@@ -144,13 +144,16 @@ pub struct Client {
     out: Vec<Msg>,
     /// The map the welcome named.
     map_id: u8,
+    /// Welcomes so far: a cup's entrant gets one a heat.
+    welcomes: u32,
 }
 
 #[wasm_bindgen]
 impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
     /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
-    /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game)
+    /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game,
+    /// 5 a cup)
     /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
     /// signed in with an
     /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
@@ -260,6 +263,7 @@ impl Client {
             ready: false,
             out: Vec::new(),
             map_id: 0,
+            welcomes: 0,
             transport,
             datagrams,
             writer,
@@ -278,6 +282,13 @@ impl Client {
     #[wasm_bindgen(getter)]
     pub fn team(&self) -> u8 {
         self.core.team
+    }
+
+    /// How many welcomes have come: a cup's entrant is welcomed into each
+    /// heat on the same connection, and the page redraws the level then.
+    #[wasm_bindgen(getter)]
+    pub fn welcomes(&self) -> u32 {
+        self.welcomes
     }
 
     /// The map this match is on (`map_boxes(map)` and friends draw it).
@@ -331,6 +342,7 @@ impl Client {
                         continue;
                     };
                     self.map_id = map;
+                    self.welcomes += 1;
                     self.core = NetCore::new(slot, team, tick, rules, m);
                     self.core.salt_commit = salt_commit;
                     self.ready = true;
@@ -578,6 +590,22 @@ impl Client {
                         }
                         .into(),
                     );
+                }
+                Msg::Cup {
+                    round,
+                    rounds,
+                    entrants,
+                    place,
+                    points,
+                    done,
+                } => {
+                    set("type", "cup".into());
+                    set("round", round.into());
+                    set("rounds", rounds.into());
+                    set("entrants", entrants.into());
+                    set("place", place.into());
+                    set("points", points.into());
+                    set("done", done.into());
                 }
                 Msg::Bye => set("type", "bye".into()),
                 _ => continue,

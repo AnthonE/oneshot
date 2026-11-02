@@ -19,7 +19,7 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 5;
+pub const PROTO_VER: u16 = 6;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -600,6 +600,8 @@ pub const MODE_DUEL: u8 = 1;
 pub const MODE_DOUBLES: u8 = 2;
 pub const MODE_FFA: u8 = 3;
 pub const MODE_GUN_GAME: u8 = 4;
+/// A cup: free-for-all heats, Swiss rounds, a final (ranked: a wallet's).
+pub const MODE_CUP: u8 = 5;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
 
@@ -656,6 +658,17 @@ pub enum Msg {
     Phase {
         phase: u8,
         winner: u8,
+    },
+    /// Server → a cup's entrant, as it forms and after every heat: where they
+    /// stand. `round` counts Swiss rounds from 1, `rounds + 1` is the
+    /// final; `done` once it is over (`place` is then final).
+    Cup {
+        round: u8,
+        rounds: u8,
+        entrants: u8,
+        place: u8,
+        points: u16,
+        done: bool,
     },
     /// Server → everyone, once the match is over: the salt every spread was
     /// drawn with, to check against the welcome's commitment and to replay.
@@ -793,6 +806,22 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Cup {
+            round,
+            rounds,
+            entrants,
+            place,
+            points,
+            done,
+        } => {
+            w.write(10, 8)?;
+            w.write(*round as u32, 8)?;
+            w.write(*rounds as u32, 8)?;
+            w.write(*entrants as u32, 8)?;
+            w.write(*place as u32, 8)?;
+            w.write(*points as u32, 16)?;
+            w.write_bit(*done)?;
+        }
         Msg::Reveal { salt } => {
             w.write(8, 8)?;
             for &x in salt {
@@ -877,6 +906,14 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        10 => Msg::Cup {
+            round: r.read(8)? as u8,
+            rounds: r.read(8)? as u8,
+            entrants: r.read(8)? as u8,
+            place: r.read(8)? as u8,
+            points: r.read(16)? as u16,
+            done: r.read_bit()?,
+        },
         8 => {
             let mut salt = [0u64; 2];
             for x in salt.iter_mut() {

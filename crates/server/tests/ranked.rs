@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use proto::frame::LEN_PREFIX_BYTES;
-use proto::{decode_msg, frame_msg, Msg, Name, Pass, MAX_STREAM_MSG, MODE_DUEL, PROTO_VER};
+use proto::{decode_msg, frame_msg, Msg, Name, Pass, MAX_STREAM_MSG, MODE_CUP, MODE_DUEL, PROTO_VER};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sim::world::Rules;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -173,8 +173,10 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg>
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
     let mut got = Vec::new();
-    let _ = tokio::time::timeout(Duration::from_secs(30), async {
+    let _ = tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(m) = read_msg(&mut recv).await {
+            // A cup's entrant plays several matches on one session: only a
+            // bye or a refusal ends it.
             let end = matches!(m, Msg::Bye | Msg::Refuse { .. });
             got.push(m);
             if end {
@@ -420,4 +422,142 @@ async fn a_ban_is_signed_and_an_old_elo_pros_still_takes_the_result() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["matches"][0]["id"], "m-old");
     assert!(v["matches"][0].get("evidence").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
+    let (origin, seen) = stand_in(false).await;
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-cup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("server.pem");
+    std::fs::write(&key_path, pem(&SERVER_SEED)).unwrap();
+    let account = Ed25519KeyPair::from_seed_unchecked(&ACCOUNT_SEED).unwrap();
+    let h = server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        cup: Rules {
+            time_limit_ms: 3000,
+            ..Rules::ffa()
+        },
+        cup_min: 4,
+        cup_fill: Duration::ZERO,
+        cup_rounds: 1,
+        cup_review_top: 2,
+        linger: Duration::from_millis(500),
+        domains: vec!["127.0.0.1".into()],
+        elo_pubkey: Some(account.public_key().as_ref().try_into().unwrap()),
+        elo_origin: origin,
+        elo_key: Some((key_path, "t-1".into())),
+        replays: Some(dir.clone()),
+        ..server::Config::default()
+    })
+    .await
+    .unwrap();
+    let http = h.http.unwrap();
+    let wallets = [
+        WALLETS[0].to_string(),
+        WALLETS[1].to_string(),
+        "0x4444444444444444444444444444444444444444".to_string(),
+        "0x5555555555555555555555555555555555555555".to_string(),
+    ];
+    let mut passes = Vec::new();
+    for w in &wallets {
+        passes.push(pass(Some(w), &nonce(http).await));
+    }
+    let (a, b, c, d) = tokio::join!(
+        play(&h, &passes[0], MODE_CUP),
+        play(&h, &passes[1], MODE_CUP),
+        play(&h, &passes[2], MODE_CUP),
+        play(&h, &passes[3], MODE_CUP),
+    );
+    let got = [a, b, c, d];
+    for g in &got {
+        let welcomes = g.iter().filter(|m| matches!(m, Msg::Welcome { .. })).count();
+        assert_eq!(welcomes, 2, "a Swiss round and the final: {g:?}");
+        let cups: Vec<&Msg> = g.iter().filter(|m| matches!(m, Msg::Cup { .. })).collect();
+        assert!(
+            matches!(
+                cups.first(),
+                Some(Msg::Cup {
+                    round: 1,
+                    rounds: 1,
+                    entrants: 4,
+                    done: false,
+                    ..
+                })
+            ),
+            "{cups:?}"
+        );
+        // Nobody fired: every heat a four-way tie for first.
+        assert!(
+            matches!(
+                cups.last(),
+                Some(Msg::Cup {
+                    place: 1,
+                    points: 10,
+                    done: true,
+                    ..
+                })
+            ),
+            "{cups:?}"
+        );
+        assert_eq!(g.last(), Some(&Msg::Bye));
+    }
+    // Two heats reported on the cup ladder, each with all four placed.
+    let mut reports = Vec::new();
+    for _ in 0..50 {
+        reports = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _, b)| l.starts_with("POST /api/ratings/") && b.contains("\"cup\""))
+            .map(|(_, _, b)| serde_json::from_str::<serde_json::Value>(b).unwrap())
+            .collect();
+        if reports.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(reports.len(), 2);
+    for r in &reports {
+        assert_eq!(r["matches"][0]["teams"].as_array().unwrap().len(), 4);
+        assert!(r["matches"][0]["evidence"]["replay_sha256"].is_string());
+    }
+    // The cup's file, and its top two waiting on a review before a prize.
+    let mut cup = None;
+    for _ in 0..50 {
+        cup = std::fs::read_dir(dir.join("cups"))
+            .ok()
+            .and_then(|mut d| d.next())
+            .and_then(|e| e.ok());
+        if cup.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let cup_path = cup.expect("the cup's file").path();
+    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cup_path).unwrap()).unwrap();
+    assert_eq!(doc["standings"].as_array().unwrap().len(), 4);
+    assert_eq!(doc["heats"].as_array().unwrap().len(), 2);
+    let id = doc["cup"].as_str().unwrap();
+    let mut review = None;
+    for _ in 0..50 {
+        review = std::fs::read_to_string(dir.join("review").join(format!("{id}.json"))).ok();
+        if review.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let review: serde_json::Value = serde_json::from_str(&review.expect("a prize review")).unwrap();
+    assert_eq!(review["kind"], "cup prize");
+    // A four-way tie for first: all four are in the top two places.
+    assert_eq!(review["seats"].as_array().unwrap().len(), 4);
+    for s in review["seats"].as_array().unwrap() {
+        assert_eq!(s["replays"].as_array().unwrap().len(), 2);
+    }
+    for heat in doc["heats"].as_array().unwrap() {
+        let bytes = std::fs::read(dir.join(heat["replay"].as_str().unwrap())).expect("the heat's replay");
+        room::replay::verify(&bytes).expect("replays");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

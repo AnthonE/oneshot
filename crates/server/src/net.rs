@@ -10,7 +10,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use proto::{
-    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_DOUBLES, MODE_DUEL, PROTO_VER,
+    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
+    PROTO_VER,
 };
 use tokio::sync::mpsc as tmpsc;
 use wtransport::endpoint::endpoint_side::Server;
@@ -101,7 +102,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         return refuse(&mut send, proto::REFUSE_VERSION).await;
     }
     // Who: a pass from Elo Pros, or a guest.
-    let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES);
+    let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
     let who = if pass.is_empty() {
         None
     } else if let Some(key) = ctx.elo_pubkey {
@@ -142,7 +143,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = tmpsc::channel::<Out>(OUT_QUEUE);
     let join = match mode {
-        MODE_DUEL | MODE_DOUBLES => {
+        MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
             let Some(wallet) = who.and_then(|p| p.wallet) else {
                 return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
@@ -152,7 +153,11 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             if ctx.elo.banned(&wallet).await == Some(true) {
                 return refuse(&mut send, proto::REFUSE_BANNED).await;
             }
-            let ladder = if mode == MODE_DOUBLES { "doubles" } else { "duel" };
+            let ladder = match mode {
+                MODE_DOUBLES => "doubles",
+                MODE_CUP => "cup",
+                _ => "duel",
+            };
             let rating = ctx.elo.rating(&wallet, ladder).await;
             ToSim::Queue {
                 session: session_id,

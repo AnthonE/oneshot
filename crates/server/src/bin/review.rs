@@ -1,6 +1,8 @@
 //! `oneshot-review`: the person's half of the aim review. The server writes
 //! a match's numbers beside its replay, and a copy to `<replays>/review/`
-//! when they cross a line (`room::watch`); this lists them, shows one, and
+//! when they cross a line (`room::watch`), or when a cup ends, its top
+//! places with every heat they played (a prize waits on that review); this
+//! lists them, shows one, and
 //! bans or lifts a wallet on the game's Elo Pros list. Nothing is banned
 //! without a person running `ban` after watching the replay.
 //!
@@ -112,6 +114,17 @@ fn list(replays: &Path) {
 }
 
 fn show(replays: &Path, id: &str) {
+    // A cup's prize review: who, and the heats to watch with fog off.
+    if let Some(v) = read(&replays.join("review").join(format!("{id}.json"))).filter(|v| v["kind"] == "cup prize") {
+        println!("{}", serde_json::to_string_pretty(&v["seats"]).unwrap_or_default());
+        println!("\nwatch each with fog off before the prize is paid:");
+        for s in v["seats"].as_array().into_iter().flatten() {
+            for r in s["replays"].as_array().into_iter().flatten() {
+                println!("  oneshot-replay {}", replays.join(r.as_str().unwrap_or("")).display());
+            }
+        }
+        return;
+    }
     let p = replays.join(format!("{id}.watch.json"));
     let v = read(&p).unwrap_or_else(|| die(&format!("{}: not found or not JSON", p.display())));
     println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());

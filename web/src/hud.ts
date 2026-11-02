@@ -22,7 +22,7 @@ const css = `
 #hud .score { position: absolute; left: 24px; bottom: 20px; }
 #hud .score div { margin-top: 2px; }
 #hud .feed { position: absolute; right: 24px; top: 18px; text-align: right; }
-#hud .center { position: absolute; left: 0; right: 0; top: 34%; text-align: center; font-size: 28px; }
+#hud .center { position: absolute; left: 0; right: 0; top: 34%; text-align: center; font-size: 28px; white-space: pre-line; }
 #hud .net { position: absolute; left: 12px; top: 12px; font: 12px ui-monospace, monospace; background: #0008; padding: 6px 8px;
   white-space: pre; display: none; }
 #hud .dmg { position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; margin: -110px; opacity: 0;

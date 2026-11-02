@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
-import { buildWorld, defaultMaterials } from './world';
+import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
 import { Effects } from './effects';
 import { Hud } from './hud';
@@ -85,9 +85,9 @@ async function main() {
   try { skinSelect.value = localStorage.getItem('oneshot.skin') || '0'; } catch { /* private window */ }
 
   const info = await (await fetch('server.json')).json();
-  const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, el('duel'), el('doubles'));
+  const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, [el('duel'), el('doubles'), el('cup')]);
 
-  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4 };
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
   let client: Client;
   try {
     const mode = AUTOPLAY
@@ -113,6 +113,9 @@ async function main() {
   // What the server says on the stream, before and during play.
   const slotName = (n: { bot: boolean; name: string }) => (n.bot ? 'BOT' : n.name);
   let ended = false;
+  // A cup: where we stand, as the server last said.
+  let cupLine = '';
+  const ordinal = (n: number) => `${n}${['th', 'st', 'nd', 'rd'][n % 100 > 10 && n % 100 < 14 ? 0 : Math.min(n % 10, 4) % 4] || 'th'}`;
   const handle = (m: any) => {
     if (m.type === 'seat') {
       hud.names[m.slot] = slotName(m);
@@ -120,7 +123,13 @@ async function main() {
     }
     else if (m.type === 'queued') {
       const t = m.waiting as number;
-      status.textContent = `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+      status.textContent = `${m.mode === 5 ? 'Waiting for the cup to fill' : `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}`}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    } else if (m.type === 'cup') {
+      const stage = m.round > m.rounds ? 'the final' : `round ${m.round} of ${m.rounds}`;
+      cupLine = m.done
+        ? `Cup over: ${ordinal(m.place)} of ${m.entrants}`
+        : `Cup, ${stage}: ${ordinal(m.place)} of ${m.entrants} on ${m.points} points`;
+      status.textContent = cupLine;
     } else if (m.type === 'refused') {
       shared.error = m.why;
       status.textContent = m.why;
@@ -148,12 +157,23 @@ async function main() {
   });
   cancel.hidden = true;
   menu.style.display = 'none';
-  const gunGame = client.gun_game;
-  // The level the welcome named, from the sim's own tables.
-  const layout = map_layout(client.map);
-  buildWorld(scene, map_boxes(client.map), map_pads(client.map), defaultMaterials(), layout);
-  route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
-  hud.kill(map_name(client.map));
+  let gunGame = false;
+  // The level the welcome named, from the sim's own tables; built again
+  // when a new welcome comes (a cup's next heat, maybe on another map).
+  let level: ReturnType<typeof buildWorld> | null = null;
+  let welcomed = 0;
+  const mats = defaultMaterials();
+  const welcome = () => {
+    welcomed = client.welcomes;
+    gunGame = client.gun_game;
+    if (level) dropWorld(level.level);
+    const layout = map_layout(client.map);
+    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout);
+    route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
+    leg = 0;
+    hud.kill(map_name(client.map));
+  };
+  welcome();
   shared.connected = true;
   const controls = new Controls(canvas);
   if (!AUTOPLAY) canvas.click();
@@ -168,6 +188,7 @@ async function main() {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
+    if (client.welcomes !== welcomed) welcome();
     let f = controls.frame();
     if (AUTOPLAY) f = autopilot(f, shared);
     client.update(now, f.buttons, f.yaw, f.pitch, f.mx, f.mz);
@@ -256,6 +277,7 @@ async function main() {
       const v = client.stats()[8];
       if (v === 1) center += ' · match verified ✓';
       if (v === 0) center += ' · verification FAILED';
+      if (cupLine) center += `\n${cupLine}`;
     }
     else if (!alive && killcam) center = `Killed by ${hud.name(cam![5])} · respawning in ${Math.ceil(respawn)}`;
     else if (!alive) center = `Respawning in ${Math.ceil(respawn)}`;
@@ -378,8 +400,7 @@ main();
  * nonce the pass must carry; we fetch one ahead so the popup opens on the
  * click itself (a popup opened later is blocked). Ranked needs a wallet
  * linked to the account: ratings are a wallet's. */
-async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElement,
-  duel: HTMLButtonElement, doubles: HTMLButtonElement) {
+async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElement, ranked: HTMLButtonElement[]) {
   let pass = '';
   let nonce = '';
   const fresh = async () => {
@@ -398,7 +419,7 @@ async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElemen
         const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
         const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
         who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
-        duel.disabled = doubles.disabled = !wallet;
+        for (const b of ranked) b.disabled = !wallet;
         button.hidden = true;
       } catch (e: any) {
         who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;

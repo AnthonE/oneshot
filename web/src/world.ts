@@ -96,8 +96,21 @@ function tileUVs(g: THREE.BoxGeometry, w: number, h: number, d: number, tile: nu
 
 /** `boxes` is map_boxes(id): 7 a box. `bounds` is min x, min z, max x,
  * max z. */
+/** Takes a level built by buildWorld out of the scene. */
+export function dropWorld(level: THREE.Group) {
+  level.removeFromParent();
+  level.traverse((o) => {
+    if (o instanceof THREE.Mesh) o.geometry.dispose();
+  });
+}
+
 export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float32Array, mats: Materials,
   bounds: ArrayLike<number> = [-24, -24, 24, 24]) {
+  // Everything the level adds goes in one group, so a new map (a cup's next
+  // heat) replaces it whole.
+  const level = new THREE.Group();
+  scene.add(level);
+  scene = level as unknown as THREE.Scene;
   const [bx0, bz0, bx1, bz1] = Array.from(bounds).slice(0, 4);
   const cx = (bx0 + bx1) / 2, cz = (bz0 + bz1) / 2;
   const half = Math.max(bx1 - bx0, bz1 - bz0) / 2 + 8;
@@ -153,5 +166,5 @@ export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float3
     scene.add(ring);
     padMeshes.push(ring);
   }
-  return { sun, padMeshes };
+  return { level, sun, padMeshes };
 }
