@@ -323,7 +323,10 @@ export async function loadArt(
   ]);
   const guns = new Map<number, THREE.Object3D>();
   Object.keys(GUNS).forEach((k, i) => guns.set(Number(k), gunScenes[i] as THREE.Object3D));
-  players.setModel(bodyFactory(tt as GLTF, guns));
+  // ?capsules: everyone else stays a capsule. The eight-seat browser test
+  // runs on a software GPU, where skinning seven characters on the CPU
+  // would starve the netcode of frames.
+  if (!new URLSearchParams(location.search).has('capsules')) players.setModel(bodyFactory(tt as GLTF, guns));
 
   const view = new Viewmodel(guns);
   const muzzleLight = new THREE.PointLight(0xffc066, 0, 6);

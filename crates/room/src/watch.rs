@@ -17,7 +17,8 @@
 //! - **Pre-aim:** time spent aimed within [`PREAIM_DEG`] of an enemy that fog
 //!   sent this player but that has been out of plain sight for over
 //!   [`PREAIM_HIDDEN_MS`]: following someone through a wall with what the
-//!   client was told early.
+//!   client was told early. Not while also aimed at an enemy in plain
+//!   sight: then the wall behind is a coincidence.
 
 use sim::consts::{ticks, MAX_FIGHTERS, TICK_HZ};
 use sim::events::Kind as Ev;
@@ -155,6 +156,21 @@ impl Watch {
         let cos_pre = (PREAIM_DEG.to_radians()).cos();
         for (v, me) in w.fighters.iter().enumerate() {
             self.yaws[v][tick as usize % YAWS] = me.yaw;
+            let aim = aim_dir(me.yaw, me.pitch);
+            let on = |them: &sim::fighter::Fighter| {
+                let to = them.body.pos + V3::new(0.0, 1.1, 0.0) - me.eye();
+                let d = to.len();
+                d > 1.0 && aim.dot(to * (1.0 / d)) >= cos_pre
+            };
+            // Aimed at an enemy in plain sight: one behind a wall on the
+            // same line is no evidence (Doubles and free for all have many).
+            let honest = w.fighters.iter().enumerate().any(|(t, them)| {
+                t != v
+                    && them.active()
+                    && !(w.rules.teams && them.team == me.team)
+                    && on(them)
+                    && plainly_sees(&w.map, me, them)
+            });
             for (t, them) in w.fighters.iter().enumerate() {
                 let enemy = t != v && them.seated && !(w.rules.teams && them.team == me.team);
                 let s = &mut self.sight[v][t];
@@ -171,13 +187,8 @@ impl Watch {
                     continue;
                 }
                 let long_hidden = s.last.is_none_or(|l| tick.saturating_sub(l) > hidden_for);
-                if long_hidden && shown(v, t) {
-                    let chest = them.body.pos + V3::new(0.0, 1.1, 0.0);
-                    let to = chest - me.eye();
-                    let d = to.len();
-                    if d > 1.0 && aim_dir(me.yaw, me.pitch).dot(to * (1.0 / d)) >= cos_pre {
-                        self.preaim_ticks[v] += 1;
-                    }
+                if long_hidden && !honest && shown(v, t) && on(them) {
+                    self.preaim_ticks[v] += 1;
                 }
             }
             self.stats[v].preaim_ms = ticks_to_ms(self.preaim_ticks[v]);

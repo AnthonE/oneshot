@@ -81,7 +81,7 @@ async function main() {
   const info = await (await fetch('server.json')).json();
   const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, el('duel'), el('doubles'));
 
-  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2 };
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4 };
   let client: Client;
   try {
     const mode = AUTOPLAY
@@ -134,6 +134,7 @@ async function main() {
   });
   cancel.hidden = true;
   menu.style.display = 'none';
+  const gunGame = client.gun_game;
   shared.connected = true;
   const controls = new Controls(canvas);
   if (!AUTOPLAY) canvas.click();
@@ -246,7 +247,11 @@ async function main() {
       weapon: arm_name(arm), other: other ? arm_name(other) : '',
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,
-        ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i]).map(([s, i]) => `${hud.name(i)} ${s}`),
+        // The rest, best first: everyone in a duel or doubles, the top
+        // four in a room of eight.
+        ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i])
+          .sort((a, b) => b[0] - a[0]).slice(0, 4).map(([s, i]) => `${hud.name(i)} ${s}`),
+        gunGame ? `Rung ${Math.min(scores[slot], limit - 1) + 1} of ${limit}${scores[slot] < limit - 1 ? ` · next ${arm_name(client.rung(scores[slot] + 1))}` : ' · last gun'}` : '',
         phase === 1 ? mmss(clock) : '',
         `K ${kills} · D ${deaths}`,
       ],
@@ -262,7 +267,7 @@ async function main() {
     if (client.closed || ended) {
       // The match is over (or the line dropped): back to the menu.
       status.textContent = ended ? 'Match over' : 'Disconnected';
-      for (const id of ['play', 'duel', 'doubles']) el(id).hidden = true;
+      for (const id of Object.keys(MODES)) el(id).hidden = true;
       cancel.hidden = false;
       cancel.textContent = 'Back to menu';
       menu.style.display = 'flex';

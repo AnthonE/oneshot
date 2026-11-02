@@ -26,7 +26,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use proto::{encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_DOUBLES};
+use proto::{
+    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_CASUAL, MODE_DOUBLES, MODE_FFA, MODE_GUN_GAME,
+};
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::map::Map;
@@ -43,10 +45,12 @@ pub enum Out {
 
 /// What sessions tell the sim thread.
 pub enum ToSim {
-    /// A room against a bot.
+    /// Casual: a room against a bot, or a seat in a shared free-for-all or
+    /// Gun Game room where bots fill the rest.
     Casual {
         session: u64,
         name: Name,
+        mode: u8,
         tx: tmpsc::Sender<Out>,
     },
     /// Into the ranked queue.
@@ -90,8 +94,10 @@ pub struct Config {
     /// PEM certificate and key; without them a self-signed certificate
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
-    /// A casual room's rules.
+    /// A casual room's rules: against a bot, free for all, Gun Game.
     pub rules: Rules,
+    pub ffa: Rules,
+    pub gun_game: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -120,6 +126,8 @@ impl Default for Config {
             web_dir: "web/dist".into(),
             cert: None,
             rules: Rules::duel(),
+            ffa: Rules::ffa(),
+            gun_game: Rules::gun_game(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             passive_bots: false,
@@ -267,23 +275,22 @@ fn send_msg(tx: &tmpsc::Sender<Out>, m: &Msg) {
 impl Sim {
     /// A new room: fresh salt (never seen until the end) and a seed drawn
     /// apart from it (what clients watch: spawn picks, bots).
-    fn new_room(&self, ranked: Option<u8>) -> Room {
+    fn new_room(&self, mode: u8, ranked: bool) -> Room {
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
-        match ranked {
-            Some(mode) => {
-                let rules = if mode == MODE_DOUBLES {
-                    self.cfg.doubles
-                } else {
-                    self.cfg.duel
-                };
-                Room::ranked(Map::proving_grounds(), rules, seed, salt)
-            }
-            None => {
-                let mut r = Room::new(Map::proving_grounds(), self.cfg.rules, seed, salt);
-                r.passive_bots = self.cfg.passive_bots;
-                r
-            }
+        let rules = match mode {
+            MODE_DOUBLES => self.cfg.doubles,
+            MODE_FFA => self.cfg.ffa,
+            MODE_GUN_GAME => self.cfg.gun_game,
+            _ if ranked => self.cfg.duel,
+            _ => self.cfg.rules,
+        };
+        if ranked {
+            Room::ranked(Map::proving_grounds(), rules, seed, salt)
+        } else {
+            let mut r = Room::new(Map::proving_grounds(), rules, seed, salt);
+            r.passive_bots = self.cfg.passive_bots;
+            r
         }
     }
 
@@ -312,19 +319,49 @@ impl Sim {
             let now_ms = start.elapsed().as_secs_f64() * 1000.0;
             while let Ok(m) = self.rx.try_recv() {
                 match m {
-                    ToSim::Casual { session, name, tx } => {
-                        let mut room = self.new_room(None);
-                        let Some((slot, out)) = room.join(name) else { continue };
-                        let mut live = Live {
-                            room,
-                            id: format!("os-c{:016x}", random_u64()),
-                            mode: proto::MODE_CASUAL,
-                            links: [None; MAX_FIGHTERS],
-                            wallets: Default::default(),
-                            over_at: None,
+                    ToSim::Casual {
+                        session,
+                        name,
+                        mode,
+                        tx,
+                    } => {
+                        let mode = match mode {
+                            MODE_FFA | MODE_GUN_GAME => mode,
+                            _ => MODE_CASUAL,
+                        };
+                        // Free for all and Gun Game are shared: a seat a bot
+                        // holds in a room still playing, else a new room.
+                        let open = (mode != MODE_CASUAL)
+                            .then(|| {
+                                rooms.iter().position(|r| {
+                                    r.as_ref().is_some_and(|r| {
+                                        r.mode == mode
+                                            && r.over_at.is_none()
+                                            && r.room.world.phase != Phase::Over
+                                            && r.links.iter().take(r.room.size).any(|l| l.is_none())
+                                    })
+                                })
+                            })
+                            .flatten();
+                        let i = match open {
+                            Some(i) => i,
+                            None => place(
+                                &mut rooms,
+                                Live {
+                                    room: self.new_room(mode, false),
+                                    id: format!("os-c{:016x}", random_u64()),
+                                    mode,
+                                    links: [None; MAX_FIGHTERS],
+                                    wallets: Default::default(),
+                                    over_at: None,
+                                },
+                            ),
+                        };
+                        let live = rooms[i].as_mut().unwrap();
+                        let Some((slot, out)) = live.room.join(name) else {
+                            continue;
                         };
                         live.links[slot as usize] = Some(session);
-                        let i = place(&mut rooms, live);
                         sessions.insert(
                             session,
                             Sess {
@@ -389,7 +426,7 @@ impl Sim {
                 while let Some(sides) = q.form(now) {
                     let mode = sides[0][0].mode;
                     let mut live = Live {
-                        room: self.new_room(Some(mode)),
+                        room: self.new_room(mode, true),
                         id: format!("os-{:016x}", random_u64()),
                         mode,
                         links: [None; MAX_FIGHTERS],

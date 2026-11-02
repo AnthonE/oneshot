@@ -25,6 +25,12 @@ pub struct Rules {
     pub time_limit_ms: u32,
     /// The guns everyone spawns with: in hand, then on the back.
     pub loadout: [u8; 2],
+    /// Seats the mode fills: 2 for a duel, 4 for doubles, up to 8.
+    pub seats: u8,
+    /// Gun Game: everyone carries the gun of their rung on
+    /// [`crate::arms::LADDER`], a kill moves the killer up a rung, pads are
+    /// off, and the score is the rung.
+    pub gun_game: bool,
 }
 
 impl Rules {
@@ -35,6 +41,8 @@ impl Rules {
             score_limit: 15,
             time_limit_ms: 600_000,
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            seats: 2,
+            gun_game: false,
         }
     }
 
@@ -45,7 +53,39 @@ impl Rules {
             score_limit: 30,
             time_limit_ms: 720_000,
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            seats: 4,
+            gun_game: false,
         }
+    }
+
+    /// Free for all, eight seats: first to 25, or the most at 10 minutes.
+    /// Casual with bots in the empty seats; a cup's heat.
+    pub fn ffa() -> Rules {
+        Rules {
+            teams: false,
+            score_limit: 25,
+            time_limit_ms: 600_000,
+            loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            seats: MAX_FIGHTERS as u8,
+            gun_game: false,
+        }
+    }
+
+    /// Gun Game, eight seats: up the ladder, a kill a rung; the first kill
+    /// with the last gun wins.
+    pub fn gun_game() -> Rules {
+        Rules {
+            score_limit: crate::arms::LADDER.len() as i32,
+            loadout: [crate::arms::LADDER[0], NONE],
+            gun_game: true,
+            ..Rules::ffa()
+        }
+    }
+
+    /// The gun on rung `score` of Gun Game's ladder.
+    pub fn rung(score: i32) -> u8 {
+        let l = &crate::arms::LADDER;
+        l[score.clamp(0, l.len() as i32 - 1) as usize]
     }
 }
 
@@ -132,6 +172,10 @@ impl World {
             team,
             ..Fighter::default()
         };
+        // Everyone for themselves: the seat's score is the newcomer's own.
+        if !self.rules.teams {
+            self.score[slot] = 0;
+        }
         self.respawn(slot);
     }
 
@@ -546,12 +590,25 @@ impl World {
         let k = &mut self.fighters[att];
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
+        let gun_game = self.rules.gun_game;
         if own {
+            // A rung is never lost below the first.
             self.score[side] -= 1;
+            if gun_game {
+                self.score[side] = self.score[side].max(0);
+            }
         } else {
             k.kills += 1;
             k.grenades = (k.grenades + 1).min(GREN_MAX);
             self.score[side] += 1;
+            if gun_game && k.alive && self.score[side] < self.rules.score_limit {
+                // Up a rung, at once: the new gun full and in hand.
+                k.guns = [Gun::full(Rules::rung(self.score[side])), Gun::default()];
+                k.cur = 0;
+                k.reload = 0;
+                k.burst_left = 0;
+                k.refire = k.refire.max(ticks(crate::arms::SWAP_MS) as u16);
+            }
         }
         self.events.push(Event {
             kind: Ev::Kill,
@@ -586,6 +643,9 @@ impl World {
     }
 
     fn pickup(&mut self, s: usize) {
+        if self.rules.gun_game {
+            return;
+        }
         let at = self.fighters[s].body.pos;
         for (i, def) in self.map.pads.iter().enumerate().take(MAX_PADS) {
             let d = def.pos - at;
@@ -674,7 +734,11 @@ impl World {
             }
         }
         let sp = self.map.spawns[pick];
-        let loadout = self.rules.loadout;
+        let loadout = if self.rules.gun_game {
+            [Rules::rung(self.score[s]), NONE]
+        } else {
+            self.rules.loadout
+        };
         self.fighters[s].spawn(sp.pos, sp.yaw, loadout);
         self.rewind.forget(s);
         self.events.push(Event {

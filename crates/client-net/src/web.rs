@@ -148,7 +148,8 @@ pub struct Client {
 impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
     /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
-    /// a bot, 1 ranked Duel, 2 ranked Doubles) as `name`, signed in with an
+    /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game)
+    /// as `name`, signed in with an
     /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
@@ -265,6 +266,17 @@ impl Client {
     #[wasm_bindgen(getter)]
     pub fn team(&self) -> u8 {
         self.core.team
+    }
+
+    /// Whether this match is Gun Game: the score is the rung.
+    #[wasm_bindgen(getter)]
+    pub fn gun_game(&self) -> bool {
+        self.core.rules.gun_game
+    }
+
+    /// The gun on Gun Game's rung `score`.
+    pub fn rung(&self, score: i32) -> u8 {
+        sim::world::Rules::rung(score)
     }
 
     #[wasm_bindgen(getter)]

@@ -168,6 +168,21 @@ fn msgs() -> Vec<Msg> {
             rules: Rules::duel(),
             salt_commit: salt_commit([7, 9]),
         },
+        Msg::Welcome {
+            slot: 5,
+            team: 1,
+            tick: 9000,
+            tick_hz: 128,
+            map: 2,
+            rules: Rules::gun_game(),
+            salt_commit: salt_commit([1, 2]),
+        },
+        Msg::Hello {
+            proto: PROTO_VER,
+            name: Name::new("ffa"),
+            pass: Pass::NONE,
+            mode: MODE_GUN_GAME,
+        },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
             slot: 0,
@@ -259,13 +274,15 @@ fn the_bytes_match_their_goldens() {
         let n = encode_msg(&m, &mut buf).unwrap();
         got.push(fnv(&buf[..n]));
     }
-    let want: [u64; 12] = [
+    let want: &[u64] = &[
         0x21cd_ceaa_a773_0091,
         0x13de_bd0b_5d65_9ca7,
-        0x5abb_9726_fdc1_09d3,
-        0xdd02_d3a6_2f01_9cc0,
-        0xc410_d8b8_5356_ae7a,
-        0x9046_9a79_8597_d6fb,
+        0x4631_13fe_27e9_c90e,
+        0x823c_2f63_f325_0e1f,
+        0x7ebe_34b8_2c10_f2d0,
+        0xe85b_7b56_99f2_042c,
+        0xeae6_fd0a_54e2_f36b,
+        0xe5b7_1c97_90cb_c7c5,
         0x0835_ec07_b4ee_4fb0,
         0x5c12_e734_0afe_dd50,
         0xc6fb_4858_89be_4749,

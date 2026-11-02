@@ -150,6 +150,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         _ => ToSim::Casual {
             session: session_id,
             name,
+            mode,
             tx,
         },
     };

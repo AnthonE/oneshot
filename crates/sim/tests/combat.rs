@@ -1,7 +1,7 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, MAGNUM, ROCKET, SHOTGUN, SNIPER};
+use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fmath;
@@ -24,6 +24,7 @@ fn duel_salted(loadout: [u8; 2], dist: f32, salt: (u64, u64)) -> World {
         score_limit: 100,
         time_limit_ms: 0,
         loadout,
+        ..Rules::duel()
     };
     let mut w = World::new(Map::open(), rules, 1, salt);
     w.seat(0, 0);
@@ -375,4 +376,68 @@ fn the_prediction_matches_the_server_bit_for_bit() {
         }
     }
     assert!(w.fighters[0].alive, "nothing should have hurt the predicted fighter");
+}
+
+#[test]
+fn gun_game_moves_the_killer_up_a_rung_and_the_last_rung_wins() {
+    let rules = Rules {
+        time_limit_ms: 0,
+        ..Rules::gun_game()
+    };
+    let mut w = World::new(Map::open(), rules, 1, (3, 4));
+    w.seat(0, 0);
+    w.seat(1, 1);
+    // Everyone starts on the first rung, with nothing on the back.
+    assert_eq!(w.fighters[0].guns.map(|g| g.arm), [LADDER[0], NONE]);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    while w.phase == Phase::Countdown {
+        w.step(&idle, &NO_LAG);
+    }
+    w.fighters[0].body.pos = V3::ZERO;
+    w.fighters[1].body.pos = V3::new(12.0, 0.0, 0.0);
+    for _ in 0..TICK_HZ * 2 {
+        let c = chest(&w, 1);
+        shoot(&mut w, c, FIRE, NO_LAG);
+        if kills(&w) > 0 {
+            break;
+        }
+    }
+    assert_eq!(w.score[0], 1);
+    assert_eq!(
+        w.fighters[0].guns.map(|g| g.arm),
+        [LADDER[1], NONE],
+        "up a rung, in hand"
+    );
+    // Pads are off: standing on the shotgun's pad gives nothing.
+    w.fighters[0].body.pos = w.map.pads[0].pos;
+    let mut use_pad = [Input::default(); MAX_FIGHTERS];
+    use_pad[0].buttons = USE;
+    w.step(&use_pad, &NO_LAG);
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].gun().arm, LADDER[1]);
+    // The dead come back on their own rung.
+    for _ in 0..ticks(RESPAWN_MS) + 2 {
+        w.step(&idle, &NO_LAG);
+    }
+    assert!(w.fighters[1].alive);
+    assert_eq!(w.fighters[1].gun().arm, LADDER[0]);
+    // A kill on the last rung wins.
+    w.score[0] = rules.score_limit - 1;
+    w.fighters[0].guns[0] = sim::fighter::Gun::full(SNIPER);
+    w.fighters[0].body.pos = V3::ZERO;
+    w.fighters[1].body.pos = V3::new(12.0, 0.0, 0.0);
+    w.fighters[0].refire = 0;
+    let h = head(&w, 1);
+    shoot(&mut w, h, FIRE, NO_LAG);
+    assert_eq!(w.phase, Phase::Over);
+    assert_eq!(w.winner, 0);
+}
+
+#[test]
+fn a_seat_taken_in_free_for_all_starts_from_nothing() {
+    let mut w = World::new(Map::open(), Rules::ffa(), 1, (3, 4));
+    w.seat(2, 0);
+    w.score[2] = 9;
+    w.seat(2, 0);
+    assert_eq!(w.score[2], 0);
 }

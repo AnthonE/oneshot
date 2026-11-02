@@ -1,5 +1,5 @@
-//! The leak gate (docs/DESIGN.md §17): a whole Doubles match with one
-//! person seat (played by a bot, through the same input path a client
+//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, and an
+//! eight-seat Gun Game) with one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
@@ -48,7 +48,7 @@ fn on_grid(v: f32) -> bool {
 struct Gate {
     room: Room,
     me: usize,
-    mate: usize,
+    mate: Option<usize>,
     history: VecDeque<[Fighter; MAX_FIGHTERS]>,
     sent: Vec<Vec<u8>>,
     over: bool,
@@ -64,9 +64,10 @@ impl Gate {
         let me = &w.fighters[self.me];
         let now = &self.history[0];
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
-        let known = |q: usize| q == self.me || q == self.mate || sent.contains(&q);
+        let mate = |q: usize| Some(q) == self.mate;
+        let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
         for (q, f) in w.fighters.iter().enumerate() {
-            if q == self.me || q == self.mate || !f.seated {
+            if q == self.me || mate(q) || !f.seated {
                 continue;
             }
             if sent.contains(&q) {
@@ -107,13 +108,32 @@ impl Gate {
 }
 
 #[test]
-fn nothing_a_client_should_not_know_reaches_it() {
-    let rules = Rules {
-        score_limit: 25,
-        time_limit_ms: 120_000,
-        ..Rules::doubles()
-    };
-    let mut room = Room::new(Map::proving_grounds(), rules, 77, SALT);
+fn nothing_a_client_should_not_know_reaches_it_in_doubles() {
+    gate(
+        Map::proving_grounds(),
+        Rules {
+            score_limit: 25,
+            time_limit_ms: 120_000,
+            ..Rules::doubles()
+        },
+    );
+}
+
+#[test]
+fn nothing_a_client_should_not_know_reaches_it_in_a_free_for_all() {
+    gate(
+        Map::proving_grounds(),
+        Rules {
+            time_limit_ms: 120_000,
+            ..Rules::gun_game()
+        },
+    );
+}
+
+/// One match of `rules` on `map`, the person in the first seat, checked
+/// from start to end.
+fn gate(map: Map, rules: Rules) {
+    let mut room = Room::new(map, rules, 77, SALT);
     let (slot, out) = room.join(Name::new("gate")).unwrap();
     let Some((
         _,
@@ -126,7 +146,7 @@ fn nothing_a_client_should_not_know_reaches_it() {
     };
     let me = slot as usize;
     let mut g = Gate {
-        mate: me ^ 2,
+        mate: rules.teams.then_some(me ^ 2),
         room,
         me,
         history: VecDeque::new(),

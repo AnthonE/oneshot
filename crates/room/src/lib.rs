@@ -205,7 +205,8 @@ pub type Outbox = Vec<(Option<u8>, Msg)>;
 pub struct Room {
     pub world: World,
     pub seats: [Seat; MAX_FIGHTERS],
-    /// Seats the rules use: 2 for a duel, 4 for doubles.
+    /// Seats the rules use: 2 for a duel, 4 for doubles, 8 for a free for
+    /// all.
     pub size: usize,
     /// Bots stand still and never fire: for tests that need a target.
     pub passive_bots: bool,
@@ -243,7 +244,7 @@ impl Room {
     }
 
     fn empty(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
-        let size = if rules.teams { 4 } else { 2 };
+        let size = (rules.seats as usize).clamp(1, MAX_FIGHTERS);
         Room {
             rec: replay::Recorder::new(seed, salt, &rules, 0),
             world: World::new(map, rules, seed, salt),

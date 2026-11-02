@@ -19,7 +19,7 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 3;
+pub const PROTO_VER: u16 = 4;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -584,10 +584,16 @@ impl Pass {
     }
 }
 
-/// What a client asks to play (`Msg::Hello::mode`).
+/// What a client asks to play (`Msg::Hello::mode`): casual against a bot,
+/// ranked Duel or Doubles, casual free-for-all or Gun Game with bots in the
+/// empty seats.
 pub const MODE_CASUAL: u8 = 0;
 pub const MODE_DUEL: u8 = 1;
 pub const MODE_DOUBLES: u8 = 2;
+pub const MODE_FFA: u8 = 3;
+pub const MODE_GUN_GAME: u8 = 4;
+/// Modes fit this many bits.
+const MODE_BITS: u32 = 4;
 
 // The hello carries a pass (640 bytes) and so sizes every message; stream
 // messages are a handful a second, so `Copy` is worth more than the bytes.
@@ -710,11 +716,11 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             for &b in &pass.bytes[..pass.len as usize] {
                 w.write(b as u32, 7)?;
             }
-            w.write(*mode as u32, 2)?;
+            w.write(*mode as u32, MODE_BITS)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
-            w.write(*mode as u32, 2)?;
+            w.write(*mode as u32, MODE_BITS)?;
             w.write(*waiting_s as u32, 16)?;
         }
         Msg::Welcome {
@@ -737,6 +743,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.time_limit_ms, 32)?;
             w.write(rules.loadout[0] as u32, 4)?;
             w.write(rules.loadout[1] as u32, 4)?;
+            w.write(rules.seats as u32, 4)?;
+            w.write_bit(rules.gun_game)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
             }
@@ -796,10 +804,10 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 p.len = len as u16;
                 p
             },
-            mode: r.read(2)? as u8,
+            mode: r.read(MODE_BITS)? as u8,
         },
         9 => Msg::Queued {
-            mode: r.read(2)? as u8,
+            mode: r.read(MODE_BITS)? as u8,
             waiting_s: r.read(16)? as u16,
         },
         2 => Msg::Welcome {
@@ -813,6 +821,11 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 score_limit: r_i32(&mut r, 32)?,
                 time_limit_ms: r.read(32)?,
                 loadout: [r.read(4)? as u8, r.read(4)? as u8],
+                seats: match r.read(4)? as u8 {
+                    n @ 1..=8 => n,
+                    _ => return Err(WireError::Malformed),
+                },
+                gun_game: r.read_bit()?,
             },
             salt_commit: {
                 let mut c = [0u8; 32];
