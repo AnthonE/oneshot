@@ -72,7 +72,7 @@ keep its JS map tools nearly as they are.
 | `src/weapons.wat` | 326 | `sim` | Port | Rockets, frags, splash, rocket jumps |
 | `src/am/slayer.*`, `src/am/*` | | `sim` | Port Slayer; reference the rest | The team-mode kit's shape: `start`, `tick`, `kill`, `bar` hooks |
 | `client/arena-bot.mjs` | 646 | `server` (Rust) | Port | The AI fighter: target choice by sight, settling aim with human wobble (1.4–2.8° rms), 0.25–0.6 s reaction, blind past 60°, gun by range, strafing, frags, pads. It runs server-side against the true world. |
-| `tools/map-compile.mjs` | 366 | `tools/maps` | Copy, extend | Map compiler core (no Node imports). Extend with the visibility bake (`DESIGN.md` §8). |
+| `tools/map-compile.mjs` | 366 | `tools/maps` | Port (done: `tools/maps/compile.mjs`) | Boxes, prefabs, quarter turns; our flat floor (no heightfield, no movers), team mirroring, output as Rust tables the sim builds a `Map` from. The visibility bake (`DESIGN.md` §8) is still to come. |
 | `tools/png-codec.mjs` | 125 | `tools/maps` | Copy | PNG encode/decode in typed arrays |
 | `tools/scene-map.mjs` | 607 | `tools/maps` | Copy | Convex solids to boxes, ramps to stairs |
 | `tools/map.mjs` | 56 | `tools/maps` | Copy | CLI; documents `map.json` |

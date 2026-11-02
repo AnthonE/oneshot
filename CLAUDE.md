@@ -15,14 +15,19 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
 | `web/` | three.js page: draws, never decides |
+| `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
 
 ## The loop
 
 1. Write the code.
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
-4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`.
-5. Commit with a short message.
+4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
+   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map).
+5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
+   `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
+   hand; Proving Grounds is the golden's map.
+6. Commit with a short message.
 
 ## The wire's walls
 
@@ -41,7 +46,9 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
   `step`), so the replay records it. A replay that doesn't re-run to the
   server's hash is a bug in the sim or the room, never in the replay.
 - **Ranked is a wallet's.** A pass without a wallet plays casual only; a
-  rating is reported only for wallets.
+  rating is reported only for wallets. A cup is ranked.
+- **Skins are cosmetic and checked.** Worn only if the wallet owns it; never
+  in the sim, never a hitbox, a sound or a fighter's visibility.
 - **The seed is not the salt.** What clients watch (spawns, bots) comes from
   the seed; the salt keys spread and is revealed only at `Phase::Over`.
 

@@ -1,6 +1,7 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
 //! [--web web/dist] [--cert cert.pem --key key.pem] [--doubles]
-//! [--passive-bots] [--map <id>]… [--slug oneshot] [--domain host]…
+//! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
+//! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir]`
 //!
@@ -42,6 +43,8 @@ fn main() {
                     .id;
                 cfg.maps.push(id);
             }
+            "--cup-min" => cfg.cup_min = val().parse().unwrap_or_else(|_| die("--cup-min is a count")),
+            "--cup-rounds" => cfg.cup_rounds = val().parse().unwrap_or_else(|_| die("--cup-rounds is a count")),
             "--slug" => cfg.slug = val(),
             "--domain" => domains.push(val()),
             "--elo-pubkey" => {

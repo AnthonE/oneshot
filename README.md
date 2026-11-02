@@ -57,3 +57,26 @@ cargo run -p server --release --bin oneshot-replay -- replays/os-*.osr   # re-ru
 
 The server's key is `openssl genpkey -algorithm ed25519 -out server.pem`; its
 public half goes in the game's `elo.json` `server_keys` on Elo Pros.
+
+## Milestone 6: modes, maps, skins, cups
+
+- **Casual:** against the bot, a free for all, or Gun Game (a kill a rung
+  up a ladder of seven guns), bots in the empty seats; the free-for-all
+  rooms are shared.
+- **Kill cam:** the run-up to your death from the killer's eye, made only
+  of what fog already sent you.
+- **Maps** are data: `maps/<name>/map.json`, compiled to the sim's tables.
+  Proving Grounds, Overpass and Cistern; a room draws one from its seed.
+- **Skins:** worn only if your wallet owns them (Elo Pros' items), drawn as
+  trim over the side's colour.
+- **Cups:** Swiss rounds of free-for-all heats, a final of the top eight,
+  each heat reported on the `cup` ladder, and the top places' heats queued
+  for review before any prize.
+
+```sh
+node tools/maps/compile.mjs           # after editing a map.json (ci checks it with --check)
+cargo test -p sim --test maps         # every map: spawns, pads, walkable, bots fight
+ci/parity.sh                          # every map native vs wasm, Doubles and Gun Game
+node ci/e2e.mjs 40 4 2                # the page in Gun Game on Cistern against seven bots
+oneshot-server --map cistern --cup-min 8 --cup-rounds 3
+```
