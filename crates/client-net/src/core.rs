@@ -422,6 +422,17 @@ impl NetCore {
         self.clock_offset.map_or(0.0, |o| now_ms / TICK_MS + o - self.delay)
     }
 
+    /// Whether anyone is drawn past the newest snapshot at `now_ms`: the
+    /// render tick has outrun what arrived (late or lost snapshots), so
+    /// they are extrapolated or held. The impaired-network gate counts it.
+    pub fn extrapolating(&self, now_ms: f64) -> bool {
+        if self.n_frames == 0 {
+            return false;
+        }
+        let newest = &self.frames[self.n_frames - 1];
+        newest.n > 0 && self.render_tick(now_ms) > newest.tick as f64
+    }
+
     /// Everyone else as drawn at `now_ms`: between the two snapshots around
     /// the render tick, or extrapolated at most two intervals past the
     /// newest, then held.
