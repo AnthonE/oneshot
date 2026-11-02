@@ -23,7 +23,16 @@ pub struct Bot {
     target: u8,
     /// A wobble that drifts, in turns.
     wob: (f32, f32),
+    /// The map's roam point it walks to with nobody in sight, and ticks
+    /// left before it gives up on it (stuck on a wall).
+    goal: u8,
+    goal_for: u16,
 }
+
+/// How long a bot walks at one roam point before it picks another.
+const GOAL_MS: u32 = 8000;
+/// Close enough to a roam point to pick the next.
+const GOAL_NEAR: f32 = 2.0;
 
 impl Bot {
     pub fn new(seed: u64, slot: usize, skill: f32) -> Bot {
@@ -35,6 +44,8 @@ impl Bot {
             seen: 0,
             target: 255,
             wob: (0.0, 0.0),
+            goal: 0,
+            goal_for: 0,
         }
     }
 
@@ -92,8 +103,18 @@ impl Bot {
         }
 
         if best == 255 {
-            // Nobody in sight: walk toward the middle, then the pads.
-            let goal = if me.body.pos.flat().len() > 6.0 {
+            // Nobody in sight: the map's roam points one after another, or
+            // with none, toward the middle, then the first pad.
+            let roam = &w.map.roam;
+            let goal = if !roam.is_empty() {
+                let at = roam[self.goal as usize % roam.len()];
+                if self.goal_for == 0 || (at - me.body.pos).flat().len() < GOAL_NEAR {
+                    self.goal = self.rng.next_bounded(roam.len() as u32) as u8;
+                    self.goal_for = ticks(GOAL_MS) as u16;
+                }
+                self.goal_for -= 1;
+                roam[self.goal as usize % roam.len()]
+            } else if me.body.pos.flat().len() > 6.0 {
                 V3::ZERO
             } else {
                 w.map.pads.first().map_or(V3::ZERO, |p| p.pos)
@@ -158,23 +179,33 @@ impl Bot {
 /// depth back to exercise the rewind. Returns the world's hash, folded over
 /// every tick, so any tick that differs shows.
 pub fn bot_match(seed: u64, ticks_n: u32) -> u64 {
+    bot_match_on(0, false, seed, ticks_n)
+}
+
+/// [`bot_match`] on map `map`, or with `eight` an eight-seat Gun Game
+/// there: what `ci/parity.sh` runs on every map. 0 if there is no such map.
+pub fn bot_match_on(map: u8, eight: bool, seed: u64, ticks_n: u32) -> u64 {
+    let Some(m) = crate::map::by_id(map) else {
+        return 0;
+    };
     let rules = Rules {
         score_limit: 100_000,
         time_limit_ms: 0,
-        ..Rules::doubles()
+        ..if eight { Rules::gun_game() } else { Rules::doubles() }
     };
+    let n = rules.seats as usize;
     let salt = (crate::rng::splitmix64(seed), crate::rng::splitmix64(seed ^ 0x5a17));
-    let mut w = World::new(crate::map::Map::proving_grounds(), rules, seed, salt);
+    let mut w = World::new(m, rules, seed, salt);
     let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
-    for (s, b) in bots.iter_mut().enumerate().take(4) {
+    for (s, b) in bots.iter_mut().enumerate().take(n) {
         w.seat(s, (s & 1) as u8);
-        *b = Bot::new(seed, s, 0.3 + 0.2 * s as f32);
+        *b = Bot::new(seed, s, 0.3 + 0.2 * (s % 4) as f32);
     }
-    let depth = [0, 3 << 8, 7 << 8 | 128, 12 << 8, 0, 0, 0, 0];
+    let depth = [0, 3 << 8, 7 << 8 | 128, 12 << 8, 0, 5 << 8, 1 << 8, 9 << 8];
     let mut fold = 0u64;
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     for _ in 0..ticks_n {
-        for s in 0..4 {
+        for s in 0..n {
             inputs[s] = bots[s].think(&w, s);
         }
         w.step(&inputs, &depth);

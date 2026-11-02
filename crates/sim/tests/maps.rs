@@ -1,0 +1,180 @@
+//! Every map holds up: spawns stand clear on a floor, pads sit where a
+//! fighter can take them, red and blue start alike, every spawn and pad can
+//! be walked to from the first spawn, and bots fight on it. The compiler
+//! (`tools/maps/compile.mjs`) checks a map's shape; this checks it plays.
+
+use std::collections::{BTreeSet, VecDeque};
+
+use sim::bot::Bot;
+use sim::consts::*;
+use sim::fmath::{fabs, round};
+use sim::input::Input;
+use sim::map::{by_id, Map, ANY_TEAM};
+use sim::maps::ALL;
+use sim::world::{Rules, World};
+
+/// Whether a body of radius `r` standing at height `y` at (x, z) is in a
+/// box (beyond touching its top).
+fn blocked(m: &Map, x: f32, z: f32, y: f32, r: f32) -> bool {
+    m.boxes
+        .iter()
+        .any(|b| b.over_xz(x, z, r) && b.min.y < y + BODY_H && b.max.y > y + 1e-3)
+}
+
+#[test]
+fn ids_are_the_maps_and_one_each() {
+    let ids: BTreeSet<u8> = ALL.iter().map(|d| d.id).collect();
+    assert_eq!(ids.len(), ALL.len());
+    for d in ALL {
+        let m = by_id(d.id).unwrap();
+        assert_eq!(m.id, d.id);
+        assert_eq!(m.looks.len(), m.boxes.len(), "{}", m.name);
+    }
+    assert_eq!(Map::proving_grounds().id, 0);
+}
+
+#[test]
+fn spawns_stand_clear_and_pads_can_be_taken() {
+    for d in ALL {
+        let m = d.build();
+        for (i, s) in m.spawns.iter().enumerate() {
+            let p = s.pos;
+            assert!(
+                p.x - BODY_R >= m.lo.0 && p.x + BODY_R <= m.hi.0 && p.z - BODY_R >= m.lo.1 && p.z + BODY_R <= m.hi.1,
+                "{} spawn {i}: out of bounds",
+                m.name
+            );
+            assert_eq!(
+                m.floor(p.x, p.z, BODY_R, p.y + STEP),
+                p.y,
+                "{} spawn {i}: not on its floor",
+                m.name
+            );
+            assert!(!blocked(&m, p.x, p.z, p.y, BODY_R), "{} spawn {i}: in a box", m.name);
+        }
+        assert!(m.pads.len() <= MAX_PADS, "{}", m.name);
+        for (i, pad) in m.pads.iter().enumerate() {
+            let p = pad.pos;
+            assert_eq!(
+                m.floor(p.x, p.z, BODY_R, p.y + STEP),
+                p.y,
+                "{} pad {i}: not on a floor",
+                m.name
+            );
+            assert!(!blocked(&m, p.x, p.z, p.y, BODY_R), "{} pad {i}: in a box", m.name);
+        }
+        let side = |t: u8| m.spawns.iter().filter(|s| s.team == t || s.team == ANY_TEAM).count();
+        assert!(
+            side(0) >= 2 && side(0) == side(1),
+            "{}: red {} blue {}",
+            m.name,
+            side(0),
+            side(1)
+        );
+        assert!(m.spawns.len() >= 8, "{}: eight seats need eight spawns", m.name);
+    }
+}
+
+/// Walkable places from `from` on a grid: a step to a neighbour climbs at
+/// most STEP and needs the body's height clear; walking off a ledge drops
+/// to the floor below. No jumps: everything must be reachable on foot.
+fn walk(m: &Map, from: (f32, f32, f32)) -> BTreeSet<(i32, i32, i32)> {
+    const G: f32 = 0.25;
+    let key = |x: f32, z: f32, y: f32| (round(x / G) as i32, round(z / G) as i32, round(y * 64.0) as i32);
+    let mut seen = BTreeSet::new();
+    let mut q = VecDeque::new();
+    let k0 = key(from.0, from.2, from.1);
+    seen.insert(k0);
+    q.push_back(k0);
+    let r = BODY_R;
+    while let Some((ix, iz, iy)) = q.pop_front() {
+        let y = iy as f32 / 64.0;
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, nz) = (ix + dx, iz + dz);
+            let (x, z) = (nx as f32 * G, nz as f32 * G);
+            if x - r < m.lo.0 || x + r > m.hi.0 || z - r < m.lo.1 || z + r > m.hi.1 {
+                continue;
+            }
+            let ny = m.floor(x, z, r, y + STEP);
+            if blocked(m, x, z, ny, r) {
+                continue;
+            }
+            let k = key(x, z, ny);
+            if seen.insert(k) {
+                q.push_back(k);
+            }
+        }
+    }
+    seen
+}
+
+#[test]
+fn everything_can_be_walked_to() {
+    for d in ALL {
+        let m = d.build();
+        let s0 = m.spawns[0].pos;
+        let reach = walk(&m, (s0.x, s0.y, s0.z));
+        let near = |x: f32, z: f32, y: f32| {
+            reach.iter().any(|&(ix, iz, iy)| {
+                fabs(ix as f32 * 0.25 - x) <= 0.25
+                    && fabs(iz as f32 * 0.25 - z) <= 0.25
+                    && fabs(iy as f32 / 64.0 - y) < 0.01
+            })
+        };
+        for (i, s) in m.spawns.iter().enumerate() {
+            assert!(
+                near(s.pos.x, s.pos.z, s.pos.y),
+                "{}: spawn {i} can't be walked to",
+                m.name
+            );
+        }
+        for (i, p) in m.pads.iter().enumerate() {
+            assert!(
+                near(p.pos.x, p.pos.z, p.pos.y),
+                "{}: pad {i} can't be walked to",
+                m.name
+            );
+        }
+        for (i, r) in m.roam.iter().enumerate() {
+            assert!(
+                reach
+                    .iter()
+                    .any(|&(ix, iz, _)| fabs(ix as f32 * 0.25 - r.x) <= 0.25 && fabs(iz as f32 * 0.25 - r.z) <= 0.25),
+                "{}: roam point {i} can't be walked to",
+                m.name
+            );
+        }
+    }
+}
+
+#[test]
+fn bots_fight_on_every_map() {
+    for d in ALL {
+        for rules in [Rules::doubles(), Rules::ffa()] {
+            let rules = Rules {
+                score_limit: 1000,
+                time_limit_ms: 0,
+                ..rules
+            };
+            let n = rules.seats as usize;
+            let mut w = World::new(d.build(), rules, 3, (1, 2));
+            let mut bots: Vec<Bot> = (0..n).map(|s| Bot::new(3, s, 0.6)).collect();
+            for s in 0..n {
+                w.seat(s, (s & 1) as u8);
+            }
+            let mut inputs = [Input::default(); MAX_FIGHTERS];
+            for _ in 0..20_000 {
+                for (s, b) in bots.iter_mut().enumerate() {
+                    inputs[s] = b.think(&w, s);
+                }
+                w.step(&inputs, &[0; MAX_FIGHTERS]);
+            }
+            let kills: u16 = w.fighters.iter().map(|f| f.kills).sum();
+            assert!(
+                kills >= 5,
+                "{} with {n} seats: only {kills} kills in 20000 ticks",
+                d.name
+            );
+        }
+    }
+}

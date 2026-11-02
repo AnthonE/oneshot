@@ -131,6 +131,17 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
     b.to_string()
 }
 
+/// The skin names in an items answer that are skins of this game.
+pub fn owned_skins(v: &serde_json::Value) -> Vec<String> {
+    let names = v["items"].as_array().into_iter().flatten().filter_map(|i| {
+        i.as_str()
+            .or_else(|| i["skin"].as_str())
+            .or_else(|| i["name"].as_str())
+            .map(|s| s.to_ascii_lowercase())
+    });
+    names.filter(|n| proto::SKINS.contains(&n.as_str())).collect()
+}
+
 /// How long a ban answer is kept before it is asked again.
 pub const BAN_CACHE: Duration = Duration::from_secs(60);
 
@@ -140,6 +151,7 @@ pub struct Elo {
     pub key: Option<ServerKey>,
     http: reqwest::Client,
     bans: Mutex<HashMap<String, (Instant, bool)>>,
+    skins: Mutex<HashMap<String, (Instant, Vec<String>)>>,
 }
 
 impl Elo {
@@ -153,7 +165,43 @@ impl Elo {
                 .build()
                 .unwrap_or_default(),
             bans: Mutex::new(HashMap::new()),
+            skins: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
+    /// on Elo Pros (Metaplex Core, `meter/solana_items.py`), asked as
+    /// `GET /api/items/<slug>/of/<wallet>`, read as `{"items": [...]}` whose
+    /// entries are names or objects with a `skin` or `name`. Empty if Elo
+    /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
+    /// look, never the game. Answers are kept [`BAN_CACHE`].
+    pub async fn skins(&self, wallet: &str) -> Vec<String> {
+        let key = wallet.to_ascii_lowercase();
+        if let Ok(m) = self.skins.lock() {
+            if let Some((at, s)) = m.get(&key) {
+                if at.elapsed() < BAN_CACHE {
+                    return s.clone();
+                }
+            }
+        }
+        let url = format!("{}/api/items/{}/of/{}", self.origin, self.slug, wallet);
+        let got = async {
+            let res = self.http.get(&url).send().await.ok()?;
+            if !res.status().is_success() {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+            Some(owned_skins(&v))
+        }
+        .await;
+        let Some(got) = got else { return Vec::new() };
+        if let Ok(mut m) = self.skins.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
+            }
+            m.insert(key, (Instant::now(), got.clone()));
+        }
+        got
     }
 
     /// Whether the game has banned `wallet`: None if Elo Pros couldn't be
@@ -274,6 +322,13 @@ impl Elo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
+        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, 7]});
+        assert_eq!(owned_skins(&v), vec!["ember", "gilded", "pill"]);
+        assert!(owned_skins(&serde_json::json!({})).is_empty());
+    }
 
     #[test]
     fn the_text_is_the_sdk_s() {

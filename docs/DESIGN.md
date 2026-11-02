@@ -363,7 +363,8 @@ crossed) and the bots (none).
    and the leak gate green.
 4. **Ranked:** sign-in, queue, ratings with evidence, replays and kill cam.
 5. **Review:** telemetry, the review queue, bans.
-6. **Doubles, three maps, skins,** then cups.
+6. **Doubles, three maps, skins,** then cups. Also: casual free for all and
+   Gun Game, the kill cam, the impaired-network gate.
 
 ## 17 · What CI blocks a merge on
 
@@ -375,7 +376,8 @@ crossed) and the bots (none).
 | Prediction | the predicted own body differs from the server's through runs, jumps, bursts, swaps, reloads and frags |
 | **Leak gate** | headless Chrome plus bots: any enemy reaches a client while not visible within the lead window, or any byte of the salt crosses the wire before match end |
 | Lag-comp bounds | a shot lands with more than 160 ms of favour, or a client's claimed ack beats the server's view |
-| Impaired network | at 60 ms delay, 10 ms jitter, 5% loss: correction rate, bandwidth and interpolation stalls over their budgets |
+| Impaired network | at 60 ms delay, 10 ms jitter, 5% loss: correction rate, bandwidth and interpolation stalls over their budgets (`client-net/tests/loopback.rs`) |
+| Maps | a map's compiled tables aren't what its `map.json` compiles to; a spawn or pad off its floor or unreachable on foot; bots that don't fight on it |
 
 Numbers in this page that come from measurements cite their source. Every
 other number is a starting value, set in code and tuned from matches.

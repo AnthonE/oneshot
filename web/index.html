@@ -13,7 +13,7 @@
         font: 16px system-ui, sans-serif; }
       #menu h1 { margin: 0; font-size: 52px; letter-spacing: 6px; }
       #menu p { margin: 0; opacity: 0.75; }
-      #menu input, #menu button { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
+      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
         background: #0008; color: inherit; }
       #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
       #menu button:disabled { opacity: 0.35; cursor: default; }
@@ -28,14 +28,22 @@
     <canvas id="game"></canvas>
     <div id="menu">
       <h1>ONESHOT</h1>
-      <p>Halo-style 1v1 and 2v2 · ranked on Elo Pros</p>
-      <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
+      <p>Halo-style 1v1 and 2v2 · ranked on Elo Pros · free for all and Gun Game with bots</p>
+      <div class="row">
+        <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
+        <select id="skin" title="Skin: worn if your wallet owns it"></select>
+      </div>
       <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
       <div id="who"></div>
       <button id="play">Play the bot</button>
       <div class="row">
+        <button id="ffa" class="quiet">Free for all</button>
+        <button id="gungame" class="quiet">Gun Game</button>
+      </div>
+      <div class="row">
         <button id="duel" disabled>Ranked Duel</button>
         <button id="doubles" disabled>Ranked Doubles</button>
+        <button id="cup" disabled>Enter a cup</button>
       </div>
       <div id="status"></div>
       <button id="cancel" class="quiet" hidden>Cancel</button>

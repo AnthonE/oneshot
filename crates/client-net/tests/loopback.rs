@@ -19,7 +19,15 @@ struct Net {
     loss: f64,
     up: Vec<(f64, Vec<u8>)>,
     down: Vec<(f64, Vec<u8>)>,
+    /// Bytes handed to the network each way, before loss, with QUIC's
+    /// per-datagram overhead.
+    bytes_up: u64,
+    bytes_down: u64,
 }
+
+/// What a datagram costs on the wire past its payload: QUIC short header,
+/// packet number, the DATAGRAM frame, AEAD tag, UDP and IPv4.
+const OVERHEAD: u64 = 1 + 8 + 4 + 3 + 16 + 8 + 20;
 
 impl Net {
     fn unit(&mut self) -> f64 {
@@ -27,6 +35,12 @@ impl Net {
     }
 
     fn send(&mut self, now: f64, bytes: Vec<u8>, up: bool) {
+        let cost = bytes.len() as u64 + OVERHEAD;
+        if up {
+            self.bytes_up += cost;
+        } else {
+            self.bytes_down += cost;
+        }
         if self.unit() < self.loss {
             return;
         }
@@ -60,6 +74,10 @@ struct Run {
     now: f64,
     next_tick: f64,
     next_frame: f64,
+    /// Frames the page drew, and of those, frames where someone in view was
+    /// drawn past the newest snapshot (extrapolated or held).
+    frames: u64,
+    stalls: u64,
 }
 
 fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
@@ -69,7 +87,7 @@ fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
         ..Rules::duel()
     };
     let mut room = Room::new(Map::proving_grounds(), rules, 11, (5, 6));
-    let (slot, out) = room.join(Name::new("tester")).unwrap();
+    let (slot, out) = room.join(Name::new("tester"), 0).unwrap();
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
     };
@@ -94,7 +112,11 @@ fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
             loss,
             up: Vec::new(),
             down: Vec::new(),
+            bytes_up: 0,
+            bytes_down: 0,
         },
+        frames: 0,
+        stalls: 0,
         now: 0.0,
         next_tick: 0.0,
         next_frame: 0.0,
@@ -125,6 +147,10 @@ impl Run {
                 self.next_tick += 1000.0 / TICK_HZ as f64;
             }
             if self.next_frame <= self.now {
+                self.frames += 1;
+                if self.client.extrapolating(self.now) {
+                    self.stalls += 1;
+                }
                 for m in self.client.update(self.now, input(self.now)) {
                     let n = encode_input(&m, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), true);
@@ -236,4 +262,43 @@ fn the_reveal_is_checked_against_the_commitment() {
     assert_eq!(r.client.verified, Some(false));
     assert!(r.client.on_reveal([3, 4]));
     assert_eq!(r.client.verified, Some(true));
+}
+
+/// The impaired-network gate (docs/DESIGN.md §17): 60 ms each way, 10 ms of
+/// jitter and 5% loss both ways, against a bot that fights back. Over its
+/// budgets the build is red.
+#[test]
+fn an_impaired_link_stays_within_its_budgets() {
+    // Measured when the gate went in: 0.8% corrected, 96 kbit/s down and
+    // 97 up, 0.06% of frames stalled. The budgets leave room, not slack.
+    /// Predictions the server corrected, of all it ruled on.
+    const MAX_CORRECTION_RATE: f64 = 0.02;
+    /// Down (snapshots) and up (inputs), kilobits a second, with QUIC's
+    /// overhead. A duel: Doubles and FFA send more remotes.
+    const MAX_DOWN_KBPS: f64 = 150.0;
+    const MAX_UP_KBPS: f64 = 130.0;
+    /// Frames drawn with someone past the newest snapshot.
+    const MAX_STALL_RATE: f64 = 0.01;
+
+    let mut r = start(60.0, 10.0, 0.05, false);
+    r.run(4000.0, player);
+    let (warm, up0, down0, f0, st0) = (r.client.stats, r.net.bytes_up, r.net.bytes_down, r.frames, r.stalls);
+    let secs = 30.0;
+    r.run(secs * 1000.0, player);
+    let s = r.client.stats;
+    let (conf, corr) = (s.confirmations - warm.confirmations, s.corrections - warm.corrections);
+    let correction_rate = corr as f64 / (conf + corr).max(1) as f64;
+    let down = (r.net.bytes_down - down0) as f64 * 8.0 / 1000.0 / secs;
+    let up = (r.net.bytes_up - up0) as f64 * 8.0 / 1000.0 / secs;
+    let stall_rate = (r.stalls - st0) as f64 / (r.frames - f0) as f64;
+    let report = format!(
+        "corrections {correction_rate:.4} ({corr} of {}), down {down:.0} kbit/s, up {up:.0} kbit/s, stalls {stall_rate:.4}: {s:?}",
+        conf + corr
+    );
+    println!("{report}");
+    assert!(conf > 1000, "{report}");
+    assert!(correction_rate <= MAX_CORRECTION_RATE, "{report}");
+    assert!(down <= MAX_DOWN_KBPS, "{report}");
+    assert!(up <= MAX_UP_KBPS, "{report}");
+    assert!(stall_rate <= MAX_STALL_RATE, "{report}");
 }

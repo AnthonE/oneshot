@@ -83,10 +83,14 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
     eyes.iter().any(|&e| points.iter().any(|&t| map.clear(e, t)))
 }
 
-/// The plain test: is the target's chest in clear line from the viewer's
-/// eye right now. Fog must never hide what passes this.
+/// The plain test: is the target's chest or head in clear line from the
+/// viewer's eye right now (a head over waist-high cover is in plain sight).
+/// Fog must never hide what passes this.
 pub fn plainly_sees(map: &Map, viewer: &Fighter, target: &Fighter) -> bool {
-    map.clear(eye(viewer), target.body.pos + V3::new(0.0, chest_h(target), 0.0))
+    let head = if target.body.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
+    let e = eye(viewer);
+    map.clear(e, target.body.pos + V3::new(0.0, chest_h(target), 0.0))
+        || map.clear(e, target.body.pos + V3::new(0.0, head, 0.0))
 }
 
 /// One viewer's fog: until when each other seat stays sent.

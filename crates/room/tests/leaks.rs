@@ -1,5 +1,5 @@
-//! The leak gate (docs/DESIGN.md §17): a whole Doubles match with one
-//! person seat (played by a bot, through the same input path a client
+//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, and an
+//! eight-seat Gun Game) with one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
@@ -19,6 +19,8 @@ use sim::map::Map;
 use sim::world::{Phase, Rules};
 
 const SALT: (u64, u64) = (0x5a17_0123_4567_89ab, 0xfeed_beef_cafe_d00d);
+/// The skin the person seat wears (the server checked it owns it).
+const SKIN: u8 = 3;
 
 /// Whether the 64 bits of `w` appear in `buf` at any bit offset (the wire
 /// is bit-packed, so a leak need not be byte-aligned).
@@ -48,7 +50,7 @@ fn on_grid(v: f32) -> bool {
 struct Gate {
     room: Room,
     me: usize,
-    mate: usize,
+    mate: Option<usize>,
     history: VecDeque<[Fighter; MAX_FIGHTERS]>,
     sent: Vec<Vec<u8>>,
     over: bool,
@@ -60,20 +62,37 @@ struct Gate {
 
 impl Gate {
     fn check_snapshot(&mut self, s: &Snapshot) {
+        let c = self.room.client(self.me as u8).map(|c| (c.rtt_ms, c.playout as u32));
+        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play));
         let w = &self.room.world;
         let me = &w.fighters[self.me];
         let now = &self.history[0];
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
-        let known = |q: usize| q == self.me || q == self.mate || sent.contains(&q);
+        let mate = |q: usize| Some(q) == self.mate;
+        let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
         for (q, f) in w.fighters.iter().enumerate() {
-            if q == self.me || q == self.mate || !f.seated {
+            if q == self.me || mate(q) || !f.seated {
                 continue;
             }
             if sent.contains(&q) {
                 // 1. Never sent while far from visible: a check looser
-                // than fog's (300 ms ahead, 0.7 m lean, the last 16 ticks).
-                let near = self.history.iter().any(|h| sees(&w.map, &h[self.me], &h[q], 0.3, 0.7));
-                assert!(near, "tick {}: seat {q} sent while hidden from every angle", w.tick);
+                // than fog's. Seen from any look-ahead up to 300 ms
+                // (fog's own among them: a point further along a path is
+                // not a superset of a nearer one) leaning up to 0.7 m, in
+                // the last 16 ticks.
+                let leads = [fog_lead, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
+                let near = self.history.iter().any(|h| {
+                    leads.iter().any(|&l| {
+                        [room::fog::PEEK_M, 0.7]
+                            .iter()
+                            .any(|&p| sees(&w.map, &h[self.me], &h[q], l, p))
+                    })
+                });
+                assert!(
+                    near,
+                    "{} tick {}: seat {q} sent while hidden from every angle: me {:?} them {:?} alive {} teams {}",
+                    w.map.name, w.tick, me.body.pos, f.body.pos, f.alive, w.rules.teams
+                );
             } else {
                 // 2. Never hidden while plainly visible.
                 assert!(
@@ -107,14 +126,49 @@ impl Gate {
 }
 
 #[test]
-fn nothing_a_client_should_not_know_reaches_it() {
-    let rules = Rules {
-        score_limit: 25,
-        time_limit_ms: 120_000,
-        ..Rules::doubles()
-    };
-    let mut room = Room::new(Map::proving_grounds(), rules, 77, SALT);
-    let (slot, out) = room.join(Name::new("gate")).unwrap();
+fn nothing_a_client_should_not_know_reaches_it_in_doubles() {
+    gate(
+        Map::proving_grounds(),
+        Rules {
+            score_limit: 25,
+            time_limit_ms: 120_000,
+            ..Rules::doubles()
+        },
+    );
+}
+
+#[test]
+fn nothing_a_client_should_not_know_reaches_it_on_any_map() {
+    for d in sim::maps::ALL {
+        for rules in [Rules::doubles(), Rules::ffa()] {
+            gate(
+                d.build(),
+                Rules {
+                    score_limit: 25,
+                    time_limit_ms: 120_000,
+                    ..rules
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
+    gate(
+        Map::proving_grounds(),
+        Rules {
+            time_limit_ms: 120_000,
+            ..Rules::gun_game()
+        },
+    );
+}
+
+/// One match of `rules` on `map`, the person in the first seat, checked
+/// from start to end.
+fn gate(map: Map, rules: Rules) {
+    let mut room = Room::new(map, rules, 77, SALT);
+    let (slot, out) = room.join(Name::new("gate"), SKIN).unwrap();
     let Some((
         _,
         Msg::Welcome {
@@ -126,7 +180,7 @@ fn nothing_a_client_should_not_know_reaches_it() {
     };
     let me = slot as usize;
     let mut g = Gate {
-        mate: me ^ 2,
+        mate: rules.teams.then_some(me ^ 2),
         room,
         me,
         history: VecDeque::new(),
@@ -138,6 +192,7 @@ fn nothing_a_client_should_not_know_reaches_it() {
         hidden_seen: 0,
     };
     for (_, m) in &out {
+        check_seat(m, slot);
         let mut b = [0u8; 256];
         let n = encode_msg(m, &mut b).unwrap();
         g.sent.push(b[..n].to_vec());
@@ -179,6 +234,7 @@ fn nothing_a_client_should_not_know_reaches_it() {
                 g.revealed = Some(*salt);
                 continue;
             }
+            check_seat(m, slot);
             if let Msg::Phase { phase, .. } = m {
                 g.over |= *phase == Phase::Over as u8;
             }
@@ -205,6 +261,16 @@ fn nothing_a_client_should_not_know_reaches_it() {
     // The gate only means something if fog actually hid someone.
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
+}
+
+/// Check 7: skins are public by design (docs/DESIGN.md §15) and say
+/// nothing of the world. A seat names the skin its person was checked to
+/// own, and a bot's is the standard look.
+fn check_seat(m: &Msg, me: u8) {
+    if let Msg::Seat { slot, bot, skin, .. } = *m {
+        let want = if slot == me && !bot { SKIN } else { proto::SKIN_STANDARD };
+        assert_eq!(skin, want, "seat {slot}'s skin");
+    }
 }
 
 #[test]

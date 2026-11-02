@@ -13,6 +13,10 @@ pub const ROCKET: u8 = 6;
 pub const SMG: u8 = 7;
 pub const COUNT: usize = 8;
 
+/// Gun Game's ladder: each kill moves the killer up one, the power weapons
+/// first, and a kill with the last one wins.
+pub const LADDER: [u8; 7] = [ROCKET, SHOTGUN, SMG, AR, SNIPER, BR, MAGNUM];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Hitscan,

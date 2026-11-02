@@ -1,6 +1,7 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
 //! [--web web/dist] [--cert cert.pem --key key.pem] [--doubles]
-//! [--passive-bots] [--slug oneshot] [--domain host]…
+//! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
+//! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir]`
 //!
@@ -33,6 +34,17 @@ fn main() {
             "--key" => key = Some(val()),
             "--doubles" => cfg.rules = Rules::doubles(),
             "--passive-bots" => cfg.passive_bots = true,
+            "--map" => {
+                let v = val();
+                let id = sim::maps::ALL
+                    .iter()
+                    .find(|d| d.id.to_string() == v || d.name.eq_ignore_ascii_case(&v))
+                    .unwrap_or_else(|| die(&format!("no map {v}")))
+                    .id;
+                cfg.maps.push(id);
+            }
+            "--cup-min" => cfg.cup_min = val().parse().unwrap_or_else(|_| die("--cup-min is a count")),
+            "--cup-rounds" => cfg.cup_rounds = val().parse().unwrap_or_else(|_| die("--cup-rounds is a count")),
             "--slug" => cfg.slug = val(),
             "--domain" => domains.push(val()),
             "--elo-pubkey" => {

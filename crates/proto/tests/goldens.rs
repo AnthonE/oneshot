@@ -148,12 +148,14 @@ fn msgs() -> Vec<Msg> {
             name: Name::new("player one"),
             pass: Pass::NONE,
             mode: MODE_CASUAL,
+            skin: SKIN_STANDARD,
         },
         Msg::Hello {
             proto: PROTO_VER,
             name: Name::new("ranked"),
             pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
             mode: MODE_DUEL,
+            skin: 2,
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -168,12 +170,36 @@ fn msgs() -> Vec<Msg> {
             rules: Rules::duel(),
             salt_commit: salt_commit([7, 9]),
         },
+        Msg::Welcome {
+            slot: 5,
+            team: 1,
+            tick: 9000,
+            tick_hz: 128,
+            map: 2,
+            rules: Rules::gun_game(),
+            salt_commit: salt_commit([1, 2]),
+        },
+        Msg::Hello {
+            proto: PROTO_VER,
+            name: Name::new("ffa"),
+            pass: Pass::NONE,
+            mode: MODE_GUN_GAME,
+            skin: 5,
+        },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
             slot: 0,
             team: 0,
             bot: true,
             name: Name::new("BOT"),
+            skin: SKIN_STANDARD,
+        },
+        Msg::Seat {
+            slot: 6,
+            team: 0,
+            bot: false,
+            name: Name::new("ember"),
+            skin: 2,
         },
         Msg::Kill {
             killer: 0,
@@ -181,6 +207,14 @@ fn msgs() -> Vec<Msg> {
             cause: 102,
         },
         Msg::Phase { phase: 2, winner: 0 },
+        Msg::Cup {
+            round: 2,
+            rounds: 3,
+            entrants: 21,
+            place: 4,
+            points: 17,
+            done: false,
+        },
         Msg::Bye,
         Msg::Reveal {
             salt: [0x0123_4567_89ab_cdef, u64::MAX],
@@ -259,17 +293,21 @@ fn the_bytes_match_their_goldens() {
         let n = encode_msg(&m, &mut buf).unwrap();
         got.push(fnv(&buf[..n]));
     }
-    let want: [u64; 12] = [
+    let want: &[u64] = &[
         0x21cd_ceaa_a773_0091,
         0x13de_bd0b_5d65_9ca7,
-        0x5abb_9726_fdc1_09d3,
-        0xdd02_d3a6_2f01_9cc0,
-        0xc410_d8b8_5356_ae7a,
-        0x9046_9a79_8597_d6fb,
+        0x5b64_743f_57b4_1864,
+        0xa7db_3836_260c_75fb,
+        0x7ebe_34b8_2c10_f2d0,
+        0xe85b_7b56_99f2_042c,
+        0xeae6_fd0a_54e2_f36b,
+        0xc093_c63f_bf4a_6f4d,
         0x0835_ec07_b4ee_4fb0,
-        0x5c12_e734_0afe_dd50,
+        0x72fc_2d6e_af12_0ef0,
+        0x10d0_3fdf_f974_5eec,
         0xc6fb_4858_89be_4749,
         0xc800_e818_6244_f8b3,
+        0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,
         0xdfb3_0ed7_79ac_056f,
     ];

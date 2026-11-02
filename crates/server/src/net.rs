@@ -10,7 +10,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use proto::{
-    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_DOUBLES, MODE_DUEL, PROTO_VER,
+    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
+    PROTO_VER,
 };
 use tokio::sync::mpsc as tmpsc;
 use wtransport::endpoint::endpoint_side::Server;
@@ -92,6 +93,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         name,
         pass,
         mode,
+        skin,
     } = hello
     else {
         return;
@@ -100,12 +102,10 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         return refuse(&mut send, proto::REFUSE_VERSION).await;
     }
     // Who: a pass from Elo Pros, or a guest.
+    let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
     let who = if pass.is_empty() {
         None
-    } else {
-        let Some(key) = ctx.elo_pubkey else {
-            return refuse(&mut send, proto::REFUSE_PASS).await;
-        };
+    } else if let Some(key) = ctx.elo_pubkey {
         match auth::verify_pass(
             pass.as_str(),
             &key,
@@ -115,14 +115,35 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             auth::now_unix(),
         ) {
             Ok(p) => Some(p),
-            Err(_) => return refuse(&mut send, proto::REFUSE_PASS).await,
+            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            // Casual is open to anyone: a pass that doesn't check out (say,
+            // older than its ten minutes) only costs its skin.
+            Err(_) => None,
         }
+    } else if ranked {
+        return refuse(&mut send, proto::REFUSE_PASS).await;
+    } else {
+        None
+    };
+
+    // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
+    // a guest, or a list that can't be read, wears the standard look.
+    let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        Some(w) if skin != proto::SKIN_STANDARD => {
+            let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
+            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+                skin
+            } else {
+                proto::SKIN_STANDARD
+            }
+        }
+        _ => proto::SKIN_STANDARD,
     };
 
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = tmpsc::channel::<Out>(OUT_QUEUE);
     let join = match mode {
-        MODE_DUEL | MODE_DOUBLES => {
+        MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
             let Some(wallet) = who.and_then(|p| p.wallet) else {
                 return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
@@ -132,7 +153,11 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             if ctx.elo.banned(&wallet).await == Some(true) {
                 return refuse(&mut send, proto::REFUSE_BANNED).await;
             }
-            let ladder = if mode == MODE_DOUBLES { "doubles" } else { "duel" };
+            let ladder = match mode {
+                MODE_DOUBLES => "doubles",
+                MODE_CUP => "cup",
+                _ => "duel",
+            };
             let rating = ctx.elo.rating(&wallet, ladder).await;
             ToSim::Queue {
                 session: session_id,
@@ -143,6 +168,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
                     mode,
                     rating,
                     since: std::time::Instant::now(),
+                    skin,
                 }),
                 tx,
             }
@@ -150,6 +176,8 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         _ => ToSim::Casual {
             session: session_id,
             name,
+            mode,
+            skin,
             tx,
         },
     };

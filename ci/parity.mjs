@@ -1,8 +1,12 @@
-// node ci/parity.mjs <sim_wasm.wasm> <seed> <ticks>: the folded hash of a bot
-// match run by the sim compiled to wasm, printed as 16 hex digits.
+// node ci/parity.mjs <sim_wasm.wasm> <seed> <ticks> [map eight]: the
+// folded hash of a bot match run by the sim compiled to wasm, printed as 16
+// hex digits. With a map: on that map, eight seats of Gun Game if `eight`
+// is 1.
 import { readFileSync } from 'node:fs';
 
-const [file, seed = '1', ticks = '20000'] = process.argv.slice(2);
+const [file, seed = '1', ticks = '20000', map, eight = '0'] = process.argv.slice(2);
 const { instance } = await WebAssembly.instantiate(readFileSync(file), {});
-const h = instance.exports.bot_match(BigInt(seed), Number(ticks));
+const h = map === undefined
+  ? instance.exports.bot_match(BigInt(seed), Number(ticks))
+  : instance.exports.bot_match_on(Number(map), Number(eight), BigInt(seed), Number(ticks));
 console.log(BigInt.asUintN(64, h).toString(16).padStart(16, '0'));

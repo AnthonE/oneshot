@@ -1,0 +1,80 @@
+{
+  "id": 1,
+  "name": "Overpass",
+  "about": "60 by 40 m, mirrored between red (-x) and blue (+x): a bridge across the middle with the sniper on it and the rocket under it, a raised base at each end, lane walls and crates between.",
+  "bounds": [-30, 30, -20, 20],
+  "mirror": "x",
+  "prefabs": {
+    "steps down to the north": [
+      [-2, 0, 12, 2, 2.5, 13, "block"],
+      [-2, 0, 13, 2, 2, 14, "block"],
+      [-2, 0, 14, 2, 1.5, 15, "block"],
+      [-2, 0, 15, 2, 1, 16, "block"],
+      [-2, 0, 16, 2, 0.5, 17, "block"]
+    ]
+  },
+  "structures": [
+    {
+      "name": "walls",
+      "boxes": [
+        [-31, 0, -21, 31, 8, -20, "wall"],
+        [-31, 0, 20, 31, 8, 21, "wall"],
+        [-31, 0, -20, -30, 8, 20, "wall"],
+        [30, 0, -20, 31, 8, 20, "wall"]
+      ]
+    },
+    {
+      "name": "the bridge",
+      "boxes": [
+        [-2, 2.5, -12, 2, 3, 12, "dark"],
+        [-0.5, 0, -6.5, 0.5, 2.5, -5.5, "trim"],
+        [-0.5, 0, 5.5, 0.5, 2.5, 6.5, "trim"]
+      ]
+    },
+    { "name": "the bridge's north steps", "prefab": "steps down to the north" },
+    { "name": "the bridge's south steps", "prefab": "steps down to the north", "turn": 180 },
+    {
+      "name": "red's base",
+      "mirror": true,
+      "boxes": [
+        [-28, 0, -6, -22, 2, 6, "red"],
+        [-22, 0, -1.5, -21, 1.5, 1.5, "block"],
+        [-21, 0, -1.5, -20, 1, 1.5, "block"],
+        [-20, 0, -1.5, -19, 0.5, 1.5, "block"],
+        [-22.5, 2, -6, -22, 3.2, -1.5, "red"],
+        [-22.5, 2, 1.5, -22, 3.2, 6, "red"]
+      ]
+    },
+    {
+      "name": "red's lanes",
+      "mirror": true,
+      "boxes": [
+        [-12, 0, -10.25, -6, 3, -9.75, "block"],
+        [-12, 0, 9.75, -6, 3, 10.25, "block"],
+        [-13, 0, -1.5, -12.5, 1.2, 1.5, "block"],
+        [-17, 0, -15, -15.5, 1.5, -13.5, "block"],
+        [-17, 0, 13.5, -15.5, 1.5, 15, "block"],
+        [-8, 0, -4, -6.5, 1.5, -2.5, "block"],
+        [-8, 0, 2.5, -6.5, 1.5, 4, "block"],
+        [-5, 0, -15.75, -3.5, 4, -14.25, "block"],
+        [-5, 0, 14.25, -3.5, 4, 15.75, "block"]
+      ]
+    }
+  ],
+  "spawns": [
+    { "at": [-26, -4, 2], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-26, 4, 2], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-24, -15], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-24, 15], "team": "red", "yaw": 0, "mirror": true }
+  ],
+  "pads": [
+    { "weapon": "sniper", "at": [0, 0, 3], "respawn": 90 },
+    { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
+    { "weapon": "shotgun", "at": [-10, -15], "respawn": 60, "mirror": true },
+    { "weapon": "smg", "at": [-25, 0, 2], "respawn": 30, "mirror": true }
+  ],
+  "roam": [
+    [0, 0], [-10, 0], [10, 0], [-20, -15], [-20, 15], [20, -15], [20, 15],
+    [-4, -18], [4, 18], [-14, -5], [14, 5], [0, -12], [0, 12]
+  ]
+}

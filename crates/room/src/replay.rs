@@ -5,8 +5,9 @@
 //! the server wrote. Bots' inputs are recorded like anyone's, so a replay
 //! never depends on the bot's code.
 //!
-//! Format, little-endian: `OSR1`, u16 PROTO_VER, u64 golden tag, u64 seed,
-//! u64 salt × 2, the rules, u8 map; then records: `S` slot team (a seat),
+//! Format, little-endian: `OSR2`, u16 PROTO_VER, u64 golden tag, u64 seed,
+//! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
+//! gun game), u8 map; then records: `S` slot team (a seat),
 //! `U` slot (an unseat), `T` changed-input mask, inputs, changed-rewind
 //! mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 8 scores (the end).
 
@@ -17,7 +18,7 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::world::{Rules, World};
 
-pub const MAGIC: &[u8; 4] = b"OSR1";
+pub const MAGIC: &[u8; 4] = b"OSR2";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
@@ -25,10 +26,7 @@ pub const RULES_TAG: u64 = 0x6a3a_cc7e_0b61_c34a;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {
-    match id {
-        0 => Some(Map::proving_grounds()),
-        _ => None,
-    }
+    sim::map::by_id(id)
 }
 
 pub struct Recorder {
@@ -51,6 +49,8 @@ impl Recorder {
         buf.extend_from_slice(&rules.score_limit.to_le_bytes());
         buf.extend_from_slice(&rules.time_limit_ms.to_le_bytes());
         buf.extend_from_slice(&rules.loadout);
+        buf.push(rules.seats);
+        buf.push(rules.gun_game as u8);
         buf.push(map);
         Recorder {
             buf,
@@ -175,7 +175,12 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
         score_limit: r.u32()? as i32,
         time_limit_ms: r.u32()?,
         loadout: [r.u8()?, r.u8()?],
+        seats: r.u8()?,
+        gun_game: r.u8()? != 0,
     };
+    if rules.seats == 0 || rules.seats as usize > MAX_FIGHTERS {
+        return Err("a seat count past the last".into());
+    }
     let map = map_by_id(r.u8()?).ok_or("an unknown map")?;
     let mut w = World::new(map, rules, seed, salt);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
@@ -284,11 +289,40 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_byte_is_caught() {
+    fn edited_inputs_are_caught() {
         let mut bytes = recorded();
-        // An input in the middle: a bot's yaw, most likely.
-        let at = bytes.len() / 2;
-        bytes[at] ^= 0x10;
+        // Walk the records; past the middle of the match, turn every changed
+        // input's forward stick around.
+        let mut at = 4 + 2 + 8 + 24 + 1 + 4 + 4 + 2 + 1 + 1 + 1;
+        let mut ticks = 0;
+        let mut edited = 0;
+        while bytes[at] != b'E' {
+            match bytes[at] {
+                b'S' => at += 3,
+                b'U' => at += 2,
+                b'T' => {
+                    let mask = bytes[at + 1];
+                    at += 2;
+                    for _ in 0..mask.count_ones() {
+                        if ticks > 3000 {
+                            bytes[at + 7] ^= 0x80;
+                            edited += 1;
+                        }
+                        at += 8;
+                    }
+                    let rmask = bytes[at];
+                    at += 1 + 4 * rmask.count_ones() as usize;
+                    ticks += 1;
+                }
+                k => panic!("record {k:#x}"),
+            }
+        }
+        assert!(edited > 100);
+        assert!(verify(&bytes).is_err());
+        // And a byte of the end record.
+        let mut bytes = recorded();
+        let n = bytes.len();
+        bytes[n - 40] ^= 1;
         assert!(verify(&bytes).is_err());
     }
 }

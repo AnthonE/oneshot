@@ -15,6 +15,7 @@ pub mod geom;
 pub mod hash;
 pub mod input;
 pub mod map;
+pub mod maps;
 pub mod movement;
 pub mod rewind;
 pub mod rng;

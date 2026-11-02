@@ -11,14 +11,22 @@ use sim::world::{Phase, Rules, World};
 
 const TAU: f32 = core::f32::consts::TAU;
 
-/// Plays a duel to its end (or `max_s`), seat 0 aimed by `aim` when it
-/// returns Some, a bot otherwise; returns the watch.
+/// Plays a duel to its end (or `max_s`), seat 0 an aimbot or a bot.
 fn duel(seed: u64, max_s: u32, aimbot: bool) -> Watch {
-    let mut w = World::new(Map::proving_grounds(), Rules::duel(), seed, (seed, !seed));
-    w.seat(0, 0);
-    w.seat(1, 1);
-    let mut bots = [Bot::new(seed, 0, 0.5), Bot::new(seed, 1, 0.5)];
-    let mut fog = Fog::default();
+    play(Rules::duel(), seed, max_s, aimbot)
+}
+
+/// Plays `rules` to its end (or `max_s`) with a bot in every seat, seat 0
+/// instead snapping to the head of the nearest enemy fog shows it when
+/// `aimbot`; every seat's fog feeds the watch.
+fn play(rules: Rules, seed: u64, max_s: u32, aimbot: bool) -> Watch {
+    let n = rules.seats as usize;
+    let mut w = World::new(Map::proving_grounds(), rules, seed, (seed, !seed));
+    for s in 0..n {
+        w.seat(s, (s & 1) as u8);
+    }
+    let mut bots: Vec<Bot> = (0..n).map(|s| Bot::new(seed, s, 0.5)).collect();
+    let mut fogs = vec![Fog::default(); n];
     let mut watch = Watch::default();
     let rewind = [0u32; MAX_FIGHTERS];
     for _ in 0..max_s * TICK_HZ {
@@ -26,28 +34,36 @@ fn duel(seed: u64, max_s: u32, aimbot: bool) -> Watch {
             break;
         }
         let next = w.tick + 1;
-        fog.update(&w, 0, 0.1, next);
+        for (s, f) in fogs.iter_mut().enumerate() {
+            f.update(&w, s, 0.1, next);
+        }
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         for (s, b) in bots.iter_mut().enumerate() {
             inputs[s] = b.think(&w, s);
         }
-        if aimbot {
-            let me = &w.fighters[0];
-            let them = &w.fighters[1];
-            if me.active() && them.active() && fog.shows(1, next) {
-                // Straight to the head, this tick, and pull.
-                let to = them.body.pos + sim::geom::V3::new(0.0, HEAD_Y, 0.0) - me.eye();
-                let flat = (to.x * to.x + to.z * to.z).sqrt();
-                inputs[0].yaw = ((to.z.atan2(to.x) / TAU * 65536.0).round() as i32 & 0xffff) as u16;
-                inputs[0].pitch = (to.y.atan2(flat) / TAU * 65536.0).round() as i16;
-                inputs[0].buttons &= !FIRE;
-                if me.last_buttons & FIRE == 0 {
-                    inputs[0].buttons |= FIRE;
-                }
+        let me = &w.fighters[0];
+        let target = (1..n)
+            .filter(|&q| !(rules.teams && w.fighters[q].team == me.team))
+            .filter(|&q| w.fighters[q].active() && fogs[0].shows(q, next))
+            .min_by(|&a, &b| {
+                let d = |q: usize| (w.fighters[q].body.pos - me.body.pos).len();
+                d(a).total_cmp(&d(b))
+            });
+        if let (true, true, Some(q)) = (aimbot, me.active(), target) {
+            // Straight to the head, this tick, and pull.
+            let them = &w.fighters[q];
+            let to = them.body.pos + sim::geom::V3::new(0.0, HEAD_Y, 0.0) - me.eye();
+            let flat = (to.x * to.x + to.z * to.z).sqrt();
+            inputs[0].yaw = ((to.z.atan2(to.x) / TAU * 65536.0).round() as i32 & 0xffff) as u16;
+            inputs[0].pitch = (to.y.atan2(flat) / TAU * 65536.0).round() as i16;
+            inputs[0].buttons &= !FIRE;
+            if me.last_buttons & FIRE == 0 {
+                inputs[0].buttons |= FIRE;
             }
         }
         w.step(&inputs, &rewind);
-        watch.observe(&w, |v, t| v == 0 && fog.shows(t, w.tick));
+        let tick = w.tick;
+        watch.observe(&w, |v, t| v < n && fogs[v].shows(t, tick));
     }
     watch
 }
@@ -87,6 +103,28 @@ fn the_bots_are_not_flagged() {
                 st.preaim_ms
             );
             assert!(st.hits > 20, "the bots fought");
+            assert!(st.flags().is_empty(), "seed {seed} seat {s}: {:?}", st.flags());
+        }
+    }
+}
+
+#[test]
+fn in_doubles_too() {
+    let rules = Rules {
+        time_limit_ms: 300_000,
+        ..Rules::doubles()
+    };
+    let w = play(rules, 5, 300, true);
+    let flags = w.stats[0].flags();
+    assert!(flags.contains(&"head_rate"), "{flags:?}");
+    for s in 1..4 {
+        assert!(w.stats[s].flags().is_empty(), "seat {s}: {:?}", w.stats[s].flags());
+    }
+    for seed in 1..3 {
+        let w = play(rules, seed, 300, false);
+        for s in 0..4 {
+            let st = &w.stats[s];
+            assert!(st.hits > 10, "seed {seed} seat {s}: the bots fought ({} hits)", st.hits);
             assert!(st.flags().is_empty(), "seed {seed} seat {s}: {:?}", st.flags());
         }
     }

@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { type Body, type Players, TEAM_COLORS } from './players';
+import { type Body, type Players, TEAM_COLORS, SKIN_TRIM } from './players';
 import { FIRE, type Frame } from './input';
 
 export interface Art {
@@ -154,11 +154,12 @@ const CLIPS = ['Idle_Loop', 'Walk_Loop', 'Jog_Fwd_Loop', 'Sprint_Loop', 'Crouch_
 
 function bodyFactory(base: GLTF, guns: Map<number, THREE.Object3D>) {
   const clips = new Map(base.animations.map((a) => [a.name, a]));
-  return (team: number): Body => {
+  return (team: number, skin = 0): Body => {
     const root = new THREE.Group();
     const model = SkeletonUtils.clone(base.scene);
     model.rotation.y = FACE;
     const tint = new THREE.Color(TEAM_COLORS[team & 1]);
+    const trim = SKIN_TRIM[skin];
     model.traverse((o) => {
       const m = o as THREE.SkinnedMesh;
       if (!m.isMesh) return;
@@ -169,9 +170,22 @@ function bodyFactory(base: GLTF, guns: Map<number, THREE.Object3D>) {
       // and tint it by side so a fighter reads at a glance.
       mat.color = new THREE.Color(2.6, 2.6, 2.6).lerp(tint.clone().multiplyScalar(3), 0.35);
       mat.emissive = tint.clone().multiplyScalar(0.08);
+      // A skin is a faint sheen of its trim on top: the side's colour still
+      // carries the fighter.
+      if (trim !== null && trim !== undefined) mat.emissive.add(new THREE.Color(trim).multiplyScalar(0.06));
       m.material = mat;
     });
     root.add(model);
+    if (trim !== null && trim !== undefined) {
+      // And a band at the waist in its colour.
+      const band = new THREE.Mesh(
+        new THREE.TorusGeometry(0.2, 0.025, 6, 20),
+        new THREE.MeshStandardMaterial({ color: trim, roughness: 0.4, metalness: 0.5 }),
+      );
+      band.rotation.x = Math.PI / 2;
+      band.position.y = 1.0;
+      root.add(band);
+    }
     const mixer = new THREE.AnimationMixer(model);
     const actions = new Map<string, THREE.AnimationAction>();
     for (const n of CLIPS) {
@@ -323,7 +337,10 @@ export async function loadArt(
   ]);
   const guns = new Map<number, THREE.Object3D>();
   Object.keys(GUNS).forEach((k, i) => guns.set(Number(k), gunScenes[i] as THREE.Object3D));
-  players.setModel(bodyFactory(tt as GLTF, guns));
+  // ?capsules: everyone else stays a capsule. The eight-seat browser test
+  // runs on a software GPU, where skinning seven characters on the CPU
+  // would starve the netcode of frames.
+  if (!new URLSearchParams(location.search).has('capsules')) players.setModel(bodyFactory(tt as GLTF, guns));
 
   const view = new Viewmodel(guns);
   const muzzleLight = new THREE.PointLight(0xffc066, 0, 6);

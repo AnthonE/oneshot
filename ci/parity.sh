@@ -19,4 +19,17 @@ for seed in 1 2 3; do
     fi
   done
 done
+# Every map, Doubles and an eight-seat Gun Game.
+for map in $(sed -n 's/^    id: \([0-9]*\),$/\1/p' crates/sim/src/maps/*.rs); do
+  for eight in 0 1; do
+    n=$(target/release/examples/bot_match 7 6000 "$map" "$eight")
+    w=$(node ci/parity.mjs "$wasm" 7 6000 "$map" "$eight")
+    if [ "$n" = "$w" ] && [ "$n" != "0000000000000000" ]; then
+      echo "map $map, eight $eight: $n"
+    else
+      echo "MISMATCH map $map, eight $eight: native $n, wasm $w"
+      fail=1
+    fi
+  done
+done
 exit $fail

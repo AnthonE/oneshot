@@ -14,6 +14,7 @@
 //! replay files go to a tokio task for the same reason.
 
 pub mod auth;
+pub mod cup;
 pub mod elo;
 pub mod http;
 pub mod net;
@@ -26,7 +27,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use proto::{encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_DOUBLES};
+use proto::{
+    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_FFA,
+    MODE_GUN_GAME,
+};
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::map::Map;
@@ -43,10 +47,14 @@ pub enum Out {
 
 /// What sessions tell the sim thread.
 pub enum ToSim {
-    /// A room against a bot.
+    /// Casual: a room against a bot, or a seat in a shared free-for-all or
+    /// Gun Game room where bots fill the rest.
     Casual {
         session: u64,
         name: Name,
+        mode: u8,
+        /// A skin checked against the player's wallet.
+        skin: u8,
         tx: tmpsc::Sender<Out>,
     },
     /// Into the ranked queue.
@@ -76,7 +84,7 @@ pub enum Job {
 
 /// Room for this many messages to one session before snapshots drop.
 pub const OUT_QUEUE: usize = 64;
-/// A finished match stays up this long, for the end screen.
+/// A finished match stays up this long, for the end screen (`Config::linger`).
 pub const LINGER: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
@@ -90,13 +98,30 @@ pub struct Config {
     /// PEM certificate and key; without them a self-signed certificate
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
-    /// A casual room's rules.
+    /// A casual room's rules: against a bot, free for all, Gun Game.
     pub rules: Rules,
+    pub ffa: Rules,
+    pub gun_game: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
+    /// A cup heat's rules (a free for all), and how a cup forms: once
+    /// `cup_min` have entered, it starts when `cup_max` have or `cup_fill`
+    /// has passed; `cup_rounds` Swiss rounds, then the final.
+    pub cup: Rules,
+    pub cup_min: usize,
+    pub cup_max: usize,
+    pub cup_fill: Duration,
+    pub cup_rounds: u8,
+    /// The places in a cup whose heats are reviewed before a prize.
+    pub cup_review_top: u32,
+    /// How long a finished match stays up, for the end screen.
+    pub linger: Duration,
     /// Bots that stand still: a target for the browser test.
     pub passive_bots: bool,
+    /// The maps rooms are played on (ids, `sim::maps`), one drawn from each
+    /// room's seed. Empty: all of them.
+    pub maps: Vec<u8>,
     /// This game's name on Elo Pros, what passes are for.
     pub slug: String,
     /// The hosts the page is served from: a pass names the one it was
@@ -120,9 +145,23 @@ impl Default for Config {
             web_dir: "web/dist".into(),
             cert: None,
             rules: Rules::duel(),
+            ffa: Rules::ffa(),
+            gun_game: Rules::gun_game(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
+            cup: Rules {
+                score_limit: 15,
+                time_limit_ms: 480_000,
+                ..Rules::ffa()
+            },
+            cup_min: 4,
+            cup_max: 64,
+            cup_fill: Duration::from_secs(60),
+            cup_rounds: 3,
+            cup_review_top: 3,
+            linger: LINGER,
             passive_bots: false,
+            maps: Vec::new(),
             slug: "oneshot".into(),
             domains: vec!["localhost".into(), "127.0.0.1".into()],
             elo_pubkey: None,
@@ -248,7 +287,24 @@ struct Live {
     links: [Option<u64>; MAX_FIGHTERS],
     wallets: [Option<String>; MAX_FIGHTERS],
     over_at: Option<Instant>,
+    /// A cup heat: the cup (by index) and the heat in its stage.
+    cup: Option<(usize, usize)>,
 }
+
+/// Puts a room in the first free place; returns where.
+fn place_room(rooms: &mut Vec<Option<Live>>, live: Live) -> usize {
+    if let Some(i) = rooms.iter().position(|r| r.is_none()) {
+        rooms[i] = Some(live);
+        i
+    } else {
+        rooms.push(Some(live));
+        rooms.len() - 1
+    }
+}
+
+/// A cup heat that has run its course: (cup, heat, match id, scores in the
+/// heat's order).
+type HeatDone = (usize, usize, String, Vec<i32>);
 
 struct Sim {
     cfg: Config,
@@ -267,24 +323,33 @@ fn send_msg(tx: &tmpsc::Sender<Out>, m: &Msg) {
 impl Sim {
     /// A new room: fresh salt (never seen until the end) and a seed drawn
     /// apart from it (what clients watch: spawn picks, bots).
-    fn new_room(&self, ranked: Option<u8>) -> Room {
+    fn new_room(&self, mode: u8, ranked: bool) -> Room {
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
-        match ranked {
-            Some(mode) => {
-                let rules = if mode == MODE_DOUBLES {
-                    self.cfg.doubles
-                } else {
-                    self.cfg.duel
-                };
-                Room::ranked(Map::proving_grounds(), rules, seed, salt)
-            }
-            None => {
-                let mut r = Room::new(Map::proving_grounds(), self.cfg.rules, seed, salt);
-                r.passive_bots = self.cfg.passive_bots;
-                r
-            }
+        let rules = match mode {
+            MODE_DOUBLES => self.cfg.doubles,
+            MODE_CUP => self.cfg.cup,
+            MODE_FFA => self.cfg.ffa,
+            MODE_GUN_GAME => self.cfg.gun_game,
+            _ if ranked => self.cfg.duel,
+            _ => self.cfg.rules,
+        };
+        let map = self.pick_map(seed);
+        if ranked {
+            Room::ranked(map, rules, seed, salt)
+        } else {
+            let mut r = Room::new(map, rules, seed, salt);
+            r.passive_bots = self.cfg.passive_bots;
+            r
         }
+    }
+
+    /// The map a room plays, from its seed (what clients may know anyway).
+    fn pick_map(&self, seed: u64) -> Map {
+        let all: Vec<u8> = sim::maps::ALL.iter().map(|d| d.id).collect();
+        let ids: Vec<u8> = self.cfg.maps.iter().copied().filter(|id| all.contains(id)).collect();
+        let ids = if ids.is_empty() { all } else { ids };
+        sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }
 
     fn run(self) {
@@ -297,34 +362,61 @@ impl Sim {
         let mut buf = [0u8; MAX_DATAGRAM];
         let mut last_second = Instant::now();
 
-        let place = |rooms: &mut Vec<Option<Live>>, live: Live| -> usize {
-            if let Some(i) = rooms.iter().position(|r| r.is_none()) {
-                rooms[i] = Some(live);
-                i
-            } else {
-                rooms.push(Some(live));
-                rooms.len() - 1
-            }
-        };
+        let place = place_room;
+        let mut cups: Vec<Option<cup::Cup>> = Vec::new();
+        let mut cup_wait: Vec<queue::Entry> = Vec::new();
+        let mut cup_ready_at: Option<Instant> = None;
 
         while !self.stop.load(Ordering::Relaxed) {
             let now = Instant::now();
             let now_ms = start.elapsed().as_secs_f64() * 1000.0;
             while let Ok(m) = self.rx.try_recv() {
                 match m {
-                    ToSim::Casual { session, name, tx } => {
-                        let mut room = self.new_room(None);
-                        let Some((slot, out)) = room.join(name) else { continue };
-                        let mut live = Live {
-                            room,
-                            id: format!("os-c{:016x}", random_u64()),
-                            mode: proto::MODE_CASUAL,
-                            links: [None; MAX_FIGHTERS],
-                            wallets: Default::default(),
-                            over_at: None,
+                    ToSim::Casual {
+                        session,
+                        name,
+                        mode,
+                        skin,
+                        tx,
+                    } => {
+                        let mode = match mode {
+                            MODE_FFA | MODE_GUN_GAME => mode,
+                            _ => MODE_CASUAL,
+                        };
+                        // Free for all and Gun Game are shared: a seat a bot
+                        // holds in a room still playing, else a new room.
+                        let open = (mode != MODE_CASUAL)
+                            .then(|| {
+                                rooms.iter().position(|r| {
+                                    r.as_ref().is_some_and(|r| {
+                                        r.mode == mode
+                                            && r.over_at.is_none()
+                                            && r.room.world.phase != Phase::Over
+                                            && r.links.iter().take(r.room.size).any(|l| l.is_none())
+                                    })
+                                })
+                            })
+                            .flatten();
+                        let i = match open {
+                            Some(i) => i,
+                            None => place(
+                                &mut rooms,
+                                Live {
+                                    room: self.new_room(mode, false),
+                                    id: format!("os-c{:016x}", random_u64()),
+                                    mode,
+                                    links: [None; MAX_FIGHTERS],
+                                    wallets: Default::default(),
+                                    over_at: None,
+                                    cup: None,
+                                },
+                            ),
+                        };
+                        let live = rooms[i].as_mut().unwrap();
+                        let Some((slot, out)) = live.room.join(name, skin) else {
+                            continue;
                         };
                         live.links[slot as usize] = Some(session);
-                        let i = place(&mut rooms, live);
                         sessions.insert(
                             session,
                             Sess {
@@ -339,7 +431,12 @@ impl Sim {
                             .iter()
                             .flatten()
                             .any(|r| r.over_at.is_none() && r.wallets.iter().flatten().any(|w| *w == entry.wallet));
-                        if playing || q.has_wallet(&entry.wallet) {
+                        let in_cup = cup_wait.iter().any(|e| e.wallet == entry.wallet)
+                            || cups.iter().flatten().any(|c| {
+                                c.stage != cup::Stage::Done
+                                    && c.entrants.iter().any(|e| e.here && e.wallet == entry.wallet)
+                            });
+                        if playing || in_cup || q.has_wallet(&entry.wallet) {
                             send_msg(
                                 &tx,
                                 &Msg::Refuse {
@@ -356,7 +453,11 @@ impl Sim {
                                 waiting_s: 0,
                             },
                         );
-                        q.push(*entry);
+                        if entry.mode == MODE_CUP {
+                            cup_wait.push(*entry);
+                        } else {
+                            q.push(*entry);
+                        }
                         sessions.insert(session, Sess { tx, at: None });
                     }
                     ToSim::Input { session, msg } => {
@@ -368,11 +469,17 @@ impl Sim {
                     }
                     ToSim::Leave { session } => {
                         q.remove(session);
+                        cup_wait.retain(|e| e.session != session);
+                        for c in cups.iter_mut().flatten() {
+                            c.leave(session);
+                        }
                         let Some(s) = sessions.remove(&session) else { continue };
                         let Some((i, slot)) = s.at else { continue };
                         let Some(r) = rooms[i].as_mut() else { continue };
                         r.links[slot as usize] = None;
-                        if r.links.iter().all(|l| l.is_none()) {
+                        // A cup's heat plays out even with nobody left: the
+                        // cup waits on its result.
+                        if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() {
                             // Nobody left to play or watch.
                             rooms[i] = None;
                         } else {
@@ -389,19 +496,20 @@ impl Sim {
                 while let Some(sides) = q.form(now) {
                     let mode = sides[0][0].mode;
                     let mut live = Live {
-                        room: self.new_room(Some(mode)),
+                        room: self.new_room(mode, true),
                         id: format!("os-{:016x}", random_u64()),
                         mode,
                         links: [None; MAX_FIGHTERS],
                         wallets: Default::default(),
                         over_at: None,
+                        cup: None,
                     };
                     let mut outs = Vec::new();
                     for (side, players) in sides.iter().enumerate() {
                         for (k, p) in players.iter().enumerate() {
                             // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
                             let slot = side + 2 * k;
-                            outs.push(live.room.seat_person(slot, p.name));
+                            outs.push(live.room.seat_person(slot, p.name, p.skin));
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
                         }
@@ -424,7 +532,40 @@ impl Sim {
                         deliver(&sessions, rooms[i].as_ref().unwrap(), out);
                     }
                 }
-                for e in &q.entries {
+                // A cup: once enough have entered, when it fills or the wait
+                // for more is up.
+                if cup_wait.len() < self.cfg.cup_min.max(2) {
+                    cup_ready_at = None;
+                } else {
+                    let since = *cup_ready_at.get_or_insert(now);
+                    if cup_wait.len() >= self.cfg.cup_max || now.duration_since(since) >= self.cfg.cup_fill {
+                        cup_ready_at = None;
+                        let n = cup_wait.len().min(self.cfg.cup_max);
+                        let entrants = cup_wait
+                            .drain(..n)
+                            .map(|e| cup::Entrant {
+                                session: e.session,
+                                wallet: e.wallet,
+                                name: e.name,
+                                skin: e.skin,
+                                points: 0,
+                                here: true,
+                                final_place: None,
+                            })
+                            .collect();
+                        let c = cup::Cup::new(format!("cup-{:016x}", random_u64()), entrants, self.cfg.cup_rounds);
+                        let ci = match cups.iter().position(|c| c.is_none()) {
+                            Some(i) => i,
+                            None => {
+                                cups.push(None);
+                                cups.len() - 1
+                            }
+                        };
+                        cups[ci] = Some(c);
+                        self.start_stage(&cups, ci, &mut rooms, &mut sessions);
+                    }
+                }
+                for e in q.entries.iter().chain(&cup_wait) {
                     if let Some(s) = sessions.get(&e.session) {
                         let waited = now.duration_since(e.since).as_secs().min(u16::MAX as u64) as u16;
                         send_msg(
@@ -438,6 +579,7 @@ impl Sim {
                 }
             }
 
+            let mut heats_done: Vec<HeatDone> = Vec::new();
             for entry in rooms.iter_mut() {
                 let Some(r) = entry.as_mut() else { continue };
                 let (snaps, out) = r.room.step(now_ms);
@@ -454,15 +596,39 @@ impl Sim {
                     r.over_at = Some(now);
                     self.finish(r);
                 }
-                if r.over_at.is_some_and(|t| now.duration_since(t) >= LINGER) {
+                if r.over_at.is_some_and(|t| now.duration_since(t) >= self.cfg.linger) {
                     for id in r.links.iter().flatten() {
                         if let Some(s) = sessions.get_mut(id) {
-                            send_msg(&s.tx, &Msg::Bye);
-                            let _ = s.tx.try_send(Out::Close);
+                            // A cup's entrants stay on for the next heat.
+                            if r.cup.is_none() {
+                                send_msg(&s.tx, &Msg::Bye);
+                                let _ = s.tx.try_send(Out::Close);
+                            }
                             s.at = None;
                         }
                     }
+                    if let Some((ci, h)) = r.cup {
+                        // Seats 0.. are the heat's entrants in its order.
+                        let n = cups[ci].as_ref().map_or(0, |c| c.heats.get(h).map_or(0, |x| x.0.len()));
+                        heats_done.push((ci, h, r.id.clone(), r.room.world.score[..n].to_vec()));
+                    }
                     *entry = None;
+                }
+            }
+            for (ci, h, id, scores) in heats_done {
+                let Some(c) = cups[ci].as_mut() else { continue };
+                let members = c.heats.get(h).map(|x| x.0.clone()).unwrap_or_default();
+                let advanced = c.record(h, &id, &scores);
+                if !advanced {
+                    // Others still play this round: where these stand now.
+                    for i in members {
+                        tell_cup(c, i, &sessions);
+                    }
+                } else if c.stage == cup::Stage::Done {
+                    self.finish_cup(c, &mut sessions);
+                    cups[ci] = None;
+                } else {
+                    self.start_stage(&cups, ci, &mut rooms, &mut sessions);
                 }
             }
 
@@ -475,6 +641,101 @@ impl Sim {
                 next = now;
             }
         }
+    }
+
+    /// Seats the heats of cup `ci`'s current stage, each in a ranked room
+    /// of its own, and tells every entrant where they stand.
+    fn start_stage(
+        &self,
+        cups: &[Option<cup::Cup>],
+        ci: usize,
+        rooms: &mut Vec<Option<Live>>,
+        sessions: &mut BTreeMap<u64, Sess>,
+    ) {
+        let Some(c) = cups[ci].as_ref() else { return };
+        for i in 0..c.entrants.len() {
+            tell_cup(c, i, sessions);
+        }
+        for (h, (members, _)) in c.heats.iter().enumerate() {
+            let mut live = Live {
+                room: self.new_room(MODE_CUP, true),
+                id: format!("{}-{}-{}", c.id, c.round_no(), h + 1),
+                mode: MODE_CUP,
+                links: [None; MAX_FIGHTERS],
+                wallets: Default::default(),
+                over_at: None,
+                cup: Some((ci, h)),
+            };
+            let mut outs = Vec::new();
+            for (slot, &i) in members.iter().enumerate() {
+                let e = &c.entrants[i];
+                outs.push(live.room.seat_person(slot, e.name, e.skin));
+                live.links[slot] = Some(e.session);
+                live.wallets[slot] = Some(e.wallet.clone());
+            }
+            let at = place_room(rooms, live);
+            for (slot, &i) in members.iter().enumerate() {
+                if let Some(s) = sessions.get_mut(&c.entrants[i].session) {
+                    s.at = Some((at, slot as u8));
+                }
+            }
+            for out in outs {
+                deliver(sessions, rooms[at].as_ref().unwrap(), out);
+            }
+        }
+    }
+
+    /// A cup is over: the standings to everyone still here, then goodbye;
+    /// its file beside the replays; and the top places' heats to the
+    /// review queue, which a prize waits on (docs/DESIGN.md §13).
+    fn finish_cup(&self, c: &cup::Cup, sessions: &mut BTreeMap<u64, Sess>) {
+        for (i, e) in c.entrants.iter().enumerate() {
+            tell_cup(c, i, sessions);
+            if let Some(s) = sessions.get_mut(&e.session) {
+                send_msg(&s.tx, &Msg::Bye);
+                let _ = s.tx.try_send(Out::Close);
+                s.at = None;
+            }
+        }
+        let Some(dir) = &self.cfg.replays else { return };
+        let doc = c.doc();
+        let _ = self.jobs.send(Job::Write {
+            path: dir.join("cups").join(format!("{}.json", c.id)),
+            bytes: serde_json::to_vec_pretty(&doc).unwrap_or_default(),
+        });
+        let top = self.cfg.cup_review_top;
+        let seats: Vec<serde_json::Value> = c
+            .standings()
+            .into_iter()
+            .filter(|&i| c.place_of(i) <= top)
+            .map(|i| {
+                let e = &c.entrants[i];
+                let replays: Vec<String> = c
+                    .played
+                    .iter()
+                    .filter(|(_, _, m, _)| m.contains(&i))
+                    .map(|(_, id, _, _)| format!("{id}.osr"))
+                    .collect();
+                serde_json::json!({
+                    "name": e.name.as_str(),
+                    "wallet": e.wallet,
+                    "place": c.place_of(i),
+                    "flags": [format!("cup prize: place {}", c.place_of(i))],
+                    "replays": replays,
+                })
+            })
+            .collect();
+        let review = serde_json::json!({
+            "id": c.id,
+            "kind": "cup prize",
+            "why": "a prize is paid only after these heats are watched with fog off (docs/DESIGN.md §13)",
+            "seats": seats,
+            "cup": doc,
+        });
+        let _ = self.jobs.send(Job::Write {
+            path: dir.join("review").join(format!("{}.json", c.id)),
+            bytes: serde_json::to_vec_pretty(&review).unwrap_or_default(),
+        });
     }
 
     /// A match ended: its replay and its aim review's numbers to disk (and
@@ -506,8 +767,8 @@ impl Sim {
             return;
         }
         let w = &r.room.world;
-        // Sides and their scores: each seat for a duel, each team for
-        // doubles (seats 0 and 2 red, 1 and 3 blue).
+        // Sides and their scores: each seat for a duel or a cup heat, each
+        // team for doubles (seats 0 and 2 red, 1 and 3 blue).
         let sides: Vec<(Vec<String>, i32)> = if r.mode == MODE_DOUBLES {
             (0..2)
                 .map(|t| {
@@ -519,7 +780,7 @@ impl Sim {
                 })
                 .collect()
         } else {
-            (0..2)
+            (0..MAX_FIGHTERS)
                 .filter_map(|s| r.wallets[s].clone().map(|wl| (vec![wl], w.score[s])))
                 .collect()
         };
@@ -532,7 +793,12 @@ impl Sim {
             .collect();
         let _ = self.jobs.send(Job::Report(elo::Report {
             id: r.id.clone(),
-            ladder: if r.mode == MODE_DOUBLES { "doubles" } else { "duel" }.into(),
+            ladder: match r.mode {
+                MODE_DOUBLES => "doubles",
+                MODE_CUP => "cup",
+                _ => "duel",
+            }
+            .into(),
             sides: placed,
             replay_sha256: sha,
             salt_commit,
@@ -579,6 +845,24 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
         "seats": seats,
     });
     (doc, flagged)
+}
+
+/// Where entrant `i` of a cup stands, to them.
+fn tell_cup(c: &cup::Cup, i: usize, sessions: &BTreeMap<u64, Sess>) {
+    let e = &c.entrants[i];
+    let Some(s) = sessions.get(&e.session) else { return };
+    let done = c.stage == cup::Stage::Done;
+    send_msg(
+        &s.tx,
+        &Msg::Cup {
+            round: if done { c.rounds + 1 } else { c.round_no() },
+            rounds: c.rounds,
+            entrants: c.entrants.len().min(255) as u8,
+            place: c.place_of(i).min(255) as u8,
+            points: e.points.min(u16::MAX as u32) as u16,
+            done,
+        },
+    );
 }
 
 fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: room::Outbox) {

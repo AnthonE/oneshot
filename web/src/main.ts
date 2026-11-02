@@ -3,9 +3,9 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, arm_name } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
-import { buildWorld, defaultMaterials } from './world';
+import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
 import { Effects } from './effects';
 import { Hud } from './hud';
@@ -28,8 +28,12 @@ interface Shared {
   error: string;
   own: number[];
   others: number[];
+  killcams: number;
+  inKillcam: boolean;
 }
-const shared: Shared = { connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [] };
+const shared: Shared = {
+  connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [], killcams: 0, inKillcam: false,
+};
 (window as any).__oneshot = { state: () => shared };
 
 async function main() {
@@ -56,7 +60,6 @@ async function main() {
   addEventListener('resize', resize);
   resize();
 
-  buildWorld(scene, map_boxes(), map_pads(), defaultMaterials());
   const players = new Players(scene);
   const effects = new Effects(scene);
   const hud = new Hud();
@@ -66,18 +69,25 @@ async function main() {
     return null;
   }) : null;
 
-  if (params.has('pose')) return pose(scene, camera, renderer, players, art);
+  if (params.has('pose')) {
+    buildWorld(scene, map_boxes(0), map_pads(0), defaultMaterials(), map_layout(0));
+    return pose(scene, camera, renderer, players, art);
+  }
 
   const menu = document.getElementById('menu')!;
   const status = document.getElementById('status')!;
   const nameInput = document.getElementById('name') as HTMLInputElement;
   const el = (id: string) => document.getElementById(id) as HTMLButtonElement;
   nameInput.value = params.get('name') || localStorage.getItem('oneshot.name') || '';
+  // Skins: worn only if the signed-in wallet owns one; the server checks.
+  const skinSelect = document.getElementById('skin') as HTMLSelectElement;
+  skin_names().forEach((n: string, i: number) => skinSelect.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
+  try { skinSelect.value = localStorage.getItem('oneshot.skin') || '0'; } catch { /* private window */ }
 
   const info = await (await fetch('server.json')).json();
-  const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, el('duel'), el('doubles'));
+  const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, [el('duel'), el('doubles'), el('cup')]);
 
-  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2 };
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
   let client: Client;
   try {
     const mode = AUTOPLAY
@@ -86,9 +96,14 @@ async function main() {
           for (const id of Object.keys(MODES)) el(id).addEventListener('click', () => go(MODES[id]), { once: true });
         });
     const name = nameInput.value.trim() || 'player';
-    try { localStorage.setItem('oneshot.name', name); } catch { /* private window */ }
+    try {
+      localStorage.setItem('oneshot.name', name);
+      localStorage.setItem('oneshot.skin', skinSelect.value);
+    } catch { /* private window */ }
     status.textContent = 'connecting…';
-    client = await Client.connect(info.addr, info.hash, name, mode ? signin.pass() : '', mode);
+    // A pass goes with every mode once signed in: it is what proves a skin
+    // is yours. Casual without one is a guest, in the standard look.
+    client = await Client.connect(info.addr, info.hash, name, signin.pass(), mode, Number(skinSelect.value) || 0);
   } catch (e) {
     shared.error = String(e);
     status.textContent = String(e);
@@ -98,11 +113,23 @@ async function main() {
   // What the server says on the stream, before and during play.
   const slotName = (n: { bot: boolean; name: string }) => (n.bot ? 'BOT' : n.name);
   let ended = false;
+  // A cup: where we stand, as the server last said.
+  let cupLine = '';
+  const ordinal = (n: number) => `${n}${['th', 'st', 'nd', 'rd'][n % 100 > 10 && n % 100 < 14 ? 0 : Math.min(n % 10, 4) % 4] || 'th'}`;
   const handle = (m: any) => {
-    if (m.type === 'seat') hud.names[m.slot] = slotName(m);
+    if (m.type === 'seat') {
+      hud.names[m.slot] = slotName(m);
+      players.skins[m.slot] = m.skin;
+    }
     else if (m.type === 'queued') {
       const t = m.waiting as number;
-      status.textContent = `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+      status.textContent = `${m.mode === 5 ? 'Waiting for the cup to fill' : `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}`}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    } else if (m.type === 'cup') {
+      const stage = m.round > m.rounds ? 'the final' : `round ${m.round} of ${m.rounds}`;
+      cupLine = m.done
+        ? `Cup over: ${ordinal(m.place)} of ${m.entrants}`
+        : `Cup, ${stage}: ${ordinal(m.place)} of ${m.entrants} on ${m.points} points`;
+      status.textContent = cupLine;
     } else if (m.type === 'refused') {
       shared.error = m.why;
       status.textContent = m.why;
@@ -130,6 +157,23 @@ async function main() {
   });
   cancel.hidden = true;
   menu.style.display = 'none';
+  let gunGame = false;
+  // The level the welcome named, from the sim's own tables; built again
+  // when a new welcome comes (a cup's next heat, maybe on another map).
+  let level: ReturnType<typeof buildWorld> | null = null;
+  let welcomed = 0;
+  const mats = defaultMaterials();
+  const welcome = () => {
+    welcomed = client.welcomes;
+    gunGame = client.gun_game;
+    if (level) dropWorld(level.level);
+    const layout = map_layout(client.map);
+    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout);
+    route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
+    leg = 0;
+    hud.kill(map_name(client.map));
+  };
+  welcome();
   shared.connected = true;
   const controls = new Controls(canvas);
   if (!AUTOPLAY) canvas.click();
@@ -144,6 +188,7 @@ async function main() {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
 
+    if (client.welcomes !== welcomed) welcome();
     let f = controls.frame();
     if (AUTOPLAY) f = autopilot(f, shared);
     client.update(now, f.buttons, f.yaw, f.pitch, f.mx, f.mz);
@@ -155,9 +200,20 @@ async function main() {
     // predicted body.
     const yaw = AUTOPLAY ? (f.yaw / 65536) * 2 * Math.PI : controls.yaw;
     const pitch = AUTOPLAY ? (f.pitch / 65536) * 2 * Math.PI : controls.pitch;
-    camera.position.set(px, py + eye, pz);
-    const cp = Math.cos(pitch);
-    camera.lookAt(px + cp * Math.cos(yaw), py + eye + Math.sin(pitch), pz + cp * Math.sin(yaw));
+    // Dead, and we saw who did it: the run-up to the kill from their eye,
+    // made of what we were sent (client-net's killcam).
+    const cam = alive ? null : client.killcam(now);
+    const killcam = cam !== null && cam.length >= 7;
+    if (killcam) {
+      const c = cam!;
+      camera.position.set(c[0], c[1], c[2]);
+      const kp = Math.cos(c[4]);
+      camera.lookAt(c[0] + kp * Math.cos(c[3]), c[1] + Math.sin(c[4]), c[2] + kp * Math.sin(c[3]));
+    } else {
+      camera.position.set(px, py + eye, pz);
+      const cp = Math.cos(pitch);
+      camera.lookAt(px + cp * Math.cos(yaw), py + eye + Math.sin(pitch), pz + cp * Math.sin(yaw));
+    }
     const zoom = (f.buttons & ZOOM) !== 0;
     const zoomed = zoom ? (arm === 4 ? 5 : 2) : 1;
     camera.fov = 78 / zoomed;
@@ -165,7 +221,9 @@ async function main() {
 
     const others = client.others(now);
     shared.others = Array.from(others);
-    players.update(others, dt);
+    players.update(killcam ? cam!.subarray(7) : others, dt);
+    shared.killcams += killcam && !shared.inKillcam ? 1 : 0;
+    shared.inKillcam = killcam;
     effects.projectiles(client.projectiles());
 
     const slot = client.slot;
@@ -219,7 +277,9 @@ async function main() {
       const v = client.stats()[8];
       if (v === 1) center += ' · match verified ✓';
       if (v === 0) center += ' · verification FAILED';
+      if (cupLine) center += `\n${cupLine}`;
     }
+    else if (!alive && killcam) center = `Killed by ${hud.name(cam![5])} · respawning in ${Math.ceil(respawn)}`;
     else if (!alive) center = `Respawning in ${Math.ceil(respawn)}`;
     const st = client.stats();
     shared.stats = Array.from(st);
@@ -228,11 +288,15 @@ async function main() {
       weapon: arm_name(arm), other: other ? arm_name(other) : '',
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,
-        ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i]).map(([s, i]) => `${hud.name(i)} ${s}`),
+        // The rest, best first: everyone in a duel or doubles, the top
+        // four in a room of eight.
+        ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i])
+          .sort((a, b) => b[0] - a[0]).slice(0, 4).map(([s, i]) => `${hud.name(i)} ${s}`),
+        gunGame ? `Rung ${Math.min(scores[slot], limit - 1) + 1} of ${limit}${scores[slot] < limit - 1 ? ` · next ${arm_name(client.rung(scores[slot] + 1))}` : ' · last gun'}` : '',
         phase === 1 ? mmss(clock) : '',
         `K ${kills} · D ${deaths}`,
       ],
-      center, zoom: zoom && (arm === 4 || arm === 2 || arm === 3), reloading,
+      center, zoom: !killcam && zoom && (arm === 4 || arm === 2 || arm === 3), reloading, killcam,
       net: `snapshots ${st[0]}\nconfirmed ${st[1]}  corrected ${st[2]}\ndepth ${st[4]}  rate ${st[5].toFixed(2)}\ninterp ${st[6].toFixed(1)} ticks  dropped ${st[7]}`,
     });
 
@@ -244,7 +308,7 @@ async function main() {
     if (client.closed || ended) {
       // The match is over (or the line dropped): back to the menu.
       status.textContent = ended ? 'Match over' : 'Disconnected';
-      for (const id of ['play', 'duel', 'doubles']) el(id).hidden = true;
+      for (const id of Object.keys(MODES)) el(id).hidden = true;
       cancel.hidden = false;
       cancel.textContent = 'Back to menu';
       menu.style.display = 'flex';
@@ -258,13 +322,15 @@ async function main() {
 
 /** ?pose: no server. One fighter on the floor in front of the camera, for
  * looking at the models (ci/look.mjs takes pictures of it). ?yaw= turns the
- * fighter (radians), ?arm= picks its gun, ?anim=speed. */
+ * fighter (radians), ?arm= picks its gun, ?anim=speed, ?skin= its skin,
+ * ?team= its side. */
 function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer,
   players: Players, art: Awaited<ReturnType<typeof import('./art').loadArt>> | null) {
   document.getElementById('menu')!.style.display = 'none';
   const yaw = Number(params.get('yaw') ?? Math.PI), arm = Number(params.get('arm') ?? 1);
   const speed = Number(params.get('speed') ?? 0);
-  const o = new Float32Array([1, 0, 1, 0, 1, 0, 3, 0, 0, yaw, 0, arm, 1, speed]);
+  players.skins[1] = Number(params.get('skin') ?? 0);
+  const o = new Float32Array([1, Number(params.get('team') ?? 0), 1, 0, 1, 0, 3, 0, 0, yaw, 0, arm, 1, speed]);
   const own = new Float32Array(22);
   own[3] = 1.6; own[6] = 1; own[10] = arm; own[11] = 10; own[20] = 1;
   camera.position.set(0, 1.6, 0);
@@ -288,9 +354,10 @@ function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THR
 /** For the browser test (?autoplay): walk at the nearest other fighter,
  * aim at them and keep pulling the trigger. Only inputs: the server still
  * decides every hit. */
-// Where the autopilot walks while fog shows it nobody: round the open
-// lanes of Proving Grounds.
+// Where the autopilot walks while fog shows it nobody: the map's roam
+// points, or round the open lanes of Proving Grounds (which has none).
 const ROUTE = [[-15, 8], [15, 8], [21, 0], [15, -8], [-15, -8], [-21, 0]];
+let route = ROUTE;
 let leg = 0;
 
 function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
@@ -306,10 +373,10 @@ function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
   }
   if (best < 0) {
     // Nobody in sight: walk the route until fog shows someone.
-    let [tx, tz] = ROUTE[leg];
-    if (Math.hypot(tx - me[0], tz - me[2]) < 2) {
-      leg = (leg + 1) % ROUTE.length;
-      [tx, tz] = ROUTE[leg];
+    let [tx, tz] = route[leg % route.length];
+    if (Math.hypot(tx - me[0], tz - me[2]) < 2 || s.frames % 600 === 0) {
+      leg = (leg + 1) % route.length;
+      [tx, tz] = route[leg];
     }
     return { buttons: 0, yaw: toYaw(Math.atan2(tz - me[2], tx - me[0])), pitch: 0, mx: 0, mz: 127 };
   }
@@ -333,8 +400,7 @@ main();
  * nonce the pass must carry; we fetch one ahead so the popup opens on the
  * click itself (a popup opened later is blocked). Ranked needs a wallet
  * linked to the account: ratings are a wallet's. */
-async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElement,
-  duel: HTMLButtonElement, doubles: HTMLButtonElement) {
+async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElement, ranked: HTMLButtonElement[]) {
   let pass = '';
   let nonce = '';
   const fresh = async () => {
@@ -353,7 +419,7 @@ async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElemen
         const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
         const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
         who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
-        duel.disabled = doubles.disabled = !wallet;
+        for (const b of ranked) b.disabled = !wallet;
         button.hidden = true;
       } catch (e: any) {
         who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;

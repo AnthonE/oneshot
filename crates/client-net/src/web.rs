@@ -142,18 +142,32 @@ pub struct Client {
     ready: bool,
     /// Stream messages for the page, until `messages()` takes them.
     out: Vec<Msg>,
+    /// The map the welcome named.
+    map_id: u8,
+    /// Welcomes so far: a cup's entrant gets one a heat.
+    welcomes: u32,
 }
 
 #[wasm_bindgen]
 impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
     /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
-    /// a bot, 1 ranked Duel, 2 ranked Doubles) as `name`, signed in with an
+    /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game,
+    /// 5 a cup)
+    /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
+    /// signed in with an
     /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
     /// comes through `messages()`.
-    pub async fn connect(addr: String, hash: String, name: String, pass: String, mode: u8) -> Result<Client, JsValue> {
+    pub async fn connect(
+        addr: String,
+        hash: String,
+        name: String,
+        pass: String,
+        mode: u8,
+        skin: u8,
+    ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
             proto::Pass::NONE
         } else {
@@ -187,6 +201,7 @@ impl Client {
                 name: Name::new(&name),
                 pass,
                 mode,
+                skin,
             },
         )
         .await?;
@@ -247,6 +262,8 @@ impl Client {
             core: NetCore::new(0, 0, 0, sim::world::Rules::duel(), Map::proving_grounds()),
             ready: false,
             out: Vec::new(),
+            map_id: 0,
+            welcomes: 0,
             transport,
             datagrams,
             writer,
@@ -265,6 +282,30 @@ impl Client {
     #[wasm_bindgen(getter)]
     pub fn team(&self) -> u8 {
         self.core.team
+    }
+
+    /// How many welcomes have come: a cup's entrant is welcomed into each
+    /// heat on the same connection, and the page redraws the level then.
+    #[wasm_bindgen(getter)]
+    pub fn welcomes(&self) -> u32 {
+        self.welcomes
+    }
+
+    /// The map this match is on (`map_boxes(map)` and friends draw it).
+    #[wasm_bindgen(getter)]
+    pub fn map(&self) -> u8 {
+        self.map_id
+    }
+
+    /// Whether this match is Gun Game: the score is the rung.
+    #[wasm_bindgen(getter)]
+    pub fn gun_game(&self) -> bool {
+        self.core.rules.gun_game
+    }
+
+    /// The gun on Gun Game's rung `score`.
+    pub fn rung(&self, score: i32) -> u8 {
+        sim::world::Rules::rung(score)
     }
 
     #[wasm_bindgen(getter)]
@@ -290,9 +331,19 @@ impl Client {
                     tick,
                     rules,
                     salt_commit,
+                    map,
                     ..
                 } => {
-                    self.core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+                    // A map this page doesn't know: it is out of date.
+                    let Some(m) = sim::map::by_id(map) else {
+                        self.out.push(Msg::Refuse {
+                            reason: proto::REFUSE_VERSION,
+                        });
+                        continue;
+                    };
+                    self.map_id = map;
+                    self.welcomes += 1;
+                    self.core = NetCore::new(slot, team, tick, rules, m);
                     self.core.salt_commit = salt_commit;
                     self.ready = true;
                 }
@@ -403,22 +454,23 @@ impl Client {
     pub fn others(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
         for d in self.core.others(now) {
-            v.extend_from_slice(&[
-                d.slot as f32,
-                d.team as f32,
-                d.alive as u8 as f32,
-                d.crouched as u8 as f32,
-                d.grounded as u8 as f32,
-                d.reloading as u8 as f32,
-                d.pos.x,
-                d.pos.y,
-                d.pos.z,
-                d.yaw,
-                d.pitch,
-                d.arm as f32,
-                d.shield as f32 / 255.0,
-                (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt(),
-            ]);
+            push_drawn(&mut v, &d);
+        }
+        v
+    }
+
+    /// While we are dead and saw who killed us: the kill cam, 7 numbers
+    /// then the bodies as `others()` gives them (ourselves among them, the
+    /// killer not): eye x y z, yaw, pitch (radians), the killer's seat, how
+    /// far through the run-up (0..1). Empty otherwise. Made only of
+    /// snapshots we were already sent.
+    pub fn killcam(&self, now: f64) -> Vec<f32> {
+        let Some(k) = self.core.killcam(now) else {
+            return Vec::new();
+        };
+        let mut v = vec![k.eye.x, k.eye.y, k.eye.z, k.yaw, k.pitch, k.killer as f32, k.progress];
+        for d in &k.bodies {
+            push_drawn(&mut v, d);
         }
         v
     }
@@ -490,8 +542,15 @@ impl Client {
                 let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
             };
             match m {
-                Msg::Seat { slot, team, bot, name } => {
+                Msg::Seat {
+                    slot,
+                    team,
+                    bot,
+                    name,
+                    skin,
+                } => {
                     set("type", "seat".into());
+                    set("skin", skin.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());
@@ -532,6 +591,22 @@ impl Client {
                         .into(),
                     );
                 }
+                Msg::Cup {
+                    round,
+                    rounds,
+                    entrants,
+                    place,
+                    points,
+                    done,
+                } => {
+                    set("type", "cup".into());
+                    set("round", round.into());
+                    set("rounds", rounds.into());
+                    set("entrants", entrants.into());
+                    set("place", place.into());
+                    set("points", points.into());
+                    set("done", done.into());
+                }
                 Msg::Bye => set("type", "bye".into()),
                 _ => continue,
             }
@@ -564,27 +639,74 @@ impl Client {
     }
 }
 
-/// The map's boxes, 6 numbers each (min x y z, max x y z): the one source
-/// of the level's geometry for the renderer.
+fn push_drawn(v: &mut Vec<f32>, d: &crate::core::Drawn) {
+    v.extend_from_slice(&[
+        d.slot as f32,
+        d.team as f32,
+        d.alive as u8 as f32,
+        d.crouched as u8 as f32,
+        d.grounded as u8 as f32,
+        d.reloading as u8 as f32,
+        d.pos.x,
+        d.pos.y,
+        d.pos.z,
+        d.yaw,
+        d.pitch,
+        d.arm as f32,
+        d.shield as f32 / 255.0,
+        (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt(),
+    ]);
+}
+
+fn map_or_first(id: u8) -> Map {
+    sim::map::by_id(id).unwrap_or_else(Map::proving_grounds)
+}
+
+/// Map `id`'s boxes, 7 numbers each (min x y z, max x y z, look): the one
+/// source of the level's geometry for the renderer.
 #[wasm_bindgen]
-pub fn map_boxes() -> Vec<f32> {
-    let m = Map::proving_grounds();
+pub fn map_boxes(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
     let mut v = Vec::new();
-    for b in &m.boxes {
-        v.extend_from_slice(&[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]);
+    for (b, &look) in m.boxes.iter().zip(&m.looks) {
+        v.extend_from_slice(&[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z, look as f32]);
     }
     v
 }
 
-/// The map's pads, 5 each: x y z, arm, respawn seconds.
+/// Map `id`'s pads, 5 each: x y z, arm, respawn seconds.
 #[wasm_bindgen]
-pub fn map_pads() -> Vec<f32> {
-    let m = Map::proving_grounds();
+pub fn map_pads(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
     let mut v = Vec::new();
     for p in &m.pads {
         v.extend_from_slice(&[p.pos.x, p.pos.y, p.pos.z, p.arm as f32, p.respawn_ms as f32 / 1000.0]);
     }
     v
+}
+
+/// Map `id`'s bounds (min x, min z, max x, max z), then its roam points
+/// (x, z each).
+#[wasm_bindgen]
+pub fn map_layout(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
+    let mut v = vec![m.lo.0, m.lo.1, m.hi.0, m.hi.1];
+    for r in &m.roam {
+        v.extend_from_slice(&[r.x, r.z]);
+    }
+    v
+}
+
+/// Map `id`'s name.
+#[wasm_bindgen]
+pub fn map_name(id: u8) -> String {
+    map_or_first(id).name.to_string()
+}
+
+/// Skin names by id (`proto::SKINS`), for the menu.
+#[wasm_bindgen]
+pub fn skin_names() -> Vec<String> {
+    proto::SKINS.iter().map(|s| s.to_string()).collect()
 }
 
 /// Arm names by id, for the HUD.
