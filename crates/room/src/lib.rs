@@ -4,11 +4,14 @@
 //! (docs/DESIGN.md §4, §7, §10). `crates/server` puts this behind
 //! WebTransport; the netcode tests drive it directly.
 
+pub mod fog;
+
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use proto::{MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
+use sim::geom::V3;
 use sim::input::Input;
 use sim::map::Map;
 use sim::world::{Phase, ProjKind, Rules, World};
@@ -206,6 +209,10 @@ pub struct Room {
     pub passive_bots: bool,
     seed: u64,
     phase: Phase,
+    /// The match's secret, kept here only to publish its commitment at the
+    /// start and the salt itself at the end (docs/DESIGN.md §9).
+    salt: (u64, u64),
+    fogs: [fog::Fog; MAX_FIGHTERS],
 }
 
 impl Room {
@@ -219,6 +226,8 @@ impl Room {
             passive_bots: false,
             seed,
             phase: Phase::Countdown,
+            salt,
+            fogs: Default::default(),
         };
         for s in 0..size {
             r.seat_bot(s);
@@ -241,6 +250,7 @@ impl Room {
     pub fn join(&mut self, name: Name) -> Option<(u8, Outbox)> {
         let s = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Bot(_) | Seat::Empty))?;
         self.seats[s] = Seat::Person(Box::default(), name);
+        self.fogs[s] = fog::Fog::default();
         let team = self.team_of(s);
         self.world.seat(s, team);
         let mut out: Outbox = vec![(
@@ -252,6 +262,7 @@ impl Room {
                 tick_hz: TICK_HZ as u16,
                 map: 0,
                 rules: self.world.rules,
+                salt_commit: proto::salt_commit([self.salt.0, self.salt.1]),
             },
         )];
         for q in 0..self.size {
@@ -345,6 +356,15 @@ impl Room {
                     winner: self.world.winner,
                 },
             ));
+            if self.phase == Phase::Over {
+                // The match is decided: the salt can be checked now.
+                out.push((
+                    None,
+                    Msg::Reveal {
+                        salt: [self.salt.0, self.salt.1],
+                    },
+                ));
+            }
         }
         let events = self.world.events.as_slice();
         for seat in self.seats.iter_mut() {
@@ -358,8 +378,11 @@ impl Room {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
                 if let Seat::Person(c, _) = &mut self.seats[s] {
+                    let lead = fog::lead_s(c.rtt_ms, c.playout as u32);
+                    let f = &mut self.fogs[s];
+                    f.update(&self.world, s, lead, tick);
                     let low = c.take_low();
-                    let snap = build(&self.world, s, c.last_seq, low, &c.pending, |_| true);
+                    let snap = build(&self.world, s, c.last_seq, low, &c.pending, |q| f.shows(q, tick));
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
                     snaps.push((s as u8, snap));
@@ -412,9 +435,18 @@ pub fn build(
         };
         snap.n_remote += 1;
     }
+    // What this client may know: itself, its side, and whom fog shows it.
+    let me = &w.fighters[s];
+    let eye = me.eye();
+    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
     for p in w.proj.iter().filter(|p| p.active) {
         if snap.n_proj as usize >= MAX_SNAP_PROJ {
             break;
+        }
+        // A projectile flies in the open: sent if it is ours or our side's,
+        // or in clear line of sight.
+        if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
+            continue;
         }
         snap.proj[snap.n_proj as usize] = ProjState {
             kind: (p.kind == ProjKind::Frag) as u8,
@@ -428,19 +460,10 @@ pub fn build(
         if snap.n_events as usize >= MAX_SNAP_EVENTS {
             break;
         }
-        // Hits on others are theirs to know, not this client's.
-        if e.kind == Ev::Hit && e.b as usize != s && e.a as usize != s {
+        let Some(e) = filter_event(w, s, eye, e, &known) else {
             continue;
-        }
-        snap.events[snap.n_events as usize] = EventState {
-            kind: e.kind as u8,
-            a: e.a,
-            b: e.b,
-            part: e.part,
-            c: e.c,
-            pos: e.pos,
-            end: e.end,
         };
+        snap.events[snap.n_events as usize] = e;
         snap.n_events += 1;
     }
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
@@ -451,4 +474,68 @@ pub fn build(
     }
     snap.n_pads = n as u8;
     snap
+}
+
+/// A shot heard is placed only to this grid, with no direction.
+pub const HEARD_GRID_M: f32 = 2.0;
+/// How far gunfire and blasts carry.
+pub const HEAR_SHOT_M: f32 = 60.0;
+/// How far a grenade's throw carries.
+pub const HEAR_THROW_M: f32 = 30.0;
+/// `part` on a Shot or Throw that was heard, not seen.
+pub const HEARD: u8 = 1;
+
+fn coarse(p: V3) -> V3 {
+    let g = HEARD_GRID_M;
+    V3::new((p.x / g).round() * g, (p.y / g).round() * g, (p.z / g).round() * g)
+}
+
+/// What client `s` may be told of an event: all of it, a heard version
+/// (rounded place, no direction), or nothing (docs/DESIGN.md §8).
+fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) -> bool) -> Option<EventState> {
+    let a = e.a as usize;
+    let full = EventState {
+        kind: e.kind as u8,
+        a: e.a,
+        b: e.b,
+        part: e.part,
+        c: e.c,
+        pos: e.pos,
+        end: e.end,
+    };
+    let heard = |range: f32| {
+        ((e.pos - eye).len() <= range).then(|| {
+            let at = coarse(e.pos);
+            EventState {
+                part: HEARD,
+                pos: at,
+                end: at,
+                ..full
+            }
+        })
+    };
+    match e.kind {
+        // Hits are the two fighters' business; where the victim stood is
+        // told only if this client may know it.
+        Ev::Hit => {
+            if a != s && e.b as usize != s {
+                return None;
+            }
+            let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
+            Some(EventState { pos, ..full })
+        }
+        Ev::Shot if known(a) => Some(EventState { part: 0, ..full }),
+        Ev::Shot => heard(HEAR_SHOT_M),
+        Ev::Throw if known(a) => Some(full),
+        Ev::Throw => heard(HEAR_THROW_M),
+        Ev::Blast if known(a) || w.map.clear(eye, e.pos) => Some(full),
+        Ev::Blast => heard(HEAR_SHOT_M),
+        Ev::Kill => {
+            let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
+            Some(EventState { pos, ..full })
+        }
+        // Where someone spawned, picked up or swung: only if seen.
+        Ev::Spawn | Ev::Pickup | Ev::Melee => known(a).then_some(full),
+        Ev::None => None,
+    }
 }

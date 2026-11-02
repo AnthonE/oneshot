@@ -82,13 +82,14 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    let mut salt = [0u8; 16];
-    getrandom::fill(&mut salt).map_err(|e| e.to_string())?;
-    let salt = (
-        u64::from_le_bytes(salt[..8].try_into().unwrap()),
-        u64::from_le_bytes(salt[8..].try_into().unwrap()),
-    );
-    let seed = salt.0 ^ 0x9e37_79b9_7f4a_7c15;
+    // The salt keys every spread draw and never leaves the server until the
+    // match ends. The seed drives what clients watch (spawn picks, bots), so
+    // it is drawn on its own: nothing seen of it says anything of the salt.
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
+    let word = |i: usize| u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap());
+    let salt = (word(0), word(1));
+    let seed = word(2);
     let rules = cfg.rules;
     let passive = cfg.passive_bots;
     let s = stop.clone();

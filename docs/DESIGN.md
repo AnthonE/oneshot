@@ -173,11 +173,11 @@ fix.)
 A client is sent an enemy only when that enemy could be on its screen soon.
 Wallhacks and ESP then have nothing to read. Valorant does the same.
 
-1. **Bake (at map compile):** a coarse potentially-visible set. The map is cut
-   into 2 m cells, and each cell stores a bitset of the cells visible from it
-   (rays from several points in each cell against the map's solids). An enemy in
-   a cell outside the viewer's set is hidden at once. Most pairs end here.
-2. **Rays (each snapshot):** for pairs that survive the bake, cast rays from
+1. **Rays, every snapshot** (`crates/room/src/fog.rs`, built in milestone
+   3). A baked potentially-visible set (2 m cells, a bitset of the cells
+   each sees) is the optimisation for when maps and rooms grow; at 2v2 the
+   rays below cost a few thousand box tests a snapshot.
+2. **The rays:** for each enemy, cast rays from
    the viewer's eye against the map, through the sim's own ray query:
    - the viewer's eye pushed ahead along its velocity by its one-way latency +
      a snapshot interval + its playout delay, and that eye moved ±0.4 m to each

@@ -32,6 +32,13 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 - **The clock steers on the low point** of the server's input buffer
   (`ClientNet::take_low`); a page drawing slowly sends in bursts.
 - **web/ draws.** Gameplay state lives in `sim` and `client-net`.
+- **Every byte to a client goes through `room::build`** and its fog
+  (`room/src/fog.rs`): an enemy only if it could be seen soon, an unseen
+  fighter's shot only as a rounded sound, never an unseen spawn. The leak
+  gate (`room/tests/leaks.rs`) plays a whole match and fails on any leak;
+  a new field on the wire needs a line there.
+- **The seed is not the salt.** What clients watch (spawns, bots) comes from
+  the seed; the salt keys spread and is revealed only at `Phase::Over`.
 
 ## The sim's walls (CI stops you on these)
 

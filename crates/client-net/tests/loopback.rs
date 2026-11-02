@@ -227,3 +227,13 @@ fn a_stalled_page_catches_up_within_a_second() {
         "corrections went on after the stall: {s:?}"
     );
 }
+
+#[test]
+fn the_reveal_is_checked_against_the_commitment() {
+    let mut r = start(10.0, 0.0, 0.0, true);
+    r.client.salt_commit = proto::salt_commit([3, 4]);
+    assert!(!r.client.on_reveal([3, 5]));
+    assert_eq!(r.client.verified, Some(false));
+    assert!(r.client.on_reveal([3, 4]));
+    assert_eq!(r.client.verified, Some(true));
+}

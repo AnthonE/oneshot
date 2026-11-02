@@ -112,6 +112,10 @@ pub struct NetCore {
     jitter: f64,
     delay: f64,
     events: Vec<EventState>,
+    /// The welcome's commitment to the match's salt, and whether the salt
+    /// revealed at the end matched it (None until then).
+    pub salt_commit: [u8; 32],
+    pub verified: Option<bool>,
 }
 
 impl NetCore {
@@ -150,7 +154,18 @@ impl NetCore {
             jitter: 0.0,
             delay: 4.0,
             events: Vec::new(),
+            salt_commit: [0; 32],
+            verified: None,
         }
+    }
+
+    /// The match is over and its salt revealed: check it against the
+    /// welcome's commitment. Every spread in the match was drawn from it, so
+    /// a replay with it reproduces every shot.
+    pub fn on_reveal(&mut self, salt: [u64; 2]) -> bool {
+        let ok = proto::salt_commit(salt) == self.salt_commit;
+        self.verified = Some(ok);
+        ok
     }
 
     /// Advances the clock to `now_ms`, making one input per client tick

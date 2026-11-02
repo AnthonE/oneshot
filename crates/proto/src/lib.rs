@@ -19,7 +19,7 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 1;
+pub const PROTO_VER: u16 = 2;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -561,6 +561,9 @@ pub enum Msg {
         tick_hz: u16,
         map: u8,
         rules: Rules,
+        /// SHA-256 of the match's salt (see [`salt_commit`]): the salt
+        /// itself comes in [`Msg::Reveal`] once the match is over.
+        salt_commit: [u8; 32],
     },
     /// Server → client: you are not.
     Refuse {
@@ -582,7 +585,21 @@ pub enum Msg {
         phase: u8,
         winner: u8,
     },
+    /// Server → everyone, once the match is over: the salt every spread was
+    /// drawn with, to check against the welcome's commitment and to replay.
+    Reveal {
+        salt: [u64; 2],
+    },
     Bye,
+}
+
+/// The commitment to a match's salt: SHA-256 of its two words, little-endian.
+pub fn salt_commit(salt: [u64; 2]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(salt[0].to_le_bytes());
+    h.update(salt[1].to_le_bytes());
+    h.finalize().into()
 }
 
 pub const REFUSE_VERSION: u8 = 1;
@@ -630,6 +647,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             tick_hz,
             map,
             rules,
+            salt_commit,
         } => {
             w.write(2, 8)?;
             w.write(*slot as u32, 3)?;
@@ -642,6 +660,9 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.time_limit_ms, 32)?;
             w.write(rules.loadout[0] as u32, 4)?;
             w.write(rules.loadout[1] as u32, 4)?;
+            for &b in salt_commit {
+                w.write(b as u32, 8)?;
+            }
         }
         Msg::Refuse { reason } => {
             w.write(3, 8)?;
@@ -666,6 +687,13 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Reveal { salt } => {
+            w.write(8, 8)?;
+            for &x in salt {
+                w.write(x as u32, 32)?;
+                w.write((x >> 32) as u32, 32)?;
+            }
+        }
     }
     Ok(w.finish())
 }
@@ -689,6 +717,13 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 time_limit_ms: r.read(32)?,
                 loadout: [r.read(4)? as u8, r.read(4)? as u8],
             },
+            salt_commit: {
+                let mut c = [0u8; 32];
+                for b in c.iter_mut() {
+                    *b = r.read(8)? as u8;
+                }
+                c
+            },
         },
         3 => Msg::Refuse {
             reason: r.read(8)? as u8,
@@ -709,6 +744,13 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        8 => {
+            let mut salt = [0u64; 2];
+            for x in salt.iter_mut() {
+                *x = r.read(32)? as u64 | (r.read(32)? as u64) << 32;
+            }
+            Msg::Reveal { salt }
+        }
         _ => return Err(WireError::Malformed),
     };
     done(&r)?;

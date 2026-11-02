@@ -7,3 +7,4 @@ description = "The wire: inputs, snapshots and stream messages, bit-packed"
 
 [dependencies]
 sim = { path = "../sim" }
+sha2 = { version = "0.10", default-features = false }

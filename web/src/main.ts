@@ -16,6 +16,8 @@ const AUTOPLAY = params.has('autoplay');
 // Event kinds (sim::events::Kind).
 const EV_SHOT = 1, EV_HIT = 2, EV_KILL = 3, EV_BLAST = 6;
 const ROCKET = 6;
+/** `part` on a shot heard but not seen (room::HEARD). */
+const HEARD = 1;
 
 interface Shared {
   connected: boolean;
@@ -135,7 +137,11 @@ async function main() {
       const kind = ev[i], a = ev[i + 1], b = ev[i + 2], part = ev[i + 3], c = ev[i + 4];
       v.set(ev[i + 5], ev[i + 6], ev[i + 7]);
       w.set(ev[i + 8], ev[i + 9], ev[i + 10]);
-      if (kind === EV_SHOT && c !== ROCKET) {
+      if (kind === EV_SHOT && part === HEARD) {
+        // Fog: a shot from someone we can't see is only a sound, placed
+        // roughly, with no tracer and no direction.
+        art?.shot(false, c, v);
+      } else if (kind === EV_SHOT && c !== ROCKET) {
         effects.tracer(v, w, a === slot);
         effects.spark(w);
         art?.shot(a === slot, c, v);
@@ -169,7 +175,14 @@ async function main() {
     const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     let center = '';
     if (phase === 0) center = `Starting in ${Math.ceil(clock)}`;
-    else if (phase === 2) center = winner === slot ? 'You win' : winner === 255 ? 'Draw' : `${hud.name(winner)} wins`;
+    else if (phase === 2) {
+      center = winner === slot ? 'You win' : winner === 255 ? 'Draw' : `${hud.name(winner)} wins`;
+      // The salt every spread was drawn from, checked against the
+      // commitment the server made when we joined.
+      const v = client.stats()[8];
+      if (v === 1) center += ' · match verified ✓';
+      if (v === 0) center += ' · verification FAILED';
+    }
     else if (!alive) center = `Respawning in ${Math.ceil(respawn)}`;
     const st = client.stats();
     shared.stats = Array.from(st);
@@ -233,24 +246,38 @@ function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THR
 /** For the browser test (?autoplay): walk at the nearest other fighter,
  * aim at them and keep pulling the trigger. Only inputs: the server still
  * decides every hit. */
+// Where the autopilot walks while fog shows it nobody: round the open
+// lanes of Proving Grounds.
+const ROUTE = [[-15, 8], [15, 8], [21, 0], [15, -8], [-15, -8], [-21, 0]];
+let leg = 0;
+
 function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
   const o = s.others, me = s.own;
-  if (o.length < STRIDE || me.length === 0) return f;
+  if (me.length === 0) return f;
+  const TURN = 65536;
+  const toYaw = (a: number) => (((Math.round((a / (2 * Math.PI)) * TURN)) % TURN) + TURN) % TURN;
   let best = -1, bd = Infinity;
   for (let i = 0; i + STRIDE <= o.length; i += STRIDE) {
     if (!o[i + 2]) continue;
     const d = Math.hypot(o[i + 6] - me[0], o[i + 8] - me[2]);
     if (d < bd) { bd = d; best = i; }
   }
-  if (best < 0) return { ...f, buttons: 0 };
+  if (best < 0) {
+    // Nobody in sight: walk the route until fog shows someone.
+    let [tx, tz] = ROUTE[leg];
+    if (Math.hypot(tx - me[0], tz - me[2]) < 2) {
+      leg = (leg + 1) % ROUTE.length;
+      [tx, tz] = ROUTE[leg];
+    }
+    return { buttons: 0, yaw: toYaw(Math.atan2(tz - me[2], tx - me[0])), pitch: 0, mx: 0, mz: 127 };
+  }
   const dx = o[best + 6] - me[0], dz = o[best + 8] - me[2];
   const dy = o[best + 7] + 1.3 - (me[1] + me[3]);
   const yaw = Math.atan2(dz, dx);
   const pitch = Math.atan2(dy, Math.hypot(dx, dz));
-  const TURN = 65536;
   return {
     buttons: (s.frames & 1) ? FIRE : 0,
-    yaw: (((Math.round((yaw / (2 * Math.PI)) * TURN)) % TURN) + TURN) % TURN,
+    yaw: toYaw(yaw),
     pitch: Math.round((pitch / (2 * Math.PI)) * TURN),
     mx: (s.frames >> 6) & 1 ? 60 : -60,
     mz: bd > 8 ? 127 : 0,

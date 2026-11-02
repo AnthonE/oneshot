@@ -180,14 +180,15 @@ impl Client {
             .next()
             .await
             .ok_or_else(|| JsValue::from_str("the server hung up"))?;
-        let (slot, team, tick, rules) = match decode_msg(&f) {
+        let (slot, team, tick, rules, commit) = match decode_msg(&f) {
             Ok(Msg::Welcome {
                 slot,
                 team,
                 tick,
                 rules,
+                salt_commit,
                 ..
-            }) => (slot, team, tick, rules),
+            }) => (slot, team, tick, rules, salt_commit),
             Ok(Msg::Refuse { reason }) => {
                 return Err(JsValue::from_str(match reason {
                     proto::REFUSE_VERSION => "this page is out of date: reload",
@@ -247,8 +248,10 @@ impl Client {
             });
         }
         let writer = datagram_writer(&datagrams)?;
+        let mut core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+        core.salt_commit = commit;
         Ok(Client {
-            core: NetCore::new(slot, team, tick, rules, Map::proving_grounds()),
+            core,
             transport,
             datagrams,
             writer,
@@ -446,7 +449,8 @@ impl Client {
     /// Stream messages since the last call, as JS objects.
     pub fn messages(&mut self) -> js_sys::Array {
         let out = js_sys::Array::new();
-        for m in self.msgs.borrow_mut().drain(..) {
+        let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
+        for m in msgs {
             let o = js_sys::Object::new();
             let set = |k: &str, v: JsValue| {
                 let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
@@ -470,6 +474,11 @@ impl Client {
                     set("phase", phase.into());
                     set("winner", winner.into());
                 }
+                Msg::Reveal { salt } => {
+                    let ok = self.core.on_reveal(salt);
+                    set("type", "reveal".into());
+                    set("verified", ok.into());
+                }
                 _ => continue,
             }
             out.push(&o);
@@ -478,7 +487,9 @@ impl Client {
     }
 
     /// Netcode health: snapshots, confirmations, corrections, resyncs,
-    /// depth, clock rate, interpolation delay (ticks), datagrams dropped.
+    /// depth, clock rate, interpolation delay (ticks), datagrams dropped,
+    /// and whether the match's revealed salt matched its commitment (1 yes,
+    /// 0 no, −1 not revealed yet).
     pub fn stats(&self) -> Vec<f64> {
         let s = self.core.stats;
         vec![
@@ -490,6 +501,7 @@ impl Client {
             s.rate,
             s.delay_ticks,
             self.dropped as f64,
+            self.core.verified.map_or(-1.0, |v| v as u8 as f64),
         ]
     }
 
