@@ -156,9 +156,26 @@ impl NetCore {
     /// Returns the input datagrams to send.
     pub fn update(&mut self, now_ms: f64, input: Input) -> Vec<InputMsg> {
         let input = input.sanitized();
-        let dt = self.last_ms.map_or(0.0, |l| (now_ms - l).clamp(0.0, 250.0));
+        // The clock keeps real time through a stall (a tab in the
+        // background, a long first frame): time dropped here would leave the
+        // client behind the server, starving it for as long as the ±5% takes
+        // to win the ticks back.
+        let dt = self.last_ms.map_or(0.0, |l| (now_ms - l).max(0.0));
         self.last_ms = Some(now_ms);
         self.t += dt / TICK_MS * self.rate;
+        // Owed more ticks than a datagram can carry: skip to the newest. The
+        // server runs repeats for the ones skipped.
+        let owed = self.t.floor() - self.seq as f64;
+        if owed > MAX_INPUT_FRAMES as f64 {
+            let to = (self.t.floor() as u32).wrapping_sub(MAX_INPUT_FRAMES as u32);
+            while self.seq != to {
+                self.inputs[self.seq as usize % RING] = input.repeated();
+                self.after[self.seq as usize % RING] = self.pred;
+                self.seq = self.seq.wrapping_add(1);
+            }
+            self.stats.resyncs += 1;
+        }
+        let dt = dt.min(250.0);
         let mut out = Vec::new();
         while (self.seq as f64) < self.t.floor() {
             let s = self.seq;

@@ -101,12 +101,17 @@ impl ClientNet {
             let seq = m.first_seq.wrapping_add(i as u32);
             let cursor = *self.cursor.get_or_insert(seq);
             let ahead = seq.wrapping_sub(cursor);
-            if ahead >= BUF as u32 {
-                // Already run, or absurdly far ahead.
-                if ahead < 0x8000_0000 {
-                    self.late += 1;
-                }
+            if ahead >= 0x8000_0000 {
+                // Already run.
+                self.late += 1;
                 continue;
+            }
+            if ahead >= BUF as u32 {
+                // The client's clock jumped ahead (it stalled and skipped):
+                // follow it. Still one frame a tick; what it skipped is lost.
+                self.cursor = Some(seq);
+                self.frames = [None; BUF];
+                self.newest_seq = None;
             }
             self.frames[seq as usize % BUF] = Some((seq, f.sanitized()));
             if self.newest_seq.is_none_or(|n| seq.wrapping_sub(n) < 0x8000_0000) {
@@ -136,7 +141,10 @@ impl ClientNet {
             }
             _ => {
                 self.repeats += 1;
-                (self.last.repeated(), -1)
+                // How far behind the client is: frames it hasn't sent yet
+                // count against it, so its clock can jump rather than crawl.
+                let behind = self.newest_seq.map_or(-1, |n| (n.wrapping_sub(cursor) as i32).min(-1));
+                (self.last.repeated(), behind)
             }
         };
         self.low = Some(self.low.map_or(spare, |l| l.min(spare)));

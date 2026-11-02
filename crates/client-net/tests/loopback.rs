@@ -208,3 +208,22 @@ fn others_are_drawn_between_where_the_server_had_them() {
         }
     }
 }
+
+#[test]
+fn a_stalled_page_catches_up_within_a_second() {
+    let mut r = start(20.0, 0.0, 0.0, true);
+    r.run(5000.0, player);
+    // Two seconds with no frames drawn: the page did nothing at all.
+    let saved = r.next_frame;
+    r.next_frame = r.now + 2000.0;
+    r.run(2000.0, player);
+    assert!(r.next_frame >= saved);
+    r.run(1000.0, player);
+    let settled = r.client.stats;
+    r.run(4000.0, player);
+    let s = r.client.stats;
+    assert_eq!(
+        s.corrections, settled.corrections,
+        "corrections went on after the stall: {s:?}"
+    );
+}
