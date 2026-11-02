@@ -92,6 +92,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         name,
         pass,
         mode,
+        skin,
     } = hello
     else {
         return;
@@ -100,12 +101,10 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
         return refuse(&mut send, proto::REFUSE_VERSION).await;
     }
     // Who: a pass from Elo Pros, or a guest.
+    let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES);
     let who = if pass.is_empty() {
         None
-    } else {
-        let Some(key) = ctx.elo_pubkey else {
-            return refuse(&mut send, proto::REFUSE_PASS).await;
-        };
+    } else if let Some(key) = ctx.elo_pubkey {
         match auth::verify_pass(
             pass.as_str(),
             &key,
@@ -115,8 +114,29 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             auth::now_unix(),
         ) {
             Ok(p) => Some(p),
-            Err(_) => return refuse(&mut send, proto::REFUSE_PASS).await,
+            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            // Casual is open to anyone: a pass that doesn't check out (say,
+            // older than its ten minutes) only costs its skin.
+            Err(_) => None,
         }
+    } else if ranked {
+        return refuse(&mut send, proto::REFUSE_PASS).await;
+    } else {
+        None
+    };
+
+    // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
+    // a guest, or a list that can't be read, wears the standard look.
+    let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        Some(w) if skin != proto::SKIN_STANDARD => {
+            let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
+            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+                skin
+            } else {
+                proto::SKIN_STANDARD
+            }
+        }
+        _ => proto::SKIN_STANDARD,
     };
 
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
@@ -143,6 +163,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
                     mode,
                     rating,
                     since: std::time::Instant::now(),
+                    skin,
                 }),
                 tx,
             }
@@ -151,6 +172,7 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             session: session_id,
             name,
             mode,
+            skin,
             tx,
         },
     };

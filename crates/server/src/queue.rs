@@ -19,6 +19,8 @@ pub struct Entry {
     pub mode: u8,
     pub rating: f64,
     pub since: Instant,
+    /// A skin checked against the wallet.
+    pub skin: u8,
 }
 
 /// Players a match needs.
@@ -108,6 +110,7 @@ mod tests {
             mode,
             rating,
             since,
+            skin: 0,
         }
     }
 

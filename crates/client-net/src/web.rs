@@ -151,12 +151,20 @@ impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
     /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
     /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game)
-    /// as `name`, signed in with an
+    /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
+    /// signed in with an
     /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
     /// comes through `messages()`.
-    pub async fn connect(addr: String, hash: String, name: String, pass: String, mode: u8) -> Result<Client, JsValue> {
+    pub async fn connect(
+        addr: String,
+        hash: String,
+        name: String,
+        pass: String,
+        mode: u8,
+        skin: u8,
+    ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
             proto::Pass::NONE
         } else {
@@ -190,6 +198,7 @@ impl Client {
                 name: Name::new(&name),
                 pass,
                 mode,
+                skin,
             },
         )
         .await?;
@@ -521,8 +530,15 @@ impl Client {
                 let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
             };
             match m {
-                Msg::Seat { slot, team, bot, name } => {
+                Msg::Seat {
+                    slot,
+                    team,
+                    bot,
+                    name,
+                    skin,
+                } => {
                     set("type", "seat".into());
+                    set("skin", skin.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());
@@ -657,6 +673,12 @@ pub fn map_layout(id: u8) -> Vec<f32> {
 #[wasm_bindgen]
 pub fn map_name(id: u8) -> String {
     map_or_first(id).name.to_string()
+}
+
+/// Skin names by id (`proto::SKINS`), for the menu.
+#[wasm_bindgen]
+pub fn skin_names() -> Vec<String> {
+    proto::SKINS.iter().map(|s| s.to_string()).collect()
 }
 
 /// Arm names by id, for the HUD.

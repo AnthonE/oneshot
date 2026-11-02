@@ -3,7 +3,7 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
@@ -79,6 +79,10 @@ async function main() {
   const nameInput = document.getElementById('name') as HTMLInputElement;
   const el = (id: string) => document.getElementById(id) as HTMLButtonElement;
   nameInput.value = params.get('name') || localStorage.getItem('oneshot.name') || '';
+  // Skins: worn only if the signed-in wallet owns one; the server checks.
+  const skinSelect = document.getElementById('skin') as HTMLSelectElement;
+  skin_names().forEach((n: string, i: number) => skinSelect.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
+  try { skinSelect.value = localStorage.getItem('oneshot.skin') || '0'; } catch { /* private window */ }
 
   const info = await (await fetch('server.json')).json();
   const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, el('duel'), el('doubles'));
@@ -92,9 +96,14 @@ async function main() {
           for (const id of Object.keys(MODES)) el(id).addEventListener('click', () => go(MODES[id]), { once: true });
         });
     const name = nameInput.value.trim() || 'player';
-    try { localStorage.setItem('oneshot.name', name); } catch { /* private window */ }
+    try {
+      localStorage.setItem('oneshot.name', name);
+      localStorage.setItem('oneshot.skin', skinSelect.value);
+    } catch { /* private window */ }
     status.textContent = 'connecting…';
-    client = await Client.connect(info.addr, info.hash, name, mode ? signin.pass() : '', mode);
+    // A pass goes with every mode once signed in: it is what proves a skin
+    // is yours. Casual without one is a guest, in the standard look.
+    client = await Client.connect(info.addr, info.hash, name, signin.pass(), mode, Number(skinSelect.value) || 0);
   } catch (e) {
     shared.error = String(e);
     status.textContent = String(e);
@@ -105,7 +114,10 @@ async function main() {
   const slotName = (n: { bot: boolean; name: string }) => (n.bot ? 'BOT' : n.name);
   let ended = false;
   const handle = (m: any) => {
-    if (m.type === 'seat') hud.names[m.slot] = slotName(m);
+    if (m.type === 'seat') {
+      hud.names[m.slot] = slotName(m);
+      players.skins[m.slot] = m.skin;
+    }
     else if (m.type === 'queued') {
       const t = m.waiting as number;
       status.textContent = `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
@@ -288,13 +300,15 @@ async function main() {
 
 /** ?pose: no server. One fighter on the floor in front of the camera, for
  * looking at the models (ci/look.mjs takes pictures of it). ?yaw= turns the
- * fighter (radians), ?arm= picks its gun, ?anim=speed. */
+ * fighter (radians), ?arm= picks its gun, ?anim=speed, ?skin= its skin,
+ * ?team= its side. */
 function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer,
   players: Players, art: Awaited<ReturnType<typeof import('./art').loadArt>> | null) {
   document.getElementById('menu')!.style.display = 'none';
   const yaw = Number(params.get('yaw') ?? Math.PI), arm = Number(params.get('arm') ?? 1);
   const speed = Number(params.get('speed') ?? 0);
-  const o = new Float32Array([1, 0, 1, 0, 1, 0, 3, 0, 0, yaw, 0, arm, 1, speed]);
+  players.skins[1] = Number(params.get('skin') ?? 0);
+  const o = new Float32Array([1, Number(params.get('team') ?? 0), 1, 0, 1, 0, 3, 0, 0, yaw, 0, arm, 1, speed]);
   const own = new Float32Array(22);
   own[3] = 1.6; own[6] = 1; own[10] = arm; own[11] = 10; own[20] = 1;
   camera.position.set(0, 1.6, 0);

@@ -51,6 +51,8 @@ pub enum ToSim {
         session: u64,
         name: Name,
         mode: u8,
+        /// A skin checked against the player's wallet.
+        skin: u8,
         tx: tmpsc::Sender<Out>,
     },
     /// Into the ranked queue.
@@ -336,6 +338,7 @@ impl Sim {
                         session,
                         name,
                         mode,
+                        skin,
                         tx,
                     } => {
                         let mode = match mode {
@@ -371,7 +374,7 @@ impl Sim {
                             ),
                         };
                         let live = rooms[i].as_mut().unwrap();
-                        let Some((slot, out)) = live.room.join(name) else {
+                        let Some((slot, out)) = live.room.join(name, skin) else {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
@@ -451,7 +454,7 @@ impl Sim {
                         for (k, p) in players.iter().enumerate() {
                             // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
                             let slot = side + 2 * k;
-                            outs.push(live.room.seat_person(slot, p.name));
+                            outs.push(live.room.seat_person(slot, p.name, p.skin));
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
                         }

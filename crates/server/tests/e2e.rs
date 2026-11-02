@@ -52,6 +52,7 @@ async fn a_native_client_plays_the_bot() {
             name: Name::new("native"),
             pass: proto::Pass::NONE,
             mode: proto::MODE_CASUAL,
+            skin: 2,
         },
         &mut f,
     )
@@ -70,7 +71,9 @@ async fn a_native_client_plays_the_bot() {
     };
     let mut seats = 0;
     while seats < 2 {
-        if let Some(Msg::Seat { .. }) = read_frame(&mut recv).await {
+        if let Some(Msg::Seat { skin, .. }) = read_frame(&mut recv).await {
+            // A guest owns nothing: the skin asked for is not worn.
+            assert_eq!(skin, proto::SKIN_STANDARD);
             seats += 1;
         }
     }
@@ -150,6 +153,7 @@ async fn hello(
             name: Name::new(name),
             pass: proto::Pass::NONE,
             mode,
+            skin: 0,
         },
         &mut f,
     )

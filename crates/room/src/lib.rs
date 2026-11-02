@@ -222,6 +222,9 @@ pub struct Room {
     pub ranked: bool,
     /// The aim review's numbers, for every seat.
     watch: watch::Watch,
+    /// The skin each person wears, checked by the server against their
+    /// wallet before they were seated. Cosmetic: never reaches the world.
+    skins: [u8; MAX_FIGHTERS],
 }
 
 impl Room {
@@ -257,6 +260,7 @@ impl Room {
             fogs: Default::default(),
             ranked: false,
             watch: watch::Watch::default(),
+            skins: [proto::SKIN_STANDARD; MAX_FIGHTERS],
         }
     }
 
@@ -286,23 +290,30 @@ impl Room {
 
     fn seat_bot(&mut self, s: usize) {
         self.seats[s] = Seat::Bot(Bot::new(self.seed, s, 0.5));
+        self.skins[s] = proto::SKIN_STANDARD;
         let t = self.team_of(s);
         self.world_seat(s, t);
     }
 
-    /// A person takes the first seat a bot holds. Returns the seat and the
-    /// stream messages: a welcome for them, the seats for everyone.
-    pub fn join(&mut self, name: Name) -> Option<(u8, Outbox)> {
+    /// A person takes the first seat a bot holds, wearing `skin` (one the
+    /// server checked they own). Returns the seat and the stream messages: a
+    /// welcome for them, the seats for everyone.
+    pub fn join(&mut self, name: Name, skin: u8) -> Option<(u8, Outbox)> {
         if self.ranked {
             return None;
         }
         let s = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Bot(_) | Seat::Empty))?;
-        Some((s as u8, self.seat_person(s, name)))
+        Some((s as u8, self.seat_person(s, name, skin)))
     }
 
     /// A person in seat `s`: the welcome for them, the seats for everyone.
-    pub fn seat_person(&mut self, s: usize, name: Name) -> Outbox {
+    pub fn seat_person(&mut self, s: usize, name: Name, skin: u8) -> Outbox {
         self.seats[s] = Seat::Person(Box::default(), name);
+        self.skins[s] = if (skin as usize) < proto::SKINS.len() {
+            skin
+        } else {
+            proto::SKIN_STANDARD
+        };
         self.fogs[s] = fog::Fog::default();
         let team = self.team_of(s);
         self.world_seat(s, team);
@@ -330,6 +341,7 @@ impl Room {
     pub fn leave(&mut self, s: u8) -> Outbox {
         if self.ranked {
             self.seats[s as usize] = Seat::Empty;
+            self.skins[s as usize] = proto::SKIN_STANDARD;
         } else {
             self.seat_bot(s as usize);
         }
@@ -346,6 +358,7 @@ impl Room {
             team: self.team_of(s),
             bot,
             name,
+            skin: self.skins[s],
         }
     }
 

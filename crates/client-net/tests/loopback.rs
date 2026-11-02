@@ -87,7 +87,7 @@ fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
         ..Rules::duel()
     };
     let mut room = Room::new(Map::proving_grounds(), rules, 11, (5, 6));
-    let (slot, out) = room.join(Name::new("tester")).unwrap();
+    let (slot, out) = room.join(Name::new("tester"), 0).unwrap();
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
     };

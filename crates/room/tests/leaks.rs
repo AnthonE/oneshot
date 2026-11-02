@@ -19,6 +19,8 @@ use sim::map::Map;
 use sim::world::{Phase, Rules};
 
 const SALT: (u64, u64) = (0x5a17_0123_4567_89ab, 0xfeed_beef_cafe_d00d);
+/// The skin the person seat wears (the server checked it owns it).
+const SKIN: u8 = 3;
 
 /// Whether the 64 bits of `w` appear in `buf` at any bit offset (the wire
 /// is bit-packed, so a leak need not be byte-aligned).
@@ -166,7 +168,7 @@ fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
 /// from start to end.
 fn gate(map: Map, rules: Rules) {
     let mut room = Room::new(map, rules, 77, SALT);
-    let (slot, out) = room.join(Name::new("gate")).unwrap();
+    let (slot, out) = room.join(Name::new("gate"), SKIN).unwrap();
     let Some((
         _,
         Msg::Welcome {
@@ -190,6 +192,7 @@ fn gate(map: Map, rules: Rules) {
         hidden_seen: 0,
     };
     for (_, m) in &out {
+        check_seat(m, slot);
         let mut b = [0u8; 256];
         let n = encode_msg(m, &mut b).unwrap();
         g.sent.push(b[..n].to_vec());
@@ -231,6 +234,7 @@ fn gate(map: Map, rules: Rules) {
                 g.revealed = Some(*salt);
                 continue;
             }
+            check_seat(m, slot);
             if let Msg::Phase { phase, .. } = m {
                 g.over |= *phase == Phase::Over as u8;
             }
@@ -257,6 +261,16 @@ fn gate(map: Map, rules: Rules) {
     // The gate only means something if fog actually hid someone.
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
+}
+
+/// Check 7: skins are public by design (docs/DESIGN.md §15) and say
+/// nothing of the world. A seat names the skin its person was checked to
+/// own, and a bot's is the standard look.
+fn check_seat(m: &Msg, me: u8) {
+    if let Msg::Seat { slot, bot, skin, .. } = *m {
+        let want = if slot == me && !bot { SKIN } else { proto::SKIN_STANDARD };
+        assert_eq!(skin, want, "seat {slot}'s skin");
+    }
 }
 
 #[test]

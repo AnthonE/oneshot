@@ -19,7 +19,7 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 4;
+pub const PROTO_VER: u16 = 5;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -584,6 +584,14 @@ impl Pass {
     }
 }
 
+/// Skins, by the id the wire carries: cosmetic only (docs/DESIGN.md §15).
+/// A skin never changes a hitbox, a sound or how well a fighter shows; the
+/// page draws it as trim on the side's colour. Each is a Metaplex Core item
+/// of the game's collection on Elo Pros, under its name here, except the
+/// standard look everyone has.
+pub const SKINS: [&str; 6] = ["standard", "pill", "ember", "glacier", "verdant", "gilded"];
+pub const SKIN_STANDARD: u8 = 0;
+
 /// What a client asks to play (`Msg::Hello::mode`): casual against a bot,
 /// ranked Duel or Doubles, casual free-for-all or Gun Game with bots in the
 /// empty seats.
@@ -607,6 +615,8 @@ pub enum Msg {
         name: Name,
         pass: Pass,
         mode: u8,
+        /// The skin it would wear: worn only if the pass's wallet owns it.
+        skin: u8,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -635,6 +645,8 @@ pub enum Msg {
         team: u8,
         bot: bool,
         name: Name,
+        /// The skin the server checked it owns; [`SKIN_STANDARD`] otherwise.
+        skin: u8,
     },
     Kill {
         killer: u8,
@@ -708,6 +720,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             name,
             pass,
             mode,
+            skin,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
@@ -717,6 +730,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
                 w.write(b as u32, 7)?;
             }
             w.write(*mode as u32, MODE_BITS)?;
+            w.write(*skin as u32, 8)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -753,12 +767,19 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(3, 8)?;
             w.write(*reason as u32, 8)?;
         }
-        Msg::Seat { slot, team, bot, name } => {
+        Msg::Seat {
+            slot,
+            team,
+            bot,
+            name,
+            skin,
+        } => {
             w.write(4, 8)?;
             w.write(*slot as u32, 3)?;
             w.write(*team as u32 & 1, 1)?;
             w.write_bit(*bot)?;
             w_name(&mut w, name)?;
+            w.write(*skin as u32, 8)?;
         }
         Msg::Kill { killer, victim, cause } => {
             w.write(5, 8)?;
@@ -805,6 +826,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 p
             },
             mode: r.read(MODE_BITS)? as u8,
+            skin: r.read(8)? as u8,
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -843,6 +865,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             team: r.read(1)? as u8,
             bot: r.read_bit()?,
             name: r_name(&mut r)?,
+            skin: r.read(8)? as u8,
         },
         5 => Msg::Kill {
             killer: r.read(3)? as u8,
