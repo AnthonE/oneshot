@@ -26,10 +26,7 @@ pub const RULES_TAG: u64 = 0x6a3a_cc7e_0b61_c34a;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {
-    match id {
-        0 => Some(Map::proving_grounds()),
-        _ => None,
-    }
+    sim::map::by_id(id)
 }
 
 pub struct Recorder {

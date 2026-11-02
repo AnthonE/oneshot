@@ -103,6 +103,9 @@ pub struct Config {
     pub doubles: Rules,
     /// Bots that stand still: a target for the browser test.
     pub passive_bots: bool,
+    /// The maps rooms are played on (ids, `sim::maps`), one drawn from each
+    /// room's seed. Empty: all of them.
+    pub maps: Vec<u8>,
     /// This game's name on Elo Pros, what passes are for.
     pub slug: String,
     /// The hosts the page is served from: a pass names the one it was
@@ -131,6 +134,7 @@ impl Default for Config {
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             passive_bots: false,
+            maps: Vec::new(),
             slug: "oneshot".into(),
             domains: vec!["localhost".into(), "127.0.0.1".into()],
             elo_pubkey: None,
@@ -285,13 +289,22 @@ impl Sim {
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
         };
+        let map = self.pick_map(seed);
         if ranked {
-            Room::ranked(Map::proving_grounds(), rules, seed, salt)
+            Room::ranked(map, rules, seed, salt)
         } else {
-            let mut r = Room::new(Map::proving_grounds(), rules, seed, salt);
+            let mut r = Room::new(map, rules, seed, salt);
             r.passive_bots = self.cfg.passive_bots;
             r
         }
+    }
+
+    /// The map a room plays, from its seed (what clients may know anyway).
+    fn pick_map(&self, seed: u64) -> Map {
+        let all: Vec<u8> = sim::maps::ALL.iter().map(|d| d.id).collect();
+        let ids: Vec<u8> = self.cfg.maps.iter().copied().filter(|id| all.contains(id)).collect();
+        let ids = if ids.is_empty() { all } else { ids };
+        sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }
 
     fn run(self) {

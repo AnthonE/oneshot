@@ -5,6 +5,8 @@
 # ci/quick.sh sim proto room        ... and those crates' tests
 set -eu
 cd "$(dirname "$0")/.."
+# The maps' Rust is what their JSON compiles to.
+node tools/maps/compile.mjs --check
 cargo fmt --all
 cargo clippy -q --workspace --all-targets -- -D warnings
 cargo clippy -q -p sim-wasm -p client-net --target wasm32-unknown-unknown -- -D warnings

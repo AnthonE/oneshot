@@ -1,0 +1,75 @@
+{
+  "id": 2,
+  "name": "Cistern",
+  "about": "40 m square and the same from every side: a walkway 1.5 m up around the walls, steps down into the floor, pillars and low walls in each quarter, the rocket on the block in the middle.",
+  "bounds": [-20, 20, -20, 20],
+  "mirror": "xz",
+  "structures": [
+    {
+      "name": "walls",
+      "boxes": [
+        [-21, 0, -21, 21, 8, -20, "wall"],
+        [-21, 0, 20, 21, 8, 21, "wall"],
+        [-21, 0, -20, -20, 8, 20, "wall"],
+        [20, 0, -20, 21, 8, 20, "wall"]
+      ]
+    },
+    {
+      "name": "the walkway",
+      "boxes": [
+        [-20, 0, -20, -16, 1.5, 20, "red"],
+        [16, 0, -20, 20, 1.5, 20, "blue"],
+        [-16, 0, 16, 16, 1.5, 20, "dark"],
+        [-16, 0, -20, 16, 1.5, -16, "dark"]
+      ]
+    },
+    {
+      "name": "steps down",
+      "boxes": [
+        [-16, 0, -2, -15, 1, 2, "block"],
+        [-15, 0, -2, -14, 0.5, 2, "block"],
+        [15, 0, -2, 16, 1, 2, "block"],
+        [14, 0, -2, 15, 0.5, 2, "block"],
+        [-2, 0, 15, 2, 1, 16, "block"],
+        [-2, 0, 14, 2, 0.5, 15, "block"],
+        [-2, 0, -16, 2, 1, -15, "block"],
+        [-2, 0, -15, 2, 0.5, -14, "block"]
+      ]
+    },
+    {
+      "name": "the middle",
+      "boxes": [
+        [-1.5, 0, -1.5, 1.5, 1, 1.5, "trim"],
+        [-2.5, 0, -0.75, -1.5, 0.5, 0.75, "block"],
+        [1.5, 0, -0.75, 2.5, 0.5, 0.75, "block"]
+      ]
+    },
+    {
+      "name": "a quarter",
+      "mirror": true,
+      "boxes": [
+        [-8, 0, -8, -6.5, 4, -6.5, "block"],
+        [-12, 0, -6, -11.5, 1.2, -2, "block"],
+        [-6, 0, -12, -2, 1.2, -11.5, "block"],
+        [-19.5, 1.5, -19.5, -18, 3, -18, "block"]
+      ]
+    }
+  ],
+  "spawns": [
+    { "at": [-18, -10, 1.5], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-10, -18, 1.5], "team": "red", "yaw": 90, "mirror": true }
+  ],
+  "pads": [
+    { "weapon": "rocket", "at": [0, 0, 1], "respawn": 120 },
+    { "weapon": "sniper", "at": [0, 18, 1.5], "respawn": 90 },
+    { "weapon": "sniper", "at": [0, -18, 1.5], "respawn": 90 },
+    { "weapon": "smg", "at": [-18, 0, 1.5], "respawn": 30 },
+    { "weapon": "smg", "at": [18, 0, 1.5], "respawn": 30 },
+    { "weapon": "shotgun", "at": [-10, 0], "respawn": 60 },
+    { "weapon": "shotgun", "at": [10, 0], "respawn": 60 }
+  ],
+  "roam": [
+    [0, 0], [-10, -10], [10, -10], [-10, 10], [10, 10],
+    [-18, 0], [18, 0], [0, -18], [0, 18], [-12, 0], [12, 0]
+  ]
+}

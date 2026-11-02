@@ -8,7 +8,6 @@ use client_net::core::NetCore;
 use proto::frame::LEN_PREFIX_BYTES;
 use proto::{decode_msg, decode_snapshot, encode_input, frame_msg, Msg, Name, MAX_DATAGRAM, MAX_STREAM_MSG, PROTO_VER};
 use sim::input::{Input, FIRE};
-use sim::map::Map;
 use sim::world::Rules;
 use wtransport::tls::Sha256Digest;
 use wtransport::{ClientConfig, Endpoint};
@@ -63,6 +62,7 @@ async fn a_native_client_plays_the_bot() {
         team,
         tick,
         rules,
+        map,
         ..
     }) = read_frame(&mut recv).await
     else {
@@ -75,7 +75,7 @@ async fn a_native_client_plays_the_bot() {
         }
     }
 
-    let mut core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+    let mut core = NetCore::new(slot, team, tick, rules, sim::map::by_id(map).expect("a map we know"));
     let (dtx, mut drx) = tokio::sync::mpsc::unbounded_channel();
     let rconn = conn.clone();
     tokio::spawn(async move {

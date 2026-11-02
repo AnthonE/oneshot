@@ -60,6 +60,8 @@ struct Gate {
 
 impl Gate {
     fn check_snapshot(&mut self, s: &Snapshot) {
+        let c = self.room.client(self.me as u8).map(|c| (c.rtt_ms, c.playout as u32));
+        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play));
         let w = &self.room.world;
         let me = &w.fighters[self.me];
         let now = &self.history[0];
@@ -72,9 +74,23 @@ impl Gate {
             }
             if sent.contains(&q) {
                 // 1. Never sent while far from visible: a check looser
-                // than fog's (300 ms ahead, 0.7 m lean, the last 16 ticks).
-                let near = self.history.iter().any(|h| sees(&w.map, &h[self.me], &h[q], 0.3, 0.7));
-                assert!(near, "tick {}: seat {q} sent while hidden from every angle", w.tick);
+                // than fog's. Seen from any look-ahead up to 300 ms
+                // (fog's own among them: a point further along a path is
+                // not a superset of a nearer one) leaning up to 0.7 m, in
+                // the last 16 ticks.
+                let leads = [fog_lead, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
+                let near = self.history.iter().any(|h| {
+                    leads.iter().any(|&l| {
+                        [room::fog::PEEK_M, 0.7]
+                            .iter()
+                            .any(|&p| sees(&w.map, &h[self.me], &h[q], l, p))
+                    })
+                });
+                assert!(
+                    near,
+                    "{} tick {}: seat {q} sent while hidden from every angle: me {:?} them {:?} alive {} teams {}",
+                    w.map.name, w.tick, me.body.pos, f.body.pos, f.alive, w.rules.teams
+                );
             } else {
                 // 2. Never hidden while plainly visible.
                 assert!(
@@ -120,7 +136,23 @@ fn nothing_a_client_should_not_know_reaches_it_in_doubles() {
 }
 
 #[test]
-fn nothing_a_client_should_not_know_reaches_it_in_a_free_for_all() {
+fn nothing_a_client_should_not_know_reaches_it_on_any_map() {
+    for d in sim::maps::ALL {
+        for rules in [Rules::doubles(), Rules::ffa()] {
+            gate(
+                d.build(),
+                Rules {
+                    score_limit: 25,
+                    time_limit_ms: 120_000,
+                    ..rules
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
         Rules {

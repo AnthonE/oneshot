@@ -246,7 +246,7 @@ impl Room {
     fn empty(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
         let size = (rules.seats as usize).clamp(1, MAX_FIGHTERS);
         Room {
-            rec: replay::Recorder::new(seed, salt, &rules, 0),
+            rec: replay::Recorder::new(seed, salt, &rules, map.id),
             world: World::new(map, rules, seed, salt),
             seats: core::array::from_fn(|_| Seat::Empty),
             size,
@@ -313,7 +313,7 @@ impl Room {
                 team,
                 tick: self.world.tick,
                 tick_hz: TICK_HZ as u16,
-                map: 0,
+                map: self.world.map.id,
                 rules: self.world.rules,
                 salt_commit: self.salt_commit(),
             },

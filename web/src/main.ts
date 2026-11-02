@@ -3,7 +3,7 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, arm_name } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
@@ -60,7 +60,6 @@ async function main() {
   addEventListener('resize', resize);
   resize();
 
-  buildWorld(scene, map_boxes(), map_pads(), defaultMaterials());
   const players = new Players(scene);
   const effects = new Effects(scene);
   const hud = new Hud();
@@ -70,7 +69,10 @@ async function main() {
     return null;
   }) : null;
 
-  if (params.has('pose')) return pose(scene, camera, renderer, players, art);
+  if (params.has('pose')) {
+    buildWorld(scene, map_boxes(0), map_pads(0), defaultMaterials(), map_layout(0));
+    return pose(scene, camera, renderer, players, art);
+  }
 
   const menu = document.getElementById('menu')!;
   const status = document.getElementById('status')!;
@@ -135,6 +137,11 @@ async function main() {
   cancel.hidden = true;
   menu.style.display = 'none';
   const gunGame = client.gun_game;
+  // The level the welcome named, from the sim's own tables.
+  const layout = map_layout(client.map);
+  buildWorld(scene, map_boxes(client.map), map_pads(client.map), defaultMaterials(), layout);
+  route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
+  hud.kill(map_name(client.map));
   shared.connected = true;
   const controls = new Controls(canvas);
   if (!AUTOPLAY) canvas.click();
@@ -311,9 +318,10 @@ function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THR
 /** For the browser test (?autoplay): walk at the nearest other fighter,
  * aim at them and keep pulling the trigger. Only inputs: the server still
  * decides every hit. */
-// Where the autopilot walks while fog shows it nobody: round the open
-// lanes of Proving Grounds.
+// Where the autopilot walks while fog shows it nobody: the map's roam
+// points, or round the open lanes of Proving Grounds (which has none).
 const ROUTE = [[-15, 8], [15, 8], [21, 0], [15, -8], [-15, -8], [-21, 0]];
+let route = ROUTE;
 let leg = 0;
 
 function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
@@ -329,10 +337,10 @@ function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
   }
   if (best < 0) {
     // Nobody in sight: walk the route until fog shows someone.
-    let [tx, tz] = ROUTE[leg];
-    if (Math.hypot(tx - me[0], tz - me[2]) < 2) {
-      leg = (leg + 1) % ROUTE.length;
-      [tx, tz] = ROUTE[leg];
+    let [tx, tz] = route[leg % route.length];
+    if (Math.hypot(tx - me[0], tz - me[2]) < 2 || s.frames % 600 === 0) {
+      leg = (leg + 1) % route.length;
+      [tx, tz] = route[leg];
     }
     return { buttons: 0, yaw: toYaw(Math.atan2(tz - me[2], tx - me[0])), pitch: 0, mx: 0, mz: 127 };
   }

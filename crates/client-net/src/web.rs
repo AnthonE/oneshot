@@ -142,6 +142,8 @@ pub struct Client {
     ready: bool,
     /// Stream messages for the page, until `messages()` takes them.
     out: Vec<Msg>,
+    /// The map the welcome named.
+    map_id: u8,
 }
 
 #[wasm_bindgen]
@@ -248,6 +250,7 @@ impl Client {
             core: NetCore::new(0, 0, 0, sim::world::Rules::duel(), Map::proving_grounds()),
             ready: false,
             out: Vec::new(),
+            map_id: 0,
             transport,
             datagrams,
             writer,
@@ -266,6 +269,12 @@ impl Client {
     #[wasm_bindgen(getter)]
     pub fn team(&self) -> u8 {
         self.core.team
+    }
+
+    /// The map this match is on (`map_boxes(map)` and friends draw it).
+    #[wasm_bindgen(getter)]
+    pub fn map(&self) -> u8 {
+        self.map_id
     }
 
     /// Whether this match is Gun Game: the score is the rung.
@@ -302,9 +311,18 @@ impl Client {
                     tick,
                     rules,
                     salt_commit,
+                    map,
                     ..
                 } => {
-                    self.core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+                    // A map this page doesn't know: it is out of date.
+                    let Some(m) = sim::map::by_id(map) else {
+                        self.out.push(Msg::Refuse {
+                            reason: proto::REFUSE_VERSION,
+                        });
+                        continue;
+                    };
+                    self.map_id = map;
+                    self.core = NetCore::new(slot, team, tick, rules, m);
                     self.core.salt_commit = salt_commit;
                     self.ready = true;
                 }
@@ -596,27 +614,49 @@ fn push_drawn(v: &mut Vec<f32>, d: &crate::core::Drawn) {
     ]);
 }
 
-/// The map's boxes, 6 numbers each (min x y z, max x y z): the one source
-/// of the level's geometry for the renderer.
+fn map_or_first(id: u8) -> Map {
+    sim::map::by_id(id).unwrap_or_else(Map::proving_grounds)
+}
+
+/// Map `id`'s boxes, 7 numbers each (min x y z, max x y z, look): the one
+/// source of the level's geometry for the renderer.
 #[wasm_bindgen]
-pub fn map_boxes() -> Vec<f32> {
-    let m = Map::proving_grounds();
+pub fn map_boxes(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
     let mut v = Vec::new();
-    for b in &m.boxes {
-        v.extend_from_slice(&[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]);
+    for (b, &look) in m.boxes.iter().zip(&m.looks) {
+        v.extend_from_slice(&[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z, look as f32]);
     }
     v
 }
 
-/// The map's pads, 5 each: x y z, arm, respawn seconds.
+/// Map `id`'s pads, 5 each: x y z, arm, respawn seconds.
 #[wasm_bindgen]
-pub fn map_pads() -> Vec<f32> {
-    let m = Map::proving_grounds();
+pub fn map_pads(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
     let mut v = Vec::new();
     for p in &m.pads {
         v.extend_from_slice(&[p.pos.x, p.pos.y, p.pos.z, p.arm as f32, p.respawn_ms as f32 / 1000.0]);
     }
     v
+}
+
+/// Map `id`'s bounds (min x, min z, max x, max z), then its roam points
+/// (x, z each).
+#[wasm_bindgen]
+pub fn map_layout(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
+    let mut v = vec![m.lo.0, m.lo.1, m.hi.0, m.hi.1];
+    for r in &m.roam {
+        v.extend_from_slice(&[r.x, r.z]);
+    }
+    v
+}
+
+/// Map `id`'s name.
+#[wasm_bindgen]
+pub fn map_name(id: u8) -> String {
+    map_or_first(id).name.to_string()
 }
 
 /// Arm names by id, for the HUD.

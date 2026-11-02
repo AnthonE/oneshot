@@ -33,6 +33,9 @@ export interface Materials {
   wall: THREE.Material;
   block: THREE.Material;
   trim: THREE.Material;
+  red: THREE.Material;
+  blue: THREE.Material;
+  dark: THREE.Material;
 }
 
 /** A CC0 texture pair from Gates (tools/assets.mjs), tiled per metre by
@@ -65,8 +68,16 @@ export function defaultMaterials(): Materials {
     wall: textured('concrete', 0x8a8f96, 0.9),
     block: textured('metal', 0x9da3ab, 0.6, 0.3),
     trim: new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.5, metalness: 0.4 }),
+    // The sides' colours on their own ground: muted, so a fighter in team
+    // colours still stands out against them.
+    red: textured('metal', 0x8a5450, 0.6, 0.3),
+    blue: textured('metal', 0x50648a, 0.6, 0.3),
+    dark: textured('metal', 0x4a4f57, 0.7, 0.3),
   };
 }
+
+/** Box looks, as maps/<name>/map.json names them (tools/maps/compile.mjs LOOKS). */
+const LOOKS: (keyof Materials)[] = ['wall', 'block', 'trim', 'red', 'blue', 'dark'];
 
 /** Scales a box's UVs to its size so a texture tiles every `tile` metres
  * on every face. BoxGeometry's faces come in order +x −x +y −y +z −z, four
@@ -83,7 +94,13 @@ function tileUVs(g: THREE.BoxGeometry, w: number, h: number, d: number, tile: nu
   uv.needsUpdate = true;
 }
 
-export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float32Array, mats: Materials) {
+/** `boxes` is map_boxes(id): 7 a box. `bounds` is min x, min z, max x,
+ * max z. */
+export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float32Array, mats: Materials,
+  bounds: ArrayLike<number> = [-24, -24, 24, 24]) {
+  const [bx0, bz0, bx1, bz1] = Array.from(bounds).slice(0, 4);
+  const cx = (bx0 + bx1) / 2, cz = (bz0 + bz1) / 2;
+  const half = Math.max(bx1 - bx0, bz1 - bz0) / 2 + 8;
   scene.background = new THREE.Color(0x9fc4e8);
   scene.fog = new THREE.Fog(0x9fc4e8, 60, 160);
 
@@ -94,28 +111,34 @@ export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float3
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera as THREE.OrthographicCamera;
-  sc.left = sc.bottom = -32;
-  sc.right = sc.top = 32;
+  sc.left = sc.bottom = -half;
+  sc.right = sc.top = half;
+  sun.position.set(cx - 30, 50, cz + 20);
+  sun.target.position.set(cx, 0, cz);
+  scene.add(sun.target);
   sc.near = 1;
   sc.far = 120;
   sun.shadow.bias = -0.0005;
   scene.add(sun);
 
-  const fg = new THREE.PlaneGeometry(100, 100);
+  const size = 2 * half + 40;
+  const fg = new THREE.PlaneGeometry(size, size);
   const fuv = fg.attributes.uv as THREE.BufferAttribute;
-  for (let i = 0; i < fuv.count; i++) fuv.setXY(i, fuv.getX(i) * 25, fuv.getY(i) * 25);
+  for (let i = 0; i < fuv.count; i++) fuv.setXY(i, fuv.getX(i) * size / 4, fuv.getY(i) * size / 4);
   const floor = new THREE.Mesh(fg, mats.floor);
   floor.rotation.x = -Math.PI / 2;
+  floor.position.set(cx, 0, cz);
   floor.receiveShadow = true;
   scene.add(floor);
 
-  for (let i = 0; i < boxes.length; i += 6) {
-    const [x0, y0, z0, x1, y1, z1] = boxes.subarray(i, i + 6);
+  for (let i = 0; i + 7 <= boxes.length; i += 7) {
+    const [x0, y0, z0, x1, y1, z1, look] = boxes.subarray(i, i + 7);
     const w = x1 - x0, h = y1 - y0, d = z1 - z0;
-    const tall = h >= 6;
+    const kind = LOOKS[look] ?? 'block';
+    const tall = kind === 'wall';
     const g = new THREE.BoxGeometry(w, h, d);
     tileUVs(g, w, h, d, tall ? 4 : 2);
-    const m = new THREE.Mesh(g, tall ? mats.wall : mats.block);
+    const m = new THREE.Mesh(g, mats[kind]);
     m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
     m.castShadow = !tall;
     m.receiveShadow = true;

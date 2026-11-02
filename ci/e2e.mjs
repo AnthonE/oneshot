@@ -1,8 +1,9 @@
-// node ci/e2e.mjs [seconds] [mode]: the real server and the real page in
+// node ci/e2e.mjs [seconds] [mode] [map]: the real server and the real page in
 // headless Chromium. The page autoplays (?autoplay: it walks at the bot,
 // aims and fires; inputs only) against bots that stand still: one (mode 0,
 // the default) or seven (3 free for all, 4 Gun Game). Passes when it
-// connected, drew, its predictions confirmed and it scored a kill.
+// connected, drew, its predictions confirmed and it scored a kill. The map
+// is Proving Grounds (id 0) unless named.
 // A screenshot goes to traces/e2e-<mode>.png.
 
 import { spawn } from 'node:child_process';
@@ -11,6 +12,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 
 const seconds = Number(process.argv[2] || 40);
 const mode = Number(process.argv[3] || 0);
+const map = process.argv[4] || '0';
 // Resolved from web/, where playwright is a dev dependency.
 const require = createRequire(new URL('../web/package.json', import.meta.url));
 const { chromium } = (() => {
@@ -21,7 +23,7 @@ const { chromium } = (() => {
 })();
 
 const server = spawn('target/release/oneshot-server', [
-  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'web/dist', '--passive-bots',
+  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'web/dist', '--passive-bots', '--map', map,
 ], { stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((ok, fail) => {
   let out = '';
@@ -59,7 +61,7 @@ try {
     if (s.kills >= 1 && Date.now() - t0 > 20000) break;
   }
   mkdirSync('traces', { recursive: true });
-  await page.screenshot({ path: `traces/e2e-${mode}.png` });
+  await page.screenshot({ path: `traces/e2e-${mode}-${map}.png` });
   const [snaps = 0, conf = 0, corr = 0] = s.stats;
   const ratio = (conf - base[1]) / Math.max(1, conf - base[1] + corr - base[2]);
   const fps = s.frames / ((Date.now() - t0) / 1000);

@@ -1,0 +1,119 @@
+{
+  "id": 0,
+  "name": "Proving Grounds",
+  "about": "the test arena, 48 m square, mirrored between red (-x) and blue (+x): a raised centre with the rocket, a platform on each side reached by steps, pillars and waist-high walls for cover, the sniper and the shotgun at the ends of the middle lane.",
+  "bounds": [-24, 24, -24, 24],
+  "structures": [
+    {
+      "name": "walls",
+      "boxes": [
+        [-25, 0, -25, 25, 8, -24, "wall"],
+        [-25, 0, 24, 25, 8, 25, "wall"],
+        [-25, 0, -24, -24, 8, 24, "wall"],
+        [24, 0, -24, 25, 8, 24, "wall"]
+      ]
+    },
+    {
+      "name": "the centre",
+      "boxes": [
+        [-3, 0, -3, 3, 0.5, 3, "block"],
+        [-2, 0.5, -2, 2, 1, 2, "trim"]
+      ]
+    },
+    {
+      "name": "red's side",
+      "boxes": [
+        [-20, 0, -4, -12, 2.5, 4, "red"],
+        [-12, 0, -1.5, -11, 2, 1.5, "block"],
+        [-11, 0, -1.5, -10, 1.5, 1.5, "block"],
+        [-10, 0, -1.5, -9, 1, 1.5, "block"],
+        [-9, 0, -1.5, -8, 0.5, 1.5, "block"],
+        [-8.75, 0, -12.75, -7.25, 3, -11.25, "block"],
+        [-8.75, 0, 11.25, -7.25, 3, 12.75, "block"],
+        [-6, 0, -16.25, 6, 1.2, -15.75, "block"]
+      ]
+    },
+    {
+      "name": "blue's side",
+      "boxes": [
+        [12, 0, -4, 20, 2.5, 4, "blue"],
+        [11, 0, -1.5, 12, 2, 1.5, "block"],
+        [10, 0, -1.5, 11, 1.5, 1.5, "block"],
+        [9, 0, -1.5, 10, 1, 1.5, "block"],
+        [8, 0, -1.5, 9, 0.5, 1.5, "block"],
+        [7.25, 0, -12.75, 8.75, 3, -11.25, "block"],
+        [7.25, 0, 11.25, 8.75, 3, 12.75, "block"],
+        [-6, 0, 15.75, 6, 1.2, 16.25, "block"]
+      ]
+    }
+  ],
+  "spawns": [
+    {
+      "at": [-22, 20],
+      "team": "red",
+      "yaw": 0
+    },
+    {
+      "at": [-22, -20],
+      "team": "red",
+      "yaw": 0
+    },
+    {
+      "at": [-22, 8],
+      "team": "red",
+      "yaw": 0
+    },
+    {
+      "at": [-22, -8],
+      "team": "red",
+      "yaw": 0
+    },
+    {
+      "at": [22, 20],
+      "team": "blue",
+      "yaw": 180
+    },
+    {
+      "at": [22, -20],
+      "team": "blue",
+      "yaw": 180
+    },
+    {
+      "at": [22, 8],
+      "team": "blue",
+      "yaw": 180
+    },
+    {
+      "at": [22, -8],
+      "team": "blue",
+      "yaw": 180
+    }
+  ],
+  "pads": [
+    {
+      "weapon": "rocket",
+      "at": [0, 0, 1],
+      "respawn": 120
+    },
+    {
+      "weapon": "sniper",
+      "at": [0, 20],
+      "respawn": 90
+    },
+    {
+      "weapon": "shotgun",
+      "at": [0, -20],
+      "respawn": 60
+    },
+    {
+      "weapon": "smg",
+      "at": [-16, 0, 2.5],
+      "respawn": 30
+    },
+    {
+      "weapon": "smg",
+      "at": [16, 0, 2.5],
+      "respawn": 30
+    }
+  ]
+}
