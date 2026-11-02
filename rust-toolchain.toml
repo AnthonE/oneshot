@@ -1,0 +1,8 @@
+# The compiler is part of "same build": a release may change float codegen,
+# and the determinism gate pins hashes. Raise it on purpose, then rerun
+# ci/quick.sh and ci/parity.sh; a moved golden is a finding, not a fixture.
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

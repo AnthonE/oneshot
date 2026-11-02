@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/sim", "crates/sim-wasm"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
