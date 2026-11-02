@@ -150,10 +150,7 @@ impl World {
         match self.phase {
             Phase::Countdown => {
                 for (f, inp) in self.fighters.iter_mut().zip(inputs) {
-                    let i = inp.sanitized();
-                    f.yaw = i.yaw;
-                    f.pitch = i.pitch;
-                    f.last_buttons = i.buttons;
+                    f.step_in(Phase::Countdown, &inp.sanitized(), &self.map);
                 }
                 self.clock -= 1;
                 if self.clock == 0 {
@@ -180,7 +177,7 @@ impl World {
         // where everyone now is, so seat order never decides a trade.
         let mut locals = [Local::default(); MAX_FIGHTERS];
         for (s, l) in locals.iter_mut().enumerate() {
-            *l = self.fighters[s].step_local(&inputs[s].sanitized(), &self.map);
+            *l = self.fighters[s].step_in(Phase::Playing, &inputs[s].sanitized(), &self.map);
         }
         for (s, l) in locals.iter().enumerate() {
             if l.fired {

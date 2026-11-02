@@ -1,0 +1,16 @@
+[package]
+name = "client-net"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The browser's netcode: clock, prediction, interpolation, WebTransport"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sim = { path = "../sim" }
+proto = { path = "../proto" }
+
+[dev-dependencies]
+room = { path = "../room" }

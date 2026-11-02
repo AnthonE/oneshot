@@ -1,0 +1,258 @@
+//! Every message round-trips, and its bytes are pinned. A golden that
+//! moves is a wire change: bump `PROTO_VER` in the same commit and paste the
+//! new value (the failure prints it).
+
+use proto::*;
+use sim::arms::{BR, MAGNUM};
+use sim::fighter::{Fighter, Gun};
+use sim::geom::V3;
+use sim::input::Input;
+use sim::movement::Body;
+use sim::world::Rules;
+
+fn fnv(b: &[u8]) -> u64 {
+    let mut h = sim::hash::Fnv::default();
+    for &x in b {
+        h.u8(x);
+    }
+    h.finish()
+}
+
+fn input() -> InputMsg {
+    let mut m = InputMsg {
+        ack_tick: 1234,
+        ack_bits: 0xF0F0_0F0F,
+        playout: 4,
+        first_seq: 99_000,
+        n: 3,
+        ..InputMsg::default()
+    };
+    for i in 0..3 {
+        m.frames[i] = Input {
+            buttons: 0x1A5 >> i,
+            yaw: 40_000 + i as u16,
+            pitch: -1200 + i as i16,
+            mx: -127,
+            mz: 100,
+        };
+    }
+    m
+}
+
+fn own() -> Fighter {
+    Fighter {
+        seated: true,
+        team: 1,
+        alive: true,
+        body: Body {
+            pos: V3::new(-12.5, 2.5, 3.0 + 1.0 / 1024.0),
+            vel: V3::new(6.0, -3.5, 0.0),
+            grounded: false,
+            crouched: true,
+        },
+        yaw: 12_345,
+        pitch: -555,
+        shield: 30 * 256,
+        health: 100 * 256,
+        guns: [
+            Gun {
+                arm: BR,
+                mag: 30,
+                reserve: 90,
+            },
+            Gun {
+                arm: MAGNUM,
+                mag: 8,
+                reserve: 40,
+            },
+        ],
+        cur: 1,
+        refire: 7,
+        reload: 0,
+        burst_left: 2,
+        burst_gap: 3,
+        melee_cool: 11,
+        gren_cool: 0,
+        grenades: 3,
+        shots: 777,
+        last_buttons: 0x41,
+        respawn: 0,
+        kills: 4,
+        deaths: 2,
+        ..Fighter::default()
+    }
+}
+
+fn snapshot() -> Snapshot {
+    let mut s = Snapshot {
+        tick: 50_000,
+        last_seq: 99_001,
+        depth: 2,
+        own: own(),
+        n_remote: 1,
+        n_proj: 1,
+        n_events: 2,
+        n_pads: 2,
+        phase: 1,
+        clock: 70_000,
+        winner: 255,
+        ..Snapshot::default()
+    };
+    s.remotes[0] = Remote {
+        slot: 1,
+        team: 0,
+        alive: true,
+        crouched: false,
+        grounded: true,
+        reloading: true,
+        pos: V3::new(10.0, 0.0, -4.25),
+        vel: V3::new(-7.0, 0.0, 0.5),
+        yaw: 32_768,
+        pitch: 100,
+        arm: BR,
+        shield: 200,
+    };
+    s.proj[0] = ProjState {
+        kind: 0,
+        owner: 1,
+        pos: V3::new(1.0, 1.5, 2.0),
+        vel: V3::new(36.0, 0.0, 0.0),
+    };
+    s.events[0] = EventState {
+        kind: 1,
+        a: 1,
+        b: 0,
+        part: 0,
+        c: BR as u16,
+        pos: V3::new(10.0, 1.625, -4.25),
+        end: V3::new(-12.0, 3.0, 3.0),
+    };
+    s.events[1] = EventState {
+        kind: 2,
+        a: 1,
+        b: 0,
+        part: 1,
+        c: 9,
+        ..EventState::default()
+    };
+    s.pads[1].empty_s = 45;
+    s.score[0] = 3;
+    s.score[1] = -1;
+    s
+}
+
+fn msgs() -> Vec<Msg> {
+    vec![
+        Msg::Hello {
+            proto: PROTO_VER,
+            name: Name::new("player one"),
+        },
+        Msg::Welcome {
+            slot: 1,
+            team: 1,
+            tick: 384,
+            tick_hz: 128,
+            map: 0,
+            rules: Rules::duel(),
+        },
+        Msg::Refuse { reason: REFUSE_FULL },
+        Msg::Seat {
+            slot: 0,
+            team: 0,
+            bot: true,
+            name: Name::new("BOT"),
+        },
+        Msg::Kill {
+            killer: 0,
+            victim: 1,
+            cause: 102,
+        },
+        Msg::Phase { phase: 2, winner: 0 },
+        Msg::Bye,
+    ]
+}
+
+#[test]
+fn inputs_round_trip() {
+    let m = input();
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_input(&m, &mut buf).unwrap();
+    assert_eq!(decode_input(&buf[..n]).unwrap(), m);
+    assert_eq!(datagram_kind(&buf[..n]), Some(DG_INPUT));
+    // Sixteen frames still fit a datagram with room to spare.
+    let full = InputMsg { n: 16, ..m };
+    assert!(encode_input(&full, &mut buf).unwrap() < 200);
+}
+
+#[test]
+fn snapshots_round_trip_and_the_own_fighter_is_exact() {
+    let s = snapshot();
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_snapshot(&s, &mut buf).unwrap();
+    let d = decode_snapshot(&buf[..n]).unwrap();
+    assert_eq!(
+        d.own.body, s.own.body,
+        "positions on the sim's grid come back bit for bit"
+    );
+    assert_eq!(d.own.guns, s.own.guns);
+    assert_eq!(d.own.shots, s.own.shots);
+    assert_eq!(d.events(), s.events());
+    assert_eq!(d.remotes()[0].pos, s.remotes[0].pos);
+    assert_eq!(d.score, s.score);
+    assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
+    // A full 8-seat snapshot fits the budget.
+    let full = Snapshot {
+        n_remote: 7,
+        n_proj: MAX_SNAP_PROJ as u8,
+        n_events: MAX_SNAP_EVENTS as u8,
+        n_pads: 8,
+        ..s
+    };
+    let n = encode_snapshot(&full, &mut buf).unwrap();
+    assert!(n <= MAX_DATAGRAM, "{n} bytes");
+}
+
+#[test]
+fn stream_messages_round_trip() {
+    for m in msgs() {
+        let mut buf = [0u8; MAX_STREAM_MSG];
+        let n = encode_msg(&m, &mut buf).unwrap();
+        assert_eq!(decode_msg(&buf[..n]).unwrap(), m);
+    }
+}
+
+#[test]
+fn decoders_refuse_garbage() {
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_input(&input(), &mut buf).unwrap();
+    assert!(decode_input(&buf[..n - 1]).is_err(), "truncated");
+    assert!(decode_input(&buf[..n + 1]).is_err(), "trailing byte");
+    assert!(decode_snapshot(&buf[..n]).is_err(), "wrong kind");
+    assert!(decode_msg(&[99]).is_err());
+}
+
+#[test]
+fn the_bytes_match_their_goldens() {
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let mut got = Vec::new();
+    let n = encode_input(&input(), &mut buf).unwrap();
+    got.push(fnv(&buf[..n]));
+    let n = encode_snapshot(&snapshot(), &mut buf).unwrap();
+    got.push(fnv(&buf[..n]));
+    for m in msgs() {
+        let n = encode_msg(&m, &mut buf).unwrap();
+        got.push(fnv(&buf[..n]));
+    }
+    let want: [u64; 9] = [
+        0x21cd_ceaa_a773_0091,
+        0x13de_bd0b_5d65_9ca7,
+        0xc016_dee3_af31_f65d,
+        0xe6c6_89e8_37eb_2f82,
+        0x0835_ec07_b4ee_4fb0,
+        0x5c12_e734_0afe_dd50,
+        0xc6fb_4858_89be_4749,
+        0xc800_e818_6244_f8b3,
+        0xaf63_ba4c_8601_b2c6,
+    ];
+    assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
+}

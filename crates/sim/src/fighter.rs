@@ -118,6 +118,23 @@ impl Fighter {
         self.respawn = 0;
     }
 
+    /// One tick of this fighter in a match `phase`: what the browser runs to
+    /// predict itself, so it freezes and thaws exactly when the server does.
+    /// During the countdown only the aim and the buttons move; once it is
+    /// over nothing does.
+    pub fn step_in(&mut self, phase: crate::world::Phase, inp: &Input, map: &Map) -> Local {
+        match phase {
+            crate::world::Phase::Countdown => {
+                self.yaw = inp.yaw;
+                self.pitch = inp.pitch;
+                self.last_buttons = inp.buttons;
+                Local::default()
+            }
+            crate::world::Phase::Playing => self.step_local(inp, map),
+            crate::world::Phase::Over => Local::default(),
+        }
+    }
+
     /// One tick of this fighter's own state under `inp` (already
     /// sanitized). Deterministic in (self, inp, map) alone.
     pub fn step_local(&mut self, inp: &Input, map: &Map) -> Local {

@@ -1,0 +1,723 @@
+//! The wire: what the browser and the server say to each other
+//! (docs/DESIGN.md §10). Datagrams carry inputs up and snapshots down; one
+//! bidirectional stream carries the handshake, the kill feed and the
+//! match's phases, each message in a [`frame`].
+//!
+//! Every message is bit-packed by [`bits`] into a caller's buffer. Decoders
+//! are strict: a bad kind, a count over its cap, a value out of range or
+//! trailing bytes is an error, never a guess. A layout change bumps
+//! [`PROTO_VER`] and moves the goldens in `tests/goldens.rs`.
+
+pub mod bits;
+pub mod frame;
+
+use bits::{BitReader, BitWriter, WireError};
+use sim::consts::MAX_FIGHTERS;
+use sim::fighter::{Fighter, Gun};
+use sim::geom::V3;
+use sim::input::{Input, BUTTONS};
+use sim::movement::Body;
+use sim::world::Rules;
+
+pub const PROTO_VER: u16 = 1;
+/// Under QUIC's 1,200-byte floor with room for its headers.
+pub const MAX_DATAGRAM: usize = 1100;
+/// Input frames one datagram resends: everything the server hasn't run.
+pub const MAX_INPUT_FRAMES: usize = 16;
+pub const MAX_REMOTES: usize = MAX_FIGHTERS;
+pub const MAX_SNAP_PROJ: usize = 16;
+pub const MAX_SNAP_EVENTS: usize = 32;
+pub const MAX_SNAP_PADS: usize = 8;
+/// A stream message's ceiling.
+pub const MAX_STREAM_MSG: usize = 128;
+pub const MAX_NAME: usize = 16;
+
+const KIND_INPUT: u32 = 0;
+const KIND_SNAPSHOT: u32 = 1;
+
+/// Remote positions on a 1/64 m grid, velocities in 1/64 m/s.
+const COARSE: f32 = 64.0;
+
+type R<T> = Result<T, WireError>;
+
+fn w_i32(w: &mut BitWriter, v: i32, bits: u32) -> R<()> {
+    let lim = 1i64 << (bits - 1);
+    if (v as i64) < -lim || (v as i64) >= lim {
+        return Err(WireError::Range);
+    }
+    let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
+    w.write(v as u32 & mask, bits)
+}
+
+fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
+    let v = r.read(bits)?;
+    let shift = 32 - bits;
+    Ok(((v << shift) as i32) >> shift)
+}
+
+fn done(r: &BitReader) -> R<()> {
+    if r.remaining_bits() >= 8 {
+        Err(WireError::Malformed)
+    } else {
+        Ok(())
+    }
+}
+
+/// A float on the sim's 1/1024 grid, sent exactly.
+fn w_grid(w: &mut BitWriter, v: f32) -> R<()> {
+    w_i32(w, sim::fmath::round(v * sim::consts::QUANT) as i32, 32)
+}
+
+fn r_grid(r: &mut BitReader) -> R<f32> {
+    Ok(r_i32(r, 32)? as f32 * (1.0 / sim::consts::QUANT))
+}
+
+fn w_coarse(w: &mut BitWriter, v: f32) -> R<()> {
+    let q = sim::fmath::round(v * COARSE).clamp(-32768.0, 32767.0);
+    w_i32(w, q as i32, 16)
+}
+
+fn r_coarse(r: &mut BitReader) -> R<f32> {
+    Ok(r_i32(r, 16)? as f32 * (1.0 / COARSE))
+}
+
+fn w_v3c(w: &mut BitWriter, v: V3) -> R<()> {
+    w_coarse(w, v.x)?;
+    w_coarse(w, v.y)?;
+    w_coarse(w, v.z)
+}
+
+fn r_v3c(r: &mut BitReader) -> R<V3> {
+    Ok(V3::new(r_coarse(r)?, r_coarse(r)?, r_coarse(r)?))
+}
+
+// ---------------------------------------------------------------- inputs
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputMsg {
+    /// The newest snapshot tick this client has, and which of the 32 before
+    /// it it also has.
+    pub ack_tick: u32,
+    pub ack_bits: u32,
+    /// How far behind its newest snapshot it draws others, in ticks. The
+    /// server clamps it; it never decides a rewind on its own.
+    pub playout: u8,
+    /// The seq of `frames[0]`; the rest follow one a tick.
+    pub first_seq: u32,
+    pub n: u8,
+    pub frames: [Input; MAX_INPUT_FRAMES],
+}
+
+impl Default for InputMsg {
+    fn default() -> Self {
+        InputMsg {
+            ack_tick: 0,
+            ack_bits: 0,
+            playout: 0,
+            first_seq: 0,
+            n: 0,
+            frames: [Input::default(); MAX_INPUT_FRAMES],
+        }
+    }
+}
+
+impl InputMsg {
+    pub fn frames(&self) -> &[Input] {
+        &self.frames[..self.n as usize]
+    }
+}
+
+pub fn encode_input(m: &InputMsg, out: &mut [u8]) -> R<usize> {
+    if m.n as usize > MAX_INPUT_FRAMES {
+        return Err(WireError::Cap);
+    }
+    let mut w = BitWriter::new(out);
+    w.write(KIND_INPUT, 4)?;
+    w.write(m.ack_tick, 32)?;
+    w.write(m.ack_bits, 32)?;
+    w.write(m.playout as u32, 8)?;
+    w.write(m.first_seq, 32)?;
+    w.write(m.n as u32, 5)?;
+    for f in m.frames() {
+        w.write((f.buttons & BUTTONS) as u32, 9)?;
+        w.write(f.yaw as u32, 16)?;
+        w.write(f.pitch as u16 as u32, 16)?;
+        w.write(f.mx as u8 as u32, 8)?;
+        w.write(f.mz as u8 as u32, 8)?;
+    }
+    Ok(w.finish())
+}
+
+pub fn decode_input(buf: &[u8]) -> R<InputMsg> {
+    let mut r = BitReader::new(buf);
+    if r.read(4)? != KIND_INPUT {
+        return Err(WireError::Malformed);
+    }
+    let mut m = InputMsg {
+        ack_tick: r.read(32)?,
+        ack_bits: r.read(32)?,
+        playout: r.read(8)? as u8,
+        first_seq: r.read(32)?,
+        n: r.read(5)? as u8,
+        ..InputMsg::default()
+    };
+    if m.n as usize > MAX_INPUT_FRAMES {
+        return Err(WireError::Cap);
+    }
+    for i in 0..m.n as usize {
+        m.frames[i] = Input {
+            buttons: r.read(9)? as u16,
+            yaw: r.read(16)? as u16,
+            pitch: r.read(16)? as u16 as i16,
+            mx: r.read(8)? as u8 as i8,
+            mz: r.read(8)? as u8 as i8,
+        };
+    }
+    done(&r)?;
+    Ok(m)
+}
+
+/// Which kind a datagram is, without decoding it.
+pub fn datagram_kind(buf: &[u8]) -> Option<u8> {
+    buf.first().map(|b| b & 0xf)
+}
+pub const DG_INPUT: u8 = KIND_INPUT as u8;
+pub const DG_SNAPSHOT: u8 = KIND_SNAPSHOT as u8;
+
+// ------------------------------------------------------------- snapshots
+
+/// Another fighter as this client may draw it: coarse, no ammo, no timers.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Remote {
+    pub slot: u8,
+    pub team: u8,
+    pub alive: bool,
+    pub crouched: bool,
+    pub grounded: bool,
+    pub reloading: bool,
+    pub pos: V3,
+    pub vel: V3,
+    pub yaw: u16,
+    pub pitch: i16,
+    pub arm: u8,
+    /// Shields as a fraction of full, 0..255, for the flare.
+    pub shield: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ProjState {
+    /// 0 rocket, 1 frag.
+    pub kind: u8,
+    pub owner: u8,
+    pub pos: V3,
+    pub vel: V3,
+}
+
+/// A cosmetic event (sim::events::Event, coarsened).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EventState {
+    pub kind: u8,
+    pub a: u8,
+    pub b: u8,
+    pub part: u8,
+    pub c: u16,
+    pub pos: V3,
+    pub end: V3,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PadState {
+    /// Whole seconds until the gun is back; 0 means it's there.
+    pub empty_s: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Snapshot {
+    pub tick: u32,
+    /// This client's last input seq the server ran.
+    pub last_seq: u32,
+    /// Frames of this client's waiting in the server's buffer.
+    pub depth: i8,
+    /// This client's own fighter, exactly: what reconciliation adopts.
+    pub own: Fighter,
+    pub n_remote: u8,
+    pub remotes: [Remote; MAX_REMOTES],
+    pub n_proj: u8,
+    pub proj: [ProjState; MAX_SNAP_PROJ],
+    pub n_events: u8,
+    pub events: [EventState; MAX_SNAP_EVENTS],
+    pub n_pads: u8,
+    pub pads: [PadState; MAX_SNAP_PADS],
+    pub score: [i32; MAX_FIGHTERS],
+    pub phase: u8,
+    pub clock: u32,
+    pub winner: u8,
+}
+
+impl Default for Snapshot {
+    fn default() -> Self {
+        Snapshot {
+            tick: 0,
+            last_seq: 0,
+            depth: 0,
+            own: Fighter::default(),
+            n_remote: 0,
+            remotes: [Remote::default(); MAX_REMOTES],
+            n_proj: 0,
+            proj: [ProjState::default(); MAX_SNAP_PROJ],
+            n_events: 0,
+            events: [EventState::default(); MAX_SNAP_EVENTS],
+            n_pads: 0,
+            pads: [PadState::default(); MAX_SNAP_PADS],
+            score: [0; MAX_FIGHTERS],
+            phase: 0,
+            clock: 0,
+            winner: 255,
+        }
+    }
+}
+
+impl Snapshot {
+    pub fn remotes(&self) -> &[Remote] {
+        &self.remotes[..self.n_remote as usize]
+    }
+    pub fn proj(&self) -> &[ProjState] {
+        &self.proj[..self.n_proj as usize]
+    }
+    pub fn events(&self) -> &[EventState] {
+        &self.events[..self.n_events as usize]
+    }
+    pub fn pads(&self) -> &[PadState] {
+        &self.pads[..self.n_pads as usize]
+    }
+}
+
+fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
+    w.write_bit(f.seated)?;
+    w.write(f.team as u32, 1)?;
+    w.write_bit(f.alive)?;
+    w.write_bit(f.body.grounded)?;
+    w.write_bit(f.body.crouched)?;
+    for v in [
+        f.body.pos.x,
+        f.body.pos.y,
+        f.body.pos.z,
+        f.body.vel.x,
+        f.body.vel.y,
+        f.body.vel.z,
+    ] {
+        w_grid(w, v)?;
+    }
+    w.write(f.yaw as u32, 16)?;
+    w.write(f.pitch as u16 as u32, 16)?;
+    w_i32(w, f.shield, 32)?;
+    w_i32(w, f.health, 32)?;
+    for g in &f.guns {
+        w.write(g.arm as u32, 4)?;
+        w.write(g.mag as u32, 16)?;
+        w.write(g.reserve as u32, 16)?;
+    }
+    w.write(f.cur as u32 & 1, 1)?;
+    w.write(f.refire as u32, 16)?;
+    w.write(f.reload as u32, 16)?;
+    w.write(f.burst_left as u32, 8)?;
+    w.write(f.burst_gap as u32, 16)?;
+    w.write(f.melee_cool as u32, 16)?;
+    w.write(f.gren_cool as u32, 16)?;
+    w.write(f.grenades as u32, 8)?;
+    w.write(f.shots, 32)?;
+    w.write(f.last_buttons as u32, 16)?;
+    w.write(f.respawn as u32, 16)?;
+    w.write(f.kills as u32, 16)?;
+    w.write(f.deaths as u32, 16)
+}
+
+fn r_own(r: &mut BitReader) -> R<Fighter> {
+    let seated = r.read_bit()?;
+    let team = r.read(1)? as u8;
+    let alive = r.read_bit()?;
+    let grounded = r.read_bit()?;
+    let crouched = r.read_bit()?;
+    let pos = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
+    let vel = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
+    let mut f = Fighter {
+        seated,
+        team,
+        alive,
+        body: Body {
+            pos,
+            vel,
+            grounded,
+            crouched,
+        },
+        yaw: r.read(16)? as u16,
+        pitch: r.read(16)? as u16 as i16,
+        shield: r_i32(r, 32)?,
+        health: r_i32(r, 32)?,
+        ..Fighter::default()
+    };
+    for g in f.guns.iter_mut() {
+        *g = Gun {
+            arm: r.read(4)? as u8,
+            mag: r.read(16)? as u16,
+            reserve: r.read(16)? as u16,
+        };
+        if g.arm as usize >= sim::arms::COUNT {
+            return Err(WireError::Malformed);
+        }
+    }
+    f.cur = r.read(1)? as u8;
+    f.refire = r.read(16)? as u16;
+    f.reload = r.read(16)? as u16;
+    f.burst_left = r.read(8)? as u8;
+    f.burst_gap = r.read(16)? as u16;
+    f.melee_cool = r.read(16)? as u16;
+    f.gren_cool = r.read(16)? as u16;
+    f.grenades = r.read(8)? as u8;
+    f.shots = r.read(32)?;
+    f.last_buttons = r.read(16)? as u16;
+    f.respawn = r.read(16)? as u16;
+    f.kills = r.read(16)? as u16;
+    f.deaths = r.read(16)? as u16;
+    Ok(f)
+}
+
+pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
+    let caps = [
+        (s.n_remote as usize, MAX_REMOTES),
+        (s.n_proj as usize, MAX_SNAP_PROJ),
+        (s.n_events as usize, MAX_SNAP_EVENTS),
+        (s.n_pads as usize, MAX_SNAP_PADS),
+    ];
+    if caps.iter().any(|&(n, cap)| n > cap) {
+        return Err(WireError::Cap);
+    }
+    let mut w = BitWriter::new(out);
+    w.write(KIND_SNAPSHOT, 4)?;
+    w.write(s.tick, 32)?;
+    w.write(s.last_seq, 32)?;
+    w_i32(&mut w, s.depth as i32, 8)?;
+    w_own(&mut w, &s.own)?;
+    w.write(s.n_remote as u32, 4)?;
+    for m in s.remotes() {
+        w.write(m.slot as u32, 3)?;
+        w.write(m.team as u32 & 1, 1)?;
+        w.write_bit(m.alive)?;
+        w.write_bit(m.crouched)?;
+        w.write_bit(m.grounded)?;
+        w.write_bit(m.reloading)?;
+        w_v3c(&mut w, m.pos)?;
+        w_v3c(&mut w, m.vel)?;
+        w.write(m.yaw as u32, 16)?;
+        w.write(m.pitch as u16 as u32, 16)?;
+        w.write(m.arm as u32, 4)?;
+        w.write(m.shield as u32, 8)?;
+    }
+    w.write(s.n_proj as u32, 5)?;
+    for p in s.proj() {
+        w.write(p.kind as u32, 1)?;
+        w.write(p.owner as u32, 3)?;
+        w_v3c(&mut w, p.pos)?;
+        w_v3c(&mut w, p.vel)?;
+    }
+    w.write(s.n_events as u32, 6)?;
+    for e in s.events() {
+        w.write(e.kind as u32, 4)?;
+        w.write(e.a as u32, 3)?;
+        w.write(e.b as u32, 3)?;
+        w.write(e.part as u32, 2)?;
+        w.write(e.c as u32, 16)?;
+        w_v3c(&mut w, e.pos)?;
+        w_v3c(&mut w, e.end)?;
+    }
+    w.write(s.n_pads as u32, 4)?;
+    for p in s.pads() {
+        w.write(p.empty_s as u32, 16)?;
+    }
+    for &sc in &s.score {
+        w_i32(&mut w, sc, 16)?;
+    }
+    w.write(s.phase as u32, 2)?;
+    w.write(s.clock, 32)?;
+    w.write(s.winner as u32, 8)?;
+    Ok(w.finish())
+}
+
+pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
+    let mut r = BitReader::new(buf);
+    if r.read(4)? != KIND_SNAPSHOT {
+        return Err(WireError::Malformed);
+    }
+    let mut s = Snapshot {
+        tick: r.read(32)?,
+        last_seq: r.read(32)?,
+        depth: r_i32(&mut r, 8)? as i8,
+        own: r_own(&mut r)?,
+        ..Snapshot::default()
+    };
+    s.n_remote = r.read(4)? as u8;
+    if s.n_remote as usize > MAX_REMOTES {
+        return Err(WireError::Cap);
+    }
+    for i in 0..s.n_remote as usize {
+        s.remotes[i] = Remote {
+            slot: r.read(3)? as u8,
+            team: r.read(1)? as u8,
+            alive: r.read_bit()?,
+            crouched: r.read_bit()?,
+            grounded: r.read_bit()?,
+            reloading: r.read_bit()?,
+            pos: r_v3c(&mut r)?,
+            vel: r_v3c(&mut r)?,
+            yaw: r.read(16)? as u16,
+            pitch: r.read(16)? as u16 as i16,
+            arm: r.read(4)? as u8,
+            shield: r.read(8)? as u8,
+        };
+    }
+    s.n_proj = r.read(5)? as u8;
+    if s.n_proj as usize > MAX_SNAP_PROJ {
+        return Err(WireError::Cap);
+    }
+    for i in 0..s.n_proj as usize {
+        s.proj[i] = ProjState {
+            kind: r.read(1)? as u8,
+            owner: r.read(3)? as u8,
+            pos: r_v3c(&mut r)?,
+            vel: r_v3c(&mut r)?,
+        };
+    }
+    s.n_events = r.read(6)? as u8;
+    if s.n_events as usize > MAX_SNAP_EVENTS {
+        return Err(WireError::Cap);
+    }
+    for i in 0..s.n_events as usize {
+        s.events[i] = EventState {
+            kind: r.read(4)? as u8,
+            a: r.read(3)? as u8,
+            b: r.read(3)? as u8,
+            part: r.read(2)? as u8,
+            c: r.read(16)? as u16,
+            pos: r_v3c(&mut r)?,
+            end: r_v3c(&mut r)?,
+        };
+    }
+    s.n_pads = r.read(4)? as u8;
+    if s.n_pads as usize > MAX_SNAP_PADS {
+        return Err(WireError::Cap);
+    }
+    for i in 0..s.n_pads as usize {
+        s.pads[i].empty_s = r.read(16)? as u16;
+    }
+    for sc in s.score.iter_mut() {
+        *sc = r_i32(&mut r, 16)?;
+    }
+    s.phase = r.read(2)? as u8;
+    s.clock = r.read(32)?;
+    s.winner = r.read(8)? as u8;
+    done(&r)?;
+    Ok(s)
+}
+
+// --------------------------------------------------------------- stream
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Name {
+    pub len: u8,
+    pub bytes: [u8; MAX_NAME],
+}
+
+impl Name {
+    /// Printable ASCII only, cut to [`MAX_NAME`].
+    pub fn new(s: &str) -> Name {
+        let mut n = Name {
+            len: 0,
+            bytes: [0; MAX_NAME],
+        };
+        for b in s.bytes().filter(|b| (0x20..0x7f).contains(b)).take(MAX_NAME) {
+            n.bytes[n.len as usize] = b;
+            n.len += 1;
+        }
+        n
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Msg {
+    /// Client → server, first.
+    Hello {
+        proto: u16,
+        name: Name,
+    },
+    /// Server → client: you are in.
+    Welcome {
+        slot: u8,
+        team: u8,
+        tick: u32,
+        tick_hz: u16,
+        map: u8,
+        rules: Rules,
+    },
+    /// Server → client: you are not.
+    Refuse {
+        reason: u8,
+    },
+    /// Who sits where (sent for every seat on join, and on any change).
+    Seat {
+        slot: u8,
+        team: u8,
+        bot: bool,
+        name: Name,
+    },
+    Kill {
+        killer: u8,
+        victim: u8,
+        cause: u16,
+    },
+    Phase {
+        phase: u8,
+        winner: u8,
+    },
+    Bye,
+}
+
+pub const REFUSE_VERSION: u8 = 1;
+pub const REFUSE_FULL: u8 = 2;
+
+fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
+    w.write(n.len as u32, 5)?;
+    for &b in &n.bytes[..n.len as usize] {
+        w.write(b as u32, 8)?;
+    }
+    Ok(())
+}
+
+fn r_name(r: &mut BitReader) -> R<Name> {
+    let len = r.read(5)? as usize;
+    if len > MAX_NAME {
+        return Err(WireError::Cap);
+    }
+    let mut n = Name {
+        len: len as u8,
+        bytes: [0; MAX_NAME],
+    };
+    for i in 0..len {
+        let b = r.read(8)? as u8;
+        if !(0x20..0x7f).contains(&b) {
+            return Err(WireError::Malformed);
+        }
+        n.bytes[i] = b;
+    }
+    Ok(n)
+}
+
+pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
+    let mut w = BitWriter::new(out);
+    match m {
+        Msg::Hello { proto, name } => {
+            w.write(1, 8)?;
+            w.write(*proto as u32, 16)?;
+            w_name(&mut w, name)?;
+        }
+        Msg::Welcome {
+            slot,
+            team,
+            tick,
+            tick_hz,
+            map,
+            rules,
+        } => {
+            w.write(2, 8)?;
+            w.write(*slot as u32, 3)?;
+            w.write(*team as u32 & 1, 1)?;
+            w.write(*tick, 32)?;
+            w.write(*tick_hz as u32, 16)?;
+            w.write(*map as u32, 8)?;
+            w.write_bit(rules.teams)?;
+            w_i32(&mut w, rules.score_limit, 32)?;
+            w.write(rules.time_limit_ms, 32)?;
+            w.write(rules.loadout[0] as u32, 4)?;
+            w.write(rules.loadout[1] as u32, 4)?;
+        }
+        Msg::Refuse { reason } => {
+            w.write(3, 8)?;
+            w.write(*reason as u32, 8)?;
+        }
+        Msg::Seat { slot, team, bot, name } => {
+            w.write(4, 8)?;
+            w.write(*slot as u32, 3)?;
+            w.write(*team as u32 & 1, 1)?;
+            w.write_bit(*bot)?;
+            w_name(&mut w, name)?;
+        }
+        Msg::Kill { killer, victim, cause } => {
+            w.write(5, 8)?;
+            w.write(*killer as u32, 3)?;
+            w.write(*victim as u32, 3)?;
+            w.write(*cause as u32, 16)?;
+        }
+        Msg::Phase { phase, winner } => {
+            w.write(6, 8)?;
+            w.write(*phase as u32, 2)?;
+            w.write(*winner as u32, 8)?;
+        }
+        Msg::Bye => w.write(7, 8)?,
+    }
+    Ok(w.finish())
+}
+
+pub fn decode_msg(buf: &[u8]) -> R<Msg> {
+    let mut r = BitReader::new(buf);
+    let m = match r.read(8)? {
+        1 => Msg::Hello {
+            proto: r.read(16)? as u16,
+            name: r_name(&mut r)?,
+        },
+        2 => Msg::Welcome {
+            slot: r.read(3)? as u8,
+            team: r.read(1)? as u8,
+            tick: r.read(32)?,
+            tick_hz: r.read(16)? as u16,
+            map: r.read(8)? as u8,
+            rules: Rules {
+                teams: r.read_bit()?,
+                score_limit: r_i32(&mut r, 32)?,
+                time_limit_ms: r.read(32)?,
+                loadout: [r.read(4)? as u8, r.read(4)? as u8],
+            },
+        },
+        3 => Msg::Refuse {
+            reason: r.read(8)? as u8,
+        },
+        4 => Msg::Seat {
+            slot: r.read(3)? as u8,
+            team: r.read(1)? as u8,
+            bot: r.read_bit()?,
+            name: r_name(&mut r)?,
+        },
+        5 => Msg::Kill {
+            killer: r.read(3)? as u8,
+            victim: r.read(3)? as u8,
+            cause: r.read(16)? as u16,
+        },
+        6 => Msg::Phase {
+            phase: r.read(2)? as u8,
+            winner: r.read(8)? as u8,
+        },
+        7 => Msg::Bye,
+        _ => return Err(WireError::Malformed),
+    };
+    done(&r)?;
+    Ok(m)
+}
+
+/// A message framed for the stream: length prefix, then the message.
+pub fn frame_msg(m: &Msg, out: &mut [u8; MAX_STREAM_MSG + frame::LEN_PREFIX_BYTES]) -> R<usize> {
+    let mut body = [0u8; MAX_STREAM_MSG];
+    let n = encode_msg(m, &mut body)?;
+    frame::encode_into(out, &body[..n]).ok_or(WireError::Overflow)
+}

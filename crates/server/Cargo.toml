@@ -1,0 +1,24 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The authoritative server: rooms behind WebTransport, and the page"
+
+[[bin]]
+name = "oneshot-server"
+path = "src/main.rs"
+
+[dependencies]
+sim = { path = "../sim" }
+proto = { path = "../proto" }
+room = { path = "../room" }
+# Pinned: crates.io 0.7.1 has a remotely triggerable panic (#317). Gates and
+# engine-shim pin the same rev.
+wtransport = { git = "https://github.com/BiagioFesta/wtransport", rev = "a11e6a8e7ff33c6eef522d308007da55d1df9f81", features = ["dangerous-configuration", "self-signed", "quinn"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "sync", "fs"] }
+getrandom = "0.3"
+
+[dev-dependencies]
+client-net = { path = "../client-net" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
