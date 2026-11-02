@@ -31,6 +31,8 @@ pub const INTERP_FRAMES: usize = 8;
 pub const TARGET_DEPTH: f64 = 1.0;
 /// Ticks between snapshots (and between input datagrams).
 pub const SEND_EVERY: u32 = 2;
+/// Ticks owed past which the clock skips rather than makes them all.
+pub const SKIP_AFTER: u32 = TICK_HZ / 2;
 /// A correction this large snaps instead of easing.
 pub const SNAP_M: f32 = 4.0;
 /// How fast a correction eases out, in ms.
@@ -163,11 +165,14 @@ impl NetCore {
         let dt = self.last_ms.map_or(0.0, |l| (now_ms - l).max(0.0));
         self.last_ms = Some(now_ms);
         self.t += dt / TICK_MS * self.rate;
-        // Owed more ticks than a datagram can carry: skip to the newest. The
-        // server runs repeats for the ones skipped.
+        // Owed more than half a second of ticks (a stall, not a slow
+        // frame): skip to the newest. The server runs repeats for the ones
+        // skipped. Short of that, every owed tick is made and sent: a
+        // datagram goes every SEND_EVERY ticks inside the loop below, each
+        // carrying the last MAX_INPUT_FRAMES.
         let owed = self.t.floor() - self.seq as f64;
-        if owed > MAX_INPUT_FRAMES as f64 {
-            let to = (self.t.floor() as u32).wrapping_sub(MAX_INPUT_FRAMES as u32);
+        if owed > SKIP_AFTER as f64 {
+            let to = (self.t.floor() as u32).wrapping_sub(SEND_EVERY);
             while self.seq != to {
                 self.inputs[self.seq as usize % RING] = input.repeated();
                 self.after[self.seq as usize % RING] = self.pred;
