@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 
-function gridTexture(base: string, line: string, cells: number): THREE.CanvasTexture {
+export function gridTexture(base: string, line: string, cells: number): THREE.CanvasTexture {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const g = c.getContext('2d')!;
@@ -35,15 +35,52 @@ export interface Materials {
   trim: THREE.Material;
 }
 
+/** A CC0 texture pair from Gates (tools/assets.mjs), tiled per metre by
+ * the geometry's UVs (tileUVs). Until it loads, or if it never does, the
+ * material's own colour shows. */
+function textured(name: string, color: number, roughness: number, metalness = 0): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({ color, roughness, metalness });
+  const tl = new THREE.TextureLoader();
+  const wrap = (t: THREE.Texture) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  };
+  tl.load(`textures/${name}_albedo.jpg`, (t) => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    mat.map = wrap(t);
+    mat.color.set(0xffffff);
+    mat.needsUpdate = true;
+  }, undefined, () => {});
+  tl.load(`textures/${name}_normal.jpg`, (t) => {
+    mat.normalMap = wrap(t);
+    mat.needsUpdate = true;
+  }, undefined, () => {});
+  return mat;
+}
+
 export function defaultMaterials(): Materials {
-  const floor = gridTexture('#5d6168', '#4b4f55', 4);
-  floor.repeat.set(24, 24);
   return {
-    floor: new THREE.MeshStandardMaterial({ map: floor, roughness: 0.9 }),
-    wall: new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.85 }),
-    block: new THREE.MeshStandardMaterial({ color: 0x9da3ab, roughness: 0.7, metalness: 0.1 }),
+    floor: textured('aggregate', 0x6a6e74, 0.95),
+    wall: textured('concrete', 0x8a8f96, 0.9),
+    block: textured('metal', 0x9da3ab, 0.6, 0.3),
     trim: new THREE.MeshStandardMaterial({ color: 0xc9a227, roughness: 0.5, metalness: 0.4 }),
   };
+}
+
+/** Scales a box's UVs to its size so a texture tiles every `tile` metres
+ * on every face. BoxGeometry's faces come in order +x −x +y −y +z −z, four
+ * vertices each. */
+function tileUVs(g: THREE.BoxGeometry, w: number, h: number, d: number, tile: number) {
+  const uv = g.attributes.uv as THREE.BufferAttribute;
+  const dims = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+  for (let f = 0; f < 6; f++) {
+    for (let k = 0; k < 4; k++) {
+      const i = f * 4 + k;
+      uv.setXY(i, (uv.getX(i) * dims[f][0]) / tile, (uv.getY(i) * dims[f][1]) / tile);
+    }
+  }
+  uv.needsUpdate = true;
 }
 
 export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float32Array, mats: Materials) {
@@ -64,7 +101,10 @@ export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float3
   sun.shadow.bias = -0.0005;
   scene.add(sun);
 
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), mats.floor);
+  const fg = new THREE.PlaneGeometry(100, 100);
+  const fuv = fg.attributes.uv as THREE.BufferAttribute;
+  for (let i = 0; i < fuv.count; i++) fuv.setXY(i, fuv.getX(i) * 25, fuv.getY(i) * 25);
+  const floor = new THREE.Mesh(fg, mats.floor);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
   scene.add(floor);
@@ -73,7 +113,9 @@ export function buildWorld(scene: THREE.Scene, boxes: Float32Array, pads: Float3
     const [x0, y0, z0, x1, y1, z1] = boxes.subarray(i, i + 6);
     const w = x1 - x0, h = y1 - y0, d = z1 - z0;
     const tall = h >= 6;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), tall ? mats.wall : mats.block);
+    const g = new THREE.BoxGeometry(w, h, d);
+    tileUVs(g, w, h, d, tall ? 4 : 2);
+    const m = new THREE.Mesh(g, tall ? mats.wall : mats.block);
     m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
     m.castShadow = !tall;
     m.receiveShadow = true;

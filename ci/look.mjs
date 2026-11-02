@@ -1,0 +1,38 @@
+// node ci/look.mjs: pictures of the art with no match running (the page's
+// ?pose mode): a fighter in front of the camera, facing it and side on,
+// with a long gun and a pistol. Into traces/look-*.png.
+
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { existsSync, mkdirSync } from 'node:fs';
+
+const require = createRequire(new URL('../web/package.json', import.meta.url));
+const { chromium } = (() => {
+  for (const n of ['playwright', '/opt/node-tools/node_modules/playwright']) {
+    try { return require(n); } catch { /* next */ }
+  }
+  throw new Error('playwright not found');
+})();
+const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'web/dist'],
+  { stdio: ['ignore', 'pipe', 'inherit'] });
+const url = await new Promise((ok) => {
+  let out = '';
+  server.stdout.on('data', (d) => { out += d; const m = out.match(/play: (http:\/\/\S+)/); if (m) ok(m[1]); });
+});
+const exe = process.env.CHROMIUM_PATH || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
+const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+mkdirSync('traces', { recursive: true });
+const shots = process.argv.slice(2).length ? process.argv.slice(2) : ['yaw=3.1416&arm=1', 'yaw=1.5708&arm=1', 'yaw=1.5708&arm=3', 'yaw=0&arm=4&speed=5'];
+for (const [i, q] of shots.entries()) {
+  const page = await browser.newPage({ viewport: { width: 800, height: 450 } });
+  page.on('pageerror', (e) => console.error(`[page] ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.error(`[page] ${m.text()}`); });
+  await page.goto(`${url}?pose=1&${q}`);
+  await page.waitForFunction(() => window.__oneshot?.state().connected, null, { timeout: 60000 }).catch(() => console.error('art never loaded'));
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: `traces/look-${i}.png` });
+  console.log(`traces/look-${i}.png  ${q}`);
+  await page.close();
+}
+await browser.close();
+server.kill();

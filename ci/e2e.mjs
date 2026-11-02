@@ -43,7 +43,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.error(`[page] ${m.text()}`); });
   page.on('pageerror', (e) => console.error(`[page] ${e.message}`));
-  await page.goto(`${url}?autoplay=1&name=e2e`);
+  await page.goto(`${url}?autoplay=1&lite=1&name=e2e`);
   const t0 = Date.now();
   let s, base = [0, 0, 0];
   while (Date.now() - t0 < seconds * 1000) {

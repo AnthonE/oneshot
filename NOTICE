@@ -1,0 +1,24 @@
+oneshot: third-party notices
+
+Code is MIT (the workspace Cargo.toml). Assets are ours or CC0; nothing
+here is NC or SA.
+
+Models (web/public/models): Triple T and the guns are commissioned from
+Meshy on a paid plan, owned outright, from the Gates repository
+(AnthonE/Gates, assets/models). No attribution is owed.
+
+Sounds (web/public/sound), all CC0 or public domain, cut by Gates
+(assets/sound/MANIFEST.md has every source page):
+  - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
+  - USC Sunset Editorial / Red Library sound effects (archive.org), public
+    domain: reloads, dry fire, headshots, footsteps
+  - Kenney (kenney.nl) Interface and UI audio, CC0: hit marker, equip
+  - Freesound uploaders, CC0: klangfabrik (revolver), felix.blume,
+    alienistcog, julujanus (blasts), tortillathrilla, unfa, leonelmail
+    (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
+    manifest
+
+Textures (web/public/textures), CC0: Poly Haven, ambientCG, TextureCan.
+
+three.js (MIT), including its basis transcoder (Apache-2.0), is bundled
+into the page.

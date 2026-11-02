@@ -34,9 +34,12 @@ async function main() {
   await init();
   const canvas = document.getElementById('game') as HTMLCanvasElement;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // ?lite: half resolution, no shadows. The browser test runs on a
+  // software GPU, where the full picture would starve the netcode of frames.
+  const LITE = params.has('lite');
+  renderer.setPixelRatio(LITE ? 0.5 : Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = !LITE;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
@@ -60,6 +63,8 @@ async function main() {
     console.warn('art did not load', e);
     return null;
   }) : null;
+
+  if (params.has('pose')) return pose(scene, camera, renderer, players, art);
 
   const menu = document.getElementById('menu')!;
   const status = document.getElementById('status')!;
@@ -141,7 +146,7 @@ async function main() {
           const s = others.findIndex((_, j) => j % STRIDE === 0 && others[j] === a);
           if (s >= 0) hud.damage(Math.atan2(others[s + 8] - pz, others[s + 6] - px) - yaw + Math.PI / 2);
         }
-        art?.hit(a === slot, part);
+        art?.hit(a === slot && b !== slot, part, b === slot);
       } else if (kind === EV_KILL) {
         if (a === slot && b !== slot) hud.hit(true);
       } else if (kind === EV_BLAST) {
@@ -181,9 +186,10 @@ async function main() {
       net: `snapshots ${st[0]}\nconfirmed ${st[1]}  corrected ${st[2]}\ndepth ${st[4]}  rate ${st[5].toFixed(2)}\ninterp ${st[6].toFixed(1)} ticks  dropped ${st[7]}`,
     });
 
-    art?.frame(own, f, dt, now);
+    art?.frame(own, f, dt, now, camera);
     effects.update();
     renderer.render(scene, camera);
+    art?.afterRender(renderer);
     shared.frames++;
     if (client.closed) {
       status.textContent = 'disconnected';
@@ -192,6 +198,35 @@ async function main() {
     }
     requestAnimationFrame(loop);
   };
+  requestAnimationFrame(loop);
+}
+
+/** ?pose: no server. One fighter on the floor in front of the camera, for
+ * looking at the models (ci/look.mjs takes pictures of it). ?yaw= turns the
+ * fighter (radians), ?arm= picks its gun, ?anim=speed. */
+function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THREE.WebGLRenderer,
+  players: Players, art: Awaited<ReturnType<typeof import('./art').loadArt>> | null) {
+  document.getElementById('menu')!.style.display = 'none';
+  const yaw = Number(params.get('yaw') ?? Math.PI), arm = Number(params.get('arm') ?? 1);
+  const speed = Number(params.get('speed') ?? 0);
+  const o = new Float32Array([1, 0, 1, 0, 1, 0, 3, 0, 0, yaw, 0, arm, 1, speed]);
+  const own = new Float32Array(22);
+  own[3] = 1.6; own[6] = 1; own[10] = arm; own[11] = 10; own[20] = 1;
+  camera.position.set(0, 1.6, 0);
+  camera.lookAt(3, 1.0, 0);
+  let last = performance.now();
+  const loop = () => {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    players.update(o, dt);
+    art?.frame(own, { buttons: 0, yaw: 0, pitch: 0, mx: 0, mz: 0 }, dt, now, camera);
+    renderer.render(scene, camera);
+    art?.afterRender(renderer);
+    shared.frames++;
+    requestAnimationFrame(loop);
+  };
+  shared.connected = !!art;
   requestAnimationFrame(loop);
 }
 

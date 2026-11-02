@@ -10,13 +10,28 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 |---|---|
 | `crates/sim` | the rules: movement, guns, shields, pads, Slayer, rewind. Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
+| `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
+| `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, snapshots |
+| `crates/server` | wtransport sessions, the sim thread, the page server (`oneshot-server`) |
+| `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
+| `web/` | three.js page: draws, never decides |
 
 ## The loop
 
 1. Write the code.
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
-4. Commit with a short message.
+4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`.
+5. Commit with a short message.
+
+## The wire's walls
+
+- **A wire change bumps `PROTO_VER`** and moves `crates/proto/tests/goldens.rs`.
+- **The sim thread never blocks on the network**: sessions get `try_send`,
+  a full queue drops a snapshot.
+- **The clock steers on the low point** of the server's input buffer
+  (`ClientNet::take_low`); a page drawing slowly sends in bursts.
+- **web/ draws.** Gameplay state lives in `sim` and `client-net`.
 
 ## The sim's walls (CI stops you on these)
 
