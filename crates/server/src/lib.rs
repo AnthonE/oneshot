@@ -62,6 +62,8 @@ pub struct Config {
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
     pub rules: Rules,
+    /// Bots that stand still: a target for the browser test.
+    pub passive_bots: bool,
 }
 
 pub struct Handle {
@@ -88,10 +90,15 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     );
     let seed = salt.0 ^ 0x9e37_79b9_7f4a_7c15;
     let rules = cfg.rules;
+    let passive = cfg.passive_bots;
     let s = stop.clone();
     std::thread::Builder::new()
         .name("sim".into())
-        .spawn(move || sim_thread(Room::new(Map::proving_grounds(), rules, seed, salt), from_net, s))
+        .spawn(move || {
+            let mut room = Room::new(Map::proving_grounds(), rules, seed, salt);
+            room.passive_bots = passive;
+            sim_thread(room, from_net, s)
+        })
         .map_err(|e| e.to_string())?;
 
     tokio::spawn(net::accept_loop(endpoint, to_sim));

@@ -1,0 +1,535 @@
+//! The netcode on WebTransport, handed to the page. Transport after Gates'
+//! `client/src/net/web.rs`: the certificate pinned by hash, datagrams
+//! written without ever waiting (a full queue drops, a newer one follows),
+//! the stream read through a buffer because a browser read returns whatever
+//! arrived.
+//!
+//! The page calls [`Client::update`] once a frame with the controls as they
+//! are, then reads flat `Float32Array`s to draw from.
+
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::Rc;
+
+use js_sys::Uint8Array;
+use proto::frame::{FrameBuf, LEN_PREFIX_BYTES};
+use proto::{decode_msg, decode_snapshot, encode_input, frame_msg, Msg, Name, MAX_DATAGRAM, MAX_STREAM_MSG, PROTO_VER};
+use sim::input::Input;
+use sim::map::Map;
+use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::{spawn_local, JsFuture};
+use web_sys::{
+    ReadableStream, ReadableStreamDefaultReader, WebTransport, WebTransportDatagramDuplexStream,
+    WritableStreamDefaultWriter,
+};
+
+use crate::core::NetCore;
+
+fn js_err(what: &str, v: &JsValue) -> JsValue {
+    let msg = js_sys::Reflect::get(v, &JsValue::from_str("message"))
+        .ok()
+        .and_then(|m| m.as_string())
+        .or_else(|| v.as_string())
+        .unwrap_or_default();
+    JsValue::from_str(&format!("{what}: {msg}"))
+}
+
+fn now_ms() -> f64 {
+    web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
+}
+
+fn hex32(s: &str) -> Option<[u8; 32]> {
+    let s: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Reads length-prefixed frames off a stream, whatever sizes reads return.
+struct FrameReader {
+    reader: ReadableStreamDefaultReader,
+    buf: Box<FrameBuf<MAX_STREAM_MSG>>,
+    pending: Vec<u8>,
+    at: usize,
+}
+
+impl FrameReader {
+    fn new(stream: &ReadableStream) -> Result<Self, JsValue> {
+        Ok(FrameReader {
+            reader: ReadableStreamDefaultReader::new(stream).map_err(|e| js_err("stream reader", &e))?,
+            buf: Box::new(FrameBuf::new()),
+            pending: Vec::new(),
+            at: 0,
+        })
+    }
+
+    async fn next(&mut self) -> Option<Vec<u8>> {
+        loop {
+            while self.at < self.pending.len() {
+                let (used, done) = self.buf.push(&self.pending[self.at..]).ok()?;
+                self.at += used;
+                if done {
+                    let out = self.buf.frame().to_vec();
+                    self.buf.take();
+                    return Some(out);
+                }
+            }
+            self.pending.clear();
+            self.at = 0;
+            let result = JsFuture::from(self.reader.read()).await.ok()?;
+            let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                .ok()
+                .and_then(|d| d.as_bool())
+                .unwrap_or(true);
+            if done {
+                return None;
+            }
+            let chunk: Uint8Array = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
+                .ok()?
+                .dyn_into()
+                .ok()?;
+            self.pending.resize(chunk.length() as usize, 0);
+            chunk.copy_to(&mut self.pending);
+        }
+    }
+}
+
+async fn write_frame(w: &WritableStreamDefaultWriter, m: &Msg) -> Result<(), JsValue> {
+    let mut out = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    let n = frame_msg(m, &mut out).map_err(|_| JsValue::from_str("frame"))?;
+    let chunk = Uint8Array::new_with_length(n as u32);
+    chunk.copy_from(&out[..n]);
+    JsFuture::from(w.write_with_chunk(&chunk))
+        .await
+        .map(|_| ())
+        .map_err(|e| js_err("stream write", &e))
+}
+
+/// The datagram writer: Safari has only `createWritable()`.
+fn datagram_writer(d: &WebTransportDatagramDuplexStream) -> Result<WritableStreamDefaultWriter, JsValue> {
+    let create = js_sys::Reflect::get(d, &JsValue::from_str("createWritable"))
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    let stream = match create {
+        Some(f) => f.call0(d)?,
+        None => js_sys::Reflect::get(d, &JsValue::from_str("writable"))?,
+    };
+    stream
+        .unchecked_into::<web_sys::WritableStream>()
+        .get_writer()
+        .map_err(|e| js_err("datagram writer", &e))
+}
+
+type Queue<T> = Rc<RefCell<VecDeque<T>>>;
+
+#[wasm_bindgen]
+pub struct Client {
+    core: NetCore,
+    transport: WebTransport,
+    datagrams: WebTransportDatagramDuplexStream,
+    writer: WritableStreamDefaultWriter,
+    inbox: Queue<(f64, Vec<u8>)>,
+    msgs: Queue<Msg>,
+    closed: Rc<RefCell<bool>>,
+    dropped: u32,
+}
+
+#[wasm_bindgen]
+impl Client {
+    /// Connects to `addr` (host:port), pinning the certificate whose
+    /// SHA-256 is `hash` (hex), and joins as `name`.
+    pub async fn connect(addr: String, hash: String, name: String) -> Result<Client, JsValue> {
+        let opts = web_sys::WebTransportOptions::new();
+        opts.set_require_unreliable(true);
+        if let Some(digest) = hex32(&hash) {
+            let bytes = Uint8Array::new_with_length(32);
+            bytes.copy_from(&digest);
+            let h = web_sys::WebTransportHash::new();
+            h.set_algorithm("sha-256");
+            h.set_value_u8_array(&bytes);
+            opts.set_server_certificate_hashes(&[h]);
+        }
+        let url = format!("https://{addr}/");
+        let transport = WebTransport::new_with_options(&url, &opts).map_err(|e| js_err("connect", &e))?;
+        JsFuture::from(transport.ready())
+            .await
+            .map_err(|e| js_err("connect", &e))?;
+
+        let bidi: web_sys::WebTransportBidirectionalStream = JsFuture::from(transport.create_bidirectional_stream())
+            .await
+            .map_err(|e| js_err("stream", &e))?
+            .unchecked_into();
+        let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
+        write_frame(
+            &sw,
+            &Msg::Hello {
+                proto: PROTO_VER,
+                name: Name::new(&name),
+            },
+        )
+        .await?;
+        let mut reader = FrameReader::new(&bidi.readable())?;
+        // The first message is the answer: a welcome or a refusal.
+        let f = reader
+            .next()
+            .await
+            .ok_or_else(|| JsValue::from_str("the server hung up"))?;
+        let (slot, team, tick, rules) = match decode_msg(&f) {
+            Ok(Msg::Welcome {
+                slot,
+                team,
+                tick,
+                rules,
+                ..
+            }) => (slot, team, tick, rules),
+            Ok(Msg::Refuse { reason }) => {
+                return Err(JsValue::from_str(match reason {
+                    proto::REFUSE_VERSION => "this page is out of date: reload",
+                    _ => "the room is full",
+                }))
+            }
+            _ => return Err(JsValue::from_str("a bad handshake")),
+        };
+
+        let msgs: Queue<Msg> = Rc::default();
+        let closed = Rc::new(RefCell::new(false));
+        {
+            let msgs = msgs.clone();
+            let closed = closed.clone();
+            spawn_local(async move {
+                while let Some(f) = reader.next().await {
+                    if let Ok(m) = decode_msg(&f) {
+                        msgs.borrow_mut().push_back(m);
+                    }
+                }
+                *closed.borrow_mut() = true;
+                drop(sw);
+            });
+        }
+
+        let datagrams = transport.datagrams();
+        let inbox: Queue<(f64, Vec<u8>)> = Rc::default();
+        {
+            let inbox = inbox.clone();
+            let readable = datagrams.readable();
+            spawn_local(async move {
+                let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
+                    return;
+                };
+                loop {
+                    let Ok(result) = JsFuture::from(reader.read()).await else {
+                        break;
+                    };
+                    let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                        .ok()
+                        .and_then(|d| d.as_bool())
+                        .unwrap_or(true);
+                    if done {
+                        break;
+                    }
+                    let Ok(v) = js_sys::Reflect::get(&result, &JsValue::from_str("value")) else {
+                        break;
+                    };
+                    let Ok(chunk) = v.dyn_into::<Uint8Array>() else { break };
+                    let mut q = inbox.borrow_mut();
+                    // A page in the background stops drawing: keep the newest.
+                    if q.len() >= 256 {
+                        q.pop_front();
+                    }
+                    q.push_back((now_ms(), chunk.to_vec()));
+                }
+            });
+        }
+        let writer = datagram_writer(&datagrams)?;
+        Ok(Client {
+            core: NetCore::new(slot, team, tick, rules, Map::proving_grounds()),
+            transport,
+            datagrams,
+            writer,
+            inbox,
+            msgs,
+            closed,
+            dropped: 0,
+        })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn slot(&self) -> u8 {
+        self.core.slot
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn team(&self) -> u8 {
+        self.core.team
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn closed(&self) -> bool {
+        *self.closed.borrow()
+    }
+
+    /// Once a frame: takes in what arrived, advances the clock with the
+    /// controls as they are, sends what is due.
+    pub fn update(&mut self, now: f64, buttons: u16, yaw: u16, pitch: i16, mx: i8, mz: i8) {
+        let arrived: Vec<(f64, Vec<u8>)> = self.inbox.borrow_mut().drain(..).collect();
+        for (at, d) in arrived {
+            if proto::datagram_kind(&d) == Some(proto::DG_SNAPSHOT) {
+                if let Ok(s) = decode_snapshot(&d) {
+                    self.core.on_snapshot(at, &s);
+                }
+            }
+        }
+        let input = Input {
+            buttons,
+            yaw,
+            pitch,
+            mx,
+            mz,
+        };
+        let mut buf = [0u8; MAX_DATAGRAM];
+        for m in self.core.update(now, input) {
+            let Ok(n) = encode_input(&m, &mut buf) else { continue };
+            self.send_datagram(&buf[..n]);
+        }
+    }
+
+    fn send_datagram(&mut self, payload: &[u8]) {
+        let max = self.datagrams.max_datagram_size() as usize;
+        if max != 0 && payload.len() > max {
+            self.dropped += 1;
+            return;
+        }
+        if self.writer.desired_size().ok().flatten().is_some_and(|d| d <= 0.0) {
+            self.dropped += 1;
+            return;
+        }
+        let chunk = Uint8Array::new_with_length(payload.len() as u32);
+        chunk.copy_from(payload);
+        let p = self.writer.write_with_chunk(&chunk);
+        spawn_local(async move {
+            let _ = JsFuture::from(p).await;
+        });
+    }
+
+    /// Our own fighter, drawn: x y z, eye height, yaw, pitch (radians),
+    /// alive, crouched, shield, health (points), arm, mag, reserve, other
+    /// arm, grenades, reloading (0..1), team, kills, deaths, respawn (s),
+    /// grounded, speed.
+    pub fn own(&self) -> Vec<f32> {
+        let (f, p) = self.core.own();
+        let g = f.gun();
+        let a = sim::arms::arm(g.arm);
+        let reload = if f.reload > 0 {
+            1.0 - f.reload as f32 / sim::consts::ticks(a.reload_ms).max(1) as f32
+        } else {
+            0.0
+        };
+        let eye = if f.body.crouched {
+            sim::consts::CROUCH_EYE
+        } else {
+            sim::consts::EYE
+        };
+        let rad = core::f32::consts::TAU / 65536.0;
+        vec![
+            p.x,
+            p.y,
+            p.z,
+            eye,
+            f.yaw as f32 * rad,
+            f.pitch as f32 * rad,
+            f.alive as u8 as f32,
+            f.body.crouched as u8 as f32,
+            f.shield as f32 / sim::consts::PT as f32,
+            f.health as f32 / sim::consts::PT as f32,
+            g.arm as f32,
+            g.mag as f32,
+            g.reserve as f32,
+            f.guns[(f.cur as usize & 1) ^ 1].arm as f32,
+            f.grenades as f32,
+            reload,
+            f.team as f32,
+            f.kills as f32,
+            f.deaths as f32,
+            f.respawn as f32 / sim::consts::TICK_HZ as f32,
+            f.body.grounded as u8 as f32,
+            (f.body.vel.x * f.body.vel.x + f.body.vel.z * f.body.vel.z).sqrt(),
+        ]
+    }
+
+    /// Everyone else, 14 numbers each: slot, team, alive, crouched,
+    /// grounded, reloading, x, y, z, yaw, pitch, arm, shield (0..1), speed.
+    pub fn others(&self, now: f64) -> Vec<f32> {
+        let mut v = Vec::new();
+        for d in self.core.others(now) {
+            v.extend_from_slice(&[
+                d.slot as f32,
+                d.team as f32,
+                d.alive as u8 as f32,
+                d.crouched as u8 as f32,
+                d.grounded as u8 as f32,
+                d.reloading as u8 as f32,
+                d.pos.x,
+                d.pos.y,
+                d.pos.z,
+                d.yaw,
+                d.pitch,
+                d.arm as f32,
+                d.shield as f32 / 255.0,
+                (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt(),
+            ]);
+        }
+        v
+    }
+
+    /// Rockets and frags, 7 each: kind (0 rocket, 1 frag), owner, x y z,
+    /// velocity x z.
+    pub fn projectiles(&self) -> Vec<f32> {
+        let mut v = Vec::new();
+        for p in self.core.latest().proj() {
+            v.extend_from_slice(&[
+                p.kind as f32,
+                p.owner as f32,
+                p.pos.x,
+                p.pos.y,
+                p.pos.z,
+                p.vel.x,
+                p.vel.z,
+            ]);
+        }
+        v
+    }
+
+    /// What happened since the last call, 11 each: kind, a, b, part, c,
+    /// pos x y z, end x y z (sim::events::Kind numbers the kinds).
+    pub fn events(&mut self) -> Vec<f32> {
+        let mut v = Vec::new();
+        for e in self.core.drain_events() {
+            v.extend_from_slice(&[
+                e.kind as f32,
+                e.a as f32,
+                e.b as f32,
+                e.part as f32,
+                e.c as f32,
+                e.pos.x,
+                e.pos.y,
+                e.pos.z,
+                e.end.x,
+                e.end.y,
+                e.end.z,
+            ]);
+        }
+        v
+    }
+
+    /// The match: phase (0 countdown, 1 playing, 2 over), seconds left,
+    /// winner, the score limit, then the 8 scores, then each pad's seconds
+    /// until its gun is back.
+    pub fn match_state(&self) -> Vec<f32> {
+        let s = self.core.latest();
+        let mut v = vec![
+            s.phase as f32,
+            s.clock as f32 / sim::consts::TICK_HZ as f32,
+            s.winner as f32,
+            self.core.rules.score_limit as f32,
+        ];
+        v.extend(s.score.iter().map(|&x| x as f32));
+        v.extend(s.pads().iter().map(|p| p.empty_s as f32));
+        v
+    }
+
+    /// Stream messages since the last call, as JS objects.
+    pub fn messages(&mut self) -> js_sys::Array {
+        let out = js_sys::Array::new();
+        for m in self.msgs.borrow_mut().drain(..) {
+            let o = js_sys::Object::new();
+            let set = |k: &str, v: JsValue| {
+                let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
+            };
+            match m {
+                Msg::Seat { slot, team, bot, name } => {
+                    set("type", "seat".into());
+                    set("slot", slot.into());
+                    set("team", team.into());
+                    set("bot", bot.into());
+                    set("name", name.as_str().into());
+                }
+                Msg::Kill { killer, victim, cause } => {
+                    set("type", "kill".into());
+                    set("killer", killer.into());
+                    set("victim", victim.into());
+                    set("cause", cause.into());
+                }
+                Msg::Phase { phase, winner } => {
+                    set("type", "phase".into());
+                    set("phase", phase.into());
+                    set("winner", winner.into());
+                }
+                _ => continue,
+            }
+            out.push(&o);
+        }
+        out
+    }
+
+    /// Netcode health: snapshots, confirmations, corrections, resyncs,
+    /// depth, clock rate, interpolation delay (ticks), datagrams dropped.
+    pub fn stats(&self) -> Vec<f64> {
+        let s = self.core.stats;
+        vec![
+            s.snapshots as f64,
+            s.confirmations as f64,
+            s.corrections as f64,
+            s.resyncs as f64,
+            s.depth as f64,
+            s.rate,
+            s.delay_ticks,
+            self.dropped as f64,
+        ]
+    }
+
+    pub fn close(&self) {
+        self.transport.close();
+    }
+}
+
+/// The map's boxes, 6 numbers each (min x y z, max x y z): the one source
+/// of the level's geometry for the renderer.
+#[wasm_bindgen]
+pub fn map_boxes() -> Vec<f32> {
+    let m = Map::proving_grounds();
+    let mut v = Vec::new();
+    for b in &m.boxes {
+        v.extend_from_slice(&[b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z]);
+    }
+    v
+}
+
+/// The map's pads, 5 each: x y z, arm, respawn seconds.
+#[wasm_bindgen]
+pub fn map_pads() -> Vec<f32> {
+    let m = Map::proving_grounds();
+    let mut v = Vec::new();
+    for p in &m.pads {
+        v.extend_from_slice(&[p.pos.x, p.pos.y, p.pos.z, p.arm as f32, p.respawn_ms as f32 / 1000.0]);
+    }
+    v
+}
+
+/// Arm names by id, for the HUD.
+#[wasm_bindgen]
+pub fn arm_name(id: u8) -> String {
+    sim::arms::arm(id).name.to_string()
+}
+
+#[wasm_bindgen(start)]
+pub fn start() {
+    std::panic::set_hook(Box::new(|info| {
+        web_sys::console::error_1(&JsValue::from_str(&format!("oneshot: panic: {info}")));
+    }));
+}

@@ -1,5 +1,5 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080] [--web web/dist]
-//! [--cert cert.pem --key key.pem] [--doubles]`
+//! [--cert cert.pem --key key.pem] [--doubles] [--passive-bots]`
 
 use std::net::SocketAddr;
 
@@ -12,6 +12,7 @@ fn main() {
         web_dir: "web/dist".into(),
         cert: None,
         rules: Rules::duel(),
+        passive_bots: false,
     };
     let mut cert = None;
     let mut key = None;
@@ -28,6 +29,7 @@ fn main() {
             "--cert" => cert = Some(val()),
             "--key" => key = Some(val()),
             "--doubles" => cfg.rules = Rules::doubles(),
+            "--passive-bots" => cfg.passive_bots = true,
             _ => die(&format!("unknown argument {a}")),
         }
     }
@@ -37,6 +39,7 @@ fn main() {
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| die(&e.to_string()));
     rt.block_on(async {
         let h = server::run(cfg).await.unwrap_or_else(|e| die(&e));
+        // Tests read these lines: keep their shape.
         println!("game: {} (WebTransport)", h.addr);
         println!("cert sha-256: {}", server::hex(&h.cert_hash));
         if let Some(http) = h.http {

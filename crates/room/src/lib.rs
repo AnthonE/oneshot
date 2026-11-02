@@ -14,8 +14,8 @@ use sim::map::Map;
 use sim::world::{Phase, ProjKind, Rules, World};
 
 /// Input frames a client may have waiting; past this the oldest go, so a
-/// client can never run the server's clock for it.
-pub const MAX_DEPTH: u32 = 8;
+/// client can never bank inputs. (It can never step faster: one runs a tick.)
+pub const MAX_DEPTH: u32 = 16;
 /// Frames held by seq.
 const BUF: usize = 32;
 /// The most a shot is rewound: 160 ms (docs/DESIGN.md §7).
@@ -46,6 +46,11 @@ pub struct ClientNet {
     /// Frames that came too late or too early, and repeats used.
     pub late: u32,
     pub repeats: u32,
+    /// The fewest frames waiting behind the one run, over the ticks since
+    /// the last snapshot (−1: a tick had none). What the client's clock
+    /// steers on: a page that draws slowly sends in bursts, and it is the
+    /// low point between bursts that starves the server.
+    low: Option<i32>,
     /// Events since the last snapshot to this client.
     pending: Vec<Event>,
 }
@@ -64,6 +69,7 @@ impl Default for ClientNet {
             rtt_ms: 0.0,
             late: 0,
             repeats: 0,
+            low: None,
             pending: Vec::new(),
         }
     }
@@ -123,13 +129,17 @@ impl ClientNet {
             }
         }
         let slot = &mut self.frames[cursor as usize % BUF];
-        let inp = match slot.take() {
-            Some((s, f)) if s == cursor => f,
+        let (inp, spare) = match slot.take() {
+            Some((s, f)) if s == cursor => {
+                let n = self.newest_seq.unwrap_or(cursor);
+                (f, n.wrapping_sub(cursor) as i32)
+            }
             _ => {
                 self.repeats += 1;
-                self.last.repeated()
+                (self.last.repeated(), -1)
             }
         };
+        self.low = Some(self.low.map_or(spare, |l| l.min(spare)));
         self.last = inp;
         self.last_seq = cursor;
         self.cursor = Some(cursor.wrapping_add(1));
@@ -142,6 +152,13 @@ impl ClientNet {
             Some(n) => (n.wrapping_sub(self.last_seq) as i32).clamp(-127, 127) as i8,
             None => 0,
         }
+    }
+
+    /// The low point of [`ClientNet::depth`] since the last call, for the
+    /// snapshot.
+    pub fn take_low(&mut self) -> i8 {
+        let d = self.low.take().unwrap_or_else(|| self.depth() as i32);
+        d.clamp(-127, 127) as i8
     }
 
     fn sent_snapshot(&mut self, tick: u32, now_ms: f64) {
@@ -177,6 +194,8 @@ pub struct Room {
     pub seats: [Seat; MAX_FIGHTERS],
     /// Seats the rules use: 2 for a duel, 4 for doubles.
     pub size: usize,
+    /// Bots stand still and never fire: for tests that need a target.
+    pub passive_bots: bool,
     seed: u64,
     phase: Phase,
 }
@@ -189,6 +208,7 @@ impl Room {
             world: World::new(map, rules, seed, salt),
             seats: core::array::from_fn(|_| Seat::Empty),
             size,
+            passive_bots: false,
             seed,
             phase: Phase::Countdown,
         };
@@ -281,7 +301,11 @@ impl Room {
         let next = self.world.tick.wrapping_add(1);
         for s in 0..MAX_FIGHTERS {
             match &mut self.seats[s] {
-                Seat::Bot(b) => inputs[s] = b.think(&self.world, s),
+                Seat::Bot(b) => {
+                    if !self.passive_bots {
+                        inputs[s] = b.think(&self.world, s);
+                    }
+                }
                 Seat::Person(c, _) => {
                     inputs[s] = c.take_frame();
                     rewind[s] = c.rewind_q8(next);
@@ -326,7 +350,8 @@ impl Room {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
                 if let Seat::Person(c, _) = &mut self.seats[s] {
-                    let snap = build(&self.world, s, c.last_seq, c.depth(), &c.pending, |_| true);
+                    let low = c.take_low();
+                    let snap = build(&self.world, s, c.last_seq, low, &c.pending, |_| true);
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
                     snaps.push((s as u8, snap));

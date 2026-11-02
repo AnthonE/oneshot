@@ -21,3 +21,30 @@ jobs:
           cargo test -q -p sim -p proto -p room -p client-net -p server
       - name: native vs wasm
         run: ci/parity.sh
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.130
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: build the page and the server
+        run: |
+          (cd web && npm ci)
+          ci/build_web.sh
+          cargo build -q --release -p server
+      - name: play it in headless Chromium
+        run: |
+          (cd web && npx playwright install --with-deps chromium)
+          node ci/e2e.mjs 60
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e
+          path: traces/

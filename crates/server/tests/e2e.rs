@@ -33,6 +33,7 @@ async fn a_native_client_plays_the_bot() {
             time_limit_ms: 0,
             ..Rules::duel()
         },
+        passive_bots: false,
     })
     .await
     .unwrap();

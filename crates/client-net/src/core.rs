@@ -26,8 +26,9 @@ use sim::world::{Phase, Rules};
 pub const RING: usize = 64;
 /// Snapshots kept for interpolation.
 pub const INTERP_FRAMES: usize = 8;
-/// Input frames waiting at the server that the clock aims for.
-pub const TARGET_DEPTH: f64 = 2.0;
+/// Input frames the clock aims to have waiting at the server at its low
+/// point between our datagrams: one spare, never none.
+pub const TARGET_DEPTH: f64 = 1.0;
 /// Ticks between snapshots (and between input datagrams).
 pub const SEND_EVERY: u32 = 2;
 /// A correction this large snaps instead of easing.
@@ -259,7 +260,8 @@ impl NetCore {
         self.delay = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
         self.stats.delay_ticks = self.delay;
 
-        // The clock: keep about TARGET_DEPTH of our inputs waiting there.
+        // The clock: keep the low point of our inputs waiting there at about
+        // TARGET_DEPTH: below it the server guesses, above it we add delay.
         let d = s.depth as f64;
         if !(-8.0..=16.0).contains(&d) {
             self.t += TARGET_DEPTH - d;
@@ -269,9 +271,9 @@ impl NetCore {
             }
             self.stats.resyncs += 1;
             self.rate = 1.0;
-        } else if d < TARGET_DEPTH - 1.0 {
+        } else if d < TARGET_DEPTH {
             self.rate = 1.05;
-        } else if d > TARGET_DEPTH + 1.0 {
+        } else if d > TARGET_DEPTH + 1.5 {
             self.rate = 0.95;
         } else {
             self.rate = 1.0;
