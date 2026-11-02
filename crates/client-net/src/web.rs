@@ -403,22 +403,23 @@ impl Client {
     pub fn others(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
         for d in self.core.others(now) {
-            v.extend_from_slice(&[
-                d.slot as f32,
-                d.team as f32,
-                d.alive as u8 as f32,
-                d.crouched as u8 as f32,
-                d.grounded as u8 as f32,
-                d.reloading as u8 as f32,
-                d.pos.x,
-                d.pos.y,
-                d.pos.z,
-                d.yaw,
-                d.pitch,
-                d.arm as f32,
-                d.shield as f32 / 255.0,
-                (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt(),
-            ]);
+            push_drawn(&mut v, &d);
+        }
+        v
+    }
+
+    /// While we are dead and saw who killed us: the kill cam, 7 numbers
+    /// then the bodies as `others()` gives them (ourselves among them, the
+    /// killer not): eye x y z, yaw, pitch (radians), the killer's seat, how
+    /// far through the run-up (0..1). Empty otherwise. Made only of
+    /// snapshots we were already sent.
+    pub fn killcam(&self, now: f64) -> Vec<f32> {
+        let Some(k) = self.core.killcam(now) else {
+            return Vec::new();
+        };
+        let mut v = vec![k.eye.x, k.eye.y, k.eye.z, k.yaw, k.pitch, k.killer as f32, k.progress];
+        for d in &k.bodies {
+            push_drawn(&mut v, d);
         }
         v
     }
@@ -562,6 +563,25 @@ impl Client {
     pub fn close(&self) {
         self.transport.close();
     }
+}
+
+fn push_drawn(v: &mut Vec<f32>, d: &crate::core::Drawn) {
+    v.extend_from_slice(&[
+        d.slot as f32,
+        d.team as f32,
+        d.alive as u8 as f32,
+        d.crouched as u8 as f32,
+        d.grounded as u8 as f32,
+        d.reloading as u8 as f32,
+        d.pos.x,
+        d.pos.y,
+        d.pos.z,
+        d.yaw,
+        d.pitch,
+        d.arm as f32,
+        d.shield as f32 / 255.0,
+        (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt(),
+    ]);
 }
 
 /// The map's boxes, 6 numbers each (min x y z, max x y z): the one source

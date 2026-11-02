@@ -28,8 +28,12 @@ interface Shared {
   error: string;
   own: number[];
   others: number[];
+  killcams: number;
+  inKillcam: boolean;
 }
-const shared: Shared = { connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [] };
+const shared: Shared = {
+  connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [], killcams: 0, inKillcam: false,
+};
 (window as any).__oneshot = { state: () => shared };
 
 async function main() {
@@ -155,9 +159,20 @@ async function main() {
     // predicted body.
     const yaw = AUTOPLAY ? (f.yaw / 65536) * 2 * Math.PI : controls.yaw;
     const pitch = AUTOPLAY ? (f.pitch / 65536) * 2 * Math.PI : controls.pitch;
-    camera.position.set(px, py + eye, pz);
-    const cp = Math.cos(pitch);
-    camera.lookAt(px + cp * Math.cos(yaw), py + eye + Math.sin(pitch), pz + cp * Math.sin(yaw));
+    // Dead, and we saw who did it: the run-up to the kill from their eye,
+    // made of what we were sent (client-net's killcam).
+    const cam = alive ? null : client.killcam(now);
+    const killcam = cam !== null && cam.length >= 7;
+    if (killcam) {
+      const c = cam!;
+      camera.position.set(c[0], c[1], c[2]);
+      const kp = Math.cos(c[4]);
+      camera.lookAt(c[0] + kp * Math.cos(c[3]), c[1] + Math.sin(c[4]), c[2] + kp * Math.sin(c[3]));
+    } else {
+      camera.position.set(px, py + eye, pz);
+      const cp = Math.cos(pitch);
+      camera.lookAt(px + cp * Math.cos(yaw), py + eye + Math.sin(pitch), pz + cp * Math.sin(yaw));
+    }
     const zoom = (f.buttons & ZOOM) !== 0;
     const zoomed = zoom ? (arm === 4 ? 5 : 2) : 1;
     camera.fov = 78 / zoomed;
@@ -165,7 +180,9 @@ async function main() {
 
     const others = client.others(now);
     shared.others = Array.from(others);
-    players.update(others, dt);
+    players.update(killcam ? cam!.subarray(7) : others, dt);
+    shared.killcams += killcam && !shared.inKillcam ? 1 : 0;
+    shared.inKillcam = killcam;
     effects.projectiles(client.projectiles());
 
     const slot = client.slot;
@@ -220,6 +237,7 @@ async function main() {
       if (v === 1) center += ' · match verified ✓';
       if (v === 0) center += ' · verification FAILED';
     }
+    else if (!alive && killcam) center = `Killed by ${hud.name(cam![5])} · respawning in ${Math.ceil(respawn)}`;
     else if (!alive) center = `Respawning in ${Math.ceil(respawn)}`;
     const st = client.stats();
     shared.stats = Array.from(st);
@@ -232,7 +250,7 @@ async function main() {
         phase === 1 ? mmss(clock) : '',
         `K ${kills} · D ${deaths}`,
       ],
-      center, zoom: zoom && (arm === 4 || arm === 2 || arm === 3), reloading,
+      center, zoom: !killcam && zoom && (arm === 4 || arm === 2 || arm === 3), reloading, killcam,
       net: `snapshots ${st[0]}\nconfirmed ${st[1]}  corrected ${st[2]}\ndepth ${st[4]}  rate ${st[5].toFixed(2)}\ninterp ${st[6].toFixed(1)} ticks  dropped ${st[7]}`,
     });
 

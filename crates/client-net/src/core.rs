@@ -29,6 +29,10 @@ pub const INTERP_FRAMES: usize = 8;
 /// Input frames the clock aims to have waiting at the server at its low
 /// point between our datagrams: one spare, never none.
 pub const TARGET_DEPTH: f64 = 1.0;
+/// How much of the run-up to a death the kill cam shows, in ms.
+pub const KILLCAM_MS: u32 = 2500;
+/// Snapshots kept for it: the window and a little more.
+pub const KILLCAM_FRAMES: usize = (KILLCAM_MS as usize * TICK_HZ as usize / 1000) / SEND_EVERY as usize + 8;
 /// Ticks between snapshots (and between input datagrams).
 pub const SEND_EVERY: u32 = 2;
 /// Ticks owed past which the clock skips rather than makes them all.
@@ -57,6 +61,38 @@ struct Frame {
     tick: u32,
     n: u8,
     remotes: [Remote; MAX_REMOTES],
+}
+
+/// One snapshot as the kill cam keeps it: everyone this client was shown,
+/// and itself.
+#[derive(Clone, Copy)]
+struct CamFrame {
+    tick: u32,
+    n: u8,
+    remotes: [Remote; MAX_REMOTES],
+    me: Remote,
+}
+
+/// A death the kill cam can show: when, who, and when we heard.
+#[derive(Clone, Copy, Debug)]
+struct Death {
+    tick: u32,
+    killer: u8,
+    at_ms: f64,
+}
+
+/// The kill cam at one moment: the killer's eye and aim, and every body as
+/// it stood then, ourselves among them.
+#[derive(Clone, Debug)]
+pub struct KillCam {
+    pub killer: u8,
+    pub eye: V3,
+    /// Radians.
+    pub yaw: f32,
+    pub pitch: f32,
+    /// How far through the run-up, 0..1 (1: the kill, held).
+    pub progress: f32,
+    pub bodies: Vec<Drawn>,
 }
 
 /// A remote fighter as drawn this frame.
@@ -112,6 +148,12 @@ pub struct NetCore {
     jitter: f64,
     delay: f64,
     events: Vec<EventState>,
+    /// The last few seconds as this client was sent them, for the kill cam.
+    /// Nothing in it is more than the snapshots already said: fog shaped
+    /// it on the server.
+    cam: Vec<CamFrame>,
+    cam_at: usize,
+    death: Option<Death>,
     /// The welcome's commitment to the match's salt, and whether the salt
     /// revealed at the end matched it (None until then).
     pub salt_commit: [u8; 32],
@@ -154,6 +196,9 @@ impl NetCore {
             jitter: 0.0,
             delay: 4.0,
             events: Vec::new(),
+            cam: Vec::with_capacity(KILLCAM_FRAMES),
+            cam_at: 0,
+            death: None,
             salt_commit: [0; 32],
             verified: None,
         }
@@ -332,11 +377,33 @@ impl NetCore {
             self.frames.rotate_left(1);
             self.frames[INTERP_FRAMES - 1] = f;
         }
+        let cf = CamFrame {
+            tick: s.tick,
+            n: s.n_remote,
+            remotes: s.remotes,
+            me: as_remote(self.slot, &s.own),
+        };
+        if self.cam.len() < KILLCAM_FRAMES {
+            self.cam.push(cf);
+        } else {
+            self.cam[self.cam_at] = cf;
+            self.cam_at = (self.cam_at + 1) % KILLCAM_FRAMES;
+        }
         for e in s.events() {
             let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot;
             if !own_shot {
                 self.events.push(*e);
             }
+            if e.kind == sim::events::Kind::Kill as u8 && e.b == self.slot {
+                self.death = (e.a != self.slot).then_some(Death {
+                    tick: s.tick,
+                    killer: e.a,
+                    at_ms: now_ms,
+                });
+            }
+        }
+        if s.own.alive {
+            self.death = None;
         }
         self.latest = *s;
     }
@@ -471,6 +538,102 @@ impl NetCore {
             out.push(d);
         }
         out
+    }
+}
+
+impl NetCore {
+    /// The kill cam at `now_ms`, while we are dead and the killer was in
+    /// what we were sent: the run-up to the kill from the killer's eye, at
+    /// real speed from when we heard of it, then held on the kill. None if
+    /// we are alive, killed ourselves, or never saw who did it.
+    pub fn killcam(&self, now_ms: f64) -> Option<KillCam> {
+        let d = self.death?;
+        let n = self.cam.len();
+        let frames = (0..n).map(|k| &self.cam[(self.cam_at + k) % n]);
+        let from = d.tick.saturating_sub(sim::consts::ticks(KILLCAM_MS));
+        let has = |f: &CamFrame| f.remotes[..f.n as usize].iter().any(|r| r.slot == d.killer && r.alive);
+        let first = frames
+            .clone()
+            .find(|f| f.tick >= from && f.tick <= d.tick && has(f))?
+            .tick;
+        let last = frames.clone().rfind(|f| f.tick <= d.tick && has(f))?.tick;
+        let span = (d.tick - first).max(1) as f64;
+        let rt = (first as f64 + (now_ms - d.at_ms) / TICK_MS).min(d.tick as f64);
+        // The two kept frames around the playback tick.
+        let mut a: Option<&CamFrame> = None;
+        let mut b: Option<&CamFrame> = None;
+        for f in frames {
+            if (f.tick as f64) <= rt {
+                a = Some(f);
+            } else if b.is_none() {
+                b = Some(f);
+            }
+        }
+        let a = a?;
+        let u = b.map_or(0.0, |b| {
+            ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32
+        });
+        let mut bodies = Vec::new();
+        let all = |f: &CamFrame| {
+            let mut v: Vec<Remote> = f.remotes[..f.n as usize].to_vec();
+            v.push(f.me);
+            v
+        };
+        let (ra, rb) = (all(a), b.map(all).unwrap_or_default());
+        for x in &ra {
+            let mut d = drawn(x);
+            if let Some(y) = rb.iter().find(|y| y.slot == x.slot && y.alive == x.alive) {
+                d.pos = x.pos + (y.pos - x.pos) * u;
+                d.yaw = lerp_angle(d.yaw, yaw_rad(y.yaw), u);
+                d.pitch = d.pitch + (pitch_rad(y.pitch) - d.pitch) * u;
+            }
+            bodies.push(d);
+        }
+        // The killer as last seen at or before the playback tick: past its
+        // last sighting it stays where it was.
+        let k = match bodies.iter().find(|x| x.slot == d.killer && x.alive) {
+            Some(k) => *k,
+            None => {
+                let at = self
+                    .cam
+                    .iter()
+                    .filter(|f| f.tick <= last.min(rt as u32) && has(f))
+                    .max_by_key(|f| f.tick)?;
+                drawn(at.remotes[..at.n as usize].iter().find(|r| r.slot == d.killer)?)
+            }
+        };
+        bodies.retain(|x| x.slot != d.killer);
+        let eye_h = if k.crouched {
+            sim::consts::CROUCH_EYE
+        } else {
+            sim::consts::EYE
+        };
+        Some(KillCam {
+            killer: d.killer,
+            eye: k.pos + V3::new(0.0, eye_h, 0.0),
+            yaw: k.yaw,
+            pitch: k.pitch,
+            progress: ((rt - first as f64) / span).clamp(0.0, 1.0) as f32,
+            bodies,
+        })
+    }
+}
+
+/// A fighter as the kill cam draws it: the coarse fields any remote has.
+fn as_remote(slot: u8, f: &Fighter) -> Remote {
+    Remote {
+        slot,
+        team: f.team,
+        alive: f.alive,
+        crouched: f.body.crouched,
+        grounded: f.body.grounded,
+        reloading: f.reload > 0,
+        pos: f.body.pos,
+        vel: f.body.vel,
+        yaw: f.yaw,
+        pitch: f.pitch,
+        arm: f.gun().arm,
+        shield: (f.shield.max(0) as i64 * 255 / sim::consts::SHIELD_MAX as i64) as u8,
     }
 }
 

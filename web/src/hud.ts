@@ -27,6 +27,8 @@ const css = `
   white-space: pre; display: none; }
 #hud .dmg { position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; margin: -110px; opacity: 0;
   border-radius: 50%; border-top: 6px solid #f33c; }
+#hud.killcam { box-shadow: inset 0 0 0 4px #e8b93166; }
+#hud.killcam .bars, #hud.killcam .ammo { opacity: 0.25; }
 #hud .scope { position: absolute; inset: 0; display: none;
   background: radial-gradient(circle at center, transparent 0, transparent 34vh, #000 34.2vh); }
 `;
@@ -80,7 +82,7 @@ export class Hud {
 
   update(o: {
     shield: number; health: number; ammo: string; reserve: string; grenades: number; weapon: string; other: string;
-    score: string[]; center: string; net: string; zoom: boolean; reloading: number;
+    score: string[]; center: string; net: string; zoom: boolean; reloading: number; killcam?: boolean;
   }) {
     const now = performance.now();
     this.el.shield.style.width = `${Math.max(0, Math.min(100, o.shield))}%`;
@@ -96,6 +98,7 @@ export class Hud {
     this.el.net.style.display = this.netOn ? 'block' : 'none';
     this.el.net.textContent = o.net;
     this.el.scope.style.display = o.zoom ? 'block' : 'none';
-    this.el.reticle.style.display = o.zoom ? 'none' : 'block';
+    this.el.reticle.style.display = o.zoom || o.killcam ? 'none' : 'block';
+    this.root.classList.toggle('killcam', !!o.killcam);
   }
 }
