@@ -146,6 +146,18 @@ fn msgs() -> Vec<Msg> {
         Msg::Hello {
             proto: PROTO_VER,
             name: Name::new("player one"),
+            pass: Pass::NONE,
+            mode: MODE_CASUAL,
+        },
+        Msg::Hello {
+            proto: PROTO_VER,
+            name: Name::new("ranked"),
+            pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
+            mode: MODE_DUEL,
+        },
+        Msg::Queued {
+            mode: MODE_DOUBLES,
+            waiting_s: 42,
         },
         Msg::Welcome {
             slot: 1,
@@ -247,10 +259,12 @@ fn the_bytes_match_their_goldens() {
         let n = encode_msg(&m, &mut buf).unwrap();
         got.push(fnv(&buf[..n]));
     }
-    let want: [u64; 10] = [
+    let want: [u64; 12] = [
         0x21cd_ceaa_a773_0091,
         0x13de_bd0b_5d65_9ca7,
-        0x54ba_c3e7_3434_bb08,
+        0x5abb_9726_fdc1_09d3,
+        0xdd02_d3a6_2f01_9cc0,
+        0xc410_d8b8_5356_ae7a,
         0x9046_9a79_8597_d6fb,
         0x0835_ec07_b4ee_4fb0,
         0x5c12_e734_0afe_dd50,

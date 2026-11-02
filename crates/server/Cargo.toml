@@ -9,6 +9,10 @@ description = "The authoritative server: rooms behind WebTransport, and the page
 name = "oneshot-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "oneshot-replay"
+path = "src/bin/replay.rs"
+
 [dependencies]
 sim = { path = "../sim" }
 proto = { path = "../proto" }
@@ -18,7 +22,13 @@ room = { path = "../room" }
 wtransport = { git = "https://github.com/BiagioFesta/wtransport", rev = "a11e6a8e7ff33c6eef522d308007da55d1df9f81", features = ["dangerous-configuration", "self-signed", "quinn"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "net", "sync", "fs"] }
 getrandom = "0.3"
+ring = "0.17"
+base64 = "0.22"
+sha2 = "0.10"
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dev-dependencies]
 client-net = { path = "../client-net" }
+room = { path = "../room" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

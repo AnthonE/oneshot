@@ -42,3 +42,18 @@ ci/quick.sh sim proto room client-net server   # fmt, clippy, tests
 node ci/e2e.mjs                                # the page plays a bot in headless Chromium
 node ci/look.mjs                               # pictures of the models (traces/)
 ```
+
+## Milestone 4: ranked
+
+Sign in with Elo Pros, queue for Duel or Doubles, play; the result goes to
+the Elo Pros ladder signed with this server's key, and the replay to disk.
+
+```sh
+oneshot-server --domain play.example.com \
+  --elo-pubkey "$(curl -s https://elopros.com/api/account/pubkey | jq -r .pubkey)" \
+  --elo-key /etc/oneshot/server.pem --elo-key-id eu-1 --replays /var/lib/oneshot/replays
+cargo run -p server --release --bin oneshot-replay -- replays/os-*.osr   # re-run and check
+```
+
+The server's key is `openssl genpkey -algorithm ed25519 -out server.pem`; its
+public half goes in the game's `elo.json` `server_keys` on Elo Pros.

@@ -6,13 +6,18 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use proto::frame::LEN_PREFIX_BYTES;
-use proto::{datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, PROTO_VER};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use proto::{
+    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_DOUBLES, MODE_DUEL, PROTO_VER,
+};
 use tokio::sync::mpsc as tmpsc;
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
 use wtransport::{Endpoint, Identity, RecvStream, ServerConfig};
 
-use crate::{Config, Out, ToSim, OUT_QUEUE};
+use crate::{auth, queue, Config, Ctx, Out, ToSim, OUT_QUEUE};
 
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -43,10 +48,10 @@ pub async fn endpoint(cfg: &Config) -> Result<(Endpoint<Server>, [u8; 32]), Stri
     Ok((ep, hash))
 }
 
-pub async fn accept_loop(ep: Endpoint<Server>, to_sim: mpsc::Sender<ToSim>) {
+pub async fn accept_loop(ep: Endpoint<Server>, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
     loop {
         let incoming = ep.accept().await;
-        tokio::spawn(session(incoming, to_sim.clone()));
+        tokio::spawn(session(incoming, to_sim.clone(), ctx.clone()));
     }
 }
 
@@ -62,7 +67,15 @@ async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
-async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>) {
+async fn refuse(send: &mut wtransport::SendStream, reason: u8) {
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    if let Ok(n) = proto::frame_msg(&Msg::Refuse { reason }, &mut f) {
+        let _ = send.write_all(&f[..n]).await;
+        let _ = send.finish().await;
+    }
+}
+
+async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
     let opened = tokio::time::timeout(HANDSHAKE, async {
         let request = incoming.await.ok()?;
         let conn = request.accept().await.ok()?;
@@ -74,35 +87,70 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>) {
     let Ok(Some((conn, mut send, mut recv, hello))) = opened else {
         return;
     };
-    let Msg::Hello { proto, name } = hello else {
+    let Msg::Hello {
+        proto,
+        name,
+        pass,
+        mode,
+    } = hello
+    else {
         return;
     };
     if proto != PROTO_VER {
-        let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
-        if let Ok(n) = proto::frame_msg(
-            &Msg::Refuse {
-                reason: proto::REFUSE_VERSION,
-            },
-            &mut f,
-        ) {
-            let _ = send.write_all(&f[..n]).await;
-        }
-        return;
+        return refuse(&mut send, proto::REFUSE_VERSION).await;
     }
+    // Who: a pass from Elo Pros, or a guest.
+    let who = if pass.is_empty() {
+        None
+    } else {
+        let Some(key) = ctx.elo_pubkey else {
+            return refuse(&mut send, proto::REFUSE_PASS).await;
+        };
+        match auth::verify_pass(
+            pass.as_str(),
+            &key,
+            &ctx.slug,
+            &ctx.domains,
+            |n| ctx.nonces.take(n),
+            auth::now_unix(),
+        ) {
+            Ok(p) => Some(p),
+            Err(_) => return refuse(&mut send, proto::REFUSE_PASS).await,
+        }
+    };
 
+    let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, mut rx) = tmpsc::channel::<Out>(OUT_QUEUE);
-    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-    if to_sim
-        .send(ToSim::Join {
+    let join = match mode {
+        MODE_DUEL | MODE_DOUBLES => {
+            // Ranked is a wallet's: that is what a rating belongs to.
+            let Some(wallet) = who.and_then(|p| p.wallet) else {
+                return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
+            };
+            let ladder = if mode == MODE_DOUBLES { "doubles" } else { "duel" };
+            let rating = ctx.elo.rating(&wallet, ladder).await;
+            ToSim::Queue {
+                session: session_id,
+                entry: Box::new(queue::Entry {
+                    session: session_id,
+                    wallet,
+                    name,
+                    mode,
+                    rating,
+                    since: std::time::Instant::now(),
+                }),
+                tx,
+            }
+        }
+        _ => ToSim::Casual {
+            session: session_id,
             name,
             tx,
-            reply: reply_tx,
-        })
-        .is_err()
-    {
+        },
+    };
+    if to_sim.send(join).is_err() {
         return;
     }
-    let seat = reply_rx.await.ok().flatten();
 
     // The writer: stream messages in order, datagrams if they fit.
     let wconn = conn.clone();
@@ -125,11 +173,6 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>) {
         let _ = send.finish().await;
     });
 
-    let Some((slot, id)) = seat else {
-        let _ = writer.await;
-        return;
-    };
-
     // Inputs as datagrams; the stream only says goodbye.
     let dconn = conn.clone();
     let dsim = to_sim.clone();
@@ -140,20 +183,28 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>) {
             }
             if let Ok(m) = decode_input(&d) {
                 let _ = dsim.send(ToSim::Input {
-                    slot,
-                    id,
+                    session: session_id,
                     msg: Box::new(m),
                 });
             }
         }
     });
-    while let Some(f) = read_frame(&mut recv).await {
-        if matches!(decode_msg(&f), Ok(Msg::Bye) | Err(_)) {
-            break;
+    let reader = async {
+        while let Some(f) = read_frame(&mut recv).await {
+            if matches!(decode_msg(&f), Ok(Msg::Bye) | Err(_)) {
+                break;
+            }
         }
+    };
+    // Whichever ends first: the client says goodbye, or the server is done
+    // with it (the writer closed).
+    let mut writer = writer;
+    tokio::select! {
+        _ = reader => {}
+        _ = &mut writer => {}
     }
     datagrams.abort();
-    let _ = to_sim.send(ToSim::Leave { slot, id });
+    let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
     conn.close(0u32.into(), b"");
 }

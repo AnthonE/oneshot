@@ -71,27 +71,64 @@ async function main() {
   const menu = document.getElementById('menu')!;
   const status = document.getElementById('status')!;
   const nameInput = document.getElementById('name') as HTMLInputElement;
+  const el = (id: string) => document.getElementById(id) as HTMLButtonElement;
   nameInput.value = params.get('name') || localStorage.getItem('oneshot.name') || '';
 
-  async function join(): Promise<Client> {
+  const info = await (await fetch('server.json')).json();
+  const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, el('duel'), el('doubles'));
+
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2 };
+  let client: Client;
+  try {
+    const mode = AUTOPLAY
+      ? Number(params.get('mode') ?? 0)
+      : await new Promise<number>((go) => {
+          for (const id of Object.keys(MODES)) el(id).addEventListener('click', () => go(MODES[id]), { once: true });
+        });
     const name = nameInput.value.trim() || 'player';
     try { localStorage.setItem('oneshot.name', name); } catch { /* private window */ }
     status.textContent = 'connecting…';
-    const info = await (await fetch('server.json')).json();
-    return Client.connect(info.addr, info.hash, name);
-  }
-
-  let client: Client;
-  try {
-    if (!AUTOPLAY) {
-      await new Promise<void>((go) => document.getElementById('play')!.addEventListener('click', () => go(), { once: true }));
-    }
-    client = await join();
+    client = await Client.connect(info.addr, info.hash, name, mode ? signin.pass() : '', mode);
   } catch (e) {
     shared.error = String(e);
     status.textContent = String(e);
     return;
   }
+
+  // What the server says on the stream, before and during play.
+  const slotName = (n: { bot: boolean; name: string }) => (n.bot ? 'BOT' : n.name);
+  let ended = false;
+  const handle = (m: any) => {
+    if (m.type === 'seat') hud.names[m.slot] = slotName(m);
+    else if (m.type === 'queued') {
+      const t = m.waiting as number;
+      status.textContent = `Finding ${m.mode === 2 ? 'a 2v2' : 'an opponent'}… ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    } else if (m.type === 'refused') {
+      shared.error = m.why;
+      status.textContent = m.why;
+    } else if (m.type === 'bye') ended = true;
+    return m;
+  };
+
+  // Waiting for the welcome: at once against the bot, when the queue forms
+  // a match for ranked.
+  const cancel = el('cancel');
+  cancel.hidden = false;
+  cancel.onclick = () => {
+    client.close();
+    location.reload();
+  };
+  await new Promise<void>((ready) => {
+    const wait = () => {
+      client.update(performance.now(), 0, 0, 0, 0, 0);
+      for (const m of client.messages()) handle(m);
+      if (client.ready) return ready();
+      if (client.closed || shared.error) return;
+      requestAnimationFrame(wait);
+    };
+    wait();
+  });
+  cancel.hidden = true;
   menu.style.display = 'none';
   shared.connected = true;
   const controls = new Controls(canvas);
@@ -161,7 +198,7 @@ async function main() {
       }
     }
     for (const m of client.messages()) {
-      if (m.type === 'seat') hud.names[m.slot] = m.bot ? 'BOT' : m.name;
+      handle(m);
       if (m.type === 'kill') {
         hud.kill(m.killer === m.victim ? `${hud.name(m.killer)} died` : `${hud.name(m.killer)} ⟶ ${hud.name(m.victim)}`);
         if (m.killer === slot && m.victim !== slot) shared.kills++;
@@ -204,9 +241,14 @@ async function main() {
     renderer.render(scene, camera);
     art?.afterRender(renderer);
     shared.frames++;
-    if (client.closed) {
-      status.textContent = 'disconnected';
+    if (client.closed || ended) {
+      // The match is over (or the line dropped): back to the menu.
+      status.textContent = ended ? 'Match over' : 'Disconnected';
+      for (const id of ['play', 'duel', 'doubles']) el(id).hidden = true;
+      cancel.hidden = false;
+      cancel.textContent = 'Back to menu';
       menu.style.display = 'flex';
+      document.exitPointerLock();
       return;
     }
     requestAnimationFrame(loop);
@@ -285,3 +327,41 @@ function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
 }
 
 main();
+
+/** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup
+ * (https://elopros.com/sdk/elo-signin-1.js). The server hands out the
+ * nonce the pass must carry; we fetch one ahead so the popup opens on the
+ * click itself (a popup opened later is blocked). Ranked needs a wallet
+ * linked to the account: ratings are a wallet's. */
+async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElement,
+  duel: HTMLButtonElement, doubles: HTMLButtonElement) {
+  let pass = '';
+  let nonce = '';
+  const fresh = async () => {
+    try { nonce = (await (await fetch('nonce')).json()).nonce; } catch { nonce = ''; }
+  };
+  const sdk = () => (window as any).EloSignIn;
+  // The SDK script is async: give it a moment.
+  for (let i = 0; i < 20 && !sdk(); i++) await new Promise((r) => setTimeout(r, 100));
+  if (info.signin && sdk()) {
+    button.hidden = false;
+    await fresh();
+    button.onclick = async () => {
+      try {
+        const res = await sdk().popup({ game: info.game, nonce });
+        pass = res.pass;
+        const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
+        const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
+        who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
+        duel.disabled = doubles.disabled = !wallet;
+        button.hidden = true;
+      } catch (e: any) {
+        who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;
+      }
+      await fresh();
+    };
+  } else {
+    who.textContent = info.signin ? '' : 'Ranked is off on this server';
+  }
+  return { pass: () => pass };
+}

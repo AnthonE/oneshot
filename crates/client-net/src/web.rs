@@ -138,13 +138,27 @@ pub struct Client {
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
     dropped: u32,
+    /// The welcome has come: a room, a seat, a clock.
+    ready: bool,
+    /// Stream messages for the page, until `messages()` takes them.
+    out: Vec<Msg>,
 }
 
 #[wasm_bindgen]
 impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
-    /// SHA-256 is `hash` (hex), and joins as `name`.
-    pub async fn connect(addr: String, hash: String, name: String) -> Result<Client, JsValue> {
+    /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
+    /// a bot, 1 ranked Duel, 2 ranked Doubles) as `name`, signed in with an
+    /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
+    /// the welcome comes when a room is ready (at once for casual, when the
+    /// queue forms a match for ranked), and `ready` turns true. A refusal
+    /// comes through `messages()`.
+    pub async fn connect(addr: String, hash: String, name: String, pass: String, mode: u8) -> Result<Client, JsValue> {
+        let pass = if pass.is_empty() {
+            proto::Pass::NONE
+        } else {
+            proto::Pass::new(&pass).ok_or_else(|| JsValue::from_str("that pass is not one Elo Pros gives"))?
+        };
         let opts = web_sys::WebTransportOptions::new();
         opts.set_require_unreliable(true);
         if let Some(digest) = hex32(&hash) {
@@ -171,32 +185,12 @@ impl Client {
             &Msg::Hello {
                 proto: PROTO_VER,
                 name: Name::new(&name),
+                pass,
+                mode,
             },
         )
         .await?;
         let mut reader = FrameReader::new(&bidi.readable())?;
-        // The first message is the answer: a welcome or a refusal.
-        let f = reader
-            .next()
-            .await
-            .ok_or_else(|| JsValue::from_str("the server hung up"))?;
-        let (slot, team, tick, rules, commit) = match decode_msg(&f) {
-            Ok(Msg::Welcome {
-                slot,
-                team,
-                tick,
-                rules,
-                salt_commit,
-                ..
-            }) => (slot, team, tick, rules, salt_commit),
-            Ok(Msg::Refuse { reason }) => {
-                return Err(JsValue::from_str(match reason {
-                    proto::REFUSE_VERSION => "this page is out of date: reload",
-                    _ => "the room is full",
-                }))
-            }
-            _ => return Err(JsValue::from_str("a bad handshake")),
-        };
 
         let msgs: Queue<Msg> = Rc::default();
         let closed = Rc::new(RefCell::new(false));
@@ -248,10 +242,11 @@ impl Client {
             });
         }
         let writer = datagram_writer(&datagrams)?;
-        let mut core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
-        core.salt_commit = commit;
         Ok(Client {
-            core,
+            // A stand-in until the welcome names the seat.
+            core: NetCore::new(0, 0, 0, sim::world::Rules::duel(), Map::proving_grounds()),
+            ready: false,
+            out: Vec::new(),
             transport,
             datagrams,
             writer,
@@ -277,9 +272,47 @@ impl Client {
         *self.closed.borrow()
     }
 
+    /// Whether the welcome has come and play has begun.
+    #[wasm_bindgen(getter)]
+    pub fn ready(&self) -> bool {
+        self.ready
+    }
+
+    /// Takes in stream messages: a welcome starts the netcode; a reveal is
+    /// checked against the welcome's commitment; the rest wait for the page.
+    fn absorb(&mut self) {
+        let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
+        for m in msgs {
+            match m {
+                Msg::Welcome {
+                    slot,
+                    team,
+                    tick,
+                    rules,
+                    salt_commit,
+                    ..
+                } => {
+                    self.core = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+                    self.core.salt_commit = salt_commit;
+                    self.ready = true;
+                }
+                Msg::Reveal { salt } => {
+                    self.core.on_reveal(salt);
+                    self.out.push(m);
+                }
+                m => self.out.push(m),
+            }
+        }
+    }
+
     /// Once a frame: takes in what arrived, advances the clock with the
     /// controls as they are, sends what is due.
     pub fn update(&mut self, now: f64, buttons: u16, yaw: u16, pitch: i16, mx: i8, mz: i8) {
+        self.absorb();
+        if !self.ready {
+            self.inbox.borrow_mut().clear();
+            return;
+        }
         let arrived: Vec<(f64, Vec<u8>)> = self.inbox.borrow_mut().drain(..).collect();
         for (at, d) in arrived {
             if proto::datagram_kind(&d) == Some(proto::DG_SNAPSHOT) {
@@ -449,7 +482,8 @@ impl Client {
     /// Stream messages since the last call, as JS objects.
     pub fn messages(&mut self) -> js_sys::Array {
         let out = js_sys::Array::new();
-        let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
+        self.absorb();
+        let msgs: Vec<Msg> = core::mem::take(&mut self.out);
         for m in msgs {
             let o = js_sys::Object::new();
             let set = |k: &str, v: JsValue| {
@@ -474,11 +508,30 @@ impl Client {
                     set("phase", phase.into());
                     set("winner", winner.into());
                 }
-                Msg::Reveal { salt } => {
-                    let ok = self.core.on_reveal(salt);
+                Msg::Reveal { .. } => {
                     set("type", "reveal".into());
-                    set("verified", ok.into());
+                    set("verified", (self.core.verified == Some(true)).into());
                 }
+                Msg::Queued { mode, waiting_s } => {
+                    set("type", "queued".into());
+                    set("mode", mode.into());
+                    set("waiting", waiting_s.into());
+                }
+                Msg::Refuse { reason } => {
+                    set("type", "refused".into());
+                    set(
+                        "why",
+                        match reason {
+                            proto::REFUSE_VERSION => "this page is out of date: reload it",
+                            proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
+                            proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
+                            proto::REFUSE_BUSY => "that wallet is already queued or playing",
+                            _ => "the server is full",
+                        }
+                        .into(),
+                    );
+                }
+                Msg::Bye => set("type", "bye".into()),
                 _ => continue,
             }
             out.push(&o);

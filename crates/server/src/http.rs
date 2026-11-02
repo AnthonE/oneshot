@@ -9,14 +9,21 @@ use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-pub async fn serve(at: SocketAddr, dir: PathBuf, game: SocketAddr, hash: [u8; 32]) -> Result<SocketAddr, String> {
+pub async fn serve(
+    at: SocketAddr,
+    dir: PathBuf,
+    game: SocketAddr,
+    hash: [u8; 32],
+    ctx: std::sync::Arc<crate::Ctx>,
+) -> Result<SocketAddr, String> {
     let listener = TcpListener::bind(at).await.map_err(|e| format!("http {at}: {e}"))?;
     let local = listener.local_addr().map_err(|e| e.to_string())?;
     tokio::spawn(async move {
         while let Ok((sock, _)) = listener.accept().await {
             let dir = dir.clone();
+            let ctx = ctx.clone();
             tokio::spawn(async move {
-                let _ = handle(sock, &dir, game, hash).await;
+                let _ = handle(sock, &dir, game, hash, &ctx).await;
             });
         }
     });
@@ -40,7 +47,13 @@ fn mime(path: &Path) -> &'static str {
     }
 }
 
-async fn handle(mut sock: TcpStream, dir: &Path, game: SocketAddr, hash: [u8; 32]) -> std::io::Result<()> {
+async fn handle(
+    mut sock: TcpStream,
+    dir: &Path,
+    game: SocketAddr,
+    hash: [u8; 32],
+    ctx: &crate::Ctx,
+) -> std::io::Result<()> {
     let mut req = vec![0u8; 8192];
     let n = sock.read(&mut req).await?;
     let text = String::from_utf8_lossy(&req[..n]);
@@ -59,11 +72,18 @@ async fn handle(mut sock: TcpStream, dir: &Path, game: SocketAddr, hash: [u8; 32
     if path == "/server.json" {
         // The game is on the same host the page came from.
         let body = format!(
-            "{{\"addr\":\"{}:{}\",\"hash\":\"{}\"}}",
+            "{{\"addr\":\"{}:{}\",\"hash\":\"{}\",\"game\":\"{}\",\"signin\":{}}}",
             host,
             game.port(),
-            crate::hex(&hash)
+            crate::hex(&hash),
+            ctx.slug,
+            ctx.elo_pubkey.is_some()
         );
+        return reply(&mut sock, 200, "application/json", body.as_bytes()).await;
+    }
+    if path == "/nonce" {
+        // For a pass: the page asks Elo Pros to sign this, once.
+        let body = format!("{{\"nonce\":\"{}\",\"game\":\"{}\"}}", ctx.nonces.issue(), ctx.slug);
         return reply(&mut sock, 200, "application/json", body.as_bytes()).await;
     }
     let rel = path.trim_start_matches('/');

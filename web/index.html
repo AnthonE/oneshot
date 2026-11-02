@@ -16,6 +16,10 @@
       #menu input, #menu button { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
         background: #0008; color: inherit; }
       #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
+      #menu button:disabled { opacity: 0.35; cursor: default; }
+      #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
+      #menu .row { display: flex; gap: 10px; }
+      #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
       #status { min-height: 1.2em; opacity: 0.8; }
       .keys { font-size: 13px; opacity: 0.6; text-align: center; line-height: 1.6; }
     </style>
@@ -24,13 +28,23 @@
     <canvas id="game"></canvas>
     <div id="menu">
       <h1>ONESHOT</h1>
-      <p>1v1 Slayer · first to 15</p>
+      <p>Halo-style 1v1 and 2v2 · ranked on Elo Pros</p>
       <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
+      <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
+      <div id="who"></div>
       <button id="play">Play the bot</button>
+      <div class="row">
+        <button id="duel" disabled>Ranked Duel</button>
+        <button id="doubles" disabled>Ranked Doubles</button>
+      </div>
       <div id="status"></div>
+      <button id="cancel" class="quiet" hidden>Cancel</button>
       <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom<br />
         R reload · 1/2 or wheel swap · Q melee · G frag · E pick up · N net graph</div>
     </div>
+    <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
+         doesn't load, sign-in is hidden and the bot is still there. -->
+    <script async src="https://elopros.com/sdk/elo-signin-1.js"></script>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

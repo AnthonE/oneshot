@@ -26,14 +26,12 @@ async fn a_native_client_plays_the_bot() {
     let h = server::run(server::Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         http: None,
-        web_dir: "web/dist".into(),
-        cert: None,
         rules: Rules {
             score_limit: 1000,
             time_limit_ms: 0,
             ..Rules::duel()
         },
-        passive_bots: false,
+        ..server::Config::default()
     })
     .await
     .unwrap();
@@ -53,6 +51,8 @@ async fn a_native_client_plays_the_bot() {
         &Msg::Hello {
             proto: PROTO_VER,
             name: Name::new("native"),
+            pass: proto::Pass::NONE,
+            mode: proto::MODE_CASUAL,
         },
         &mut f,
     )

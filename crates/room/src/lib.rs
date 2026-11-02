@@ -5,6 +5,7 @@
 //! WebTransport; the netcode tests drive it directly.
 
 pub mod fog;
+pub mod replay;
 
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use proto::{MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
@@ -213,13 +214,35 @@ pub struct Room {
     /// start and the salt itself at the end (docs/DESIGN.md §9).
     salt: (u64, u64),
     fogs: [fog::Fog; MAX_FIGHTERS],
+    /// Every call that moves the world, for the replay.
+    rec: replay::Recorder,
+    /// A ranked room: people only, no bots, nobody joins after the start.
+    pub ranked: bool,
 }
 
 impl Room {
     /// A room with bots in every seat until people come.
     pub fn new(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
+        let mut r = Room::empty(map, rules, seed, salt);
+        for s in 0..r.size {
+            r.seat_bot(s);
+        }
+        r
+    }
+
+    /// A ranked room: its seats are filled with [`Room::seat_person`], and
+    /// one whose person leaves stays empty (its fighter stands still).
+    pub fn ranked(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
+        Room {
+            ranked: true,
+            ..Room::empty(map, rules, seed, salt)
+        }
+    }
+
+    fn empty(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
         let size = if rules.teams { 4 } else { 2 };
-        let mut r = Room {
+        Room {
+            rec: replay::Recorder::new(seed, salt, &rules, 0),
             world: World::new(map, rules, seed, salt),
             seats: core::array::from_fn(|_| Seat::Empty),
             size,
@@ -228,11 +251,23 @@ impl Room {
             phase: Phase::Countdown,
             salt,
             fogs: Default::default(),
-        };
-        for s in 0..size {
-            r.seat_bot(s);
+            ranked: false,
         }
-        r
+    }
+
+    /// The replay so far (the whole match once it is over).
+    pub fn replay(&self) -> Vec<u8> {
+        self.rec.finish(&self.world)
+    }
+
+    /// The commitment to this match's salt.
+    pub fn salt_commit(&self) -> [u8; 32] {
+        proto::salt_commit([self.salt.0, self.salt.1])
+    }
+
+    fn world_seat(&mut self, s: usize, team: u8) {
+        self.rec.seat(s, team);
+        self.world.seat(s, team);
     }
 
     fn team_of(&self, s: usize) -> u8 {
@@ -242,17 +277,25 @@ impl Room {
     fn seat_bot(&mut self, s: usize) {
         self.seats[s] = Seat::Bot(Bot::new(self.seed, s, 0.5));
         let t = self.team_of(s);
-        self.world.seat(s, t);
+        self.world_seat(s, t);
     }
 
     /// A person takes the first seat a bot holds. Returns the seat and the
     /// stream messages: a welcome for them, the seats for everyone.
     pub fn join(&mut self, name: Name) -> Option<(u8, Outbox)> {
+        if self.ranked {
+            return None;
+        }
         let s = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Bot(_) | Seat::Empty))?;
+        Some((s as u8, self.seat_person(s, name)))
+    }
+
+    /// A person in seat `s`: the welcome for them, the seats for everyone.
+    pub fn seat_person(&mut self, s: usize, name: Name) -> Outbox {
         self.seats[s] = Seat::Person(Box::default(), name);
         self.fogs[s] = fog::Fog::default();
         let team = self.team_of(s);
-        self.world.seat(s, team);
+        self.world_seat(s, team);
         let mut out: Outbox = vec![(
             Some(s as u8),
             Msg::Welcome {
@@ -262,19 +305,24 @@ impl Room {
                 tick_hz: TICK_HZ as u16,
                 map: 0,
                 rules: self.world.rules,
-                salt_commit: proto::salt_commit([self.salt.0, self.salt.1]),
+                salt_commit: self.salt_commit(),
             },
         )];
         for q in 0..self.size {
             out.push((Some(s as u8), self.seat_msg(q)));
         }
         out.push((None, self.seat_msg(s)));
-        Some((s as u8, out))
+        out
     }
 
-    /// A person left: a bot takes the seat.
+    /// A person left: a bot takes the seat, or in a ranked room nobody does
+    /// and the fighter stands where it was.
     pub fn leave(&mut self, s: u8) -> Outbox {
-        self.seat_bot(s as usize);
+        if self.ranked {
+            self.seats[s as usize] = Seat::Empty;
+        } else {
+            self.seat_bot(s as usize);
+        }
         vec![(None, self.seat_msg(s as usize))]
     }
 
@@ -332,6 +380,7 @@ impl Room {
                 Seat::Empty => {}
             }
         }
+        self.rec.step(&inputs, &rewind);
         self.world.step(&inputs, &rewind);
 
         let mut out: Outbox = Vec::new();

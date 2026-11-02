@@ -19,7 +19,7 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 2;
+pub const PROTO_VER: u16 = 3;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -28,8 +28,11 @@ pub const MAX_REMOTES: usize = MAX_FIGHTERS;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 8;
-/// A stream message's ceiling.
-pub const MAX_STREAM_MSG: usize = 128;
+/// A stream message's ceiling: a hello with an Elo Pros pass is the
+/// largest.
+pub const MAX_STREAM_MSG: usize = 1024;
+/// An Elo Pros pass's ceiling (Gates' `PASS_MAX` is 600).
+pub const MAX_PASS: usize = 640;
 pub const MAX_NAME: usize = 16;
 
 const KIND_INPUT: u32 = 0;
@@ -546,12 +549,63 @@ impl Name {
     }
 }
 
+/// An Elo Pros pass as the client was handed it: `b64url(text).b64url(sig)`,
+/// printable ASCII. Empty for a guest. Opaque here; the server checks it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pass {
+    pub len: u16,
+    pub bytes: [u8; MAX_PASS],
+}
+
+impl Pass {
+    pub const NONE: Pass = Pass {
+        len: 0,
+        bytes: [0; MAX_PASS],
+    };
+
+    /// None if it is too long or not printable ASCII.
+    pub fn new(s: &str) -> Option<Pass> {
+        let b = s.trim().as_bytes();
+        if b.len() > MAX_PASS || !b.iter().all(|c| (0x21..0x7f).contains(c)) {
+            return None;
+        }
+        let mut p = Pass::NONE;
+        p.bytes[..b.len()].copy_from_slice(b);
+        p.len = b.len() as u16;
+        Some(p)
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+/// What a client asks to play (`Msg::Hello::mode`).
+pub const MODE_CASUAL: u8 = 0;
+pub const MODE_DUEL: u8 = 1;
+pub const MODE_DOUBLES: u8 = 2;
+
+// The hello carries a pass (640 bytes) and so sizes every message; stream
+// messages are a handful a second, so `Copy` is worth more than the bytes.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Msg {
-    /// Client → server, first.
+    /// Client → server, first: who (a pass from Elo Pros, or none for a
+    /// guest) and what to play.
     Hello {
         proto: u16,
         name: Name,
+        pass: Pass,
+        mode: u8,
+    },
+    /// Server → client: in the ranked queue, `waiting_s` so far.
+    Queued {
+        mode: u8,
+        waiting_s: u16,
     },
     /// Server → client: you are in.
     Welcome {
@@ -604,6 +658,12 @@ pub fn salt_commit(salt: [u64; 2]) -> [u8; 32] {
 
 pub const REFUSE_VERSION: u8 = 1;
 pub const REFUSE_FULL: u8 = 2;
+/// The pass didn't check out (signature, game, host, nonce or time).
+pub const REFUSE_PASS: u8 = 3;
+/// Ranked needs a pass with a wallet: ratings are a wallet's.
+pub const REFUSE_NEEDS_WALLET: u8 = 4;
+/// This wallet is already queued or playing.
+pub const REFUSE_BUSY: u8 = 5;
 
 fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
@@ -635,10 +695,25 @@ fn r_name(r: &mut BitReader) -> R<Name> {
 pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
     let mut w = BitWriter::new(out);
     match m {
-        Msg::Hello { proto, name } => {
+        Msg::Hello {
+            proto,
+            name,
+            pass,
+            mode,
+        } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
             w_name(&mut w, name)?;
+            w.write(pass.len as u32, 10)?;
+            for &b in &pass.bytes[..pass.len as usize] {
+                w.write(b as u32, 7)?;
+            }
+            w.write(*mode as u32, 2)?;
+        }
+        Msg::Queued { mode, waiting_s } => {
+            w.write(9, 8)?;
+            w.write(*mode as u32, 2)?;
+            w.write(*waiting_s as u32, 16)?;
         }
         Msg::Welcome {
             slot,
@@ -704,6 +779,26 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
         1 => Msg::Hello {
             proto: r.read(16)? as u16,
             name: r_name(&mut r)?,
+            pass: {
+                let len = r.read(10)? as usize;
+                if len > MAX_PASS {
+                    return Err(WireError::Cap);
+                }
+                let mut p = Pass::NONE;
+                for b in p.bytes[..len].iter_mut() {
+                    *b = r.read(7)? as u8;
+                    if !(0x21..0x7f).contains(b) {
+                        return Err(WireError::Malformed);
+                    }
+                }
+                p.len = len as u16;
+                p
+            },
+            mode: r.read(2)? as u8,
+        },
+        9 => Msg::Queued {
+            mode: r.read(2)? as u8,
+            waiting_s: r.read(16)? as u16,
         },
         2 => Msg::Welcome {
             slot: r.read(3)? as u8,

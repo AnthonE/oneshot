@@ -11,8 +11,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 | `crates/sim` | the rules: movement, guns, shields, pads, Slayer, rewind. Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
-| `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, snapshots |
-| `crates/server` | wtransport sessions, the sim thread, the page server (`oneshot-server`) |
+| `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays |
+| `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay` |
 | `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
 | `web/` | three.js page: draws, never decides |
 
@@ -37,6 +37,11 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
   fighter's shot only as a rounded sound, never an unseen spawn. The leak
   gate (`room/tests/leaks.rs`) plays a whole match and fails on any leak;
   a new field on the wire needs a line there.
+- **Every call that moves a world goes through `Room`** (`world_seat`,
+  `step`), so the replay records it. A replay that doesn't re-run to the
+  server's hash is a bug in the sim or the room, never in the replay.
+- **Ranked is a wallet's.** A pass without a wallet plays casual only; a
+  rating is reported only for wallets.
 - **The seed is not the salt.** What clients watch (spawns, bots) comes from
   the seed; the salt keys spread and is revealed only at `Phase::Over`.
 
