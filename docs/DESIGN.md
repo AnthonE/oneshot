@@ -286,9 +286,9 @@ input log. The server writes that for every match. It gives us:
 - kill cams and spectating from the same data;
 - review of any match with fog off (§13);
 - **evidence on the rating:** the report carries
-  `evidence: {replay_sha256, salt_commit}`, which needs one new key in
-  `ratings.py` `MATCH_KEYS` on the Elo Pros side. That's the store's `replay`
-  tier.
+  `evidence: {replay_sha256, salt_commit}`, which Elo Pros keeps in its
+  hash-chained match log (`ratings.py`). That's the store's `replay` tier.
+  An Elo Pros that refuses the key gets the result without it.
 
 CI checks the same input log hashes equal native and wasm (§17).
 
@@ -298,21 +298,28 @@ Authority (§4), fog (§8) and the salt (§9) remove speedhacks, teleports,
 rapid fire, wallhacks, ESP and no-spread. What remains is aim: an aimbot
 or triggerbot in the browser. That's caught by evidence, not prevented.
 
-**Server telemetry** per shot and per engagement, written beside the replay:
-- snap-hits: more than 30° of turn in 100 ms ending in a hit;
-- head-shot rate: 60% or more over at least 20 hits;
-- **reaction time from the tick the target became visible to that client**,
-  which only a fog-of-war server knows exactly;
-- pre-aim: the crosshair tracking an enemy the client was never sent;
-- flick-to-hit ratio, time-on-target before firing, aim smoothness.
+**Server telemetry** (`room/src/watch.rs`), every tick, written beside the
+replay as `<id>.watch.json`. A match is flagged when any line is crossed:
+- head-shot rate: 60% or more over at least 20 hitscan hits, shields or not;
+- snap-hits: a sighting's first hit after more than 30° of turn in 100 ms,
+  on half or more of the sightings (at least 5);
+- **reaction time from the tick the target came into plain sight**, which
+  only a fog-of-war server knows exactly: a median under 150 ms over at
+  least 5 sightings;
+- pre-aim: over 3 s aimed within 2° of an enemy that fog sent early but that
+  has been out of plain sight for 250 ms, which is a wallhack using what fog
+  lets through.
 
-These are Gates' `server/src/cheat.rs` checks plus the fog-native ones.
+`room/tests/watch.rs` holds the lines to a scripted aimbot (all four
+crossed) and the bots (none).
 
 **What happens:**
-- Nothing automatic. Flags go into an evidence log per match and a review
-  queue.
-- A per-wallet ban list on Elo Pros (new: `meter/bans.py`), read at sign-in.
-  A ban is the game's call, made on a reviewed replay.
+- Nothing automatic. A flagged match is copied to `<replays>/review/`;
+  `oneshot-review list | show | done` works through it.
+- A per-wallet ban list on Elo Pros (`meter/gamebans.py`), written by
+  `oneshot-review ban | lift` signed with the server key, read at ranked
+  sign-in (cached a minute; a list that can't be read refuses nobody).
+  A ban is the game's call, made on a reviewed replay. Casual stays open.
 - **Prizes need a record.** Cup prize eligibility needs a history (for example
   50 or more ranked matches in good standing) and the top N's replays reviewed
   with fog off before anything is paid. Wallets are free, so a ban alone

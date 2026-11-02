@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "oneshot-replay"
 path = "src/bin/replay.rs"
 
+[[bin]]
+name = "oneshot-review"
+path = "src/bin/review.rs"
+
 [dependencies]
 sim = { path = "../sim" }
 proto = { path = "../proto" }

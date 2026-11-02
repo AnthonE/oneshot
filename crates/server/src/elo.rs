@@ -6,8 +6,13 @@
 //! the method, the path without `/api`, `<slug>/<key id>`, unix seconds, a
 //! nonce and the body's SHA-256 in hex, one a line; the signature in the
 //! `X-Elo-Signature` header, standard base64.
+//!
+//! Bans are the game's own list on Elo Pros (`meter/gamebans.py`): written
+//! with the same signature by `oneshot-review`, read by anyone.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use ring::signature::Ed25519KeyPair;
@@ -94,26 +99,47 @@ pub struct Report {
     pub id: String,
     pub ladder: String,
     pub sides: Vec<(Vec<String>, u32)>,
-    /// What the replay hashes to and the salt's commitment: kept beside the
-    /// report until Elo Pros' ratings take an `evidence` key.
+    /// What the replay hashes to and the salt's commitment, sent as the
+    /// match's `evidence`, kept in Elo Pros' hash-chained match log.
     pub replay_sha256: String,
     pub salt_commit: String,
 }
 
-pub fn report_body(r: &Report) -> String {
+pub fn report_body(r: &Report, evidence: bool) -> String {
     let teams: Vec<serde_json::Value> = r
         .sides
         .iter()
         .map(|(players, place)| serde_json::json!({"players": players, "place": place}))
         .collect();
-    serde_json::json!({"matches": [{"id": r.id, "ladder": r.ladder, "teams": teams}]}).to_string()
+    let mut m = serde_json::json!({"id": r.id, "ladder": r.ladder, "teams": teams});
+    if evidence {
+        m["evidence"] = serde_json::json!({"replay_sha256": r.replay_sha256, "salt_commit": r.salt_commit});
+    }
+    serde_json::json!({ "matches": [m] }).to_string()
 }
+
+/// A ban or a lift, as `POST /api/bans/<slug>` takes it.
+pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>) -> String {
+    let mut b = serde_json::json!({
+        "wallet": wallet,
+        "status": if banned { "banned" } else { "lifted" },
+        "reason": reason,
+    });
+    if let Some(m) = match_id {
+        b["match"] = m.into();
+    }
+    b.to_string()
+}
+
+/// How long a ban answer is kept before it is asked again.
+pub const BAN_CACHE: Duration = Duration::from_secs(60);
 
 pub struct Elo {
     pub origin: String,
     pub slug: String,
     pub key: Option<ServerKey>,
     http: reqwest::Client,
+    bans: Mutex<HashMap<String, (Instant, bool)>>,
 }
 
 impl Elo {
@@ -126,6 +152,70 @@ impl Elo {
                 .timeout(Duration::from_secs(10))
                 .build()
                 .unwrap_or_default(),
+            bans: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Whether the game has banned `wallet`: None if Elo Pros couldn't be
+    /// asked, which never refuses anyone. Answers are kept [`BAN_CACHE`].
+    pub async fn banned(&self, wallet: &str) -> Option<bool> {
+        let key = wallet.to_ascii_lowercase();
+        if let Ok(m) = self.bans.lock() {
+            if let Some(&(at, b)) = m.get(&key) {
+                if at.elapsed() < BAN_CACHE {
+                    return Some(b);
+                }
+            }
+        }
+        let url = format!("{}/api/bans/{}/of/{}", self.origin, self.slug, wallet);
+        let got = async {
+            let res = self.http.get(&url).send().await.ok()?;
+            if !res.status().is_success() {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+            v["banned"].as_bool()
+        }
+        .await?;
+        if let Ok(mut m) = self.bans.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
+            }
+            m.insert(key, (Instant::now(), got));
+        }
+        Some(got)
+    }
+
+    /// Bans or lifts a wallet on the game's list. A person's call, made on a
+    /// reviewed replay (`oneshot-review`).
+    pub async fn ban(
+        &self,
+        wallet: &str,
+        banned: bool,
+        reason: &str,
+        match_id: Option<&str>,
+    ) -> Result<String, String> {
+        let key = self.key.as_ref().ok_or("no server key: a ban is signed with it")?;
+        let body = ban_body(wallet, banned, reason, match_id);
+        let path = format!("/bans/{}", self.slug);
+        let mut req = self
+            .http
+            .post(format!("{}/api{}", self.origin, path))
+            .header("Content-Type", "application/json")
+            .body(body.clone());
+        for (k, v) in key.headers("POST", &path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
+            req = req.header(k, v);
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("Elo Pros couldn't be reached: {e}"))?;
+        let code = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if code.is_success() {
+            Ok(text)
+        } else {
+            Err(format!("{code}: {text}"))
         }
     }
 
@@ -144,7 +234,8 @@ impl Elo {
     /// Posts a result, retrying what may be passing (5xx, 429).
     pub async fn report(&self, r: &Report) -> Result<(), String> {
         let key = self.key.as_ref().ok_or("no server key: nothing is reported")?;
-        let body = report_body(r);
+        let mut evidence = true;
+        let mut body = report_body(r, evidence);
         let path = format!("/ratings/{}/report", self.slug);
         let mut wait = Duration::from_secs(1);
         for _ in 0..5 {
@@ -161,7 +252,15 @@ impl Elo {
                 Ok(res) if res.status().is_server_error() || res.status().as_u16() == 429 => {}
                 Ok(res) => {
                     let code = res.status();
-                    return Err(format!("{code}: {}", res.text().await.unwrap_or_default()));
+                    let text = res.text().await.unwrap_or_default();
+                    // An Elo Pros from before ratings took `evidence`: the
+                    // result still counts, so send it without.
+                    if code.as_u16() == 422 && evidence && text.contains("evidence") {
+                        evidence = false;
+                        body = report_body(r, evidence);
+                        continue;
+                    }
+                    return Err(format!("{code}: {text}"));
                 }
                 Err(_) => {}
             }

@@ -509,14 +509,13 @@ impl World {
             let soak = pts.min(v.shield);
             v.shield -= soak;
             v.health -= pts - soak;
-            if pts > soak {
-                if head {
-                    2
-                } else {
-                    1
-                }
-            } else {
-                0
+            match (head, pts > soak) {
+                (true, true) => 2,
+                (false, true) => 1,
+                // A head hit the shields took whole: told apart from a body
+                // hit for the server's aim review (room/src/watch.rs).
+                (true, false) => 3,
+                (false, false) => 0,
             }
         };
         let dead = v.health <= 0;

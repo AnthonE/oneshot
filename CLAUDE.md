@@ -11,8 +11,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 | `crates/sim` | the rules: movement, guns, shields, pads, Slayer, rewind. Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
-| `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays |
-| `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay` |
+| `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
+| `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
 | `web/` | three.js page: draws, never decides |
 

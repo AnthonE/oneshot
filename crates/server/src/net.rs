@@ -127,6 +127,11 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
             let Some(wallet) = who.and_then(|p| p.wallet) else {
                 return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
             };
+            // A ban is a person's call on a reviewed replay; a list that
+            // can't be read never refuses.
+            if ctx.elo.banned(&wallet).await == Some(true) {
+                return refuse(&mut send, proto::REFUSE_BANNED).await;
+            }
             let ladder = if mode == MODE_DOUBLES { "doubles" } else { "duel" };
             let rating = ctx.elo.rating(&wallet, ladder).await;
             ToSim::Queue {

@@ -526,6 +526,7 @@ impl Client {
                             proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
                             proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
                             proto::REFUSE_BUSY => "that wallet is already queued or playing",
+                            proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
                             _ => "the server is full",
                         }
                         .into(),

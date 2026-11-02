@@ -11,7 +11,8 @@ pub enum Kind {
     None,
     /// A round left `a`'s gun `c` (an arm id): from `pos` to `end`.
     Shot,
-    /// `a` hurt `b` for `c` points; `part` 0 shields, 1 health, 2 head.
+    /// `a` hurt `b` for `c` points; `part` 0 shields, 1 health, 2 head (to
+    /// health), 3 head (the shields took it all).
     Hit,
     /// `a` killed `b` with `c` (an arm id or a [`Cause`] past them).
     Kill,
