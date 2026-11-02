@@ -67,7 +67,11 @@ pub enum ToSim {
 /// What the sim thread hands off: slow work, off the tick.
 pub enum Job {
     Report(elo::Report),
-    Replay { path: PathBuf, bytes: Vec<u8> },
+    /// A file to write: a replay, its watch, a review.
+    Write {
+        path: PathBuf,
+        bytes: Vec<u8>,
+    },
 }
 
 /// Room for this many messages to one session before snapshots drop.
@@ -201,12 +205,12 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
 async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
     while let Some(j) = rx.recv().await {
         match j {
-            Job::Replay { path, bytes } => {
+            Job::Write { path, bytes } => {
                 if let Some(dir) = path.parent() {
                     let _ = tokio::fs::create_dir_all(dir).await;
                 }
                 if let Err(e) = tokio::fs::write(&path, bytes).await {
-                    eprintln!("oneshot: replay {}: {e}", path.display());
+                    eprintln!("oneshot: {}: {e}", path.display());
                 }
             }
             Job::Report(r) => {
@@ -473,15 +477,29 @@ impl Sim {
         }
     }
 
-    /// A match ended: its replay to disk, and a ranked one's result to Elo
+    /// A match ended: its replay and its aim review's numbers to disk (and
+    /// to `review/` if they cross a line), and a ranked one's result to Elo
     /// Pros.
     fn finish(&self, r: &Live) {
         let bytes = r.room.replay();
         let sha = elo::sha256_hex(&bytes);
+        let salt_commit = hex(&r.room.salt_commit());
         if let Some(dir) = &self.cfg.replays {
-            let _ = self.jobs.send(Job::Replay {
+            let _ = self.jobs.send(Job::Write {
                 path: dir.join(format!("{}.osr", r.id)),
                 bytes,
+            });
+            let (doc, flagged) = watch_doc(r, &sha, &salt_commit);
+            let text = serde_json::to_vec_pretty(&doc).unwrap_or_default();
+            if flagged {
+                let _ = self.jobs.send(Job::Write {
+                    path: dir.join("review").join(format!("{}.json", r.id)),
+                    bytes: text.clone(),
+                });
+            }
+            let _ = self.jobs.send(Job::Write {
+                path: dir.join(format!("{}.watch.json", r.id)),
+                bytes: text,
             });
         }
         if !r.room.ranked {
@@ -517,9 +535,50 @@ impl Sim {
             ladder: if r.mode == MODE_DOUBLES { "doubles" } else { "duel" }.into(),
             sides: placed,
             replay_sha256: sha,
-            salt_commit: hex(&r.room.salt_commit()),
+            salt_commit,
         }));
     }
+}
+
+/// A match's aim review: each person's numbers and the lines they cross
+/// (`room::watch`). Whether any did.
+fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool) {
+    let mut flagged = false;
+    let seats: Vec<serde_json::Value> = (0..MAX_FIGHTERS)
+        .filter_map(|s| {
+            let room::Seat::Person(_, name) = &r.room.seats[s] else {
+                return None;
+            };
+            let st = &r.room.watch().stats[s];
+            let flags = st.flags();
+            flagged |= !flags.is_empty();
+            Some(serde_json::json!({
+                "seat": s,
+                "name": name.as_str(),
+                "wallet": r.wallets[s],
+                "shots": st.shots,
+                "hits": st.hits,
+                "head_hits": st.head_hits,
+                "head_rate": (st.head_rate() * 1000.0).round() / 1000.0,
+                "kills": st.kills,
+                "sightings_hit": st.reactions_ms.len(),
+                "median_reaction_ms": st.median_reaction_ms(),
+                "snaps": st.snaps,
+                "preaim_ms": st.preaim_ms,
+                "flags": flags,
+            }))
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "id": r.id,
+        "ranked": r.room.ranked,
+        "mode": r.mode,
+        "replay": format!("{}.osr", r.id),
+        "replay_sha256": sha,
+        "salt_commit": salt_commit,
+        "seats": seats,
+    });
+    (doc, flagged)
 }
 
 fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: room::Outbox) {

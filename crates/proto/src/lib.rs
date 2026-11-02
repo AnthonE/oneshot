@@ -664,6 +664,8 @@ pub const REFUSE_PASS: u8 = 3;
 pub const REFUSE_NEEDS_WALLET: u8 = 4;
 /// This wallet is already queued or playing.
 pub const REFUSE_BUSY: u8 = 5;
+/// The game has banned this wallet from ranked (Elo Pros `/bans/oneshot`).
+pub const REFUSE_BANNED: u8 = 6;
 
 fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;

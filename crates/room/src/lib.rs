@@ -6,6 +6,7 @@
 
 pub mod fog;
 pub mod replay;
+pub mod watch;
 
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use proto::{MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
@@ -218,6 +219,8 @@ pub struct Room {
     rec: replay::Recorder,
     /// A ranked room: people only, no bots, nobody joins after the start.
     pub ranked: bool,
+    /// The aim review's numbers, for every seat.
+    watch: watch::Watch,
 }
 
 impl Room {
@@ -252,12 +255,18 @@ impl Room {
             salt,
             fogs: Default::default(),
             ranked: false,
+            watch: watch::Watch::default(),
         }
     }
 
     /// The replay so far (the whole match once it is over).
     pub fn replay(&self) -> Vec<u8> {
         self.rec.finish(&self.world)
+    }
+
+    /// The aim review's numbers so far.
+    pub fn watch(&self) -> &watch::Watch {
+        &self.watch
     }
 
     /// The commitment to this match's salt.
@@ -382,6 +391,8 @@ impl Room {
         }
         self.rec.step(&inputs, &rewind);
         self.world.step(&inputs, &rewind);
+        let (fogs, tick) = (&self.fogs, self.world.tick);
+        self.watch.observe(&self.world, |v, t| fogs[v].shows(t, tick));
 
         let mut out: Outbox = Vec::new();
         for e in self.world.events.as_slice() {

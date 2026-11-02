@@ -2,8 +2,9 @@
 //! a stand-in Elo Pros (its account key a test key), queue for a duel, are
 //! matched, play it out, and see the salt revealed; the result reaches the
 //! stand-in signed with the server's key; the replay on disk re-runs to the
-//! same hash. And what is refused: a ranked player without a wallet, and a
-//! pass whose nonce was already used.
+//! same hash, and the report's evidence names it. And what is refused: a
+//! ranked player without a wallet, a pass whose nonce was already used, and
+//! a wallet the game has banned.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -25,12 +26,16 @@ const WALLETS: [&str; 2] = [
     "0x1111111111111111111111111111111111111111",
     "0x2222222222222222222222222222222222222222",
 ];
+const BANNED: &str = "0x3333333333333333333333333333333333333333";
 
-/// What the stand-in Elo Pros got: (headers, body) of each report.
-type Seen = Arc<Mutex<Vec<(Vec<(String, String)>, String)>>>;
+/// What the stand-in Elo Pros got: (request line, headers, body) of each
+/// POST.
+type Seen = Arc<Mutex<Vec<(String, Vec<(String, String)>, String)>>>;
 
-/// A stand-in Elo Pros: ratings for anyone (1500), and reports recorded.
-async fn stand_in() -> (String, Seen) {
+/// A stand-in Elo Pros: ratings for anyone (1500), [`BANNED`] banned, and
+/// posts recorded. `old`: one from before ratings took `evidence`, which
+/// refuses it as Elo Pros refused unknown keys.
+async fn stand_in(old: bool) -> (String, Seen) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", l.local_addr().unwrap());
     let seen: Seen = Arc::default();
@@ -70,16 +75,24 @@ async fn stand_in() -> (String, Seen) {
                     buf.extend_from_slice(&chunk[..n]);
                 }
                 let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
-                let reply = if first.starts_with("POST /api/ratings/oneshot/report") {
-                    seen.lock().unwrap().push((headers, body));
-                    r#"{"ok":true}"#.to_string()
+                let (code, reply) = if old && first.starts_with("POST /api/ratings/") && body.contains("evidence") {
+                    (
+                        422,
+                        r#"{"error":"matches[0]: evidence is not a field here. What may be written: id, ladder, teams, agents."}"#
+                            .to_string(),
+                    )
+                } else if first.starts_with("POST ") {
+                    seen.lock().unwrap().push((first, headers, body));
+                    (200, r#"{"ok":true}"#.to_string())
+                } else if first.starts_with("GET /api/bans/oneshot/of/") {
+                    (200, format!(r#"{{"banned":{}}}"#, first.contains(BANNED)))
                 } else {
-                    r#"{"ladders":{"duel":{"rating":1500}}}"#.to_string()
+                    (200, r#"{"ladders":{"duel":{"rating":1500}}}"#.to_string())
                 };
                 let _ = sock
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             reply.len(),
                             reply
                         )
@@ -172,7 +185,7 @@ fn pem(seed: &[u8; 32]) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_ranked_duel_is_matched_played_reported_and_replays() {
-    let (origin, seen) = stand_in().await;
+    let (origin, seen) = stand_in(false).await;
     let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-ranked-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let key_path = dir.join("server.pem");
@@ -212,6 +225,13 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
             reason: proto::REFUSE_PASS
         }]
     );
+    let got = play(&h, &pass(Some(BANNED), &nonce(http).await), MODE_DUEL).await;
+    assert_eq!(
+        got,
+        vec![Msg::Refuse {
+            reason: proto::REFUSE_BANNED
+        }]
+    );
 
     // Two players queue and play.
     let (n0, n1) = (nonce(http).await, nonce(http).await);
@@ -244,7 +264,7 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    let (headers, body) = report.expect("a report reached Elo Pros");
+    let (_, headers, body) = report.expect("a report reached Elo Pros");
     let get = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap();
     assert_eq!(get("x-elo-server"), "oneshot/t-1");
     let text = server::elo::server_text(
@@ -285,8 +305,82 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         .expect("the ranked match's replay");
     let mut bytes = std::fs::read(&file).unwrap();
     room::replay::verify(&bytes).expect("replays");
+    // The report's evidence is this file's hash and the commitment the
+    // players were welcomed with.
+    assert_eq!(m["evidence"]["replay_sha256"], server::elo::sha256_hex(&bytes));
+    let commit = a.iter().find_map(|m| match m {
+        Msg::Welcome { salt_commit, .. } => Some(server::hex(salt_commit)),
+        _ => None,
+    });
+    assert_eq!(m["evidence"]["salt_commit"].as_str(), commit.as_deref());
+    // The aim review's numbers sit beside it, one row a person.
+    let watch: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(file.with_extension("watch.json")).unwrap()).unwrap();
+    assert_eq!(watch["replay_sha256"], m["evidence"]["replay_sha256"]);
+    assert_eq!(watch["seats"].as_array().unwrap().len(), 2);
+    assert!(watch["seats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|s| s["flags"] == serde_json::json!([])));
+    assert!(
+        !dir.join("review").exists(),
+        "nothing to review in a match nobody fired in"
+    );
     let at = bytes.len() - 20;
     bytes[at] ^= 1;
     assert!(room::replay::verify(&bytes).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_ban_is_signed_and_an_old_elo_pros_still_takes_the_result() {
+    let (origin, seen) = stand_in(true).await;
+    let key = || Some(server::elo::ServerKey::from_seed("oneshot", "t-1", &SERVER_SEED).unwrap());
+    let elo = server::elo::Elo::new(&origin, "oneshot", key());
+    assert_eq!(elo.banned(BANNED).await, Some(true));
+    assert_eq!(elo.banned(WALLETS[0]).await, Some(false));
+    // Elo Pros out of reach: "couldn't look", never "banned".
+    let gone = server::elo::Elo::new("http://127.0.0.1:9", "oneshot", None);
+    assert_eq!(gone.banned(BANNED).await, None);
+
+    elo.ban(WALLETS[1], true, "aim review", Some("m-1")).await.unwrap();
+    let (line, headers, body) = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(line.starts_with("POST /api/bans/oneshot "), "{line}");
+    let get = |k: &str| headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap();
+    let text = server::elo::server_text(
+        "POST",
+        "/bans/oneshot",
+        "oneshot/t-1",
+        get("x-elo-time").parse().unwrap(),
+        body.as_bytes(),
+        &get("x-elo-nonce"),
+    );
+    let sig = base64::engine::general_purpose::STANDARD
+        .decode(get("x-elo-signature"))
+        .unwrap();
+    let server_pub = Ed25519KeyPair::from_seed_unchecked(&SERVER_SEED).unwrap();
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, server_pub.public_key().as_ref())
+        .verify(text.as_bytes(), &sig)
+        .expect("signed with the server's key");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({"wallet": WALLETS[1], "status": "banned", "reason": "aim review", "match": "m-1"})
+    );
+
+    // An Elo Pros that refuses `evidence` gets the result without it.
+    let r = server::elo::Report {
+        id: "m-old".into(),
+        ladder: "duel".into(),
+        sides: vec![(vec![WALLETS[0].into()], 1), (vec![WALLETS[1].into()], 2)],
+        replay_sha256: "ab".repeat(32),
+        salt_commit: "cd".repeat(32),
+    };
+    elo.report(&r).await.unwrap();
+    let (line, _, body) = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(line.starts_with("POST /api/ratings/oneshot/report"), "{line}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["matches"][0]["id"], "m-old");
+    assert!(v["matches"][0].get("evidence").is_none());
 }
