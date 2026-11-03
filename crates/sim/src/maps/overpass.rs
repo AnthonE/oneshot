@@ -93,4 +93,5 @@ pub const DEF: Def = Def {
     ],
     solid_looks: &[],
     nav: false,
+    light: crate::map::LightDef::DAY,
 };

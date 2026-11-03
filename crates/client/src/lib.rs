@@ -369,7 +369,14 @@ fn rebuild(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     old: Query<Entity, With<level::LevelPart>>,
-    eye: Query<Entity, With<Eye>>,
+    mut eye: Query<
+        (
+            Entity,
+            &mut bevy::camera::Exposure,
+            &mut bevy::light::EnvironmentMapLight,
+        ),
+        With<Eye>,
+    >,
 ) {
     let s = link.0.session();
     if !s.ready || s.welcomes == built.0 {
@@ -377,8 +384,11 @@ fn rebuild(
     }
     built.0 = s.welcomes;
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
-    if let Ok(eye) = eye.single() {
+    if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
+        if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
+            look::rig::expose_for(&d.light, &mut exposure, &mut env);
+        }
     }
 }
 

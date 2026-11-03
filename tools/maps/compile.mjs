@@ -40,6 +40,9 @@
 //   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
 //             rather than walking straight where they're going
 //   callouts  [{ name, at: [x, z, y?] }]: places tools/flow names; not compiled
+//   light     { ev100, sun, fill, lamps: [{ at: [x, z, y], color: [r, g, b],
+//             lm, mirror: bool }], floor: look }: drawing only (sim::map::LightDef). ev100
+//             0 is the client's noon; sun and fill scale its sun and sky fill
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
 // LOOKS. A structure's list may also hold solids that aren't boxes
 // (crates/sim/src/solid.rs), placed, turned and mirrored as boxes are:
@@ -66,7 +69,7 @@ const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
 /** How a box is drawn, as the client's level.rs numbers them. */
-export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate'];
+export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate', 'alien', 'alien_dark', 'alien_red', 'alien_blue'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
@@ -211,7 +214,7 @@ export function compile(spec, where = 'map.json') {
   if (!(bx0 < bx1 && bz0 < bz1)) fail('bounds: [x0, x1, z0, z1]');
   const inside = (x, z, what) => { if (!(x >= bx0 && x <= bx1 && z >= bz0 && z <= bz1)) fail(`${what} at ${x}, ${z} is out of bounds`); };
   const mirrors = images(spec.mirror);
-  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow' };
+  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red' };
   const swapLook = (l) => SWAP[l] || l;
 
   const boxes = [];
@@ -332,7 +335,23 @@ export function compile(spec, where = 'map.json') {
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
-  return { id: spec.id, name: spec.name, about: spec.about || '', nav: !!spec.nav, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
+  const L0 = spec.light || {};
+  const light = { ev100: L0.ev100 ?? 0, sun: L0.sun ?? 1, fill: L0.fill ?? 1, lamps: [], floor: 255 };
+  if (L0.floor !== undefined) {
+    if (!LOOKS.includes(L0.floor)) fail(`light.floor: no look "${L0.floor}"`);
+    light.floor = LOOKS.indexOf(L0.floor);
+  }
+  for (const [k, l] of (L0.lamps || []).entries()) {
+    const what = `lamp ${k}`;
+    if (!Array.isArray(l.at) || l.at.length !== 3) fail(`${what}: at is [x, z, y]`);
+    const c = l.color || [1, 1, 1];
+    if (!Array.isArray(c) || c.length !== 3 || c.some((v) => !(v >= 0 && v <= 1))) fail(`${what}: color is [r, g, b], 0 to 1`);
+    if (!(l.lm > 0)) fail(`${what}: lm, its lumens, over 0`);
+    const p = [l.at[0], l.at[2], l.at[1]];
+    light.lamps.push({ p, c, lm: l.lm });
+    if (l.mirror) for (const [sx, sz] of mirrors) light.lamps.push({ p: [p[0] * sx, p[1], p[2] * sz], c, lm: l.lm });
+  }
+  return { id: spec.id, name: spec.name, about: spec.about || '', nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -468,6 +487,19 @@ export function rust(m, src) {
   L.push('    ],');
   L.push(`    solid_looks: &[${m.solids.map((s) => LOOKS.indexOf(s.look)).join(', ')}],`);
   L.push(`    nav: ${m.nav},`);
+  const lt = m.light;
+  if (lt.ev100 === 0 && lt.sun === 1 && lt.fill === 1 && !lt.lamps.length && lt.floor === 255) L.push('    light: crate::map::LightDef::DAY,');
+  else {
+    L.push('    light: crate::map::LightDef {');
+    L.push(`        ev100: ${lit(lt.ev100)},`);
+    L.push(`        sun: ${lit(lt.sun)},`);
+    L.push(`        fill: ${lit(lt.fill)},`);
+    L.push('        lamps: &[');
+    for (const l of lt.lamps) L.push(`            ([${l.p.map(lit).join(', ')}], [${l.c.map(lit).join(', ')}], ${lit(l.lm)}),`);
+    L.push('        ],');
+    L.push(`        floor: ${lt.floor},`);
+    L.push('    },');
+  }
   L.push('};');
   return L.join('\n') + '\n';
 }

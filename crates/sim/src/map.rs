@@ -71,6 +71,32 @@ pub struct Def {
     /// Bots find their way by waypoints ([`crate::nav`]) rather than
     /// walking straight at where they're going.
     pub nav: bool,
+    pub light: LightDef,
+}
+
+/// How a map is lit: the client's, never read by the sim (like looks).
+/// `ev100` 0 is the client's noon; `sun` and `fill` scale its sun and its
+/// sky's fill (an interior under a roof wants less of both); `lamps` are
+/// point lights: position, colour (0..1 each), lumens; `floor` is how a
+/// flat map's floor is drawn (a look, or 255: the client's own).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightDef {
+    pub ev100: f32,
+    pub sun: f32,
+    pub fill: f32,
+    pub lamps: &'static [([f32; 3], [f32; 3], f32)],
+    pub floor: u8,
+}
+
+impl LightDef {
+    /// Noon on a clear day, nothing else.
+    pub const DAY: LightDef = LightDef {
+        ev100: 0.0,
+        sun: 1.0,
+        fill: 1.0,
+        lamps: &[],
+        floor: 255,
+    };
 }
 
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
@@ -142,6 +168,7 @@ impl Def {
                 .collect(),
             terrain,
             nav: None,
+            light: self.light,
         }
         .indexed();
         if self.nav {
@@ -188,6 +215,7 @@ pub struct Map {
     pub vehicles: Vec<VehicleSpawn>,
     /// Waypoints for bots, on a map that asks for them.
     pub nav: Option<crate::nav::Nav>,
+    pub light: LightDef,
 }
 
 impl Map {
@@ -410,6 +438,7 @@ impl Map {
             launchers: Vec::new(),
             vehicles: Vec::new(),
             nav: None,
+            light: LightDef::DAY,
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
@@ -538,6 +567,7 @@ mod tests {
             ],
             solid_looks: &[0; 6],
             nav: false,
+            light: LightDef::DAY,
         }
         .build()
     }

@@ -39,11 +39,18 @@ pub struct Textures {
     /// packing (R occlusion, G roughness, B metal, full: the material's
     /// numbers scale it), as Bevy's two slots read it.
     pub orm: Vec<(&'static str, Handle<Image>)>,
+    /// Sets that glow in places: the glow's mask, by set.
+    pub emissive: Vec<(&'static str, Handle<Image>)>,
 }
 
 impl Textures {
     pub fn ready(&self) -> bool {
         self.ground.is_some()
+    }
+
+    /// A set's glow mask, when it glows.
+    pub fn emissive(&self, name: &str) -> Option<Handle<Image>> {
+        self.emissive.iter().find(|s| s.0 == name).map(|s| s.1.clone())
     }
 
     /// A box set's packed occlusion-roughness-metal map, when it has one.
@@ -173,6 +180,120 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));
     t.sets.push(("panel", a, n));
     t.orm.push(("panel", o));
+    let (albedo, normal, orm, glow) = alien_images(PANEL_PX);
+    let (a, n, o, g) = (
+        images.add(albedo),
+        images.add(normal),
+        images.add(orm),
+        images.add(glow),
+    );
+    t.sets.push(("alien", a, n));
+    t.orm.push(("alien", o));
+    t.emissive.push(("alien", g));
+}
+
+/// The alien hull, ours and procedural: ribs that sweep and swell across
+/// the tile (a field of integer frequencies, so it repeats seamlessly),
+/// glossy on their crowns, and between some of them a vein that glows.
+/// Its colour drifts between violet and a sea blue; the look's tint
+/// shades it. Albedo, normal, occlusion-roughness-metal, and the glow's
+/// mask, each mipped.
+pub fn alien_images(n: usize) -> (Image, Image, Image, Image) {
+    use core::f32::consts::TAU;
+    let nf = n as f32;
+    // u, v in 0..1 across the tile: two broad ribs that sway a little,
+    // a slow swell across the plates between them, and one vein.
+    let sway = |u: f32, v: f32| 0.06 * (TAU * u).sin() + 0.025 * (TAU * (2.0 * u + v)).sin();
+    let rib = |u: f32, v: f32| -> f32 { (TAU * (2.0 * (v + sway(u, v)))).cos() };
+    let swell =
+        |u: f32, v: f32| -> f32 { 0.5 + 0.25 * (TAU * u).sin() * (TAU * v).cos() + 0.25 * (TAU * (u + 2.0 * v)).sin() };
+    let vein = |u: f32, v: f32| -> f32 { (TAU * (v + sway(u, v) * 1.5 + 0.25)).sin() };
+    let hue = |u: f32, v: f32| -> f32 { 0.5 + 0.5 * (TAU * (u + v)).sin() };
+    let smooth = |e0: f32, e1: f32, x: f32| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let mut hs = vec![0f32; n * n];
+    let mut glow_l = vec![0f32; n * n];
+    for y in 0..n {
+        for x in 0..n {
+            let (u, v) = (x as f32 / nf, y as f32 / nf);
+            // A rib: raised, rounded, a fifth of the plate's width.
+            let r = smooth(0.55, 0.95, rib(u, v));
+            let g = vein(u, v);
+            let w = (1.0 - (g.abs() / 0.025).min(1.0)).powi(2);
+            hs[y * n + x] = 0.25 * swell(u, v) + 0.75 * r - 0.3 * w;
+            glow_l[y * n + x] = w;
+        }
+    }
+    let h = |x: isize, y: isize| hs[(y.rem_euclid(n as isize) as usize) * n + x.rem_euclid(n as isize) as usize];
+    let (mut albedo, mut normal, mut orm, mut glow) = (
+        vec![0u8; n * n * 4],
+        vec![0u8; n * n * 4],
+        vec![0u8; n * n * 4],
+        vec![0u8; n * n * 4],
+    );
+    let violet = Vec3::new(0.58, 0.5, 0.78);
+    let sea = Vec3::new(0.46, 0.56, 0.74);
+    for y in 0..n {
+        for x in 0..n {
+            let i = (y * n + x) * 4;
+            let hv = hs[y * n + x];
+            let (xi, yi) = (x as isize, y as isize);
+            let k = 3.0;
+            let nv = Vec3::new(
+                (h(xi - 1, yi) - h(xi + 1, yi)) * k,
+                (h(xi, yi - 1) - h(xi, yi + 1)) * k,
+                1.0,
+            )
+            .normalize();
+            for (c, v) in [nv.x, nv.y, nv.z].into_iter().enumerate() {
+                normal[i + c] = ((v * 0.5 + 0.5) * 255.0).round() as u8;
+            }
+            normal[i + 3] = 255;
+            let (u, v) = (x as f32 / nf, y as f32 / nf);
+            let col = violet.lerp(sea, hue(u, v)) * (0.7 + 0.3 * hv.clamp(0.0, 1.0));
+            for (c, v) in [col.x, col.y, col.z].into_iter().enumerate() {
+                albedo[i + c] = linear_to_srgb(v);
+            }
+            albedo[i + 3] = 255;
+            let hc = hv.clamp(0.0, 1.0);
+            orm[i] = ((0.6 + 0.4 * hc) * 255.0).round() as u8;
+            orm[i + 1] = ((0.42 - 0.17 * hc).clamp(0.0, 1.0) * 255.0).round() as u8;
+            orm[i + 2] = 255;
+            orm[i + 3] = 255;
+            let g = linear_to_srgb(glow_l[y * n + x]);
+            glow[i..i + 3].copy_from_slice(&[g, g, g]);
+            glow[i + 3] = 255;
+        }
+    }
+    let image = |data: Vec<u8>, srgb: bool, normal: bool| {
+        let (all, levels) = chain(&data, n, n, srgb, normal);
+        let mut img = Image::new(
+            Extent3d {
+                width: n as u32,
+                height: n as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            all,
+            if srgb {
+                TextureFormat::Rgba8UnormSrgb
+            } else {
+                TextureFormat::Rgba8Unorm
+            },
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        img.texture_descriptor.mip_level_count = levels;
+        img.sampler = ImageSampler::Descriptor(repeat());
+        img
+    };
+    (
+        image(albedo, true, false),
+        image(normal, false, true),
+        image(orm, false, false),
+        image(glow, true, false),
+    )
 }
 
 /// The plating's texels a side; one tile is [`PANEL_PLATES`] plates square.
@@ -538,6 +659,15 @@ fn array(layers: &[Image]) -> Option<Image> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_alien_hull_tiles_and_glows_only_in_its_veins() {
+        let (a, _, _, g) = alien_images(64);
+        assert_eq!(a.texture_descriptor.mip_level_count, 7);
+        let g = g.data.unwrap();
+        let lit = (0..64 * 64).filter(|i| g[i * 4] > 128).count();
+        assert!(lit > 0 && lit < 64 * 64 / 4, "{lit} texels glow");
+    }
 
     #[test]
     fn the_plating_tiles_and_has_its_seams() {

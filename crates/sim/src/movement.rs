@@ -402,6 +402,7 @@ mod tests {
             solids: &[],
             solid_looks: &[],
             nav: false,
+            light: crate::map::LightDef::DAY,
         }
         .build()
     }
@@ -482,6 +483,7 @@ mod tests {
             ],
             solid_looks: &[0, 0, 0],
             nav: false,
+            light: crate::map::LightDef::DAY,
         }
         .build()
     }
