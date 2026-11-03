@@ -65,7 +65,7 @@
       // (web/index.html, web/src/main.ts): the page only picks what to play
       // and signs in; the game, the queue's wait and everything after are
       // the client's.
-      import init, { play, skin_names } from './oneshot_client.js';
+      import init, { play, pose, skin_names } from './oneshot_client.js';
       const params = new URLSearchParams(location.search);
       const flag = (k) => params.get(k) === '1';
       const AUTOPLAY = flag('autoplay');
@@ -77,6 +77,12 @@
       const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
 
       await init();
+      if (params.has('pose')) {
+        // No server: one fighter for a picture (ci/look.mjs).
+        menu.style.display = 'none';
+        pose(location.search, ['lite'].filter(flag).join(','));
+        await new Promise(() => {}); // nothing more for the page to do
+      }
       nameInput.value = params.get('name') || store('oneshot.name') || '';
       // Skins: worn only if the signed-in wallet owns one; the server checks.
       skin_names().forEach((n, i) => skin.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
@@ -113,7 +119,7 @@
       cancel.hidden = false;
       cancel.onclick = () => location.reload();
       say('connecting…');
-      const opts = ['autoplay', 'lite'].filter(flag).join(',');
+      const opts = ['autoplay', 'lite', 'capsules'].filter(flag).join(',');
       let playing = false;
       try {
         // No hash with a CA's certificate: checked by the browser, never pinned.

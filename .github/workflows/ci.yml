@@ -23,28 +23,33 @@ jobs:
       - name: native vs wasm
         run: ci/parity.sh
 
-  web:
+  client:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          # The Bevy client is its own workspace.
+          workspaces: |
+            . -> target
+            crates/client -> target
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-bindgen@0.2.130
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: build the page and the server
+      - name: build the client (clippy, native, the browser's) and the server
         run: |
-          (cd web && npm ci)
-          ci/build_web.sh
+          ci/client.sh
           cargo build -q --release -p server
       - name: play it in headless Chromium
         run: |
-          (cd web && npx playwright install --with-deps chromium)
-          node ci/e2e.mjs 60
-          node ci/e2e.mjs 60 4 2
+          npm ci
+          npx playwright install --with-deps chromium
+          node ci/e2e.mjs 150
+          node ci/e2e.mjs 150 4 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:

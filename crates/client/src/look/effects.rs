@@ -1,4 +1,4 @@
-//! Shots, hits, blasts and what's in flight, after `web/src/effects.ts`:
+//! Shots, hits, blasts and what's in flight, after the three.js page's `effects.ts`:
 //! a tracer for each round fog lets us see (a shot we only hear has none),
 //! a spark where it ended, a blast's fireball and its light, and rockets
 //! and frags drawn with their models. Drawing only.

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRequire } from 'node:module';
-const require = createRequire(new URL('../web/package.json', import.meta.url));
+const require = createRequire(new URL('../package.json', import.meta.url));
 const { chromium } = require('playwright');
 const [out = 'traces/client.png', secs = '25', mode = '6', map = '3', auto = '0'] = process.argv.slice(2);
 const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--map', map], { stdio: ['ignore', 'pipe', 'inherit'] });

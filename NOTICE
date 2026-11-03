@@ -3,14 +3,12 @@ oneshot: third-party notices
 Code is MIT (the workspace Cargo.toml). Assets are ours or CC0; nothing
 here is NC or SA.
 
-Models (web/public/models): Triple T and the guns are commissioned from
-Meshy on a paid plan, owned outright, from the Gates repository
-(AnthonE/Gates, assets/models). No attribution is owed. The Bevy client's
-copies (crates/client/assets/models) are the same models with their KTX2
-textures re-encoded as JPEG by tools/glb.
+Models (crates/client/assets/models): Triple T and the guns are
+commissioned from Meshy on a paid plan, owned outright, from the Gates
+repository (AnthonE/Gates, assets/models). No attribution is owed. They are
+Gates' models with their KTX2 textures re-encoded as JPEG by tools/glb.
 
-Sounds (web/public/sound, and the Bevy client's copies in
-crates/client/assets/sound), all CC0 or public domain, cut by Gates
+Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
   - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
   - USC Sunset Editorial / Red Library sound effects (archive.org), public
@@ -20,11 +18,6 @@ crates/client/assets/sound), all CC0 or public domain, cut by Gates
     alienistcog, julujanus (blasts), tortillathrilla, unfa, leonelmail
     (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
     manifest
-
-Textures (web/public/textures), CC0: Poly Haven, ambientCG, TextureCan.
-
-three.js (MIT), including its basis transcoder (Apache-2.0), is bundled
-into the page.
 
 Code ported into the Bevy client (crates/client/src/look) from Gates
 (AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
@@ -53,7 +46,7 @@ crates/client/src/webassets.rs, under the MIT licence:
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Textures in the Bevy client (crates/client/assets/textures: sand, grass,
-gravel, rock, concrete, metal), copied from Gates by tools/assets_client.mjs,
+gravel, rock, concrete, metal), copied from Gates by tools/assets.mjs,
 are CC0 from Poly Haven (polyhaven.com: sand_02, forrest_ground_01,
 bicolour_gravel, concrete_wall_003) and ambientCG (ambientcg.com: Rock043L,
 CorrugatedSteel009), and the grass card atlas from Poly Haven's

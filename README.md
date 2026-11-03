@@ -24,8 +24,8 @@ ci/parity.sh        # native and wasm hash the same bot matches
 ## Milestone 2: one playable room
 
 ```sh
-node tools/assets.mjs ../Gates          # once: models, sounds, textures from a Gates checkout
-ci/build_web.sh                         # client-net to wasm, then the page into web/dist
+ci/client.sh                            # the Bevy client: clippy, native, the page into crates/client/dist
+node tools/assets.mjs ../Gates          # only to refresh crates/client/assets from a Gates checkout
 cargo run -p server --release           # then open http://127.0.0.1:8080 in Chrome
 ```
 
@@ -34,12 +34,13 @@ cargo run -p server --release           # then open http://127.0.0.1:8080 in Chr
 | `crates/proto` | the wire: inputs, snapshots, stream messages, bit-packed, goldens |
 | `crates/room` | a match as the server runs it: seats, input buffers, rewind depth, snapshots |
 | `crates/server` | WebTransport (wtransport), the 128 Hz sim thread, the page server |
-| `crates/client-net` | the browser's netcode: clock, prediction, interpolation, WebTransport (wasm) |
-| `web/` | three.js: the level, Triple T, the guns in view, HUD, sound |
+| `crates/client-net` | the client's netcode: clock, prediction, interpolation, WebTransport (wasm), wtransport (native) |
+| `crates/client` | the Bevy client, desktop and browser: the level, Triple T, the guns in view, HUD, sound, the menu |
 
 ```sh
 ci/quick.sh sim proto room client-net server   # fmt, clippy, tests
-node ci/e2e.mjs                                # the page plays a bot in headless Chromium
+npm ci                                         # once: Playwright, for the two below
+node ci/e2e.mjs                                # the page: its menu, then it plays a bot in headless Chromium
 node ci/look.mjs                               # pictures of the models (traces/)
 ```
 
@@ -77,7 +78,7 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 node tools/maps/compile.mjs           # after editing a map.json (ci checks it with --check)
 cargo test -p sim --test maps         # every map: spawns, pads, walkable, bots fight
 ci/parity.sh                          # every map native vs wasm, Doubles and Gun Game
-node ci/e2e.mjs 40 4 2                # the page in Gun Game on Cistern against seven bots
+node ci/e2e.mjs 150 4 2               # the page in Gun Game on Cistern against seven bots
 oneshot-server --map cistern --cup-min 8 --cup-rounds 3
 ```
 

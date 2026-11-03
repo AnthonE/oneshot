@@ -8,12 +8,13 @@
 //! (docs/RIP.md §9); Triple T bodies with guns in hand; the gun in view,
 //! effects and sound; a first-person camera (a chase camera at the wheel,
 //! the kill cam when dead); the three.js page's controls; the HUD. In a
-//! browser the page (`web/index.html`) has the menu and calls `play()`.
+//! browser the page (`crates/client/web/index.html`) has the menu and calls `play()`.
 
 pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod pose;
 pub mod sound;
 
 use std::collections::BTreeMap;
@@ -46,15 +47,16 @@ pub struct Look {
 #[derive(Resource, Default)]
 struct Built(u32);
 
-/// Drawn things by their slot.
+/// Drawn things by their slot (a fighter with the side and skin its body
+/// was made in).
 #[derive(Resource, Default)]
 struct Drawn {
-    fighters: BTreeMap<u8, Entity>,
+    fighters: BTreeMap<u8, (Entity, u8, u8)>,
     vehicles: BTreeMap<u8, Entity>,
 }
 
 #[derive(Component)]
-struct Eye;
+pub struct Eye;
 
 /// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
 /// roam route until fog shows an enemy, then close in, aim and fire. After
@@ -64,9 +66,33 @@ pub struct Autoplay {
     pub on: bool,
     leg: usize,
     frames: u64,
-    /// Where we were at the last check: stuck on a rock, take the next leg.
+    /// Where we were at the last check, and when (ms): pushing ahead and
+    /// not getting anywhere is stuck.
     was: (f32, f32),
+    checked: f64,
+    /// Walking on: the next roam point at this time (ms).
+    next_leg: f64,
+    /// Stuck chasing someone fog shows behind a wall: the route instead
+    /// until this time (ms).
+    detour: f64,
 }
+
+/// How often the autopilot checks it is getting somewhere, how far counts,
+/// how long it walks the route when it isn't, and how long a leg may take.
+const AUTO_CHECK_MS: f64 = 1500.0;
+const AUTO_MOVED_M: f32 = 1.0;
+const AUTO_DETOUR_MS: f64 = 4000.0;
+const AUTO_LEG_MS: f64 = 20000.0;
+/// Where the autopilot walks on a map with no roam points (Proving Grounds):
+/// round its open lanes, as the three.js page's did.
+const AUTO_LANES: [(f32, f32); 6] = [
+    (-15.0, 8.0),
+    (15.0, 8.0),
+    (21.0, 0.0),
+    (15.0, -8.0),
+    (-15.0, -8.0),
+    (-21.0, 0.0),
+];
 
 /// Stream messages that came before the app ran (the page waited for the
 /// welcome): the HUD reads them first.
@@ -77,7 +103,7 @@ pub struct Early(pub Vec<proto::Msg>);
 const SENS: f32 = 0.0022;
 const ZOOM_SENS: f32 = 0.45;
 
-/// The keys, as the three.js page binds them (web/src/input.ts, after
+/// The keys, as the three.js page binds them (the three.js page's input.ts, after
 /// Fireplace's arena). The wheel swaps too.
 const KEYS: [(KeyCode, u16); 11] = [
     (KeyCode::Space, JUMP),
@@ -100,6 +126,11 @@ const KEYS: [(KeyCode, u16); 11] = [
 pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
+    /// No server: one fighter posed for a picture (`pose::Pose`).
+    pub pose: Option<pose::Pose>,
+    /// Everyone else as a capsule in the side's colour, not Triple T: a
+    /// software GPU can't skin a room of them (the gate, eight seats on).
+    pub capsules: bool,
 }
 
 impl Opts {
@@ -109,6 +140,8 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
+            pose: None,
+            capsules: has("capsules"),
         }
     }
 }
@@ -148,13 +181,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_systems(
         Startup,
-        (
-            setup,
-            look::textures::load,
-            look::guns::load,
-            look::effects::setup,
-            hud::setup,
-        ),
+        (setup, look::textures::load, look::guns::load, look::effects::setup),
     )
     .add_systems(
         Update,
@@ -183,6 +210,11 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     app.insert_resource(opts);
     if opts.lite {
         app.add_systems(Update, lite);
+    }
+    if let Some(p) = opts.pose {
+        app.insert_resource(p).add_systems(Update, pose::aim.after(view));
+    } else {
+        app.add_systems(Startup, hud::setup);
     }
     app
 }
@@ -286,23 +318,34 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         .filter(|d| d.alive && Some(d.team & 1) != mate.map(|t| t & 1))
         .map(|d| ((d.pos.x - me.x).hypot(d.pos.z - me.z), d))
         .min_by(|a, b| a.0.total_cmp(&b.0));
+    // Pushing ahead (roaming, or closing on someone far) and not getting
+    // anywhere: on a rock, or at a wall with whoever fog shows behind it.
+    let pushing = best.is_none_or(|(dist, _)| dist > 8.0);
+    let mut stuck = false;
+    if now - auto.checked >= AUTO_CHECK_MS {
+        stuck = pushing && f.alive && (me.x - auto.was.0).hypot(me.z - auto.was.1) < AUTO_MOVED_M;
+        auto.was = (me.x, me.z);
+        auto.checked = now;
+    }
+    if stuck && best.is_some() {
+        auto.detour = now + AUTO_DETOUR_MS;
+    }
+    let best = best.filter(|_| now >= auto.detour);
     let Some((dist, d)) = best else {
-        // Nobody in sight: walk the route until fog shows someone.
-        let route = &core.map.roam;
-        if route.is_empty() {
-            return (0, 0, 0);
-        }
+        // Nobody in sight (or a detour): walk the route.
+        let route: Vec<(f32, f32)> = if core.map.roam.is_empty() {
+            AUTO_LANES.to_vec()
+        } else {
+            core.map.roam.iter().map(|p| (p.x, p.z)).collect()
+        };
         let mut t = route[auto.leg % route.len()];
-        let check = auto.frames.is_multiple_of(90);
-        let stuck = check && (me.x - auto.was.0).hypot(me.z - auto.was.1) < 1.0;
-        if check {
-            auto.was = (me.x, me.z);
-        }
-        if (t.x - me.x).hypot(t.z - me.z) < 2.0 || stuck || auto.frames.is_multiple_of(600) {
+        if (t.0 - me.x).hypot(t.1 - me.z) < 2.0 || stuck || now >= auto.next_leg {
             auto.leg += 1;
+            auto.next_leg = now + AUTO_LEG_MS;
             t = route[auto.leg % route.len()];
         }
-        look.yaw = (t.z - me.z).atan2(t.x - me.x);
+        let t = Vec2::new(t.0, t.1);
+        look.yaw = (t.y - me.z).atan2(t.x - me.x);
         look.pitch = 0.0;
         return (0, 0, 127);
     };
@@ -346,6 +389,11 @@ fn draw_fighters(
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
     models: Res<look::guns::Models>,
+    st: Res<hud::HudState>,
+    posed: Option<Res<pose::Pose>>,
+    opts: Res<Opts>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
     graph: Option<Res<look::bodies::Graph>>,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
@@ -356,16 +404,33 @@ fn draw_fighters(
     let core = &link.0.session().core;
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
-    let others = match core.killcam(now) {
-        Some(k) if !core.own().0.alive => k.bodies,
+    let others = match (core.killcam(now), &posed) {
+        (_, Some(p)) => vec![p.0],
+        (Some(k), _) if !core.own().0.alive => k.bodies,
         _ => core.others(now),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
     for d in &others {
-        let e = *drawn
-            .fighters
-            .entry(d.slot)
-            .or_insert_with(|| look::bodies::spawn(&mut commands, &models, d.team));
+        let skin = posed.as_ref().map_or_else(|| st.skin(d.slot), |p| p.1);
+        let e = match drawn.fighters.get(&d.slot) {
+            Some(&(e, team, s)) if team == d.team && s == skin => e,
+            had => {
+                if let Some(&(old, ..)) = had {
+                    commands.entity(old).despawn();
+                }
+                let e = if opts.capsules {
+                    look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
+                } else {
+                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, skin)
+                };
+                drawn.fighters.insert(d.slot, (e, d.team, skin));
+                e
+            }
+        };
+        if opts.capsules {
+            look::bodies::pose_capsule(d, e, &mut at);
+            continue;
+        }
         look::bodies::pose(
             &mut commands,
             &models,
@@ -379,7 +444,7 @@ fn draw_fighters(
             &mut playing,
         );
     }
-    drawn.fighters.retain(|slot, e| {
+    drawn.fighters.retain(|slot, (e, ..)| {
         let k = others.iter().any(|d| d.slot == *slot);
         if !k {
             commands.entity(*e).despawn();
@@ -545,12 +610,16 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA.
+/// A software GPU's frame: no shadows, no SMAA, no grass.
 fn lite(
     mut commands: Commands,
     mut suns: Query<&mut DirectionalLight>,
     aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
+    grass: Query<Entity, With<level::GrassPart>>,
 ) {
+    for e in &grass {
+        commands.entity(e).despawn();
+    }
     for mut s in &mut suns {
         if s.shadows_enabled {
             s.shadows_enabled = false;
@@ -561,7 +630,7 @@ fn lite(
     }
 }
 
-/// For the browser gate (`ci/client_e2e.mjs`): `window.__oneshot`, as the
+/// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
 fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>) {
@@ -590,6 +659,11 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("cup", st.cup.as_str().into());
     set("bye", st.ended.into());
     set("ended", (st.ended || link.0.closed()).into());
+    // The netcode's health, as the three.js page gave it: snapshots,
+    // confirmed predictions, corrected ones.
+    let n = s.core.stats;
+    let stats = js_sys::Array::of3(&n.snapshots.into(), &n.confirmations.into(), &n.corrections.into());
+    set("stats", stats.into());
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -690,5 +764,16 @@ mod web_start {
         app.insert_resource(super::Early(early));
         app.run();
         Ok(true)
+    }
+
+    /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;
+    /// `query` is the page's, as `?yaw=1.57&arm=3`).
+    #[wasm_bindgen]
+    pub fn pose(query: String, opts: String) {
+        let opts = super::Opts {
+            pose: Some(super::pose::Pose::parse(&query)),
+            ..super::Opts::parse(&opts)
+        };
+        super::app(Box::new(super::link::Still::new()), opts).run();
     }
 }

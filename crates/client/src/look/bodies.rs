@@ -1,7 +1,10 @@
-//! Everyone else as Triple T, after `web/src/art.ts`'s `bodyFactory`: the
+//! Everyone else as Triple T, after the three.js page's `art.ts`'s `bodyFactory`: the
 //! model lifted and tinted by side, an animation picked from what the
 //! snapshot says (alive, grounded, crouched, speed, seated), with Gates'
-//! 0.15 s crossfades, and the gun they hold in hand. Drawing only.
+//! 0.15 s crossfades, and the gun they hold in hand. A skin is a faint
+//! sheen of its trim and a band at the waist: the side's colour still
+//! carries the fighter, and no hitbox or visibility changes (DESIGN.md
+//! §15). Drawing only.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -58,6 +61,25 @@ const TINT: f32 = 0.42;
 /// brightness in full sun, so a fighter reads at a glance even in shade.
 const GLOW: f32 = 0.1;
 
+/// Each skin's trim (`proto::SKINS` order); none for the standard look.
+const SKIN_TRIM: [Option<u32>; 6] = [
+    None,
+    Some(0xf2f2f2),
+    Some(0xff6a1a),
+    Some(0x8fd8ff),
+    Some(0x58d06a),
+    Some(0xe8b931),
+];
+/// The trim's sheen, against the side's glow.
+const TRIM_GLOW: f32 = 0.35;
+
+fn trim(skin: u8) -> Option<Color> {
+    SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
+        let [_, r, g, b] = c.to_be_bytes();
+        Color::srgb_u8(r, g, b)
+    })
+}
+
 /// The animation graph, once the model has loaded.
 #[derive(Resource)]
 pub struct Graph {
@@ -93,6 +115,7 @@ pub fn graph(
 #[derive(Component)]
 pub struct Body {
     team: u8,
+    skin: u8,
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
     clip: Option<usize>,
@@ -100,9 +123,30 @@ pub struct Body {
     held: u8,
 }
 
-/// A body spawned for `team`: its root, which the caller places.
-pub fn spawn(commands: &mut Commands, models: &Models, team: u8) -> Entity {
+/// A body spawned for `team` in `skin`: its root, which the caller places.
+pub fn spawn(
+    commands: &mut Commands,
+    models: &Models,
+    meshes: &mut Assets<Mesh>,
+    mats: &mut Assets<StandardMaterial>,
+    team: u8,
+    skin: u8,
+) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
+    if let Some(c) = trim(skin) {
+        // The band at the waist, in the trim's colour.
+        commands.spawn((
+            Mesh3d(meshes.add(Torus::new(0.175, 0.225))),
+            MeshMaterial3d(mats.add(StandardMaterial {
+                base_color: c,
+                perceptual_roughness: 0.4,
+                metallic: 0.5,
+                ..default()
+            })),
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            ChildOf(root),
+        ));
+    }
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
         .id();
@@ -115,12 +159,57 @@ pub fn spawn(commands: &mut Commands, models: &Models, team: u8) -> Entity {
         .observe(dress);
     commands.entity(root).insert(Body {
         team,
+        skin,
         player: None,
         clip: None,
         hand,
         held: 0,
     });
     root
+}
+
+/// The stand-in: a capsule in the side's colour with a visor where it
+/// looks (`Opts::capsules`).
+pub fn spawn_capsule(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    mats: &mut Assets<StandardMaterial>,
+    team: u8,
+) -> Entity {
+    let body = mats.add(StandardMaterial {
+        base_color: team_color(team),
+        perceptual_roughness: 0.6,
+        ..default()
+    });
+    let visor = mats.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.8, 0.2),
+        ..default()
+    });
+    commands
+        .spawn((Transform::default(), Visibility::default()))
+        .with_children(|c| {
+            c.spawn((
+                Mesh3d(meshes.add(Capsule3d::new(0.35, 1.1))),
+                MeshMaterial3d(body),
+                Transform::from_xyz(0.0, 0.9, 0.0),
+            ));
+            c.spawn((
+                Mesh3d(meshes.add(Cuboid::new(0.36, 0.12, 0.12))),
+                MeshMaterial3d(visor),
+                Transform::from_xyz(0.3, 1.55, 0.0).with_rotation(Quat::from_rotation_y(core::f32::consts::FRAC_PI_2)),
+            ));
+        })
+        .id()
+}
+
+/// A capsule this frame: where, which way, lower when crouched, flat dead.
+pub fn pose_capsule(d: &Drawn, root: Entity, at: &mut Query<&mut Transform>) {
+    if let Ok(mut t) = at.get_mut(root) {
+        let s = if d.crouched { 0.72 } else { 1.0 };
+        *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z)
+            .with_rotation(Quat::from_rotation_y(-d.yaw))
+            .with_scale(Vec3::new(1.0, if d.alive { s } else { 0.2 }, 1.0));
+    }
 }
 
 pub fn team_color(team: u8) -> Color {
@@ -157,6 +246,7 @@ fn dress(
         LIFT * (1.0 - TINT) + tint.blue * 3.0 * TINT,
     );
     let glow = GLOW * bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let sheen = trim(body.skin).map_or(LinearRgba::BLACK, |c| c.to_linear() * TRIM_GLOW);
     for e in children.iter_descendants(model) {
         if players.contains(e) {
             body.player = Some(e);
@@ -166,7 +256,7 @@ fn dress(
                 continue;
             };
             mat.base_color = base.into();
-            mat.emissive = tint * glow;
+            mat.emissive = (tint + sheen) * glow;
             // In nits, under the camera's exposure like everything lit.
             mat.emissive_exposure_weight = 1.0;
             commands

@@ -1,4 +1,4 @@
-//! The HUD, after `web/src/hud.ts`: shield and health bars, the gun and
+//! The HUD, after the three.js page's `hud.ts`: shield and health bars, the gun and
 //! its rounds, a crosshair, a hit marker on our hits (red on a kill), an
 //! arc toward whoever hurt us, the score and clock, the kill feed, and a
 //! line in the middle for the countdown, the result, the kill cam and the
@@ -25,6 +25,8 @@ const DAMAGE_R: f32 = 90.0;
 #[derive(Resource, Default)]
 pub struct HudState {
     names: BTreeMap<u8, String>,
+    /// Each seat's skin, as the server checked it.
+    skins: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,
     hit_at: f32,
     hit_kill: bool,
@@ -45,6 +47,10 @@ pub struct HudState {
 }
 
 impl HudState {
+    pub fn skin(&self, slot: u8) -> u8 {
+        self.skins.get(&slot).copied().unwrap_or(proto::SKIN_STANDARD)
+    }
+
     pub fn name(&self, slot: u8) -> String {
         self.names
             .get(&slot)
@@ -290,8 +296,9 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
             st.status = line;
         }
         match m {
-            Msg::Seat { slot, name, .. } => {
+            Msg::Seat { slot, name, skin, .. } => {
                 st.names.insert(*slot, name.as_str().to_string());
+                st.skins.insert(*slot, *skin);
             }
             Msg::Kill { killer, victim, .. } => {
                 let line = if killer == victim {
