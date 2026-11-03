@@ -253,12 +253,26 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         .map(|d| ((d.pos.x - me.x).hypot(d.pos.z - me.z), d))
         .min_by(|a, b| a.0.total_cmp(&b.0));
     let Some((dist, d)) = best else {
-        // Nobody in sight: walk the route until fog shows someone.
-        let route = &core.map.roam;
-        if route.is_empty() {
+        // Nobody in sight: walk the route until fog shows someone. A map
+        // with no route (Proving Grounds) is walked spawn to spawn, or a
+        // bot out of sight of ours would never be found.
+        let map = &core.map;
+        let n = if map.roam.is_empty() {
+            map.spawns.len()
+        } else {
+            map.roam.len()
+        };
+        if n == 0 {
             return (0, 0, 0);
         }
-        let mut t = route[auto.leg % route.len()];
+        let leg = |i: usize| {
+            if map.roam.is_empty() {
+                map.spawns[i % n].pos
+            } else {
+                map.roam[i % n]
+            }
+        };
+        let mut t = leg(auto.leg);
         let check = auto.frames.is_multiple_of(90);
         let stuck = check && (me.x - auto.was.0).hypot(me.z - auto.was.1) < 1.0;
         if check {
@@ -266,7 +280,7 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         }
         if (t.x - me.x).hypot(t.z - me.z) < 2.0 || stuck || auto.frames.is_multiple_of(600) {
             auto.leg += 1;
-            t = route[auto.leg % route.len()];
+            t = leg(auto.leg);
         }
         look.yaw = (t.z - me.z).atan2(t.x - me.x);
         look.pitch = 0.0;
