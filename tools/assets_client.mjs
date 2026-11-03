@@ -17,6 +17,9 @@ if (!existsSync(join(src, 'MANIFEST.md'))) {
 // The ground's four (sand, grass, the creek's gravel, rock) and the boxes'.
 const SETS = ['sand', 'grass', 'gravel', 'rock', 'concrete', 'metal'];
 mkdirSync(out, { recursive: true });
+// The grass card atlas (Poly Haven grass_medium_01, baked by Gates).
+copyFileSync(join(src, 'grass_card_albedo.png'), join(out, 'grass_card_albedo.png'));
+console.log(`${out}/grass_card_albedo.png`);
 for (const s of SETS) {
   for (const m of ['albedo', 'normal']) {
     copyFileSync(join(src, `${s}_${m}.jpg`), join(out, `${s}_${m}.jpg`));

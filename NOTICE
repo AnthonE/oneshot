@@ -52,4 +52,6 @@ Textures in the Bevy client (crates/client/assets/textures: sand, grass,
 gravel, rock, concrete, metal), copied from Gates by tools/assets_client.mjs,
 are CC0 from Poly Haven (polyhaven.com: sand_02, forrest_ground_01,
 bicolour_gravel, concrete_wall_003) and ambientCG (ambientcg.com: Rock043L,
-CorrugatedSteel009). No attribution is required; credited by choice.
+CorrugatedSteel009), and the grass card atlas from Poly Haven's
+grass_medium_01 (baked by Gates). No attribution is required; credited by
+choice.

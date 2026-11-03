@@ -30,6 +30,9 @@ pub struct Textures {
     pub sets: Vec<(&'static str, Handle<Image>, Handle<Image>)>,
     /// The ground's arrays, once built.
     pub ground: Option<(Handle<Image>, Handle<Image>)>,
+    /// The grass cards' atlas (a cutout), once mipped.
+    pub grass: Option<Handle<Image>>,
+    grass_loading: Option<Handle<Image>>,
 }
 
 impl Textures {
@@ -76,6 +79,17 @@ pub fn load(mut t: ResMut<Textures>, assets: Res<AssetServer>) {
         });
         t.loading.push((n, albedo, normal));
     }
+    t.grass_loading = Some(assets.load_with_settings(
+        "textures/grass_card_albedo.png",
+        |s: &mut ImageLoaderSettings| {
+            s.is_srgb = true;
+            s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::ClampToEdge,
+                address_mode_v: ImageAddressMode::ClampToEdge,
+                ..repeat()
+            });
+        },
+    ));
 }
 
 /// Once every set has loaded: their mips, and the ground's arrays.
@@ -83,12 +97,20 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     if t.ready() || t.loading.is_empty() {
         return;
     }
-    if !t
-        .loading
-        .iter()
-        .all(|(_, a, n)| images.contains(a) && images.contains(n))
+    let grass_in = t.grass_loading.as_ref().is_none_or(|g| images.contains(g));
+    if !grass_in
+        || !t
+            .loading
+            .iter()
+            .all(|(_, a, n)| images.contains(a) && images.contains(n))
     {
         return;
+    }
+    if let Some(g) = t.grass_loading.take() {
+        if let Some(img) = images.get_mut(&g) {
+            mip_cutout_in_place(img);
+        }
+        t.grass = Some(g);
     }
     let loading = std::mem::take(&mut t.loading);
     for (_, a, n) in &loading {
@@ -203,6 +225,51 @@ fn mip_in_place(img: &mut Image, normal: bool) {
     };
     let (all, n) = chain(&data, w, h, srgb, normal);
     img.data = Some(all);
+    img.texture_descriptor.mip_level_count = n;
+}
+
+/// The fraction of texels a cutout keeps at the 0.5 test.
+fn coverage(level: &[u8]) -> f32 {
+    let n = level.len() / 4;
+    level.chunks(4).filter(|p| p[3] >= 128).count() as f32 / n.max(1) as f32
+}
+
+/// A cutout's chain, each level's alpha scaled so it keeps level 0's
+/// coverage at the 0.5 test (Gates' `mipmap.rs`): averaged alone, a tuft
+/// thins to nothing a few levels down.
+fn mip_cutout_in_place(img: &mut Image) {
+    if img.texture_descriptor.mip_level_count > 1 {
+        return;
+    }
+    let Some((data, w, h, srgb)) = rgba8(img) else {
+        return;
+    };
+    let want = coverage(&data);
+    let mut out = data.clone();
+    let (mut cur, mut cw, mut ch, mut n) = (data, w, h, 1u32);
+    while cw > 1 || ch > 1 {
+        cur = halve(&cur, cw, ch, srgb, false);
+        cw = (cw / 2).max(1);
+        ch = (ch / 2).max(1);
+        // The scale that brings coverage back, by bisection.
+        let (mut lo, mut hi) = (0.25f32, 8.0f32);
+        for _ in 0..16 {
+            let k = (lo + hi) * 0.5;
+            let c = cur.chunks(4).filter(|p| (p[3] as f32 * k) >= 128.0).count() as f32 / (cw * ch) as f32;
+            if c < want {
+                lo = k;
+            } else {
+                hi = k;
+            }
+        }
+        let k = (lo + hi) * 0.5;
+        for p in cur.chunks_mut(4) {
+            p[3] = (p[3] as f32 * k).min(255.0) as u8;
+        }
+        out.extend_from_slice(&cur);
+        n += 1;
+    }
+    img.data = Some(out);
     img.texture_descriptor.mip_level_count = n;
 }
 

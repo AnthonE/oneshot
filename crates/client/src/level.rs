@@ -23,6 +23,10 @@ pub struct BoxLook(pub u8);
 #[derive(Component)]
 pub struct Dressed;
 
+/// A block of grass, waiting for its atlas.
+#[derive(Component)]
+pub struct GrassPart;
+
 /// A box's texture set, the metres it repeats over, and its tint (the
 /// photograph's colour times this).
 fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
@@ -78,10 +82,26 @@ pub fn dress_level(
     mut mats: ResMut<Assets<StandardMaterial>>,
     ground: Query<Entity, (With<GroundMesh>, Without<Dressed>)>,
     boxes: Query<(Entity, &BoxLook), Without<Dressed>>,
+    grass: Query<Entity, (With<GrassPart>, Without<Dressed>)>,
 ) {
     let Some((albedo, normal)) = tex.ground.clone() else {
         return;
     };
+    if let Some(atlas) = tex.grass.clone() {
+        if !grass.is_empty() {
+            let m = mats.add(StandardMaterial {
+                base_color_texture: Some(atlas),
+                alpha_mode: AlphaMode::Mask(0.5),
+                double_sided: true,
+                cull_mode: None,
+                perceptual_roughness: 0.9,
+                ..default()
+            });
+            for e in grass.iter() {
+                commands.entity(e).insert((MeshMaterial3d(m.clone()), Dressed));
+            }
+        }
+    }
     for e in ground.iter() {
         let m = ground_mats.add(crate::look::ground::material(albedo.clone(), normal.clone()));
         commands
@@ -207,6 +227,17 @@ pub fn build(
     }
     match &def.terrain {
         Some(t) => {
+            for (mesh, centre) in crate::look::grass::blocks(t, lo, hi, id as u32 * 7919 + 1) {
+                commands.spawn((
+                    LevelPart,
+                    GrassPart,
+                    crate::look::grass::GrassBlock { centre },
+                    Mesh3d(meshes.add(mesh)),
+                    Transform::default(),
+                    Visibility::Hidden,
+                    bevy::light::NotShadowCaster,
+                ));
+            }
             commands.spawn((
                 LevelPart,
                 GroundMesh,

@@ -2,6 +2,7 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod fill;
+pub mod grass;
 pub mod ground;
 pub mod rig;
 pub mod sky;

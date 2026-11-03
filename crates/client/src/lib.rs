@@ -89,6 +89,7 @@ pub fn app(link: Box<dyn Link>) -> App {
             rebuild,
             look::textures::prepare,
             level::dress_level,
+            look::grass::cull,
             draw_fighters,
             draw_vehicles,
             view,
