@@ -18,7 +18,7 @@ use super::{Fx, Scene, ZAP_FLASH};
 /// it fades (per second).
 const FLARE_HIT: f32 = 1.0;
 const FLARE_POP: f32 = 1.6;
-const FLARE_FADE: f32 = 5.0;
+const FLARE_FADE: f32 = 3.0;
 /// The shimmer while a shield climbs back.
 const SHIMMER: f32 = 0.22;
 /// Arcs a second crawling over a shield as it climbs back.
@@ -33,7 +33,10 @@ struct One {
     shield: u8,
     grounded: bool,
     fall: f32,
-    flare: f32,
+    /// The flare's peak and when it was raised (s): its brightness is a
+    /// function of the time since, so the frame's order can't lose it.
+    peak: f32,
+    at: f32,
     /// The shield went up since last frame.
     charging: bool,
 }
@@ -52,6 +55,16 @@ impl Default for Was {
 }
 
 impl Was {
+    /// Raises `slot`'s flare to `level` at time `t`, unless it already
+    /// shows brighter.
+    pub fn raise(&mut self, slot: u8, level: f32, t: f32) {
+        let o = &mut self.slots[slot as usize % 64];
+        if level >= fade(o.peak, o.at, t) {
+            o.peak = level;
+            o.at = t;
+        }
+    }
+
     /// How bright `slot`'s shield shows now, `t` the time in seconds.
     pub fn flare(&self, slot: u8, t: f32) -> f32 {
         let o = &self.slots[slot as usize % 64];
@@ -60,8 +73,12 @@ impl Was {
         } else {
             0.0
         };
-        o.flare.max(shimmer)
+        fade(o.peak, o.at, t).max(shimmer)
     }
+}
+
+fn fade(peak: f32, at: f32, t: f32) -> f32 {
+    peak * (1.0 - (t - at) * FLARE_FADE).clamp(0.0, 1.0)
 }
 
 /// A point on a standing body at `feet`, somewhere over its height.
@@ -72,7 +89,7 @@ fn on_body(fx: &mut Fx, feet: Vec3) -> Vec3 {
 }
 
 /// This frame's bodies against last frame's: flares, breaks, landings.
-pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32) {
+pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32, t: f32) {
     let mut now = [false; 64];
     for d in others {
         let i = d.slot as usize % 64;
@@ -85,17 +102,22 @@ pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32) {
             shield: d.shield,
             grounded: d.grounded,
             fall: if d.grounded { 0.0 } else { (-d.vel.y).max(0.0) },
-            flare: (was.flare - FLARE_FADE * dt).max(0.0),
+            peak: was.peak,
+            at: was.at,
             charging: false,
         };
         // Only against a frame we saw them in, alive both times.
         if was.seen && was.alive && d.alive {
             if d.shield < was.shield {
-                if d.shield == 0 {
-                    o.flare = FLARE_POP;
+                let level = if d.shield == 0 {
                     pop(fx, at);
+                    FLARE_POP
                 } else {
-                    o.flare = o.flare.max(FLARE_HIT);
+                    FLARE_HIT
+                };
+                if level >= fade(o.peak, o.at, t) {
+                    o.peak = level;
+                    o.at = t;
                 }
             }
             o.charging = d.shield > was.shield && d.shield < 255;

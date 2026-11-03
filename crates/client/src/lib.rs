@@ -127,6 +127,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<hud::HudState>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
         Startup,
         (
@@ -331,6 +332,8 @@ fn draw_fighters(
     mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
     mut fx: ResMut<look::fx::Fx>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut shield_mats: ResMut<Assets<look::shield::ShieldMaterial>>,
+    mut shells: Query<&mut Visibility, With<look::shield::ShellPart>>,
     time: Res<Time>,
 ) {
     let now = link.0.now_ms();
@@ -342,7 +345,7 @@ fn draw_fighters(
         _ => core.others(now),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
-    look::fx::bodies::watch(&mut fx, &others, time.delta_secs());
+    look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
     look::fx::bodies::watch_own(
         &mut fx,
@@ -369,7 +372,14 @@ fn draw_fighters(
             &mut players,
             &mut playing,
         );
-        look::bodies::flare(e, fx.was.flare(d.slot, t), &mut bodies, &mut mats);
+        look::bodies::flare(
+            e,
+            fx.was.flare(d.slot, t),
+            &mut bodies,
+            &mut mats,
+            &mut shield_mats,
+            &mut shells,
+        );
     }
     drawn.fighters.retain(|slot, e| {
         let k = others.iter().any(|d| d.slot == *slot);

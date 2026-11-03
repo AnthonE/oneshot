@@ -3,7 +3,8 @@
 //! It makes up events and hands them to the effects only, never to the
 //! session: the match is untouched. `?fxstage=N` plays only stage `N`:
 //! 0 rifles, 1 sniper, 2 shotgun, 3 grenade, 4 a shield taking rounds and
-//! breaking, 5 rounds into a wall, 6 a rocket and a wreck.
+//! breaking, 5 rounds into a wall, 6 a rocket and a wreck, 7 the shield
+//! shell flaring on every fighter in view.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -18,7 +19,7 @@ use crate::LinkRes;
 /// Each stage plays this long, firing every `EVERY_S`.
 const STAGE_S: f32 = 2.5;
 const EVERY_S: f32 = 0.3;
-const STAGES: u32 = 7;
+const STAGES: u32 = 8;
 /// A slot no fighter has: its shots flash like anyone else's.
 const SHOOTER: u8 = 200;
 
@@ -99,6 +100,22 @@ pub fn run(
             } else {
                 let at = feet + Vec3::new(fx.range(-0.2, 0.2), fx.range(0.6, 1.6), fx.range(-0.2, 0.2));
                 ev.push(shot(BR, shooter, at));
+            }
+        }
+        // Every fighter in view: the shell flares, and breaks every few.
+        7 => {
+            clock.hits += 1;
+            let now = time.elapsed_secs();
+            for d in core.others(link.0.now_ms()) {
+                if !d.alive {
+                    continue;
+                }
+                if clock.hits.is_multiple_of(4) {
+                    fx.was.raise(d.slot, 1.6, now);
+                    bodies::pop(&mut fx, Vec3::new(d.pos.x, d.pos.y, d.pos.z));
+                } else {
+                    fx.was.raise(d.slot, 1.0, now);
+                }
             }
         }
         // Rounds into whatever wall is ahead.
