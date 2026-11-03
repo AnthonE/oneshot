@@ -24,6 +24,8 @@ const DAMAGE_R: f32 = 90.0;
 #[derive(Resource, Default)]
 pub struct HudState {
     names: BTreeMap<u8, String>,
+    /// Each seat's skin, as the server allows it (`Msg::Seat`).
+    skins: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,
     hit_at: f32,
     hit_kill: bool,
@@ -32,9 +34,44 @@ pub struct HudState {
     /// Our kills and deaths as the stream told them (the page's stats).
     pub kills: u32,
     pub deaths: u32,
+    /// Before the welcome: the queue's wait, or why we were refused.
+    pub status: String,
+    /// The server refused us (shown, and given to the page's gate).
+    pub error: Option<String>,
+    /// A cup: where we stand, as the server last said.
+    cup: String,
+    /// The server said goodbye: the match (or the cup) is over.
+    pub bye: bool,
+}
+
+fn ordinal(n: u8) -> String {
+    let suffix = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// What a refusal means, as the three.js page said it.
+pub fn refusal(reason: u8) -> &'static str {
+    match reason {
+        proto::REFUSE_VERSION => "this page is out of date: reload it",
+        proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
+        proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
+        proto::REFUSE_BUSY => "that wallet is already queued or playing",
+        proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
+        _ => "the server is full",
+    }
 }
 
 impl HudState {
+    pub fn skin(&self, slot: u8) -> u8 {
+        self.skins.get(&slot).copied().unwrap_or(0)
+    }
+
     pub fn name(&self, slot: u8) -> String {
         self.names
             .get(&slot)
@@ -199,6 +236,16 @@ pub fn setup(mut commands: Commands) {
     ));
 }
 
+/// The HUD laid out for a 720-pixel-tall window, scaled to this one.
+pub fn scale(windows: Query<&Window, With<bevy::window::PrimaryWindow>>, mut ui: ResMut<UiScale>) {
+    if let Ok(w) = windows.single() {
+        let s = (w.height() / 720.0).clamp(0.5, 2.0);
+        if (ui.0 - s).abs() > 0.01 {
+            ui.0 = s;
+        }
+    }
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
     let me = s.core.slot;
@@ -224,9 +271,49 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
     }
     for m in msgs {
         match m {
-            Msg::Seat { slot, name, .. } => {
-                st.names.insert(*slot, name.as_str().to_string());
+            Msg::Seat {
+                slot, name, bot, skin, ..
+            } => {
+                st.skins.insert(*slot, *skin);
+                let n = if *bot {
+                    "BOT".to_string()
+                } else {
+                    name.as_str().to_string()
+                };
+                st.names.insert(*slot, n);
             }
+            Msg::Queued { mode, waiting_s } => {
+                let what = match *mode {
+                    proto::MODE_CUP => "Waiting for the cup to fill",
+                    proto::MODE_DOUBLES => "Finding a 2v2",
+                    _ => "Finding an opponent",
+                };
+                st.status = format!("{what}... {}", mmss(*waiting_s as f32));
+            }
+            Msg::Refuse { reason } => {
+                st.status = refusal(*reason).to_string();
+                st.error = Some(st.status.clone());
+            }
+            Msg::Cup {
+                round,
+                rounds,
+                entrants,
+                place,
+                points,
+                done,
+            } => {
+                st.cup = if *done {
+                    format!("Cup over: {} of {entrants}", ordinal(*place))
+                } else {
+                    let stage = if round > rounds {
+                        "the final".to_string()
+                    } else {
+                        format!("round {round} of {rounds}")
+                    };
+                    format!("Cup, {stage}: {} of {entrants} on {points} points", ordinal(*place))
+                };
+            }
+            Msg::Bye => st.bye = true,
             Msg::Kill { killer, victim, .. } => {
                 let line = if killer == victim {
                     format!("{} died", st.name(*victim))
@@ -284,9 +371,14 @@ pub fn draw(
     let core = &s.core;
     let (f, _) = core.own();
     if !s.ready {
-        for (mut t, _, sc, _, _) in texts.iter_mut() {
-            if sc.is_some() {
-                t.0 = "connecting...".into();
+        let line = if st.status.is_empty() {
+            "connecting..."
+        } else {
+            st.status.as_str()
+        };
+        for (mut t, _, _, _, ce) in texts.iter_mut() {
+            if ce.is_some() && t.0 != line {
+                t.0 = line.into();
             }
         }
         return;
@@ -338,6 +430,10 @@ pub fn draw(
                 Some(true) => c.push_str("  -  match verified"),
                 Some(false) => c.push_str("  -  verification FAILED"),
                 None => {}
+            }
+            if !st.cup.is_empty() {
+                c.push('\n');
+                c.push_str(&st.cup);
             }
             c
         }

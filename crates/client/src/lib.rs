@@ -36,6 +36,8 @@ pub struct Look {
     pitch: f32,
     /// The zoom button is held.
     pub zoom: bool,
+    /// We were alive last frame (a spawn turns us the way it faces).
+    alive: bool,
 }
 
 /// The welcome this level was built for.
@@ -53,7 +55,7 @@ struct Drawn {
 struct Eye;
 
 /// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
-/// roam route until fog shows an enemy, then close in, aim and fire. After
+/// roam route until an enemy is in the open, then close in, aim and fire. After
 /// the three.js page's autopilot; it sends what a player's hands could.
 #[derive(Resource, Default)]
 pub struct Autoplay {
@@ -68,12 +70,14 @@ pub struct Autoplay {
 const SENS: f32 = 0.0022;
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
-/// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
+/// shadows, SMAA or grass, for a software GPU (the browser gates on SwiftShader;
 /// the page also halves its canvas).
 #[derive(Clone, Copy, Default, Resource)]
 pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
+    /// Everyone else as a capsule (the many-seat browser gates).
+    pub capsules: bool,
 }
 
 impl Opts {
@@ -83,6 +87,7 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
+            capsules: has("capsules"),
         }
     }
 }
@@ -126,6 +131,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             look::textures::load,
             look::guns::load,
             look::effects::setup,
+            look::bodies::setup_plain,
             hud::setup,
         ),
     )
@@ -147,6 +153,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             look::effects::fade,
             view,
             draw_view,
+            hud::scale,
             hud::draw,
         )
             .chain(),
@@ -199,6 +206,16 @@ fn pump(
     motion: Res<AccumulatedMouseMotion>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
+    // A spawn faces somewhere: start looking that way.
+    let (alive, yaw) = {
+        let f = link.0.session().core.own().0;
+        (f.alive, f.yaw)
+    };
+    if alive && !look.alive {
+        look.yaw = yaw as f32 / 65536.0 * core::f32::consts::TAU;
+        look.pitch = 0.0;
+    }
+    look.alive = alive;
     let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
     if grabbed {
         look.yaw += motion.delta.x * SENS;
@@ -246,15 +263,35 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     auto.frames += 1;
     let (f, me) = core.own();
     let mate = core.rules.teams.then_some(core.team);
+    let eye = if f.body.crouched { CROUCH_EYE } else { EYE };
+    let from = sim::geom::V3::new(me.x, me.y + eye, me.z);
+    // In the open, not just sent: fog sends whoever could be seen soon,
+    // and a wall between is no target.
+    let clear = |d: &client_net::core::Drawn| {
+        let to = sim::geom::V3::new(d.pos.x, d.pos.y + 1.3, d.pos.z);
+        let v = to - from;
+        let len = v.len();
+        len < 0.1 || core.map.ray(from, v * (1.0 / len), len) >= len - 0.3
+    };
     let best = core
         .others(now)
         .into_iter()
-        .filter(|d| d.alive && Some(d.team & 1) != mate.map(|t| t & 1))
+        .filter(|d| d.alive && Some(d.team & 1) != mate.map(|t| t & 1) && clear(d))
         .map(|d| ((d.pos.x - me.x).hypot(d.pos.z - me.z), d))
         .min_by(|a, b| a.0.total_cmp(&b.0));
     let Some((dist, d)) = best else {
-        // Nobody in sight: walk the route until fog shows someone.
-        let route = &core.map.roam;
+        // Nobody in the open: walk the route until someone is.
+        // The map's roam points; a map without them, its pads then spawns.
+        let m = &core.map;
+        let route: Vec<sim::geom::V3> = if m.roam.is_empty() {
+            m.pads
+                .iter()
+                .map(|p| p.pos)
+                .chain(m.spawns.iter().map(|s| s.pos))
+                .collect()
+        } else {
+            m.roam.clone()
+        };
         if route.is_empty() {
             return (0, 0, 0);
         }
@@ -272,7 +309,6 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         look.pitch = 0.0;
         return (0, 0, 127);
     };
-    let eye = if f.body.crouched { CROUCH_EYE } else { EYE };
     let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
     look.yaw = dz.atan2(dx);
     look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
@@ -313,6 +349,7 @@ fn draw_fighters(
     mut commands: Commands,
     models: Res<look::guns::Models>,
     graph: Option<Res<look::bodies::Graph>>,
+    (opts, plain, st): (Res<Opts>, Res<look::bodies::Plain>, Res<hud::HudState>),
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
     mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
@@ -328,10 +365,18 @@ fn draw_fighters(
     };
     let seats = look::bodies::seats(&core.vehicles(now));
     for d in &others {
+        // A skin the stream told us of after the body was made: make it again.
+        let skin = st.skin(d.slot);
+        if let Some(&e) = drawn.fighters.get(&d.slot) {
+            if bodies.get(e).is_ok_and(|b| b.skin() != skin) {
+                commands.entity(e).despawn();
+                drawn.fighters.remove(&d.slot);
+            }
+        }
         let e = *drawn
             .fighters
             .entry(d.slot)
-            .or_insert_with(|| look::bodies::spawn(&mut commands, &models, d.team));
+            .or_insert_with(|| look::bodies::spawn(&mut commands, &models, &plain, d.team, skin, opts.capsules));
         look::bodies::pose(
             &mut commands,
             &models,
@@ -509,12 +554,16 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA.
+/// A software GPU's frame: no shadows, no SMAA, no grass.
 fn lite(
     mut commands: Commands,
     mut suns: Query<&mut DirectionalLight>,
     aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
+    grass: Query<Entity, With<look::grass::GrassBlock>>,
 ) {
+    for e in &grass {
+        commands.entity(e).despawn();
+    }
     for mut s in &mut suns {
         if s.shadows_enabled {
             s.shadows_enabled = false;
@@ -525,7 +574,7 @@ fn lite(
     }
 }
 
-/// For the browser gate (`ci/client_e2e.mjs`): `window.__oneshot`, as the
+/// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
 fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>) {
@@ -549,6 +598,20 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
     set("health", f.health.into());
     set("killcam", s.core.killcam(link.0.now_ms()).is_some().into());
+    let n = s.core.stats;
+    let stats = [
+        n.snapshots as f64,
+        n.confirmations as f64,
+        n.corrections as f64,
+        n.resyncs as f64,
+    ];
+    set(
+        "stats",
+        js_sys::Array::from_iter(stats.iter().map(|&v| JsValue::from(v))).into(),
+    );
+    set("error", st.error.clone().map_or(JsValue::NULL, JsValue::from));
+    set("bye", st.bye.into());
+    set("verified", s.core.verified.map_or(JsValue::NULL, JsValue::from));
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -567,11 +630,20 @@ fn fly(
 mod web_start {
     use wasm_bindgen::prelude::*;
 
-    /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
+    /// The page's entry: connect as `name` (with Elo Pros' `pass`, or none:
+    /// a guest), ask for `mode`, wear `skin` if the pass's wallet owns it.
     /// `opts`: a comma list of `autoplay` and `lite` (see `Opts`).
-    pub async fn play(addr: String, hash: String, name: String, mode: u8, opts: String) -> Result<(), JsValue> {
-        let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
+    pub async fn play(
+        addr: String,
+        hash: String,
+        name: String,
+        pass: String,
+        mode: u8,
+        skin: u8,
+        opts: String,
+    ) -> Result<(), JsValue> {
+        let c = client_net::web::Client::connect(addr, hash, name, pass, mode, skin).await?;
         super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts)).run();
         Ok(())
     }

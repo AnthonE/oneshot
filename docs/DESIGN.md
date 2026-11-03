@@ -51,7 +51,7 @@ are original; never another game's layout or art.
 | `server` | Rooms, transport, sign-in, fog of war, lag-comp depth, snapshots, telemetry, reports | Native, wtransport over quinn. |
 | `client-net` | Session (handshake), clock, prediction, reconciliation, interpolation | `core` and `session` build everywhere; the transport is wtransport natively and WebTransport in wasm, behind one `Wire` trait. |
 | `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, audio, menus | Milestone 12 on. Native first; the same crate built for wasm (WebGPU, WebGL2 fallback) replaces `web/`. Draws; never decides. |
-| `web/` | three.js renderer | Today's browser client. Kept until the Bevy wasm build plays as well, then deleted. |
+| `web/` | three.js renderer | The old browser client, replaced by the Bevy page (milestone 12). Served only with `--web web/dist`; deleted once the Bevy page has been played on real GPUs. |
 | `tools/maps` | Map compiler and editor | JS, from Fireplace (`RIP.md`). |
 
 Why Bevy now: the look we want (sky, clouds, terrain, grass, real lighting)
@@ -441,13 +441,17 @@ keeps every gate in §17 green and moves a golden only on purpose.
 12. **The Bevy client:** a session layer in `client-net` and a native
     transport (done: `client_net::session::Session` over a `Wire`, the
     browser's WebTransport in `web.rs`, wtransport in `native.rs`; the
-    server's end-to-end test plays through it), then the client (C1 done:
-    `crates/client`, Bevy 0.18, its own workspace; the level from the
-    sim's map, fighters and vehicles as plain shapes, first-person and
-    chase cameras, the controls, a text HUD; native on wtransport, and in
-    the browser on WebGL2, where it joins a Big Team match on Dry Fork): a playable skeleton, Gates' lighting, sky,
-    terrain and grass, the game's feel, and last its wasm build replacing
-    `web/`.
+    server's end-to-end test plays through it), then the client in
+    `crates/client` (Bevy 0.18, its own workspace), done in steps:
+    C1 a playable skeleton (native on wtransport, the browser on WebGL2);
+    C2–C5 Gates' lighting, sky, the textured ground and grass; C6 Triple T
+    and the guns (converted once by `tools/glb`), the gun in view, effects,
+    the HUD, the kill cam and sound; C7 the browser build replacing `web/`:
+    the `web` profile at 9.9 MB gzipped against an 11 MB gate
+    (`ci/client.sh`), the menu and Elo Pros sign-in on its page, the server
+    serving it by default, and `ci/e2e.mjs` playing it. `web/` stays
+    buildable (`--web web/dist`) until the Bevy page has been played on
+    real GPUs, then goes.
 
 ## 17 · What CI blocks a merge on
 

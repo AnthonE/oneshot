@@ -1,8 +1,19 @@
 # oneshot
 
-A free-to-play, Halo-style arena shooter for the browser: 1v1 and 2v2 ranked,
-with an authoritative server and fog of war, so it can be ranked without
-trusting anyone's machine.
+A free-to-play, Halo-style shooter for the desktop and the browser: 1v1 and
+2v2 ranked, and 8v8 Big Team, with an authoritative server and fog of war,
+so it can be ranked without trusting anyone's machine.
+
+```sh
+ci/client.sh                            # the Bevy client: desktop, and the browser build into crates/client/dist
+cargo run -p server --release           # then open http://127.0.0.1:8080 in Chrome
+cargo run --release --manifest-path crates/client/Cargo.toml --features sound -- --server 127.0.0.1:8080   # the desktop client
+node ci/e2e.mjs                         # the browser build plays a bot in headless Chromium
+```
+
+The milestones below are the history; milestone 2's three.js page in `web/`
+is still built by `ci/build_web.sh` and served with `--web web/dist`, until
+the Bevy page has been played on real GPUs.
 
 - [`docs/DESIGN.md`](docs/DESIGN.md): the design, netcode first.
 - [`docs/RIP.md`](docs/RIP.md): what we take from Gates, Fireplace,

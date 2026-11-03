@@ -1,5 +1,7 @@
-//! The page, served plain: the built `web/dist`, and `/server.json` telling
-//! it where the game listens and the certificate hash to pin. Plain HTTP on
+//! The page, served plain: the built `crates/client/dist` (the Bevy
+//! client; `--web web/dist` for the three.js page while it lasts), and
+//! `/server.json` telling it where the game listens and the certificate
+//! hash to pin. Plain HTTP on
 //! localhost is a secure context, which WebTransport needs. In production a
 //! real web server and a real certificate stand in front.
 

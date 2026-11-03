@@ -17,7 +17,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
 | `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and browser (`crates/client/dist`): draws, never decides. Its own workspace; `ci/client.sh` is its check |
-| `web/` | three.js page: draws, never decides. Replaced by the Bevy client once it plays as well (`DESIGN.md` §16, milestone 12) |
+| `web/` | the old three.js page, served only with `--web web/dist`: the Bevy page replaced it (milestone 12); deleted once the Bevy page has been played on real GPUs |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
 
 ## The loop
@@ -25,14 +25,15 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 1. Write the code.
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
-4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
-   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
-   `node ci/e2e.mjs 60 6 3` for sixteen in Big Team on Dry Fork's terrain).
-5. Touching the Bevy client: `ci/client.sh` (clippy, native, wasm into
-   `crates/client/dist`; serve it with `oneshot-server --web crates/client/dist`),
-   then `node ci/client_e2e.mjs` (it must score a kill) and
-   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it. Native
-   sound is `--features sound` (needs ALSA); the browser always has it.
+4. Touching the Bevy client or the netcode: `ci/client.sh` (clippy, native,
+   the browser build into `crates/client/dist` under its gzipped size budget;
+   the server serves it by default), then `node ci/e2e.mjs` (it must score a
+   kill), `node ci/e2e.mjs 150 4 2` for eight seats on another map,
+   `node ci/e2e.mjs 180 6 3` for sixteen in Big Team on Dry Fork, and
+   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it.
+   `PROFILE=release ci/client.sh` builds the browser faster to iterate on.
+   Native sound is `--features sound` (needs ALSA); the browser always has it.
+5. Touching `web/` (while it lasts): `ci/build_web.sh && WEB=web/dist node ci/e2e.mjs`.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.

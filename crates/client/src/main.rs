@@ -45,6 +45,7 @@ fn main() {
     let opts = oneshot_client::Opts {
         autoplay: args.iter().any(|a| a == "--autoplay"),
         lite: args.iter().any(|a| a == "--lite"),
+        capsules: args.iter().any(|a| a == "--capsules"),
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
 }

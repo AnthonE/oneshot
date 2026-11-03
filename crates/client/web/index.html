@@ -4,25 +4,153 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>oneshot</title>
+    <link rel="icon" href="data:," />
     <style>
       html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
       #wrap { width: 100vw; height: 100vh; }
       /* ?lite=1: a quarter of the pixels, scaled back up (a software GPU). */
       #wrap.lite { width: 50vw; height: 50vh; transform: scale(2); transform-origin: 0 0; }
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
+      #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
+        font: 16px system-ui, sans-serif; padding: 0 16px; text-align: center; }
+      #menu h1 { margin: 0; font-size: 52px; letter-spacing: 6px; }
+      #menu p { margin: 0; opacity: 0.75; }
+      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
+        background: #0008; color: inherit; }
+      #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
+      #menu button:disabled { opacity: 0.35; cursor: default; }
+      #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
+      #menu .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+      #who, #status { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
+      .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
+      #cancel { position: fixed; left: 50%; bottom: 22%; transform: translateX(-50%); font: 600 16px system-ui, sans-serif;
+        padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3; background: #000a; color: #e9eef5; cursor: pointer; }
     </style>
   </head>
   <body>
     <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
+    <div id="menu">
+      <h1>ONESHOT</h1>
+      <p>Halo-style 1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
+      <div class="row">
+        <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
+        <select id="skin" title="Skin: worn if your wallet owns it"></select>
+      </div>
+      <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
+      <div id="who"></div>
+      <button id="play" data-mode="0">Play the bot</button>
+      <div class="row">
+        <button class="quiet" data-mode="3">Free for all</button>
+        <button class="quiet" data-mode="4">Gun Game</button>
+        <button class="quiet" data-mode="6">Big Team</button>
+      </div>
+      <div class="row">
+        <button id="duel" data-mode="1" disabled>Ranked Duel</button>
+        <button id="doubles" data-mode="2" disabled>Ranked Doubles</button>
+        <button id="cup" data-mode="5" disabled>Enter a cup</button>
+      </div>
+      <div id="status"></div>
+      <div class="keys">WASD move · Space jump · Ctrl or C crouch · Mouse aim and fire · Right mouse zoom<br />
+        R reload · Q swap · F melee · G frag · E pick up, get in and out · Esc frees the mouse</div>
+    </div>
+    <button id="cancel" hidden>Cancel</button>
+    <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
+         doesn't load, sign-in is hidden and the bot is still there. -->
+    <script async src="https://elopros.com/sdk/elo-signin-1.js"></script>
     <script type="module">
-      // The Bevy client in the browser: the server's address and
-      // certificate hash from server.json, as the three.js page reads them.
-      import init, { play } from './oneshot_client.js';
+      // The Bevy client in the browser. The menu is the three.js page's:
+      // a name, a skin (worn only if the signed-in wallet owns it; the
+      // server checks), Elo Pros' sign-in for ranked, and a mode. Then
+      // play(): the session and everything drawn are the wasm's.
+      import init, { play, skin_names } from './oneshot_client.js';
       const params = new URLSearchParams(location.search);
-      if (params.get('lite') === '1') document.getElementById('wrap').classList.add('lite');
+      const $ = (id) => document.getElementById(id);
+      if (params.get('lite') === '1') $('wrap').classList.add('lite');
+      const store = {
+        get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+        set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window */ } },
+      };
       await init();
       const info = await (await fetch('server.json')).json();
-      await play(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0), ['autoplay', 'lite'].filter((k) => params.get(k) === '1').join(','));
+      $('name').value = params.get('name') || store.get('oneshot.name') || '';
+      skin_names().forEach((n, i) => $('skin').add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
+      $('skin').value = store.get('oneshot.skin') || '0';
+      const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
+
+      // ?autoplay=1 (the browser gates): no menu, straight into ?mode.
+      const opts = ['autoplay', 'lite', 'capsules'].filter((k) => params.get(k) === '1').join(',');
+      const mode = params.get('autoplay') === '1'
+        ? Number(params.get('mode') || 0)
+        : await new Promise((go) => {
+            for (const b of document.querySelectorAll('#menu button[data-mode]')) {
+              b.addEventListener('click', () => go(Number(b.dataset.mode)), { once: true });
+            }
+          });
+      const name = $('name').value.trim() || 'player';
+      store.set('oneshot.name', name);
+      store.set('oneshot.skin', $('skin').value);
+      $('status').textContent = 'connecting…';
+      // Until the welcome (a ranked queue can take a while) a way back.
+      const cancel = $('cancel');
+      cancel.onclick = () => location.reload();
+      setInterval(() => {
+        const s = window.__oneshot;
+        if (!s) return;
+        $('menu').hidden = true;
+        $('menu').style.display = 'none';
+        // Shown while queued, and after a refusal (back to the menu).
+        cancel.hidden = s.connected && !s.error;
+      }, 250);
+      try {
+        // A pass goes with every mode once signed in: it is what proves a
+        // skin is yours. Without one, a guest in the standard look.
+        await play(info.addr, info.hash, name, signin.pass(), mode, Number($('skin').value) || 0, opts);
+      } catch (e) {
+        // Bevy's event loop leaves run() by throwing; that is not an error.
+        if (!String(e).includes('control flow')) {
+          $('menu').style.display = '';
+          $('status').textContent = String(e);
+          window.__oneshot = { error: String(e), connected: false };
+        }
+      }
+
+      /** Sign in with Elo Pros (https://elopros.com/sdk/elo-signin-1.js):
+       * the server hands out the nonce the pass must carry; one is fetched
+       * ahead so the popup opens on the click itself (a popup opened later
+       * is blocked). Ranked needs a wallet linked to the account. */
+      async function setupSignIn(info, button, who, ranked) {
+        let pass = '';
+        let nonce = '';
+        const fresh = async () => {
+          try { nonce = (await (await fetch('nonce')).json()).nonce; } catch { nonce = ''; }
+        };
+        const sdk = () => window.EloSignIn;
+        for (let i = 0; i < 20 && !sdk(); i++) await new Promise((r) => setTimeout(r, 100));
+        if (info.signin && sdk()) {
+          button.hidden = false;
+          await fresh();
+          button.onclick = async () => {
+            try {
+              const res = await sdk().popup({ game: info.game, nonce });
+              pass = res.pass;
+              const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
+              const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
+              who.textContent = wallet
+                ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}`
+                : 'Signed in · link a wallet on Elo Pros to play ranked';
+              for (const b of ranked) b.disabled = !wallet;
+              button.hidden = true;
+            } catch (e) {
+              who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;
+            }
+            await fresh();
+          };
+        } else {
+          who.textContent = info.signin ? '' : 'Ranked is off on this server';
+        }
+        return { pass: () => pass };
+      }
     </script>
   </body>
 </html>

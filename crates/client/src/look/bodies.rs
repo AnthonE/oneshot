@@ -93,6 +93,7 @@ pub fn graph(
 #[derive(Component)]
 pub struct Body {
     team: u8,
+    skin: u8,
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
     clip: Option<usize>,
@@ -100,27 +101,116 @@ pub struct Body {
     held: u8,
 }
 
-/// A body spawned for `team`: its root, which the caller places.
-pub fn spawn(commands: &mut Commands, models: &Models, team: u8) -> Entity {
+/// What every body shares: the stand-in capsule (`?capsules=1`: a software
+/// GPU can't skin sixteen Triple Ts at a playable rate) with a material a
+/// side, and the skins' waist band with a material a trim.
+#[derive(Resource)]
+pub struct Plain {
+    mesh: Handle<Mesh>,
+    sides: [Handle<StandardMaterial>; 2],
+    band: Handle<Mesh>,
+    trims: Vec<Option<Handle<StandardMaterial>>>,
+}
+
+pub fn setup_plain(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+) {
+    let side = |t: u8| StandardMaterial {
+        base_color: team_color(t),
+        perceptual_roughness: 0.6,
+        ..default()
+    };
+    let trims = (0..SKIN_TRIM.len() as u8)
+        .map(|k| {
+            trim(k).map(|c| {
+                mats.add(StandardMaterial {
+                    base_color: c,
+                    perceptual_roughness: 0.4,
+                    metallic: 0.5,
+                    ..default()
+                })
+            })
+        })
+        .collect();
+    commands.insert_resource(Plain {
+        mesh: meshes.add(Capsule3d::new(0.35, 1.1)),
+        sides: [mats.add(side(0)), mats.add(side(1))],
+        band: meshes.add(Torus::new(0.175, 0.225)),
+        trims,
+    });
+}
+
+/// A body spawned for `team` in `skin`: its root, which the caller places.
+/// With `capsule`, a capsule instead of Triple T.
+pub fn spawn(commands: &mut Commands, models: &Models, plain: &Plain, team: u8, skin: u8, capsule: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
         .id();
-    commands
-        .spawn((
-            SceneRoot(models.body_scene.clone()),
-            Transform::from_rotation(Quat::from_rotation_y(FACE)),
+    // A skin's band at the waist, in its trim.
+    if let Some(Some(m)) = plain.trims.get(skin as usize) {
+        commands.spawn((
+            Mesh3d(plain.band.clone()),
+            MeshMaterial3d(m.clone()),
+            Transform::from_xyz(0.0, 1.0, 0.0),
             ChildOf(root),
-        ))
-        .observe(dress);
+        ));
+    }
+    match capsule {
+        true => {
+            commands.spawn((
+                Mesh3d(plain.mesh.clone()),
+                MeshMaterial3d(plain.sides[team as usize & 1].clone()),
+                Transform::from_xyz(0.0, 0.9, 0.0),
+                ChildOf(root),
+            ));
+        }
+        false => {
+            commands
+                .spawn((
+                    SceneRoot(models.body_scene.clone()),
+                    Transform::from_rotation(Quat::from_rotation_y(FACE)),
+                    ChildOf(root),
+                ))
+                .observe(dress);
+        }
+    }
     commands.entity(root).insert(Body {
         team,
+        skin,
         player: None,
         clip: None,
         hand,
         held: 0,
     });
     root
+}
+
+impl Body {
+    pub fn skin(&self) -> u8 {
+        self.skin
+    }
+}
+
+/// Each skin's trim (`proto::SKINS` order), drawn over the side's colour
+/// and never instead of it: a skin changes no hitbox and no fighter's
+/// visibility (web/src/players.ts's `SKIN_TRIM`).
+pub const SKIN_TRIM: [Option<u32>; 6] = [
+    None,
+    Some(0xf2f2f2),
+    Some(0xff6a1a),
+    Some(0x8fd8ff),
+    Some(0x58d06a),
+    Some(0xe8b931),
+];
+/// The trim's sheen, as a share of the side's glow.
+const TRIM_GLOW: f32 = 0.75;
+
+pub fn trim(skin: u8) -> Option<Color> {
+    let c = (*SKIN_TRIM.get(skin as usize)?)?;
+    Some(Color::srgb_u8((c >> 16) as u8, (c >> 8) as u8, c as u8))
 }
 
 pub fn team_color(team: u8) -> Color {
@@ -167,6 +257,10 @@ fn dress(
             };
             mat.base_color = base.into();
             mat.emissive = tint * glow;
+            // A skin is a faint sheen of its trim on top.
+            if let Some(t) = trim(body.skin) {
+                mat.emissive += t.to_linear() * (glow * TRIM_GLOW);
+            }
             // In nits, under the camera's exposure like everything lit.
             mat.emissive_exposure_weight = 1.0;
             commands

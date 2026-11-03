@@ -66,3 +66,19 @@ debug = false
 [profile.release]
 codegen-units = 16
 lto = "thin"
+
+# The browser build (ci/client.sh): bytes are what a page pays, so whole-
+# program LTO, one codegen unit, no debug info and no unwinding (Gates'
+# `[profile.web]`). The names go at wasm-bindgen (`--remove-name-section`):
+# `strip = true` would also take the target-features section it reads.
+# opt-level 3, not "s": the frame is CPU on the page's one thread.
+# Measured 2026-11-03: --release 95.4 MB raw, 15.2 MB gzipped; this, 39.7 MB
+# and 9.9 MB before wasm-opt.
+[profile.web]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+panic = "abort"
+
