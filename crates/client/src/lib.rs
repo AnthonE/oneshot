@@ -105,7 +105,7 @@ const ZOOM_SENS: f32 = 0.45;
 
 /// The keys, as the three.js page binds them (the three.js page's input.ts, after
 /// Fireplace's arena). The wheel swaps too.
-const KEYS: [(KeyCode, u16); 11] = [
+const KEYS: [(KeyCode, u16); 12] = [
     (KeyCode::Space, JUMP),
     (KeyCode::ControlLeft, CROUCH),
     (KeyCode::KeyC, CROUCH),
@@ -117,6 +117,7 @@ const KEYS: [(KeyCode, u16); 11] = [
     (KeyCode::Digit1, SWAP),
     (KeyCode::Digit2, SWAP),
     (KeyCode::KeyE, USE),
+    (KeyCode::KeyT, GREN_SWITCH),
 ];
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
@@ -267,7 +268,10 @@ fn pump(
     let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
     let key = |k: KeyCode| grabbed && (keys.pressed(k) || keys.just_pressed(k));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
-    look.zoom = button(MouseButton::Right) && !auto.on;
+    // A gun in each hand: the right button is the left hand's trigger,
+    // not the scope.
+    let dual = link.0.session().core.own().0.dual();
+    look.zoom = button(MouseButton::Right) && !auto.on && !dual;
     if grabbed {
         let sens = SENS * if look.zoom { ZOOM_SENS } else { 1.0 };
         look.yaw += motion.delta.x * sens;
@@ -288,6 +292,9 @@ fn pump(
     }
     if look.zoom {
         buttons |= ZOOM;
+    }
+    if dual && look.armed && button(MouseButton::Right) {
+        buttons |= FIRE_LEFT;
     }
     if grabbed && scroll.delta.y != 0.0 {
         buttons |= SWAP;

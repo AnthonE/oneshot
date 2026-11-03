@@ -392,7 +392,7 @@ impl Client {
         let g = f.gun();
         let a = sim::arms::arm(g.arm);
         let reload = if f.reload > 0 {
-            1.0 - f.reload as f32 / sim::consts::ticks(a.reload_ms).max(1) as f32
+            1.0 - f.reload as f32 / a.reload_ticks().max(1) as f32
         } else {
             0.0
         };

@@ -48,7 +48,7 @@ const fn g(
 }
 
 /// By arm id (`sim::arms`), from 1.
-pub const GUNS: [(u8, Gun); 7] = [
+pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::AR,
         g(
@@ -147,6 +147,120 @@ pub const GUNS: [(u8, Gun); 7] = [
             "reload_rifle_0",
         ),
     ),
+    // Placeholders: the rest borrow the nearest model and sound until they
+    // have their own (web/src/art.ts the same).
+    (
+        arms::SWORD,
+        g(
+            "magnum",
+            0.325,
+            0.17,
+            1.0,
+            false,
+            "shot_bolt",
+            3,
+            "shot_bolt_far",
+            "reload_pistol_0",
+        ),
+    ),
+    (
+        arms::CARBINE,
+        g(
+            "br",
+            0.957,
+            0.36,
+            0.85,
+            true,
+            "shot_gun",
+            2,
+            "shot_gun_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::BEAM_RIFLE,
+        g(
+            "sniper",
+            1.09,
+            0.33,
+            0.8,
+            true,
+            "shot_bolt",
+            3,
+            "shot_bolt_far",
+            "reload_bolt_0",
+        ),
+    ),
+    (
+        arms::ION_RIFLE,
+        g(
+            "smg",
+            0.621,
+            0.42,
+            0.9,
+            true,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::ION_PISTOL,
+        g(
+            "magnum",
+            0.325,
+            0.17,
+            1.0,
+            false,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_pistol_0",
+        ),
+    ),
+    (
+        arms::SHARDS,
+        g(
+            "smg",
+            0.621,
+            0.42,
+            0.9,
+            true,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::LAUNCHER,
+        g(
+            "shotgun",
+            0.949,
+            0.3,
+            0.85,
+            true,
+            "shot_rocket",
+            3,
+            "shot_rifle_far",
+            "reload_shotgun_0",
+        ),
+    ),
+    (
+        arms::CANNON,
+        g(
+            "rocket-launcher",
+            1.058,
+            0.45,
+            0.8,
+            true,
+            "shot_rocket",
+            3,
+            "shot_rifle_far",
+            "reload_rifle_0",
+        ),
+    ),
 ];
 
 pub fn gun(arm: u8) -> Option<&'static Gun> {
@@ -177,7 +291,7 @@ pub struct Models {
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
     let scene = |f: &str| assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{f}.glb")));
-    let mut guns = vec![None; 8];
+    let mut guns = vec![None; arms::COUNT];
     for (arm, g) in &GUNS {
         guns[*arm as usize] = Some(scene(g.file));
     }

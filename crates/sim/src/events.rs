@@ -19,9 +19,11 @@ pub enum Kind {
     Spawn,
     /// `a` took arm `c` from a pad.
     Pickup,
-    /// A blast at `pos`; `c` is the arm id (rocket) or [`Cause::Grenade`].
+    /// A blast at `pos`; `c` is the arm id (rocket) or [`Cause::Grenade`]
+    /// or [`Cause::Sticky`].
     Blast,
     Melee,
+    /// `a` threw a grenade; `c` 1 for a sticky.
     Throw,
     /// `a` hurt vehicle `part` (its slot) for `c` points.
     VehicleHit,
@@ -45,6 +47,8 @@ pub enum Cause {
     Splatter = 104,
     /// In or by a vehicle when it blew up.
     Wreck = 105,
+    /// A sticky grenade: stuck to, or in its blast.
+    Sticky = 106,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

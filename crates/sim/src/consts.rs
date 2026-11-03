@@ -17,8 +17,8 @@ pub const fn ticks(ms: u32) -> u32 {
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
-/// Weapon pads on a map.
-pub const MAX_PADS: usize = 8;
+/// Weapon pads on a map (the Range has one of every gun).
+pub const MAX_PADS: usize = 16;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
 /// Boxes in a map (`tools/maps/compile.mjs` holds maps to it).
@@ -91,12 +91,50 @@ pub const MELEE_COOL_MS: u32 = 800;
 /// A hit within this cosine of straight behind the victim kills.
 pub const BEHIND_COS: f32 = 0.5;
 
+// The sword (arms::SWORD). A pull with the aim on someone (its body grown
+// by `LUNGE_PAD`: the red reticle) kills them in `SWORD_REACH`, or past it
+// to `LUNGE_RANGE` lunges: the world drives the body at them, steering, for
+// up to `LUNGE_MS`, and kills on reaching `STRIKE_R` of them. Two lunging
+// at each other clash: both thrown back, nobody hurt.
+pub const SWORD_REACH: f32 = 2.0;
+pub const LUNGE_RANGE: f32 = 6.0;
+pub const LUNGE_PAD: f32 = 0.5;
+pub const LUNGE_SPEED: f32 = 18.0;
+pub const LUNGE_MS: u32 = 400;
+/// Feet to feet, across the ground, and up or down within a body's height.
+pub const STRIKE_R: f32 = 1.2;
+/// How hard a clash throws each back.
+pub const CLASH_PUSH: f32 = 8.0;
+
+/// A homing round (a shard, a charged bolt) locks on whoever its aim
+/// passes this near, at the shot.
+pub const HOMING_PAD: f32 = 1.0;
+/// Shards fall out of a fighter this long after the last went in.
+pub const NEEDLE_KEEP_MS: u32 = 1500;
+/// What a charged bolt does to a hull.
+pub const CHARGE_VEH_DMG: i32 = 60;
+
 pub const GREN_DMG: i32 = 150;
 pub const GREN_RADIUS: f32 = 5.0;
 pub const GREN_FULL: f32 = 1.0;
 pub const GREN_FUSE_MS: u32 = 1800;
 pub const GREN_SPEED: f32 = 16.0;
 pub const GREN_START: u8 = 2;
+/// Sticky grenades at a spawn (at most `GREN_MAX` too). Halo 2 gives
+/// plasma grenades from the map; ours has no grenade pickups yet.
+pub const STICKY_START: u8 = 1;
+/// A sticky (Halo 2's plasma grenade in multiplayer): it sticks to the
+/// first body or hull it touches (not to the map: it skips off that), and
+/// goes off `STICKY_FUSE_MS` after it sticks or first lands, never before
+/// `STICKY_ARM_MS` from the throw. Its blast kills to `STICKY_FULL`; the
+/// one it is stuck to dies whatever.
+pub const STICKY_FUSE_MS: u32 = 900;
+pub const STICKY_ARM_MS: u32 = 1300;
+pub const STICKY_DMG: i32 = 200;
+pub const STICKY_RADIUS: f32 = 5.3;
+pub const STICKY_FULL: f32 = 1.5;
+/// Dual wielding: both hands reload together, this much slower.
+pub const DUAL_RELOAD_K: f32 = 1.5;
 pub const GREN_MAX: u8 = 4;
 pub const GREN_COOL_MS: u32 = 600;
 /// Speed kept along the normal and the surface in a bounce.

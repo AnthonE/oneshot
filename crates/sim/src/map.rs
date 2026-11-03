@@ -52,6 +52,9 @@ pub struct Launcher {
 pub struct Def {
     pub id: u8,
     pub name: &'static str,
+    /// A practice map (the Range): played only when a server names it,
+    /// never in the rotation.
+    pub practice: bool,
     pub lo: (f32, f32),
     pub hi: (f32, f32),
     pub boxes: &'static [[f32; 6]],
@@ -169,8 +172,9 @@ pub struct Map {
 }
 
 impl Map {
-    /// Builds the box grid; every constructor ends here.
-    fn indexed(mut self) -> Map {
+    /// Builds the box grid; every constructor ends here, and a test that
+    /// adds a box calls it again.
+    pub fn indexed(mut self) -> Map {
         self.grid = Grid::build(&self.boxes);
         self
     }

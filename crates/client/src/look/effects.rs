@@ -69,7 +69,7 @@ pub fn on_events(commands: &mut Commands, fx: &Fx, mats: &mut Assets<StandardMat
         let from = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
         let to = Vec3::new(e.end.x, e.end.y, e.end.z);
         match e.kind {
-            k if k == Kind::Shot as u8 && e.part != HEARD && e.c != sim::arms::ROCKET as u16 => {
+            k if k == Kind::Shot as u8 && e.part != HEARD && sim::arms::arm(e.c as u8).kind.ray() => {
                 let len = from.distance(to);
                 let start = if e.a == me && len > OWN_TRACER_SKIP_M {
                     from.lerp(to, OWN_TRACER_SKIP_M / len)

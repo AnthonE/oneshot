@@ -469,7 +469,11 @@ pub fn draw(
     let g = f.gun();
     let arm = sim::arms::arm(g.arm);
     let other = f.guns[1 - f.cur as usize];
-    let reload = if f.reload > 0 { "  reloading" } else { "" };
+    let reload = match (f.reload > 0, arm.hot()) {
+        (true, true) => "  venting",
+        (true, false) => "  reloading",
+        _ => "",
+    };
     let swap = if other.arm != 0 {
         format!("\n{}", sim::arms::arm(other.arm).name)
     } else {
@@ -480,9 +484,29 @@ pub fn draw(
         Some(_) => "\nriding: E gets out",
         None => "",
     };
+    // A gun that heats has a battery, no reserve: its heat goes there.
+    let spare = if arm.hot() {
+        format!("heat {}%", g.heat as u32 * 100 / sim::arms::HEAT_FULL as u32)
+    } else {
+        g.reserve.to_string()
+    };
+    // Two guns: both named, both mags. The grenade a throw takes is marked.
+    let (name, mag) = if f.dual() {
+        let l = sim::arms::arm(f.left.arm);
+        (
+            format!("{} + {}", arm.name, l.name),
+            format!("{} | {}", g.mag, f.left.mag),
+        )
+    } else {
+        (arm.name.to_string(), g.mag.to_string())
+    };
+    let mark = |k: u8| if f.gren_kind == k { "*" } else { "" };
     let ammo = format!(
-        "{}{reload}\n{} / {}   grenades {}{swap}{ride}",
-        arm.name, g.mag, g.reserve, f.grenades
+        "{name}{reload}\n{mag} / {spare}   frags {}{} stickies {}{}{swap}{ride}",
+        f.grenades,
+        mark(0),
+        f.stickies,
+        mark(1)
     );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
     let net = if st.net {
