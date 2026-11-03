@@ -3,7 +3,7 @@
 //! [`Fighter::step_local`] is what the browser predicts (docs/DESIGN.md §5);
 //! the world resolves what it fired against everyone else.
 
-use crate::arms::{arm, Kind, NONE, SWAP_MS};
+use crate::arms::{arm, Kind, HEAT_FULL, NONE, SWAP_MS};
 use crate::consts::*;
 use crate::geom::V3;
 use crate::input::*;
@@ -16,6 +16,8 @@ pub struct Gun {
     pub arm: u8,
     pub mag: u16,
     pub reserve: u16,
+    /// A hot gun's heat, in 1/128 % ([`HEAT_FULL`] is 100).
+    pub heat: u16,
 }
 
 impl Gun {
@@ -25,6 +27,7 @@ impl Gun {
             arm: id,
             mag: a.mag,
             reserve: a.reserve,
+            heat: 0,
         }
     }
 }
@@ -70,6 +73,11 @@ pub struct Fighter {
     /// not the prediction's: the client sees it as its body's velocity.
     pub lunge: u8,
     pub lunge_left: u16,
+    /// Ticks the trigger of a charge weapon has been held, to its full.
+    pub charge: u16,
+    /// Shards stuck in this fighter, and ticks since the last; the world's.
+    pub needles: u8,
+    pub needle_t: u16,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -79,6 +87,8 @@ pub struct Local {
     /// A round left the gun in hand (`shots` already counts it).
     pub fired: bool,
     pub melee: bool,
+    /// The round fired is a charge weapon's charged one.
+    pub charged: bool,
     pub throw: bool,
     /// USE went down this tick.
     pub use_pad: bool,
@@ -138,6 +148,9 @@ impl Fighter {
         self.ride = 0;
         self.lunge = 0;
         self.lunge_left = 0;
+        self.charge = 0;
+        self.needles = 0;
+        self.needle_t = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -181,27 +194,46 @@ impl Fighter {
         dec(&mut self.burst_gap);
         dec(&mut self.melee_cool);
         dec(&mut self.gren_cool);
+        // Hot guns cool, in hand or on the back; one venting doesn't (the
+        // vent is its reload).
+        for i in 0..2 {
+            let a = arm(self.guns[i].arm);
+            let venting = i == self.cur as usize & 1 && self.reload > 0;
+            if a.hot() && !venting {
+                self.guns[i].heat = self.guns[i].heat.saturating_sub(a.heat_cool);
+            }
+        }
         if self.reload > 0 {
             self.reload -= 1;
             if self.reload == 0 {
                 let a = arm(self.gun().arm);
                 let g = self.gun_mut();
-                let take = (a.mag - g.mag).min(g.reserve);
-                g.mag += take;
-                g.reserve -= take;
+                if a.hot() {
+                    g.heat = 0;
+                } else {
+                    let take = (a.mag - g.mag).min(g.reserve);
+                    g.mag += take;
+                    g.reserve -= take;
+                }
             }
         }
 
-        // Swap: cancels a reload and a burst.
+        // Swap: cancels a reload, a burst and a charge.
         if pressed & SWAP != 0 && self.guns[(self.cur as usize & 1) ^ 1].arm != NONE {
             self.cur ^= 1;
             self.reload = 0;
             self.burst_left = 0;
+            self.charge = 0;
             self.refire = self.refire.max(ticks(SWAP_MS) as u16);
         }
 
         let a = arm(self.gun().arm);
         let g = *self.gun();
+        // A hot gun past full vents (again, if a swap cut its vent short).
+        if a.hot() && g.heat >= HEAT_FULL && self.reload == 0 {
+            self.reload = a.vent_ticks() as u16;
+            self.charge = 0;
+        }
         let can_reload = g.arm != NONE && g.mag < a.mag && g.reserve > 0 && self.reload == 0;
         if can_reload && (pressed & RELOAD != 0 || (g.mag == 0 && inp.held(FIRE))) {
             self.reload = ticks(a.reload_ms) as u16;
@@ -219,6 +251,19 @@ impl Fighter {
             } else {
                 self.burst_gap = ticks(a.burst_gap_ms) as u16;
             }
+        } else if a.charge_ms > 0 {
+            // A charge weapon fires on the release: charged if held to full.
+            let full = ticks(a.charge_ms) as u16;
+            if !ready || self.refire > 0 {
+                self.charge = 0;
+            } else if inp.held(FIRE) {
+                self.charge = (self.charge + 1).min(full);
+            } else if self.charge > 0 {
+                out.fired = true;
+                out.charged = self.charge >= full && g.mag >= a.charge_cost;
+                self.charge = 0;
+                self.refire = ticks(a.refire_ms) as u16;
+            }
         } else if ready && self.burst_left == 0 && self.refire == 0 && inp.held(FIRE) && (a.auto || pressed & FIRE != 0)
         {
             out.fired = true;
@@ -230,8 +275,18 @@ impl Fighter {
             }
         }
         if out.fired {
-            if a.kind != Kind::Sword {
-                self.gun_mut().mag -= 1;
+            let cost = match a.kind {
+                Kind::Sword => 0,
+                _ if out.charged => a.charge_cost,
+                _ => 1,
+            };
+            let heat = if out.charged { a.charge_heat } else { a.heat_shot };
+            let g = self.gun_mut();
+            g.mag -= cost.min(g.mag);
+            g.heat = g.heat.saturating_add(heat.saturating_mul(128));
+            if a.hot() && g.heat >= HEAT_FULL {
+                self.reload = a.vent_ticks() as u16;
+                self.burst_left = 0;
             }
             self.shots = self.shots.wrapping_add(1);
             if a.kind == Kind::Rocket {
@@ -285,6 +340,7 @@ impl Thing for Fighter {
             h.u8(g.arm);
             h.u16(g.mag);
             h.u16(g.reserve);
+            h.u16(g.heat);
         }
         h.u8(self.cur);
         h.u16(self.refire);
@@ -302,5 +358,8 @@ impl Thing for Fighter {
         h.u8(self.ride);
         h.u8(self.lunge);
         h.u16(self.lunge_left);
+        h.u16(self.charge);
+        h.u8(self.needles);
+        h.u16(self.needle_t);
     }
 }

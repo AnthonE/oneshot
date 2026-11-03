@@ -20,7 +20,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 10;
+pub const PROTO_VER: u16 = 11;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -29,7 +29,7 @@ pub const MAX_INPUT_FRAMES: usize = 16;
 pub const MAX_REMOTES: usize = MAX_FIGHTERS - 1;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
-pub const MAX_SNAP_PADS: usize = 8;
+pub const MAX_SNAP_PADS: usize = 15;
 pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
@@ -245,7 +245,8 @@ pub struct Remote {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProjState {
-    /// 0 rocket, 1 frag.
+    /// `sim::world::ProjKind` as a number: 0 rocket, 1 frag, 2 ion bolt,
+    /// 3 charged bolt, 4 shard, 5 launcher grenade, 6 cannon ball.
     pub kind: u8,
     pub owner: u8,
     pub pos: V3,
@@ -308,14 +309,14 @@ impl Pack for Remote {
 
 impl Pack for ProjState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
-        w.write(self.kind as u32, 1)?;
+        w.write(self.kind as u32, 3)?;
         w.write(self.owner as u32, SLOT_BITS)?;
         w_v3c(w, self.pos)?;
         w_v3c(w, self.vel)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(ProjState {
-            kind: r.read(1)? as u8,
+            kind: r.read(3)? as u8,
             owner: r.read(SLOT_BITS)? as u8,
             pos: r_v3c(r)?,
             vel: r_v3c(r)?,
@@ -541,6 +542,7 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
         w.write(g.arm as u32, 4)?;
         w.write(g.mag as u32, 16)?;
         w.write(g.reserve as u32, 16)?;
+        w.write(g.heat as u32, 16)?;
     }
     w.write(f.cur as u32 & 1, 1)?;
     w.write(f.refire as u32, 16)?;
@@ -548,6 +550,7 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.burst_left as u32, 8)?;
     w.write(f.burst_gap as u32, 16)?;
     w.write(f.melee_cool as u32, 16)?;
+    w.write(f.charge as u32, 16)?;
     w.write(f.gren_cool as u32, 16)?;
     w.write(f.grenades as u32, 8)?;
     w.write(f.shots, 32)?;
@@ -587,6 +590,7 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
             arm: r.read(4)? as u8,
             mag: r.read(16)? as u16,
             reserve: r.read(16)? as u16,
+            heat: r.read(16)? as u16,
         };
         if g.arm as usize >= sim::arms::COUNT {
             return Err(WireError::Malformed);
@@ -598,6 +602,7 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.burst_left = r.read(8)? as u8;
     f.burst_gap = r.read(16)? as u16;
     f.melee_cool = r.read(16)? as u16;
+    f.charge = r.read(16)? as u16;
     f.gren_cool = r.read(16)? as u16;
     f.grenades = r.read(8)? as u8;
     f.shots = r.read(32)?;

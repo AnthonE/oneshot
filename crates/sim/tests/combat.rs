@@ -606,3 +606,53 @@ fn the_sword_s_melee_swings_without_a_lunge_and_spends_nothing() {
     assert!(!w.fighters[1].alive);
     assert_eq!(w.fighters[0].gun().mag, sim::arms::arm(SWORD).mag);
 }
+
+/// Heat, vents and a charge are the fighter's own, so the prediction must
+/// match them too: a charge pistol and a beam rifle, swapped and fired at
+/// random.
+#[test]
+fn the_prediction_matches_through_heat_and_charge() {
+    let mut w = duel([sim::arms::ION_PISTOL, sim::arms::BEAM_RIFLE], 45.0);
+    w.fighters[1].body.pos = V3::new(45.0, 0.0, 45.0);
+    let mut mine = w.fighters[0];
+    let map = Map::open();
+    let mut rng = sim::rng::Pcg32::new(11, 3);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut vents, mut charged) = (0, 0);
+    for t in 0..TICK_HZ * 30 {
+        let r = rng.next_u32();
+        // The trigger held in runs, so charges fill and guns overheat.
+        let fire = if t % 120 < 90 { FIRE } else { 0 };
+        let swap = if r.is_multiple_of(300) { SWAP } else { 0 };
+        let inp = Input {
+            buttons: fire | swap | ((r as u16) & JUMP),
+            yaw: (t * 31) as u16,
+            pitch: 2000,
+            mx: (r >> 16) as i8,
+            mz: (r >> 24) as i8,
+        }
+        .sanitized();
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+        let local = mine.step_local(&inp, &map);
+        charged += local.charged as u32;
+        vents += (mine.reload > 0 && mine.gun().heat >= sim::arms::HEAT_FULL) as u32;
+        let s = &w.fighters[0];
+        assert_eq!(s.body, mine.body, "tick {t}");
+        assert_eq!(
+            (s.guns, s.cur, s.refire, s.reload, s.charge, s.shots, s.last_buttons),
+            (
+                mine.guns,
+                mine.cur,
+                mine.refire,
+                mine.reload,
+                mine.charge,
+                mine.shots,
+                mine.last_buttons
+            ),
+            "tick {t}"
+        );
+    }
+    assert!(charged >= 2, "{charged} charged shots");
+    assert!(vents > 0, "never overheated");
+}

@@ -105,7 +105,7 @@ pub fn update(
     v.flash = (v.flash - dt * 25.0).max(0.0);
     v.bob += dt * own.speed * 1.6;
     let sway = (own.speed / 7.0).min(1.0);
-    let whole = sim::consts::ticks(sim::arms::arm(arm).reload_ms).max(1) as f32;
+    let whole = sim::arms::arm(arm).reload_ticks().max(1) as f32;
     let reloading = f.reload as f32 / whole;
     let dip = if reloading > 0.0 {
         (reloading.min(1.0) * core::f32::consts::PI).sin()

@@ -18,6 +18,10 @@ export class Effects {
   private rocketGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.6, 8);
   private fragGeo = new THREE.SphereGeometry(0.09, 10, 8);
   private projMat = new THREE.MeshStandardMaterial({ color: 0x444a40, emissive: 0x331100 });
+  // Placeholders by sim::world::ProjKind: ion (bolt, charged, cannon)
+  // glows blue, a shard pink.
+  private ionMat = new THREE.MeshBasicMaterial({ color: 0x66ccff });
+  private shardMat = new THREE.MeshBasicMaterial({ color: 0xff55cc });
 
   constructor(private scene: THREE.Scene) {}
 
@@ -62,7 +66,10 @@ export class Effects {
       m.visible = i < n;
       if (i >= n) return;
       const o = i * 7;
-      m.geometry = p[o] === 0 ? this.rocketGeo : this.fragGeo;
+      const k = p[o];
+      m.geometry = k === 0 ? this.rocketGeo : this.fragGeo;
+      m.material = k === 2 || k === 3 || k === 6 ? this.ionMat : k === 4 ? this.shardMat : this.projMat;
+      m.scale.setScalar(k === 3 || k === 6 ? 2.5 : k === 2 || k === 4 ? 0.6 : 1);
       m.position.set(p[o + 2], p[o + 3], p[o + 4]);
       if (p[o] === 0) {
         m.rotation.set(0, -Math.atan2(p[o + 6], p[o + 5]), Math.PI / 2);

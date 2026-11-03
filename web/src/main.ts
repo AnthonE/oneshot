@@ -3,7 +3,7 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, map_layout, map_name, map_terrain, map_launchers, arm_name, skin_names } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, map_terrain, map_launchers, arm_name, arm_ray, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
@@ -293,7 +293,7 @@ async function main() {
         // Fog: a shot from someone we can't see is only a sound, placed
         // roughly, with no tracer and no direction.
         art?.shot(false, c, v);
-      } else if (kind === EV_SHOT && c !== ROCKET) {
+      } else if (kind === EV_SHOT && arm_ray(c)) {
         effects.tracer(v, w, a === slot);
         effects.spark(w);
         art?.shot(a === slot, c, v);
@@ -341,7 +341,8 @@ async function main() {
     const st = client.stats();
     shared.stats = Array.from(st);
     hud.update({
-      shield, health, ammo: String(mag), reserve: String(reserve), grenades,
+      // A gun that heats has a battery, no reserve: its heat goes there.
+      shield, health, ammo: String(mag), reserve: own[24] >= 0 ? `heat ${own[24]}%` : String(reserve), grenades,
       weapon: arm_name(arm), other: other ? arm_name(other) : '',
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,

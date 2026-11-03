@@ -52,6 +52,9 @@ pub struct Launcher {
 pub struct Def {
     pub id: u8,
     pub name: &'static str,
+    /// A practice map (the Range): played only when a server names it,
+    /// never in the rotation.
+    pub practice: bool,
     pub lo: (f32, f32),
     pub hi: (f32, f32),
     pub boxes: &'static [[f32; 6]],

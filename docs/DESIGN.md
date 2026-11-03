@@ -20,6 +20,8 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
 - Equal starts: a rifle and a sidearm, two frags.
 - Power weapons (sniper, rocket, shotgun, the sword) on pads with timed respawns, so a match is about map control.
+- Halo 2's arsenal as archetypes, ours by name and look: a carbine, a beam rifle that runs hot, ion guns that strip shields (a charge shot that homes), homing shards that go off together, a skipping grenade launcher, a heavy ion cannon. Its counts and times are the baseline (`sim/tests/range.rs`); tuning makes them our own.
+- The Range: a practice map with every gun on a pad, out of the rotation.
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 

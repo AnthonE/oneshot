@@ -353,7 +353,11 @@ pub fn draw(
     let g = f.gun();
     let arm = sim::arms::arm(g.arm);
     let other = f.guns[1 - f.cur as usize];
-    let reload = if f.reload > 0 { "  reloading" } else { "" };
+    let reload = match (f.reload > 0, arm.hot()) {
+        (true, true) => "  venting",
+        (true, false) => "  reloading",
+        _ => "",
+    };
     let swap = if other.arm != 0 {
         format!("\n{}", sim::arms::arm(other.arm).name)
     } else {
@@ -364,9 +368,15 @@ pub fn draw(
         Some(_) => "\nriding: E gets out",
         None => "",
     };
+    // A gun that heats has a battery, no reserve: its heat goes there.
+    let spare = if arm.hot() {
+        format!("heat {}%", g.heat as u32 * 100 / sim::arms::HEAT_FULL as u32)
+    } else {
+        g.reserve.to_string()
+    };
     let ammo = format!(
-        "{}{reload}\n{} / {}   grenades {}{swap}{ride}",
-        arm.name, g.mag, g.reserve, f.grenades
+        "{}{reload}\n{} / {spare}   grenades {}{swap}{ride}",
+        arm.name, g.mag, f.grenades
     );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
     for (mut t, a, sc, fe, ce) in texts.iter_mut() {

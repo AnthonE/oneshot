@@ -13,6 +13,7 @@ use crate::terrain::TerrainDef;
 pub const DEF: Def = Def {
     id: 1,
     name: "Overpass",
+    practice: false,
     lo: (-30.0, -20.0),
     hi: (30.0, 20.0),
     boxes: &[

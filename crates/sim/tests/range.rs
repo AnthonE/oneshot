@@ -16,7 +16,10 @@
 // the sim's.
 #![allow(clippy::disallowed_macros, clippy::disallowed_types)]
 
-use sim::arms::{self, arm, Kind, AR, BR, MAGNUM, ROCKET, SHOTGUN, SMG, SNIPER, SWORD};
+use sim::arms::{
+    self, arm, Kind, AR, BEAM_RIFLE, BR, CANNON, CARBINE, ION_PISTOL, ION_RIFLE, LAUNCHER, MAGNUM, ROCKET, SHARDS,
+    SHOTGUN, SMG, SNIPER, SWORD,
+};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fmath;
@@ -79,6 +82,9 @@ struct Kill {
     pulls: u32,
     /// Rounds (pellets count once a shell) that left the gun.
     rounds: u32,
+    /// Hits on the target (a projectile's that landed, when the next may
+    /// already be flying).
+    hits: u32,
     /// From the first round to the kill.
     ms: u32,
 }
@@ -90,7 +96,7 @@ fn kill(id: u8, dist: f32, at: Spot, salt: (u64, u64)) -> Option<Kill> {
     let mut w = range([id, arms::NONE], dist, salt);
     let a = arm(id);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
-    let (mut pulls, mut rounds, mut first) = (0u32, 0u32, None);
+    let (mut pulls, mut rounds, mut hits, mut first) = (0u32, 0u32, 0u32, None);
     for t in 0..TICK_HZ * 10 {
         // The fighter's timers count down before it fires, so a pull the
         // tick one reaches 1 is the first that can fire.
@@ -113,9 +119,20 @@ fn kill(id: u8, dist: f32, at: Spot, salt: (u64, u64)) -> Option<Kill> {
             // A round with no burst running before it starts a pull.
             pulls += (f.burst_left == 0) as u32;
         }
+        hits += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.a == 0 && e.b == 1)
+            .count() as u32;
         if w.events.as_slice().iter().any(|e| e.kind == Ev::Kill && e.b == 1) {
             let ms = (t - first.unwrap_or(t)) * 1000 / TICK_HZ;
-            return Some(Kill { pulls, rounds, ms });
+            return Some(Kill {
+                pulls,
+                rounds,
+                hits,
+                ms,
+            });
         }
     }
     None
@@ -359,6 +376,174 @@ fn the_sword_kills_in_one_and_lunges() {
     assert!(sword(4.0, 1.5).is_none(), "well off doesn't");
 }
 
+/// Holds `id`'s trigger, aimed off into the open, for `ms`; when the gun
+/// first overheats, in ms, or None.
+fn overheats(id: u8, ms: u32) -> Option<u32> {
+    let mut w = range([id, arms::NONE], 40.0, SALT);
+    w.fighters[1].body.pos = V3::new(20.0, 0.0, 40.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let semi = !arm(id).auto;
+    for t in 0..ms * TICK_HZ / 1000 {
+        let f = w.fighters[0];
+        // A semi-automatic pulled as fast as it fires.
+        let pull = !semi || (f.refire <= 1 && f.last_buttons & FIRE == 0);
+        inputs[0].buttons = if pull { FIRE } else { 0 };
+        w.step(&inputs, &NO_LAG);
+        if w.fighters[0].reload > 0 {
+            return Some(t * 1000 / TICK_HZ);
+        }
+    }
+    None
+}
+
+/// A charge held to full at the target's chest and let go: the target's
+/// shield and health once it lands, and whether the pistol is venting.
+fn charged_bolt(dist: f32) -> (i32, i32, bool) {
+    let mut w = range([ION_PISTOL, BR], dist, SALT);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let full = ticks(arm(ION_PISTOL).charge_ms);
+    for t in 0..full + 1 + TICK_HZ * 2 {
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
+        inputs[0] = Input {
+            buttons: if t < full { FIRE } else { 0 },
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        if w.fighters[1].shield < SHIELD_MAX {
+            break;
+        }
+    }
+    let v = w.fighters[1];
+    (v.shield, v.health, w.fighters[0].reload > 0)
+}
+
+#[test]
+fn the_carbine_is_a_seven_shot() {
+    // Halo 2's: six strip the shields, the seventh in the head; a second.
+    let head = kill(CARBINE, 30.0, Spot::Head, SALT).unwrap();
+    assert_eq!(head.pulls, 7, "{head:?}");
+    assert!((950..=1100).contains(&head.ms), "{head:?}");
+    assert_eq!(kill(CARBINE, 30.0, Spot::Chest, SALT).unwrap().pulls, 12);
+}
+
+#[test]
+fn the_beam_rifle_fires_twice_then_vents() {
+    // Halo 2's: a sniper's counts, 0.25 s apart, but 65% heat a shot.
+    assert_eq!(kill(BEAM_RIFLE, 80.0, Spot::Head, SALT).unwrap().pulls, 1);
+    let body = kill(BEAM_RIFLE, 80.0, Spot::Chest, SALT).unwrap();
+    assert_eq!(body.pulls, 2);
+    assert!((240..=270).contains(&body.ms), "{body:?}");
+    let hot = overheats(BEAM_RIFLE, 2000).expect("overheats");
+    assert!(hot <= 300, "the second quick shot overheats it: {hot} ms");
+    let vent = arm(BEAM_RIFLE).vent_ticks() * 1000 / TICK_HZ;
+    assert!((3000..=3500).contains(&vent), "vents in {vent} ms");
+}
+
+#[test]
+fn the_ion_rifle_strips_shields_and_runs_hot() {
+    // Halo 2's plasma rifle: 5 bolts strip the shields, 13 more kill, at
+    // 7.5 a second: 2.3 s; held, it overheats in about 3.6 s.
+    let k = kill(ION_RIFLE, 10.0, Spot::Chest, SALT).unwrap();
+    assert_eq!(k.hits, 18, "{k:?}");
+    assert!((2200..=2600).contains(&k.ms), "{k:?}");
+    let hot = overheats(ION_RIFLE, 6000).expect("overheats");
+    assert!((3000..=4300).contains(&hot), "overheats at {hot} ms");
+}
+
+#[test]
+fn the_ion_pistol_s_charge_takes_the_shields_and_vents() {
+    let (shield, health, venting) = charged_bolt(10.0);
+    assert_eq!((shield, health), (0, HEALTH_MAX), "every shield and no health");
+    assert!(venting, "a charged shot overheats the pistol");
+    // Tapped as fast as it fires, it overheats inside a second and a half.
+    let hot = overheats(ION_PISTOL, 3000).expect("overheats");
+    assert!(hot < 1500, "{hot} ms");
+}
+
+#[test]
+fn a_charge_then_a_head_shot_kills() {
+    // The combo: the charged bolt takes the shields, one BR burst to the
+    // head the rest.
+    let mut w = range([ION_PISTOL, BR], 12.0, SALT);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let full = ticks(arm(ION_PISTOL).charge_ms);
+    let mut swapped = false;
+    for t in 0..TICK_HZ * 4 {
+        let stripped = w.fighters[1].shield == 0;
+        let at = if stripped { Spot::Head } else { Spot::Chest };
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, at));
+        let f = w.fighters[0];
+        let buttons = if !swapped && stripped {
+            swapped = true;
+            SWAP
+        } else if swapped {
+            if f.refire <= 1 && f.last_buttons & FIRE == 0 {
+                FIRE
+            } else {
+                0
+            }
+        } else if t < full {
+            FIRE
+        } else {
+            0
+        };
+        inputs[0] = Input {
+            buttons,
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        if !w.fighters[1].alive {
+            assert!(t < TICK_HZ * 2, "combo in {t} ticks");
+            return;
+        }
+    }
+    panic!("no kill");
+}
+
+#[test]
+fn eight_shards_go_off_together() {
+    // Halo 2's needler: eight stuck, a kill.
+    // (Nine hits: the eighth shard's own, then all eight going off.)
+    let k = kill(SHARDS, 10.0, Spot::Chest, SALT).unwrap();
+    assert_eq!(k.hits, 9, "{k:?}");
+    // They turn after a target crossing the aim: fired where it is, not
+    // led, at 15 m they still find it.
+    let mut w = range([SHARDS, arms::NONE], 15.0, SALT);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1] = Input {
+        mx: 127,
+        yaw: 32768,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ * 3 {
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
+        inputs[0] = Input {
+            buttons: FIRE,
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        if !w.fighters[1].alive {
+            return;
+        }
+    }
+    panic!("a strafing target never supercombined");
+}
+
+#[test]
+fn the_launcher_is_three_and_the_cannon_one() {
+    let k = kill(LAUNCHER, 10.0, Spot::Chest, SALT).unwrap();
+    assert_eq!(k.hits, 3, "{k:?}");
+    let k = kill(CANNON, 15.0, Spot::Chest, SALT).unwrap();
+    assert_eq!(k.hits, 1, "{k:?}");
+    assert_eq!(arm(CANNON).kind, Kind::Cannon);
+}
+
 // ---- The whole table ----
 
 #[test]
@@ -368,18 +553,26 @@ fn the_range_table() {
         "\n{:<16} {:>5} {:>13} {:>13} {:>13}",
         "gun", "m", "head", "body", "spread@m"
     );
-    let rows: [(u8, f32); 6] = [
+    let rows = [
         (BR, 30.0),
         (MAGNUM, 20.0),
         (SNIPER, 80.0),
         (AR, 10.0),
         (SMG, 8.0),
         (SHOTGUN, 3.0),
+        (CARBINE, 30.0),
+        (BEAM_RIFLE, 80.0),
+        (ION_RIFLE, 10.0),
+        (ION_PISTOL, 8.0),
+        (SHARDS, 10.0),
+        (LAUNCHER, 10.0),
+        (CANNON, 15.0),
+        (ROCKET, 15.0),
     ];
     for (id, dist) in rows {
         let a = arm(id);
         let show = |k: Option<Kill>| match k {
-            Some(k) => format!("{}p/{}r {:>4}ms", k.pulls, k.rounds, k.ms),
+            Some(k) => format!("{}p/{}h {:>4}ms", k.pulls, k.hits, k.ms),
             None => "no kill".to_string(),
         };
         let (worst, mean) = scatter(id, dist, 300);
@@ -408,6 +601,13 @@ fn the_range_table() {
         rocket_flight(20.0),
         rocket_flight(40.0),
         rocket_kill_radius()
+    );
+    for id in [BEAM_RIFLE, ION_RIFLE, ION_PISTOL] {
+        println!("{} held: overheats at {:?} ms", arm(id).name, overheats(id, 8000));
+    }
+    println!(
+        "ION PISTOL charged at 10 m: (shield, health, venting) {:?}",
+        charged_bolt(10.0)
     );
     println!(
         "SWORD: 1.5 m {:?} ms, 4 m {:?} ms, lunges from {} m",

@@ -17,7 +17,7 @@ use sim::events::{Event, Kind as Ev};
 use sim::geom::V3;
 use sim::input::Input;
 use sim::map::Map;
-use sim::world::{Phase, ProjKind, Rules, World};
+use sim::world::{Phase, Rules, World};
 
 /// Input frames a client may have waiting; past this the oldest go, so a
 /// client can never bank inputs. (It can never step faster: one runs a tick.)
@@ -620,7 +620,7 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
             continue;
         }
         snap.proj[snap.n_proj as usize] = ProjState {
-            kind: (p.kind == ProjKind::Frag) as u8,
+            kind: p.kind as u8,
             owner: p.owner,
             pos: p.pos,
             vel: p.vel,

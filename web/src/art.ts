@@ -40,6 +40,16 @@ const GUNS: Record<number, GunDef> = {
   5: { file: 'shotgun', height: 0.949, grip: 0.3, scale: 0.85, long: true, sound: 'shot_shotgun', takes: 3, far: 'shot_shotgun_far', reload: 'reload_shotgun_0' },
   6: { file: 'rocket-launcher', height: 1.058, grip: 0.45, scale: 0.8, long: true, sound: 'shot_rocket', takes: 3, far: 'shot_rifle_far', reload: 'reload_rifle_0' },
   7: { file: 'smg', height: 0.621, grip: 0.42, scale: 0.9, long: true, sound: 'shot_smg', takes: 3, far: 'shot_smg_far', reload: 'reload_rifle_0' },
+  // Placeholders: the rest borrow the nearest model and sound until they
+  // have their own (crates/client/src/look/guns.rs the same).
+  8: { file: 'magnum', height: 0.325, grip: 0.17, scale: 1.0, long: false, sound: 'shot_bolt', takes: 3, far: 'shot_bolt_far', reload: 'reload_pistol_0' },
+  9: { file: 'br', height: 0.957, grip: 0.36, scale: 0.85, long: true, sound: 'shot_gun', takes: 2, far: 'shot_gun_far', reload: 'reload_rifle_0' },
+  10: { file: 'sniper', height: 1.09, grip: 0.33, scale: 0.8, long: true, sound: 'shot_bolt', takes: 3, far: 'shot_bolt_far', reload: 'reload_bolt_0' },
+  11: { file: 'smg', height: 0.621, grip: 0.42, scale: 0.9, long: true, sound: 'shot_smg', takes: 3, far: 'shot_smg_far', reload: 'reload_rifle_0' },
+  12: { file: 'magnum', height: 0.325, grip: 0.17, scale: 1.0, long: false, sound: 'shot_smg', takes: 3, far: 'shot_smg_far', reload: 'reload_pistol_0' },
+  13: { file: 'smg', height: 0.621, grip: 0.42, scale: 0.9, long: true, sound: 'shot_smg', takes: 3, far: 'shot_smg_far', reload: 'reload_rifle_0' },
+  14: { file: 'shotgun', height: 0.949, grip: 0.3, scale: 0.85, long: true, sound: 'shot_rocket', takes: 3, far: 'shot_rifle_far', reload: 'reload_shotgun_0' },
+  15: { file: 'rocket-launcher', height: 1.058, grip: 0.45, scale: 0.8, long: true, sound: 'shot_rocket', takes: 3, far: 'shot_rifle_far', reload: 'reload_rifle_0' },
 };
 
 /** Triple T faces +Z in its file; our bodies face +X. */

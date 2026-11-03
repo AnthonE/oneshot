@@ -366,6 +366,7 @@ mod tests {
         crate::map::Def {
             id: 254,
             name: "cliff",
+            practice: true,
             lo: (0.5, 0.5),
             hi: (15.5, 1.5),
             boxes: &[],

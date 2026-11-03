@@ -17,8 +17,8 @@ pub const fn ticks(ms: u32) -> u32 {
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
-/// Weapon pads on a map.
-pub const MAX_PADS: usize = 8;
+/// Weapon pads on a map (the Range has one of every gun).
+pub const MAX_PADS: usize = 16;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
 /// Boxes in a map (`tools/maps/compile.mjs` holds maps to it).
@@ -105,6 +105,14 @@ pub const LUNGE_MS: u32 = 400;
 pub const STRIKE_R: f32 = 1.2;
 /// How hard a clash throws each back.
 pub const CLASH_PUSH: f32 = 8.0;
+
+/// A homing round (a shard, a charged bolt) locks on whoever its aim
+/// passes this near, at the shot.
+pub const HOMING_PAD: f32 = 1.0;
+/// Shards fall out of a fighter this long after the last went in.
+pub const NEEDLE_KEEP_MS: u32 = 1500;
+/// What a charged bolt does to a hull.
+pub const CHARGE_VEH_DMG: i32 = 60;
 
 pub const GREN_DMG: i32 = 150;
 pub const GREN_RADIUS: f32 = 5.0;

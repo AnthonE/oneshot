@@ -1,0 +1,77 @@
+{
+  "id": 4,
+  "name": "The Range",
+  "about": "a practice map, out of the rotation (oneshot-server --map range): every gun on a pad in a row along the south wall, back in 5 s; a 60 m lane east to west along the pads for the long guns, a wall across the middle with a gap, low walls and a step block for grenades and the launcher to skip off, a ramp to lunge down from.",
+  "practice": true,
+  "bounds": [-30, 30, -20, 20],
+  "structures": [
+    {
+      "name": "walls",
+      "boxes": [
+        [-31, 0, -21, 31, 8, -20, "wall"],
+        [-31, 0, 20, 31, 8, 21, "wall"],
+        [-31, 0, -20, -30, 8, 20, "wall"],
+        [30, 0, -20, 31, 8, 20, "wall"]
+      ]
+    },
+    {
+      "name": "the pad row's kerb",
+      "boxes": [[-24, 0, -20, 24, 0.2, -16, "trim"]]
+    },
+    {
+      "name": "the wall across the middle, an 8 m gap in it",
+      "boxes": [
+        [-30, 0, 2, -4, 4, 3, "wall"],
+        [4, 0, 2, 30, 4, 3, "wall"]
+      ]
+    },
+    {
+      "name": "cover",
+      "boxes": [
+        [-14, 0, -2, -12, 1.2, 2, "block"],
+        [12, 0, -2, 14, 1.2, 2, "block"],
+        [-1, 0, 6, 1, 1.2, 10, "block"],
+        [-4, 0, 13, 4, 1, 15, "block"]
+      ]
+    },
+    {
+      "name": "a step up and a platform to lunge from",
+      "boxes": [
+        [20, 0, 6, 28, 1, 14, "dark"],
+        [22, 1, 8, 28, 2.5, 14, "dark"],
+        [-28, 0, 6, -20, 2.5, 14, "red"],
+        [-20, 0, 6, -18, 1.2, 14, "red"]
+      ]
+    }
+  ],
+  "spawns": [
+    { "at": [-8, -12], "team": "any", "yaw": 90 },
+    { "at": [8, -12], "team": "any", "yaw": 90 },
+    { "at": [-20, -10], "team": "any", "yaw": 90 },
+    { "at": [20, -10], "team": "any", "yaw": 90 },
+    { "at": [-6, 17], "team": "any", "yaw": 270 },
+    { "at": [6, 17], "team": "any", "yaw": 270 },
+    { "at": [-24, 0], "team": "any", "yaw": 0 },
+    { "at": [24, 0], "team": "any", "yaw": 180 }
+  ],
+  "pads": [
+    { "weapon": "ar", "at": [-21, -18, 0.2], "respawn": 5 },
+    { "weapon": "br", "at": [-18, -18, 0.2], "respawn": 5 },
+    { "weapon": "magnum", "at": [-15, -18, 0.2], "respawn": 5 },
+    { "weapon": "smg", "at": [-12, -18, 0.2], "respawn": 5 },
+    { "weapon": "shotgun", "at": [-9, -18, 0.2], "respawn": 5 },
+    { "weapon": "sniper", "at": [-6, -18, 0.2], "respawn": 5 },
+    { "weapon": "rocket", "at": [-3, -18, 0.2], "respawn": 5 },
+    { "weapon": "sword", "at": [0, -18, 0.2], "respawn": 5 },
+    { "weapon": "carbine", "at": [3, -18, 0.2], "respawn": 5 },
+    { "weapon": "beam_rifle", "at": [6, -18, 0.2], "respawn": 5 },
+    { "weapon": "ion_rifle", "at": [9, -18, 0.2], "respawn": 5 },
+    { "weapon": "ion_pistol", "at": [12, -18, 0.2], "respawn": 5 },
+    { "weapon": "shards", "at": [15, -18, 0.2], "respawn": 5 },
+    { "weapon": "launcher", "at": [18, -18, 0.2], "respawn": 5 },
+    { "weapon": "cannon", "at": [21, -18, 0.2], "respawn": 5 }
+  ],
+  "roam": [
+    [0, 0], [-10, -8], [10, -8], [-10, 8], [10, 8], [0, 17], [-24, 0], [24, 0]
+  ]
+}

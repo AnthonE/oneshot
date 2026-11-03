@@ -386,13 +386,14 @@ impl Client {
     /// alive, crouched, shield, health (points), arm, mag, reserve, other
     /// arm, grenades, reloading (0..1), team, kills, deaths, respawn (s),
     /// grounded, speed, then the seat it rides in (−1 on foot, 0 driver, 1
-    /// passenger) and that vehicle's slot.
+    /// passenger) and that vehicle's slot, then the gun's heat in % (−1 for
+    /// a gun that doesn't heat).
     pub fn own(&self) -> Vec<f32> {
         let (f, p) = self.session.core.own();
         let g = f.gun();
         let a = sim::arms::arm(g.arm);
         let reload = if f.reload > 0 {
-            1.0 - f.reload as f32 / sim::consts::ticks(a.reload_ms).max(1) as f32
+            1.0 - f.reload as f32 / a.reload_ticks().max(1) as f32
         } else {
             0.0
         };
@@ -427,6 +428,11 @@ impl Client {
             (f.body.vel.x * f.body.vel.x + f.body.vel.z * f.body.vel.z).sqrt(),
             f.riding().map_or(-1.0, |(_, seat)| seat as f32),
             f.riding().map_or(-1.0, |(i, _)| i as f32),
+            if a.hot() {
+                (g.heat as u32 * 100 / sim::arms::HEAT_FULL as u32) as f32
+            } else {
+                -1.0
+            },
         ]
     }
 
@@ -763,6 +769,12 @@ pub fn skin_names() -> Vec<String> {
 #[wasm_bindgen]
 pub fn arm_name(id: u8) -> String {
     sim::arms::arm(id).name.to_string()
+}
+
+/// Whether arm `id`'s rounds are rays (drawn as tracers), not projectiles.
+#[wasm_bindgen]
+pub fn arm_ray(id: u8) -> bool {
+    sim::arms::arm(id).kind.ray()
 }
 
 #[wasm_bindgen(start)]
