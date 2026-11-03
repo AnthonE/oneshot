@@ -10,6 +10,8 @@ node tools/maps/compile.mjs --check
 cargo fmt --all
 cargo clippy -q --workspace --all-targets -- -D warnings
 cargo clippy -q -p sim-wasm -p client-net --target wasm32-unknown-unknown -- -D warnings
+# Fog of war at sixteen seats stays inside its budget (room/examples/fog_cost.rs).
+cargo run -q --release -p room --example fog_cost -- --check >/dev/null
 for c in "$@"; do
   cargo test -q -p "$c"
 done

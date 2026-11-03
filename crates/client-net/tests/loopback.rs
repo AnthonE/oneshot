@@ -78,15 +78,21 @@ struct Run {
     /// drawn past the newest snapshot (extrapolated or held).
     frames: u64,
     stalls: u64,
+    /// Kills the server's world raised.
+    kills: u32,
 }
 
 fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
+    start_on(Map::proving_grounds(), delay_ms, jitter_ms, loss, harmless)
+}
+
+fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
     let rules = Rules {
         score_limit: 1000,
         time_limit_ms: 0,
         ..Rules::duel()
     };
-    let mut room = Room::new(Map::proving_grounds(), rules, 11, (5, 6));
+    let mut room = Room::new(map.clone(), rules, 11, (5, 6));
     let (slot, out) = room.join(Name::new("tester"), 0).unwrap();
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
@@ -100,7 +106,7 @@ fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
             }
         }
     }
-    let client = NetCore::new(slot, team, tick, rules, Map::proving_grounds());
+    let client = NetCore::new(slot, team, tick, rules, map);
     Run {
         room,
         client,
@@ -117,6 +123,7 @@ fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
         },
         frames: 0,
         stalls: 0,
+        kills: 0,
         now: 0.0,
         next_tick: 0.0,
         next_frame: 0.0,
@@ -140,6 +147,14 @@ impl Run {
             }
             while self.next_tick <= self.now {
                 let (snaps, _) = self.room.step(self.now);
+                self.kills += self
+                    .room
+                    .world
+                    .events
+                    .as_slice()
+                    .iter()
+                    .filter(|e| e.kind == sim::events::Kind::Kill)
+                    .count() as u32;
                 for (_, s) in snaps {
                     let n = encode_snapshot(&s, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), false);
@@ -301,4 +316,63 @@ fn an_impaired_link_stays_within_its_budgets() {
     assert!(down <= MAX_DOWN_KBPS, "{report}");
     assert!(up <= MAX_UP_KBPS, "{report}");
     assert!(stall_rate <= MAX_STALL_RATE, "{report}");
+}
+
+/// At the wheel on a clean link: every prediction of the vehicle (and the
+/// seat on it) is confirmed, over Dry Fork's slopes and creek. Getting in
+/// is the world's (a correction a round trip later), driving is ours.
+#[test]
+fn a_driver_predicts_its_vehicle_without_a_correction() {
+    use sim::geom::V3;
+    let mut r = start_on(sim::maps::canyon::DEF.build(), 20.0, 0.0, 0.0, true);
+    let s = r.slot as usize;
+    let v = r.room.world.vehicles[0].pos;
+    let at = V3::new(v.x - 2.0, 0.0, v.z);
+    r.room.world.fighters[s].body.pos = V3::new(at.x, r.room.world.map.ground(at.x, at.z), at.z);
+    r.run(4000.0, |_| Input::default());
+    let t0 = r.now;
+    r.run(500.0, |t| Input {
+        buttons: if t - t0 < 40.0 { sim::input::USE } else { 0 },
+        ..Input::default()
+    });
+    assert!(r.client.own().0.riding().is_some(), "in the driver's seat");
+    r.run(1000.0, |_| Input::default());
+    let warm = r.client.stats;
+    r.run(10_000.0, |t| Input {
+        mz: 127,
+        mx: ((t / 900.0).sin() * 70.0) as i8,
+        ..Input::default()
+    });
+    let st = r.client.stats;
+    let (_, pos, _) = r.client.own_vehicle().expect("our vehicle");
+    assert!((pos - v).flat().len() > 20.0, "it drove: {pos:?}");
+    assert!(st.confirmations - warm.confirmations > 500, "{st:?}");
+    assert_eq!(st.corrections - warm.corrections, 0, "{st:?}");
+}
+
+/// Events ride every snapshot until one carrying them is acked: on a lossy
+/// link every kill the server saw reaches the client, once each.
+#[test]
+fn every_kill_arrives_once_through_loss() {
+    let mut r = start(60.0, 10.0, 0.10, false);
+    let mut told = 0u32;
+    for _ in 0..160 {
+        r.run(500.0, player);
+        told += r
+            .client
+            .drain_events()
+            .iter()
+            .filter(|e| e.kind == sim::events::Kind::Kill as u8)
+            .count() as u32;
+    }
+    // A last second for the newest to get home.
+    r.run(1000.0, |_| Input::default());
+    told += r
+        .client
+        .drain_events()
+        .iter()
+        .filter(|e| e.kind == sim::events::Kind::Kill as u8)
+        .count() as u32;
+    assert!(r.kills >= 5, "{} kills to count", r.kills);
+    assert_eq!(told, r.kills, "every kill told, none twice");
 }

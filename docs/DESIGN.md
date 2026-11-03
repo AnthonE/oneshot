@@ -1,8 +1,8 @@
-# DESIGN.md: a browser arena shooter, ranked from day one
+# DESIGN.md: an arena shooter, ranked from day one
 
-Working name to come. A free-to-play, Halo-style arena shooter that runs in
-the browser: 1v1 and 2v2 ranked, FFA cups later, skins as Solana NFTs. This
-page is the design of record. Netcode comes first because the game is only
+Working name to come. A free-to-play, Halo-style shooter on the desktop and in
+the browser: 1v1 and 2v2 ranked, cups, an 8v8 Big Team mode on canyon maps
+with vehicles, skins as Solana NFTs. This page is the design of record. Netcode comes first because the game is only
 worth ranking if the server can't be lied to. What to take from our other
 repos is `RIP.md`.
 
@@ -14,6 +14,7 @@ repos is `RIP.md`.
 | **Doubles** | 2v2 Team Slayer, first to 30 or 12 minutes. Ladder `doubles`. |
 | **Cups** (later) | FFA heats of 8, points per placement, swiss rounds, the top seats into a final. Same match server, same reports. |
 | **Casual** | FFA and Gun Game with bots filling empty seats. Unranked. |
+| **Big Team** | 8v8 Team Slayer on terrain maps with vehicles. Casual first; a ladder once it plays well. |
 
 Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
@@ -25,19 +26,21 @@ Halo's rules, the ones Fireplace's arena already plays:
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
-Not in v1: vehicles, abilities, hidden-information modes beyond fog of war,
-voice.
+Not yet: abilities, hidden-information modes beyond fog of war, voice.
+Vehicles and terrain come with Big Team (§16, milestones 7 to 11), to rules
+our own: one ground vehicle first, a driver and a gunner. Maps and vehicles
+are original; never another game's layout or art.
 
 ## 2 · Architecture
 
 ```
-            browser                                   server (native)
+       desktop or browser                             server (native)
  ┌──────────────────────────────┐            ┌──────────────────────────────┐
- │ web/  three.js, HUD, audio   │            │ server  rooms, auth, fog,    │
- │   ▲ draws                    │ WebTransport│         lag comp, telemetry │
- │ client-net (wasm)            │◄──────────►│   ▲                          │
- │   transport · clock · interp │ datagrams + │ sim (native)  the truth     │
- │   predict ── sim (wasm)      │ one stream  │                              │
+ │ client  Bevy: world, HUD,    │            │ server  rooms, auth, fog,    │
+ │   ▲ draws       audio        │ WebTransport│         lag comp, telemetry │
+ │ client-net (native or wasm)  │◄──────────►│   ▲                          │
+ │   session · clock · interp   │ datagrams + │ sim (native)  the truth     │
+ │   predict ── sim             │ one stream  │                              │
  └──────────────────────────────┘            └──────────────────────────────┘
 ```
 
@@ -46,17 +49,20 @@ voice.
 | `sim` | The game's rules: movement, guns, shields, pads, modes, rewind | Deterministic. Built native for the server and wasm for the browser's prediction. No I/O, clock, threads, `HashMap` iteration or allocation in the tick. Floats are `+ − × ÷ sqrt min max`; trig, exp, pow and rounding go through `sim::fmath` (pure-Rust libm, same bits native and wasm). |
 | `proto` | Wire format: bit packing, inputs, snapshots, events, handshake | `PROTO_VER`, byte-exact goldens. Depends on nothing game-specific beyond small state structs. |
 | `server` | Rooms, transport, sign-in, fog of war, lag-comp depth, snapshots, telemetry, reports | Native, wtransport over quinn. |
-| `client-net` | Transport, clock, prediction, reconciliation, interpolation | wasm, exported to JS. Target about 200 KB gzipped (Gates' headless netcode module is 178 KB: `Gates/findings/web-build-20260909.md`). |
-| `web/` | three.js renderer, viewmodel, HUD, audio, menus, sign-in | TypeScript, Vite. Draws; never decides. |
+| `client-net` | Session (handshake), clock, prediction, reconciliation, interpolation | `core` and `session` build everywhere; the transport is wtransport natively and WebTransport in wasm, behind one `Wire` trait. |
+| `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, audio, menus | Milestone 12 on. Native first; the same crate built for wasm (WebGPU, WebGL2 fallback) replaces `web/`. Draws; never decides. |
+| `web/` | three.js renderer | Today's browser client. Kept until the Bevy wasm build plays as well, then deleted. |
 | `tools/maps` | Map compiler and editor | JS, from Fireplace (`RIP.md`). |
 
-Why not Bevy: Gates' browser build is 8.57 MB gzipped with a heap around 700
-MB (`Gates/docs/NOW.md` §0web). A click-from-X player won't wait for it.
-three.js loads Triple T and the guns as GLBs directly (after `RIP.md`'s
-KTX2-to-PNG step).
+Why Bevy now: the look we want (sky, clouds, terrain, grass, real lighting)
+is what Gates' Bevy renderer already draws, and a desktop build comes free.
+Gates' renderer is a donor, not a dependency: we port modules (`RIP.md` §9).
+The cost is the browser download: Gates' wasm is 8.57 MB gzipped with a heap
+around 700 MB (`Gates/docs/NOW.md` §0web). The wasm build gets a size gate,
+and WebGL2 drops the atmosphere, SSAO, bloom and TAA.
 
-**The rule that keeps it honest: the browser draws, the server decides.**
-Gameplay state lives in `sim`. `web/` reads from `client-net` and never
+**The rule that keeps it honest: the client draws, the server decides.**
+Gameplay state lives in `sim`. The client reads from `client-net` and never
 feeds anything back but inputs.
 
 ## 3 · Tick and timing
@@ -102,9 +108,13 @@ input datagram: ack of newest snapshot u16 · ack bits u32 · playout ticks u4 �
 
 ## 5 · Prediction and reconciliation
 
-The browser runs the same `sim` crate, as wasm, for **its own body and its own
-weapon state only**: movement, jumps, refire, magazine, reload and swap
-timers. Everything else is the server's.
+The client runs the same `sim` crate for **its own body and its own weapon
+state only**: movement, jumps, refire, magazine, reload and swap timers. A
+driver also predicts **the vehicle it drives** (`Vehicle::step_local`: the
+vehicle, the driver's input and the map, nothing else); a gunner predicts its
+turret's aim. Vehicle-on-vehicle hits, splatter and getting in or out are the
+world's, and reach the client by reconciliation. Everything else is the
+server's.
 
 - **Prediction ring:** each input is stepped immediately, and its result is
   stored by `seq` in a ring of 64 (half a second at 128 Hz). This is Gates'
@@ -146,8 +156,8 @@ server decides how far back that was. The client never says.** (Fireplace's
 arena trusts a client-claimed lag of up to 248 ms on every shot; this is the
 fix.)
 
-- **Rewind ring:** every fighter's pose (feet position, crouch, yaw) for the
-  last 32 ticks (250 ms), stamped per tick, in the sim (Gates'
+- **Rewind ring:** every fighter's pose (feet position, crouch) and every
+  vehicle's (position, yaw) for the last 32 ticks (250 ms), stamped per tick, in the sim (Gates'
   `sim-core/src/rewind.rs`, extended to interpolate between two ticks so
   rewind isn't stuck to whole ticks).
 - **Depth** for a shot fired at server tick `T` by player `p`:
@@ -176,7 +186,33 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
 1. **Rays, every snapshot** (`crates/room/src/fog.rs`, built in milestone
    3). A baked potentially-visible set (2 m cells, a bitset of the cells
    each sees) is the optimisation for when maps and rooms grow; at 2v2 the
-   rays below cost a few thousand box tests a snapshot.
+   rays below cost a few thousand box tests a snapshot. At 8v8 they were
+   not cheap: 0.6 to 1.9 ms a snapshot on our three maps (`cargo run
+   --release -p room --example fog_cost`). Two things brought that to
+   0.1 to 0.3 ms, under 2% of a core per room:
+   - **A box grid** (`sim/src/grid.rs`, 8 m cells): a ray tests only the
+     boxes in the cells it crosses and stops at the first hit. It answers
+     bit for bit as the full scan did.
+   - **Half the room a snapshot:** each enemy gets the full look every
+     other snapshot, with the look ahead stretched by the snapshot it
+     skips; between, the plain test (chest or head in clear line). So
+     nobody in plain sight is ever held back.
+
+   Terrain made it dear again: on Dry Fork, 140 m long and hilly, 42% of
+   pairs are hidden and the mean line is 74 m (0.7 ms a snapshot). Three
+   more brought it to 0.3 ms:
+   - **Far pairs** (past 40 m) get the full look every fourth snapshot,
+     without the leans and the chest's edges: 18 lines, not 70. At 40 m
+     those turn a line by half a degree.
+   - **The ground's proof:** a group of lines (one eye, the target now or
+     ahead) is dropped when the ground stands above a line over all of
+     them by more than it can rise across their width.
+   - **Terrain in 16 m blocks** with their highest point, so a line clear
+     above a block skips its cells.
+
+   A pair found hidden still gets the plain test. `ci/quick.sh` fails if
+   fog at sixteen seats on any map goes past twice the budget (0.3 ms mean,
+   1.5 ms at the 99.9th percentile).
 2. **The rays:** for each enemy, cast rays from
    the viewer's eye against the map, through the sim's own ray query:
    - the viewer's eye pushed ahead along its velocity by its one-way latency +
@@ -248,9 +284,11 @@ runs. A no-spread cheat has nothing to cancel.
   - visible projectiles, events since the last acked snapshot (shots heard,
     hits on you, kills, pickups), pad timers, score.
 
-  About 200 B at 2v2, about 13 KB/s down. Full snapshots in v1. Delta against
-  the client's acked baseline (Gates' 64-entry sent ring, zero baseline when
-  the ack is stale) comes when 8-player cups need it.
+  About 200 B at 2v2, about 13 KB/s down. Full snapshots until milestone 10,
+  which encodes each snapshot as a delta against the client's acked baseline
+  (Gates' 64-entry sent ring, zero baseline when the ack is stale), so 16
+  fighters and vehicles fit in a datagram. Events are cleared when a snapshot
+  carrying them is acked, not when it is sent.
 - **Goldens:** every message has a seeded fixture encoded byte-exact in CI.
   A wire change bumps `PROTO_VER` and regenerates them.
 
@@ -390,14 +428,59 @@ crossed) and the bots (none).
    slots so a deploy never leaves nobody taking players, the deploy and
    publish scripts (`ops/`).
 
+From here the game grows into a full shooter. The sim comes first; each step
+keeps every gate in §17 green and moves a golden only on purpose.
+
+7. **Entity pools:** fighters, projectiles and pads behind one `Thing` shape,
+   so a new kind is a short list the compiler checks. No behaviour change;
+   the golden does not move.
+8. **16 seats and Big Team:** 8v8 Team Slayer, casual.
+9. **Terrain:** a deterministic heightfield beside the boxes, slopes and
+   sliding, a box grid for rays; an original canyon map with its own golden.
+   Done: Dry Fork (`maps/canyon/`), 140 × 60 m, Big Team's map (a map of
+   4,000 m² or more is a Big Team map; the rest are arenas).
+   **Launchers** too: a pad in the map that throws a fighter along a set
+   velocity. It reads only the fighter and the map, so it predicts exactly
+   and costs no wire. Skiing (low-friction slides down slopes) is a later
+   experiment.
+10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
+    rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
+    about y only and meets boxes as two hull circles; USE gets in and out
+    (a vehicle in reach beats a pad); hitscan, melee, rockets and blasts
+    hurt it, and it blows up with its riders and comes back after its
+    respawn; past 11 m/s it runs down whoever is on foot in its way. Two a
+    side on Dry Fork. Bots drive, back up when stuck, and get out to fight.
+    Fog shows a vehicle as it shows a fighter (held, the full look every
+    other snapshot, the plain test between) and names a rider only to a
+    client that may know them.
+11. **The delta wire:** snapshots as deltas against the acked baseline, a
+    byte budget, events cleared on ack. Events first (done): each event a
+    client may be told gets an id and rides every snapshot until one that
+    carried it is acked; what doesn't fit waits; the client keeps the first
+    and drops repeats (`room::EventQueue`). Every kill gets through 10% loss
+    once (`client-net/tests/loopback.rs`). Deltas and snapshots split
+    across datagrams wait until a snapshot stops fitting: sixteen seats,
+    every projectile, pad and vehicle fit one today with room for events
+    (`room/tests/budget.rs`).
+12. **The Bevy client:** a session layer in `client-net` and a native
+    transport (done: `client_net::session::Session` over a `Wire`, the
+    browser's WebTransport in `web.rs`, wtransport in `native.rs`; the
+    server's end-to-end test plays through it), then the client (C1 done:
+    `crates/client`, Bevy 0.18, its own workspace; the level from the
+    sim's map, fighters and vehicles as plain shapes, first-person and
+    chase cameras, the controls, a text HUD; native on wtransport, and in
+    the browser on WebGL2, where it joins a Big Team match on Dry Fork): a playable skeleton, Gates' lighting, sky,
+    terrain and grass, the game's feel, and last its wasm build replacing
+    `web/`.
+
 ## 17 · What CI blocks a merge on
 
 | Gate | Fails when |
 |---|---|
-| Determinism | a recorded match hashes differently native vs wasm |
+| Determinism | a recorded match hashes differently native vs wasm, or a golden moves without a rule change |
 | Zero allocation | the sim tick allocates after warmup |
 | Goldens | any wire message's bytes change without a `PROTO_VER` bump |
-| Prediction | the predicted own body differs from the server's through runs, jumps, bursts, swaps, reloads and frags |
+| Prediction | the predicted own body (or driven vehicle) differs from the server's through runs, jumps, bursts, swaps, reloads, frags and driving |
 | **Leak gate** | headless Chrome plus bots: any enemy reaches a client while not visible within the lead window, or any byte of the salt crosses the wire before match end |
 | Lag-comp bounds | a shot lands with more than 160 ms of favour, or a client's claimed ack beats the server's view |
 | Impaired network | at 60 ms delay, 10 ms jitter, 5% loss: correction rate, bandwidth and interpolation stalls over their budgets (`client-net/tests/loopback.rs`) |

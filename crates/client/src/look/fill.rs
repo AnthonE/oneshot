@@ -1,0 +1,168 @@
+//! The sky fill as a **hemisphere**: sky half cool blue, earth half warm,
+//! baked into a small cubemap and handed to Bevy as an
+//! `EnvironmentMapLight`, whose diffuse lookup is by world normal, so the
+//! cube is a hemisphere light exactly. Bevy's `AmbientLight` can't be one:
+//! it never reads the normal.
+//!
+//! Ported from Gates' `crates/client/src/render/fill.rs` (MIT, © 2026
+//! MoreRight DAO): the same transfer, the same `0.5 + 0.5·n·y` blend, the
+//! same sky register; the ground's albedos are Dry Fork's (sand, grass,
+//! creek bed, rock) in place of Gates' island.
+
+use bevy::asset::RenderAssetUsages;
+use bevy::image::Image;
+use bevy::light::light_consts::lux;
+use bevy::prelude::*;
+use bevy::render::render_resource::{
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
+
+use super::rig::SUN_ELEVATION;
+
+/// The cube's face size: the fill is low frequency.
+pub const FILL_FACE: u32 = 32;
+
+/// The sky's chroma at the zenith, sRGB, and how bright it fills.
+pub const SKY_FILL_SRGB: [f32; 3] = [0.80, 0.85, 0.95];
+pub const SKY_FILL_SCALE: f32 = 1.8;
+pub const SKY_FILL_LUX: f32 = lux::AMBIENT_DAYLIGHT * SKY_FILL_SCALE;
+
+/// The ground the fill bounces off, linear albedo: sand, grass, the creek
+/// bed's dust, rock (Gates' four identities, which Dry Fork shares), and
+/// how much of the map each covers.
+pub const GROUND_ALBEDO: [[f32; 3]; 4] = [
+    [0.1895, 0.1775, 0.1513],
+    [0.0482, 0.0648, 0.0176],
+    [0.117, 0.0885, 0.0343],
+    [0.2850, 0.1342, 0.0823],
+];
+pub const GROUND_MIX: [f32; 4] = [0.45, 0.25, 0.1, 0.2];
+
+/// sRGB → linear, the exact piecewise transfer.
+pub fn srgb_to_linear(v: f32) -> f32 {
+    if v <= 0.040_45 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// linear → sRGB, the exact piecewise transfer.
+pub fn linear_to_srgb(v: f32) -> f32 {
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Rec.709 luminance of a linear triple.
+pub fn luminance(c: [f32; 3]) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
+/// The sky half: irradiance on a zenith-facing surface, linear lux.
+pub fn sky_lux() -> [f32; 3] {
+    SKY_FILL_SRGB.map(|c| srgb_to_linear(c) * SKY_FILL_LUX)
+}
+
+fn bounce_albedo() -> [f32; 3] {
+    let mut a = [0.0f32; 3];
+    for (i, w) in GROUND_MIX.iter().enumerate() {
+        for (c, a_c) in a.iter_mut().enumerate() {
+            *a_c += GROUND_ALBEDO[i][c] * w;
+        }
+    }
+    a
+}
+
+/// The earth half: what the ground reflects of the sun on it (its elevation
+/// above the horizon, so the sine) and the sky.
+pub fn bounce_lux() -> [f32; 3] {
+    let e = lux::DIRECT_SUNLIGHT * SUN_ELEVATION.sin() + SKY_FILL_LUX;
+    bounce_albedo().map(|a| a * e)
+}
+
+/// Irradiance arriving at a surface of world normal `n`, linear lux.
+pub fn fill_at(n: Vec3) -> [f32; 3] {
+    let w = 0.5 + 0.5 * n.y.clamp(-1.0, 1.0);
+    let (sky, ground) = (sky_lux(), bounce_lux());
+    [0, 1, 2].map(|c| ground[c] + (sky[c] - ground[c]) * w)
+}
+
+/// The brightest the fill gets: the cube holds `fill / peak` and the
+/// light's intensity carries `peak` back.
+pub fn peak_lux() -> f32 {
+    sky_lux()
+        .iter()
+        .chain(bounce_lux().iter())
+        .fold(0.0f32, |m, v| m.max(*v))
+}
+
+/// A cube face's texel as a direction (Bevy's face order and handedness).
+pub fn cube_dir(face: usize, x: u32, y: u32, n: u32) -> Vec3 {
+    let uc = 2.0 * (x as f32 + 0.5) / n as f32 - 1.0;
+    let vc = 2.0 * (y as f32 + 0.5) / n as f32 - 1.0;
+    let d = match face {
+        0 => Vec3::new(1.0, -vc, -uc),
+        1 => Vec3::new(-1.0, -vc, uc),
+        2 => Vec3::new(uc, 1.0, vc),
+        3 => Vec3::new(uc, -1.0, -vc),
+        4 => Vec3::new(uc, -vc, 1.0),
+        _ => Vec3::new(-uc, -vc, -1.0),
+    };
+    Vec3::new(d.x, d.y, -d.z).normalize()
+}
+
+/// The hemisphere, baked.
+pub fn cubemap(n: u32) -> Image {
+    let peak = peak_lux();
+    let mut data = vec![0u8; (n * n * 6 * 4) as usize];
+    for face in 0..6usize {
+        for y in 0..n {
+            for x in 0..n {
+                let f = fill_at(cube_dir(face, x, y, n));
+                let i = (((face as u32 * n + y) * n + x) * 4) as usize;
+                for c in 0..3 {
+                    data[i + c] = (linear_to_srgb((f[c] / peak).clamp(0.0, 1.0)) * 255.0).round() as u8;
+                }
+                data[i + 3] = 255;
+            }
+        }
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: n,
+            height: n,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    image
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_transfer_round_trips_and_the_halves_are_where_they_belong() {
+        for k in 0..=100 {
+            let v = k as f32 / 100.0;
+            assert!((srgb_to_linear(linear_to_srgb(v)) - v).abs() < 1e-5);
+        }
+        // Up is the sky's, down the ground's, and the sky is brighter.
+        assert_eq!(fill_at(Vec3::Y), sky_lux());
+        assert_eq!(fill_at(Vec3::NEG_Y), bounce_lux());
+        assert!(luminance(sky_lux()) > luminance(bounce_lux()));
+        // The cube's +Y face looks up.
+        assert!(cube_dir(2, 16, 16, 32).y > 0.99);
+    }
+}

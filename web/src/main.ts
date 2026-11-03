@@ -3,10 +3,11 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name, skin_names } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, map_terrain, map_launchers, arm_name, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
+import { Vehicles, VEHICLE_H } from './vehicles';
 import { Effects } from './effects';
 import { Hud } from './hud';
 
@@ -30,9 +31,12 @@ interface Shared {
   others: number[];
   killcams: number;
   inKillcam: boolean;
+  /** Our side with teams, else -1: whom the autopilot never chases. */
+  mate: number;
 }
 const shared: Shared = {
   connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [], killcams: 0, inKillcam: false,
+  mate: -1,
 };
 (window as any).__oneshot = { state: () => shared };
 
@@ -61,6 +65,7 @@ async function main() {
   resize();
 
   const players = new Players(scene);
+  const vehicles = new Vehicles(scene);
   const effects = new Effects(scene);
   const hud = new Hud();
   const hooks = await import('./art').catch(() => null);
@@ -96,7 +101,7 @@ async function main() {
   info.base = base;
   const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, [el('duel'), el('doubles'), el('cup')]);
 
-  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
   let client: Client;
   let mode = 0;
   let name = 'player';
@@ -207,8 +212,10 @@ async function main() {
     welcomed = client.welcomes;
     gunGame = client.gun_game;
     if (level) dropWorld(level.level);
+    vehicles.clear();
+    vehicles.terrain = map_terrain(client.map);
     const layout = map_layout(client.map);
-    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout);
+    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout, map_terrain(client.map), map_launchers(client.map));
     route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
     leg = 0;
     hud.kill(map_name(client.map));
@@ -235,7 +242,11 @@ async function main() {
 
     const own = client.own();
     shared.own = Array.from(own);
+    shared.mate = client.teams ? client.team : -1;
     const [px, py, pz, eye, , , alive, , shield, health, arm, mag, reserve, other, grenades, reloading, , kills, deaths, respawn] = own;
+    // At the wheel: the camera rides behind the vehicle, looking where we
+    // look; a passenger sees from its seat.
+    const driving = own[22] === 0;
     // Aim is drawn from the controls (no round trip) on top of the
     // predicted body.
     const yaw = AUTOPLAY ? (f.yaw / 65536) * 2 * Math.PI : controls.yaw;
@@ -249,6 +260,11 @@ async function main() {
       camera.position.set(c[0], c[1], c[2]);
       const kp = Math.cos(c[4]);
       camera.lookAt(c[0] + kp * Math.cos(c[3]), c[1] + Math.sin(c[4]), c[2] + kp * Math.sin(c[3]));
+    } else if (driving) {
+      const cp = Math.cos(pitch);
+      const back = 7.5;
+      camera.position.set(px - cp * Math.cos(yaw) * back, py + VEHICLE_H + 2.2 - Math.sin(pitch) * back, pz - cp * Math.sin(yaw) * back);
+      camera.lookAt(px, py + VEHICLE_H, pz);
     } else {
       camera.position.set(px, py + eye, pz);
       const cp = Math.cos(pitch);
@@ -262,6 +278,7 @@ async function main() {
     const others = client.others(now);
     shared.others = Array.from(others);
     players.update(killcam ? cam!.subarray(7) : others, dt);
+    vehicles.update(client.vehicles(now));
     shared.killcams += killcam && !shared.inKillcam ? 1 : 0;
     shared.inKillcam = killcam;
     effects.projectiles(client.projectiles());
@@ -306,7 +323,7 @@ async function main() {
 
     const ms = client.match_state();
     const phase = ms[0], clock = ms[1], winner = ms[2], limit = ms[3];
-    const scores = Array.from(ms.subarray(4, 12));
+    const scores = Array.from(ms.subarray(5, 5 + ms[4]));
     const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     let center = '';
     if (phase === 0) center = `Starting in ${Math.ceil(clock)}`;
@@ -329,7 +346,7 @@ async function main() {
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,
         // The rest, best first: everyone in a duel or doubles, the top
-        // four in a room of eight.
+        // four in a bigger room.
         ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i])
           .sort((a, b) => b[0] - a[0]).slice(0, 4).map(([s, i]) => `${hud.name(i)} ${s}`),
         gunGame ? `Rung ${Math.min(scores[slot], limit - 1) + 1} of ${limit}${scores[slot] < limit - 1 ? ` · next ${arm_name(client.rung(scores[slot] + 1))}` : ' · last gun'}` : '',
@@ -340,7 +357,8 @@ async function main() {
       net: `snapshots ${st[0]}\nconfirmed ${st[1]}  corrected ${st[2]}\ndepth ${st[4]}  rate ${st[5].toFixed(2)}\ninterp ${st[6].toFixed(1)} ticks  dropped ${st[7]}`,
     });
 
-    art?.frame(own, f, dt, now, camera);
+    // Hands on the wheel: no gun in view.
+    art?.frame(driving ? own.map((x, i) => (i === 10 ? 0 : x)) : own, f, dt, now, camera);
     effects.update();
     renderer.render(scene, camera);
     art?.afterRender(renderer);
@@ -391,7 +409,7 @@ function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THR
   requestAnimationFrame(loop);
 }
 
-/** For the browser test (?autoplay): walk at the nearest other fighter,
+/** For the browser test (?autoplay): walk at the nearest enemy,
  * aim at them and keep pulling the trigger. Only inputs: the server still
  * decides every hit. */
 // Where the autopilot walks while fog shows it nobody: the map's roam
@@ -407,7 +425,7 @@ function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
   const toYaw = (a: number) => (((Math.round((a / (2 * Math.PI)) * TURN)) % TURN) + TURN) % TURN;
   let best = -1, bd = Infinity;
   for (let i = 0; i + STRIDE <= o.length; i += STRIDE) {
-    if (!o[i + 2]) continue;
+    if (!o[i + 2] || o[i + 1] === s.mate) continue;
     const d = Math.hypot(o[i + 6] - me[0], o[i + 8] - me[2]);
     if (d < bd) { bd = d; best = i; }
   }

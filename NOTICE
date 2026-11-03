@@ -5,9 +5,12 @@ here is NC or SA.
 
 Models (web/public/models): Triple T and the guns are commissioned from
 Meshy on a paid plan, owned outright, from the Gates repository
-(AnthonE/Gates, assets/models). No attribution is owed.
+(AnthonE/Gates, assets/models). No attribution is owed. The Bevy client's
+copies (crates/client/assets/models) are the same models with their KTX2
+textures re-encoded as JPEG by tools/glb.
 
-Sounds (web/public/sound), all CC0 or public domain, cut by Gates
+Sounds (web/public/sound, and the Bevy client's copies in
+crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
   - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
   - USC Sunset Editorial / Red Library sound effects (archive.org), public
@@ -22,3 +25,37 @@ Textures (web/public/textures), CC0: Poly Haven, ambientCG, TextureCan.
 
 three.js (MIT), including its basis transcoder (Apache-2.0), is bundled
 into the page.
+
+Code ported into the Bevy client (crates/client/src/look) from Gates
+(AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
+ground and grass modules as they arrive), and into tools/glb from Gates'
+crates/client/src/webassets.rs, under the MIT licence:
+
+    Copyright (c) 2026 MoreRight DAO
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the
+    "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish,
+    distribute, sublicense, and/or sell copies of the Software, and to
+    permit persons to whom the Software is furnished to do so, subject to
+    the following conditions:
+
+    The above copyright notice and this permission notice shall be included
+    in all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+    IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Textures in the Bevy client (crates/client/assets/textures: sand, grass,
+gravel, rock, concrete, metal), copied from Gates by tools/assets_client.mjs,
+are CC0 from Poly Haven (polyhaven.com: sand_02, forrest_ground_01,
+bicolour_gravel, concrete_wall_003) and ambientCG (ambientcg.com: Rock043L,
+CorrugatedSteel009), and the grass card atlas from Poly Haven's
+grass_medium_01 (baked by Gates). No attribution is required; credited by
+choice.

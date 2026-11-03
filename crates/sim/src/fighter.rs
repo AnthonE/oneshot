@@ -9,6 +9,7 @@ use crate::geom::V3;
 use crate::input::*;
 use crate::map::Map;
 use crate::movement::{self, Body};
+use crate::thing::Thing;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Gun {
@@ -61,6 +62,9 @@ pub struct Fighter {
     pub respawn: u16,
     pub kills: u16,
     pub deaths: u16,
+    /// In a vehicle: its slot × 2 + the seat, plus 1; 0 on foot. The world
+    /// puts a rider's body at its seat (`Vehicle::mount`).
+    pub ride: u8,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -92,6 +96,16 @@ impl Fighter {
         self.seated && self.alive
     }
 
+    /// The vehicle and seat it rides in, if it does.
+    pub fn riding(&self) -> Option<(usize, usize)> {
+        (self.ride != 0).then(|| ((self.ride as usize - 1) / 2, (self.ride as usize - 1) % 2))
+    }
+
+    /// The `ride` value for `seat` of vehicle `vehicle`.
+    pub fn ride_of(vehicle: usize, seat: usize) -> u8 {
+        (vehicle * 2 + seat + 1) as u8
+    }
+
     /// Back in play at a spawn point, full and with the loadout.
     pub fn spawn(&mut self, pos: V3, yaw: u16, loadout: [u8; 2]) {
         self.alive = true;
@@ -116,6 +130,7 @@ impl Fighter {
         self.gren_cool = 0;
         self.grenades = GREN_START;
         self.respawn = 0;
+        self.ride = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -136,7 +151,9 @@ impl Fighter {
     }
 
     /// One tick of this fighter's own state under `inp` (already
-    /// sanitized). Deterministic in (self, inp, map) alone.
+    /// sanitized). Deterministic in (self, inp, map) alone. A rider doesn't
+    /// walk (the world puts it at its seat); a driver doesn't fight, a
+    /// passenger only shoots.
     pub fn step_local(&mut self, inp: &Input, map: &Map) -> Local {
         let mut out = Local::default();
         if !self.active() {
@@ -146,7 +163,12 @@ impl Fighter {
         let pressed = inp.buttons & !self.last_buttons;
         self.yaw = inp.yaw;
         self.pitch = inp.pitch;
-        movement::step(&mut self.body, inp, map);
+        let seat = self.riding().map(|(_, s)| s);
+        if seat.is_none() {
+            movement::step(&mut self.body, inp, map);
+        }
+        let shoots = seat != Some(crate::vehicle::DRIVER);
+        let on_foot = seat.is_none();
 
         dec(&mut self.refire);
         dec(&mut self.burst_gap);
@@ -181,7 +203,7 @@ impl Fighter {
 
         // A burst keeps firing once pulled; otherwise a semi-automatic
         // fires on the pull, an automatic while held.
-        let ready = self.reload == 0 && g.arm != NONE && g.mag > 0;
+        let ready = shoots && self.reload == 0 && g.arm != NONE && g.mag > 0;
         if ready && self.burst_left > 0 && self.burst_gap == 0 {
             self.burst_left -= 1;
             out.fired = true;
@@ -210,14 +232,14 @@ impl Fighter {
             self.burst_left = 0;
         }
 
-        if pressed & MELEE != 0 && self.melee_cool == 0 {
+        if on_foot && pressed & MELEE != 0 && self.melee_cool == 0 {
             out.melee = true;
             self.melee_cool = ticks(MELEE_COOL_MS) as u16;
             self.reload = 0;
             self.burst_left = 0;
             self.refire = self.refire.max(ticks(MELEE_COOL_MS / 2) as u16);
         }
-        if pressed & GRENADE != 0 && self.grenades > 0 && self.gren_cool == 0 {
+        if on_foot && pressed & GRENADE != 0 && self.grenades > 0 && self.gren_cool == 0 {
             out.throw = true;
             self.grenades -= 1;
             self.gren_cool = ticks(GREN_COOL_MS) as u16;
@@ -230,4 +252,44 @@ impl Fighter {
 
 fn dec(t: &mut u16) {
     *t = t.saturating_sub(1);
+}
+
+impl Thing for Fighter {
+    fn live(&self) -> bool {
+        self.seated
+    }
+
+    fn hash(&self, h: &mut crate::hash::Fnv) {
+        h.bool(self.seated);
+        h.u8(self.team);
+        h.bool(self.alive);
+        h.v3(self.body.pos);
+        h.v3(self.body.vel);
+        h.bool(self.body.grounded);
+        h.bool(self.body.crouched);
+        h.u16(self.yaw);
+        h.u16(self.pitch as u16);
+        h.i32(self.shield);
+        h.i32(self.health);
+        h.u32(self.since_hit);
+        for g in &self.guns {
+            h.u8(g.arm);
+            h.u16(g.mag);
+            h.u16(g.reserve);
+        }
+        h.u8(self.cur);
+        h.u16(self.refire);
+        h.u16(self.reload);
+        h.u8(self.burst_left);
+        h.u16(self.burst_gap);
+        h.u16(self.melee_cool);
+        h.u16(self.gren_cool);
+        h.u8(self.grenades);
+        h.u32(self.shots);
+        h.u16(self.last_buttons);
+        h.u16(self.respawn);
+        h.u16(self.kills);
+        h.u16(self.deaths);
+        h.u8(self.ride);
+    }
 }

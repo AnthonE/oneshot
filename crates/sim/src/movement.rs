@@ -2,6 +2,9 @@
 //! `$move` (`src/players.wat`). Ground friction and acceleration, capped air
 //! acceleration (air strafing), gravity, then the map's boxes an axis at a
 //! time: x, z, then up or down, stepping onto anything up to [`STEP`] high.
+//! On a terrain, a slope steeper than [`MAX_CLIMB`] stops a step up it and
+//! one too steep to stand on slides the body down; a launcher throws a
+//! grounded body. All of it reads only the body, its input and the map.
 
 use crate::consts::*;
 use crate::fmath;
@@ -107,25 +110,41 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let hi = p.y + h;
 
     let tx = p.x + v.x * DT;
-    let nx = sweep(
+    let mut nx = sweep(
         map,
+        BODY_R,
         p.x,
         tx,
+        (
+            (p.x.min(tx) - BODY_R, p.z - BODY_R),
+            (p.x.max(tx) + BODY_R, p.z + BODY_R),
+        ),
         |bx| (bx.min.x, bx.max.x),
-        |bx| bx.over_z(p.z) && bx.min.y < hi && bx.max.y > lo,
+        |bx| bx.over_z(p.z, BODY_R) && bx.min.y < hi && bx.max.y > lo,
     );
+    if map.terrain.is_some() && too_steep(map, (p.x, p.z), (nx, p.z), p.y) {
+        nx = p.x;
+    }
     if nx != tx {
         v.x = 0.0;
     }
     p.x = nx.clamp(map.lo.0, map.hi.0);
     let tz = p.z + v.z * DT;
-    let nz = sweep(
+    let mut nz = sweep(
         map,
+        BODY_R,
         p.z,
         tz,
+        (
+            (p.x - BODY_R, p.z.min(tz) - BODY_R),
+            (p.x + BODY_R, p.z.max(tz) + BODY_R),
+        ),
         |bx| (bx.min.z, bx.max.z),
-        |bx| bx.over_x(p.x) && bx.min.y < hi && bx.max.y > lo,
+        |bx| bx.over_x(p.x, BODY_R) && bx.min.y < hi && bx.max.y > lo,
     );
+    if map.terrain.is_some() && too_steep(map, (p.x, p.z), (p.x, nz), p.y) {
+        nz = p.z;
+    }
     if nz != tz {
         v.z = 0.0;
     }
@@ -152,33 +171,72 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     }
     p.y = ny;
 
+    if map.terrain.is_some() && v.y <= 0.0 && floor == map.ground(p.x, p.z) && p.y - floor < SNAP {
+        // On ground too steep to stand on: the body stays on the face and
+        // slides down the fall line, never grounded (no friction, no jump).
+        let n = map.ground_normal(p.x, p.z);
+        if n.y < WALK_NY {
+            p.y = floor;
+            v.y = 0.0;
+            b.grounded = false;
+            v.x += n.x * (SLIDE_ACCEL * DT);
+            v.z += n.z * (SLIDE_ACCEL * DT);
+        }
+    }
+    if b.grounded {
+        for l in &map.launchers {
+            let a = &l.area;
+            if p.x >= a.min.x && p.x <= a.max.x && p.z >= a.min.z && p.z <= a.max.z && p.y >= a.min.y && p.y <= a.max.y
+            {
+                v = l.vel;
+                b.grounded = false;
+                break;
+            }
+        }
+    }
+
     b.pos = quant3(p);
     b.vel = quant3(v);
+}
+
+/// Whether a move from `a` to `b` (x, z) climbs ground steeper than
+/// [`MAX_CLIMB`] to above the feet at `feet`.
+pub(crate) fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
+    let g1 = map.ground(b.0, b.1);
+    if g1 <= feet + 0.01 {
+        return false;
+    }
+    let run = crate::fmath::fabs(b.0 - a.0) + crate::fmath::fabs(b.1 - a.1);
+    g1 - map.ground(a.0, a.1) > run * MAX_CLIMB
 }
 
 /// Moves a coordinate from `from` toward `to` until it meets a box face
 /// that `blocks` says is in the way on the other axes. "Was outside" allows
 /// [`FACE_EPS`], so a body the grid left a hair inside a face it rests
-/// against is still held by it.
-fn sweep(
+/// against is still held by it. `area` (x and z, low and high) holds every
+/// box that could stop the move; the answer is the nearest stop, so which
+/// boxes are visited, and in what order, never changes it.
+pub(crate) fn sweep(
     map: &Map,
+    r: f32,
     from: f32,
     to: f32,
+    area: ((f32, f32), (f32, f32)),
     span: impl Fn(&crate::geom::Aabb) -> (f32, f32),
     blocks: impl Fn(&crate::geom::Aabb) -> bool,
 ) -> f32 {
     let mut t = to;
-    for bx in &map.boxes {
+    map.each_box_in(area.0, area.1, |bx| {
         if !blocks(bx) {
-            continue;
+            return;
         }
         let (lo, hi) = span(bx);
-        if to > from && from + BODY_R <= lo + FACE_EPS && t + BODY_R > lo {
-            t = lo - BODY_R;
-        } else if to < from && from - BODY_R >= hi - FACE_EPS && t - BODY_R < hi {
-            t = hi + BODY_R;
+        if to > from && from + r <= lo + FACE_EPS && t + r > lo {
+            t = lo - r;
+        } else if to < from && from - r >= hi - FACE_EPS && t - r < hi {
+            t = hi + r;
         }
-    }
+    });
     t
 }
 
@@ -187,17 +245,18 @@ fn sweep(
 const FACE_EPS: f32 = 0.01;
 
 impl crate::geom::Aabb {
-    fn over_z(&self, z: f32) -> bool {
-        self.min.z < z + BODY_R && self.max.z > z - BODY_R
+    pub(crate) fn over_z(&self, z: f32, r: f32) -> bool {
+        self.min.z < z + r && self.max.z > z - r
     }
-    fn over_x(&self, x: f32) -> bool {
-        self.min.x < x + BODY_R && self.max.x > x - BODY_R
+    pub(crate) fn over_x(&self, x: f32, r: f32) -> bool {
+        self.min.x < x + r && self.max.x > x - r
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fmath::fabs;
     use crate::input::Input;
 
     fn run(b: &mut Body, inp: Input, map: &Map, n: u32) {
@@ -294,5 +353,108 @@ mod tests {
         assert!(b.pos.x < -12.5 && b.pos.x > -19.5, "{:?}", b.pos);
         assert_eq!(b.pos.y, 2.5, "{:?}", b.pos);
         assert!(b.grounded);
+    }
+
+    /// 16 m along x in 2 m cells, rising 3 m a cell over its middle (56°,
+    /// too steep), flat at both ends.
+    const CLIFF: [i16; 18] = [
+        0, 0, 0, 384, 768, 1152, 1152, 1152, 1152, //
+        0, 0, 0, 384, 768, 1152, 1152, 1152, 1152,
+    ];
+
+    fn cliff() -> Map {
+        crate::map::Def {
+            id: 254,
+            name: "cliff",
+            lo: (0.5, 0.5),
+            hi: (15.5, 1.5),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([1.0, 0.0, 1.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: Some(crate::terrain::TerrainDef {
+                cell: 2.0,
+                x0: 0.0,
+                z0: 0.0,
+                nx: 9,
+                nz: 2,
+                heights: &CLIFF,
+            }),
+            launchers: &[],
+            vehicles: &[],
+        }
+        .build()
+    }
+
+    fn standing(map: &Map, x: f32, z: f32) -> Body {
+        Body {
+            pos: V3::new(x, map.ground(x, z), z),
+            grounded: true,
+            ..Body::default()
+        }
+    }
+
+    fn run_x() -> Input {
+        Input {
+            mz: 127,
+            ..Input::default()
+        }
+    }
+
+    #[test]
+    fn a_gentle_slope_is_walked_up_on_the_ground() {
+        let map = crate::maps::canyon::DEF.build();
+        // Up the side of the hill at (−30, 13) from its foot.
+        let mut b = standing(&map, -30.0, 3.5);
+        let up = Input {
+            mz: 127,
+            yaw: 16384,
+            ..Input::default()
+        };
+        let mut was = b.pos.y;
+        for _ in 0..TICK_HZ {
+            step(&mut b, &up, &map);
+            assert!(b.pos.y >= was - 1e-3, "never down on the way up: {:?}", b.pos);
+            was = b.pos.y;
+        }
+        assert!(b.pos.z > 9.0, "it climbed: {:?}", b.pos);
+        assert!(
+            b.pos.y > 1.5 && fabs(b.pos.y - map.ground(b.pos.x, b.pos.z)) < 0.01,
+            "{:?}",
+            b.pos
+        );
+        assert!(b.grounded);
+    }
+
+    #[test]
+    fn a_slope_too_steep_stops_a_walk_up_it_and_slides_a_body_off() {
+        let map = cliff();
+        let mut b = standing(&map, 2.0, 1.0);
+        run(&mut b, run_x(), &map, TICK_HZ * 2);
+        assert!(b.pos.x < 6.5 && b.pos.y < 1.0, "held at the foot: {:?}", b.pos);
+        // Put on the face, it slides back down.
+        let mut b = standing(&map, 8.0, 1.0);
+        run(&mut b, Input::default(), &map, TICK_HZ);
+        assert!(b.pos.x < 6.5, "slid down: {:?}", b.pos);
+        assert!(b.pos.y < 0.5 && b.grounded, "{:?}", b.pos);
+    }
+
+    #[test]
+    fn a_launcher_throws_a_body_where_its_map_says() {
+        let map = crate::maps::canyon::DEF.build();
+        let l = map.launchers[0];
+        let at = (l.area.min + l.area.max) * 0.5;
+        let mut b = standing(&map, at.x, at.z);
+        step(&mut b, &Input::default(), &map);
+        assert!(!b.grounded && b.vel.y > 10.0, "thrown: {:?}", b);
+        let mut ticks = 0;
+        while !b.grounded && ticks < TICK_HZ * 4 {
+            step(&mut b, &Input::default(), &map);
+            ticks += 1;
+        }
+        // Red's lands near (−10, 0) after about 1.5 s.
+        assert!(fabs(b.pos.x - -10.0) < 1.5 && fabs(b.pos.z) < 0.5, "{:?}", b.pos);
+        assert!((TICK_HZ * 13 / 10..TICK_HZ * 17 / 10).contains(&ticks), "{ticks} ticks");
     }
 }

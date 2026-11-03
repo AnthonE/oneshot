@@ -12,6 +12,16 @@ crate-type = ["cdylib", "rlib"]
 sim = { path = "../sim" }
 proto = { path = "../proto" }
 
+[features]
+# The native transport (wtransport on quinn): for a native client and the
+# server's tests. The browser build never has it.
+native = ["dep:wtransport", "dep:tokio"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The same rev the server pins (docs/RIP.md §6).
+wtransport = { git = "https://github.com/BiagioFesta/wtransport", rev = "a11e6a8e7ff33c6eef522d308007da55d1df9f81", features = ["dangerous-configuration", "quinn"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util", "sync", "net"], optional = true }
+
 [dev-dependencies]
 room = { path = "../room" }
 

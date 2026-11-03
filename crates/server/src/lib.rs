@@ -28,8 +28,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_FFA,
-    MODE_GUN_GAME,
+    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES,
+    MODE_FFA, MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -100,10 +100,12 @@ pub struct Config {
     /// PEM certificate and key; without them a self-signed certificate
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
-    /// A casual room's rules: against a bot, free for all, Gun Game.
+    /// A casual room's rules: against a bot, free for all, Gun Game, Big
+    /// Team.
     pub rules: Rules,
     pub ffa: Rules,
     pub gun_game: Rules,
+    pub big_team: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -166,6 +168,7 @@ impl Default for Config {
             rules: Rules::duel(),
             ffa: Rules::ffa(),
             gun_game: Rules::gun_game(),
+            big_team: Rules::big_team(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             cup: Rules {
@@ -435,11 +438,12 @@ impl Sim {
             MODE_DOUBLES => self.cfg.doubles,
             MODE_CUP => self.cfg.cup,
             MODE_FFA => self.cfg.ffa,
+            MODE_BIG_TEAM => self.cfg.big_team,
             MODE_GUN_GAME => self.cfg.gun_game,
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
         };
-        let map = self.pick_map(seed);
+        let map = self.pick_map(seed, mode == MODE_BIG_TEAM);
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
@@ -449,11 +453,25 @@ impl Sim {
         }
     }
 
-    /// The map a room plays, from its seed (what clients may know anyway).
-    fn pick_map(&self, seed: u64) -> Map {
-        let all: Vec<u8> = sim::maps::ALL.iter().map(|d| d.id).collect();
-        let ids: Vec<u8> = self.cfg.maps.iter().copied().filter(|id| all.contains(id)).collect();
-        let ids = if ids.is_empty() { all } else { ids };
+    /// The map a room plays, from its seed (what clients may know anyway):
+    /// the `--map` ones if any are given, else Big Team on the big maps and
+    /// everything else on the arenas.
+    fn pick_map(&self, seed: u64, big: bool) -> Map {
+        let given: Vec<u8> = self
+            .cfg
+            .maps
+            .iter()
+            .copied()
+            .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
+            .collect();
+        let sized: Vec<u8> = sim::maps::ALL.iter().filter(|d| d.big() == big).map(|d| d.id).collect();
+        let ids = if !given.is_empty() {
+            given
+        } else if !sized.is_empty() {
+            sized
+        } else {
+            sim::maps::ALL.iter().map(|d| d.id).collect()
+        };
         sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }
 
@@ -485,7 +503,7 @@ impl Sim {
                         tx,
                     } => {
                         let mode = match mode {
-                            MODE_FFA | MODE_GUN_GAME => mode,
+                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
                             _ => MODE_CASUAL,
                         };
                         // Free for all and Gun Game are shared: a seat a bot

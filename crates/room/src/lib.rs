@@ -8,8 +8,9 @@ pub mod fog;
 pub mod replay;
 pub mod watch;
 
+use proto::MAX_SNAP_VEHICLES;
+use proto::{encode_snapshot, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
-use proto::{MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
@@ -58,6 +59,51 @@ pub struct ClientNet {
     low: Option<i32>,
     /// Events since the last snapshot to this client.
     pending: Vec<Event>,
+    /// What this client was told of them, until it acks a snapshot that
+    /// carried it.
+    pub queue: EventQueue,
+}
+
+/// A client's events as it may be told them (filtered by `room::build`),
+/// each sent in every snapshot from the first that carries it until the
+/// client acks one of those (docs/DESIGN.md §10). Oldest first, never one
+/// skipped: so the client keeps an event by its id and drops repeats.
+#[derive(Clone, Debug, Default)]
+pub struct EventQueue {
+    list: Vec<(Option<u32>, EventState)>,
+    next_id: u16,
+    /// Events dropped because a client stopped acking.
+    pub dropped: u32,
+}
+
+/// Events a client may have waiting: past this the oldest go.
+pub const MAX_QUEUED_EVENTS: usize = 256;
+
+impl EventQueue {
+    fn push(&mut self, mut e: EventState) {
+        e.id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        if self.list.len() >= MAX_QUEUED_EVENTS {
+            self.list.remove(0);
+            self.dropped += 1;
+        }
+        self.list.push((None, e));
+    }
+
+    /// The client has every snapshot up to `tick`: what those carried is
+    /// home.
+    pub fn ack(&mut self, tick: u32) {
+        self.list.retain(|(since, _)| since.is_none_or(|t| t > tick));
+    }
+
+    /// Waiting, oldest first.
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
 }
 
 impl Default for ClientNet {
@@ -76,6 +122,7 @@ impl Default for ClientNet {
             repeats: 0,
             low: None,
             pending: Vec::new(),
+            queue: EventQueue::default(),
         }
     }
 }
@@ -90,6 +137,7 @@ impl ClientNet {
             let ack = m.ack_tick;
             if ack <= sent && self.acked.is_none_or(|a| ack > a) {
                 self.acked = Some(ack);
+                self.queue.ack(ack);
                 let (t, at) = self.sent[ack as usize % SENT];
                 if t == ack {
                     let rtt = now_ms - at;
@@ -456,7 +504,15 @@ impl Room {
                     let f = &mut self.fogs[s];
                     f.update(&self.world, s, lead, tick);
                     let low = c.take_low();
-                    let snap = build(&self.world, s, c.last_seq, low, &c.pending, |q| f.shows(q, tick));
+                    let snap = build(
+                        &self.world,
+                        s,
+                        (c.last_seq, low),
+                        &c.pending,
+                        &mut c.queue,
+                        |q| f.shows(q, tick),
+                        |i| f.shows_vehicle(i, tick),
+                    );
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
                     snaps.push((s as u8, snap));
@@ -468,15 +524,17 @@ impl Room {
 }
 
 /// The snapshot seat `s` is sent: its own fighter exactly, the others it
-/// may see coarsely. `visible(q)` is fog of war's to answer (milestone 3);
-/// everything else here is what any client may know.
+/// may see coarsely. `clock` is the client's last input seq run and its
+/// input depth; `visible(q)` and `vehicle_visible(i)` are fog of war's to
+/// answer; everything else here is what any client may know.
 pub fn build(
     w: &World,
     s: usize,
-    last_seq: u32,
-    depth: i8,
+    (last_seq, depth): (u32, i8),
     events: &[Event],
+    queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
+    vehicle_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
     let mut snap = Snapshot {
         tick: w.tick,
@@ -487,8 +545,48 @@ pub fn build(
         clock: w.clock,
         winner: w.winner,
         score: w.score,
+        n_score: if w.rules.teams { 2 } else { w.rules.seats },
         ..Snapshot::default()
     };
+    // What this client may know: itself, its side, and whom fog shows it.
+    let me = &w.fighters[s];
+    let eye = me.eye();
+    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
+    // Every kind, each by its own rule; no wildcard, so a new kind must
+    // say what this client may see of it.
+    for k in sim::thing::Kind::ALL {
+        match k {
+            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible),
+            sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
+            sim::thing::Kind::Pad => add_pads(&mut snap, w),
+            sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
+        }
+    }
+    // What this client may be told of the new events joins its queue; the
+    // queue goes out oldest first, as many as fit.
+    for e in events {
+        if let Some(e) = filter_event(w, s, eye, e, &known) {
+            queue.push(e);
+        }
+    }
+    for (_, e) in queue.list.iter().take(MAX_SNAP_EVENTS) {
+        snap.events[snap.n_events as usize] = *e;
+        snap.n_events += 1;
+    }
+    // Over a datagram, the snapshot would be dropped whole: the newest
+    // events wait for the next instead.
+    let mut scratch = [0u8; 2 * MAX_DATAGRAM];
+    while snap.n_events > 0 && encode_snapshot(&snap, &mut scratch).map_or(true, |n| n > MAX_DATAGRAM) {
+        snap.n_events -= 1;
+    }
+    for (since, _) in queue.list.iter_mut().take(snap.n_events as usize) {
+        since.get_or_insert(w.tick);
+    }
+    snap
+}
+
+/// The others fog shows this client, coarsely.
+fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usize) -> bool) {
     for (q, f) in w.fighters.iter().enumerate() {
         if q == s || !f.seated || !visible(q) || snap.n_remote as usize >= MAX_REMOTES {
             continue;
@@ -509,16 +607,15 @@ pub fn build(
         };
         snap.n_remote += 1;
     }
-    // What this client may know: itself, its side, and whom fog shows it.
-    let me = &w.fighters[s];
-    let eye = me.eye();
-    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
-    for p in w.proj.iter().filter(|p| p.active) {
+}
+
+/// A projectile flies in the open: sent if its owner is known to this
+/// client, or it is in clear line of sight.
+fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usize) -> bool) {
+    for (_, p) in w.proj.live() {
         if snap.n_proj as usize >= MAX_SNAP_PROJ {
             break;
         }
-        // A projectile flies in the open: sent if it is ours or our side's,
-        // or in clear line of sight.
         if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
             continue;
         }
@@ -530,16 +627,46 @@ pub fn build(
         };
         snap.n_proj += 1;
     }
-    for e in events {
-        if snap.n_events as usize >= MAX_SNAP_EVENTS {
+}
+
+/// The vehicle this client rides in, exactly; the others fog shows it
+/// (`visible`: [`fog::Fog::shows_vehicle`]), or that someone it knows
+/// rides in; and a seat's rider only when it may know them.
+fn add_vehicles(
+    snap: &mut Snapshot,
+    w: &World,
+    s: usize,
+    known: &impl Fn(usize) -> bool,
+    visible: &impl Fn(usize) -> bool,
+) {
+    let me = &w.fighters[s];
+    let mine = me.riding().map(|(i, _)| i);
+    if let Some(i) = mine {
+        snap.own_vehicle = Some(w.vehicles[i]);
+    }
+    for (i, v) in w.vehicles.live() {
+        if snap.n_vehicles as usize >= MAX_SNAP_VEHICLES {
             break;
         }
-        let Some(e) = filter_event(w, s, eye, e, &known) else {
+        let ridden_by_known = v.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
+        if mine != Some(i) && !ridden_by_known && !visible(i) {
             continue;
+        }
+        let seat = |x: u8| if x != 0 && known(x as usize - 1) { x } else { 0 };
+        snap.vehicles[snap.n_vehicles as usize] = VehState {
+            slot: i as u8,
+            pos: v.pos,
+            vel: v.vel,
+            yaw: v.yaw,
+            health: (v.health.max(0) as i64 * 255 / sim::consts::VEH_HEALTH as i64) as u8,
+            seats: [seat(v.seats[0]), seat(v.seats[1])],
         };
-        snap.events[snap.n_events as usize] = e;
-        snap.n_events += 1;
+        snap.n_vehicles += 1;
     }
+}
+
+/// Pad timers are public: they say when a gun is back, not who is near.
+fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
     for i in 0..n {
         snap.pads[i] = PadState {
@@ -547,7 +674,6 @@ pub fn build(
         };
     }
     snap.n_pads = n as u8;
-    snap
 }
 
 /// A shot heard is placed only to this grid, with no direction.
@@ -569,6 +695,8 @@ fn coarse(p: V3) -> V3 {
 fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) -> bool) -> Option<EventState> {
     let a = e.a as usize;
     let full = EventState {
+        // The client's queue numbers it.
+        id: 0,
         kind: e.kind as u8,
         a: e.a,
         b: e.b,
@@ -608,8 +736,16 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
             let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
             Some(EventState { pos, ..full })
         }
-        // Where someone spawned, picked up or swung: only if seen.
-        Ev::Spawn | Ev::Pickup | Ev::Melee => known(a).then_some(full),
+        // Where someone spawned, picked up, swung, or got in or out: only if
+        // seen.
+        Ev::Spawn | Ev::Pickup | Ev::Melee | Ev::Ride => known(a).then_some(full),
+        // A hull hit: the hitter's business and its riders'.
+        Ev::VehicleHit => {
+            let rides = w.fighters[s].riding().is_some_and(|(i, _)| i == e.part as usize);
+            (a == s || rides).then_some(full)
+        }
+        // A wreck seen (its blast is sent as a Blast, heard or seen).
+        Ev::Wreck => (known(a) || w.map.clear(eye, e.pos)).then_some(full),
         Ev::None => None,
     }
 }

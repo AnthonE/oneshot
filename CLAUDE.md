@@ -1,20 +1,23 @@
 # CLAUDE.md: oneshot
 
-A free-to-play, Halo-style arena shooter for the browser: 1v1 and 2v2
-ranked. The server is the truth; the browser predicts only its own fighter
-and is sent only what it could see. `docs/DESIGN.md` is the design of
+A free-to-play, Halo-style shooter for the desktop and the browser: 1v1 and
+2v2 ranked, and an 8v8 Big Team mode with terrain and vehicles on the way.
+The server is the truth; the client predicts only its own fighter (and the
+vehicle it drives) and is sent only what it could see. `docs/DESIGN.md` is the design of
 record; `docs/RIP.md` says what to take from Gates, Fireplace, engine-shim
-and Elo Pros. Milestones are `DESIGN.md` §16.
+and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a full shooter
+(entity pools, 16 seats, terrain, vehicles, the delta wire, the Bevy client).
 
 | crate | what |
 |---|---|
-| `crates/sim` | the rules: movement, guns, shields, pads, Slayer, rewind. Native on the server, wasm in the browser |
+| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`) and terrain (`terrain.rs`). Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
-| `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
-| `web/` | three.js page: draws, never decides |
+| `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
+| `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and browser (`crates/client/dist`): draws, never decides. Its own workspace; `ci/client.sh` is its check |
+| `web/` | three.js page: draws, never decides. Replaced by the Bevy client once it plays as well (`DESIGN.md` §16, milestone 12) |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: the systemd unit, the certbot hook, the game box's nginx, the runbook (`ops/README.md`) |
 
@@ -24,8 +27,14 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
 4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
-   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map).
-5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
+   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
+   `node ci/e2e.mjs 60 6 3` for sixteen in Big Team on Dry Fork's terrain).
+5. Touching the Bevy client: `ci/client.sh` (clippy, native, wasm into
+   `crates/client/dist`; serve it with `oneshot-server --web crates/client/dist`),
+   then `node ci/client_e2e.mjs` (it must score a kill) and
+   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it. Native
+   sound is `--features sound` (needs ALSA); the browser always has it.
+6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.
 6. Touching the look: `node tools/board.mjs look` (after the two builds):
@@ -40,6 +49,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
   a full queue drops a snapshot.
 - **The clock steers on the low point** of the server's input buffer
   (`ClientNet::take_low`); a page drawing slowly sends in bursts.
+- **The client draws, never decides** (`web/` today, the Bevy client next).
+  Gameplay state lives in `sim` and `client-net`.
 - **web/ draws.** Gameplay state lives in `sim` and `client-net`.
 - **Production never pins.** With `--cert`, `server.json` sends no hash;
   SIGTERM drains (matches finish), SIGHUP reloads the certificate. Hosting
@@ -73,9 +84,11 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 - **The golden moves only on purpose.** `tests/determinism.rs` pins
   `bot_match(1, 20000)`. A rule change updates it in the same commit; a
   compiler bump that moves it is a finding.
-- **`Fighter::step_local` is what the browser predicts.** It may read only
-  the fighter, its input and the map. Anything touching another fighter
-  goes in `World`. `the_prediction_matches_the_server_bit_for_bit` holds it.
+- **`Fighter::step_local` is what the client predicts** (and, once vehicles
+  land, `Vehicle::step_local` for a driver). Each may read only its own
+  state, its seat's input and the map. Anything touching another fighter or
+  vehicle goes in `World`. `the_prediction_matches_the_server_bit_for_bit`
+  holds it.
 - **The client never names its own lag.** `World::step` takes each seat's
   rewind depth from the server.
 - **The salt never leaves the server** while a match runs.

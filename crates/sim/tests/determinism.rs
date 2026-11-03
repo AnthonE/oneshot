@@ -11,7 +11,7 @@ use sim::Map;
 /// `bot_match(1, 20_000)`. If this moves, a rule changed (update it with
 /// the commit that changed the rule) or the compiler changed a float
 /// (stop: that is a finding).
-const GOLDEN: u64 = 0x6a3a_cc7e_0b61_c34a;
+const GOLDEN: u64 = 0x7504_7f2f_0aa9_4bd7;
 
 #[test]
 fn a_bot_match_hashes_the_same_twice() {
@@ -23,6 +23,17 @@ fn a_bot_match_hashes_the_same_twice() {
 fn the_bot_match_matches_its_golden() {
     let h = bot_match(1, 20_000);
     assert_eq!(h, GOLDEN, "bot_match(1, 20000) = {h:#018x}");
+}
+
+/// `bot_match_on(3, 2, 1, 20_000)`: sixteen bots in Big Team on Dry Fork,
+/// the terrain's golden (slopes, launchers, rays over the ground). Moves
+/// with a terrain or Big Team rule, like [`GOLDEN`] with the rest.
+const GOLDEN_DRY_FORK: u64 = 0x0b4c_c924_90c5_daff;
+
+#[test]
+fn big_team_on_dry_fork_matches_its_golden() {
+    let h = sim::bot::bot_match_on(3, 2, 1, 20_000);
+    assert_eq!(h, GOLDEN_DRY_FORK, "bot_match_on(3, 2, 1, 20000) = {h:#018x}");
 }
 
 /// The gate only means something if the bots actually fight.

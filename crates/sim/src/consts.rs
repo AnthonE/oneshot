@@ -12,14 +12,17 @@ pub const fn ticks(ms: u32) -> u32 {
     (ms * TICK_HZ + 500) / 1000
 }
 
-/// Seats in a room: Duel 2, Doubles 4, a cup heat 8.
-pub const MAX_FIGHTERS: usize = 8;
+/// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,
+/// Big Team 16.
+pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
 /// Weapon pads on a map.
 pub const MAX_PADS: usize = 8;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
+/// Boxes in a map (`tools/maps/compile.mjs` holds maps to it).
+pub const MAX_MAP_BOXES: usize = 256;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
@@ -48,6 +51,13 @@ pub const CROUCH_EYE: f32 = 1.1;
 pub const STEP: f32 = 0.5;
 /// A grounded body walking off a ledge this low stays on the ground.
 pub const SNAP: f32 = 0.25;
+/// Ground steeper than 46° can't be stood on or walked up: the normal's
+/// height below this (cos 46°) slides the body, and a rise steeper than
+/// this per metre (tan 46°) stops a step up it.
+pub const WALK_NY: f32 = 0.694_658_4;
+pub const MAX_CLIMB: f32 = 1.035_530_4;
+/// How hard a too-steep slope pushes a body down it, in m/s².
+pub const SLIDE_ACCEL: f32 = 14.0;
 pub const HIT_R: f32 = 0.35;
 pub const HIT_TOP: f32 = 1.45;
 pub const HIT_TOP_CROUCH: f32 = 0.95;
@@ -98,3 +108,45 @@ pub const BLAST_PUSH: f32 = 9.0;
 pub const COUNTDOWN_MS: u32 = 3000;
 /// Range of a pad: within this in x and z, and 1.5 m in height.
 pub const PAD_REACH: f32 = 1.0;
+
+// Vehicles (sim/src/vehicle.rs): one kind so far, a light four-wheeler for
+// a driver and a passenger who shoots.
+/// Vehicles on a map at once.
+pub const MAX_VEHICLES: usize = 8;
+/// Half the hull's length and width, and its height above the ground.
+pub const VEH_HALF_L: f32 = 2.2;
+pub const VEH_HALF_W: f32 = 1.1;
+pub const VEH_H: f32 = 1.5;
+/// The hull meets boxes as two circles this far fore and aft of its middle.
+pub const VEH_HULL_OFF: f32 = 1.1;
+pub const VEH_HULL_R: f32 = 1.1;
+/// Driving, per second: throttle, braking against the way it rolls, top
+/// speed forward and back, rolling drag (a fraction of speed), sideways
+/// grip (likewise), and turning: radians at full steer once past
+/// `VEH_TURN_FULL` m/s.
+pub const VEH_ACCEL: f32 = 13.0;
+pub const VEH_BRAKE: f32 = 24.0;
+pub const VEH_TOP: f32 = 21.0;
+pub const VEH_REVERSE: f32 = 8.0;
+pub const VEH_ROLL: f32 = 0.35;
+pub const VEH_GRIP: f32 = 7.0;
+pub const VEH_TURN: f32 = 1.9;
+pub const VEH_TURN_FULL: f32 = 6.0;
+/// Slower than this, an empty vehicle on the ground stands still.
+pub const VEH_PARK: f32 = 0.5;
+/// The share of a slope's pull across the heading the tyres let through.
+pub const VEH_SIDE_SLIP: f32 = 0.15;
+/// It drives onto a ledge this high and stays on the ground over a drop
+/// this deep.
+pub const VEH_STEP: f32 = 0.6;
+pub const VEH_SNAP: f32 = 0.4;
+/// Hit points (in `PT`s, like a fighter's).
+pub const VEH_HEALTH: i32 = 900 * PT;
+/// How near a fighter must stand to get in.
+pub const ENTER_R: f32 = 3.0;
+/// Faster than this, it runs a fighter down; past `SPLAT_KILL` the hit is
+/// lethal, below it scaled.
+pub const SPLAT_SPEED: f32 = 5.0;
+pub const SPLAT_KILL: f32 = 11.0;
+/// How much of a blast's push a vehicle takes.
+pub const VEH_PUSH_K: f32 = 0.3;

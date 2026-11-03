@@ -1,10 +1,11 @@
-//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, and an
-//! eight-seat Gun Game) with one person seat (played by a bot, through the same input path a client
+//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, an
+//! eight-seat Gun Game, a sixteen-seat Big Team) with one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
-//! unseen fighter's shot carries a place or a direction, or if any bit of
-//! the salt crosses the wire before the match is over.
+//! unseen fighter's shot carries a place or a direction, if a hidden
+//! fighter's projectile is sent out of sight, or if any bit of the salt
+//! crosses the wire before the match is over.
 
 use std::collections::VecDeque;
 
@@ -50,14 +51,16 @@ fn on_grid(v: f32) -> bool {
 struct Gate {
     room: Room,
     me: usize,
-    mate: Option<usize>,
     history: VecDeque<[Fighter; MAX_FIGHTERS]>,
+    vhistory: VecDeque<[sim::vehicle::Vehicle; sim::consts::MAX_VEHICLES]>,
     sent: Vec<Vec<u8>>,
     over: bool,
     revealed: Option<[u64; 2]>,
     commit: [u8; 32],
     checked: usize,
     hidden_seen: usize,
+    proj_seen: usize,
+    vehicles_seen: usize,
 }
 
 impl Gate {
@@ -68,8 +71,89 @@ impl Gate {
         let me = &w.fighters[self.me];
         let now = &self.history[0];
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
-        let mate = |q: usize| Some(q) == self.mate;
+        let mate = |q: usize| q != self.me && w.rules.teams && w.fighters[q].team == me.team;
         let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
+        // Every kind on the wire has its check; no wildcard, so a new kind
+        // doesn't compile until it has one.
+        for k in sim::thing::Kind::ALL {
+            match k {
+                sim::thing::Kind::Fighter => {}
+                // 8. A projectile is sent only if its owner is known to
+                // this client or it is in clear line of sight.
+                sim::thing::Kind::Projectile => {
+                    let eye = me.eye();
+                    for p in s.proj() {
+                        self.proj_seen += 1;
+                        let truth = w
+                            .proj
+                            .live()
+                            .find(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            .map(|(_, t)| *t);
+                        let t = truth.unwrap_or_else(|| panic!("tick {}: {p:?} is in no true projectile", w.tick));
+                        assert!(
+                            known(p.owner as usize) || w.map.clear(eye, t.pos),
+                            "tick {}: a hidden fighter's projectile out of sight was sent: {p:?}",
+                            w.tick
+                        );
+                    }
+                }
+                // Pad timers are public (room::build).
+                sim::thing::Kind::Pad => {}
+                // 9. A vehicle only if it is ours, someone we know rides
+                // it, or it was in clear line in the last 16 ticks (from
+                // any look ahead up to 300 ms); a rider named only if
+                // known; and never one held back in plain sight.
+                sim::thing::Kind::Vehicle => {
+                    let mine = me.riding().map(|(i, _)| i);
+                    assert_eq!(
+                        s.own_vehicle.is_some(),
+                        mine.is_some(),
+                        "tick {}: our own vehicle",
+                        w.tick
+                    );
+                    let leads = [
+                        0.0,
+                        0.1,
+                        0.2,
+                        0.3,
+                        room::fog::full_lead(fog_lead, 2),
+                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                    ];
+                    for v in s.vehicles() {
+                        self.vehicles_seen += 1;
+                        let i = v.slot as usize;
+                        let t = &w.vehicles[i];
+                        for &x in &v.seats {
+                            assert!(
+                                x == 0 || known(x as usize - 1),
+                                "tick {}: an unknown rider named: {v:?}",
+                                w.tick
+                            );
+                        }
+                        let ridden = t.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
+                        let seen = self.history.iter().zip(&self.vhistory).any(|(h, hv)| {
+                            hv[i].active
+                                && leads
+                                    .iter()
+                                    .any(|&l| room::fog::sees_vehicle(&w.map, h[self.me].eye(), &hv[i], l))
+                        });
+                        assert!(
+                            mine == Some(i) || ridden || seen,
+                            "tick {}: a hidden vehicle was sent: {v:?}",
+                            w.tick
+                        );
+                    }
+                    for (i, t) in w.vehicles.live() {
+                        let sent = s.vehicles().iter().any(|v| v.slot as usize == i);
+                        assert!(
+                            sent || mine == Some(i) || !room::fog::plainly_sees_vehicle(&w.map, me.eye(), t),
+                            "tick {}: vehicle {i} in plain sight but not sent",
+                            w.tick
+                        );
+                    }
+                }
+            }
+        }
         for (q, f) in w.fighters.iter().enumerate() {
             if q == self.me || mate(q) || !f.seated {
                 continue;
@@ -77,10 +161,22 @@ impl Gate {
             if sent.contains(&q) {
                 // 1. Never sent while far from visible: a check looser
                 // than fog's. Seen from any look-ahead up to 300 ms
-                // (fog's own among them: a point further along a path is
+                // (fog's own among them, stretched for near and far pairs'
+                // full looks: a point further along a path is
                 // not a superset of a nearer one) leaning up to 0.7 m, in
                 // the last 16 ticks.
-                let leads = [fog_lead, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
+                let leads = [
+                    fog_lead,
+                    room::fog::full_lead(fog_lead, 2),
+                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                    0.0,
+                    0.05,
+                    0.1,
+                    0.15,
+                    0.2,
+                    0.25,
+                    0.3,
+                ];
                 let near = self.history.iter().any(|h| {
                     leads.iter().any(|&l| {
                         [room::fog::PEEK_M, 0.7]
@@ -154,6 +250,20 @@ fn nothing_a_client_should_not_know_reaches_it_on_any_map() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
+    for d in sim::maps::ALL {
+        gate(
+            d.build(),
+            Rules {
+                score_limit: 60,
+                time_limit_ms: 120_000,
+                ..Rules::big_team()
+            },
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
@@ -180,16 +290,18 @@ fn gate(map: Map, rules: Rules) {
     };
     let me = slot as usize;
     let mut g = Gate {
-        mate: rules.teams.then_some(me ^ 2),
         room,
         me,
         history: VecDeque::new(),
+        vhistory: VecDeque::new(),
         sent: Vec::new(),
         over: false,
         revealed: None,
         commit,
         checked: 0,
         hidden_seen: 0,
+        proj_seen: 0,
+        vehicles_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -217,6 +329,8 @@ fn gate(map: Map, rules: Rules) {
         let (snaps, out) = g.room.step(now);
         g.history.push_front(g.room.world.fighters);
         g.history.truncate(16);
+        g.vhistory.push_front(*g.room.world.vehicles);
+        g.vhistory.truncate(16);
         for (_, s) in &snaps {
             acked = s.tick;
             g.check_snapshot(s);
@@ -261,6 +375,10 @@ fn gate(map: Map, rules: Rules) {
     // The gate only means something if fog actually hid someone.
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
+    assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
+    if !g.room.world.map.vehicles.is_empty() {
+        assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
+    }
 }
 
 /// Check 7: skins are public by design (docs/DESIGN.md §15) and say

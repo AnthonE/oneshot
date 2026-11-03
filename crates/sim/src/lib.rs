@@ -12,13 +12,18 @@ pub mod events;
 pub mod fighter;
 pub mod fmath;
 pub mod geom;
+pub mod grid;
 pub mod hash;
 pub mod input;
 pub mod map;
 pub mod maps;
 pub mod movement;
+pub mod pool;
 pub mod rewind;
 pub mod rng;
+pub mod terrain;
+pub mod thing;
+pub mod vehicle;
 pub mod world;
 
 pub use input::Input;

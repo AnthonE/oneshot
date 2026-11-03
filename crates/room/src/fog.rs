@@ -11,10 +11,12 @@
 //! person and every enemy. At 2v2 that is a few thousand box tests a
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
-use sim::consts::{CROUCH_EYE, EYE, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{CROUCH_EYE, EYE, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 use sim::map::Map;
+use sim::vehicle::Vehicle;
 use sim::world::World;
 
 /// Ticks an enemy stays sent after its last clear line (94 ms).
@@ -47,17 +49,12 @@ fn chest_h(f: &Fighter) -> f32 {
     }
 }
 
-/// Whether `viewer` could see `target` within `lead` seconds, leaning up to
-/// `peek` metres. The leak gate calls it with looser numbers than fog does.
-pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32) -> bool {
+/// Where `viewer`'s eye could be within `lead` seconds: now, pushed ahead
+/// by its speed, leaning `peek` metres across `side` either way, or jumping.
+pub fn eyes(viewer: &Fighter, side: V3, lead: f32, peek: f32) -> [V3; 7] {
     let e0 = eye(viewer);
     let e1 = e0 + viewer.body.vel * lead;
-    let to = (target.body.pos - viewer.body.pos).flat();
-    let side = {
-        let d = to.norm();
-        V3::new(-d.z, 0.0, d.x)
-    };
-    let eyes = [
+    [
         e0,
         e1,
         e0 + side * peek,
@@ -65,7 +62,14 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
         e1 + side * peek,
         e1 - side * peek,
         e0 + V3::new(0.0, JUMP_M, 0.0),
-    ];
+    ]
+}
+
+/// The points of a fighter that, in clear line, show it: head, chest, feet
+/// and the chest's two edges across `side`, now and pushed ahead by its
+/// speed over `lead` seconds. A new kind on the wire (a vehicle) names its
+/// own points and goes through [`sees_points`].
+pub fn fighter_points(target: &Fighter, side: V3, lead: f32) -> [V3; 10] {
     let head = if target.body.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
     let ch = chest_h(target);
     let edge = side * (HIT_R + 0.1);
@@ -80,7 +84,83 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
         points[k * 5 + 3] = c + edge;
         points[k * 5 + 4] = c - edge;
     }
+    points
+}
+
+/// Whether any eye has a clear line to any point.
+pub fn sees_points(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
     eyes.iter().any(|&e| points.iter().any(|&t| map.clear(e, t)))
+}
+
+/// Across the line from `viewer` to `target`, flat: the way a peek leans.
+fn across(viewer: V3, target: V3) -> V3 {
+    let d = (target - viewer).flat().norm();
+    V3::new(-d.z, 0.0, d.x)
+}
+
+/// Whether `viewer` could see `target` within `lead` seconds, leaning up to
+/// `peek` metres. The leak gate calls it with looser numbers than fog does.
+pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32) -> bool {
+    let side = across(viewer.body.pos, target.body.pos);
+    sees_points(
+        map,
+        &eyes(viewer, side, lead, peek),
+        &fighter_points(target, side, lead),
+    )
+}
+
+/// Whether the ground hides every line from any of `eyes` to any of
+/// `points`, without casting them: along a line above all of them (from the
+/// eyes' middle at their highest to the points' middle at their highest),
+/// somewhere the ground stands higher than that line by more than it can
+/// rise across the bundle's width. Then every line passes under the ground
+/// there. Never true when one of them is clear; sometimes false when all
+/// are hidden (the rays then decide).
+pub fn ground_hides(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
+    let Some(g) = &map.terrain else {
+        return false;
+    };
+    let mid = |ps: &[V3]| {
+        let n = ps.len() as f32;
+        let s = ps.iter().fold(V3::ZERO, |a, &p| a + p);
+        V3::new(s.x / n, ps.iter().fold(f32::NEG_INFINITY, |a, p| a.max(p.y)), s.z / n)
+    };
+    let (a, b) = (mid(eyes), mid(points));
+    let wide = |ps: &[V3], c: V3| ps.iter().fold(0.0f32, |w, p| w.max((*p - c).flat().len()));
+    // How much higher the ground may be under any line than under the
+    // reference line, plus a margin for rounding.
+    let rise = wide(eyes, a).max(wide(points, b)) * g.steepest() + 0.05;
+    let n = ((b - a).flat().len() * 0.25) as usize;
+    (1..n.clamp(2, 64)).any(|k| {
+        let s = k as f32 / n.clamp(2, 64) as f32;
+        let p = a + (b - a) * s;
+        g.height(p.x, p.z).is_some_and(|h| h - rise > p.y)
+    })
+}
+
+/// [`sees`], as fog runs it: each eye against the target's points now and
+/// its points ahead, a group at a time; a group the ground plainly hides
+/// ([`ground_hides`]) casts no rays. Past [`FAR_M`] the leans and the
+/// chest's edges are left out (at 40 m they turn a line by half a degree):
+/// 18 rays, not 70. A pair found hidden is given the plain test as well, so
+/// no shortcut can hide what is in plain sight.
+fn sees_full(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, far: bool) -> bool {
+    let side = across(viewer.body.pos, target.body.pos);
+    let all_eyes = eyes(viewer, side, lead, PEEK_M);
+    let all = fighter_points(target, side, lead);
+    // Now, ahead, jumping; head, chest and feet.
+    let (e, p): (&[V3], [&[V3]; 2]) = if far {
+        (&[all_eyes[0], all_eyes[1], all_eyes[6]], [&all[0..3], &all[5..8]])
+    } else {
+        (&all_eyes, [&all[0..5], &all[5..10]])
+    };
+    let seen = e.iter().any(|eye| {
+        p.iter().any(|group| {
+            let one = core::slice::from_ref(eye);
+            !ground_hides(map, one, group) && sees_points(map, one, group)
+        })
+    });
+    seen || plainly_sees(map, viewer, target)
 }
 
 /// The plain test: is the target's chest or head in clear line from the
@@ -93,25 +173,144 @@ pub fn plainly_sees(map: &Map, viewer: &Fighter, target: &Fighter) -> bool {
         || map.clear(e, target.body.pos + V3::new(0.0, head, 0.0))
 }
 
-/// One viewer's fog: until when each other seat stays sent.
+/// Points of a hull a vehicle has, a time.
+const VPOINTS: usize = 6;
+
+/// The points of a hull that, in clear line, show it: its middle, the
+/// middle of its top and its four top corners, now and pushed ahead by its
+/// speed over `lead`. The first two now are the plain test's.
+pub fn vehicle_points(v: &Vehicle, lead: f32) -> [V3; 2 * VPOINTS] {
+    let (f, r) = v.axes();
+    let mut out = [V3::ZERO; 2 * VPOINTS];
+    for (k, at) in [v.pos, v.pos + v.vel * lead].into_iter().enumerate() {
+        let top = at + V3::new(0.0, VEH_H * 0.8, 0.0);
+        let p = &mut out[k * VPOINTS..(k + 1) * VPOINTS];
+        p[0] = at + V3::new(0.0, VEH_H * 0.5, 0.0);
+        p[1] = top;
+        p[2] = top + f * VEH_HALF_L + r * VEH_HALF_W;
+        p[3] = top - f * VEH_HALF_L - r * VEH_HALF_W;
+        p[4] = top + f * VEH_HALF_L - r * VEH_HALF_W;
+        p[5] = top - f * VEH_HALF_L + r * VEH_HALF_W;
+    }
+    out
+}
+
+/// Whether a hull is in clear line from `eye`, now or within `lead`.
+pub fn sees_vehicle(map: &Map, eye: V3, v: &Vehicle, lead: f32) -> bool {
+    vehicle_points(v, lead).iter().any(|&p| map.clear(eye, p))
+}
+
+/// [`sees_vehicle`], as fog runs it: the points now and the points ahead a
+/// group at a time, a group the ground plainly hides casting no rays; past
+/// [`FAR_M`], only the middles and two opposite corners. Then the plain test.
+fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> bool {
+    let p = vehicle_points(v, lead);
+    let groups: [&[V3]; 2] = if far {
+        [&p[0..4], &p[VPOINTS..VPOINTS + 4]]
+    } else {
+        [&p[0..VPOINTS], &p[VPOINTS..]]
+    };
+    let one = core::slice::from_ref(&eye);
+    groups
+        .iter()
+        .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
+        || plainly_sees_vehicle(map, eye, v)
+}
+
+/// The plain test for a hull: its middle or the middle of its top in clear
+/// line now (the first two of [`vehicle_points`]). Fog must never hide what
+/// passes this.
+pub fn plainly_sees_vehicle(map: &Map, eye: V3, v: &Vehicle) -> bool {
+    vehicle_points(v, 0.0)[..2].iter().any(|&p| map.clear(eye, p))
+}
+
+/// One viewer's fog: until when each other seat, and each vehicle, stays
+/// sent.
 #[derive(Clone, Debug, Default)]
 pub struct Fog {
     until: [u32; MAX_FIGHTERS],
+    vuntil: [u32; MAX_VEHICLES],
+}
+
+/// Past this, a pair's full look comes every [`FAR_EVERY`] snapshots, not
+/// every other: far away, a fighter crosses less of the screen in a
+/// snapshot, and on a big map most pairs are far.
+pub const FAR_M: f32 = 40.0;
+pub const FAR_EVERY: usize = 4;
+
+/// How many snapshots apart a pair's full looks are: 2, or [`FAR_EVERY`]
+/// past [`FAR_M`].
+pub fn every(viewer: &Fighter, target: &Fighter) -> usize {
+    let d = (target.body.pos - viewer.body.pos).flat();
+    if d.dot(d) > FAR_M * FAR_M {
+        FAR_EVERY
+    } else {
+        2
+    }
+}
+
+/// The look ahead of a full look `every` snapshots apart: `lead`, and the
+/// snapshots until the pair's next full look.
+pub fn full_lead(lead: f32, every: usize) -> f32 {
+    lead + (every - 1) as f32 * crate::SNAP_EVERY as f32 / TICK_HZ as f32
 }
 
 impl Fog {
-    /// Looks again from `viewer` at `tick`.
+    /// Looks again from `viewer` at `tick`, a snapshot's tick. Each enemy
+    /// gets the full look (every eye, every point, [`full_lead`]) every
+    /// other snapshot ([`every`]: every fourth past [`FAR_M`]), the room
+    /// taking turns; on the snapshots between, the plain test, so nobody in
+    /// plain sight is ever held back. The hold ([`HOLD_TICKS`]) outlasts
+    /// the gap, so a pair in sight stays sent (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
         let me = &w.fighters[viewer];
+        let turn = (tick / crate::SNAP_EVERY) as usize + viewer;
         for (q, f) in w.fighters.iter().enumerate() {
             if q == viewer || !f.seated {
                 self.until[q] = 0;
             } else if w.rules.teams && f.team == me.team {
                 self.until[q] = u32::MAX;
-            } else if sees(&w.map, me, f, lead, PEEK_M) {
-                self.until[q] = tick + HOLD_TICKS;
+            } else {
+                let k = every(me, f);
+                let seen = if (turn + q).is_multiple_of(k) {
+                    sees_full(&w.map, me, f, full_lead(lead, k), k == FAR_EVERY)
+                } else {
+                    plainly_sees(&w.map, me, f)
+                };
+                if seen {
+                    self.until[q] = tick + HOLD_TICKS;
+                }
             }
         }
+        // Vehicles the same way: the full look (from the eye, ahead by
+        // lead and a snapshot) every other snapshot, the plain test between.
+        let eye = me.eye();
+        let mine = me.riding().map(|(i, _)| i);
+        for (i, v) in w.vehicles.iter().enumerate() {
+            if !v.active {
+                self.vuntil[i] = 0;
+            } else if mine == Some(i) {
+                self.vuntil[i] = u32::MAX;
+            } else {
+                let far = (v.pos - me.body.pos).flat().len() > FAR_M;
+                let k = if far { FAR_EVERY } else { 2 };
+                let seen = if (turn + i).is_multiple_of(k) {
+                    sees_vehicle_full(&w.map, eye, v, full_lead(lead, k), far)
+                } else {
+                    plainly_sees_vehicle(&w.map, eye, v)
+                };
+                if seen {
+                    self.vuntil[i] = tick + HOLD_TICKS;
+                } else if self.vuntil[i] == u32::MAX {
+                    self.vuntil[i] = 0;
+                }
+            }
+        }
+    }
+
+    /// Whether vehicle `i` may be sent at `tick`.
+    pub fn shows_vehicle(&self, i: usize, tick: u32) -> bool {
+        self.vuntil[i] != 0 && self.vuntil[i] >= tick
     }
 
     /// Whether seat `q` may be sent at `tick`.

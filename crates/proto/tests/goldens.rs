@@ -4,6 +4,7 @@
 
 use proto::*;
 use sim::arms::{BR, MAGNUM};
+use sim::consts::MAX_FIGHTERS;
 use sim::fighter::{Fighter, Gun};
 use sim::geom::V3;
 use sim::input::Input;
@@ -119,6 +120,7 @@ fn snapshot() -> Snapshot {
         vel: V3::new(36.0, 0.0, 0.0),
     };
     s.events[0] = EventState {
+        id: 41,
         kind: 1,
         a: 1,
         b: 0,
@@ -136,6 +138,30 @@ fn snapshot() -> Snapshot {
         ..EventState::default()
     };
     s.pads[1].empty_s = 45;
+    // Riding: in the passenger's seat of vehicle 2, sent exactly; and
+    // vehicle 5 driven by seat 1.
+    s.own.ride = 6;
+    s.own_vehicle = Some(sim::vehicle::Vehicle {
+        active: true,
+        pos: V3::new(-40.0, 1.0390625, -19.5),
+        vel: V3::new(12.5, 0.0, -0.25),
+        yaw: 1000,
+        grounded: true,
+        health: 200_000,
+        seats: [0, 1],
+        respawn: 0,
+        home: 2,
+    });
+    s.n_vehicles = 1;
+    s.vehicles[0] = VehState {
+        slot: 5,
+        pos: V3::new(20.0, 0.5, 12.0),
+        vel: V3::new(-15.0, 0.0, 3.0),
+        yaw: 40_000,
+        health: 128,
+        seats: [2, 0],
+    };
+    s.n_score = 2;
     s.score[0] = 3;
     s.score[1] = -1;
     s
@@ -249,17 +275,25 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.events(), s.events());
     assert_eq!(d.remotes()[0].pos, s.remotes[0].pos);
     assert_eq!(d.score, s.score);
+    assert_eq!(d.own.ride, s.own.ride);
+    assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
+    assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
-    // A full 8-seat snapshot fits the budget.
+    // Sixteen seats, every projectile and pad: fits with room for events.
+    // (room::build drops events past the datagram, so a full snapshot of
+    // everything is never sent.)
     let full = Snapshot {
-        n_remote: 7,
+        n_remote: MAX_REMOTES as u8,
         n_proj: MAX_SNAP_PROJ as u8,
-        n_events: MAX_SNAP_EVENTS as u8,
-        n_pads: 8,
+        n_events: 0,
+        n_pads: MAX_SNAP_PADS as u8,
+        n_vehicles: MAX_SNAP_VEHICLES as u8,
+        n_score: MAX_FIGHTERS as u8,
         ..s
     };
-    let n = encode_snapshot(&full, &mut buf).unwrap();
-    assert!(n <= MAX_DATAGRAM, "{n} bytes");
+    let mut big = [0u8; 4 * MAX_DATAGRAM];
+    let n = encode_snapshot(&full, &mut big).unwrap();
+    assert!(n + 200 <= MAX_DATAGRAM, "{n} bytes before events");
 }
 
 #[test]
@@ -295,17 +329,17 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x21cd_ceaa_a773_0091,
-        0x13de_bd0b_5d65_9ca7,
-        0x5b64_743f_57b4_1864,
-        0xa7db_3836_260c_75fb,
+        0x5ae2_2de8_84e4_3501,
+        0x42e9_59a2_804d_c077,
+        0x1c3d_28c8_ef48_a1d2,
         0x7ebe_34b8_2c10_f2d0,
-        0xe85b_7b56_99f2_042c,
-        0xeae6_fd0a_54e2_f36b,
-        0xc093_c63f_bf4a_6f4d,
+        0x3a33_e7d9_9d0c_85a6,
+        0xb8d3_9fbc_28b2_b2b7,
+        0xbdd2_7999_6f2a_620c,
         0x0835_ec07_b4ee_4fb0,
-        0x72fc_2d6e_af12_0ef0,
-        0x10d0_3fdf_f974_5eec,
-        0xc6fb_4858_89be_4749,
+        0x9e6a_3369_2998_8329,
+        0x227f_c9e3_d4c4_2705,
+        0xb77f_6e56_3cf6_3da6,
         0xc800_e818_6244_f8b3,
         0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,

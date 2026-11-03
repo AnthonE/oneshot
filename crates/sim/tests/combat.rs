@@ -441,3 +441,59 @@ fn a_seat_taken_in_free_for_all_starts_from_nothing() {
     w.seat(2, 0);
     assert_eq!(w.score[2], 0);
 }
+
+/// The same on Dry Fork: slopes, the creek, a hill, the bunker's steps and
+/// a launcher. Runs from red's launcher with the stick mostly forward and
+/// the yaw wandering, so the walk crosses all of them.
+#[test]
+fn the_prediction_matches_the_server_on_terrain_and_launchers() {
+    let map = sim::maps::canyon::DEF.build();
+    let rules = Rules {
+        teams: false,
+        score_limit: 100,
+        time_limit_ms: 0,
+        ..Rules::duel()
+    };
+    let mut w = World::new(map.clone(), rules, 1, (0xdead, 0xbeef));
+    w.seat(0, 0);
+    w.seat(1, 1);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    while w.phase == Phase::Countdown {
+        w.step(&idle, &NO_LAG);
+    }
+    let l = map.launchers[0];
+    let at = (l.area.min + l.area.max) * 0.5;
+    w.fighters[0].body.pos = V3::new(at.x, map.ground(at.x, at.z), at.z);
+    w.fighters[0].body.grounded = true;
+    w.fighters[1].body.pos = V3::new(60.0, 0.0, -20.0);
+    let mut mine = w.fighters[0];
+    let mut rng = sim::rng::Pcg32::new(9, 9);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut launched, mut climbed) = (false, 0.0f32);
+    for t in 0..TICK_HZ * 40 {
+        let r = rng.next_u32();
+        let inp = Input {
+            // No grenades: a frag's blast on its own thrower is the world's.
+            buttons: (r as u16) & (FIRE | JUMP | CROUCH | RELOAD | SWAP),
+            yaw: (fmath::sin(t as f32 * 0.003) * 30000.0) as i16 as u16,
+            pitch: 2000,
+            mx: (r >> 16) as i8 / 4,
+            mz: 127,
+        }
+        .sanitized();
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+        mine.step_local(&inp, &map);
+        let s = &w.fighters[0];
+        assert_eq!(s.body, mine.body, "tick {t}");
+        assert_eq!(
+            (s.guns, s.refire, s.reload, s.shots),
+            (mine.guns, mine.refire, mine.reload, mine.shots),
+            "tick {t}"
+        );
+        launched |= s.body.vel.y > 10.0;
+        climbed = climbed.max(s.body.pos.y);
+    }
+    assert!(launched, "the launcher threw it");
+    assert!(climbed > 2.0, "it went up the ground: {climbed}");
+}

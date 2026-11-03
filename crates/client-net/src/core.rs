@@ -7,20 +7,36 @@
 //!   needs them. It steers on the input depth each snapshot reports, within
 //!   ±5% (Gates' `client-core/src/clock.rs`).
 //! - **prediction:** its own fighter, stepped with `sim`'s `step_local` the
-//!   moment an input is made. Each snapshot carries the server's exact own
-//!   fighter after the last input it ran: equal to the prediction there is
-//!   a confirmation; different, the client adopts it and replays the rest
-//!   (Gates' `client-core/src/predict.rs`).
+//!   moment an input is made, and when it drives, its vehicle
+//!   ([`step_own`]). Each snapshot carries the server's exact own fighter
+//!   (and vehicle) after the last input it ran: equal to the prediction
+//!   there is a confirmation; different, the client adopts it and replays
+//!   the rest (Gates' `client-core/src/predict.rs`). A passenger's vehicle
+//!   is the server's: its seat follows it.
 //! - **interpolation:** everyone else, drawn between two snapshots a little
 //!   behind the newest (Gates' `client-core/src/interp.rs`).
 
-use proto::{EventState, InputMsg, Remote, Snapshot, MAX_INPUT_FRAMES, MAX_REMOTES};
+use proto::{EventState, InputMsg, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_VEHICLES};
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::fighter::Fighter;
 use sim::geom::{aim_dir, V3};
 use sim::input::Input;
 use sim::map::Map;
+use sim::vehicle::{Vehicle, DRIVER};
 use sim::world::{Phase, Rules};
+
+/// One tick of what this client predicts, in the server's order: its
+/// fighter (`step_in`), then the vehicle it drives, then its seat.
+pub fn step_own(f: &mut Fighter, v: &mut Option<Vehicle>, phase: Phase, inp: &Input, map: &Map) -> sim::fighter::Local {
+    let l = f.step_in(phase, inp, map);
+    if let (Some((_, seat)), Some(v)) = (f.riding(), v.as_mut()) {
+        if seat == DRIVER && phase == Phase::Playing && f.active() {
+            v.step_local(inp, map);
+        }
+        f.body = v.seat_body(seat);
+    }
+    l
+}
 
 /// Inputs and predictions kept, by seq.
 pub const RING: usize = 64;
@@ -61,6 +77,8 @@ struct Frame {
     tick: u32,
     n: u8,
     remotes: [Remote; MAX_REMOTES],
+    nv: u8,
+    vehicles: [VehState; MAX_SNAP_VEHICLES],
 }
 
 /// One snapshot as the kill cam keeps it: everyone this client was shown,
@@ -95,6 +113,17 @@ pub struct KillCam {
     pub bodies: Vec<Drawn>,
 }
 
+/// A vehicle as drawn this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawnVehicle {
+    pub slot: u8,
+    pub pos: V3,
+    /// Radians.
+    pub yaw: f32,
+    pub health: u8,
+    pub seats: [u8; 2],
+}
+
 /// A remote fighter as drawn this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Drawn {
@@ -127,14 +156,18 @@ pub struct NetCore {
     /// The next seq to make.
     seq: u32,
     inputs: [Input; RING],
-    /// The predicted fighter after each seq.
+    /// The predicted fighter after each seq, and the vehicle it rode.
     after: [Fighter; RING],
+    after_v: [Option<Vehicle>; RING],
     /// The newest seq the server says it ran.
     acked_seq: u32,
 
     pred: Fighter,
-    /// Before the newest predicted tick, for drawing between ticks.
+    pred_v: Option<Vehicle>,
+    /// Before the newest predicted tick, for drawing between ticks (the
+    /// body, and the vehicle's middle).
     prev_pos: V3,
+    prev_v: V3,
     /// A correction still easing out, added to the drawn position.
     offset: V3,
 
@@ -148,6 +181,8 @@ pub struct NetCore {
     jitter: f64,
     delay: f64,
     events: Vec<EventState>,
+    /// The newest event id kept: an event comes again until acked.
+    event_id: Option<u16>,
     /// The last few seconds as this client was sent them, for the kill cam.
     /// Nothing in it is more than the snapshots already said: fog shaped
     /// it on the server.
@@ -179,9 +214,12 @@ impl NetCore {
             seq,
             inputs: [Input::default(); RING],
             after: [Fighter::default(); RING],
+            after_v: [None; RING],
             acked_seq: seq.wrapping_sub(1),
             pred: Fighter::default(),
+            pred_v: None,
             prev_pos: V3::ZERO,
+            prev_v: V3::ZERO,
             offset: V3::ZERO,
             newest: None,
             ack_bits: 0,
@@ -190,12 +228,15 @@ impl NetCore {
                 tick: 0,
                 n: 0,
                 remotes: [Remote::default(); MAX_REMOTES],
+                nv: 0,
+                vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
             }; INTERP_FRAMES],
             n_frames: 0,
             clock_offset: None,
             jitter: 0.0,
             delay: 4.0,
             events: Vec::new(),
+            event_id: None,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
             death: None,
@@ -236,6 +277,7 @@ impl NetCore {
             while self.seq != to {
                 self.inputs[self.seq as usize % RING] = input.repeated();
                 self.after[self.seq as usize % RING] = self.pred;
+                self.after_v[self.seq as usize % RING] = self.pred_v;
                 self.seq = self.seq.wrapping_add(1);
             }
             self.stats.resyncs += 1;
@@ -246,8 +288,11 @@ impl NetCore {
             let s = self.seq;
             self.inputs[s as usize % RING] = input;
             self.prev_pos = self.pred.body.pos;
-            let fired = self.pred.step_in(self.phase(), &input, &self.map).fired;
+            self.prev_v = self.pred_v.map_or(V3::ZERO, |v| v.pos);
+            let phase = self.phase();
+            let fired = step_own(&mut self.pred, &mut self.pred_v, phase, &input, &self.map).fired;
             self.after[s as usize % RING] = self.pred;
+            self.after_v[s as usize % RING] = self.pred_v;
             if fired {
                 self.own_shot();
             }
@@ -369,6 +414,8 @@ impl NetCore {
             tick: s.tick,
             n: s.n_remote,
             remotes: s.remotes,
+            nv: s.n_vehicles,
+            vehicles: s.vehicles,
         };
         if self.n_frames < INTERP_FRAMES {
             self.frames[self.n_frames] = f;
@@ -390,6 +437,14 @@ impl NetCore {
             self.cam_at = (self.cam_at + 1) % KILLCAM_FRAMES;
         }
         for e in s.events() {
+            // Seen already (sent again until a snapshot with it is acked).
+            if self
+                .event_id
+                .is_some_and(|n| e.id.wrapping_sub(n) == 0 || e.id.wrapping_sub(n) >= 0x8000)
+            {
+                continue;
+            }
+            self.event_id = Some(e.id);
             let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot;
             if !own_shot {
                 self.events.push(*e);
@@ -411,28 +466,51 @@ impl NetCore {
     fn reconcile(&mut self, s: &Snapshot) {
         let l = s.last_seq;
         let auth = s.own;
+        let auth_v = s.own_vehicle;
         let phase = phase_of(s.phase);
         let alive_changed = auth.alive != self.pred.alive;
+        // A passenger can't predict the vehicle it sits in (someone else
+        // drives): its seat is the server's, and only the rest is checked.
+        let passenger = auth.riding().is_some_and(|(_, seat)| seat != DRIVER);
+        let same = |f: &Fighter, v: &Option<Vehicle>| {
+            if passenger {
+                same_local(&Fighter { body: auth.body, ..*f }, &auth)
+            } else {
+                same_local(f, &auth) && *v == auth_v
+            }
+        };
         // Seqs the server can't have run yet are ours to keep predicting;
         // one it has run but we never made (the clock jumped) is a reset.
         let ahead = self.seq.wrapping_sub(l.wrapping_add(1));
         let known = ahead < RING as u32 && l.wrapping_sub(self.acked_seq) < 0x8000_0000;
-        if known && !alive_changed && same_local(&self.after[l as usize % RING], &auth) {
+        if known && !alive_changed && same(&self.after[l as usize % RING], &self.after_v[l as usize % RING]) {
             self.stats.confirmations += 1;
+            if passenger {
+                self.pred_v = auth_v;
+                if let Some((_, seat)) = self.pred.riding() {
+                    if let Some(v) = &self.pred_v {
+                        self.pred.body = v.seat_body(seat);
+                    }
+                }
+            }
         } else {
             if !alive_changed {
                 self.stats.corrections += 1;
             }
             let before = self.pred.body.pos;
             let mut f = auth;
+            let mut v = auth_v;
             if ahead < RING as u32 {
                 let mut q = l.wrapping_add(1);
                 while q != self.seq {
-                    f.step_in(phase, &self.inputs[q as usize % RING], &self.map);
+                    step_own(&mut f, &mut v, phase, &self.inputs[q as usize % RING], &self.map);
                     self.after[q as usize % RING] = f;
+                    self.after_v[q as usize % RING] = v;
                     q = q.wrapping_add(1);
                 }
             }
+            self.pred_v = v;
+            self.prev_v = v.map_or(V3::ZERO, |v| v.pos);
             let jump = before - f.body.pos;
             self.offset = if alive_changed || (self.offset + jump).len() > SNAP_M {
                 V3::ZERO
@@ -463,6 +541,55 @@ impl NetCore {
         let a = (self.t - (self.seq as f64 - 1.0)).clamp(0.0, 1.0) as f32;
         let p = self.prev_pos + (self.pred.body.pos - self.prev_pos) * a + self.offset;
         (&self.pred, p)
+    }
+
+    /// The vehicle we ride in, as predicted (a driver's) or as the server
+    /// last said (a passenger's), drawn at `alpha` through the tick: its
+    /// middle and its heading in radians.
+    pub fn own_vehicle(&self) -> Option<(Vehicle, V3, f32)> {
+        let v = self.pred_v?;
+        self.pred.riding()?;
+        let a = (self.t - (self.seq as f64 - 1.0)).clamp(0.0, 1.0) as f32;
+        let p = self.prev_v + (v.pos - self.prev_v) * a;
+        Some((v, p, yaw_rad(v.yaw)))
+    }
+
+    /// The vehicles we were sent (but the one we ride in), between the two
+    /// snapshots around the render tick.
+    pub fn vehicles(&self, now_ms: f64) -> Vec<DrawnVehicle> {
+        let mut out = Vec::new();
+        if self.n_frames == 0 {
+            return out;
+        }
+        let mine = self.pred.riding().map(|(i, _)| i as u8);
+        let rt = self.render_tick(now_ms);
+        let frames = &self.frames[..self.n_frames];
+        let ai = frames.iter().rposition(|f| f.tick as f64 <= rt).unwrap_or(0);
+        let a = &frames[ai];
+        let b = frames.get(ai + 1).filter(|b| b.tick as f64 > rt);
+        for va in &a.vehicles[..a.nv as usize] {
+            if Some(va.slot) == mine {
+                continue;
+            }
+            let mut d = DrawnVehicle {
+                slot: va.slot,
+                pos: va.pos,
+                yaw: yaw_rad(va.yaw),
+                health: va.health,
+                seats: va.seats,
+            };
+            let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
+            if let (Some(b), Some(vb)) = (b, vb) {
+                let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
+                d.pos = va.pos + (vb.pos - va.pos) * u;
+                d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+            } else {
+                let ahead = ((rt - a.tick as f64).max(0.0)).min((SEND_EVERY * 2) as f64) as f32;
+                d.pos = va.pos + va.vel * (ahead / TICK_HZ as f32);
+            }
+            out.push(d);
+        }
+        out
     }
 
     /// The match's phase as of the newest snapshot.
@@ -653,6 +780,7 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.grenades == b.grenades
         && a.shots == b.shots
         && a.last_buttons == b.last_buttons
+        && a.ride == b.ride
 }
 
 fn phase_of(p: u8) -> Phase {
