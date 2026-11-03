@@ -16,6 +16,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 | `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
 | `web/` | three.js page: draws, never decides |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
+| `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: the systemd unit, the certbot hook, the game box's nginx, the runbook (`ops/README.md`) |
 
 ## The loop
 
@@ -37,6 +38,10 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 - **The clock steers on the low point** of the server's input buffer
   (`ClientNet::take_low`); a page drawing slowly sends in bursts.
 - **web/ draws.** Gameplay state lives in `sim` and `client-net`.
+- **Production never pins.** With `--cert`, `server.json` sends no hash;
+  SIGTERM drains (matches finish), SIGHUP reloads the certificate. Hosting
+  is the game box beside Gates, two slots so one always takes players
+  (`--live-file`, a shared `--nonce-key`); `ops/README.md`.
 - **Every byte to a client goes through `room::build`** and its fog
   (`room/src/fog.rs`): an enemy only if it could be seen soon, an unseen
   fighter's shot only as a rounded sound, never an unseen spawn. The leak

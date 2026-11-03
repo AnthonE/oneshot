@@ -328,13 +328,33 @@ crossed) and the bots (none).
 ## 14 · Hosting
 
 - One server process, many rooms (a room is a sim plus its clients; a 2v2 tick
-  costs microseconds).
+  costs microseconds), on the game box beside Gates (`game.elopros.com`), run
+  by systemd. The page is on elopros.com (`/games/oneshot/play/`) and finds
+  the game box through its `origin.json`; the box's nginx fronts
+  `server.json`, `/nonce` and `/ready` on 443. `ops/README.md` is the runbook.
+- **Always a server taking players:** two slots (`ops/oneshot@.service`), UDP
+  61250 and 61251. A deploy starts the new build in the idle slot, names it
+  in the shared `live` file (every `server.json` says it, whichever slot
+  answers), then drains the old one. Two ports, not one socket shared with
+  SO_REUSEPORT: adding a socket re-hashes live QUIC connections onto the new
+  process. A page refused "full" by the old slot asks `server.json` again and
+  moves with the same pass: both slots sign nonces with one key
+  (`--nonce-key`, `auth::Nonces`), and each takes a nonce once.
 - Certificates from ACME (Gates' `ops/certbot-deploy-hook.sh` model), so
-  production needs no certificate-hash pinning. Dev uses a self-signed 14-day
-  certificate pinned by hash.
+  production needs no certificate-hash pinning: with a real certificate
+  `server.json` sends no hash and the browser checks it against its roots.
+  Dev uses a self-signed 14-day certificate pinned by hash. A renewal
+  **reloads** (SIGHUP, `Endpoint::reload_config`): new handshakes get the new
+  certificate, nobody in a match is dropped.
+- A stop **drains** (SIGTERM): a hello is answered `REFUSE_FULL`, the queue is
+  let go, every running match plays to its end and its replay and report go
+  out, then the process exits; `--drain-max` caps it. Gates restarts on both;
+  a ranked match can't be cut short, and with two slots nobody waits on it.
 - QUIC admission with Retry past 2× capacity and refusal past 4× (Gates'
-  `spawn_shard`). The wtransport commit stays pinned (Gates and engine-shim pin
-  the same rev).
+  `spawn_shard`), eight connections per address (an IPv6 /64) and 32 per
+  prefix (/24, /48), loopback exempt; past capacity a hello is answered
+  `REFUSE_FULL`. The UDP socket asks for 8 MiB buffers (Gates' `bind_udp`).
+  The wtransport commit stays pinned (Gates and engine-shim pin the same rev).
 - One region at launch. Regions and ping-aware matching come next; `lobbies.py`
   has no ping signal yet.
 - A server behind NAT can register with engine-shim's identity relay
@@ -365,6 +385,10 @@ crossed) and the bots (none).
 5. **Review:** telemetry, the review queue, bans.
 6. **Doubles, three maps, skins,** then cups. Also: casual free for all and
    Gun Game, the kill cam, the impaired-network gate.
+7. **Hosting:** the game box and elopros.com, an unpinned CA certificate
+   reloaded on renewal, admission, a drain that lets matches finish, two
+   slots so a deploy never leaves nobody taking players, the deploy and
+   publish scripts (`ops/`).
 
 ## 17 · What CI blocks a merge on
 

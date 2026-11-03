@@ -56,7 +56,7 @@ cargo run -p server --release --bin oneshot-replay -- replays/os-*.osr   # re-ru
 ```
 
 The server's key is `openssl genpkey -algorithm ed25519 -out server.pem`; its
-public half goes in the game's `elo.json` `server_keys` on Elo Pros.
+public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 
 ## Milestone 6: modes, maps, skins, cups
 
@@ -79,4 +79,31 @@ cargo test -p sim --test maps         # every map: spawns, pads, walkable, bots 
 ci/parity.sh                          # every map native vs wasm, Doubles and Gun Game
 node ci/e2e.mjs 40 4 2                # the page in Gun Game on Cistern against seven bots
 oneshot-server --map cistern --cup-min 8 --cup-rounds 3
+```
+
+## Milestone 7: hosting
+
+The server on the game box beside Gates (`game.elopros.com`, UDP 61250 and
+61251), the page on elopros.com (`/games/oneshot/play/`). `ops/README.md` is
+the runbook.
+
+- **Always one taking players:** two slots. A deploy starts the new build in
+  the idle one, points `--live-file` at it (every `server.json` says so),
+  then drains the old; a page turned away by the old one follows to the new
+  with the same sign-in (`--nonce-key`, shared).
+- **A real certificate, never pinned:** with `--cert`, `server.json` sends no
+  hash and the browser checks the certificate itself; `--public-addr` names
+  where to connect, `--allow-origin` lets the page on elopros.com read it.
+- **Admission:** past `--capacity` a hello is answered "full"; past twice it,
+  an unproven address gets a QUIC Retry; past four times, a refusal; eight
+  connections per address, 32 per prefix.
+- **SIGTERM drains:** no new players, every match plays out (at most
+  `--drain-max`), its replay and report go out, then it exits.
+- **SIGHUP reloads** the certificate: an ACME renewal drops nobody.
+- `/health`, `/ready` (503 while draining, and the wire it speaks).
+
+```sh
+ci/deploy_server.sh            # on the box: a dry run; --go starts the idle slot, switches, drains the old
+ci/publish_web.sh              # from a workstation: build, upload to morr, flip current
+cargo test -p server --test hosting
 ```

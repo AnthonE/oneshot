@@ -2,7 +2,10 @@
 //! after engine-shim's `engine2/src/net.rs` and Gates' `spawn_shard`; the
 //! datagram send checks the live MTU and never waits (Gates' `send_snap`).
 
-use std::sync::mpsc;
+use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::AtomicUsize;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 
 use proto::frame::LEN_PREFIX_BYTES;
@@ -23,36 +26,234 @@ use crate::{auth, queue, Config, Ctx, Out, ToSim, OUT_QUEUE};
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE: Duration = Duration::from_secs(10);
+/// The UDP socket's buffers (Gates' `bind_udp`): a burst of snapshots to a
+/// full server fits rather than drops. Linux clamps to `net.core.rmem_max`
+/// and `wmem_max`, so what was granted is read back and printed.
+pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
+/// Connections one address may hold (an IPv4 address, an IPv6 /64), and one
+/// prefix (a /24, a /48): a household plays, a flood from one place doesn't.
+pub const PER_SOURCE: u16 = 8;
+pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 
-pub async fn endpoint(cfg: &Config) -> Result<(Endpoint<Server>, [u8; 32]), String> {
-    let identity = match &cfg.cert {
+/// The certificate the server presents: its PEM files, or a fresh
+/// self-signed one (14 days, which the page pins by hash).
+pub async fn identity(cfg: &Config) -> Result<Identity, String> {
+    match &cfg.cert {
         Some((cert, key)) => Identity::load_pemfiles(cert, key)
             .await
-            .map_err(|e| format!("{cert}, {key}: {e}"))?,
-        None => Identity::self_signed(["localhost", "127.0.0.1", "::1"]).map_err(|e| e.to_string())?,
-    };
-    let hash = *identity
+            .map_err(|e| format!("{cert}, {key}: {e}")),
+        None => Identity::self_signed(["localhost", "127.0.0.1", "::1"]).map_err(|e| e.to_string()),
+    }
+}
+
+/// SHA-256 of an identity's leaf certificate.
+pub fn cert_hash(identity: &Identity) -> Result<[u8; 32], String> {
+    Ok(*identity
         .certificate_chain()
         .as_slice()
         .first()
         .ok_or("an empty certificate chain")?
         .hash()
-        .as_ref();
-    let config = ServerConfig::builder()
-        .with_bind_address(cfg.bind)
+        .as_ref())
+}
+
+/// The UDP socket, with buffers asked for before the bind (after Gates'
+/// `bind_udp`): dual-stack on `[::]`; a buffer refused is not fatal, a
+/// bind refused is. Returns the socket and the receive and send buffers
+/// the kernel granted.
+pub fn bind_udp(addr: SocketAddr) -> Result<(std::net::UdpSocket, usize, usize), String> {
+    use socket2::{Domain, Protocol, Socket, Type};
+    let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP)).map_err(|e| e.to_string())?;
+    if addr.is_ipv6() {
+        let _ = sock.set_only_v6(false);
+    }
+    let _ = sock.set_recv_buffer_size(UDP_BUF_BYTES);
+    let _ = sock.set_send_buffer_size(UDP_BUF_BYTES);
+    sock.bind(&addr.into()).map_err(|e| format!("bind {addr}: {e}"))?;
+    sock.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let recv = sock.recv_buffer_size().unwrap_or(0);
+    let send = sock.send_buffer_size().unwrap_or(0);
+    Ok((sock.into(), recv, send))
+}
+
+fn server_config(
+    bind: wtransport::config::ServerConfigBuilder<wtransport::config::states::WantsIdentity>,
+    identity: Identity,
+) -> Result<ServerConfig, String> {
+    Ok(bind
         .with_identity(identity)
         .keep_alive_interval(Some(KEEP_ALIVE))
         .max_idle_timeout(Some(IDLE_TIMEOUT))
         .map_err(|e| e.to_string())?
-        .build();
-    let ep = Endpoint::server(config).map_err(|e| format!("bind {}: {e}", cfg.bind))?;
-    Ok((ep, hash))
+        .build())
 }
 
-pub async fn accept_loop(ep: Endpoint<Server>, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
+/// What the endpoint was given: the socket's buffers and the certificate.
+pub struct Bound {
+    pub endpoint: Endpoint<Server>,
+    pub cert_hash: [u8; 32],
+    pub udp_recv: usize,
+    pub udp_send: usize,
+}
+
+pub async fn endpoint(cfg: &Config) -> Result<Bound, String> {
+    let identity = identity(cfg).await?;
+    let cert_hash = cert_hash(&identity)?;
+    let (socket, udp_recv, udp_send) = bind_udp(cfg.bind)?;
+    let config = server_config(ServerConfig::builder().with_bind_socket(socket), identity)?;
+    let endpoint = Endpoint::server(config).map_err(|e| format!("bind {}: {e}", cfg.bind))?;
+    Ok(Bound {
+        endpoint,
+        cert_hash,
+        udp_recv,
+        udp_send,
+    })
+}
+
+/// Reads the PEM files again and hands the endpoint the new certificate:
+/// new handshakes present it, live sessions keep theirs (an ACME renewal
+/// without a restart). Returns the new certificate's hash.
+pub async fn reload(ep: &Endpoint<Server>, cfg: &Config) -> Result<[u8; 32], String> {
+    if cfg.cert.is_none() {
+        return Err("no --cert to reload".into());
+    }
+    let identity = identity(cfg).await?;
+    let hash = cert_hash(&identity)?;
+    // The bind address is ignored without a rebind: the socket stays.
+    let config = server_config(ServerConfig::builder().with_bind_address(cfg.bind), identity)?;
+    ep.reload_config(config, false).map_err(|e| e.to_string())?;
+    Ok(hash)
+}
+
+/// What to do with a connection attempt, given how many connections the
+/// server holds (`busy`, handshakes included) and its `capacity` in players
+/// (docs/DESIGN.md §14, after Gates' accept loop): past four times capacity
+/// refuse outright; past twice, make an address that hasn't proved itself
+/// do so with a QUIC Retry first; otherwise take it (and past capacity the
+/// hello is answered "full").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admit {
+    Take,
+    Retry,
+    Refuse,
+}
+
+pub fn admit(busy: usize, validated: bool, capacity: usize) -> Admit {
+    if busy >= 4 * capacity {
+        Admit::Refuse
+    } else if busy >= 2 * capacity && !validated {
+        // `retry()` panics on an address already validated.
+        Admit::Retry
+    } else {
+        Admit::Take
+    }
+}
+
+/// The connections held, in all and per address and prefix.
+pub struct Gate {
+    pub capacity: usize,
+    conns: AtomicUsize,
+    places: Mutex<(BTreeMap<IpAddr, u16>, BTreeMap<IpAddr, u16>)>,
+}
+
+/// One connection's place at the gate, given back when it drops (whatever
+/// way its session ends).
+pub struct Permit {
+    gate: Arc<Gate>,
+    keys: Option<(IpAddr, IpAddr)>,
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        self.gate.conns.fetch_sub(1, Ordering::Relaxed);
+        if let (Some((src, pre)), Ok(mut m)) = (self.keys, self.gate.places.lock()) {
+            let (by_src, by_pre) = &mut *m;
+            for (map, k) in [(by_src, src), (by_pre, pre)] {
+                if let Some(n) = map.get_mut(&k) {
+                    *n -= 1;
+                    if *n == 0 {
+                        map.remove(&k);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An address's key (itself, or its /64) and its prefix's (/24, /48).
+fn source_keys(ip: IpAddr) -> (IpAddr, IpAddr) {
+    match ip.to_canonical() {
+        IpAddr::V4(v4) => {
+            let b = u32::from(v4);
+            (IpAddr::V4(v4), IpAddr::V4((b & 0xffff_ff00).into()))
+        }
+        IpAddr::V6(v6) => {
+            let b = u128::from(v6);
+            (
+                IpAddr::V6((b & !0u128 << 64).into()),
+                IpAddr::V6((b & !0u128 << 80).into()),
+            )
+        }
+    }
+}
+
+impl Gate {
+    pub fn new(capacity: usize) -> Gate {
+        Gate {
+            capacity: capacity.max(1),
+            conns: AtomicUsize::new(0),
+            places: Mutex::new((BTreeMap::new(), BTreeMap::new())),
+        }
+    }
+
+    /// Connections held now, handshakes included.
+    pub fn busy(&self) -> usize {
+        self.conns.load(Ordering::Relaxed)
+    }
+
+    /// A place for a connection from `ip`, or None if its address or prefix
+    /// holds its share. Loopback is the box itself (tests, local bots) and
+    /// isn't counted per source.
+    pub fn take(self: &Arc<Self>, ip: IpAddr) -> Option<Permit> {
+        let keys = if ip.to_canonical().is_loopback() {
+            None
+        } else {
+            let (src, pre) = source_keys(ip);
+            let mut m = self.places.lock().ok()?;
+            if m.0.get(&src).copied().unwrap_or(0) >= PER_SOURCE || m.1.get(&pre).copied().unwrap_or(0) >= PER_PREFIX {
+                return None;
+            }
+            *m.0.entry(src).or_insert(0) += 1;
+            *m.1.entry(pre).or_insert(0) += 1;
+            Some((src, pre))
+        };
+        self.conns.fetch_add(1, Ordering::Relaxed);
+        Some(Permit {
+            gate: self.clone(),
+            keys,
+        })
+    }
+}
+
+pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
     loop {
         let incoming = ep.accept().await;
-        tokio::spawn(session(incoming, to_sim.clone(), ctx.clone()));
+        match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
+            Admit::Refuse => {
+                incoming.refuse();
+                continue;
+            }
+            Admit::Retry => {
+                incoming.retry();
+                continue;
+            }
+            Admit::Take => {}
+        }
+        let Some(permit) = ctx.gate.take(incoming.remote_address().ip()) else {
+            incoming.refuse();
+            continue;
+        };
+        tokio::spawn(session(incoming, permit, to_sim.clone(), ctx.clone()));
     }
 }
 
@@ -76,7 +277,7 @@ async fn refuse(send: &mut wtransport::SendStream, reason: u8) {
     }
 }
 
-async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
+async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
     let opened = tokio::time::timeout(HANDSHAKE, async {
         let request = incoming.await.ok()?;
         let conn = request.accept().await.ok()?;
@@ -100,6 +301,10 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
     };
     if proto != PROTO_VER {
         return refuse(&mut send, proto::REFUSE_VERSION).await;
+    }
+    // Past capacity, or on its way down for a restart: come back soon.
+    if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
+        return refuse(&mut send, proto::REFUSE_FULL).await;
     }
     // Who: a pass from Elo Pros, or a guest.
     let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
@@ -240,4 +445,68 @@ async fn session(incoming: IncomingSession, to_sim: mpsc::Sender<ToSim>, ctx: Ar
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
     conn.close(0u32.into(), b"");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_crowd_is_retried_then_refused() {
+        // 100 players: anyone up to 200 connections, then an address must
+        // prove itself, then past 400 nobody.
+        assert_eq!(admit(0, false, 100), Admit::Take);
+        assert_eq!(admit(199, false, 100), Admit::Take);
+        assert_eq!(admit(200, false, 100), Admit::Retry);
+        assert_eq!(admit(200, true, 100), Admit::Take);
+        assert_eq!(admit(399, true, 100), Admit::Take);
+        assert_eq!(admit(400, true, 100), Admit::Refuse);
+        assert_eq!(admit(400, false, 100), Admit::Refuse);
+    }
+
+    #[test]
+    fn one_place_holds_its_share_and_gets_it_back() {
+        let gate = Arc::new(Gate::new(1000));
+        let a: IpAddr = "203.0.113.7".parse().unwrap();
+        let held: Vec<Permit> = (0..PER_SOURCE).map(|_| gate.take(a).unwrap()).collect();
+        assert!(gate.take(a).is_none(), "an address past its share");
+        // Its neighbour on the /24 still gets in, up to the prefix's share.
+        let b: IpAddr = "203.0.113.8".parse().unwrap();
+        assert!(gate.take(b).is_some());
+        assert_eq!(gate.busy(), PER_SOURCE as usize);
+        drop(held);
+        assert_eq!(gate.busy(), 0);
+        assert!(gate.take(a).is_some());
+        // The same address over IPv4-mapped IPv6 is the same place.
+        let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        let held: Vec<Permit> = (0..PER_SOURCE).map(|_| gate.take(mapped).unwrap()).collect();
+        assert!(gate.take(a).is_none());
+        drop(held);
+        // An IPv6 /64 is one address; loopback is never counted.
+        let v6 = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let held: Vec<Permit> = (0..PER_SOURCE)
+            .map(|i| gate.take(v6(&format!("2001:db8:0:1::{i:x}"))).unwrap())
+            .collect();
+        assert!(gate.take(v6("2001:db8:0:1::ffff")).is_none());
+        assert!(gate.take(v6("2001:db8:0:2::1")).is_some());
+        drop(held);
+        let lo: Vec<Permit> = (0..3 * PER_PREFIX)
+            .map(|_| gate.take(v6("127.0.0.1")).unwrap())
+            .collect();
+        assert_eq!(lo.len(), 3 * PER_PREFIX as usize);
+    }
+
+    #[test]
+    fn a_prefix_holds_its_share() {
+        let gate = Arc::new(Gate::new(1000));
+        let held: Vec<Permit> = (0..PER_PREFIX)
+            .map(|i| {
+                gate.take(format!("198.51.100.{}", i / PER_SOURCE).parse().unwrap())
+                    .unwrap()
+            })
+            .collect();
+        assert!(gate.take("198.51.100.200".parse().unwrap()).is_none());
+        assert!(gate.take("198.51.101.1".parse().unwrap()).is_some());
+        drop(held);
+    }
 }
