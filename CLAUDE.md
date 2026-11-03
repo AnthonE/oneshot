@@ -28,7 +28,10 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.
-6. Commit with a short message.
+6. Touching the look: `node tools/board.mjs look` (after the two builds):
+   the art's views beside their references and the operator's marks, one
+   sheet (`board/board.json`; the elo-look skill is the loop).
+7. Commit with a short message.
 
 ## The wire's walls
 
