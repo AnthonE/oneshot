@@ -6,19 +6,23 @@
     <title>oneshot</title>
     <style>
       html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
-      canvas#game { width: 100vw; height: 100vh; display: block; outline: none; }
+      #wrap { width: 100vw; height: 100vh; }
+      /* ?lite=1: a quarter of the pixels, scaled back up (a software GPU). */
+      #wrap.lite { width: 50vw; height: 50vh; transform: scale(2); transform-origin: 0 0; }
+      canvas#game { width: 100%; height: 100%; display: block; outline: none; }
     </style>
   </head>
   <body>
-    <canvas id="game" tabindex="0"></canvas>
+    <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
     <script type="module">
       // The Bevy client in the browser: the server's address and
       // certificate hash from server.json, as the three.js page reads them.
       import init, { play } from './oneshot_client.js';
       const params = new URLSearchParams(location.search);
+      if (params.get('lite') === '1') document.getElementById('wrap').classList.add('lite');
       await init();
       const info = await (await fetch('server.json')).json();
-      await play(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0), params.get('autoplay') === '1');
+      await play(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0), ['autoplay', 'lite'].filter((k) => params.get(k) === '1').join(','));
     </script>
   </body>
 </html>

@@ -67,7 +67,27 @@ pub struct Autoplay {
 /// Radians per pixel of mouse.
 const SENS: f32 = 0.0022;
 
-pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
+/// How the app runs: `autoplay` drives it (tests); `lite` draws with no
+/// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
+/// the page also halves its canvas).
+#[derive(Clone, Copy, Default, Resource)]
+pub struct Opts {
+    pub autoplay: bool,
+    pub lite: bool,
+}
+
+impl Opts {
+    /// From a comma list, as the page and the command line give it.
+    pub fn parse(s: &str) -> Opts {
+        let has = |k: &str| s.split([',', ' ']).any(|w| w == k);
+        Opts {
+            autoplay: has("autoplay"),
+            lite: has("lite"),
+        }
+    }
+}
+
+pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -89,7 +109,7 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
     .insert_non_send_resource(LinkRes(link))
     .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
     .insert_resource(Autoplay {
-        on: autoplay,
+        on: opts.autoplay,
         ..default()
     })
     .init_resource::<Look>()
@@ -133,6 +153,10 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
     );
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw));
+    app.insert_resource(opts);
+    if opts.lite {
+        app.add_systems(Update, lite);
+    }
     app
 }
 
@@ -485,6 +509,22 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
+/// A software GPU's frame: no shadows, no SMAA.
+fn lite(
+    mut commands: Commands,
+    mut suns: Query<&mut DirectionalLight>,
+    aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
+) {
+    for mut s in &mut suns {
+        if s.shadows_enabled {
+            s.shadows_enabled = false;
+        }
+    }
+    for e in &aa {
+        commands.entity(e).remove::<bevy::anti_alias::smaa::Smaa>();
+    }
+}
+
 /// For the browser gate (`ci/client_e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
@@ -505,6 +545,10 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("deaths", st.deaths.into());
     set("alive", s.core.own().0.alive.into());
     set("slot", s.core.slot.into());
+    let (f, p) = s.core.own();
+    set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
+    set("health", f.health.into());
+    set("killcam", s.core.killcam(link.0.now_ms()).is_some().into());
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -525,9 +569,10 @@ mod web_start {
 
     /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
-    pub async fn play(addr: String, hash: String, name: String, mode: u8, autoplay: bool) -> Result<(), JsValue> {
+    /// `opts`: a comma list of `autoplay` and `lite` (see `Opts`).
+    pub async fn play(addr: String, hash: String, name: String, mode: u8, opts: String) -> Result<(), JsValue> {
         let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
-        super::app(Box::new(super::link::Web(c)), autoplay).run();
+        super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts)).run();
         Ok(())
     }
 }

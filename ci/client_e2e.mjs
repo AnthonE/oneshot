@@ -1,7 +1,8 @@
 // node ci/client_e2e.mjs [seconds] [mode] [map]: the Bevy client in headless
 // Chromium (WebGL2 on SwiftShader) against the real server, driving itself
 // (?autoplay=1: it walks the map's route, closes on whoever fog shows and
-// fires; inputs only) against bots that stand still. Passes when it
+// fires; inputs only; ?lite=1: a quarter of the pixels, no shadows, for the
+// software GPU) against bots that stand still. Passes when it
 // connected, drew frames and scored a kill. Defaults: a casual duel against
 // the bot on Proving Grounds. ci/client.sh builds crates/client/dist first.
 // A screenshot goes to traces/client-e2e-<mode>.png.
@@ -39,7 +40,7 @@ const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-await page.goto(`${url}?mode=${mode}&name=e2e&autoplay=1`);
+await page.goto(`${url}?mode=${mode}&name=e2e&autoplay=1&lite=1`);
 
 const state = () => page.evaluate(() => window.__oneshot ?? null);
 let s = null;
