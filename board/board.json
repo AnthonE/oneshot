@@ -1,0 +1,68 @@
+{
+  "game": "oneshot",
+  "about": "The reference board: the art seen with no match running (the page's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/build_web.sh).",
+  "refs": "refs",
+  "private_refs_env": "ELO_REF_DIR",
+  "views": [
+    {
+      "id": "fighter-front",
+      "what": "a fighter facing the camera with a long gun, in the arena",
+      "take": "a silhouette you read as an enemy at a glance, and where to aim",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "yaw=3.1416&arm=1",
+        "yaw=1.5708&arm=1",
+        "yaw=1.5708&arm=3",
+        "yaw=0&arm=4&speed=5"
+      ],
+      "png": "traces/look-0.png",
+      "refs": []
+    },
+    {
+      "id": "fighter-side",
+      "what": "a fighter side on with a long gun",
+      "take": "the body and the gun read apart; the head is the obvious target",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "yaw=3.1416&arm=1",
+        "yaw=1.5708&arm=1",
+        "yaw=1.5708&arm=3",
+        "yaw=0&arm=4&speed=5"
+      ],
+      "png": "traces/look-1.png",
+      "refs": []
+    },
+    {
+      "id": "fighter-pistol",
+      "what": "a fighter side on with a pistol",
+      "take": "which gun someone holds, from across the room",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "yaw=3.1416&arm=1",
+        "yaw=1.5708&arm=1",
+        "yaw=1.5708&arm=3",
+        "yaw=0&arm=4&speed=5"
+      ],
+      "png": "traces/look-2.png",
+      "refs": []
+    },
+    {
+      "id": "fighter-running",
+      "what": "a fighter running away with a heavy weapon",
+      "take": "motion and the weapon read from behind",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "yaw=3.1416&arm=1",
+        "yaw=1.5708&arm=1",
+        "yaw=1.5708&arm=3",
+        "yaw=0&arm=4&speed=5"
+      ],
+      "png": "traces/look-3.png",
+      "refs": []
+    }
+  ]
+}
