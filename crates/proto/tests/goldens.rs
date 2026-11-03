@@ -120,6 +120,7 @@ fn snapshot() -> Snapshot {
         vel: V3::new(36.0, 0.0, 0.0),
     };
     s.events[0] = EventState {
+        id: 41,
         kind: 1,
         a: 1,
         b: 0,
@@ -328,13 +329,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x21cd_ceaa_a773_0091,
-        0xcb32_4ae1_3a61_4b98,
-        0xb762_e9cc_0497_6c26,
-        0xb57d_eea4_497d_6fa9,
+        0x5ae2_2de8_84e4_3501,
+        0x42e9_59a2_804d_c077,
+        0x1c3d_28c8_ef48_a1d2,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0xc165_eb7e_8c04_2033,
+        0xbdd2_7999_6f2a_620c,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,

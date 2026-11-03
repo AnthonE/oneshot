@@ -430,7 +430,14 @@ keeps every gate in §17 green and moves a golden only on purpose.
     other snapshot, the plain test between) and names a rider only to a
     client that may know them.
 11. **The delta wire:** snapshots as deltas against the acked baseline, a
-    byte budget, events cleared on ack.
+    byte budget, events cleared on ack. Events first (done): each event a
+    client may be told gets an id and rides every snapshot until one that
+    carried it is acked; what doesn't fit waits; the client keeps the first
+    and drops repeats (`room::EventQueue`). Every kill gets through 10% loss
+    once (`client-net/tests/loopback.rs`). Deltas and snapshots split
+    across datagrams wait until a snapshot stops fitting: sixteen seats,
+    every projectile, pad and vehicle fit one today with room for events
+    (`room/tests/budget.rs`).
 12. **The Bevy client:** a session layer in `client-net` and a native
     transport, then the client: a playable skeleton, Gates' lighting, sky,
     terrain and grass, the game's feel, and last its wasm build replacing

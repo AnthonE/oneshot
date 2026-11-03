@@ -59,6 +59,51 @@ pub struct ClientNet {
     low: Option<i32>,
     /// Events since the last snapshot to this client.
     pending: Vec<Event>,
+    /// What this client was told of them, until it acks a snapshot that
+    /// carried it.
+    pub queue: EventQueue,
+}
+
+/// A client's events as it may be told them (filtered by `room::build`),
+/// each sent in every snapshot from the first that carries it until the
+/// client acks one of those (docs/DESIGN.md §10). Oldest first, never one
+/// skipped: so the client keeps an event by its id and drops repeats.
+#[derive(Clone, Debug, Default)]
+pub struct EventQueue {
+    list: Vec<(Option<u32>, EventState)>,
+    next_id: u16,
+    /// Events dropped because a client stopped acking.
+    pub dropped: u32,
+}
+
+/// Events a client may have waiting: past this the oldest go.
+pub const MAX_QUEUED_EVENTS: usize = 256;
+
+impl EventQueue {
+    fn push(&mut self, mut e: EventState) {
+        e.id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        if self.list.len() >= MAX_QUEUED_EVENTS {
+            self.list.remove(0);
+            self.dropped += 1;
+        }
+        self.list.push((None, e));
+    }
+
+    /// The client has every snapshot up to `tick`: what those carried is
+    /// home.
+    pub fn ack(&mut self, tick: u32) {
+        self.list.retain(|(since, _)| since.is_none_or(|t| t > tick));
+    }
+
+    /// Waiting, oldest first.
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
 }
 
 impl Default for ClientNet {
@@ -77,6 +122,7 @@ impl Default for ClientNet {
             repeats: 0,
             low: None,
             pending: Vec::new(),
+            queue: EventQueue::default(),
         }
     }
 }
@@ -91,6 +137,7 @@ impl ClientNet {
             let ack = m.ack_tick;
             if ack <= sent && self.acked.is_none_or(|a| ack > a) {
                 self.acked = Some(ack);
+                self.queue.ack(ack);
                 let (t, at) = self.sent[ack as usize % SENT];
                 if t == ack {
                     let rtt = now_ms - at;
@@ -460,9 +507,9 @@ impl Room {
                     let snap = build(
                         &self.world,
                         s,
-                        c.last_seq,
-                        low,
+                        (c.last_seq, low),
                         &c.pending,
+                        &mut c.queue,
                         |q| f.shows(q, tick),
                         |i| f.shows_vehicle(i, tick),
                     );
@@ -477,14 +524,15 @@ impl Room {
 }
 
 /// The snapshot seat `s` is sent: its own fighter exactly, the others it
-/// may see coarsely. `visible(q)` is fog of war's to answer (milestone 3);
-/// everything else here is what any client may know.
+/// may see coarsely. `clock` is the client's last input seq run and its
+/// input depth; `visible(q)` and `vehicle_visible(i)` are fog of war's to
+/// answer; everything else here is what any client may know.
 pub fn build(
     w: &World,
     s: usize,
-    last_seq: u32,
-    depth: i8,
+    (last_seq, depth): (u32, i8),
     events: &[Event],
+    queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
@@ -514,22 +562,25 @@ pub fn build(
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
         }
     }
+    // What this client may be told of the new events joins its queue; the
+    // queue goes out oldest first, as many as fit.
     for e in events {
-        if snap.n_events as usize >= MAX_SNAP_EVENTS {
-            break;
+        if let Some(e) = filter_event(w, s, eye, e, &known) {
+            queue.push(e);
         }
-        let Some(e) = filter_event(w, s, eye, e, &known) else {
-            continue;
-        };
-        snap.events[snap.n_events as usize] = e;
+    }
+    for (_, e) in queue.list.iter().take(MAX_SNAP_EVENTS) {
+        snap.events[snap.n_events as usize] = *e;
         snap.n_events += 1;
     }
-    // Over a datagram, the snapshot would be dropped whole: drop events from
-    // the end instead, the least urgent part (milestone 11 carries them
-    // over to the next snapshot).
+    // Over a datagram, the snapshot would be dropped whole: the newest
+    // events wait for the next instead.
     let mut scratch = [0u8; 2 * MAX_DATAGRAM];
     while snap.n_events > 0 && encode_snapshot(&snap, &mut scratch).map_or(true, |n| n > MAX_DATAGRAM) {
         snap.n_events -= 1;
+    }
+    for (since, _) in queue.list.iter_mut().take(snap.n_events as usize) {
+        since.get_or_insert(w.tick);
     }
     snap
 }
@@ -644,6 +695,8 @@ fn coarse(p: V3) -> V3 {
 fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) -> bool) -> Option<EventState> {
     let a = e.a as usize;
     let full = EventState {
+        // The client's queue numbers it.
+        id: 0,
         kind: e.kind as u8,
         a: e.a,
         b: e.b,

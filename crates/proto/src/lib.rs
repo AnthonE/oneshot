@@ -20,7 +20,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 8;
+pub const PROTO_VER: u16 = 9;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -255,6 +255,9 @@ pub struct ProjState {
 /// A cosmetic event (sim::events::Event, coarsened).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct EventState {
+    /// Counts up per client: an event comes again in every snapshot until
+    /// one that carried it is acked, and the client keeps the first.
+    pub id: u16,
     pub kind: u8,
     pub a: u8,
     pub b: u8,
@@ -322,6 +325,7 @@ impl Pack for ProjState {
 
 impl Pack for EventState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.id as u32, 16)?;
         w.write(self.kind as u32, 4)?;
         w.write(self.a as u32, SLOT_BITS)?;
         w.write(self.b as u32, SLOT_BITS)?;
@@ -332,6 +336,7 @@ impl Pack for EventState {
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(EventState {
+            id: r.read(16)? as u16,
             kind: r.read(4)? as u8,
             a: r.read(SLOT_BITS)? as u8,
             b: r.read(SLOT_BITS)? as u8,

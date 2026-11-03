@@ -38,7 +38,8 @@ fn the_worst_case_snapshot_fits_a_datagram() {
             ..Event::default()
         })
         .collect();
-    let snap = room::build(&w, 0, 1, 0, &events, |_| true, |_| true);
+    let mut queue = room::EventQueue::default();
+    let snap = room::build(&w, 0, (1, 0), &events, &mut queue, |_| true, |_| true);
     assert_eq!(snap.n_remote as usize, MAX_REMOTES);
     assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
     assert_eq!(snap.n_score, 2);
@@ -46,4 +47,16 @@ fn the_worst_case_snapshot_fits_a_datagram() {
     let mut buf = [0u8; MAX_DATAGRAM];
     let n = encode_snapshot(&snap, &mut buf).expect("fits a datagram");
     assert!(n <= MAX_DATAGRAM);
+    // What didn't fit waits, in order, and goes once the client acks.
+    assert_eq!(queue.len(), 200);
+    let first = snap.events()[0].id;
+    let next = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    assert_eq!(next.events()[0].id, first, "unacked: sent again");
+    queue.ack(w.tick);
+    let after = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    assert_eq!(
+        after.events()[0].id,
+        first + snap.n_events as u16,
+        "acked: the next ones"
+    );
 }

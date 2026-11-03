@@ -78,6 +78,8 @@ struct Run {
     /// drawn past the newest snapshot (extrapolated or held).
     frames: u64,
     stalls: u64,
+    /// Kills the server's world raised.
+    kills: u32,
 }
 
 fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
@@ -121,6 +123,7 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
         },
         frames: 0,
         stalls: 0,
+        kills: 0,
         now: 0.0,
         next_tick: 0.0,
         next_frame: 0.0,
@@ -144,6 +147,14 @@ impl Run {
             }
             while self.next_tick <= self.now {
                 let (snaps, _) = self.room.step(self.now);
+                self.kills += self
+                    .room
+                    .world
+                    .events
+                    .as_slice()
+                    .iter()
+                    .filter(|e| e.kind == sim::events::Kind::Kill)
+                    .count() as u32;
                 for (_, s) in snaps {
                     let n = encode_snapshot(&s, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), false);
@@ -337,4 +348,31 @@ fn a_driver_predicts_its_vehicle_without_a_correction() {
     assert!((pos - v).flat().len() > 20.0, "it drove: {pos:?}");
     assert!(st.confirmations - warm.confirmations > 500, "{st:?}");
     assert_eq!(st.corrections - warm.corrections, 0, "{st:?}");
+}
+
+/// Events ride every snapshot until one carrying them is acked: on a lossy
+/// link every kill the server saw reaches the client, once each.
+#[test]
+fn every_kill_arrives_once_through_loss() {
+    let mut r = start(60.0, 10.0, 0.10, false);
+    let mut told = 0u32;
+    for _ in 0..160 {
+        r.run(500.0, player);
+        told += r
+            .client
+            .drain_events()
+            .iter()
+            .filter(|e| e.kind == sim::events::Kind::Kill as u8)
+            .count() as u32;
+    }
+    // A last second for the newest to get home.
+    r.run(1000.0, |_| Input::default());
+    told += r
+        .client
+        .drain_events()
+        .iter()
+        .filter(|e| e.kind == sim::events::Kind::Kill as u8)
+        .count() as u32;
+    assert!(r.kills >= 5, "{} kills to count", r.kills);
+    assert_eq!(told, r.kills, "every kill told, none twice");
 }

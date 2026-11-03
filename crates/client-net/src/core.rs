@@ -181,6 +181,8 @@ pub struct NetCore {
     jitter: f64,
     delay: f64,
     events: Vec<EventState>,
+    /// The newest event id kept: an event comes again until acked.
+    event_id: Option<u16>,
     /// The last few seconds as this client was sent them, for the kill cam.
     /// Nothing in it is more than the snapshots already said: fog shaped
     /// it on the server.
@@ -234,6 +236,7 @@ impl NetCore {
             jitter: 0.0,
             delay: 4.0,
             events: Vec::new(),
+            event_id: None,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
             death: None,
@@ -434,6 +437,14 @@ impl NetCore {
             self.cam_at = (self.cam_at + 1) % KILLCAM_FRAMES;
         }
         for e in s.events() {
+            // Seen already (sent again until a snapshot with it is acked).
+            if self
+                .event_id
+                .is_some_and(|n| e.id.wrapping_sub(n) == 0 || e.id.wrapping_sub(n) >= 0x8000)
+            {
+                continue;
+            }
+            self.event_id = Some(e.id);
             let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot;
             if !own_shot {
                 self.events.push(*e);
