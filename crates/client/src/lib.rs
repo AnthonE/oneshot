@@ -70,7 +70,10 @@ pub fn app(link: Box<dyn Link>) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .add_systems(Startup, setup)
-    .add_systems(Update, (grab, pump, rebuild, draw_fighters, draw_vehicles, view, hud).chain());
+    .add_systems(
+        Update,
+        (grab, pump, rebuild, draw_fighters, draw_vehicles, view, hud).chain(),
+    );
     app
 }
 
@@ -86,14 +89,17 @@ fn setup(mut commands: Commands) {
         }),
         DistanceFog {
             color: Color::srgb(0.62, 0.77, 0.91),
-            falloff: FogFalloff::Linear { start: 90.0, end: 320.0 },
+            falloff: FogFalloff::Linear {
+                start: 90.0,
+                end: 320.0,
+            },
             ..default()
         },
         Transform::from_xyz(0.0, 2.0, 0.0),
     ));
     commands.spawn((
         Hud,
-        Text::new("connecting…"),
+        Text::new("connecting..."),
         TextFont {
             font_size: 18.0,
             ..default()
@@ -147,7 +153,10 @@ fn pump(
         (grabbed && mouse.pressed(MouseButton::Left), FIRE),
         (mouse.pressed(MouseButton::Right), ZOOM),
         (keys.pressed(KeyCode::Space), JUMP),
-        (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyC), CROUCH),
+        (
+            keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyC),
+            CROUCH,
+        ),
         (keys.pressed(KeyCode::KeyR), RELOAD),
         (keys.pressed(KeyCode::KeyQ), SWAP),
         (keys.pressed(KeyCode::KeyF), MELEE),
@@ -323,7 +332,11 @@ fn view(link: NonSend<LinkRes>, look: Res<Look>, mut cam: Query<&mut Transform, 
         return;
     };
     let (f, p) = link.0.session().core.own();
-    let dir = Vec3::new(look.pitch.cos() * look.yaw.cos(), look.pitch.sin(), look.pitch.cos() * look.yaw.sin());
+    let dir = Vec3::new(
+        look.pitch.cos() * look.yaw.cos(),
+        look.pitch.sin(),
+        look.pitch.cos() * look.yaw.sin(),
+    );
     let at = Vec3::new(p.x, p.y, p.z);
     if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
         let eye = at - dir * 7.5 + Vec3::Y * (VEH_H + 2.2);
@@ -341,7 +354,7 @@ fn hud(link: NonSend<LinkRes>, mut text: Query<&mut Text, With<Hud>>) {
     };
     let s = link.0.session();
     if !s.ready {
-        **t = "connecting…".into();
+        **t = "connecting...".into();
         return;
     }
     let (f, _) = s.core.own();
@@ -349,12 +362,12 @@ fn hud(link: NonSend<LinkRes>, mut text: Query<&mut Text, With<Hud>>) {
     let pt = sim::consts::PT;
     let name = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
     let seat = match f.riding() {
-        Some((_, 0)) => "  ·  driving (E to get out)",
-        Some(_) => "  ·  riding",
+        Some((_, 0)) => "  |  driving (E to get out)",
+        Some(_) => "  |  riding",
         None => "",
     };
     **t = format!(
-        "{name}  ·  shield {}  health {}  ·  {} {} / {}  ·  K {} D {}{seat}",
+        "{name}  |  shield {}  health {}  |  {} {} / {}  |  K {} D {}{seat}",
         f.shield / pt,
         f.health / pt,
         sim::arms::arm(g.arm).name,
@@ -371,7 +384,7 @@ mod web_start {
 
     /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
-    pub async fn start(addr: String, hash: String, name: String, mode: u8) -> Result<(), JsValue> {
+    pub async fn play(addr: String, hash: String, name: String, mode: u8) -> Result<(), JsValue> {
         let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
         super::app(Box::new(super::link::Web(c))).run();
         Ok(())

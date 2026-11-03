@@ -16,7 +16,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
-| `web/` | three.js page: draws, never decides. Replaced by the Bevy client (`DESIGN.md` §16, milestone 12) |
+| `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and browser (`crates/client/dist`): draws, never decides. Its own workspace; `ci/client.sh` is its check |
+| `web/` | three.js page: draws, never decides. Replaced by the Bevy client once it plays as well (`DESIGN.md` §16, milestone 12) |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
 
 ## The loop
@@ -27,10 +28,12 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
    (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
    `node ci/e2e.mjs 60 6 3` for sixteen in Big Team on Dry Fork's terrain).
-5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
+5. Touching the Bevy client: `ci/client.sh` (clippy, native, wasm into
+   `crates/client/dist`; serve it with `oneshot-server --web crates/client/dist`).
+6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.
-6. Commit with a short message.
+7. Commit with a short message.
 
 ## The wire's walls
 

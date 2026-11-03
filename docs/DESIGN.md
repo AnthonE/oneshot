@@ -441,7 +441,11 @@ keeps every gate in §17 green and moves a golden only on purpose.
 12. **The Bevy client:** a session layer in `client-net` and a native
     transport (done: `client_net::session::Session` over a `Wire`, the
     browser's WebTransport in `web.rs`, wtransport in `native.rs`; the
-    server's end-to-end test plays through it), then the client: a playable skeleton, Gates' lighting, sky,
+    server's end-to-end test plays through it), then the client (C1 done:
+    `crates/client`, Bevy 0.18, its own workspace; the level from the
+    sim's map, fighters and vehicles as plain shapes, first-person and
+    chase cameras, the controls, a text HUD; native on wtransport, and in
+    the browser on WebGL2, where it joins a Big Team match on Dry Fork): a playable skeleton, Gates' lighting, sky,
     terrain and grass, the game's feel, and last its wasm build replacing
     `web/`.
 
