@@ -91,6 +91,21 @@ pub const MELEE_COOL_MS: u32 = 800;
 /// A hit within this cosine of straight behind the victim kills.
 pub const BEHIND_COS: f32 = 0.5;
 
+// The sword (arms::SWORD). A pull with the aim on someone (its body grown
+// by `LUNGE_PAD`: the red reticle) kills them in `SWORD_REACH`, or past it
+// to `LUNGE_RANGE` lunges: the world drives the body at them, steering, for
+// up to `LUNGE_MS`, and kills on reaching `STRIKE_R` of them. Two lunging
+// at each other clash: both thrown back, nobody hurt.
+pub const SWORD_REACH: f32 = 2.0;
+pub const LUNGE_RANGE: f32 = 6.0;
+pub const LUNGE_PAD: f32 = 0.5;
+pub const LUNGE_SPEED: f32 = 18.0;
+pub const LUNGE_MS: u32 = 400;
+/// Feet to feet, across the ground, and up or down within a body's height.
+pub const STRIKE_R: f32 = 1.2;
+/// How hard a clash throws each back.
+pub const CLASH_PUSH: f32 = 8.0;
+
 pub const GREN_DMG: i32 = 150;
 pub const GREN_RADIUS: f32 = 5.0;
 pub const GREN_FULL: f32 = 1.0;

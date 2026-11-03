@@ -314,6 +314,7 @@ impl World {
                 self.pickup(s);
             }
         }
+        self.lunges();
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
             self.recover(s);
@@ -357,6 +358,7 @@ impl World {
                     ..Event::default()
                 });
             }
+            Kind::Sword => self.swing(s, depth, true),
         }
     }
 
@@ -452,6 +454,11 @@ impl World {
 
     fn melee(&mut self, s: usize, depth: u32) {
         let f = self.fighters[s];
+        // With a sword in hand the melee is the sword's swing, no lunge.
+        if arm(f.gun().arm).kind == Kind::Sword {
+            self.swing(s, depth, false);
+            return;
+        }
         let eye = f.eye();
         let dir = aim_dir(f.yaw, f.pitch);
         let wall = self.map.ray(eye, dir, MELEE_RANGE);
@@ -475,6 +482,125 @@ impl World {
                 self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
             }
         }
+    }
+
+    /// A sword pulled (or swung, without `lunge`): whoever the aim is on,
+    /// their body grown by [`LUNGE_PAD`] and where `s` saw them, dies if in
+    /// [`SWORD_REACH`]; farther, to [`LUNGE_RANGE`], `s` lunges at them.
+    /// A hull in reach is cut; a hull is never lunged at.
+    fn swing(&mut self, s: usize, depth: u32, lunge: bool) {
+        let f = self.fighters[s];
+        let eye = f.eye();
+        let dir = aim_dir(f.yaw, f.pitch);
+        self.events.push(Event {
+            kind: Ev::Melee,
+            a: s as u8,
+            c: crate::arms::SWORD as u16,
+            pos: eye,
+            ..Event::default()
+        });
+        let reach = if lunge { LUNGE_RANGE } else { SWORD_REACH };
+        let wall = self.map.ray(eye, dir, reach);
+        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD) {
+            Some((Target::Vehicle(i), t)) if t <= SWORD_REACH => {
+                let pts = arm(crate::arms::SWORD).dmg * PT;
+                self.damage_vehicle(s, i, pts, crate::arms::SWORD as u16);
+            }
+            Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
+            Some((Target::Fighter(q, _), _)) if lunge => {
+                let me = &mut self.fighters[s];
+                me.lunge = q as u8 + 1;
+                me.lunge_left = ticks(LUNGE_MS) as u16;
+                self.steer_lunge(s, q);
+            }
+            _ => {}
+        }
+    }
+
+    /// Every lunge: on, at the target as it is now, till it is reached
+    /// (the kill), the time runs out, or either is gone.
+    fn lunges(&mut self) {
+        for s in 0..MAX_FIGHTERS {
+            let f = self.fighters[s];
+            if f.lunge == 0 {
+                continue;
+            }
+            let q = f.lunge as usize - 1;
+            let v = self.fighters[q];
+            let on = f.active() && f.ride == 0 && v.active() && v.ride == 0 && f.gun().arm == crate::arms::SWORD;
+            if !on {
+                self.end_lunge(s);
+                continue;
+            }
+            let d = v.body.pos - f.body.pos;
+            let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
+            if d.flat().len() <= STRIKE_R && crate::fmath::fabs(d.y) < BODY_H && self.map.clear(f.eye(), chest) {
+                self.end_lunge(s);
+                self.strike(s, q);
+                continue;
+            }
+            self.fighters[s].lunge_left -= 1;
+            if self.fighters[s].lunge_left == 0 {
+                self.end_lunge(s);
+            } else {
+                self.steer_lunge(s, q);
+            }
+        }
+    }
+
+    /// `s`'s body driven straight at `q`'s at [`LUNGE_SPEED`].
+    fn steer_lunge(&mut self, s: usize, q: usize) {
+        let to = self.fighters[q].body.pos - self.fighters[s].body.pos;
+        let len = to.len();
+        if len <= 0.0 {
+            return;
+        }
+        let v = to * (LUNGE_SPEED / len);
+        let b = &mut self.fighters[s].body;
+        b.vel = V3::new(
+            crate::movement::quant(v.x),
+            crate::movement::quant(v.y),
+            crate::movement::quant(v.z),
+        );
+        if v.y > 0.0 {
+            b.grounded = false;
+        }
+    }
+
+    /// A lunge over: the body stops where it got to (falling, if it was).
+    fn end_lunge(&mut self, s: usize) {
+        let f = &mut self.fighters[s];
+        if f.lunge != 0 && f.active() {
+            let v = f.body.vel;
+            f.body.vel = V3::new(0.0, v.y.min(0.0), 0.0);
+        }
+        f.lunge = 0;
+        f.lunge_left = 0;
+    }
+
+    /// The sword lands on `q`: a kill, unless `q` was lunging back at `s`
+    /// (a clash: both thrown apart, nobody hurt).
+    fn strike(&mut self, s: usize, q: usize) {
+        if self.fighters[q].lunge == s as u8 + 1 {
+            self.end_lunge(q);
+            let away = (self.fighters[q].body.pos - self.fighters[s].body.pos).flat().norm();
+            for (k, dir) in [(s, away * -1.0), (q, away)] {
+                let b = &mut self.fighters[k].body;
+                b.vel = dir * CLASH_PUSH + V3::new(0.0, 3.0, 0.0);
+                b.grounded = false;
+            }
+            self.events.push(Event {
+                kind: Ev::Melee,
+                a: s as u8,
+                part: 2,
+                c: crate::arms::SWORD as u16,
+                pos: self.fighters[s].eye(),
+                ..Event::default()
+            });
+            return;
+        }
+        let pts = arm(crate::arms::SWORD).dmg * PT;
+        self.damage(s, q, pts, false, Head::None, crate::arms::SWORD as u16);
     }
 
     fn throw(&mut self, s: usize) {
@@ -557,6 +683,12 @@ impl World {
                         continue;
                     }
                     p.pos = p.pos + p.vel * DT;
+                    // Faster with each metre flown, to its top speed.
+                    let a = arm(crate::arms::ROCKET);
+                    if speed < a.speed_max {
+                        let up = speed + (a.speed_max - a.speed) * (step / a.ramp);
+                        p.vel = d * up.min(a.speed_max);
+                    }
                 }
                 ProjKind::Frag => {
                     p.vel.y -= GRAVITY * DT;

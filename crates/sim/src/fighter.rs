@@ -65,6 +65,11 @@ pub struct Fighter {
     /// In a vehicle: its slot × 2 + the seat, plus 1; 0 on foot. The world
     /// puts a rider's body at its seat (`Vehicle::mount`).
     pub ride: u8,
+    /// Lunging with the sword: at seat `lunge - 1`, for `lunge_left` more
+    /// ticks; 0 not. The world's (it steers by where the target is), so
+    /// not the prediction's: the client sees it as its body's velocity.
+    pub lunge: u8,
+    pub lunge_left: u16,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -131,6 +136,8 @@ impl Fighter {
         self.grenades = GREN_START;
         self.respawn = 0;
         self.ride = 0;
+        self.lunge = 0;
+        self.lunge_left = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -223,7 +230,9 @@ impl Fighter {
             }
         }
         if out.fired {
-            self.gun_mut().mag -= 1;
+            if a.kind != Kind::Sword {
+                self.gun_mut().mag -= 1;
+            }
             self.shots = self.shots.wrapping_add(1);
             if a.kind == Kind::Rocket {
                 self.burst_left = 0;
@@ -291,5 +300,7 @@ impl Thing for Fighter {
         h.u16(self.kills);
         h.u16(self.deaths);
         h.u8(self.ride);
+        h.u8(self.lunge);
+        h.u16(self.lunge_left);
     }
 }

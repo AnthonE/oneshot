@@ -19,7 +19,7 @@ repos is `RIP.md`.
 Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
 - Equal starts: a rifle and a sidearm, two frags.
-- Power weapons (sniper, rocket, shotgun) on pads with timed respawns, so a match is about map control.
+- Power weapons (sniper, rocket, shotgun, the sword) on pads with timed respawns, so a match is about map control.
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 

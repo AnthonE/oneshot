@@ -1,7 +1,7 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER};
+use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fmath;
@@ -496,4 +496,113 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
     }
     assert!(launched, "the launcher threw it");
     assert!(climbed > 2.0, "it went up the ground: {climbed}");
+}
+
+/// Seat 0 pulls the sword at seat 1's chest once, then holds still; true
+/// if 1 is dead within a second. `inputs[1]` is whatever 1 does meanwhile.
+fn lunge_at(w: &mut World, other: Input) -> bool {
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1] = other;
+    for t in 0..TICK_HZ {
+        let (yaw, pitch) = aim(w, 0, chest(w, 1));
+        inputs[0] = Input {
+            buttons: if t == 0 { FIRE } else { 0 },
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        if !w.fighters[1].alive {
+            return true;
+        }
+    }
+    false
+}
+
+#[test]
+fn a_lunge_runs_down_a_target_that_strafes() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let strafe = Input {
+        mx: 127,
+        yaw: 32768,
+        ..Input::default()
+    };
+    assert!(lunge_at(&mut w, strafe), "it steers onto the target");
+    assert_eq!(w.fighters[0].kills, 1);
+    assert_eq!(w.fighters[0].lunge, 0, "the lunge is over with the kill");
+    let me = w.fighters[0].body.vel;
+    assert!(me.x * me.x + me.z * me.z < 0.01, "and it stops there: {me:?}");
+}
+
+#[test]
+fn a_sword_never_lunges_through_a_wall_or_at_a_teammate() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let mut map = w.map.clone();
+    map.boxes
+        .push(sim::geom::Aabb::new(V3::new(2.4, 0.0, -3.0), V3::new(2.6, 4.0, 3.0)));
+    w.map = map.indexed();
+    assert!(!lunge_at(&mut w, Input::default()));
+    assert_eq!(w.fighters[0].lunge, 0);
+
+    let mut w = duel([SWORD, MAGNUM], 4.0);
+    w.rules.teams = true;
+    w.fighters[1].team = w.fighters[0].team;
+    assert!(!lunge_at(&mut w, Input::default()));
+    assert_eq!(w.fighters[0].lunge, 0);
+}
+
+#[test]
+fn two_swords_lunging_at_each_other_clash() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    for (s, inp) in inputs.iter_mut().enumerate().take(2) {
+        let (yaw, pitch) = aim(&w, s, chest(&w, 1 - s));
+        *inp = Input {
+            buttons: FIRE,
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+    }
+    let mut clashed = false;
+    for _ in 0..TICK_HZ {
+        w.step(&inputs, &NO_LAG);
+        inputs[0].buttons = 0;
+        inputs[1].buttons = 0;
+        clashed |= w.events.as_slice().iter().any(|e| e.kind == Ev::Melee && e.part == 2);
+    }
+    assert!(clashed);
+    assert!(w.fighters[0].alive && w.fighters[1].alive, "nobody hurt");
+    assert_eq!(w.fighters[1].shield, SHIELD_MAX);
+    let gap = (w.fighters[1].body.pos - w.fighters[0].body.pos).len();
+    assert!(gap > 2.0, "thrown apart: {gap} m");
+}
+
+#[test]
+fn the_sword_s_melee_swings_without_a_lunge_and_spends_nothing() {
+    // Out of the swing's reach, the melee button doesn't lunge.
+    let mut w = duel([SWORD, MAGNUM], 4.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (yaw, pitch) = aim(&w, 0, chest(&w, 1));
+    inputs[0] = Input {
+        buttons: MELEE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    assert_eq!(w.fighters[0].lunge, 0);
+    assert!(w.fighters[1].alive);
+    // In reach it kills; the battery is never spent.
+    let mut w = duel([SWORD, MAGNUM], 1.6);
+    let (yaw, pitch) = aim(&w, 0, chest(&w, 1));
+    inputs[0] = Input {
+        buttons: MELEE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    assert!(!w.fighters[1].alive);
+    assert_eq!(w.fighters[0].gun().mag, sim::arms::arm(SWORD).mag);
 }

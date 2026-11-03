@@ -169,8 +169,9 @@ pub struct Map {
 }
 
 impl Map {
-    /// Builds the box grid; every constructor ends here.
-    fn indexed(mut self) -> Map {
+    /// Builds the box grid; every constructor ends here, and a test that
+    /// adds a box calls it again.
+    pub fn indexed(mut self) -> Map {
         self.grid = Grid::build(&self.boxes);
         self
     }

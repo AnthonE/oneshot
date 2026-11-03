@@ -251,8 +251,9 @@ impl Bot {
         let tp = (want_pitch - cur_pitch).clamp(-max_turn, max_turn);
         inp.pitch = fmath::round((cur_pitch + tp) * 65536.0).clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
 
-        // Keep a fighting distance and strafe.
-        inp.mz = if near > 14.0 {
+        // Keep a fighting distance and strafe; with a sword, close in.
+        let a = arm(g.arm);
+        inp.mz = if a.kind == crate::arms::Kind::Sword || near > 14.0 {
             127
         } else if near < 6.0 {
             -100
@@ -263,7 +264,6 @@ impl Bot {
 
         let react = (TICK_HZ as f32 * (0.6 - 0.35 * self.skill)) as u16;
         let on = fmath::fabs(dy) < 0.006 + 0.01 * rough && self.seen > react;
-        let a = arm(g.arm);
         if on && near < a.range {
             // A semi-automatic needs the trigger let go between pulls.
             if a.auto || me.last_buttons & FIRE == 0 {

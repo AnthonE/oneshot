@@ -53,7 +53,7 @@ const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 /** How a box is drawn, as web/src/world.ts numbers them. */
 export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock'];
 /** sim::arms, by the names map.json uses. */
-export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
+export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 8;
