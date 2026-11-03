@@ -1,7 +1,8 @@
 // node ci/e2e.mjs [seconds] [mode] [map]: the real server and the real page in
 // headless Chromium. The page autoplays (?autoplay: it walks at the bot,
 // aims and fires; inputs only) against bots that stand still: one (mode 0,
-// the default) or seven (3 free for all, 4 Gun Game). Passes when it
+// the default), seven (3 free for all, 4 Gun Game) or fifteen (6 Big
+// Team). Passes when it
 // connected, drew, its predictions confirmed and it scored a kill. The map
 // is Proving Grounds (id 0) unless named.
 // A screenshot goes to traces/e2e-<mode>.png.

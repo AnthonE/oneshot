@@ -30,9 +30,12 @@ interface Shared {
   others: number[];
   killcams: number;
   inKillcam: boolean;
+  /** Our side with teams, else -1: whom the autopilot never chases. */
+  mate: number;
 }
 const shared: Shared = {
   connected: false, frames: 0, kills: 0, deaths: 0, stats: [], error: '', own: [], others: [], killcams: 0, inKillcam: false,
+  mate: -1,
 };
 (window as any).__oneshot = { state: () => shared };
 
@@ -87,7 +90,7 @@ async function main() {
   const info = await (await fetch('server.json')).json();
   const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, [el('duel'), el('doubles'), el('cup')]);
 
-  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
+  const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
   let client: Client;
   try {
     const mode = AUTOPLAY
@@ -195,6 +198,7 @@ async function main() {
 
     const own = client.own();
     shared.own = Array.from(own);
+    shared.mate = client.teams ? client.team : -1;
     const [px, py, pz, eye, , , alive, , shield, health, arm, mag, reserve, other, grenades, reloading, , kills, deaths, respawn] = own;
     // Aim is drawn from the controls (no round trip) on top of the
     // predicted body.
@@ -266,7 +270,7 @@ async function main() {
 
     const ms = client.match_state();
     const phase = ms[0], clock = ms[1], winner = ms[2], limit = ms[3];
-    const scores = Array.from(ms.subarray(4, 12));
+    const scores = Array.from(ms.subarray(5, 5 + ms[4]));
     const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
     let center = '';
     if (phase === 0) center = `Starting in ${Math.ceil(clock)}`;
@@ -289,7 +293,7 @@ async function main() {
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,
         // The rest, best first: everyone in a duel or doubles, the top
-        // four in a room of eight.
+        // four in a bigger room.
         ...scores.map((s, i) => [s, i] as const).filter(([, i]) => i !== slot && hud.names[i])
           .sort((a, b) => b[0] - a[0]).slice(0, 4).map(([s, i]) => `${hud.name(i)} ${s}`),
         gunGame ? `Rung ${Math.min(scores[slot], limit - 1) + 1} of ${limit}${scores[slot] < limit - 1 ? ` · next ${arm_name(client.rung(scores[slot] + 1))}` : ' · last gun'}` : '',
@@ -351,7 +355,7 @@ function pose(scene: THREE.Scene, camera: THREE.PerspectiveCamera, renderer: THR
   requestAnimationFrame(loop);
 }
 
-/** For the browser test (?autoplay): walk at the nearest other fighter,
+/** For the browser test (?autoplay): walk at the nearest enemy,
  * aim at them and keep pulling the trigger. Only inputs: the server still
  * decides every hit. */
 // Where the autopilot walks while fog shows it nobody: the map's roam
@@ -367,7 +371,7 @@ function autopilot(f: ReturnType<Controls['frame']>, s: Shared) {
   const toYaw = (a: number) => (((Math.round((a / (2 * Math.PI)) * TURN)) % TURN) + TURN) % TURN;
   let best = -1, bd = Infinity;
   for (let i = 0; i + STRIDE <= o.length; i += STRIDE) {
-    if (!o[i + 2]) continue;
+    if (!o[i + 2] || o[i + 1] === s.mate) continue;
     const d = Math.hypot(o[i + 6] - me[0], o[i + 8] - me[2]);
     if (d < bd) { bd = d; best = i; }
   }

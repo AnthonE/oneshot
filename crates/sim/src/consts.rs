@@ -12,8 +12,9 @@ pub const fn ticks(ms: u32) -> u32 {
     (ms * TICK_HZ + 500) / 1000
 }
 
-/// Seats in a room: Duel 2, Doubles 4, a cup heat 8.
-pub const MAX_FIGHTERS: usize = 8;
+/// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,
+/// Big Team 16.
+pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
 /// Weapon pads on a map.

@@ -179,19 +179,26 @@ impl Bot {
 /// depth back to exercise the rewind. Returns the world's hash, folded over
 /// every tick, so any tick that differs shows.
 pub fn bot_match(seed: u64, ticks_n: u32) -> u64 {
-    bot_match_on(0, false, seed, ticks_n)
+    bot_match_on(0, 0, seed, ticks_n)
 }
 
-/// [`bot_match`] on map `map`, or with `eight` an eight-seat Gun Game
-/// there: what `ci/parity.sh` runs on every map. 0 if there is no such map.
-pub fn bot_match_on(map: u8, eight: bool, seed: u64, ticks_n: u32) -> u64 {
+/// [`bot_match`] on map `map` in `mode`: 0 Doubles, 1 an eight-seat Gun
+/// Game, 2 a sixteen-seat Big Team. What `ci/parity.sh` runs on every map.
+/// 0 if there is no such map or mode.
+pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
     let Some(m) = crate::map::by_id(map) else {
         return 0;
+    };
+    let base = match mode {
+        0 => Rules::doubles(),
+        1 => Rules::gun_game(),
+        2 => Rules::big_team(),
+        _ => return 0,
     };
     let rules = Rules {
         score_limit: 100_000,
         time_limit_ms: 0,
-        ..if eight { Rules::gun_game() } else { Rules::doubles() }
+        ..base
     };
     let n = rules.seats as usize;
     let salt = (crate::rng::splitmix64(seed), crate::rng::splitmix64(seed ^ 0x5a17));
@@ -201,7 +208,12 @@ pub fn bot_match_on(map: u8, eight: bool, seed: u64, ticks_n: u32) -> u64 {
         w.seat(s, (s & 1) as u8);
         *b = Bot::new(seed, s, 0.3 + 0.2 * (s % 4) as f32);
     }
-    let depth = [0, 3 << 8, 7 << 8 | 128, 12 << 8, 0, 5 << 8, 1 << 8, 9 << 8];
+    // Each seat its own rewind depth, as the server would choose them.
+    let pattern = [0, 3 << 8, 7 << 8 | 128, 12 << 8, 0, 5 << 8, 1 << 8, 9 << 8];
+    let mut depth = [0u32; MAX_FIGHTERS];
+    for (s, d) in depth.iter_mut().enumerate() {
+        *d = pattern[s % pattern.len()];
+    }
     let mut fold = 0u64;
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     for _ in 0..ticks_n {

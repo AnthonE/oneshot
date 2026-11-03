@@ -27,7 +27,8 @@ pub struct Rules {
     pub time_limit_ms: u32,
     /// The guns everyone spawns with: in hand, then on the back.
     pub loadout: [u8; 2],
-    /// Seats the mode fills: 2 for a duel, 4 for doubles, up to 8.
+    /// Seats the mode fills: 2 for a duel, 4 for doubles, 8 for a free for
+    /// all, 16 for Big Team; at most `MAX_FIGHTERS`.
     pub seats: u8,
     /// Gun Game: everyone carries the gun of their rung on
     /// [`crate::arms::LADDER`], a kill moves the killer up a rung, pads are
@@ -67,6 +68,19 @@ impl Rules {
             teams: false,
             score_limit: 25,
             time_limit_ms: 600_000,
+            loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            seats: 8,
+            gun_game: false,
+        }
+    }
+
+    /// Big Team, 8v8 Team Slayer: first side to 50, or the most at 15
+    /// minutes. Casual, bots in the empty seats.
+    pub fn big_team() -> Rules {
+        Rules {
+            teams: true,
+            score_limit: 50,
+            time_limit_ms: 900_000,
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,

@@ -1,5 +1,5 @@
-//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, and an
-//! eight-seat Gun Game) with one person seat (played by a bot, through the same input path a client
+//! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, an
+//! eight-seat Gun Game, a sixteen-seat Big Team) with one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
@@ -51,7 +51,6 @@ fn on_grid(v: f32) -> bool {
 struct Gate {
     room: Room,
     me: usize,
-    mate: Option<usize>,
     history: VecDeque<[Fighter; MAX_FIGHTERS]>,
     sent: Vec<Vec<u8>>,
     over: bool,
@@ -70,7 +69,7 @@ impl Gate {
         let me = &w.fighters[self.me];
         let now = &self.history[0];
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
-        let mate = |q: usize| Some(q) == self.mate;
+        let mate = |q: usize| q != self.me && w.rules.teams && w.fighters[q].team == me.team;
         let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
         // Every kind on the wire has its check; no wildcard, so a new kind
         // doesn't compile until it has one.
@@ -184,6 +183,20 @@ fn nothing_a_client_should_not_know_reaches_it_on_any_map() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
+    for d in sim::maps::ALL {
+        gate(
+            d.build(),
+            Rules {
+                score_limit: 60,
+                time_limit_ms: 120_000,
+                ..Rules::big_team()
+            },
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
@@ -210,7 +223,6 @@ fn gate(map: Map, rules: Rules) {
     };
     let me = slot as usize;
     let mut g = Gate {
-        mate: rules.teams.then_some(me ^ 2),
         room,
         me,
         history: VecDeque::new(),

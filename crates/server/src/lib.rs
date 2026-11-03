@@ -28,8 +28,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_FFA,
-    MODE_GUN_GAME,
+    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES,
+    MODE_FFA, MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -98,10 +98,12 @@ pub struct Config {
     /// PEM certificate and key; without them a self-signed certificate
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
-    /// A casual room's rules: against a bot, free for all, Gun Game.
+    /// A casual room's rules: against a bot, free for all, Gun Game, Big
+    /// Team.
     pub rules: Rules,
     pub ffa: Rules,
     pub gun_game: Rules,
+    pub big_team: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -147,6 +149,7 @@ impl Default for Config {
             rules: Rules::duel(),
             ffa: Rules::ffa(),
             gun_game: Rules::gun_game(),
+            big_team: Rules::big_team(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             cup: Rules {
@@ -330,6 +333,7 @@ impl Sim {
             MODE_DOUBLES => self.cfg.doubles,
             MODE_CUP => self.cfg.cup,
             MODE_FFA => self.cfg.ffa,
+            MODE_BIG_TEAM => self.cfg.big_team,
             MODE_GUN_GAME => self.cfg.gun_game,
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
@@ -380,7 +384,7 @@ impl Sim {
                         tx,
                     } => {
                         let mode = match mode {
-                            MODE_FFA | MODE_GUN_GAME => mode,
+                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
                             _ => MODE_CASUAL,
                         };
                         // Free for all and Gun Game are shared: a seat a bot

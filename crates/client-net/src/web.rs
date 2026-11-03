@@ -303,6 +303,12 @@ impl Client {
         self.core.rules.gun_game
     }
 
+    /// Whether this match is red against blue.
+    #[wasm_bindgen(getter)]
+    pub fn teams(&self) -> bool {
+        self.core.rules.teams
+    }
+
     /// The gun on Gun Game's rung `score`.
     pub fn rung(&self, score: i32) -> u8 {
         sim::world::Rules::rung(score)
@@ -516,8 +522,9 @@ impl Client {
     }
 
     /// The match: phase (0 countdown, 1 playing, 2 over), seconds left,
-    /// winner, the score limit, then the 8 scores, then each pad's seconds
-    /// until its gun is back.
+    /// winner, the score limit, the number of scores `n`, then the `n`
+    /// scores (each side's with teams, else each seat's), then each pad's
+    /// seconds until its gun is back.
     pub fn match_state(&self) -> Vec<f32> {
         let s = self.core.latest();
         let mut v = vec![
@@ -526,6 +533,7 @@ impl Client {
             s.winner as f32,
             self.core.rules.score_limit as f32,
         ];
+        v.push(s.score.len() as f32);
         v.extend(s.score.iter().map(|&x| x as f32));
         v.extend(s.pads().iter().map(|p| p.empty_s as f32));
         v

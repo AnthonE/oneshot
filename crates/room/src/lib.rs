@@ -8,8 +8,8 @@ pub mod fog;
 pub mod replay;
 pub mod watch;
 
+use proto::{encode_snapshot, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
-use proto::{MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
@@ -487,6 +487,7 @@ pub fn build(
         clock: w.clock,
         winner: w.winner,
         score: w.score,
+        n_score: if w.rules.teams { 2 } else { w.rules.seats },
         ..Snapshot::default()
     };
     // What this client may know: itself, its side, and whom fog shows it.
@@ -511,6 +512,13 @@ pub fn build(
         };
         snap.events[snap.n_events as usize] = e;
         snap.n_events += 1;
+    }
+    // Over a datagram, the snapshot would be dropped whole: drop events from
+    // the end instead, the least urgent part (milestone 11 carries them
+    // over to the next snapshot).
+    let mut scratch = [0u8; 2 * MAX_DATAGRAM];
+    while snap.n_events > 0 && encode_snapshot(&snap, &mut scratch).map_or(true, |n| n > MAX_DATAGRAM) {
+        snap.n_events -= 1;
     }
     snap
 }

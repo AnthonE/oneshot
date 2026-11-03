@@ -186,7 +186,11 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
 1. **Rays, every snapshot** (`crates/room/src/fog.rs`, built in milestone
    3). A baked potentially-visible set (2 m cells, a bitset of the cells
    each sees) is the optimisation for when maps and rooms grow; at 2v2 the
-   rays below cost a few thousand box tests a snapshot.
+   rays below cost a few thousand box tests a snapshot. At 8v8 they are
+   not cheap: `cargo run --release -p room --example fog_cost` measured
+   0.6 to 1.9 ms a snapshot on our three maps, worst 6 to 9 ms (longer
+   than a tick), 4 to 12% of a core per room. Milestone 9's box grid is
+   the first answer; the baked set the next.
 2. **The rays:** for each enemy, cast rays from
    the viewer's eye against the map, through the sim's own ray query:
    - the viewer's eye pushed ahead along its velocity by its one-way latency +

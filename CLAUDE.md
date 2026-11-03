@@ -25,7 +25,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
 4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
-   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map).
+   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
+   `node ci/e2e.mjs 40 6 1` for sixteen in Big Team).
 5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.

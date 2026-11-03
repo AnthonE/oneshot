@@ -5,11 +5,12 @@
 //! the server wrote. Bots' inputs are recorded like anyone's, so a replay
 //! never depends on the bot's code.
 //!
-//! Format, little-endian: `OSR2`, u16 PROTO_VER, u64 golden tag, u64 seed,
+//! Format, little-endian: `OSR3`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
 //! gun game), u8 map; then records: `S` slot team (a seat),
-//! `U` slot (an unseat), `T` changed-input mask, inputs, changed-rewind
-//! mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 8 scores (the end).
+//! `U` slot (an unseat), `T` u16 changed-input mask, inputs, u16
+//! changed-rewind mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16
+//! scores (the end).
 
 use proto::PROTO_VER;
 use sim::consts::MAX_FIGHTERS;
@@ -18,11 +19,11 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::world::{Rules, World};
 
-pub const MAGIC: &[u8; 4] = b"OSR2";
+pub const MAGIC: &[u8; 4] = b"OSR3";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
-pub const RULES_TAG: u64 = 0x6a3a_cc7e_0b61_c34a;
+pub const RULES_TAG: u64 = 0x9e52_09c4_abf9_1979;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {
@@ -71,13 +72,13 @@ impl Recorder {
     /// One `World::step`'s arguments.
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind: &[u32; MAX_FIGHTERS]) {
         self.buf.push(b'T');
-        let mut mask = 0u8;
+        let mut mask = 0u16;
         for (s, i) in inputs.iter().enumerate() {
             if *i != self.inputs[s] {
                 mask |= 1 << s;
             }
         }
-        self.buf.push(mask);
+        self.buf.extend_from_slice(&mask.to_le_bytes());
         for (s, i) in inputs.iter().enumerate() {
             if mask & (1 << s) != 0 {
                 self.buf.extend_from_slice(&i.buttons.to_le_bytes());
@@ -87,13 +88,13 @@ impl Recorder {
                 self.buf.push(i.mz as u8);
             }
         }
-        let mut rmask = 0u8;
+        let mut rmask = 0u16;
         for (s, &r) in rewind.iter().enumerate() {
             if r != self.rewind[s] {
                 rmask |= 1 << s;
             }
         }
-        self.buf.push(rmask);
+        self.buf.extend_from_slice(&rmask.to_le_bytes());
         for (s, &r) in rewind.iter().enumerate() {
             if rmask & (1 << s) != 0 {
                 self.buf.extend_from_slice(&r.to_le_bytes());
@@ -204,7 +205,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
                 w.unseat(s);
             }
             b'T' => {
-                let mask = r.u8()?;
+                let mask = r.u16()?;
                 for (s, i) in inputs.iter_mut().enumerate() {
                     if mask & (1 << s) != 0 {
                         *i = Input {
@@ -216,7 +217,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
                         };
                     }
                 }
-                let rmask = r.u8()?;
+                let rmask = r.u16()?;
                 for (s, d) in rewind.iter_mut().enumerate() {
                     if rmask & (1 << s) != 0 {
                         *d = r.u32()?;
@@ -301,8 +302,8 @@ mod tests {
                 b'S' => at += 3,
                 b'U' => at += 2,
                 b'T' => {
-                    let mask = bytes[at + 1];
-                    at += 2;
+                    let mask = u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]);
+                    at += 3;
                     for _ in 0..mask.count_ones() {
                         if ticks > 3000 {
                             bytes[at + 7] ^= 0x80;
@@ -310,8 +311,8 @@ mod tests {
                         }
                         at += 8;
                     }
-                    let rmask = bytes[at];
-                    at += 1 + 4 * rmask.count_ones() as usize;
+                    let rmask = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+                    at += 2 + 4 * rmask.count_ones() as usize;
                     ticks += 1;
                 }
                 k => panic!("record {k:#x}"),

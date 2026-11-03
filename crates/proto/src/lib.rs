@@ -19,18 +19,19 @@ use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 6;
+pub const PROTO_VER: u16 = 7;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
 pub const MAX_INPUT_FRAMES: usize = 16;
-pub const MAX_REMOTES: usize = MAX_FIGHTERS;
+/// Everyone but yourself.
+pub const MAX_REMOTES: usize = MAX_FIGHTERS - 1;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 8;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
-pub const SLOT_BITS: u32 = 3;
+pub const SLOT_BITS: u32 = 4;
 /// A stream message's ceiling: a hello with an Elo Pros pass is the
 /// largest.
 pub const MAX_STREAM_MSG: usize = 1024;
@@ -368,6 +369,9 @@ pub struct Snapshot {
     pub events: [EventState; MAX_SNAP_EVENTS],
     pub n_pads: u8,
     pub pads: [PadState; MAX_SNAP_PADS],
+    /// Scores in use: each side's (2) with teams, else each seat's. The
+    /// rest are 0 and not sent.
+    pub n_score: u8,
     pub score: [i32; MAX_FIGHTERS],
     pub phase: u8,
     pub clock: u32,
@@ -389,6 +393,7 @@ impl Default for Snapshot {
             events: [EventState::default(); MAX_SNAP_EVENTS],
             n_pads: 0,
             pads: [PadState::default(); MAX_SNAP_PADS],
+            n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
             clock: 0,
@@ -508,6 +513,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_proj as usize, MAX_SNAP_PROJ),
         (s.n_events as usize, MAX_SNAP_EVENTS),
         (s.n_pads as usize, MAX_SNAP_PADS),
+        (s.n_score as usize, MAX_FIGHTERS),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -522,7 +528,8 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.proj(), 5)?;
     w_list(&mut w, s.events(), 6)?;
     w_list(&mut w, s.pads(), 4)?;
-    for &sc in &s.score {
+    w.write(s.n_score as u32, SLOT_BITS + 1)?;
+    for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
     }
     w.write(s.phase as u32, 2)?;
@@ -547,7 +554,11 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_proj = r_list(&mut r, &mut s.proj, 5)?;
     s.n_events = r_list(&mut r, &mut s.events, 6)?;
     s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
-    for sc in s.score.iter_mut() {
+    s.n_score = r.read(SLOT_BITS + 1)? as u8;
+    if s.n_score as usize > MAX_FIGHTERS {
+        return Err(WireError::Cap);
+    }
+    for sc in s.score[..s.n_score as usize].iter_mut() {
         *sc = r_i32(&mut r, 16)?;
     }
     s.phase = r.read(2)? as u8;
@@ -637,6 +648,8 @@ pub const MODE_FFA: u8 = 3;
 pub const MODE_GUN_GAME: u8 = 4;
 /// A cup: free-for-all heats, Swiss rounds, a final (ranked: a wallet's).
 pub const MODE_CUP: u8 = 5;
+/// Big Team: 8v8 Team Slayer, casual, bots in the empty seats.
+pub const MODE_BIG_TEAM: u8 = 6;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
 
@@ -795,7 +808,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             salt_commit,
         } => {
             w.write(2, 8)?;
-            w.write(*slot as u32, 3)?;
+            w.write(*slot as u32, SLOT_BITS)?;
             w.write(*team as u32 & 1, 1)?;
             w.write(*tick, 32)?;
             w.write(*tick_hz as u32, 16)?;
@@ -805,7 +818,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.time_limit_ms, 32)?;
             w.write(rules.loadout[0] as u32, 4)?;
             w.write(rules.loadout[1] as u32, 4)?;
-            w.write(rules.seats as u32, 4)?;
+            w.write(rules.seats as u32, SLOT_BITS + 1)?;
             w.write_bit(rules.gun_game)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
@@ -823,7 +836,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             skin,
         } => {
             w.write(4, 8)?;
-            w.write(*slot as u32, 3)?;
+            w.write(*slot as u32, SLOT_BITS)?;
             w.write(*team as u32 & 1, 1)?;
             w.write_bit(*bot)?;
             w_name(&mut w, name)?;
@@ -831,8 +844,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
         }
         Msg::Kill { killer, victim, cause } => {
             w.write(5, 8)?;
-            w.write(*killer as u32, 3)?;
-            w.write(*victim as u32, 3)?;
+            w.write(*killer as u32, SLOT_BITS)?;
+            w.write(*victim as u32, SLOT_BITS)?;
             w.write(*cause as u32, 16)?;
         }
         Msg::Phase { phase, winner } => {
@@ -897,7 +910,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             waiting_s: r.read(16)? as u16,
         },
         2 => Msg::Welcome {
-            slot: r.read(3)? as u8,
+            slot: r.read(SLOT_BITS)? as u8,
             team: r.read(1)? as u8,
             tick: r.read(32)?,
             tick_hz: r.read(16)? as u16,
@@ -907,8 +920,8 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 score_limit: r_i32(&mut r, 32)?,
                 time_limit_ms: r.read(32)?,
                 loadout: [r.read(4)? as u8, r.read(4)? as u8],
-                seats: match r.read(4)? as u8 {
-                    n @ 1..=8 => n,
+                seats: match r.read(SLOT_BITS + 1)? as u8 {
+                    n if (1..=MAX_FIGHTERS as u8).contains(&n) => n,
                     _ => return Err(WireError::Malformed),
                 },
                 gun_game: r.read_bit()?,
@@ -925,15 +938,15 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             reason: r.read(8)? as u8,
         },
         4 => Msg::Seat {
-            slot: r.read(3)? as u8,
+            slot: r.read(SLOT_BITS)? as u8,
             team: r.read(1)? as u8,
             bot: r.read_bit()?,
             name: r_name(&mut r)?,
             skin: r.read(8)? as u8,
         },
         5 => Msg::Kill {
-            killer: r.read(3)? as u8,
-            victim: r.read(3)? as u8,
+            killer: r.read(SLOT_BITS)? as u8,
+            victim: r.read(SLOT_BITS)? as u8,
             cause: r.read(16)? as u16,
         },
         6 => Msg::Phase {
