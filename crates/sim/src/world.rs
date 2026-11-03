@@ -120,7 +120,12 @@ pub enum ProjKind {
     #[default]
     Rocket,
     Frag,
+    /// A SEEKER crystal: it turns toward `target`.
+    Seeker,
 }
+
+/// A crystal with nobody to seek.
+pub const NO_TARGET: u8 = u8::MAX;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Projectile {
@@ -133,6 +138,8 @@ pub struct Projectile {
     pub ttl: u16,
     /// Ticks alive, so a rocket clears its owner.
     pub age: u16,
+    /// A crystal's: the fighter it seeks, or [`NO_TARGET`].
+    pub target: u8,
 }
 
 impl Thing for Projectile {
@@ -148,7 +155,21 @@ impl Thing for Projectile {
         h.v3(self.vel);
         h.u16(self.ttl);
         h.u16(self.age);
+        // Only a crystal has a target: every match without one hashes as it
+        // did before crystals.
+        if self.kind == ProjKind::Seeker {
+            h.u8(self.target);
+        }
     }
+}
+
+/// SEEKER crystals stuck in one fighter: how many, ticks until they fall
+/// out, and whose.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stuck {
+    pub n: u8,
+    pub ttl: u16,
+    pub owner: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -184,6 +205,8 @@ pub struct World {
     pub score: [i32; MAX_FIGHTERS],
     pub winner: u8,
     pub events: Events,
+    /// Crystals stuck in each fighter.
+    pub stuck: [Stuck; MAX_FIGHTERS],
     rewind: Box<Rewind<Pose, MAX_FIGHTERS>>,
     vrewind: Box<Rewind<VPose, MAX_VEHICLES>>,
     rng: Pcg32,
@@ -211,6 +234,7 @@ impl World {
             score: [0; MAX_FIGHTERS],
             winner: NO_WINNER,
             events: Events::default(),
+            stuck: [Stuck::default(); MAX_FIGHTERS],
             rewind: Box::default(),
             vrewind: Box::default(),
             rng: Pcg32::new(seed, 1),
@@ -344,6 +368,29 @@ impl World {
                     let dir = spread(base, a.spread, self.salt, s, f.shots, k);
                     self.hitscan(s, eye, dir, id, depth);
                 }
+            }
+            Kind::Seeker => {
+                let dir = spread(base, a.spread, self.salt, s, f.shots, 0);
+                // Who it seeks: picked down the aim, not the spread.
+                let target = self.seek_target(s, eye, base, a.range, depth);
+                let _ = self.proj.alloc(Projectile {
+                    active: true,
+                    kind: ProjKind::Seeker,
+                    owner: s as u8,
+                    pos: eye + dir * 0.5,
+                    vel: dir * a.speed,
+                    ttl: ticks(SEEK_LIFE_MS) as u16,
+                    age: 0,
+                    target,
+                });
+                self.events.push(Event {
+                    kind: Ev::Shot,
+                    a: s as u8,
+                    c: id as u16,
+                    pos: eye,
+                    end: eye + dir,
+                    ..Event::default()
+                });
             }
             Kind::Rocket => {
                 let dir = spread(base, a.spread, self.salt, s, f.shots, 0);
@@ -500,7 +547,148 @@ impl World {
             vel,
             ttl: ttl as u16,
             age: 0,
+            target: NO_TARGET,
         });
+    }
+
+    /// The enemy a crystal fired from `eye` along `dir` seeks: the nearest
+    /// in the lock cone within `range`, in clear sight, where the server says
+    /// the shooter saw them (rewound like a hitscan shot).
+    fn seek_target(&self, s: usize, eye: V3, dir: V3, range: f32, depth: u32) -> u8 {
+        let me = &self.fighters[s];
+        let mut best = NO_TARGET;
+        let mut near = range;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+                continue;
+            }
+            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            if !p.alive {
+                continue;
+            }
+            let y = if p.crouched { SEEK_CHEST_Y_CROUCH } else { SEEK_CHEST_Y };
+            let to = p.pos + V3::new(0.0, y, 0.0) - eye;
+            let d = to.len();
+            if d < 0.5 || d >= near || to.dot(dir) < d * SEEK_LOCK_COS {
+                continue;
+            }
+            if !self.map.clear(eye, eye + to) {
+                continue;
+            }
+            best = q as u8;
+            near = d;
+        }
+        best
+    }
+
+    /// One crystal's tick: turn toward its target, at most `SEEK_TURN` a
+    /// second (a chord, so square roots only), fly, and end on what it
+    /// meets. Whether it ended.
+    fn seek(&mut self, i: usize, p: &mut Projectile) -> bool {
+        let speed = p.vel.len().max(1e-3);
+        let mut d = p.vel * (1.0 / speed);
+        let t = p.target as usize;
+        if t < MAX_FIGHTERS && self.fighters[t].active() {
+            let v = &self.fighters[t];
+            let y = if v.body.crouched {
+                SEEK_CHEST_Y_CROUCH
+            } else {
+                SEEK_CHEST_Y
+            };
+            let to = v.body.pos + V3::new(0.0, y, 0.0) - p.pos;
+            let dist = to.len();
+            if dist > 1e-3 {
+                let delta = to * (1.0 / dist) - d;
+                let dl = delta.len();
+                let max = SEEK_TURN * DT;
+                let turn = if dl > max { delta * (max / dl) } else { delta };
+                let nd = d + turn;
+                let l = nd.len();
+                if l > 1e-4 {
+                    d = nd * (1.0 / l);
+                }
+            }
+        }
+        p.vel = d * speed;
+        let step = speed * DT;
+        let mut t = self.map.ray(p.pos, d, step);
+        let mut met = if t < step { Some(Met::World) } else { None };
+        let owner = p.owner as usize;
+        let team = self.fighters[owner].team;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == owner || !v.active() || (self.rules.teams && v.team == team) {
+                continue;
+            }
+            if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.05, v.body.height(), t) {
+                if h < t || met.is_none() {
+                    t = h;
+                    met = Some(Met::Fighter(q));
+                }
+            }
+        }
+        let own = self.fighters[owner].riding().map(|(k, _)| k);
+        for (k, v) in self.vehicles.iter().enumerate() {
+            if !v.active || own == Some(k) || self.spares(owner, v) {
+                continue;
+            }
+            if let Some(h) = v.ray(p.pos, d, t) {
+                if h < t || met.is_none() {
+                    t = h;
+                    met = Some(Met::Hull(k));
+                }
+            }
+        }
+        if met.is_none() && p.ttl == 0 {
+            met = Some(Met::World);
+        }
+        let Some(m) = met else {
+            p.pos = p.pos + p.vel * DT;
+            return false;
+        };
+        self.proj[i].active = false;
+        self.stick(owner, m, p.pos + d * t);
+        true
+    }
+
+    /// A crystal of `s`'s ended at `at` on `m`: in a fighter it hurts and
+    /// stays, and enough in one body burst.
+    fn stick(&mut self, s: usize, m: Met, at: V3) {
+        let id = crate::arms::SEEKER;
+        let pts = arm(id).dmg * PT;
+        let mut ev = Event {
+            kind: Ev::Stick,
+            a: s as u8,
+            b: s as u8,
+            c: crate::events::STUCK_WORLD,
+            pos: at,
+            ..Event::default()
+        };
+        match m {
+            Met::World => self.events.push(ev),
+            Met::Hull(k) => {
+                ev.c = crate::events::STUCK_HULL;
+                self.events.push(ev);
+                self.damage_vehicle(s, k, pts, id as u16);
+            }
+            Met::Fighter(q) => {
+                let st = &mut self.stuck[q];
+                st.n = st.n.saturating_add(1);
+                st.ttl = ticks(STICK_MS) as u16;
+                st.owner = s as u8;
+                let n = st.n;
+                ev.b = q as u8;
+                ev.c = crate::events::STUCK_FIGHTER;
+                ev.part = n.min(STICK_BURST);
+                self.events.push(ev);
+                self.damage(s, q, pts, false, Head::None, id as u16);
+                if n >= STICK_BURST {
+                    self.stuck[q] = Stuck::default();
+                    let v = &self.fighters[q];
+                    let chest = v.body.pos + V3::new(0.0, SEEK_CHEST_Y, 0.0);
+                    self.blast(chest, s, BURST_DMG, BURST_RADIUS, BURST_FULL, 0.5, Cause::Burst as u16);
+                }
+            }
+        }
     }
 
     fn projectiles(&mut self) {
@@ -512,6 +700,11 @@ impl World {
             p.age = p.age.saturating_add(1);
             p.ttl = p.ttl.saturating_sub(1);
             match p.kind {
+                ProjKind::Seeker => {
+                    if self.seek(i, &mut p) {
+                        continue;
+                    }
+                }
                 ProjKind::Rocket => {
                     let speed = p.vel.len();
                     let d = p.vel * (1.0 / speed);
@@ -1045,6 +1238,13 @@ impl World {
 
     /// Shields and health come back; the dead come back.
     fn recover(&mut self, s: usize) {
+        let st = &mut self.stuck[s];
+        if st.n > 0 {
+            st.ttl = st.ttl.saturating_sub(1);
+            if st.ttl == 0 {
+                *st = Stuck::default();
+            }
+        }
         let f = &mut self.fighters[s];
         if !f.seated {
             return;
@@ -1069,6 +1269,7 @@ impl World {
     /// Back at the spawn point farthest from the nearest living enemy, of a
     /// few drawn.
     fn respawn(&mut self, s: usize) {
+        self.stuck[s] = Stuck::default();
         let team = self.fighters[s].team;
         let teams = self.rules.teams;
         let n = self.map.spawns.len() as u32;
@@ -1131,6 +1332,16 @@ impl World {
                 thing::Kind::Vehicle => hash_all(&*self.vehicles, &mut h),
             }
         }
+        // Stuck crystals, only where there are some: a match without them
+        // hashes as it did before them.
+        for (q, st) in self.stuck.iter().enumerate() {
+            if st.n > 0 {
+                h.u8(q as u8);
+                h.u8(st.n);
+                h.u16(st.ttl);
+                h.u8(st.owner);
+            }
+        }
         let (a, b) = self.rng.state();
         h.u64(a);
         h.u64(b);
@@ -1149,6 +1360,14 @@ impl World {
 
 /// What a ray (a shot, a swing) meets: a fighter (and whether in the head),
 /// or a vehicle's hull.
+/// What a crystal met.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Met {
+    World,
+    Fighter(usize),
+    Hull(usize),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     Fighter(usize, bool),

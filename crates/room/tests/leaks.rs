@@ -4,7 +4,8 @@
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
 //! unseen fighter's shot carries a place or a direction, if a hidden
-//! fighter's projectile is sent out of sight, or if any bit of the salt
+//! fighter's projectile is sent out of sight, if a crystal stuck in an
+//! unseen fighter says where, or if any bit of the salt
 //! crosses the wire before the match is over.
 
 use std::collections::VecDeque;
@@ -201,6 +202,19 @@ impl Gate {
         }
         for e in s.events() {
             let a = e.a as usize;
+            // 7. A SEEKER crystal stuck in someone this client may not
+            // know: told (it may be the shooter), but never where.
+            if e.kind == Ev::Stick as u8 && e.c == sim::events::STUCK_FIGHTER {
+                let b = e.b as usize;
+                if b != self.me && !known(b) {
+                    assert_eq!(
+                        e.pos,
+                        sim::geom::V3::ZERO,
+                        "tick {}: {e:?} placed an unseen fighter",
+                        w.tick
+                    );
+                }
+            }
             if known(a) {
                 continue;
             }

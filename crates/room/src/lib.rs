@@ -620,7 +620,11 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
             continue;
         }
         snap.proj[snap.n_proj as usize] = ProjState {
-            kind: (p.kind == ProjKind::Frag) as u8,
+            kind: match p.kind {
+                ProjKind::Rocket => 0,
+                ProjKind::Frag => 1,
+                ProjKind::Seeker => 2,
+            },
             owner: p.owner,
             pos: p.pos,
             vel: p.vel,
@@ -744,6 +748,17 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
             let rides = w.fighters[s].riding().is_some_and(|(i, _)| i == e.part as usize);
             (a == s || rides).then_some(full)
         }
+        // A crystal stuck in a fighter: told like a hit to the two of them,
+        // and to whoever may know the victim; where, only to those. One
+        // shattered on a wall or a hull: like a shot, if seen.
+        Ev::Stick if e.c == sim::events::STUCK_FIGHTER => {
+            let b = e.b as usize;
+            (a == s || b == s || known(b)).then(|| {
+                let pos = if known(b) || b == s { e.pos } else { V3::ZERO };
+                EventState { pos, ..full }
+            })
+        }
+        Ev::Stick => (known(a) || w.map.clear(eye, e.pos)).then_some(full),
         // A wreck seen (its blast is sent as a Blast, heard or seen).
         Ev::Wreck => (known(a) || w.map.clear(eye, e.pos)).then_some(full),
         Ev::None => None,

@@ -31,6 +31,10 @@ pub enum Kind {
     /// `a` got into vehicle `part`'s seat `b` (0 driver, 1 passenger), or
     /// out of it when `c` is 1.
     Ride,
+    /// A SEEKER crystal of `a`'s ended at `pos`: `c` is what it met
+    /// ([`STUCK_WORLD`], [`STUCK_FIGHTER`]: `b`, with `part` crystals in them
+    /// now, or [`STUCK_HULL`]).
+    Stick,
 }
 
 /// Kill causes past the arm ids.
@@ -45,7 +49,14 @@ pub enum Cause {
     Splatter = 104,
     /// In or by a vehicle when it blew up.
     Wreck = 105,
+    /// Enough SEEKER crystals in one body burst.
+    Burst = 106,
 }
+
+/// What a [`Kind::Stick`] crystal met (its `c`).
+pub const STUCK_WORLD: u16 = 0;
+pub const STUCK_FIGHTER: u16 = 1;
+pub const STUCK_HULL: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Event {

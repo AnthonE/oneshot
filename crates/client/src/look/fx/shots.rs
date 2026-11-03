@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use proto::EventState;
-use sim::arms::{arm, ROCKET, SHOTGUN};
+use sim::arms::{arm, ROCKET, SEEKER, SHOTGUN};
 use sim::consts::{HEAD_Y, HIT_R};
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -52,7 +52,7 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     fx.flashed |= bit;
     if own {
         // Drawn when it broke (`own`): only what it met is new.
-        if arm != ROCKET {
+        if arm != ROCKET && arm != SEEKER {
             land(fx, scene, arm, from, dir, len, to);
         }
         return;
@@ -65,6 +65,10 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
         if first {
             backblast(fx, muzzle, dir);
         }
+        return;
+    }
+    // A crystal flies (`flying.rs`) and sticks (`bodies.rs`).
+    if arm == SEEKER {
         return;
     }
     let n = &mut fx.rounds[e.a as usize % 64];
@@ -115,6 +119,9 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
     if id == ROCKET {
         backblast(fx, muzzle, fwd);
+        return;
+    }
+    if id == SEEKER {
         return;
     }
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };

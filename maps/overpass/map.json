@@ -71,7 +71,8 @@
     { "weapon": "sniper", "at": [0, 0, 3], "respawn": 90 },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
     { "weapon": "shotgun", "at": [-10, -15], "respawn": 60, "mirror": true },
-    { "weapon": "smg", "at": [-25, 0, 2], "respawn": 30, "mirror": true }
+    { "weapon": "smg", "at": [-25, 0, 2], "respawn": 30, "mirror": true },
+    { "weapon": "seeker", "at": [-14, -5], "respawn": 45, "mirror": true }
   ],
   "roam": [
     [0, 0], [-10, 0], [10, 0], [-20, -15], [-20, 15], [20, -15], [20, 15],

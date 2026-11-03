@@ -7,7 +7,7 @@
 //! the shield's arcs, zaps and gold sparks added.
 
 use bevy::prelude::*;
-use sim::arms::{AR, BR, MAGNUM, SHOTGUN, SMG, SNIPER};
+use sim::arms::{AR, BR, MAGNUM, SEEKER, SHOTGUN, SMG, SNIPER};
 
 use super::atlas::{ARC, FLAME, GLOW, PUFF, RING, SMOKE, SPECK, STAR, STREAK};
 use super::pool::{Orient, Particle, Pool};
@@ -572,8 +572,59 @@ pub fn gun(arm: u8) -> GunLook {
             light_lm: 220_000.0,
             ..RIFLE
         },
+        // A crystal is drawn in flight (`flying.rs`): no tracer; a pink
+        // flash at the muzzle.
+        SEEKER => GunLook {
+            c0: PINK,
+            c1: [2.0, 0.4, 1.4, 0.0],
+            stars: 2,
+            flash_scale: 0.8,
+            light_lm: 90_000.0,
+            ..RIFLE
+        },
         _ => RIFLE,
     }
+}
+
+/// The SEEKER's crystals: a hot pink, linear HDR.
+pub const PINK: [f32; 4] = [9.0, 2.2, 6.0, 1.0];
+
+/// A crystal shattering (on a wall, a hull, or in the burst): pink shards
+/// flung out, a pink blink, `n` of them.
+pub fn shatter(glow: &mut Pool, at: Vec3, n: usize, speed: f32) {
+    for _ in 0..n {
+        let d = Vec3::new(glow.signed(), glow.signed(), glow.signed()).normalize_or(Vec3::Y);
+        let life = 0.18 + 0.25 * glow.roll();
+        let v = d * speed * (0.5 + glow.roll());
+        glow.spawn(Particle {
+            left: life,
+            life,
+            pos: at,
+            vel: v,
+            gravity: 6.0,
+            drag: 2.0,
+            size0: 0.025,
+            size1: 0.012,
+            c0: PINK,
+            c1: [2.0, 0.3, 1.2, 0.0],
+            cell: super::atlas::SHARD,
+            orient: Orient::Stretch,
+            stretch: 0.03,
+            len_max: 0.12,
+            ..Particle::default()
+        });
+    }
+    glow.spawn(Particle {
+        left: 0.08,
+        life: 0.08,
+        pos: at,
+        size0: 0.12,
+        size1: 0.3,
+        c0: PINK,
+        c1: [1.5, 0.3, 1.0, 0.0],
+        cell: GLOW,
+        ..Particle::default()
+    });
 }
 
 /// A tracer from `start` along `dir`, `dist` metres, in `look`'s colours.

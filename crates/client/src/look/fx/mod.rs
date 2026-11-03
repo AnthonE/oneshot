@@ -336,6 +336,8 @@ pub struct Scene<'a> {
     pub others: &'a [Drawn],
     pub vehicles: &'a [DrawnVehicle],
     pub me: u8,
+    /// The time now, seconds.
+    pub t: f32,
 }
 
 /// One frame's events: what they look like.
@@ -351,6 +353,7 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
             k if k == Kind::Spawn as u8 => bodies::spawned(fx, from),
             k if k == Kind::Pickup as u8 => bodies::picked_up(fx, from),
             k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e.a, from),
+            k if k == Kind::Stick as u8 => bodies::stuck(fx, e, scene.t),
             // A hit on us: the frame flinches, by how much it took.
             k if k == Kind::Hit as u8 && e.b == scene.me && e.a != scene.me => {
                 let pts = e.c as f32;

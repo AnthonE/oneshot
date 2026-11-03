@@ -26,6 +26,7 @@ fn the_worst_case_snapshot_fits_a_datagram() {
             vel: V3::new(30.0, 0.0, 0.0),
             ttl: 100,
             age: 20,
+            target: sim::world::NO_TARGET,
         };
     }
     let events: Vec<Event> = (0..200)

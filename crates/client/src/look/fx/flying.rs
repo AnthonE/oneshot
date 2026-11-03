@@ -4,9 +4,9 @@
 use bevy::prelude::*;
 use proto::ProjState;
 
-use super::atlas::GLOW;
-use super::pool::Particle;
-use super::table::Layer;
+use super::atlas::{GLOW, SHARD};
+use super::pool::{Orient, Particle};
+use super::table::{Layer, PINK};
 use super::Fx;
 use crate::look::guns::Models;
 
@@ -32,6 +32,13 @@ pub fn projectiles(
     t: f32,
     have: &mut Query<(Entity, &mut Flying, &mut Transform)>,
 ) {
+    // SEEKER crystals are light, not models: drawn straight into the glow
+    // pool from where they are this frame.
+    for p in proj.iter().filter(|p| p.kind == CRYSTAL) {
+        crystal(fx, p);
+    }
+    let proj: Vec<ProjState> = proj.iter().filter(|p| p.kind != CRYSTAL).copied().collect();
+    let proj = &proj[..];
     let mut drawn: Vec<(Entity, u8)> = have.iter().map(|(e, f, _)| (e, f.kind)).collect();
     // Same count of each kind as last frame, in order: move them; else
     // respawn the lot (cheap: a handful at most).
@@ -121,6 +128,55 @@ pub fn projectiles(
             f.lit = lit;
         }
     }
+}
+
+/// `ProjState::kind` of a SEEKER crystal.
+const CRYSTAL: u8 = 2;
+
+/// One crystal this frame: a pink shard along its flight in a glow, and a
+/// sparkle left behind.
+pub fn crystal(fx: &mut Fx, p: &ProjState) {
+    let at = Vec3::new(p.pos.x, p.pos.y, p.pos.z);
+    let v = Vec3::new(p.vel.x, p.vel.y, p.vel.z);
+    let one = |cell, size, c0, orient, vel, stretch, len_max| Particle {
+        left: 0.001,
+        life: 0.001,
+        pos: at,
+        vel,
+        size0: size,
+        size1: size,
+        c0,
+        c1: c0,
+        cell,
+        orient,
+        stretch,
+        len_max,
+        ..Particle::default()
+    };
+    fx.glow.spawn(one(SHARD, 0.045, PINK, Orient::Stretch, v, 0.01, 0.36));
+    fx.glow.spawn(one(
+        GLOW,
+        0.2,
+        [3.0, 0.6, 2.0, 0.8],
+        Orient::Billboard,
+        Vec3::ZERO,
+        0.0,
+        0.0,
+    ));
+    let life = 0.25;
+    let drift = Vec3::new(fx.range(-0.3, 0.3), fx.range(-0.3, 0.3), fx.range(-0.3, 0.3));
+    fx.glow.spawn(Particle {
+        left: life,
+        life,
+        pos: at - v * 0.01,
+        vel: drift,
+        size0: 0.02,
+        size1: 0.005,
+        c0: [5.0, 1.2, 3.4, 0.9],
+        c1: [1.0, 0.2, 0.7, 0.0],
+        cell: GLOW,
+        ..Particle::default()
+    });
 }
 
 fn place(p: &ProjState) -> Transform {

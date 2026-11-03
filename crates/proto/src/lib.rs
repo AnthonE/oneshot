@@ -20,14 +20,14 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 9;
+pub const PROTO_VER: u16 = 10;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
 pub const MAX_INPUT_FRAMES: usize = 16;
 /// Everyone but yourself.
 pub const MAX_REMOTES: usize = MAX_FIGHTERS - 1;
-pub const MAX_SNAP_PROJ: usize = 16;
+pub const MAX_SNAP_PROJ: usize = 24;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 8;
 pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
@@ -245,7 +245,7 @@ pub struct Remote {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProjState {
-    /// 0 rocket, 1 frag.
+    /// 0 rocket, 1 frag, 2 a SEEKER crystal.
     pub kind: u8,
     pub owner: u8,
     pub pos: V3,
@@ -308,14 +308,14 @@ impl Pack for Remote {
 
 impl Pack for ProjState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
-        w.write(self.kind as u32, 1)?;
+        w.write(self.kind as u32, 2)?;
         w.write(self.owner as u32, SLOT_BITS)?;
         w_v3c(w, self.pos)?;
         w_v3c(w, self.vel)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(ProjState {
-            kind: r.read(1)? as u8,
+            kind: r.read(2)? as u8,
             owner: r.read(SLOT_BITS)? as u8,
             pos: r_v3c(r)?,
             vel: r_v3c(r)?,

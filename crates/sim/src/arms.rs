@@ -11,7 +11,10 @@ pub const SNIPER: u8 = 4;
 pub const SHOTGUN: u8 = 5;
 pub const ROCKET: u8 = 6;
 pub const SMG: u8 = 7;
-pub const COUNT: usize = 8;
+/// Crystals that home on whoever they were aimed at, stick, and burst when
+/// enough are in one body (`world.rs`, `consts.rs` `SEEK_*`).
+pub const SEEKER: u8 = 8;
+pub const COUNT: usize = 9;
 
 /// Gun Game's ladder: each kill moves the killer up one, the power weapons
 /// first, and a kill with the last one wins.
@@ -21,6 +24,8 @@ pub const LADDER: [u8; 7] = [ROCKET, SHOTGUN, SMG, AR, SNIPER, BR, MAGNUM];
 pub enum Kind {
     Hitscan,
     Rocket,
+    /// A homing crystal (`world.rs`).
+    Seeker,
 }
 
 /// What a head hit does.
@@ -62,7 +67,7 @@ pub struct Arm {
     pub reload_ms: u32,
     /// Scope magnification, for the client.
     pub zoom: u8,
-    /// Rocket speed in m/s.
+    /// A rocket's or a crystal's speed in m/s.
     pub speed: f32,
     /// Blast radius, and the radius of full damage in it.
     pub radius: f32,
@@ -191,6 +196,21 @@ pub static ARMS: [Arm; COUNT] = [
         falloff: 20.0,
         falloff_min: 0.6,
         reload_ms: 1600,
+        ..BASE
+    },
+    Arm {
+        name: "SEEKER",
+        kind: Kind::Seeker,
+        auto: true,
+        refire_ms: 110,
+        mag: 20,
+        reserve: 60,
+        dmg: 7,
+        spread: q14(60.0),
+        // How far it picks a target to seek.
+        range: 40.0,
+        reload_ms: 1800,
+        speed: 30.0,
         ..BASE
     },
 ];

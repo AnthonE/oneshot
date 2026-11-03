@@ -1,7 +1,7 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER};
+use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SEEKER, SHOTGUN, SNIPER};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fmath;
@@ -496,4 +496,56 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
     }
     assert!(launched, "the launcher threw it");
     assert!(climbed > 2.0, "it went up the ground: {climbed}");
+}
+
+/// The SEEKER: crystals fired where a strafing target was still find it,
+/// stick, and enough in one body burst.
+#[test]
+fn seeker_crystals_home_stick_and_burst() {
+    let mut w = duel([SEEKER, MAGNUM], 14.0);
+    let start = chest(&w, 1);
+    let (mut stuck, mut burst, mut most) = (0, false, 0u8);
+    for t in 0..TICK_HZ * 3 {
+        // The target strafes 4 m/s across the line; the shooter keeps
+        // aiming where it first stood.
+        w.fighters[1].body.pos.z += 4.0 * DT;
+        let buttons = if t < TICK_HZ * 2 { FIRE } else { 0 };
+        shoot(&mut w, start, buttons, NO_LAG);
+        for e in w.events.as_slice() {
+            if e.kind == Ev::Stick && e.c == sim::events::STUCK_FIGHTER && e.b == 1 {
+                stuck += 1;
+                most = most.max(e.part);
+            }
+            if e.kind == Ev::Blast && e.c == sim::events::Cause::Burst as u16 {
+                burst = true;
+            }
+        }
+    }
+    assert!(w.fighters[1].body.pos.z > 8.0, "the target moved well off the line");
+    assert!(
+        stuck >= STICK_BURST as usize,
+        "only {stuck} crystals found a target strafing off the line"
+    );
+    assert_eq!(most, STICK_BURST, "the count reaches the burst");
+    assert!(burst, "seven in one body burst");
+}
+
+/// A crystal with nobody in its cone flies straight; one stuck falls out
+/// after `STICK_MS`.
+#[test]
+fn seeker_crystals_fall_out() {
+    let mut w = duel([SEEKER, MAGNUM], 10.0);
+    let c = chest(&w, 1);
+    shoot(&mut w, c, FIRE, NO_LAG);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    let mut n = 0;
+    for _ in 0..TICK_HZ {
+        w.step(&idle, &NO_LAG);
+        n = n.max(w.stuck[1].n);
+    }
+    assert_eq!(n, 1, "the one crystal stuck");
+    for _ in 0..ticks(STICK_MS) {
+        w.step(&idle, &NO_LAG);
+    }
+    assert_eq!(w.stuck[1].n, 0, "and fell out");
 }

@@ -20,6 +20,12 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
 - Equal starts: a rifle and a sidearm, two frags.
 - Power weapons (sniper, rocket, shotgun) on pads with timed respawns, so a match is about map control.
+  The SEEKER (pads on Overpass, Cistern and Dry Fork) fires crystals that
+  home on whoever they were aimed at (picked where the server says the
+  shooter saw them, like a hitscan shot), stick, and burst when enough are
+  in one body. The target is the server's: the wire carries only where a
+  crystal is, and a crystal stuck in someone a client can't see is told
+  without a place (`room/tests/leaks.rs`).
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 

@@ -30,8 +30,46 @@ pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     if heard {
         return;
     }
+    if c == Cause::Burst as u16 {
+        super::bodies::burst_at(fx, scene.others, at);
+        burst(fx, at);
+        return;
+    }
     let big = if c == Cause::Grenade as u16 { 0.85 } else { 1.0 };
     boom(fx, scene, at, big);
+}
+
+/// Seven crystals in one body going off together: a pink star, shards
+/// everywhere, a pink light. Glass, not fire.
+fn burst(fx: &mut Fx, at: Vec3) {
+    let pink = Color::LinearRgba(LinearRgba::rgb(2.4, 0.5, 1.6));
+    for k in 0..3u8 {
+        let roll = fx.range(0.0, core::f32::consts::TAU);
+        fx.glow.spawn(super::pool::Particle {
+            left: 0.12,
+            life: 0.12,
+            pos: at,
+            size0: 0.6,
+            size1: 1.3,
+            c0: super::table::PINK,
+            c1: [1.5, 0.3, 1.0, 0.0],
+            roll,
+            cell: super::atlas::STAR + k,
+            ..Default::default()
+        });
+    }
+    fx.emit_tint(Layer::Zap, 2, at, Vec3::Y, pink, 6.0);
+    super::table::shatter(&mut fx.glow, at, 40, 7.0);
+    fx.emit_tint(Layer::GunSmoke, 6, at, Vec3::Y, pink, 5.0);
+    fx.flash(
+        at,
+        super::FlashDef {
+            lumens: 900_000.0,
+            range: 9.0,
+            life: 0.3,
+            color: [1.0, 0.35, 0.8],
+        },
+    );
 }
 
 /// A vehicle blowing up: a bigger blast, then its hull burns.

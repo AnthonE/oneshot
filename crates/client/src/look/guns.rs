@@ -48,7 +48,7 @@ const fn g(
 }
 
 /// By arm id (`sim::arms`), from 1.
-pub const GUNS: [(u8, Gun); 7] = [
+pub const GUNS: [(u8, Gun); 8] = [
     (
         arms::AR,
         g(
@@ -147,6 +147,21 @@ pub const GUNS: [(u8, Gun); 7] = [
             "reload_rifle_0",
         ),
     ),
+    // The SEEKER holds and sounds like the SMG until it has its own model.
+    (
+        arms::SEEKER,
+        g(
+            "smg",
+            0.621,
+            0.42,
+            0.9,
+            true,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_rifle_0",
+        ),
+    ),
 ];
 
 pub fn gun(arm: u8) -> Option<&'static Gun> {
@@ -177,7 +192,7 @@ pub struct Models {
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
     let scene = |f: &str| assets.load(GltfAssetLabel::Scene(0).from_asset(format!("models/{f}.glb")));
-    let mut guns = vec![None; 8];
+    let mut guns = vec![None; arms::COUNT];
     for (arm, g) in &GUNS {
         guns[*arm as usize] = Some(scene(g.file));
     }

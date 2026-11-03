@@ -564,6 +564,7 @@ pub(crate) fn happened(
             others: &others,
             vehicles: &vehicles,
             me: s.core.slot,
+            t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, &events);
         // Our own gun, drawn the frame it fires, down where we look.

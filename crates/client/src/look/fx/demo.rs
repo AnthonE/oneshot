@@ -4,7 +4,8 @@
 //! session: the match is untouched. `?fxstage=N` plays only stage `N`:
 //! 0 rifles, 1 sniper, 2 shotgun, 3 grenade, 4 a shield taking rounds and
 //! breaking, 5 rounds into a wall, 6 a rocket and a wreck, 7 the shield
-//! shell flaring on every fighter in view.
+//! shell flaring on every fighter in view, 8 SEEKER crystals curving into
+//! a body, sticking, and bursting at seven.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -19,7 +20,7 @@ use crate::LinkRes;
 /// Each stage plays this long, firing every `EVERY_S`.
 const STAGE_S: f32 = 2.5;
 const EVERY_S: f32 = 0.3;
-const STAGES: u32 = 8;
+const STAGES: u32 = 9;
 /// A slot no fighter has: its shots flash like anyone else's.
 const SHOOTER: u8 = 200;
 
@@ -38,10 +39,14 @@ pub fn run(
     mut clock: Local<Clock>,
 ) {
     clock.t += time.delta_secs();
+    let stage = opts.fxstage.unwrap_or((clock.t / STAGE_S) as u32) % STAGES;
+    if stage == 8 {
+        seekers(&link, &mut fx, &mut clock, time.elapsed_secs());
+        return;
+    }
     if clock.t < clock.next {
         return;
     }
-    let stage = opts.fxstage.unwrap_or((clock.t / STAGE_S) as u32) % STAGES;
     clock.next = clock.t + if stage == 3 || stage == 6 { 1.2 } else { EVERY_S };
     let core = &link.0.session().core;
     let fwd = (fx.cam * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::X);
@@ -142,6 +147,7 @@ pub fn run(
         others: &others,
         vehicles: &[],
         me: core.slot,
+        t: time.elapsed_secs(),
     };
     on_events(&mut fx, &scene, &ev);
 }
@@ -155,6 +161,80 @@ pub fn pose(map: &sim::map::Map) -> Transform {
     let eye = Vec3::new(x, floor + 2.2, cz);
     let to = Vec3::new(cx + 4.0, map.floor(cx, cz, 0.3, 50.0) + 0.6, cz);
     Transform::from_translation(eye).looking_at(to, Vec3::Y)
+}
+
+/// Stage 8, every frame: three crystals curving from the right into a
+/// body ahead, each arrival stuck in it, the seventh bursting them all.
+fn seekers(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
+    const FLIGHT_S: f32 = 0.6;
+    let core = &link.0.session().core;
+    let fwd = (fx.cam * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::X);
+    let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+    let eye = fx.eye;
+    let at = eye + fwd * 9.0;
+    let feet = Vec3::new(at.x, core.map.floor(at.x, at.z, 0.1, eye.y - 1.0), at.z);
+    let chest = feet + Vec3::Y * 1.1;
+    let from = eye + side * 4.0 + fwd * 3.0;
+    for k in 0..3 {
+        let u = ((clock.t / FLIGHT_S) + k as f32 / 3.0).fract();
+        // A curve: out to the side, then in.
+        let bend = side * (2.5 * u * (1.0 - u)) + Vec3::Y * (1.5 * u * (1.0 - u));
+        let p = from.lerp(chest, u) + bend;
+        let ahead = from.lerp(chest, (u + 0.02).min(1.0)) + side * (2.5 * (u + 0.02) * (0.98 - u)) - p;
+        super::flying::crystal(
+            fx,
+            &proto::ProjState {
+                kind: 2,
+                owner: SHOOTER,
+                pos: v3(p),
+                vel: v3(ahead.normalize_or(fwd) * 30.0),
+            },
+        );
+    }
+    // An arrival every third of a flight.
+    let arrivals = (clock.t / (FLIGHT_S / 3.0)) as u32;
+    if arrivals != clock.hits {
+        clock.hits = arrivals;
+        let n = (arrivals % 7 + 1) as u8;
+        let d = Drawn {
+            slot: SHOOTER + 1,
+            alive: true,
+            pos: v3(feet),
+            ..default()
+        };
+        if n == 7 {
+            super::bodies::burst_at(fx, &[d], chest);
+            let scene = Scene {
+                map: &core.map,
+                others: &[d],
+                vehicles: &[],
+                me: core.slot,
+                t: now,
+            };
+            super::blast::blast(fx, &scene, chest, sim::events::Cause::Burst as u16, false);
+        } else {
+            let e = EventState {
+                kind: Kind::Stick as u8,
+                a: SHOOTER,
+                b: d.slot,
+                part: n,
+                c: sim::events::STUCK_FIGHTER,
+                pos: v3(chest),
+                ..default()
+            };
+            super::bodies::stuck(fx, &e, now);
+        }
+        // The body the crystals sit in (drawn as their glints).
+        super::bodies::watch(fx, &[d], 0.0, now);
+    } else {
+        let d = Drawn {
+            slot: SHOOTER + 1,
+            alive: true,
+            pos: v3(feet),
+            ..default()
+        };
+        super::bodies::watch(fx, &[d], 0.0, now);
+    }
 }
 
 fn v3(v: Vec3) -> V3 {

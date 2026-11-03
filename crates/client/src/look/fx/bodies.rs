@@ -39,6 +39,9 @@ struct One {
     at: f32,
     /// The shield went up since last frame.
     charging: bool,
+    /// SEEKER crystals stuck in them, and when the last stuck (s).
+    stuck: u8,
+    stuck_at: f32,
 }
 
 /// Each slot as it was last frame.
@@ -81,6 +84,66 @@ fn fade(peak: f32, at: f32, t: f32) -> f32 {
     peak * (1.0 - (t - at) * FLARE_FADE).clamp(0.0, 1.0)
 }
 
+/// How long a crystal stays stuck (`sim::consts::STICK_MS`).
+const STUCK_S: f32 = sim::consts::STICK_MS as f32 / 1000.0;
+
+/// The crystals stuck in a body this frame: pink shards poking out of its
+/// chest, each in its own place, glowing hotter as they near the burst.
+fn crystals(fx: &mut Fx, d: &Drawn, n: u8, t: f32) {
+    let feet = Vec3::new(d.pos.x, d.pos.y, d.pos.z);
+    let heat = n as f32 / sim::consts::STICK_BURST as f32;
+    let pulse = 0.7 + 0.3 * (t * (6.0 + 10.0 * heat)).sin();
+    for k in 0..n as u32 {
+        let h = |s: u32| super::atlas::hash01(d.slot as u32 * 31 + k, s);
+        let a = h(1) * core::f32::consts::TAU - d.yaw;
+        let up = 0.75 + 0.6 * h(2);
+        let out = Vec3::new(a.cos(), 0.25 * (h(3) - 0.5), a.sin());
+        let at = feet + Vec3::Y * up + out * 0.3;
+        let c = [7.0 * pulse * (0.6 + heat), 1.6 * pulse, 5.0 * pulse * (0.6 + heat), 1.0];
+        fx.glow.spawn(Particle {
+            left: 0.001,
+            life: 0.001,
+            pos: at,
+            vel: out,
+            size0: 0.022,
+            size1: 0.022,
+            c0: c,
+            c1: c,
+            cell: super::atlas::SHARD,
+            orient: Orient::Stretch,
+            stretch: 0.12,
+            len_max: 0.12,
+            ..Particle::default()
+        });
+    }
+}
+
+/// A SEEKER crystal ended: in a body (count it there, a small shatter if we
+/// may see where), or on a wall or a hull (it shatters).
+pub fn stuck(fx: &mut Fx, e: &proto::EventState, t: f32) {
+    let at = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
+    if e.c == sim::events::STUCK_FIGHTER {
+        let o = &mut fx.was.slots[e.b as usize % 64];
+        o.stuck = e.part;
+        o.stuck_at = t;
+        if at != Vec3::ZERO {
+            super::table::shatter(&mut fx.glow, at, 3, 1.5);
+        }
+    } else {
+        super::table::shatter(&mut fx.glow, at, 8, 3.0);
+    }
+}
+
+/// A burst at `at`: whoever stood there has none stuck now.
+pub fn burst_at(fx: &mut Fx, others: &[Drawn], at: Vec3) {
+    for d in others {
+        let p = Vec3::new(d.pos.x, d.pos.y, d.pos.z);
+        if p.distance(at) < 2.0 {
+            fx.was.slots[d.slot as usize % 64].stuck = 0;
+        }
+    }
+}
+
 /// A point on a standing body at `feet`, somewhere over its height.
 fn on_body(fx: &mut Fx, feet: Vec3) -> Vec3 {
     let a = fx.range(0.0, core::f32::consts::TAU);
@@ -105,7 +168,12 @@ pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32, t: f32) {
             peak: was.peak,
             at: was.at,
             charging: false,
+            stuck: if d.alive { was.stuck } else { 0 },
+            stuck_at: was.stuck_at,
         };
+        if o.stuck > 0 && t - o.stuck_at < STUCK_S {
+            crystals(fx, d, o.stuck, t);
+        }
         // Only against a frame we saw them in, alive both times.
         if was.seen && was.alive && d.alive {
             if d.shield < was.shield {

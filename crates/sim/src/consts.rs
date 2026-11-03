@@ -16,7 +16,7 @@ pub const fn ticks(ms: u32) -> u32 {
 /// Big Team 16.
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
-pub const MAX_PROJ: usize = 32;
+pub const MAX_PROJ: usize = 64;
 /// Weapon pads on a map.
 pub const MAX_PADS: usize = 8;
 /// Events one tick may raise; past it they are dropped and counted.
@@ -97,6 +97,22 @@ pub const GREN_FULL: f32 = 1.0;
 pub const GREN_FUSE_MS: u32 = 1800;
 pub const GREN_SPEED: f32 = 16.0;
 pub const GREN_START: u8 = 2;
+
+/// The SEEKER's crystals (`arms::SEEKER`): how fast one turns toward its
+/// target (radians a second), how long it flies, the cone (cosine of its
+/// half-angle) a target is picked in, and the height on a body it seeks.
+pub const SEEK_TURN: f32 = 4.0;
+pub const SEEK_LIFE_MS: u32 = 1600;
+pub const SEEK_LOCK_COS: f32 = 0.96;
+pub const SEEK_CHEST_Y: f32 = 1.0;
+pub const SEEK_CHEST_Y_CROUCH: f32 = 0.65;
+/// Crystals stay stuck this long; this many in one body burst.
+pub const STICK_MS: u32 = 3000;
+pub const STICK_BURST: u8 = 7;
+/// The burst: damage, radius, full-damage radius.
+pub const BURST_DMG: i32 = 140;
+pub const BURST_RADIUS: f32 = 2.5;
+pub const BURST_FULL: f32 = 1.0;
 pub const GREN_MAX: u8 = 4;
 pub const GREN_COOL_MS: u32 = 600;
 /// Speed kept along the normal and the surface in a bounce.
