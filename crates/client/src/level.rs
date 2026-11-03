@@ -148,14 +148,6 @@ pub fn build(
             Transform::from_xyz(p.pos.x, p.pos.y + 0.03, p.pos.z),
         ));
     }
-    // The sun, its shadows sized to the map.
-    commands.spawn((
-        LevelPart,
-        DirectionalLight {
-            illuminance: 11_000.0,
-            shadows_enabled: true,
-            ..default()
-        },
-        Transform::from_xyz(cx - 30.0, 50.0, cz + 20.0).looking_at(Vec3::new(cx, 0.0, cz), Vec3::Y),
-    ));
+    // The sun at noon (look::rig: its shadows, its disk).
+    commands.spawn((LevelPart, crate::look::rig::sun()));
 }

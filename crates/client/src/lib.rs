@@ -11,6 +11,7 @@
 
 pub mod level;
 pub mod link;
+pub mod look;
 
 use std::collections::BTreeMap;
 
@@ -77,26 +78,12 @@ pub fn app(link: Box<dyn Link>) -> App {
     app
 }
 
-fn setup(mut commands: Commands) {
-    commands.spawn((
-        Eye,
-        Camera3d::default(),
-        Projection::Perspective(PerspectiveProjection {
-            fov: 78f32.to_radians(),
-            near: 0.05,
-            far: 600.0,
-            ..default()
-        }),
-        DistanceFog {
-            color: Color::srgb(0.62, 0.77, 0.91),
-            falloff: FogFalloff::Linear {
-                start: 90.0,
-                end: 320.0,
-            },
-            ..default()
-        },
-        Transform::from_xyz(0.0, 2.0, 0.0),
-    ));
+fn setup(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut media: ResMut<Assets<bevy::pbr::ScatteringMedium>>,
+) {
+    look::rig::camera(&mut commands, &mut images, &mut media, Eye);
     commands.spawn((
         Hud,
         Text::new("connecting..."),
