@@ -1,10 +1,12 @@
-//! A map: a floor at y = 0, boxes, spawn points and weapon pads. Built once
-//! at load; the tick only reads it. The maps themselves are data
+//! A map: a floor at y = 0 (or a terrain, [`crate::terrain`]), boxes,
+//! spawn points, weapon pads and launchers. Built once at load; the tick
+//! only reads it. The maps themselves are data
 //! (`maps/*/map.json`), compiled to the tables in [`crate::maps`].
 
 use crate::arms::SHOTGUN;
 use crate::geom::{ray_aabb, Aabb, V3};
 use crate::grid::Grid;
+use crate::terrain::{Terrain, TerrainDef};
 
 /// Any team may spawn here.
 pub const ANY_TEAM: u8 = 255;
@@ -24,9 +26,21 @@ pub struct PadDef {
     pub respawn_ms: u32,
 }
 
+/// A launcher: a grounded fighter whose feet are in `area` is thrown at
+/// `vel` (movement::step), on the server and in the prediction alike.
+#[derive(Clone, Copy, Debug)]
+pub struct Launcher {
+    pub area: Aabb,
+    pub vel: V3,
+}
+
 /// A map as `tools/maps/compile.mjs` writes it: tables a [`Map`] is built
 /// from. Boxes are (min x y z, max x y z); spawns (x y z, yaw, team); pads
-/// (x y z, arm, respawn ms); roam points (x, z).
+/// (x y z, arm, respawn ms); roam points (x, z); launchers (min x y z, max
+/// x y z of the pad, velocity). On a terrain, a spawn, a pad or a roam
+/// point at height 0 stands on the ground, and one given a height never
+/// under it: the ground's height is found here, so the compiler never
+/// computes a height the sim stands on.
 pub struct Def {
     pub id: u8,
     pub name: &'static str,
@@ -37,13 +51,37 @@ pub struct Def {
     pub spawns: &'static [([f32; 3], u16, u8)],
     pub pads: &'static [([f32; 3], u8, u32)],
     pub roam: &'static [[f32; 2]],
+    pub terrain: Option<TerrainDef>,
+    pub launchers: &'static [([f32; 6], [f32; 3])],
 }
 
+/// A map this big (in m²) is for Big Team; smaller ones are arenas.
+pub const BIG_M2: f32 = 4000.0;
+
 impl Def {
+    /// Whether this is a Big Team map ([`BIG_M2`] or more inside its
+    /// bounds), not an arena.
+    pub fn big(&self) -> bool {
+        (self.hi.0 - self.lo.0) * (self.hi.1 - self.lo.1) >= BIG_M2
+    }
+
     pub fn build(&self) -> Map {
-        let v = |p: [f32; 3]| V3::new(p[0], p[1], p[2]);
+        let terrain = self.terrain.as_ref().map(Terrain::build);
+        let ground = |x: f32, z: f32| terrain.as_ref().and_then(|t| t.height(x, z)).unwrap_or(0.0);
+        let v = |p: [f32; 3]| {
+            let g = ground(p[0], p[2]);
+            V3::new(p[0], if p[1] == 0.0 { g } else { p[1].max(g) }, p[2])
+        };
         Map {
             grid: Grid::default(),
+            launchers: self
+                .launchers
+                .iter()
+                .map(|&(b, vel)| Launcher {
+                    area: Aabb::new(V3::new(b[0], b[1], b[2]), V3::new(b[3], b[4], b[5])),
+                    vel: V3::new(vel[0], vel[1], vel[2]),
+                })
+                .collect(),
             id: self.id,
             name: self.name,
             lo: self.lo,
@@ -68,7 +106,12 @@ impl Def {
                     respawn_ms,
                 })
                 .collect(),
-            roam: self.roam.iter().map(|r| V3::new(r[0], 0.0, r[1])).collect(),
+            roam: self
+                .roam
+                .iter()
+                .map(|r| V3::new(r[0], ground(r[0], r[1]), r[1]))
+                .collect(),
+            terrain,
         }
         .indexed()
     }
@@ -100,6 +143,9 @@ pub struct Map {
     pub roam: Vec<V3>,
     /// The boxes by cell, for the queries below.
     grid: Grid,
+    /// The ground, if it isn't the plane y = 0.
+    pub terrain: Option<Terrain>,
+    pub launchers: Vec<Launcher>,
 }
 
 impl Map {
@@ -119,8 +165,13 @@ impl Map {
     /// or `tmax` if nothing is nearer.
     pub fn ray(&self, o: V3, d: V3, tmax: f32) -> f32 {
         let mut t = tmax;
-        if d.y < 0.0 && o.y >= 0.0 {
-            t = t.min(-o.y / d.y);
+        match &self.terrain {
+            None => {
+                if d.y < 0.0 && o.y >= 0.0 {
+                    t = t.min(-o.y / d.y);
+                }
+            }
+            Some(g) => t = g.ray(o, d, t),
         }
         let reach = t;
         self.grid.each_on_ray(o, d, reach, |i| {
@@ -139,10 +190,28 @@ impl Map {
         l == 0.0 || self.ray(a, v * (1.0 / l), l) >= l
     }
 
+    /// The ground's height at (x, z): the terrain's, or 0.
+    pub fn ground(&self, x: f32, z: f32) -> f32 {
+        match &self.terrain {
+            None => 0.0,
+            Some(g) => g.height(x, z).unwrap_or(0.0),
+        }
+    }
+
+    /// The ground's unit normal at (x, z): straight up but on a terrain.
+    pub fn ground_normal(&self, x: f32, z: f32) -> V3 {
+        match &self.terrain {
+            None => V3::new(0.0, 1.0, 0.0),
+            Some(g) => g.normal(x, z),
+        }
+    }
+
     /// The highest floor under a footprint of half-width `r` at (x, z) whose
-    /// top is at or below `reach`.
+    /// top is at or below `reach`. The ground counts wherever it is: under
+    /// the footprint's middle, at its own height (a slope too steep to
+    /// stand on is movement's to refuse, not the floor's).
     pub fn floor(&self, x: f32, z: f32, r: f32, reach: f32) -> f32 {
-        let mut f = 0.0f32;
+        let mut f = self.ground(x, z);
         self.each_box_in((x - r, z - r), (x + r, z + r), |b| {
             if b.max.y <= reach && b.max.y > f && b.over_xz(x, z, r) {
                 f = b.max.y;
@@ -168,6 +237,8 @@ impl Map {
         let b = |x0: f32, z0: f32, x1: f32, z1: f32| Aabb::new(V3::new(x0, 0.0, z0), V3::new(x1, 8.0, z1));
         Map {
             grid: Grid::default(),
+            terrain: None,
+            launchers: Vec::new(),
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
@@ -213,11 +284,17 @@ mod tests {
     use super::*;
     use crate::rng::Pcg32;
 
-    /// The scans the grid replaced: every box, in order.
+    /// The scans the grid replaced: every box, in order (over the same
+    /// ground: the grid is the boxes').
     fn ray_linear(m: &Map, o: V3, d: V3, tmax: f32) -> f32 {
         let mut t = tmax;
-        if d.y < 0.0 && o.y >= 0.0 {
-            t = t.min(-o.y / d.y);
+        match &m.terrain {
+            None => {
+                if d.y < 0.0 && o.y >= 0.0 {
+                    t = t.min(-o.y / d.y);
+                }
+            }
+            Some(g) => t = g.ray(o, d, t),
         }
         for b in &m.boxes {
             if let Some(h) = ray_aabb(o, d, b, t) {
@@ -228,7 +305,7 @@ mod tests {
     }
 
     fn floor_linear(m: &Map, x: f32, z: f32, r: f32, reach: f32) -> f32 {
-        let mut f = 0.0f32;
+        let mut f = m.ground(x, z);
         for b in &m.boxes {
             if b.max.y <= reach && b.max.y > f && b.over_xz(x, z, r) {
                 f = b.max.y;

@@ -3,7 +3,7 @@
 // the server does, and the page only draws.
 
 import * as THREE from 'three';
-import init, { Client, map_boxes, map_pads, map_layout, map_name, arm_name, skin_names } from './pkg/client_net.js';
+import init, { Client, map_boxes, map_pads, map_layout, map_name, map_terrain, map_launchers, arm_name, skin_names } from './pkg/client_net.js';
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
@@ -171,7 +171,7 @@ async function main() {
     gunGame = client.gun_game;
     if (level) dropWorld(level.level);
     const layout = map_layout(client.map);
-    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout);
+    level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout, map_terrain(client.map), map_launchers(client.map));
     route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
     leg = 0;
     hud.kill(map_name(client.map));

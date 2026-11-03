@@ -6,6 +6,8 @@
 use super::Def;
 #[allow(unused_imports)]
 use crate::arms::*;
+#[allow(unused_imports)]
+use crate::terrain::TerrainDef;
 
 #[rustfmt::skip]
 pub const DEF: Def = Def {
@@ -56,4 +58,7 @@ pub const DEF: Def = Def {
         ([16.0, 2.5, 0.0], SMG, 30000),
     ],
     roam: &[],
+    terrain: None,
+    launchers: &[
+    ],
 };

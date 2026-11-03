@@ -198,7 +198,21 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
      skips; between, the plain test (chest or head in clear line). So
      nobody in plain sight is ever held back.
 
-   `ci/quick.sh` fails if fog at sixteen seats goes past twice that.
+   Terrain made it dear again: on Dry Fork, 140 m long and hilly, 42% of
+   pairs are hidden and the mean line is 74 m (0.7 ms a snapshot). Three
+   more brought it to 0.3 ms:
+   - **Far pairs** (past 40 m) get the full look every fourth snapshot,
+     without the leans and the chest's edges: 18 lines, not 70. At 40 m
+     those turn a line by half a degree.
+   - **The ground's proof:** a group of lines (one eye, the target now or
+     ahead) is dropped when the ground stands above a line over all of
+     them by more than it can rise across their width.
+   - **Terrain in 16 m blocks** with their highest point, so a line clear
+     above a block skips its cells.
+
+   A pair found hidden still gets the plain test. `ci/quick.sh` fails if
+   fog at sixteen seats on any map goes past twice the budget (0.3 ms mean,
+   1.5 ms at the 99.9th percentile).
 2. **The rays:** for each enemy, cast rays from
    the viewer's eye against the map, through the sim's own ray query:
    - the viewer's eye pushed ahead along its velocity by its one-way latency +
@@ -399,6 +413,8 @@ keeps every gate in §17 green and moves a golden only on purpose.
 8. **16 seats and Big Team:** 8v8 Team Slayer, casual.
 9. **Terrain:** a deterministic heightfield beside the boxes, slopes and
    sliding, a box grid for rays; an original canyon map with its own golden.
+   Done: Dry Fork (`maps/canyon/`), 140 × 60 m, Big Team's map (a map of
+   4,000 m² or more is a Big Team map; the rest are arenas).
    **Launchers** too: a pad in the map that throws a fighter along a set
    velocity. It reads only the fighter and the map, so it predicts exactly
    and costs no wire. Skiing (low-friction slides down slopes) is a later

@@ -99,6 +99,11 @@ fn walk(m: &Map, from: (f32, f32, f32)) -> BTreeSet<(i32, i32, i32)> {
             if blocked(m, x, z, ny, r) {
                 continue;
             }
+            // Up ground steeper than movement climbs (movement::too_steep).
+            let (px, pz) = (ix as f32 * G, iz as f32 * G);
+            if m.terrain.is_some() && m.ground(x, z) > y + 0.01 && m.ground(x, z) - m.ground(px, pz) > G * MAX_CLIMB {
+                continue;
+            }
             let k = key(x, z, ny);
             if seen.insert(k) {
                 q.push_back(k);

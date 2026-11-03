@@ -338,7 +338,7 @@ impl Sim {
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
         };
-        let map = self.pick_map(seed);
+        let map = self.pick_map(seed, mode == MODE_BIG_TEAM);
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
@@ -348,11 +348,25 @@ impl Sim {
         }
     }
 
-    /// The map a room plays, from its seed (what clients may know anyway).
-    fn pick_map(&self, seed: u64) -> Map {
-        let all: Vec<u8> = sim::maps::ALL.iter().map(|d| d.id).collect();
-        let ids: Vec<u8> = self.cfg.maps.iter().copied().filter(|id| all.contains(id)).collect();
-        let ids = if ids.is_empty() { all } else { ids };
+    /// The map a room plays, from its seed (what clients may know anyway):
+    /// the `--map` ones if any are given, else Big Team on the big maps and
+    /// everything else on the arenas.
+    fn pick_map(&self, seed: u64, big: bool) -> Map {
+        let given: Vec<u8> = self
+            .cfg
+            .maps
+            .iter()
+            .copied()
+            .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
+            .collect();
+        let sized: Vec<u8> = sim::maps::ALL.iter().filter(|d| d.big() == big).map(|d| d.id).collect();
+        let ids = if !given.is_empty() {
+            given
+        } else if !sized.is_empty() {
+            sized
+        } else {
+            sim::maps::ALL.iter().map(|d| d.id).collect()
+        };
         sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }
 

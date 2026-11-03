@@ -51,6 +51,13 @@ pub const CROUCH_EYE: f32 = 1.1;
 pub const STEP: f32 = 0.5;
 /// A grounded body walking off a ledge this low stays on the ground.
 pub const SNAP: f32 = 0.25;
+/// Ground steeper than 46° can't be stood on or walked up: the normal's
+/// height below this (cos 46°) slides the body, and a rise steeper than
+/// this per metre (tan 46°) stops a step up it.
+pub const WALK_NY: f32 = 0.694_658_4;
+pub const MAX_CLIMB: f32 = 1.035_530_4;
+/// How hard a too-steep slope pushes a body down it, in m/s².
+pub const SLIDE_ACCEL: f32 = 14.0;
 pub const HIT_R: f32 = 0.35;
 pub const HIT_TOP: f32 = 1.45;
 pub const HIT_TOP_CROUCH: f32 = 0.95;

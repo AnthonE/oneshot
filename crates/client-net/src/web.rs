@@ -693,6 +693,37 @@ pub fn map_pads(id: u8) -> Vec<f32> {
     v
 }
 
+/// Map `id`'s ground, if it isn't flat: cell size, corner x, corner z,
+/// vertices along x, along z, then the heights in metres, row by row (z
+/// outer). Empty for a flat floor. Each cell is two triangles split from
+/// its low corner to its high one, as the sim's are (`sim::terrain`): the
+/// one where the x offset is at least the z offset, then the other.
+#[wasm_bindgen]
+pub fn map_terrain(id: u8) -> Vec<f32> {
+    let Some(d) = sim::maps::ALL.iter().find(|d| d.id == id).or(sim::maps::ALL.first()) else {
+        return Vec::new();
+    };
+    let Some(t) = &d.terrain else {
+        return Vec::new();
+    };
+    let mut v = vec![t.cell, t.x0, t.z0, t.nx as f32, t.nz as f32];
+    v.extend(t.heights.iter().map(|&q| q as f32 * (1.0 / sim::terrain::HEIGHT_Q)));
+    v
+}
+
+/// Map `id`'s launchers, 9 each: the pad's min x y z, max x y z, then the
+/// velocity it throws at.
+#[wasm_bindgen]
+pub fn map_launchers(id: u8) -> Vec<f32> {
+    let m = map_or_first(id);
+    let mut v = Vec::new();
+    for l in &m.launchers {
+        let (a, b) = (l.area.min, l.area.max);
+        v.extend_from_slice(&[a.x, a.y, a.z, b.x, b.y, b.z, l.vel.x, l.vel.y, l.vel.z]);
+    }
+    v
+}
+
 /// Map `id`'s bounds (min x, min z, max x, max z), then its roam points
 /// (x, z each).
 #[wasm_bindgen]

@@ -4,8 +4,7 @@
 // listing them by id. The JSON is what a person edits; the Rust is checked in
 // so the sim needs no parser, and `--check` (run by CI) fails when it isn't
 // what the JSON compiles to. After Fireplace's tools/map-compile.mjs (CC0):
-// its boxes, prefabs and quarter turns, on our flat floor (no heightfield,
-// nothing that moves).
+// its boxes, prefabs and quarter turns, on a flat floor or a terrain.
 //
 //   node tools/maps/compile.mjs           write the Rust
 //   node tools/maps/compile.mjs --check   fail if it is stale
@@ -25,8 +24,21 @@
 //             mirror: bool }]
 //   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]
 //   roam      [[x, z], ...]: where a bot with nobody in sight walks
+//   terrain   { cell: 0.5|1|2|4, base: m, margin: m, shapes: [...] }: ground
+//             that isn't flat, over the bounds and `margin` past them. A
+//             shape adds to the base, with a cosine falloff:
+//               { hill: [x, z], r, h }         a round rise (h < 0: a dip)
+//               { ridge: [[x, z], [x, z]], w, h }  along a line, w to either side
+//               { plateau: [x0, z0, x1, z1], h, edge }  flat inside, falling over `edge`
+//             each with mirror: bool. The heights are written as integers
+//             (1/128 m), so the sim never reads a float made here.
+//   launchers [{ at: [x, z, y?], to: [x, z, y?], time: s, size: [w, d],
+//             mirror: bool }]: a pad that throws a fighter from `at` to land
+//             on `to` after `time` seconds
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
-// LOOKS. Metres, y up, the floor at y = 0.
+// LOOKS. Metres, y up, the floor at y = 0. On a terrain a box stands at the
+// y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
+// roam point at height 0 is put on the ground by the sim.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -37,13 +49,18 @@ const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
 /** How a box is drawn, as web/src/world.ts numbers them. */
-export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark'];
+export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 8;
 const MAX_BOXES = 256;
+const MAX_LAUNCHERS = 8;
+/** sim::consts::GRAVITY, for a launcher's throw. */
+const GRAVITY = 20;
+/** sim::terrain::HEIGHT_Q. */
+const HEIGHT_Q = 128;
 
 /** A box turned by `turn` degrees about y (+x toward +z at 90), then moved to `at`. */
 export function place(box, at, turn) {
@@ -84,7 +101,7 @@ export function compile(spec, where = 'map.json') {
     for (const b of list) {
       if (b.length < 6 || b.slice(0, 6).some((v) => typeof v !== 'number')) fail(`${name}: a box is [x0, y0, z0, x1, y1, z1, look]`);
       if (!(b[0] < b[3] && b[1] < b[4] && b[2] < b[5])) fail(`${name}: box ${JSON.stringify(b)} is empty or inside out`);
-      if (b[1] < 0) fail(`${name}: box ${JSON.stringify(b)} goes under the floor`);
+      if (b[1] < 0 && !spec.terrain) fail(`${name}: box ${JSON.stringify(b)} goes under the floor`);
       const look = (s.tint && s.tint[b[6]]) || b[6] || 'block';
       if (!LOOKS.includes(look)) fail(`${name}: no look "${look}" (${LOOKS.join(', ')})`);
       placed.push({ box: place(b, at, turn), look });
@@ -143,7 +160,72 @@ export function compile(spec, where = 'map.json') {
     inside(r[0], r[1], `roam ${k}`);
     return r;
   });
-  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam };
+  const terrain = spec.terrain ? heightfield(spec.terrain, [bx0, bx1, bz0, bz1], mirrors, fail) : null;
+  const launchers = [];
+  for (const [k, l] of (spec.launchers || []).entries()) {
+    const what = `launcher ${k}`;
+    const a = point(l.at, what), b = point(l.to, `${what}'s landing`);
+    const T = l.time;
+    if (!(T > 0)) fail(`${what}: "time" in seconds, over 0`);
+    const [w, d] = l.size || [2, 2];
+    const one = (a, b) => ({
+      area: [a[0] - w / 2, a[1], a[2] - d / 2, a[0] + w / 2, a[1] + 0.5, a[2] + d / 2],
+      // Lands on b after T: x and z at speed, y against gravity.
+      vel: [(b[0] - a[0]) / T, (b[1] - a[1] + 0.5 * GRAVITY * T * T) / T, (b[2] - a[2]) / T],
+    });
+    launchers.push(one(a, b));
+    if (l.mirror) for (const [sx, sz] of mirrors) launchers.push(one([a[0] * sx, a[1], a[2] * sz], [b[0] * sx, b[1], b[2] * sz]));
+  }
+  if (launchers.length > MAX_LAUNCHERS) fail(`${launchers.length} launchers, at most ${MAX_LAUNCHERS}`);
+  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers };
+}
+
+/** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
+function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, fail) {
+  const cell = t.cell ?? 2;
+  if (![0.5, 1, 2, 4].includes(cell)) fail('terrain: cell is 0.5, 1, 2 or 4');
+  const margin = t.margin ?? 4;
+  const x0 = Math.floor((bx0 - margin) / cell) * cell, z0 = Math.floor((bz0 - margin) / cell) * cell;
+  const nx = Math.ceil((bx1 + margin - x0) / cell) + 1, nz = Math.ceil((bz1 + margin - z0) / cell) + 1;
+  if (nx * nz > 65536) fail(`terrain: ${nx} × ${nz} vertices, too many`);
+  const fall = (d, r) => (d >= r ? 0 : 0.5 + 0.5 * Math.cos((Math.PI * d) / r));
+  const shapes = [];
+  for (const [k, s] of (t.shapes || []).entries()) {
+    const imgs = [[1, 1]].concat(s.mirror ? mirrors.map(([sx, sz]) => [sx, sz]) : []);
+    for (const [sx, sz] of imgs) {
+      if (s.hill) {
+        const [cx, cz] = s.hill, r = s.r, h = s.h;
+        if (!(r > 0) || typeof h !== 'number') fail(`terrain shape ${k}: a hill needs r > 0 and h`);
+        shapes.push((x, z) => h * fall(Math.hypot(x - cx * sx, z - cz * sz), r));
+      } else if (s.ridge) {
+        const [[ax, az], [qx, qz]] = s.ridge, w = s.w, h = s.h;
+        if (!(w > 0) || typeof h !== 'number') fail(`terrain shape ${k}: a ridge needs w > 0 and h`);
+        const [x1, z1, x2, z2] = [ax * sx, az * sz, qx * sx, qz * sz];
+        shapes.push((x, z) => {
+          const vx = x2 - x1, vz = z2 - z1, L = vx * vx + vz * vz;
+          const u = L ? Math.max(0, Math.min(1, ((x - x1) * vx + (z - z1) * vz) / L)) : 0;
+          return h * fall(Math.hypot(x - (x1 + u * vx), z - (z1 + u * vz)), w);
+        });
+      } else if (s.plateau) {
+        const [p0, q0, p1, q1] = s.plateau, h = s.h, e = s.edge ?? 4;
+        if (typeof h !== 'number' || !(e > 0)) fail(`terrain shape ${k}: a plateau needs h and edge > 0`);
+        const [xa, xb] = [p0 * sx, p1 * sx].sort((a, b) => a - b), [za, zb] = [q0 * sz, q1 * sz].sort((a, b) => a - b);
+        shapes.push((x, z) => h * fall(Math.hypot(Math.max(xa - x, 0, x - xb), Math.max(za - z, 0, z - zb)), e));
+      } else fail(`terrain shape ${k}: a hill, a ridge or a plateau`);
+    }
+  }
+  const base = t.base ?? 0;
+  const heights = [];
+  for (let j = 0; j < nz; j++) {
+    for (let i = 0; i < nx; i++) {
+      const x = x0 + i * cell, z = z0 + j * cell;
+      const h = shapes.reduce((a, f) => a + f(x, z), base);
+      const q = Math.round(h * HEIGHT_Q);
+      if (q < -32768 || q > 32767) fail(`terrain: ${h} m at ${x}, ${z} is out of range`);
+      heights.push(q);
+    }
+  }
+  return { cell, x0, z0, nx, nz, heights };
 }
 
 // ---------------------------------------------------------------- Rust out
@@ -170,6 +252,8 @@ export function rust(m, src) {
   L.push('');
   L.push('use super::Def;');
   L.push('#[allow(unused_imports)]');
+  L.push('use crate::terrain::TerrainDef;');
+  L.push('#[allow(unused_imports)]');
   L.push('use crate::arms::*;');
   L.push('');
   L.push('#[rustfmt::skip]');
@@ -189,6 +273,24 @@ export function rust(m, src) {
   for (const p of m.pads) L.push(`        ([${p.pos.map(lit).join(', ')}], ${p.arm}, ${p.respawn}),`);
   L.push('    ],');
   L.push(`    roam: &[${m.roam.map((r) => `[${r.map(lit).join(', ')}]`).join(', ')}],`);
+  if (m.terrain) {
+    const t = m.terrain;
+    L.push('    terrain: Some(TerrainDef {');
+    L.push(`        cell: ${lit(t.cell)},`);
+    L.push(`        x0: ${lit(t.x0)},`);
+    L.push(`        z0: ${lit(t.z0)},`);
+    L.push(`        nx: ${t.nx},`);
+    L.push(`        nz: ${t.nz},`);
+    L.push('        heights: &[');
+    for (let j = 0; j < t.nz; j++) L.push(`            ${t.heights.slice(j * t.nx, (j + 1) * t.nx).join(', ')},`);
+    L.push('        ],');
+    L.push('    }),');
+  } else {
+    L.push('    terrain: None,');
+  }
+  L.push('    launchers: &[');
+  for (const l of m.launchers) L.push(`        ([${l.area.map(lit).join(', ')}], [${l.vel.map(lit).join(', ')}]),`);
+  L.push('    ],');
   L.push('};');
   return L.join('\n') + '\n';
 }
@@ -234,7 +336,10 @@ function main() {
       console.log(`wrote ${path.slice(ROOT.length + 1)}`);
     }
   }
-  for (const m of list) console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points`);
+  for (const m of list) {
+    const t = m.terrain ? `, terrain ${m.terrain.nx} × ${m.terrain.nz}` : '';
+    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers${t}`);
+  }
   if (stale) process.exit(1);
 }
 

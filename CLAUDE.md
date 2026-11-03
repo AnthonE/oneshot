@@ -10,7 +10,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 
 | crate | what |
 |---|---|
-| `crates/sim` | the rules: movement, guns, shields, pads, Slayer, rewind. Native on the server, wasm in the browser |
+| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, Slayer, rewind; the map's box grid (`grid.rs`) and terrain (`terrain.rs`). Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
@@ -26,7 +26,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
 4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
    (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
-   `node ci/e2e.mjs 40 6 1` for sixteen in Big Team).
+   `node ci/e2e.mjs 60 6 3` for sixteen in Big Team on Dry Fork's terrain).
 5. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.

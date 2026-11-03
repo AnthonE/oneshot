@@ -106,12 +106,14 @@ impl Gate {
             if sent.contains(&q) {
                 // 1. Never sent while far from visible: a check looser
                 // than fog's. Seen from any look-ahead up to 300 ms
-                // (fog's own among them: a point further along a path is
+                // (fog's own among them, stretched for near and far pairs'
+                // full looks: a point further along a path is
                 // not a superset of a nearer one) leaning up to 0.7 m, in
                 // the last 16 ticks.
                 let leads = [
                     fog_lead,
-                    room::fog::full_lead(fog_lead),
+                    room::fog::full_lead(fog_lead, 2),
+                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
                     0.0,
                     0.05,
                     0.1,

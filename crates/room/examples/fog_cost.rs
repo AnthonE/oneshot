@@ -21,9 +21,18 @@ const MEAN_US: f64 = 600.0;
 const P999_US: f64 = 3000.0;
 
 fn main() {
-    let check = std::env::args().any(|a| a == "--check");
+    let args: Vec<String> = std::env::args().collect();
+    let check = args.iter().any(|a| a == "--check");
+    // --map <id>: one map only (for a profiler); --ticks <n>.
+    let opt = |k: &str| {
+        args.iter()
+            .position(|a| a == k)
+            .and_then(|i| args.get(i + 1)?.parse::<u32>().ok())
+    };
+    let only = opt("--map");
+    let ticks = opt("--ticks").unwrap_or(20_000);
     let mut over = false;
-    for d in sim::maps::ALL {
+    for d in sim::maps::ALL.iter().filter(|d| only.is_none_or(|m| m == d.id as u32)) {
         let mut w = World::new(d.build(), Rules::big_team(), 7, (1, 2));
         let mut bots = [Bot::new(7, 0, 0.5); MAX_FIGHTERS];
         for (s, b) in bots.iter_mut().enumerate() {
@@ -34,7 +43,7 @@ fn main() {
         let lead = lead_s(60.0, 4);
         let mut times: Vec<f64> = Vec::new();
         let mut inputs = [Input::default(); MAX_FIGHTERS];
-        for t in 0..20_000u32 {
+        for t in 0..ticks {
             for s in 0..MAX_FIGHTERS {
                 inputs[s] = bots[s].think(&w, s);
             }

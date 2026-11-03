@@ -107,6 +107,60 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
     )
 }
 
+/// Whether the ground hides every line from any of `eyes` to any of
+/// `points`, without casting them: along a line above all of them (from the
+/// eyes' middle at their highest to the points' middle at their highest),
+/// somewhere the ground stands higher than that line by more than it can
+/// rise across the bundle's width. Then every line passes under the ground
+/// there. Never true when one of them is clear; sometimes false when all
+/// are hidden (the rays then decide).
+pub fn ground_hides(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
+    let Some(g) = &map.terrain else {
+        return false;
+    };
+    let mid = |ps: &[V3]| {
+        let n = ps.len() as f32;
+        let s = ps.iter().fold(V3::ZERO, |a, &p| a + p);
+        V3::new(s.x / n, ps.iter().fold(f32::NEG_INFINITY, |a, p| a.max(p.y)), s.z / n)
+    };
+    let (a, b) = (mid(eyes), mid(points));
+    let wide = |ps: &[V3], c: V3| ps.iter().fold(0.0f32, |w, p| w.max((*p - c).flat().len()));
+    // How much higher the ground may be under any line than under the
+    // reference line, plus a margin for rounding.
+    let rise = wide(eyes, a).max(wide(points, b)) * g.steepest() + 0.05;
+    let n = ((b - a).flat().len() * 0.25) as usize;
+    (1..n.clamp(2, 64)).any(|k| {
+        let s = k as f32 / n.clamp(2, 64) as f32;
+        let p = a + (b - a) * s;
+        g.height(p.x, p.z).is_some_and(|h| h - rise > p.y)
+    })
+}
+
+/// [`sees`], as fog runs it: each eye against the target's points now and
+/// its points ahead, a group at a time; a group the ground plainly hides
+/// ([`ground_hides`]) casts no rays. Past [`FAR_M`] the leans and the
+/// chest's edges are left out (at 40 m they turn a line by half a degree):
+/// 18 rays, not 70. A pair found hidden is given the plain test as well, so
+/// no shortcut can hide what is in plain sight.
+fn sees_full(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, far: bool) -> bool {
+    let side = across(viewer.body.pos, target.body.pos);
+    let all_eyes = eyes(viewer, side, lead, PEEK_M);
+    let all = fighter_points(target, side, lead);
+    // Now, ahead, jumping; head, chest and feet.
+    let (e, p): (&[V3], [&[V3]; 2]) = if far {
+        (&[all_eyes[0], all_eyes[1], all_eyes[6]], [&all[0..3], &all[5..8]])
+    } else {
+        (&all_eyes, [&all[0..5], &all[5..10]])
+    };
+    let seen = e.iter().any(|eye| {
+        p.iter().any(|group| {
+            let one = core::slice::from_ref(eye);
+            !ground_hides(map, one, group) && sees_points(map, one, group)
+        })
+    });
+    seen || plainly_sees(map, viewer, target)
+}
+
 /// The plain test: is the target's chest or head in clear line from the
 /// viewer's eye right now (a head over waist-high cover is in plain sight).
 /// Fog must never hide what passes this.
@@ -123,19 +177,36 @@ pub struct Fog {
     until: [u32; MAX_FIGHTERS],
 }
 
-/// The look ahead of a full look: `lead`, and the snapshot until the
-/// pair's next full look (fog looks at each pair in full every other
-/// snapshot).
-pub fn full_lead(lead: f32) -> f32 {
-    lead + crate::SNAP_EVERY as f32 / TICK_HZ as f32
+/// Past this, a pair's full look comes every [`FAR_EVERY`] snapshots, not
+/// every other: far away, a fighter crosses less of the screen in a
+/// snapshot, and on a big map most pairs are far.
+pub const FAR_M: f32 = 40.0;
+pub const FAR_EVERY: usize = 4;
+
+/// How many snapshots apart a pair's full looks are: 2, or [`FAR_EVERY`]
+/// past [`FAR_M`].
+pub fn every(viewer: &Fighter, target: &Fighter) -> usize {
+    let d = (target.body.pos - viewer.body.pos).flat();
+    if d.dot(d) > FAR_M * FAR_M {
+        FAR_EVERY
+    } else {
+        2
+    }
+}
+
+/// The look ahead of a full look `every` snapshots apart: `lead`, and the
+/// snapshots until the pair's next full look.
+pub fn full_lead(lead: f32, every: usize) -> f32 {
+    lead + (every - 1) as f32 * crate::SNAP_EVERY as f32 / TICK_HZ as f32
 }
 
 impl Fog {
     /// Looks again from `viewer` at `tick`, a snapshot's tick. Each enemy
     /// gets the full look (every eye, every point, [`full_lead`]) every
-    /// other snapshot, half the room one snapshot and half the next; on
-    /// the snapshot between, the plain test, so nobody in plain sight is
-    /// ever held back. At 8v8 that halves fog's cost (docs/DESIGN.md §8).
+    /// other snapshot ([`every`]: every fourth past [`FAR_M`]), the room
+    /// taking turns; on the snapshots between, the plain test, so nobody in
+    /// plain sight is ever held back. The hold ([`HOLD_TICKS`]) outlasts
+    /// the gap, so a pair in sight stays sent (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
         let me = &w.fighters[viewer];
         let turn = (tick / crate::SNAP_EVERY) as usize + viewer;
@@ -145,8 +216,9 @@ impl Fog {
             } else if w.rules.teams && f.team == me.team {
                 self.until[q] = u32::MAX;
             } else {
-                let seen = if (turn + q).is_multiple_of(2) {
-                    sees(&w.map, me, f, full_lead(lead), PEEK_M)
+                let k = every(me, f);
+                let seen = if (turn + q).is_multiple_of(k) {
+                    sees_full(&w.map, me, f, full_lead(lead, k), k == FAR_EVERY)
                 } else {
                     plainly_sees(&w.map, me, f)
                 };

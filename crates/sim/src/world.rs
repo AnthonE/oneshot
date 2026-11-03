@@ -481,7 +481,16 @@ impl World {
                     let floor = self.map.floor(n.x, n.z, 0.0, p.pos.y + 0.001);
                     if n.y < floor {
                         n.y = floor;
-                        p.vel = V3::new(p.vel.x * GREN_SLIDE, -p.vel.y * GREN_BOUNCE, p.vel.z * GREN_SLIDE);
+                        if self.map.terrain.is_some() && floor == self.map.ground(n.x, n.z) {
+                            // Off a slope: the part into the ground bounces
+                            // back, the part along it slides on.
+                            let g = self.map.ground_normal(n.x, n.z);
+                            let into = p.vel.dot(g);
+                            let along = p.vel - g * into;
+                            p.vel = along * GREN_SLIDE - g * (into * GREN_BOUNCE);
+                        } else {
+                            p.vel = V3::new(p.vel.x * GREN_SLIDE, -p.vel.y * GREN_BOUNCE, p.vel.z * GREN_SLIDE);
+                        }
                     }
                     for b in &self.map.boxes {
                         if !b.contains(n) {

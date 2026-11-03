@@ -25,6 +25,17 @@ fn the_bot_match_matches_its_golden() {
     assert_eq!(h, GOLDEN, "bot_match(1, 20000) = {h:#018x}");
 }
 
+/// `bot_match_on(3, 2, 1, 20_000)`: sixteen bots in Big Team on Dry Fork,
+/// the terrain's golden (slopes, launchers, rays over the ground). Moves
+/// with a terrain or Big Team rule, like [`GOLDEN`] with the rest.
+const GOLDEN_DRY_FORK: u64 = 0x3360_2d77_9d1d_732c;
+
+#[test]
+fn big_team_on_dry_fork_matches_its_golden() {
+    let h = sim::bot::bot_match_on(3, 2, 1, 20_000);
+    assert_eq!(h, GOLDEN_DRY_FORK, "bot_match_on(3, 2, 1, 20000) = {h:#018x}");
+}
+
 /// The gate only means something if the bots actually fight.
 #[test]
 fn bots_fight() {

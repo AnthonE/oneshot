@@ -21,6 +21,7 @@ pub mod movement;
 pub mod pool;
 pub mod rewind;
 pub mod rng;
+pub mod terrain;
 pub mod thing;
 pub mod world;
 
