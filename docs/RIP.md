@@ -270,6 +270,8 @@ depend on Gates' crates. The same Bevy version keeps the ports close.
 | `ground_splat.rs` + `ground_splat.wgsl` | `client` | Four texture sets blended on the ground, packed into two arrays for WebGL2's limit; cut blight and road bands |
 | `clutter.rs`, `foliage.rs` + `foliage*.wgsl` | `client` | Grass and bush cards with wind and a distance fade, scattered from the map seed; cosmetic, never collide |
 | `mipmap.rs`, `textures.rs`, `prewarm.rs`, `pipelines.rs` | `client` | CPU mip chains for JPG/PNG, texture loading, shader prewarm |
+| `fx/{atlas,pool,table}.rs`, `fx/mod.rs` | `client/src/look/fx/` | The generated sprite sheet, the two pooled particle meshes (glow additive, soft lit), the weapon × matter table, pooled flash lights. Its droplet and leaf sprites become an arc and a crystal shard; the table takes our guns and matters, plus a shield's arcs |
+| `decal.rs` (its atlas and mesh pool), `shake.rs`, `hurt_flash.rs`, `fx/gun.rs` (own shot drawn now) | `client/src/look/{fx/marks,shake}.rs`, `hud.rs`, `fx/shots.rs` | Holes and scorches in one mesh with a relief normal map; trauma shake and kicks; the red rim; our own tracer the frame we fire. Not the conforming to meshes (our surfaces are flat) |
 
 The types Gates' modules read become ours: `Eye` → `OwnView` (from
 `NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the

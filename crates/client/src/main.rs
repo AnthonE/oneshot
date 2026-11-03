@@ -46,6 +46,7 @@ fn main() {
         autoplay: args.iter().any(|a| a == "--autoplay"),
         lite: args.iter().any(|a| a == "--lite"),
         fxdemo: args.iter().any(|a| a == "--fxdemo"),
+        fxstage: None,
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
 }

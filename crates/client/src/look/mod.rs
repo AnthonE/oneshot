@@ -8,6 +8,7 @@ pub mod grass;
 pub mod ground;
 pub mod guns;
 pub mod rig;
+pub mod shake;
 pub mod sky;
 pub mod textures;
 pub mod viewmodel;

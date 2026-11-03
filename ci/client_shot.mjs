@@ -2,7 +2,8 @@
 // headless Chromium (WebGL2 on SwiftShader) against the real server, a
 // screenshot of what it draws: the browser tier's look (ci/client.sh builds
 // crates/client/dist first). Defaults: Big Team on Dry Fork, 25 s. `fxdemo=1`
-// as the last argument stages the effects in front of the camera.
+// as the last argument stages the effects in front of the camera,
+// `fxstage=N` only stage N (crates/client/src/look/fx/demo.rs).
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

@@ -4,7 +4,10 @@
 use bevy::prelude::*;
 use proto::ProjState;
 
-use super::{Fx, Particle, Tone};
+use super::atlas::GLOW;
+use super::pool::Particle;
+use super::table::Layer;
+use super::Fx;
 use crate::look::guns::Models;
 
 /// A rocket's trail: a puff every this many metres.
@@ -78,39 +81,42 @@ pub fn projectiles(
         let at = tr.translation;
         if p.kind == 0 {
             let back = tr.rotation * Vec3::NEG_Y;
-            fx.emit(
-                commands,
-                at + back * 0.45,
-                Particle::new(Tone::Fire, 0.05).size(0.35, 0.12),
-            );
+            // The exhaust: a white-hot core in an orange glow.
+            fx.glow.spawn(Particle {
+                left: 0.05,
+                life: 0.05,
+                pos: at + back * 0.45,
+                size0: 0.35,
+                size1: 0.15,
+                c0: [14.0, 6.0, 1.6, 1.0],
+                c1: [3.0, 0.8, 0.1, 0.0],
+                cell: GLOW,
+                ..Particle::default()
+            });
             let gone = at.distance(f.last);
             if gone >= PUFF_EVERY_M {
                 // A puff for each step it went, along the way.
                 let n = ((gone / PUFF_EVERY_M) as usize).min(8);
                 for k in 0..n {
                     let q = f.last.lerp(at, (k + 1) as f32 / n as f32) + back * 0.5;
-                    let drift = fx.unit() * 0.25 + Vec3::Y * 0.2;
-                    fx.emit(
-                        commands,
-                        q,
-                        Particle::new(Tone::Smoke, fx.range(1.1, 1.6))
-                            .vel(drift)
-                            .drag(0.5)
-                            .size(0.22, 1.1)
-                            .alpha(0.5)
-                            .fade_in(0.08),
-                    );
+                    fx.emit_tint(Layer::GunSmoke, 1, q, Vec3::Y, Color::WHITE, 4.0);
                 }
                 f.last = at;
             }
         } else {
             let lit = (t * BLINK_HZ).fract() < 0.5;
             if lit && !f.lit {
-                fx.emit(
-                    commands,
-                    at + Vec3::Y * 0.1,
-                    Particle::new(Tone::TracerRed, 0.1).size(0.18, 0.1),
-                );
+                fx.glow.spawn(Particle {
+                    left: 0.1,
+                    life: 0.1,
+                    pos: at + Vec3::Y * 0.1,
+                    size0: 0.12,
+                    size1: 0.06,
+                    c0: [10.0, 1.5, 0.8, 1.0],
+                    c1: [2.0, 0.2, 0.1, 0.0],
+                    cell: GLOW,
+                    ..Particle::default()
+                });
             }
             f.lit = lit;
         }

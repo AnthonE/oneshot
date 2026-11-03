@@ -246,7 +246,7 @@ pub fn mip_models(
 }
 
 /// Gives a loaded RGBA8 image its whole mip chain.
-fn mip_in_place(img: &mut Image, normal: bool) {
+pub(crate) fn mip_in_place(img: &mut Image, normal: bool) {
     if img.texture_descriptor.mip_level_count > 1 {
         return;
     }

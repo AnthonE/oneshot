@@ -76,6 +76,8 @@ pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
     pub fxdemo: bool,
+    /// `fxstage<N>`: the demo plays only its stage `N` (`demo.rs`).
+    pub fxstage: Option<u32>,
 }
 
 impl Opts {
@@ -85,7 +87,10 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
-            fxdemo: has("fxdemo"),
+            fxdemo: has("fxdemo") || s.contains("fxstage"),
+            fxstage: s
+                .split([',', ' '])
+                .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
         }
     }
 }
@@ -148,9 +153,10 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             draw_vehicles,
             fly,
             view,
-            look::fx::tick,
+            look::fx::draw,
             draw_view,
             hud::draw,
+            hud::hurt_rim,
         )
             .chain(),
     );
@@ -161,7 +167,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
         app.add_systems(Update, lite);
     }
     if opts.fxdemo {
-        app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::tick));
+        app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
     }
     app
 }
@@ -336,10 +342,9 @@ fn draw_fighters(
         _ => core.others(now),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
-    look::fx::bodies::watch(&mut commands, &mut fx, &others, time.delta_secs());
+    look::fx::bodies::watch(&mut fx, &others, time.delta_secs());
     let (f, p) = core.own();
     look::fx::bodies::watch_own(
-        &mut commands,
         &mut fx,
         core.slot,
         Vec3::new(p.x, p.y, p.z),
@@ -399,7 +404,7 @@ fn draw_vehicles(
     }
     for &(slot, p, yaw) in &list {
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
-        look::fx::hulls::roll(&mut commands, &mut fx, slot, p, yaw, health, time.delta_secs());
+        look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
         match drawn.vehicles.get(&slot) {
             Some(&e) => {
@@ -459,8 +464,9 @@ fn draw_vehicles(
 fn view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
-    fx: Res<look::fx::Fx>,
+    mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
+    opts: Res<Opts>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
@@ -488,10 +494,13 @@ fn view(
             fov /= zoom as f32;
         }
     }
-    // A blast's shake: the drawn camera only, never the aim we send.
-    let (turn, shift) = look::fx::blast::nudge(fx.shake, time.elapsed_secs());
-    t.rotation *= turn;
-    t.translation += shift;
+    // The effects demo stands its camera in one place (drawing only).
+    if opts.fxdemo {
+        *t = look::fx::demo::pose(&core.map);
+    }
+    // Shake and kick: the drawn camera only, never the aim we send.
+    let o = fx.shake.step(time.delta_secs());
+    look::shake::apply(&mut t, o);
     if let Projection::Perspective(pp) = &mut *proj {
         pp.fov = fov.to_radians();
     }
@@ -532,7 +541,6 @@ pub(crate) fn happened(
     time: Res<Time>,
     mut fx: ResMut<look::fx::Fx>,
     mut st: ResMut<hud::HudState>,
-    mut commands: Commands,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
@@ -547,7 +555,18 @@ pub(crate) fn happened(
             vehicles: &vehicles,
             me: s.core.slot,
         };
-        look::fx::on_events(&mut commands, &mut fx, &scene, &events);
+        look::fx::on_events(&mut fx, &scene, &events);
+        // Our own gun, drawn the frame it fires, down where we look.
+        let (f, p) = s.core.own();
+        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
+        let eye = Vec3::new(p.x, p.y + h, p.z);
+        let dir = Vec3::new(
+            look.pitch.cos() * look.yaw.cos(),
+            look.pitch.sin(),
+            look.pitch.cos() * look.yaw.sin(),
+        );
+        let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
+        look::fx::shots::own(&mut fx, &scene, f, eye, cam);
     }
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
     heard.0 = events;
@@ -615,7 +634,7 @@ mod web_start {
 
     /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
-    /// `opts`: a comma list of `autoplay`, `lite` and `fxdemo` (see `Opts`).
+    /// `opts`: a comma list of `autoplay`, `lite`, `fxdemo` and `fxstage<N>` (see `Opts`).
     pub async fn play(addr: String, hash: String, name: String, mode: u8, opts: String) -> Result<(), JsValue> {
         let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
         super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts)).run();
