@@ -84,10 +84,10 @@ async fn stand_in(old: bool) -> (String, Seen) {
                 } else if first.starts_with("POST ") {
                     seen.lock().unwrap().push((first, headers, body));
                     (200, r#"{"ok":true}"#.to_string())
-                } else if first.starts_with("GET /api/items/oneshot/of/") {
+                } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
                     // The first wallet owns the ember skin; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
-                        r#"[{"skin":"ember"}]"#
+                        r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"}]"#
                     } else {
                         "[]"
                     };
@@ -133,7 +133,8 @@ async fn nonce(http: std::net::SocketAddr) -> String {
     let mut out = String::new();
     s.read_to_string(&mut out).await.unwrap();
     let at = out.find("\"nonce\":\"").unwrap() + 9;
-    out[at..at + 32].to_string()
+    let len = out[at..].find('"').unwrap();
+    out[at..at + len].to_string()
 }
 
 async fn read_msg(r: &mut wtransport::RecvStream) -> Option<Msg> {

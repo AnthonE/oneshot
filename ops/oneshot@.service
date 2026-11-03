@@ -1,0 +1,95 @@
+# The public oneshot server as two systemd slots, `oneshot@a` and
+# `oneshot@b`, on the game box beside Gates (ops/README.md). One is live and
+# takes new players; a deploy starts the new build in the other, points new
+# players at it, and only then stops the old one, which plays its matches
+# out. So there is always a server taking players.
+#
+#   sudo cp 'ops/oneshot@.service' /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   ci/deploy_server.sh --go          # starts a slot and points players at it
+#   systemctl status 'oneshot@*' ; journalctl -u oneshot@a -f
+#
+# Each slot runs its own copy of the binary from /home/master/oneshot-deploy/
+# <slot>/, which `ci/deploy_server.sh` stages with its `slot.env`
+# (GAME_PORT, HTTP_PORT): a crash-restart of a draining slot comes back as
+# its own build, never the new one halfway through. What they write (replays,
+# the review queue) goes to /home/master/oneshot-data, shared.
+#
+# Shared by both slots, in /home/master/oneshot-data:
+#   - nonce.key: so either slot takes the nonce the other handed a page.
+#   - live: the live slot's host:port, which every server.json names.
+#
+# Signals (crates/server/src/main.rs):
+#   - stop sends SIGTERM: the slot DRAINS. No new players (a hello is
+#     answered "full or restarting", and the page follows `live` to the other
+#     slot), the queue is let go, every running match plays to its end and its
+#     replay and rating report go out, then it exits. `--drain-max` caps the
+#     wait; TimeoutStopSec sits above it so systemd never kills a drain that
+#     is on time.
+#   - reload sends SIGHUP: the certificate is read again and handed to new
+#     handshakes; nobody is disconnected (the certbot hook uses this).
+
+[Unit]
+Description=oneshot server, slot %i — game.elopros.com
+Documentation=https://github.com/AnthonE/oneshot
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=master
+Group=master
+WorkingDirectory=/home/master/oneshot-deploy/%i
+# GAME_PORT: 61250 (a) or 61251 (b), UDP, open in ufw AND the Hetzner cloud
+# firewall. HTTP_PORT: 8450 or 8451, loopback only, behind the box's nginx on
+# 443 (ops/game-elopros-oneshot.nginx.conf). The page is on elopros.com, so a
+# pass names elopros.com as its shard and the page's origin may read
+# server.json and /nonce. The Elo Pros key is the platform's account key
+# (GET https://elopros.com/api/account/pubkey); the server key's public half
+# is entered on the dev desk under id eu-1, one key for both slots.
+EnvironmentFile=/home/master/oneshot-deploy/%i/slot.env
+ExecStart=/home/master/oneshot-deploy/%i/oneshot-server \
+  --bind 0.0.0.0:${GAME_PORT} \
+  --http 127.0.0.1:${HTTP_PORT} \
+  --cert /home/master/oneshot-certs/fullchain.pem \
+  --key /home/master/oneshot-certs/privkey.pem \
+  --public-addr game.elopros.com:${GAME_PORT} \
+  --live-file /home/master/oneshot-data/live \
+  --nonce-key /home/master/oneshot-data/nonce.key \
+  --domain elopros.com \
+  --allow-origin https://elopros.com \
+  --elo-pubkey aFt4QqMGWbw1aPASBd9FEUoCgdeaGKyx+MXlh0oaif8= \
+  --elo-origin https://elopros.com \
+  --elo-key /home/master/oneshot-data/server.pem \
+  --elo-key-id eu-1 \
+  --replays /home/master/oneshot-data/replays \
+  --capacity 256 \
+  --drain-max 900
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=2
+
+# SIGTERM is the drain. A ranked match is at most 12 minutes (Doubles) plus
+# its end screen; 900 s covers it, and 60 s more lets the reports go out.
+# Players never wait on it: the other slot is live by then.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=1000
+
+LimitNOFILE=65536
+
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/master/oneshot-data
+PrivateTmp=true
+NoNewPrivileges=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=oneshot-%i
+
+[Install]
+WantedBy=multi-user.target

@@ -36,8 +36,10 @@ pub struct HudState {
     pub deaths: u32,
     /// Before the welcome: the queue's wait, or why we were refused.
     pub status: String,
-    /// The server refused us (shown, and given to the page's gate).
+    /// The server refused us (shown, and given to the page's gate), and
+    /// its reason (`proto::REFUSE_*`: the page follows a restart on FULL).
     pub error: Option<String>,
+    pub refused: Option<u8>,
     /// A cup: where we stand, as the server last said.
     cup: String,
     /// The server said goodbye: the match (or the cup) is over.
@@ -63,6 +65,7 @@ pub fn refusal(reason: u8) -> &'static str {
         proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
         proto::REFUSE_BUSY => "that wallet is already queued or playing",
         proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
+        proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
         _ => "the server is full",
     }
 }
@@ -291,6 +294,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 st.status = format!("{what}... {}", mmss(*waiting_s as f32));
             }
             Msg::Refuse { reason } => {
+                st.refused = Some(*reason);
                 st.status = refusal(*reason).to_string();
                 st.error = Some(st.status.clone());
             }

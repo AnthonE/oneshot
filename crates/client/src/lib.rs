@@ -610,6 +610,7 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
         js_sys::Array::from_iter(stats.iter().map(|&v| JsValue::from(v))).into(),
     );
     set("error", st.error.clone().map_or(JsValue::NULL, JsValue::from));
+    set("refused", st.refused.map_or(JsValue::NULL, JsValue::from));
     set("bye", st.bye.into());
     set("verified", s.core.verified.map_or(JsValue::NULL, JsValue::from));
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);

@@ -23,7 +23,7 @@ pub mod queue;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -80,6 +80,8 @@ pub enum Job {
         path: PathBuf,
         bytes: Vec<u8>,
     },
+    /// Answered once every job before it is done (reports included).
+    Flush(tokio::sync::oneshot::Sender<()>),
 }
 
 /// Room for this many messages to one session before snapshots drop.
@@ -137,6 +139,23 @@ pub struct Config {
     pub elo_key: Option<(PathBuf, String)>,
     /// Where replays are written.
     pub replays: Option<PathBuf>,
+    /// Where players reach the game (`host:port`), told to the page in
+    /// `server.json`. None: the host the page was asked on, at the bound
+    /// port.
+    pub public_addr: Option<String>,
+    /// Origins whose pages may read `server.json` and `/nonce` (CORS): the
+    /// page on elopros.com asking the game box.
+    pub allow_origins: Vec<String>,
+    /// Players the server takes before a hello is answered "full"; QUIC
+    /// Retry past twice this, refusal past four times (docs/DESIGN.md §14).
+    pub capacity: usize,
+    /// The key nonces are signed with, shared by the two slots so either
+    /// takes the other's (`auth::Nonces`). None: a key of this process's own.
+    pub nonce_key: Option<[u8; 32]>,
+    /// A file naming the live slot's `host:port`: what `server.json` tells
+    /// the page, from whichever slot answers. Missing or unreadable: our
+    /// own address.
+    pub live_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -171,6 +190,11 @@ impl Default for Config {
             elo_origin: "https://elopros.com".into(),
             elo_key: None,
             replays: None,
+            public_addr: None,
+            allow_origins: Vec::new(),
+            capacity: 256,
+            nonce_key: None,
+            live_file: None,
         }
     }
 }
@@ -183,6 +207,16 @@ pub struct Ctx {
     pub nonces: auth::Nonces,
     pub elo: elo::Elo,
     pub sessions: AtomicU64,
+    /// Connections held, and each address's share.
+    pub gate: Arc<net::Gate>,
+    /// On its way down: no new players, matches play out.
+    pub draining: AtomicBool,
+    /// Rooms still up (the sim writes it each tick).
+    pub rooms: AtomicUsize,
+    /// What `server.json` says.
+    pub public_addr: Option<String>,
+    pub live_file: Option<PathBuf>,
+    pub allow_origins: Vec<String>,
 }
 
 pub struct Handle {
@@ -190,14 +224,54 @@ pub struct Handle {
     pub http: Option<SocketAddr>,
     /// SHA-256 of the certificate, for `serverCertificateHashes`.
     pub cert_hash: [u8; 32],
+    /// The UDP buffers the kernel granted (receive, send).
+    pub udp_buffers: (usize, usize),
     pub stop: Arc<AtomicBool>,
     pub ctx: Arc<Ctx>,
+    endpoint: Arc<wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>>,
+    jobs: tmpsc::UnboundedSender<Job>,
+    cfg: Config,
+}
+
+impl Handle {
+    /// Goes down without cutting a match short (docs/DESIGN.md §14): no new
+    /// players (a hello is answered "full", the queue is let go), every room
+    /// plays to its end and its replay and report go out, then the sim
+    /// stops. A room still up after `max` is cut. Returns once the files
+    /// are written and the reports sent, or given up on.
+    pub async fn drain(&self, max: Duration) {
+        self.ctx.draining.store(true, Ordering::Relaxed);
+        let until = Instant::now() + max;
+        // A tick for the sim to see it and count.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        while self.ctx.rooms.load(Ordering::Relaxed) > 0 && Instant::now() < until {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let cut = self.ctx.rooms.load(Ordering::Relaxed);
+        if cut > 0 {
+            eprintln!("oneshot: drain: {cut} room(s) still up after {max:?}, cut");
+        }
+        self.stop.store(true, Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if self.jobs.send(Job::Flush(tx)).is_ok() {
+            let _ = tokio::time::timeout(Duration::from_secs(60), rx).await;
+        }
+    }
+
+    /// Reads the certificate's PEM files again (after an ACME renewal): new
+    /// handshakes present the new one, live sessions keep theirs. Returns
+    /// its hash.
+    pub async fn reload(&self) -> Result<[u8; 32], String> {
+        net::reload(&self.endpoint, &self.cfg).await
+    }
 }
 
 /// Starts the server on the current tokio runtime. Returns once it is
 /// listening.
 pub async fn run(cfg: Config) -> Result<Handle, String> {
-    let (endpoint, cert_hash) = net::endpoint(&cfg).await?;
+    let bound = net::endpoint(&cfg).await?;
+    let cert_hash = bound.cert_hash;
+    let endpoint = Arc::new(bound.endpoint);
     let addr = endpoint.local_addr().map_err(|e| e.to_string())?;
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
@@ -214,50 +288,80 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         slug: cfg.slug.clone(),
         domains: cfg.domains.clone(),
         elo_pubkey: cfg.elo_pubkey,
-        nonces: auth::Nonces::default(),
+        nonces: cfg
+            .nonce_key
+            .map_or_else(auth::Nonces::default, |k| auth::Nonces::with_key(&k)),
         elo: elo::Elo::new(&cfg.elo_origin, &cfg.slug, key),
         sessions: AtomicU64::new(1),
+        gate: Arc::new(net::Gate::new(cfg.capacity)),
+        draining: AtomicBool::new(false),
+        rooms: AtomicUsize::new(0),
+        public_addr: cfg.public_addr.clone(),
+        live_file: cfg.live_file.clone(),
+        allow_origins: cfg.allow_origins.clone(),
     });
 
     let sim = Sim {
         cfg: cfg.clone(),
         rx: from_net,
-        jobs: jobs_tx,
+        jobs: jobs_tx.clone(),
         stop: stop.clone(),
+        ctx: ctx.clone(),
     };
     std::thread::Builder::new()
         .name("sim".into())
         .spawn(move || sim.run())
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
-    tokio::spawn(net::accept_loop(endpoint, to_sim, ctx.clone()));
+    tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
+    // A certificate from a CA is checked by the browser against its own
+    // roots; only the self-signed one is pinned (and Chrome takes a pin
+    // only on a certificate of 14 days or less).
+    let pin = cfg.cert.is_none().then_some(cert_hash);
     let http = match cfg.http {
-        Some(at) => Some(http::serve(at, cfg.web_dir.clone(), addr, cert_hash, ctx.clone()).await?),
+        Some(at) => Some(http::serve(at, cfg.web_dir.clone(), addr, pin, ctx.clone()).await?),
         None => None,
     };
     Ok(Handle {
         addr,
         http,
         cert_hash,
+        udp_buffers: (bound.udp_recv, bound.udp_send),
         stop,
         ctx,
+        endpoint,
+        jobs: jobs_tx,
+        cfg,
     })
 }
 
 async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
+    let mut reports = tokio::task::JoinSet::new();
     while let Some(j) = rx.recv().await {
+        while reports.try_join_next().is_some() {}
         match j {
+            Job::Flush(done) => {
+                while reports.join_next().await.is_some() {}
+                let _ = done.send(());
+            }
             Job::Write { path, bytes } => {
                 if let Some(dir) = path.parent() {
                     let _ = tokio::fs::create_dir_all(dir).await;
                 }
-                if let Err(e) = tokio::fs::write(&path, bytes).await {
+                // Whole or not at all: a reader (the review tool, a backup)
+                // never sees half a file, nor does a crash leave one.
+                let tmp = path.with_extension("part");
+                let wrote = async {
+                    tokio::fs::write(&tmp, bytes).await?;
+                    tokio::fs::rename(&tmp, &path).await
+                };
+                if let Err(e) = wrote.await {
                     eprintln!("oneshot: {}: {e}", path.display());
                 }
             }
             Job::Report(r) => {
                 let ctx = ctx.clone();
-                tokio::spawn(async move {
+                reports.spawn(async move {
                     match ctx.elo.report(&r).await {
                         Ok(()) => eprintln!(
                             "oneshot: reported {} ({}) replay sha256 {} salt commit {}",
@@ -314,6 +418,7 @@ struct Sim {
     rx: mpsc::Receiver<ToSim>,
     jobs: tmpsc::UnboundedSender<Job>,
     stop: Arc<AtomicBool>,
+    ctx: Arc<Ctx>,
 }
 
 fn send_msg(tx: &tmpsc::Sender<Out>, m: &Msg) {
@@ -507,6 +612,23 @@ impl Sim {
                     }
                 }
             }
+
+            // Going down: those still waiting are let go (no match will
+            // form), the rooms play out.
+            if self.ctx.draining.load(Ordering::Relaxed) {
+                for e in q.entries.drain(..).chain(cup_wait.drain(..)) {
+                    if let Some(s) = sessions.remove(&e.session) {
+                        send_msg(
+                            &s.tx,
+                            &Msg::Refuse {
+                                reason: proto::REFUSE_FULL,
+                            },
+                        );
+                        let _ = s.tx.try_send(Out::Close);
+                    }
+                }
+            }
+            self.ctx.rooms.store(rooms.iter().flatten().count(), Ordering::Relaxed);
 
             // Once a second: form matches, tell the waiting how long.
             if now.duration_since(last_second) >= Duration::from_secs(1) {

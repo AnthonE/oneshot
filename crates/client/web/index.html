@@ -72,31 +72,66 @@
         set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private window */ } },
       };
       await init();
-      const info = await (await fetch('server.json')).json();
+      // Where the game's own endpoints are: beside the page in dev, the game
+      // box when the page is published to elopros.com (ci/publish_web.sh
+      // writes origin.json).
+      let base = '';
+      try {
+        const o = await fetch('origin.json');
+        if (o.ok) base = (await o.json()).server ?? '';
+      } catch { /* none: beside the page */ }
+      const info = await (await fetch(`${base}server.json`)).json();
+      info.base = base;
       $('name').value = params.get('name') || store.get('oneshot.name') || '';
       skin_names().forEach((n, i) => $('skin').add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
       $('skin').value = store.get('oneshot.skin') || '0';
       const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
 
+      // A join carried over a reload: the server we asked was on its way
+      // down and the live one is another (the deploy's other slot,
+      // ops/README.md). Read once, then gone.
+      let carried = null;
+      try {
+        carried = JSON.parse(sessionStorage.getItem('oneshot.rejoin') || 'null');
+        sessionStorage.removeItem('oneshot.rejoin');
+      } catch { /* none */ }
       // ?autoplay=1 (the browser gates): no menu, straight into ?mode.
       const opts = ['autoplay', 'lite', 'capsules'].filter((k) => params.get(k) === '1').join(',');
-      const mode = params.get('autoplay') === '1'
-        ? Number(params.get('mode') || 0)
-        : await new Promise((go) => {
-            for (const b of document.querySelectorAll('#menu button[data-mode]')) {
-              b.addEventListener('click', () => go(Number(b.dataset.mode)), { once: true });
-            }
-          });
-      const name = $('name').value.trim() || 'player';
+      const mode = carried
+        ? carried.mode
+        : params.get('autoplay') === '1'
+          ? Number(params.get('mode') || 0)
+          : await new Promise((go) => {
+              for (const b of document.querySelectorAll('#menu button[data-mode]')) {
+                b.addEventListener('click', () => go(Number(b.dataset.mode)), { once: true });
+              }
+            });
+      const name = carried ? carried.name : $('name').value.trim() || 'player';
+      const pass = carried ? carried.pass : signin.pass();
       store.set('oneshot.name', name);
       store.set('oneshot.skin', $('skin').value);
       $('status').textContent = 'connecting…';
       // Until the welcome (a ranked queue can take a while) a way back.
       const cancel = $('cancel');
       cancel.onclick = () => location.reload();
+      // "Full or restarting" (proto::REFUSE_FULL): if server.json now names
+      // another server, go there once, with the same pass.
+      const REFUSE_FULL = 2;
+      let following = false;
+      const follow = async () => {
+        following = true;
+        try {
+          const now = await (await fetch(`${base}server.json`)).json();
+          if (now.addr && now.addr !== info.addr && !carried) {
+            sessionStorage.setItem('oneshot.rejoin', JSON.stringify({ mode, name, pass, skin: $('skin').value }));
+            location.reload();
+          }
+        } catch { /* stay refused */ }
+      };
       setInterval(() => {
         const s = window.__oneshot;
         if (!s) return;
+        if (s.refused === REFUSE_FULL && !following) follow();
         $('menu').hidden = true;
         $('menu').style.display = 'none';
         // Shown while queued, and after a refusal (back to the menu).
@@ -105,7 +140,9 @@
       try {
         // A pass goes with every mode once signed in: it is what proves a
         // skin is yours. Without one, a guest in the standard look.
-        await play(info.addr, info.hash, name, signin.pass(), mode, Number($('skin').value) || 0, opts);
+        // No hash: a CA's certificate, checked by the browser, never pinned.
+        const skin = Number(carried ? carried.skin : $('skin').value) || 0;
+        await play(info.addr, info.hash ?? '', name, pass, mode, skin, opts);
       } catch (e) {
         // Bevy's event loop leaves run() by throwing; that is not an error.
         if (!String(e).includes('control flow')) {
@@ -123,7 +160,7 @@
         let pass = '';
         let nonce = '';
         const fresh = async () => {
-          try { nonce = (await (await fetch('nonce')).json()).nonce; } catch { nonce = ''; }
+          try { nonce = (await (await fetch(`${info.base}nonce`)).json()).nonce; } catch { nonce = ''; }
         };
         const sdk = () => window.EloSignIn;
         for (let i = 0; i < 20 && !sdk(); i++) await new Promise((r) => setTimeout(r, 100));
