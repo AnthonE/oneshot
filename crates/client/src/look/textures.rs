@@ -215,6 +215,36 @@ fn rgba8(img: &Image) -> Option<(Vec<u8>, usize, usize, bool)> {
     (data.len() >= w * h * 4).then(|| (data[..w * h * 4].to_vec(), w, h, srgb))
 }
 
+/// The models' maps (`models/*.glb`, a JPEG level each): their chains as
+/// the level's get theirs, filtered between levels. A linear map (normal,
+/// roughness) is averaged as data.
+pub fn mip_models(
+    mut events: MessageReader<AssetEvent<Image>>,
+    mut images: ResMut<Assets<Image>>,
+    assets: Res<AssetServer>,
+) {
+    for ev in events.read() {
+        let AssetEvent::LoadedWithDependencies { id } = ev else {
+            continue;
+        };
+        if !assets.get_path(*id).is_some_and(|p| p.path().starts_with("models")) {
+            continue;
+        }
+        let Some(img) = images.get_mut(*id) else {
+            continue;
+        };
+        mip_in_place(img, false);
+        let mut d = match &img.sampler {
+            ImageSampler::Descriptor(d) => d.clone(),
+            ImageSampler::Default => ImageSamplerDescriptor::linear(),
+        };
+        d.mipmap_filter = ImageFilterMode::Linear;
+        d.min_filter = ImageFilterMode::Linear;
+        d.mag_filter = ImageFilterMode::Linear;
+        img.sampler = ImageSampler::Descriptor(d);
+    }
+}
+
 /// Gives a loaded RGBA8 image its whole mip chain.
 fn mip_in_place(img: &mut Image, normal: bool) {
     if img.texture_descriptor.mip_level_count > 1 {

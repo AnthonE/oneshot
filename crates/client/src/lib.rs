@@ -51,10 +51,22 @@ struct Hud;
 #[derive(Component)]
 struct Eye;
 
+/// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
+/// roam route until fog shows an enemy, then close in, aim and fire. After
+/// the three.js page's autopilot; it sends what a player's hands could.
+#[derive(Resource, Default)]
+pub struct Autoplay {
+    pub on: bool,
+    leg: usize,
+    frames: u64,
+    /// Where we were at the last check: stuck on a rock, take the next leg.
+    was: (f32, f32),
+}
+
 /// Radians per pixel of mouse.
 const SENS: f32 = 0.0022;
 
-pub fn app(link: Box<dyn Link>) -> App {
+pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -75,12 +87,16 @@ pub fn app(link: Box<dyn Link>) -> App {
     )
     .insert_non_send_resource(LinkRes(link))
     .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
+    .insert_resource(Autoplay {
+        on: autoplay,
+        ..default()
+    })
     .init_resource::<Look>()
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
-    .add_systems(Startup, (setup, look::textures::load))
+    .add_systems(Startup, (setup, look::textures::load, look::guns::load))
     .add_systems(
         Update,
         (
@@ -88,8 +104,10 @@ pub fn app(link: Box<dyn Link>) -> App {
             pump,
             rebuild,
             look::textures::prepare,
+            look::textures::mip_models,
             level::dress_level,
             look::grass::cull,
+            look::bodies::graph,
             draw_fighters,
             draw_vehicles,
             view,
@@ -142,9 +160,11 @@ fn grab(
 }
 
 /// The controls into an input, and the session's frame.
+#[allow(clippy::too_many_arguments)]
 fn pump(
     mut link: NonSendMut<LinkRes>,
     mut look: ResMut<Look>,
+    mut auto: ResMut<Autoplay>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -177,14 +197,58 @@ fn pump(
         }
     }
     let turn = core::f32::consts::TAU;
+    let (mut mx, mut mz) = (axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
+    if auto.on {
+        (buttons, mx, mz) = autopilot(&mut auto, &mut look, &link.0.session().core, link.0.now_ms());
+    }
     let input = Input {
         buttons,
         yaw: ((look.yaw / turn).rem_euclid(1.0) * 65536.0) as u32 as u16,
         pitch: (look.pitch / turn * 65536.0) as i16,
-        mx: axis(KeyCode::KeyD, KeyCode::KeyA) as i8,
-        mz: axis(KeyCode::KeyW, KeyCode::KeyS) as i8,
+        mx: mx as i8,
+        mz: mz as i8,
     };
     link.0.update(input);
+}
+
+/// One frame of the autopilot: buttons and the two axes, and where to look.
+fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore, now: f64) -> (u16, i32, i32) {
+    auto.frames += 1;
+    let (f, me) = core.own();
+    let mate = core.rules.teams.then_some(core.team);
+    let best = core
+        .others(now)
+        .into_iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate.map(|t| t & 1))
+        .map(|d| ((d.pos.x - me.x).hypot(d.pos.z - me.z), d))
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let Some((dist, d)) = best else {
+        // Nobody in sight: walk the route until fog shows someone.
+        let route = &core.map.roam;
+        if route.is_empty() {
+            return (0, 0, 0);
+        }
+        let mut t = route[auto.leg % route.len()];
+        let check = auto.frames.is_multiple_of(90);
+        let stuck = check && (me.x - auto.was.0).hypot(me.z - auto.was.1) < 1.0;
+        if check {
+            auto.was = (me.x, me.z);
+        }
+        if (t.x - me.x).hypot(t.z - me.z) < 2.0 || stuck || auto.frames.is_multiple_of(600) {
+            auto.leg += 1;
+            t = route[auto.leg % route.len()];
+        }
+        look.yaw = (t.z - me.z).atan2(t.x - me.x);
+        look.pitch = 0.0;
+        return (0, 0, 127);
+    };
+    let eye = if f.body.crouched { CROUCH_EYE } else { EYE };
+    let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
+    look.yaw = dz.atan2(dx);
+    look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
+    let fire = if auto.frames & 1 == 1 { FIRE } else { 0 };
+    let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
+    (fire, strafe, if dist > 8.0 { 127 } else { 0 })
 }
 
 /// A new welcome: the map it names. (Bevy hands a system its world in
@@ -211,55 +275,43 @@ fn rebuild(
     }
 }
 
-fn team_color(team: u8) -> Color {
-    if team & 1 == 0 {
-        Color::srgb(0.85, 0.27, 0.23)
-    } else {
-        Color::srgb(0.23, 0.48, 0.85)
-    }
-}
-
 /// Everyone else, where client-net interpolated them.
+#[allow(clippy::too_many_arguments)]
 fn draw_fighters(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    models: Res<look::guns::Models>,
+    graph: Option<Res<look::bodies::Graph>>,
+    mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
+    mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
+    mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
 ) {
     let now = link.0.now_ms();
-    let others = link.0.session().core.others(now);
-    let keep: Vec<u8> = others.iter().map(|d| d.slot).collect();
+    let core = &link.0.session().core;
+    let others = core.others(now);
+    let seats = look::bodies::seats(&core.vehicles(now));
     for d in &others {
-        let y = if d.crouched { 0.65 } else { 0.9 };
-        let t = Transform::from_xyz(d.pos.x, d.pos.y + y, d.pos.z)
-            .with_rotation(Quat::from_rotation_y(-d.yaw))
-            .with_scale(Vec3::new(1.0, if d.crouched { 0.72 } else { 1.0 }, 1.0));
-        match drawn.fighters.get(&d.slot) {
-            Some(&e) => {
-                if let Ok(mut tr) = at.get_mut(e) {
-                    *tr = t;
-                }
-            }
-            None => {
-                let e = commands
-                    .spawn((
-                        Mesh3d(meshes.add(Capsule3d::new(0.35, 1.1))),
-                        MeshMaterial3d(mats.add(StandardMaterial {
-                            base_color: team_color(d.team),
-                            perceptual_roughness: 0.6,
-                            ..default()
-                        })),
-                        t,
-                    ))
-                    .id();
-                drawn.fighters.insert(d.slot, e);
-            }
-        }
+        let e = *drawn
+            .fighters
+            .entry(d.slot)
+            .or_insert_with(|| look::bodies::spawn(&mut commands, &models, d.team));
+        look::bodies::pose(
+            &mut commands,
+            &models,
+            graph.as_deref(),
+            d,
+            seats.get(&d.slot).map(|(v, k)| (v, *k)),
+            e,
+            &mut bodies,
+            &mut at,
+            &mut players,
+            &mut playing,
+        );
     }
     drawn.fighters.retain(|slot, e| {
-        let k = keep.contains(slot);
+        let k = others.iter().any(|d| d.slot == *slot);
         if !k {
             commands.entity(*e).despawn();
         }
@@ -400,9 +452,9 @@ mod web_start {
 
     /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
-    pub async fn play(addr: String, hash: String, name: String, mode: u8) -> Result<(), JsValue> {
+    pub async fn play(addr: String, hash: String, name: String, mode: u8, autoplay: bool) -> Result<(), JsValue> {
         let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
-        super::app(Box::new(super::link::Web(c))).run();
+        super::app(Box::new(super::link::Web(c)), autoplay).run();
         Ok(())
     }
 }

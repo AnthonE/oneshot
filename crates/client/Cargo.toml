@@ -33,6 +33,9 @@ bevy = { version = "0.18", default-features = false, features = [
     "ui_bevy_render",
     "jpeg",
     "png",
+    "bevy_gltf",
+    "bevy_scene",
+    "gltf_animation",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
