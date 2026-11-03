@@ -51,7 +51,7 @@ const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
 /** How a box is drawn, as the client's level.rs numbers them. */
-export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock'];
+export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
@@ -65,6 +65,8 @@ const MAX_VEHICLES = 8;
 const GRAVITY = 20;
 /** sim::terrain::HEIGHT_Q. */
 const HEIGHT_Q = 128;
+/** rustfmt.toml's max_width. */
+const MAX_WIDTH = 120;
 
 /** A box turned by `turn` degrees about y (+x toward +z at 90), then moved to `at`. */
 export function place(box, at, turn) {
@@ -94,7 +96,8 @@ export function compile(spec, where = 'map.json') {
   if (!(bx0 < bx1 && bz0 < bz1)) fail('bounds: [x0, x1, z0, z1]');
   const inside = (x, z, what) => { if (!(x >= bx0 && x <= bx1 && z >= bz0 && z <= bz1)) fail(`${what} at ${x}, ${z} is out of bounds`); };
   const mirrors = images(spec.mirror);
-  const swapLook = (l) => (l === 'red' ? 'blue' : l === 'blue' ? 'red' : l);
+  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow' };
+  const swapLook = (l) => SWAP[l] || l;
 
   const boxes = [];
   for (const [k, s] of (spec.structures || []).entries()) {
@@ -331,7 +334,16 @@ function modRs(list) {
   L.push('pub use crate::map::Def;');
   L.push('');
   L.push('/// Every map, in id order.');
-  L.push(`pub const ALL: [&Def; ${list.length}] = [${list.map((m) => `&${m.module}::DEF`).join(', ')}];`);
+  // One line while rustfmt keeps it so (an array up to 60% of max_width,
+  // its array_width), else one a line.
+  const items = `[${list.map((m) => `&${m.module}::DEF`).join(', ')}]`;
+  const one = `pub const ALL: [&Def; ${list.length}] = ${items};`;
+  if (items.length <= MAX_WIDTH * 0.6 && one.length <= MAX_WIDTH) L.push(one);
+  else {
+    L.push(`pub const ALL: [&Def; ${list.length}] = [`);
+    for (const m of list) L.push(`    &${m.module}::DEF,`);
+    L.push('];');
+  }
   return L.join('\n') + '\n';
 }
 
