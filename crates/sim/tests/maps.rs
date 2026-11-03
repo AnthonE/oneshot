@@ -16,9 +16,7 @@ use sim::world::{Rules, World};
 /// Whether a body of radius `r` standing at height `y` at (x, z) is in a
 /// box (beyond touching its top).
 fn blocked(m: &Map, x: f32, z: f32, y: f32, r: f32) -> bool {
-    m.boxes
-        .iter()
-        .any(|b| b.over_xz(x, z, r) && b.min.y < y + BODY_H && b.max.y > y + 1e-3)
+    m.occupied(x, z, r, y, y + BODY_H)
 }
 
 #[test]
@@ -29,6 +27,7 @@ fn ids_are_the_maps_and_one_each() {
         let m = by_id(d.id).unwrap();
         assert_eq!(m.id, d.id);
         assert_eq!(m.looks.len(), m.boxes.len(), "{}", m.name);
+        assert_eq!(m.solid_looks.len(), m.solids.len(), "{}", m.name);
     }
     assert_eq!(Map::proving_grounds().id, 0);
 }

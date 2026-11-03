@@ -598,6 +598,29 @@ impl World {
                             p.vel.y = -p.vel.y * GREN_BOUNCE;
                         }
                     }
+                    for s in &self.map.solids {
+                        let top = s.top_at(n.x, n.z);
+                        if !(n.y > s.y0 && n.y < top && s.over(n.x, n.z, 0.0)) {
+                            continue;
+                        }
+                        if p.pos.y >= s.top_at(p.pos.x, p.pos.z) - 0.05 {
+                            // Onto its top (a slope moves up under a frag).
+                            n.y = top + 0.01;
+                            p.vel.y = -p.vel.y * GREN_BOUNCE;
+                        } else if p.pos.y <= s.y0 {
+                            n.y = s.y0 - 0.01;
+                            p.vel.y = -p.vel.y * GREN_BOUNCE;
+                        } else if let Some((x, z, ux, uz)) = s.push(n.x, n.z, 0.01) {
+                            // Off its side: the part into the face back out.
+                            n.x = x;
+                            n.z = z;
+                            let into = p.vel.x * ux + p.vel.z * uz;
+                            if into < 0.0 {
+                                p.vel.x -= ux * into * (1.0 + GREN_BOUNCE);
+                                p.vel.z -= uz * into * (1.0 + GREN_BOUNCE);
+                            }
+                        }
+                    }
                     p.pos = n;
                     if p.ttl == 0 {
                         self.proj[i].active = false;

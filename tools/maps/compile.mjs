@@ -38,7 +38,19 @@
 //   vehicles  [{ at: [x, z, y?], yaw: degrees, respawn: seconds, mirror: bool }]:
 //             where a vehicle starts and comes back
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
-// LOOKS. Metres, y up, the floor at y = 0. On a terrain a box stands at the
+// LOOKS. A structure's list may also hold solids that aren't boxes
+// (crates/sim/src/solid.rs), placed, turned and mirrored as boxes are:
+//   { round: [x, z], r, y: [y0, y1], look }          an upright cylinder
+//   { turned: [x, z], size: [w, d], angle: deg, y: [y0, y1], look }
+//                                                    a box turned about y
+//                                                    (+x toward +z)
+//   { ramp: [x0, z0, x1, z1], up: "+x"|"-x"|"+z"|"-z", from: y, to: y,
+//     base: y (default 0), look }                     a slope, `from` at its
+//                                                    low side, `to` at its high
+//   { arc: [x, z], r, from: deg, to: deg, thick: m, y: [y0, y1], look }
+//                                                    a curved wall: turned
+//                                                    segments along the circle
+//                                                    of radius r, within 2 cm Metres, y up, the floor at y = 0. On a terrain a box stands at the
 // y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
 // roam point at height 0 is put on the ground by the sim.
 
@@ -57,7 +69,11 @@ export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER',
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 8;
-const MAX_BOXES = 256;
+/** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
+const MAX_BOXES = 512;
+/** How far an arc's segments may stray from its circle, m. */
+const ARC_ERR = 0.02;
+const DIRS = ['+x', '-x', '+z', '-z'];
 const MAX_LAUNCHERS = 8;
 /** sim::consts::MAX_VEHICLES. */
 const MAX_VEHICLES = 8;
@@ -76,6 +92,102 @@ export function place(box, at, turn) {
   const rot = ([x, z]) => [[x, z], [-z, x], [-x, -z], [z, -x]][q];
   const a = rot([x0, z0]), b = rot([x1, z1]);
   return [Math.min(a[0], b[0]) + at[0], y0 + at[1], Math.min(a[1], b[1]) + at[2], Math.max(a[0], b[0]) + at[0], y1 + at[1], Math.max(a[1], b[1]) + at[2]];
+}
+
+/** A solid turned by `turn` degrees about y (as `place`), then moved to `at`. */
+export function placeSolid(sol, at, turn) {
+  const q = ((Math.round(turn / 90) % 4) + 4) % 4;
+  const rot = ([x, z]) => [[x, z], [-z, x], [-x, -z], [z, -x]][q];
+  const o = { ...sol };
+  if (sol.kind === 'ramp') {
+    const [x0, z0, x1, z1] = sol.rect;
+    const a = rot([x0, z0]), b = rot([x1, z1]);
+    o.rect = [Math.min(a[0], b[0]) + at[0], Math.min(a[1], b[1]) + at[2], Math.max(a[0], b[0]) + at[0], Math.max(a[1], b[1]) + at[2]];
+    const v = rot([[1, 0], [-1, 0], [0, 1], [0, -1]][sol.dir]);
+    o.dir = v[0] > 0.5 ? 0 : v[0] < -0.5 ? 1 : v[1] > 0.5 ? 2 : 3;
+    o.base = sol.base + at[1]; o.low = sol.low + at[1]; o.high = sol.high + at[1];
+  } else {
+    const c = rot([sol.x, sol.z]);
+    o.x = c[0] + at[0]; o.z = c[1] + at[2];
+    o.y0 = sol.y0 + at[1]; o.y1 = sol.y1 + at[1];
+    if (sol.kind === 'turned') o.angle = sol.angle + 90 * q;
+  }
+  return o;
+}
+
+/** A solid's mirror image across x (sx = −1) and/or z (sz = −1). */
+function mirrorSolid(sol, sx, sz) {
+  const o = { ...sol };
+  if (sol.kind === 'ramp') {
+    const [x0, z0, x1, z1] = sol.rect;
+    const xs = [x0 * sx, x1 * sx].sort((a, b) => a - b), zs = [z0 * sz, z1 * sz].sort((a, b) => a - b);
+    o.rect = [xs[0], zs[0], xs[1], zs[1]];
+    let d = sol.dir;
+    if (sx < 0 && d < 2) d = 1 - d;
+    if (sz < 0 && d >= 2) d = 5 - d;
+    o.dir = d;
+  } else {
+    o.x = sol.x * sx; o.z = sol.z * sz;
+    if (sol.kind === 'turned') {
+      const r = (sol.angle * Math.PI) / 180;
+      o.angle = (Math.atan2(Math.sin(r) * sz, Math.cos(r) * sx) * 180) / Math.PI;
+    }
+  }
+  return o;
+}
+
+/** A solid item of map.json as the compiler holds it (arcs become several). */
+function readSolid(it, name, fail, terrain) {
+  const look = it.look || 'block';
+  const ys = (what) => {
+    const y = it.y;
+    if (!Array.isArray(y) || y.length !== 2 || !(y[0] < y[1])) fail(`${name}: ${what} needs y: [y0, y1], y0 < y1`);
+    if (y[0] < 0 && !terrain) fail(`${name}: ${what} goes under the floor`);
+    return y;
+  };
+  if (it.round) {
+    const [y0, y1] = ys('a round');
+    if (!(it.r >= 0.1)) fail(`${name}: a round needs r of 0.1 m or more`);
+    return [{ kind: 'round', x: it.round[0], z: it.round[1], r: it.r, y0, y1, look }];
+  }
+  if (it.turned) {
+    const [y0, y1] = ys('a turned box');
+    const [w, d] = it.size || fail(`${name}: a turned box needs size: [w, d]`);
+    if (!(w >= 0.2 && d >= 0.2)) fail(`${name}: a turned box is 0.2 m or more each way`);
+    return [{ kind: 'turned', x: it.turned[0], z: it.turned[1], hx: w / 2, hz: d / 2, angle: it.angle || 0, y0, y1, look }];
+  }
+  if (it.ramp) {
+    const [x0, z0, x1, z1] = it.ramp;
+    if (!(x0 < x1 && z0 < z1)) fail(`${name}: a ramp is [x0, z0, x1, z1], low to high`);
+    const dir = DIRS.indexOf(it.up);
+    if (dir < 0) fail(`${name}: a ramp's "up" is one of ${DIRS.join(', ')}`);
+    const base = it.base ?? 0, low = it.from, high = it.to;
+    if (typeof low !== 'number' || typeof high !== 'number' || !(high > low) || !(low >= base)) fail(`${name}: a ramp rises "from" (≥ base) "to" (higher)`);
+    const run = dir < 2 ? x1 - x0 : z1 - z0;
+    if ((high - low) / run > 1) fail(`${name}: a ramp steeper than 45°`);
+    return [{ kind: 'ramp', rect: [x0, z0, x1, z1], dir, base, low, high, look }];
+  }
+  if (it.arc) {
+    const [y0, y1] = ys('an arc');
+    const R = it.r, t = it.thick ?? 0.4;
+    if (!(R > t) || !(t >= 0.2)) fail(`${name}: an arc needs r over its thick (0.2 m or more)`);
+    const a0 = it.from, a1 = it.to;
+    if (typeof a0 !== 'number' || typeof a1 !== 'number' || a0 === a1) fail(`${name}: an arc runs "from" one angle "to" another (degrees)`);
+    const span = ((a1 - a0) * Math.PI) / 180;
+    const step = 2 * Math.acos(Math.max(-1, 1 - ARC_ERR / (R + t / 2)));
+    const n = Math.max(1, Math.ceil(Math.abs(span) / step));
+    const th = span / n;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const phi = (a0 * Math.PI) / 180 + th * (i + 0.5);
+      // Each segment as long as the outer face's chord needs, so neighbours'
+      // outer corners meet.
+      const hx = (R + t / 2) * Math.tan(Math.abs(th) / 2);
+      out.push({ kind: 'turned', x: it.arc[0] + R * Math.cos(phi), z: it.arc[1] + R * Math.sin(phi), hx, hz: t / 2, angle: (phi * 180) / Math.PI + 90, y0, y1, look });
+    }
+    return out;
+  }
+  fail(`${name}: an item is a box [..], or { round | turned | ramp | arc }`);
 }
 
 const f32 = (v) => Math.fround(v);
@@ -100,12 +212,22 @@ export function compile(spec, where = 'map.json') {
   const swapLook = (l) => SWAP[l] || l;
 
   const boxes = [];
+  const solids = [];
   for (const [k, s] of (spec.structures || []).entries()) {
     const name = s.name || `structure ${k}`;
     const list = s.prefab ? ((spec.prefabs || {})[s.prefab] || fail(`${name}: no prefab "${s.prefab}"`)) : (s.boxes || fail(`${name}: no boxes`));
     const at = s.at || [0, 0, 0], turn = s.turn || 0;
     const placed = [];
+    const placedSolids = [];
     for (const b of list) {
+      if (!Array.isArray(b)) {
+        for (const sol of readSolid(b, name, fail, spec.terrain)) {
+          const look = (s.tint && s.tint[sol.look]) || sol.look;
+          if (!LOOKS.includes(look)) fail(`${name}: no look "${look}" (${LOOKS.join(', ')})`);
+          placedSolids.push(placeSolid({ ...sol, look }, at, turn));
+        }
+        continue;
+      }
       if (b.length < 6 || b.slice(0, 6).some((v) => typeof v !== 'number')) fail(`${name}: a box is [x0, y0, z0, x1, y1, z1, look]`);
       if (!(b[0] < b[3] && b[1] < b[4] && b[2] < b[5])) fail(`${name}: box ${JSON.stringify(b)} is empty or inside out`);
       if (b[1] < 0 && !spec.terrain) fail(`${name}: box ${JSON.stringify(b)} goes under the floor`);
@@ -114,8 +236,12 @@ export function compile(spec, where = 'map.json') {
       placed.push({ box: place(b, at, turn), look });
     }
     boxes.push(...placed);
+    solids.push(...placedSolids);
     if (s.mirror) {
       if (!mirrors.length) fail(`${name}: "mirror" needs the map's "mirror"`);
+      for (const [sx, sz, swap] of mirrors) {
+        for (const p of placedSolids) solids.push({ ...mirrorSolid(p, sx, sz), look: swap ? swapLook(p.look) : p.look });
+      }
       for (const [sx, sz, swap] of mirrors) {
         for (const p of placed) {
           const [x0, y0, z0, x1, y1, z1] = p.box;
@@ -125,7 +251,7 @@ export function compile(spec, where = 'map.json') {
       }
     }
   }
-  if (boxes.length > MAX_BOXES) fail(`${boxes.length} boxes, at most ${MAX_BOXES}`);
+  if (boxes.length + solids.length > MAX_BOXES) fail(`${boxes.length} boxes and ${solids.length} solids, at most ${MAX_BOXES} together`);
 
   const point = (at, what) => {
     if (!Array.isArray(at) || at.length < 2 || at.some((v) => typeof v !== 'number')) fail(`${what}: "at" is [x, z] or [x, z, y]`);
@@ -202,7 +328,7 @@ export function compile(spec, where = 'map.json') {
     }
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers, vehicles };
+  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -268,6 +394,19 @@ const lit = (v) => {
 };
 const yawU16 = (deg) => ((Math.round((deg / 360) * 65536) % 65536) + 65536) % 65536;
 
+/** A solid as sim::solid::Solid::from_def reads it: kind, then 8 numbers. */
+function solidRow(s) {
+  let k, n;
+  if (s.kind === 'round') [k, n] = [0, [s.x, s.z, s.r, 0, 0, 0, s.y0, s.y1]];
+  else if (s.kind === 'turned') {
+    const r = (s.angle * Math.PI) / 180;
+    // Quarter turns exactly: no 6e-17 for a cosine that is 0.
+    const snap = (v) => (Math.abs(v) < 1e-9 ? 0 : Math.abs(Math.abs(v) - 1) < 1e-9 ? Math.sign(v) : v);
+    [k, n] = [1, [s.x, s.z, s.hx, s.hz, snap(Math.cos(r)), snap(Math.sin(r)), s.y0, s.y1]];
+  } else [k, n] = [2, [...s.rect, s.dir, s.base, s.low, s.high]];
+  return `${k}, [${n.map(lit).join(', ')}]`;
+}
+
 export function rust(m, src) {
   const L = [];
   L.push(`//! ${m.name}${m.about ? `: ${m.about}` : ''}`);
@@ -320,6 +459,10 @@ export function rust(m, src) {
   L.push('    vehicles: &[');
   for (const v of m.vehicles) L.push(`        ([${v.pos.map(lit).join(', ')}], ${yawU16(v.yaw)}, ${v.respawn}),`);
   L.push('    ],');
+  L.push('    solids: &[');
+  for (const s of m.solids) L.push(`        (${solidRow(s)}),`);
+  L.push('    ],');
+  L.push(`    solid_looks: &[${m.solids.map((s) => LOOKS.indexOf(s.look)).join(', ')}],`);
   L.push('};');
   return L.join('\n') + '\n';
 }
@@ -376,7 +519,7 @@ function main() {
   }
   for (const m of list) {
     const t = m.terrain ? `, terrain ${m.terrain.nx} × ${m.terrain.nz}` : '';
-    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
+    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.solids.length} solids, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
   }
   if (stale) process.exit(1);
 }

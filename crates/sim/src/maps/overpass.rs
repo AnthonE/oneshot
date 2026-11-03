@@ -89,4 +89,7 @@ pub const DEF: Def = Def {
     ],
     vehicles: &[
     ],
+    solids: &[
+    ],
+    solid_looks: &[],
 };

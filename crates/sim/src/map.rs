@@ -6,6 +6,7 @@
 use crate::arms::SHOTGUN;
 use crate::geom::{ray_aabb, Aabb, V3};
 use crate::grid::Grid;
+use crate::solid::Solid;
 use crate::terrain::{Terrain, TerrainDef};
 
 /// Any team may spawn here.
@@ -63,6 +64,10 @@ pub struct Def {
     pub launchers: &'static [([f32; 6], [f32; 3])],
     /// (x y z, yaw, respawn ms) each.
     pub vehicles: &'static [([f32; 3], u16, u32)],
+    /// The solids that aren't boxes ([`Solid::from_def`]: kind, numbers),
+    /// and how each is drawn.
+    pub solids: &'static [(u8, [f32; 8])],
+    pub solid_looks: &'static [u8],
 }
 
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
@@ -102,6 +107,8 @@ impl Def {
                 .map(|b| Aabb::new(V3::new(b[0], b[1], b[2]), V3::new(b[3], b[4], b[5])))
                 .collect(),
             looks: self.looks.to_vec(),
+            solids: self.solids.iter().map(|&(k, n)| Solid::from_def(k, n)).collect(),
+            solid_looks: self.solid_looks.to_vec(),
             spawns: self
                 .spawns
                 .iter()
@@ -155,6 +162,10 @@ pub struct Map {
     pub boxes: Vec<Aabb>,
     /// How each box is drawn (the client's `level.rs`): drawing only.
     pub looks: Vec<u8>,
+    /// Round pillars, turned boxes and ramps ([`crate::solid`]), and their
+    /// looks. In the grid after the boxes.
+    pub solids: Vec<Solid>,
+    pub solid_looks: Vec<u8>,
     pub spawns: Vec<Spawn>,
     pub pads: Vec<PadDef>,
     /// Where a bot with nobody in sight walks; none: the middle, then the
@@ -171,14 +182,34 @@ pub struct Map {
 impl Map {
     /// Builds the box grid; every constructor ends here.
     fn indexed(mut self) -> Map {
-        self.grid = Grid::build(&self.boxes);
+        let mut all = self.boxes.clone();
+        all.extend(self.solids.iter().map(Solid::bounds));
+        self.grid = Grid::build(&all);
         self
     }
 
     /// Calls `f` for each box that may overlap the rectangle `lo..hi` in x
     /// and z, each once, in index order (and some that don't: `f` checks).
     pub fn each_box_in(&self, lo: (f32, f32), hi: (f32, f32), mut f: impl FnMut(&Aabb)) {
-        self.grid.each_in(lo, hi, |i| f(&self.boxes[i]));
+        let n = self.boxes.len();
+        self.grid.each_in(lo, hi, |i| {
+            if i < n {
+                f(&self.boxes[i])
+            }
+        });
+    }
+
+    /// The same for the solids.
+    pub fn each_solid_in(&self, lo: (f32, f32), hi: (f32, f32), mut f: impl FnMut(&Solid)) {
+        if self.solids.is_empty() {
+            return;
+        }
+        let n = self.boxes.len();
+        self.grid.each_in(lo, hi, |i| {
+            if i >= n {
+                f(&self.solids[i - n])
+            }
+        });
     }
 
     /// Distance along unit `d` from `o` to the first solid (box or floor),
@@ -194,8 +225,14 @@ impl Map {
             Some(g) => t = g.ray(o, d, t),
         }
         let reach = t;
+        let n = self.boxes.len();
         self.grid.each_on_ray(o, d, reach, |i| {
-            if let Some(h) = ray_aabb(o, d, &self.boxes[i], t) {
+            let hit = if i < n {
+                ray_aabb(o, d, &self.boxes[i], t)
+            } else {
+                self.solids[i - n].ray(o, d, t)
+            };
+            if let Some(h) = hit {
                 t = h;
             }
             t
@@ -231,10 +268,27 @@ impl Map {
     /// the footprint's middle, at its own height (a slope too steep to
     /// stand on is movement's to refuse, not the floor's).
     pub fn floor(&self, x: f32, z: f32, r: f32, reach: f32) -> f32 {
+        self.floor_with(x, z, r, reach, reach)
+    }
+
+    /// [`Map::floor`], with a ramp's slope counting up to `ramp_reach`
+    /// (movement lets a body a step under a slope onto it, rising or
+    /// falling: the slope moves under it between ticks as a flat top
+    /// can't). A solid's footprint is met as a circle.
+    pub fn floor_with(&self, x: f32, z: f32, r: f32, reach: f32, ramp_reach: f32) -> f32 {
         let mut f = self.ground(x, z);
         self.each_box_in((x - r, z - r), (x + r, z + r), |b| {
             if b.max.y <= reach && b.max.y > f && b.over_xz(x, z, r) {
                 f = b.max.y;
+            }
+        });
+        self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
+            let (top, lim) = match s.shape {
+                crate::solid::Shape::Ramp { .. } => (s.top_at(x, z), ramp_reach),
+                _ => (s.y1, reach),
+            };
+            if top <= lim && top > f && s.over(x, z, r) {
+                f = top;
             }
         });
         f
@@ -248,7 +302,91 @@ impl Map {
                 c = b.min.y;
             }
         });
+        self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
+            if s.y0 >= from && s.y0 < c && s.over(x, z, r) {
+                c = s.y0;
+            }
+        });
         c
+    }
+
+    /// Whether a body of radius `r` with its feet at `feet` and its head at
+    /// `head` at (x, z) is inside something: a box or a solid past its top
+    /// (a ramp's slope where it stands). For tests and tools; movement
+    /// keeps bodies out on its own.
+    pub fn occupied(&self, x: f32, z: f32, r: f32, feet: f32, head: f32) -> bool {
+        let mut hit = false;
+        self.each_box_in((x - r, z - r), (x + r, z + r), |b| {
+            hit |= b.over_xz(x, z, r) && b.min.y < head && b.max.y > feet + 1e-3;
+        });
+        self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
+            hit |= s.over(x, z, r) && s.y0 < head && s.top_at(x, z) > feet + 1e-3;
+        });
+        hit
+    }
+
+    /// Pushes a body of radius `r` at (x, z) back out of every solid in its
+    /// band, its speed into each face taken off (it slides along). `lo` and
+    /// `hi`: the band a box blocks in (movement's); a ramp blocks only where
+    /// its slope stands more than `climb` over the feet. Three rounds, for
+    /// a body in a corner where two solids meet. A push that would put the
+    /// body in a box is undone: it stays where it started the tick, `back`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_out(
+        &self,
+        x: &mut f32,
+        z: &mut f32,
+        v: &mut V3,
+        r: f32,
+        lo: f32,
+        hi: f32,
+        climb: f32,
+        back: (f32, f32),
+    ) {
+        if self.solids.is_empty() {
+            return;
+        }
+        let mut pushed = false;
+        for _ in 0..3 {
+            let mut moved = false;
+            let (qx, qz) = (*x, *z);
+            self.each_solid_in((qx - r, qz - r), (qx + r, qz + r), |s| {
+                let blocks = match s.shape {
+                    crate::solid::Shape::Ramp { .. } => s.y0 < hi && s.top_at(*x, *z) > climb,
+                    _ => s.y0 < hi && s.y1 > lo,
+                };
+                if !blocks {
+                    return;
+                }
+                if let Some((nx, nz, ux, uz)) = s.push(*x, *z, r) {
+                    *x = nx;
+                    *z = nz;
+                    let into = v.x * ux + v.z * uz;
+                    if into < 0.0 {
+                        v.x -= ux * into;
+                        v.z -= uz * into;
+                    }
+                    moved = true;
+                }
+            });
+            pushed |= moved;
+            if !moved {
+                break;
+            }
+        }
+        if !pushed {
+            return;
+        }
+        let mut in_box = false;
+        self.each_box_in((*x - r, *z - r), (*x + r, *z + r), |b| {
+            in_box |= b.over_xz(*x, *z, r) && b.min.y < hi && b.max.y > lo;
+        });
+        if in_box {
+            *x = back.0;
+            *z = back.1;
+            v.x = 0.0;
+            v.z = 0.0;
+        }
     }
 
     /// An open floor 100 m square with walls, a spawn at each end and the
@@ -263,6 +401,8 @@ impl Map {
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
+            solids: Vec::new(),
+            solid_looks: Vec::new(),
             roam: Vec::new(),
             lo: (-50.0, -50.0),
             hi: (50.0, 50.0),
@@ -322,6 +462,11 @@ mod tests {
                 t = h;
             }
         }
+        for s in &m.solids {
+            if let Some(h) = s.ray(o, d, t) {
+                t = h;
+            }
+        }
         t
     }
 
@@ -330,6 +475,12 @@ mod tests {
         for b in &m.boxes {
             if b.max.y <= reach && b.max.y > f && b.over_xz(x, z, r) {
                 f = b.max.y;
+            }
+        }
+        for s in &m.solids {
+            let top = s.top_at(x, z);
+            if top <= reach && top > f && s.over(x, z, r) {
+                f = top;
             }
         }
         f
@@ -342,7 +493,40 @@ mod tests {
                 c = b.min.y;
             }
         }
+        for s in &m.solids {
+            if s.y0 >= from && s.y0 < c && s.over(x, z, r) {
+                c = s.y0;
+            }
+        }
         c
+    }
+
+    /// Solids of every kind across cell edges, some overlapping boxes.
+    fn with_solids() -> Map {
+        Def {
+            id: 252,
+            name: "with solids",
+            lo: (-20.0, -20.0),
+            hi: (20.0, 20.0),
+            boxes: &[[-3.0, 0.0, -3.0, 3.0, 1.0, 3.0], [9.0, 0.0, -1.0, 12.0, 4.0, 1.0]],
+            looks: &[0, 0],
+            spawns: &[([0.0, 0.0, -10.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[
+                (0, [8.0, 8.0, 1.5, 0.0, 0.0, 0.0, 0.0, 3.0]),
+                (0, [-8.0, 0.0, 0.6, 0.0, 0.0, 0.0, 2.0, 6.0]),
+                (1, [0.0, 8.0, 5.0, 0.3, 0.8, 0.6, 0.0, 4.0]),
+                (1, [-12.0, -12.0, 3.0, 0.2, 0.0, 1.0, 1.0, 2.5]),
+                (2, [-16.0, -4.0, -9.0, 4.0, 0.0, 0.0, 0.0, 3.0]),
+                (2, [4.0, -18.0, 8.0, -9.0, 3.0, 0.0, 1.0, 2.5]),
+            ],
+            solid_looks: &[0; 6],
+        }
+        .build()
     }
 
     fn unit(r: &mut Pcg32, lo: f32, hi: f32) -> f32 {
@@ -353,6 +537,7 @@ mod tests {
     fn the_grid_answers_as_the_linear_scan_does_bit_for_bit() {
         let mut maps: Vec<Map> = crate::maps::ALL.iter().map(|d| d.build()).collect();
         maps.push(Map::open());
+        maps.push(with_solids());
         let mut r = Pcg32::new(11, 3);
         for m in &maps {
             let (lx, lz) = (m.lo.0 - 6.0, m.lo.1 - 6.0);
