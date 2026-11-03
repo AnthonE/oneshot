@@ -136,23 +136,33 @@ pub fn camera<M: Component>(
             TemporalAntiAliasing::default(),
         ));
     }
+    // No atmosphere in a browser: its air as a fog (Gates' browser haze),
+    // and its sky baked into the cube `sky_for` hangs on the camera.
     #[cfg(target_arch = "wasm32")]
-    commands.entity(eye).insert((
-        Smaa::default(),
-        // No atmosphere in a browser: the air as a fog, the desktop's
-        // haze distance (until the sky's own haze, C3).
-        DistanceFog {
-            color: Color::srgb(0.66, 0.78, 0.9),
-            falloff: FogFalloff::Linear {
-                start: 110.0,
-                end: FAR_M * 0.75,
-            },
-            ..default()
-        },
-    ));
+    commands
+        .entity(eye)
+        .insert((Smaa::default(), super::sky::browser_haze(1.0)));
     #[cfg(not(target_arch = "wasm32"))]
     let _ = Smaa::default;
     eye
+}
+
+/// The sky for map `seed`: in a browser the noon cube, clouds and sky
+/// together, as a `Skybox`. On the desktop the atmosphere draws the sky
+/// (its cloud deck is still to come), so nothing.
+pub fn sky_for(commands: &mut Commands, images: &mut Assets<Image>, eye: Entity, seed: u64) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use super::sky::{cloud_cubemap, CLOUD_NITS, DECK_GAIN};
+        let image = images.add(cloud_cubemap(seed));
+        commands.entity(eye).insert(bevy::core_pipeline::Skybox {
+            image,
+            brightness: CLOUD_NITS * DECK_GAIN,
+            ..default()
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = (commands, images, eye, seed);
 }
 
 /// The sun at noon, shadowing out to the tier's reach.

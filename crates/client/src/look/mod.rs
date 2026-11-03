@@ -3,3 +3,4 @@
 
 pub mod fill;
 pub mod rig;
+pub mod sky;

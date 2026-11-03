@@ -165,14 +165,18 @@ fn pump(
     link.0.update(input);
 }
 
-/// A new welcome: the map it names.
+/// A new welcome: the map it names. (Bevy hands a system its world in
+/// pieces; this one needs eight.)
+#[allow(clippy::too_many_arguments)]
 fn rebuild(
     link: NonSend<LinkRes>,
     mut built: ResMut<Built>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     old: Query<Entity, With<level::LevelPart>>,
+    eye: Query<Entity, With<Eye>>,
 ) {
     let s = link.0.session();
     if !s.ready || s.welcomes == built.0 {
@@ -180,6 +184,9 @@ fn rebuild(
     }
     built.0 = s.welcomes;
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
+    if let Ok(eye) = eye.single() {
+        look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
+    }
 }
 
 fn team_color(team: u8) -> Color {
