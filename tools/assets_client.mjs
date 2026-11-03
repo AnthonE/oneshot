@@ -1,10 +1,11 @@
 // node tools/assets_client.mjs [GATES_DIR]: copies the textures the Bevy
-// client draws with from a Gates checkout into crates/client/assets
+// client draws with from a Gates checkout into crates/client/assets, and
+// the page's sounds (web/public/sound, Gates' CC0 cuts) beside them
 // (docs/RIP.md §9). All CC0 (Gates' assets/textures/MANIFEST.md: Poly
 // Haven and ambientCG); credited in NOTICE. The three.js page's are
 // tools/assets.mjs's.
 
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const gates = process.argv[2] || process.env.GATES_DIR || '../Gates';
@@ -26,3 +27,11 @@ for (const s of SETS) {
     console.log(`${out}/${s}_${m}.jpg`);
   }
 }
+
+// The sounds: the three.js page's (CC0 and public domain, NOTICE).
+const snd = 'crates/client/assets/sound';
+mkdirSync(snd, { recursive: true });
+for (const f of readdirSync('web/public/sound').filter((f) => f.endsWith('.ogg'))) {
+  copyFileSync(join('web/public/sound', f), join(snd, f));
+}
+console.log(`${snd}/*.ogg`);

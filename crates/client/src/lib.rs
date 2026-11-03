@@ -13,6 +13,7 @@ pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod sound;
 
 use std::collections::BTreeMap;
 
@@ -96,6 +97,7 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
+    .add_plugins(sound::SoundPlugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_systems(
         Startup,
@@ -129,6 +131,8 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
         )
             .chain(),
     );
+    #[cfg(target_arch = "wasm32")]
+    app.add_systems(Update, expose.after(hud::draw));
     app
 }
 
@@ -460,8 +464,10 @@ fn draw_view(
 
 /// What the session queued for us this frame: events become effects and
 /// HUD marks, stream messages names and the feed.
-fn happened(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn happened(
     mut link: NonSendMut<LinkRes>,
+    mut heard: ResMut<sound::Heard>,
     look: Res<Look>,
     time: Res<Time>,
     fx: Res<look::effects::Fx>,
@@ -476,6 +482,30 @@ fn happened(
     let me = s.core.slot;
     look::effects::on_events(&mut commands, &fx, &mut mats, &events, me);
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
+    heard.0 = events;
+}
+
+/// For the browser gate (`ci/client_e2e.mjs`): `window.__oneshot`, as the
+/// three.js page has it.
+#[cfg(target_arch = "wasm32")]
+fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>) {
+    use wasm_bindgen::JsValue;
+    *frames += 1;
+    let Some(w) = web_sys::window() else {
+        return;
+    };
+    let s = link.0.session();
+    let o = js_sys::Object::new();
+    let set = |k: &str, v: JsValue| {
+        let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
+    };
+    set("connected", s.ready.into());
+    set("frames", (*frames).into());
+    set("kills", st.kills.into());
+    set("deaths", st.deaths.into());
+    set("alive", s.core.own().0.alive.into());
+    set("slot", s.core.slot.into());
+    let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
 /// Rockets and frags in flight.

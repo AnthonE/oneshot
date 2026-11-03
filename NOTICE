@@ -9,7 +9,8 @@ Meshy on a paid plan, owned outright, from the Gates repository
 copies (crates/client/assets/models) are the same models with their KTX2
 textures re-encoded as JPEG by tools/glb.
 
-Sounds (web/public/sound), all CC0 or public domain, cut by Gates
+Sounds (web/public/sound, and the Bevy client's copies in
+crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
   - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
   - USC Sunset Editorial / Red Library sound effects (archive.org), public

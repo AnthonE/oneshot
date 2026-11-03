@@ -38,15 +38,21 @@ bevy = { version = "0.18", default-features = false, features = [
     "gltf_animation",
 ] }
 
+[features]
+# Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
+sound = ["bevy/bevy_audio", "bevy/vorbis"]
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 client-net = { path = "../client-net", features = ["native"] }
 bevy = { version = "0.18", default-features = false, features = ["multi_threaded", "x11"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy = { version = "0.18", default-features = false, features = ["webgl2"] }
+# Sound always in a browser (Web Audio needs nothing from the build box).
+bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Performance"] }
 
 # Quick to build and quick enough to play: our code a little optimised,
