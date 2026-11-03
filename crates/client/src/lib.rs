@@ -4,10 +4,11 @@
 //! snapshots and the prediction of our own fighter and vehicle), and all it
 //! sends back is the controls.
 //!
-//! C1, the skeleton: the level from the sim's map, fighters and vehicles as
-//! plain shapes, a first-person camera (a chase camera at the wheel), the
-//! controls, and a text HUD. Gates' lighting, sky, terrain and grass come
-//! next (docs/RIP.md §9).
+//! The level from the sim's map in Gates' light, sky, ground and grass
+//! (docs/RIP.md §9); Triple T bodies with guns in hand; the gun in view,
+//! effects and sound; a first-person camera (a chase camera at the wheel,
+//! the kill cam when dead); the three.js page's controls; the HUD. In a
+//! browser the page (`web/index.html`) has the menu and calls `play()`.
 
 pub mod hud;
 pub mod level;
@@ -17,7 +18,7 @@ pub mod sound;
 
 use std::collections::BTreeMap;
 
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use sim::consts::{CROUCH_EYE, EYE, PITCH_MAX, VEH_H};
@@ -36,6 +37,9 @@ pub struct Look {
     pitch: f32,
     /// The zoom button is held.
     pub zoom: bool,
+    /// The trigger counts: not still held from the click that took the
+    /// mouse (that click only takes it, as on the page).
+    armed: bool,
 }
 
 /// The welcome this level was built for.
@@ -64,8 +68,30 @@ pub struct Autoplay {
     was: (f32, f32),
 }
 
-/// Radians per pixel of mouse.
+/// Stream messages that came before the app ran (the page waited for the
+/// welcome): the HUD reads them first.
+#[derive(Resource, Default)]
+pub struct Early(pub Vec<proto::Msg>);
+
+/// Radians per pixel of mouse; zoomed, this much of it.
 const SENS: f32 = 0.0022;
+const ZOOM_SENS: f32 = 0.45;
+
+/// The keys, as the three.js page binds them (web/src/input.ts, after
+/// Fireplace's arena). The wheel swaps too.
+const KEYS: [(KeyCode, u16); 11] = [
+    (KeyCode::Space, JUMP),
+    (KeyCode::ControlLeft, CROUCH),
+    (KeyCode::KeyC, CROUCH),
+    (KeyCode::KeyQ, MELEE),
+    (KeyCode::KeyV, MELEE),
+    (KeyCode::KeyG, GRENADE),
+    (KeyCode::KeyR, RELOAD),
+    (KeyCode::KeyX, SWAP),
+    (KeyCode::Digit1, SWAP),
+    (KeyCode::Digit2, SWAP),
+    (KeyCode::KeyE, USE),
+];
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
 /// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
@@ -117,6 +143,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
+    .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_systems(
@@ -172,15 +199,17 @@ fn setup(
 /// A click takes the mouse; Escape gives it back.
 fn grab(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut look: ResMut<Look>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok(mut c) = cursor.single_mut() else {
         return;
     };
-    if mouse.just_pressed(MouseButton::Left) {
+    if mouse.just_pressed(MouseButton::Left) && c.grab_mode == CursorGrabMode::None {
         c.grab_mode = CursorGrabMode::Locked;
         c.visible = false;
+        look.armed = false;
     }
     if keys.just_pressed(KeyCode::Escape) {
         c.grab_mode = CursorGrabMode::None;
@@ -188,43 +217,48 @@ fn grab(
     }
 }
 
-/// The controls into an input, and the session's frame.
+/// The controls into an input, and the session's frame. Only with the
+/// mouse taken, as the page does; a press that came and went inside one
+/// frame still counts (`just_pressed` without `pressed`).
 #[allow(clippy::too_many_arguments)]
 fn pump(
     mut link: NonSendMut<LinkRes>,
     mut look: ResMut<Look>,
     mut auto: ResMut<Autoplay>,
+    mut st: ResMut<hud::HudState>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
     let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
+    let key = |k: KeyCode| grabbed && (keys.pressed(k) || keys.just_pressed(k));
+    let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
+    look.zoom = button(MouseButton::Right) && !auto.on;
     if grabbed {
-        look.yaw += motion.delta.x * SENS;
+        let sens = SENS * if look.zoom { ZOOM_SENS } else { 1.0 };
+        look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
-        look.pitch = (look.pitch - motion.delta.y * SENS).clamp(-max, max);
+        look.pitch = (look.pitch - motion.delta.y * sens).clamp(-max, max);
     }
-    look.zoom = grabbed && mouse.pressed(MouseButton::Right) && !auto.on;
-    let axis = |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127;
-    let mut buttons = 0;
-    for (on, b) in [
-        (grabbed && mouse.pressed(MouseButton::Left), FIRE),
-        (look.zoom, ZOOM),
-        (keys.pressed(KeyCode::Space), JUMP),
-        (
-            keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyC),
-            CROUCH,
-        ),
-        (keys.pressed(KeyCode::KeyR), RELOAD),
-        (keys.pressed(KeyCode::KeyQ), SWAP),
-        (keys.pressed(KeyCode::KeyF), MELEE),
-        (keys.pressed(KeyCode::KeyG), GRENADE),
-        (keys.pressed(KeyCode::KeyE), USE),
-    ] {
-        if on {
-            buttons |= b;
-        }
+    if keys.just_pressed(KeyCode::KeyN) {
+        st.net = !st.net;
+    }
+    let axis =
+        |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127 * grabbed as i32;
+    let mut buttons = KEYS.iter().filter(|(k, _)| key(*k)).fold(0, |b, (_, v)| b | v);
+    if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {
+        look.armed = true;
+    }
+    if look.armed && button(MouseButton::Left) {
+        buttons |= FIRE;
+    }
+    if look.zoom {
+        buttons |= ZOOM;
+    }
+    if grabbed && scroll.delta.y != 0.0 {
+        buttons |= SWAP;
     }
     let turn = core::f32::consts::TAU;
     let (mut mx, mut mz) = (axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
@@ -496,13 +530,15 @@ pub(crate) fn happened(
     time: Res<Time>,
     fx: Res<look::effects::Fx>,
     mut st: ResMut<hud::HudState>,
+    mut early: ResMut<Early>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
     let events = s.core.drain_events();
-    let msgs = s.take_messages();
+    let mut msgs = core::mem::take(&mut early.0);
+    msgs.extend(s.take_messages());
     let me = s.core.slot;
     look::effects::on_events(&mut commands, &fx, &mut mats, &events, me);
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
@@ -549,6 +585,11 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
     set("health", f.health.into());
     set("killcam", s.core.killcam(link.0.now_ms()).is_some().into());
+    // For the page's menu: what the stream last said, and whether it's over.
+    set("status", st.status.as_str().into());
+    set("cup", st.cup.as_str().into());
+    set("bye", st.ended.into());
+    set("ended", (st.ended || link.0.closed()).into());
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -565,14 +606,89 @@ fn fly(
 
 #[cfg(target_arch = "wasm32")]
 mod web_start {
+    use client_net::web::Client;
     use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
 
-    /// The page's entry: connect (as the three.js page does) and run.
+    async fn sleep(ms: i32) {
+        let p = js_sys::Promise::new(&mut |done, _| {
+            if let Some(w) = web_sys::window() {
+                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&done, ms);
+            }
+        });
+        let _ = JsFuture::from(p).await;
+    }
+
+    /// The page's entry, as the three.js page plays: connect to `addr`
+    /// (pinning `hash`, or none for a CA's certificate) as `name`, signed in
+    /// with an Elo Pros `pass` (empty for a guest), asking for `mode` in
+    /// `skin`; wait for the welcome, handing each line the stream gives
+    /// (the queue, a cup, a refusal) to `status`; then run the game.
+    ///
+    /// A server on its way down refuses as full: `follow()` then resolves
+    /// to the live server's `[addr, hash]` (the deploy's other slot,
+    /// ops/README.md), or null if it is this one, and we go there once
+    /// with the same pass. Resolves true once the game runs, false if the
+    /// server said no (`status` has had why). `opts`: a comma list of
+    /// `autoplay` and `lite` (see `Opts`).
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen]
-    /// `opts`: a comma list of `autoplay` and `lite` (see `Opts`).
-    pub async fn play(addr: String, hash: String, name: String, mode: u8, opts: String) -> Result<(), JsValue> {
-        let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
-        super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts)).run();
-        Ok(())
+    pub async fn play(
+        addr: String,
+        hash: String,
+        name: String,
+        pass: String,
+        mode: u8,
+        skin: u8,
+        opts: String,
+        status: js_sys::Function,
+        follow: js_sys::Function,
+    ) -> Result<bool, JsValue> {
+        let connect = |addr: String, hash: String| Client::connect(addr, hash, name.clone(), pass.clone(), mode, skin);
+        let say = |line: &str| {
+            let _ = status.call1(&JsValue::NULL, &JsValue::from_str(line));
+        };
+        let mut c = connect(addr, hash).await?;
+        let mut moved = false;
+        let mut early = Vec::new();
+        'wait: loop {
+            c.tick(sim::input::Input::default());
+            for m in c.session_mut().take_messages() {
+                if m == (proto::Msg::Refuse {
+                    reason: proto::REFUSE_FULL,
+                }) && !moved
+                {
+                    moved = true;
+                    say("moving to the new server...");
+                    let to = follow.call0(&JsValue::NULL)?.dyn_into::<js_sys::Promise>()?;
+                    if let Some(a) = JsFuture::from(to).await?.dyn_ref::<js_sys::Array>() {
+                        c.close();
+                        c = connect(
+                            a.get(0).as_string().unwrap_or_default(),
+                            a.get(1).as_string().unwrap_or_default(),
+                        )
+                        .await?;
+                        early.clear();
+                        continue 'wait;
+                    }
+                }
+                if let Some(line) = super::hud::status_line(&m) {
+                    say(&line);
+                }
+                early.push(m);
+            }
+            if c.ready() {
+                break;
+            }
+            if c.closed() {
+                return Ok(false);
+            }
+            sleep(100).await;
+        }
+        let mut app = super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts));
+        app.insert_resource(super::Early(early));
+        app.run();
+        Ok(true)
     }
 }

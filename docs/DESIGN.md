@@ -471,7 +471,10 @@ keeps every gate in §17 green and moves a golden only on purpose.
     chase cameras, the controls, a text HUD; native on wtransport, and in
     the browser on WebGL2, where it joins a Big Team match on Dry Fork): a playable skeleton, Gates' lighting, sky,
     terrain and grass, the game's feel, and last its wasm build replacing
-    `web/`.
+    `web/`. Its page has the three.js page's menu (name, skin, Elo Pros
+    sign-in, every mode, the queue's wait, the move to the live slot when a
+    server drains, back to the menu at the end) and its controls (the same
+    keys, taps that land inside a frame, the wheel, `N`'s net graph).
 
 ## 17 · What CI blocks a merge on
 

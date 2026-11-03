@@ -5,7 +5,8 @@
 // software GPU) against bots that stand still. Passes when it
 // connected, drew frames and scored a kill. Defaults: a casual duel against
 // the bot on Proving Grounds. ci/client.sh builds crates/client/dist first.
-// A screenshot goes to traces/client-e2e-<mode>.png.
+// A screenshot goes to traces/client-e2e-<mode>.png. First, the menu: its
+// button for the mode must get a person into the match.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -40,6 +41,27 @@ const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+// The menu first: a person's way in. Pick the mode's button, and the menu
+// must give way to the game.
+const BUTTONS = ['play', 'duel', 'doubles', 'ffa', 'gungame', 'cup', 'bigteam'];
+const menuFails = [];
+// Ranked's buttons wait for a sign-in: only casual modes go through it here.
+if ([0, 3, 4, 6].includes(mode)) {
+  const p = await browser.newPage({ viewport: { width: 960, height: 540 } });
+  p.on('pageerror', (e) => errors.push(e.message));
+  await p.goto(`${url}?lite=1&name=menu`);
+  await p.click(`#${BUTTONS[mode]}`, { timeout: 30000 }).catch((e) => menuFails.push(`no ${BUTTONS[mode]} button: ${e.message}`));
+  const t = Date.now();
+  let m = null;
+  while (Date.now() - t < 30000) {
+    await p.waitForTimeout(500);
+    m = await p.evaluate(() => ({ connected: !!window.__oneshot?.connected, menu: getComputedStyle(document.getElementById('menu')).display }));
+    if (m.connected && m.menu === 'none') break;
+  }
+  if (!m?.connected) menuFails.push('the menu never got us into a match');
+  else if (m.menu !== 'none') menuFails.push('the menu stayed up in the match');
+  await p.close();
+}
 await page.goto(`${url}?mode=${mode}&name=e2e&autoplay=1&lite=1`);
 
 const state = () => page.evaluate(() => window.__oneshot ?? null);
@@ -56,7 +78,7 @@ await browser.close();
 server.kill();
 
 console.log(JSON.stringify(s));
-const fails = [];
+const fails = [...menuFails];
 if (!s || !s.connected) fails.push('never connected');
 if (!s || s.frames < 30) fails.push(`drew ${s?.frames ?? 0} frames`);
 if (!s || s.kills < 1) fails.push('scored no kill');
