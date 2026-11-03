@@ -15,7 +15,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
-| `crates/client-net` | the browser's netcode: `core` (clock, prediction, interpolation; native-tested), `web` (wasm) |
+| `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
 | `web/` | three.js page: draws, never decides. Replaced by the Bevy client (`DESIGN.md` §16, milestone 12) |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
 

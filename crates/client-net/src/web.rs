@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use js_sys::Uint8Array;
 use proto::frame::{FrameBuf, LEN_PREFIX_BYTES};
-use proto::{decode_msg, decode_snapshot, encode_input, frame_msg, Msg, Name, MAX_DATAGRAM, MAX_STREAM_MSG, PROTO_VER};
+use proto::{decode_msg, frame_msg, Msg, MAX_STREAM_MSG};
 use sim::input::Input;
 use sim::map::Map;
 use wasm_bindgen::prelude::*;
@@ -24,7 +24,7 @@ use web_sys::{
     WritableStreamDefaultWriter,
 };
 
-use crate::core::NetCore;
+use crate::session::{Session, Wire};
 
 fn js_err(what: &str, v: &JsValue) -> JsValue {
     let msg = js_sys::Reflect::get(v, &JsValue::from_str("message"))
@@ -128,24 +128,41 @@ fn datagram_writer(d: &WebTransportDatagramDuplexStream) -> Result<WritableStrea
 
 type Queue<T> = Rc<RefCell<VecDeque<T>>>;
 
+/// The datagram writer as a session's [`Wire`]: never waits; a datagram
+/// past the path's size or behind a full queue is dropped.
+struct WebWire<'a> {
+    datagrams: &'a WebTransportDatagramDuplexStream,
+    writer: &'a WritableStreamDefaultWriter,
+}
+
+impl Wire for WebWire<'_> {
+    fn send_datagram(&mut self, payload: &[u8]) -> bool {
+        let max = self.datagrams.max_datagram_size() as usize;
+        if max != 0 && payload.len() > max {
+            return false;
+        }
+        if self.writer.desired_size().ok().flatten().is_some_and(|d| d <= 0.0) {
+            return false;
+        }
+        let chunk = Uint8Array::new_with_length(payload.len() as u32);
+        chunk.copy_from(payload);
+        let p = self.writer.write_with_chunk(&chunk);
+        spawn_local(async move {
+            let _ = JsFuture::from(p).await;
+        });
+        true
+    }
+}
+
 #[wasm_bindgen]
 pub struct Client {
-    core: NetCore,
+    session: Session,
     transport: WebTransport,
     datagrams: WebTransportDatagramDuplexStream,
     writer: WritableStreamDefaultWriter,
     inbox: Queue<(f64, Vec<u8>)>,
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
-    dropped: u32,
-    /// The welcome has come: a room, a seat, a clock.
-    ready: bool,
-    /// Stream messages for the page, until `messages()` takes them.
-    out: Vec<Msg>,
-    /// The map the welcome named.
-    map_id: u8,
-    /// Welcomes so far: a cup's entrant gets one a heat.
-    welcomes: u32,
 }
 
 #[wasm_bindgen]
@@ -194,17 +211,7 @@ impl Client {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        write_frame(
-            &sw,
-            &Msg::Hello {
-                proto: PROTO_VER,
-                name: Name::new(&name),
-                pass,
-                mode,
-                skin,
-            },
-        )
-        .await?;
+        write_frame(&sw, &Session::hello(&name, pass, mode, skin)).await?;
         let mut reader = FrameReader::new(&bidi.readable())?;
 
         let msgs: Queue<Msg> = Rc::default();
@@ -258,55 +265,49 @@ impl Client {
         }
         let writer = datagram_writer(&datagrams)?;
         Ok(Client {
-            // A stand-in until the welcome names the seat.
-            core: NetCore::new(0, 0, 0, sim::world::Rules::duel(), Map::proving_grounds()),
-            ready: false,
-            out: Vec::new(),
-            map_id: 0,
-            welcomes: 0,
+            session: Session::new(),
             transport,
             datagrams,
             writer,
             inbox,
             msgs,
             closed,
-            dropped: 0,
         })
     }
 
     #[wasm_bindgen(getter)]
     pub fn slot(&self) -> u8 {
-        self.core.slot
+        self.session.core.slot
     }
 
     #[wasm_bindgen(getter)]
     pub fn team(&self) -> u8 {
-        self.core.team
+        self.session.core.team
     }
 
     /// How many welcomes have come: a cup's entrant is welcomed into each
     /// heat on the same connection, and the page redraws the level then.
     #[wasm_bindgen(getter)]
     pub fn welcomes(&self) -> u32 {
-        self.welcomes
+        self.session.welcomes
     }
 
     /// The map this match is on (`map_boxes(map)` and friends draw it).
     #[wasm_bindgen(getter)]
     pub fn map(&self) -> u8 {
-        self.map_id
+        self.session.map_id
     }
 
     /// Whether this match is Gun Game: the score is the rung.
     #[wasm_bindgen(getter)]
     pub fn gun_game(&self) -> bool {
-        self.core.rules.gun_game
+        self.session.core.rules.gun_game
     }
 
     /// Whether this match is red against blue.
     #[wasm_bindgen(getter)]
     pub fn teams(&self) -> bool {
-        self.core.rules.teams
+        self.session.core.rules.teams
     }
 
     /// The gun on Gun Game's rung `score`.
@@ -322,43 +323,14 @@ impl Client {
     /// Whether the welcome has come and play has begun.
     #[wasm_bindgen(getter)]
     pub fn ready(&self) -> bool {
-        self.ready
+        self.session.ready
     }
 
-    /// Takes in stream messages: a welcome starts the netcode; a reveal is
-    /// checked against the welcome's commitment; the rest wait for the page.
+    /// Takes in stream messages (the session's to read).
     fn absorb(&mut self) {
         let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
         for m in msgs {
-            match m {
-                Msg::Welcome {
-                    slot,
-                    team,
-                    tick,
-                    rules,
-                    salt_commit,
-                    map,
-                    ..
-                } => {
-                    // A map this page doesn't know: it is out of date.
-                    let Some(m) = sim::map::by_id(map) else {
-                        self.out.push(Msg::Refuse {
-                            reason: proto::REFUSE_VERSION,
-                        });
-                        continue;
-                    };
-                    self.map_id = map;
-                    self.welcomes += 1;
-                    self.core = NetCore::new(slot, team, tick, rules, m);
-                    self.core.salt_commit = salt_commit;
-                    self.ready = true;
-                }
-                Msg::Reveal { salt } => {
-                    self.core.on_reveal(salt);
-                    self.out.push(m);
-                }
-                m => self.out.push(m),
-            }
+            self.session.on_msg(m);
         }
     }
 
@@ -366,17 +338,13 @@ impl Client {
     /// controls as they are, sends what is due.
     pub fn update(&mut self, now: f64, buttons: u16, yaw: u16, pitch: i16, mx: i8, mz: i8) {
         self.absorb();
-        if !self.ready {
+        if !self.session.ready {
             self.inbox.borrow_mut().clear();
             return;
         }
         let arrived: Vec<(f64, Vec<u8>)> = self.inbox.borrow_mut().drain(..).collect();
         for (at, d) in arrived {
-            if proto::datagram_kind(&d) == Some(proto::DG_SNAPSHOT) {
-                if let Ok(s) = decode_snapshot(&d) {
-                    self.core.on_snapshot(at, &s);
-                }
-            }
+            self.session.on_datagram(at, &d);
         }
         let input = Input {
             buttons,
@@ -385,29 +353,11 @@ impl Client {
             mx,
             mz,
         };
-        let mut buf = [0u8; MAX_DATAGRAM];
-        for m in self.core.update(now, input) {
-            let Ok(n) = encode_input(&m, &mut buf) else { continue };
-            self.send_datagram(&buf[..n]);
-        }
-    }
-
-    fn send_datagram(&mut self, payload: &[u8]) {
-        let max = self.datagrams.max_datagram_size() as usize;
-        if max != 0 && payload.len() > max {
-            self.dropped += 1;
-            return;
-        }
-        if self.writer.desired_size().ok().flatten().is_some_and(|d| d <= 0.0) {
-            self.dropped += 1;
-            return;
-        }
-        let chunk = Uint8Array::new_with_length(payload.len() as u32);
-        chunk.copy_from(payload);
-        let p = self.writer.write_with_chunk(&chunk);
-        spawn_local(async move {
-            let _ = JsFuture::from(p).await;
-        });
+        let mut wire = WebWire {
+            datagrams: &self.datagrams,
+            writer: &self.writer,
+        };
+        self.session.update(now, input, &mut wire);
     }
 
     /// Our own fighter, drawn: x y z, eye height, yaw, pitch (radians),
@@ -416,7 +366,7 @@ impl Client {
     /// grounded, speed, then the seat it rides in (−1 on foot, 0 driver, 1
     /// passenger) and that vehicle's slot.
     pub fn own(&self) -> Vec<f32> {
-        let (f, p) = self.core.own();
+        let (f, p) = self.session.core.own();
         let g = f.gun();
         let a = sim::arms::arm(g.arm);
         let reload = if f.reload > 0 {
@@ -464,8 +414,8 @@ impl Client {
     pub fn vehicles(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
         let seat = |x: u8| if x == 0 { -1.0 } else { x as f32 - 1.0 };
-        if let Some((car, p, yaw)) = self.core.own_vehicle() {
-            let i = self.core.own().0.riding().map_or(0, |(i, _)| i);
+        if let Some((car, p, yaw)) = self.session.core.own_vehicle() {
+            let i = self.session.core.own().0.riding().map_or(0, |(i, _)| i);
             v.extend_from_slice(&[
                 i as f32,
                 p.x,
@@ -477,7 +427,7 @@ impl Client {
                 seat(car.seats[1]),
             ]);
         }
-        for d in self.core.vehicles(now) {
+        for d in self.session.core.vehicles(now) {
             v.extend_from_slice(&[
                 d.slot as f32,
                 d.pos.x,
@@ -496,7 +446,7 @@ impl Client {
     /// grounded, reloading, x, y, z, yaw, pitch, arm, shield (0..1), speed.
     pub fn others(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
-        for d in self.core.others(now) {
+        for d in self.session.core.others(now) {
             push_drawn(&mut v, &d);
         }
         v
@@ -508,7 +458,7 @@ impl Client {
     /// far through the run-up (0..1). Empty otherwise. Made only of
     /// snapshots we were already sent.
     pub fn killcam(&self, now: f64) -> Vec<f32> {
-        let Some(k) = self.core.killcam(now) else {
+        let Some(k) = self.session.core.killcam(now) else {
             return Vec::new();
         };
         let mut v = vec![k.eye.x, k.eye.y, k.eye.z, k.yaw, k.pitch, k.killer as f32, k.progress];
@@ -522,7 +472,7 @@ impl Client {
     /// velocity x z.
     pub fn projectiles(&self) -> Vec<f32> {
         let mut v = Vec::new();
-        for p in self.core.latest().proj() {
+        for p in self.session.core.latest().proj() {
             v.extend_from_slice(&[
                 p.kind as f32,
                 p.owner as f32,
@@ -540,7 +490,7 @@ impl Client {
     /// pos x y z, end x y z (sim::events::Kind numbers the kinds).
     pub fn events(&mut self) -> Vec<f32> {
         let mut v = Vec::new();
-        for e in self.core.drain_events() {
+        for e in self.session.core.drain_events() {
             v.extend_from_slice(&[
                 e.kind as f32,
                 e.a as f32,
@@ -563,12 +513,12 @@ impl Client {
     /// scores (each side's with teams, else each seat's), then each pad's
     /// seconds until its gun is back.
     pub fn match_state(&self) -> Vec<f32> {
-        let s = self.core.latest();
+        let s = self.session.core.latest();
         let mut v = vec![
             s.phase as f32,
             s.clock as f32 / sim::consts::TICK_HZ as f32,
             s.winner as f32,
-            self.core.rules.score_limit as f32,
+            self.session.core.rules.score_limit as f32,
         ];
         v.push(s.score.len() as f32);
         v.extend(s.score.iter().map(|&x| x as f32));
@@ -580,7 +530,7 @@ impl Client {
     pub fn messages(&mut self) -> js_sys::Array {
         let out = js_sys::Array::new();
         self.absorb();
-        let msgs: Vec<Msg> = core::mem::take(&mut self.out);
+        let msgs: Vec<Msg> = self.session.take_messages();
         for m in msgs {
             let o = js_sys::Object::new();
             let set = |k: &str, v: JsValue| {
@@ -614,7 +564,7 @@ impl Client {
                 }
                 Msg::Reveal { .. } => {
                     set("type", "reveal".into());
-                    set("verified", (self.core.verified == Some(true)).into());
+                    set("verified", (self.session.core.verified == Some(true)).into());
                 }
                 Msg::Queued { mode, waiting_s } => {
                     set("type", "queued".into());
@@ -665,7 +615,7 @@ impl Client {
     /// and whether the match's revealed salt matched its commitment (1 yes,
     /// 0 no, −1 not revealed yet).
     pub fn stats(&self) -> Vec<f64> {
-        let s = self.core.stats;
+        let s = self.session.core.stats;
         vec![
             s.snapshots as f64,
             s.confirmations as f64,
@@ -674,8 +624,8 @@ impl Client {
             s.depth as f64,
             s.rate,
             s.delay_ticks,
-            self.dropped as f64,
-            self.core.verified.map_or(-1.0, |v| v as u8 as f64),
+            self.session.dropped as f64,
+            self.session.core.verified.map_or(-1.0, |v| v as u8 as f64),
         ]
     }
 

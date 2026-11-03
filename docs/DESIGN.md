@@ -439,7 +439,9 @@ keeps every gate in §17 green and moves a golden only on purpose.
     every projectile, pad and vehicle fit one today with room for events
     (`room/tests/budget.rs`).
 12. **The Bevy client:** a session layer in `client-net` and a native
-    transport, then the client: a playable skeleton, Gates' lighting, sky,
+    transport (done: `client_net::session::Session` over a `Wire`, the
+    browser's WebTransport in `web.rs`, wtransport in `native.rs`; the
+    server's end-to-end test plays through it), then the client: a playable skeleton, Gates' lighting, sky,
     terrain and grass, the game's feel, and last its wasm build replacing
     `web/`.
 
