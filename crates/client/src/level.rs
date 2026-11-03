@@ -27,16 +27,25 @@ pub struct Dressed;
 #[derive(Component)]
 pub struct GrassPart;
 
+/// A material's roughness over the photograph's, which averages about 0.6.
+const ROUGH_SCALE: f32 = 1.5;
+
+/// The arena floor's look (not a map look: a flat map's ground).
+const FLOOR: u8 = 255;
+
 /// A box's texture set, the metres it repeats over, and its tint (the
 /// photograph's colour times this).
 fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
     Some(match look {
         0 => ("concrete", 3.0, Color::srgb(0.9, 0.88, 0.84)),
         1 => ("metal", 2.0, Color::srgb(0.85, 0.87, 0.9)),
-        3 => ("metal", 2.0, Color::srgb(0.95, 0.55, 0.5)),
-        4 => ("metal", 2.0, Color::srgb(0.55, 0.68, 0.98)),
+        3 => ("panel", 4.0, Color::srgb(0.78, 0.36, 0.32)),
+        4 => ("panel", 4.0, Color::srgb(0.32, 0.45, 0.78)),
         5 => ("metal", 2.0, Color::srgb(0.45, 0.47, 0.5)),
         6 => ("rock", 2.5, Color::srgb(0.95, 0.58, 0.42)),
+        7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
+        11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
+        FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
         _ => return None,
     })
 }
@@ -117,22 +126,51 @@ pub fn dress_level(
         let Some((albedo, normal)) = tex.set(set) else {
             continue;
         };
-        let (roughness, metallic) = if set == "metal" { (0.55, 0.35) } else { (0.9, 0.0) };
+        let (roughness, metallic) = match (look.0, set) {
+            (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
+            (_, "metal") => (0.55, 0.35),
+            _ => (0.9, 0.0),
+        };
+        // With the photographed roughness and occlusion, the numbers scale
+        // the photograph's (its roughness is about 0.6 on average).
+        let orm = tex.orm(set);
+        let scale = if orm.is_some() { ROUGH_SCALE } else { 1.0 };
         let m = mats.add(StandardMaterial {
             base_color: tint,
             base_color_texture: Some(albedo),
             normal_map_texture: Some(normal),
-            perceptual_roughness: roughness,
+            perceptual_roughness: (roughness * scale).min(1.0),
             metallic,
+            metallic_roughness_texture: orm.clone(),
+            occlusion_texture: orm,
             ..default()
         });
         commands.entity(e).insert((MeshMaterial3d(m), Dressed));
     }
 }
 
+/// How bright a light strip is, over the display's white (HDR: past 1 it
+/// blooms on the desktop), and a launcher's glow beside it.
+const STRIP_GLOW: f32 = 4.0;
+const LAUNCHER_GLOW: f32 = 2.5;
+
+/// A light strip's colour (looks `glow`, `red_glow`, `blue_glow`): drawn
+/// unshadowed and emissive, the same in the sun and in a hangar.
+fn strip(i: u8) -> Option<Color> {
+    Some(match i {
+        8 => Color::srgb(0.62, 0.88, 1.0),
+        9 => Color::srgb(1.0, 0.36, 0.26),
+        10 => Color::srgb(0.3, 0.55, 1.0),
+        _ => return None,
+    })
+}
+
 /// A box's look (tools/maps/compile.mjs LOOKS): its colour and roughness.
 fn look(i: u8) -> (Color, f32, f32) {
     match i {
+        7 => (Color::srgb(0.36, 0.39, 0.44), 0.45, 0.55),  // hull
+        11 => (Color::srgb(0.66, 0.68, 0.71), 0.45, 0.55), // plate
+        8..=10 => (strip(i).unwrap_or(Color::WHITE), 0.3, 0.0),
         0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0),  // wall
         1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2),  // block
         2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4),  // trim
@@ -208,6 +246,21 @@ pub fn build(
         let size = b.max - b.min;
         let mid = (b.min + b.max) * 0.5;
         let tile = dress(l).map_or(2.0, |d| d.1);
+        if let Some(c) = strip(l) {
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: c,
+                    emissive: LinearRgba::from(c) * STRIP_GLOW,
+                    perceptual_roughness: roughness,
+                    ..default()
+                })),
+                Transform::from_xyz(mid.x, mid.y, mid.z),
+                bevy::light::NotShadowCaster,
+            ));
+            continue;
+        }
         commands.spawn((
             LevelPart,
             BoxLook(l),
@@ -251,16 +304,23 @@ pub fn build(
             ));
         }
         None => {
+            // The floor as a slab whose top is y = 0, textured in world
+            // metres like the boxes on it.
             let size = 2.0 * half + 40.0;
             commands.spawn((
                 LevelPart,
-                Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
+                BoxLook(FLOOR),
+                Mesh3d(meshes.add(box_mesh(
+                    Vec3::new(size, 0.2, size),
+                    Vec3::new(cx, -0.1, cz),
+                    dress(FLOOR).map_or(4.0, |d| d.1),
+                ))),
                 MeshMaterial3d(mats.add(StandardMaterial {
                     base_color: Color::srgb(0.42, 0.43, 0.45),
                     perceptual_roughness: 0.95,
                     ..default()
                 })),
-                Transform::from_xyz(cx, 0.0, cz),
+                Transform::from_xyz(cx, -0.1, cz),
             ));
         }
     }
@@ -271,7 +331,7 @@ pub fn build(
             Mesh3d(meshes.add(Cuboid::new(b.x - a.x, 0.08, b.z - a.z))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: Color::srgb(0.27, 0.82, 1.0),
-                emissive: LinearRgba::rgb(0.1, 0.56, 0.75),
+                emissive: LinearRgba::rgb(0.1, 0.56, 0.75) * LAUNCHER_GLOW,
                 ..default()
             })),
             Transform::from_xyz((a.x + b.x) * 0.5, a.y + 0.04, (a.z + b.z) * 0.5),

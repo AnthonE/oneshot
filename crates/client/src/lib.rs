@@ -405,7 +405,7 @@ fn draw_fighters(
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
     let others = match (core.killcam(now), &posed) {
-        (_, Some(p)) => vec![p.0],
+        (_, Some(p)) => p.2.fighter.then_some(p.0).into_iter().collect(),
         (Some(k), _) if !core.own().0.alive => k.bodies,
         _ => core.others(now),
     };
@@ -770,10 +770,11 @@ mod web_start {
     /// `query` is the page's, as `?yaw=1.57&arm=3`).
     #[wasm_bindgen]
     pub fn pose(query: String, opts: String) {
+        let pose = super::pose::Pose::parse(&query);
         let opts = super::Opts {
-            pose: Some(super::pose::Pose::parse(&query)),
+            pose: Some(pose),
             ..super::Opts::parse(&opts)
         };
-        super::app(Box::new(super::link::Still::new()), opts).run();
+        super::app(Box::new(super::link::Still::on(pose.2.map)), opts).run();
     }
 }

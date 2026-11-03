@@ -67,6 +67,74 @@
       ],
       "png": "traces/look-3.png",
       "refs": []
+    },
+    {
+      "id": "bulkhead-base",
+      "name": "Bulkhead: red's deck",
+      "what": "Bulkhead from red's deck, 3 m up, over the pit to blue's base",
+      "take": "the whole map reads from home: the bridge, the pit, both lanes, which base is whose",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=4&eye=-11,1.6,-8&look=0,2,0",
+        "map=4&eye=-2,4.6,0.5&look=20,3,0",
+        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-0.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-pit",
+      "name": "Bulkhead: bottom mid",
+      "what": "the pit under the bridge, from beside red's low wall",
+      "take": "the pit is its own place: cover to fight around, the lifts, the bridge overhead",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=4&eye=-11,1.6,-8&look=0,2,0",
+        "map=4&eye=-2,4.6,0.5&look=20,3,0",
+        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-1.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-top",
+      "name": "Bulkhead: top mid",
+      "what": "on top mid with the sniper, looking down the bridge at blue's deck",
+      "take": "the long sight line and where it's exposed; the far base reads as blue",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=4&eye=-11,1.6,-8&look=0,2,0",
+        "map=4&eye=-2,4.6,0.5&look=20,3,0",
+        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-2.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-lane",
+      "name": "Bulkhead: a side lane",
+      "what": "red's end of the north lane, looking along it",
+      "take": "the lane is a route of its own, and the steps down into the pit read",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=4&eye=-11,1.6,-8&look=0,2,0",
+        "map=4&eye=-2,4.6,0.5&look=20,3,0",
+        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-3.png",
+      "refs": []
     }
   ]
 }

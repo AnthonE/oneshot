@@ -48,6 +48,7 @@ const SOUNDS = [
 
 // The ground's four (sand, grass, the creek's gravel, rock) and the boxes'.
 const SETS = ['sand', 'grass', 'gravel', 'rock', 'concrete', 'metal'];
+const BOX_SETS = ['concrete', 'metal', 'rock'];
 
 // The models: Gates' files as they are into a scratch folder, then tools/glb
 // re-embeds their textures into ours.
@@ -78,5 +79,7 @@ mkdirSync(join(out, 'textures'), { recursive: true });
 copyFileSync(join(tex, 'grass_card_albedo.png'), join(out, 'textures/grass_card_albedo.png'));
 for (const set of SETS) {
   for (const m of ['albedo', 'normal']) copyFileSync(join(tex, `${set}_${m}.jpg`), join(out, `textures/${set}_${m}.jpg`));
+  // The boxes' roughness and occlusion (look/textures.rs packs them).
+  if (BOX_SETS.includes(set)) for (const m of ['rough', 'ao']) copyFileSync(join(tex, `${set}_${m}.jpg`), join(out, `textures/${set}_${m}.jpg`));
 }
 console.log(`${Object.keys(MODELS).length} models, ${SOUNDS.length} sounds, ${SETS.length * 2 + 1} textures into ${out}`);
