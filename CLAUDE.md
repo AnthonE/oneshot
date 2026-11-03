@@ -10,7 +10,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 
 | crate | what |
 |---|---|
-| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, Slayer, rewind; the map's box grid (`grid.rs`) and terrain (`terrain.rs`). Native on the server, wasm in the browser |
+| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`) and terrain (`terrain.rs`). Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |

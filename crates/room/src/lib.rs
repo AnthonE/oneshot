@@ -8,7 +8,8 @@ pub mod fog;
 pub mod replay;
 pub mod watch;
 
-use proto::{encode_snapshot, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
+use proto::MAX_SNAP_VEHICLES;
+use proto::{encode_snapshot, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
@@ -456,7 +457,15 @@ impl Room {
                     let f = &mut self.fogs[s];
                     f.update(&self.world, s, lead, tick);
                     let low = c.take_low();
-                    let snap = build(&self.world, s, c.last_seq, low, &c.pending, |q| f.shows(q, tick));
+                    let snap = build(
+                        &self.world,
+                        s,
+                        c.last_seq,
+                        low,
+                        &c.pending,
+                        |q| f.shows(q, tick),
+                        |i| f.shows_vehicle(i, tick),
+                    );
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
                     snaps.push((s as u8, snap));
@@ -477,6 +486,7 @@ pub fn build(
     depth: i8,
     events: &[Event],
     visible: impl Fn(usize) -> bool,
+    vehicle_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
     let mut snap = Snapshot {
         tick: w.tick,
@@ -501,6 +511,7 @@ pub fn build(
             sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible),
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
+            sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
         }
     }
     for e in events {
@@ -564,6 +575,42 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
             vel: p.vel,
         };
         snap.n_proj += 1;
+    }
+}
+
+/// The vehicle this client rides in, exactly; the others fog shows it
+/// (`visible`: [`fog::Fog::shows_vehicle`]), or that someone it knows
+/// rides in; and a seat's rider only when it may know them.
+fn add_vehicles(
+    snap: &mut Snapshot,
+    w: &World,
+    s: usize,
+    known: &impl Fn(usize) -> bool,
+    visible: &impl Fn(usize) -> bool,
+) {
+    let me = &w.fighters[s];
+    let mine = me.riding().map(|(i, _)| i);
+    if let Some(i) = mine {
+        snap.own_vehicle = Some(w.vehicles[i]);
+    }
+    for (i, v) in w.vehicles.live() {
+        if snap.n_vehicles as usize >= MAX_SNAP_VEHICLES {
+            break;
+        }
+        let ridden_by_known = v.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
+        if mine != Some(i) && !ridden_by_known && !visible(i) {
+            continue;
+        }
+        let seat = |x: u8| if x != 0 && known(x as usize - 1) { x } else { 0 };
+        snap.vehicles[snap.n_vehicles as usize] = VehState {
+            slot: i as u8,
+            pos: v.pos,
+            vel: v.vel,
+            yaw: v.yaw,
+            health: (v.health.max(0) as i64 * 255 / sim::consts::VEH_HEALTH as i64) as u8,
+            seats: [seat(v.seats[0]), seat(v.seats[1])],
+        };
+        snap.n_vehicles += 1;
     }
 }
 
@@ -636,8 +683,16 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
             let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
             Some(EventState { pos, ..full })
         }
-        // Where someone spawned, picked up or swung: only if seen.
-        Ev::Spawn | Ev::Pickup | Ev::Melee => known(a).then_some(full),
+        // Where someone spawned, picked up, swung, or got in or out: only if
+        // seen.
+        Ev::Spawn | Ev::Pickup | Ev::Melee | Ev::Ride => known(a).then_some(full),
+        // A hull hit: the hitter's business and its riders'.
+        Ev::VehicleHit => {
+            let rides = w.fighters[s].riding().is_some_and(|(i, _)| i == e.part as usize);
+            (a == s || rides).then_some(full)
+        }
+        // A wreck seen (its blast is sent as a Blast, heard or seen).
+        Ev::Wreck => (known(a) || w.map.clear(eye, e.pos)).then_some(full),
         Ev::None => None,
     }
 }

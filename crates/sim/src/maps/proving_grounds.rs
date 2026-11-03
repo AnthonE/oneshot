@@ -61,4 +61,6 @@ pub const DEF: Def = Def {
     terrain: None,
     launchers: &[
     ],
+    vehicles: &[
+    ],
 };

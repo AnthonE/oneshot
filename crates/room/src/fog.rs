@@ -11,10 +11,12 @@
 //! person and every enemy. At 2v2 that is a few thousand box tests a
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
-use sim::consts::{CROUCH_EYE, EYE, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{CROUCH_EYE, EYE, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 use sim::map::Map;
+use sim::vehicle::Vehicle;
 use sim::world::World;
 
 /// Ticks an enemy stays sent after its last clear line (94 ms).
@@ -171,10 +173,63 @@ pub fn plainly_sees(map: &Map, viewer: &Fighter, target: &Fighter) -> bool {
         || map.clear(e, target.body.pos + V3::new(0.0, head, 0.0))
 }
 
-/// One viewer's fog: until when each other seat stays sent.
+/// Points of a hull a vehicle has, a time.
+const VPOINTS: usize = 6;
+
+/// The points of a hull that, in clear line, show it: its middle, the
+/// middle of its top and its four top corners, now and pushed ahead by its
+/// speed over `lead`. The first two now are the plain test's.
+pub fn vehicle_points(v: &Vehicle, lead: f32) -> [V3; 2 * VPOINTS] {
+    let (f, r) = v.axes();
+    let mut out = [V3::ZERO; 2 * VPOINTS];
+    for (k, at) in [v.pos, v.pos + v.vel * lead].into_iter().enumerate() {
+        let top = at + V3::new(0.0, VEH_H * 0.8, 0.0);
+        let p = &mut out[k * VPOINTS..(k + 1) * VPOINTS];
+        p[0] = at + V3::new(0.0, VEH_H * 0.5, 0.0);
+        p[1] = top;
+        p[2] = top + f * VEH_HALF_L + r * VEH_HALF_W;
+        p[3] = top - f * VEH_HALF_L - r * VEH_HALF_W;
+        p[4] = top + f * VEH_HALF_L - r * VEH_HALF_W;
+        p[5] = top - f * VEH_HALF_L + r * VEH_HALF_W;
+    }
+    out
+}
+
+/// Whether a hull is in clear line from `eye`, now or within `lead`.
+pub fn sees_vehicle(map: &Map, eye: V3, v: &Vehicle, lead: f32) -> bool {
+    vehicle_points(v, lead).iter().any(|&p| map.clear(eye, p))
+}
+
+/// [`sees_vehicle`], as fog runs it: the points now and the points ahead a
+/// group at a time, a group the ground plainly hides casting no rays; past
+/// [`FAR_M`], only the middles and two opposite corners. Then the plain test.
+fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> bool {
+    let p = vehicle_points(v, lead);
+    let groups: [&[V3]; 2] = if far {
+        [&p[0..4], &p[VPOINTS..VPOINTS + 4]]
+    } else {
+        [&p[0..VPOINTS], &p[VPOINTS..]]
+    };
+    let one = core::slice::from_ref(&eye);
+    groups
+        .iter()
+        .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
+        || plainly_sees_vehicle(map, eye, v)
+}
+
+/// The plain test for a hull: its middle or the middle of its top in clear
+/// line now (the first two of [`vehicle_points`]). Fog must never hide what
+/// passes this.
+pub fn plainly_sees_vehicle(map: &Map, eye: V3, v: &Vehicle) -> bool {
+    vehicle_points(v, 0.0)[..2].iter().any(|&p| map.clear(eye, p))
+}
+
+/// One viewer's fog: until when each other seat, and each vehicle, stays
+/// sent.
 #[derive(Clone, Debug, Default)]
 pub struct Fog {
     until: [u32; MAX_FIGHTERS],
+    vuntil: [u32; MAX_VEHICLES],
 }
 
 /// Past this, a pair's full look comes every [`FAR_EVERY`] snapshots, not
@@ -227,6 +282,35 @@ impl Fog {
                 }
             }
         }
+        // Vehicles the same way: the full look (from the eye, ahead by
+        // lead and a snapshot) every other snapshot, the plain test between.
+        let eye = me.eye();
+        let mine = me.riding().map(|(i, _)| i);
+        for (i, v) in w.vehicles.iter().enumerate() {
+            if !v.active {
+                self.vuntil[i] = 0;
+            } else if mine == Some(i) {
+                self.vuntil[i] = u32::MAX;
+            } else {
+                let far = (v.pos - me.body.pos).flat().len() > FAR_M;
+                let k = if far { FAR_EVERY } else { 2 };
+                let seen = if (turn + i).is_multiple_of(k) {
+                    sees_vehicle_full(&w.map, eye, v, full_lead(lead, k), far)
+                } else {
+                    plainly_sees_vehicle(&w.map, eye, v)
+                };
+                if seen {
+                    self.vuntil[i] = tick + HOLD_TICKS;
+                } else if self.vuntil[i] == u32::MAX {
+                    self.vuntil[i] = 0;
+                }
+            }
+        }
+    }
+
+    /// Whether vehicle `i` may be sent at `tick`.
+    pub fn shows_vehicle(&self, i: usize, tick: u32) -> bool {
+        self.vuntil[i] != 0 && self.vuntil[i] >= tick
     }
 
     /// Whether seat `q` may be sent at `tick`.

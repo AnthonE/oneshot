@@ -38,7 +38,7 @@ fn the_worst_case_snapshot_fits_a_datagram() {
             ..Event::default()
         })
         .collect();
-    let snap = room::build(&w, 0, 1, 0, &events, |_| true);
+    let snap = room::build(&w, 0, 1, 0, &events, |_| true, |_| true);
     assert_eq!(snap.n_remote as usize, MAX_REMOTES);
     assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
     assert_eq!(snap.n_score, 2);

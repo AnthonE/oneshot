@@ -23,6 +23,14 @@ pub enum Kind {
     Blast,
     Melee,
     Throw,
+    /// `a` hurt vehicle `part` (its slot) for `c` points.
+    VehicleHit,
+    /// Vehicle `part` blew up at `pos`, `a` the one who did it (or a
+    /// slot past the seats: nobody).
+    Wreck,
+    /// `a` got into vehicle `part`'s seat `b` (0 driver, 1 passenger), or
+    /// out of it when `c` is 1.
+    Ride,
 }
 
 /// Kill causes past the arm ids.
@@ -33,6 +41,10 @@ pub enum Cause {
     Melee = 101,
     Behind = 102,
     Fall = 103,
+    /// Run down by a vehicle.
+    Splatter = 104,
+    /// In or by a vehicle when it blew up.
+    Wreck = 105,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

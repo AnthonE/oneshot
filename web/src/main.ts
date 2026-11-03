@@ -7,6 +7,7 @@ import init, { Client, map_boxes, map_pads, map_layout, map_name, map_terrain, m
 import { Controls, FIRE, ZOOM } from './input';
 import { buildWorld, dropWorld, defaultMaterials } from './world';
 import { Players, STRIDE } from './players';
+import { Vehicles, VEHICLE_H } from './vehicles';
 import { Effects } from './effects';
 import { Hud } from './hud';
 
@@ -64,6 +65,7 @@ async function main() {
   resize();
 
   const players = new Players(scene);
+  const vehicles = new Vehicles(scene);
   const effects = new Effects(scene);
   const hud = new Hud();
   const hooks = await import('./art').catch(() => null);
@@ -170,6 +172,8 @@ async function main() {
     welcomed = client.welcomes;
     gunGame = client.gun_game;
     if (level) dropWorld(level.level);
+    vehicles.clear();
+    vehicles.terrain = map_terrain(client.map);
     const layout = map_layout(client.map);
     level = buildWorld(scene, map_boxes(client.map), map_pads(client.map), mats, layout, map_terrain(client.map), map_launchers(client.map));
     route = layout.length > 4 ? Array.from({ length: (layout.length - 4) / 2 }, (_, k) => [layout[4 + 2 * k], layout[5 + 2 * k]]) : ROUTE;
@@ -200,6 +204,9 @@ async function main() {
     shared.own = Array.from(own);
     shared.mate = client.teams ? client.team : -1;
     const [px, py, pz, eye, , , alive, , shield, health, arm, mag, reserve, other, grenades, reloading, , kills, deaths, respawn] = own;
+    // At the wheel: the camera rides behind the vehicle, looking where we
+    // look; a passenger sees from its seat.
+    const driving = own[22] === 0;
     // Aim is drawn from the controls (no round trip) on top of the
     // predicted body.
     const yaw = AUTOPLAY ? (f.yaw / 65536) * 2 * Math.PI : controls.yaw;
@@ -213,6 +220,11 @@ async function main() {
       camera.position.set(c[0], c[1], c[2]);
       const kp = Math.cos(c[4]);
       camera.lookAt(c[0] + kp * Math.cos(c[3]), c[1] + Math.sin(c[4]), c[2] + kp * Math.sin(c[3]));
+    } else if (driving) {
+      const cp = Math.cos(pitch);
+      const back = 7.5;
+      camera.position.set(px - cp * Math.cos(yaw) * back, py + VEHICLE_H + 2.2 - Math.sin(pitch) * back, pz - cp * Math.sin(yaw) * back);
+      camera.lookAt(px, py + VEHICLE_H, pz);
     } else {
       camera.position.set(px, py + eye, pz);
       const cp = Math.cos(pitch);
@@ -226,6 +238,7 @@ async function main() {
     const others = client.others(now);
     shared.others = Array.from(others);
     players.update(killcam ? cam!.subarray(7) : others, dt);
+    vehicles.update(client.vehicles(now));
     shared.killcams += killcam && !shared.inKillcam ? 1 : 0;
     shared.inKillcam = killcam;
     effects.projectiles(client.projectiles());
@@ -304,7 +317,8 @@ async function main() {
       net: `snapshots ${st[0]}\nconfirmed ${st[1]}  corrected ${st[2]}\ndepth ${st[4]}  rate ${st[5].toFixed(2)}\ninterp ${st[6].toFixed(1)} ticks  dropped ${st[7]}`,
     });
 
-    art?.frame(own, f, dt, now, camera);
+    // Hands on the wheel: no gun in view.
+    art?.frame(driving ? own.map((x, i) => (i === 10 ? 0 : x)) : own, f, dt, now, camera);
     effects.update();
     renderer.render(scene, camera);
     art?.afterRender(renderer);

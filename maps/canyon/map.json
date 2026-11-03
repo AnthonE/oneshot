@@ -97,6 +97,10 @@
     { "weapon": "smg", "at": [-30, 0], "respawn": 30, "mirror": true },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 }
   ],
+  "vehicles": [
+    { "at": [-44, -20], "yaw": 0, "respawn": 30, "mirror": true },
+    { "at": [-44, 20], "yaw": 0, "respawn": 30, "mirror": true }
+  ],
   "launchers": [
     { "at": [-46, 0], "to": [-10, 0, 0.8], "time": 1.5, "size": [2, 2], "mirror": true }
   ],

@@ -1,7 +1,7 @@
 //! `cargo run --release -p room --example fog_cost`: what fog of war costs
 //! a sixteen-seat Big Team room, per map. Bots play; every snapshot (every
-//! other tick) each seat's fog looks again at everyone, as `Room::step`
-//! does. Prints how long one snapshot's fog takes for the room: the mean
+//! other tick) each seat's fog looks again at everyone, and at every
+//! vehicle, as `Room::step` does. Prints how long one snapshot's fog takes for the room: the mean
 //! and the spread. With `--check` (`ci/quick.sh`) it fails past
 //! [`MEAN_US`] or [`P999_US`]: twice what the box grid and the spread look
 //! (milestone 9) measured, so a slow machine passes and losing either

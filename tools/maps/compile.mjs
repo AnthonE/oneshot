@@ -35,6 +35,8 @@
 //   launchers [{ at: [x, z, y?], to: [x, z, y?], time: s, size: [w, d],
 //             mirror: bool }]: a pad that throws a fighter from `at` to land
 //             on `to` after `time` seconds
+//   vehicles  [{ at: [x, z, y?], yaw: degrees, respawn: seconds, mirror: bool }]:
+//             where a vehicle starts and comes back
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
 // LOOKS. Metres, y up, the floor at y = 0. On a terrain a box stands at the
 // y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
@@ -57,6 +59,8 @@ const TEAMS = { red: 0, blue: 1, any: 255 };
 const MAX_PADS = 8;
 const MAX_BOXES = 256;
 const MAX_LAUNCHERS = 8;
+/** sim::consts::MAX_VEHICLES. */
+const MAX_VEHICLES = 8;
 /** sim::consts::GRAVITY, for a launcher's throw. */
 const GRAVITY = 20;
 /** sim::terrain::HEIGHT_Q. */
@@ -177,7 +181,25 @@ export function compile(spec, where = 'map.json') {
     if (l.mirror) for (const [sx, sz] of mirrors) launchers.push(one([a[0] * sx, a[1], a[2] * sz], [b[0] * sx, b[1], b[2] * sz]));
   }
   if (launchers.length > MAX_LAUNCHERS) fail(`${launchers.length} launchers, at most ${MAX_LAUNCHERS}`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers };
+  const vehicles = [];
+  for (const [k, v] of (spec.vehicles || []).entries()) {
+    const what = `vehicle ${k}`;
+    const p = point(v.at, what);
+    const yaw = v.yaw ?? 0;
+    const respawn = Math.round((v.respawn ?? 30) * 1000);
+    if (!(respawn > 0)) fail(`${what}: respawn in seconds, over 0`);
+    vehicles.push({ pos: p, yaw, respawn });
+    if (v.mirror) {
+      for (const [sx, sz] of mirrors) {
+        let y = yaw;
+        if (sx < 0) y = 180 - y;
+        if (sz < 0) y = -y;
+        vehicles.push({ pos: [p[0] * sx, p[1], p[2] * sz], yaw: y, respawn });
+      }
+    }
+  }
+  if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
+  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -250,11 +272,12 @@ export function rust(m, src) {
   L.push(`//! Generated from \`${src}\` by \`tools/maps/compile.mjs\`: edit the JSON,`);
   L.push(`//! then run it. CI fails if this file is not what the JSON compiles to.`);
   L.push('');
+  // In rustfmt's order, so `cargo fmt` leaves the file as written.
   L.push('use super::Def;');
   L.push('#[allow(unused_imports)]');
-  L.push('use crate::terrain::TerrainDef;');
-  L.push('#[allow(unused_imports)]');
   L.push('use crate::arms::*;');
+  L.push('#[allow(unused_imports)]');
+  L.push('use crate::terrain::TerrainDef;');
   L.push('');
   L.push('#[rustfmt::skip]');
   L.push('pub const DEF: Def = Def {');
@@ -290,6 +313,9 @@ export function rust(m, src) {
   }
   L.push('    launchers: &[');
   for (const l of m.launchers) L.push(`        ([${l.area.map(lit).join(', ')}], [${l.vel.map(lit).join(', ')}]),`);
+  L.push('    ],');
+  L.push('    vehicles: &[');
+  for (const v of m.vehicles) L.push(`        ([${v.pos.map(lit).join(', ')}], ${yawU16(v.yaw)}, ${v.respawn}),`);
   L.push('    ],');
   L.push('};');
   return L.join('\n') + '\n';
@@ -338,7 +364,7 @@ function main() {
   }
   for (const m of list) {
     const t = m.terrain ? `, terrain ${m.terrain.nx} × ${m.terrain.nz}` : '';
-    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers${t}`);
+    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
   }
   if (stale) process.exit(1);
 }

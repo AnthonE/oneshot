@@ -27,8 +27,15 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
+/// One test, both worlds in turn: the counter is the process's, so a
+/// second test finishing on another thread would count.
 #[test]
 fn the_tick_allocates_nothing() {
+    on_proving_grounds();
+    on_terrain_with_vehicles();
+}
+
+fn on_proving_grounds() {
     let rules = Rules {
         score_limit: 1000,
         time_limit_ms: 0,
@@ -53,5 +60,35 @@ fn the_tick_allocates_nothing() {
     run(&mut w, 500);
     let before = ALLOCS.load(Ordering::Relaxed);
     run(&mut w, 10_000);
+    assert_eq!(ALLOCS.load(Ordering::Relaxed) - before, 0);
+}
+
+/// Sixteen bots on Dry Fork: terrain, launchers, vehicles driven, shot up,
+/// wrecked and back.
+fn on_terrain_with_vehicles() {
+    let rules = Rules {
+        score_limit: 1000,
+        time_limit_ms: 0,
+        ..Rules::big_team()
+    };
+    let mut w = World::new(sim::maps::canyon::DEF.build(), rules, 5, (1, 2));
+    let mut bots = [Bot::new(5, 0, 0.5); MAX_FIGHTERS];
+    for (s, b) in bots.iter_mut().enumerate() {
+        w.seat(s, (s & 1) as u8);
+        *b = Bot::new(5, s, 0.6);
+    }
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let lag = [3 << 8; MAX_FIGHTERS];
+    let mut run = |w: &mut World, n: u32| {
+        for _ in 0..n {
+            for s in 0..MAX_FIGHTERS {
+                inputs[s] = bots[s].think(w, s);
+            }
+            w.step(&inputs, &lag);
+        }
+    };
+    run(&mut w, 500);
+    let before = ALLOCS.load(Ordering::Relaxed);
+    run(&mut w, 20_000);
     assert_eq!(ALLOCS.load(Ordering::Relaxed) - before, 0);
 }

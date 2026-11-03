@@ -413,7 +413,8 @@ impl Client {
     /// Our own fighter, drawn: x y z, eye height, yaw, pitch (radians),
     /// alive, crouched, shield, health (points), arm, mag, reserve, other
     /// arm, grenades, reloading (0..1), team, kills, deaths, respawn (s),
-    /// grounded, speed.
+    /// grounded, speed, then the seat it rides in (−1 on foot, 0 driver, 1
+    /// passenger) and that vehicle's slot.
     pub fn own(&self) -> Vec<f32> {
         let (f, p) = self.core.own();
         let g = f.gun();
@@ -452,7 +453,43 @@ impl Client {
             f.respawn as f32 / sim::consts::TICK_HZ as f32,
             f.body.grounded as u8 as f32,
             (f.body.vel.x * f.body.vel.x + f.body.vel.z * f.body.vel.z).sqrt(),
+            f.riding().map_or(-1.0, |(_, seat)| seat as f32),
+            f.riding().map_or(-1.0, |(i, _)| i as f32),
         ]
+    }
+
+    /// The vehicles to draw, 8 numbers each: slot, x y z (the hull's middle
+    /// at the ground), yaw (radians), health (0..1), and each seat's rider
+    /// (a slot, or −1). The one we ride in is our prediction of it.
+    pub fn vehicles(&self, now: f64) -> Vec<f32> {
+        let mut v = Vec::new();
+        let seat = |x: u8| if x == 0 { -1.0 } else { x as f32 - 1.0 };
+        if let Some((car, p, yaw)) = self.core.own_vehicle() {
+            let i = self.core.own().0.riding().map_or(0, |(i, _)| i);
+            v.extend_from_slice(&[
+                i as f32,
+                p.x,
+                p.y,
+                p.z,
+                yaw,
+                car.health.max(0) as f32 / sim::consts::VEH_HEALTH as f32,
+                seat(car.seats[0]),
+                seat(car.seats[1]),
+            ]);
+        }
+        for d in self.core.vehicles(now) {
+            v.extend_from_slice(&[
+                d.slot as f32,
+                d.pos.x,
+                d.pos.y,
+                d.pos.z,
+                d.yaw,
+                d.health as f32 / 255.0,
+                seat(d.seats[0]),
+                seat(d.seats[1]),
+            ]);
+        }
+        v
     }
 
     /// Everyone else, 14 numbers each: slot, team, alive, crouched,

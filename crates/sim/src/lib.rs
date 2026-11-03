@@ -23,6 +23,7 @@ pub mod rewind;
 pub mod rng;
 pub mod terrain;
 pub mod thing;
+pub mod vehicle;
 pub mod world;
 
 pub use input::Input;

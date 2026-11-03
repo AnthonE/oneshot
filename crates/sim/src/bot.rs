@@ -27,12 +27,24 @@ pub struct Bot {
     /// left before it gives up on it (stuck on a wall).
     goal: u8,
     goal_for: u16,
+    /// Ticks in the vehicle it rides, and ticks before it may get into one
+    /// again after getting out.
+    ride_for: u16,
+    ride_cool: u16,
+    /// At the wheel: ticks it has barely moved, and ticks left backing up.
+    stuck: u16,
+    backing: u16,
 }
 
 /// How long a bot walks at one roam point before it picks another.
 const GOAL_MS: u32 = 8000;
 /// Close enough to a roam point to pick the next.
 const GOAL_NEAR: f32 = 2.0;
+/// How long a bot drives (or rides) before it gets out, how long before it
+/// gets back in, and how far it walks to a free vehicle.
+const RIDE_MS: u32 = 20_000;
+const RIDE_COOL_MS: u32 = 15_000;
+const VEHICLE_WALK: f32 = 25.0;
 
 impl Bot {
     pub fn new(seed: u64, slot: usize, skill: f32) -> Bot {
@@ -46,7 +58,77 @@ impl Bot {
             wob: (0.0, 0.0),
             goal: 0,
             goal_for: 0,
+            ride_for: 0,
+            ride_cool: 0,
+            stuck: 0,
+            backing: 0,
         }
+    }
+
+    /// The map's roam point to head for with nobody in sight (picking the
+    /// next when it's reached or taking too long), or with none, toward the
+    /// middle, then the first pad.
+    fn roam_goal(&mut self, w: &World, at: V3) -> V3 {
+        let roam = &w.map.roam;
+        if !roam.is_empty() {
+            let here = roam[self.goal as usize % roam.len()];
+            if self.goal_for == 0 || (here - at).flat().len() < GOAL_NEAR {
+                self.goal = self.rng.next_bounded(roam.len() as u32) as u8;
+                self.goal_for = ticks(GOAL_MS) as u16;
+            }
+            self.goal_for -= 1;
+            roam[self.goal as usize % roam.len()]
+        } else if at.flat().len() > 6.0 {
+            V3::ZERO
+        } else {
+            w.map.pads.first().map_or(V3::ZERO, |p| p.pos)
+        }
+    }
+
+    /// USE pressed this tick, as a tap: let go first if it was held.
+    fn tap_use(inp: &mut Input, last: u16) {
+        if last & USE == 0 {
+            inp.buttons |= USE;
+        }
+    }
+
+    /// At the wheel: toward the nearest enemy in sight or the roam goal,
+    /// out after a while or to fight someone near.
+    fn drive(&mut self, w: &World, slot: usize, vi: usize, best: u8, near: f32, mut inp: Input) -> Input {
+        let me = &w.fighters[slot];
+        let v = &w.vehicles[vi];
+        self.ride_for = self.ride_for.saturating_add(1);
+        if self.ride_for as u32 > ticks(RIDE_MS) || (best != 255 && near < 18.0) {
+            Self::tap_use(&mut inp, me.last_buttons);
+            return inp;
+        }
+        let goal = if best != 255 {
+            w.fighters[best as usize].body.pos
+        } else {
+            self.roam_goal(w, v.pos)
+        };
+        let to = goal - v.pos;
+        let want = fmath::atan2(to.z, to.x) * (1.0 / core::f32::consts::TAU);
+        let mut diff = want - v.yaw as f32 * (1.0 / 65536.0);
+        diff -= fmath::round(diff);
+        // Stuck on something: back up a second, turning the other way.
+        self.stuck = if v.vel.flat().len() < 1.0 { self.stuck + 1 } else { 0 };
+        if self.stuck as u32 > TICK_HZ / 2 {
+            self.backing = TICK_HZ as u16;
+            self.stuck = 0;
+        }
+        let steer = (diff * 6.0).clamp(-1.0, 1.0) * 127.0;
+        if self.backing > 0 {
+            self.backing -= 1;
+            inp.mx = -steer as i8;
+            inp.mz = -127;
+        } else {
+            inp.mx = steer as i8;
+            inp.mz = if fmath::fabs(diff) > 0.3 { 50 } else { 127 };
+        }
+        inp.yaw = v.yaw;
+        inp.pitch = 0;
+        inp
     }
 
     fn unit(&mut self) -> f32 {
@@ -61,8 +143,10 @@ impl Bot {
             ..Input::default()
         };
         if !me.active() || w.phase != Phase::Playing {
+            self.ride_for = 0;
             return inp;
         }
+        self.ride_cool = self.ride_cool.saturating_sub(1);
         let eye = me.eye();
         // The nearest enemy it can see.
         let mut best = 255u8;
@@ -85,6 +169,24 @@ impl Bot {
             self.seen = self.seen.saturating_add(1);
         }
 
+        match me.riding() {
+            Some((vi, crate::vehicle::DRIVER)) => return self.drive(w, slot, vi, best, near, inp),
+            Some(_) => {
+                // A passenger fights as usual, and gets out after a while.
+                self.ride_for = self.ride_for.saturating_add(1);
+                if self.ride_for as u32 > ticks(RIDE_MS) {
+                    Self::tap_use(&mut inp, me.last_buttons);
+                    return inp;
+                }
+            }
+            None => {
+                if self.ride_for > 0 {
+                    self.ride_for = 0;
+                    self.ride_cool = ticks(RIDE_COOL_MS) as u16;
+                }
+            }
+        }
+
         if self.strafe_for == 0 {
             self.strafe = if self.unit() < 0.5 { -1 } else { 1 };
             self.strafe_for = (TICK_HZ / 2 + self.rng.next_bounded(TICK_HZ)) as u16;
@@ -103,28 +205,32 @@ impl Bot {
         }
 
         if best == 255 {
-            // Nobody in sight: the map's roam points one after another, or
-            // with none, toward the middle, then the first pad.
-            let roam = &w.map.roam;
-            let goal = if !roam.is_empty() {
-                let at = roam[self.goal as usize % roam.len()];
-                if self.goal_for == 0 || (at - me.body.pos).flat().len() < GOAL_NEAR {
-                    self.goal = self.rng.next_bounded(roam.len() as u32) as u8;
-                    self.goal_for = ticks(GOAL_MS) as u16;
-                }
-                self.goal_for -= 1;
-                roam[self.goal as usize % roam.len()]
-            } else if me.body.pos.flat().len() > 6.0 {
-                V3::ZERO
-            } else {
-                w.map.pads.first().map_or(V3::ZERO, |p| p.pos)
+            // Nobody in sight: to a free vehicle near if it may, else the
+            // roam goal.
+            let free = (self.ride_cool == 0 && me.riding().is_none())
+                .then(|| {
+                    w.vehicles
+                        .iter()
+                        .filter(|v| v.active && v.seats[crate::vehicle::DRIVER] == 0)
+                        .map(|v| (v.pos, (v.pos - me.body.pos).flat().len()))
+                        .filter(|&(_, d)| d < VEHICLE_WALK)
+                        .min_by(|a, b| a.1.total_cmp(&b.1))
+                })
+                .flatten();
+            let goal = match free {
+                Some((at, _)) => at,
+                None => self.roam_goal(w, me.body.pos),
             };
             let to = goal - me.body.pos;
             inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
             inp.pitch = 0;
             inp.mz = 127;
             inp.mx = self.strafe * 40;
-            inp.buttons |= USE;
+            match free {
+                Some((_, d)) if d < ENTER_R - 0.5 => Self::tap_use(&mut inp, me.last_buttons),
+                Some(_) => {}
+                None => inp.buttons |= USE,
+            }
             return inp;
         }
 

@@ -112,6 +112,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let tx = p.x + v.x * DT;
     let mut nx = sweep(
         map,
+        BODY_R,
         p.x,
         tx,
         (
@@ -119,7 +120,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             (p.x.max(tx) + BODY_R, p.z + BODY_R),
         ),
         |bx| (bx.min.x, bx.max.x),
-        |bx| bx.over_z(p.z) && bx.min.y < hi && bx.max.y > lo,
+        |bx| bx.over_z(p.z, BODY_R) && bx.min.y < hi && bx.max.y > lo,
     );
     if map.terrain.is_some() && too_steep(map, (p.x, p.z), (nx, p.z), p.y) {
         nx = p.x;
@@ -131,6 +132,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let tz = p.z + v.z * DT;
     let mut nz = sweep(
         map,
+        BODY_R,
         p.z,
         tz,
         (
@@ -138,7 +140,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             (p.x + BODY_R, p.z.max(tz) + BODY_R),
         ),
         |bx| (bx.min.z, bx.max.z),
-        |bx| bx.over_x(p.x) && bx.min.y < hi && bx.max.y > lo,
+        |bx| bx.over_x(p.x, BODY_R) && bx.min.y < hi && bx.max.y > lo,
     );
     if map.terrain.is_some() && too_steep(map, (p.x, p.z), (p.x, nz), p.y) {
         nz = p.z;
@@ -199,7 +201,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
 
 /// Whether a move from `a` to `b` (x, z) climbs ground steeper than
 /// [`MAX_CLIMB`] to above the feet at `feet`.
-fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
+pub(crate) fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
     let g1 = map.ground(b.0, b.1);
     if g1 <= feet + 0.01 {
         return false;
@@ -214,8 +216,9 @@ fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
 /// against is still held by it. `area` (x and z, low and high) holds every
 /// box that could stop the move; the answer is the nearest stop, so which
 /// boxes are visited, and in what order, never changes it.
-fn sweep(
+pub(crate) fn sweep(
     map: &Map,
+    r: f32,
     from: f32,
     to: f32,
     area: ((f32, f32), (f32, f32)),
@@ -228,10 +231,10 @@ fn sweep(
             return;
         }
         let (lo, hi) = span(bx);
-        if to > from && from + BODY_R <= lo + FACE_EPS && t + BODY_R > lo {
-            t = lo - BODY_R;
-        } else if to < from && from - BODY_R >= hi - FACE_EPS && t - BODY_R < hi {
-            t = hi + BODY_R;
+        if to > from && from + r <= lo + FACE_EPS && t + r > lo {
+            t = lo - r;
+        } else if to < from && from - r >= hi - FACE_EPS && t - r < hi {
+            t = hi + r;
         }
     });
     t
@@ -242,11 +245,11 @@ fn sweep(
 const FACE_EPS: f32 = 0.01;
 
 impl crate::geom::Aabb {
-    fn over_z(&self, z: f32) -> bool {
-        self.min.z < z + BODY_R && self.max.z > z - BODY_R
+    pub(crate) fn over_z(&self, z: f32, r: f32) -> bool {
+        self.min.z < z + r && self.max.z > z - r
     }
-    fn over_x(&self, x: f32) -> bool {
-        self.min.x < x + BODY_R && self.max.x > x - BODY_R
+    pub(crate) fn over_x(&self, x: f32, r: f32) -> bool {
+        self.min.x < x + r && self.max.x > x - r
     }
 }
 
@@ -379,6 +382,7 @@ mod tests {
                 heights: &CLIFF,
             }),
             launchers: &[],
+            vehicles: &[],
         }
         .build()
     }

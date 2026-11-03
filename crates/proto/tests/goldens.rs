@@ -137,6 +137,29 @@ fn snapshot() -> Snapshot {
         ..EventState::default()
     };
     s.pads[1].empty_s = 45;
+    // Riding: in the passenger's seat of vehicle 2, sent exactly; and
+    // vehicle 5 driven by seat 1.
+    s.own.ride = 6;
+    s.own_vehicle = Some(sim::vehicle::Vehicle {
+        active: true,
+        pos: V3::new(-40.0, 1.0390625, -19.5),
+        vel: V3::new(12.5, 0.0, -0.25),
+        yaw: 1000,
+        grounded: true,
+        health: 200_000,
+        seats: [0, 1],
+        respawn: 0,
+        home: 2,
+    });
+    s.n_vehicles = 1;
+    s.vehicles[0] = VehState {
+        slot: 5,
+        pos: V3::new(20.0, 0.5, 12.0),
+        vel: V3::new(-15.0, 0.0, 3.0),
+        yaw: 40_000,
+        health: 128,
+        seats: [2, 0],
+    };
     s.n_score = 2;
     s.score[0] = 3;
     s.score[1] = -1;
@@ -251,6 +274,9 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.events(), s.events());
     assert_eq!(d.remotes()[0].pos, s.remotes[0].pos);
     assert_eq!(d.score, s.score);
+    assert_eq!(d.own.ride, s.own.ride);
+    assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
+    assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -260,6 +286,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_proj: MAX_SNAP_PROJ as u8,
         n_events: 0,
         n_pads: MAX_SNAP_PADS as u8,
+        n_vehicles: MAX_SNAP_VEHICLES as u8,
         n_score: MAX_FIGHTERS as u8,
         ..s
     };
@@ -301,13 +328,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x21cd_ceaa_a773_0091,
-        0x5311_45f7_cfe5_d41d,
-        0x3585_d251_f4b5_72b5,
-        0x4fee_c5df_d638_b22c,
+        0xcb32_4ae1_3a61_4b98,
+        0xb762_e9cc_0497_6c26,
+        0xb57d_eea4_497d_6fa9,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x35d1_3405_9f46_5bae,
+        0xc165_eb7e_8c04_2033,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,

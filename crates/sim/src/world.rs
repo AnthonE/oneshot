@@ -1,4 +1,5 @@
-//! A match: the fighters, what they fire, the pads, the score and the clock.
+//! A match: the fighters, what they fire, the pads, the vehicles, the score
+//! and the clock.
 //! [`World::step`] is the server's tick. The browser never runs it for
 //! anyone but itself (docs/DESIGN.md §4–5).
 
@@ -14,6 +15,7 @@ use crate::pool::Pool;
 use crate::rewind::{Pose, Rewind};
 use crate::rng::{sip24, Pcg32};
 use crate::thing::{self, hash_all, Thing};
+use crate::vehicle::{VPose, Vehicle, DRIVER};
 
 /// No winner (yet, or a draw).
 pub const NO_WINNER: u8 = 255;
@@ -173,6 +175,8 @@ pub struct World {
     pub fighters: [Fighter; MAX_FIGHTERS],
     pub proj: Pool<Projectile, MAX_PROJ>,
     pub pads: [Pad; MAX_PADS],
+    /// By slot: slot `i` is always the map's vehicle `i` (`Map::vehicles`).
+    pub vehicles: Pool<Vehicle, MAX_VEHICLES>,
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -181,6 +185,7 @@ pub struct World {
     pub winner: u8,
     pub events: Events,
     rewind: Box<Rewind<Pose, MAX_FIGHTERS>>,
+    vrewind: Box<Rewind<VPose, MAX_VEHICLES>>,
     rng: Pcg32,
     /// The match's secret: keys every spread draw. Never leaves the server
     /// while the match runs (docs/DESIGN.md §9).
@@ -189,6 +194,10 @@ pub struct World {
 
 impl World {
     pub fn new(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> World {
+        let mut vehicles = Pool::default();
+        for (i, v) in map.vehicles.iter().enumerate().take(MAX_VEHICLES) {
+            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8);
+        }
         World {
             tick: 0,
             map,
@@ -196,12 +205,14 @@ impl World {
             fighters: [Fighter::default(); MAX_FIGHTERS],
             proj: Pool::default(),
             pads: [Pad::default(); MAX_PADS],
+            vehicles,
             phase: Phase::Countdown,
             clock: ticks(COUNTDOWN_MS),
             score: [0; MAX_FIGHTERS],
             winner: NO_WINNER,
             events: Events::default(),
             rewind: Box::default(),
+            vrewind: Box::default(),
             rng: Pcg32::new(seed, 1),
             salt,
         }
@@ -223,6 +234,7 @@ impl World {
     }
 
     pub fn unseat(&mut self, slot: usize) {
+        self.leave_vehicle(slot);
         self.fighters[slot] = Fighter::default();
         self.rewind.forget(slot);
     }
@@ -257,6 +269,11 @@ impl World {
             *p = pose(f);
         }
         self.rewind.write(self.tick, &poses);
+        let mut vposes = [VPose::default(); MAX_VEHICLES];
+        for (p, v) in vposes.iter_mut().zip(self.vehicles.iter()) {
+            *p = VPose::of(v);
+        }
+        self.vrewind.write(self.tick, &vposes);
     }
 
     fn play(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
@@ -266,6 +283,22 @@ impl World {
         for (s, l) in locals.iter_mut().enumerate() {
             *l = self.fighters[s].step_in(Phase::Playing, &inputs[s].sanitized(), &self.map);
         }
+        // Vehicles drive under their drivers' inputs (what a driver
+        // predicts: Vehicle::step_local), then everyone riding sits.
+        for i in 0..MAX_VEHICLES {
+            if !self.vehicles[i].active {
+                continue;
+            }
+            match self.vehicles[i].driver() {
+                Some(d) if self.fighters[d].active() => {
+                    let inp = inputs[d].sanitized();
+                    self.vehicles[i].step_local(&inp, &self.map);
+                }
+                _ => self.vehicles[i].step_parked(&self.map),
+            }
+        }
+        self.seat_riders();
+        self.splatter();
         for (s, l) in locals.iter().enumerate() {
             if l.fired {
                 self.fire(s, rewind_q8[s]);
@@ -276,13 +309,17 @@ impl World {
             if l.throw {
                 self.throw(s);
             }
-            if l.use_pad && self.fighters[s].active() {
+            // A vehicle in reach (or the one ridden) beats a pad.
+            if l.use_pad && self.fighters[s].active() && !self.use_vehicle(s) {
                 self.pickup(s);
             }
         }
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
             self.recover(s);
+        }
+        for i in 0..MAX_VEHICLES {
+            self.vehicle_back(i);
         }
         for p in self.pads.iter_mut() {
             p.empty_for = p.empty_for.saturating_sub(1);
@@ -323,11 +360,11 @@ impl World {
         }
     }
 
-    /// The nearest enemy a ray from `eye` meets, where the server says the
-    /// shooter saw them: `(slot, t, head)`.
-    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32) -> Option<(usize, f32, bool)> {
+    /// The nearest enemy (or vehicle) a ray from `eye` meets, where the
+    /// server says the shooter saw them, and how far.
+    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32) -> Option<(Target, f32)> {
         let me = &self.fighters[s];
-        let mut best: Option<(usize, f32, bool)> = None;
+        let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
         for (q, v) in self.fighters.iter().enumerate() {
             if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
@@ -345,17 +382,44 @@ impl World {
             if let Some(t) = ray_sphere(eye, dir, p.pos + V3::new(0.0, hy, 0.0), HEAD_R + pad, near) {
                 if t < near || best.is_none() {
                     near = t;
-                    best = Some((q, t, true));
+                    best = Some((Target::Fighter(q, true), t));
                 }
             }
             if let Some(t) = ray_cylinder(eye, dir, p.pos, HIT_R + pad, top, near) {
                 if t < near {
                     near = t;
-                    best = Some((q, t, false));
+                    best = Some((Target::Fighter(q, false), t));
+                }
+            }
+        }
+        // Hulls, rewound like bodies. A rider hit before its hull is hit.
+        let ride = me.riding().map(|(i, _)| i);
+        for (i, v) in self.vehicles.iter().enumerate() {
+            if !v.active || ride == Some(i) || self.spares(s, v) {
+                continue;
+            }
+            let p = self.vrewind.pose_at(self.tick, i, depth, &VPose::of(v));
+            if !p.alive {
+                continue;
+            }
+            if let Some(t) = p.as_vehicle().ray(eye, dir, near) {
+                if t < near {
+                    near = t;
+                    best = Some((Target::Vehicle(i), t));
                 }
             }
         }
         best
+    }
+
+    /// Whether `att` may not hurt `v`: with sides, a teammate of theirs
+    /// rides in it.
+    fn spares(&self, att: usize, v: &Vehicle) -> bool {
+        let team = self.fighters[att].team;
+        self.rules.teams
+            && v.seats
+                .iter()
+                .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
     }
 
     fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
@@ -371,7 +435,7 @@ impl World {
             end: eye + dir * t,
             ..Event::default()
         });
-        if let Some((q, t, head)) = hit {
+        if let Some((target, t)) = hit {
             let k = if t <= a.falloff {
                 1.0
             } else {
@@ -379,7 +443,10 @@ impl World {
                 1.0 + (a.falloff_min - 1.0) * u
             };
             let pts = (a.dmg * PT) as f32 * k;
-            self.damage(s, q, pts as i32, head, a.head, id as u16);
+            match target {
+                Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id as u16),
+                Target::Vehicle(i) => self.damage_vehicle(s, i, pts as i32, id as u16),
+            }
         }
     }
 
@@ -394,7 +461,11 @@ impl World {
             pos: eye,
             ..Event::default()
         });
-        if let Some((q, _, _)) = self.trace(s, eye, dir, wall, depth, 0.25) {
+        let hit = self.trace(s, eye, dir, wall, depth, 0.25);
+        if let Some((Target::Vehicle(i), _)) = hit {
+            self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
+        }
+        if let Some((Target::Fighter(q, _), _)) = hit {
             let v = &self.fighters[q];
             let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
             let toward = (v.body.pos - f.body.pos).flat().norm();
@@ -452,6 +523,18 @@ impl World {
                             continue;
                         }
                         if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.1, v.body.height(), t) {
+                            if h < t || !met {
+                                t = h;
+                                met = true;
+                            }
+                        }
+                    }
+                    let own = self.fighters[p.owner as usize].riding().map(|(i, _)| i);
+                    for (k, v) in self.vehicles.iter().enumerate() {
+                        if !v.active || (own == Some(k) && p.age < 16) {
+                            continue;
+                        }
+                        if let Some(h) = v.ray(p.pos, d, t) {
                             if h < t || !met {
                                 t = h;
                                 met = true;
@@ -587,6 +670,234 @@ impl World {
             }
             self.damage(owner, q, pts as i32, false, Head::None, cause);
         }
+        for i in 0..MAX_VEHICLES {
+            let v = self.vehicles[i];
+            if !v.active || self.spares(owner, &v) {
+                continue;
+            }
+            let mid = v.pos + V3::new(0.0, VEH_H * 0.5, 0.0);
+            let d = mid - at;
+            let dist = d.len();
+            if dist >= radius || !self.map.clear(at, mid) {
+                continue;
+            }
+            let k = if dist <= full {
+                1.0
+            } else {
+                (radius - dist) / (radius - full)
+            };
+            let away = if dist > 0.0 {
+                d * (1.0 / dist)
+            } else {
+                V3::new(0.0, 1.0, 0.0)
+            };
+            let veh = &mut self.vehicles[i];
+            veh.vel = veh.vel + away * (BLAST_PUSH * VEH_PUSH_K * k);
+            if away.y > 0.0 {
+                veh.grounded = false;
+            }
+            self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32, cause);
+        }
+    }
+
+    /// `att` hurts vehicle `i` for `pts`; at nothing left it blows up.
+    fn damage_vehicle(&mut self, att: usize, i: usize, pts: i32, cause: u16) {
+        let v = &mut self.vehicles[i];
+        if !v.active || pts <= 0 {
+            return;
+        }
+        v.health -= pts;
+        let pos = v.pos;
+        let dead = v.health <= 0;
+        self.events.push(Event {
+            kind: Ev::VehicleHit,
+            a: att as u8,
+            part: i as u8,
+            c: (pts / PT).min(u16::MAX as i32) as u16,
+            pos,
+            ..Event::default()
+        });
+        if dead {
+            self.wreck(i, att, cause);
+        }
+    }
+
+    /// Vehicle `i` blows up, `att`'s doing: whoever rides in it dies, a
+    /// blast around it, back at its spawn after the map says.
+    fn wreck(&mut self, i: usize, att: usize, _cause: u16) {
+        let v = self.vehicles[i];
+        let back = self.map.vehicles.get(v.home as usize).map_or(30_000, |d| d.respawn_ms);
+        self.vehicles[i] = Vehicle {
+            active: false,
+            respawn: ticks(back).max(1),
+            home: v.home,
+            pos: v.pos,
+            yaw: v.yaw,
+            ..Vehicle::default()
+        };
+        self.events.push(Event {
+            kind: Ev::Wreck,
+            a: att as u8,
+            part: i as u8,
+            pos: v.pos,
+            ..Event::default()
+        });
+        for &x in &v.seats {
+            if x != 0 {
+                let q = x as usize - 1;
+                self.fighters[q].ride = 0;
+                if self.fighters[q].alive {
+                    self.kill(att, q, Cause::Wreck as u16);
+                }
+            }
+        }
+        self.blast(
+            v.pos + V3::new(0.0, 0.8, 0.0),
+            att,
+            GREN_DMG,
+            GREN_RADIUS,
+            GREN_FULL,
+            1.0,
+            Cause::Wreck as u16,
+        );
+    }
+
+    /// A destroyed vehicle counts down to coming back at its spawn.
+    fn vehicle_back(&mut self, i: usize) {
+        let v = &mut self.vehicles[i];
+        if v.active || v.respawn == 0 {
+            return;
+        }
+        v.respawn -= 1;
+        if v.respawn == 0 {
+            if let Some(d) = self.map.vehicles.get(v.home as usize) {
+                *v = Vehicle::new(d.pos, d.yaw, v.home);
+            }
+        }
+    }
+
+    /// Everyone riding is put at their seat.
+    fn seat_riders(&mut self) {
+        for s in 0..MAX_FIGHTERS {
+            if let Some((i, seat)) = self.fighters[s].riding() {
+                self.fighters[s].body = self.vehicles[i].seat_body(seat);
+            }
+        }
+    }
+
+    /// USE: out of the vehicle `s` rides, or into the nearest in reach
+    /// with a seat free (the driver's first). Whether it did either.
+    fn use_vehicle(&mut self, s: usize) -> bool {
+        if let Some((i, seat)) = self.fighters[s].riding() {
+            self.leave_vehicle(s);
+            let v = self.vehicles[i];
+            let (f, r) = v.axes();
+            let at = if seat == DRIVER {
+                v.pos - r * (VEH_HALF_W + 0.9)
+            } else {
+                v.pos - f * (VEH_HALF_L + 0.9)
+            };
+            let x = at.x.clamp(self.map.lo.0, self.map.hi.0);
+            let z = at.z.clamp(self.map.lo.1, self.map.hi.1);
+            let y = self.map.floor(x, z, BODY_R, v.pos.y + 1.5);
+            let b = &mut self.fighters[s].body;
+            b.pos = V3::new(
+                crate::movement::quant(x),
+                crate::movement::quant(y),
+                crate::movement::quant(z),
+            );
+            b.vel = V3::ZERO;
+            b.grounded = true;
+            return true;
+        }
+        let at = self.fighters[s].body.pos;
+        let mut best: Option<usize> = None;
+        let mut near = ENTER_R;
+        for (i, v) in self.vehicles.iter().enumerate() {
+            let d = (v.pos - at).flat().len();
+            if v.active && v.seats.contains(&0) && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0 {
+                near = d;
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
+            return false;
+        };
+        let seat = if self.vehicles[i].seats[DRIVER] == 0 {
+            DRIVER
+        } else {
+            crate::vehicle::PASSENGER
+        };
+        self.vehicles[i].seats[seat] = s as u8 + 1;
+        let f = &mut self.fighters[s];
+        f.ride = Fighter::ride_of(i, seat);
+        f.reload = 0;
+        f.burst_left = 0;
+        f.body = self.vehicles[i].seat_body(seat);
+        self.events.push(Event {
+            kind: Ev::Ride,
+            a: s as u8,
+            b: seat as u8,
+            part: i as u8,
+            pos: self.vehicles[i].pos,
+            ..Event::default()
+        });
+        true
+    }
+
+    /// `s` is no longer in its vehicle (if any); where it stands is the
+    /// caller's.
+    fn leave_vehicle(&mut self, s: usize) {
+        if let Some((i, seat)) = self.fighters[s].riding() {
+            self.vehicles[i].seats[seat] = 0;
+            self.fighters[s].ride = 0;
+            self.events.push(Event {
+                kind: Ev::Ride,
+                a: s as u8,
+                b: seat as u8,
+                c: 1,
+                part: i as u8,
+                pos: self.vehicles[i].pos,
+                ..Event::default()
+            });
+        }
+    }
+
+    /// A vehicle moving fast runs down whoever is on foot in its way: at
+    /// [`SPLAT_KILL`] dead, slower knocked aside. Its driver did it (or
+    /// nobody drove: then the fighter's own death).
+    fn splatter(&mut self) {
+        for i in 0..MAX_VEHICLES {
+            let v = self.vehicles[i];
+            let speed = v.vel.flat().len();
+            if !v.active || speed < SPLAT_SPEED {
+                continue;
+            }
+            let driver = v.driver();
+            for q in 0..MAX_FIGHTERS {
+                let f = self.fighters[q];
+                if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
+                    continue;
+                }
+                if driver.is_some_and(|d| d != q && self.rules.teams && self.fighters[d].team == f.team) {
+                    continue;
+                }
+                let away = (f.body.pos - v.pos).flat().norm();
+                let b = &mut self.fighters[q].body;
+                b.vel = b.vel + away * 6.0 + V3::new(0.0, 3.0, 0.0);
+                b.grounded = false;
+                if speed >= SPLAT_KILL {
+                    self.damage(
+                        driver.unwrap_or(q),
+                        q,
+                        HEALTH_MAX + SHIELD_MAX,
+                        false,
+                        Head::None,
+                        Cause::Splatter as u16,
+                    );
+                }
+            }
+        }
     }
 
     fn damage(&mut self, att: usize, vic: usize, pts: i32, head: bool, rule: Head, cause: u16) {
@@ -629,6 +940,7 @@ impl World {
     }
 
     fn kill(&mut self, att: usize, vic: usize, cause: u16) {
+        self.leave_vehicle(vic);
         let v = &mut self.fighters[vic];
         v.alive = false;
         v.health = 0;
@@ -816,6 +1128,7 @@ impl World {
                 thing::Kind::Fighter => hash_all(&self.fighters, &mut h),
                 thing::Kind::Projectile => hash_all(&*self.proj, &mut h),
                 thing::Kind::Pad => hash_all(&self.pads, &mut h),
+                thing::Kind::Vehicle => hash_all(&*self.vehicles, &mut h),
             }
         }
         let (a, b) = self.rng.state();
@@ -832,6 +1145,14 @@ impl World {
         }
         h.finish()
     }
+}
+
+/// What a ray (a shot, a swing) meets: a fighter (and whether in the head),
+/// or a vehicle's hull.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Target {
+    Fighter(usize, bool),
+    Vehicle(usize),
 }
 
 fn pose(f: &Fighter) -> Pose {

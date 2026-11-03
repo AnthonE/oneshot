@@ -52,6 +52,7 @@ struct Gate {
     room: Room,
     me: usize,
     history: VecDeque<[Fighter; MAX_FIGHTERS]>,
+    vhistory: VecDeque<[sim::vehicle::Vehicle; sim::consts::MAX_VEHICLES]>,
     sent: Vec<Vec<u8>>,
     over: bool,
     revealed: Option<[u64; 2]>,
@@ -59,6 +60,7 @@ struct Gate {
     checked: usize,
     hidden_seen: usize,
     proj_seen: usize,
+    vehicles_seen: usize,
 }
 
 impl Gate {
@@ -97,6 +99,59 @@ impl Gate {
                 }
                 // Pad timers are public (room::build).
                 sim::thing::Kind::Pad => {}
+                // 9. A vehicle only if it is ours, someone we know rides
+                // it, or it was in clear line in the last 16 ticks (from
+                // any look ahead up to 300 ms); a rider named only if
+                // known; and never one held back in plain sight.
+                sim::thing::Kind::Vehicle => {
+                    let mine = me.riding().map(|(i, _)| i);
+                    assert_eq!(
+                        s.own_vehicle.is_some(),
+                        mine.is_some(),
+                        "tick {}: our own vehicle",
+                        w.tick
+                    );
+                    let leads = [
+                        0.0,
+                        0.1,
+                        0.2,
+                        0.3,
+                        room::fog::full_lead(fog_lead, 2),
+                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                    ];
+                    for v in s.vehicles() {
+                        self.vehicles_seen += 1;
+                        let i = v.slot as usize;
+                        let t = &w.vehicles[i];
+                        for &x in &v.seats {
+                            assert!(
+                                x == 0 || known(x as usize - 1),
+                                "tick {}: an unknown rider named: {v:?}",
+                                w.tick
+                            );
+                        }
+                        let ridden = t.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
+                        let seen = self.history.iter().zip(&self.vhistory).any(|(h, hv)| {
+                            hv[i].active
+                                && leads
+                                    .iter()
+                                    .any(|&l| room::fog::sees_vehicle(&w.map, h[self.me].eye(), &hv[i], l))
+                        });
+                        assert!(
+                            mine == Some(i) || ridden || seen,
+                            "tick {}: a hidden vehicle was sent: {v:?}",
+                            w.tick
+                        );
+                    }
+                    for (i, t) in w.vehicles.live() {
+                        let sent = s.vehicles().iter().any(|v| v.slot as usize == i);
+                        assert!(
+                            sent || mine == Some(i) || !room::fog::plainly_sees_vehicle(&w.map, me.eye(), t),
+                            "tick {}: vehicle {i} in plain sight but not sent",
+                            w.tick
+                        );
+                    }
+                }
             }
         }
         for (q, f) in w.fighters.iter().enumerate() {
@@ -238,6 +293,7 @@ fn gate(map: Map, rules: Rules) {
         room,
         me,
         history: VecDeque::new(),
+        vhistory: VecDeque::new(),
         sent: Vec::new(),
         over: false,
         revealed: None,
@@ -245,6 +301,7 @@ fn gate(map: Map, rules: Rules) {
         checked: 0,
         hidden_seen: 0,
         proj_seen: 0,
+        vehicles_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -272,6 +329,8 @@ fn gate(map: Map, rules: Rules) {
         let (snaps, out) = g.room.step(now);
         g.history.push_front(g.room.world.fighters);
         g.history.truncate(16);
+        g.vhistory.push_front(*g.room.world.vehicles);
+        g.vhistory.truncate(16);
         for (_, s) in &snaps {
             acked = s.tick;
             g.check_snapshot(s);
@@ -317,6 +376,9 @@ fn gate(map: Map, rules: Rules) {
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
     assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
+    if !g.room.world.map.vehicles.is_empty() {
+        assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
+    }
 }
 
 /// Check 7: skins are public by design (docs/DESIGN.md §15) and say

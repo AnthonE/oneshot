@@ -419,8 +419,16 @@ keeps every gate in §17 green and moves a golden only on purpose.
    velocity. It reads only the fighter and the map, so it predicts exactly
    and costs no wire. Skiing (low-friction slides down slopes) is a later
    experiment.
-10. **Vehicles:** one ground vehicle, four ray-cast wheels, a driver and a
-    gunner, rewound for hitscan, splatter.
+10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
+    rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
+    about y only and meets boxes as two hull circles; USE gets in and out
+    (a vehicle in reach beats a pad); hitscan, melee, rockets and blasts
+    hurt it, and it blows up with its riders and comes back after its
+    respawn; past 11 m/s it runs down whoever is on foot in its way. Two a
+    side on Dry Fork. Bots drive, back up when stuck, and get out to fight.
+    Fog shows a vehicle as it shows a fighter (held, the full look every
+    other snapshot, the plain test between) and names a rider only to a
+    client that may know them.
 11. **The delta wire:** snapshots as deltas against the acked baseline, a
     byte budget, events cleared on ack.
 12. **The Bevy client:** a session layer in `client-net` and a native

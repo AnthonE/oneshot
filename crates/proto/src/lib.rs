@@ -17,9 +17,10 @@ use sim::fighter::{Fighter, Gun};
 use sim::geom::V3;
 use sim::input::{Input, BUTTONS};
 use sim::movement::Body;
+use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 7;
+pub const PROTO_VER: u16 = 8;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -29,6 +30,7 @@ pub const MAX_REMOTES: usize = MAX_FIGHTERS - 1;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 8;
+pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
 pub const SLOT_BITS: u32 = 4;
@@ -323,7 +325,7 @@ impl Pack for EventState {
         w.write(self.kind as u32, 4)?;
         w.write(self.a as u32, SLOT_BITS)?;
         w.write(self.b as u32, SLOT_BITS)?;
-        w.write(self.part as u32, 2)?;
+        w.write(self.part as u32, 3)?;
         w.write(self.c as u32, 16)?;
         w_v3c(w, self.pos)?;
         w_v3c(w, self.end)
@@ -333,12 +335,95 @@ impl Pack for EventState {
             kind: r.read(4)? as u8,
             a: r.read(SLOT_BITS)? as u8,
             b: r.read(SLOT_BITS)? as u8,
-            part: r.read(2)? as u8,
+            part: r.read(3)? as u8,
             c: r.read(16)? as u16,
             pos: r_v3c(r)?,
             end: r_v3c(r)?,
         })
     }
+}
+
+/// A vehicle as this client may draw it: coarse, health as a fraction, and
+/// who rides only when this client may know them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VehState {
+    pub slot: u8,
+    pub pos: V3,
+    pub vel: V3,
+    pub yaw: u16,
+    /// Health as a fraction of full, 0..255.
+    pub health: u8,
+    /// Each seat's rider's slot + 1, or 0 (nobody, or nobody it may know).
+    pub seats: [u8; 2],
+}
+
+impl Pack for VehState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, 3)?;
+        w_v3c(w, self.pos)?;
+        w_v3c(w, self.vel)?;
+        w.write(self.yaw as u32, 16)?;
+        w.write(self.health as u32, 8)?;
+        for &s in &self.seats {
+            w.write(s as u32, SLOT_BITS + 1)?;
+        }
+        Ok(())
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        let mut v = VehState {
+            slot: r.read(3)? as u8,
+            pos: r_v3c(r)?,
+            vel: r_v3c(r)?,
+            yaw: r.read(16)? as u16,
+            health: r.read(8)? as u8,
+            seats: [0; 2],
+        };
+        for s in v.seats.iter_mut() {
+            *s = r.read(SLOT_BITS + 1)? as u8;
+            if *s as usize > MAX_FIGHTERS {
+                return Err(WireError::Malformed);
+            }
+        }
+        Ok(v)
+    }
+}
+
+/// The vehicle this client rides in, exactly: what a driver's
+/// reconciliation adopts.
+fn w_vehicle(w: &mut BitWriter, v: &Vehicle) -> R<()> {
+    w.write_bit(v.active)?;
+    for c in [v.pos.x, v.pos.y, v.pos.z, v.vel.x, v.vel.y, v.vel.z] {
+        w_grid(w, c)?;
+    }
+    w.write(v.yaw as u32, 16)?;
+    w.write_bit(v.grounded)?;
+    w_i32(w, v.health, 32)?;
+    for &s in &v.seats {
+        w.write(s as u32, SLOT_BITS + 1)?;
+    }
+    w.write(v.respawn, 32)?;
+    w.write(v.home as u32, 8)
+}
+
+fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
+    let active = r.read_bit()?;
+    let pos = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
+    let vel = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
+    let mut v = Vehicle {
+        active,
+        pos,
+        vel,
+        yaw: r.read(16)? as u16,
+        grounded: r.read_bit()?,
+        health: r_i32(r, 32)?,
+        ..Vehicle::default()
+    };
+    for s in v.seats.iter_mut() {
+        *s = r.read(SLOT_BITS + 1)? as u8;
+    }
+    v.respawn = r.read(32)?;
+    v.home = r.read(8)? as u8;
+    Ok(v)
 }
 
 impl Pack for PadState {
@@ -361,6 +446,8 @@ pub struct Snapshot {
     pub depth: i8,
     /// This client's own fighter, exactly: what reconciliation adopts.
     pub own: Fighter,
+    /// The vehicle it rides in, exactly, if it rides.
+    pub own_vehicle: Option<Vehicle>,
     pub n_remote: u8,
     pub remotes: [Remote; MAX_REMOTES],
     pub n_proj: u8,
@@ -369,6 +456,8 @@ pub struct Snapshot {
     pub events: [EventState; MAX_SNAP_EVENTS],
     pub n_pads: u8,
     pub pads: [PadState; MAX_SNAP_PADS],
+    pub n_vehicles: u8,
+    pub vehicles: [VehState; MAX_SNAP_VEHICLES],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -385,6 +474,7 @@ impl Default for Snapshot {
             last_seq: 0,
             depth: 0,
             own: Fighter::default(),
+            own_vehicle: None,
             n_remote: 0,
             remotes: [Remote::default(); MAX_REMOTES],
             n_proj: 0,
@@ -393,6 +483,8 @@ impl Default for Snapshot {
             events: [EventState::default(); MAX_SNAP_EVENTS],
             n_pads: 0,
             pads: [PadState::default(); MAX_SNAP_PADS],
+            n_vehicles: 0,
+            vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -411,6 +503,9 @@ impl Snapshot {
     }
     pub fn events(&self) -> &[EventState] {
         &self.events[..self.n_events as usize]
+    }
+    pub fn vehicles(&self) -> &[VehState] {
+        &self.vehicles[..self.n_vehicles as usize]
     }
     pub fn pads(&self) -> &[PadState] {
         &self.pads[..self.n_pads as usize]
@@ -454,7 +549,8 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.last_buttons as u32, 16)?;
     w.write(f.respawn as u32, 16)?;
     w.write(f.kills as u32, 16)?;
-    w.write(f.deaths as u32, 16)
+    w.write(f.deaths as u32, 16)?;
+    w.write(f.ride as u32, 8)
 }
 
 fn r_own(r: &mut BitReader) -> R<Fighter> {
@@ -504,6 +600,10 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.respawn = r.read(16)? as u16;
     f.kills = r.read(16)? as u16;
     f.deaths = r.read(16)? as u16;
+    f.ride = r.read(8)? as u8;
+    if f.ride as usize > 2 * sim::consts::MAX_VEHICLES {
+        return Err(WireError::Malformed);
+    }
     Ok(f)
 }
 
@@ -514,6 +614,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_events as usize, MAX_SNAP_EVENTS),
         (s.n_pads as usize, MAX_SNAP_PADS),
         (s.n_score as usize, MAX_FIGHTERS),
+        (s.n_vehicles as usize, MAX_SNAP_VEHICLES),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -524,10 +625,15 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w.write(s.last_seq, 32)?;
     w_i32(&mut w, s.depth as i32, 8)?;
     w_own(&mut w, &s.own)?;
+    w.write_bit(s.own_vehicle.is_some())?;
+    if let Some(v) = &s.own_vehicle {
+        w_vehicle(&mut w, v)?;
+    }
     w_list(&mut w, s.remotes(), 4)?;
     w_list(&mut w, s.proj(), 5)?;
     w_list(&mut w, s.events(), 6)?;
     w_list(&mut w, s.pads(), 4)?;
+    w_list(&mut w, s.vehicles(), 4)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
@@ -550,10 +656,14 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
         own: r_own(&mut r)?,
         ..Snapshot::default()
     };
+    if r.read_bit()? {
+        s.own_vehicle = Some(r_vehicle(&mut r)?);
+    }
     s.n_remote = r_list(&mut r, &mut s.remotes, 4)?;
     s.n_proj = r_list(&mut r, &mut s.proj, 5)?;
     s.n_events = r_list(&mut r, &mut s.events, 6)?;
     s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
+    s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);

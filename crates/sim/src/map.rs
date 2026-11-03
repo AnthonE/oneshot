@@ -26,6 +26,14 @@ pub struct PadDef {
     pub respawn_ms: u32,
 }
 
+/// Where a vehicle starts, and comes back after it is destroyed.
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleSpawn {
+    pub pos: V3,
+    pub yaw: u16,
+    pub respawn_ms: u32,
+}
+
 /// A launcher: a grounded fighter whose feet are in `area` is thrown at
 /// `vel` (movement::step), on the server and in the prediction alike.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +61,8 @@ pub struct Def {
     pub roam: &'static [[f32; 2]],
     pub terrain: Option<TerrainDef>,
     pub launchers: &'static [([f32; 6], [f32; 3])],
+    /// (x y z, yaw, respawn ms) each.
+    pub vehicles: &'static [([f32; 3], u16, u32)],
 }
 
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
@@ -111,6 +121,15 @@ impl Def {
                 .iter()
                 .map(|r| V3::new(r[0], ground(r[0], r[1]), r[1]))
                 .collect(),
+            vehicles: self
+                .vehicles
+                .iter()
+                .map(|&(p, yaw, respawn_ms)| VehicleSpawn {
+                    pos: v(p),
+                    yaw,
+                    respawn_ms,
+                })
+                .collect(),
             terrain,
         }
         .indexed()
@@ -146,6 +165,7 @@ pub struct Map {
     /// The ground, if it isn't the plane y = 0.
     pub terrain: Option<Terrain>,
     pub launchers: Vec<Launcher>,
+    pub vehicles: Vec<VehicleSpawn>,
 }
 
 impl Map {
@@ -239,6 +259,7 @@ impl Map {
             grid: Grid::default(),
             terrain: None,
             launchers: Vec::new(),
+            vehicles: Vec::new(),
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
