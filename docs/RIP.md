@@ -88,7 +88,11 @@ keep its JS map tools nearly as they are.
 **Not taken from Fireplace:** the lockstep netcode itself (every client holds
 the whole world), the WAT build, the Deno relay, the box renderer.
 
-## 3 · Player model and guns, from Gates (GLB → three.js)
+## 3 · Player model and guns, from Gates (GLB → the client)
+
+The three.js page that first loaded these is retired; `tools/assets.mjs`
+now runs every GLB through `tools/glb` (KTX2 → JPEG/PNG) for the Bevy
+client. The note below is why that step exists.
 
 **Every Gates GLB stores its textures as KTX2 without declaring
 `KHR_texture_basisu`, so three.js's `GLTFLoader` won't load them as they are.**

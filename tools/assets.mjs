@@ -1,18 +1,17 @@
-// node tools/assets.mjs [GATES_DIR]: copies what the page uses from a Gates
-// checkout into web/public (docs/RIP.md §3–5), and patches each GLB so
-// three.js reads its textures.
-//
-// Gates' GLBs embed KTX2 (UASTC, Zstd) images but name them only by
-// mimeType, without declaring KHR_texture_basisu; three's GLTFLoader then
-// skips them. The patch moves each KTX2 image reference into the
-// extension and declares it. No pixel changes.
+// node tools/assets.mjs [GATES_DIR]: what the Bevy client draws and plays,
+// from a Gates checkout into crates/client/assets (docs/RIP.md §3–5, §9):
+// the models (Triple T and the guns) with their KTX2 textures re-embedded as
+// JPEG by tools/glb, so no build needs a transcoder; the sounds; and the
+// ground's and the boxes' textures. All CC0 or public domain (Gates'
+// MANIFEST.md files); credited in NOTICE.
 
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { basename, join } from 'node:path';
 
 const gates = process.argv[2] || process.env.GATES_DIR || '../Gates';
-const out = 'web/public';
-if (!existsSync(join(gates, 'assets/models/stumpy.glb'))) {
+const out = 'crates/client/assets';
+if (!existsSync(join(gates, 'assets/models/stumpy.glb')) || !existsSync(join(gates, 'assets/textures/MANIFEST.md'))) {
   console.error(`no Gates checkout at ${gates} (pass its path)`);
   process.exit(1);
 }
@@ -47,59 +46,37 @@ const SOUNDS = [
   'freesound/land_0.ogg',
 ];
 
-const TEXTURES = ['concrete_albedo.jpg', 'concrete_normal.jpg', 'metal_albedo.jpg', 'metal_normal.jpg',
-  'aggregate_albedo.jpg', 'aggregate_normal.jpg'];
+// The ground's four (sand, grass, the creek's gravel, rock) and the boxes'.
+const SETS = ['sand', 'grass', 'gravel', 'rock', 'concrete', 'metal'];
 
-function patchGlb(buf) {
-  if (buf.readUInt32LE(0) !== 0x46546c67) throw new Error('not a GLB');
-  const jsonLen = buf.readUInt32LE(12);
-  if (buf.readUInt32LE(16) !== 0x4e4f534a) throw new Error('first chunk is not JSON');
-  const json = JSON.parse(buf.subarray(20, 20 + jsonLen).toString('utf8'));
-  const rest = buf.subarray(20 + jsonLen);
-  let n = 0;
-  for (const t of json.textures || []) {
-    const img = json.images?.[t.source];
-    if (t.source !== undefined && img?.mimeType === 'image/ktx2') {
-      t.extensions = { ...(t.extensions || {}), KHR_texture_basisu: { source: t.source } };
-      delete t.source;
-      n++;
-    }
-  }
-  if (n) json.extensionsUsed = [...new Set([...(json.extensionsUsed || []), 'KHR_texture_basisu'])];
-  let text = Buffer.from(JSON.stringify(json), 'utf8');
-  const pad = (4 - (text.length % 4)) % 4;
-  text = Buffer.concat([text, Buffer.alloc(pad, 0x20)]);
-  const head = Buffer.alloc(20);
-  head.writeUInt32LE(0x46546c67, 0);
-  head.writeUInt32LE(2, 4);
-  head.writeUInt32LE(20 + text.length + rest.length, 8);
-  head.writeUInt32LE(text.length, 12);
-  head.writeUInt32LE(0x4e4f534a, 16);
-  return [Buffer.concat([head, text, rest]), n];
-}
-
-const put = (rel, data) => {
-  const p = join(out, rel);
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, data);
-};
-
+// The models: Gates' files as they are into a scratch folder, then tools/glb
+// re-embeds their textures into ours.
+const raw = 'traces/gates-models';
+rmSync(raw, { recursive: true, force: true });
+mkdirSync(raw, { recursive: true });
 for (const [name, src] of Object.entries(MODELS)) {
-  const [glb, n] = patchGlb(readFileSync(join(gates, 'assets', src)));
-  put(`models/${name}`, glb);
-  console.log(`models/${name} ← ${src} (${n} textures declared)`);
+  copyFileSync(join(gates, 'assets', src), join(raw, name));
+  console.log(`models/${name} <- ${src}`);
 }
+mkdirSync(join(out, 'models'), { recursive: true });
+const glb = spawnSync('cargo', ['run', '-q', '--release', '--manifest-path', 'tools/glb/Cargo.toml', '--', raw, join(out, 'models')], { stdio: 'inherit' });
+if (glb.status !== 0) process.exit(glb.status ?? 1);
+
+mkdirSync(join(out, 'sound'), { recursive: true });
 for (const s of SOUNDS) {
   const from = join(gates, 'assets/sound', s);
   if (!existsSync(from)) {
     console.warn(`missing sound ${s}`);
     continue;
   }
-  mkdirSync(join(out, 'sound'), { recursive: true });
   copyFileSync(from, join(out, 'sound', basename(s)));
 }
-for (const t of TEXTURES) {
-  mkdirSync(join(out, 'textures'), { recursive: true });
-  copyFileSync(join(gates, 'assets/textures', t), join(out, 'textures', t));
+
+const tex = join(gates, 'assets/textures');
+mkdirSync(join(out, 'textures'), { recursive: true });
+// The grass card atlas (Poly Haven grass_medium_01, baked by Gates).
+copyFileSync(join(tex, 'grass_card_albedo.png'), join(out, 'textures/grass_card_albedo.png'));
+for (const set of SETS) {
+  for (const m of ['albedo', 'normal']) copyFileSync(join(tex, `${set}_${m}.jpg`), join(out, `textures/${set}_${m}.jpg`));
 }
-console.log(`${SOUNDS.length} sounds, ${TEXTURES.length} textures`);
+console.log(`${Object.keys(MODELS).length} models, ${SOUNDS.length} sounds, ${SETS.length * 2 + 1} textures into ${out}`);

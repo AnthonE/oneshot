@@ -66,3 +66,11 @@ debug = false
 [profile.release]
 codegen-units = 16
 lto = "thin"
+
+# The browser's build (ci/client.sh): every byte is a download, so small
+# over fast, and the whole program optimised as one.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1

@@ -1,6 +1,6 @@
 {
   "game": "oneshot",
-  "about": "The reference board: the art seen with no match running (the page's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/build_web.sh).",
+  "about": "The reference board: the art seen with no match running (the Bevy client's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/client.sh).",
   "refs": "refs",
   "private_refs_env": "ELO_REF_DIR",
   "views": [

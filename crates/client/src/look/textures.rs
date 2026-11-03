@@ -1,5 +1,5 @@
 //! The texture sets the level is dressed in (CC0, from Gates:
-//! `tools/assets_client.mjs`), with their mip chains built here on the CPU
+//! `tools/assets.mjs`), with their mip chains built here on the CPU
 //! as Gates' `render/mipmap.rs` does: Bevy uploads a JPG with one level,
 //! and a tiled ground with one level shimmers. Albedo is filtered in linear
 //! light (sRGB-correct); normals are averaged and renormalised.

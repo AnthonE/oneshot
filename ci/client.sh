@@ -1,15 +1,18 @@
 #!/bin/sh
 # The Bevy client (crates/client, its own workspace): clippy and a native
 # build, then the browser build into crates/client/dist, which the server
-# serves like web/dist:
+# serves by default:
 #   target/release/oneshot-server --web crates/client/dist
-# Needs wasm-bindgen-cli at the version in crates/client/Cargo.lock.
+# The browser's build is its own profile (crates/client/Cargo.toml: small,
+# fat LTO) without wasm's name section: ~31 MB, ~8 MB gzipped, against 95
+# MB for a plain release build. Needs wasm-bindgen-cli at the version in
+# crates/client/Cargo.lock.
 set -eu
 cd "$(dirname "$0")/../crates/client"
 cargo fmt
 cargo clippy -q --all-targets -- -D warnings
 cargo build -q
-cargo build -q --release --lib --target wasm32-unknown-unknown
+cargo build -q --profile web --lib --target wasm32-unknown-unknown
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
 have=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}')
 if [ "$want" != "$have" ]; then
@@ -17,7 +20,15 @@ if [ "$want" != "$have" ]; then
   exit 1
 fi
 rm -rf dist
-wasm-bindgen --target web --out-dir dist target/wasm32-unknown-unknown/release/oneshot_client.wasm
+wasm-bindgen --target web --remove-name-section --remove-producers-section --out-dir dist \
+  target/wasm32-unknown-unknown/web/oneshot_client.wasm
+# The size gate (docs/DESIGN.md §2): what a player downloads, gzipped.
+gz=$(gzip -9c dist/oneshot_client_bg.wasm | wc -c)
+echo "wasm: $(wc -c < dist/oneshot_client_bg.wasm) bytes, $gz gzipped"
+if [ "$gz" -gt 9000000 ]; then
+  echo "the wasm is $gz bytes gzipped, past the 9 MB gate" >&2
+  exit 1
+fi
 cp web/index.html dist/
 cp -r assets dist/assets
 du -sh dist

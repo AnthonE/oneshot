@@ -50,16 +50,16 @@ are original; never another game's layout or art.
 | `proto` | Wire format: bit packing, inputs, snapshots, events, handshake | `PROTO_VER`, byte-exact goldens. Depends on nothing game-specific beyond small state structs. |
 | `server` | Rooms, transport, sign-in, fog of war, lag-comp depth, snapshots, telemetry, reports | Native, wtransport over quinn. |
 | `client-net` | Session (handshake), clock, prediction, reconciliation, interpolation | `core` and `session` build everywhere; the transport is wtransport natively and WebTransport in wasm, behind one `Wire` trait. |
-| `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, audio, menus | Milestone 12 on. Native first; the same crate built for wasm (WebGPU, WebGL2 fallback) replaces `web/`. Draws; never decides. |
-| `web/` | three.js renderer | Today's browser client. Kept until the Bevy wasm build plays as well, then deleted. |
+| `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, audio, menus | Milestone 12. Native, and the same crate built for wasm (WebGL2) is the page. Draws; never decides. |
 | `tools/maps` | Map compiler and editor | JS, from Fireplace (`RIP.md`). |
 
 Why Bevy now: the look we want (sky, clouds, terrain, grass, real lighting)
 is what Gates' Bevy renderer already draws, and a desktop build comes free.
 Gates' renderer is a donor, not a dependency: we port modules (`RIP.md` §9).
 The cost is the browser download: Gates' wasm is 8.57 MB gzipped with a heap
-around 700 MB (`Gates/docs/NOW.md` §0web). The wasm build gets a size gate,
-and WebGL2 drops the atmosphere, SSAO, bloom and TAA.
+around 700 MB (`Gates/docs/NOW.md` §0web). Ours is 7.7 MB gzipped (its own
+`web` profile, no name section); `ci/client.sh` fails it past 9 MB, and
+WebGL2 drops the atmosphere, SSAO, bloom and TAA.
 
 **The rule that keeps it honest: the client draws, the server decides.**
 Gameplay state lives in `sim`. The client reads from `client-net` and never
@@ -471,7 +471,13 @@ keeps every gate in §17 green and moves a golden only on purpose.
     chase cameras, the controls, a text HUD; native on wtransport, and in
     the browser on WebGL2, where it joins a Big Team match on Dry Fork): a playable skeleton, Gates' lighting, sky,
     terrain and grass, the game's feel, and last its wasm build replacing
-    `web/`.
+    `web/`. Done: the page has the three.js page's menu (name, skin, Elo
+    Pros sign-in, every mode, the queue's wait, the move to the live slot
+    when a server drains, back to the menu at the end), its controls (the
+    same keys, taps that land inside a frame, the wheel, `N`'s net graph),
+    skins and its `?pose` for the look board. `ci/e2e.mjs` plays it, the
+    server serves it, `ci/publish_web.sh` publishes it, and `web/` (three.js)
+    is gone.
 
 ## 17 · What CI blocks a merge on
 

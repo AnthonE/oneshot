@@ -50,7 +50,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
-/** How a box is drawn, as web/src/world.ts numbers them. */
+/** How a box is drawn, as the client's level.rs numbers them. */
 export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
