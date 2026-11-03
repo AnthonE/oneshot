@@ -29,6 +29,17 @@ node tools/assets.mjs ../Gates          # only to refresh crates/client/assets f
 cargo run -p server --release           # then open http://127.0.0.1:8080 in Chrome
 ```
 
+The desktop client is the same code (`crates/client/DESKTOP.md`):
+
+```sh
+cd crates/client && cargo run --release --features sound -- --server 127.0.0.1:8080
+oneshot                                 # a packaged build: the public server
+```
+
+`.github/workflows/desktop.yml` builds it for Linux, Windows and macOS on
+every client change (the run's artifacts), and puts the three on a release
+for a `desktop-v*` tag.
+
 | crate / dir | what |
 |---|---|
 | `crates/proto` | the wire: inputs, snapshots, stream messages, bit-packed, goldens |
@@ -67,7 +78,9 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 - **Kill cam:** the run-up to your death from the killer's eye, made only
   of what fog already sent you.
 - **Maps** are data: `maps/<name>/map.json`, compiled to the sim's tables.
-  Proving Grounds, Overpass and Cistern; a room draws one from its seed.
+  Proving Grounds, Overpass, Cistern and Bulkhead (bases, a bridge over a
+  pit, side lanes: the old arena flow, our own layout); a room draws one
+  from its seed.
 - **Skins:** worn only if your wallet owns them (Elo Pros' items), drawn as
   trim over the side's colour.
 - **Cups:** Swiss rounds of free-for-all heats, a final of the top eight,

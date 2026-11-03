@@ -1,0 +1,81 @@
+name: desktop
+# The desktop client for Linux, Windows and macOS: `oneshot` with sound,
+# its assets beside it (Bevy reads `assets/` next to the executable). Each
+# run uploads the three builds as artifacts; a `desktop-v*` tag also puts
+# them on a GitHub release (tagging is the operator's).
+on:
+  push:
+    branches: [main]
+    tags: ['desktop-v*']
+    paths:
+      - 'crates/client/**'
+      - 'crates/client-net/**'
+      - 'crates/sim/**'
+      - 'crates/proto/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'crates/client/**'
+      - 'crates/client-net/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            features: sound,wayland
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            features: sound
+          - os: macos-14
+            target: aarch64-apple-darwin
+            features: sound
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # rustup reads rust-toolchain.toml (the pinned compiler).
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/client -> target
+          key: desktop-${{ matrix.target }}
+      - name: build
+        working-directory: crates/client
+        run: cargo build --release --locked --bin oneshot --features ${{ matrix.features }}
+      - name: test
+        if: runner.os == 'Linux'
+        working-directory: crates/client
+        run: cargo test --release --locked --bin oneshot --features ${{ matrix.features }}
+      - name: package
+        shell: bash
+        run: |
+          name=oneshot-${{ matrix.target }}
+          mkdir -p "pkg/$name"
+          exe=oneshot; [ "$RUNNER_OS" = Windows ] && exe=oneshot.exe
+          cp "crates/client/target/release/$exe" "pkg/$name/"
+          cp -r crates/client/assets "pkg/$name/assets"
+          cp NOTICE "pkg/$name/"
+          cp crates/client/DESKTOP.md "pkg/$name/README.md"
+          cd pkg
+          if [ "$RUNNER_OS" = Windows ]; then 7z a -tzip "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
+          ls -la
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oneshot-${{ matrix.target }}
+          path: pkg/oneshot-${{ matrix.target }}.*
+      - name: release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "oneshot desktop $GITHUB_REF_NAME" --notes "The desktop client. Unzip and run oneshot (README.md inside)." || true
+          gh release upload "$GITHUB_REF_NAME" pkg/oneshot-${{ matrix.target }}.* --clobber
