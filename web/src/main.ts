@@ -84,7 +84,16 @@ async function main() {
   skin_names().forEach((n: string, i: number) => skinSelect.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
   try { skinSelect.value = localStorage.getItem('oneshot.skin') || '0'; } catch { /* private window */ }
 
-  const info = await (await fetch('server.json')).json();
+  // Where the game's own endpoints are: beside the page in dev, the game box
+  // when the page is published to elopros.com (`ci/publish_web.sh` writes
+  // `origin.json`).
+  let base = '';
+  try {
+    const o = await fetch('origin.json');
+    if (o.ok) base = (await o.json()).server ?? '';
+  } catch { /* none: beside the page */ }
+  const info = await (await fetch(`${base}server.json`)).json();
+  info.base = base;
   const signin = await setupSignIn(info, el('signin'), document.getElementById('who')!, [el('duel'), el('doubles'), el('cup')]);
 
   const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
@@ -103,7 +112,8 @@ async function main() {
     status.textContent = 'connecting…';
     // A pass goes with every mode once signed in: it is what proves a skin
     // is yours. Casual without one is a guest, in the standard look.
-    client = await Client.connect(info.addr, info.hash, name, signin.pass(), mode, Number(skinSelect.value) || 0);
+    // No hash: a CA's certificate, checked by the browser, never pinned.
+    client = await Client.connect(info.addr, info.hash ?? '', name, signin.pass(), mode, Number(skinSelect.value) || 0);
   } catch (e) {
     shared.error = String(e);
     status.textContent = String(e);
@@ -404,7 +414,7 @@ async function setupSignIn(info: any, button: HTMLButtonElement, who: HTMLElemen
   let pass = '';
   let nonce = '';
   const fresh = async () => {
-    try { nonce = (await (await fetch('nonce')).json()).nonce; } catch { nonce = ''; }
+    try { nonce = (await (await fetch(`${info.base}nonce`)).json()).nonce; } catch { nonce = ''; }
   };
   const sdk = () => (window as any).EloSignIn;
   // The SDK script is async: give it a moment.

@@ -35,4 +35,4 @@ for (const [i, q] of shots.entries()) {
   await page.close();
 }
 await browser.close();
-server.kill();
+server.kill('SIGINT'); // at once; SIGTERM would drain

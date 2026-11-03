@@ -151,7 +151,8 @@ pub struct Client {
 #[wasm_bindgen]
 impl Client {
     /// Connects to `addr` (host:port), pinning the certificate whose
-    /// SHA-256 is `hash` (hex), and asks to play `mode` (0 casual against
+    /// SHA-256 is `hash` (hex; empty for a certificate from a CA, which the
+    /// browser checks against its own roots), and asks to play `mode` (0 casual against
     /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game,
     /// 5 a cup)
     /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
@@ -586,6 +587,7 @@ impl Client {
                             proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
                             proto::REFUSE_BUSY => "that wallet is already queued or playing",
                             proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
+                            proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
                             _ => "the server is full",
                         }
                         .into(),
