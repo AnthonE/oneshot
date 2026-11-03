@@ -123,17 +123,36 @@ pub struct Fog {
     until: [u32; MAX_FIGHTERS],
 }
 
+/// The look ahead of a full look: `lead`, and the snapshot until the
+/// pair's next full look (fog looks at each pair in full every other
+/// snapshot).
+pub fn full_lead(lead: f32) -> f32 {
+    lead + crate::SNAP_EVERY as f32 / TICK_HZ as f32
+}
+
 impl Fog {
-    /// Looks again from `viewer` at `tick`.
+    /// Looks again from `viewer` at `tick`, a snapshot's tick. Each enemy
+    /// gets the full look (every eye, every point, [`full_lead`]) every
+    /// other snapshot, half the room one snapshot and half the next; on
+    /// the snapshot between, the plain test, so nobody in plain sight is
+    /// ever held back. At 8v8 that halves fog's cost (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
         let me = &w.fighters[viewer];
+        let turn = (tick / crate::SNAP_EVERY) as usize + viewer;
         for (q, f) in w.fighters.iter().enumerate() {
             if q == viewer || !f.seated {
                 self.until[q] = 0;
             } else if w.rules.teams && f.team == me.team {
                 self.until[q] = u32::MAX;
-            } else if sees(&w.map, me, f, lead, PEEK_M) {
-                self.until[q] = tick + HOLD_TICKS;
+            } else {
+                let seen = if (turn + q).is_multiple_of(2) {
+                    sees(&w.map, me, f, full_lead(lead), PEEK_M)
+                } else {
+                    plainly_sees(&w.map, me, f)
+                };
+                if seen {
+                    self.until[q] = tick + HOLD_TICKS;
+                }
             }
         }
     }

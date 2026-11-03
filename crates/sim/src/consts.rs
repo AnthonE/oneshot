@@ -21,6 +21,8 @@ pub const MAX_PROJ: usize = 32;
 pub const MAX_PADS: usize = 8;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
+/// Boxes in a map (`tools/maps/compile.mjs` holds maps to it).
+pub const MAX_MAP_BOXES: usize = 256;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 

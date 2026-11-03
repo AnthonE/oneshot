@@ -109,7 +109,17 @@ impl Gate {
                 // (fog's own among them: a point further along a path is
                 // not a superset of a nearer one) leaning up to 0.7 m, in
                 // the last 16 ticks.
-                let leads = [fog_lead, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3];
+                let leads = [
+                    fog_lead,
+                    room::fog::full_lead(fog_lead),
+                    0.0,
+                    0.05,
+                    0.1,
+                    0.15,
+                    0.2,
+                    0.25,
+                    0.3,
+                ];
                 let near = self.history.iter().any(|h| {
                     leads.iter().any(|&l| {
                         [room::fog::PEEK_M, 0.7]

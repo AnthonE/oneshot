@@ -111,6 +111,10 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
         map,
         p.x,
         tx,
+        (
+            (p.x.min(tx) - BODY_R, p.z - BODY_R),
+            (p.x.max(tx) + BODY_R, p.z + BODY_R),
+        ),
         |bx| (bx.min.x, bx.max.x),
         |bx| bx.over_z(p.z) && bx.min.y < hi && bx.max.y > lo,
     );
@@ -123,6 +127,10 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
         map,
         p.z,
         tz,
+        (
+            (p.x - BODY_R, p.z.min(tz) - BODY_R),
+            (p.x + BODY_R, p.z.max(tz) + BODY_R),
+        ),
         |bx| (bx.min.z, bx.max.z),
         |bx| bx.over_x(p.x) && bx.min.y < hi && bx.max.y > lo,
     );
@@ -159,18 +167,21 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
 /// Moves a coordinate from `from` toward `to` until it meets a box face
 /// that `blocks` says is in the way on the other axes. "Was outside" allows
 /// [`FACE_EPS`], so a body the grid left a hair inside a face it rests
-/// against is still held by it.
+/// against is still held by it. `area` (x and z, low and high) holds every
+/// box that could stop the move; the answer is the nearest stop, so which
+/// boxes are visited, and in what order, never changes it.
 fn sweep(
     map: &Map,
     from: f32,
     to: f32,
+    area: ((f32, f32), (f32, f32)),
     span: impl Fn(&crate::geom::Aabb) -> (f32, f32),
     blocks: impl Fn(&crate::geom::Aabb) -> bool,
 ) -> f32 {
     let mut t = to;
-    for bx in &map.boxes {
+    map.each_box_in(area.0, area.1, |bx| {
         if !blocks(bx) {
-            continue;
+            return;
         }
         let (lo, hi) = span(bx);
         if to > from && from + BODY_R <= lo + FACE_EPS && t + BODY_R > lo {
@@ -178,7 +189,7 @@ fn sweep(
         } else if to < from && from - BODY_R >= hi - FACE_EPS && t - BODY_R < hi {
             t = hi + BODY_R;
         }
-    }
+    });
     t
 }
 

@@ -1,7 +1,11 @@
 //! `cargo run --release -p room --example fog_cost`: what fog of war costs
 //! a sixteen-seat Big Team room, per map. Bots play; every snapshot (every
 //! other tick) each seat's fog looks again at everyone, as `Room::step`
-//! does. Prints the mean and worst time of one snapshot's fog for the room.
+//! does. Prints how long one snapshot's fog takes for the room: the mean
+//! and the spread. With `--check` (`ci/quick.sh`) it fails past
+//! [`MEAN_US`] or [`P999_US`]: twice what the box grid and the spread look
+//! (milestone 9) measured, so a slow machine passes and losing either
+//! doesn't.
 
 use std::time::Instant;
 
@@ -11,7 +15,14 @@ use sim::consts::MAX_FIGHTERS;
 use sim::input::Input;
 use sim::world::{Rules, World};
 
+/// The most a snapshot's fog may take on average, at sixteen seats.
+const MEAN_US: f64 = 600.0;
+/// And at the 99.9th percentile (the maximum is the scheduler's).
+const P999_US: f64 = 3000.0;
+
 fn main() {
+    let check = std::env::args().any(|a| a == "--check");
+    let mut over = false;
     for d in sim::maps::ALL {
         let mut w = World::new(d.build(), Rules::big_team(), 7, (1, 2));
         let mut bots = [Bot::new(7, 0, 0.5); MAX_FIGHTERS];
@@ -21,7 +32,7 @@ fn main() {
         }
         let mut fogs: Vec<Fog> = (0..MAX_FIGHTERS).map(|_| Fog::default()).collect();
         let lead = lead_s(60.0, 4);
-        let (mut total, mut worst, mut n) = (0f64, 0f64, 0u32);
+        let mut times: Vec<f64> = Vec::new();
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         for t in 0..20_000u32 {
             for s in 0..MAX_FIGHTERS {
@@ -33,21 +44,28 @@ fn main() {
                 for (s, f) in fogs.iter_mut().enumerate() {
                     f.update(&w, s, lead, w.tick);
                 }
-                let us = t0.elapsed().as_secs_f64() * 1e6;
-                total += us;
-                worst = worst.max(us);
-                n += 1;
+                times.push(t0.elapsed().as_secs_f64() * 1e6);
             }
         }
-        let mean = total / n as f64;
+        let mean = times.iter().sum::<f64>() / times.len() as f64;
+        times.sort_by(|a, b| a.total_cmp(b));
+        let at = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
         // 64 snapshots a second.
         println!(
-            "{:16} {:3} boxes: fog {:7.1} µs a snapshot (worst {:7.1}), {:4.1}% of a core at 64 Hz",
+            "{:16} {:3} boxes: fog mean {:6.1} µs, p50 {:6.1}, p99 {:6.1}, p99.9 {:6.1}, max {:7.1}; {:4.1}% of a core at 64 Hz",
             d.name,
             w.map.boxes.len(),
             mean,
-            worst,
+            at(0.5),
+            at(0.99),
+            at(0.999),
+            at(1.0),
             mean * 64.0 / 1e4
         );
+        over |= mean > MEAN_US || at(0.999) > P999_US;
+    }
+    if check && over {
+        eprintln!("fog is over budget: mean {MEAN_US} µs, p99.9 {P999_US} µs");
+        std::process::exit(1);
     }
 }

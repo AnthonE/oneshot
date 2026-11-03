@@ -12,6 +12,7 @@ pub mod events;
 pub mod fighter;
 pub mod fmath;
 pub mod geom;
+pub mod grid;
 pub mod hash;
 pub mod input;
 pub mod map;
