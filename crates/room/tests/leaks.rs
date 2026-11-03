@@ -3,8 +3,9 @@
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
-//! unseen fighter's shot carries a place or a direction, or if any bit of
-//! the salt crosses the wire before the match is over.
+//! unseen fighter's shot carries a place or a direction, if a hidden
+//! fighter's projectile is sent out of sight, or if any bit of the salt
+//! crosses the wire before the match is over.
 
 use std::collections::VecDeque;
 
@@ -58,6 +59,7 @@ struct Gate {
     commit: [u8; 32],
     checked: usize,
     hidden_seen: usize,
+    proj_seen: usize,
 }
 
 impl Gate {
@@ -70,6 +72,34 @@ impl Gate {
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
         let mate = |q: usize| Some(q) == self.mate;
         let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
+        // Every kind on the wire has its check; no wildcard, so a new kind
+        // doesn't compile until it has one.
+        for k in sim::thing::Kind::ALL {
+            match k {
+                sim::thing::Kind::Fighter => {}
+                // 8. A projectile is sent only if its owner is known to
+                // this client or it is in clear line of sight.
+                sim::thing::Kind::Projectile => {
+                    let eye = me.eye();
+                    for p in s.proj() {
+                        self.proj_seen += 1;
+                        let truth = w
+                            .proj
+                            .live()
+                            .find(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            .map(|(_, t)| *t);
+                        let t = truth.unwrap_or_else(|| panic!("tick {}: {p:?} is in no true projectile", w.tick));
+                        assert!(
+                            known(p.owner as usize) || w.map.clear(eye, t.pos),
+                            "tick {}: a hidden fighter's projectile out of sight was sent: {p:?}",
+                            w.tick
+                        );
+                    }
+                }
+                // Pad timers are public (room::build).
+                sim::thing::Kind::Pad => {}
+            }
+        }
         for (q, f) in w.fighters.iter().enumerate() {
             if q == self.me || mate(q) || !f.seated {
                 continue;
@@ -190,6 +220,7 @@ fn gate(map: Map, rules: Rules) {
         commit,
         checked: 0,
         hidden_seen: 0,
+        proj_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -261,6 +292,7 @@ fn gate(map: Map, rules: Rules) {
     // The gate only means something if fog actually hid someone.
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
+    assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
 }
 
 /// Check 7: skins are public by design (docs/DESIGN.md §15) and say

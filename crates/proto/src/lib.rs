@@ -28,6 +28,9 @@ pub const MAX_REMOTES: usize = MAX_FIGHTERS;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 8;
+/// Bits for a seat number on the wire: a remote's slot, a projectile's
+/// owner, an event's two fighters.
+pub const SLOT_BITS: u32 = 3;
 /// A stream message's ceiling: a hello with an Elo Pros pass is the
 /// largest.
 pub const MAX_STREAM_MSG: usize = 1024;
@@ -189,6 +192,36 @@ pub const DG_SNAPSHOT: u8 = KIND_SNAPSHOT as u8;
 
 // ------------------------------------------------------------- snapshots
 
+/// A thing's wire form: written and read field by field, the same bits
+/// both ways. A new kind on the wire is an impl of this, a count in the
+/// snapshot, and a line in the leak gate.
+pub trait Pack: Sized {
+    fn pack(&self, w: &mut BitWriter) -> R<()>;
+    fn unpack(r: &mut BitReader) -> R<Self>;
+}
+
+/// `items`, counted in `bits` bits.
+fn w_list<T: Pack>(w: &mut BitWriter, items: &[T], bits: u32) -> R<()> {
+    w.write(items.len() as u32, bits)?;
+    for t in items {
+        t.pack(w)?;
+    }
+    Ok(())
+}
+
+/// A list counted in `bits` bits into `out`; more than `out` holds is
+/// refused. Returns the count.
+fn r_list<T: Pack>(r: &mut BitReader, out: &mut [T], bits: u32) -> R<u8> {
+    let n = r.read(bits)? as usize;
+    if n > out.len() {
+        return Err(WireError::Cap);
+    }
+    for t in out[..n].iter_mut() {
+        *t = T::unpack(r)?;
+    }
+    Ok(n as u8)
+}
+
 /// Another fighter as this client may draw it: coarse, no ammo, no timers.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Remote {
@@ -232,6 +265,90 @@ pub struct EventState {
 pub struct PadState {
     /// Whole seconds until the gun is back; 0 means it's there.
     pub empty_s: u16,
+}
+
+impl Pack for Remote {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, SLOT_BITS)?;
+        w.write(self.team as u32 & 1, 1)?;
+        w.write_bit(self.alive)?;
+        w.write_bit(self.crouched)?;
+        w.write_bit(self.grounded)?;
+        w.write_bit(self.reloading)?;
+        w_v3c(w, self.pos)?;
+        w_v3c(w, self.vel)?;
+        w.write(self.yaw as u32, 16)?;
+        w.write(self.pitch as u16 as u32, 16)?;
+        w.write(self.arm as u32, 4)?;
+        w.write(self.shield as u32, 8)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(Remote {
+            slot: r.read(SLOT_BITS)? as u8,
+            team: r.read(1)? as u8,
+            alive: r.read_bit()?,
+            crouched: r.read_bit()?,
+            grounded: r.read_bit()?,
+            reloading: r.read_bit()?,
+            pos: r_v3c(r)?,
+            vel: r_v3c(r)?,
+            yaw: r.read(16)? as u16,
+            pitch: r.read(16)? as u16 as i16,
+            arm: r.read(4)? as u8,
+            shield: r.read(8)? as u8,
+        })
+    }
+}
+
+impl Pack for ProjState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.kind as u32, 1)?;
+        w.write(self.owner as u32, SLOT_BITS)?;
+        w_v3c(w, self.pos)?;
+        w_v3c(w, self.vel)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(ProjState {
+            kind: r.read(1)? as u8,
+            owner: r.read(SLOT_BITS)? as u8,
+            pos: r_v3c(r)?,
+            vel: r_v3c(r)?,
+        })
+    }
+}
+
+impl Pack for EventState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.kind as u32, 4)?;
+        w.write(self.a as u32, SLOT_BITS)?;
+        w.write(self.b as u32, SLOT_BITS)?;
+        w.write(self.part as u32, 2)?;
+        w.write(self.c as u32, 16)?;
+        w_v3c(w, self.pos)?;
+        w_v3c(w, self.end)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(EventState {
+            kind: r.read(4)? as u8,
+            a: r.read(SLOT_BITS)? as u8,
+            b: r.read(SLOT_BITS)? as u8,
+            part: r.read(2)? as u8,
+            c: r.read(16)? as u16,
+            pos: r_v3c(r)?,
+            end: r_v3c(r)?,
+        })
+    }
+}
+
+impl Pack for PadState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.empty_s as u32, 16)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(PadState {
+            empty_s: r.read(16)? as u16,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -401,42 +518,10 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w.write(s.last_seq, 32)?;
     w_i32(&mut w, s.depth as i32, 8)?;
     w_own(&mut w, &s.own)?;
-    w.write(s.n_remote as u32, 4)?;
-    for m in s.remotes() {
-        w.write(m.slot as u32, 3)?;
-        w.write(m.team as u32 & 1, 1)?;
-        w.write_bit(m.alive)?;
-        w.write_bit(m.crouched)?;
-        w.write_bit(m.grounded)?;
-        w.write_bit(m.reloading)?;
-        w_v3c(&mut w, m.pos)?;
-        w_v3c(&mut w, m.vel)?;
-        w.write(m.yaw as u32, 16)?;
-        w.write(m.pitch as u16 as u32, 16)?;
-        w.write(m.arm as u32, 4)?;
-        w.write(m.shield as u32, 8)?;
-    }
-    w.write(s.n_proj as u32, 5)?;
-    for p in s.proj() {
-        w.write(p.kind as u32, 1)?;
-        w.write(p.owner as u32, 3)?;
-        w_v3c(&mut w, p.pos)?;
-        w_v3c(&mut w, p.vel)?;
-    }
-    w.write(s.n_events as u32, 6)?;
-    for e in s.events() {
-        w.write(e.kind as u32, 4)?;
-        w.write(e.a as u32, 3)?;
-        w.write(e.b as u32, 3)?;
-        w.write(e.part as u32, 2)?;
-        w.write(e.c as u32, 16)?;
-        w_v3c(&mut w, e.pos)?;
-        w_v3c(&mut w, e.end)?;
-    }
-    w.write(s.n_pads as u32, 4)?;
-    for p in s.pads() {
-        w.write(p.empty_s as u32, 16)?;
-    }
+    w_list(&mut w, s.remotes(), 4)?;
+    w_list(&mut w, s.proj(), 5)?;
+    w_list(&mut w, s.events(), 6)?;
+    w_list(&mut w, s.pads(), 4)?;
     for &sc in &s.score {
         w_i32(&mut w, sc, 16)?;
     }
@@ -458,60 +543,10 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
         own: r_own(&mut r)?,
         ..Snapshot::default()
     };
-    s.n_remote = r.read(4)? as u8;
-    if s.n_remote as usize > MAX_REMOTES {
-        return Err(WireError::Cap);
-    }
-    for i in 0..s.n_remote as usize {
-        s.remotes[i] = Remote {
-            slot: r.read(3)? as u8,
-            team: r.read(1)? as u8,
-            alive: r.read_bit()?,
-            crouched: r.read_bit()?,
-            grounded: r.read_bit()?,
-            reloading: r.read_bit()?,
-            pos: r_v3c(&mut r)?,
-            vel: r_v3c(&mut r)?,
-            yaw: r.read(16)? as u16,
-            pitch: r.read(16)? as u16 as i16,
-            arm: r.read(4)? as u8,
-            shield: r.read(8)? as u8,
-        };
-    }
-    s.n_proj = r.read(5)? as u8;
-    if s.n_proj as usize > MAX_SNAP_PROJ {
-        return Err(WireError::Cap);
-    }
-    for i in 0..s.n_proj as usize {
-        s.proj[i] = ProjState {
-            kind: r.read(1)? as u8,
-            owner: r.read(3)? as u8,
-            pos: r_v3c(&mut r)?,
-            vel: r_v3c(&mut r)?,
-        };
-    }
-    s.n_events = r.read(6)? as u8;
-    if s.n_events as usize > MAX_SNAP_EVENTS {
-        return Err(WireError::Cap);
-    }
-    for i in 0..s.n_events as usize {
-        s.events[i] = EventState {
-            kind: r.read(4)? as u8,
-            a: r.read(3)? as u8,
-            b: r.read(3)? as u8,
-            part: r.read(2)? as u8,
-            c: r.read(16)? as u16,
-            pos: r_v3c(&mut r)?,
-            end: r_v3c(&mut r)?,
-        };
-    }
-    s.n_pads = r.read(4)? as u8;
-    if s.n_pads as usize > MAX_SNAP_PADS {
-        return Err(WireError::Cap);
-    }
-    for i in 0..s.n_pads as usize {
-        s.pads[i].empty_s = r.read(16)? as u16;
-    }
+    s.n_remote = r_list(&mut r, &mut s.remotes, 4)?;
+    s.n_proj = r_list(&mut r, &mut s.proj, 5)?;
+    s.n_events = r_list(&mut r, &mut s.events, 6)?;
+    s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
     for sc in s.score.iter_mut() {
         *sc = r_i32(&mut r, 16)?;
     }

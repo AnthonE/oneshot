@@ -489,6 +489,34 @@ pub fn build(
         score: w.score,
         ..Snapshot::default()
     };
+    // What this client may know: itself, its side, and whom fog shows it.
+    let me = &w.fighters[s];
+    let eye = me.eye();
+    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
+    // Every kind, each by its own rule; no wildcard, so a new kind must
+    // say what this client may see of it.
+    for k in sim::thing::Kind::ALL {
+        match k {
+            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible),
+            sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
+            sim::thing::Kind::Pad => add_pads(&mut snap, w),
+        }
+    }
+    for e in events {
+        if snap.n_events as usize >= MAX_SNAP_EVENTS {
+            break;
+        }
+        let Some(e) = filter_event(w, s, eye, e, &known) else {
+            continue;
+        };
+        snap.events[snap.n_events as usize] = e;
+        snap.n_events += 1;
+    }
+    snap
+}
+
+/// The others fog shows this client, coarsely.
+fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usize) -> bool) {
     for (q, f) in w.fighters.iter().enumerate() {
         if q == s || !f.seated || !visible(q) || snap.n_remote as usize >= MAX_REMOTES {
             continue;
@@ -509,16 +537,15 @@ pub fn build(
         };
         snap.n_remote += 1;
     }
-    // What this client may know: itself, its side, and whom fog shows it.
-    let me = &w.fighters[s];
-    let eye = me.eye();
-    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
-    for p in w.proj.iter().filter(|p| p.active) {
+}
+
+/// A projectile flies in the open: sent if its owner is known to this
+/// client, or it is in clear line of sight.
+fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usize) -> bool) {
+    for (_, p) in w.proj.live() {
         if snap.n_proj as usize >= MAX_SNAP_PROJ {
             break;
         }
-        // A projectile flies in the open: sent if it is ours or our side's,
-        // or in clear line of sight.
         if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
             continue;
         }
@@ -530,16 +557,10 @@ pub fn build(
         };
         snap.n_proj += 1;
     }
-    for e in events {
-        if snap.n_events as usize >= MAX_SNAP_EVENTS {
-            break;
-        }
-        let Some(e) = filter_event(w, s, eye, e, &known) else {
-            continue;
-        };
-        snap.events[snap.n_events as usize] = e;
-        snap.n_events += 1;
-    }
+}
+
+/// Pad timers are public: they say when a gun is back, not who is near.
+fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
     for i in 0..n {
         snap.pads[i] = PadState {
@@ -547,7 +568,6 @@ pub fn build(
         };
     }
     snap.n_pads = n as u8;
-    snap
 }
 
 /// A shot heard is placed only to this grid, with no direction.

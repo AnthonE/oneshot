@@ -9,6 +9,7 @@ use crate::geom::V3;
 use crate::input::*;
 use crate::map::Map;
 use crate::movement::{self, Body};
+use crate::thing::Thing;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Gun {
@@ -230,4 +231,43 @@ impl Fighter {
 
 fn dec(t: &mut u16) {
     *t = t.saturating_sub(1);
+}
+
+impl Thing for Fighter {
+    fn live(&self) -> bool {
+        self.seated
+    }
+
+    fn hash(&self, h: &mut crate::hash::Fnv) {
+        h.bool(self.seated);
+        h.u8(self.team);
+        h.bool(self.alive);
+        h.v3(self.body.pos);
+        h.v3(self.body.vel);
+        h.bool(self.body.grounded);
+        h.bool(self.body.crouched);
+        h.u16(self.yaw);
+        h.u16(self.pitch as u16);
+        h.i32(self.shield);
+        h.i32(self.health);
+        h.u32(self.since_hit);
+        for g in &self.guns {
+            h.u8(g.arm);
+            h.u16(g.mag);
+            h.u16(g.reserve);
+        }
+        h.u8(self.cur);
+        h.u16(self.refire);
+        h.u16(self.reload);
+        h.u8(self.burst_left);
+        h.u16(self.burst_gap);
+        h.u16(self.melee_cool);
+        h.u16(self.gren_cool);
+        h.u8(self.grenades);
+        h.u32(self.shots);
+        h.u16(self.last_buttons);
+        h.u16(self.respawn);
+        h.u16(self.kills);
+        h.u16(self.deaths);
+    }
 }

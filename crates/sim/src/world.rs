@@ -10,8 +10,10 @@ use crate::geom::{aim_dir, ray_cylinder, ray_sphere, V3};
 use crate::hash::Fnv;
 use crate::input::Input;
 use crate::map::{Map, ANY_TEAM};
+use crate::pool::Pool;
 use crate::rewind::{Pose, Rewind};
 use crate::rng::{sip24, Pcg32};
+use crate::thing::{self, hash_all, Thing};
 
 /// No winner (yet, or a draw).
 pub const NO_WINNER: u8 = 255;
@@ -117,10 +119,37 @@ pub struct Projectile {
     pub age: u16,
 }
 
+impl Thing for Projectile {
+    fn live(&self) -> bool {
+        self.active
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.bool(self.active);
+        h.u8(self.kind as u8);
+        h.u8(self.owner);
+        h.v3(self.pos);
+        h.v3(self.vel);
+        h.u16(self.ttl);
+        h.u16(self.age);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pad {
     /// Ticks until the gun is back; 0 means it's there.
     pub empty_for: u32,
+}
+
+impl Thing for Pad {
+    /// A pad is part of its map: always there, with a gun or without.
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.u32(self.empty_for);
+    }
 }
 
 pub struct World {
@@ -128,7 +157,7 @@ pub struct World {
     pub map: Map,
     pub rules: Rules,
     pub fighters: [Fighter; MAX_FIGHTERS],
-    pub proj: [Projectile; MAX_PROJ],
+    pub proj: Pool<Projectile, MAX_PROJ>,
     pub pads: [Pad; MAX_PADS],
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
@@ -137,7 +166,7 @@ pub struct World {
     pub score: [i32; MAX_FIGHTERS],
     pub winner: u8,
     pub events: Events,
-    rewind: Box<Rewind>,
+    rewind: Box<Rewind<Pose, MAX_FIGHTERS>>,
     rng: Pcg32,
     /// The match's secret: keys every spread draw. Never leaves the server
     /// while the match runs (docs/DESIGN.md §9).
@@ -151,7 +180,7 @@ impl World {
             map,
             rules,
             fighters: [Fighter::default(); MAX_FIGHTERS],
-            proj: [Projectile::default(); MAX_PROJ],
+            proj: Pool::default(),
             pads: [Pad::default(); MAX_PADS],
             phase: Phase::Countdown,
             clock: ticks(COUNTDOWN_MS),
@@ -377,17 +406,16 @@ impl World {
     }
 
     fn launch(&mut self, kind: ProjKind, s: usize, pos: V3, vel: V3, ttl: u32) {
-        if let Some(p) = self.proj.iter_mut().find(|p| !p.active) {
-            *p = Projectile {
-                active: true,
-                kind,
-                owner: s as u8,
-                pos,
-                vel,
-                ttl: ttl as u16,
-                age: 0,
-            };
-        }
+        // A full pool drops the throw, as it always has.
+        let _ = self.proj.alloc(Projectile {
+            active: true,
+            kind,
+            owner: s as u8,
+            pos,
+            vel,
+            ttl: ttl as u16,
+            age: 0,
+        });
     }
 
     fn projectiles(&mut self) {
@@ -759,49 +787,13 @@ impl World {
         for &s in &self.score {
             h.i32(s);
         }
-        for f in &self.fighters {
-            h.bool(f.seated);
-            h.u8(f.team);
-            h.bool(f.alive);
-            h.v3(f.body.pos);
-            h.v3(f.body.vel);
-            h.bool(f.body.grounded);
-            h.bool(f.body.crouched);
-            h.u16(f.yaw);
-            h.u16(f.pitch as u16);
-            h.i32(f.shield);
-            h.i32(f.health);
-            h.u32(f.since_hit);
-            for g in &f.guns {
-                h.u8(g.arm);
-                h.u16(g.mag);
-                h.u16(g.reserve);
+        // Every kind, every slot; no wildcard, so a new kind must be added.
+        for k in thing::Kind::ALL {
+            match k {
+                thing::Kind::Fighter => hash_all(&self.fighters, &mut h),
+                thing::Kind::Projectile => hash_all(&*self.proj, &mut h),
+                thing::Kind::Pad => hash_all(&self.pads, &mut h),
             }
-            h.u8(f.cur);
-            h.u16(f.refire);
-            h.u16(f.reload);
-            h.u8(f.burst_left);
-            h.u16(f.burst_gap);
-            h.u16(f.melee_cool);
-            h.u16(f.gren_cool);
-            h.u8(f.grenades);
-            h.u32(f.shots);
-            h.u16(f.last_buttons);
-            h.u16(f.respawn);
-            h.u16(f.kills);
-            h.u16(f.deaths);
-        }
-        for p in &self.proj {
-            h.bool(p.active);
-            h.u8(p.kind as u8);
-            h.u8(p.owner);
-            h.v3(p.pos);
-            h.v3(p.vel);
-            h.u16(p.ttl);
-            h.u16(p.age);
-        }
-        for p in &self.pads {
-            h.u32(p.empty_for);
         }
         let (a, b) = self.rng.state();
         h.u64(a);

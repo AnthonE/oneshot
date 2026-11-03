@@ -17,8 +17,10 @@ pub mod input;
 pub mod map;
 pub mod maps;
 pub mod movement;
+pub mod pool;
 pub mod rewind;
 pub mod rng;
+pub mod thing;
 pub mod world;
 
 pub use input::Input;

@@ -47,17 +47,12 @@ fn chest_h(f: &Fighter) -> f32 {
     }
 }
 
-/// Whether `viewer` could see `target` within `lead` seconds, leaning up to
-/// `peek` metres. The leak gate calls it with looser numbers than fog does.
-pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32) -> bool {
+/// Where `viewer`'s eye could be within `lead` seconds: now, pushed ahead
+/// by its speed, leaning `peek` metres across `side` either way, or jumping.
+pub fn eyes(viewer: &Fighter, side: V3, lead: f32, peek: f32) -> [V3; 7] {
     let e0 = eye(viewer);
     let e1 = e0 + viewer.body.vel * lead;
-    let to = (target.body.pos - viewer.body.pos).flat();
-    let side = {
-        let d = to.norm();
-        V3::new(-d.z, 0.0, d.x)
-    };
-    let eyes = [
+    [
         e0,
         e1,
         e0 + side * peek,
@@ -65,7 +60,14 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
         e1 + side * peek,
         e1 - side * peek,
         e0 + V3::new(0.0, JUMP_M, 0.0),
-    ];
+    ]
+}
+
+/// The points of a fighter that, in clear line, show it: head, chest, feet
+/// and the chest's two edges across `side`, now and pushed ahead by its
+/// speed over `lead` seconds. A new kind on the wire (a vehicle) names its
+/// own points and goes through [`sees_points`].
+pub fn fighter_points(target: &Fighter, side: V3, lead: f32) -> [V3; 10] {
     let head = if target.body.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
     let ch = chest_h(target);
     let edge = side * (HIT_R + 0.1);
@@ -80,7 +82,29 @@ pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32)
         points[k * 5 + 3] = c + edge;
         points[k * 5 + 4] = c - edge;
     }
+    points
+}
+
+/// Whether any eye has a clear line to any point.
+pub fn sees_points(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
     eyes.iter().any(|&e| points.iter().any(|&t| map.clear(e, t)))
+}
+
+/// Across the line from `viewer` to `target`, flat: the way a peek leans.
+fn across(viewer: V3, target: V3) -> V3 {
+    let d = (target - viewer).flat().norm();
+    V3::new(-d.z, 0.0, d.x)
+}
+
+/// Whether `viewer` could see `target` within `lead` seconds, leaning up to
+/// `peek` metres. The leak gate calls it with looser numbers than fog does.
+pub fn sees(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, peek: f32) -> bool {
+    let side = across(viewer.body.pos, target.body.pos);
+    sees_points(
+        map,
+        &eyes(viewer, side, lead, peek),
+        &fighter_points(target, side, lead),
+    )
 }
 
 /// The plain test: is the target's chest or head in clear line from the
