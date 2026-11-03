@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>oneshot</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
+      canvas#game { width: 100vw; height: 100vh; display: block; outline: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" tabindex="0"></canvas>
+    <script type="module">
+      // The Bevy client in the browser: the server's address and
+      // certificate hash from server.json, as the three.js page reads them.
+      import init, { start } from './oneshot_client.js';
+      const params = new URLSearchParams(location.search);
+      await init();
+      const info = await (await fetch('server.json')).json();
+      await start(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0));
+    </script>
+  </body>
+</html>
