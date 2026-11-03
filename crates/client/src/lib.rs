@@ -69,11 +69,13 @@ const SENS: f32 = 0.0022;
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
 /// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
-/// the page also halves its canvas).
+/// the page also halves its canvas); `fxdemo` stages the effects in front
+/// of the camera (drawing only, `look/fx/demo.rs`).
 #[derive(Clone, Copy, Default, Resource)]
 pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
+    pub fxdemo: bool,
 }
 
 impl Opts {
@@ -83,6 +85,7 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
+            fxdemo: has("fxdemo"),
         }
     }
 }
@@ -125,7 +128,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             setup,
             look::textures::load,
             look::guns::load,
-            look::effects::setup,
+            look::fx::setup,
             hud::setup,
         ),
     )
@@ -144,8 +147,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             draw_fighters,
             draw_vehicles,
             fly,
-            look::effects::fade,
             view,
+            look::fx::tick,
             draw_view,
             hud::draw,
         )
@@ -156,6 +159,9 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     app.insert_resource(opts);
     if opts.lite {
         app.add_systems(Update, lite);
+    }
+    if opts.fxdemo {
+        app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::tick));
     }
     app
 }
@@ -317,6 +323,9 @@ fn draw_fighters(
     mut at: Query<&mut Transform>,
     mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
     mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
+    mut fx: ResMut<look::fx::Fx>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    time: Res<Time>,
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
@@ -327,6 +336,17 @@ fn draw_fighters(
         _ => core.others(now),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
+    look::fx::bodies::watch(&mut commands, &mut fx, &others, time.delta_secs());
+    let (f, p) = core.own();
+    look::fx::bodies::watch_own(
+        &mut commands,
+        &mut fx,
+        core.slot,
+        Vec3::new(p.x, p.y, p.z),
+        f.body.vel.y,
+        f.body.grounded && f.alive && f.riding().is_none(),
+    );
+    let t = time.elapsed_secs();
     for d in &others {
         let e = *drawn
             .fighters
@@ -344,6 +364,7 @@ fn draw_fighters(
             &mut players,
             &mut playing,
         );
+        look::bodies::flare(e, fx.was.flare(d.slot, t), &mut bodies, &mut mats);
     }
     drawn.fighters.retain(|slot, e| {
         let k = others.iter().any(|d| d.slot == *slot);
@@ -355,6 +376,7 @@ fn draw_fighters(
 }
 
 /// The vehicles: ours as predicted, the rest interpolated.
+#[allow(clippy::too_many_arguments)]
 fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
@@ -362,11 +384,13 @@ fn draw_vehicles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut at: Query<&mut Transform>,
+    mut fx: ResMut<look::fx::Fx>,
+    time: Res<Time>,
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
-    let mut list: Vec<(u8, Vec3, f32)> = core
-        .vehicles(now)
+    let seen = core.vehicles(now);
+    let mut list: Vec<(u8, Vec3, f32)> = seen
         .iter()
         .map(|v| (v.slot, Vec3::new(v.pos.x, v.pos.y, v.pos.z), v.yaw))
         .collect();
@@ -374,6 +398,8 @@ fn draw_vehicles(
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
     for &(slot, p, yaw) in &list {
+        let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
+        look::fx::hulls::roll(&mut commands, &mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
         match drawn.vehicles.get(&slot) {
             Some(&e) => {
@@ -430,7 +456,13 @@ fn draw_vehicles(
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
-fn view(link: NonSend<LinkRes>, look: Res<Look>, mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>) {
+fn view(
+    link: NonSend<LinkRes>,
+    look: Res<Look>,
+    fx: Res<look::fx::Fx>,
+    time: Res<Time>,
+    mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
+) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
         return;
     };
@@ -456,6 +488,10 @@ fn view(link: NonSend<LinkRes>, look: Res<Look>, mut cam: Query<(&mut Transform,
             fov /= zoom as f32;
         }
     }
+    // A blast's shake: the drawn camera only, never the aim we send.
+    let (turn, shift) = look::fx::blast::nudge(fx.shake, time.elapsed_secs());
+    t.rotation *= turn;
+    t.translation += shift;
     if let Projection::Perspective(pp) = &mut *proj {
         pp.fov = fov.to_radians();
     }
@@ -494,17 +530,25 @@ pub(crate) fn happened(
     mut heard: ResMut<sound::Heard>,
     look: Res<Look>,
     time: Res<Time>,
-    fx: Res<look::effects::Fx>,
+    mut fx: ResMut<look::fx::Fx>,
     mut st: ResMut<hud::HudState>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
     let events = s.core.drain_events();
     let msgs = s.take_messages();
-    let me = s.core.slot;
-    look::effects::on_events(&mut commands, &fx, &mut mats, &events, me);
+    {
+        let others = s.core.others(now_ms);
+        let vehicles = s.core.vehicles(now_ms);
+        let scene = look::fx::Scene {
+            map: &s.core.map,
+            others: &others,
+            vehicles: &vehicles,
+            me: s.core.slot,
+        };
+        look::fx::on_events(&mut commands, &mut fx, &scene, &events);
+    }
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
     heard.0 = events;
 }
@@ -556,11 +600,13 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
 fn fly(
     link: NonSend<LinkRes>,
     models: Res<look::guns::Models>,
+    time: Res<Time>,
+    mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
-    mut have: Query<(Entity, &look::effects::Flying, &mut Transform)>,
+    mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform)>,
 ) {
     let proj = link.0.session().core.latest().proj();
-    look::effects::projectiles(&mut commands, &models, proj, &mut have);
+    look::fx::flying::projectiles(&mut commands, &mut fx, &models, proj, time.elapsed_secs(), &mut have);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -569,7 +615,7 @@ mod web_start {
 
     /// The page's entry: connect (as the three.js page does) and run.
     #[wasm_bindgen]
-    /// `opts`: a comma list of `autoplay` and `lite` (see `Opts`).
+    /// `opts`: a comma list of `autoplay`, `lite` and `fxdemo` (see `Opts`).
     pub async fn play(addr: String, hash: String, name: String, mode: u8, opts: String) -> Result<(), JsValue> {
         let c = client_net::web::Client::connect(addr, hash, name, String::new(), mode, 0).await?;
         super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts)).run();

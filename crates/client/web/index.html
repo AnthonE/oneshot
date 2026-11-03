@@ -22,7 +22,7 @@
       if (params.get('lite') === '1') document.getElementById('wrap').classList.add('lite');
       await init();
       const info = await (await fetch('server.json')).json();
-      await play(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0), ['autoplay', 'lite'].filter((k) => params.get(k) === '1').join(','));
+      await play(info.addr, info.hash, params.get('name') || 'player', Number(params.get('mode') || 0), ['autoplay', 'lite', 'fxdemo'].filter((k) => params.get(k) === '1').join(','));
     </script>
   </body>
 </html>

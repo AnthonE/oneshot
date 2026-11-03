@@ -1,4 +1,4 @@
-//! `oneshot --server 127.0.0.1:8080 [--name you] [--mode 0..6] [--autoplay] [--lite]`: the
+//! `oneshot --server 127.0.0.1:8080 [--name you] [--mode 0..6] [--autoplay] [--lite] [--fxdemo]`: the
 //! desktop client. It reads the game server's address and certificate
 //! hash from the page server's `server.json` (what the browser page reads),
 //! connects with client-net's native session, and runs the Bevy client.
@@ -45,6 +45,7 @@ fn main() {
     let opts = oneshot_client::Opts {
         autoplay: args.iter().any(|a| a == "--autoplay"),
         lite: args.iter().any(|a| a == "--lite"),
+        fxdemo: args.iter().any(|a| a == "--fxdemo"),
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
 }

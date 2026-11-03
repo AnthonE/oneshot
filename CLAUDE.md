@@ -32,7 +32,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 5. Touching the Bevy client: `ci/client.sh` (clippy, native, wasm into
    `crates/client/dist`; serve it with `oneshot-server --web crates/client/dist`),
    then `node ci/client_e2e.mjs` (it must score a kill) and
-   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it. Native
+   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it
+   (`... 30 0 0 0 fxdemo=1` stages the effects in front of the camera). Native
    sound is `--features sound` (needs ALSA); the browser always has it.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by

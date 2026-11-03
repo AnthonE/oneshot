@@ -98,6 +98,11 @@ pub struct Body {
     clip: Option<usize>,
     hand: Entity,
     held: u8,
+    /// Its materials (its own: `dress` copies them per body), their glow
+    /// at rest, and the shield's flare last put on them.
+    mats: Vec<Handle<StandardMaterial>>,
+    glow: LinearRgba,
+    lit: f32,
 }
 
 /// A body spawned for `team`: its root, which the caller places.
@@ -119,6 +124,9 @@ pub fn spawn(commands: &mut Commands, models: &Models, team: u8) -> Entity {
         clip: None,
         hand,
         held: 0,
+        mats: Vec::new(),
+        glow: LinearRgba::BLACK,
+        lit: 0.0,
     });
     root
 }
@@ -169,9 +177,37 @@ fn dress(
             mat.emissive = tint * glow;
             // In nits, under the camera's exposure like everything lit.
             mat.emissive_exposure_weight = 1.0;
-            commands
-                .entity(e)
-                .insert((MeshMaterial3d(mats.add(mat)), NoFrustumCulling));
+            let h = mats.add(mat);
+            body.mats.push(h.clone());
+            commands.entity(e).insert((MeshMaterial3d(h), NoFrustumCulling));
+        }
+    }
+    body.glow = tint * glow;
+}
+
+/// The shield's gold at a flare of 1, as a share of a white surface's
+/// brightness in full sun: brighter than anything lit, so it blooms.
+const FLARE_GOLD: [f32; 3] = [1.6, 1.15, 0.35];
+
+/// The shield's flare on a body: `level` 0 is none (`fx/bodies.rs`).
+pub fn flare(root: Entity, level: f32, bodies: &mut Query<&mut Body>, mats: &mut Assets<StandardMaterial>) {
+    let Ok(mut body) = bodies.get_mut(root) else {
+        return;
+    };
+    if (level - body.lit).abs() < 0.02 && (level > 0.0 || body.lit == 0.0) {
+        return;
+    }
+    body.lit = level;
+    let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let k = level * sun;
+    let e = LinearRgba::rgb(
+        body.glow.red + FLARE_GOLD[0] * k,
+        body.glow.green + FLARE_GOLD[1] * k,
+        body.glow.blue + FLARE_GOLD[2] * k,
+    );
+    for h in &body.mats {
+        if let Some(m) = mats.get_mut(h) {
+            m.emissive = e;
         }
     }
 }
