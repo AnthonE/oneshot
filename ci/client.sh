@@ -19,4 +19,5 @@ fi
 rm -rf dist
 wasm-bindgen --target web --out-dir dist target/wasm32-unknown-unknown/release/oneshot_client.wasm
 cp web/index.html dist/
+cp -r assets dist/assets
 du -sh dist

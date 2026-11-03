@@ -47,3 +47,9 @@ ground and grass modules as they arrive), under the MIT licence:
     CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
     TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Textures in the Bevy client (crates/client/assets/textures: sand, grass,
+gravel, rock, concrete, metal), copied from Gates by tools/assets_client.mjs,
+are CC0 from Poly Haven (polyhaven.com: sand_02, forrest_ground_01,
+bicolour_gravel) and ambientCG (ambientcg.com: Rock043L, CorrugatedSteel009,
+and the concrete set). No attribution is required; credited by choice.

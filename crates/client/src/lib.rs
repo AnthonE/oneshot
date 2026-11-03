@@ -56,24 +56,45 @@ const SENS: f32 = 0.0022;
 
 pub fn app(link: Box<dyn Link>) -> App {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "oneshot".into(),
-            canvas: Some("#game".into()),
-            fit_canvas_to_parent: true,
-            ..default()
-        }),
-        ..default()
-    }))
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "oneshot".into(),
+                    canvas: Some("#game".into()),
+                    fit_canvas_to_parent: true,
+                    ..default()
+                }),
+                ..default()
+            })
+            // No `.meta` beside our assets: don't ask the server for one.
+            .set(AssetPlugin {
+                meta_check: bevy::asset::AssetMetaCheck::Never,
+                ..default()
+            }),
+    )
     .insert_non_send_resource(LinkRes(link))
     .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
     .init_resource::<Look>()
     .init_resource::<Built>()
     .init_resource::<Drawn>()
-    .add_systems(Startup, setup)
+    .init_resource::<look::textures::Textures>()
+    .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
+    .add_systems(Startup, (setup, look::textures::load))
     .add_systems(
         Update,
-        (grab, pump, rebuild, draw_fighters, draw_vehicles, view, hud).chain(),
+        (
+            grab,
+            pump,
+            rebuild,
+            look::textures::prepare,
+            level::dress_level,
+            draw_fighters,
+            draw_vehicles,
+            view,
+            hud,
+        )
+            .chain(),
     );
     app
 }
