@@ -219,7 +219,17 @@ impl Bot {
                 .flatten();
             let goal = match free {
                 Some((at, _)) => at,
-                None => self.roam_goal(w, me.body.pos),
+                None => {
+                    let g = self.roam_goal(w, me.body.pos);
+                    // On a map with waypoints, the way there rather than
+                    // straight at it.
+                    match &w.map.nav {
+                        Some(nav) if !w.map.roam.is_empty() => nav
+                            .toward(&w.map, self.goal as usize % w.map.roam.len(), me.body.pos)
+                            .unwrap_or(g),
+                        _ => g,
+                    }
+                }
             };
             let to = goal - me.body.pos;
             inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));

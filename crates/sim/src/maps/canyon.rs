@@ -175,4 +175,5 @@ pub const DEF: Def = Def {
     solids: &[
     ],
     solid_looks: &[],
+    nav: false,
 };

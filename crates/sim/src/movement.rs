@@ -401,6 +401,7 @@ mod tests {
             vehicles: &[],
             solids: &[],
             solid_looks: &[],
+            nav: false,
         }
         .build()
     }
@@ -480,6 +481,7 @@ mod tests {
                 (2, [30.0, -2.0, 36.0, 2.0, 0.0, 0.0, 0.0, 3.0]),
             ],
             solid_looks: &[0, 0, 0],
+            nav: false,
         }
         .build()
     }

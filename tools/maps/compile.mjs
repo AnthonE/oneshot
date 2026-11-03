@@ -37,6 +37,9 @@
 //             on `to` after `time` seconds
 //   vehicles  [{ at: [x, z, y?], yaw: degrees, respawn: seconds, mirror: bool }]:
 //             where a vehicle starts and comes back
+//   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
+//             rather than walking straight where they're going
+//   callouts  [{ name, at: [x, z, y?] }]: places tools/flow names; not compiled
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
 // LOOKS. A structure's list may also hold solids that aren't boxes
 // (crates/sim/src/solid.rs), placed, turned and mirrored as boxes are:
@@ -328,7 +331,8 @@ export function compile(spec, where = 'map.json') {
     }
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
+  if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
+  return { id: spec.id, name: spec.name, about: spec.about || '', nav: !!spec.nav, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -463,6 +467,7 @@ export function rust(m, src) {
   for (const s of m.solids) L.push(`        (${solidRow(s)}),`);
   L.push('    ],');
   L.push(`    solid_looks: &[${m.solids.map((s) => LOOKS.indexOf(s.look)).join(', ')}],`);
+  L.push(`    nav: ${m.nav},`);
   L.push('};');
   return L.join('\n') + '\n';
 }

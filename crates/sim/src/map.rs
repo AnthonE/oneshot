@@ -68,6 +68,9 @@ pub struct Def {
     /// and how each is drawn.
     pub solids: &'static [(u8, [f32; 8])],
     pub solid_looks: &'static [u8],
+    /// Bots find their way by waypoints ([`crate::nav`]) rather than
+    /// walking straight at where they're going.
+    pub nav: bool,
 }
 
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
@@ -87,7 +90,7 @@ impl Def {
             let g = ground(p[0], p[2]);
             V3::new(p[0], if p[1] == 0.0 { g } else { p[1].max(g) }, p[2])
         };
-        Map {
+        let mut map = Map {
             grid: Grid::default(),
             launchers: self
                 .launchers
@@ -138,8 +141,14 @@ impl Def {
                 })
                 .collect(),
             terrain,
+            nav: None,
         }
-        .indexed()
+        .indexed();
+        if self.nav {
+            let nav = crate::nav::Nav::build(&map);
+            map.nav = Some(nav);
+        }
+        map
     }
 }
 
@@ -177,6 +186,8 @@ pub struct Map {
     pub terrain: Option<Terrain>,
     pub launchers: Vec<Launcher>,
     pub vehicles: Vec<VehicleSpawn>,
+    /// Waypoints for bots, on a map that asks for them.
+    pub nav: Option<crate::nav::Nav>,
 }
 
 impl Map {
@@ -398,6 +409,7 @@ impl Map {
             terrain: None,
             launchers: Vec::new(),
             vehicles: Vec::new(),
+            nav: None,
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
@@ -525,6 +537,7 @@ mod tests {
                 (2, [4.0, -18.0, 8.0, -9.0, 3.0, 0.0, 1.0, 2.5]),
             ],
             solid_looks: &[0; 6],
+            nav: false,
         }
         .build()
     }
