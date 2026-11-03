@@ -216,7 +216,7 @@ its terms before using).
 | `relay.rs`, `bin/relay.rs` | 275 | | Later | Identity relay for servers behind NAT, billed per player-hour through Elo Pros |
 | `Cargo.toml` | | workspace | Copy the pin | `wtransport` at rev `a11e6a8e7ff33c6eef522d308007da55d1df9f81` (the same rev Gates pins: crates.io 0.7.1 has a remote panic) |
 | `physics.rs` (Rapier) | 2,229 | | Reference | If maps outgrow boxes: Rapier's query pipeline for rays and shape casts against triangle meshes (turn on `enhanced-determinism` so native and wasm agree) |
-| `render/` | about 1,500 | | Reference | A wgpu skinned-model renderer, if we ever want the client all-Rust |
+| `render/` | about 1,500 | | Reference | A wgpu skinned-model renderer; the client is Bevy instead (§9) |
 
 ## 7 · Elo Pros (scry-forge): APIs we call
 
@@ -253,3 +253,36 @@ Nothing copied. These are the services the server and page talk to.
   name and present them as our own (as Gates' store packs do), and never ship
   Facepunch's own assets.
 - No NC or SA licence anywhere: the game is sold.
+
+## 9 · The Bevy client, from Gates (Bevy 0.18.1 → Bevy 0.18.1)
+
+Gates' renderer lives in `crates/client/src/render/`, about 140 files inside
+one 181k-line crate that depends on `sim-core`, `protocol` and `client-core`.
+It is a donor, not a dependency: we **copy modules and trim**, and never
+depend on Gates' crates. The same Bevy version keeps the ports close.
+
+| Source (`Gates/crates/client/src/render/…`) | → here | What we keep |
+|---|---|---|
+| `rig.rs`, `quality.rs`, `render_scale.rs` | `client` | Camera, sun with cascaded shadows, environment light, tonemapping, bloom, SSAO, SMAA/TAA, the quality tiers and their WebGL2 downgrades. Strip the day-cycle reads (`sim_core::world::day_frac`) for a per-map sky block |
+| `fill.rs`, `fresnel.rs` | `client` | The hemisphere fill and the fresnel rim |
+| `sky.rs`, `deck.rs` + `assets/shaders/{cloud,deck,sky_deck,sky_fog,cloud_prepass}.wgsl` | `client` | The sky, the cloud deck (ray-marched on WebGPU and desktop, flat on WebGL2), the fog band |
+| `terrain_mesh.rs` | `client` | Heightfield meshing with normals from the height function; ours is one arena-sized mesh, no streaming ring or island far mesh |
+| `ground_splat.rs` + `ground_splat.wgsl` | `client` | Four texture sets blended on the ground, packed into two arrays for WebGL2's limit; cut blight and road bands |
+| `clutter.rs`, `foliage.rs` + `foliage*.wgsl` | `client` | Grass and bush cards with wind and a distance fade, scattered from the map seed; cosmetic, never collide |
+| `mipmap.rs`, `textures.rs`, `prewarm.rs`, `pipelines.rs` | `client` | CPU mip chains for JPG/PNG, texture loading, shader prewarm |
+
+The types Gates' modules read become ours: `Eye` → `OwnView` (from
+`NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the
+map's `"sky"` block, which the sim never reads.
+
+**Not taken:** `hud.rs`, `viewmodel.rs`, `anim.rs`, `bodies.rs` (survival
+game state throughout), `water.rs`, `far_trees.rs`, `weather.rs` and the
+streaming machinery (built for a 4 km island). Gates' netcode also stays
+there: it is as game-specific as ours, has no vehicles, and its useful parts
+(delta snapshots against the acked baseline, `docs/NETCODE.md`; one client
+for desktop and wasm split at `send_datagram`, `client/src/net/mod.rs`) are
+patterns we write ourselves.
+
+**Assets:** textures are CC0 (`assets/textures/MANIFEST.md`), roughness and
+AO maps included. Models are Meshy commissions (ours, §3). Check each file's
+manifest line before taking it.
