@@ -2,6 +2,7 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod bodies;
+pub mod effects;
 pub mod fill;
 pub mod grass;
 pub mod ground;
@@ -9,3 +10,4 @@ pub mod guns;
 pub mod rig;
 pub mod sky;
 pub mod textures;
+pub mod viewmodel;

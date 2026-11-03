@@ -10,6 +10,9 @@ pub trait Link {
     /// Once a frame: what arrived in, the controls out.
     fn update(&mut self, input: Input);
     fn session(&self) -> &Session;
+    /// For draining what the session queued for the app (events, stream
+    /// messages); never for steering it.
+    fn session_mut(&mut self) -> &mut Session;
     /// The clock the session's interpolation runs on, in ms.
     fn now_ms(&self) -> f64;
 }
@@ -32,6 +35,9 @@ impl Link for Native {
     fn session(&self) -> &Session {
         &self.client.session
     }
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.client.session
+    }
     fn now_ms(&self) -> f64 {
         self.client.now_ms()
     }
@@ -47,6 +53,9 @@ impl Link for Web {
     }
     fn session(&self) -> &Session {
         self.0.session()
+    }
+    fn session_mut(&mut self) -> &mut Session {
+        self.0.session_mut()
     }
     fn now_ms(&self) -> f64 {
         self.0.now()

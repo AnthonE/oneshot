@@ -9,6 +9,7 @@
 //! controls, and a text HUD. Gates' lighting, sky, terrain and grass come
 //! next (docs/RIP.md §9).
 
+pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
@@ -29,9 +30,11 @@ pub struct LinkRes(pub Box<dyn Link>);
 /// Where we look, in radians: ours, never the server's (aim is drawn with
 /// no round trip).
 #[derive(Resource, Default)]
-struct Look {
+pub struct Look {
     yaw: f32,
     pitch: f32,
+    /// The zoom button is held.
+    pub zoom: bool,
 }
 
 /// The welcome this level was built for.
@@ -44,9 +47,6 @@ struct Drawn {
     fighters: BTreeMap<u8, Entity>,
     vehicles: BTreeMap<u8, Entity>,
 }
-
-#[derive(Component)]
-struct Hud;
 
 #[derive(Component)]
 struct Eye;
@@ -95,13 +95,24 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
+    .init_resource::<hud::HudState>()
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
-    .add_systems(Startup, (setup, look::textures::load, look::guns::load))
+    .add_systems(
+        Startup,
+        (
+            setup,
+            look::textures::load,
+            look::guns::load,
+            look::effects::setup,
+            hud::setup,
+        ),
+    )
     .add_systems(
         Update,
         (
             grab,
             pump,
+            happened,
             rebuild,
             look::textures::prepare,
             look::textures::mip_models,
@@ -110,8 +121,11 @@ pub fn app(link: Box<dyn Link>, autoplay: bool) -> App {
             look::bodies::graph,
             draw_fighters,
             draw_vehicles,
+            fly,
+            look::effects::fade,
             view,
-            hud,
+            draw_view,
+            hud::draw,
         )
             .chain(),
     );
@@ -123,21 +137,8 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut media: ResMut<Assets<bevy::pbr::ScatteringMedium>>,
 ) {
-    look::rig::camera(&mut commands, &mut images, &mut media, Eye);
-    commands.spawn((
-        Hud,
-        Text::new("connecting..."),
-        TextFont {
-            font_size: 18.0,
-            ..default()
-        },
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(14.0),
-            bottom: Val::Px(12.0),
-            ..default()
-        },
-    ));
+    let eye = look::rig::camera(&mut commands, &mut images, &mut media, Eye);
+    look::viewmodel::spawn(&mut commands, eye);
 }
 
 /// A click takes the mouse; Escape gives it back.
@@ -176,11 +177,12 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * SENS).clamp(-max, max);
     }
+    look.zoom = grabbed && mouse.pressed(MouseButton::Right) && !auto.on;
     let axis = |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127;
     let mut buttons = 0;
     for (on, b) in [
         (grabbed && mouse.pressed(MouseButton::Left), FIRE),
-        (mouse.pressed(MouseButton::Right), ZOOM),
+        (look.zoom, ZOOM),
         (keys.pressed(KeyCode::Space), JUMP),
         (
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyC),
@@ -290,7 +292,12 @@ fn draw_fighters(
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
-    let others = core.others(now);
+    // Dead, and we saw who did it: the kill cam's bodies (ourselves among
+    // them) instead of the living.
+    let others = match core.killcam(now) {
+        Some(k) if !core.own().0.alive => k.bodies,
+        _ => core.others(now),
+    };
     let seats = look::bodies::seats(&core.vehicles(now));
     for d in &others {
         let e = *drawn
@@ -394,56 +401,92 @@ fn draw_vehicles(
     });
 }
 
-/// From our eye, or behind our vehicle at the wheel.
-fn view(link: NonSend<LinkRes>, look: Res<Look>, mut cam: Query<&mut Transform, With<Eye>>) {
-    let Ok(mut t) = cam.single_mut() else {
+/// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
+fn view(link: NonSend<LinkRes>, look: Res<Look>, mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>) {
+    let Ok((mut t, mut proj)) = cam.single_mut() else {
         return;
     };
-    let (f, p) = link.0.session().core.own();
-    let dir = Vec3::new(
-        look.pitch.cos() * look.yaw.cos(),
-        look.pitch.sin(),
-        look.pitch.cos() * look.yaw.sin(),
-    );
+    let core = &link.0.session().core;
+    let (f, p) = core.own();
+    let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
+    let mut fov = look::rig::FOV_DEG;
     let at = Vec3::new(p.x, p.y, p.z);
-    if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
-        let eye = at - dir * 7.5 + Vec3::Y * (VEH_H + 2.2);
+    let kill = if f.alive { None } else { core.killcam(link.0.now_ms()) };
+    if let Some(k) = kill {
+        // The run-up to the kill, from the killer's eye.
+        let eye = Vec3::new(k.eye.x, k.eye.y, k.eye.z);
+        *t = Transform::from_translation(eye).looking_at(eye + dir(k.yaw, k.pitch), Vec3::Y);
+    } else if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
+        let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = at + Vec3::Y * h;
-        *t = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y);
+        *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
+        let zoom = sim::arms::arm(f.gun().arm).zoom;
+        if look.zoom && f.alive && zoom > 1 {
+            fov /= zoom as f32;
+        }
+    }
+    if let Projection::Perspective(pp) = &mut *proj {
+        pp.fov = fov.to_radians();
     }
 }
 
-fn hud(link: NonSend<LinkRes>, mut text: Query<&mut Text, With<Hud>>) {
-    let Ok(mut t) = text.single_mut() else {
-        return;
+/// The gun in our view.
+fn draw_view(
+    link: NonSend<LinkRes>,
+    look: Res<Look>,
+    time: Res<Time>,
+    models: Res<look::guns::Models>,
+    mut commands: Commands,
+    mut hold: Query<(Entity, &mut look::viewmodel::ViewGun, &mut Transform, &mut Visibility)>,
+    mut flash: Query<&mut PointLight, With<look::viewmodel::Flash>>,
+) {
+    let (f, _) = link.0.session().core.own();
+    let v = f.body.vel;
+    let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    let own = look::viewmodel::Own {
+        f,
+        speed: if f.body.grounded {
+            (v.x * v.x + v.z * v.z).sqrt()
+        } else {
+            0.0
+        },
+        shown: f.alive && f.riding().is_none() && !scoped,
     };
-    let s = link.0.session();
-    if !s.ready {
-        **t = "connecting...".into();
-        return;
-    }
-    let (f, _) = s.core.own();
-    let g = f.gun();
-    let pt = sim::consts::PT;
-    let name = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
-    let seat = match f.riding() {
-        Some((_, 0)) => "  |  driving (E to get out)",
-        Some(_) => "  |  riding",
-        None => "",
-    };
-    **t = format!(
-        "{name}  |  shield {}  health {}  |  {} {} / {}  |  K {} D {}{seat}",
-        f.shield / pt,
-        f.health / pt,
-        sim::arms::arm(g.arm).name,
-        g.mag,
-        g.reserve,
-        f.kills,
-        f.deaths,
-    );
+    look::viewmodel::update(&mut commands, &models, own, time.delta_secs(), &mut hold, &mut flash);
+}
+
+/// What the session queued for us this frame: events become effects and
+/// HUD marks, stream messages names and the feed.
+fn happened(
+    mut link: NonSendMut<LinkRes>,
+    look: Res<Look>,
+    time: Res<Time>,
+    fx: Res<look::effects::Fx>,
+    mut st: ResMut<hud::HudState>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    let now_ms = link.0.now_ms();
+    let s = link.0.session_mut();
+    let events = s.core.drain_events();
+    let msgs = s.take_messages();
+    let me = s.core.slot;
+    look::effects::on_events(&mut commands, &fx, &mut mats, &events, me);
+    hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
+}
+
+/// Rockets and frags in flight.
+fn fly(
+    link: NonSend<LinkRes>,
+    models: Res<look::guns::Models>,
+    mut commands: Commands,
+    mut have: Query<(Entity, &look::effects::Flying, &mut Transform)>,
+) {
+    let proj = link.0.session().core.latest().proj();
+    look::effects::projectiles(&mut commands, &models, proj, &mut have);
 }
 
 #[cfg(target_arch = "wasm32")]

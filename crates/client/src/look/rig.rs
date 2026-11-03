@@ -89,7 +89,8 @@ pub fn camera<M: Component>(
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: FOV_DEG.to_radians(),
-                near: 0.05,
+                // The gun in view sits a few centimetres out (viewmodel.rs).
+                near: 0.02,
                 far: FAR_M,
                 ..default()
             }),

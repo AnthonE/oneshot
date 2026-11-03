@@ -161,6 +161,10 @@ impl Client {
         &self.session
     }
 
+    pub fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
     pub fn tick(&mut self, input: Input) {
         let i = input;
         self.update(now_ms(), i.buttons, i.yaw, i.pitch, i.mx, i.mz);

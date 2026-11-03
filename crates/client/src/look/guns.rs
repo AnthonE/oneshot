@@ -195,9 +195,16 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
 #[derive(Component)]
 pub struct Muzzle;
 
-/// `arm`'s gun posed so its grip sits at the returned entity's origin,
-/// turned by `basis`, as a child of `parent`. None for no gun.
-pub fn spawn_posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, parent: Entity) -> Option<Entity> {
+/// `arm`'s gun posed so its grip sits at the returned pivot's origin,
+/// turned by `basis`, as a child of `parent`: `(pivot, scene)`. None for no
+/// gun.
+pub fn spawn_posed(
+    commands: &mut Commands,
+    models: &Models,
+    arm: u8,
+    basis: Quat,
+    parent: Entity,
+) -> Option<(Entity, Entity)> {
     let g = gun(arm)?;
     let scene = models.guns.get(arm as usize)?.clone()?;
     let pivot = commands
@@ -210,16 +217,18 @@ pub fn spawn_posed(commands: &mut Commands, models: &Models, arm: u8, basis: Qua
             ChildOf(pivot),
         ))
         .id();
-    commands.spawn((
-        SceneRoot(scene),
-        Transform::from_xyz(0.0, -g.height * g.grip, 0.0),
-        ChildOf(scaler),
-    ));
+    let scene = commands
+        .spawn((
+            SceneRoot(scene),
+            Transform::from_xyz(0.0, -g.height * g.grip, 0.0),
+            ChildOf(scaler),
+        ))
+        .id();
     commands.spawn((
         Muzzle,
         Transform::from_xyz(0.0, g.height * (1.0 - g.grip), 0.0),
         Visibility::default(),
         ChildOf(scaler),
     ));
-    Some(pivot)
+    Some((pivot, scene))
 }
