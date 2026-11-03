@@ -154,6 +154,23 @@ impl Wire for WebWire<'_> {
     }
 }
 
+/// For a Rust app holding the browser's session (the Bevy client): the
+/// session, and a frame's update with the clock read here.
+impl Client {
+    pub fn session(&self) -> &Session {
+        &self.session
+    }
+
+    pub fn tick(&mut self, input: Input) {
+        let i = input;
+        self.update(now_ms(), i.buttons, i.yaw, i.pitch, i.mx, i.mz);
+    }
+
+    pub fn now(&self) -> f64 {
+        now_ms()
+    }
+}
+
 #[wasm_bindgen]
 pub struct Client {
     session: Session,
