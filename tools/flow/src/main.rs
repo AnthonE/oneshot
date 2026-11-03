@@ -531,7 +531,7 @@ fn main() {
         .map(|b| b.max.y)
         .chain(m.solids.iter().map(|s| s.y1))
         .fold(1.0f32, f32::max)
-        .min(8.0);
+        .min(walk.nodes.iter().map(|&k| at(k).y).fold(0.0f32, f32::max) + 4.0);
     let mut svg = String::new();
     let _ = writeln!(
         svg,
@@ -554,8 +554,16 @@ fn main() {
         Box(&'a sim::geom::Aabb),
         Solid(&'a sim::solid::Solid),
     }
-    let mut items: Vec<(f32, Item)> = m.boxes.iter().map(|b| (b.max.y, Item::Box(b))).collect();
-    items.extend(m.solids.iter().map(|s| (s.y1, Item::Solid(s))));
+    // A roof (anything wholly over every place to stand, and a head) isn't
+    // drawn: it would cover the plan.
+    let over = walk.nodes.iter().map(|&k| at(k).y).fold(0.0f32, f32::max) + BODY_H + 0.5;
+    let mut items: Vec<(f32, Item)> = m
+        .boxes
+        .iter()
+        .filter(|b| b.min.y < over)
+        .map(|b| (b.max.y, Item::Box(b)))
+        .collect();
+    items.extend(m.solids.iter().filter(|s| s.y0 < over).map(|s| (s.y1, Item::Solid(s))));
     items.sort_by(|a, b| a.0.total_cmp(&b.0));
     for (y, it) in &items {
         let fill = height_colour(*y, top);

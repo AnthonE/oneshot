@@ -78,9 +78,11 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 - **Kill cam:** the run-up to your death from the killer's eye, made only
   of what fog already sent you.
 - **Maps** are data: `maps/<name>/map.json`, compiled to the sim's tables.
-  Proving Grounds, Overpass, Cistern and Bulkhead (bases, a bridge over a
-  pit, side lanes: the old arena flow, our own layout); a room draws one
-  from its seed.
+  Proving Grounds, Overpass, Cistern, Bulkhead and Chrysalis (inside an
+  alien hull: pods ringing bottom mid, top mid over it, curved bases with
+  windows, rotations that wrap: the old arena flow, our own layout); a room
+  draws one from its seed. Maps have round, turned and sloped solids beside
+  their boxes, waypoints for bots, and their own light.
 - **Skins:** worn only if your wallet owns them (Elo Pros' items), drawn as
   trim over the side's colour.
 - **Cups:** Swiss rounds of free-for-all heats, a final of the top eight,
@@ -89,6 +91,7 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 
 ```sh
 node tools/maps/compile.mjs           # after editing a map.json (ci checks it with --check)
+cargo run -p flow --release -- chrysalis   # its plan, walk times and sight lines (traces/flow/)
 cargo test -p sim --test maps         # every map: spawns, pads, walkable, bots fight
 ci/parity.sh                          # every map native vs wasm, Doubles and Gun Game
 node ci/e2e.mjs 150 4 2               # the page in Gun Game on Cistern against seven bots

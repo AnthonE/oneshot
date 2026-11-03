@@ -10,14 +10,14 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 
 | crate | what |
 |---|---|
-| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`) and terrain (`terrain.rs`). Native on the server, wasm in the browser |
+| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`), terrain (`terrain.rs`), round, turned and sloped solids (`solid.rs`) and bots' waypoints (`nav.rs`). Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
 | `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and the page (`crates/client/dist`, its menu in `crates/client/web/index.html`): draws, never decides. Its own workspace; `ci/client.sh` builds and checks it |
-| `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
+| `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`; the compiler writes `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow (plan, walk times, sight lines) |
 | `tools/assets.mjs`, `tools/glb` | the models, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: the systemd unit, the certbot hook, the game box's nginx, the runbook (`ops/README.md`) |
 
@@ -37,7 +37,11 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
    browser always has it.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
-   hand; Proving Grounds is the golden's map.
+   hand; Proving Grounds is the golden's map. Boxes, and solids that aren't
+   (`round`, `turned`, `ramp`, `arc`: `sim/src/solid.rs`); `"nav": true`
+   for bots on a tight map; `light` for an interior. Read its flow with
+   `cargo run -p flow --release -- <map>` (the plan and the numbers in
+   `traces/flow/`; `node tools/flow/png.mjs` for a picture).
 6. Touching the look: `node tools/board.mjs look` (after the two builds):
    the art's views (the client's `?pose`, `ci/look.mjs`) beside their
    references and the operator's marks, one sheet (`board/board.json`; the
