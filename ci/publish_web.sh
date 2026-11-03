@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Publish the page to elopros.com/games/oneshot/play/, after Gates'
-# ci/publish_web.sh. Run from a workstation that can `ssh morr`:
+# Publish the page (the Bevy client's browser build, crates/client/dist) to
+# elopros.com/games/oneshot/play/, after Gates' ci/publish_web.sh. Run from a
+# workstation that can `ssh morr`:
 #
 #   ci/publish_web.sh             # build, upload, flip `current`
-#   ci/publish_web.sh --no-build  # upload what web/dist already holds
+#   ci/publish_web.sh --no-build  # upload what crates/client/dist already holds
 #   ci/publish_web.sh --dry-run   # everything but the upload and the flip
 #   ci/publish_web.sh --strand    # publish a page the live server will refuse
 #
@@ -47,12 +48,12 @@ else
   exit 1
 fi
 
-OUT=web/dist
+OUT=crates/client/dist
 if [ "$BUILD" = 1 ]; then
-  ci/build_web.sh
+  ci/client.sh
 fi
-[ -f "$OUT/index.html" ] || { echo "$OUT/index.html is missing: run ci/build_web.sh" >&2; exit 1; }
-# Where the page finds the game box: server.json and /nonce (web/src/main.ts).
+[ -f "$OUT/index.html" ] || { echo "$OUT/index.html is missing: run ci/client.sh" >&2; exit 1; }
+# Where the page finds the game box: server.json and /nonce (its index.html).
 printf '{"server":"%s"}\n' "$SERVER" > "$OUT/origin.json"
 # nginx serves .gz beside a file when there is one (gzip_static).
 find "$OUT" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \

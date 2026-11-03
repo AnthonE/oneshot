@@ -1,5 +1,5 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
-//! [--web web/dist] [--cert cert.pem --key key.pem] [--doubles]
+//! [--web crates/client/dist] [--cert cert.pem --key key.pem] [--doubles]
 //! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]

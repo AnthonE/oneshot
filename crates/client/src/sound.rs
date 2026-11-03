@@ -1,4 +1,4 @@
-//! Sound, after `web/src/art.ts`'s `Sfx`: shots placed where they were
+//! Sound, after the three.js page's `art.ts`'s `Sfx`: shots placed where they were
 //! fired (each gun its own takes, a far one past 35 m, our own unplaced),
 //! hits and headshots, blasts, reloads, the swap, a dry trigger, steps
 //! and landings. Gates' CC0 cuts (`assets/sound`, NOTICE).

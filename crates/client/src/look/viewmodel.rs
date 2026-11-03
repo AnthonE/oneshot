@@ -1,4 +1,4 @@
-//! The gun in our own view, after `web/src/art.ts`'s `Viewmodel`: Gates'
+//! The gun in our own view, after the three.js page's `art.ts`'s `Viewmodel`: Gates'
 //! hold (`VIEWMODEL_HOLD`), a kick on each of our shots, a bob with our
 //! speed, a dip through a reload, and a muzzle flash that lights the world
 //! around us. Hidden when dead, at the wheel or behind a scope. With a gun

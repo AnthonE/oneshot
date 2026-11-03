@@ -1,8 +1,9 @@
-//! The HUD, after `web/src/hud.ts`: shield and health bars, the gun and
+//! The HUD, after the three.js page's `hud.ts`: shield and health bars, the gun and
 //! its rounds, a crosshair, a hit marker on our hits (red on a kill), an
 //! arc toward whoever hurt us, the score and clock, the kill feed, and a
 //! line in the middle for the countdown, the result, the kill cam and the
-//! respawn. Everything here is read from the session; nothing is decided.
+//! respawn; before the welcome, the queue's line. `N` shows the net graph.
+//! Everything here is read from the session; nothing is decided.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +12,7 @@ use proto::{EventState, Msg};
 use sim::consts::{HEALTH_MAX, SHIELD_MAX, TICK_HZ};
 use sim::events::Kind;
 
-use client_net::session::Session;
+use client_net::session::{refuse_why, Session};
 
 const FEED_S: f32 = 5.0;
 const FEED_LINES: usize = 5;
@@ -24,6 +25,8 @@ const DAMAGE_R: f32 = 90.0;
 #[derive(Resource, Default)]
 pub struct HudState {
     names: BTreeMap<u8, String>,
+    /// Each seat's skin, as the server checked it.
+    skins: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,
     hit_at: f32,
     hit_kill: bool,
@@ -32,9 +35,22 @@ pub struct HudState {
     /// Our kills and deaths as the stream told them (the page's stats).
     pub kills: u32,
     pub deaths: u32,
+    /// The last line the stream gave for the menu: the queue, a cup's
+    /// standing, a refusal.
+    pub status: String,
+    /// In a cup: where we stand, as the server last said.
+    pub cup: String,
+    /// The server said goodbye: the match (or the cup) is over.
+    pub ended: bool,
+    /// The net graph is up.
+    pub net: bool,
 }
 
 impl HudState {
+    pub fn skin(&self, slot: u8) -> u8 {
+        self.skins.get(&slot).copied().unwrap_or(proto::SKIN_STANDARD)
+    }
+
     pub fn name(&self, slot: u8) -> String {
         self.names
             .get(&slot)
@@ -55,6 +71,8 @@ pub struct ScoreText;
 pub struct FeedText;
 #[derive(Component)]
 pub struct CenterText;
+#[derive(Component)]
+pub struct NetText;
 #[derive(Component)]
 pub struct Reticle;
 #[derive(Component)]
@@ -113,6 +131,7 @@ pub fn setup(mut commands: Commands) {
     commands.spawn((AmmoText, text(20.0), abs(None, Some(22.0), None, Some(20.0))));
     commands.spawn((ScoreText, text(18.0), abs(Some(18.0), None, Some(14.0), None)));
     commands.spawn((FeedText, text(16.0), abs(None, Some(18.0), Some(14.0), None)));
+    commands.spawn((NetText, text(14.0), abs(Some(18.0), None, None, Some(64.0))));
     // The middle: a full-width row, its text centred.
     commands.spawn((
         Node {
@@ -199,6 +218,53 @@ pub fn setup(mut commands: Commands) {
     ));
 }
 
+fn ordinal(n: u8) -> String {
+    let th = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    format!("{n}{th}")
+}
+
+/// What a stream message says to someone waiting: the queue, a cup's
+/// standing, a refusal. The page's menu shows it until the welcome.
+pub fn status_line(m: &Msg) -> Option<String> {
+    Some(match *m {
+        Msg::Queued { mode, waiting_s } => {
+            let what = match mode {
+                proto::MODE_CUP => "Waiting for the cup to fill",
+                proto::MODE_DOUBLES => "Finding a 2v2",
+                _ => "Finding an opponent",
+            };
+            format!("{what}... {}", mmss(waiting_s as f32))
+        }
+        Msg::Cup {
+            round,
+            rounds,
+            entrants,
+            place,
+            points,
+            done,
+        } => {
+            if done {
+                format!("Cup over: {} of {entrants}", ordinal(place))
+            } else {
+                let stage = if round > rounds {
+                    "the final".to_string()
+                } else {
+                    format!("round {round} of {rounds}")
+                };
+                format!("Cup, {stage}: {} of {entrants} on {points} points", ordinal(place))
+            }
+        }
+        Msg::Refuse { reason } => refuse_why(reason).to_string(),
+        _ => return None,
+    })
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
     let me = s.core.slot;
@@ -223,9 +289,16 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         }
     }
     for m in msgs {
+        if let Some(line) = status_line(m) {
+            if matches!(m, Msg::Cup { .. }) {
+                st.cup = line.clone();
+            }
+            st.status = line;
+        }
         match m {
-            Msg::Seat { slot, name, .. } => {
+            Msg::Seat { slot, name, skin, .. } => {
                 st.names.insert(*slot, name.as_str().to_string());
+                st.skins.insert(*slot, *skin);
             }
             Msg::Kill { killer, victim, .. } => {
                 let line = if killer == victim {
@@ -241,6 +314,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                     st.deaths += 1;
                 }
             }
+            Msg::Bye => st.ended = true,
             _ => {}
         }
     }
@@ -274,6 +348,7 @@ pub fn draw(
         Option<&ScoreText>,
         Option<&FeedText>,
         Option<&CenterText>,
+        Option<&NetText>,
     )>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
@@ -283,10 +358,27 @@ pub fn draw(
     let now = time.elapsed_secs();
     let core = &s.core;
     let (f, _) = core.own();
+    let gone = if st.ended {
+        Some("Match over")
+    } else if link.0.closed() {
+        Some("Disconnected")
+    } else {
+        None
+    };
     if !s.ready {
-        for (mut t, _, sc, _, _) in texts.iter_mut() {
-            if sc.is_some() {
-                t.0 = "connecting...".into();
+        let line = gone.map_or_else(
+            || {
+                if st.status.is_empty() {
+                    "connecting...".to_string()
+                } else {
+                    st.status.clone()
+                }
+            },
+            |g| format!("{g}\n{}", st.status),
+        );
+        for (mut t, _, _, _, ce, _) in texts.iter_mut() {
+            if ce.is_some() && t.0 != line {
+                t.0 = line.clone();
             }
         }
         return;
@@ -302,21 +394,38 @@ pub fn draw(
     let limit = core.rules.score_limit;
     let scores = &snap.score[..snap.n_score as usize];
     let map = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
-    let score = if core.rules.teams {
+    let clock = snap.clock as f32 / TICK_HZ as f32;
+    let mut score = vec![map.to_string()];
+    if core.rules.teams {
         let side = |t: usize| scores.get(t).copied().unwrap_or(0);
         let (us, them) = (side(core.team as usize & 1), side(1 - (core.team as usize & 1)));
-        format!("{us} - {them}   to {limit}")
+        score.push(format!("{us} - {them}   to {limit}"));
     } else {
+        // Us, then the rest best first: everyone in a duel or doubles, the
+        // top four in a bigger room.
         let mine = scores.get(core.slot as usize).copied().unwrap_or(0);
-        let best = scores
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != core.slot as usize)
-            .map(|(_, v)| *v)
-            .max();
-        format!("{mine} / {limit}   best other {}", best.unwrap_or(0))
-    };
-    let clock = snap.clock as f32 / TICK_HZ as f32;
+        score.push(format!("{} {mine} / {limit}", st.name(core.slot)));
+        let mut rest: Vec<(i32, u8)> = (0..scores.len() as u8)
+            .filter(|&i| i != core.slot && st.names.contains_key(&i))
+            .map(|i| (scores[i as usize], i))
+            .collect();
+        rest.sort_by_key(|&(v, i)| (-v, i));
+        score.extend(rest.iter().take(4).map(|&(v, i)| format!("{} {v}", st.name(i))));
+    }
+    if core.rules.gun_game {
+        let mine = scores.get(core.slot as usize).copied().unwrap_or(0);
+        let next = if mine < limit - 1 {
+            format!("next {}", sim::arms::arm(sim::world::Rules::rung(mine + 1)).name)
+        } else {
+            "last gun".into()
+        };
+        score.push(format!("Rung {} of {limit}  -  {next}", mine.min(limit - 1) + 1));
+    }
+    if snap.phase == 1 {
+        score.push(mmss(clock));
+    }
+    score.push(format!("K {}  D {}", st.kills, st.deaths));
+    let score = score.join("\n");
     let center = match snap.phase {
         0 => format!("Starting in {}", clock.ceil() as u32),
         2 => {
@@ -339,8 +448,15 @@ pub fn draw(
                 Some(false) => c.push_str("  -  verification FAILED"),
                 None => {}
             }
+            if !st.cup.is_empty() {
+                c = format!("{c}\n{}", st.cup);
+            }
+            if let Some(g) = gone {
+                c = format!("{c}\n{g}");
+            }
             c
         }
+        _ if gone.is_some() => gone.unwrap_or_default().to_string(),
         _ if !f.alive => {
             let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
             match &killcam {
@@ -393,15 +509,26 @@ pub fn draw(
         mark(1)
     );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
-    for (mut t, a, sc, fe, ce) in texts.iter_mut() {
+    let net = if st.net {
+        let n = core.stats;
+        format!(
+            "snapshots {}\nconfirmed {}  corrected {}\ndepth {}  rate {:.2}\ninterp {:.1} ticks  dropped {}",
+            n.snapshots, n.confirmations, n.corrections, n.depth, n.rate, n.delay_ticks, s.dropped
+        )
+    } else {
+        String::new()
+    };
+    for (mut t, a, sc, fe, ce, ne) in texts.iter_mut() {
         let v = if a.is_some() {
             ammo.clone()
         } else if sc.is_some() {
-            format!("{map}\n{score}\n{}", mmss(clock))
+            score.clone()
         } else if fe.is_some() {
             feed.clone()
         } else if ce.is_some() {
             center.clone()
+        } else if ne.is_some() {
+            net.clone()
         } else {
             continue;
         };
@@ -444,5 +571,37 @@ pub fn draw(
         tr.rotation = Rot2::radians(a);
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_menu_reads_the_queue_and_the_cup() {
+        let q = Msg::Queued {
+            mode: proto::MODE_DOUBLES,
+            waiting_s: 75,
+        };
+        assert_eq!(status_line(&q).unwrap(), "Finding a 2v2... 1:15");
+        let cup = |round, place, done| Msg::Cup {
+            round,
+            rounds: 3,
+            entrants: 16,
+            place,
+            points: 6,
+            done,
+        };
+        assert_eq!(
+            status_line(&cup(2, 1, false)).unwrap(),
+            "Cup, round 2 of 3: 1st of 16 on 6 points"
+        );
+        assert_eq!(
+            status_line(&cup(4, 12, false)).unwrap(),
+            "Cup, the final: 12th of 16 on 6 points"
+        );
+        assert_eq!(status_line(&cup(4, 3, true)).unwrap(), "Cup over: 3rd of 16");
+        assert!(status_line(&Msg::Bye).is_none());
     }
 }

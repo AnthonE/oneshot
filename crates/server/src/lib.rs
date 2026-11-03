@@ -163,7 +163,7 @@ impl Default for Config {
         Config {
             bind: "0.0.0.0:4433".parse().unwrap(),
             http: Some("0.0.0.0:8080".parse().unwrap()),
-            web_dir: "web/dist".into(),
+            web_dir: "crates/client/dist".into(),
             cert: None,
             rules: Rules::duel(),
             ffa: Rules::ffa(),

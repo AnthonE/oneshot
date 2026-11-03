@@ -16,9 +16,9 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
 | `crates/server` | wtransport sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page server; `oneshot-server`, `oneshot-replay`, `oneshot-review` |
 | `crates/client-net` | the client's netcode: `core` (clock, prediction, interpolation; native-tested), `session` (handshake, snapshots in, inputs out over a `Wire`), `web` (wasm, WebTransport), `native` (feature `native`, wtransport) |
-| `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and browser (`crates/client/dist`): draws, never decides. Its own workspace; `ci/client.sh` is its check |
-| `web/` | three.js page: draws, never decides. Replaced by the Bevy client once it plays as well (`DESIGN.md` §16, milestone 12) |
+| `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and the page (`crates/client/dist`, its menu in `crates/client/web/index.html`): draws, never decides. Its own workspace; `ci/client.sh` builds and checks it |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
+| `tools/assets.mjs`, `tools/glb` | the models, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: the systemd unit, the certbot hook, the game box's nginx, the runbook (`ops/README.md`) |
 
 ## The loop
@@ -30,22 +30,24 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
    `cargo test -p sim --test range` (Halo 2's counts and times, pinned), and
    `-- --ignored --nocapture` prints the whole table to tune by. To feel
    them: `oneshot-server --map range` (every gun on a pad, never in the
-   rotation). New guns borrow a model in `web/src/art.ts` and
-   `crates/client/src/look/guns.rs` until they have their own.
-4. Touching the page or the netcode: `ci/build_web.sh && node ci/e2e.mjs`
-   (and `node ci/e2e.mjs 40 4 2` for eight seats on another map,
-   `node ci/e2e.mjs 60 6 3` for sixteen in Big Team on Dry Fork's terrain).
-5. Touching the Bevy client: `ci/client.sh` (clippy, native, wasm into
-   `crates/client/dist`; serve it with `oneshot-server --web crates/client/dist`),
-   then `node ci/client_e2e.mjs` (it must score a kill) and
-   `node ci/client_shot.mjs traces/x.png 25 6 3 1` to look at it. Native
-   sound is `--features sound` (needs ALSA); the browser always has it.
+   rotation). New guns borrow a model in `crates/client/src/look/guns.rs`
+   until they have their own.
+4. Touching the client or the netcode: `ci/client.sh` (clippy, native, the
+   browser's build into `crates/client/dist`, which `oneshot-server` serves
+   by default), `cargo build --release -p server`, then `node ci/e2e.mjs`
+   (the menu, then a match that must confirm its predictions and score a
+   kill; `npm ci` once for Playwright). `node ci/e2e.mjs 150 4 2` for eight
+   seats on another map, `node ci/e2e.mjs 150 6 3` for sixteen in Big Team
+   on Dry Fork's terrain; `node ci/client_shot.mjs traces/x.png 25 6 3 1`
+   to look at it. Native sound is `--features sound` (needs ALSA); the
+   browser always has it.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.
 6. Touching the look: `node tools/board.mjs look` (after the two builds):
-   the art's views beside their references and the operator's marks, one
-   sheet (`board/board.json`; the elo-look skill is the loop).
+   the art's views (the client's `?pose`, `ci/look.mjs`) beside their
+   references and the operator's marks, one sheet (`board/board.json`; the
+   elo-look skill is the loop).
 7. Commit with a short message.
 
 ## The wire's walls
@@ -55,9 +57,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
   a full queue drops a snapshot.
 - **The clock steers on the low point** of the server's input buffer
   (`ClientNet::take_low`); a page drawing slowly sends in bursts.
-- **The client draws, never decides** (`web/` today, the Bevy client next).
-  Gameplay state lives in `sim` and `client-net`.
-- **web/ draws.** Gameplay state lives in `sim` and `client-net`.
+- **The client draws, never decides.** Gameplay state lives in `sim` and
+  `client-net`; `crates/client` reads a session and sends the controls.
 - **Production never pins.** With `--cert`, `server.json` sends no hash;
   SIGTERM drains (matches finish), SIGHUP reloads the certificate. Hosting
   is the game box beside Gates, two slots so one always takes players
@@ -73,7 +74,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 - **Ranked is a wallet's.** A pass without a wallet plays casual only; a
   rating is reported only for wallets. A cup is ranked.
 - **Skins are cosmetic and checked.** Worn only if the wallet owns it; never
-  in the sim, never a hitbox, a sound or a fighter's visibility.
+  in the sim, never a hitbox, a sound or a fighter's visibility (the client
+  draws a trim's sheen and a band, `look/bodies.rs`).
 - **The seed is not the salt.** What clients watch (spawns, bots) comes from
   the seed; the salt keys spread and is revealed only at `Phase::Over`.
 

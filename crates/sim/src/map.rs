@@ -156,7 +156,7 @@ pub struct Map {
     pub lo: (f32, f32),
     pub hi: (f32, f32),
     pub boxes: Vec<Aabb>,
-    /// How each box is drawn (web/src/world.ts): drawing only.
+    /// How each box is drawn (the client's `level.rs`): drawing only.
     pub looks: Vec<u8>,
     pub spawns: Vec<Spawn>,
     pub pads: Vec<PadDef>,

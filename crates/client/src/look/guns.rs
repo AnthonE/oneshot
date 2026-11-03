@@ -1,6 +1,6 @@
 //! The models: Triple T and the guns (`assets/models`, made from
-//! `web/public/models` by `tools/glb`), and how each gun is held, after
-//! `web/src/art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
+//! Gates' GLBs by `tools/glb`, through `tools/assets.mjs`), and how each gun is held, after
+//! the three.js page's `art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
 
 use bevy::prelude::*;
 use sim::arms;
