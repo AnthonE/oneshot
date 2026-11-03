@@ -33,7 +33,7 @@ mod on {
     use sim::events::Kind;
 
     use super::{Heard, SoundPlugin};
-    use crate::look::effects::HEARD;
+    use crate::look::fx::HEARD;
     use crate::look::guns::GUNS;
     use crate::LinkRes;
 

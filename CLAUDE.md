@@ -39,7 +39,9 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
    kill; `npm ci` once for Playwright). `node ci/e2e.mjs 150 4 2` for eight
    seats on another map, `node ci/e2e.mjs 150 6 3` for sixteen in Big Team
    on Dry Fork's terrain; `node ci/client_shot.mjs traces/x.png 25 6 3 1`
-   to look at it. Native sound is `--features sound` (needs ALSA); the
+   to look at it (`... 30 0 0 0 fxdemo=1` stages the effects in front of
+   the camera, `fxstage=N` one of them; `look/fx/demo.rs` lists the
+   stages). Native sound is `--features sound` (needs ALSA); the
    browser always has it.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by

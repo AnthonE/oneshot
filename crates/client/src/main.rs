@@ -59,6 +59,8 @@ fn main() {
         lite,
         pose: None,
         capsules: args.iter().any(|a| a == "--capsules"),
+        fxdemo: args.iter().any(|a| a == "--fxdemo"),
+        fxstage: None,
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
 }
