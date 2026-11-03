@@ -88,7 +88,11 @@ async fn handle(
         return reply(&mut sock, 405, "text/plain", b"GET only").await;
     }
     if path == "/server.json" {
-        let body = server_json(ctx, &host, game, hash);
+        let live = match &ctx.live_file {
+            Some(f) => tokio::fs::read_to_string(f).await.ok().and_then(|s| live_addr(&s)),
+            None => None,
+        };
+        let body = server_json(ctx, &host, game, hash, live.as_deref());
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
     if path == "/nonce" {
@@ -129,13 +133,20 @@ async fn handle(
     }
 }
 
-/// Where the page connects: the public address if we were given one (the
-/// game box behind its own name), else the host the page asked on at the
-/// bound port; and the certificate's hash only when it is ours to pin.
-pub fn server_json(ctx: &crate::Ctx, host: &str, game: SocketAddr, hash: Option<[u8; 32]>) -> String {
-    let addr = ctx
-        .public_addr
-        .clone()
+/// Where the page connects: the live slot's address (`live`, read from
+/// `--live-file`), else the public address if we were given one (the game
+/// box behind its own name), else the host the page asked on at the bound
+/// port; and the certificate's hash only when it is ours to pin.
+pub fn server_json(
+    ctx: &crate::Ctx,
+    host: &str,
+    game: SocketAddr,
+    hash: Option<[u8; 32]>,
+    live: Option<&str>,
+) -> String {
+    let addr = live
+        .map(str::to_string)
+        .or_else(|| ctx.public_addr.clone())
         .unwrap_or_else(|| format!("{host}:{}", game.port()));
     let hash = hash.map_or("null".to_string(), |h| format!("\"{}\"", crate::hex(&h)));
     format!(
@@ -144,6 +155,19 @@ pub fn server_json(ctx: &crate::Ctx, host: &str, game: SocketAddr, hash: Option<
         ctx.elo_pubkey.is_some(),
         proto::PROTO_VER
     )
+}
+
+/// A live file's `host:port`, if that's what it holds (it is written by
+/// `ci/deploy_server.sh`; anything else is ignored, never sent on).
+pub fn live_addr(s: &str) -> Option<String> {
+    let s = s.trim();
+    let (host, port) = s.rsplit_once(':')?;
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    (host_ok && port.parse::<u16>().is_ok_and(|p| p > 0)).then(|| s.to_string())
 }
 
 async fn reply(sock: &mut TcpStream, code: u16, kind: &str, body: &[u8]) -> std::io::Result<()> {

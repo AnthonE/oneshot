@@ -2,8 +2,9 @@
 //! on loopback: past capacity a hello is answered "full"; a drain lets a
 //! match play out, writes its replay and turns new players away; a reload
 //! hands new handshakes the new certificate and leaves live sessions be;
-//! and `server.json` names the public address and pins nothing when the
-//! certificate is a CA's.
+//! `server.json` names the public address and pins nothing when the
+//! certificate is a CA's; and two slots side by side hand players over:
+//! both name the live one, and either takes the other's nonces.
 
 use std::time::{Duration, Instant};
 
@@ -279,5 +280,66 @@ async fn the_page_is_told_the_public_address_and_pins_only_its_own_certificate()
     h.drain(Duration::from_secs(5)).await;
     assert_eq!(get(port, "/ready", None).await.0, 503);
     assert_eq!(get(port, "/health", None).await.0, 200);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_slots_hand_new_players_from_the_old_to_the_new() {
+    let dir = std::env::temp_dir().join(format!("oneshot-slots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let live = dir.join("live");
+    let slot = |public: &str| server::Config {
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        public_addr: Some(public.into()),
+        nonce_key: Some([5u8; 32]),
+        live_file: Some(live.clone()),
+        ..local()
+    };
+    let a = server::run(slot("game.example:61250")).await.unwrap();
+    let b = server::run(slot("game.example:61251")).await.unwrap();
+    let addr_of = |h: &server::Handle| {
+        let port = h.http.unwrap().port();
+        async move {
+            let (_, _, body) = get(port, "/server.json", None).await;
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["addr"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+
+    // No live file yet: each names itself.
+    assert_eq!(addr_of(&a).await, "game.example:61250");
+    assert_eq!(addr_of(&b).await, "game.example:61251");
+    // The deploy points at B: both say B, whichever nginx asked.
+    std::fs::write(&live, "game.example:61251\n").unwrap();
+    assert_eq!(addr_of(&a).await, "game.example:61251");
+    assert_eq!(addr_of(&b).await, "game.example:61251");
+    // A live file that isn't an address is never passed on.
+    std::fs::write(&live, "\",\"hash\":\"x").unwrap();
+    assert_eq!(addr_of(&a).await, "game.example:61250");
+    std::fs::write(&live, "game.example:61251").unwrap();
+
+    // A page that got its nonce from A signs in at B.
+    let (_, _, body) = get(a.http.unwrap().port(), "/nonce", None).await;
+    let nonce = serde_json::from_str::<serde_json::Value>(&body).unwrap()["nonce"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(b.ctx.nonces.take(&nonce), "B takes A's nonce");
+    assert!(!b.ctx.nonces.take(&nonce), "once");
+
+    // A drains (nothing to play out here): it turns new players away, and B
+    // takes them.
+    a.drain(Duration::from_secs(5)).await;
+    let (_, at_a) = join(a.addr.port(), a.cert_hash, "late").await.unwrap();
+    assert_eq!(
+        at_a,
+        Some(Msg::Refuse {
+            reason: proto::REFUSE_FULL
+        })
+    );
+    let (_, at_b) = join(b.addr.port(), b.cert_hash, "late").await.unwrap();
+    assert!(matches!(at_b, Some(Msg::Welcome { .. })), "{at_b:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -40,7 +40,8 @@ and Elo Pros. Milestones are `DESIGN.md` §16.
 - **web/ draws.** Gameplay state lives in `sim` and `client-net`.
 - **Production never pins.** With `--cert`, `server.json` sends no hash;
   SIGTERM drains (matches finish), SIGHUP reloads the certificate. Hosting
-  is the game box beside Gates; `ops/README.md`.
+  is the game box beside Gates, two slots so one always takes players
+  (`--live-file`, a shared `--nonce-key`); `ops/README.md`.
 - **Every byte to a client goes through `room::build`** and its fog
   (`room/src/fog.rs`): an enemy only if it could be seen soon, an unseen
   fighter's shot only as a rounded sound, never an unseen spawn. The leak

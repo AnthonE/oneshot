@@ -133,7 +133,8 @@ async fn nonce(http: std::net::SocketAddr) -> String {
     let mut out = String::new();
     s.read_to_string(&mut out).await.unwrap();
     let at = out.find("\"nonce\":\"").unwrap() + 9;
-    out[at..at + 32].to_string()
+    let len = out[at..].find('"').unwrap();
+    out[at..at + len].to_string()
 }
 
 async fn read_msg(r: &mut wtransport::RecvStream) -> Option<Msg> {

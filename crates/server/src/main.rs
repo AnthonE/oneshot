@@ -5,14 +5,19 @@
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
-//! [--capacity 256] [--drain-max 900]`
+//! [--capacity 256] [--drain-max 900]
+//! [--nonce-key file] [--live-file file]`
 //!
 //! Without `--elo-pubkey` nobody can sign in and only casual play is open.
 //! Without `--elo-key` ranked results aren't reported.
 //!
-//! Signals (`ops/oneshot.service`): SIGTERM drains (no new players, every
-//! match plays out, at most `--drain-max` seconds) and exits; SIGHUP reads
-//! the certificate again (an ACME renewal); SIGINT exits at once.
+//! Two slots run side by side on the game box (`ops/oneshot@.service`): they
+//! share `--nonce-key` (32 bytes, or 64 hex) so either takes the other's
+//! nonces, and `--live-file` (`host:port`), which every `server.json` names.
+//!
+//! Signals: SIGTERM drains (no new players, every match plays out, at most
+//! `--drain-max` seconds) and exits; SIGHUP reads the certificate again (an
+//! ACME renewal); SIGINT exits at once.
 
 use std::net::SocketAddr;
 
@@ -71,6 +76,8 @@ fn main() {
                 drain_max =
                     std::time::Duration::from_secs(val().parse().unwrap_or_else(|_| die("--drain-max is seconds")))
             }
+            "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
+            "--live-file" => cfg.live_file = Some(val().into()),
             _ => die(&format!("unknown argument {a}")),
         }
     }
@@ -132,6 +139,25 @@ async fn signals(h: &server::Handle, drain_max: std::time::Duration) {
 #[cfg(not(unix))]
 async fn signals(_: &server::Handle, _: std::time::Duration) {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+/// The shared nonce key: a file of 32 raw bytes, or 64 hex.
+fn nonce_key(path: &str) -> [u8; 32] {
+    let b = std::fs::read(path).unwrap_or_else(|e| die(&format!("--nonce-key {path}: {e}")));
+    if let Ok(k) = <[u8; 32]>::try_from(b.as_slice()) {
+        return k;
+    }
+    let t = String::from_utf8_lossy(&b);
+    let t = t.trim();
+    if t.len() == 64 && t.is_ascii() {
+        let mut k = [0u8; 32];
+        for (i, k) in k.iter_mut().enumerate() {
+            *k = u8::from_str_radix(&t[2 * i..2 * i + 2], 16)
+                .unwrap_or_else(|_| die(&format!("--nonce-key {path}: not 64 hex")));
+        }
+        return k;
+    }
+    die(&format!("--nonce-key {path}: 32 bytes or 64 hex"))
 }
 
 fn addr(s: &str) -> SocketAddr {

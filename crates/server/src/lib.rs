@@ -147,6 +147,13 @@ pub struct Config {
     /// Players the server takes before a hello is answered "full"; QUIC
     /// Retry past twice this, refusal past four times (docs/DESIGN.md §14).
     pub capacity: usize,
+    /// The key nonces are signed with, shared by the two slots so either
+    /// takes the other's (`auth::Nonces`). None: a key of this process's own.
+    pub nonce_key: Option<[u8; 32]>,
+    /// A file naming the live slot's `host:port`: what `server.json` tells
+    /// the page, from whichever slot answers. Missing or unreadable: our
+    /// own address.
+    pub live_file: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -183,6 +190,8 @@ impl Default for Config {
             public_addr: None,
             allow_origins: Vec::new(),
             capacity: 256,
+            nonce_key: None,
+            live_file: None,
         }
     }
 }
@@ -203,6 +212,7 @@ pub struct Ctx {
     pub rooms: AtomicUsize,
     /// What `server.json` says.
     pub public_addr: Option<String>,
+    pub live_file: Option<PathBuf>,
     pub allow_origins: Vec<String>,
 }
 
@@ -275,13 +285,16 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         slug: cfg.slug.clone(),
         domains: cfg.domains.clone(),
         elo_pubkey: cfg.elo_pubkey,
-        nonces: auth::Nonces::default(),
+        nonces: cfg
+            .nonce_key
+            .map_or_else(auth::Nonces::default, |k| auth::Nonces::with_key(&k)),
         elo: elo::Elo::new(&cfg.elo_origin, &cfg.slug, key),
         sessions: AtomicU64::new(1),
         gate: Arc::new(net::Gate::new(cfg.capacity)),
         draining: AtomicBool::new(false),
         rooms: AtomicUsize::new(0),
         public_addr: cfg.public_addr.clone(),
+        live_file: cfg.live_file.clone(),
         allow_origins: cfg.allow_origins.clone(),
     });
 

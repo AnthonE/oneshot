@@ -579,6 +579,7 @@ impl Client {
                 }
                 Msg::Refuse { reason } => {
                     set("type", "refused".into());
+                    set("reason", reason.into());
                     set(
                         "why",
                         match reason {

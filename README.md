@@ -83,9 +83,14 @@ oneshot-server --map cistern --cup-min 8 --cup-rounds 3
 
 ## Milestone 7: hosting
 
-The server on the game box beside Gates (`game.elopros.com:61250`), the page
-on elopros.com (`/games/oneshot/play/`). `ops/README.md` is the runbook.
+The server on the game box beside Gates (`game.elopros.com`, UDP 61250 and
+61251), the page on elopros.com (`/games/oneshot/play/`). `ops/README.md` is
+the runbook.
 
+- **Always one taking players:** two slots. A deploy starts the new build in
+  the idle one, points `--live-file` at it (every `server.json` says so),
+  then drains the old; a page turned away by the old one follows to the new
+  with the same sign-in (`--nonce-key`, shared).
 - **A real certificate, never pinned:** with `--cert`, `server.json` sends no
   hash and the browser checks the certificate itself; `--public-addr` names
   where to connect, `--allow-origin` lets the page on elopros.com read it.
@@ -98,7 +103,7 @@ on elopros.com (`/games/oneshot/play/`). `ops/README.md` is the runbook.
 - `/health`, `/ready` (503 while draining, and the wire it speaks).
 
 ```sh
-ci/deploy_server.sh            # on the box: a dry run; --go builds, stages, restarts, checks
+ci/deploy_server.sh            # on the box: a dry run; --go starts the idle slot, switches, drains the old
 ci/publish_web.sh              # from a workstation: build, upload to morr, flip current
 cargo test -p server --test hosting
 ```

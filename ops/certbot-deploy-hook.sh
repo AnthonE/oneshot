@@ -12,10 +12,10 @@
 # one game's hook must never restart another.
 set -e
 
-# The name players dial: --public-addr in ops/oneshot.service.
+# The name players dial: --public-addr in ops/oneshot@.service.
 NAME=game.elopros.com
 DEST=/home/master/oneshot-certs
-UNIT=oneshot.service
+SLOTS="a b"
 
 # `openssl x509 -checkhost` exits 0 either way; the verdict is on stdout.
 covers() {  # $1 = name, $2 = a fullchain.pem
@@ -54,9 +54,13 @@ install -d -o master -g master -m 755 "$DEST"
 install -o master -g master -m 644 "$LIVE/fullchain.pem" "$DEST/fullchain.pem"
 install -o master -g master -m 600 "$LIVE/privkey.pem"   "$DEST/privkey.pem"
 
-if systemctl is-active --quiet "$UNIT"; then
-  systemctl reload "$UNIT"
-  echo "[copy-oneshot-cert] refreshed $DEST from $LIVE and reloaded oneshot"
-else
-  echo "[copy-oneshot-cert] refreshed $DEST from $LIVE (oneshot not running)"
-fi
+# Every slot that runs reads it again (a draining one too: it may still take
+# a handshake from a page that hasn't moved yet).
+reloaded=
+for s in $SLOTS; do
+  if systemctl is-active --quiet "oneshot@$s.service"; then
+    systemctl reload "oneshot@$s.service"
+    reloaded="$reloaded oneshot@$s"
+  fi
+done
+echo "[copy-oneshot-cert] refreshed $DEST from $LIVE; reloaded:${reloaded:- nothing running}"

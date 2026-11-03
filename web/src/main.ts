@@ -98,22 +98,25 @@ async function main() {
 
   const MODES: Record<string, number> = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5 };
   let client: Client;
+  let mode = 0;
+  let name = 'player';
+  // A pass goes with every mode once signed in: it is what proves a skin
+  // is yours. Casual without one is a guest, in the standard look.
+  // No hash: a CA's certificate, checked by the browser, never pinned.
+  const connect = () => Client.connect(info.addr, info.hash ?? '', name, signin.pass(), mode, Number(skinSelect.value) || 0);
   try {
-    const mode = AUTOPLAY
+    mode = AUTOPLAY
       ? Number(params.get('mode') ?? 0)
       : await new Promise<number>((go) => {
           for (const id of Object.keys(MODES)) el(id).addEventListener('click', () => go(MODES[id]), { once: true });
         });
-    const name = nameInput.value.trim() || 'player';
+    name = nameInput.value.trim() || 'player';
     try {
       localStorage.setItem('oneshot.name', name);
       localStorage.setItem('oneshot.skin', skinSelect.value);
     } catch { /* private window */ }
     status.textContent = 'connecting…';
-    // A pass goes with every mode once signed in: it is what proves a skin
-    // is yours. Casual without one is a guest, in the standard look.
-    // No hash: a CA's certificate, checked by the browser, never pinned.
-    client = await Client.connect(info.addr, info.hash ?? '', name, signin.pass(), mode, Number(skinSelect.value) || 0);
+    client = await connect();
   } catch (e) {
     shared.error = String(e);
     status.textContent = String(e);
@@ -155,10 +158,37 @@ async function main() {
     client.close();
     location.reload();
   };
+  // "Full or restarting" from a server on its way down: if the live server
+  // is now another (the deploy's other slot, ops/README.md), go there once,
+  // with the same pass. True if we did.
+  const REFUSE_FULL = 2;
+  let moved = false;
+  const follow = async (): Promise<boolean> => {
+    if (moved) return false;
+    moved = true;
+    try {
+      const now = await (await fetch(`${base}server.json`)).json();
+      if (!now.addr || now.addr === info.addr) return false;
+      client.close();
+      info.addr = now.addr;
+      info.hash = now.hash;
+      client = await connect();
+      return true;
+    } catch {
+      return false;
+    }
+  };
   await new Promise<void>((ready) => {
     const wait = () => {
       client.update(performance.now(), 0, 0, 0, 0, 0);
-      for (const m of client.messages()) handle(m);
+      for (const m of client.messages()) {
+        if (m.type === 'refused' && m.reason === REFUSE_FULL && !moved) {
+          status.textContent = 'moving to the new server…';
+          follow().then((ok) => (ok ? wait() : handle(m)));
+          return;
+        }
+        handle(m);
+      }
       if (client.ready) return ready();
       if (client.closed || shared.error) return;
       requestAnimationFrame(wait);
