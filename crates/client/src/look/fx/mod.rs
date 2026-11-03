@@ -146,8 +146,13 @@ pub struct Fx {
     hulls: [hulls::Hull; 16],
     /// Wrecks burning (`blast.rs`).
     burning: [blast::Burn; 4],
-    /// Our own rounds drawn so far (`shots::own`).
+    /// Our own rounds drawn so far (`shots::own`), and which hand drew the
+    /// last while two guns are out.
     own_shots: u32,
+    own_left: bool,
+    /// Rounds of light flying last frame (`flying.rs`), to tell where one
+    /// ended.
+    last_light: Vec<proto::ProjState>,
 }
 
 impl Fx {
@@ -326,6 +331,8 @@ pub fn setup(
         hulls: [hulls::Hull::default(); 16],
         burning: [blast::Burn::default(); 4],
         own_shots: 0,
+        own_left: false,
+        last_light: Vec::new(),
     });
 }
 
@@ -352,8 +359,7 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
             k if k == Kind::Wreck as u8 => blast::wreck(fx, scene, from),
             k if k == Kind::Spawn as u8 => bodies::spawned(fx, from),
             k if k == Kind::Pickup as u8 => bodies::picked_up(fx, from),
-            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e.a, from),
-            k if k == Kind::Stick as u8 => bodies::stuck(fx, e, scene.t),
+            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e.a, e.c, from),
             // A hit on us: the frame flinches, by how much it took.
             k if k == Kind::Hit as u8 && e.b == scene.me && e.a != scene.me => {
                 let pts = e.c as f32;

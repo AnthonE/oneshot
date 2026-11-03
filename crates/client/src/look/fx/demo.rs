@@ -4,8 +4,9 @@
 //! session: the match is untouched. `?fxstage=N` plays only stage `N`:
 //! 0 rifles, 1 sniper, 2 shotgun, 3 grenade, 4 a shield taking rounds and
 //! breaking, 5 rounds into a wall, 6 a rocket and a wreck, 7 the shield
-//! shell flaring on every fighter in view, 8 SEEKER crystals curving into
-//! a body, sticking, and bursting at seven.
+//! shell flaring on every fighter in view, 8 the SHARD GUN's shards curving
+//! into a body, sticking, and bursting together, 9 ion bolts splashing, a
+//! charged bolt and the cannon's ball.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -20,7 +21,7 @@ use crate::LinkRes;
 /// Each stage plays this long, firing every `EVERY_S`.
 const STAGE_S: f32 = 2.5;
 const EVERY_S: f32 = 0.3;
-const STAGES: u32 = 9;
+const STAGES: u32 = 10;
 /// A slot no fighter has: its shots flash like anyone else's.
 const SHOOTER: u8 = 200;
 
@@ -41,7 +42,11 @@ pub fn run(
     clock.t += time.delta_secs();
     let stage = opts.fxstage.unwrap_or((clock.t / STAGE_S) as u32) % STAGES;
     if stage == 8 {
-        seekers(&link, &mut fx, &mut clock, time.elapsed_secs());
+        shards(&link, &mut fx, &mut clock, time.elapsed_secs());
+        return;
+    }
+    if stage == 9 {
+        bolts(&link, &mut fx, &mut clock, time.elapsed_secs());
         return;
     }
     if clock.t < clock.next {
@@ -163,9 +168,9 @@ pub fn pose(map: &sim::map::Map) -> Transform {
     Transform::from_translation(eye).looking_at(to, Vec3::Y)
 }
 
-/// Stage 8, every frame: three crystals curving from the right into a
-/// body ahead, each arrival stuck in it, the seventh bursting them all.
-fn seekers(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
+/// Stage 8, every frame: three shards curving from the right into a body
+/// ahead, each arrival stuck in it, the gun's count of them going off.
+fn shards(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
     const FLIGHT_S: f32 = 0.6;
     let core = &link.0.session().core;
     let fwd = (fx.cam * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::X);
@@ -184,26 +189,25 @@ fn seekers(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
         super::flying::crystal(
             fx,
             &proto::ProjState {
-                kind: 2,
+                kind: super::flying::NEEDLE,
                 owner: SHOOTER,
                 pos: v3(p),
                 vel: v3(ahead.normalize_or(fwd) * 30.0),
             },
         );
     }
+    let d = Drawn {
+        slot: SHOOTER + 1,
+        alive: true,
+        pos: v3(feet),
+        ..default()
+    };
     // An arrival every third of a flight.
     let arrivals = (clock.t / (FLIGHT_S / 3.0)) as u32;
     if arrivals != clock.hits {
         clock.hits = arrivals;
-        let n = (arrivals % 7 + 1) as u8;
-        let d = Drawn {
-            slot: SHOOTER + 1,
-            alive: true,
-            pos: v3(feet),
-            ..default()
-        };
-        if n == 7 {
-            super::bodies::burst_at(fx, &[d], chest);
+        let stick = sim::arms::arm(sim::arms::SHARDS).stick as u32;
+        if arrivals % stick == stick - 1 {
             let scene = Scene {
                 map: &core.map,
                 others: &[d],
@@ -211,30 +215,76 @@ fn seekers(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
                 me: core.slot,
                 t: now,
             };
-            super::blast::blast(fx, &scene, chest, sim::events::Cause::Burst as u16, false);
+            super::blast::blast(fx, &scene, chest, sim::arms::SHARDS as u16, false);
         } else {
-            let e = EventState {
-                kind: Kind::Stick as u8,
-                a: SHOOTER,
-                b: d.slot,
-                part: n,
-                c: sim::events::STUCK_FIGHTER,
-                pos: v3(chest),
-                ..default()
-            };
-            super::bodies::stuck(fx, &e, now);
+            super::bodies::needle_in(fx, d.slot, now);
+            super::table::shatter(&mut fx.glow, chest, 3, 1.5);
         }
-        // The body the crystals sit in (drawn as their glints).
-        super::bodies::watch(fx, &[d], 0.0, now);
-    } else {
-        let d = Drawn {
-            slot: SHOOTER + 1,
-            alive: true,
-            pos: v3(feet),
-            ..default()
-        };
-        super::bodies::watch(fx, &[d], 0.0, now);
     }
+    // The body the shards sit in (drawn as their glints).
+    super::bodies::watch(fx, &[d], 0.0, now);
+}
+
+/// Stage 9, every frame: ion bolts from the right into the ground ahead,
+/// splashing; every few, a charged bolt; and the cannon's ball going off.
+fn bolts(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
+    const FLIGHT_S: f32 = 0.35;
+    let core = &link.0.session().core;
+    let fwd = (fx.cam * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::X);
+    let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+    let eye = fx.eye;
+    let at = eye + fwd * 10.0 - side * 1.5;
+    let to = Vec3::new(at.x, core.map.floor(at.x, at.z, 0.1, eye.y - 1.0) + 0.05, at.z);
+    let from = eye + side * 3.5 + fwd * 3.0;
+    let n = (clock.t / (FLIGHT_S / 3.0)) as u32;
+    for k in 0..3 {
+        let u = ((clock.t / FLIGHT_S) + k as f32 / 3.0).fract();
+        let charged = (n + k).is_multiple_of(6);
+        let p = from.lerp(to, u);
+        let v = (to - from).normalize_or(fwd) * if charged { 23.0 } else { 40.0 };
+        let kind = if charged {
+            super::flying::CHARGE
+        } else {
+            super::flying::BOLT
+        };
+        super::flying::light(
+            fx,
+            &proto::ProjState {
+                kind,
+                owner: SHOOTER,
+                pos: v3(p),
+                vel: v3(v),
+            },
+        );
+    }
+    if n != clock.hits {
+        clock.hits = n;
+        super::flying::splash(fx, to, (from - to).normalize_or(Vec3::Y), 1.0);
+        // Every few arrivals, the cannon's ball goes off to the left.
+        if n.is_multiple_of(9) {
+            let scene = Scene {
+                map: &core.map,
+                others: &[],
+                vehicles: &[],
+                me: core.slot,
+                t: now,
+            };
+            let ball = to - side * 4.0 + fwd * 2.0 + Vec3::Y * 0.5;
+            super::blast::blast(fx, &scene, ball, sim::arms::CANNON as u16, false);
+        }
+    }
+    // The ball itself, on its way, between bursts.
+    let u = (clock.t / (FLIGHT_S * 3.0)).fract();
+    let ball_to = to - side * 4.0 + fwd * 2.0 + Vec3::Y * 0.5;
+    super::flying::light(
+        fx,
+        &proto::ProjState {
+            kind: super::flying::CANNON,
+            owner: SHOOTER,
+            pos: v3(from.lerp(ball_to, u)),
+            vel: v3((ball_to - from).normalize_or(fwd) * 20.0),
+        },
+    );
 }
 
 fn v3(v: Vec3) -> V3 {

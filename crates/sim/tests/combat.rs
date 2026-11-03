@@ -1,7 +1,7 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SEEKER, SHOTGUN, SNIPER};
+use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fmath;
@@ -498,54 +498,226 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
     assert!(climbed > 2.0, "it went up the ground: {climbed}");
 }
 
-/// The SEEKER: crystals fired where a strafing target was still find it,
-/// stick, and enough in one body burst.
-#[test]
-fn seeker_crystals_home_stick_and_burst() {
-    let mut w = duel([SEEKER, MAGNUM], 14.0);
-    let start = chest(&w, 1);
-    let (mut stuck, mut burst, mut most) = (0, false, 0u8);
-    for t in 0..TICK_HZ * 3 {
-        // The target strafes 4 m/s across the line; the shooter keeps
-        // aiming where it first stood.
-        w.fighters[1].body.pos.z += 4.0 * DT;
-        let buttons = if t < TICK_HZ * 2 { FIRE } else { 0 };
-        shoot(&mut w, start, buttons, NO_LAG);
-        for e in w.events.as_slice() {
-            if e.kind == Ev::Stick && e.c == sim::events::STUCK_FIGHTER && e.b == 1 {
-                stuck += 1;
-                most = most.max(e.part);
-            }
-            if e.kind == Ev::Blast && e.c == sim::events::Cause::Burst as u16 {
-                burst = true;
-            }
+/// Seat 0 pulls the sword at seat 1's chest once, then holds still; true
+/// if 1 is dead within a second. `inputs[1]` is whatever 1 does meanwhile.
+fn lunge_at(w: &mut World, other: Input) -> bool {
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1] = other;
+    for t in 0..TICK_HZ {
+        let (yaw, pitch) = aim(w, 0, chest(w, 1));
+        inputs[0] = Input {
+            buttons: if t == 0 { FIRE } else { 0 },
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        if !w.fighters[1].alive {
+            return true;
         }
     }
-    assert!(w.fighters[1].body.pos.z > 8.0, "the target moved well off the line");
-    assert!(
-        stuck >= STICK_BURST as usize,
-        "only {stuck} crystals found a target strafing off the line"
-    );
-    assert_eq!(most, STICK_BURST, "the count reaches the burst");
-    assert!(burst, "seven in one body burst");
+    false
 }
 
-/// A crystal with nobody in its cone flies straight; one stuck falls out
-/// after `STICK_MS`.
 #[test]
-fn seeker_crystals_fall_out() {
-    let mut w = duel([SEEKER, MAGNUM], 10.0);
-    let c = chest(&w, 1);
-    shoot(&mut w, c, FIRE, NO_LAG);
-    let idle = [Input::default(); MAX_FIGHTERS];
-    let mut n = 0;
+fn a_lunge_runs_down_a_target_that_strafes() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let strafe = Input {
+        mx: 127,
+        yaw: 32768,
+        ..Input::default()
+    };
+    assert!(lunge_at(&mut w, strafe), "it steers onto the target");
+    assert_eq!(w.fighters[0].kills, 1);
+    assert_eq!(w.fighters[0].lunge, 0, "the lunge is over with the kill");
+    let me = w.fighters[0].body.vel;
+    assert!(me.x * me.x + me.z * me.z < 0.01, "and it stops there: {me:?}");
+}
+
+#[test]
+fn a_sword_never_lunges_through_a_wall_or_at_a_teammate() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let mut map = w.map.clone();
+    map.boxes
+        .push(sim::geom::Aabb::new(V3::new(2.4, 0.0, -3.0), V3::new(2.6, 4.0, 3.0)));
+    w.map = map.indexed();
+    assert!(!lunge_at(&mut w, Input::default()));
+    assert_eq!(w.fighters[0].lunge, 0);
+
+    let mut w = duel([SWORD, MAGNUM], 4.0);
+    w.rules.teams = true;
+    w.fighters[1].team = w.fighters[0].team;
+    assert!(!lunge_at(&mut w, Input::default()));
+    assert_eq!(w.fighters[0].lunge, 0);
+}
+
+#[test]
+fn two_swords_lunging_at_each_other_clash() {
+    let mut w = duel([SWORD, MAGNUM], 5.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    for (s, inp) in inputs.iter_mut().enumerate().take(2) {
+        let (yaw, pitch) = aim(&w, s, chest(&w, 1 - s));
+        *inp = Input {
+            buttons: FIRE,
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+    }
+    let mut clashed = false;
     for _ in 0..TICK_HZ {
-        w.step(&idle, &NO_LAG);
-        n = n.max(w.stuck[1].n);
+        w.step(&inputs, &NO_LAG);
+        inputs[0].buttons = 0;
+        inputs[1].buttons = 0;
+        clashed |= w.events.as_slice().iter().any(|e| e.kind == Ev::Melee && e.part == 2);
     }
-    assert_eq!(n, 1, "the one crystal stuck");
-    for _ in 0..ticks(STICK_MS) {
-        w.step(&idle, &NO_LAG);
+    assert!(clashed);
+    assert!(w.fighters[0].alive && w.fighters[1].alive, "nobody hurt");
+    assert_eq!(w.fighters[1].shield, SHIELD_MAX);
+    let gap = (w.fighters[1].body.pos - w.fighters[0].body.pos).len();
+    assert!(gap > 2.0, "thrown apart: {gap} m");
+}
+
+#[test]
+fn the_sword_s_melee_swings_without_a_lunge_and_spends_nothing() {
+    // Out of the swing's reach, the melee button doesn't lunge.
+    let mut w = duel([SWORD, MAGNUM], 4.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (yaw, pitch) = aim(&w, 0, chest(&w, 1));
+    inputs[0] = Input {
+        buttons: MELEE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    assert_eq!(w.fighters[0].lunge, 0);
+    assert!(w.fighters[1].alive);
+    // In reach it kills; the battery is never spent.
+    let mut w = duel([SWORD, MAGNUM], 1.6);
+    let (yaw, pitch) = aim(&w, 0, chest(&w, 1));
+    inputs[0] = Input {
+        buttons: MELEE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    assert!(!w.fighters[1].alive);
+    assert_eq!(w.fighters[0].gun().mag, sim::arms::arm(SWORD).mag);
+}
+
+/// Heat, vents and a charge are the fighter's own, so the prediction must
+/// match them too: a charge pistol and a beam rifle, swapped and fired at
+/// random.
+#[test]
+fn the_prediction_matches_through_heat_and_charge() {
+    let mut w = duel([sim::arms::ION_PISTOL, sim::arms::BEAM_RIFLE], 45.0);
+    w.fighters[1].body.pos = V3::new(45.0, 0.0, 45.0);
+    let mut mine = w.fighters[0];
+    let map = Map::open();
+    let mut rng = sim::rng::Pcg32::new(11, 3);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut vents, mut charged) = (0, 0);
+    for t in 0..TICK_HZ * 30 {
+        let r = rng.next_u32();
+        // The trigger held in runs, so charges fill and guns overheat.
+        let fire = if t % 120 < 90 { FIRE } else { 0 };
+        let swap = if r.is_multiple_of(300) { SWAP } else { 0 };
+        let inp = Input {
+            buttons: fire | swap | ((r as u16) & JUMP),
+            yaw: (t * 31) as u16,
+            pitch: 2000,
+            mx: (r >> 16) as i8,
+            mz: (r >> 24) as i8,
+        }
+        .sanitized();
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+        let local = mine.step_local(&inp, &map);
+        charged += local.charged as u32;
+        vents += (mine.reload > 0 && mine.gun().heat >= sim::arms::HEAT_FULL) as u32;
+        let s = &w.fighters[0];
+        assert_eq!(s.body, mine.body, "tick {t}");
+        assert_eq!(
+            (s.guns, s.cur, s.refire, s.reload, s.charge, s.shots, s.last_buttons),
+            (
+                mine.guns,
+                mine.cur,
+                mine.refire,
+                mine.reload,
+                mine.charge,
+                mine.shots,
+                mine.last_buttons
+            ),
+            "tick {t}"
+        );
     }
-    assert_eq!(w.stuck[1].n, 0, "and fell out");
+    assert!(charged >= 2, "{charged} charged shots");
+    assert!(vents > 0, "never overheated");
+}
+
+/// Two guns in hand, each with its own trigger, timers, heat and charge,
+/// and the grenade switch: the client predicts all of it, so it must match.
+#[test]
+fn the_prediction_matches_with_a_gun_in_each_hand() {
+    let mut w = duel([sim::arms::SMG, MAGNUM], 45.0);
+    w.fighters[1].body.pos = V3::new(45.0, 0.0, 45.0);
+    w.fighters[0].left = sim::fighter::Gun::full(sim::arms::ION_PISTOL);
+    let mut mine = w.fighters[0];
+    let map = Map::open();
+    let mut rng = sim::rng::Pcg32::new(5, 9);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut left_shots, mut right_shots) = (0, 0);
+    for t in 0..TICK_HZ * 20 {
+        let r = rng.next_u32();
+        let left = if t % 150 < 100 { FIRE_LEFT } else { 0 };
+        let right = if (t / 7) % 2 == 0 { FIRE } else { 0 };
+        let taps = if r.is_multiple_of(97) { RELOAD } else { 0 } | if r.is_multiple_of(131) { GREN_SWITCH } else { 0 };
+        let inp = Input {
+            buttons: left | right | taps,
+            yaw: (t * 13) as u16,
+            pitch: 1000,
+            mx: (r >> 16) as i8,
+            mz: (r >> 24) as i8,
+        }
+        .sanitized();
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+        let local = mine.step_local(&inp, &map);
+        left_shots += local.fired_left as u32;
+        right_shots += local.fired as u32;
+        let s = &w.fighters[0];
+        assert_eq!(s.body, mine.body, "tick {t}");
+        assert_eq!(
+            (
+                s.guns,
+                s.left,
+                s.refire,
+                s.reload,
+                s.left_refire,
+                s.left_reload,
+                s.left_charge
+            ),
+            (
+                mine.guns,
+                mine.left,
+                mine.refire,
+                mine.reload,
+                mine.left_refire,
+                mine.left_reload,
+                mine.left_charge
+            ),
+            "tick {t}"
+        );
+        assert_eq!(
+            (s.shots, s.gren_kind, s.grenades, s.stickies),
+            (mine.shots, mine.gren_kind, mine.grenades, mine.stickies),
+            "tick {t}"
+        );
+    }
+    assert!(
+        left_shots > 5 && right_shots > 20,
+        "left {left_shots}, right {right_shots}"
+    );
 }

@@ -13,6 +13,7 @@ use crate::terrain::TerrainDef;
 pub const DEF: Def = Def {
     id: 2,
     name: "Cistern",
+    practice: false,
     lo: (-20.0, -20.0),
     hi: (20.0, 20.0),
     boxes: &[
@@ -67,8 +68,8 @@ pub const DEF: Def = Def {
         ([0.0, 1.0, 0.0], ROCKET, 120000),
         ([0.0, 1.5, 18.0], SNIPER, 90000),
         ([0.0, 1.5, -18.0], SNIPER, 90000),
-        ([-18.0, 1.5, 0.0], SEEKER, 45000),
-        ([18.0, 1.5, 0.0], SEEKER, 45000),
+        ([-18.0, 1.5, 0.0], SMG, 30000),
+        ([18.0, 1.5, 0.0], SMG, 30000),
         ([-10.0, 0.0, 0.0], SHOTGUN, 60000),
         ([10.0, 0.0, 0.0], SHOTGUN, 60000),
     ],

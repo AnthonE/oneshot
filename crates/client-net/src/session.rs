@@ -17,6 +17,19 @@ pub trait Wire {
     fn send_datagram(&mut self, payload: &[u8]) -> bool;
 }
 
+/// Why the server said no, as a player reads it (`Msg::Refuse`).
+pub fn refuse_why(reason: u8) -> &'static str {
+    match reason {
+        proto::REFUSE_VERSION => "this page is out of date: reload it",
+        proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
+        proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
+        proto::REFUSE_BUSY => "that wallet is already queued or playing",
+        proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
+        proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
+        _ => "the server is full",
+    }
+}
+
 pub struct Session {
     pub core: NetCore,
     /// The welcome has come: a room, a seat, a clock.

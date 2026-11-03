@@ -1,4 +1,5 @@
-//! `oneshot --server 127.0.0.1:8080 [--name you] [--mode 0..6] [--autoplay] [--lite] [--fxdemo]`: the
+//! `oneshot --server 127.0.0.1:8080 [--name you] [--mode 0..6] [--autoplay] [--lite] [--capsules]`
+//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture): the
 //! desktop client. It reads the game server's address and certificate
 //! hash from the page server's `server.json` (what the browser page reads),
 //! connects with client-net's native session, and runs the Bevy client.
@@ -9,6 +10,17 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
+    let lite = args.iter().any(|a| a == "--lite");
+    if let Some(q) = arg("--pose") {
+        // No server: one fighter for a picture (`--pose 'yaw=1.57&arm=3'`).
+        let opts = oneshot_client::Opts {
+            lite,
+            pose: Some(oneshot_client::pose::Pose::parse(&q)),
+            ..Default::default()
+        };
+        oneshot_client::app(Box::new(oneshot_client::link::Still::new()), opts).run();
+        return;
+    }
     let server = arg("--server").unwrap_or_else(|| "127.0.0.1:8080".into());
     let name = arg("--name").unwrap_or_else(|| "player".into());
     let mode = arg("--mode").and_then(|m| m.parse().ok()).unwrap_or(proto::MODE_CASUAL);
@@ -44,7 +56,9 @@ fn main() {
         .unwrap_or_else(|e| panic!("{addr}: {e}"));
     let opts = oneshot_client::Opts {
         autoplay: args.iter().any(|a| a == "--autoplay"),
-        lite: args.iter().any(|a| a == "--lite"),
+        lite,
+        pose: None,
+        capsules: args.iter().any(|a| a == "--capsules"),
         fxdemo: args.iter().any(|a| a == "--fxdemo"),
         fxstage: None,
     };

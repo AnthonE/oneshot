@@ -7,7 +7,9 @@
 //! the shield's arcs, zaps and gold sparks added.
 
 use bevy::prelude::*;
-use sim::arms::{AR, BR, MAGNUM, SEEKER, SHOTGUN, SMG, SNIPER};
+use sim::arms::{
+    AR, BEAM_RIFLE, BR, CANNON, CARBINE, ION_PISTOL, ION_RIFLE, LAUNCHER, MAGNUM, SHARDS, SHOTGUN, SMG, SNIPER,
+};
 
 use super::atlas::{ARC, FLAME, GLOW, PUFF, RING, SMOKE, SPECK, STAR, STREAK};
 use super::pool::{Orient, Particle, Pool};
@@ -29,7 +31,7 @@ impl Weapon {
     pub fn of_arm(arm: u8) -> Weapon {
         match arm {
             SHOTGUN => Weapon::Pellet,
-            SNIPER => Weapon::Sniper,
+            SNIPER | BEAM_RIFLE => Weapon::Sniper,
             _ => Weapon::Bullet,
         }
     }
@@ -506,8 +508,9 @@ pub struct GunLook {
     pub width: f32,
     /// A smoke wake along the line that hangs this long (s); 0: none.
     pub wake_s: f32,
-    /// The muzzle: flash stars, their size, the tongue, the light (lumens).
+    /// The muzzle: flash stars, their colour and size, the light (lumens).
     pub stars: u8,
+    pub flash_c: [f32; 4],
     pub flash_scale: f32,
     pub light_lm: f32,
 }
@@ -521,6 +524,7 @@ const RIFLE: GunLook = GunLook {
     width: 0.014,
     wake_s: 0.0,
     stars: 2,
+    flash_c: [7.0, 5.5, 3.0, 1.0],
     flash_scale: 1.0,
     light_lm: 120_000.0,
 };
@@ -572,22 +576,81 @@ pub fn gun(arm: u8) -> GunLook {
             light_lm: 220_000.0,
             ..RIFLE
         },
-        // A crystal is drawn in flight (`flying.rs`): no tracer; a pink
-        // flash at the muzzle.
-        SEEKER => GunLook {
-            c0: PINK,
-            c1: [2.0, 0.4, 1.4, 0.0],
-            stars: 2,
+        // Green rounds, a green flash.
+        CARBINE => GunLook {
+            c0: [2.0, 9.0, 3.0, 0.9],
+            c1: [0.6, 3.5, 1.0, 0.5],
+            flash_c: [3.0, 9.0, 3.5, 1.0],
+            mps: 340.0,
+            ..RIFLE
+        },
+        // A beam: pink-violet, all of its line in a frame.
+        BEAM_RIFLE => GunLook {
+            c0: [9.0, 3.0, 14.0, 1.0],
+            c1: [3.0, 0.8, 5.0, 0.6],
+            flash_c: [8.0, 3.0, 12.0, 1.0],
+            mps: 3000.0,
+            len_m: 60.0,
+            width: 0.03,
+            stars: 3,
+            flash_scale: 1.5,
+            light_lm: 200_000.0,
+            ..RIFLE
+        },
+        // What flies is drawn in flight (`flying.rs`): only the muzzle here.
+        ION_RIFLE | ION_PISTOL => GunLook {
+            flash_c: [2.0, 5.0, 14.0, 1.0],
             flash_scale: 0.8,
             light_lm: 90_000.0,
+            ..RIFLE
+        },
+        SHARDS => GunLook {
+            flash_c: PINK,
+            flash_scale: 0.8,
+            light_lm: 90_000.0,
+            ..RIFLE
+        },
+        CANNON => GunLook {
+            flash_c: [3.0, 12.0, 4.0, 1.0],
+            stars: 3,
+            flash_scale: 2.2,
+            light_lm: 300_000.0,
+            ..RIFLE
+        },
+        LAUNCHER => GunLook {
+            stars: 3,
+            flash_scale: 1.8,
+            light_lm: 200_000.0,
             ..RIFLE
         },
         _ => RIFLE,
     }
 }
 
-/// The SEEKER's crystals: a hot pink, linear HDR.
+/// The SHARD GUN's crystals: a hot pink, linear HDR.
 pub const PINK: [f32; 4] = [9.0, 2.2, 6.0, 1.0];
+
+/// A muzzle's flash: `n` stars in colour `c`, `scale` times an impact's.
+pub fn stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
+    for _ in 0..n {
+        let life = 0.05 + 0.03 * pool.roll();
+        let size = (0.06 + 0.04 * pool.roll()) * scale;
+        let cell = STAR + ((pool.roll() * 3.0) as u8).min(2);
+        let roll = pool.roll() * core::f32::consts::TAU;
+        pool.spawn(Particle {
+            left: life,
+            life,
+            pos: at,
+            size0: size,
+            size1: size * 1.4,
+            c0: c,
+            c1: [c[0] * 0.2, c[1] * 0.15, c[2] * 0.1, 0.0],
+            roll,
+            cell,
+            ..Particle::default()
+        });
+    }
+}
 
 /// A crystal shattering (on a wall, a hull, or in the burst): pink shards
 /// flung out, a pink blink, `n` of them.

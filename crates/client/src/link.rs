@@ -15,6 +15,8 @@ pub trait Link {
     fn session_mut(&mut self) -> &mut Session;
     /// The clock the session's interpolation runs on, in ms.
     fn now_ms(&self) -> f64;
+    /// The server closed the stream (a refusal, the match's end, a drain).
+    fn closed(&self) -> bool;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,6 +43,9 @@ impl Link for Native {
     fn now_ms(&self) -> f64 {
         self.client.now_ms()
     }
+    fn closed(&self) -> bool {
+        self.client.closed()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -59,5 +64,43 @@ impl Link for Web {
     }
     fn now_ms(&self) -> f64 {
         self.0.now()
+    }
+    fn closed(&self) -> bool {
+        self.0.closed()
+    }
+}
+
+/// No server: a stand-in session, ready on Proving Grounds, that nothing
+/// ever reaches (the pose mode, `crate::pose`).
+pub struct Still(pub Session);
+
+impl Still {
+    pub fn new() -> Still {
+        let mut s = Session::new();
+        s.ready = true;
+        s.welcomes = 1;
+        Still(s)
+    }
+}
+
+impl Default for Still {
+    fn default() -> Self {
+        Still::new()
+    }
+}
+
+impl Link for Still {
+    fn update(&mut self, _: Input) {}
+    fn session(&self) -> &Session {
+        &self.0
+    }
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.0
+    }
+    fn now_ms(&self) -> f64 {
+        0.0
+    }
+    fn closed(&self) -> bool {
+        false
     }
 }

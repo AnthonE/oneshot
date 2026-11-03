@@ -50,13 +50,15 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
-/** How a box is drawn, as web/src/world.ts numbers them. */
+/** How a box is drawn, as the client's level.rs numbers them. */
 export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock'];
 /** sim::arms, by the names map.json uses. */
-export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', seeker: 'SEEKER' };
+export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
+  carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
+  launcher: 'LAUNCHER', cannon: 'CANNON' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
-const MAX_PADS = 8;
+const MAX_PADS = 16;
 const MAX_BOXES = 256;
 const MAX_LAUNCHERS = 8;
 /** sim::consts::MAX_VEHICLES. */
@@ -199,7 +201,7 @@ export function compile(spec, where = 'map.json') {
     }
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers, vehicles };
+  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, lo: [bx0, bz0], hi: [bx1, bz1], boxes, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -283,6 +285,7 @@ export function rust(m, src) {
   L.push('pub const DEF: Def = Def {');
   L.push(`    id: ${m.id},`);
   L.push(`    name: ${JSON.stringify(m.name)},`);
+  L.push(`    practice: ${m.practice},`);
   L.push(`    lo: (${lit(m.lo[0])}, ${lit(m.lo[1])}),`);
   L.push(`    hi: (${lit(m.hi[0])}, ${lit(m.hi[1])}),`);
   L.push('    boxes: &[');
@@ -331,7 +334,12 @@ function modRs(list) {
   L.push('pub use crate::map::Def;');
   L.push('');
   L.push('/// Every map, in id order.');
-  L.push(`pub const ALL: [&Def; ${list.length}] = [${list.map((m) => `&${m.module}::DEF`).join(', ')}];`);
+  // As rustfmt writes it: on one line while the array is within its
+  // array_width (60% of max_width 120), else one a line.
+  const defs = list.map((m) => `&${m.module}::DEF`);
+  const one = `[${defs.join(', ')}]`;
+  if (one.length <= 72) L.push(`pub const ALL: [&Def; ${list.length}] = ${one};`);
+  else L.push(`pub const ALL: [&Def; ${list.length}] = [`, ...defs.map((d) => `    ${d},`), '];');
   return L.join('\n') + '\n';
 }
 

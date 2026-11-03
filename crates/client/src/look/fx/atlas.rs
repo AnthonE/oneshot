@@ -3,7 +3,7 @@
 //!
 //! Ported from Gates' `crates/client/src/render/fx/atlas.rs` (MIT, © 2026
 //! MoreRight DAO). Its droplet and leaf cells are ours here: an electric
-//! arc (a shield taking a round) and a crystal shard (the SEEKER's).
+//! arc (a shield taking a round) and a crystal shard (the SHARD GUN's).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;

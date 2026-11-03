@@ -39,7 +39,8 @@ struct One {
     at: f32,
     /// The shield went up since last frame.
     charging: bool,
-    /// SEEKER crystals stuck in them, and when the last stuck (s).
+    /// SHARD GUN shards stuck in them (as `flying.rs` saw them end), and
+    /// when the last stuck (s).
     stuck: u8,
     stuck_at: f32,
 }
@@ -84,14 +85,14 @@ fn fade(peak: f32, at: f32, t: f32) -> f32 {
     peak * (1.0 - (t - at) * FLARE_FADE).clamp(0.0, 1.0)
 }
 
-/// How long a crystal stays stuck (`sim::consts::STICK_MS`).
-const STUCK_S: f32 = sim::consts::STICK_MS as f32 / 1000.0;
+/// How long a shard stays stuck (`sim::consts::NEEDLE_KEEP_MS`).
+const STUCK_S: f32 = sim::consts::NEEDLE_KEEP_MS as f32 / 1000.0;
 
 /// The crystals stuck in a body this frame: pink shards poking out of its
 /// chest, each in its own place, glowing hotter as they near the burst.
 fn crystals(fx: &mut Fx, d: &Drawn, n: u8, t: f32) {
     let feet = Vec3::new(d.pos.x, d.pos.y, d.pos.z);
-    let heat = n as f32 / sim::consts::STICK_BURST as f32;
+    let heat = n as f32 / sim::arms::arm(sim::arms::SHARDS).stick.max(1) as f32;
     let pulse = 0.7 + 0.3 * (t * (6.0 + 10.0 * heat)).sin();
     for k in 0..n as u32 {
         let h = |s: u32| super::atlas::hash01(d.slot as u32 * 31 + k, s);
@@ -118,20 +119,14 @@ fn crystals(fx: &mut Fx, d: &Drawn, n: u8, t: f32) {
     }
 }
 
-/// A SEEKER crystal ended: in a body (count it there, a small shatter if we
-/// may see where), or on a wall or a hull (it shatters).
-pub fn stuck(fx: &mut Fx, e: &proto::EventState, t: f32) {
-    let at = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
-    if e.c == sim::events::STUCK_FIGHTER {
-        let o = &mut fx.was.slots[e.b as usize % 64];
-        o.stuck = e.part;
-        o.stuck_at = t;
-        if at != Vec3::ZERO {
-            super::table::shatter(&mut fx.glow, at, 3, 1.5);
-        }
-    } else {
-        super::table::shatter(&mut fx.glow, at, 8, 3.0);
+/// A shard ended in `slot`'s body (`flying.rs`): one more stuck there.
+pub fn needle_in(fx: &mut Fx, slot: u8, t: f32) {
+    let o = &mut fx.was.slots[slot as usize % 64];
+    if t - o.stuck_at >= STUCK_S {
+        o.stuck = 0;
     }
+    o.stuck = (o.stuck + 1).min(sim::arms::arm(sim::arms::SHARDS).stick);
+    o.stuck_at = t;
 }
 
 /// A burst at `at`: whoever stood there has none stuck now.
@@ -312,9 +307,10 @@ pub fn picked_up(fx: &mut Fx, at: Vec3) {
     fx.emit_tint(Layer::ShieldSparks, 6, at, Vec3::Y, Color::WHITE, 1.0);
 }
 
-/// A melee swing we saw land: a flash and sparks a reach in front of the
-/// swinger.
-pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, feet: Vec3) {
+/// A melee swing we saw: a flash and sparks a reach in front of the
+/// swinger; a sword's (`c` the sword's arm id, `at` its eye), a blue slash
+/// of light across the swing.
+pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, c: u16, at: Vec3) {
     if slot == scene.me {
         return;
     }
@@ -322,7 +318,30 @@ pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, feet: Vec3) {
         return;
     };
     let fwd = Vec3::new(d.yaw.cos(), 0.0, d.yaw.sin());
-    let at = feet + Vec3::Y * 1.3 + fwd * 0.9;
+    if c == sim::arms::SWORD as u16 {
+        let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+        let mid = at - Vec3::Y * 0.3 + fwd * 0.8;
+        for k in 0..5 {
+            let u = k as f32 / 4.0 - 0.5;
+            fx.glow.spawn(Particle {
+                left: 0.12,
+                life: 0.12,
+                pos: mid + side * u * 1.1 + Vec3::Y * u * 0.4,
+                vel: side * 6.0,
+                size0: 0.05,
+                size1: 0.02,
+                c0: [2.0, 5.0, 14.0, 1.0],
+                c1: [0.4, 1.0, 3.0, 0.0],
+                cell: super::atlas::STREAK,
+                orient: Orient::Stretch,
+                stretch: 0.06,
+                len_max: 0.5,
+                ..Particle::default()
+            });
+        }
+        return;
+    }
+    let at = at + Vec3::Y * 1.3 + fwd * 0.9;
     fx.emit_tint(Layer::Flash, 1, at, fwd, Color::WHITE, 3.0);
     fx.emit(Layer::Sparks, 5, at, fwd, Matter::Metal);
 }

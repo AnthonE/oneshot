@@ -1,0 +1,8 @@
+{
+  "name": "oneshot-gates",
+  "private": true,
+  "description": "What the gates and tools under ci/ and tools/ load: Playwright and its Chromium.",
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

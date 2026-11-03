@@ -20,13 +20,22 @@ fn the_worst_case_snapshot_fits_a_datagram() {
     for i in 0..MAX_PROJ {
         w.proj[i] = Projectile {
             active: true,
-            kind: if i % 2 == 0 { ProjKind::Rocket } else { ProjKind::Frag },
+            // Every kind, so the widest goes in.
+            kind: [
+                ProjKind::Rocket,
+                ProjKind::Frag,
+                ProjKind::Bolt,
+                ProjKind::Charge,
+                ProjKind::Needle,
+                ProjKind::Lob,
+                ProjKind::Cannon,
+            ][i % 7],
             owner: (i % MAX_FIGHTERS) as u8,
             pos: V3::new(-20.0 + i as f32, 1.5, 10.0),
             vel: V3::new(30.0, 0.0, 0.0),
             ttl: 100,
             age: 20,
-            target: sim::world::NO_TARGET,
+            ..Projectile::default()
         };
     }
     let events: Vec<Event> = (0..200)

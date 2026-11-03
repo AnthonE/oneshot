@@ -1,7 +1,8 @@
-//! The gun in our own view, after `web/src/art.ts`'s `Viewmodel`: Gates'
+//! The gun in our own view, after the three.js page's `art.ts`'s `Viewmodel`: Gates'
 //! hold (`VIEWMODEL_HOLD`), a kick on each of our shots, a bob with our
 //! speed, a dip through a reload, and a muzzle flash that lights the world
-//! around us. Hidden when dead, at the wheel or behind a scope.
+//! around us. Hidden when dead, at the wheel or behind a scope. With a gun
+//! in each hand, the left one is held the same way, mirrored.
 //!
 //! Drawn by the world's camera, not a second one: the gun is shrunk by
 //! [`SHRINK`] and brought that much closer to the eye, which leaves the
@@ -27,6 +28,8 @@ const FLASH_RANGE_M: f32 = 6.0;
 
 #[derive(Component, Default)]
 pub struct ViewGun {
+    /// The left hand's (dual wielding), not the right's.
+    left: bool,
     arm: u8,
     shots: u32,
     kick: f32,
@@ -39,12 +42,14 @@ pub struct Flash;
 
 /// The hold and the flash, on the camera.
 pub fn spawn(commands: &mut Commands, eye: Entity) {
-    commands.spawn((
-        ViewGun::default(),
-        Transform::from_translation(HOLD * SHRINK).with_scale(Vec3::splat(SHRINK)),
-        Visibility::Hidden,
-        ChildOf(eye),
-    ));
+    for left in [false, true] {
+        commands.spawn((
+            ViewGun { left, ..default() },
+            Transform::from_translation(HOLD * SHRINK).with_scale(Vec3::splat(SHRINK)),
+            Visibility::Hidden,
+            ChildOf(eye),
+        ));
+    }
     commands.spawn((
         Flash,
         PointLight {
@@ -76,11 +81,30 @@ pub fn update(
     hold: &mut Query<(Entity, &mut ViewGun, &mut Transform, &mut Visibility)>,
     flash: &mut Query<&mut PointLight, With<Flash>>,
 ) {
-    let Ok((e, mut v, mut t, mut vis)) = hold.single_mut() else {
-        return;
-    };
     let f = own.f;
-    let arm = f.gun().arm;
+    for (e, mut v, mut t, mut vis) in hold.iter_mut() {
+        hand(commands, models, &own, f, dt, e, &mut v, &mut t, &mut vis);
+    }
+    let lit = hold.iter().map(|(_, v, ..)| v.flash).fold(0.0, f32::max);
+    if let Ok(mut l) = flash.single_mut() {
+        l.intensity = if own.shown { lit * FLASH_LM } else { 0.0 };
+    }
+}
+
+/// One hand's gun, posed for the frame.
+#[allow(clippy::too_many_arguments)]
+fn hand(
+    commands: &mut Commands,
+    models: &Models,
+    own: &Own,
+    f: &Fighter,
+    dt: f32,
+    e: Entity,
+    v: &mut ViewGun,
+    t: &mut Transform,
+    vis: &mut Visibility,
+) {
+    let arm = if v.left { f.left.arm } else { f.gun().arm };
     if arm != v.arm {
         commands.entity(e).despawn_related::<Children>();
         if let Some((_, scene)) = spawn_posed(commands, models, arm, view_basis(), e) {
@@ -96,7 +120,7 @@ pub fn update(
         }
         v.shots = f.shots;
     }
-    *vis = if own.shown {
+    *vis = if own.shown && arm != sim::arms::NONE {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -105,23 +129,21 @@ pub fn update(
     v.flash = (v.flash - dt * 25.0).max(0.0);
     v.bob += dt * own.speed * 1.6;
     let sway = (own.speed / 7.0).min(1.0);
-    let whole = sim::consts::ticks(sim::arms::arm(arm).reload_ms).max(1) as f32;
-    let reloading = f.reload as f32 / whole;
+    let whole = sim::arms::arm(arm).reload_ticks().max(1) as f32;
+    let reloading = if v.left { f.left_reload } else { f.reload } as f32 / whole;
     let dip = if reloading > 0.0 {
         (reloading.min(1.0) * core::f32::consts::PI).sin()
     } else {
         0.0
     };
+    let side = if v.left { -1.0 } else { 1.0 };
     let at = Vec3::new(
-        HOLD.x + v.bob.sin() * 0.012 * sway,
+        side * HOLD.x + v.bob.sin() * 0.012 * sway,
         HOLD.y + v.bob.cos().abs() * 0.012 * sway - dip * 0.12,
         HOLD.z + v.kick * 0.06,
     );
     t.translation = at * SHRINK;
-    t.rotation = Quat::from_euler(EulerRot::XYZ, v.kick * 0.09 - dip * 0.5, 0.06, dip * 0.4);
-    if let Ok(mut l) = flash.single_mut() {
-        l.intensity = if own.shown { v.flash * FLASH_LM } else { 0.0 };
-    }
+    t.rotation = Quat::from_euler(EulerRot::XYZ, v.kick * 0.09 - dip * 0.5, side * 0.06, side * dip * 0.4);
 }
 
 fn no_shadows(

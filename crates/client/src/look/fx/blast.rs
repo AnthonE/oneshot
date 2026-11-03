@@ -30,16 +30,82 @@ pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     if heard {
         return;
     }
-    if c == Cause::Burst as u16 {
+    // The SHARD GUN's shards going off together; the cannon's ball.
+    if c == sim::arms::SHARDS as u16 {
         super::bodies::burst_at(fx, scene.others, at);
         burst(fx, at);
+        return;
+    }
+    if c == sim::arms::CANNON as u16 {
+        plasma(fx, at);
         return;
     }
     let big = if c == Cause::Grenade as u16 { 0.85 } else { 1.0 };
     boom(fx, scene, at, big);
 }
 
-/// Seven crystals in one body going off together: a pink star, shards
+/// The ion cannon's ball bursting: green light, a green ring, sparks,
+/// no fire or smoke.
+fn plasma(fx: &mut Fx, at: Vec3) {
+    let green = super::pool::Particle {
+        left: 0.25,
+        life: 0.25,
+        pos: at,
+        size0: 1.0,
+        size1: 4.0,
+        c0: [3.0, 12.0, 4.0, 1.0],
+        c1: [0.3, 1.5, 0.4, 0.0],
+        cell: super::atlas::GLOW,
+        ..Default::default()
+    };
+    fx.glow.spawn(green);
+    fx.glow.spawn(super::pool::Particle {
+        size0: 0.5,
+        size1: 9.0,
+        left: 0.35,
+        life: 0.35,
+        cell: super::atlas::RING,
+        orient: super::pool::Orient::Flat,
+        pos: at - Vec3::Y * 0.4,
+        c0: [1.5, 6.0, 2.0, 0.8],
+        c1: [0.2, 0.8, 0.3, 0.0],
+        ..green
+    });
+    for _ in 0..24 {
+        let d = fx.unit();
+        let life = fx.range(0.3, 0.6);
+        let speed = fx.range(4.0, 11.0);
+        fx.glow.spawn(super::pool::Particle {
+            left: life,
+            life,
+            pos: at,
+            vel: d * speed,
+            gravity: 6.0,
+            drag: 1.5,
+            size0: 0.012,
+            size1: 0.006,
+            c0: [3.0, 12.0, 4.0, 1.0],
+            c1: [0.3, 1.5, 0.4, 0.0],
+            cell: super::atlas::STREAK,
+            orient: super::pool::Orient::Stretch,
+            stretch: 0.02,
+            ..Default::default()
+        });
+    }
+    let eye = fx.eye;
+    fx.shake.add_at(0.8, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
+    fx.flash(
+        at,
+        super::FlashDef {
+            lumens: 1_500_000.0,
+            range: 14.0,
+            life: 0.35,
+            color: [0.4, 1.0, 0.45],
+        },
+    );
+}
+
+/// Shards in one body going off together: a pink star, shards
 /// everywhere, a pink light. Glass, not fire.
 fn burst(fx: &mut Fx, at: Vec3) {
     let pink = Color::LinearRgba(LinearRgba::rgb(2.4, 0.5, 1.6));

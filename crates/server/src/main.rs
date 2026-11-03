@@ -1,5 +1,5 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
-//! [--web web/dist] [--cert cert.pem --key key.pem] [--doubles]
+//! [--web crates/client/dist] [--cert cert.pem --key key.pem] [--doubles]
 //! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
@@ -50,7 +50,11 @@ fn main() {
                 let v = val();
                 let id = sim::maps::ALL
                     .iter()
-                    .find(|d| d.id.to_string() == v || d.name.eq_ignore_ascii_case(&v))
+                    .find(|d| {
+                        // "The Range" answers to "range" too.
+                        let bare = d.name.strip_prefix("The ").unwrap_or(d.name);
+                        d.id.to_string() == v || d.name.eq_ignore_ascii_case(&v) || bare.eq_ignore_ascii_case(&v)
+                    })
                     .unwrap_or_else(|| die(&format!("no map {v}")))
                     .id;
                 cfg.maps.push(id);

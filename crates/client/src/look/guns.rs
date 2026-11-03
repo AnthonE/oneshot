@@ -1,6 +1,6 @@
 //! The models: Triple T and the guns (`assets/models`, made from
-//! `web/public/models` by `tools/glb`), and how each gun is held, after
-//! `web/src/art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
+//! Gates' GLBs by `tools/glb`, through `tools/assets.mjs`), and how each gun is held, after
+//! the three.js page's `art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
 
 use bevy::prelude::*;
 use sim::arms;
@@ -48,7 +48,7 @@ const fn g(
 }
 
 /// By arm id (`sim::arms`), from 1.
-pub const GUNS: [(u8, Gun); 8] = [
+pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::AR,
         g(
@@ -147,9 +147,52 @@ pub const GUNS: [(u8, Gun); 8] = [
             "reload_rifle_0",
         ),
     ),
-    // The SEEKER holds and sounds like the SMG until it has its own model.
+    // Placeholders: the rest borrow the nearest model and sound until they
+    // have their own (web/src/art.ts the same).
     (
-        arms::SEEKER,
+        arms::SWORD,
+        g(
+            "magnum",
+            0.325,
+            0.17,
+            1.0,
+            false,
+            "shot_bolt",
+            3,
+            "shot_bolt_far",
+            "reload_pistol_0",
+        ),
+    ),
+    (
+        arms::CARBINE,
+        g(
+            "br",
+            0.957,
+            0.36,
+            0.85,
+            true,
+            "shot_gun",
+            2,
+            "shot_gun_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::BEAM_RIFLE,
+        g(
+            "sniper",
+            1.09,
+            0.33,
+            0.8,
+            true,
+            "shot_bolt",
+            3,
+            "shot_bolt_far",
+            "reload_bolt_0",
+        ),
+    ),
+    (
+        arms::ION_RIFLE,
         g(
             "smg",
             0.621,
@@ -159,6 +202,62 @@ pub const GUNS: [(u8, Gun); 8] = [
             "shot_smg",
             3,
             "shot_smg_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::ION_PISTOL,
+        g(
+            "magnum",
+            0.325,
+            0.17,
+            1.0,
+            false,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_pistol_0",
+        ),
+    ),
+    (
+        arms::SHARDS,
+        g(
+            "smg",
+            0.621,
+            0.42,
+            0.9,
+            true,
+            "shot_smg",
+            3,
+            "shot_smg_far",
+            "reload_rifle_0",
+        ),
+    ),
+    (
+        arms::LAUNCHER,
+        g(
+            "shotgun",
+            0.949,
+            0.3,
+            0.85,
+            true,
+            "shot_rocket",
+            3,
+            "shot_rifle_far",
+            "reload_shotgun_0",
+        ),
+    ),
+    (
+        arms::CANNON,
+        g(
+            "rocket-launcher",
+            1.058,
+            0.45,
+            0.8,
+            true,
+            "shot_rocket",
+            3,
+            "shot_rifle_far",
             "reload_rifle_0",
         ),
     ),

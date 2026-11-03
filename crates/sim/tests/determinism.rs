@@ -11,9 +11,7 @@ use sim::Map;
 /// `bot_match(1, 20_000)`. If this moves, a rule changed (update it with
 /// the commit that changed the rule) or the compiler changed a float
 /// (stop: that is a finding).
-/// Moved by `MAX_PROJ` 32 → 64 (the SEEKER's crystals): every slot is
-/// hashed, the empty ones too.
-const GOLDEN: u64 = 0xdde7_37b0_cf28_9926;
+const GOLDEN: u64 = 0x4446_382f_bfda_36d6;
 
 #[test]
 fn a_bot_match_hashes_the_same_twice() {
@@ -30,7 +28,7 @@ fn the_bot_match_matches_its_golden() {
 /// `bot_match_on(3, 2, 1, 20_000)`: sixteen bots in Big Team on Dry Fork,
 /// the terrain's golden (slopes, launchers, rays over the ground). Moves
 /// with a terrain or Big Team rule, like [`GOLDEN`] with the rest.
-const GOLDEN_DRY_FORK: u64 = 0x4131_be21_31c7_7dda;
+const GOLDEN_DRY_FORK: u64 = 0x363b_b4f2_bde0_b4bd;
 
 #[test]
 fn big_team_on_dry_fork_matches_its_golden() {

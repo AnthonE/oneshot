@@ -392,7 +392,7 @@ impl Client {
         let g = f.gun();
         let a = sim::arms::arm(g.arm);
         let reload = if f.reload > 0 {
-            1.0 - f.reload as f32 / sim::consts::ticks(a.reload_ms).max(1) as f32
+            1.0 - f.reload as f32 / a.reload_ticks().max(1) as f32
         } else {
             0.0
         };
@@ -596,19 +596,7 @@ impl Client {
                 Msg::Refuse { reason } => {
                     set("type", "refused".into());
                     set("reason", reason.into());
-                    set(
-                        "why",
-                        match reason {
-                            proto::REFUSE_VERSION => "this page is out of date: reload it",
-                            proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
-                            proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
-                            proto::REFUSE_BUSY => "that wallet is already queued or playing",
-                            proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
-                            proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
-                            _ => "the server is full",
-                        }
-                        .into(),
-                    );
+                    set("why", crate::session::refuse_why(reason).into());
                 }
                 Msg::Cup {
                     round,

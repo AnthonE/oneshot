@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 use proto::EventState;
-use sim::arms::{arm, ROCKET, SEEKER, SHOTGUN};
+use sim::arms::{arm, Kind, ROCKET, SHOTGUN};
 use sim::consts::{HEAD_Y, HIT_R};
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -50,25 +50,26 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     let bit = 1u64 << (e.a % 64);
     let first = fx.flashed & bit == 0;
     fx.flashed |= bit;
+    // A ray is drawn as a tracer; anything else flies (`flying.rs`).
+    let kind = sim::arms::arm(arm).kind;
     if own {
         // Drawn when it broke (`own`): only what it met is new.
-        if arm != ROCKET && arm != SEEKER {
+        if kind.ray() {
             land(fx, scene, arm, from, dir, len, to);
         }
+        return;
+    }
+    if kind == Kind::Sword {
         return;
     }
     let muzzle = from + dir * MUZZLE_FWD_M - Vec3::Y * MUZZLE_DOWN_M;
     if first {
         flash(fx, muzzle, dir, &look);
     }
-    if arm == ROCKET {
-        if first {
+    if !kind.ray() {
+        if first && arm == ROCKET {
             backblast(fx, muzzle, dir);
         }
-        return;
-    }
-    // A crystal flies (`flying.rs`) and sticks (`bodies.rs`).
-    if arm == SEEKER {
         return;
     }
     let n = &mut fx.rounds[e.a as usize % 64];
@@ -93,23 +94,36 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     }
     let rounds = (shots - fx.own_shots).min(3);
     fx.own_shots = shots;
-    let id = f.gun().arm;
+    // Two guns out: `shots` counts both hands, so the hands take turns
+    // (drawn only; the server's events say which really fired).
+    let left = f.dual() && !fx.own_left;
+    fx.own_left = left;
+    let id = if left { f.left.arm } else { f.gun().arm };
     let a = arm(id);
+    if a.kind == Kind::Sword {
+        return;
+    }
     let look = table::gun(id);
     let fwd = cam * Vec3::NEG_Z;
     let right = cam * Vec3::X;
     let up = cam * Vec3::Y;
-    let muzzle = eye + fwd * OWN_MUZZLE.z + right * OWN_MUZZLE.x + up * OWN_MUZZLE.y;
-    fx.emit_tint(
-        Layer::Flash,
-        look.stars as usize,
+    let side = if left { -OWN_MUZZLE.x } else { OWN_MUZZLE.x };
+    let muzzle = eye + fwd * OWN_MUZZLE.z + right * side + up * OWN_MUZZLE.y;
+    table::stars(
+        &mut fx.glow,
         muzzle,
-        fwd,
-        Color::WHITE,
+        look.stars as usize,
         1.6 * look.flash_scale,
+        look.flash_c,
     );
     fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
-    fx.flash(muzzle, MUZZLE_FLASH);
+    fx.flash(
+        muzzle,
+        super::FlashDef {
+            color: tint(&look),
+            ..MUZZLE_FLASH
+        },
+    );
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
@@ -117,11 +131,10 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     let side = fx.shake.rand() * shake::SHOT_SIDE_RAD;
     fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, side * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
-    if id == ROCKET {
-        backblast(fx, muzzle, fwd);
-        return;
-    }
-    if id == SEEKER {
+    if !a.kind.ray() {
+        if id == ROCKET {
+            backblast(fx, muzzle, fwd);
+        }
         return;
     }
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };
@@ -134,7 +147,7 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
         };
         // Down the view to the first wall, or as far as the gun reaches.
         let reach = scene.map.ray(v3(eye), v3(dir), a.range.max(30.0));
-        let start = eye + dir * OWN_TRACER_SKIP_M + right * OWN_MUZZLE.x * 0.5 + up * OWN_MUZZLE.y * 0.5;
+        let start = eye + dir * OWN_TRACER_SKIP_M + right * side * 0.5 + up * OWN_MUZZLE.y * 0.5;
         if k == 0 || id == SHOTGUN {
             table::tracer(&mut fx.glow, &look, start, dir, (reach - OWN_TRACER_SKIP_M).max(0.0));
         }
@@ -224,20 +237,23 @@ fn face(scene: &Scene, at: Vec3, dir: Vec3) -> (Matter, Vec3) {
 
 /// A third-person muzzle: a star flash, a tongue of fire, smoke, a light.
 pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
-    fx.emit_tint(
-        Layer::Flash,
-        look.stars as usize,
+    table::stars(
+        &mut fx.glow,
         at,
-        dir,
-        Color::WHITE,
+        look.stars as usize,
         3.0 * look.flash_scale,
+        look.flash_c,
     );
-    fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
+    // Fire out of a gun that burns powder; an energy gun's flash is its own.
+    if look.flash_c[0] > look.flash_c[2] && look.flash_c[0] > look.flash_c[1] * 1.1 {
+        fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
+    }
     fx.emit(Layer::GunSmoke, 2, at, dir, Matter::Concrete);
     fx.flash(
         at,
         super::FlashDef {
             lumens: look.light_lm,
+            color: tint(look),
             ..MUZZLE_FLASH
         },
     );
@@ -258,4 +274,11 @@ fn backblast(fx: &mut Fx, at: Vec3, dir: Vec3) {
             ..MUZZLE_FLASH
         },
     );
+}
+
+/// A muzzle light's colour: the flash's, at a peak of 1.
+fn tint(look: &GunLook) -> [f32; 3] {
+    let c = look.flash_c;
+    let m = c[0].max(c[1]).max(c[2]).max(1e-3);
+    [c[0] / m, c[1] / m, c[2] / m]
 }

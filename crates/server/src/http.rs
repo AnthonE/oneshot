@@ -1,4 +1,4 @@
-//! The page, served plain: the built `web/dist`, and `/server.json` telling
+//! The page, served plain: the built `crates/client/dist` (ci/client.sh), and `/server.json` telling
 //! it where the game listens and the certificate hash to pin. Plain HTTP on
 //! localhost is a secure context, which WebTransport needs.
 //!
