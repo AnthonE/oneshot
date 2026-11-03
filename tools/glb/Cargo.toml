@@ -1,0 +1,20 @@
+[package]
+name = "oneshot-glb"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Re-embeds a GLB's KTX2/UASTC textures as JPEG/PNG for the Bevy client"
+
+# Its own workspace: basis-universal is C++ and nothing else needs it.
+[workspace]
+
+[dependencies]
+basis-universal = "0.3"
+ktx2 = "0.4"
+ruzstd = "0.8"
+png = "0.18"
+jpeg-encoder = "0.6"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3

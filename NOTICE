@@ -5,7 +5,9 @@ here is NC or SA.
 
 Models (web/public/models): Triple T and the guns are commissioned from
 Meshy on a paid plan, owned outright, from the Gates repository
-(AnthonE/Gates, assets/models). No attribution is owed.
+(AnthonE/Gates, assets/models). No attribution is owed. The Bevy client's
+copies (crates/client/assets/models) are the same models with their KTX2
+textures re-encoded as JPEG by tools/glb.
 
 Sounds (web/public/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
@@ -25,7 +27,8 @@ into the page.
 
 Code ported into the Bevy client (crates/client/src/look) from Gates
 (AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
-ground and grass modules as they arrive), under the MIT licence:
+ground and grass modules as they arrive), and into tools/glb from Gates'
+crates/client/src/webassets.rs, under the MIT licence:
 
     Copyright (c) 2026 MoreRight DAO
 
