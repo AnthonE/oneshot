@@ -205,12 +205,17 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * SENS).clamp(-max, max);
     }
-    look.zoom = grabbed && mouse.pressed(MouseButton::Right) && !auto.on;
+    // A gun in each hand: the right button is the left hand's trigger.
+    let dual = link.0.session().core.own().0.dual();
+    let right = grabbed && mouse.pressed(MouseButton::Right);
+    look.zoom = right && !auto.on && !dual;
     let axis = |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127;
     let mut buttons = 0;
     for (on, b) in [
         (grabbed && mouse.pressed(MouseButton::Left), FIRE),
         (look.zoom, ZOOM),
+        (right && dual, FIRE_LEFT),
+        (keys.pressed(KeyCode::KeyT), GREN_SWITCH),
         (keys.pressed(KeyCode::Space), JUMP),
         (
             keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyC),

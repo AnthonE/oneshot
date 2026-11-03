@@ -11,6 +11,9 @@ export const RELOAD = 1 << 5;
 export const SWAP = 1 << 6;
 export const USE = 1 << 7;
 export const ZOOM = 1 << 8;
+/** The left hand's trigger (the right mouse button, with two guns). */
+export const FIRE_LEFT = 1 << 9;
+export const GREN_SWITCH = 1 << 10;
 
 const KEYS: Record<string, number> = {
   Space: JUMP,
@@ -24,6 +27,7 @@ const KEYS: Record<string, number> = {
   Digit1: SWAP,
   Digit2: SWAP,
   KeyE: USE,
+  KeyT: GREN_SWITCH,
 };
 
 const TURN = 65536;
@@ -43,6 +47,9 @@ export class Controls {
   pitch = 0;
   sens = 0.0022;
   locked = false;
+  /** A gun in each hand (set from our fighter each frame): the right
+   * button is the left hand's trigger, not the scope. */
+  dual = false;
   private held = new Set<string>();
   private mouse = 0;
   private latched = 0;
@@ -65,7 +72,7 @@ export class Controls {
     });
     on(document, 'mousemove', (e: MouseEvent) => {
       if (!this.locked) return;
-      const s = this.sens * (this.mouse & ZOOM ? 0.45 : 1);
+      const s = this.sens * (this.mouse & ZOOM && !this.dual ? 0.45 : 1);
       this.yaw += e.movementX * s;
       this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - e.movementY * s));
     });
@@ -103,6 +110,7 @@ export class Controls {
   frame(): Frame {
     let buttons = this.mouse | this.latched;
     this.latched = 0;
+    if (this.dual && buttons & ZOOM) buttons = (buttons & ~ZOOM) | FIRE_LEFT;
     for (const k of this.held) buttons |= KEYS[k] ?? 0;
     const ax = (this.held.has('KeyD') ? 1 : 0) - (this.held.has('KeyA') ? 1 : 0);
     const az = (this.held.has('KeyW') ? 1 : 0) - (this.held.has('KeyS') ? 1 : 0);

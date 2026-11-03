@@ -15,12 +15,12 @@ use bits::{BitReader, BitWriter, WireError};
 use sim::consts::MAX_FIGHTERS;
 use sim::fighter::{Fighter, Gun};
 use sim::geom::V3;
-use sim::input::{Input, BUTTONS};
+use sim::input::{Input, BUTTONS, BUTTON_BITS};
 use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 11;
+pub const PROTO_VER: u16 = 12;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -148,7 +148,7 @@ pub fn encode_input(m: &InputMsg, out: &mut [u8]) -> R<usize> {
     w.write(m.first_seq, 32)?;
     w.write(m.n as u32, 5)?;
     for f in m.frames() {
-        w.write((f.buttons & BUTTONS) as u32, 9)?;
+        w.write((f.buttons & BUTTONS) as u32, BUTTON_BITS)?;
         w.write(f.yaw as u32, 16)?;
         w.write(f.pitch as u16 as u32, 16)?;
         w.write(f.mx as u8 as u32, 8)?;
@@ -175,7 +175,7 @@ pub fn decode_input(buf: &[u8]) -> R<InputMsg> {
     }
     for i in 0..m.n as usize {
         m.frames[i] = Input {
-            buttons: r.read(9)? as u16,
+            buttons: r.read(BUTTON_BITS)? as u16,
             yaw: r.read(16)? as u16,
             pitch: r.read(16)? as u16 as i16,
             mx: r.read(8)? as u8 as i8,
@@ -246,7 +246,7 @@ pub struct Remote {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ProjState {
     /// `sim::world::ProjKind` as a number: 0 rocket, 1 frag, 2 ion bolt,
-    /// 3 charged bolt, 4 shard, 5 launcher grenade, 6 cannon ball.
+    /// 3 charged bolt, 4 shard, 5 launcher grenade, 6 cannon ball, 7 sticky.
     pub kind: u8,
     pub owner: u8,
     pub pos: V3,
@@ -539,10 +539,7 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w_i32(w, f.shield, 32)?;
     w_i32(w, f.health, 32)?;
     for g in &f.guns {
-        w.write(g.arm as u32, 4)?;
-        w.write(g.mag as u32, 16)?;
-        w.write(g.reserve as u32, 16)?;
-        w.write(g.heat as u32, 16)?;
+        w_gun(w, g)?;
     }
     w.write(f.cur as u32 & 1, 1)?;
     w.write(f.refire as u32, 16)?;
@@ -558,7 +555,33 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.respawn as u32, 16)?;
     w.write(f.kills as u32, 16)?;
     w.write(f.deaths as u32, 16)?;
-    w.write(f.ride as u32, 8)
+    w.write(f.ride as u32, 8)?;
+    w_gun(w, &f.left)?;
+    w.write(f.left_refire as u32, 16)?;
+    w.write(f.left_reload as u32, 16)?;
+    w.write(f.left_charge as u32, 16)?;
+    w.write(f.stickies as u32, 8)?;
+    w.write(f.gren_kind as u32, 1)
+}
+
+fn w_gun(w: &mut BitWriter, g: &Gun) -> R<()> {
+    w.write(g.arm as u32, 4)?;
+    w.write(g.mag as u32, 16)?;
+    w.write(g.reserve as u32, 16)?;
+    w.write(g.heat as u32, 16)
+}
+
+fn r_gun(r: &mut BitReader) -> R<Gun> {
+    let g = Gun {
+        arm: r.read(4)? as u8,
+        mag: r.read(16)? as u16,
+        reserve: r.read(16)? as u16,
+        heat: r.read(16)? as u16,
+    };
+    if g.arm as usize >= sim::arms::COUNT {
+        return Err(WireError::Malformed);
+    }
+    Ok(g)
 }
 
 fn r_own(r: &mut BitReader) -> R<Fighter> {
@@ -586,15 +609,7 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
         ..Fighter::default()
     };
     for g in f.guns.iter_mut() {
-        *g = Gun {
-            arm: r.read(4)? as u8,
-            mag: r.read(16)? as u16,
-            reserve: r.read(16)? as u16,
-            heat: r.read(16)? as u16,
-        };
-        if g.arm as usize >= sim::arms::COUNT {
-            return Err(WireError::Malformed);
-        }
+        *g = r_gun(r)?;
     }
     f.cur = r.read(1)? as u8;
     f.refire = r.read(16)? as u16;
@@ -614,6 +629,12 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     if f.ride as usize > 2 * sim::consts::MAX_VEHICLES {
         return Err(WireError::Malformed);
     }
+    f.left = r_gun(r)?;
+    f.left_refire = r.read(16)? as u16;
+    f.left_reload = r.read(16)? as u16;
+    f.left_charge = r.read(16)? as u16;
+    f.stickies = r.read(8)? as u8;
+    f.gren_kind = r.read(1)? as u8;
     Ok(f)
 }
 

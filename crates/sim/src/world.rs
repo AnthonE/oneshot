@@ -129,10 +129,17 @@ pub enum ProjKind {
     Lob,
     /// An ion cannon's ball.
     Cannon,
+    /// A sticky grenade.
+    Sticky,
 }
 
 /// A projectile homing on nobody.
 pub const NO_TARGET: u8 = 255;
+
+/// A sticky's fuse once it sticks or lands at `age` ticks.
+fn sticky_fuse(age: u16) -> u16 {
+    ticks(STICKY_FUSE_MS).max(ticks(STICKY_ARM_MS).saturating_sub(age as u32)) as u16
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Projectile {
@@ -147,7 +154,9 @@ pub struct Projectile {
     pub age: u16,
     /// The gun it came from (a frag's is `arms::NONE`).
     pub arm: u8,
-    /// The seat it homes on, or [`NO_TARGET`].
+    /// The seat it homes on, or [`NO_TARGET`]. A sticky stuck to a
+    /// fighter names its seat; to a vehicle, `MAX_FIGHTERS` + its slot (and
+    /// then `vel` is where on it, from its feet or its middle).
     pub target: u8,
     /// A lob has touched something: its fuse is lit.
     pub landed: bool,
@@ -322,13 +331,16 @@ impl World {
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
             if l.fired {
-                self.fire(s, rewind_q8[s], l.charged);
+                self.fire(s, rewind_q8[s], l.charged, false);
+            }
+            if l.fired_left {
+                self.fire(s, rewind_q8[s], l.charged_left, true);
             }
             if l.melee {
                 self.melee(s, rewind_q8[s]);
             }
             if l.throw {
-                self.throw(s);
+                self.throw(s, l.sticky);
             }
             // A vehicle in reach (or the one ridden) beats a pad.
             if l.use_pad && self.fighters[s].active() && !self.use_vehicle(s) {
@@ -354,22 +366,27 @@ impl World {
         }
     }
 
-    fn fire(&mut self, s: usize, depth: u32, charged: bool) {
+    /// `s` fires the gun in its right hand, or its `left`.
+    fn fire(&mut self, s: usize, depth: u32, charged: bool, left: bool) {
         let f = self.fighters[s];
-        let id = f.gun().arm;
+        let id = if left { f.left.arm } else { f.gun().arm };
         let a = arm(id);
+        // Dual, each gun's cone is its dual one; the left's draws apart
+        // from the right's (both count in `shots` the same tick).
+        let cone = if f.dual() { a.dual_spread } else { a.spread };
+        let pk = if left { 64 } else { 0 };
         let eye = f.eye();
         let base = aim_dir(f.yaw, f.pitch);
         match a.kind {
             Kind::Hitscan => {
                 for k in 0..a.pellets {
-                    let dir = spread(base, a.spread, self.salt, s, f.shots, k);
+                    let dir = spread(base, cone, self.salt, s, f.shots, pk + k);
                     self.hitscan(s, eye, dir, id, depth);
                 }
             }
             Kind::Sword => self.swing(s, depth, true),
             Kind::Rocket | Kind::Cannon | Kind::Bolt | Kind::Needle | Kind::Lob => {
-                let dir = spread(base, a.spread, self.salt, s, f.shots, 0);
+                let dir = spread(base, cone, self.salt, s, f.shots, pk);
                 let (kind, speed) = match a.kind {
                     Kind::Rocket => (ProjKind::Rocket, a.speed),
                     Kind::Cannon => (ProjKind::Cannon, a.speed),
@@ -656,16 +673,22 @@ impl World {
         self.damage(s, q, pts, false, Head::None, crate::arms::SWORD as u16);
     }
 
-    fn throw(&mut self, s: usize) {
+    fn throw(&mut self, s: usize, sticky: bool) {
         let f = self.fighters[s];
         let dir = aim_dir(f.yaw, f.pitch);
         let vel = dir * GREN_SPEED + V3::new(0.0, 2.0, 0.0);
+        // A sticky's fuse is lit when it sticks or lands; till then, long.
+        let (kind, ttl) = if sticky {
+            (ProjKind::Sticky, ticks(10_000))
+        } else {
+            (ProjKind::Frag, ticks(GREN_FUSE_MS))
+        };
         self.launch(
             Projectile {
-                kind: ProjKind::Frag,
+                kind,
                 pos: f.eye() + dir * 0.4,
                 vel,
-                ttl: ticks(GREN_FUSE_MS) as u16,
+                ttl: ttl as u16,
                 target: NO_TARGET,
                 ..Projectile::default()
             },
@@ -674,9 +697,97 @@ impl World {
         self.events.push(Event {
             kind: Ev::Throw,
             a: s as u8,
+            c: sticky as u16,
             pos: f.eye(),
             ..Event::default()
         });
+    }
+
+    /// A sticky's tick: riding what it is stuck to; else flying, sticking
+    /// to the first body or hull it meets, skipping off the map. Whether it
+    /// is still about (it goes off at the end of its fuse).
+    fn sticky(&mut self, p: &mut Projectile) -> bool {
+        let stuck = p.landed && p.target != NO_TARGET;
+        if stuck {
+            let t = p.target as usize;
+            let on = if t < MAX_FIGHTERS {
+                let v = &self.fighters[t];
+                v.active().then_some(v.body.pos)
+            } else {
+                let v = &self.vehicles[t - MAX_FIGHTERS];
+                v.active.then_some(v.pos)
+            };
+            match on {
+                Some(at) => p.pos = at + p.vel,
+                // What it was on is gone: it drops where it is.
+                None => {
+                    p.target = NO_TARGET;
+                    p.vel = V3::ZERO;
+                }
+            }
+        } else {
+            let speed = p.vel.len();
+            let hit = if speed > 0.0 {
+                let d = p.vel * (1.0 / speed);
+                match self.flight_hit(p, d, speed * DT, false) {
+                    (t, true, Some(who)) => Some((who, p.pos + d * t)),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            match hit {
+                Some((who, at)) => {
+                    let (target, base) = match who {
+                        Target::Fighter(q, _) => (q as u8, self.fighters[q].body.pos),
+                        Target::Vehicle(i) => ((MAX_FIGHTERS + i) as u8, self.vehicles[i].pos),
+                    };
+                    p.target = target;
+                    p.pos = at;
+                    p.vel = at - base;
+                    if !p.landed {
+                        p.landed = true;
+                        p.ttl = sticky_fuse(p.age);
+                    }
+                }
+                None => {
+                    if self.bounce(p, GRAVITY) && !p.landed {
+                        p.landed = true;
+                        p.ttl = sticky_fuse(p.age);
+                    }
+                }
+            }
+        }
+        if p.ttl > 0 {
+            return true;
+        }
+        // Off: the one it is stuck to dies (unless a teammate of the
+        // thrower's, as with every blast), then the blast.
+        let owner = p.owner as usize;
+        if p.landed && (p.target as usize) < MAX_FIGHTERS {
+            let q = p.target as usize;
+            let mate = self.rules.teams && q != owner && self.fighters[q].team == self.fighters[owner].team;
+            if !mate {
+                self.damage(
+                    owner,
+                    q,
+                    HEALTH_MAX + SHIELD_MAX,
+                    false,
+                    Head::None,
+                    Cause::Sticky as u16,
+                );
+            }
+        }
+        self.blast(
+            p.pos + V3::new(0.0, 0.05, 0.0),
+            owner,
+            STICKY_DMG,
+            STICKY_RADIUS,
+            STICKY_FULL,
+            1.0,
+            Cause::Sticky as u16,
+        );
+        false
     }
 
     fn launch(&mut self, p: Projectile, s: usize) {
@@ -953,6 +1064,12 @@ impl World {
                     if p.ttl == 0 {
                         self.proj[i].active = false;
                         self.impact(&p, p.pos + V3::new(0.0, 0.05, 0.0), None);
+                        continue;
+                    }
+                }
+                ProjKind::Sticky => {
+                    if !self.sticky(&mut p) {
+                        self.proj[i].active = false;
                         continue;
                     }
                 }
@@ -1335,6 +1452,7 @@ impl World {
             if gun_game && k.alive && self.score[side] < self.rules.score_limit {
                 // Up a rung, at once: the new gun full and in hand.
                 k.guns = [Gun::full(Rules::rung(self.score[side])), Gun::default()];
+                k.drop_left();
                 k.cur = 0;
                 k.reload = 0;
                 k.burst_left = 0;
@@ -1388,7 +1506,20 @@ impl World {
             }
             let f = &mut self.fighters[s];
             let full = Gun::full(def.arm);
-            if let Some(g) = f.guns.iter_mut().find(|g| g.arm == def.arm) {
+            let one_handed = arm(def.arm).dual && arm(f.gun().arm).dual;
+            if one_handed && !f.dual() {
+                // A one-handed gun beside one: dual wielded.
+                f.left = full;
+                f.left_reload = 0;
+                f.left_charge = 0;
+                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
+            } else if f.dual() && arm(def.arm).dual {
+                // Dual already: it takes the left hand.
+                f.left = full;
+                f.left_reload = 0;
+                f.left_charge = 0;
+                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
+            } else if let Some(g) = f.guns.iter_mut().find(|g| g.arm == def.arm) {
                 *g = full;
             } else if f.guns[1].arm == NONE {
                 f.guns[1] = full;

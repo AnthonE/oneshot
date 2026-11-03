@@ -374,9 +374,23 @@ pub fn draw(
     } else {
         g.reserve.to_string()
     };
+    // Two guns: both named, both mags. The grenade a throw takes is marked.
+    let (name, mag) = if f.dual() {
+        let l = sim::arms::arm(f.left.arm);
+        (
+            format!("{} + {}", arm.name, l.name),
+            format!("{} | {}", g.mag, f.left.mag),
+        )
+    } else {
+        (arm.name.to_string(), g.mag.to_string())
+    };
+    let mark = |k: u8| if f.gren_kind == k { "*" } else { "" };
     let ammo = format!(
-        "{}{reload}\n{} / {spare}   grenades {}{swap}{ride}",
-        arm.name, g.mag, f.grenades
+        "{name}{reload}\n{mag} / {spare}   frags {}{} stickies {}{}{swap}{ride}",
+        f.grenades,
+        mark(0),
+        f.stickies,
+        mark(1)
     );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
     for (mut t, a, sc, fe, ce) in texts.iter_mut() {

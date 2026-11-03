@@ -656,3 +656,68 @@ fn the_prediction_matches_through_heat_and_charge() {
     assert!(charged >= 2, "{charged} charged shots");
     assert!(vents > 0, "never overheated");
 }
+
+/// Two guns in hand, each with its own trigger, timers, heat and charge,
+/// and the grenade switch: the client predicts all of it, so it must match.
+#[test]
+fn the_prediction_matches_with_a_gun_in_each_hand() {
+    let mut w = duel([sim::arms::SMG, MAGNUM], 45.0);
+    w.fighters[1].body.pos = V3::new(45.0, 0.0, 45.0);
+    w.fighters[0].left = sim::fighter::Gun::full(sim::arms::ION_PISTOL);
+    let mut mine = w.fighters[0];
+    let map = Map::open();
+    let mut rng = sim::rng::Pcg32::new(5, 9);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut left_shots, mut right_shots) = (0, 0);
+    for t in 0..TICK_HZ * 20 {
+        let r = rng.next_u32();
+        let left = if t % 150 < 100 { FIRE_LEFT } else { 0 };
+        let right = if (t / 7) % 2 == 0 { FIRE } else { 0 };
+        let taps = if r.is_multiple_of(97) { RELOAD } else { 0 } | if r.is_multiple_of(131) { GREN_SWITCH } else { 0 };
+        let inp = Input {
+            buttons: left | right | taps,
+            yaw: (t * 13) as u16,
+            pitch: 1000,
+            mx: (r >> 16) as i8,
+            mz: (r >> 24) as i8,
+        }
+        .sanitized();
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+        let local = mine.step_local(&inp, &map);
+        left_shots += local.fired_left as u32;
+        right_shots += local.fired as u32;
+        let s = &w.fighters[0];
+        assert_eq!(s.body, mine.body, "tick {t}");
+        assert_eq!(
+            (
+                s.guns,
+                s.left,
+                s.refire,
+                s.reload,
+                s.left_refire,
+                s.left_reload,
+                s.left_charge
+            ),
+            (
+                mine.guns,
+                mine.left,
+                mine.refire,
+                mine.reload,
+                mine.left_refire,
+                mine.left_reload,
+                mine.left_charge
+            ),
+            "tick {t}"
+        );
+        assert_eq!(
+            (s.shots, s.gren_kind, s.grenades, s.stickies),
+            (mine.shots, mine.gren_kind, mine.grenades, mine.stickies),
+            "tick {t}"
+        );
+    }
+    assert!(
+        left_shots > 5 && right_shots > 20,
+        "left {left_shots}, right {right_shots}"
+    );
+}

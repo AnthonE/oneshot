@@ -22,10 +22,11 @@ use sim::arms::{
 };
 use sim::consts::*;
 use sim::events::Kind as Ev;
+use sim::fighter::Gun;
 use sim::fmath;
 use sim::geom::{aim_dir, rad_to_yaw, V3};
 use sim::input::*;
-use sim::world::{spread, Phase, Rules, World};
+use sim::world::{spread, Phase, ProjKind, Rules, World};
 use sim::Map;
 
 const NO_LAG: [u32; MAX_FIGHTERS] = [0; MAX_FIGHTERS];
@@ -542,6 +543,191 @@ fn the_launcher_is_three_and_the_cannon_one() {
     let k = kill(CANNON, 15.0, Spot::Chest, SALT).unwrap();
     assert_eq!(k.hits, 1, "{k:?}");
     assert_eq!(arm(CANNON).kind, Kind::Cannon);
+}
+
+// ---- Dual wielding and the sticky ----
+
+#[test]
+fn two_smgs_kill_in_about_half_the_time() {
+    // Halo 2's: the same rounds to kill, both triggers at once.
+    let mut w = range([SMG, arms::NONE], 8.0, SALT);
+    w.fighters[0].left = Gun::full(SMG);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (mut hits, mut first) = (0, None);
+    for t in 0..TICK_HZ * 4 {
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
+        inputs[0] = Input {
+            buttons: FIRE | FIRE_LEFT,
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        first.get_or_insert(t);
+        hits += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.b == 1)
+            .count();
+        if !w.fighters[1].alive {
+            let ms = (t - first.unwrap()) * 1000 / TICK_HZ;
+            assert_eq!(hits, 25);
+            assert!((700..=1000).contains(&ms), "two SMGs kill in {ms} ms");
+            return;
+        }
+    }
+    panic!("no kill");
+}
+
+#[test]
+fn dual_wielding_gives_up_grenades_and_a_swing_drops_the_left() {
+    let mut w = range([SMG, MAGNUM], 8.0, SALT);
+    w.fighters[0].left = Gun::full(SMG);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = GRENADE;
+    w.step(&inputs, &NO_LAG);
+    assert_eq!(w.fighters[0].grenades, GREN_START, "no throw with two guns");
+    inputs[0].buttons = 0;
+    w.step(&inputs, &NO_LAG);
+    inputs[0].buttons = MELEE;
+    w.step(&inputs, &NO_LAG);
+    assert!(!w.fighters[0].dual(), "the swing drops the left gun");
+    // A swap with two in hand drops the left and takes the back one.
+    w.fighters[0].left = Gun::full(SMG);
+    for b in [0, SWAP] {
+        inputs[0].buttons = b;
+        w.step(&inputs, &NO_LAG);
+    }
+    assert!(!w.fighters[0].dual());
+    assert_eq!(w.fighters[0].gun().arm, MAGNUM);
+}
+
+#[test]
+fn a_one_handed_gun_off_a_pad_goes_in_the_left_hand() {
+    let map = sim::map::by_id(4).expect("the Range");
+    let pad = |id: u8| map.pads.iter().find(|p| p.arm == id).unwrap().pos;
+    let rules = Rules {
+        teams: false,
+        time_limit_ms: 0,
+        loadout: [SMG, MAGNUM],
+        ..Rules::duel()
+    };
+    let mut w = World::new(map.clone(), rules, 1, SALT);
+    w.seat(0, 0);
+    w.seat(1, 1);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    while w.phase == Phase::Countdown {
+        w.step(&idle, &NO_LAG);
+    }
+    let take = |w: &mut World, id: u8| {
+        w.fighters[0].body.pos = pad(id);
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        inputs[0].buttons = USE;
+        w.step(&inputs, &NO_LAG);
+        w.step(&idle, &NO_LAG);
+    };
+    take(&mut w, ION_RIFLE);
+    let f = w.fighters[0];
+    assert_eq!((f.gun().arm, f.left.arm), (SMG, ION_RIFLE), "beside the SMG");
+    // A two-handed one is taken the usual way, and the left goes with it
+    // the moment both hands are wanted (a swap).
+    take(&mut w, BR);
+    assert_eq!(w.fighters[0].gun().arm, BR);
+}
+
+/// A sticky thrown at the target's chest `dist` m off, the target running
+/// sideways once it is stuck: (stuck to it, ms from the throw to its death
+/// or None).
+fn sticky_at(dist: f32) -> (bool, Option<u32>) {
+    let mut w = range([BR, arms::NONE], dist, SALT);
+    w.fighters[0].gren_kind = 1;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
+    inputs[0] = Input {
+        buttons: GRENADE,
+        yaw,
+        pitch: pitch + 600,
+        ..Input::default()
+    };
+    let mut stuck = false;
+    for t in 0..TICK_HZ * 4 {
+        w.step(&inputs, &NO_LAG);
+        inputs[0].buttons = 0;
+        stuck |= w
+            .proj
+            .live()
+            .any(|(_, p)| p.kind == ProjKind::Sticky && p.landed && p.target == 1);
+        if stuck {
+            inputs[1] = Input {
+                mx: 127,
+                yaw: 32768,
+                ..Input::default()
+            };
+        }
+        if !w.fighters[1].alive {
+            return (stuck, Some(t * 1000 / TICK_HZ));
+        }
+    }
+    (stuck, None)
+}
+
+#[test]
+fn a_sticky_sticks_and_whoever_wears_it_dies() {
+    assert_eq!(w_sticky_count(), STICKY_START);
+    let (stuck, dead) = sticky_at(6.0);
+    assert!(stuck, "it stuck");
+    let ms = dead.expect("the one it stuck to died, running or not");
+    // Halo 2's: never before 1.3 s from the throw (to the tick).
+    assert!((1280..=1500).contains(&ms), "off at {ms} ms");
+}
+
+fn w_sticky_count() -> u8 {
+    range([BR, arms::NONE], 5.0, SALT).fighters[0].stickies
+}
+
+#[test]
+fn a_sticky_skips_off_the_floor_and_goes_off_after_it_lands() {
+    let mut w = range([BR, arms::NONE], 30.0, SALT);
+    w.fighters[0].gren_kind = 1;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch: -2000,
+        ..Input::default()
+    };
+    for t in 0..TICK_HZ * 4 {
+        w.step(&inputs, &NO_LAG);
+        inputs[0].buttons = 0;
+        if w.events.as_slice().iter().any(|e| e.kind == Ev::Blast) {
+            let ms = t * 1000 / TICK_HZ;
+            assert!((1280..=1600).contains(&ms), "off at {ms} ms");
+            assert!(w.fighters[1].alive && w.fighters[0].alive);
+            return;
+        }
+    }
+    panic!("never went off");
+}
+
+#[test]
+fn the_grenade_switch_picks_the_throw() {
+    let mut w = range([BR, arms::NONE], 30.0, SALT);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (frags, stickies) = (w.fighters[0].grenades, w.fighters[0].stickies);
+    for b in [GREN_SWITCH, 0, GRENADE, 0] {
+        inputs[0].buttons = b;
+        w.step(&inputs, &NO_LAG);
+    }
+    assert_eq!((w.fighters[0].grenades, w.fighters[0].stickies), (frags, stickies - 1));
+    // Out of stickies, a throw takes a frag.
+    for _ in 0..TICK_HZ {
+        w.step(&[Input::default(); MAX_FIGHTERS], &NO_LAG);
+    }
+    for b in [GRENADE, 0] {
+        inputs[0].buttons = b;
+        w.step(&inputs, &NO_LAG);
+    }
+    assert_eq!(w.fighters[0].grenades, frags - 1);
 }
 
 // ---- The whole table ----

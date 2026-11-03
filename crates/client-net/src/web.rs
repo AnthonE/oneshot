@@ -387,7 +387,8 @@ impl Client {
     /// arm, grenades, reloading (0..1), team, kills, deaths, respawn (s),
     /// grounded, speed, then the seat it rides in (−1 on foot, 0 driver, 1
     /// passenger) and that vehicle's slot, then the gun's heat in % (−1 for
-    /// a gun that doesn't heat).
+    /// a gun that doesn't heat), the left hand's arm (0: none), mag and
+    /// reserve, stickies, and the grenade a throw takes (0 frag, 1 sticky).
     pub fn own(&self) -> Vec<f32> {
         let (f, p) = self.session.core.own();
         let g = f.gun();
@@ -433,6 +434,11 @@ impl Client {
             } else {
                 -1.0
             },
+            f.left.arm as f32,
+            f.left.mag as f32,
+            f.left.reserve as f32,
+            f.stickies as f32,
+            f.gren_kind as f32,
         ]
     }
 

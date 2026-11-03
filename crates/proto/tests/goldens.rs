@@ -30,7 +30,8 @@ fn input() -> InputMsg {
     };
     for i in 0..3 {
         m.frames[i] = Input {
-            buttons: 0x1A5 >> i,
+            // FIRE_LEFT and GREN_SWITCH (bits 9, 10) among them.
+            buttons: 0x6A5 >> i,
             yaw: 40_000 + i as u16,
             pitch: -1200 + i as i16,
             mx: -127,
@@ -76,6 +77,17 @@ fn own() -> Fighter {
         burst_gap: 3,
         melee_cool: 11,
         charge: 21,
+        left: Gun {
+            arm: sim::arms::SMG,
+            mag: 40,
+            reserve: 100,
+            heat: 0,
+        },
+        left_refire: 4,
+        left_reload: 0,
+        left_charge: 0,
+        stickies: 1,
+        gren_kind: 1,
         gren_cool: 0,
         grenades: 3,
         shots: 777,
@@ -331,14 +343,14 @@ fn the_bytes_match_their_goldens() {
         got.push(fnv(&buf[..n]));
     }
     let want: &[u64] = &[
-        0x21cd_ceaa_a773_0091,
-        0xa67b_7fa2_73bd_aad1,
-        0x0096_9f61_5dbc_6bc1,
-        0x3402_2d10_573b_52a8,
+        0x945f_3074_619f_0fc7,
+        0x7578_0987_9b7c_1ac2,
+        0xd724_beda_f252_12c2,
+        0xecdc_9032_25ab_e115,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0xb95a_e1b3_a3e7_e63a,
+        0x9b51_4e6b_3773_df6f,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,

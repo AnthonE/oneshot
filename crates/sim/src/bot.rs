@@ -269,6 +269,11 @@ impl Bot {
             if a.auto || me.last_buttons & FIRE == 0 {
                 inp.buttons |= FIRE;
             }
+            // A gun in each hand: both triggers.
+            let l = arm(me.left.arm);
+            if me.dual() && (l.auto || me.last_buttons & FIRE_LEFT == 0) {
+                inp.buttons |= FIRE_LEFT;
+            }
         }
         if near < MELEE_RANGE {
             inp.buttons |= MELEE;

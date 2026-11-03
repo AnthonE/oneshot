@@ -242,6 +242,7 @@ async function main() {
 
     const own = client.own();
     shared.own = Array.from(own);
+    controls.dual = own[25] > 0;
     shared.mate = client.teams ? client.team : -1;
     const [px, py, pz, eye, , , alive, , shield, health, arm, mag, reserve, other, grenades, reloading, , kills, deaths, respawn] = own;
     // At the wheel: the camera rides behind the vehicle, looking where we
@@ -342,8 +343,12 @@ async function main() {
     shared.stats = Array.from(st);
     hud.update({
       // A gun that heats has a battery, no reserve: its heat goes there.
-      shield, health, ammo: String(mag), reserve: own[24] >= 0 ? `heat ${own[24]}%` : String(reserve), grenades,
-      weapon: arm_name(arm), other: other ? arm_name(other) : '',
+      shield, health, grenades,
+      // Two guns: both named, both mags.
+      ammo: own[25] > 0 ? `${mag} · ${own[26]}` : String(mag),
+      reserve: own[24] >= 0 ? `heat ${own[24]}%` : String(reserve),
+      weapon: own[25] > 0 ? `${arm_name(arm)} + ${arm_name(own[25])}` : arm_name(arm),
+      other: `${other ? `${arm_name(other)} · ` : ''}frags ${grenades}${own[29] ? '' : ' ◀'} · stickies ${own[28]}${own[29] ? ' ◀' : ''}`,
       score: [
         `${hud.name(slot)} ${scores[slot]} / ${limit}`,
         // The rest, best first: everyone in a duel or doubles, the top

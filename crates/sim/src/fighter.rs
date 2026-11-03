@@ -78,6 +78,18 @@ pub struct Fighter {
     /// Shards stuck in this fighter, and ticks since the last; the world's.
     pub needles: u8,
     pub needle_t: u16,
+    /// Dual wielding: the gun in the left hand (`arms::NONE`: none), and
+    /// its own timers. Only a gun that is `dual` goes there, beside one in
+    /// the right; it fires on [`FIRE_LEFT`]. While dual: no grenades, and a
+    /// melee or a swap drops it.
+    pub left: Gun,
+    pub left_refire: u16,
+    pub left_reload: u16,
+    pub left_charge: u16,
+    /// Sticky grenades carried (frags are `grenades`), and which a throw
+    /// takes: 0 frags, 1 stickies.
+    pub stickies: u8,
+    pub gren_kind: u8,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -89,7 +101,12 @@ pub struct Local {
     pub melee: bool,
     /// The round fired is a charge weapon's charged one.
     pub charged: bool,
+    /// The same for the left hand's gun.
+    pub fired_left: bool,
+    pub charged_left: bool,
     pub throw: bool,
+    /// The throw is a sticky, not a frag.
+    pub sticky: bool,
     /// USE went down this tick.
     pub use_pad: bool,
 }
@@ -99,8 +116,17 @@ impl Fighter {
         &self.guns[self.cur as usize & 1]
     }
 
-    fn gun_mut(&mut self) -> &mut Gun {
-        &mut self.guns[self.cur as usize & 1]
+    /// Two guns in hand.
+    pub fn dual(&self) -> bool {
+        self.left.arm != NONE
+    }
+
+    /// The left hand empties.
+    pub fn drop_left(&mut self) {
+        self.left = Gun::default();
+        self.left_refire = 0;
+        self.left_reload = 0;
+        self.left_charge = 0;
     }
 
     pub fn eye(&self) -> V3 {
@@ -151,6 +177,9 @@ impl Fighter {
         self.charge = 0;
         self.needles = 0;
         self.needle_t = 0;
+        self.drop_left();
+        self.stickies = STICKY_START;
+        self.gren_kind = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -190,123 +219,93 @@ impl Fighter {
         let shoots = seat != Some(crate::vehicle::DRIVER);
         let on_foot = seat.is_none();
 
+        let mut spare = (0u8, 0u16);
         dec(&mut self.refire);
         dec(&mut self.burst_gap);
+        dec(&mut self.left_refire);
         dec(&mut self.melee_cool);
         dec(&mut self.gren_cool);
-        // Hot guns cool, in hand or on the back; one venting doesn't (the
+        // Hot guns cool, in a hand or on the back; one venting doesn't (the
         // vent is its reload).
+        let c = self.cur as usize & 1;
         for i in 0..2 {
-            let a = arm(self.guns[i].arm);
-            let venting = i == self.cur as usize & 1 && self.reload > 0;
-            if a.hot() && !venting {
-                self.guns[i].heat = self.guns[i].heat.saturating_sub(a.heat_cool);
-            }
+            let venting = i == c && self.reload > 0;
+            cool(&mut self.guns[i], venting);
         }
-        if self.reload > 0 {
-            self.reload -= 1;
-            if self.reload == 0 {
-                let a = arm(self.gun().arm);
-                let g = self.gun_mut();
-                if a.hot() {
-                    g.heat = 0;
-                } else {
-                    let take = (a.mag - g.mag).min(g.reserve);
-                    g.mag += take;
-                    g.reserve -= take;
-                }
+        cool(&mut self.left, self.left_reload > 0);
+        self.right().tick_reload();
+        self.left_hand(&mut spare).tick_reload();
+
+        // Swap: cancels a reload, a burst and a charge. Dual, it drops the
+        // left gun first (and takes the back one, if there is one).
+        if pressed & SWAP != 0 {
+            let had_left = self.dual();
+            if had_left {
+                self.drop_left();
+            }
+            if self.guns[c ^ 1].arm != NONE {
+                self.cur ^= 1;
+            }
+            if had_left || self.guns[c ^ 1].arm != NONE {
+                self.reload = 0;
+                self.burst_left = 0;
+                self.charge = 0;
+                self.refire = self.refire.max(ticks(SWAP_MS) as u16);
             }
         }
 
-        // Swap: cancels a reload, a burst and a charge.
-        if pressed & SWAP != 0 && self.guns[(self.cur as usize & 1) ^ 1].arm != NONE {
-            self.cur ^= 1;
-            self.reload = 0;
-            self.burst_left = 0;
-            self.charge = 0;
-            self.refire = self.refire.max(ticks(SWAP_MS) as u16);
-        }
-
-        let a = arm(self.gun().arm);
-        let g = *self.gun();
         // A hot gun past full vents (again, if a swap cut its vent short).
-        if a.hot() && g.heat >= HEAT_FULL && self.reload == 0 {
-            self.reload = a.vent_ticks() as u16;
-            self.charge = 0;
-        }
-        let can_reload = g.arm != NONE && g.mag < a.mag && g.reserve > 0 && self.reload == 0;
-        if can_reload && (pressed & RELOAD != 0 || (g.mag == 0 && inp.held(FIRE))) {
-            self.reload = ticks(a.reload_ms) as u16;
-            self.burst_left = 0;
-        }
-
-        // A burst keeps firing once pulled; otherwise a semi-automatic
-        // fires on the pull, an automatic while held.
-        let ready = shoots && self.reload == 0 && g.arm != NONE && g.mag > 0;
-        if ready && self.burst_left > 0 && self.burst_gap == 0 {
-            self.burst_left -= 1;
-            out.fired = true;
-            if self.burst_left == 0 {
-                self.refire = self.refire.max(ticks(a.refire_ms) as u16);
-            } else {
-                self.burst_gap = ticks(a.burst_gap_ms) as u16;
-            }
-        } else if a.charge_ms > 0 {
-            // A charge weapon fires on the release: charged if held to full.
-            let full = ticks(a.charge_ms) as u16;
-            if !ready || self.refire > 0 {
-                self.charge = 0;
-            } else if inp.held(FIRE) {
-                self.charge = (self.charge + 1).min(full);
-            } else if self.charge > 0 {
-                out.fired = true;
-                out.charged = self.charge >= full && g.mag >= a.charge_cost;
-                self.charge = 0;
-                self.refire = ticks(a.refire_ms) as u16;
-            }
-        } else if ready && self.burst_left == 0 && self.refire == 0 && inp.held(FIRE) && (a.auto || pressed & FIRE != 0)
-        {
-            out.fired = true;
-            if a.burst > 1 {
-                self.burst_left = a.burst - 1;
-                self.burst_gap = ticks(a.burst_gap_ms) as u16;
-            } else {
-                self.refire = ticks(a.refire_ms) as u16;
-            }
-        }
-        if out.fired {
-            let cost = match a.kind {
-                Kind::Sword => 0,
-                _ if out.charged => a.charge_cost,
-                _ => 1,
-            };
-            let heat = if out.charged { a.charge_heat } else { a.heat_shot };
-            let g = self.gun_mut();
-            g.mag -= cost.min(g.mag);
-            g.heat = g.heat.saturating_add(heat.saturating_mul(128));
-            if a.hot() && g.heat >= HEAT_FULL {
-                self.reload = a.vent_ticks() as u16;
-                self.burst_left = 0;
-            }
-            self.shots = self.shots.wrapping_add(1);
-            if a.kind == Kind::Rocket {
-                self.burst_left = 0;
-            }
-        } else if self.burst_left > 0 && !ready {
-            self.burst_left = 0;
+        self.right().vent();
+        self.left_hand(&mut spare).vent();
+        let dual = self.dual();
+        let empty_pull = |g: &Gun, b: u16| g.arm != NONE && g.mag == 0 && inp.held(b);
+        let want = pressed & RELOAD != 0 || empty_pull(self.gun(), FIRE) || empty_pull(&self.left, FIRE_LEFT);
+        if want {
+            // Dual, both hands reload together, and slower.
+            let k = if dual { DUAL_RELOAD_K } else { 1.0 };
+            self.right().start_reload(k);
+            self.left_hand(&mut spare).start_reload(k);
         }
 
+        let (fired, charged) = self.right().pull(shoots, inp.held(FIRE), pressed & FIRE != 0);
+        out.fired = fired;
+        out.charged = charged;
+        self.shots = self.shots.wrapping_add(fired as u32);
+        if dual {
+            let (fired, charged) =
+                self.left_hand(&mut spare)
+                    .pull(shoots, inp.held(FIRE_LEFT), pressed & FIRE_LEFT != 0);
+            out.fired_left = fired;
+            out.charged_left = charged;
+            self.shots = self.shots.wrapping_add(fired as u32);
+        }
+
+        if pressed & GREN_SWITCH != 0 {
+            self.gren_kind ^= 1;
+        }
         if on_foot && pressed & MELEE != 0 && self.melee_cool == 0 {
+            // Dual, the left gun is dropped for the swing (Halo 2's).
+            self.drop_left();
             out.melee = true;
             self.melee_cool = ticks(MELEE_COOL_MS) as u16;
             self.reload = 0;
             self.burst_left = 0;
             self.refire = self.refire.max(ticks(MELEE_COOL_MS / 2) as u16);
         }
-        if on_foot && pressed & GRENADE != 0 && self.grenades > 0 && self.gren_cool == 0 {
-            out.throw = true;
-            self.grenades -= 1;
-            self.gren_cool = ticks(GREN_COOL_MS) as u16;
+        // A throw takes the kind chosen, or the other if none of it is left;
+        // never with a gun in each hand.
+        if on_foot && !self.dual() && pressed & GRENADE != 0 && self.gren_cool == 0 {
+            let sticky = match self.gren_kind {
+                1 => self.stickies > 0 || self.grenades == 0,
+                _ => self.grenades == 0,
+            };
+            let n = if sticky { &mut self.stickies } else { &mut self.grenades };
+            if *n > 0 {
+                *n -= 1;
+                out.throw = true;
+                out.sticky = sticky;
+                self.gren_cool = ticks(GREN_COOL_MS) as u16;
+            }
         }
         out.use_pad = pressed & USE != 0;
         self.last_buttons = inp.buttons;
@@ -316,6 +315,155 @@ impl Fighter {
 
 fn dec(t: &mut u16) {
     *t = t.saturating_sub(1);
+}
+
+/// A hot gun's tick of cooling, unless it is venting.
+fn cool(g: &mut Gun, venting: bool) {
+    let a = arm(g.arm);
+    if a.hot() && !venting {
+        g.heat = g.heat.saturating_sub(a.heat_cool);
+    }
+}
+
+/// One hand: its gun and its timers, borrowed from the fighter (the right
+/// hand's are the fighter's own fields; the left's beside them, and a gun
+/// that goes in the left never bursts).
+struct Hand<'a> {
+    gun: &'a mut Gun,
+    refire: &'a mut u16,
+    reload: &'a mut u16,
+    burst_left: &'a mut u8,
+    burst_gap: &'a mut u16,
+    charge: &'a mut u16,
+}
+
+impl Fighter {
+    fn right(&mut self) -> Hand<'_> {
+        Hand {
+            gun: &mut self.guns[self.cur as usize & 1],
+            refire: &mut self.refire,
+            reload: &mut self.reload,
+            burst_left: &mut self.burst_left,
+            burst_gap: &mut self.burst_gap,
+            charge: &mut self.charge,
+        }
+    }
+
+    /// The left hand; `spare` stands in for the burst it never fires.
+    fn left_hand<'a>(&'a mut self, spare: &'a mut (u8, u16)) -> Hand<'a> {
+        Hand {
+            gun: &mut self.left,
+            refire: &mut self.left_refire,
+            reload: &mut self.left_reload,
+            burst_left: &mut spare.0,
+            burst_gap: &mut spare.1,
+            charge: &mut self.left_charge,
+        }
+    }
+}
+
+impl Hand<'_> {
+    /// The reload (or a hot gun's vent) counts down; at 0 the magazine
+    /// fills (or the gun is cold).
+    fn tick_reload(&mut self) {
+        if *self.reload == 0 {
+            return;
+        }
+        *self.reload -= 1;
+        if *self.reload == 0 {
+            let a = arm(self.gun.arm);
+            let g = &mut *self.gun;
+            if a.hot() {
+                g.heat = 0;
+            } else {
+                let take = (a.mag - g.mag).min(g.reserve);
+                g.mag += take;
+                g.reserve -= take;
+            }
+        }
+    }
+
+    /// A hot gun at full heat starts its vent.
+    fn vent(&mut self) {
+        let a = arm(self.gun.arm);
+        if a.hot() && self.gun.heat >= HEAT_FULL && *self.reload == 0 {
+            *self.reload = a.vent_ticks() as u16;
+            *self.charge = 0;
+        }
+    }
+
+    /// A reload, `k` times as long, if one can start.
+    fn start_reload(&mut self, k: f32) {
+        let a = arm(self.gun.arm);
+        let g = *self.gun;
+        if g.arm != NONE && g.mag < a.mag && g.reserve > 0 && *self.reload == 0 {
+            *self.reload = (ticks(a.reload_ms) as f32 * k) as u16;
+            *self.burst_left = 0;
+        }
+    }
+
+    /// This hand's trigger, `held` and `pressed` this tick: whether a round
+    /// left the gun, and whether it was a charged one. Spends it (ammo, a
+    /// battery, heat).
+    fn pull(&mut self, shoots: bool, held: bool, pressed: bool) -> (bool, bool) {
+        let a = arm(self.gun.arm);
+        let g = *self.gun;
+        let (mut fired, mut charged) = (false, false);
+        // A burst keeps firing once pulled; otherwise a semi-automatic
+        // fires on the pull, an automatic while held.
+        let ready = shoots && *self.reload == 0 && g.arm != NONE && g.mag > 0;
+        if ready && *self.burst_left > 0 && *self.burst_gap == 0 {
+            *self.burst_left -= 1;
+            fired = true;
+            if *self.burst_left == 0 {
+                *self.refire = (*self.refire).max(ticks(a.refire_ms) as u16);
+            } else {
+                *self.burst_gap = ticks(a.burst_gap_ms) as u16;
+            }
+        } else if a.charge_ms > 0 {
+            // A charge weapon fires on the release: charged if held to full.
+            let full = ticks(a.charge_ms) as u16;
+            if !ready || *self.refire > 0 {
+                *self.charge = 0;
+            } else if held {
+                *self.charge = (*self.charge + 1).min(full);
+            } else if *self.charge > 0 {
+                fired = true;
+                charged = *self.charge >= full && g.mag >= a.charge_cost;
+                *self.charge = 0;
+                *self.refire = ticks(a.refire_ms) as u16;
+            }
+        } else if ready && *self.burst_left == 0 && *self.refire == 0 && held && (a.auto || pressed) {
+            fired = true;
+            if a.burst > 1 {
+                *self.burst_left = a.burst - 1;
+                *self.burst_gap = ticks(a.burst_gap_ms) as u16;
+            } else {
+                *self.refire = ticks(a.refire_ms) as u16;
+            }
+        }
+        if fired {
+            let cost = match a.kind {
+                Kind::Sword => 0,
+                _ if charged => a.charge_cost,
+                _ => 1,
+            };
+            let heat = if charged { a.charge_heat } else { a.heat_shot };
+            let g = &mut *self.gun;
+            g.mag -= cost.min(g.mag);
+            g.heat = g.heat.saturating_add(heat.saturating_mul(128));
+            if a.hot() && g.heat >= HEAT_FULL {
+                *self.reload = a.vent_ticks() as u16;
+                *self.burst_left = 0;
+            }
+            if a.kind == Kind::Rocket {
+                *self.burst_left = 0;
+            }
+        } else if *self.burst_left > 0 && !ready {
+            *self.burst_left = 0;
+        }
+        (fired, charged)
+    }
 }
 
 impl Thing for Fighter {
@@ -361,5 +509,14 @@ impl Thing for Fighter {
         h.u16(self.charge);
         h.u8(self.needles);
         h.u16(self.needle_t);
+        h.u8(self.left.arm);
+        h.u16(self.left.mag);
+        h.u16(self.left.reserve);
+        h.u16(self.left.heat);
+        h.u16(self.left_refire);
+        h.u16(self.left_reload);
+        h.u16(self.left_charge);
+        h.u8(self.stickies);
+        h.u8(self.gren_kind);
     }
 }

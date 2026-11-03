@@ -777,6 +777,12 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.burst_gap == b.burst_gap
         && a.melee_cool == b.melee_cool
         && a.charge == b.charge
+        && a.left == b.left
+        && a.left_refire == b.left_refire
+        && a.left_reload == b.left_reload
+        && a.left_charge == b.left_charge
+        && a.stickies == b.stickies
+        && a.gren_kind == b.gren_kind
         && a.gren_cool == b.gren_cool
         && a.grenades == b.grenades
         && a.shots == b.shots

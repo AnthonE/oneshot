@@ -142,6 +142,11 @@ pub struct Arm {
     pub stick: u8,
     /// A lob's fuse, from when it first touches something.
     pub fuse_ms: u32,
+    /// One-handed: it may be dual wielded, beside another that is, with
+    /// its cone grown to `dual_spread` (Halo 2's: the same shots to kill,
+    /// less accurate).
+    pub dual: bool,
+    pub dual_spread: f32,
 }
 
 impl Arm {
@@ -210,6 +215,8 @@ const BASE: Arm = Arm {
     charge_heat: 0,
     stick: 0,
     fuse_ms: 0,
+    dual: false,
+    dual_spread: 0.0,
 };
 
 pub static ARMS: [Arm; COUNT] = [
@@ -255,6 +262,8 @@ pub static ARMS: [Arm; COUNT] = [
         range: 110.0,
         reload_ms: 1280,
         zoom: 2,
+        dual: true,
+        dual_spread: q14(14.0),
         ..BASE
     },
     Arm {
@@ -316,6 +325,9 @@ pub static ARMS: [Arm; COUNT] = [
         falloff: 20.0,
         falloff_min: 0.6,
         reload_ms: 1600,
+        // Halo 2's: 1–2.75° alone, 1.5–3° dual.
+        dual: true,
+        dual_spread: q14(100.0),
         ..BASE
     },
     Arm {
@@ -380,6 +392,9 @@ pub static ARMS: [Arm; COUNT] = [
         heat_shot: 15,
         heat_cool: 85,
         heat_vent: 35,
+        // Halo 2's: 0.25–0.75° alone, 1.5–3° dual.
+        dual: true,
+        dual_spread: deg(2.0),
         ..BASE
     },
     Arm {
@@ -402,6 +417,8 @@ pub static ARMS: [Arm; COUNT] = [
         charge_speed: 23.0,
         charge_cost: 37,
         charge_heat: 100,
+        dual: true,
+        dual_spread: deg(0.5),
         ..BASE
     },
     Arm {
@@ -422,6 +439,9 @@ pub static ARMS: [Arm; COUNT] = [
         homing: deg(60.0),
         stick: 8,
         reload_ms: 2000,
+        // Halo 2's: 0.5–1.5° alone, 1–3° dual.
+        dual: true,
+        dual_spread: deg(2.0),
         ..BASE
     },
     Arm {

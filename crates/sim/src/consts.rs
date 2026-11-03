@@ -120,6 +120,21 @@ pub const GREN_FULL: f32 = 1.0;
 pub const GREN_FUSE_MS: u32 = 1800;
 pub const GREN_SPEED: f32 = 16.0;
 pub const GREN_START: u8 = 2;
+/// Sticky grenades at a spawn (at most `GREN_MAX` too). Halo 2 gives
+/// plasma grenades from the map; ours has no grenade pickups yet.
+pub const STICKY_START: u8 = 1;
+/// A sticky (Halo 2's plasma grenade in multiplayer): it sticks to the
+/// first body or hull it touches (not to the map: it skips off that), and
+/// goes off `STICKY_FUSE_MS` after it sticks or first lands, never before
+/// `STICKY_ARM_MS` from the throw. Its blast kills to `STICKY_FULL`; the
+/// one it is stuck to dies whatever.
+pub const STICKY_FUSE_MS: u32 = 900;
+pub const STICKY_ARM_MS: u32 = 1300;
+pub const STICKY_DMG: i32 = 200;
+pub const STICKY_RADIUS: f32 = 5.3;
+pub const STICKY_FULL: f32 = 1.5;
+/// Dual wielding: both hands reload together, this much slower.
+pub const DUAL_RELOAD_K: f32 = 1.5;
 pub const GREN_MAX: u8 = 4;
 pub const GREN_COOL_MS: u32 = 600;
 /// Speed kept along the normal and the surface in a bounce.
