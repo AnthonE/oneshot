@@ -131,15 +131,53 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
     b.to_string()
 }
 
-/// The skin names in an items answer that are skins of this game.
-pub fn owned_skins(v: &serde_json::Value) -> Vec<String> {
-    let names = v["items"].as_array().into_iter().flatten().filter_map(|i| {
+/// The skin names in an items answer that are skins of this game (`slug`).
+///
+/// Elo Pros answers two shapes. The EVM collection
+/// (`GET /api/items/of/<wallet>?game=<slug>&title=<slug>`, `meter/items.py`)
+/// lists tokens already filtered to the title, each named by its catalog
+/// row's `catalog_name`. The Solana one (`GET /api/items/sol/of/<wallet>`,
+/// `meter/solana_items.py`) lists every title's items, each with its
+/// `title`, its `item` key and its `name`. A row of another title is
+/// dropped; a name counts if it, or its first word, is one of
+/// `proto::SKINS`.
+pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
+    let rows = v["items"].as_array().into_iter().flatten();
+    let names = rows.filter_map(|i| {
+        if let Some(t) = i["title"].as_str() {
+            if !t.eq_ignore_ascii_case(slug) {
+                return None;
+            }
+        }
         i.as_str()
             .or_else(|| i["skin"].as_str())
+            .or_else(|| i["item"].as_str())
+            .or_else(|| i["catalog_name"].as_str())
             .or_else(|| i["name"].as_str())
-            .map(|s| s.to_ascii_lowercase())
+            .map(|s| s.trim().to_ascii_lowercase())
     });
-    names.filter(|n| proto::SKINS.contains(&n.as_str())).collect()
+    let mut out: Vec<String> = names
+        .filter_map(|n| {
+            let first = n.split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
+            [n.as_str(), first]
+                .into_iter()
+                .find(|c| proto::SKINS.contains(c))
+                .map(str::to_string)
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Where Elo Pros lists `wallet`'s items of game `slug`: the EVM
+/// collection for a `0x` wallet, the Solana one for a base58 wallet.
+pub fn items_url(origin: &str, slug: &str, wallet: &str) -> String {
+    if wallet.starts_with("0x") || wallet.starts_with("0X") {
+        format!("{origin}/api/items/of/{wallet}?game={slug}&title={slug}")
+    } else {
+        format!("{origin}/api/items/sol/of/{wallet}")
+    }
 }
 
 /// How long a ban answer is kept before it is asked again.
@@ -170,9 +208,7 @@ impl Elo {
     }
 
     /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
-    /// on Elo Pros (Metaplex Core, `meter/solana_items.py`), asked as
-    /// `GET /api/items/<slug>/of/<wallet>`, read as `{"items": [...]}` whose
-    /// entries are names or objects with a `skin` or `name`. Empty if Elo
+    /// on Elo Pros ([`items_url`], read by [`owned_skins`]). Empty if Elo
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
     pub async fn skins(&self, wallet: &str) -> Vec<String> {
@@ -184,14 +220,14 @@ impl Elo {
                 }
             }
         }
-        let url = format!("{}/api/items/{}/of/{}", self.origin, self.slug, wallet);
+        let url = items_url(&self.origin, &self.slug, wallet);
         let got = async {
             let res = self.http.get(&url).send().await.ok()?;
             if !res.status().is_success() {
                 return None;
             }
             let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
-            Some(owned_skins(&v))
+            Some(owned_skins(&v, &self.slug))
         }
         .await;
         let Some(got) = got else { return Vec::new() };
@@ -326,8 +362,38 @@ mod tests {
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
         let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, 7]});
-        assert_eq!(owned_skins(&v), vec!["ember", "gilded", "pill"]);
-        assert!(owned_skins(&serde_json::json!({})).is_empty());
+        assert_eq!(owned_skins(&v, "oneshot"), vec!["ember", "gilded", "pill"]);
+        assert!(owned_skins(&serde_json::json!({}), "oneshot").is_empty());
+    }
+
+    #[test]
+    fn skins_are_read_from_both_of_elo_pros_item_lists() {
+        // `meter/items.py`: tokens of the game's EloItem, named by catalog.
+        let evm = serde_json::json!({"wallet": "0xab", "items": [
+            {"token_id": 4, "catalog_id": 101, "catalog_name": "Glacier"},
+            {"token_id": 5, "catalog_id": 102, "catalog_name": "Ember Trim"},
+            {"token_id": 6, "derived": null, "derived_error": "no schema"},
+        ]});
+        assert_eq!(owned_skins(&evm, "oneshot"), vec!["ember", "glacier"]);
+        // `meter/solana_items.py`: every title's items; only ours count.
+        let sol = serde_json::json!({"items": [
+            {"title": "oneshot", "item": "verdant", "name": "Verdant"},
+            {"title": "gates", "item": "ember", "name": "Ember Bat"},
+        ]});
+        assert_eq!(owned_skins(&sol, "oneshot"), vec!["verdant"]);
+    }
+
+    #[test]
+    fn a_wallet_is_asked_where_its_chain_keeps_items() {
+        let o = "https://elopros.com";
+        assert_eq!(
+            items_url(o, "oneshot", "0xAbC"),
+            "https://elopros.com/api/items/of/0xAbC?game=oneshot&title=oneshot"
+        );
+        assert_eq!(
+            items_url(o, "oneshot", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"),
+            "https://elopros.com/api/items/sol/of/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+        );
     }
 
     #[test]

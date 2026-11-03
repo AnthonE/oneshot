@@ -85,6 +85,6 @@ try {
   failed = true;
 } finally {
   await browser.close();
-  server.kill();
+  server.kill('SIGINT'); // at once; SIGTERM would drain
 }
 process.exit(failed ? 1 : 0);

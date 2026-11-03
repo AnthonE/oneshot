@@ -19,6 +19,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 | `crates/client` | the Bevy client, desktop (`oneshot --server host:port`) and browser (`crates/client/dist`): draws, never decides. Its own workspace; `ci/client.sh` is its check |
 | `web/` | three.js page: draws, never decides. Replaced by the Bevy client once it plays as well (`DESIGN.md` §16, milestone 12) |
 | `maps/`, `tools/maps` | maps as `map.json`; the compiler writes `crates/sim/src/maps/` |
+| `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: the systemd unit, the certbot hook, the game box's nginx, the runbook (`ops/README.md`) |
 
 ## The loop
 
@@ -36,6 +37,9 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
    hand; Proving Grounds is the golden's map.
+6. Touching the look: `node tools/board.mjs look` (after the two builds):
+   the art's views beside their references and the operator's marks, one
+   sheet (`board/board.json`; the elo-look skill is the loop).
 7. Commit with a short message.
 
 ## The wire's walls
@@ -47,6 +51,11 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
   (`ClientNet::take_low`); a page drawing slowly sends in bursts.
 - **The client draws, never decides** (`web/` today, the Bevy client next).
   Gameplay state lives in `sim` and `client-net`.
+- **web/ draws.** Gameplay state lives in `sim` and `client-net`.
+- **Production never pins.** With `--cert`, `server.json` sends no hash;
+  SIGTERM drains (matches finish), SIGHUP reloads the certificate. Hosting
+  is the game box beside Gates, two slots so one always takes players
+  (`--live-file`, a shared `--nonce-key`); `ops/README.md`.
 - **Every byte to a client goes through `room::build`** and its fog
   (`room/src/fog.rs`): an enemy only if it could be seen soon, an unseen
   fighter's shot only as a rounded sound, never an unseen spawn. The leak
