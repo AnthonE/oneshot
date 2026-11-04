@@ -48,6 +48,12 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 sound = ["bevy/bevy_audio", "bevy/vorbis"]
 # Wayland beside X11 on Linux: needs libwayland-dev (the release builds have it).
 wayland = ["bevy/wayland"]
+# The browser's WebGPU module (after Gates' `webgpu`): ci/client.sh builds the
+# page's wasm twice, with and without this, and web/index.html loads the one
+# the browser can draw with. Bevy picks its GPU API when it is compiled and
+# drops every WebGL workaround under this, so it is a second module, not a
+# switch; build.rs names its absence on wasm32 `cfg(webgl2)`. Nothing natively.
+webgpu = ["bevy/webgpu"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 client-net = { path = "../client-net", features = ["native"] }
@@ -60,7 +66,14 @@ rustls-native-certs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Sound always in a browser (Web Audio needs nothing from the build box).
+# `webgl2` is in both modules: under `webgpu` Bevy takes the WebGPU path and
+# the GL backend is dead code (a feature can't take a feature away).
 bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis"] }
+# The wgpu Bevy resolves (one entry in Cargo.lock), named so the WebGPU module
+# can hand the device an error hook: Bevy re-exports neither `wgpu::Error`
+# nor the handler (look/gpu.rs, `watch`). `default-features = false`, or
+# wgpu's own defaults would put its WebGPU backend in the WebGL2 module too.
+wgpu = { version = "27", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"

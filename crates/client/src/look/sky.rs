@@ -1,7 +1,9 @@
 //! The sky and its clouds, at noon on a clear day: a seeded cloud field
-//! composed into a cubemap, with Gates' sky behind it in a browser (which
+//! composed into a cubemap, with Gates' sky behind it under WebGL2 (which
 //! has no atmosphere) and clear texels left to the atmosphere on the
-//! desktop.
+//! desktop and in the browser's WebGPU module (`gpu.rs`). What follows the
+//! GPU API is `cfg(webgl2)`; what follows the browser's one thread (the
+//! field's size, the composer's budget) stays `target_arch = "wasm32"`.
 //!
 //! Ported from Gates' `crates/client/src/render/sky.rs` (MIT, © 2026
 //! MoreRight DAO; NOTICE). Its weather, moon phase, underwater fog and the
@@ -89,7 +91,7 @@ use bevy::render::render_resource::{
 /// Cube face size in texels. 6 × 256² = 393k texels, 1.5 MB of RGBA8 on the
 /// desktop and under WebGPU; a quarter of that under WebGL2, where every
 /// re-upload is a WebGL texture rebuilt.
-pub const SKY_FACE: u32 = if cfg!(target_arch = "wasm32") { 128 } else { 256 };
+pub const SKY_FACE: u32 = if cfg!(webgl2) { 128 } else { 256 };
 
 /// Cloud-deck altitude, metres. Cumulus bases sit near a kilometre; the exact
 /// value only sets how fast the deck compresses toward the horizon.
@@ -138,7 +140,7 @@ const CLOUD_BASE: [f32; 3] = [0.42, 0.45, 0.52];
 /// Whether the deck carries a clear sky behind the clouds. Zero texels
 /// wherever the atmosphere draws (the desktop, and the browser's WebGPU
 /// module), for the reason above; a sky under WebGL2, which has none.
-pub const BAKE_BACKDROP: bool = cfg!(target_arch = "wasm32");
+pub const BAKE_BACKDROP: bool = cfg!(webgl2);
 
 /// The horizon's luminance over the zenith's. A clear sky is brightest at
 /// the horizon, where the eye looks through the most air: measured skies
@@ -473,7 +475,16 @@ const HUE_STEPS: usize = 512;
 /// the headroom they keep: [`deck_hue`] lifts a cloud top's blue by 1.5 at
 /// the zenith and more below, and a top that clipped would come out warm
 /// again. A browser has no atmosphere to undo and needs none.
-pub const DECK_GAIN: f32 = if BAKE_BACKDROP { 1.0 } else { 2.0 };
+pub const DECK_GAIN: f32 = deck_gain(BAKE_BACKDROP);
+
+/// [`DECK_GAIN`] for a cube with (`backdrop`) or without a sky baked in.
+pub const fn deck_gain(backdrop: bool) -> f32 {
+    if backdrop {
+        1.0
+    } else {
+        2.0
+    }
+}
 /// The browser's night sky floor (the desktop's atmosphere has its own).
 pub const NIGHT_SKY: [f32; 3] = [0.0015, 0.002, 0.0035];
 /// The warm glow a low sun puts on the browser's horizon near it.
@@ -967,9 +978,9 @@ impl SkyFog {
 /// periwinkle — measured 26 levels bluer than the desktop's in a SwiftShader
 /// browser. There this only evens the brightness: `grey / mean(T)`, the same
 /// in all three channels, so a cloud lands as bright as on the desktop and
-/// as grey. [`super::quality::GpuCaps::dual_source_blending`] says which.
+/// as grey. [`super::gpu::GpuCaps::dual_source_blending`] says which.
 pub fn deck_hue(y: f32) -> [f32; 3] {
-    deck_hue_for(y, true)
+    deck_hue_for(y, super::gpu::caps().dual_source_blending)
 }
 
 /// [`deck_hue`] for a composite through `T` per channel (`per_channel`) or

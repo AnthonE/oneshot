@@ -273,6 +273,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 ..default()
             }),
     )
+    // What the device can bind, read before `Startup` spawns the camera.
+    .add_plugins(look::gpu::GpuPlugin)
     .insert_non_send_resource(LinkRes(link))
     // The shell's ground until a level is spawned (`loading::settle` then
     // gives it the sky's): the frames before the first UI draw are the
@@ -942,6 +944,9 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // Which module this is and what it draws (`look/gpu.rs`).
+    set(&o, "gfx", look::gpu::api().into());
+    set(&o, "tier", look::gpu::tier().describe().into());
     // The screen's level is there with nothing over it (`loading::Settle`):
     // what `ci/client_shot.mjs` waits for before its seconds.
     set(&o, "ready", settle.shown().into());
@@ -1025,6 +1030,7 @@ mod web_start {
         };
         let door = super::door::Door::new(addr, hash, follow, signin, off);
         let mut app = super::game(door, o);
+        super::look::gpu::hook_panics();
         if !name.is_empty() {
             app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
         }
@@ -1043,6 +1049,7 @@ mod web_start {
         };
         let stage = super::look::fx::stage::Stage::parse(&query);
         let mut app = super::app(Box::new(super::link::Still::on(pose.2.map)), opts);
+        super::look::gpu::hook_panics();
         // `fx=<name>`: the fx stage instead of a fighter (`look/fx/stage.rs`).
         if let Some(s) = stage {
             super::look::fx::stage::install(&mut app, s);

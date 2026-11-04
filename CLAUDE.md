@@ -90,7 +90,11 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 9. **Guns:** `cargo test -p sim --test range` pins Halo 2's counts and times.
    `-- --ignored --nocapture` prints the table to tune by;
    `oneshot-server --map range` puts every gun on a pad to feel them.
-10. **The page is ≤ 9 MB gzipped** (`ci/client.sh`).
+10. **The page is ≤ 9 MB gzipped, each module** (`ci/client.sh`): the page is
+    built twice, `oneshot_client` (WebGL2) and `oneshot_client_gpu`
+    (`--features webgpu`, the desktop's frame), and picks one before either
+    downloads. What WebGL2 can't do is `cfg(webgl2)` (`build.rs`), never
+    `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
 11. **`crates/fx` is Gates'** (`crates/fx/tests/vendored.rs`).
 
 ## Commands
@@ -98,11 +102,13 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 ```
 ci/quick.sh [crate…]                                 # the local check
 ci/parity.sh                                         # native vs wasm
-ci/client.sh                                         # the client: clippy, native, the page into crates/client/dist
+ci/client.sh                                         # the client: clippy, native, the page's two modules into crates/client/dist
+ci/client.sh dev                                     # just the page, quickly (release, no size gate); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
-node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill
-node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo)
+node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too)
+node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo;
+                                                     #   GFX=webgpu for the WebGPU module, ?gfx=webgpu|webgl2 on the page)
 ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (Xvfb, lavapipe; title: … 2 0 0 0,
                                                      #   settings, pose='map=6&eye=…&look=…'); F12 in game saves one
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
@@ -117,9 +123,14 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 
 - The client is its own workspace. `cargo` at the root never builds it;
   `ci/client.sh` (or `cd crates/client`) does.
-- The page's real build (`--profile web`, fat LTO) is slow. `tools/fx.sh`
-  builds release for the stage, which is fine for looking but not for the
-  9 MB gate.
+- The page's real build (`--profile web`, fat LTO, two modules) is slow.
+  `ci/client.sh dev` and `tools/fx.sh` build release, which is fine for
+  looking but not for the 9 MB gate (`ci/publish_web.sh` refuses a dev page).
+- Headless Chromium draws WebGPU only on SwiftShader's Vulkan
+  (`--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader
+  --use-angle=vulkan`); with ANGLE on GL the device is lost at once and the
+  page falls back to WebGL2. Its adapter is a software one, so the page
+  takes WebGPU there only with `?gfx=webgpu`.
 - `ci/client_shot.mjs` and `ci/desktop_shot.sh` count their seconds from
   when the screen is there (`loading.rs`: level dressed, shaders compiled),
   then on the wall clock, so whether a 50 ms flash is in the shot is luck.

@@ -4,6 +4,7 @@
 pub mod bodies;
 pub mod fill;
 pub mod fx;
+pub mod gpu;
 pub mod grass;
 pub mod ground;
 pub mod guns;

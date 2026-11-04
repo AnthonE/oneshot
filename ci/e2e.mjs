@@ -11,6 +11,16 @@
 // Proving Grounds (id 0) unless named. Build first: ci/client.sh and
 // `cargo build --release -p server`. A screenshot goes to
 // traces/e2e-<mode>-<map>.png.
+//
+// The page is two modules (ci/client.sh): here it must pick WebGL2, since
+// SwiftShader's WebGPU adapter is a software one and the page refuses
+// those. `E2E_WEBGPU=1` then smokes the WebGPU module too, in a Chromium
+// that draws WebGPU on SwiftShader's Vulkan (`--enable-unsafe-webgpu
+// --enable-features=Vulkan --use-vulkan=swiftshader --use-angle=vulkan`;
+// with ANGLE on GL the device is destroyed at once): the page must still
+// refuse the software adapter by itself, and with `?gfx=webgpu` the module
+// must start, keep its device (no fall back to WebGL2), join and draw.
+// Off by default: another browser and another minute or two.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -179,13 +189,55 @@ try {
     // GPU draws 60+ and confirms 99%+ (the native e2e).
     [`predictions confirmed once steady (${(ratio * 100).toFixed(1)}% of ${counted}, ${fps.toFixed(1)} fps overall)`, ratio >= 0.9],
     ['scored a kill', (s?.kills ?? 0) >= 1],
+    [`drew with the WebGL2 module (${s?.gfx}: ${s?.tier})`, s?.gfx === 'webgl2'],
   );
 } catch (e) {
   errors.push(String(e));
 } finally {
   await browser.close();
-  server.kill('SIGINT'); // at once; SIGTERM would drain
 }
+if (process.env.E2E_WEBGPU === '1') {
+  const gpu = await chromium.launch({
+    executablePath: exe,
+    args: ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader',
+      '--use-angle=vulkan', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
+  });
+  try {
+    // Left to itself, the page refuses SwiftShader's adapter.
+    const p = await gpu.newPage({ viewport: { width: 480, height: 270 } });
+    watch(p);
+    await p.goto(`${url}?name=pick`);
+    await p.waitForFunction(() => !!window.__oneshotGfx, null, { timeout: 120000 }).catch(() => {});
+    const picked = await p.evaluate(() => [window.__oneshotGfx, document.getElementById('gfx')?.title]);
+    checks.push([`webgpu: the page refused the software adapter (${picked.join(': ')})`, picked[0] === 'webgl2']);
+    await p.close();
+    // Forced: the WebGPU module joins and draws, and keeps its device.
+    const g = await gpu.newPage({ viewport: { width: 480, height: 270 } });
+    const gpuErrors = [];
+    g.on('console', (m) => { if (/webgpu: |switching to WebGL2/.test(m.text())) gpuErrors.push(m.text().slice(0, 200)); });
+    watch(g);
+    await g.goto(`${url}?mode=${mode}&name=gpu&autoplay=1&lite=1&gfx=webgpu${mode ? '&capsules=1' : ''}`);
+    let w = null;
+    const t = Date.now();
+    while (Date.now() - t < 150000) {
+      await g.waitForTimeout(2000);
+      w = await g.evaluate(() => ({ ...(window.__oneshot ?? {}), page: window.__oneshotGfx, at: location.search }));
+      if (w.connected && w.frames >= 60 && (w.stats?.[0] ?? 0) > 200) break;
+    }
+    await g.screenshot({ path: `traces/e2e-webgpu-${mode}-${map}.png` });
+    console.log(`webgpu: ${w?.gfx}: ${w?.tier}; frames ${w?.frames}, snapshots ${w?.stats?.[0]}, kills ${w?.kills}`);
+    checks.push(
+      [`webgpu: the WebGPU module drew (${w?.gfx}, ${w?.at})`, w?.gfx === 'webgpu' && w?.page === 'webgpu'],
+      [`webgpu: kept its device${gpuErrors.length ? `: ${gpuErrors.slice(0, 2).join(' | ')}` : ''}`, gpuErrors.length === 0],
+      ['webgpu: connected, drew 60 frames, snapshots flowed', !!w?.connected && w.frames >= 60 && (w.stats?.[0] ?? 0) > 200],
+    );
+  } catch (e) {
+    errors.push(`webgpu: ${e}`);
+  } finally {
+    await gpu.close();
+  }
+}
+server.kill('SIGINT'); // at once; SIGTERM would drain
 // The 404 is the favicon or the sign-in SDK offline; anything else is ours.
 const real = errors.filter((e) => !/404|ERR_|elopros\.com/.test(e));
 checks.push([`no page errors${real.length ? `: ${real.slice(0, 3).join(' | ')}` : ''}`, real.length === 0]);

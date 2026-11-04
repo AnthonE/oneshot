@@ -10,8 +10,8 @@
 //!
 //! - **glow**: unlit, additive, HDR vertex colour. Sparks, flashes, fire,
 //!   tracers, arcs. A sprite carries its own halo and a streak is never
-//!   drawn under ~1.5 px wide, so it reads as light with bloom off (the
-//!   browser).
+//!   drawn under ~1.5 px wide, so it reads as light with bloom off
+//!   (WebGL2, or a device without room for it: `look/gpu.rs`).
 //! - **soft**: lit like the world, blended, sorted back to front. Dust,
 //!   grit, smoke, mist.
 //!
@@ -70,7 +70,8 @@ const HIGH: Caps = Caps {
     marks: 192,
     lights: 6,
 };
-/// A browser's (WebGL2), and `lite` (a software GPU).
+/// WebGL2's, and `lite` (a software GPU). The WebGPU module has the
+/// desktop's.
 const LOW: Caps = Caps {
     glow: 512,
     soft: 256,
@@ -260,11 +261,7 @@ pub fn setup(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let caps = if opts.lite || cfg!(target_arch = "wasm32") {
-        LOW
-    } else {
-        HIGH
-    };
+    let caps = if opts.lite || cfg!(webgl2) { LOW } else { HIGH };
     let sheet = images.add(atlas::sprite_image());
     let glow_mesh = meshes.add(pool_mesh(caps.glow));
     let soft_mesh = meshes.add(pool_mesh(caps.soft));

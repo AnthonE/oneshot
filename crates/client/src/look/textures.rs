@@ -73,7 +73,9 @@ fn repeat() -> ImageSamplerDescriptor {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        anisotropy_clamp: if cfg!(target_arch = "wasm32") { 4 } else { 16 },
+        // Gates' 4 for WebGL2's integrated GPUs; the desktop's 16 wherever
+        // the desktop's frame is drawn (the WebGPU module too).
+        anisotropy_clamp: if cfg!(webgl2) { 4 } else { 16 },
         ..default()
     }
 }
