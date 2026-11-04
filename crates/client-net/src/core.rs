@@ -165,9 +165,10 @@ pub struct NetCore {
     pred: Fighter,
     pred_v: Option<Vehicle>,
     /// Before the newest predicted tick, for drawing between ticks (the
-    /// body, and the vehicle's middle).
+    /// body, and the vehicle's middle and heading).
     prev_pos: V3,
     prev_v: V3,
+    prev_vyaw: u16,
     /// A correction still easing out, added to the drawn position.
     offset: V3,
 
@@ -220,6 +221,7 @@ impl NetCore {
             pred_v: None,
             prev_pos: V3::ZERO,
             prev_v: V3::ZERO,
+            prev_vyaw: 0,
             offset: V3::ZERO,
             newest: None,
             ack_bits: 0,
@@ -288,9 +290,14 @@ impl NetCore {
             let s = self.seq;
             self.inputs[s as usize % RING] = input;
             self.prev_pos = self.pred.body.pos;
-            self.prev_v = self.pred_v.map_or(V3::ZERO, |v| v.pos);
+            let was = self.pred_v;
             let phase = self.phase();
             let fired = step_own(&mut self.pred, &mut self.pred_v, phase, &input, &self.map).fired;
+            // A vehicle just got into starts where it is, not at the origin.
+            if let Some(v) = was.or(self.pred_v) {
+                self.prev_v = v.pos;
+                self.prev_vyaw = v.yaw;
+            }
             self.after[s as usize % RING] = self.pred;
             self.after_v[s as usize % RING] = self.pred_v;
             if fired {
@@ -498,6 +505,7 @@ impl NetCore {
                 self.stats.corrections += 1;
             }
             let before = self.pred.body.pos;
+            let before_v = self.pred_v;
             let mut f = auth;
             let mut v = auth_v;
             if ahead < RING as u32 {
@@ -510,14 +518,24 @@ impl NetCore {
                 }
             }
             self.pred_v = v;
-            self.prev_v = v.map_or(V3::ZERO, |v| v.pos);
+            // The tick being drawn through moves with the correction, so
+            // the step between ticks stays the one already on screen.
+            match (before_v, v) {
+                (Some(b), Some(n)) => self.prev_v = self.prev_v + (n.pos - b.pos),
+                (_, Some(n)) => {
+                    self.prev_v = n.pos;
+                    self.prev_vyaw = n.yaw;
+                }
+                _ => {}
+            }
             let jump = before - f.body.pos;
-            self.offset = if alive_changed || (self.offset + jump).len() > SNAP_M {
-                V3::ZERO
+            if alive_changed || (self.offset + jump).len() > SNAP_M {
+                self.offset = V3::ZERO;
+                self.prev_pos = f.body.pos;
             } else {
-                self.offset + jump
-            };
-            self.prev_pos = f.body.pos;
+                self.offset = self.offset + jump;
+                self.prev_pos = self.prev_pos - jump;
+            }
             self.pred = f;
         }
         if l.wrapping_sub(self.acked_seq) < 0x8000_0000 {
@@ -535,10 +553,23 @@ impl NetCore {
         p.deaths = auth.deaths;
     }
 
-    /// Our own fighter as predicted, its body drawn at `alpha` of the way
-    /// through the current tick, with any correction still easing out.
+    /// How far the clock is through the tick after the newest predicted
+    /// one, 0 to 1: what is drawn is that far from the tick before the
+    /// newest to the newest, one tick behind the clock, so every frame
+    /// moves by its own share of time (Gates' `ClientClock::alpha`).
+    pub fn alpha(&self) -> f32 {
+        let a = (self.t - self.seq as f64) as f32;
+        if a.is_nan() {
+            0.0
+        } else {
+            a.clamp(0.0, 1.0)
+        }
+    }
+
+    /// Our own fighter as predicted, its body drawn at [`Self::alpha`]
+    /// between the last two ticks, with any correction still easing out.
     pub fn own(&self) -> (&Fighter, V3) {
-        let a = (self.t - (self.seq as f64 - 1.0)).clamp(0.0, 1.0) as f32;
+        let a = self.alpha();
         let p = self.prev_pos + (self.pred.body.pos - self.prev_pos) * a + self.offset;
         (&self.pred, p)
     }
@@ -549,9 +580,12 @@ impl NetCore {
     pub fn own_vehicle(&self) -> Option<(Vehicle, V3, f32)> {
         let v = self.pred_v?;
         self.pred.riding()?;
-        let a = (self.t - (self.seq as f64 - 1.0)).clamp(0.0, 1.0) as f32;
+        let a = self.alpha();
         let p = self.prev_v + (v.pos - self.prev_v) * a;
-        Some((v, p, yaw_rad(v.yaw)))
+        // The short way round between the two headings.
+        let turn = v.yaw.wrapping_sub(self.prev_vyaw) as i16 as f32;
+        let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0);
+        Some((v, p, yaw))
     }
 
     /// The vehicles we were sent (but the one we ride in), between the two
