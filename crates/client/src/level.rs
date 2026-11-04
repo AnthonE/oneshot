@@ -60,7 +60,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
         12 => ("alien", HULL_TILE_M, Color::srgb(0.54, 0.38, 0.77)),
-        13 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.21, 0.44)),
+        13 => ("alien", HULL_TILE_M, Color::srgb(0.34, 0.25, 0.51)),
         14 => ("alien", HULL_TILE_M, Color::srgb(0.75, 0.22, 0.36)),
         15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
         DECK => ("deck", 4.0, Color::WHITE),
@@ -437,7 +437,7 @@ fn look(i: u8) -> (Color, f32, f32) {
         7 => (Color::srgb(0.36, 0.39, 0.44), 0.45, 0.55),         // hull
         11 => (Color::srgb(0.66, 0.68, 0.71), 0.45, 0.55),        // plate
         12 | VAULT => (Color::srgb(0.45, 0.35, 0.65), 0.35, 0.7), // the ship's hull
-        RIB => (Color::srgb(0.2, 0.14, 0.32), 0.3, 0.8),          // its ribs, plain and dark
+        RIB => (Color::srgb(0.24, 0.17, 0.37), 0.3, 0.8),         // its ribs, plain and dark
         13 => (Color::srgb(0.25, 0.2, 0.38), 0.4, 0.7),
         14 => (Color::srgb(0.6, 0.25, 0.4), 0.35, 0.7),
         15 => (Color::srgb(0.25, 0.35, 0.65), 0.35, 0.7),
