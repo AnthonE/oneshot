@@ -170,10 +170,18 @@ impl Faces {
     }
 }
 
+/// How many facets a round solid of radius `r` is drawn with: one every
+/// 25 cm or so of its rim. A mark lies on these, not on the true circle
+/// (`look/fx/surface.rs`).
+pub fn round_sides(r: f32) -> usize {
+    ((core::f32::consts::TAU * r / 0.25).ceil() as usize).clamp(24, 128)
+}
+
 /// A round solid: its side smooth (a facet every 25 cm or so of its
-/// rim), its top a disc; about its own middle, y from 0 to `h`.
+/// rim: [`round_sides`]), its top a disc; about its own middle, y from 0
+/// to `h`.
 fn round_mesh(r: f32, h: f32, tile: f32) -> Mesh {
-    let n = ((core::f32::consts::TAU * r / 0.25).ceil() as usize).clamp(24, 128);
+    let n = round_sides(r);
     let mut f = Faces::default();
     let ring = |i: usize| {
         let a = i as f32 / n as f32 * core::f32::consts::TAU;

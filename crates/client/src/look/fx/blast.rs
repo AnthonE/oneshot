@@ -193,8 +193,11 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
         } else {
             Vec3::Y
         };
+        // Laid on the floor as drawn: over a ramp's slope, the terrain's
+        // folds, and faded off a platform's edge.
         if let Some((k, size)) = super::marks::kind(Weapon::Blast, dust) {
-            fx.marks.place(k, size * big, Vec3::new(at.x, floor, at.z), up, dust);
+            fx.marks
+                .lay(scene.map, k, size * big, Vec3::new(at.x, floor, at.z), up, dust);
         }
     }
 }

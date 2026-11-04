@@ -80,7 +80,9 @@ fn run() -> Result<(), String> {
             None => None,
         };
         let autoplay = flag("--autoplay");
-        let fxdemo = flag("--fxdemo");
+        // `--fxstage N`: the demo's stage N alone (`look/fx/demo.rs`).
+        let fxstage = arg("--fxstage").and_then(|n| n.parse::<u32>().ok());
+        let fxdemo = flag("--fxdemo") || fxstage.is_some();
         let front = match mode {
             Some(m) => Start::Join(m),
             None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
@@ -95,7 +97,7 @@ fn run() -> Result<(), String> {
             capsules: flag("--capsules"),
             graphics: flag("--graphics"),
             fxdemo,
-            fxstage: None,
+            fxstage,
             open,
             front,
         };

@@ -19,7 +19,10 @@
 //!
 //! - `atlas`: the generated sprite sheet. `pool`: the pools and their mesh.
 //! - `table`: what a blow throws by weapon × matter, and each gun's look.
-//! - `marks`: bullet holes and scorches, one mesh.
+//! - `surface`: what a blow met in the map as drawn: the face, its normal,
+//!   its matter.
+//! - `marks`: holes, chips, dents, gashes, scuffs, blood and scorches laid
+//!   on the drawn surface, one mesh. `chips`: lit debris, one mesh.
 //! - `shots`: gunfire, ours drawn the frame it breaks; impacts by matter.
 //! - `blast`: explosions and a wreck's fire. `flying`: rockets and frags.
 //! - `bodies`: shields flaring and breaking, landings, spawns, pickups.
@@ -29,6 +32,7 @@
 pub mod atlas;
 pub mod blast;
 pub mod bodies;
+pub mod chips;
 pub mod demo;
 pub mod flying;
 pub mod hulls;
@@ -36,6 +40,7 @@ pub mod marks;
 pub mod pool;
 pub mod shots;
 pub mod stage;
+pub mod surface;
 pub mod table;
 
 use bevy::camera::visibility::NoFrustumCulling;
@@ -44,6 +49,7 @@ use bevy::prelude::*;
 use client_net::core::{Drawn, DrawnVehicle};
 use proto::EventState;
 use sim::events::Kind;
+use sim::geom::V3;
 use sim::map::Map;
 
 use crate::look::quality::{Effects, Tier};
@@ -137,6 +143,12 @@ pub struct Fx {
     pub glow: Pool,
     pub soft: Pool,
     pub marks: marks::Marks,
+    pub chips: chips::Chips,
+    /// The faces near a blow, reused for the casts that find them.
+    pub near: surface::Near,
+    /// Slots that bled this frame (one splat a body a frame, however many
+    /// pellets: `shots.rs`, then the hits in `on_events`).
+    bled: u64,
     pub shake: Shake,
     pub caps: Caps,
     flashes: [Flash; MAX_LIGHTS],
@@ -201,9 +213,10 @@ impl Fx {
     }
 
     /// What `weapon` striking `matter` at `at` throws, around `away` (the
-    /// surface's normal, or back toward the shooter), thinned with distance;
-    /// and the mark it leaves.
-    pub fn impact(&mut self, weapon: Weapon, matter: Matter, at: Vec3, away: Vec3) {
+    /// surface's normal, or back toward the shooter), thinned with distance:
+    /// its particles, its chips, a shield's blink. How much was thrown
+    /// (`table::lod`), 0 past the range anything is.
+    pub fn impact(&mut self, weapon: Weapon, matter: Matter, at: Vec3, away: Vec3) -> f32 {
         let def = table::effect(weapon, matter);
         let dist = at.distance(self.eye);
         let lod = if weapon == Weapon::Blast {
@@ -217,13 +230,37 @@ impl Fx {
                 self.emit(layer, n, at, away, matter);
             }
         }
+        let n = table::scaled(def.chips, lod);
+        if n > 0 {
+            self.chips.throw(at, away, matter, n);
+        }
         if matter == Matter::Shield && lod > 0.0 {
             self.flash(at, ZAP_FLASH);
         }
+        lod
+    }
+
+    /// [`Fx::impact`] on the map's face `hit`, and the mark the blow leaves
+    /// there (`marks.rs`).
+    pub fn strike(&mut self, map: &Map, weapon: Weapon, matter: Matter, hit: &surface::Hit) {
+        let lod = self.impact(weapon, matter, hit.at, hit.normal);
+        if lod <= 0.0 {
+            return;
+        }
         if let Some((k, size)) = marks::kind(weapon, matter) {
-            if lod > 0.0 {
-                self.marks.place(k, size, at, away, matter);
-            }
+            self.marks.lay(map, k, size, hit.at, hit.normal, matter);
+        }
+    }
+
+    /// Blood for the body in `slot`, struck at `at` along `dir`: its spray
+    /// and drops every blow, a splat behind it once a frame (a shotgun's
+    /// pellets are a dozen blows).
+    pub fn bleed(&mut self, map: &Map, slot: u8, weapon: Weapon, at: Vec3, dir: Vec3) {
+        let lod = self.impact(weapon, Matter::Flesh, at, -dir);
+        let bit = 1u64 << (slot % 64);
+        if lod > 0.0 && self.bled & bit == 0 {
+            self.bled |= bit;
+            self.marks.bleed(map, at, dir);
         }
     }
 
@@ -322,10 +359,15 @@ pub fn setup(
     }
     let mut marks = marks::Marks::new(caps.marks);
     marks::setup(&mut commands, &mut marks, &mut meshes, &mut mats, &mut images);
+    let mut chips = chips::Chips::default();
+    chips::setup(&mut commands, &mut chips, &mut meshes, &mut mats);
     commands.insert_resource(Fx {
         glow: Pool::new(caps.glow, false),
         soft: Pool::new(caps.soft, true),
         marks,
+        chips,
+        near: surface::Near::default(),
+        bled: 0,
         shake: Shake::default(),
         caps,
         flashes: [Flash::default(); MAX_LIGHTS],
@@ -371,6 +413,8 @@ pub struct Scene<'a> {
     pub others: &'a [Drawn],
     pub vehicles: &'a [DrawnVehicle],
     pub me: u8,
+    /// Where we aim (a unit vector): our own swing's way.
+    pub aim: Vec3,
     /// The time now, seconds.
     pub t: f32,
 }
@@ -378,6 +422,7 @@ pub struct Scene<'a> {
 /// One frame's events: what they look like.
 pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
     fx.flashed = 0;
+    fx.bled = 0;
     for e in events {
         let from = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
         let to = Vec3::new(e.end.x, e.end.y, e.end.z);
@@ -387,23 +432,65 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
             k if k == Kind::Wreck as u8 => blast::wreck(fx, scene, from),
             k if k == Kind::Spawn as u8 => bodies::spawned(fx, from),
             k if k == Kind::Pickup as u8 => bodies::picked_up(fx, from),
-            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e.a, e.c, from),
-            // A hit on us: the frame flinches, by how much it took.
-            k if k == Kind::Hit as u8 && e.b == scene.me && e.a != scene.me => {
-                let pts = e.c as f32;
-                let t = (crate::look::shake::HURT_TRAUMA_BASE + pts * crate::look::shake::HURT_TRAUMA_PER_PT)
-                    .min(crate::look::shake::HURT_TRAUMA_MAX);
-                fx.shake.add(t);
-                let (p, y) = (fx.shake.rand(), fx.shake.rand());
-                fx.shake.kick(Vec3::new(p, y, 0.0) * crate::look::shake::FLINCH_RAD);
+            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e, from),
+            k if k == Kind::Hit as u8 => {
+                // A hit on us: the frame flinches, by how much it took.
+                if e.b == scene.me && e.a != scene.me {
+                    let pts = e.c as f32;
+                    let t = (crate::look::shake::HURT_TRAUMA_BASE + pts * crate::look::shake::HURT_TRAUMA_PER_PT)
+                        .min(crate::look::shake::HURT_TRAUMA_MAX);
+                    fx.shake.add(t);
+                    let (p, y) = (fx.shake.rand(), fx.shake.rand());
+                    fx.shake.kick(Vec3::new(p, y, 0.0) * crate::look::shake::FLINCH_RAD);
+                }
+                hurt(fx, scene, e, from);
             }
             _ => {}
         }
     }
 }
 
+/// Health taken (a hit's part 1 or 2), where the server told us the body
+/// stood (it sends the place only of a body we may know of): blood behind
+/// it, along the way from whoever struck it, unless a round's line already
+/// bled it this frame (`shots.rs`). Our own body bleeds on the world, not
+/// in front of our eyes.
+fn hurt(fx: &mut Fx, scene: &Scene, e: &EventState, feet: Vec3) {
+    if !(e.part == 1 || e.part == 2) || e.pos == V3::ZERO {
+        return;
+    }
+    let chest = feet + Vec3::Y * 1.0;
+    let from = if e.a == scene.me {
+        Some(fx.eye)
+    } else {
+        scene
+            .others
+            .iter()
+            .find(|d| d.slot == e.a && d.slot != e.b)
+            .map(|d| Vec3::new(d.pos.x, d.pos.y + 1.4, d.pos.z))
+    };
+    let dir = match from {
+        Some(f) if f.distance(chest) > 0.3 && e.a != e.b => (chest - f).normalize(),
+        _ => {
+            let a = fx.range(0.0, core::f32::consts::TAU);
+            Vec3::new(a.cos(), -0.3, a.sin()).normalize()
+        }
+    };
+    let bit = 1u64 << (e.b % 64);
+    if fx.bled & bit != 0 {
+        return;
+    }
+    if e.b == scene.me {
+        fx.bled |= bit;
+        fx.marks.bleed(scene.map, chest, dir);
+        return;
+    }
+    fx.bleed(scene.map, e.b, Weapon::Melee, chest, dir);
+}
+
 /// Every frame, after the camera is placed: the pools step and are copied
-/// into their meshes, the wrecks burn, the lights dim, the marks fade.
+/// into their meshes, the wrecks burn, the lights dim, the marks fade, the
+/// chips fly.
 #[allow(clippy::type_complexity)]
 pub fn draw(
     time: Res<Time>,
@@ -420,6 +507,13 @@ pub fn draw(
     if let Some(mesh) = fx.marks.fade(dt).then(|| meshes.get_mut(fx.marks.mesh())).flatten() {
         fx.marks.write(mesh);
     }
+    // Written, then stepped: a chip is drawn once where it was born.
+    if fx.chips.needs_write() {
+        if let Some(mesh) = meshes.get_mut(fx.chips.mesh()) {
+            fx.chips.write(mesh);
+        }
+    }
+    fx.chips.step(dt);
     for (FlashLight(i), mut light, mut tf, mut vis) in &mut lights {
         let f = &mut fx.flashes[*i];
         if f.left <= 0.0 {

@@ -952,7 +952,7 @@ pub(crate) fn view(
     }
     // The effects demo stands its camera in one place (drawing only).
     if opts.fxdemo {
-        *t = look::fx::demo::pose(&core.map);
+        *t = look::fx::demo::pose(&core.map, opts.fxstage);
     }
     // Shake and kick: the drawn camera only, never the aim we send.
     let o = fx.shake.step(time.delta_secs());
@@ -1020,11 +1020,17 @@ pub(crate) fn happened(
     {
         let others = s.core.others(now_ms);
         let vehicles = s.core.vehicles(now_ms);
+        let dir = Vec3::new(
+            look.pitch.cos() * look.yaw.cos(),
+            look.pitch.sin(),
+            look.pitch.cos() * look.yaw.sin(),
+        );
         let scene = look::fx::Scene {
             map: &s.core.map,
             others: &others,
             vehicles: &vehicles,
             me: s.core.slot,
+            aim: dir,
             t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, &events);
@@ -1032,11 +1038,6 @@ pub(crate) fn happened(
         let (f, p) = s.core.own();
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = Vec3::new(p.x, p.y + h, p.z);
-        let dir = Vec3::new(
-            look.pitch.cos() * look.yaw.cos(),
-            look.pitch.sin(),
-            look.pitch.cos() * look.yaw.sin(),
-        );
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
         look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
     }
@@ -1151,6 +1152,7 @@ fn fly(
         &mut commands,
         &mut fx,
         &models,
+        &core.map,
         core.latest().proj(),
         &others,
         time.elapsed_secs(),

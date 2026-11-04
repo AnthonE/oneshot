@@ -102,6 +102,7 @@ pub fn projectiles(
     commands: &mut Commands,
     fx: &mut Fx,
     models: &Models,
+    map: &sim::map::Map,
     proj: &[ProjState],
     others: &[Drawn],
     t: f32,
@@ -111,7 +112,7 @@ pub fn projectiles(
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
         light(fx, p);
     }
-    ended(fx, proj, others, t, dt);
+    ended(fx, map, proj, others, t, dt);
     // The models in flight, kept: each projectile takes the nearest shown
     // model of its kind (so a rocket's trail stays its own), else a hidden
     // one, else a new one; the rest are hidden. Never despawned: a model
@@ -351,8 +352,10 @@ pub fn crystal(fx: &mut Fx, p: &ProjState) {
 }
 
 /// Rounds of light that were flying last frame and are gone now: where they
-/// ended, and what that looks like.
-fn ended(fx: &mut Fx, proj: &[ProjState], others: &[Drawn], t: f32, dt: f32) {
+/// ended, and what that looks like; an ion bolt that ended on the map
+/// leaves a burn on the face it met (`marks.rs`), only ever for a bolt the
+/// server sent us.
+fn ended(fx: &mut Fx, map: &sim::map::Map, proj: &[ProjState], others: &[Drawn], t: f32, dt: f32) {
     let last = std::mem::take(&mut fx.last_light);
     let mut taken = vec![false; proj.len()];
     for was in &last {
@@ -385,6 +388,9 @@ fn ended(fx: &mut Fx, proj: &[ProjState], others: &[Drawn], t: f32, dt: f32) {
             BOLT | CHARGE => {
                 let big = if was.kind == CHARGE { 2.0 } else { 1.0 };
                 splash(fx, at, -wv.normalize_or(Vec3::Y), big);
+                if in_body(others, at).is_none() {
+                    burn(fx, map, wp, wv, dt, big);
+                }
             }
             // The cannon's ball ends in a Blast event (`blast.rs`).
             _ => {}
@@ -392,6 +398,28 @@ fn ended(fx: &mut Fx, proj: &[ProjState], others: &[Drawn], t: f32, dt: f32) {
     }
     fx.last_light.clear();
     fx.last_light.extend(proj.iter().filter(|p| !modelled(p.kind)).copied());
+}
+
+/// The face a bolt from `wp` flying `wv` met in its last frame, if it met
+/// one near enough to be where it ended, and the burn it left there.
+fn burn(fx: &mut Fx, map: &sim::map::Map, wp: Vec3, wv: Vec3, dt: f32, big: f32) {
+    let speed = wv.length();
+    if speed < 1e-3 || super::table::lod(wp.distance(fx.eye)) <= 0.0 {
+        return;
+    }
+    let dir = wv / speed;
+    let reach = speed * dt * 2.0 + 0.5;
+    if let Some(hit) = super::surface::cast(map, &mut fx.near, wp - dir * 0.2, dir, reach) {
+        let matter = super::surface::matter(map, hit.on);
+        fx.marks.lay(
+            map,
+            super::marks::Kind::Scorch,
+            super::marks::BURN_M * big,
+            hit.at,
+            hit.normal,
+            matter,
+        );
+    }
 }
 
 /// The fighter whose body `at` is in, if we draw them.
