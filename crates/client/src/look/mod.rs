@@ -2,9 +2,11 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod bodies;
+pub mod cliffs;
 pub mod cloud_shadow;
 pub mod deck;
 pub mod fill;
+pub mod fresnel;
 pub mod fx;
 pub mod gpu;
 pub mod grass;
@@ -20,6 +22,7 @@ pub mod rain;
 pub mod rainbow;
 pub mod render_scale;
 pub mod rig;
+pub mod rock;
 pub mod shafts;
 pub mod shake;
 pub mod shield;
@@ -28,3 +31,4 @@ pub mod sky;
 pub mod stars;
 pub mod textures;
 pub mod viewmodel;
+pub mod weathering;

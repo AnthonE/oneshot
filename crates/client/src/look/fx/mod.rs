@@ -288,7 +288,8 @@ pub fn setup(
         base_color_texture: Some(sheet),
         perceptual_roughness: 1.0,
         metallic: 0.0,
-        reflectance: 0.0,
+        // A puff is not a surface (`fresnel::NO_SURFACE`).
+        reflectance: super::fresnel::NO_SURFACE,
         alpha_mode: AlphaMode::Blend,
         double_sided: true,
         cull_mode: None,

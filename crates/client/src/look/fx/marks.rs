@@ -107,6 +107,13 @@ pub struct Marks {
     rng: u32,
     dirty: bool,
     mesh: Handle<Mesh>,
+    /// Collision boxes drawn as rock that stands back from them
+    /// (`rock.rs`' masses, out of bounds): a round stopped there stopped
+    /// behind the drawn rock, and its mark would hang in the air.
+    pub bare: Vec<(Vec3, Vec3)>,
+    /// The rock skin over the terrain (`cliffs.rs`): a mark on the ground
+    /// is laid on the shell drawn over it, not under it.
+    pub lift: Option<std::sync::Arc<crate::look::cliffs::Lift>>,
 }
 
 impl Marks {
@@ -117,6 +124,8 @@ impl Marks {
             rng: 0x2545_f491,
             dirty: false,
             mesh: Handle::default(),
+            bare: Vec::new(),
+            lift: None,
         }
     }
 
@@ -132,6 +141,17 @@ impl Marks {
     /// oldest is the faintest.
     pub fn place(&mut self, kind: Kind, size: f32, at: Vec3, normal: Vec3, matter: Matter) {
         let n = normal.normalize_or(Vec3::Y);
+        let near =
+            |lo: Vec3, hi: Vec3| at.cmpge(lo - Vec3::splat(0.01)).all() && at.cmple(hi + Vec3::splat(0.01)).all();
+        if self.bare.iter().any(|&(lo, hi)| near(lo, hi)) {
+            return;
+        }
+        let mut at = at;
+        if let Some((ground, lift)) = self.lift.as_ref().and_then(|l| l.at(at.x, at.z)) {
+            if (at.y - ground).abs() < 0.05 && lift > 0.0 {
+                at.y += lift;
+            }
+        }
         let i = self.marks.iter().position(|m| m.left <= 0.0).unwrap_or_else(|| {
             let i = self.next;
             self.next = (self.next + 1) % self.marks.len();

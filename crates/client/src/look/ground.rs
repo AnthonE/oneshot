@@ -4,7 +4,8 @@
 //! where the map's mood rains and crossed by its cloud deck's shadows
 //! (`cloud_shadow.rs`). After Gates' `render/ground_splat.rs` (MIT, NOTICE):
 //! its extension of `StandardMaterial`, its texture arrays, its sizes;
-//! without the island's roads, blight, snow and caustics.
+//! without the island's roads, blight, snow and caustics. The rock skin
+//! over its rock faces (`cliffs.rs`) wears it too, its value off `UV_1`.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -58,6 +59,7 @@ pub fn material(
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,
+            reflectance: super::fresnel::DIELECTRIC,
             ..default()
         },
         extension: Ground {

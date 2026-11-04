@@ -2,11 +2,24 @@
 //! and ramps: `sim::solid`), its ground, its launchers and its light. What
 //! you see is what you collide with and what stops bullets.
 //! Rebuilt whole on each welcome (a cup's next heat may be another map).
+//!
+//! The surfaces over that shape (`look/weathering.rs`, `look/rock.rs`,
+//! `look/cliffs.rs`) keep it: a box is weathered in its shading only, a
+//! rock box's faces are faceted in their shading only and stay its planes,
+//! the terrain's rock skin lies within centimetres of the sim's ground,
+//! and only a rock box nobody can reach (out of bounds, clear of its edge)
+//! is drawn as a rock mass inside it.
+
+use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use sim::terrain::HEIGHT_Q;
+use sim::terrain::{TerrainDef, HEIGHT_Q};
+
+use crate::look::fresnel;
+use crate::look::rock::{self, Mass};
+use crate::look::weathering::{self, Block, Shape, Surface};
 
 /// Everything a level spawned, to take down with it.
 #[derive(Component)]
@@ -53,6 +66,64 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         15 => ("alien", 8.0, Color::srgb(0.55, 0.68, 1.0)),
         _ => return None,
     })
+}
+
+/// The rock look (tools/maps/compile.mjs LOOKS).
+const ROCK: u8 = 6;
+
+/// A mass's face is dressed with pieces while more than this share of it
+/// shows past the boxes in front of it.
+const MASS_OPEN: f32 = 0.05;
+
+fn v3(v: sim::geom::V3) -> Vec3 {
+    Vec3::new(v.x, v.y, v.z)
+}
+
+/// A dressed look's material before its textures, its wet and its weather:
+/// its tint, roughness and metal, and the dielectric F0 it claims
+/// (`look/fresnel.rs`). `None` for a look drawn plain.
+pub fn box_material(look: u8) -> Option<StandardMaterial> {
+    let (set, _, tint) = dress(look)?;
+    let (roughness, metallic) = match (look, set) {
+        (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
+        (12..=15, _) => (1.0, 0.7),
+        (_, "metal") => (0.55, 0.35),
+        _ => (0.9, 0.0),
+    };
+    Some(StandardMaterial {
+        base_color: tint,
+        perceptual_roughness: roughness,
+        metallic,
+        reflectance: fresnel::DIELECTRIC,
+        ..default()
+    })
+}
+
+/// What a look is, as it weathers (`look/weathering.rs`).
+fn surface(look: u8) -> Surface {
+    match look {
+        1 | 5 => Surface::Steel,
+        3 | 4 | 7 | 11 => Surface::Paint,
+        ROCK => Surface::Rock,
+        FLOOR => Surface::Floor,
+        12..=15 => Surface::Hull,
+        _ => Surface::Concrete,
+    }
+}
+
+/// The key a map's rock relief is drawn with: one field per map, so
+/// neighbouring rock boxes' faces carry on as one rock.
+fn rock_key(id: u8) -> u32 {
+    (id as u32 + 1).wrapping_mul(0x2545_F491) ^ 0x0c1f_f5ed
+}
+
+/// A box's own key (a mass's layout), from where it stands.
+fn box_key(mid: Vec3, id: u8) -> u32 {
+    let q = |v: f32| (v * 16.0).round() as i32 as u32;
+    q(mid.x).wrapping_mul(73_856_093)
+        ^ q(mid.y).wrapping_mul(19_349_663)
+        ^ q(mid.z).wrapping_mul(83_492_791)
+        ^ rock_key(id)
 }
 
 /// Faces as the meshes below are built: positions, normals, texture
@@ -207,54 +278,28 @@ fn turned_mesh(size: Vec3, mid: Vec3, rot: Quat, tile: f32) -> Mesh {
     m
 }
 
-/// A box's mesh with its texture laid in world metres, face by face, so
-/// neighbouring boxes line up and nothing stretches.
-fn box_mesh(size: Vec3, mid: Vec3, tile: f32) -> Mesh {
-    let mut m = Mesh::from(Cuboid::new(size.x, size.y, size.z));
-    let pos: Vec<[f32; 3]> = match m.attribute(Mesh::ATTRIBUTE_POSITION) {
-        Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
-        _ => Vec::new(),
-    };
-    let nor: Vec<[f32; 3]> = match m.attribute(Mesh::ATTRIBUTE_NORMAL) {
-        Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
-        _ => Vec::new(),
-    };
-    let uv: Vec<[f32; 2]> = pos
-        .iter()
-        .zip(&nor)
-        .map(|(p, n)| {
-            let w = Vec3::from_array(*p) + mid;
-            let n = Vec3::from_array(*n).abs();
-            let (u, v) = if n.y > n.x && n.y > n.z {
-                (w.x, w.z)
-            } else if n.x > n.z {
-                (w.z, -w.y)
-            } else {
-                (w.x, -w.y)
-            };
-            [u / tile, v / tile]
-        })
-        .collect();
-    m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
-    let _ = m.generate_tangents();
-    m
-}
+/// A box still in its plain colour (a mass waits for its pieces first).
+type Undressed = (Without<Dressed>, Without<Mass>);
 
-/// The level's ground and boxes in their textures, once those are ready.
+/// The level's ground and boxes in their textures, once those are ready:
+/// the ground (and its rock skin) in one splat material, every textured
+/// box weathered (`look/weathering.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn dress_level(
     mut commands: Commands,
     tex: Res<crate::look::textures::Textures>,
     mut ground_mats: ResMut<Assets<crate::look::ground::GroundMaterial>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut level_mats: ResMut<Assets<weathering::LevelMaterial>>,
     ground: Query<Entity, (With<GroundMesh>, Without<Dressed>)>,
-    boxes: Query<(Entity, &BoxLook), Without<Dressed>>,
+    boxes: Query<(Entity, &BoxLook, Option<&Block>), Undressed>,
     grass: Query<Entity, (With<GrassPart>, Without<Dressed>)>,
     mood: Res<crate::look::mood::MoodNow>,
 ) {
     // The rain's wet on everything it falls on (`look/rain.rs`); none
     // under a roof.
     let wet = if mood.roofed { 0.0 } else { mood.mood.wet };
+    let dusty = mood.mood.dust > 0.0;
     let Some((albedo, normal)) = tex.ground.clone() else {
         return;
     };
@@ -266,6 +311,7 @@ pub fn dress_level(
                 double_sided: true,
                 cull_mode: None,
                 perceptual_roughness: 0.9,
+                reflectance: fresnel::DIELECTRIC,
                 ..default()
             });
             for e in grass.iter() {
@@ -273,30 +319,31 @@ pub fn dress_level(
             }
         }
     }
+    // One material for the ground and the skin over it, so the two are one
+    // surface where they meet and the deck's shadows cross both.
+    let mut ground_mat = None;
     for e in ground.iter() {
-        let m = ground_mats.add(crate::look::ground::material(
-            albedo.clone(),
-            normal.clone(),
-            crate::look::cloud_shadow::CloudShadowParams::off(wet),
-        ));
+        let m = ground_mat
+            .get_or_insert_with(|| {
+                ground_mats.add(crate::look::ground::material(
+                    albedo.clone(),
+                    normal.clone(),
+                    crate::look::cloud_shadow::CloudShadowParams::off(wet),
+                ))
+            })
+            .clone();
         commands
             .entity(e)
             .remove::<MeshMaterial3d<StandardMaterial>>()
             .insert((MeshMaterial3d(m), Dressed));
     }
-    for (e, look) in boxes.iter() {
-        let Some((set, _, tint)) = dress(look.0) else {
+    for (e, look, block) in boxes.iter() {
+        let (Some(base), Some((set, _, _))) = (box_material(look.0), dress(look.0)) else {
             commands.entity(e).insert(Dressed);
             continue;
         };
         let Some((albedo, normal)) = tex.set(set) else {
             continue;
-        };
-        let (roughness, metallic) = match (look.0, set) {
-            (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
-            (12..=15, _) => (1.0, 0.7),
-            (_, "metal") => (0.55, 0.35),
-            _ => (0.9, 0.0),
         };
         // With the photographed roughness and occlusion, the numbers scale
         // the photograph's (its roughness is about 0.6 on average).
@@ -304,13 +351,13 @@ pub fn dress_level(
         let scale = if orm.is_some() { ROUGH_SCALE } else { 1.0 };
         // A set that glows (the alien hull's veins): in its look's colour.
         let glow = tex.emissive(set);
-        let (tint, rough) = crate::look::rain::wetted(tint, (roughness * scale).min(1.0), wet);
-        let m = mats.add(StandardMaterial {
+        let (tint, rough) =
+            crate::look::rain::wetted(base.base_color, (base.perceptual_roughness * scale).min(1.0), wet);
+        let m = StandardMaterial {
             base_color: tint,
             base_color_texture: Some(albedo),
             normal_map_texture: Some(normal),
             perceptual_roughness: rough,
-            metallic,
             metallic_roughness_texture: orm.clone(),
             occlusion_texture: orm,
             emissive: if glow.is_some() {
@@ -319,9 +366,20 @@ pub fn dress_level(
                 LinearRgba::BLACK
             },
             emissive_texture: glow,
-            ..default()
-        });
-        commands.entity(e).insert((MeshMaterial3d(m), Dressed));
+            ..base
+        };
+        let mut ec = commands.entity(e);
+        match block {
+            Some(b) => {
+                let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
+                ec.remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert(MeshMaterial3d(level_mats.add(w)));
+            }
+            None => {
+                ec.insert(MeshMaterial3d(mats.add(m)));
+            }
+        }
+        ec.insert(Dressed);
     }
 }
 
@@ -374,11 +432,58 @@ fn look(i: u8) -> (Color, f32, f32) {
     }
 }
 
+/// The ground at vertex (i, j): its slope (rise/run, by central
+/// differences) and its splat weights (sand, grass, gravel, rock): rock
+/// where it is steep, gravel down in the creek, grass up on the hills,
+/// sand the rest. The rock skin grows on the same rock (`look/cliffs.rs`).
+pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize) -> (f32, [f32; 4]) {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
+    let dx = (h((i + 1).min(nx - 1), j) - h(i.saturating_sub(1), j)) / (2.0 * t.cell);
+    let dz = (h(i, (j + 1).min(nz - 1)) - h(i, j.saturating_sub(1))) / (2.0 * t.cell);
+    let slope = (dx * dx + dz * dz).sqrt();
+    let y = h(i, j);
+    let rock = ((slope - 0.35) / 0.4).clamp(0.0, 1.0);
+    let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
+    let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * (1.0 - rock) * (1.0 - gravel);
+    let sand = (1.0 - rock - gravel - grass).max(0.0);
+    (slope, [sand, grass, gravel, rock])
+}
+
+/// The ground's vertex normals: each triangle's (the sim's split) weighted
+/// by its angle at the vertex, as Bevy's `compute_smooth_normals` does;
+/// here so the rock skin fades into exactly these.
+pub(crate) fn ground_normals(t: &TerrainDef) -> Vec<Vec3> {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let p = |k: usize| {
+        Vec3::new(
+            t.x0 + (k % nx) as f32 * t.cell,
+            t.heights[k] as f32 / HEIGHT_Q,
+            t.z0 + (k / nx) as f32 * t.cell,
+        )
+    };
+    let mut n = vec![Vec3::ZERO; nx * nz];
+    for j in 0..nz - 1 {
+        for i in 0..nx - 1 {
+            let a = j * nx + i;
+            let (b, c) = (a + 1, a + nx);
+            let d = c + 1;
+            for tri in [[a, d, b], [a, c, d]] {
+                let q = tri.map(p);
+                let face = (q[1] - q[0]).cross(q[2] - q[0]).normalize_or_zero();
+                for (v, o1, o2) in [(0, 1, 2), (1, 2, 0), (2, 0, 1)] {
+                    n[tri[v]] += face * (q[o1] - q[v]).angle_between(q[o2] - q[v]);
+                }
+            }
+        }
+    }
+    n.into_iter().map(|v| v.normalize_or(Vec3::Y)).collect()
+}
+
 /// The ground mesh: the sim's vertices and its split of each cell (low
 /// corner to high corner), with its splat weights in the vertex colour
-/// (sand, grass, gravel, rock): rock where it is steep, gravel down in the
-/// creek, grass up on the hills, sand the rest.
-fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
+/// ([`ground_point`]).
+fn terrain_mesh(t: &TerrainDef) -> Mesh {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
     let mut pos = Vec::with_capacity(nx * nz);
@@ -386,15 +491,7 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
     for j in 0..nz {
         for i in 0..nx {
             pos.push([t.x0 + i as f32 * t.cell, h(i, j), t.z0 + j as f32 * t.cell]);
-            let dx = (h((i + 1).min(nx - 1), j) - h(i.saturating_sub(1), j)) / (2.0 * t.cell);
-            let dz = (h(i, (j + 1).min(nz - 1)) - h(i, j.saturating_sub(1))) / (2.0 * t.cell);
-            let slope = (dx * dx + dz * dz).sqrt();
-            let y = h(i, j);
-            let rock = ((slope - 0.35) / 0.4).clamp(0.0, 1.0);
-            let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
-            let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * (1.0 - rock) * (1.0 - gravel);
-            let sand = (1.0 - rock - gravel - grass).max(0.0);
-            col.push([sand, grass, gravel, rock]);
+            col.push(ground_point(t, i, j).1);
         }
     }
     let mut idx = Vec::with_capacity((nx - 1) * (nz - 1) * 6);
@@ -407,12 +504,12 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
             idx.extend_from_slice(&[a, d, b, a, c, d]);
         }
     }
-    let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+    let nrm: Vec<[f32; 3]> = ground_normals(t).into_iter().map(|n| n.to_array()).collect();
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
-        .with_inserted_indices(Indices::U32(idx));
-    m.compute_smooth_normals();
-    m
+        .with_inserted_indices(Indices::U32(idx))
 }
 
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
@@ -433,13 +530,51 @@ pub fn build(
     let (lo, hi) = (map.lo, map.hi);
     let (cx, cz) = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let half = (hi.0 - lo.0).max(hi.1 - lo.1) * 0.5 + 8.0;
+    // The ground under a point, where a block's grime starts.
+    let ground_at = |x: f32, z: f32| map.terrain.as_ref().and_then(|t| t.height(x, z)).unwrap_or(0.0);
+    // Every box as the others' faces are cut by (`rock::covers`): a light
+    // strip wins every shared plane, the floor none; a mass merged into
+    // another is not drawn.
+    let floor_size = 2.0 * half + 40.0;
+    let mut all: Vec<rock::Other> = map
+        .boxes
+        .iter()
+        .zip(&map.looks)
+        .map(|(b, &l)| rock::Other {
+            wins: strip(l).is_some(),
+            ..rock::Other::new(v3(b.min), v3(b.max))
+        })
+        .collect();
+    if def.terrain.is_none() {
+        all.push(rock::Other::new(
+            Vec3::new(cx - floor_size * 0.5, -0.2, cz - floor_size * 0.5),
+            Vec3::new(cx + floor_size * 0.5, 0.0, cz + floor_size * 0.5),
+        ));
+    }
+    let is_mass = |i: usize, o: &rock::Other| map.looks[i] == ROCK && rock::is_mass(o.min, o.max, lo, hi);
+    // Two masses that are one box between them (a mirrored cliff across
+    // the middle) are drawn as that box: their shared planes and their
+    // layouts would otherwise be drawn twice over.
+    for i in 0..map.boxes.len() {
+        for j in i + 1..map.boxes.len() {
+            let (a, b) = (all[i], all[j]);
+            if a.gone || b.gone || !is_mass(i, &a) || !is_mass(j, &b) {
+                continue;
+            }
+            if let Some((min, max)) = rock::union_box(a.min, a.max, b.min, b.max) {
+                all[i].min = min;
+                all[i].max = max;
+                all[j].gone = true;
+            }
+        }
+    }
 
-    for (b, &l) in map.boxes.iter().zip(&map.looks) {
+    for (i, (b, &l)) in map.boxes.iter().zip(&map.looks).enumerate() {
         let (color, roughness, metallic) = look(l);
         let size = b.max - b.min;
-        let mid = (b.min + b.max) * 0.5;
         let tile = dress(l).map_or(2.0, |d| d.1);
         if let Some(c) = strip(l) {
+            let mid = (b.min + b.max) * 0.5;
             commands.spawn((
                 LevelPart,
                 Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
@@ -454,22 +589,71 @@ pub fn build(
             ));
             continue;
         }
-        commands.spawn((
+        let me = all[i];
+        if me.gone {
+            continue;
+        }
+        let (min, max) = (me.min, me.max);
+        let mid = (min + max) * 0.5;
+        let mut block = Block {
+            mid,
+            half: (max - min) * 0.5,
+            turn: (1.0, 0.0),
+            shape: Shape::Box,
+            ground: ground_at(mid.x, mid.z),
+            own_value: true,
+        };
+        // Its faces, less what the other boxes hide or draw themselves.
+        let cover = rock::covers(min, max, i, &all);
+        // A rock box's faces faceted where anyone can see them; one out of
+        // bounds and clear of its edge drawn as a mass (`look/rock.rs`).
+        let out = max.x <= lo.0 || min.x >= hi.0 || max.z <= lo.1 || min.z >= hi.1;
+        let seen = match (l == ROCK, out) {
+            (false, _) => [false; 6],
+            (true, false) => rock::SEEN_ALL,
+            (true, true) => rock::seen_from(min, max, lo, hi),
+        };
+        let mut soup = rock::Soup::default();
+        rock::faceted_box(&mut soup, min, max, mid, rock_key(id), seen, &cover);
+        if soup.is_empty() {
+            // Inside other boxes: nothing of it shows.
+            continue;
+        }
+        let mass = (l == ROCK && is_mass(i, &me)).then(|| {
+            // Its drawn edges are the rock's, not the box's: no wear on them.
+            block.shape = Shape::Other;
+            // Pieces only along a face something of which shows.
+            let mut seen = seen;
+            for (f, s) in seen.iter_mut().enumerate() {
+                let (lu, lv) = rock::face_size(min, max, f);
+                *s &= cover[f].open(lu, lv) > MASS_OPEN;
+            }
+            Mass {
+                min,
+                max,
+                seen,
+                key: box_key(mid, id),
+                tile,
+                cover: cover.clone(),
+            }
+        });
+        let mut e = commands.spawn((
             LevelPart,
             BoxLook(l),
-            Mesh3d(meshes.add(box_mesh(
-                Vec3::new(size.x, size.y, size.z),
-                Vec3::new(mid.x, mid.y, mid.z),
-                tile,
-            ))),
+            block,
+            Mesh3d(meshes.add(soup.mesh(tile))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: color,
                 perceptual_roughness: roughness,
                 metallic,
+                reflectance: fresnel::DIELECTRIC,
                 ..default()
             })),
-            Transform::from_xyz(mid.x, mid.y, mid.z),
+            Transform::from_translation(mid),
         ));
+        if let Some(m) = mass {
+            e.insert(m);
+        }
     }
     for (sol, &l) in map.solids.iter().zip(&map.solid_looks) {
         let (color, roughness, metallic) = look(l);
@@ -486,9 +670,44 @@ pub fn build(
                 base_color: color,
                 perceptual_roughness: roughness,
                 metallic,
+                reflectance: fresnel::DIELECTRIC,
                 ..default()
             },
         });
+        let hy = (sol.y1 - sol.y0) * 0.5;
+        let bounds = sol.bounds();
+        let block = match sol.shape {
+            sim::solid::Shape::Round { x, z, r } => Block {
+                mid: Vec3::new(x, sol.y0 + hy, z),
+                half: Vec3::new(r, hy, r),
+                turn: (1.0, 0.0),
+                shape: Shape::Round,
+                ground: ground_at(x, z),
+                own_value: false,
+            },
+            // No wear: an arc is turned segments overlapping at their
+            // ends, and each one's end edges are inside the next.
+            sim::solid::Shape::Turned { x, z, hx, hz, c, s } => Block {
+                mid: Vec3::new(x, sol.y0 + hy, z),
+                half: Vec3::new(hx, hy, hz),
+                turn: (c, s),
+                shape: Shape::Other,
+                ground: ground_at(x, z),
+                own_value: false,
+            },
+            sim::solid::Shape::Ramp { .. } => {
+                let (a, b) = (bounds.min, bounds.max);
+                let mid = Vec3::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
+                Block {
+                    mid,
+                    half: Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z) * 0.5,
+                    turn: (1.0, 0.0),
+                    shape: Shape::Other,
+                    ground: ground_at(mid.x, mid.z),
+                    own_value: false,
+                }
+            }
+        };
         let (mesh, at) = match sol.shape {
             sim::solid::Shape::Round { x, z, r } => {
                 (round_mesh(r, sol.y1 - sol.y0, tile), Transform::from_xyz(x, sol.y0, z))
@@ -511,7 +730,7 @@ pub fn build(
         if glow.is_some() {
             e.insert(bevy::light::NotShadowCaster);
         } else {
-            e.insert(BoxLook(l));
+            e.insert((BoxLook(l), block));
         }
     }
     for &(p, c, lm) in map.light.lamps {
@@ -541,38 +760,70 @@ pub fn build(
                     bevy::light::NotShadowCaster,
                 ));
             }
+            let soil = mats.add(StandardMaterial {
+                base_color: Color::srgb(0.75, 0.62, 0.48),
+                perceptual_roughness: 0.95,
+                reflectance: fresnel::DIELECTRIC,
+                ..default()
+            });
             commands.spawn((
                 LevelPart,
                 GroundMesh,
                 Mesh3d(meshes.add(terrain_mesh(t))),
-                MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.75, 0.62, 0.48),
-                    perceptual_roughness: 0.95,
-                    ..default()
-                })),
+                MeshMaterial3d(soil.clone()),
                 Transform::default(),
             ));
+            // The rock skin over its rock faces (`look/cliffs.rs`): no
+            // shadow of its own, the ground under it casts it.
+            let (skin, lift) = crate::look::cliffs::skin(t, lo, hi, rock_key(id));
+            if let Some(skin) = skin {
+                commands.spawn((
+                    LevelPart,
+                    GroundMesh,
+                    Mesh3d(meshes.add(skin)),
+                    MeshMaterial3d(soil),
+                    Transform::default(),
+                    bevy::light::NotShadowCaster,
+                ));
+            }
+            commands.insert_resource(crate::look::cliffs::SkinLift(Some(Arc::new(lift))));
         }
         None => {
             // The floor as a slab whose top is y = 0, textured in world
             // metres like the boxes on it.
-            let size = 2.0 * half + 40.0;
+            let size = floor_size;
             let floor = if map.light.floor == 255 { FLOOR } else { map.light.floor };
             commands.spawn((
                 LevelPart,
                 BoxLook(floor),
-                Mesh3d(meshes.add(box_mesh(
-                    Vec3::new(size, 0.2, size),
-                    Vec3::new(cx, -0.1, cz),
-                    dress(floor).map_or(4.0, |d| d.1),
-                ))),
+                // A floor: no edges anyone sees, and no grime (its ground
+                // is far under it), only its mottle and its dust.
+                Block {
+                    mid: Vec3::new(cx, -0.1, cz),
+                    half: Vec3::new(size * 0.5, 0.1, size * 0.5),
+                    turn: (1.0, 0.0),
+                    shape: Shape::Other,
+                    ground: -1.0e3,
+                    own_value: false,
+                },
+                Mesh3d(meshes.add({
+                    // Cut where the boxes stand on it.
+                    let me = all.len() - 1;
+                    let (min, max) = (all[me].min, all[me].max);
+                    let mut soup = rock::Soup::default();
+                    let cover = rock::covers(min, max, me, &all);
+                    rock::faceted_box(&mut soup, min, max, Vec3::new(cx, -0.1, cz), 0, [false; 6], &cover);
+                    soup.mesh(dress(floor).map_or(4.0, |d| d.1))
+                })),
                 MeshMaterial3d(mats.add(StandardMaterial {
                     base_color: Color::srgb(0.42, 0.43, 0.45),
                     perceptual_roughness: 0.95,
+                    reflectance: fresnel::DIELECTRIC,
                     ..default()
                 })),
                 Transform::from_xyz(cx, -0.1, cz),
             ));
+            commands.insert_resource(crate::look::cliffs::SkinLift(None));
         }
     }
     for l in &map.launchers {
@@ -583,6 +834,7 @@ pub fn build(
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: Color::srgb(0.27, 0.82, 1.0),
                 emissive: LinearRgba::rgb(0.1, 0.56, 0.75) * LAUNCHER_GLOW,
+                reflectance: fresnel::DIELECTRIC,
                 ..default()
             })),
             Transform::from_xyz((a.x + b.x) * 0.5, a.y + 0.04, (a.z + b.z) * 0.5),
@@ -595,6 +847,7 @@ pub fn build(
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: Color::srgb(0.79, 0.64, 0.15),
                 metallic: 0.4,
+                reflectance: fresnel::DIELECTRIC,
                 ..default()
             })),
             Transform::from_xyz(p.pos.x, p.pos.y + 0.03, p.pos.z),

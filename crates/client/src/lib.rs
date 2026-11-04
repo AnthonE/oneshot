@@ -319,6 +319,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
+    // The boxes' weathering (`look/weathering.rs`).
+    .add_plugins(look::weathering::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     // The sky (look/deck.rs and its layers) under each map's mood.
     .add_plugins(MaterialPlugin::<look::deck::CloudMaterial>::default())
@@ -331,11 +333,13 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::SkyClock>()
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
+    .init_resource::<look::cliffs::SkinLift>()
     .add_systems(
         Startup,
         (
             setup,
             look::textures::load,
+            look::rock::load,
             look::guns::load,
             look::fx::setup,
             look::prewarm::setup,
@@ -369,7 +373,19 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         Update,
-        (look::prewarm::warm, look::prewarm::warm_models, look::prewarm::retire).chain(),
+        (
+            look::prewarm::warm,
+            look::prewarm::warm_level,
+            look::prewarm::warm_models,
+            look::prewarm::retire,
+        )
+            .chain(),
+    )
+    // The marks keep off what is drawn back from its box, and onto the
+    // rock skin (`look/rock.rs`, `look/cliffs.rs`).
+    .add_systems(
+        Update,
+        (look::rock::bare_marks, look::cliffs::lift_marks).after(level::dress_level),
     )
     .add_systems(PreUpdate, look::fx::retier.after(look::quality::resolve))
     .add_systems(
@@ -381,6 +397,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             rebuild,
             look::textures::prepare,
             look::textures::mip_models,
+            look::rock::dress_masses,
             level::dress_level,
             look::grass::cull,
             look::bodies::graph,

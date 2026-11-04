@@ -2,7 +2,8 @@
 // weights in the vertex colour (sand, grass, gravel, rock), each tiled in
 // world x and z at its own size, then Bevy's PBR lighting, the rain's wet
 // and the cloud deck's shadows (`cloud_shadow.wgsl`). After Gates'
-// shaders/ground_splat.wgsl (MIT, NOTICE).
+// shaders/ground_splat.wgsl (MIT, NOTICE). The rock skin (look/cliffs.rs)
+// carries its value multiplier in `UV_1.x`; the ground has no `UV_1`.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -39,6 +40,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         c += textureSample(albedo_tex, albedo_smp, uv, i).rgb * tint[i].rgb * w[i];
         n += (textureSample(normal_tex, normal_smp, uv, i).rgb * 2.0 - 1.0) * w[i];
     }
+
+#ifdef VERTEX_UVS_B
+    // The skin's facets: recessed darker, proud lighter.
+    c *= in.uv_b.x;
+#endif
 
     // The map's normal, laid on the ground: u runs along world x, v along
     // world z, around the mesh's own normal.
