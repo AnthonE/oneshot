@@ -30,8 +30,8 @@ const WARM_AHEAD_M: f32 = 0.5;
 /// measured; their first 1e-4 was a visible speck).
 const WARM_SIZE_M: f32 = 0.000_02;
 
-/// How far behind the eye the warm fighter stands.
-const BEHIND_M: f32 = 3.0;
+/// Where the warm fighter stands: far under every map.
+const UNDER_M: f32 = -500.0;
 
 /// A warm draw, and its frames left once it can draw.
 #[derive(Component)]
@@ -120,17 +120,15 @@ pub fn warm_models(
                 commands.entity(ev.entity).insert(SceneDone);
             });
     }
-    // Behind the eye at full size: a body's meshes and shells are never
-    // culled (`bodies::dress`), so it is queued, and drawn where nothing
-    // can see it. In front, however small, its shell (pushed out along the
-    // normals by a fixed distance, `shield.wgsl`) would be a disc.
+    // Far under the map at full size: a body's meshes and shells are never
+    // culled (`bodies::dress`), so it is queued, shadow and all, where
+    // neither it nor its shadow (cast down, away from the floor) can be
+    // seen. In front of the eye, however small, its shell (pushed out along
+    // the normals by a fixed distance, `shield.wgsl`) would be a disc.
     let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, 0);
-    commands.entity(body).insert((
-        Warming(WARM_FRAMES),
-        WarmBody,
-        Transform::from_xyz(0.0, -1.0, BEHIND_M),
-        ChildOf(eye),
-    ));
+    commands
+        .entity(body)
+        .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));
 }
 
 /// Counts each warm draw down once it can draw, then lets it go.

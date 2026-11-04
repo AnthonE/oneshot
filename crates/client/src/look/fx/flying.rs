@@ -42,9 +42,12 @@ const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
 
-/// A shown model this near a projectile of its kind is taken to be it (a
-/// rocket's 30 m/s at a slow frame's 1/10 s is 3 m).
-const REASSIGN_M: f32 = 4.0;
+/// A shown model within a frame's flight of a projectile of its kind (twice
+/// its speed by the frame, or a snapshot's interval if longer) and this
+/// much more is taken to be it.
+const REASSIGN_M: f32 = 1.0;
+/// A snapshot's interval, s: positions move by at least this much flight.
+const SNAP_S: f32 = 2.0 / sim::consts::TICK_HZ as f32;
 
 /// A new model for `p`, kept from then on.
 fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &ProjState) -> Entity {
@@ -119,21 +122,47 @@ pub fn projectiles(
         .collect();
     let mut taken = vec![false; pool.len()];
     let mut go: Vec<(Entity, ProjState, bool)> = Vec::new();
-    for p in proj.iter().filter(|p| modelled(p.kind)) {
-        let rocket = p.kind == ROCKET;
+    let live: Vec<&ProjState> = proj.iter().filter(|p| modelled(p.kind)).collect();
+    let mut matched = vec![false; live.len()];
+    // First every shown model to its nearest projectile of its kind within
+    // a frame's flight (closest pairs first, so a new rocket never takes
+    // one still flying), then the rest a free model, hidden ones first,
+    // then a new one.
+    let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
+    for (i, p) in live.iter().enumerate() {
         let at = place(p).translation;
-        let free = |k: usize, pool: &[(Entity, bool, Vec3, bool)], taken: &[bool]| !taken[k] && pool[k].1 == rocket;
-        let near = (0..pool.len())
-            .filter(|&k| free(k, &pool, &taken) && pool[k].3 && pool[k].2.distance(at) < REASSIGN_M)
-            .min_by(|&a, &b| pool[a].2.distance(at).total_cmp(&pool[b].2.distance(at)));
-        match near.or_else(|| (0..pool.len()).find(|&k| free(k, &pool, &taken))) {
+        let reach = Vec3::new(p.vel.x, p.vel.y, p.vel.z).length() * dt.max(SNAP_S) * 2.0 + REASSIGN_M;
+        for (k, m) in pool.iter().enumerate() {
+            let d = m.2.distance(at);
+            if m.1 == (p.kind == ROCKET) && m.3 && d < reach {
+                pairs.push((d, i, k));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, i, k) in pairs {
+        if !matched[i] && !taken[k] {
+            matched[i] = true;
+            taken[k] = true;
+            go.push((pool[k].0, *live[i], false));
+        }
+    }
+    for (i, p) in live.iter().enumerate() {
+        if matched[i] {
+            continue;
+        }
+        let rocket = p.kind == ROCKET;
+        let free = (0..pool.len())
+            .filter(|&k| !taken[k] && pool[k].1 == rocket)
+            .min_by_key(|&k| pool[k].3);
+        match free {
             Some(k) => {
                 taken[k] = true;
-                go.push((pool[k].0, *p, near.is_none()));
+                go.push((pool[k].0, **p, true));
             }
             None => {
                 let e = spawn(commands, fx, models, p);
-                pool.push((e, rocket, at, true));
+                pool.push((e, rocket, place(p).translation, true));
                 taken.push(true);
             }
         }

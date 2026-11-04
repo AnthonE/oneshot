@@ -85,14 +85,18 @@ type BodyParts<'w, 's> = (
     KeptVis<'w, 's>,
 );
 
-/// Shows or hides a kept entity, writing only on a change.
-fn show(vis: &mut KeptVis, e: Entity, on: bool) {
-    if let Ok(mut v) = vis.get_mut(e) {
-        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
+/// Shows or hides a kept entity, writing only on a change; whether it
+/// changed.
+fn show(vis: &mut KeptVis, e: Entity, on: bool) -> bool {
+    let Ok(mut v) = vis.get_mut(e) else {
+        return false;
+    };
+    let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+    let changed = *v != want;
+    if changed {
+        *v = want;
     }
+    changed
 }
 
 /// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
@@ -336,18 +340,18 @@ fn pump(
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let (dual, scope) = {
+    let (dual, scope, driving) = {
         let f = link.0.session().core.own().0;
-        (
-            f.dual(),
-            if f.alive {
-                sim::arms::arm(f.gun().arm).zoom.max(1)
-            } else {
-                1
-            },
-        )
+        let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
+        let scope = if f.alive {
+            sim::arms::arm(f.gun().arm).zoom.max(1)
+        } else {
+            1
+        };
+        (f.dual(), scope, driving)
     };
-    look.zoom = button(MouseButton::Right) && !auto.on && !dual;
+    // No scope at the wheel: the chase camera doesn't narrow.
+    look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
     if grabbed {
         let sens = if look.zoom { SENS / scope as f32 } else { SENS };
         look.yaw += motion.delta.x * sens;
@@ -436,7 +440,9 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
     look.yaw = dz.atan2(dx);
     look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
-    let fire = if auto.frames & 1 == 1 { FIRE } else { 0 };
+    // Tap by tick, not by frame: down if the last tick had it up. Frames
+    // outnumbering ticks would otherwise hold it down for good.
+    let fire = if f.last_buttons & FIRE == 0 { FIRE } else { 0 };
     let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
 }
@@ -539,7 +545,7 @@ fn draw_fighters(
                 e
             }
         };
-        show(&mut vis, e, true);
+        let _ = show(&mut vis, e, true);
         if opts.capsules {
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
@@ -566,8 +572,13 @@ fn draw_fighters(
         );
     }
     for (slot, (e, ..)) in &drawn.fighters {
-        if !others.iter().any(|d| d.slot == *slot) {
-            show(&mut vis, *e, false);
+        if !others.iter().any(|d| d.slot == *slot) && show(&mut vis, *e, false) {
+            // Shown again, it starts its clip afresh, not fading from the
+            // pose it was hidden in (a kill cam's victim got up off the
+            // floor).
+            if let Ok(mut b) = bodies.get_mut(*e) {
+                b.afresh();
+            }
         }
     }
 }
@@ -598,7 +609,7 @@ fn draw_vehicles(
     }
     for &(slot, p, yaw) in &list {
         if let Some(&e) = drawn.vehicles.get(&slot) {
-            show(&mut vis, e, true);
+            let _ = show(&mut vis, e, true);
         }
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
@@ -658,7 +669,7 @@ fn draw_vehicles(
     }
     for (slot, e) in &drawn.vehicles {
         if !list.iter().any(|v| v.0 == *slot) {
-            show(&mut vis, *e, false);
+            let _ = show(&mut vis, *e, false);
         }
     }
 }

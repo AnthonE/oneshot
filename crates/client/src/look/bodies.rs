@@ -132,6 +132,8 @@ pub struct Body {
     /// The shield's shell (`shield.rs`): its material and its meshes.
     shell: Handle<ShieldMaterial>,
     shells: Vec<Entity>,
+    /// Shown again after hiding: its next clip starts at once.
+    fresh: bool,
 }
 
 /// A body spawned for `team` in `skin`: its root, which the caller places.
@@ -139,6 +141,12 @@ impl Body {
     /// Its scene has spawned and been dressed: it draws.
     pub fn dressed(&self) -> bool {
         !self.mats.is_empty()
+    }
+
+    /// Hidden: the next clip starts at once, not faded from this pose.
+    pub fn afresh(&mut self) {
+        self.clip = None;
+        self.fresh = true;
     }
 }
 
@@ -187,6 +195,7 @@ pub fn spawn(
         lit: 0.0,
         shell: Handle::default(),
         shells: Vec::new(),
+        fresh: false,
     });
     root
 }
@@ -434,7 +443,9 @@ pub fn pose(
                 .insert((AnimationGraphHandle(graph.handle.clone()), AnimationTransitions::new()));
         } else if let Ok((mut player, mut tr)) = playing.get_mut(p) {
             if body.clip != Some(clip) {
-                let a = tr.play(&mut player, graph.nodes[clip], FADE);
+                let fade = if body.fresh { Duration::ZERO } else { FADE };
+                body.fresh = false;
+                let a = tr.play(&mut player, graph.nodes[clip], fade);
                 if clip == DEATH {
                     a.set_repeat(RepeatAnimation::Never);
                 } else {
