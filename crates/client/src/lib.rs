@@ -13,6 +13,7 @@
 pub mod binds;
 pub mod config;
 pub mod hud;
+pub mod items;
 pub mod level;
 pub mod link;
 pub mod look;
@@ -248,6 +249,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
+    .init_resource::<items::Items>()
     .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
@@ -285,6 +287,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             look::bodies::graph,
             draw_fighters,
             draw_vehicles,
+            items::draw,
             fly,
             view,
             look::fx::draw,
@@ -304,7 +307,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
     } else {
-        app.add_systems(Startup, hud::setup);
+        app.add_systems(Startup, hud::setup)
+            .add_systems(Update, hud::prompt.after(hud::draw));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));

@@ -81,6 +81,9 @@ pub struct FeedText;
 pub struct CenterText;
 #[derive(Component)]
 pub struct NetText;
+/// What USE would take here (`items::offer`).
+#[derive(Component)]
+pub struct PromptText;
 #[derive(Component)]
 pub struct Reticle;
 #[derive(Component)]
@@ -185,6 +188,17 @@ pub fn setup(mut commands: Commands) {
             ..default()
         },
         children![(CenterText, text(crate::ui::display(32.0)))],
+    ));
+    // Under the crosshair: what USE would take.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(60.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(PromptText, text(crate::ui::semibold(20.0)))],
     ));
     // The crosshair, the hit marker and the damage arc, all centred on the
     // screen's middle.
@@ -616,6 +630,27 @@ pub fn draw(
         tr.rotation = Rot2::radians(a);
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+    }
+}
+
+/// The prompt under the crosshair: the USE key and what it would take.
+pub fn prompt(
+    link: NonSend<crate::LinkRes>,
+    binds: Res<crate::binds::Binds>,
+    mut q: Query<&mut Text, With<PromptText>>,
+) {
+    let s = link.0.session();
+    let line = if s.ready {
+        crate::items::offer(&s.core, link.0.now_ms())
+            .map(|what| format!("{}  {what}", binds.key(crate::binds::Action::Use)))
+    } else {
+        None
+    }
+    .unwrap_or_default();
+    for mut t in q.iter_mut() {
+        if t.0 != line {
+            t.0 = line.clone();
+        }
     }
 }
 
