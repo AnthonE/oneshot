@@ -303,9 +303,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // are exact complements, so this crosses over at 45° by construction.
     let w_top = pow(abs(pn.y), ground.wall.y);
     let w_wall = pow(p_sin, ground.wall.y);
+    // The light tier (`wall.z`, a software GPU) keeps the splat, the veto
+    // and the planar taps, and skips the wall planes and the rock face:
+    // a cliff pixel there costs twelve of the floor's.
+    let lite = ground.wall.z > 0.5;
     var wall_mix = 0.0;
     if p_sin > ground.wall.x {
-        wall_mix = w_wall / max(w_top + w_wall, 1e-6);
+        wall_mix = select(w_wall / max(w_top + w_wall, 1e-6), 0.0, lite);
     }
 
     var w = vec4<f32>(1.0, 0.0, 0.0, 0.0);
@@ -422,7 +426,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let near_fine = 1.0 - smoothstep(0.05, 0.25, fine_px);
     var rock_shade = 1.0;
     var rock_tilt = vec3<f32>(0.0);
-    if w.w > 0.002 {
+    if w.w > 0.002 && !lite {
         var shade = 1.0;
         var t_big = vec3<f32>(0.0);
         // Skipped where it would add nothing: every output of the block pass
@@ -487,12 +491,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // The swash: from under the water to `sea.y` above it the ground is
     // wet, darker and glossy, dry again `sea.z` higher, the line wandering
-    // a little so it is not a contour.
-    let wander = (value3(in.world_position.xyz / WET_WANDER_WAVE_M) - 0.5) * 2.0 * WET_WANDER_M;
-    let wet_top = ground.sea.x + ground.sea.y + wander;
-    let wet = 1.0 - smoothstep(wet_top, wet_top + ground.sea.z, in.world_position.y);
-    c = c * (1.0 - ground.sea.w * wet);
-    pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, WET_ROUGHNESS, wet);
+    // a little so it is not a contour. Only the band pays for its noise.
+    let wet_top = ground.sea.x + ground.sea.y;
+    if in.world_position.y < wet_top + ground.sea.z + WET_WANDER_M {
+        let wander = (value3(in.world_position.xyz / WET_WANDER_WAVE_M) - 0.5) * 2.0 * WET_WANDER_M;
+        let wet = 1.0 - smoothstep(wet_top + wander, wet_top + wander + ground.sea.z, in.world_position.y);
+        c = c * (1.0 - ground.sea.w * wet);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, WET_ROUGHNESS, wet);
+    }
 
     // The relief, blended as gradients. The planar taps' share is laid in
     // the ground's own frame (u along world x, the image's up toward -z,

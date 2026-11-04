@@ -53,7 +53,8 @@ pub struct GroundParams {
     /// how far the noise moves that, w = the noise's wavelength (m).
     pub cliff: Vec4,
     /// x = `sin(tilt)` where the wall planes turn on, y = the exponent the
-    /// two plane weights are raised to, z = 0, w = the floor under a normal
+    /// two plane weights are raised to, z = 1 on the light tier (no wall
+    /// planes, no rock face: a software GPU), w = the floor under a normal
     /// map's z before it becomes a gradient.
     pub wall: Vec4,
     /// x = the share of each 45° step between two wall planes over which
@@ -249,10 +250,12 @@ impl MaterialExtension for Ground {
 }
 
 /// The ground's material over its photographs, wet up from the sea at
-/// `sea_y` (the map's `light.sea`; not finite means no sea).
-pub fn material(albedo: Handle<Image>, normal: Handle<Image>, sea_y: f32) -> GroundMaterial {
+/// `sea_y` (the map's `light.sea`; not finite means no sea); `lite` is the
+/// light tier, which draws no wall planes or rock face.
+pub fn material(albedo: Handle<Image>, normal: Handle<Image>, sea_y: f32, lite: bool) -> GroundMaterial {
     let mut params = GroundParams::default();
     params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
+    params.wall.z = if lite { 1.0 } else { 0.0 };
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,

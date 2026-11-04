@@ -31,6 +31,21 @@ pub struct Dressed;
 #[derive(Component)]
 pub struct GrassPart;
 
+/// A tree's drawn parts (look::trees): decoration the light tier strips.
+#[derive(Component)]
+pub struct TreePart;
+
+/// The ground once the light tier has swapped in its coarser mesh.
+#[derive(Component)]
+pub struct Lightened;
+
+/// The light tier draws the ground on every this-many-th raster vertex: a
+/// software rasteriser pays per triangle, and a 1 m cell at twenty metres
+/// is under a pixel, so Dry Fork's 170k triangles cost it more than every
+/// pixel it shades. The sim still walks the full raster; the drawn ground
+/// is within a step of it on a bank.
+pub const LITE_TERRAIN_STEP: usize = 2;
+
 /// A material's roughness over the photograph's, which averages about 0.6.
 const ROUGH_SCALE: f32 = 1.5;
 
@@ -306,8 +321,10 @@ fn box_mesh(size: Vec3, mid: Vec3, tile: f32) -> Mesh {
 }
 
 /// The level's ground and boxes in their textures, once those are ready.
+#[allow(clippy::too_many_arguments)]
 pub fn dress_level(
     mut commands: Commands,
+    opts: Res<crate::Opts>,
     tex: Res<crate::look::textures::Textures>,
     mut ground_mats: ResMut<Assets<crate::look::ground::GroundMaterial>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
@@ -334,7 +351,12 @@ pub fn dress_level(
         }
     }
     for (e, g) in ground.iter() {
-        let m = ground_mats.add(crate::look::ground::material(albedo.clone(), normal.clone(), g.sea));
+        let m = ground_mats.add(crate::look::ground::material(
+            albedo.clone(),
+            normal.clone(),
+            g.sea,
+            opts.lite,
+        ));
         commands
             .entity(e)
             .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -482,13 +504,29 @@ const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
 /// (sand, grass, gravel, rock): rock where it is steep, gravel down in the
 /// creek, grass up on the hills, sand the rest.
 fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
+    terrain_mesh_at(t, 1)
+}
+
+/// The ground mesh on every `step`-th raster vertex (and the last), the
+/// splat judged at each kept vertex from the full raster; `step` 1 is the
+/// sim's own grid, [`LITE_TERRAIN_STEP`] the light tier's.
+pub fn terrain_mesh_at(t: &sim::terrain::TerrainDef, step: usize) -> Mesh {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let step = step.max(1);
+    let kept = |n: usize| -> Vec<usize> {
+        let mut v: Vec<usize> = (0..n).step_by(step).collect();
+        if v.last() != Some(&(n - 1)) {
+            v.push(n - 1);
+        }
+        v
+    };
+    let (xs, zs) = (kept(nx), kept(nz));
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
-    let mut pos = Vec::with_capacity(nx * nz);
-    let mut col = Vec::with_capacity(nx * nz);
+    let mut pos = Vec::with_capacity(xs.len() * zs.len());
+    let mut col = Vec::with_capacity(xs.len() * zs.len());
     let s = ((CREEK_STENCIL_M / t.cell).round() as usize).max(1);
-    for j in 0..nz {
-        for i in 0..nx {
+    for &j in &zs {
+        for &i in &xs {
             pos.push([t.x0 + i as f32 * t.cell, h(i, j), t.z0 + j as f32 * t.cell]);
             let dx = (h((i + 1).min(nx - 1), j) - h(i.saturating_sub(1), j)) / (2.0 * t.cell);
             let dz = (h(i, (j + 1).min(nz - 1)) - h(i, j.saturating_sub(1))) / (2.0 * t.cell);
@@ -505,6 +543,7 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
             col.push([sand, grass, gravel, rock]);
         }
     }
+    let (nx, nz) = (xs.len(), zs.len());
     let mut idx = Vec::with_capacity((nx - 1) * (nz - 1) * 6);
     for j in 0..nz - 1 {
         for i in 0..nx - 1 {
@@ -688,6 +727,7 @@ pub fn build(
             for (mesh, mat, at) in crate::look::trees::tree(kind, seed, r, sol.y1 - sol.y0, cards, meshes, mats) {
                 commands.spawn((
                     LevelPart,
+                    TreePart,
                     Mesh3d(mesh),
                     MeshMaterial3d(mat),
                     Transform::from_xyz(x, sol.y0, z).mul_transform(at),

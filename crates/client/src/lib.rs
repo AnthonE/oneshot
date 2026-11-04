@@ -842,15 +842,38 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA, no grass.
+/// A software GPU's frame: no shadows, no SMAA, no grass, no sea, no
+/// trees (the sim still has the trunks), and the ground on a coarser grid
+/// (`level::LITE_TERRAIN_STEP`); the ground's own shader stays, as does
+/// every box.
+#[allow(clippy::too_many_arguments)]
 fn lite(
     mut commands: Commands,
+    link: NonSend<LinkRes>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut suns: Query<&mut DirectionalLight>,
     aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
     grass: Query<Entity, With<level::GrassPart>>,
+    seas: Query<Entity, With<look::water::WaterPart>>,
+    trees: Query<Entity, With<level::TreePart>>,
+    ground: Query<Entity, (With<level::GroundMesh>, Without<level::Lightened>)>,
 ) {
-    for e in &grass {
+    for e in grass.iter().chain(seas.iter()).chain(trees.iter()) {
         commands.entity(e).despawn();
+    }
+    if !ground.is_empty() {
+        let id = link.0.session().map_id;
+        let terrain = sim::maps::ALL
+            .iter()
+            .find(|d| d.id == id)
+            .and_then(|d| d.terrain.as_ref());
+        for e in &ground {
+            let mut e = commands.entity(e);
+            e.insert(level::Lightened);
+            if let Some(t) = terrain {
+                e.insert(Mesh3d(meshes.add(level::terrain_mesh_at(t, level::LITE_TERRAIN_STEP))));
+            }
+        }
     }
     for mut s in &mut suns {
         if s.shadows_enabled {
