@@ -108,6 +108,7 @@ node ci/e2e.mjs [150 4 2 | 150 6 3]                  # menu, a match: prediction
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match (… 30 0 0 0 fxdemo=1 for the demo)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
+ci/native_shot.sh traces/x.png 'map=6&eye=…' | match 6 3   # a GPU shot of the desktop client in seconds (a pose, a match)
 tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless)
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
 cargo run -p flow --release -- <map>                 # a map's flow (traces/flow/; node tools/flow/png.mjs)

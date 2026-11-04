@@ -20,7 +20,7 @@ use super::guns::{spawn_posed, view_basis, Models};
 /// How much smaller, and nearer, the gun is than it looks.
 const SHRINK: f32 = 0.25;
 /// Gates' `VIEWMODEL_HOLD`: where the gun sits in view space, as it looks.
-const HOLD: Vec3 = Vec3::new(0.3, -0.29, -0.5);
+const HOLD: Vec3 = Vec3::new(0.27, -0.25, -0.42);
 /// The flash's peak, in lumens: a few thousand lux on a wall a metre off,
 /// enough to read against noon.
 const FLASH_LM: f32 = 400_000.0;

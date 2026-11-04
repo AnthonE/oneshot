@@ -47,11 +47,12 @@ PALETTE = {
     'display': ('#0a1a26', 0.00, 0.30, ('#49b8ff', 4.0), 0.0),
     'display_dim': ('#0a1a26', 0.00, 0.30, ('#49b8ff', 1.5), 0.0),
     'amber': ('#2a1a00', 0.00, 0.30, ('#ffb000', 3.0), 0.0),
-    # Veil: the ship's line.
-    'shell': ('#5a2d8a', 0.75, 0.30, None, 0.6),
-    'shell_dark': ('#2a1540', 0.55, 0.50, None, 0.3),
-    'shell_light': ('#8a5cc8', 0.75, 0.30, None, 0.6),
-    'shell_red': ('#8a2d4a', 0.75, 0.30, None, 0.6),
+    # Veil: the ship's line. The shells are barely metal and carry no
+    # coat: in the game either takes the sky's colour and reads white.
+    'shell': ('#5a2d8a', 0.15, 0.40, None, 0.0),
+    'shell_dark': ('#2a1540', 0.15, 0.50, None, 0.0),
+    'shell_light': ('#8a5cc8', 0.15, 0.40, None, 0.0),
+    'shell_red': ('#8a2d4a', 0.15, 0.40, None, 0.0),
     'bone': ('#c9c2d6', 0.20, 0.50, None, 0.0),
     'iron': ('#3a3a44', 0.80, 0.45, None, 0.0),
     'cyan': ('#06232a', 0.00, 0.30, ('#4ff2ff', 5.0), 0.0),
@@ -407,12 +408,12 @@ def sheet(o, path, title=''):
         # A copy inherits the hiding; these are the picture.
         c.hide_render = False
         bpy.context.scene.collection.objects.link(c)
-        c.matrix_world = Matrix.Translation(Vector(((i - 1) * size * 1.3, 0, 0))) @ m @ Matrix.Translation(-centre)
+        c.matrix_world = Matrix.Translation(Vector(((i - 1) * size * 1.15, 0, 0))) @ m @ Matrix.Translation(-centre)
         copies.append(c)
     cam = bpy.data.objects.new('cam', bpy.data.cameras.new('cam'))
     s.collection.objects.link(cam)
     cam.data.type = 'ORTHO'
-    cam.data.ortho_scale = size * 4.1
+    cam.data.ortho_scale = size * 3.5
     cam.location = (0, -5, 0)
     cam.rotation_euler = (math.radians(90), 0, 0)
     s.camera = cam

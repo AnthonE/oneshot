@@ -61,7 +61,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // colour (pearl purple, its dark hull, red's and blue's).
         12 => ("alien", HULL_TILE_M, Color::srgb(0.54, 0.38, 0.77)),
         13 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.21, 0.44)),
-        14 => ("alien", HULL_TILE_M, Color::srgb(0.77, 0.29, 0.48)),
+        14 => ("alien", HULL_TILE_M, Color::srgb(0.75, 0.22, 0.36)),
         15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
         DECK => ("deck", 4.0, Color::WHITE),
         GOLD => ("gold", 1.2, Color::WHITE),
