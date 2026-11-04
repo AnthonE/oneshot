@@ -250,6 +250,14 @@ impl Solid {
 
     /// Where a ray from `o` along unit `d` first meets it, within `[0, tmax]`.
     pub fn ray(&self, o: V3, d: V3, tmax: f32) -> Option<f32> {
+        if self.wide_of(o, d) {
+            return None;
+        }
+        self.ray_exact(o, d, tmax)
+    }
+
+    /// [`Self::ray`] without the quick look first: what the tests hold it to.
+    pub fn ray_exact(&self, o: V3, d: V3, tmax: f32) -> Option<f32> {
         match self.shape {
             Shape::Round { x, z, r } => ray_cylinder(o, d, V3::new(x, self.y0, z), r, self.y1 - self.y0, tmax),
             Shape::Turned { x, z, hx, hz, c, s } => {
@@ -303,6 +311,31 @@ impl Solid {
                 }
             }
         }
+    }
+}
+
+impl Solid {
+    /// Whether a ray passes wide of the circle around a round or turned
+    /// solid in x and z, so it can't meet it: a few products and no
+    /// division, where most of the rays near a curved wall end (fog asks
+    /// tens per pair). The circle is widened past any rounding, so a ray
+    /// the exact test would stop is never turned away: the answer is the
+    /// exact test's, bit for bit.
+    fn wide_of(&self, o: V3, d: V3) -> bool {
+        let (x, z, r2) = match self.shape {
+            Shape::Round { x, z, r } => (x, z, r * r),
+            Shape::Turned { x, z, hx, hz, .. } => (x, z, hx * hx + hz * hz),
+            Shape::Ramp { .. } => return false,
+        };
+        let (mx, mz) = (o.x - x, o.z - z);
+        // Outside the circle by c (in m²), heading along it at b per metre.
+        let c = mx * mx + mz * mz - (r2 * 1.001 + 0.0001);
+        let b = mx * d.x + mz * d.z;
+        if c > 0.0 && b >= 0.0 {
+            return true;
+        }
+        // The line's nearest pass is outside: |m|² − b²/|d|² > r².
+        b * b < (d.x * d.x + d.z * d.z) * c
     }
 }
 
