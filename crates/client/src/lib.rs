@@ -72,14 +72,14 @@ impl Built {
     }
 }
 
-/// Drawn things by their slot (a fighter with the side and skin its body
+/// Drawn things by their slot (a fighter with the side and look its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
 /// hull, it doesn't throw it away, so their coming back costs nothing (a
 /// skinned scene, its materials and shield shells, made mid-fight, was a
 /// hitch).
 #[derive(Resource, Default)]
 struct Drawn {
-    fighters: BTreeMap<u8, (Entity, u8, u8)>,
+    fighters: BTreeMap<u8, (Entity, u8, proto::Look)>,
     vehicles: BTreeMap<u8, Entity>,
 }
 
@@ -315,6 +315,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
+    .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<Early>()
@@ -781,9 +782,9 @@ fn draw_fighters(
     );
     let t = time.elapsed_secs();
     for d in &others {
-        let skin = posed.as_ref().map_or_else(|| st.skin(d.slot), |p| p.1);
+        let look = posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1);
         let e = match drawn.fighters.get(&d.slot) {
-            Some(&(e, team, s)) if team == d.team && s == skin => e,
+            Some(&(e, team, l)) if team == d.team && l == look => e,
             had => {
                 if let Some(&(old, ..)) = had {
                     commands.entity(old).despawn();
@@ -791,10 +792,10 @@ fn draw_fighters(
                 let e = if opts.capsules {
                     look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
                 } else {
-                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, skin)
+                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, look)
                 };
                 commands.entity(e).insert(Kept);
-                drawn.fighters.insert(d.slot, (e, d.team, skin));
+                drawn.fighters.insert(d.slot, (e, d.team, look));
                 e
             }
         };
@@ -1238,16 +1239,16 @@ mod web_start {
 
     /// The page's menu asks for a match (`page` in `launch`'s opts): as
     /// `name`, with an Elo Pros pass or the server's ticket (or nothing, a
-    /// guest), `mode` in `skin`, with the `party` it comes with (its code;
-    /// 0 for none). How it goes is `__oneshot.knocking`, `.front_status`,
-    /// `.in_match`.
+    /// guest), `mode` in `skin` with `emblem` on its back, with the `party`
+    /// it comes with (its code; 0 for none). How it goes is
+    /// `__oneshot.knocking`, `.front_status`, `.in_match`.
     #[wasm_bindgen]
-    pub fn knock(name: String, pass: String, mode: u8, skin: u8, party: u32) {
+    pub fn knock(name: String, pass: String, mode: u8, skin: u8, emblem: u16, party: u32) {
         let ask = super::door::Ask {
             name,
             pass,
             mode,
-            skin,
+            look: proto::Look { skin, emblem },
             party,
         };
         super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Knock(ask)));
@@ -1263,6 +1264,44 @@ mod web_start {
     #[wasm_bindgen]
     pub fn leave() {
         super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Leave));
+    }
+
+    /// Emblem `code` drawn `size`² as RGBA8, rows top down (`look/emblem.rs`):
+    /// the menu's preview is the game's own pixels.
+    #[wasm_bindgen]
+    pub fn emblem_rgba(code: u16, size: u32) -> Vec<u8> {
+        super::look::emblem::rgba(code, size.clamp(8, 256))
+    }
+
+    /// The emblem palette as CSS colours, by index.
+    #[wasm_bindgen]
+    pub fn emblem_palette() -> Vec<String> {
+        (0..proto::EMBLEM_COLOURS as usize)
+            .map(super::look::emblem::css)
+            .collect()
+    }
+
+    /// Glyph and field names by index (`proto::EMBLEM_GLYPHS`, `EMBLEM_FIELDS`).
+    #[wasm_bindgen]
+    pub fn emblem_glyphs() -> Vec<String> {
+        proto::EMBLEM_GLYPHS.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[wasm_bindgen]
+    pub fn emblem_fields() -> Vec<String> {
+        proto::EMBLEM_FIELDS.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Each glyph's rank lock (`proto::GLYPH_FLOOR`; 0 is none).
+    #[wasm_bindgen]
+    pub fn glyph_floors() -> Vec<u16> {
+        proto::GLYPH_FLOOR.to_vec()
+    }
+
+    /// An emblem from its parts (`proto::emblem`).
+    #[wasm_bindgen]
+    pub fn emblem_code(glyph: u8, field: u8, glyph_colour: u8, field_colour: u8) -> u16 {
+        proto::emblem(glyph, field, glyph_colour, field_colour)
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;

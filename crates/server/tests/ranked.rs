@@ -175,11 +175,11 @@ async fn read_msg(r: &mut wtransport::RecvStream) -> Option<Msg> {
 /// Connects, says hello, and returns every stream message until the server
 /// closes the session (or 30 s pass).
 async fn play(h: &server::Handle, pass: &str, mode: u8) -> Vec<Msg> {
-    play_as(h, pass, mode, proto::SKIN_STANDARD).await
+    play_as(h, pass, mode, proto::Look::default()).await
 }
 
 /// [`play`], asking to wear `skin`.
-async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg> {
+async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) -> Vec<Msg> {
     let cfg = ClientConfig::builder()
         .with_bind_address("127.0.0.1:0".parse().unwrap())
         .with_server_certificate_hashes([Sha256Digest::from(h.cert_hash)])
@@ -196,7 +196,8 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg>
         name: Name::new("ranked"),
         pass: Pass::new(pass).unwrap(),
         mode,
-        skin,
+        skin: look.skin,
+        emblem: look.emblem,
         party: 0,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
@@ -299,7 +300,13 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     });
     // Each asks for a skin it owns: the first's floor is at ember's line, the
     // second's is under gilded's (rank-locked), so it plays in the standard look.
-    let (a, b) = tokio::join!(play_as(&h, &p0, MODE_DUEL, 2), play_as(&h, &p1, MODE_DUEL, 5));
+    // And an emblem: the first asks for the crown, locked at 1800, which its
+    // 1350 doesn't reach; the second for a free star.
+    let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
+    let (a, b) = tokio::join!(
+        play_as(&h, &p0, MODE_DUEL, proto::Look { skin: 2, emblem: crown }),
+        play_as(&h, &p1, MODE_DUEL, proto::Look { skin: 5, emblem: star })
+    );
     let (online, status) = watcher.await.unwrap().expect("online.json listed both players");
     let mut listed: Vec<&str> = online["online"]
         .as_array()
@@ -323,8 +330,20 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
             _ => None,
         })
     };
+    let emblem_of = |got: &[Msg], who: u8| {
+        got.iter().rev().find_map(|m| match m {
+            Msg::Seat { slot, emblem, .. } if *slot == who => Some(*emblem),
+            _ => None,
+        })
+    };
     let (sa, sb) = (slot_of(&a).unwrap(), slot_of(&b).unwrap());
     for got in [&a, &b] {
+        assert_eq!(
+            emblem_of(got, sa),
+            Some(proto::EMBLEM_NONE),
+            "a locked glyph under its line"
+        );
+        assert_eq!(emblem_of(got, sb), Some(star), "a free emblem, seen by both");
         assert_eq!(skin_of(got, sa), Some(2), "the owned skin, seen by both");
         assert_eq!(
             skin_of(got, sb),

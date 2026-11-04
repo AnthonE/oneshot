@@ -146,7 +146,7 @@ impl Lobby {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let stream = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        let hello = Session::hello(&name, pass, proto::MODE_LOBBY, 0, party);
+        let hello = Session::hello(&name, pass, proto::MODE_LOBBY, proto::Look::default(), party);
         write_frame(&stream, &hello).await?;
 
         let mut reader = FrameReader::new(&bidi.readable())?;

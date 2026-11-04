@@ -4,8 +4,8 @@
 //! `?pose`: `yaw=` turns the fighter (radians), `arm=` picks its gun,
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
-//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`
-//! and `team=` dress it.
+//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
+//! `emblem=` (a `proto::Emblem`) and `team=` dress it.
 //!
 //! A map's view (the board's level shots): `map=4` builds that map instead,
 //! `eye=x,y,z` and `look=x,y,z` place the camera, and the fighter stands
@@ -15,10 +15,10 @@ use bevy::prelude::*;
 use client_net::core::Drawn;
 use sim::geom::V3;
 
-/// The fighter, as a snapshot would draw it, and its skin; then the map,
+/// The fighter, as a snapshot would draw it, and its look; then the map,
 /// the camera, and whether the fighter stands at all.
 #[derive(Resource, Clone, Copy)]
-pub struct Pose(pub Drawn, pub u8, pub View);
+pub struct Pose(pub Drawn, pub proto::Look, pub View);
 
 /// Where the picture is taken.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,7 +85,11 @@ impl Pose {
             shield: 255,
             ..Drawn::default()
         };
-        Pose(d, get("skin", 0.0) as u8, view)
+        let look = proto::Look {
+            skin: get("skin", 0.0) as u8,
+            emblem: proto::emblem_valid(get("emblem", 0.0) as u16),
+        };
+        Pose(d, look, view)
     }
 }
 

@@ -23,7 +23,7 @@ pub struct Ask {
     /// An Elo Pros pass, or empty for a guest.
     pub pass: String,
     pub mode: u8,
-    pub skin: u8,
+    pub look: proto::Look,
     /// The party it comes with (its code; 0 for none), seated with it.
     pub party: u32,
 }
@@ -193,7 +193,7 @@ mod desktop {
         let (mut addr, mut hash) = where_is(server)?;
         let mut moved = false;
         'connect: loop {
-            let hello = Session::hello(&ask.name, proto::Pass::NONE, ask.mode, ask.skin, ask.party);
+            let hello = Session::hello(&ask.name, proto::Pass::NONE, ask.mode, ask.look, ask.party);
             let mut c = rt
                 .block_on(NativeClient::connect(&addr, hash, hello))
                 .map_err(|e| format!("{addr}: {e}"))?;
@@ -513,7 +513,8 @@ mod web {
                 ask.name.clone(),
                 ask.pass.clone(),
                 ask.mode,
-                ask.skin,
+                ask.look.skin,
+                ask.look.emblem,
                 ask.party,
             )
         };

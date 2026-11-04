@@ -193,6 +193,42 @@ const floors = skin_floors();
 const skinLabel = (n, i) => n[0].toUpperCase() + n.slice(1) + (floors[i] ? ` · ${floors[i]}+` : '');
 skin_names().forEach((n, i) => skin.add(new Option(skinLabel(n, i), String(i))));
 skin.value = store('oneshot.skin') || '0';
+
+// The emblem on your back: a glyph on a shape, each in a colour, drawn by
+// the game's own code (`look/emblem.rs`). A rank-locked glyph is worn only
+// at its line; the server checks.
+const eParts = ['emblem-glyph', 'emblem-field', 'emblem-gc', 'emblem-fc'].map($);
+const ePalette = glue.emblem_palette();
+const gFloors = glue.glyph_floors();
+const cap = (n) => n[0].toUpperCase() + n.slice(1);
+const glyphLabel = (n, i) => (i ? cap(n) : 'No emblem') + (gFloors[i] ? ` · ${gFloors[i]}+` : '');
+glue.emblem_glyphs().forEach((n, i) => eParts[0].add(new Option(glyphLabel(n, i), String(i))));
+glue.emblem_fields().forEach((n, i) => eParts[1].add(new Option(i ? cap(n) : 'No shape', String(i))));
+for (const sel of [eParts[2], eParts[3]]) {
+  ePalette.forEach((c, i) => {
+    const o = new Option(`\u25A0 ${i + 1}`, String(i));
+    o.style.color = c;
+    sel.add(o);
+  });
+}
+{
+  // Kept as its code; a star on a circle for someone new.
+  const c = Number(store('oneshot.emblem') ?? glue.emblem_code(1, 1, 0, 4)) || 0;
+  [c & 31, (c >> 5) & 7, (c >> 8) & 15, (c >> 12) & 15].forEach((v, k) => { eParts[k].value = String(v); });
+}
+const emblemCode = () => glue.emblem_code(...eParts.map((s) => Number(s.value) || 0));
+function drawEmblem() {
+  const view = $('emblem-view');
+  const ctx = view.getContext('2d');
+  ctx.clearRect(0, 0, view.width, view.height);
+  const code = emblemCode();
+  if (code) ctx.putImageData(new ImageData(new Uint8ClampedArray(glue.emblem_rgba(code, view.width)), view.width, view.height), 0, 0);
+  for (const k of [2, 3]) eParts[k].style.color = ePalette[Number(eParts[k].value) || 0];
+  for (const k of [1, 2, 3]) eParts[k].disabled = !code;
+  store('oneshot.emblem', String(code));
+}
+for (const sel of eParts) sel.addEventListener('change', drawEmblem);
+drawEmblem();
 const myName = () => nameInput.value.trim() || 'player';
 
 // Where the game's own endpoints are: beside the page in dev, the game box
@@ -839,7 +875,7 @@ function startMatch(mode, priv, withParty) {
   // Our ticket says who we are (signed in, or a guest of the server's); a
   // fresh pass the first time, before the lobby has handed one.
   const pass = st.ticket || signin.pass();
-  glue.knock(myName(), pass, mode, Number(skin.value) || 0, code >>> 0);
+  glue.knock(myName(), pass, mode, Number(skin.value) || 0, emblemCode(), code >>> 0);
   const t0 = performance.now();
   let asked = false;
   let inMatch = false;
@@ -951,6 +987,12 @@ async function showRecord(who) {
     if (rec.items && !owned.has(n)) note = ' · not yours yet';
     else if (floors[i] && rec.ratings && (best === null || best < floors[i])) note = ` · locked, floor ${best === null ? 'unrated' : Math.round(best)}`;
     o.textContent = skinLabel(n, i) + note;
+  });
+  glue.emblem_glyphs().forEach((n, i) => {
+    const o = eParts[0].options[i];
+    if (!o) return;
+    const locked = gFloors[i] && rec.ratings && (best === null || best < gFloors[i]);
+    o.textContent = glyphLabel(n, i) + (locked ? ` · locked, floor ${best === null ? 'unrated' : Math.round(best)}` : '');
   });
 }
 /** After a match: what it unlocked and moved. The server reports as the

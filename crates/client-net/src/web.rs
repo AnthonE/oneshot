@@ -193,13 +193,15 @@ impl Client {
     /// browser checks against its own roots), and asks to play `mode` (0 casual against
     /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game,
     /// 5 a cup)
-    /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
+    /// as `name` wearing `skin` (worn only if the pass's wallet owns it) and
+    /// `emblem` on its back (`proto::Emblem`),
     /// signed in with an
     /// Elo Pros `pass` (empty for a guest; or the server's ticket), with the
     /// `party` it comes with (its code, 0 for none). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
     /// comes through `messages()`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         addr: String,
         hash: String,
@@ -207,6 +209,7 @@ impl Client {
         pass: String,
         mode: u8,
         skin: u8,
+        emblem: u16,
         party: u32,
     ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
@@ -235,7 +238,11 @@ impl Client {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        write_frame(&sw, &Session::hello(&name, pass, mode, skin, party)).await?;
+        write_frame(
+            &sw,
+            &Session::hello(&name, pass, mode, proto::Look { skin, emblem }, party),
+        )
+        .await?;
         let mut reader = FrameReader::new(&bidi.readable())?;
 
         let msgs: Queue<Msg> = Rc::default();
@@ -567,9 +574,11 @@ impl Client {
                     bot,
                     name,
                     skin,
+                    emblem,
                 } => {
                     set("type", "seat".into());
                     set("skin", skin.into());
+                    set("emblem", emblem.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());

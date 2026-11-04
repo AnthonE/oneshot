@@ -297,6 +297,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         pass,
         mode,
         skin,
+        emblem,
         party,
     } = hello
     else {
@@ -370,6 +371,16 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         }
         _ => proto::SKIN_STANDARD,
     };
+    // An emblem is anyone's, a guest's too, but a rank-locked glyph
+    // (`proto::GLYPH_FLOOR`) is worn only at its line, as a skin.
+    let emblem = proto::emblem_valid(emblem);
+    let line = proto::GLYPH_FLOOR[proto::emblem_parts(emblem).0 as usize];
+    let emblem = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if line == 0 => emblem,
+        Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
+        _ => proto::EMBLEM_NONE,
+    };
+    let look = proto::Look { skin, emblem };
 
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
@@ -401,7 +412,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
                     mode,
                     rating,
                     since: std::time::Instant::now(),
-                    skin,
+                    look,
                     party: seating.filter(|_| mode == MODE_DOUBLES),
                 }),
                 tx,
@@ -411,7 +422,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             session: session_id,
             name,
             mode,
-            skin,
+            look,
             party: seating,
             player,
             tx,

@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 18;
+pub const PROTO_VER: u16 = 19;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -831,6 +831,79 @@ pub const SKIN_STANDARD: u8 = 0;
 /// wears the standard look, and can sell the skin to one above it.
 pub const SKIN_FLOOR: [u16; 6] = [0, 0, 1300, 1500, 1650, 1800];
 
+/// An emblem, Halo's way: a glyph on a field, each in its own colour, worn
+/// on the back. Cosmetic only, as a skin: never lit, never on a hitbox, never
+/// changes how well a fighter shows (docs/DESIGN.md §15). Sixteen bits: the
+/// glyph (`EMBLEM_GLYPHS`, 5 bits; 0 is no emblem at all), the field
+/// (`EMBLEM_FIELDS`, 3 bits; 0 is none), the glyph's colour and the field's
+/// (4 bits each, the client's palette).
+pub type Emblem = u16;
+pub const EMBLEM_NONE: Emblem = 0;
+pub const EMBLEM_GLYPHS: [&str; 17] = [
+    "none",
+    "star",
+    "chevron",
+    "bolt",
+    "crosshair",
+    "ring",
+    "diamond",
+    "triangle",
+    "cross",
+    "arrow",
+    "moon",
+    "heart",
+    "eye",
+    "shield",
+    "sun",
+    "wings",
+    "crown",
+];
+pub const EMBLEM_FIELDS: [&str; 8] = [
+    "none", "circle", "square", "diamond", "hexagon", "shield", "triangle", "octagon",
+];
+/// Colours in the palette.
+pub const EMBLEM_COLOURS: u16 = 16;
+/// The rank lock, by glyph (`EMBLEM_GLYPHS` order), as [`SKIN_FLOOR`]: a
+/// wallet whose floor is under the line wears no emblem. 0 is no lock.
+pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1500, 1650, 1800];
+
+/// What a fighter wears, as the server checked it: its skin and its emblem.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub skin: u8,
+    pub emblem: Emblem,
+}
+
+/// An emblem's parts: (glyph, field, glyph colour, field colour).
+pub const fn emblem_parts(e: Emblem) -> (u8, u8, u8, u8) {
+    (
+        (e & 31) as u8,
+        ((e >> 5) & 7) as u8,
+        ((e >> 8) & 15) as u8,
+        ((e >> 12) & 15) as u8,
+    )
+}
+
+/// An emblem from its parts, each taken modulo its range.
+pub const fn emblem(glyph: u8, field: u8, glyph_colour: u8, field_colour: u8) -> Emblem {
+    let g = glyph as u16 % EMBLEM_GLYPHS.len() as u16;
+    if g == 0 {
+        return EMBLEM_NONE;
+    }
+    g | (field as u16 & 7) << 5 | (glyph_colour as u16 & 15) << 8 | (field_colour as u16 & 15) << 12
+}
+
+/// `e` if it names a glyph that exists, else [`EMBLEM_NONE`]: what a room
+/// keeps of what a client asked for.
+pub const fn emblem_valid(e: Emblem) -> Emblem {
+    let (g, ..) = emblem_parts(e);
+    if g == 0 || g as usize >= EMBLEM_GLYPHS.len() {
+        EMBLEM_NONE
+    } else {
+        e
+    }
+}
+
 /// What a client asks to play (`Msg::Hello::mode`): casual against a bot,
 /// ranked Duel or Doubles, casual free-for-all or Gun Game with bots in the
 /// empty seats.
@@ -880,6 +953,8 @@ pub enum Msg {
         mode: u8,
         /// The skin it would wear: worn only if the pass's wallet owns it.
         skin: u8,
+        /// The emblem it would wear on its back ([`Emblem`]).
+        emblem: Emblem,
         /// A match: the party it comes with (its code), to be seated with
         /// it; a lobby: the party to join. 0: none.
         party: u32,
@@ -913,6 +988,8 @@ pub enum Msg {
         name: Name,
         /// The skin the server checked it owns; [`SKIN_STANDARD`] otherwise.
         skin: u8,
+        /// The emblem the server checked; [`EMBLEM_NONE`] otherwise.
+        emblem: Emblem,
     },
     Kill {
         killer: u8,
@@ -1095,6 +1172,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             pass,
             mode,
             skin,
+            emblem,
             party,
         } => {
             w.write(1, 8)?;
@@ -1103,6 +1181,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_pass(&mut w, pass)?;
             w.write(*mode as u32, MODE_BITS)?;
             w.write(*skin as u32, 8)?;
+            w.write(*emblem as u32, 16)?;
             w.write(*party, party::CODE_BITS)?;
         }
         Msg::Queued { mode, waiting_s } => {
@@ -1147,6 +1226,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             bot,
             name,
             skin,
+            emblem,
         } => {
             w.write(4, 8)?;
             w.write(*slot as u32, SLOT_BITS)?;
@@ -1154,6 +1234,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write_bit(*bot)?;
             w_name(&mut w, name)?;
             w.write(*skin as u32, 8)?;
+            w.write(*emblem as u32, 16)?;
         }
         Msg::Kill {
             killer,
@@ -1338,6 +1419,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             pass: r_pass(&mut r)?,
             mode: r.read(MODE_BITS)? as u8,
             skin: r.read(8)? as u8,
+            emblem: r.read(16)? as u16,
             party: r.read(party::CODE_BITS)?,
         },
         9 => Msg::Queued {
@@ -1379,6 +1461,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             bot: r.read_bit()?,
             name: r_name(&mut r)?,
             skin: r.read(8)? as u8,
+            emblem: r.read(16)? as u16,
         },
         5 => Msg::Kill {
             killer: r.read(SLOT_BITS)? as u8,

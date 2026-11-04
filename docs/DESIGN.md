@@ -467,6 +467,11 @@ passes that never expire are what players kept.
 - The server checks a player's skins against their wallet, and a locked one
   against their floor, at sign-in, and only then puts a skin id in snapshots.
   A client can't claim one it doesn't own or hasn't earned.
+- **Emblems**, Halo's way: a glyph on a shape, each in one of 16 colours,
+  painted on Triple T's back (`proto::Emblem`, drawn by `look/emblem.rs`, the
+  menu's preview the same pixels). Ours, drawn from geometry: no uploads.
+  Anyone wears one, a guest too; a few glyphs are rank-locked
+  (`proto::GLYPH_FLOOR`) the way skins are. Never lit, never on the head.
 - The free Pill skin after 10 minutes of play. Everything in the store has a
   path through play too. A pass, if there is one, never expires.
 - **No cases at launch.** If they come, cosmetic only, odds above the pull,

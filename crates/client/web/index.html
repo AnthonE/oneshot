@@ -102,6 +102,9 @@
       .panel h2 { margin: 0 0 10px; font: 400 15px Unitblock, sans-serif; letter-spacing: 3px; color: var(--glow); text-transform: uppercase; }
       .panel p { margin: 0; color: var(--dim); }
       .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      #menu .emblem { gap: 6px; }
+      #menu .emblem select { padding: 6px 8px; font-size: 12px; }
+      #emblem-view { width: 40px; height: 40px; border: 1px solid var(--edge, #3a6); border-radius: 6px; background: #1b1d1b; }
       .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 
       /* A pill: every button in the menu. */
@@ -239,6 +242,13 @@
             <div class="row" style="margin-top:10px">
               <label class="row" style="gap:6px;color:var(--dim);font-size:13px"><input type="checkbox" id="private" /> Party alone (bots fill the rest)</label>
               <select id="skin" title="Skin: worn if your wallet owns it and your ranked floor is at its line"></select>
+            </div>
+            <div class="row emblem" style="margin-top:10px">
+              <canvas id="emblem-view" width="64" height="64" title="Your emblem, worn on your back"></canvas>
+              <select id="emblem-glyph" title="Emblem: the glyph"></select>
+              <select id="emblem-field" title="Emblem: the shape behind it"></select>
+              <select id="emblem-gc" title="The glyph's colour"></select>
+              <select id="emblem-fc" title="The shape's colour"></select>
             </div>
           </div>
           <div class="panel"><div id="status" role="status"></div>
