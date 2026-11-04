@@ -31,6 +31,9 @@
       #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
       #menu .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
       #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
+      #who a, #news a { color: inherit; }
+      #news { min-height: 0; font-size: 14px; line-height: 1.6; max-width: 560px; }
+      #news b { color: #e8b931; font-weight: 700; }
       #status { min-height: 1.2em; opacity: 0.8; }
       .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
     </style>
@@ -60,6 +63,7 @@
         <button id="cup" disabled>Enter a cup</button>
       </div>
       <div id="status"></div>
+      <div id="news"></div>
       <button id="cancel" class="quiet" hidden>Cancel</button>
       <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
         R reload · 1, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · Tab scores · N net graph<br />
@@ -107,6 +111,20 @@
       const $ = (id) => document.getElementById(id);
       const menu = $('menu'), status = $('status'), cancel = $('cancel'), nameInput = $('name'), skin = $('skin');
       const say = (line) => { status.textContent = line; };
+      // Elo Pros' reads (above the first await: sign-in calls them while the
+      // page still waits for a mode).
+      const ELO = /(^|\.)elopros\.com$/.test(location.hostname) ? '' : 'https://elopros.com';
+      const GAME = 'oneshot';
+      const getJSON = async (path) => {
+        try {
+          const r = await fetch(`${ELO}${path}`, { cache: 'no-store' });
+          return r.ok ? await r.json() : null;
+        } catch { return null; }
+      };
+      const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+      // Who signed in ({wallet, account}), and their record when they did.
+      let me = null;
+      let before = null;
       const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
       const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
 
@@ -131,7 +149,10 @@
         if (o.ok) base = (await o.json()).server ?? '';
       } catch { /* none: beside the page */ }
       const info = await (await fetch(`${base}server.json`)).json();
-      const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
+      const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')], (who) => {
+        me = who;
+        showRecord(who);
+      });
 
       // A server on its way down: the live one, if it is now another.
       const follow = async () => {
@@ -177,6 +198,7 @@
             cancel.textContent = 'Back to menu';
             menu.style.display = 'flex';
             document.exitPointerLock();
+            if (me && before) showNews(me, before);
             return;
           }
           setTimeout(watch, 500);
@@ -186,11 +208,93 @@
         cancel.textContent = 'Back to menu';
       }
 
+      /* What Elo Pros keeps for a player: ratings, achievements and boards,
+       * and skins. Read from elopros.com (the page's own origin once
+       * published). A read that fails shows nothing; it never blocks play. */
+      /** One read of everything: {stats, ratings, skins}. `fresh` asks past
+       * any cache (after a match, the record just moved). */
+      async function record(who, fresh) {
+        const id = who.wallet || who.account;
+        const t = fresh ? `?t=${Date.now()}` : '';
+        const [stats, ratings, rh, sol] = await Promise.all([
+          getJSON(`/api/gamestats/${GAME}/of/${id}${t}`),
+          who.wallet ? getJSON(`/api/ratings/${GAME}/of/${who.wallet}${t}`) : null,
+          who.wallet ? getJSON(`/api/items/of/${who.wallet}?game=${GAME}&title=${GAME}`) : null,
+          // the Solana wallet linked to it, where the free Pill goes
+          who.wallet ? getJSON(`/api/items/sol/of/${who.wallet}`) : null,
+        ]);
+        const items = rh || sol ? { items: [...((rh && rh.items) || []), ...((sol && sol.items) || [])] } : null;
+        return { stats, ratings, items };
+      }
+      /** The skins an items answer names (the server's `owned_skins`). */
+      function ownedSkins(items) {
+        const names = skin_names();
+        const out = new Set(['standard']);
+        for (const i of (items && items.items) || []) {
+          if (i.title && String(i.title).toLowerCase() !== GAME) continue;
+          const n = String(i.skin || i.item || i.catalog_name || i.name || '').trim().toLowerCase();
+          const first = n.split(/[^a-z0-9]/)[0];
+          for (const c of [n, first]) if (names.includes(c)) out.add(c);
+        }
+        return out;
+      }
+      async function showRecord(who) {
+        const rec = await record(who, false);
+        before = rec;
+        const bits = [];
+        const lad = (rec.ratings && rec.ratings.ladders) || {};
+        for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles']]) {
+          const l = lad[id];
+          if (l && l.rated && l.rating != null) bits.push(`${label} ${Math.round(l.rating)}${l.placed ? '' : ' (placing)'}`);
+        }
+        const tot = rec.stats && rec.stats.totals;
+        if (tot) bits.push(`${tot.earned}/${tot.total} achievements`);
+        const prof = who.wallet ? ` · <a href="https://elopros.com/profile.html?who=${who.wallet}" target="_blank" rel="noopener">profile</a>` : '';
+        if (bits.length) $('news').innerHTML = esc(bits.join(' · ')) + prof;
+        // Mark the skins this wallet holds; the server still checks.
+        const owned = ownedSkins(rec.items);
+        skin_names().forEach((n, i) => {
+          const o = skin.options[i];
+          if (o) o.textContent = n[0].toUpperCase() + n.slice(1) + (rec.items && !owned.has(n) ? ' · not yours yet' : '');
+        });
+      }
+      /** After a match: what it unlocked and moved. The server reports as the
+       * match ends, so ask a few times until the record moves. */
+      async function showNews(who, was) {
+        let now = null;
+        for (let i = 0; i < 5; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          now = await record(who, true);
+          if (now.stats && (!was.stats || now.stats.last !== was.stats.last)) break;
+        }
+        if (!now || !now.stats) return;
+        const had = new Set(((was.stats && was.stats.achievements) || []).filter((a) => a.earned).map((a) => a.id));
+        const got = (now.stats.achievements || []).filter((a) => a.earned && !had.has(a.id));
+        const lines = got.map((a) => `<b>Unlocked</b> ${esc(a.name)}${a.rare ? ' · rare' : ''}`);
+        const best = new Map(((was.stats && was.stats.boards) || []).map((b) => [b.id, b.score]));
+        for (const b of now.stats.boards || []) {
+          if (b.score != null && b.score !== best.get(b.id)) {
+            const v = b.format === 'time_ms' ? `${(b.score / 1000).toFixed(1)} s` : b.score;
+            lines.push(`<b>New best</b> ${esc(b.name)}: ${esc(v)}${b.rank ? ` · #${b.rank} of ${b.of}` : ''}`);
+          }
+        }
+        const lad = (now.ratings && now.ratings.ladders) || {};
+        const old = (was.ratings && was.ratings.ladders) || {};
+        for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles'], ['cup', 'Cup']]) {
+          const a = old[id], b = lad[id];
+          if (b && b.rated && b.rating != null && (!a || a.rating !== b.rating)) {
+            const d = a && a.rating != null ? Math.round(b.rating - a.rating) : null;
+            lines.push(`<b>${label}</b> ${Math.round(b.rating)}${d ? ` (${d > 0 ? '+' : ''}${d})` : ''}`);
+          }
+        }
+        if (lines.length) $('news').innerHTML = lines.join('<br />');
+      }
+
       /** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup.
        * The server hands out the nonce the pass must carry; we fetch one
        * ahead so the popup opens on the click itself (a popup opened later is
        * blocked). Ranked needs a wallet linked to the account. */
-      async function setupSignIn(info, button, who, ranked) {
+      async function setupSignIn(info, button, who, ranked, signedIn) {
         let pass = '';
         let nonce = '';
         const fresh = async () => {
@@ -208,9 +312,11 @@
               pass = res.pass;
               const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
               const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
+              const account = /id: (acct_[0-9a-f]{20})/.exec(text)?.[1];
               who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
               for (const b of ranked) b.disabled = !wallet;
               button.hidden = true;
+              if (account) signedIn({ wallet: wallet ?? null, account });
             } catch (e) {
               who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;
             }

@@ -1,0 +1,753 @@
+{
+  "achievements": [
+    {
+      "desc": "Finish a match",
+      "hidden": false,
+      "icon": "gamepad",
+      "id": "FIRST_MATCH",
+      "name": "Boots on",
+      "progress": {
+        "max": 1,
+        "stat": "matches"
+      }
+    },
+    {
+      "desc": "Win a match",
+      "hidden": false,
+      "icon": "trophy",
+      "id": "FIRST_WIN",
+      "name": "On the board",
+      "progress": {
+        "max": 1,
+        "stat": "wins"
+      }
+    },
+    {
+      "desc": "Win 25 matches",
+      "hidden": false,
+      "icon": "laurels",
+      "id": "WINS_25",
+      "name": "Regular",
+      "progress": {
+        "max": 25,
+        "stat": "wins"
+      }
+    },
+    {
+      "desc": "Win 100 matches",
+      "hidden": false,
+      "icon": "podium",
+      "id": "WINS_100",
+      "name": "Hundred up",
+      "progress": {
+        "max": 100,
+        "stat": "wins"
+      }
+    },
+    {
+      "desc": "Win a match against the bot",
+      "hidden": false,
+      "icon": "target",
+      "id": "BOT_WIN",
+      "name": "Beat the bot",
+      "progress": {
+        "max": 1,
+        "stat": "bot_wins"
+      }
+    },
+    {
+      "desc": "Win a free for all",
+      "hidden": false,
+      "icon": "star",
+      "id": "FFA_WIN",
+      "name": "Last one standing",
+      "progress": {
+        "max": 1,
+        "stat": "ffa_wins"
+      }
+    },
+    {
+      "desc": "Win a game of Gun Game",
+      "hidden": false,
+      "icon": "revolver",
+      "id": "GUN_GAME_WIN",
+      "name": "Through the ladder",
+      "progress": {
+        "max": 1,
+        "stat": "gun_game_wins"
+      }
+    },
+    {
+      "desc": "Win a Big Team match",
+      "hidden": false,
+      "icon": "flag",
+      "id": "BIG_TEAM_WIN",
+      "name": "Big win",
+      "progress": {
+        "max": 1,
+        "stat": "big_team_wins"
+      }
+    },
+    {
+      "desc": "Finish a ranked match",
+      "hidden": false,
+      "icon": "upgrade",
+      "id": "RANKED_FIRST",
+      "name": "Rated",
+      "progress": {
+        "max": 1,
+        "stat": "ranked_matches"
+      }
+    },
+    {
+      "desc": "Win a ranked match",
+      "hidden": false,
+      "icon": "medal",
+      "id": "RANKED_WIN",
+      "name": "First rated win",
+      "progress": {
+        "max": 1,
+        "stat": "ranked_wins"
+      }
+    },
+    {
+      "desc": "Win 50 ranked matches",
+      "hidden": false,
+      "icon": "upgrade",
+      "id": "RANKED_WINS_50",
+      "name": "Climber",
+      "progress": {
+        "max": 50,
+        "stat": "ranked_wins"
+      }
+    },
+    {
+      "desc": "Win a Ranked Duel",
+      "hidden": false,
+      "icon": "spears",
+      "id": "DUEL_WIN",
+      "name": "One on one",
+      "progress": {
+        "max": 1,
+        "stat": "duel_wins"
+      }
+    },
+    {
+      "desc": "Win a Ranked Doubles match",
+      "hidden": false,
+      "icon": "crowd",
+      "id": "DOUBLES_WIN",
+      "name": "Two on two",
+      "progress": {
+        "max": 1,
+        "stat": "doubles_wins"
+      }
+    },
+    {
+      "desc": "Play a cup to the end",
+      "hidden": false,
+      "icon": "cup",
+      "id": "CUP_ENTER",
+      "name": "Cup run",
+      "progress": {
+        "max": 1,
+        "stat": "cups_played"
+      }
+    },
+    {
+      "desc": "Win a cup",
+      "hidden": false,
+      "icon": "cup",
+      "id": "CUP_WIN",
+      "name": "Cup winner",
+      "progress": {
+        "max": 1,
+        "stat": "cup_wins"
+      }
+    },
+    {
+      "desc": "Get 100 kills",
+      "hidden": false,
+      "icon": "target",
+      "id": "KILLS_100",
+      "name": "Hundred down",
+      "progress": {
+        "max": 100,
+        "stat": "kills"
+      }
+    },
+    {
+      "desc": "Get 1,000 kills",
+      "hidden": false,
+      "icon": "target",
+      "id": "KILLS_1000",
+      "name": "Thousand down",
+      "progress": {
+        "max": 1000,
+        "stat": "kills"
+      }
+    },
+    {
+      "desc": "Get 10,000 kills",
+      "hidden": true,
+      "icon": "target",
+      "id": "KILLS_10000",
+      "name": "Ten thousand down",
+      "progress": {
+        "max": 10000,
+        "stat": "kills"
+      }
+    },
+    {
+      "desc": "Get 100 assists",
+      "hidden": false,
+      "icon": "crowd",
+      "id": "ASSISTS_100",
+      "name": "Wingman",
+      "progress": {
+        "max": 100,
+        "stat": "assists"
+      }
+    },
+    {
+      "desc": "Get 5 kills without dying",
+      "hidden": false,
+      "icon": "embers",
+      "id": "SPREE_5",
+      "name": "Killing Spree",
+      "progress": {
+        "max": 5,
+        "stat": "best_spree"
+      }
+    },
+    {
+      "desc": "Get 10 kills without dying",
+      "hidden": false,
+      "icon": "embers",
+      "id": "SPREE_10",
+      "name": "Killing Frenzy",
+      "progress": {
+        "max": 10,
+        "stat": "best_spree"
+      }
+    },
+    {
+      "desc": "Get 15 kills without dying",
+      "hidden": false,
+      "icon": "embers",
+      "id": "SPREE_15",
+      "name": "Running Riot",
+      "progress": {
+        "max": 15,
+        "stat": "best_spree"
+      }
+    },
+    {
+      "desc": "Get 25 kills without dying",
+      "hidden": true,
+      "icon": "embers",
+      "id": "SPREE_25",
+      "name": "Untouchable",
+      "progress": {
+        "max": 25,
+        "stat": "best_spree"
+      }
+    },
+    {
+      "desc": "Get three kills, each within four seconds of the last",
+      "hidden": false,
+      "icon": "bullets",
+      "id": "MULTI_3",
+      "name": "Triple Kill",
+      "progress": {
+        "max": 3,
+        "stat": "best_multi"
+      }
+    },
+    {
+      "desc": "Get four kills, each within four seconds of the last",
+      "hidden": false,
+      "icon": "bullets",
+      "id": "MULTI_4",
+      "name": "Overkill",
+      "progress": {
+        "max": 4,
+        "stat": "best_multi"
+      }
+    },
+    {
+      "desc": "Get five kills, each within four seconds of the last",
+      "hidden": true,
+      "icon": "bullets",
+      "id": "MULTI_5",
+      "name": "Killstorm",
+      "progress": {
+        "max": 5,
+        "stat": "best_multi"
+      }
+    },
+    {
+      "desc": "Make a precision kill in the gun's fewest shots, none missed",
+      "hidden": false,
+      "icon": "arrowhead",
+      "id": "PERFECT",
+      "name": "Perfect",
+      "progress": {
+        "max": 1,
+        "stat": "medal.perfect"
+      }
+    },
+    {
+      "desc": "Win with 15 or more kills and no deaths",
+      "hidden": true,
+      "icon": "star",
+      "id": "PERFECTION",
+      "name": "Perfection",
+      "progress": {
+        "max": 1,
+        "stat": "medal.perfection"
+      }
+    },
+    {
+      "desc": "Kill with a sniper or beam rifle without its scope up",
+      "hidden": false,
+      "icon": "arrowhead",
+      "id": "NO_SCOPE",
+      "name": "No Scope",
+      "progress": {
+        "max": 1,
+        "stat": "medal.no_scope"
+      }
+    },
+    {
+      "desc": "Run down 10 people with a vehicle",
+      "hidden": false,
+      "icon": "energy",
+      "id": "SPLATTER_10",
+      "name": "Road rage",
+      "progress": {
+        "max": 10,
+        "stat": "medal.splatter"
+      }
+    },
+    {
+      "desc": "Kill 25 people with a sticky grenade stuck to them",
+      "hidden": false,
+      "icon": "dynamite",
+      "id": "STICK_25",
+      "name": "Sticky fingers",
+      "progress": {
+        "max": 25,
+        "stat": "medal.stick"
+      }
+    },
+    {
+      "desc": "Kill 10 people from behind with a melee",
+      "hidden": false,
+      "icon": "hatchet",
+      "id": "ASSASSIN_10",
+      "name": "Quiet work",
+      "progress": {
+        "max": 10,
+        "stat": "medal.assassination"
+      }
+    },
+    {
+      "desc": "Make a kill after you've died",
+      "hidden": false,
+      "icon": "meteor",
+      "id": "FROM_THE_GRAVE",
+      "name": "From the grave",
+      "progress": {
+        "max": 1,
+        "stat": "medal.kill_from_the_grave"
+      }
+    },
+    {
+      "desc": "Make a grenade kill from far off",
+      "hidden": false,
+      "icon": "dynamite",
+      "id": "HAIL_MARY",
+      "name": "Hail Mary",
+      "progress": {
+        "max": 1,
+        "stat": "medal.hail_mary"
+      }
+    },
+    {
+      "desc": "Play for an hour",
+      "hidden": false,
+      "icon": "campfire",
+      "id": "HOURS_1",
+      "name": "An hour in",
+      "progress": {
+        "max": 3600,
+        "stat": "seconds_played"
+      }
+    },
+    {
+      "desc": "Play for ten hours",
+      "hidden": false,
+      "icon": "campfire",
+      "id": "HOURS_10",
+      "name": "Ten hours in",
+      "progress": {
+        "max": 36000,
+        "stat": "seconds_played"
+      }
+    },
+    {
+      "desc": "Play for a hundred hours",
+      "hidden": false,
+      "icon": "campfire",
+      "id": "HOURS_100",
+      "name": "A hundred hours in",
+      "progress": {
+        "max": 360000,
+        "stat": "seconds_played"
+      }
+    }
+  ],
+  "boards": [
+    {
+      "format": "number",
+      "id": "ranked_kills",
+      "keep": "best",
+      "name": "Most kills in a ranked match",
+      "sort": "desc"
+    },
+    {
+      "format": "number",
+      "id": "ranked_spree",
+      "keep": "best",
+      "name": "Longest spree in a ranked match",
+      "sort": "desc"
+    },
+    {
+      "format": "time_ms",
+      "id": "gun_game_ms",
+      "keep": "best",
+      "name": "Fastest Gun Game win",
+      "sort": "asc"
+    },
+    {
+      "format": "number",
+      "id": "cup_place",
+      "keep": "best",
+      "name": "Best cup finish",
+      "sort": "asc"
+    }
+  ],
+  "stats": [
+    {
+      "agg": "sum",
+      "id": "matches",
+      "name": "Matches finished"
+    },
+    {
+      "agg": "sum",
+      "id": "wins",
+      "name": "Wins"
+    },
+    {
+      "agg": "sum",
+      "id": "ranked_matches",
+      "name": "Ranked matches finished"
+    },
+    {
+      "agg": "sum",
+      "id": "ranked_wins",
+      "name": "Ranked wins"
+    },
+    {
+      "agg": "sum",
+      "id": "bot_wins",
+      "name": "Wins against the bot"
+    },
+    {
+      "agg": "sum",
+      "id": "duel_wins",
+      "name": "Ranked Duel wins"
+    },
+    {
+      "agg": "sum",
+      "id": "doubles_wins",
+      "name": "Ranked Doubles wins"
+    },
+    {
+      "agg": "sum",
+      "id": "ffa_wins",
+      "name": "Free for all wins"
+    },
+    {
+      "agg": "sum",
+      "id": "gun_game_wins",
+      "name": "Gun Game wins"
+    },
+    {
+      "agg": "sum",
+      "id": "big_team_wins",
+      "name": "Big Team wins"
+    },
+    {
+      "agg": "sum",
+      "id": "cups_played",
+      "name": "Cups finished"
+    },
+    {
+      "agg": "sum",
+      "id": "cup_wins",
+      "name": "Cups won"
+    },
+    {
+      "agg": "sum",
+      "id": "kills",
+      "name": "Kills"
+    },
+    {
+      "agg": "sum",
+      "id": "deaths",
+      "name": "Deaths"
+    },
+    {
+      "agg": "sum",
+      "id": "assists",
+      "name": "Assists"
+    },
+    {
+      "agg": "sum",
+      "id": "damage",
+      "name": "Damage done"
+    },
+    {
+      "agg": "sum",
+      "id": "seconds_played",
+      "name": "Seconds played"
+    },
+    {
+      "agg": "max",
+      "id": "most_kills",
+      "name": "Most kills in a match"
+    },
+    {
+      "agg": "max",
+      "id": "best_spree",
+      "name": "Longest spree"
+    },
+    {
+      "agg": "max",
+      "id": "best_multi",
+      "name": "Longest multi-kill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.double_kill",
+      "name": "Double Kill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.triple_kill",
+      "name": "Triple Kill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.overkill",
+      "name": "Overkill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killstorm",
+      "name": "Killstorm"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killquake",
+      "name": "Killquake"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killcano",
+      "name": "Killcano"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killossal",
+      "name": "Killossal"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killmageddon",
+      "name": "Killmageddon"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killennium",
+      "name": "Killennium"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killing_spree",
+      "name": "Killing Spree"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killing_frenzy",
+      "name": "Killing Frenzy"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.running_riot",
+      "name": "Running Riot"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.rampage",
+      "name": "Rampage"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.untouchable",
+      "name": "Untouchable"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.invincible",
+      "name": "Invincible"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.inconceivable",
+      "name": "Inconceivable"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.unstoppable",
+      "name": "Unstoppable"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.headshot",
+      "name": "Headshot"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.sniper_kill",
+      "name": "Sniper Kill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.no_scope",
+      "name": "No Scope"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.beat_down",
+      "name": "Beat Down"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.assassination",
+      "name": "Assassination"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.splatter",
+      "name": "Splatter"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.stick",
+      "name": "Stick"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.grenade_kill",
+      "name": "Grenade Kill"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.kill_from_the_grave",
+      "name": "Kill from the Grave"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.killjoy",
+      "name": "Killjoy"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.revenge",
+      "name": "Revenge"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.avenger",
+      "name": "Avenger"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.first_strike",
+      "name": "First Strike"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.last_shot",
+      "name": "Last Shot"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.perfect",
+      "name": "Perfect"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.reversal",
+      "name": "Reversal"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.protector",
+      "name": "Protector"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.wheelman",
+      "name": "Wheelman"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.assist",
+      "name": "Assist"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.extermination",
+      "name": "Extermination"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.distraction",
+      "name": "Distraction"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.hail_mary",
+      "name": "Hail Mary"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.nade_shot",
+      "name": "Nade Shot"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.game_winner",
+      "name": "Game Winner"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.perfection",
+      "name": "Perfection"
+    }
+  ]
+}
