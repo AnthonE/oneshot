@@ -63,8 +63,20 @@ pub fn ground(t: &TerrainDef, x: f32, z: f32) -> Option<f32> {
     })
 }
 
+/// The grass is patchy: the rock's noise at this scale (patches a few
+/// metres across) bares the ground this far, in the splat and the tufts
+/// alike.
+const PATCH_SCALE: f32 = 0.5;
+const PATCH_BARE: f32 = 0.75;
+
+/// How much of the grass at (x, z) is left by its patchiness, 0..1.
+pub fn patch(x: f32, z: f32) -> f32 {
+    1.0 - PATCH_BARE + PATCH_BARE * super::rock::fbm(Vec3::new(x, 0.0, z) * PATCH_SCALE, 5)
+}
+
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
-/// rule (level.rs): grass up the hills, none on steep rock or in the creek.
+/// rule (level.rs): grass up the hills, none on steep rock or in the creek,
+/// in patches.
 fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
@@ -73,7 +85,7 @@ fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     if slope > 0.55 || y < -0.12 {
         return None;
     }
-    let green = ((y - 1.0) / 1.5).clamp(0.0, 1.0);
+    let green = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * patch(x, z);
     Some((green, 0.07))
 }
 

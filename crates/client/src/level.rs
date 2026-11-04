@@ -41,6 +41,8 @@ const GOLD: u8 = 17;
 const VAULT: u8 = 18;
 const HIDDEN: u8 = 19;
 const RIB: u8 = 22;
+/// Rock: drawn as weathered stone (look::rock), never as a box.
+const ROCK: u8 = 6;
 /// The hull's plates repeat over this many metres.
 const HULL_TILE_M: f32 = 8.0;
 
@@ -53,7 +55,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         3 => ("panel", 4.0, Color::srgb(0.78, 0.36, 0.32)),
         4 => ("panel", 4.0, Color::srgb(0.32, 0.45, 0.78)),
         5 => ("metal", 2.0, Color::srgb(0.45, 0.47, 0.5)),
-        6 => ("rock", 2.5, Color::srgb(0.95, 0.58, 0.42)),
+        ROCK => ("rock", 2.5, Color::srgb(0.95, 0.58, 0.42)),
         7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
         11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
@@ -472,7 +474,8 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
             let y = h(i, j);
             let rock = ((slope - 0.35) / 0.4).clamp(0.0, 1.0);
             let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
-            let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * (1.0 - rock) * (1.0 - gravel);
+            let patch = crate::look::grass::patch(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
+            let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * patch * (1.0 - rock) * (1.0 - gravel);
             let sand = (1.0 - rock - gravel - grass).max(0.0);
             col.push([sand, grass, gravel, rock]);
         }
@@ -552,6 +555,22 @@ pub fn build(
             Vec3::new(b.min.x, b.min.y, b.min.z),
             Vec3::new(b.max.x, b.max.y, b.max.z),
         );
+        if l == ROCK {
+            let seed = (b.min.x * 31.0 + b.min.z * 7.0 + b.max.y) as i32 as u32;
+            commands.spawn((
+                LevelPart,
+                BoxLook(l),
+                Mesh3d(meshes.add(crate::look::rock::rock(lo, hi, Vec3::new(cx, 0.0, cz), seed, tile))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: roughness,
+                    metallic,
+                    ..default()
+                })),
+                Transform::default(),
+            ));
+            continue;
+        }
         if l == VAULT {
             let v = crate::look::vault::vault(lo, hi, HULL_TILE_M, HULL_TILE_M);
             for (mesh, look_id) in [(v.plates, 12), (v.ribs, 13)] {

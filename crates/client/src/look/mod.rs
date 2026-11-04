@@ -9,6 +9,7 @@ pub mod ground;
 pub mod guns;
 pub mod prewarm;
 pub mod rig;
+pub mod rock;
 pub mod shake;
 pub mod shield;
 pub mod ship;
