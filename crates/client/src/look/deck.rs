@@ -630,7 +630,13 @@ pub fn setup(
     let field = sky::CloudField::new(SKY_SEED, sky::FIELD_N);
     let image = images.add(field.image());
     let detail = images.add(detail_volume(SKY_SEED, DETAIL_N));
-    let soft = field.soft(sky::soft_level());
+    // The light a fighter stands in comes off a field of one size on every
+    // target (`sky::SOFT_FIELD_N`), not the drawn one.
+    let soft = if sky::FIELD_N == sky::SOFT_FIELD_N {
+        field.soft(0)
+    } else {
+        sky::CloudField::new(SKY_SEED, sky::SOFT_FIELD_N).soft(0)
+    };
     let triangle = meshes.add(fullscreen_mesh());
     let mood = super::mood::NOON;
     let at = Anchor::default();

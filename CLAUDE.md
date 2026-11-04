@@ -94,7 +94,8 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
     built twice, `oneshot_client` (WebGL2) and `oneshot_client_gpu`
     (`--features webgpu`, the desktop's frame), and picks one before either
     downloads. What WebGL2 can't do is `cfg(webgl2)` (`build.rs`), never
-    `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
+    `target_arch = "wasm32"`; the tier is `look/quality.rs` (`Tier`,
+    `for_target`, `effective_on`), the device's caps `look/gpu.rs`.
 11. **`crates/fx` is Gates'** (`crates/fx/tests/vendored.rs`).
 
 ## Commands

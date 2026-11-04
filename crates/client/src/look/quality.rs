@@ -44,15 +44,20 @@
 //! - **Smoke and marks** are pooled the same on every rung (`fx::Caps`);
 //!   EFFECTS moves only sparks, tracers and flash lights, which show and
 //!   never hide.
-//! - **Grass and ground clutter** never stand as tall as a crouching
-//!   fighter's hit box (`grass::TUFT_MAX_H`, `clutter::CLUTTER_MAX_H`,
-//!   asserted when the crate compiles), so thinning them or drawing them
-//!   nearer uncovers no one. Anything on the ground that could hide a
-//!   fighter must not read [`Gfx::cover`]: it is drawn the same for all.
+//! - **Grass and ground clutter** are drawn the same on every rung, every
+//!   tuft and piece to `grass::DRAW_M`: there is no GRASS row. They stand
+//!   under a crouching fighter's hit box on his own ground, but over a
+//!   crest or at a grazing look they still cover his lower half, so no
+//!   rung may thin them or draw them nearer.
 //! - **The air** is the same haze both ways (`sky::browser_haze`).
 //!
 //! What a lower rung gives up is finish: contact shading, edges, glow,
-//! resolution, the shade's sharpness, sparks.
+//! resolution, the shade's sharpness, sparks. Two of those are judgement
+//! calls, kept because every shooter's ladder has them: SSAO darkens the
+//! fill a little where a wall meets the ground, so a fighter crouched in a
+//! wall's shade is a shade lighter with AO OFF (POTATO, LOW, always on
+//! WebGL2); and bloom veils a little round a bright flash on the rungs
+//! that have it. Both are a few percent of fill light, never a shadow.
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
@@ -163,37 +168,6 @@ named!(Aa {
     Taa = "taa",
 });
 
-/// How thick the ground cover is: the grass and the ground clutter
-/// (`clutter.rs`: pebbles, stones, twigs, dry plants), neither of which can
-/// hide a fighter. Each rung draws a share of the tufts and the pieces
-/// (`grass::LAYER_SHARE`), the same ones every time.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
-pub enum Cover {
-    #[default]
-    Off,
-    Low,
-    Medium,
-    High,
-}
-named!(Cover {
-    Off = "off",
-    Low = "low",
-    Medium = "medium",
-    High = "high",
-});
-
-impl Cover {
-    /// How many of the cover's layers are drawn (`grass::LAYER_SHARE`).
-    pub fn layers(self) -> u8 {
-        match self {
-            Cover::Off => 0,
-            Cover::Low => 1,
-            Cover::Medium => 2,
-            Cover::High => 3,
-        }
-    }
-}
-
 /// How much of the glowing kind of effect there is: the spark pool and the
 /// flash lights (`fx::Caps`). Smoke and marks don't move with it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
@@ -238,9 +212,6 @@ pub struct Gfx {
     /// Percent of each dimension the world is drawn at; the HUD stays at
     /// the window's (`render_scale.rs`).
     pub render_scale: u8,
-    /// The ground cover's thickness and how far out it is drawn, metres.
-    pub cover: Cover,
-    pub cover_m: f32,
     pub effects: Effects,
     pub clouds: Clouds,
 }
@@ -259,10 +230,6 @@ const _: () = assert!(
 /// The shadow map sizes, texels a side: powers of two, which is what keeps
 /// a cascade's texel exactly representable and its edges from crawling.
 pub const SHADOW_PX_LADDER: [usize; 4] = [512, 1024, 2048, 4096];
-
-/// How far the ground cover is drawn, metres; HIGH's is the grass's own
-/// `grass::DRAW_M`.
-pub const COVER_M_LADDER: [f32; 5] = [24.0, 34.0, super::grass::DRAW_M, 60.0, 80.0];
 
 /// POTATO's render scale, percent of each dimension (half the pixels).
 pub const POTATO_RENDER_SCALE: u8 = 70;
@@ -316,8 +283,6 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             aa: Aa::Taa,
             bloom: true,
             render_scale: RENDER_SCALE_MAX,
-            cover: Cover::High,
-            cover_m: super::grass::DRAW_M,
             effects: Effects::High,
             clouds: Clouds::High,
         },
@@ -329,8 +294,6 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             aa: Aa::Taa,
             bloom: true,
             render_scale: RENDER_SCALE_MAX,
-            cover: Cover::High,
-            cover_m: super::grass::DRAW_M,
             effects: Effects::Low,
             // The second budget spent by target: the WebGL2 module opens
             // on this rung, on whatever GPU a browser without WebGPU has,
@@ -351,8 +314,6 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             aa: Aa::Smaa,
             bloom: false,
             render_scale: RENDER_SCALE_MAX,
-            cover: Cover::Medium,
-            cover_m: COVER_M_LADDER[1],
             effects: Effects::Low,
             clouds: Clouds::Low,
         },
@@ -366,8 +327,6 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             aa: Aa::Off,
             bloom: false,
             render_scale: POTATO_RENDER_SCALE,
-            cover: Cover::Off,
-            cover_m: COVER_M_LADDER[0],
             effects: Effects::Low,
             clouds: Clouds::Low,
         },
@@ -569,7 +528,7 @@ impl Tier {
     pub fn describe(&self) -> String {
         let g = &self.gfx;
         format!(
-            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, cover {} to {:.0} m, effects {}, clouds {}{}, {}%",
+            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, effects {}, clouds {}{}, {}%",
             self.preset.map_or("custom", Quality::name),
             gpu::api(),
             if self.atmosphere { "atmosphere" } else { "haze" },
@@ -579,8 +538,6 @@ impl Tier {
             g.cascades,
             self.shadow_m,
             g.shadow_map_px,
-            g.cover.name(),
-            g.cover_m,
             g.effects.name(),
             g.clouds.name(),
             if self.shafts() { " with shafts" } else { "" },
@@ -779,7 +736,6 @@ mod tests {
         assert!(t.gfx.bloom);
         assert_eq!((t.gfx.cascades, t.shadow_m), (4, 200.0));
         assert_eq!(t.gfx.shadow_map_px, DirectionalLightShadowMap::default().size);
-        assert_eq!((t.gfx.cover, t.gfx.cover_m), (Cover::High, super::super::grass::DRAW_M));
         assert_eq!((t.gfx.effects, t.gfx.render_scale), (Effects::High, 100));
         assert_eq!(t.gfx.clouds, Clouds::High);
         assert!(t.shafts());
@@ -795,7 +751,6 @@ mod tests {
         assert_eq!(w.gfx.aa, Aa::Smaa);
         assert_eq!((w.gfx.cascades, w.shadow_m), (1, 120.0));
         assert_eq!(w.gfx.shadow_map_px, DirectionalLightShadowMap::default().size);
-        assert_eq!((w.gfx.cover, w.gfx.cover_m), (Cover::High, super::super::grass::DRAW_M));
         assert_eq!((w.gfx.effects, w.gfx.render_scale), (Effects::Low, 100));
         assert_eq!(w.gfx.clouds, Clouds::Low, "the flat deck WebGL2 drew");
         assert!(!w.shafts(), "no volumetric pass under WebGL2");
@@ -830,11 +785,6 @@ mod tests {
                 assert!(lo.shadow_m <= hi.shadow_m, "{at}: shadow distance");
                 assert!(l.shadow_map_px <= h.shadow_map_px, "{at}: shadow map");
                 assert!(l.render_scale <= h.render_scale, "{at}: render scale");
-                assert!(
-                    rank(Cover::LADDER, &l.cover) <= rank(Cover::LADDER, &h.cover),
-                    "{at}: cover"
-                );
-                assert!(l.cover_m <= h.cover_m, "{at}: cover distance");
                 assert!(
                     rank(Effects::LADDER, &l.effects) <= rank(Effects::LADDER, &h.effects),
                     "{at}: fx"
@@ -894,9 +844,6 @@ mod tests {
         for w in SHADOW_M_LADDER.windows(2) {
             assert!(w[0] < w[1]);
         }
-        for w in COVER_M_LADDER.windows(2) {
-            assert!(w[0] < w[1]);
-        }
         for w in SHADOW_PX_LADDER.windows(2) {
             assert!(w[0] < w[1]);
         }
@@ -914,7 +861,6 @@ mod tests {
                 let g = preset_on(q, webgl2);
                 assert!(SHADOW_M_LADDER.contains(&g.shadow_m), "{q:?}");
                 assert!(SHADOW_PX_LADDER.contains(&g.shadow_map_px), "{q:?}");
-                assert!(COVER_M_LADDER.contains(&g.cover_m), "{q:?}");
                 assert!(g.render_scale >= RENDER_SCALE_MIN && g.render_scale <= RENDER_SCALE_MAX);
                 assert_eq!(g.render_scale % RENDER_SCALE_STEP, 0, "{q:?}");
             }

@@ -389,13 +389,18 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
             "through a misty map's air, at HIGH"
         } else if tier.atmosphere {
             "at HIGH clouds: the sun's beams through a misty map's air"
+        } else if crate::look::gpu::WEBGL2 {
+            "not under WebGL2: Bevy's volumetric pass wants WebGPU; the mist glows toward the sun instead"
         } else {
-            "not here: Bevy's volumetric pass wants WebGPU; the mist glows toward the sun instead"
+            "not on this GPU: it can't filter the atmosphere's tables; the mist glows toward the sun instead"
         },
     );
     pane.spawn(ui::group("WORLD"));
-    number(pane, s, Knob::Cover, "GRASS", "grass, stones, dry scrub");
-    number(pane, s, Knob::CoverDistance, "GRASS DISTANCE", "how far out");
+    fact(
+        pane,
+        "GRASS",
+        "the same on every rung: it can cover a crouching fighter",
+    );
     number(pane, s, Knob::Fx, "EFFECTS", "sparks, tracers, flash lights");
     pane.spawn(ui::group("ON THIS MACHINE"));
     note(pane, &target_note(s, tier));
@@ -410,8 +415,8 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
     }
     note(
         pane,
-        "No row shows anyone another hides: the shade reaches across the map on every rung, smoke and marks are \
-         the same for all, and grass and stones never stand as tall as a crouching fighter.",
+        "No row shows anyone another hides: the shade reaches across the map on every rung, smoke, marks, grass \
+         and stones are the same for all.",
     );
 }
 
