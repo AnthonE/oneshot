@@ -269,7 +269,7 @@ pub fn alien_images(n: usize) -> (Image, Image, Image, Image) {
     }
     let image = |data: Vec<u8>, srgb: bool, normal: bool| {
         let (all, levels) = chain(&data, n, n, srgb, normal);
-        let mut img = Image::new(
+        let mut img = mipped(
             Extent3d {
                 width: n as u32,
                 height: n as u32,
@@ -383,7 +383,7 @@ pub fn panel_images(n: usize) -> (Image, Image, Image) {
     }
     let image = |data: Vec<u8>, srgb: bool, normal: bool| {
         let (all, levels) = chain(&data, n, n, srgb, normal);
-        let mut img = Image::new(
+        let mut img = mipped(
             Extent3d {
                 width: n as u32,
                 height: n as u32,
@@ -518,7 +518,7 @@ fn pack_orm(rough: &(Vec<u8>, usize, usize), ao: &(Vec<u8>, usize, usize)) -> Op
         px[1] = r[i];
     }
     let (all, n) = chain(&l0, *w, *h, false, false);
-    let mut img = Image::new(
+    let mut img = mipped(
         Extent3d {
             width: *w as u32,
             height: *h as u32,
@@ -636,7 +636,7 @@ fn array(layers: &[Image]) -> Option<Image> {
     for l in layers {
         data.extend_from_slice(l.data.as_ref()?);
     }
-    let mut img = Image::new(
+    let mut img = mipped(
         Extent3d {
             width: d.size.width,
             height: d.size.height,
@@ -654,6 +654,24 @@ fn array(layers: &[Image]) -> Option<Image> {
     });
     img.sampler = ImageSampler::Descriptor(repeat());
     Some(img)
+}
+
+/// An image whose data is its whole mip chain. `Image::new` checks the
+/// data against the first level only (in a debug build, where a chain
+/// panicked it): made from that, then given the chain.
+fn mipped(
+    size: Extent3d,
+    dim: TextureDimension,
+    data: Vec<u8>,
+    format: TextureFormat,
+    usage: RenderAssetUsages,
+) -> Image {
+    use bevy::image::TextureFormatPixelInfo;
+    let texels = size.width as usize * size.height as usize * size.depth_or_array_layers as usize;
+    let first = (texels * format.pixel_size().unwrap_or(4)).min(data.len());
+    let mut img = Image::new(size, dim, data[..first].to_vec(), format, usage);
+    img.data = Some(data);
+    img
 }
 
 #[cfg(test)]

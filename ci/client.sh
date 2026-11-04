@@ -11,6 +11,8 @@ set -eu
 cd "$(dirname "$0")/../crates/client"
 cargo fmt
 cargo clippy -q --all-targets -- -D warnings
+# Its own tests (textures, the pointer lock): not run anywhere else.
+cargo test -q --lib
 cargo build -q
 cargo build -q --profile web --lib --target wasm32-unknown-unknown
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
