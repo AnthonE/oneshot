@@ -284,6 +284,14 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
         1,
     ),
     ach(
+        "NO_SCOPE_360",
+        "360 No Scope",
+        "Turn a full circle and kill with a sniper or beam rifle without its scope up",
+        "energy",
+        "medal.360_no_scope",
+        1,
+    ),
+    ach(
         "SPLATTER_10",
         "Road rage",
         "Run down 10 people with a vehicle",

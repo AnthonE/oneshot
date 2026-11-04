@@ -320,6 +320,17 @@
       }
     },
     {
+      "desc": "Turn a full circle and kill with a sniper or beam rifle without its scope up",
+      "hidden": false,
+      "icon": "energy",
+      "id": "NO_SCOPE_360",
+      "name": "360 No Scope",
+      "progress": {
+        "max": 1,
+        "stat": "medal.360_no_scope"
+      }
+    },
+    {
       "desc": "Run down 10 people with a vehicle",
       "hidden": false,
       "icon": "energy",
@@ -748,6 +759,11 @@
       "agg": "sum",
       "id": "medal.perfection",
       "name": "Perfection"
+    },
+    {
+      "agg": "sum",
+      "id": "medal.360_no_scope",
+      "name": "360 No Scope"
     }
   ]
 }

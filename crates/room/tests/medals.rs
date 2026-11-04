@@ -247,6 +247,93 @@ fn a_sniper_unscoped() {
     assert!(has(&a, 0, md::SNIPER_KILL) && !has(&a, 0, md::NO_SCOPE));
 }
 
+/// Seat `s` turns `by` (1/65536 of a turn a tick, signed) for `n` ticks.
+fn turn(sc: &mut Script, s: usize, by: i32, n: u32) {
+    for _ in 0..n {
+        let f = &mut sc.w.fighters[s];
+        f.yaw = (f.yaw as i32 + by).rem_euclid(1 << 16) as u16;
+        sc.at(0, &[]);
+    }
+}
+
+fn snipe(sc: &mut Script) -> Vec<Award> {
+    sc.at(0, &[shot(0, SNIPER), hit(0, 1, 120, false), kill(0, 1, SNIPER as u16)])
+}
+
+#[test]
+fn a_full_turn_then_unscoped_is_a_360() {
+    use room::medals::{FULL_TURN, SPIN_TICKS};
+    // A full turn in half a second, then the shot.
+    let mut s = Script::new(Rules::duel());
+    let ticks_half = (TICK_HZ / 2) as i32;
+    turn(&mut s, 0, FULL_TURN / ticks_half + 1, ticks_half as u32);
+    let a = snipe(&mut s);
+    assert!(
+        has(&a, 0, md::NO_SCOPE) && has(&a, 0, md::NO_SCOPE_360),
+        "{:?}",
+        names(&a)
+    );
+    assert_eq!(s.m.tally(0).medals[md::NO_SCOPE_360 as usize], 1);
+    // The other way round counts too.
+    s.at(3000, &[spawn(1)]);
+    turn(&mut s, 0, -(FULL_TURN / ticks_half + 1), ticks_half as u32);
+    assert!(has(&snipe(&mut s), 0, md::NO_SCOPE_360));
+
+    // Three quarters, or a wiggle back and forth past a full turn's travel:
+    // a No Scope, not a 360.
+    s.at(3000, &[spawn(1)]);
+    turn(&mut s, 0, FULL_TURN * 3 / 4 / ticks_half, ticks_half as u32);
+    let a = snipe(&mut s);
+    assert!(
+        has(&a, 0, md::NO_SCOPE) && !has(&a, 0, md::NO_SCOPE_360),
+        "{:?}",
+        names(&a)
+    );
+    s.at(3000, &[spawn(1)]);
+    for _ in 0..4 {
+        turn(&mut s, 0, 1200, 20);
+        turn(&mut s, 0, -1200, 20);
+    }
+    assert!(!has(&snipe(&mut s), 0, md::NO_SCOPE_360));
+
+    // A full turn that ended too long ago is spent.
+    s.at(3000, &[spawn(1)]);
+    turn(&mut s, 0, FULL_TURN / ticks_half + 1, ticks_half as u32);
+    turn(&mut s, 0, 0, SPIN_TICKS as u32);
+    assert!(!has(&snipe(&mut s), 0, md::NO_SCOPE_360));
+
+    // Scoped, it's no No Scope at all; and a spin with the rifle's scope up
+    // is just a spin.
+    s.at(3000, &[spawn(1)]);
+    turn(&mut s, 0, FULL_TURN / ticks_half + 1, ticks_half as u32);
+    s.w.fighters[0].last_buttons |= sim::input::ZOOM;
+    let a = snipe(&mut s);
+    assert!(!has(&a, 0, md::NO_SCOPE) && !has(&a, 0, md::NO_SCOPE_360));
+    s.w.fighters[0].last_buttons &= !sim::input::ZOOM;
+
+    // Any other gun after a full turn is only a kill.
+    s.at(3000, &[spawn(1)]);
+    turn(&mut s, 0, FULL_TURN / ticks_half + 1, ticks_half as u32);
+    let a = s.at(0, &[shot(0, BR), hit(0, 1, 200, false), kill(0, 1, GUN)]);
+    assert!(!has(&a, 0, md::NO_SCOPE_360));
+}
+
+#[test]
+fn a_spawn_is_not_a_turn() {
+    // Facing the spawn's way turns nothing: dying and coming back facing
+    // the other way, then a half turn, is a half turn.
+    use room::medals::FULL_TURN;
+    let mut s = Script::new(Rules::duel());
+    let half = (TICK_HZ / 4) as i32;
+    turn(&mut s, 0, FULL_TURN / 2 / half, half as u32);
+    s.at(0, &[kill(1, 0, GUN)]);
+    s.w.fighters[0].yaw = s.w.fighters[0].yaw.wrapping_add(1 << 15);
+    s.at(0, &[spawn(0)]);
+    turn(&mut s, 0, FULL_TURN / 2 / half, half as u32);
+    s.at(0, &[spawn(1)]);
+    assert!(!has(&snipe(&mut s), 0, md::NO_SCOPE_360));
+}
+
 #[test]
 fn stuck_or_caught_in_the_blast() {
     let mut s = Script::new(Rules::ffa());
