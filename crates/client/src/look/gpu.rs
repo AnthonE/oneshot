@@ -1,37 +1,36 @@
-//! What the GPU under this build can draw, and so which frame it gets: the
-//! desktop's on the desktop and in the browser's WebGPU module, the cheap
-//! one in its WebGL2 module. After Gates' `render/quality.rs` (`GpuCaps`,
-//! `max_cascades`) and `render/web.rs` (`watch_gpu`) (MIT, NOTICE).
+//! What the GPU under this build can draw. After Gates' `render/quality.rs`
+//! (`GpuCaps`) and `render/web.rs` (`watch_gpu`) (MIT, NOTICE). The
+//! graphics ladder (`quality.rs`) decides the frame from the player's rows
+//! and this; nothing here picks a look.
 //!
-//! Two layers decide it:
+//! Two layers:
 //!
 //! - **The API, fixed when the module is compiled** (`cfg(webgl2)`,
 //!   build.rs). WebGL2 has no compute and no storage buffers in the fragment
 //!   stage, so no atmosphere (its layout wants one: inserted there it kills
 //!   the module, though the log says it is merely off), no SSAO or TAA
 //!   (their prepasses want the same), no bloom (Bevy: "not compatible with
-//!   WebGL2"), and Bevy gives a light one cascade there. The sky is then
-//!   baked into the cloud cube and the air is a fog of the same air
-//!   (`sky::browser_haze`). Nothing in it is a removal: the WebGL2 frame is
-//!   the best WebGL2 can do with what it has.
+//!   WebGL2"), and Bevy gives a light one cascade there
+//!   (`quality::for_target_on`). The sky is then baked into the cloud cube
+//!   and the air is a fog of the same air (`sky::browser_haze`). Nothing in
+//!   it is a removal: the WebGL2 frame is the best WebGL2 can do.
 //! - **The device, read once at startup** ([`GpuPlugin`]). A WebGPU adapter
 //!   guarantees 16 sampled textures per fragment stage and 4 storage
 //!   textures; Chrome gives most hardware 48 and 8, SwiftShader the floor.
 //!   The worst main-pass pipeline (the ground under the atmosphere) is
 //!   [`FRAGMENT_TEXTURES`] with no prepass, and each prepass it reads adds
 //!   one, so TAA (depth and motion) and SSAO (depth and normal; five storage
-//!   textures; filterable 32-bit floats) go on only where there is room. A
-//!   pipeline over the limit is refused, and under WebGPU that loses the
-//!   whole frame, not one mesh. SMAA stands in where TAA can't go.
+//!   textures; filterable 32-bit floats) go on only where there is room
+//!   (`quality::effective_on`). A pipeline over the limit is refused, and
+//!   under WebGPU that loses the whole frame, not one mesh. SMAA stands in
+//!   where TAA can't go.
 //!
-//! **Fairness:** the tiers differ in light and finish, never in what hides
-//! a player. The haze is the same air both ways (`sky::browser_haze` is
-//! the atmosphere's own coefficients), and WebGL2's shorter shadow reach
-//! shows less, never more.
+//! **Fairness:** what a GPU can't do costs it finish, never what hides a
+//! player: the haze is the same air both ways (`sky::browser_haze` is the
+//! atmosphere's own coefficients), and `quality.rs`' header says the rest.
 
 use std::sync::OnceLock;
 
-use bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel;
 use bevy::prelude::*;
 
 /// This module draws through WebGL2 (`cfg(webgl2)`, build.rs).
@@ -45,18 +44,6 @@ pub const fn api() -> &'static str {
         "webgpu"
     } else {
         "native"
-    }
-}
-
-/// Shadow cascades a light can have here: Bevy's own
-/// `MAX_CASCADES_PER_LIGHT`, 1 under WebGL2. Asking for more there doesn't
-/// fail, it keeps cascade 0 only, and every shadow stops at its far edge
-/// (Gates shipped that once): so WebGL2 asks for one.
-pub const fn max_cascades() -> usize {
-    if cfg!(webgl2) {
-        1
-    } else {
-        4
     }
 }
 
@@ -124,89 +111,27 @@ pub fn caps() -> GpuCaps {
     CAPS.get().copied().unwrap_or(GpuCaps::UNBOUNDED)
 }
 
-/// The frame one build on one device draws.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Tier {
-    /// Bevy's atmosphere draws the sky and the air. Without it the sky is
-    /// baked behind the clouds (`sky::BAKE_BACKDROP`) and the air is a fog.
-    pub atmosphere: bool,
-    /// Occlusion is kept before TAA when only one fits: it is what pays
-    /// back the sky fill (Gates' `rig.rs`).
-    pub ssao: Option<ScreenSpaceAmbientOcclusionQualityLevel>,
-    pub taa: bool,
-    /// Where TAA isn't.
-    pub smaa: bool,
-    pub bloom: bool,
-    /// Sun shadow cascades, and how far the last reaches (metres).
-    pub cascades: usize,
-    pub shadow_m: f32,
+/// Whether Bevy's atmosphere draws the sky and the air: never under
+/// WebGL2 (its layout wants a storage buffer in the fragment stage, which
+/// kills the module), and only where 32-bit floats filter (it binds its
+/// `Rgba32Float` tables as filterable without asking). Elsewhere the sky
+/// is baked into the cloud cube and the air is a fog of the same air
+/// (`sky::browser_haze`).
+pub fn atmosphere_on(webgl2: bool, caps: GpuCaps) -> bool {
+    !webgl2 && caps.float32_filterable
 }
 
-/// The desktop's frame: four cascades to 200 m.
-const HIGH_SHADOW_M: f32 = 200.0;
-/// WebGL2's one cascade, to 120 m.
-const LOW_SHADOW_M: f32 = 120.0;
-
-/// The frame for an API (`webgl2` or not) on a device with `caps`.
-pub fn tier_for(webgl2: bool, caps: GpuCaps) -> Tier {
-    if webgl2 {
-        return Tier {
-            atmosphere: false,
-            ssao: None,
-            taa: false,
-            smaa: true,
-            bloom: false,
-            cascades: 1,
-            shadow_m: LOW_SHADOW_M,
-        };
-    }
-    let ao = caps.ao(false);
-    let taa = caps.taa(ao);
-    Tier {
-        atmosphere: caps.float32_filterable,
-        ssao: ao.then_some(ScreenSpaceAmbientOcclusionQualityLevel::Medium),
-        taa,
-        smaa: !taa,
-        bloom: caps.rg11b10_renderable,
-        cascades: max_cascades(),
-        shadow_m: HIGH_SHADOW_M,
-    }
-}
-
-/// This build's frame on this device.
-pub fn tier() -> Tier {
-    tier_for(WEBGL2, caps())
-}
-
-impl Tier {
-    /// What it draws, for the log and the page (`window.__oneshot.tier`).
-    pub fn describe(&self) -> String {
-        let mut on: Vec<&str> = Vec::new();
-        if self.atmosphere {
-            on.push("atmosphere");
-        } else {
-            on.push("haze");
-        }
-        if self.ssao.is_some() {
-            on.push("ssao");
-        }
-        if self.taa {
-            on.push("taa");
-        }
-        if self.smaa {
-            on.push("smaa");
-        }
-        if self.bloom {
-            on.push("bloom");
-        }
-        format!("{} {} cascade(s) to {} m", on.join(" "), self.cascades, self.shadow_m)
-    }
+/// [`atmosphere_on`] this build on this device.
+pub fn atmosphere() -> bool {
+    atmosphere_on(WEBGL2, caps())
 }
 
 /// Reads the device once it exists: `RenderPlugin::finish` has put it in
 /// the main world by our `finish`, which runs before `Startup` spawns the
-/// camera (`rig::camera`). Under WebGPU it also hands the device an error
-/// hook ([`watch`]).
+/// camera (`rig::camera`). Then the machine may take the graphics lower
+/// (`potato::at_boot`) and the tier is resolved against both, before
+/// anything is drawn with it. Under WebGPU it also hands the device an
+/// error hook ([`watch`]).
 pub struct GpuPlugin;
 
 impl Plugin for GpuPlugin {
@@ -226,9 +151,13 @@ impl Plugin for GpuPlugin {
             dual_source_blending: features.contains(WgpuFeatures::DUAL_SOURCE_BLENDING),
         };
         let _ = CAPS.set(caps);
-        info!("oneshot: gpu {} {caps:?}: {}", api(), tier().describe());
         #[cfg(all(target_arch = "wasm32", not(webgl2)))]
         watch(device.wgpu_device());
+        super::potato::at_boot(app);
+        super::quality::refresh(app.world_mut());
+        if let Some(t) = app.world().get_resource::<super::quality::Tier>() {
+            info!("oneshot: gpu {} {caps:?}: {}", api(), t.describe());
+        }
     }
 }
 
@@ -300,43 +229,31 @@ mod tests {
     };
 
     #[test]
-    fn the_desktop_draws_everything() {
-        let t = tier_for(false, GpuCaps::UNBOUNDED);
-        assert!(t.atmosphere && t.ssao.is_some() && t.taa && t.bloom && !t.smaa);
-        assert_eq!((t.cascades, t.shadow_m), (4, HIGH_SHADOW_M));
-    }
-
-    #[test]
-    fn webgpu_at_the_floor_keeps_the_sky_and_drops_the_prepasses() {
-        let t = tier_for(false, FLOOR);
-        assert!(t.atmosphere && t.bloom && t.smaa);
-        assert!(t.ssao.is_none() && !t.taa);
-        assert_eq!(t.cascades, 4);
-        // Chrome's usual hardware tier: room for both.
+    fn the_prepasses_go_where_there_is_room() {
+        assert!(GpuCaps::UNBOUNDED.ao(true) && GpuCaps::UNBOUNDED.taa(true));
+        assert!(!FLOOR.ao(false) && !FLOOR.taa(false));
         let hw = GpuCaps {
             sampled_textures: 48,
             storage_textures: 8,
             ..FLOOR
         };
-        let t = tier_for(false, hw);
-        assert!(t.ssao.is_some() && t.taa && !t.smaa);
-        // Room for one prepass pair: occlusion first.
+        assert!(hw.ao(true) && hw.taa(true));
         let one = GpuCaps {
             sampled_textures: FRAGMENT_TEXTURES + 2,
             storage_textures: 8,
             ..FLOOR
         };
-        let t = tier_for(false, one);
-        assert!(t.ssao.is_some() && !t.taa && t.smaa);
+        assert!(one.ao(false) && !one.ao(true) && one.taa(false) && !one.taa(true));
     }
 
     #[test]
-    fn webgl2_is_the_cheap_frame_and_never_sees_further() {
-        let low = tier_for(true, GpuCaps::UNBOUNDED);
-        let high = tier_for(false, GpuCaps::UNBOUNDED);
-        assert!(!low.atmosphere && low.ssao.is_none() && !low.taa && !low.bloom && low.smaa);
-        assert_eq!(low.cascades, 1);
-        // Shadows can give a player away: the cheap frame casts no further.
-        assert!(low.shadow_m <= high.shadow_m);
+    fn the_atmosphere_is_never_webgl2s() {
+        assert!(atmosphere_on(false, FLOOR));
+        assert!(!atmosphere_on(true, GpuCaps::UNBOUNDED));
+        let no_f32 = GpuCaps {
+            float32_filterable: false,
+            ..GpuCaps::UNBOUNDED
+        };
+        assert!(!atmosphere_on(false, no_f32));
     }
 }

@@ -520,11 +520,11 @@ pub fn build(
     }
     match &def.terrain {
         Some(t) => {
-            for (mesh, centre) in crate::look::grass::blocks(t, lo, hi, id as u32 * 7919 + 1) {
+            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, id as u32 * 7919 + 1) {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
-                    crate::look::grass::GrassBlock { centre },
+                    crate::look::grass::GrassBlock { centre, layer },
                     Mesh3d(meshes.add(mesh)),
                     Transform::default(),
                     Visibility::Hidden,

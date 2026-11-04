@@ -11,9 +11,11 @@
 //! - **glow**: unlit, additive, HDR vertex colour. Sparks, flashes, fire,
 //!   tracers, arcs. A sprite carries its own halo and a streak is never
 //!   drawn under ~1.5 px wide, so it reads as light with bloom off
-//!   (WebGL2, or a device without room for it: `look/gpu.rs`).
+//!   (WebGL2, a device without room for it, or a rung without it:
+//!   `look/quality.rs`). How many may fly is the EFFECTS row (`Caps`).
 //! - **soft**: lit like the world, blended, sorted back to front. Dust,
-//!   grit, smoke, mist.
+//!   grit, smoke, mist. The same pool on every rung: smoke can hide a
+//!   player.
 //!
 //! - `atlas`: the generated sprite sheet. `pool`: the pools and their mesh.
 //! - `table`: what a blow throws by weapon × matter, and each gun's look.
@@ -44,8 +46,8 @@ use proto::EventState;
 use sim::events::Kind;
 use sim::map::Map;
 
+use crate::look::quality::{Effects, Tier};
 use crate::look::shake::Shake;
-use crate::Opts;
 use pool::{pool_mesh, MeshWrite, Pool};
 use table::{Layer, Matter, Weapon};
 
@@ -53,9 +55,8 @@ use table::{Layer, Matter, Weapon};
 /// no tracer, no spark, its place rounded.
 pub const HEARD: u8 = 1;
 
-/// What a tier may have alive at once: the two pools, the marks, the
-/// flash lights.
-#[derive(Clone, Copy)]
+/// What may be alive at once: the two pools, the marks, the flash lights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Caps {
     pub glow: usize,
     pub soft: usize,
@@ -63,21 +64,29 @@ pub struct Caps {
     pub lights: usize,
 }
 
-/// The desktop's.
-const HIGH: Caps = Caps {
-    glow: 1024,
-    soft: 512,
-    marks: 192,
-    lights: 6,
-};
-/// WebGL2's, and `lite` (a software GPU). The WebGPU module has the
-/// desktop's.
-const LOW: Caps = Caps {
-    glow: 512,
-    soft: 256,
-    marks: 64,
-    lights: 2,
-};
+/// Smoke, dust and marks: the same on every rung. They can stand between
+/// a player and whoever is behind them, so a lower graphics rung that ran
+/// out of them sooner would see more (`quality.rs`' fairness).
+pub const SOFT: usize = 512;
+pub const MARKS: usize = 192;
+
+impl Caps {
+    /// The EFFECTS row (`quality::Effects`): how many sparks and tracers
+    /// may fly and how many flash lights burn. Those only show, never hide.
+    pub fn for_effects(e: Effects) -> Caps {
+        let (glow, lights) = match e {
+            Effects::High => (1024, 6),
+            Effects::Low => (512, 2),
+        };
+        Caps {
+            glow,
+            soft: SOFT,
+            marks: MARKS,
+            lights,
+        }
+    }
+}
+
 /// Flash lights spawned (the tier uses the first `Caps::lights`).
 const MAX_LIGHTS: usize = 6;
 
@@ -256,12 +265,12 @@ pub struct FxMesh {
 /// flies), so their pipelines compile at load and not on the first spark.
 pub fn setup(
     mut commands: Commands,
-    opts: Res<Opts>,
+    tier: Res<Tier>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let caps = if opts.lite || cfg!(webgl2) { LOW } else { HIGH };
+    let caps = Caps::for_effects(tier.gfx.effects);
     let sheet = images.add(atlas::sprite_image());
     let glow_mesh = meshes.add(pool_mesh(caps.glow));
     let soft_mesh = meshes.add(pool_mesh(caps.soft));
@@ -332,6 +341,25 @@ pub fn setup(
         own_left: false,
         last_light: Vec::new(),
     });
+}
+
+/// The EFFECTS row moved: the spark pool at its new size (what was flying
+/// in it goes) and the flash lights it may use. Smoke and marks stay.
+pub fn retier(tier: Res<Tier>, fx: Option<ResMut<Fx>>, mut meshes: ResMut<Assets<Mesh>>) {
+    let Some(mut fx) = fx else {
+        return;
+    };
+    let caps = Caps::for_effects(tier.gfx.effects);
+    if fx.caps == caps {
+        return;
+    }
+    if caps.glow != fx.caps.glow {
+        fx.glow = Pool::new(caps.glow, false);
+        if let Some(m) = meshes.get_mut(&fx.glow_mesh) {
+            *m = pool_mesh(caps.glow);
+        }
+    }
+    fx.caps = caps;
 }
 
 /// What the world looks like to the effects this frame: the map, who's in

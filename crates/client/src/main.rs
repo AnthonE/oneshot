@@ -1,5 +1,6 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--capsules] [--menu|--settings] [--shot out.png [--shot-at s]]`
+//! [--autoplay] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--shot out.png [--shot-at s]]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture): the
 //! desktop client. It opens on the title
 //! screen (`front.rs`); PLAY reads the game server's address and
@@ -35,6 +36,14 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let lite = flag("--lite");
+    let potato = flag("--potato");
+    let quality = match arg("--quality") {
+        Some(q) => Some(
+            oneshot_client::look::quality::Quality::from_name(&q.to_ascii_lowercase())
+                .ok_or_else(|| format!("--quality {q}: potato, low, medium or high"))?,
+        ),
+        None => None,
+    };
     // `--shot x.png [--shot-at s]`: one frame once the screen is there, then out.
     let shot = match arg("--shot") {
         Some(p) if p.to_ascii_lowercase().ends_with(".png") => Some(std::path::PathBuf::from(p)),
@@ -45,7 +54,7 @@ fn run() -> Result<(), String> {
         Some(s) => s.parse::<f64>().map_err(|_| format!("--shot-at {s}: seconds"))?,
         None => 1.0,
     };
-    let open = if flag("--settings") {
+    let open = if flag("--settings") || flag("--graphics") {
         Screen::Settings
     } else if flag("--menu") {
         Screen::Paused
@@ -57,6 +66,8 @@ fn run() -> Result<(), String> {
         let pose = oneshot_client::pose::Pose::parse(&q);
         let opts = oneshot_client::Opts {
             lite,
+            potato,
+            quality,
             pose: Some(pose),
             ..Default::default()
         };
@@ -78,8 +89,11 @@ fn run() -> Result<(), String> {
         let opts = oneshot_client::Opts {
             autoplay,
             lite,
+            potato,
+            quality,
             pose: None,
             capsules: flag("--capsules"),
+            graphics: flag("--graphics"),
             fxdemo,
             fxstage: None,
             open,
@@ -120,11 +134,14 @@ const HELP: &str = "oneshot: the desktop client
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros
                                    sign-in (the web page)
-  --lite                           the light tier: for a slow or software GPU
+  --lite                           POTATO for this run (your own graphics are kept)
+  --potato                         POTATO from now on (SETTINGS > GRAPHICS to change it)
+  --quality NAME                   potato, low, medium or high, for this run only
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
   --menu, --settings               open the match on the Esc menu or the settings
                                    (--settings alone: over the title)
+  --graphics                       the settings, on GRAPHICS
   --shot out.png [--shot-at S]     save one frame once the screen is there (its
                                    level built, its shaders compiled, nothing over
                                    it) and S seconds have passed (1), then exit 0;
@@ -134,11 +151,14 @@ const HELP: &str = "oneshot: the desktop client
 F12 saves a screenshot on any screen, into your pictures folder under
 oneshot/ (ONESHOT_SHOTS_DIR names another).
 
-Keys (by default; rebind them, with the mouse's speed, the field of view
-and the volume, in OPTIONS, saved in your config folder under
+Keys (by default; rebind them, with the mouse's speed, the field of view,
+the volume and the graphics, in SETTINGS, saved in your config folder under
 oneshot/settings.toml): WASD and the mouse, space jumps, Ctrl or C crouches,
 R reloads, E uses, G throws a frag, T picks frag or sticky, Q or V melees,
-X, 1 or the wheel swaps, N the net graph, Esc the menu.";
+X, 1 or the wheel swaps, N the net graph, F11 fullscreen, Esc the menu.
+
+A slow machine (a software rasterizer) starts on POTATO by itself until you
+pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
 const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam (or 0 to 6)";

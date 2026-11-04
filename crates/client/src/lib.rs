@@ -15,6 +15,7 @@
 
 pub mod binds;
 pub mod config;
+pub mod display;
 pub mod door;
 pub mod front;
 pub mod hud;
@@ -187,14 +188,20 @@ const BUTTONS: [(binds::Action, u16); 8] = [
     (binds::Action::GrenSwitch, GREN_SWITCH),
 ];
 
-/// How the app runs: `autoplay` drives it (tests); `lite` draws with no
-/// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
-/// the page also halves its canvas); `fxdemo` stages the effects in front
-/// of the camera (drawing only, `look/fx/demo.rs`).
+/// How the app runs: `autoplay` drives it (tests); `lite` draws POTATO
+/// for this run, keeping the player's own rung for the file (the browser
+/// gates on SwiftShader; the page also halves its canvas); `fxdemo` stages
+/// the effects in front of the camera (drawing only, `look/fx/demo.rs`).
 #[derive(Clone, Copy, Default, Resource)]
 pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
+    /// `potato` (`?potato`, `--potato`): POTATO whatever was chosen, and
+    /// kept (`look/potato.rs`).
+    pub potato: bool,
+    /// `quality=<name>` (`?quality=`, `--quality`): that rung for this run
+    /// only, and no picking for the machine: what a picture of a rung asks.
+    pub quality: Option<look::quality::Quality>,
     pub fxdemo: bool,
     /// `fxstage<N>`: the demo plays only its stage `N` (`demo.rs`).
     pub fxstage: Option<u32>,
@@ -207,6 +214,8 @@ pub struct Opts {
     /// (`settings`): for pictures of them (`ci/client_shot.mjs ... menu=1`).
     /// On the title, `settings` opens the settings over it.
     pub open: Screen,
+    /// `graphics`: the settings, on their GRAPHICS tab.
+    pub graphics: bool,
     /// The title, or straight into a mode, or neither (a picture).
     pub front: front::Start,
 }
@@ -218,6 +227,10 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
+            potato: has("potato"),
+            quality: s
+                .split([',', ' '])
+                .find_map(|w| w.strip_prefix("quality=").and_then(look::quality::Quality::from_name)),
             fxdemo: has("fxdemo") || s.contains("fxstage"),
             fxstage: s
                 .split([',', ' '])
@@ -225,7 +238,8 @@ impl Opts {
             pose: None,
             capsules: has("capsules"),
             front: front::Start::Off,
-            open: if has("settings") {
+            graphics: has("graphics"),
+            open: if has("settings") || has("graphics") {
                 Screen::Settings
             } else if has("menu") {
                 Screen::Paused
@@ -293,6 +307,12 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
+    // The graphics ladder after the settings it reads: its tier exists
+    // before anything is spawned with it.
+    .add_plugins(look::quality::plugin)
+    .add_plugins(look::potato::plugin)
+    .add_plugins(look::render_scale::plugin)
+    .add_plugins(display::plugin)
     .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
@@ -314,6 +334,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (look::prewarm::warm, look::prewarm::warm_models, look::prewarm::retire).chain(),
     )
+    .add_systems(PreUpdate, look::fx::retier.after(look::quality::resolve))
     .add_systems(
         Update,
         (
@@ -341,8 +362,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
     app.insert_resource(opts);
-    if opts.lite {
-        app.add_systems(Update, lite);
+    if opts.graphics {
+        app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
@@ -547,6 +568,7 @@ fn rebuild(
         ),
         With<Eye>,
     >,
+    mut shade: ResMut<look::quality::MapShade>,
 ) {
     let s = link.0.session();
     let now = Some((gen.map_or(0, |g| g.0), s.welcomes));
@@ -560,6 +582,10 @@ fn rebuild(
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
             look::rig::expose_for(&d.light, &mut exposure, &mut env);
         }
+    }
+    // Every rung's shade reaches across this map (`look/quality.rs`).
+    if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
+        shade.set_if_neq(look::quality::MapShade::of(d));
     }
 }
 
@@ -872,26 +898,6 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA, no grass.
-fn lite(
-    mut commands: Commands,
-    mut suns: Query<&mut DirectionalLight>,
-    aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
-    grass: Query<Entity, With<level::GrassPart>>,
-) {
-    for e in &grass {
-        commands.entity(e).despawn();
-    }
-    for mut s in &mut suns {
-        if s.shadows_enabled {
-            s.shadows_enabled = false;
-        }
-    }
-    for e in &aa {
-        commands.entity(e).remove::<bevy::anti_alias::smaa::Smaa>();
-    }
-}
-
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it, and where the title's controls are (`ui`: a tag's
 /// centre and size in the page's pixels, for a click).
@@ -910,6 +916,7 @@ fn expose(
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
     settle: Res<loading::Settle>,
+    tier: Res<look::quality::Tier>,
     mut frames: Local<u32>,
 ) {
     use wasm_bindgen::JsValue;
@@ -946,7 +953,12 @@ fn expose(
     set(&o, "screen", name.into());
     // Which module this is and what it draws (`look/gpu.rs`).
     set(&o, "gfx", look::gpu::api().into());
-    set(&o, "tier", look::gpu::tier().describe().into());
+    set(&o, "tier", tier.describe().into());
+    set(
+        &o,
+        "quality",
+        tier.preset.map_or("custom", look::quality::Quality::name).into(),
+    );
     // The screen's level is there with nothing over it (`loading::Settle`):
     // what `ci/client_shot.mjs` waits for before its seconds.
     set(&o, "ready", settle.shown().into());

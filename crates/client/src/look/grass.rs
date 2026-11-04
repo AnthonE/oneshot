@@ -16,6 +16,26 @@ use sim::terrain::{TerrainDef, HEIGHT_Q};
 
 /// Gates' tuft: 0.4 m tall, three cards, twice as wide as tall, sunk 4%.
 pub const TUFT_H: f32 = 0.40;
+/// A tuft's height jitter (`0.75 + 0.5 × hash`) and a card's (`0.8 + 0.4 ×
+/// hash`), each at its most.
+const TUFT_JITTER_MAX: f32 = 1.25;
+const CARD_JITTER_MAX: f32 = 1.2;
+/// The tallest card any tuft can grow (a green one: dry tufts are 0.8).
+pub const TUFT_MAX_H: f32 = TUFT_H * TUFT_JITTER_MAX * CARD_JITTER_MAX;
+
+// The graphics ladder thins the grass and draws it nearer on a lower rung
+// (`quality::Cover`), which is fair only because grass hides no one: it
+// never reaches the top of a crouching fighter's hit box.
+const _: () = assert!(
+    TUFT_MAX_H < sim::consts::HIT_TOP_CROUCH,
+    "grass that can hide a crouching fighter can't be a graphics row: every rung must draw it the same"
+);
+
+/// The share of the tufts in each density layer, in order: GRASS LOW draws
+/// the first, MEDIUM the first two, HIGH all three (`quality::Cover`). A
+/// tuft's layer is hashed from its cell, so a rung is the same tufts every
+/// time, and thinning keeps the scatter even.
+pub const LAYER_SHARE: [f32; 3] = [0.5, 0.25, 0.25];
 const CARDS_PER_TUFT: u32 = 3;
 const CARD_ASPECT: f32 = 2.0;
 const CARD_SINK: f32 = 0.04;
@@ -25,7 +45,8 @@ const ROWS: u32 = 2;
 /// The scatter's cell, and a block's side.
 const STEP_M: f32 = 0.7;
 pub const BLOCK_M: f32 = 16.0;
-/// Past this a block isn't drawn (Gates fades grass out by 46 m).
+/// Past this a block isn't drawn at HIGH (Gates fades grass out by 46 m);
+/// the GRASS DISTANCE row moves it (`quality::COVER_M_LADDER`).
 pub const DRAW_M: f32 = 46.0;
 /// What a dry tuft's photograph is multiplied by, and a green one's.
 const STRAW: [f32; 3] = [1.35, 1.12, 0.62];
@@ -34,6 +55,20 @@ const GREEN: [f32; 3] = [0.95, 1.0, 0.85];
 #[derive(Component)]
 pub struct GrassBlock {
     pub centre: Vec2,
+    /// Its density layer ([`LAYER_SHARE`]).
+    pub layer: u8,
+}
+
+/// The layer a tuft with hash `r` (0..1) is in.
+fn layer_of(r: f32) -> usize {
+    let mut edge = 0.0;
+    for (i, share) in LAYER_SHARE.iter().enumerate() {
+        edge += share;
+        if r < edge {
+            return i;
+        }
+    }
+    LAYER_SHARE.len() - 1
 }
 
 fn hash01(seed: u32, k: u32) -> f32 {
@@ -131,14 +166,15 @@ impl Soup {
     }
 }
 
-/// The blocks of grass for a map's terrain, each a mesh and its centre.
-pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32) -> Vec<(Mesh, Vec2)> {
+/// The blocks of grass for a map's terrain: a mesh per block and density
+/// layer, its centre and its layer.
+pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let mut bz = lo.1;
     while bz < hi.1 {
         let mut bx = lo.0;
         while bx < hi.0 {
-            let mut soup = Soup::default();
+            let mut soups: [Soup; LAYER_SHARE.len()] = Default::default();
             let n = (BLOCK_M / STEP_M) as u32;
             for j in 0..n {
                 for i in 0..n {
@@ -161,7 +197,7 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32) -> Vec<
                     };
                     let Some(y) = ground(t, x, z) else { continue };
                     let h = TUFT_H * scale * (0.75 + 0.5 * hash01(cell, 4));
-                    soup.tuft(
+                    soups[layer_of(hash01(cell, 6))].tuft(
                         Vec3::new(x, y, z),
                         hash01(cell, 5) * core::f32::consts::TAU,
                         cell,
@@ -170,8 +206,11 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32) -> Vec<
                     );
                 }
             }
-            if let Some(m) = soup.mesh() {
-                out.push((m, Vec2::new(bx + BLOCK_M * 0.5, bz + BLOCK_M * 0.5)));
+            let centre = Vec2::new(bx + BLOCK_M * 0.5, bz + BLOCK_M * 0.5);
+            for (layer, soup) in soups.into_iter().enumerate() {
+                if let Some(m) = soup.mesh() {
+                    out.push((m, centre, layer as u8));
+                }
             }
             bx += BLOCK_M;
         }
@@ -180,15 +219,21 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32) -> Vec<
     out
 }
 
-/// Only the blocks near the eye are drawn.
-pub fn cull(eye: Query<&GlobalTransform, With<Camera3d>>, mut blocks: Query<(&GrassBlock, &mut Visibility)>) {
+/// Only the blocks near the eye are drawn, and only the layers the tier's
+/// cover draws (`quality::Cover`), out to its distance.
+pub fn cull(
+    eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
+    tier: Res<super::quality::Tier>,
+    mut blocks: Query<(&GrassBlock, &mut Visibility)>,
+) {
     let Ok(e) = eye.single() else {
         return;
     };
     let p = e.translation().xz();
-    let reach = DRAW_M + BLOCK_M * 0.71;
+    let reach = tier.gfx.cover_m + BLOCK_M * 0.71;
+    let layers = tier.gfx.cover.layers();
     for (b, mut v) in blocks.iter_mut() {
-        let want = if b.centre.distance(p) < reach {
+        let want = if b.layer < layers && b.centre.distance(p) < reach {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -196,5 +241,25 @@ pub fn cull(eye: Query<&GlobalTransform, With<Camera3d>>, mut blocks: Query<(&Gr
         if *v != want {
             *v = want;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_layers_share_out_every_tuft() {
+        assert!((LAYER_SHARE.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert_eq!(layer_of(0.0), 0);
+        assert_eq!(layer_of(0.49), 0);
+        assert_eq!(layer_of(0.5), 1);
+        assert_eq!(layer_of(0.8), 2);
+        assert_eq!(layer_of(0.999_999), 2);
+        assert_eq!(
+            usize::from(crate::look::quality::Cover::High.layers()),
+            LAYER_SHARE.len(),
+            "HIGH draws every layer"
+        );
     }
 }

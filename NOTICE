@@ -25,9 +25,11 @@ Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
     Reserved"
 
 Code ported into the Bevy client (crates/client/src/look) from Gates
-(AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
-ground and grass modules as they arrive), and into tools/glb from Gates'
-crates/client/src/webassets.rs, under the MIT licence:
+(AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, quality.rs,
+potato.rs, render_scale.rs with assets/shaders/render_scale.wgsl, the
+settings' graphics half, and the sky, ground and grass modules as they
+arrive), and into tools/glb from Gates' crates/client/src/webassets.rs,
+under the MIT licence:
 
     Copyright (c) 2026 MoreRight DAO
 

@@ -2,20 +2,18 @@
 //! tone, fill, sun and haze, so they can't drift apart.
 //!
 //! Ported from Gates' `crates/client/src/render/rig.rs` (MIT, © 2026
-//! MoreRight DAO) at its noon, with its two tiers (`gpu.rs` decides which):
-//! the desktop's, which the browser's WebGPU module draws too (atmosphere,
-//! SSAO, bloom, TAA, four shadow cascades, each where the device has room
-//! for it), and WebGL2's (no compute, so no atmosphere and no SSAO; SMAA,
-//! one cascade, and the air as a fog). Gates' day cycle, weather, moon and
-//! shafts are left out: a match is noon on a clear day.
+//! MoreRight DAO) at its noon. The sky is the GPU's to decide (`gpu.rs`:
+//! Bevy's atmosphere where there is compute, else a baked sky and the air
+//! as a fog); the post stack (SSAO, anti-aliasing, bloom) and the sun's
+//! cascades are the graphics ladder's (`quality::apply` puts them on this
+//! camera and every sun the frame they appear, and again whenever the tier
+//! moves). Gates' day cycle, weather, moon and shafts are left out: a match
+//! is noon on a clear day.
 
-use bevy::anti_alias::smaa::Smaa;
-use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{light_consts::lux, CascadeShadowConfigBuilder, EnvironmentMapLight, SunDisk};
-use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium, ScreenSpaceAmbientOcclusion};
-use bevy::post_process::bloom::Bloom;
+use bevy::pbr::{Atmosphere, AtmosphereSettings, ScatteringMedium};
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, Msaa};
 
@@ -37,13 +35,22 @@ pub const AIR_DENSITY: f32 = 0.85;
 pub const HAZE_SCALE: f32 = 10.0;
 /// The shadow cascades: from here, the first one's far edge, and their
 /// overlap (Gates' `CASCADE_*`); how far they reach and how many is the
-/// tier's (`gpu::Tier`).
+/// graphics tier's (`quality::Tier`).
 pub const CASCADE_MIN_M: f32 = 0.2;
 pub const CASCADE_FIRST_M: f32 = 12.0;
 pub const CASCADE_OVERLAP: f32 = 0.2;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
+
+/// The world's camera, whatever else marks it: what the graphics tier
+/// (`quality::apply`) and the render scale (`render_scale.rs`) dress.
+#[derive(Component)]
+pub struct EyeCam;
+
+/// The level's sun: `quality::apply` gives it the tier's cascades.
+#[derive(Component)]
+pub struct Sun;
 
 /// The direction toward the sun.
 pub fn to_sun() -> Vec3 {
@@ -86,6 +93,7 @@ pub fn camera<M: Component>(
     let eye = commands
         .spawn((
             marker,
+            EyeCam,
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: FOV_DEG.to_radians(),
@@ -114,12 +122,9 @@ pub fn camera<M: Component>(
             Transform::from_xyz(0.0, 2.0, 0.0),
         ))
         .id();
-    // What this build on this device draws (`gpu.rs`). Each piece is
-    // inserted only where it can be: under WebGL2 the atmosphere's and the
-    // prepasses' layouts kill the module, under WebGPU a pipeline over the
-    // device's textures loses the frame.
-    let tier = super::gpu::tier();
-    if tier.atmosphere {
+    // The sky this device can draw (`gpu.rs`): inserted where it can't,
+    // the atmosphere's layout kills a WebGL2 module.
+    if super::gpu::atmosphere() {
         let medium = media.add(medium());
         commands.entity(eye).insert((
             Atmosphere::earthlike(medium),
@@ -133,21 +138,6 @@ pub fn camera<M: Component>(
         // No atmosphere: its air as a fog (Gates' browser haze), and its
         // sky baked into the cube `sky_for` hangs on the camera.
         commands.entity(eye).insert(super::sky::browser_haze(1.0));
-    }
-    if let Some(quality_level) = tier.ssao {
-        commands.entity(eye).insert(ScreenSpaceAmbientOcclusion {
-            quality_level,
-            ..default()
-        });
-    }
-    if tier.bloom {
-        commands.entity(eye).insert(Bloom::NATURAL);
-    }
-    if tier.taa {
-        commands.entity(eye).insert(TemporalAntiAliasing::default());
-    }
-    if tier.smaa {
-        commands.entity(eye).insert(Smaa::default());
     }
     eye
 }
@@ -166,7 +156,7 @@ pub fn expose_for(light: &sim::map::LightDef, exposure: &mut Exposure, env: &mut
 /// where there is none (WebGL2) the sky is baked in behind them.
 pub fn sky_for(commands: &mut Commands, images: &mut Assets<Image>, eye: Entity, seed: u64) {
     use super::sky::{cloud_cubemap_with, deck_gain, CLOUD_NITS};
-    let backdrop = !super::gpu::tier().atmosphere;
+    let backdrop = !super::gpu::atmosphere();
     let image = images.add(cloud_cubemap_with(seed, backdrop));
     commands.entity(eye).insert(bevy::core_pipeline::Skybox {
         image,
@@ -175,11 +165,12 @@ pub fn sky_for(commands: &mut Commands, images: &mut Assets<Image>, eye: Entity,
     });
 }
 
-/// The sun at noon, `k` of its full strength, shadowing out to the tier's
-/// reach.
+/// The sun at noon, `k` of its full strength. Its cascades here are a
+/// placeholder: `quality::apply` gives a new [`Sun`] the tier's the frame
+/// it appears.
 pub fn sun(k: f32) -> impl Bundle {
-    let tier = super::gpu::tier();
     (
+        Sun,
         DirectionalLight {
             color: Color::WHITE,
             illuminance: lux::DIRECT_SUNLIGHT * k,
@@ -187,9 +178,9 @@ pub fn sun(k: f32) -> impl Bundle {
             ..default()
         },
         CascadeShadowConfigBuilder {
-            num_cascades: tier.cascades,
+            num_cascades: 1,
             minimum_distance: CASCADE_MIN_M,
-            maximum_distance: tier.shadow_m,
+            maximum_distance: super::quality::SHADOW_M_LADDER[0],
             first_cascade_far_bound: CASCADE_FIRST_M,
             overlap_proportion: CASCADE_OVERLAP,
         }

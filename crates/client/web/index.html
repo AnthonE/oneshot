@@ -86,6 +86,25 @@
       const params = new URLSearchParams(location.search);
       const flag = (k) => params.get(k) === '1';
       if (flag('lite')) document.getElementById('wrap').classList.add('lite');
+      // The graphics ladder's words for the game (look/quality.rs,
+      // look/potato.rs): `?potato` is POTATO from now on, `?quality=high`
+      // (potato, low, medium, high) that rung for this run, as a picture of
+      // it wants; `?lite=1` is POTATO for this run.
+      const gfxOpts = [
+        ...(params.has('potato') && params.get('potato') !== '0' ? ['potato'] : []),
+        ...(/^(potato|low|medium|high)$/.test(params.get('quality') ?? '') ? ['quality=' + params.get('quality')] : []),
+      ];
+      /* FULLSCREEN on the settings screen is the page's (crates/client/src/
+         display.rs). Esc is the game's menu key and a browser also ends a
+         page's fullscreen on it: while fullscreen, Keyboard Lock (Chromium)
+         hands Esc to the game, and holding it still leaves, as the browser
+         says. Elsewhere the row follows the browser out. */
+      document.addEventListener('fullscreenchange', () => {
+        const kb = navigator.keyboard;
+        if (!kb || !kb.lock) return;
+        if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
+        else kb.unlock();
+      });
       const boot = document.getElementById('boot');
       const say = (line, bad) => { document.getElementById('say').textContent = line; boot.classList.toggle('failed', !!bad); };
       // The splash goes once the game has drawn a few frames.
@@ -263,7 +282,7 @@
           // No server: one fighter for a picture (ci/look.mjs).
           boot.remove();
           started = performance.now();
-          pose(location.search, ['lite'].filter(flag).join(','));
+          pose(location.search, ['lite'].filter(flag).concat(gfxOpts).join(','));
           await new Promise(() => {}); // nothing more for the page to do
         }
         try {
@@ -280,8 +299,8 @@
           } catch { return null; }
         };
         const signin = await setupSignIn(info);
-        const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag)
-          .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
+        const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics'].filter(flag)
+          .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts).join(',');
         say('Starting');
         requestAnimationFrame(shown);
         started = performance.now();

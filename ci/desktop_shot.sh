@@ -10,8 +10,10 @@
 #   autoplay 0: the title (no server); 1: a match of `mode` on `map` against
 #   a local target/release/oneshot-server, the autopilot driving.
 #   more: menu (the Esc menu over the match), settings (over the title, or
-#   the match), fxdemo, lite, capsules, name=NAME, pose=QUERY (no server:
-#   a picture, `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`).
+#   the match), graphics (the settings on GRAPHICS), fxdemo, lite (POTATO),
+#   quality=potato|low|medium|high (that rung; unset, the default HIGH),
+#   capsules, name=NAME, pose=QUERY (no server: a picture,
+#   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`).
 #
 #   ci/desktop_shot.sh traces/title.png 2 0 0 0
 #   ci/desktop_shot.sh traces/settings.png 2 0 0 0 settings
@@ -48,13 +50,15 @@ for w in "${more[@]}"; do
   case $w in
     menu | menu=1) args+=(--menu) ;;
     settings | settings=1) args+=(--settings) ;;
+    graphics | graphics=1) args+=(--graphics) ;;
+    quality=*) args+=(--quality "${w#quality=}") ;;
     title | title=1) ;;
     fxdemo | fxdemo=1) match=1; args+=(--fxdemo) ;;
     lite | lite=1) args+=(--lite) ;;
     capsules | capsules=1) args+=(--capsules) ;;
     name=*) args+=(--name "${w#name=}") ;;
     pose=*) args+=(--pose "${w#pose=}") ;;
-    *) echo "desktop_shot: what is '$w'? (menu settings title fxdemo lite capsules name= pose=)" >&2; exit 1 ;;
+    *) echo "desktop_shot: what is '$w'? (menu settings graphics title fxdemo lite quality= capsules name= pose=)" >&2; exit 1 ;;
   esac
 done
 case " ${args[*]} " in *" --pose "*) match=0 ;; esac

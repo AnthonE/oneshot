@@ -5,13 +5,21 @@
 //! value `+` stepper, a toggle a button that says ON or OFF; a key cell
 //! captures the next key pressed (Esc cancels, a right click clears it), and
 //! a key taken from another action says where from. Everything saves as it
-//! changes (`settings.rs`). Over a match the match shows through, so a wider
-//! view is seen as it's chosen. BACK or Esc: the Esc menu, or the title.
+//! changes (`settings.rs`) and applies at once: over a match the match shows
+//! through, so a wider view or a lower rung is seen as it's chosen. BACK or
+//! Esc: the Esc menu, or the title.
+//!
+//! GRAPHICS is the ladder (`look/quality.rs`): QUALITY writes every row
+//! under it and reads CUSTOM once one moves. A row this target can't move
+//! is drawn as a fact saying why (WebGL2's walls, a browser's own frame
+//! pacing), never as a control that does nothing; what this GPU refused of
+//! the rest is the "on this machine" line, derived from what is drawn.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::binds::{normalize, Action, Bind, Binds, MOUSE, SPECS};
+use crate::look::quality::{self, Tier};
 use crate::settings::{Disk, Knob, Settings};
 use crate::{ui, Screen};
 
@@ -44,9 +52,11 @@ struct Back;
 struct ResetTab;
 
 /// The rail.
-pub const CATEGORIES: [&str; 3] = ["MOUSE AND VIEW", "SOUND", "KEYS"];
+pub const CATEGORIES: [&str; 4] = ["MOUSE AND VIEW", "SOUND", "GRAPHICS", "KEYS"];
+/// The rail's GRAPHICS.
+pub const GRAPHICS: usize = 2;
 /// The rail's KEYS (the title's CONTROLS opens on it).
-pub const KEYS: usize = 2;
+pub const KEYS: usize = 3;
 
 /// The screen's own state: the picked category, the cell waiting for a
 /// key, the line under the pane, and where the pane was scrolled to (kept
@@ -97,9 +107,10 @@ fn build(
     st: Res<Page>,
     disk: Option<Res<Disk>>,
     in_match: Option<Res<crate::front::InMatch>>,
+    tier: Res<Tier>,
 ) {
     let to = back(in_match.as_deref());
-    spawn(&mut commands, &settings, &binds, &st, disk.as_deref(), to);
+    spawn(&mut commands, &settings, &binds, &st, disk.as_deref(), to, &tier);
 }
 
 /// The frame every row shares: label left, control right.
@@ -116,7 +127,15 @@ fn frame() -> Node {
     }
 }
 
-fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page, disk: Option<&Disk>, to: Screen) {
+fn spawn(
+    commands: &mut Commands,
+    settings: &Settings,
+    binds: &Binds,
+    st: &Page,
+    disk: Option<&Disk>,
+    to: Screen,
+    tier: &Tier,
+) {
     let over_match = to == Screen::Paused;
     let (root_bg, panel_bg) = if over_match {
         (Color::srgba(0.055, 0.051, 0.043, 0.55), ui::PANE_BG)
@@ -215,6 +234,7 @@ fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page,
                         number(pane, settings, Knob::Master, "VOLUME", "everything");
                         number(pane, settings, Knob::Effects, "GAME SOUNDS", "shots, steps, hits");
                     }
+                    GRAPHICS => graphics(pane, settings, tier),
                     _ => {
                         for s in &SPECS {
                             key_row(pane, binds, st, s.action, s.name);
@@ -248,6 +268,9 @@ fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page,
                         st.note.clone()
                     } else if st.cat == KEYS {
                         "Click a key to change it · right click clears it".to_string()
+                    } else if st.cat == GRAPHICS && settings.held.is_some() {
+                        "This run draws another rung (--lite, ?quality=): yours is kept until you change a row"
+                            .to_string()
                     } else {
                         String::new()
                     };
@@ -275,6 +298,156 @@ fn note(p: &mut ChildSpawnerCommands, text: &str) {
         },
         children![ui::label(text, 14.0, ui::DIM)],
     ));
+}
+
+/// A row with nothing to turn: a label and what is so.
+fn fact(p: &mut ChildSpawnerCommands, name: &str, value: impl Into<String>) {
+    p.spawn((frame(), BackgroundColor(ui::ROW_IDLE))).with_children(|r| {
+        r.spawn(ui::strong(name, 15.0, ui::DIM));
+        r.spawn((
+            Node {
+                max_width: Val::Px(520.0),
+                justify_content: JustifyContent::FlexEnd,
+                ..default()
+            },
+            children![ui::label(value, 13.0, ui::DIM)],
+        ));
+    });
+}
+
+/// SETTINGS > GRAPHICS: the preset, its rows, what this machine does with
+/// them, and the window.
+fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
+    let webgl2 = crate::look::gpu::WEBGL2;
+    let browser = cfg!(target_arch = "wasm32");
+    number(pane, s, Knob::Quality, "QUALITY", "a preset for the rows below");
+    pane.spawn(ui::group("SHADE"));
+    let floor = tier.shadow_m > tier.gfx.shadow_m;
+    number(
+        pane,
+        s,
+        Knob::ShadowDistance,
+        "SHADOW DISTANCE",
+        if floor {
+            "at least across this map"
+        } else {
+            "how far the sun casts"
+        },
+    );
+    if webgl2 {
+        fact(pane, "CASCADES", "1: WebGL2 draws one, over the whole distance");
+    } else {
+        number(pane, s, Knob::Cascades, "CASCADES", "slices of the distance");
+    }
+    number(pane, s, Knob::ShadowMap, "SHADOW MAP", "texels a side");
+    fact(pane, "  at the far edge", far_edge(s, tier));
+    pane.spawn(ui::group("IMAGE"));
+    if webgl2 {
+        fact(pane, "AMBIENT OCCLUSION", "not in WebGL2: it has no compute");
+    } else {
+        number(pane, s, Knob::Ambient, "AMBIENT OCCLUSION", "contact shading");
+    }
+    number(
+        pane,
+        s,
+        Knob::Aa,
+        "ANTI-ALIASING",
+        if webgl2 {
+            "FXAA or SMAA; no TAA in WebGL2"
+        } else {
+            "TAA is the smoothest"
+        },
+    );
+    if webgl2 {
+        fact(pane, "BLOOM", "not in WebGL2: the glows are drawn to read without it");
+    } else {
+        toggle(pane, s, Knob::Bloom, "BLOOM");
+    }
+    number(
+        pane,
+        s,
+        Knob::RenderScale,
+        "RENDER SCALE",
+        "the world's resolution; the HUD stays sharp",
+    );
+    fact(
+        pane,
+        "SKY",
+        if tier.atmosphere {
+            "the atmosphere: this GPU draws the sky and the air"
+        } else if webgl2 {
+            "baked, and the same air as a haze: WebGL2 has no compute"
+        } else {
+            "baked, and the same air as a haze: this GPU can't filter the atmosphere's tables"
+        },
+    );
+    pane.spawn(ui::group("WORLD"));
+    number(pane, s, Knob::Cover, "GRASS", "how thick");
+    number(pane, s, Knob::CoverDistance, "GRASS DISTANCE", "how far out");
+    number(pane, s, Knob::Fx, "EFFECTS", "sparks, tracers, flash lights");
+    pane.spawn(ui::group("ON THIS MACHINE"));
+    note(pane, &target_note(s, tier));
+    pane.spawn(ui::group("WINDOW"));
+    toggle(pane, s, Knob::Fullscreen, "FULLSCREEN");
+    if browser {
+        fact(pane, "VSYNC", "always: the browser draws once a refresh");
+        fact(pane, "FRAME CAP", "the display's: the browser paces every frame");
+    } else {
+        toggle(pane, s, Knob::Vsync, "VSYNC");
+        number(pane, s, Knob::FrameCap, "FRAME CAP", "frames a second");
+    }
+    note(
+        pane,
+        "No row shows anyone another hides: the shade reaches across the map on every rung, smoke and marks are \
+         the same for all, and grass never stands as tall as a crouching fighter.",
+    );
+}
+
+/// The shade at the far edge of the last cascade, as drawn: centimetres of
+/// world per texel, and what the maps cost.
+fn far_edge(s: &Settings, tier: &Tier) -> String {
+    let g = &tier.gfx;
+    format!(
+        "{:.0} cm a texel at {:.0} m · {:.0} MiB",
+        quality::far_texel_m(g.cascades, tier.shadow_m, g.shadow_map_px, s.fov) * 100.0,
+        tier.shadow_m,
+        quality::shadow_vram_mb(g.cascades, g.shadow_map_px),
+    )
+}
+
+/// What this machine draws differently from the rows, in a sentence:
+/// derived by diffing them against what is drawn, so a clamp shows up here
+/// the day it's added and stops being claimed the day it goes.
+fn target_note(s: &Settings, tier: &Tier) -> String {
+    let (want, got) = (s.gfx, tier.gfx);
+    let mut notes: Vec<String> = Vec::new();
+    if tier.shadow_m > want.shadow_m {
+        notes.push(format!(
+            "shadows reach {:.0} m, across this map, for everyone",
+            tier.shadow_m
+        ));
+    }
+    if got.ao != want.ao {
+        notes.push("no ambient occlusion: this GPU has no room for its prepasses".into());
+    }
+    if got.aa != want.aa {
+        notes.push(format!(
+            "{} for {}: no room for TAA's history",
+            got.aa.name().to_uppercase(),
+            want.aa.name().to_uppercase()
+        ));
+    }
+    if got.bloom != want.bloom {
+        notes.push("no bloom: this GPU can't draw its mip chain".into());
+    }
+    if notes.is_empty() {
+        "Everything above is what is drawn.".into()
+    } else {
+        let mut line = notes.join("; ");
+        line.push('.');
+        let mut c = line.chars();
+        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+    }
 }
 
 fn number(p: &mut ChildSpawnerCommands, s: &Settings, knob: Knob, name: &str, unit: &str) {
@@ -460,6 +633,7 @@ fn click(
                     settings.master = d.master;
                     settings.effects = d.effects;
                 }
+                GRAPHICS => settings.reset_graphics(),
                 _ => *binds = Binds::default(),
             }
             st.note = format!("{} is back to its defaults", CATEGORIES[st.cat]);
@@ -534,8 +708,11 @@ fn rebuild(
     binds: Res<Binds>,
     disk: Option<Res<Disk>>,
     in_match: Option<Res<crate::front::InMatch>>,
+    tier: Res<Tier>,
 ) {
-    if !st.dirty {
+    // Also when something else moved them: F11, the page leaving
+    // fullscreen, the frame-rate watch, the map's shade.
+    if !st.dirty && !settings.is_changed() && !tier.is_changed() {
         return;
     }
     st.dirty = false;
@@ -549,5 +726,6 @@ fn rebuild(
         &st,
         disk.as_deref(),
         back(in_match.as_deref()),
+        &tier,
     );
 }
