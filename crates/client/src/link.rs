@@ -19,6 +19,69 @@ pub trait Link {
     fn closed(&self) -> bool;
     /// We're leaving: close the connection (the server lets the seat go).
     fn leave(&mut self) {}
+    /// Not connected yet: a stand-in while the page warms the game up
+    /// (`Pending`).
+    fn pending(&self) -> bool {
+        false
+    }
+    /// The real link, and what its stream said first, once it's here
+    /// (`Pending`); the app swaps it in.
+    fn take(&mut self) -> Option<(Box<dyn Link>, Vec<proto::Msg>)> {
+        None
+    }
+}
+
+/// Where the page's connect puts the client once it's seated, and what
+/// its stream said before (the queue's lines, the welcome).
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub struct Slot {
+    pub client: Option<client_net::web::Client>,
+    pub early: Vec<proto::Msg>,
+}
+
+/// A browser's link before it connects: Proving Grounds and nobody, so
+/// the game draws a level (warming every pipeline, `warm.rs`) behind the
+/// page's menu while the page waits; then the real one, from the slot.
+#[cfg(target_arch = "wasm32")]
+pub struct Pending {
+    idle: Still,
+    slot: std::rc::Rc<std::cell::RefCell<Slot>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Pending {
+    pub fn new(slot: std::rc::Rc<std::cell::RefCell<Slot>>) -> Pending {
+        Pending {
+            idle: Still::on(0),
+            slot,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Link for Pending {
+    fn update(&mut self, _: Input) {}
+    fn session(&self) -> &Session {
+        self.idle.session()
+    }
+    fn session_mut(&mut self) -> &mut Session {
+        self.idle.session_mut()
+    }
+    fn now_ms(&self) -> f64 {
+        0.0
+    }
+    fn closed(&self) -> bool {
+        false
+    }
+    fn pending(&self) -> bool {
+        true
+    }
+    fn take(&mut self) -> Option<(Box<dyn Link>, Vec<proto::Msg>)> {
+        let mut s = self.slot.borrow_mut();
+        let client = s.client.take()?;
+        Some((Box::new(Web(client)), core::mem::take(&mut s.early)))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

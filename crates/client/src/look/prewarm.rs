@@ -46,12 +46,17 @@ pub struct SceneDone;
 #[derive(Component)]
 pub struct WarmBody;
 
+/// The models have been put up to warm (`warm.rs` waits for it).
+#[derive(Resource, Default)]
+pub struct WarmModels(pub bool);
+
 /// The triangle every material is warmed on.
 #[derive(Resource)]
 pub struct WarmMesh(Handle<Mesh>);
 
 pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     commands.insert_resource(WarmMesh(meshes.add(Triangle3d::default())));
+    commands.init_resource::<WarmModels>();
 }
 
 fn at() -> Transform {
@@ -93,14 +98,14 @@ pub fn warm(
 #[allow(clippy::too_many_arguments)]
 pub fn warm_models(
     mut commands: Commands,
-    mut done: Local<bool>,
+    mut done: ResMut<WarmModels>,
     models: Option<Res<Models>>,
     assets: Res<AssetServer>,
     eye: Query<Entity, With<Eye>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
-    if *done {
+    if done.0 {
         return;
     }
     let (Some(models), Ok(eye)) = (models, eye.single()) else {
@@ -112,7 +117,7 @@ pub fn warm_models(
     if !scenes.iter().all(settled) {
         return;
     }
-    *done = true;
+    done.0 = true;
     for scene in scenes.iter().take(scenes.len() - 1) {
         commands
             .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))

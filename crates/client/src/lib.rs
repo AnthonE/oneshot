@@ -18,11 +18,13 @@ pub mod link;
 pub mod look;
 pub mod options;
 pub mod pause;
+pub mod pipelines;
 pub mod pointer;
 pub mod pose;
 pub mod settings;
 pub mod sound;
 pub mod ui;
+pub mod warm;
 
 use std::collections::BTreeMap;
 
@@ -288,6 +290,9 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
+    .add_plugins(pipelines::plugin)
+    .init_resource::<warm::Warm>()
+    .add_systems(Update, warm::check)
     .add_plugins(settings::plugin)
     .insert_state(opts.open)
     .add_plugins(pause::plugin)
@@ -311,6 +316,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_systems(
         Update,
         (
+            adopt,
             grab,
             pump,
             happened,
@@ -525,6 +531,16 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     let fire = if f.last_buttons & FIRE == 0 { FIRE } else { 0 };
     let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
+}
+
+/// The real link once it's here (`link::Pending`): in, with what its
+/// stream said first, and the level built again for its map.
+fn adopt(mut link: NonSendMut<LinkRes>, mut built: ResMut<Built>, mut early: ResMut<Early>) {
+    if let Some((next, said)) = link.0.take() {
+        link.0 = next;
+        early.0.extend(said);
+        built.0 = 0;
+    }
 }
 
 /// A new welcome: the map it names. (Bevy hands a system its world in
@@ -905,7 +921,13 @@ fn lite(
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
-fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>, mut frames: Local<u32>) {
+fn expose(
+    link: NonSend<LinkRes>,
+    st: Res<hud::HudState>,
+    left: Res<pause::Left>,
+    warm: Res<warm::Warm>,
+    mut frames: Local<u32>,
+) {
     use wasm_bindgen::JsValue;
     *frames += 1;
     let Some(w) = web_sys::window() else {
@@ -916,7 +938,8 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     let set = |k: &str, v: JsValue| {
         let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
     };
-    set("connected", s.ready.into());
+    // Seated: not the stand-in the page warms the game up on.
+    set("connected", (s.ready && !link.0.pending()).into());
     set("frames", (*frames).into());
     set("kills", st.kills.into());
     set("deaths", st.deaths.into());
@@ -933,6 +956,8 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     set("ended", (st.ended || link.0.closed()).into());
     // The player left (the Esc menu): straight back to the menu.
     set("left", left.0.into());
+    // Every pipeline built: the page may seat us (`warm.rs`).
+    set("warm", warm.done.into());
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;
@@ -1009,6 +1034,29 @@ mod web_start {
         let say = |line: &str| {
             let _ = status.call1(&JsValue::NULL, &JsValue::from_str(line));
         };
+        // The game first, on a stand-in link: it draws a level behind the
+        // menu until every pipeline is built (`warm.rs`), so the match
+        // doesn't start in a stall with us already seated in it. Then we
+        // connect, and the app takes the client from the slot.
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(super::link::Slot::default()));
+        super::app(
+            Box::new(super::link::Pending::new(slot.clone())),
+            super::Opts::parse(&opts),
+        )
+        .run();
+        say("getting the game ready...");
+        let warm = || {
+            web_sys::window()
+                .and_then(|w| js_sys::Reflect::get(&w, &JsValue::from_str("__oneshot")).ok())
+                .and_then(|o| js_sys::Reflect::get(&o, &JsValue::from_str("warm")).ok())
+                .is_some_and(|v| v.is_truthy())
+        };
+        let started = js_sys::Date::now();
+        // At most half a minute: a machine that never gets there plays anyway.
+        while !warm() && js_sys::Date::now() - started < WARM_MAX_MS {
+            sleep(100).await;
+        }
+        say("connecting...");
         let mut c = connect(addr, hash).await?;
         let mut moved = false;
         let mut early = Vec::new();
@@ -1046,11 +1094,14 @@ mod web_start {
             }
             sleep(100).await;
         }
-        let mut app = super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts));
-        app.insert_resource(super::Early(early));
-        app.run();
+        let mut s = slot.borrow_mut();
+        s.client = Some(c);
+        s.early = early;
         Ok(true)
     }
+
+    /// The longest the page waits for the game to be warm, ms.
+    const WARM_MAX_MS: f64 = 30_000.0;
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;
     /// `query` is the page's, as `?yaw=1.57&arm=3`).
