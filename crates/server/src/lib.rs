@@ -337,7 +337,11 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
         stats: stats::Stats::default(),
-        bugs: cfg.bugs.clone().map(bugs::Intake::new),
+        // Each slot its own file, by the HTTP port it answers on.
+        bugs: cfg.bugs.clone().map(|d| {
+            let tag = cfg.http.map_or(String::new(), |a| a.port().to_string());
+            bugs::Intake::new(d, &tag)
+        }),
         started: Instant::now(),
         allow_origins: cfg.allow_origins.clone(),
     });
@@ -584,6 +588,7 @@ impl Sim {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
+                        self.ctx.stats.joins_casual.fetch_add(1, Ordering::Relaxed);
                         sessions.insert(
                             session,
                             Sess {
@@ -626,6 +631,7 @@ impl Sim {
                         } else {
                             q.push(*entry);
                         }
+                        self.ctx.stats.joins_ranked.fetch_add(1, Ordering::Relaxed);
                         sessions.insert(session, Sess { tx, at: None });
                     }
                     ToSim::Input { session, msg } => {
@@ -669,7 +675,8 @@ impl Sim {
                                 reason: proto::REFUSE_FULL,
                             },
                         );
-                        self.ctx.stats.refuse(proto::REFUSE_FULL);
+                        // Joined, then let go: not a hello turned away.
+                        self.ctx.stats.let_go.fetch_add(1, Ordering::Relaxed);
                         s.tx.close();
                     }
                 }

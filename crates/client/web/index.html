@@ -194,6 +194,7 @@
           } else {
             send.disabled = false;
             line.textContent = code === 429 ? 'Too many reports from here just now: try again later.'
+              : reportTo === null ? "The page hasn't found the game's server yet: try again in a moment."
               : "It didn't go through. Try again in a moment.";
           }
         });
@@ -242,6 +243,18 @@
       const say = (line) => { status.textContent = line; };
       const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
       const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
+
+      // Where the game's own endpoints are: beside the page in dev, the game
+      // box when the page is published to elopros.com (ci/publish_web.sh
+      // writes origin.json). Read first, so a report can go while the game
+      // downloads, or after it failed to.
+      let base = '';
+      try {
+        const o = await fetch('origin.json');
+        if (o.ok) base = (await o.json()).server ?? '';
+      } catch { /* none: beside the page */ }
+      reportTo = base;
+      sendCrash();
 
       // The game's 31 MB, with a bar: the bytes are counted off a copy of the
       // download while the compiler takes the original (so it still
@@ -305,16 +318,6 @@
       skin_names().forEach((n, i) => skin.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
       skin.value = store('oneshot.skin') || '0';
 
-      // Where the game's own endpoints are: beside the page in dev, the game
-      // box when the page is published to elopros.com (ci/publish_web.sh
-      // writes origin.json).
-      let base = '';
-      try {
-        const o = await fetch('origin.json');
-        if (o.ok) base = (await o.json()).server ?? '';
-      } catch { /* none: beside the page */ }
-      reportTo = base;
-      sendCrash();
       const info = await (await fetch(`${base}server.json`)).json();
       const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
 

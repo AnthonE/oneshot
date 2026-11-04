@@ -144,6 +144,7 @@ mod crash {
         std::panic::set_hook(Box::new(move |info| {
             before(info);
             let doc = doc(&format!("{info}"));
+            let mut saved = None;
             if let Some(dir) = oneshot_client::config::settings_path().and_then(|p| Some(p.parent()?.join("crashes"))) {
                 let unix = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -154,11 +155,13 @@ mod crash {
                     .is_ok()
                 {
                     eprintln!("oneshot: the crash is written to {}", path.display());
+                    saved = Some(path);
                 }
             }
-            match super::fetch::post_bug(&server, &doc) {
-                Ok(s) if s == "204" => eprintln!("oneshot: and reported. Thank you."),
-                _ => eprintln!("oneshot: it couldn't be reported; the file has it."),
+            match (super::fetch::post_bug(&server, &doc), saved) {
+                (Ok(s), _) if s == "204" => eprintln!("oneshot: and reported. Thank you."),
+                (_, Some(p)) => eprintln!("oneshot: it couldn't be reported; {} has it.", p.display()),
+                (_, None) => eprintln!("oneshot: it couldn't be saved or reported; the lines above are all there is."),
             }
         }));
     }

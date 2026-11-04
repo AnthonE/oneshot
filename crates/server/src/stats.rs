@@ -71,9 +71,12 @@ pub struct Stats {
     pub handshake_failed: AtomicU64,
     /// Hellos turned away, by `proto::REFUSE_*` code.
     pub refused: [AtomicU64; REFUSALS],
-    /// Hellos taken into casual play, and into a ranked queue or cup.
+    /// Hellos the sim seated in casual play, and took into a ranked queue
+    /// or cup (counted there, not at the hello: a busy wallet's isn't).
     pub joins_casual: AtomicU64,
     pub joins_ranked: AtomicU64,
+    /// Ranked players waiting when a drain began, let go to the new slot.
+    pub let_go: AtomicU64,
     /// Matches opened.
     pub matches: AtomicU64,
     /// Ticks run.
@@ -132,6 +135,7 @@ impl Stats {
             refused: core::array::from_fn(|i| g(&self.refused[i])),
             joins_casual: g(&self.joins_casual),
             joins_ranked: g(&self.joins_ranked),
+            let_go: g(&self.let_go),
             matches: g(&self.matches),
             ticks: g(&self.ticks),
             ticks_late: g(&self.ticks_late),
@@ -159,6 +163,7 @@ pub struct Read {
     pub refused: [u64; REFUSALS],
     pub joins_casual: u64,
     pub joins_ranked: u64,
+    pub let_go: u64,
     pub matches: u64,
     pub ticks: u64,
     pub ticks_late: u64,
@@ -195,7 +200,7 @@ fn list(v: &[u64]) -> String {
 pub fn json(now: Now, r: &Read) -> String {
     format!(
         "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{},\"uptime_s\":{},\
-         \"joins_casual\":{},\"joins_ranked\":{},\"matches\":{},\
+         \"joins_casual\":{},\"joins_ranked\":{},\"let_go\":{},\"matches\":{},\
          \"conn_refused\":{},\"conn_retried\":{},\"handshake_failed\":{},\"refused\":{},\
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
          \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\
@@ -210,6 +215,7 @@ pub fn json(now: Now, r: &Read) -> String {
         now.uptime_s,
         r.joins_casual,
         r.joins_ranked,
+        r.let_go,
         r.matches,
         r.conn_refused,
         r.conn_retried,

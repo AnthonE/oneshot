@@ -95,7 +95,16 @@ for b in oneshot-server oneshot-replay oneshot-review; do
 done
 put "$SLOT/slot.env" "GAME_PORT=$GPORT
 HTTP_PORT=$(http_port $NEW)"
-run cp -f ops/game-elopros-oneshot.nginx.conf "$DEPLOY/game-elopros-oneshot.nginx.conf"
+# The locations name nginx's `oneshot_bugs` zone, which only the box's own
+# http-level config can define (ops/README.md step 4). Staged without it, the
+# box's next nginx reload (Gates' too) would fail: then the old file stays.
+NGINX_DIR=${NGINX_DIR:-/etc/nginx}
+if grep -rqs 'limit_req_zone.*zone=oneshot_bugs' "$NGINX_DIR"; then
+  run cp -f ops/game-elopros-oneshot.nginx.conf "$DEPLOY/game-elopros-oneshot.nginx.conf"
+else
+  echo "!! nginx defines no oneshot_bugs zone: add the limit_req_zone line from" >&2
+  echo "   ops/game-elopros-oneshot.nginx.conf to oneshot-upstream.conf; the nginx file isn't staged" >&2
+fi
 # The unit passes --elo-key: without the file the server won't start.
 if [ ! -f "$DATA/server.pem" ]; then
   echo "  !! no $DATA/server.pem, which the slots sign ranked results with. Make it first:"

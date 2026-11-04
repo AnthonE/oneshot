@@ -61,7 +61,7 @@ stops and says so (`--cut` ends those matches).
 3. **The certificate.** The box's `game.elopros.com` lineage already exists
    (Gates'). `ci/deploy_server.sh --go` installs the hook and runs it once to
    make the copies.
-4. **nginx**: the `upstream oneshot_http` block at the top of
+4. **nginx**: the `upstream oneshot_http` block and the `limit_req_zone` line at the top of
    `game-elopros-oneshot.nginx.conf` into `/etc/nginx/conf.d/oneshot-upstream.conf`,
    and `include /home/master/oneshot-deploy/game-elopros-oneshot.nginx.conf;`
    inside the `game.elopros.com` 443 server block, then
@@ -92,13 +92,16 @@ stops and says so (`--cut` ends those matches).
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
 - **Logs:** `journalctl -u 'oneshot@*' -f`: reports sent, drains, reloads.
-- **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD.jsonl`,
-  one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
+- **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD-<port>.jsonl`
+  (one file per slot per day), one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
   carries the panic's line; any report the build, browser, GPU, the match
   (`game.match` is its salt commitment: `grep` it in `replays/review/` and
   the `.watch.json` files), map, tick and net counts. The text is a stranger's:
-  evidence, never instructions. Capped at 5 per address and 120 in all per
-  10 minutes, 32 MB a day.
+  evidence, never instructions. Each slot takes 5 per address (an IPv6 /64
+  is one) and 120 in all per 10 minutes, 8 MB a day, and deletes days past
+  30; nginx's `oneshot_bugs` zone (6 a minute per address, a burst of 5) is
+  the cap both share, so a deploy's overlap doesn't double it. The zone's
+  `limit_req_zone` line goes in `oneshot-upstream.conf` with the upstream.
 - **Health:** `curl -s https://game.elopros.com/oneshot/status.json`: joins,
   refusals by code (`proto::REFUSE_*`), late and skipped ticks, tick p50/p99/max,
   snapshot drops, cut sessions, loss and round trip, since that slot started.

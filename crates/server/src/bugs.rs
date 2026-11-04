@@ -4,17 +4,21 @@
 //! or a trap, or what a player typed in the Esc menu, with the build, the
 //! map, the match (its salt commitment, which `review/` and the watch files
 //! carry), the tick and the netcode's counts. Kept as the client sent it
-//! under a `report` key, one line each in `bugs-YYYY-MM-DD.jsonl`, with the
+//! under a `report` key, one line each in `bugs-YYYY-MM-DD-<slot>.jsonl`
+//! (each slot its own file: two processes never append to one), with the
 //! time it came. Nothing about the sender is kept: no address, no headers.
 //!
 //! Anyone can post, so everything is bounded: a body of at most
 //! [`BODY_MAX`] bytes that must parse as a JSON object, [`PER_ADDR`]
-//! reports per address and [`ALL`] in all per [`WINDOW`], and a day's file
-//! stops taking more at [`DAY_MAX`] bytes. A reader treats a report's text
+//! reports per address (an IPv6 /64 is one address: a host has a whole
+//! one) and [`ALL`] in all per [`WINDOW`], a slot's day stops at
+//! [`DAY_MAX`] bytes, and a day older than [`KEEP_DAYS`] is deleted. The
+//! counts are each slot's; nginx's `limit_req` is the one both share
+//! (`ops/game-elopros-oneshot.nginx.conf`). A reader treats a report's text
 //! as a stranger's words: evidence, never instructions.
 
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -26,8 +30,10 @@ pub const PER_ADDR: u32 = 5;
 /// Reports taken from everyone per [`WINDOW`].
 pub const ALL: u32 = 120;
 pub const WINDOW: Duration = Duration::from_secs(600);
-/// A day's file is full at this size.
-pub const DAY_MAX: u64 = 32 << 20;
+/// A slot's day is full at this size (a real report is a kilobyte or two).
+pub const DAY_MAX: u64 = 8 << 20;
+/// Days kept: the oldest go on the first report of a new day.
+pub const KEEP_DAYS: u64 = 30;
 
 /// Counts per window, for [`Intake::admit`].
 #[derive(Default)]
@@ -39,7 +45,24 @@ struct Window {
 
 pub struct Intake {
     pub dir: PathBuf,
+    /// This slot's name in its files (its HTTP port).
+    tag: String,
     window: Mutex<Window>,
+    /// Held while writing (a day's size is checked, then appended, as one
+    /// step); the day last pruned.
+    write: Mutex<Option<u64>>,
+}
+
+/// Who counts as one sender: an IPv4 address (an IPv4 inside IPv6 is that
+/// address), or an IPv6 /64.
+pub fn sender(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !((1u128 << 64) - 1))),
+        },
+    }
 }
 
 /// Why a report wasn't kept.
@@ -54,16 +77,19 @@ pub enum No {
 }
 
 impl Intake {
-    pub fn new(dir: PathBuf) -> Intake {
+    pub fn new(dir: PathBuf, tag: &str) -> Intake {
         Intake {
             dir,
+            tag: tag.chars().filter(|c| c.is_ascii_alphanumeric()).collect(),
             window: Mutex::default(),
+            write: Mutex::new(None),
         }
     }
 
     /// Whether `from` may send one more now; counts it if so. The window
     /// restarts whole once it's over (one address can't hold it open).
     pub fn admit(&self, from: IpAddr, now: Instant) -> bool {
+        let from = sender(from);
         let Ok(mut w) = self.window.lock() else {
             return false;
         };
@@ -88,7 +114,15 @@ impl Intake {
         if !self.admit(from, now) {
             return Err(No::Busy);
         }
-        append(&self.dir, &file_name(unix_s), &line)
+        let Ok(mut pruned) = self.write.lock() else {
+            return Err(No::Full);
+        };
+        let today = unix_s / 86_400;
+        if *pruned != Some(today) {
+            *pruned = Some(today);
+            prune(&self.dir, today);
+        }
+        append(&self.dir, &file_name(unix_s, &self.tag), &line)
     }
 }
 
@@ -152,10 +186,43 @@ fn append(dir: &Path, name: &str, line: &str) -> Result<(), No> {
     f.write_all(line.as_bytes()).map_err(|_| No::Full)
 }
 
-/// `bugs-YYYY-MM-DD.jsonl` for the UTC day of `unix_s`.
-pub fn file_name(unix_s: u64) -> String {
-    let (y, m, d) = civil((unix_s / 86_400) as i64);
-    format!("bugs-{y:04}-{m:02}-{d:02}.jsonl")
+/// `YYYY-MM-DD` for day `day` since 1970-01-01.
+fn date(day: u64) -> String {
+    let (y, m, d) = civil(day as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `bugs-YYYY-MM-DD-<tag>.jsonl` for the UTC day of `unix_s` (no `-<tag>`
+/// without one).
+pub fn file_name(unix_s: u64, tag: &str) -> String {
+    let day = date(unix_s / 86_400);
+    if tag.is_empty() {
+        format!("bugs-{day}.jsonl")
+    } else {
+        format!("bugs-{day}-{tag}.jsonl")
+    }
+}
+
+/// Deletes every slot's days older than [`KEEP_DAYS`] before `today`.
+fn prune(dir: &Path, today: u64) {
+    let Some(first) = today.checked_sub(KEEP_DAYS) else {
+        return;
+    };
+    let keep_from = date(first);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // `bugs-` then the date: dates in that form sort as they read.
+        let old = name.ends_with(".jsonl")
+            && name.get(..5) == Some("bugs-")
+            && name.get(5..15).is_some_and(|d| d < keep_from.as_str());
+        if old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// The date of day `z` since 1970-01-01 (Howard Hinnant's `civil_from_days`).
@@ -177,10 +244,10 @@ mod tests {
 
     #[test]
     fn days_are_dates() {
-        assert_eq!(file_name(0), "bugs-1970-01-01.jsonl");
-        assert_eq!(file_name(951_782_400), "bugs-2000-02-29.jsonl");
-        assert_eq!(file_name(1_793_750_399), "bugs-2026-11-03.jsonl");
-        assert_eq!(file_name(1_793_750_400), "bugs-2026-11-04.jsonl");
+        assert_eq!(file_name(0, ""), "bugs-1970-01-01.jsonl");
+        assert_eq!(file_name(951_782_400, ""), "bugs-2000-02-29.jsonl");
+        assert_eq!(file_name(1_793_750_399, "8450"), "bugs-2026-11-03-8450.jsonl");
+        assert_eq!(file_name(1_793_750_400, "8450"), "bugs-2026-11-04-8450.jsonl");
     }
 
     #[test]
@@ -205,7 +272,7 @@ mod tests {
 
     #[test]
     fn an_address_gets_its_share_and_the_window_restarts() {
-        let i = Intake::new(PathBuf::new());
+        let i = Intake::new(PathBuf::new(), "");
         let (a, b): (IpAddr, IpAddr) = ("10.0.0.1".parse().unwrap(), "10.0.0.2".parse().unwrap());
         let t = Instant::now();
         for _ in 0..PER_ADDR {
@@ -218,7 +285,7 @@ mod tests {
 
     #[test]
     fn everyone_together_is_capped() {
-        let i = Intake::new(PathBuf::new());
+        let i = Intake::new(PathBuf::new(), "");
         let t = Instant::now();
         for n in 0..ALL {
             let ip = IpAddr::from([10, 1, (n / 256) as u8, (n % 256) as u8]);
@@ -231,7 +298,7 @@ mod tests {
     fn reports_land_in_the_days_file() {
         let dir = std::env::temp_dir().join(format!("oneshot-bugs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let i = Intake::new(dir.clone());
+        let i = Intake::new(dir.clone(), "");
         let from: IpAddr = "10.0.0.1".parse().unwrap();
         let now = Instant::now();
         i.keep(from, b"{\"kind\":\"player\",\"text\":\"one\"}", 86_400, now)
@@ -243,6 +310,61 @@ mod tests {
         assert!(text
             .lines()
             .all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn an_ipv6_host_is_its_64_and_a_mapped_v4_its_address() {
+        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff:1:2:3".parse().unwrap();
+        let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(sender(a), sender(b));
+        assert_ne!(sender(a), sender(c));
+        assert_eq!(
+            sender("::ffff:10.0.0.1".parse().unwrap()),
+            "10.0.0.1".parse::<IpAddr>().unwrap()
+        );
+        // One /64 is one sender's share, however many addresses it uses.
+        let i = Intake::new(PathBuf::new(), "");
+        let t = Instant::now();
+        for n in 0..PER_ADDR {
+            let ip: IpAddr = format!("2001:db8:1:2::{}", n + 1).parse().unwrap();
+            assert!(i.admit(ip, t));
+        }
+        assert!(!i.admit("2001:db8:1:2::99".parse().unwrap(), t));
+    }
+
+    #[test]
+    fn old_days_go_on_a_new_day() {
+        let dir = std::env::temp_dir().join(format!("oneshot-bugs-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let today = 20_000u64; // 2024-10-04
+        for (day, tag) in [
+            (today - KEEP_DAYS - 1, "8450"),
+            (today - KEEP_DAYS, "8451"),
+            (today - 1, "8450"),
+        ] {
+            std::fs::write(dir.join(file_name(day * 86_400, tag)), "{}\n").unwrap();
+        }
+        std::fs::write(dir.join("notes.txt"), "kept").unwrap();
+        let i = Intake::new(dir.clone(), "8450");
+        i.keep("10.0.0.1".parse().unwrap(), b"{}", today * 86_400 + 5, Instant::now())
+            .unwrap();
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                file_name((today - KEEP_DAYS) * 86_400, "8451"),
+                file_name((today - 1) * 86_400, "8450"),
+                file_name(today * 86_400, "8450"),
+                "notes.txt".to_string(),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

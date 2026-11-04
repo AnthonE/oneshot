@@ -392,14 +392,10 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             tx,
         },
     };
-    let counter = match join {
-        ToSim::Casual { .. } => &ctx.stats.joins_casual,
-        _ => &ctx.stats.joins_ranked,
-    };
+    // Counted as a join by the sim once it seats or queues it (`stats.rs`).
     if to_sim.send(join).is_err() {
         return;
     }
-    counter.fetch_add(1, Ordering::Relaxed);
 
     // The writers: snapshots on their own, the newest waiting, if they fit,
     // so a stream the client is slow to take never holds them back; stream
