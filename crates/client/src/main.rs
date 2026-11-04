@@ -1,6 +1,7 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--capsules]` (or `oneshot --pose 'yaw=1.57&arm=3'`,
-//! no server, for a picture): the desktop client. It opens on the title
+//! [--autoplay] [--lite] [--capsules] [--menu|--settings] [--shot out.png [--shot-at s]]`
+//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture): the
+//! desktop client. It opens on the title
 //! screen (`front.rs`); PLAY reads the game server's address and
 //! certificate hash from the page server's `server.json` (what the browser
 //! page reads) and connects with client-net's native session. `--mode` or
@@ -24,6 +25,7 @@ fn main() {
 fn run() -> Result<(), String> {
     use oneshot_client::door::{Door, PUBLIC};
     use oneshot_client::front::Start;
+    use oneshot_client::Screen;
 
     let args: Vec<String> = std::env::args().collect();
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
@@ -33,7 +35,24 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     let lite = flag("--lite");
-    if let Some(q) = arg("--pose") {
+    // `--shot x.png [--shot-at s]`: one frame once the screen is there, then out.
+    let shot = match arg("--shot") {
+        Some(p) if p.to_ascii_lowercase().ends_with(".png") => Some(std::path::PathBuf::from(p)),
+        Some(p) => return Err(format!("--shot {p}: a .png path")),
+        None => None,
+    };
+    let shot_at = match arg("--shot-at") {
+        Some(s) => s.parse::<f64>().map_err(|_| format!("--shot-at {s}: seconds"))?,
+        None => 1.0,
+    };
+    let open = if flag("--settings") {
+        Screen::Settings
+    } else if flag("--menu") {
+        Screen::Paused
+    } else {
+        Screen::Playing
+    };
+    let (mut app, want, want_match) = if let Some(q) = arg("--pose") {
         // No server: one fighter for a picture (`--pose 'yaw=1.57&arm=3'`).
         let pose = oneshot_client::pose::Pose::parse(&q);
         let opts = oneshot_client::Opts {
@@ -41,37 +60,55 @@ fn run() -> Result<(), String> {
             pose: Some(pose),
             ..Default::default()
         };
-        oneshot_client::app(Box::new(oneshot_client::link::Still::on(pose.2.map)), opts).run();
-        return Ok(());
-    }
-    let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
-    let mode = match arg("--mode") {
-        Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
-        None => None,
-    };
-    let autoplay = flag("--autoplay");
-    let fxdemo = flag("--fxdemo");
-    let opts = oneshot_client::Opts {
-        autoplay,
-        lite,
-        pose: None,
-        capsules: flag("--capsules"),
-        fxdemo,
-        fxstage: None,
-        open: oneshot_client::Screen::Playing,
-        front: match mode {
+        let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
+        (oneshot_client::app(link, opts), Screen::Playing, false)
+    } else {
+        let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
+        let mode = match arg("--mode") {
+            Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
+            None => None,
+        };
+        let autoplay = flag("--autoplay");
+        let fxdemo = flag("--fxdemo");
+        let front = match mode {
             Some(m) => Start::Join(m),
             None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
             None => Start::Title,
-        },
+        };
+        let opts = oneshot_client::Opts {
+            autoplay,
+            lite,
+            pose: None,
+            capsules: flag("--capsules"),
+            fxdemo,
+            fxstage: None,
+            open,
+            front,
+        };
+        let joins = matches!(front, Start::Join(_));
+        // On the title only the settings open over it; in a match, the
+        // screen asked for.
+        let want = match (joins, open) {
+            (true, o) => o,
+            (false, Screen::Settings) => Screen::Settings,
+            (false, _) => Screen::Title,
+        };
+        let mut app = oneshot_client::game(Door::new(server), opts);
+        if let Some(n) = arg("--name") {
+            app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
+                oneshot_client::settings::Player::clean(&n);
+        }
+        (app, want, joins)
     };
-    let mut app = oneshot_client::game(Door::new(server), opts);
-    if let Some(n) = arg("--name") {
-        app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
-            oneshot_client::settings::Player::clean(&n);
+    if let Some(path) = shot {
+        app.insert_resource(oneshot_client::look::shot::Capture::new(
+            path, shot_at, want, want_match,
+        ));
     }
-    app.run();
-    Ok(())
+    match app.run() {
+        bevy::app::AppExit::Error(code) => std::process::exit(code.get().into()),
+        bevy::app::AppExit::Success => Ok(()),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +123,16 @@ const HELP: &str = "oneshot: the desktop client
   --lite                           the light tier: for a slow or software GPU
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
+  --menu, --settings               open the match on the Esc menu or the settings
+                                   (--settings alone: over the title)
+  --shot out.png [--shot-at S]     save one frame once the screen is there (its
+                                   level built, its shaders compiled, nothing over
+                                   it) and S seconds have passed (1), then exit 0;
+                                   non-zero, saying why, if it never is
+                                   (ci/desktop_shot.sh)
+
+F12 saves a screenshot on any screen, into your pictures folder under
+oneshot/ (ONESHOT_SHOTS_DIR names another).
 
 Keys (by default; rebind them, with the mouse's speed, the field of view
 and the volume, in OPTIONS, saved in your config folder under

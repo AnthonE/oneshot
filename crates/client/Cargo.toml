@@ -39,6 +39,9 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_scene",
     "gltf_animation",
 ] }
+# F12's PNG (look/shot.rs): the encoder Bevy's own image loading already
+# builds, named so the client can write one.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 # Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
@@ -61,7 +64,20 @@ bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Performance", "Document", "Element", "Storage", "Location"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Performance",
+    "Document",
+    "Element",
+    "Storage",
+    "Location",
+    # F12's download (look/shot.rs).
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlElement",
+    "HtmlAnchorElement",
+] }
 
 # Quick to build and quick enough to play: our code a little optimised,
 # Bevy fully, and no debug info for it (Gates measured 20 GB without that).

@@ -1,9 +1,14 @@
 // node ci/client_shot.mjs [out.png] [seconds] [mode] [map] [autoplay 0|1] [more query]: the Bevy client in
 // headless Chromium (WebGL2 on SwiftShader) against the real server, a
 // screenshot of what it draws: the browser tier's look (ci/client.sh builds
-// crates/client/dist first). Defaults: Big Team on Dry Fork, 25 s. `fxdemo=1`
-// as the last argument stages the effects in front of the camera,
-// `fxstage=N` only stage N (crates/client/src/look/fx/demo.rs).
+// crates/client/dist first). The seconds count from when the screen is
+// there (`__oneshot.ready`: its level built and dressed, its shaders
+// compiled, no curtain or loading overlay over it; crates/client/src/loading.rs),
+// as ci/desktop_shot.sh's do. Defaults: Big Team on Dry Fork, 25 s.
+// autoplay 0 is the title; `menu=1` or `settings=1` opens them (the match's
+// with autoplay=1, else the settings over the title). `fxdemo=1` as the last
+// argument stages the effects in front of the camera, `fxstage=N` only
+// stage N (crates/client/src/look/fx/demo.rs).
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -20,6 +25,11 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.error('[page]', m.text().slice(0, 300)); });
 page.on('pageerror', (e) => console.error('[pageerror]', e.message.slice(0, 300)));
 await page.goto(`${url}?mode=${mode}&name=bevy&autoplay=${auto}${more ? '&' + more : ''}`);
+const t0 = Date.now();
+const ready = await page.waitForFunction(() => window.__oneshot?.ready === true, null, { timeout: 300000 })
+  .then(() => true, () => false);
+const stage = await page.evaluate(() => window.__oneshot?.stage ?? 'nothing drawn');
+console.log(ready ? `ready after ${((Date.now() - t0) / 1000).toFixed(1)} s` : `never ready (at ${stage}): shooting anyway`);
 await page.waitForTimeout(Number(secs) * 1000);
 await page.screenshot({ path: out });
 console.log('shot', out);

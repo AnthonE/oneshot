@@ -20,12 +20,14 @@ pub mod front;
 pub mod hud;
 pub mod level;
 pub mod link;
+pub mod loading;
 pub mod look;
 pub mod options;
 pub mod pause;
 pub mod pointer;
 pub mod pose;
 pub mod settings;
+pub mod shot;
 pub mod sound;
 pub mod ui;
 
@@ -272,7 +274,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             }),
     )
     .insert_non_send_resource(LinkRes(link))
-    .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
+    // The shell's ground until a level is spawned (`loading::settle` then
+    // gives it the sky's): the frames before the first UI draw are the
+    // title's colour, not a flash of blue.
+    .insert_resource(ClearColor(ui::BG))
     .insert_resource(Autoplay {
         on: opts.autoplay,
         ..default()
@@ -289,6 +294,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
+    .add_plugins(loading::plugin)
+    .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
@@ -900,6 +907,7 @@ fn expose(
         &InheritedVisibility,
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    settle: Res<loading::Settle>,
     mut frames: Local<u32>,
 ) {
     use wasm_bindgen::JsValue;
@@ -934,6 +942,10 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // The screen's level is there with nothing over it (`loading::Settle`):
+    // what `ci/client_shot.mjs` waits for before its seconds.
+    set(&o, "ready", settle.shown().into());
+    set(&o, "stage", settle.now.stage().into());
     // What the stream last said, and whether it's over.
     set(&o, "status", st.status.as_str().into());
     set(&o, "cup", st.cup.as_str().into());

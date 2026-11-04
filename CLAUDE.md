@@ -102,7 +102,9 @@ ci/client.sh                                         # the client: clippy, nativ
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
 node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill
-node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match (… 30 0 0 0 fxdemo=1 for the demo)
+node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo)
+ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (Xvfb, lavapipe; title: … 2 0 0 0,
+                                                     #   settings, pose='map=6&eye=…&look=…'); F12 in game saves one
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
@@ -118,9 +120,10 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 - The page's real build (`--profile web`, fat LTO) is slow. `tools/fx.sh`
   builds release for the stage, which is fine for looking but not for the
   9 MB gate.
-- `ci/client_shot.mjs` sleeps on the wall clock, so whether a 50 ms flash
-  is in the shot is luck. Stage effects with `tools/fx.sh`, which steps the
-  clock.
+- `ci/client_shot.mjs` and `ci/desktop_shot.sh` count their seconds from
+  when the screen is there (`loading.rs`: level dressed, shaders compiled),
+  then on the wall clock, so whether a 50 ms flash is in the shot is luck.
+  Stage effects with `tools/fx.sh`, which steps the clock.
 - `ci/e2e.mjs` needs the release server built first.
 - `wasm-bindgen` must match `crates/client/Cargo.lock` exactly; `ci/client.sh`
   names the version it wants.
@@ -132,7 +135,8 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 - `npm ci` once for Playwright. Chromium at `/opt/pw-browsers/chromium` is
   used if present (`CHROMIUM_PATH` overrides), else `npx playwright install chromium`.
 - The desktop client needs `libwayland-dev libudev-dev libxkbcommon-x11-0`;
-  native sound (`--features sound`) needs `libasound2-dev`.
+  native sound (`--features sound`) needs `libasound2-dev`. Its headless
+  shots (`ci/desktop_shot.sh`) need `apt-get install xvfb mesa-vulkan-drivers`.
 - A Gates checkout beside this one (`../Gates`) for `tools/assets.mjs` and
   `tools/fx-sync.sh`.
 

@@ -43,9 +43,13 @@ const SHOT_EYE: Vec3 = Vec3::new(-10.0, 6.5, -10.0);
 const SHOT_LOOK: Vec3 = Vec3::new(8.0, 2.0, 5.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
-/// The curtain over the backdrop while it is built, and how fast it lifts.
-const CURTAIN_HOLD_S: f32 = 0.35;
-const CURTAIN_FADE_S: f32 = 0.9;
+/// The curtain over the backdrop until its level is there
+/// (`loading::Settle`), then how long it holds and how fast it lifts; and
+/// the guard: lifted this long after the level is built whatever is still
+/// arriving (the title over it works throughout).
+const CURTAIN_HOLD_S: f64 = 0.15;
+const CURTAIN_FADE_S: f64 = 0.9;
+const CURTAIN_GUARD_S: f64 = 10.0;
 /// PLAY, pressed again this soon after it knocked, isn't a cancel.
 const CANCEL_AFTER_S: f32 = 0.6;
 /// The match over: this long on the HUD's banner, then the title.
@@ -147,11 +151,16 @@ fn mode(id: u8) -> &'static Mode {
     MODES.iter().find(|m| m.id == id).unwrap_or(&MODES[0])
 }
 
+/// A mode's name as the play panel says it.
+pub(crate) fn mode_name(id: u8) -> &'static str {
+    mode(id).name
+}
+
 /// The title's own state.
 #[derive(Resource)]
-struct Front {
+pub(crate) struct Front {
     /// The mode PLAY asks for.
-    mode: u8,
+    pub(crate) mode: u8,
     /// The line over PLAY: what the stream said, or why we're back.
     status: String,
     bad: bool,
@@ -170,6 +179,13 @@ struct Front {
     knocked_at: f32,
 }
 
+impl Front {
+    /// The line a knock was turned away with, while it shows.
+    pub(crate) fn refused(&self) -> Option<&str> {
+        self.bad.then_some(self.status.as_str())
+    }
+}
+
 /// A connection on its way.
 #[derive(Default)]
 struct Knocking(Option<door::Knock>);
@@ -177,8 +193,9 @@ struct Knocking(Option<door::Knock>);
 #[derive(Component)]
 struct TitleRoot;
 
+/// Over the backdrop until its level is there (`loading::Settle`).
 #[derive(Component)]
-struct Curtain;
+pub(crate) struct Curtain;
 
 #[derive(Component)]
 struct NameText;
@@ -770,27 +787,37 @@ fn rebuild(
     build(&mut commands, &front, &player, &door, knocking.0.is_some());
 }
 
-/// The curtain over the backdrop: up until the level is built, then lifted.
+/// The curtain over the backdrop: up until its level is there (built,
+/// dressed, its models warm and its pipelines compiled: `loading::Settle`),
+/// then lifted.
 fn curtain(
-    built: Res<crate::Built>,
+    settle: Res<crate::loading::Settle>,
     gen: Res<LinkGen>,
-    time: Res<Time>,
-    mut since: Local<Option<(u32, f32)>>,
+    time: Res<Time<Real>>,
+    mut since: Local<Option<(u32, f64)>>,
     mut q: Query<&mut BackgroundColor, With<Curtain>>,
 ) {
-    let now = time.elapsed_secs();
-    if built.gen() != Some(gen.0) {
+    let now = time.elapsed_secs_f64();
+    let ours = settle.gen() == Some(gen.0);
+    let guard = settle.now.built && settle.age(now) >= CURTAIN_GUARD_S;
+    if !ours || !(settle.ready() || guard) {
         *since = None;
         return;
     }
     let at = match *since {
         Some((g, at)) if g == gen.0 => at,
         _ => {
+            if !settle.ready() {
+                warn!(
+                    "oneshot: the title's curtain lifted at its guard, at {}",
+                    settle.now.stage()
+                );
+            }
             *since = Some((gen.0, now));
             now
         }
     };
-    let u = ((now - at - CURTAIN_HOLD_S) / CURTAIN_FADE_S).clamp(0.0, 1.0);
+    let u = ((now - at - CURTAIN_HOLD_S) / CURTAIN_FADE_S).clamp(0.0, 1.0) as f32;
     let a = 1.0 - u * u * (3.0 - 2.0 * u);
     for mut bg in &mut q {
         let want = if a <= 0.0 { Color::NONE } else { ui::BG.with_alpha(a) };
