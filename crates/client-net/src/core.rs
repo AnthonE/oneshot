@@ -55,8 +55,15 @@ pub const SEND_EVERY: u32 = 2;
 pub const SKIP_AFTER: u32 = TICK_HZ / 2;
 /// A correction this large snaps instead of easing.
 pub const SNAP_M: f32 = 4.0;
-/// How fast a correction eases out, in ms.
-pub const EASE_MS: f64 = 100.0;
+/// How fast a correction eases out, in ms: a big one (a metre or more)
+/// quickly, a small one (a quarter metre or less) slowly enough not to be
+/// seen, blended between (Gates' `Predictor::decay_error`; DESIGN §5).
+pub const EASE_FAR_MS: f64 = 100.0;
+pub const EASE_NEAR_MS: f64 = 325.0;
+const EASE_FAR_M: f32 = 1.0;
+const EASE_NEAR_M: f32 = 0.25;
+/// A correction left smaller than this is dropped.
+pub const DEAD_ZONE_M: f32 = 0.01;
 /// How far past the welcome's tick the first snapshot may be, in ms. A
 /// snapshot from before the welcome (a cup's last heat, still sending as
 /// the next one seats us) is far ahead of a new room's clock; taken
@@ -177,8 +184,11 @@ pub struct NetCore {
     prev_pos: V3,
     prev_v: V3,
     prev_vyaw: u16,
-    /// A correction still easing out, added to the drawn position.
+    /// A correction still easing out, added to the drawn position; and the
+    /// driven vehicle's, its middle and its heading (radians).
     offset: V3,
+    voffset: V3,
+    vyaw_off: f32,
 
     newest: Option<u32>,
     ack_bits: u32,
@@ -232,6 +242,8 @@ impl NetCore {
             prev_v: V3::ZERO,
             prev_vyaw: 0,
             offset: V3::ZERO,
+            voffset: V3::ZERO,
+            vyaw_off: 0.0,
             newest: None,
             ack_bits: 0,
             latest: Snapshot::default(),
@@ -317,9 +329,12 @@ impl NetCore {
                 out.push(self.input_msg());
             }
         }
-        // Ease a correction out.
-        let k = (-dt / EASE_MS).exp() as f32;
-        self.offset = self.offset * k;
+        // Ease corrections out.
+        self.offset = ease(self.offset, dt);
+        self.voffset = ease(self.voffset, dt);
+        // A heading's correction: a fifth of a radian as a metre is.
+        let turn = ease(V3::new(self.vyaw_off * 5.0, 0.0, 0.0), dt).x * 0.2;
+        self.vyaw_off = turn;
         out
     }
 
@@ -415,6 +430,7 @@ impl NetCore {
         let d = s.depth as f64;
         if !(-8.0..=16.0).contains(&d) {
             let drawn = self.own().1;
+            let drawn_v = self.own_vehicle();
             self.t += TARGET_DEPTH - d;
             if self.t < self.seq as f64 {
                 // Never take back a seq already made.
@@ -424,6 +440,10 @@ impl NetCore {
             // screen eases on from where it was, as a correction does,
             // rather than step back.
             self.offset = self.offset + (drawn - self.own().1);
+            if let (Some((_, p0, y0)), Some((_, p1, y1))) = (drawn_v, self.own_vehicle()) {
+                self.voffset = self.voffset + (p0 - p1);
+                self.vyaw_off += y0 - y1;
+            }
             self.stats.resyncs += 1;
             self.rate = 1.0;
         } else if d < TARGET_DEPTH {
@@ -541,11 +561,29 @@ impl NetCore {
             self.pred_v = v;
             // The tick being drawn through moves with the correction, so
             // the step between ticks stays the one already on screen.
+            // The vehicle's correction eases out with the body's, so the hull
+            // glides with the camera rather than snap under it.
             match (before_v, v) {
-                (Some(b), Some(n)) => self.prev_v = self.prev_v + (n.pos - b.pos),
+                (Some(b), Some(n)) => {
+                    let jump = b.pos - n.pos;
+                    let turn = b.yaw.wrapping_sub(n.yaw);
+                    self.prev_v = self.prev_v - jump;
+                    self.prev_vyaw = self.prev_vyaw.wrapping_sub(turn);
+                    if alive_changed || (self.voffset + jump).len() > SNAP_M {
+                        self.voffset = V3::ZERO;
+                        self.vyaw_off = 0.0;
+                        self.prev_v = n.pos;
+                        self.prev_vyaw = n.yaw;
+                    } else {
+                        self.voffset = self.voffset + jump;
+                        self.vyaw_off += turn as i16 as f32 * (core::f32::consts::TAU / 65536.0);
+                    }
+                }
                 (_, Some(n)) => {
                     self.prev_v = n.pos;
                     self.prev_vyaw = n.yaw;
+                    self.voffset = V3::ZERO;
+                    self.vyaw_off = 0.0;
                 }
                 _ => {}
             }
@@ -602,10 +640,10 @@ impl NetCore {
         let v = self.pred_v?;
         self.pred.riding()?;
         let a = self.alpha();
-        let p = self.prev_v + (v.pos - self.prev_v) * a;
+        let p = self.prev_v + (v.pos - self.prev_v) * a + self.voffset;
         // The short way round between the two headings.
         let turn = v.yaw.wrapping_sub(self.prev_vyaw) as i16 as f32;
-        let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0);
+        let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0) + self.vyaw_off;
         Some((v, p, yaw))
     }
 
@@ -843,6 +881,19 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.shots == b.shots
         && a.last_buttons == b.last_buttons
         && a.ride == b.ride
+}
+
+/// What is left of a correction `dt` ms on: eased out over
+/// [`EASE_FAR_MS`] when a metre or more, [`EASE_NEAR_MS`] when a quarter
+/// metre or less, blended between; dropped under [`DEAD_ZONE_M`].
+fn ease(e: V3, dt: f64) -> V3 {
+    let size = e.len();
+    if size < DEAD_ZONE_M {
+        return V3::ZERO;
+    }
+    let u = ((size - EASE_NEAR_M) / (EASE_FAR_M - EASE_NEAR_M)).clamp(0.0, 1.0) as f64;
+    let tau = EASE_NEAR_MS + (EASE_FAR_MS - EASE_NEAR_MS) * u;
+    e * (-dt / tau).exp() as f32
 }
 
 fn phase_of(p: u8) -> Phase {
