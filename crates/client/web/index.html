@@ -66,6 +66,30 @@
       // and signs in; the game, the queue's wait and everything after are
       // the client's.
       import init, { play, pose, skin_names } from './oneshot_client.js';
+      // Raw mouse: the game's lock (winit asks with no options) asks the
+      // browser for unadjusted movement, so the OS's acceleration doesn't
+      // bend aim. Not on Linux, where Chrome refuses and a second request
+      // can lose the click; a refusal anywhere is remembered and asked
+      // plainly at once (Gates' app.js).
+      {
+        const canvas = document.getElementById('game');
+        const plain = canvas.requestPointerLock;
+        const RAW_REFUSED = 'oneshot.rawMouseRefused';
+        let refused = /Linux/.test(navigator.platform) && !/CrOS/.test(navigator.userAgent);
+        try { refused = refused || localStorage.getItem(RAW_REFUSED) === '1'; } catch { /* private window */ }
+        canvas.requestPointerLock = function () {
+          if (refused) return plain.call(this);
+          let p;
+          try { p = plain.call(this, { unadjustedMovement: true }); } catch { return plain.call(this); }
+          if (p && p.catch) p.catch((err) => {
+            if (!err || err.name !== 'NotSupportedError') return;
+            refused = true;
+            try { localStorage.setItem(RAW_REFUSED, '1'); } catch { /* private window */ }
+            plain.call(this);
+          });
+          return p;
+        };
+      }
       const params = new URLSearchParams(location.search);
       const flag = (k) => params.get(k) === '1';
       const AUTOPLAY = flag('autoplay');
