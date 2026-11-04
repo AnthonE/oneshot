@@ -718,21 +718,28 @@ impl Sim {
             let mut heats_done: Vec<HeatDone> = Vec::new();
             for entry in rooms.iter_mut() {
                 let Some(r) = entry.as_mut() else { continue };
-                let (snaps, out) = r.room.step(now_ms);
-                for (slot, snap) in snaps {
-                    let link = r.links[slot as usize].and_then(|id| sessions.get(&id));
-                    if let (Some(s), Ok(n)) = (link, encode_snapshot(&snap, &mut buf)) {
-                        // Full means the session is behind: this snapshot
-                        // goes, the next replaces it.
-                        s.tx.datagram(buf[..n].to_vec());
+                // Its linger over, a room sends nothing more: a cup's next
+                // heat may seat its entrants in this same pass, and a
+                // snapshot of this room after that welcome is another
+                // room's to them.
+                let done = r.over_at.is_some_and(|t| now.duration_since(t) >= self.cfg.linger);
+                if !done {
+                    let (snaps, out) = r.room.step(now_ms);
+                    for (slot, snap) in snaps {
+                        let link = r.links[slot as usize].and_then(|id| sessions.get(&id));
+                        if let (Some(s), Ok(n)) = (link, encode_snapshot(&snap, &mut buf)) {
+                            // Full means the session is behind: this snapshot
+                            // goes, the next replaces it.
+                            s.tx.datagram(buf[..n].to_vec());
+                        }
+                    }
+                    deliver(&sessions, r, out);
+                    if r.room.world.phase == Phase::Over && r.over_at.is_none() {
+                        r.over_at = Some(now);
+                        self.finish(r);
                     }
                 }
-                deliver(&sessions, r, out);
-                if r.room.world.phase == Phase::Over && r.over_at.is_none() {
-                    r.over_at = Some(now);
-                    self.finish(r);
-                }
-                if r.over_at.is_some_and(|t| now.duration_since(t) >= self.cfg.linger) {
+                if done {
                     for id in r.links.iter().flatten() {
                         if let Some(s) = sessions.get_mut(id) {
                             // A cup's entrants stay on for the next heat.

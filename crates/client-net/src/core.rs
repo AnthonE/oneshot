@@ -17,7 +17,7 @@
 //!   behind the newest (Gates' `client-core/src/interp.rs`).
 
 use proto::{EventState, InputMsg, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_VEHICLES};
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{ticks, MAX_FIGHTERS, TICK_HZ};
 use sim::fighter::Fighter;
 use sim::geom::{aim_dir, V3};
 use sim::input::Input;
@@ -57,6 +57,11 @@ pub const SKIP_AFTER: u32 = TICK_HZ / 2;
 pub const SNAP_M: f32 = 4.0;
 /// How fast a correction eases out, in ms.
 pub const EASE_MS: f64 = 100.0;
+/// How far past the welcome's tick the first snapshot may be, in ms. A
+/// snapshot from before the welcome (a cup's last heat, still sending as
+/// the next one seats us) is far ahead of a new room's clock; taken
+/// first, it would make every snapshot of the new room look old.
+pub const FIRST_WITHIN: u32 = 2000;
 
 const TICK_MS: f64 = 1000.0 / TICK_HZ as f64;
 
@@ -161,6 +166,9 @@ pub struct NetCore {
     after_v: [Option<Vehicle>; RING],
     /// The newest seq the server says it ran.
     acked_seq: u32,
+    /// The server's tick at the welcome: the first snapshot must be near
+    /// it ([`FIRST_WITHIN`]).
+    welcome_tick: u32,
 
     pred: Fighter,
     pred_v: Option<Vehicle>,
@@ -217,6 +225,7 @@ impl NetCore {
             after: [Fighter::default(); RING],
             after_v: [None; RING],
             acked_seq: seq.wrapping_sub(1),
+            welcome_tick: tick,
             pred: Fighter::default(),
             pred_v: None,
             prev_pos: V3::ZERO,
@@ -372,7 +381,14 @@ impl NetCore {
                     (self.ack_bits << fwd) | (1 << (fwd - 1))
                 };
             }
-            None => {}
+            None => {
+                // Half a second before the welcome (sent with it) to two
+                // seconds after; anything else is another room's.
+                let from = self.welcome_tick.wrapping_sub(ticks(500));
+                if s.tick.wrapping_sub(from) > ticks(500 + FIRST_WITHIN) {
+                    return;
+                }
+            }
         }
         self.newest = Some(s.tick);
         self.stats.snapshots += 1;
