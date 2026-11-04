@@ -64,6 +64,8 @@ fn run() -> Result<(), String> {
         lite,
         pose: None,
         capsules: args.iter().any(|a| a == "--capsules"),
+        fxdemo: args.iter().any(|a| a == "--fxdemo"),
+        fxstage: None,
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
     Ok(())
@@ -79,7 +81,7 @@ const HELP: &str = "oneshot: the desktop client
                                    are ranked, which needs an Elo Pros sign-in (the web page)
   --lite                           the light tier: for a slow or software GPU
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
-  --pose 'map=4&eye=-20,6,0&look=0,2,0'  no server: a map's view
+  --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
 
 Keys: WASD and the mouse, space jumps, Ctrl or C crouches, R reloads, E uses,
 G throws a frag, Q or V melees, X, 1, 2 or the wheel swaps, N the net graph,

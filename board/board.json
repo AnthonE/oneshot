@@ -77,10 +77,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=level",
-        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
-        "map=4&eye=-11,1.6,-8&look=0,2,0",
-        "map=4&eye=-2,4.6,0.5&look=20,3,0",
-        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
       ],
       "png": "traces/level-0.png",
       "refs": []
@@ -94,10 +94,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=level",
-        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
-        "map=4&eye=-11,1.6,-8&look=0,2,0",
-        "map=4&eye=-2,4.6,0.5&look=20,3,0",
-        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
       ],
       "png": "traces/level-1.png",
       "refs": []
@@ -111,10 +111,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=level",
-        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
-        "map=4&eye=-11,1.6,-8&look=0,2,0",
-        "map=4&eye=-2,4.6,0.5&look=20,3,0",
-        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
       ],
       "png": "traces/level-2.png",
       "refs": []
@@ -128,10 +128,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=level",
-        "map=4&eye=-21,4.6,-6&look=0,2.5,2",
-        "map=4&eye=-11,1.6,-8&look=0,2,0",
-        "map=4&eye=-2,4.6,0.5&look=20,3,0",
-        "map=4&eye=-17,3.1,14&look=10,1.5,10"
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
       ],
       "png": "traces/level-3.png",
       "refs": []
@@ -145,10 +145,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=5&eye=-18.5,5.1,-2&look=0,3,1",
-        "map=5&eye=-7,1.6,-5.5&look=0,2.2,1",
-        "map=5&eye=-2.5,5.1,-1&look=14,4,0",
-        "map=5&eye=-15,1.6,-11.8&look=0,1.5,-9"
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
       ],
       "png": "traces/chrysalis-0.png",
       "refs": []
@@ -162,10 +162,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=5&eye=-18.5,5.1,-2&look=0,3,1",
-        "map=5&eye=-7,1.6,-5.5&look=0,2.2,1",
-        "map=5&eye=-2.5,5.1,-1&look=14,4,0",
-        "map=5&eye=-15,1.6,-11.8&look=0,1.5,-9"
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
       ],
       "png": "traces/chrysalis-1.png",
       "refs": []
@@ -179,10 +179,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=5&eye=-18.5,5.1,-2&look=0,3,1",
-        "map=5&eye=-7,1.6,-5.5&look=0,2.2,1",
-        "map=5&eye=-2.5,5.1,-1&look=14,4,0",
-        "map=5&eye=-15,1.6,-11.8&look=0,1.5,-9"
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
       ],
       "png": "traces/chrysalis-2.png",
       "refs": []
@@ -196,10 +196,10 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=5&eye=-18.5,5.1,-2&look=0,3,1",
-        "map=5&eye=-7,1.6,-5.5&look=0,2.2,1",
-        "map=5&eye=-2.5,5.1,-1&look=14,4,0",
-        "map=5&eye=-15,1.6,-11.8&look=0,1.5,-9"
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
       ],
       "png": "traces/chrysalis-3.png",
       "refs": []

@@ -14,9 +14,15 @@ pub const SWAP: u16 = 1 << 6;
 pub const USE: u16 = 1 << 7;
 /// Scope in. Drawing only; the sim ignores it.
 pub const ZOOM: u16 = 1 << 8;
-pub const BUTTONS: u16 = (1 << 9) - 1;
+/// The left hand's trigger, with a gun in each hand.
+pub const FIRE_LEFT: u16 = 1 << 9;
+/// Frags or stickies for the next throw.
+pub const GREN_SWITCH: u16 = 1 << 10;
+/// Buttons on the wire, and the bits they take there.
+pub const BUTTON_BITS: u32 = 11;
+pub const BUTTONS: u16 = (1 << BUTTON_BITS) - 1;
 /// Buttons that act on the tick they go down, not while held.
-pub const TAPS: u16 = MELEE | GRENADE | RELOAD | SWAP | USE;
+pub const TAPS: u16 = MELEE | GRENADE | RELOAD | SWAP | USE | GREN_SWITCH;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Input {

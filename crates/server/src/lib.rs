@@ -464,13 +464,14 @@ impl Sim {
             .copied()
             .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
             .collect();
-        let sized: Vec<u8> = sim::maps::ALL.iter().filter(|d| d.big() == big).map(|d| d.id).collect();
+        let rotation = || sim::maps::ALL.iter().filter(|d| !d.practice);
+        let sized: Vec<u8> = rotation().filter(|d| d.big() == big).map(|d| d.id).collect();
         let ids = if !given.is_empty() {
             given
         } else if !sized.is_empty() {
             sized
         } else {
-            sim::maps::ALL.iter().map(|d| d.id).collect()
+            rotation().map(|d| d.id).collect()
         };
         sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }

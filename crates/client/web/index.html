@@ -54,8 +54,8 @@
       </div>
       <div id="status"></div>
       <button id="cancel" class="quiet" hidden>Cancel</button>
-      <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom<br />
-        R reload · 1/2, X or wheel swap · Q melee · G frag · E pick up, get in · N net graph · Esc frees the mouse</div>
+      <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
+        R reload · 1/2, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · N net graph · Esc frees the mouse</div>
     </div>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, sign-in is hidden and the bot is still there. -->
@@ -69,6 +69,8 @@
       const params = new URLSearchParams(location.search);
       const flag = (k) => params.get(k) === '1';
       const AUTOPLAY = flag('autoplay');
+      // The effects demo (`?fxdemo=1`, `?fxstage=N`) skips the menu too.
+      const SKIP_MENU = AUTOPLAY || flag('fxdemo') || params.has('fxstage');
       if (flag('lite')) document.getElementById('wrap').classList.add('lite');
       const $ = (id) => document.getElementById(id);
       const menu = $('menu'), status = $('status'), cancel = $('cancel'), nameInput = $('name'), skin = $('skin');
@@ -107,7 +109,7 @@
         } catch { return null; }
       };
 
-      const mode = AUTOPLAY
+      const mode = SKIP_MENU
         ? Number(params.get('mode') || 0)
         : await new Promise((go) => {
             for (const id of Object.keys(MODES)) $(id).addEventListener('click', () => go(MODES[id]), { once: true });
@@ -119,7 +121,7 @@
       cancel.hidden = false;
       cancel.onclick = () => location.reload();
       say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules'].filter(flag).join(',');
+      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
       let playing = false;
       try {
         // No hash with a CA's certificate: checked by the browser, never pinned.
@@ -129,7 +131,7 @@
       }
       if (playing) {
         menu.style.display = 'none';
-        if (!AUTOPLAY) $('game').focus();
+        if (!SKIP_MENU) $('game').focus();
         // The match over (or the line dropped): back to the menu.
         const watch = () => {
           const s = window.__oneshot;

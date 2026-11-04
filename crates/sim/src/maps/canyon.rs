@@ -13,6 +13,7 @@ use crate::terrain::TerrainDef;
 pub const DEF: Def = Def {
     id: 3,
     name: "Dry Fork",
+    practice: false,
     lo: (-70.0, -30.0),
     hi: (70.0, 30.0),
     boxes: &[

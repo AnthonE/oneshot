@@ -71,10 +71,12 @@ const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 /** How a box is drawn, as the client's level.rs numbers them. */
 export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate', 'alien', 'alien_dark', 'alien_red', 'alien_blue'];
 /** sim::arms, by the names map.json uses. */
-export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG' };
+export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
+  carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
+  launcher: 'LAUNCHER', cannon: 'CANNON' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
-const MAX_PADS = 8;
+const MAX_PADS = 16;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
 const MAX_BOXES = 512;
 /** How far an arc's segments may stray from its circle, m. */
@@ -87,8 +89,6 @@ const MAX_VEHICLES = 8;
 const GRAVITY = 20;
 /** sim::terrain::HEIGHT_Q. */
 const HEIGHT_Q = 128;
-/** rustfmt.toml's max_width. */
-const MAX_WIDTH = 120;
 
 /** A box turned by `turn` degrees about y (+x toward +z at 90), then moved to `at`. */
 export function place(box, at, turn) {
@@ -351,7 +351,7 @@ export function compile(spec, where = 'map.json') {
     light.lamps.push({ p, c, lm: l.lm });
     if (l.mirror) for (const [sx, sz] of mirrors) light.lamps.push({ p: [p[0] * sx, p[1], p[2] * sz], c, lm: l.lm });
   }
-  return { id: spec.id, name: spec.name, about: spec.about || '', nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
+  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -448,6 +448,7 @@ export function rust(m, src) {
   L.push('pub const DEF: Def = Def {');
   L.push(`    id: ${m.id},`);
   L.push(`    name: ${JSON.stringify(m.name)},`);
+  L.push(`    practice: ${m.practice},`);
   L.push(`    lo: (${lit(m.lo[0])}, ${lit(m.lo[1])}),`);
   L.push(`    hi: (${lit(m.hi[0])}, ${lit(m.hi[1])}),`);
   L.push('    boxes: &[');
@@ -514,16 +515,12 @@ function modRs(list) {
   L.push('pub use crate::map::Def;');
   L.push('');
   L.push('/// Every map, in id order.');
-  // One line while rustfmt keeps it so (an array up to 60% of max_width,
-  // its array_width), else one a line.
-  const items = `[${list.map((m) => `&${m.module}::DEF`).join(', ')}]`;
-  const one = `pub const ALL: [&Def; ${list.length}] = ${items};`;
-  if (items.length <= MAX_WIDTH * 0.6 && one.length <= MAX_WIDTH) L.push(one);
-  else {
-    L.push(`pub const ALL: [&Def; ${list.length}] = [`);
-    for (const m of list) L.push(`    &${m.module}::DEF,`);
-    L.push('];');
-  }
+  // As rustfmt writes it: on one line while the array is within its
+  // array_width (60% of max_width 120), else one a line.
+  const defs = list.map((m) => `&${m.module}::DEF`);
+  const one = `[${defs.join(', ')}]`;
+  if (one.length <= 72) L.push(`pub const ALL: [&Def; ${list.length}] = ${one};`);
+  else L.push(`pub const ALL: [&Def; ${list.length}] = [`, ...defs.map((d) => `    ${d},`), '];');
   return L.join('\n') + '\n';
 }
 

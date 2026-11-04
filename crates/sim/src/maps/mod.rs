@@ -7,15 +7,17 @@ pub mod chrysalis;
 pub mod cistern;
 pub mod overpass;
 pub mod proving_grounds;
+pub mod range;
 
 pub use crate::map::Def;
 
 /// Every map, in id order.
-pub const ALL: [&Def; 6] = [
+pub const ALL: [&Def; 7] = [
     &proving_grounds::DEF,
     &overpass::DEF,
     &cistern::DEF,
     &canyon::DEF,
+    &range::DEF,
     &bulkhead::DEF,
     &chrysalis::DEF,
 ];

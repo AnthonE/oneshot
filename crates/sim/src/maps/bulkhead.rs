@@ -11,8 +11,9 @@ use crate::terrain::TerrainDef;
 
 #[rustfmt::skip]
 pub const DEF: Def = Def {
-    id: 4,
+    id: 5,
     name: "Bulkhead",
+    practice: false,
     lo: (-24.0, -16.0),
     hi: (24.0, 16.0),
     boxes: &[

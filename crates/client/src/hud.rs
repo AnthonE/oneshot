@@ -18,6 +18,12 @@ const FEED_S: f32 = 5.0;
 const FEED_LINES: usize = 5;
 const HIT_S: f32 = 0.22;
 const DAMAGE_S: f32 = 0.6;
+/// The red rim when we're hit (after Gates' `hurt_flash.rs`): its alpha at
+/// the blow, how long it fades, and where the red starts (a share of the
+/// far-corner radius). Faint, at the edge, gone in half a second.
+const RIM_ALPHA: f32 = 0.38;
+const RIM_S: f32 = 0.5;
+const RIM_CLEAR_PCT: f32 = 52.0;
 /// How far out from the middle the damage arc sits, px.
 const DAMAGE_R: f32 = 90.0;
 
@@ -61,6 +67,8 @@ impl HudState {
 
 #[derive(Component)]
 pub struct ShieldBar;
+#[derive(Component)]
+pub struct HurtRim;
 #[derive(Component)]
 pub struct HealthBar;
 #[derive(Component)]
@@ -126,6 +134,26 @@ pub fn setup(mut commands: Commands) {
         bottom: bottom.map_or(Val::Auto, Val::Px),
         ..default()
     };
+    // Under the HUD, over the world.
+    commands.spawn((
+        HurtRim,
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundGradient(vec![Gradient::Radial(RadialGradient::new(
+            UiPosition::CENTER,
+            RadialGradientShape::FarthestCorner,
+            vec![
+                ColorStop::new(Color::NONE, Val::Percent(RIM_CLEAR_PCT)),
+                ColorStop::new(rim(0.0), Val::Percent(100.0)),
+            ],
+        ))]),
+        ZIndex(-1),
+        Visibility::Hidden,
+    ));
     commands.spawn(bar(Color::srgb(0.35, 0.7, 1.0), ShieldBar, 40.0));
     commands.spawn(bar(Color::srgb(0.9, 0.3, 0.25), HealthBar, 24.0));
     commands.spawn((AmmoText, text(20.0), abs(None, Some(22.0), None, Some(20.0))));
@@ -469,7 +497,11 @@ pub fn draw(
     let g = f.gun();
     let arm = sim::arms::arm(g.arm);
     let other = f.guns[1 - f.cur as usize];
-    let reload = if f.reload > 0 { "  reloading" } else { "" };
+    let reload = match (f.reload > 0, arm.hot()) {
+        (true, true) => "  venting",
+        (true, false) => "  reloading",
+        _ => "",
+    };
     let swap = if other.arm != 0 {
         format!("\n{}", sim::arms::arm(other.arm).name)
     } else {
@@ -480,9 +512,29 @@ pub fn draw(
         Some(_) => "\nriding: E gets out",
         None => "",
     };
+    // A gun that heats has a battery, no reserve: its heat goes there.
+    let spare = if arm.hot() {
+        format!("heat {}%", g.heat as u32 * 100 / sim::arms::HEAT_FULL as u32)
+    } else {
+        g.reserve.to_string()
+    };
+    // Two guns: both named, both mags. The grenade a throw takes is marked.
+    let (name, mag) = if f.dual() {
+        let l = sim::arms::arm(f.left.arm);
+        (
+            format!("{} + {}", arm.name, l.name),
+            format!("{} | {}", g.mag, f.left.mag),
+        )
+    } else {
+        (arm.name.to_string(), g.mag.to_string())
+    };
+    let mark = |k: u8| if f.gren_kind == k { "*" } else { "" };
     let ammo = format!(
-        "{}{reload}\n{} / {}   grenades {}{swap}{ride}",
-        arm.name, g.mag, g.reserve, f.grenades
+        "{name}{reload}\n{mag} / {spare}   frags {}{} stickies {}{}{swap}{ride}",
+        f.grenades,
+        mark(0),
+        f.stickies,
+        mark(1)
     );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
     let net = if st.net {
@@ -547,6 +599,42 @@ pub fn draw(
         tr.rotation = Rot2::radians(a);
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+    }
+}
+
+fn rim(alpha: f32) -> Color {
+    Color::srgba(0.55, 0.02, 0.02, alpha)
+}
+
+/// The red rim: raised by a hit on us (`HudState::hurt_at`), fading out.
+pub fn hurt_rim(
+    time: Res<Time>,
+    st: Res<HudState>,
+    mut q: Query<(&mut BackgroundGradient, &mut Visibility), With<HurtRim>>,
+) {
+    let Ok((mut bg, mut vis)) = q.single_mut() else {
+        return;
+    };
+    let u = (time.elapsed_secs() - st.hurt_at) / RIM_S;
+    let alpha = if st.hurt_at > 0.0 && (0.0..1.0).contains(&u) {
+        RIM_ALPHA * (1.0 - u)
+    } else {
+        0.0
+    };
+    let want = if alpha > 0.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if *vis != want {
+        *vis = want;
+    }
+    if alpha > 0.0 {
+        if let Some(Gradient::Radial(r)) = bg.0.first_mut() {
+            if let Some(stop) = r.stops.last_mut() {
+                stop.color = rim(alpha);
+            }
+        }
     }
 }
 

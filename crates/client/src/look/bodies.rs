@@ -16,6 +16,9 @@ use bevy::scene::SceneInstanceReady;
 use client_net::core::{Drawn, DrawnVehicle};
 
 use super::guns::{body_basis, gun, spawn_posed, Models};
+use super::shield::{ShellPart, ShieldMaterial};
+use bevy::light::NotShadowCaster;
+use bevy::mesh::skinning::SkinnedMesh;
 
 /// Triple T faces +Z in its file; our bodies face +X.
 const FACE: f32 = core::f32::consts::FRAC_PI_2;
@@ -121,6 +124,14 @@ pub struct Body {
     clip: Option<usize>,
     hand: Entity,
     held: u8,
+    /// Its materials (its own: `dress` copies them per body), their glow
+    /// at rest, and the shield's flare last put on them.
+    mats: Vec<Handle<StandardMaterial>>,
+    glow: LinearRgba,
+    lit: f32,
+    /// The shield's shell (`shield.rs`): its material and its meshes.
+    shell: Handle<ShieldMaterial>,
+    shells: Vec<Entity>,
 }
 
 /// A body spawned for `team` in `skin`: its root, which the caller places.
@@ -164,6 +175,11 @@ pub fn spawn(
         clip: None,
         hand,
         held: 0,
+        mats: Vec::new(),
+        glow: LinearRgba::BLACK,
+        lit: 0.0,
+        shell: Handle::default(),
+        shells: Vec::new(),
     });
     root
 }
@@ -220,16 +236,23 @@ pub fn team_color(team: u8) -> Color {
     }
 }
 
-/// The scene is in: tint its materials by side, and find its player.
-#[allow(clippy::too_many_arguments)]
+/// The scene is in: tint its materials by side, find its player, and give
+/// each of its meshes a shield shell beside it.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dress(
     ev: On<SceneInstanceReady>,
     parents: Query<&ChildOf>,
     children: Query<&Children>,
     mut bodies: Query<&mut Body>,
     players: Query<(), With<AnimationPlayer>>,
-    meshes: Query<&MeshMaterial3d<StandardMaterial>>,
+    meshes: Query<(
+        &MeshMaterial3d<StandardMaterial>,
+        &Mesh3d,
+        Option<&SkinnedMesh>,
+        &Transform,
+    )>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut shield_mats: ResMut<Assets<ShieldMaterial>>,
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -246,22 +269,91 @@ fn dress(
         LIFT * (1.0 - TINT) + tint.blue * 3.0 * TINT,
     );
     let glow = GLOW * bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let shell = shield_mats.add(super::shield::material());
+    body.shell = shell.clone();
     let sheen = trim(body.skin).map_or(LinearRgba::BLACK, |c| c.to_linear() * TRIM_GLOW);
     for e in children.iter_descendants(model) {
         if players.contains(e) {
             body.player = Some(e);
         }
-        if let Ok(m) = meshes.get(e) {
+        if let Ok((m, mesh, skin, at)) = meshes.get(e) {
             let Some(mut mat) = mats.get(&m.0).cloned() else {
                 continue;
             };
+            if let Ok(&ChildOf(parent)) = parents.get(e) {
+                let mut s = commands.spawn((
+                    mesh.clone(),
+                    MeshMaterial3d(shell.clone()),
+                    *at,
+                    Visibility::Hidden,
+                    ShellPart,
+                    NotShadowCaster,
+                    NoFrustumCulling,
+                    ChildOf(parent),
+                ));
+                if let Some(skin) = skin {
+                    s.insert(skin.clone());
+                }
+                body.shells.push(s.id());
+            }
             mat.base_color = base.into();
             mat.emissive = (tint + sheen) * glow;
             // In nits, under the camera's exposure like everything lit.
             mat.emissive_exposure_weight = 1.0;
-            commands
-                .entity(e)
-                .insert((MeshMaterial3d(mats.add(mat)), NoFrustumCulling));
+            let h = mats.add(mat);
+            body.mats.push(h.clone());
+            commands.entity(e).insert((MeshMaterial3d(h), NoFrustumCulling));
+        }
+    }
+    body.glow = (tint + sheen) * glow;
+}
+
+/// The light the shell casts on the body under it, gold, at a flare of 1:
+/// a share of a white surface's brightness in full sun.
+const FLARE_GOLD: [f32; 3] = [0.25, 0.18, 0.05];
+
+/// The shield's flare on a body: `level` 0 is none (`fx/bodies.rs`). The
+/// shell shows at that level, and the body under it takes a little gold.
+pub fn flare(
+    root: Entity,
+    level: f32,
+    bodies: &mut Query<&mut Body>,
+    mats: &mut Assets<StandardMaterial>,
+    shield_mats: &mut Assets<ShieldMaterial>,
+    shells: &mut Query<&mut Visibility, With<ShellPart>>,
+) {
+    let Ok(mut body) = bodies.get_mut(root) else {
+        return;
+    };
+    if (level - body.lit).abs() < 0.02 && (level > 0.0 || body.lit == 0.0) {
+        return;
+    }
+    let shown = level > 0.0;
+    if shown != (body.lit > 0.0) {
+        for &e in &body.shells {
+            if let Ok(mut v) = shells.get_mut(e) {
+                *v = if shown {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+    }
+    body.lit = level;
+    if let Some(m) = shield_mats.get_mut(&body.shell) {
+        m.extension.color.w = level;
+    }
+    let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let k = level * sun;
+    let e = LinearRgba::rgb(
+        body.glow.red + FLARE_GOLD[0] * k,
+        body.glow.green + FLARE_GOLD[1] * k,
+        body.glow.blue + FLARE_GOLD[2] * k,
+    );
+    for h in &body.mats {
+        if let Some(m) = mats.get_mut(h) {
+            m.emissive = e;
         }
     }
 }

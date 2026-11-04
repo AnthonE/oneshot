@@ -10,7 +10,7 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 
 | crate | what |
 |---|---|
-| `crates/sim` | the rules: movement (slopes, launchers), guns, shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`), terrain (`terrain.rs`), round, turned and sloped solids (`solid.rs`) and bots' waypoints (`nav.rs`). Native on the server, wasm in the browser |
+| `crates/sim` | the rules: movement (slopes, launchers), guns (`arms.rs`: hitscan, projectiles, heat, charge, the sword's lunge), shields, pads, vehicles (`vehicle.rs`), Slayer, rewind; the map's box grid (`grid.rs`), terrain (`terrain.rs`), round, turned and sloped solids (`solid.rs`) and bots' waypoints (`nav.rs`). Native on the server, wasm in the browser |
 | `crates/sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `crates/proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `crates/room` | a match as the server runs it, no transport: seats, input buffers, rewind depth, fog, snapshots, replays, the aim review's numbers (`watch.rs`) |
@@ -26,6 +26,12 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
 1. Write the code.
 2. `ci/quick.sh sim`: fmt, clippy with `-D warnings`, sim's tests.
 3. `ci/parity.sh` when you touch the sim: native and wasm must hash equal.
+   Touching a gun (`arms.rs`, the sword's numbers in `consts.rs`): the range,
+   `cargo test -p sim --test range` (Halo 2's counts and times, pinned), and
+   `-- --ignored --nocapture` prints the whole table to tune by. To feel
+   them: `oneshot-server --map range` (every gun on a pad, never in the
+   rotation). New guns borrow a model in `crates/client/src/look/guns.rs`
+   until they have their own.
 4. Touching the client or the netcode: `ci/client.sh` (clippy, native, the
    browser's build into `crates/client/dist`, which `oneshot-server` serves
    by default), `cargo build --release -p server`, then `node ci/e2e.mjs`
@@ -33,7 +39,9 @@ and Elo Pros. Milestones are `DESIGN.md` §16; 7 to 12 are the growth into a ful
    kill; `npm ci` once for Playwright). `node ci/e2e.mjs 150 4 2` for eight
    seats on another map, `node ci/e2e.mjs 150 6 3` for sixteen in Big Team
    on Dry Fork's terrain; `node ci/client_shot.mjs traces/x.png 25 6 3 1`
-   to look at it. Native sound is `--features sound` (needs ALSA); the
+   to look at it (`... 30 0 0 0 fxdemo=1` stages the effects in front of
+   the camera, `fxstage=N` one of them; `look/fx/demo.rs` lists the
+   stages). Native sound is `--features sound` (needs ALSA); the
    browser always has it.
 6. Touching a map: edit its `map.json`, `node tools/maps/compile.mjs`, then
    `cargo test -p sim --test maps`. Never edit `crates/sim/src/maps/` by
