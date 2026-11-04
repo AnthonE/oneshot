@@ -2679,6 +2679,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fx"
+version = "0.1.0"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3990,6 +3994,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "client-net",
+ "fx",
  "js-sys",
  "proto",
  "rustls",

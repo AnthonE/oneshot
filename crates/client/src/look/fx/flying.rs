@@ -198,7 +198,7 @@ pub fn projectiles(
             fx.glow.spawn(Particle {
                 left: 0.05,
                 life: 0.05,
-                pos: at + back * 0.45,
+                pos: (at + back * 0.45).into(),
                 size0: 0.35,
                 size1: 0.15,
                 c0: [14.0, 6.0, 1.6, 1.0],
@@ -229,7 +229,7 @@ pub fn projectiles(
             fx.glow.spawn(Particle {
                 left: 0.1,
                 life: 0.1,
-                pos: at + Vec3::Y * 0.1,
+                pos: (at + Vec3::Y * 0.1).into(),
                 size0: 0.12,
                 size1: 0.06,
                 c0: c,
@@ -247,7 +247,7 @@ fn dot(at: Vec3, size: f32, c: [f32; 4]) -> Particle {
     Particle {
         left: 0.001,
         life: 0.001,
-        pos: at,
+        pos: at.into(),
         size0: size,
         size1: size,
         c0: c,
@@ -262,8 +262,8 @@ fn streak(at: Vec3, v: Vec3, cell: u8, width: f32, len: f32, c: [f32; 4]) -> Par
     Particle {
         left: 0.001,
         life: 0.001,
-        pos: at,
-        vel: v,
+        pos: at.into(),
+        vel: v.into(),
         size0: width,
         size1: width,
         c0: c,
@@ -329,8 +329,8 @@ fn trail(fx: &mut Fx, at: Vec3, v: Vec3, c: [f32; 4]) {
     fx.glow.spawn(Particle {
         left: life,
         life,
-        pos: at - v * 0.01,
-        vel: drift,
+        pos: (at - v * 0.01).into(),
+        vel: drift.into(),
         size0: 0.025,
         size1: 0.005,
         c0: [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, 0.9],
@@ -412,7 +412,7 @@ pub fn splash(fx: &mut Fx, at: Vec3, back: Vec3, big: f32) {
     fx.glow.spawn(Particle {
         left: 0.1,
         life: 0.1,
-        pos: at,
+        pos: at.into(),
         size0: 0.25 * big,
         size1: 0.6 * big,
         c0: ION,
@@ -428,8 +428,8 @@ pub fn splash(fx: &mut Fx, at: Vec3, back: Vec3, big: f32) {
         fx.glow.spawn(Particle {
             left: life,
             life,
-            pos: at,
-            vel: d * speed,
+            pos: at.into(),
+            vel: (d * speed).into(),
             gravity: 4.0,
             drag: 3.0,
             size0: 0.008,

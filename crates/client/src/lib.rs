@@ -998,7 +998,8 @@ mod web_start {
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;
-    /// `query` is the page's, as `?yaw=1.57&arm=3`).
+    /// `query` is the page's, as `?yaw=1.57&arm=3`), or with `fx=<name>`
+    /// one effect on the fx stage (`look/fx/stage.rs`, `tools/fx.sh`).
     #[wasm_bindgen]
     pub fn pose(query: String, opts: String) {
         let pose = super::pose::Pose::parse(&query);
@@ -1006,6 +1007,12 @@ mod web_start {
             pose: Some(pose),
             ..super::Opts::parse(&opts)
         };
-        super::app(Box::new(super::link::Still::on(pose.2.map)), opts).run();
+        let stage = super::look::fx::stage::Stage::parse(&query);
+        let mut app = super::app(Box::new(super::link::Still::on(pose.2.map)), opts);
+        // `fx=<name>`: the fx stage instead of a fighter (`look/fx/stage.rs`).
+        if let Some(s) = stage {
+            super::look::fx::stage::install(&mut app, s);
+        }
+        app.run();
     }
 }

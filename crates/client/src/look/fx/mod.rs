@@ -33,6 +33,7 @@ pub mod hulls;
 pub mod marks;
 pub mod pool;
 pub mod shots;
+pub mod stage;
 pub mod table;
 
 use bevy::camera::visibility::NoFrustumCulling;
@@ -45,7 +46,7 @@ use sim::map::Map;
 
 use crate::look::shake::Shake;
 use crate::Opts;
-use pool::{pool_mesh, Cam, Pool};
+use pool::{pool_mesh, MeshWrite, Pool};
 use table::{Layer, Matter, Weapon};
 
 /// `EventState::part` on a shot fog lets us only hear (room's `HEARD`):
@@ -414,21 +415,18 @@ pub fn draw(
         fx.soft.step(dt);
         return;
     };
-    let cam = Cam {
-        pos: cam_gt.translation(),
-        right: cam_gt.right().into(),
-        up: cam_gt.up().into(),
-    };
-    fx.eye = cam.pos;
+    let cam = pool::cam(cam_gt);
+    let eye = cam_gt.translation();
+    fx.eye = eye;
     fx.cam = cam_gt.compute_transform().rotation;
     let ahead: Vec3 = cam_gt.forward().into();
     for (m, mut tf, mut gt) in &mut q {
         // The additive mesh sorts at the eye, the soft one a metre ahead of
         // it: transparent draws go far to near, so sparks land over dust.
         let (pool, handle, anchor) = if m.glow {
-            (&mut fx.glow, &fx.glow_mesh, cam.pos)
+            (&mut fx.glow, &fx.glow_mesh, eye)
         } else {
-            (&mut fx.soft, &fx.soft_mesh, cam.pos + ahead)
+            (&mut fx.soft, &fx.soft_mesh, eye + ahead)
         };
         if tf.translation != anchor {
             tf.translation = anchor;
