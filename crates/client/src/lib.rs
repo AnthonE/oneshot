@@ -317,6 +317,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<look::rag::Blows>()
     .init_resource::<Early>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
@@ -474,7 +475,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        look::bodies::pose_spines
+        (look::bodies::pose_spines, look::rag::step)
+            .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
@@ -1023,6 +1025,7 @@ pub(crate) fn happened(
     mut st: ResMut<hud::HudState>,
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
+    mut blows: ResMut<look::rag::Blows>,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
@@ -1046,6 +1049,14 @@ pub(crate) fn happened(
             t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, &events);
+        let me = s.core.own().1;
+        look::rag::on_events(
+            &mut blows,
+            &events,
+            &others,
+            (s.core.slot, Vec3::new(me.x, me.y, me.z)),
+            time.elapsed_secs(),
+        );
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
