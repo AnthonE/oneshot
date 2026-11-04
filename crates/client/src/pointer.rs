@@ -85,7 +85,12 @@ pub fn pointer_locked() -> Option<bool> {
 }
 
 /// `PostUpdate`: keep the window's grab mode honest about the page's lock.
-pub fn follow(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut lock: Local<BrowserLock>) {
+pub fn follow(
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    mut lock: Local<BrowserLock>,
+    screen: Res<State<crate::Screen>>,
+    mut next: ResMut<NextState<crate::Screen>>,
+) {
     let Some(has) = pointer_locked() else {
         return;
     };
@@ -98,9 +103,17 @@ pub fn follow(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut lo
         // Written though it already reads None: the write is the change
         // Bevy acts on, and acting is `exitPointerLock()` again.
         LockFix::Unlock => c.grab_mode = CursorGrabMode::None,
-        LockFix::Refused | LockFix::Taken => {
+        LockFix::Refused => {
             c.grab_mode = CursorGrabMode::None;
             c.visible = true;
+        }
+        // The page kept the player's Esc: it's the game's, and opens the menu.
+        LockFix::Taken => {
+            c.grab_mode = CursorGrabMode::None;
+            c.visible = true;
+            if *screen.get() == crate::Screen::Playing {
+                next.set(crate::Screen::Paused);
+            }
         }
     }
 }

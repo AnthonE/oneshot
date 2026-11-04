@@ -17,6 +17,8 @@ pub trait Link {
     fn now_ms(&self) -> f64;
     /// The server closed the stream (a refusal, the match's end, a drain).
     fn closed(&self) -> bool;
+    /// We're leaving: close the connection (the server lets the seat go).
+    fn leave(&mut self) {}
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,6 +48,9 @@ impl Link for Native {
     fn closed(&self) -> bool {
         self.client.closed()
     }
+    fn leave(&mut self) {
+        self.client.close();
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -67,6 +72,9 @@ impl Link for Web {
     }
     fn closed(&self) -> bool {
         self.0.closed()
+    }
+    fn leave(&mut self) {
+        self.0.close();
     }
 }
 

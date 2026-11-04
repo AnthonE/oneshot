@@ -145,7 +145,7 @@
       cancel.hidden = false;
       cancel.onclick = () => location.reload();
       say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
+      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
       let playing = false;
       try {
         // No hash with a CA's certificate: checked by the browser, never pinned.
@@ -159,6 +159,11 @@
         // The match over (or the line dropped): back to the menu.
         const watch = () => {
           const s = window.__oneshot;
+          // Left from the Esc menu: straight back to the menu.
+          if (s && s.left) {
+            location.reload();
+            return;
+          }
           if (s && s.ended) {
             say([s.bye ? 'Match over' : 'Disconnected', s.cup].filter(Boolean).join(' · '));
             cancel.textContent = 'Back to menu';

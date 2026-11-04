@@ -138,6 +138,11 @@ impl NativeClient {
         self.session.update(now, input, &mut wire);
     }
 
+    /// Closes the connection: we're leaving.
+    pub fn close(&self) {
+        self.conn.close(0u32.into(), b"bye");
+    }
+
     /// Whether the server closed the stream.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)

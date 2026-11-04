@@ -16,6 +16,7 @@ pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod pause;
 pub mod pointer;
 pub mod pose;
 pub mod settings;
@@ -65,6 +66,15 @@ struct Drawn {
 
 #[derive(Component)]
 pub struct Eye;
+
+/// What has the mouse: the match, the Esc menu, or the settings.
+#[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Screen {
+    #[default]
+    Playing,
+    Paused,
+    Settings,
+}
 
 /// What every hull is made of, made with the first.
 struct HullParts {
@@ -178,6 +188,9 @@ pub struct Opts {
     /// Everyone else as a capsule in the side's colour, not Triple T: a
     /// software GPU can't skin a room of them (the gate, eight seats on).
     pub capsules: bool,
+    /// Start in the Esc menu (`menu`) or the settings (`settings`): for
+    /// pictures of them (`ci/client_shot.mjs ... menu=1`).
+    pub open: Screen,
 }
 
 impl Opts {
@@ -193,6 +206,13 @@ impl Opts {
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
+            open: if has("settings") {
+                Screen::Settings
+            } else if has("menu") {
+                Screen::Paused
+            } else {
+                Screen::Playing
+            },
         }
     }
 }
@@ -231,6 +251,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
+    .insert_state(opts.open)
+    .add_plugins(pause::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
@@ -297,13 +319,19 @@ fn setup(
     look::viewmodel::spawn(&mut commands, eye);
 }
 
-/// A click takes the mouse; Escape gives it back.
+/// In a match: a click takes the mouse; Escape opens the menu (in a
+/// browser the page keeps that Esc, and `pointer::follow` opens it).
 fn grab(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut look: ResMut<Look>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    screen: Res<State<Screen>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
+    if *screen.get() != Screen::Playing {
+        return;
+    }
     let Ok(mut c) = cursor.single_mut() else {
         return;
     };
@@ -313,8 +341,7 @@ fn grab(
         look.armed = false;
     }
     if keys.just_pressed(KeyCode::Escape) {
-        c.grab_mode = CursorGrabMode::None;
-        c.visible = true;
+        next.set(Screen::Paused);
     }
 }
 
@@ -821,7 +848,7 @@ fn lite(
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
-fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>) {
+fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>, mut frames: Local<u32>) {
     use wasm_bindgen::JsValue;
     *frames += 1;
     let Some(w) = web_sys::window() else {
@@ -847,6 +874,8 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("cup", st.cup.as_str().into());
     set("bye", st.ended.into());
     set("ended", (st.ended || link.0.closed()).into());
+    // The player left (the Esc menu): straight back to the menu.
+    set("left", left.0.into());
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;
