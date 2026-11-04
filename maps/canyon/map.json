@@ -1,21 +1,38 @@
 {
   "id": 3,
   "name": "Dry Fork",
-  "about": "a long red-rock canyon, 280 by 130 m, mirrored between red (-x) and blue (+x): a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising 12 m to 45 m cliffs with mesas behind, a hill in the middle with the rocket, a dry creek bed, boulders and outcrops for cover, and a launcher at each bunker's door that throws you to the middle.",
-  "bounds": [-140, 140, -65, 65],
+  "about": "a red-rock gulch, 300 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
+  "bounds": [-140, 160, -78, 78],
   "mirror": "x",
+  "light": { "sea": -6 },
   "terrain": {
-    "cell": 2,
+    "cell": 1,
     "base": 0,
-    "margin": 16,
+    "margin": [40, 60, 30, 30],
+    "gen": "canyon",
+    "canyon": {
+      "seed": 3,
+      "detail": { "h": 0.6, "wave": 14, "octaves": 2 },
+      "warp": { "m": 8, "wave": 50, "octaves": 2 },
+      "floor": { "half": 62, "wobble": 6, "wave": 40, "octaves": 2 },
+      "pockets": { "w": 12, "half": 16, "at": [[-70, -1], [-25, 1], [35, -1], [85, 1]] },
+      "flare": { "w": 50, "from": 115, "over": 60 },
+      "end": { "x": -140, "blend": 12 },
+      "gullies": { "m": 3, "wave": 16, "at": 4, "half": 6 },
+      "scree": { "h": 12, "w": 24 },
+      "cliff": [[0, 12], [3, 24], [5, 27], [8, 42], [10, 46]],
+      "mesa": { "rise": 16, "over": 30 },
+      "crags": { "h": 6, "wave": 22, "from": 8, "over": 6 },
+      "strata": { "h": 3.1, "bed": 8, "at": 5, "half": 7 },
+      "sea": { "drops": [[14, 115, 45], [4, 160, 60]], "walls": [140, 60], "terrace": [8, 0.25, 105, 30] }
+    },
     "shapes": [
-      { "ridge": [[-160, 65], [160, 65]], "w": 28, "h": 12 },
-      { "ridge": [[-160, -65], [160, -65]], "w": 28, "h": 12 },
       { "hill": [0, 0], "r": 32, "h": 4 },
       { "hill": [-60, 28], "r": 20, "h": 4, "mirror": true },
       { "hill": [-66, -28], "r": 18, "h": 3.5, "mirror": true },
       { "ridge": [[-88, -19.5], [-44, 6.5]], "w": 8, "h": -1.6, "mirror": true },
-      { "ridge": [[-44, 6.5], [0, -8.7]], "w": 8, "h": -1.6, "mirror": true }
+      { "ridge": [[-44, 6.5], [0, -8.7]], "w": 8, "h": -1.6, "mirror": true },
+      { "pad": [-100, 0], "r": 16, "h": 0, "blend": 12, "mirror": true }
     ]
   },
   "prefabs": {
@@ -44,13 +61,49 @@
     ]
   },
   "structures": [
-    { "name": "the canyon walls", "boxes": [[-145, 0, -70, 145, 45, -65, "rock"], [-145, 0, 65, 145, 45, 70, "rock"], [-145, 0, -70, -140, 45, 70, "rock"], [140, 0, -70, 145, 45, 70, "rock"]] },
-    { "name": "the cliffs beyond (scenery: nobody reaches them)", "boxes": [[-152, 0, -100, -80, 55, -71, "rock"], [-80, 0, -92, -24, 50, -71, "rock"], [-24, 0, -105, 28, 62, -71, "rock"], [-120, 0, 71, -56, 52, 94, "rock"], [-56, 0, 71, -4, 58, 103, "rock"], [-185, 0, -70, -147, 56, 70, "rock"]], "mirror": true },
     { "name": "red's bunker", "prefab": "bunker", "at": [-100, 0, 0], "mirror": true },
     { "name": "red's roof steps", "prefab": "steps", "at": [-114, 0, 0], "mirror": true },
-    { "name": "rocks on red's half", "boxes": [[-49.5, -1.5, -9.7, -46.5, 1.6, -7.7, "rock"], [-41.0, -1.5, 12.6, -39.0, 2.2, 15.6, "rock"], [-81.0, -1.5, 3.3, -79.0, 1.2, 5.3, "rock"], [-26.5, -1.5, 20.7, -23.5, 1.4, 22.7, "rock"], [-28.5, -1.5, -30.7, -25.5, 2.4, -27.7, "rock"], [-90.5, -1.5, -33.5, -87.5, 1.8, -31.5, "rock"], [-90.5, -1.5, 31.5, -87.5, 1.8, 33.5, "rock"], [-69.0, -1.5, -18.3, -67.0, 1.4, -16.3, "rock"], [-103.0, -1.5, 18.8, -101.0, 1.8, 21.2, "rock"], [-14.5, -1.5, -41.6, -11.5, 1.6, -38.6, "rock"], [-58.8, -1.5, 44.8, -56.2, 2.0, 47.2, "rock"], [-9.0, -1.5, 9.8, -7.0, 1.0, 11.8, "rock"], [-70.0, -1.5, -45.9, -66.0, 2.6, -42.9, "rock"]], "mirror": true },
-    { "name": "outcrops at the walls' feet on red's half (the stone the banks rise to)", "boxes": [[-124, -2, -66, -100, 18, -54, "rock"], [-60, -2, -66, -40, 17, -56, "rock"], [-110, -2, 54, -90, 17, 66, "rock"], [-36, -2, 52, -16, 17, 66, "rock"]], "mirror": true }
+    {
+      "name": "palms on the beach",
+      "boxes": [
+        { "round": [120, -30], "r": 0.3, "ground": true, "h": 9, "look": "palm" },
+        { "round": [126, 14], "r": 0.3, "ground": true, "h": 8, "look": "palm" },
+        { "round": [131, -10], "r": 0.3, "ground": true, "h": 10, "look": "palm" },
+        { "round": [118, 40], "r": 0.3, "ground": true, "h": 8.5, "look": "palm" },
+        { "round": [128, 44], "r": 0.3, "ground": true, "h": 9.5, "look": "palm" },
+        { "round": [134, 26], "r": 0.3, "ground": true, "h": 8, "look": "palm" }
+      ]
+    },
+    {
+      "name": "dead trees on the floor",
+      "boxes": [
+        { "round": [-80, -22], "r": 0.28, "ground": true, "h": 8, "look": "dead_tree" },
+        { "round": [-45, 32], "r": 0.28, "ground": true, "h": 7, "look": "dead_tree" },
+        { "round": [-30, -38], "r": 0.28, "ground": true, "h": 9, "look": "dead_tree" },
+        { "round": [10, 27], "r": 0.28, "ground": true, "h": 7.5, "look": "dead_tree" },
+        { "round": [50, -30], "r": 0.28, "ground": true, "h": 8.5, "look": "dead_tree" },
+        { "round": [-110, 36], "r": 0.28, "ground": true, "h": 7, "look": "dead_tree" },
+        { "round": [75, 40], "r": 0.28, "ground": true, "h": 9, "look": "dead_tree" },
+        { "round": [20, -42], "r": 0.28, "ground": true, "h": 8, "look": "dead_tree" }
+      ]
+    }
   ],
+  "rocks": {
+    "seed": 8,
+    "cell": 40,
+    "inset": 8,
+    "x": [-125, 0],
+    "floor": 4,
+    "density": 0.85,
+    "strays": 0.5,
+    "big": 6,
+    "body": 16,
+    "stray": [1.2, 2.4],
+    "strayMinH": 1.4,
+    "slope": 0.5,
+    "clear": { "spawn": 5, "pad": 4, "launcher": 6, "roam": 3, "vehicle": 7, "tree": 2, "box": 2, "creek": 3, "base": 0 },
+    "max": 60
+  },
   "spawns": [
     { "at": [-100, -4], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-100, 4], "team": "red", "yaw": 0, "mirror": true },
@@ -74,5 +127,9 @@
   "launchers": [
     { "at": [-90, 0], "to": [-20, 0, 0.8], "time": 2.5, "size": [2, 2], "mirror": true }
   ],
-  "roam": [[-80, 0], [-48, -19.5], [0, 0], [48, 19.5], [80, 0], [-60, 34.7], [60, -34.7], [0, -34.7], [0, 34.7], [-100, 0], [100, 0], [-60, -39], [60, 39]]
+  "roam": [
+    [-80, 0], [-48, -19.5], [0, 0], [48, 19.5], [80, 0], [-60, 34.7], [60, -34.7], [0, -34.7], [0, 34.7], [-100, 0], [100, 0], [-60, -39], [60, 39],
+    [130, -20], [130, 20],
+    [-70, -52], [-25, 52], [35, -53], [85, 56]
+  ]
 }

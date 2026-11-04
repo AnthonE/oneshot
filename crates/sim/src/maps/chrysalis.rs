@@ -380,5 +380,6 @@ pub const DEF: Def = Def {
             ([9.0, 7.3, 12.2], [0.9, 0.72, 1.0], 180000.0),
         ],
         floor: 16,
+        sea: f32::NEG_INFINITY,
     },
 };

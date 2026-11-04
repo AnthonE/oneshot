@@ -86,7 +86,8 @@ pub struct Def {
 /// `ev100` 0 is the client's noon; `sun` and `fill` scale its sun and its
 /// sky's fill (an interior under a roof wants less of both); `lamps` are
 /// point lights: position, colour (0..1 each), lumens; `floor` is how a
-/// flat map's floor is drawn (a look, or 255: the client's own).
+/// flat map's floor is drawn (a look, or 255: the client's own); `sea` is
+/// the height of the water the client draws (`f32::NEG_INFINITY`: none).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LightDef {
     pub ev100: f32,
@@ -94,6 +95,7 @@ pub struct LightDef {
     pub fill: f32,
     pub lamps: &'static [([f32; 3], [f32; 3], f32)],
     pub floor: u8,
+    pub sea: f32,
 }
 
 impl LightDef {
@@ -104,6 +106,7 @@ impl LightDef {
         fill: 1.0,
         lamps: &[],
         floor: 255,
+        sea: f32::NEG_INFINITY,
     };
 }
 
