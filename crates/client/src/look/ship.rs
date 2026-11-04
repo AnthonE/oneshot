@@ -173,8 +173,8 @@ pub fn hull_images(n: usize) -> [Image; 4] {
     bake(n, 5.0, &height, &texel)
 }
 
-/// The deck: metre plates, every other one a fine mesh of slots, the rest
-/// flat with a sunk panel. Near-black blue-grey metal.
+/// The deck: metre plates, one in four a fine mesh of slots, the rest
+/// plain dark purple metal with a sunk panel, a little glossy.
 pub fn deck_images(n: usize) -> [Image; 4] {
     const PLATES: usize = 4;
     const SEAM: f32 = 0.004;
@@ -186,10 +186,12 @@ pub fn deck_images(n: usize) -> [Image; 4] {
         let (lu, lv) = (u.rem_euclid(pw), v.rem_euclid(pw));
         (i, j, lu, lv, inset(lu, lv, pw, pw, 0.01))
     };
-    // 1 on a bar, 0 in a slot, where a plate is meshed: rows of long
-    // slots across it, in three columns.
+    // One plate in four is meshed: rows of long slots across it, in three
+    // columns. The rest are plain, the hull's purple, a panel sunk in each.
+    let meshed = |i: usize, j: usize| hash2(i + 7, j + 1, 31) < 0.28;
+    // 1 on a bar, 0 in a slot.
     let grate = |i: usize, j: usize, lu: f32, lv: f32, d: f32| -> f32 {
-        if !(i + j).is_multiple_of(2) || d < 0.022 {
+        if !meshed(i, j) || d < 0.022 {
             return 1.0;
         }
         let fv = (lv / (pw / 16.0)).rem_euclid(1.0);
@@ -202,7 +204,7 @@ pub fn deck_images(n: usize) -> [Image; 4] {
         }
     };
     let panel = |i: usize, j: usize, d: f32| -> f32 {
-        if (i + j).is_multiple_of(2) {
+        if meshed(i, j) {
             return 0.0;
         }
         // A sunk panel inside the plate's border.
@@ -216,20 +218,29 @@ pub fn deck_images(n: usize) -> [Image; 4] {
         top * grate(i, j, lu, lv, d) - 0.15 * panel(i, j, d)
     };
     let bar = Vec3::new(0.026, 0.027, 0.038);
+    let plain = Vec3::new(0.05, 0.034, 0.082);
     let hole = Vec3::new(0.003, 0.003, 0.005);
     let texel = |x: usize, y: usize, h: f32| -> Texel {
         let (u, v) = (x as f32 / nf, y as f32 / nf);
         let (i, j, lu, lv, d) = plate(u, v);
+        let m = meshed(i, j);
         let g = grate(i, j, lu, lv, d);
         let shade = 0.9 + 0.1 * hash2(i, j, 3);
         let wear = 0.95 + 0.05 * hash2(x / 8, y / 8, 9);
         let hc = h.clamp(0.0, 1.0);
-        let col = hole.lerp(bar * shade * wear, smooth(0.0, 0.6, hc) * g);
+        let top = if m { bar } else { plain };
+        let col = hole.lerp(top * shade * wear, smooth(0.0, 0.6, hc) * g);
         Texel {
             albedo: col.to_array(),
             ao: if g < 0.5 { 0.3 } else { 0.6 + 0.4 * hc },
-            rough: if g < 0.5 { 0.9 } else { 0.45 + 0.2 * (1.0 - hc) },
-            metal: 1.0,
+            rough: if g < 0.5 {
+                0.9
+            } else if m {
+                0.45 + 0.2 * (1.0 - hc)
+            } else {
+                0.32 + 0.2 * (1.0 - hc)
+            },
+            metal: if m { 1.0 } else { 0.8 },
             glow: 0.0,
         }
     };

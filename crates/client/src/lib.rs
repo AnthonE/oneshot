@@ -514,6 +514,7 @@ fn rebuild(
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
             look::rig::expose_for(&d.light, &mut exposure, &mut env);
+            look::rig::haze_for(&mut commands, eye, &d.light);
         }
     }
 }

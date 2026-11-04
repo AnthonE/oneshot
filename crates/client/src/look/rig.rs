@@ -12,7 +12,7 @@ use bevy::anti_alias::smaa::Smaa;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{light_consts::lux, CascadeShadowConfigBuilder, EnvironmentMapLight, SunDisk};
-use bevy::pbr::ScatteringMedium;
+use bevy::pbr::{DistanceFog, FogFalloff, ScatteringMedium};
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, Msaa};
 
@@ -42,6 +42,11 @@ const CASCADES: (usize, f32) = (4, 200.0);
 #[cfg(target_arch = "wasm32")]
 const CASCADES: (usize, f32) = (1, 120.0);
 /// The sun disk's brightness, held under what the tone curve can roll off.
+/// A hall's air (a map lit by its lamps, no sun): a faint haze in the
+/// hull's colour, this much a metre squared, so the near wall is clear
+/// and the far end of the hall softens. Post-exposure, before the tonemap.
+pub const HALL_HAZE: [f32; 3] = [0.07, 0.04, 0.12];
+pub const HALL_HAZE_DENSITY: f32 = 0.015;
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
 
@@ -153,6 +158,25 @@ pub fn camera<M: Component>(
 pub fn expose_for(light: &sim::map::LightDef, exposure: &mut Exposure, env: &mut EnvironmentMapLight) {
     exposure.ev100 = if light.ev100 > 0.0 { light.ev100 } else { DAY_EV100 };
     env.intensity = super::fill::peak_lux() * light.fill;
+}
+
+/// The air for a map: a hall's haze under its lamps; under the sky, the
+/// tier's own (the desktop's atmosphere, the browser's haze).
+pub fn haze_for(commands: &mut Commands, eye: Entity, light: &sim::map::LightDef) {
+    if light.sun <= 0.0 {
+        commands.entity(eye).insert(DistanceFog {
+            color: Color::linear_rgb(HALL_HAZE[0], HALL_HAZE[1], HALL_HAZE[2]),
+            falloff: FogFalloff::ExponentialSquared {
+                density: HALL_HAZE_DENSITY,
+            },
+            ..default()
+        });
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        commands.entity(eye).insert(super::sky::browser_haze(1.0));
+        #[cfg(not(target_arch = "wasm32"))]
+        commands.entity(eye).remove::<DistanceFog>();
+    }
 }
 
 /// The sky for map `seed`: in a browser the noon cube, clouds and sky

@@ -60,6 +60,26 @@
       ]
     },
     {
+      "name": "the long walls' pods between the ribs, and the cove at their feet",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        [-14, 0, 12.6, 0, 0.8, 13.4, "rib"],
+        [-14, 0, -13.4, 0, 0.8, -12.6, "rib"],
+        { "round": [-10, 15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
+        { "round": [-6, 15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
+        { "round": [-10, -15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
+        { "round": [-6, -15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" }
+      ]
+    },
+    {
+      "name": "the south wall's wide pod under its window",
+      "dress": true,
+      "boxes": [
+        { "round": [0, -20.6], "r": 8, "y": [0, 5.2], "look": "alien" }
+      ]
+    },
+    {
       "name": "the hull's ends",
       "mirror": true,
       "boxes": [
