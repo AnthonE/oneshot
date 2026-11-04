@@ -10,12 +10,19 @@
 //! the kill cam when dead); the three.js page's controls; the HUD. In a
 //! browser the page (`crates/client/web/index.html`) has the menu and calls `play()`.
 
+pub mod binds;
+pub mod config;
 pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod options;
+pub mod pause;
+pub mod pointer;
 pub mod pose;
+pub mod settings;
 pub mod sound;
+pub mod ui;
 
 use std::collections::BTreeMap;
 
@@ -48,7 +55,10 @@ pub struct Look {
 struct Built(u32);
 
 /// Drawn things by their slot (a fighter with the side and skin its body
-/// was made in).
+/// was made in). Made once and kept: fog hiding someone hides their body or
+/// hull, it doesn't throw it away, so their coming back costs nothing (a
+/// skinned scene, its materials and shield shells, made mid-fight, was a
+/// hitch).
 #[derive(Resource, Default)]
 struct Drawn {
     fighters: BTreeMap<u8, (Entity, u8, u8)>,
@@ -57,6 +67,52 @@ struct Drawn {
 
 #[derive(Component)]
 pub struct Eye;
+
+/// What has the mouse: the match, the Esc menu, or the settings.
+#[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Screen {
+    #[default]
+    Playing,
+    Paused,
+    Settings,
+}
+
+/// What every hull is made of, made with the first.
+struct HullParts {
+    hull: Handle<StandardMaterial>,
+    dark: Handle<StandardMaterial>,
+    body: Handle<Mesh>,
+    screen: Handle<Mesh>,
+    wheel: Handle<Mesh>,
+}
+
+/// A fighter's body or a vehicle's hull, shown or hidden by `Drawn`.
+#[derive(Component)]
+struct Kept;
+
+/// The kept entities' visibility (never a shield shell's).
+type KeptVis<'w, 's> = Query<'w, 's, &'static mut Visibility, (With<Kept>, Without<look::shield::ShellPart>)>;
+
+/// What a body is made of, and the kept ones' visibility.
+type BodyParts<'w, 's> = (
+    ResMut<'w, Assets<Mesh>>,
+    ResMut<'w, Assets<StandardMaterial>>,
+    KeptVis<'w, 's>,
+);
+
+/// Shows or hides a kept entity, writing only on a change; whether it
+/// changed.
+fn show(vis: &mut KeptVis, e: Entity, on: bool) -> bool {
+    let Ok(mut v) = vis.get_mut(e) else {
+        return false;
+    };
+    let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+    let changed = *v != want;
+    if changed {
+        *v = want;
+    }
+    changed
+}
 
 /// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
 /// roam route until fog shows an enemy, then close in, aim and fire. After
@@ -99,25 +155,22 @@ const AUTO_LANES: [(f32, f32); 6] = [
 #[derive(Resource, Default)]
 pub struct Early(pub Vec<proto::Msg>);
 
-/// Radians per pixel of mouse; zoomed, this much of it.
+/// Radians per pixel of mouse. Scoped, divided by the scope's zoom: the
+/// view narrows by it, so the world moves under the crosshair at one speed
+/// (Gates' `input.rs`).
 const SENS: f32 = 0.0022;
-const ZOOM_SENS: f32 = 0.45;
 
-/// The keys, as the three.js page binds them (the three.js page's input.ts, after
-/// Fireplace's arena). The wheel swaps too.
-const KEYS: [(KeyCode, u16); 12] = [
-    (KeyCode::Space, JUMP),
-    (KeyCode::ControlLeft, CROUCH),
-    (KeyCode::KeyC, CROUCH),
-    (KeyCode::KeyQ, MELEE),
-    (KeyCode::KeyV, MELEE),
-    (KeyCode::KeyG, GRENADE),
-    (KeyCode::KeyR, RELOAD),
-    (KeyCode::KeyX, SWAP),
-    (KeyCode::Digit1, SWAP),
-    (KeyCode::Digit2, SWAP),
-    (KeyCode::KeyE, USE),
-    (KeyCode::KeyT, GREN_SWITCH),
+/// The bound actions that are buttons (the player's keys, `binds.rs`).
+/// The wheel swaps too.
+const BUTTONS: [(binds::Action, u16); 8] = [
+    (binds::Action::Jump, JUMP),
+    (binds::Action::Crouch, CROUCH),
+    (binds::Action::Melee, MELEE),
+    (binds::Action::Grenade, GRENADE),
+    (binds::Action::Reload, RELOAD),
+    (binds::Action::Swap, SWAP),
+    (binds::Action::Use, USE),
+    (binds::Action::GrenSwitch, GREN_SWITCH),
 ];
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
@@ -136,6 +189,9 @@ pub struct Opts {
     /// Everyone else as a capsule in the side's colour, not Triple T: a
     /// software GPU can't skin a room of them (the gate, eight seats on).
     pub capsules: bool,
+    /// Start in the Esc menu (`menu`) or the settings (`settings`): for
+    /// pictures of them (`ci/client_shot.mjs ... menu=1`).
+    pub open: Screen,
 }
 
 impl Opts {
@@ -151,6 +207,13 @@ impl Opts {
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
+            open: if has("settings") {
+                Screen::Settings
+            } else if has("menu") {
+                Screen::Paused
+            } else {
+                Screen::Playing
+            },
         }
     }
 }
@@ -187,11 +250,26 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
+    .add_plugins(ui::plugin)
+    .add_plugins(settings::plugin)
+    .insert_state(opts.open)
+    .add_plugins(pause::plugin)
+    .add_plugins(options::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
         Startup,
-        (setup, look::textures::load, look::guns::load, look::fx::setup),
+        (
+            setup,
+            look::textures::load,
+            look::guns::load,
+            look::fx::setup,
+            look::prewarm::setup,
+        ),
+    )
+    .add_systems(
+        Update,
+        (look::prewarm::warm, look::prewarm::warm_models, look::prewarm::retire).chain(),
     )
     .add_systems(
         Update,
@@ -217,7 +295,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             .chain(),
     );
     #[cfg(target_arch = "wasm32")]
-    app.add_systems(Update, expose.after(hud::draw));
+    app.add_systems(Update, expose.after(hud::draw))
+        .add_systems(PostUpdate, pointer::follow);
     app.insert_resource(opts);
     if opts.lite {
         app.add_systems(Update, lite);
@@ -242,13 +321,19 @@ fn setup(
     look::viewmodel::spawn(&mut commands, eye);
 }
 
-/// A click takes the mouse; Escape gives it back.
+/// In a match: a click takes the mouse; Escape opens the menu (in a
+/// browser the page keeps that Esc, and `pointer::follow` opens it).
 fn grab(
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut look: ResMut<Look>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
+    screen: Res<State<Screen>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
+    if *screen.get() != Screen::Playing {
+        return;
+    }
     let Ok(mut c) = cursor.single_mut() else {
         return;
     };
@@ -258,8 +343,7 @@ fn grab(
         look.armed = false;
     }
     if keys.just_pressed(KeyCode::Escape) {
-        c.grab_mode = CursorGrabMode::None;
-        c.visible = true;
+        next.set(Screen::Paused);
     }
 }
 
@@ -277,26 +361,43 @@ fn pump(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    (binds, settings): (Res<binds::Binds>, Res<settings::Settings>),
 ) {
-    let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
-    let key = |k: KeyCode| grabbed && (keys.pressed(k) || keys.just_pressed(k));
+    // The mouse is ours only while held: on the web, the page's lock is the
+    // truth (a lock asked for and not yet granted, or let go behind our
+    // back, turns nothing and fires nothing).
+    let grabbed =
+        cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
+    let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let dual = link.0.session().core.own().0.dual();
-    look.zoom = button(MouseButton::Right) && !auto.on && !dual;
+    let (dual, scope, driving) = {
+        let f = link.0.session().core.own().0;
+        let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
+        let scope = if f.alive {
+            sim::arms::arm(f.gun().arm).zoom.max(1)
+        } else {
+            1
+        };
+        (f.dual(), scope, driving)
+    };
+    // No scope at the wheel: the chase camera doesn't narrow.
+    look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
     if grabbed {
-        let sens = SENS * if look.zoom { ZOOM_SENS } else { 1.0 };
+        let base = SENS * settings.sensitivity;
+        let sens = if look.zoom { base / scope as f32 } else { base };
+        let up = if settings.invert { -1.0 } else { 1.0 };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
-        look.pitch = (look.pitch - motion.delta.y * sens).clamp(-max, max);
+        look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if keys.just_pressed(KeyCode::KeyN) {
+    if binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
         st.net = !st.net;
     }
-    let axis =
-        |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127 * grabbed as i32;
-    let mut buttons = KEYS.iter().filter(|(k, _)| key(*k)).fold(0, |b, (_, v)| b | v);
+    let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
+    let axis = |plus: binds::Action, minus: binds::Action| (on(plus) - on(minus)) * 127;
+    let mut buttons = BUTTONS.iter().filter(|(a, _)| held(*a)).fold(0, |b, (_, v)| b | v);
     if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {
         look.armed = true;
     }
@@ -313,7 +414,10 @@ fn pump(
         buttons |= SWAP;
     }
     let turn = core::f32::consts::TAU;
-    let (mut mx, mut mz) = (axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
+    let (mut mx, mut mz) = (
+        axis(binds::Action::Right, binds::Action::Left),
+        axis(binds::Action::Forward, binds::Action::Back),
+    );
     if auto.on {
         (buttons, mx, mz) = autopilot(&mut auto, &mut look, &link.0.session().core, link.0.now_ms());
     }
@@ -373,7 +477,9 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
     look.yaw = dz.atan2(dx);
     look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
-    let fire = if auto.frames & 1 == 1 { FIRE } else { 0 };
+    // Tap by tick, not by frame: down if the last tick had it up. Frames
+    // outnumbering ticks would otherwise hold it down for good.
+    let fire = if f.last_buttons & FIRE == 0 { FIRE } else { 0 };
     let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
 }
@@ -429,8 +535,7 @@ fn draw_fighters(
     st: Res<hud::HudState>,
     posed: Option<Res<pose::Pose>>,
     opts: Res<Opts>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    (mut meshes, mut mats, mut vis): BodyParts,
     graph: Option<Res<look::bodies::Graph>>,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
@@ -472,10 +577,12 @@ fn draw_fighters(
                 } else {
                     look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, skin)
                 };
+                commands.entity(e).insert(Kept);
                 drawn.fighters.insert(d.slot, (e, d.team, skin));
                 e
             }
         };
+        let _ = show(&mut vis, e, true);
         if opts.capsules {
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
@@ -501,13 +608,16 @@ fn draw_fighters(
             &mut shells,
         );
     }
-    drawn.fighters.retain(|slot, (e, ..)| {
-        let k = others.iter().any(|d| d.slot == *slot);
-        if !k {
-            commands.entity(*e).despawn();
+    for (slot, (e, ..)) in &drawn.fighters {
+        if !others.iter().any(|d| d.slot == *slot) && show(&mut vis, *e, false) {
+            // Shown again, it starts its clip afresh, not fading from the
+            // pose it was hidden in (a kill cam's victim got up off the
+            // floor).
+            if let Ok(mut b) = bodies.get_mut(*e) {
+                b.afresh();
+            }
         }
-        k
-    });
+    }
 }
 
 /// The vehicles: ours as predicted, the rest interpolated.
@@ -519,6 +629,8 @@ fn draw_vehicles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut at: Query<&mut Transform>,
+    mut vis: KeptVis,
+    mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
 ) {
@@ -533,6 +645,9 @@ fn draw_vehicles(
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
     for &(slot, p, yaw) in &list {
+        if let Some(&e) = drawn.vehicles.get(&slot) {
+            let _ = show(&mut vis, e, true);
+        }
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -543,33 +658,41 @@ fn draw_vehicles(
                 }
             }
             None => {
-                let hull = mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.36, 0.42, 0.29),
-                    perceptual_roughness: 0.6,
-                    metallic: 0.3,
-                    ..default()
+                // One set of meshes and materials for every hull.
+                let k = parts.get_or_insert_with(|| HullParts {
+                    hull: mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.36, 0.42, 0.29),
+                        perceptual_roughness: 0.6,
+                        metallic: 0.3,
+                        ..default()
+                    }),
+                    dark: mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.14, 0.15, 0.17),
+                        perceptual_roughness: 0.8,
+                        ..default()
+                    }),
+                    body: meshes.add(Cuboid::new(4.4, 0.7, 2.2)),
+                    screen: meshes.add(Cuboid::new(0.12, 0.9, 2.2)),
+                    wheel: meshes.add(Cylinder::new(0.42, 0.35)),
                 });
-                let dark = mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.14, 0.15, 0.17),
-                    perceptual_roughness: 0.8,
-                    ..default()
-                });
+                let (hull, dark) = (k.hull.clone(), k.dark.clone());
+                let (body, screen, wheel) = (k.body.clone(), k.screen.clone(), k.wheel.clone());
                 let e = commands
-                    .spawn((t, Visibility::default()))
+                    .spawn((t, Visibility::default(), Kept))
                     .with_children(|c| {
                         c.spawn((
-                            Mesh3d(meshes.add(Cuboid::new(4.4, 0.7, 2.2))),
+                            Mesh3d(body),
                             MeshMaterial3d(hull.clone()),
                             Transform::from_xyz(0.0, 0.75, 0.0),
                         ));
                         c.spawn((
-                            Mesh3d(meshes.add(Cuboid::new(0.12, 0.9, 2.2))),
+                            Mesh3d(screen),
                             MeshMaterial3d(dark.clone()),
                             Transform::from_xyz(-0.9, 1.55, 0.0),
                         ));
                         for (x, z) in [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)] {
                             c.spawn((
-                                Mesh3d(meshes.add(Cylinder::new(0.42, 0.35))),
+                                Mesh3d(wheel.clone()),
                                 MeshMaterial3d(dark.clone()),
                                 Transform::from_xyz(x, 0.42, z)
                                     .with_rotation(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
@@ -581,13 +704,11 @@ fn draw_vehicles(
             }
         }
     }
-    drawn.vehicles.retain(|slot, e| {
-        let k = list.iter().any(|v| v.0 == *slot);
-        if !k {
-            commands.entity(*e).despawn();
+    for (slot, e) in &drawn.vehicles {
+        if !list.iter().any(|v| v.0 == *slot) {
+            let _ = show(&mut vis, *e, false);
         }
-        k
-    });
+    }
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
@@ -597,6 +718,7 @@ fn view(
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     opts: Res<Opts>,
+    settings: Res<settings::Settings>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
@@ -605,7 +727,7 @@ fn view(
     let core = &link.0.session().core;
     let (f, p) = core.own();
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
-    let mut fov = look::rig::FOV_DEG;
+    let mut fov = settings.fov;
     let at = Vec3::new(p.x, p.y, p.z);
     let kill = if f.alive { None } else { core.killcam(link.0.now_ms()) };
     if let Some(k) = kill {
@@ -728,7 +850,7 @@ fn lite(
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it.
 #[cfg(target_arch = "wasm32")]
-fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>) {
+fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>, mut frames: Local<u32>) {
     use wasm_bindgen::JsValue;
     *frames += 1;
     let Some(w) = web_sys::window() else {
@@ -754,6 +876,8 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, mut frames: Local<u32>
     set("cup", st.cup.as_str().into());
     set("bye", st.ended.into());
     set("ended", (st.ended || link.0.closed()).into());
+    // The player left (the Esc menu): straight back to the menu.
+    set("left", left.0.into());
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;
@@ -769,7 +893,7 @@ fn fly(
     time: Res<Time>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
-    mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform)>,
+    mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
     let others = core.others(link.0.now_ms());

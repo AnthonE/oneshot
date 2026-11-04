@@ -128,9 +128,11 @@ server's.
   server's, replay the unacked tail, and put the jump into a render-only offset
   that decays (100 to 325 ms, blended by size), snapping past 4 m.
 - **Clock:** the client runs ahead of the server by its one-way latency plus a
-  small buffer, steered by the server-reported input buffer depth (target 2
-  ticks, deadband ±1), time-dilated within ±5%, hard resync if far off.
-  Gates' `client-core/src/clock.rs`.
+  small buffer, steered by the low point of the server's input buffer (a band
+  of 1 to 2.5 inputs): short of it 5% fast (the server is guessing, which
+  costs corrections), past it slower in proportion, 1% to 5% (only latency
+  is lost, so it eases down rather than swing across), hard resync if far
+  off. Gates' `client-core/src/clock.rs`.
 - **Own shots are drawn now:** tracer, muzzle flash, recoil kick, ammo count,
   reload. Their direction is the centre of the reticle (spread is the server's
   secret, §9). Hit markers, damage numbers and kills arrive from the server, a
@@ -144,14 +146,26 @@ server's.
 
 Remote fighters are drawn **between** two snapshots, never guessed ahead:
 
+- The render tick runs on real time from an estimate of the server's clock
+  that each snapshot moves a tenth of the way to what it says; what is drawn
+  follows the estimate at 90 to 110% of real time, faster the further off
+  (to half again: a latency step is caught up in a fraction of a second), so
+  a late snapshot slows everyone else a little and never stops or pulls them
+  back. Snapshots over 150 ms early re-take the estimate at once (that only
+  moves everyone on); late ones never do. The client reports how far behind
+  its newest snapshot it draws, as measured (§7).
 - A playout delay starts at 2 snapshot intervals (31 ms at 64 Hz) and adapts
-  from measured jitter (RFC 3550 estimator) within 1 to 6 intervals. The client
-  reports its delay to the server in each input datagram (it feeds lag
-  compensation, §7).
+  from measured jitter (RFC 3550 estimator) within 1 to 6 intervals, slewed
+  (up 4 ticks a second, down 1). The client reports its delay to the server
+  in each input datagram (it feeds lag compensation, §7).
 - Linear interpolation of position, slerp of yaw and pitch, and animation state
   (moving, airborne, firing, reloading, dead) from the snapshot flags.
-- On a gap: extrapolate at most 2 intervals from velocity, then freeze.
-- This is Gates' `client-core/src/interp.rs`, retuned from 30 Hz.
+- On a gap: extrapolate at most 125 ms from velocity, then hold. Two
+  snapshots more than 250 ms apart aren't drawn between: run on and held as
+  if the second hadn't come, then where they are.
+- This is Gates' `client-core/src/interp.rs` and its `server_est`, retuned
+  from 30 Hz; `client-net/tests/loopback.rs` holds it to even steps through
+  25 ms of jitter.
 
 ## 7 · Lag compensation: the server chooses
 

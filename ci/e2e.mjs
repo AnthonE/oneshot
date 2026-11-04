@@ -81,6 +81,19 @@ try {
   // Small, as the three.js page's gate ran: SwiftShader is fill-bound.
   const page = await browser.newPage({ viewport: { width: 480, height: 270 } });
   watch(page);
+  // Every gap between animation frames, from when the page is told to
+  // start counting (once it draws steadily): hitches show as gaps far over
+  // the median.
+  await page.addInitScript(() => {
+    window.__gaps = [];
+    let last = 0;
+    const tick = (t) => {
+      if (window.__countGaps && last) window.__gaps.push(t - last);
+      last = t;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
   // Eight seats or more: capsules, not Triple T (SwiftShader can't skin a
   // room of them), as the three.js page's gate drew them.
   await page.goto(`${url}?mode=${mode}&name=e2e&autoplay=1&lite=1${mode ? '&capsules=1' : ''}`);
@@ -101,10 +114,21 @@ try {
     const now = Date.now();
     const fps = prev ? (s.frames - prev.frames) / ((now - prev.at) / 1000) : 0;
     console.log(`${Math.round((now - t0) / 1000)}s frames ${s.frames} (${fps.toFixed(1)} fps) snapshots ${snaps} confirmed ${conf} corrected ${corr} kills ${s.kills}`);
-    if (!base && fps >= STEADY_FPS) base = s.stats.slice();
+    if (!base && fps >= STEADY_FPS) {
+      base = s.stats.slice();
+      await page.evaluate(() => { window.__countGaps = true; });
+    }
     prev = { frames: s.frames, at: now, stats: s.stats.slice() };
     const counted = base ? conf - base[1] + corr - base[2] : 0;
     if (s.kills >= 1 && counted >= COUNT) break;
+  }
+  // Hitches: the worst gaps between frames once steady, against the median.
+  const gaps = (await page.evaluate(() => window.__gaps)).sort((a, b) => a - b);
+  if (gaps.length) {
+    const at = (q) => gaps[Math.min(gaps.length - 1, Math.floor(q * gaps.length))];
+    const med = at(0.5);
+    const over = gaps.filter((g) => g > 3 * med).length;
+    console.log(`frames ${gaps.length}: median ${med.toFixed(0)} ms, p99 ${at(0.99).toFixed(0)} ms, worst ${gaps[gaps.length - 1].toFixed(0)} ms, ${over} over 3x the median`);
   }
   mkdirSync('traces', { recursive: true });
   await page.screenshot({ path: `traces/e2e-${mode}-${map}.png` });

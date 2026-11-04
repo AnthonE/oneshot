@@ -19,6 +19,11 @@ Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
     (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
     manifest
 
+Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
+  - Unitblock, by GGBotNet (ggbot.net, github.com/ggbotnet/fonts-cc0)
+  - Aileron, by Sora Sagano (dotcolon.net/fonts/aileron), "No Rights
+    Reserved"
+
 Code ported into the Bevy client (crates/client/src/look) from Gates
 (AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
 ground and grass modules as they arrive), and into tools/glb from Gates'

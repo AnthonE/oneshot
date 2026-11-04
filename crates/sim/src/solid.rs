@@ -250,6 +250,14 @@ impl Solid {
 
     /// Where a ray from `o` along unit `d` first meets it, within `[0, tmax]`.
     pub fn ray(&self, o: V3, d: V3, tmax: f32) -> Option<f32> {
+        if self.wide_of(o, d) {
+            return None;
+        }
+        self.ray_exact(o, d, tmax)
+    }
+
+    /// [`Self::ray`] without the quick look first: what the tests hold it to.
+    pub fn ray_exact(&self, o: V3, d: V3, tmax: f32) -> Option<f32> {
         match self.shape {
             Shape::Round { x, z, r } => ray_cylinder(o, d, V3::new(x, self.y0, z), r, self.y1 - self.y0, tmax),
             Shape::Turned { x, z, hx, hz, c, s } => {
@@ -303,6 +311,39 @@ impl Solid {
                 }
             }
         }
+    }
+}
+
+impl Solid {
+    /// Whether a ray passes wide of the circle around a round or turned
+    /// solid in x and z, so it can't meet it: a few products and no
+    /// division, where most of the rays near a curved wall end (fog asks
+    /// tens per pair). Never turns away a ray the exact test would stop, so
+    /// the answer is the exact test's, bit for bit: the miss is measured by
+    /// the cross product, whose rounding grows with the distance and not
+    /// its square, and the circle is widened past that rounding at any
+    /// distance on a map (`a_ray_past_a_curve_is_answered_as_the_exact_test_does`).
+    fn wide_of(&self, o: V3, d: V3) -> bool {
+        let (x, z, r2) = match self.shape {
+            Shape::Round { x, z, r } => (x, z, r * r),
+            Shape::Turned { x, z, hx, hz, .. } => (x, z, hx * hx + hz * hz),
+            Shape::Ramp { .. } => return false,
+        };
+        let dd = d.x * d.x + d.z * d.z;
+        // Nearly straight up or down: the exact test.
+        if dd < 1e-4 {
+            return false;
+        }
+        let (mx, mz) = (o.x - x, o.z - z);
+        let s = mx * mx + mz * mz;
+        let wide = r2 * 1.001 + 1e-4 + s * 1e-6;
+        // The line passes the middle at |cross| / |d| in x and z.
+        let cross = mx * d.z - mz * d.x;
+        if cross * cross > dd * wide {
+            return true;
+        }
+        // Outside the circle and heading away from it.
+        s > wide && mx * d.x + mz * d.z > 0.001
     }
 }
 

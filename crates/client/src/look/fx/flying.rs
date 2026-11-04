@@ -42,6 +42,47 @@ const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
 
+/// A shown model within a frame's flight of a projectile of its kind (twice
+/// its speed by the frame, or a snapshot's interval if longer) and this
+/// much more is taken to be it.
+const REASSIGN_M: f32 = 1.0;
+/// A snapshot's interval, s: positions move by at least this much flight.
+const SNAP_S: f32 = 2.0 / sim::consts::TICK_HZ as f32;
+
+/// A new model for `p`, kept from then on.
+fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &ProjState) -> Entity {
+    let rocket = p.kind == ROCKET;
+    let scene = if rocket { &models.rocket } else { &models.frag };
+    let place = place(p);
+    let mut e = commands.spawn((
+        Flying {
+            kind: p.kind,
+            last: place.translation,
+            lit: false,
+        },
+        place,
+        Visibility::default(),
+    ));
+    e.with_child((
+        SceneRoot(scene.clone()),
+        // Both models stand on their base, +Y up: centre them.
+        Transform::from_xyz(0.0, if rocket { -0.3 } else { -0.08 }, 0.0),
+    ));
+    if rocket && fx.caps.lights > 2 {
+        e.with_child((
+            Transform::from_xyz(0.0, -0.5, 0.0),
+            PointLight {
+                intensity: 200_000.0,
+                range: 7.0,
+                color: Color::srgb(1.0, 0.6, 0.3),
+                shadows_enabled: false,
+                ..default()
+            },
+        ));
+    }
+    e.id()
+}
+
 /// Drawn with a model (the rest are light).
 fn modelled(kind: u8) -> bool {
     matches!(kind, ROCKET | FRAG | LOB | STICKY)
@@ -65,59 +106,90 @@ pub fn projectiles(
     others: &[Drawn],
     t: f32,
     dt: f32,
-    have: &mut Query<(Entity, &mut Flying, &mut Transform)>,
+    have: &mut Query<(Entity, &mut Flying, &mut Transform, &mut Visibility)>,
 ) {
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
         light(fx, p);
     }
     ended(fx, proj, others, t, dt);
-    let proj: Vec<ProjState> = proj.iter().filter(|p| modelled(p.kind)).copied().collect();
-    let proj = &proj[..];
-    let mut drawn: Vec<(Entity, u8)> = have.iter().map(|(e, f, _)| (e, f.kind)).collect();
-    // Same count of each kind as last frame, in order: move them; else
-    // respawn the lot (cheap: a handful at most).
-    let same = drawn.len() == proj.len() && drawn.iter().zip(proj).all(|(d, p)| d.1 == p.kind);
-    if !same {
-        for (e, _) in drawn.drain(..) {
-            commands.entity(e).despawn();
-        }
-        for p in proj {
-            let rocket = p.kind == ROCKET;
-            let scene = if rocket { &models.rocket } else { &models.frag };
-            let place = place(p);
-            let mut e = commands.spawn((
-                Flying {
-                    kind: p.kind,
-                    last: place.translation,
-                    lit: false,
-                },
-                place,
-                Visibility::default(),
-            ));
-            e.with_child((
-                SceneRoot(scene.clone()),
-                // Both models stand on their base, +Y up: centre them.
-                Transform::from_xyz(0.0, if rocket { -0.3 } else { -0.08 }, 0.0),
-            ));
-            if rocket && fx.caps.lights > 2 {
-                e.with_child((
-                    Transform::from_xyz(0.0, -0.5, 0.0),
-                    PointLight {
-                        intensity: 200_000.0,
-                        range: 7.0,
-                        color: Color::srgb(1.0, 0.6, 0.3),
-                        shadows_enabled: false,
-                        ..default()
-                    },
-                ));
+    // The models in flight, kept: each projectile takes the nearest shown
+    // model of its kind (so a rocket's trail stays its own), else a hidden
+    // one, else a new one; the rest are hidden. Never despawned: a model
+    // made mid-fight is a scene spawned mid-fight.
+    let mut pool: Vec<(Entity, bool, Vec3, bool)> = have
+        .iter()
+        .map(|(e, f, tr, v)| (e, f.kind == ROCKET, tr.translation, *v != Visibility::Hidden))
+        .collect();
+    let mut taken = vec![false; pool.len()];
+    let mut go: Vec<(Entity, ProjState, bool)> = Vec::new();
+    let live: Vec<&ProjState> = proj.iter().filter(|p| modelled(p.kind)).collect();
+    let mut matched = vec![false; live.len()];
+    // First every shown model to its nearest projectile of its kind within
+    // a frame's flight (closest pairs first, so a new rocket never takes
+    // one still flying), then the rest a free model, hidden ones first,
+    // then a new one.
+    let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
+    for (i, p) in live.iter().enumerate() {
+        let at = place(p).translation;
+        let reach = Vec3::new(p.vel.x, p.vel.y, p.vel.z).length() * dt.max(SNAP_S) * 2.0 + REASSIGN_M;
+        for (k, m) in pool.iter().enumerate() {
+            let d = m.2.distance(at);
+            if m.1 == (p.kind == ROCKET) && m.3 && d < reach {
+                pairs.push((d, i, k));
             }
         }
-        return;
     }
-    for ((e, _), p) in drawn.iter().zip(proj) {
-        let Ok((_, mut f, mut tr)) = have.get_mut(*e) else {
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (_, i, k) in pairs {
+        if !matched[i] && !taken[k] {
+            matched[i] = true;
+            taken[k] = true;
+            go.push((pool[k].0, *live[i], false));
+        }
+    }
+    for (i, p) in live.iter().enumerate() {
+        if matched[i] {
+            continue;
+        }
+        let rocket = p.kind == ROCKET;
+        let free = (0..pool.len())
+            .filter(|&k| !taken[k] && pool[k].1 == rocket)
+            .min_by_key(|&k| pool[k].3);
+        match free {
+            Some(k) => {
+                taken[k] = true;
+                go.push((pool[k].0, **p, true));
+            }
+            None => {
+                let e = spawn(commands, fx, models, p);
+                pool.push((e, rocket, place(p).translation, true));
+                taken.push(true);
+            }
+        }
+    }
+    for (k, (e, ..)) in pool.iter().enumerate() {
+        if !taken[k] {
+            if let Ok((_, _, _, mut v)) = have.get_mut(*e) {
+                if *v != Visibility::Hidden {
+                    *v = Visibility::Hidden;
+                }
+            }
+        }
+    }
+    for (e, p, fresh) in go {
+        let Ok((_, mut f, mut tr, mut v)) = have.get_mut(e) else {
             continue;
         };
+        if *v == Visibility::Hidden {
+            *v = Visibility::Inherited;
+        }
+        f.kind = p.kind;
+        if fresh {
+            // Another projectile now: its trail starts where it is.
+            f.last = place(&p).translation;
+            f.lit = false;
+        }
+        let p = &p;
         *tr = place(p);
         let at = tr.translation;
         if p.kind == ROCKET {

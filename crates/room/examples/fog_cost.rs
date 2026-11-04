@@ -30,6 +30,13 @@ fn main() {
             .and_then(|i| args.get(i + 1)?.parse::<u32>().ok())
     };
     let only = opt("--map");
+    // A shared CI runner is slower and noisier than a workstation: CI
+    // scales the budget (FOG_BUDGET_SCALE=2 in ci.yml).
+    let scale: f64 = std::env::var("FOG_BUDGET_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|v: &f64| *v >= 1.0)
+        .unwrap_or(1.0);
     let ticks = opt("--ticks").unwrap_or(20_000);
     let mut over = false;
     for d in sim::maps::ALL.iter().filter(|d| only.is_none_or(|m| m == d.id as u32)) {
@@ -71,10 +78,14 @@ fn main() {
             at(1.0),
             mean * 64.0 / 1e4
         );
-        over |= mean > MEAN_US || at(0.999) > P999_US;
+        over |= mean > MEAN_US * scale || at(0.999) > P999_US * scale;
     }
     if check && over {
-        eprintln!("fog is over budget: mean {MEAN_US} µs, p99.9 {P999_US} µs");
+        eprintln!(
+            "fog is over budget: mean {} µs, p99.9 {} µs",
+            MEAN_US * scale,
+            P999_US * scale
+        );
         std::process::exit(1);
     }
 }
