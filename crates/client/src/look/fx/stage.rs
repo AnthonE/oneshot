@@ -51,11 +51,12 @@ pub struct Staged {
     pub fire: Fire,
 }
 
-const WEAPONS: [(Weapon, &str); 4] = [
+const WEAPONS: [(Weapon, &str); 5] = [
     (Weapon::Bullet, "bullet"),
     (Weapon::Pellet, "pellet"),
     (Weapon::Sniper, "sniper"),
     (Weapon::Melee, "melee"),
+    (Weapon::Blade, "blade"),
 ];
 
 const MATTERS: [(Matter, &str); 6] = [
@@ -283,8 +284,10 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
     if tick.clear || (tick.fire && tick.step == 1) {
         fx.glow.clear();
         fx.soft.clear();
+        fx.chips.clear();
         fx.glow.seed(stage.seed);
         fx.soft.seed(stage.seed.wrapping_mul(0x9E37_79B9));
+        fx.chips.seed(stage.seed);
     }
     if !tick.fire {
         return;
@@ -295,6 +298,7 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
         others: &[],
         vehicles: &[],
         me: core.slot,
+        aim: Vec3::from(stage.framing.dir),
         t: time.elapsed_secs(),
     };
     let f = &stage.framing;
@@ -302,7 +306,13 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
     for a in f.anchors {
         let at = ORIGIN + Vec3::from(a);
         match stage.staged.fire {
-            Fire::Hit(w, m) => fx.impact(w, m, at, dir),
+            // The mark flat on the card's plane: no map is drawn here.
+            Fire::Hit(w, m) => {
+                fx.impact(w, m, at, dir);
+                if let Some((k, size)) = super::marks::kind(w, m) {
+                    fx.marks.place(k, size, at, dir, m);
+                }
+            }
             Fire::Muzzle(arm) => shots::flash(&mut fx, at, dir, &table::gun(arm)),
             Fire::Blast(c) => blast::blast(&mut fx, &scene, at, c, false),
             Fire::Pop => bodies::pop(&mut fx, at - Vec3::Y * 1.0),

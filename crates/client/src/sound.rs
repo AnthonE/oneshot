@@ -138,7 +138,7 @@ mod on {
     }
 
     /// The listener rides the camera.
-    fn listen(mut commands: Commands, eye: Query<Entity, (With<Camera3d>, Without<SpatialListener>)>) {
+    fn listen(mut commands: Commands, eye: Query<Entity, (With<crate::look::rig::EyeCam>, Without<SpatialListener>)>) {
         for e in &eye {
             commands.entity(e).insert(SpatialListener::new(0.2));
         }
@@ -172,7 +172,7 @@ mod on {
         time: Res<Time>,
         mut ear: ResMut<Ear>,
         mut commands: Commands,
-        cam: Query<&GlobalTransform, With<Camera3d>>,
+        cam: Query<&GlobalTransform, With<crate::look::rig::EyeCam>>,
         settings: Res<crate::settings::Settings>,
     ) {
         ear.volume = settings.volume();

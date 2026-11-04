@@ -2,7 +2,10 @@
 //! of a still camera, for looking at the art (`ci/look.mjs` shoots it for
 //! the reference board, `board/board.json`). After the three.js page's
 //! `?pose`: `yaw=` turns the fighter (radians), `arm=` picks its gun,
-//! `speed=` sets it running (m/s), `skin=` and `team=` dress it.
+//! `speed=` sets it running (m/s) and `dir=` which way, radians from its
+//! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
+//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`
+//! and `team=` dress it.
 //!
 //! A map's view (the board's level shots): `map=4` builds that map instead,
 //! `eye=x,y,z` and `look=x,y,z` place the camera, and the fighter stands
@@ -66,15 +69,18 @@ impl Pose {
         };
         let yaw = get("yaw", core::f32::consts::PI);
         let speed = get("speed", 0.0);
+        let travel = yaw + get("dir", 0.0);
         let d = Drawn {
             slot: 1,
             team: get("team", 0.0) as u8,
             alive: true,
             grounded: true,
             pos: V3::new(AT.x, AT.y, AT.z),
-            // Running the way it faces.
-            vel: V3::new(speed * yaw.cos(), 0.0, speed * yaw.sin()),
+            // Running the way it faces, or `dir` off it.
+            vel: V3::new(speed * travel.cos(), 0.0, speed * travel.sin()),
             yaw,
+            pitch: get("pitch", 0.0),
+            crouched: get("crouch", 0.0) != 0.0,
             arm: get("arm", 1.0) as u8,
             shield: 255,
             ..Drawn::default()

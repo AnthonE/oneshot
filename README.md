@@ -24,7 +24,7 @@ ci/parity.sh        # native and wasm hash the same bot matches
 ## Milestone 2: one playable room
 
 ```sh
-ci/client.sh                            # the Bevy client: clippy, native, the page into crates/client/dist
+ci/client.sh                            # the Bevy client: clippy, native, the page (WebGL2 and WebGPU) into crates/client/dist
 node tools/assets.mjs ../Gates          # only to refresh crates/client/assets from a Gates checkout
 cargo run -p server --release           # then open http://127.0.0.1:8080 in Chrome
 ```

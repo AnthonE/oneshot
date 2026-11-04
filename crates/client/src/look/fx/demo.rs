@@ -6,7 +6,10 @@
 //! breaking, 5 rounds into a wall, 6 a rocket and a wreck, 7 the shield
 //! shell flaring on every fighter in view, 8 the SHARD GUN's shards curving
 //! into a body, sticking, and bursting together, 9 ion bolts splashing, a
-//! charged bolt and the cannon's ball.
+//! charged bolt and the cannon's ball, 10 marks on the face ahead (a round
+//! pillar's, stood in front of with `fxstage=10`): blood sprayed onto it
+//! from a body shot in front of it, a rifle butt's chip or dent, a sword's
+//! gash, rounds' holes, all bent round it and fitted to its facets.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -21,7 +24,7 @@ use crate::LinkRes;
 /// Each stage plays this long, firing every `EVERY_S`.
 const STAGE_S: f32 = 2.5;
 const EVERY_S: f32 = 0.3;
-const STAGES: u32 = 10;
+const STAGES: u32 = 11;
 /// A slot no fighter has: its shots flash like anyone else's.
 const SHOOTER: u8 = 200;
 
@@ -70,6 +73,7 @@ pub fn run(
         ..default()
     };
     match stage {
+        10 => marks(core, &mut fx, &mut clock, &mut ev, &mut others, eye, fwd),
         0 => {
             for k in 0..3 {
                 let to = ground(eye + fwd * 10.0 + side * fx.range(-1.5, 1.5)) + Vec3::Y * 0.01 * k as f32;
@@ -152,20 +156,195 @@ pub fn run(
         others: &others,
         vehicles: &[],
         me: core.slot,
+        aim: fx.cam * Vec3::NEG_Z,
         t: time.elapsed_secs(),
     };
     on_events(&mut fx, &scene, &ev);
 }
 
+/// The face stage 10 marks: a round pillar in view, else the wall ahead,
+/// else the ground.
+#[derive(Clone, Copy)]
+enum Face {
+    Round { c: Vec2, r: f32 },
+    Flat { p: Vec3, n: Vec3 },
+}
+
+impl Face {
+    fn find(map: &sim::map::Map, eye: Vec3, fwd: Vec3) -> Face {
+        let round = map
+            .solids
+            .iter()
+            .filter_map(|s| match s.shape {
+                sim::solid::Shape::Round { x, z, r } if s.y1 - s.y0 > 1.5 => Some((Vec2::new(x, z), r)),
+                _ => None,
+            })
+            .filter(|(c, _)| {
+                let to = Vec3::new(c.x - eye.x, 0.0, c.y - eye.z);
+                to.length() < 30.0 && to.normalize_or(fwd).dot(fwd) > 0.7
+            })
+            .min_by(|a, b| {
+                let d = |c: Vec2| c.distance(Vec2::new(eye.x, eye.z));
+                d(a.0).total_cmp(&d(b.0))
+            });
+        if let Some((c, r)) = round {
+            return Face::Round { c, r };
+        }
+        let mut near = super::surface::Near::default();
+        match super::surface::cast(map, &mut near, eye, fwd, 40.0) {
+            Some(h) => Face::Flat { p: h.at, n: h.normal },
+            None => Face::Flat {
+                p: Vec3::new(eye.x, map.ground(eye.x, eye.z), eye.z) + fwd * 8.0,
+                n: Vec3::Y,
+            },
+        }
+    }
+
+    /// The point `k` metres along the face from its middle as seen from
+    /// `eye` (round the pillar, or along the wall), and its outward normal.
+    fn at(self, eye: Vec3, k: f32) -> (Vec3, Vec3) {
+        match self {
+            Face::Round { c, r } => {
+                let a = (eye.z - c.y).atan2(eye.x - c.x) + k / r;
+                let n = Vec3::new(a.cos(), 0.0, a.sin());
+                (Vec3::new(c.x, eye.y, c.y) + n * r, n)
+            }
+            Face::Flat { p, n } => {
+                let t = Vec3::Y.cross(n).normalize_or(Vec3::X);
+                (p + t * k, n)
+            }
+        }
+    }
+}
+
+/// Stage 10, every `EVERY_S`: in turn, a body without shields shot in front
+/// of the face (its blood on it), a rifle butt and a sword swung at it, and
+/// rounds into it.
+#[allow(clippy::too_many_arguments)]
+fn marks(
+    core: &client_net::core::NetCore,
+    fx: &mut Fx,
+    clock: &mut Clock,
+    ev: &mut Vec<EventState>,
+    others: &mut Vec<Drawn>,
+    eye: Vec3,
+    fwd: Vec3,
+) {
+    let map = &core.map;
+    let face = Face::find(map, eye, fwd);
+    let floor = |p: Vec3| map.floor(p.x, p.z, 0.1, p.y + 1.0);
+    let out = |n: Vec3| n.with_y(0.0).normalize_or(-fwd);
+    clock.hits += 1;
+    // The body, always there for the swings to keep clear of.
+    let (p, n) = face.at(eye, -0.7);
+    let body = p + out(n) * 1.0;
+    let feet = Vec3::new(body.x, floor(body), body.z);
+    others.push(Drawn {
+        slot: SHOOTER + 1,
+        alive: true,
+        pos: v3(feet),
+        ..default()
+    });
+    let shot = |arm: u8, from: Vec3, to: Vec3| EventState {
+        kind: Kind::Shot as u8,
+        a: SHOOTER,
+        c: arm as u16,
+        pos: v3(from),
+        end: v3(to),
+        ..default()
+    };
+    match clock.hits % 4 {
+        0 => {
+            let chest = feet + Vec3::Y * fx.range(0.9, 1.4);
+            let from = chest + out(n) * 7.0 + Vec3::Y * 0.4;
+            let at = chest + (from - chest).with_y(0.0).normalize_or(out(n)) * 0.3;
+            ev.push(shot(BR, from, at));
+        }
+        k @ (1 | 2) => {
+            let (p, n) = face.at(eye, if k == 1 { 0.6 } else { 1.5 });
+            let stand = p + out(n) * 1.2;
+            let feet = Vec3::new(stand.x, floor(stand), stand.z);
+            let swing = feet + Vec3::Y * sim::consts::EYE;
+            let target = Vec3::new(p.x, feet.y + fx.range(0.8, 1.5), p.z);
+            let aim = (target - swing).normalize_or(-out(n));
+            others.push(Drawn {
+                slot: SHOOTER + 2,
+                alive: true,
+                pos: v3(feet),
+                yaw: aim.z.atan2(aim.x),
+                pitch: aim.y.clamp(-1.0, 1.0).asin(),
+                ..default()
+            });
+            ev.push(EventState {
+                kind: Kind::Melee as u8,
+                a: SHOOTER + 2,
+                c: if k == 2 { sim::arms::SWORD as u16 } else { 0 },
+                pos: v3(swing),
+                ..default()
+            });
+        }
+        _ => {
+            let (p, n) = face.at(eye, 0.0);
+            let from = Vec3::new(p.x, feet.y + 1.6, p.z) + out(n) * 7.0;
+            for _ in 0..2 {
+                let (q, _) = face.at(eye, fx.range(-1.2, 1.2));
+                let aim = Vec3::new(q.x, feet.y + fx.range(0.4, 2.2), q.z);
+                let d = (aim - from).normalize_or(-out(n));
+                let t = map.ray(v3(from), v3(d), 30.0);
+                ev.push(shot(MAGNUM, from, from + d * t));
+            }
+        }
+    }
+}
+
 /// Where the demo's camera stands: west of the map's middle, a little
-/// above the floor, looking east and a touch down, wherever we spawned.
-pub fn pose(map: &sim::map::Map) -> Transform {
+/// above the floor, looking east and a touch down, wherever we spawned;
+/// for stage 10 alone, in front of a round pillar near the middle, if the
+/// map has one.
+pub fn pose(map: &sim::map::Map, stage: Option<u32>) -> Transform {
+    if stage == Some(10) {
+        if let Some(t) = before_pillar(map) {
+            return t;
+        }
+    }
     let (cx, cz) = ((map.lo.0 + map.hi.0) * 0.5, (map.lo.1 + map.hi.1) * 0.5);
     let x = cx - 9.0;
     let floor = map.floor(x, cz, 0.3, 50.0);
     let eye = Vec3::new(x, floor + 2.2, cz);
     let to = Vec3::new(cx + 4.0, map.floor(cx, cz, 0.3, 50.0) + 0.6, cz);
     Transform::from_translation(eye).looking_at(to, Vec3::Y)
+}
+
+/// Five metres out from the round pillar nearest the map's middle, at its
+/// foot's level, where the view of it is clear.
+fn before_pillar(map: &sim::map::Map) -> Option<Transform> {
+    let mid = Vec2::new((map.lo.0 + map.hi.0) * 0.5, (map.lo.1 + map.hi.1) * 0.5);
+    let mut rounds: Vec<(Vec2, f32, f32)> = map
+        .solids
+        .iter()
+        .filter_map(|s| match s.shape {
+            sim::solid::Shape::Round { x, z, r } if s.y1 - s.y0 > 1.5 => Some((Vec2::new(x, z), r, s.y0)),
+            _ => None,
+        })
+        .collect();
+    rounds.sort_by(|a, b| a.0.distance(mid).total_cmp(&b.0.distance(mid)));
+    for (c, r, y0) in rounds {
+        for k in 0..8 {
+            let a = k as f32 / 8.0 * core::f32::consts::TAU;
+            let at = c + Vec2::new(a.cos(), a.sin()) * (r + 5.0);
+            let feet = map.floor(at.x, at.y, 0.3, y0 + 0.5);
+            if (feet - y0).abs() > 1.0 || map.occupied(at.x, at.y, 0.3, feet + 0.1, feet + 1.9) {
+                continue;
+            }
+            let eye = Vec3::new(at.x, feet + 1.7, at.y);
+            let on = Vec3::new(c.x, feet + 1.2, c.y) + Vec3::new(a.cos(), 0.0, a.sin()) * r;
+            if !map.clear(v3(eye), v3(on + Vec3::new(a.cos(), 0.0, a.sin()) * 0.05)) {
+                continue;
+            }
+            return Some(Transform::from_translation(eye).looking_at(Vec3::new(c.x, feet + 1.2, c.y), Vec3::Y));
+        }
+    }
+    None
 }
 
 /// Stage 8, every frame: three shards curving from the right into a body
@@ -213,6 +392,7 @@ fn shards(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
                 others: &[d],
                 vehicles: &[],
                 me: core.slot,
+                aim: fwd,
                 t: now,
             };
             super::blast::blast(fx, &scene, chest, sim::arms::SHARDS as u16, false);
@@ -267,6 +447,7 @@ fn bolts(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
                 others: &[],
                 vehicles: &[],
                 me: core.slot,
+                aim: fwd,
                 t: now,
             };
             let ball = to - side * 4.0 + fwd * 2.0 + Vec3::Y * 0.5;

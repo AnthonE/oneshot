@@ -1,9 +1,8 @@
-// The page's menu: the dashboard. It picks what to play, signs in, and
-// keeps the lobby session (the party, its friends, its voice) open beside
-// any match; the game itself, the queue's wait and everything after are the
-// Bevy client's (`play`). After a match the page reloads (a page runs one
-// game); the lobby comes back on its ticket and the party is still there.
-import init, { play, pose, skin_names, Lobby, party_code, mode_name } from './oneshot_client.js';
+// The page's menu: the dashboard. The game (Bevy, `front.rs`) runs behind
+// it from the start, its live backdrop under the green glass; the menu picks
+// what to play and signs in, the game joins it (`knock`) and comes back here
+// when the match ends. The lobby session (the party, its friends, its voice)
+// stays open the whole time. On the desktop the game's own title does this.
 import { Voice, voiceWorks } from './voice.js';
 
 // Raw mouse: the game's lock (winit asks with no options) asks the browser
@@ -66,11 +65,125 @@ const say = (line, bad) => { status.textContent = line; status.classList.toggle(
 // The toast whose face buttons answer it (an invite).
 let toastActions = null;
 
-await init();
+// ── the game's module (after Gates' web/app.js, pickModule) ─────────────
+// Bevy picks its GPU API when it is compiled and has no fallback at run
+// time, so the page picks before the download: the WebGPU module for a
+// hardware adapter with filterable 32-bit floats, else WebGL2 (ci/client.sh
+// builds both; `?gfx=webgl2|webgpu` forces one). A WebGPU module that failed
+// here is remembered against that build (build.json's hash).
+const gfxOpts = [
+  ...(params.has('potato') && params.get('potato') !== '0' ? ['potato'] : []),
+  ...(/^(potato|low|medium|high)$/.test(params.get('quality') ?? '') ? ['quality=' + params.get('quality')] : []),
+];
+const MODULES = {
+  webgl2: { js: './oneshot_client.js', wasm: 'oneshot_client_bg.wasm', name: 'WebGL2' },
+  webgpu: { js: './oneshot_client_gpu.js', wasm: 'oneshot_client_gpu_bg.wasm', name: 'WebGPU' },
+};
+const GPU_FAILED = 'oneshot.webgpu.failed';
+const built = fetch('build.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const gpuProbe = (async () => {
+  if (!navigator.gpu) return { ok: false, why: 'no WebGPU in this browser' };
+  try {
+    const adapter = await Promise.race([
+      navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }),
+      new Promise((r) => setTimeout(() => r(null), 3000)),
+    ]);
+    if (!adapter) return { ok: false, why: 'no WebGPU adapter' };
+    const info = adapter.info || {};
+    if (info.isFallbackAdapter || adapter.isFallbackAdapter) return { ok: false, why: 'a software WebGPU adapter' };
+    if (!adapter.features.has('float32-filterable')) return { ok: false, why: 'no float32-filterable' };
+    return { ok: true, why: 'a WebGPU adapter' };
+  } catch {
+    return { ok: false, why: 'the WebGPU adapter was refused' };
+  }
+})();
+let mods = null;
+const gpuKey = () => String(mods?.webgpu?.sha256 ?? mods?.webgpu?.wasm_bytes ?? '');
+async function pickModule() {
+  const has = (k) => (mods ? !!mods[k] : k === 'webgl2');
+  const forced = params.get('gfx');
+  if (forced === 'webgpu') { try { localStorage.removeItem(GPU_FAILED); } catch { /* private window */ } }
+  if ((forced === 'webgl2' || forced === 'webgpu') && has(forced)) return { gfx: forced, why: 'forced by ?gfx' };
+  if (!has('webgpu')) return { gfx: 'webgl2', why: 'this build has no WebGPU module' };
+  if (!has('webgl2')) return { gfx: 'webgpu', why: 'this build has no WebGL2 module' };
+  try {
+    if (localStorage.getItem(GPU_FAILED) === gpuKey()) return { gfx: 'webgl2', why: 'WebGPU failed here before' };
+  } catch { /* private window */ }
+  const probe = await gpuProbe;
+  return { gfx: probe.ok ? 'webgpu' : 'webgl2', why: probe.why };
+}
+async function loadModule(gfx) {
+  const m = MODULES[gfx];
+  // Glue and module are a pair: both asked for by the pair's hash.
+  const sha = mods?.[gfx]?.sha256;
+  const v = sha ? `?v=${sha.slice(0, 12)}` : '';
+  const res = fetch(new URL(m.wasm + v, location.href));
+  res.catch(() => { /* awaited by the glue */ });
+  const g = await import(m.js + v);
+  await g.default({ module_or_path: res });
+  window.__oneshotGfx = gfx;
+  return g;
+}
+let started = 0;
+/* Back into WebGL2, once: the failure is written against this build first,
+   and a canvas that held a WebGPU context never takes a WebGL2 one, so the
+   way there is a reload. */
+function gpuFallBack(why) {
+  let kept = false;
+  try {
+    localStorage.setItem(GPU_FAILED, gpuKey());
+    kept = localStorage.getItem(GPU_FAILED) === gpuKey();
+  } catch { /* storage blocked */ }
+  const u = new URL(location.href);
+  if (!kept || params.get('gfx') === 'webgpu') u.searchParams.set('gfx', 'webgl2');
+  console.warn(`oneshot: ${why}: switching to WebGL2`);
+  location.replace(u);
+}
+// The WebGPU module's device hooks (look/gpu.rs) and every panic.
+window.__oneshotGpuError = (msg, kind) => {
+  if (window.__oneshotGfx !== 'webgpu') return;
+  if (kind === 'lost' || !st.gameUp) { gpuFallBack('WebGPU lost the device or refused the frame'); return; }
+  try { localStorage.setItem(GPU_FAILED, gpuKey()); } catch { /* private window */ }
+  const u = new URL(location.href);
+  u.searchParams.set('gfx', 'webgl2');
+  toast(`The graphics card refused part of the frame under WebGPU. <a href="${esc(u)}" style="color:var(--lime)">Reload with WebGL2</a>`, { ttl: 0, bad: true });
+};
+window.__oneshotPanic = (msg) => {
+  const m = String(msg || '');
+  const gpu = window.__oneshotGfx === 'webgpu';
+  const renderer = /bevy_render|Unable to find a GPU|wgpu surface|request_device|adapter/.test(m);
+  if (gpu && renderer && started && performance.now() - started < 30000) { gpuFallBack('WebGPU did not start here'); return; }
+  if (gpu && /wgpu-[\d.]+\/src\/backend\/webgpu|GPUDevice|GPUQueue|GPUCanvasContext/.test(m)) { gpuFallBack('the graphics card refused WebGPU'); return; }
+  say('The game stopped. Reload to try again.', true);
+};
+mods = (await built)?.modules ?? null;
+let { gfx, why: gfxWhy } = await pickModule();
+let glue;
+try {
+  glue = await loadModule(gfx);
+} catch (err) {
+  if (gfx !== 'webgpu' || !mods?.webgl2) throw err;
+  console.warn('oneshot: the WebGPU module failed to load, loading WebGL2', err);
+  gfx = 'webgl2';
+  gfxWhy = 'the WebGPU module did not load';
+  glue = await loadModule(gfx);
+}
+const { Lobby, party_code, mode_name, skin_names } = glue;
+$('gfx').textContent = ` · ${MODULES[gfx].name.toUpperCase()}`;
+$('gfx').title = gfxWhy;
+/* FULLSCREEN (the settings' row) is the page's: while fullscreen, Keyboard
+   Lock hands Esc to the game. */
+document.addEventListener('fullscreenchange', () => {
+  const kb = navigator.keyboard;
+  if (!kb || !kb.lock) return;
+  if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
+  else kb.unlock();
+});
 if (params.has('pose')) {
   // No server: one fighter for a picture (ci/look.mjs).
   menu.style.display = 'none';
-  pose(location.search, ['lite'].filter(flag).join(','));
+  started = performance.now();
+  glue.pose(location.search, ['lite'].filter(flag).concat(gfxOpts).join(','));
   await new Promise(() => {}); // nothing more for the page to do
 }
 nameInput.value = params.get('name') || store('oneshot.name') || '';
@@ -107,7 +220,9 @@ const st = {
   who: null,
   party: null,
   friends: [], friendsNext: [], friendsN: -1, reachable: true,
-  lobby: null, busy: false, ran: false, playing: false,
+  lobby: null, busy: false, playing: false,
+  // The game has drawn behind the menu: a click on a mode counts now.
+  gameUp: false,
 };
 /** Who a ticket names: `os1.` b64url("id\naccount\nwallet\nexp"). */
 function whoOf(t) {
@@ -284,6 +399,10 @@ function onLobby(m) {
       tab('oneshot.ticket', m.ticket);
       st.who = whoOf(m.ticket);
       drawWho();
+      if (st.who && st.who.account && recordOf !== st.who.id) {
+        recordOf = st.who.id;
+        showRecord(st.who);
+      }
       break;
     case 'party': {
       const before = st.party;
@@ -377,11 +496,13 @@ function drawModes() {
   const n = members().length || 1;
   const party = n > 1;
   const wallets = members().length ? members().every((m) => m.wallet) : !!st.who?.wallet;
-  const mine = !party || leads();
+  // Until the game has drawn, a click would be lost: wait (main's lesson).
+  const mine = (!party || leads()) && st.gameUp;
   for (const id of ['play', 'ffa', 'gungame', 'bigteam']) {
     const b = $(id);
     b.disabled = !mine || (id === 'play' && party);
-    b.title = !mine ? `${leader()?.name ?? 'The leader'} picks the game` : id === 'play' && party ? 'The bot is a game for one' : '';
+    b.title = !st.gameUp ? 'The game is loading' : !mine ? `${leader()?.name ?? 'The leader'} picks the game`
+      : id === 'play' && party ? 'The bot is a game for one' : '';
   }
   const signedWallet = !!st.who?.wallet;
   $('duel').disabled = !mine || party || !signedWallet;
@@ -694,76 +815,168 @@ function choose(mode) {
   startMatch(mode, false, false);
 }
 
-async function startMatch(mode, priv, withParty) {
-  if (st.playing && !st.ran) return;
-  const code = withParty ? (st.party?.code || Number(tab('oneshot.party')) || 0) : 0;
-  // A page runs one game: after one, the next is a reload away.
-  if (st.ran) {
-    tab('oneshot.go', JSON.stringify({ mode, priv, code, t: Date.now() }));
-    location.reload();
-    return;
-  }
+/** Into a match: the game asks the server (`knock`), the menu says what
+ * the stream says while it waits, and steps aside once the match is on. */
+function startMatch(mode, priv, withParty) {
+  if (st.playing) return;
+  if (!st.gameUp) { toast('The game is still loading.'); return; }
+  const code = withParty ? (st.party?.code || 0) : 0;
   st.playing = true;
-  sfx.humOff();
   store('oneshot.name', myName());
   store('oneshot.skin', skin.value);
   for (const b of document.querySelectorAll('.modes')) b.hidden = true;
+  $('news').innerHTML = '';
   cancel.hidden = false;
   cancel.textContent = 'Cancel';
-  cancel.onclick = () => location.reload();
-  say('connecting…');
+  cancel.onclick = () => { glue.cancel(); sfx.back(); };
+  say('Connecting…');
   openPane(RANKED.has(mode) ? 'ranked' : 'play');
-  if (RANKED.has(mode)) {
-    // The ranked pane shows the status too: carry it there.
-    document.querySelector('section.pane[data-pane="ranked"]').appendChild(status.parentElement);
-  }
+  document.querySelector(`section.pane[data-pane="${RANKED.has(mode) ? 'ranked' : 'play'}"]`).appendChild(status.parentElement);
   st.lobby?.act(ACT.PLAYING, mode);
-  const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag)
-    .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
-  // Our ticket says who we are (signed in, or a guest of the server's);
-  // a fresh pass the first time, before the lobby has handed one.
+  // Our ticket says who we are (signed in, or a guest of the server's); a
+  // fresh pass the first time, before the lobby has handed one.
   const pass = st.ticket || signin.pass();
-  let playing = false;
-  try {
-    // No hash with a CA's certificate: checked by the browser, never pinned.
-    playing = await play(info.addr, info.hash ?? '', myName(), pass, mode, Number(skin.value) || 0, code >>> 0, opts,
-      (line) => say(line), follow);
-  } catch (e) {
-    say(String(e), true);
-  }
-  if (!playing) {
+  glue.knock(myName(), pass, mode, Number(skin.value) || 0, code >>> 0);
+  const t0 = performance.now();
+  let asked = false;
+  let inMatch = false;
+  const back = (line, bad) => {
     st.playing = false;
     st.lobby?.act(ACT.PLAYING, PLAYING_NONE);
-    cancel.textContent = 'Back to menu';
-    return;
-  }
-  st.ran = true;
-  menu.style.display = 'none';
-  if (!SKIP_MENU) $('game').focus();
-  // The match over (or the line dropped): back to the menu, the party still
-  // here. The next game is a reload away.
+    for (const b of document.querySelectorAll('.modes')) b.hidden = false;
+    cancel.hidden = true;
+    menu.style.display = 'flex';
+    if (document.pointerLockElement) document.exitPointerLock();
+    say(line, bad);
+    sfx.humOn();
+    drawAll();
+  };
   const watch = () => {
-    const s = window.__oneshot;
-    // Left from the Esc menu: straight back to the menu.
-    if (s && s.left) {
-      location.reload();
+    const s = window.__oneshot || {};
+    if (!inMatch) {
+      asked ||= s.knocking || s.in_match;
+      if (s.in_match) {
+        inMatch = true;
+        menu.style.display = 'none';
+        sfx.humOff();
+        if (!SKIP_MENU) $('game').focus();
+      } else if (asked && !s.knocking) {
+        // Turned away, or cancelled.
+        back(s.front_status || 'Cancelled', !!s.front_bad);
+        return;
+      } else if (!asked && performance.now() - t0 > 5000) {
+        back('The game did not answer. Reload the page.', true);
+        return;
+      } else if (s.front_status) {
+        say(s.front_status, !!s.front_bad);
+      }
+    } else if (!s.in_match) {
+      // The match over, left, or the line dropped: back to the menu, the
+      // party still here.
+      back(s.front_status || 'Match over');
+      if (st.who && st.who.account && before) showNews(st.who, before);
       return;
     }
-    if (s && s.ended) {
-      say([s.bye ? 'Match over' : 'Disconnected', s.cup].filter(Boolean).join(' · '));
-      st.playing = false;
-      st.lobby?.act(ACT.PLAYING, PLAYING_NONE);
-      for (const b of document.querySelectorAll('.modes')) b.hidden = false;
-      cancel.textContent = 'Back to menu';
-      menu.style.display = 'flex';
-      document.exitPointerLock();
-      sfx.humOn();
-      drawAll();
-      return;
-    }
-    setTimeout(watch, 500);
+    setTimeout(watch, 200);
   };
   watch();
+}
+
+// ── Elo Pros' record: ratings, achievements and boards, skins ────────────
+// Read from elopros.com (the page's own origin once published). A read that
+// fails shows nothing; it never blocks play.
+const ELO = /(^|\.)elopros\.com$/.test(location.hostname) ? '' : 'https://elopros.com';
+const GAME = 'oneshot';
+const getJSON = async (path) => {
+  try {
+    const r = await fetch(`${ELO}${path}`, { cache: 'no-store' });
+    return r.ok ? await r.json() : null;
+  } catch { return null; }
+};
+// Their record when they signed in (or after the last match).
+let before = null;
+let recordOf = '';
+/** One read of everything: {stats, ratings, items}. `fresh` asks past any
+ * cache (after a match, the record just moved). */
+async function record(who, fresh) {
+  const id = who.wallet || who.account;
+  const t = fresh ? `?t=${Date.now()}` : '';
+  const [stats, ratings, rh, sol] = await Promise.all([
+    getJSON(`/api/gamestats/${GAME}/of/${id}${t}`),
+    who.wallet ? getJSON(`/api/ratings/${GAME}/of/${who.wallet}${t}`) : null,
+    who.wallet ? getJSON(`/api/items/of/${who.wallet}?game=${GAME}&title=${GAME}`) : null,
+    // the Solana wallet linked to it, where the free Pill goes
+    who.wallet ? getJSON(`/api/items/sol/of/${who.wallet}`) : null,
+  ]);
+  const items = rh || sol ? { items: [...((rh && rh.items) || []), ...((sol && sol.items) || [])] } : null;
+  return { stats, ratings, items };
+}
+/** The skins an items answer names (the server's `owned_skins`). */
+function ownedSkins(items) {
+  const names = skin_names();
+  const out = new Set(['standard']);
+  for (const i of (items && items.items) || []) {
+    if (i.title && String(i.title).toLowerCase() !== GAME) continue;
+    const n = String(i.skin || i.item || i.catalog_name || i.name || '').trim().toLowerCase();
+    const first = n.split(/[^a-z0-9]/)[0];
+    for (const c of [n, first]) if (names.includes(c)) out.add(c);
+  }
+  return out;
+}
+async function showRecord(who) {
+  const rec = await record(who, false);
+  before = rec;
+  const bits = [];
+  const lad = (rec.ratings && rec.ratings.ladders) || {};
+  for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles']]) {
+    const l = lad[id];
+    if (l && l.rated && l.rating != null) bits.push(`${label} ${Math.round(l.rating)}${l.placed ? '' : ' (placing)'}`);
+  }
+  const tot = rec.stats && rec.stats.totals;
+  if (tot) bits.push(`${tot.earned}/${tot.total} achievements`);
+  const prof = who.wallet ? ` · <a href="https://elopros.com/profile.html?who=${esc(who.wallet)}" target="_blank" rel="noopener">profile</a>` : '';
+  $('record').innerHTML = bits.length ? esc(bits.join(' · ')) + prof : 'No matches on record yet.' + prof;
+  // Mark the skins this wallet holds; the server still checks.
+  const owned = ownedSkins(rec.items);
+  skin_names().forEach((n, i) => {
+    const o = skin.options[i];
+    if (o) o.textContent = n[0].toUpperCase() + n.slice(1) + (rec.items && !owned.has(n) ? ' · not yours yet' : '');
+  });
+}
+/** After a match: what it unlocked and moved. The server reports as the
+ * match ends, so ask a few times until the record moves. */
+async function showNews(who, was) {
+  let now = null;
+  for (let i = 0; i < 5; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    now = await record(who, true);
+    if (now.stats && (!was.stats || now.stats.last !== was.stats.last)) break;
+  }
+  if (!now || !now.stats) return;
+  const had = new Set(((was.stats && was.stats.achievements) || []).filter((a) => a.earned).map((a) => a.id));
+  const got = (now.stats.achievements || []).filter((a) => a.earned && !had.has(a.id));
+  const lines = got.map((a) => `<b>Unlocked</b> ${esc(a.name)}${a.rare ? ' · rare' : ''}`);
+  const best = new Map(((was.stats && was.stats.boards) || []).map((b) => [b.id, b.score]));
+  for (const b of now.stats.boards || []) {
+    if (b.score != null && b.score !== best.get(b.id)) {
+      const v = b.format === 'time_ms' ? `${(b.score / 1000).toFixed(1)} s` : b.score;
+      lines.push(`<b>New best</b> ${esc(b.name)}: ${esc(v)}${b.rank ? ` · #${b.rank} of ${b.of}` : ''}`);
+    }
+  }
+  const lad = (now.ratings && now.ratings.ladders) || {};
+  const old = (was.ratings && was.ratings.ladders) || {};
+  for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles'], ['cup', 'Cup']]) {
+    const a = old[id], b = lad[id];
+    if (b && b.rated && b.rating != null && (!a || a.rating !== b.rating)) {
+      const d = a && a.rating != null ? Math.round(b.rating - a.rating) : null;
+      lines.push(`<b>${label}</b> ${Math.round(b.rating)}${d ? ` (${d > 0 ? '+' : ''}${d})` : ''}`);
+    }
+  }
+  if (lines.length) {
+    $('news').innerHTML = lines.join('<br />');
+    sfx.chime();
+  }
+  before = now;
 }
 
 /** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup. The
@@ -816,19 +1029,30 @@ Object.defineProperty(window, '__lobby', {
 });
 
 drawAll();
+const launchOpts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics'].filter(flag)
+  .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts);
 if (SKIP_MENU) {
-  // Straight in (the browser gate's autoplay, the effects demo).
-  startMatch(Number(params.get('mode') || 0), false, false);
+  // Straight in (the browser gate's autoplay, the effects demo): the game's
+  // own way, no menu.
+  menu.style.display = 'none';
+  started = performance.now();
+  glue.launch(info.addr, info.hash ?? '', launchOpts.join(','), myName(), Number(params.get('mode') || 0), null, 'page', follow);
 } else {
   sfx.humOn();
   connectLobby();
-  // A game the party started while this page reloaded after its match.
-  const go = JSON.parse(tab('oneshot.go') || 'null');
-  tab('oneshot.go', null);
-  if (go && Date.now() - go.t < 30000) {
-    if (go.code) want = go.code;
-    startMatch(go.mode, go.priv, !!go.code);
-  } else {
-    first($('blades'))?.focus({ preventScroll: true });
+  first($('blades'))?.focus({ preventScroll: true });
+  // The game behind the menu: its live backdrop, and the door the menu
+  // knocks at. A click on a mode counts once it has drawn.
+  started = performance.now();
+  const up = () => {
+    if ((window.__oneshot?.frames ?? 0) > 3) { st.gameUp = true; drawModes(); return; }
+    requestAnimationFrame(up);
+  };
+  requestAnimationFrame(up);
+  try {
+    glue.launch(info.addr, info.hash ?? '', launchOpts.concat('page').join(','), myName(), 0, null, 'page', follow);
+  } catch (e) {
+    // winit's web loop may unwind out of run(); the game goes on.
+    if (!/control flow|isn't an error/i.test(String(e?.message ?? e))) throw e;
   }
 }

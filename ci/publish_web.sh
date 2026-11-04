@@ -53,6 +53,13 @@ if [ "$BUILD" = 1 ]; then
   ci/client.sh
 fi
 [ -f "$OUT/index.html" ] || { echo "$OUT/index.html is missing: run ci/client.sh" >&2; exit 1; }
+# Both modules, from the gated build: the page picks WebGPU or WebGL2 by
+# build.json, and `ci/client.sh dev` skips the fat LTO and the 9 MB gate.
+for f in oneshot_client.js oneshot_client_bg.wasm oneshot_client_gpu.js oneshot_client_gpu_bg.wasm build.json; do
+  [ -f "$OUT/$f" ] || { echo "$OUT/$f is missing: run ci/client.sh" >&2; exit 1; }
+done
+grep -q '"profile":"web"' "$OUT/build.json" || {
+  echo "$OUT is a dev build (ci/client.sh dev): run ci/client.sh for the gated one" >&2; exit 1; }
 # Where the page finds the game box: server.json and /nonce (its index.html).
 printf '{"server":"%s"}\n' "$SERVER" > "$OUT/origin.json"
 # nginx serves .gz beside a file when there is one (gzip_static).

@@ -33,12 +33,12 @@
 
       #menu { position: fixed; inset: 0; display: flex; flex-direction: column; color: var(--ink);
         font: 15px Aileron, system-ui, sans-serif; overflow: hidden; isolation: isolate;
-        background: radial-gradient(120% 90% at 50% 38%, #10300ef2 0%, #061106f5 45%, #020402fa 80%); }
+        background: radial-gradient(120% 90% at 50% 38%, #10300ea6 0%, #061106c2 45%, #020402e6 80%); }
       /* The core: an orb that breathes, a ring that turns, vapour drifting. */
       #menu .core { position: absolute; z-index: -1; left: 50%; top: 40%; width: min(70vmin, 620px); aspect-ratio: 1;
         transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
         background: radial-gradient(circle at 42% 36%, #f4ffd8 0%, #b8ff5c 9%, #3fa61c 26%, #13460d 48%, #06160500 70%);
-        filter: blur(1px); opacity: 0.55; animation: breathe 6s ease-in-out infinite; }
+        filter: blur(1px); opacity: 0.32; animation: breathe 6s ease-in-out infinite; }
       #menu .ring { position: absolute; z-index: -1; left: 50%; top: 40%; width: min(96vmin, 860px); aspect-ratio: 1;
         transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none; opacity: 0.35;
         background: conic-gradient(from 0deg, #9dff3c00 0deg, #9dff3c55 40deg, #9dff3c00 90deg, #9dff3c00 180deg, #9dff3c44 230deg, #9dff3c00 280deg);
@@ -51,7 +51,7 @@
         animation: drift 28s ease-in-out infinite alternate; }
       #menu .scan { position: absolute; z-index: -1; inset: 0; pointer-events: none; opacity: 0.18;
         background: repeating-linear-gradient(0deg, #000 0 1px, transparent 1px 3px); }
-      @keyframes breathe { 0%, 100% { opacity: 0.45; transform: translate(-50%, -50%) scale(0.97); } 50% { opacity: 0.62; transform: translate(-50%, -50%) scale(1.03); } }
+      @keyframes breathe { 0%, 100% { opacity: 0.26; transform: translate(-50%, -50%) scale(0.97); } 50% { opacity: 0.4; transform: translate(-50%, -50%) scale(1.03); } }
       @keyframes turn { to { transform: translate(-50%, -50%) rotate(360deg); } }
       @keyframes drift { from { transform: translate(-3%, 2%); } to { transform: translate(3%, -2%); } }
       @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 1px var(--edge-hi), 0 0 18px #9dff3c55; } 50% { box-shadow: 0 0 0 1px var(--edge-hi), 0 0 30px #9dff3c99; } }
@@ -62,7 +62,7 @@
       #menu.boot .blade:nth-child(1) { animation-delay: 0.6s; } #menu.boot .blade:nth-child(2) { animation-delay: 0.68s; }
       #menu.boot .blade:nth-child(3) { animation-delay: 0.76s; } #menu.boot .blade:nth-child(4) { animation-delay: 0.84s; }
       @keyframes boot { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); filter: brightness(3) blur(0); }
-        30% { opacity: 1; filter: brightness(2.4) blur(2px); } 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); filter: blur(1px); } }
+        30% { opacity: 1; filter: brightness(2.4) blur(2px); } 100% { opacity: 0.32; transform: translate(-50%, -50%) scale(1); filter: blur(1px); } }
       @keyframes rise { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
       @keyframes slide { from { opacity: 0; translate: -28px 0; } to { opacity: 1; translate: 0 0; } }
       @media (prefers-reduced-motion: reduce) { #menu .core, #menu .ring, #menu .vapour, #menu .on, #menu :focus { animation: none !important; } }
@@ -150,7 +150,11 @@
 
       #status { min-height: 1.3em; color: var(--lime); font-weight: 600; }
       /* Nothing to say: no box. */
-      .panel:has(> #status:empty):has(#cancel[hidden]) { display: none; }
+      .panel:has(> #status:empty):has(> #news:empty):has(#cancel[hidden]) { display: none; }
+      #news { font-size: 13px; line-height: 1.6; color: var(--dim); }
+      #news b, #record b { color: var(--lime); }
+      #record a, #news a { color: var(--lime); }
+      #gfx { color: var(--faint); }
       #status.bad { color: var(--bad); }
       .keys { font-size: 12px; color: var(--faint); line-height: 1.6; }
 
@@ -204,7 +208,7 @@
       <div class="vapour"></div><div class="ring"></div><div class="core"></div><div class="scan"></div>
       <header>
         <h1>ONESHOT</h1>
-        <span class="tag">Arena · ranked on Elo Pros</span>
+        <span class="tag">Arena · ranked on Elo Pros<span id="gfx"></span></span>
         <div id="card" class="panel" style="padding:8px 12px">
           <div class="face" id="face">?</div>
           <div class="lines">
@@ -238,6 +242,7 @@
             </div>
           </div>
           <div class="panel"><div id="status" role="status"></div>
+            <div id="news"></div>
             <div class="row" style="margin-top:6px"><button id="cancel" class="quiet" hidden>Cancel</button></div>
           </div>
         </section>
@@ -246,6 +251,7 @@
           <div class="panel">
             <h2>Ranked</h2>
             <p style="margin-bottom:10px">Your rating on Elo Pros. Sign in with a wallet to play.</p>
+            <p id="record" style="margin-bottom:10px;font-size:13px"></p>
             <div class="grid modes">
               <button id="duel" class="mode" disabled><b>DUEL</b><span>1v1</span></button>
               <button id="doubles" class="mode" disabled><b>DOUBLES</b><span>2v2, bring a friend</span></button>

@@ -1,19 +1,18 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--capsules]` (or `oneshot --pose 'yaw=1.57&arm=3'`,
-//! no server, for a picture): the desktop client. It reads the game
-//! server's address and certificate hash from the page server's
-//! `server.json` (what the browser page reads), connects with client-net's
-//! native session, and runs the Bevy client.
+//! [--autoplay] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--shot out.png [--shot-at s]]`
+//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture): the
+//! desktop client. It opens on the title
+//! screen (`front.rs`); PLAY reads the game server's address and
+//! certificate hash from the page server's `server.json` (what the browser
+//! page reads) and connects with client-net's native session. `--mode` or
+//! `--autoplay` goes straight into a match.
 //!
 //! The server is the public one unless `--server` names another:
 //! `https://game.elopros.com/oneshot` (production: a CA certificate, so
 //! `server.json` sends no hash and the system's roots are trusted), or a
 //! local `oneshot-server` as `127.0.0.1:8080` / `http://127.0.0.1:8080`
 //! (its own certificate, pinned by the hash it sends).
-
-/// Where the desktop client plays unless told otherwise (ops/README.md).
-#[cfg(not(target_arch = "wasm32"))]
-const PUBLIC: &str = "https://game.elopros.com/oneshot";
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -25,70 +24,144 @@ fn main() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
+    use oneshot_client::door::{Door, PUBLIC};
+    use oneshot_client::front::Start;
+    use oneshot_client::Screen;
+
     let args: Vec<String> = std::env::args().collect();
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    let flag = |k: &str| args.iter().any(|a| a == k);
+    if flag("--help") || flag("-h") {
         println!("{}", HELP.replace("{PUBLIC}", PUBLIC));
         return Ok(());
     }
-    let lite = args.iter().any(|a| a == "--lite");
-    if let Some(q) = arg("--pose") {
+    let lite = flag("--lite");
+    let potato = flag("--potato");
+    let quality = match arg("--quality") {
+        Some(q) => Some(
+            oneshot_client::look::quality::Quality::from_name(&q.to_ascii_lowercase())
+                .ok_or_else(|| format!("--quality {q}: potato, low, medium or high"))?,
+        ),
+        None => None,
+    };
+    // `--shot x.png [--shot-at s]`: one frame once the screen is there, then out.
+    let shot = match arg("--shot") {
+        Some(p) if p.to_ascii_lowercase().ends_with(".png") => Some(std::path::PathBuf::from(p)),
+        Some(p) => return Err(format!("--shot {p}: a .png path")),
+        None => None,
+    };
+    let shot_at = match arg("--shot-at") {
+        Some(s) => s.parse::<f64>().map_err(|_| format!("--shot-at {s}: seconds"))?,
+        None => 1.0,
+    };
+    let open = if flag("--settings") || flag("--graphics") {
+        Screen::Settings
+    } else if flag("--menu") {
+        Screen::Paused
+    } else {
+        Screen::Playing
+    };
+    let (mut app, want, want_match) = if let Some(q) = arg("--pose") {
         // No server: one fighter for a picture (`--pose 'yaw=1.57&arm=3'`).
         let pose = oneshot_client::pose::Pose::parse(&q);
         let opts = oneshot_client::Opts {
             lite,
+            potato,
+            quality,
             pose: Some(pose),
             ..Default::default()
         };
-        oneshot_client::app(Box::new(oneshot_client::link::Still::on(pose.2.map)), opts).run();
-        return Ok(());
+        let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
+        (oneshot_client::app(link, opts), Screen::Playing, false)
+    } else {
+        let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
+        let mode = match arg("--mode") {
+            Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
+            None => None,
+        };
+        let autoplay = flag("--autoplay");
+        // `--fxstage N`: the demo's stage N alone (`look/fx/demo.rs`).
+        let fxstage = arg("--fxstage").and_then(|n| n.parse::<u32>().ok());
+        let fxdemo = flag("--fxdemo") || fxstage.is_some();
+        let front = match mode {
+            Some(m) => Start::Join(m),
+            None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
+            None => Start::Title,
+        };
+        let opts = oneshot_client::Opts {
+            autoplay,
+            lite,
+            potato,
+            quality,
+            pose: None,
+            capsules: flag("--capsules"),
+            graphics: flag("--graphics"),
+            fxdemo,
+            fxstage,
+            open,
+            front,
+            page: false,
+        };
+        let joins = matches!(front, Start::Join(_));
+        // On the title only the settings open over it; in a match, the
+        // screen asked for.
+        let want = match (joins, open) {
+            (true, o) => o,
+            (false, Screen::Settings) => Screen::Settings,
+            (false, _) => Screen::Title,
+        };
+        let mut app = oneshot_client::game(Door::new(server), opts);
+        if let Some(n) = arg("--name") {
+            app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
+                oneshot_client::settings::Player::clean(&n);
+        }
+        (app, want, joins)
+    };
+    if let Some(path) = shot {
+        app.insert_resource(oneshot_client::look::shot::Capture::new(
+            path, shot_at, want, want_match,
+        ));
     }
-    let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
-    let name = arg("--name").unwrap_or_else(|| "player".into());
-    let mode = match arg("--mode") {
-        Some(m) => mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?,
-        None => proto::MODE_CASUAL,
-    };
-
-    let body = fetch::server_json(&server)?;
-    let (addr, hash) =
-        parse_server_json(&body).ok_or_else(|| format!("{server}: server.json doesn't name a game server"))?;
-
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let hello = client_net::session::Session::hello(&name, proto::Pass::NONE, mode, 0, 0);
-    let client = rt
-        .block_on(client_net::native::NativeClient::connect(&addr, hash, hello))
-        .map_err(|e| format!("{addr}: {e}"))?;
-    let opts = oneshot_client::Opts {
-        autoplay: args.iter().any(|a| a == "--autoplay"),
-        lite,
-        pose: None,
-        capsules: args.iter().any(|a| a == "--capsules"),
-        fxdemo: args.iter().any(|a| a == "--fxdemo"),
-        fxstage: None,
-        open: oneshot_client::Screen::Playing,
-    };
-    oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
-    Ok(())
+    match app.run() {
+        bevy::app::AppExit::Error(code) => std::process::exit(code.get().into()),
+        bevy::app::AppExit::Success => Ok(()),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 const HELP: &str = "oneshot: the desktop client
 
-  oneshot                          play on the public server ({PUBLIC})
+  oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
-  --name NAME                      the name others see (default: player)
-  --mode MODE                      casual (default), ffa, gungame, bigteam; duel and doubles
-                                   are ranked, which needs an Elo Pros sign-in (the web page)
-  --lite                           the light tier: for a slow or software GPU
+  --name NAME                      the name others see (the title's field)
+  --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
+                                   duel and doubles are ranked, which needs an Elo Pros
+                                   sign-in (the web page)
+  --lite                           POTATO for this run (your own graphics are kept)
+  --potato                         POTATO from now on (SETTINGS > GRAPHICS to change it)
+  --quality NAME                   potato, low, medium or high, for this run only
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
+  --menu, --settings               open the match on the Esc menu or the settings
+                                   (--settings alone: over the title)
+  --graphics                       the settings, on GRAPHICS
+  --shot out.png [--shot-at S]     save one frame once the screen is there (its
+                                   level built, its shaders compiled, nothing over
+                                   it) and S seconds have passed (1), then exit 0;
+                                   non-zero, saying why, if it never is
+                                   (ci/desktop_shot.sh)
 
-Keys (by default; rebind them, with the mouse's speed, the field of view
-and the volume, in the settings, saved in your config folder under
+F12 saves a screenshot on any screen, into your pictures folder under
+oneshot/ (ONESHOT_SHOTS_DIR names another).
+
+Keys (by default; rebind them, with the mouse's speed, the field of view,
+the volume and the graphics, in SETTINGS, saved in your config folder under
 oneshot/settings.toml): WASD and the mouse, space jumps, Ctrl or C crouches,
 R reloads, E uses, G throws a frag, T picks frag or sticky, Q or V melees,
-X, 1 or the wheel swaps, N the net graph, Esc lets the mouse go.";
+X, 1 or the wheel swaps, N the net graph, F11 fullscreen, Esc the menu.
+
+A slow machine (a software rasterizer) starts on POTATO by itself until you
+pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
 const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam (or 0 to 6)";
@@ -108,115 +181,8 @@ fn mode(m: &str) -> Option<u8> {
     })
 }
 
-/// server.json's `addr` and, when it pins one, the certificate's hash:
-/// `{"addr": "host:port", "hash": "hex" | null, ...}`.
-#[cfg(not(target_arch = "wasm32"))]
-fn parse_server_json(body: &str) -> Option<(String, Option<[u8; 32]>)> {
-    let field = |k: &str| {
-        let at = body.find(&format!("\"{k}\""))? + k.len() + 2;
-        let rest = body[at..].trim_start().strip_prefix(':')?.trim_start();
-        let rest = rest.strip_prefix('"')?;
-        Some(rest[..rest.find('"')?].to_string())
-    };
-    let addr = field("addr")?;
-    let hash = field("hash").and_then(|h| {
-        let h: String = h.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        (h.len() == 64).then(|| {
-            let mut out = [0u8; 32];
-            for (i, b) in out.iter_mut().enumerate() {
-                *b = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap_or(0);
-            }
-            out
-        })
-    });
-    Some((addr, hash))
-}
-
-/// `GET <server>/server.json`, over HTTPS (the system's roots) or plain
-/// HTTP (a local server): one request, HTTP/1.0, the body back.
-#[cfg(not(target_arch = "wasm32"))]
-mod fetch {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    pub fn server_json(server: &str) -> Result<String, String> {
-        let (tls, rest) = match server.split_once("://") {
-            Some(("https", r)) => (true, r),
-            Some(("http", r)) => (false, r),
-            Some((s, _)) => return Err(format!("{server}: http:// or https://, not {s}://")),
-            None => (false, server),
-        };
-        let (hostport, path) = match rest.find('/') {
-            Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')),
-            None => (rest, ""),
-        };
-        let (host, port) = match hostport.rsplit_once(':') {
-            Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => {
-                (h, p.parse::<u16>().map_err(|_| format!("{server}: bad port {p}"))?)
-            }
-            _ => (hostport, if tls { 443 } else { 80 }),
-        };
-        let at = format!("{host}:{port}");
-        let tcp = std::net::ToSocketAddrs::to_socket_addrs(&at)
-            .map_err(|e| format!("{at}: {e}"))?
-            .find_map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok())
-            .ok_or_else(|| format!("{at}: can't connect (is the server up?)"))?;
-        let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-        let req = format!(
-            "GET {path}/server.json HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n\r\n"
-        );
-        let mut raw = Vec::new();
-        if tls {
-            let mut roots = rustls::RootCertStore::empty();
-            for c in rustls_native_certs::load_native_certs().certs {
-                let _ = roots.add(c);
-            }
-            let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| format!("{host}: {e}"))?;
-            let conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| e.to_string())?;
-            let mut s = rustls::StreamOwned::new(conn, tcp);
-            s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
-            // A server that closes without TLS's close_notify still sent the body.
-            if let Err(e) = s.read_to_end(&mut raw) {
-                if raw.is_empty() {
-                    return Err(format!("{at}: {e}"));
-                }
-            }
-        } else {
-            let mut s = tcp;
-            s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
-            s.read_to_end(&mut raw).map_err(|e| format!("{at}: {e}"))?;
-        }
-        let text = String::from_utf8_lossy(&raw);
-        let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| format!("{at}: no reply"))?;
-        let status = head.split_whitespace().nth(1).unwrap_or("");
-        if status != "200" {
-            return Err(format!("{server}/server.json: HTTP {status}"));
-        }
-        Ok(body.to_string())
-    }
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    #[test]
-    fn server_json_reads_both_forms() {
-        let (a, h) =
-            super::parse_server_json(r#"{"addr":"game.example.com:4433","hash":null,"game":"oneshot"}"#).unwrap();
-        assert_eq!(a, "game.example.com:4433");
-        assert!(h.is_none());
-        let hex = "ab".repeat(32);
-        let (a, h) = super::parse_server_json(&format!(r#"{{"addr": "127.0.0.1:4433", "hash": "{hex}"}}"#)).unwrap();
-        assert_eq!(a, "127.0.0.1:4433");
-        assert_eq!(h, Some([0xab; 32]));
-    }
-
     #[test]
     fn modes_by_name() {
         assert_eq!(super::mode("Duel"), Some(proto::MODE_DUEL));
