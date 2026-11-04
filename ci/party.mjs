@@ -1,10 +1,11 @@
 // node ci/party.mjs: two pages make a party and play together, in headless
 // Chromium against the real server (build first: ci/client.sh and
-// `cargo build --release -p server`). The first page's party code brings the
-// second in; the first talks (Chromium's fake microphone, a beep, on open
-// mic) and the second plays its frames; the leader starts Free for all and
-// both pages land in one match, each naming the other. Screenshots of the
-// menu with the party go to traces/party-*.png.
+// `cargo build --release -p server`). The first page's party code (the
+// title's PARTY, `__oneshot.party`) brings the second in by its link
+// (`?party=CODE`); the first talks (Chromium's fake microphone, a beep, on
+// open mic) and the second plays its frames; the leader picks Free for all
+// on the title and presses PLAY, and both pages land in one match, each
+// naming the other. Screenshots of PARTY go to traces/party-*.png.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -40,14 +41,14 @@ const browser = await chromium.launch({
 });
 const errors = [];
 const checks = [];
-const until = async (what, fn, ms = 60000) => {
+const until = async (what, fn, ms = 90000) => {
   const t = Date.now();
   while (Date.now() - t < ms) {
     try {
       const v = await fn();
       if (v) return v;
     } catch { /* not yet */ }
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error(`timed out: ${what}`);
 };
@@ -58,37 +59,60 @@ try {
     const p = await ctx.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     p.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-    await p.goto(`${url}?lite=1&${q}`);
+    await p.goto(`${url}?${q}`);
     return p;
   };
-  const lobby = (p) => p.evaluate(() => window.__lobby);
+  const party = (p) => p.evaluate(() => window.__oneshot?.party ?? null);
+  // A control on the title, where the game says it is (`__oneshot.ui`),
+  // pressed for a few frames (SwiftShader draws slowly).
+  const press = async (p, tag) => {
+    const r = await until(`the title shows ${tag}`, () => p.evaluate((t) => {
+      const r = window.__oneshot?.ui?.[t];
+      const c = document.getElementById('game');
+      const k = c.getBoundingClientRect().width / c.clientWidth;
+      return r ? r.map((v) => v * k) : null;
+    }, tag));
+    await p.mouse.move(r[0], r[1]);
+    await p.waitForTimeout(400);
+    await p.mouse.down();
+    await p.waitForTimeout(250);
+    await p.mouse.up();
+    await p.waitForTimeout(400);
+  };
   const a = await open('name=alpha&mic=open');
-  const pa = await until('the first page has a party', async () => (await lobby(a))?.party);
-  const b = await open(`name=bravo&party=${pa.text}`);
-  const both = await until('the second page is in the first one\'s party', async () => {
-    const [la, lb] = [await lobby(a), await lobby(b)];
-    return la?.party?.members.length === 2 && lb?.party?.code === la.party.code ? [la, lb] : null;
+  const pa = await until('the first page has a party', async () => {
+    const x = await party(a);
+    return x?.connected && x.code ? x : null;
   });
-  checks.push([`the code ${pa.text} brought the second page in`, !!both]);
-  await a.screenshot({ path: 'traces/party-menu.png' });
-  await b.click('#blade-party');
-  await b.screenshot({ path: 'traces/party-pane.png' });
+  const b = await open(`name=bravo&party=${pa.code}`);
+  const both = await until("the second page is in the first one's party", async () => {
+    const [x, y] = [await party(a), await party(b)];
+    return x?.n === 2 && y?.code === x.code ? [x, y] : null;
+  });
+  checks.push([`the link ?party=${pa.code} brought the second page in`, !!both]);
+  await press(a, 'nav-party');
+  await a.screenshot({ path: 'traces/party-leader.png' });
+  await press(b, 'nav-party');
+  await b.screenshot({ path: 'traces/party-member.png' });
 
-  const heard = await until('the second page plays the first one\'s voice', async () => {
-    const [la, lb] = [await lobby(a), await lobby(b)];
-    return la.sent > 25 && lb.heard > 25 ? [la.sent, lb.heard] : null;
+  const heard = await until("the second page plays the first one's voice", async () => {
+    const [x, y] = [await party(a), await party(b)];
+    return x.sent > 25 && y.heard > 25 ? [x.sent, y.heard] : null;
   }, 30000).catch((e) => { errors.push(e.message); return null; });
   checks.push([`voice: ${heard ? `${heard[0]} frames sent, ${heard[1]} played` : 'none'}`, !!heard]);
 
-  await a.click('#ffa');
-  const playing = async (p) => p.evaluate(() => !!window.__oneshot?.connected
-    && getComputedStyle(document.getElementById('menu')).display === 'none' ? window.__oneshot.names : null);
-  const [na, nb] = [await until('the leader is in the match', () => playing(a), 90000),
-    await until('the member is in the match', () => playing(b), 90000)];
-  checks.push(['the leader started Free for all for both', !!na && !!nb]);
+  // The leader picks Free for all and presses PLAY: both go.
+  await press(a, 'nav-play');
+  await press(a, 'mode3');
+  await press(a, 'go');
+  const playing = async (p) => p.evaluate(() => (window.__oneshot?.connected && window.__oneshot.screen === 'playing'
+    ? window.__oneshot.names : null));
+  const [na, nb] = [await until('the leader is in the match', () => playing(a)),
+    await until('the member is in the match', () => playing(b))];
+  checks.push(["the leader's PLAY started Free for all for both", !!na && !!nb]);
   checks.push([`one match: each page names the other (${na.join(', ')})`, na.includes('bravo') && nb.includes('alpha')]);
-  const still = await lobby(b);
-  checks.push(['the party stays up through the match', still.connected && still.party?.members.length === 2]);
+  const still = await party(b);
+  checks.push(['the party stays up through the match', still.connected && still.n === 2]);
 } catch (e) {
   errors.push(String(e));
 } finally {

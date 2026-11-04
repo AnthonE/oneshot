@@ -26,6 +26,7 @@ pub mod loading;
 pub mod look;
 pub mod medals;
 pub mod options;
+pub mod pad;
 pub mod party;
 pub mod pause;
 pub mod pointer;
@@ -335,6 +336,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
+    .add_plugins(pad::plugin)
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
