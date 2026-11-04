@@ -151,6 +151,9 @@ pub struct Disk {
     other: Vec<(String, String)>,
     other_binds: Vec<(String, String)>,
     written: String,
+    /// The settings and keys as last loaded or written: what this process
+    /// changed is what differs from these.
+    base: (Settings, Binds),
 }
 
 /// The store this build writes to, and what it holds now.
@@ -201,7 +204,8 @@ pub fn read(text: Option<&str>) -> (Settings, Binds, u32, Lines, Lines) {
     (s, b, doc.version, other, other_binds)
 }
 
-/// The text to write for `s` and `b`, keeping what this build doesn't know.
+/// The text to write for `s` and `b`, keeping what this build doesn't know
+/// (a kept bind line goes once its action is rebound here).
 pub fn text(
     s: &Settings,
     b: &Binds,
@@ -212,8 +216,37 @@ pub fn text(
     let mut pairs = s.pairs();
     pairs.extend(other.iter().cloned());
     let mut binds = b.to_lines();
-    binds.extend(other_binds.iter().cloned());
+    let ours: Vec<String> = binds.iter().map(|(a, _)| a.clone()).collect();
+    binds.extend(other_binds.iter().filter(|(a, _)| !ours.contains(a)).cloned());
     config::serialize(version, &pairs, &binds)
+}
+
+/// What this process changed since `base` (what it loaded or last wrote),
+/// put over what the store holds now: another tab or client's changes to
+/// other settings and keys survive this one's write.
+fn merge(base: (&Settings, &Binds), ours: (&Settings, &Binds), now: (&Settings, &Binds)) -> (Settings, Binds) {
+    let pick = |b: f32, o: f32, n: f32| if o != b { o } else { n };
+    let s = Settings {
+        sensitivity: pick(base.0.sensitivity, ours.0.sensitivity, now.0.sensitivity),
+        invert: if ours.0.invert != base.0.invert {
+            ours.0.invert
+        } else {
+            now.0.invert
+        },
+        fov: pick(base.0.fov, ours.0.fov, now.0.fov),
+        master: pick(base.0.master, ours.0.master, now.0.master),
+        effects: pick(base.0.effects, ours.0.effects, now.0.effects),
+    };
+    let mut b = now.1.clone();
+    for spec in &crate::binds::SPECS {
+        let a = spec.action;
+        if ours.1.slots(a) != base.1.slots(a) {
+            for (i, slot) in ours.1.slots(a).into_iter().enumerate() {
+                b.set(a, i, slot);
+            }
+        }
+    }
+    (s, b)
 }
 
 /// The settings into the app as it is built: from the store, or the
@@ -225,6 +258,7 @@ pub fn plugin(app: &mut App) {
     // What's held, as this build would write it: nothing is written until
     // something changes.
     let written = text(&s, &b, version, &other, &other_binds);
+    let base = (s, b.clone());
     app.insert_resource(s).insert_resource(b);
     if let Some(store) = store {
         app.insert_resource(Disk {
@@ -233,28 +267,40 @@ pub fn plugin(app: &mut App) {
             other,
             other_binds,
             written,
+            base,
         });
     }
     app.add_systems(Last, save_on_change);
 }
 
 /// Writes the settings when they changed (and what's written would
-/// differ); a failed write is said once and tried again on the next change.
-fn save_on_change(settings: Res<Settings>, binds: Res<Binds>, disk: Option<ResMut<Disk>>) {
+/// differ), over what the store holds now; a failed write is said once and
+/// tried again on the next change.
+fn save_on_change(mut settings: ResMut<Settings>, mut binds: ResMut<Binds>, disk: Option<ResMut<Disk>>) {
     let Some(mut disk) = disk else {
         return;
     };
     if !settings.is_changed() && !binds.is_changed() {
         return;
     }
-    let t = text(&settings, &binds, disk.version, &disk.other, &disk.other_binds);
-    if t == disk.written {
-        return;
+    let held = open_store().and_then(|(_, t)| t);
+    let (now_s, now_b, version, other, other_binds) = read(held.as_deref());
+    let (s, b) = merge((&disk.base.0, &disk.base.1), (&settings, &binds), (&now_s, &now_b));
+    let version = version.max(disk.version);
+    let t = text(&s, &b, version, &other, &other_binds);
+    disk.version = version;
+    disk.other = other;
+    disk.other_binds = other_binds;
+    if t != disk.written && t != held.unwrap_or_default() {
+        if let Err(e) = write_store(&disk.store, &t) {
+            warn!("settings not saved: {e}");
+            return;
+        }
     }
-    match write_store(&disk.store, &t) {
-        Ok(()) => disk.written = t,
-        Err(e) => warn!("settings not saved: {e}"),
-    }
+    disk.written = t;
+    disk.base = (s, b.clone());
+    settings.set_if_neq(s);
+    binds.set_if_neq(b);
 }
 
 #[cfg(test)]
@@ -286,6 +332,33 @@ mod tests {
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
         let (s2, b2, ..) = read(Some(&t));
         assert_eq!((s2, b2), (s, b));
+    }
+
+    #[test]
+    fn two_clients_keep_each_others_changes() {
+        // Both loaded the defaults; one widened the view and wrote; the other
+        // turned the volume down and writes now: both changes stay.
+        let base = (Settings::default(), Binds::default());
+        let mut other_tab = base.0;
+        other_tab.adjust(Knob::Fov, 4);
+        let mut ours = base.0;
+        ours.adjust(Knob::Master, -3);
+        let mut our_keys = Binds::default();
+        our_keys.set(Action::Jump, 0, Some(Bind::Key(KeyCode::KeyB)));
+        let (s, b) = merge((&base.0, &base.1), (&ours, &our_keys), (&other_tab, &Binds::default()));
+        assert_eq!(s.fov, other_tab.fov);
+        assert_eq!(s.master, ours.master);
+        assert_eq!(b.slots(Action::Jump)[0], Some(Bind::Key(KeyCode::KeyB)));
+    }
+
+    #[test]
+    fn a_newer_builds_bind_is_kept_until_rebound_here() {
+        let held = "bind.jump = \"Mouse6 Space\"\n";
+        let (s, mut b, v, other, other_binds) = read(Some(held));
+        assert!(text(&s, &b, v, &other, &other_binds).contains("bind.jump = \"Mouse6 Space\""));
+        b.set(Action::Jump, 0, Some(Bind::Key(KeyCode::KeyJ)));
+        let t = text(&s, &b, v, &other, &other_binds);
+        assert!(t.contains("bind.jump = \"KeyJ none\"") && !t.contains("Mouse6"), "{t}");
     }
 
     #[test]

@@ -48,6 +48,18 @@ pub struct Look {
     /// The trigger counts: not still held from the click that took the
     /// mouse (that click only takes it, as on the page).
     armed: bool,
+    /// The keys count: none still held from the menu's key that resumed
+    /// (1 resumes and, by default, swaps too).
+    keys_armed: bool,
+}
+
+impl Look {
+    /// Neither the trigger nor the keys count until let go: what took the
+    /// mouse back (a click, a menu's key) isn't a shot or a move.
+    pub fn disarm(&mut self) {
+        self.armed = false;
+        self.keys_armed = false;
+    }
 }
 
 /// The welcome this level was built for.
@@ -368,7 +380,18 @@ fn pump(
     // back, turns nothing and fires nothing).
     let grabbed =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
-    let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
+    // Back from the menu, the keys count again once every bound key is up.
+    if !look.keys_armed
+        && binds::SPECS
+            .iter()
+            .all(|s| !binds.pressed(s.action, &keys, &mouse) && !binds.just_pressed(s.action, &keys, &mouse))
+    {
+        look.keys_armed = true;
+    }
+    let live = grabbed && look.keys_armed;
+    // The match has the screen but not the mouse: the HUD says to click.
+    st.free = !grabbed && !auto.on;
+    let held = |a: binds::Action| live && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
@@ -392,10 +415,10 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
+    if live && binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
         st.net = !st.net;
     }
-    let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
+    let on = |a: binds::Action| (live && binds.pressed(a, &keys, &mouse)) as i32;
     let axis = |plus: binds::Action, minus: binds::Action| (on(plus) - on(minus)) * 127;
     let mut buttons = BUTTONS.iter().filter(|(a, _)| held(*a)).fold(0, |b, (_, v)| b | v);
     if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {

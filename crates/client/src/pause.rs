@@ -52,7 +52,7 @@ pub fn lock_cursor(cursor: &mut Query<&mut CursorOptions, With<PrimaryWindow>>, 
         c.grab_mode = CursorGrabMode::Locked;
         c.visible = false;
     }
-    look.armed = false;
+    look.disarm();
 }
 
 fn setup(mut commands: Commands) {
@@ -120,8 +120,15 @@ fn choose(
         return;
     };
     match verb {
+        // Back to the match. A browser takes the pointer only for a click
+        // (a key isn't a gesture, and Esc never is): a key resumes with the
+        // mouse free, and the match's first click takes it (`grab`).
         Verb::Resume => {
-            lock_cursor(&mut cursor, &mut look);
+            if clicked.is_some() || cfg!(not(target_arch = "wasm32")) {
+                lock_cursor(&mut cursor, &mut look);
+            } else {
+                look.disarm();
+            }
             next.set(Screen::Playing);
         }
         Verb::Settings => next.set(Screen::Settings),

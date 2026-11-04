@@ -30,6 +30,8 @@ const DAMAGE_R: f32 = 90.0;
 /// Names by slot (from `Msg::Seat`), the feed, and the markers' clocks.
 #[derive(Resource, Default)]
 pub struct HudState {
+    /// The match has the screen but not the mouse (`pump`): click to play.
+    pub free: bool,
     names: BTreeMap<u8, String>,
     /// Each seat's skin, as the server checked it.
     skins: BTreeMap<u8, u8>,
@@ -508,6 +510,7 @@ pub fn draw(
                 None => format!("Respawning in {back}"),
             }
         }
+        _ if st.free => "Click to play".to_string(),
         _ => String::new(),
     };
     let g = f.gun();

@@ -353,7 +353,7 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, st: Res<Page>, mut next: ResMut<NextSta
 /// The wheel scrolls the list.
 fn scroll(
     mut wheel: MessageReader<MouseWheel>,
-    mut pane: Query<&mut ScrollPosition, With<Pane>>,
+    mut pane: Query<(&mut ScrollPosition, &ComputedNode), With<Pane>>,
     mut st: ResMut<Page>,
 ) {
     let dy: f32 = wheel
@@ -366,8 +366,11 @@ fn scroll(
     if dy == 0.0 {
         return;
     }
-    for mut p in &mut pane {
-        p.y = (p.y - dy).max(0.0);
+    for (mut p, n) in &mut pane {
+        // No further than the list goes (the layout clamps what it draws,
+        // not this, so overscroll would pile up as a dead zone).
+        let most = ((n.content_size.y - n.size.y + n.scrollbar_size.y) * n.inverse_scale_factor).max(0.0);
+        p.y = (p.y - dy).clamp(0.0, most);
         st.scroll = p.y;
     }
 }
