@@ -410,7 +410,7 @@ fn burn(fx: &mut Fx, map: &sim::map::Map, wp: Vec3, wv: Vec3, dt: f32, big: f32)
     let dir = wv / speed;
     let reach = speed * dt * 2.0 + 0.5;
     if let Some(hit) = super::surface::cast(map, &mut fx.near, wp - dir * 0.2, dir, reach) {
-        let matter = super::surface::matter(map, hit.on);
+        let matter = super::surface::matter_of(map, &hit, fx.marks.lift.as_deref());
         fx.marks.lay(
             map,
             super::marks::Kind::Scorch,

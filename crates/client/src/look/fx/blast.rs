@@ -193,6 +193,9 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
         } else {
             Vec3::Y
         };
+        // Lit debris off the ground it tore up (the table's Blast row).
+        let chips = n(usize::from(super::table::effect(Weapon::Blast, dust).chips));
+        fx.chips.throw(base, up, dust, chips);
         // Laid on the floor as drawn: over a ramp's slope, the terrain's
         // folds, and faded off a platform's edge.
         if let Some((k, size)) = super::marks::kind(Weapon::Blast, dust) {

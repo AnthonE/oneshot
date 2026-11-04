@@ -61,6 +61,21 @@ pub fn matter(map: &Map, on: On) -> Matter {
     }
 }
 
+/// What a hit met is made of, as drawn: [`matter`], but the ground where
+/// the rock skin stands out of it (`cliffs.rs`, its `Lift`) is stone, so a
+/// round into a drawn cliff chips stone, not soil.
+pub fn matter_of(map: &Map, hit: &Hit, lift: Option<&crate::look::cliffs::Lift>) -> Matter {
+    let rock = matches!(hit.on, On::Ground)
+        && lift
+            .and_then(|l| l.at(hit.at.x, hit.at.z))
+            .is_some_and(|(_, l)| l > 0.0);
+    if rock {
+        Matter::Concrete
+    } else {
+        matter(map, hit.on)
+    }
+}
+
 /// The round solid `on` is, and its radius, if it is one: a mark on its
 /// side is bent round it (`marks.rs`).
 pub fn round(map: &Map, on: On) -> Option<(Vec2, f32)> {

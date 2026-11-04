@@ -30,7 +30,7 @@ const DAMAGE_R: f32 = 90.0;
 /// Names by slot (from `Msg::Seat`), the feed, and the markers' clocks.
 #[derive(Resource, Default)]
 pub struct HudState {
-    names: BTreeMap<u8, String>,
+    pub(crate) names: BTreeMap<u8, String>,
     /// Each seat's skin, as the server checked it.
     skins: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,

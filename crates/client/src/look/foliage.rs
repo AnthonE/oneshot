@@ -55,7 +55,6 @@ use bevy::render::{Render, RenderApp, RenderSystems};
 use bevy::shader::ShaderRef;
 
 use super::mood::MoodNow;
-use super::quality::Tier;
 use super::rig::EyeCam;
 
 /// Grass and clutter: `StandardMaterial` plus the sway.
@@ -67,7 +66,7 @@ pub const SHADER: &str = "shaders/foliage.wgsl";
 pub const PREPASS_SHADER: &str = "shaders/foliage_prepass.wgsl";
 
 /// Where the cover starts to thin out, as a share of its drawn distance
-/// (the GRASS DISTANCE row, `quality::Gfx::cover_m`). **(knob)**
+/// (`grass::DRAW_M`, the same on every rung). **(knob)**
 ///
 /// Each piece sinks into the ground at its own distance between this and
 /// [`FADE_END`], so the turf thins rather than ending on a line; Gates'
@@ -263,6 +262,9 @@ pub struct Trample {
     origin: IVec2,
     /// The shader's wind strength, eased toward the map's.
     wind: f32,
+    /// Some texel is pressed: while none is (every map without grass, and
+    /// a meadow nobody walked), nothing decays or goes to the GPU.
+    lit: bool,
 }
 
 impl Default for Trample {
@@ -273,6 +275,7 @@ impl Default for Trample {
             rows: vec![i64::MIN; TRAMPLE_TEXELS],
             origin: IVec2::ZERO,
             wind: WIND_FLOOR,
+            lit: false,
         }
     }
 }
@@ -303,10 +306,25 @@ impl Trample {
 
     /// Spring every trail back by `dt` seconds' worth.
     pub fn decay(&mut self, dt: f32) {
+        if !self.lit {
+            return;
+        }
         let d = dt / TRAIL_S;
+        let mut lit = false;
         for v in &mut self.px {
             *v = (*v - d).max(0.0);
+            lit |= *v > 0.0;
         }
+        self.lit = lit;
+    }
+
+    /// Forget every trail (a new level): the last match's paths don't
+    /// carry into the next.
+    pub fn clear(&mut self) {
+        self.px.fill(0.0);
+        self.cols.fill(i64::MIN);
+        self.rows.fill(i64::MIN);
+        self.lit = false;
     }
 
     /// Press the cover under a footprint of radius `r` at `at` (world XZ)
@@ -329,6 +347,7 @@ impl Trample {
                 }
                 let i = cell.y.rem_euclid(n) as usize * TRAMPLE_TEXELS + cell.x.rem_euclid(n) as usize;
                 self.px[i] = (self.px[i] + fall.min(1.0) * STAMP_RATE * dt).min(1.0);
+                self.lit |= self.px[i] > 0.0;
             }
         }
     }
@@ -383,6 +402,8 @@ pub struct FoliageUpload {
     pub trample: Handle<Image>,
     pub state_px: [f32; STATE_FLOATS],
     pub trample_px: Arc<Vec<u8>>,
+    /// `trample_px` changed this frame and goes to the GPU.
+    pub trample_dirty: bool,
 }
 
 /// Texels in the per-frame state texture (`foliage_common.wgsl`): the
@@ -440,6 +461,7 @@ pub fn init(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         trample: trample.clone(),
         state_px: [0.0; STATE_FLOATS],
         trample_px: Arc::new(vec![0; TRAMPLE_TEXELS * TRAMPLE_TEXELS]),
+        trample_dirty: false,
     });
     commands.insert_resource(Foliages {
         state,
@@ -462,17 +484,24 @@ pub fn wind_goal(wind_ms: f32, roofed: bool) -> f32 {
 /// [`FoliageUpload`]. After the fighters and the hulls are drawn, so
 /// [`Walkers`] is this frame's.
 #[allow(clippy::too_many_arguments)]
-pub fn update(
+pub(crate) fn update(
     time: Res<Time>,
     mood: Res<MoodNow>,
-    tier: Res<Tier>,
+    built: Res<crate::Built>,
     walkers: Res<Walkers>,
     eye: Query<&GlobalTransform, With<EyeCam>>,
     fx: Option<ResMut<super::fx::Fx>>,
     mut trample: ResMut<Trample>,
     mut up: ResMut<FoliageUpload>,
     mut blast: Local<Option<(Vec2, f64)>>,
+    mut level: Local<Option<(u32, u32)>>,
 ) {
+    let was_lit = trample.lit;
+    if *level != built.0 {
+        *level = built.0;
+        trample.clear();
+        *blast = None;
+    }
     let dt = time.delta_secs().min(0.25);
     let m = &mood.mood;
     let dir = m.wind();
@@ -510,14 +539,18 @@ pub fn update(
         [dir.x, dir.y, trample.wind, clock],
         [window.x, window.y, TRAMPLE_M, time.delta_secs()],
         shock,
-        [tier.gfx.cover_m, 0.0, 0.0, 0.0],
+        [super::grass::DRAW_M, 0.0, 0.0, 0.0],
     ];
     for (texel, v) in state.iter().enumerate() {
         up.state_px[texel * 4..texel * 4 + 4].copy_from_slice(v);
     }
-    let px = Arc::make_mut(&mut up.trample_px);
-    for (dst, v) in px.iter_mut().zip(&trample.px) {
-        *dst = (v * 255.0 + 0.5) as u8;
+    // An untouched map sends nothing: the texture already holds zeros.
+    up.trample_dirty = trample.lit || was_lit;
+    if up.trample_dirty {
+        let px = Arc::make_mut(&mut up.trample_px);
+        for (dst, v) in px.iter_mut().zip(&trample.px) {
+            *dst = (v * 255.0 + 0.5) as u8;
+        }
     }
 }
 
@@ -549,7 +582,7 @@ pub fn write_textures(up: Option<Res<FoliageUpload>>, images: Res<RenderAssets<G
             },
         );
     }
-    if let Some(img) = images.get(&up.trample) {
+    if let Some(img) = images.get(&up.trample).filter(|_| up.trample_dirty) {
         queue.write_texture(
             img.texture.as_image_copy(),
             &up.trample_px,

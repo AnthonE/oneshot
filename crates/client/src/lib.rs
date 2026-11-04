@@ -65,12 +65,6 @@ pub struct Look {
 #[derive(Resource, Default)]
 pub(crate) struct Built(Option<(u32, u32)>);
 
-impl Built {
-    pub(crate) fn gen(&self) -> Option<u32> {
-        self.0.map(|(g, _)| g)
-    }
-}
-
 /// Drawn things by their slot (a fighter with the side and skin its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
 /// hull, it doesn't throw it away, so their coming back costs nothing (a
@@ -206,6 +200,9 @@ pub struct Opts {
     /// `potato` (`?potato`, `--potato`): POTATO whatever was chosen, and
     /// kept (`look/potato.rs`).
     pub potato: bool,
+    /// `softgpu`: the page found its WebGPU adapter a software one, which
+    /// wgpu's WebGPU backend doesn't say (`look/potato.rs`).
+    pub softgpu: bool,
     /// `quality=<name>` (`?quality=`, `--quality`): that rung for this run
     /// only, and no picking for the machine: what a picture of a rung asks.
     pub quality: Option<look::quality::Quality>,
@@ -235,6 +232,7 @@ impl Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
             potato: has("potato"),
+            softgpu: has("softgpu"),
             quality: s
                 .split([',', ' '])
                 .find_map(|w| w.strip_prefix("quality=").and_then(look::quality::Quality::from_name)),
@@ -694,6 +692,7 @@ fn rebuild(
     mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
     mut shade: ResMut<look::quality::MapShade>,
     mut mood: ResMut<look::mood::MoodNow>,
+    fx: Option<ResMut<look::fx::Fx>>,
 ) {
     let s = link.0.session();
     let now = Some((gen.map_or(0, |g| g.0), s.welcomes));
@@ -701,6 +700,12 @@ fn rebuild(
         return;
     }
     built.0 = now;
+    // The last level's marks and debris were fitted to its faces: a cup's
+    // next heat on the same link may be another map.
+    if let Some(mut fx) = fx {
+        fx.marks.clear();
+        fx.chips.clear();
+    }
     // The map's mood first: the level's sun and its wet are the mood's.
     look::mood::set(&mut mood, s.map_id);
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
@@ -845,6 +850,10 @@ fn draw_fighters(
     }
 }
 
+/// How high over the ground a hull's origin may be and still have its
+/// wheels on it (the sim's suspension is a few centimetres).
+const WHEELS_DOWN_M: f32 = 0.3;
+
 /// The vehicles: ours as predicted, the rest interpolated.
 #[allow(clippy::too_many_arguments)]
 fn draw_vehicles(
@@ -874,8 +883,12 @@ fn draw_vehicles(
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
-        walkers.hull(p, yaw, &WHEELS);
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
+        // Only a live hull on its wheels presses the grass: not one in the
+        // air over a crest, nor a wreck.
+        if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
+            walkers.hull(p, yaw, &WHEELS);
+        }
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
         match drawn.vehicles.get(&slot) {
@@ -939,6 +952,7 @@ fn draw_vehicles(
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
@@ -947,6 +961,7 @@ pub(crate) fn view(
     opts: Res<Opts>,
     settings: Res<settings::Settings>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
+    mut demo_at: Local<Option<(u8, Transform)>>,
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
         return;
@@ -974,8 +989,15 @@ pub(crate) fn view(
         }
     }
     // The effects demo stands its camera in one place (drawing only).
+    // Worked out once a map, not every frame.
     if opts.fxdemo {
-        *t = look::fx::demo::pose(&core.map, opts.fxstage);
+        let id = link.0.session().map_id;
+        if demo_at.is_none_or(|(m, _)| m != id) {
+            *demo_at = Some((id, look::fx::demo::pose(&core.map, opts.fxstage)));
+        }
+        if let Some((_, at)) = *demo_at {
+            *t = at;
+        }
     }
     // Shake and kick: the drawn camera only, never the aim we send.
     let o = fx.shake.step(time.delta_secs());
@@ -1100,10 +1122,14 @@ fn expose(
     settle: Res<loading::Settle>,
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
-    mut frames: Local<u32>,
+    (mut frames, mut described): (Local<u32>, Local<Option<String>>),
 ) {
     use wasm_bindgen::JsValue;
     *frames += 1;
+    // Written again only when the tier moves (a row, the frame-rate watch).
+    if tier.is_changed() || described.is_none() {
+        *described = Some(tier.describe());
+    }
     let Some(w) = web_sys::window() else {
         return;
     };
@@ -1136,7 +1162,7 @@ fn expose(
     set(&o, "screen", name.into());
     // Which module this is and what it draws (`look/gpu.rs`).
     set(&o, "gfx", look::gpu::api().into());
-    set(&o, "tier", tier.describe().into());
+    set(&o, "tier", described.as_deref().unwrap_or_default().into());
     // The map's sky (`look/mood.rs`).
     set(&o, "sky", mood.mood.name.into());
     set(

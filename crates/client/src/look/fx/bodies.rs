@@ -392,7 +392,7 @@ fn wall(fx: &mut Fx, scene: &Scene, slot: u8, eye: Vec3, aim: Vec3, sword: bool)
     let Some(hit) = super::surface::cast(scene.map, &mut fx.near, eye, aim, t + 0.05) else {
         return false;
     };
-    let matter = super::surface::matter(scene.map, hit.on);
+    let matter = super::surface::matter_of(scene.map, &hit, fx.marks.lift.as_deref());
     let w = if sword { Weapon::Blade } else { Weapon::Melee };
     fx.strike(scene.map, w, matter, &hit);
     true

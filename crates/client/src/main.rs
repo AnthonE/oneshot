@@ -136,6 +136,7 @@ fn run() -> Result<(), String> {
             autoplay,
             lite,
             potato,
+            softgpu: false,
             quality,
             pose: None,
             capsules: flag("--capsules"),

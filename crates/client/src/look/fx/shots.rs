@@ -151,7 +151,13 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
-    let k = if heavy { 0.6 } else { 0.3 };
+    // Crouched, the stock is braced: half the jolt (Gates' gunfeel).
+    let braced = if f.body.crouched {
+        crate::look::viewmodel::CROUCH_KICK
+    } else {
+        1.0
+    };
+    let k = if heavy { 0.6 } else { 0.3 } * braced;
     let jolt = fx.shake.rand() * shake::SHOT_SIDE_RAD;
     fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
@@ -220,7 +226,10 @@ fn met(fx: &mut Fx, scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) ->
     let t = scene.map.ray(v3(from), v3(dir), len + 0.1);
     if t <= len + 0.06 && t >= len - 0.3 {
         return Some(match super::surface::struck(scene.map, &mut fx.near, to, dir) {
-            Some(hit) => Met::Face(hit, super::surface::matter(scene.map, hit.on)),
+            Some(hit) => Met::Face(
+                hit,
+                super::surface::matter_of(scene.map, &hit, fx.marks.lift.as_deref()),
+            ),
             None => Met::Somewhere,
         });
     }

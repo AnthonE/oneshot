@@ -458,6 +458,10 @@ fn merged(it: impl Iterator<Item = f32>) -> Vec<f32> {
     v
 }
 
+/// How far a face cut where another box stands on it runs on under that
+/// box, metres ([`covers`]).
+pub const TUCK_M: f32 = 0.01;
+
 /// What covers each face of box `me` of `all` (its extent `min..max`,
 /// which a merge may have grown past its entry's).
 pub fn covers(min: Vec3, max: Vec3, me: usize, all: &[Other]) -> [Cover; 6] {
@@ -487,12 +491,31 @@ pub fn covers(min: Vec3, max: Vec3, me: usize, all: &[Other]) -> [Cover; 6] {
             if !(outside || (twin && (o.wins || j < me))) {
                 continue;
             }
-            let r = [
+            let mut r = [
                 o.min[au].max(min[au]) - min[au],
                 o.min[av].max(min[av]) - min[av],
                 o.max[au].min(max[au]) - min[au],
                 o.max[av].min(max[av]) - min[av],
             ];
+            if outside {
+                // Tucked under the box that stands on it: the face runs on
+                // a little inside that box, so where its edge meets the
+                // box's foot (two meshes, two sets of vertices) there is
+                // overlap, never a crack to the sky.
+                let (lu, lv) = (max[au] - min[au], max[av] - min[av]);
+                if r[0] > EPS {
+                    r[0] += TUCK_M;
+                }
+                if r[1] > EPS {
+                    r[1] += TUCK_M;
+                }
+                if r[2] < lu - EPS {
+                    r[2] -= TUCK_M;
+                }
+                if r[3] < lv - EPS {
+                    r[3] -= TUCK_M;
+                }
+            }
             if r[2] - r[0] > EPS && r[3] - r[1] > EPS {
                 cover.rects.push(r);
             }

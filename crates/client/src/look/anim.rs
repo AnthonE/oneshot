@@ -128,6 +128,8 @@ impl Clip {
 
 /// How the arms hold what is in the hands: a long gun at the shoulder
 /// (Gates' `RIFLE_HOLD_CLIP`) or a pistol up in front (`ARMS_HOLD_CLIP`).
+/// Bodies wear the long hold for every gun (`bodies::pose`: the gun hangs
+/// at the chest, and the pistol clip's hands are at the face).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hold {
     Long,
@@ -579,6 +581,15 @@ pub struct Playing {
     hold_u: [f32; Hold::ALL.len()],
 }
 
+impl Playing {
+    /// How much of the head and spine the holds own between them, 0..1:
+    /// their clips key the head as a standing body holds it, so that much
+    /// of a crouch clip's bow is already gone.
+    pub fn held(&self) -> f32 {
+        self.hold_u.iter().copied().fold(0.0, f32::max).min(HOLD_MAX)
+    }
+}
+
 /// A stable phase in `[0, 1)` per body, so a crowd standing still doesn't
 /// breathe in unison.
 pub fn desync(e: Entity) -> f32 {
@@ -841,6 +852,8 @@ pub struct SpinePose {
     pub clip: Option<Clip>,
     pub pitch: f32,
     pub hip_yaw: f32,
+    /// How much of the head a hold owns ([`Playing::held`]).
+    pub held: f32,
     /// Where the head is moved, metres in the model's frame (the own
     /// shadow's, `own_shadow.rs`; zero for every other body).
     pub head_push: Vec3,
@@ -865,9 +878,11 @@ pub fn turn_spine(pose: SpinePose, spine: &mut SpineBones, bones: &mut Query<&mu
         pose.pitch.clamp(-LOOK_PITCH_MAX, LOOK_PITCH_MAX)
     };
     // The crouch clips bow the head ~42° further than the idle: lift it by
-    // the difference, so a crouched body looking level looks level.
+    // the difference, so a crouched body looking level looks level. A hold
+    // keys the head as a standing body holds it, so only the share of the
+    // head the crouch clip still owns is lifted.
     let lift = match pose.clip {
-        Some(Clip::CrouchIdle | Clip::CrouchWalk) => CROUCH_HEAD_LIFT,
+        Some(Clip::CrouchIdle | Clip::CrouchWalk) => CROUCH_HEAD_LIFT * (1.0 - pose.held.clamp(0.0, 1.0)),
         _ => 0.0,
     };
     let yaw = if dead { 0.0 } else { pose.hip_yaw };
