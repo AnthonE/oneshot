@@ -19,6 +19,10 @@ Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
     (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
     manifest
 
+The announcer (crates/client/assets/sound/voice) is ours: placeholder lines
+synthesized by tools/voice.sh with Flite (Carnegie Mellon University's
+speech synthesizer, BSD-style licence) through ffmpeg.
+
 Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
   - Unitblock, by GGBotNet (ggbot.net, github.com/ggbotnet/fonts-cc0)
   - Aileron, by Sora Sagano (dotcolon.net/fonts/aileron), "No Rights

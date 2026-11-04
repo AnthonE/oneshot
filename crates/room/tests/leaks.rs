@@ -4,8 +4,9 @@
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
 //! unseen fighter's shot carries a place or a direction, if a hidden
-//! fighter's projectile is sent out of sight, or if any bit of the salt
-//! crosses the wire before the match is over.
+//! fighter's projectile is sent out of sight, if any bit of the salt
+//! crosses the wire before the match is over, or if a medal tells more
+//! than the kill feed did.
 
 use std::collections::VecDeque;
 
@@ -334,6 +335,8 @@ fn gate(map: Map, rules: Rules) {
     }
 
     let mut driver = Bot::new(5, me, 0.6);
+    let mut feed: Vec<(u8, u8)> = Vec::new();
+    let (mut medals, mut carnage) = (0, 0);
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
     for t in 0..TICK_HZ * 125 {
@@ -372,6 +375,9 @@ fn gate(map: Map, rules: Rules) {
                 continue;
             }
             check_seat(m, slot);
+            check_medal(m, slot, g.over, &mut feed);
+            medals += matches!(m, Msg::Medal { .. }) as u32;
+            carnage += matches!(m, Msg::Carnage { .. }) as u32;
             if let Msg::Phase { phase, .. } = m {
                 g.over |= *phase == Phase::Over as u8;
             }
@@ -405,6 +411,12 @@ fn gate(map: Map, rules: Rules) {
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
     }
+    assert!(medals > 0, "no medal to check");
+    assert_eq!(
+        carnage as usize,
+        g.room.world.fighters.iter().filter(|f| f.seated).count(),
+        "carnage rows"
+    );
 }
 
 /// Check 7: skins are public by design (docs/DESIGN.md §15) and say
@@ -414,6 +426,32 @@ fn check_seat(m: &Msg, me: u8) {
     if let Msg::Seat { slot, bot, skin, .. } = *m {
         let want = if slot == me && !bot { SKIN } else { proto::SKIN_STANDARD };
         assert_eq!(skin, want, "seat {slot}'s skin");
+    }
+}
+
+/// Check 8: a medal says no more than the kill feed. Someone else's
+/// medal is a public one, for a kill the feed already told this client;
+/// the carnage report comes once the match is over.
+fn check_medal(m: &Msg, me: u8, over: bool, feed: &mut Vec<(u8, u8)>) {
+    match *m {
+        Msg::Kill { killer, victim, .. } => feed.push((killer, victim)),
+        Msg::Medal { slot, medal, victim } => {
+            let info = proto::medal::info(medal);
+            assert!(
+                slot == me || info.public,
+                "seat {slot}'s {} was sent to {me}",
+                info.name
+            );
+            if info.public {
+                assert!(
+                    feed.contains(&(slot, victim)),
+                    "{} for {slot} on {victim}, a kill the feed never told",
+                    info.name
+                );
+            }
+        }
+        Msg::Carnage { slot, .. } => assert!(over, "seat {slot}'s carnage report before the end"),
+        _ => {}
     }
 }
 

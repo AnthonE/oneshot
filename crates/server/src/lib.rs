@@ -961,6 +961,14 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
             let st = &r.room.watch().stats[s];
             let flags = st.flags();
             flagged |= !flags.is_empty();
+            let t = r.room.medals().tally(s);
+            let medals: serde_json::Map<String, serde_json::Value> = t
+                .medals
+                .iter()
+                .enumerate()
+                .filter(|(_, &n)| n > 0)
+                .map(|(id, &n)| (proto::medal::slug(id as u8), n.into()))
+                .collect();
             Some(serde_json::json!({
                 "seat": s,
                 "name": name.as_str(),
@@ -975,6 +983,19 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
                 "snaps": st.snaps,
                 "preaim_ms": st.preaim_ms,
                 "flags": flags,
+                // The carnage report: what the players saw at the end.
+                "carnage": {
+                    "kills": t.kills,
+                    "deaths": t.deaths,
+                    "assists": t.assists,
+                    "betrayals": t.betrayals,
+                    "suicides": t.suicides,
+                    "damage": t.damage,
+                    "taken": t.taken,
+                    "best_spree": t.best_spree,
+                    "best_multi": t.best_multi,
+                    "medals": medals,
+                },
             }))
         })
         .collect();

@@ -5,6 +5,7 @@
 //! WebTransport; the netcode tests drive it directly.
 
 pub mod fog;
+pub mod medals;
 pub mod replay;
 pub mod watch;
 
@@ -273,6 +274,8 @@ pub struct Room {
     pub ranked: bool,
     /// The aim review's numbers, for every seat.
     watch: watch::Watch,
+    /// Medals and the carnage report, for every seat.
+    medals: medals::Medals,
     /// The skin each person wears, checked by the server against their
     /// wallet before they were seated. Cosmetic: never reaches the world.
     skins: [u8; MAX_FIGHTERS],
@@ -311,6 +314,7 @@ impl Room {
             fogs: Default::default(),
             ranked: false,
             watch: watch::Watch::default(),
+            medals: medals::Medals::default(),
             skins: [proto::SKIN_STANDARD; MAX_FIGHTERS],
         }
     }
@@ -325,6 +329,37 @@ impl Room {
         &self.watch
     }
 
+    /// Medals and the carnage report so far.
+    pub fn medals(&self) -> &medals::Medals {
+        &self.medals
+    }
+
+    /// Seat `s`'s carnage report as the stream gives it: the medals' tally
+    /// and the aim review's rounds.
+    pub fn carnage(&self, s: usize) -> Msg {
+        let t = self.medals.tally(s);
+        let c16 = |x: u32| x.min(u16::MAX as u32) as u16;
+        let mut medals = [0u8; proto::medal::COUNT];
+        for (m, &n) in medals.iter_mut().zip(&t.medals) {
+            *m = n.min(u8::MAX as u16) as u8;
+        }
+        Msg::Carnage {
+            slot: s as u8,
+            kills: t.kills,
+            deaths: t.deaths,
+            assists: t.assists,
+            betrayals: t.betrayals,
+            shots: c16(t.shots),
+            hits: c16(t.hits),
+            heads: c16(t.heads),
+            damage: c16(t.damage),
+            taken: c16(t.taken),
+            best_spree: t.best_spree,
+            best_multi: t.best_multi,
+            medals,
+        }
+    }
+
     /// The commitment to this match's salt.
     pub fn salt_commit(&self) -> [u8; 32] {
         proto::salt_commit([self.salt.0, self.salt.1])
@@ -333,6 +368,7 @@ impl Room {
     fn world_seat(&mut self, s: usize, team: u8) {
         self.rec.seat(s, team);
         self.world.seat(s, team);
+        self.medals.reset(s);
     }
 
     fn team_of(&self, s: usize) -> u8 {
@@ -473,6 +509,19 @@ impl Room {
                 ));
             }
         }
+        // After the feed's lines: a medal to its earner, or to everyone if
+        // it says no more than the feed.
+        for a in self.medals.observe(&self.world) {
+            let to = (!proto::medal::info(a.medal).public).then_some(a.slot);
+            out.push((
+                to,
+                Msg::Medal {
+                    slot: a.slot,
+                    medal: a.medal,
+                    victim: a.victim,
+                },
+            ));
+        }
         if self.world.phase != self.phase {
             self.phase = self.world.phase;
             out.push((
@@ -483,6 +532,13 @@ impl Room {
                 },
             ));
             if self.phase == Phase::Over {
+                // The carnage report: everyone's, now nothing in it can
+                // help anyone.
+                for q in 0..self.size {
+                    if self.world.fighters[q].seated {
+                        out.push((None, self.carnage(q)));
+                    }
+                }
                 // The match is decided: the salt can be checked now.
                 out.push((
                     None,

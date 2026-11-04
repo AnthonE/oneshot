@@ -621,6 +621,34 @@ impl Client {
                     set("done", done.into());
                 }
                 Msg::Bye => set("type", "bye".into()),
+                Msg::Medal { slot, medal, victim } => {
+                    set("type", "medal".into());
+                    set("slot", slot.into());
+                    set("medal", medal.into());
+                    set("name", proto::medal::info(medal).name.into());
+                    set("victim", victim.into());
+                }
+                Msg::Carnage {
+                    slot,
+                    kills,
+                    deaths,
+                    assists,
+                    shots,
+                    hits,
+                    damage,
+                    best_spree,
+                    ..
+                } => {
+                    set("type", "carnage".into());
+                    set("slot", slot.into());
+                    set("kills", kills.into());
+                    set("deaths", deaths.into());
+                    set("assists", assists.into());
+                    set("shots", shots.into());
+                    set("hits", hits.into());
+                    set("damage", damage.into());
+                    set("best_spree", best_spree.into());
+                }
                 _ => continue,
             }
             out.push(&o);
