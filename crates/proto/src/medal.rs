@@ -143,9 +143,12 @@ pub const NADE_SHOT: u8 = 40;
 pub const GAME_WINNER: u8 = 41;
 /// Won it with at least [`PERFECTION_KILLS`] kills and no death.
 pub const PERFECTION: u8 = 42;
+/// A No Scope after turning a full circle: the killer's yaw went round at
+/// least once, one way, in the last moment before it (`room::medals`).
+pub const NO_SCOPE_360: u8 = 43;
 
 /// Every id, `NONE` (0) first.
-pub const COUNT: usize = 43;
+pub const COUNT: usize = 44;
 pub const NONE: u8 = 0;
 /// A Perfection's kills: a duel's whole score.
 pub const PERFECTION_KILLS: u16 = 15;
@@ -198,6 +201,7 @@ pub static MEDALS: [Info; COUNT] = [
     m("Nade Shot", Style, false, false),
     m("Game Winner", Style, true, true),
     m("Perfection", Style, true, true),
+    m("360 No Scope", Style, false, false),
 ];
 
 /// Medal `id`'s entry; `NONE`'s for an id past the table.
@@ -256,6 +260,7 @@ mod tests {
         assert_eq!(spree_rung(7), Some(KILLING_SPREE));
         assert_eq!(spree_rung(99), Some(UNSTOPPABLE));
         assert_eq!(slug(FROM_THE_GRAVE), "kill_from_the_grave");
+        assert_eq!(slug(NO_SCOPE_360), "360_no_scope");
         for (i, m) in MEDALS.iter().enumerate().skip(1) {
             assert!(!m.name.is_empty(), "medal {i} has no name");
         }

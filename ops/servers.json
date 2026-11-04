@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "id": "eu-1",
+      "name": "oneshot",
+      "addr": "game.elopros.com:61250",
+      "max_players": 256,
+      "status_url": "https://game.elopros.com/oneshot/status.json",
+      "online_url": "https://game.elopros.com/oneshot/online.json"
+    }
+  ]
+}

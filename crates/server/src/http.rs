@@ -100,45 +100,14 @@ async fn handle(
         let body = format!("{{\"nonce\":\"{}\",\"game\":\"{}\"}}", ctx.nonces.issue(), ctx.slug);
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
-    // Elo Pros' presence (`meter/playtime.py`): who is here, signed in,
-    // and what they're doing; and the counts its server list reads. Only
-    // the live slot answers (the other's lobbies are on their way to it):
-    // a 503 sends nginx to the other.
     if path == "/online.json" || path == "/status.json" {
-        let live = match &ctx.live_file {
-            Some(f) => tokio::fs::read_to_string(f).await.ok().and_then(|s| live_addr(&s)),
-            None => None,
+        // Who plays, for Elo Pros (`online`): this slot and the others.
+        let slot = merged(ctx).await;
+        let body = if path == "/online.json" {
+            crate::online::online_json(&slot)
+        } else {
+            crate::online::status_json(&slot, ctx.gate.capacity, proto::PROTO_VER)
         };
-        let elsewhere = live
-            .as_deref()
-            .and_then(|l| l.rsplit_once(':'))
-            .and_then(|(_, p)| p.parse::<u16>().ok())
-            .is_some_and(|p| p != game.port());
-        if elsewhere || ctx.draining.load(std::sync::atomic::Ordering::Relaxed) {
-            return reply_cors(&mut sock, 503, "application/json", b"{}", cors).await;
-        }
-    }
-    if path == "/online.json" {
-        let now = crate::auth::now_unix();
-        let rows: Vec<serde_json::Value> = ctx
-            .lobby
-            .parties()
-            .online(std::time::Instant::now())
-            .into_iter()
-            .map(|(id, for_s, status)| serde_json::json!({"wallet": id, "since": now - for_s.min(now), "status": status}))
-            .collect();
-        let body = serde_json::json!({"at": now, "online": rows}).to_string();
-        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
-    }
-    if path == "/status.json" {
-        let lobbies = ctx.lobby.parties().lobbies();
-        let players = lobbies.max(ctx.gate.busy().saturating_sub(lobbies));
-        let body = serde_json::json!({
-            "players": players,
-            "max_players": ctx.gate.capacity,
-            "proto": proto::PROTO_VER,
-        })
-        .to_string();
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
     if path == "/health" {
@@ -180,6 +149,30 @@ async fn handle(
         Err(_) if path == "/origin.json" => reply(&mut sock, 200, "application/json", b"{}").await,
         Err(_) => reply(&mut sock, 404, "text/plain", b"not found").await,
     }
+}
+
+/// This slot's roster and every other slot's fresh file in the roster dir.
+async fn merged(ctx: &crate::Ctx) -> crate::online::Slot {
+    let own = ctx.roster.lock().map(|r| r.clone()).unwrap_or_default();
+    let mut others = Vec::new();
+    if let Some(dir) = &ctx.roster_dir {
+        if let Ok(mut d) = tokio::fs::read_dir(dir).await {
+            while let Ok(Some(e)) = d.next_entry().await {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name == ctx.roster_file || !name.starts_with("online-") || !name.ends_with(".json") {
+                    continue;
+                }
+                let doc = tokio::fs::read(e.path()).await.ok();
+                if let Some(s) = doc
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| crate::online::Slot::from_json(&v))
+                {
+                    others.push(s);
+                }
+            }
+        }
+    }
+    crate::online::merge(&own, &others, crate::auth::now_unix())
 }
 
 /// Where the page connects: the live slot's address (`live`, read from

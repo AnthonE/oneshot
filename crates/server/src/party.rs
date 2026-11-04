@@ -66,7 +66,6 @@ struct Lobbyist {
     who: Who,
     name: Name,
     party: u32,
-    since: Instant,
     /// Their friends' ids, as Elo Pros last told us.
     friends: BTreeSet<String>,
     invites: Vec<Instant>,
@@ -160,7 +159,6 @@ impl Parties {
                 who: who.clone(),
                 name,
                 party: 0,
-                since: now,
                 friends: friends.into_iter().collect(),
                 invites: Vec::new(),
             },
@@ -623,30 +621,6 @@ impl Parties {
             size: p.seats.len().max(1) as u8,
             private,
         })
-    }
-
-    /// Who is here, for Elo Pros' presence (`/online.json`): signed-in
-    /// players, since when, and what they're doing in a few words.
-    pub fn online(&self, now: Instant) -> Vec<(String, u64, String)> {
-        self.sessions
-            .values()
-            .filter(|l| l.who.signed())
-            .map(|l| {
-                let p = self.parties.get(&l.party);
-                let playing = p
-                    .and_then(|p| p.seats.iter().find(|s| s.id == l.who.id))
-                    .map_or(PLAYING_NONE, |s| s.playing);
-                let n = p.map_or(1, |p| p.seats.len());
-                let status = if playing != PLAYING_NONE {
-                    format!("Playing {}", proto::mode_name(playing))
-                } else if n > 1 {
-                    format!("In a party of {n}")
-                } else {
-                    "In the menu".to_string()
-                };
-                (l.who.id.clone(), now.duration_since(l.since).as_secs(), status)
-            })
-            .collect()
     }
 
     /// Who `session` is.

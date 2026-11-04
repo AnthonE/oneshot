@@ -368,6 +368,8 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         _ => proto::SKIN_STANDARD,
     };
 
+    // Who to count casual play for: the wallet, else the account itself.
+    let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
@@ -408,6 +410,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             mode,
             skin,
             party: seating,
+            player,
             tx,
         },
     };

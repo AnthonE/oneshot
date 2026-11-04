@@ -21,7 +21,8 @@ differences a ranked game needs:
 | The page | `https://elopros.com/games/oneshot/play/` | the platform's nginx, `alias /data/apps/scry-data/oneshot-web/current/` on `morr` (`ci/publish_web.sh`) |
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `server.pem`, `nonce.key`, `live` |
+| `online.json`, `status.json` | `https://game.elopros.com/oneshot/…` | either slot, for both: each writes its roster to `oneshot-data/online/` (`--roster-dir`) |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `server.pem`, `nonce.key`, `live`, `online/` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -74,6 +75,29 @@ stops and says so (`--cut` ends those matches).
    workstation `ci/publish_web.sh`.
 7. On Elo Pros: the listing's `play_url` and the nginx block for the page
    (scry-forge `deploy/nginx/elopros.com.conf`, both ports in its CSP).
+8. **Stats, achievements and boards.** `ops/elo-stats.json` is the set the
+   server reports against (`crates/server/src/stats.rs`); save it on the dev
+   desk for `oneshot` (the console's players pane, "load a set", then sign).
+   Until it's saved, Elo Pros answers each report 409 and the journal says
+   so; nothing else is affected.
+9. **Playtime.** Copy `ops/servers.json` to `$SCRY_DEPOTS_DIR/oneshot/servers.json`
+   on `morr`. Elo Pros then reads `online.json` once a minute: hours on
+   record, playing now and the status line, card drops, the free skin.
+
+## Elo Pros, from the game's side
+
+| What | How the server does it |
+|---|---|
+| Ratings | `POST /api/ratings/oneshot/report` at a ranked match's end, with evidence |
+| Stats, achievements, boards | `POST /api/gamestats/oneshot/report` at every match's end and when a signed-in player leaves one, ranked or casual. A player is their wallet, else their account's `acct_` id; guests are nobody. Achievements unlock on Elo Pros when their stat reaches its target |
+| Playing now, hours, rich presence | `online.json` lists each signed-in player with a line ("Ranked Duel on Bulkhead · 7–5") |
+| Skins | checked against the wallet's items at sign-in (`elo.rs`) |
+| Bans | the game's list on Elo Pros, read at ranked sign-in |
+
+A change to `stats.rs` is two steps: `oneshot-server --print-stats > ops/elo-stats.json`
+(a test fails until it matches), then save the new set on the desk before
+the server that reports it is deployed. An achievement someone holds is never
+renamed or removed; dropping it archives it on their profile.
 
 ## Day to day
 
@@ -91,7 +115,10 @@ stops and says so (`--cut` ends those matches).
   and stop the other (or deploy the previous commit).
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
-- **Logs:** `journalctl -u 'oneshot@*' -f`: reports sent, drains, reloads.
+- **Logs:** `journalctl -u 'oneshot@*' -f`: reports and stats sent, drains, reloads.
+- **The service file** changed (a new flag)? `sudo cp 'ops/oneshot@.service' /etc/systemd/system/ && sudo systemctl daemon-reload`
+  before the deploy; the nginx file is staged by the deploy, then
+  `sudo nginx -t && sudo systemctl reload nginx`.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo
