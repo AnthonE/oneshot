@@ -49,7 +49,10 @@ pub struct Look {
 struct Built(u32);
 
 /// Drawn things by their slot (a fighter with the side and skin its body
-/// was made in).
+/// was made in). Made once and kept: fog hiding someone hides their body or
+/// hull, it doesn't throw it away, so their coming back costs nothing (a
+/// skinned scene, its materials and shield shells, made mid-fight, was a
+/// hitch).
 #[derive(Resource, Default)]
 struct Drawn {
     fighters: BTreeMap<u8, (Entity, u8, u8)>,
@@ -58,6 +61,39 @@ struct Drawn {
 
 #[derive(Component)]
 pub struct Eye;
+
+/// What every hull is made of, made with the first.
+struct HullParts {
+    hull: Handle<StandardMaterial>,
+    dark: Handle<StandardMaterial>,
+    body: Handle<Mesh>,
+    screen: Handle<Mesh>,
+    wheel: Handle<Mesh>,
+}
+
+/// A fighter's body or a vehicle's hull, shown or hidden by `Drawn`.
+#[derive(Component)]
+struct Kept;
+
+/// The kept entities' visibility (never a shield shell's).
+type KeptVis<'w, 's> = Query<'w, 's, &'static mut Visibility, (With<Kept>, Without<look::shield::ShellPart>)>;
+
+/// What a body is made of, and the kept ones' visibility.
+type BodyParts<'w, 's> = (
+    ResMut<'w, Assets<Mesh>>,
+    ResMut<'w, Assets<StandardMaterial>>,
+    KeptVis<'w, 's>,
+);
+
+/// Shows or hides a kept entity, writing only on a change.
+fn show(vis: &mut KeptVis, e: Entity, on: bool) {
+    if let Ok(mut v) = vis.get_mut(e) {
+        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+}
 
 /// Test driving, inputs only (`?autoplay=1`, `--autoplay`): walk the map's
 /// roam route until fog shows an enemy, then close in, aim and fire. After
@@ -193,7 +229,17 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
         Startup,
-        (setup, look::textures::load, look::guns::load, look::fx::setup),
+        (
+            setup,
+            look::textures::load,
+            look::guns::load,
+            look::fx::setup,
+            look::prewarm::setup,
+        ),
+    )
+    .add_systems(
+        Update,
+        (look::prewarm::warm, look::prewarm::warm_models, look::prewarm::retire).chain(),
     )
     .add_systems(
         Update,
@@ -446,8 +492,7 @@ fn draw_fighters(
     st: Res<hud::HudState>,
     posed: Option<Res<pose::Pose>>,
     opts: Res<Opts>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    (mut meshes, mut mats, mut vis): BodyParts,
     graph: Option<Res<look::bodies::Graph>>,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
@@ -489,10 +534,12 @@ fn draw_fighters(
                 } else {
                     look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, skin)
                 };
+                commands.entity(e).insert(Kept);
                 drawn.fighters.insert(d.slot, (e, d.team, skin));
                 e
             }
         };
+        show(&mut vis, e, true);
         if opts.capsules {
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
@@ -518,13 +565,11 @@ fn draw_fighters(
             &mut shells,
         );
     }
-    drawn.fighters.retain(|slot, (e, ..)| {
-        let k = others.iter().any(|d| d.slot == *slot);
-        if !k {
-            commands.entity(*e).despawn();
+    for (slot, (e, ..)) in &drawn.fighters {
+        if !others.iter().any(|d| d.slot == *slot) {
+            show(&mut vis, *e, false);
         }
-        k
-    });
+    }
 }
 
 /// The vehicles: ours as predicted, the rest interpolated.
@@ -536,6 +581,8 @@ fn draw_vehicles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut at: Query<&mut Transform>,
+    mut vis: KeptVis,
+    mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
 ) {
@@ -550,6 +597,9 @@ fn draw_vehicles(
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
     for &(slot, p, yaw) in &list {
+        if let Some(&e) = drawn.vehicles.get(&slot) {
+            show(&mut vis, e, true);
+        }
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -560,33 +610,41 @@ fn draw_vehicles(
                 }
             }
             None => {
-                let hull = mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.36, 0.42, 0.29),
-                    perceptual_roughness: 0.6,
-                    metallic: 0.3,
-                    ..default()
+                // One set of meshes and materials for every hull.
+                let k = parts.get_or_insert_with(|| HullParts {
+                    hull: mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.36, 0.42, 0.29),
+                        perceptual_roughness: 0.6,
+                        metallic: 0.3,
+                        ..default()
+                    }),
+                    dark: mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.14, 0.15, 0.17),
+                        perceptual_roughness: 0.8,
+                        ..default()
+                    }),
+                    body: meshes.add(Cuboid::new(4.4, 0.7, 2.2)),
+                    screen: meshes.add(Cuboid::new(0.12, 0.9, 2.2)),
+                    wheel: meshes.add(Cylinder::new(0.42, 0.35)),
                 });
-                let dark = mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.14, 0.15, 0.17),
-                    perceptual_roughness: 0.8,
-                    ..default()
-                });
+                let (hull, dark) = (k.hull.clone(), k.dark.clone());
+                let (body, screen, wheel) = (k.body.clone(), k.screen.clone(), k.wheel.clone());
                 let e = commands
-                    .spawn((t, Visibility::default()))
+                    .spawn((t, Visibility::default(), Kept))
                     .with_children(|c| {
                         c.spawn((
-                            Mesh3d(meshes.add(Cuboid::new(4.4, 0.7, 2.2))),
+                            Mesh3d(body),
                             MeshMaterial3d(hull.clone()),
                             Transform::from_xyz(0.0, 0.75, 0.0),
                         ));
                         c.spawn((
-                            Mesh3d(meshes.add(Cuboid::new(0.12, 0.9, 2.2))),
+                            Mesh3d(screen),
                             MeshMaterial3d(dark.clone()),
                             Transform::from_xyz(-0.9, 1.55, 0.0),
                         ));
                         for (x, z) in [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)] {
                             c.spawn((
-                                Mesh3d(meshes.add(Cylinder::new(0.42, 0.35))),
+                                Mesh3d(wheel.clone()),
                                 MeshMaterial3d(dark.clone()),
                                 Transform::from_xyz(x, 0.42, z)
                                     .with_rotation(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
@@ -598,13 +656,11 @@ fn draw_vehicles(
             }
         }
     }
-    drawn.vehicles.retain(|slot, e| {
-        let k = list.iter().any(|v| v.0 == *slot);
-        if !k {
-            commands.entity(*e).despawn();
+    for (slot, e) in &drawn.vehicles {
+        if !list.iter().any(|v| v.0 == *slot) {
+            show(&mut vis, *e, false);
         }
-        k
-    });
+    }
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
@@ -786,7 +842,7 @@ fn fly(
     time: Res<Time>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
-    mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform)>,
+    mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
     let others = core.others(link.0.now_ms());

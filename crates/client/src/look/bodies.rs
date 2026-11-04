@@ -135,6 +135,13 @@ pub struct Body {
 }
 
 /// A body spawned for `team` in `skin`: its root, which the caller places.
+impl Body {
+    /// Its scene has spawned and been dressed: it draws.
+    pub fn dressed(&self) -> bool {
+        !self.mats.is_empty()
+    }
+}
+
 pub fn spawn(
     commands: &mut Commands,
     models: &Models,
@@ -253,6 +260,7 @@ fn dress(
     )>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
+    warm: Query<(), With<super::prewarm::WarmBody>>,
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -261,6 +269,13 @@ fn dress(
     };
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
+    };
+    // A body drawn only to warm shows its shell, so the shield's pipeline
+    // is built with it (`prewarm.rs`).
+    let shell_shown = if warm.contains(root) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
     };
     let tint = team_color(body.team).to_linear();
     let base = LinearRgba::rgb(
@@ -285,7 +300,7 @@ fn dress(
                     mesh.clone(),
                     MeshMaterial3d(shell.clone()),
                     *at,
-                    Visibility::Hidden,
+                    shell_shown,
                     ShellPart,
                     NotShadowCaster,
                     NoFrustumCulling,
