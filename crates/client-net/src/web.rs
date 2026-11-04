@@ -675,12 +675,7 @@ impl Client {
     #[wasm_bindgen(getter)]
     pub fn ended_why(&self) -> Option<String> {
         let (code, reason) = self.ended.borrow().clone()?;
-        Some(match (code, reason.as_str()) {
-            // The server's outlet: the stream lane filled.
-            (1, _) => "the game fell too far behind (a slow connection, or the tab was asleep)".into(),
-            (_, r) if !r.is_empty() => r.to_string(),
-            _ => "the connection was lost".into(),
-        })
+        Some(crate::session::close_why(code, &reason))
     }
 }
 
@@ -797,11 +792,14 @@ pub fn start() {
         let line = format!("oneshot: panic: {info}");
         web_sys::console::error_1(&JsValue::from_str(&line));
         // The page shows that the game stopped (it can't go on: a panic in
-        // wasm is a trap), rather than leave a frozen canvas.
+        // wasm is a trap), rather than leave a frozen canvas: told the
+        // panic's own words (what it says to the player is read from them,
+        // never from the file it was in) and the whole line (the report).
+        let said = info.payload_as_str().unwrap_or("");
         if let Some(w) = web_sys::window() {
             if let Ok(f) = js_sys::Reflect::get(&w, &JsValue::from_str("oneshotStopped")) {
                 if let Some(f) = f.dyn_ref::<js_sys::Function>() {
-                    let _ = f.call1(&JsValue::NULL, &JsValue::from_str(&line));
+                    let _ = f.call2(&JsValue::NULL, &JsValue::from_str(said), &JsValue::from_str(&line));
                 }
             }
         }

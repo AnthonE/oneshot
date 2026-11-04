@@ -67,6 +67,7 @@ fn run() -> Result<(), String> {
         fxdemo: args.iter().any(|a| a == "--fxdemo"),
         fxstage: None,
         open: oneshot_client::Screen::Playing,
+        panic: args.iter().any(|a| a == "--panic"),
     };
     oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
     Ok(())

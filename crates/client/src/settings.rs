@@ -106,13 +106,22 @@ impl Settings {
             Knob::Effects => self.effects += d * VOL_STEP,
             Knob::Vsync => self.vsync = !self.vsync,
             Knob::MaxFps => {
-                // Along the ladder, stopping at its ends; a cap off the
-                // ladder (hand-edited) moves from the nearest rung.
-                let at = FPS_LADDER
-                    .iter()
-                    .position(|&f| f == self.max_fps)
-                    .unwrap_or_else(|| FPS_LADDER.iter().position(|&f| f > self.max_fps).unwrap_or(0));
-                let to = (at as i32 + delta).clamp(0, FPS_LADDER.len() as i32 - 1) as usize;
+                // Along the ladder, stopping at its ends. A cap off the
+                // ladder (hand-edited) goes to the rung beside it that way:
+                // up to the next higher (or none), down to the next lower.
+                let last = FPS_LADDER.len() - 1;
+                let to = match FPS_LADDER.iter().position(|&f| f == self.max_fps) {
+                    Some(at) => (at as i32 + delta).clamp(0, last as i32) as usize,
+                    None => {
+                        let above = FPS_LADDER[..last].iter().position(|&f| f > self.max_fps);
+                        match (delta > 0, above) {
+                            (true, Some(i)) => i,
+                            (true, None) => last,
+                            (false, Some(i)) => i.saturating_sub(1),
+                            (false, None) => last - 1,
+                        }
+                    }
+                };
                 self.max_fps = FPS_LADDER[to];
             }
         }
@@ -472,6 +481,17 @@ mod tests {
         assert_eq!((back.max_fps, back.vsync), (30, false));
         let (odd, ..) = read(Some("max_fps = 7\n"));
         assert_eq!(odd.max_fps, 30, "under the ladder: its lowest");
+        // Off the ladder, a step goes to the rung beside it that way.
+        let off = |fps: u16, delta: i32| {
+            let mut s = Settings {
+                max_fps: fps,
+                ..Settings::default()
+            };
+            s.adjust(Knob::MaxFps, delta);
+            s.max_fps
+        };
+        assert_eq!((off(300, 1), off(300, -1)), (0, 240));
+        assert_eq!((off(100, 1), off(100, -1)), (120, 60));
     }
 
     #[test]

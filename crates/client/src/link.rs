@@ -121,6 +121,9 @@ impl Link for Native {
     fn leave(&mut self) {
         self.client.close();
     }
+    fn ended_why(&self) -> Option<String> {
+        self.client.ended_why()
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

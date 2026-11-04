@@ -78,6 +78,12 @@ impl Look {
     fn magnification(&self) -> f32 {
         self.mag.max(1.0)
     }
+
+    /// Through the scope, as drawn: once a gun of this zoom is halfway in.
+    /// The gun in view and the reticle go and come back together on it.
+    pub fn scoped(&self, zoom: u8) -> bool {
+        zoom > 1 && self.magnification() >= 1.0 + (zoom as f32 - 1.0) * 0.5
+    }
 }
 
 impl Look {
@@ -231,6 +237,9 @@ pub struct Opts {
     /// Start in the Esc menu (`menu`) or the settings (`settings`): for
     /// pictures of them (`ci/client_shot.mjs ... menu=1`).
     pub open: Screen,
+    /// `panic`: panic three seconds in, to see what a crash looks like (the
+    /// page's bar, the report).
+    pub panic: bool,
 }
 
 impl Opts {
@@ -253,7 +262,15 @@ impl Opts {
             } else {
                 Screen::Playing
             },
+            panic: has("panic"),
         }
+    }
+}
+
+/// `Opts::panic`: a crash on purpose.
+fn trip(time: Res<Time>) {
+    if time.elapsed_secs() > 3.0 {
+        panic!("a test panic (the panic option)");
     }
 }
 
@@ -274,7 +291,10 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             .set(AssetPlugin {
                 meta_check: bevy::asset::AssetMetaCheck::Never,
                 ..default()
-            }),
+            })
+            // Ours stays: in a browser it tells the page the game stopped
+            // (`client_net::web::start`); Bevy's would replace it.
+            .disable::<bevy::app::PanicHandlerPlugin>(),
     )
     .insert_non_send_resource(LinkRes(link))
     .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
@@ -351,6 +371,9 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
+    }
+    if opts.panic {
+        app.add_systems(Update, trip);
     }
     app
 }
@@ -537,13 +560,21 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
 /// stream said first, and the level built again for its map.
 fn adopt(mut link: NonSendMut<LinkRes>, mut built: ResMut<Built>, mut early: ResMut<Early>) {
     if let Some((next, said)) = link.0.take() {
-        let warmed = link.0.session().map_id;
+        let was = link.0.session();
+        let warmed = was.map_id;
+        // Built for the stand-in at all: a tab in the background may run
+        // its first frame only after the seat came.
+        let kept = built.0 != 0 && built.0 == was.welcomes;
         link.0 = next;
         early.0.extend(said);
         // The level warmed on is kept when it's the match's map (a Big
         // Team map's terrain and grass take seconds to build again).
         let s = link.0.session();
-        built.0 = if s.ready && s.map_id == warmed { s.welcomes } else { 0 };
+        built.0 = if kept && s.ready && s.map_id == warmed {
+            s.welcomes
+        } else {
+            0
+        };
     }
 }
 
@@ -809,7 +840,11 @@ fn view(
         // The run-up to the kill, from the killer's eye.
         let eye = Vec3::new(k.eye.x, k.eye.y, k.eye.z);
         *t = Transform::from_translation(eye).looking_at(eye + dir(k.yaw, k.pitch), Vec3::Y);
+        // Not our eye: no scope to ease out of (the mouse turns at full
+        // speed with the full view, `pump`).
+        look.mag = 1.0;
     } else if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
+        look.mag = 1.0;
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
@@ -842,8 +877,7 @@ fn draw_view(
     let (f, _) = link.0.session().core.own();
     let v = f.body.vel;
     // The gun goes once the scope is halfway up.
-    let zoom = sim::arms::arm(f.gun().arm).zoom as f32;
-    let scoped = zoom > 1.0 && look.magnification() >= 1.0 + (zoom - 1.0) * 0.5;
+    let scoped = look.scoped(sim::arms::arm(f.gun().arm).zoom);
     let own = look::viewmodel::Own {
         yaw: look.yaw,
         pitch: look.pitch,
@@ -1066,10 +1100,22 @@ mod web_start {
                 .and_then(|o| js_sys::Reflect::get(&o, &JsValue::from_str("warm")).ok())
                 .is_some_and(|v| v.is_truthy())
         };
+        // The app stopped (the page's bar says so): no seat for a dead game.
+        let dead = || {
+            web_sys::window()
+                .and_then(|w| js_sys::Reflect::get(&w, &JsValue::from_str("__oneshotDead")).ok())
+                .is_some_and(|v| v.is_truthy())
+        };
         let started = js_sys::Date::now();
         // At most half a minute: a machine that never gets there plays anyway.
         while !warm() && js_sys::Date::now() - started < WARM_MAX_MS {
+            if dead() {
+                return Ok(false);
+            }
             sleep(100).await;
+        }
+        if dead() {
+            return Ok(false);
         }
         say("connecting...");
         let mut c = connect(addr, hash).await?;
@@ -1105,6 +1151,10 @@ mod web_start {
                 break;
             }
             if c.closed() {
+                return Ok(false);
+            }
+            if dead() {
+                c.close();
                 return Ok(false);
             }
             sleep(100).await;

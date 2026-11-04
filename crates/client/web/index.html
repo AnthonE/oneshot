@@ -89,6 +89,8 @@
       // is on screen, with a way back, rather than leave a frozen canvas
       // (Gates' gatesPanic).
       const stopped = (line) => {
+        // play() reads this: a dead game takes no seat.
+        window.__oneshotDead = true;
         const bar = document.getElementById('stopped');
         if (!bar.hidden) return;
         document.getElementById('stopline').textContent = line;
@@ -96,12 +98,16 @@
         try { document.exitPointerLock(); } catch { /* not locked */ }
       };
       window.oneshotStopped = (msg) => stopped(
-        /webgl2|WebGL|GPU|adapter/i.test(String(msg))
+        /webgl2|unable to find a gpu|no suitable adapter|webgl context/i.test(String(msg))
           ? "This browser wouldn't give the game WebGL2. Turn on hardware acceleration (or try another browser), then reload."
           : 'The game stopped. Reload the page to play again.');
       // A trap with no panic behind it (out of memory, an unreachable).
       window.addEventListener('error', (e) => {
         if (e.error instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.error));
+      });
+      // The same from a promise (the renderer starts in one).
+      window.addEventListener('unhandledrejection', (e) => {
+        if (e.reason instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.reason));
       });
       if (!document.createElement('canvas').getContext('webgl2')) window.oneshotStopped('webgl2 unavailable');
       // Raw mouse: the game's lock (winit asks with no options) asks the
@@ -178,7 +184,15 @@
         for (const m of modes) m.hidden = true;
         dl.hidden = false;
         paint(0, false);
-        await init({ module_or_path: fetch('oneshot_client_bg.wasm', { priority: 'high' }).then(counted) });
+        try {
+          await init({ module_or_path: fetch('oneshot_client_bg.wasm', { priority: 'high' }).then(counted) });
+        } catch (e) {
+          // Offline, cut off mid-way, or not the game (a 404 page): say so.
+          console.error(e);
+          stopped("The game didn't download. Check the connection, then reload.");
+          dl.hidden = true;
+          await new Promise(() => {});
+        }
         dl.hidden = true;
         for (const m of modes) m.hidden = false;
       }
@@ -224,7 +238,7 @@
       cancel.hidden = false;
       cancel.onclick = () => location.reload();
       say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
+      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'panic'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
       let playing = false;
       try {
         // No hash with a CA's certificate: checked by the browser, never pinned.
@@ -235,6 +249,11 @@
       if (playing) {
         menu.style.display = 'none';
         if (!SKIP_MENU) $('game').focus();
+        // When the tab last went to the background and came back.
+        let hiddenAt = -1e9, shownAt = -1e9;
+        document.addEventListener('visibilitychange', () => {
+          if (document.hidden) hiddenAt = performance.now(); else shownAt = performance.now();
+        });
         // The match over (or the line dropped): back to the menu.
         const watch = () => {
           const s = window.__oneshot;
@@ -244,7 +263,15 @@
             return;
           }
           if (s && s.ended) {
-            say([s.bye ? 'Match over' : (s.reason ? `Disconnected: ${s.reason}` : 'Disconnected'), s.cup].filter(Boolean).join(' · '));
+            // A browser isn't told why the server closed (client_net's
+            // close_why); a tab in the background is the usual reason, and
+            // the page can see that itself.
+            const now = performance.now();
+            const asleep = document.hidden || (now - shownAt < 5000 && shownAt - hiddenAt > 2000);
+            const why = asleep && !s.bye
+              ? 'the tab was in the background, and the game can’t keep up from there'
+              : s.reason;
+            say([s.bye ? 'Match over' : (why ? `Disconnected: ${why}` : 'Disconnected'), s.cup].filter(Boolean).join(' · '));
             cancel.textContent = 'Back to menu';
             menu.style.display = 'flex';
             document.exitPointerLock();

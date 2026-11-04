@@ -590,7 +590,8 @@ pub fn draw(
             t.0 = v;
         }
     }
-    let scoped = look.zoom && arm.zoom > 1;
+    // With the gun in view (`draw_view`): halfway into the scope.
+    let scoped = look.scoped(arm.zoom);
     if let Ok(mut v) = reticle.single_mut() {
         *v = if scoped || !f.alive {
             Visibility::Hidden
