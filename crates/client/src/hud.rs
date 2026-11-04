@@ -405,9 +405,15 @@ pub fn draw(
     let core = &s.core;
     let (f, _) = core.own();
     let gone = if st.ended {
-        Some("Match over")
-    } else if link.0.closed() {
-        Some("Disconnected")
+        Some("Match over".to_string())
+    } else if link.0.closed() && !cfg!(target_arch = "wasm32") {
+        // And why, when the connection said. In a browser the page's menu
+        // comes back over the game and says it there.
+        Some(
+            link.0
+                .ended_why()
+                .map_or("Disconnected".into(), |why| format!("Disconnected: {why}")),
+        )
     } else {
         None
     };
@@ -502,7 +508,7 @@ pub fn draw(
             }
             c
         }
-        _ if gone.is_some() => gone.unwrap_or_default().to_string(),
+        _ if gone.is_some() => gone.clone().unwrap_or_default(),
         _ if !f.alive => {
             let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
             match &killcam {

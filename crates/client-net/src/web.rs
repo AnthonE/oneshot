@@ -184,6 +184,10 @@ pub struct Client {
     inbox: Queue<(f64, Vec<u8>)>,
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
+    /// Why the connection ended, once it has: the close's code and reason
+    /// (`transport.closed`), or code 0 and no reason for a line that just
+    /// went.
+    ended: Rc<RefCell<Option<(u32, String)>>>,
 }
 
 #[wasm_bindgen]
@@ -252,6 +256,26 @@ impl Client {
             });
         }
 
+        let ended: Rc<RefCell<Option<(u32, String)>>> = Rc::default();
+        {
+            let ended = ended.clone();
+            let done = JsFuture::from(transport.closed());
+            spawn_local(async move {
+                let why = match done.await {
+                    // A close with a code and a reason (the server's).
+                    Ok(info) => {
+                        let get = |k: &str| js_sys::Reflect::get(&info, &JsValue::from_str(k)).ok();
+                        let code = get("closeCode").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                        let reason = get("reason").and_then(|v| v.as_string()).unwrap_or_default();
+                        (code, reason)
+                    }
+                    // The line went.
+                    Err(_) => (0, String::new()),
+                };
+                *ended.borrow_mut() = Some(why);
+            });
+        }
+
         let datagrams = transport.datagrams();
         let inbox: Queue<(f64, Vec<u8>)> = Rc::default();
         {
@@ -294,6 +318,7 @@ impl Client {
             inbox,
             msgs,
             closed,
+            ended,
         })
     }
 
@@ -644,6 +669,19 @@ impl Client {
     pub fn close(&self) {
         self.transport.close();
     }
+
+    /// Why the connection ended, in words for the player; None while it
+    /// hasn't, or when it ended with nothing said.
+    #[wasm_bindgen(getter)]
+    pub fn ended_why(&self) -> Option<String> {
+        let (code, reason) = self.ended.borrow().clone()?;
+        Some(match (code, reason.as_str()) {
+            // The server's outlet: the stream lane filled.
+            (1, _) => "the game fell too far behind (a slow connection, or the tab was asleep)".into(),
+            (_, r) if !r.is_empty() => r.to_string(),
+            _ => "the connection was lost".into(),
+        })
+    }
 }
 
 fn push_drawn(v: &mut Vec<f32>, d: &crate::core::Drawn) {
@@ -756,6 +794,16 @@ pub fn arm_name(id: u8) -> String {
 #[wasm_bindgen(start)]
 pub fn start() {
     std::panic::set_hook(Box::new(|info| {
-        web_sys::console::error_1(&JsValue::from_str(&format!("oneshot: panic: {info}")));
+        let line = format!("oneshot: panic: {info}");
+        web_sys::console::error_1(&JsValue::from_str(&line));
+        // The page shows that the game stopped (it can't go on: a panic in
+        // wasm is a trap), rather than leave a frozen canvas.
+        if let Some(w) = web_sys::window() {
+            if let Ok(f) = js_sys::Reflect::get(&w, &JsValue::from_str("oneshotStopped")) {
+                if let Some(f) = f.dyn_ref::<js_sys::Function>() {
+                    let _ = f.call1(&JsValue::NULL, &JsValue::from_str(&line));
+                }
+            }
+        }
     }));
 }

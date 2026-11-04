@@ -19,6 +19,11 @@ pub trait Link {
     fn closed(&self) -> bool;
     /// We're leaving: close the connection (the server lets the seat go).
     fn leave(&mut self) {}
+    /// Why the connection ended, in words, once it has (the close's code
+    /// and reason); None if nothing was said.
+    fn ended_why(&self) -> Option<String> {
+        None
+    }
     /// Not connected yet: a stand-in while the page warms the game up
     /// (`Pending`).
     fn pending(&self) -> bool {
@@ -140,6 +145,9 @@ impl Link for Web {
     }
     fn leave(&mut self) {
         self.0.close();
+    }
+    fn ended_why(&self) -> Option<String> {
+        self.0.ended_why()
     }
 }
 

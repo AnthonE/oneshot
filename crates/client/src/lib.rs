@@ -958,6 +958,10 @@ fn expose(
     set("cup", st.cup.as_str().into());
     set("bye", st.ended.into());
     set("ended", (st.ended || link.0.closed()).into());
+    // Why it ended, if the connection said.
+    if let Some(why) = link.0.ended_why().filter(|_| link.0.closed()) {
+        set("reason", why.into());
+    }
     // The player left (the Esc menu): straight back to the menu.
     set("left", left.0.into());
     // Every pipeline built: the page may seat us (`warm.rs`).

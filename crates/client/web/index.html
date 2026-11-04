@@ -21,6 +21,7 @@
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
       #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
         gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
         font: 16px Aileron, system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
       #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; }
       #menu p { margin: 0; opacity: 0.75; }
@@ -33,6 +34,10 @@
       #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
       #status { min-height: 1.2em; opacity: 0.8; }
       .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
+      #stopped { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 20; max-width: min(640px, 92vw);
+        display: flex; gap: 14px; align-items: center; padding: 12px 16px; border-radius: 8px; background: #2a1414f2;
+        border: 1px solid #ff6a5a66; color: #f4e9e7; font: 15px Aileron, system-ui, sans-serif; }
+      #stopped button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #e8b931; color: #111; cursor: pointer; }
       #dl { width: min(360px, 90vw); font-size: 14px; opacity: 0.85; }
       #dl .bar { height: 6px; border-radius: 3px; background: #fff2; overflow: hidden; margin-bottom: 6px; }
       #dl .bar i { display: block; height: 100%; width: 0; background: #e8b931; transition: width 0.12s linear; }
@@ -40,6 +45,7 @@
   </head>
   <body>
     <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
+    <div id="stopped" hidden><span id="stopline"></span><button onclick="location.reload()">Reload</button></div>
     <div id="menu">
       <h1>ONESHOT</h1>
       <p>1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
@@ -78,6 +84,26 @@
       // and signs in; the game, the queue's wait and everything after are
       // the client's.
       import init, { play, pose, skin_names } from './oneshot_client.js';
+      // The game stopped (a panic, which in wasm is a trap; the client's
+      // hook calls this) or never could (no WebGL2): say so over whatever
+      // is on screen, with a way back, rather than leave a frozen canvas
+      // (Gates' gatesPanic).
+      const stopped = (line) => {
+        const bar = document.getElementById('stopped');
+        if (!bar.hidden) return;
+        document.getElementById('stopline').textContent = line;
+        bar.hidden = false;
+        try { document.exitPointerLock(); } catch { /* not locked */ }
+      };
+      window.oneshotStopped = (msg) => stopped(
+        /webgl2|WebGL|GPU|adapter/i.test(String(msg))
+          ? "This browser wouldn't give the game WebGL2. Turn on hardware acceleration (or try another browser), then reload."
+          : 'The game stopped. Reload the page to play again.');
+      // A trap with no panic behind it (out of memory, an unreachable).
+      window.addEventListener('error', (e) => {
+        if (e.error instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.error));
+      });
+      if (!document.createElement('canvas').getContext('webgl2')) window.oneshotStopped('webgl2 unavailable');
       // Raw mouse: the game's lock (winit asks with no options) asks the
       // browser for unadjusted movement, so the OS's acceleration doesn't
       // bend aim. Not on Linux, where Chrome refuses and a second request
@@ -218,7 +244,7 @@
             return;
           }
           if (s && s.ended) {
-            say([s.bye ? 'Match over' : 'Disconnected', s.cup].filter(Boolean).join(' · '));
+            say([s.bye ? 'Match over' : (s.reason ? `Disconnected: ${s.reason}` : 'Disconnected'), s.cup].filter(Boolean).join(' · '));
             cancel.textContent = 'Back to menu';
             menu.style.display = 'flex';
             document.exitPointerLock();
