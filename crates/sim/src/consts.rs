@@ -27,8 +27,14 @@ pub const MAX_MAP_BOXES: usize = 512;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
-// Movement: Quake's model (Fireplace's `PHYS`), restated per second.
-pub const RUN: f32 = 7.0;
+// Movement: Quake's model (Fireplace's `PHYS`), restated per second, at
+// Halo 2's speeds and jump. Its world unit is 10 ft (3.048 m), the scale
+// the guns are in: 2.25 wu/s ahead, 2.0 backing up and to the side (the
+// Editing Kit's player metrics); between, on the ellipse
+// (`movement::step`).
+pub const RUN: f32 = 6.86;
+pub const RUN_BACK: f32 = 6.10;
+pub const RUN_SIDE: f32 = 6.10;
 pub const CROUCH_RUN: f32 = 3.5;
 /// Below this speed friction acts as if moving at it, so a body stops.
 pub const STOP: f32 = 2.5;
@@ -37,9 +43,12 @@ pub const ACCEL: f32 = 10.0;
 pub const AIR_ACCEL: f32 = 10.0;
 /// Quake's air wish-speed cap: air strafing works, air running doesn't.
 pub const AIR_CAP: f32 = 1.0;
-pub const GRAVITY: f32 = 20.0;
-/// Take-off speed: an apex of v²/2g = 1.225 m.
-pub const JUMP_SPEED: f32 = 7.0;
+/// Halo 2's jump in proportion to our body (it jumps half again its own
+/// height and is 1.4 s in the air: Halo 3's measured, the same jump
+/// velocity): an apex of v²/2g = 2.76 m, 2v/g = 1.40 s up and down.
+/// Grenades fall at it whole (Halo's "100% gravity").
+pub const GRAVITY: f32 = 11.3;
+pub const JUMP_SPEED: f32 = 7.9;
 pub const VMAX: f32 = 60.0;
 
 // The body: a box for walking, a cylinder and a sphere for being shot.
@@ -48,6 +57,10 @@ pub const BODY_H: f32 = 1.8;
 pub const CROUCH_H: f32 = 1.3;
 pub const EYE: f32 = 1.6;
 pub const CROUCH_EYE: f32 = 1.1;
+/// Crouching in the air tucks the legs up this far (Halo's crouch jump:
+/// the head stays, the feet rise, a higher ledge is reached), and letting
+/// go puts them back down where there is room.
+pub const CROUCH_LIFT: f32 = BODY_H - CROUCH_H;
 /// A grounded body walks up onto anything this much higher than its feet.
 pub const STEP: f32 = 0.5;
 /// A grounded body walking off a ledge this low stays on the ground.
@@ -65,6 +78,10 @@ pub const HIT_TOP_CROUCH: f32 = 0.95;
 pub const HEAD_R: f32 = 0.22;
 pub const HEAD_Y: f32 = 1.62;
 pub const HEAD_Y_CROUCH: f32 = 1.12;
+/// Where a near miss is bent to (bullet magnetism, `World::magnet`): the
+/// chest, never the head.
+pub const CHEST_Y: f32 = 1.0;
+pub const CHEST_Y_CROUCH: f32 = 0.65;
 /// Pitch limit in 1/65536 turn: 89°.
 pub const PITCH_MAX: i16 = 16_202;
 
@@ -83,12 +100,30 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
-/// Spawn points drawn when picking where someone comes back.
-pub const SPAWN_DRAWS: usize = 4;
+/// Where someone comes back (`World::respawn`): of the spawns their side
+/// may use, the one whose nearest living enemy is farthest, counted only
+/// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see
+/// counts `SPAWN_SEEN_M` less, one with a living teammate within
+/// `SPAWN_MATE_R` counts `SPAWN_MATE_M` more (Halo's: back beside your
+/// side); and each draws up to `SPAWN_JITTER_M` more, so the same spawn
+/// isn't a certainty to be camped.
+pub const SPAWN_FAR_M: f32 = 30.0;
+pub const SPAWN_SEEN_M: f32 = 25.0;
+pub const SPAWN_MATE_R: f32 = 15.0;
+pub const SPAWN_MATE_M: f32 = 10.0;
+pub const SPAWN_JITTER_M: f32 = 3.0;
 
 pub const MELEE_DMG: i32 = 70;
 pub const MELEE_RANGE: f32 = 2.0;
 pub const MELEE_COOL_MS: u32 = 800;
+/// Halo 2's melee lunge: a melee with the aim (the body grown by
+/// `MELEE_LUNGE_PAD`) on someone past `MELEE_RANGE` but within
+/// `MELEE_LUNGE_RANGE` drives the body at them at `MELEE_LUNGE_SPEED`, for
+/// up to `MELEE_LUNGE_MS`, and lands the blow on reaching `STRIKE_R`.
+pub const MELEE_LUNGE_RANGE: f32 = 3.0;
+pub const MELEE_LUNGE_PAD: f32 = 0.4;
+pub const MELEE_LUNGE_SPEED: f32 = 12.0;
+pub const MELEE_LUNGE_MS: u32 = 250;
 /// A hit within this cosine of straight behind the victim kills.
 pub const BEHIND_COS: f32 = 0.5;
 
@@ -115,11 +150,19 @@ pub const NEEDLE_KEEP_MS: u32 = 1500;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
 
-pub const GREN_DMG: i32 = 150;
-pub const GREN_RADIUS: f32 = 5.0;
-pub const GREN_FULL: f32 = 1.0;
-pub const GREN_FUSE_MS: u32 = 1800;
-pub const GREN_SPEED: f32 = 16.0;
+/// A frag, as Halo 2's multiplayer throws it (Halopedia's H2 weapon data,
+/// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu;
+/// thrown at 10 wu/s; off `GREN_FUSE_MS` after it first comes down on a
+/// floor (not a wall), never sooner than `GREN_ARM_MS` from the throw, and
+/// at `GREN_LIFE_MS` if it never does.
+pub const GREN_DMG: i32 = 160;
+pub const GREN_RADIUS: f32 = 5.3;
+pub const GREN_FULL: f32 = 1.5;
+pub const GREN_EDGE: i32 = 50;
+pub const GREN_FUSE_MS: u32 = 500;
+pub const GREN_ARM_MS: u32 = 1300;
+pub const GREN_LIFE_MS: u32 = 5000;
+pub const GREN_SPEED: f32 = 30.5;
 pub const GREN_START: u8 = 2;
 /// Sticky grenades at a spawn (at most `GREN_MAX` too). Halo 2 gives
 /// plasma grenades from the map; ours has no grenade pickups yet.
@@ -134,6 +177,8 @@ pub const STICKY_ARM_MS: u32 = 1300;
 pub const STICKY_DMG: i32 = 200;
 pub const STICKY_RADIUS: f32 = 5.3;
 pub const STICKY_FULL: f32 = 1.5;
+/// What the sticky's blast still does at its rim (Halo 2's, as the frag's).
+pub const STICKY_EDGE: i32 = 50;
 /// Dual wielding: both hands reload together, this much slower.
 pub const DUAL_RELOAD_K: f32 = 1.5;
 pub const GREN_MAX: u8 = 4;
@@ -143,10 +188,26 @@ pub const GREN_BOUNCE: f32 = 0.45;
 pub const GREN_SLIDE: f32 = 0.7;
 /// Velocity a blast gives at full strength, away from its centre.
 pub const BLAST_PUSH: f32 = 9.0;
+/// A vehicle going up: its blast.
+pub const WRECK_DMG: i32 = 150;
+pub const WRECK_RADIUS: f32 = 5.0;
+pub const WRECK_FULL: f32 = 1.0;
 
 pub const COUNTDOWN_MS: u32 = 3000;
 /// Range of a pad: within this in x and z, and 1.5 m in height.
 pub const PAD_REACH: f32 = 1.0;
+
+// What the dead (and a swap) leave on the floor: the gun in hand, the left
+// hand's, and the grenades carried (`World::spill`).
+/// Drops on the floor at once; a new one past this takes the oldest's slot.
+pub const MAX_DROPS: usize = 24;
+/// How long a drop lies before it goes.
+pub const DROP_MS: u32 = 30_000;
+/// A drop is in reach as a pad is: within this in x and z, 1.5 m in height.
+pub const DROP_REACH: f32 = 1.0;
+/// The left gun and the grenades fall this far aside of the gun in hand,
+/// inside the body's own footprint (so never in a wall).
+pub const DROP_APART: f32 = 0.3;
 
 // Vehicles (sim/src/vehicle.rs): one kind so far, a light four-wheeler for
 // a driver and a passenger who shoots.

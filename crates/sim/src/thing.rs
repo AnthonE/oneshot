@@ -28,10 +28,12 @@ pub enum Kind {
     Projectile,
     Pad,
     Vehicle,
+    /// A gun (or grenades) on the floor where someone died or let it go.
+    Drop,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Fighter, Kind::Projectile, Kind::Pad, Kind::Vehicle];
+    pub const ALL: [Kind; 5] = [Kind::Fighter, Kind::Projectile, Kind::Pad, Kind::Vehicle, Kind::Drop];
 }
 
 /// Hashes every slot of `items`, in play or not, so a slot's history counts.

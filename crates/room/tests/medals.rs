@@ -91,6 +91,10 @@ fn hit(a: u8, b: u8, pts: u16, head: bool) -> Event {
 fn kill(a: u8, b: u8, cause: u16) -> Event {
     ev(Ev::Kill, a, b, 0, cause)
 }
+/// A kill whose blow was to the head, as the sim marks it.
+fn head_kill(a: u8, b: u8, cause: u16) -> Event {
+    ev(Ev::Kill, a, b, 2, cause)
+}
 fn spawn(a: u8) -> Event {
     ev(Ev::Spawn, a, 0, 0, 0)
 }
@@ -184,7 +188,7 @@ fn rifle_fight(s: &mut Script, bursts: &[u8]) -> Vec<Award> {
             got.extend(s.at(if r == 0 { 266 } else { gap }, &e));
         }
     }
-    got.extend(s.at(266, &[shot(0, BR), hit(0, 1, 10, true), kill(0, 1, GUN)]));
+    got.extend(s.at(266, &[shot(0, BR), hit(0, 1, 10, true), head_kill(0, 1, GUN)]));
     got
 }
 
@@ -227,13 +231,19 @@ fn a_kill_with_the_last_round() {
 #[test]
 fn a_sniper_unscoped() {
     let mut s = Script::new(Rules::duel());
-    let a = s.at(100, &[shot(0, SNIPER), hit(0, 1, 120, true), kill(0, 1, SNIPER as u16)]);
+    let a = s.at(
+        100,
+        &[shot(0, SNIPER), hit(0, 1, 120, true), head_kill(0, 1, SNIPER as u16)],
+    );
     for m in [md::HEADSHOT, md::SNIPER_KILL, md::NO_SCOPE] {
         assert!(has(&a, 0, m), "{:?}", names(&a));
     }
     s.at(3000, &[spawn(1)]);
     s.w.fighters[0].last_buttons |= sim::input::ZOOM;
-    let a = s.at(100, &[shot(0, SNIPER), hit(0, 1, 120, true), kill(0, 1, SNIPER as u16)]);
+    let a = s.at(
+        100,
+        &[shot(0, SNIPER), hit(0, 1, 120, true), head_kill(0, 1, SNIPER as u16)],
+    );
     assert!(has(&a, 0, md::SNIPER_KILL) && !has(&a, 0, md::NO_SCOPE));
 }
 

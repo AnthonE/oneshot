@@ -5,7 +5,7 @@ use room::fog::Fog;
 use room::watch::Watch;
 use sim::bot::Bot;
 use sim::consts::{HEAD_Y, MAX_FIGHTERS, TICK_HZ};
-use sim::input::{Input, FIRE};
+use sim::input::{Input, FIRE, USE};
 use sim::map::Map;
 use sim::world::{Phase, Rules, World};
 
@@ -40,6 +40,11 @@ fn play(rules: Rules, seed: u64, max_s: u32, aimbot: bool) -> Watch {
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         for (s, b) in bots.iter_mut().enumerate() {
             inputs[s] = b.think(&w, s);
+        }
+        // The aimbot keeps its rifle: what is measured is its aim, not
+        // what it picked up.
+        if aimbot {
+            inputs[0].buttons &= !USE;
         }
         let me = &w.fighters[0];
         let target = (1..n)

@@ -17,6 +17,7 @@ use sim::bot::Bot;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::events::Kind as Ev;
 use sim::fighter::Fighter;
+use sim::geom::V3;
 use sim::map::Map;
 use sim::world::{Phase, Rules};
 
@@ -62,6 +63,7 @@ struct Gate {
     hidden_seen: usize,
     proj_seen: usize,
     vehicles_seen: usize,
+    drops_seen: usize,
 }
 
 impl Gate {
@@ -100,6 +102,26 @@ impl Gate {
                 }
                 // Pad timers are public (room::build).
                 sim::thing::Kind::Pad => {}
+                // 10. A gun on the floor only if it is a true one, in clear
+                // line of this client's eye: never by who dropped it, so
+                // never where a hidden enemy fell.
+                sim::thing::Kind::Drop => {
+                    let eye = me.eye();
+                    for d in s.drops() {
+                        self.drops_seen += 1;
+                        let t = &w.drops[d.slot as usize];
+                        assert!(
+                            t.active && t.gun.arm == d.arm && (t.pos - d.pos).len() < 0.05,
+                            "tick {}: {d:?} is no true drop",
+                            w.tick
+                        );
+                        assert!(
+                            w.map.clear(eye, t.pos + V3::new(0.0, room::DROP_LOOK_Y, 0.0)),
+                            "tick {}: a drop out of sight was sent: {d:?}",
+                            w.tick
+                        );
+                    }
+                }
                 // 9. A vehicle only if it is ours, someone we know rides
                 // it, or it was in clear line in the last 16 ticks (from
                 // any look ahead up to 300 ms); a rider named only if
@@ -303,6 +325,7 @@ fn gate(map: Map, rules: Rules) {
         hidden_seen: 0,
         proj_seen: 0,
         vehicles_seen: 0,
+        drops_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -382,6 +405,9 @@ fn gate(map: Map, rules: Rules) {
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
     assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
+    if !g.room.world.rules.gun_game {
+        assert!(g.drops_seen > 100, "only {} drops sent to check", g.drops_seen);
+    }
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
     }

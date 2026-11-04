@@ -176,6 +176,18 @@ fn snapshot() -> Snapshot {
         health: 128,
         seats: [2, 0],
     };
+    // A rocket launcher on the floor, and someone's grenades.
+    s.n_drops = 2;
+    s.drops[0] = DropState {
+        slot: 3,
+        arm: 6,
+        pos: V3::new(4.0, 0.0, -7.5),
+    };
+    s.drops[1] = DropState {
+        slot: 23,
+        arm: 0,
+        pos: V3::new(-12.25, 2.5, 1.0),
+    };
     s.n_score = 2;
     s.score[0] = 3;
     s.score[1] = -1;
@@ -246,6 +258,7 @@ fn msgs() -> Vec<Msg> {
             killer: 0,
             victim: 1,
             cause: 102,
+            head: true,
         },
         Msg::Phase { phase: 2, winner: 0 },
         Msg::Cup {
@@ -319,6 +332,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own.ride, s.own.ride);
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
+    assert_eq!(d.drops(), s.drops());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -329,6 +343,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_events: 0,
         n_pads: MAX_SNAP_PADS as u8,
         n_vehicles: MAX_SNAP_VEHICLES as u8,
+        n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
         ..s
     };
@@ -384,17 +399,17 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0x7578_0987_9b7c_1ac2,
-        0x0569_f78f_ef6d_0143,
-        0x98c9_f7d7_fb0f_732e,
+        0xc72a_f16d_81bf_711b,
+        0x0a30_a039_0222_8f4d,
+        0xc5d8_fae9_ffff_69f4,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x00e0_af30_9763_7bd8,
+        0x63aa_1f79_9a8f_88d6,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,
-        0xb77f_6e56_3cf6_3da6,
+        0xc3c6_2389_966a_c2c5,
         0xc800_e818_6244_f8b3,
         0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,

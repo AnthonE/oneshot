@@ -14,7 +14,8 @@ pub enum Kind {
     /// `a` hurt `b` for `c` points; `part` 0 shields, 1 health, 2 head (to
     /// health), 3 head (the shields took it all).
     Hit,
-    /// `a` killed `b` with `c` (an arm id or a [`Cause`] past them).
+    /// `a` killed `b` with `c` (an arm id or a [`Cause`] past them);
+    /// `part` 2 if the blow was to the head.
     Kill,
     Spawn,
     /// `a` took arm `c` from a pad.

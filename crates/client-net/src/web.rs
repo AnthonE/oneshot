@@ -573,11 +573,17 @@ impl Client {
                     set("bot", bot.into());
                     set("name", name.as_str().into());
                 }
-                Msg::Kill { killer, victim, cause } => {
+                Msg::Kill {
+                    killer,
+                    victim,
+                    cause,
+                    head,
+                } => {
                     set("type", "kill".into());
                     set("killer", killer.into());
                     set("victim", victim.into());
                     set("cause", cause.into());
+                    set("head", head.into());
                 }
                 Msg::Phase { phase, winner } => {
                     set("type", "phase".into());

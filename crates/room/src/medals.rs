@@ -38,7 +38,7 @@ pub const AVENGE_MS: u32 = 4000;
 /// teammate's Distraction).
 pub const PROTECT_MS: u32 = 2000;
 /// A grenade kill from at least this far from the throw: Hail Mary.
-pub const HAIL_MARY_M: f32 = 25.0;
+pub const HAIL_MARY_M: f32 = 35.0;
 /// Extermination needs an enemy side this big.
 pub const EXTERMINATION_MIN: usize = 4;
 
@@ -306,13 +306,8 @@ impl Medals {
                     self.hit(a, b, gun, nade, e.part, e.c as u32, now, enemies(a, b));
                 }
                 Ev::Kill => {
-                    // The round that made it: the last hit before (a rider
-                    // gets out between), if it was this one's.
-                    let head = events[..i]
-                        .iter()
-                        .rev()
-                        .find(|h| h.kind == Ev::Hit)
-                        .is_some_and(|h| h.a == e.a && h.b == e.b && h.part == 2);
+                    // The blow was to the head (the sim marks it).
+                    let head = e.part == 2;
                     if enemies(a, b) && won(a) {
                         winning = Some((a, b));
                     }

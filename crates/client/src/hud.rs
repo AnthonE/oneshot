@@ -36,11 +36,22 @@ pub struct HudState {
     names: BTreeMap<u8, String>,
     /// Each seat's skin, as the server checked it.
     skins: BTreeMap<u8, u8>,
+    /// Each seat's side (`Msg::Seat`).
+    teams: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,
+    /// Kills and deaths by seat, as the feed told them (`tally.rs`): the
+    /// scoreboard's.
+    pub tally: crate::tally::Tally,
+    /// Where each seat last fired from, as we were told it (whole, or
+    /// heard and rounded): the hurt arc's way to a shooter fog hides.
+    shot_from: BTreeMap<u8, sim::geom::V3>,
     hit_at: f32,
     hit_kill: bool,
     hurt_at: f32,
+    arc_at: f32,
     hurt_angle: f32,
+    /// The scoreboard is held up.
+    pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
     /// stats).
     pub kills: u32,
@@ -109,8 +120,19 @@ pub struct FeedText;
 pub struct CenterText;
 #[derive(Component)]
 pub struct NetText;
+/// The scoreboard's panel, and its columns: names, kills, deaths, score.
+#[derive(Component)]
+pub struct Board;
+#[derive(Component)]
+pub struct BoardColumn(pub u8);
+/// What USE would take here (`items::offer`).
+#[derive(Component)]
+pub struct PromptText;
 #[derive(Component)]
 pub struct Reticle;
+/// One of the crosshair's four ticks: white, red on an enemy in reach.
+#[derive(Component)]
+pub struct ReticleStroke;
 #[derive(Component)]
 pub struct HitMark;
 #[derive(Component)]
@@ -214,6 +236,50 @@ pub fn setup(mut commands: Commands) {
         },
         children![(CenterText, text(crate::ui::display(32.0)))],
     ));
+    // The scoreboard: a panel in the middle, four columns.
+    commands
+        .spawn((
+            Board,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                top: Val::Percent(37.0),
+                width: Val::Px(520.0),
+                margin: UiRect::left(Val::Px(-260.0)),
+                padding: UiRect::all(Val::Px(16.0)),
+                column_gap: Val::Px(24.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.78)),
+            Visibility::Hidden,
+        ))
+        .with_children(|c| {
+            for (i, grow) in [(0u8, 1.0), (1, 0.0), (2, 0.0), (3, 0.0)] {
+                c.spawn((
+                    Node {
+                        flex_grow: grow,
+                        min_width: Val::Px(56.0),
+                        ..default()
+                    },
+                    children![(
+                        BoardColumn(i),
+                        text(crate::ui::semibold(18.0)),
+                        TextLayout::new_with_justify(if i == 0 { Justify::Left } else { Justify::Right }),
+                    )],
+                ));
+            }
+        });
+    // Under the crosshair: what USE would take.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(60.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(PromptText, text(crate::ui::semibold(20.0)))],
+    ));
     // The crosshair, the hit marker and the damage arc, all centred on the
     // screen's middle.
     let centred = |w: f32, h: f32| Node {
@@ -238,6 +304,7 @@ pub fn setup(mut commands: Commands) {
             (10.0, 15.0, 2.0, 7.0),
         ] {
             c.spawn((
+                ReticleStroke,
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(l),
@@ -407,18 +474,24 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         st.medals_gen = st.medals_gen.wrapping_add(1);
     }
     for e in events {
+        if e.kind == Kind::Shot as u8 || e.kind == Kind::Throw as u8 {
+            st.shot_from.insert(e.a, e.pos);
+        }
         if e.kind == Kind::Hit as u8 {
             if e.a == me && e.b != me {
                 st.hit_at = now;
                 st.hit_kill = false;
             }
             if e.b == me && e.a != me {
-                // Where it came from, relative to where we look: from the
-                // shot's start, which is the shooter's eye.
+                // Where it came from, relative to where we look: where the
+                // shooter is drawn, else where we last heard them fire (a
+                // hit's own place is ours). Neither: the rim alone.
                 let (_, p) = s.core.own();
                 let from = s.core.others(now_ms).into_iter().find(|d| d.slot == e.a).map(|d| d.pos);
-                let from = from.unwrap_or(e.pos);
-                st.hurt_angle = (from.z - p.z).atan2(from.x - p.x) - yaw;
+                if let Some(from) = from.or_else(|| st.shot_from.get(&e.a).copied()) {
+                    st.hurt_angle = (from.z - p.z).atan2(from.x - p.x) - yaw;
+                    st.arc_at = now;
+                }
                 st.hurt_at = now;
             }
         } else if e.kind == Kind::Kill as u8 && e.a == me && e.b != me {
@@ -434,17 +507,30 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
             st.status = line;
         }
         match m {
-            Msg::Seat { slot, name, skin, .. } => {
+            Msg::Seat {
+                slot, name, skin, team, ..
+            } => {
                 st.names.insert(*slot, name.as_str().to_string());
                 st.skins.insert(*slot, *skin);
+                st.teams.insert(*slot, *team);
             }
-            Msg::Kill { killer, victim, .. } => {
+            Msg::Kill {
+                killer,
+                victim,
+                cause,
+                head,
+            } => {
+                let how = crate::tally::how(*cause);
+                let how = if *head { format!("{how}, HEAD") } else { how.to_string() };
                 let line = if killer == victim {
-                    format!("{} died", st.name(*victim))
+                    format!("{} died  [{how}]", st.name(*victim))
                 } else {
-                    format!("{} > {}", st.name(*killer), st.name(*victim))
+                    format!("{}  [{how}]  {}", st.name(*killer), st.name(*victim))
                 };
                 st.feed.push((line, now));
+                let side = |q: &u8| st.teams.get(q).map(|t| t & 1);
+                let foe = !s.core.rules.teams || side(killer) != side(victim);
+                st.tally.kill(*killer, *victim, foe);
                 if *killer == me && *victim != me {
                     st.kills += 1;
                 }
@@ -709,7 +795,7 @@ pub fn draw(
         bg.0 = c;
     }
     if let Ok((mut n, mut tr, mut bg)) = arc.single_mut() {
-        let u = (now - st.hurt_at) / DAMAGE_S;
+        let u = (now - st.arc_at) / DAMAGE_S;
         let a = st.hurt_angle;
         n.margin = UiRect {
             left: Val::Px(DAMAGE_R * a.sin() - 28.0),
@@ -719,6 +805,155 @@ pub fn draw(
         tr.rotation = Rot2::radians(a);
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+    }
+}
+
+/// Whether our aim is on an enemy the gun in hand reaches, as drawn: the
+/// red reticle. From our eye along our aim, against the others' bodies
+/// where they are drawn, the map in between; a gun's reach is its
+/// `aim_range`, its magnetism widening the bodies with distance (as
+/// `World::magnet` bends a near miss); the sword's, its lunge's.
+pub fn on_target(core: &client_net::core::NetCore, now_ms: f64) -> bool {
+    use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH, LUNGE_PAD, LUNGE_RANGE};
+    let f = core.own().0;
+    if !f.alive || f.riding().is_some() {
+        return false;
+    }
+    let a = sim::arms::arm(f.gun().arm);
+    let sword = a.kind == sim::arms::Kind::Sword;
+    let reach = if sword { LUNGE_RANGE } else { a.aim_range };
+    let eye = f.eye();
+    let dir = sim::geom::aim_dir(f.yaw, f.pitch);
+    let wall = core.map.ray(eye, dir, reach);
+    let mate = core.rules.teams.then_some(core.team & 1);
+    core.others(now_ms)
+        .iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate)
+        .any(|d| {
+            let pad = if sword {
+                LUNGE_PAD
+            } else {
+                (d.pos - eye).len() * a.magnet
+            };
+            let (hy, top) = if d.crouched {
+                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+            } else {
+                (HEAD_Y, HIT_TOP)
+            };
+            sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).is_some()
+                || sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall)
+                    .is_some()
+        })
+}
+
+/// The crosshair red while it is on an enemy in reach ([`on_target`]).
+pub fn reticle_tint(link: NonSend<crate::LinkRes>, mut q: Query<&mut BackgroundColor, With<ReticleStroke>>) {
+    let s = link.0.session();
+    let red = s.ready && on_target(&s.core, link.0.now_ms());
+    let c = if red {
+        Color::srgba(1.0, 0.18, 0.12, 0.95)
+    } else {
+        Color::srgba(1.0, 1.0, 1.0, 0.85)
+    };
+    for mut bg in q.iter_mut() {
+        if bg.0 != c {
+            bg.0 = c;
+        }
+    }
+}
+
+/// The scoreboard: held up (its key), and once the match is over until the
+/// carnage report comes.
+/// Every seat by side (teams first, each side's score) then by score:
+/// name, kills, deaths, score.
+#[allow(clippy::type_complexity)]
+pub fn board(
+    link: NonSend<crate::LinkRes>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    binds: Res<crate::binds::Binds>,
+    mut st: ResMut<HudState>,
+    mut panel: Query<&mut Visibility, With<Board>>,
+    mut cols: Query<(&mut Text, &BoardColumn)>,
+) {
+    let s = link.0.session();
+    let over = s.ready && s.core.latest().phase == 2;
+    st.board = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
+    // Once the match is over the carnage report (`medals.rs`) is the
+    // board, as soon as its rows come.
+    let up = s.ready && (st.board || (over && st.carnage.is_empty()));
+    if let Ok(mut v) = panel.single_mut() {
+        let want = if up { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
+    if !up {
+        return;
+    }
+    let core = &s.core;
+    let snap = core.latest();
+    let score = |i: usize| snap.score.get(i).copied().unwrap_or(0);
+    let mut rows: Vec<[String; 4]> = Vec::new();
+    let mut seats: Vec<u8> = st.names.keys().copied().collect();
+    let side = |q: u8| st.teams.get(&q).copied().unwrap_or(0) & 1;
+    let kd = |q: u8| st.tally.kd.get(&q).copied().unwrap_or((0, 0));
+    if core.rules.teams {
+        for t in [core.team & 1, 1 - (core.team & 1)] {
+            let name = if t == 0 { "RED" } else { "BLUE" };
+            rows.push([name.into(), String::new(), String::new(), score(t as usize).to_string()]);
+            let mut mine: Vec<u8> = seats.iter().copied().filter(|&q| side(q) == t).collect();
+            mine.sort_by_key(|&q| (std::cmp::Reverse(kd(q).0), kd(q).1, q));
+            for q in mine {
+                let (k, d) = kd(q);
+                rows.push([format!("  {}", st.name(q)), k.to_string(), d.to_string(), String::new()]);
+            }
+        }
+    } else {
+        seats.sort_by_key(|&q| (std::cmp::Reverse(score(q as usize)), q));
+        for q in seats {
+            let (k, d) = kd(q);
+            let me = if q == core.slot { " <" } else { "" };
+            rows.push([
+                format!("{}{me}", st.name(q)),
+                k.to_string(),
+                d.to_string(),
+                score(q as usize).to_string(),
+            ]);
+        }
+    }
+    let heads = ["", "K", "D", "SCORE"];
+    for (mut t, c) in cols.iter_mut() {
+        let i = c.0 as usize;
+        let mut v = format!("{}\n", heads[i]);
+        for r in &rows {
+            v.push_str(&r[i]);
+            v.push('\n');
+        }
+        if t.0 != v {
+            t.0 = v;
+        }
+    }
+}
+
+/// The prompt under the crosshair: the USE key and what it would take.
+pub fn prompt(
+    link: NonSend<crate::LinkRes>,
+    binds: Res<crate::binds::Binds>,
+    mut q: Query<&mut Text, With<PromptText>>,
+) {
+    let s = link.0.session();
+    let line = if s.ready {
+        crate::items::offer(&s.core, link.0.now_ms())
+            .map(|what| format!("{}  {what}", binds.key(crate::binds::Action::Use)))
+    } else {
+        None
+    }
+    .unwrap_or_default();
+    for mut t in q.iter_mut() {
+        if t.0 != line {
+            t.0 = line.clone();
+        }
     }
 }
 
