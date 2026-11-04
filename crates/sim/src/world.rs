@@ -136,9 +136,10 @@ pub enum ProjKind {
 /// A projectile homing on nobody.
 pub const NO_TARGET: u8 = 255;
 
-/// A sticky's fuse once it sticks or lands at `age` ticks.
-fn sticky_fuse(age: u16) -> u16 {
-    ticks(STICKY_FUSE_MS).max(ticks(STICKY_ARM_MS).saturating_sub(age as u32)) as u16
+/// A grenade's fuse lit at `age` ticks from the throw: `after_ms` from now,
+/// but never sooner than `arm_ms` from the throw (Halo 2's).
+fn fuse(age: u16, after_ms: u32, arm_ms: u32) -> u16 {
+    ticks(after_ms).max(ticks(arm_ms).saturating_sub(age as u32)) as u16
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -816,11 +817,12 @@ impl World {
         let f = self.fighters[s];
         let dir = aim_dir(f.yaw, f.pitch);
         let vel = dir * GREN_SPEED + V3::new(0.0, 2.0, 0.0);
-        // A sticky's fuse is lit when it sticks or lands; till then, long.
+        // A grenade's fuse is lit when it sticks or comes down; till then,
+        // long.
         let (kind, ttl) = if sticky {
             (ProjKind::Sticky, ticks(10_000))
         } else {
-            (ProjKind::Frag, ticks(GREN_FUSE_MS))
+            (ProjKind::Frag, ticks(GREN_LIFE_MS))
         };
         self.launch(
             Projectile {
@@ -886,13 +888,13 @@ impl World {
                     p.vel = at - base;
                     if !p.landed {
                         p.landed = true;
-                        p.ttl = sticky_fuse(p.age);
+                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
                     }
                 }
                 None => {
-                    if self.bounce(p, GRAVITY) && !p.landed {
+                    if self.bounce(p, GRAVITY).0 && !p.landed {
                         p.landed = true;
-                        p.ttl = sticky_fuse(p.age);
+                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
                     }
                 }
             }
@@ -923,6 +925,7 @@ impl World {
             STICKY_DMG,
             STICKY_RADIUS,
             STICKY_FULL,
+            STICKY_EDGE,
             1.0,
             Cause::Sticky as u16,
         );
@@ -1043,7 +1046,7 @@ impl World {
         let cause = p.arm as u16;
         match (p.kind, who) {
             (ProjKind::Rocket | ProjKind::Cannon | ProjKind::Lob, _) => {
-                self.blast(at, owner, a.dmg, a.radius, a.full, 0.5, cause);
+                self.blast(at, owner, a.dmg, a.radius, a.full, 0, 0.5, cause);
             }
             (ProjKind::Bolt, Some(Target::Fighter(q, _))) => {
                 self.damage_k(owner, q, a.dmg * PT, false, Head::None, cause, a.shield_k);
@@ -1108,13 +1111,18 @@ impl World {
 
     /// A frag's or a lob's tick under gravity off the map's floors and
     /// walls: where it goes, and whether it touched anything.
-    fn bounce(&self, p: &mut Projectile, g: f32) -> bool {
+    /// One tick of a thrown thing under `g`, off what it meets: whether it
+    /// touched anything, and whether that was a floor (the map's, a box's
+    /// top, a solid's), not a wall.
+    fn bounce(&self, p: &mut Projectile, g: f32) -> (bool, bool) {
         let mut touched = false;
+        let mut ground = false;
         p.vel.y -= g * DT;
         let mut n = p.pos + p.vel * DT;
         let floor = self.map.floor(n.x, n.z, 0.0, p.pos.y + 0.001);
         if n.y < floor {
             touched = true;
+            ground = true;
             n.y = floor;
             if self.map.terrain.is_some() && floor == self.map.ground(n.x, n.z) {
                 // Off a slope: the part into the ground bounces back, the
@@ -1159,6 +1167,7 @@ impl World {
             touched = true;
             if p.pos.y >= s.top_at(p.pos.x, p.pos.z) - 0.05 {
                 // Onto its top (a slope moves up under a projectile).
+                ground = true;
                 n.y = top + 0.01;
                 p.vel.y = -p.vel.y * GREN_BOUNCE;
             } else if p.pos.y <= s.y0 {
@@ -1176,7 +1185,7 @@ impl World {
             }
         }
         p.pos = n;
-        touched
+        (touched, ground)
     }
 
     fn projectiles(&mut self) {
@@ -1189,7 +1198,11 @@ impl World {
             p.ttl = p.ttl.saturating_sub(1);
             match p.kind {
                 ProjKind::Frag => {
-                    self.bounce(&mut p, GRAVITY);
+                    // Its fuse lit on first coming down on a floor.
+                    if self.bounce(&mut p, GRAVITY).1 && !p.landed {
+                        p.landed = true;
+                        p.ttl = p.ttl.min(fuse(p.age, GREN_FUSE_MS, GREN_ARM_MS));
+                    }
                     if p.ttl == 0 {
                         self.proj[i].active = false;
                         self.blast(
@@ -1198,6 +1211,7 @@ impl World {
                             GREN_DMG,
                             GREN_RADIUS,
                             GREN_FULL,
+                            GREN_EDGE,
                             1.0,
                             Cause::Grenade as u16,
                         );
@@ -1220,7 +1234,7 @@ impl World {
                             continue;
                         }
                     }
-                    if self.bounce(&mut p, GRAVITY * a.gravity) && !p.landed {
+                    if self.bounce(&mut p, GRAVITY * a.gravity).0 && !p.landed {
                         p.landed = true;
                         p.ttl = p.ttl.min(ticks(a.fuse_ms) as u16);
                     }
@@ -1257,8 +1271,19 @@ impl World {
         }
     }
 
+    /// A blast of `dmg` at `at`: whole to `full`, then down to `edge` at
+    /// `radius` (0 for most; Halo 2's grenades still do 50 there), nothing
+    /// past it or through the map.
     #[allow(clippy::too_many_arguments)]
-    fn blast(&mut self, at: V3, owner: usize, dmg: i32, radius: f32, full: f32, self_k: f32, cause: u16) {
+    fn blast(&mut self, at: V3, owner: usize, dmg: i32, radius: f32, full: f32, edge: i32, self_k: f32, cause: u16) {
+        let rim = edge as f32 / dmg.max(1) as f32;
+        let falloff = |dist: f32| {
+            if dist <= full {
+                1.0
+            } else {
+                1.0 - (dist - full) / (radius - full) * (1.0 - rim)
+            }
+        };
         self.events.push(Event {
             kind: Ev::Blast,
             a: owner as u8,
@@ -1278,11 +1303,7 @@ impl World {
             if dist >= radius || !self.map.clear(at, chest) {
                 continue;
             }
-            let k = if dist <= full {
-                1.0
-            } else {
-                (radius - dist) / (radius - full)
-            };
+            let k = falloff(dist);
             let mut pts = (dmg * PT) as f32 * k;
             if q == owner {
                 pts *= self_k;
@@ -1310,11 +1331,7 @@ impl World {
             if dist >= radius || !self.map.clear(at, mid) {
                 continue;
             }
-            let k = if dist <= full {
-                1.0
-            } else {
-                (radius - dist) / (radius - full)
-            };
+            let k = falloff(dist);
             let away = if dist > 0.0 {
                 d * (1.0 / dist)
             } else {
@@ -1383,9 +1400,10 @@ impl World {
         self.blast(
             v.pos + V3::new(0.0, 0.8, 0.0),
             att,
-            GREN_DMG,
-            GREN_RADIUS,
-            GREN_FULL,
+            WRECK_DMG,
+            WRECK_RADIUS,
+            WRECK_FULL,
+            0,
             1.0,
             Cause::Wreck as u16,
         );

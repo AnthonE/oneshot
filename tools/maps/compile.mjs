@@ -86,7 +86,7 @@ const MAX_LAUNCHERS = 8;
 /** sim::consts::MAX_VEHICLES. */
 const MAX_VEHICLES = 8;
 /** sim::consts::GRAVITY, for a launcher's throw. */
-const GRAVITY = 20;
+const GRAVITY = 11.3;
 /** sim::terrain::HEIGHT_Q. */
 const HEIGHT_Q = 128;
 

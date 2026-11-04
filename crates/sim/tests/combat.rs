@@ -248,23 +248,76 @@ fn a_rocket_kills_two_and_a_rocket_jump_costs_half() {
     assert!(up > JUMP_SPEED, "the blast lifts more than a jump: {up}");
 }
 
-#[test]
-fn a_frag_goes_off_on_its_fuse() {
+/// Seat 0 throws a frag at `pitch` (from the open map's origin, facing
+/// +x): the tick it first came down, and the tick it went off.
+fn frag_at(pitch: i16) -> (Option<u32>, Option<u32>) {
     let mut w = duel([AR, MAGNUM], 8.0);
+    w.fighters[1].body.pos = V3::new(0.0, 0.0, 60.0);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
-    inputs[0].buttons = GRENADE;
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch,
+        ..Input::default()
+    };
     w.step(&inputs, &NO_LAG);
     assert_eq!(w.fighters[0].grenades, GREN_START - 1);
     inputs[0].buttons = 0;
-    let mut at = None;
-    for t in 1..TICK_HZ * 3 {
+    let (mut down, mut off) = (None, None);
+    for t in 1..TICK_HZ * 6 {
         w.step(&inputs, &NO_LAG);
+        if down.is_none() && w.proj.live().any(|(_, p)| p.landed) {
+            down = Some(t);
+        }
         if w.events.as_slice().iter().any(|e| e.kind == Ev::Blast) {
-            at = Some(t);
+            off = Some(t);
             break;
         }
     }
-    assert_eq!(at, Some(ticks(GREN_FUSE_MS) - 1));
+    (down, off)
+}
+
+#[test]
+fn a_frag_goes_off_half_a_second_after_it_comes_down_never_before_its_arming() {
+    // Thrown at the feet: down at once, so off at the arming time.
+    let (_, off) = frag_at(-PITCH_MAX);
+    let arm = ticks(GREN_ARM_MS);
+    assert!(off.is_some_and(|t| t.abs_diff(arm) <= 2), "{off:?} vs {arm}");
+    // Lofted: down after the arming time, so off half a second after.
+    let (down, off) = frag_at(1820);
+    let down = down.expect("it came down");
+    assert!(down > arm, "down at {down}");
+    assert!(
+        off.is_some_and(|t| t.abs_diff(down + ticks(GREN_FUSE_MS)) <= 1),
+        "down {down}, off {off:?}"
+    );
+}
+
+#[test]
+fn a_frag_still_hurts_at_its_rim() {
+    // 5 m off a frag at the feet: near the rim, where Halo 2's still does
+    // most of `GREN_EDGE` (a blast falling to nothing would barely scratch).
+    let mut w = duel([AR, MAGNUM], 5.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch: -PITCH_MAX,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    inputs[0].buttons = 0;
+    // Set down at the thrower's feet (one thrown down at 30 m/s bounces
+    // high).
+    for i in 0..MAX_PROJ {
+        if w.proj[i].active {
+            w.proj[i].pos = V3::new(0.0, 0.0, 0.0);
+            w.proj[i].vel = V3::ZERO;
+        }
+    }
+    for _ in 0..TICK_HZ * 2 {
+        w.step(&inputs, &NO_LAG);
+    }
+    let took = (SHIELD_MAX - w.fighters[1].shield) / PT;
+    assert!((GREN_EDGE..GREN_DMG / 2).contains(&took), "took {took}");
 }
 
 #[test]
@@ -665,7 +718,8 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
             (mine.guns, mine.refire, mine.reload, mine.shots),
             "tick {t}"
         );
-        launched |= s.body.vel.y > 10.0;
+        // Thrown faster than anyone runs (a jump only goes up).
+        launched |= s.body.vel.flat().len() > 2.0 * RUN;
         climbed = climbed.max(s.body.pos.y);
     }
     assert!(launched, "the launcher threw it");

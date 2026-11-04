@@ -35,6 +35,10 @@ pub struct Bot {
     /// At the wheel: ticks it has barely moved, and ticks left backing up.
     stuck: u16,
     backing: u16,
+    /// On foot with nobody in sight: ticks it has pushed at a wall going
+    /// nowhere, and ticks left walking along it instead.
+    foot_stuck: u16,
+    detour: u16,
 }
 
 /// How long a bot walks at one roam point before it picks another.
@@ -69,6 +73,8 @@ impl Bot {
             ride_cool: 0,
             stuck: 0,
             backing: 0,
+            foot_stuck: 0,
+            detour: 0,
         }
     }
 
@@ -264,8 +270,28 @@ impl Bot {
         }
 
         if best == 255 {
+            // Pushing at a wall and going nowhere (a corner between it and
+            // its goal, on a map it walks straight on): a second along the
+            // wall, then another goal.
+            if me.body.grounded && me.body.vel.flat().len() < 0.5 {
+                self.foot_stuck = self.foot_stuck.saturating_add(1);
+            } else {
+                self.foot_stuck = 0;
+            }
+            if self.foot_stuck as u32 > TICK_HZ / 2 {
+                self.foot_stuck = 0;
+                self.detour = TICK_HZ as u16;
+                self.goal_for = 0;
+                self.strafe = -self.strafe;
+            }
+            let detour = if self.detour > 0 {
+                self.detour -= 1;
+                self.strafe as f32 * core::f32::consts::FRAC_PI_2
+            } else {
+                0.0
+            };
             // Nobody in sight: to a gun it wants, taken in reach.
-            if let Some(at) = Self::loot(w, slot) {
+            if let Some(at) = Self::loot(w, slot).filter(|_| detour == 0.0) {
                 let to = at - me.body.pos;
                 inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
                 inp.pitch = 0;
@@ -301,7 +327,7 @@ impl Bot {
                 }
             };
             let to = goal - me.body.pos;
-            inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
+            inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
             inp.pitch = 0;
             inp.mz = 127;
             inp.mx = self.strafe * 40;
