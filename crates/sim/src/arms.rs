@@ -150,6 +150,14 @@ pub struct Arm {
     /// How much a bot wants it over another it holds (`Bot::think`): power
     /// weapons high.
     pub rank: u8,
+    /// Bullet magnetism (a hitscan gun's): a round that misses everyone
+    /// but passes within this angle (radians) of an enemy's chest, as well
+    /// as its body's width, within `aim_range`, is bent onto the body
+    /// (`World::magnet`). Never onto the head.
+    pub magnet: f32,
+    /// The red reticle's reach (the client's, over an enemy), and
+    /// magnetism's.
+    pub aim_range: f32,
 }
 
 impl Arm {
@@ -221,12 +229,16 @@ const BASE: Arm = Arm {
     dual: false,
     dual_spread: 0.0,
     rank: 0,
+    magnet: 0.0,
+    aim_range: 0.0,
 };
 
 pub static ARMS: [Arm; COUNT] = [
     BASE,
     Arm {
         name: "ASSAULT RIFLE",
+        magnet: deg(0.3),
+        aim_range: 25.0,
         rank: 2,
         auto: true,
         refire_ms: 88,
@@ -240,6 +252,8 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "BATTLE RIFLE",
+        magnet: deg(0.4),
+        aim_range: 45.0,
         rank: 3,
         burst: 3,
         // Halo 2's: 15 rounds a second in a burst, 0.266 s between bursts.
@@ -259,6 +273,8 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "MAGNUM",
+        magnet: deg(0.35),
+        aim_range: 30.0,
         rank: 1,
         refire_ms: 176,
         mag: 8,
@@ -275,6 +291,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SNIPER RIFLE",
+        aim_range: 100.0,
         rank: 6,
         refire_ms: 500,
         mag: 4,
@@ -288,6 +305,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SHOTGUN",
+        aim_range: 10.0,
         rank: 5,
         refire_ms: 840,
         mag: 6,
@@ -304,6 +322,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "ROCKET LAUNCHER",
+        aim_range: 40.0,
         rank: 7,
         kind: Kind::Rocket,
         refire_ms: 880,
@@ -324,6 +343,8 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SMG",
+        magnet: deg(0.3),
+        aim_range: 18.0,
         rank: 2,
         auto: true,
         // Halo 2's: 15 rounds a second, 25 to kill.
@@ -343,6 +364,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SWORD",
+        aim_range: 6.0,
         rank: 6,
         kind: Kind::Sword,
         refire_ms: 560,
@@ -359,6 +381,8 @@ pub static ARMS: [Arm; COUNT] = [
     // carried onto ours the way the rest are: counts and times kept.
     Arm {
         name: "CARBINE",
+        magnet: deg(0.4),
+        aim_range: 40.0,
         rank: 3,
         // Halo 2's: 0.14 s a shot, rounded to 6 a second by its tick.
         refire_ms: 167,
@@ -376,6 +400,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "BEAM RIFLE",
+        aim_range: 100.0,
         rank: 6,
         // Halo 2's: 4 a second, but 65% heat a shot and 57.5% a second off:
         // two quick shots, then a vent of three seconds.
@@ -392,6 +417,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "ION RIFLE",
+        aim_range: 25.0,
         rank: 2,
         kind: Kind::Bolt,
         auto: true,
@@ -414,6 +440,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "ION PISTOL",
+        aim_range: 25.0,
         rank: 2,
         kind: Kind::Bolt,
         // Halo 2's plasma pistol: as fast as a finger, 7 bolts strip the
@@ -439,6 +466,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SHARD GUN",
+        aim_range: 25.0,
         rank: 3,
         kind: Kind::Needle,
         auto: true,
@@ -463,6 +491,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "GRENADE LAUNCHER",
+        aim_range: 30.0,
         rank: 4,
         kind: Kind::Lob,
         // Halo 2's brute shot: 0.3 s a round, 4 to a drum, 61 m/s slowing
@@ -485,6 +514,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "ION CANNON",
+        aim_range: 40.0,
         rank: 6,
         kind: Kind::Cannon,
         // Halo 2's fuel rod: 0.4 s a round, 5 a load, 46 m/s slowing to 20

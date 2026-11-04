@@ -1,7 +1,7 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
+use sim::arms::{AR, BR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
 use sim::consts::*;
 use sim::events::Kind as Ev;
 use sim::fighter::Gun;
@@ -408,6 +408,80 @@ fn a_gun_for_two_hands_taken_while_dual_lets_both_hands_go() {
     assert_eq!(f.gun().arm, ROCKET);
     assert!(!f.dual(), "the left hand let go");
     assert_eq!(dropped(&w, MAGNUM).len(), 2, "both magnums on the floor");
+}
+
+#[test]
+fn a_melee_lunges_at_someone_just_past_reach() {
+    for (dist, lands) in [(2.8, true), (MELEE_LUNGE_RANGE + 1.0, false)] {
+        let mut w = duel([AR, MAGNUM], dist);
+        let at = chest(&w, 1);
+        let (yaw, pitch) = aim(&w, 0, at);
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        // Facing the striker: a blow, not an assassination.
+        inputs[1].yaw = 32768;
+        for t in 0..=ticks(MELEE_LUNGE_MS) {
+            inputs[0] = Input {
+                buttons: if t == 0 { MELEE } else { 0 },
+                yaw,
+                pitch,
+                ..Input::default()
+            };
+            w.step(&inputs, &NO_LAG);
+        }
+        let hurt = w.fighters[1].shield < SHIELD_MAX;
+        assert_eq!(hurt, lands, "at {dist} m");
+        if lands {
+            assert_eq!(w.fighters[1].shield, SHIELD_MAX - MELEE_DMG * PT);
+            assert!(w.fighters[0].body.pos.x > 1.0, "the striker went to them");
+        }
+    }
+}
+
+#[test]
+fn a_near_miss_bends_onto_the_body_never_the_head() {
+    // Half a metre wide of the chest at 20 m: the battle rifle's rounds
+    // find the body; the sniper's (no magnetism) miss.
+    for (gun, lands) in [(BR, true), (SNIPER, false)] {
+        let mut w = duel([gun, MAGNUM], 20.0);
+        let at = chest(&w, 1) + V3::new(0.0, 0.0, 0.45);
+        shoot(&mut w, at, FIRE, NO_LAG);
+        for _ in 0..ticks(300) {
+            shoot(&mut w, at, 0, NO_LAG);
+        }
+        assert_eq!(w.fighters[1].shield < SHIELD_MAX, lands, "{}", sim::arms::arm(gun).name);
+    }
+    // Wide of the shoulder, up by the head, shields down: bent to the
+    // chest, so body hits, never the head shot that would kill.
+    let mut w = duel([BR, MAGNUM], 20.0);
+    w.fighters[1].shield = 0;
+    let at = w.fighters[1].body.pos + V3::new(0.0, CHEST_Y + 0.25, 0.4);
+    shoot(&mut w, at, FIRE, NO_LAG);
+    let mut parts = Vec::new();
+    for _ in 0..ticks(300) {
+        parts.extend(w.events.as_slice().iter().filter(|e| e.kind == Ev::Hit).map(|e| e.part));
+        shoot(&mut w, at, 0, NO_LAG);
+    }
+    assert!(!parts.is_empty(), "the burst found the body");
+    assert!(parts.iter().all(|&p| p < 2), "never the head: {parts:?}");
+    assert!(w.fighters[1].alive);
+}
+
+#[test]
+fn the_dead_come_back_away_from_the_enemy() {
+    // The open map's two spawns: the enemy stands on one, so the other.
+    let mut w = duel([AR, MAGNUM], 20.0);
+    let spawns: Vec<V3> = w.map.spawns.iter().map(|s| s.pos).collect();
+    for (i, &at) in spawns.iter().enumerate() {
+        w.fighters[1].body.pos = at;
+        let inputs = [Input::default(); MAX_FIGHTERS];
+        w.fighters[0].health = 0;
+        w.fighters[0].shield = 0;
+        w.fighters[0].alive = false;
+        w.fighters[0].respawn = 1;
+        w.step(&inputs, &NO_LAG);
+        let back = w.fighters[0].body.pos;
+        assert_eq!(back, spawns[1 - i], "with the enemy on spawn {i}");
+    }
 }
 
 /// The browser predicts its own fighter with `step_local` alone. Through

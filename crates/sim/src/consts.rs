@@ -65,6 +65,10 @@ pub const HIT_TOP_CROUCH: f32 = 0.95;
 pub const HEAD_R: f32 = 0.22;
 pub const HEAD_Y: f32 = 1.62;
 pub const HEAD_Y_CROUCH: f32 = 1.12;
+/// Where a near miss is bent to (bullet magnetism, `World::magnet`): the
+/// chest, never the head.
+pub const CHEST_Y: f32 = 1.0;
+pub const CHEST_Y_CROUCH: f32 = 0.65;
 /// Pitch limit in 1/65536 turn: 89°.
 pub const PITCH_MAX: i16 = 16_202;
 
@@ -83,12 +87,30 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
-/// Spawn points drawn when picking where someone comes back.
-pub const SPAWN_DRAWS: usize = 4;
+/// Where someone comes back (`World::respawn`): of the spawns their side
+/// may use, the one whose nearest living enemy is farthest, counted only
+/// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see
+/// counts `SPAWN_SEEN_M` less, one with a living teammate within
+/// `SPAWN_MATE_R` counts `SPAWN_MATE_M` more (Halo's: back beside your
+/// side); and each draws up to `SPAWN_JITTER_M` more, so the same spawn
+/// isn't a certainty to be camped.
+pub const SPAWN_FAR_M: f32 = 30.0;
+pub const SPAWN_SEEN_M: f32 = 25.0;
+pub const SPAWN_MATE_R: f32 = 15.0;
+pub const SPAWN_MATE_M: f32 = 10.0;
+pub const SPAWN_JITTER_M: f32 = 3.0;
 
 pub const MELEE_DMG: i32 = 70;
 pub const MELEE_RANGE: f32 = 2.0;
 pub const MELEE_COOL_MS: u32 = 800;
+/// Halo 2's melee lunge: a melee with the aim (the body grown by
+/// `MELEE_LUNGE_PAD`) on someone past `MELEE_RANGE` but within
+/// `MELEE_LUNGE_RANGE` drives the body at them at `MELEE_LUNGE_SPEED`, for
+/// up to `MELEE_LUNGE_MS`, and lands the blow on reaching `STRIKE_R`.
+pub const MELEE_LUNGE_RANGE: f32 = 3.0;
+pub const MELEE_LUNGE_PAD: f32 = 0.4;
+pub const MELEE_LUNGE_SPEED: f32 = 12.0;
+pub const MELEE_LUNGE_MS: u32 = 250;
 /// A hit within this cosine of straight behind the victim kills.
 pub const BEHIND_COS: f32 = 0.5;
 

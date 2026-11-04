@@ -79,6 +79,9 @@ pub struct Fighter {
     /// not the prediction's: the client sees it as its body's velocity.
     pub lunge: u8,
     pub lunge_left: u16,
+    /// The lunge is a melee's (Halo 2's), not the sword's: it ends in a
+    /// melee blow, with any gun in hand.
+    pub lunge_melee: bool,
     /// Ticks the trigger of a charge weapon has been held, to its full.
     pub charge: u16,
     /// Shards stuck in this fighter, and ticks since the last; the world's.
@@ -180,6 +183,7 @@ impl Fighter {
         self.ride = 0;
         self.lunge = 0;
         self.lunge_left = 0;
+        self.lunge_melee = false;
         self.charge = 0;
         self.needles = 0;
         self.needle_t = 0;
@@ -512,6 +516,7 @@ impl Thing for Fighter {
         h.u8(self.ride);
         h.u8(self.lunge);
         h.u16(self.lunge_left);
+        h.bool(self.lunge_melee);
         h.u16(self.charge);
         h.u8(self.needles);
         h.u16(self.needle_t);

@@ -308,7 +308,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
     } else {
         app.add_systems(Startup, hud::setup)
-            .add_systems(Update, hud::prompt.after(hud::draw));
+            .add_systems(Update, (hud::prompt, hud::reticle_tint).after(hud::draw));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));

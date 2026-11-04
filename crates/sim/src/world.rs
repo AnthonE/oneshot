@@ -559,10 +559,53 @@ impl World {
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
     }
 
+    /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
+    /// misses, the one whose rewound chest it passes nearest in angle,
+    /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
+    /// and its `aim_range`, nearer than `limit` and in clear line: the way
+    /// to that chest. Only + − × ÷ and sqrt; never the head.
+    fn magnet(&self, s: usize, eye: V3, dir: V3, id: u8, depth: u32, limit: f32) -> Option<V3> {
+        let a = arm(id);
+        let me = &self.fighters[s];
+        let reach = a.aim_range.min(limit);
+        let mut best: Option<(f32, V3)> = None;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+                continue;
+            }
+            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            if !p.alive {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, if p.crouched { CHEST_Y_CROUCH } else { CHEST_Y }, 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 || t > reach {
+                continue;
+            }
+            let off = (to - dir * t).len();
+            if off > HIT_R + t * a.magnet || best.is_some_and(|b| b.0 * t <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off / t, c));
+            }
+        }
+        best.map(|(_, c)| (c - eye).norm())
+    }
+
     fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
         let a = arm(id);
-        let wall = self.map.ray(eye, dir, a.range);
-        let hit = self.trace(s, eye, dir, wall, depth, 0.0);
+        let mut wall = self.map.ray(eye, dir, a.range);
+        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0);
+        let mut dir = dir;
+        if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
+            if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
+                dir = bent;
+                wall = self.map.ray(eye, dir, a.range);
+                hit = self.trace(s, eye, dir, wall, depth, 0.0);
+            }
+        }
         let t = hit.map_or(wall, |h| h.1);
         self.events.push(Event {
             kind: Ev::Shot,
@@ -608,14 +651,33 @@ impl World {
             self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
         }
         if let Some((Target::Fighter(q, _), _)) = hit {
-            let v = &self.fighters[q];
-            let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
-            let toward = (v.body.pos - f.body.pos).flat().norm();
-            if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
-                self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
-            } else {
-                self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
-            }
+            self.blow(s, q);
+            return;
+        }
+        if hit.is_some() || f.ride != 0 {
+            return;
+        }
+        // Past reach but near, with the aim on them: the lunge (Halo 2's),
+        // and the blow when it gets there (`lunges`).
+        let wall = self.map.ray(eye, dir, MELEE_LUNGE_RANGE);
+        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD) {
+            let me = &mut self.fighters[s];
+            me.lunge = q as u8 + 1;
+            me.lunge_left = ticks(MELEE_LUNGE_MS) as u16;
+            me.lunge_melee = true;
+            self.steer_lunge(s, q);
+        }
+    }
+
+    /// A melee lands on `q`: from behind it kills, else it's a blow.
+    fn blow(&mut self, s: usize, q: usize) {
+        let v = &self.fighters[q];
+        let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
+        let toward = (v.body.pos - self.fighters[s].body.pos).flat().norm();
+        if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
+            self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
+        } else {
+            self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
         }
     }
 
@@ -662,7 +724,8 @@ impl World {
             }
             let q = f.lunge as usize - 1;
             let v = self.fighters[q];
-            let on = f.active() && f.ride == 0 && v.active() && v.ride == 0 && f.gun().arm == crate::arms::SWORD;
+            let armed = f.lunge_melee || f.gun().arm == crate::arms::SWORD;
+            let on = f.active() && f.ride == 0 && v.active() && v.ride == 0 && armed;
             if !on {
                 self.end_lunge(s);
                 continue;
@@ -671,7 +734,11 @@ impl World {
             let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
             if d.flat().len() <= STRIKE_R && crate::fmath::fabs(d.y) < BODY_H && self.map.clear(f.eye(), chest) {
                 self.end_lunge(s);
-                self.strike(s, q);
+                if f.lunge_melee {
+                    self.blow(s, q);
+                } else {
+                    self.strike(s, q);
+                }
                 continue;
             }
             self.fighters[s].lunge_left -= 1;
@@ -683,14 +750,20 @@ impl World {
         }
     }
 
-    /// `s`'s body driven straight at `q`'s at [`LUNGE_SPEED`].
+    /// `s`'s body driven straight at `q`'s at [`LUNGE_SPEED`] (a melee's
+    /// at [`MELEE_LUNGE_SPEED`]).
     fn steer_lunge(&mut self, s: usize, q: usize) {
         let to = self.fighters[q].body.pos - self.fighters[s].body.pos;
         let len = to.len();
         if len <= 0.0 {
             return;
         }
-        let v = to * (LUNGE_SPEED / len);
+        let speed = if self.fighters[s].lunge_melee {
+            MELEE_LUNGE_SPEED
+        } else {
+            LUNGE_SPEED
+        };
+        let v = to * (speed / len);
         let b = &mut self.fighters[s].body;
         b.vel = V3::new(
             crate::movement::quant(v.x),
@@ -711,12 +784,13 @@ impl World {
         }
         f.lunge = 0;
         f.lunge_left = 0;
+        f.lunge_melee = false;
     }
 
     /// The sword lands on `q`: a kill, unless `q` was lunging back at `s`
     /// (a clash: both thrown apart, nobody hurt).
     fn strike(&mut self, s: usize, q: usize) {
-        if self.fighters[q].lunge == s as u8 + 1 {
+        if self.fighters[q].lunge == s as u8 + 1 && !self.fighters[q].lunge_melee {
             self.end_lunge(q);
             let away = (self.fighters[q].body.pos - self.fighters[s].body.pos).flat().norm();
             for (k, dir) in [(s, away * -1.0), (q, away)] {
@@ -1811,33 +1885,40 @@ impl World {
         }
     }
 
-    /// Back at the spawn point farthest from the nearest living enemy, of a
-    /// few drawn.
+    /// Back at the spawn its side may use that is safest: farthest from the
+    /// nearest living enemy (to [`SPAWN_FAR_M`]), out of every living
+    /// enemy's sight, near a teammate, with a little chance
+    /// (`SPAWN_JITTER_M`) between close calls.
     fn respawn(&mut self, s: usize) {
         let team = self.fighters[s].team;
         let teams = self.rules.teams;
-        let n = self.map.spawns.len() as u32;
         let mut pick = 0usize;
-        let mut far = -1.0f32;
-        for _ in 0..SPAWN_DRAWS {
-            let mut i = self.rng.next_bounded(n) as usize;
-            // Walk to the next spawn this side may use.
-            for _ in 0..n {
-                let sp = &self.map.spawns[i];
-                if !teams || sp.team == team || sp.team == ANY_TEAM {
-                    break;
-                }
-                i = (i + 1) % n as usize;
+        let mut best = f32::NEG_INFINITY;
+        for i in 0..self.map.spawns.len() {
+            let sp = self.map.spawns[i];
+            if teams && sp.team != team && sp.team != ANY_TEAM {
+                continue;
             }
-            let at = self.map.spawns[i].pos;
-            let mut near = f32::INFINITY;
+            let eye = sp.pos + V3::new(0.0, EYE, 0.0);
+            let mut near = SPAWN_FAR_M;
+            let mut seen = false;
+            let mut mate = false;
             for (q, v) in self.fighters.iter().enumerate() {
-                if q != s && v.active() && !(teams && v.team == team) {
-                    near = near.min((v.body.pos - at).len());
+                if q == s || !v.active() {
+                    continue;
                 }
+                let far = (v.body.pos - sp.pos).len();
+                if teams && v.team == team {
+                    mate = mate || far < SPAWN_MATE_R;
+                    continue;
+                }
+                near = near.min(far);
+                seen = seen || self.map.clear(v.eye(), eye);
             }
-            if near > far {
-                far = near;
+            let luck = self.rng.next_bounded(1024) as f32 * (SPAWN_JITTER_M / 1024.0);
+            let score = near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } + luck;
+            if score > best {
+                best = score;
                 pick = i;
             }
         }
