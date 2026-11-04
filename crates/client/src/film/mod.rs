@@ -760,8 +760,20 @@ fn mixdown(
 }
 
 /// Everything on screen but the world: hidden for the film (the HUD, the
-/// names, the lines). Every root node, before visibility is worked out.
-fn hide_ui(mut roots: Query<&mut Visibility, (With<Node>, Without<ChildOf>)>) {
+/// names, the lines). Every root node, before visibility is worked out,
+/// but the render scale's frame (`render_scale.rs`): below 100% the world
+/// itself is that node.
+#[allow(clippy::type_complexity)]
+fn hide_ui(
+    mut roots: Query<
+        &mut Visibility,
+        (
+            With<Node>,
+            Without<ChildOf>,
+            Without<crate::look::render_scale::Presentation>,
+        ),
+    >,
+) {
     for mut v in &mut roots {
         v.set_if_neq(Visibility::Hidden);
     }
