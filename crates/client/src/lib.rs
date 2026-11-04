@@ -10,12 +10,15 @@
 //! the kill cam when dead); the three.js page's controls; the HUD. In a
 //! browser the page (`crates/client/web/index.html`) has the menu and calls `play()`.
 
+pub mod binds;
+pub mod config;
 pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
 pub mod pointer;
 pub mod pose;
+pub mod settings;
 pub mod sound;
 pub mod ui;
 
@@ -146,21 +149,17 @@ pub struct Early(pub Vec<proto::Msg>);
 /// (Gates' `input.rs`).
 const SENS: f32 = 0.0022;
 
-/// The keys, as the three.js page binds them (the three.js page's input.ts, after
-/// Fireplace's arena). The wheel swaps too.
-const KEYS: [(KeyCode, u16); 12] = [
-    (KeyCode::Space, JUMP),
-    (KeyCode::ControlLeft, CROUCH),
-    (KeyCode::KeyC, CROUCH),
-    (KeyCode::KeyQ, MELEE),
-    (KeyCode::KeyV, MELEE),
-    (KeyCode::KeyG, GRENADE),
-    (KeyCode::KeyR, RELOAD),
-    (KeyCode::KeyX, SWAP),
-    (KeyCode::Digit1, SWAP),
-    (KeyCode::Digit2, SWAP),
-    (KeyCode::KeyE, USE),
-    (KeyCode::KeyT, GREN_SWITCH),
+/// The bound actions that are buttons (the player's keys, `binds.rs`).
+/// The wheel swaps too.
+const BUTTONS: [(binds::Action, u16); 8] = [
+    (binds::Action::Jump, JUMP),
+    (binds::Action::Crouch, CROUCH),
+    (binds::Action::Melee, MELEE),
+    (binds::Action::Grenade, GRENADE),
+    (binds::Action::Reload, RELOAD),
+    (binds::Action::Swap, SWAP),
+    (binds::Action::Use, USE),
+    (binds::Action::GrenSwitch, GREN_SWITCH),
 ];
 
 /// How the app runs: `autoplay` drives it (tests); `lite` draws with no
@@ -231,6 +230,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
+    .add_plugins(settings::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
@@ -332,13 +332,14 @@ fn pump(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
+    (binds, settings): (Res<binds::Binds>, Res<settings::Settings>),
 ) {
     // The mouse is ours only while held: on the web, the page's lock is the
     // truth (a lock asked for and not yet granted, or let go behind our
     // back, turns nothing and fires nothing).
     let grabbed =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
-    let key = |k: KeyCode| grabbed && (keys.pressed(k) || keys.just_pressed(k));
+    let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
@@ -355,17 +356,19 @@ fn pump(
     // No scope at the wheel: the chase camera doesn't narrow.
     look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
     if grabbed {
-        let sens = if look.zoom { SENS / scope as f32 } else { SENS };
+        let base = SENS * settings.sensitivity;
+        let sens = if look.zoom { base / scope as f32 } else { base };
+        let up = if settings.invert { -1.0 } else { 1.0 };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
-        look.pitch = (look.pitch - motion.delta.y * sens).clamp(-max, max);
+        look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if keys.just_pressed(KeyCode::KeyN) {
+    if binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
         st.net = !st.net;
     }
-    let axis =
-        |plus: KeyCode, minus: KeyCode| (keys.pressed(plus) as i32 - keys.pressed(minus) as i32) * 127 * grabbed as i32;
-    let mut buttons = KEYS.iter().filter(|(k, _)| key(*k)).fold(0, |b, (_, v)| b | v);
+    let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
+    let axis = |plus: binds::Action, minus: binds::Action| (on(plus) - on(minus)) * 127;
+    let mut buttons = BUTTONS.iter().filter(|(a, _)| held(*a)).fold(0, |b, (_, v)| b | v);
     if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {
         look.armed = true;
     }
@@ -382,7 +385,10 @@ fn pump(
         buttons |= SWAP;
     }
     let turn = core::f32::consts::TAU;
-    let (mut mx, mut mz) = (axis(KeyCode::KeyD, KeyCode::KeyA), axis(KeyCode::KeyW, KeyCode::KeyS));
+    let (mut mx, mut mz) = (
+        axis(binds::Action::Right, binds::Action::Left),
+        axis(binds::Action::Forward, binds::Action::Back),
+    );
     if auto.on {
         (buttons, mx, mz) = autopilot(&mut auto, &mut look, &link.0.session().core, link.0.now_ms());
     }
@@ -683,6 +689,7 @@ fn view(
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     opts: Res<Opts>,
+    settings: Res<settings::Settings>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
@@ -691,7 +698,7 @@ fn view(
     let core = &link.0.session().core;
     let (f, p) = core.own();
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
-    let mut fov = look::rig::FOV_DEG;
+    let mut fov = settings.fov;
     let at = Vec3::new(p.x, p.y, p.z);
     let kill = if f.alive { None } else { core.killcam(link.0.now_ms()) };
     if let Some(k) = kill {

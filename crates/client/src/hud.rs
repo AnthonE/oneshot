@@ -396,6 +396,7 @@ pub fn draw(
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
+    binds: Res<crate::binds::Binds>,
 ) {
     let s = link.0.session();
     let now = time.elapsed_secs();
@@ -522,10 +523,11 @@ pub fn draw(
     } else {
         String::new()
     };
+    let out = binds.key(crate::binds::Action::Use);
     let ride = match f.riding() {
-        Some((_, 0)) => "\ndriving: E gets out",
-        Some(_) => "\nriding: E gets out",
-        None => "",
+        Some((_, 0)) => format!("\ndriving: {out} gets out"),
+        Some(_) => format!("\nriding: {out} gets out"),
+        None => String::new(),
     };
     // A gun that heats has a battery, no reserve: its heat goes there.
     let spare = if arm.hot() {

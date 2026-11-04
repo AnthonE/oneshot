@@ -83,9 +83,11 @@ const HELP: &str = "oneshot: the desktop client
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
 
-Keys: WASD and the mouse, space jumps, Ctrl or C crouches, R reloads, E uses,
-G throws a frag, Q or V melees, X, 1, 2 or the wheel swaps, N the net graph,
-Esc lets the mouse go.";
+Keys (by default; rebind them, with the mouse's speed, the field of view
+and the volume, in the settings, saved in your config folder under
+oneshot/settings.toml): WASD and the mouse, space jumps, Ctrl or C crouches,
+R reloads, E uses, G throws a frag, T picks frag or sticky, Q or V melees,
+X, 1 or the wheel swaps, N the net graph, Esc lets the mouse go.";
 
 #[cfg(not(target_arch = "wasm32"))]
 const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam (or 0 to 6)";
