@@ -249,7 +249,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<Early>()
-    // [trees] the trees' shared cards are registered here
+    .init_resource::<look::trees::TreeCards>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
