@@ -36,6 +36,10 @@ pub struct Rules {
     /// [`crate::arms::LADDER`], a kill moves the killer up a rung, pads are
     /// off, and the score is the rung.
     pub gun_game: bool,
+    /// With sides: rounds, blasts and blows hurt teammates too, and a
+    /// teammate killed costs the side a point (ranked, as MLG plays). Nobody
+    /// homes on, lunges at or is magnetised toward a teammate either way.
+    pub friendly_fire: bool,
 }
 
 impl Rules {
@@ -48,10 +52,12 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 2,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
     /// 2v2 Team Slayer: first side to 30, or the most at 12 minutes.
+    /// Ranked, so friendly fire is on.
     pub fn doubles() -> Rules {
         Rules {
             teams: true,
@@ -60,6 +66,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 4,
             gun_game: false,
+            friendly_fire: true,
         }
     }
 
@@ -73,6 +80,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -86,6 +94,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -464,7 +473,8 @@ impl World {
                 // A homing round locks on whoever the aim was on, as seen.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
-                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD) {
+                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD, true)
+                    {
                         target = q as u8;
                     }
                 }
@@ -498,14 +508,16 @@ impl World {
         }
     }
 
-    /// The nearest enemy (or vehicle) a ray from `eye` meets, where the
-    /// server says the shooter saw them, and how far.
-    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32) -> Option<(Target, f32)> {
-        let me = &self.fighters[s];
+    /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
+    /// hurt, where the server says the shooter saw them, and how far. With
+    /// `lock` (homing, a lunge) a teammate is never the one, friendly fire
+    /// or not.
+    #[allow(clippy::too_many_arguments)]
+    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32, lock: bool) -> Option<(Target, f32)> {
         let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
         for (q, v) in self.fighters.iter().enumerate() {
-            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+            if q == s || !v.active() || (if lock { self.mate(s, q) } else { self.spared(s, q) }) {
                 continue;
             }
             let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
@@ -531,7 +543,7 @@ impl World {
             }
         }
         // Hulls, rewound like bodies. A rider hit before its hull is hit.
-        let ride = me.riding().map(|(i, _)| i);
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (i, v) in self.vehicles.iter().enumerate() {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
@@ -550,11 +562,22 @@ impl World {
         best
     }
 
-    /// Whether `att` may not hurt `v`: with sides, a teammate of theirs
-    /// rides in it.
+    /// Whether `q` is on `att`'s side (never `att` itself).
+    fn mate(&self, att: usize, q: usize) -> bool {
+        self.rules.teams && q != att && self.fighters[q].team == self.fighters[att].team
+    }
+
+    /// Whether `att` may not hurt `q`: a teammate, with friendly fire off.
+    fn spared(&self, att: usize, q: usize) -> bool {
+        !self.rules.friendly_fire && self.mate(att, q)
+    }
+
+    /// Whether `att` may not hurt `v`: with sides and friendly fire off, a
+    /// teammate of theirs rides in it.
     fn spares(&self, att: usize, v: &Vehicle) -> bool {
         let team = self.fighters[att].team;
         self.rules.teams
+            && !self.rules.friendly_fire
             && v.seats
                 .iter()
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
@@ -598,13 +621,13 @@ impl World {
     fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
         let a = arm(id);
         let mut wall = self.map.ray(eye, dir, a.range);
-        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0);
+        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
         if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
             if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
-                hit = self.trace(s, eye, dir, wall, depth, 0.0);
+                hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
             }
         }
         let t = hit.map_or(wall, |h| h.1);
@@ -647,7 +670,7 @@ impl World {
             pos: eye,
             ..Event::default()
         });
-        let hit = self.trace(s, eye, dir, wall, depth, 0.25);
+        let hit = self.trace(s, eye, dir, wall, depth, 0.25, false);
         if let Some((Target::Vehicle(i), _)) = hit {
             self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
         }
@@ -661,7 +684,7 @@ impl World {
         // Past reach but near, with the aim on them: the lunge (Halo 2's),
         // and the blow when it gets there (`lunges`).
         let wall = self.map.ray(eye, dir, MELEE_LUNGE_RANGE);
-        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD) {
+        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD, true) {
             let me = &mut self.fighters[s];
             me.lunge = q as u8 + 1;
             me.lunge_left = ticks(MELEE_LUNGE_MS) as u16;
@@ -699,13 +722,13 @@ impl World {
         });
         let reach = if lunge { LUNGE_RANGE } else { SWORD_REACH };
         let wall = self.map.ray(eye, dir, reach);
-        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD) {
+        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD, false) {
             Some((Target::Vehicle(i), t)) if t <= SWORD_REACH => {
                 let pts = arm(crate::arms::SWORD).dmg * PT;
                 self.damage_vehicle(s, i, pts, crate::arms::SWORD as u16);
             }
             Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
-            Some((Target::Fighter(q, _), _)) if lunge => {
+            Some((Target::Fighter(q, _), _)) if lunge && !self.mate(s, q) => {
                 let me = &mut self.fighters[s];
                 me.lunge = q as u8 + 1;
                 me.lunge_left = ticks(LUNGE_MS) as u16;
@@ -907,8 +930,7 @@ impl World {
         let owner = p.owner as usize;
         if p.landed && (p.target as usize) < MAX_FIGHTERS {
             let q = p.target as usize;
-            let mate = self.rules.teams && q != owner && self.fighters[q].team == self.fighters[owner].team;
-            if !mate {
+            if !self.spared(owner, q) {
                 self.damage(
                     owner,
                     q,
@@ -952,12 +974,11 @@ impl World {
         let mut met = t < reach;
         let mut who = None;
         let owner = p.owner as usize;
-        let team = self.fighters[owner].team;
         for (q, v) in self.fighters.iter().enumerate() {
             if !v.active() || (q == owner && p.age < 16) {
                 continue;
             }
-            if spares && self.rules.teams && q != owner && v.team == team {
+            if spares && self.spared(owner, q) {
                 continue;
             }
             if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.1, v.body.height(), t) {
@@ -1291,10 +1312,9 @@ impl World {
             pos: at,
             ..Event::default()
         });
-        let team = self.fighters[owner].team;
         for q in 0..MAX_FIGHTERS {
             let v = self.fighters[q];
-            if !v.active() || (self.rules.teams && q != owner && v.team == team) {
+            if !v.active() || self.spared(owner, q) {
                 continue;
             }
             let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
@@ -1526,7 +1546,7 @@ impl World {
                 if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
                     continue;
                 }
-                if driver.is_some_and(|d| d != q && self.rules.teams && self.fighters[d].team == f.team) {
+                if driver.is_some_and(|d| self.spared(d, q)) {
                     continue;
                 }
                 let away = (f.body.pos - v.pos).flat().norm();

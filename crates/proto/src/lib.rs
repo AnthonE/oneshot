@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 17;
+pub const PROTO_VER: u16 = 18;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -1132,6 +1132,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.loadout[1] as u32, 4)?;
             w.write(rules.seats as u32, SLOT_BITS + 1)?;
             w.write_bit(rules.gun_game)?;
+            w.write_bit(rules.friendly_fire)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
             }
@@ -1359,6 +1360,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                     _ => return Err(WireError::Malformed),
                 },
                 gun_game: r.read_bit()?,
+                friendly_fire: r.read_bit()?,
             },
             salt_commit: {
                 let mut c = [0u8; 32];

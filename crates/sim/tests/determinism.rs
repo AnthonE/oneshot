@@ -11,7 +11,7 @@ use sim::Map;
 /// `bot_match(1, 20_000)`. If this moves, a rule changed (update it with
 /// the commit that changed the rule) or the compiler changed a float
 /// (stop: that is a finding).
-const GOLDEN: u64 = 0x3bc1_5204_d24e_fe72;
+const GOLDEN: u64 = 0x8b77_6536_8f66_88ad;
 
 #[test]
 fn a_bot_match_hashes_the_same_twice() {

@@ -27,6 +27,13 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 
+**Ranked plays MLG's way** (Duel, Doubles, cups):
+- No motion tracker and no minimap, in any mode. What you know is what you see and hear.
+- Equal starts, every life: the rifle (BR) and the magnum, two grenades. Nothing random on the map: power weapons sit on fixed pads with fixed timers per map.
+- Friendly fire on in Doubles (`Rules::friendly_fire`): your rounds, blasts and blows hurt your teammate, and a teammate killed costs your side a point. Nobody homes on, lunges at or is magnetised toward a teammate. Casual and Big Team keep it off.
+- A suicide costs a point. No vehicles on ranked maps.
+- Sides read as red and blue; a skin is trim on the side's colour, never in place of it.
+
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
