@@ -92,6 +92,7 @@ commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 # What the page reads before it downloads (index.html, pickModule), and what
 # ci/publish_web.sh checks it is publishing (both modules, the web profile).
 printf '{"commit":"%s","profile":"%s","modules":{%s}}\n' "$commit" "$profile" "$mods" > dist/build.json
-cp web/index.html dist/
+# The page, and the clip page F9 opens in a frame of its own (web/clip.js).
+cp web/index.html web/clip.html web/clip.js web/clip-fit.js web/mp4.js dist/
 cp -r assets dist/assets
 du -sh dist

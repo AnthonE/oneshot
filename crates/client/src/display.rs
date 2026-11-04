@@ -31,9 +31,13 @@ pub const FULLSCREEN_KEY: KeyCode = KeyCode::F11;
 pub const PAGE_GRACE_FRAMES: u32 = 60;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (fullscreen_key, apply_window).chain());
+    // A film's window is its list's size on its own frame clock
+    // (`film.rs`): the player's fullscreen and frame cap are not its.
+    let playing = not(resource_exists::<crate::film::Film>);
+    app.add_systems(Update, (fullscreen_key, apply_window).chain().run_if(playing));
     #[cfg(not(target_arch = "wasm32"))]
-    app.init_resource::<FrameDeadline>().add_systems(Last, limit_frames);
+    app.init_resource::<FrameDeadline>()
+        .add_systems(Last, limit_frames.run_if(not(resource_exists::<crate::film::Film>)));
 }
 
 /// F11 flips the row, from any screen; through `adjust`, so an open

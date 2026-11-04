@@ -14,9 +14,11 @@
 //! server and signs in, and calls `launch()`.
 
 pub mod binds;
+pub mod clip;
 pub mod config;
 pub mod display;
 pub mod door;
+pub mod film;
 pub mod front;
 pub mod hud;
 pub mod level;
@@ -324,6 +326,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(options::plugin)
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
+    // F9's clip of the last half minute, and `--record` (`clip.rs`).
+    .add_plugins(clip::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     // The boxes' weathering (`look/weathering.rs`).
     .add_plugins(look::weathering::plugin)
@@ -732,24 +736,43 @@ fn draw_fighters(
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
     (mut fx, mut shield_mats, mut shells): ShieldParts,
-    (time, mut walkers): (Res<Time>, ResMut<look::foliage::Walkers>),
+    (time, mut walkers, film): (Res<Time>, ResMut<look::foliage::Walkers>, Option<Res<film::Film>>),
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
+    // A film's camera off the player's eye sees the player's own body, and
+    // never through the kill cam (`film.rs`).
+    let third = film.is_some_and(|f| f.third());
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
-    let (others, live) = match (core.killcam(now), &posed) {
+    let (mut others, live) = match (core.killcam(now), &posed) {
         (_, Some(p)) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
-        (Some(k), _) if !core.own().0.alive => (k.bodies, false),
+        (Some(k), _) if !core.own().0.alive && !third => (k.bodies, false),
         _ => (core.others(now), true),
     };
-    let seats = look::bodies::seats(&core.vehicles(now));
+    if third && link.0.session().ready {
+        others.push(core.own_drawn());
+    }
+    let mut hulls = core.vehicles(now);
+    // Our own seat, when a film draws us in it.
+    if let (true, Some((_, at, yaw)), Some((i, seat))) = (third, core.own_vehicle(), core.own().0.riding()) {
+        let mut seats = [0; 2];
+        seats[seat.min(1)] = core.slot + 1;
+        hulls.push(client_net::core::DrawnVehicle {
+            slot: i as u8,
+            pos: at,
+            yaw,
+            seats,
+            ..client_net::core::DrawnVehicle::default()
+        });
+    }
+    let seats = look::bodies::seats(&hulls);
     look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
     // The grass flattens under the feet this client draws on the ground,
     // ours first: never a kill cam's replay, never a seat.
     walkers.feet.clear();
-    if live && f.alive && f.body.grounded && f.riding().is_none() {
+    if live && !third && f.alive && f.body.grounded && f.riding().is_none() {
         walkers.fighter(Vec3::new(p.x, p.y, p.z));
     }
     if live {
@@ -975,6 +998,7 @@ fn draw_view(
     mut muzzles: ResMut<look::viewmodel::ViewMuzzles>,
     mut hold: look::viewmodel::Hands,
     mut flash: look::viewmodel::FlashLight,
+    film: Option<Res<film::Film>>,
 ) {
     let (f, p) = link.0.session().core.own();
     let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
@@ -985,7 +1009,7 @@ fn draw_view(
         yaw: look.yaw,
         pitch: look.pitch,
         riding: seat.is_some(),
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped,
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,
@@ -1198,6 +1222,47 @@ mod web_start {
             app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
         }
         app.run();
+    }
+
+    /// A clip drawn into `canvas` and handed to `sink` as it is drawn: the
+    /// page's `oneshot --clip` (`web/clip.js`, `film/`). `tape` is what the
+    /// clip key gave the page (`window.__oneshotClip`, `clip.rs`); `style`
+    /// one of `clip::STYLES`, or a whole shot list as JSON (`at` from the
+    /// end when negative). The canvas is the list's size in CSS pixels at a
+    /// scale of one: the page shrinks its box for a preview, never the
+    /// canvas.
+    ///
+    /// `sink` is an object the film calls as it goes:
+    /// `shot(i, name, drawnW, drawnH, outW, outH, fps, still)`,
+    /// `frame(i, n, rgba, w, h)` in order, `audio(i, pcm)` (interleaved
+    /// stereo at 48 kHz, a frame's worth a call), `shotEnd(i, frames)`,
+    /// `progress(f, i)`, then `done()` or `fail(why)`. Like `launch`, it
+    /// doesn't return: a page holds one Bevy app, so a clip draws in a
+    /// frame of its own.
+    #[wasm_bindgen]
+    pub fn film(tape: Vec<u8>, style: String, canvas: String, sink: JsValue) -> Result<(), JsValue> {
+        use super::{clip, film};
+        let tape = client_net::tape::read(&tape).map_err(|e| JsValue::from_str(&format!("not a clip: {e}")))?;
+        let json = if style.trim_start().starts_with('{') {
+            style
+        } else {
+            clip::script(style.trim()).ok_or_else(|| {
+                JsValue::from_str(&format!("no clip style {style:?}: one of {}", clip::STYLES.join(", ")))
+            })?
+        };
+        let mut script = film::Script::parse(&json).map_err(|e| JsValue::from_str(&format!("shot list: {e}")))?;
+        script.anchor(tape.end_ms() / 1000.0);
+        let mut app = film::app(script, tape, Some(canvas)).map_err(|e| JsValue::from_str(&e))?;
+        app.insert_non_send_resource(film::encode::Sink(sink));
+        super::look::gpu::hook_panics();
+        app.run();
+        Ok(())
+    }
+
+    /// The clip styles a page may offer (`clip::STYLES`).
+    #[wasm_bindgen]
+    pub fn clip_styles() -> Vec<String> {
+        super::clip::STYLES.iter().map(|s| s.to_string()).collect()
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;

@@ -39,6 +39,29 @@
         padding: 10px 14px; background: rgba(27, 25, 22, .94); color: #ebe6d9; font: 700 12px Aileron, system-ui, sans-serif;
         letter-spacing: .06em; border-left: 3px solid #e3896a; }
       #gpubar a { color: #e8b931; margin-left: 8px; }
+      /* F9's clip (crates/client/src/clip.rs): the last half minute drawn by
+         the game in a frame of its own (clip.html) and made into a video on
+         this machine. A card in the corner: the match goes on behind it. */
+      #clip { position: fixed; right: 16px; bottom: 16px; z-index: 6; box-sizing: border-box;
+        width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 12px 14px;
+        background: rgba(27, 25, 22, .96); color: #ebe6d9; border-left: 3px solid #e8b931;
+        font: 700 12px Aileron, system-ui, sans-serif; letter-spacing: .06em; }
+      #clip[hidden] { display: none; }
+      #clip .head { display: flex; justify-content: space-between; align-items: center; }
+      #clip .word { color: #e8b931; letter-spacing: .1em; }
+      #clip p { margin: 8px 0 0; color: rgba(189, 184, 173, .9); font-weight: 400; letter-spacing: .02em; line-height: 1.35; }
+      #clip p.bad { color: #e3896a; }
+      #clip .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      #clip button, #clip a.btn { background: transparent; color: #ebe6d9; border: 1px solid rgba(235, 230, 217, .25);
+        font: inherit; padding: 6px 10px; cursor: pointer; text-decoration: none; }
+      #clip button.on { border-color: #e8b931; color: #e8b931; }
+      #clip button:disabled { opacity: .45; cursor: default; }
+      #clip .view { margin-top: 10px; background: #000; aspect-ratio: 16 / 9; }
+      #clip .view.tall { aspect-ratio: 9 / 16; width: min(100%, 28vh); margin-left: auto; margin-right: auto; }
+      #clip .view:empty { display: none; }
+      #clip iframe, #clip video { width: 100%; height: 100%; border: 0; display: block; }
+      #clip .bar { height: 3px; background: rgba(255, 255, 255, .1); margin-top: 10px; }
+      #clip .bar i { display: block; height: 100%; width: 0; background: #e8b931; }
     </style>
   </head>
   <body>
@@ -49,6 +72,23 @@
       <div class="bar"><i></i></div>
       <div class="say" id="say">Loading</div>
     </div>
+    <section id="clip" hidden role="dialog" aria-labelledby="clip-word">
+      <div class="head"><span class="word" id="clip-word">CLIP</span><button id="clip-close" type="button">CLOSE</button></div>
+      <p id="clip-held"></p>
+      <div class="row" id="clip-styles">
+        <button type="button" data-style="wide" class="on">WIDE</button>
+        <button type="button" data-style="pov">VERTICAL</button>
+        <button type="button" data-style="chase">CHASE</button>
+        <button type="button" data-style="mix">MIX</button>
+      </div>
+      <div class="view" id="clip-view"></div>
+      <div class="bar"><i id="clip-bar"></i></div>
+      <p id="clip-status"></p>
+      <div class="row" id="clip-done" hidden>
+        <a class="btn" id="clip-save" download>SAVE THE VIDEO</a>
+        <button type="button" id="clip-share" hidden>SHARE</button>
+      </div>
+    </section>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, the title says ranked is off and the rest still plays. -->
     <script async src="https://elopros.com/sdk/elo-signin-1.js"></script>
@@ -250,6 +290,92 @@
         }
         if (!boot.classList.contains('gone')) say('The game stopped. Reload to try again', true);
       };
+
+      /* ── the clip: F9 in a match (after Gates' web/app.js) ───────────────
+         The game keeps its last minute (client-net's clip.rs) and F9 hands
+         the last half of it here (crates/client/src/clip.rs). The video is
+         drawn by the same game in a frame of its own (clip.html, clip.js): a
+         page runs one Bevy app for its life, and this one is still playing
+         under the card. The frame posts back an MP4 made on this machine;
+         nothing is uploaded. One frame per video, so another style is
+         another frame over the same tape. */
+      const clipUi = { tape: null, frame: null, url: null, send: null, style: 'wide' };
+      const $c = (id) => document.getElementById(id);
+      const clipSay = (text, bad) => { $c('clip-status').textContent = text; $c('clip-status').className = bad ? 'bad' : ''; };
+      function clipReset() {
+        if (clipUi.frame) { clipUi.frame.remove(); clipUi.frame = null; }
+        if (clipUi.url) { URL.revokeObjectURL(clipUi.url); clipUi.url = null; }
+        clipUi.send = null;
+        $c('clip-view').replaceChildren();
+        $c('clip-bar').style.width = '0';
+        $c('clip-done').hidden = true;
+        clipSay('');
+      }
+      function clipMake(style) {
+        if (!clipUi.tape) return;
+        clipReset();
+        clipUi.style = style;
+        for (const b of $c('clip-styles').querySelectorAll('button')) b.classList.toggle('on', b.dataset.style === style);
+        const view = $c('clip-view');
+        view.classList.toggle('tall', style !== 'wide');
+        const frame = document.createElement('iframe');
+        frame.title = 'Your clip, being drawn';
+        frame.src = `clip.html?gfx=${encodeURIComponent(window.__oneshotGfx || 'webgl2')}`;
+        view.append(frame);
+        clipUi.frame = frame;
+        clipSay('Loading the camera...');
+        const send = { type: 'clip-tape', tape: clipUi.tape.slice(0), style, line: '', tag: true };
+        clipUi.send = () => frame.contentWindow.postMessage(send, location.origin, [send.tape]);
+      }
+      window.__oneshotClip = (bytes, held) => {
+        /* A copy the page owns: the game's view of its memory moves on. */
+        clipUi.tape = new Uint8Array(bytes).buffer;
+        const s = Math.round(Number(held) || 0);
+        $c('clip-held').textContent = s >= 15
+          ? `The last ${s} seconds you played, made into a video on this computer. Esc frees the mouse to click.`
+          : `The last ${s} seconds you played. The longer cameras want a little more play first.`;
+        $c('clip').hidden = false;
+        clipMake(clipUi.style);
+      };
+      window.addEventListener('message', (ev) => {
+        if (ev.origin !== location.origin || !clipUi.frame || ev.source !== clipUi.frame.contentWindow) return;
+        const m = ev.data || {};
+        if (m.type === 'clip-ready' && clipUi.send) {
+          clipUi.send();
+          clipUi.send = null;
+          clipSay("Drawing... you're still in the match behind this.");
+        } else if (m.type === 'clip-progress') {
+          $c('clip-bar').style.width = `${Math.round(Math.min(1, m.f) * 100)}%`;
+          if (m.encoding) clipSay('Finishing the file...');
+        } else if (m.type === 'clip-done') {
+          clipUi.frame.remove();
+          clipUi.frame = null;
+          clipUi.url = URL.createObjectURL(m.blob);
+          const video = document.createElement('video');
+          video.src = clipUi.url;
+          video.controls = true;
+          video.playsInline = true;
+          video.loop = true;
+          video.muted = true;
+          $c('clip-view').replaceChildren(video);
+          const stamp = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
+          const name = `oneshot-clip-${stamp}.mp4`;
+          $c('clip-save').href = clipUi.url;
+          $c('clip-save').download = name;
+          const file = new File([m.blob], name, { type: 'video/mp4' });
+          const share = $c('clip-share');
+          share.hidden = !(navigator.canShare && navigator.canShare({ files: [file] }));
+          share.onclick = () => navigator.share({ files: [file], title: 'oneshot' }).catch(() => {});
+          $c('clip-done').hidden = false;
+          $c('clip-bar').style.width = '100%';
+          clipSay(`${Math.round(m.seconds)} s, ${m.width}x${m.height}. Made on this computer.`);
+        } else if (m.type === 'clip-failed') {
+          if (clipUi.frame) { clipUi.frame.remove(); clipUi.frame = null; }
+          clipSay(`The video could not be made: ${m.why}`, true);
+        }
+      });
+      for (const b of $c('clip-styles').querySelectorAll('button')) b.addEventListener('click', () => clipMake(b.dataset.style));
+      $c('clip-close').addEventListener('click', () => { clipReset(); clipUi.tape = null; $c('clip').hidden = true; });
 
       // Where the game's own endpoints are: beside the page in dev, the game
       // box when the page is published to elopros.com (ci/publish_web.sh

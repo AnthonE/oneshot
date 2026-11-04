@@ -126,6 +126,7 @@ pub fn stream(
     mut own: Query<(Entity, &mut OwnShadow)>,
     mut bodies: Query<&mut super::bodies::Body>,
     mut at: Query<&mut Transform>,
+    film: Option<Res<crate::film::Film>>,
 ) {
     // Capsules are for a software GPU that can't skin a room (`Opts`).
     if opts.capsules {
@@ -146,7 +147,9 @@ pub fn stream(
     let (f, p) = core.own();
     let seat = f.riding().map(|(_, seat)| (look.yaw, seat));
     let driving = seat.is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
-    let shown = s.ready && f.alive && !driving;
+    // A film's camera off the eye draws the body itself, which casts its
+    // own shadow (`film.rs`).
+    let shown = s.ready && f.alive && !driving && !film.is_some_and(|f| f.third());
     if shown != own.shown {
         own.shown = shown;
         if let Ok(mut b) = bodies.get_mut(root) {

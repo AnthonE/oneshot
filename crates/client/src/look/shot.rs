@@ -41,11 +41,34 @@ const LINE_S: f64 = 4.0;
 const LINE_FADE_S: f64 = 0.6;
 /// Over every screen.
 const LINE_Z: i32 = 30;
+/// The strip's word for a shot, and for one that failed.
+const TAKEN: &str = "SCREENSHOT";
+const FAILED: &str = "SCREENSHOT FAILED";
 
-/// How a shot ended: saved (its name, and where in words), or not.
+/// How a shot ended: saved (its name, and where in words), or not; or
+/// another key's line on the same strip (the clip key, `clip.rs`).
 enum Outcome {
     Saved(String, String),
     Failed(String),
+    Said { word: String, what: String, bad: bool },
+}
+
+/// The line, for a key other than F12 (the clip key): what it says comes
+/// up on the same strip, from any thread.
+#[derive(Clone)]
+pub struct Line(Arc<Mutex<Vec<Outcome>>>);
+
+impl Line {
+    /// `word` in the strip's mark (its bad colour when `bad`), then `what`.
+    pub fn say(&self, word: &str, what: impl Into<String>, bad: bool) {
+        if let Ok(mut v) = self.0.lock() {
+            v.push(Outcome::Said {
+                word: word.to_string(),
+                what: what.into(),
+                bad,
+            });
+        }
+    }
 }
 
 /// Where the shots go, and the ones still on their way.
@@ -65,6 +88,13 @@ pub struct Shots {
     line: Option<(f64, bool)>,
     /// Shots taken this run.
     pub taken: u32,
+}
+
+impl Shots {
+    /// The strip, for another key's line.
+    pub fn line(&self) -> Line {
+        Line(self.out.clone())
+    }
 }
 
 impl Default for Shots {
@@ -164,10 +194,10 @@ fn take(
 ) {
     let now = time.elapsed_secs_f64();
     let came: Vec<Outcome> = shots.out.lock().map(|mut v| v.drain(..).collect()).unwrap_or_default();
-    let mut say = |shots: &mut Shots, bad: bool, what: String| {
+    let mut tell = |shots: &mut Shots, w: &str, bad: bool, what: String| {
         shots.line = Some((now, bad));
         for (mut t, mut c) in &mut word {
-            t.0 = if bad { "SCREENSHOT FAILED" } else { "SCREENSHOT" }.into();
+            t.0 = w.into();
             c.0 = if bad { ui::BAD } else { ui::MARK };
         }
         for mut t in &mut says {
@@ -175,20 +205,24 @@ fn take(
         }
     };
     for o in came {
-        shots.pending = shots.pending.saturating_sub(1);
         match o {
-            Outcome::Saved(name, at) => say(&mut shots, false, format!("{name}  {at}")),
-            Outcome::Failed(e) => {
-                error!("oneshot: a screenshot failed: {e}");
-                say(&mut shots, true, e);
+            Outcome::Saved(name, at) => {
+                shots.pending = shots.pending.saturating_sub(1);
+                tell(&mut shots, TAKEN, false, format!("{name}  {at}"))
             }
+            Outcome::Failed(e) => {
+                shots.pending = shots.pending.saturating_sub(1);
+                error!("oneshot: a screenshot failed: {e}");
+                tell(&mut shots, FAILED, true, e);
+            }
+            Outcome::Said { word, what, bad } => tell(&mut shots, &word, bad, what),
         }
     }
     if !keys.just_pressed(KEY) {
         return;
     }
     if shots.pending >= PENDING_CAP {
-        say(&mut shots, true, "still saving the last ones".into());
+        tell(&mut shots, FAILED, true, "still saving the last ones".into());
         return;
     }
     let stamp = shot::stamp(shot::now_secs());
@@ -196,15 +230,20 @@ fn take(
     #[cfg(not(target_arch = "wasm32"))]
     let observer = {
         let Some(dir) = shots.dir.clone() else {
-            say(&mut shots, true, "no folder for them: set ONESHOT_SHOTS_DIR".into());
+            tell(
+                &mut shots,
+                FAILED,
+                true,
+                "no folder for them: set ONESHOT_SHOTS_DIR".into(),
+            );
             return;
         };
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            say(&mut shots, true, format!("{}: {e}", shot::shown(&dir)));
+            tell(&mut shots, FAILED, true, format!("{}: {e}", shot::shown(&dir)));
             return;
         }
         let Some(path) = shot::pick(&dir, &stamp, |p| p.exists()) else {
-            say(&mut shots, true, "too many this second".into());
+            tell(&mut shots, FAILED, true, "too many this second".into());
             return;
         };
         info!("oneshot: screenshot to {}", path.display());
@@ -232,7 +271,7 @@ fn take(
     let observer = {
         let n = if shots.last.0 == stamp { shots.last.1 + 1 } else { 1 };
         if n > shot::PER_STAMP {
-            say(&mut shots, true, "too many this second".into());
+            tell(&mut shots, FAILED, true, "too many this second".into());
             return;
         }
         shots.last = (stamp.clone(), n);

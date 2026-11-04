@@ -42,6 +42,13 @@ bevy = { version = "0.18", default-features = false, features = [
 # F12's PNG (look/shot.rs): the encoder Bevy's own image loading already
 # builds, named so the client can write one.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Film mode's shot lists (film/script.rs), JSON as Gates' are: both already
+# in the build (bevy_gltf reads glTF's JSON with them).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A film's own mix (film/mix.rs): the game's .ogg cuts decoded off the frame
+# clock. The decoder Bevy's audio already builds into the browser's module.
+lewton = "0.10"
 
 [features]
 # Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
