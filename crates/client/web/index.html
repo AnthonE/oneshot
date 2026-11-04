@@ -6,6 +6,13 @@
     <title>oneshot</title>
     <link rel="icon" href="data:," />
     <style>
+      /* The game's own faces (assets/fonts, CC0): Unitblock for the title,
+         Aileron for the rest. */
+      @font-face { font-family: Unitblock; src: url(assets/fonts/Unitblock.ttf) format('truetype'); font-display: swap; }
+      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Regular.otf) format('opentype'); font-weight: 400; font-display: swap; }
+      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-SemiBold.otf) format('opentype'); font-weight: 600; font-display: swap; }
+      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Bold.otf) format('opentype'); font-weight: 700; font-display: swap; }
+      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Black.otf) format('opentype'); font-weight: 900; font-display: swap; }
       [hidden] { display: none !important; }
       html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
       #wrap { width: 100vw; height: 100vh; }
@@ -14,8 +21,8 @@
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
       #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
         gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
-        font: 16px system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
-      #menu h1 { margin: 0; font-size: 52px; letter-spacing: 6px; }
+        font: 16px Aileron, system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
+      #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; }
       #menu p { margin: 0; opacity: 0.75; }
       #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
         background: #0008; color: inherit; }
@@ -55,7 +62,8 @@
       <div id="status"></div>
       <button id="cancel" class="quiet" hidden>Cancel</button>
       <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
-        R reload · 1/2, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · N net graph · Esc frees the mouse</div>
+        R reload · 1, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · N net graph<br />
+        Esc in a match: the menu, and the settings (keys, mouse speed, field of view, volume)</div>
     </div>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, sign-in is hidden and the bot is still there. -->
@@ -66,6 +74,30 @@
       // and signs in; the game, the queue's wait and everything after are
       // the client's.
       import init, { play, pose, skin_names } from './oneshot_client.js';
+      // Raw mouse: the game's lock (winit asks with no options) asks the
+      // browser for unadjusted movement, so the OS's acceleration doesn't
+      // bend aim. Not on Linux, where Chrome refuses and a second request
+      // can lose the click; a refusal anywhere is remembered and asked
+      // plainly at once (Gates' app.js).
+      {
+        const canvas = document.getElementById('game');
+        const plain = canvas.requestPointerLock;
+        const RAW_REFUSED = 'oneshot.rawMouseRefused';
+        let refused = /Linux/.test(navigator.platform) && !/CrOS/.test(navigator.userAgent);
+        try { refused = refused || localStorage.getItem(RAW_REFUSED) === '1'; } catch { /* private window */ }
+        canvas.requestPointerLock = function () {
+          if (refused) return plain.call(this);
+          let p;
+          try { p = plain.call(this, { unadjustedMovement: true }); } catch { return plain.call(this); }
+          if (p && p.catch) p.catch((err) => {
+            if (!err || err.name !== 'NotSupportedError') return;
+            refused = true;
+            try { localStorage.setItem(RAW_REFUSED, '1'); } catch { /* private window */ }
+            plain.call(this);
+          });
+          return p;
+        };
+      }
       const params = new URLSearchParams(location.search);
       const flag = (k) => params.get(k) === '1';
       const AUTOPLAY = flag('autoplay');
@@ -121,7 +153,7 @@
       cancel.hidden = false;
       cancel.onclick = () => location.reload();
       say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
+      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
       let playing = false;
       try {
         // No hash with a CA's certificate: checked by the browser, never pinned.
@@ -135,6 +167,11 @@
         // The match over (or the line dropped): back to the menu.
         const watch = () => {
           const s = window.__oneshot;
+          // Left from the Esc menu: straight back to the menu.
+          if (s && s.left) {
+            location.reload();
+            return;
+          }
           if (s && s.ended) {
             say([s.bye ? 'Match over' : 'Disconnected', s.cup].filter(Boolean).join(' · '));
             cancel.textContent = 'Back to menu';

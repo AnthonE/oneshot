@@ -1,0 +1,150 @@
+//! Draw everything once, tiny, before the thing that wears it appears
+//! (after Gates' `client/src/render/prewarm.rs`, MIT).
+//!
+//! A render pipeline is built the first time something using it is queued
+//! for a draw. Without this, that was mid-fight: the first rocket, the
+//! first gun swapped to, the first shield hit (its shell is hidden until
+//! then), the first time fog showed another fighter. In a browser (no
+//! threads to build on) a build stalls the frame; natively the draw is
+//! skipped and the thing pops in late. So every `StandardMaterial` is
+//! drawn the frame it's made, and every model (a fighter with its shield
+//! shell showing, every gun, the rocket, the frag) once its scene is in, a
+//! fraction of a pixel across in front of the camera, for a few frames.
+//!
+//! Specialisation happens when a draw is queued, not when a fragment runs,
+//! so a warm draw only has to survive frustum culling.
+
+use bevy::asset::LoadState;
+use bevy::prelude::*;
+use bevy::scene::SceneInstanceReady;
+
+use super::guns::Models;
+use crate::Eye;
+
+/// Frames a warm draw stays once it can draw: long enough for what it
+/// queued to be built.
+pub const WARM_FRAMES: u32 = 8;
+/// In front of the eye, past the near plane.
+const WARM_AHEAD_M: f32 = 0.5;
+/// Its size: under a tenth of a pixel at 4K at the narrowest view (Gates
+/// measured; their first 1e-4 was a visible speck).
+const WARM_SIZE_M: f32 = 0.000_02;
+
+/// Where the warm fighter stands: far under every map.
+const UNDER_M: f32 = -500.0;
+
+/// A warm draw, and its frames left once it can draw.
+#[derive(Component)]
+pub struct Warming(pub u32);
+
+/// A scene under a warm draw has spawned (until then it draws nothing).
+#[derive(Component)]
+pub struct SceneDone;
+
+/// A fighter drawn only to warm: its shield shell shows (`bodies::dress`),
+/// so the shield's skinned pipeline is built too.
+#[derive(Component)]
+pub struct WarmBody;
+
+/// The triangle every material is warmed on.
+#[derive(Resource)]
+pub struct WarmMesh(Handle<Mesh>);
+
+pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    commands.insert_resource(WarmMesh(meshes.add(Triangle3d::default())));
+}
+
+fn at() -> Transform {
+    Transform::from_xyz(0.0, 0.0, -WARM_AHEAD_M).with_scale(Vec3::splat(WARM_SIZE_M))
+}
+
+/// A warm draw of every material the frame it's made.
+pub fn warm(
+    mut commands: Commands,
+    mut events: MessageReader<AssetEvent<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mesh: Option<Res<WarmMesh>>,
+    eye: Query<Entity, With<Eye>>,
+) {
+    let (Some(mesh), Ok(eye)) = (mesh, eye.single()) else {
+        events.clear();
+        return;
+    };
+    for event in events.read() {
+        let AssetEvent::Added { id } = event else {
+            continue;
+        };
+        // Nothing holds it any more: nothing will draw it.
+        let Some(handle) = materials.get_strong_handle(*id) else {
+            continue;
+        };
+        commands.entity(eye).with_child((
+            Warming(WARM_FRAMES),
+            SceneDone,
+            Mesh3d(mesh.0.clone()),
+            MeshMaterial3d(handle),
+            at(),
+        ));
+    }
+}
+
+/// Once, when every model is in: a fighter, every gun, the rocket and the
+/// frag, drawn warm.
+#[allow(clippy::too_many_arguments)]
+pub fn warm_models(
+    mut commands: Commands,
+    mut done: Local<bool>,
+    models: Option<Res<Models>>,
+    assets: Res<AssetServer>,
+    eye: Query<Entity, With<Eye>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+) {
+    if *done {
+        return;
+    }
+    let (Some(models), Ok(eye)) = (models, eye.single()) else {
+        return;
+    };
+    let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
+    scenes.extend([models.rocket.clone(), models.frag.clone(), models.body_scene.clone()]);
+    let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
+    if !scenes.iter().all(settled) {
+        return;
+    }
+    *done = true;
+    for scene in scenes.iter().take(scenes.len() - 1) {
+        commands
+            .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))
+            .observe(|ev: On<SceneInstanceReady>, mut commands: Commands| {
+                commands.entity(ev.entity).insert(SceneDone);
+            });
+    }
+    // Far under the map at full size: a body's meshes and shells are never
+    // culled (`bodies::dress`), so it is queued, shadow and all, where
+    // neither it nor its shadow (cast down, away from the floor) can be
+    // seen. In front of the eye, however small, its shell (pushed out along
+    // the normals by a fixed distance, `shield.wgsl`) would be a disc.
+    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, 0);
+    commands
+        .entity(body)
+        .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));
+}
+
+/// Counts each warm draw down once it can draw, then lets it go.
+pub fn retire(
+    mut commands: Commands,
+    mut warming: Query<(Entity, &mut Warming, Has<SceneDone>, Option<&super::bodies::Body>)>,
+) {
+    for (e, mut w, scene, body) in &mut warming {
+        // A body draws once dressed; a scene once spawned.
+        let ready = body.map_or(scene, |b| b.dressed());
+        if !ready {
+            continue;
+        }
+        match w.0.checked_sub(1) {
+            Some(0) | None => commands.entity(e).despawn(),
+            Some(left) => w.0 = left,
+        }
+    }
+}

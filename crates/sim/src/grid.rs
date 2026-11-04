@@ -200,6 +200,10 @@ impl Grid {
             for &i in self.cell(ix, iz) {
                 if seen.first(i as usize) {
                     best = f(i as usize);
+                    // Nothing is nearer than the ray's start.
+                    if best <= 0.0 {
+                        return;
+                    }
                 }
             }
             let next = nxt_x.min(nxt_z);

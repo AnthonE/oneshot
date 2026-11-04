@@ -58,6 +58,8 @@ mod on {
     pub struct Ear {
         clips: BTreeMap<String, Handle<AudioSource>>,
         rng: u32,
+        /// The player's volume (`settings.rs`), this frame.
+        volume: f32,
         last_reload: bool,
         last_arm: u8,
         last_grounded: bool,
@@ -124,7 +126,7 @@ mod on {
         };
         let speed = ear.pitch();
         let s = PlaybackSettings::DESPAWN
-            .with_volume(Volume::Linear(gain * MASTER))
+            .with_volume(Volume::Linear(gain * MASTER * ear.volume))
             .with_speed(speed);
         match at {
             Some(p) => {
@@ -147,7 +149,9 @@ mod on {
         mut ear: ResMut<Ear>,
         mut commands: Commands,
         cam: Query<&GlobalTransform, With<Camera3d>>,
+        settings: Res<crate::settings::Settings>,
     ) {
+        ear.volume = settings.volume();
         let s = link.0.session();
         if !s.ready {
             return;

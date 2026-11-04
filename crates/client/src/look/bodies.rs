@@ -132,9 +132,24 @@ pub struct Body {
     /// The shield's shell (`shield.rs`): its material and its meshes.
     shell: Handle<ShieldMaterial>,
     shells: Vec<Entity>,
+    /// Shown again after hiding: its next clip starts at once.
+    fresh: bool,
 }
 
 /// A body spawned for `team` in `skin`: its root, which the caller places.
+impl Body {
+    /// Its scene has spawned and been dressed: it draws.
+    pub fn dressed(&self) -> bool {
+        !self.mats.is_empty()
+    }
+
+    /// Hidden: the next clip starts at once, not faded from this pose.
+    pub fn afresh(&mut self) {
+        self.clip = None;
+        self.fresh = true;
+    }
+}
+
 pub fn spawn(
     commands: &mut Commands,
     models: &Models,
@@ -180,6 +195,7 @@ pub fn spawn(
         lit: 0.0,
         shell: Handle::default(),
         shells: Vec::new(),
+        fresh: false,
     });
     root
 }
@@ -253,6 +269,7 @@ fn dress(
     )>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
+    warm: Query<(), With<super::prewarm::WarmBody>>,
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -261,6 +278,13 @@ fn dress(
     };
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
+    };
+    // A body drawn only to warm shows its shell, so the shield's pipeline
+    // is built with it (`prewarm.rs`).
+    let shell_shown = if warm.contains(root) {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
     };
     let tint = team_color(body.team).to_linear();
     let base = LinearRgba::rgb(
@@ -285,7 +309,7 @@ fn dress(
                     mesh.clone(),
                     MeshMaterial3d(shell.clone()),
                     *at,
-                    Visibility::Hidden,
+                    shell_shown,
                     ShellPart,
                     NotShadowCaster,
                     NoFrustumCulling,
@@ -419,7 +443,9 @@ pub fn pose(
                 .insert((AnimationGraphHandle(graph.handle.clone()), AnimationTransitions::new()));
         } else if let Ok((mut player, mut tr)) = playing.get_mut(p) {
             if body.clip != Some(clip) {
-                let a = tr.play(&mut player, graph.nodes[clip], FADE);
+                let fade = if body.fresh { Duration::ZERO } else { FADE };
+                body.fresh = false;
+                let a = tr.play(&mut player, graph.nodes[clip], fade);
                 if clip == DEATH {
                     a.set_repeat(RepeatAnimation::Never);
                 } else {

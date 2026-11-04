@@ -7,6 +7,7 @@ pub mod fx;
 pub mod grass;
 pub mod ground;
 pub mod guns;
+pub mod prewarm;
 pub mod rig;
 pub mod shake;
 pub mod shield;

@@ -283,11 +283,60 @@ impl Map {
         t
     }
 
-    /// Whether the straight line from `a` to `b` is clear.
+    /// Whether the straight line from `a` to `b` is clear: what
+    /// `self.ray(a, (b − a)/l, l) >= l` says, but the first thing in the way
+    /// ends the walk, where [`Self::ray`] goes on for the nearest. Fog asks
+    /// this tens of times per pair per snapshot.
     pub fn clear(&self, a: V3, b: V3) -> bool {
         let v = b - a;
         let l = v.len();
-        l == 0.0 || self.ray(a, v * (1.0 / l), l) >= l
+        if l == 0.0 {
+            return true;
+        }
+        // A NaN or endless line answers as the nearest hit says (blocked,
+        // for NaN): fog never shows what it couldn't measure.
+        if !l.is_finite() {
+            return self.ray(a, v * (1.0 / l), l) >= l;
+        }
+        let d = v * (1.0 / l);
+        let ground = match &self.terrain {
+            None if d.y < 0.0 && a.y >= 0.0 => -a.y / d.y,
+            None => l,
+            Some(g) => g.ray(a, d, l),
+        };
+        if ground < l {
+            return false;
+        }
+        let n = self.boxes.len();
+        // A box or solid wholly over or under the line can't be in its way
+        // (a roof, a platform): skipped, with a millimetre to spare so no
+        // rounding in the exact test could have said otherwise.
+        let lo = a.y.min(b.y) - 0.001;
+        let hi = a.y.max(b.y) + 0.001;
+        let mut hit = false;
+        self.grid.each_on_ray(a, d, l, |i| {
+            let h = if i < n {
+                let bx = &self.boxes[i];
+                if bx.min.y > hi || bx.max.y < lo {
+                    return l;
+                }
+                ray_aabb(a, d, bx, l)
+            } else {
+                let s = &self.solids[i - n];
+                if s.y0 > hi || s.y1 < lo {
+                    return l;
+                }
+                s.ray(a, d, l)
+            };
+            hit |= h.is_some_and(|h| h < l);
+            // Zero ends the walk.
+            if hit {
+                0.0
+            } else {
+                l
+            }
+        });
+        !hit
     }
 
     /// The ground's height at (x, z): the terrain's, or 0.
@@ -508,11 +557,19 @@ mod tests {
             }
         }
         for s in &m.solids {
-            if let Some(h) = s.ray(o, d, t) {
+            if let Some(h) = s.ray_exact(o, d, t) {
                 t = h;
             }
         }
         t
+    }
+
+    /// What [`Map::clear`] must say: the nearest hit, by the linear scan,
+    /// no nearer than the far end.
+    fn clear_linear(m: &Map, a: V3, b: V3) -> bool {
+        let v = b - a;
+        let l = v.len();
+        l == 0.0 || ray_linear(m, a, v * (1.0 / l), l) >= l
     }
 
     fn floor_linear(m: &Map, x: f32, z: f32, r: f32, reach: f32) -> f32 {
@@ -624,6 +681,175 @@ mod tests {
                     ceiling_linear(m, x, z, rad, y).to_bits()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn clear_answers_as_the_nearest_hit_does() {
+        // Lines between two places a fighter could be, as fog draws them
+        // (eye to body), on every map: low, high, across roofs and pits.
+        let mut maps: Vec<Map> = crate::maps::ALL.iter().map(|d| d.build()).collect();
+        maps.push(with_solids());
+        let mut r = Pcg32::new(17, 5);
+        for m in &maps {
+            let (lx, lz) = (m.lo.0 - 2.0, m.lo.1 - 2.0);
+            let (hx, hz) = (m.hi.0 + 2.0, m.hi.1 + 2.0);
+            let mut blocked = 0;
+            for _ in 0..40_000 {
+                let mut p = || {
+                    let (x, z) = (unit(&mut r, lx, hx), unit(&mut r, lz, hz));
+                    V3::new(x, m.ground(x, z) + unit(&mut r, -0.5, 9.0), z)
+                };
+                let (a, b) = (p(), p());
+                let want = clear_linear(m, a, b);
+                assert_eq!(m.clear(a, b), want, "{}: {a:?} to {b:?}", m.name);
+                blocked += usize::from(!want);
+            }
+            assert!(blocked > 1000, "{}: the lines must meet things", m.name);
+        }
+    }
+
+    #[test]
+    fn clear_answers_a_nan_or_endless_line_as_the_nearest_hit_does() {
+        let n = f32::NAN;
+        let i = f32::INFINITY;
+        for m in crate::maps::ALL.iter().map(|d| d.build()) {
+            for (a, b) in [
+                (V3::new(0.0, 1.5, 0.0), V3::new(n, 1.5, 3.0)),
+                (V3::new(n, n, n), V3::new(1.0, 1.5, 3.0)),
+                (V3::new(0.0, 1.5, 0.0), V3::new(i, 1.5, 3.0)),
+                (V3::new(-i, 1.5, 0.0), V3::new(i, 1.5, 3.0)),
+                (V3::new(0.0, 1.5, 0.0), V3::new(1e30, 1.5, 3.0)),
+            ] {
+                assert_eq!(m.clear(a, b), clear_linear(&m, a, b), "{}: {a:?} to {b:?}", m.name);
+            }
+            assert!(!m.clear(V3::new(0.0, 1.5, 0.0), V3::new(n, 1.5, 3.0)));
+        }
+    }
+
+    #[test]
+    fn a_ray_past_a_curve_is_answered_as_the_exact_test_does() {
+        // Aimed at points just around each round and turned solid, so many
+        // graze it: the quick look first must never change an answer.
+        let mut maps: Vec<Map> = crate::maps::ALL.iter().map(|d| d.build()).collect();
+        maps.push(with_solids());
+        let mut r = Pcg32::new(23, 9);
+        for m in &maps {
+            for s in &m.solids {
+                let bb = s.bounds();
+                let c = (bb.min + bb.max) * 0.5;
+                let reach = (bb.max - bb.min).len() * 0.5 + 0.2;
+                for _ in 0..2_000 {
+                    let at = c + V3::new(
+                        unit(&mut r, -reach, reach),
+                        unit(&mut r, -1.0, 1.0),
+                        unit(&mut r, -reach, reach),
+                    );
+                    let o = at
+                        + V3::new(
+                            unit(&mut r, -20.0, 20.0),
+                            unit(&mut r, -2.0, 4.0),
+                            unit(&mut r, -20.0, 20.0),
+                        );
+                    let v = at - o;
+                    if v.len() == 0.0 {
+                        continue;
+                    }
+                    let d = v.norm();
+                    let tmax = unit(&mut r, 0.0, 60.0);
+                    assert_eq!(
+                        s.ray(o, d, tmax).map(f32::to_bits),
+                        s.ray_exact(o, d, tmax).map(f32::to_bits),
+                        "{}: {s:?} {o:?} {d:?}",
+                        m.name
+                    );
+                }
+                // From far across a big map, aimed within a tenth of a
+                // millimetre of an edge: where rounding is largest and a
+                // ray only grazes.
+                for e in edges(s) {
+                    for _ in 0..200 {
+                        let at = V3::new(
+                            e.x + unit(&mut r, -1e-4, 1e-4),
+                            unit(&mut r, s.y0 + 0.01, s.y1 - 0.01),
+                            e.z + unit(&mut r, -1e-4, 1e-4),
+                        );
+                        let far = unit(&mut r, 40.0, 150.0);
+                        let turn = unit(&mut r, 0.0, core::f32::consts::TAU);
+                        let o = at
+                            + V3::new(
+                                far * crate::fmath::cos(turn),
+                                unit(&mut r, -3.0, 3.0),
+                                far * crate::fmath::sin(turn),
+                            );
+                        let d = (at - o).norm();
+                        let tmax = (at - o).len() + unit(&mut r, -0.01, 0.01);
+                        assert_eq!(
+                            s.ray(o, d, tmax).map(f32::to_bits),
+                            s.ray_exact(o, d, tmax).map(f32::to_bits),
+                            "{}: {s:?} {o:?} {d:?} {tmax}",
+                            m.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A round solid's rim every 10°, a turned one's corners.
+    fn edges(s: &crate::solid::Solid) -> Vec<V3> {
+        use crate::solid::Shape;
+        match s.shape {
+            Shape::Round { x, z, r } => (0..36)
+                .map(|k| {
+                    let a = k as f32 * (core::f32::consts::TAU / 36.0);
+                    V3::new(x + r * crate::fmath::cos(a), 0.0, z + r * crate::fmath::sin(a))
+                })
+                .collect(),
+            Shape::Turned { x, z, hx, hz, c, s } => [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)]
+                .iter()
+                .map(|&(a, b)| V3::new(x + c * a * hx - s * b * hz, 0.0, z + s * a * hx + c * b * hz))
+                .collect(),
+            Shape::Ramp { .. } => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_rays_the_review_found_meet_the_wall() {
+        // Two lines across Chrysalis that graze a curved wall's corner from
+        // over 40 m, and every line within 5 mm of them.
+        let m = crate::maps::ALL.iter().find(|d| d.id == 6).unwrap().build();
+        let wall = |x: f32, z: f32| {
+            *m.solids
+                .iter()
+                .find(|s| s.bounds().min.x < x && s.bounds().max.x > x && s.bounds().min.z < z && s.bounds().max.z > z)
+                .unwrap()
+        };
+        for (s, a, b) in [
+            (
+                wall(-16.995306, 12.485494),
+                V3::new(19.827059, 1.3204271, -11.240811),
+                V3::new(-16.70709, 1.5, 12.927709),
+            ),
+            (
+                wall(16.995306, -12.485494),
+                V3::new(-17.321032, 1.1206951, 10.461417),
+                V3::new(17.283522, 1.5, -12.043298),
+            ),
+        ] {
+            for i in -50..=50 {
+                for k in -50..=50 {
+                    let b = b + V3::new(i as f32 * 1e-4, 0.0, k as f32 * 1e-4);
+                    let v = b - a;
+                    let (d, l) = (v.norm(), v.len());
+                    assert_eq!(
+                        s.ray(a, d, l).map(f32::to_bits),
+                        s.ray_exact(a, d, l).map(f32::to_bits),
+                        "{a:?} to {b:?}"
+                    );
+                }
+            }
+            assert!(s.ray_exact(a, (b - a).norm(), (b - a).len()).is_some());
         }
     }
 

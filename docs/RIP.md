@@ -278,6 +278,18 @@ depend on Gates' crates. The same Bevy version keeps the ports close.
 | `decal.rs` (its atlas and mesh pool), `shake.rs`, `hurt_flash.rs`, `fx/gun.rs` (own shot drawn now) | `client/src/look/{fx/marks,shake}.rs`, `hud.rs`, `fx/shots.rs` | Holes and scorches in one mesh with a relief normal map; trauma shake and kicks; the red rim; our own tracer the frame we fire. Not the conforming to meshes (our surfaces are flat) |
 | `fresnel.rs` (the idea) | `client/src/look/shield.rs`, `assets/shaders/shield.wgsl` | Ours, not Gates': the shield shell, a fighter's skinned meshes again pushed out along their normals, additive gold with a fresnel rim and drifting hexagons, as bright as the shield's flare |
 
+### Taken for the beta (2026-11)
+
+| Source (`Gates/crates/…`) | → here | What we keep |
+|---|---|---|
+| `client-core/src/clock.rs` `alpha`, `predict.rs` `eye_position`, `decay_error` | `client-net/src/core.rs` `own`, `own_vehicle`, `ease` | Our body drawn between its last two ticks; corrections eased by size with a dead zone |
+| `client-core/src/core.rs` `server_est`, slewed playout, `interp.rs` `sample` | `client-net/src/core.rs` `Slew`, `others`, `vehicles` | A render clock that never steps back, a slewed delay, bounded extrapolation, the long-gap rule |
+| `client-core/src/core.rs` `sticky_buttons` | `client-net/src/core.rs` `sticky` | A tap reaches one tick |
+| `server/src/net.rs` `writer_task` (the idea: newest snapshot wins, a stream never drops silently) | `server/src/outlet.rs` | Two lanes per session |
+| `client/src/ui/pointer.rs` `BrowserLock`, `render/web.rs` `pointer_locked`; `client-web/web/app.js` raw mouse | `client/src/pointer.rs`, `client/web/index.html` | The page's real pointer lock; unadjusted movement |
+| `client/src/render/prewarm.rs` | `client/src/look/prewarm.rs` | Every material and model drawn warm at load |
+| `client/src/render/ui.rs` (fonts, hover, buttons) | `client/src/ui.rs` | Embedded fonts at fixed handles; our CC0 faces, not Gates' Apache-2.0 Roboto |
+
 The types Gates' modules read become ours: `Eye` → `OwnView` (from
 `NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the
 map's `"sky"` block, which the sim never reads.

@@ -275,8 +275,14 @@ async fn the_page_is_told_the_public_address_and_pins_only_its_own_certificate()
     let (_, head, _) = get(port, "/nonce", Some("https://evil.example")).await;
     assert!(!head.contains("Access-Control-Allow-Origin"), "only the origins named");
 
-    // Ready until it drains; healthy throughout.
-    assert_eq!(get(port, "/ready", None).await.0, 200);
+    // Ready until it drains; healthy throughout. It says what the session
+    // writers counted.
+    let (code, _, body) = get(port, "/ready", None).await;
+    assert_eq!(code, 200);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    for k in ["snapshots_dropped", "snapshots_oversize", "cut_behind"] {
+        assert_eq!(v[k], 0, "{k}: {body}");
+    }
     h.drain(Duration::from_secs(5)).await;
     assert_eq!(get(port, "/ready", None).await.0, 503);
     assert_eq!(get(port, "/health", None).await.0, 200);
