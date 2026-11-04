@@ -15,5 +15,7 @@ pub mod shield;
 pub mod ship;
 pub mod sky;
 pub mod textures;
+pub mod trees;
 pub mod vault;
 pub mod viewmodel;
+pub mod water;
