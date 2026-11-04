@@ -376,9 +376,21 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
         if tier.atmosphere {
             "the atmosphere: this GPU draws the sky and the air"
         } else if webgl2 {
-            "baked, and the same air as a haze: WebGL2 has no compute"
+            "drawn per pixel, and the same air as a haze: WebGL2 has no compute"
         } else {
-            "baked, and the same air as a haze: this GPU can't filter the atmosphere's tables"
+            "drawn per pixel, and the same air as a haze: this GPU can't filter the atmosphere's tables"
+        },
+    );
+    number(pane, s, Knob::Clouds, "CLOUDS", "flat, or a raymarched slab");
+    fact(
+        pane,
+        "  light shafts",
+        if tier.shafts() {
+            "through a misty map's air, at HIGH"
+        } else if tier.atmosphere {
+            "at HIGH clouds: the sun's beams through a misty map's air"
+        } else {
+            "not here: Bevy's volumetric pass wants WebGPU; the mist glows toward the sun instead"
         },
     );
     pane.spawn(ui::group("WORLD"));

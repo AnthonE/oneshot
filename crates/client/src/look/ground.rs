@@ -1,9 +1,10 @@
 //! The ground: four photographed sets (sand, grass, the creek's gravel,
 //! rock) blended by the splat weights the terrain mesh carries in its
-//! vertex colour, each at its own photographed size, over Bevy's PBR.
-//! After Gates' `render/ground_splat.rs` (MIT, NOTICE): its extension of
-//! `StandardMaterial`, its texture arrays, its sizes; without the island's
-//! roads, blight, snow and caustics.
+//! vertex colour, each at its own photographed size, over Bevy's PBR, wet
+//! where the map's mood rains and crossed by its cloud deck's shadows
+//! (`cloud_shadow.rs`). After Gates' `render/ground_splat.rs` (MIT, NOTICE):
+//! its extension of `StandardMaterial`, its texture arrays, its sizes;
+//! without the island's roads, blight, snow and caustics.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -27,6 +28,11 @@ pub struct Ground {
     /// red-rock canyon's sand is not a beach's).
     #[uniform(105)]
     pub tint: [Vec4; 4],
+    /// The deck's shadows and the rain's wet (`cloud_shadow::drive` keeps
+    /// it): a uniform, not a texture or a buffer, so the ground binds what
+    /// it did on every target.
+    #[uniform(106)]
+    pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
 /// Dry Fork's soils over Gates' photographs: warm desert sand, dry grass,
@@ -44,7 +50,11 @@ impl MaterialExtension for Ground {
     }
 }
 
-pub fn material(albedo: Handle<Image>, normal: Handle<Image>) -> GroundMaterial {
+pub fn material(
+    albedo: Handle<Image>,
+    normal: Handle<Image>,
+    cloud: super::cloud_shadow::CloudShadowParams,
+) -> GroundMaterial {
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,
@@ -55,6 +65,7 @@ pub fn material(albedo: Handle<Image>, normal: Handle<Image>) -> GroundMaterial 
             normal,
             tile_m: Vec4::from_array(super::textures::GROUND_TILE_M),
             tint: TINT,
+            cloud,
         },
     }
 }

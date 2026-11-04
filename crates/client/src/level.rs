@@ -241,6 +241,7 @@ fn box_mesh(size: Vec3, mid: Vec3, tile: f32) -> Mesh {
 }
 
 /// The level's ground and boxes in their textures, once those are ready.
+#[allow(clippy::too_many_arguments)]
 pub fn dress_level(
     mut commands: Commands,
     tex: Res<crate::look::textures::Textures>,
@@ -249,7 +250,11 @@ pub fn dress_level(
     ground: Query<Entity, (With<GroundMesh>, Without<Dressed>)>,
     boxes: Query<(Entity, &BoxLook), Without<Dressed>>,
     grass: Query<Entity, (With<GrassPart>, Without<Dressed>)>,
+    mood: Res<crate::look::mood::MoodNow>,
 ) {
+    // The rain's wet on everything it falls on (`look/rain.rs`); none
+    // under a roof.
+    let wet = if mood.roofed { 0.0 } else { mood.mood.wet };
     let Some((albedo, normal)) = tex.ground.clone() else {
         return;
     };
@@ -269,7 +274,11 @@ pub fn dress_level(
         }
     }
     for e in ground.iter() {
-        let m = ground_mats.add(crate::look::ground::material(albedo.clone(), normal.clone()));
+        let m = ground_mats.add(crate::look::ground::material(
+            albedo.clone(),
+            normal.clone(),
+            crate::look::cloud_shadow::CloudShadowParams::off(wet),
+        ));
         commands
             .entity(e)
             .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -295,11 +304,12 @@ pub fn dress_level(
         let scale = if orm.is_some() { ROUGH_SCALE } else { 1.0 };
         // A set that glows (the alien hull's veins): in its look's colour.
         let glow = tex.emissive(set);
+        let (tint, rough) = crate::look::rain::wetted(tint, (roughness * scale).min(1.0), wet);
         let m = mats.add(StandardMaterial {
             base_color: tint,
             base_color_texture: Some(albedo),
             normal_map_texture: Some(normal),
-            perceptual_roughness: (roughness * scale).min(1.0),
+            perceptual_roughness: rough,
             metallic,
             metallic_roughness_texture: orm.clone(),
             occlusion_texture: orm,
@@ -590,7 +600,16 @@ pub fn build(
             Transform::from_xyz(p.pos.x, p.pos.y + 0.03, p.pos.z),
         ));
     }
-    // The sun at noon (look::rig: its shadows, its disk), as strong as the
-    // map says.
-    commands.spawn((LevelPart, crate::look::rig::sun(map.light.sun)));
+    // The map's sun (look::rig: its shadows, its disk), where its mood puts
+    // it, as strong as the map says.
+    let mood = crate::look::mood::of(id);
+    let ev = if map.light.ev100 > 0.0 {
+        map.light.ev100
+    } else {
+        mood.ev100
+    };
+    commands.spawn((
+        LevelPart,
+        crate::look::rig::sun(map.light.sun, &mood, crate::look::gpu::atmosphere(), ev),
+    ));
 }

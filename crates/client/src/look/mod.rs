@@ -2,21 +2,29 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod bodies;
+pub mod cloud_shadow;
+pub mod deck;
 pub mod fill;
 pub mod fx;
 pub mod gpu;
 pub mod grass;
 pub mod ground;
 pub mod guns;
+pub mod mood;
+pub mod moon;
 pub mod pipelines;
 pub mod potato;
 pub mod prewarm;
 pub mod quality;
+pub mod rain;
+pub mod rainbow;
 pub mod render_scale;
 pub mod rig;
+pub mod shafts;
 pub mod shake;
 pub mod shield;
 pub mod shot;
 pub mod sky;
+pub mod stars;
 pub mod textures;
 pub mod viewmodel;

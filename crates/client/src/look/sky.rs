@@ -1,15 +1,17 @@
-//! The sky and its clouds, at noon on a clear day: a seeded cloud field
-//! composed into a cubemap, with Gates' sky behind it under WebGL2 (which
-//! has no atmosphere) and clear texels left to the atmosphere on the
-//! desktop and in the browser's WebGPU module (`gpu.rs`). What follows the
-//! GPU API is `cfg(webgl2)`; what follows the browser's one thread (the
-//! field's size, the composer's budget) stays `target_arch = "wasm32"`.
+//! The sky's arithmetic: the seeded cloud field, how the deck is lit
+//! (`DeckLight`), the clear sky behind it where no atmosphere draws one, and
+//! the weather's air over it (`SkyFog`). The deck itself is drawn per pixel
+//! (`deck.rs`) from this field and these numbers, under the map's mood
+//! (`mood.rs`). What follows the GPU is decided at run time ([`baked`]);
+//! what follows the browser's one thread (the field's size) stays
+//! `target_arch = "wasm32"`.
 //!
 //! Ported from Gates' `crates/client/src/render/sky.rs` (MIT, © 2026
-//! MoreRight DAO; NOTICE). Its weather, moon phase, underwater fog and the
-//! composer that re-bakes the deck as the weather moves are left out: a
-//! match here is noon, clear. What remains is Gates' code as it was, so a
-//! later port of the rest lands on the same numbers.
+//! MoreRight DAO; NOTICE). Its composer (the cube re-baked as the weather
+//! moves), its underwater fog and the Verdigris are left out; the composed
+//! cube itself is kept only as Gates' reference arithmetic (nothing here
+//! reflects the sky). What remains is Gates' code as it was, so the rest
+//! of its sky lands on the same numbers.
 #![allow(dead_code, clippy::all)]
 
 /// Gates' share of night light a new moon leaves (rig.rs).
@@ -141,6 +143,13 @@ const CLOUD_BASE: [f32; 3] = [0.42, 0.45, 0.52];
 /// wherever the atmosphere draws (the desktop, and the browser's WebGPU
 /// module), for the reason above; a sky under WebGL2, which has none.
 pub const BAKE_BACKDROP: bool = cfg!(webgl2);
+
+/// [`BAKE_BACKDROP`] as this device decides it: no atmosphere draws here
+/// (`gpu::atmosphere`), so the deck draws the sky behind its clouds and the
+/// air is a fog. What the fog's colour and glow follow at run time.
+pub fn baked() -> bool {
+    !super::gpu::atmosphere()
+}
 
 /// The horizon's luminance over the zenith's. A clear sky is brightest at
 /// the horizon, where the eye looks through the most air: measured skies
@@ -1310,7 +1319,7 @@ pub fn fog_rgb_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> [f32; 3] {
     if dust <= 0.0 {
         return rgb;
     }
-    let floor = if BAKE_BACKDROP {
+    let floor = if baked() {
         static AIR: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
         *AIR.get_or_init(|| super::fill::luminance(ground_air(&super::rig::medium()).0.to_array()))
     } else {
@@ -1343,7 +1352,7 @@ pub const FOG_SUN_EXPONENT: f32 = 10.0;
 /// island's clear air all day (`browser_haze`) and a glow would brighten
 /// every hill toward the sun in fine weather.
 pub fn fog_glow() -> Color {
-    if BAKE_BACKDROP {
+    if baked() {
         Color::NONE
     } else {
         Color::linear_rgba(1.0, 0.95, 0.85, FOG_SUN_GLOW)
@@ -1355,7 +1364,7 @@ pub fn fog_glow() -> Color {
 /// `sigma` is zero then. A browser has no atmosphere, so its island air
 /// ([`browser_haze`]'s) is the floor the weather adds to.
 pub fn fog_falloff(sigma: f32) -> FogFalloff {
-    if BAKE_BACKDROP {
+    if baked() {
         let (extinction, inscattering) = ground_air(&super::rig::medium());
         FogFalloff::Atmospheric {
             extinction: extinction + Vec3::splat(sigma),

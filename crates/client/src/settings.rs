@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use crate::binds::Binds;
 use crate::config;
 use crate::look::quality::{
-    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Cover, Effects, Gfx, Quality,
-    COVER_M_LADDER, SHADOW_M_LADDER, SHADOW_PX_LADDER,
+    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Clouds, Cover, Effects, Gfx,
+    Quality, COVER_M_LADDER, SHADOW_M_LADDER, SHADOW_PX_LADDER,
 };
 use crate::look::render_scale;
 
@@ -165,6 +165,8 @@ pub enum Knob {
     CoverDistance,
     /// The EFFECTS row (sparks and flash lights), not the game's sounds.
     Fx,
+    /// How the cloud deck is drawn (`look/deck.rs`).
+    Clouds,
     Fullscreen,
     Vsync,
     FrameCap,
@@ -187,6 +189,7 @@ impl Knob {
                 | Knob::Cover
                 | Knob::CoverDistance
                 | Knob::Fx
+                | Knob::Clouds
         )
     }
 }
@@ -231,6 +234,7 @@ struct GfxFile {
     cover: Option<Cover>,
     cover_m: Option<f32>,
     effects: Option<Effects>,
+    clouds: Option<Clouds>,
 }
 
 /// The preset, then what the file overrode, sanitized beside the steppers:
@@ -251,6 +255,7 @@ fn gfx_from_file(q: Quality, f: GfxFile) -> Gfx {
         cover: f.cover.unwrap_or(base.cover),
         cover_m: span(&COVER_M_LADDER, f.cover_m.unwrap_or(base.cover_m)),
         effects: f.effects.unwrap_or(base.effects),
+        clouds: f.clouds.unwrap_or(base.clouds),
     })
 }
 
@@ -361,6 +366,7 @@ impl Settings {
                     Knob::Cover => g.cover = g.cover.step(delta),
                     Knob::CoverDistance => g.cover_m = step_ladder(&COVER_M_LADDER, g.cover_m, delta),
                     Knob::Fx => g.effects = g.effects.step(delta),
+                    Knob::Clouds => g.clouds = g.clouds.step(delta),
                     Knob::Fullscreen => self.fullscreen = !self.fullscreen,
                     Knob::Vsync => self.vsync = !self.vsync,
                     Knob::FrameCap => self.max_fps = step_fps(self.max_fps, delta),
@@ -392,6 +398,7 @@ impl Settings {
             Knob::Cover => g.cover.name().to_uppercase(),
             Knob::CoverDistance => format!("{:.0} m", g.cover_m),
             Knob::Fx => g.effects.name().to_uppercase(),
+            Knob::Clouds => g.clouds.name().to_uppercase(),
             Knob::Fullscreen => on_off(self.fullscreen),
             Knob::Vsync => on_off(self.vsync),
             Knob::FrameCap if self.max_fps == 0 => "NONE".into(),
@@ -435,6 +442,7 @@ impl Settings {
                 ("cover", g.cover.name().into()),
                 ("cover_m", format!("{}", g.cover_m)),
                 ("fx", g.effects.name().into()),
+                ("clouds", g.clouds.name().into()),
             ]);
         }
         out.extend([("vsync", self.vsync.to_string()), ("max_fps", self.max_fps.to_string())]);
@@ -477,6 +485,7 @@ impl Settings {
                 "cover" => f.cover = Cover::from_name(v),
                 "cover_m" => f.cover_m = num,
                 "fx" => f.effects = Effects::from_name(v),
+                "clouds" => f.clouds = Clouds::from_name(v),
                 "vsync" => s.vsync = flag.unwrap_or(s.vsync),
                 // Floored, not snapped: a 165 Hz panel's cap is a rate
                 // someone could mean; under the floor the game reads hung.
@@ -792,6 +801,7 @@ mod tests {
                     Knob::Cover,
                     Knob::CoverDistance,
                     Knob::Fx,
+                    Knob::Clouds,
                     Knob::FrameCap,
                 ] {
                     s.adjust(k, dir);

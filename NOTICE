@@ -27,9 +27,13 @@ Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
 Code ported into the Bevy client (crates/client/src/look) from Gates
 (AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, quality.rs,
 potato.rs, render_scale.rs with assets/shaders/render_scale.wgsl, the
-settings' graphics half, and the sky, ground and grass modules as they
-arrive), and into tools/glb from Gates' crates/client/src/webassets.rs,
-under the MIT licence:
+settings' graphics half, the sky (sky.rs, deck.rs, moon.rs, stars.rs,
+rain.rs, rainbow.rs, cloud_shadow.rs, shafts.rs, and weather.rs and rig.rs's
+day and night as look/mood.rs, with assets/shaders/deck.wgsl, cloud.wgsl
+and sky_deck.wgsl as cloud.wgsl, cloud_prepass.wgsl, sky_fog.wgsl,
+moon.wgsl, stars.wgsl, rain.wgsl, rainbow.wgsl, cloud_shadow.wgsl), and the
+ground and grass modules as they arrive), and into tools/glb from Gates'
+crates/client/src/webassets.rs, under the MIT licence:
 
     Copyright (c) 2026 MoreRight DAO
 

@@ -202,6 +202,24 @@ pub enum Effects {
 }
 named!(Effects { Low = "low", High = "high" });
 
+/// How the cloud deck is drawn (`deck.rs`): flat, per pixel, or a slab of
+/// cloud a kilometre thick, raymarched in more or fewer steps. Only the
+/// sky moves with it (and, at its top rung where the atmosphere draws, the
+/// sun's shafts through a misty map's air, `shafts.rs`): a cloud is never
+/// in front of a fighter, so no rung sees anyone another hides.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub enum Clouds {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+named!(Clouds {
+    Low = "low",
+    Medium = "medium",
+    High = "high",
+});
+
 /// What the player chose, one field per row on SETTINGS > GRAPHICS.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Gfx {
@@ -222,6 +240,7 @@ pub struct Gfx {
     pub cover: Cover,
     pub cover_m: f32,
     pub effects: Effects,
+    pub clouds: Clouds,
 }
 
 /// The shadow distances the screen offers, metres, ascending. The floor is
@@ -298,6 +317,7 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             cover: Cover::High,
             cover_m: super::grass::DRAW_M,
             effects: Effects::High,
+            clouds: Clouds::High,
         },
         Quality::Medium => Gfx {
             shadow_m: 120.0,
@@ -310,6 +330,11 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             cover: Cover::High,
             cover_m: super::grass::DRAW_M,
             effects: Effects::Low,
+            // The second budget spent by target: the WebGL2 module opens
+            // on this rung, on whatever GPU a browser without WebGPU has,
+            // so its deck is flat here and the slab is its HIGH (or the
+            // row's); the desktop and WebGPU march a short slab.
+            clouds: if webgl2 { Clouds::Low } else { Clouds::Medium },
         },
         Quality::Low => Gfx {
             shadow_m: 90.0,
@@ -327,6 +352,7 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             cover: Cover::Medium,
             cover_m: COVER_M_LADDER[1],
             effects: Effects::Low,
+            clouds: Clouds::Low,
         },
         // Fill rate is what such a GPU runs out of first: the world at 70%
         // (half the pixels) and stretched, one cascade, no post at all.
@@ -341,6 +367,7 @@ pub fn preset_on(q: Quality, webgl2: bool) -> Gfx {
             cover: Cover::Off,
             cover_m: COVER_M_LADDER[0],
             effects: Effects::Low,
+            clouds: Clouds::Low,
         },
     }
 }
@@ -522,11 +549,25 @@ impl Tier {
         .build()
     }
 
+    /// The cloud deck's view and light steps (`deck::steps`): `(0, 0)` is
+    /// the flat deck.
+    pub fn cloud_steps(&self) -> (u32, u32) {
+        super::deck::steps(self.gfx.clouds)
+    }
+
+    /// Whether the sun's shafts through a misty map's air are drawn: Bevy's
+    /// volumetric pass, which wants what the atmosphere wants (never
+    /// WebGL2), at the CLOUDS row's top rung, the same family of
+    /// raymarched air (`shafts.rs`).
+    pub fn shafts(&self) -> bool {
+        self.atmosphere && self.gfx.clouds == Clouds::High
+    }
+
     /// What it draws, for the log and the page (`window.__oneshot.tier`).
     pub fn describe(&self) -> String {
         let g = &self.gfx;
         format!(
-            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, cover {} to {:.0} m, effects {}, {}%",
+            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, cover {} to {:.0} m, effects {}, clouds {}{}, {}%",
             self.preset.map_or("custom", Quality::name),
             gpu::api(),
             if self.atmosphere { "atmosphere" } else { "haze" },
@@ -539,6 +580,8 @@ impl Tier {
             g.cover.name(),
             g.cover_m,
             g.effects.name(),
+            g.clouds.name(),
+            if self.shafts() { " with shafts" } else { "" },
             g.render_scale,
         )
     }
@@ -736,6 +779,8 @@ mod tests {
         assert_eq!(t.gfx.shadow_map_px, DirectionalLightShadowMap::default().size);
         assert_eq!((t.gfx.cover, t.gfx.cover_m), (Cover::High, super::super::grass::DRAW_M));
         assert_eq!((t.gfx.effects, t.gfx.render_scale), (Effects::High, 100));
+        assert_eq!(t.gfx.clouds, Clouds::High);
+        assert!(t.shafts());
 
         let w = Tier::resolve(
             preset_on(Quality::Medium, true),
@@ -750,6 +795,8 @@ mod tests {
         assert_eq!(w.gfx.shadow_map_px, DirectionalLightShadowMap::default().size);
         assert_eq!((w.gfx.cover, w.gfx.cover_m), (Cover::High, super::super::grass::DRAW_M));
         assert_eq!((w.gfx.effects, w.gfx.render_scale), (Effects::Low, 100));
+        assert_eq!(w.gfx.clouds, Clouds::Low, "the flat deck WebGL2 drew");
+        assert!(!w.shafts(), "no volumetric pass under WebGL2");
 
         assert_eq!(default_quality_on(false), Quality::High);
         assert_eq!(default_quality_on(true), Quality::Medium);
@@ -790,6 +837,11 @@ mod tests {
                     rank(Effects::LADDER, &l.effects) <= rank(Effects::LADDER, &h.effects),
                     "{at}: fx"
                 );
+                assert!(
+                    rank(Clouds::LADDER, &l.clouds) <= rank(Clouds::LADDER, &h.clouds),
+                    "{at}: clouds"
+                );
+                assert!(!(lo.shafts() && !hi.shafts()), "{at}: shafts");
                 assert!(lo != hi, "{at}: two rungs that draw the same frame");
                 assert!(l.cascades >= 1 && l.shadow_map_px > 0, "{at}: the shade is never off");
             }

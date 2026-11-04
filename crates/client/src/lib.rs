@@ -320,6 +320,17 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
+    // The sky (look/deck.rs and its layers) under each map's mood.
+    .add_plugins(MaterialPlugin::<look::deck::CloudMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::deck::SkyFogMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::stars::StarMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::moon::MoonMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::rain::RainMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::rainbow::RainbowMaterial>::default())
+    .init_resource::<look::mood::MoodNow>()
+    .init_resource::<look::mood::SkyClock>()
+    .init_resource::<look::mood::Drift>()
+    .init_resource::<look::shafts::Shafts>()
     .add_systems(
         Startup,
         (
@@ -328,7 +339,33 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::guns::load,
             look::fx::setup,
             look::prewarm::setup,
+            (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
+            look::rain::setup,
+            look::rainbow::setup,
+            look::shafts::setup,
         ),
+    )
+    // The sky after the level is built for its map: the clock, the drift
+    // off it, then everything drawn from the mood and the drift, each
+    // written only when it moves.
+    .add_systems(
+        Update,
+        (
+            sky_clock,
+            look::mood::drift,
+            look::shafts::drive,
+            (
+                look::deck::drive,
+                look::stars::drive,
+                look::moon::drive,
+                look::rain::drive,
+                look::rainbow::drive,
+                look::cloud_shadow::drive,
+                look::rig::fog,
+            ),
+        )
+            .chain()
+            .after(rebuild),
     )
     .add_systems(
         Update,
@@ -383,6 +420,23 @@ fn setup(
 ) {
     let eye = look::rig::camera(&mut commands, &mut images, &mut media, Eye);
     look::viewmodel::spawn(&mut commands, eye);
+}
+
+/// The sky's clock (`look::mood::SkyClock`): the server's tick as this
+/// client estimates it, so the deck drifts the same for everyone in a
+/// match; the app's own clock where no server keeps one (the title).
+fn sky_clock(link: NonSend<LinkRes>, time: Res<Time>, mut clock: ResMut<look::mood::SkyClock>) {
+    let s = link.0.session();
+    let tick = if s.ready {
+        s.core.render_tick(link.0.now_ms())
+    } else {
+        0.0
+    };
+    clock.s = if tick > 0.0 {
+        tick / f64::from(sim::consts::TICK_HZ)
+    } else {
+        time.elapsed_secs_f64()
+    };
 }
 
 /// In a match: a click takes the mouse; Escape opens the menu (in a
@@ -558,17 +612,10 @@ fn rebuild(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
     old: Query<Entity, With<level::LevelPart>>,
-    mut eye: Query<
-        (
-            Entity,
-            &mut bevy::camera::Exposure,
-            &mut bevy::light::EnvironmentMapLight,
-        ),
-        With<Eye>,
-    >,
+    mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
     mut shade: ResMut<look::quality::MapShade>,
+    mut mood: ResMut<look::mood::MoodNow>,
 ) {
     let s = link.0.session();
     let now = Some((gen.map_or(0, |g| g.0), s.welcomes));
@@ -576,11 +623,12 @@ fn rebuild(
         return;
     }
     built.0 = now;
+    // The map's mood first: the level's sun and its wet are the mood's.
+    look::mood::set(&mut mood, s.map_id);
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
-    if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
-        look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
+    if let Ok((mut exposure, mut env)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mut exposure, &mut env);
+            look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
         }
     }
     // Every rung's shade reaches across this map (`look/quality.rs`).
@@ -917,6 +965,7 @@ fn expose(
     windows: Query<&Window, With<PrimaryWindow>>,
     settle: Res<loading::Settle>,
     tier: Res<look::quality::Tier>,
+    mood: Res<look::mood::MoodNow>,
     mut frames: Local<u32>,
 ) {
     use wasm_bindgen::JsValue;
@@ -954,6 +1003,8 @@ fn expose(
     // Which module this is and what it draws (`look/gpu.rs`).
     set(&o, "gfx", look::gpu::api().into());
     set(&o, "tier", tier.describe().into());
+    // The map's sky (`look/mood.rs`).
+    set(&o, "sky", mood.mood.name.into());
     set(
         &o,
         "quality",
