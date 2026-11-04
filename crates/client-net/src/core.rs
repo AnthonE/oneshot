@@ -398,11 +398,16 @@ impl NetCore {
         // TARGET_DEPTH: below it the server guesses, above it we add delay.
         let d = s.depth as f64;
         if !(-8.0..=16.0).contains(&d) {
+            let drawn = self.own().1;
             self.t += TARGET_DEPTH - d;
             if self.t < self.seq as f64 {
                 // Never take back a seq already made.
                 self.t = self.seq as f64;
             }
+            // The clock went back through the tick being drawn: what was on
+            // screen eases on from where it was, as a correction does,
+            // rather than step back.
+            self.offset = self.offset + (drawn - self.own().1);
             self.stats.resyncs += 1;
             self.rate = 1.0;
         } else if d < TARGET_DEPTH {

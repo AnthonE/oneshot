@@ -79,3 +79,81 @@ fn alpha_walks_the_tick() {
     c.update(TICK_MS * 1.1, Input::default());
     assert!((c.alpha() - 0.1).abs() < 1e-3, "{}", c.alpha());
 }
+
+#[test]
+fn a_clock_pulled_back_never_draws_us_backwards() {
+    // A steady run at 240 fps, the server saying now and then that 40 of
+    // our inputs wait there (the clock steps back): every frame still moves
+    // us on.
+    let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let start = Fighter {
+        seated: true,
+        alive: true,
+        body: Body {
+            pos: V3::new(-30.0, 0.0, 0.0),
+            grounded: true,
+            ..Body::default()
+        },
+        ..Fighter::default()
+    };
+    let mut tick = 2;
+    c.on_snapshot(
+        tick as f64 * TICK_MS,
+        &Snapshot {
+            tick,
+            phase: 1,
+            last_seq: 7,
+            own: start,
+            ..Snapshot::default()
+        },
+    );
+    let go = Input {
+        mz: 127,
+        ..Input::default()
+    };
+    let frame = 1000.0 / 240.0;
+    let mut last = c.own().1.x;
+    let mut pulled = 0;
+    // As a client's frame runs: what arrived first, then the clock, then
+    // the drawing. A snapshot arrives a couple of frames after the input
+    // it confirms, so the clock is well into a tick when it's pulled back.
+    let mut waiting: Vec<(usize, Snapshot)> = Vec::new();
+    for i in 1..480 {
+        let now = i as f64 * frame;
+        while waiting.first().is_some_and(|w| w.0 <= i) {
+            let (_, s) = waiting.remove(0);
+            c.on_snapshot(now, &s);
+            pulled += 1;
+        }
+        for m in c.update(now, go) {
+            // Every 7th input datagram, a snapshot confirming it, deep.
+            let seq = m.first_seq + m.n as u32 - 1;
+            if seq.is_multiple_of(7) && now > 300.0 {
+                tick += 2;
+                waiting.push((
+                    i + 1 + (seq as usize % 3),
+                    Snapshot {
+                        tick,
+                        phase: 1,
+                        last_seq: seq,
+                        depth: 40,
+                        own: *c.own().0,
+                        ..Snapshot::default()
+                    },
+                ));
+            }
+        }
+        let x = c.own().1.x;
+        if now > 300.0 {
+            assert!(x >= last, "frame {i}: drawn from {last} back to {x}");
+        }
+        last = x;
+    }
+    assert!(pulled > 3, "the clock must have been pulled back ({pulled})");
+    assert!(c.stats.resyncs >= pulled, "{} resyncs", c.stats.resyncs);
+    assert!(
+        c.stats.confirmations >= pulled,
+        "{} confirmations",
+        c.stats.confirmations
+    );
+}
