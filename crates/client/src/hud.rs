@@ -90,13 +90,12 @@ pub struct HurtArc;
 #[derive(Component)]
 pub struct HitStroke;
 
-fn text(size: f32) -> impl Bundle {
+/// A HUD line in `font`: the display face for numbers and banners, the
+/// text face for the feed and the net graph (`ui.rs`).
+fn text(font: TextFont) -> impl Bundle {
     (
         Text::new(""),
-        TextFont {
-            font_size: size,
-            ..default()
-        },
+        font,
         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.92)),
         TextShadow::default(),
     )
@@ -156,10 +155,26 @@ pub fn setup(mut commands: Commands) {
     ));
     commands.spawn(bar(Color::srgb(0.35, 0.7, 1.0), ShieldBar, 40.0));
     commands.spawn(bar(Color::srgb(0.9, 0.3, 0.25), HealthBar, 24.0));
-    commands.spawn((AmmoText, text(20.0), abs(None, Some(22.0), None, Some(20.0))));
-    commands.spawn((ScoreText, text(18.0), abs(Some(18.0), None, Some(14.0), None)));
-    commands.spawn((FeedText, text(16.0), abs(None, Some(18.0), Some(14.0), None)));
-    commands.spawn((NetText, text(14.0), abs(Some(18.0), None, None, Some(64.0))));
+    commands.spawn((
+        AmmoText,
+        text(crate::ui::display(24.0)),
+        abs(None, Some(22.0), None, Some(18.0)),
+    ));
+    commands.spawn((
+        ScoreText,
+        text(crate::ui::display(21.0)),
+        abs(Some(18.0), None, Some(14.0), None),
+    ));
+    commands.spawn((
+        FeedText,
+        text(crate::ui::semibold(16.0)),
+        abs(None, Some(18.0), Some(14.0), None),
+    ));
+    commands.spawn((
+        NetText,
+        text(crate::ui::text(14.0)),
+        abs(Some(18.0), None, None, Some(64.0)),
+    ));
     // The middle: a full-width row, its text centred.
     commands.spawn((
         Node {
@@ -169,7 +184,7 @@ pub fn setup(mut commands: Commands) {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        children![(CenterText, text(26.0))],
+        children![(CenterText, text(crate::ui::display(32.0)))],
     ));
     // The crosshair, the hit marker and the damage arc, all centred on the
     // screen's middle.

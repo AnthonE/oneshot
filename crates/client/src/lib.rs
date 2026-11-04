@@ -17,6 +17,7 @@ pub mod look;
 pub mod pointer;
 pub mod pose;
 pub mod sound;
+pub mod ui;
 
 use std::collections::BTreeMap;
 
@@ -229,6 +230,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<Early>()
     .add_plugins(sound::SoundPlugin)
+    .add_plugins(ui::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
