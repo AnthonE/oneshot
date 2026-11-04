@@ -40,9 +40,11 @@ pub struct Slot {
     pub early: Vec<proto::Msg>,
 }
 
-/// A browser's link before it connects: Proving Grounds and nobody, so
-/// the game draws a level (warming every pipeline, `warm.rs`) behind the
-/// page's menu while the page waits; then the real one, from the slot.
+/// A browser's link before it connects: a map and nobody, so the game
+/// draws a level (warming every pipeline, `warm.rs`) behind the page's
+/// menu while the page waits; then the real one, from the slot. The map is
+/// the mode's kind: a Big Team map's terrain and grass are pipelines no
+/// arena has.
 #[cfg(target_arch = "wasm32")]
 pub struct Pending {
     idle: Still,
@@ -51,9 +53,9 @@ pub struct Pending {
 
 #[cfg(target_arch = "wasm32")]
 impl Pending {
-    pub fn new(slot: std::rc::Rc<std::cell::RefCell<Slot>>) -> Pending {
+    pub fn new(slot: std::rc::Rc<std::cell::RefCell<Slot>>, map: u8) -> Pending {
         Pending {
-            idle: Still::on(0),
+            idle: Still::on(map),
             slot,
         }
     }

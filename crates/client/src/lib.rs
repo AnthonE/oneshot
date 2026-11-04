@@ -537,9 +537,13 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
 /// stream said first, and the level built again for its map.
 fn adopt(mut link: NonSendMut<LinkRes>, mut built: ResMut<Built>, mut early: ResMut<Early>) {
     if let Some((next, said)) = link.0.take() {
+        let warmed = link.0.session().map_id;
         link.0 = next;
         early.0.extend(said);
-        built.0 = 0;
+        // The level warmed on is kept when it's the match's map (a Big
+        // Team map's terrain and grass take seconds to build again).
+        let s = link.0.session();
+        built.0 = if s.ready && s.map_id == warmed { s.welcomes } else { 0 };
     }
 }
 
@@ -1039,8 +1043,15 @@ mod web_start {
         // doesn't start in a stall with us already seated in it. Then we
         // connect, and the app takes the client from the slot.
         let slot = std::rc::Rc::new(std::cell::RefCell::new(super::link::Slot::default()));
+        // Warmed on a map of the kind the mode plays: Big Team's (terrain,
+        // grass), else an arena.
+        let warm_on = if mode == proto::MODE_BIG_TEAM {
+            sim::maps::ALL.iter().find(|d| d.big()).map_or(0, |d| d.id)
+        } else {
+            0
+        };
         super::app(
-            Box::new(super::link::Pending::new(slot.clone())),
+            Box::new(super::link::Pending::new(slot.clone(), warm_on)),
             super::Opts::parse(&opts),
         )
         .run();
