@@ -1,7 +1,7 @@
 {
   "id": 6,
   "name": "Chrysalis",
-  "about": "Inside an alien hull, 40 by 28 m under its roof, mirrored red (-x) to blue (+x). Bottom mid is a pit ringed by round pods; top mid is a round platform 3.5 m over half of it, a lift up from the pit, the spine rising through its north edge so no line runs base to base. Each base has a curved front with a window from its top, a lift inside its door, and three ways out: the north gallery to top mid, the south ramp down into the hall, the door to the pit.",
+  "about": "Inside a ship's purple hull, 40 by 28 m under a ribbed vault, mirrored red (-x) to blue (+x). Bottom mid is a pit ringed by round pods; top mid is a round platform 3.5 m over half of it, a lift up from the pit, the spine rising through its north edge so no line runs base to base. Each base has a curved front with a window from its top, a lift inside its door, and three ways out: the north gallery to top mid, the south ramp down into the hall, the door to the pit.",
   "bounds": [-20, 20, -13, 13],
   "mirror": "x",
   "nav": true,
@@ -9,10 +9,54 @@
     {
       "name": "the hull",
       "boxes": [
-        [-21, 8, -14, 21, 8.5, 14, "alien_dark"],
         [-14, 0, 13, 14, 8, 13.5, "alien_dark"],
         [-14, 0, -13.5, 14, 8, -13, "alien_dark"],
         { "round": [0, 13.6], "r": 2.9, "y": [0, 8], "look": "alien_dark" }
+      ]
+    },
+    {
+      "name": "the vault, and the steps under it that it collides as",
+      "boxes": [
+        [-20, 8, -14, 20, 10.8, 14, "vault"],
+        [-21, 8, -14, 21, 11.5, -13, "hidden"],
+        [-21, 8, 13, 21, 11.5, 14, "hidden"],
+        [-21, 9, -13, 21, 11.5, -11, "hidden"],
+        [-21, 9, 11, 21, 11.5, 13, "hidden"],
+        [-21, 9.7, -11, 21, 11.5, -8.5, "hidden"],
+        [-21, 9.7, 8.5, 21, 11.5, 11, "hidden"],
+        [-21, 10.2, -8.5, 21, 11.5, -5.5, "hidden"],
+        [-21, 10.2, 5.5, 21, 11.5, 8.5, "hidden"],
+        [-21, 10.55, -5.5, 21, 11.5, 5.5, "hidden"]
+      ]
+    },
+    {
+      "name": "the long walls' ribs",
+      "boxes": [
+        [-12.25, 0, 12.6, -11.75, 8, 13, "rib"],
+        [-8.25, 0, 12.6, -7.75, 8, 13, "rib"],
+        [-4.25, 0, 12.6, -3.75, 8, 13, "rib"],
+        [3.75, 0, 12.6, 4.25, 8, 13, "rib"],
+        [7.75, 0, 12.6, 8.25, 8, 13, "rib"],
+        [11.75, 0, 12.6, 12.25, 8, 13, "rib"],
+        [-12.25, 0, -13, -11.75, 8, -12.6, "rib"],
+        [-8.25, 0, -13, -7.75, 8, -12.6, "rib"],
+        [-4.25, 0, -13, -3.75, 8, -12.6, "rib"],
+        [3.75, 0, -13, 4.25, 8, -12.6, "rib"],
+        [7.75, 0, -13, 8.25, 8, -12.6, "rib"],
+        [11.75, 0, -13, 12.25, 8, -12.6, "rib"]
+      ]
+    },
+    {
+      "name": "the long walls' windows and light",
+      "dress": true,
+      "boxes": [
+        [-14, 7.55, 12.92, 14, 7.65, 13, "cyan_glow"],
+        [-14, 7.55, -13, 14, 7.65, -12.92, "cyan_glow"],
+        [-11.5, 5.6, 12.97, -6.5, 7.2, 13.02, "gold"],
+        [6.5, 5.6, 12.97, 11.5, 7.2, 13.02, "gold"],
+        [-11.5, 5.6, -13.02, -6.5, 7.2, -12.97, "gold"],
+        [6.5, 5.6, -13.02, 11.5, 7.2, -12.97, "gold"],
+        [-2.5, 5.6, -13.02, 2.5, 7.2, -12.97, "gold"]
       ]
     },
     {
@@ -22,7 +66,25 @@
         [-20.5, 0, -7, -20, 8, 7, "alien_red"],
         { "arc": [-14, 7], "r": 6.25, "from": 90, "to": 180, "thick": 0.5, "y": [0, 8], "look": "alien_dark" },
         { "arc": [-14, -7], "r": 6.25, "from": 180, "to": 270, "thick": 0.5, "y": [0, 8], "look": "alien_dark" },
+        [-21.5, 8, -14, -20, 11.5, 14, "alien_dark"]
+      ]
+    },
+    {
+      "name": "the ends' light",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        { "arc": [-14, 7], "r": 6.07, "from": 90, "to": 180, "thick": 0.2, "y": [7.55, 7.65], "look": "cyan_glow" },
+        { "arc": [-14, -7], "r": 6.07, "from": 180, "to": 270, "thick": 0.2, "y": [7.55, 7.65], "look": "cyan_glow" },
         [-20, 6.8, -3, -19.95, 7, 3, "red_glow"]
+      ]
+    },
+    {
+      "name": "the ends' viewports",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        [-20.02, 8.4, -5, -20, 10.3, 5, "gold"]
       ]
     },
     {
@@ -31,6 +93,17 @@
         { "round": [0, 2.5], "r": 5, "y": [3.1, 3.5], "look": "alien" },
         { "round": [0, 0.5], "r": 0.9, "y": [0, 8], "look": "alien" },
         { "round": [0, 8.5], "r": 2.2, "y": [0, 8], "look": "alien" }
+      ]
+    },
+    {
+      "name": "mid's light",
+      "dress": true,
+      "boxes": [
+        { "round": [0, 2.5], "r": 5.04, "y": [3.42, 3.5], "look": "magenta_glow" },
+        { "round": [0, 0.5], "r": 0.94, "y": [2.85, 2.95], "look": "cyan_glow" },
+        { "round": [0, 0.5], "r": 0.94, "y": [5.9, 6], "look": "cyan_glow" },
+        { "round": [0, 8.5], "r": 2.24, "y": [2.85, 2.95], "look": "cyan_glow" },
+        { "round": [0, 8.5], "r": 2.24, "y": [5.9, 6], "look": "cyan_glow" }
       ]
     },
     {
@@ -44,10 +117,36 @@
         { "arc": [-24, 0], "r": 11, "from": -32, "to": 32, "thick": 0.4, "y": [6.4, 8], "look": "alien_red" },
         { "arc": [-24, 0], "r": 11, "from": -32, "to": -16, "thick": 0.4, "y": [4.4, 6.4], "look": "alien_red" },
         { "arc": [-24, 0], "r": 11, "from": 16, "to": 32, "thick": 0.4, "y": [4.4, 6.4], "look": "alien_red" },
-        [-20, 3.0, -0.1, -15.5, 3.1, 0.1, "red_glow"],
         [-17, 3.1, -10.5, -12, 3.5, -7, "alien_red"],
         { "ramp": [-12, -10.5, -5, -8], "up": "-x", "from": 0, "to": 3.5, "look": "alien_dark" },
         [-17, 3.1, 5.5, -3, 3.5, 9, "alien"]
+      ]
+    },
+    {
+      "name": "red's light",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        { "arc": [-24, 0], "r": 10.87, "from": -32, "to": 32, "thick": 0.2, "y": [3.0, 3.1], "look": "red_glow" },
+        { "arc": [-24, 0], "r": 10.87, "from": -32, "to": 32, "thick": 0.2, "y": [7.55, 7.65], "look": "red_glow" },
+        [-20, 3.0, -0.1, -15.5, 3.1, 0.1, "red_glow"]
+      ]
+    },
+    {
+      "name": "the decks on the platforms",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        [-20, 3.5, -7, -15, 3.52, 7, "deck"],
+        [-17, 3.5, -10.5, -12, 3.52, -7, "deck"],
+        [-17, 3.5, 5.5, -3, 3.52, 9, "deck"]
+      ]
+    },
+    {
+      "name": "top mid's deck",
+      "dress": true,
+      "boxes": [
+        { "round": [0, 2.5], "r": 5, "y": [3.5, 3.52], "look": "deck" }
       ]
     },
     {
@@ -98,16 +197,18 @@
   "light": {
     "ev100": 9.8,
     "sun": 0,
-    "fill": 0.015,
-    "floor": "alien_dark",
+    "fill": 0.03,
+    "floor": "deck",
     "lamps": [
       { "at": [-18, 0, 2.6], "color": [1, 0.6, 0.55], "lm": 150000, "mirror": true },
-      { "at": [-17.5, 0, 7.4], "color": [1, 0.7, 0.65], "lm": 250000, "mirror": true },
-      { "at": [0, 2.5, 7.6], "color": [0.7, 0.9, 1], "lm": 300000 },
+      { "at": [-17.5, 0, 10.6], "color": [1, 0.72, 0.68], "lm": 600000, "mirror": true },
+      { "at": [0, 2.5, 10.6], "color": [0.8, 0.85, 1], "lm": 500000 },
       { "at": [0, 0.5, 2.7], "color": [0.55, 0.85, 1], "lm": 150000 },
-      { "at": [-8, -11.5, 2.8], "color": [0.7, 0.8, 1], "lm": 150000, "mirror": true },
-      { "at": [-9, 11, 2.8], "color": [0.7, 0.8, 1], "lm": 150000, "mirror": true },
-      { "at": [-10, 7.2, 7.4], "color": [0.8, 0.85, 1], "lm": 200000, "mirror": true }
+      { "at": [-8, -11.5, 9.4], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true },
+      { "at": [-9, 11, 9.6], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true },
+      { "at": [-10, 7.2, 10.25], "color": [0.85, 0.85, 1], "lm": 450000, "mirror": true },
+      { "at": [-9, -12.2, 7.3], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true },
+      { "at": [-9, 12.2, 7.3], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true }
     ]
   },
   "roam": [

@@ -25,7 +25,8 @@ Fireplace, engine-shim and Elo Pros.
 | `client` | the Bevy client, desktop and the page (`crates/client/dist`, its menu `web/index.html`). Its own workspace (`ci/client.sh`). Draws, never decides |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
-| `tools/assets.mjs`, `tools/glb` | models, sounds and textures from a Gates checkout into `crates/client/assets` |
+| `tools/models` | the guns, ours: a Blender script each on `lib.py`'s kit, exported to `crates/client/assets/models` |
+| `tools/assets.mjs`, `tools/glb` | Triple T, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
 
 ## The loop
@@ -41,6 +42,8 @@ Fireplace, engine-shim and Elo Pros.
    - **the client or the netcode:** `ci/client.sh`, then
      `cargo build --release -p server && node ci/e2e.mjs`;
    - **an effect:** `tools/fx.sh <name>` (the `fx` skill);
+   - **a model:** `tools/models/build.sh <name>` (Blender headless; the
+     sheet lands in `traces/guns/`, the numbers go in `look/guns.rs`);
    - **the look:** `node tools/board.mjs look`.
 3. Commit with a short message. Push your branch.
 
@@ -105,6 +108,7 @@ node ci/e2e.mjs [150 4 2 | 150 6 3]                  # menu, a match: prediction
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match (… 30 0 0 0 fxdemo=1 for the demo)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
+tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless)
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
 cargo run -p flow --release -- <map>                 # a map's flow (traces/flow/; node tools/flow/png.mjs)
 node tools/assets.mjs [GATES_DIR]                    # art and sound from a Gates checkout

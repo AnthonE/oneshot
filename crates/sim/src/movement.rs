@@ -402,6 +402,8 @@ mod tests {
             vehicles: &[],
             solids: &[],
             solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
         }
@@ -484,6 +486,8 @@ mod tests {
                 (2, [30.0, -2.0, 36.0, 2.0, 0.0, 0.0, 0.0, 3.0]),
             ],
             solid_looks: &[0, 0, 0],
+            dress: &[],
+            dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
         }

@@ -71,6 +71,11 @@ pub struct Def {
     /// and how each is drawn.
     pub solids: &'static [(u8, [f32; 8])],
     pub solid_looks: &'static [u8],
+    /// Boxes drawn and never collided (a vault's curve over the hidden
+    /// steps that are its real ceiling): the client's, never read here.
+    pub dress: &'static [([f32; 6], u8)],
+    /// And solids drawn only (kind, numbers as `solids`, look).
+    pub dress_solids: &'static [(u8, [f32; 8], u8)],
     /// Bots find their way by waypoints ([`crate::nav`]) rather than
     /// walking straight at where they're going.
     pub nav: bool,
@@ -628,6 +633,8 @@ mod tests {
                 (2, [4.0, -18.0, 8.0, -9.0, 3.0, 0.0, 1.0, 2.5]),
             ],
             solid_looks: &[0; 6],
+            dress: &[],
+            dress_solids: &[],
             nav: false,
             light: LightDef::DAY,
         }

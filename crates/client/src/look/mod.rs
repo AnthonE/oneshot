@@ -11,6 +11,8 @@ pub mod prewarm;
 pub mod rig;
 pub mod shake;
 pub mod shield;
+pub mod ship;
 pub mod sky;
 pub mod textures;
+pub mod vault;
 pub mod viewmodel;

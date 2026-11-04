@@ -19,7 +19,9 @@
 //             swapped for blue; "xz": also at -z, and at -x -z
 //   prefabs   { name: [box, ...] } about their own origin
 //   structures [{ name, boxes | prefab, at: [x, y, z], turn: 0|90|180|270,
-//             tint: { look: look }, mirror: bool }]
+//             tint: { look: look }, mirror: bool, dress: bool }]: with
+//             `dress`, its boxes are drawn and never collided (a vault's
+//             curve, trim on a wall); a `vault` box is always dressing
 //   spawns    [{ at: [x, z, y?], team: "red"|"blue"|"any", yaw: degrees,
 //             mirror: bool }]
 //   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]
@@ -44,7 +46,9 @@
 //             lm, mirror: bool }], floor: look }: drawing only (sim::map::LightDef). ev100
 //             0 is the client's noon; sun and fill scale its sun and sky fill
 // A box is [x0, y0, z0, x1, y1, z1, look]; a look (drawing only) is one of
-// LOOKS. A structure's list may also hold solids that aren't boxes
+// LOOKS. A `vault` box is drawn as a curved ceiling hung from its bottom edges
+// (the sim still collides with the box: put `hidden` boxes under it that step
+// with the curve); a `rib` box is drawn as a rounded bar. A structure's list may also hold solids that aren't boxes
 // (crates/sim/src/solid.rs), placed, turned and mirrored as boxes are:
 //   { round: [x, z], r, y: [y0, y1], look }          an upright cylinder
 //   { turned: [x, z], size: [w, d], angle: deg, y: [y0, y1], look }
@@ -69,7 +73,10 @@ const MAPS = join(ROOT, 'maps');
 const OUT = join(ROOT, 'crates', 'sim', 'src', 'maps');
 
 /** How a box is drawn, as the client's level.rs numbers them. */
-export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate', 'alien', 'alien_dark', 'alien_red', 'alien_blue'];
+export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'hull', 'glow', 'red_glow', 'blue_glow', 'plate', 'alien', 'alien_dark', 'alien_red', 'alien_blue',
+  // The ship's: its deck, its gold honeycomb windows, a box drawn as a curved ceiling (`vault`) or a rounded bar (`rib`),
+  // a box that collides but isn't drawn (`hidden`: the steps under a vault), and its light strips.
+  'deck', 'gold', 'vault', 'hidden', 'magenta_glow', 'cyan_glow', 'rib'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
@@ -219,6 +226,10 @@ export function compile(spec, where = 'map.json') {
 
   const boxes = [];
   const solids = [];
+  // Drawing only: boxes and solids the sim never sees (sim::map::Def::dress,
+  // dress_solids).
+  const dress = [];
+  const dressSolids = [];
   for (const [k, s] of (spec.structures || []).entries()) {
     const name = s.name || `structure ${k}`;
     const list = s.prefab ? ((spec.prefabs || {})[s.prefab] || fail(`${name}: no prefab "${s.prefab}"`)) : (s.boxes || fail(`${name}: no boxes`));
@@ -239,25 +250,28 @@ export function compile(spec, where = 'map.json') {
       if (b[1] < 0 && !spec.terrain) fail(`${name}: box ${JSON.stringify(b)} goes under the floor`);
       const look = (s.tint && s.tint[b[6]]) || b[6] || 'block';
       if (!LOOKS.includes(look)) fail(`${name}: no look "${look}" (${LOOKS.join(', ')})`);
-      placed.push({ box: place(b, at, turn), look });
+      placed.push({ box: place(b, at, turn), look, dress: !!s.dress || look === 'vault' });
     }
-    boxes.push(...placed);
-    solids.push(...placedSolids);
+    const into = (p) => (p.dress ? dress : boxes);
+    for (const p of placed) into(p).push(p);
+    const solidsOf = s.dress ? dressSolids : solids;
+    solidsOf.push(...placedSolids);
     if (s.mirror) {
       if (!mirrors.length) fail(`${name}: "mirror" needs the map's "mirror"`);
       for (const [sx, sz, swap] of mirrors) {
-        for (const p of placedSolids) solids.push({ ...mirrorSolid(p, sx, sz), look: swap ? swapLook(p.look) : p.look });
+        for (const p of placedSolids) solidsOf.push({ ...mirrorSolid(p, sx, sz), look: swap ? swapLook(p.look) : p.look });
       }
       for (const [sx, sz, swap] of mirrors) {
         for (const p of placed) {
           const [x0, y0, z0, x1, y1, z1] = p.box;
           const xs = [x0 * sx, x1 * sx].sort((a, b) => a - b), zs = [z0 * sz, z1 * sz].sort((a, b) => a - b);
-          boxes.push({ box: [xs[0], y0, zs[0], xs[1], y1, zs[1]], look: swap ? swapLook(p.look) : p.look });
+          into(p).push({ box: [xs[0], y0, zs[0], xs[1], y1, zs[1]], look: swap ? swapLook(p.look) : p.look, dress: p.dress });
         }
       }
     }
   }
   if (boxes.length + solids.length > MAX_BOXES) fail(`${boxes.length} boxes and ${solids.length} solids, at most ${MAX_BOXES} together`);
+  if (dress.length + dressSolids.length > MAX_BOXES) fail(`${dress.length + dressSolids.length} dressing pieces, at most ${MAX_BOXES}`);
 
   const point = (at, what) => {
     if (!Array.isArray(at) || at.length < 2 || at.some((v) => typeof v !== 'number')) fail(`${what}: "at" is [x, z] or [x, z, y]`);
@@ -351,7 +365,7 @@ export function compile(spec, where = 'map.json') {
     light.lamps.push({ p, c, lm: l.lm });
     if (l.mirror) for (const [sx, sz] of mirrors) light.lamps.push({ p: [p[0] * sx, p[1], p[2] * sz], c, lm: l.lm });
   }
-  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles };
+  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles, dress, dressSolids };
 }
 
 /** A terrain block rasterised: vertex heights in 1/HEIGHT_Q m. */
@@ -487,6 +501,12 @@ export function rust(m, src) {
   for (const s of m.solids) L.push(`        (${solidRow(s)}),`);
   L.push('    ],');
   L.push(`    solid_looks: &[${m.solids.map((s) => LOOKS.indexOf(s.look)).join(', ')}],`);
+  L.push('    dress: &[');
+  for (const b of m.dress) L.push(`        ([${b.box.map(lit).join(', ')}], ${LOOKS.indexOf(b.look)}),`);
+  L.push('    ],');
+  L.push('    dress_solids: &[');
+  for (const s of m.dressSolids) L.push(`        (${solidRow(s)}, ${LOOKS.indexOf(s.look)}),`);
+  L.push('    ],');
   L.push(`    nav: ${m.nav},`);
   const lt = m.light;
   if (lt.ev100 === 0 && lt.sun === 1 && lt.fill === 1 && !lt.lamps.length && lt.floor === 255) L.push('    light: crate::map::LightDef::DAY,');
@@ -553,7 +573,7 @@ function main() {
   }
   for (const m of list) {
     const t = m.terrain ? `, terrain ${m.terrain.nx} × ${m.terrain.nz}` : '';
-    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.solids.length} solids, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
+    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes, ${m.solids.length} solids, ${m.dress.length + m.dressSolids.length} dressing, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
   }
   if (stale) process.exit(1);
 }

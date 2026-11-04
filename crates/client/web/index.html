@@ -14,21 +14,24 @@
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Bold.otf) format('opentype'); font-weight: 700; font-display: swap; }
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Black.otf) format('opentype'); font-weight: 900; font-display: swap; }
       [hidden] { display: none !important; }
-      html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
+      /* The ship's palette: deep purple, gold for the one button that matters, violet trim. */
+      html, body { margin: 0; height: 100%; background: #0d0a14; overflow: hidden; }
       #wrap { width: 100vw; height: 100vh; }
       /* ?lite=1: a quarter of the pixels, scaled back up (a software GPU). */
       #wrap.lite { width: 50vw; height: 50vh; transform: scale(2); transform-origin: 0 0; }
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
       #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
+        gap: 14px; background: radial-gradient(circle at 50% 40%, #2b1a4bd9, #0b0712f5); color: #ece6f5;
         font: 16px Aileron, system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
-      #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; }
+      #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; color: #f4edff;
+        text-shadow: 0 0 28px #c04ad8aa, 0 0 2px #fff6; }
       #menu p { margin: 0; opacity: 0.75; }
-      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
-        background: #0008; color: inherit; }
+      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #b08cff55;
+        background: #0b0712aa; color: inherit; }
       #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
       #menu button:disabled { opacity: 0.35; cursor: default; }
-      #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
+      #menu button.quiet { background: #1a1030aa; color: inherit; border: 1px solid #b08cff55; font-weight: 600; }
+      #menu button.quiet:hover:not(:disabled) { border-color: #7ff0ffaa; box-shadow: 0 0 12px #4ff2ff33; }
       #menu .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
       #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
       #status { min-height: 1.2em; opacity: 0.8; }

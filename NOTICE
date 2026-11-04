@@ -3,10 +3,12 @@ oneshot: third-party notices
 Code is MIT (the workspace Cargo.toml). Assets are ours or CC0; nothing
 here is NC or SA.
 
-Models (crates/client/assets/models): Triple T and the guns are
-commissioned from Meshy on a paid plan, owned outright, from the Gates
-repository (AnthonE/Gates, assets/models). No attribution is owed. They are
-Gates' models with their KTX2 textures re-encoded as JPEG by tools/glb.
+Models (crates/client/assets/models): Triple T is commissioned from Meshy
+on a paid plan, owned outright, from the Gates repository (AnthonE/Gates,
+assets/models); no attribution is owed; it is Gates' model with its KTX2
+textures re-encoded as JPEG by tools/glb. The guns, the rocket and the
+frag are ours: each is built by a Blender script in tools/models (MIT,
+with the code).
 
 Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):

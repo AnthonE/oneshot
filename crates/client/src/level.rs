@@ -34,6 +34,16 @@ const ROUGH_SCALE: f32 = 1.5;
 /// The arena floor's look (not a map look: a flat map's ground).
 const FLOOR: u8 = 255;
 
+/// The ship's looks (tools/maps/compile.mjs LOOKS): its deck, its windows,
+/// a box drawn as a vault or a rib, and one not drawn at all.
+const DECK: u8 = 16;
+const GOLD: u8 = 17;
+const VAULT: u8 = 18;
+const HIDDEN: u8 = 19;
+const RIB: u8 = 22;
+/// The hull's plates repeat over this many metres.
+const HULL_TILE_M: f32 = 8.0;
+
 /// A box's texture set, the metres it repeats over, and its tint (the
 /// photograph's colour times this).
 fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
@@ -47,10 +57,14 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
         11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
-        12 => ("alien", 8.0, Color::srgb(0.95, 0.95, 1.0)),
-        13 => ("alien", 8.0, Color::srgb(0.42, 0.4, 0.52)),
-        14 => ("alien", 8.0, Color::srgb(1.0, 0.55, 0.52)),
-        15 => ("alien", 8.0, Color::srgb(0.55, 0.68, 1.0)),
+        // The ship: its hull's plates are near white, the look is their
+        // colour (pearl purple, its dark hull, red's and blue's).
+        12 => ("alien", HULL_TILE_M, Color::srgb(0.54, 0.38, 0.77)),
+        13 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.21, 0.44)),
+        14 => ("alien", HULL_TILE_M, Color::srgb(0.77, 0.29, 0.48)),
+        15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
+        DECK => ("deck", 4.0, Color::WHITE),
+        GOLD => ("gold", 1.2, Color::WHITE),
         _ => return None,
     })
 }
@@ -58,7 +72,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
 /// Faces as the meshes below are built: positions, normals, texture
 /// coordinates (in metres; divided by the tile at the end), triangles.
 #[derive(Default)]
-struct Faces {
+pub(crate) struct Faces {
     pos: Vec<[f32; 3]>,
     nor: Vec<[f32; 3]>,
     uv: Vec<[f32; 2]>,
@@ -83,7 +97,49 @@ impl Faces {
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 
-    fn mesh(self, tile: f32) -> Mesh {
+    /// A quad wound to face `n` with each corner's texture coordinates
+    /// given (metres, divided by `tile` here).
+    pub(crate) fn quad_uv(&mut self, p: [Vec3; 4], n: Vec3, uv: [[f32; 2]; 4], tile: f32) {
+        let base = self.pos.len() as u32;
+        let order: [usize; 4] = if (p[1] - p[0]).cross(p[2] - p[0]).dot(n) >= 0.0 {
+            [0, 1, 2, 3]
+        } else {
+            [0, 3, 2, 1]
+        };
+        for &k in &order {
+            self.pos.push(p[k].to_array());
+            self.nor.push(n.to_array());
+            self.uv.push([uv[k][0] / tile, uv[k][1] / tile]);
+        }
+        self.idx
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    /// A triangle wound to face `n`, its texture laid flat by its plane.
+    pub(crate) fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, n: Vec3, tile: f32) {
+        let base = self.pos.len() as u32;
+        let order: [Vec3; 3] = if (b - a).cross(c - a).dot(n) >= 0.0 {
+            [a, b, c]
+        } else {
+            [a, c, b]
+        };
+        let an = n.abs();
+        for p in order {
+            self.pos.push(p.to_array());
+            self.nor.push(n.to_array());
+            let uv = if an.y > an.x && an.y > an.z {
+                [p.x, p.z]
+            } else if an.x > an.z {
+                [p.z, -p.y]
+            } else {
+                [p.x, -p.y]
+            };
+            self.uv.push([uv[0] / tile, uv[1] / tile]);
+        }
+        self.idx.extend_from_slice(&[base, base + 1, base + 2]);
+    }
+
+    pub(crate) fn mesh(self, tile: f32) -> Mesh {
         let uv: Vec<[f32; 2]> = self.uv.iter().map(|u| [u[0] / tile, u[1] / tile]).collect();
         let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
             .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.pos)
@@ -285,7 +341,10 @@ pub fn dress_level(
         };
         let (roughness, metallic) = match (look.0, set) {
             (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
-            (12..=15, _) => (1.0, 0.7),
+            // The ship's sets carry their own roughness and metal.
+            (12..=15 | RIB, _) => (1.0, 0.7),
+            (DECK, _) => (1.0, 0.55),
+            (GOLD, _) => (1.0, 0.9),
             (_, "metal") => (0.55, 0.35),
             _ => (0.9, 0.0),
         };
@@ -293,7 +352,8 @@ pub fn dress_level(
         // the photograph's (its roughness is about 0.6 on average).
         let orm = tex.orm(set);
         let scale = if orm.is_some() { ROUGH_SCALE } else { 1.0 };
-        // A set that glows (the alien hull's veins): in its look's colour.
+        // A set that glows (the hull's light seams, the windows): in its
+        // look's colour.
         let glow = tex.emissive(set);
         let m = mats.add(StandardMaterial {
             base_color: tint,
@@ -304,7 +364,8 @@ pub fn dress_level(
             metallic_roughness_texture: orm.clone(),
             occlusion_texture: orm,
             emissive: if glow.is_some() {
-                vein(look.0) * VEIN_GLOW
+                let (c, k) = vein(look.0);
+                LinearRgba::from(c) * k
             } else {
                 LinearRgba::BLACK
             },
@@ -318,42 +379,68 @@ pub fn dress_level(
 /// How bright a light strip is, over the display's white (HDR: past 1 it
 /// blooms on the desktop), and a launcher's glow beside it.
 const STRIP_GLOW: f32 = 4.0;
-/// How bright the alien hull's veins glow, over the display's white.
+/// How bright the hull's light seams glow, over the display's white.
 const VEIN_GLOW: f32 = 3.0;
+/// And the windows' honeycomb.
+const GLASS_GLOW: f32 = 1.6;
 
-/// The veins' colour by look: cyan, faint on the dark hull, the side's on
-/// a side's.
-fn vein(look: u8) -> LinearRgba {
-    LinearRgba::from(match look {
-        13 => Color::srgb(0.2, 0.45, 0.6),
-        14 => Color::srgb(1.0, 0.32, 0.22),
-        15 => Color::srgb(0.28, 0.55, 1.0),
-        _ => Color::srgb(0.35, 0.95, 1.0),
-    })
+/// A glowing set's light by look: the hull's seams magenta, faint on the
+/// dark hull, red's and blue's on a side's, the windows gold.
+fn vein(look: u8) -> (Color, f32) {
+    match look {
+        13 | RIB => (Color::srgb(0.6, 0.3, 0.7), VEIN_GLOW * 0.5),
+        14 => (Color::srgb(1.0, 0.32, 0.3), VEIN_GLOW),
+        15 => (Color::srgb(0.3, 0.55, 1.0), VEIN_GLOW),
+        GOLD => (Color::srgb(1.0, 0.74, 0.35), GLASS_GLOW),
+        _ => (Color::srgb(1.0, 0.4, 0.9), VEIN_GLOW),
+    }
 }
 
-/// How far a map's lamp reaches, m.
+/// How far a map's lamp reaches, m; its fixture's radius and glow.
 const LAMP_RANGE: f32 = 30.0;
+const LAMP_R: f32 = 0.7;
+const LAMP_FIXTURE_GLOW: f32 = 3.0;
 const LAUNCHER_GLOW: f32 = 2.5;
+/// A lift's beam: how much of its colour it adds to what is behind it.
+const LIFT_BEAM_ALPHA: f32 = 0.12;
 
-/// A light strip's colour (looks `glow`, `red_glow`, `blue_glow`): drawn
-/// unshadowed and emissive, the same in the sun and in a hangar.
+/// A light strip's colour (looks `glow`, `red_glow`, `blue_glow`,
+/// `magenta_glow`, `cyan_glow`): drawn unshadowed and emissive, the same
+/// in the sun and in a hangar.
 fn strip(i: u8) -> Option<Color> {
     Some(match i {
         8 => Color::srgb(0.62, 0.88, 1.0),
-        9 => Color::srgb(1.0, 0.36, 0.26),
+        9 => Color::srgb(1.0, 0.28, 0.34),
         10 => Color::srgb(0.3, 0.55, 1.0),
+        20 => Color::srgb(1.0, 0.35, 0.85),
+        21 => Color::srgb(0.3, 0.95, 1.0),
         _ => return None,
     })
+}
+
+/// A strip's material.
+fn strip_material(c: Color, roughness: f32) -> StandardMaterial {
+    StandardMaterial {
+        base_color: c,
+        emissive: LinearRgba::from(c) * STRIP_GLOW,
+        perceptual_roughness: roughness,
+        ..default()
+    }
 }
 
 /// A box's look (tools/maps/compile.mjs LOOKS): its colour and roughness.
 fn look(i: u8) -> (Color, f32, f32) {
     match i {
-        7 => (Color::srgb(0.36, 0.39, 0.44), 0.45, 0.55),    // hull
-        11 => (Color::srgb(0.66, 0.68, 0.71), 0.45, 0.55),   // plate
-        12..=15 => (Color::srgb(0.45, 0.4, 0.6), 0.35, 0.7), // alien
-        8..=10 => (strip(i).unwrap_or(Color::WHITE), 0.3, 0.0),
+        7 => (Color::srgb(0.36, 0.39, 0.44), 0.45, 0.55),         // hull
+        11 => (Color::srgb(0.66, 0.68, 0.71), 0.45, 0.55),        // plate
+        12 | VAULT => (Color::srgb(0.45, 0.35, 0.65), 0.35, 0.7), // the ship's hull
+        RIB => (Color::srgb(0.2, 0.14, 0.32), 0.3, 0.8),          // its ribs, plain and dark
+        13 => (Color::srgb(0.25, 0.2, 0.38), 0.4, 0.7),
+        14 => (Color::srgb(0.6, 0.25, 0.4), 0.35, 0.7),
+        15 => (Color::srgb(0.25, 0.35, 0.65), 0.35, 0.7),
+        DECK => (Color::srgb(0.1, 0.1, 0.13), 0.6, 0.5),
+        GOLD => (Color::srgb(0.9, 0.7, 0.3), 0.3, 0.3),
+        8..=10 | 20 | 21 => (strip(i).unwrap_or(Color::WHITE), 0.3, 0.0),
         0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0),  // wall
         1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2),  // block
         2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4),  // trim
@@ -424,23 +511,83 @@ pub fn build(
     let (cx, cz) = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let half = (hi.0 - lo.0).max(hi.1 - lo.1) * 0.5 + 8.0;
 
-    for (b, &l) in map.boxes.iter().zip(&map.looks) {
+    // The sim's boxes, then the dressing (drawn, never collided).
+    let dressing = def.dress.iter().map(|&(b, l)| {
+        (
+            sim::geom::Aabb::new(
+                sim::geom::V3::new(b[0], b[1], b[2]),
+                sim::geom::V3::new(b[3], b[4], b[5]),
+            ),
+            l,
+        )
+    });
+    for (b, l) in map
+        .boxes
+        .iter()
+        .zip(map.looks.iter().copied())
+        .map(|(b, l)| (*b, l))
+        .chain(dressing)
+    {
         let (color, roughness, metallic) = look(l);
         let size = b.max - b.min;
         let mid = (b.min + b.max) * 0.5;
         let tile = dress(l).map_or(2.0, |d| d.1);
+        if l == HIDDEN {
+            continue;
+        }
         if let Some(c) = strip(l) {
             commands.spawn((
                 LevelPart,
                 Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
-                MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: c,
-                    emissive: LinearRgba::from(c) * STRIP_GLOW,
-                    perceptual_roughness: roughness,
-                    ..default()
-                })),
+                MeshMaterial3d(mats.add(strip_material(c, roughness))),
                 Transform::from_xyz(mid.x, mid.y, mid.z),
                 bevy::light::NotShadowCaster,
+            ));
+            continue;
+        }
+        let (lo, hi) = (
+            Vec3::new(b.min.x, b.min.y, b.min.z),
+            Vec3::new(b.max.x, b.max.y, b.max.z),
+        );
+        if l == VAULT {
+            let v = crate::look::vault::vault(lo, hi, HULL_TILE_M, HULL_TILE_M);
+            for (mesh, look_id) in [(v.plates, 12), (v.ribs, 13)] {
+                let (c, r, m) = look(look_id);
+                commands.spawn((
+                    LevelPart,
+                    BoxLook(look_id),
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: c,
+                        perceptual_roughness: r,
+                        metallic: m,
+                        ..default()
+                    })),
+                    Transform::default(),
+                ));
+            }
+            let c = strip(21).unwrap_or(Color::WHITE);
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(v.strips)),
+                MeshMaterial3d(mats.add(strip_material(c, 0.3))),
+                Transform::default(),
+                bevy::light::NotShadowCaster,
+            ));
+            continue;
+        }
+        if l == RIB {
+            commands.spawn((
+                LevelPart,
+                BoxLook(l),
+                Mesh3d(meshes.add(crate::look::vault::rib(lo, hi, tile))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: roughness,
+                    metallic,
+                    ..default()
+                })),
+                Transform::default(),
             ));
             continue;
         }
@@ -461,17 +608,26 @@ pub fn build(
             Transform::from_xyz(mid.x, mid.y, mid.z),
         ));
     }
-    for (sol, &l) in map.solids.iter().zip(&map.solid_looks) {
+    let dress_solids = def
+        .dress_solids
+        .iter()
+        .map(|&(k, n, l)| (sim::solid::Solid::from_def(k, n), l));
+    for (sol, l) in map
+        .solids
+        .iter()
+        .copied()
+        .zip(map.solid_looks.iter().copied())
+        .chain(dress_solids)
+    {
+        let sol = &sol;
+        if l == HIDDEN {
+            continue;
+        }
         let (color, roughness, metallic) = look(l);
         let tile = dress(l).map_or(2.0, |d| d.1);
         let glow = strip(l);
         let mat = mats.add(match glow {
-            Some(c) => StandardMaterial {
-                base_color: c,
-                emissive: LinearRgba::from(c) * STRIP_GLOW,
-                perceptual_roughness: roughness,
-                ..default()
-            },
+            Some(c) => strip_material(c, roughness),
             None => StandardMaterial {
                 base_color: color,
                 perceptual_roughness: roughness,
@@ -505,10 +661,11 @@ pub fn build(
         }
     }
     for &(p, c, lm) in map.light.lamps {
+        let colour = Color::srgb(c[0], c[1], c[2]);
         commands.spawn((
             LevelPart,
             PointLight {
-                color: Color::srgb(c[0], c[1], c[2]),
+                color: colour,
                 intensity: lm,
                 range: LAMP_RANGE,
                 radius: 0.15,
@@ -516,6 +673,30 @@ pub fn build(
                 ..default()
             },
             Transform::from_xyz(p[0], p[1], p[2]),
+        ));
+        // Its fixture: a lit disc in a dark ring.
+        commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(Cylinder::new(LAMP_R, 0.1))),
+            MeshMaterial3d(mats.add(StandardMaterial {
+                base_color: colour,
+                emissive: LinearRgba::from(colour) * LAMP_FIXTURE_GLOW,
+                ..default()
+            })),
+            Transform::from_xyz(p[0], p[1], p[2]),
+            bevy::light::NotShadowCaster,
+        ));
+        commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(Torus::new(LAMP_R, LAMP_R + 0.12))),
+            MeshMaterial3d(mats.add(StandardMaterial {
+                base_color: Color::srgb(0.12, 0.09, 0.18),
+                perceptual_roughness: 0.4,
+                metallic: 0.7,
+                ..default()
+            })),
+            Transform::from_xyz(p[0], p[1], p[2]),
+            bevy::light::NotShadowCaster,
         ));
     }
     match &def.terrain {
@@ -567,6 +748,7 @@ pub fn build(
     }
     for l in &map.launchers {
         let (a, b) = (l.area.min, l.area.max);
+        let (cx, cz) = ((a.x + b.x) * 0.5, (a.z + b.z) * 0.5);
         commands.spawn((
             LevelPart,
             Mesh3d(meshes.add(Cuboid::new(b.x - a.x, 0.08, b.z - a.z))),
@@ -575,7 +757,32 @@ pub fn build(
                 emissive: LinearRgba::rgb(0.1, 0.56, 0.75) * LAUNCHER_GLOW,
                 ..default()
             })),
-            Transform::from_xyz((a.x + b.x) * 0.5, a.y + 0.04, (a.z + b.z) * 0.5),
+            Transform::from_xyz(cx, a.y + 0.04, cz),
+        ));
+        // A lift: its beam stands to the throw's apex, drawn additive and
+        // unlit so it reads as light, not a wall.
+        let r = (b.x - a.x).min(b.z - a.z) * 0.45;
+        let apex = l.vel.y * l.vel.y / (2.0 * sim::consts::GRAVITY) + 1.0;
+        commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(Cylinder::new(r, apex))),
+            MeshMaterial3d(mats.add(StandardMaterial {
+                base_color: Color::srgba(0.35, 0.8, 1.0, LIFT_BEAM_ALPHA),
+                alpha_mode: AlphaMode::Add,
+                unlit: true,
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            })),
+            Transform::from_xyz(cx, a.y + apex * 0.5, cz),
+            bevy::light::NotShadowCaster,
+        ));
+        commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(Torus::new(r, r + 0.1))),
+            MeshMaterial3d(mats.add(strip_material(Color::srgb(0.3, 0.95, 1.0), 0.3))),
+            Transform::from_xyz(cx, a.y + 0.06, cz),
+            bevy::light::NotShadowCaster,
         ));
     }
     for p in &map.pads {
@@ -583,11 +790,19 @@ pub fn build(
             LevelPart,
             Mesh3d(meshes.add(Cylinder::new(0.8, 0.06))),
             MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: Color::srgb(0.79, 0.64, 0.15),
-                metallic: 0.4,
+                base_color: Color::srgb(0.12, 0.1, 0.16),
+                perceptual_roughness: 0.45,
+                metallic: 0.6,
                 ..default()
             })),
             Transform::from_xyz(p.pos.x, p.pos.y + 0.03, p.pos.z),
+        ));
+        commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(Torus::new(0.7, 0.82))),
+            MeshMaterial3d(mats.add(strip_material(Color::srgb(0.79, 0.64, 0.15), 0.3))),
+            Transform::from_xyz(p.pos.x, p.pos.y + 0.06, p.pos.z),
+            bevy::light::NotShadowCaster,
         ));
     }
     // The sun at noon (look::rig: its shadows, its disk), as strong as the
