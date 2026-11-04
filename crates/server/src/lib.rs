@@ -21,6 +21,7 @@ pub mod http;
 pub mod net;
 pub mod outlet;
 pub mod queue;
+pub mod stats;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -211,6 +212,41 @@ pub struct Ctx {
     pub allow_origins: Vec<String>,
     /// Snapshots dropped and sessions cut (`outlet`).
     pub counts: Arc<outlet::Counts>,
+    /// Everything else counted since start (`stats.rs`).
+    pub stats: stats::Stats,
+    pub started: Instant,
+}
+
+impl Ctx {
+    /// What is true now, for `/status.json` and the journal.
+    pub fn now(&self) -> stats::Now {
+        stats::Now {
+            ready: !self.draining.load(Ordering::Relaxed),
+            proto: proto::PROTO_VER,
+            players: self.gate.busy(),
+            capacity: self.gate.capacity,
+            rooms: self.rooms.load(Ordering::Relaxed),
+            uptime_s: self.started.elapsed().as_secs(),
+        }
+    }
+}
+
+/// A line to the journal every [`stats::JOURNAL`] that had anything in it:
+/// what changed.
+async fn journal(ctx: Arc<Ctx>) {
+    let mut every = tokio::time::interval(stats::JOURNAL);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    every.tick().await;
+    let mut was = ctx.stats.read(&ctx.counts);
+    loop {
+        every.tick().await;
+        let max = ctx.stats.tick_window_max_us.swap(0, Ordering::Relaxed);
+        let (now, is) = (ctx.now(), ctx.stats.read(&ctx.counts));
+        if stats::eventful(now, &was, &is) {
+            eprintln!("{}", stats::line(now, &was, &is, max));
+        }
+        was = is;
+    }
 }
 
 pub struct Handle {
@@ -293,6 +329,8 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         public_addr: cfg.public_addr.clone(),
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
+        stats: stats::Stats::default(),
+        started: Instant::now(),
         allow_origins: cfg.allow_origins.clone(),
     });
 
@@ -308,6 +346,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .spawn(move || sim.run())
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
+    tokio::spawn(journal(ctx.clone()));
     tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
@@ -427,6 +466,7 @@ impl Sim {
     /// A new room: fresh salt (never seen until the end) and a seed drawn
     /// apart from it (what clients watch: spawn picks, bots).
     fn new_room(&self, mode: u8, ranked: bool) -> Room {
+        self.ctx.stats.matches.fetch_add(1, Ordering::Relaxed);
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
         let rules = match mode {
@@ -562,6 +602,7 @@ impl Sim {
                                     reason: proto::REFUSE_BUSY,
                                 },
                             );
+                            self.ctx.stats.refuse(proto::REFUSE_BUSY);
                             tx.close();
                             continue;
                         }
@@ -620,6 +661,7 @@ impl Sim {
                                 reason: proto::REFUSE_FULL,
                             },
                         );
+                        self.ctx.stats.refuse(proto::REFUSE_FULL);
                         s.tx.close();
                     }
                 }
@@ -776,12 +818,16 @@ impl Sim {
             }
 
             next += tick;
-            let now = Instant::now();
-            if now < next {
-                std::thread::sleep(next - now);
-            } else if now - next > tick * 8 {
-                // Far behind (a stall): don't sprint to catch up.
-                next = now;
+            let done = Instant::now();
+            self.ctx.stats.tick(done - now, tick);
+            if done < next {
+                std::thread::sleep(next - done);
+            } else if done - next > tick * 8 {
+                // Far behind (a stall): don't sprint to catch up; those
+                // ticks are never run, and counted.
+                let lost = ((done - next).as_nanos() / tick.as_nanos()) as u64;
+                self.ctx.stats.ticks_skipped.fetch_add(lost, Ordering::Relaxed);
+                next = done;
             }
         }
     }

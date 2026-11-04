@@ -240,16 +240,19 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
         let incoming = ep.accept().await;
         match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
             Admit::Refuse => {
+                ctx.stats.conn_refused.fetch_add(1, Ordering::Relaxed);
                 incoming.refuse();
                 continue;
             }
             Admit::Retry => {
+                ctx.stats.conn_retried.fetch_add(1, Ordering::Relaxed);
                 incoming.retry();
                 continue;
             }
             Admit::Take => {}
         }
         let Some(permit) = ctx.gate.take(incoming.remote_address().ip()) else {
+            ctx.stats.conn_refused.fetch_add(1, Ordering::Relaxed);
             incoming.refuse();
             continue;
         };
@@ -269,7 +272,8 @@ async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
-async fn refuse(send: &mut wtransport::SendStream, reason: u8) {
+async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
+    ctx.stats.refuse(reason);
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     if let Ok(n) = proto::frame_msg(&Msg::Refuse { reason }, &mut f) {
         let _ = send.write_all(&f[..n]).await;
@@ -287,6 +291,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     })
     .await;
     let Ok(Some((conn, mut send, mut recv, hello))) = opened else {
+        ctx.stats.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     let Msg::Hello {
@@ -297,14 +302,15 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         skin,
     } = hello
     else {
+        ctx.stats.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     if proto != PROTO_VER {
-        return refuse(&mut send, proto::REFUSE_VERSION).await;
+        return refuse(&mut send, proto::REFUSE_VERSION, &ctx).await;
     }
     // Past capacity, or on its way down for a restart: come back soon.
     if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
-        return refuse(&mut send, proto::REFUSE_FULL).await;
+        return refuse(&mut send, proto::REFUSE_FULL, &ctx).await;
     }
     // Who: a pass from Elo Pros, or a guest.
     let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
@@ -320,13 +326,13 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             auth::now_unix(),
         ) {
             Ok(p) => Some(p),
-            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
             // Casual is open to anyone: a pass that doesn't check out (say,
             // older than its ten minutes) only costs its skin.
             Err(_) => None,
         }
     } else if ranked {
-        return refuse(&mut send, proto::REFUSE_PASS).await;
+        return refuse(&mut send, proto::REFUSE_PASS, &ctx).await;
     } else {
         None
     };
@@ -351,12 +357,12 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
             let Some(wallet) = who.and_then(|p| p.wallet) else {
-                return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
+                return refuse(&mut send, proto::REFUSE_NEEDS_WALLET, &ctx).await;
             };
             // A ban is a person's call on a reviewed replay; a list that
             // can't be read never refuses.
             if ctx.elo.banned(&wallet).await == Some(true) {
-                return refuse(&mut send, proto::REFUSE_BANNED).await;
+                return refuse(&mut send, proto::REFUSE_BANNED, &ctx).await;
             }
             let ladder = match mode {
                 MODE_DOUBLES => "doubles",
@@ -386,9 +392,14 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             tx,
         },
     };
+    let counter = match join {
+        ToSim::Casual { .. } => &ctx.stats.joins_casual,
+        _ => &ctx.stats.joins_ranked,
+    };
     if to_sim.send(join).is_err() {
         return;
     }
+    counter.fetch_add(1, Ordering::Relaxed);
 
     // The writers: snapshots on their own, the newest waiting, if they fit,
     // so a stream the client is slow to take never holds them back; stream
@@ -397,17 +408,43 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         mut datagrams,
         mut streams,
     } = inlet;
-    let (wconn, counts) = (conn.clone(), ctx.counts.clone());
+    let (wconn, wctx) = (conn.clone(), ctx.clone());
     let snapshots = tokio::spawn(async move {
         while let Some(d) = datagrams.recv().await {
-            let d = outlet::newest(&mut datagrams, d, &counts);
+            let d = outlet::newest(&mut datagrams, d, &wctx.counts);
             if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
-                let _ = wconn.send_datagram(d);
+                if wconn.send_datagram(d).is_err() {
+                    wctx.stats.send_errors.fetch_add(1, Ordering::Relaxed);
+                }
             } else {
-                counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
+                wctx.counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
             }
         }
     });
+    // The connection's round trip and loss, each journal window and at
+    // the end (`stats.rs`).
+    let seen = Arc::new(Mutex::new((0u64, 0u64)));
+    let sample = {
+        let (conn, ctx, seen) = (conn.clone(), ctx.clone(), seen.clone());
+        move || {
+            let q = conn.quic_connection().stats();
+            if let Ok(mut last) = seen.lock() {
+                ctx.stats
+                    .sample(conn.rtt(), q.path.sent_packets, q.path.lost_packets, &mut last);
+            }
+        }
+    };
+    let sampler = {
+        let sample = sample.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(crate::stats::JOURNAL);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                sample();
+            }
+        })
+    };
     let writer = tokio::spawn(async move {
         let ended = streams.write_stream(&mut send).await;
         if ended == Ended::Closed {
@@ -448,6 +485,8 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     };
     datagrams.abort();
     snapshots.abort();
+    sampler.abort();
+    sample();
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
     if behind {

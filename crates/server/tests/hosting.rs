@@ -349,3 +349,39 @@ async fn two_slots_hand_new_players_from_the_old_to_the_new() {
     assert!(matches!(at_b, Some(Msg::Welcome { .. })), "{at_b:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// One number out of `/status.json` (a flat document of numbers).
+fn field(doc: &str, key: &str) -> u64 {
+    let at = doc
+        .find(&format!("\"{key}\":"))
+        .unwrap_or_else(|| panic!("{key} in {doc}"))
+        + key.len()
+        + 3;
+    doc[at..].split([',', '}']).next().unwrap().parse().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_status_counts_joins_refusals_and_ticks() {
+    let h = server::run(server::Config {
+        capacity: 1,
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        ..local()
+    })
+    .await
+    .unwrap();
+    let port = h.http.unwrap().port();
+    let (_a, first) = join(h.addr.port(), h.cert_hash, "first").await.unwrap();
+    assert!(matches!(first, Some(Msg::Welcome { .. })), "{first:?}");
+    let (_b, second) = join(h.addr.port(), h.cert_hash, "second").await.unwrap();
+    assert!(matches!(second, Some(Msg::Refuse { .. })), "{second:?}");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (code, head, doc) = get(port, "/status.json", None).await;
+    assert_eq!(code, 200);
+    assert!(head.contains("application/json"), "{head}");
+    assert_eq!(field(&doc, "joins_casual"), 1, "{doc}");
+    assert_eq!(field(&doc, "matches"), 1, "{doc}");
+    assert!(doc.contains("\"refused\":[0,0,1,0,0,0,0,0]"), "one REFUSE_FULL: {doc}");
+    assert!(field(&doc, "ticks") > 10, "{doc}");
+    assert!(field(&doc, "tick_p50_us") > 0, "{doc}");
+    assert_eq!(field(&doc, "proto"), PROTO_VER as u64, "{doc}");
+}

@@ -17,7 +17,7 @@ differences a ranked game needs:
 |---|---|---|
 | The game (WebTransport, UDP) | `game.elopros.com:61250` (slot a), `:61251` (slot b) | `oneshot@.service`, user `master` |
 | Which slot is live | `/home/master/oneshot-data/live` (`host:port`) | written by `ci/deploy_server.sh`; every `server.json` names it |
-| `server.json`, `/nonce`, `/ready` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
+| `server.json`, `/nonce`, `/ready`, `/status.json` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
 | The page | `https://elopros.com/games/oneshot/play/` | the platform's nginx, `alias /data/apps/scry-data/oneshot-web/current/` on `morr` (`ci/publish_web.sh`) |
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
@@ -92,6 +92,11 @@ stops and says so (`--cut` ends those matches).
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
 - **Logs:** `journalctl -u 'oneshot@*' -f`: reports sent, drains, reloads.
+- **Health:** `curl -s https://game.elopros.com/oneshot/status.json`: joins,
+  refusals by code (`proto::REFUSE_*`), late and skipped ticks, tick p50/p99/max,
+  snapshot drops, cut sessions, loss and round trip, since that slot started.
+  Every busy 10 s a `oneshot: status` line in the journal says what changed;
+  `skipped`, `cut` or `send_err` above zero is worth a look.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo

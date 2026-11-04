@@ -286,6 +286,7 @@ depend on Gates' crates. The same Bevy version keeps the ports close.
 | `client-core/src/core.rs` `server_est`, slewed playout, `interp.rs` `sample` | `client-net/src/core.rs` `Slew`, `others`, `vehicles` | A render clock that never steps back, a slewed delay, bounded extrapolation, the long-gap rule |
 | `client-core/src/core.rs` `sticky_buttons` | `client-net/src/core.rs` `sticky` | A tap reaches one tick |
 | `server/src/net.rs` `writer_task` (the idea: newest snapshot wins, a stream never drops silently) | `server/src/outlet.rs` | Two lanes per session |
+| `server/src/stats.rs` (`record_phase`, `phase_pct_us`), `status.rs` | `server/src/stats.rs`, `/status.json` in `http.rs` | Atomic counters, log2 tick histogram, one JSON line of numbers, a journal line per busy 10 s |
 | `client/src/ui/pointer.rs` `BrowserLock`, `render/web.rs` `pointer_locked`; `client-web/web/app.js` raw mouse | `client/src/pointer.rs`, `client/web/index.html` | The page's real pointer lock; unadjusted movement |
 | `client/src/render/prewarm.rs` | `client/src/look/prewarm.rs` | Every material and model drawn warm at load |
 | `client/src/render/ui.rs` (fonts, hover, buttons) | `client/src/ui.rs` | Embedded fonts at fixed handles; our CC0 faces, not Gates' Apache-2.0 Roboto |

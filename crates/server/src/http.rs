@@ -7,7 +7,8 @@
 //! elopros.com: `server.json` names the public address and no hash (the
 //! browser checks a CA's certificate itself), and answers the page's origin
 //! (`--allow-origin`) for CORS. `/health` says the process is up, `/ready`
-//! whether it takes players (503 while it drains).
+//! whether it takes players (503 while it drains), `/status.json` what the
+//! server counted since it started (`stats.rs`).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -102,6 +103,11 @@ async fn handle(
     }
     if path == "/health" {
         return reply(&mut sock, 200, "text/plain", b"ok").await;
+    }
+    if path == "/status.json" {
+        // Everything counted since start (`stats.rs`); one line of numbers.
+        let body = crate::stats::json(ctx.now(), &ctx.stats.read(&ctx.counts));
+        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
     if path == "/ready" {
         use std::sync::atomic::Ordering::Relaxed;
