@@ -104,14 +104,22 @@ async fn handle(
         return reply(&mut sock, 200, "text/plain", b"ok").await;
     }
     if path == "/ready" {
-        let draining = ctx.draining.load(std::sync::atomic::Ordering::Relaxed);
+        use std::sync::atomic::Ordering::Relaxed;
+        let draining = ctx.draining.load(Relaxed);
+        // And what the session writers counted since start (outlet.rs):
+        // snapshots dropped or too big for the path, sessions cut behind.
+        let n = &ctx.counts;
         let body = format!(
-            "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{}}}",
+            "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{},\
+             \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{}}}",
             !draining,
             proto::PROTO_VER,
             ctx.gate.busy(),
             ctx.gate.capacity,
-            ctx.rooms.load(std::sync::atomic::Ordering::Relaxed)
+            ctx.rooms.load(Relaxed),
+            n.datagrams_dropped.load(Relaxed),
+            n.datagrams_oversize.load(Relaxed),
+            n.stream_overflows.load(Relaxed),
         );
         let code = if draining { 503 } else { 200 };
         return reply_cors(&mut sock, code, "application/json", body.as_bytes(), cors).await;

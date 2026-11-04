@@ -451,6 +451,10 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
     if behind {
+        eprintln!(
+            "oneshot: session {session_id} ({}) cut: too far behind on the stream",
+            conn.remote_address()
+        );
         conn.close(outlet::CLOSE_BEHIND.into(), b"too far behind");
     } else {
         conn.close(0u32.into(), b"");
