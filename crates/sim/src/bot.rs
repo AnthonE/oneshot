@@ -47,9 +47,11 @@ const RIDE_MS: u32 = 20_000;
 const RIDE_COOL_MS: u32 = 15_000;
 const VEHICLE_WALK: f32 = 25.0;
 /// How far a bot goes out of its way for a gun it wants, and how far above
-/// or below it may be.
+/// or below it may be: on its own level, as it walks there straight.
 const LOOT_M: f32 = 20.0;
-const LOOT_RISE: f32 = 3.0;
+const LOOT_RISE: f32 = 0.6;
+/// A bot's waist, for a straight walk's line.
+const WAIST: f32 = 0.9;
 
 impl Bot {
     pub fn new(seed: u64, slot: usize, skill: f32) -> Bot {
@@ -90,15 +92,15 @@ impl Bot {
         }
     }
 
-    /// A gun it wants, in sight and near: on a pad that holds it, or on the
-    /// floor. Wanted: ranked over the best it carries that has rounds, or
+    /// A gun it wants, near, on its level and a straight walk away: on a
+    /// pad that holds it, or on the floor. Wanted: ranked over the best it carries that has rounds, or
     /// rounds for one of its own running low.
     fn loot(w: &World, slot: usize) -> Option<V3> {
         if w.rules.gun_game {
             return None;
         }
         let me = &w.fighters[slot];
-        let eye = me.eye();
+        let waist = me.body.pos + V3::new(0.0, WAIST, 0.0);
         let rank = |g: &Gun| if g.spent() { 0 } else { arm(g.arm).rank };
         let top = rank(&me.guns[0]).max(rank(&me.guns[1]));
         let wants = |id: u8| {
@@ -115,7 +117,7 @@ impl Bot {
             if d < near
                 && fmath::fabs(at.y - me.body.pos.y) < LOOT_RISE
                 && wants(id)
-                && w.map.clear(eye, at + V3::new(0.0, 0.5, 0.0))
+                && w.map.clear(waist, at + V3::new(0.0, WAIST, 0.0))
             {
                 near = d;
                 best = Some(at);
