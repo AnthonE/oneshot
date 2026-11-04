@@ -19,6 +19,10 @@ pub trait Link {
     fn closed(&self) -> bool;
     /// We're leaving: close the connection (the server lets the seat go).
     fn leave(&mut self) {}
+    /// A real connection, not a stand-in.
+    fn live(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -94,6 +98,11 @@ impl Still {
         s.map_id = map;
         Still(s)
     }
+
+    /// Not even a map: nothing is built until a real link comes.
+    pub fn idle() -> Still {
+        Still(Session::new())
+    }
 }
 
 impl Default for Still {
@@ -114,6 +123,9 @@ impl Link for Still {
         0.0
     }
     fn closed(&self) -> bool {
+        false
+    }
+    fn live(&self) -> bool {
         false
     }
 }

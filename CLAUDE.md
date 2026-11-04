@@ -22,7 +22,7 @@ Fireplace, engine-shim and Elo Pros.
 | `room` | a match with no transport: seats, input buffers, rewind, fog, snapshots, replays, the aim review (`watch.rs`) |
 | `server` | sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
 | `client-net` | the client's netcode: clock, prediction, interpolation (`core`), the session, the web and native transports |
-| `client` | the Bevy client, desktop and the page (`crates/client/dist`, its menu `web/index.html`). Its own workspace (`ci/client.sh`). Draws, never decides |
+| `client` | the Bevy client, desktop and the page (`crates/client/dist`). In a browser the menu is the page's green dashboard (`web/index.html`, `web/menu.js`: modes, the party, friends, voice, a pad to move) over the game's live backdrop; it asks the game for a match with `knock()` (`front.rs`, `Opts::page`). On the desktop the game's own title (`front.rs`, connecting is its state, `door.rs`), in the same green. The Esc menu and the settings are the game's. Its own workspace (`ci/client.sh`). Draws, never decides |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
 | `tools/assets.mjs`, `tools/glb` | models, sounds and textures from a Gates checkout into `crates/client/assets` |
@@ -90,7 +90,11 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 9. **Guns:** `cargo test -p sim --test range` pins Halo 2's counts and times.
    `-- --ignored --nocapture` prints the table to tune by;
    `oneshot-server --map range` puts every gun on a pad to feel them.
-10. **The page is ≤ 9 MB gzipped** (`ci/client.sh`).
+10. **The page is ≤ 9 MB gzipped, each module** (`ci/client.sh`): the page is
+    built twice, `oneshot_client` (WebGL2) and `oneshot_client_gpu`
+    (`--features webgpu`, the desktop's frame), and picks one before either
+    downloads. What WebGL2 can't do is `cfg(webgl2)` (`build.rs`), never
+    `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
 11. **`crates/fx` is Gates'** (`crates/fx/tests/vendored.rs`).
 
 ## Commands
@@ -98,11 +102,18 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 ```
 ci/quick.sh [crate…]                                 # the local check
 ci/parity.sh                                         # native vs wasm
-ci/client.sh                                         # the client: clippy, native, the page into crates/client/dist
+ci/client.sh                                         # the client: clippy, native, the page's two modules into crates/client/dist
+ci/client.sh dev                                     # just the page, quickly (release, no size gate); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
-node ci/e2e.mjs [150 4 2 | 150 6 3]                  # menu, a match: predictions confirmed, a kill
-node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match (… 30 0 0 0 fxdemo=1 for the demo)
+node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too)
+node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo;
+                                                     #   GFX=webgpu for the WebGPU module, ?gfx=webgpu|webgl2 on the page)
+ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (Xvfb, lavapipe; title: … 2 0 0 0,
+                                                     #   settings, pose='map=6&eye=…&look=…'); F12 in game saves one
+                                                     # either: quality=potato|low|medium|high draws that rung (a software
+                                                     #   GPU is otherwise POTATO in a browser: look/potato.rs), graphics opens
+                                                     #   SETTINGS > GRAPHICS (`?graphics=1` / `--graphics`)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
@@ -115,12 +126,18 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 
 - The client is its own workspace. `cargo` at the root never builds it;
   `ci/client.sh` (or `cd crates/client`) does.
-- The page's real build (`--profile web`, fat LTO) is slow. `tools/fx.sh`
-  builds release for the stage, which is fine for looking but not for the
-  9 MB gate.
-- `ci/client_shot.mjs` sleeps on the wall clock, so whether a 50 ms flash
-  is in the shot is luck. Stage effects with `tools/fx.sh`, which steps the
-  clock.
+- The page's real build (`--profile web`, fat LTO, two modules) is slow.
+  `ci/client.sh dev` and `tools/fx.sh` build release, which is fine for
+  looking but not for the 9 MB gate (`ci/publish_web.sh` refuses a dev page).
+- Headless Chromium draws WebGPU only on SwiftShader's Vulkan
+  (`--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader
+  --use-angle=vulkan`); with ANGLE on GL the device is lost at once and the
+  page falls back to WebGL2. Its adapter is a software one, so the page
+  takes WebGPU there only with `?gfx=webgpu`.
+- `ci/client_shot.mjs` and `ci/desktop_shot.sh` count their seconds from
+  when the screen is there (`loading.rs`: level dressed, shaders compiled),
+  then on the wall clock, so whether a 50 ms flash is in the shot is luck.
+  Stage effects with `tools/fx.sh`, which steps the clock.
 - `ci/e2e.mjs` needs the release server built first.
 - `wasm-bindgen` must match `crates/client/Cargo.lock` exactly; `ci/client.sh`
   names the version it wants.
@@ -132,7 +149,8 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 - `npm ci` once for Playwright. Chromium at `/opt/pw-browsers/chromium` is
   used if present (`CHROMIUM_PATH` overrides), else `npx playwright install chromium`.
 - The desktop client needs `libwayland-dev libudev-dev libxkbcommon-x11-0`;
-  native sound (`--features sound`) needs `libasound2-dev`.
+  native sound (`--features sound`) needs `libasound2-dev`. Its headless
+  shots (`ci/desktop_shot.sh`) need `apt-get install xvfb mesa-vulkan-drivers`.
 - A Gates checkout beside this one (`../Gates`) for `tools/assets.mjs` and
   `tools/fx-sync.sh`.
 

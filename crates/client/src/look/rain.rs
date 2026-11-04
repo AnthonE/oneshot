@@ -1,0 +1,267 @@
+//! Rain: streaks that follow the eye, on a mood that has a shower
+//! (`mood::Mood::rain`), and the wet it leaves (`Mood::wet`: the ground's
+//! shader, `cloud_shadow.wgsl`, and the boxes' materials, `level.rs`).
+//! After Gates' `render/rain.rs` (MIT, NOTICE), without its snow.
+//!
+//! **One mesh, one draw, and no particles**: a fixed mesh of streak quads
+//! whose vertex stage wraps each drop into a box around the camera by how
+//! far the rain has fallen. How hard it rains is how many drops are alive,
+//! so a drizzle and a storm are the same mesh with one number moved. The
+//! fall runs on `globals.time` in the shader, so the material is written
+//! once a map.
+//!
+//! **The same rain for everyone.** The streaks are something a fighter is
+//! seen through, so every target and every rung draws the same count of
+//! them, and a light shower's streaks are a few percent of the frame.
+
+use bevy::asset::Asset;
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
+use bevy::prelude::*;
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::shader::ShaderRef;
+
+use super::mood::{Mood, MoodNow};
+
+pub const SHADER: &str = "shaders/rain.wgsl";
+
+/// Drops in the mesh: the most a shower draws, on every target.
+pub const DROPS: u32 = 4_000;
+/// Half the box the drops fall in around the eye, metres.
+pub const BOX_HALF: Vec3 = Vec3::new(14.0, 9.0, 14.0);
+/// How fast a drop falls, m/s: a raindrop's terminal speed.
+pub const FALL_MS: f32 = 9.0;
+/// The rain's glint with no sun: the light a streak gives back.
+pub const GLINT: f32 = 0.12;
+/// Each drop falls at its own whole number of `1 / SPEED_STEPS` of the
+/// travel, so the travel wrapped at `SPEED_STEPS` box lengths moves every
+/// drop by whole boxes (`rain.wgsl`).
+pub const SPEED_STEPS: f32 = 20.0;
+
+/// The uniform, laid out to match `Rain` in the shader. 48 bytes: WebGL2
+/// wants uniforms of at least 16.
+#[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
+pub struct RainParams {
+    /// xyz the fall velocity (m/s), w the streak length (m).
+    pub fall: Vec4,
+    /// xyz the box's half extents (m), w the intensity `0..1`.
+    pub box_: Vec4,
+    /// rgb the streak's lit colour; w unused.
+    pub look: Vec4,
+}
+
+#[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
+pub struct RainMaterial {
+    #[uniform(0)]
+    pub params: RainParams,
+}
+
+impl Material for RainMaterial {
+    fn vertex_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // A streak is a camera-facing quad either way round.
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
+/// The rain's entity.
+#[derive(Component)]
+pub struct Rain;
+
+/// The handle `drive` writes.
+#[derive(Resource)]
+pub struct RainHandle(pub Handle<RainMaterial>);
+
+/// Deterministic per-drop randomness — a look, not a sim draw.
+fn hash01(i: u32, k: u32) -> f32 {
+    let mut h = (i as u64) << 32 | k as u64;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    (h >> 40) as f32 / 16_777_216.0
+}
+
+/// The drop mesh: `drops` quads, each a home in the unit box (POSITION),
+/// its corners (UV_0) and its rank and phase (COLOR).
+pub fn drop_mesh(drops: u32) -> Mesh {
+    let n = drops as usize;
+    let mut pos = Vec::with_capacity(n * 4);
+    let mut uv = Vec::with_capacity(n * 4);
+    let mut col = Vec::with_capacity(n * 4);
+    let mut idx: Vec<u16> = Vec::with_capacity(n * 6);
+    for i in 0..drops {
+        let home = [hash01(i, 0), hash01(i, 1), hash01(i, 2)];
+        // Rank is the drop's index spread evenly, so the alive share tracks
+        // the intensity exactly rather than by luck.
+        let rank = (i as f32 + 0.5) / drops as f32;
+        let phase = hash01(i, 3);
+        let base = (i * 4) as u16;
+        for (x, y) in [(-1.0, 0.0), (1.0, 0.0), (1.0, 1.0), (-1.0, 1.0)] {
+            pos.push(home);
+            uv.push([x, y]);
+            col.push([rank, phase, 0.0, 1.0]);
+        }
+        idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    mesh.insert_indices(Indices::U16(idx));
+    mesh
+}
+
+const _: () = assert!(DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u16 indices");
+
+/// What a mood's rain looks like. None under a roof (an interior's mood
+/// never rains).
+pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
+    let wind = m.wind() * (1.0 + 0.6 * m.wind_ms);
+    let fall = Vec3::new(wind.x, -(FALL_MS + 2.0 * m.rain), wind.y);
+    // Lit by the sky it falls from: bright grey by day, under a heavy one
+    // greyer, opened with the exposure as the frame is.
+    let lit = ((GLINT + 0.6 * m.sun * (1.0 - 0.45 * m.dark)) * m.exposure_gain()).min(0.8);
+    RainParams {
+        fall: fall.extend(0.45 + 0.3 * m.rain),
+        box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
+        look: Vec4::new(0.55 * lit, 0.58 * lit, 0.62 * lit, 0.0),
+    }
+}
+
+/// Build the rain, hidden until a mood rains.
+pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<RainMaterial>>) {
+    let material = materials.add(RainMaterial {
+        params: RainParams::default(),
+    });
+    commands.spawn((
+        Rain,
+        Mesh3d(meshes.add(drop_mesh(DROPS))),
+        MeshMaterial3d(material.clone()),
+        Transform::default(),
+        Visibility::Hidden,
+        NoFrustumCulling,
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
+    commands.insert_resource(RainHandle(material));
+}
+
+/// The map's rain, when the map changes.
+pub fn drive(
+    now: Res<MoodNow>,
+    handle: Option<Res<RainHandle>>,
+    mut materials: ResMut<Assets<RainMaterial>>,
+    mut rain: Query<&mut Visibility, With<Rain>>,
+) {
+    if !now.is_changed() {
+        return;
+    }
+    let want = params_for(&now.mood, now.roofed);
+    let show = want.box_.w > 0.0;
+    for mut v in rain.iter_mut() {
+        let vis = if show {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *v != vis {
+            *v = vis;
+        }
+    }
+    if let Some(handle) = handle {
+        if materials.get(&handle.0).is_some_and(|m| m.params != want) {
+            if let Some(m) = materials.get_mut(&handle.0) {
+                m.params = want;
+            }
+        }
+    }
+}
+
+/// What the rain's wet does to a box's material: darker, and more
+/// saturated about its own luma (Gates' `wetted`, the ground's own), and
+/// smoother. `wet` is the mood's.
+pub fn wetted(c: Color, roughness: f32, wet: f32) -> (Color, f32) {
+    if wet <= 0.0 {
+        return (c, roughness);
+    }
+    let l = LinearRgba::from(c);
+    let rgb = [l.red, l.green, l.blue];
+    let luma = super::fill::luminance(rgb);
+    let value = if luma > WET_FLOOR {
+        (1.0 - wet * (1.0 - WET_VALUE)).max(WET_FLOOR / luma)
+    } else {
+        1.0
+    };
+    let chroma = 1.0 + wet * WET_SATURATION;
+    let out: [f32; 3] = core::array::from_fn(|i| ((luma + (rgb[i] - luma) * chroma) * value).max(0.0));
+    (
+        Color::linear_rgba(out[0], out[1], out[2], l.alpha),
+        roughness * (1.0 - wet * (1.0 - WET_ROUGH)),
+    )
+}
+
+/// How much of a colour's value a full soak keeps (Gates' `WET_VALUE`).
+pub const WET_VALUE: f32 = 0.55;
+/// How much its chroma is stretched about its own luma.
+pub const WET_SATURATION: f32 = 0.35;
+/// The darkest a soak may take a colour to, luma.
+pub const WET_FLOOR: f32 = 0.05;
+/// How much of its roughness a soaked surface keeps.
+pub const WET_ROUGH: f32 = 0.75;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Wet is darker and glossier, never black, and dry is nothing.
+    #[test]
+    fn wet_darkens_and_smooths_but_never_blackens() {
+        let c = Color::linear_rgb(0.4, 0.38, 0.35);
+        assert_eq!(wetted(c, 0.9, 0.0), (c, 0.9));
+        let (w, r) = wetted(c, 0.9, 1.0);
+        let l = |c: Color| {
+            let l = LinearRgba::from(c);
+            super::super::fill::luminance([l.red, l.green, l.blue])
+        };
+        assert!(l(w) < l(c) && l(w) >= WET_FLOOR - 1e-6 && r < 0.9);
+        let dark = Color::linear_rgb(0.03, 0.03, 0.03);
+        assert!((l(wetted(dark, 0.5, 1.0).0) - l(dark)).abs() < 1e-3);
+    }
+
+    /// A light shower: under half the drops, and none indoors.
+    #[test]
+    fn a_shower_is_light_and_stays_outside() {
+        let p = params_for(&super::super::mood::SUN_SHOWER, false);
+        assert!(p.box_.w > 0.0 && p.box_.w < 0.5);
+        assert_eq!(params_for(&super::super::mood::SUN_SHOWER, true).box_.w, 0.0);
+        assert_eq!(params_for(&super::super::mood::NOON, false).box_.w, 0.0);
+    }
+}

@@ -92,8 +92,21 @@ pub const MEDAL_S: f32 = 4.0;
 const ANNOUNCE_MAX: usize = 8;
 
 impl HudState {
+    /// A new match's: nothing carried over but the net graph.
+    pub fn fresh(&self) -> HudState {
+        HudState {
+            net: self.net,
+            ..default()
+        }
+    }
+
     pub fn skin(&self, slot: u8) -> u8 {
         self.skins.get(&slot).copied().unwrap_or(proto::SKIN_STANDARD)
+    }
+
+    /// Every seat's name, by slot (bots' too).
+    pub fn names(&self) -> impl Iterator<Item = (&u8, &String)> {
+        self.names.iter()
     }
 
     pub fn name(&self, slot: u8) -> String {
@@ -103,6 +116,10 @@ impl HudState {
             .unwrap_or_else(|| format!("P{}", slot + 1))
     }
 }
+
+/// Every HUD node hangs off this: hidden off a match (`front::hud_shown`).
+#[derive(Component)]
+pub struct HudRoot;
 
 #[derive(Component)]
 pub struct ShieldBar;
@@ -183,8 +200,21 @@ pub fn setup(mut commands: Commands) {
         bottom: bottom.map_or(Val::Auto, Val::Px),
         ..default()
     };
+    // One root for all of it, so the title can hide it.
+    let root = commands
+        .spawn((
+            HudRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ))
+        .id();
     // Under the HUD, over the world.
     commands.spawn((
+        ChildOf(root),
         HurtRim,
         Node {
             position_type: PositionType::Absolute,
@@ -203,30 +233,35 @@ pub fn setup(mut commands: Commands) {
         ZIndex(-1),
         Visibility::Hidden,
     ));
-    commands.spawn(bar(Color::srgb(0.35, 0.7, 1.0), ShieldBar, 40.0));
-    commands.spawn(bar(Color::srgb(0.9, 0.3, 0.25), HealthBar, 24.0));
+    commands.spawn((ChildOf(root), bar(Color::srgb(0.35, 0.7, 1.0), ShieldBar, 40.0)));
+    commands.spawn((ChildOf(root), bar(Color::srgb(0.9, 0.3, 0.25), HealthBar, 24.0)));
     commands.spawn((
+        ChildOf(root),
         AmmoText,
         text(crate::ui::display(24.0)),
         abs(None, Some(22.0), None, Some(18.0)),
     ));
     commands.spawn((
+        ChildOf(root),
         ScoreText,
         text(crate::ui::display(21.0)),
         abs(Some(18.0), None, Some(14.0), None),
     ));
     commands.spawn((
+        ChildOf(root),
         FeedText,
         text(crate::ui::semibold(16.0)),
         abs(None, Some(18.0), Some(14.0), None),
     ));
     commands.spawn((
+        ChildOf(root),
         NetText,
         text(crate::ui::text(14.0)),
         abs(Some(18.0), None, None, Some(64.0)),
     ));
     // The middle: a full-width row, its text centred.
     commands.spawn((
+        ChildOf(root),
         Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
@@ -295,29 +330,32 @@ pub fn setup(mut commands: Commands) {
         },
         ..default()
     };
-    commands.spawn((Reticle, centred(22.0, 22.0))).with_children(|c| {
-        let white = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.85));
-        for (l, t, w, h) in [
-            (0.0, 10.0, 7.0, 2.0),
-            (15.0, 10.0, 7.0, 2.0),
-            (10.0, 0.0, 2.0, 7.0),
-            (10.0, 15.0, 2.0, 7.0),
-        ] {
-            c.spawn((
-                ReticleStroke,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(l),
-                    top: Val::Px(t),
-                    width: Val::Px(w),
-                    height: Val::Px(h),
-                    ..default()
-                },
-                white,
-            ));
-        }
-    });
+    commands
+        .spawn((ChildOf(root), Reticle, centred(22.0, 22.0)))
+        .with_children(|c| {
+            let white = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.85));
+            for (l, t, w, h) in [
+                (0.0, 10.0, 7.0, 2.0),
+                (15.0, 10.0, 7.0, 2.0),
+                (10.0, 0.0, 2.0, 7.0),
+                (10.0, 15.0, 2.0, 7.0),
+            ] {
+                c.spawn((
+                    ReticleStroke,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(l),
+                        top: Val::Px(t),
+                        width: Val::Px(w),
+                        height: Val::Px(h),
+                        ..default()
+                    },
+                    white,
+                ));
+            }
+        });
     commands.spawn((
+        ChildOf(root),
         HitMark,
         centred(26.0, 26.0),
         UiTransform::from_rotation(Rot2::degrees(45.0)),
@@ -350,6 +388,7 @@ pub fn setup(mut commands: Commands) {
         ],
     ));
     commands.spawn((
+        ChildOf(root),
         HurtArc,
         centred(56.0, 6.0),
         BackgroundColor(Color::srgba(1.0, 0.2, 0.15, 0.0)),
