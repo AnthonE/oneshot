@@ -100,6 +100,47 @@ async fn handle(
         let body = format!("{{\"nonce\":\"{}\",\"game\":\"{}\"}}", ctx.nonces.issue(), ctx.slug);
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
+    // Elo Pros' presence (`meter/playtime.py`): who is here, signed in,
+    // and what they're doing; and the counts its server list reads. Only
+    // the live slot answers (the other's lobbies are on their way to it):
+    // a 503 sends nginx to the other.
+    if path == "/online.json" || path == "/status.json" {
+        let live = match &ctx.live_file {
+            Some(f) => tokio::fs::read_to_string(f).await.ok().and_then(|s| live_addr(&s)),
+            None => None,
+        };
+        let elsewhere = live
+            .as_deref()
+            .and_then(|l| l.rsplit_once(':'))
+            .and_then(|(_, p)| p.parse::<u16>().ok())
+            .is_some_and(|p| p != game.port());
+        if elsewhere || ctx.draining.load(std::sync::atomic::Ordering::Relaxed) {
+            return reply_cors(&mut sock, 503, "application/json", b"{}", cors).await;
+        }
+    }
+    if path == "/online.json" {
+        let now = crate::auth::now_unix();
+        let rows: Vec<serde_json::Value> = ctx
+            .lobby
+            .parties()
+            .online(std::time::Instant::now())
+            .into_iter()
+            .map(|(id, for_s, status)| serde_json::json!({"wallet": id, "since": now - for_s.min(now), "status": status}))
+            .collect();
+        let body = serde_json::json!({"at": now, "online": rows}).to_string();
+        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
+    }
+    if path == "/status.json" {
+        let lobbies = ctx.lobby.parties().lobbies();
+        let players = lobbies.max(ctx.gate.busy().saturating_sub(lobbies));
+        let body = serde_json::json!({
+            "players": players,
+            "max_players": ctx.gate.capacity,
+            "proto": proto::PROTO_VER,
+        })
+        .to_string();
+        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
+    }
     if path == "/health" {
         return reply(&mut sock, 200, "text/plain", b"ok").await;
     }

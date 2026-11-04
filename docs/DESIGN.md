@@ -30,7 +30,7 @@ Halo's rules, the ones Fireplace's arena already plays:
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
-Not yet: abilities, hidden-information modes beyond fog of war, voice.
+Not yet: abilities, hidden-information modes beyond fog of war.
 Vehicles and terrain come with Big Team (§16, milestones 7 to 11), to rules
 our own: one ground vehicle first, a driver and a gunner. Maps and vehicles
 are original; never another game's layout or art.
@@ -321,6 +321,17 @@ runs. A no-spread cheat has nothing to cancel.
 - **Ranked needs a wallet.** `ratings.py` refuses login-only `acct_` ids. A
   login plays casual.
 - **One seat per wallet per match.**
+- **Parties, friends, voice** (`server/src/party.rs`, `lobby.rs`): the page
+  keeps a lobby session (`MODE_LOBBY`) beside any match. Everyone is in a
+  party, of one until they join someone's by its code; the leader picks who
+  may join (anyone with the link, the leader's Elo Pros friends, invite only)
+  and starts a mode for everyone present, who are then seated together (one
+  side in Big Team, one unit in Doubles, a room of their own if they ask).
+  Friends are Elo Pros' list (`GET /api/friends/<player>`), with where they
+  are here; `online.json` gives Elo Pros the presence back. Party voice is
+  Opus over the lobby's datagrams (Gates' layout), relayed to the party and
+  nobody else, never decoded by the server. A page back from a match comes
+  in on its ticket (`auth.rs`) and takes its place.
 - **Queue:** Elo Pros' `lobbies.py` op `queue`. It matches parties inside a
   rating window that grows while they wait and balances sides, then writes a
   match id and a server onto each party's lobby. The server reads

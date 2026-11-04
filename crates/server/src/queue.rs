@@ -21,6 +21,8 @@ pub struct Entry {
     pub since: Instant,
     /// A skin checked against the wallet.
     pub skin: u8,
+    /// Doubles: the party it queues with, kept on one side.
+    pub party: Option<crate::party::Seating>,
 }
 
 /// Players a match needs.
@@ -51,9 +53,17 @@ impl Queue {
     }
 
     /// The next match that can form, as its sides: for a duel two sides of
-    /// one, for doubles two sides of two with the ratings balanced.
+    /// one, for doubles two sides of two with the ratings balanced and a
+    /// party of two never split.
     pub fn form(&mut self, now: Instant) -> Option<Vec<Vec<Entry>>> {
-        for mode in [MODE_DUEL, MODE_DOUBLES] {
+        if let Some(m) = self.form_duel(now) {
+            return Some(m);
+        }
+        self.form_doubles(now)
+    }
+
+    fn form_duel(&mut self, now: Instant) -> Option<Vec<Vec<Entry>>> {
+        for mode in [MODE_DUEL] {
             let need = size(mode);
             let mut waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == mode).collect();
             if waiting.len() < need {
@@ -95,6 +105,84 @@ impl Queue {
         }
         None
     }
+
+    /// Doubles by units: a player alone, or a party of two once both are
+    /// here. The longest-waiting unit anchors; the nearest units by mean
+    /// rating inside its window fill four seats without splitting a pair.
+    fn form_doubles(&mut self, now: Instant) -> Option<Vec<Vec<Entry>>> {
+        let waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == MODE_DOUBLES).collect();
+        let mut units: Vec<Vec<&Entry>> = Vec::new();
+        for e in &waiting {
+            match e.party.filter(|p| p.size == 2) {
+                None => units.push(vec![e]),
+                Some(p) => {
+                    if units.iter().any(|u| u[0].party.is_some_and(|q| q.code == p.code)) {
+                        continue;
+                    }
+                    let pair: Vec<&Entry> = waiting
+                        .iter()
+                        .copied()
+                        .filter(|o| o.party.is_some_and(|q| q.code == p.code))
+                        .take(2)
+                        .collect();
+                    // A pair waits for its other half.
+                    if pair.len() == 2 {
+                        units.push(pair);
+                    }
+                }
+            }
+        }
+        let since = |u: &Vec<&Entry>| u.iter().map(|e| e.since).min().unwrap_or(now);
+        let rating = |u: &Vec<&Entry>| u.iter().map(|e| e.rating).sum::<f64>() / u.len() as f64;
+        units.sort_by_key(since);
+        let anchor = units.first()?;
+        let window = WINDOW_BASE + WINDOW_GROW * now.duration_since(since(anchor)).as_secs_f64();
+        let mut near: Vec<&Vec<&Entry>> = units[1..]
+            .iter()
+            .filter(|u| (rating(u) - rating(anchor)).abs() <= window)
+            .collect();
+        near.sort_by(|a, b| {
+            let (da, db) = ((rating(a) - rating(anchor)).abs(), (rating(b) - rating(anchor)).abs());
+            da.total_cmp(&db).then(since(a).cmp(&since(b)))
+        });
+        let mut picked = vec![anchor];
+        let mut n = anchor.len();
+        for u in near {
+            if n + u.len() <= 4 {
+                n += u.len();
+                picked.push(u);
+            }
+            if n == 4 {
+                break;
+            }
+        }
+        if n < 4 {
+            return None;
+        }
+        let ids: Vec<Vec<u64>> = picked.iter().map(|u| u.iter().map(|e| e.session).collect()).collect();
+        let mut take = |ids: &[u64]| -> Vec<Entry> { ids.iter().filter_map(|&s| self.remove(s)).collect() };
+        let (pairs, singles): (Vec<&Vec<u64>>, Vec<&Vec<u64>>) = ids.iter().partition(|u| u.len() == 2);
+        let sides = match pairs.len() {
+            2 => vec![take(pairs[0]), take(pairs[1])],
+            1 => {
+                let rest: Vec<u64> = singles.iter().flat_map(|u| u.iter().copied()).collect();
+                vec![take(pairs[0]), take(&rest)]
+            }
+            _ => {
+                let all: Vec<u64> = ids.iter().flatten().copied().collect();
+                let mut players = take(&all);
+                players.sort_by(|a, b| b.rating.total_cmp(&a.rating));
+                let (a, b, c, d) = (
+                    players[0].clone(),
+                    players[1].clone(),
+                    players[2].clone(),
+                    players[3].clone(),
+                );
+                vec![vec![a, d], vec![b, c]]
+            }
+        };
+        Some(sides)
+    }
 }
 
 #[cfg(test)]
@@ -111,6 +199,7 @@ mod tests {
             rating,
             since,
             skin: 0,
+            party: None,
         }
     }
 
@@ -124,6 +213,37 @@ mod tests {
         let m = q.form(t0 + Duration::from_secs(31)).expect("window 255 by now");
         assert_eq!(m.len(), 2);
         assert!(q.entries.is_empty());
+    }
+
+    #[test]
+    fn a_party_of_two_waits_for_its_half_and_sits_together() {
+        let t0 = Instant::now();
+        let pair = Some(crate::party::Seating {
+            code: 9,
+            size: 2,
+            private: false,
+        });
+        let mut q = Queue::default();
+        // Half of a pair and three singles: no match; the pair waits whole.
+        q.push(Entry {
+            party: pair,
+            ..e(1, MODE_DOUBLES, 1800.0, t0)
+        });
+        for s in 2..=4 {
+            q.push(e(s, MODE_DOUBLES, 1500.0, t0));
+        }
+        assert!(q.form(t0).is_none(), "the pair's other half isn't here yet");
+        // Its other half: the pair (far apart in rating, which alone would
+        // split them) against two of the singles.
+        q.push(Entry {
+            party: pair,
+            ..e(5, MODE_DOUBLES, 1400.0, t0)
+        });
+        let m = q.form(t0).expect("a pair and two singles");
+        let side_of = |s: u64| m.iter().position(|side| side.iter().any(|p| p.session == s)).unwrap();
+        assert_eq!(side_of(1), side_of(5), "the party sits together");
+        assert_eq!(m[side_of(1)].len(), 2);
+        assert_eq!(q.entries.len(), 1, "one single still waits");
     }
 
     #[test]

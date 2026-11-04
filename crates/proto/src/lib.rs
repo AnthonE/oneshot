@@ -11,8 +11,11 @@
 pub mod bits;
 pub mod frame;
 pub mod medal;
+pub mod party;
+pub mod voice;
 
 use bits::{BitReader, BitWriter, WireError};
+use party::{Party, PlayerId};
 use sim::consts::MAX_FIGHTERS;
 use sim::fighter::{Fighter, Gun};
 use sim::geom::V3;
@@ -21,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 15;
+pub const PROTO_VER: u16 = 16;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -67,7 +70,7 @@ fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
     Ok(((v << shift) as i32) >> shift)
 }
 
-fn done(r: &BitReader) -> R<()> {
+pub(crate) fn done(r: &BitReader) -> R<()> {
     if r.remaining_bits() >= 8 {
         Err(WireError::Malformed)
     } else {
@@ -195,6 +198,8 @@ pub fn datagram_kind(buf: &[u8]) -> Option<u8> {
 }
 pub const DG_INPUT: u8 = KIND_INPUT as u8;
 pub const DG_SNAPSHOT: u8 = KIND_SNAPSHOT as u8;
+/// Party voice, both ways, on a lobby session ([`voice`]).
+pub const DG_VOICE: u8 = voice::KIND_VOICE as u8;
 
 // ------------------------------------------------------------- snapshots
 
@@ -832,8 +837,25 @@ pub const MODE_GUN_GAME: u8 = 4;
 pub const MODE_CUP: u8 = 5;
 /// Big Team: 8v8 Team Slayer, casual, bots in the empty seats.
 pub const MODE_BIG_TEAM: u8 = 6;
+/// No match: the menu's own session, for a party, its friends and its
+/// voice ([`party`]). Kept open beside a match.
+pub const MODE_LOBBY: u8 = 7;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
+
+/// A mode as a player reads it.
+pub fn mode_name(mode: u8) -> &'static str {
+    match mode {
+        MODE_CASUAL => "the bot",
+        MODE_DUEL => "Ranked Duel",
+        MODE_DOUBLES => "Ranked Doubles",
+        MODE_FFA => "Free for all",
+        MODE_GUN_GAME => "Gun Game",
+        MODE_CUP => "a cup",
+        MODE_BIG_TEAM => "Big Team",
+        _ => "oneshot",
+    }
+}
 /// Bits a medal id takes (`medal::COUNT` fits).
 const MEDAL_BITS: u32 = 6;
 const _: () = assert!(medal::COUNT <= 1 << MEDAL_BITS);
@@ -852,6 +874,9 @@ pub enum Msg {
         mode: u8,
         /// The skin it would wear: worn only if the pass's wallet owns it.
         skin: u8,
+        /// A match: the party it comes with (its code), to be seated with
+        /// it; a lobby: the party to join. 0: none.
+        party: u32,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -937,6 +962,59 @@ pub enum Msg {
         /// Each medal's count, by id (saturated).
         medals: [u8; medal::COUNT],
     },
+    /// Server → a session that signed in, and a guest's lobby: what the
+    /// server takes in place of a pass for a while (`server::auth`), so a
+    /// page that reloads after a match is still who it was.
+    Ticket {
+        ticket: Pass,
+    },
+    /// Client → server on a lobby: sign in now, with a fresh pass.
+    SignIn {
+        pass: Pass,
+    },
+    /// Client → server on a lobby: a party act (`party::ACT_*`).
+    PartyAct {
+        act: u8,
+        arg: u32,
+    },
+    /// Client → server on a lobby: let this friend into my party, and tell
+    /// them if they're here.
+    PartyInvite {
+        player: PlayerId,
+    },
+    /// Server → a lobby: its party as it is now.
+    Party(Party),
+    /// Server → each member present: the leader started `mode`. Each opens
+    /// a match session with the party's code; `private`: the party alone.
+    Go {
+        mode: u8,
+        private: bool,
+    },
+    /// Server → a lobby: `n` friend rows follow ([`Msg::Friend`]).
+    /// `reachable`: Elo Pros answered (false: we couldn't ask).
+    Friends {
+        n: u8,
+        reachable: bool,
+    },
+    /// Server → a lobby: one of my friends, and where they are.
+    Friend {
+        i: u8,
+        name: Name,
+        player: PlayerId,
+        /// `party::AT_*`.
+        at: u8,
+        /// The party they're in, if I may join it; 0 otherwise.
+        party: u32,
+        /// How many are in their party.
+        size: u8,
+        /// What they're in: a mode, or `party::PLAYING_NONE`.
+        playing: u8,
+    },
+    /// Server → a lobby: `from` asks me into party `code`.
+    Invited {
+        from: Name,
+        code: u32,
+    },
 }
 
 /// The commitment to a match's salt: SHA-256 of its two words, little-endian.
@@ -958,8 +1036,24 @@ pub const REFUSE_NEEDS_WALLET: u8 = 4;
 pub const REFUSE_BUSY: u8 = 5;
 /// The game has banned this wallet from ranked (Elo Pros `/bans/oneshot`).
 pub const REFUSE_BANNED: u8 = 6;
+/// No party has that code (any more).
+pub const REFUSE_NO_PARTY: u8 = 7;
+pub const REFUSE_PARTY_FULL: u8 = 8;
+/// The party is for the leader's friends, and you aren't one.
+pub const REFUSE_FRIENDS_ONLY: u8 = 9;
+/// The party is invite only, and you weren't asked.
+pub const REFUSE_INVITE_ONLY: u8 = 10;
+/// The leader removed you from that party.
+pub const REFUSE_KICKED: u8 = 11;
+/// Only the party's leader does that.
+pub const REFUSE_NOT_LEADER: u8 = 12;
+/// The party doesn't fit that mode (too many, or someone without a wallet
+/// for ranked).
+pub const REFUSE_PARTY_MODE: u8 = 13;
+/// Not one of your friends on Elo Pros, or not signed in.
+pub const REFUSE_NOT_FRIEND: u8 = 14;
 
-fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
+pub(crate) fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
     for &b in &n.bytes[..n.len as usize] {
         w.write(b as u32, 8)?;
@@ -967,7 +1061,7 @@ fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     Ok(())
 }
 
-fn r_name(r: &mut BitReader) -> R<Name> {
+pub(crate) fn r_name(r: &mut BitReader) -> R<Name> {
     let len = r.read(5)? as usize;
     if len > MAX_NAME {
         return Err(WireError::Cap);
@@ -995,16 +1089,15 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             pass,
             mode,
             skin,
+            party,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
             w_name(&mut w, name)?;
-            w.write(pass.len as u32, 10)?;
-            for &b in &pass.bytes[..pass.len as usize] {
-                w.write(b as u32, 7)?;
-            }
+            w_pass(&mut w, pass)?;
             w.write(*mode as u32, MODE_BITS)?;
             w.write(*skin as u32, 8)?;
+            w.write(*party, party::CODE_BITS)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -1142,8 +1235,83 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
                 w.write(c as u32, 8)?;
             }
         }
+        Msg::Ticket { ticket: p } | Msg::SignIn { pass: p } => {
+            w.write(if matches!(m, Msg::Ticket { .. }) { 13 } else { 14 }, 8)?;
+            w_pass(&mut w, p)?;
+        }
+        Msg::PartyAct { act, arg } => {
+            w.write(15, 8)?;
+            w.write(*act as u32, 8)?;
+            w.write(*arg, 32)?;
+        }
+        Msg::PartyInvite { player } => {
+            w.write(16, 8)?;
+            player.pack(&mut w)?;
+        }
+        Msg::Party(p) => {
+            w.write(17, 8)?;
+            p.pack(&mut w)?;
+        }
+        Msg::Go { mode, private } => {
+            w.write(18, 8)?;
+            w.write(*mode as u32, MODE_BITS)?;
+            w.write_bit(*private)?;
+        }
+        Msg::Friends { n, reachable } => {
+            w.write(19, 8)?;
+            w.write(*n as u32, 8)?;
+            w.write_bit(*reachable)?;
+        }
+        Msg::Friend {
+            i,
+            name,
+            player,
+            at,
+            party: code,
+            size,
+            playing,
+        } => {
+            w.write(20, 8)?;
+            w.write(*i as u32, 8)?;
+            w_name(&mut w, name)?;
+            player.pack(&mut w)?;
+            party::w_at(&mut w, *at)?;
+            w.write(*code, party::CODE_BITS)?;
+            w.write(*size as u32, 4)?;
+            party::w_play(&mut w, *playing)?;
+        }
+        Msg::Invited { from, code } => {
+            w.write(21, 8)?;
+            w_name(&mut w, from)?;
+            w.write(*code, party::CODE_BITS)?;
+        }
     }
     Ok(w.finish())
+}
+
+/// A pass or a ticket: printable ASCII, counted.
+fn w_pass(w: &mut BitWriter, p: &Pass) -> R<()> {
+    w.write(p.len as u32, 10)?;
+    for &b in &p.bytes[..p.len as usize] {
+        w.write(b as u32, 7)?;
+    }
+    Ok(())
+}
+
+fn r_pass(r: &mut BitReader) -> R<Pass> {
+    let len = r.read(10)? as usize;
+    if len > MAX_PASS {
+        return Err(WireError::Cap);
+    }
+    let mut p = Pass::NONE;
+    for b in p.bytes[..len].iter_mut() {
+        *b = r.read(7)? as u8;
+        if !(0x21..0x7f).contains(b) {
+            return Err(WireError::Malformed);
+        }
+    }
+    p.len = len as u16;
+    Ok(p)
 }
 
 /// A medal id: [`medal::NONE`] or past the table is malformed.
@@ -1160,23 +1328,10 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
         1 => Msg::Hello {
             proto: r.read(16)? as u16,
             name: r_name(&mut r)?,
-            pass: {
-                let len = r.read(10)? as usize;
-                if len > MAX_PASS {
-                    return Err(WireError::Cap);
-                }
-                let mut p = Pass::NONE;
-                for b in p.bytes[..len].iter_mut() {
-                    *b = r.read(7)? as u8;
-                    if !(0x21..0x7f).contains(b) {
-                        return Err(WireError::Malformed);
-                    }
-                }
-                p.len = len as u16;
-                p
-            },
+            pass: r_pass(&mut r)?,
             mode: r.read(MODE_BITS)? as u8,
             skin: r.read(8)? as u8,
+            party: r.read(party::CODE_BITS)?,
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -1287,6 +1442,39 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 medals,
             }
         }
+        13 => Msg::Ticket {
+            ticket: r_pass(&mut r)?,
+        },
+        14 => Msg::SignIn { pass: r_pass(&mut r)? },
+        15 => Msg::PartyAct {
+            act: r.read(8)? as u8,
+            arg: r.read(32)?,
+        },
+        16 => Msg::PartyInvite {
+            player: PlayerId::unpack(&mut r)?,
+        },
+        17 => Msg::Party(Party::unpack(&mut r)?),
+        18 => Msg::Go {
+            mode: r.read(MODE_BITS)? as u8,
+            private: r.read_bit()?,
+        },
+        19 => Msg::Friends {
+            n: r.read(8)? as u8,
+            reachable: r.read_bit()?,
+        },
+        20 => Msg::Friend {
+            i: r.read(8)? as u8,
+            name: r_name(&mut r)?,
+            player: PlayerId::unpack(&mut r)?,
+            at: party::r_at(&mut r)?,
+            party: r.read(party::CODE_BITS)?,
+            size: r.read(4)? as u8,
+            playing: party::r_play(&mut r)?,
+        },
+        21 => Msg::Invited {
+            from: r_name(&mut r)?,
+            code: r.read(party::CODE_BITS)?,
+        },
         _ => return Err(WireError::Malformed),
     };
     done(&r)?;

@@ -202,6 +202,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_CASUAL,
             skin: SKIN_STANDARD,
+            party: 0,
         },
         Msg::Hello {
             proto: PROTO_VER,
@@ -209,6 +210,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
             mode: MODE_DUEL,
             skin: 2,
+            party: 0,
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -238,6 +240,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_GUN_GAME,
             skin: 5,
+            party: party::code_parse("K7Q2XD").unwrap(),
         },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
@@ -299,7 +302,90 @@ fn msgs() -> Vec<Msg> {
                 m
             },
         },
+        Msg::Ticket {
+            ticket: Pass::new("os1.Z3Vlc3Q.c2ln").unwrap(),
+        },
+        Msg::SignIn {
+            pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
+        },
+        Msg::PartyAct {
+            act: party::ACT_START,
+            arg: MODE_BIG_TEAM as u32 | party::START_PRIVATE,
+        },
+        Msg::PartyInvite {
+            player: party::PlayerId::new("0x1111111111111111111111111111111111111111").unwrap(),
+        },
+        Msg::Party(a_party()),
+        Msg::Go {
+            mode: MODE_FFA,
+            private: true,
+        },
+        Msg::Friends { n: 2, reachable: true },
+        Msg::Friend {
+            i: 1,
+            name: Name::new("chief"),
+            player: party::PlayerId::new("acct_0123456789abcdef0123").unwrap(),
+            at: party::AT_HERE,
+            party: 77,
+            size: 3,
+            playing: party::PLAYING_NONE,
+        },
+        Msg::Invited {
+            from: Name::new("arbiter"),
+            code: 0x2aaa_aaaa,
+        },
     ]
+}
+
+/// A full party: eight members, a guest among them.
+fn a_party() -> party::Party {
+    let mut p = party::Party {
+        code: party::code_parse("K7Q2XD").unwrap(),
+        privacy: party::PRIVACY_FRIENDS,
+        leader: 3,
+        me: 0,
+        n: party::MAX_PARTY as u8,
+        members: [party::Member::EMPTY; party::MAX_PARTY],
+    };
+    for (i, m) in p.members.iter_mut().enumerate() {
+        *m = party::Member {
+            tag: i as u8,
+            name: Name::new(&format!("member {i} long name")),
+            player: if i == 5 {
+                party::PlayerId::NONE
+            } else {
+                party::PlayerId::new(&format!("0x{:040x}", i + 1)).unwrap()
+            },
+            away: i == 2,
+            playing: if i == 1 { MODE_DOUBLES } else { party::PLAYING_NONE },
+        };
+    }
+    p
+}
+
+#[test]
+fn a_full_party_fits_a_stream_message() {
+    let mut buf = [0u8; MAX_STREAM_MSG];
+    let n = encode_msg(&Msg::Party(a_party()), &mut buf).unwrap();
+    assert!(n <= MAX_STREAM_MSG / 2, "{n} bytes");
+}
+
+#[test]
+fn voice_frames_have_their_goldens() {
+    let mut f = voice::VoiceFrame::new(300, voice::VOICE_END, &[9 << 3, 0xde, 0xad]).unwrap();
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let up = voice::encode_voice_up(&f, &mut buf).unwrap();
+    assert_eq!(datagram_kind(&buf[..up]), Some(DG_VOICE));
+    let a = fnv(&buf[..up]);
+    f.from = 5;
+    let n = voice::encode_voice(&f, &mut buf).unwrap();
+    let b = fnv(&buf[..n]);
+    assert_eq!(
+        [a, b],
+        [0xf76d_1c0a_fc9a_e4cc, 0x90a3_e271_cfc2_d6d1],
+        "got {:#018x?}",
+        [a, b]
+    );
 }
 
 #[test]
@@ -400,12 +486,12 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0xc72a_f16d_81bf_711b,
-        0x0a30_a039_0222_8f4d,
-        0xc5d8_fae9_ffff_69f4,
+        0x4c62_9178_43d3_473e,
+        0x2890_80b2_8af8_2be1,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x63aa_1f79_9a8f_88d6,
+        0x6003_ddd5_a915_b8b7,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,
@@ -416,6 +502,15 @@ fn the_bytes_match_their_goldens() {
         0xdfb3_0ed7_79ac_056f,
         0x26d2_6718_97d8_1f69,
         0xcf3f_7643_a904_811f,
+        0x4627_86ee_7e74_8b4f,
+        0x84e5_706c_e958_be03,
+        0x519c_8b9c_47dc_7be6,
+        0xba4d_2217_aeb8_fb47,
+        0xb06e_95f9_23e4_b9c4,
+        0x086f_a507_b51f_4f52,
+        0x6c87_7218_bf71_5473,
+        0x88d8_ddf9_f436_7356,
+        0x8461_28ae_94ef_0f4c,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

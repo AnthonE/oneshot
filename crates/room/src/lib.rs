@@ -386,11 +386,31 @@ impl Room {
     /// server checked they own). Returns the seat and the stream messages: a
     /// welcome for them, the seats for everyone.
     pub fn join(&mut self, name: Name, skin: u8) -> Option<(u8, Outbox)> {
+        self.join_team(name, skin, None)
+    }
+
+    /// [`Room::join`], on `team`'s side while it has a seat (a party sits
+    /// together; the sides are the seats' parity).
+    pub fn join_team(&mut self, name: Name, skin: u8, team: Option<u8>) -> Option<(u8, Outbox)> {
         if self.ranked {
             return None;
         }
-        let s = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Bot(_) | Seat::Empty))?;
+        let s = (0..self.size)
+            .find(|&s| self.open(s) && team.is_none_or(|t| self.team_of(s) == t))
+            .or_else(|| (0..self.size).find(|&s| self.open(s)))?;
         Some((s as u8, self.seat_person(s, name, skin)))
+    }
+
+    /// Whether a person could take seat `s` (a bot holds it, or nobody).
+    fn open(&self, s: usize) -> bool {
+        matches!(self.seats[s], Seat::Bot(_) | Seat::Empty)
+    }
+
+    /// Seats a person could take, on `team`'s side or anywhere.
+    pub fn open_seats(&self, team: Option<u8>) -> usize {
+        (0..self.size)
+            .filter(|&s| self.open(s) && team.is_none_or(|t| self.team_of(s) == t))
+            .count()
     }
 
     /// A person in seat `s`: the welcome for them, the seats for everyone.
