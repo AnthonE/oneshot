@@ -69,6 +69,19 @@ pub fn ground(t: &TerrainDef, x: f32, z: f32) -> Option<f32> {
 const PATCH_SCALE: f32 = 0.5;
 const PATCH_BARE: f32 = 0.75;
 
+/// Where grass grows by height: none on the creek's floor, full from
+/// this height, and gone again above the next (the scree's top and the
+/// cliffs' ledges are bare).
+const GREEN_FROM: (f32, f32) = (1.0, 2.5);
+const GREEN_TO: (f32, f32) = (6.0, 10.0);
+
+/// How much grass the height `y` allows, 0..1.
+pub fn by_height(y: f32) -> f32 {
+    let up = ((y - GREEN_FROM.0) / (GREEN_FROM.1 - GREEN_FROM.0)).clamp(0.0, 1.0);
+    let down = 1.0 - ((y - GREEN_TO.0) / (GREEN_TO.1 - GREEN_TO.0)).clamp(0.0, 1.0);
+    up * down
+}
+
 /// How much of the grass at (x, z) is left by its patchiness, 0..1.
 pub fn patch(x: f32, z: f32) -> f32 {
     1.0 - PATCH_BARE + PATCH_BARE * super::rock::fbm(Vec3::new(x, 0.0, z) * PATCH_SCALE, 5)
@@ -85,7 +98,7 @@ fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     if slope > 0.55 || y < -0.12 {
         return None;
     }
-    let green = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * patch(x, z);
+    let green = by_height(y) * patch(x, z);
     Some((green, 0.07))
 }
 

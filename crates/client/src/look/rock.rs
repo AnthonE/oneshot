@@ -12,7 +12,7 @@ use bevy::prelude::*;
 /// (a wall is thin but tall, and its crags are sized to its height), capped
 /// in metres; a boulder (all sides short) at least this share of its size.
 const DEPTH_SHARE: f32 = 0.12;
-const DEPTH_MAX_M: f32 = 2.0;
+const DEPTH_MAX_M: f32 = 4.0;
 const BOULDER_DEPTH: f32 = 0.15;
 /// The rounding of edges and corners: how far in from an edge it reaches
 /// as a share of the shortest side (capped, m), and how deep it cuts at the
@@ -20,26 +20,36 @@ const BOULDER_DEPTH: f32 = 0.15;
 const ROUND_REACH: f32 = 0.45;
 const ROUND_REACH_MAX_M: f32 = 2.0;
 const ROUND_DEPTH: f32 = 0.7;
-/// A dark band is also cut back into the rock, a ledge, this share of the
+/// A seam is also cut back into the rock, a ledge, this share of the
 /// weathering's depth.
-const LEDGE: f32 = 0.5;
+const LEDGE: f32 = 0.7;
 /// The grid's step: a share of the second-shortest side, clamped, m.
 const STEP_SHARE: f32 = 0.08;
 const STEP_MIN_M: f32 = 0.4;
 const STEP_MAX_M: f32 = 1.5;
-/// The noise's octaves: metres each repeats over, and its weight.
-const OCTAVES: [(f32, f32); 3] = [(7.0, 0.55), (2.4, 0.3), (0.9, 0.15)];
-/// The strata: metres a band repeats over, how far the bands wander up and
-/// down along the rock, and how dark a band's floor is against its crest.
-const STRATA_M: f32 = 2.8;
+/// The noise's octaves: metres each repeats over, and its weight (the
+/// longest folds a cliff into buttresses).
+const OCTAVES: [(f32, f32); 4] = [(28.0, 0.42), (7.0, 0.3), (2.4, 0.18), (0.9, 0.1)];
+/// The strata: metres a band repeats over (varying along the rock between
+/// these shares of it), how far the bands wander up and down, how dark a
+/// band's seam is against its face, and how narrow the seam is (a power).
+const STRATA_M: f32 = 3.2;
+const STRATA_VARY: (f32, f32) = (0.7, 2.0);
 const STRATA_WANDER: f32 = 1.2;
 const STRATA_DARK: f32 = 0.7;
+const SEAM_POWER: f32 = 2.5;
 /// How much darker the deepest cut is than the crag beside it: grime.
 const GRIME: f32 = 0.25;
 /// A box thinner than this many cuts is a wall at the map's edge: only its
 /// face toward the middle is cut, its back stays flat and is seen from
 /// nowhere.
 const WALL_CUTS: f32 = 2.2;
+/// A wall's foot, where fighters walk, is cut only this share of the depth
+/// (the sim stops them at the box, so the stone they touch must be near
+/// it); the cut grows to full between these shares of the wall's height.
+const FOOT_CUT: f32 = 0.15;
+const FOOT_FROM: f32 = 0.3;
+const FOOT_TO: f32 = 0.6;
 
 fn hash3(x: i32, y: i32, z: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343)
@@ -136,11 +146,21 @@ pub fn rock(min: Vec3, max: Vec3, toward: Vec3, seed: u32, tile: f32) -> Mesh {
                     let round = 1.0 - (ea.min(eb) / reach).min(1.0);
                     let noise = fbm(p, seed);
                     let wander = STRATA_WANDER * vnoise(Vec3::new(p.x, 0.0, p.z) / 9.0, seed ^ 77);
-                    let band = 0.5 + 0.5 * ((p.y / STRATA_M + wander) * core::f32::consts::TAU).sin();
+                    let vary = vnoise(Vec3::new(p.x, 0.0, p.z) / 50.0, seed ^ 31);
+                    let period = STRATA_M * (STRATA_VARY.0 + (STRATA_VARY.1 - STRATA_VARY.0) * vary);
+                    let band = 0.5 + 0.5 * ((p.y / period + wander) * core::f32::consts::TAU).sin();
+                    // The seam: narrow at the band's floor, the face between seams wide.
+                    let seam = (1.0 - band).powf(SEAM_POWER);
                     let d = dir(p);
-                    let facing = if wall { toward_dir.dot(d).max(0.0) } else { 1.0 };
-                    let cut =
-                        facing * (depth * noise + LEDGE * depth * (1.0 - band) + ROUND_DEPTH * reach * round * round);
+                    let facing = if wall {
+                        let rise = ((p.y - min.y) / size.y.max(1e-3) - FOOT_FROM) / (FOOT_TO - FOOT_FROM);
+                        let rise = rise.clamp(0.0, 1.0);
+                        let foot = FOOT_CUT + (1.0 - FOOT_CUT) * rise * rise * (3.0 - 2.0 * rise);
+                        toward_dir.dot(d).max(0.0) * foot
+                    } else {
+                        1.0
+                    };
+                    let cut = facing * (depth * noise + LEDGE * depth * seam + ROUND_DEPTH * reach * round * round);
                     pos.push(p - d * cut);
                     let planar = match axis {
                         0 => [p.z, -p.y],
@@ -148,7 +168,7 @@ pub fn rock(min: Vec3, max: Vec3, toward: Vec3, seed: u32, tile: f32) -> Mesh {
                         _ => [p.x, -p.y],
                     };
                     uv.push([planar[0] / tile, planar[1] / tile]);
-                    let dark = STRATA_DARK + (1.0 - STRATA_DARK) * band;
+                    let dark = STRATA_DARK + (1.0 - STRATA_DARK) * (1.0 - seam);
                     let m = dark * (1.0 - GRIME * (cut / (depth + 1e-3)).min(1.0));
                     col.push([m, m * (0.97 + 0.03 * band), m * (0.92 + 0.08 * band), 1.0]);
                 }

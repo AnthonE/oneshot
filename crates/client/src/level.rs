@@ -456,6 +456,10 @@ fn look(i: u8) -> (Color, f32, f32) {
     }
 }
 
+/// The ground is rock from this slope (rise over run), fully by the next:
+/// the scree banks read as stone, the hills as soil.
+const ROCK_SLOPE: (f32, f32) = (0.25, 0.55);
+
 /// The ground mesh: the sim's vertices and its split of each cell (low
 /// corner to high corner), with its splat weights in the vertex colour
 /// (sand, grass, gravel, rock): rock where it is steep, gravel down in the
@@ -472,10 +476,10 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
             let dz = (h(i, (j + 1).min(nz - 1)) - h(i, j.saturating_sub(1))) / (2.0 * t.cell);
             let slope = (dx * dx + dz * dz).sqrt();
             let y = h(i, j);
-            let rock = ((slope - 0.35) / 0.4).clamp(0.0, 1.0);
+            let rock = ((slope - ROCK_SLOPE.0) / (ROCK_SLOPE.1 - ROCK_SLOPE.0)).clamp(0.0, 1.0);
             let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
             let patch = crate::look::grass::patch(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
-            let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * patch * (1.0 - rock) * (1.0 - gravel);
+            let grass = crate::look::grass::by_height(y) * patch * (1.0 - rock) * (1.0 - gravel);
             let sand = (1.0 - rock - gravel - grass).max(0.0);
             col.push([sand, grass, gravel, rock]);
         }
