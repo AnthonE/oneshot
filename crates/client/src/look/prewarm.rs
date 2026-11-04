@@ -92,7 +92,15 @@ pub fn warm(
 /// What a weathered box's pipeline is specialised on: its maps (normal,
 /// occlusion-roughness-metal, glow) and whether its mesh carries the
 /// rock's value (`UV_1`).
-type LevelKey = (bool, bool, bool, bool);
+type LevelKey = (bool, bool, bool, Option<bool>);
+
+/// Whether `mesh` carries attribute `id`; `None` for a mesh whose data
+/// went to the render world (`RenderAssetUsages::RENDER_WORLD`, extracted),
+/// whose layout can't be read here: its warm is then once per material
+/// (Gates' `layout_key`), as `Mesh::attribute` would panic on it.
+pub fn carries(mesh: &Mesh, id: bevy::mesh::MeshVertexAttribute) -> Option<bool> {
+    mesh.try_attribute_option(id).ok().map(|a| a.is_some())
+}
 
 /// A warm draw of each kind of weathered box (`weathering.rs`) the frame
 /// the first of its kind is dressed, on that box's own mesh, shrunk: its
@@ -121,9 +129,10 @@ pub fn warm_level(
             m.base.normal_map_texture.is_some(),
             m.base.metallic_roughness_texture.is_some(),
             m.base.emissive_texture.is_some(),
-            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
+            carries(me, Mesh::ATTRIBUTE_UV_1),
         );
-        if seen.contains(&key) {
+        let warmed = |k: &LevelKey| (k.0, k.1, k.2) == (key.0, key.1, key.2);
+        if seen.contains(&key) || (key.3.is_none() && seen.iter().any(warmed)) {
             continue;
         }
         seen.push(key);

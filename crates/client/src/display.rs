@@ -207,6 +207,10 @@ mod tests {
             assert_eq!(p.step(true, false), Ok(None));
         }
         assert_eq!(p.step(true, false), Err(false), "refused: the row says so");
+        assert_eq!(p.step(false, false), Ok(None));
+        assert_eq!(p.step(true, false), Ok(Some(true)));
+        assert_eq!(p.step(true, true), Ok(None));
         assert_eq!(p.step(false, true), Ok(Some(false)), "OFF asks the page out");
+        assert_eq!(p.step(false, false), Ok(None), "and it left");
     }
 }

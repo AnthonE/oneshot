@@ -573,7 +573,9 @@ const WARM_UNDER_M: f32 = -500.0;
 
 /// What a foliage pipeline is specialised on: its material and its mesh's
 /// layout.
-type WarmKey = (AssetId<FoliageMaterial>, bool, bool, bool);
+/// `None` for a mesh already extracted to the render world: warmed once per
+/// material then (`prewarm::carries`).
+type WarmKey = (AssetId<FoliageMaterial>, Option<(bool, bool, bool)>);
 
 /// A warm draw of each foliage pipeline the frame the first block wearing
 /// it is dressed (after `prewarm.rs`): a block is hidden until the eye
@@ -591,13 +593,17 @@ pub fn warm(
         let Some(me) = meshes.get(&mesh.0) else {
             continue;
         };
-        let key = (
-            mat.0.id(),
-            me.attribute(Mesh::ATTRIBUTE_UV_0).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_COLOR).is_some(),
+        use super::prewarm::carries;
+        let layout = (
+            carries(me, Mesh::ATTRIBUTE_UV_0),
+            carries(me, Mesh::ATTRIBUTE_UV_1),
+            carries(me, Mesh::ATTRIBUTE_COLOR),
         );
-        if seen.contains(&key) {
+        let key = match layout {
+            (Some(a), Some(b), Some(c)) => (mat.0.id(), Some((a, b, c))),
+            _ => (mat.0.id(), None),
+        };
+        if seen.contains(&key) || (key.1.is_none() && seen.iter().any(|k| k.0 == key.0)) {
             continue;
         }
         seen.push(key);
