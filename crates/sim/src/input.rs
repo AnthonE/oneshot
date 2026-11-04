@@ -50,13 +50,13 @@ impl Input {
         }
     }
 
-    /// The frame repeated for a tick that never arrived: held buttons and
-    /// aim kept, taps cleared.
+    /// The frame repeated for a tick that never arrived: everything held,
+    /// taps too. A tap acts only on the tick its button goes down
+    /// (`Fighter::step_local`), so one still held can't act again here;
+    /// cleared, the next frame's held button would be a second press (a
+    /// swap undone, a second grenade).
     pub fn repeated(self) -> Input {
-        Input {
-            buttons: self.buttons & !TAPS,
-            ..self
-        }
+        self
     }
 
     pub fn held(&self, b: u16) -> bool {

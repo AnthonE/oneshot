@@ -721,3 +721,26 @@ fn the_prediction_matches_with_a_gun_in_each_hand() {
         "left {left_shots}, right {right_shots}"
     );
 }
+
+#[test]
+fn a_tap_held_through_a_missing_frame_acts_once() {
+    // SWAP held over three ticks, the middle one never arrived (the room
+    // repeats the last): one swap, not a swap and a swap back.
+    let mut w = duel([sim::arms::BR, MAGNUM], 45.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let start = w.fighters[0].cur;
+    let held = Input {
+        buttons: SWAP,
+        ..Input::default()
+    };
+    for inp in [held, held.repeated(), held] {
+        inputs[0] = inp;
+        w.step(&inputs, &NO_LAG);
+    }
+    assert_ne!(w.fighters[0].cur, start, "swapped once");
+    inputs[0] = Input::default();
+    w.step(&inputs, &NO_LAG);
+    inputs[0] = held;
+    w.step(&inputs, &NO_LAG);
+    assert_eq!(w.fighters[0].cur, start, "and a new press swaps back");
+}

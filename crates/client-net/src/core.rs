@@ -246,6 +246,10 @@ pub struct NetCore {
     /// The next seq to make.
     seq: u32,
     inputs: [Input; RING],
+    /// Buttons seen down since the last tick was made, ORed: a press that
+    /// begins and ends between two ticks still reaches one, and only one
+    /// (Gates' `sticky_buttons`).
+    sticky: u16,
     /// The predicted fighter after each seq, and the vehicle it rode.
     after: [Fighter; RING],
     after_v: [Option<Vehicle>; RING],
@@ -313,6 +317,7 @@ impl NetCore {
             rate: 1.0,
             seq,
             inputs: [Input::default(); RING],
+            sticky: 0,
             after: [Fighter::default(); RING],
             after_v: [None; RING],
             acked_seq: seq.wrapping_sub(1),
@@ -367,6 +372,7 @@ impl NetCore {
     /// Returns the input datagrams to send.
     pub fn update(&mut self, now_ms: f64, input: Input) -> Vec<InputMsg> {
         let input = input.sanitized();
+        self.sticky |= input.buttons;
         // The clock keeps real time through a stall (a tab in the
         // background, a long first frame): time dropped here would leave the
         // client behind the server, starving it for as long as the ±5% takes
@@ -394,6 +400,11 @@ impl NetCore {
         let mut out = Vec::new();
         while (self.seq as f64) < self.t.floor() {
             let s = self.seq;
+            // The first tick made takes every button seen since the last.
+            let input = Input {
+                buttons: input.buttons | core::mem::take(&mut self.sticky),
+                ..input
+            };
             self.inputs[s as usize % RING] = input;
             self.prev_pos = self.pred.body.pos;
             let was = self.pred_v;
