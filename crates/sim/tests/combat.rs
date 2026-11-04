@@ -1,12 +1,14 @@
 //! The rules as a player meets them: guns, shields, heads, lag compensation,
 //! blasts, pads, the score, and the prediction matching the server.
 
-use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
+use sim::arms::{AR, BR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
 use sim::consts::*;
 use sim::events::Kind as Ev;
+use sim::fighter::Gun;
 use sim::fmath;
 use sim::geom::{rad_to_yaw, V3};
 use sim::input::*;
+use sim::world::Dropped;
 use sim::world::{Phase, Rules, World};
 use sim::Map;
 
@@ -246,23 +248,76 @@ fn a_rocket_kills_two_and_a_rocket_jump_costs_half() {
     assert!(up > JUMP_SPEED, "the blast lifts more than a jump: {up}");
 }
 
-#[test]
-fn a_frag_goes_off_on_its_fuse() {
+/// Seat 0 throws a frag at `pitch` (from the open map's origin, facing
+/// +x): the tick it first came down, and the tick it went off.
+fn frag_at(pitch: i16) -> (Option<u32>, Option<u32>) {
     let mut w = duel([AR, MAGNUM], 8.0);
+    w.fighters[1].body.pos = V3::new(0.0, 0.0, 60.0);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
-    inputs[0].buttons = GRENADE;
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch,
+        ..Input::default()
+    };
     w.step(&inputs, &NO_LAG);
     assert_eq!(w.fighters[0].grenades, GREN_START - 1);
     inputs[0].buttons = 0;
-    let mut at = None;
-    for t in 1..TICK_HZ * 3 {
+    let (mut down, mut off) = (None, None);
+    for t in 1..TICK_HZ * 6 {
         w.step(&inputs, &NO_LAG);
+        if down.is_none() && w.proj.live().any(|(_, p)| p.landed) {
+            down = Some(t);
+        }
         if w.events.as_slice().iter().any(|e| e.kind == Ev::Blast) {
-            at = Some(t);
+            off = Some(t);
             break;
         }
     }
-    assert_eq!(at, Some(ticks(GREN_FUSE_MS) - 1));
+    (down, off)
+}
+
+#[test]
+fn a_frag_goes_off_half_a_second_after_it_comes_down_never_before_its_arming() {
+    // Thrown at the feet: down at once, so off at the arming time.
+    let (_, off) = frag_at(-PITCH_MAX);
+    let arm = ticks(GREN_ARM_MS);
+    assert!(off.is_some_and(|t| t.abs_diff(arm) <= 2), "{off:?} vs {arm}");
+    // Lofted: down after the arming time, so off half a second after.
+    let (down, off) = frag_at(1820);
+    let down = down.expect("it came down");
+    assert!(down > arm, "down at {down}");
+    assert!(
+        off.is_some_and(|t| t.abs_diff(down + ticks(GREN_FUSE_MS)) <= 1),
+        "down {down}, off {off:?}"
+    );
+}
+
+#[test]
+fn a_frag_still_hurts_at_its_rim() {
+    // 5 m off a frag at the feet: near the rim, where Halo 2's still does
+    // most of `GREN_EDGE` (a blast falling to nothing would barely scratch).
+    let mut w = duel([AR, MAGNUM], 5.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch: -PITCH_MAX,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    inputs[0].buttons = 0;
+    // Set down at the thrower's feet (one thrown down at 30 m/s bounces
+    // high).
+    for i in 0..MAX_PROJ {
+        if w.proj[i].active {
+            w.proj[i].pos = V3::new(0.0, 0.0, 0.0);
+            w.proj[i].vel = V3::ZERO;
+        }
+    }
+    for _ in 0..TICK_HZ * 2 {
+        w.step(&inputs, &NO_LAG);
+    }
+    let took = (SHIELD_MAX - w.fighters[1].shield) / PT;
+    assert!((GREN_EDGE..GREN_DMG / 2).contains(&took), "took {took}");
 }
 
 #[test]
@@ -308,6 +363,178 @@ fn a_pad_gives_its_gun_and_comes_back() {
         w.step(&inputs, &NO_LAG);
     }
     assert_eq!(w.pads[0].empty_for, 0);
+}
+
+/// The live drops, by gun.
+fn dropped(w: &World, arm: u8) -> Vec<Dropped> {
+    w.drops
+        .live()
+        .filter(|(_, d)| d.gun.arm == arm)
+        .map(|(_, d)| *d)
+        .collect()
+}
+
+#[test]
+fn the_dead_drop_what_they_held_and_a_swap_leaves_the_old_gun() {
+    let mut w = duel([SNIPER, MAGNUM], 20.0);
+    let at = head(&w, 1);
+    shoot(&mut w, at, FIRE, NO_LAG);
+    assert!(!w.fighters[1].alive);
+    // The gun in hand, as it was (the holstered magnum stays with them),
+    // and the grenades they carried.
+    let gun = dropped(&w, SNIPER);
+    assert_eq!(gun.len(), 1);
+    assert_eq!((gun[0].gun.mag, gun[0].gun.reserve), (4, 20));
+    assert!(dropped(&w, MAGNUM).is_empty());
+    let nades = dropped(&w, NONE);
+    assert_eq!((nades[0].frags, nades[0].stickies), (GREN_START, STICKY_START));
+    // Walking over: the grenades, as many as fit; USE: the sniper, and the
+    // rifle let go of lies where it was taken.
+    let f = &mut w.fighters[0];
+    f.guns = [Gun::full(AR), Gun::full(MAGNUM)];
+    f.cur = 0;
+    let (frags, stickies) = (f.grenades, f.stickies);
+    f.body.pos = gun[0].pos;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = USE;
+    w.step(&inputs, &NO_LAG);
+    let f = &w.fighters[0];
+    assert_eq!(f.gun().arm, SNIPER);
+    assert_eq!((f.gun().mag, f.gun().reserve), (4, 20));
+    assert_eq!(dropped(&w, AR).len(), 1);
+    assert!(dropped(&w, SNIPER).is_empty());
+    assert_eq!(f.grenades, (frags + GREN_START).min(GREN_MAX));
+    assert_eq!(f.stickies, (stickies + STICKY_START).min(GREN_MAX));
+}
+
+#[test]
+fn walking_over_a_gun_of_ones_own_kind_takes_its_rounds_to_a_full_reserve() {
+    let mut w = duel([AR, MAGNUM], 20.0);
+    let at = w.fighters[0].body.pos;
+    w.fighters[0].guns[0].reserve = 100;
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun {
+            arm: AR,
+            mag: 32,
+            reserve: 50,
+            heat: 0,
+        },
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].guns[0].reserve, 182);
+    assert!(!w.drops[0].active, "spent, it goes");
+    // Past a full reserve, the rest stays on the floor.
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun::full(AR),
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].guns[0].reserve, 192);
+    assert!(w.drops[0].active);
+    assert_eq!(w.drops[0].gun.mag + w.drops[0].gun.reserve, 32 + 192 - 10);
+}
+
+#[test]
+fn a_gun_for_two_hands_taken_while_dual_lets_both_hands_go() {
+    let mut w = duel([MAGNUM, AR], 20.0);
+    let at = w.fighters[0].body.pos;
+    w.fighters[0].left = Gun::full(MAGNUM);
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun::full(ROCKET),
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = USE;
+    w.step(&inputs, &NO_LAG);
+    let f = &w.fighters[0];
+    assert_eq!(f.gun().arm, ROCKET);
+    assert!(!f.dual(), "the left hand let go");
+    assert_eq!(dropped(&w, MAGNUM).len(), 2, "both magnums on the floor");
+}
+
+#[test]
+fn a_melee_lunges_at_someone_just_past_reach() {
+    for (dist, lands) in [(2.8, true), (MELEE_LUNGE_RANGE + 1.0, false)] {
+        let mut w = duel([AR, MAGNUM], dist);
+        let at = chest(&w, 1);
+        let (yaw, pitch) = aim(&w, 0, at);
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        // Facing the striker: a blow, not an assassination.
+        inputs[1].yaw = 32768;
+        for t in 0..=ticks(MELEE_LUNGE_MS) {
+            inputs[0] = Input {
+                buttons: if t == 0 { MELEE } else { 0 },
+                yaw,
+                pitch,
+                ..Input::default()
+            };
+            w.step(&inputs, &NO_LAG);
+        }
+        let hurt = w.fighters[1].shield < SHIELD_MAX;
+        assert_eq!(hurt, lands, "at {dist} m");
+        if lands {
+            assert_eq!(w.fighters[1].shield, SHIELD_MAX - MELEE_DMG * PT);
+            assert!(w.fighters[0].body.pos.x > 1.0, "the striker went to them");
+        }
+    }
+}
+
+#[test]
+fn a_near_miss_bends_onto_the_body_never_the_head() {
+    // Half a metre wide of the chest at 20 m: the battle rifle's rounds
+    // find the body; the sniper's (no magnetism) miss.
+    for (gun, lands) in [(BR, true), (SNIPER, false)] {
+        let mut w = duel([gun, MAGNUM], 20.0);
+        let at = chest(&w, 1) + V3::new(0.0, 0.0, 0.45);
+        shoot(&mut w, at, FIRE, NO_LAG);
+        for _ in 0..ticks(300) {
+            shoot(&mut w, at, 0, NO_LAG);
+        }
+        assert_eq!(w.fighters[1].shield < SHIELD_MAX, lands, "{}", sim::arms::arm(gun).name);
+    }
+    // Wide of the shoulder, up by the head, shields down: bent to the
+    // chest, so body hits, never the head shot that would kill.
+    let mut w = duel([BR, MAGNUM], 20.0);
+    w.fighters[1].shield = 0;
+    let at = w.fighters[1].body.pos + V3::new(0.0, CHEST_Y + 0.25, 0.4);
+    shoot(&mut w, at, FIRE, NO_LAG);
+    let mut parts = Vec::new();
+    for _ in 0..ticks(300) {
+        parts.extend(w.events.as_slice().iter().filter(|e| e.kind == Ev::Hit).map(|e| e.part));
+        shoot(&mut w, at, 0, NO_LAG);
+    }
+    assert!(!parts.is_empty(), "the burst found the body");
+    assert!(parts.iter().all(|&p| p < 2), "never the head: {parts:?}");
+    assert!(w.fighters[1].alive);
+}
+
+#[test]
+fn the_dead_come_back_away_from_the_enemy() {
+    // The open map's two spawns: the enemy stands on one, so the other.
+    let mut w = duel([AR, MAGNUM], 20.0);
+    let spawns: Vec<V3> = w.map.spawns.iter().map(|s| s.pos).collect();
+    for (i, &at) in spawns.iter().enumerate() {
+        w.fighters[1].body.pos = at;
+        let inputs = [Input::default(); MAX_FIGHTERS];
+        w.fighters[0].health = 0;
+        w.fighters[0].shield = 0;
+        w.fighters[0].alive = false;
+        w.fighters[0].respawn = 1;
+        w.step(&inputs, &NO_LAG);
+        let back = w.fighters[0].body.pos;
+        assert_eq!(back, spawns[1 - i], "with the enemy on spawn {i}");
+    }
 }
 
 /// The browser predicts its own fighter with `step_local` alone. Through
@@ -491,7 +718,8 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
             (mine.guns, mine.refire, mine.reload, mine.shots),
             "tick {t}"
         );
-        launched |= s.body.vel.y > 10.0;
+        // Thrown faster than anyone runs (a jump only goes up).
+        launched |= s.body.vel.flat().len() > 2.0 * RUN;
         climbed = climbed.max(s.body.pos.y);
     }
     assert!(launched, "the launcher threw it");

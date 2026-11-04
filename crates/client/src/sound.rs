@@ -64,6 +64,8 @@ mod on {
         last_arm: u8,
         last_grounded: bool,
         last_mag: u16,
+        last_shield: i32,
+        last_alive: bool,
         step: f32,
         dry: f32,
     }
@@ -95,6 +97,10 @@ mod on {
             "step_concrete_1",
             "step_concrete_2",
             "step_concrete_3",
+            "swing_0",
+            "fuse_0",
+            "hurt_0",
+            "death_0",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -189,10 +195,25 @@ mod on {
             } else if e.kind == Kind::Blast as u8 || e.kind == Kind::Wreck as u8 {
                 let n = format!("blast_{}", ear.roll(2));
                 sfx(&mut commands, &mut ear, &n, Some(at), 1.2);
+            } else if e.kind == Kind::Melee as u8 {
+                let at = (e.a != me).then_some(at);
+                sfx(&mut commands, &mut ear, "swing_0", at, 0.7);
+            } else if e.kind == Kind::Throw as u8 {
+                let at = (e.a != me || e.part == HEARD).then_some(at);
+                sfx(&mut commands, &mut ear, "fuse_0", at, 0.6);
             }
         }
-        // Our own body: reloads, the swap, a dry trigger, steps, landing.
+        // Our own body: shields gone, a death, reloads, the swap, a dry
+        // trigger, steps, landing.
         let (f, _) = s.core.own();
+        if f.alive && f.shield == 0 && ear.last_shield > 0 {
+            sfx(&mut commands, &mut ear, "hurt_0", None, 0.6);
+        }
+        ear.last_shield = f.shield;
+        if !f.alive && ear.last_alive {
+            sfx(&mut commands, &mut ear, "death_0", None, 0.7);
+        }
+        ear.last_alive = f.alive;
         let g = f.gun();
         let gun = crate::look::guns::gun(g.arm);
         let dt = time.delta_secs();

@@ -102,11 +102,11 @@
   ],
   "pads": [
     { "weapon": "sniper", "at": [0, 0, 3], "respawn": 120 },
-    { "weapon": "shotgun", "at": [0, 0], "respawn": 90 },
+    { "weapon": "sword", "at": [0, 0], "respawn": 120 },
     { "weapon": "br", "at": [-21, 0, 3], "respawn": 30, "mirror": true },
     { "weapon": "magnum", "at": [-21, 0], "respawn": 30, "mirror": true },
-    { "weapon": "smg", "at": [0, 14, 1.5], "respawn": 45 },
-    { "weapon": "smg", "at": [0, -14, 1.5], "respawn": 45 }
+    { "weapon": "ion_rifle", "at": [0, 14, 1.5], "respawn": 30 },
+    { "weapon": "ion_rifle", "at": [0, -14, 1.5], "respawn": 30 }
   ],
   "launchers": [
     { "at": [0, 6.5], "to": [0, 2.3, 3], "time": 0.9, "size": [2, 2] },

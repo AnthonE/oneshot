@@ -578,9 +578,10 @@ pub fn build(
             Transform::from_xyz((a.x + b.x) * 0.5, a.y + 0.04, (a.z + b.z) * 0.5),
         ));
     }
-    for p in &map.pads {
+    for (i, p) in map.pads.iter().enumerate() {
         commands.spawn((
             LevelPart,
+            crate::items::PadDisc(i),
             Mesh3d(meshes.add(Cylinder::new(0.8, 0.06))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: Color::srgb(0.79, 0.64, 0.15),

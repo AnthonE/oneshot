@@ -38,6 +38,16 @@ fn the_worst_case_snapshot_fits_a_datagram() {
             ..Projectile::default()
         };
     }
+    // A floor full of guns, all in sight.
+    for i in 0..sim::consts::MAX_DROPS {
+        w.drops[i] = sim::world::Dropped {
+            active: true,
+            gun: sim::fighter::Gun::full(1 + (i % 15) as u8),
+            pos: V3::new(-20.0 + 1.5 * i as f32, 0.0, 9.0),
+            ttl: 1000,
+            ..sim::world::Dropped::default()
+        };
+    }
     let events: Vec<Event> = (0..200)
         .map(|i| Event {
             kind: Ev::Shot,
@@ -52,6 +62,7 @@ fn the_worst_case_snapshot_fits_a_datagram() {
     let snap = room::build(&w, 0, (1, 0), &events, &mut queue, |_| true, |_| true);
     assert_eq!(snap.n_remote as usize, MAX_REMOTES);
     assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
+    assert_eq!(snap.n_drops as usize, proto::MAX_SNAP_DROPS);
     assert_eq!(snap.n_score, 2);
     assert!(snap.n_events > 10, "room left for {} events", snap.n_events);
     let mut buf = [0u8; MAX_DATAGRAM];

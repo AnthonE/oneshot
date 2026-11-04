@@ -5,6 +5,7 @@
 
 use crate::arms::{arm, NONE};
 use crate::consts::*;
+use crate::fighter::Gun;
 use crate::fmath;
 use crate::geom::{rad_to_yaw, V3};
 use crate::input::*;
@@ -34,6 +35,10 @@ pub struct Bot {
     /// At the wheel: ticks it has barely moved, and ticks left backing up.
     stuck: u16,
     backing: u16,
+    /// On foot with nobody in sight: ticks it has pushed at a wall going
+    /// nowhere, and ticks left walking along it instead.
+    foot_stuck: u16,
+    detour: u16,
 }
 
 /// How long a bot walks at one roam point before it picks another.
@@ -45,6 +50,12 @@ const GOAL_NEAR: f32 = 2.0;
 const RIDE_MS: u32 = 20_000;
 const RIDE_COOL_MS: u32 = 15_000;
 const VEHICLE_WALK: f32 = 25.0;
+/// How far a bot goes out of its way for a gun it wants, and how far above
+/// or below it may be: on its own level, as it walks there straight.
+const LOOT_M: f32 = 20.0;
+const LOOT_RISE: f32 = 0.6;
+/// A bot's waist, for a straight walk's line.
+const WAIST: f32 = 0.9;
 
 impl Bot {
     pub fn new(seed: u64, slot: usize, skill: f32) -> Bot {
@@ -62,6 +73,8 @@ impl Bot {
             ride_cool: 0,
             stuck: 0,
             backing: 0,
+            foot_stuck: 0,
+            detour: 0,
         }
     }
 
@@ -83,6 +96,50 @@ impl Bot {
         } else {
             w.map.pads.first().map_or(V3::ZERO, |p| p.pos)
         }
+    }
+
+    /// A gun it wants, near, on its level and a straight walk away: on a
+    /// pad that holds it, or on the floor. Wanted: ranked over the best it carries that has rounds, or
+    /// rounds for one of its own running low.
+    fn loot(w: &World, slot: usize) -> Option<V3> {
+        if w.rules.gun_game {
+            return None;
+        }
+        let me = &w.fighters[slot];
+        let waist = me.body.pos + V3::new(0.0, WAIST, 0.0);
+        let rank = |g: &Gun| if g.spent() { 0 } else { arm(g.arm).rank };
+        let top = rank(&me.guns[0]).max(rank(&me.guns[1]));
+        let wants = |id: u8| {
+            let a = arm(id);
+            match me.guns.iter().find(|g| g.arm == id) {
+                Some(g) => !a.hot() && (g.mag as u32 + g.reserve as u32) < a.mag as u32,
+                None => a.rank > top,
+            }
+        };
+        let mut best = None;
+        let mut near = LOOT_M;
+        let mut consider = |at: V3, id: u8| {
+            let d = (at - me.body.pos).flat().len();
+            if d < near
+                && fmath::fabs(at.y - me.body.pos.y) < LOOT_RISE
+                && wants(id)
+                && w.map.clear(waist, at + V3::new(0.0, WAIST, 0.0))
+            {
+                near = d;
+                best = Some(at);
+            }
+        };
+        for (i, p) in w.map.pads.iter().enumerate().take(MAX_PADS) {
+            if w.pads[i].empty_for == 0 {
+                consider(p.pos, p.arm);
+            }
+        }
+        for (_, d) in w.drops.live() {
+            if d.gun.arm != NONE {
+                consider(d.pos, d.gun.arm);
+            }
+        }
+        best
     }
 
     /// USE pressed this tick, as a tap: let go first if it was held.
@@ -197,16 +254,54 @@ impl Bot {
         self.wob.1 = self.wob.1 * 0.98 + (self.unit() - 0.5) * 0.001 * rough;
 
         let g = me.gun();
+        let other = &me.guns[(me.cur as usize & 1) ^ 1];
         if g.arm != NONE && g.mag == 0 {
-            inp.buttons |= RELOAD;
+            // Nothing left to load: to the other gun, if it has rounds.
+            if g.reserve == 0 && other.arm != NONE && !other.spent() {
+                if me.last_buttons & SWAP == 0 {
+                    inp.buttons |= SWAP;
+                }
+            } else {
+                inp.buttons |= RELOAD;
+            }
         }
         if self.unit() < 0.004 {
             inp.buttons |= JUMP;
         }
 
         if best == 255 {
-            // Nobody in sight: to a free vehicle near if it may, else the
-            // roam goal.
+            // Pushing at a wall and going nowhere (a corner between it and
+            // its goal, on a map it walks straight on): a second along the
+            // wall, then another goal.
+            if me.body.grounded && me.body.vel.flat().len() < 0.5 {
+                self.foot_stuck = self.foot_stuck.saturating_add(1);
+            } else {
+                self.foot_stuck = 0;
+            }
+            if self.foot_stuck as u32 > TICK_HZ / 2 {
+                self.foot_stuck = 0;
+                self.detour = TICK_HZ as u16;
+                self.goal_for = 0;
+                self.strafe = -self.strafe;
+            }
+            let detour = if self.detour > 0 {
+                self.detour -= 1;
+                self.strafe as f32 * core::f32::consts::FRAC_PI_2
+            } else {
+                0.0
+            };
+            // Nobody in sight: to a gun it wants, taken in reach.
+            if let Some(at) = Self::loot(w, slot).filter(|_| detour == 0.0) {
+                let to = at - me.body.pos;
+                inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
+                inp.pitch = 0;
+                inp.mz = 127;
+                if to.flat().len() < PAD_REACH * 0.7 {
+                    Self::tap_use(&mut inp, me.last_buttons);
+                }
+                return inp;
+            }
+            // Else to a free vehicle near if it may, else the roam goal.
             let free = (self.ride_cool == 0 && me.riding().is_none())
                 .then(|| {
                     w.vehicles
@@ -232,7 +327,7 @@ impl Bot {
                 }
             };
             let to = goal - me.body.pos;
-            inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
+            inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
             inp.pitch = 0;
             inp.mz = 127;
             inp.mx = self.strafe * 40;
