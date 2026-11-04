@@ -143,6 +143,15 @@
       ]
     },
     {
+      "name": "the glowing trim at red's front's foot, either side of its door",
+      "dress": true,
+      "mirror": true,
+      "boxes": [
+        { "arc": [-24, 0], "r": 11.3, "from": -32, "to": -9, "thick": 0.2, "y": [0, 0.12], "look": "red_glow" },
+        { "arc": [-24, 0], "r": 11.3, "from": 9, "to": 32, "thick": 0.2, "y": [0, 0.12], "look": "red_glow" }
+      ]
+    },
+    {
       "name": "red's light",
       "dress": true,
       "mirror": true,

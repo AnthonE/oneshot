@@ -402,7 +402,10 @@ const LAMP_R: f32 = 0.7;
 const LAMP_FIXTURE_GLOW: f32 = 3.0;
 const LAUNCHER_GLOW: f32 = 2.5;
 /// A lift's beam: how much of its colour it adds to what is behind it.
-const LIFT_BEAM_ALPHA: f32 = 0.12;
+const LIFT_BEAM_ALPHA: f32 = 0.08;
+/// The beam's radius as a share of the lift's narrower side: a column of
+/// light up the middle, not a glass wall over the whole pad.
+const LIFT_BEAM_R: f32 = 0.22;
 
 /// A light strip's colour (looks `glow`, `red_glow`, `blue_glow`,
 /// `magenta_glow`, `cyan_glow`): drawn unshadowed and emissive, the same
@@ -761,7 +764,7 @@ pub fn build(
         ));
         // A lift: its beam stands to the throw's apex, drawn additive and
         // unlit so it reads as light, not a wall.
-        let r = (b.x - a.x).min(b.z - a.z) * 0.45;
+        let r = (b.x - a.x).min(b.z - a.z) * LIFT_BEAM_R;
         let apex = l.vel.y * l.vel.y / (2.0 * sim::consts::GRAVITY) + 1.0;
         commands.spawn((
             LevelPart,
