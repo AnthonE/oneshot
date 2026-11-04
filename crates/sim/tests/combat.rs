@@ -4,9 +4,11 @@
 use sim::arms::{AR, LADDER, MAGNUM, NONE, ROCKET, SHOTGUN, SNIPER, SWORD};
 use sim::consts::*;
 use sim::events::Kind as Ev;
+use sim::fighter::Gun;
 use sim::fmath;
 use sim::geom::{rad_to_yaw, V3};
 use sim::input::*;
+use sim::world::Dropped;
 use sim::world::{Phase, Rules, World};
 use sim::Map;
 
@@ -308,6 +310,104 @@ fn a_pad_gives_its_gun_and_comes_back() {
         w.step(&inputs, &NO_LAG);
     }
     assert_eq!(w.pads[0].empty_for, 0);
+}
+
+/// The live drops, by gun.
+fn dropped(w: &World, arm: u8) -> Vec<Dropped> {
+    w.drops
+        .live()
+        .filter(|(_, d)| d.gun.arm == arm)
+        .map(|(_, d)| *d)
+        .collect()
+}
+
+#[test]
+fn the_dead_drop_what_they_held_and_a_swap_leaves_the_old_gun() {
+    let mut w = duel([SNIPER, MAGNUM], 20.0);
+    let at = head(&w, 1);
+    shoot(&mut w, at, FIRE, NO_LAG);
+    assert!(!w.fighters[1].alive);
+    // The gun in hand, as it was (the holstered magnum stays with them),
+    // and the grenades they carried.
+    let gun = dropped(&w, SNIPER);
+    assert_eq!(gun.len(), 1);
+    assert_eq!((gun[0].gun.mag, gun[0].gun.reserve), (4, 20));
+    assert!(dropped(&w, MAGNUM).is_empty());
+    let nades = dropped(&w, NONE);
+    assert_eq!((nades[0].frags, nades[0].stickies), (GREN_START, STICKY_START));
+    // Walking over: the grenades, as many as fit; USE: the sniper, and the
+    // rifle let go of lies where it was taken.
+    let f = &mut w.fighters[0];
+    f.guns = [Gun::full(AR), Gun::full(MAGNUM)];
+    f.cur = 0;
+    let (frags, stickies) = (f.grenades, f.stickies);
+    f.body.pos = gun[0].pos;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = USE;
+    w.step(&inputs, &NO_LAG);
+    let f = &w.fighters[0];
+    assert_eq!(f.gun().arm, SNIPER);
+    assert_eq!((f.gun().mag, f.gun().reserve), (4, 20));
+    assert_eq!(dropped(&w, AR).len(), 1);
+    assert!(dropped(&w, SNIPER).is_empty());
+    assert_eq!(f.grenades, (frags + GREN_START).min(GREN_MAX));
+    assert_eq!(f.stickies, (stickies + STICKY_START).min(GREN_MAX));
+}
+
+#[test]
+fn walking_over_a_gun_of_ones_own_kind_takes_its_rounds_to_a_full_reserve() {
+    let mut w = duel([AR, MAGNUM], 20.0);
+    let at = w.fighters[0].body.pos;
+    w.fighters[0].guns[0].reserve = 100;
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun {
+            arm: AR,
+            mag: 32,
+            reserve: 50,
+            heat: 0,
+        },
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].guns[0].reserve, 182);
+    assert!(!w.drops[0].active, "spent, it goes");
+    // Past a full reserve, the rest stays on the floor.
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun::full(AR),
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].guns[0].reserve, 192);
+    assert!(w.drops[0].active);
+    assert_eq!(w.drops[0].gun.mag + w.drops[0].gun.reserve, 32 + 192 - 10);
+}
+
+#[test]
+fn a_gun_for_two_hands_taken_while_dual_lets_both_hands_go() {
+    let mut w = duel([MAGNUM, AR], 20.0);
+    let at = w.fighters[0].body.pos;
+    w.fighters[0].left = Gun::full(MAGNUM);
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun::full(ROCKET),
+        pos: at,
+        ttl: 1000,
+        ..Dropped::default()
+    };
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = USE;
+    w.step(&inputs, &NO_LAG);
+    let f = &w.fighters[0];
+    assert_eq!(f.gun().arm, ROCKET);
+    assert!(!f.dual(), "the left hand let go");
+    assert_eq!(dropped(&w, MAGNUM).len(), 2, "both magnums on the floor");
 }
 
 /// The browser predicts its own fighter with `step_local` alone. Through

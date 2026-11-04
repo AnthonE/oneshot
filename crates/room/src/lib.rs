@@ -9,7 +9,10 @@ pub mod replay;
 pub mod watch;
 
 use proto::MAX_SNAP_VEHICLES;
-use proto::{encode_snapshot, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
+use proto::{
+    encode_snapshot, DropState, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_DROPS, MAX_SNAP_EVENTS, MAX_SNAP_PADS,
+    MAX_SNAP_PROJ,
+};
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
@@ -560,6 +563,7 @@ pub fn build(
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
+            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
         }
     }
     // What this client may be told of the new events joins its queue; the
@@ -626,6 +630,38 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
             vel: p.vel,
         };
         snap.n_proj += 1;
+    }
+}
+
+/// How far a gun on the floor is named to a client that sees it.
+pub const SEE_DROP_M: f32 = 50.0;
+/// A drop is seen if a line from the eye clears the map to this far over
+/// where it lies.
+pub const DROP_LOOK_Y: f32 = 0.3;
+
+/// The guns on the floor this client sees, nearest first: in clear line of
+/// its eye and within [`SEE_DROP_M`]. Never by who left it, so a fresh one
+/// (where someone fell) never tells where a hidden enemy died.
+fn add_drops(snap: &mut Snapshot, w: &World, eye: V3) {
+    let mut seen = [(f32::INFINITY, 0usize); sim::consts::MAX_DROPS];
+    let mut n = 0;
+    for (i, d) in w.drops.live() {
+        let far = (d.pos - eye).len();
+        if far <= SEE_DROP_M && w.map.clear(eye, d.pos + V3::new(0.0, DROP_LOOK_Y, 0.0)) {
+            seen[n] = (far, i);
+            n += 1;
+        }
+    }
+    let seen = &mut seen[..n];
+    seen.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for &(_, i) in seen.iter().take(MAX_SNAP_DROPS) {
+        let d = &w.drops[i];
+        snap.drops[snap.n_drops as usize] = DropState {
+            slot: i as u8,
+            arm: d.gun.arm,
+            pos: d.pos,
+        };
+        snap.n_drops += 1;
     }
 }
 

@@ -148,6 +148,18 @@ pub const COUNTDOWN_MS: u32 = 3000;
 /// Range of a pad: within this in x and z, and 1.5 m in height.
 pub const PAD_REACH: f32 = 1.0;
 
+// What the dead (and a swap) leave on the floor: the gun in hand, the left
+// hand's, and the grenades carried (`World::spill`).
+/// Drops on the floor at once; a new one past this takes the oldest's slot.
+pub const MAX_DROPS: usize = 24;
+/// How long a drop lies before it goes.
+pub const DROP_MS: u32 = 30_000;
+/// A drop is in reach as a pad is: within this in x and z, 1.5 m in height.
+pub const DROP_REACH: f32 = 1.0;
+/// The left gun and the grenades fall this far aside of the gun in hand,
+/// inside the body's own footprint (so never in a wall).
+pub const DROP_APART: f32 = 0.3;
+
 // Vehicles (sim/src/vehicle.rs): one kind so far, a light four-wheeler for
 // a driver and a passenger who shoots.
 /// Vehicles on a map at once.

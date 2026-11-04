@@ -20,7 +20,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 12;
+pub const PROTO_VER: u16 = 13;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -31,6 +31,8 @@ pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 15;
 pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
+/// Guns on the floor a snapshot names, nearest first (`room::build`).
+pub const MAX_SNAP_DROPS: usize = 8;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
 pub const SLOT_BITS: u32 = 4;
@@ -432,6 +434,34 @@ fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     Ok(v)
 }
 
+/// A gun on the floor, as this client may see it: its slot (so a drawn one
+/// is kept), the gun (`sim::arms::NONE`: grenades), where it lies, coarse.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DropState {
+    pub slot: u8,
+    pub arm: u8,
+    pub pos: V3,
+}
+
+impl Pack for DropState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, 5)?;
+        w.write(self.arm as u32, 4)?;
+        w_v3c(w, self.pos)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        let d = DropState {
+            slot: r.read(5)? as u8,
+            arm: r.read(4)? as u8,
+            pos: r_v3c(r)?,
+        };
+        if d.slot as usize >= sim::consts::MAX_DROPS || d.arm as usize >= sim::arms::COUNT {
+            return Err(WireError::Malformed);
+        }
+        Ok(d)
+    }
+}
+
 impl Pack for PadState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
         w.write(self.empty_s as u32, 16)
@@ -464,6 +494,8 @@ pub struct Snapshot {
     pub pads: [PadState; MAX_SNAP_PADS],
     pub n_vehicles: u8,
     pub vehicles: [VehState; MAX_SNAP_VEHICLES],
+    pub n_drops: u8,
+    pub drops: [DropState; MAX_SNAP_DROPS],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -491,6 +523,8 @@ impl Default for Snapshot {
             pads: [PadState::default(); MAX_SNAP_PADS],
             n_vehicles: 0,
             vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
+            n_drops: 0,
+            drops: [DropState::default(); MAX_SNAP_DROPS],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -515,6 +549,9 @@ impl Snapshot {
     }
     pub fn pads(&self) -> &[PadState] {
         &self.pads[..self.n_pads as usize]
+    }
+    pub fn drops(&self) -> &[DropState] {
+        &self.drops[..self.n_drops as usize]
     }
 }
 
@@ -646,6 +683,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_pads as usize, MAX_SNAP_PADS),
         (s.n_score as usize, MAX_FIGHTERS),
         (s.n_vehicles as usize, MAX_SNAP_VEHICLES),
+        (s.n_drops as usize, MAX_SNAP_DROPS),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -665,6 +703,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.events(), 6)?;
     w_list(&mut w, s.pads(), 4)?;
     w_list(&mut w, s.vehicles(), 4)?;
+    w_list(&mut w, s.drops(), 4)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
@@ -695,6 +734,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_events = r_list(&mut r, &mut s.events, 6)?;
     s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
     s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
+    s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);

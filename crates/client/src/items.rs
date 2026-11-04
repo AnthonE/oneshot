@@ -1,14 +1,15 @@
 //! What lies about the map for the taking: each pad's gun, turning over its
 //! disc and gone while the pad waits (the snapshot's `empty_s`), the disc
-//! lit while it holds one, and the line that says what USE would take
-//! here. All read from the session; what USE takes is the sim's
-//! (`World::pickup`).
+//! lit while it holds one; the guns and grenades on the floor that the
+//! snapshot names; and the line that says what USE would take here. All
+//! read from the session; what USE takes is the sim's (`World::pickup`).
 
 use bevy::prelude::*;
 use client_net::core::NetCore;
 use sim::arms::{arm, NONE};
-use sim::consts::{ENTER_R, PAD_REACH};
+use sim::consts::{DROP_REACH, ENTER_R, MAX_DROPS, PAD_REACH};
 use sim::fighter::Fighter;
+use sim::geom::V3;
 use sim::vehicle::DRIVER;
 use sim::world::Phase;
 
@@ -22,6 +23,8 @@ const BOB_HZ: f32 = 0.45;
 const SPIN: f32 = 1.1;
 /// A loaded pad's disc glows this, a waiting one's not at all.
 const DISC_GLOW: f32 = 1.6;
+/// A gun on the floor lies on its side this high (its half thickness).
+const LIE_Y: f32 = 0.05;
 
 /// Pad `i`'s gun.
 #[derive(Component)]
@@ -31,16 +34,30 @@ pub struct PadGun(pub usize);
 #[derive(Component)]
 pub struct PadDisc(pub usize);
 
-/// The welcome the pads' guns were made for, and which discs are lit.
+/// The welcome the pads' guns were made for, which discs are lit, and the
+/// drop drawn in each drop slot: its entity, gun and where it lies.
 #[derive(Resource, Default)]
 pub struct Items {
     built: u32,
     lit: Vec<Option<bool>>,
+    drops: [Option<(Entity, u8, V3)>; MAX_DROPS],
 }
 
 /// Whether pad `i` holds its gun, as the last snapshot says.
 fn loaded(core: &NetCore, i: usize) -> bool {
     core.latest().pads().get(i).is_none_or(|p| p.empty_s == 0)
+}
+
+/// `arm`'s gun under `root`, turned about its middle rather than its grip.
+fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
+    if let (Some(g), Some((pivot, _))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
+        let half = g.height * g.scale * (0.5 - g.grip);
+        commands.entity(pivot).insert(Transform {
+            translation: basis * Vec3::new(0.0, -half, 0.0),
+            rotation: basis,
+            ..default()
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -63,6 +80,7 @@ pub fn draw(
         // The level's parts go with the level (`level::build`).
         items.built = s.welcomes;
         items.lit = vec![None; core.map.pads.len()];
+        items.drops = [None; MAX_DROPS];
         for (i, p) in core.map.pads.iter().enumerate() {
             let root = commands
                 .spawn((
@@ -72,18 +90,7 @@ pub fn draw(
                     Visibility::Hidden,
                 ))
                 .id();
-            if let (Some(g), Some((pivot, _))) = (
-                guns::gun(p.arm),
-                guns::spawn_posed(&mut commands, &models, p.arm, guns::body_basis(), root),
-            ) {
-                // Turned about its middle, not its grip.
-                let half = g.height * g.scale * (0.5 - g.grip);
-                commands.entity(pivot).insert(Transform {
-                    translation: Vec3::new(-half, 0.0, 0.0),
-                    rotation: guns::body_basis(),
-                    ..default()
-                });
-            }
+            posed(&mut commands, &models, p.arm, guns::body_basis(), root);
         }
         return;
     }
@@ -119,11 +126,47 @@ pub fn draw(
             };
         }
     }
+    // The floor as the last snapshot names it: a slot gone or changed is
+    // taken down, a new one put down.
+    let mut want = [None; MAX_DROPS];
+    for d in core.latest().drops() {
+        if let Some(w) = want.get_mut(d.slot as usize) {
+            *w = Some((d.arm, d.pos));
+        }
+    }
+    for (slot, (have, want)) in items.drops.iter_mut().zip(want).enumerate() {
+        if have.is_some_and(|(_, a, p)| want == Some((a, p))) {
+            continue;
+        }
+        if let Some((e, _, _)) = have.take() {
+            commands.entity(e).despawn();
+        }
+        let Some((a, p)) = want else {
+            continue;
+        };
+        // On its side, each slot turned its own way.
+        let turn = Quat::from_rotation_y(slot as f32 * 2.4);
+        let root = commands
+            .spawn((
+                crate::level::LevelPart,
+                Transform::from_xyz(p.x, p.y + LIE_Y, p.z).with_rotation(turn),
+                Visibility::default(),
+            ))
+            .id();
+        if a == NONE {
+            commands.spawn((SceneRoot(models.frag.clone()), Transform::default(), ChildOf(root)));
+        } else {
+            let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
+            posed(&mut commands, &models, a, side * guns::body_basis(), root);
+        }
+        *have = Some((root, a, p));
+    }
 }
 
 /// What USE would do for `f` standing here, as `World::pickup` would take
-/// it: a vehicle in reach with a seat free first, then a pad holding its
-/// gun. None for nothing (or not on foot and alive in play).
+/// it: a vehicle in reach with a seat free first, then the nearest pad
+/// holding its gun or gun on the floor. None for nothing (or not on foot
+/// and alive in play).
 pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
     let f: &Fighter = core.own().0;
     if !f.alive || f.riding().is_some() || core.phase() != Phase::Playing {
@@ -141,21 +184,39 @@ pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
     if core.rules.gun_game {
         return None;
     }
-    let (_, p) = core.map.pads.iter().enumerate().find(|&(i, p)| {
-        let d = p.pos - at;
-        d.x.abs() < PAD_REACH && d.z.abs() < PAD_REACH && d.y.abs() < 1.5 && loaded(core, i)
-    })?;
-    Some(take(f, p.arm))
+    let near = |p: V3, r: f32| {
+        let d = p - at;
+        (d.x.abs() < r && d.z.abs() < r && d.y.abs() < 1.5).then(|| d.flat().len())
+    };
+    let pads = core
+        .map
+        .pads
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| loaded(core, i))
+        .filter_map(|(_, p)| near(p.pos, PAD_REACH).map(|d| (d, p.arm, true)));
+    let drops = core
+        .latest()
+        .drops()
+        .iter()
+        .filter(|d| d.arm != NONE)
+        .filter_map(|d| near(d.pos, DROP_REACH).map(|r| (r, d.arm, false)));
+    let (_, id, pad) = pads.chain(drops).min_by(|a, b| a.0.total_cmp(&b.0))?;
+    take(f, id, pad)
 }
 
-/// How taking `id` would land, in pickup's words.
-fn take(f: &Fighter, id: u8) -> String {
+/// How taking `id` would land, in pickup's words. A gun of a kind carried,
+/// from the floor, is no offer: walking over took its rounds.
+fn take(f: &Fighter, id: u8, pad: bool) -> Option<String> {
     let a = arm(id);
-    if a.dual && arm(f.gun().arm).dual && f.gun().arm != NONE {
+    Some(if a.dual && arm(f.gun().arm).dual {
         format!("dual wield {}", a.name)
     } else if f.guns.iter().any(|g| g.arm == id) {
+        if !pad {
+            return None;
+        }
         format!("refill {}", a.name)
     } else {
         format!("pick up {}", a.name)
-    }
+    })
 }

@@ -30,6 +30,12 @@ impl Gun {
             heat: 0,
         }
     }
+
+    /// Not a round left: nothing in the magazine (a hot gun's battery) or
+    /// in reserve.
+    pub fn spent(&self) -> bool {
+        self.mag == 0 && self.reserve == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

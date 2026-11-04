@@ -176,6 +176,18 @@ fn snapshot() -> Snapshot {
         health: 128,
         seats: [2, 0],
     };
+    // A rocket launcher on the floor, and someone's grenades.
+    s.n_drops = 2;
+    s.drops[0] = DropState {
+        slot: 3,
+        arm: 6,
+        pos: V3::new(4.0, 0.0, -7.5),
+    };
+    s.drops[1] = DropState {
+        slot: 23,
+        arm: 0,
+        pos: V3::new(-12.25, 2.5, 1.0),
+    };
     s.n_score = 2;
     s.score[0] = 3;
     s.score[1] = -1;
@@ -293,6 +305,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own.ride, s.own.ride);
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
+    assert_eq!(d.drops(), s.drops());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -303,6 +316,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_events: 0,
         n_pads: MAX_SNAP_PADS as u8,
         n_vehicles: MAX_SNAP_VEHICLES as u8,
+        n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
         ..s
     };
@@ -344,13 +358,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0x7578_0987_9b7c_1ac2,
-        0xd724_beda_f252_12c2,
-        0xecdc_9032_25ab_e115,
+        0xc72a_f16d_81bf_711b,
+        0x0569_f78f_ef6d_0143,
+        0x98c9_f7d7_fb0f_732e,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x9b51_4e6b_3773_df6f,
+        0x00e0_af30_9763_7bd8,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,

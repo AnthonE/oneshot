@@ -198,6 +198,53 @@ impl Thing for Pad {
     }
 }
 
+/// A gun on the floor, with what was left in it, or the grenades someone
+/// carried (`gun.arm` [`NONE`]): left by the dead, and by a hand that let
+/// go for another gun. USE takes the gun as a pad's; walking over one takes
+/// its rounds for a gun of the same kind carried, and its grenades.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Dropped {
+    pub active: bool,
+    pub gun: Gun,
+    pub frags: u8,
+    pub stickies: u8,
+    /// On the floor, on the grid.
+    pub pos: V3,
+    /// Ticks till it goes.
+    pub ttl: u32,
+}
+
+impl Dropped {
+    /// Nothing left to take: no rounds in the gun, no grenades.
+    fn spent(&self) -> bool {
+        (self.gun.arm == NONE || self.gun.spent()) && self.frags == 0 && self.stickies == 0
+    }
+
+    /// Within reach of a body standing at `at`.
+    pub fn reach(&self, at: V3) -> bool {
+        let d = self.pos - at;
+        crate::fmath::fabs(d.x) < DROP_REACH && crate::fmath::fabs(d.z) < DROP_REACH && crate::fmath::fabs(d.y) < 1.5
+    }
+}
+
+impl Thing for Dropped {
+    fn live(&self) -> bool {
+        self.active
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.bool(self.active);
+        h.u8(self.gun.arm);
+        h.u16(self.gun.mag);
+        h.u16(self.gun.reserve);
+        h.u16(self.gun.heat);
+        h.u8(self.frags);
+        h.u8(self.stickies);
+        h.v3(self.pos);
+        h.u32(self.ttl);
+    }
+}
+
 pub struct World {
     pub tick: u32,
     pub map: Map,
@@ -207,6 +254,7 @@ pub struct World {
     pub pads: [Pad; MAX_PADS],
     /// By slot: slot `i` is always the map's vehicle `i` (`Map::vehicles`).
     pub vehicles: Pool<Vehicle, MAX_VEHICLES>,
+    pub drops: Pool<Dropped, MAX_DROPS>,
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -236,6 +284,7 @@ impl World {
             proj: Pool::default(),
             pads: [Pad::default(); MAX_PADS],
             vehicles,
+            drops: Pool::default(),
             phase: Phase::Countdown,
             clock: ticks(COUNTDOWN_MS),
             score: [0; MAX_FIGHTERS],
@@ -311,7 +360,14 @@ impl World {
         // where everyone now is, so seat order never decides a trade.
         let mut locals = [Local::default(); MAX_FIGHTERS];
         for (s, l) in locals.iter_mut().enumerate() {
+            let left = self.fighters[s].left;
             *l = self.fighters[s].step_in(Phase::Playing, &inputs[s].sanitized(), &self.map);
+            // A melee or a swap let go of the left gun (the fighter's own
+            // tick, which the client predicts): it falls here.
+            let f = &self.fighters[s];
+            if left.arm != NONE && f.left.arm == NONE && f.active() {
+                self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0));
+            }
         }
         // Vehicles drive under their drivers' inputs (what a driver
         // predicts: Vehicle::step_local), then everyone riding sits.
@@ -350,6 +406,9 @@ impl World {
         self.lunges();
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
+            self.loot(s);
+        }
+        for s in 0..MAX_FIGHTERS {
             self.recover(s);
         }
         for i in 0..MAX_VEHICLES {
@@ -357,6 +416,12 @@ impl World {
         }
         for p in self.pads.iter_mut() {
             p.empty_for = p.empty_for.saturating_sub(1);
+        }
+        for d in self.drops.iter_mut().filter(|d| d.active) {
+            d.ttl = d.ttl.saturating_sub(1);
+            if d.ttl == 0 {
+                d.active = false;
+            }
         }
         if self.phase == Phase::Playing {
             self.clock -= 1;
@@ -1459,6 +1524,14 @@ impl World {
         v.deaths += 1;
         let vteam = v.team;
         let pos = v.body.pos;
+        // What they held falls where they fell (Gun Game's ladder guns
+        // aren't for the taking).
+        let (hand, left, frags, stickies) = (*v.gun(), v.left, v.grenades, v.stickies);
+        if !self.rules.gun_game {
+            self.spill(hand, 0, 0, pos);
+            self.spill(left, 0, 0, pos + V3::new(DROP_APART, 0.0, 0.0));
+            self.spill(Gun::default(), frags, stickies, pos + V3::new(0.0, 0.0, DROP_APART));
+        }
         let k = &mut self.fighters[att];
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
@@ -1515,54 +1588,195 @@ impl World {
         self.winner = who;
     }
 
+    /// USE on foot: the nearest pad holding its gun, or gun on the floor,
+    /// in reach. What a hand lets go of for it falls at `s`'s feet.
     fn pickup(&mut self, s: usize) {
         if self.rules.gun_game {
             return;
         }
         let at = self.fighters[s].body.pos;
+        // How far, a pad (or a drop), its index.
+        let mut best: Option<(f32, bool, usize)> = None;
         for (i, def) in self.map.pads.iter().enumerate().take(MAX_PADS) {
             let d = def.pos - at;
             let near = crate::fmath::fabs(d.x) < PAD_REACH
                 && crate::fmath::fabs(d.z) < PAD_REACH
                 && crate::fmath::fabs(d.y) < 1.5;
-            if !near || self.pads[i].empty_for > 0 {
+            let far = d.flat().len();
+            if near && self.pads[i].empty_for == 0 && best.is_none_or(|b| far < b.0) {
+                best = Some((far, true, i));
+            }
+        }
+        for (i, d) in self.drops.live() {
+            let far = (d.pos - at).flat().len();
+            if d.gun.arm != NONE && d.reach(at) && best.is_none_or(|b| far < b.0) {
+                best = Some((far, false, i));
+            }
+        }
+        let Some((_, pad, i)) = best else {
+            return;
+        };
+        let (gun, pos) = if pad {
+            let def = &self.map.pads[i];
+            self.pads[i].empty_for = ticks(def.respawn_ms);
+            (Gun::full(def.arm), def.pos)
+        } else {
+            let d = &mut self.drops[i];
+            let gun = d.gun;
+            d.gun = Gun::default();
+            d.active = !d.spent();
+            (gun, d.pos)
+        };
+        let gone = self.equip(s, gun, pad);
+        let feet = self.fighters[s].body.pos;
+        self.spill(gone[0], 0, 0, feet + V3::new(DROP_APART, 0.0, 0.0));
+        self.spill(gone[1], 0, 0, feet);
+        self.events.push(Event {
+            kind: Ev::Pickup,
+            a: s as u8,
+            c: gun.arm as u16,
+            pos,
+            ..Event::default()
+        });
+    }
+
+    /// `s` takes `g` by a pickup's rules, and gives back what its hands let
+    /// go of for it: the left hand's gun, then the one in hand. A
+    /// one-handed gun beside another goes in the left hand; a gun for two
+    /// hands empties the left. A gun of a kind carried is `refill`ed (a
+    /// pad's, full), or from the floor the fuller of the two is kept.
+    fn equip(&mut self, s: usize, g: Gun, refill: bool) -> [Gun; 2] {
+        let f = &mut self.fighters[s];
+        let a = arm(g.arm);
+        let swap = ticks(crate::arms::SWAP_MS) as u16;
+        let mut gone = [Gun::default(); 2];
+        if a.dual && arm(f.gun().arm).dual {
+            gone[0] = f.left;
+            f.left = g;
+            f.left_reload = 0;
+            f.left_charge = 0;
+            f.left_refire = swap;
+        } else {
+            if f.dual() {
+                gone[0] = f.left;
+                f.drop_left();
+            }
+            let cur = f.cur as usize & 1;
+            let rounds = |g: &Gun| g.mag as u32 + g.reserve as u32;
+            if let Some(h) = f.guns.iter_mut().find(|h| h.arm == g.arm) {
+                if refill || rounds(&g) > rounds(h) {
+                    if !refill {
+                        gone[1] = *h;
+                    }
+                    *h = g;
+                } else {
+                    gone[1] = g;
+                }
+            } else if f.guns[1].arm == NONE {
+                f.guns[1] = g;
+                f.cur = 1;
+            } else {
+                gone[1] = f.guns[cur];
+                f.guns[cur] = g;
+            }
+        }
+        f.reload = 0;
+        f.burst_left = 0;
+        f.refire = f.refire.max(swap);
+        gone
+    }
+
+    /// A gun (with what's left in it) and grenades onto the floor under
+    /// `at`. Nothing for nothing (an empty hand, a spent gun); with the
+    /// floor full, the oldest drop gives its slot.
+    fn spill(&mut self, gun: Gun, frags: u8, stickies: u8, at: V3) {
+        let gun = if gun.arm == NONE || gun.spent() {
+            Gun::default()
+        } else {
+            gun
+        };
+        let x = at.x.clamp(self.map.lo.0, self.map.hi.0);
+        let z = at.z.clamp(self.map.lo.1, self.map.hi.1);
+        let y = self.map.floor(x, z, 0.1, at.y + STEP);
+        let d = Dropped {
+            active: true,
+            gun,
+            frags,
+            stickies,
+            pos: V3::new(
+                crate::movement::quant(x),
+                crate::movement::quant(y),
+                crate::movement::quant(z),
+            ),
+            ttl: ticks(DROP_MS),
+        };
+        if d.spent() || self.drops.alloc(d).is_some() {
+            return;
+        }
+        let mut old = 0;
+        for i in 1..MAX_DROPS {
+            if self.drops[i].ttl < self.drops[old].ttl {
+                old = i;
+            }
+        }
+        self.drops[old] = d;
+    }
+
+    /// Walking over the floor: a dropped gun's rounds into the reserve of
+    /// the same kind of gun carried (a battery isn't poured: that's a
+    /// swap), and grenades up to what may be carried.
+    fn loot(&mut self, s: usize) {
+        let f = &self.fighters[s];
+        if !f.active() || f.riding().is_some() || self.rules.gun_game {
+            return;
+        }
+        let at = f.body.pos;
+        for i in 0..MAX_DROPS {
+            let mut d = self.drops[i];
+            if !d.active || !d.reach(at) {
                 continue;
             }
             let f = &mut self.fighters[s];
-            let full = Gun::full(def.arm);
-            let one_handed = arm(def.arm).dual && arm(f.gun().arm).dual;
-            if one_handed && !f.dual() {
-                // A one-handed gun beside one: dual wielded.
-                f.left = full;
-                f.left_reload = 0;
-                f.left_charge = 0;
-                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
-            } else if f.dual() && arm(def.arm).dual {
-                // Dual already: it takes the left hand.
-                f.left = full;
-                f.left_reload = 0;
-                f.left_charge = 0;
-                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
-            } else if let Some(g) = f.guns.iter_mut().find(|g| g.arm == def.arm) {
-                *g = full;
-            } else if f.guns[1].arm == NONE {
-                f.guns[1] = full;
-                f.cur = 1;
-            } else {
-                f.guns[f.cur as usize & 1] = full;
+            let mut took = false;
+            let frags = d.frags.min(GREN_MAX.saturating_sub(f.grenades));
+            let stickies = d.stickies.min(GREN_MAX.saturating_sub(f.stickies));
+            if frags + stickies > 0 {
+                f.grenades += frags;
+                f.stickies += stickies;
+                d.frags -= frags;
+                d.stickies -= stickies;
+                took = true;
             }
-            f.reload = 0;
-            f.burst_left = 0;
-            f.refire = f.refire.max(ticks(crate::arms::SWAP_MS) as u16);
-            self.pads[i].empty_for = ticks(def.respawn_ms);
+            let a = arm(d.gun.arm);
+            if d.gun.arm != NONE && !a.hot() {
+                for h in f.guns.iter_mut().chain(core::iter::once(&mut f.left)) {
+                    if h.arm != d.gun.arm || h.reserve >= a.reserve {
+                        continue;
+                    }
+                    let want = a.reserve - h.reserve;
+                    let from_reserve = want.min(d.gun.reserve);
+                    let from_mag = (want - from_reserve).min(d.gun.mag);
+                    h.reserve += from_reserve + from_mag;
+                    d.gun.reserve -= from_reserve;
+                    d.gun.mag -= from_mag;
+                    took |= from_reserve + from_mag > 0;
+                }
+            }
+            if !took {
+                continue;
+            }
+            if d.gun.arm != NONE && d.gun.spent() {
+                d.gun = Gun::default();
+            }
+            d.active = !d.spent();
+            self.drops[i] = d;
             self.events.push(Event {
                 kind: Ev::Pickup,
                 a: s as u8,
-                c: def.arm as u16,
-                pos: def.pos,
+                c: d.gun.arm as u16,
+                pos: d.pos,
                 ..Event::default()
             });
-            return;
         }
     }
 
@@ -1660,6 +1874,7 @@ impl World {
                 thing::Kind::Projectile => hash_all(&*self.proj, &mut h),
                 thing::Kind::Pad => hash_all(&self.pads, &mut h),
                 thing::Kind::Vehicle => hash_all(&*self.vehicles, &mut h),
+                thing::Kind::Drop => hash_all(&*self.drops, &mut h),
             }
         }
         let (a, b) = self.rng.state();
