@@ -31,6 +31,11 @@ if [ "$gz" -gt 9000000 ]; then
   echo "the wasm is $gz bytes gzipped, past the 9 MB gate" >&2
   exit 1
 fi
+# What the page's download bar counts to: the module's own size (a
+# published page serves it gzipped, so Content-Length isn't it).
+printf '{"wasm_bytes":%d,"wasm_gz_bytes":%d,"commit":"%s"}\n' \
+  "$(wc -c < dist/oneshot_client_bg.wasm)" "$gz" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+  > dist/build.json
 cp web/index.html dist/
 cp -r assets dist/assets
 du -sh dist

@@ -33,6 +33,9 @@
       #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
       #status { min-height: 1.2em; opacity: 0.8; }
       .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
+      #dl { width: min(360px, 90vw); font-size: 14px; opacity: 0.85; }
+      #dl .bar { height: 6px; border-radius: 3px; background: #fff2; overflow: hidden; margin-bottom: 6px; }
+      #dl .bar i { display: block; height: 100%; width: 0; background: #e8b931; transition: width 0.12s linear; }
     </style>
   </head>
   <body>
@@ -59,6 +62,7 @@
         <button id="doubles" disabled>Ranked Doubles</button>
         <button id="cup" disabled>Enter a cup</button>
       </div>
+      <div id="dl" hidden><div class="bar"><i id="dlbar"></i></div><span id="dlline"></span></div>
       <div id="status"></div>
       <button id="cancel" class="quiet" hidden>Cancel</button>
       <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
@@ -110,7 +114,48 @@
       const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
       const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
 
-      await init();
+      // The game's 31 MB, with a bar: the bytes are counted off a copy of the
+      // download while the compiler takes the original (so it still
+      // compiles as it streams, and the browser's code cache keys to its
+      // URL). The total is the build's (build.json): a gzipped page's
+      // Content-Length isn't the module's size (Gates' app.js `counted`).
+      {
+        const modes = document.querySelectorAll('.modes');
+        const dl = $('dl'), bar = $('dlbar'), line = $('dlline');
+        let want = 0;
+        try {
+          const b = await (await fetch('build.json', { cache: 'no-cache' })).json();
+          want = Number(b.wasm_bytes) || 0;
+        } catch { /* an older build: count in megabytes */ }
+        const mb = (n) => (n / 1048576).toFixed(0);
+        const paint = (got, done) => {
+          bar.style.width = want ? `${Math.min(100, (100 * got) / want).toFixed(1)}%` : (done ? '100%' : '30%');
+          line.textContent = done ? 'Starting the game…' : `Downloading the game · ${mb(got)}${want ? ' / ' + mb(want) : ''} MB`;
+        };
+        const counted = (res) => {
+          if (!want && !res.headers.get('content-encoding')) want = Number(res.headers.get('content-length')) || 0;
+          const reader = res.clone().body?.getReader();
+          if (!reader) return res;
+          let got = 0, last = 0;
+          (async () => {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              got += value.byteLength;
+              const now = performance.now();
+              if (now - last > 120) { last = now; paint(got, false); }
+            }
+            paint(got, true);
+          })().catch(() => {});
+          return res;
+        };
+        for (const m of modes) m.hidden = true;
+        dl.hidden = false;
+        paint(0, false);
+        await init({ module_or_path: fetch('oneshot_client_bg.wasm', { priority: 'high' }).then(counted) });
+        dl.hidden = true;
+        for (const m of modes) m.hidden = false;
+      }
       if (params.has('pose')) {
         // No server: one fighter for a picture (ci/look.mjs).
         menu.style.display = 'none';
