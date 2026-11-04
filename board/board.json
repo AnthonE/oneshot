@@ -67,6 +67,142 @@
       ],
       "png": "traces/look-3.png",
       "refs": []
+    },
+    {
+      "id": "bulkhead-base",
+      "name": "Bulkhead: red's deck",
+      "what": "Bulkhead from red's deck, 3 m up, over the pit to blue's base",
+      "take": "the whole map reads from home: the bridge, the pit, both lanes, which base is whose",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-0.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-pit",
+      "name": "Bulkhead: bottom mid",
+      "what": "the pit under the bridge, from beside red's low wall",
+      "take": "the pit is its own place: cover to fight around, the lifts, the bridge overhead",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-1.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-top",
+      "name": "Bulkhead: top mid",
+      "what": "on top mid with the sniper, looking down the bridge at blue's deck",
+      "take": "the long sight line and where it's exposed; the far base reads as blue",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-2.png",
+      "refs": []
+    },
+    {
+      "id": "bulkhead-lane",
+      "name": "Bulkhead: a side lane",
+      "what": "red's end of the north lane, looking along it",
+      "take": "the lane is a route of its own, and the steps down into the pit read",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=level",
+        "map=5&eye=-21,4.6,-6&look=0,2.5,2",
+        "map=5&eye=-11,1.6,-8&look=0,2,0",
+        "map=5&eye=-2,4.6,0.5&look=20,3,0",
+        "map=5&eye=-17,3.1,14&look=10,1.5,10"
+      ],
+      "png": "traces/level-3.png",
+      "refs": []
+    },
+    {
+      "id": "chrysalis-top",
+      "name": "Chrysalis: red's top",
+      "what": "from red's base top through its window, over top mid to blue",
+      "take": "the bubble reads as one curved wall, the window frames top mid, the far base reads as blue",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=chrysalis",
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
+      ],
+      "png": "traces/chrysalis-0.png",
+      "refs": []
+    },
+    {
+      "id": "chrysalis-pit",
+      "name": "Chrysalis: bottom mid",
+      "what": "in the pit beside a pod, top mid and the stem overhead",
+      "take": "an alien interior, not a box: the pods, the stem and the platform overhead read at a glance",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=chrysalis",
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
+      ],
+      "png": "traces/chrysalis-1.png",
+      "refs": []
+    },
+    {
+      "id": "chrysalis-mid",
+      "name": "Chrysalis: top mid",
+      "what": "on top mid by the stem, looking at blue's base",
+      "take": "where the fights are reads; the hull's veins glow without hiding fighters",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=chrysalis",
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
+      ],
+      "png": "traces/chrysalis-2.png",
+      "refs": []
+    },
+    {
+      "id": "chrysalis-hall",
+      "name": "Chrysalis: the south hall",
+      "what": "red's end of the south hall, the ramp up to blue's top ahead",
+      "take": "the hall is a route of its own, the ramp and the landing read",
+      "shoot": [
+        "node",
+        "ci/look.mjs",
+        "--prefix=chrysalis",
+        "map=6&eye=-18.5,5.1,-2&look=0,3,1",
+        "map=6&eye=-7,1.6,-5.5&look=0,2.2,1",
+        "map=6&eye=-2.5,5.1,-1&look=14,4,0",
+        "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
+      ],
+      "png": "traces/chrysalis-3.png",
+      "refs": []
     }
   ]
 }

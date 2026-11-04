@@ -389,7 +389,14 @@ fn rebuild(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     old: Query<Entity, With<level::LevelPart>>,
-    eye: Query<Entity, With<Eye>>,
+    mut eye: Query<
+        (
+            Entity,
+            &mut bevy::camera::Exposure,
+            &mut bevy::light::EnvironmentMapLight,
+        ),
+        With<Eye>,
+    >,
 ) {
     let s = link.0.session();
     if !s.ready || s.welcomes == built.0 {
@@ -397,8 +404,11 @@ fn rebuild(
     }
     built.0 = s.welcomes;
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
-    if let Ok(eye) = eye.single() {
+    if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
+        if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
+            look::rig::expose_for(&d.light, &mut exposure, &mut env);
+        }
     }
 }
 
@@ -434,7 +444,7 @@ fn draw_fighters(
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
     let others = match (core.killcam(now), &posed) {
-        (_, Some(p)) => vec![p.0],
+        (_, Some(p)) => p.2.fighter.then_some(p.0).into_iter().collect(),
         (Some(k), _) if !core.own().0.alive => k.bodies,
         _ => core.others(now),
     };
@@ -867,10 +877,11 @@ mod web_start {
     /// `query` is the page's, as `?yaw=1.57&arm=3`).
     #[wasm_bindgen]
     pub fn pose(query: String, opts: String) {
+        let pose = super::pose::Pose::parse(&query);
         let opts = super::Opts {
-            pose: Some(super::pose::Pose::parse(&query)),
+            pose: Some(pose),
             ..super::Opts::parse(&opts)
         };
-        super::app(Box::new(super::link::Still::new()), opts).run();
+        super::app(Box::new(super::link::Still::on(pose.2.map)), opts).run();
     }
 }

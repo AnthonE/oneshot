@@ -41,11 +41,17 @@ bevy = { version = "0.18", default-features = false, features = [
 [features]
 # Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
 sound = ["bevy/bevy_audio", "bevy/vorbis"]
+# Wayland beside X11 on Linux: needs libwayland-dev (the release builds have it).
+wayland = ["bevy/wayland"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 client-net = { path = "../client-net", features = ["native"] }
 bevy = { version = "0.18", default-features = false, features = ["multi_threaded", "x11"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
+# server.json over HTTPS from the public server (main.rs): the rustls and
+# ring wtransport already builds, and the system's roots.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Sound always in a browser (Web Audio needs nothing from the build box).

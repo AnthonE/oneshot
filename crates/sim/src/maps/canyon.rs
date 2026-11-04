@@ -173,4 +173,9 @@ pub const DEF: Def = Def {
         ([-44.0, 0.0, 20.0], 0, 30000),
         ([44.0, 0.0, 20.0], 32768, 30000),
     ],
+    solids: &[
+    ],
+    solid_looks: &[],
+    nav: false,
+    light: crate::map::LightDef::DAY,
 };

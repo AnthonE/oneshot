@@ -79,4 +79,9 @@ pub const DEF: Def = Def {
     ],
     vehicles: &[
     ],
+    solids: &[
+    ],
+    solid_looks: &[],
+    nav: false,
+    light: crate::map::LightDef::DAY,
 };

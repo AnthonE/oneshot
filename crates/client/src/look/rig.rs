@@ -148,6 +148,13 @@ pub fn camera<M: Component>(
     eye
 }
 
+/// The map's exposure and sky fill (`sim::map::LightDef`: an interior
+/// is exposed for its lamps, its fill turned down under its roof).
+pub fn expose_for(light: &sim::map::LightDef, exposure: &mut Exposure, env: &mut EnvironmentMapLight) {
+    exposure.ev100 = if light.ev100 > 0.0 { light.ev100 } else { DAY_EV100 };
+    env.intensity = super::fill::peak_lux() * light.fill;
+}
+
 /// The sky for map `seed`: in a browser the noon cube, clouds and sky
 /// together, as a `Skybox`. On the desktop the atmosphere draws the sky
 /// (its cloud deck is still to come), so nothing.
@@ -166,12 +173,13 @@ pub fn sky_for(commands: &mut Commands, images: &mut Assets<Image>, eye: Entity,
     let _ = (commands, images, eye, seed);
 }
 
-/// The sun at noon, shadowing out to the tier's reach.
-pub fn sun() -> impl Bundle {
+/// The sun at noon, `k` of its full strength, shadowing out to the tier's
+/// reach.
+pub fn sun(k: f32) -> impl Bundle {
     (
         DirectionalLight {
             color: Color::WHITE,
-            illuminance: lux::DIRECT_SUNLIGHT,
+            illuminance: lux::DIRECT_SUNLIGHT * k,
             shadows_enabled: true,
             ..default()
         },

@@ -149,9 +149,25 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
         v.z = 0.0;
     }
     p.z = nz.clamp(map.lo.1, map.hi.1);
+    if !map.solids.is_empty() {
+        // Round and turned walls, and ramps too tall to walk onto: out of
+        // them, sliding along (crate::solid).
+        map.push_out(
+            &mut p.x,
+            &mut p.z,
+            &mut v,
+            BODY_R,
+            lo,
+            hi,
+            p.y + STEP,
+            (b.pos.x, b.pos.z),
+        );
+        p.x = p.x.clamp(map.lo.0, map.hi.0);
+        p.z = p.z.clamp(map.lo.1, map.hi.1);
+    }
 
     let reach = p.y + if b.grounded { STEP } else { 0.01 };
-    let floor = map.floor(p.x, p.z, BODY_R, reach);
+    let floor = map.floor_with(p.x, p.z, BODY_R, reach, p.y + STEP);
     let ceil = map.ceiling(p.x, p.z, BODY_R, p.y + h - 0.01);
     let mut ny = p.y + v.y * DT;
     if ny + h > ceil {
@@ -384,6 +400,10 @@ mod tests {
             }),
             launchers: &[],
             vehicles: &[],
+            solids: &[],
+            solid_looks: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
         }
         .build()
     }
@@ -439,6 +459,106 @@ mod tests {
         run(&mut b, Input::default(), &map, TICK_HZ);
         assert!(b.pos.x < 6.5, "slid down: {:?}", b.pos);
         assert!(b.pos.y < 0.5 && b.grounded, "{:?}", b.pos);
+    }
+
+    /// Open floor with a round pillar, a wall turned 45° and a ramp up +x
+    /// from 0 to 3 m: one of each solid (crate::solid).
+    fn solids() -> Map {
+        crate::map::Def {
+            id: 253,
+            practice: false,
+            name: "solids",
+            lo: (0.0, -10.0),
+            hi: (40.0, 10.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([1.0, 0.0, 0.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[
+                (0, [8.0, 0.3, 1.0, 0.0, 0.0, 0.0, 0.0, 3.0]),
+                (1, [18.0, 0.0, 4.0, 0.2, 0.70710677, 0.70710677, 0.0, 3.0]),
+                (2, [30.0, -2.0, 36.0, 2.0, 0.0, 0.0, 0.0, 3.0]),
+            ],
+            solid_looks: &[0, 0, 0],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+        }
+        .build()
+    }
+
+    #[test]
+    fn a_body_slides_round_a_pillar_and_not_through_it() {
+        let map = solids();
+        let mut b = standing(&map, 4.0, 0.0);
+        let p = map.solids[0];
+        for _ in 0..TICK_HZ * 2 {
+            step(&mut b, &run_x(), &map);
+            assert!(!p.over(b.pos.x, b.pos.z, BODY_R - 0.01), "in the pillar: {:?}", b.pos);
+        }
+        // Off its south side and on past it.
+        assert!(b.pos.x > 10.0 && b.pos.z < -0.5, "{:?}", b.pos);
+    }
+
+    #[test]
+    fn a_turned_wall_holds_a_body_on_its_side() {
+        let map = solids();
+        let w = map.solids[1];
+        // Across the wall (its own z) and along it (its own x).
+        let local = |b: &Body| {
+            let (dx, dz) = (b.pos.x - 18.0, b.pos.z);
+            (dx * 0.70710677 + dz * 0.70710677, dz * 0.70710677 - dx * 0.70710677)
+        };
+        let mut b = standing(&map, 13.0, 0.0);
+        let mut slid = false;
+        for _ in 0..TICK_HZ * 2 {
+            step(&mut b, &run_x(), &map);
+            let (along, across) = local(&b);
+            if fabs(along) < 4.0 {
+                assert!(across > 0.2 + BODY_R - 0.01, "through the wall: {:?}", b.pos);
+                slid |= along > 0.0;
+            }
+            assert!(!w.over(b.pos.x, b.pos.z, BODY_R - 0.01));
+        }
+        // It slid along the wall's face, +x +z, and round its end.
+        assert!(slid && b.pos.x > 21.0, "{:?}", b.pos);
+    }
+
+    #[test]
+    fn a_ramp_is_walked_up_and_its_side_is_a_wall() {
+        let map = solids();
+        let r = map.solids[2];
+        let mut b = standing(&map, 28.0, 0.0);
+        let mut top = 0.0f32;
+        for _ in 0..TICK_HZ * 2 {
+            step(&mut b, &run_x(), &map);
+            if b.pos.x > 30.5 && b.pos.x < 35.5 {
+                assert!(b.grounded, "on the slope: {:?}", b);
+                assert!(fabs(b.pos.y - r.top_at(b.pos.x, b.pos.z)) < 0.01, "{:?}", b.pos);
+            }
+            top = top.max(b.pos.y);
+        }
+        assert!(fabs(top - 3.0) < 0.01, "to the top: {top}");
+        // Into its side where it stands 2.4 m: held off.
+        let south = Input {
+            mz: 127,
+            yaw: 49152,
+            ..Input::default()
+        };
+        let mut b = standing(&map, 34.8, 4.0);
+        run(&mut b, south, &map, TICK_HZ);
+        assert!(b.pos.z >= 2.0 + BODY_R && b.pos.y == 0.0, "{:?}", b.pos);
+        // Where its side is under a step, walked onto.
+        let mut b = standing(&map, 30.4, 4.0);
+        let mut up = 0.0f32;
+        for _ in 0..TICK_HZ / 2 {
+            step(&mut b, &south, &map);
+            up = up.max(b.pos.y);
+        }
+        assert!(b.pos.z < 1.0 && up > 0.15, "{:?} {up}", b.pos);
     }
 
     #[test]

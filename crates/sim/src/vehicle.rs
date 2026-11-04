@@ -263,7 +263,27 @@ impl Vehicle {
             }
         }
 
-        let floor = map.floor(p.x, p.z, VEH_HALF_W, p.y + VEH_STEP);
+        if !map.solids.is_empty() {
+            // Each hull circle out of the solids; the vehicle moves with it.
+            for k in [1.0, -1.0] {
+                let c = p + fore * k;
+                let was = self.pos + fore * k;
+                let (mut cx, mut cz) = (c.x, c.z);
+                map.push_out(
+                    &mut cx,
+                    &mut cz,
+                    &mut v,
+                    VEH_HULL_R,
+                    lo,
+                    hi,
+                    p.y + VEH_STEP,
+                    (was.x, was.z),
+                );
+                p.x = (p.x + (cx - c.x)).clamp(map.lo.0, map.hi.0);
+                p.z = (p.z + (cz - c.z)).clamp(map.lo.1, map.hi.1);
+            }
+        }
+        let floor = map.floor_with(p.x, p.z, VEH_HALF_W, p.y + VEH_STEP, p.y + VEH_STEP);
         let ny = p.y + v.y * DT;
         if ny <= floor {
             p.y = floor;

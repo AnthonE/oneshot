@@ -70,15 +70,20 @@ impl Link for Web {
     }
 }
 
-/// No server: a stand-in session, ready on Proving Grounds, that nothing
-/// ever reaches (the pose mode, `crate::pose`).
+/// No server: a stand-in session, ready on a map (Proving Grounds unless
+/// told), that nothing ever reaches (the pose mode, `crate::pose`).
 pub struct Still(pub Session);
 
 impl Still {
     pub fn new() -> Still {
+        Still::on(0)
+    }
+
+    pub fn on(map: u8) -> Still {
         let mut s = Session::new();
         s.ready = true;
         s.welcomes = 1;
+        s.map_id = map;
         Still(s)
     }
 }
