@@ -64,6 +64,68 @@ const EASE_FAR_M: f32 = 1.0;
 const EASE_NEAR_M: f32 = 0.25;
 /// A correction left smaller than this is dropped.
 pub const DEAD_ZONE_M: f32 = 0.01;
+/// How far everyone else may be drawn past the newest snapshot, on their
+/// velocity, before they are held (Gates' `EXTRAP_MAX_TICKS`, 133 ms).
+pub const EXTRAPOLATE_MS: u32 = 125;
+/// Two snapshots further apart than this aren't drawn between: whoever
+/// moved that far unseen is shown where they were, then where they are.
+pub const LERP_SPAN_MS: u32 = 250;
+/// The server's clock as estimated from arrivals: each snapshot moves the
+/// estimate a tenth of the way to what it says; what is drawn follows the
+/// estimate at no more than a tenth of real time, so everyone else always
+/// moves at 90 to 110% of it. Past this far off the estimate is taken as it
+/// comes (a stall, a new route).
+const CLOCK_GAIN: f64 = 0.1;
+const CLOCK_SLEW: f64 = 0.1;
+const CLOCK_SNAP_MS: u32 = 150;
+/// How fast the playout delay follows its target, ticks a second: up
+/// briskly when the link gets worse, down gently (Gates slews at 0.5 a
+/// 30 Hz tick a second).
+const DELAY_UP_PER_S: f64 = 4.0;
+const DELAY_DOWN_PER_S: f64 = 1.0;
+
+/// A number drawn from that follows its target at a bounded rate of real
+/// time, worked out at the moment it's read: however snapshots bunch up,
+/// no frame moves it faster than the rate.
+#[derive(Clone, Copy, Debug)]
+struct Slew {
+    from: f64,
+    target: f64,
+    /// When `from` held, local ms.
+    at_ms: f64,
+    /// Most it moves per tick of real time, up and down.
+    up: f64,
+    down: f64,
+}
+
+impl Slew {
+    fn new(v: f64, up: f64, down: f64) -> Slew {
+        Slew {
+            from: v,
+            target: v,
+            at_ms: 0.0,
+            up,
+            down,
+        }
+    }
+
+    fn at(&self, now_ms: f64) -> f64 {
+        let dt = ((now_ms - self.at_ms) / TICK_MS).max(0.0);
+        self.from + (self.target - self.from).clamp(-self.down * dt, self.up * dt)
+    }
+
+    fn aim(&mut self, now_ms: f64, target: f64) {
+        self.from = self.at(now_ms);
+        self.at_ms = now_ms;
+        self.target = target;
+    }
+
+    fn set(&mut self, now_ms: f64, v: f64) {
+        self.from = v;
+        self.target = v;
+        self.at_ms = now_ms;
+    }
+}
 /// How far past the welcome's tick the first snapshot may be, in ms. A
 /// snapshot from before the welcome (a cup's last heat, still sending as
 /// the next one seats us) is far ahead of a new room's clock; taken
@@ -195,10 +257,13 @@ pub struct NetCore {
     latest: Snapshot,
     frames: [Frame; INTERP_FRAMES],
     n_frames: usize,
-    /// Server tick minus local ticks, smoothed: when snapshots arrive.
-    clock_offset: Option<f64>,
+    /// Server tick minus local ticks, smoothed (when snapshots arrive):
+    /// the estimate is the target, what's drawn slews to it. None until
+    /// the first snapshot.
+    clock: Option<Slew>,
     jitter: f64,
-    delay: f64,
+    /// The playout delay in ticks, slewed to its target.
+    delay: Slew,
     events: Vec<EventState>,
     /// The newest event id kept: an event comes again until acked.
     event_id: Option<u16>,
@@ -255,9 +320,13 @@ impl NetCore {
                 vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
             }; INTERP_FRAMES],
             n_frames: 0,
-            clock_offset: None,
+            clock: None,
             jitter: 0.0,
-            delay: 4.0,
+            delay: Slew::new(
+                SEND_EVERY as f64 * 2.0,
+                DELAY_UP_PER_S / TICK_HZ as f64,
+                DELAY_DOWN_PER_S / TICK_HZ as f64,
+            ),
             events: Vec::new(),
             event_id: None,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
@@ -347,7 +416,7 @@ impl NetCore {
         let mut m = InputMsg {
             ack_tick: self.newest.unwrap_or(0),
             ack_bits: self.ack_bits,
-            playout: self.delay.round().clamp(0.0, 255.0) as u8,
+            playout: self.delay.target.round().clamp(0.0, 255.0) as u8,
             first_seq: first,
             n: 0,
             ..InputMsg::default()
@@ -409,21 +478,35 @@ impl NetCore {
         self.stats.snapshots += 1;
         self.stats.depth = s.depth;
 
-        // When snapshots arrive against the local clock: jitter and delay.
+        // When snapshots arrive against the local clock: the server's clock,
+        // the jitter about it (RFC 3550's gain), and the playout delay. The
+        // render tick they make moves on with real time, never back: a
+        // late snapshot slows it a little, it doesn't pull it back (Gates'
+        // `server_est` and slewed playout).
         let local = now_ms / TICK_MS;
         let off = s.tick as f64 - local;
-        match self.clock_offset {
-            None => self.clock_offset = Some(off),
-            Some(o) => {
-                // Late arrivals pull the estimate down at once; early ones
-                // raise it slowly, so it tracks the earliest path.
-                let dev = (off - o).abs();
-                self.jitter += (dev - self.jitter) / 16.0;
-                self.clock_offset = Some(if off < o { off } else { o + (off - o) * 0.05 });
+        match self.clock.as_mut() {
+            None => {
+                self.clock = Some({
+                    let mut c = Slew::new(off, CLOCK_SLEW, CLOCK_SLEW);
+                    c.set(now_ms, off);
+                    c
+                });
+                self.delay.set(now_ms, self.delay.target);
+            }
+            Some(c) => {
+                let err = off - c.target;
+                self.jitter += (err.abs() - self.jitter) / 16.0;
+                if err.abs() > ticks(CLOCK_SNAP_MS) as f64 {
+                    c.set(now_ms, off);
+                } else {
+                    c.aim(now_ms, c.target + err * CLOCK_GAIN);
+                }
+                let target = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
+                self.delay.aim(now_ms, target);
             }
         }
-        self.delay = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
-        self.stats.delay_ticks = self.delay;
+        self.stats.delay_ticks = self.delay.at(now_ms);
 
         // The clock: keep the low point of our inputs waiting there at about
         // TARGET_DEPTH: below it the server guesses, above it we add delay.
@@ -673,12 +756,13 @@ impl NetCore {
             };
             let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
             if let (Some(b), Some(vb)) = (b, vb) {
-                let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
-                d.pos = va.pos + (vb.pos - va.pos) * u;
-                d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+                if b.tick - a.tick <= ticks(LERP_SPAN_MS) {
+                    let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
+                    d.pos = va.pos + (vb.pos - va.pos) * u;
+                    d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+                }
             } else {
-                let ahead = ((rt - a.tick as f64).max(0.0)).min((SEND_EVERY * 2) as f64) as f32;
-                d.pos = va.pos + va.vel * (ahead / TICK_HZ as f32);
+                d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
             }
             out.push(d);
         }
@@ -706,7 +790,8 @@ impl NetCore {
 
     /// The server tick everyone else is drawn at, at `now_ms`.
     pub fn render_tick(&self, now_ms: f64) -> f64 {
-        self.clock_offset.map_or(0.0, |o| now_ms / TICK_MS + o - self.delay)
+        self.clock
+            .map_or(0.0, |c| now_ms / TICK_MS + c.at(now_ms) - self.delay.at(now_ms))
     }
 
     /// Whether anyone is drawn past the newest snapshot at `now_ms`: the
@@ -721,7 +806,7 @@ impl NetCore {
     }
 
     /// Everyone else as drawn at `now_ms`: between the two snapshots around
-    /// the render tick, or extrapolated at most two intervals past the
+    /// the render tick, or extrapolated at most [`EXTRAPOLATE_MS`] past the
     /// newest, then held.
     pub fn others(&self, now_ms: f64) -> Vec<Drawn> {
         let mut out = Vec::new();
@@ -743,15 +828,18 @@ impl NetCore {
             let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
             match (b, rb) {
                 (Some(b), Some(rb)) if ra.alive == rb.alive => {
-                    let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
-                    d.pos = ra.pos + (rb.pos - ra.pos) * u;
-                    d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
-                    d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
+                    // A gap too long to draw across: where they were until
+                    // the next, then there.
+                    if b.tick - a.tick <= ticks(LERP_SPAN_MS) {
+                        let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
+                        d.pos = ra.pos + (rb.pos - ra.pos) * u;
+                        d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
+                        d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
+                    }
                 }
                 _ => {
-                    let ahead = ((rt - a.tick as f64).max(0.0)).min((SEND_EVERY * 2) as f64) as f32;
                     if ra.alive {
-                        d.pos = ra.pos + ra.vel * (ahead / TICK_HZ as f32);
+                        d.pos = ra.pos + ra.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
                     }
                 }
             }
@@ -894,6 +982,12 @@ fn ease(e: V3, dt: f64) -> V3 {
     let u = ((size - EASE_NEAR_M) / (EASE_FAR_M - EASE_NEAR_M)).clamp(0.0, 1.0) as f64;
     let tau = EASE_NEAR_MS + (EASE_FAR_MS - EASE_NEAR_MS) * u;
     e * (-dt / tau).exp() as f32
+}
+
+/// How far past snapshot tick `a` to extrapolate at render tick `rt`, in
+/// ticks: none before it, at most [`EXTRAPOLATE_MS`].
+fn ahead(rt: f64, a: u32) -> f32 {
+    (rt - a as f64).clamp(0.0, ticks(EXTRAPOLATE_MS) as f64) as f32
 }
 
 fn phase_of(p: u8) -> Phase {

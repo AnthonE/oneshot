@@ -78,6 +78,13 @@ struct Run {
     /// drawn past the newest snapshot (extrapolated or held).
     frames: u64,
     stalls: u64,
+    /// Frames that drew everyone else at an earlier tick than the frame
+    /// before (they'd jerk backwards), and the render tick last drawn.
+    back: u64,
+    last_rt: f64,
+    /// How far everyone else moved on each frame, in frames of real time
+    /// (1 is even): a hitch shows as a step well under or over 1.
+    steps: Vec<f64>,
     /// Kills the server's world raised.
     kills: u32,
 }
@@ -123,6 +130,9 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
         },
         frames: 0,
         stalls: 0,
+        back: 0,
+        last_rt: 0.0,
+        steps: Vec::new(),
         kills: 0,
         now: 0.0,
         next_tick: 0.0,
@@ -166,6 +176,13 @@ impl Run {
                 if self.client.extrapolating(self.now) {
                     self.stalls += 1;
                 }
+                let rt = self.client.render_tick(self.now);
+                if rt < self.last_rt {
+                    self.back += 1;
+                }
+                self.steps
+                    .push((rt - self.last_rt) / (1000.0 / 60.0 / (1000.0 / TICK_HZ as f64)));
+                self.last_rt = rt;
                 for m in self.client.update(self.now, input(self.now)) {
                     let n = encode_input(&m, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), true);
@@ -297,7 +314,15 @@ fn an_impaired_link_stays_within_its_budgets() {
 
     let mut r = start(60.0, 10.0, 0.05, false);
     r.run(4000.0, player);
-    let (warm, up0, down0, f0, st0) = (r.client.stats, r.net.bytes_up, r.net.bytes_down, r.frames, r.stalls);
+    let (warm, up0, down0, f0, st0, b0, s0) = (
+        r.client.stats,
+        r.net.bytes_up,
+        r.net.bytes_down,
+        r.frames,
+        r.stalls,
+        r.back,
+        r.steps.len(),
+    );
     let secs = 30.0;
     r.run(secs * 1000.0, player);
     let s = r.client.stats;
@@ -306,9 +331,13 @@ fn an_impaired_link_stays_within_its_budgets() {
     let down = (r.net.bytes_down - down0) as f64 * 8.0 / 1000.0 / secs;
     let up = (r.net.bytes_up - up0) as f64 * 8.0 / 1000.0 / secs;
     let stall_rate = (r.stalls - st0) as f64 / (r.frames - f0) as f64;
+    let back = r.back - b0;
+    let (lo, hi) = spread(&r.steps[s0..]);
     let report = format!(
-        "corrections {correction_rate:.4} ({corr} of {}), down {down:.0} kbit/s, up {up:.0} kbit/s, stalls {stall_rate:.4}: {s:?}",
-        conf + corr
+        "corrections {correction_rate:.4} ({corr} of {}), down {down:.0} kbit/s, up {up:.0} kbit/s, stalls {stall_rate:.4}, \
+         drawn backwards {back}, steps {lo:.3} to {hi:.3} over {} frames: {s:?}",
+        conf + corr,
+        r.frames - f0
     );
     println!("{report}");
     assert!(conf > 1000, "{report}");
@@ -316,6 +345,29 @@ fn an_impaired_link_stays_within_its_budgets() {
     assert!(down <= MAX_DOWN_KBPS, "{report}");
     assert!(up <= MAX_UP_KBPS, "{report}");
     assert!(stall_rate <= MAX_STALL_RATE, "{report}");
+    assert_eq!(back, 0, "{report}");
+}
+
+/// The least and most anyone else moved on in a frame, in frames.
+fn spread(steps: &[f64]) -> (f64, f64) {
+    steps.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &s| {
+        (lo.min(s), hi.max(s))
+    })
+}
+
+/// Everyone else moves on with real time through a jittery, lossy link: a
+/// late snapshot slows them a little, never stops or pulls them back
+/// (Gates' server_est and slewed playout; DESIGN §6).
+#[test]
+fn others_move_on_evenly_through_jitter() {
+    let mut r = start(60.0, 25.0, 0.05, false);
+    r.run(4000.0, player);
+    let (b0, s0) = (r.back, r.steps.len());
+    r.run(20_000.0, player);
+    let (lo, hi) = spread(&r.steps[s0..]);
+    println!("steps {lo:.3} to {hi:.3}, backwards {}", r.back - b0);
+    assert_eq!(r.back, b0, "drawn backwards");
+    assert!(lo > 0.85 && hi < 1.15, "steps {lo:.3} to {hi:.3}");
 }
 
 /// At the wheel on a clean link: every prediction of the vehicle (and the

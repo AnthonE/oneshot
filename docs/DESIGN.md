@@ -144,14 +144,23 @@ server's.
 
 Remote fighters are drawn **between** two snapshots, never guessed ahead:
 
+- The render tick runs on real time from an estimate of the server's clock
+  that each snapshot moves a tenth of the way to what it says; what is drawn
+  follows the estimate at 90 to 110% of real time, so a late snapshot slows
+  everyone else a little and never stops or pulls them back (re-taken whole
+  past 150 ms off: a stall, a new route).
 - A playout delay starts at 2 snapshot intervals (31 ms at 64 Hz) and adapts
-  from measured jitter (RFC 3550 estimator) within 1 to 6 intervals. The client
-  reports its delay to the server in each input datagram (it feeds lag
-  compensation, §7).
+  from measured jitter (RFC 3550 estimator) within 1 to 6 intervals, slewed
+  (up 4 ticks a second, down 1). The client reports its delay to the server
+  in each input datagram (it feeds lag compensation, §7).
 - Linear interpolation of position, slerp of yaw and pitch, and animation state
   (moving, airborne, firing, reloading, dead) from the snapshot flags.
-- On a gap: extrapolate at most 2 intervals from velocity, then freeze.
-- This is Gates' `client-core/src/interp.rs`, retuned from 30 Hz.
+- On a gap: extrapolate at most 125 ms from velocity, then hold. Two
+  snapshots more than 250 ms apart aren't drawn between: where they were,
+  then where they are.
+- This is Gates' `client-core/src/interp.rs` and its `server_est`, retuned
+  from 30 Hz; `client-net/tests/loopback.rs` holds it to even steps through
+  25 ms of jitter.
 
 ## 7 · Lag compensation: the server chooses
 
