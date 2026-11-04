@@ -13,6 +13,8 @@ use sim::arms::{
 
 use super::atlas::{ARC, FLAME, GLOW, PUFF, RING, SMOKE, SPECK, STAR, STREAK};
 use super::pool::{Orient, Particle, Pool};
+use ::fx::recipe::Recipe;
+use std::sync::OnceLock;
 
 /// What struck.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -85,6 +87,49 @@ pub enum Layer {
 }
 
 impl Layer {
+    /// Every layer, in the order the knobs name them.
+    pub const ALL: [Layer; 14] = [
+        Layer::Sparks,
+        Layer::Flash,
+        Layer::Dust,
+        Layer::Grit,
+        Layer::Smoke,
+        Layer::Fireball,
+        Layer::GunSmoke,
+        Layer::Plume,
+        Layer::Arcs,
+        Layer::Zap,
+        Layer::ShieldSparks,
+        Layer::Hurt,
+        Layer::Shock,
+        Layer::Tongue,
+    ];
+
+    /// Its name, as a knob names it (`Sparks.speed=4,12`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Layer::Sparks => "Sparks",
+            Layer::Flash => "Flash",
+            Layer::Dust => "Dust",
+            Layer::Grit => "Grit",
+            Layer::Smoke => "Smoke",
+            Layer::Fireball => "Fireball",
+            Layer::GunSmoke => "GunSmoke",
+            Layer::Plume => "Plume",
+            Layer::Arcs => "Arcs",
+            Layer::Zap => "Zap",
+            Layer::ShieldSparks => "ShieldSparks",
+            Layer::Hurt => "Hurt",
+            Layer::Shock => "Shock",
+            Layer::Tongue => "Tongue",
+        }
+    }
+
+    /// The layer a knob names, any case.
+    pub fn named(name: &str) -> Option<Layer> {
+        Layer::ALL.into_iter().find(|l| l.name().eq_ignore_ascii_case(name))
+    }
+
     /// Whether this layer is light (the additive pool) or matter (the alpha
     /// pool, lit like the world).
     pub fn glow(self) -> bool {
@@ -192,34 +237,9 @@ pub fn dust_tint(m: Matter) -> Color {
     }
 }
 
-/// One layer's recipe.
-struct Spec {
-    orient: Orient,
-    cell: u8,
-    cells: u8,
-    speed: (f32, f32),
-    /// Share of the launch along the thrown direction rather than scattered.
-    spray: f32,
-    /// Extra upward speed, m/s.
-    up: f32,
-    gravity: f32,
-    drag: f32,
-    life: (f32, f32),
-    size: (f32, f32),
-    /// End size over start size.
-    grow: f32,
-    c0: [f32; 4],
-    c1: [f32; 4],
-    /// Multiply the colours by the matter's dust tint.
-    tinted: bool,
-    spin: f32,
-    stretch: f32,
-    len_max: f32,
-    bounce: bool,
-}
-
-fn spec(layer: Layer) -> Spec {
-    let base = Spec {
+/// The layer's recipe as built, before any knob (`fx::recipe::Recipe`).
+pub fn built(layer: Layer) -> Recipe {
+    let base = Recipe {
         orient: Orient::Billboard,
         cell: PUFF,
         cells: 1,
@@ -240,7 +260,7 @@ fn spec(layer: Layer) -> Spec {
         bounce: false,
     };
     match layer {
-        Layer::Sparks => Spec {
+        Layer::Sparks => Recipe {
             orient: Orient::Stretch,
             cell: STREAK,
             speed: (3.0, 9.0),
@@ -257,7 +277,7 @@ fn spec(layer: Layer) -> Spec {
             bounce: true,
             ..base
         },
-        Layer::Flash => Spec {
+        Layer::Flash => Recipe {
             cell: STAR,
             cells: 3,
             life: (0.05, 0.08),
@@ -267,7 +287,7 @@ fn spec(layer: Layer) -> Spec {
             c1: [1.5, 0.8, 0.3, 0.0],
             ..base
         },
-        Layer::Dust => Spec {
+        Layer::Dust => Recipe {
             cells: 3,
             speed: (0.4, 1.6),
             spray: 0.55,
@@ -283,7 +303,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 0.8,
             ..base
         },
-        Layer::Grit => Spec {
+        Layer::Grit => Recipe {
             cell: SPECK,
             speed: (2.0, 4.5),
             spray: 0.6,
@@ -299,7 +319,7 @@ fn spec(layer: Layer) -> Spec {
             bounce: true,
             ..base
         },
-        Layer::Smoke => Spec {
+        Layer::Smoke => Recipe {
             cell: SMOKE,
             cells: 2,
             speed: (0.3, 1.0),
@@ -314,7 +334,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 0.3,
             ..base
         },
-        Layer::GunSmoke => Spec {
+        Layer::GunSmoke => Recipe {
             cell: SMOKE,
             cells: 2,
             speed: (0.6, 1.6),
@@ -329,7 +349,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 0.6,
             ..base
         },
-        Layer::Plume => Spec {
+        Layer::Plume => Recipe {
             cells: 3,
             speed: (0.5, 2.0),
             spray: 0.5,
@@ -345,7 +365,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 0.4,
             ..base
         },
-        Layer::Fireball => Spec {
+        Layer::Fireball => Recipe {
             cell: GLOW,
             speed: (1.0, 5.0),
             spray: 0.3,
@@ -361,7 +381,7 @@ fn spec(layer: Layer) -> Spec {
         },
         // Lightning: a jagged bolt flung out and gone in a blink, rolled
         // at random so no two strikes match.
-        Layer::Arcs => Spec {
+        Layer::Arcs => Recipe {
             cell: ARC,
             speed: (0.0, 0.6),
             spray: 0.3,
@@ -373,7 +393,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 6.0,
             ..base
         },
-        Layer::Zap => Spec {
+        Layer::Zap => Recipe {
             cell: GLOW,
             life: (0.06, 0.09),
             size: (0.18, 0.24),
@@ -382,7 +402,7 @@ fn spec(layer: Layer) -> Spec {
             c1: [0.8, 1.4, 3.0, 0.0],
             ..base
         },
-        Layer::ShieldSparks => Spec {
+        Layer::ShieldSparks => Recipe {
             orient: Orient::Stretch,
             cell: STREAK,
             speed: (2.0, 6.5),
@@ -397,7 +417,7 @@ fn spec(layer: Layer) -> Spec {
             stretch: 0.02,
             ..base
         },
-        Layer::Hurt => Spec {
+        Layer::Hurt => Recipe {
             cells: 3,
             speed: (0.5, 1.8),
             spray: 0.6,
@@ -411,7 +431,7 @@ fn spec(layer: Layer) -> Spec {
             spin: 1.0,
             ..base
         },
-        Layer::Shock => Spec {
+        Layer::Shock => Recipe {
             orient: Orient::Flat,
             cell: RING,
             life: (0.28, 0.32),
@@ -421,7 +441,7 @@ fn spec(layer: Layer) -> Spec {
             c1: [0.6, 0.4, 0.2, 0.0],
             ..base
         },
-        Layer::Tongue => Spec {
+        Layer::Tongue => Recipe {
             orient: Orient::Stretch,
             cell: FLAME,
             speed: (0.5, 0.5),
@@ -438,10 +458,6 @@ fn spec(layer: Layer) -> Spec {
     }
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
 /// Throw `n` particles of `layer` from `at`, around `dir`, coloured for
 /// `matter`. Sparks and grit bounce once off the plane through `at` facing
 /// `dir`: the surface they came off.
@@ -452,46 +468,48 @@ pub fn emit(pool: &mut Pool, layer: Layer, n: usize, at: Vec3, dir: Vec3, matter
 /// [`emit`] in a colour of the caller's, at `scale` times the layer's size.
 /// A layer that is not tinted ignores the colour.
 pub fn emit_tint(pool: &mut Pool, layer: Layer, n: usize, at: Vec3, dir: Vec3, tint: Color, scale: f32) {
-    let s = spec(layer);
-    let tint = if s.tinted {
-        tint.to_linear().to_f32_array_no_alpha()
-    } else {
-        [1.0; 3]
-    };
-    let paint = |c: [f32; 4]| [c[0] * tint[0], c[1] * tint[1], c[2] * tint[2], c[3]];
-    let dir = dir.normalize_or(Vec3::Y);
-    for _ in 0..n {
-        let scatter = Vec3::new(pool.signed(), pool.signed(), pool.signed()).normalize_or(Vec3::Y);
-        let v = (dir * s.spray + scatter * (1.0 - s.spray)).normalize_or(dir);
-        let speed = lerp(s.speed.0, s.speed.1, pool.roll());
-        let life = lerp(s.life.0, s.life.1, pool.roll());
-        let size = lerp(s.size.0, s.size.1, pool.roll()) * scale;
-        let cell = s.cell + ((pool.roll() * s.cells as f32) as u8).min(s.cells - 1);
-        let roll = pool.roll() * core::f32::consts::TAU;
-        let spin = pool.signed() * s.spin;
-        pool.spawn(Particle {
-            left: life,
-            life,
-            // A couple of centimetres off the surface, so nothing is born
-            // inside it.
-            pos: at + v * 0.02,
-            vel: v * speed * scale.sqrt() + Vec3::Y * s.up,
-            size0: size,
-            size1: size * s.grow,
-            c0: paint(s.c0),
-            c1: paint(s.c1),
-            gravity: s.gravity,
-            drag: s.drag,
-            roll,
-            spin,
-            cell,
-            orient: s.orient,
-            stretch: s.stretch,
-            len_max: s.len_max,
-            plane_p: at,
-            plane_n: if s.bounce { dir } else { Vec3::ZERO },
-        });
+    ::fx::recipe::emit(
+        pool,
+        &recipe(layer),
+        n,
+        at.into(),
+        dir.into(),
+        tint.to_linear().to_f32_array_no_alpha(),
+        scale,
+    );
+}
+
+/// Recipes the fx stage retuned (`?knobs=`), set once at its start.
+static KNOBS: OnceLock<Vec<(Layer, Recipe)>> = OnceLock::new();
+
+/// The recipe a layer throws now: as built, or as the stage's knobs retuned it.
+pub fn recipe(layer: Layer) -> Recipe {
+    KNOBS
+        .get()
+        .and_then(|k| k.iter().find(|(l, _)| *l == layer).map(|(_, r)| *r))
+        .unwrap_or_else(|| built(layer))
+}
+
+/// Retune layers from knobs (`Sparks.speed=4,12;Flash.life=0.04,0.07`) for
+/// the rest of the run. Once per run: the fx stage calls it at start-up.
+pub fn set_knobs(text: &str) -> Result<(), String> {
+    let mut out: Vec<(Layer, Recipe)> = Vec::new();
+    for k in ::fx::recipe::knobs(text) {
+        let k = k?;
+        let layer = Layer::named(k.layer).ok_or_else(|| {
+            let names: Vec<_> = Layer::ALL.iter().map(|l| l.name()).collect();
+            format!("no layer `{}` (layers: {})", k.layer, names.join(", "))
+        })?;
+        let i = match out.iter().position(|(l, _)| *l == layer) {
+            Some(i) => i,
+            None => {
+                out.push((layer, built(layer)));
+                out.len() - 1
+            }
+        };
+        out[i].1.set(k.key, k.val)?;
     }
+    KNOBS.set(out).map_err(|_| "knobs are set once a run".to_string())
 }
 
 /// A gun's look when it fires.
@@ -640,7 +658,7 @@ pub fn stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
         pool.spawn(Particle {
             left: life,
             life,
-            pos: at,
+            pos: at.into(),
             size0: size,
             size1: size * 1.4,
             c0: c,
@@ -662,8 +680,8 @@ pub fn shatter(glow: &mut Pool, at: Vec3, n: usize, speed: f32) {
         glow.spawn(Particle {
             left: life,
             life,
-            pos: at,
-            vel: v,
+            pos: at.into(),
+            vel: v.into(),
             gravity: 6.0,
             drag: 2.0,
             size0: 0.025,
@@ -680,7 +698,7 @@ pub fn shatter(glow: &mut Pool, at: Vec3, n: usize, speed: f32) {
     glow.spawn(Particle {
         left: 0.08,
         life: 0.08,
-        pos: at,
+        pos: at.into(),
         size0: 0.12,
         size1: 0.3,
         c0: PINK,
@@ -699,8 +717,8 @@ pub fn tracer(pool: &mut Pool, look: &GunLook, start: Vec3, dir: Vec3, dist: f32
     pool.spawn(Particle {
         left: life,
         life,
-        pos: start,
-        vel: dir * look.mps,
+        pos: start.into(),
+        vel: (dir * look.mps).into(),
         size0: look.width,
         size1: look.width * 0.7,
         c0: look.c0,
@@ -727,8 +745,8 @@ pub fn wake(pool: &mut Pool, from: Vec3, to: Vec3, life: f32) {
         pool.spawn(Particle {
             left: l,
             life: l,
-            pos: at,
-            vel,
+            pos: at.into(),
+            vel: vel.into(),
             size0: 0.05,
             size1: 0.32,
             c0: [0.8, 0.8, 0.82, 0.3],

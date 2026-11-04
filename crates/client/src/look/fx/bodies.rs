@@ -104,8 +104,8 @@ fn crystals(fx: &mut Fx, d: &Drawn, n: u8, t: f32) {
         fx.glow.spawn(Particle {
             left: 0.001,
             life: 0.001,
-            pos: at,
-            vel: out,
+            pos: at.into(),
+            vel: out.into(),
             size0: 0.022,
             size1: 0.022,
             c0: c,
@@ -270,7 +270,7 @@ pub fn spawned(fx: &mut Fx, feet: Vec3) {
     fx.glow.spawn(Particle {
         left: 0.5,
         life: 0.5,
-        pos: feet + Vec3::Y * 0.05,
+        pos: (feet + Vec3::Y * 0.05).into(),
         size0: 1.2,
         size1: 0.3,
         c0: blue,
@@ -288,8 +288,8 @@ pub fn spawned(fx: &mut Fx, feet: Vec3) {
         fx.glow.spawn(Particle {
             left: life,
             life,
-            pos,
-            vel,
+            pos: pos.into(),
+            vel: vel.into(),
             size0: 0.06,
             size1: 0.01,
             c0: blue,
@@ -326,8 +326,8 @@ pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, c: u16, at: Vec3) {
             fx.glow.spawn(Particle {
                 left: 0.12,
                 life: 0.12,
-                pos: mid + side * u * 1.1 + Vec3::Y * u * 0.4,
-                vel: side * 6.0,
+                pos: (mid + side * u * 1.1 + Vec3::Y * u * 0.4).into(),
+                vel: (side * 6.0).into(),
                 size0: 0.05,
                 size1: 0.02,
                 c0: [2.0, 5.0, 14.0, 1.0],

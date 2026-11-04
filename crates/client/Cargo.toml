@@ -18,6 +18,9 @@ path = "src/main.rs"
 
 [dependencies]
 sim = { path = "../sim" }
+# The particle pool, sprite sheet and recipes with no Bevy in them, vendored
+# from Gates (tools/fx-sync.sh); look/fx is their Bevy half.
+fx = { path = "../fx" }
 proto = { path = "../proto" }
 client-net = { path = "../client-net" }
 # What the client draws with, and nothing it doesn't (no audio or gamepads

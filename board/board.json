@@ -1,6 +1,6 @@
 {
   "game": "oneshot",
-  "about": "The reference board: the art seen with no match running (the Bevy client's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/client.sh).",
+  "about": "The reference board: the art seen with no match running (the Bevy client's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/client.sh). The fx-* views are the fx stage's strips (tools/fx.sh, the fx skill): one effect over a dark and a light card, every frame of it, measured against the plate and the last run.",
   "refs": "refs",
   "private_refs_env": "ELO_REF_DIR",
   "views": [
@@ -202,6 +202,132 @@
         "map=6&eye=-15,1.6,-11.8&look=0,1.5,-9"
       ],
       "png": "traces/chrysalis-3.png",
+      "refs": []
+    },
+    {
+      "id": "fx-hit-bullet-metal",
+      "name": "Effect: a round on metal",
+      "what": "a rifle round on metal on the fx stage: dark card left, light card right",
+      "take": "a white-hot star for a frame, sparks that streak and cool to ember and skitter once, a small grey puff; reads with bloom off (the browser has none)",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/hit-bullet-metal/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-hit-bullet-shield",
+      "name": "Effect: a round on a shield",
+      "what": "a rifle round on a fighter's shield on the fx stage",
+      "take": "a blue-white crack of light, arcs crawling and gold specks thrown off; no dust, no blood: the shield took it",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/hit-bullet-shield/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-hit-sniper-concrete",
+      "name": "Effect: a sniper round on concrete",
+      "what": "a sniper round into a wall on the fx stage",
+      "take": "heavier than a rifle's: more grit and a bigger puff, a few sparks; the mark left on the card",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/hit-sniper-concrete/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-muzzle-rifle",
+      "name": "Effect: a rifle's muzzle",
+      "what": "the rifle's muzzle flash on the fx stage",
+      "take": "a star and a tongue of fire for a frame or two, a breath of grey smoke after; nothing hangs",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/muzzle-rifle/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-grenade",
+      "name": "Effect: a frag going off",
+      "what": "a grenade's blast on the fx stage, framed for 2.2 m",
+      "take": "a flash, an orange fireball that cools to red, sparks thrown wide, then smoke that rises and hangs; the light card shows the smoke's body",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/grenade/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-rocket",
+      "name": "Effect: a rocket going off",
+      "what": "a rocket's blast on the fx stage, framed for 2.4 m",
+      "take": "bigger than the frag: more fire, more smoke, the same order of flash, fire, sparks, smoke",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/rocket/strip.png",
+      "refs": []
+    },
+    {
+      "id": "fx-shield-pop",
+      "name": "Effect: a shield breaking",
+      "what": "a fighter's shield breaking on the fx stage",
+      "take": "the shell bursting: a ring of light and shards of it thrown off; quick",
+      "shoot": [
+        "tools/fx.sh",
+        "hit-bullet-metal",
+        "hit-bullet-shield",
+        "hit-sniper-concrete",
+        "muzzle-rifle",
+        "grenade",
+        "rocket",
+        "shield-pop"
+      ],
+      "png": "traces/fx/shield-pop/strip.png",
       "refs": []
     }
   ]

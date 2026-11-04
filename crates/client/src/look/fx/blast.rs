@@ -50,7 +50,7 @@ fn plasma(fx: &mut Fx, at: Vec3) {
     let green = super::pool::Particle {
         left: 0.25,
         life: 0.25,
-        pos: at,
+        pos: at.into(),
         size0: 1.0,
         size1: 4.0,
         c0: [3.0, 12.0, 4.0, 1.0],
@@ -66,7 +66,7 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         life: 0.35,
         cell: super::atlas::RING,
         orient: super::pool::Orient::Flat,
-        pos: at - Vec3::Y * 0.4,
+        pos: (at - Vec3::Y * 0.4).into(),
         c0: [1.5, 6.0, 2.0, 0.8],
         c1: [0.2, 0.8, 0.3, 0.0],
         ..green
@@ -78,8 +78,8 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         fx.glow.spawn(super::pool::Particle {
             left: life,
             life,
-            pos: at,
-            vel: d * speed,
+            pos: at.into(),
+            vel: (d * speed).into(),
             gravity: 6.0,
             drag: 1.5,
             size0: 0.012,
@@ -114,7 +114,7 @@ fn burst(fx: &mut Fx, at: Vec3) {
         fx.glow.spawn(super::pool::Particle {
             left: 0.12,
             life: 0.12,
-            pos: at,
+            pos: at.into(),
             size0: 0.6,
             size1: 1.3,
             c0: super::table::PINK,
