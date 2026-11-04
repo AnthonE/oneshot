@@ -1078,6 +1078,7 @@ fn expose(
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
     page: Option<Res<front::PageState>>,
+    ear: Res<sound::Ear>,
     mut frames: Local<u32>,
 ) {
     use wasm_bindgen::JsValue;
@@ -1128,6 +1129,13 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // The mixer: clips decoded, still loading, and commands sent it.
+    let (decoded, loading, sent) = ear.stats();
+    set(
+        &o,
+        "sound",
+        js_sys::Array::of3(&decoded.into(), &loading.into(), &sent.into()).into(),
+    );
     // For the page's menu: in a match, a knock out, and the line it gave.
     set(&o, "in_match", matched.into());
     if let Some(p) = page {

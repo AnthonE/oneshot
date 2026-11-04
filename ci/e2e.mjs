@@ -164,6 +164,11 @@ try {
     [`predictions confirmed once steady (${(ratio * 100).toFixed(1)}% of ${counted}, ${fps.toFixed(1)} fps overall)`, ratio >= 0.9],
     ['scored a kill', (s?.kills ?? 0) >= 1],
     [`drew with the WebGL2 module (${s?.gfx}: ${s?.tier})`, s?.gfx === 'webgl2'],
+    // The mixer (sound/mix.rs): the bank decoded (a few milliseconds a
+    // frame, so at SwiftShader's frame rate the last may still be coming),
+    // and the match sent it cues.
+    [`sound: ${s?.sound?.[0]} clips decoded, ${s?.sound?.[1]} loading, ${s?.sound?.[2]} commands`,
+      (s?.sound?.[0] ?? 0) > 100 && (s?.sound?.[1] ?? 99) <= 5 && (s?.sound?.[2] ?? 0) > 30],
   );
 } catch (e) {
   errors.push(String(e));
