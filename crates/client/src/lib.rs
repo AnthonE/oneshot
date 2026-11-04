@@ -14,6 +14,7 @@ pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod pointer;
 pub mod pose;
 pub mod sound;
 
@@ -99,9 +100,10 @@ const AUTO_LANES: [(f32, f32); 6] = [
 #[derive(Resource, Default)]
 pub struct Early(pub Vec<proto::Msg>);
 
-/// Radians per pixel of mouse; zoomed, this much of it.
+/// Radians per pixel of mouse. Scoped, divided by the scope's zoom: the
+/// view narrows by it, so the world moves under the crosshair at one speed
+/// (Gates' `input.rs`).
 const SENS: f32 = 0.0022;
-const ZOOM_SENS: f32 = 0.45;
 
 /// The keys, as the three.js page binds them (the three.js page's input.ts, after
 /// Fireplace's arena). The wheel swaps too.
@@ -217,7 +219,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             .chain(),
     );
     #[cfg(target_arch = "wasm32")]
-    app.add_systems(Update, expose.after(hud::draw));
+    app.add_systems(Update, expose.after(hud::draw))
+        .add_systems(PostUpdate, pointer::follow);
     app.insert_resource(opts);
     if opts.lite {
         app.add_systems(Update, lite);
@@ -278,15 +281,29 @@ fn pump(
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
-    let grabbed = cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None);
+    // The mouse is ours only while held: on the web, the page's lock is the
+    // truth (a lock asked for and not yet granted, or let go behind our
+    // back, turns nothing and fires nothing).
+    let grabbed =
+        cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
     let key = |k: KeyCode| grabbed && (keys.pressed(k) || keys.just_pressed(k));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let dual = link.0.session().core.own().0.dual();
+    let (dual, scope) = {
+        let f = link.0.session().core.own().0;
+        (
+            f.dual(),
+            if f.alive {
+                sim::arms::arm(f.gun().arm).zoom.max(1)
+            } else {
+                1
+            },
+        )
+    };
     look.zoom = button(MouseButton::Right) && !auto.on && !dual;
     if grabbed {
-        let sens = SENS * if look.zoom { ZOOM_SENS } else { 1.0 };
+        let sens = if look.zoom { SENS / scope as f32 } else { SENS };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens).clamp(-max, max);
