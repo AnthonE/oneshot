@@ -44,9 +44,10 @@
 //! - **Smoke and marks** are pooled the same on every rung (`fx::Caps`);
 //!   EFFECTS moves only sparks, tracers and flash lights, which show and
 //!   never hide.
-//! - **Grass** never stands as tall as a crouching fighter's hit box
-//!   (`grass::TUFT_MAX_H`, asserted when the crate compiles), so thinning it
-//!   or drawing it nearer uncovers no one. Ground clutter that could hide a
+//! - **Grass and ground clutter** never stand as tall as a crouching
+//!   fighter's hit box (`grass::TUFT_MAX_H`, `clutter::CLUTTER_MAX_H`,
+//!   asserted when the crate compiles), so thinning them or drawing them
+//!   nearer uncovers no one. Anything on the ground that could hide a
 //!   fighter must not read [`Gfx::cover`]: it is drawn the same for all.
 //! - **The air** is the same haze both ways (`sky::browser_haze`).
 //!
@@ -162,9 +163,10 @@ named!(Aa {
     Taa = "taa",
 });
 
-/// How thick the ground cover is: the grass now, and the ground clutter
-/// that can't hide a fighter when it comes. Each rung draws a share of the
-/// tufts (`grass::LAYER_SHARE`), the same tufts every time.
+/// How thick the ground cover is: the grass and the ground clutter
+/// (`clutter.rs`: pebbles, stones, twigs, dry plants), neither of which can
+/// hide a fighter. Each rung draws a share of the tufts and the pieces
+/// (`grass::LAYER_SHARE`), the same ones every time.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Cover {
     #[default]

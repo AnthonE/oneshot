@@ -157,6 +157,9 @@ pub struct Fx {
     hulls: [hulls::Hull; 16],
     /// Wrecks burning (`blast.rs`).
     burning: [blast::Burn; 4],
+    /// The last blast seen (not heard) this frame, for the grass's shock
+    /// (`foliage::update` takes it).
+    pub shock: Option<Vec3>,
     /// Our own rounds drawn so far (`shots::own`), and which hand drew the
     /// last while two guns are out.
     own_shots: u32,
@@ -338,6 +341,7 @@ pub fn setup(
         was: bodies::Was::default(),
         hulls: [hulls::Hull::default(); 16],
         burning: [blast::Burn::default(); 4],
+        shock: None,
         own_shots: 0,
         own_left: false,
         last_light: Vec::new(),

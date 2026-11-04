@@ -4,8 +4,10 @@
 pub mod bodies;
 pub mod cliffs;
 pub mod cloud_shadow;
+pub mod clutter;
 pub mod deck;
 pub mod fill;
+pub mod foliage;
 pub mod fresnel;
 pub mod fx;
 pub mod gpu;

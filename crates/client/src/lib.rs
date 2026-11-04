@@ -92,6 +92,10 @@ pub enum Screen {
     Settings,
 }
 
+/// Where a hull's wheels are in its frame (+X forward), metres: drawn
+/// there, and pressing the grass there (`look::foliage::Walkers::hull`).
+const WHEELS: [(f32, f32); 4] = [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)];
+
 /// What every hull is made of, made with the first.
 struct HullParts {
     hull: Handle<StandardMaterial>,
@@ -321,6 +325,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     // The boxes' weathering (`look/weathering.rs`).
     .add_plugins(look::weathering::plugin)
+    // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
+    .add_plugins(look::foliage::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     // The sky (look/deck.rs and its layers) under each map's mood.
     .add_plugins(MaterialPlugin::<look::deck::CloudMaterial>::default())
@@ -398,11 +404,17 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::textures::prepare,
             look::textures::mip_models,
             look::rock::dress_masses,
-            level::dress_level,
+            (
+                level::dress_level,
+                look::grass::dress,
+                look::clutter::dress,
+                look::foliage::warm,
+            )
+                .chain(),
             look::grass::cull,
             look::bodies::graph,
-            draw_fighters,
-            draw_vehicles,
+            // What presses the grass is what is drawn (`look/foliage.rs`).
+            (draw_fighters, draw_vehicles, look::foliage::update).chain(),
             fly,
             view,
             look::fx::draw,
@@ -678,20 +690,34 @@ fn draw_fighters(
     mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
     mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
     (mut fx, mut shield_mats, mut shells): ShieldParts,
-    time: Res<Time>,
+    (time, mut walkers): (Res<Time>, ResMut<look::foliage::Walkers>),
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
-    let others = match (core.killcam(now), &posed) {
-        (_, Some(p)) => p.2.fighter.then_some(p.0).into_iter().collect(),
-        (Some(k), _) if !core.own().0.alive => k.bodies,
-        _ => core.others(now),
+    let (others, live) = match (core.killcam(now), &posed) {
+        (_, Some(p)) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
+        (Some(k), _) if !core.own().0.alive => (k.bodies, false),
+        _ => (core.others(now), true),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
     look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
+    // The grass flattens under the feet this client draws on the ground,
+    // ours first: never a kill cam's replay, never a seat.
+    walkers.feet.clear();
+    if live && f.alive && f.body.grounded && f.riding().is_none() {
+        walkers.fighter(Vec3::new(p.x, p.y, p.z));
+    }
+    if live {
+        for d in others
+            .iter()
+            .filter(|d| d.alive && d.grounded && !seats.contains_key(&d.slot))
+        {
+            walkers.fighter(Vec3::new(d.pos.x, d.pos.y, d.pos.z));
+        }
+    }
     look::fx::bodies::watch_own(
         &mut fx,
         core.slot,
@@ -769,6 +795,7 @@ fn draw_vehicles(
     mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
+    mut walkers: ResMut<look::foliage::Walkers>,
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
@@ -784,6 +811,7 @@ fn draw_vehicles(
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
+        walkers.hull(p, yaw, &WHEELS);
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -826,7 +854,7 @@ fn draw_vehicles(
                             MeshMaterial3d(dark.clone()),
                             Transform::from_xyz(-0.9, 1.55, 0.0),
                         ));
-                        for (x, z) in [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)] {
+                        for (x, z) in WHEELS {
                             c.spawn((
                                 Mesh3d(wheel.clone()),
                                 MeshMaterial3d(dark.clone()),

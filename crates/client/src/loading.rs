@@ -28,7 +28,7 @@ use bevy::asset::LoadState;
 use bevy::prelude::*;
 
 use crate::front::{Front, InMatch, LinkGen};
-use crate::level::{BoxLook, Dressed, GrassPart, GroundMesh, LevelPart};
+use crate::level::{BoxLook, ClutterPart, Dressed, GrassPart, GroundMesh, LevelPart};
 use crate::look::pipelines::PipelineBacklog;
 use crate::look::prewarm::Warming;
 use crate::{ui, LinkRes};
@@ -183,8 +183,15 @@ fn models_in(models: Option<&crate::look::guns::Models>, assets: &AssetServer) -
 }
 
 /// A level's parts that wait for their textures, and whether each has them.
-type Parts<'w, 's> =
-    Query<'w, 's, Has<Dressed>, (With<LevelPart>, Or<(With<GroundMesh>, With<BoxLook>, With<GrassPart>)>)>;
+type Parts<'w, 's> = Query<
+    'w,
+    's,
+    Has<Dressed>,
+    (
+        With<LevelPart>,
+        Or<(With<GroundMesh>, With<BoxLook>, With<GrassPart>, With<ClutterPart>)>,
+    ),
+>;
 
 /// This frame's counts, and whether they add up to a level.
 #[allow(clippy::too_many_arguments)]

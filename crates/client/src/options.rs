@@ -394,7 +394,7 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
         },
     );
     pane.spawn(ui::group("WORLD"));
-    number(pane, s, Knob::Cover, "GRASS", "how thick");
+    number(pane, s, Knob::Cover, "GRASS", "grass, stones, dry scrub");
     number(pane, s, Knob::CoverDistance, "GRASS DISTANCE", "how far out");
     number(pane, s, Knob::Fx, "EFFECTS", "sparks, tracers, flash lights");
     pane.spawn(ui::group("ON THIS MACHINE"));
@@ -411,7 +411,7 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
     note(
         pane,
         "No row shows anyone another hides: the shade reaches across the map on every rung, smoke and marks are \
-         the same for all, and grass never stands as tall as a crouching fighter.",
+         the same for all, and grass and stones never stand as tall as a crouching fighter.",
     );
 }
 

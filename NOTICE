@@ -37,9 +37,13 @@ and sky_deck.wgsl as cloud.wgsl, cloud_prepass.wgsl, sky_fog.wgsl,
 moon.wgsl, stars.wgsl, rain.wgsl, rainbow.wgsl, cloud_shadow.wgsl), the
 level's surfaces (weathering.rs with assets/shaders/weathering.wgsl,
 fresnel.rs, cliff_skin.rs and cliffs.rs as look/cliffs.rs, boulders.rs and
-sim-core's face.rs facet noise as look/rock.rs), and the ground and grass
-modules as they arrive), and into tools/glb from Gates'
-crates/client/src/webassets.rs, under the MIT licence:
+sim-core's face.rs facet noise as look/rock.rs), the ground cover
+(foliage.rs with assets/shaders/foliage.wgsl, foliage_prepass.wgsl,
+foliage_common.wgsl and alpha_cut.wgsl; clutter.rs's tuft as
+look/grass.rs; clutter.rs's stones and litter and plants.rs's dead scrub
+as look/clutter.rs), and the ground modules as they arrive), and into
+tools/glb from Gates' crates/client/src/webassets.rs, under the MIT
+licence:
 
     Copyright (c) 2026 MoreRight DAO
 

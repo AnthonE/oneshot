@@ -37,9 +37,13 @@ pub struct BoxLook(pub u8);
 #[derive(Component)]
 pub struct Dressed;
 
-/// A block of grass, waiting for its atlas.
+/// A block of grass, waiting for its atlas (`look/grass.rs`).
 #[derive(Component)]
 pub struct GrassPart;
+
+/// A block of ground clutter, waiting for its material (`look/clutter.rs`).
+#[derive(Component)]
+pub struct ClutterPart;
 
 /// A material's roughness over the photograph's, which averages about 0.6.
 const ROUGH_SCALE: f32 = 1.5;
@@ -283,7 +287,8 @@ type Undressed = (Without<Dressed>, Without<Mass>);
 
 /// The level's ground and boxes in their textures, once those are ready:
 /// the ground (and its rock skin) in one splat material, every textured
-/// box weathered (`look/weathering.rs`).
+/// box weathered (`look/weathering.rs`). The grass and the clutter dress
+/// themselves (`look/grass.rs`, `look/clutter.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn dress_level(
     mut commands: Commands,
@@ -293,7 +298,6 @@ pub fn dress_level(
     mut level_mats: ResMut<Assets<weathering::LevelMaterial>>,
     ground: Query<Entity, (With<GroundMesh>, Without<Dressed>)>,
     boxes: Query<(Entity, &BoxLook, Option<&Block>), Undressed>,
-    grass: Query<Entity, (With<GrassPart>, Without<Dressed>)>,
     mood: Res<crate::look::mood::MoodNow>,
 ) {
     // The rain's wet on everything it falls on (`look/rain.rs`); none
@@ -303,22 +307,6 @@ pub fn dress_level(
     let Some((albedo, normal)) = tex.ground.clone() else {
         return;
     };
-    if let Some(atlas) = tex.grass.clone() {
-        if !grass.is_empty() {
-            let m = mats.add(StandardMaterial {
-                base_color_texture: Some(atlas),
-                alpha_mode: AlphaMode::Mask(0.5),
-                double_sided: true,
-                cull_mode: None,
-                perceptual_roughness: 0.9,
-                reflectance: fresnel::DIELECTRIC,
-                ..default()
-            });
-            for e in grass.iter() {
-                commands.entity(e).insert((MeshMaterial3d(m.clone()), Dressed));
-            }
-        }
-    }
     // One material for the ground and the skin over it, so the two are one
     // surface where they meet and the deck's shadows cross both.
     let mut ground_mat = None;
@@ -442,12 +430,18 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize) -> (f32, [f32; 4]
     let dx = (h((i + 1).min(nx - 1), j) - h(i.saturating_sub(1), j)) / (2.0 * t.cell);
     let dz = (h(i, (j + 1).min(nz - 1)) - h(i, j.saturating_sub(1))) / (2.0 * t.cell);
     let slope = (dx * dx + dz * dz).sqrt();
-    let y = h(i, j);
+    (slope, splat(slope, h(i, j)))
+}
+
+/// The splat weights (sand, grass, gravel, rock) of ground at height `y`
+/// with slope `slope`: [`ground_point`]'s rule anywhere, which the ground
+/// clutter scatters by (`look/clutter.rs`).
+pub(crate) fn splat(slope: f32, y: f32) -> [f32; 4] {
     let rock = ((slope - 0.35) / 0.4).clamp(0.0, 1.0);
     let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
     let grass = ((y - 1.0) / 1.5).clamp(0.0, 1.0) * (1.0 - rock) * (1.0 - gravel);
     let sand = (1.0 - rock - gravel - grass).max(0.0);
-    (slope, [sand, grass, gravel, rock])
+    [sand, grass, gravel, rock]
 }
 
 /// The ground's vertex normals: each triangle's (the sim's split) weighted
@@ -749,11 +743,38 @@ pub fn build(
     }
     match &def.terrain {
         Some(t) => {
-            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, id as u32 * 7919 + 1) {
+            // The ground cover, from the map's seed: the grass off the pads
+            // and the launchers, the clutter off those, the spawns, the
+            // vehicles' bays and the walls (`look/grass.rs`,
+            // `look/clutter.rs`). Neither casts a shadow (a rung without
+            // them would light a fighter's feet they shade).
+            let seed = id as u32 * 7919 + 1;
+            let clear = crate::look::grass::Clear::pads(&map);
+            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear) {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
-                    crate::look::grass::GrassBlock { centre, layer },
+                    crate::look::grass::CoverBlock {
+                        centre,
+                        layer,
+                        reach: crate::look::grass::BLOCK_REACH,
+                    },
+                    Mesh3d(meshes.add(mesh)),
+                    Transform::default(),
+                    Visibility::Hidden,
+                    bevy::light::NotShadowCaster,
+                ));
+            }
+            let clear = crate::look::clutter::clear(&map, t);
+            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear) {
+                commands.spawn((
+                    LevelPart,
+                    ClutterPart,
+                    crate::look::grass::CoverBlock {
+                        centre,
+                        layer,
+                        reach: crate::look::clutter::BLOCK_REACH,
+                    },
                     Mesh3d(meshes.add(mesh)),
                     Transform::default(),
                     Visibility::Hidden,

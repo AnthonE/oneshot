@@ -156,6 +156,8 @@ pub fn wreck(fx: &mut Fx, scene: &Scene, at: Vec3) {
 }
 
 fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
+    // Its shock through the grass and the dry scrub (`foliage.rs`).
+    fx.shock = Some(at);
     let dust = if scene.map.terrain.is_some() {
         Matter::Dirt
     } else {
