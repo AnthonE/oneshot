@@ -30,7 +30,14 @@ struct GroundParams {
     rock_c: vec4<f32>,
     rock_d: vec4<f32>,
     rock_e: vec4<f32>,
+    sea: vec4<f32>,
 }
+
+// Wet ground's roughness (dry is the material's), and how far the wet
+// line wanders (m) over its noise's wavelength (m).
+const WET_ROUGHNESS: f32 = 0.35;
+const WET_WANDER_M: f32 = 0.25;
+const WET_WANDER_WAVE_M: f32 = 3.0;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var albedo_tex: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var albedo_smp: sampler;
@@ -473,10 +480,19 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     //
     // Each photograph times the map's own soil, the rock's by its blocks'
     // shade.
-    let c = a0.rgb * ground.tint[0].rgb * w.x
+    var c = a0.rgb * ground.tint[0].rgb * w.x
         + a1.rgb * ground.tint[1].rgb * w.y
         + a2.rgb * ground.tint[2].rgb * w.z
         + a3.rgb * ground.tint[3].rgb * (w.w * rock_shade);
+
+    // The swash: from under the water to `sea.y` above it the ground is
+    // wet, darker and glossy, dry again `sea.z` higher, the line wandering
+    // a little so it is not a contour.
+    let wander = (value3(in.world_position.xyz / WET_WANDER_WAVE_M) - 0.5) * 2.0 * WET_WANDER_M;
+    let wet_top = ground.sea.x + ground.sea.y + wander;
+    let wet = 1.0 - smoothstep(wet_top, wet_top + ground.sea.z, in.world_position.y);
+    c = c * (1.0 - ground.sea.w * wet);
+    pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, WET_ROUGHNESS, wet);
 
     // The relief, blended as gradients. The planar taps' share is laid in
     // the ground's own frame (u along world x, the image's up toward -z,

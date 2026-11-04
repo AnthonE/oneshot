@@ -12,9 +12,12 @@ use sim::terrain::HEIGHT_Q;
 #[derive(Component)]
 pub struct LevelPart;
 
-/// The ground, waiting for its textured material (look::ground).
+/// The ground, waiting for its textured material (look::ground), with the
+/// sea's height for its wet band (`f32::NEG_INFINITY`: no sea).
 #[derive(Component)]
-pub struct GroundMesh;
+pub struct GroundMesh {
+    pub sea: f32,
+}
 
 /// A box by its look, waiting for its textured material.
 #[derive(Component)]
@@ -43,6 +46,10 @@ const HIDDEN: u8 = 19;
 const RIB: u8 = 22;
 /// Rock: drawn as weathered stone (look::rock), never as a box.
 const ROCK: u8 = 6;
+/// A tree's looks: grown by look::trees at the solid's foot, never drawn
+/// as a cylinder.
+const PALM: u8 = 23;
+const DEAD_TREE: u8 = 24;
 /// The hull's plates repeat over this many metres.
 const HULL_TILE_M: f32 = 8.0;
 
@@ -304,7 +311,7 @@ pub fn dress_level(
     tex: Res<crate::look::textures::Textures>,
     mut ground_mats: ResMut<Assets<crate::look::ground::GroundMaterial>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    ground: Query<Entity, (With<GroundMesh>, Without<Dressed>)>,
+    ground: Query<(Entity, &GroundMesh), Without<Dressed>>,
     boxes: Query<(Entity, &BoxLook), Without<Dressed>>,
     grass: Query<Entity, (With<GrassPart>, Without<Dressed>)>,
 ) {
@@ -326,8 +333,8 @@ pub fn dress_level(
             }
         }
     }
-    for e in ground.iter() {
-        let m = ground_mats.add(crate::look::ground::material(albedo.clone(), normal.clone()));
+    for (e, g) in ground.iter() {
+        let m = ground_mats.add(crate::look::ground::material(albedo.clone(), normal.clone(), g.sea));
         commands
             .entity(e)
             .remove::<MeshMaterial3d<StandardMaterial>>()
@@ -457,8 +464,18 @@ fn look(i: u8) -> (Color, f32, f32) {
 }
 
 /// The ground is rock from this slope (rise over run), fully by the next:
-/// the scree banks read as stone, the hills as soil.
-const ROCK_SLOPE: (f32, f32) = (0.25, 0.55);
+/// the scree banks turn to stone up their middle; from tan 0.9 the ground
+/// shader's per-pixel cliff veto (look::ground::CLIFF_TAN_LO/HI) owns the
+/// edge, so it wanders with its noise instead of stepping per vertex.
+const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
+/// A creek bed is gravel: ground under the floor (below `CREEK_Y`, fully
+/// half a metre lower) that also lies in a basin, under the mean of its
+/// neighbours `CREEK_STENCIL_M` off along an axis by `CREEK_BASIN`'s first
+/// metres (fully by its second). A beach sloping to the sea is under the
+/// floor too, but no basin, so it stays sand.
+const CREEK_Y: f32 = -0.15;
+const CREEK_STENCIL_M: f32 = 12.0;
+const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
 
 /// The ground mesh: the sim's vertices and its split of each cell (low
 /// corner to high corner), with its splat weights in the vertex colour
@@ -469,6 +486,7 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
     let mut pos = Vec::with_capacity(nx * nz);
     let mut col = Vec::with_capacity(nx * nz);
+    let s = ((CREEK_STENCIL_M / t.cell).round() as usize).max(1);
     for j in 0..nz {
         for i in 0..nx {
             pos.push([t.x0 + i as f32 * t.cell, h(i, j), t.z0 + j as f32 * t.cell]);
@@ -477,7 +495,10 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
             let slope = (dx * dx + dz * dz).sqrt();
             let y = h(i, j);
             let rock = ((slope - ROCK_SLOPE.0) / (ROCK_SLOPE.1 - ROCK_SLOPE.0)).clamp(0.0, 1.0);
-            let gravel = ((-y - 0.15) * 2.0).clamp(0.0, 1.0) * (1.0 - rock);
+            let along_x = 0.5 * (h((i + s).min(nx - 1), j) + h(i.saturating_sub(s), j)) - y;
+            let along_z = 0.5 * (h(i, (j + s).min(nz - 1)) + h(i, j.saturating_sub(s))) - y;
+            let basin = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
+            let gravel = ((CREEK_Y - y) * 2.0).clamp(0.0, 1.0) * basin * (1.0 - rock);
             let patch = crate::look::grass::patch(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
             let grass = crate::look::grass::by_height(y) * patch * (1.0 - rock) * (1.0 - gravel);
             let sand = (1.0 - rock - gravel - grass).max(0.0);
@@ -503,10 +524,14 @@ fn terrain_mesh(t: &sim::terrain::TerrainDef) -> Mesh {
 }
 
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
+    water_mats: &mut Assets<crate::look::water::WaterMaterial>,
+    images: &mut Assets<Image>,
+    cards: &crate::look::trees::TreeCards,
     old: &Query<Entity, With<LevelPart>>,
     id: u8,
 ) {
@@ -649,6 +674,27 @@ pub fn build(
         if l == HIDDEN {
             continue;
         }
+        let kind = match l {
+            PALM => Some(crate::look::trees::Kind::Palm),
+            DEAD_TREE => Some(crate::look::trees::Kind::Dead),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            let sim::solid::Shape::Round { x, z, r } = sol.shape else {
+                continue;
+            };
+            // Each tree its own, from where it stands (a mirrored twin differs).
+            let seed = (x * 31.0 + z * 7.0 + sol.y0) as i32 as u32;
+            for (mesh, mat, at) in crate::look::trees::tree(kind, seed, r, sol.y1 - sol.y0, cards, meshes, mats) {
+                commands.spawn((
+                    LevelPart,
+                    Mesh3d(mesh),
+                    MeshMaterial3d(mat),
+                    Transform::from_xyz(x, sol.y0, z).mul_transform(at),
+                ));
+            }
+            continue;
+        }
         let (color, roughness, metallic) = look(l);
         let tile = dress(l).map_or(2.0, |d| d.1);
         let glow = strip(l);
@@ -740,7 +786,7 @@ pub fn build(
             }
             commands.spawn((
                 LevelPart,
-                GroundMesh,
+                GroundMesh { sea: map.light.sea },
                 Mesh3d(meshes.add(terrain_mesh(t))),
                 MeshMaterial3d(mats.add(StandardMaterial {
                     base_color: Color::srgb(0.75, 0.62, 0.48),
@@ -749,6 +795,9 @@ pub fn build(
                 })),
                 Transform::default(),
             ));
+            if map.light.sea.is_finite() {
+                crate::look::water::spawn(commands, meshes, water_mats, images, t, map.light.sea);
+            }
         }
         None => {
             // The floor as a slab whose top is y = 0, textured in world

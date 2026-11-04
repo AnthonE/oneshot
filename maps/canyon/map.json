@@ -2,7 +2,7 @@
   "id": 3,
   "name": "Dry Fork",
   "about": "a red-rock gulch, 300 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
-  "bounds": [-140, 160, -78, 78],
+  "bounds": [-140, 150, -78, 78],
   "mirror": "x",
   "light": { "sea": -6 },
   "terrain": {
@@ -24,7 +24,7 @@
       "mesa": { "rise": 16, "over": 30 },
       "crags": { "h": 6, "wave": 22, "from": 8, "over": 6 },
       "strata": { "h": 3.1, "bed": 8, "at": 5, "half": 7 },
-      "sea": { "drops": [[14, 115, 45], [4, 160, 60]], "walls": [140, 60], "terrace": [8, 0.25, 105, 30] }
+      "sea": { "drops": [[8, 115, 45], [10, 150, 60]], "walls": [140, 60], "terrace": [6, 0.25, 105, 30] }
     },
     "shapes": [
       { "hill": [0, 0], "r": 32, "h": 4 },

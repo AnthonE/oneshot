@@ -497,6 +497,8 @@ fn rebuild(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
+    cards: Res<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<
         (
@@ -512,7 +514,16 @@ fn rebuild(
         return;
     }
     built.0 = s.welcomes;
-    level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
+    level::build(
+        &mut commands,
+        &mut meshes,
+        &mut mats,
+        &mut water_mats,
+        &mut images,
+        &cards,
+        &old,
+        s.map_id,
+    );
     if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {

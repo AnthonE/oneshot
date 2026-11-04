@@ -77,6 +77,10 @@ pub struct GroundParams {
     /// of the lean a gentle slope keeps, z/w = `sin(tilt)` where the rest of
     /// it starts / is whole.
     pub rock_e: Vec4,
+    /// x = the sea's height (far below the map when there is none), y =
+    /// how far above it the ground is wet, z = over how much further it
+    /// dries, w = how dark wet ground is against dry.
+    pub sea: Vec4,
 }
 
 /// Dry Fork's soils over Gates' photographs: warm desert sand, dry grass,
@@ -85,7 +89,7 @@ pub const TINT: [Vec4; 4] = [
     Vec4::new(1.18, 0.96, 0.74, 1.0),
     Vec4::new(1.05, 0.98, 0.8, 1.0),
     Vec4::new(1.1, 0.9, 0.72, 1.0),
-    Vec4::new(1.12, 0.66, 0.48, 1.0),
+    Vec4::new(1.0, 0.54, 0.38, 1.0),
 ];
 
 // --- The cliff, per pixel ---------------------------------------------------
@@ -173,7 +177,7 @@ pub const ROCK_FINE_M: f32 = 2.2;
 pub const ROCK_TILT: f32 = 0.6;
 pub const ROCK_FINE_TILT: f32 = 0.25;
 /// Peak per-block departure of the face's value from its mean.
-pub const ROCK_SHADE: f32 = 0.14;
+pub const ROCK_SHADE: f32 = 0.09;
 /// Wavelength of the weathering patches, metres, and their peak departure.
 pub const ROCK_WEATHER_M: f32 = 14.0;
 pub const ROCK_WEATHER: f32 = 0.08;
@@ -210,6 +214,15 @@ pub const ROCK_FLAT_LEAN: f32 = 0.35;
 pub const ROCK_LEAN_ON: f32 = 0.35;
 pub const ROCK_LEAN_FULL: f32 = 0.7;
 
+/// Where there is no sea: a height no ground reaches, so the wet band
+/// never shows (never `NEG_INFINITY`: the shader subtracts it).
+pub const NO_SEA: f32 = -1.0e5;
+/// The swash: ground is wet from the water to this far above it, and dry
+/// again `WET_FADE_M` higher; wet ground is darker by `WET_DARK`.
+pub const WET_M: f32 = 0.5;
+pub const WET_FADE_M: f32 = 0.6;
+pub const WET_DARK: f32 = 0.42;
+
 impl Default for GroundParams {
     /// Dry Fork's: its soils over the sets' sizes, and the numbers above.
     fn default() -> Self {
@@ -224,6 +237,7 @@ impl Default for GroundParams {
             rock_c: Vec4::new(ROCK_CRACK_SHARE, ROCK_CRACK_W, ROCK_CRACK_DARK, ROCK_STREAK),
             rock_d: Vec4::new(ROCK_STREAK_W_M, ROCK_STREAK_H_M, ROCK_FACE_ON, ROCK_FACE_FULL),
             rock_e: Vec4::new(ROCK_SEAM, ROCK_FLAT_LEAN, ROCK_LEAN_ON, ROCK_LEAN_FULL),
+            sea: Vec4::new(NO_SEA, WET_M, WET_FADE_M, WET_DARK),
         }
     }
 }
@@ -234,17 +248,17 @@ impl MaterialExtension for Ground {
     }
 }
 
-pub fn material(albedo: Handle<Image>, normal: Handle<Image>) -> GroundMaterial {
+/// The ground's material over its photographs, wet up from the sea at
+/// `sea_y` (the map's `light.sea`; not finite means no sea).
+pub fn material(albedo: Handle<Image>, normal: Handle<Image>, sea_y: f32) -> GroundMaterial {
+    let mut params = GroundParams::default();
+    params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,
             ..default()
         },
-        extension: Ground {
-            albedo,
-            normal,
-            params: GroundParams::default(),
-        },
+        extension: Ground { albedo, normal, params },
     }
 }
 

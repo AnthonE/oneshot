@@ -50,8 +50,10 @@ pub const CULL_M: f32 = 1.2;
 /// than the core, so the wave weights fade rather than step at the join.
 pub const SKIRT_FROM_M: f32 = 2.0;
 pub const SKIRT_RATIO: f32 = 1.7;
-/// How far past the terrain the skirt reaches: the camera's far plane.
-pub const SKIRT_REACH_M: f32 = super::rig::FAR_M;
+/// How far past the terrain the skirt reaches: to the horizon from any
+/// eye in play (from 14 m up, a sea ending at 1 km leaves a band of the
+/// planet under the sky; at 5 km the two meet within a pixel).
+pub const SKIRT_REACH_M: f32 = 5_000.0;
 /// The water column a skirt vertex is given, metres: deep by fiat, past
 /// where any curve here still moves (`water.wgsl`'s `DEEP_M`).
 pub const DEEP_M: f32 = 64.0;
@@ -224,7 +226,7 @@ pub fn water_f0() -> f32 {
 /// narrowed so a wading shelf keeps clear water past its surf), and
 /// where it is thickest: offshore of the waterline, so the brightest
 /// thing on the sea is not the polygon edge where it meets the sand.
-pub const FOAM_DEPTH_M: f32 = 2.0;
+pub const FOAM_DEPTH_M: f32 = 1.4;
 pub const FOAM_PEAK_M: f32 = 0.60;
 /// Shore slope (rise over run) at which the wash is full, and what a flat
 /// shore still gets.

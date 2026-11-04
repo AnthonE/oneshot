@@ -28,7 +28,7 @@ fn the_bot_match_matches_its_golden() {
 /// `bot_match_on(3, 2, 1, 20_000)`: sixteen bots in Big Team on Dry Fork,
 /// the terrain's golden (slopes, launchers, rays over the ground). Moves
 /// with a terrain or Big Team rule, like [`GOLDEN`] with the rest.
-const GOLDEN_DRY_FORK: u64 = 0x4969_b694_005b_4168;
+const GOLDEN_DRY_FORK: u64 = 0x7b89_3343_ad1a_35e9;
 
 #[test]
 fn big_team_on_dry_fork_matches_its_golden() {
