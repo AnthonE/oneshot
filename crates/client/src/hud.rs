@@ -244,7 +244,7 @@ pub fn setup(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Percent(50.0),
-                top: Val::Percent(22.0),
+                top: Val::Percent(37.0),
                 width: Val::Px(520.0),
                 margin: UiRect::left(Val::Px(-260.0)),
                 padding: UiRect::all(Val::Px(16.0)),
