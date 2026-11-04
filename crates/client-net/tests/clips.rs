@@ -70,7 +70,7 @@ fn wire(tick: u32) -> Vec<u8> {
 }
 
 /// A live session `secs` into a match that began at tick `t0`, snapshots
-/// every two ticks, a seat changed halfway.
+/// every two ticks, a seat changed a quarter of the way in.
 fn live(t0: u32, secs: f64) -> (Session, u32) {
     let mut s = Session::new();
     s.on_msg(welcome(t0));
@@ -81,7 +81,7 @@ fn live(t0: u32, secs: f64) -> (Session, u32) {
     for k in 1..=n {
         tick = t0 + 2 * k;
         let at = k as f64 * 2.0 * TICK_MS;
-        if k == n / 2 {
+        if k == n / 4 {
             s.on_msg(seat(1, "renamed"));
         }
         s.on_datagram(at, &wire(tick));
@@ -106,7 +106,11 @@ fn a_clip_cut_mid_stream_replays_every_snapshot_into_a_watcher() {
     let Some(Msg::Welcome { tick, .. }) = t.welcome() else {
         panic!("no welcome");
     };
-    assert!(tick > t0 + 128 * 20, "the welcome is re-keyed to the cut: {tick}");
+    // The cut is the start of the segment that holds the ask and its lead:
+    // 37.5 s in, 9 s back is in the second, so 15 s after the welcome, and
+    // after the seat changed (9.4 s).
+    let seg_ticks = (SEG_MS / TICK_MS) as u32;
+    assert!(tick >= t0 + seg_ticks, "the welcome is re-keyed to the cut: {tick}");
     let opening: Vec<Msg> = t
         .entries
         .iter()
