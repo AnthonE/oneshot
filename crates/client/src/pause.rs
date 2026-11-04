@@ -1,5 +1,5 @@
 //! The Esc menu, after Gates' `client/src/render/pause.rs` (MIT): Resume,
-//! Settings, Leave. The match goes on underneath (it's everyone's): the
+//! Settings, Report a bug (a browser: the page's form), Leave. The match goes on underneath (it's everyone's): the
 //! cursor is free, so the controls send nothing (`pump`'s grab gate) while
 //! the session keeps running. Esc resumes; so does a number or a click.
 
@@ -17,10 +17,22 @@ struct PauseRoot;
 enum Verb {
     Resume,
     Settings,
+    /// The page's report form (a browser has a text box; the desktop's
+    /// crashes report themselves, `main.rs`).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Report,
     Leave,
 }
 
-const VERBS: [(Verb, &str); 3] = [
+#[cfg(target_arch = "wasm32")]
+const VERBS: &[(Verb, &str)] = &[
+    (Verb::Resume, "Resume"),
+    (Verb::Settings, "Settings"),
+    (Verb::Report, "Report a bug"),
+    (Verb::Leave, "Leave the match"),
+];
+#[cfg(not(target_arch = "wasm32"))]
+const VERBS: &[(Verb, &str)] = &[
     (Verb::Resume, "Resume"),
     (Verb::Settings, "Settings"),
     (Verb::Leave, "Leave the match"),
@@ -111,8 +123,9 @@ fn choose(
         .iter()
         .find(|(i, _)| **i == Interaction::Pressed)
         .map(|(_, v)| *v);
-    let digit = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3]
+    let digit = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4]
         .iter()
+        .take(VERBS.len())
         .position(|k| keys.just_pressed(*k))
         .map(|i| VERBS[i].0);
     let esc = keys.just_pressed(KeyCode::Escape).then_some(Verb::Resume);
@@ -132,6 +145,18 @@ fn choose(
             next.set(Screen::Playing);
         }
         Verb::Settings => next.set(Screen::Settings),
+        Verb::Report =>
+        {
+            #[cfg(target_arch = "wasm32")]
+            if let Some(w) = web_sys::window() {
+                use wasm_bindgen::JsCast;
+                if let Ok(f) = js_sys::Reflect::get(&w, &"oneshotReportOpen".into()) {
+                    if let Some(f) = f.dyn_ref::<js_sys::Function>() {
+                        let _ = f.call0(&wasm_bindgen::JsValue::NULL);
+                    }
+                }
+            }
+        }
         Verb::Leave => {
             link.0.leave();
             left.0 = true;

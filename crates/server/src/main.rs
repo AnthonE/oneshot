@@ -3,7 +3,7 @@
 //! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
-//! [--elo-key server.pem --elo-key-id eu-1] [--replays dir]
+//! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900]
 //! [--nonce-key file] [--live-file file]`
@@ -73,6 +73,7 @@ fn main() {
             "--elo-key" => elo_key = Some(val()),
             "--elo-key-id" => elo_key_id = Some(val()),
             "--replays" => cfg.replays = Some(val().into()),
+            "--bugs" => cfg.bugs = Some(val().into()),
             "--public-addr" => cfg.public_addr = Some(val()),
             "--allow-origin" => cfg.allow_origins.push(val().trim_end_matches('/').to_string()),
             "--capacity" => cfg.capacity = val().parse().unwrap_or_else(|_| die("--capacity is a count")),

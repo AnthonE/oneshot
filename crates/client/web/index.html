@@ -38,6 +38,19 @@
         display: flex; gap: 14px; align-items: center; padding: 12px 16px; border-radius: 8px; background: #2a1414f2;
         border: 1px solid #ff6a5a66; color: #f4e9e7; font: 15px Aileron, system-ui, sans-serif; }
       #stopped button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #e8b931; color: #111; cursor: pointer; }
+      #report { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+        background: #0009; padding: 16px; box-sizing: border-box; font: 15px Aileron, system-ui, sans-serif; color: #e9eef5; }
+      #report[hidden] { display: none; }
+      #report form { width: min(520px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 10px;
+        background: #141b24f5; border: 1px solid #fff2; }
+      #report h2 { margin: 0; font: 400 28px Unitblock, system-ui, sans-serif; letter-spacing: 2px; }
+      #report textarea { font: inherit; min-height: 140px; resize: vertical; padding: 10px; border-radius: 6px; border: 1px solid #fff3;
+        background: #0b0f14; color: inherit; box-sizing: border-box; width: 100%; }
+      #report .row { display: flex; gap: 10px; justify-content: flex-end; }
+      #report button { font: inherit; font-weight: 700; padding: 9px 16px; border-radius: 6px; border: 0; background: #e8b931; color: #111; cursor: pointer; }
+      #report button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
+      #report small { opacity: 0.65; }
+      #menu a.small { font-size: 13px; opacity: 0.6; color: inherit; }
       #dl { width: min(360px, 90vw); font-size: 14px; opacity: 0.85; }
       #dl .bar { height: 6px; border-radius: 3px; background: #fff2; overflow: hidden; margin-bottom: 6px; }
       #dl .bar i { display: block; height: 100%; width: 0; background: #e8b931; transition: width 0.12s linear; }
@@ -46,6 +59,15 @@
   <body>
     <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
     <div id="stopped" hidden><span id="stopline"></span><button onclick="location.reload()">Reload</button></div>
+    <div id="report" hidden>
+      <form id="reportform">
+        <h2>REPORT A BUG</h2>
+        <textarea id="reporttext" maxlength="4000" placeholder="What happened, and what you expected. Where on the map, if it matters."></textarea>
+        <small>Sent with it: the game's build, your browser and graphics card, and this match's map, tick and net counts. Not your name or address.</small>
+        <span id="reportline"></span>
+        <div class="row"><button type="button" class="quiet" id="reportcancel">Cancel</button><button type="submit" id="reportsend">Send</button></div>
+      </form>
+    </div>
     <div id="menu">
       <h1>ONESHOT</h1>
       <p>1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
@@ -74,6 +96,7 @@
       <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
         R reload · 1, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · N net graph<br />
         Esc in a match: the menu, and the settings (keys, mouse speed, field of view, volume)</div>
+      <a href="#" id="reportlink" class="small">Report a bug</a>
     </div>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, sign-in is hidden and the bot is still there. -->
@@ -97,10 +120,84 @@
         bar.hidden = false;
         try { document.exitPointerLock(); } catch { /* not locked */ }
       };
-      window.oneshotStopped = (msg) => stopped(
-        /webgl2|unable to find a gpu|no suitable adapter|webgl context/i.test(String(msg))
-          ? "This browser wouldn't give the game WebGL2. Turn on hardware acceleration (or try another browser), then reload."
-          : 'The game stopped. Reload the page to play again.');
+      // Reports (crates/server/src/bugs.rs) go to the game's own origin,
+      // known once origin.json is read; a crash before that waits for it.
+      let reportTo = null, build = {}, crash = null, crashSent = false;
+      const gpu = () => {
+        try {
+          const g = document.createElement('canvas').getContext('webgl2');
+          const x = g && g.getExtension('WEBGL_debug_renderer_info');
+          return x ? String(g.getParameter(x.UNMASKED_RENDERER_WEBGL)) : (g ? 'webgl2' : 'none');
+        } catch { return ''; }
+      };
+      const reportDoc = (kind, text) => {
+        const s = window.__oneshot || {};
+        return {
+          kind, text: String(text).slice(0, 4000),
+          build: { commit: build.commit || '', wasm_bytes: build.wasm_bytes || 0, proto: s.proto ?? null },
+          where: { ua: navigator.userAgent, gpu: gpu(), screen: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, page: location.pathname },
+          game: {
+            connected: !!s.connected, match: s.match || '', map: s.map ?? null, tick: s.tick ?? null,
+            stats: s.stats ? Array.from(s.stats) : [], frames: s.frames ?? 0, ended: !!s.ended, reason: s.reason || '',
+          },
+        };
+      };
+      // A crash goes as a beacon (it survives the page going); a player's
+      // report as a request, so the page can say it went.
+      const sendReport = async (doc, beacon) => {
+        if (reportTo === null) return 0;
+        const url = `${reportTo}bugs`, body = JSON.stringify(doc);
+        if (beacon && navigator.sendBeacon) return navigator.sendBeacon(url, body) ? 204 : 0;
+        try {
+          return (await fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain' }, keepalive: true })).status;
+        } catch { return 0; }
+      };
+      const sendCrash = () => {
+        if (crash && !crashSent && reportTo !== null) { crashSent = true; sendReport(crash, true); }
+      };
+      // `said` is the panic's own words; `line` all of it, where included.
+      window.oneshotStopped = (said, line) => {
+        if (!crash) { crash = reportDoc('crash', line || said); sendCrash(); }
+        stopped(
+          /webgl2|unable to find a gpu|no suitable adapter|webgl context/i.test(String(said))
+            ? "This browser wouldn't give the game WebGL2. Turn on hardware acceleration (or try another browser), then reload."
+            : 'The game stopped. Reload the page to play again.');
+      };
+      // A player's report, from the page's menu or the game's Esc menu.
+      {
+        const box = document.getElementById('report'), text = document.getElementById('reporttext');
+        const line = document.getElementById('reportline'), send = document.getElementById('reportsend');
+        const close = () => {
+          box.hidden = true;
+          document.getElementById('game').focus();
+        };
+        window.oneshotReportOpen = () => {
+          try { document.exitPointerLock(); } catch { /* not locked */ }
+          line.textContent = '';
+          send.disabled = false;
+          box.hidden = false;
+          text.focus();
+        };
+        document.getElementById('reportlink').addEventListener('click', (e) => { e.preventDefault(); window.oneshotReportOpen(); });
+        document.getElementById('reportcancel').addEventListener('click', close);
+        box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
+        document.getElementById('reportform').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          if (!text.value.trim()) { line.textContent = 'Say what happened first.'; return; }
+          send.disabled = true;
+          line.textContent = 'Sending…';
+          const code = await sendReport(reportDoc('player', text.value), false);
+          if (code === 204) {
+            text.value = '';
+            line.textContent = 'Sent. Thank you.';
+            setTimeout(close, 1200);
+          } else {
+            send.disabled = false;
+            line.textContent = code === 429 ? 'Too many reports from here just now: try again later.'
+              : "It didn't go through. Try again in a moment.";
+          }
+        });
+      }
       // A trap with no panic behind it (out of memory, an unreachable).
       window.addEventListener('error', (e) => {
         if (e.error instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.error));
@@ -157,6 +254,7 @@
         let want = 0;
         try {
           const b = await (await fetch('build.json', { cache: 'no-cache' })).json();
+          build = b;
           want = Number(b.wasm_bytes) || 0;
         } catch { /* an older build: count in megabytes */ }
         const mb = (n) => (n / 1048576).toFixed(0);
@@ -215,6 +313,8 @@
         const o = await fetch('origin.json');
         if (o.ok) base = (await o.json()).server ?? '';
       } catch { /* none: beside the page */ }
+      reportTo = base;
+      sendCrash();
       const info = await (await fetch(`${base}server.json`)).json();
       const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
 

@@ -300,6 +300,11 @@ pub struct NetCore {
 }
 
 impl NetCore {
+    /// The tick we've predicted up to (a report's "when").
+    pub fn tick(&self) -> u32 {
+        self.seq
+    }
+
     /// From the server's welcome. `tick` is the server's tick then.
     pub fn new(slot: u8, team: u8, tick: u32, rules: Rules, map: Map) -> NetCore {
         let seq = tick + 8;

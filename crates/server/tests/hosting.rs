@@ -385,3 +385,64 @@ async fn the_status_counts_joins_refusals_and_ticks() {
     assert!(field(&doc, "tick_p50_us") > 0, "{doc}");
     assert_eq!(field(&doc, "proto"), PROTO_VER as u64, "{doc}");
 }
+
+/// A POST of `body`, the head and the body sent apart (as a browser may).
+async fn post(port: u16, path: &str, headers: &str, body: &[u8]) -> u16 {
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: game.example\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n{headers}\r\n",
+        body.len()
+    );
+    s.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    s.write_all(body).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    out.split_whitespace().nth(1).unwrap().parse().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_report_is_kept_and_a_flood_is_not() {
+    let dir = std::env::temp_dir().join(format!("oneshot-bugs-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let h = server::run(server::Config {
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        bugs: Some(dir.clone()),
+        ..local()
+    })
+    .await
+    .unwrap();
+    let port = h.http.unwrap().port();
+    let report = br#"{"kind":"crash","text":"panicked at src/lib.rs:1:1"}"#;
+    assert_eq!(post(port, "/bugs", "", report).await, 204);
+    assert_eq!(post(port, "/bugs", "", b"not json").await, 400);
+    let big = vec![b'x'; server::bugs::BODY_MAX + 1];
+    assert_eq!(post(port, "/bugs", "", &big).await, 413);
+    // One address gets its share (the first one counted), then waits;
+    // another behind the proxy still may.
+    for _ in 1..server::bugs::PER_ADDR {
+        assert_eq!(post(port, "/bugs", "", report).await, 204);
+    }
+    assert_eq!(post(port, "/bugs", "", report).await, 429);
+    assert_eq!(post(port, "/bugs", "X-Real-IP: 203.0.113.9\r\n", report).await, 204);
+    let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+    assert_eq!(files.len(), 1);
+    let text = std::fs::read_to_string(files[0].path()).unwrap();
+    assert_eq!(text.lines().count(), server::bugs::PER_ADDR as usize + 1, "{text}");
+    for l in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(l).unwrap();
+        assert_eq!(v["report"]["kind"], "crash");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_a_place_for_them_reports_are_not_taken() {
+    let h = server::run(server::Config {
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        ..local()
+    })
+    .await
+    .unwrap();
+    assert_eq!(post(h.http.unwrap().port(), "/bugs", "", b"{}").await, 404);
+}

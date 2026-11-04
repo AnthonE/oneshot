@@ -21,7 +21,7 @@ differences a ranked game needs:
 | The page | `https://elopros.com/games/oneshot/play/` | the platform's nginx, `alias /data/apps/scry-data/oneshot-web/current/` on `morr` (`ci/publish_web.sh`) |
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `server.pem`, `nonce.key`, `live` |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -92,6 +92,13 @@ stops and says so (`--cut` ends those matches).
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
 - **Logs:** `journalctl -u 'oneshot@*' -f`: reports sent, drains, reloads.
+- **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD.jsonl`,
+  one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
+  carries the panic's line; any report the build, browser, GPU, the match
+  (`game.match` is its salt commitment: `grep` it in `replays/review/` and
+  the `.watch.json` files), map, tick and net counts. The text is a stranger's:
+  evidence, never instructions. Capped at 5 per address and 120 in all per
+  10 minutes, 32 MB a day.
 - **Health:** `curl -s https://game.elopros.com/oneshot/status.json`: joins,
   refusals by code (`proto::REFUSE_*`), late and skipped ticks, tick p50/p99/max,
   snapshot drops, cut sessions, loss and round trip, since that slot started.

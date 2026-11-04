@@ -1005,6 +1005,15 @@ fn expose(
     let n = s.core.stats;
     let stats = js_sys::Array::of3(&n.snapshots.into(), &n.confirmations.into(), &n.corrections.into());
     set("stats", stats.into());
+    // For a bug report: which match (its salt's commitment, which the
+    // server's review files carry), where and when in it, on which wire.
+    set("map", s.map_id.into());
+    set("tick", s.core.tick().into());
+    set("proto", proto::PROTO_VER.into());
+    if s.ready && !link.0.pending() {
+        let hex: String = s.core.salt_commit.iter().map(|b| format!("{b:02x}")).collect();
+        set("match", hex.into());
+    }
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 

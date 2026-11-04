@@ -15,6 +15,7 @@
 //! files go to a tokio task for the same reason.
 
 pub mod auth;
+pub mod bugs;
 pub mod cup;
 pub mod elo;
 pub mod http;
@@ -132,6 +133,9 @@ pub struct Config {
     pub elo_key: Option<(PathBuf, String)>,
     /// Where replays are written.
     pub replays: Option<PathBuf>,
+    /// Where players' bug and crash reports are kept (`bugs.rs`). None:
+    /// `/bugs` isn't taken.
+    pub bugs: Option<PathBuf>,
     /// Where players reach the game (`host:port`), told to the page in
     /// `server.json`. None: the host the page was asked on, at the bound
     /// port.
@@ -183,6 +187,7 @@ impl Default for Config {
             elo_origin: "https://elopros.com".into(),
             elo_key: None,
             replays: None,
+            bugs: None,
             public_addr: None,
             allow_origins: Vec::new(),
             capacity: 256,
@@ -214,6 +219,8 @@ pub struct Ctx {
     pub counts: Arc<outlet::Counts>,
     /// Everything else counted since start (`stats.rs`).
     pub stats: stats::Stats,
+    /// Players' reports, if they're taken (`--bugs`).
+    pub bugs: Option<bugs::Intake>,
     pub started: Instant,
 }
 
@@ -330,6 +337,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
         stats: stats::Stats::default(),
+        bugs: cfg.bugs.clone().map(bugs::Intake::new),
         started: Instant::now(),
         allow_origins: cfg.allow_origins.clone(),
     });

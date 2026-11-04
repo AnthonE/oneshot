@@ -51,6 +51,7 @@ fn run() -> Result<(), String> {
     };
 
     let body = fetch::server_json(&server)?;
+    crash::hook(server.clone());
     let (addr, hash) =
         parse_server_json(&body).ok_or_else(|| format!("{server}: server.json doesn't name a game server"))?;
 
@@ -133,6 +134,66 @@ fn parse_server_json(body: &str) -> Option<(String, Option<[u8; 32]>)> {
     Some((addr, hash))
 }
 
+/// A panic, reported: the default hook's words on stderr as before, a copy
+/// beside the settings (`crashes/`), and the same to the server's `/bugs`
+/// (`server/src/bugs.rs`), as the page does for a browser's.
+#[cfg(not(target_arch = "wasm32"))]
+mod crash {
+    pub fn hook(server: String) {
+        let before = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            before(info);
+            let doc = doc(&format!("{info}"));
+            if let Some(dir) = oneshot_client::config::settings_path().and_then(|p| Some(p.parent()?.join("crashes"))) {
+                let unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let path = dir.join(format!("crash-{unix}.json"));
+                if std::fs::create_dir_all(&dir)
+                    .and_then(|_| std::fs::write(&path, &doc))
+                    .is_ok()
+                {
+                    eprintln!("oneshot: the crash is written to {}", path.display());
+                }
+            }
+            match super::fetch::post_bug(&server, &doc) {
+                Ok(s) if s == "204" => eprintln!("oneshot: and reported. Thank you."),
+                _ => eprintln!("oneshot: it couldn't be reported; the file has it."),
+            }
+        }));
+    }
+
+    /// The report: what the page sends, as far as the desktop knows it.
+    pub fn doc(line: &str) -> String {
+        format!(
+            "{{\"kind\":\"crash\",\"text\":{},\"build\":{{\"version\":{},\"proto\":{}}},\
+             \"where\":{{\"desktop\":true,\"os\":{},\"arch\":{}}}}}",
+            quote(&line.chars().take(4000).collect::<String>()),
+            quote(env!("CARGO_PKG_VERSION")),
+            proto::PROTO_VER,
+            quote(std::env::consts::OS),
+            quote(std::env::consts::ARCH),
+        )
+    }
+
+    /// `s` as a JSON string.
+    pub fn quote(s: &str) -> String {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push('"');
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    }
+}
+
 /// `GET <server>/server.json`, over HTTPS (the system's roots) or plain
 /// HTTP (a local server): one request, HTTP/1.0, the body back.
 #[cfg(not(target_arch = "wasm32"))]
@@ -143,6 +204,21 @@ mod fetch {
     use std::time::Duration;
 
     pub fn server_json(server: &str) -> Result<String, String> {
+        let (status, body) = request(server, "GET", "server.json", b"")?;
+        if status != "200" {
+            return Err(format!("{server}/server.json: HTTP {status}"));
+        }
+        Ok(body)
+    }
+
+    /// A report to the server's `/bugs` (`server/src/bugs.rs`); its status.
+    pub fn post_bug(server: &str, doc: &str) -> Result<String, String> {
+        request(server, "POST", "bugs", doc.as_bytes()).map(|(s, _)| s)
+    }
+
+    /// `method` `file` beside `server` (a URL, or `host:port`): the status
+    /// and the body.
+    fn request(server: &str, method: &str, file: &str, body: &[u8]) -> Result<(String, String), String> {
         let (tls, rest) = match server.split_once("://") {
             Some(("https", r)) => (true, r),
             Some(("http", r)) => (false, r),
@@ -165,9 +241,15 @@ mod fetch {
             .find_map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok())
             .ok_or_else(|| format!("{at}: can't connect (is the server up?)"))?;
         let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-        let req = format!(
-            "GET {path}/server.json HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n\r\n"
-        );
+        let mut req = format!(
+            "{method} {path}/{file} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n"
+        )
+        .into_bytes();
+        if method == "POST" {
+            req.extend_from_slice(format!("Content-Type: text/plain\r\nContent-Length: {}\r\n", body.len()).as_bytes());
+        }
+        req.extend_from_slice(b"\r\n");
+        req.extend_from_slice(body);
         let mut raw = Vec::new();
         if tls {
             let mut roots = rustls::RootCertStore::empty();
@@ -182,7 +264,7 @@ mod fetch {
             let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| format!("{host}: {e}"))?;
             let conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| e.to_string())?;
             let mut s = rustls::StreamOwned::new(conn, tcp);
-            s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
+            s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
             // A server that closes without TLS's close_notify still sent the body.
             if let Err(e) = s.read_to_end(&mut raw) {
                 if raw.is_empty() {
@@ -191,21 +273,29 @@ mod fetch {
             }
         } else {
             let mut s = tcp;
-            s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
+            s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
             s.read_to_end(&mut raw).map_err(|e| format!("{at}: {e}"))?;
         }
         let text = String::from_utf8_lossy(&raw);
         let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| format!("{at}: no reply"))?;
         let status = head.split_whitespace().nth(1).unwrap_or("");
-        if status != "200" {
-            return Err(format!("{server}/server.json: HTTP {status}"));
-        }
-        Ok(body.to_string())
+        Ok((status.to_string(), body.to_string()))
     }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    #[test]
+    fn a_crash_report_quotes_what_the_panic_said() {
+        assert_eq!(super::crash::quote("a \"b\"\\c\nd\u{1}"), r#""a \"b\"\\c\nd\u0001""#);
+        let doc = super::crash::doc("panicked at src/x.rs:1:2:\nboom");
+        assert!(
+            doc.starts_with(r#"{"kind":"crash","text":"panicked at src/x.rs:1:2:\nboom","build":{"version":""#),
+            "{doc}"
+        );
+        assert!(doc.ends_with("}}"), "{doc}");
+    }
+
     #[test]
     fn server_json_reads_both_forms() {
         let (a, h) =

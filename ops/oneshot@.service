@@ -65,6 +65,7 @@ ExecStart=/home/master/oneshot-deploy/%i/oneshot-server \
   --elo-key /home/master/oneshot-data/server.pem \
   --elo-key-id eu-1 \
   --replays /home/master/oneshot-data/replays \
+  --bugs /home/master/oneshot-data/bugs \
   --capacity 256 \
   --drain-max 900
 ExecReload=/bin/kill -HUP $MAINPID

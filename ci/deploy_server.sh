@@ -88,7 +88,7 @@ if [ "$GO" = 1 ] && [ ! -x target/release/oneshot-server ]; then echo "  !! no o
 
 echo "== 2. stage oneshot@$NEW"
 SLOT="$DEPLOY/$NEW"
-run mkdir -p "$SLOT" "$DATA/replays"
+run mkdir -p "$SLOT" "$DATA/replays" "$DATA/bugs"
 for b in oneshot-server oneshot-replay oneshot-review; do
   run cp -f "target/release/$b" "$SLOT/$b.new"
   run mv -f "$SLOT/$b.new" "$SLOT/$b"

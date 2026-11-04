@@ -527,10 +527,10 @@ async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
     // The cup's file, and its top two waiting on a review before a prize.
     let mut cup = None;
     for _ in 0..50 {
+        // The file once whole: the server writes a `.part` and renames it.
         cup = std::fs::read_dir(dir.join("cups"))
             .ok()
-            .and_then(|mut d| d.next())
-            .and_then(|e| e.ok());
+            .and_then(|d| d.flatten().find(|e| e.path().extension().is_some_and(|x| x == "json")));
         if cup.is_some() {
             break;
         }
