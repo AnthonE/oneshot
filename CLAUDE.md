@@ -22,7 +22,7 @@ Fireplace, engine-shim and Elo Pros.
 | `room` | a match with no transport: seats, input buffers, rewind, fog, snapshots, replays, the aim review (`watch.rs`) |
 | `server` | sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
 | `client-net` | the client's netcode: clock, prediction, interpolation (`core`), the session, the web and native transports |
-| `client` | the Bevy client, desktop and the page (`crates/client/dist`, its menu `web/index.html`). Its own workspace (`ci/client.sh`). Draws, never decides |
+| `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/index.html` only finds the server and signs in). Its screens are Gates' style: the title (`front.rs`, connecting is its state, `door.rs`), the Esc menu, the settings. Its own workspace (`ci/client.sh`). Draws, never decides |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
 | `tools/assets.mjs`, `tools/glb` | models, sounds and textures from a Gates checkout into `crates/client/assets` |
@@ -101,7 +101,7 @@ ci/parity.sh                                         # native vs wasm
 ci/client.sh                                         # the client: clippy, native, the page into crates/client/dist
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
-node ci/e2e.mjs [150 4 2 | 150 6 3]                  # menu, a match: predictions confirmed, a kill
+node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match (… 30 0 0 0 fxdemo=1 for the demo)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks

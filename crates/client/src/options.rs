@@ -1,16 +1,18 @@
-//! The settings screen, after Gates' `client/src/render/settings.rs` (MIT),
-//! trimmed to one page: the mouse, the view, the sound, and every key.
-//! A number is a `-` value `+` stepper, a toggle a button that says ON or
-//! OFF; a key cell captures the next key pressed (Esc cancels, a right
-//! click clears it), and a key taken from another action says where from.
-//! Everything saves as it changes (`settings.rs`). The match shows through,
-//! so a wider view is seen as it's chosen. BACK or Esc: the Esc menu.
+//! The settings screen, after Gates' `client/src/render/settings.rs` (MIT):
+//! a category rail down the left with the picked one blocked out in the
+//! blue, a pane of rows on the right, each a label and its control, and a
+//! foot with BACK, RESET TAB and where it's all kept. A number is a `-`
+//! value `+` stepper, a toggle a button that says ON or OFF; a key cell
+//! captures the next key pressed (Esc cancels, a right click clears it), and
+//! a key taken from another action says where from. Everything saves as it
+//! changes (`settings.rs`). Over a match the match shows through, so a wider
+//! view is seen as it's chosen. BACK or Esc: the Esc menu, or the title.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::binds::{normalize, Action, Bind, Binds, MOUSE, SPECS};
-use crate::settings::{Knob, Settings};
+use crate::settings::{Disk, Knob, Settings};
 use crate::{ui, Screen};
 
 #[derive(Component)]
@@ -32,25 +34,31 @@ struct BindCell {
     slot: usize,
 }
 
+#[derive(Component, Clone, Copy)]
+struct Category(usize);
+
 #[derive(Component)]
 struct Back;
 
-/// The screen's own state: the cell waiting for a key, the line under the
-/// list, and where the pane was scrolled to (kept across a rebuild).
+#[derive(Component)]
+struct ResetTab;
+
+/// The rail.
+pub const CATEGORIES: [&str; 3] = ["MOUSE AND VIEW", "SOUND", "KEYS"];
+/// The rail's KEYS (the title's CONTROLS opens on it).
+pub const KEYS: usize = 2;
+
+/// The screen's own state: the picked category, the cell waiting for a
+/// key, the line under the pane, and where the pane was scrolled to (kept
+/// across a rebuild).
 #[derive(Resource, Default)]
-struct Page {
+pub struct Page {
+    pub cat: usize,
     capturing: Option<(Action, usize)>,
     note: String,
     scroll: f32,
     dirty: bool,
 }
-
-const NUMBERS: [(Knob, &str); 4] = [
-    (Knob::Sensitivity, "Mouse sensitivity"),
-    (Knob::Fov, "Field of view"),
-    (Knob::Master, "Volume"),
-    (Knob::Effects, "Game sounds"),
-];
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Page>()
@@ -74,131 +82,204 @@ fn enter(mut st: ResMut<Page>) {
     st.dirty = false;
 }
 
-fn row() -> Node {
+/// Where BACK goes: the Esc menu in a match (or a picture), else the title.
+fn back(in_match: Option<&crate::front::InMatch>) -> Screen {
+    match in_match {
+        Some(m) if !m.0 => Screen::Title,
+        _ => Screen::Paused,
+    }
+}
+
+fn build(
+    mut commands: Commands,
+    settings: Res<Settings>,
+    binds: Res<Binds>,
+    st: Res<Page>,
+    disk: Option<Res<Disk>>,
+    in_match: Option<Res<crate::front::InMatch>>,
+) {
+    let to = back(in_match.as_deref());
+    spawn(&mut commands, &settings, &binds, &st, disk.as_deref(), to);
+}
+
+/// The frame every row shares: label left, control right.
+fn frame() -> Node {
     Node {
         width: Val::Percent(100.0),
         flex_direction: FlexDirection::Row,
         align_items: AlignItems::Center,
         justify_content: JustifyContent::SpaceBetween,
-        padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+        column_gap: Val::Px(20.0),
+        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+        flex_shrink: 0.0,
         ..default()
     }
 }
 
-fn group(p: &mut ChildSpawnerCommands, name: &str) {
-    p.spawn((
-        Text::new(name),
-        ui::display(20.0),
-        TextColor(ui::ACCENT),
-        Node {
-            margin: UiRect::new(Val::Px(14.0), Val::Px(0.0), Val::Px(14.0), Val::Px(4.0)),
-            ..default()
-        },
-    ));
-}
-
-fn build(mut commands: Commands, settings: Res<Settings>, binds: Res<Binds>, st: Res<Page>) {
-    spawn(&mut commands, &settings, &binds, &st);
-}
-
-fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page) {
+fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page, disk: Option<&Disk>, to: Screen) {
+    let over_match = to == Screen::Paused;
+    let (root_bg, panel_bg) = if over_match {
+        (Color::srgba(0.055, 0.051, 0.043, 0.55), ui::PANE_BG)
+    } else {
+        (Color::NONE, ui::PANEL_BG)
+    };
+    let saved = disk.map_or("settings are not being saved this run".into(), Disk::describe);
+    let back_to = if over_match { "the match" } else { "the title" };
     commands
-        .spawn((
-            OptionsRoot,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            // Lighter than the Esc menu's: the view shows through.
-            BackgroundColor(Color::srgba(0.043, 0.059, 0.078, 0.45)),
-            GlobalZIndex(10),
-        ))
+        .spawn((OptionsRoot, ui::shell(), BackgroundColor(root_bg), GlobalZIndex(10)))
         .with_children(|root| {
+            if !over_match {
+                root.spawn(ui::scrim());
+            }
             root.spawn((
+                ui::strong("SETTINGS", 30.0, ui::TITLE),
+                ui::TEXT_SHADOW,
                 Node {
-                    width: Val::Px(620.0),
-                    max_width: Val::Percent(96.0),
-                    max_height: Val::Percent(94.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(18.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    margin: UiRect::new(Val::Px(34.0), Val::Px(0.0), Val::Px(26.0), Val::Px(16.0)),
                     ..default()
                 },
-                BackgroundColor(ui::PANEL),
-            ))
-            .with_children(|panel| {
-                panel.spawn((Text::new("SETTINGS"), ui::display(34.0), TextColor(ui::TITLE)));
-                panel
-                    .spawn((
-                        Pane,
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            overflow: Overflow::scroll_y(),
-                            flex_shrink: 1.0,
-                            margin: UiRect::vertical(Val::Px(8.0)),
-                            ..default()
-                        },
-                        ScrollPosition(Vec2::new(0.0, st.scroll)),
-                    ))
-                    .with_children(|pane| {
-                        group(pane, "MOUSE AND VIEW");
-                        for (knob, name) in &NUMBERS[..2] {
-                            number(pane, settings, *knob, name);
-                        }
-                        toggle(pane, settings, Knob::Invert, "Invert look");
-                        group(pane, "SOUND");
-                        for (knob, name) in &NUMBERS[2..] {
-                            number(pane, settings, *knob, name);
-                        }
-                        group(pane, "KEYS");
+            ));
+            // The rail and the pane, side by side, both full height.
+            root.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                flex_grow: 1.0,
+                min_height: Val::Px(0.0),
+                column_gap: Val::Px(14.0),
+                padding: UiRect::new(Val::Px(34.0), Val::Px(34.0), Val::Px(0.0), Val::Px(12.0)),
+                ..default()
+            })
+            .with_children(|body| {
+                body.spawn((
+                    Node {
+                        width: Val::Px(250.0),
+                        flex_shrink: 0.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(2.0),
+                        padding: UiRect::all(Val::Px(8.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(panel_bg),
+                    BorderColor::all(ui::RULE),
+                ))
+                .with_children(|rail| {
+                    for (i, name) in CATEGORIES.iter().enumerate() {
+                        let on = i == st.cat;
+                        let (idle, over) = if on {
+                            (ui::ACCENT, ui::ACCENT_HOVER)
+                        } else {
+                            (ui::ROW_IDLE, ui::ROW_HOVER)
+                        };
+                        rail.spawn((
+                            Button,
+                            Category(i),
+                            ui::Hover::new(idle, over),
+                            Node {
+                                width: Val::Percent(100.0),
+                                padding: UiRect::axes(Val::Px(14.0), Val::Px(11.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(idle),
+                            BorderColor::all(if on { ui::ACCENT } else { ui::RULE }),
+                            children![ui::strong(*name, 16.0, if on { ui::TEXT_COLOR } else { ui::DIM })],
+                        ));
+                    }
+                });
+                body.spawn((
+                    Pane,
+                    Node {
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(3.0),
+                        padding: UiRect::all(Val::Px(14.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    BackgroundColor(panel_bg),
+                    BorderColor::all(ui::RULE),
+                    ScrollPosition(Vec2::new(0.0, st.scroll)),
+                ))
+                .with_children(|pane| match st.cat {
+                    0 => {
+                        number(pane, settings, Knob::Sensitivity, "MOUSE SENSITIVITY", "times");
+                        toggle(pane, settings, Knob::Invert, "INVERT LOOK");
+                        number(pane, settings, Knob::Fov, "FIELD OF VIEW", "unscoped");
+                        note(
+                            pane,
+                            "Scoped, the mouse turns slower by the zoom, so the world moves under the crosshair at one speed.",
+                        );
+                    }
+                    1 => {
+                        number(pane, settings, Knob::Master, "VOLUME", "everything");
+                        number(pane, settings, Knob::Effects, "GAME SOUNDS", "shots, steps, hits");
+                    }
+                    _ => {
                         for s in &SPECS {
                             key_row(pane, binds, st, s.action, s.name);
                         }
-                        pane.spawn((
-                            ui::label("Fire, scope and the wheel's swap stay on the mouse.", 13.0, ui::DIM),
-                            Node {
-                                margin: UiRect::new(Val::Px(14.0), Val::Px(0.0), Val::Px(6.0), Val::Px(0.0)),
-                                ..default()
-                            },
-                        ));
-                    });
-                let hint = if st.capturing.is_some() {
-                    "Press a key or mouse button · Esc cancels".to_string()
-                } else if !st.note.is_empty() {
-                    st.note.clone()
-                } else {
-                    "Click a key to change it · right click clears it · saved as you go".to_string()
-                };
-                panel.spawn(ui::label(
-                    hint,
-                    14.0,
-                    if st.note.is_empty() { ui::DIM } else { ui::ACCENT },
-                ));
-                panel
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(14.0),
-                        margin: UiRect::top(Val::Px(12.0)),
-                        ..default()
-                    })
-                    .with_children(|f| {
-                        f.spawn((ui::button(140.0, true), Back))
-                            .with_child(ui::button_label("BACK", true));
-                        f.spawn(ui::label("or Esc", 13.0, ui::DIM));
-                    });
+                        note(pane, "Fire, scope and the wheel's swap stay on the mouse.");
+                    }
+                });
+            });
+            // The foot.
+            root.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(18.0),
+                margin: UiRect::new(Val::Px(34.0), Val::Px(34.0), Val::Px(0.0), Val::Px(16.0)),
+                ..default()
+            })
+            .with_children(|foot| {
+                foot.spawn((ui::button(120.0, true), Back))
+                    .with_child(ui::strong("BACK", 14.0, ui::TITLE));
+                foot.spawn((ui::button(150.0, false), ResetTab))
+                    .with_child(ui::strong("RESET TAB", 14.0, ui::TEXT_COLOR));
+                foot.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                })
+                .with_children(|col| {
+                    let hint = if st.capturing.is_some() {
+                        "Press the key or mouse button to use · Esc cancels".to_string()
+                    } else if !st.note.is_empty() {
+                        st.note.clone()
+                    } else if st.cat == KEYS {
+                        "Click a key to change it · right click clears it".to_string()
+                    } else {
+                        String::new()
+                    };
+                    if !hint.is_empty() {
+                        let c = if st.note.is_empty() { ui::DIM } else { ui::TEXT_COLOR };
+                        col.spawn(ui::label(hint, 13.0, c));
+                    }
+                    col.spawn(ui::label(
+                        format!("BACK or Esc returns to {back_to} · {saved}"),
+                        12.0,
+                        ui::FAINT,
+                    ));
+                });
             });
         });
 }
 
-fn number(p: &mut ChildSpawnerCommands, s: &Settings, knob: Knob, name: &str) {
-    p.spawn(row()).with_children(|r| {
-        r.spawn(ui::label(name, 16.0, ui::TEXT_COLOR));
+fn note(p: &mut ChildSpawnerCommands, text: &str) {
+    p.spawn((
+        Node {
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(10.0)),
+            max_width: Val::Px(760.0),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        children![ui::label(text, 14.0, ui::DIM)],
+    ));
+}
+
+fn number(p: &mut ChildSpawnerCommands, s: &Settings, knob: Knob, name: &str, unit: &str) {
+    p.spawn((frame(), BackgroundColor(ui::ROW_IDLE))).with_children(|r| {
+        r.spawn(ui::strong(name, 15.0, ui::TEXT_COLOR));
         r.spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -206,33 +287,48 @@ fn number(p: &mut ChildSpawnerCommands, s: &Settings, knob: Knob, name: &str) {
             ..default()
         })
         .with_children(|c| {
+            c.spawn(ui::label(unit, 12.0, ui::FAINT));
             c.spawn((ui::stepper(), Adjust { knob, delta: -1 }))
-                .with_child(ui::button_label("-", false));
+                .with_child(ui::strong("-", 16.0, ui::TEXT_COLOR));
             c.spawn((
                 Node {
-                    width: Val::Px(70.0),
+                    width: Val::Px(84.0),
                     justify_content: JustifyContent::Center,
                     ..default()
                 },
-                children![(Text::new(s.value(knob)), ui::bold(16.0), TextColor(ui::TITLE))],
+                children![ui::strong(s.value(knob), 15.0, ui::TEXT_COLOR)],
             ));
             c.spawn((ui::stepper(), Adjust { knob, delta: 1 }))
-                .with_child(ui::button_label("+", false));
+                .with_child(ui::strong("+", 16.0, ui::TEXT_COLOR));
         });
     });
 }
 
 fn toggle(p: &mut ChildSpawnerCommands, s: &Settings, knob: Knob, name: &str) {
-    p.spawn(row()).with_children(|r| {
-        r.spawn(ui::label(name, 16.0, ui::TEXT_COLOR));
-        r.spawn((ui::button(150.0, false), Adjust { knob, delta: 0 }))
-            .with_child(ui::button_label(s.value(knob), false));
+    p.spawn((frame(), BackgroundColor(ui::ROW_IDLE))).with_children(|r| {
+        r.spawn(ui::strong(name, 15.0, ui::TEXT_COLOR));
+        r.spawn((
+            Button,
+            Adjust { knob, delta: 0 },
+            ui::Hover::default(),
+            BackgroundColor(ui::ROW_IDLE),
+            BorderColor::all(ui::RULE),
+            Node {
+                width: Val::Px(92.0),
+                height: Val::Px(26.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            children![ui::strong(s.value(knob), 14.0, ui::TEXT_COLOR)],
+        ));
     });
 }
 
 fn key_row(p: &mut ChildSpawnerCommands, binds: &Binds, st: &Page, action: Action, name: &str) {
-    p.spawn(row()).with_children(|r| {
-        r.spawn(ui::label(name, 16.0, ui::TEXT_COLOR));
+    p.spawn((frame(), BackgroundColor(ui::ROW_IDLE))).with_children(|r| {
+        r.spawn(ui::strong(name.to_uppercase(), 15.0, ui::TEXT_COLOR));
         r.spawn(Node {
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(8.0),
@@ -241,13 +337,32 @@ fn key_row(p: &mut ChildSpawnerCommands, binds: &Binds, st: &Page, action: Actio
         .with_children(|c| {
             for (slot, b) in binds.slots(action).into_iter().enumerate() {
                 let waiting = st.capturing == Some((action, slot));
-                let text = if waiting {
-                    "PRESS A KEY"
-                } else {
-                    b.map_or("—", Bind::label)
+                let (text, colour) = match (waiting, b) {
+                    (true, _) => ("PRESS A KEY", ui::TITLE),
+                    (false, Some(b)) => (b.label(), ui::TEXT_COLOR),
+                    (false, None) => ("-", ui::FAINT),
                 };
-                c.spawn((ui::button(130.0, waiting), BindCell { action, slot }))
-                    .with_child(ui::button_label(text, waiting));
+                let (idle, over) = if waiting {
+                    (ui::ACCENT, ui::ACCENT_HOVER)
+                } else {
+                    (ui::ROW_IDLE, ui::ROW_HOVER)
+                };
+                c.spawn((
+                    Button,
+                    BindCell { action, slot },
+                    ui::Hover::new(idle, over),
+                    Node {
+                        width: Val::Px(132.0),
+                        height: Val::Px(26.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    BackgroundColor(idle),
+                    BorderColor::all(if waiting { ui::ACCENT } else { ui::RULE }),
+                    children![ui::strong(text, 14.0, colour)],
+                ));
             }
         });
     });
@@ -307,19 +422,50 @@ fn capture(
     };
 }
 
-/// Clicks: a stepper or toggle turns its knob, a key cell waits for a
-/// key, a right click on one clears it, BACK goes back.
+/// Clicks: the rail picks a category, a stepper or toggle turns its knob,
+/// a key cell waits for a key, a right click on one clears it, RESET TAB
+/// puts the category's defaults back, BACK goes back.
 #[allow(clippy::too_many_arguments)]
 fn click(
+    cats: Query<(&Interaction, &Category), Changed<Interaction>>,
     adjust: Query<(&Interaction, &Adjust), Changed<Interaction>>,
     cells: Query<(&Interaction, &BindCell)>,
-    back: Query<&Interaction, (Changed<Interaction>, With<Back>)>,
+    backs: Query<&Interaction, (Changed<Interaction>, With<Back>)>,
+    resets: Query<&Interaction, (Changed<Interaction>, With<ResetTab>)>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut settings: ResMut<Settings>,
     mut binds: ResMut<Binds>,
     mut st: ResMut<Page>,
     mut next: ResMut<NextState<Screen>>,
+    in_match: Option<Res<crate::front::InMatch>>,
 ) {
+    if st.capturing.is_none() {
+        for (i, c) in &cats {
+            if *i == Interaction::Pressed && c.0 != st.cat {
+                st.cat = c.0;
+                st.scroll = 0.0;
+                st.note.clear();
+                st.dirty = true;
+            }
+        }
+        if resets.iter().any(|i| *i == Interaction::Pressed) {
+            let d = Settings::default();
+            match st.cat {
+                0 => {
+                    settings.sensitivity = d.sensitivity;
+                    settings.invert = d.invert;
+                    settings.fov = d.fov;
+                }
+                1 => {
+                    settings.master = d.master;
+                    settings.effects = d.effects;
+                }
+                _ => *binds = Binds::default(),
+            }
+            st.note = format!("{} is back to its defaults", CATEGORIES[st.cat]);
+            st.dirty = true;
+        }
+    }
     for (i, a) in &adjust {
         if *i == Interaction::Pressed {
             settings.adjust(a.knob, a.delta);
@@ -338,15 +484,20 @@ fn click(
             st.dirty = true;
         }
     }
-    if back.iter().any(|i| *i == Interaction::Pressed) && st.capturing.is_none() {
-        next.set(Screen::Paused);
+    if backs.iter().any(|i| *i == Interaction::Pressed) && st.capturing.is_none() {
+        next.set(back(in_match.as_deref()));
     }
 }
 
 /// Esc goes back (when no cell is waiting: then it cancels, `capture`).
-fn keys(keys: Res<ButtonInput<KeyCode>>, st: Res<Page>, mut next: ResMut<NextState<Screen>>) {
+fn keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    st: Res<Page>,
+    mut next: ResMut<NextState<Screen>>,
+    in_match: Option<Res<crate::front::InMatch>>,
+) {
     if st.capturing.is_none() && keys.just_pressed(KeyCode::Escape) {
-        next.set(Screen::Paused);
+        next.set(back(in_match.as_deref()));
     }
 }
 
@@ -374,12 +525,15 @@ fn scroll(
 
 /// Built again when anything on it changed (Gates' way: simpler than
 /// patching, and a screen this size builds in no time).
+#[allow(clippy::too_many_arguments)]
 fn rebuild(
     mut commands: Commands,
     mut st: ResMut<Page>,
     roots: Query<Entity, With<OptionsRoot>>,
     settings: Res<Settings>,
     binds: Res<Binds>,
+    disk: Option<Res<Disk>>,
+    in_match: Option<Res<crate::front::InMatch>>,
 ) {
     if !st.dirty {
         return;
@@ -388,5 +542,12 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    spawn(&mut commands, &settings, &binds, &st);
+    spawn(
+        &mut commands,
+        &settings,
+        &binds,
+        &st,
+        disk.as_deref(),
+        back(in_match.as_deref()),
+    );
 }

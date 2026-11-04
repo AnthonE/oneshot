@@ -61,7 +61,7 @@ bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Performance", "Document", "Element", "Storage"] }
+web-sys = { version = "0.3", features = ["Window", "Performance", "Document", "Element", "Storage", "Location"] }
 
 # Quick to build and quick enough to play: our code a little optimised,
 # Bevy fully, and no debug info for it (Gates measured 20 GB without that).

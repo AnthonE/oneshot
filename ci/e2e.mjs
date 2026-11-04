@@ -1,7 +1,7 @@
 // node ci/e2e.mjs [seconds] [mode] [map]: the real server and the game's
 // page (the Bevy client, crates/client/dist) in headless Chromium, WebGL2 on
-// SwiftShader. First the menu: a casual mode's button must get a person
-// into the match. Then the client drives itself (?autoplay=1: it walks the
+// SwiftShader. First the title: a casual mode's row and PLAY must get a
+// person into the match. Then the client drives itself (?autoplay=1: it walks the
 // map's route, closes on whoever fog shows and fires; inputs only; ?lite=1:
 // a quarter of the pixels, no shadows or grass, for the software GPU;
 // ?capsules=1 past a duel) against bots
@@ -55,26 +55,57 @@ const watch = (p) => {
 };
 const checks = [];
 try {
-  // The menu: a person's way in. Ranked's buttons wait for a sign-in, so
-  // only casual modes go through it here.
-  const BUTTONS = ['play', 'duel', 'doubles', 'ffa', 'gungame', 'cup', 'bigteam'];
+  // The title: a person's way in, drawn by the game (front.rs), so its
+  // controls are clicked where the game says they are (`__oneshot.ui`).
+  // Ranked's rows wait for a sign-in, so only casual modes go through it.
   if ([0, 3, 4, 6].includes(mode)) {
-    const p = await browser.newPage({ viewport: { width: 480, height: 270 } });
+    const p = await browser.newPage({ viewport: { width: 960, height: 540 } });
     watch(p);
-    await p.goto(`${url}?lite=1&name=menu`);
+    // Full size, not ?lite=1: the title is laid out for 1280 by 720 and
+    // scaled down, and a canvas scaled up by the page moves the clicks.
+    await p.goto(`${url}?name=menu`);
     let m = null;
+    // In the canvas' pixels; ?lite=1 draws it at half and scales it up.
+    const rect = (tag) => p.evaluate((t) => {
+      const r = window.__oneshot?.ui?.[t];
+      const c = document.getElementById('game');
+      const k = c.getBoundingClientRect().width / c.clientWidth;
+      return r ? r.map((v) => v * k) : null;
+    }, tag);
+    const press = async (tag) => {
+      const t = Date.now();
+      let r = null;
+      while (!r && Date.now() - t < 60000) {
+        r = await rect(tag);
+        if (!r) await p.waitForTimeout(500);
+      }
+      if (!r) throw new Error(`the title never showed ${tag}`);
+      // Held for a few frames: SwiftShader draws slowly, and a press that
+      // came and went between two frames is still one, but a move first
+      // gives the game the pointer's place.
+      await p.mouse.move(r[0], r[1]);
+      await p.waitForTimeout(400);
+      await p.mouse.down();
+      await p.waitForTimeout(250);
+      await p.mouse.up();
+      await p.waitForTimeout(400);
+    };
     try {
-      await p.click(`#${BUTTONS[mode]}`, { timeout: 60000 });
+      await press(`mode${mode}`);
+      await press('go');
       const t = Date.now();
       while (Date.now() - t < 60000) {
         await p.waitForTimeout(500);
-        m = await p.evaluate(() => ({ connected: !!window.__oneshot?.connected, menu: getComputedStyle(document.getElementById('menu')).display }));
-        if (m.connected && m.menu === 'none') break;
+        m = await p.evaluate(() => ({ connected: !!window.__oneshot?.connected, screen: window.__oneshot?.screen }));
+        if (m.connected && m.screen === 'playing') break;
       }
     } catch (e) {
-      errors.push(`menu: ${e.message}`);
+      errors.push(`title: ${e.message}`);
     }
-    checks.push([`the menu's ${BUTTONS[mode]} button got us into a match`, !!m?.connected && m.menu === 'none']);
+    mkdirSync('traces', { recursive: true });
+    await p.screenshot({ path: `traces/e2e-title-${mode}.png` });
+    const NAMES = ['vs the bot', 'duel', 'doubles', 'free for all', 'gun game', 'cup', 'big team'];
+    checks.push([`the title's ${NAMES[mode]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
     await p.close();
   }
 

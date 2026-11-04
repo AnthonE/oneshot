@@ -44,6 +44,46 @@ impl Default for Settings {
     }
 }
 
+/// Who plays: the name others see and the skin asked for (worn only if
+/// the wallet owns it; the server checks). Set on the title screen, kept
+/// with the settings.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Player {
+    pub name: String,
+    pub skin: u8,
+}
+
+/// How long a name may be (proto's `Name`).
+pub const NAME_MAX: usize = 16;
+
+impl Player {
+    /// The name as sent: what was typed, or `player`.
+    pub fn sent_name(&self) -> String {
+        let n = self.name.trim();
+        if n.is_empty() {
+            "player".into()
+        } else {
+            n.into()
+        }
+    }
+
+    fn pairs(&self) -> Vec<(String, String)> {
+        vec![
+            ("name".into(), format!("{:?}", self.name)),
+            ("skin".into(), self.skin.to_string()),
+        ]
+    }
+
+    /// A name as it may be kept: printable, no quotes or `#` (the file's
+    /// comment), at most [`NAME_MAX`].
+    pub fn clean(name: &str) -> String {
+        name.chars()
+            .filter(|c| (' '..='~').contains(c) && *c != '"' && *c != '\\' && *c != '#')
+            .take(NAME_MAX)
+            .collect()
+    }
+}
+
 /// A knob the settings screen turns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Knob {
@@ -153,6 +193,16 @@ pub struct Disk {
     written: String,
 }
 
+impl Disk {
+    /// Where the settings are kept, for the settings screen's foot.
+    pub fn describe(&self) -> String {
+        match &self.store {
+            Store::File(p) => format!("saved to {}", p.display()),
+            Store::Browser => "saved in this browser".into(),
+        }
+    }
+}
+
 /// The store this build writes to, and what it holds now.
 fn open_store() -> Option<(Store, Option<String>)> {
     #[cfg(target_arch = "wasm32")]
@@ -194,22 +244,40 @@ pub type Lines = Vec<(String, String)>;
 
 /// The settings and binds from `text` (or the defaults), the file's
 /// version, and the pairs and binds this build doesn't know.
-pub fn read(text: Option<&str>) -> (Settings, Binds, u32, Lines, Lines) {
+pub fn read(text: Option<&str>) -> (Settings, Binds, Player, u32, Lines, Lines) {
     let doc = config::parse(text.unwrap_or(""));
-    let (s, other) = Settings::from_pairs(&doc.pairs);
+    let (s, mut other) = Settings::from_pairs(&doc.pairs);
+    let mut p = Player::default();
+    other.retain(|(k, v)| match k.as_str() {
+        "name" => {
+            p.name = Player::clean(v.trim_matches('"'));
+            false
+        }
+        "skin" => {
+            p.skin = v
+                .parse()
+                .ok()
+                .filter(|&n| (n as usize) < proto::SKINS.len())
+                .unwrap_or(0);
+            false
+        }
+        _ => true,
+    });
     let (b, other_binds) = Binds::from_lines(&doc.binds);
-    (s, b, doc.version, other, other_binds)
+    (s, b, p, doc.version, other, other_binds)
 }
 
 /// The text to write for `s` and `b`, keeping what this build doesn't know.
 pub fn text(
     s: &Settings,
     b: &Binds,
+    p: &Player,
     version: u32,
     other: &[(String, String)],
     other_binds: &[(String, String)],
 ) -> String {
     let mut pairs = s.pairs();
+    pairs.extend(p.pairs());
     pairs.extend(other.iter().cloned());
     let mut binds = b.to_lines();
     binds.extend(other_binds.iter().cloned());
@@ -221,11 +289,11 @@ pub fn text(
 /// with no home).
 pub fn plugin(app: &mut App) {
     let (store, held) = open_store().map_or((None, None), |(s, t)| (Some(s), t));
-    let (s, b, version, other, other_binds) = read(held.as_deref());
+    let (s, b, p, version, other, other_binds) = read(held.as_deref());
     // What's held, as this build would write it: nothing is written until
     // something changes.
-    let written = text(&s, &b, version, &other, &other_binds);
-    app.insert_resource(s).insert_resource(b);
+    let written = text(&s, &b, &p, version, &other, &other_binds);
+    app.insert_resource(s).insert_resource(b).insert_resource(p);
     if let Some(store) = store {
         app.insert_resource(Disk {
             store,
@@ -240,14 +308,14 @@ pub fn plugin(app: &mut App) {
 
 /// Writes the settings when they changed (and what's written would
 /// differ); a failed write is said once and tried again on the next change.
-fn save_on_change(settings: Res<Settings>, binds: Res<Binds>, disk: Option<ResMut<Disk>>) {
+fn save_on_change(settings: Res<Settings>, binds: Res<Binds>, player: Res<Player>, disk: Option<ResMut<Disk>>) {
     let Some(mut disk) = disk else {
         return;
     };
-    if !settings.is_changed() && !binds.is_changed() {
+    if !settings.is_changed() && !binds.is_changed() && !player.is_changed() {
         return;
     }
-    let t = text(&settings, &binds, disk.version, &disk.other, &disk.other_binds);
+    let t = text(&settings, &binds, &player, disk.version, &disk.other, &disk.other_binds);
     if t == disk.written {
         return;
     }
@@ -277,15 +345,18 @@ mod tests {
     #[test]
     fn settings_and_binds_round_trip_keeping_what_this_build_does_not_know() {
         let held = "version = 3\nfov = 95\nfuture_thing = 4\nbind.jump = \"KeyB\"\nbind.dance = \"KeyZ\"\n";
-        let (mut s, mut b, v, other, other_binds) = read(Some(held));
+        let (mut s, mut b, mut p, v, other, other_binds) = read(Some(held));
         assert_eq!(s.fov, 95.0);
         assert_eq!(b.slots(Action::Jump)[0], Some(Bind::Key(KeyCode::KeyB)));
         s.adjust(Knob::Sensitivity, 3);
         b.set(Action::Reload, 1, Some(Bind::Mouse(MouseButton::Back)));
-        let t = text(&s, &b, v, &other, &other_binds);
+        p.name = Player::clean("Master \"Chief\" of the long name");
+        p.skin = 3;
+        let t = text(&s, &b, &p, v, &other, &other_binds);
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
-        let (s2, b2, ..) = read(Some(&t));
-        assert_eq!((s2, b2), (s, b));
+        let (s2, b2, p2, ..) = read(Some(&t));
+        assert_eq!((s2, b2, &p2), (s, b, &p));
+        assert_eq!(p2.name, "Master Chief of ");
     }
 
     #[test]

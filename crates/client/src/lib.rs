@@ -7,11 +7,16 @@
 //! The level from the sim's map in Gates' light, sky, ground and grass
 //! (docs/RIP.md §9); Triple T bodies with guns in hand; the gun in view,
 //! effects and sound; a first-person camera (a chase camera at the wheel,
-//! the kill cam when dead); the three.js page's controls; the HUD. In a
-//! browser the page (`crates/client/web/index.html`) has the menu and calls `play()`.
+//! the kill cam when dead); the three.js page's controls; the HUD; and the
+//! game's own screens in Gates' style: the title (`front`), the Esc menu
+//! (`pause`) and the settings (`options`), the same on the desktop and in a
+//! browser, where the page (`crates/client/web/index.html`) only finds the
+//! server and signs in, and calls `launch()`.
 
 pub mod binds;
 pub mod config;
+pub mod door;
+pub mod front;
 pub mod hud;
 pub mod level;
 pub mod link;
@@ -50,9 +55,15 @@ pub struct Look {
     armed: bool,
 }
 
-/// The welcome this level was built for.
+/// The link (by `front::LinkGen`) and welcome this level was built for.
 #[derive(Resource, Default)]
-struct Built(u32);
+pub(crate) struct Built(Option<(u32, u32)>);
+
+impl Built {
+    pub(crate) fn gen(&self) -> Option<u32> {
+        self.0.map(|(g, _)| g)
+    }
+}
 
 /// Drawn things by their slot (a fighter with the side and skin its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
@@ -68,9 +79,10 @@ struct Drawn {
 #[derive(Component)]
 pub struct Eye;
 
-/// What has the mouse: the match, the Esc menu, or the settings.
+/// What has the mouse: the title, the match, the Esc menu, or the settings.
 #[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Screen {
+    Title,
     #[default]
     Playing,
     Paused,
@@ -189,9 +201,12 @@ pub struct Opts {
     /// Everyone else as a capsule in the side's colour, not Triple T: a
     /// software GPU can't skin a room of them (the gate, eight seats on).
     pub capsules: bool,
-    /// Start in the Esc menu (`menu`) or the settings (`settings`): for
-    /// pictures of them (`ci/client_shot.mjs ... menu=1`).
+    /// Open the match on the Esc menu (`menu`) or the settings
+    /// (`settings`): for pictures of them (`ci/client_shot.mjs ... menu=1`).
+    /// On the title, `settings` opens the settings over it.
     pub open: Screen,
+    /// The title, or straight into a mode, or neither (a picture).
+    pub front: front::Start,
 }
 
 impl Opts {
@@ -207,6 +222,7 @@ impl Opts {
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
+            front: front::Start::Off,
             open: if has("settings") {
                 Screen::Settings
             } else if has("menu") {
@@ -218,7 +234,25 @@ impl Opts {
     }
 }
 
+/// The game: the title (or straight into a mode, `opts.front`) on `door`.
+pub fn game(door: door::Door, opts: Opts) -> App {
+    let (link, first): (Box<dyn Link>, Screen) = match opts.front {
+        // Nothing behind it: the match's level is the first built.
+        front::Start::Join(_) | front::Start::Off => (Box::new(link::Still::idle()), Screen::Title),
+        front::Start::Title if opts.open == Screen::Settings => (front::backdrop(), Screen::Settings),
+        front::Start::Title => (front::backdrop(), Screen::Title),
+    };
+    let mut app = app_on(link, opts, first);
+    front::install(&mut app, door, opts.front, opts.open);
+    app
+}
+
+/// The client on `link` with no title: a picture (`pose`), or the fx stage.
 pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
+    app_on(link, opts, opts.open)
+}
+
+fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -252,7 +286,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
-    .insert_state(opts.open)
+    .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
@@ -392,7 +426,7 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
+    if grabbed && binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
         st.net = !st.net;
     }
     let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
@@ -490,6 +524,7 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
 fn rebuild(
     link: NonSend<LinkRes>,
     mut built: ResMut<Built>,
+    gen: Option<Res<front::LinkGen>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
@@ -505,10 +540,11 @@ fn rebuild(
     >,
 ) {
     let s = link.0.session();
-    if !s.ready || s.welcomes == built.0 {
+    let now = Some((gen.map_or(0, |g| g.0), s.welcomes));
+    if !s.ready || built.0 == now {
         return;
     }
-    built.0 = s.welcomes;
+    built.0 = now;
     level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
     if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
@@ -712,7 +748,7 @@ fn draw_vehicles(
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
-fn view(
+pub(crate) fn view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
     mut fx: ResMut<look::fx::Fx>,
@@ -848,9 +884,24 @@ fn lite(
 }
 
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
-/// three.js page has it.
+/// three.js page has it, and where the title's controls are (`ui`: a tag's
+/// centre and size in the page's pixels, for a click).
 #[cfg(target_arch = "wasm32")]
-fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>, mut frames: Local<u32>) {
+#[allow(clippy::too_many_arguments)]
+fn expose(
+    link: NonSend<LinkRes>,
+    st: Res<hud::HudState>,
+    in_match: Option<Res<front::InMatch>>,
+    screen: Res<State<Screen>>,
+    tags: Query<(
+        &front::Tag,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &InheritedVisibility,
+    )>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut frames: Local<u32>,
+) {
     use wasm_bindgen::JsValue;
     *frames += 1;
     let Some(w) = web_sys::window() else {
@@ -858,31 +909,52 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     };
     let s = link.0.session();
     let o = js_sys::Object::new();
-    let set = |k: &str, v: JsValue| {
-        let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
+    let set = |o: &js_sys::Object, k: &str, v: JsValue| {
+        let _ = js_sys::Reflect::set(o, &JsValue::from_str(k), &v);
     };
-    set("connected", s.ready.into());
-    set("frames", (*frames).into());
-    set("kills", st.kills.into());
-    set("deaths", st.deaths.into());
-    set("alive", s.core.own().0.alive.into());
-    set("slot", s.core.slot.into());
+    let live = link.0.live() && in_match.is_none_or(|m| m.0);
+    set(&o, "connected", (live && s.ready).into());
+    set(&o, "frames", (*frames).into());
+    set(&o, "kills", st.kills.into());
+    set(&o, "deaths", st.deaths.into());
+    set(&o, "alive", s.core.own().0.alive.into());
+    set(&o, "slot", s.core.slot.into());
     let (f, p) = s.core.own();
-    set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
-    set("health", f.health.into());
-    set("killcam", s.core.killcam(link.0.now_ms()).is_some().into());
-    // For the page's menu: what the stream last said, and whether it's over.
-    set("status", st.status.as_str().into());
-    set("cup", st.cup.as_str().into());
-    set("bye", st.ended.into());
-    set("ended", (st.ended || link.0.closed()).into());
-    // The player left (the Esc menu): straight back to the menu.
-    set("left", left.0.into());
+    set(
+        &o,
+        "pos",
+        js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into(),
+    );
+    set(&o, "health", f.health.into());
+    set(&o, "killcam", s.core.killcam(link.0.now_ms()).is_some().into());
+    let name = match screen.get() {
+        Screen::Title => "title",
+        Screen::Playing => "playing",
+        Screen::Paused => "paused",
+        Screen::Settings => "settings",
+    };
+    set(&o, "screen", name.into());
+    // What the stream last said, and whether it's over.
+    set(&o, "status", st.status.as_str().into());
+    set(&o, "cup", st.cup.as_str().into());
+    set(&o, "bye", st.ended.into());
+    set(&o, "ended", (st.ended || (live && link.0.closed())).into());
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;
     let stats = js_sys::Array::of3(&n.snapshots.into(), &n.confirmations.into(), &n.corrections.into());
-    set("stats", stats.into());
+    set(&o, "stats", stats.into());
+    let ui = js_sys::Object::new();
+    let k = windows.single().map_or(1.0, |w| w.scale_factor());
+    for (t, node, at, vis) in &tags {
+        if !vis.get() {
+            continue;
+        }
+        let (c, size) = (at.translation / k, node.size() / k);
+        let r = [c.x, c.y, size.x, size.y].map(JsValue::from);
+        set(&ui, t.0, js_sys::Array::of4(&r[0], &r[1], &r[2], &r[3]).into());
+    }
+    set(&o, "ui", ui.into());
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -911,90 +983,40 @@ fn fly(
 
 #[cfg(target_arch = "wasm32")]
 mod web_start {
-    use client_net::web::Client;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
 
-    async fn sleep(ms: i32) {
-        let p = js_sys::Promise::new(&mut |done, _| {
-            if let Some(w) = web_sys::window() {
-                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&done, ms);
-            }
-        });
-        let _ = JsFuture::from(p).await;
-    }
-
-    /// The page's entry, as the three.js page plays: connect to `addr`
-    /// (pinning `hash`, or none for a CA's certificate) as `name`, signed in
-    /// with an Elo Pros `pass` (empty for a guest), asking for `mode` in
-    /// `skin`; wait for the welcome, handing each line the stream gives
-    /// (the queue, a cup, a refusal) to `status`; then run the game.
-    ///
-    /// A server on its way down refuses as full: `follow()` then resolves
-    /// to the live server's `[addr, hash]` (the deploy's other slot,
-    /// ops/README.md), or null if it is this one, and we go there once
-    /// with the same pass. Resolves true once the game runs, false if the
-    /// server said no (`status` has had why). `opts`: a comma list of
-    /// `autoplay` and `lite` (see `Opts`).
+    /// The page's entry: the game, on the title (or straight into `mode`
+    /// with `autoplay`, `fxdemo` or `fxstage` in `opts`, a comma list: see
+    /// `Opts`). `addr` and `hash` are `server.json`'s game server (no hash
+    /// with a CA's certificate: checked by the browser, never pinned);
+    /// `follow()` resolves to the live server's `[addr, hash]` when this one
+    /// is on its way down (or null); `signin()` opens Elo Pros' popup and
+    /// resolves to `{pass, wallet}`, or is null with `off` saying why.
+    /// `name`, if not empty, is the name for this run.
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen]
-    pub async fn play(
+    pub fn launch(
         addr: String,
         hash: String,
-        name: String,
-        pass: String,
-        mode: u8,
-        skin: u8,
         opts: String,
-        status: js_sys::Function,
+        name: String,
+        mode: u8,
+        signin: JsValue,
+        off: String,
         follow: js_sys::Function,
-    ) -> Result<bool, JsValue> {
-        let connect = |addr: String, hash: String| Client::connect(addr, hash, name.clone(), pass.clone(), mode, skin);
-        let say = |line: &str| {
-            let _ = status.call1(&JsValue::NULL, &JsValue::from_str(line));
+    ) {
+        let mut o = super::Opts::parse(&opts);
+        o.front = if o.autoplay || o.fxdemo {
+            super::front::Start::Join(mode)
+        } else {
+            super::front::Start::Title
         };
-        let mut c = connect(addr, hash).await?;
-        let mut moved = false;
-        let mut early = Vec::new();
-        'wait: loop {
-            c.tick(sim::input::Input::default());
-            for m in c.session_mut().take_messages() {
-                if m == (proto::Msg::Refuse {
-                    reason: proto::REFUSE_FULL,
-                }) && !moved
-                {
-                    moved = true;
-                    say("moving to the new server...");
-                    let to = follow.call0(&JsValue::NULL)?.dyn_into::<js_sys::Promise>()?;
-                    if let Some(a) = JsFuture::from(to).await?.dyn_ref::<js_sys::Array>() {
-                        c.close();
-                        c = connect(
-                            a.get(0).as_string().unwrap_or_default(),
-                            a.get(1).as_string().unwrap_or_default(),
-                        )
-                        .await?;
-                        early.clear();
-                        continue 'wait;
-                    }
-                }
-                if let Some(line) = super::hud::status_line(&m) {
-                    say(&line);
-                }
-                early.push(m);
-            }
-            if c.ready() {
-                break;
-            }
-            if c.closed() {
-                return Ok(false);
-            }
-            sleep(100).await;
+        let door = super::door::Door::new(addr, hash, follow, signin, off);
+        let mut app = super::game(door, o);
+        if !name.is_empty() {
+            app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
         }
-        let mut app = super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts));
-        app.insert_resource(super::Early(early));
         app.run();
-        Ok(true)
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;
