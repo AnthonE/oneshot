@@ -1376,7 +1376,7 @@ impl World {
                 let q = x as usize - 1;
                 self.fighters[q].ride = 0;
                 if self.fighters[q].alive {
-                    self.kill(att, q, Cause::Wreck as u16);
+                    self.kill(att, q, Cause::Wreck as u16, false);
                 }
             }
         }
@@ -1582,11 +1582,12 @@ impl World {
             ..Event::default()
         });
         if dead {
-            self.kill(att, vic, cause);
+            self.kill(att, vic, cause, part == 2);
         }
     }
 
-    fn kill(&mut self, att: usize, vic: usize, cause: u16) {
+    /// `att` killed `vic` with `cause`; `head`: the blow was to the head.
+    fn kill(&mut self, att: usize, vic: usize, cause: u16, head: bool) {
         self.leave_vehicle(vic);
         let v = &mut self.fighters[vic];
         v.alive = false;
@@ -1634,6 +1635,7 @@ impl World {
             kind: Ev::Kill,
             a: att as u8,
             b: vic as u8,
+            part: if head { 2 } else { 0 },
             c: cause,
             pos,
             ..Event::default()

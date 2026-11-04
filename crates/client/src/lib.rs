@@ -23,6 +23,7 @@ pub mod pointer;
 pub mod pose;
 pub mod settings;
 pub mod sound;
+pub mod tally;
 pub mod ui;
 
 use std::collections::BTreeMap;
@@ -307,8 +308,10 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
     } else {
-        app.add_systems(Startup, hud::setup)
-            .add_systems(Update, (hud::prompt, hud::reticle_tint).after(hud::draw));
+        app.add_systems(Startup, hud::setup).add_systems(
+            Update,
+            (hud::prompt, hud::reticle_tint, hud::medals, hud::board).after(hud::draw),
+        );
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));

@@ -468,6 +468,7 @@ impl Room {
                         killer: e.a,
                         victim: e.b,
                         cause: e.c,
+                        head: e.part == 2,
                     },
                 ));
             }

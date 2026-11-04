@@ -20,7 +20,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 13;
+pub const PROTO_VER: u16 = 14;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -883,6 +883,8 @@ pub enum Msg {
         killer: u8,
         victim: u8,
         cause: u16,
+        /// The blow was to the head.
+        head: bool,
     },
     Phase {
         phase: u8,
@@ -1023,11 +1025,17 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_name(&mut w, name)?;
             w.write(*skin as u32, 8)?;
         }
-        Msg::Kill { killer, victim, cause } => {
+        Msg::Kill {
+            killer,
+            victim,
+            cause,
+            head,
+        } => {
             w.write(5, 8)?;
             w.write(*killer as u32, SLOT_BITS)?;
             w.write(*victim as u32, SLOT_BITS)?;
             w.write(*cause as u32, 16)?;
+            w.write_bit(*head)?;
         }
         Msg::Phase { phase, winner } => {
             w.write(6, 8)?;
@@ -1129,6 +1137,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             killer: r.read(SLOT_BITS)? as u8,
             victim: r.read(SLOT_BITS)? as u8,
             cause: r.read(16)? as u16,
+            head: r.read_bit()?,
         },
         6 => Msg::Phase {
             phase: r.read(2)? as u8,
