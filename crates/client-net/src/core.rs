@@ -529,12 +529,8 @@ impl NetCore {
             }
             self.stats.resyncs += 1;
             self.rate = 1.0;
-        } else if d < TARGET_DEPTH {
-            self.rate = 1.05;
-        } else if d > TARGET_DEPTH + 1.5 {
-            self.rate = 0.95;
         } else {
-            self.rate = 1.0;
+            self.rate = clock_rate(d);
         }
         self.stats.rate = self.rate;
 
@@ -982,6 +978,23 @@ fn ease(e: V3, dt: f64) -> V3 {
     let u = ((size - EASE_NEAR_M) / (EASE_FAR_M - EASE_NEAR_M)).clamp(0.0, 1.0) as f64;
     let tau = EASE_NEAR_MS + (EASE_FAR_MS - EASE_NEAR_MS) * u;
     e * (-dt / tau).exp() as f32
+}
+
+/// The clock's rate for a low point of `d` inputs waiting at the server.
+/// Short of the band (TARGET_DEPTH to one over it) the server is guessing
+/// our inputs, which costs corrections: 5% fast. Past it we only add
+/// latency: slower in proportion to how far, 1% to 5% (Gates'
+/// `ClientClock` gain), so the clock eases down into the band rather than
+/// swing across it and run our own movement 5% slow on the way.
+fn clock_rate(d: f64) -> f64 {
+    const KP: f64 = 0.015;
+    if d < TARGET_DEPTH {
+        1.05
+    } else if d > TARGET_DEPTH + 1.5 {
+        1.0 - (KP * (d - TARGET_DEPTH - 1.0)).clamp(0.01, 0.05)
+    } else {
+        1.0
+    }
 }
 
 /// How far past snapshot tick `a` to extrapolate at render tick `rt`, in

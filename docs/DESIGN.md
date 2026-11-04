@@ -128,9 +128,11 @@ server's.
   server's, replay the unacked tail, and put the jump into a render-only offset
   that decays (100 to 325 ms, blended by size), snapping past 4 m.
 - **Clock:** the client runs ahead of the server by its one-way latency plus a
-  small buffer, steered by the server-reported input buffer depth (target 2
-  ticks, deadband ±1), time-dilated within ±5%, hard resync if far off.
-  Gates' `client-core/src/clock.rs`.
+  small buffer, steered by the low point of the server's input buffer (a band
+  of 1 to 2.5 inputs): short of it 5% fast (the server is guessing, which
+  costs corrections), past it slower in proportion, 1% to 5% (only latency
+  is lost, so it eases down rather than swing across), hard resync if far
+  off. Gates' `client-core/src/clock.rs`.
 - **Own shots are drawn now:** tracer, muzzle flash, recoil kick, ammo count,
   reload. Their direction is the centre of the reticle (spread is the server's
   secret, §9). Hit markers, damage numbers and kills arrive from the server, a
