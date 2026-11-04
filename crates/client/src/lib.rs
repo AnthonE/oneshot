@@ -16,6 +16,7 @@ pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod options;
 pub mod pause;
 pub mod pointer;
 pub mod pose;
@@ -253,6 +254,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(settings::plugin)
     .insert_state(opts.open)
     .add_plugins(pause::plugin)
+    .add_plugins(options::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_systems(
