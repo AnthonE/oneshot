@@ -386,7 +386,14 @@ export function compile(spec, where = 'map.json') {
     const T = l.time;
     if (!(T > 0)) fail(`${what}: "time" in seconds, over 0`);
     const [w, d] = l.size || [2, 2];
+    // A landing given as [x, z] on a terrain map is seated on the ground there, each mirror image on its own.
+    const seated = l.to.length === 2 && terrain;
     const one = (a, b) => {
+      if (seated) {
+        const g = terrain.ground(b[0], b[2]);
+        if (g == null) fail(`${what}'s landing is off the terrain`);
+        b = [b[0], g + LAUNCH_LAND_M, b[2]];
+      }
       throwEnds.push([a[0], a[2]], [b[0], b[2]]);
       return {
         area: [a[0] - w / 2, a[1], a[2] - d / 2, a[0] + w / 2, a[1] + 0.5, a[2] + d / 2],
@@ -447,6 +454,10 @@ const clamp01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
 const bump = (t) => 1 - fade(Math.min(Math.abs(t), 1));
 /** max(a, b), rounded off within k/2 where they meet. */
 const smoothmax = (a, b, k) => 0.5 * (a + b + Math.sqrt((a - b) * (a - b) + k * k));
+/** How softly the wading shelf meets the beach and the seabed (m): a C1 join, a hand's width either side. */
+const SHELF_BLEND_M = 0.6;
+/** A launcher's landing authored as [x, z] on a terrain map aims this far over the ground there, so the body lands a step before its mark rather than clipping into a rise. */
+const LAUNCH_LAND_M = 0.5;
 const dist = (dx, dz) => Math.sqrt(dx * dx + dz * dz);
 /** 1 in the middle, 0 from r: a shape's falloff. */
 const fall = (d, r) => (d >= r ? 0 : 1 - fade(d / r));
@@ -604,6 +615,9 @@ function canyon(c, sea, fail) {
   const terr = c.sea?.terrace;
   if (!Array.isArray(terr) || terr.length !== 4 || !(terr[0] > 0) || !(terr[1] >= 0 && terr[1] <= 1) || typeof terr[2] !== 'number' || !(terr[3] > 0)) fail('canyon.sea.terrace: [h, k, from, over], k 0..1');
   const [tH, tK, tFrom, tOver] = terr;
+  const shelf = c.sea?.shelf;
+  if (!Array.isArray(shelf) || shelf.length !== 4 || !(shelf[0] > 0) || typeof shelf[1] !== 'number' || !(shelf[2] >= 0) || !(shelf[3] > 0)) fail('canyon.sea.shelf: [depth, to, drop, over]');
+  const [shDepth, shTo, shDrop, shOver] = shelf;
   // Gates' shore_terrace: f(h) = h − C·H·u²(1−u)² over the band, identity
   // outside it, f(0) = 0, f'(0) = 1, slope k of itself at the berm, C =
   // (1 − k)·3√3.
@@ -652,6 +666,10 @@ function canyon(c, sea, fail) {
       if (u <= 0 || u >= 1) return h;
       const a = u * (1 - u);
       return h - tC * tH * a * a * fade(clamp01((x - tFrom) / tOver));
+    },
+    /** The wading shelf: the seabed held to `depth` under the water as far as x `to` (the bound), falling `drop` m over `over` past it. */
+    shelf(h, x) {
+      return smoothmax(h, sea - shDepth - shDrop * fade(clamp01((x - shTo) / shOver)), SHELF_BLEND_M);
     },
     /** How far (x, z) stands outside the floor's edge (negative inside), as the walls see it. */
     outside(x, z) {
@@ -721,7 +739,7 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
     for (let i = 0; i < nx; i++) {
       const x = x0 + i * cell, z = z0 + j * cell;
       let h = shapes.reduce((a, f) => a + f(x, z), base);
-      if (gen) h = gen.terrace(h + gen.relief(x, z), x);
+      if (gen) h = gen.shelf(gen.terrace(h + gen.relief(x, z), x), x);
       for (const p of padsOf) h = p(x, z, h);
       const q = Math.round(h * HEIGHT_Q);
       if (q < -32768 || q > 32767) fail(`terrain: ${h} m at ${x}, ${z} is out of range`);

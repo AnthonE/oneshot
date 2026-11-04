@@ -1,14 +1,14 @@
 {
   "id": 3,
   "name": "Dry Fork",
-  "about": "a red-rock gulch, 300 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
+  "about": "a red-rock gulch, 290 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
   "bounds": [-140, 150, -78, 78],
   "mirror": "x",
   "light": { "sea": -6 },
   "terrain": {
     "cell": 1,
     "base": 0,
-    "margin": [40, 60, 30, 30],
+    "margin": [60, 60, 30, 30],
     "gen": "canyon",
     "canyon": {
       "seed": 3,
@@ -17,14 +17,14 @@
       "floor": { "half": 62, "wobble": 6, "wave": 40, "octaves": 2 },
       "pockets": { "w": 12, "half": 16, "at": [[-70, -1], [-25, 1], [35, -1], [85, 1]] },
       "flare": { "w": 50, "from": 115, "over": 60 },
-      "end": { "x": -140, "blend": 12 },
-      "gullies": { "m": 3, "wave": 16, "at": 4, "half": 6 },
-      "scree": { "h": 12, "w": 24 },
+      "end": { "x": -160, "blend": 12 },
+      "gullies": { "m": 2, "wave": 16, "at": 4, "half": 6 },
+      "scree": { "h": 12, "w": 32 },
       "cliff": [[0, 12], [3, 24], [5, 27], [8, 42], [10, 46]],
       "mesa": { "rise": 16, "over": 30 },
       "crags": { "h": 6, "wave": 22, "from": 8, "over": 6 },
-      "strata": { "h": 3.1, "bed": 8, "at": 5, "half": 7 },
-      "sea": { "drops": [[8, 115, 45], [10, 150, 60]], "walls": [140, 60], "terrace": [6, 0.25, 105, 30] }
+      "strata": { "h": 1.6, "bed": 8, "at": 5, "half": 7 },
+      "sea": { "drops": [[8, 115, 45], [10, 150, 60]], "walls": [140, 60], "terrace": [6, 0.25, 105, 30], "shelf": [0.9, 150, 12, 60] }
     },
     "shapes": [
       { "hill": [0, 0], "r": 32, "h": 4 },
@@ -125,7 +125,7 @@
     { "at": [-88, 32], "yaw": 0, "respawn": 30, "mirror": true }
   ],
   "launchers": [
-    { "at": [-90, 0], "to": [-20, 0, 0.8], "time": 2.5, "size": [2, 2], "mirror": true }
+    { "at": [-90, 0], "to": [-20, 0], "time": 2.5, "size": [2, 2], "mirror": true }
   ],
   "roam": [
     [-80, 0], [-48, -19.5], [0, 0], [48, 19.5], [80, 0], [-60, 34.7], [60, -34.7], [0, -34.7], [0, 34.7], [-100, 0], [100, 0], [-60, -39], [60, 39],

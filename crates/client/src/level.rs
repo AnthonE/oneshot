@@ -351,10 +351,12 @@ pub fn dress_level(
         }
     }
     for (e, g) in ground.iter() {
+        // The light tier draws no sea, so no wet band either.
+        let sea = if opts.lite { f32::NEG_INFINITY } else { g.sea };
         let m = ground_mats.add(crate::look::ground::material(
             albedo.clone(),
             normal.clone(),
-            g.sea,
+            sea,
             opts.lite,
         ));
         commands
@@ -491,10 +493,11 @@ fn look(i: u8) -> (Color, f32, f32) {
 /// edge, so it wanders with its noise instead of stepping per vertex.
 const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// A creek bed is gravel: ground under the floor (below `CREEK_Y`, fully
-/// half a metre lower) that also lies in a basin, under the mean of its
+/// half a metre lower) that also lies in a trough, under both of its
 /// neighbours `CREEK_STENCIL_M` off along an axis by `CREEK_BASIN`'s first
 /// metres (fully by its second). A beach sloping to the sea is under the
-/// floor too, but no basin, so it stays sand.
+/// floor too, but one of its neighbours is always lower, so it stays sand
+/// (a mean of the two would read the beach's knee as a bed).
 const CREEK_Y: f32 = -0.15;
 const CREEK_STENCIL_M: f32 = 12.0;
 const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
@@ -533,8 +536,8 @@ pub fn terrain_mesh_at(t: &sim::terrain::TerrainDef, step: usize) -> Mesh {
             let slope = (dx * dx + dz * dz).sqrt();
             let y = h(i, j);
             let rock = ((slope - ROCK_SLOPE.0) / (ROCK_SLOPE.1 - ROCK_SLOPE.0)).clamp(0.0, 1.0);
-            let along_x = 0.5 * (h((i + s).min(nx - 1), j) + h(i.saturating_sub(s), j)) - y;
-            let along_z = 0.5 * (h(i, (j + s).min(nz - 1)) + h(i, j.saturating_sub(s))) - y;
+            let along_x = h((i + s).min(nx - 1), j).min(h(i.saturating_sub(s), j)) - y;
+            let along_z = h(i, (j + s).min(nz - 1)).min(h(i, j.saturating_sub(s))) - y;
             let basin = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
             let gravel = ((CREEK_Y - y) * 2.0).clamp(0.0, 1.0) * basin * (1.0 - rock);
             let patch = crate::look::grass::patch(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
@@ -563,6 +566,8 @@ pub fn terrain_mesh_at(t: &sim::terrain::TerrainDef, step: usize) -> Mesh {
 }
 
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
+/// The light tier (`lite`) gets no sea and no trees (`lib.rs`'s `lite`
+/// strips the rest).
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     commands: &mut Commands,
@@ -570,9 +575,10 @@ pub fn build(
     mats: &mut Assets<StandardMaterial>,
     water_mats: &mut Assets<crate::look::water::WaterMaterial>,
     images: &mut Assets<Image>,
-    cards: &crate::look::trees::TreeCards,
+    cards: &mut crate::look::trees::TreeCards,
     old: &Query<Entity, With<LevelPart>>,
     id: u8,
+    lite: bool,
 ) {
     for e in old.iter() {
         commands.entity(e).despawn();
@@ -722,8 +728,12 @@ pub fn build(
             let sim::solid::Shape::Round { x, z, r } = sol.shape else {
                 continue;
             };
+            if lite {
+                continue;
+            }
             // Each tree its own, from where it stands (a mirrored twin differs).
             let seed = (x * 31.0 + z * 7.0 + sol.y0) as i32 as u32;
+            let cards = cards.get(images);
             for (mesh, mat, at) in crate::look::trees::tree(kind, seed, r, sol.y1 - sol.y0, cards, meshes, mats) {
                 commands.spawn((
                     LevelPart,
@@ -835,7 +845,7 @@ pub fn build(
                 })),
                 Transform::default(),
             ));
-            if map.light.sea.is_finite() {
+            if map.light.sea.is_finite() && !lite {
                 crate::look::water::spawn(commands, meshes, water_mats, images, t, map.light.sea);
             }
         }

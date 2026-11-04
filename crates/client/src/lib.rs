@@ -498,7 +498,8 @@ fn rebuild(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
-    cards: Res<look::trees::TreeCards>,
+    mut cards: ResMut<look::trees::TreeCards>,
+    opts: Res<Opts>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<
         (
@@ -520,9 +521,10 @@ fn rebuild(
         &mut mats,
         &mut water_mats,
         &mut images,
-        &cards,
+        &mut cards,
         &old,
         s.map_id,
+        opts.lite,
     );
     if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
         look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
@@ -842,11 +844,10 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA, no grass, no sea, no
-/// trees (the sim still has the trunks), and the ground on a coarser grid
-/// (`level::LITE_TERRAIN_STEP`); the ground's own shader stays, as does
-/// every box.
-#[allow(clippy::too_many_arguments)]
+/// A software GPU's frame: no shadows, no SMAA, no grass, and the ground on
+/// a coarser grid (`level::LITE_TERRAIN_STEP`) drawn without its per-pixel
+/// rock; `level::build` spawned no sea and no trees for it (the sim still
+/// has the trunks); every box stays.
 fn lite(
     mut commands: Commands,
     link: NonSend<LinkRes>,
@@ -854,11 +855,9 @@ fn lite(
     mut suns: Query<&mut DirectionalLight>,
     aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
     grass: Query<Entity, With<level::GrassPart>>,
-    seas: Query<Entity, With<look::water::WaterPart>>,
-    trees: Query<Entity, With<level::TreePart>>,
     ground: Query<Entity, (With<level::GroundMesh>, Without<level::Lightened>)>,
 ) {
-    for e in grass.iter().chain(seas.iter()).chain(trees.iter()) {
+    for e in &grass {
         commands.entity(e).despawn();
     }
     if !ground.is_empty() {

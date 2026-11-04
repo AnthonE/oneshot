@@ -216,9 +216,20 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
 }
 
 /// Whether a move from `a` to `b` (x, z) climbs ground steeper than
-/// [`MAX_CLIMB`] to above the feet at `feet`.
+/// [`MAX_CLIMB`] to above the feet at `feet`, or onto a face too steep to
+/// stand on ([`WALK_NY`]).
 pub(crate) fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
     let g1 = map.ground(b.0, b.1);
+    if g1 <= feet {
+        return false;
+    }
+    // A face too steep to stand on refuses any step up it, however small
+    // and from whichever side: the rise along one axis alone, under the
+    // centimetre below, let a body creep along a cliff at an angle and be
+    // lifted up it a few millimetres a tick.
+    if map.ground_normal(b.0, b.1).y < WALK_NY {
+        return true;
+    }
     if g1 <= feet + 0.01 {
         return false;
     }

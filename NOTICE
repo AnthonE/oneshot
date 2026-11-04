@@ -32,7 +32,7 @@ ground (and its ground_splat.wgsl, as shaders/ground.wgsl) and grass
 modules, water.rs and water.wgsl as look/water.rs and shaders/water.wgsl,
 and the palm of tree.rs with the frond and dead scrub of plants.rs as
 look/trees.rs), into tools/maps (compile.mjs's canyon height function
-after Gates' terrain.rs and its rock planner after boulder.rs;
+after Gates' terrain.rs and face.rs and its rock planner after boulder.rs;
 hillshade.mjs after its crease probe), and into tools/glb from Gates'
 crates/client/src/webassets.rs, under the MIT licence:
 

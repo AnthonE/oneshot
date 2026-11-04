@@ -567,8 +567,9 @@ pub fn material(ripples: Handle<Image>, sky: Handle<Image>) -> WaterMaterial {
             // alpha and the Fresnel sky is added at full strength.
             alpha_mode: AlphaMode::Premultiplied,
             // One side (the default): the eye never goes under, since the
-            // wading shelf is shallower than a crouched eye, and from
-            // above a back face is the far slope of a crest.
+            // map holds its wading shelf to 0.9 m (the canyon's `sea.shelf`
+            // in compile.mjs) against a crouched eye at 1.1, and from above
+            // a back face is the far slope of a crest.
             ..default()
         },
         extension: Water {

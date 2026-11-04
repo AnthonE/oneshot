@@ -7,8 +7,8 @@
 //! After Gates' `render/tree.rs` (`palm`, `palm_crown`, `palm_bark_rgba`)
 //! and `render/plants.rs` (`frond`, `frond_rgba`, `dead_scrub` and its
 //! sticks), MIT, NOTICE: copied and trimmed, the dead tree grown from the
-//! scrub to a tree's height. Both cards are drawn at boot ([`TreeCards`]),
-//! nothing on disk. Every tree is a pure function of its seed (a hash, no
+//! scrub to a tree's height. Both cards are drawn the first time a map
+//! grows a tree ([`TreeCards`]), nothing on disk. Every tree is a pure function of its seed (a hash, no
 //! rand), so every client builds the same trees. No wind yet.
 
 use bevy::asset::RenderAssetUsages;
@@ -31,24 +31,31 @@ pub enum Kind {
 /// relative to the trunk's base (the origin).
 pub type Part = (Handle<Mesh>, Handle<StandardMaterial>, Transform);
 
-/// The trees' shared cards, drawn at boot: the frond (an alpha cutout) and
-/// the palm's bark (albedo and normal, tiling).
-#[derive(Resource)]
-pub struct TreeCards {
+/// The trees' shared cards: the frond (an alpha cutout) and the palm's
+/// bark (albedo and normal, tiling).
+pub struct Cards {
     pub frond: Handle<Image>,
     pub bark: Handle<Image>,
     pub bark_normal: Handle<Image>,
 }
 
-impl FromWorld for TreeCards {
-    fn from_world(world: &mut World) -> Self {
-        let mut images = world.resource_mut::<Assets<Image>>();
-        let [bark, bark_normal] = palm_bark_images();
-        TreeCards {
-            frond: images.add(frond_image()),
-            bark: images.add(bark),
-            bark_normal: images.add(bark_normal),
-        }
+/// The cards, drawn the first time a map grows a tree and kept: a map with
+/// no tree never pays for them, and the page's first seconds are what the
+/// netcode's clock settles on.
+#[derive(Resource, Default)]
+pub struct TreeCards(Option<Cards>);
+
+impl TreeCards {
+    /// The cards, drawn now if they never were.
+    pub fn get(&mut self, images: &mut Assets<Image>) -> &Cards {
+        self.0.get_or_insert_with(|| {
+            let [bark, bark_normal] = palm_bark_images();
+            Cards {
+                frond: images.add(frond_image()),
+                bark: images.add(bark),
+                bark_normal: images.add(bark_normal),
+            }
+        })
     }
 }
 
@@ -58,7 +65,7 @@ pub const DEAD_MAX_TRIS: usize = 2_000;
 
 /// A tree's foot sinks this far below the origin, so a slope under it
 /// shows no gap.
-const SINK_M: f32 = 0.06;
+const SINK_M: f32 = 0.15;
 
 /// Gates' palm is 12 m; its lean and its fronds are scaled from that.
 const GATES_PALM_H: f32 = 12.0;
@@ -111,7 +118,7 @@ pub fn tree(
     seed: u32,
     trunk_r: f32,
     height: f32,
-    cards: &TreeCards,
+    cards: &Cards,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
 ) -> Vec<Part> {
@@ -914,7 +921,10 @@ mod tests {
                 }
             }
         }
-        assert!((-0.1..=0.0).contains(&lo), "{what}: the foot is at {lo}");
+        assert!(
+            (-SINK_M - 0.01..=0.0).contains(&lo),
+            "{what}: the foot is at {lo}, not sunk {SINK_M}"
+        );
         assert!((hi - height).abs() < 1e-2, "{what}: the top is at {hi}, not {height}");
         assert!(
             foot_r <= trunk_r * 1.2,

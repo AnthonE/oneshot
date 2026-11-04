@@ -32,5 +32,6 @@ if [ "$gz" -gt 9000000 ]; then
   exit 1
 fi
 cp web/index.html dist/
+cp ../../NOTICE dist/
 cp -r assets dist/assets
 du -sh dist
