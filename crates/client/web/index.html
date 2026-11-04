@@ -50,12 +50,12 @@
       <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
       <div id="who"></div>
       <div class="row modes">
-        <button id="play">Play the bot</button>
+        <button id="play" disabled>Play the bot</button>
       </div>
       <div class="row modes">
-        <button id="ffa" class="quiet">Free for all</button>
-        <button id="gungame" class="quiet">Gun Game</button>
-        <button id="bigteam" class="quiet">Big Team</button>
+        <button id="ffa" class="quiet" disabled>Free for all</button>
+        <button id="gungame" class="quiet" disabled>Gun Game</button>
+        <button id="bigteam" class="quiet" disabled>Big Team</button>
       </div>
       <div class="row modes">
         <button id="duel" disabled>Ranked Duel</button>
@@ -166,6 +166,9 @@
         ? Number(params.get('mode') || 0)
         : await new Promise((go) => {
             for (const id of Object.keys(MODES)) $(id).addEventListener('click', () => go(MODES[id]), { once: true });
+            // Casual opens now that a click counts (one before this was lost);
+            // ranked waits for a wallet (setupSignIn).
+            for (const id of ['play', 'ffa', 'gungame', 'bigteam']) $(id).disabled = false;
           });
       const name = nameInput.value.trim() || 'player';
       store('oneshot.name', name);
