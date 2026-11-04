@@ -32,7 +32,9 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// Connections one address may hold (an IPv4 address, an IPv6 /64), and one
 /// prefix (a /24, a /48): a household plays, a flood from one place doesn't.
-pub const PER_SOURCE: u16 = 8;
+/// Each player holds two (the lobby beside the match), so eight at one
+/// address fit.
+pub const PER_SOURCE: u16 = 16;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 
 /// The certificate the server presents: its PEM files, or a fresh

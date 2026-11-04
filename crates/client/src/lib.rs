@@ -882,6 +882,13 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     set("carnage", st.carnage.len().into());
     set("alive", s.core.own().0.alive.into());
     set("slot", s.core.slot.into());
+    set("team", s.core.team.into());
+    // Who sits where, by name: a party's page sees its members (ci/party.mjs).
+    let names = js_sys::Array::new();
+    for (_, n) in st.names() {
+        names.push(&JsValue::from_str(n));
+    }
+    set("names", names.into());
     let (f, p) = s.core.own();
     set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
     set("health", f.health.into());
@@ -942,8 +949,9 @@ mod web_start {
 
     /// The page's entry, as the three.js page plays: connect to `addr`
     /// (pinning `hash`, or none for a CA's certificate) as `name`, signed in
-    /// with an Elo Pros `pass` (empty for a guest), asking for `mode` in
-    /// `skin`; wait for the welcome, handing each line the stream gives
+    /// with an Elo Pros `pass` (empty for a guest, or the server's ticket),
+    /// asking for `mode` in `skin` with the `party` it comes with (its code,
+    /// 0 for none); wait for the welcome, handing each line the stream gives
     /// (the queue, a cup, a refusal) to `status`; then run the game.
     ///
     /// A server on its way down refuses as full: `follow()` then resolves
@@ -961,11 +969,13 @@ mod web_start {
         pass: String,
         mode: u8,
         skin: u8,
+        party: u32,
         opts: String,
         status: js_sys::Function,
         follow: js_sys::Function,
     ) -> Result<bool, JsValue> {
-        let connect = |addr: String, hash: String| Client::connect(addr, hash, name.clone(), pass.clone(), mode, skin);
+        let connect =
+            |addr: String, hash: String| Client::connect(addr, hash, name.clone(), pass.clone(), mode, skin, party);
         let say = |line: &str| {
             let _ = status.call1(&JsValue::NULL, &JsValue::from_str(line));
         };

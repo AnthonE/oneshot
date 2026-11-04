@@ -55,7 +55,7 @@ fn run() -> Result<(), String> {
         parse_server_json(&body).ok_or_else(|| format!("{server}: server.json doesn't name a game server"))?;
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let hello = client_net::session::Session::hello(&name, proto::Pass::NONE, mode, 0);
+    let hello = client_net::session::Session::hello(&name, proto::Pass::NONE, mode, 0, 0);
     let client = rt
         .block_on(client_net::native::NativeClient::connect(&addr, hash, hello))
         .map_err(|e| format!("{addr}: {e}"))?;

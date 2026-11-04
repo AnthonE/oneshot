@@ -418,7 +418,7 @@ crossed) and the bots (none).
   out, then the process exits; `--drain-max` caps it. Gates restarts on both;
   a ranked match can't be cut short, and with two slots nobody waits on it.
 - QUIC admission with Retry past 2× capacity and refusal past 4× (Gates'
-  `spawn_shard`), eight connections per address (an IPv6 /64) and 32 per
+  `spawn_shard`), sixteen connections per address (an IPv6 /64; a player holds two) and 64 per
   prefix (/24, /48), loopback exempt; past capacity a hello is answered
   `REFUSE_FULL`. The UDP socket asks for 8 MiB buffers (Gates' `bind_udp`).
   The wtransport commit stays pinned (Gates and engine-shim pin the same rev).

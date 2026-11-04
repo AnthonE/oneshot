@@ -31,6 +31,6 @@ if [ "$gz" -gt 9000000 ]; then
   echo "the wasm is $gz bytes gzipped, past the 9 MB gate" >&2
   exit 1
 fi
-cp web/index.html dist/
+cp web/*.html web/*.js dist/
 cp -r assets dist/assets
 du -sh dist

@@ -84,19 +84,21 @@ pub fn bold(size: f32) -> TextFont {
     }
 }
 
-// The palette: the page menu's (`web/index.html`): near-black blue panels,
-// off-white text, the gold accent.
-pub const SHADE: Color = Color::srgba(0.043, 0.059, 0.078, 0.82);
-pub const PANEL: Color = Color::srgba(0.114, 0.153, 0.2, 0.94);
-pub const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.05);
-pub const ROW_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
-pub const RULE: Color = Color::srgba(1.0, 1.0, 1.0, 0.18);
-pub const ACCENT: Color = Color::srgb(0.91, 0.725, 0.192);
-pub const ACCENT_HOVER: Color = Color::srgb(0.96, 0.8, 0.33);
-pub const INK: Color = Color::srgb(0.067, 0.067, 0.067);
-pub const TITLE: Color = Color::srgb(0.914, 0.933, 0.961);
-pub const TEXT_COLOR: Color = Color::srgba(0.914, 0.933, 0.961, 0.92);
-pub const DIM: Color = Color::srgba(0.914, 0.933, 0.961, 0.6);
+// The palette: the page menu's dashboard (`web/index.html`): near-black
+// green glass, pale green text, the lit green accent.
+pub const SHADE: Color = Color::srgba(0.012, 0.035, 0.012, 0.84);
+pub const PANEL: Color = Color::srgba(0.05, 0.12, 0.045, 0.95);
+pub const ROW: Color = Color::srgba(0.62, 1.0, 0.24, 0.06);
+pub const ROW_HOVER: Color = Color::srgba(0.62, 1.0, 0.24, 0.16);
+pub const RULE: Color = Color::srgba(0.67, 1.0, 0.43, 0.32);
+pub const ACCENT: Color = Color::srgb(0.616, 1.0, 0.235);
+pub const ACCENT_HOVER: Color = Color::srgb(0.79, 1.0, 0.54);
+pub const INK: Color = Color::srgb(0.012, 0.024, 0.012);
+pub const TITLE: Color = Color::srgb(0.914, 1.0, 0.85);
+pub const TEXT_COLOR: Color = Color::srgba(0.914, 1.0, 0.85, 0.92);
+pub const DIM: Color = Color::srgba(0.62, 0.75, 0.55, 0.9);
+/// Gold: the best medals, whatever the menus' colour.
+pub const GOLD: Color = Color::srgb(0.91, 0.725, 0.192);
 
 /// A button's background at rest and under the pointer.
 #[derive(Component, Clone, Copy)]

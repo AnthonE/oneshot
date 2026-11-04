@@ -96,6 +96,11 @@ impl HudState {
         self.skins.get(&slot).copied().unwrap_or(proto::SKIN_STANDARD)
     }
 
+    /// Every seat's name, by slot (bots' too).
+    pub fn names(&self) -> impl Iterator<Item = (&u8, &String)> {
+        self.names.iter()
+    }
+
     pub fn name(&self, slot: u8) -> String {
         self.names
             .get(&slot)
