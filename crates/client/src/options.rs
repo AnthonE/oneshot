@@ -151,6 +151,12 @@ fn spawn(commands: &mut Commands, settings: &Settings, binds: &Binds, st: &Page)
                             number(pane, settings, *knob, name);
                         }
                         toggle(pane, settings, Knob::Invert, "Invert look");
+                        // A browser paces to the screen whatever is asked.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            toggle(pane, settings, Knob::Vsync, "Vsync");
+                            number(pane, settings, Knob::MaxFps, "Frame cap");
+                        }
                         group(pane, "SOUND");
                         for (knob, name) in &NUMBERS[2..] {
                             number(pane, settings, *knob, name);

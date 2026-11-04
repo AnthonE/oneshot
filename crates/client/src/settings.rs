@@ -16,6 +16,8 @@ pub const FOV_MIN: f32 = 60.0;
 pub const FOV_MAX: f32 = 110.0;
 pub const FOV_STEP: f32 = 5.0;
 pub const VOL_STEP: f32 = 0.1;
+/// The frame caps the screen steps through; 0 is none (Gates' ladder).
+pub const FPS_LADDER: [u16; 6] = [30, 60, 120, 144, 240, 0];
 /// The browser's key.
 pub const BROWSER_KEY: &str = "oneshot.settings";
 
@@ -30,6 +32,11 @@ pub struct Settings {
     /// Every sound, and the game's own (shots, steps, hits), 0 to 1.
     pub master: f32,
     pub effects: f32,
+    /// The desktop's present mode: vsync, or as fast as it draws (a
+    /// browser always paces to the screen).
+    pub vsync: bool,
+    /// The desktop's frame cap, frames a second; 0 none.
+    pub max_fps: u16,
 }
 
 impl Default for Settings {
@@ -40,6 +47,8 @@ impl Default for Settings {
             fov: crate::look::rig::FOV_DEG,
             master: 1.0,
             effects: 1.0,
+            vsync: true,
+            max_fps: 0,
         }
     }
 }
@@ -52,6 +61,8 @@ pub enum Knob {
     Fov,
     Master,
     Effects,
+    Vsync,
+    MaxFps,
 }
 
 fn step(v: f32, s: f32) -> f32 {
@@ -74,6 +85,13 @@ impl Settings {
             fov: step(fin(self.fov, d.fov), FOV_STEP).clamp(FOV_MIN, FOV_MAX),
             master: step(fin(self.master, d.master), VOL_STEP).clamp(0.0, 1.0),
             effects: step(fin(self.effects, d.effects), VOL_STEP).clamp(0.0, 1.0),
+            vsync: self.vsync,
+            // None, or at least the ladder's lowest.
+            max_fps: if self.max_fps == 0 {
+                0
+            } else {
+                self.max_fps.max(FPS_LADDER[0])
+            },
         }
     }
 
@@ -86,6 +104,17 @@ impl Settings {
             Knob::Fov => self.fov += d * FOV_STEP,
             Knob::Master => self.master += d * VOL_STEP,
             Knob::Effects => self.effects += d * VOL_STEP,
+            Knob::Vsync => self.vsync = !self.vsync,
+            Knob::MaxFps => {
+                // Along the ladder, stopping at its ends; a cap off the
+                // ladder (hand-edited) moves from the nearest rung.
+                let at = FPS_LADDER
+                    .iter()
+                    .position(|&f| f == self.max_fps)
+                    .unwrap_or_else(|| FPS_LADDER.iter().position(|&f| f > self.max_fps).unwrap_or(0));
+                let to = (at as i32 + delta).clamp(0, FPS_LADDER.len() as i32 - 1) as usize;
+                self.max_fps = FPS_LADDER[to];
+            }
         }
         *self = self.clamped();
     }
@@ -98,6 +127,11 @@ impl Settings {
             Knob::Fov => format!("{:.0}°", self.fov),
             Knob::Master => format!("{:.0}%", self.master * 100.0),
             Knob::Effects => format!("{:.0}%", self.effects * 100.0),
+            Knob::Vsync => if self.vsync { "ON" } else { "OFF" }.into(),
+            Knob::MaxFps => match self.max_fps {
+                0 => "NONE".into(),
+                n => n.to_string(),
+            },
         }
     }
 
@@ -108,6 +142,8 @@ impl Settings {
             ("fov", format!("{:.0}", self.fov)),
             ("master", format!("{:.1}", self.master)),
             ("effects", format!("{:.1}", self.effects)),
+            ("vsync", self.vsync.to_string()),
+            ("max_fps", self.max_fps.to_string()),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -127,6 +163,8 @@ impl Settings {
                 ("master", Some(n)) => s.master = n,
                 ("effects", Some(n)) => s.effects = n,
                 ("invert", _) => s.invert = v == "true",
+                ("vsync", _) => s.vsync = v != "false",
+                ("max_fps", _) => s.max_fps = v.parse().unwrap_or(0),
                 ("sensitivity" | "fov" | "master" | "effects", None) => {}
                 _ => other.push((k.clone(), v.clone())),
             }
@@ -236,6 +274,16 @@ fn merge(base: (&Settings, &Binds), ours: (&Settings, &Binds), now: (&Settings, 
         fov: pick(base.0.fov, ours.0.fov, now.0.fov),
         master: pick(base.0.master, ours.0.master, now.0.master),
         effects: pick(base.0.effects, ours.0.effects, now.0.effects),
+        vsync: if ours.0.vsync != base.0.vsync {
+            ours.0.vsync
+        } else {
+            now.0.vsync
+        },
+        max_fps: if ours.0.max_fps != base.0.max_fps {
+            ours.0.max_fps
+        } else {
+            now.0.max_fps
+        },
     };
     let mut b = now.1.clone();
     for spec in &crate::binds::SPECS {
@@ -271,6 +319,56 @@ pub fn plugin(app: &mut App) {
         });
     }
     app.add_systems(Last, save_on_change);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.init_resource::<FrameDeadline>()
+        .add_systems(Update, apply_window)
+        .add_systems(Last, limit_frames.after(save_on_change));
+}
+
+/// The present mode the settings ask for, written only on a change (a
+/// write marks the window changed, and the backend does work for it).
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_window(settings: Res<Settings>, mut window: Query<&mut Window>) {
+    use bevy::window::PresentMode;
+    let want = if settings.vsync {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    };
+    for mut w in &mut window {
+        if w.present_mode != want {
+            w.present_mode = want;
+        }
+    }
+}
+
+/// When the next frame may start, under a cap.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct FrameDeadline(Option<std::time::Instant>);
+
+/// The frame cap (Gates' `limit_frames`): sleep to the deadline, then set
+/// the next a frame on; behind it, start again from now rather than run
+/// fast to catch up.
+#[cfg(not(target_arch = "wasm32"))]
+fn limit_frames(settings: Res<Settings>, mut deadline: ResMut<FrameDeadline>) {
+    use std::time::{Duration, Instant};
+    if settings.max_fps == 0 {
+        deadline.0 = None;
+        return;
+    }
+    let frame = Duration::from_nanos(1_000_000_000 / settings.max_fps as u64);
+    let now = Instant::now();
+    let target = deadline.0.unwrap_or(now);
+    if target > now {
+        std::thread::sleep(target - now);
+    }
+    let next = target + frame;
+    deadline.0 = Some(if next < Instant::now() {
+        Instant::now() + frame
+    } else {
+        next
+    });
 }
 
 /// Writes the settings when they changed (and what's written would
@@ -359,6 +457,21 @@ mod tests {
         b.set(Action::Jump, 0, Some(Bind::Key(KeyCode::KeyJ)));
         let t = text(&s, &b, v, &other, &other_binds);
         assert!(t.contains("bind.jump = \"KeyJ none\"") && !t.contains("Mouse6"), "{t}");
+    }
+
+    #[test]
+    fn the_frame_cap_steps_its_ladder_and_reads_back() {
+        let mut s = Settings::default();
+        assert_eq!(s.max_fps, 0);
+        s.adjust(Knob::MaxFps, -1);
+        assert_eq!(s.max_fps, 240);
+        s.adjust(Knob::MaxFps, -9);
+        assert_eq!(s.max_fps, 30);
+        s.adjust(Knob::Vsync, 0);
+        let (back, ..) = read(Some(&text(&s, &Binds::default(), 1, &[], &[])));
+        assert_eq!((back.max_fps, back.vsync), (30, false));
+        let (odd, ..) = read(Some("max_fps = 7\n"));
+        assert_eq!(odd.max_fps, 30, "under the ladder: its lowest");
     }
 
     #[test]
