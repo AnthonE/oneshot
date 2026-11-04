@@ -260,6 +260,32 @@ fn msgs() -> Vec<Msg> {
         Msg::Reveal {
             salt: [0x0123_4567_89ab_cdef, u64::MAX],
         },
+        Msg::Medal {
+            slot: 3,
+            medal: medal::TRIPLE_KILL,
+            victim: 14,
+        },
+        Msg::Carnage {
+            slot: 15,
+            kills: 25,
+            deaths: 7,
+            assists: 9,
+            betrayals: 1,
+            shots: 1312,
+            hits: 655,
+            heads: 31,
+            damage: 4321,
+            taken: 1789,
+            best_spree: 11,
+            best_multi: 3,
+            medals: {
+                let mut m = [0u8; medal::COUNT];
+                m[medal::DOUBLE_KILL as usize] = 4;
+                m[medal::KILLING_FRENZY as usize] = 1;
+                m[medal::EXTERMINATION as usize] = 255;
+                m
+            },
+        },
     ]
 }
 
@@ -328,6 +354,20 @@ fn decoders_refuse_garbage() {
     assert!(decode_input(&buf[..n + 1]).is_err(), "trailing byte");
     assert!(decode_snapshot(&buf[..n]).is_err(), "wrong kind");
     assert!(decode_msg(&[99]).is_err());
+    // A medal past the table, or none.
+    let mut buf = [0u8; 64];
+    for medal in [0, medal::COUNT as u8] {
+        let n = encode_msg(
+            &Msg::Medal {
+                slot: 1,
+                medal,
+                victim: 2,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        assert!(decode_msg(&buf[..n]).is_err(), "medal {medal}");
+    }
 }
 
 #[test]
@@ -345,12 +385,12 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0x7578_0987_9b7c_1ac2,
-        0xd724_beda_f252_12c2,
-        0xecdc_9032_25ab_e115,
+        0x0569_f78f_ef6d_0143,
+        0x98c9_f7d7_fb0f_732e,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x9b51_4e6b_3773_df6f,
+        0x00e0_af30_9763_7bd8,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,
@@ -359,6 +399,8 @@ fn the_bytes_match_their_goldens() {
         0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,
         0xdfb3_0ed7_79ac_056f,
+        0x26d2_6718_97d8_1f69,
+        0xcf3f_7643_a904_811f,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

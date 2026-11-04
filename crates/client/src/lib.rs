@@ -16,6 +16,7 @@ pub mod hud;
 pub mod level;
 pub mod link;
 pub mod look;
+pub mod medals;
 pub mod options;
 pub mod pause;
 pub mod pointer;
@@ -294,6 +295,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
         )
             .chain(),
     );
+    app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
@@ -304,7 +306,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
     } else {
-        app.add_systems(Startup, hud::setup);
+        app.add_systems(Startup, (hud::setup, medals::setup));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
@@ -865,6 +867,14 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     set("frames", (*frames).into());
     set("kills", st.kills.into());
     set("deaths", st.deaths.into());
+    set("assists", st.assists.into());
+    // Our medals this match, by name, and the carnage report's rows.
+    let medals = js_sys::Object::new();
+    for (&id, &n) in &st.earned {
+        let _ = js_sys::Reflect::set(&medals, &JsValue::from_str(proto::medal::info(id).name), &n.into());
+    }
+    set("medals", medals.into());
+    set("carnage", st.carnage.len().into());
     set("alive", s.core.own().0.alive.into());
     set("slot", s.core.slot.into());
     let (f, p) = s.core.own();

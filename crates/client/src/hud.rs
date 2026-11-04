@@ -3,11 +3,14 @@
 //! arc toward whoever hurt us, the score and clock, the kill feed, and a
 //! line in the middle for the countdown, the result, the kill cam and the
 //! respawn; before the welcome, the queue's line. `N` shows the net graph.
-//! Everything here is read from the session; nothing is decided.
+//! Medals and the carnage report are `medals.rs`'s to draw; their lines in
+//! the feed are here. Everything here is read from the session; nothing is
+//! decided.
 
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
+use proto::medal as md;
 use proto::{EventState, Msg};
 use sim::consts::{HEALTH_MAX, SHIELD_MAX, TICK_HZ};
 use sim::events::Kind;
@@ -38,9 +41,28 @@ pub struct HudState {
     hit_kill: bool,
     hurt_at: f32,
     hurt_angle: f32,
-    /// Our kills and deaths as the stream told them (the page's stats).
+    /// Our kills, deaths and assists as the stream told them (the page's
+    /// stats).
     pub kills: u32,
     pub deaths: u32,
+    pub assists: u32,
+    /// Our medals on screen: each id and when it came.
+    pub medals: Vec<(u8, f32)>,
+    /// Bumped when `medals` gains one.
+    pub medals_gen: u32,
+    /// Our medals for the announcer to say, oldest first (`sound.rs` takes
+    /// them).
+    pub announce: Vec<u8>,
+    /// Every medal of ours this match, by id: the end screen's.
+    pub earned: BTreeMap<u8, u16>,
+    /// Each seat's spree rung as the stream last told it, and the one it
+    /// had when it last died: what a Killjoy ended.
+    rung: BTreeMap<u8, u8>,
+    spree_ended: BTreeMap<u8, u8>,
+    /// The carnage report, a row a seat, once the match is over.
+    pub carnage: BTreeMap<u8, Msg>,
+    /// The welcomes seen: a new one is a new match (a cup's next heat).
+    welcomes: u32,
     /// The last line the stream gave for the menu: the queue, a cup's
     /// standing, a refusal.
     pub status: String,
@@ -51,6 +73,12 @@ pub struct HudState {
     /// The net graph is up.
     pub net: bool,
 }
+
+/// Medals on screen at once, and how long each stays.
+pub const MEDALS_SHOWN: usize = 6;
+pub const MEDAL_S: f32 = 4.0;
+/// Medals the announcer may have waiting.
+const ANNOUNCE_MAX: usize = 8;
 
 impl HudState {
     pub fn skin(&self, slot: u8) -> u8 {
@@ -308,9 +336,76 @@ pub fn status_line(m: &Msg) -> Option<String> {
     })
 }
 
+/// A medal from the stream. Ours: on screen, counted, and for the
+/// announcer if it says it. Anyone's that the feed carries (sprees, the
+/// big multi-kills, a spree ended): a line in it.
+fn on_medal(st: &mut HudState, me: u8, slot: u8, medal: u8, victim: u8, now: f32) {
+    let info = md::info(medal);
+    if info.family == md::Family::Spree {
+        st.rung.insert(slot, medal);
+    }
+    if slot == me {
+        st.medals.push((medal, now));
+        if st.medals.len() > MEDALS_SHOWN {
+            st.medals.remove(0);
+        }
+        st.medals_gen = st.medals_gen.wrapping_add(1);
+        *st.earned.entry(medal).or_default() += 1;
+        if medal == md::ASSIST {
+            st.assists += 1;
+        }
+        if info.voiced {
+            st.announce.push(medal);
+            if st.announce.len() > ANNOUNCE_MAX {
+                st.announce.remove(0);
+            }
+        }
+    }
+    if let Some(line) = feed_line(st, me, slot, medal, victim) {
+        st.feed.push((line, now));
+    }
+}
+
+/// What the feed says of `slot`'s `medal`, if anything: the rungs everyone
+/// hears of, and a spree's end.
+fn feed_line(st: &HudState, me: u8, slot: u8, medal: u8, victim: u8) -> Option<String> {
+    let who = if slot == me { "You".to_string() } else { st.name(slot) };
+    let name = md::info(medal).name;
+    Some(match md::info(medal).family {
+        md::Family::Spree if slot == me => return None,
+        md::Family::Spree => format!("{who} is on a {name}"),
+        md::Family::Multi if medal >= md::OVERKILL && slot != me => format!("{who}: {name}"),
+        _ => match medal {
+            md::KILLJOY => {
+                let spree = st.spree_ended.get(&victim).map_or("spree", |&r| md::info(r).name);
+                let whose = if victim == me {
+                    "your".to_string()
+                } else {
+                    format!("{}'s", st.name(victim))
+                };
+                format!("{who} ended {whose} {spree}")
+            }
+            md::EXTERMINATION | md::PERFECTION => format!("{who}: {name}"),
+            _ => return None,
+        },
+    })
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
     let me = s.core.slot;
+    // A new match (a cup's next heat): its medals and report start over.
+    if s.welcomes != st.welcomes {
+        st.welcomes = s.welcomes;
+        st.medals.clear();
+        st.announce.clear();
+        st.earned.clear();
+        st.rung.clear();
+        st.spree_ended.clear();
+        st.carnage.clear();
+        st.assists = 0;
+        st.medals_gen = st.medals_gen.wrapping_add(1);
+    }
     for e in events {
         if e.kind == Kind::Hit as u8 {
             if e.a == me && e.b != me {
@@ -356,6 +451,13 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 if *victim == me {
                     st.deaths += 1;
                 }
+                if let Some(r) = st.rung.remove(victim) {
+                    st.spree_ended.insert(*victim, r);
+                }
+            }
+            &Msg::Medal { slot, medal, victim } => on_medal(st, me, slot, medal, victim, now),
+            &Msg::Carnage { slot, .. } => {
+                st.carnage.insert(slot, *m);
             }
             Msg::Bye => st.ended = true,
             _ => {}
@@ -365,6 +467,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
     while st.feed.len() > FEED_LINES {
         st.feed.remove(0);
     }
+    st.medals.retain(|&(_, t)| now - t < MEDAL_S);
 }
 
 fn mmss(s: f32) -> String {
@@ -468,7 +571,7 @@ pub fn draw(
     if snap.phase == 1 {
         score.push(mmss(clock));
     }
-    score.push(format!("K {}  D {}", st.kills, st.deaths));
+    score.push(format!("K {}  D {}  A {}", st.kills, st.deaths, st.assists));
     let score = score.join("\n");
     let center = match snap.phase {
         0 => format!("Starting in {}", clock.ceil() as u32),
@@ -658,6 +761,30 @@ pub fn hurt_rim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_feed_tells_of_sprees_and_their_end() {
+        let mut st = HudState::default();
+        st.names.insert(1, "ana".into());
+        st.names.insert(2, "bo".into());
+        on_medal(&mut st, 0, 1, md::KILLING_SPREE, 3, 0.0);
+        assert_eq!(st.feed.last().unwrap().0, "ana is on a Killing Spree");
+        // Ana dies to Bo: the kill puts her rung aside, then Bo's Killjoy.
+        if let Some(r) = st.rung.remove(&1) {
+            st.spree_ended.insert(1, r);
+        }
+        on_medal(&mut st, 0, 2, md::KILLJOY, 1, 0.0);
+        assert_eq!(st.feed.last().unwrap().0, "bo ended ana's Killing Spree");
+        // Ours: on screen, counted, and said; a headshot only drawn.
+        let lines = st.feed.len();
+        on_medal(&mut st, 0, 0, md::DOUBLE_KILL, 1, 1.0);
+        on_medal(&mut st, 0, 0, md::HEADSHOT, 1, 1.0);
+        assert_eq!(st.medals, vec![(md::DOUBLE_KILL, 1.0), (md::HEADSHOT, 1.0)]);
+        assert_eq!(st.announce, vec![md::DOUBLE_KILL]);
+        assert_eq!(st.feed.len(), lines, "our own rungs aren't fed");
+        on_medal(&mut st, 0, 0, md::ASSIST, 1, 1.0);
+        assert_eq!((st.assists, st.earned[&md::ASSIST]), (1, 1));
+    }
 
     #[test]
     fn the_menu_reads_the_queue_and_the_cup() {

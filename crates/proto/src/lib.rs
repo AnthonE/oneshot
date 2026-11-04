@@ -10,6 +10,7 @@
 
 pub mod bits;
 pub mod frame;
+pub mod medal;
 
 use bits::{BitReader, BitWriter, WireError};
 use sim::consts::MAX_FIGHTERS;
@@ -20,7 +21,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 12;
+pub const PROTO_VER: u16 = 13;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -793,6 +794,9 @@ pub const MODE_CUP: u8 = 5;
 pub const MODE_BIG_TEAM: u8 = 6;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
+/// Bits a medal id takes (`medal::COUNT` fits).
+const MEDAL_BITS: u32 = 6;
+const _: () = assert!(medal::COUNT <= 1 << MEDAL_BITS);
 
 // The hello carries a pass (640 bytes) and so sizes every message; stream
 // messages are a handful a second, so `Copy` is worth more than the bytes.
@@ -865,6 +869,32 @@ pub enum Msg {
         salt: [u64; 2],
     },
     Bye,
+    /// Server → whoever earned it, or everyone for a public one
+    /// ([`medal::Info::public`]): a medal (`medal`), for the kill on
+    /// `victim`.
+    Medal {
+        slot: u8,
+        medal: u8,
+        victim: u8,
+    },
+    /// Server → everyone, once the match is over: one seat's carnage
+    /// report. Rounds are hitscan rounds; damage is in points.
+    Carnage {
+        slot: u8,
+        kills: u16,
+        deaths: u16,
+        assists: u16,
+        betrayals: u16,
+        shots: u16,
+        hits: u16,
+        heads: u16,
+        damage: u16,
+        taken: u16,
+        best_spree: u16,
+        best_multi: u8,
+        /// Each medal's count, by id (saturated).
+        medals: [u8; medal::COUNT],
+    },
 }
 
 /// The commitment to a match's salt: SHA-256 of its two words, little-endian.
@@ -1018,8 +1048,62 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
                 w.write((x >> 32) as u32, 32)?;
             }
         }
+        Msg::Medal { slot, medal, victim } => {
+            w.write(11, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            w.write(*medal as u32, MEDAL_BITS)?;
+            w.write(*victim as u32, SLOT_BITS)?;
+        }
+        Msg::Carnage {
+            slot,
+            kills,
+            deaths,
+            assists,
+            betrayals,
+            shots,
+            hits,
+            heads,
+            damage,
+            taken,
+            best_spree,
+            best_multi,
+            medals,
+        } => {
+            w.write(12, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            for &x in &[
+                *kills,
+                *deaths,
+                *assists,
+                *betrayals,
+                *shots,
+                *hits,
+                *heads,
+                *damage,
+                *taken,
+                *best_spree,
+            ] {
+                w.write(x as u32, 16)?;
+            }
+            w.write(*best_multi as u32, 8)?;
+            // Only the medals earned: an id and its count each.
+            let n = medals.iter().filter(|&&c| c > 0).count();
+            w.write(n as u32, MEDAL_BITS)?;
+            for (id, &c) in medals.iter().enumerate().filter(|(_, &c)| c > 0) {
+                w.write(id as u32, MEDAL_BITS)?;
+                w.write(c as u32, 8)?;
+            }
+        }
     }
     Ok(w.finish())
+}
+
+/// A medal id: [`medal::NONE`] or past the table is malformed.
+fn r_medal(r: &mut BitReader) -> R<u8> {
+    match r.read(MEDAL_BITS)? as usize {
+        id if id > 0 && id < medal::COUNT => Ok(id as u8),
+        _ => Err(WireError::Malformed),
+    }
 }
 
 pub fn decode_msg(buf: &[u8]) -> R<Msg> {
@@ -1109,6 +1193,50 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 *x = r.read(32)? as u64 | (r.read(32)? as u64) << 32;
             }
             Msg::Reveal { salt }
+        }
+        11 => Msg::Medal {
+            slot: r.read(SLOT_BITS)? as u8,
+            medal: r_medal(&mut r)?,
+            victim: r.read(SLOT_BITS)? as u8,
+        },
+        12 => {
+            let slot = r.read(SLOT_BITS)? as u8;
+            let mut v = [0u16; 10];
+            for x in v.iter_mut() {
+                *x = r.read(16)? as u16;
+            }
+            let best_multi = r.read(8)? as u8;
+            let n = r.read(MEDAL_BITS)? as usize;
+            if n >= medal::COUNT {
+                return Err(WireError::Cap);
+            }
+            // Ascending, each earned: one way to write any tally.
+            let mut medals = [0u8; medal::COUNT];
+            let mut last = 0;
+            for _ in 0..n {
+                let id = r_medal(&mut r)? as usize;
+                let c = r.read(8)? as u8;
+                if id <= last || c == 0 {
+                    return Err(WireError::Malformed);
+                }
+                medals[id] = c;
+                last = id;
+            }
+            Msg::Carnage {
+                slot,
+                kills: v[0],
+                deaths: v[1],
+                assists: v[2],
+                betrayals: v[3],
+                shots: v[4],
+                hits: v[5],
+                heads: v[6],
+                damage: v[7],
+                taken: v[8],
+                best_spree: v[9],
+                best_multi,
+                medals,
+            }
         }
         _ => return Err(WireError::Malformed),
     };
