@@ -411,7 +411,7 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
 pub fn draw(
     time: Res<Time>,
     mut fx: ResMut<Fx>,
-    cams: Query<&GlobalTransform, (With<Camera3d>, Without<FxMesh>)>,
+    cams: Query<&GlobalTransform, (With<crate::look::rig::EyeCam>, Without<FxMesh>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut q: Query<(&FxMesh, &mut Transform, &mut GlobalTransform), Without<FlashLight>>,
     mut lights: Query<(&FlashLight, &mut PointLight, &mut Transform, &mut Visibility), Without<FxMesh>>,

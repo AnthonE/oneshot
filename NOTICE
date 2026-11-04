@@ -41,7 +41,9 @@ sim-core's face.rs facet noise as look/rock.rs), the ground cover
 (foliage.rs with assets/shaders/foliage.wgsl, foliage_prepass.wgsl,
 foliage_common.wgsl and alpha_cut.wgsl; clutter.rs's tuft as
 look/grass.rs; clutter.rs's stones and litter and plants.rs's dead scrub
-as look/clutter.rs), and the ground modules as they arrive), and into
+as look/clutter.rs), the bodies (anim.rs's locomotion as look/anim.rs,
+own_shadow.rs, portrait.rs, and faces.rs's nametag as src/tags.rs), and
+the ground modules as they arrive), and into
 tools/glb from Gates' crates/client/src/webassets.rs, under the MIT
 licence:
 

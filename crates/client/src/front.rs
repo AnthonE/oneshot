@@ -2,7 +2,8 @@
 //! `render/ui.rs`, and the page it was drawn from,
 //! `client-web/web/index.html`): the wordmark top-left, a nav column whose
 //! type is its own button, and beside it the play panel (who you are, which
-//! mode, PLAY) and an open stage that says what the picked mode is. Behind
+//! mode, PLAY) and an open stage: Triple T in the skin picked
+//! (`look/portrait.rs`), and what the picked mode is. Behind
 //! it all one of our maps, live, under Gates' wash, with the camera drifting
 //! (Gates plays footage; we have the level).
 //!
@@ -265,7 +266,14 @@ fn exit(mut commands: Commands, roots: Query<Entity, With<TitleRoot>>, mut front
 /// The gutter either side of the shell.
 const GUT: f32 = 40.0;
 
-fn build(commands: &mut Commands, front: &Front, player: &Player, door: &Door, knocking: bool) {
+fn build(
+    commands: &mut Commands,
+    front: &Front,
+    player: &Player,
+    door: &Door,
+    knocking: bool,
+    portrait: Option<&crate::look::portrait::Portrait>,
+) {
     let signin = door.signin();
     commands
         .spawn((TitleRoot, ui::shell(), GlobalZIndex(5)))
@@ -305,7 +313,7 @@ fn build(commands: &mut Commands, front: &Front, player: &Player, door: &Door, k
             .with_children(|body| {
                 nav(body, door.quits());
                 panel(body, front, player, &signin, knocking);
-                stage(body, front.mode);
+                stage(body, front.mode, portrait);
             });
             // The foot.
             root.spawn(Node {
@@ -543,53 +551,72 @@ fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool) {
     }
 }
 
-/// The open stage: the scene, and the picked mode over it.
-fn stage(body: &mut ChildSpawnerCommands, id: u8) {
+/// How tall Triple T stands on the stage: tall enough to read at 720p
+/// without reaching the wordmark.
+const HERO_VH: f32 = 56.0;
+
+/// The open stage: Triple T beside the panel, and the picked mode over the
+/// scene.
+fn stage(body: &mut ChildSpawnerCommands, id: u8, portrait: Option<&crate::look::portrait::Portrait>) {
     let m = mode(id);
     body.spawn(Node {
         flex_grow: 1.0,
         min_width: Val::Px(0.0),
-        flex_direction: FlexDirection::Column,
-        justify_content: JustifyContent::FlexEnd,
-        padding: UiRect::new(Val::Px(56.0), Val::Px(0.0), Val::Px(0.0), Val::Px(8.0)),
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::FlexEnd,
+        column_gap: Val::Px(20.0),
+        padding: UiRect::new(Val::Px(24.0), Val::Px(0.0), Val::Px(0.0), Val::Px(8.0)),
         ..default()
     })
-    .with_children(|s| {
-        s.spawn(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(10.0),
-            max_width: Val::Px(640.0),
-            ..default()
-        })
-        .with_children(|hero| {
-            hero.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(10.0),
+    .with_children(|stage| {
+        if let Some(p) = portrait {
+            stage.spawn(crate::look::portrait::view(p, Val::Vh(HERO_VH)));
+        }
+        stage
+            .spawn(Node {
+                flex_grow: 1.0,
+                min_width: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
                 ..default()
             })
-            .with_children(|k| {
-                k.spawn((
-                    Node {
-                        width: Val::Px(26.0),
-                        height: Val::Px(3.0),
+            .with_children(|s| {
+                s.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(10.0),
+                    max_width: Val::Px(640.0),
+                    ..default()
+                })
+                .with_children(|hero| {
+                    hero.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(10.0),
                         ..default()
-                    },
-                    BackgroundColor(ui::MARK),
-                ));
-                k.spawn((ui::strong(m.short, 12.0, ui::TITLE), ui::TEXT_SHADOW));
+                    })
+                    .with_children(|k| {
+                        k.spawn((
+                            Node {
+                                width: Val::Px(26.0),
+                                height: Val::Px(3.0),
+                                ..default()
+                            },
+                            BackgroundColor(ui::MARK),
+                        ));
+                        k.spawn((ui::strong(m.short, 12.0, ui::TITLE), ui::TEXT_SHADOW));
+                    });
+                    hero.spawn((
+                        Text::new(m.name),
+                        ui::display(44.0),
+                        TextColor(ui::TITLE),
+                        ui::TEXT_SHADOW,
+                    ));
+                    hero.spawn((
+                        ui::label(m.about, 16.0, ui::TEXT_COLOR.with_alpha(0.88)),
+                        ui::TEXT_SHADOW,
+                    ));
+                });
             });
-            hero.spawn((
-                Text::new(m.name),
-                ui::display(44.0),
-                TextColor(ui::TITLE),
-                ui::TEXT_SHADOW,
-            ));
-            hero.spawn((
-                ui::label(m.about, 16.0, ui::TEXT_COLOR.with_alpha(0.88)),
-                ui::TEXT_SHADOW,
-            ));
-        });
     });
 }
 
@@ -774,6 +801,7 @@ fn rebuild(
     door: NonSend<Door>,
     knocking: NonSend<Knocking>,
     roots: Query<Entity, With<TitleRoot>>,
+    portrait: Option<Res<crate::look::portrait::Portrait>>,
 ) {
     let signin = door.signin();
     if !front.dirty && front.drawn.as_ref() == Some(&signin) {
@@ -784,7 +812,14 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    build(&mut commands, &front, &player, &door, knocking.0.is_some());
+    build(
+        &mut commands,
+        &front,
+        &player,
+        &door,
+        knocking.0.is_some(),
+        portrait.as_deref(),
+    );
 }
 
 /// The curtain over the backdrop: up until its level is there (built,

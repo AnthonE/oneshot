@@ -30,6 +30,7 @@ pub mod pose;
 pub mod settings;
 pub mod shot;
 pub mod sound;
+pub mod tags;
 pub mod ui;
 
 use std::collections::BTreeMap;
@@ -328,6 +329,20 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
+    // Your own body, cast in the sun's shadow and drawn by no camera
+    // (`look/own_shadow.rs`).
+    .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
+    // The title's Triple T is on a layer of his own, and every node his
+    // scene spawns takes it before visibility is worked out
+    // (`look/portrait.rs`).
+    .add_plugins(bevy::app::HierarchyPropagatePlugin::<
+        bevy::camera::visibility::RenderLayers,
+    >::new(PostUpdate))
+    .configure_sets(
+        PostUpdate,
+        bevy::app::PropagateSet::<bevy::camera::visibility::RenderLayers>::default()
+            .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+    )
     // The sky (look/deck.rs and its layers) under each map's mood.
     .add_plugins(MaterialPlugin::<look::deck::CloudMaterial>::default())
     .add_plugins(MaterialPlugin::<look::deck::SkyFogMaterial>::default())
@@ -347,6 +362,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::textures::load,
             look::rock::load,
             look::guns::load,
+            look::own_shadow::setup,
+            look::portrait::setup,
             look::fx::setup,
             look::prewarm::setup,
             (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
@@ -412,7 +429,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             )
                 .chain(),
             look::grass::cull,
-            look::bodies::graph,
+            look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (draw_fighters, draw_vehicles, look::foliage::update).chain(),
             fly,
@@ -424,6 +441,33 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         )
             .chain(),
     );
+    // Your shadow and the title's Triple T are bodies too, posed beside
+    // everyone else's; then every body's player is driven; then, between
+    // the animation and the transforms, every spine is turned
+    // (`look/anim.rs`).
+    app.add_systems(
+        Update,
+        (
+            look::own_shadow::stream.after(draw_fighters),
+            look::portrait::stand,
+            look::portrait::activate,
+        ),
+    )
+    .add_systems(
+        Update,
+        look::bodies::drive
+            .after(look::own_shadow::stream)
+            .after(look::portrait::stand)
+            .after(draw_fighters),
+    )
+    .add_systems(
+        PostUpdate,
+        look::bodies::pose_spines
+            .after(bevy::app::AnimationSystems)
+            .before(bevy::transform::TransformSystems::Propagate),
+    )
+    // Names over heads, after the camera is placed (`tags.rs`).
+    .add_systems(Update, tags::draw.after(view).after(hud::draw));
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
@@ -684,11 +728,8 @@ fn draw_fighters(
     posed: Option<Res<pose::Pose>>,
     opts: Res<Opts>,
     (mut meshes, mut mats, mut vis): BodyParts,
-    graph: Option<Res<look::bodies::Graph>>,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
-    mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
     (mut fx, mut shield_mats, mut shells): ShieldParts,
     (time, mut walkers): (Res<Time>, ResMut<look::foliage::Walkers>),
 ) {
@@ -752,14 +793,12 @@ fn draw_fighters(
         look::bodies::pose(
             &mut commands,
             &models,
-            graph.as_deref(),
             d,
-            seats.get(&d.slot).map(|(v, k)| (v, *k)),
+            seats.get(&d.slot).map(|(v, k)| (v.yaw, *k)),
             e,
             &mut bodies,
             &mut at,
-            &mut players,
-            &mut playing,
+            time.delta_secs(),
         );
         look::bodies::flare(
             e,

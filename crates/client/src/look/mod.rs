@@ -1,6 +1,7 @@
 //! The look: Gates' renderer, ported piece by piece (docs/RIP.md §9).
 //! Drawing only: nothing here reads anything but the map and the camera.
 
+pub mod anim;
 pub mod bodies;
 pub mod cliffs;
 pub mod cloud_shadow;
@@ -16,7 +17,9 @@ pub mod ground;
 pub mod guns;
 pub mod mood;
 pub mod moon;
+pub mod own_shadow;
 pub mod pipelines;
+pub mod portrait;
 pub mod potato;
 pub mod prewarm;
 pub mod quality;
