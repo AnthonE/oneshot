@@ -591,12 +591,17 @@ pub fn warm(
         let Some(me) = meshes.get(&mesh.0) else {
             continue;
         };
-        let key = (
-            mat.0.id(),
-            me.attribute(Mesh::ATTRIBUTE_UV_0).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_COLOR).is_some(),
-        );
+        // A RENDER_WORLD mesh already sent to the GPU can't be read here
+        // (`attribute` panics): its pipeline is built when it draws.
+        let has = |id| me.try_attribute_option(id).map(|a| a.is_some());
+        let (Ok(uv0), Ok(uv1), Ok(color)) = (
+            has(Mesh::ATTRIBUTE_UV_0.id),
+            has(Mesh::ATTRIBUTE_UV_1.id),
+            has(Mesh::ATTRIBUTE_COLOR.id),
+        ) else {
+            continue;
+        };
+        let key = (mat.0.id(), uv0, uv1, color);
         if seen.contains(&key) {
             continue;
         }

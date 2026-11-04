@@ -117,11 +117,16 @@ pub fn warm_level(
         let (Some(m), Some(me)) = (mats.get(&mat.0), meshes.get(&mesh.0)) else {
             continue;
         };
+        // A RENDER_WORLD mesh already sent to the GPU can't be read here
+        // (`attribute` panics): its pipeline is built when it draws.
+        let Ok(uv1) = me.try_attribute_option(Mesh::ATTRIBUTE_UV_1.id).map(|a| a.is_some()) else {
+            continue;
+        };
         let key = (
             m.base.normal_map_texture.is_some(),
             m.base.metallic_roughness_texture.is_some(),
             m.base.emissive_texture.is_some(),
-            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
+            uv1,
         );
         if seen.contains(&key) {
             continue;
