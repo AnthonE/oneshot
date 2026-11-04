@@ -7,6 +7,9 @@ Models (crates/client/assets/models): Triple T and the guns are
 commissioned from Meshy on a paid plan, owned outright, from the Gates
 repository (AnthonE/Gates, assets/models). No attribution is owed. They are
 Gates' models with their KTX2 textures re-encoded as JPEG by tools/glb.
+The rock pieces (models/rock, block_*_far.glb) are Gates' formation rock
+pieces (assets/models/prop/rock), commissioned from Meshy on the same
+terms, geometry only, copied as they are by tools/assets.mjs.
 
 Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
@@ -29,9 +32,24 @@ Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
     Reserved"
 
 Code ported into the Bevy client (crates/client/src/look) from Gates
-(AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, and the sky,
-ground and grass modules as they arrive), and into tools/glb from Gates'
-crates/client/src/webassets.rs, under the MIT licence:
+(AnthonE/Gates, crates/client/src/render: rig.rs, fill.rs, quality.rs,
+potato.rs, render_scale.rs with assets/shaders/render_scale.wgsl, the
+settings' graphics half, the sky (sky.rs, deck.rs, moon.rs, stars.rs,
+rain.rs, rainbow.rs, cloud_shadow.rs, shafts.rs, and weather.rs and rig.rs's
+day and night as look/mood.rs, with assets/shaders/deck.wgsl, cloud.wgsl
+and sky_deck.wgsl as cloud.wgsl, cloud_prepass.wgsl, sky_fog.wgsl,
+moon.wgsl, stars.wgsl, rain.wgsl, rainbow.wgsl, cloud_shadow.wgsl), the
+level's surfaces (weathering.rs with assets/shaders/weathering.wgsl,
+fresnel.rs, cliff_skin.rs and cliffs.rs as look/cliffs.rs, boulders.rs and
+sim-core's face.rs facet noise as look/rock.rs), the ground cover
+(foliage.rs with assets/shaders/foliage.wgsl, foliage_prepass.wgsl,
+foliage_common.wgsl and alpha_cut.wgsl; clutter.rs's tuft as
+look/grass.rs; clutter.rs's stones and litter and plants.rs's dead scrub
+as look/clutter.rs), the bodies (anim.rs's locomotion as look/anim.rs,
+own_shadow.rs, portrait.rs, and faces.rs's nametag as src/tags.rs), and
+the ground modules as they arrive), and into
+tools/glb from Gates' crates/client/src/webassets.rs, under the MIT
+licence:
 
     Copyright (c) 2026 MoreRight DAO
 

@@ -153,3 +153,97 @@ impl NativeClient {
         self.session.take_messages()
     }
 }
+
+/// A lobby session on wtransport (`MODE_LOBBY`): the party's acts up, its
+/// state down, and its voice both ways. For the server's tests and a
+/// native client's party.
+pub struct NativeLobby {
+    conn: Connection,
+    send: tokio::sync::Mutex<wtransport::SendStream>,
+    msgs: tokio::sync::Mutex<UnboundedReceiver<Msg>>,
+    voices: tokio::sync::Mutex<UnboundedReceiver<proto::voice::VoiceFrame>>,
+    closed: Arc<AtomicBool>,
+    _endpoint: Endpoint<wtransport::endpoint::endpoint_side::Client>,
+}
+
+impl NativeLobby {
+    /// Connects as [`NativeClient::connect`] does; `hello` asks for
+    /// `MODE_LOBBY`.
+    pub async fn connect(addr: &str, cert_hash: Option<[u8; 32]>, hello: Msg) -> Result<NativeLobby, String> {
+        let c = NativeClient::connect(addr, cert_hash, hello).await?;
+        let NativeClient {
+            conn,
+            msgs,
+            datagrams,
+            closed,
+            _send,
+            _endpoint,
+            ..
+        } = c;
+        let (vtx, voices) = unbounded_channel();
+        let mut datagrams = datagrams;
+        tokio::spawn(async move {
+            while let Some((_, d)) = datagrams.recv().await {
+                if proto::datagram_kind(&d) != Some(proto::DG_VOICE) {
+                    continue;
+                }
+                if let Ok(f) = proto::voice::decode_voice(&d) {
+                    if vtx.send(f).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(NativeLobby {
+            conn,
+            send: tokio::sync::Mutex::new(_send),
+            msgs: tokio::sync::Mutex::new(msgs),
+            voices: tokio::sync::Mutex::new(voices),
+            closed,
+            _endpoint,
+        })
+    }
+
+    pub async fn send(&self, m: &Msg) -> Result<(), String> {
+        let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+        let n = frame_msg(m, &mut f).map_err(|_| "frame".to_string())?;
+        self.send
+            .lock()
+            .await
+            .write_all(&f[..n])
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn send_voice(&self, f: &proto::voice::VoiceFrame) -> bool {
+        let mut buf = [0u8; 8 + proto::voice::VOICE_MAX_BYTES];
+        match proto::voice::encode_voice_up(f, &mut buf) {
+            Ok(n) => self.conn.send_datagram(&buf[..n]).is_ok(),
+            Err(_) => false,
+        }
+    }
+
+    /// The next stream message, if one comes within `wait`.
+    pub async fn next(&self, wait: std::time::Duration) -> Option<Msg> {
+        tokio::time::timeout(wait, self.msgs.lock().await.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// The next voice frame, if one comes within `wait`.
+    pub async fn voice(&self, wait: std::time::Duration) -> Option<proto::voice::VoiceFrame> {
+        tokio::time::timeout(wait, self.voices.lock().await.recv())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
+    }
+
+    pub fn close(&self) {
+        self.conn.close(0u32.into(), b"bye");
+    }
+}

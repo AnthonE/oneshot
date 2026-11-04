@@ -187,6 +187,7 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg>
         pass: Pass::new(pass).unwrap(),
         mode,
         skin,
+        party: 0,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();

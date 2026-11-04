@@ -4,14 +4,15 @@ Unpack it anywhere and run `oneshot` (`oneshot.exe` on Windows). Keep the
 `assets` folder beside it.
 
 ```
-oneshot                          play on the public server
-oneshot --name you --mode ffa    ffa, gungame, bigteam or casual (the default: you and bots)
+oneshot                          the title screen: pick a mode, PLAY, on the public server
+oneshot --name you --mode ffa    straight into a match: ffa, gungame, bigteam or casual (you and bots)
 oneshot --server 127.0.0.1:8080  play on a local oneshot-server
 oneshot --lite                   the light tier, for a slow GPU
 oneshot --help                   everything else, and the keys
 ```
 
-Click the window to take the mouse; Esc lets it go.
+Click the window to take the mouse; Esc opens the menu (settings, leave the
+match).
 
 - **macOS:** the build isn't signed yet. The first time, right-click
   `oneshot`, Open, and confirm (or `xattr -dr com.apple.quarantine .` in

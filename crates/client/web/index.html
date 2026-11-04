@@ -13,323 +13,318 @@
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-SemiBold.otf) format('opentype'); font-weight: 600; font-display: swap; }
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Bold.otf) format('opentype'); font-weight: 700; font-display: swap; }
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Black.otf) format('opentype'); font-weight: 900; font-display: swap; }
+
+      /* The dashboard: a green core glowing in the dark, glass blades, the
+         four face buttons. Ours, after the early-2000s console menus. */
+      :root {
+        --void: #030603; --deep: #071207; --moss: #0e2410;
+        --glow: #9dff3c; --lime: #c9ff8a; --ink: #e9ffd9; --dim: #9fbf8c; --faint: #5f7f52;
+        --glass: rgba(56, 120, 34, 0.20); --glass-hi: rgba(120, 220, 60, 0.30);
+        --edge: rgba(170, 255, 110, 0.32); --edge-hi: rgba(200, 255, 140, 0.85);
+        --a: #5fc236; --b: #d8443a; --x: #3a7ad8; --y: #e9b72c;
+        --bad: #ff8a7a;
+      }
       [hidden] { display: none !important; }
-      html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
+      html, body { margin: 0; height: 100%; background: var(--void); overflow: hidden; }
       #wrap { width: 100vw; height: 100vh; }
       /* ?lite=1: a quarter of the pixels, scaled back up (a software GPU). */
       #wrap.lite { width: 50vw; height: 50vh; transform: scale(2); transform-origin: 0 0; }
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
-      #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
-        font: 16px Aileron, system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
-      #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; }
-      #menu p { margin: 0; opacity: 0.75; }
-      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
-        background: #0008; color: inherit; }
-      #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
-      #menu button:disabled { opacity: 0.35; cursor: default; }
-      #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
-      #menu .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-      #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
-      #who a, #news a { color: inherit; }
-      #news { min-height: 0; font-size: 14px; line-height: 1.6; max-width: 560px; }
-      #news b { color: #e8b931; font-weight: 700; }
-      #status { min-height: 1.2em; opacity: 0.8; }
-      .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
+
+      #menu { position: fixed; inset: 0; display: flex; flex-direction: column; color: var(--ink);
+        font: 15px Aileron, system-ui, sans-serif; overflow: hidden; isolation: isolate;
+        background: radial-gradient(120% 90% at 50% 38%, #10300ea6 0%, #061106c2 45%, #020402e6 80%); }
+      /* The core: an orb that breathes, a ring that turns, vapour drifting. */
+      #menu .core { position: absolute; z-index: -1; left: 50%; top: 40%; width: min(70vmin, 620px); aspect-ratio: 1;
+        transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
+        background: radial-gradient(circle at 42% 36%, #f4ffd8 0%, #b8ff5c 9%, #3fa61c 26%, #13460d 48%, #06160500 70%);
+        filter: blur(1px); opacity: 0.32; animation: breathe 6s ease-in-out infinite; }
+      #menu .ring { position: absolute; z-index: -1; left: 50%; top: 40%; width: min(96vmin, 860px); aspect-ratio: 1;
+        transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none; opacity: 0.35;
+        background: conic-gradient(from 0deg, #9dff3c00 0deg, #9dff3c55 40deg, #9dff3c00 90deg, #9dff3c00 180deg, #9dff3c44 230deg, #9dff3c00 280deg);
+        -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%, #000 64.5%, transparent 65.5%);
+        mask: radial-gradient(circle, transparent 62%, #000 63%, #000 64.5%, transparent 65.5%);
+        animation: turn 40s linear infinite; }
+      #menu .vapour { position: absolute; z-index: -1; inset: -20%; pointer-events: none; opacity: 0.5;
+        background: radial-gradient(30% 20% at 20% 70%, #4fd12a22, transparent 70%), radial-gradient(25% 18% at 80% 30%, #7fff3a1c, transparent 70%),
+          radial-gradient(40% 25% at 60% 85%, #2f8f1a26, transparent 70%);
+        animation: drift 28s ease-in-out infinite alternate; }
+      #menu .scan { position: absolute; z-index: -1; inset: 0; pointer-events: none; opacity: 0.18;
+        background: repeating-linear-gradient(0deg, #000 0 1px, transparent 1px 3px); }
+      @keyframes breathe { 0%, 100% { opacity: 0.26; transform: translate(-50%, -50%) scale(0.97); } 50% { opacity: 0.4; transform: translate(-50%, -50%) scale(1.03); } }
+      @keyframes turn { to { transform: translate(-50%, -50%) rotate(360deg); } }
+      @keyframes drift { from { transform: translate(-3%, 2%); } to { transform: translate(3%, -2%); } }
+      @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 1px var(--edge-hi), 0 0 18px #9dff3c55; } 50% { box-shadow: 0 0 0 1px var(--edge-hi), 0 0 30px #9dff3c99; } }
+      /* Boot: the core flares and settles, then the menu rises in. */
+      #menu.boot .core { animation: boot 1.7s cubic-bezier(.2, .8, .2, 1) both; }
+      #menu.boot header, #menu.boot main > :not(nav), #menu.boot footer { animation: rise 0.6s ease-out 0.55s both; }
+      #menu.boot .blade { animation: slide 0.45s ease-out both; }
+      #menu.boot .blade:nth-child(1) { animation-delay: 0.6s; } #menu.boot .blade:nth-child(2) { animation-delay: 0.68s; }
+      #menu.boot .blade:nth-child(3) { animation-delay: 0.76s; } #menu.boot .blade:nth-child(4) { animation-delay: 0.84s; }
+      @keyframes boot { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.12); filter: brightness(3) blur(0); }
+        30% { opacity: 1; filter: brightness(2.4) blur(2px); } 100% { opacity: 0.32; transform: translate(-50%, -50%) scale(1); filter: blur(1px); } }
+      @keyframes rise { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
+      @keyframes slide { from { opacity: 0; translate: -28px 0; } to { opacity: 1; translate: 0 0; } }
+      @media (prefers-reduced-motion: reduce) { #menu .core, #menu .ring, #menu .vapour, #menu .on, #menu :focus { animation: none !important; } }
+
+      header { display: flex; align-items: center; gap: 16px; padding: 14px 22px 6px; flex-wrap: wrap; }
+      header h1 { margin: 0; font: 400 46px/1 Unitblock, system-ui, sans-serif; letter-spacing: 5px; color: var(--lime);
+        text-shadow: 0 0 18px #9dff3c88, 0 0 2px #fff; }
+      header .tag { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); }
+      /* The gamer card: who you are, your mic. */
+      #card { margin-left: auto; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 14px;
+        background: linear-gradient(180deg, #1b3a14cc, #0a1a08cc); border: 1px solid var(--edge); }
+      #card .face { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font: 400 18px Unitblock, sans-serif;
+        color: var(--void); background: radial-gradient(circle at 35% 30%, #f0ffd0, var(--glow) 45%, #2f7a14); }
+      #card .lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      #card input { width: 9.5em; font: 700 15px Aileron, sans-serif; color: var(--ink); background: transparent; border: 0; padding: 0;
+        border-bottom: 1px dashed var(--faint); outline: none; }
+      #card input:focus { border-bottom-color: var(--glow); }
+      #who { font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16em; }
+
+      main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(170px, 230px) minmax(0, 1fr) minmax(280px, 360px);
+        grid-auto-rows: max-content; gap: 18px; padding: 8px 22px 6px; overflow: auto; }
+      /* The blades: the menu's spine. */
+      nav#blades { display: flex; flex-direction: column; gap: 10px; padding-top: 6px; }
+      #menu .blade { position: relative; display: flex; align-items: center; gap: 10px; text-align: left; cursor: pointer;
+        font: 400 19px Unitblock, sans-serif; letter-spacing: 2px; color: var(--lime); padding: 12px 16px 12px 28px;
+        border: 1px solid var(--edge); border-radius: 22px 6px 6px 22px; background: linear-gradient(90deg, var(--glass-hi), var(--glass));
+        transition: transform 0.12s, background 0.12s; }
+      #menu .blade small { font: 600 11px Aileron, sans-serif; letter-spacing: 1px; color: var(--dim); margin-left: auto; }
+      #menu .blade.on { transform: translateX(8px); background: linear-gradient(90deg, #5fc23677, #2a6a1655); animation: pulse 2.4s ease-in-out infinite; color: #fff; }
+      #menu .blade::before { content: ''; position: absolute; left: 8px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%;
+        background: var(--faint); }
+      #menu .blade.on::before { background: var(--glow); box-shadow: 0 0 8px var(--glow); }
+
+      section.pane { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+      .panel { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--edge);
+        background: linear-gradient(180deg, #14301099, #08140799); box-shadow: inset 0 1px 0 #c9ff8a22; }
+      .panel h2 { margin: 0 0 10px; font: 400 15px Unitblock, sans-serif; letter-spacing: 3px; color: var(--glow); text-transform: uppercase; }
+      .panel p { margin: 0; color: var(--dim); }
+      .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+      /* A pill: every button in the menu. */
+      #menu button, #menu select, .pill { font: 700 14px Aileron, sans-serif; color: var(--ink); cursor: pointer; padding: 10px 14px;
+        border-radius: 999px; border: 1px solid var(--edge); background: linear-gradient(180deg, #2d6a1d, #153d0e); text-align: center; }
+      #menu button.mode { border-radius: 14px; padding: 14px 12px; display: flex; flex-direction: column; gap: 3px; min-height: 64px; justify-content: center; }
+      #menu button.mode b { font: 400 16px Unitblock, sans-serif; letter-spacing: 1.5px; color: var(--lime); }
+      #menu button.mode span { font-weight: 600; font-size: 12px; color: var(--dim); }
+      #menu button.quiet { background: #0b180acc; }
+      #menu button:hover:not(:disabled), #menu select:hover { border-color: var(--edge-hi); background: linear-gradient(180deg, #3f8a28, #1d5212); }
+      #menu button:disabled { opacity: 0.38; cursor: default; }
+      #menu :focus { outline: none; }
+      #menu input[type=range], #menu input[type=checkbox] { accent-color: var(--glow); }
+      #menu :focus-visible, #menu .blade:focus { box-shadow: 0 0 0 2px var(--glow), 0 0 20px #9dff3c88; border-color: var(--edge-hi); }
+      #menu input.code { width: 7.5em; text-transform: uppercase; letter-spacing: 3px; font: 400 16px Unitblock, sans-serif; color: var(--lime);
+        padding: 9px 12px; border-radius: 999px; border: 1px solid var(--edge); background: #050c05; }
+
+      /* The party: the lobby's roster. */
+      #roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+      #roster li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #0c1f0aaa; border: 1px solid #9dff3c1f; }
+      #roster li.me { border-color: #9dff3c66; }
+      #roster li.away { opacity: 0.5; }
+      #roster .nm { font-weight: 700; flex: 1; min-width: 5em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #roster .st { font-size: 12px; color: var(--dim); white-space: nowrap; }
+      #roster .lead { color: var(--y); font-size: 13px; }
+      #roster button { padding: 3px 8px; font-size: 11px; }
+      #roster li.empty { justify-content: center; color: var(--faint); border-style: dashed; background: transparent; font-size: 13px; }
+      /* The speaker: lit while they talk, struck through when muted. */
+      .spk { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 1px solid var(--faint); display: grid; place-items: center; cursor: pointer;
+        background: transparent; padding: 0 !important; }
+      .spk svg { width: 13px; height: 13px; fill: var(--faint); }
+      .spk.talk { border-color: var(--glow); box-shadow: 0 0 10px var(--glow); }
+      .spk.talk svg { fill: var(--glow); }
+      .spk.mute svg { fill: var(--bad); }
+      .spk.mute { border-color: var(--bad); }
+
+      #friends { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow: auto; }
+      #friends li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 10px; background: #0c1f0aaa; }
+      #friends .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #2a3a26; }
+      #friends .dot.here { background: var(--glow); box-shadow: 0 0 8px var(--glow); }
+      #friends .dot.match { background: var(--y); }
+      #friends .dot.elsewhere { background: var(--x); }
+      #friends .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+      #friends .st { font-size: 12px; color: var(--dim); }
+      #friends button { padding: 4px 10px; font-size: 12px; }
+
+      #status { min-height: 1.3em; color: var(--lime); font-weight: 600; }
+      /* Nothing to say: no box. */
+      .panel:has(> #status:empty):has(> #news:empty):has(#cancel[hidden]) { display: none; }
+      #news { font-size: 13px; line-height: 1.6; color: var(--dim); }
+      #news b, #record b { color: var(--lime); }
+      #record a, #news a { color: var(--lime); }
+      #gfx { color: var(--faint); }
+      #status.bad { color: var(--bad); }
+      .keys { font-size: 12px; color: var(--faint); line-height: 1.6; }
+
+      /* The hints: the face buttons, as the bottom of the screen says them. */
+      footer { display: flex; gap: 18px; align-items: center; padding: 8px 22px 12px; flex-wrap: wrap; font-size: 13px; color: var(--dim);
+        border-top: 1px solid #9dff3c1a; background: #020502aa; }
+      footer .hint { display: flex; align-items: center; gap: 7px; cursor: pointer; background: none !important; border: 0 !important; padding: 0 !important; }
+      .face-btn { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font: 900 12px Aileron, sans-serif;
+        color: #fff; box-shadow: inset 0 -3px 5px #0006, inset 0 2px 3px #fff5, 0 1px 2px #000; text-shadow: 0 1px 1px #0008; }
+      .face-btn.a { background: radial-gradient(circle at 40% 30%, #9bf06a, var(--a) 55%, #2c6e14); }
+      .face-btn.b { background: radial-gradient(circle at 40% 30%, #ff8d80, var(--b) 55%, #7a1712); }
+      .face-btn.x { background: radial-gradient(circle at 40% 30%, #8ab8ff, var(--x) 55%, #173c7a); }
+      .face-btn.y { background: radial-gradient(circle at 40% 30%, #ffe08a, var(--y) 55%, #7a5a0c); }
+      footer .right { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+
+      /* A toast: an invite, a refusal, a line worth saying. */
+      #toasts { position: fixed; right: 18px; bottom: 64px; display: flex; flex-direction: column; gap: 8px; z-index: 30; max-width: min(380px, calc(100vw - 32px)); }
+      .toast { padding: 12px 14px; border-radius: 14px; border: 1px solid var(--edge-hi); color: var(--ink); font: 14px Aileron, sans-serif;
+        background: linear-gradient(180deg, #1d4a14f2, #0a1d08f2); box-shadow: 0 6px 30px #000a, 0 0 22px #9dff3c44; }
+      .toast b { color: var(--lime); }
+      .toast .row { margin-top: 8px; }
+      .toast button { font: 700 13px Aileron, sans-serif; color: var(--ink); padding: 7px 12px; border-radius: 999px; border: 1px solid var(--edge);
+        background: linear-gradient(180deg, #2d6a1d, #153d0e); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+      /* Over the match: who is talking, top left, out of the way. */
+      #talking { position: fixed; left: 14px; top: 30%; z-index: 20; display: flex; flex-direction: column; gap: 4px; pointer-events: none;
+        font: 700 13px Aileron, sans-serif; color: var(--ink); text-shadow: 0 1px 2px #000; }
+      #talking div { display: flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; background: #0a1d08b3; border: 1px solid #9dff3c55; }
+      #talking svg { width: 12px; height: 12px; fill: var(--glow); }
+
+      @media (max-width: 860px) {
+        main { grid-template-columns: 1fr; padding: 6px 16px; }
+        nav#blades { flex-direction: row; overflow-x: auto; padding: 4px 2px 6px; }
+        #menu .blade { border-radius: 999px; padding: 9px 14px; font-size: 15px; white-space: nowrap; }
+        #menu .blade small, #menu .blade::before { display: none; }
+        #menu .blade.on { transform: none; }
+        header { padding: 10px 16px 4px; }
+        header h1 { font-size: 32px; }
+        #card { margin-left: 0; }
+        footer { padding: 8px 16px; }
+        footer .right { margin-left: 0; }
+      }
+      @media (max-height: 420px) {
+        header h1 { font-size: 26px; } header .tag { display: none; }
+        .keys { display: none; }
+      }
     </style>
   </head>
   <body>
     <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
-    <div id="menu">
-      <h1>ONESHOT</h1>
-      <p>1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
-      <div class="row">
-        <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
-        <select id="skin" title="Skin: worn if your wallet owns it"></select>
-      </div>
-      <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
-      <div id="who"></div>
-      <div class="row modes">
-        <button id="play" disabled>Play the bot</button>
-      </div>
-      <div class="row modes">
-        <button id="ffa" class="quiet" disabled>Free for all</button>
-        <button id="gungame" class="quiet" disabled>Gun Game</button>
-        <button id="bigteam" class="quiet" disabled>Big Team</button>
-      </div>
-      <div class="row modes">
-        <button id="duel" disabled>Ranked Duel</button>
-        <button id="doubles" disabled>Ranked Doubles</button>
-        <button id="cup" disabled>Enter a cup</button>
-      </div>
-      <div id="status"></div>
-      <div id="news"></div>
-      <button id="cancel" class="quiet" hidden>Cancel</button>
-      <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
-        R reload · 1, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · Tab scores · N net graph<br />
-        Esc in a match: the menu, and the settings (keys, mouse speed, field of view, volume)</div>
+    <div id="menu" class="boot">
+      <div class="vapour"></div><div class="ring"></div><div class="core"></div><div class="scan"></div>
+      <header>
+        <h1>ONESHOT</h1>
+        <span class="tag">Arena · ranked on Elo Pros<span id="gfx"></span></span>
+        <div id="card" class="panel" style="padding:8px 12px">
+          <div class="face" id="face">?</div>
+          <div class="lines">
+            <input id="name" maxlength="16" placeholder="your name" autocomplete="off" spellcheck="false" />
+            <div id="who"></div>
+          </div>
+          <button id="signin" class="quiet" hidden>Sign in</button>
+          <button id="mic" class="quiet" title="Voice: talk to your party">Mic off</button>
+        </div>
+      </header>
+      <main>
+        <nav id="blades" aria-label="menu">
+          <button class="blade on" data-pane="play" id="blade-play">PLAY <small>with bots</small></button>
+          <button class="blade" data-pane="ranked" id="blade-ranked">RANKED <small>Elo Pros</small></button>
+          <button class="blade" data-pane="party" id="blade-party">PARTY <small id="party-count">1 of 8</small></button>
+          <button class="blade" data-pane="friends" id="blade-friends">FRIENDS <small id="friend-count"></small></button>
+        </nav>
+
+        <section class="pane" data-pane="play">
+          <div class="panel">
+            <h2>Play now</h2>
+            <div class="grid modes">
+              <button id="play" class="mode"><b>THE BOT</b><span>1v1, just you</span></button>
+              <button id="ffa" class="mode"><b>FREE FOR ALL</b><span>8 players, first to 25</span></button>
+              <button id="gungame" class="mode"><b>GUN GAME</b><span>a kill a gun</span></button>
+              <button id="bigteam" class="mode"><b>BIG TEAM</b><span>8v8, vehicles</span></button>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <label class="row" style="gap:6px;color:var(--dim);font-size:13px"><input type="checkbox" id="private" /> Party alone (bots fill the rest)</label>
+              <select id="skin" title="Skin: worn if your wallet owns it"></select>
+            </div>
+          </div>
+          <div class="panel"><div id="status" role="status"></div>
+            <div id="news"></div>
+            <div class="row" style="margin-top:6px"><button id="cancel" class="quiet" hidden>Cancel</button></div>
+          </div>
+        </section>
+
+        <section class="pane" data-pane="ranked" hidden>
+          <div class="panel">
+            <h2>Ranked</h2>
+            <p style="margin-bottom:10px">Your rating on Elo Pros. Sign in with a wallet to play.</p>
+            <p id="record" style="margin-bottom:10px;font-size:13px"></p>
+            <div class="grid modes">
+              <button id="duel" class="mode" disabled><b>DUEL</b><span>1v1</span></button>
+              <button id="doubles" class="mode" disabled><b>DOUBLES</b><span>2v2, bring a friend</span></button>
+              <button id="cup" class="mode" disabled><b>CUP</b><span>heats, then a final</span></button>
+            </div>
+          </div>
+        </section>
+
+        <section class="pane" data-pane="party" hidden>
+          <div class="panel">
+            <h2>Your party <span id="party-code" style="color:var(--lime);letter-spacing:4px"></span></h2>
+            <p id="party-line" style="margin-bottom:10px">Send your link. Whoever leads picks the game, and the party plays it together.</p>
+            <div class="row">
+              <button id="copy-link">Copy party link</button>
+              <select id="privacy" title="Who can join">
+                <option value="0">Anyone with the link</option>
+                <option value="1">Your friends</option>
+                <option value="2">Invite only</option>
+              </select>
+              <button id="leave" class="quiet" hidden>Leave party</button>
+            </div>
+            <div class="row" style="margin-top:10px">
+              <input id="join-code" class="code" maxlength="7" placeholder="CODE" autocomplete="off" spellcheck="false" />
+              <button id="join" class="quiet">Join a party</button>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Voice</h2>
+            <div class="row">
+              <select id="talk-mode" title="How you talk">
+                <option value="ptt">Hold V to talk</option>
+                <option value="open">Open mic</option>
+              </select>
+              <label class="row" style="gap:6px;color:var(--dim);font-size:13px">Voices <input type="range" id="voice-vol" min="0" max="100" value="80" /></label>
+            </div>
+            <p id="voice-line" style="margin-top:8px;font-size:13px">Your party hears you, in the menu and in a match. Nobody else does.</p>
+          </div>
+        </section>
+
+        <section class="pane" data-pane="friends" hidden>
+          <div class="panel">
+            <h2>Friends</h2>
+            <p id="friends-line" style="margin-bottom:10px">Sign in with Elo Pros to see your friends here.</p>
+            <ul id="friends"></ul>
+          </div>
+        </section>
+
+        <aside class="pane">
+          <div class="panel">
+            <h2>Party <span id="party-size" style="color:var(--dim)"></span></h2>
+            <ul id="roster"></ul>
+            <p id="lead-line" style="margin-top:8px;font-size:13px"></p>
+          </div>
+          <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom<br />
+            R reload · 1, X or wheel swap · Q melee · G grenade · T switch grenade · E pick up, get in · Tab scores<br />
+            V talk to your party · Esc in a match: the menu and the settings</div>
+        </aside>
+      </main>
+      <footer>
+        <button class="hint" data-key="a"><span class="face-btn a">A</span> Select</button>
+        <button class="hint" data-key="b"><span class="face-btn b">B</span> Back</button>
+        <button class="hint" data-key="x"><span class="face-btn x">X</span> Invite</button>
+        <button class="hint" data-key="y"><span class="face-btn y">Y</span> Friends</button>
+        <div class="right">
+          <button class="hint" id="sound" title="Menu sound"><span id="sound-word">Sound on</span></button>
+        </div>
+      </footer>
     </div>
+    <div id="toasts"></div>
+    <div id="talking"></div>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, sign-in is hidden and the bot is still there. -->
     <script async src="https://elopros.com/sdk/elo-signin-1.js"></script>
-    <script type="module">
-      // The Bevy client in the browser, with the three.js page's menu
-      // (web/index.html, web/src/main.ts): the page only picks what to play
-      // and signs in; the game, the queue's wait and everything after are
-      // the client's.
-      import init, { play, pose, skin_names } from './oneshot_client.js';
-      // Raw mouse: the game's lock (winit asks with no options) asks the
-      // browser for unadjusted movement, so the OS's acceleration doesn't
-      // bend aim. Not on Linux, where Chrome refuses and a second request
-      // can lose the click; a refusal anywhere is remembered and asked
-      // plainly at once (Gates' app.js).
-      {
-        const canvas = document.getElementById('game');
-        const plain = canvas.requestPointerLock;
-        const RAW_REFUSED = 'oneshot.rawMouseRefused';
-        let refused = /Linux/.test(navigator.platform) && !/CrOS/.test(navigator.userAgent);
-        try { refused = refused || localStorage.getItem(RAW_REFUSED) === '1'; } catch { /* private window */ }
-        canvas.requestPointerLock = function () {
-          if (refused) return plain.call(this);
-          let p;
-          try { p = plain.call(this, { unadjustedMovement: true }); } catch { return plain.call(this); }
-          if (p && p.catch) p.catch((err) => {
-            if (!err || err.name !== 'NotSupportedError') return;
-            refused = true;
-            try { localStorage.setItem(RAW_REFUSED, '1'); } catch { /* private window */ }
-            plain.call(this);
-          });
-          return p;
-        };
-      }
-      const params = new URLSearchParams(location.search);
-      const flag = (k) => params.get(k) === '1';
-      const AUTOPLAY = flag('autoplay');
-      // The effects demo (`?fxdemo=1`, `?fxstage=N`) skips the menu too.
-      const SKIP_MENU = AUTOPLAY || flag('fxdemo') || params.has('fxstage');
-      if (flag('lite')) document.getElementById('wrap').classList.add('lite');
-      const $ = (id) => document.getElementById(id);
-      const menu = $('menu'), status = $('status'), cancel = $('cancel'), nameInput = $('name'), skin = $('skin');
-      const say = (line) => { status.textContent = line; };
-      // Elo Pros' reads (above the first await: sign-in calls them while the
-      // page still waits for a mode).
-      const ELO = /(^|\.)elopros\.com$/.test(location.hostname) ? '' : 'https://elopros.com';
-      const GAME = 'oneshot';
-      const getJSON = async (path) => {
-        try {
-          const r = await fetch(`${ELO}${path}`, { cache: 'no-store' });
-          return r.ok ? await r.json() : null;
-        } catch { return null; }
-      };
-      const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-      // Who signed in ({wallet, account}), and their record when they did.
-      let me = null;
-      let before = null;
-      const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
-      const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
-
-      await init();
-      if (params.has('pose')) {
-        // No server: one fighter for a picture (ci/look.mjs).
-        menu.style.display = 'none';
-        pose(location.search, ['lite'].filter(flag).join(','));
-        await new Promise(() => {}); // nothing more for the page to do
-      }
-      nameInput.value = params.get('name') || store('oneshot.name') || '';
-      // Skins: worn only if the signed-in wallet owns one; the server checks.
-      skin_names().forEach((n, i) => skin.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
-      skin.value = store('oneshot.skin') || '0';
-
-      // Where the game's own endpoints are: beside the page in dev, the game
-      // box when the page is published to elopros.com (ci/publish_web.sh
-      // writes origin.json).
-      let base = '';
-      try {
-        const o = await fetch('origin.json');
-        if (o.ok) base = (await o.json()).server ?? '';
-      } catch { /* none: beside the page */ }
-      const info = await (await fetch(`${base}server.json`)).json();
-      const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')], (who) => {
-        me = who;
-        showRecord(who);
-      });
-
-      // A server on its way down: the live one, if it is now another.
-      const follow = async () => {
-        try {
-          const now = await (await fetch(`${base}server.json`)).json();
-          return now.addr && now.addr !== info.addr ? [now.addr, now.hash ?? ''] : null;
-        } catch { return null; }
-      };
-
-      const mode = SKIP_MENU
-        ? Number(params.get('mode') || 0)
-        : await new Promise((go) => {
-            for (const id of Object.keys(MODES)) $(id).addEventListener('click', () => go(MODES[id]), { once: true });
-            // Casual opens now that a click counts (one before this was lost);
-            // ranked waits for a wallet (setupSignIn).
-            for (const id of ['play', 'ffa', 'gungame', 'bigteam']) $(id).disabled = false;
-          });
-      const name = nameInput.value.trim() || 'player';
-      store('oneshot.name', name);
-      store('oneshot.skin', skin.value);
-      for (const b of document.querySelectorAll('.modes')) b.hidden = true;
-      cancel.hidden = false;
-      cancel.onclick = () => location.reload();
-      say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
-      let playing = false;
-      try {
-        // No hash with a CA's certificate: checked by the browser, never pinned.
-        playing = await play(info.addr, info.hash ?? '', name, signin.pass(), mode, Number(skin.value) || 0, opts, say, follow);
-      } catch (e) {
-        say(String(e));
-      }
-      if (playing) {
-        menu.style.display = 'none';
-        if (!SKIP_MENU) $('game').focus();
-        // The match over (or the line dropped): back to the menu.
-        const watch = () => {
-          const s = window.__oneshot;
-          // Left from the Esc menu: straight back to the menu.
-          if (s && s.left) {
-            location.reload();
-            return;
-          }
-          if (s && s.ended) {
-            say([s.bye ? 'Match over' : 'Disconnected', s.cup].filter(Boolean).join(' · '));
-            cancel.textContent = 'Back to menu';
-            menu.style.display = 'flex';
-            document.exitPointerLock();
-            if (me && before) showNews(me, before);
-            return;
-          }
-          setTimeout(watch, 500);
-        };
-        watch();
-      } else {
-        cancel.textContent = 'Back to menu';
-      }
-
-      /* What Elo Pros keeps for a player: ratings, achievements and boards,
-       * and skins. Read from elopros.com (the page's own origin once
-       * published). A read that fails shows nothing; it never blocks play. */
-      /** One read of everything: {stats, ratings, skins}. `fresh` asks past
-       * any cache (after a match, the record just moved). */
-      async function record(who, fresh) {
-        const id = who.wallet || who.account;
-        const t = fresh ? `?t=${Date.now()}` : '';
-        const [stats, ratings, rh, sol] = await Promise.all([
-          getJSON(`/api/gamestats/${GAME}/of/${id}${t}`),
-          who.wallet ? getJSON(`/api/ratings/${GAME}/of/${who.wallet}${t}`) : null,
-          who.wallet ? getJSON(`/api/items/of/${who.wallet}?game=${GAME}&title=${GAME}`) : null,
-          // the Solana wallet linked to it, where the free Pill goes
-          who.wallet ? getJSON(`/api/items/sol/of/${who.wallet}`) : null,
-        ]);
-        const items = rh || sol ? { items: [...((rh && rh.items) || []), ...((sol && sol.items) || [])] } : null;
-        return { stats, ratings, items };
-      }
-      /** The skins an items answer names (the server's `owned_skins`). */
-      function ownedSkins(items) {
-        const names = skin_names();
-        const out = new Set(['standard']);
-        for (const i of (items && items.items) || []) {
-          if (i.title && String(i.title).toLowerCase() !== GAME) continue;
-          const n = String(i.skin || i.item || i.catalog_name || i.name || '').trim().toLowerCase();
-          const first = n.split(/[^a-z0-9]/)[0];
-          for (const c of [n, first]) if (names.includes(c)) out.add(c);
-        }
-        return out;
-      }
-      async function showRecord(who) {
-        const rec = await record(who, false);
-        before = rec;
-        const bits = [];
-        const lad = (rec.ratings && rec.ratings.ladders) || {};
-        for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles']]) {
-          const l = lad[id];
-          if (l && l.rated && l.rating != null) bits.push(`${label} ${Math.round(l.rating)}${l.placed ? '' : ' (placing)'}`);
-        }
-        const tot = rec.stats && rec.stats.totals;
-        if (tot) bits.push(`${tot.earned}/${tot.total} achievements`);
-        const prof = who.wallet ? ` · <a href="https://elopros.com/profile.html?who=${who.wallet}" target="_blank" rel="noopener">profile</a>` : '';
-        if (bits.length) $('news').innerHTML = esc(bits.join(' · ')) + prof;
-        // Mark the skins this wallet holds; the server still checks.
-        const owned = ownedSkins(rec.items);
-        skin_names().forEach((n, i) => {
-          const o = skin.options[i];
-          if (o) o.textContent = n[0].toUpperCase() + n.slice(1) + (rec.items && !owned.has(n) ? ' · not yours yet' : '');
-        });
-      }
-      /** After a match: what it unlocked and moved. The server reports as the
-       * match ends, so ask a few times until the record moves. */
-      async function showNews(who, was) {
-        let now = null;
-        for (let i = 0; i < 5; i++) {
-          await new Promise((r) => setTimeout(r, 2000));
-          now = await record(who, true);
-          if (now.stats && (!was.stats || now.stats.last !== was.stats.last)) break;
-        }
-        if (!now || !now.stats) return;
-        const had = new Set(((was.stats && was.stats.achievements) || []).filter((a) => a.earned).map((a) => a.id));
-        const got = (now.stats.achievements || []).filter((a) => a.earned && !had.has(a.id));
-        const lines = got.map((a) => `<b>Unlocked</b> ${esc(a.name)}${a.rare ? ' · rare' : ''}`);
-        const best = new Map(((was.stats && was.stats.boards) || []).map((b) => [b.id, b.score]));
-        for (const b of now.stats.boards || []) {
-          if (b.score != null && b.score !== best.get(b.id)) {
-            const v = b.format === 'time_ms' ? `${(b.score / 1000).toFixed(1)} s` : b.score;
-            lines.push(`<b>New best</b> ${esc(b.name)}: ${esc(v)}${b.rank ? ` · #${b.rank} of ${b.of}` : ''}`);
-          }
-        }
-        const lad = (now.ratings && now.ratings.ladders) || {};
-        const old = (was.ratings && was.ratings.ladders) || {};
-        for (const [id, label] of [['duel', 'Duel'], ['doubles', 'Doubles'], ['cup', 'Cup']]) {
-          const a = old[id], b = lad[id];
-          if (b && b.rated && b.rating != null && (!a || a.rating !== b.rating)) {
-            const d = a && a.rating != null ? Math.round(b.rating - a.rating) : null;
-            lines.push(`<b>${label}</b> ${Math.round(b.rating)}${d ? ` (${d > 0 ? '+' : ''}${d})` : ''}`);
-          }
-        }
-        if (lines.length) $('news').innerHTML = lines.join('<br />');
-      }
-
-      /** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup.
-       * The server hands out the nonce the pass must carry; we fetch one
-       * ahead so the popup opens on the click itself (a popup opened later is
-       * blocked). Ranked needs a wallet linked to the account. */
-      async function setupSignIn(info, button, who, ranked, signedIn) {
-        let pass = '';
-        let nonce = '';
-        const fresh = async () => {
-          try { nonce = (await (await fetch(`${base}nonce`)).json()).nonce; } catch { nonce = ''; }
-        };
-        const sdk = () => window.EloSignIn;
-        // The SDK script is async: give it a moment.
-        for (let i = 0; i < 20 && !sdk(); i++) await new Promise((r) => setTimeout(r, 100));
-        if (info.signin && sdk()) {
-          button.hidden = false;
-          await fresh();
-          button.onclick = async () => {
-            try {
-              const res = await sdk().popup({ game: info.game, nonce });
-              pass = res.pass;
-              const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
-              const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
-              const account = /id: (acct_[0-9a-f]{20})/.exec(text)?.[1];
-              who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
-              for (const b of ranked) b.disabled = !wallet;
-              button.hidden = true;
-              if (account) signedIn({ wallet: wallet ?? null, account });
-            } catch (e) {
-              who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;
-            }
-            await fresh();
-          };
-        } else {
-          who.textContent = info.signin ? '' : 'Ranked is off on this server';
-        }
-        return { pass: () => pass };
-      }
-    </script>
+    <script type="module" src="menu.js"></script>
   </body>
 </html>

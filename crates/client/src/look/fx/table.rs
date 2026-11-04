@@ -4,7 +4,9 @@
 //!
 //! After Gates' `crates/client/src/render/fx/table.rs` (MIT, © 2026
 //! MoreRight DAO): its layers and recipes, with our weapons and matters, and
-//! the shield's arcs, zaps and gold sparks added.
+//! the shield's arcs, zaps and gold sparks added; its blood drops off a body
+//! (drawn as specks: our sheet has no droplet cell, `atlas.rs`) and the lit
+//! chips each blow throws (`chips.rs`, after its `impact.rs`).
 
 use bevy::prelude::*;
 use sim::arms::{
@@ -25,7 +27,10 @@ pub enum Weapon {
     Pellet,
     /// A sniper round.
     Sniper,
+    /// A rifle butt, a blow.
     Melee,
+    /// The sword's cut.
+    Blade,
     Blast,
 }
 
@@ -80,6 +85,8 @@ pub enum Layer {
     ShieldSparks,
     /// A dark red mist off health.
     Hurt,
+    /// Blood thrown off a body and falling.
+    BloodDrops,
     /// A ring spreading along the ground.
     Shock,
     /// A muzzle's tongue of fire.
@@ -88,7 +95,7 @@ pub enum Layer {
 
 impl Layer {
     /// Every layer, in the order the knobs name them.
-    pub const ALL: [Layer; 14] = [
+    pub const ALL: [Layer; 15] = [
         Layer::Sparks,
         Layer::Flash,
         Layer::Dust,
@@ -101,6 +108,7 @@ impl Layer {
         Layer::Zap,
         Layer::ShieldSparks,
         Layer::Hurt,
+        Layer::BloodDrops,
         Layer::Shock,
         Layer::Tongue,
     ];
@@ -120,6 +128,7 @@ impl Layer {
             Layer::Zap => "Zap",
             Layer::ShieldSparks => "ShieldSparks",
             Layer::Hurt => "Hurt",
+            Layer::BloodDrops => "BloodDrops",
             Layer::Shock => "Shock",
             Layer::Tongue => "Tongue",
         }
@@ -147,17 +156,19 @@ impl Layer {
     }
 }
 
-/// What one blow throws: up to five layers with a count each.
+/// What one blow throws: up to five layers with a count each, and how
+/// many lit chips of the struck matter fly with them (`chips.rs`).
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDef {
     pub layers: [(Layer, u8); 5],
+    pub chips: u8,
 }
 
 impl EffectDef {
-    fn of(layers: &[(Layer, u8)]) -> Self {
+    fn of(layers: &[(Layer, u8)], chips: u8) -> Self {
         let mut out = [(Layer::Dust, 0u8); 5];
         out[..layers.len()].copy_from_slice(layers);
-        Self { layers: out }
+        Self { layers: out, chips }
     }
 
     /// How many of `layer` this effect throws.
@@ -167,28 +178,34 @@ impl EffectDef {
 }
 
 /// The effect of a blow. Metal showers sparks; concrete flashes a few in a
-/// grey cloud; the ground is dust and grit; a shield crackles; health mists.
+/// grey cloud and throws chips; the ground is dust and grit; a shield
+/// crackles; health mists and drips; a sword's cut on metal is a shower.
 pub fn effect(weapon: Weapon, matter: Matter) -> EffectDef {
     use Layer::*;
     use Matter::*;
+    let of = EffectDef::of;
     match (weapon, matter) {
-        (Weapon::Blast, _) => EffectDef::of(&[(Flash, 2), (Fireball, 14), (Smoke, 9), (Dust, 8), (Sparks, 28)]),
-        (Weapon::Sniper, Shield) => EffectDef::of(&[(Zap, 1), (Arcs, 6), (ShieldSparks, 16)]),
-        (_, Shield) => EffectDef::of(&[(Zap, 1), (Arcs, 3), (ShieldSparks, 7)]),
-        (Weapon::Pellet, Flesh) => EffectDef::of(&[(Hurt, 1)]),
-        (_, Flesh) => EffectDef::of(&[(Hurt, 3)]),
-        (Weapon::Melee, Metal | Hull) => EffectDef::of(&[(Sparks, 14), (Flash, 1)]),
-        (Weapon::Melee, Concrete) => EffectDef::of(&[(Sparks, 4), (Dust, 2), (Grit, 4)]),
-        (Weapon::Melee, Dirt) => EffectDef::of(&[(Dust, 3), (Grit, 5)]),
-        (Weapon::Bullet, Metal | Hull) => EffectDef::of(&[(Sparks, 12), (Flash, 1), (Dust, 1)]),
-        (Weapon::Bullet, Concrete) => EffectDef::of(&[(Sparks, 4), (Flash, 1), (Dust, 2), (Grit, 6)]),
-        (Weapon::Bullet, Dirt) => EffectDef::of(&[(Dust, 3), (Grit, 8)]),
-        (Weapon::Pellet, Metal | Hull) => EffectDef::of(&[(Sparks, 4), (Flash, 1)]),
-        (Weapon::Pellet, Concrete) => EffectDef::of(&[(Sparks, 1), (Dust, 1), (Grit, 2)]),
-        (Weapon::Pellet, Dirt) => EffectDef::of(&[(Dust, 1), (Grit, 3)]),
-        (Weapon::Sniper, Metal | Hull) => EffectDef::of(&[(Sparks, 24), (Flash, 2), (Dust, 2)]),
-        (Weapon::Sniper, Concrete) => EffectDef::of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (Plume, 2)]),
-        (Weapon::Sniper, Dirt) => EffectDef::of(&[(Dust, 6), (Grit, 14), (Plume, 2)]),
+        (Weapon::Blast, _) => of(&[(Flash, 2), (Fireball, 14), (Smoke, 9), (Dust, 8), (Sparks, 28)], 16),
+        (Weapon::Sniper, Shield) => of(&[(Zap, 1), (Arcs, 6), (ShieldSparks, 16)], 0),
+        (_, Shield) => of(&[(Zap, 1), (Arcs, 3), (ShieldSparks, 7)], 0),
+        (Weapon::Pellet, Flesh) => of(&[(Hurt, 1), (BloodDrops, 3)], 0),
+        (Weapon::Sniper, Flesh) => of(&[(Hurt, 4), (BloodDrops, 12)], 0),
+        (_, Flesh) => of(&[(Hurt, 3), (BloodDrops, 8)], 0),
+        (Weapon::Melee, Metal | Hull) => of(&[(Sparks, 14), (Flash, 1)], 3),
+        (Weapon::Melee, Concrete) => of(&[(Sparks, 4), (Dust, 2), (Grit, 4)], 8),
+        (Weapon::Melee, Dirt) => of(&[(Dust, 3), (Grit, 5)], 3),
+        (Weapon::Blade, Metal | Hull) => of(&[(Sparks, 18), (Flash, 1), (Dust, 1)], 2),
+        (Weapon::Blade, Concrete) => of(&[(Sparks, 6), (Flash, 1), (Dust, 3), (Grit, 4)], 6),
+        (Weapon::Blade, Dirt) => of(&[(Dust, 4), (Grit, 6)], 3),
+        (Weapon::Bullet, Metal | Hull) => of(&[(Sparks, 12), (Flash, 1), (Dust, 1)], 2),
+        (Weapon::Bullet, Concrete) => of(&[(Sparks, 4), (Flash, 1), (Dust, 2), (Grit, 6)], 4),
+        (Weapon::Bullet, Dirt) => of(&[(Dust, 3), (Grit, 8)], 0),
+        (Weapon::Pellet, Metal | Hull) => of(&[(Sparks, 4), (Flash, 1)], 1),
+        (Weapon::Pellet, Concrete) => of(&[(Sparks, 1), (Dust, 1), (Grit, 2)], 2),
+        (Weapon::Pellet, Dirt) => of(&[(Dust, 1), (Grit, 3)], 0),
+        (Weapon::Sniper, Metal | Hull) => of(&[(Sparks, 24), (Flash, 2), (Dust, 2)], 4),
+        (Weapon::Sniper, Concrete) => of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (Plume, 2)], 8),
+        (Weapon::Sniper, Dirt) => of(&[(Dust, 6), (Grit, 14), (Plume, 2)], 2),
     }
 }
 
@@ -429,6 +446,22 @@ pub fn built(layer: Layer) -> Recipe {
             c0: [0.20, 0.004, 0.004, 0.85],
             c1: [0.24, 0.01, 0.01, 0.0],
             spin: 1.0,
+            ..base
+        },
+        // Gates' blood drops, as specks.
+        Layer::BloodDrops => Recipe {
+            cell: SPECK,
+            speed: (1.5, 3.5),
+            spray: 0.5,
+            up: 0.8,
+            gravity: 9.81,
+            drag: 0.5,
+            life: (0.35, 0.7),
+            size: (0.010, 0.014),
+            grow: 0.8,
+            c0: [0.16, 0.002, 0.002, 1.0],
+            c1: [0.16, 0.002, 0.002, 0.6],
+            bounce: true,
             ..base
         },
         Layer::Shock => Recipe {

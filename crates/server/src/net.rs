@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use proto::{
     datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
-    PROTO_VER,
+    MODE_LOBBY, PROTO_VER,
 };
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
@@ -32,7 +32,9 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// Connections one address may hold (an IPv4 address, an IPv6 /64), and one
 /// prefix (a /24, a /48): a household plays, a flood from one place doesn't.
-pub const PER_SOURCE: u16 = 8;
+/// Each player holds two (the lobby beside the match), so eight at one
+/// address fit.
+pub const PER_SOURCE: u16 = 16;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 
 /// The certificate the server presents: its PEM files, or a fresh
@@ -257,7 +259,7 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
     }
 }
 
-async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
+pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     let mut len = [0u8; LEN_PREFIX_BYTES];
     r.read_exact(&mut len).await.ok()?;
     let n = u16::from_le_bytes(len) as usize;
@@ -295,6 +297,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         pass,
         mode,
         skin,
+        party,
     } = hello
     else {
         return;
@@ -306,10 +309,18 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
         return refuse(&mut send, proto::REFUSE_FULL).await;
     }
-    // Who: a pass from Elo Pros, or a guest.
+    // Who: a pass from Elo Pros, a ticket of ours a pass earned, or a
+    // guest.
     let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
-    let who = if pass.is_empty() {
+    let ticket = pass.as_str().starts_with(auth::TICKET_PREFIX);
+    let who: Option<auth::Who> = if pass.is_empty() {
         None
+    } else if ticket {
+        match ctx.nonces.check_ticket(pass.as_str()) {
+            Some(w) => Some(w),
+            None if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            None => None,
+        }
     } else if let Some(key) = ctx.elo_pubkey {
         match auth::verify_pass(
             pass.as_str(),
@@ -319,7 +330,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             |n| ctx.nonces.take(n),
             auth::now_unix(),
         ) {
-            Ok(p) => Some(p),
+            Ok(p) => Some(auth::Who::from(p)),
             Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
             // Casual is open to anyone: a pass that doesn't check out (say,
             // older than its ten minutes) only costs its skin.
@@ -329,6 +340,18 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         return refuse(&mut send, proto::REFUSE_PASS).await;
     } else {
         None
+    };
+
+    // The menu's own session: its party, friends and voice (`lobby.rs`).
+    if mode == MODE_LOBBY {
+        let who = who.unwrap_or_else(auth::Who::guest);
+        return crate::lobby::session(conn, send, recv, who, name, party, ctx).await;
+    }
+    // A match with a party: seated with it if they're in it and its leader
+    // started this mode, else alone.
+    let seating = match (&who, party) {
+        (Some(w), code) if code != 0 => ctx.lobby.parties().seating(code, &w.id, mode),
+        _ => None,
     };
 
     // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
@@ -346,9 +369,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     };
 
     // Who to count casual play for: the wallet, else the account itself.
-    let player = who
-        .as_ref()
-        .map(|p| p.wallet.clone().unwrap_or_else(|| p.account.clone()));
+    let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
@@ -378,6 +399,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
                     rating,
                     since: std::time::Instant::now(),
                     skin,
+                    party: seating.filter(|_| mode == MODE_DOUBLES),
                 }),
                 tx,
             }
@@ -387,6 +409,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             name,
             mode,
             skin,
+            party: seating,
             player,
             tx,
         },

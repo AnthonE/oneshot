@@ -38,7 +38,7 @@ async fn a_native_client_plays_the_bot() {
 
     // The native client the desktop build will use: client_net's session
     // on wtransport.
-    let hello = Session::hello("native", proto::Pass::NONE, proto::MODE_CASUAL, 2);
+    let hello = Session::hello("native", proto::Pass::NONE, proto::MODE_CASUAL, 2, 0);
     let addr = format!("127.0.0.1:{}", h.addr.port());
     let mut c = NativeClient::connect(&addr, Some(h.cert_hash), hello).await.unwrap();
 
@@ -109,6 +109,7 @@ async fn hello(
             pass: proto::Pass::NONE,
             mode,
             skin: 0,
+            party: 0,
         },
         &mut f,
     )

@@ -187,6 +187,43 @@ pub fn items_urls(origin: &str, slug: &str, wallet: &str) -> Vec<String> {
 
 /// How long a ban answer is kept before it is asked again.
 pub const BAN_CACHE: Duration = Duration::from_secs(60);
+/// How long a friends list is kept: a friend added on Elo Pros shows up
+/// within this.
+pub const FRIENDS_CACHE: Duration = Duration::from_secs(30);
+
+/// One friend as Elo Pros lists them (`GET /api/friends/<player>`,
+/// `meter/friends.py`): their player id, the name they go by, and whether
+/// Elo Pros sees them online anywhere.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FriendRow {
+    pub id: String,
+    pub name: String,
+    pub online: bool,
+}
+
+/// The rows of a friends answer, in its order. A friend with no name goes
+/// by their id, shortened as Elo Pros shows one (`0x1234…abcd`).
+pub fn friend_rows(v: &serde_json::Value) -> Vec<FriendRow> {
+    v["friends"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            let id = f["wallet"].as_str()?.trim().to_ascii_lowercase();
+            proto::party::PlayerId::new(&id).filter(|p| !p.is_empty())?;
+            let name = match f["name"].as_str().map(str::trim) {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ if id.len() > 12 => format!("{}..{}", &id[..6], &id[id.len() - 4..]),
+                _ => id.clone(),
+            };
+            Some(FriendRow {
+                id,
+                name,
+                online: f["online"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
+}
 
 pub struct Elo {
     pub origin: String,
@@ -195,6 +232,7 @@ pub struct Elo {
     http: reqwest::Client,
     bans: Mutex<HashMap<String, (Instant, bool)>>,
     skins: Mutex<HashMap<String, (Instant, Vec<String>)>>,
+    friends: Mutex<HashMap<String, (Instant, Vec<FriendRow>)>>,
 }
 
 impl Elo {
@@ -209,7 +247,38 @@ impl Elo {
                 .unwrap_or_default(),
             bans: Mutex::new(HashMap::new()),
             skins: Mutex::new(HashMap::new()),
+            friends: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// `player`'s friends on Elo Pros (their list is public), or None if
+    /// Elo Pros can't be asked. `fresh`: ask again even if a list is kept.
+    /// Answers are kept [`FRIENDS_CACHE`].
+    pub async fn friends(&self, player: &str, fresh: bool) -> Option<Vec<FriendRow>> {
+        let key = player.to_ascii_lowercase();
+        if !fresh {
+            if let Ok(m) = self.friends.lock() {
+                if let Some((at, f)) = m.get(&key) {
+                    if at.elapsed() < FRIENDS_CACHE {
+                        return Some(f.clone());
+                    }
+                }
+            }
+        }
+        let url = format!("{}/api/friends/{}", self.origin, key);
+        let res = self.http.get(&url).send().await.ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+        let got = friend_rows(&v);
+        if let Ok(mut m) = self.friends.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < FRIENDS_CACHE);
+            }
+            m.insert(key, (Instant::now(), got.clone()));
+        }
+        Some(got)
     }
 
     /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
@@ -383,6 +452,30 @@ impl Elo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn friends_are_read_as_elo_pros_lists_them() {
+        // `meter/friends.py` `view_of`: a wallet friend with a name, an
+        // account friend without one, and rows that aren't ids at all.
+        let v = serde_json::json!({"wallet": "0xaa", "friends": [
+            {"wallet": "0x24445EFDDB08D4938E3E3627042B2CF4063D9092", "name": "Chief", "online": true,
+             "playing": {"game": "gates"}},
+            {"wallet": "acct_0123456789abcdef0123", "name": null, "online": false},
+            {"wallet": "not an id!"}, {"name": "no id"}
+        ]});
+        let rows = friend_rows(&v);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            FriendRow {
+                id: "0x24445efddb08d4938e3e3627042b2cf4063d9092".into(),
+                name: "Chief".into(),
+                online: true
+            }
+        );
+        assert_eq!((rows[1].name.as_str(), rows[1].online), ("acct_0..0123", false));
+        assert!(friend_rows(&serde_json::json!({"error": "x"})).is_empty());
+    }
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {

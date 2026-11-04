@@ -15,6 +15,7 @@
 //! so a warm draw only has to survive frustum culling.
 
 use bevy::asset::LoadState;
+use bevy::camera::primitives::MeshAabb;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 
@@ -84,6 +85,57 @@ pub fn warm(
             Mesh3d(mesh.0.clone()),
             MeshMaterial3d(handle),
             at(),
+        ));
+    }
+}
+
+/// What a weathered box's pipeline is specialised on: its maps (normal,
+/// occlusion-roughness-metal, glow) and whether its mesh carries the
+/// rock's value (`UV_1`).
+type LevelKey = (bool, bool, bool, bool);
+
+/// A warm draw of each kind of weathered box (`weathering.rs`) the frame
+/// the first of its kind is dressed, on that box's own mesh, shrunk: its
+/// pipeline wants its mesh's layout (tangents, the rock's `UV_1`), which
+/// the warm triangle doesn't carry, and a box behind the eye at the start
+/// would otherwise build it mid-fight.
+pub fn warm_level(
+    mut commands: Commands,
+    mut seen: Local<Vec<LevelKey>>,
+    mats: Res<Assets<super::weathering::LevelMaterial>>,
+    meshes: Res<Assets<Mesh>>,
+    fresh: Query<
+        (&Mesh3d, &MeshMaterial3d<super::weathering::LevelMaterial>),
+        Added<MeshMaterial3d<super::weathering::LevelMaterial>>,
+    >,
+    eye: Query<Entity, With<Eye>>,
+) {
+    let Ok(eye) = eye.single() else {
+        return;
+    };
+    for (mesh, mat) in &fresh {
+        let (Some(m), Some(me)) = (mats.get(&mat.0), meshes.get(&mesh.0)) else {
+            continue;
+        };
+        let key = (
+            m.base.normal_map_texture.is_some(),
+            m.base.metallic_roughness_texture.is_some(),
+            m.base.emissive_texture.is_some(),
+            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
+        );
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let extent = me
+            .compute_aabb()
+            .map_or(1.0, |b| (Vec3::from(b.half_extents) * 2.0).max_element().max(1e-3));
+        commands.entity(eye).with_child((
+            Warming(WARM_FRAMES),
+            SceneDone,
+            Mesh3d(mesh.0.clone()),
+            MeshMaterial3d(mat.0.clone()),
+            Transform::from_xyz(0.0, 0.0, -WARM_AHEAD_M).with_scale(Vec3::splat(WARM_SIZE_M / extent)),
         ));
     }
 }

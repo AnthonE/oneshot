@@ -21,9 +21,11 @@ pub mod auth;
 pub mod cup;
 pub mod elo;
 pub mod http;
+pub mod lobby;
 pub mod net;
 pub mod online;
 pub mod outlet;
+pub mod party;
 pub mod queue;
 pub mod stats;
 
@@ -54,6 +56,8 @@ pub enum ToSim {
         mode: u8,
         /// A skin checked against the player's wallet.
         skin: u8,
+        /// The party it comes with, if it is in one that started this mode.
+        party: Option<party::Seating>,
         /// Who signed in: their wallet, else their account's `acct_` id.
         /// None for a guest.
         player: Option<String>,
@@ -228,6 +232,8 @@ pub struct Ctx {
     pub allow_origins: Vec<String>,
     /// Snapshots dropped and sessions cut (`outlet`).
     pub counts: Arc<outlet::Counts>,
+    /// The menu's sessions: parties, friends, voice (`lobby.rs`).
+    pub lobby: Arc<lobby::Lobby>,
     /// Who this process holds (the sim writes it every few seconds), and
     /// where the slots share theirs.
     pub roster: std::sync::Mutex<online::Slot>,
@@ -317,6 +323,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
         allow_origins: cfg.allow_origins.clone(),
+        lobby: Arc::default(),
         roster: std::sync::Mutex::new(online::Slot::default()),
         roster_dir: cfg.roster_dir.clone(),
         roster_file: online::file_name(addr.port()),
@@ -334,6 +341,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .spawn(move || sim.run())
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
+    tokio::spawn(ctx.lobby.clone().sweeper());
     tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
@@ -454,6 +462,10 @@ struct Live {
     room: Room,
     id: String,
     mode: u8,
+    /// Made for a party alone: no stranger is seated in it.
+    private: bool,
+    /// The parties seated here, and the side each took (Big Team).
+    parties: Vec<(u32, Option<u8>)>,
     links: [Option<u64>; MAX_FIGHTERS],
     wallets: [Option<String>; MAX_FIGHTERS],
     /// Who sits in each seat, for stats: the wallet, else the account's
@@ -489,7 +501,7 @@ struct Sim {
     ctx: Arc<Ctx>,
 }
 
-fn send_msg(tx: &outlet::Outlet, m: &Msg) {
+pub(crate) fn send_msg(tx: &outlet::Outlet, m: &Msg) {
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
     if let Ok(n) = frame_msg(m, &mut f) {
         tx.stream(f[..n].to_vec());
@@ -570,6 +582,7 @@ impl Sim {
                         name,
                         mode,
                         skin,
+                        party,
                         player,
                         tx,
                     } => {
@@ -577,39 +590,73 @@ impl Sim {
                             MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
                             _ => MODE_CASUAL,
                         };
-                        // Free for all and Gun Game are shared: a seat a bot
-                        // holds in a room still playing, else a new room.
-                        let open = (mode != MODE_CASUAL)
+                        let live_room =
+                            |r: &Live| r.mode == mode && r.over_at.is_none() && r.room.world.phase != Phase::Over;
+                        // A party's room: where its first member went, on
+                        // the side it took, while that side has a seat.
+                        let with_party = party.and_then(|p| {
+                            rooms.iter().enumerate().find_map(|(i, r)| {
+                                let r = r.as_ref()?;
+                                let &(_, team) = r.parties.iter().find(|(c, _)| *c == p.code)?;
+                                (live_room(r) && r.room.open_seats(team) > 0).then_some((i, team))
+                            })
+                        });
+                        // Big Team's side with room for the whole party.
+                        let side_for = |r: &Live, n: usize| -> Option<Option<u8>> {
+                            if !r.room.world.rules.teams {
+                                return (r.room.open_seats(None) >= n).then_some(None);
+                            }
+                            [0u8, 1]
+                                .into_iter()
+                                .find(|&t| r.room.open_seats(Some(t)) >= n)
+                                .map(Some)
+                        };
+                        let need = party.map_or(1, |p| p.size as usize);
+                        let private = party.is_some_and(|p| p.private);
+                        // Free for all, Gun Game and Big Team are shared: a
+                        // room still playing with seats for all of us, else
+                        // a new room. A party alone always gets its own.
+                        let open = (mode != MODE_CASUAL && !private)
                             .then(|| {
-                                rooms.iter().position(|r| {
-                                    r.as_ref().is_some_and(|r| {
-                                        r.mode == mode
-                                            && r.over_at.is_none()
-                                            && r.room.world.phase != Phase::Over
-                                            && r.links.iter().take(r.room.size).any(|l| l.is_none())
-                                    })
+                                rooms.iter().enumerate().find_map(|(i, r)| {
+                                    let r = r.as_ref()?;
+                                    if !live_room(r) || r.private {
+                                        return None;
+                                    }
+                                    side_for(r, need).map(|t| (i, t))
                                 })
                             })
                             .flatten();
-                        let i = match open {
-                            Some(i) => i,
-                            None => place(
-                                &mut rooms,
-                                Live {
-                                    room: self.new_room(mode, false),
-                                    id: format!("os-c{:016x}", random_u64()),
-                                    mode,
-                                    links: [None; MAX_FIGHTERS],
-                                    wallets: Default::default(),
-                                    players: Default::default(),
-                                    joined: [0; MAX_FIGHTERS],
-                                    over_at: None,
-                                    cup: None,
-                                },
-                            ),
+                        let (i, team) = match with_party.or(open) {
+                            Some(at) => at,
+                            None => {
+                                let i = place(
+                                    &mut rooms,
+                                    Live {
+                                        room: self.new_room(mode, false),
+                                        id: format!("os-c{:016x}", random_u64()),
+                                        mode,
+                                        links: [None; MAX_FIGHTERS],
+                                        wallets: Default::default(),
+                                        players: Default::default(),
+                                        joined: [0; MAX_FIGHTERS],
+                                        over_at: None,
+                                        cup: None,
+                                        private,
+                                        parties: Vec::new(),
+                                    },
+                                );
+                                let team = side_for(rooms[i].as_ref().unwrap(), need).flatten();
+                                (i, team)
+                            }
                         };
                         let live = rooms[i].as_mut().unwrap();
-                        let Some((slot, out)) = live.room.join(name, skin) else {
+                        if let Some(p) = party {
+                            if !live.parties.iter().any(|(c, _)| *c == p.code) {
+                                live.parties.push((p.code, team));
+                            }
+                        }
+                        let Some((slot, out)) = live.room.join_team(name, skin, team) else {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
@@ -745,6 +792,8 @@ impl Sim {
                         joined: [0; MAX_FIGHTERS],
                         over_at: None,
                         cup: None,
+                        private: false,
+                        parties: Vec::new(),
                     };
                     let mut outs = Vec::new();
                     for (side, players) in sides.iter().enumerate() {
@@ -917,6 +966,8 @@ impl Sim {
                 joined: [0; MAX_FIGHTERS],
                 over_at: None,
                 cup: Some((ci, h)),
+                private: false,
+                parties: Vec::new(),
             };
             let mut outs = Vec::new();
             for (slot, &i) in members.iter().enumerate() {

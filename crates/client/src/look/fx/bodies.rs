@@ -1,17 +1,20 @@
 //! What happens to bodies: a shield flaring gold as it takes a round,
 //! breaking in a burst of lightning, crackling as it comes back; dust where
 //! someone lands hard; a shimmer where someone spawns, a glint at a pickup,
-//! a flash where a melee lands. Read from what the snapshots say (a
-//! shield's level is sent for everyone we can see, so a bystander sees the
-//! flare with no hit event and no new field), drawn only.
+//! a flash where a melee lands, and the chip, dent or gash it leaves in a
+//! wall it meets. Read from what the snapshots say (a shield's level is
+//! sent for everyone we can see, so a bystander sees the flare with no hit
+//! event and no new field) and from the events, drawn only.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
-use sim::consts::HEAD_Y;
+use proto::EventState;
+use sim::consts::{HEAD_Y, HIT_R, LUNGE_PAD, MELEE_RANGE, SWORD_REACH};
+use sim::geom::V3;
 
 use super::atlas::{GLOW, RING};
 use super::pool::{Orient, Particle};
-use super::table::{Layer, Matter};
+use super::table::{Layer, Matter, Weapon};
 use super::{Fx, Scene, ZAP_FLASH};
 
 /// A flare's peak when a shield takes a round, and when it breaks; how fast
@@ -307,20 +310,30 @@ pub fn picked_up(fx: &mut Fx, at: Vec3) {
     fx.emit_tint(Layer::ShieldSparks, 6, at, Vec3::Y, Color::WHITE, 1.0);
 }
 
-/// A melee swing we saw: a flash and sparks a reach in front of the
-/// swinger; a sword's (`c` the sword's arm id, `at` its eye), a blue slash
-/// of light across the swing.
-pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, c: u16, at: Vec3) {
-    if slot == scene.me {
-        return;
-    }
-    let Some(d) = scene.others.iter().find(|d| d.slot == slot) else {
+/// A melee swing we saw, or our own (`e.pos` the swinger's eye, `c` the
+/// sword's arm id for its swing, `part` 2 a clash of swords): when the
+/// swing's line meets the map within its reach and nobody we draw stands
+/// on it first, what the blow throws off that face and the chip, dent or
+/// gash it leaves (`marks.rs`). Someone else's: a blue slash of light
+/// across a sword's swing, and a flash and sparks where a blow lands.
+pub fn swung(fx: &mut Fx, scene: &Scene, e: &EventState, eye: Vec3) {
+    let slot = e.a;
+    let own = slot == scene.me;
+    let d = scene.others.iter().find(|d| d.slot == slot).copied();
+    let aim = match (own, d) {
+        (true, _) => scene.aim,
+        (false, Some(d)) => Vec3::new(d.pitch.cos() * d.yaw.cos(), d.pitch.sin(), d.pitch.cos() * d.yaw.sin()),
+        (false, None) => return,
+    };
+    let sword = e.c == sim::arms::SWORD as u16;
+    let walled = e.part != 2 && wall(fx, scene, slot, eye, aim, sword);
+    let Some(d) = d.filter(|_| !own) else {
         return;
     };
     let fwd = Vec3::new(d.yaw.cos(), 0.0, d.yaw.sin());
-    if c == sim::arms::SWORD as u16 {
+    if sword {
         let side = Vec3::new(-fwd.z, 0.0, fwd.x);
-        let mid = at - Vec3::Y * 0.3 + fwd * 0.8;
+        let mid = eye - Vec3::Y * 0.3 + fwd * 0.8;
         for k in 0..5 {
             let u = k as f32 / 4.0 - 0.5;
             fx.glow.spawn(Particle {
@@ -341,7 +354,46 @@ pub fn swung(fx: &mut Fx, scene: &Scene, slot: u8, c: u16, at: Vec3) {
         }
         return;
     }
-    let at = at + Vec3::Y * 1.3 + fwd * 0.9;
+    if walled {
+        return;
+    }
+    let at = eye - Vec3::Y * 0.3 + fwd * 0.9;
     fx.emit_tint(Layer::Flash, 1, at, fwd, Color::WHITE, 3.0);
     fx.emit(Layer::Sparks, 5, at, fwd, Matter::Metal);
+}
+
+/// A swing from `eye` along `aim` against the map: whether it met a face
+/// in reach with nobody we draw (but the swinger) in the way, and if so
+/// what that face throws and keeps.
+fn wall(fx: &mut Fx, scene: &Scene, slot: u8, eye: Vec3, aim: Vec3, sword: bool) -> bool {
+    let reach = if sword { SWORD_REACH } else { MELEE_RANGE };
+    let pad = if sword { LUNGE_PAD } else { 0.25 };
+    let t = scene
+        .map
+        .ray(V3::new(eye.x, eye.y, eye.z), V3::new(aim.x, aim.y, aim.z), reach);
+    if t >= reach {
+        return false;
+    }
+    let between = scene.others.iter().filter(|d| d.alive && d.slot != slot).any(|d| {
+        let feet = Vec3::new(d.pos.x, d.pos.y, d.pos.z);
+        let s = (feet + Vec3::Y * 0.9 - eye).dot(aim).clamp(0.0, t);
+        let p = eye + aim * s;
+        let flat = Vec2::new(p.x - feet.x, p.z - feet.z).length();
+        flat < HIT_R + pad && (-0.2..HEAD_Y + 0.4).contains(&(p.y - feet.y))
+    });
+    let hull = scene.vehicles.iter().any(|v| {
+        let c = Vec3::new(v.pos.x, v.pos.y + 1.0, v.pos.z);
+        let s = (c - eye).dot(aim).clamp(0.0, t);
+        (eye + aim * s).distance_squared(c) < 2.5 * 2.5
+    });
+    if between || hull {
+        return false;
+    }
+    let Some(hit) = super::surface::cast(scene.map, &mut fx.near, eye, aim, t + 0.05) else {
+        return false;
+    };
+    let matter = super::surface::matter(scene.map, hit.on);
+    let w = if sword { Weapon::Blade } else { Weapon::Melee };
+    fx.strike(scene.map, w, matter, &hit);
+    true
 }

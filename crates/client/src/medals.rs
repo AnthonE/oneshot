@@ -36,7 +36,7 @@ pub struct CarnagePanel;
 
 /// A medal's colour: what kind it is, and for a multi-kill how far up.
 pub fn colour(id: u8) -> Color {
-    let gold = ui::ACCENT;
+    let gold = ui::GOLD;
     match md::info(id).family {
         md::Family::Multi => {
             let rung = md::MULTI.iter().position(|&m| m == id).unwrap_or(0) as f32;
