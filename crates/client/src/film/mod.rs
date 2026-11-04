@@ -324,7 +324,7 @@ pub fn install(app: &mut App, script: Script, canvas: Option<String>) {
         Update,
         (
             feed.before(crate::pump),
-            as_player.after(crate::pump).before(crate::view),
+            as_player.after(crate::pump).before(crate::happened),
             (aim, lens).chain().after(crate::view).before(crate::look::fx::draw),
             mixdown.after(crate::sound::decide),
             roll.after(mixdown).after(crate::hud::draw).after(crate::tags::draw),

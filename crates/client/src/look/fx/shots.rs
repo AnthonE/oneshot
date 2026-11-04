@@ -102,6 +102,12 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, muzzle
     }
 }
 
+/// Our own rounds counted off and not drawn: a film's camera off the eye
+/// sees them fired from the body, as anyone's (`film.rs`).
+pub fn own_unseen(fx: &mut Fx, f: &Fighter) {
+    let _ = fx.own_rounds.take(f);
+}
+
 /// Where our flash sits in view space: on the line to the drawn muzzle, at
 /// [`OWN_MUZZLE`]'s depth.
 fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {

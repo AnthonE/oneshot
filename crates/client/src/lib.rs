@@ -1035,14 +1035,21 @@ pub(crate) fn happened(
     mut st: ResMut<hud::HudState>,
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
+    film: Option<Res<film::Film>>,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
     let events = s.core.drain_events();
     let mut msgs = core::mem::take(&mut early.0);
     msgs.extend(s.take_messages());
+    // A film's camera off the eye sees our shots as anyone's: from the
+    // drawn body, not the gun in view (`film.rs`).
+    let third = film.is_some_and(|f| f.third());
     {
-        let others = s.core.others(now_ms);
+        let mut others = s.core.others(now_ms);
+        if third {
+            others.push(s.core.own_drawn());
+        }
         let vehicles = s.core.vehicles(now_ms);
         let dir = Vec3::new(
             look.pitch.cos() * look.yaw.cos(),
@@ -1053,7 +1060,7 @@ pub(crate) fn happened(
             map: &s.core.map,
             others: &others,
             vehicles: &vehicles,
-            me: s.core.slot,
+            me: if third { u8::MAX } else { s.core.slot },
             aim: dir,
             t: time.elapsed_secs(),
         };
@@ -1063,7 +1070,11 @@ pub(crate) fn happened(
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = Vec3::new(p.x, p.y + h, p.z);
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
-        look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
+        if third {
+            look::fx::shots::own_unseen(&mut fx, f);
+        } else {
+            look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
+        }
     }
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
     heard.0 = events;
