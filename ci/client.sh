@@ -6,7 +6,9 @@
 #                      into crates/client/dist, each module under the gate
 #   ci/client.sh dev   just the page, quickly: release (thin LTO, where the
 #                      web profile is fat), no size gate; both modules,
-#                      bound and proved, into dist all the same
+#                      bound and proved, into dist all the same, or one
+#                      (WEB_MODULES=webgl2 or webgpu: a dev loop; the page
+#                      takes the one there, publish_web.sh refuses it)
 #
 # The page is two wasm modules (after Gates' ci/build_web.sh, "the game,
 # twice"): Bevy picks its GPU API when it is compiled, so `oneshot_client`
@@ -48,10 +50,15 @@ fi
 rm -rf dist
 mkdir -p dist
 mods=""
-for m in webgl2 webgpu; do
+modules="webgl2 webgpu"
+if [ "$mode" = dev ]; then
+  modules=${WEB_MODULES:-$modules}
+fi
+for m in $modules; do
   case "$m" in
     webgl2) stem=oneshot_client; feat="" ;;
     webgpu) stem=oneshot_client_gpu; feat="--features webgpu" ;;
+    *) echo "WEB_MODULES: webgl2 and/or webgpu, not $m" >&2; exit 2 ;;
   esac
   # Both builds write the same oneshot_client.wasm, so each is bound before
   # the next is built.

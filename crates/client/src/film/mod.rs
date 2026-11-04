@@ -34,11 +34,12 @@
 //! The lens is a cinema camera's where the GPU has it: a shutter (motion
 //! blur, on TAA's motion prepass, so only where the tier has TAA: the
 //! desktop and WebGPU with prepass room), a focus and an aperture (depth of
-//! field, which reads the view's depth: not WebGL2), colour fringing (not
-//! WebGL2), a hand on the camera and a grade. WebGL2 has neither the
-//! prepass nor the depth to bind, so a WebGL2 film is graded, shaken and
-//! rolled but not blurred or focused: that is what WebGL2 can do, said
-//! here rather than refused.
+//! field, which reads the view's depth: not WebGL2; Bevy's gaussian under
+//! WebGPU, where its bokeh doesn't work), colour fringing, a hand on the
+//! camera and a grade. WebGL2 has neither the prepass nor the depth to
+//! bind, so a WebGL2 film is graded, fringed, shaken and rolled but not
+//! blurred or focused: that is what WebGL2 can do, said here rather than
+//! refused.
 
 pub mod encode;
 pub mod mix;
@@ -306,6 +307,10 @@ pub fn install(app: &mut App, script: Script, canvas: Option<String>) {
             win.resolution = bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0);
             win.resizable = false;
             win.fit_canvas_to_parent = false;
+            // Opened without the focus: an F9 film draws beside a match
+            // still being played (a second window on the desktop, a frame
+            // in the page), and the player's keys stay with the match.
+            win.focused = false;
             if let Some(c) = &canvas {
                 win.canvas = Some(c.clone());
             }
@@ -313,6 +318,8 @@ pub fn install(app: &mut App, script: Script, canvas: Option<String>) {
     }
     let mut virt = Time::<Virtual>::default();
     virt.set_max_delta(std::time::Duration::from_secs_f64(MAX_DELTA_S));
+    // Unfocused, as it opens, it still draws flat out.
+    app.insert_resource(bevy::winit::WinitSettings::continuous());
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         std::time::Duration::from_secs_f64(1.0 / fps as f64),
     ))
@@ -694,8 +701,14 @@ fn lens(
             // The blur's cap scales with the drawn frame, so a supersampled
             // shot looks as one drawn at size.
             let h = window.single().map_or(1080.0, |w| w.physical_height() as f32);
+            // Bevy's bokeh doesn't work on WebGPU; its gaussian does.
+            let mode = if crate::look::gpu::api() == "webgpu" {
+                DepthOfFieldMode::Gaussian
+            } else {
+                DepthOfFieldMode::Bokeh
+            };
             commands.entity(cam).insert(DepthOfField {
-                mode: DepthOfFieldMode::Bokeh,
+                mode,
                 focal_distance: at,
                 aperture_f_stops: fstop,
                 max_circle_of_confusion_diameter: 48.0 * h / 1080.0,
@@ -708,7 +721,8 @@ fn lens(
         }
         (None, None) => {}
     }
-    match (l.fringe > 0.0 && !webgl2, fringe) {
+    // Bevy's fringe is two textures and a uniform: WebGL2 draws it too.
+    match (l.fringe > 0.0, fringe) {
         (true, Some(mut f)) => f.intensity = l.fringe,
         (true, None) => {
             commands.entity(cam).insert(ChromaticAberration {
@@ -754,7 +768,9 @@ fn mixdown(
     }
     let n = (FILM_RATE / film.script.fps) as usize;
     let buf = mix.0.render(n);
-    if matches!(film.phase, Phase::Roll { .. }) {
+    // A still is one frame and has no sound: its hold's worth would run
+    // every later shot's sound ahead of its picture.
+    if matches!(film.phase, Phase::Roll { .. }) && !film.cur().still {
         film.put_audio(buf);
     }
 }

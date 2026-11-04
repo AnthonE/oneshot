@@ -185,7 +185,7 @@
           ]);
           if (!adapter) return { ok: false, why: 'no WebGPU adapter' };
           const info = adapter.info || {};
-          if (info.isFallbackAdapter || adapter.isFallbackAdapter) return { ok: false, why: 'a software WebGPU adapter' };
+          if (info.isFallbackAdapter || adapter.isFallbackAdapter) return { ok: false, soft: true, why: 'a software WebGPU adapter' };
           if (!adapter.features.has('float32-filterable')) return { ok: false, why: 'no float32-filterable' };
           return { ok: true, why: 'a WebGPU adapter' };
         } catch {
@@ -282,7 +282,10 @@
       window.__oneshotPanic = (msg) => {
         const m = String(msg || '');
         const gpu = window.__oneshotGfx === 'webgpu';
-        const renderer = /bevy_render|Unable to find a GPU|wgpu surface|request_device|adapter/.test(m);
+        // Only a panic in the renderer's own set-up (Gates' app.js): a bug
+        // in an asset upload panics in bevy_render too, and would panic
+        // again under WebGL2.
+        const renderer = /bevy_render[^\n]*renderer|Unable to find a GPU|wgpu surface|request_device/.test(m);
         if (gpu && renderer && started && performance.now() - started < 30000) { gpuFallBack('WebGPU did not start here'); return; }
         if (gpu && /wgpu-[\d.]+\/src\/backend\/webgpu|GPUDevice|GPUQueue|GPUCanvasContext/.test(m)) {
           gpuFallBack('the graphics card refused WebGPU');
@@ -299,7 +302,7 @@
          under the card. The frame posts back an MP4 made on this machine;
          nothing is uploaded. One frame per video, so another style is
          another frame over the same tape. */
-      const clipUi = { tape: null, frame: null, url: null, send: null, style: 'wide' };
+      const clipUi = { tape: null, frame: null, url: null, send: null, style: 'wide', live: true };
       const $c = (id) => document.getElementById(id);
       const clipSay = (text, bad) => { $c('clip-status').textContent = text; $c('clip-status').className = bad ? 'bad' : ''; };
       function clipReset() {
@@ -311,8 +314,13 @@
         $c('clip-done').hidden = true;
         clipSay('');
       }
+      /* While the match is still on only the player's own eye is offered
+         (clip.rs LIVE_STYLES): a camera behind them would show where the
+         enemies the fog sent went, not only the ones they saw. */
+      const CLIP_LIVE = ['wide', 'pov', 'long'];
       function clipMake(style) {
         if (!clipUi.tape) return;
+        if (clipUi.live && !CLIP_LIVE.includes(style)) style = 'wide';
         clipReset();
         clipUi.style = style;
         for (const b of $c('clip-styles').querySelectorAll('button')) b.classList.toggle('on', b.dataset.style === style);
@@ -320,6 +328,9 @@
         view.classList.toggle('tall', style !== 'wide');
         const frame = document.createElement('iframe');
         frame.title = 'Your clip, being drawn';
+        /* Nothing in it takes the keys from the match behind the card. */
+        frame.inert = true;
+        frame.tabIndex = -1;
         frame.src = `clip.html?gfx=${encodeURIComponent(window.__oneshotGfx || 'webgl2')}`;
         view.append(frame);
         clipUi.frame = frame;
@@ -327,9 +338,15 @@
         const send = { type: 'clip-tape', tape: clipUi.tape.slice(0), style, line: '', tag: true };
         clipUi.send = () => frame.contentWindow.postMessage(send, location.origin, [send.tape]);
       }
-      window.__oneshotClip = (bytes, held) => {
+      window.__oneshotClip = (bytes, held, api, live) => {
         /* A copy the page owns: the game's view of its memory moves on. */
         clipUi.tape = new Uint8Array(bytes).buffer;
+        clipUi.live = live !== false;
+        for (const b of $c('clip-styles').querySelectorAll('button')) {
+          const shut = clipUi.live && !CLIP_LIVE.includes(b.dataset.style);
+          b.disabled = shut;
+          b.title = shut ? 'After the match: a camera off your eye would show more than you saw' : '';
+        }
         const s = Math.round(Number(held) || 0);
         $c('clip-held').textContent = s >= 15
           ? `The last ${s} seconds you played, made into a video on this computer. Esc frees the mouse to click.`
@@ -405,7 +422,10 @@
         }
         const { launch, pose } = glue;
         if (params.has('pose')) {
-          // No server: one fighter for a picture (ci/look.mjs).
+          // No server: one fighter for a picture (ci/look.mjs). Gone, as
+          // the splash is once a game is drawing, so a refused frame later
+          // shows the bar rather than reloading into WebGL2.
+          boot.classList.add('gone');
           boot.remove();
           started = performance.now();
           pose(location.search, ['lite'].filter(flag).concat(gfxOpts).join(','));
@@ -425,8 +445,11 @@
           } catch { return null; }
         };
         const signin = await setupSignIn(info);
+        // A software adapter the WebGPU module was forced onto: the game
+        // can't tell from wgpu (look/potato.rs), so the page says.
+        const soft = window.__oneshotGfx === 'webgpu' && (await gpuProbe).soft ? ['softgpu'] : [];
         const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics'].filter(flag)
-          .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts).join(',');
+          .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts, soft).join(',');
         say('Starting');
         requestAnimationFrame(shown);
         started = performance.now();

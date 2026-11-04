@@ -32,6 +32,16 @@ const FAILED: &str = "CLIP FAILED";
 /// 9:16, the shape a phone's feed plays.
 pub const STYLES: [&str; 5] = ["wide", "pov", "chase", "mix", "long"];
 
+/// The styles a match still being played may be clipped in: the player's
+/// own eye only. A camera behind and above them sees over cover and round
+/// corners, and the tape holds every enemy the fog sent because it could
+/// be seen soon, not only the ones the player saw; a chase of the last
+/// fifteen seconds mid-match would show where they went. Once the match
+/// is over every style is open.
+/// The page offers only these until the match is over (`web/index.html`'s
+/// `__oneshotClip`, told by [`take`]).
+pub const LIVE_STYLES: [&str; 3] = ["wide", "pov", "long"];
+
 /// A style's shot list as JSON, `None` for a name not in [`STYLES`].
 pub fn script(style: &str) -> Option<String> {
     // The camera behind and a little above the player, quick to follow: an
@@ -96,14 +106,15 @@ fn take(
         return;
     };
     let held = s.clip_held_s().min(CLIP_S);
+    let on = s.core.phase() != sim::world::Phase::Over;
     // The film draws in a window of its own; on a screen shorter than the
     // video it draws smaller and the encoder scales it up.
     let screen = monitors.iter().map(|m| m.physical_height).max();
-    hand_over(tape, held, screen, line);
+    hand_over(tape, held, on, screen, line);
 }
 
 #[cfg(target_arch = "wasm32")]
-fn hand_over(tape: Vec<u8>, held: f64, _screen: Option<u32>, line: crate::look::shot::Line) {
+fn hand_over(tape: Vec<u8>, held: f64, on: bool, _screen: Option<u32>, line: crate::look::shot::Line) {
     use wasm_bindgen::{JsCast, JsValue};
     let global = js_sys::global();
     let f = js_sys::Reflect::get(&global, &JsValue::from_str("__oneshotClip"))
@@ -114,12 +125,13 @@ fn hand_over(tape: Vec<u8>, held: f64, _screen: Option<u32>, line: crate::look::
         return;
     };
     let bytes = js_sys::Uint8Array::from(&tape[..]);
-    match f.call3(
-        &global,
+    let args = js_sys::Array::of4(
         &bytes,
         &JsValue::from(held),
         &JsValue::from_str(crate::look::gpu::api()),
-    ) {
+        &JsValue::from(on),
+    );
+    match f.apply(&global, &args) {
         Ok(_) => line.say(WORD, format!("the last {held:.0} s: making your video"), false),
         Err(e) => {
             error!("oneshot: the page's __oneshotClip threw: {e:?}");
@@ -131,7 +143,7 @@ fn hand_over(tape: Vec<u8>, held: f64, _screen: Option<u32>, line: crate::look::
 /// The tape beside the screenshots, and a second copy of this binary to
 /// draw it, on a thread: a file and a process are not a frame's work.
 #[cfg(not(target_arch = "wasm32"))]
-fn hand_over(tape: Vec<u8>, held: f64, screen: Option<u32>, line: crate::look::shot::Line) {
+fn hand_over(tape: Vec<u8>, held: f64, _on: bool, screen: Option<u32>, line: crate::look::shot::Line) {
     let Some(dir) = crate::shot::dir() else {
         line.say(FAILED, "no folder for it: set ONESHOT_SHOTS_DIR", true);
         return;

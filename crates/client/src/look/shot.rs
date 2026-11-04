@@ -7,7 +7,9 @@
 //! where the desktop's key doesn't (`crate::shot`'s header). On the desktop
 //! the PNG goes in the player's pictures folder (`shot::dir`), encoded and
 //! written on a thread of its own so the frame doesn't hitch; in a browser,
-//! which can't write a file, the page hands it to the browser as a download.
+//! which can't write a file, the browser's own encoder makes the PNG (a
+//! canvas' `toBlob`, off the page's thread) and hands it over as a
+//! download.
 //! Either way a line at the top says where, once it is there, and says so
 //! louder if it isn't. The line is hidden the frame the key is pressed, so
 //! the last shot's line is never in the next shot.
@@ -36,6 +38,9 @@ pub const KEY: KeyCode = KeyCode::F12;
 /// refuse and say so. Each clears when its file is written, well under a
 /// second.
 pub const PENDING_CAP: usize = 4;
+/// Seconds after the last shot asked for that the ones still out are
+/// given up on.
+pub const PENDING_GIVE_UP_S: f64 = 20.0;
 /// How long the line stays, then how long it fades.
 const LINE_S: f64 = 4.0;
 const LINE_FADE_S: f64 = 0.6;
@@ -81,6 +86,8 @@ pub struct Shots {
     /// Filled by the observer (or its thread), drained by [`take`].
     out: Arc<Mutex<Vec<Outcome>>>,
     pending: usize,
+    /// When the last one was asked for (real seconds).
+    pending_at: f64,
     /// A browser's names: the stamp last used and how many had it.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     last: (String, u32),
@@ -111,6 +118,7 @@ impl Default for Shots {
             dir,
             out: Arc::default(),
             pending: 0,
+            pending_at: 0.0,
             last: (String::new(), 0),
             line: None,
             taken: 0,
@@ -221,6 +229,15 @@ fn take(
     if !keys.just_pressed(KEY) {
         return;
     }
+    // A frame that never came back (a lost device, a browser that never
+    // answered) doesn't hold the key shut for the rest of the run.
+    if shots.pending > 0 && now - shots.pending_at > PENDING_GIVE_UP_S {
+        warn!(
+            "oneshot: {} screenshot(s) never came back; forgetting them",
+            shots.pending
+        );
+        shots.pending = 0;
+    }
     if shots.pending >= PENDING_CAP {
         tell(&mut shots, FAILED, true, "still saving the last ones".into());
         return;
@@ -277,12 +294,12 @@ fn take(
         shots.last = (stamp.clone(), n);
         let name = shot::name(&stamp, n);
         move |ev: On<ScreenshotCaptured>| {
-            let o = match encode(ev.image.clone()).and_then(|png| web::download(&name, &png)) {
-                Ok(()) => Outcome::Saved(name.clone(), "to your downloads".into()),
-                Err(e) => Outcome::Failed(e),
-            };
-            if let Ok(mut v) = out.lock() {
-                v.push(o);
+            // The browser's own encoder makes the PNG, off the page's
+            // thread; it says how that went when it's done.
+            if let Err(e) = web::save(name.clone(), ev.image.clone(), out.clone()) {
+                if let Ok(mut v) = out.lock() {
+                    v.push(Outcome::Failed(e));
+                }
             }
         }
     };
@@ -290,6 +307,7 @@ fn take(
     shots.line = None;
     commands.spawn(Screenshot::primary_window()).observe(observer);
     shots.pending += 1;
+    shots.pending_at = now;
     shots.taken += 1;
 }
 
@@ -474,21 +492,68 @@ fn capture(
 /// The browser's half: a file is a download.
 #[cfg(target_arch = "wasm32")]
 mod web {
+    use std::sync::{Arc, Mutex};
+
+    use bevy::prelude::Image;
     use wasm_bindgen::closure::Closure;
-    use wasm_bindgen::JsCast;
+    use wasm_bindgen::{Clamped, JsCast, JsValue};
+
+    use super::Outcome;
 
     /// Seconds the download's object URL is kept before it is let go.
     const REVOKE_MS: i32 = 10_000;
 
-    pub fn download(name: &str, png: &[u8]) -> Result<(), String> {
-        let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    fn js(e: JsValue) -> String {
+        format!("{e:?}")
+    }
+
+    /// The frame onto a canvas of its own and out through the canvas' own
+    /// PNG encoder (`toBlob`), which the browser runs off the page's
+    /// thread: encoding a big frame in wasm was tens of milliseconds of a
+    /// frame in the middle of a fight. Opaque: the frame's alpha holds
+    /// brightness, not coverage (`encode`).
+    pub fn save(name: String, img: Image, out: Arc<Mutex<Vec<Outcome>>>) -> Result<(), String> {
+        let rgba = img.try_into_dynamic().map_err(|e| e.to_string())?.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let mut px = rgba.into_raw();
+        for a in px.iter_mut().skip(3).step_by(4) {
+            *a = 255;
+        }
+        let doc = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+        let canvas: web_sys::HtmlCanvasElement = doc
+            .create_element("canvas")
+            .map_err(js)?
+            .dyn_into()
+            .map_err(|_| "not a canvas")?;
+        canvas.set_width(w);
+        canvas.set_height(h);
+        let ctx: web_sys::CanvasRenderingContext2d = canvas
+            .get_context("2d")
+            .map_err(js)?
+            .ok_or("no 2d context")?
+            .dyn_into()
+            .map_err(|_| "not a 2d context")?;
+        let data = web_sys::ImageData::new_with_u8_clamped_array_and_sh(Clamped(&px), w, h).map_err(js)?;
+        ctx.put_image_data(&data, 0, 0).map_err(js)?;
+        let done = Closure::once_into_js(move |blob: JsValue| {
+            let o = match blob.dyn_into::<web_sys::Blob>() {
+                Ok(b) => match download(&name, &b) {
+                    Ok(()) => Outcome::Saved(name.clone(), "to your downloads".into()),
+                    Err(e) => Outcome::Failed(e),
+                },
+                Err(_) => Outcome::Failed("the browser made no PNG of it".into()),
+            };
+            if let Ok(mut v) = out.lock() {
+                v.push(o);
+            }
+        });
+        canvas.to_blob_with_type(done.unchecked_ref(), "image/png").map_err(js)
+    }
+
+    fn download(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
         let w = web_sys::window().ok_or("no window")?;
         let doc = w.document().ok_or("no document")?;
-        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(png).into());
-        let opts = web_sys::BlobPropertyBag::new();
-        opts.set_type("image/png");
-        let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(js)?;
-        let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js)?;
+        let url = web_sys::Url::create_object_url_with_blob(blob).map_err(js)?;
         let a: web_sys::HtmlAnchorElement = doc
             .create_element("a")
             .map_err(js)?

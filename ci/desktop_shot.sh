@@ -22,8 +22,9 @@
 #   ci/desktop_shot.sh traces/menu.png 4 6 3 1 menu
 #
 # Needs Xvfb and lavapipe (apt-get install xvfb mesa-vulkan-drivers), the
-# desktop client (ci/client.sh builds crates/client/target/debug/oneshot;
-# ONESHOT_BIN names another) and for a match the release server (cargo
+# desktop client (the newer of crates/client/target/release/oneshot, as the
+# web shots are, and the debug one ci/client.sh builds; ONESHOT_BIN names
+# another; the log says which) and for a match the release server (cargo
 # build --release -p server). The settings file is a fresh one, so a
 # player's own field of view or keys never move a shot. The client's log
 # goes beside the shot (<out>.log).
@@ -36,7 +37,12 @@ mode=${3:-6}
 map=${4:-3}
 auto=${5:-0}
 more=("${@:6}")
-bin=${ONESHOT_BIN:-crates/client/target/debug/oneshot}
+bin=${ONESHOT_BIN:-}
+if [ -z "$bin" ]; then
+  rel=crates/client/target/release/oneshot dbg=crates/client/target/debug/oneshot
+  if [ -x "$rel" ] && { [ ! -x "$dbg" ] || [ "$rel" -nt "$dbg" ]; }; then bin=$rel; else bin=$dbg; fi
+fi
+echo "desktop_shot: $bin" >&2
 [ -x "$bin" ] || { echo "desktop_shot: no $bin (ci/client.sh, or cd crates/client && cargo build)" >&2; exit 1; }
 command -v Xvfb >/dev/null || { echo "desktop_shot: no Xvfb (apt-get install xvfb mesa-vulkan-drivers)" >&2; exit 1; }
 case $out in /*) ;; *) out=$root/$out ;; esac

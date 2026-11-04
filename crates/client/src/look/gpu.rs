@@ -199,18 +199,22 @@ pub fn tell_page(hook: &str, msg: &str, kind: &str) {
     }
 }
 
-/// Every panic to the page too (`window.__oneshotPanic(message)`), after
-/// whatever hook Bevy set (its console one): a WebGPU module whose renderer
-/// never started (no adapter, a refused device or surface) panics before
-/// the device hooks exist, and the page is the only thing left that can
-/// load the WebGL2 module instead. Called once the App is built, so Bevy's
-/// `PanicHandlerPlugin` has already set its hook and this one wraps it.
+/// Every panic to the console and to the page (`window.__oneshotPanic
+/// (message)`): a WebGPU module whose renderer never started (no adapter, a
+/// refused device or surface) panics before the device hooks exist, and the
+/// page is the only thing left that can load the WebGL2 module instead.
+/// Bevy's own console hook is only in its `web` feature, which this build
+/// leaves out, and std's does nothing on wasm32-unknown-unknown: without
+/// this line a fallback would leave no reason anywhere. Called once the App
+/// is built, so whatever hook Bevy's `PanicHandlerPlugin` set is wrapped.
 #[cfg(target_arch = "wasm32")]
 pub fn hook_panics() {
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         prev(info);
-        tell_page("__oneshotPanic", &info.to_string(), "panic");
+        let msg = info.to_string();
+        web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!("oneshot: panic: {msg}")));
+        tell_page("__oneshotPanic", &msg, "panic");
     }));
 }
 
