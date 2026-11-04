@@ -53,8 +53,10 @@ pub const KILLCAM_FRAMES: usize = (KILLCAM_MS as usize * TICK_HZ as usize / 1000
 pub const SEND_EVERY: u32 = 2;
 /// Ticks owed past which the clock skips rather than makes them all.
 pub const SKIP_AFTER: u32 = TICK_HZ / 2;
-/// A correction this large snaps instead of easing.
+/// A correction this large snaps instead of easing; for a vehicle's
+/// heading, this many radians.
 pub const SNAP_M: f32 = 4.0;
+pub const SNAP_TURN: f32 = 1.0;
 /// How fast a correction eases out, in ms: a big one (a metre or more)
 /// quickly, a small one (a quarter metre or less) slowly enough not to be
 /// seen, blended between (Gates' `Predictor::decay_error`; DESIGN §5).
@@ -72,12 +74,19 @@ pub const EXTRAPOLATE_MS: u32 = 125;
 pub const LERP_SPAN_MS: u32 = 250;
 /// The server's clock as estimated from arrivals: each snapshot moves the
 /// estimate a tenth of the way to what it says; what is drawn follows the
-/// estimate at no more than a tenth of real time, so everyone else always
-/// moves at 90 to 110% of it. Past this far off the estimate is taken as it
-/// comes (a stall, a new route).
+/// estimate at 90 to 110% of real time while within two ticks of it, and
+/// faster the further off, up to half again at [`CLOCK_FAR_TICKS`] more (a
+/// latency step: caught up in a fraction of a second, never back).
+/// Snapshots this far early re-take it at once (it only moves everyone on);
+/// late ones never do, so a stall's burst can't pull everyone back.
 const CLOCK_GAIN: f64 = 0.1;
 const CLOCK_SLEW: f64 = 0.1;
+const CLOCK_SLEW_FAR: f64 = 0.5;
+const CLOCK_FAR_TICKS: f64 = 10.0;
 const CLOCK_SNAP_MS: u32 = 150;
+/// One snapshot's say in the jitter, at most, in ticks: a stall's burst
+/// shouldn't hold the delay at its cap for seconds.
+const JITTER_SAMPLE_MAX: f64 = 8.0;
 /// How fast the playout delay follows its target, ticks a second: up
 /// briskly when the link gets worse, down gently (Gates slews at 0.5 a
 /// 30 Hz tick a second).
@@ -118,6 +127,13 @@ impl Slew {
         self.from = self.at(now_ms);
         self.at_ms = now_ms;
         self.target = target;
+    }
+
+    /// As [`Self::aim`], at new rates.
+    fn aim_at(&mut self, now_ms: f64, target: f64, up: f64, down: f64) {
+        self.aim(now_ms, target);
+        self.up = up;
+        self.down = down;
     }
 
     fn set(&mut self, now_ms: f64, v: f64) {
@@ -395,11 +411,16 @@ impl NetCore {
             }
             self.seq = s.wrapping_add(1);
             if self.seq.is_multiple_of(SEND_EVERY) {
-                out.push(self.input_msg());
+                out.push(self.input_msg(now_ms));
             }
         }
-        // Ease corrections out.
-        self.offset = ease(self.offset, dt);
+        // Ease corrections out. Riding, the body is drawn on the hull: its
+        // own offset is the hull's, and must not linger for getting out.
+        self.offset = if self.pred.riding().is_some() {
+            V3::ZERO
+        } else {
+            ease(self.offset, dt)
+        };
         self.voffset = ease(self.voffset, dt);
         // A heading's correction: a fifth of a radian as a metre is.
         let turn = ease(V3::new(self.vyaw_off * 5.0, 0.0, 0.0), dt).x * 0.2;
@@ -409,14 +430,14 @@ impl NetCore {
 
     /// Every input the server hasn't run yet, up to the cap: lost datagrams
     /// cost nothing as long as the next one gets there.
-    fn input_msg(&self) -> InputMsg {
+    fn input_msg(&self, now_ms: f64) -> InputMsg {
         let last = self.seq.wrapping_sub(1);
         let unacked = last.wrapping_sub(self.acked_seq).min(MAX_INPUT_FRAMES as u32);
         let first = last.wrapping_sub(unacked.max(1) - 1);
         let mut m = InputMsg {
             ack_tick: self.newest.unwrap_or(0),
             ack_bits: self.ack_bits,
-            playout: self.delay.target.round().clamp(0.0, 255.0) as u8,
+            playout: self.playout(now_ms),
             first_seq: first,
             n: 0,
             ..InputMsg::default()
@@ -496,11 +517,16 @@ impl NetCore {
             }
             Some(c) => {
                 let err = off - c.target;
-                self.jitter += (err.abs() - self.jitter) / 16.0;
-                if err.abs() > ticks(CLOCK_SNAP_MS) as f64 {
+                if err > ticks(CLOCK_SNAP_MS) as f64 {
                     c.set(now_ms, off);
                 } else {
-                    c.aim(now_ms, c.target + err * CLOCK_GAIN);
+                    self.jitter += (err.abs().min(JITTER_SAMPLE_MAX) - self.jitter) / 16.0;
+                    let target = c.target + err * CLOCK_GAIN;
+                    // The further off what's drawn is, the faster it follows.
+                    let gap = (target - c.at(now_ms)).abs();
+                    let rate = (CLOCK_SLEW + (CLOCK_SLEW_FAR - CLOCK_SLEW) * (gap - 2.0) / CLOCK_FAR_TICKS)
+                        .clamp(CLOCK_SLEW, CLOCK_SLEW_FAR);
+                    c.aim_at(now_ms, target, rate, rate);
                 }
                 let target = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
                 self.delay.aim(now_ms, target);
@@ -648,14 +674,18 @@ impl NetCore {
                     let turn = b.yaw.wrapping_sub(n.yaw);
                     self.prev_v = self.prev_v - jump;
                     self.prev_vyaw = self.prev_vyaw.wrapping_sub(turn);
-                    if alive_changed || (self.voffset + jump).len() > SNAP_M {
+                    let turn_rad = turn as i16 as f32 * (core::f32::consts::TAU / 65536.0);
+                    if alive_changed
+                        || (self.voffset + jump).len() > SNAP_M
+                        || (self.vyaw_off + turn_rad).abs() > SNAP_TURN
+                    {
                         self.voffset = V3::ZERO;
                         self.vyaw_off = 0.0;
                         self.prev_v = n.pos;
                         self.prev_vyaw = n.yaw;
                     } else {
                         self.voffset = self.voffset + jump;
-                        self.vyaw_off += turn as i16 as f32 * (core::f32::consts::TAU / 65536.0);
+                        self.vyaw_off += turn_rad;
                     }
                 }
                 (_, Some(n)) => {
@@ -706,7 +736,18 @@ impl NetCore {
 
     /// Our own fighter as predicted, its body drawn at [`Self::alpha`]
     /// between the last two ticks, with any correction still easing out.
+    /// Riding, it is drawn in its seat on the drawn hull, so the two never
+    /// part (one correction, one decision to snap or ease).
     pub fn own(&self) -> (&Fighter, V3) {
+        if let (Some((_, seat)), Some((v, p, yaw))) = (self.pred.riding(), self.own_vehicle()) {
+            let turn = (yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+            let drawn = Vehicle {
+                pos: p,
+                yaw: turn.rem_euclid(65536.0) as u16,
+                ..v
+            };
+            return (&self.pred, drawn.mount(seat));
+        }
         let a = self.alpha();
         let p = self.prev_pos + (self.pred.body.pos - self.prev_pos) * a + self.offset;
         (&self.pred, p)
@@ -756,6 +797,8 @@ impl NetCore {
                     let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
                     d.pos = va.pos + (vb.pos - va.pos) * u;
                     d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+                } else {
+                    d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
                 }
             } else {
                 d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
@@ -782,6 +825,17 @@ impl NetCore {
     /// shots the moment they were predicted.
     pub fn drain_events(&mut self) -> Vec<EventState> {
         core::mem::take(&mut self.events)
+    }
+
+    /// How far behind the newest snapshot everyone else is drawn at
+    /// `now_ms`, in ticks: what the server adds to the snapshot's age to
+    /// rewind a shot to what we saw (DESIGN §7). The delay and the clock
+    /// both slew, so it is measured, not either's target.
+    fn playout(&self, now_ms: f64) -> u8 {
+        match self.newest {
+            Some(n) if self.clock.is_some() => (n as f64 - self.render_tick(now_ms)).round().clamp(0.0, 255.0) as u8,
+            _ => self.delay.target.round() as u8,
+        }
     }
 
     /// The server tick everyone else is drawn at, at `now_ms`.
@@ -824,13 +878,15 @@ impl NetCore {
             let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
             match (b, rb) {
                 (Some(b), Some(rb)) if ra.alive == rb.alive => {
-                    // A gap too long to draw across: where they were until
-                    // the next, then there.
+                    // A gap too long to draw across: as if the next hadn't
+                    // come (run on, then held) until it is due, then there.
                     if b.tick - a.tick <= ticks(LERP_SPAN_MS) {
                         let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
                         d.pos = ra.pos + (rb.pos - ra.pos) * u;
                         d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
                         d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
+                    } else if ra.alive {
+                        d.pos = ra.pos + ra.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
                     }
                 }
                 _ => {

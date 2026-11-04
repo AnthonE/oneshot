@@ -172,3 +172,79 @@ fn a_drivers_hull_eases_with_the_camera() {
         "hull {hull_moved} seat {seat_moved}"
     );
 }
+
+#[test]
+fn a_driver_stays_in_the_seat_of_the_drawn_hull_through_any_correction() {
+    // The review's case: 3.8 m on and turned 0.575 rad, where the seat
+    // moves over 4 m and the middle under. However it's drawn, snapped or
+    // eased, the body is in the seat of the hull drawn.
+    use sim::fighter::Fighter as F;
+    use sim::vehicle::{Vehicle, DRIVER};
+    for (dx, turn) in [(3.8f32, 6000u16), (-3.8, 59536), (4.1, 59536), (0.4, 9000), (6.0, 0)] {
+        let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+        let hull = Vehicle {
+            active: true,
+            pos: AT,
+            grounded: true,
+            health: 100,
+            seats: [1, 0],
+            ..Vehicle::default()
+        };
+        let me = F {
+            seated: true,
+            alive: true,
+            ride: F::ride_of(0, DRIVER),
+            body: hull.seat_body(DRIVER),
+            ..F::default()
+        };
+        c.on_snapshot(
+            2.0 * TICK_MS,
+            &Snapshot {
+                tick: 2,
+                phase: 1,
+                last_seq: 7,
+                own: me,
+                own_vehicle: Some(hull),
+                ..Snapshot::default()
+            },
+        );
+        let mut last = 0;
+        let mut now = 0.0;
+        while now < 200.0 {
+            now += 1000.0 / 60.0;
+            for m in c.update(now, Input::default()) {
+                last = m.first_seq + m.n as u32 - 1;
+            }
+        }
+        let mut v = c.own_vehicle().unwrap().0;
+        v.pos.x += dx;
+        v.yaw = v.yaw.wrapping_add(turn);
+        let mut told = *c.own().0;
+        told.body = v.seat_body(DRIVER);
+        c.on_snapshot(
+            now,
+            &Snapshot {
+                tick: 40,
+                phase: 1,
+                last_seq: last,
+                own: told,
+                own_vehicle: Some(v),
+                ..Snapshot::default()
+            },
+        );
+        for _ in 0..40 {
+            let (hv, p, yaw) = c.own_vehicle().unwrap();
+            let drawn = Vehicle {
+                pos: p,
+                yaw: (yaw as f64 * (65536.0 / core::f64::consts::TAU))
+                    .round()
+                    .rem_euclid(65536.0) as u16,
+                ..hv
+            };
+            let apart = (c.own().1 - drawn.mount(DRIVER)).len();
+            assert!(apart < 1e-3, "{dx} m, turn {turn}: the seat is {apart} m off the hull");
+            now += 1000.0 / 60.0;
+            c.update(now, Input::default());
+        }
+    }
+}

@@ -60,16 +60,130 @@ fn a_runner_whose_snapshots_stop_runs_on_a_little_then_holds() {
 }
 
 #[test]
-fn a_long_gap_is_not_drawn_across() {
+fn a_long_gap_is_not_drawn_across_nor_pulled_back() {
     // Snapshots to tick 200, then one a second later with them 30 m on:
-    // drawn where they were until then, never sliding between.
+    // run on and held as if it hadn't come, never sliding between, never
+    // pulled back from where they were drawn.
     let mut c = running(200);
     let gap = 200 + ticks(1000);
     assert!(gap - 200 > ticks(LERP_SPAN_MS));
-    c.on_snapshot(gap as f64 * TICK_MS + LATE_MS, &snap(gap, 30.0));
-    let was = 200.0 * 5.0 / TICK_HZ as f32;
-    let now = gap as f64 * TICK_MS + LATE_MS;
-    let rt = c.render_tick(now);
+    let arrive = gap as f64 * TICK_MS + LATE_MS;
+    let held = x_at(&c, arrive - 1.0);
+    c.on_snapshot(arrive, &snap(gap, 30.0));
+    let rt = c.render_tick(arrive);
     assert!(rt > 200.0 && rt < gap as f64, "render tick {rt} inside the gap");
-    assert_eq!(x_at(&c, now), was);
+    assert_eq!(x_at(&c, arrive), held);
+    let was = 200.0 * 5.0 / TICK_HZ as f32;
+    let far = was + 5.0 * ticks(EXTRAPOLATE_MS) as f32 / TICK_HZ as f32;
+    assert!((held - far).abs() < 1e-3, "held at {held}, want {far}");
+}
+
+#[test]
+fn a_stall_and_its_burst_never_pull_everyone_back() {
+    // Steady snapshots, then 250 ms held up and let go at once (a Wi-Fi
+    // hiccup), then steady again: the render tick never goes back.
+    let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let mut last_rt = f64::NEG_INFINITY;
+    let mut now = 0.0;
+    let mut t = 2;
+    while now < 4000.0 {
+        now += 1000.0 / 144.0;
+        while (t as f64) * TICK_MS + LATE_MS <= now {
+            let made = t as f64 * TICK_MS;
+            // Held from 2.0 s to 2.25 s, then all at once.
+            let late = if (2000.0..2250.0).contains(&made) {
+                2250.0 - made
+            } else {
+                0.0
+            };
+            if made + LATE_MS + late <= now {
+                c.on_snapshot(now, &snap(t, t as f32 * 5.0 / TICK_HZ as f32));
+                t += 2;
+            } else {
+                break;
+            }
+        }
+        // From the first snapshot on.
+        if t > 2 {
+            let rt = c.render_tick(now);
+            assert!(
+                rt >= last_rt,
+                "at {now:.1} ms the render tick went back {last_rt} to {rt}"
+            );
+            last_rt = rt;
+        }
+    }
+}
+
+#[test]
+fn a_latency_step_is_caught_up_without_going_back() {
+    // 40 ms, then 140 ms from 2 s on: the render tick slows and catches up
+    // within half a second, never back.
+    let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let mut last_rt = f64::NEG_INFINITY;
+    let mut now = 0.0;
+    let mut t = 2;
+    let mut held = 0;
+    while now < 5000.0 {
+        now += 1000.0 / 144.0;
+        loop {
+            let made = t as f64 * TICK_MS;
+            let late = if made < 2000.0 { LATE_MS } else { LATE_MS + 100.0 };
+            if made + late > now {
+                break;
+            }
+            c.on_snapshot(now, &snap(t, t as f32 * 5.0 / TICK_HZ as f32));
+            t += 2;
+        }
+        if t > 2 {
+            let rt = c.render_tick(now);
+            assert!(
+                rt >= last_rt,
+                "at {now:.1} ms the render tick went back {last_rt} to {rt}"
+            );
+            last_rt = rt;
+        }
+        if now > 2500.0 && c.extrapolating(now) {
+            held += 1;
+        }
+    }
+    assert_eq!(held, 0, "still past the newest snapshot half a second after the step");
+}
+
+#[test]
+fn the_server_is_told_how_far_behind_we_draw() {
+    // Through a jittery spell the delay's target jumps and what is drawn
+    // follows it slowly: the server must hear what is drawn.
+    use sim::input::Input;
+    let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let mut now = 0.0;
+    let mut t = 2;
+    let mut checked = 0;
+    while now < 3000.0 {
+        now += 1000.0 / 60.0;
+        loop {
+            let made = t as f64 * TICK_MS;
+            // From 1 s on, every other snapshot 30 ms late.
+            let late = if made > 1000.0 && t % 4 == 0 {
+                LATE_MS + 30.0
+            } else {
+                LATE_MS
+            };
+            if made + late > now {
+                break;
+            }
+            c.on_snapshot(now, &snap(t, 0.0));
+            t += 2;
+        }
+        let newest = c.latest().tick as f64;
+        for m in c.update(now, Input::default()) {
+            if t == 2 {
+                continue; // nothing drawn yet
+            }
+            let behind = (newest - c.render_tick(now)).round().clamp(0.0, 255.0);
+            assert_eq!(m.playout as f64, behind, "at {now:.0} ms");
+            checked += 1;
+        }
+    }
+    assert!(checked > 100);
 }
