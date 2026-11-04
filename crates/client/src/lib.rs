@@ -51,6 +51,31 @@ pub struct Look {
     /// The keys count: none still held from the menu's key that resumed
     /// (1 resumes and, by default, swaps too).
     keys_armed: bool,
+    /// Crouched, as drawn: 0 standing to 1, eased (`CROUCH_EASE_S`).
+    crouch: f32,
+    /// The scope's magnification as drawn: 1 out to the gun's zoom, eased
+    /// (`ZOOM_RATE`). The view narrows by it and the mouse slows by it.
+    mag: f32,
+}
+
+/// How fast the eye eases between standing and crouched, s (Gates'
+/// `CROUCH_EASE_S`): the shot already leaves from where the sim says, so
+/// this is only what's drawn.
+const CROUCH_EASE_S: f32 = 0.06;
+/// How fast a scope comes up and goes down, per second (Gates'
+/// `VIEWMODEL_RAISE_RATE`).
+const ZOOM_RATE: f32 = 14.0;
+
+impl Look {
+    /// The eye's height over the feet, as drawn.
+    fn eye_h(&self) -> f32 {
+        EYE - (EYE - CROUCH_EYE) * self.crouch
+    }
+
+    /// The magnification, never under 1.
+    fn magnification(&self) -> f32 {
+        self.mag.max(1.0)
+    }
 }
 
 impl Look {
@@ -395,21 +420,16 @@ fn pump(
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let (dual, scope, driving) = {
+    let (dual, driving) = {
         let f = link.0.session().core.own().0;
         let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
-        let scope = if f.alive {
-            sim::arms::arm(f.gun().arm).zoom.max(1)
-        } else {
-            1
-        };
-        (f.dual(), scope, driving)
+        (f.dual(), driving)
     };
     // No scope at the wheel: the chase camera doesn't narrow.
     look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
     if grabbed {
-        let base = SENS * settings.sensitivity;
-        let sens = if look.zoom { base / scope as f32 } else { base };
+        // Slowed as the view narrows, eased with it (`view`).
+        let sens = SENS * settings.sensitivity / look.magnification();
         let up = if settings.invert { -1.0 } else { 1.0 };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
@@ -737,7 +757,7 @@ fn draw_vehicles(
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
 fn view(
     link: NonSend<LinkRes>,
-    look: Res<Look>,
+    mut look: ResMut<Look>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     opts: Res<Opts>,
@@ -752,6 +772,18 @@ fn view(
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
     let mut fov = settings.fov;
     let at = Vec3::new(p.x, p.y, p.z);
+    // Crouch and scope, eased toward what they are.
+    let dt = time.delta_secs();
+    let crouched = if f.body.crouched { 1.0 } else { 0.0 };
+    look.crouch += (crouched - look.crouch) * (1.0 - (-dt / CROUCH_EASE_S).exp());
+    let zoom = sim::arms::arm(f.gun().arm).zoom;
+    let want = if look.zoom && f.alive && zoom > 1 {
+        zoom as f32
+    } else {
+        1.0
+    };
+    let mag = look.magnification();
+    look.mag = mag + (want - mag) * (1.0 - (-ZOOM_RATE * dt).exp());
     let kill = if f.alive { None } else { core.killcam(link.0.now_ms()) };
     if let Some(k) = kill {
         // The run-up to the kill, from the killer's eye.
@@ -761,13 +793,9 @@ fn view(
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
-        let eye = at + Vec3::Y * h;
+        let eye = at + Vec3::Y * look.eye_h();
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
-        let zoom = sim::arms::arm(f.gun().arm).zoom;
-        if look.zoom && f.alive && zoom > 1 {
-            fov /= zoom as f32;
-        }
+        fov /= look.magnification();
     }
     // The effects demo stands its camera in one place (drawing only).
     if opts.fxdemo {
@@ -793,8 +821,12 @@ fn draw_view(
 ) {
     let (f, _) = link.0.session().core.own();
     let v = f.body.vel;
-    let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    // The gun goes once the scope is halfway up.
+    let zoom = sim::arms::arm(f.gun().arm).zoom as f32;
+    let scoped = zoom > 1.0 && look.magnification() >= 1.0 + (zoom - 1.0) * 0.5;
     let own = look::viewmodel::Own {
+        yaw: look.yaw,
+        pitch: look.pitch,
         f,
         speed: if f.body.grounded {
             (v.x * v.x + v.z * v.z).sqrt()
@@ -836,8 +868,8 @@ pub(crate) fn happened(
         look::fx::on_events(&mut fx, &scene, &events);
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
-        let eye = Vec3::new(p.x, p.y + h, p.z);
+        // From the eye as drawn, as the camera is.
+        let eye = Vec3::new(p.x, p.y + look.eye_h(), p.z);
         let dir = Vec3::new(
             look.pitch.cos() * look.yaw.cos(),
             look.pitch.sin(),

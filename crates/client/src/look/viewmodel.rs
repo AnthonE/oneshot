@@ -35,7 +35,18 @@ pub struct ViewGun {
     kick: f32,
     bob: f32,
     flash: f32,
+    /// The look's yaw and pitch last frame (None: not seen yet), and the
+    /// trail they make: yaw, pitch, radians.
+    seen: Option<(f32, f32)>,
+    sway: Vec2,
 }
+
+/// Look-sway, after Gates' `VIEWMODEL_SWAY_*`: the gun trails a turn by
+/// this many radians per radian a second, catches up this fast (per
+/// second), and never trails more than this.
+const SWAY_GAIN: f32 = 0.055;
+const SWAY_CATCHUP: f32 = 9.0;
+const SWAY_MAX: f32 = 0.16;
 
 #[derive(Component)]
 pub struct Flash;
@@ -66,6 +77,9 @@ pub fn spawn(commands: &mut Commands, eye: Entity) {
 
 /// What the frame knows about us.
 pub struct Own<'a> {
+    /// Where we look, radians (`Look`).
+    pub yaw: f32,
+    pub pitch: f32,
     pub f: &'a Fighter,
     /// Ground speed, m/s.
     pub speed: f32,
@@ -128,6 +142,18 @@ fn hand(
     v.kick = (v.kick - dt * 9.0).max(0.0);
     v.flash = (v.flash - dt * 25.0).max(0.0);
     v.bob += dt * own.speed * 1.6;
+    // The trail: a turn to the right (yaw growing) leaves the gun left of
+    // centre (a turn about the view's up), a look up leaves it low.
+    if own.shown && dt > 0.0 {
+        let (y0, p0) = v.seen.unwrap_or((own.yaw, own.pitch));
+        let rate = Vec2::new(own.yaw - y0, -(own.pitch - p0)) / dt;
+        let target = (rate * SWAY_GAIN).clamp(Vec2::splat(-SWAY_MAX), Vec2::splat(SWAY_MAX));
+        v.sway += (target - v.sway) * (1.0 - (-SWAY_CATCHUP * dt).exp());
+        v.seen = Some((own.yaw, own.pitch));
+    } else {
+        v.seen = None;
+        v.sway = Vec2::ZERO;
+    }
     let sway = (own.speed / 7.0).min(1.0);
     let whole = sim::arms::arm(arm).reload_ticks().max(1) as f32;
     let reloading = if v.left { f.left_reload } else { f.reload } as f32 / whole;
@@ -143,7 +169,8 @@ fn hand(
         HOLD.z + v.kick * 0.06,
     );
     t.translation = at * SHRINK;
-    t.rotation = Quat::from_euler(EulerRot::XYZ, v.kick * 0.09 - dip * 0.5, side * 0.06, side * dip * 0.4);
+    t.rotation = Quat::from_euler(EulerRot::YXZ, v.sway.x, v.sway.y, 0.0)
+        * Quat::from_euler(EulerRot::XYZ, v.kick * 0.09 - dip * 0.5, side * 0.06, side * dip * 0.4);
 }
 
 fn no_shadows(
