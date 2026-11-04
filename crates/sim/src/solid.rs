@@ -318,24 +318,32 @@ impl Solid {
     /// Whether a ray passes wide of the circle around a round or turned
     /// solid in x and z, so it can't meet it: a few products and no
     /// division, where most of the rays near a curved wall end (fog asks
-    /// tens per pair). The circle is widened past any rounding, so a ray
-    /// the exact test would stop is never turned away: the answer is the
-    /// exact test's, bit for bit.
+    /// tens per pair). Never turns away a ray the exact test would stop, so
+    /// the answer is the exact test's, bit for bit: the miss is measured by
+    /// the cross product, whose rounding grows with the distance and not
+    /// its square, and the circle is widened past that rounding at any
+    /// distance on a map (`a_ray_past_a_curve_is_answered_as_the_exact_test_does`).
     fn wide_of(&self, o: V3, d: V3) -> bool {
         let (x, z, r2) = match self.shape {
             Shape::Round { x, z, r } => (x, z, r * r),
             Shape::Turned { x, z, hx, hz, .. } => (x, z, hx * hx + hz * hz),
             Shape::Ramp { .. } => return false,
         };
+        let dd = d.x * d.x + d.z * d.z;
+        // Nearly straight up or down: the exact test.
+        if dd < 1e-4 {
+            return false;
+        }
         let (mx, mz) = (o.x - x, o.z - z);
-        // Outside the circle by c (in m²), heading along it at b per metre.
-        let c = mx * mx + mz * mz - (r2 * 1.001 + 0.0001);
-        let b = mx * d.x + mz * d.z;
-        if c > 0.0 && b >= 0.0 {
+        let s = mx * mx + mz * mz;
+        let wide = r2 * 1.001 + 1e-4 + s * 1e-6;
+        // The line passes the middle at |cross| / |d| in x and z.
+        let cross = mx * d.z - mz * d.x;
+        if cross * cross > dd * wide {
             return true;
         }
-        // The line's nearest pass is outside: |m|² − b²/|d|² > r².
-        b * b < (d.x * d.x + d.z * d.z) * c
+        // Outside the circle and heading away from it.
+        s > wide && mx * d.x + mz * d.z > 0.001
     }
 }
 
