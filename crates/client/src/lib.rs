@@ -258,7 +258,8 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .add_plugins(options::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
-    // [water] the sea's material and its animation are registered here
+    .add_plugins(MaterialPlugin::<look::water::WaterMaterial>::default())
+    .add_systems(Update, look::water::animate.after(view))
     .add_systems(
         Startup,
         (
