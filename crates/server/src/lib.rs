@@ -9,15 +9,17 @@
 //!
 //! The sim thread never blocks on the network: sessions hand it what they
 //! got over a channel, and it hands each session its datagrams and stream
-//! messages over a bounded one it only `try_send`s to. A full queue drops a
-//! snapshot (the next replaces it) rather than stall the tick. Reports and
-//! replay files go to a tokio task for the same reason.
+//! messages through an [`outlet::Outlet`] that never waits. A full datagram
+//! lane drops a snapshot (the next replaces it); a full stream lane cuts the
+//! session, counted, rather than lose what it was told. Reports and replay
+//! files go to a tokio task for the same reason.
 
 pub mod auth;
 pub mod cup;
 pub mod elo;
 pub mod http;
 pub mod net;
+pub mod outlet;
 pub mod queue;
 
 use std::collections::BTreeMap;
@@ -37,14 +39,6 @@ use sim::map::Map;
 use sim::world::{Phase, Rules};
 use tokio::sync::mpsc as tmpsc;
 
-/// What a session is sent.
-#[derive(Debug)]
-pub enum Out {
-    Datagram(Vec<u8>),
-    Stream(Vec<u8>),
-    Close,
-}
-
 /// What sessions tell the sim thread.
 pub enum ToSim {
     /// Casual: a room against a bot, or a seat in a shared free-for-all or
@@ -55,13 +49,13 @@ pub enum ToSim {
         mode: u8,
         /// A skin checked against the player's wallet.
         skin: u8,
-        tx: tmpsc::Sender<Out>,
+        tx: outlet::Outlet,
     },
     /// Into the ranked queue.
     Queue {
         session: u64,
         entry: Box<queue::Entry>,
-        tx: tmpsc::Sender<Out>,
+        tx: outlet::Outlet,
     },
     Input {
         session: u64,
@@ -84,8 +78,6 @@ pub enum Job {
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
-/// Room for this many messages to one session before snapshots drop.
-pub const OUT_QUEUE: usize = 64;
 /// A finished match stays up this long, for the end screen (`Config::linger`).
 pub const LINGER: Duration = Duration::from_secs(10);
 
@@ -217,6 +209,8 @@ pub struct Ctx {
     pub public_addr: Option<String>,
     pub live_file: Option<PathBuf>,
     pub allow_origins: Vec<String>,
+    /// Snapshots dropped and sessions cut (`outlet`).
+    pub counts: Arc<outlet::Counts>,
 }
 
 pub struct Handle {
@@ -298,6 +292,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         rooms: AtomicUsize::new(0),
         public_addr: cfg.public_addr.clone(),
         live_file: cfg.live_file.clone(),
+        counts: Arc::new(outlet::Counts::default()),
         allow_origins: cfg.allow_origins.clone(),
     });
 
@@ -382,7 +377,7 @@ fn random_u64() -> u64 {
 }
 
 struct Sess {
-    tx: tmpsc::Sender<Out>,
+    tx: outlet::Outlet,
     /// The room and seat it plays in.
     at: Option<(usize, u8)>,
 }
@@ -421,10 +416,10 @@ struct Sim {
     ctx: Arc<Ctx>,
 }
 
-fn send_msg(tx: &tmpsc::Sender<Out>, m: &Msg) {
+fn send_msg(tx: &outlet::Outlet, m: &Msg) {
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
     if let Ok(n) = frame_msg(m, &mut f) {
-        let _ = tx.try_send(Out::Stream(f[..n].to_vec()));
+        tx.stream(f[..n].to_vec());
     }
 }
 
@@ -567,7 +562,7 @@ impl Sim {
                                     reason: proto::REFUSE_BUSY,
                                 },
                             );
-                            let _ = tx.try_send(Out::Close);
+                            tx.close();
                             continue;
                         }
                         send_msg(
@@ -625,7 +620,7 @@ impl Sim {
                                 reason: proto::REFUSE_FULL,
                             },
                         );
-                        let _ = s.tx.try_send(Out::Close);
+                        s.tx.close();
                     }
                 }
             }
@@ -729,7 +724,7 @@ impl Sim {
                     if let (Some(s), Ok(n)) = (link, encode_snapshot(&snap, &mut buf)) {
                         // Full means the session is behind: this snapshot
                         // goes, the next replaces it.
-                        let _ = s.tx.try_send(Out::Datagram(buf[..n].to_vec()));
+                        s.tx.datagram(buf[..n].to_vec());
                     }
                 }
                 deliver(&sessions, r, out);
@@ -743,7 +738,7 @@ impl Sim {
                             // A cup's entrants stay on for the next heat.
                             if r.cup.is_none() {
                                 send_msg(&s.tx, &Msg::Bye);
-                                let _ = s.tx.try_send(Out::Close);
+                                s.tx.close();
                             }
                             s.at = None;
                         }
@@ -834,7 +829,7 @@ impl Sim {
             tell_cup(c, i, sessions);
             if let Some(s) = sessions.get_mut(&e.session) {
                 send_msg(&s.tx, &Msg::Bye);
-                let _ = s.tx.try_send(Out::Close);
+                s.tx.close();
                 s.at = None;
             }
         }
@@ -1015,7 +1010,7 @@ fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: room::Outbox) {
                 continue;
             };
             if to.is_none_or(|t| t as usize == s) {
-                let _ = sess.tx.try_send(Out::Stream(f[..n].to_vec()));
+                sess.tx.stream(f[..n].to_vec());
             }
         }
     }

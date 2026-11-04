@@ -16,12 +16,12 @@ use proto::{
     datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
     PROTO_VER,
 };
-use tokio::sync::mpsc as tmpsc;
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
 use wtransport::{Endpoint, Identity, RecvStream, ServerConfig};
 
-use crate::{auth, queue, Config, Ctx, Out, ToSim, OUT_QUEUE};
+use crate::outlet::{self, Ended};
+use crate::{auth, queue, Config, Ctx, ToSim};
 
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -346,7 +346,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     };
 
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
-    let (tx, mut rx) = tmpsc::channel::<Out>(OUT_QUEUE);
+    let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
         MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
@@ -390,25 +390,30 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         return;
     }
 
-    // The writer: stream messages in order, datagrams if they fit.
-    let wconn = conn.clone();
-    let writer = tokio::spawn(async move {
-        while let Some(o) = rx.recv().await {
-            match o {
-                Out::Datagram(d) => {
-                    if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
-                        let _ = wconn.send_datagram(d);
-                    }
-                }
-                Out::Stream(f) => {
-                    if send.write_all(&f).await.is_err() {
-                        break;
-                    }
-                }
-                Out::Close => break,
+    // The writers: snapshots on their own, the newest waiting, if they fit,
+    // so a stream the client is slow to take never holds them back; stream
+    // messages in order until the sim closes the session or cuts it.
+    let outlet::Inlet {
+        mut datagrams,
+        mut streams,
+    } = inlet;
+    let (wconn, counts) = (conn.clone(), ctx.counts.clone());
+    let snapshots = tokio::spawn(async move {
+        while let Some(d) = datagrams.recv().await {
+            let d = outlet::newest(&mut datagrams, d, &counts);
+            if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
+                let _ = wconn.send_datagram(d);
+            } else {
+                counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let _ = send.finish().await;
+    });
+    let writer = tokio::spawn(async move {
+        let ended = streams.write_stream(&mut send).await;
+        if ended == Ended::Closed {
+            let _ = send.finish().await;
+        }
+        ended
     });
 
     // Inputs as datagrams; the stream only says goodbye.
@@ -437,14 +442,19 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     // Whichever ends first: the client says goodbye, or the server is done
     // with it (the writer closed).
     let mut writer = writer;
-    tokio::select! {
-        _ = reader => {}
-        _ = &mut writer => {}
-    }
+    let behind = tokio::select! {
+        _ = reader => false,
+        e = &mut writer => matches!(e, Ok(Ended::Behind)),
+    };
     datagrams.abort();
+    snapshots.abort();
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
-    conn.close(0u32.into(), b"");
+    if behind {
+        conn.close(outlet::CLOSE_BEHIND.into(), b"too far behind");
+    } else {
+        conn.close(0u32.into(), b"");
+    }
 }
 
 #[cfg(test)]
