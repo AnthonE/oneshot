@@ -27,6 +27,8 @@
       #boot .word { font: 400 52px Unitblock, system-ui, sans-serif; color: #edebe6; letter-spacing: 0; }
       #boot .line { display: flex; align-items: center; gap: 10px; color: rgba(158, 153, 143, .8); font-size: 11px; }
       #boot .line::before { content: ""; width: 26px; height: 3px; background: #e8b931; }
+      /* The renderer, after the line's own words: a space's width, not the gap. */
+      #boot .line #gfx { margin-left: -6px; }
       #boot .bar { width: min(320px, 70vw); height: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; margin-top: 18px; }
       #boot .bar i { display: block; width: 40%; height: 100%; background: #e8b931; animation: slide 1.2s ease-in-out infinite; }
       #boot.failed .bar i { animation: none; width: 100%; background: #e3896a; }
@@ -150,7 +152,7 @@
       // fall back, what failed.
       const showGfx = (gfx, why, note) => {
         const g = document.getElementById('gfx');
-        g.textContent = ` · ${MODULES[gfx].name.toUpperCase()}${note ? ` (${note.toUpperCase()})` : ''}`;
+        g.textContent = `· ${MODULES[gfx].name.toUpperCase()}${note ? ` (${note.toUpperCase()})` : ''}`;
         g.title = why;
       };
       async function load(gfx) {
