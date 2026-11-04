@@ -14,7 +14,8 @@
 //! - **Perfect:** a precision gun's fewest trigger pulls, none missed,
 //!   every round of the fight the killer's with that gun, from full.
 //! - **How and when:** the cause on the kill (melee from the front or
-//!   behind, a splatter, a grenade stuck or not, a sniper scoped or not),
+//!   behind, a splatter, a grenade stuck or not, a sniper scoped or not,
+//!   and unscoped after a full turn: the 360),
 //!   the round that made it (a headshot, the magazine's last), and what
 //!   came before (the victim's spree, who last killed whom).
 
@@ -41,6 +42,13 @@ pub const PROTECT_MS: u32 = 2000;
 pub const HAIL_MARY_M: f32 = 35.0;
 /// Extermination needs an enemy side this big.
 pub const EXTERMINATION_MIN: usize = 4;
+/// A 360 No Scope: the killer's yaw went a full turn one way within this
+/// long before the kill.
+pub const SPIN_MS: u32 = 1500;
+/// Ticks of turning each seat keeps for it.
+pub const SPIN_TICKS: usize = ticks(SPIN_MS) as usize;
+/// A full turn, in yaw's 1/65536 of one.
+pub const FULL_TURN: i32 = 1 << 16;
 
 /// A medal earned: by whom, which, and the kill it was for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,7 +172,25 @@ struct Seat {
     full: bool,
     /// The seats whose sticky is stuck to this one (a bit each).
     stuck: u16,
+    /// Its yaw at the last tick, and each tick's turn since (signed, in
+    /// 1/65536 of a turn) with the tick it was made on: the last
+    /// [`SPIN_TICKS`], for a 360.
+    yaw: u16,
+    turn: [i16; SPIN_TICKS],
+    turn_at: [u32; SPIN_TICKS],
     tally: Tally,
+}
+
+impl Seat {
+    /// How far it turned, net, in the last [`SPIN_TICKS`] up to `now`.
+    fn spun(&self, now: u32) -> i32 {
+        self.turn
+            .iter()
+            .zip(&self.turn_at)
+            .filter(|(_, &at)| now.wrapping_sub(at) < SPIN_TICKS as u32)
+            .map(|(&d, _)| d as i32)
+            .sum()
+    }
 }
 
 impl Default for Seat {
@@ -183,6 +209,9 @@ impl Default for Seat {
             threw: V3::ZERO,
             full: false,
             stuck: 0,
+            yaw: 0,
+            turn: [0; SPIN_TICKS],
+            turn_at: [0; SPIN_TICKS],
             tally: Tally::default(),
         }
     }
@@ -267,6 +296,20 @@ impl Medals {
         };
         let won = |k: usize| w.phase == Phase::Over && w.score[side(k)] >= w.rules.score_limit;
         let mut winning: Option<(usize, usize)> = None;
+        // This tick's turn, before its kills: a dead or empty seat turns
+        // nothing.
+        for (q, s) in self.seats.iter_mut().enumerate() {
+            let f = &w.fighters[q];
+            let d = if f.active() {
+                f.yaw.wrapping_sub(s.yaw) as i16
+            } else {
+                0
+            };
+            s.yaw = f.yaw;
+            let i = now as usize % SPIN_TICKS;
+            s.turn[i] = d;
+            s.turn_at[i] = now;
+        }
         let events = w.events.as_slice();
         for (i, e) in events.iter().enumerate() {
             let (a, b) = (e.a as usize, e.b as usize);
@@ -298,6 +341,8 @@ impl Medals {
                     s.dead = false;
                     s.fight = Fight::default();
                     s.stuck = 0;
+                    // A spawn faces where the map says: not a turn.
+                    s.turn = [0; SPIN_TICKS];
                 }
                 Ev::Hit => {
                     let after_shot = i > 0 && events[i - 1].kind == Ev::Shot && events[i - 1].a == e.a;
@@ -475,6 +520,9 @@ impl Medals {
         }
         if sniper && !grave && killer.last_buttons & ZOOM == 0 {
             self.award(k, md::NO_SCOPE, v);
+            if ks.spun(now).abs() >= FULL_TURN {
+                self.award(k, md::NO_SCOPE_360, v);
+            }
         }
         let nade = cause == Cause::Grenade as u16 || cause == Cause::Sticky as u16;
         if cause == Cause::Melee as u16 {
