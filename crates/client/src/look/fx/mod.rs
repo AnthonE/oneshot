@@ -160,10 +160,8 @@ pub struct Fx {
     /// The last blast seen (not heard) this frame, for the grass's shock
     /// (`foliage::update` takes it).
     pub shock: Option<Vec3>,
-    /// Our own rounds drawn so far (`shots::own`), and which hand drew the
-    /// last while two guns are out.
-    own_shots: u32,
-    own_left: bool,
+    /// Our own rounds drawn so far, by hand (`shots::own`).
+    own_rounds: crate::look::viewmodel::Rounds,
     /// Rounds of light flying last frame (`flying.rs`), to tell where one
     /// ended.
     last_light: Vec<proto::ProjState>,
@@ -342,8 +340,7 @@ pub fn setup(
         hulls: [hulls::Hull::default(); 16],
         burning: [blast::Burn::default(); 4],
         shock: None,
-        own_shots: 0,
-        own_left: false,
+        own_rounds: Default::default(),
         last_light: Vec::new(),
     });
 }

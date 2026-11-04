@@ -85,19 +85,37 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     land(fx, scene, arm, from, dir, len, to);
 }
 
-/// Our own gun, this frame: each round it fired since the last, drawn now.
-pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
-    let shots = f.shots;
-    if shots <= fx.own_shots || !f.alive || f.riding().is_some() {
-        fx.own_shots = shots;
+/// Our own gun, this frame: each round it fired since the last, drawn now,
+/// from the hand that fired it (`viewmodel::Rounds`) at the muzzle the gun
+/// in view was drawn with (`muzzles`, view space as it looks; the fixed
+/// [`OWN_MUZZLE`] while none is drawn, behind a scope).
+pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, muzzles: [Option<Vec3>; 2]) {
+    let fired = fx.own_rounds.take(f);
+    // A driver doesn't shoot; a passenger does, from the seat.
+    if !f.alive || f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
         return;
     }
-    let rounds = (shots - fx.own_shots).min(3);
-    fx.own_shots = shots;
-    // Two guns out: `shots` counts both hands, so the hands take turns
-    // (drawn only; the server's events say which really fired).
-    let left = f.dual() && !fx.own_left;
-    fx.own_left = left;
+    for (i, rounds) in fired.into_iter().enumerate() {
+        if rounds > 0 {
+            hand(fx, scene, f, eye, cam, i == 1, rounds, muzzles[i]);
+        }
+    }
+}
+
+/// Where our flash sits in view space: on the line to the drawn muzzle, at
+/// [`OWN_MUZZLE`]'s depth.
+fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {
+    let at = Vec3::new(OWN_MUZZLE.x, OWN_MUZZLE.y, -OWN_MUZZLE.z);
+    let fixed = if left { Vec3::new(-at.x, at.y, at.z) } else { at };
+    match drawn {
+        Some(m) if m.z < -0.05 => m * (OWN_MUZZLE.z / -m.z),
+        _ => fixed,
+    }
+}
+
+/// One hand's rounds.
+#[allow(clippy::too_many_arguments)]
+fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: bool, rounds: u32, drawn: Option<Vec3>) {
     let id = if left { f.left.arm } else { f.gun().arm };
     let a = arm(id);
     if a.kind == Kind::Sword {
@@ -107,8 +125,8 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     let fwd = cam * Vec3::NEG_Z;
     let right = cam * Vec3::X;
     let up = cam * Vec3::Y;
-    let side = if left { -OWN_MUZZLE.x } else { OWN_MUZZLE.x };
-    let muzzle = eye + fwd * OWN_MUZZLE.z + right * side + up * OWN_MUZZLE.y;
+    let at = own_muzzle(left, drawn);
+    let muzzle = eye + cam * at;
     table::stars(
         &mut fx.glow,
         muzzle,
@@ -128,8 +146,8 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
     let k = if heavy { 0.6 } else { 0.3 };
-    let side = fx.shake.rand() * shake::SHOT_SIDE_RAD;
-    fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, side * k, 0.0));
+    let jolt = fx.shake.rand() * shake::SHOT_SIDE_RAD;
+    fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
     if !a.kind.ray() {
         if id == ROCKET {
@@ -145,9 +163,10 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
         } else {
             fwd
         };
-        // Down the view to the first wall, or as far as the gun reaches.
+        // Down the view to the first wall, or as far as the gun reaches,
+        // from half way between the muzzle's line and the view's.
         let reach = scene.map.ray(v3(eye), v3(dir), a.range.max(30.0));
-        let start = eye + dir * OWN_TRACER_SKIP_M + right * side * 0.5 + up * OWN_MUZZLE.y * 0.5;
+        let start = eye + dir * OWN_TRACER_SKIP_M + (right * at.x + up * at.y) * 0.5;
         if k == 0 || id == SHOTGUN {
             table::tracer(&mut fx.glow, &look, start, dir, (reach - OWN_TRACER_SKIP_M).max(0.0));
         }

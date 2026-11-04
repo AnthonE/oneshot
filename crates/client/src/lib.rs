@@ -309,6 +309,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<Early>()
+    .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
@@ -961,29 +962,41 @@ pub(crate) fn view(
     }
 }
 
-/// The gun in our view.
+/// The gun in our view: hidden dead, at the wheel and behind a scope; a
+/// passenger, who fights from the seat in first person, holds it.
+#[allow(clippy::too_many_arguments)]
 fn draw_view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
     time: Res<Time>,
     models: Res<look::guns::Models>,
     mut commands: Commands,
-    mut hold: Query<(Entity, &mut look::viewmodel::ViewGun, &mut Transform, &mut Visibility)>,
-    mut flash: Query<&mut PointLight, With<look::viewmodel::Flash>>,
+    mut motion: Local<look::viewmodel::Motion>,
+    mut muzzles: ResMut<look::viewmodel::ViewMuzzles>,
+    mut hold: look::viewmodel::Hands,
+    mut flash: look::viewmodel::FlashLight,
 ) {
-    let (f, _) = link.0.session().core.own();
-    let v = f.body.vel;
+    let (f, p) = link.0.session().core.own();
     let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
         f,
-        speed: if f.body.grounded {
-            (v.x * v.x + v.z * v.z).sqrt()
-        } else {
-            0.0
-        },
-        shown: f.alive && f.riding().is_none() && !scoped,
+        at: Vec3::new(p.x, p.y, p.z),
+        yaw: look.yaw,
+        pitch: look.pitch,
+        riding: seat.is_some(),
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped,
     };
-    look::viewmodel::update(&mut commands, &models, own, time.delta_secs(), &mut hold, &mut flash);
+    look::viewmodel::update(
+        &mut commands,
+        &models,
+        own,
+        time.delta_secs(),
+        &mut motion,
+        &mut muzzles,
+        &mut hold,
+        &mut flash,
+    );
 }
 
 /// What the session queued for us this frame: events become effects and
@@ -997,6 +1010,7 @@ pub(crate) fn happened(
     mut fx: ResMut<look::fx::Fx>,
     mut st: ResMut<hud::HudState>,
     mut early: ResMut<Early>,
+    muzzles: Res<look::viewmodel::ViewMuzzles>,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
@@ -1024,7 +1038,7 @@ pub(crate) fn happened(
             look.pitch.cos() * look.yaw.sin(),
         );
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
-        look::fx::shots::own(&mut fx, &scene, f, eye, cam);
+        look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
     }
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
     heard.0 = events;
