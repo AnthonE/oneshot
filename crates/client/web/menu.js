@@ -38,6 +38,12 @@ const SKIP_MENU = AUTOPLAY || flag('fxdemo') || params.has('fxstage');
 if (flag('lite')) document.getElementById('wrap').classList.add('lite');
 const $ = (id) => document.getElementById(id);
 const menu = $('menu'), status = $('status'), cancel = $('cancel'), nameInput = $('name'), skin = $('skin');
+// The boot intro plays once from the page's start; anything pressed ends it
+// (its animations would start again on whatever is shown).
+const booted = () => menu.classList.remove('boot');
+setTimeout(booted, 1700);
+addEventListener('pointerdown', booted, { once: true, capture: true });
+addEventListener('keydown', booted, { once: true, capture: true });
 const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
 const RANKED = new Set([1, 2, 5]);
 const ACT = { JOIN: 1, LEAVE: 2, START: 3, KICK: 4, PRIVACY: 5, LEAD: 6, PLAYING: 7, FRIENDS: 8 };
@@ -221,10 +227,10 @@ function drawMic() {
 }
 // The first gesture wakes sound (a browser won't before one), and the mic
 // if it was on last time.
-let booted = false;
+let swelled = false;
 const wakeAll = async () => {
-  if (!booted && !st.playing) {
-    booted = true;
+  if (!swelled && !st.playing) {
+    swelled = true;
     if (!tab('oneshot.booted')) { tab('oneshot.booted', '1'); sfx.boot(); }
   }
   await voice.wake();
@@ -508,6 +514,7 @@ function toast(html, { actions = [], ttl = 6000, bad = false } = {}) {
 // ── panes, blades, and moving around ─────────────────────────────────────
 const blades = [...document.querySelectorAll('.blade')];
 function openPane(name, focus) {
+  booted();
   for (const b of blades) b.classList.toggle('on', b.dataset.pane === name);
   for (const p of document.querySelectorAll('section.pane')) p.hidden = p.dataset.pane !== name;
   if (name === 'friends' && st.lobby && signedIn()) st.lobby.act(ACT.FRIENDS, 0);
@@ -809,7 +816,6 @@ Object.defineProperty(window, '__lobby', {
 });
 
 drawAll();
-setTimeout(() => menu.classList.remove('boot'), 1800);
 if (SKIP_MENU) {
   // Straight in (the browser gate's autoplay, the effects demo).
   startMatch(Number(params.get('mode') || 0), false, false);
