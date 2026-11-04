@@ -200,6 +200,12 @@ const AUTO_LANES: [(f32, f32); 6] = [
 #[derive(Resource, Default)]
 pub struct Early(pub Vec<proto::Msg>);
 
+/// This frame's local clock, ms, read once at the top of `pump`: what
+/// `happened` releases events on and `fly` draws rounds on, so a round
+/// goes the frame its Blast plays.
+#[derive(Resource, Default, Clone, Copy)]
+pub(crate) struct Now(pub f64);
+
 /// Radians per pixel of mouse. Scoped, divided by the scope's zoom: the
 /// view narrows by it, so the world moves under the crosshair at one speed
 /// (Gates' `input.rs`).
@@ -308,6 +314,7 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<Early>()
+    .init_resource::<Now>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(pipelines::plugin)
@@ -427,8 +434,9 @@ fn pump(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
-    (binds, settings): (Res<binds::Binds>, Res<settings::Settings>),
+    (binds, settings, mut now): (Res<binds::Binds>, Res<settings::Settings>, ResMut<Now>),
 ) {
+    now.0 = link.0.now_ms();
     // The mouse is ours only while held: on the web, the page's lock is the
     // truth (a lock asked for and not yet granted, or let go behind our
     // back, turns nothing and fires nothing).
@@ -903,10 +911,11 @@ pub(crate) fn happened(
     mut fx: ResMut<look::fx::Fx>,
     mut st: ResMut<hud::HudState>,
     mut early: ResMut<Early>,
+    now: Res<Now>,
 ) {
-    let now_ms = link.0.now_ms();
+    let now_ms = now.0;
     let s = link.0.session_mut();
-    let events = s.core.drain_events();
+    let events = s.core.drain_events(now_ms);
     let mut msgs = core::mem::take(&mut early.0);
     msgs.extend(s.take_messages());
     {
@@ -1017,25 +1026,36 @@ fn expose(
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
-/// Rockets and frags in flight.
+/// Rounds in flight, on the render tick (ours from our drawn muzzle,
+/// gliding onto it). Under the kill cam none: it shows the past, and
+/// present-time rounds over it would be in the wrong world.
+#[allow(clippy::too_many_arguments)]
 fn fly(
     link: NonSend<LinkRes>,
     models: Res<look::guns::Models>,
     time: Res<Time>,
+    now: Res<Now>,
+    posed: Option<Res<pose::Pose>>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
-    let others = core.others(link.0.now_ms());
+    // As `draw_fighters` decides it.
+    let cam = posed.is_none() && core.killcam(now.0).is_some() && !core.own().0.alive;
+    let (proj, others) = if cam {
+        (Vec::new(), Vec::new())
+    } else {
+        (core.projectiles(now.0), core.others(now.0))
+    };
     look::fx::flying::projectiles(
         &mut commands,
         &mut fx,
         &models,
-        core.latest().proj(),
+        &proj,
         &others,
         time.elapsed_secs(),
-        time.delta_secs(),
+        cam,
         &mut have,
     );
 }

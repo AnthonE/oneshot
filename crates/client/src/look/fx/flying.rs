@@ -5,14 +5,16 @@
 //! frame: an ion bolt's blue core and streak, a charged bolt's bigger one
 //! with its light, the cannon's green ball, the SHARD GUN's pink crystals.
 //!
+//! Each round comes with an id that holds while it flies
+//! (`client_net::core::NetCore::projectiles`), so a model and its trail
+//! stay with one round, and a round of light whose id is gone has ended.
 //! No event says where a bolt or a shard ended (a hit is the two fighters'
-//! business), so it is inferred, cosmetically: one that was flying last
-//! frame and is gone now ended a frame's flight on. A shard that ended in
-//! a body we see sticks there (`bodies.rs` glints it); anywhere else it
-//! shatters. A bolt splashes. Drawing only.
+//! business), so it is inferred, cosmetically: where it was last drawn. A
+//! shard that ended in a body we see sticks there (`bodies.rs` glints it);
+//! anywhere else it shatters. A bolt splashes. Drawing only.
 
 use bevy::prelude::*;
-use client_net::core::Drawn;
+use client_net::core::{Drawn, DrawnProj};
 use proto::ProjState;
 use sim::consts::{HEAD_Y, HIT_R};
 
@@ -42,20 +44,14 @@ const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
 
-/// A shown model within a frame's flight of a projectile of its kind (twice
-/// its speed by the frame, or a snapshot's interval if longer) and this
-/// much more is taken to be it.
-const REASSIGN_M: f32 = 1.0;
-/// A snapshot's interval, s: positions move by at least this much flight.
-const SNAP_S: f32 = 2.0 / sim::consts::TICK_HZ as f32;
-
 /// A new model for `p`, kept from then on.
-fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &ProjState) -> Entity {
+fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &DrawnProj) -> Entity {
     let rocket = p.kind == ROCKET;
     let scene = if rocket { &models.rocket } else { &models.frag };
-    let place = place(p);
+    let place = place(&p.state());
     let mut e = commands.spawn((
         Flying {
+            id: p.id,
             kind: p.kind,
             last: place.translation,
             lit: false,
@@ -90,6 +86,8 @@ fn modelled(kind: u8) -> bool {
 
 #[derive(Component)]
 pub struct Flying {
+    /// The round it draws (`DrawnProj::id`).
+    id: u16,
     kind: u8,
     /// Where its last puff was.
     last: Vec3,
@@ -97,54 +95,45 @@ pub struct Flying {
     lit: bool,
 }
 
+/// This frame's rounds: `proj` as `NetCore::projectiles` draws them, on
+/// the render tick `others` is drawn on. `quiet`: none of last frame's
+/// rounds of light ended (the kill cam took the view, and `proj` is
+/// empty while it does).
 #[allow(clippy::too_many_arguments)]
 pub fn projectiles(
     commands: &mut Commands,
     fx: &mut Fx,
     models: &Models,
-    proj: &[ProjState],
+    proj: &[DrawnProj],
     others: &[Drawn],
     t: f32,
-    dt: f32,
+    quiet: bool,
     have: &mut Query<(Entity, &mut Flying, &mut Transform, &mut Visibility)>,
 ) {
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
-        light(fx, p);
+        light(fx, &p.state());
     }
-    ended(fx, proj, others, t, dt);
-    // The models in flight, kept: each projectile takes the nearest shown
-    // model of its kind (so a rocket's trail stays its own), else a hidden
-    // one, else a new one; the rest are hidden. Never despawned: a model
-    // made mid-fight is a scene spawned mid-fight.
-    let mut pool: Vec<(Entity, bool, Vec3, bool)> = have
+    ended(fx, proj, others, t, quiet);
+    // The models in flight, kept: each round keeps the model that drew its
+    // id (so a rocket's trail stays its own), else takes a hidden one of
+    // its kind, else a new one; the rest are hidden. Never despawned: a
+    // model made mid-fight is a scene spawned mid-fight.
+    let mut pool: Vec<(Entity, bool, u16, bool)> = have
         .iter()
-        .map(|(e, f, tr, v)| (e, f.kind == ROCKET, tr.translation, *v != Visibility::Hidden))
+        .map(|(e, f, _, v)| (e, f.kind == ROCKET, f.id, *v != Visibility::Hidden))
         .collect();
     let mut taken = vec![false; pool.len()];
-    let mut go: Vec<(Entity, ProjState, bool)> = Vec::new();
-    let live: Vec<&ProjState> = proj.iter().filter(|p| modelled(p.kind)).collect();
+    let mut go: Vec<(Entity, DrawnProj, bool)> = Vec::new();
+    let live: Vec<&DrawnProj> = proj.iter().filter(|p| modelled(p.kind)).collect();
     let mut matched = vec![false; live.len()];
-    // First every shown model to its nearest projectile of its kind within
-    // a frame's flight (closest pairs first, so a new rocket never takes
-    // one still flying), then the rest a free model, hidden ones first,
-    // then a new one.
-    let mut pairs: Vec<(f32, usize, usize)> = Vec::new();
+    // First every shown model to its own round, then the rest a free
+    // model, hidden ones first, then a new one.
     for (i, p) in live.iter().enumerate() {
-        let at = place(p).translation;
-        let reach = Vec3::new(p.vel.x, p.vel.y, p.vel.z).length() * dt.max(SNAP_S) * 2.0 + REASSIGN_M;
-        for (k, m) in pool.iter().enumerate() {
-            let d = m.2.distance(at);
-            if m.1 == (p.kind == ROCKET) && m.3 && d < reach {
-                pairs.push((d, i, k));
-            }
-        }
-    }
-    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_, i, k) in pairs {
-        if !matched[i] && !taken[k] {
+        let rocket = p.kind == ROCKET;
+        if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == rocket && pool[k].2 == p.id) {
             matched[i] = true;
             taken[k] = true;
-            go.push((pool[k].0, *live[i], false));
+            go.push((pool[k].0, **p, false));
         }
     }
     for (i, p) in live.iter().enumerate() {
@@ -162,7 +151,7 @@ pub fn projectiles(
             }
             None => {
                 let e = spawn(commands, fx, models, p);
-                pool.push((e, rocket, place(p).translation, true));
+                pool.push((e, rocket, p.id, true));
                 taken.push(true);
             }
         }
@@ -183,13 +172,14 @@ pub fn projectiles(
         if *v == Visibility::Hidden {
             *v = Visibility::Inherited;
         }
+        f.id = p.id;
         f.kind = p.kind;
+        let p = &p.state();
         if fresh {
-            // Another projectile now: its trail starts where it is.
-            f.last = place(&p).translation;
+            // Another round now: its trail starts where it is.
+            f.last = place(p).translation;
             f.lit = false;
         }
-        let p = &p;
         *tr = place(p);
         let at = tr.translation;
         if p.kind == ROCKET {
@@ -351,29 +341,16 @@ pub fn crystal(fx: &mut Fx, p: &ProjState) {
 }
 
 /// Rounds of light that were flying last frame and are gone now: where they
-/// ended, and what that looks like.
-fn ended(fx: &mut Fx, proj: &[ProjState], others: &[Drawn], t: f32, dt: f32) {
+/// ended (where they were last drawn), and what that looks like. Quiet,
+/// none ended: they only went out of view.
+fn ended(fx: &mut Fx, proj: &[DrawnProj], others: &[Drawn], t: f32, quiet: bool) {
     let last = std::mem::take(&mut fx.last_light);
-    let mut taken = vec![false; proj.len()];
-    for was in &last {
-        let wv = Vec3::new(was.vel.x, was.vel.y, was.vel.z);
-        let wp = Vec3::new(was.pos.x, was.pos.y, was.pos.z);
-        let ahead = wp + wv * dt;
-        let reach = wv.length() * dt * 2.0 + 0.5;
-        // Still flying: the nearest of its kind and owner, near where it
-        // would be now.
-        let still = proj
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| !taken[*i] && p.kind == was.kind && p.owner == was.owner)
-            .map(|(i, p)| (i, Vec3::new(p.pos.x, p.pos.y, p.pos.z).distance(ahead)))
-            .filter(|(_, d)| *d < reach)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((i, _)) = still {
-            taken[i] = true;
+    for was in last.iter().filter(|_| !quiet) {
+        if proj.iter().any(|p| p.id == was.id && p.kind == was.kind) {
             continue;
         }
-        let at = wp + wv * (dt * 0.5);
+        let wv = Vec3::new(was.vel.x, was.vel.y, was.vel.z);
+        let at = Vec3::new(was.pos.x, was.pos.y, was.pos.z);
         match was.kind {
             NEEDLE => match in_body(others, at) {
                 Some(slot) => {

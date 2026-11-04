@@ -56,7 +56,9 @@ files and trim**; we never depend on Gates' crates.
 **Not taken from Gates:** `sim-core`'s survival world (`world.rs`, terrain,
 building, crafting), `protocol/src/event.rs` (12,889 lines of survival
 events), `server/src/core.rs` and `client-core/src/core.rs` (whole-game
-state), the Bevy client and its shaders.
+state), the Bevy client and its shaders (§9 takes some of it later; its
+`tracer.rs` flies a round from its shot event alone, which we don't: ours
+are in the snapshots).
 
 ## 2 · Game rules, bot and maps, from Fireplace (WAT/JS → Rust/JS)
 
@@ -291,6 +293,7 @@ depend on Gates' crates. The same Bevy version keeps the ports close.
 | `client/src/ui/pointer.rs` `BrowserLock`, `render/web.rs` `pointer_locked`; `client-web/web/app.js` raw mouse | `client/src/pointer.rs`, `client/web/index.html` | The page's real pointer lock; unadjusted movement |
 | `client/src/render/prewarm.rs` | `client/src/look/prewarm.rs` | Every material and model drawn warm at load |
 | `client/src/render/ui.rs` (fonts, hover, buttons) | `client/src/ui.rs` | Embedded fonts at fixed handles; our CC0 faces, not Gates' Apache-2.0 Roboto |
+| `client/src/render/tracer.rs` (the idea) | `client-net/src/proj.rs`, `core.rs` `projectiles`, `client/src/look/fx/flying.rs` | Our own round launched from the drawn body, flown in fractional ticks with the sim's own arithmetic, a fixed pool of 16 launches that refuses the newest. Not its event-only flight: our rounds are in the snapshots, so a remote's is drawn from them on the render tick, and ours hands off to them |
 
 The types Gates' modules read become ours: `Eye` → `OwnView` (from
 `NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the

@@ -515,11 +515,12 @@ impl Client {
         v
     }
 
-    /// Rockets and frags, 7 each: kind (0 rocket, 1 frag), owner, x y z,
-    /// velocity x z.
-    pub fn projectiles(&self) -> Vec<f32> {
+    /// Rounds in flight as drawn at `now`, 8 each: kind
+    /// (`proto::ProjState::kind`), owner, x y z, velocity x z, and an id
+    /// that holds while it flies.
+    pub fn projectiles(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
-        for p in self.session.core.latest().proj() {
+        for p in self.session.core.projectiles(now) {
             v.extend_from_slice(&[
                 p.kind as f32,
                 p.owner as f32,
@@ -528,16 +529,18 @@ impl Client {
                 p.pos.z,
                 p.vel.x,
                 p.vel.z,
+                p.id as f32,
             ]);
         }
         v
     }
 
-    /// What happened since the last call, 11 each: kind, a, b, part, c,
-    /// pos x y z, end x y z (sim::events::Kind numbers the kinds).
-    pub fn events(&mut self) -> Vec<f32> {
+    /// What is due to play at `now` (`NetCore::drain_events`), 11 each:
+    /// kind, a, b, part, c, pos x y z, end x y z (sim::events::Kind
+    /// numbers the kinds).
+    pub fn events(&mut self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
-        for e in self.session.core.drain_events() {
+        for e in self.session.core.drain_events(now) {
             v.extend_from_slice(&[
                 e.kind as f32,
                 e.a as f32,

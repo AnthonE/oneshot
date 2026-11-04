@@ -19,6 +19,9 @@ struct Net {
     loss: f64,
     up: Vec<(f64, Vec<u8>)>,
     down: Vec<(f64, Vec<u8>)>,
+    /// From this time, this much more latency on the way up (a route
+    /// change): the server runs short of our inputs.
+    up_step: (f64, f64),
     /// Bytes handed to the network each way, before loss, with QUIC's
     /// per-datagram overhead.
     bytes_up: u64,
@@ -44,7 +47,12 @@ impl Net {
         if self.unit() < self.loss {
             return;
         }
-        let at = now + self.delay_ms + self.unit() * self.jitter_ms;
+        let step = if up && now >= self.up_step.0 {
+            self.up_step.1
+        } else {
+            0.0
+        };
+        let at = now + self.delay_ms + step + self.unit() * self.jitter_ms;
         if up {
             self.up.push((at, bytes));
         } else {
@@ -87,7 +95,12 @@ struct Run {
     steps: Vec<f64>,
     /// Kills the server's world raised.
     kills: u32,
+    /// Snapshots it says yes to are lost on the way down.
+    drop: Option<Lose>,
 }
+
+/// Says which snapshots are lost on the way down.
+type Lose = Box<dyn FnMut(&proto::Snapshot) -> bool>;
 
 fn start(delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
     start_on(Map::proving_grounds(), delay_ms, jitter_ms, loss, harmless)
@@ -99,6 +112,10 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
         time_limit_ms: 0,
         ..Rules::duel()
     };
+    start_with(map, rules, delay_ms, jitter_ms, loss, harmless)
+}
+
+fn start_with(map: Map, rules: Rules, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
     let mut room = Room::new(map.clone(), rules, 11, (5, 6));
     let (slot, out) = room.join(Name::new("tester"), 0).unwrap();
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
@@ -125,6 +142,7 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
             loss,
             up: Vec::new(),
             down: Vec::new(),
+            up_step: (f64::INFINITY, 0.0),
             bytes_up: 0,
             bytes_down: 0,
         },
@@ -134,16 +152,32 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
         last_rt: 0.0,
         steps: Vec::new(),
         kills: 0,
+        drop: None,
         now: 0.0,
         next_tick: 0.0,
         next_frame: 0.0,
     }
 }
 
+/// What a run shows a watcher, as it happens.
+enum Seen<'a> {
+    /// The server stepped its world.
+    Tick(&'a Room),
+    /// A snapshot reached the client (before it is handed it).
+    Snap(&'a proto::Snapshot),
+    /// The page drew a frame at `now`, after `update` made `made` ticks.
+    Frame(&'a mut NetCore, f64, u32),
+}
+
 impl Run {
     /// Runs `ms` of virtual time: the server on its tick, the page at 60
     /// frames a second, the network in between. `input(t)` is the player.
     fn run(&mut self, ms: f64, input: impl Fn(f64) -> Input) {
+        self.run_seen(ms, input, |_| {});
+    }
+
+    /// As [`Self::run`], showing `seen` each tick and each frame.
+    fn run_seen(&mut self, ms: f64, input: impl Fn(f64) -> Input, mut seen: impl FnMut(Seen)) {
         let end = self.now + ms;
         let mut buf = [0u8; MAX_DATAGRAM];
         while self.now < end {
@@ -153,6 +187,10 @@ impl Run {
             }
             for b in Net::due(&mut self.net.down, self.now) {
                 let s = decode_snapshot(&b).unwrap();
+                if self.drop.as_mut().is_some_and(|d| d(&s)) {
+                    continue;
+                }
+                seen(Seen::Snap(&s));
                 self.client.on_snapshot(self.now, &s);
             }
             while self.next_tick <= self.now {
@@ -169,6 +207,7 @@ impl Run {
                     let n = encode_snapshot(&s, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), false);
                 }
+                seen(Seen::Tick(&self.room));
                 self.next_tick += 1000.0 / TICK_HZ as f64;
             }
             if self.next_frame <= self.now {
@@ -183,10 +222,13 @@ impl Run {
                 self.steps
                     .push((rt - self.last_rt) / (1000.0 / 60.0 / (1000.0 / TICK_HZ as f64)));
                 self.last_rt = rt;
+                let before = self.client.tick();
                 for m in self.client.update(self.now, input(self.now)) {
                     let n = encode_input(&m, &mut buf).unwrap();
                     self.net.send(self.now, buf[..n].to_vec(), true);
                 }
+                let made = self.client.tick().wrapping_sub(before);
+                seen(Seen::Frame(&mut self.client, self.now, made));
                 self.next_frame += 1000.0 / 60.0;
             }
             self.now += 0.5;
@@ -410,21 +452,328 @@ fn every_kill_arrives_once_through_loss() {
     let mut told = 0u32;
     for _ in 0..160 {
         r.run(500.0, player);
+        let now = r.now;
         told += r
             .client
-            .drain_events()
+            .drain_events(now)
             .iter()
             .filter(|e| e.kind == sim::events::Kind::Kill as u8)
             .count() as u32;
     }
     // A last second for the newest to get home.
     r.run(1000.0, |_| Input::default());
+    let now = r.now;
     told += r
         .client
-        .drain_events()
+        .drain_events(now)
         .iter()
         .filter(|e| e.kind == sim::events::Kind::Kill as u8)
         .count() as u32;
     assert!(r.kills >= 5, "{} kills to count", r.kills);
     assert_eq!(told, r.kills, "every kill told, none twice");
+}
+
+fn rocket_rules() -> Rules {
+    Rules {
+        score_limit: 1000,
+        time_limit_ms: 0,
+        loadout: [sim::arms::ROCKET, sim::arms::MAGNUM],
+        ..Rules::duel()
+    }
+}
+
+/// The world's rounds on one tick: its slot in the pool and its age (who
+/// it is), owner, kind, where.
+type Rounds = Vec<(usize, u16, u8, u8, sim::geom::V3)>;
+
+fn rounds(room: &Room) -> (u32, Rounds) {
+    let w = &room.world;
+    (
+        w.tick,
+        w.proj
+            .live()
+            .map(|(i, p)| (i, p.age, p.owner, p.kind as u8, p.pos))
+            .collect(),
+    )
+}
+
+/// Where the world had a round of `owner`'s and `kind` at fractional tick
+/// `rt`, from its ticks either side, the nearest `near` of those in both
+/// (None: none was, or the nearest is a metre off, so another round).
+fn truth_at(history: &[(u32, Rounds)], rt: f64, owner: u8, kind: u8, near: sim::geom::V3) -> Option<sim::geom::V3> {
+    let lo = rt.floor() as u32;
+    let a = &history.iter().find(|(t, _)| *t == lo)?.1;
+    let b = &history.iter().find(|(t, _)| *t == lo + 1)?.1;
+    let u = (rt - lo as f64) as f32;
+    a.iter()
+        .filter(|r| r.2 == owner && r.3 == kind)
+        .filter_map(|ra| {
+            let rb = b.iter().find(|r| r.0 == ra.0 && r.1 == ra.1 + 1)?;
+            Some(ra.4 + (rb.4 - ra.4) * u)
+        })
+        .min_by(|x, y| (*x - near).len().total_cmp(&(*y - near).len()))
+        .filter(|t| (*t - near).len() < 1.0)
+}
+
+/// Our rocket, fired while strafing at a run over 60 ms of round trip:
+/// out of the muzzle we are drawn with the frame it fires, then moving on
+/// every frame at 70 to 110% of its speed (the glide onto the render tick
+/// and the clock's slew, never a pop), on the render tick as anyone's
+/// round once it has glided there, and gone the frame its blast plays.
+#[test]
+fn our_rocket_leaves_our_drawn_muzzle_and_hands_off_without_a_pop() {
+    let mut r = start_with(Map::open(), rocket_rules(), 30.0, 10.0, 0.02, true);
+    r.run(3000.0, |_| Input::default());
+    own_rockets(&mut r, 20);
+}
+
+/// The same over a long round trip (300 and 400 ms): the round leaves
+/// the muzzle the frame it fires and moves on every frame after, never
+/// waiting on snapshots to step it.
+#[test]
+fn our_rocket_moves_every_frame_over_a_long_round_trip() {
+    for one_way in [150.0, 200.0] {
+        let mut r = start_with(Map::open(), rocket_rules(), one_way, 2.0, 0.0, true);
+        r.run(3000.0, |_| Input::default());
+        own_rockets(&mut r, 0);
+    }
+}
+
+/// The first snapshots with our rocket in them lost: the one that gets
+/// through, however late, still finds it, so it keeps its id and its path
+/// (never a stand-in that goes and a copy that pops in behind it).
+#[test]
+fn our_rocket_is_found_when_the_snapshots_with_it_first_are_lost() {
+    let mut r = start_with(Map::open(), rocket_rules(), 50.0, 0.0, 0.0, true);
+    r.run(3000.0, |_| Input::default());
+    let me = r.slot;
+    // Each rocket: the first three snapshots it is in are lost.
+    let mut lost = 0;
+    r.drop = Some(Box::new(move |s: &proto::Snapshot| {
+        if !s.proj().iter().any(|p| p.owner == me) {
+            lost = 0;
+            return false;
+        }
+        lost += 1;
+        lost <= 3
+    }));
+    own_rockets(&mut r, 20);
+}
+
+/// The route up gets 120 ms longer while our rocket flies: the server
+/// runs short of our inputs and the clock jumps on. Our body jumps with
+/// it; the rocket already in the air does not.
+#[test]
+fn a_clock_resync_does_not_throw_our_rocket_on() {
+    let mut r = start_with(Map::open(), rocket_rules(), 30.0, 0.0, 0.0, true);
+    r.run(3000.0, |_| Input::default());
+    // The first rocket goes 500 ms in: 140 ms into its flight.
+    r.net.up_step = (r.now + 640.0, 120.0);
+    let before = r.client.stats.resyncs;
+    own_rockets(&mut r, 0);
+    assert!(r.client.stats.resyncs > before, "no resync to test");
+}
+
+/// Fires two rockets while strafing, as `our_rocket_leaves_our_drawn_muzzle`
+/// says, checking each frame; each must be on the render tick for at least
+/// `plain_min` frames before it goes.
+fn own_rockets(r: &mut Run, plain_min: u32) {
+    use sim::geom::{aim_dir, V3};
+    let me = r.slot;
+    let x0 = r.room.world.fighters[me as usize].body.pos.x;
+    let yaw = if x0 < 0.0 { 0 } else { 32768 };
+    let t0 = r.now;
+    let fires = [t0 + 500.0, t0 + 2600.0];
+    let input = move |t: f64| Input {
+        buttons: if fires.iter().any(|&f| (f..f + 30.0).contains(&t)) {
+            FIRE
+        } else {
+            0
+        },
+        yaw,
+        pitch: 0,
+        mx: if (((t - t0) / 600.0) as u32).is_multiple_of(2) {
+            127
+        } else {
+            -127
+        },
+        mz: 0,
+    };
+    let frame_s = 1.0 / 60.0;
+    let mut history: Vec<(u32, Rounds)> = Vec::new();
+    let mut shots = r.client.own().0.shots;
+    // Each of our rounds: its id, where and how fast it was last drawn, the
+    // frame it went, and whether it was on the render tick by then.
+    struct Ours {
+        id: u16,
+        pos: V3,
+        speed: f32,
+        gone: Option<u64>,
+        plain: u32,
+    }
+    let mut ours: Vec<Ours> = Vec::new();
+    let mut blasts: Vec<(u64, V3)> = Vec::new();
+    let mut frame = 0u64;
+    let mut steps = 0;
+    r.run_seen(6000.0, input, |seen| match seen {
+        Seen::Tick(room) => history.push(rounds(room)),
+        Seen::Snap(_) => {}
+        Seen::Frame(c, now, made) => {
+            frame += 1;
+            let drawn: Vec<_> = c.projectiles(now).into_iter().filter(|p| p.owner == me).collect();
+            let (f, body) = c.own();
+            let fired = f.shots != shots;
+            shots = f.shots;
+            let muzzle = body + (f.eye() - f.body.pos) + aim_dir(f.yaw, f.pitch) * 0.4;
+            let launches = c.launches();
+            let rt = c.render_tick(now);
+            for e in c.drain_events(now) {
+                if e.kind == sim::events::Kind::Blast as u8 && e.a == me {
+                    blasts.push((frame, e.pos));
+                }
+            }
+            let new: Vec<_> = drawn.iter().filter(|p| !ours.iter().any(|o| o.id == p.id)).collect();
+            if fired {
+                assert_eq!(new.len(), 1, "one round the frame it fired: {drawn:?}");
+                // Out of the drawn muzzle, as far on as the ticks made since.
+                let reach = 0.3 + 24.4 * (made.max(1) - 1) as f32 / TICK_HZ as f32;
+                let d = (new[0].pos - muzzle).len();
+                assert!(d <= reach, "{d} m from the drawn muzzle ({made} ticks made)");
+            } else {
+                assert!(new.is_empty(), "a round of ours from nowhere: {new:?}");
+            }
+            for p in &drawn {
+                let open = p.pos.x.abs() < 47.0 && p.pos.z.abs() < 47.0;
+                match ours.iter_mut().find(|o| o.id == p.id) {
+                    None => ours.push(Ours {
+                        id: p.id,
+                        pos: p.pos,
+                        speed: p.vel.len(),
+                        gone: None,
+                        plain: 0,
+                    }),
+                    Some(o) => {
+                        assert!(o.gone.is_none(), "drawn again after it went");
+                        let v = (o.speed + p.vel.len()) * 0.5;
+                        let step = (p.pos - o.pos).len();
+                        if open {
+                            let (lo, hi) = (0.7 * v * frame_s - 0.02, 1.1 * v * frame_s + 0.02);
+                            assert!(
+                                (lo..=hi).contains(&step),
+                                "stepped {step} at {v} m/s ({lo} to {hi}) at {rt}"
+                            );
+                            steps += 1;
+                        }
+                        o.pos = p.pos;
+                        o.speed = p.vel.len();
+                        if launches == 0 && open && rt <= c.latest().tick as f64 {
+                            // On the render tick, where the server had it.
+                            let t = truth_at(&history, rt, me, 0, p.pos).expect("in the world");
+                            assert!((p.pos - t).len() < 0.05, "{:?} vs {t:?} at {rt}", p.pos);
+                            o.plain += 1;
+                        }
+                    }
+                }
+            }
+            for o in ours.iter_mut() {
+                if o.gone.is_none() && !drawn.iter().any(|p| p.id == o.id) {
+                    o.gone = Some(frame);
+                }
+            }
+        }
+    });
+    println!(
+        "{steps} steps; on the render tick for {:?} frames",
+        ours.iter().map(|o| o.plain).collect::<Vec<_>>()
+    );
+    assert_eq!(ours.len(), 2, "two rockets");
+    assert!(steps > 100, "{steps}");
+    for o in &ours {
+        assert!(o.plain >= plain_min, "never on the render tick: {}", o.plain);
+        let gone = o.gone.expect("it went");
+        let (_, at) = blasts
+            .iter()
+            .find(|(f, _)| *f == gone)
+            .unwrap_or_else(|| panic!("no blast the frame it went: {blasts:?} vs {gone}"));
+        // Drawn last on the frame before the render tick reached the
+        // snapshot without it: at most a frame's flight short of where it
+        // went off.
+        let near = o.speed * frame_s + 0.3;
+        assert!((o.pos - *at).len() < near, "last drawn {:?}, blast {at:?}", o.pos);
+    }
+}
+
+/// A bot firing rockets at us: each drawn where the server had it at the
+/// render tick, while what was sent covers the render tick.
+#[test]
+fn remote_rounds_are_drawn_where_the_server_had_them() {
+    let mut r = start_with(Map::open(), rocket_rules(), 30.0, 5.0, 0.02, false);
+    r.run(3000.0, |_| Input::default());
+    let me = r.slot;
+    let mut history: Vec<(u32, Rounds)> = Vec::new();
+    let mut checked = 0;
+    r.run_seen(
+        30_000.0,
+        |_| Input::default(),
+        |seen| match seen {
+            Seen::Tick(room) => history.push(rounds(room)),
+            Seen::Snap(_) => {}
+            Seen::Frame(c, now, _) => {
+                let rt = c.render_tick(now);
+                if rt > c.latest().tick as f64 {
+                    return;
+                }
+                for p in c.projectiles(now) {
+                    if p.owner == me || p.kind != 0 {
+                        continue;
+                    }
+                    let Some(t) = truth_at(&history, rt, p.owner, p.kind, p.pos) else {
+                        continue; // gone by then: run on to where it went
+                    };
+                    assert!((p.pos - t).len() < 0.05, "{:?} vs {t:?} at {rt}", p.pos);
+                    checked += 1;
+                }
+            }
+        },
+    );
+    println!("{checked} rockets checked");
+    assert!(checked > 30, "{checked} rockets checked");
+}
+
+/// Nothing is drawn that this client wasn't sent: every round not ours is
+/// near a state of it from a snapshot at or before the render tick, within
+/// what running on from it for `EXTRAPOLATE_MS` reaches.
+#[test]
+fn nothing_is_drawn_that_was_not_sent() {
+    use client_net::core::EXTRAPOLATE_MS;
+    use sim::consts::ticks;
+    let mut r = start_with(Map::open(), rocket_rules(), 40.0, 10.0, 0.05, false);
+    r.run(2000.0, |_| Input::default());
+    let me = r.slot;
+    let mut sent: Vec<(u32, proto::ProjState)> = Vec::new();
+    let mut checked = 0;
+    r.run_seen(30_000.0, player, |seen| match seen {
+        Seen::Tick(_) => {}
+        Seen::Snap(s) => sent.extend(s.proj().iter().map(|p| (s.tick, *p))),
+        Seen::Frame(c, now, _) => {
+            let rt = c.render_tick(now);
+            for p in c.projectiles(now) {
+                if p.owner == me {
+                    continue;
+                }
+                let ok = sent.iter().any(|(t, q)| {
+                    let dt = rt - *t as f64;
+                    if dt < 0.0 || q.kind != p.kind || q.owner != p.owner {
+                        return false;
+                    }
+                    let run = dt.min(ticks(EXTRAPOLATE_MS) as f64) as f32 / TICK_HZ as f32;
+                    (p.pos - q.pos).len() <= (q.vel.len() + 10.0) * run + 0.25
+                });
+                assert!(ok, "{p:?} at {rt}: nothing sent puts it there");
+                checked += 1;
+            }
+        }
+    });
+    println!("{checked} rounds checked");
+    assert!(checked > 30, "{checked} rounds checked");
 }

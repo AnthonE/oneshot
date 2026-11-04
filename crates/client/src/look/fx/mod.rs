@@ -150,9 +150,9 @@ pub struct Fx {
     /// last while two guns are out.
     own_shots: u32,
     own_left: bool,
-    /// Rounds of light flying last frame (`flying.rs`), to tell where one
-    /// ended.
-    last_light: Vec<proto::ProjState>,
+    /// Rounds of light flying last frame (`flying.rs`), by id, to tell
+    /// where one ended.
+    last_light: Vec<client_net::core::DrawnProj>,
 }
 
 impl Fx {

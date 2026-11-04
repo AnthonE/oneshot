@@ -15,8 +15,15 @@
 //!   is the server's: its seat follows it.
 //! - **interpolation:** everyone else, drawn between two snapshots a little
 //!   behind the newest (Gates' `client-core/src/interp.rs`).
+//! - **rounds in flight:** on the same render tick as everyone else, ours
+//!   from our predicted muzzle gliding onto it, and the cosmetic events
+//!   held for that tick too ([`crate::proj`]).
 
-use proto::{EventState, InputMsg, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_VEHICLES};
+use crate::proj::{self, Seed, GLIDE, HOLD_MAX_MS, HOST_ME, MAX_LAUNCHES, NO_HOST, OWN_AHEAD_MS};
+use proto::{
+    EventState, InputMsg, ProjState, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_PROJ,
+    MAX_SNAP_VEHICLES,
+};
 use sim::consts::{ticks, MAX_FIGHTERS, TICK_HZ};
 use sim::fighter::Fighter;
 use sim::geom::{aim_dir, V3};
@@ -24,6 +31,7 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::vehicle::{Vehicle, DRIVER};
 use sim::world::{Phase, Rules};
+use std::collections::VecDeque;
 
 /// One tick of what this client predicts, in the server's order: its
 /// fighter (`step_in`), then the vehicle it drives, then its seat.
@@ -162,13 +170,101 @@ pub struct Stats {
     pub delay_ticks: f64,
 }
 
+/// One snapshot as interpolation keeps it: everyone else, the vehicles,
+/// and the rounds in flight with the ids and hosts matched to them.
 #[derive(Clone, Copy)]
-struct Frame {
-    tick: u32,
+pub(crate) struct Frame {
+    pub(crate) tick: u32,
     n: u8,
     remotes: [Remote; MAX_REMOTES],
     nv: u8,
     vehicles: [VehState; MAX_SNAP_VEHICLES],
+    pub(crate) np: u8,
+    pub(crate) proj: [ProjState; MAX_SNAP_PROJ],
+    /// Each round's id (`proj::assign_ids`), and who it is stuck to
+    /// (`proj::detect_hosts`).
+    pub(crate) pid: [u16; MAX_SNAP_PROJ],
+    pub(crate) host: [u8; MAX_SNAP_PROJ],
+    /// The round is new in this frame: never drawn before it.
+    pub(crate) fresh: [bool; MAX_SNAP_PROJ],
+}
+
+impl Frame {
+    fn empty() -> Frame {
+        Frame {
+            tick: 0,
+            n: 0,
+            remotes: [Remote::default(); MAX_REMOTES],
+            nv: 0,
+            vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
+            np: 0,
+            proj: [ProjState::default(); MAX_SNAP_PROJ],
+            pid: [0; MAX_SNAP_PROJ],
+            host: [NO_HOST; MAX_SNAP_PROJ],
+            fresh: [false; MAX_SNAP_PROJ],
+        }
+    }
+}
+
+/// A round in flight as drawn this frame. `id` holds from frame to frame
+/// while it flies (ours keeps the one it launched with).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawnProj {
+    pub id: u16,
+    /// `ProjState::kind`.
+    pub kind: u8,
+    pub owner: u8,
+    pub pos: V3,
+    pub vel: V3,
+}
+
+impl DrawnProj {
+    /// As the wire has it, for what draws from a `ProjState`.
+    pub fn state(&self) -> ProjState {
+        ProjState {
+            kind: self.kind,
+            owner: self.owner,
+            pos: self.pos,
+            vel: self.vel,
+        }
+    }
+}
+
+/// One of our own rounds from the tick we fired it, before and while the
+/// server's copy of it is in the frames.
+#[derive(Clone, Copy, Debug)]
+struct Launch {
+    /// The seq it was fired on, and when, local ms.
+    q: u32,
+    at_ms: f64,
+    seed: Seed,
+    /// Server tick minus seq when fired: seq `q` runs on tick `q + k`.
+    k: f64,
+    /// Its drawn id; once the server's round is bound to it, that round's
+    /// id in the frames too.
+    id: u16,
+    bound: bool,
+    /// Unbound, the tick of the first snapshot that ran `q`: it goes when
+    /// the render tick gets there (its blast, or a mispredicted shot).
+    ack_tick: Option<u32>,
+    /// Unbound and acked, the tick it was drawn at then: its end is known,
+    /// so it is held there till it goes, never flown on through a body.
+    held_at: Option<f64>,
+    /// Ticks taken off its drawn tick: a clock resync that jumped our seqs
+    /// on moved our body, not the round already in the air.
+    skip: f64,
+    /// What is added to where it is drawn: the drawn body's correction at
+    /// the launch, then whatever keeps a snapshot from moving it, easing
+    /// out (`ease`) while it flies.
+    off: V3,
+}
+
+/// An event held for the render tick to reach the snapshot it came in.
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    tick: u32,
+    at_ms: f64,
+    e: EventState,
 }
 
 /// One snapshot as the kill cam keeps it: everyone this client was shown,
@@ -284,9 +380,18 @@ pub struct NetCore {
     jitter: f64,
     /// The playout delay in ticks, slewed to its target.
     delay: Slew,
+    /// Events to hand on at once (hits, kills, our own), and those held
+    /// for the render tick (everyone else's shots, blasts, ...).
     events: Vec<EventState>,
+    held: VecDeque<Held>,
     /// The newest event id kept: an event comes again until acked.
     event_id: Option<u16>,
+    /// The next round id to give, and our own rounds since they left the gun.
+    next_pid: u16,
+    launches: Vec<Launch>,
+    /// Ticks a forward clock resync added that the next `update` makes on
+    /// top of the time passed: our rounds already flying don't take them.
+    resync_ahead: f64,
     /// The last few seconds as this client was sent them, for the kill cam.
     /// Nothing in it is more than the snapshots already said: fog shaped
     /// it on the server.
@@ -338,13 +443,7 @@ impl NetCore {
             newest: None,
             ack_bits: 0,
             latest: Snapshot::default(),
-            frames: [Frame {
-                tick: 0,
-                n: 0,
-                remotes: [Remote::default(); MAX_REMOTES],
-                nv: 0,
-                vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
-            }; INTERP_FRAMES],
+            frames: [Frame::empty(); INTERP_FRAMES],
             n_frames: 0,
             clock: None,
             jitter: 0.0,
@@ -354,7 +453,11 @@ impl NetCore {
                 DELAY_DOWN_PER_S / TICK_HZ as f64,
             ),
             events: Vec::new(),
+            held: VecDeque::new(),
             event_id: None,
+            next_pid: 0,
+            launches: Vec::with_capacity(MAX_LAUNCHES),
+            resync_ahead: 0.0,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
             death: None,
@@ -402,6 +505,12 @@ impl NetCore {
             self.stats.resyncs += 1;
         }
         let dt = dt.min(250.0);
+        // A resync's jump moves our drawn body on, but not our rounds in the
+        // air: their drawn tick keeps going from where it was.
+        let skip = core::mem::take(&mut self.resync_ahead);
+        for l in self.launches.iter_mut() {
+            l.skip += skip;
+        }
         let mut out = Vec::new();
         while (self.seq as f64) < self.t.floor() {
             let s = self.seq;
@@ -414,7 +523,7 @@ impl NetCore {
             self.prev_pos = self.pred.body.pos;
             let was = self.pred_v;
             let phase = self.phase();
-            let fired = step_own(&mut self.pred, &mut self.pred_v, phase, &input, &self.map).fired;
+            let local = step_own(&mut self.pred, &mut self.pred_v, phase, &input, &self.map);
             // A vehicle just got into starts where it is, not at the origin.
             if let Some(v) = was.or(self.pred_v) {
                 self.prev_v = v.pos;
@@ -422,9 +531,10 @@ impl NetCore {
             }
             self.after[s as usize % RING] = self.pred;
             self.after_v[s as usize % RING] = self.pred_v;
-            if fired {
+            if local.fired {
                 self.own_shot();
             }
+            self.launch(s, now_ms, &local);
             self.seq = s.wrapping_add(1);
             if self.seq.is_multiple_of(SEND_EVERY) {
                 out.push(self.input_msg(now_ms));
@@ -441,7 +551,316 @@ impl NetCore {
         // A heading's correction: a fifth of a radian as a metre is.
         let turn = ease(V3::new(self.vyaw_off * 5.0, 0.0, 0.0), dt).x * 0.2;
         self.vyaw_off = turn;
+        // Our rounds' corrections ease out as the body's do, but for one
+        // whose end has come: it stays where it is drawn till its blast.
+        let frames = &self.frames[..self.n_frames];
+        for l in self.launches.iter_mut() {
+            let ended = if l.bound {
+                proj::ended(frames, l.id)
+            } else {
+                l.ack_tick.is_some()
+            };
+            if !ended {
+                l.off = ease(l.off, dt);
+            }
+        }
+        self.free_launches(now_ms);
         out
+    }
+
+    /// What predicted tick `q` fired, as rounds of ours to draw from the
+    /// muzzle on: only once the server's clock is known (a snapshot came),
+    /// and the newest refused once [`MAX_LAUNCHES`] fly.
+    fn launch(&mut self, q: u32, now_ms: f64, l: &sim::fighter::Local) {
+        if self.newest.is_none() {
+            return;
+        }
+        // A passenger's hull is the server's newest, not predicted: what
+        // it fires from where the hull will be is drawn when sent, as the
+        // hull is, never from a muzzle a round trip behind it.
+        if self.pred.riding().is_some_and(|(_, seat)| seat != DRIVER) {
+            return;
+        }
+        let f = &self.pred;
+        let seeds = [
+            l.fired.then(|| proj::seed_fire(f, false, l.charged)).flatten(),
+            l.fired_left.then(|| proj::seed_fire(f, true, l.charged_left)).flatten(),
+            l.throw.then(|| proj::seed_throw(f, l.sticky)),
+        ];
+        // The drawn body's correction: the round leaves the drawn muzzle.
+        let off = if self.pred.riding().is_some() {
+            self.voffset
+        } else {
+            self.offset
+        };
+        let k = self.latest.tick.wrapping_sub(self.latest.last_seq) as i32 as f64;
+        for seed in seeds.into_iter().flatten() {
+            if self.launches.len() >= MAX_LAUNCHES {
+                return;
+            }
+            let id = self.next_pid;
+            self.next_pid = self.next_pid.wrapping_add(1);
+            self.launches.push(Launch {
+                q,
+                at_ms: now_ms,
+                seed,
+                k,
+                id,
+                bound: false,
+                ack_tick: None,
+                held_at: None,
+                skip: 0.0,
+                off,
+            });
+        }
+    }
+
+    /// The server tick our drawn body is on at `now_ms`, as launch `l`
+    /// reckons ticks (`own()` draws between the predictions after seqs
+    /// `seq - 2` and `seq - 1`).
+    fn drawn_tick(&self, l: &Launch) -> f64 {
+        self.seq.wrapping_sub(2) as f64 + self.alpha() as f64 + l.k
+    }
+
+    /// The tick launch `l` is drawn at, at `now_ms`, and how far that is
+    /// past the render tick: our drawn body's tick on the frame it fired,
+    /// gliding onto the render tick at [`GLIDE`] of real time; never more
+    /// than [`OWN_AHEAD_MS`] past the newest snapshot as the clock has it
+    /// now (moving on every frame, not by a snapshot's step).
+    fn launch_tick(&self, l: &Launch, now_ms: f64) -> (f64, f64) {
+        let rt = self.render_tick(now_ms);
+        let lead = self.drawn_tick(l) - l.skip - rt;
+        let o = (lead - GLIDE * (now_ms - l.at_ms) / TICK_MS).max(0.0);
+        let cap = rt + self.delay.at(now_ms) + ticks(OWN_AHEAD_MS) as f64;
+        let t = (rt + o).min(cap).max(rt);
+        (t, o)
+    }
+
+    /// Launch `l` before (or without) the server's copy: flown from its
+    /// seed to tick `t`.
+    fn stand_in(&self, l: &Launch, t: f64) -> (V3, V3) {
+        // The seed is a tick before the sim's first state, made on tick
+        // `q + k`.
+        let age = t - (l.q as f64 + l.k - 1.0);
+        let (p, v, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age.max(0.0), &self.map);
+        (p, v)
+    }
+
+    /// Launch `l` as drawn at `now_ms`, or None once it is gone.
+    fn launch_drawn(&self, l: &Launch, now_ms: f64) -> Option<DrawnProj> {
+        let rt = self.render_tick(now_ms);
+        let (t, _) = self.launch_tick(l, now_ms);
+        let (pos, vel) = if l.bound {
+            let frames = &self.frames[..self.n_frames];
+            let (first, _) = proj::first_seen(frames, l.id)?;
+            if t < first as f64 {
+                // Not yet as far as the server's first state of it.
+                self.stand_in(l, t)
+            } else {
+                let s = proj::sample(frames, l.id, t, rt, ticks(OWN_AHEAD_MS) as f64, &self.map)?;
+                self.placed(&s, now_ms)
+            }
+        } else {
+            if l.ack_tick.is_some_and(|a| rt >= a as f64) {
+                return None;
+            }
+            if l.ack_tick.is_none() && now_ms - l.at_ms >= 1000.0 {
+                return None;
+            }
+            self.stand_in(l, l.held_at.map_or(t, |h| t.min(h)))
+        };
+        Some(DrawnProj {
+            id: l.id,
+            kind: l.seed.kind,
+            owner: self.slot,
+            pos: pos + l.off,
+            vel,
+        })
+    }
+
+    /// Drops the launches done with: gone, or drawn from here on exactly as
+    /// anyone's round is.
+    fn free_launches(&mut self, now_ms: f64) {
+        let mut i = 0;
+        while i < self.launches.len() {
+            let l = self.launches[i];
+            let keep = match self.launch_drawn(&l, now_ms) {
+                None => false,
+                Some(d) if l.bound => {
+                    let (_, o) = self.launch_tick(&l, now_ms);
+                    let plain = self.plain(l.id, now_ms);
+                    !(o == 0.0 && l.off == V3::ZERO && plain.is_some_and(|p| p.pos == d.pos))
+                }
+                Some(_) => true,
+            };
+            if keep {
+                i += 1;
+            } else {
+                self.launches.remove(i);
+            }
+        }
+    }
+
+    /// Round `pid` as anyone's is drawn: on the render tick.
+    fn plain(&self, pid: u16, now_ms: f64) -> Option<DrawnProj> {
+        let frames = &self.frames[..self.n_frames];
+        let rt = self.render_tick(now_ms);
+        let s = proj::sample(frames, pid, rt, rt, ticks(EXTRAPOLATE_MS) as f64, &self.map)?;
+        let (pos, vel) = self.placed(&s, now_ms);
+        Some(DrawnProj {
+            id: pid,
+            kind: s.kind,
+            owner: s.owner,
+            pos,
+            vel,
+        })
+    }
+
+    /// Where a sampled round is drawn: a stuck one on its host as drawn
+    /// (or where it was, if its host isn't), never run on by its offset.
+    fn placed(&self, s: &proj::Sample, now_ms: f64) -> (V3, V3) {
+        if s.host == NO_HOST {
+            // Flying onto someone it sticks to: onto them as drawn, not as
+            // the server had them (we are drawn a round trip ahead of it).
+            if let Some((h, at, u)) = s.onto {
+                if let Some((drawn, _)) = self.host_drawn(h, now_ms) {
+                    return (s.pos + (drawn - at) * u, s.vel);
+                }
+            }
+            return (s.pos, s.vel);
+        }
+        match self.host_drawn(s.host, now_ms) {
+            Some((at, vel)) => (at + s.vel, vel),
+            None => (s.pos, V3::ZERO),
+        }
+    }
+
+    /// Host `h` (`proj::detect_hosts`) as drawn at `now_ms`: where, and
+    /// how fast.
+    fn host_drawn(&self, h: u8, now_ms: f64) -> Option<(V3, V3)> {
+        if h == HOST_ME {
+            let (f, p) = self.own();
+            return Some((p, f.body.vel));
+        }
+        if (h as usize) < MAX_FIGHTERS {
+            return self
+                .others(now_ms)
+                .into_iter()
+                .find(|d| d.slot == h)
+                .map(|d| (d.pos, d.vel));
+        }
+        let slot = h - MAX_FIGHTERS as u8;
+        if self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
+            return self.own_vehicle().map(|(v, p, _)| (p, v.vel));
+        }
+        self.vehicles(now_ms)
+            .into_iter()
+            .find(|v| v.slot == slot)
+            .map(|v| (v.pos, V3::ZERO))
+    }
+
+    /// Our own rounds still drawn from their launch, not yet on the render
+    /// tick as anyone's are (or gone at their ack).
+    pub fn launches(&self) -> usize {
+        self.launches.len()
+    }
+
+    /// Every round in flight as drawn at `now_ms`. Anyone's (and ours once
+    /// it has glided onto it) on the render tick, from the frames its
+    /// shooter is drawn from; ours from the muzzle we are drawn with
+    /// (`own()`) the frame it fired, its clock run at `1 - GLIDE` until it
+    /// is on the render tick. A stuck sticky rides its host as drawn.
+    pub fn projectiles(&self, now_ms: f64) -> Vec<DrawnProj> {
+        let mut out = Vec::new();
+        let frames = &self.frames[..self.n_frames];
+        let mut seen: Vec<u16> = Vec::new();
+        for f in frames {
+            for &pid in &f.pid[..f.np as usize] {
+                if seen.contains(&pid) {
+                    continue;
+                }
+                seen.push(pid);
+                if self.launches.iter().any(|l| l.bound && l.id == pid) {
+                    continue;
+                }
+                if let Some(d) = self.plain(pid, now_ms) {
+                    out.push(d);
+                }
+            }
+        }
+        for l in &self.launches {
+            if let Some(d) = self.launch_drawn(l, now_ms) {
+                out.push(d);
+            }
+        }
+        out
+    }
+
+    /// Our unbound launches meet the server's rounds in the newest frame:
+    /// each the nearest of ours of its kind, new since it was fired, where
+    /// we flew it (to its cone). Tried on the first snapshot that ran it,
+    /// however late (the ones before it lost), and on any within
+    /// `2 * SEND_EVERY` seqs of it (the server fired a tick or two late).
+    /// One that never turns up is held where it is drawn and goes at the
+    /// render tick of the snapshot that ran it.
+    fn bind(&mut self, now_ms: f64, s: &Snapshot) {
+        let ks = s.tick.wrapping_sub(s.last_seq) as i32 as f64;
+        let ni = self.n_frames - 1;
+        for li in 0..self.launches.len() {
+            let l = self.launches[li];
+            if l.bound {
+                continue;
+            }
+            let after = s.last_seq.wrapping_sub(l.q);
+            if after >= 0x8000_0000 {
+                continue; // not run yet
+            }
+            if l.ack_tick.is_none() || after <= 2 * SEND_EVERY {
+                let age = after as f64 + 1.0;
+                let (at, _, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age, &self.map);
+                let flown = (at - l.seed.pos).len();
+                let reach = proj::BIND_M + l.seed.cone * flown;
+                let born = l.q as f64 + ks;
+                let frames = &self.frames[..self.n_frames];
+                let f = &frames[ni];
+                let mut best: Option<(f32, u16)> = None;
+                for i in 0..f.np as usize {
+                    let p = &f.proj[i];
+                    let pid = f.pid[i];
+                    if p.owner != self.slot || p.kind != l.seed.kind {
+                        continue;
+                    }
+                    if self.launches.iter().any(|m| m.bound && m.id == pid) {
+                        continue;
+                    }
+                    if proj::first_seen(frames, pid).is_none_or(|(t, fresh)| !fresh || (t as f64) < born) {
+                        continue;
+                    }
+                    let d = (p.pos - at).len();
+                    if d <= reach && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, pid));
+                    }
+                }
+                if let Some((_, pid)) = best {
+                    // The server's round takes our id, in every frame.
+                    for f in self.frames[..self.n_frames].iter_mut() {
+                        for p in f.pid[..f.np as usize].iter_mut() {
+                            if *p == pid {
+                                *p = l.id;
+                            }
+                        }
+                    }
+                    self.launches[li].bound = true;
+                    continue;
+                }
+            }
+            if l.ack_tick.is_none() {
+                let (t, _) = self.launch_tick(&l, now_ms);
+                let l = &mut self.launches[li];
+                l.ack_tick = Some(s.tick);
+                l.held_at = Some(t);
+            }
+        }
     }
 
     /// Every input the server hasn't run yet, up to the cap: lost datagrams
@@ -511,6 +930,16 @@ impl NetCore {
                 }
             }
         }
+        // Where our rounds are drawn before this snapshot: after it, they
+        // carry what it would move them by (the clock, the binding, the
+        // server's own path) as a correction to ease out, never a pop.
+        let drawn: Vec<Option<V3>> = self
+            .launches
+            .iter()
+            .map(|l| self.launch_drawn(l, now_ms).map(|d| d.pos))
+            .collect();
+        // The hull we rode in before this snapshot says otherwise (a wreck).
+        let rode = self.pred.riding();
         self.newest = Some(s.tick);
         self.stats.snapshots += 1;
         self.stats.depth = s.depth;
@@ -556,10 +985,17 @@ impl NetCore {
         if !(-8.0..=16.0).contains(&d) {
             let drawn = self.own().1;
             let drawn_v = self.own_vehicle();
+            let (t0, a0) = (self.t, self.alpha());
             self.t += TARGET_DEPTH - d;
             if self.t < self.seq as f64 {
                 // Never take back a seq already made.
                 self.t = self.seq as f64;
+            }
+            // Forward, the next update makes the ticks jumped all at once:
+            // all but what alpha shows already (the fold below takes that).
+            let unseen = (self.t - t0) - (self.alpha() - a0) as f64;
+            if unseen > 0.0 {
+                self.resync_ahead += unseen;
             }
             // The clock went back through the tick being drawn: what was on
             // screen eases on from where it was, as a correction does,
@@ -578,14 +1014,24 @@ impl NetCore {
 
         self.reconcile(s);
 
-        // Others, for interpolation.
-        let f = Frame {
+        // Others, for interpolation; the rounds in flight with their ids.
+        let mut f = Frame {
             tick: s.tick,
             n: s.n_remote,
             remotes: s.remotes,
             nv: s.n_vehicles,
             vehicles: s.vehicles,
+            np: s.n_proj.min(MAX_SNAP_PROJ as u8),
+            proj: s.proj,
+            ..Frame::empty()
         };
+        proj::detect_hosts(&mut f, s);
+        {
+            let n = self.n_frames;
+            let prev = n.checked_sub(1).map(|i| &self.frames[i]);
+            let prev2 = n.checked_sub(2).map(|i| &self.frames[i]);
+            proj::assign_ids(prev, prev2, &mut f, &mut self.next_pid);
+        }
         if self.n_frames < INTERP_FRAMES {
             self.frames[self.n_frames] = f;
             self.n_frames += 1;
@@ -605,6 +1051,11 @@ impl NetCore {
             self.cam[self.cam_at] = cf;
             self.cam_at = (self.cam_at + 1) % KILLCAM_FRAMES;
         }
+        self.bind(now_ms, s);
+        // The hull we ride is drawn in the present; any other on the render
+        // tick, its wreck with it.
+        let ours = |i: Option<(usize, usize)>| i.map(|(i, _)| i as u8);
+        let rode = [ours(rode), ours(s.own.riding())];
         for e in s.events() {
             // Seen already (sent again until a snapshot with it is acked).
             if self
@@ -614,9 +1065,28 @@ impl NetCore {
                 continue;
             }
             self.event_id = Some(e.id);
-            let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot;
-            if !own_shot {
+            use sim::events::Kind;
+            let own_shot = e.kind == Kind::Shot as u8 && e.a == self.slot;
+            // What is told (hits, kills) and what is ours plays at once;
+            // what is seen in the world plays on the render tick, with the
+            // rounds and bodies it belongs to. Our blasts too: they end a
+            // round drawn there; and our wrecks but of the hull we ride.
+            let wreck = e.kind == Kind::Wreck as u8;
+            let at_once = e.kind == Kind::Hit as u8
+                || e.kind == Kind::Kill as u8
+                || e.kind == Kind::VehicleHit as u8
+                || (wreck && rode.contains(&Some(e.part)))
+                || (e.a == self.slot && e.kind != Kind::Blast as u8 && !wreck);
+            if own_shot {
+                // Played the tick it was predicted.
+            } else if at_once {
                 self.events.push(*e);
+            } else {
+                self.held.push_back(Held {
+                    tick: s.tick,
+                    at_ms: now_ms,
+                    e: *e,
+                });
             }
             if e.kind == sim::events::Kind::Kill as u8 && e.b == self.slot {
                 self.death = (e.a != self.slot).then_some(Death {
@@ -630,6 +1100,13 @@ impl NetCore {
             self.death = None;
         }
         self.latest = *s;
+        for (i, was) in drawn.into_iter().enumerate() {
+            let l = self.launches[i];
+            if let (Some(p0), Some(p1)) = (was, self.launch_drawn(&l, now_ms).map(|d| d.pos)) {
+                let off = l.off + (p0 - p1);
+                self.launches[i].off = if off.len() > SNAP_M { V3::ZERO } else { off };
+            }
+        }
     }
 
     fn reconcile(&mut self, s: &Snapshot) {
@@ -792,10 +1269,9 @@ impl NetCore {
         }
         let mine = self.pred.riding().map(|(i, _)| i as u8);
         let rt = self.render_tick(now_ms);
-        let frames = &self.frames[..self.n_frames];
-        let ai = frames.iter().rposition(|f| f.tick as f64 <= rt).unwrap_or(0);
-        let a = &frames[ai];
-        let b = frames.get(ai + 1).filter(|b| b.tick as f64 > rt);
+        let (ai, bi) = self.around(rt);
+        let a = &self.frames[ai];
+        let b = bi.map(|i| &self.frames[i]);
         for va in &a.vehicles[..a.nv as usize] {
             if Some(va.slot) == mine {
                 continue;
@@ -837,10 +1313,25 @@ impl NetCore {
         &self.latest
     }
 
-    /// Events since the last call: everyone else's from snapshots, our own
-    /// shots the moment they were predicted.
-    pub fn drain_events(&mut self) -> Vec<EventState> {
-        core::mem::take(&mut self.events)
+    /// Events due at `now_ms`: everyone else's (shots, throws, blasts,
+    /// spawns, ...) once the render tick reaches the snapshot they came in,
+    /// so a flash or a blast plays with the body or round it belongs to,
+    /// or once held [`HOLD_MAX_MS`]; then hits, kills and our own, which
+    /// play the moment they arrive (our shots the moment predicted).
+    pub fn drain_events(&mut self, now_ms: f64) -> Vec<EventState> {
+        let rt = self.render_tick(now_ms);
+        let mut out = Vec::new();
+        // Snapshots only come newer, so they are due in order.
+        while let Some(h) = self.held.front() {
+            if h.tick as f64 <= rt || now_ms - h.at_ms >= HOLD_MAX_MS {
+                out.push(h.e);
+                self.held.pop_front();
+            } else {
+                break;
+            }
+        }
+        out.append(&mut self.events);
+        out
     }
 
     /// How far behind the newest snapshot everyone else is drawn at
@@ -871,6 +1362,17 @@ impl NetCore {
         newest.n > 0 && self.render_tick(now_ms) > newest.tick as f64
     }
 
+    /// The two kept frames around render tick `rt`: the last at or before
+    /// it (the first kept, if none is), and the next if it is after it.
+    /// Everyone else and the vehicles are drawn between them. There must be
+    /// a frame.
+    fn around(&self, rt: f64) -> (usize, Option<usize>) {
+        let frames = &self.frames[..self.n_frames];
+        let ai = frames.iter().rposition(|f| f.tick as f64 <= rt).unwrap_or(0);
+        let bi = Some(ai + 1).filter(|&i| i < frames.len() && frames[i].tick as f64 > rt);
+        (ai, bi)
+    }
+
     /// Everyone else as drawn at `now_ms`: between the two snapshots around
     /// the render tick, or extrapolated at most [`EXTRAPOLATE_MS`] past the
     /// newest, then held.
@@ -880,15 +1382,9 @@ impl NetCore {
             return out;
         }
         let rt = self.render_tick(now_ms);
-        let frames = &self.frames[..self.n_frames];
-        let mut ai = 0;
-        for (i, f) in frames.iter().enumerate() {
-            if f.tick as f64 <= rt {
-                ai = i;
-            }
-        }
-        let a = &frames[ai];
-        let b = frames.get(ai + 1).filter(|b| b.tick as f64 > rt);
+        let (ai, bi) = self.around(rt);
+        let a = &self.frames[ai];
+        let b = bi.map(|i| &self.frames[i]);
         for ra in &a.remotes[..a.n as usize] {
             let mut d = drawn(ra);
             let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
