@@ -85,15 +85,25 @@ async fn stand_in(old: bool) -> (String, Seen) {
                     seen.lock().unwrap().push((first, headers, body));
                     (200, r#"{"ok":true}"#.to_string())
                 } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
-                    // The first wallet owns the ember skin; nobody else owns any.
+                    // The first wallet owns the ember skin, the second the
+                    // gilded one; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
                         r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"}]"#
+                    } else if first.contains(WALLETS[1]) {
+                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"}]"#
                     } else {
                         "[]"
                     };
                     (200, format!(r#"{{"items":{items}}}"#))
                 } else if first.starts_with("GET /api/bans/oneshot/of/") {
                     (200, format!(r#"{{"banned":{}}}"#, first.contains(BANNED)))
+                } else if first.starts_with("GET /api/ratings/oneshot/of/") {
+                    // Both floors clear ember's line; neither clears gilded's.
+                    let floor = if first.contains(WALLETS[0]) { 1350 } else { 1400 };
+                    (
+                        200,
+                        format!(r#"{{"ladders":{{"duel":{{"rating":1500,"floor":{floor}}}}}}}"#),
+                    )
                 } else {
                     (200, r#"{"ladders":{"duel":{"rating":1500}}}"#.to_string())
                 };
@@ -253,8 +263,8 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     // Two players queue and play.
     let (n0, n1) = (nonce(http).await, nonce(http).await);
     let (p0, p1) = (pass(Some(WALLETS[0]), &n0), pass(Some(WALLETS[1]), &n1));
-    // Each asks for a skin: the first owns ember, the second doesn't own
-    // gilded and plays in the standard look.
+    // Each asks for a skin it owns: the first's floor is at ember's line, the
+    // second's is under gilded's (rank-locked), so it plays in the standard look.
     let (a, b) = tokio::join!(play_as(&h, &p0, MODE_DUEL, 2), play_as(&h, &p1, MODE_DUEL, 5));
     let slot_of = |got: &[Msg]| {
         got.iter().find_map(|m| match m {
@@ -274,7 +284,7 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         assert_eq!(
             skin_of(got, sb),
             Some(proto::SKIN_STANDARD),
-            "an unowned skin is not worn"
+            "a skin above the wallet's floor is not worn"
         );
     }
     for got in [&a, &b] {

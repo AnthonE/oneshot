@@ -819,6 +819,12 @@ impl Pass {
 /// standard look everyone has.
 pub const SKINS: [&str; 6] = ["standard", "pill", "ember", "glacier", "verdant", "gilded"];
 pub const SKIN_STANDARD: u8 = 0;
+/// The rank lock, by skin (`SKINS` order): the floor on Elo Pros (its
+/// ratings' mu − 3 sigma on the Elo scale, idle time counted; a wallet's best
+/// across the ladders) a wallet needs to wear the skin it owns. 0 is no lock.
+/// Owning one is a market; wearing one is a record. A wallet below the line
+/// wears the standard look, and can sell the skin to one above it.
+pub const SKIN_FLOOR: [u16; 6] = [0, 0, 1300, 1500, 1650, 1800];
 
 /// What a client asks to play (`Msg::Hello::mode`): casual against a bot,
 /// ranked Duel or Doubles, casual free-for-all or Gun Game with bots in the

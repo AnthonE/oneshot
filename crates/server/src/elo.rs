@@ -180,6 +180,17 @@ pub fn items_url(origin: &str, slug: &str, wallet: &str) -> String {
     }
 }
 
+/// A wallet's best floor across the game's ladders in an Elo Pros ratings
+/// answer (`GET /api/ratings/<slug>/of/<wallet>`): what a rank-locked skin
+/// reads (`proto::SKIN_FLOOR`). None if it was never rated.
+pub fn best_floor(v: &serde_json::Value) -> Option<f64> {
+    v["ladders"]
+        .as_object()?
+        .values()
+        .filter_map(|l| l["floor"].as_f64())
+        .reduce(f64::max)
+}
+
 /// How long a ban answer is kept before it is asked again.
 pub const BAN_CACHE: Duration = Duration::from_secs(60);
 
@@ -190,6 +201,7 @@ pub struct Elo {
     http: reqwest::Client,
     bans: Mutex<HashMap<String, (Instant, bool)>>,
     skins: Mutex<HashMap<String, (Instant, Vec<String>)>>,
+    floors: Mutex<HashMap<String, (Instant, Option<f64>)>>,
 }
 
 impl Elo {
@@ -204,7 +216,39 @@ impl Elo {
                 .unwrap_or_default(),
             bans: Mutex::new(HashMap::new()),
             skins: Mutex::new(HashMap::new()),
+            floors: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// `wallet`'s best floor on Elo Pros ([`best_floor`]): None if it was
+    /// never rated or Elo Pros can't be asked, which wears the standard look.
+    /// Answers are kept [`BAN_CACHE`].
+    pub async fn floor(&self, wallet: &str) -> Option<f64> {
+        let key = wallet.to_ascii_lowercase();
+        if let Ok(m) = self.floors.lock() {
+            if let Some((at, f)) = m.get(&key) {
+                if at.elapsed() < BAN_CACHE {
+                    return *f;
+                }
+            }
+        }
+        let url = format!("{}/api/ratings/{}/of/{}", self.origin, self.slug, wallet);
+        let got = async {
+            let res = self.http.get(&url).send().await.ok()?;
+            if !res.status().is_success() {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+            Some(best_floor(&v))
+        }
+        .await?;
+        if let Ok(mut m) = self.floors.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
+            }
+            m.insert(key, (Instant::now(), got));
+        }
+        got
     }
 
     /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
@@ -358,6 +402,18 @@ impl Elo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_best_floor_is_read_across_ladders_and_never_rated_is_none() {
+        let v = serde_json::json!({"ladders": {
+            "duel": {"rated": true, "rating": 1710, "floor": 1612},
+            "doubles": {"rated": true, "rating": 1650, "floor": 1580},
+            "cup": {"rated": false, "rating": null, "floor": null}}});
+        assert_eq!(best_floor(&v), Some(1612.0));
+        let none = serde_json::json!({"ladders": {"duel": {"rated": false, "floor": null}}});
+        assert_eq!(best_floor(&none), None);
+        assert_eq!(best_floor(&serde_json::json!({"error": "x"})), None);
+    }
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {

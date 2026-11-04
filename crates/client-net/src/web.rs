@@ -781,6 +781,12 @@ pub fn skin_names() -> Vec<String> {
     proto::SKINS.iter().map(|s| s.to_string()).collect()
 }
 
+/// Each skin's rank lock by id (`proto::SKIN_FLOOR`; 0 is none), for the menu.
+#[wasm_bindgen]
+pub fn skin_floors() -> Vec<u16> {
+    proto::SKIN_FLOOR.to_vec()
+}
+
 /// Arm names by id, for the HUD.
 #[wasm_bindgen]
 pub fn arm_name(id: u8) -> String {

@@ -331,12 +331,15 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         None
     };
 
-    // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
-    // a guest, or a list that can't be read, wears the standard look.
+    // A skin is worn only if the pass's wallet owns it and, for a rank-locked
+    // one, its floor is at the line (docs/DESIGN.md §15); a guest, or a list
+    // or rating that can't be read, wears the standard look.
     let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
         Some(w) if skin != proto::SKIN_STANDARD => {
             let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
-            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+            let line = proto::SKIN_FLOOR.get(skin as usize).copied().unwrap_or(u16::MAX);
+            let owned = ctx.elo.skins(w).await.iter().any(|s| s == want);
+            if owned && (line == 0 || ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line))) {
                 skin
             } else {
                 proto::SKIN_STANDARD

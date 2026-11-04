@@ -42,7 +42,7 @@
       <p>1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
       <div class="row">
         <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
-        <select id="skin" title="Skin: worn if your wallet owns it"></select>
+        <select id="skin" title="Skin: worn if your wallet owns it and your ranked floor is at its line"></select>
       </div>
       <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
       <div id="who"></div>
@@ -73,7 +73,7 @@
       // (web/index.html, web/src/main.ts): the page only picks what to play
       // and signs in; the game, the queue's wait and everything after are
       // the client's.
-      import init, { play, pose, skin_names } from './oneshot_client.js';
+      import init, { play, pose, skin_names, skin_floors } from './oneshot_client.js';
       // Raw mouse: the game's lock (winit asks with no options) asks the
       // browser for unadjusted movement, so the OS's acceleration doesn't
       // bend aim. Not on Linux, where Chrome refuses and a second request
@@ -118,8 +118,11 @@
         await new Promise(() => {}); // nothing more for the page to do
       }
       nameInput.value = params.get('name') || store('oneshot.name') || '';
-      // Skins: worn only if the signed-in wallet owns one; the server checks.
-      skin_names().forEach((n, i) => skin.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
+      // Skins: worn only if the signed-in wallet owns one and its ranked floor
+      // is at the skin's line; the server checks.
+      const floors = skin_floors();
+      skin_names().forEach((n, i) => skin.add(new Option(
+        n[0].toUpperCase() + n.slice(1) + (floors[i] ? ` · ${floors[i]}+` : ''), String(i))));
       skin.value = store('oneshot.skin') || '0';
 
       // Where the game's own endpoints are: beside the page in dev, the game
