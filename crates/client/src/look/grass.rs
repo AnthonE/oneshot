@@ -35,18 +35,18 @@ const CARD_JITTER_MAX: f32 = 1.2;
 /// The tallest card any tuft can grow (a green one: dry tufts are 0.8).
 pub const TUFT_MAX_H: f32 = TUFT_H * TUFT_JITTER_MAX * CARD_JITTER_MAX;
 
-// The graphics ladder thins the grass and draws it nearer on a lower rung
-// (`quality::Cover`), which is fair only because grass hides no one: it
-// never reaches the top of a crouching fighter's hit box.
+// Grass never reaches the top of a crouching fighter's hit box on his own
+// ground, so a head always shows over it. It can still cover his lower
+// half from a grazing look or over a crest, so every rung draws it the
+// same (`quality.rs`' fairness): no graphics row thins it.
 const _: () = assert!(
     TUFT_MAX_H < sim::consts::HIT_TOP_CROUCH,
-    "grass that can hide a crouching fighter can't be a graphics row: every rung must draw it the same"
+    "grass must never hide a crouching fighter's head"
 );
 
-/// The share of the tufts in each density layer, in order: GRASS LOW draws
-/// the first, MEDIUM the first two, HIGH all three (`quality::Cover`). A
-/// tuft's layer is hashed from its cell, so a rung is the same tufts every
-/// time, and thinning keeps the scatter even.
+/// The share of the tufts in each density layer, in order. Every rung
+/// draws all three; the layers only cut a block into a few meshes. A
+/// tuft's layer is hashed from its cell (a key no tuft's own hash uses).
 pub const LAYER_SHARE: [f32; 3] = [0.5, 0.25, 0.25];
 const CARDS_PER_TUFT: u32 = 3;
 const CARD_ASPECT: f32 = 2.0;
@@ -68,8 +68,8 @@ const ROWS: u32 = 2;
 /// The scatter's cell, and a block's side.
 const STEP_M: f32 = 0.7;
 pub const BLOCK_M: f32 = 16.0;
-/// Past this a block isn't drawn at HIGH (Gates fades grass out by 46 m);
-/// the GRASS DISTANCE row moves it (`quality::COVER_M_LADDER`).
+/// Past this a block isn't drawn, on any rung (Gates fades grass out by
+/// 46 m).
 pub const DRAW_M: f32 = 46.0;
 /// What a dry tuft's photograph is multiplied by once the foliage shader
 /// has taken it to its own grey (luma ~0.108): Gates' golden straw. A green
@@ -196,8 +196,32 @@ pub fn ground(t: &TerrainDef, x: f32, z: f32) -> Option<f32> {
     })
 }
 
+/// The grass is patchy: its patches ([`patch`], metres across) bare the
+/// ground this far, in the splat and the tufts alike.
+const PATCH_BARE: f32 = 0.75;
+
+/// Where grass grows by height: none on the creek's floor, full from
+/// this height, and gone again above the next (the scree's top and the
+/// cliffs' ledges are bare).
+const GREEN_FROM: (f32, f32) = (1.0, 2.5);
+const GREEN_TO: (f32, f32) = (6.0, 10.0);
+
+/// How much grass the height `y` allows, 0..1.
+pub fn by_height(y: f32) -> f32 {
+    let up = ((y - GREEN_FROM.0) / (GREEN_FROM.1 - GREEN_FROM.0)).clamp(0.0, 1.0);
+    let down = 1.0 - ((y - GREEN_TO.0) / (GREEN_TO.1 - GREEN_TO.0)).clamp(0.0, 1.0);
+    up * down
+}
+
+/// How much grass grows at (x, z) at height `y`, by its height and its
+/// patch, 0..1: the splat's share (`level::ground_point`) and the tufts'.
+pub fn cover(x: f32, z: f32, y: f32) -> f32 {
+    by_height(y) * (1.0 - PATCH_BARE + PATCH_BARE * patch(x, z))
+}
+
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
-/// rule (level.rs): grass up the hills, none on steep rock or in the creek.
+/// rule (level.rs): grass up the hills, none on steep rock or in the creek,
+/// in patches.
 fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
@@ -206,7 +230,7 @@ fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     if slope > 0.55 || y < -0.12 {
         return None;
     }
-    let green = ((y - 1.0) / 1.5).clamp(0.0, 1.0);
+    let green = cover(x, z, y);
     Some((green, 0.07))
 }
 
@@ -338,7 +362,7 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: 
                     };
                     let Some(y) = ground(t, x, z) else { continue };
                     let h = TUFT_H * scale * (0.75 + 0.5 * hash01(cell, 4));
-                    soups[layer_of(hash01(cell, 6))].tuft(
+                    soups[layer_of(hash01(cell, 41))].tuft(
                         Vec3::new(x, y, z),
                         hash01(cell, 5) * core::f32::consts::TAU,
                         cell,
@@ -400,22 +424,16 @@ pub fn dress(
     }
 }
 
-/// Only the blocks near the eye are drawn, and only the layers the tier's
-/// cover draws (`quality::Cover`), out to its distance: the grass and the
-/// clutter alike. Past the distance the foliage shader has already sunk
-/// every piece (`foliage::FADE_END`), so a block is never seen going.
-pub fn cull(
-    eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
-    tier: Res<super::quality::Tier>,
-    mut blocks: Query<(&CoverBlock, &mut Visibility)>,
-) {
+/// Only the blocks near the eye are drawn, out to [`DRAW_M`] on every rung:
+/// the grass and the clutter alike. Past it the foliage shader has already
+/// sunk every piece (`foliage::FADE_END`), so a block is never seen going.
+pub fn cull(eye: Query<&GlobalTransform, With<super::rig::EyeCam>>, mut blocks: Query<(&CoverBlock, &mut Visibility)>) {
     let Ok(e) = eye.single() else {
         return;
     };
     let p = e.translation().xz();
-    let layers = tier.gfx.cover.layers();
     for (b, mut v) in blocks.iter_mut() {
-        let want = if b.layer < layers && b.centre.distance(p) < tier.gfx.cover_m + b.reach {
+        let want = if b.centre.distance(p) < DRAW_M + b.reach {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -438,11 +456,6 @@ mod tests {
         assert_eq!(layer_of(0.5), 1);
         assert_eq!(layer_of(0.8), 2);
         assert_eq!(layer_of(0.999_999), 2);
-        assert_eq!(
-            usize::from(crate::look::quality::Cover::High.layers()),
-            LAYER_SHARE.len(),
-            "HIGH draws every layer"
-        );
     }
 
     /// A tuft's roots are bedded (their normal the ground's to a degree),

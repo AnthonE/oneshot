@@ -3,10 +3,12 @@
 //! NOTICE): the model lifted and tinted by side, moving the way its
 //! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
 //! the spine back to the aim, the head on the aim's pitch, the feet planted,
-//! the hold on the arms), and the gun they hold in hand. A skin is a faint
-//! sheen of its trim and a band at the waist: the side's colour still
-//! carries the fighter, and no hitbox or visibility changes (DESIGN.md
-//! §15). Drawing only.
+//! the hold on the arms), and the gun they hold in hand. The wood is left
+//! its own colour; the side, the emblem and a skin's trim are sprayed on it
+//! (`paint.rs`): a headband in the side's colour, glowing a little so a
+//! fighter reads in shade, the emblem on the back, the trim a stripe round
+//! the waist. No hitbox or visibility changes (DESIGN.md §15). Drawing
+//! only.
 //!
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
@@ -22,6 +24,7 @@ use client_net::core::{Drawn, DrawnVehicle};
 
 use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
 use super::guns::{body_basis, gun, spawn_posed, Models};
+use super::paint::{BodyMaterial, Paint, Paints};
 use super::shield::{ShellPart, ShieldMaterial};
 
 /// Triple T faces +Z in its file; our bodies face +X.
@@ -32,13 +35,12 @@ const FACE: f32 = core::f32::consts::FRAC_PI_2;
 const HAND: Vec3 = Vec3::new(0.18, 1.18, 0.2);
 const HAND_CROUCHED_Y: f32 = 0.85;
 
-/// The albedo is very dark (Gates' MANIFEST: luma 0.056): this much lift,
-/// and this much of it toward the side's colour.
+/// The albedo is very dark (Gates' MANIFEST: luma 0.056): this much lift.
 const LIFT: f32 = 2.6;
-const TINT: f32 = 0.42;
-/// A faint glow of the side's colour, as a share of a white surface's
-/// brightness in full sun, so a fighter reads at a glance even in shade.
-const GLOW: f32 = 0.1;
+/// The headband's glow in the side's colour, as a share of a white
+/// surface's brightness in full sun, so a fighter reads at a glance even in
+/// shade.
+const GLOW: f32 = 0.12;
 
 /// Each skin's trim (`proto::SKINS` order); none for the standard look.
 const SKIN_TRIM: [Option<u32>; 6] = [
@@ -63,6 +65,7 @@ fn trim(skin: u8) -> Option<Color> {
 pub struct Body {
     team: u8,
     skin: u8,
+    emblem: proto::Emblem,
     /// Cast in the sun's shadow and drawn by no camera (`own_shadow.rs`):
     /// no shells, no band, and every mesh on the shadow's material.
     shadow: bool,
@@ -72,10 +75,9 @@ pub struct Body {
     player: Option<Entity>,
     hand: Entity,
     held: u8,
-    /// Its materials (its own: `dress` copies them per body), their glow
-    /// at rest, and the shield's flare last put on them.
-    mats: Vec<Handle<StandardMaterial>>,
-    glow: LinearRgba,
+    /// Its materials (its own: `dress` copies them per body) and the
+    /// shield's flare last put on them.
+    mats: Vec<Handle<BodyMaterial>>,
     lit: f32,
     /// The shield's shell (`shield.rs`): its material and its meshes.
     shell: Handle<ShieldMaterial>,
@@ -88,6 +90,14 @@ pub struct Body {
     /// Where its head is moved, metres in the model's frame
     /// (`own_shadow.rs`).
     head_push: Vec3,
+    /// Whose body it was last drawn as, alive or not, whether it was the
+    /// frame before (none the first frame it is drawn), and how it last
+    /// moved alive: for the rag doll (`rag.rs`).
+    slot: u8,
+    alive: bool,
+    was_alive: Option<bool>,
+    drawn: bool,
+    vel: Vec3,
 }
 
 impl Body {
@@ -101,6 +111,27 @@ impl Body {
     pub fn afresh(&mut self) {
         self.gait = Gait::default();
         self.fresh = true;
+        self.drawn = false;
+    }
+
+    /// Alive now, and the frame before (none: not drawn then).
+    pub fn life(&self) -> (bool, Option<bool>) {
+        (self.alive, self.was_alive)
+    }
+
+    /// The seat it was last drawn for.
+    pub fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    /// How it moved the last frame it was drawn alive, m/s.
+    pub fn last_vel(&self) -> Vec3 {
+        self.vel
+    }
+
+    /// Your own shadow (`own_shadow.rs`).
+    pub fn is_shadow(&self) -> bool {
+        self.shadow
     }
 
     /// Where its head is moved, metres in the model's frame.
@@ -115,39 +146,17 @@ pub fn model_rotation(yaw: f32) -> Quat {
     Quat::from_rotation_y(-yaw) * Quat::from_rotation_y(FACE)
 }
 
-/// A body spawned for `team` in `skin`: its root, which the caller places.
-pub fn spawn(
-    commands: &mut Commands,
-    models: &Models,
-    meshes: &mut Assets<Mesh>,
-    mats: &mut Assets<StandardMaterial>,
-    team: u8,
-    skin: u8,
-) -> Entity {
-    let root = spawn_as(commands, models, team, skin, false);
-    if let Some(c) = trim(skin) {
-        // The band at the waist, in the trim's colour.
-        commands.spawn((
-            Mesh3d(meshes.add(Torus::new(0.175, 0.225))),
-            MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: c,
-                perceptual_roughness: 0.4,
-                metallic: 0.5,
-                ..default()
-            })),
-            Transform::from_xyz(0.0, 1.0, 0.0),
-            ChildOf(root),
-        ));
-    }
-    root
+/// A body spawned for `team` in `look`: its root, which the caller places.
+pub fn spawn(commands: &mut Commands, models: &Models, team: u8, look: proto::Look) -> Entity {
+    spawn_as(commands, models, team, look, false)
 }
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
 pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
-    spawn_as(commands, models, team, 0, true)
+    spawn_as(commands, models, team, proto::Look::default(), true)
 }
 
-fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow: bool) -> Entity {
+fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
@@ -161,14 +170,14 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow
         .observe(dress);
     commands.entity(root).insert(Body {
         team,
-        skin,
+        skin: look.skin,
+        emblem: proto::emblem_valid(look.emblem),
         shadow,
         dressed: false,
         player: None,
         hand,
         held: 0,
         mats: Vec::new(),
-        glow: LinearRgba::BLACK,
         lit: 0.0,
         shell: Handle::default(),
         shells: Vec::new(),
@@ -176,6 +185,11 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow
         gait: Gait::default(),
         playing: Playing::default(),
         head_push: Vec3::ZERO,
+        slot: 0,
+        alive: true,
+        was_alive: None,
+        drawn: false,
+        vel: Vec3::ZERO,
     });
     root
 }
@@ -232,9 +246,10 @@ pub fn team_color(team: u8) -> Color {
     }
 }
 
-/// The scene is in: tint its materials by side, find its player and its
-/// spine, and give each of its meshes a shield shell beside it. Your own
-/// shadow's meshes take the shadow's material instead, and no shells.
+/// The scene is in: paint it (`paint.rs`: the side's headband, the emblem,
+/// the trim), find its player and its spine, and give each of its meshes a
+/// shield shell beside it. Your own shadow's meshes take the shadow's
+/// material instead, and no shells.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dress(
     ev: On<SceneInstanceReady>,
@@ -249,10 +264,11 @@ fn dress(
         &Transform,
     )>,
     (names, transforms): (Query<&Name>, Query<&Transform>),
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    (mats, mut body_mats): (Res<Assets<StandardMaterial>>, ResMut<Assets<BodyMaterial>>),
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
     shadow_mat: Option<Res<super::own_shadow::ShadowMat>>,
     warm: Query<(), With<super::prewarm::WarmBody>>,
+    (mut paints, mut images, mesh_assets): (ResMut<Paints>, ResMut<Assets<Image>>, Res<Assets<Mesh>>),
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -265,6 +281,13 @@ fn dress(
     commands
         .entity(root)
         .insert(anim::bind_spine(model, &names, &parents, &children, &transforms));
+    match super::rag::bind(model, &names, &parents, &children) {
+        Some(r) => {
+            commands.entity(root).insert(r);
+        }
+        None if !body.shadow => error!("rag: a bone is missing or moved in models/triple-t.glb: no rag doll"),
+        None => {}
+    }
     body.dressed = true;
     if body.shadow {
         let Some(shadow) = shadow_mat else {
@@ -290,22 +313,30 @@ fn dress(
     } else {
         Visibility::Hidden
     };
-    let tint = team_color(body.team).to_linear();
-    let base = LinearRgba::rgb(
-        LIFT * (1.0 - TINT) + tint.red * 3.0 * TINT,
-        LIFT * (1.0 - TINT) + tint.green * 3.0 * TINT,
-        LIFT * (1.0 - TINT) + tint.blue * 3.0 * TINT,
+    // The paint's mask, the body unrolled from its meshes the first time.
+    let model_meshes: Vec<&Mesh> = children
+        .iter_descendants(model)
+        .filter_map(|e| meshes.get(e).ok())
+        .filter_map(|(_, mesh, ..)| mesh_assets.get(&mesh.0))
+        .collect();
+    let mask = paints.mask(body.emblem, &model_meshes, &mut images);
+    let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let params = super::paint::params(
+        team_color(body.team).to_linear(),
+        body.emblem,
+        trim(body.skin).map(|c| c.to_linear()),
+        GLOW * sun,
+        GLOW * TRIM_GLOW * sun,
+        LIFT,
     );
-    let glow = GLOW * bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
     let shell = shield_mats.add(super::shield::material());
     body.shell = shell.clone();
-    let sheen = trim(body.skin).map_or(LinearRgba::BLACK, |c| c.to_linear() * TRIM_GLOW);
     for e in children.iter_descendants(model) {
         if players.contains(e) {
             body.player = Some(e);
         }
         if let Ok((m, mesh, skin, at)) = meshes.get(e) {
-            let Some(mut mat) = mats.get(&m.0).cloned() else {
+            let Some(mut base) = mats.get(&m.0).cloned() else {
                 continue;
             };
             if let Ok(&ChildOf(parent)) = parents.get(e) {
@@ -324,16 +355,24 @@ fn dress(
                 }
                 body.shells.push(s.id());
             }
-            mat.base_color = base.into();
-            mat.emissive = (tint + sheen) * glow;
+            base.base_color = LinearRgba::rgb(LIFT, LIFT, LIFT).into();
+            base.emissive = LinearRgba::BLACK;
             // In nits, under the camera's exposure like everything lit.
-            mat.emissive_exposure_weight = 1.0;
-            let h = mats.add(mat);
+            base.emissive_exposure_weight = 1.0;
+            let h = body_mats.add(BodyMaterial {
+                base,
+                extension: Paint {
+                    params,
+                    mask: mask.clone(),
+                },
+            });
             body.mats.push(h.clone());
-            commands.entity(e).insert((MeshMaterial3d(h), NoFrustumCulling));
+            commands
+                .entity(e)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert((MeshMaterial3d(h), NoFrustumCulling));
         }
     }
-    body.glow = (tint + sheen) * glow;
 }
 
 /// The light the shell casts on the body under it, gold, at a flare of 1:
@@ -346,7 +385,7 @@ pub fn flare(
     root: Entity,
     level: f32,
     bodies: &mut Query<&mut Body>,
-    mats: &mut Assets<StandardMaterial>,
+    mats: &mut Assets<BodyMaterial>,
     shield_mats: &mut Assets<ShieldMaterial>,
     shells: &mut Query<&mut Visibility, With<ShellPart>>,
 ) {
@@ -374,14 +413,10 @@ pub fn flare(
     }
     let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
     let k = level * sun;
-    let e = LinearRgba::rgb(
-        body.glow.red + FLARE_GOLD[0] * k,
-        body.glow.green + FLARE_GOLD[1] * k,
-        body.glow.blue + FLARE_GOLD[2] * k,
-    );
+    let e = LinearRgba::rgb(FLARE_GOLD[0] * k, FLARE_GOLD[1] * k, FLARE_GOLD[2] * k);
     for h in &body.mats {
         if let Some(m) = mats.get_mut(h) {
-            m.emissive = e;
+            m.base.emissive = e;
         }
     }
 }
@@ -403,6 +438,13 @@ pub fn pose(
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
     };
+    body.was_alive = body.drawn.then_some(body.alive);
+    body.drawn = true;
+    body.alive = d.alive;
+    body.slot = d.slot;
+    if d.alive {
+        body.vel = Vec3::new(d.vel.x, d.vel.y, d.vel.z);
+    }
     let driving = seat.is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
     // A driver faces the way the hull does.
     let yaw = match seat {
@@ -412,7 +454,14 @@ pub fn pose(
     if let Ok(mut t) = at.get_mut(root) {
         *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
     }
-    let hold = gun(d.arm).map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    // Every gun hangs at the same `HAND`, at the chest, where the long
+    // hold puts both hands. The pistol clip is Gates' first-person arms
+    // (hands up at the face): over a body it held nothing. A pistol's
+    // reload is still its own clip, and the gun goes with the hand while
+    // it plays (`pose_hands`).
+    let gun_of = gun(d.arm);
+    let hold = gun_of.map(|_| Hold::Long);
+    let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
     body.gait.observe(
         &Seen {
             alive: d.alive,
@@ -424,6 +473,9 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
+            reload: reload_clip
+                .filter(|_| d.reloading && !sim::arms::arm(d.arm).hot())
+                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0)),
         },
         dt,
     );
@@ -453,7 +505,7 @@ pub fn drive(
     mut commands: Commands,
     rig: Option<Res<anim::Rig>>,
     time: Res<Time>,
-    mut bodies: Query<(Entity, &mut Body)>,
+    mut bodies: Query<(Entity, &mut Body, Has<super::rag::Ragdoll>)>,
     mut players: Query<(
         &mut AnimationPlayer,
         Option<&mut AnimationTransitions>,
@@ -464,13 +516,20 @@ pub fn drive(
         return;
     };
     let dt = time.delta_secs();
-    for (e, mut body) in &mut bodies {
+    for (e, mut body, limp) in &mut bodies {
         let Some(p) = body.player else {
             continue;
         };
         let Ok((mut player, transitions, bound)) = players.get_mut(p) else {
             continue;
         };
+        // Limp, the rag doll poses it (`rag.rs`): no clip may.
+        if limp {
+            if player.playing_animations().next().is_some() {
+                player.stop_all();
+            }
+            continue;
+        }
         let Some(mut transitions) = transitions.filter(|_| bound) else {
             commands
                 .entity(p)
@@ -494,6 +553,30 @@ pub fn drive(
     }
 }
 
+/// While a body reloads, its gun goes with its right hand, by as much as the
+/// reload owns its arms: the hold's clips keep the hand at [`HAND`], a
+/// reload's take it to the magazine and back. Last frame's hand, so a frame
+/// behind, which a hand moving at a reload's pace never shows.
+pub fn pose_hands(
+    q: Query<(&Body, &super::rag::RagBones, &GlobalTransform), Without<super::rag::Ragdoll>>,
+    globals: Query<&GlobalTransform>,
+    mut at: Query<&mut Transform>,
+) {
+    for (b, bones, root) in &q {
+        let u = b.playing.reload_share();
+        if u <= 0.0 {
+            continue;
+        }
+        let Ok(hand) = globals.get(bones.right_hand()) else {
+            continue;
+        };
+        let there = root.affine().inverse().transform_point3(hand.translation());
+        if let Ok(mut t) = at.get_mut(b.hand) {
+            t.translation = t.translation.lerp(there, u);
+        }
+    }
+}
+
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
 pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {
@@ -502,6 +585,7 @@ pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut
             clip: b.gait.clip,
             pitch: b.gait.pitch,
             hip_yaw: b.gait.hip_yaw,
+            held: b.playing.held(),
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);

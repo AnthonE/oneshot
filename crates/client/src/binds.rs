@@ -33,9 +33,9 @@ pub fn normalize(k: KeyCode) -> KeyCode {
     }
 }
 
-/// Keys a player may not bind: Esc (the menu), and F11 and F12 (the
-/// browser's fullscreen and tools).
-pub const RESERVED: [KeyCode; 3] = [KeyCode::Escape, KeyCode::F11, KeyCode::F12];
+/// Keys a player may not bind: Esc (the menu), F9 (the clip, `clip.rs`),
+/// and F11 and F12 (fullscreen and the screenshot).
+pub const RESERVED: [KeyCode; 4] = [KeyCode::Escape, KeyCode::F9, KeyCode::F11, KeyCode::F12];
 
 /// The mouse buttons a bind may use. Left and right are not among them (see
 /// the module header).
@@ -440,7 +440,11 @@ impl Binds {
                     None => ok = false,
                 }
             }
-            if ok {
+            if !ok {
+                // A key this build doesn't know (a newer one's): the default
+                // here, and the line kept as it came until it's rebound.
+                other.push((action.clone(), value.clone()));
+            } else {
                 // Through `set`, so a file naming one key twice can't make
                 // it do two things.
                 for (i, b) in slots.into_iter().enumerate() {
@@ -514,6 +518,7 @@ mod tests {
         let (b, other) = Binds::from_lines(&lines);
         assert_eq!(b.slots(Action::Jump), Action::Jump.spec().default);
         assert_eq!(b.slots(Action::Reload), Action::Reload.spec().default);
-        assert_eq!(other, vec![("dance".to_string(), "KeyB".to_string())]);
+        let kept: Vec<&str> = other.iter().map(|(a, _)| a.as_str()).collect();
+        assert_eq!(kept, ["jump", "reload", "dance"], "kept to be written back");
     }
 }

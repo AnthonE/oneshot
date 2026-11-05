@@ -182,52 +182,43 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));
     t.sets.push(("panel", a, n));
     t.orm.push(("panel", o));
-    let (albedo, normal, orm, glow) = alien_images(PANEL_PX);
-    let (a, n, o, g) = (
-        images.add(albedo),
-        images.add(normal),
-        images.add(orm),
-        images.add(glow),
-    );
-    t.sets.push(("alien", a, n));
-    t.orm.push(("alien", o));
-    t.emissive.push(("alien", g));
-}
-
-/// The alien hull, ours and procedural: ribs that sweep and swell across
-/// the tile (a field of integer frequencies, so it repeats seamlessly),
-/// glossy on their crowns, and between some of them a vein that glows.
-/// Its colour drifts between violet and a sea blue; the look's tint
-/// shades it. Albedo, normal, occlusion-roughness-metal, and the glow's
-/// mask, each mipped.
-pub fn alien_images(n: usize) -> (Image, Image, Image, Image) {
-    use core::f32::consts::TAU;
-    let nf = n as f32;
-    // u, v in 0..1 across the tile: two broad ribs that sway a little,
-    // a slow swell across the plates between them, and one vein.
-    let sway = |u: f32, v: f32| 0.06 * (TAU * u).sin() + 0.025 * (TAU * (2.0 * u + v)).sin();
-    let rib = |u: f32, v: f32| -> f32 { (TAU * (2.0 * (v + sway(u, v)))).cos() };
-    let swell =
-        |u: f32, v: f32| -> f32 { 0.5 + 0.25 * (TAU * u).sin() * (TAU * v).cos() + 0.25 * (TAU * (u + 2.0 * v)).sin() };
-    let vein = |u: f32, v: f32| -> f32 { (TAU * (v + sway(u, v) * 1.5 + 0.25)).sin() };
-    let hue = |u: f32, v: f32| -> f32 { 0.5 + 0.5 * (TAU * (u + v)).sin() };
-    let smooth = |e0: f32, e1: f32, x: f32| {
-        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
-    };
-    let mut hs = vec![0f32; n * n];
-    let mut glow_l = vec![0f32; n * n];
-    for y in 0..n {
-        for x in 0..n {
-            let (u, v) = (x as f32 / nf, y as f32 / nf);
-            // A rib: raised, rounded, a fifth of the plate's width.
-            let r = smooth(0.55, 0.95, rib(u, v));
-            let g = vein(u, v);
-            let w = (1.0 - (g.abs() / 0.025).min(1.0)).powi(2);
-            hs[y * n + x] = 0.25 * swell(u, v) + 0.75 * r - 0.3 * w;
-            glow_l[y * n + x] = w;
+    // The ship's surfaces (`ship.rs`): the hull's plates, the deck's
+    // grating, the windows' honeycomb.
+    for (name, [albedo, normal, orm, glow], glows) in [
+        ("alien", super::ship::hull_images(super::ship::HULL_PX), true),
+        ("deck", super::ship::deck_images(PANEL_PX), false),
+        ("gold", super::ship::gold_images(PANEL_PX), true),
+    ] {
+        let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));
+        t.sets.push((name, a, n));
+        t.orm.push((name, o));
+        if glows {
+            t.emissive.push((name, images.add(glow)));
         }
     }
+}
+
+/// What one texel of a baked set is, besides its height: its colour
+/// (linear), occlusion, roughness, metal and glow.
+pub(crate) struct Texel {
+    pub albedo: [f32; 3],
+    pub ao: f32,
+    pub rough: f32,
+    pub metal: f32,
+    pub glow: f32,
+}
+
+/// A procedural set over a seamless n × n tile: `height` (0..1, for the
+/// normal map, its slope scaled by `k`) and `texel` (given the height)
+/// baked into albedo (sRGB), normal, occlusion-roughness-metal and the glow
+/// mask (sRGB), each with its mip chain.
+pub(crate) fn bake(
+    n: usize,
+    k: f32,
+    height: &dyn Fn(usize, usize) -> f32,
+    texel: &dyn Fn(usize, usize, f32) -> Texel,
+) -> [Image; 4] {
+    let hs: Vec<f32> = (0..n * n).map(|i| height(i % n, i / n)).collect();
     let h = |x: isize, y: isize| hs[(y.rem_euclid(n as isize) as usize) * n + x.rem_euclid(n as isize) as usize];
     let (mut albedo, mut normal, mut orm, mut glow) = (
         vec![0u8; n * n * 4],
@@ -235,14 +226,11 @@ pub fn alien_images(n: usize) -> (Image, Image, Image, Image) {
         vec![0u8; n * n * 4],
         vec![0u8; n * n * 4],
     );
-    let violet = Vec3::new(0.58, 0.5, 0.78);
-    let sea = Vec3::new(0.46, 0.56, 0.74);
     for y in 0..n {
         for x in 0..n {
             let i = (y * n + x) * 4;
             let hv = hs[y * n + x];
             let (xi, yi) = (x as isize, y as isize);
-            let k = 3.0;
             let nv = Vec3::new(
                 (h(xi - 1, yi) - h(xi + 1, yi)) * k,
                 (h(xi, yi - 1) - h(xi, yi + 1)) * k,
@@ -253,49 +241,59 @@ pub fn alien_images(n: usize) -> (Image, Image, Image, Image) {
                 normal[i + c] = ((v * 0.5 + 0.5) * 255.0).round() as u8;
             }
             normal[i + 3] = 255;
-            let (u, v) = (x as f32 / nf, y as f32 / nf);
-            let col = violet.lerp(sea, hue(u, v)) * (0.7 + 0.3 * hv.clamp(0.0, 1.0));
-            for (c, v) in [col.x, col.y, col.z].into_iter().enumerate() {
+            let t = texel(x, y, hv);
+            for (c, v) in t.albedo.into_iter().enumerate() {
                 albedo[i + c] = linear_to_srgb(v);
             }
             albedo[i + 3] = 255;
-            let hc = hv.clamp(0.0, 1.0);
-            orm[i] = ((0.6 + 0.4 * hc) * 255.0).round() as u8;
-            orm[i + 1] = ((0.42 - 0.17 * hc).clamp(0.0, 1.0) * 255.0).round() as u8;
-            orm[i + 2] = 255;
+            orm[i] = (t.ao.clamp(0.0, 1.0) * 255.0).round() as u8;
+            orm[i + 1] = (t.rough.clamp(0.0, 1.0) * 255.0).round() as u8;
+            orm[i + 2] = (t.metal.clamp(0.0, 1.0) * 255.0).round() as u8;
             orm[i + 3] = 255;
-            let g = linear_to_srgb(glow_l[y * n + x]);
+            let g = linear_to_srgb(t.glow);
             glow[i..i + 3].copy_from_slice(&[g, g, g]);
             glow[i + 3] = 255;
         }
     }
-    let image = |data: Vec<u8>, srgb: bool, normal: bool| {
-        let (all, levels) = chain(&data, n, n, srgb, normal);
-        let mut img = mipped(
-            Extent3d {
-                width: n as u32,
-                height: n as u32,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            all,
-            if srgb {
-                TextureFormat::Rgba8UnormSrgb
-            } else {
-                TextureFormat::Rgba8Unorm
-            },
-            RenderAssetUsages::RENDER_WORLD,
-        );
-        img.texture_descriptor.mip_level_count = levels;
-        img.sampler = ImageSampler::Descriptor(repeat());
-        img
-    };
-    (
-        image(albedo, true, false),
-        image(normal, false, true),
-        image(orm, false, false),
-        image(glow, true, false),
-    )
+    [
+        baked_image(albedo, n, true, false),
+        baked_image(normal, n, false, true),
+        baked_image(orm, n, false, false),
+        baked_image(glow, n, true, false),
+    ]
+}
+
+/// A square RGBA8 level 0 as a repeating, mipped image.
+pub(crate) fn baked_image(data: Vec<u8>, n: usize, srgb: bool, normal: bool) -> Image {
+    let (all, levels) = chain(&data, n, n, srgb, normal);
+    let mut img = mipped(
+        Extent3d {
+            width: n as u32,
+            height: n as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        all,
+        if srgb {
+            TextureFormat::Rgba8UnormSrgb
+        } else {
+            TextureFormat::Rgba8Unorm
+        },
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.texture_descriptor.mip_level_count = levels;
+    img.sampler = ImageSampler::Descriptor(repeat());
+    img
+}
+
+/// A hash in 0..1 of a lattice point and a key.
+pub(crate) fn hash2(x: usize, y: usize, k: u32) -> f32 {
+    let mut h =
+        (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ k.wrapping_mul(0xcb1a_b31f);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1_e995);
+    h ^= h >> 15;
+    (h & 0xffff) as f32 / 65535.0
 }
 
 /// The plating's texels a side; one tile is [`PANEL_PLATES`] plates square.
@@ -331,14 +329,7 @@ pub fn panel_images(n: usize) -> (Image, Image, Image) {
         }
         seam * inset + 0.25 * bolt
     };
-    let noise = |x: usize, y: usize, k: u32| -> f32 {
-        let mut h =
-            (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ k.wrapping_mul(0xcb1a_b31f);
-        h ^= h >> 13;
-        h = h.wrapping_mul(0x5bd1_e995);
-        h ^= h >> 15;
-        (h & 0xffff) as f32 / 65535.0
-    };
+    let noise = hash2;
     // Soft mottling: noise on a coarse lattice, bilinear.
     let mottle = |x: usize, y: usize| -> f32 {
         let cell = 32usize;
@@ -681,12 +672,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_alien_hull_tiles_and_glows_only_in_its_veins() {
-        let (a, _, _, g) = alien_images(64);
-        assert_eq!(a.texture_descriptor.mip_level_count, 7);
-        let g = g.data.unwrap();
-        let lit = (0..64 * 64).filter(|i| g[i * 4] > 128).count();
-        assert!(lit > 0 && lit < 64 * 64 / 4, "{lit} texels glow");
+    fn the_ships_surfaces_tile_and_glow_only_in_their_lights() {
+        // Each set, and how much of it may glow: the hull's seams a
+        // little, the windows' glass most of them, the deck nothing.
+        for (name, [a, _, _, g], most) in [
+            ("hull", crate::look::ship::hull_images(64), 0.25),
+            ("deck", crate::look::ship::deck_images(64), 0.0),
+            ("gold", crate::look::ship::gold_images(64), 0.9),
+        ] {
+            assert_eq!(a.texture_descriptor.mip_level_count, 7, "{name}");
+            let g = g.data.unwrap();
+            let lit = (0..64 * 64).filter(|i| g[i * 4] > 128).count() as f32 / (64.0 * 64.0);
+            if most > 0.0 {
+                assert!(lit > 0.0 && lit < most, "{name}: {lit} of it glows");
+            } else {
+                assert_eq!(lit, 0.0, "{name} glows");
+            }
+        }
     }
 
     #[test]

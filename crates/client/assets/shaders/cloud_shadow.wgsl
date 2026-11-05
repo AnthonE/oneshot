@@ -29,7 +29,8 @@
     pbr_functions::{calculate_diffuse_color, calculate_F0},
     lighting,
     lighting::LAYER_BASE,
-    shadows::fetch_directional_shadow,
+    shadows::{get_cascade_index, world_to_directional_light_local},
+    shadow_sampling::sample_shadow_map_hardware,
 }
 
 // Field for field `cloud_shadow::CloudShadowParams`.
@@ -60,19 +61,43 @@ struct CloudShadow {
     texels: array<vec4<u32>, 16>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(106) var<uniform> cloud: CloudShadow;
+// The ground's one uniform block, here so this file and `ground.wgsl` both
+// read it: under WebGL2 many devices' fragment shaders may read only twelve
+// (ANGLE on D3D11 and on Metal), and Bevy's view, mesh and material take
+// eleven.
+//
+// ⚠ This struct's field list and order must match `GroundParams` in
+// look/ground.rs exactly: a uniform whose two sides disagree about layout
+// binds fine and is garbage in every field after the first mismatch. A test
+// in ground.rs scrapes both. What each field holds is written there.
+struct GroundParams {
+    tile_m: vec4<f32>,
+    tint: array<vec4<f32>, 4>,
+    cliff: vec4<f32>,
+    wall: vec4<f32>,
+    wall_planes: vec4<f32>,
+    rock_a: vec4<f32>,
+    rock_b: vec4<f32>,
+    rock_c: vec4<f32>,
+    rock_d: vec4<f32>,
+    rock_e: vec4<f32>,
+    sea: vec4<f32>,
+    cloud: CloudShadow,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> ground: GroundParams;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 
 // Texel `i` of the field, wrapping, `0..=1`, out of the window.
 fn field_texel(i: vec2<i32>) -> f32 {
-    let n = i32(cloud.deck.w);
-    let o = vec2<i32>(cloud.window.xy);
+    let n = i32(ground.cloud.deck.w);
+    let o = vec2<i32>(ground.cloud.window.xy);
     // Unsigned before the wrap: under WebGL2 a `%` of a negative is
     // undefined. A thousand fields over is past any drift an hour makes.
     let k = vec2<u32>(i - o + vec2<i32>(n * 1024)) % vec2<u32>(u32(n));
     let l = min(k, vec2<u32>(15u));
-    let word = cloud.texels[l.y][l.x / 4u];
+    let word = ground.cloud.texels[l.y][l.x / 4u];
     return f32((word >> ((l.x % 4u) * 8u)) & 0xffu) / 255.0;
 }
 
@@ -81,7 +106,7 @@ fn field_texel(i: vec2<i32>) -> f32 {
 // level L is the box over 2^L of those, so its centre sits `fade.w` of its
 // own texel on.
 fn field_at(q: vec2<f32>) -> f32 {
-    let u = q * cloud.deck.z * cloud.deck.w - vec2(cloud.fade.w);
+    let u = q * ground.cloud.deck.z * ground.cloud.deck.w - vec2(ground.cloud.fade.w);
     let i = vec2<i32>(floor(u));
     let f = u - floor(u);
     let a = field_texel(i);
@@ -98,16 +123,37 @@ fn field_at(q: vec2<f32>) -> f32 {
 // rides the middle, so `p` reads it at its offset from there along the ray
 // to the sun, and the middle reads what `SkyField::cover_at` reads.
 fn sun_through(p: vec3<f32>, l: vec3<f32>, drift: vec2<f32>, fade: f32) -> f32 {
-    let up = max(cloud.deck.x - (p.y - cloud.at.y), 0.0);
-    let q = (p.xz - cloud.at.xz + l.xz * (up / max(l.y, cloud.fade.x))) * cloud.deck.y + drift;
-    let cover = clamp((field_at(q) - cloud.cover.z) / cloud.cover.w, 0.0, 1.0) * fade;
-    return 1.0 - cloud.fade.z * cover;
+    let up = max(ground.cloud.deck.x - (p.y - ground.cloud.at.y), 0.0);
+    let q = (p.xz - ground.cloud.at.xz + l.xz * (up / max(l.y, ground.cloud.fade.x))) * ground.cloud.deck.y + drift;
+    let cover = clamp((field_at(q) - ground.cloud.cover.z) / ground.cloud.cover.w, 0.0, 1.0) * fade;
+    return 1.0 - ground.cloud.fade.z * cover;
+}
+
+// The sun's shadow at `p` (facing `n`), one hardware-compared tap of the
+// cascade it falls in, with Bevy's own biases: what is added below is a
+// share of the sun, soft over tens of metres, so the main pass's filtered
+// edge needs no second filter, and a second filtered fetch (nine taps, two
+// cascades where they blend) over every stretch a cloud's shade lies on is
+// not worth it.
+fn sun_shadow_tap(sun: u32, p: vec4<f32>, n: vec3<f32>, view_z: f32) -> f32 {
+    let light = &lights.directional_lights[sun];
+    let cascade = get_cascade_index(sun, view_z);
+    if cascade >= (*light).num_cascades {
+        return 1.0;
+    }
+    let texel = (*light).cascades[cascade].texel_size;
+    let offset = (*light).shadow_normal_bias * texel * n + (*light).shadow_depth_bias * (*light).direction_to_light;
+    let ll = world_to_directional_light_local(sun, cascade, vec4(p.xyz + offset, p.w));
+    if ll.w == 0.0 {
+        return 1.0;
+    }
+    return sample_shadow_map_hardware(ll.xy, ll.z, i32((*light).depth_texture_base_index + cascade));
 }
 
 // The light to add to `apply_pbr_lighting`'s for the deck's shadows, before
 // exposure: zero where the point and the middle see the sun alike.
 fn cloud_shadow(in: PbrInput) -> vec3<f32> {
-    if cloud.cover.x <= 0.0 {
+    if ground.cloud.cover.x <= 0.0 {
         return vec3(0.0);
     }
     // Which directional light is the sun: the one pointing where the rig's
@@ -116,7 +162,7 @@ fn cloud_shadow(in: PbrInput) -> vec3<f32> {
     var sun = count;
     var best = 0.95;
     for (var i = 0u; i < count; i += 1u) {
-        let c = dot(lights.directional_lights[i].direction_to_light, cloud.sun.xyz);
+        let c = dot(lights.directional_lights[i].direction_to_light, ground.cloud.sun.xyz);
         if c > best {
             best = c;
             sun = i;
@@ -126,13 +172,13 @@ fn cloud_shadow(in: PbrInput) -> vec3<f32> {
         return vec3(0.0);
     }
     let l = lights.directional_lights[sun].direction_to_light;
-    let fade = clamp((l.y - cloud.fade.x) / cloud.fade.y, 0.0, 1.0);
+    let fade = clamp((l.y - ground.cloud.fade.x) / ground.cloud.fade.y, 0.0, 1.0);
     if fade <= 0.0 {
         return vec3(0.0);
     }
-    let drift = cloud.drift.xy + cloud.drift.zw * (globals.time - cloud.sun.w);
+    let drift = ground.cloud.drift.xy + ground.cloud.drift.zw * (globals.time - ground.cloud.sun.w);
     let here = sun_through(in.world_position.xyz, l, drift, fade);
-    let there = sun_through(cloud.at.xyz, l, drift, fade);
+    let there = sun_through(ground.cloud.at.xyz, l, drift, fade);
     // Under a step of the field's eight bits: nothing anyone sees, and the
     // second look at the sun below is not free.
     if abs(here - there) < 1.0 / 512.0 {
@@ -169,7 +215,7 @@ fn cloud_shadow(in: PbrInput) -> vec3<f32> {
             view.view_from_world[2].z,
             view.view_from_world[3].z
         ), in.world_position);
-        shadow = fetch_directional_shadow(sun, in.world_position, in.world_normal, view_z);
+        shadow = sun_shadow_tap(sun, in.world_position, in.world_normal, view_z);
     }
     // The rig lit this point as it lit the middle; this is the difference.
     return lighting::directional_light(sun, &li, true) * shadow * (here / there - 1.0);
@@ -178,7 +224,7 @@ fn cloud_shadow(in: PbrInput) -> vec3<f32> {
 // How wet the ground is at a surface facing `n`: the map's wet, on what
 // faces the sky.
 fn ground_wet(n: vec3<f32>) -> f32 {
-    return cloud.wet.x * clamp(n.y, 0.0, 1.0);
+    return ground.cloud.wet.x * clamp(n.y, 0.0, 1.0);
 }
 
 // Gates' `terrain_mesh::wetted`: darker, and more saturated about its own
@@ -189,9 +235,9 @@ fn wetted(c: vec3<f32>, wet: f32) -> vec3<f32> {
     }
     let luma = dot(c, LUMA);
     var value = 1.0;
-    if luma > cloud.wet.w {
-        value = max(1.0 - wet * (1.0 - cloud.wet.y), cloud.wet.w / luma);
+    if luma > ground.cloud.wet.w {
+        value = max(1.0 - wet * (1.0 - ground.cloud.wet.y), ground.cloud.wet.w / luma);
     }
-    let chroma = 1.0 + wet * cloud.wet.z;
+    let chroma = 1.0 + wet * ground.cloud.wet.z;
     return max((vec3(luma) + (c - vec3(luma)) * chroma) * value, vec3(0.0));
 }

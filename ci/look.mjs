@@ -36,7 +36,8 @@ for (const [i, q] of shots.entries()) {
   // Frames drawn: the models and textures load over the first few.
   await page.waitForFunction(() => (window.__oneshot?.frames ?? 0) > 20, null, { timeout: 120000 }).catch(() => console.error('art never drew'));
   await page.waitForTimeout(1500);
-  await page.screenshot({ path: `traces/${prefix}-${i}.png` });
+  // A ship's hall on SwiftShader draws a frame every couple of seconds.
+  await page.screenshot({ path: `traces/${prefix}-${i}.png`, timeout: 180000 });
   console.log(`traces/${prefix}-${i}.png  ${q}`);
   await page.close();
 }

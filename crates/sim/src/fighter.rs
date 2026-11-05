@@ -99,6 +99,10 @@ pub struct Fighter {
     /// takes: 0 frags, 1 stickies.
     pub stickies: u8,
     pub gren_kind: u8,
+    /// Carrying the enemy's flag (Capture the Flag): both hands on it, so
+    /// no gun fires and no grenade goes; a melee still swings. The world's
+    /// to set; its own tick reads it.
+    pub flag: bool,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -180,6 +184,7 @@ impl Fighter {
         self.gren_cool = 0;
         self.grenades = GREN_START;
         self.respawn = 0;
+        self.flag = false;
         self.ride = 0;
         self.lunge = 0;
         self.lunge_left = 0;
@@ -226,7 +231,7 @@ impl Fighter {
         if seat.is_none() {
             movement::step(&mut self.body, inp, map);
         }
-        let shoots = seat != Some(crate::vehicle::DRIVER);
+        let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag;
         let on_foot = seat.is_none();
 
         let mut spare = (0u8, 0u16);
@@ -304,7 +309,7 @@ impl Fighter {
         }
         // A throw takes the kind chosen, or the other if none of it is left;
         // never with a gun in each hand.
-        if on_foot && !self.dual() && pressed & GRENADE != 0 && self.gren_cool == 0 {
+        if on_foot && !self.flag && !self.dual() && pressed & GRENADE != 0 && self.gren_cool == 0 {
             let sticky = match self.gren_kind {
                 1 => self.stickies > 0 || self.grenades == 0,
                 _ => self.grenades == 0,
@@ -529,5 +534,9 @@ impl Thing for Fighter {
         h.u16(self.left_charge);
         h.u8(self.stickies);
         h.u8(self.gren_kind);
+        // Only while true, so a mode without flags hashes as it did.
+        if self.flag {
+            h.u8(0xF1);
+        }
     }
 }

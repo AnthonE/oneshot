@@ -38,7 +38,15 @@ async fn a_native_client_plays_the_bot() {
 
     // The native client the desktop build will use: client_net's session
     // on wtransport.
-    let hello = Session::hello("native", proto::Pass::NONE, proto::MODE_CASUAL, 2, 0);
+    // A skin a guest can't own, and an emblem anyone may wear.
+    let star = proto::emblem(1, 1, 3, 4);
+    let hello = Session::hello(
+        "native",
+        proto::Pass::NONE,
+        proto::MODE_CASUAL,
+        proto::Look { skin: 2, emblem: star },
+        0,
+    );
     let addr = format!("127.0.0.1:{}", h.addr.port());
     let mut c = NativeClient::connect(&addr, Some(h.cert_hash), hello).await.unwrap();
 
@@ -47,6 +55,7 @@ async fn a_native_client_plays_the_bot() {
     let mut bot_moved = false;
     let mut bot_start = None;
     let mut seats = 0;
+    let mut starred = false;
     while t0.elapsed() < Duration::from_secs(8) {
         frame.tick().await;
         let now = c.now_ms();
@@ -57,9 +66,12 @@ async fn a_native_client_plays_the_bot() {
             ..Input::default()
         });
         for m in c.messages() {
-            if let Msg::Seat { skin, .. } = m {
-                // A guest owns nothing: the skin asked for is not worn.
+            if let Msg::Seat { skin, emblem, bot, .. } = m {
+                // A guest owns nothing: the skin asked for is not worn; the
+                // free emblem is, and a bot wears none.
                 assert_eq!(skin, proto::SKIN_STANDARD);
+                assert_eq!(emblem, if bot { proto::EMBLEM_NONE } else { star });
+                starred |= !bot;
                 seats += 1;
             }
         }
@@ -70,6 +82,7 @@ async fn a_native_client_plays_the_bot() {
     }
     assert!(c.session.ready, "welcomed");
     assert!(seats >= 2, "told who sits where");
+    assert!(starred, "and the guest's emblem is worn");
     let s = c.session.core.stats;
     eprintln!("{s:?}");
     // 8 s at 64 a second, less the first moments.
@@ -109,6 +122,7 @@ async fn hello(
             pass: proto::Pass::NONE,
             mode,
             skin: 0,
+            emblem: 0,
             party: 0,
         },
         &mut f,
@@ -181,4 +195,89 @@ async fn gun_game_is_shared_and_bots_fill_the_rest() {
     };
     assert_ne!(salt_commit, c0);
     assert_eq!(rules.seats, 2);
+}
+
+/// Watching: a page plays free for all; a watcher asks for any public match
+/// and gets that one, as its player saw it, a casual match's delay late;
+/// a click follows the next seat; nobody watches a match they sit in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watcher_sees_a_live_match_late_and_follows_the_next_player() {
+    let h = server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: None,
+        ..server::Config::default()
+    })
+    .await
+    .unwrap();
+    let addr = format!("127.0.0.1:{}", h.addr.port());
+    let look = proto::Look::default();
+    // Nothing to watch yet.
+    let hello_watch = || Session::hello("eyes", proto::Pass::NONE, proto::MODE_WATCH, look, 0);
+    let mut early = NativeClient::connect(&addr, Some(h.cert_hash), hello_watch())
+        .await
+        .unwrap();
+    let t0 = Instant::now();
+    let mut refused = false;
+    while t0.elapsed() < Duration::from_secs(3) && !refused {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        early.update(Input::default());
+        refused = early.messages().iter().any(|m| {
+            matches!(
+                m,
+                Msg::Refuse {
+                    reason: proto::REFUSE_NOTHING_TO_WATCH
+                }
+            )
+        });
+    }
+    assert!(refused, "nothing to watch is said so");
+
+    let play = Session::hello("player", proto::Pass::NONE, proto::MODE_FFA, look, 0);
+    let mut p = NativeClient::connect(&addr, Some(h.cert_hash), play).await.unwrap();
+    let mut w = NativeClient::connect(&addr, Some(h.cert_hash), hello_watch())
+        .await
+        .unwrap();
+    assert!(w.session.watch, "a watch hello opens a watching session");
+    let delay = room::spectate::DELAY_CASUAL_MS as f64;
+    let t0 = Instant::now();
+    let mut frame = tokio::time::interval(Duration::from_millis(8));
+    let (mut first_snap_ms, mut follows, mut asked) = (None, Vec::new(), false);
+    let mut names = 0;
+    while t0.elapsed() < Duration::from_millis(delay as u64 + 6000) {
+        frame.tick().await;
+        p.update(Input {
+            mz: 127,
+            ..Input::default()
+        });
+        p.messages();
+        w.update(Input::default());
+        for m in w.messages() {
+            match m {
+                Msg::Follow { slot, .. } => follows.push(slot),
+                Msg::Seat { .. } => names += 1,
+                Msg::Refuse { reason } => panic!("refused: {reason}"),
+                _ => {}
+            }
+        }
+        if w.session.core.stats.snapshots > 0 && first_snap_ms.is_none() {
+            first_snap_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        // Shown for a while: follow the next player.
+        if !asked && first_snap_ms.is_some_and(|t| t0.elapsed().as_secs_f64() * 1000.0 > t + 2000.0) {
+            w.session.follow_next();
+            asked = true;
+        }
+    }
+    assert!(w.session.ready, "welcomed");
+    assert!(names >= 8, "every seat named: {names}");
+    let first = first_snap_ms.expect("snapshots came");
+    assert!(
+        first >= delay - 500.0,
+        "the first snapshot came {first} ms in, sooner than the delay"
+    );
+    assert!(follows.len() >= 2, "followed one seat, then the next: {follows:?}");
+    assert_ne!(follows[0], follows[1]);
+    assert_eq!(w.session.core.slot, follows[1]);
+    // Its own fighter is the one it follows, seated and drawn.
+    assert!(w.session.core.own().0.seated);
 }

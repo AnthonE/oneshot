@@ -174,9 +174,16 @@ pub struct Fx {
     pub shock: Option<Vec3>,
     /// Our own rounds drawn so far, by hand (`shots::own`).
     own_rounds: crate::look::viewmodel::Rounds,
+    /// Our own flash, by hand, until the frame's camera is placed
+    /// (`shots::muzzle`).
+    own_flash: [Option<shots::OwnFlash>; 2],
     /// Rounds of light flying last frame (`flying.rs`), to tell where one
     /// ended.
-    last_light: Vec<proto::ProjState>,
+    last_light: Vec<client_net::core::DrawnProj>,
+    /// Our own melee: its cooldown last frame, and where we looked as the
+    /// swing began, which the server's event comes back to a round trip
+    /// later (`bodies::swung`).
+    swing: (u16, Option<Vec3>),
 }
 
 impl Fx {
@@ -200,6 +207,20 @@ impl Fx {
         Vec3::new(r * a.cos(), z, r * a.sin())
     }
 
+    /// Our own fighter's melee cooldown this frame and where we look: a
+    /// swing starting (the cooldown rising) keeps that aim for its mark.
+    pub fn own_swing(&mut self, melee_cool: u16, aim: Vec3) {
+        if melee_cool > self.swing.0 {
+            self.swing.1 = Some(aim);
+        }
+        self.swing.0 = melee_cool;
+    }
+
+    /// The aim our own last swing began with, once (`bodies::swung`).
+    pub fn take_swing(&mut self) -> Option<Vec3> {
+        self.swing.1.take()
+    }
+
     /// Throws `n` of `layer` at `at` around `dir`, into the pool it draws in.
     pub fn emit(&mut self, layer: Layer, n: usize, at: Vec3, dir: Vec3, matter: Matter) {
         let pool = if layer.glow() { &mut self.glow } else { &mut self.soft };
@@ -214,9 +235,10 @@ impl Fx {
 
     /// What `weapon` striking `matter` at `at` throws, around `away` (the
     /// surface's normal, or back toward the shooter), thinned with distance:
-    /// its particles, its chips, a shield's blink. How much was thrown
+    /// its particles, its chips (landing on a floor at height `floor`,
+    /// `surface::floor_under`), a shield's blink. How much was thrown
     /// (`table::lod`), 0 past the range anything is.
-    pub fn impact(&mut self, weapon: Weapon, matter: Matter, at: Vec3, away: Vec3) -> f32 {
+    pub fn impact(&mut self, weapon: Weapon, matter: Matter, at: Vec3, away: Vec3, floor: f32) -> f32 {
         let def = table::effect(weapon, matter);
         let dist = at.distance(self.eye);
         let lod = if weapon == Weapon::Blast {
@@ -232,7 +254,7 @@ impl Fx {
         }
         let n = table::scaled(def.chips, lod);
         if n > 0 {
-            self.chips.throw(at, away, matter, n);
+            self.chips.throw(at, away, matter, n, floor);
         }
         if matter == Matter::Shield && lod > 0.0 {
             self.flash(at, ZAP_FLASH);
@@ -243,7 +265,13 @@ impl Fx {
     /// [`Fx::impact`] on the map's face `hit`, and the mark the blow leaves
     /// there (`marks.rs`).
     pub fn strike(&mut self, map: &Map, weapon: Weapon, matter: Matter, hit: &surface::Hit) {
-        let lod = self.impact(weapon, matter, hit.at, hit.normal);
+        let lod = self.impact(
+            weapon,
+            matter,
+            hit.at,
+            hit.normal,
+            surface::floor_under(map, hit.at, hit.normal),
+        );
         if lod <= 0.0 {
             return;
         }
@@ -256,7 +284,7 @@ impl Fx {
     /// and drops every blow, a splat behind it once a frame (a shotgun's
     /// pellets are a dozen blows).
     pub fn bleed(&mut self, map: &Map, slot: u8, weapon: Weapon, at: Vec3, dir: Vec3) {
-        let lod = self.impact(weapon, Matter::Flesh, at, -dir);
+        let lod = self.impact(weapon, Matter::Flesh, at, -dir, surface::floor_under(map, at, -dir));
         let bit = 1u64 << (slot % 64);
         if lod > 0.0 && self.bled & bit == 0 {
             self.bled |= bit;
@@ -383,7 +411,9 @@ pub fn setup(
         burning: [blast::Burn::default(); 4],
         shock: None,
         own_rounds: Default::default(),
+        own_flash: [None; 2],
         last_light: Vec::new(),
+        swing: (0, None),
     });
 }
 
@@ -495,14 +525,22 @@ fn hurt(fx: &mut Fx, scene: &Scene, e: &EventState, feet: Vec3) {
 pub fn draw(
     time: Res<Time>,
     mut fx: ResMut<Fx>,
-    cams: Query<&GlobalTransform, (With<crate::look::rig::EyeCam>, Without<FxMesh>)>,
+    cams: Query<(&GlobalTransform, &Transform), (With<crate::look::rig::EyeCam>, Without<FxMesh>, Without<FlashLight>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut q: Query<(&FxMesh, &mut Transform, &mut GlobalTransform), Without<FlashLight>>,
     mut lights: Query<(&FlashLight, &mut PointLight, &mut Transform, &mut Visibility), Without<FxMesh>>,
+    muzzles: Res<crate::look::viewmodel::ViewMuzzles>,
 ) {
     // A hitch must not fling everything a hundred metres.
     let dt = time.delta_secs().min(0.1);
     let fx = &mut *fx;
+    // Our own flash, off the camera as this frame places it (a root: its
+    // transform is this frame's, its global one last frame's) and the gun
+    // as this frame poses it (`draw_view` runs first).
+    match cams.single() {
+        Ok((_, placed)) => shots::muzzle(fx, placed, muzzles.0),
+        Err(_) => fx.own_flash = [None; 2],
+    }
     blast::burn(fx, dt);
     if let Some(mesh) = fx.marks.fade(dt).then(|| meshes.get_mut(fx.marks.mesh())).flatten() {
         fx.marks.write(mesh);
@@ -531,7 +569,7 @@ pub fn draw(
         *vis = Visibility::Visible;
     }
     // The camera this frame (ours is the only 3D one).
-    let Ok(cam_gt) = cams.single() else {
+    let Ok((cam_gt, _)) = cams.single() else {
         fx.glow.step(dt);
         fx.soft.step(dt);
         return;

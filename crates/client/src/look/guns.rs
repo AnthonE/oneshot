@@ -1,18 +1,28 @@
-//! The models: Triple T and the guns (`assets/models`, made from
-//! Gates' GLBs by `tools/glb`, through `tools/assets.mjs`), and how each gun is held, after
-//! the three.js page's `art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
+//! The models: Triple T (`assets/models`, from Gates' GLB by `tools/glb`,
+//! through `tools/assets.mjs`) and the guns, ours, each commissioned from
+//! Meshy and cut by a Blender script in `tools/models` (its numbers here
+//! are what `finish` printed: `traces/guns/<name>.json`),
+//! and how each gun is held, after the three.js page's `art.ts`'s `GUNS`.
 
 use bevy::prelude::*;
 use sim::arms;
 
 /// One gun's model and how it sits in a hand. Each model stands barrel up
-/// (+Y), top toward +Z, stock at y = 0.
+/// (+Y), top toward +Z, stock at y = 0; the axis it is held by (x = z = 0)
+/// runs just over the fist on its grip.
 pub struct Gun {
     pub file: &'static str,
     /// The model's length, stock to muzzle, in its own units.
     pub height: f32,
     /// Where the grip is, as a fraction of `height` from the stock.
     pub grip: f32,
+    /// The muzzle's height over the axis (the model's +Z), in its own units.
+    pub rise: f32,
+    /// A long gun's other hand: how far up the barrel from the grip (a share
+    /// of the barrel's length past it), and how far under the axis the
+    /// belly it cups is there.
+    pub fore: f32,
+    pub under: f32,
     pub scale: f32,
     /// A long gun (two hands) or a pistol.
     pub long: bool,
@@ -27,6 +37,9 @@ const fn g(
     file: &'static str,
     height: f32,
     grip: f32,
+    rise: f32,
+    fore: f32,
+    under: f32,
     scale: f32,
     long: bool,
     sound: &'static str,
@@ -38,6 +51,9 @@ const fn g(
         file,
         height,
         grip,
+        rise,
+        fore,
+        under,
         scale,
         long,
         sound,
@@ -53,9 +69,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::AR,
         g(
             "ar",
-            0.888,
-            0.32,
-            0.85,
+            0.78,
+            0.4487,
+            0.0397,
+            0.3721,
+            0.0516,
+            1.0,
             true,
             "shot_rifle",
             3,
@@ -67,9 +86,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::BR,
         g(
             "br",
-            0.957,
-            0.36,
-            0.85,
+            0.88,
+            0.2898,
+            0.0294,
+            0.6,
+            -0.0096,
+            1.0,
             true,
             "shot_heli",
             3,
@@ -81,8 +103,11 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::MAGNUM,
         g(
             "magnum",
-            0.325,
-            0.17,
+            0.305,
+            0.1705,
+            0.0404,
+            0.6,
+            -0.0044,
             1.0,
             false,
             "shot_gun",
@@ -95,9 +120,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SNIPER,
         g(
             "sniper",
-            1.09,
-            0.33,
-            0.8,
+            1.25,
+            0.24,
+            0.0446,
+            0.6,
+            0.0127,
+            0.72,
             true,
             "shot_bolt",
             3,
@@ -109,9 +137,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SHOTGUN,
         g(
             "shotgun",
-            0.949,
-            0.3,
-            0.85,
+            0.95,
+            0.2947,
+            0.0643,
+            0.6,
+            0.0109,
+            0.96,
             true,
             "shot_shotgun",
             3,
@@ -123,9 +154,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::ROCKET,
         g(
             "rocket-launcher",
-            1.058,
-            0.45,
-            0.8,
+            1.054,
+            0.4317,
+            0.104,
+            0.4541,
+            0.03,
+            0.96,
             true,
             "shot_rocket",
             3,
@@ -137,9 +171,12 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SMG,
         g(
             "smg",
-            0.621,
-            0.42,
-            0.9,
+            0.55,
+            0.4182,
+            0.0471,
+            0.6,
+            0.0128,
+            1.0,
             true,
             "shot_smg",
             3,
@@ -147,14 +184,17 @@ pub const GUNS: [(u8, Gun); 15] = [
             "reload_rifle_0",
         ),
     ),
-    // The rest borrow the nearest model until they have their own; their
-    // sounds are ours (tools/sfx.mjs).
+    // The ship's line (`tools/models`: the Veil guns), each with its own
+    // model; their sounds are ours (tools/sfx.mjs).
     (
         arms::SWORD,
         g(
-            "magnum",
-            0.325,
-            0.17,
+            "sword",
+            1.01,
+            0.2475,
+            -0.0529,
+            0.6,
+            0.1617,
             1.0,
             false,
             "sword_swing",
@@ -166,10 +206,13 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::CARBINE,
         g(
-            "br",
-            0.957,
-            0.36,
-            0.85,
+            "carbine",
+            0.954,
+            0.304,
+            0.0498,
+            0.6,
+            0.0736,
+            1.0,
             true,
             "shot_carbine",
             3,
@@ -180,10 +223,13 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::BEAM_RIFLE,
         g(
-            "sniper",
-            1.09,
-            0.33,
-            0.8,
+            "beam-rifle",
+            1.3,
+            0.4,
+            0.073,
+            0.6,
+            -0.0212,
+            0.82,
             true,
             "shot_beam",
             3,
@@ -193,14 +239,30 @@ pub const GUNS: [(u8, Gun); 15] = [
     ),
     (
         arms::ION_RIFLE,
-        g("smg", 0.621, 0.42, 0.9, true, "shot_ion", 3, "shot_ion_far", "vent_0"),
+        g(
+            "ion-rifle",
+            0.616,
+            0.3701,
+            0.0547,
+            0.6,
+            0.0329,
+            1.0,
+            true,
+            "shot_ion",
+            3,
+            "shot_ion_far",
+            "vent_0",
+        ),
     ),
     (
         arms::ION_PISTOL,
         g(
-            "magnum",
-            0.325,
-            0.17,
+            "ion-pistol",
+            0.366,
+            0.123,
+            0.0312,
+            0.6,
+            0.0284,
             1.0,
             false,
             "shot_ionp",
@@ -212,10 +274,13 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::SHARDS,
         g(
-            "smg",
-            0.621,
-            0.42,
-            0.9,
+            "shards",
+            0.577,
+            0.5806,
+            0.0327,
+            0.6,
+            0.0291,
+            1.0,
             true,
             "shot_shards",
             3,
@@ -226,10 +291,13 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::LAUNCHER,
         g(
-            "shotgun",
-            0.949,
-            0.3,
-            0.85,
+            "launcher",
+            0.905,
+            0.3503,
+            0.0882,
+            0.4133,
+            0.0563,
+            1.0,
             true,
             "shot_launcher",
             3,
@@ -240,10 +308,13 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::CANNON,
         g(
-            "rocket-launcher",
-            1.058,
-            0.45,
-            0.8,
+            "cannon",
+            1.25,
+            0.44,
+            0.1085,
+            0.4143,
+            0.03,
+            0.84,
             true,
             "shot_cannon",
             3,
@@ -277,6 +348,8 @@ pub struct Models {
     pub guns: Vec<Option<Handle<Scene>>>,
     pub rocket: Handle<Scene>,
     pub frag: Handle<Scene>,
+    /// A vehicle's hull (`look/truck.rs`).
+    pub truck: Handle<Scene>,
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -291,6 +364,7 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         guns,
         rocket: scene("rocket"),
         frag: scene("frag"),
+        truck: scene("truck"),
     });
 }
 
@@ -330,7 +404,7 @@ pub fn spawn_posed(
         .id();
     commands.spawn((
         Muzzle,
-        Transform::from_xyz(0.0, g.height * (1.0 - g.grip), 0.0),
+        Transform::from_xyz(0.0, g.height * (1.0 - g.grip), g.rise),
         Visibility::default(),
         ChildOf(scaler),
     ));

@@ -56,7 +56,7 @@ fn playout_and_the_total_are_capped() {
 #[test]
 fn a_client_cannot_step_faster_than_the_server() {
     let mut room = Room::new(Map::proving_grounds(), Rules::duel(), 1, (1, 2));
-    let (slot, _) = room.join(Name::new("speed"), 0).unwrap();
+    let (slot, _) = room.join(Name::new("speed"), proto::Look::default()).unwrap();
     // Two seconds of frames at once: the server still runs one a tick and
     // keeps at most a few waiting.
     let mut m = InputMsg {

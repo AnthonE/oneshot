@@ -33,7 +33,11 @@ pub fn parse(text: &str) -> Doc {
         ..Doc::default()
     };
     for line in text.lines() {
-        let line = line.split('#').next().unwrap_or("");
+        // A comment is a whole line: a value may hold a `#` (written back
+        // as it came).
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
         let Some((k, v)) = line.split_once('=') else {
             continue;
         };
@@ -74,7 +78,9 @@ pub fn save(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    let tmp = path.with_extension("toml.tmp");
+    // This process's own: two clients writing at once can't truncate each
+    // other's temporary file.
+    let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
     std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -136,8 +142,8 @@ mod tests {
 
     #[test]
     fn a_garbled_file_is_nothing_and_comments_go() {
-        let doc = parse("\u{0}\u{1}garbage\n= no key\nnot a line\n# x = 1\n fov = 90 # wide\n");
-        assert_eq!(doc.pairs, pairs(&[("fov", "90")]));
+        let doc = parse("\u{0}\u{1}garbage\n= no key\nnot a line\n# x = 1\n fov = 90\nnote = a#b\n");
+        assert_eq!(doc.pairs, pairs(&[("fov", "90"), ("note", "a#b")]));
         assert!(doc.binds.is_empty());
     }
 
@@ -163,7 +169,7 @@ mod tests {
         let text = serialize(1, &pairs(&[("fov", "100")]), &[]);
         save(&path, &text).unwrap();
         assert_eq!(read(&path).as_deref(), Some(text.as_str()));
-        assert!(!path.with_extension("toml.tmp").exists());
+        assert!(!path.with_extension(format!("toml.{}.tmp", std::process::id())).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

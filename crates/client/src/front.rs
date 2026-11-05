@@ -23,8 +23,10 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use crate::door::{self, Ask, Door, News, SignIn};
+use crate::party::{self, Do, Friend, Mic, PartyAsks, PartyView, TalkLight};
 use crate::settings::{Player, NAME_MAX};
 use crate::{hud, link, ui, LinkRes, Screen};
+use proto::party as pp;
 
 /// How the app starts: no title (a picture), the title, or straight into a
 /// mode (the autopilot, the effects demo).
@@ -89,7 +91,7 @@ struct Mode {
     tag: &'static str,
 }
 
-const MODES: [Mode; 7] = [
+const MODES: [Mode; 9] = [
     Mode {
         id: proto::MODE_CASUAL,
         name: "VS THE BOT",
@@ -121,6 +123,23 @@ const MODES: [Mode; 7] = [
         about: "Team Slayer on terrain, with vehicles. Bots fill the empty seats.",
         ranked: false,
         tag: "mode6",
+    },
+    Mode {
+        id: proto::MODE_CTF,
+        name: "CAPTURE THE FLAG",
+        short: "4V4 · FLAGS",
+        about:
+            "Take their flag and bring it to yours while yours is home. First to 3 captures. Bots fill the empty seats.",
+        ranked: false,
+        tag: "mode8",
+    },
+    Mode {
+        id: proto::MODE_WATCH,
+        name: "WATCH",
+        short: "A LIVE MATCH",
+        about: "Watch a live match through one of its players' eyes, a little behind. Click for the next player.",
+        ranked: false,
+        tag: "mode9",
     },
     Mode {
         id: proto::MODE_DUEL,
@@ -157,9 +176,25 @@ pub(crate) fn mode_name(id: u8) -> &'static str {
     mode(id).name
 }
 
+/// What the panel beside the nav shows: what to play, the party, friends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Tab {
+    #[default]
+    Play,
+    Party,
+    Friends,
+    Challenges,
+}
+
 /// The title's own state.
 #[derive(Resource)]
 pub(crate) struct Front {
+    /// The panel beside the nav.
+    tab: Tab,
+    /// The party's state as last drawn (`PartyView::gen`).
+    drawn_party: u32,
+    /// The challenges as last drawn (`Challenges::gen`).
+    drawn_challenges: u32,
     /// The mode PLAY asks for.
     pub(crate) mode: u8,
     /// The line over PLAY: what the stream said, or why we're back.
@@ -178,6 +213,8 @@ pub(crate) struct Front {
     join: Option<u8>,
     /// When PLAY last knocked (s).
     knocked_at: f32,
+    /// How far the PLAY panel's rows are scrolled (px), kept over rebuilds.
+    scroll: f32,
 }
 
 impl Front {
@@ -191,39 +228,24 @@ impl Front {
 #[derive(Default)]
 struct Knocking(Option<door::Knock>);
 
-/// In a browser the page's menu is the title (`Opts::page`, `web/menu.js`):
-/// none is drawn here, only its backdrop, and the page asks the door for a
-/// match ([`PageCmd`]) and reads how it goes ([`PageState`]).
-#[derive(Resource, Default)]
-pub struct PageMenu(pub bool);
-
-/// What the page's menu asks for.
+/// What the party asks of the door (`party.rs`): a match its leader
+/// started, joined as one of it.
 pub enum PageCmd {
-    /// A match, as the page's menu picked it (name, pass or ticket, mode,
-    /// skin, party).
+    /// A match (name, pass or ticket, mode, skin, party).
     Knock(Ask),
-    /// Stop waiting (the queue, a cup).
-    Cancel,
-    /// Leave the match.
-    Leave,
 }
 
 thread_local! {
-    /// The page's asks, taken each frame by `page_cmds`.
+    /// The party's asks, taken each frame by `page_cmds`.
     pub static PAGE: std::cell::RefCell<Vec<PageCmd>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// What the page's menu reads: the line, whether it went wrong, and whether
-/// a knock is out.
-#[derive(Resource, Default)]
-pub struct PageState {
-    pub status: String,
-    pub bad: bool,
-    pub knocking: bool,
 }
 
 #[derive(Component)]
 struct TitleRoot;
+
+/// The PLAY panel's rows, over PLAY: they scroll.
+#[derive(Component)]
+struct Rows;
 
 /// Over the backdrop until its level is there (`loading::Settle`).
 #[derive(Component)]
@@ -240,9 +262,35 @@ enum Hit {
     Quit,
     Mode(u8),
     Skin(i32),
+    /// A part of the emblem (`EMBLEM_PARTS`), one step either way.
+    Emblem(usize, i32),
     Name,
     SignIn,
     Go,
+    Tab(Tab),
+    /// The party: hand the lead to, remove, mute a member (by tag).
+    Lead(u8),
+    Kick(u8),
+    Mute(u8),
+    /// Who may join, a step either way.
+    Privacy(i8),
+    CopyLink,
+    Leave,
+    Alone,
+    /// The party's own room: map (0), score to win (1) or clock (2), a
+    /// step either way.
+    Custom(u8, i8),
+    Mic,
+    TalkMode,
+    /// Friends: join their party (its code), watch their match (the same
+    /// code), invite them (their row).
+    Join(u32),
+    Watch(u32),
+    Invite(u8),
+    Friends,
+    /// The invite on the title: join, or not now.
+    InviteJoin,
+    InviteDismiss,
 }
 
 /// The title on `app`, from `door`, starting as `start` says.
@@ -266,27 +314,52 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
                 _ => None,
             },
             knocked_at: 0.0,
+            scroll: 0.0,
+            tab: Tab::Play,
+            drawn_party: u32::MAX,
+            drawn_challenges: u32::MAX,
         })
         .init_resource::<InMatch>()
         .init_resource::<Leaving>()
         .init_resource::<LinkGen>()
-        .init_resource::<PageMenu>()
-        .init_resource::<PageState>()
         .add_systems(OnEnter(Screen::Title), enter)
         .add_systems(OnExit(Screen::Title), exit)
         .add_systems(
             Update,
-            (click, typing, rebuild, curtain)
+            (click, typing, scroll, rebuild, curtain)
                 .chain()
                 .run_if(in_state(Screen::Title)),
         )
-        .add_systems(Update, (page_cmds, join, poll, ended, page_state, hud_shown).chain())
+        .add_systems(Update, (page_cmds, join, poll, ended, hud_shown).chain())
         .add_systems(Update, fly.after(crate::view));
 }
 
 fn enter(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut front: ResMut<Front>) {
     crate::pause::free(&mut cursor);
     front.dirty = true;
+}
+
+/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane).
+fn scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut rows: Query<&mut ScrollPosition, With<Rows>>,
+    mut front: ResMut<Front>,
+) {
+    use bevy::input::mouse::MouseScrollUnit;
+    let dy: f32 = wheel
+        .read()
+        .map(|w| match w.unit {
+            MouseScrollUnit::Line => w.y * 32.0,
+            MouseScrollUnit::Pixel => w.y,
+        })
+        .sum();
+    if dy == 0.0 {
+        return;
+    }
+    for mut r in &mut rows {
+        r.y = (r.y - dy).max(0.0);
+        front.scroll = r.y;
+    }
 }
 
 fn exit(mut commands: Commands, roots: Query<Entity, With<TitleRoot>>, mut front: ResMut<Front>) {
@@ -299,6 +372,7 @@ fn exit(mut commands: Commands, roots: Query<Entity, With<TitleRoot>>, mut front
 /// The gutter either side of the shell.
 const GUT: f32 = 40.0;
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     commands: &mut Commands,
     front: &Front,
@@ -306,6 +380,8 @@ fn build(
     door: &Door,
     knocking: bool,
     portrait: Option<&crate::look::portrait::Portrait>,
+    party: &PartyView,
+    challenges: &crate::challenges::Challenges,
 ) {
     let signin = door.signin();
     commands
@@ -344,10 +420,18 @@ fn build(
                 ..default()
             })
             .with_children(|body| {
-                nav(body, door.quits());
-                panel(body, front, player, &signin, knocking);
+                nav(body, door.quits(), front.tab, party);
+                match front.tab {
+                    Tab::Play => panel(body, front, player, &signin, knocking, party),
+                    Tab::Party => party_panel(body, party),
+                    Tab::Friends => friends_panel(body, party, &signin),
+                    Tab::Challenges => challenges_panel(body, challenges, &signin),
+                }
                 stage(body, front.mode, portrait);
             });
+            if let Some((from, _)) = &party.invite {
+                invite_card(root, from);
+            }
             // The foot.
             root.spawn(Node {
                 flex_direction: FlexDirection::Row,
@@ -406,7 +490,7 @@ fn account(top: &mut ChildSpawnerCommands, signin: &SignIn) {
     });
 }
 
-fn nav(body: &mut ChildSpawnerCommands, quits: bool) {
+fn nav(body: &mut ChildSpawnerCommands, quits: bool, tab: Tab, party: &PartyView) {
     body.spawn(Node {
         width: Val::Px(230.0),
         flex_shrink: 0.0,
@@ -415,7 +499,36 @@ fn nav(body: &mut ChildSpawnerCommands, quits: bool) {
         ..default()
     })
     .with_children(|n| {
-        n.spawn((ui::nav_item("PLAY", true, 26.0), Tag("nav-play")));
+        n.spawn((
+            ui::nav_item("PLAY", tab == Tab::Play, 26.0),
+            Hit::Tab(Tab::Play),
+            Tag("nav-play"),
+        ));
+        let size = party.size();
+        let party_word = if size > 1 {
+            format!("PARTY {size}")
+        } else {
+            "PARTY".into()
+        };
+        n.spawn((
+            ui::nav_item(&party_word, tab == Tab::Party, 26.0),
+            Hit::Tab(Tab::Party),
+            Tag("nav-party"),
+        ));
+        n.spawn((
+            ui::nav_item("FRIENDS", tab == Tab::Friends, 26.0),
+            Hit::Tab(Tab::Friends),
+            Tag("nav-friends"),
+        ));
+        n.spawn((
+            ui::nav_item("CHALLENGES", tab == Tab::Challenges, 26.0),
+            Hit::Tab(Tab::Challenges),
+            Tag("nav-challenges"),
+        ));
+        n.spawn(Node {
+            height: Val::Px(12.0),
+            ..default()
+        });
         n.spawn((ui::nav_item("OPTIONS", false, 26.0), Hit::Options, Tag("nav-options")));
         n.spawn((
             ui::nav_item("CONTROLS", false, 26.0),
@@ -432,81 +545,140 @@ fn nav(body: &mut ChildSpawnerCommands, quits: bool) {
     });
 }
 
-fn panel(body: &mut ChildSpawnerCommands, front: &Front, player: &Player, signin: &SignIn, knocking: bool) {
-    body.spawn(ui::panel(380.0)).with_children(|p| {
-        p.spawn(ui::group("WHO"));
-        // The name: a field that takes the keys when clicked.
-        let edge = if front.editing { ui::ACCENT_HOVER } else { ui::RULE_HI };
-        p.spawn((
-            Button,
-            Hit::Name,
-            Tag("name"),
-            Node {
-                height: Val::Px(32.0),
-                padding: UiRect::horizontal(Val::Px(10.0)),
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                flex_shrink: 0.0,
-                border_radius: BorderRadius::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(ui::WELL),
-            BorderColor::all(edge),
-        ))
-        .with_child((
-            NameText,
-            ui::strong(
-                name_shown(player, front.editing, true),
-                15.0,
-                name_color(player, front.editing),
-            ),
-        ));
-        // The skin: worn if the wallet owns it.
-        p.spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(8.0),
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|r| {
-            r.spawn(ui::strong("SKIN", 12.0, ui::FAINT));
-            r.spawn(ui::label("if your wallet owns it", 11.0, ui::FAINT));
-            r.spawn(Node {
-                flex_grow: 1.0,
-                ..default()
+fn panel(
+    body: &mut ChildSpawnerCommands,
+    front: &Front,
+    player: &Player,
+    signin: &SignIn,
+    knocking: bool,
+    party: &PartyView,
+) {
+    body.spawn(ui::panel(380.0)).with_children(|panel| {
+        // The rows scroll under the wheel when the panel can't hold them
+        // (an emblem's four rows); PLAY stays at its foot.
+        panel
+            .spawn((
+                Rows,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(7.0),
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                ScrollPosition(Vec2::new(0.0, front.scroll)),
+            ))
+            .with_children(|p| {
+                p.spawn(ui::group("WHO"));
+                // The name: a field that takes the keys when clicked.
+                let edge = if front.editing { ui::ACCENT_HOVER } else { ui::RULE_HI };
+                p.spawn((
+                    Button,
+                    Hit::Name,
+                    Tag("name"),
+                    Node {
+                        height: Val::Px(32.0),
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        flex_shrink: 0.0,
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(ui::WELL),
+                    BorderColor::all(edge),
+                ))
+                .with_child((
+                    NameText,
+                    ui::strong(
+                        name_shown(player, front.editing, true),
+                        15.0,
+                        name_color(player, front.editing),
+                    ),
+                ));
+                // The skin: worn if the wallet owns it and its floor is at the line.
+                p.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .with_children(|r| {
+                    r.spawn(ui::strong("SKIN", 12.0, ui::FAINT));
+                    r.spawn(ui::label("if your wallet owns it", 11.0, ui::FAINT));
+                    r.spawn(Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    });
+                    r.spawn((ui::stepper(), Hit::Skin(-1)))
+                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                    r.spawn(Node {
+                        width: Val::Px(96.0),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child(ui::strong(skin_name(player.skin), 14.0, ui::TEXT_COLOR));
+                    r.spawn((ui::stepper(), Hit::Skin(1)))
+                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                });
+                // The emblem on the back: a glyph, the shape behind it, their colours.
+                let parts = proto::emblem_parts(player.emblem);
+                for (k, (label, hint)) in EMBLEM_PARTS.iter().enumerate() {
+                    if k > 0 && parts.0 == 0 {
+                        break;
+                    }
+                    p.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        r.spawn(ui::strong(*label, 12.0, ui::FAINT));
+                        r.spawn(ui::label(*hint, 11.0, ui::FAINT));
+                        r.spawn(Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        });
+                        r.spawn((ui::stepper(), Hit::Emblem(k, -1)))
+                            .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                        r.spawn(Node {
+                            width: Val::Px(96.0),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        })
+                        .with_child(ui::strong(
+                            emblem_part_name(k, parts),
+                            14.0,
+                            ui::TEXT_COLOR,
+                        ));
+                        r.spawn((ui::stepper(), Hit::Emblem(k, 1)))
+                            .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                    });
+                }
+
+                p.spawn(ui::group("CASUAL"));
+                for m in MODES.iter().filter(|m| !m.ranked) {
+                    mode_row(p, m, front.mode == m.id, true);
+                }
+                p.spawn(ui::group("RANKED"));
+                let open = signin.ranked();
+                if !open {
+                    let why = match signin {
+                        SignIn::Off(why) => why.clone(),
+                        SignIn::In(_) => "Link a wallet on Elo Pros to play ranked.".into(),
+                        _ => "Sign in with Elo Pros, a wallet linked, to play ranked.".into(),
+                    };
+                    p.spawn(ui::label(why, 12.0, ui::FAINT));
+                }
+                for m in MODES.iter().filter(|m| m.ranked) {
+                    mode_row(p, m, front.mode == m.id, open);
+                }
             });
-            r.spawn((ui::stepper(), Hit::Skin(-1)))
-                .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
-            r.spawn(Node {
-                width: Val::Px(96.0),
-                justify_content: JustifyContent::Center,
-                ..default()
-            })
-            .with_child(ui::strong(skin_name(player.skin), 14.0, ui::TEXT_COLOR));
-            r.spawn((ui::stepper(), Hit::Skin(1)))
-                .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
-        });
-
-        p.spawn(ui::group("CASUAL"));
-        for m in MODES.iter().filter(|m| !m.ranked) {
-            mode_row(p, m, front.mode == m.id, true);
-        }
-        p.spawn(ui::group("RANKED"));
-        let open = signin.ranked();
-        if !open {
-            let why = match signin {
-                SignIn::Off(why) => why.clone(),
-                SignIn::In(_) => "Link a wallet on Elo Pros to play ranked.".into(),
-                _ => "Sign in with Elo Pros, a wallet linked, to play ranked.".into(),
-            };
-            p.spawn(ui::label(why, 12.0, ui::FAINT));
-        }
-        for m in MODES.iter().filter(|m| m.ranked) {
-            mode_row(p, m, front.mode == m.id, open);
-        }
-
-        p.spawn(ui::spacer());
+        let p = panel;
         p.spawn((
             ui::label(front.status.clone(), 13.5, if front.bad { ui::BAD } else { ui::DIM }),
             Node {
@@ -516,16 +688,491 @@ fn panel(body: &mut ChildSpawnerCommands, front: &Front, player: &Player, signin
             },
         ));
         let m = mode(front.mode);
-        let ready = !knocking;
+        // In a party the leader's PLAY is everyone's.
+        let size = party.size();
+        let waiting = size > 1 && !party.leads();
+        let ready = !knocking && !waiting;
         let ink = ui::go_ink(ready);
         let (word, sub) = if knocking {
             ("CANCEL".to_string(), "STOP LOOKING FOR A MATCH".to_string())
+        } else if waiting {
+            let who = party
+                .leader()
+                .map_or("THE LEADER".into(), |l| l.name.as_str().to_uppercase());
+            ("WAITING".to_string(), format!("{who} PICKS THE GAME"))
+        } else if size > 1 || party.alone {
+            ("PLAY".to_string(), format!("PARTY OF {size} · {}", m.name))
         } else {
             ("PLAY".to_string(), format!("{} · {}", m.name, m.short))
         };
         p.spawn((ui::go(ready), Hit::Go, Tag("go"))).with_children(|g| {
             g.spawn(ui::strong(word, 28.0, ink));
             g.spawn(ui::strong(sub, 11.0, ink.with_alpha(0.72)));
+        });
+    });
+}
+
+/// A small button in a row: a member's LEAD or MUTE, a friend's JOIN.
+fn chip(width: f32) -> impl Bundle {
+    (
+        Button,
+        Node {
+            width: Val::Px(width),
+            height: Val::Px(22.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            flex_shrink: 0.0,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(ui::ROW_IDLE),
+        BorderColor::all(ui::RULE),
+        ui::Hover::default(),
+    )
+}
+
+fn chip_label(s: &str) -> impl Bundle {
+    ui::strong(s.to_string(), 11.0, ui::TEXT_COLOR)
+}
+
+/// One line of a list: a light, a name, what they're doing, its buttons.
+fn line_row() -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            height: Val::Px(32.0),
+            flex_shrink: 0.0,
+            padding: UiRect::horizontal(Val::Px(10.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(ui::ROW_IDLE),
+        BorderColor::all(ui::RULE),
+    )
+}
+
+fn grow() -> Node {
+    Node {
+        flex_grow: 1.0,
+        min_width: Val::Px(0.0),
+        overflow: Overflow::clip(),
+        ..default()
+    }
+}
+
+fn playing_words(p: u8) -> String {
+    if p == pp::PLAYING_NONE {
+        "IN THE MENU".into()
+    } else {
+        format!("PLAYING {}", proto::mode_name(p).to_uppercase())
+    }
+}
+
+/// PARTY: who is in it, who leads, who may join, the link, and voice.
+fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
+    body.spawn(ui::panel(380.0)).with_children(|p| {
+        let Some(info) = party.party.as_ref() else {
+            p.spawn(ui::group("PARTY"));
+            p.spawn(ui::label("Getting your party ready...", 13.0, ui::DIM));
+            return;
+        };
+        p.spawn(ui::group(&format!("PARTY · {}", pp::code_text(info.code))));
+        let lead = party.leads();
+        for m in info.members() {
+            let mine = m.tag == info.me;
+            p.spawn(line_row()).with_children(|r| {
+                r.spawn((
+                    TalkLight(m.tag),
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    BackgroundColor(ui::RULE),
+                ));
+                let name = if mine {
+                    format!("{} (YOU)", m.name.as_str())
+                } else {
+                    m.name.as_str().to_string()
+                };
+                r.spawn(grow())
+                    .with_child(ui::strong(name, 14.0, if m.away { ui::FAINT } else { ui::TITLE }));
+                if m.tag == info.leader {
+                    r.spawn(ui::strong("LEADS", 10.5, ui::MARK));
+                }
+                r.spawn(ui::label(
+                    if m.away {
+                        "ON THE WAY".into()
+                    } else {
+                        playing_words(m.playing)
+                    },
+                    10.5,
+                    ui::FAINT,
+                ));
+                if !mine && party.mic != Mic::None {
+                    let muted = party::muted(&party::voice_key(m));
+                    r.spawn((chip(52.0), Hit::Mute(m.tag))).with_child(chip_label(if muted {
+                        "UNMUTE"
+                    } else {
+                        "MUTE"
+                    }));
+                }
+                if lead && !mine {
+                    r.spawn((chip(44.0), Hit::Lead(m.tag))).with_child(chip_label("LEAD"));
+                    r.spawn((chip(24.0), Hit::Kick(m.tag))).with_child(chip_label("X"));
+                }
+            });
+        }
+        if info.members().len() < pp::MAX_PARTY {
+            p.spawn(ui::label(
+                "Send your link to bring people in. Whoever leads picks the game.",
+                12.0,
+                ui::FAINT,
+            ));
+        }
+
+        p.spawn(ui::group("WHO CAN JOIN"));
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|r| {
+            let word = match info.privacy {
+                pp::PRIVACY_OPEN => "ANYONE WITH THE LINK",
+                pp::PRIVACY_FRIENDS => "YOUR FRIENDS",
+                _ => "ONLY WHO YOU INVITE",
+            };
+            if lead {
+                r.spawn((ui::stepper(), Hit::Privacy(-1)))
+                    .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+            }
+            r.spawn(Node {
+                flex_grow: 1.0,
+                justify_content: JustifyContent::Center,
+                ..default()
+            })
+            .with_child(ui::strong(word, 13.0, ui::TEXT_COLOR));
+            if lead {
+                r.spawn((ui::stepper(), Hit::Privacy(1)))
+                    .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+            }
+        });
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(8.0),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn((ui::button(168.0, true), Hit::CopyLink, Tag("party-copy")))
+                .with_child(ui::button_label("COPY PARTY LINK"));
+            if info.members().len() > 1 {
+                r.spawn((ui::button(168.0, false), Hit::Leave, Tag("party-leave")))
+                    .with_child(ui::button_label("LEAVE PARTY"));
+            }
+        });
+        let alone = if party.alone { "ON" } else { "OFF" };
+        p.spawn(line_row()).with_children(|r| {
+            r.spawn(grow())
+                .with_child(ui::strong("PARTY ALONE · BOTS FILL THE REST", 12.0, ui::TEXT_COLOR));
+            r.spawn((chip(44.0), Hit::Alone, Tag("party-alone")))
+                .with_child(chip_label(alone));
+        });
+        // Alone, the leader sets the room's own map, score and clock.
+        if party.alone && lead {
+            let c = party.custom;
+            let map = c
+                .map
+                .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
+                .map_or("THE SERVER'S PICK".to_string(), |d| d.name.to_uppercase());
+            let score = match pp::SCORE_LIMITS[c.score as usize] {
+                0 => "THE MODE'S".to_string(),
+                i32::MAX => "NO LIMIT".to_string(),
+                n => n.to_string(),
+            };
+            let time = match pp::TIME_LIMITS_MIN[c.time as usize] {
+                0 => "THE MODE'S".to_string(),
+                u32::MAX => "NO CLOCK".to_string(),
+                m => format!("{m} MIN"),
+            };
+            for (k, what, word) in [(0u8, "MAP", map), (1, "TO WIN", score), (2, "CLOCK", time)] {
+                p.spawn(line_row()).with_children(|r| {
+                    r.spawn(Node {
+                        width: Val::Px(64.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_child(ui::label(what, 11.0, ui::FAINT));
+                    r.spawn((ui::stepper(), Hit::Custom(k, -1)))
+                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                    r.spawn(Node {
+                        flex_grow: 1.0,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child(ui::strong(word, 12.5, ui::TEXT_COLOR));
+                    r.spawn((ui::stepper(), Hit::Custom(k, 1)))
+                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                });
+            }
+        }
+
+        p.spawn(ui::group("VOICE"));
+        if party.mic == Mic::None {
+            p.spawn(ui::label(
+                if cfg!(target_arch = "wasm32") {
+                    "This browser can't do voice."
+                } else {
+                    "Party voice is in the browser for now."
+                },
+                12.0,
+                ui::FAINT,
+            ));
+        } else {
+            p.spawn(line_row()).with_children(|r| {
+                let mic = match party.mic {
+                    Mic::Off => "MIC OFF",
+                    Mic::On => "MIC ON",
+                    _ => "TALKING",
+                };
+                r.spawn((chip(96.0), Hit::Mic, Tag("party-mic")))
+                    .with_child(chip_label(mic));
+                r.spawn(grow()).with_child(ui::label(
+                    if party.open_mic { "Open mic" } else { "Hold V to talk" },
+                    12.0,
+                    ui::DIM,
+                ));
+                r.spawn((chip(96.0), Hit::TalkMode))
+                    .with_child(chip_label(if party.open_mic { "HOLD V" } else { "OPEN MIC" }));
+            });
+            p.spawn(ui::label(
+                "Your party hears you, here and in a match. Nobody else does.",
+                11.5,
+                ui::FAINT,
+            ));
+        }
+        p.spawn(ui::spacer());
+        if let Some(n) = &party.notice {
+            p.spawn(ui::label(n.clone(), 12.5, ui::DIM));
+        }
+        if !party.connected {
+            p.spawn(ui::label(
+                "The party's line dropped: joining it again...",
+                12.5,
+                ui::BAD,
+            ));
+        }
+    });
+}
+
+/// FRIENDS: your Elo Pros friends, where they are, and a way in or to ask.
+/// Today's and this week's challenges, as Elo Pros has them
+/// (`challenges.rs`), with our progress once we're signed in.
+fn challenges_panel(body: &mut ChildSpawnerCommands, ch: &crate::challenges::Challenges, signin: &SignIn) {
+    use crate::challenges::{left_words, progress_words};
+    body.spawn(ui::panel(380.0)).with_children(|p| {
+        let Some(v) = &ch.view else {
+            p.spawn(ui::group("CHALLENGES"));
+            p.spawn(ui::label(
+                if ch.failed {
+                    "Elo Pros didn't answer just now."
+                } else {
+                    "Reading today's challenges..."
+                },
+                13.0,
+                if ch.failed { ui::BAD } else { ui::DIM },
+            ));
+            return;
+        };
+        let now = crate::challenges::unix_now();
+        for (title, per) in [("TODAY", &v.day), ("THIS WEEK", &v.week)] {
+            p.spawn(ui::group(&format!("{title} · {} LEFT", left_words(per.ends_at, now))));
+            if per.challenges.is_empty() {
+                p.spawn(ui::label("None yet.", 12.5, ui::FAINT));
+            }
+            for c in &per.challenges {
+                p.spawn(line_row()).with_children(|r| {
+                    r.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        flex_grow: 1.0,
+                        ..default()
+                    })
+                    .with_children(|t| {
+                        t.spawn(ui::strong(c.name.to_uppercase(), 13.5, ui::TITLE));
+                        if !c.desc.is_empty() {
+                            t.spawn(ui::label(c.desc.clone(), 11.0, ui::FAINT));
+                        }
+                    });
+                    let done = c.done == Some(true);
+                    r.spawn(ui::strong(
+                        progress_words(c),
+                        12.0,
+                        if done { ui::GOOD } else { ui::TEXT_COLOR },
+                    ));
+                    if c.cards > 0 {
+                        let cards = if c.cards == 1 {
+                            "1 CARD".to_string()
+                        } else {
+                            format!("{} CARDS", c.cards)
+                        };
+                        r.spawn(ui::label(cards, 10.5, ui::ACCENT));
+                    }
+                });
+            }
+        }
+        p.spawn(ui::spacer());
+        if !matches!(signin, SignIn::In(_)) {
+            p.spawn(ui::label(
+                "Sign in with Elo Pros to count your progress.",
+                12.5,
+                ui::DIM,
+            ));
+        }
+        if !v.rules.is_empty() {
+            p.spawn(ui::label(v.rules.clone(), 10.5, ui::FAINT));
+        }
+    });
+}
+
+fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &SignIn) {
+    body.spawn(ui::panel(380.0)).with_children(|p| {
+        let here = party.friends.iter().filter(|f| f.at >= pp::AT_HERE).count();
+        p.spawn(ui::group(&if party.friends.is_empty() {
+            "FRIENDS".to_string()
+        } else {
+            format!("FRIENDS · {here} HERE")
+        }));
+        if !matches!(signin, SignIn::In(_)) && party.friends.is_empty() {
+            p.spawn(ui::label(
+                "Sign in with Elo Pros to see your friends here.",
+                13.0,
+                ui::DIM,
+            ));
+            if matches!(signin, SignIn::Ready | SignIn::Failed(_)) {
+                p.spawn((ui::button(220.0, false), Hit::SignIn))
+                    .with_child(ui::button_label("SIGN IN WITH ELO PROS"));
+            }
+            return;
+        }
+        if !party.reachable && party.friends_known {
+            p.spawn(ui::label("Elo Pros didn't answer just now.", 12.5, ui::BAD));
+        } else if party.friends_known && party.friends.is_empty() {
+            p.spawn(ui::label(
+                "No friends yet. Add them on your Elo Pros profile.",
+                13.0,
+                ui::DIM,
+            ));
+        } else if !party.friends_known {
+            p.spawn(ui::label("Reading your friends...", 13.0, ui::DIM));
+        }
+        let mine: Vec<&str> = party.members().iter().map(|m| m.player.as_str()).collect();
+        let order = |f: &Friend| match f.at {
+            pp::AT_HERE => 0,
+            pp::AT_MATCH => 1,
+            pp::AT_ELSEWHERE => 2,
+            _ => 3,
+        };
+        let mut rows: Vec<(usize, &Friend)> = party.friends.iter().enumerate().collect();
+        rows.sort_by_key(|(_, f)| order(f));
+        for (i, f) in rows.into_iter().take(12) {
+            p.spawn(line_row()).with_children(|r| {
+                let lit = match f.at {
+                    pp::AT_HERE => ui::GOOD,
+                    pp::AT_MATCH => ui::MARK,
+                    pp::AT_ELSEWHERE => ui::ACCENT,
+                    _ => ui::RULE,
+                };
+                r.spawn((
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                    BackgroundColor(lit),
+                ));
+                r.spawn(grow()).with_child(ui::strong(f.name.clone(), 14.0, ui::TITLE));
+                let in_mine = mine.contains(&f.player.as_str());
+                let where_ = if in_mine {
+                    "IN YOUR PARTY".to_string()
+                } else {
+                    match f.at {
+                        pp::AT_MATCH => playing_words(f.playing),
+                        pp::AT_HERE if f.size > 1 => format!("PARTY OF {}", f.size),
+                        pp::AT_HERE => "IN THE MENU".into(),
+                        pp::AT_ELSEWHERE => "ON ELO PROS".into(),
+                        _ => "OFFLINE".into(),
+                    }
+                };
+                r.spawn(ui::label(where_, 10.5, ui::FAINT));
+                if f.party != 0 && !in_mine {
+                    r.spawn((chip(44.0), Hit::Join(f.party))).with_child(chip_label("JOIN"));
+                }
+                if f.party != 0 && f.at == pp::AT_MATCH && !in_mine {
+                    r.spawn((chip(56.0), Hit::Watch(f.party)))
+                        .with_child(chip_label("WATCH"));
+                }
+                if f.at >= pp::AT_HERE && !in_mine {
+                    r.spawn((chip(56.0), Hit::Invite(i as u8)))
+                        .with_child(chip_label("INVITE"));
+                }
+            });
+        }
+        p.spawn(ui::spacer());
+        if let Some(n) = &party.notice {
+            p.spawn(ui::label(n.clone(), 12.5, ui::DIM));
+        }
+        p.spawn((ui::button(140.0, false), Hit::Friends))
+            .with_child(ui::button_label("REFRESH"));
+    });
+}
+
+/// An invite, over the title's corner: join, or not now.
+fn invite_card(root: &mut ChildSpawnerCommands, from: &str) {
+    root.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(GUT),
+            top: Val::Px(84.0),
+            width: Val::Px(320.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            border: UiRect::new(Val::Px(3.0), Val::Px(1.0), Val::Px(1.0), Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(ui::PANE_BG),
+        BorderColor {
+            left: ui::MARK,
+            ..BorderColor::all(ui::RULE_HI)
+        },
+        GlobalZIndex(7),
+    ))
+    .with_children(|c| {
+        c.spawn(ui::strong(
+            format!("{} ASKS YOU INTO THEIR PARTY", from.to_uppercase()),
+            13.0,
+            ui::TITLE,
+        ));
+        c.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn((ui::button(120.0, true), Hit::InviteJoin, Tag("invite-join")))
+                .with_child(ui::button_label("JOIN"));
+            r.spawn((ui::button(120.0, false), Hit::InviteDismiss))
+                .with_child(ui::button_label("NOT NOW"));
         });
     });
 }
@@ -585,8 +1232,8 @@ fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool) {
 }
 
 /// How tall Triple T stands on the stage: tall enough to read at 720p
-/// without reaching the wordmark.
-const HERO_VH: f32 = 56.0;
+/// without reaching the wordmark (his picture is drawn at that size).
+const HERO_VH: f32 = crate::look::portrait::VIEW_VH;
 
 /// The open stage: Triple T beside the panel, and the picked mode over the
 /// scene.
@@ -653,12 +1300,56 @@ fn stage(body: &mut ChildSpawnerCommands, id: u8, portrait: Option<&crate::look:
     });
 }
 
+/// The emblem's rows on the title: its label and a hint.
+const EMBLEM_PARTS: [(&str, &str); 4] = [
+    ("EMBLEM", "on your back"),
+    ("SHAPE", "behind it"),
+    ("COLOUR", "the emblem's"),
+    ("COLOUR", "the shape's"),
+];
+
+fn emblem_part_name(k: usize, (g, f, gc, fc): (u8, u8, u8, u8)) -> String {
+    match k {
+        0 if g == 0 => "NONE".into(),
+        0 => {
+            let line = proto::GLYPH_FLOOR[g as usize];
+            let name = proto::EMBLEM_GLYPHS[g as usize].to_uppercase();
+            if line > 0 {
+                format!("{name} {line}+")
+            } else {
+                name
+            }
+        }
+        1 => proto::EMBLEM_FIELDS[f as usize].to_uppercase(),
+        2 => format!("{}", gc + 1),
+        _ => format!("{}", fc + 1),
+    }
+}
+
+/// `e` with part `k` stepped by `d`, round its range.
+fn step_emblem(e: proto::Emblem, k: usize, d: i32) -> proto::Emblem {
+    let (mut p, n) = (proto::emblem_parts(e), proto::EMBLEM_COLOURS as i32);
+    let step = |v: u8, range: i32| (v as i32 + d).rem_euclid(range) as u8;
+    match k {
+        0 => p.0 = step(p.0, proto::EMBLEM_GLYPHS.len() as i32),
+        1 => p.1 = step(p.1, proto::EMBLEM_FIELDS.len() as i32),
+        2 => p.2 = step(p.2, n),
+        _ => p.3 = step(p.3, n),
+    }
+    proto::emblem(p.0, p.1, p.2, p.3)
+}
+
+/// A skin's name, with its rank lock (`proto::SKIN_FLOOR`) when it has one.
 fn skin_name(i: u8) -> String {
-    proto::SKINS
+    let name = proto::SKINS
         .get(i as usize)
         .copied()
         .unwrap_or("standard")
-        .to_uppercase()
+        .to_uppercase();
+    match proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0) {
+        0 => name,
+        line => format!("{name} {line}+"),
+    }
 }
 
 /// The name as the field shows it: what's typed, a caret while editing, a
@@ -693,6 +1384,8 @@ fn click(
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
     time: Res<Time>,
+    mut party: ResMut<PartyView>,
+    mut asks: ResMut<PartyAsks>,
 ) {
     let hit = hits.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| *h);
     // A click anywhere but the field puts the keys back.
@@ -740,12 +1433,110 @@ fn click(
             player.skin = (player.skin as i32 + d).rem_euclid(n) as u8;
             front.dirty = true;
         }
+        Hit::Emblem(k, d) => {
+            player.emblem = step_emblem(player.emblem, k, d);
+            front.dirty = true;
+        }
         Hit::Name => {
             front.editing = true;
             front.dirty = true;
         }
         Hit::SignIn => {
             door.sign_in();
+            front.dirty = true;
+        }
+        Hit::Tab(t) => {
+            front.tab = t;
+            if t == Tab::Friends {
+                asks.0.push(Do::Act(pp::ACT_FRIENDS, 0));
+            }
+            front.dirty = true;
+        }
+        Hit::Lead(tag) => asks.0.push(Do::Act(pp::ACT_LEAD, tag as u32)),
+        Hit::Kick(tag) => asks.0.push(Do::Act(pp::ACT_KICK, tag as u32)),
+        Hit::Mute(tag) => {
+            if let Some(m) = party.members().iter().find(|m| m.tag == tag) {
+                party::toggle_mute(&party::voice_key(m));
+                front.dirty = true;
+            }
+        }
+        Hit::Privacy(d) => {
+            if let Some(p) = &party.party {
+                let next = (p.privacy as i32 + d as i32).rem_euclid(3) as u32;
+                asks.0.push(Do::Act(pp::ACT_PRIVACY, next));
+            }
+        }
+        Hit::CopyLink => {
+            let code = party.code_text();
+            party.notice = Some(match party::copy_link(&code) {
+                Some(link) => format!("Copied: {link}"),
+                None => format!("Your party's code is {code}: oneshot --party {code}"),
+            });
+            front.dirty = true;
+        }
+        Hit::Leave => asks.0.push(Do::Act(pp::ACT_LEAVE, 0)),
+        Hit::Alone => {
+            party.alone = !party.alone;
+            front.dirty = true;
+        }
+        Hit::Custom(k, d) => {
+            let step = |i: u8, n: usize| (i as i32 + d as i32).rem_euclid(n as i32) as u8;
+            let c = &mut party.custom;
+            match k {
+                0 => {
+                    // None (the server's pick), then every map in order.
+                    let ids: Vec<Option<u8>> = core::iter::once(None)
+                        .chain(sim::maps::ALL.iter().map(|m| Some(m.id)))
+                        .collect();
+                    let at = ids.iter().position(|&m| m == c.map).unwrap_or(0);
+                    c.map = ids[step(at as u8, ids.len()) as usize];
+                }
+                1 => c.score = step(c.score, pp::SCORE_LIMITS.len()),
+                _ => c.time = step(c.time, pp::TIME_LIMITS_MIN.len()),
+            }
+            front.dirty = true;
+        }
+        Hit::Mic => party::mic_toggle(),
+        Hit::TalkMode => party::set_open_mic(!party.open_mic),
+        Hit::Join(code) => {
+            asks.0.push(Do::Act(pp::ACT_JOIN, code));
+            front.tab = Tab::Party;
+            front.dirty = true;
+        }
+        Hit::Watch(code) => {
+            if knocking.0.is_none() {
+                front.mode = proto::MODE_WATCH;
+                let ask = Ask {
+                    name: player.sent_name(),
+                    pass: party::match_pass(&party, &door),
+                    mode: proto::MODE_WATCH,
+                    look: player.look(),
+                    party: code,
+                };
+                knocking.0 = Some(door.knock(ask));
+                front.knocked_at = time.elapsed_secs();
+                front.status.clear();
+                front.bad = false;
+                front.dirty = true;
+            }
+        }
+        Hit::Invite(i) => {
+            if let Some(f) = party.friends.get(i as usize) {
+                asks.0.push(Do::Invite(f.player.clone()));
+                party.notice = Some(format!("Invited {}. They can join from their title.", f.name));
+                front.dirty = true;
+            }
+        }
+        Hit::Friends => asks.0.push(Do::Act(pp::ACT_FRIENDS, 0)),
+        Hit::InviteJoin => {
+            if let Some((_, code)) = party.invite.take() {
+                asks.0.push(Do::Act(pp::ACT_JOIN, code));
+                front.tab = Tab::Party;
+            }
+            front.dirty = true;
+        }
+        Hit::InviteDismiss => {
+            party.invite = None;
             front.dirty = true;
         }
         Hit::Go => {
@@ -764,13 +1555,35 @@ fn click(
                 if m.ranked && !signin.ranked() {
                     front.status = "Ranked needs a sign-in with a wallet".into();
                     front.bad = true;
+                } else if m.id != proto::MODE_WATCH && party.connected && (party.size() > 1 || party.alone) {
+                    // A party's game: its leader starts it, and the server
+                    // tells each of us to go (`party.rs`).
+                    if party.leads() {
+                        let alone = if party.alone {
+                            pp::START_PRIVATE | party.custom.to_arg()
+                        } else {
+                            0
+                        };
+                        asks.0.push(Do::Act(pp::ACT_START, m.id as u32 | alone));
+                        front.status = "Starting for the party...".into();
+                        front.bad = false;
+                    } else {
+                        let who = party
+                            .leader()
+                            .map_or("The leader".into(), |l| l.name.as_str().to_string());
+                        front.status = format!("{who} picks the game");
+                        front.bad = false;
+                    }
                 } else {
+                    // Our party's code goes with us (friends watch by it); a
+                    // watcher's own is no match to watch, so none.
+                    let code = party.party.as_ref().map_or(0, |p| p.code);
                     let ask = Ask {
                         name: player.sent_name(),
-                        pass: signin.pass(),
+                        pass: party::match_pass(&party, &door),
                         mode: m.id,
-                        skin: player.skin,
-                        party: 0,
+                        look: player.look(),
+                        party: if m.id == proto::MODE_WATCH { 0 } else { code },
                     };
                     knocking.0 = Some(door.knock(ask));
                     front.knocked_at = now;
@@ -837,18 +1650,28 @@ fn rebuild(
     knocking: NonSend<Knocking>,
     roots: Query<Entity, With<TitleRoot>>,
     portrait: Option<Res<crate::look::portrait::Portrait>>,
-    page: Res<PageMenu>,
+    party: Res<PartyView>,
+    (mut challenges, time): (ResMut<crate::challenges::Challenges>, Res<Time>),
 ) {
-    // The page's menu is the title in a browser: only the backdrop here.
-    if page.0 {
-        return;
-    }
     let signin = door.signin();
-    if !front.dirty && front.drawn.as_ref() == Some(&signin) {
+    // Challenges: asked for while the title is up, for whoever is signed in.
+    let wallet = match &signin {
+        SignIn::In(p) => p.wallet.clone(),
+        _ => None,
+    };
+    challenges.want(wallet, time.elapsed_secs_f64());
+    challenges.poll();
+    if !front.dirty
+        && front.drawn.as_ref() == Some(&signin)
+        && front.drawn_party == party.gen
+        && front.drawn_challenges == challenges.gen
+    {
         return;
     }
     front.dirty = false;
     front.drawn = Some(signin);
+    front.drawn_party = party.gen;
+    front.drawn_challenges = challenges.gen;
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -859,6 +1682,8 @@ fn rebuild(
         &door,
         knocking.0.is_some(),
         portrait.as_deref(),
+        &party,
+        &challenges,
     );
 }
 
@@ -902,13 +1727,12 @@ fn curtain(
     }
 }
 
-/// What the page's menu asked: a match, stop waiting, or leave.
+/// What the party asked: its leader started a match, so we knock with it.
 fn page_cmds(
     mut front: ResMut<Front>,
     mut door: NonSendMut<Door>,
     mut knocking: NonSendMut<Knocking>,
     in_match: Res<InMatch>,
-    mut leaving: ResMut<Leaving>,
 ) {
     let cmds: Vec<PageCmd> = PAGE.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for c in cmds {
@@ -921,25 +1745,7 @@ fn page_cmds(
                 knocking.0 = Some(door.knock(ask));
             }
             PageCmd::Knock(_) => {}
-            PageCmd::Cancel => {
-                // Dropping the knock closes its connection.
-                knocking.0 = None;
-                front.status.clear();
-                front.dirty = true;
-            }
-            PageCmd::Leave if in_match.0 => leaving.0 = Some("You left the match".into()),
-            PageCmd::Leave => {}
         }
-    }
-}
-
-/// The line and the knock, for the page's menu (`__oneshot.front`).
-fn page_state(front: Res<Front>, knocking: NonSend<Knocking>, mut st: ResMut<PageState>) {
-    let knocking = knocking.0.is_some();
-    if st.status != front.status || st.bad != front.bad || st.knocking != knocking {
-        st.status.clone_from(&front.status);
-        st.bad = front.bad;
-        st.knocking = knocking;
     }
 }
 
@@ -952,7 +1758,7 @@ fn join(mut front: ResMut<Front>, player: Res<Player>, mut door: NonSendMut<Door
         name: player.sent_name(),
         pass: String::new(),
         mode: m,
-        skin: player.skin,
+        look: player.look(),
         party: 0,
     }));
     front.dirty = true;

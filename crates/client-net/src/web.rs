@@ -181,9 +181,15 @@ pub struct Client {
     transport: WebTransport,
     datagrams: WebTransportDatagramDuplexStream,
     writer: WritableStreamDefaultWriter,
+    /// The stream's writer: what a watcher asks goes out on it.
+    stream: Rc<WritableStreamDefaultWriter>,
     inbox: Queue<(f64, Vec<u8>)>,
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
+    /// Why the connection ended, once it has: the close's code and reason
+    /// (`transport.closed`), or code 0 and no reason for a line that just
+    /// went.
+    ended: Rc<RefCell<Option<(u32, String)>>>,
 }
 
 #[wasm_bindgen]
@@ -193,13 +199,15 @@ impl Client {
     /// browser checks against its own roots), and asks to play `mode` (0 casual against
     /// a bot, 1 ranked Duel, 2 ranked Doubles, 3 free for all, 4 Gun Game,
     /// 5 a cup)
-    /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
+    /// as `name` wearing `skin` (worn only if the pass's wallet owns it) and
+    /// `emblem` on its back (`proto::Emblem`),
     /// signed in with an
     /// Elo Pros `pass` (empty for a guest; or the server's ticket), with the
     /// `party` it comes with (its code, 0 for none). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
     /// comes through `messages()`.
+    #[allow(clippy::too_many_arguments)]
     pub async fn connect(
         addr: String,
         hash: String,
@@ -207,6 +215,7 @@ impl Client {
         pass: String,
         mode: u8,
         skin: u8,
+        emblem: u16,
         party: u32,
     ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
@@ -234,8 +243,10 @@ impl Client {
             .await
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
-        let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        write_frame(&sw, &Session::hello(&name, pass, mode, skin, party)).await?;
+        let sw = Rc::new(bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?);
+        let hello = Session::hello(&name, pass, mode, proto::Look { skin, emblem }, party);
+        write_frame(&sw, &hello).await?;
+        let stream = sw.clone();
         let mut reader = FrameReader::new(&bidi.readable())?;
 
         let msgs: Queue<Msg> = Rc::default();
@@ -251,6 +262,26 @@ impl Client {
                 }
                 *closed.borrow_mut() = true;
                 drop(sw);
+            });
+        }
+
+        let ended: Rc<RefCell<Option<(u32, String)>>> = Rc::default();
+        {
+            let ended = ended.clone();
+            let done = JsFuture::from(transport.closed());
+            spawn_local(async move {
+                let why = match done.await {
+                    // A close with a code and a reason (the server's).
+                    Ok(info) => {
+                        let get = |k: &str| js_sys::Reflect::get(&info, &JsValue::from_str(k)).ok();
+                        let code = get("closeCode").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                        let reason = get("reason").and_then(|v| v.as_string()).unwrap_or_default();
+                        (code, reason)
+                    }
+                    // The line went.
+                    Err(_) => (0, String::new()),
+                };
+                *ended.borrow_mut() = Some(why);
             });
         }
 
@@ -289,13 +320,15 @@ impl Client {
         }
         let writer = datagram_writer(&datagrams)?;
         Ok(Client {
-            session: Session::new(),
+            session: Session::for_hello(&hello),
             transport,
             datagrams,
             writer,
+            stream,
             inbox,
             msgs,
             closed,
+            ended,
         })
     }
 
@@ -382,6 +415,12 @@ impl Client {
             writer: &self.writer,
         };
         self.session.update(now, input, &mut wire);
+        for m in self.session.take_outgoing() {
+            let sw = self.stream.clone();
+            spawn_local(async move {
+                let _ = write_frame(&sw, &m).await;
+            });
+        }
     }
 
     /// Our own fighter, drawn: x y z, eye height, yaw, pitch (radians),
@@ -492,11 +531,12 @@ impl Client {
         v
     }
 
-    /// Rockets and frags, 7 each: kind (0 rocket, 1 frag), owner, x y z,
-    /// velocity x z.
-    pub fn projectiles(&self) -> Vec<f32> {
+    /// Rounds in flight as drawn at `now`, 8 each: kind
+    /// (`proto::ProjState::kind`), owner, x y z, velocity x z, and an id
+    /// that holds while it flies.
+    pub fn projectiles(&self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
-        for p in self.session.core.latest().proj() {
+        for p in self.session.core.projectiles(now) {
             v.extend_from_slice(&[
                 p.kind as f32,
                 p.owner as f32,
@@ -505,16 +545,18 @@ impl Client {
                 p.pos.z,
                 p.vel.x,
                 p.vel.z,
+                p.id as f32,
             ]);
         }
         v
     }
 
-    /// What happened since the last call, 11 each: kind, a, b, part, c,
-    /// pos x y z, end x y z (sim::events::Kind numbers the kinds).
-    pub fn events(&mut self) -> Vec<f32> {
+    /// What is due to play at `now` (`NetCore::drain_events`), 11 each:
+    /// kind, a, b, part, c, pos x y z, end x y z (sim::events::Kind
+    /// numbers the kinds).
+    pub fn events(&mut self, now: f64) -> Vec<f32> {
         let mut v = Vec::new();
-        for e in self.session.core.drain_events() {
+        for e in self.session.core.drain_events(now) {
             v.extend_from_slice(&[
                 e.kind as f32,
                 e.a as f32,
@@ -567,9 +609,11 @@ impl Client {
                     bot,
                     name,
                     skin,
+                    emblem,
                 } => {
                     set("type", "seat".into());
                     set("skin", skin.into());
+                    set("emblem", emblem.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());
@@ -680,6 +724,14 @@ impl Client {
     pub fn close(&self) {
         self.transport.close();
     }
+
+    /// Why the connection ended, in words for the player; None while it
+    /// hasn't, or when it ended with nothing said.
+    #[wasm_bindgen(getter)]
+    pub fn ended_why(&self) -> Option<String> {
+        let (code, reason) = self.ended.borrow().clone()?;
+        Some(crate::session::close_why(code, &reason))
+    }
 }
 
 fn push_drawn(v: &mut Vec<f32>, d: &crate::core::Drawn) {
@@ -783,6 +835,12 @@ pub fn skin_names() -> Vec<String> {
     proto::SKINS.iter().map(|s| s.to_string()).collect()
 }
 
+/// Each skin's rank lock by id (`proto::SKIN_FLOOR`; 0 is none), for the menu.
+#[wasm_bindgen]
+pub fn skin_floors() -> Vec<u16> {
+    proto::SKIN_FLOOR.to_vec()
+}
+
 /// Arm names by id, for the HUD.
 #[wasm_bindgen]
 pub fn arm_name(id: u8) -> String {
@@ -792,6 +850,19 @@ pub fn arm_name(id: u8) -> String {
 #[wasm_bindgen(start)]
 pub fn start() {
     std::panic::set_hook(Box::new(|info| {
-        web_sys::console::error_1(&JsValue::from_str(&format!("oneshot: panic: {info}")));
+        let line = format!("oneshot: panic: {info}");
+        web_sys::console::error_1(&JsValue::from_str(&line));
+        // The page shows that the game stopped (it can't go on: a panic in
+        // wasm is a trap), rather than leave a frozen canvas: told the
+        // panic's own words (what it says to the player is read from them,
+        // never from the file it was in) and the whole line (the report).
+        let said = info.payload_as_str().unwrap_or("");
+        if let Some(w) = web_sys::window() {
+            if let Ok(f) = js_sys::Reflect::get(&w, &JsValue::from_str("oneshotStopped")) {
+                if let Some(f) = f.dyn_ref::<js_sys::Function>() {
+                    let _ = f.call2(&JsValue::NULL, &JsValue::from_str(said), &JsValue::from_str(&line));
+                }
+            }
+        }
     }));
 }

@@ -414,18 +414,18 @@ pub const FIELD_N: usize = if cfg!(target_arch = "wasm32") || cfg!(debug_asserti
 };
 /// How soft the deck's edge is where its shadow falls, metres: the sun's
 /// own disk blurs a shadow cast from 1.4 km up by 13–40 m, and a cumulus
-/// edge is a few tens of metres more. The field's mip whose texel is
-/// nearest this ([`soft_level`]) is what the rig dims the sun by
-/// ([`SkyComposer::cover_at`]) and what the ground's cloud shadows read
-/// (`cloud_shadow.rs`), so the two agree at the eye.
+/// edge is a few tens of metres more. The field the rig dims the sun by
+/// ([`SkyComposer::cover_at`]) and the ground's cloud shadows read
+/// (`cloud_shadow.rs`) has a texel about this size ([`SOFT_FIELD_N`]), so
+/// the two agree at the eye.
 pub const SOFT_M: f32 = 60.0;
 
-/// The field's mip [`SOFT_M`] reads: 1 on a desktop release, whose texel
-/// is 28 m; 0 in a browser and a debug build, whose texel is 56 m.
-pub fn soft_level() -> u32 {
-    let texel = CLOUD_SCALE_M * FIELD_PERIOD as f32 / FIELD_N as f32;
-    (SOFT_M / texel).log2().round().max(0.0) as u32
-}
+/// That field's texels per side, the same on every target: a desktop
+/// release draws its sky from a field twice as fine, but the light a
+/// fighter stands in is read off this one, so a desktop player and a
+/// browser player see the same sun on him at the same moment. Its texel is
+/// 56 m, about [`SOFT_M`].
+pub const SOFT_FIELD_N: usize = 512;
 
 /// Below this `d.y` (~2.6°) there is no deck: `1/d.y` explodes.
 pub const DECK_CUTOFF: f32 = 0.045;

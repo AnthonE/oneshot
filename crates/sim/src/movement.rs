@@ -235,9 +235,20 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
 }
 
 /// Whether a move from `a` to `b` (x, z) climbs ground steeper than
-/// [`MAX_CLIMB`] to above the feet at `feet`.
+/// [`MAX_CLIMB`] to above the feet at `feet`, or onto a face too steep to
+/// stand on ([`WALK_NY`]).
 pub(crate) fn too_steep(map: &Map, a: (f32, f32), b: (f32, f32), feet: f32) -> bool {
     let g1 = map.ground(b.0, b.1);
+    if g1 <= feet {
+        return false;
+    }
+    // A face too steep to stand on refuses any step up it, however small
+    // and from whichever side: the rise along one axis alone, under the
+    // centimetre below, let a body creep along a cliff at an angle and be
+    // lifted up it a few millimetres a tick.
+    if map.ground_normal(b.0, b.1).y < WALK_NY {
+        return true;
+    }
     if g1 <= feet + 0.01 {
         return false;
     }
@@ -499,8 +510,11 @@ mod tests {
             vehicles: &[],
             solids: &[],
             solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
+            flags: &[],
         }
         .build()
     }
@@ -523,8 +537,8 @@ mod tests {
     #[test]
     fn a_gentle_slope_is_walked_up_on_the_ground() {
         let map = crate::maps::canyon::DEF.build();
-        // Up the side of the hill at (−30, 13) from its foot.
-        let mut b = standing(&map, -30.0, 3.5);
+        // Up the south side of the hill at (−60, 28) from its foot.
+        let mut b = standing(&map, -64.0, 15.0);
         let up = Input {
             mz: 127,
             yaw: 16384,
@@ -536,7 +550,7 @@ mod tests {
             assert!(b.pos.y >= was - 1e-3, "never down on the way up: {:?}", b.pos);
             was = b.pos.y;
         }
-        assert!(b.pos.z > 9.0, "it climbed: {:?}", b.pos);
+        assert!(b.pos.z > 20.5, "it climbed: {:?}", b.pos);
         assert!(
             b.pos.y > 1.5 && fabs(b.pos.y - map.ground(b.pos.x, b.pos.z)) < 0.01,
             "{:?}",
@@ -581,8 +595,11 @@ mod tests {
                 (2, [30.0, -2.0, 36.0, 2.0, 0.0, 0.0, 0.0, 3.0]),
             ],
             solid_looks: &[0, 0, 0],
+            dress: &[],
+            dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
+            flags: &[],
         }
         .build()
     }
@@ -671,8 +688,9 @@ mod tests {
             step(&mut b, &Input::default(), &map);
             ticks += 1;
         }
-        // Red's lands near (−10, 0) after about 1.5 s.
-        assert!(fabs(b.pos.x - -10.0) < 1.5 && fabs(b.pos.z) < 0.5, "{:?}", b.pos);
-        assert!((TICK_HZ * 13 / 10..TICK_HZ * 17 / 10).contains(&ticks), "{ticks} ticks");
+        // Red's lands near (−20, 0) after about 2.5 s (the creek bed there
+        // is a little under where it is aimed, so a little past it).
+        assert!(fabs(b.pos.x - -19.0) < 1.5 && fabs(b.pos.z) < 0.5, "{:?}", b.pos);
+        assert!((TICK_HZ * 23 / 10..TICK_HZ * 27 / 10).contains(&ticks), "{ticks} ticks");
     }
 }

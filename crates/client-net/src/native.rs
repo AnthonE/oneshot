@@ -30,9 +30,12 @@ pub struct NativeClient {
     msgs: UnboundedReceiver<Msg>,
     datagrams: UnboundedReceiver<(Instant, Vec<u8>)>,
     closed: Arc<AtomicBool>,
+    /// The close's code and reason, once the connection has ended.
+    ended: Arc<std::sync::Mutex<Option<(u32, String)>>>,
     t0: Instant,
-    /// Kept open: dropping it would close our side of the stream.
-    _send: wtransport::SendStream,
+    /// Our side of the stream: kept open (dropping it would close it), and
+    /// what a watcher's asks go out on.
+    send: Arc<tokio::sync::Mutex<wtransport::SendStream>>,
     _endpoint: Endpoint<wtransport::endpoint::endpoint_side::Client>,
 }
 
@@ -102,14 +105,30 @@ impl NativeClient {
                 }
             }
         });
+        let ended = Arc::new(std::sync::Mutex::new(None));
+        let (econn, e) = (conn.clone(), ended.clone());
+        tokio::spawn(async move {
+            let why = match econn.closed().await {
+                wtransport::error::ConnectionError::ApplicationClosed(c) => (
+                    c.code().into_inner() as u32,
+                    String::from_utf8_lossy(c.reason()).into_owned(),
+                ),
+                wtransport::error::ConnectionError::TimedOut => (0, "the server stopped answering".into()),
+                _ => (0, String::new()),
+            };
+            if let Ok(mut e) = e.lock() {
+                *e = Some(why);
+            }
+        });
         Ok(NativeClient {
-            session: Session::new(),
+            session: Session::for_hello(&hello),
             conn,
             msgs,
             datagrams,
             closed,
+            ended,
             t0: Instant::now(),
-            _send: send,
+            send: Arc::new(tokio::sync::Mutex::new(send)),
             _endpoint: endpoint,
         })
     }
@@ -136,6 +155,15 @@ impl NativeClient {
         let now = self.now_ms();
         let mut wire = ConnWire(&self.conn);
         self.session.update(now, input, &mut wire);
+        for m in self.session.take_outgoing() {
+            let send = self.send.clone();
+            tokio::spawn(async move {
+                let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+                if let Ok(n) = frame_msg(&m, &mut f) {
+                    let _ = send.lock().await.write_all(&f[..n]).await;
+                }
+            });
+        }
     }
 
     /// Closes the connection: we're leaving.
@@ -146,6 +174,13 @@ impl NativeClient {
     /// Whether the server closed the stream.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
+    }
+
+    /// Why the connection ended, once it has (`session::close_why`).
+    pub fn ended_why(&self) -> Option<String> {
+        let e = self.ended.lock().ok()?;
+        let (code, reason) = e.as_ref()?;
+        Some(crate::session::close_why(*code, reason))
     }
 
     /// Stream messages since the last call (the welcome is the session's).
@@ -159,7 +194,8 @@ impl NativeClient {
 /// native client's party.
 pub struct NativeLobby {
     conn: Connection,
-    send: tokio::sync::Mutex<wtransport::SendStream>,
+    /// To the writer task: messages go out in the order they're given.
+    out: tokio::sync::mpsc::UnboundedSender<Msg>,
     msgs: tokio::sync::Mutex<UnboundedReceiver<Msg>>,
     voices: tokio::sync::Mutex<UnboundedReceiver<proto::voice::VoiceFrame>>,
     closed: Arc<AtomicBool>,
@@ -176,7 +212,7 @@ impl NativeLobby {
             msgs,
             datagrams,
             closed,
-            _send,
+            send,
             _endpoint,
             ..
         } = c;
@@ -194,9 +230,20 @@ impl NativeLobby {
                 }
             }
         });
+        let (out, mut outq) = unbounded_channel::<Msg>();
+        tokio::spawn(async move {
+            let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+            let mut send = send.lock().await;
+            while let Some(m) = outq.recv().await {
+                let Ok(n) = frame_msg(&m, &mut f) else { continue };
+                if send.write_all(&f[..n]).await.is_err() {
+                    break;
+                }
+            }
+        });
         Ok(NativeLobby {
             conn,
-            send: tokio::sync::Mutex::new(_send),
+            out,
             msgs: tokio::sync::Mutex::new(msgs),
             voices: tokio::sync::Mutex::new(voices),
             closed,
@@ -205,14 +252,35 @@ impl NativeLobby {
     }
 
     pub async fn send(&self, m: &Msg) -> Result<(), String> {
-        let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
-        let n = frame_msg(m, &mut f).map_err(|_| "frame".to_string())?;
-        self.send
-            .lock()
-            .await
-            .write_all(&f[..n])
-            .await
-            .map_err(|e| e.to_string())
+        self.send_now(*m);
+        Ok(())
+    }
+
+    /// A message to the server, after every one before it; never waits.
+    pub fn send_now(&self, m: Msg) {
+        let _ = self.out.send(m);
+    }
+
+    /// Stream messages since the last call, without waiting.
+    pub fn take(&self) -> Vec<Msg> {
+        let mut out = Vec::new();
+        if let Ok(mut q) = self.msgs.try_lock() {
+            while let Ok(m) = q.try_recv() {
+                out.push(m);
+            }
+        }
+        out
+    }
+
+    /// Voice frames since the last call, without waiting.
+    pub fn take_voice(&self) -> Vec<proto::voice::VoiceFrame> {
+        let mut out = Vec::new();
+        if let Ok(mut q) = self.voices.try_lock() {
+            while let Ok(f) = q.try_recv() {
+                out.push(f);
+            }
+        }
+        out
     }
 
     pub fn send_voice(&self, f: &proto::voice::VoiceFrame) -> bool {

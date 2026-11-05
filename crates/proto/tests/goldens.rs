@@ -127,6 +127,20 @@ fn snapshot() -> Snapshot {
         pitch: 100,
         arm: BR,
         shield: 200,
+        flag: true,
+    };
+    // Capture the Flag: red's flag held by seat 1, blue's on the floor.
+    s.n_flags = 2;
+    s.flags[0] = FlagState {
+        state: 1,
+        carrier: 1,
+        ..FlagState::default()
+    };
+    s.flags[1] = FlagState {
+        state: 2,
+        carrier: 0,
+        pos: V3::new(18.5, 0.0, -2.0),
+        down_s: 27,
     };
     s.proj[0] = ProjState {
         kind: 0,
@@ -202,6 +216,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_CASUAL,
             skin: SKIN_STANDARD,
+            emblem: EMBLEM_NONE,
             party: 0,
         },
         Msg::Hello {
@@ -210,6 +225,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
             mode: MODE_DUEL,
             skin: 2,
+            emblem: emblem(16, 5, 3, 12),
             party: 0,
         },
         Msg::Queued {
@@ -240,6 +256,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_GUN_GAME,
             skin: 5,
+            emblem: emblem(1, 0, 15, 0),
             party: party::code_parse("K7Q2XD").unwrap(),
         },
         Msg::Refuse { reason: REFUSE_FULL },
@@ -249,6 +266,7 @@ fn msgs() -> Vec<Msg> {
             bot: true,
             name: Name::new("BOT"),
             skin: SKIN_STANDARD,
+            emblem: EMBLEM_NONE,
         },
         Msg::Seat {
             slot: 6,
@@ -256,6 +274,7 @@ fn msgs() -> Vec<Msg> {
             bot: false,
             name: Name::new("ember"),
             skin: 2,
+            emblem: emblem(3, 1, 9, 2),
         },
         Msg::Kill {
             killer: 0,
@@ -273,6 +292,7 @@ fn msgs() -> Vec<Msg> {
             done: false,
         },
         Msg::Bye,
+        Msg::Follow { slot: 13, team: 1 },
         Msg::Reveal {
             salt: [0x0123_4567_89ab_cdef, u64::MAX],
         },
@@ -419,6 +439,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
+    assert_eq!(d.flags(), s.flags());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -485,20 +506,21 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xc72a_f16d_81bf_711b,
-        0x51ca_7147_32d8_a0df,
-        0x20fb_63c8_54bb_461a,
+        0xaec2_e834_0768_a087,
+        0xa8c0_0e4b_a193_2523,
+        0x8b6a_379d_4857_e0a8,
         0x7ebe_34b8_2c10_f2d0,
-        0x3a33_e7d9_9d0c_85a6,
-        0xb8d3_9fbc_28b2_b2b7,
-        0x31fb_12ef_3b97_e478,
+        0x7ab6_78d6_f6ba_aa53,
+        0x9571_1811_717b_689e,
+        0x4c32_e1d0_bab3_9dec,
         0x0835_ec07_b4ee_4fb0,
-        0x9e6a_3369_2998_8329,
-        0x227f_c9e3_d4c4_2705,
+        0x3f28_24ea_ec0c_5c91,
+        0xd5ca_75af_c4fa_c9d7,
         0xc3c6_2389_966a_c2c5,
         0xc800_e818_6244_f8b3,
         0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,
+        0x0862_2707_b513_eedc,
         0xdfb3_0ed7_79ac_056f,
         0x26d2_6718_97d8_1f69,
         0xcf3f_7643_a904_811f,
@@ -513,4 +535,14 @@ fn the_bytes_match_their_goldens() {
         0x8461_28ae_94ef_0f4c,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
+}
+
+#[test]
+fn an_emblem_packs_its_parts_and_no_glyph_is_none() {
+    let e = emblem(16, 5, 3, 12);
+    assert_eq!(emblem_parts(e), (16, 5, 3, 12));
+    assert_eq!(emblem_valid(e), e);
+    assert_eq!(emblem(0, 5, 3, 12), EMBLEM_NONE, "no glyph, no emblem");
+    assert_eq!(emblem_valid(31 | 5 << 5), EMBLEM_NONE, "a glyph past the list is none");
+    assert_eq!(GLYPH_FLOOR.len(), EMBLEM_GLYPHS.len());
 }

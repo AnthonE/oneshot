@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use proto::{
     datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
-    MODE_LOBBY, PROTO_VER,
+    MODE_LOBBY, MODE_WATCH, PROTO_VER,
 };
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
@@ -242,16 +242,19 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
         let incoming = ep.accept().await;
         match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
             Admit::Refuse => {
+                ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
                 incoming.refuse();
                 continue;
             }
             Admit::Retry => {
+                ctx.health.conn_retried.fetch_add(1, Ordering::Relaxed);
                 incoming.retry();
                 continue;
             }
             Admit::Take => {}
         }
         let Some(permit) = ctx.gate.take(incoming.remote_address().ip()) else {
+            ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
             incoming.refuse();
             continue;
         };
@@ -271,7 +274,8 @@ pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
-async fn refuse(send: &mut wtransport::SendStream, reason: u8) {
+async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
+    ctx.health.refuse(reason);
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     if let Ok(n) = proto::frame_msg(&Msg::Refuse { reason }, &mut f) {
         let _ = send.write_all(&f[..n]).await;
@@ -289,6 +293,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     })
     .await;
     let Ok(Some((conn, mut send, mut recv, hello))) = opened else {
+        ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     let Msg::Hello {
@@ -297,17 +302,19 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         pass,
         mode,
         skin,
+        emblem,
         party,
     } = hello
     else {
+        ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     if proto != PROTO_VER {
-        return refuse(&mut send, proto::REFUSE_VERSION).await;
+        return refuse(&mut send, proto::REFUSE_VERSION, &ctx).await;
     }
     // Past capacity, or on its way down for a restart: come back soon.
     if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
-        return refuse(&mut send, proto::REFUSE_FULL).await;
+        return refuse(&mut send, proto::REFUSE_FULL, &ctx).await;
     }
     // Who: a pass from Elo Pros, a ticket of ours a pass earned, or a
     // guest.
@@ -318,7 +325,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     } else if ticket {
         match ctx.nonces.check_ticket(pass.as_str()) {
             Some(w) => Some(w),
-            None if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            None if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
             None => None,
         }
     } else if let Some(key) = ctx.elo_pubkey {
@@ -331,13 +338,13 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             auth::now_unix(),
         ) {
             Ok(p) => Some(auth::Who::from(p)),
-            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS).await,
+            Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
             // Casual is open to anyone: a pass that doesn't check out (say,
             // older than its ten minutes) only costs its skin.
             Err(_) => None,
         }
     } else if ranked {
-        return refuse(&mut send, proto::REFUSE_PASS).await;
+        return refuse(&mut send, proto::REFUSE_PASS, &ctx).await;
     } else {
         None
     };
@@ -354,12 +361,15 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         _ => None,
     };
 
-    // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
-    // a guest, or a list that can't be read, wears the standard look.
+    // A skin is worn only if the pass's wallet owns it and, for a rank-locked
+    // one, its floor is at the line (docs/DESIGN.md §15); a guest, or a list
+    // or rating that can't be read, wears the standard look.
     let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
         Some(w) if skin != proto::SKIN_STANDARD => {
             let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
-            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+            let line = proto::SKIN_FLOOR.get(skin as usize).copied().unwrap_or(u16::MAX);
+            let owned = ctx.elo.skins(w).await.iter().any(|s| s == want);
+            if owned && (line == 0 || ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line))) {
                 skin
             } else {
                 proto::SKIN_STANDARD
@@ -367,21 +377,38 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         }
         _ => proto::SKIN_STANDARD,
     };
+    // An emblem is anyone's, a guest's too, but a rank-locked glyph
+    // (`proto::GLYPH_FLOOR`) is worn only at its line, as a skin.
+    let emblem = proto::emblem_valid(emblem);
+    let line = proto::GLYPH_FLOOR[proto::emblem_parts(emblem).0 as usize];
+    let emblem = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if line == 0 => emblem,
+        Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
+        _ => proto::EMBLEM_NONE,
+    };
+    let look = proto::Look { skin, emblem };
 
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
+        // A watcher takes no seat: party `party`'s match, or any public one.
+        MODE_WATCH => ToSim::Watch {
+            session: session_id,
+            target: party,
+            player,
+            tx,
+        },
         MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
             let Some(wallet) = who.and_then(|p| p.wallet) else {
-                return refuse(&mut send, proto::REFUSE_NEEDS_WALLET).await;
+                return refuse(&mut send, proto::REFUSE_NEEDS_WALLET, &ctx).await;
             };
             // A ban is a person's call on a reviewed replay; a list that
             // can't be read never refuses.
             if ctx.elo.banned(&wallet).await == Some(true) {
-                return refuse(&mut send, proto::REFUSE_BANNED).await;
+                return refuse(&mut send, proto::REFUSE_BANNED, &ctx).await;
             }
             let ladder = match mode {
                 MODE_DOUBLES => "doubles",
@@ -398,7 +425,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
                     mode,
                     rating,
                     since: std::time::Instant::now(),
-                    skin,
+                    look,
                     party: seating.filter(|_| mode == MODE_DOUBLES),
                 }),
                 tx,
@@ -408,12 +435,14 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             session: session_id,
             name,
             mode,
-            skin,
+            look,
             party: seating,
+            code: party,
             player,
             tx,
         },
     };
+    // Counted as a join by the sim once it seats or queues it (`health.rs`).
     if to_sim.send(join).is_err() {
         return;
     }
@@ -425,17 +454,43 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         mut datagrams,
         mut streams,
     } = inlet;
-    let (wconn, counts) = (conn.clone(), ctx.counts.clone());
+    let (wconn, wctx) = (conn.clone(), ctx.clone());
     let snapshots = tokio::spawn(async move {
         while let Some(d) = datagrams.recv().await {
-            let d = outlet::newest(&mut datagrams, d, &counts);
+            let d = outlet::newest(&mut datagrams, d, &wctx.counts);
             if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
-                let _ = wconn.send_datagram(d);
+                if wconn.send_datagram(d).is_err() {
+                    wctx.health.send_errors.fetch_add(1, Ordering::Relaxed);
+                }
             } else {
-                counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
+                wctx.counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
             }
         }
     });
+    // The connection's round trip and loss, each journal window and at
+    // the end (`health.rs`).
+    let seen = Arc::new(Mutex::new((0u64, 0u64)));
+    let sample = {
+        let (conn, ctx, seen) = (conn.clone(), ctx.clone(), seen.clone());
+        move || {
+            let q = conn.quic_connection().stats();
+            if let Ok(mut last) = seen.lock() {
+                ctx.health
+                    .sample(conn.rtt(), q.path.sent_packets, q.path.lost_packets, &mut last);
+            }
+        }
+    };
+    let sampler = {
+        let sample = sample.clone();
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(crate::health::JOURNAL);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                sample();
+            }
+        })
+    };
     let writer = tokio::spawn(async move {
         let ended = streams.write_stream(&mut send).await;
         if ended == Ended::Closed {
@@ -460,10 +515,16 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             }
         }
     });
+    // The stream says goodbye, or (a watcher) asks for the next player.
+    let fsim = to_sim.clone();
     let reader = async {
         while let Some(f) = read_frame(&mut recv).await {
-            if matches!(decode_msg(&f), Ok(Msg::Bye) | Err(_)) {
-                break;
+            match decode_msg(&f) {
+                Ok(Msg::Follow { .. }) if mode == MODE_WATCH => {
+                    let _ = fsim.send(ToSim::Follow { session: session_id });
+                }
+                Ok(Msg::Bye) | Err(_) => break,
+                _ => {}
             }
         }
     };
@@ -476,6 +537,8 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     };
     datagrams.abort();
     snapshots.abort();
+    sampler.abort();
+    sample();
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
     if behind {

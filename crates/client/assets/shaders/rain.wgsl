@@ -19,7 +19,8 @@ struct Rain {
     fall: vec4<f32>,
     // xyz: the box's half extents, m. w: intensity 0..1.
     box_: vec4<f32>,
-    // rgb: the streak's colour, already lit and exposed. w: unused.
+    // rgb: the streak's colour, already lit and exposed. w: the radius
+    // round the eye put out under a roof (`rain::SHELTER_CLEAR_M`), 0 out.
     look: vec4<f32>,
 }
 
@@ -77,7 +78,10 @@ fn vertex(in: VertexIn) -> VertexOut {
     // wrap is never seen.
     let alive = select(0.0, 1.0, in.color.x < rain.box_.w);
     let edge = max(max(abs(wrapped.x) / half.x, abs(wrapped.z) / half.z), abs(wrapped.y) / half.y);
-    let fade = alive * (1.0 - smoothstep(0.7, 1.0, edge));
+    // Under a roof, none near the eye (Gates' shelter): a metre's fade.
+    let clear = rain.look.w;
+    let open = select(1.0, smoothstep(clear, clear + 1.0, length(wrapped.xz)), clear > 0.0);
+    let fade = alive * open * (1.0 - smoothstep(0.7, 1.0, edge));
 
     var world = along + side * in.uv.x;
     if fade <= 0.0 {

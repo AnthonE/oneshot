@@ -93,6 +93,11 @@ pub const DEF: Def = Def {
     solids: &[
     ],
     solid_looks: &[],
+    dress: &[
+    ],
+    dress_solids: &[
+    ],
     nav: false,
+    flags: &[[-18.5, 0.0, 0.0], [18.5, 0.0, 0.0]],
     light: crate::map::LightDef::DAY,
 };

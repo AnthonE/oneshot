@@ -1,5 +1,6 @@
 //! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, an
-//! eight-seat Gun Game, a sixteen-seat Big Team) with one person seat (played by a bot, through the same input path a client
+//! eight-seat Gun Game, a sixteen-seat Big Team, Capture the Flag) with
+//! one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
@@ -24,6 +25,7 @@ use sim::world::{Phase, Rules};
 const SALT: (u64, u64) = (0x5a17_0123_4567_89ab, 0xfeed_beef_cafe_d00d);
 /// The skin the person seat wears (the server checked it owns it).
 const SKIN: u8 = 3;
+const EMBLEM: proto::Emblem = proto::emblem(3, 2, 5, 9);
 
 /// Whether the 64 bits of `w` appear in `buf` at any bit offset (the wire
 /// is bit-packed, so a leak need not be byte-aligned).
@@ -102,6 +104,28 @@ impl Gate {
                 }
                 // Pad timers are public (room::build).
                 sim::thing::Kind::Pad => {}
+                // 11. Capture the Flag: a flag at home or on the floor is
+                // public, where it truly is (its base, or where its
+                // carrier fell or let go: told to everyone, as Halo's
+                // waypoint is); a carried one names its carrier, never
+                // where they are.
+                sim::thing::Kind::Flag => {
+                    assert_eq!(s.flags().len(), if w.rules.ctf { 2 } else { 0 });
+                    for (t, f) in s.flags().iter().enumerate() {
+                        let truth = &w.flags[t];
+                        assert_eq!(f.state, truth.state, "tick {}: flag {t}", w.tick);
+                        if f.state == sim::world::FLAG_HELD {
+                            assert_eq!(f.carrier, truth.carrier);
+                            assert_eq!(f.pos, V3::ZERO, "tick {}: a carried flag's place was sent", w.tick);
+                        } else {
+                            assert!(
+                                (f.pos - truth.pos).len() < 0.05,
+                                "tick {}: {f:?} is not where flag {t} is",
+                                w.tick
+                            );
+                        }
+                    }
+                }
                 // 10. A gun on the floor only if it is a true one, in clear
                 // line of this client's eye: never by who dropped it, so
                 // never where a hidden enemy fell.
@@ -287,6 +311,19 @@ fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
+    for d in sim::maps::ALL.iter().filter(|d| d.flags.len() == 2) {
+        gate(
+            d.build(),
+            Rules {
+                time_limit_ms: 120_000,
+                ..Rules::ctf()
+            },
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
@@ -301,7 +338,15 @@ fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
 /// from start to end.
 fn gate(map: Map, rules: Rules) {
     let mut room = Room::new(map, rules, 77, SALT);
-    let (slot, out) = room.join(Name::new("gate"), SKIN).unwrap();
+    let (slot, out) = room
+        .join(
+            Name::new("gate"),
+            proto::Look {
+                skin: SKIN,
+                emblem: EMBLEM,
+            },
+        )
+        .unwrap();
     let Some((
         _,
         Msg::Welcome {
@@ -419,13 +464,29 @@ fn gate(map: Map, rules: Rules) {
     );
 }
 
-/// Check 7: skins are public by design (docs/DESIGN.md §15) and say
-/// nothing of the world. A seat names the skin its person was checked to
-/// own, and a bot's is the standard look.
+/// Check 7: skins and emblems are public by design (docs/DESIGN.md §15)
+/// and say nothing of the world. A seat names the skin and emblem its
+/// person was checked to wear, and a bot's are the standard look and none.
 fn check_seat(m: &Msg, me: u8) {
-    if let Msg::Seat { slot, bot, skin, .. } = *m {
-        let want = if slot == me && !bot { SKIN } else { proto::SKIN_STANDARD };
-        assert_eq!(skin, want, "seat {slot}'s skin");
+    if let Msg::Seat {
+        slot,
+        bot,
+        skin,
+        emblem,
+        ..
+    } = *m
+    {
+        let mine = slot == me && !bot;
+        assert_eq!(
+            skin,
+            if mine { SKIN } else { proto::SKIN_STANDARD },
+            "seat {slot}'s skin"
+        );
+        assert_eq!(
+            emblem,
+            if mine { EMBLEM } else { proto::EMBLEM_NONE },
+            "seat {slot}'s emblem"
+        );
     }
 }
 

@@ -87,15 +87,25 @@ async fn stand_in(old: bool) -> (String, Seen) {
                     seen.lock().unwrap().push((first, headers, body));
                     (200, r#"{"ok":true}"#.to_string())
                 } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
-                    // The first wallet owns the ember skin; nobody else owns any.
+                    // The first wallet owns the ember skin, the second the
+                    // gilded one; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
                         r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"}]"#
+                    } else if first.contains(WALLETS[1]) {
+                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"}]"#
                     } else {
                         "[]"
                     };
                     (200, format!(r#"{{"items":{items}}}"#))
                 } else if first.starts_with("GET /api/bans/oneshot/of/") {
                     (200, format!(r#"{{"banned":{}}}"#, first.contains(BANNED)))
+                } else if first.starts_with("GET /api/ratings/oneshot/of/") {
+                    // Both floors clear ember's line; neither clears gilded's.
+                    let floor = if first.contains(WALLETS[0]) { 1350 } else { 1400 };
+                    (
+                        200,
+                        format!(r#"{{"ladders":{{"duel":{{"rating":1500,"floor":{floor}}}}}}}"#),
+                    )
                 } else {
                     (200, r#"{"ladders":{"duel":{"rating":1500}}}"#.to_string())
                 };
@@ -165,11 +175,11 @@ async fn read_msg(r: &mut wtransport::RecvStream) -> Option<Msg> {
 /// Connects, says hello, and returns every stream message until the server
 /// closes the session (or 30 s pass).
 async fn play(h: &server::Handle, pass: &str, mode: u8) -> Vec<Msg> {
-    play_as(h, pass, mode, proto::SKIN_STANDARD).await
+    play_as(h, pass, mode, proto::Look::default()).await
 }
 
 /// [`play`], asking to wear `skin`.
-async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg> {
+async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) -> Vec<Msg> {
     let cfg = ClientConfig::builder()
         .with_bind_address("127.0.0.1:0".parse().unwrap())
         .with_server_certificate_hashes([Sha256Digest::from(h.cert_hash)])
@@ -186,7 +196,8 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg>
         name: Name::new("ranked"),
         pass: Pass::new(pass).unwrap(),
         mode,
-        skin,
+        skin: look.skin,
+        emblem: look.emblem,
         party: 0,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
@@ -287,9 +298,15 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         }
         None
     });
-    // Each asks for a skin: the first owns ember, the second doesn't own
-    // gilded and plays in the standard look.
-    let (a, b) = tokio::join!(play_as(&h, &p0, MODE_DUEL, 2), play_as(&h, &p1, MODE_DUEL, 5));
+    // Each asks for a skin it owns: the first's floor is at ember's line, the
+    // second's is under gilded's (rank-locked), so it plays in the standard look.
+    // And an emblem: the first asks for the crown, locked at 1800, which its
+    // 1350 doesn't reach; the second for a free star.
+    let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
+    let (a, b) = tokio::join!(
+        play_as(&h, &p0, MODE_DUEL, proto::Look { skin: 2, emblem: crown }),
+        play_as(&h, &p1, MODE_DUEL, proto::Look { skin: 5, emblem: star })
+    );
     let (online, status) = watcher.await.unwrap().expect("online.json listed both players");
     let mut listed: Vec<&str> = online["online"]
         .as_array()
@@ -313,13 +330,25 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
             _ => None,
         })
     };
+    let emblem_of = |got: &[Msg], who: u8| {
+        got.iter().rev().find_map(|m| match m {
+            Msg::Seat { slot, emblem, .. } if *slot == who => Some(*emblem),
+            _ => None,
+        })
+    };
     let (sa, sb) = (slot_of(&a).unwrap(), slot_of(&b).unwrap());
     for got in [&a, &b] {
+        assert_eq!(
+            emblem_of(got, sa),
+            Some(proto::EMBLEM_NONE),
+            "a locked glyph under its line"
+        );
+        assert_eq!(emblem_of(got, sb), Some(star), "a free emblem, seen by both");
         assert_eq!(skin_of(got, sa), Some(2), "the owned skin, seen by both");
         assert_eq!(
             skin_of(got, sb),
             Some(proto::SKIN_STANDARD),
-            "an unowned skin is not worn"
+            "a skin above the wallet's floor is not worn"
         );
     }
     for got in [&a, &b] {
@@ -639,10 +668,10 @@ async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
     // The cup's file, and its top two waiting on a review before a prize.
     let mut cup = None;
     for _ in 0..50 {
+        // The file once whole: the server writes a `.part` and renames it.
         cup = std::fs::read_dir(dir.join("cups"))
             .ok()
-            .and_then(|mut d| d.next())
-            .and_then(|e| e.ok());
+            .and_then(|d| d.flatten().find(|e| e.path().extension().is_some_and(|x| x == "json")));
         if cup.is_some() {
             break;
         }

@@ -8,13 +8,17 @@
 //!   anything of the map) **and** the map says their head can be seen from
 //!   your eye (`sim::map::Map::clear`). The server sends an enemy who could
 //!   be seen *soon* (`room/src/fog.rs`), so being sent is not being seen: a
-//!   name never shows through a wall, and never says more than the body
-//!   under the crosshair already does.
+//!   name never shows through a wall. It does show over an enemy in a fog
+//!   bank, a dark corner or the grass, inside [`REACH_M`]: what the sim's
+//!   map can't see through stops it, what only the picture hides doesn't.
+//!   That is Halo's red reticle, the same for every player and every rung.
+//! - **At the wheel** only teammates: the chase camera is behind the hull,
+//!   not where the aim leaves from, and sees round what the seat can't.
 //!
 //! The tests are the sim map's own raycasts, the same on every target and
 //! every rung, so what a tag tells one player it tells every player looking
-//! the same way. None while you are dead (the kill cam is the killer's
-//! eye) or off a match (the HUD's root hides them).
+//! the same way. None while you are dead (the death cam watches your own
+//! body) or off a match (the HUD's root hides them).
 //!
 //! Bevy draws, it does not decide: who is aimed at is worked out here from
 //! the session's state and nothing is sent.
@@ -92,6 +96,7 @@ pub fn draw(
     look: Res<Look>,
     st: Res<hud::HudState>,
     mut built: Local<bool>,
+    (mut want, mut foes): (Local<Vec<Wanted>>, Local<Vec<client_net::core::Drawn>>),
     root: Query<Entity, With<hud::HudRoot>>,
     eye: Query<(&Transform, &Projection), With<Eye>>,
     mut tags: Query<(&mut Tag, &mut Node, &mut Text, &mut TextColor, &mut Visibility)>,
@@ -123,7 +128,11 @@ pub fn draw(
     let s = link.0.session();
     let core = &s.core;
     let (f, p) = core.own();
-    let mut want: Vec<Wanted> = Vec::new();
+    want.clear();
+    // At the wheel the camera is behind the hull, not at the eye the aim
+    // leaves from: an enemy's name would be drawn where the crosshair
+    // isn't, and over a wall the chase camera sees round. Teammates only.
+    let driving = f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER);
     if s.ready && f.alive {
         let now = link.0.now_ms();
         let others = core.others(now);
@@ -145,11 +154,10 @@ pub fn draw(
         let (sy, cy) = look.yaw.sin_cos();
         let (sp, cp) = look.pitch.sin_cos();
         let dir = V3::new(cp * cy, sp, cp * sy);
-        let foes: Vec<client_net::core::Drawn> = others
-            .iter()
-            .filter(|d| d.slot != core.slot && !mate(d))
-            .copied()
-            .collect();
+        foes.clear();
+        if !driving {
+            foes.extend(others.iter().filter(|d| d.slot != core.slot && !mate(d)).copied());
+        }
         if let Some(slot) = aimed_at(&core.map, from, dir, &foes) {
             if let Some(d) = foes.iter().find(|d| d.slot == slot) {
                 want.push(Wanted {
@@ -180,9 +188,11 @@ pub fn draw(
             tag.slot = Some(w.slot);
         }
         // The name can land after the body does (the seat's message).
-        let name = st.name(w.slot);
-        if text.0 != name {
-            text.0 = name;
+        if st.names.get(&w.slot) != Some(&text.0) {
+            let name = st.name(w.slot);
+            if text.0 != name {
+                text.0 = name;
+            }
         }
         ink.set_if_neq(TextColor(if w.mate { MATE_INK } else { FOE_INK }));
         let (left, top) = ((ndc.x + 1.0) * 50.0, (1.0 - ndc.y) * 50.0);

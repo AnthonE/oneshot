@@ -77,6 +77,11 @@ pub struct Presentation;
 #[derive(Component)]
 pub struct ScaledSurface {
     pub image: Handle<Image>,
+    /// The backdrop's material: touched after a resize, so its bind group
+    /// is built again against the new texture (Bevy rebuilds a resized
+    /// image's texture, and a material's bind group only when the material
+    /// itself changes).
+    pub frame: Handle<OpaqueFrame>,
     pub camera: Entity,
     pub backdrop: Entity,
     original_target: RenderTarget,
@@ -115,6 +120,7 @@ pub fn apply(
                 commands.entity(surface.backdrop).despawn();
                 commands.entity(surface.camera).despawn();
                 images.remove(&surface.image);
+                frames.remove(&surface.frame);
                 commands.entity(eye).remove::<ScaledSurface>().insert(IsDefaultUiCamera);
             }
             continue;
@@ -131,6 +137,9 @@ pub fn apply(
                         depth_or_array_layers: 1,
                     });
                 }
+                // Without this the window shows the old texture, frozen,
+                // while the eye draws into the new one.
+                let _ = frames.get_mut(&surface.frame);
             }
             continue;
         }
@@ -153,6 +162,7 @@ pub fn apply(
                 DebandDither::Disabled,
             ))
             .id();
+        let frame = frames.add(OpaqueFrame { image: image.clone() });
         let backdrop = commands
             .spawn((
                 Presentation,
@@ -162,7 +172,7 @@ pub fn apply(
                     height: Val::Percent(100.0),
                     ..default()
                 },
-                MaterialNode(frames.add(OpaqueFrame { image: image.clone() })),
+                MaterialNode(frame.clone()),
                 GlobalZIndex(i32::MIN),
                 UiTargetCamera(presentation),
                 FocusPolicy::Pass,
@@ -175,6 +185,7 @@ pub fn apply(
             .remove::<IsDefaultUiCamera>()
             .insert(ScaledSurface {
                 image: image.clone(),
+                frame,
                 camera: presentation,
                 backdrop,
                 original_target: target.clone(),

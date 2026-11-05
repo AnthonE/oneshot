@@ -7,7 +7,9 @@
 //! elopros.com: `server.json` names the public address and no hash (the
 //! browser checks a CA's certificate itself), and answers the page's origin
 //! (`--allow-origin`) for CORS. `/health` says the process is up, `/ready`
-//! whether it takes players (503 while it drains).
+//! whether it takes players (503 while it drains), `/health.json` what the
+//! server counted since it started (`health.rs`); `POST /bugs` takes a
+//! player's report (`bugs.rs`, with `--bugs`).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -84,6 +86,56 @@ async fn handle(
     if method == "OPTIONS" && cors.is_some() {
         return reply_cors(&mut sock, 204, "text/plain", b"", cors).await;
     }
+    if method == "POST" && path == "/bugs" {
+        let Some(intake) = &ctx.bugs else {
+            return reply(&mut sock, 404, "text/plain", b"not taken here").await;
+        };
+        // Behind nginx every peer is loopback: then its X-Real-IP says who.
+        let peer = sock.peer_addr().map(|a| a.ip()).unwrap_or([0u8; 4].into());
+        let from = if peer.is_loopback() {
+            header("x-real-ip").and_then(|v| v.parse().ok()).unwrap_or(peer)
+        } else {
+            peer
+        };
+        let len: usize = match header("content-length").map(|v| v.parse()) {
+            Some(Ok(n)) if n <= crate::bugs::BODY_MAX => n,
+            Some(Ok(_)) => return reply_cors(&mut sock, 413, "text/plain", b"too big", cors).await,
+            _ => return reply_cors(&mut sock, 400, "text/plain", b"length", cors).await,
+        };
+        let Some(at) = req[..n].windows(4).position(|w| w == b"\r\n\r\n") else {
+            return reply_cors(&mut sock, 400, "text/plain", b"head", cors).await;
+        };
+        let mut body = req[at + 4..n].to_vec();
+        let read = async {
+            let mut more = [0u8; 4096];
+            while body.len() < len {
+                let k = sock.read(&mut more).await?;
+                if k == 0 {
+                    break;
+                }
+                body.extend_from_slice(&more[..k]);
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(5), read)
+            .await
+            .is_err()
+            || body.len() < len
+        {
+            return reply_cors(&mut sock, 400, "text/plain", b"short", cors).await;
+        }
+        body.truncate(len);
+        let unix_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let (code, said): (u16, &[u8]) = match intake.keep(from, &body, unix_s, std::time::Instant::now()) {
+            Ok(()) => (204, b""),
+            Err(crate::bugs::No::Bad) => (400, b"not a report"),
+            Err(crate::bugs::No::Busy) => (429, b"too many: later"),
+            Err(crate::bugs::No::Full) => (503, b"full today"),
+        };
+        return reply_cors(&mut sock, code, "text/plain", said, cors).await;
+    }
     if method != "GET" {
         return reply(&mut sock, 405, "text/plain", b"GET only").await;
     }
@@ -112,6 +164,12 @@ async fn handle(
     }
     if path == "/health" {
         return reply(&mut sock, 200, "text/plain", b"ok").await;
+    }
+    if path == "/health.json" {
+        // Everything counted since start (`health.rs`); one line of numbers.
+        // (`/status.json` is the Elo Pros server-list row, `online.rs`.)
+        let body = crate::health::json(ctx.now(), &ctx.health.read(&ctx.counts));
+        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
     if path == "/ready" {
         use std::sync::atomic::Ordering::Relaxed;
@@ -226,12 +284,15 @@ async fn reply_cors(
     let status = match code {
         200 => "OK",
         204 => "No Content",
+        400 => "Bad Request",
         404 => "Not Found",
+        413 => "Payload Too Large",
+        429 => "Too Many Requests",
         503 => "Service Unavailable",
         _ => "Method Not Allowed",
     };
     let cors = cors.map_or(String::new(), |o| {
-        format!("Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET\r\n")
+        format!("Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST\r\n")
     });
     let head = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\n{cors}Connection: close\r\n\r\n",

@@ -23,6 +23,10 @@ pub trait Link {
     fn live(&self) -> bool {
         true
     }
+    /// A tape's link (film mode, `film.rs`), whose clock the film moves.
+    fn tape(&mut self) -> Option<&mut Tape> {
+        None
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,6 +100,11 @@ impl Still {
         s.ready = true;
         s.welcomes = 1;
         s.map_id = map;
+        // The map itself too: what stands on its ground asks it where that
+        // is (a posed truck on a terrain).
+        if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == map) {
+            s.core.map = d.build();
+        }
         Still(s)
     }
 
@@ -127,5 +136,47 @@ impl Link for Still {
     }
     fn live(&self) -> bool {
         false
+    }
+}
+
+/// A tape played back (`film.rs`): a watching session fed by a
+/// `client_net::tape::Replay` at the film's clock, on its own frame clock,
+/// however long a frame takes to draw. What it draws is what the player
+/// was sent, through client-net's interpolation; nothing goes anywhere.
+pub struct Tape {
+    pub session: Session,
+    pub replay: client_net::tape::Replay,
+}
+
+impl Tape {
+    pub fn new(tape: client_net::tape::Tape) -> Tape {
+        Tape {
+            session: Session::replay(),
+            replay: client_net::tape::Replay::new(tape),
+        }
+    }
+}
+
+impl Link for Tape {
+    fn update(&mut self, _: Input) {
+        self.replay.frame(&mut self.session);
+    }
+    fn session(&self) -> &Session {
+        &self.session
+    }
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+    fn now_ms(&self) -> f64 {
+        self.replay.clock_ms
+    }
+    fn closed(&self) -> bool {
+        false
+    }
+    fn live(&self) -> bool {
+        false
+    }
+    fn tape(&mut self) -> Option<&mut Tape> {
+        Some(self)
     }
 }

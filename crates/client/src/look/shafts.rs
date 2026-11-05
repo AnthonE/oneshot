@@ -25,14 +25,17 @@
 //!
 //! **Where it runs**: wherever the atmosphere draws (the desktop, the
 //! browser's WebGPU module) at the CLOUDS row's top rung
-//! (`quality::Tier::shafts`). **Not under WebGL2, and not by choice**:
-//! Bevy's volumetric pass is WebGPU-only on the web ("Requires using WebGPU
-//! on Wasm builds"), and a march of the shadow map would be a render node of
-//! our own reading Bevy's private shadow textures. The best WebGL2 draws is
-//! the same mist's sunward glow (`rig::fog_for`): the brightening toward the
-//! sun a forward-scattering mist gives, unshadowed, so no beams. The mist
-//! itself is the same on every tier, so no rung sees a fighter another
-//! doesn't.
+//! (`quality::Tier::shafts`). **Under WebGL2, a march of our own** at the
+//! same rung ([`WebShafts`], `shaft_march.wgsl`): Bevy's volumetric pass is
+//! WebGPU-only on the web, and WebGL2 has no scene depth for a pass of its
+//! own, but a material's fragment knows how far its own ray runs and can
+//! read the sun's shadow map. So the boxes (`weathering.wgsl`) and the sky
+//! behind them (the deck's BACKDROP) each march their ray through the map's
+//! box, twelve steps, and take the sun's share of the flat fog back where it
+//! crossed shade. Bodies and effects don't march: the beams are in front of
+//! the walls and the sky, not of a fighter. Either way the mist's
+//! extinction is the same on every rung, and shafts only take light away
+//! where a wall shades the air, so no rung sees a fighter another doesn't.
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::Exposure;
@@ -78,6 +81,37 @@ pub struct Shafts {
 /// The volume's entity.
 #[derive(Component)]
 pub struct ShaftVolume;
+
+/// Steps WebGL2's march takes along a ray (`shaft_march.wgsl`'s
+/// `SHAFT_STEPS`): a map's box is crossed in a few metres a step.
+pub const WEB_STEPS: u32 = 12;
+
+/// The WebGL2 march's lanes (`shaft_march.wgsl`), the same in every
+/// material that marches: the map's box (`lo` w: the mist's extinction per
+/// metre; `hi` w: 1 where it runs) and what a fully shaded ray takes back
+/// per unit of optical depth (`tint`: the flat fog's colour, exposed, times
+/// the sun's share of the mist; w [`SHAFT_G`]). All zero: off.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct WebShafts {
+    pub lo: Vec4,
+    pub hi: Vec4,
+    pub tint: Vec4,
+}
+
+impl WebShafts {
+    /// For a mood's mist in map `map`'s box, `share` of it the sun's.
+    pub fn new(m: &Mood, map: u8, share: f32) -> WebShafts {
+        let b = box_transform(map);
+        let (lo, hi) = (b.translation - b.scale * 0.5, b.translation + b.scale * 0.5);
+        let f = super::rig::fog_for(m, false, 0.0);
+        let c = LinearRgba::from(f.color);
+        WebShafts {
+            lo: lo.extend(m.mist),
+            hi: hi.extend(1.0),
+            tint: (Vec3::new(c.red, c.green, c.blue) * share.clamp(0.0, 1.0)).extend(SHAFT_G),
+        }
+    }
+}
 
 fn smooth(lo: f32, hi: f32, x: f32) -> f32 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
@@ -204,6 +238,7 @@ pub fn drive(
     mood: Res<MoodNow>,
     tier: Res<Tier>,
     mut state: ResMut<Shafts>,
+    mut web_now: ResMut<WebShafts>,
     mut written: Local<Option<(u8, Shafts, u32)>>,
     cam: Query<Cam, With<EyeCam>>,
     sun: Query<(Entity, Has<VolumetricLight>, &SunBase), With<Sun>>,
@@ -214,7 +249,16 @@ pub fn drive(
     let lux = sun_now.map_or(0.0, |(_, _, b)| b.lux);
     let t_sun = super::sky::sun_transmittance(m.sun_elev.sin());
     let cut = split(m, lux * super::fill::luminance(t_sun));
-    let on = tier.shafts() && !mood.roofed && m.mist > 0.0 && lux > 0.0 && cut.volume > 0.0;
+    let lit = !mood.roofed && m.mist > 0.0 && lux > 0.0 && cut.volume > 0.0;
+    // Our own march where the volumetric pass can't run (WebGL2, or a GPU
+    // without the atmosphere), at the rung the volume would be drawn at.
+    let web = if !tier.atmosphere && tier.gfx.clouds == super::quality::Clouds::High && lit {
+        WebShafts::new(m, mood.map, cut.volume / m.mist)
+    } else {
+        WebShafts::default()
+    };
+    web_now.set_if_neq(web);
+    let on = tier.shafts() && lit;
     let cut = if on {
         cut
     } else {
@@ -272,6 +316,30 @@ pub fn drive(
     }
 }
 
+/// The march's lanes into every box that marches, when they move or a
+/// box's material is made (a level's build).
+pub fn paint_web(
+    web: Res<WebShafts>,
+    mut made: MessageReader<AssetEvent<super::weathering::LevelMaterial>>,
+    mut mats: ResMut<Assets<super::weathering::LevelMaterial>>,
+) {
+    let fresh = made.read().any(|e| matches!(e, AssetEvent::Added { .. }));
+    if !web.is_changed() && !fresh {
+        return;
+    }
+    let ids: Vec<_> = mats
+        .iter()
+        .filter(|(_, m)| super::weathering::shaft_lanes(&m.extension.params) != (web.lo, web.hi, web.tint))
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        if let Some(m) = mats.get_mut(id) {
+            let p = &mut m.extension.params;
+            (p.shaft_lo, p.shaft_hi, p.shaft_tint) = (web.lo, web.hi, web.tint);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +358,12 @@ mod tests {
         let t = box_transform(2);
         let shade = super::super::quality::MapShade::of(sim::maps::ALL[2]);
         assert!(t.scale.length() < shade.floor_m);
+        // WebGL2's march lies in the same box and takes back no more than
+        // the sun's share of the fog.
+        let w = WebShafts::new(&m, 2, s.volume / m.mist);
+        assert!(w.hi.w == 1.0 && (w.lo.w - m.mist).abs() < 1e-9);
+        assert!((w.lo.truncate() - (t.translation - t.scale * 0.5)).length() < 1e-4);
+        let fog = LinearRgba::from(super::super::rig::fog_for(&m, false, 0.0).color);
+        assert!(w.tint.x > 0.0 && w.tint.x < fog.red && w.tint.w == SHAFT_G);
     }
 }

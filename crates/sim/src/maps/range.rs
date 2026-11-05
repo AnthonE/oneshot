@@ -70,6 +70,11 @@ pub const DEF: Def = Def {
     solids: &[
     ],
     solid_looks: &[],
+    dress: &[
+    ],
+    dress_solids: &[
+    ],
     nav: false,
+    flags: &[],
     light: crate::map::LightDef::DAY,
 };

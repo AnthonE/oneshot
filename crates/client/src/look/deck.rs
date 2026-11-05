@@ -165,6 +165,10 @@ pub struct CloudParams {
     pub dust: Vec4,
     pub disk: Vec4,
     pub disk_rgb: Vec4,
+    /// WebGL2's light shafts over the sky (`shafts::WebShafts`).
+    pub shaft_lo: Vec4,
+    pub shaft_hi: Vec4,
+    pub shaft_tint: Vec4,
 }
 
 /// What the WebGL2 deck draws its sun disk with: toward the sun, and its
@@ -210,9 +214,19 @@ impl CloudParams {
             }))
         };
         let r = SunDisk::EARTH.angular_size * 0.5;
-        let (lift, zenith, horizon, night, glow, fog, disk_dir, disk_rgb) = if p.backdrop {
+        // Daylight's, so it fades with the sun and under an overcast, and is
+        // gone as the sun drops toward the horizon (where `DeckLight` starts
+        // warming the deck), so a dusk sky is not greyed by blue. On both
+        // skies: the backdrop under WebGL2 is the slate the atmosphere alone
+        // drew (`rig::SKY_LIFT`), and without it a browser's sky read a
+        // stop darker than the desktop's and, through Dry Fork's dust, grey.
+        let lift = Vec3::from_array(sky::air_chroma())
+            * super::rig::SKY_LIFT
+            * p.light
+            * (p.sun.y / 0.25).clamp(0.0, 1.0)
+            * (1.0 - p.dark);
+        let (zenith, horizon, night, glow, fog, disk_dir, disk_rgb) = if p.backdrop {
             (
-                Vec3::ZERO,
                 grade(sky::backdrop_at(Vec3::Y)).extend(sky::AIR_FLOOR),
                 grade(sky::backdrop_at(Vec3::X)).extend((r * DISK_SOFT).cos()),
                 (v3(sky::NIGHT_SKY) * p.night).extend(0.0),
@@ -222,17 +236,7 @@ impl CloudParams {
                 disk.rgb,
             )
         } else {
-            // Daylight's, so it fades with the sun and under an overcast,
-            // and is gone as the sun drops toward the horizon (where
-            // `DeckLight` starts warming the deck), so a dusk sky is the
-            // atmosphere's orange, not greyed by blue.
-            let lift = Vec3::from_array(sky::air_chroma())
-                * super::rig::SKY_LIFT
-                * p.light
-                * (p.sun.y / 0.25).clamp(0.0, 1.0)
-                * (1.0 - p.dark);
             (
-                lift,
                 Vec4::ZERO,
                 Vec4::ZERO,
                 Vec4::ZERO,
@@ -293,6 +297,9 @@ impl CloudParams {
             dust: p.fog.dust_lanes(),
             disk: disk_dir.extend(0.0),
             disk_rgb: disk_rgb.extend(0.0),
+            shaft_lo: Vec4::ZERO,
+            shaft_hi: Vec4::ZERO,
+            shaft_tint: Vec4::ZERO,
         }
     }
 }
@@ -630,7 +637,13 @@ pub fn setup(
     let field = sky::CloudField::new(SKY_SEED, sky::FIELD_N);
     let image = images.add(field.image());
     let detail = images.add(detail_volume(SKY_SEED, DETAIL_N));
-    let soft = field.soft(sky::soft_level());
+    // The light a fighter stands in comes off a field of one size on every
+    // target (`sky::SOFT_FIELD_N`), not the drawn one.
+    let soft = if sky::FIELD_N == sky::SOFT_FIELD_N {
+        field.soft(0)
+    } else {
+        sky::CloudField::new(SKY_SEED, sky::SOFT_FIELD_N).soft(0)
+    };
     let triangle = meshes.add(fullscreen_mesh());
     let mood = super::mood::NOON;
     let at = Anchor::default();
@@ -666,6 +679,7 @@ pub fn drive(
     drift: Res<Drift>,
     tier: Res<Tier>,
     shafts: Res<super::shafts::Shafts>,
+    web: Res<super::shafts::WebShafts>,
     deck: Option<Res<DeckHandles>>,
     cam: Query<(Has<TemporalAntiAliasing>, &Exposure), With<EyeCam>>,
     mut clouds: ResMut<Assets<CloudMaterial>>,
@@ -677,14 +691,19 @@ pub fn drive(
     let m = &mood.mood;
     let (temporal, ev) = cam.single().map_or((false, m.ev100), |(t, e)| (t, e.ev100));
     let at = drift.anchor;
-    let want = CloudParams::new(
-        &m.compose(at.off, sky::baked()),
-        sky::CLOUD_NITS,
-        tier.cloud_steps(),
-        temporal,
-        &at,
-        Disk::of(m, ev),
-    );
+    let want = CloudParams {
+        shaft_lo: web.lo,
+        shaft_hi: web.hi,
+        shaft_tint: web.tint,
+        ..CloudParams::new(
+            &m.compose(at.off, sky::baked()),
+            sky::CLOUD_NITS,
+            tier.cloud_steps(),
+            temporal,
+            &at,
+            Disk::of(m, ev),
+        )
+    };
     if clouds.get(&deck.cloud).is_some_and(|c| c.params != want) {
         if let Some(c) = clouds.get_mut(&deck.cloud) {
             c.params = want;
@@ -718,15 +737,15 @@ mod tests {
         assert!((worley(3, p, 4) - worley(3, p + Vec3::splat(4.0), 4)).abs() < 1e-6);
     }
 
-    /// The uniform holds every lane `cloud.wgsl` declares, in order: 26
+    /// The uniform holds every lane `cloud.wgsl` declares, in order: 29
     /// four-float lanes.
     #[test]
     fn the_deck_uniform_matches_the_shader() {
-        assert_eq!(CloudParams::min_size().get(), 26 * 16);
+        assert_eq!(CloudParams::min_size().get(), 29 * 16);
         let src = include_str!("../../assets/shaders/cloud.wgsl");
         let body = &src[src.find("struct Cloud {").unwrap()..];
         let body = &body[..body.find('}').unwrap()];
-        assert_eq!(body.matches(": vec4<f32>,").count(), 26);
+        assert_eq!(body.matches(": vec4<f32>,").count(), 29);
     }
 
     /// The flat deck at LOW, the slab above it, and the stars and the moon
