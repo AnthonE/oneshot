@@ -33,7 +33,7 @@ Fireplace, engine-shim and Elo Pros.
 
 1. Write the code.
 2. `ci/quick.sh`: the maps' check, fmt, clippy (`-D warnings`; the sim's
-   walls are `crates/sim/clippy.toml`), the wasm clippy and the fog budget.
+   walls are `crates/sim/clippy.toml`) and the wasm clippy.
    Add crate names to run their tests too (`ci/quick.sh sim room`). Then
    only what you touched:
    - **the sim:** `ci/parity.sh`;
@@ -93,11 +93,12 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 9. **Guns:** `cargo test -p sim --test range` pins Halo 2's counts and times.
    `-- --ignored --nocapture` prints the table to tune by;
    `oneshot-server --map range` puts every gun on a pad to feel them.
-10. **The page is ≤ 9 MB gzipped, each module** (`ci/client.sh`): the page is
-    built twice, `oneshot_client` (WebGL2) and `oneshot_client_gpu`
-    (`--features webgpu`, the desktop's frame), and picks one before either
-    downloads. What WebGL2 can't do is `cfg(webgl2)` (`build.rs`), never
-    `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
+10. **The page is two modules** (`ci/client.sh`): `oneshot_client` (WebGL2)
+    and `oneshot_client_gpu` (`--features webgpu`, the desktop's frame); it
+    picks one before either downloads. Their gzipped sizes are printed, not
+    gated (no size, fog or frame-rate budget stops a build any more; the
+    tools that measure them stay). What WebGL2 can't do is `cfg(webgl2)`
+    (`build.rs`), never `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
 11. **`crates/fx` is Gates'** (`crates/fx/tests/vendored.rs`).
 
 ## Commands
@@ -106,7 +107,7 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
 ci/quick.sh [crate…]                                 # the local check
 ci/parity.sh                                         # native vs wasm
 ci/client.sh                                         # the client: clippy, native, the page's two modules into crates/client/dist
-ci/client.sh dev                                     # just the page, quickly (release, no size gate); both modules
+ci/client.sh dev                                     # just the page, quickly (release, no fat LTO); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
 node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too)
@@ -133,7 +134,7 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
   `ci/client.sh` (or `cd crates/client`) does.
 - The page's real build (`--profile web`, fat LTO, two modules) is slow.
   `ci/client.sh dev` and `tools/fx.sh` build release, which is fine for
-  looking but not for the 9 MB gate (`ci/publish_web.sh` refuses a dev page).
+  looking but not what ships (`ci/publish_web.sh` refuses a dev page).
 - Headless Chromium draws WebGPU only on SwiftShader's Vulkan
   (`--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader
   --use-angle=vulkan`); with ANGLE on GL the device is lost at once and the

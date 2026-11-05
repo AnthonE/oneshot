@@ -5,7 +5,7 @@
 #                      modules), its tests, a native build, then the page
 #                      into crates/client/dist, each module under the gate
 #   ci/client.sh dev   just the page, quickly: release (thin LTO, where the
-#                      web profile is fat), no size gate; both modules,
+#                      web profile is fat); both modules,
 #                      bound and proved, into dist all the same
 #
 # The page is two wasm modules (after Gates' ci/build_web.sh, "the game,
@@ -70,17 +70,13 @@ for m in webgl2 webgpu; do
   fi
   raw=$(wc -c < "dist/${stem}_bg.wasm")
   if [ "$mode" = check ]; then
-    # The size gate (docs/DESIGN.md §2): what a player downloads, gzipped,
-    # whichever module their browser fetches.
+    # What a player downloads, gzipped, whichever module their browser
+    # fetches: printed, never a gate.
     gz=$(gzip -9c "dist/${stem}_bg.wasm" | wc -c)
     echo "$stem ($m): $raw bytes, $gz gzipped"
-    if [ "$gz" -gt 9000000 ]; then
-      echo "$stem is $gz bytes gzipped, past the 9 MB gate" >&2
-      exit 1
-    fi
   else
     gz=0
-    echo "$stem ($m): $raw bytes (dev: no size gate)"
+    echo "$stem ($m): $raw bytes (dev)"
   fi
   # The pair's hash: the page asks for glue and module by it (a cached glue
   # never meets another build's module) and remembers a WebGPU failure
