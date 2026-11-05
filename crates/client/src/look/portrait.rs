@@ -185,7 +185,6 @@ pub fn stand(
     models: Option<Res<Models>>,
     views: Query<(), With<PortraitView>>,
     time: Res<Time>,
-    (mut meshes, mut mats): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
     mut bodies: Query<&mut super::bodies::Body>,
     mut at: Query<&mut Transform>,
 ) {
@@ -207,7 +206,7 @@ pub fn stand(
             if let Some((old, _)) = had {
                 commands.entity(old).despawn();
             }
-            let e = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, TEAM, look);
+            let e = super::bodies::spawn(&mut commands, &models, TEAM, look);
             commands
                 .entity(e)
                 .insert((PortraitBody, Propagate(RenderLayers::layer(LAYER))));

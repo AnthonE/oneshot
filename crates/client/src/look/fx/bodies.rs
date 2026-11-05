@@ -206,16 +206,45 @@ pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32, t: f32) {
 }
 
 /// Our own landing: dust at our feet, and the camera's dip (`shake.rs`).
-pub fn watch_own(fx: &mut Fx, slot: u8, at: Vec3, vel_y: f32, grounded: bool) {
+/// And our own shield (`shield`: its level, None dead): its flare, which
+/// the arms and the gun in view wear (`viewmodel.rs`), and, as it breaks,
+/// a crack of blue-white light about us.
+pub fn watch_own(fx: &mut Fx, slot: u8, at: Vec3, vel_y: f32, grounded: bool, shield: Option<u8>, t: f32) {
     fx.shake.body(grounded, vel_y);
     let i = slot as usize % 64;
     let was = fx.was.slots[i];
     if grounded && !was.grounded && was.fall > LAND_MPS {
         land(fx, at, was.fall);
     }
+    let mut peak = (was.peak, was.at);
+    if let (Some(now), true) = (shield, was.alive) {
+        if now < was.shield {
+            let level = if now == 0 {
+                fx.flash(
+                    at + Vec3::Y * HEAD_Y,
+                    super::FlashDef {
+                        lumens: ZAP_FLASH.lumens * 2.0,
+                        range: 5.0,
+                        life: 0.2,
+                        ..ZAP_FLASH
+                    },
+                );
+                FLARE_POP
+            } else {
+                FLARE_HIT
+            };
+            if level >= fade(peak.0, peak.1, t) {
+                peak = (level, t);
+            }
+        }
+    }
     let o = &mut fx.was.slots[i];
     o.grounded = grounded;
     o.fall = if grounded { 0.0 } else { (-vel_y).max(0.0) };
+    o.alive = shield.is_some();
+    o.charging = shield.is_some_and(|s| s > was.shield && s < 255);
+    o.shield = shield.unwrap_or(0);
+    (o.peak, o.at) = peak;
 }
 
 /// A shield breaking: a blue-white crack, lightning all over the body, a

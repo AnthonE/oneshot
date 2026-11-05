@@ -5,8 +5,16 @@
 //! (`VIEWMODEL_SWING_PIVOT`), its bob off distance walked, its sway off the
 //! look rate, its heave off the body's vertical speed and its C¹ pulses
 //! ([`bump`], the stroke's phases); and the visual half of its `gunfeel.rs`,
-//! the kick a round gives the gun the frame its trigger breaks. Trimmed to a
-//! gun with no arms, and timed by what our own predicted fighter says.
+//! the kick a round gives the gun the frame its trigger breaks. Timed by
+//! what our own predicted fighter says.
+//!
+//! **The arms** are ours, Halo's: a black glove round the grip and a black
+//! forearm back past the frame's edge under an armour plate in the side's
+//! colour; a long gun's other hand under its barrel ([`arms`]). They are
+//! the gun's children, so every motion below moves them with it. Both they
+//! and the gun wear our own shield as it flares (`shield.rs`'s shell, a
+//! hair proud of them: [`shimmer`]): gold as it takes a round, bright as it
+//! breaks, crawling as it climbs back.
 //!
 //! **Each motion is a different input**, as Gates keeps them apart:
 //!
@@ -68,6 +76,7 @@ use sim::fighter::{Fighter, Gun};
 
 use super::guns::{gun, spawn_posed, view_basis, Models};
 use super::shake::{peak_to_speed, spring};
+use super::shield::ShieldMaterial;
 
 /// How much smaller, and nearer, the gun is than it looks.
 const SHRINK: f32 = 0.25;
@@ -322,6 +331,216 @@ const RELOAD_RELATCH_TICKS: u16 = 8;
 
 #[derive(Component)]
 pub struct Flash;
+
+// ── Arms ────────────────────────────────────────────────────────────────
+/// Metres as it looks, in the hand's frame (x right, y up, z back toward
+/// the eye; the grip at 0): the fist round the grip and its size, the
+/// wrist, and the elbow (below the frame's edge), the forearm's radius,
+/// and the armour plate over it (wide, thick, long) and how far down the
+/// forearm from the wrist its middle sits.
+const FIST: Vec3 = Vec3::new(0.0, -0.05, 0.012);
+const FIST_R: f32 = 0.046;
+const FIST_SCALE: Vec3 = Vec3::new(0.85, 1.0, 1.15);
+const WRIST: Vec3 = Vec3::new(0.006, -0.07, 0.07);
+const ELBOW: Vec3 = Vec3::new(0.1, -0.33, 0.47);
+const FOREARM_R: f32 = 0.047;
+const PLATE_R: f32 = 0.05;
+const PLATE_LEN: f32 = 0.2;
+/// The plate's squash: wider than the arm, flatter than it is wide.
+const PLATE_SCALE: Vec3 = Vec3::new(1.2, 0.62, 1.0);
+const PLATE_AT: f32 = 0.06;
+/// A long gun's other hand: how far up the barrel from the grip (a share
+/// of the barrel's length past it), how far under it, and its elbow, as
+/// the right hand's are.
+const FORE_SHARE: f32 = 0.6;
+const FORE_DROP: f32 = -0.085;
+const OFF_WRIST: Vec3 = Vec3::new(-0.04, -0.07, 0.045);
+const OFF_ELBOW: Vec3 = Vec3::new(-0.42, -0.3, 0.3);
+/// The glove's black and the plate's lift over the side's colour.
+const GLOVE: Color = Color::srgb(0.035, 0.037, 0.04);
+const PLATE_LIFT: f32 = 0.55;
+/// How far the shield's shell stands proud of the arms and the gun, world
+/// metres (they are drawn [`SHRINK`] small, so a body's push would swell
+/// them); its hexagons, per uv unit.
+const SHELL_PUSH_M: f32 = 0.0035;
+const SHELL_HEX: f32 = 9.0;
+/// The shell in view against a body's at the same flare, with no fill
+/// (`shield.wgsl`): it fills the frame's corner, so it is a crackle over
+/// the arms, not a coat of gold.
+const SHELL_IN_VIEW: f32 = 0.22;
+
+/// The arms' meshes and materials, and the shell they and the gun wear.
+#[derive(Resource)]
+pub struct ViewKit {
+    forearm: Handle<Mesh>,
+    plate: Handle<Mesh>,
+    fist: Handle<Mesh>,
+    armour: Handle<StandardMaterial>,
+    glove: Handle<StandardMaterial>,
+    shell: Handle<ShieldMaterial>,
+    /// The side the armour was last coloured for.
+    team: Option<u8>,
+}
+
+/// A mesh in view wearing our shield (hidden while it is quiet).
+#[derive(Component)]
+pub struct ViewShell;
+
+pub fn kit(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut shells: ResMut<Assets<ShieldMaterial>>,
+) {
+    let mut shell = super::shield::material();
+    shell.extension.params = Vec4::new(SHELL_PUSH_M, SHELL_HEX, 1.0, 0.0);
+    let reach = (ELBOW - WRIST).length();
+    commands.insert_resource(ViewKit {
+        forearm: meshes.add(Capsule3d::new(FOREARM_R, reach)),
+        plate: meshes.add(Capsule3d::new(PLATE_R, PLATE_LEN)),
+        fist: meshes.add(Sphere::new(FIST_R)),
+        armour: mats.add(StandardMaterial {
+            base_color: super::bodies::team_color(0),
+            perceptual_roughness: 0.42,
+            metallic: 0.55,
+            ..default()
+        }),
+        glove: mats.add(StandardMaterial {
+            base_color: GLOVE,
+            perceptual_roughness: 0.75,
+            ..default()
+        }),
+        shell: shells.add(shell),
+        team: None,
+    });
+}
+
+/// One part of an arm, and its shell beside it.
+fn part(
+    commands: &mut Commands,
+    kit: &ViewKit,
+    parent: Entity,
+    mesh: &Handle<Mesh>,
+    mat: &Handle<StandardMaterial>,
+    t: Transform,
+) {
+    let e = commands
+        .spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            t,
+            NotShadowCaster,
+            ChildOf(parent),
+        ))
+        .id();
+    commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(kit.shell.clone()),
+        Transform::IDENTITY,
+        Visibility::Hidden,
+        ViewShell,
+        NotShadowCaster,
+        ChildOf(e),
+    ));
+}
+
+/// A fist at `fist`, its forearm from `wrist` back to `elbow` and the plate
+/// over it, on the outside (`side`: 1 right, -1 left, as it looks).
+fn arm_parts(commands: &mut Commands, kit: &ViewKit, parent: Entity, fist: Vec3, wrist: Vec3, elbow: Vec3, side: f32) {
+    part(
+        commands,
+        kit,
+        parent,
+        &kit.fist,
+        &kit.glove,
+        Transform::from_translation(fist).with_scale(FIST_SCALE),
+    );
+    let d = (elbow - wrist).normalize();
+    let mid = (wrist + elbow) * 0.5;
+    part(
+        commands,
+        kit,
+        parent,
+        &kit.forearm,
+        &kit.glove,
+        Transform::from_translation(mid).with_rotation(Quat::from_rotation_arc(Vec3::Y, d)),
+    );
+    // The plate rides the top and the outside of the forearm.
+    let out = Vec3::new(0.7 * side, 1.0, 0.0);
+    let up = (out - d * out.dot(d)).normalize();
+    let at = wrist + (elbow - wrist) * PLATE_AT + d * (PLATE_LEN * 0.5 + PLATE_R) + up * FOREARM_R * 0.45;
+    // The capsule lies along its Y: Y down the arm, Z out over it.
+    let turn = Transform::IDENTITY.looking_to(-up, d).rotation;
+    part(
+        commands,
+        kit,
+        parent,
+        &kit.plate,
+        &kit.armour,
+        Transform::from_translation(at)
+            .with_rotation(turn)
+            .with_scale(Vec3::new(PLATE_SCALE.x, PLATE_SCALE.z, PLATE_SCALE.y)),
+    );
+}
+
+/// The arms holding `arm`'s gun, under the hand `parent` (`left`: the left
+/// hand's gun): the hand round its grip and, a long gun, the other under
+/// its barrel.
+fn arms(commands: &mut Commands, kit: &ViewKit, parent: Entity, arm: u8, left: bool) {
+    let Some(g) = gun(arm) else {
+        return;
+    };
+    let side = if left { -1.0 } else { 1.0 };
+    let m = |v: Vec3| Vec3::new(v.x * side, v.y, v.z);
+    arm_parts(commands, kit, parent, m(FIST), m(WRIST), m(ELBOW), side);
+    if g.long && !left {
+        let reach = g.height * (1.0 - g.grip) * g.scale * FORE_SHARE;
+        let fist = Vec3::new(0.0, FORE_DROP, -reach);
+        arm_parts(commands, kit, parent, fist, fist + OFF_WRIST, fist + OFF_ELBOW, -1.0);
+    }
+}
+
+/// Our shield on the arms and the gun in view: as bright as its flare
+/// (`fx/bodies.rs`), hidden while it is quiet; and the armour in our
+/// side's colour.
+pub fn shimmer(
+    link: NonSend<crate::LinkRes>,
+    time: Res<Time>,
+    fx: Res<super::fx::Fx>,
+    kit: Option<ResMut<ViewKit>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut shells: ResMut<Assets<ShieldMaterial>>,
+    mut q: Query<&mut Visibility, With<ViewShell>>,
+) {
+    let Some(mut kit) = kit else {
+        return;
+    };
+    let core = &link.0.session().core;
+    if kit.team != Some(core.team) {
+        kit.team = Some(core.team);
+        if let Some(m) = mats.get_mut(&kit.armour) {
+            let c = super::bodies::team_color(core.team).to_linear();
+            m.base_color = Color::LinearRgba(c * PLATE_LIFT + LinearRgba::rgb(0.02, 0.02, 0.02));
+        }
+    }
+    let level = if core.own().0.alive {
+        fx.was.flare(core.slot, time.elapsed_secs()) * SHELL_IN_VIEW
+    } else {
+        0.0
+    };
+    let on = level > 0.004;
+    if let Some(m) = shells.get(&kit.shell) {
+        if (m.extension.color.w - level).abs() > 0.002 || (!on && m.extension.color.w != 0.0) {
+            if let Some(m) = shells.get_mut(&kit.shell) {
+                m.extension.color.w = if on { level } else { 0.0 };
+            }
+        }
+    }
+    let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+    for mut v in &mut q {
+        v.set_if_neq(want);
+    }
+}
 
 /// Where each hand's muzzle is drawn, view space as it looks (metres,
 /// before [`SHRINK`]), as last posed (this frame's once `draw_view` has
@@ -885,6 +1104,7 @@ pub type FlashLight<'w, 's> =
 pub fn update(
     commands: &mut Commands,
     models: &Models,
+    kit: Option<&ViewKit>,
     own: Own,
     dt: f32,
     m: &mut Motion,
@@ -910,7 +1130,7 @@ pub fn update(
             respawned,
             t: m.t,
         };
-        let at = hand(commands, models, &own, &k, dt, e, &mut v, &mut t, vis);
+        let at = hand(commands, models, kit, &own, &k, dt, e, &mut v, &mut t, vis);
         if let Some(mz) = at {
             muzzles.0[usize::from(left)] = Some(mz);
             if v.flash > lit.0 {
@@ -944,6 +1164,7 @@ struct Hand {
 fn hand(
     commands: &mut Commands,
     models: &Models,
+    kit: Option<&ViewKit>,
     own: &Own,
     k: &Hand,
     dt: f32,
@@ -964,6 +1185,9 @@ fn hand(
         commands.entity(e).despawn_related::<Children>();
         if let Some((_, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
             commands.entity(scene).observe(no_shadows);
+            if let Some(kit) = kit {
+                arms(commands, kit, e, want, v.left);
+            }
         }
         v.drawn = want;
         v.kick = Spring::default();
@@ -1043,15 +1267,29 @@ fn cant_of(shots: u32) -> f32 {
     (x as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
+/// The gun's scene is in: it casts nothing, and each of its meshes wears
+/// our shield's shell ([`shimmer`]).
 fn no_shadows(
     ev: On<SceneInstanceReady>,
     children: Query<&Children>,
-    meshes: Query<(), With<Mesh3d>>,
+    meshes: Query<&Mesh3d>,
+    kit: Option<Res<ViewKit>>,
     mut commands: Commands,
 ) {
     for e in children.iter_descendants(ev.entity) {
-        if meshes.contains(e) {
+        if let Ok(mesh) = meshes.get(e) {
             commands.entity(e).insert(NotShadowCaster);
+            if let Some(kit) = &kit {
+                commands.spawn((
+                    mesh.clone(),
+                    MeshMaterial3d(kit.shell.clone()),
+                    Transform::IDENTITY,
+                    Visibility::Hidden,
+                    ViewShell,
+                    NotShadowCaster,
+                    ChildOf(e),
+                ));
+            }
         }
     }
 }

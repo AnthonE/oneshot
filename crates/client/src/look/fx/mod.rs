@@ -179,7 +179,7 @@ pub struct Fx {
     own_flash: [Option<shots::OwnFlash>; 2],
     /// Rounds of light flying last frame (`flying.rs`), to tell where one
     /// ended.
-    last_light: Vec<proto::ProjState>,
+    last_light: Vec<client_net::core::DrawnProj>,
     /// Our own melee: its cooldown last frame, and where we looked as the
     /// swing began, which the server's event comes back to a round trip
     /// later (`bodies::swung`).

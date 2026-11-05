@@ -246,12 +246,12 @@ impl Replay {
         while self.clock_ms + step <= to_ms {
             self.clock_ms += step;
             self.frame(s);
-            s.core.drain_events();
+            s.core.drain_events(self.clock_ms);
         }
         if self.clock_ms < to_ms {
             self.clock_ms = to_ms;
             self.frame(s);
-            s.core.drain_events();
+            s.core.drain_events(self.clock_ms);
         }
     }
 }

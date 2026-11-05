@@ -420,7 +420,7 @@ pub struct Shot {
     #[serde(default)]
     pub track: Option<Track>,
     /// Through the player's own eyes: what they saw, the gun in view, the
-    /// scope, the chase camera at the wheel and the kill cam.
+    /// scope, the chase camera at the wheel and the death cam.
     #[serde(default)]
     pub pov: bool,
     /// This shot's lens and grade, over the list's.

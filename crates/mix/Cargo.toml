@@ -1,0 +1,11 @@
+[package]
+name = "mix"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The game's mixer with nothing in it but std: the client plays it through
+# Bevy on the desktop (`sound::on`) and the browser runs it on its audio
+# thread (`mix-worklet`, an AudioWorklet), so neither half links the other.
+[dependencies]

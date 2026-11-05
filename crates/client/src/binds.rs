@@ -440,7 +440,11 @@ impl Binds {
                     None => ok = false,
                 }
             }
-            if ok {
+            if !ok {
+                // A key this build doesn't know (a newer one's): the default
+                // here, and the line kept as it came until it's rebound.
+                other.push((action.clone(), value.clone()));
+            } else {
                 // Through `set`, so a file naming one key twice can't make
                 // it do two things.
                 for (i, b) in slots.into_iter().enumerate() {
@@ -514,6 +518,7 @@ mod tests {
         let (b, other) = Binds::from_lines(&lines);
         assert_eq!(b.slots(Action::Jump), Action::Jump.spec().default);
         assert_eq!(b.slots(Action::Reload), Action::Reload.spec().default);
-        assert_eq!(other, vec![("dance".to_string(), "KeyB".to_string())]);
+        let kept: Vec<&str> = other.iter().map(|(a, _)| a.as_str()).collect();
+        assert_eq!(kept, ["jump", "reload", "dance"], "kept to be written back");
     }
 }

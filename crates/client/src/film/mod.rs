@@ -28,7 +28,7 @@
 //! fog included: anyone but the player is there only while the player could
 //! have seen them. The one thing a film writes is the eye. A pov shot is the
 //! player's: their aim (off their snapshots), the gun in view, the scope,
-//! the chase camera at the wheel, the kill cam. Any other shot draws the
+//! the chase camera at the wheel, the death cam. Any other shot draws the
 //! player's own body and hides the gun in view.
 //!
 //! The lens is a cinema camera's where the GPU has it: a shutter (motion
@@ -747,7 +747,7 @@ fn mixdown(
     cues: Res<crate::sound::Cues>,
     cam: Query<&GlobalTransform, With<EyeCam>>,
     #[cfg(target_arch = "wasm32")] clips: Option<Res<crate::sound::on::Clips>>,
-    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<bevy::audio::AudioSource>>>,
+    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<crate::sound::on::Sound>>>,
 ) {
     let ear = cam.iter().next().copied().unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]

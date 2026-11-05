@@ -7,12 +7,14 @@
 //! The level from the sim's map in Gates' light, sky, ground and grass
 //! (docs/RIP.md §9); Triple T bodies with guns in hand; the gun in view,
 //! effects and sound; a first-person camera (a chase camera at the wheel,
-//! the kill cam when dead); the three.js page's controls; the HUD; and the
-//! game's own screens in Gates' style: the title (`front`), the Esc menu
-//! (`pause`) and the settings (`options`), the same on the desktop and in a
-//! browser, where the page (`crates/client/web/index.html`) only finds the
-//! server and signs in, and calls `launch()`.
+//! the death cam over your own body when dead); the three.js page's
+//! controls; the HUD; and the game's own screens in Gates' style: the
+//! title (`front`), the Esc menu (`pause`) and the settings (`options`),
+//! the same on the desktop and in a browser, where the page
+//! (`crates/client/web/index.html`) only finds the server and signs in, and
+//! calls `launch()`.
 
+pub mod asset_fetch;
 pub mod binds;
 pub mod clip;
 pub mod config;
@@ -31,8 +33,10 @@ pub mod options;
 pub mod pad;
 pub mod party;
 pub mod pause;
+pub mod plate;
 pub mod pointer;
 pub mod pose;
+pub mod scope;
 pub mod settings;
 pub mod shot;
 pub mod sound;
@@ -128,6 +132,8 @@ fn show(vis: &mut KeptVis, e: Entity, on: bool) -> bool {
 #[derive(Resource, Default)]
 pub struct Autoplay {
     pub on: bool,
+    /// Holds the scope the whole way (`--scope`): a picture of one.
+    pub scope: bool,
     leg: usize,
     frames: u64,
     /// Where we were at the last check, and when (ms): pushing ahead and
@@ -268,18 +274,73 @@ pub fn game(door: door::Door, opts: Opts) -> App {
     app
 }
 
+/// Switch off `bevy_render`'s `present_frames` span, the one span Bevy opens
+/// every frame without its `trace` feature (Gates' `client-web`). In a
+/// browser the logger answers a span with `performance.mark` and
+/// `performance.measure`: two calls into JS a frame, and two User Timing
+/// entries a frame that nothing clears, ~430,000 an hour, held by the tab.
+/// A layer not interested in a callsite disables it for every layer, so the
+/// span is never built at all.
+fn quiet_frame_span(_: &mut App) -> Option<bevy::log::BoxedLayer> {
+    use bevy::log::tracing::{subscriber::Interest, Metadata, Subscriber};
+    use bevy::log::tracing_subscriber::layer::{Context, Layer};
+
+    struct Quiet;
+    fn frame_span(m: &Metadata<'_>) -> bool {
+        m.is_span() && m.name() == "present_frames"
+    }
+    impl<S: Subscriber> Layer<S> for Quiet {
+        fn register_callsite(&self, m: &'static Metadata<'static>) -> Interest {
+            if frame_span(m) {
+                Interest::never()
+            } else {
+                Interest::always()
+            }
+        }
+        fn enabled(&self, m: &Metadata<'_>, _: Context<'_, S>) -> bool {
+            !frame_span(m)
+        }
+    }
+    Some(Box::new(Quiet))
+}
+
 /// The client on `link` with no title: a picture (`pose`), or the fx stage.
 pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     app_on(link, opts, opts.open)
 }
 
 fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
+    // The asset loader's threads get a deep stack (Gates' `bin/gates.rs`):
+    // `bevy_gltf` blocks on a scope while a model's textures load, and the
+    // waiting IO thread runs the next queued load inside it, one nest of
+    // frames per model in flight; Gates' boot overflowed the default 2 MiB
+    // on a busy 4-core box. Same thread count Bevy picks; `TaskPoolPlugin`
+    // keeps a pool that already exists. A browser has one thread and no pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    bevy::tasks::IoTaskPool::get_or_init(|| {
+        bevy::tasks::TaskPoolBuilder::default()
+            .num_threads((bevy::tasks::available_parallelism() / 4).clamp(1, 4))
+            .stack_size(32 << 20)
+            .thread_name("IO Task Pool".to_string())
+            .build()
+    });
     let mut app = App::new();
+    // Before `AssetPlugin`, which keeps a source already registered: Bevy's
+    // wasm reader panics on a download that breaks mid-body, this one
+    // retries it (`asset_fetch.rs`).
+    #[cfg(target_arch = "wasm32")]
+    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"));
     app.add_plugins(
         DefaultPlugins
+            .set(bevy::log::LogPlugin {
+                custom_layer: quiet_frame_span,
+                ..default()
+            })
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "oneshot".into(),
+                    // WM_CLASS on X11, app_id on Wayland: what a desktop entry matches.
+                    name: Some("oneshot".into()),
                     canvas: Some("#game".into()),
                     fit_canvas_to_parent: true,
                     ..default()
@@ -307,15 +368,18 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
-    .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<look::rag::Blows>()
+    .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
+    .init_resource::<Now>()
+    .add_systems(First, stamp)
     .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
+    .add_plugins(plate::plugin)
     .add_plugins(settings::plugin)
     // The graphics ladder after the settings it reads: its tier exists
     // before anything is spawned with it.
@@ -338,6 +402,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::truck::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
+    // Triple T's spray paint: the side's headband, the emblem, the trim
+    // (`look/paint.rs`).
+    .add_plugins(look::paint::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
@@ -376,6 +443,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::textures::load,
             look::rock::load,
             look::guns::load,
+            look::viewmodel::kit,
             look::own_shadow::setup,
             look::portrait::setup,
             look::fx::setup,
@@ -453,8 +521,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             draw_view,
+            look::viewmodel::shimmer,
             look::fx::draw,
             hud::draw,
+            (hud::gear, hud::vitals, hud::corner, scope::draw),
             hud::hurt_rim,
         )
             .chain(),
@@ -500,7 +570,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.insert_resource(p)
             .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
     } else {
-        app.add_systems(Startup, (hud::setup, medals::setup))
+        app.add_systems(Startup, (hud::setup, medals::setup, scope::setup.after(hud::setup)))
             .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
     }
     if opts.fxdemo {
@@ -597,7 +667,12 @@ fn pump(
         (f.dual(), scope, driving)
     };
     // No scope at the wheel: the chase camera doesn't narrow.
-    look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
+    let want = if auto.on {
+        auto.scope
+    } else {
+        button(MouseButton::Right)
+    };
+    look.zoom = want && !dual && !driving;
     if grabbed {
         let base = SENS * settings.sensitivity;
         let sens = if look.zoom { base / scope as f32 } else { base };
@@ -757,6 +832,7 @@ type ShieldParts<'w, 's> = (
     ResMut<'w, look::fx::Fx>,
     ResMut<'w, Assets<look::shield::ShieldMaterial>>,
     Query<'w, 's, &'static mut Visibility, With<look::shield::ShellPart>>,
+    ResMut<'w, Assets<look::paint::BodyMaterial>>,
 );
 
 /// Everyone else, where client-net interpolated them.
@@ -772,20 +848,17 @@ fn draw_fighters(
     (mut meshes, mut mats, mut vis): BodyParts,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    (mut fx, mut shield_mats, mut shells): ShieldParts,
+    (mut fx, mut shield_mats, mut shells, mut body_mats): ShieldParts,
     (time, mut walkers, film): (Res<Time>, ResMut<look::foliage::Walkers>, Option<Res<film::Film>>),
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
-    // A film's camera off the player's eye sees the player's own body, and
-    // never through the kill cam (`film.rs`).
+    // A film's camera off the player's eye sees the player's own body
+    // (`film.rs`).
     let third = film.is_some_and(|f| f.third());
-    // Dead, and we saw who did it: the kill cam's bodies (ourselves among
-    // them) instead of the living.
-    let (mut others, live) = match (core.killcam(now), &posed) {
-        (_, Some(p)) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
-        (Some(k), _) if !core.own().0.alive && !third => (k.bodies, false),
-        _ => (core.others(now), true),
+    let (mut others, live) = match &posed {
+        Some(p) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
+        None => (core.others(now), true),
     };
     if third && link.0.session().ready {
         others.push(core.own_drawn());
@@ -818,7 +891,7 @@ fn draw_fighters(
     look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
     // The grass flattens under the feet this client draws on the ground,
-    // ours first: never a kill cam's replay, never a seat.
+    // ours first: never a seat.
     walkers.feet.clear();
     if live && !third && f.alive && f.body.grounded && f.riding().is_none() {
         walkers.fighter(Vec3::new(p.x, p.y, p.z));
@@ -837,27 +910,47 @@ fn draw_fighters(
         Vec3::new(p.x, p.y, p.z),
         f.body.vel.y,
         f.body.grounded && f.alive && f.riding().is_none(),
+        f.alive.then(|| core.own_drawn().shield),
+        time.elapsed_secs(),
     );
     let t = time.elapsed_secs();
-    for d in &others {
-        let look = posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1);
-        let e = match drawn.fighters.get(&d.slot) {
-            Some(&(e, team, l)) if team == d.team && l == look => e,
-            had => {
-                if let Some(&(old, ..)) = had {
-                    commands.entity(old).despawn();
-                }
-                let e = if opts.capsules {
-                    look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
-                } else {
-                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, look)
-                };
-                commands.entity(e).insert(Kept);
-                drawn.fighters.insert(d.slot, (e, d.team, look));
-                e
+    let mut kept = |d: &client_net::core::Drawn, look: proto::Look| match drawn.fighters.get(&d.slot) {
+        Some(&(e, team, l)) if team == d.team && l == look => e,
+        had => {
+            if let Some(&(old, ..)) = had {
+                commands.entity(old).despawn();
             }
-        };
-        let _ = show(&mut vis, e, true);
+            let e = if opts.capsules {
+                look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
+            } else {
+                look::bodies::spawn(&mut commands, &models, d.team, look)
+            };
+            commands.entity(e).insert(Kept);
+            drawn.fighters.insert(d.slot, (e, d.team, look));
+            e
+        }
+    };
+    // Our own body, posed every frame where we stand and hidden while we
+    // are in it, so the frame we die it is shown and goes limp from the
+    // pose we died in (`rag.rs`), flying as the blow throws it, for the
+    // death cam (`view`) to watch until we respawn.
+    let own = (live && !third && link.0.session().ready).then(|| {
+        let d = core.own_drawn();
+        (d, kept(&d, st.look(d.slot)))
+    });
+    let mut shown: Vec<(client_net::core::Drawn, Entity)> = others
+        .iter()
+        .map(|d| (*d, kept(d, posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1))))
+        .collect();
+    if let Some((d, e)) = own {
+        let _ = show(&mut vis, e, !d.alive);
+        shown.push((d, e));
+    }
+    for (d, e) in &shown {
+        let (d, e) = (d, *e);
+        if Some(d.slot) != own.map(|(o, _)| o.slot) {
+            let _ = show(&mut vis, e, true);
+        }
         if opts.capsules {
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
@@ -876,15 +969,15 @@ fn draw_fighters(
             e,
             fx.was.flare(d.slot, t),
             &mut bodies,
-            &mut mats,
+            &mut body_mats,
             &mut shield_mats,
             &mut shells,
         );
     }
     for (slot, (e, ..)) in &drawn.fighters {
-        if !others.iter().any(|d| d.slot == *slot) && show(&mut vis, *e, false) {
+        if !shown.iter().any(|(d, _)| d.slot == *slot) && show(&mut vis, *e, false) {
             // Shown again, it starts its clip afresh, not fading from the
-            // pose it was hidden in (a kill cam's victim got up off the
+            // pose it was hidden in (a corpse doesn't get up off the
             // floor).
             if let Ok(mut b) = bodies.get_mut(*e) {
                 b.afresh();
@@ -962,7 +1055,28 @@ fn draw_vehicles(
     }
 }
 
-/// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
+/// The death cam (Halo 2's): how far back from our body it sits, metres,
+/// how far over it it looks down (radians below where we look), how long
+/// it takes to pull back out of the eye, seconds, and how near a wall or
+/// the ground it may come, metres.
+const DEATH_CAM_M: f32 = 3.4;
+const DEATH_CAM_DOWN: f32 = 0.42;
+const DEATH_CAM_POP_S: f32 = 0.55;
+const DEATH_CAM_PAD_M: f32 = 0.35;
+/// The death cam follows the body this fast, 1/s.
+const DEATH_CAM_FOLLOW: f32 = 14.0;
+
+/// Where the death cam started (the eye we died in), when, and what it
+/// watches.
+#[derive(Default)]
+pub(crate) struct DeathCam {
+    from: Option<(Transform, f32)>,
+    at: Vec3,
+}
+
+/// From our eye, or behind our vehicle at the wheel; dead, the death cam:
+/// out of the eye and back over our own body as it flies and falls, turned
+/// about it by the mouse, until we respawn.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
     link: NonSend<LinkRes>,
@@ -973,6 +1087,7 @@ pub(crate) fn view(
     settings: Res<settings::Settings>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
     mut demo_at: Local<Option<(u8, Transform)>>,
+    (rag, mut death): (Res<look::rag::OwnRag>, Local<DeathCam>),
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
         return;
@@ -982,11 +1097,34 @@ pub(crate) fn view(
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
     let mut fov = settings.fov;
     let at = Vec3::new(p.x, p.y, p.z);
-    let kill = if f.alive { None } else { core.killcam(link.0.now_ms()) };
-    if let Some(k) = kill {
-        // The run-up to the kill, from the killer's eye.
-        let eye = Vec3::new(k.eye.x, k.eye.y, k.eye.z);
-        *t = Transform::from_translation(eye).looking_at(eye + dir(k.yaw, k.pitch), Vec3::Y);
+    let dead = !f.alive && link.0.session().ready;
+    if !dead {
+        death.from = None;
+    }
+    if dead {
+        let now = time.elapsed_secs();
+        // The body: where the rag doll has it, else where we fell.
+        let body = rag.0.unwrap_or(at + Vec3::Y * 0.9);
+        if death.from.is_none() {
+            death.from = Some((*t, now));
+            death.at = body;
+        }
+        let (from, since) = death.from.unwrap_or((*t, now));
+        let k = 1.0 - (-DEATH_CAM_FOLLOW * time.delta_secs()).exp();
+        death.at = death.at.lerp(body, k);
+        let aim = dir(look.yaw, (look.pitch - DEATH_CAM_DOWN).clamp(-1.3, 0.4));
+        let v = |a: Vec3| sim::geom::V3::new(a.x, a.y, a.z);
+        let room = core.map.ray(v(death.at), v(-aim), DEATH_CAM_M);
+        let back = (room - DEATH_CAM_PAD_M).max(0.5);
+        let eye = death.at - aim * back;
+        let out = Transform::from_translation(eye).looking_at(death.at, Vec3::Y);
+        let u = ((now - since) / DEATH_CAM_POP_S).clamp(0.0, 1.0);
+        let u = u * u * (3.0 - 2.0 * u);
+        *t = Transform {
+            translation: from.translation.lerp(out.translation, u),
+            rotation: from.rotation.slerp(out.rotation, u),
+            ..*t
+        };
     } else if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
@@ -1032,6 +1170,7 @@ fn draw_view(
     mut hold: look::viewmodel::Hands,
     mut flash: look::viewmodel::FlashLight,
     film: Option<Res<film::Film>>,
+    kit: Option<Res<look::viewmodel::ViewKit>>,
 ) {
     let (f, p) = link.0.session().core.own();
     let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
@@ -1047,6 +1186,7 @@ fn draw_view(
     look::viewmodel::update(
         &mut commands,
         &models,
+        kit.as_deref(),
         own,
         time.delta_secs(),
         &mut motion,
@@ -1058,6 +1198,16 @@ fn draw_view(
 
 /// What the session queued for us this frame: events become effects and
 /// HUD marks, stream messages names and the feed.
+/// The netcode's clock for this frame, read once: what is drawn at the
+/// render tick and the events played on it agree to the frame (a round
+/// goes the frame its blast plays).
+#[derive(Resource, Default)]
+pub(crate) struct Now(pub f64);
+
+fn stamp(link: NonSend<LinkRes>, mut now: ResMut<Now>) {
+    now.0 = link.0.now_ms();
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn happened(
     mut link: NonSendMut<LinkRes>,
@@ -1069,11 +1219,11 @@ pub(crate) fn happened(
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
     film: Option<Res<film::Film>>,
-    mut blows: ResMut<look::rag::Blows>,
+    (mut blows, now): (ResMut<look::rag::Blows>, Res<Now>),
 ) {
-    let now_ms = link.0.now_ms();
+    let now_ms = now.0;
     let s = link.0.session_mut();
-    let events = s.core.drain_events();
+    let events = s.core.drain_events(now_ms);
     let mut msgs = core::mem::take(&mut early.0);
     msgs.extend(s.take_messages());
     // A film's camera off the eye sees our shots as anyone's: from the
@@ -1144,6 +1294,7 @@ fn expose(
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
     party: Option<Res<party::PartyView>>,
+    ear: Res<sound::Ear>,
     (mut frames, mut described): (Local<u32>, Local<Option<String>>),
 ) {
     use wasm_bindgen::JsValue;
@@ -1198,6 +1349,13 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // The mixer: clips decoded, still loading, and commands sent it.
+    let (decoded, loading, sent) = ear.stats();
+    set(
+        &o,
+        "sound",
+        js_sys::Array::of3(&decoded.into(), &loading.into(), &sent.into()).into(),
+    );
     set(&o, "in_match", matched.into());
     // The party as this page sees it (ci/party.mjs).
     if let Some(p) = party {
@@ -1255,22 +1413,25 @@ fn expose(
 }
 
 /// Rockets and frags in flight.
+#[allow(clippy::too_many_arguments)]
 fn fly(
     link: NonSend<LinkRes>,
     models: Res<look::guns::Models>,
     time: Res<Time>,
+    now: Res<Now>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
-    let others = core.others(link.0.now_ms());
+    // On the render tick, with the bodies that fired them (`core.rs`).
+    let others = core.others(now.0);
     look::fx::flying::projectiles(
         &mut commands,
         &mut fx,
         &models,
         &core.map,
-        core.latest().proj(),
+        &core.projectiles(now.0),
         &others,
         time.elapsed_secs(),
         time.delta_secs(),
