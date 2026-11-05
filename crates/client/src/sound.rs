@@ -67,6 +67,8 @@ pub fn names() -> Vec<String> {
         "fuse_0",
         "hurt_0",
         "death_0",
+        "shield_low_0",
+        "shield_charge_0",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -97,9 +99,15 @@ pub struct Ear {
     last_mag: u16,
     last_shield: i32,
     last_alive: bool,
+    /// The shield climbing back last frame, and the empty alarm's clock.
+    charging: bool,
+    beep: f32,
     step: f32,
     dry: f32,
 }
+
+/// The empty shield's alarm: a beep this often, seconds.
+const SHIELD_BEEP_S: f32 = 0.3;
 
 impl Default for Ear {
     fn default() -> Self {
@@ -111,6 +119,8 @@ impl Default for Ear {
             last_mag: 0,
             last_shield: 0,
             last_alive: false,
+            charging: false,
+            beep: 0.0,
             step: 0.0,
             dry: 0.0,
         }
@@ -207,11 +217,28 @@ pub fn decide(
             ear.cue(cues, "fuse_0", at, 0.6);
         }
     }
-    // Our own body: shields gone, a death, reloads, the swap, a dry
-    // trigger, steps, landing.
+    // Our own body: shields gone (and the alarm while they stay gone, the
+    // hum as they climb back), a death, reloads, the swap, a dry trigger,
+    // steps, landing.
     let (f, _) = s.core.own();
+    let dt = time.delta_secs();
     if f.alive && f.shield == 0 && ear.last_shield > 0 {
         ear.cue(cues, "hurt_0", None, 0.6);
+        ear.beep = 0.0;
+    }
+    if f.alive && f.shield == 0 {
+        ear.beep -= dt;
+        if ear.beep <= 0.0 {
+            ear.cue(cues, "shield_low_0", None, 0.35);
+            ear.beep = SHIELD_BEEP_S;
+        }
+    }
+    let charging = f.alive && f.shield > ear.last_shield && f.shield < sim::consts::SHIELD_MAX;
+    if charging && !ear.charging && ear.last_shield < sim::consts::SHIELD_MAX / 2 {
+        ear.cue(cues, "shield_charge_0", None, 0.45);
+    }
+    if f.shield != ear.last_shield {
+        ear.charging = charging;
     }
     ear.last_shield = f.shield;
     if !f.alive && ear.last_alive {
@@ -220,7 +247,6 @@ pub fn decide(
     ear.last_alive = f.alive;
     let g = f.gun();
     let gun = crate::look::guns::gun(g.arm);
-    let dt = time.delta_secs();
     let reloading = f.reload > 0;
     if reloading && !ear.last_reload {
         let n = gun.map_or("reload_rifle_0", |g| g.reload);

@@ -17,8 +17,8 @@
 //!
 //! The tests are the sim map's own raycasts, the same on every target and
 //! every rung, so what a tag tells one player it tells every player looking
-//! the same way. None while you are dead (the kill cam is the killer's
-//! eye) or off a match (the HUD's root hides them).
+//! the same way. None while you are dead (the death cam watches your own
+//! body) or off a match (the HUD's root hides them).
 //!
 //! Bevy draws, it does not decide: who is aimed at is worked out here from
 //! the session's state and nothing is sent.

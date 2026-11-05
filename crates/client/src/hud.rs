@@ -5,8 +5,11 @@
 //! left, health a thin line beneath; the clock, the map and the two scores
 //! that matter bottom right. A crosshair, a hit marker on our hits (red on
 //! a kill), an arc toward whoever hurt us, and a line in the middle for the
-//! countdown, the result, the kill cam and the respawn; before the welcome,
-//! the queue's line. `N` shows the net graph. The scope is `scope.rs`'s.
+//! countdown, the result and who killed us (then the respawn's count, low
+//! in the middle until the scoreboard comes up); the screen's rim (red as
+//! health goes, gold as the shield takes a round, a crackle of blue as it
+//! breaks); before the welcome, the queue's line. `N` shows the net graph.
+//! The scope is `scope.rs`'s.
 //! Medals and the carnage report are `medals.rs`'s to draw; their lines in
 //! the feed are here. Everything here is read from the session; nothing is
 //! decided.
@@ -35,6 +38,18 @@ const RIM_S: f32 = 0.5;
 const RIM_CLEAR_PCT: f32 = 52.0;
 /// How far out from the middle the damage arc sits, px.
 const DAMAGE_R: f32 = 90.0;
+/// A round on the shield: a faint gold rim, as long as the red's.
+const RIM_SHIELD_ALPHA: f32 = 0.09;
+/// The shield breaking: a crackle of blue-white round the edge, how long,
+/// how far in it reaches (the share of the far-corner radius it starts
+/// at) and how fast it flickers, Hz.
+const POP_ALPHA: f32 = 0.55;
+const POP_S: f32 = 0.45;
+const POP_CLEAR_PCT: f32 = 38.0;
+const POP_FLICKER_HZ: f32 = 22.0;
+/// Dead this long, the scoreboard comes up until the respawn (Halo 2's),
+/// seconds: long enough to watch yourself fly.
+pub const DEAD_BOARD_S: f32 = 1.5;
 
 /// The HUD's blue: its type, a box's fill (lit for what's picked, dim for
 /// what isn't) and edge, a round in the magazine and one spent.
@@ -83,8 +98,15 @@ pub struct HudState {
     hit_at: f32,
     hit_kill: bool,
     hurt_at: f32,
+    /// The last hit on us landed on the shield (gold), not health (red).
+    hurt_shield: bool,
+    /// When our shield last broke, and its level last frame.
+    pop_at: f32,
+    last_shield: i32,
     arc_at: f32,
     hurt_angle: f32,
+    /// How we last died, as a line ("You were sniped by ...").
+    pub death_line: String,
     /// The scoreboard is held up.
     pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
@@ -218,6 +240,9 @@ pub struct ScoreMine(pub u8);
 pub struct FeedText;
 #[derive(Component)]
 pub struct CenterText;
+/// "Respawn in N", low in the middle while we are dead.
+#[derive(Component)]
+pub struct RespawnText;
 #[derive(Component)]
 pub struct NetText;
 /// The scoreboard's panel, and its columns: names, kills, deaths, score.
@@ -660,6 +685,17 @@ pub fn setup(mut commands: Commands) {
         },
         children![(CenterText, text(crate::ui::display(32.0)))],
     ));
+    commands.spawn((
+        ChildOf(root),
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            bottom: Val::Percent(16.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(RespawnText, text(crate::ui::display(28.0)))],
+    ));
     // The scoreboard: a panel in the middle, four columns.
     commands
         .spawn((
@@ -921,12 +957,19 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                     st.arc_at = now;
                 }
                 st.hurt_at = now;
+                st.hurt_shield = s.core.own().0.shield > 0;
             }
         } else if e.kind == Kind::Kill as u8 && e.a == me && e.b != me {
             st.hit_at = now;
             st.hit_kill = true;
         }
     }
+    // Our shield breaking.
+    let f = s.core.own().0;
+    if f.alive && f.shield == 0 && st.last_shield > 0 {
+        st.pop_at = now;
+    }
+    st.last_shield = if f.alive { f.shield } else { 0 };
     for m in msgs {
         if let Some(line) = status_line(m) {
             if matches!(m, Msg::Cup { .. }) {
@@ -975,6 +1018,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 }
                 if *victim == me {
                     st.deaths += 1;
+                    st.death_line = death_line(st, s.core.rules.teams, me, *killer, *cause);
                 }
                 if let Some(r) = st.rung.remove(victim) {
                     st.spree_ended.insert(*victim, r);
@@ -995,6 +1039,29 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
     st.medals.retain(|&(_, t)| now - t < MEDAL_S);
 }
 
+/// Dead long enough for the scoreboard ([`DEAD_BOARD_S`]), on the
+/// respawn's own clock.
+fn boarded(f: &sim::fighter::Fighter) -> bool {
+    let gone = sim::consts::ticks(sim::consts::RESPAWN_MS).saturating_sub(u32::from(f.respawn));
+    !f.alive && gone as f32 >= DEAD_BOARD_S * TICK_HZ as f32
+}
+
+/// What the screen says when we die, after Halo 2's.
+fn death_line(st: &HudState, teams: bool, me: u8, killer: u8, cause: u16) -> String {
+    if killer == me {
+        return if cause == sim::events::Cause::Fall as u16 {
+            "You fell to your death".into()
+        } else {
+            "You killed yourself".into()
+        };
+    }
+    let side = |q: u8| st.teams.get(&q).map(|t| t & 1);
+    if teams && side(killer) == side(me) {
+        return format!("You were betrayed by {}", st.name(killer));
+    }
+    format!("You were {} by {}", crate::tally::verb(cause), st.name(killer))
+}
+
 fn mmss(s: f32) -> String {
     let s = s.max(0.0) as u32;
     format!("{}:{:02}", s / 60, s % 60)
@@ -1009,7 +1076,13 @@ pub fn draw(
     time: Res<Time>,
     st: Res<HudState>,
     mut arc: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<HurtArc>>,
-    mut texts: Query<(&mut Text, Option<&FeedText>, Option<&CenterText>, Option<&NetText>)>,
+    mut texts: Query<(
+        &mut Text,
+        Option<&FeedText>,
+        Option<&CenterText>,
+        Option<&NetText>,
+        Option<&RespawnText>,
+    )>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
@@ -1036,14 +1109,16 @@ pub fn draw(
             },
             |g| format!("{g}\n{}", st.status),
         );
-        for (mut t, _, ce, _) in texts.iter_mut() {
+        for (mut t, _, ce, _, _) in texts.iter_mut() {
             if ce.is_some() && t.0 != line {
                 t.0 = line.clone();
             }
         }
         return;
     }
-    let killcam = if f.alive { None } else { core.killcam(link.0.now_ms()) };
+    // Dead: who did it, then (with the scoreboard up) the count.
+    let boarded = boarded(f);
+    let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
     let center = match snap.phase {
@@ -1077,13 +1152,8 @@ pub fn draw(
             c
         }
         _ if gone.is_some() => gone.unwrap_or_default().to_string(),
-        _ if !f.alive => {
-            let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
-            match &killcam {
-                Some(k) => format!("Killed by {}  -  respawning in {back}", st.name(k.killer)),
-                None => format!("Respawning in {back}"),
-            }
-        }
+        _ if !f.alive && boarded => format!("Respawn in {back}"),
+        _ if !f.alive => st.death_line.clone(),
         _ => String::new(),
     };
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
@@ -1096,8 +1166,15 @@ pub fn draw(
     } else {
         String::new()
     };
-    for (mut t, fe, ce, ne) in texts.iter_mut() {
-        let v = if fe.is_some() {
+    let respawn = if snap.phase == 1 && gone.is_none() && !f.alive && !boarded {
+        format!("Respawn in {back}")
+    } else {
+        String::new()
+    };
+    for (mut t, fe, ce, ne, re) in texts.iter_mut() {
+        let v = if re.is_some() {
+            &respawn
+        } else if fe.is_some() {
             &feed
         } else if ce.is_some() {
             &center
@@ -1535,8 +1612,9 @@ pub fn reticle_tint(link: NonSend<crate::LinkRes>, mut q: Query<&mut BackgroundC
     }
 }
 
-/// The scoreboard: held up (its key), and once the match is over until the
-/// carnage report comes.
+/// The scoreboard: held up (its key), while we are dead (after
+/// [`DEAD_BOARD_S`]), and once the match is over until the carnage report
+/// comes.
 /// Every seat by side (teams first, each side's score) then by score:
 /// name, kills, deaths, score.
 #[allow(clippy::type_complexity)]
@@ -1554,7 +1632,9 @@ pub fn board(
     st.board = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
     // Once the match is over the carnage report (`medals.rs`) is the
     // board, as soon as its rows come.
-    let up = s.ready && (st.board || (over && st.carnage.is_empty()));
+    // Dead a moment, it comes up on its own until the respawn (Halo 2's).
+    let dead = s.ready && !over && boarded(s.core.own().0);
+    let up = s.ready && (st.board || dead || (over && st.carnage.is_empty()));
     if let Ok(mut v) = panel.single_mut() {
         let want = if up { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
@@ -1634,20 +1714,40 @@ fn rim(alpha: f32) -> Color {
     Color::srgba(0.55, 0.02, 0.02, alpha)
 }
 
-/// The red rim: raised by a hit on us (`HudState::hurt_at`), fading out.
+/// The rim: raised by a hit on us (`HudState::hurt_at`), red on health
+/// and a faint gold on the shield, fading out; a flicker of blue-white as
+/// the shield breaks.
 pub fn hurt_rim(
     time: Res<Time>,
     st: Res<HudState>,
     mut q: Query<(&mut BackgroundGradient, &mut Visibility), With<HurtRim>>,
 ) {
+    let now = time.elapsed_secs();
     let Ok((mut bg, mut vis)) = q.single_mut() else {
         return;
     };
-    let u = (time.elapsed_secs() - st.hurt_at) / RIM_S;
-    let alpha = if st.hurt_at > 0.0 && (0.0..1.0).contains(&u) {
-        RIM_ALPHA * (1.0 - u)
+    let u = (now - st.hurt_at) / RIM_S;
+    let hurt = if st.hurt_at > 0.0 && (0.0..1.0).contains(&u) {
+        let (peak, c) = if st.hurt_shield {
+            (RIM_SHIELD_ALPHA, Vec3::new(1.0, 0.82, 0.35))
+        } else {
+            (RIM_ALPHA, Vec3::new(0.55, 0.02, 0.02))
+        };
+        (peak * (1.0 - u), c)
+    } else {
+        (0.0, Vec3::ZERO)
+    };
+    let p = (now - st.pop_at) / POP_S;
+    let pop = if st.pop_at > 0.0 && (0.0..1.0).contains(&p) {
+        let flicker = 0.7 + 0.3 * (now * POP_FLICKER_HZ * core::f32::consts::TAU).sin();
+        POP_ALPHA * (1.0 - p) * (1.0 - p) * flicker
     } else {
         0.0
+    };
+    let (alpha, c, clear) = if pop > hurt.0 {
+        (pop, Vec3::new(0.6, 0.85, 1.0), POP_CLEAR_PCT)
+    } else {
+        (hurt.0, hurt.1, RIM_CLEAR_PCT)
     };
     let want = if alpha > 0.0 {
         Visibility::Inherited
@@ -1659,8 +1759,11 @@ pub fn hurt_rim(
     }
     if alpha > 0.0 {
         if let Some(Gradient::Radial(r)) = bg.0.first_mut() {
+            if let Some(stop) = r.stops.first_mut() {
+                stop.point = Val::Percent(clear);
+            }
             if let Some(stop) = r.stops.last_mut() {
-                stop.color = rim(alpha);
+                stop.color = Color::srgba(c.x, c.y, c.z, alpha);
             }
         }
     }
