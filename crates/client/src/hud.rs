@@ -77,6 +77,9 @@ const SHIELD_W: f32 = 460.0;
 const SHIELD_H: f32 = 24.0;
 const SHIELD_TOP_PX: f32 = 16.0;
 const SCORE_W: f32 = 150.0;
+/// A gun's picture in its box, px wide, and its height for its width.
+const ICON_W: f32 = 112.0;
+const ICON_ASPECT: f32 = crate::look::icons::ICON_H as f32 / crate::look::icons::ICON_W as f32;
 /// Under this share the shield is low: its frame pulses red.
 const SHIELD_LOW_PCT: f32 = 25.0;
 /// Rounds a magazine may show; a bigger one (a battery) is a number.
@@ -211,6 +214,9 @@ pub struct GunPanel(pub u8);
 pub struct GunCount(pub u8);
 #[derive(Component)]
 pub struct GunName(pub u8);
+/// A hand's gun as a picture (`look/icons.rs`), where its name was.
+#[derive(Component)]
+pub struct GunIcon(pub u8);
 #[derive(Component)]
 pub struct Pip(pub u8, pub usize);
 #[derive(Component)]
@@ -353,6 +359,16 @@ fn gun_panel(c: &mut ChildSpawnerCommands, hand: u8, right: bool) {
                 BackgroundColor(EDGE_DIM),
             ));
             c.spawn((GunName(hand), tinted(crate::ui::display(15.0), INK)));
+            c.spawn((
+                GunIcon(hand),
+                Node {
+                    width: Val::Px(ICON_W),
+                    height: Val::Px(ICON_W * ICON_ASPECT),
+                    display: Display::None,
+                    ..default()
+                },
+                ImageNode::default().with_color(INK),
+            ));
         });
         // The magazine: a round each, wrapping, from the box's side.
         c.spawn(Node {
@@ -1354,6 +1370,36 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
         } else {
             ""
         },
+    }
+}
+
+/// Each hand's gun as its picture, once it is drawn; its name until then.
+#[allow(clippy::type_complexity)]
+pub fn gun_icons(
+    link: NonSend<crate::LinkRes>,
+    icons: Option<Res<crate::look::icons::GunIcons>>,
+    mut pics: Query<(&GunIcon, &mut Node, &mut ImageNode), Without<GunName>>,
+    mut names: Query<(&GunName, &mut Node), Without<GunIcon>>,
+) {
+    let s = link.0.session();
+    let (true, Some(icons)) = (s.ready, icons) else {
+        return;
+    };
+    let f = s.core.own().0;
+    let arm = |h: u8| if h == 0 { f.gun().arm } else { f.left.arm };
+    let mut shown = [false; 2];
+    for (h, mut n, mut img) in &mut pics {
+        let pic = icons.get(arm(h.0));
+        shown[h.0 as usize & 1] = pic.is_some();
+        if let Some(pic) = pic {
+            if img.image != *pic {
+                img.image = pic.clone();
+            }
+        }
+        set_display(&mut n, pic.is_some());
+    }
+    for (h, mut n) in &mut names {
+        set_display(&mut n, !shown[h.0 as usize & 1]);
     }
 }
 

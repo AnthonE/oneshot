@@ -487,6 +487,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::guns::load,
             look::viewmodel::kit,
             look::counter::setup,
+            look::icons::setup.after(look::guns::load),
             arms_setup
                 .after(setup)
                 .after(look::guns::load)
@@ -571,7 +572,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::viewmodel::shimmer,
             look::fx::draw,
             hud::draw,
-            (hud::gear, hud::vitals, hud::corner, scope::draw),
+            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw),
             hud::hurt_rim,
         )
             .chain(),
@@ -605,7 +606,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .before(bevy::transform::TransformSystems::Propagate),
     )
     // Our own arms in view, onto the guns as `draw_view` posed them.
-    .add_systems(Update, look::hands::build)
+    .add_systems(Update, (look::hands::build, look::icons::develop))
     .add_systems(
         PostUpdate,
         look::hands::pose

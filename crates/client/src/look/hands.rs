@@ -3,10 +3,11 @@
 //! boned) and `char1_body` (the trunk, the legs and the head with its face);
 //! here only the arms are drawn, so no face ever reaches the camera.
 //!
-//! **The fingers** are the hold clip's (`anim::Hold`, its first frame held):
-//! `Rifle_Hold_Loop` round a long gun's grip and its fore-end,
-//! `Pistol_Idle_Loop` round a pistol's. With a gun in each hand the left
-//! hand's fingers are the right's, mirrored.
+//! **The fingers** are the hold clip's (`anim::Hold`, its first frame held,
+//! whole: [`ViewClips`]): `Rifle_Hold_Loop` round a long gun's grip and its
+//! fore-end, `Pistol_Idle_Loop` round a pistol's. One pistol is held in
+//! the right hand alone, the left arm folded away out of the frame; with a
+//! gun in each hand the left hand's fingers are the right's, mirrored.
 //!
 //! **The arms** are solved every frame onto the guns as `viewmodel.rs`
 //! poses them ([`Grips`]): each hand is the clip's hand moved rigidly so
@@ -32,13 +33,12 @@
 use std::collections::BTreeMap;
 
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::gltf::Gltf;
 use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
-
-use bevy::gltf::Gltf;
 
 use super::anim::Hold;
 use super::guns::{gun, view_basis, Models};
@@ -81,7 +81,7 @@ pub const MAG_UNDER_M: f32 = 0.12;
 /// A throw: the off hand drawn back past the shoulder, then flung forward
 /// and up out of the frame (as it looks, from its own shoulder).
 pub const THROW_BACK: Vec3 = Vec3::new(-0.08, 0.05, 0.12);
-pub const THROW_OUT: Vec3 = Vec3::new(0.12, 0.42, -0.42);
+pub const THROW_OUT: Vec3 = Vec3::new(0.1, 0.3, -0.22);
 /// The glove's black, the band's glow (a share of a white surface's
 /// brightness in full sun) and the wood's lift (`bodies.rs`'s).
 const GLOVE: [f32; 3] = [0.012, 0.013, 0.015];
