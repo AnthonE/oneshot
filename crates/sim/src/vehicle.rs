@@ -83,25 +83,29 @@ impl Vehicle {
         (self.seats[DRIVER] != 0).then(|| self.seats[DRIVER] as usize - 1)
     }
 
-    /// Where a fighter in `seat` stands (its feet), by the hull.
+    /// Where a fighter in `seat` is (its feet), by the hull: the driver
+    /// in the cab's left seat, the passenger standing in the bed.
     pub fn mount(&self, seat: usize) -> V3 {
         let (f, r) = self.axes();
         let at = if seat == DRIVER {
-            self.pos + f * -0.3 + r * -0.45 + V3::new(0.0, 0.6, 0.0)
+            self.pos + f * 0.45 + r * -0.45 + V3::new(0.0, 0.4, 0.0)
         } else {
-            self.pos + f * -1.4 + V3::new(0.0, 0.9, 0.0)
+            self.pos + f * -1.7 + V3::new(0.0, 0.9, 0.0)
         };
         V3::new(quant(at.x), quant(at.y), quant(at.z))
     }
 
-    /// A rider's body in `seat`: at its mount, moving with the hull, on
-    /// its feet. What the world and a rider's prediction both put there.
+    /// A rider's body in `seat`: at its mount, moving with the hull; the
+    /// driver sitting (a crouched body's height: under the roof, so the
+    /// hull takes what is shot at it), the passenger on its feet, chest
+    /// and head over the hull. What the world and a rider's prediction
+    /// both put there.
     pub fn seat_body(&self, seat: usize) -> crate::movement::Body {
         crate::movement::Body {
             pos: self.mount(seat),
             vel: self.vel,
             grounded: true,
-            crouched: false,
+            crouched: seat == DRIVER,
         }
     }
 
@@ -193,7 +197,7 @@ impl Vehicle {
         let lo = self.pos.y + VEH_STEP;
         let hi = self.pos.y + VEH_H;
         let mut p = self.pos;
-        // Each axis as far as both hull circles may go.
+        // Each axis as far as every hull circle may go.
         let fore = f * VEH_HULL_OFF;
         for axis in 0..2 {
             let d = if axis == 0 { v.x * DT } else { v.z * DT };
@@ -202,7 +206,7 @@ impl Vehicle {
             }
             let mut go = d;
             let mut blocked = false;
-            for c in [p + fore, p - fore] {
+            for c in [p + fore, p, p - fore] {
                 let (from, other) = if axis == 0 { (c.x, c.z) } else { (c.z, c.x) };
                 let rr = VEH_HULL_R;
                 let area = if axis == 0 {
@@ -265,7 +269,7 @@ impl Vehicle {
 
         if !map.solids.is_empty() {
             // Each hull circle out of the solids; the vehicle moves with it.
-            for k in [1.0, -1.0] {
+            for k in [1.0, 0.0, -1.0] {
                 let c = p + fore * k;
                 let was = self.pos + fore * k;
                 let (mut cx, mut cz) = (c.x, c.z);

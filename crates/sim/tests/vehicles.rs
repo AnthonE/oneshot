@@ -233,6 +233,63 @@ fn shots_wreck_a_hull_and_its_riders_and_it_comes_back() {
     assert_eq!(w.vehicles[0].pos, w.map.vehicles[0].pos);
 }
 
+/// The cab covers its driver: a shot at where they sit meets the hull.
+/// The bed doesn't cover its passenger, whose chest and head stand over it.
+#[test]
+fn the_cab_covers_its_driver_and_the_bed_not_its_passenger() {
+    let rules = Rules {
+        teams: false,
+        score_limit: 100,
+        time_limit_ms: 0,
+        ..Rules::doubles()
+    };
+    let mut w = World::new(dry_fork(), rules, 1, (5, 6));
+    for s in 0..3 {
+        w.seat(s, s as u8 & 1);
+    }
+    let idle = [Input::default(); MAX_FIGHTERS];
+    while w.phase == Phase::Countdown {
+        w.step(&idle, &NO_LAG);
+    }
+    let v = w.vehicles[0].pos;
+    for s in [0, 2] {
+        w.fighters[s].body.pos = V3::new(v.x - 2.0, w.map.ground(v.x - 2.0, v.z), v.z);
+        tap_use(&mut w, s);
+    }
+    assert_eq!(w.fighters[0].riding(), Some((0, DRIVER)));
+    assert_eq!(w.fighters[2].riding(), Some((0, PASSENGER)));
+    // Blue 12 m off its flank, its eye level with what it aims at, fires
+    // once.
+    let shoot = |w: &mut World, at: V3| {
+        let (_, r) = w.vehicles[0].axes();
+        let from = at + r * 12.0;
+        w.fighters[1].body.pos = V3::new(from.x, from.y - EYE, from.z);
+        let d = at - w.fighters[1].eye();
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        inputs[1] = Input {
+            buttons: FIRE,
+            yaw: rad_to_yaw(fmath::atan2(d.z, d.x)),
+            pitch: fmath::round(fmath::atan2(d.y, d.flat().len()) * (65536.0 / core::f32::consts::TAU)) as i16,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        // The burst over and the trigger let go before the next.
+        for _ in 0..TICK_HZ {
+            w.step(&[Input::default(); MAX_FIGHTERS], &NO_LAG);
+        }
+    };
+    let hull = w.vehicles[0].health;
+    let head = w.vehicles[0].mount(DRIVER) + V3::new(0.0, HEAD_Y_CROUCH, 0.0);
+    shoot(&mut w, head);
+    assert!(w.vehicles[0].health < hull, "the hull took the shot at its driver");
+    assert_eq!(w.fighters[0].shield, SHIELD_MAX, "and the driver none of it");
+    let hull = w.vehicles[0].health;
+    let chest = w.vehicles[0].mount(PASSENGER) + V3::new(0.0, CHEST_Y, 0.0);
+    shoot(&mut w, chest);
+    assert!(w.fighters[2].shield < SHIELD_MAX, "the passenger is over the hull");
+    assert_eq!(w.vehicles[0].health, hull, "which that shot went over");
+}
+
 /// A shot is checked against the hull where the shooter saw it: rewound
 /// with it, so a shot at where it was 25 ticks ago (4 m back at speed)
 /// hits with that much lag and misses without.

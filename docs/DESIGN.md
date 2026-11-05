@@ -520,7 +520,7 @@ keeps every gate in §17 green and moves a golden only on purpose.
    experiment.
 10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
     rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
-    about y only and meets boxes as two hull circles; USE gets in and out
+    about y only and meets boxes as three hull circles; USE gets in and out
     (a vehicle in reach beats a pad); hitscan, melee, rockets and blasts
     hurt it, and it blows up with its riders and comes back after its
     respawn; past 11 m/s it runs down whoever is on foot in its way. Two a

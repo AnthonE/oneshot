@@ -7,11 +7,10 @@
 //! terrain. Nothing that decides reads any of it.
 //!
 //! It is drawn at the size it came, a real truck's (5.7 m long, 2.1 wide,
-//! 1.8 tall), because that is the size the sim's riders fit: the driver's
-//! mount is in its cab and the passenger's in its bed. The sim's hull is
-//! still the buggy's box (4.4 by 2.2 by 1.5, `VEH_HALF_L` and `VEH_H`), so
-//! the nose, the tail and the top of the roof take no hits and stop at no
-//! wall until those grow to it.
+//! 1.8 tall), and the sim's hull is that box (`VEH_HALF_L`, `VEH_HALF_W`,
+//! `VEH_H`), its middle the model's: what is drawn is what takes a shot and
+//! meets a wall. The sim's seats are its seats (`Vehicle::mount`): the
+//! driver in the cab's left one, the passenger standing in the bed.
 
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
@@ -20,20 +19,11 @@ use super::guns::Models;
 use crate::LinkRes;
 
 /// Where its wheels are in the hull's frame (+X forward, +Z its right),
-/// metres, front pair first: what `truck.py` prints, slid by [`AT`].
-pub const WHEELS: [(f32, f32); 4] = [
-    (1.97 + AT.x, 0.888),
-    (1.97 + AT.x, -0.888),
-    (-1.771 + AT.x, 0.888),
-    (-1.771 + AT.x, -0.888),
-];
+/// metres, front pair first: what `truck.py` prints.
+pub const WHEELS: [(f32, f32); 4] = [(1.97, 0.888), (1.97, -0.888), (-1.771, 0.888), (-1.771, -0.888)];
 const WHEEL_R: f32 = 0.455;
 const WHEELBASE: f32 = 3.741;
 const TRACK: f32 = 1.776;
-/// The model's place in the hull's frame: slid so the sim's driver
-/// (`Vehicle::mount`: 0.3 m behind the middle, 0.45 to the left) is on its
-/// driver's seat.
-const AT: Vec3 = Vec3::new(-0.35, 0.0, 0.0);
 /// The most the front wheels turn, radians; slower than `STEER_FROM` m/s
 /// they straighten (a yaw with no speed is no steer to read).
 const STEER_MAX: f32 = 0.55;
@@ -73,7 +63,7 @@ pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) {
         .spawn((
             Truck::default(),
             SceneRoot(models.truck.clone()),
-            Transform::from_translation(AT),
+            Transform::default(),
             ChildOf(hull),
         ))
         .observe(bind);
@@ -139,7 +129,7 @@ pub fn drive(
             truck.bank += (bank.clamp(-LEAN_MAX, LEAN_MAX) - truck.bank) * ease;
             truck.lift += (lift.clamp(-LIFT_MAX, LIFT_MAX) - truck.lift) * ease;
         }
-        *body = Transform::from_translation(AT + Vec3::Y * truck.lift)
+        *body = Transform::from_translation(Vec3::Y * truck.lift)
             .with_rotation(Quat::from_rotation_z(truck.pitch) * Quat::from_rotation_x(truck.bank));
         for w in children.iter_descendants(e) {
             let Ok((wheel, mut tr)) = wheels.get_mut(w) else {
