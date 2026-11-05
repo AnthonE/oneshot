@@ -613,8 +613,8 @@ pub fn built(layer: Layer) -> Recipe {
             life: (1.8, 3.0),
             size: (0.45, 0.7),
             grow: 1.6,
-            c0: [1.0, 1.0, 1.0, 0.9],
-            c1: [1.2, 1.2, 1.2, 0.0],
+            c0: [0.55, 0.55, 0.55, 1.0],
+            c1: [0.65, 0.65, 0.65, 0.0],
             tinted: true,
             spin: 0.25,
             ..strip(base, sheets::SMOKE)
@@ -690,8 +690,11 @@ pub fn built(layer: Layer) -> Recipe {
             spin: 0.5,
             ..strip(base, sheets::WISP)
         },
+        // The soot's albedo is a dark grey (0.1 linear): lit by the sun it
+        // reads as smoke, not cloud; the fire's glow is kept under what
+        // clips without bloom, so its body stays orange.
         Layer::Boom => Recipe {
-            glow: 2.5,
+            glow: 1.4,
             speed: (0.0, 0.5),
             spray: 0.4,
             gravity: -0.6,
@@ -699,38 +702,41 @@ pub fn built(layer: Layer) -> Recipe {
             life: (1.3, 1.7),
             size: (1.8, 2.4),
             grow: 1.5,
-            c0: [0.28, 0.26, 0.25, 1.0],
-            c1: [0.4, 0.4, 0.4, 0.0],
+            c0: [0.1, 0.09, 0.085, 1.0],
+            c1: [0.18, 0.18, 0.18, 0.0],
             spin: 0.15,
             ..strip(base, sheets::EXPLOSION)
         },
+        // Flung off the main one sideways, faster, not up into it.
         Layer::Fireballs => Recipe {
-            glow: 2.2,
-            speed: (2.5, 5.5),
-            spray: 0.35,
-            up: 1.5,
+            glow: 1.2,
+            speed: (3.5, 7.0),
+            spray: 0.15,
+            up: 0.3,
             gravity: -0.4,
             drag: 2.6,
             life: (0.9, 1.3),
             size: (0.8, 1.2),
             grow: 1.6,
-            c0: [0.28, 0.26, 0.25, 1.0],
-            c1: [0.4, 0.4, 0.4, 0.0],
+            c0: [0.1, 0.09, 0.085, 1.0],
+            c1: [0.18, 0.18, 0.18, 0.0],
             spin: 0.3,
             ..strip(base, sheets::EXPLOSION)
         },
+        // Motes big enough to see drift and fall, in the blast's colour.
         Layer::Embers => Recipe {
             cell: GLOW,
             speed: (2.0, 7.0),
             spray: 0.3,
             up: 2.0,
             gravity: 3.0,
-            drag: 1.2,
+            drag: 0.6,
             life: (0.8, 1.8),
-            size: (0.012, 0.02),
+            size: (0.03, 0.045),
             grow: 0.6,
-            c0: [10.0, 4.0, 0.8, 1.0],
-            c1: [2.0, 0.4, 0.05, 0.0],
+            c0: [8.0, 8.0, 8.0, 1.0],
+            c1: [1.6, 1.6, 1.6, 0.0],
+            tinted: true,
             ..base
         },
     }

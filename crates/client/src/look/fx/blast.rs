@@ -50,6 +50,8 @@ const SOOT: Color = Color::srgb(0.2, 0.19, 0.18);
 const FIRE_RING: Color = Color::srgb(1.0, 0.8, 0.55);
 /// Ion blue, for the sticky's.
 const ION_RING: Color = Color::srgb(0.45, 0.65, 1.0);
+/// An ember's orange: what the Embers layer's white is tinted.
+const EMBER: Color = Color::srgb(1.0, 0.45, 0.1);
 
 pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     let eye = fx.eye;
@@ -287,7 +289,7 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
     let smoke = SOOT.mix(&tint, 0.35);
     fx.emit_tint(Layer::Cloud, n(5), at + Vec3::Y * 0.7 * big, Vec3::Y, smoke, 1.5 * big);
     fx.emit_tint(Layer::Sparks, n(36), at, Vec3::Y, Color::WHITE, 1.7 * big);
-    fx.emit_tint(Layer::Embers, n(22), at, Vec3::Y, Color::WHITE, big);
+    fx.emit_tint(Layer::Embers, n(22), at, Vec3::Y, EMBER, big);
     // On or near the ground: a ring, dust rolled out along it, debris off
     // it trailing smoke, a scorch.
     let floor = scene.map.floor(at.x, at.z, 0.2, at.y + 0.5);

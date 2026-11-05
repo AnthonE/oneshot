@@ -133,7 +133,9 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
 #endif
     let ambient = lights.ambient_color.rgb * view.exposure;
     let open = (a.r + a.g + a.b + b.r + b.g + b.b) / 6.0;
-    var smoke = tint.rgb * (sun * lit * shadow + ambient * (0.35 + 0.65 * open));
+    // Over π, as a Lambertian surface's radiance is (Bevy's Fd_Burley):
+    // the smoke's soot is as bright as the ground it drifts over.
+    var smoke = tint.rgb * (sun * lit * shadow * 0.3183 + ambient * (0.35 + 0.65 * open));
 
     // Heat: the ramp, as bright as the recipe asks, faded with the recipe.
     let heat = b.a;

@@ -29,15 +29,16 @@ pub struct Shock {
     pub color: Vec3,
 }
 
-/// A fire blast's shell: a warm rim, 0.3 to `4 × big` metres in 0.3 s.
+/// A fire blast's shell: a faint warm rim about 1.5 times the fireball,
+/// 0.3 to `2 × big` metres in a quarter of a second.
 pub fn fire(at: Vec3, big: f32) -> Shock {
     Shock {
         at,
         left: 0.26,
         life: 0.26,
         r0: 0.3,
-        r1: 4.0 * big,
-        color: Vec3::new(1.6, 1.2, 0.75),
+        r1: 2.0 * big,
+        color: Vec3::new(0.6, 0.45, 0.28),
     }
 }
 
@@ -48,8 +49,8 @@ pub fn ion(at: Vec3) -> Shock {
         left: 0.24,
         life: 0.24,
         r0: 0.3,
-        r1: 4.0,
-        color: Vec3::new(0.7, 1.1, 2.1),
+        r1: 2.2,
+        color: Vec3::new(0.3, 0.5, 0.95),
     }
 }
 
@@ -90,8 +91,8 @@ pub fn setup(commands: &mut Commands, meshes: &mut Assets<Mesh>, mats: &mut Asse
     let sphere = meshes.add(
         Sphere::new(1.0)
             .mesh()
-            .ico(3)
-            .unwrap_or_else(|_| Sphere::new(1.0).mesh().uv(24, 16)),
+            .ico(4)
+            .unwrap_or_else(|_| Sphere::new(1.0).mesh().uv(32, 20)),
     );
     for index in 0..SHELLS {
         let material = mats.add(ShockMaterial {
