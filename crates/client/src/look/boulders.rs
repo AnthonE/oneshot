@@ -73,8 +73,11 @@ pub const WET_ROUGH: f32 = 0.45;
 pub const DRY_ROUGH: f32 = 0.92;
 /// The pylon's metal: brushed, not polished (a mirror under the open sky
 /// is white).
-pub const PYLON_ROUGH: f32 = 0.5;
-pub const PYLON_METAL: f32 = 0.85;
+pub const PYLON_ROUGH: f32 = 0.55;
+pub const PYLON_METAL: f32 = 0.4;
+/// Its paint over Meshy's (linear): lifted into the wall's grey. Near
+/// full metal its own paint hardly showed and it stood black beside it.
+pub const PYLON_TINT: f32 = 1.5;
 
 /// A rock box waiting for its block.
 #[derive(Component, Clone, Copy, Debug)]
@@ -310,8 +313,10 @@ impl Stones {
             let tinted = |t: [f32; 3], rough: f32| StandardMaterial {
                 // The stack keeps its own paint (its top is green), and
                 // the pylon is metal, as its own material says.
-                base_color: if i == STACK || i == PYLON_MODEL {
+                base_color: if i == STACK {
                     Color::WHITE
+                } else if i == PYLON_MODEL {
+                    Color::linear_rgb(PYLON_TINT, PYLON_TINT, PYLON_TINT)
                 } else {
                     Color::linear_rgb(t[0], t[1], t[2])
                 },

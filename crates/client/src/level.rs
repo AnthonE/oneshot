@@ -80,14 +80,14 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // cover a paler one, their dark pieces a darker, a side's pieces
         // the plate under its paint. The floor keeps its big panels: tread
         // plate over forty metres is a field of noise.
-        0 => ("steel", 4.0, Color::linear_rgb(2.3, 2.32, 2.4)),
-        1 => ("steel", 3.0, Color::linear_rgb(2.9, 2.9, 2.95)),
-        3 => ("steel", 3.0, Color::linear_rgb(4.6, 1.0, 0.8)),
-        4 => ("steel", 3.0, Color::linear_rgb(0.9, 1.5, 4.2)),
-        5 => ("steel", 3.0, Color::linear_rgb(1.1, 1.12, 1.2)),
+        0 => ("steel", 5.0, Color::linear_rgb(0.62, 0.62, 0.64)),
+        1 => ("steel", 4.0, Color::linear_rgb(0.86, 0.86, 0.87)),
+        3 => ("steel", 4.0, Color::linear_rgb(1.5, 0.3, 0.24)),
+        4 => ("steel", 4.0, Color::linear_rgb(0.26, 0.44, 1.35)),
+        5 => ("steel", 4.0, Color::linear_rgb(0.3, 0.3, 0.32)),
         ROCK => ("rock", 2.5, Color::linear_rgb(1.45, 1.6, 2.1)),
-        7 => ("steel", 3.0, Color::linear_rgb(1.7, 1.72, 1.78)),
-        11 => ("steel", 3.0, Color::linear_rgb(3.4, 3.4, 3.45)),
+        7 => ("steel", 4.0, Color::linear_rgb(0.55, 0.55, 0.57)),
+        11 => ("steel", 4.0, Color::linear_rgb(1.0, 1.0, 1.0)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
@@ -97,11 +97,12 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
         DECK => ("deck", 4.0, Color::WHITE),
         GOLD => ("gold", 1.2, Color::WHITE),
-        // A base's metal: gunmetal plate lifted to a mid steel, the same
-        // under a side's paint, and tread plate.
-        STEEL => ("steel", 3.0, Color::linear_rgb(1.7, 1.72, 1.78)),
-        STEEL_RED => ("steel", 3.0, Color::linear_rgb(4.6, 1.0, 0.8)),
-        STEEL_BLUE => ("steel", 3.0, Color::linear_rgb(0.9, 1.5, 4.2)),
+        // A base's metal: plates over a metre across (the set is four to
+        // its tile) in a mid steel, the same under a side's paint, and
+        // tread plate.
+        STEEL => ("steel", 5.0, Color::linear_rgb(0.7, 0.7, 0.72)),
+        STEEL_RED => ("steel", 5.0, Color::linear_rgb(1.5, 0.3, 0.24)),
+        STEEL_BLUE => ("steel", 5.0, Color::linear_rgb(0.26, 0.44, 1.35)),
         TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
         _ => return None,
     })

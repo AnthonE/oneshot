@@ -14,7 +14,7 @@
 # longer copies these four from Gates. Needs curl, python3 and ImageMagick.
 #
 # And the bases' metal, the same way from ambientCG (ambientcg.com, CC0):
-# `steel` (gunmetal plates, their seams and bolts) and `tread` (tread
+# `steel` (plates with seams and bolts) and `tread` (tread
 # plate, for a deck or a ramp), each with its roughness and occlusion as
 # the boxes' sets have them (`textures::BOXES`).
 #
@@ -31,7 +31,7 @@ SETS=(
 )
 # our name | ambientCG's id | what it is
 METAL=(
-  "steel|MetalPlates004|dark gunmetal plates, seamed and bolted"
+  "steel|MetalPlates001|steel plates a quarter of the tile across, staggered, bolted at their corners"
   "tread|DiamondPlate008C|worn tread plate"
 )
 src=sources/polyhaven

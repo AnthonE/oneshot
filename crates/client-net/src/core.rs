@@ -977,10 +977,13 @@ impl NetCore {
             }
             Some(n) => {
                 let fwd = s.tick - n;
+                // Exactly 32 on shifts every old bit out (and `<< 32` on a
+                // u32 is an overflow: a panic in a debug build, which a
+                // half-second hitch at a level's load found).
                 self.ack_bits = if fwd > 32 {
                     0
                 } else {
-                    (self.ack_bits << fwd) | (1 << (fwd - 1))
+                    self.ack_bits.checked_shl(fwd).unwrap_or(0) | (1 << (fwd - 1))
                 };
             }
             None => {
