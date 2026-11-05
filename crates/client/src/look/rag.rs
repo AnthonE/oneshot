@@ -777,6 +777,7 @@ pub fn step(
                 if alive || !shown {
                     commands.entity(e).remove::<Ragdoll>();
                     body.afresh();
+                    body.cull(&mut commands, true);
                     continue;
                 }
                 if let Ok(mut tr) = at.get_mut(e) {
@@ -818,6 +819,7 @@ pub fn step(
                     own.0 = Some(rag.now[HIPS]);
                 }
                 body.go_limp();
+                body.cull(&mut commands, false);
                 commands.entity(e).insert(rag);
             }
         }
