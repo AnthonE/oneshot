@@ -23,15 +23,17 @@ use bevy::shader::ShaderRef;
 
 const SHADER: &str = "shaders/cloud_sea.wgsl";
 
-/// The sheet's rings, metres from the map's middle, and how far each stands
-/// over the sea's level: flat to [`FLAT_M`], then the bank, its rim
-/// [`BANK_M`] up by [`REACH_M`], under the far plane however the eye turns.
+/// The sheet's rings, metres from the map's middle: flat to [`FLAT_M`],
+/// then the bank, its rim at [`RIM_Y`] by [`REACH_M`], under the far plane
+/// however the eye turns.
 const RINGS_M: [f32; 14] = [
     0.0, 15.0, 30.0, 50.0, 75.0, 110.0, 150.0, 200.0, 260.0, 330.0, 400.0, 460.0, 515.0, 560.0,
 ];
 pub const FLAT_M: f32 = 400.0;
 pub const REACH_M: f32 = 560.0;
-pub const BANK_M: f32 = 60.0;
+/// The bank's rim: over the eye of anyone on the island (a strut's tip is
+/// 9 m up), so from there it stands just over the horizon.
+pub const RIM_Y: f32 = 20.0;
 const SPOKES: usize = 96;
 /// A billow's top and the hollow between, linear: a grey white under the
 /// lit sand's value, and a cool grey in the folds.
@@ -92,11 +94,11 @@ fn params(drift: Vec2) -> SeaParams {
     }
 }
 
-/// How far the sheet stands over the sea's level `r` metres out: nothing
-/// to [`FLAT_M`], then up a smooth quarter-pipe to [`BANK_M`].
-pub fn lift(r: f32) -> f32 {
+/// How far the sheet at `y` stands over it `r` metres out: nothing to
+/// [`FLAT_M`], then up a smooth quarter-pipe to [`RIM_Y`].
+pub fn lift(r: f32, y: f32) -> f32 {
     let t = ((r - FLAT_M) / (REACH_M - FLAT_M)).clamp(0.0, 1.0);
-    BANK_M * t * t
+    (RIM_Y - y).max(0.0) * t * t
 }
 
 /// The sheet: rings round `mid` at `y` and their bank, facing up and in.
@@ -105,11 +107,11 @@ fn mesh(mid: Vec2, y: f32) -> Mesh {
     let mut nrm = vec![[0.0, 1.0, 0.0]];
     for &r in &RINGS_M[1..] {
         // The bank's slope, for its normal: up and in toward the middle.
-        let slope = (lift(r + 1.0) - lift(r - 1.0)) * 0.5;
+        let slope = (lift(r + 1.0, y) - lift(r - 1.0, y)) * 0.5;
         for k in 0..SPOKES {
             let a = k as f32 / SPOKES as f32 * core::f32::consts::TAU;
             let (s, c) = a.sin_cos();
-            pos.push([mid.x + c * r, y + lift(r), mid.y + s * r]);
+            pos.push([mid.x + c * r, y + lift(r, y), mid.y + s * r]);
             nrm.push(Vec3::new(-c * slope, 1.0, -s * slope).normalize().to_array());
         }
     }
@@ -188,21 +190,23 @@ mod tests {
     #[test]
     fn the_sheet_is_flat_then_banks_up_inside_the_far_plane() {
         let mid = Vec2::new(3.0, -2.0);
-        let m = mesh(mid, -30.0);
+        let m = mesh(mid, -60.0);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("positions");
         };
         for v in p {
             let r = Vec2::new(v[0], v[2]).distance(mid);
             if r <= FLAT_M {
-                assert_eq!(v[1], -30.0);
+                assert_eq!(v[1], -60.0);
             }
             assert!(r <= REACH_M + 0.01);
+            assert!(v[1] <= RIM_Y + 1e-3);
         }
+        assert!(p.iter().any(|v| (v[1] - RIM_Y).abs() < 1e-3));
         // An eye 30 m over the island's ground (0), up to 35 m off the
         // middle (the island's far edge): the rim is above it and nearer
         // than the far plane.
-        const { assert!(-30.0 + BANK_M >= 30.0) };
+        const { assert!(RIM_Y >= 12.0) };
         const { assert!(REACH_M + 35.0 < crate::look::rig::FAR_M) };
     }
 }

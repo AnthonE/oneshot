@@ -23,6 +23,7 @@ pub mod ground;
 pub mod guns;
 pub mod hands;
 pub mod icons;
+pub mod keel;
 pub mod mood;
 pub mod moon;
 pub mod own_shadow;

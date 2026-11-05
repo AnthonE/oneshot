@@ -70,7 +70,7 @@ pub const TINT: [f32; 3] = [0.74, 0.62, 0.52];
 /// An island's (`level::Land::Isle`): pale cream sandstone, its boulders
 /// of the sand's family; and its stacks, far off in the air, plain cream
 /// without the stack's own paint (its top is green).
-pub const PALE_TINT: [f32; 3] = [1.8, 2.4, 3.1];
+pub const PALE_TINT: [f32; 3] = [2.0, 3.2, 4.0];
 pub const PALE_STACK: [f32; 3] = [0.5, 0.41, 0.3];
 /// Stone the sea washes: darker and glossier.
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
@@ -189,19 +189,19 @@ const DRY_FORK: [Prop; 19] = [
     stone(2, [157.5, -5.9, 70.0], [5.0, 5.2, 4.4], 0.8, -0.6),
 ];
 
-/// Cloudbreak's sky: stacks standing out of the sea of cloud (at −30) all
+/// Cloudbreak's sky: stacks standing out of the sea of cloud (at −60) all
 /// round, their feet under it, each further one paler in the air, some
 /// over the island's own height so the skyline is never empty.
 const CLOUDBREAK: [Prop; 9] = [
-    stack(-150.0, -230.0, -45.0, 55.0, 0.6),
-    stack(-290.0, -380.0, -45.0, 80.0, 2.1),
-    stack(120.0, -300.0, -45.0, 45.0, 4.0),
-    stack(260.0, 90.0, -45.0, 75.0, 1.3),
-    stack(-260.0, 160.0, -45.0, 70.0, 3.3),
-    stack(60.0, 380.0, -45.0, 75.0, 5.0),
-    stack(-460.0, -60.0, -45.0, 95.0, 0.2),
-    stack(380.0, -300.0, -45.0, 70.0, 2.7),
-    stack(-90.0, -480.0, -45.0, 85.0, 1.8),
+    stack(-150.0, -230.0, -75.0, 85.0, 0.6),
+    stack(-290.0, -380.0, -75.0, 110.0, 2.1),
+    stack(120.0, -300.0, -75.0, 75.0, 4.0),
+    stack(260.0, 90.0, -75.0, 105.0, 1.3),
+    stack(-260.0, 160.0, -75.0, 100.0, 3.3),
+    stack(60.0, 380.0, -75.0, 105.0, 5.0),
+    stack(-460.0, -60.0, -75.0, 125.0, 0.2),
+    stack(380.0, -300.0, -75.0, 100.0, 2.7),
+    stack(-90.0, -480.0, -75.0, 115.0, 1.8),
 ];
 
 /// The scenery of map `id`.

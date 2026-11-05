@@ -1273,13 +1273,32 @@ pub fn build(
                 reflectance: fresnel::DIELECTRIC,
                 ..default()
             });
+            // An island's ground ends at its void: its keel hangs there
+            // instead (`look/keel.rs`).
+            let isle = land == Land::Isle;
+            let cut = |m: Mesh| {
+                if isle {
+                    crate::look::keel::clip_below(&m, def.void)
+                } else {
+                    m
+                }
+            };
+            if isle {
+                commands.spawn((
+                    LevelPart,
+                    GroundMesh { sea: wet_from, isle },
+                    Mesh3d(meshes.add(crate::look::keel::mesh(t, def.void, rock_key(id)))),
+                    MeshMaterial3d(soil.clone()),
+                    Transform::default(),
+                ));
+            }
             commands.spawn((
                 LevelPart,
                 GroundMesh {
                     sea: wet_from,
                     isle: land == Land::Isle,
                 },
-                Mesh3d(meshes.add(terrain_mesh(t, land))),
+                Mesh3d(meshes.add(cut(terrain_mesh(t, land)))),
                 MeshMaterial3d(soil.clone()),
                 Transform::default(),
             ));
@@ -1293,7 +1312,7 @@ pub fn build(
                         sea: wet_from,
                         isle: land == Land::Isle,
                     },
-                    Mesh3d(meshes.add(skin)),
+                    Mesh3d(meshes.add(cut(skin))),
                     MeshMaterial3d(soil),
                     Transform::default(),
                     bevy::light::NotShadowCaster,

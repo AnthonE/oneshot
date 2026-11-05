@@ -196,6 +196,6 @@ pub const DEF: Def = Def {
         lamps: &[
         ],
         floor: 255,
-        sea: -30.0,
+        sea: -60.0,
     },
 };
