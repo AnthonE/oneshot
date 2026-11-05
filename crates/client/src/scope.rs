@@ -233,6 +233,7 @@ pub fn setup(mut commands: Commands, root: Query<Entity, With<hud::HudRoot>>) {
 pub fn draw(
     link: NonSend<crate::LinkRes>,
     look: Res<crate::Look>,
+    seen: Res<crate::Seen>,
     mut root: Query<&mut Visibility, With<ScopeRoot>>,
     mut ring: Query<&mut BorderColor, With<ScopeRing>>,
     mut rounds: Query<(&mut Node, &ScopeRound)>,
@@ -251,7 +252,7 @@ pub fn draw(
     if !up {
         return;
     }
-    let red = hud::on_target(&s.core, link.0.now_ms());
+    let red = seen.on_target;
     if let Ok(mut b) = ring.single_mut() {
         let c = if red { RING_HOT } else { RING };
         if b.top != c {

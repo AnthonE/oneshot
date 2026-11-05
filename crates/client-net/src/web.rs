@@ -36,7 +36,52 @@ pub(crate) fn js_err(what: &str, v: &JsValue) -> JsValue {
 }
 
 fn now_ms() -> f64 {
-    web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
+    // Read a dozen times a frame: the page's clock found once.
+    thread_local! {
+        static PERF: Option<web_sys::Performance> = web_sys::window().and_then(|w| w.performance());
+    }
+    PERF.with(|p| p.as_ref().map_or(0.0, |p| p.now()))
+}
+
+/// Lets a write's promise settle with nobody waiting on it (a rejection is
+/// caught, not reported): one shared handler, where a task spawned to await
+/// it was a box and two closures per datagram.
+pub(crate) fn settle(p: &js_sys::Promise) {
+    thread_local! {
+        static IGNORE: Closure<dyn FnMut(JsValue)> = Closure::new(|_| ());
+    }
+    IGNORE.with(|f| {
+        let _ = p.catch(f);
+    });
+}
+
+/// The keys of a stream read's result, made once a reader rather than once
+/// a read.
+pub(crate) struct ReadKeys {
+    done: JsValue,
+    value: JsValue,
+}
+
+impl ReadKeys {
+    pub(crate) fn new() -> ReadKeys {
+        ReadKeys {
+            done: JsValue::from_str("done"),
+            value: JsValue::from_str("value"),
+        }
+    }
+
+    /// The chunk a read gave, or None at the stream's end (or a read that
+    /// wasn't one).
+    pub(crate) fn chunk(&self, result: &JsValue) -> Option<Uint8Array> {
+        let done = js_sys::Reflect::get(result, &self.done).ok()?.as_bool().unwrap_or(true);
+        if done {
+            return None;
+        }
+        js_sys::Reflect::get(result, &self.value)
+            .ok()?
+            .dyn_into::<Uint8Array>()
+            .ok()
+    }
 }
 
 pub(crate) fn hex32(s: &str) -> Option<[u8; 32]> {
@@ -57,6 +102,7 @@ pub(crate) struct FrameReader {
     buf: Box<FrameBuf<MAX_STREAM_MSG>>,
     pending: Vec<u8>,
     at: usize,
+    keys: ReadKeys,
 }
 
 impl FrameReader {
@@ -66,6 +112,7 @@ impl FrameReader {
             buf: Box::new(FrameBuf::new()),
             pending: Vec::new(),
             at: 0,
+            keys: ReadKeys::new(),
         })
     }
 
@@ -83,17 +130,7 @@ impl FrameReader {
             self.pending.clear();
             self.at = 0;
             let result = JsFuture::from(self.reader.read()).await.ok()?;
-            let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
-                .ok()
-                .and_then(|d| d.as_bool())
-                .unwrap_or(true);
-            if done {
-                return None;
-            }
-            let chunk: Uint8Array = js_sys::Reflect::get(&result, &JsValue::from_str("value"))
-                .ok()?
-                .dyn_into()
-                .ok()?;
+            let chunk = self.keys.chunk(&result)?;
             self.pending.resize(chunk.length() as usize, 0);
             chunk.copy_to(&mut self.pending);
         }
@@ -128,6 +165,10 @@ pub(crate) fn datagram_writer(d: &WebTransportDatagramDuplexStream) -> Result<Wr
 
 type Queue<T> = Rc<RefCell<VecDeque<T>>>;
 
+/// Datagrams held for the game at most: a page in the background stops
+/// drawing, and the oldest go.
+const INBOX_MAX: usize = 256;
+
 /// The datagram writer as a session's [`Wire`]: never waits; a datagram
 /// past the path's size or behind a full queue is dropped.
 struct WebWire<'a> {
@@ -146,10 +187,7 @@ impl Wire for WebWire<'_> {
         }
         let chunk = Uint8Array::new_with_length(payload.len() as u32);
         chunk.copy_from(payload);
-        let p = self.writer.write_with_chunk(&chunk);
-        spawn_local(async move {
-            let _ = JsFuture::from(p).await;
-        });
+        settle(&self.writer.write_with_chunk(&chunk));
         true
     }
 }
@@ -184,6 +222,9 @@ pub struct Client {
     /// The stream's writer: what a watcher asks goes out on it.
     stream: Rc<WritableStreamDefaultWriter>,
     inbox: Queue<(f64, Vec<u8>)>,
+    /// The inbox's buffers once read, for the reader to fill again: a
+    /// datagram allocates nothing once a few are in hand.
+    spare: Rc<RefCell<Vec<Vec<u8>>>>,
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
     /// Why the connection ended, once it has: the close's code and reason
@@ -287,34 +328,31 @@ impl Client {
 
         let datagrams = transport.datagrams();
         let inbox: Queue<(f64, Vec<u8>)> = Rc::default();
+        let spare: Rc<RefCell<Vec<Vec<u8>>>> = Rc::default();
         {
-            let inbox = inbox.clone();
+            let (inbox, spare) = (inbox.clone(), spare.clone());
             let readable = datagrams.readable();
             spawn_local(async move {
                 let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
                     return;
                 };
+                let keys = ReadKeys::new();
                 loop {
                     let Ok(result) = JsFuture::from(reader.read()).await else {
                         break;
                     };
-                    let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
-                        .ok()
-                        .and_then(|d| d.as_bool())
-                        .unwrap_or(true);
-                    if done {
-                        break;
-                    }
-                    let Ok(v) = js_sys::Reflect::get(&result, &JsValue::from_str("value")) else {
-                        break;
-                    };
-                    let Ok(chunk) = v.dyn_into::<Uint8Array>() else { break };
+                    let Some(chunk) = keys.chunk(&result) else { break };
                     let mut q = inbox.borrow_mut();
                     // A page in the background stops drawing: keep the newest.
-                    if q.len() >= 256 {
-                        q.pop_front();
+                    let mut buf = if q.len() >= INBOX_MAX {
+                        q.pop_front().map(|(_, b)| b)
+                    } else {
+                        spare.borrow_mut().pop()
                     }
-                    q.push_back((now_ms(), chunk.to_vec()));
+                    .unwrap_or_default();
+                    buf.resize(chunk.length() as usize, 0);
+                    chunk.copy_to(&mut buf);
+                    q.push_back((now_ms(), buf));
                 }
             });
         }
@@ -326,6 +364,7 @@ impl Client {
             writer,
             stream,
             inbox,
+            spare,
             msgs,
             closed,
             ended,
@@ -385,8 +424,10 @@ impl Client {
 
     /// Takes in stream messages (the session's to read).
     fn absorb(&mut self) {
-        let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
-        for m in msgs {
+        loop {
+            let Some(m) = self.msgs.borrow_mut().pop_front() else {
+                break;
+            };
             self.session.on_msg(m);
         }
     }
@@ -396,12 +437,20 @@ impl Client {
     pub fn update(&mut self, now: f64, buttons: u16, yaw: u16, pitch: i16, mx: i8, mz: i8) {
         self.absorb();
         if !self.session.ready {
-            self.inbox.borrow_mut().clear();
+            let mut spare = self.spare.borrow_mut();
+            spare.extend(self.inbox.borrow_mut().drain(..).map(|(_, b)| b));
+            spare.truncate(INBOX_MAX);
             return;
         }
-        let arrived: Vec<(f64, Vec<u8>)> = self.inbox.borrow_mut().drain(..).collect();
-        for (at, d) in arrived {
+        loop {
+            let Some((at, d)) = self.inbox.borrow_mut().pop_front() else {
+                break;
+            };
             self.session.on_datagram(at, &d);
+            let mut spare = self.spare.borrow_mut();
+            if spare.len() < INBOX_MAX {
+                spare.push(d);
+            }
         }
         let input = Input {
             buttons,

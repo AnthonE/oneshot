@@ -988,7 +988,15 @@ fn flags_line(st: &HudState, s: &proto::Snapshot) -> String {
 }
 
 /// This frame's events and stream messages: the markers, names, the feed.
-pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
+pub fn on_events(
+    st: &mut HudState,
+    s: &Session,
+    others: &[client_net::core::Drawn],
+    events: &[EventState],
+    msgs: &[Msg],
+    now: f32,
+    yaw: f32,
+) {
     let me = s.core.slot;
     // A new match (a cup's next heat): its medals and report start over.
     if s.welcomes != st.welcomes {
@@ -1017,7 +1025,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 // shooter is drawn, else where we last heard them fire (a
                 // hit's own place is ours). Neither: the rim alone.
                 let (_, p) = s.core.own();
-                let from = s.core.others(now_ms).into_iter().find(|d| d.slot == e.a).map(|d| d.pos);
+                let from = others.iter().find(|d| d.slot == e.a).map(|d| d.pos);
                 if let Some(from) = from.or_else(|| st.shot_from.get(&e.a).copied()) {
                     st.hurt_angle = (from.z - p.z).atan2(from.x - p.x) - yaw;
                     st.arc_at = now;
@@ -1667,7 +1675,7 @@ pub fn corner(
 /// where they are drawn, the map in between; a gun's reach is its
 /// `aim_range`, its magnetism widening the bodies with distance (as
 /// `World::magnet` bends a near miss); the sword's, its lunge's.
-pub fn on_target(core: &client_net::core::NetCore, now_ms: f64) -> bool {
+pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
     use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH, LUNGE_PAD, LUNGE_RANGE};
     let f = core.own().0;
     if !f.alive || f.riding().is_some() {
@@ -1680,30 +1688,25 @@ pub fn on_target(core: &client_net::core::NetCore, now_ms: f64) -> bool {
     let dir = sim::geom::aim_dir(f.yaw, f.pitch);
     let wall = core.map.ray(eye, dir, reach);
     let mate = core.rules.teams.then_some(core.team & 1);
-    core.others(now_ms)
-        .iter()
-        .filter(|d| d.alive && Some(d.team & 1) != mate)
-        .any(|d| {
-            let pad = if sword {
-                LUNGE_PAD
-            } else {
-                (d.pos - eye).len() * a.magnet
-            };
-            let (hy, top) = if d.crouched {
-                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
-            } else {
-                (HEAD_Y, HIT_TOP)
-            };
-            sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).is_some()
-                || sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall)
-                    .is_some()
-        })
+    others.iter().filter(|d| d.alive && Some(d.team & 1) != mate).any(|d| {
+        let pad = if sword {
+            LUNGE_PAD
+        } else {
+            (d.pos - eye).len() * a.magnet
+        };
+        let (hy, top) = if d.crouched {
+            (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+        } else {
+            (HEAD_Y, HIT_TOP)
+        };
+        sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).is_some()
+            || sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall).is_some()
+    })
 }
 
 /// The crosshair red while it is on an enemy in reach ([`on_target`]).
-pub fn reticle_tint(link: NonSend<crate::LinkRes>, mut q: Query<&mut BackgroundColor, With<ReticleStroke>>) {
-    let s = link.0.session();
-    let red = s.ready && on_target(&s.core, link.0.now_ms());
+pub fn reticle_tint(seen: Res<crate::Seen>, mut q: Query<&mut BackgroundColor, With<ReticleStroke>>) {
+    let red = seen.on_target;
     let c = if red {
         Color::srgba(1.0, 0.18, 0.12, 0.95)
     } else {
@@ -1797,11 +1800,12 @@ pub fn board(
 pub fn prompt(
     link: NonSend<crate::LinkRes>,
     binds: Res<crate::binds::Binds>,
+    seen: Res<crate::Seen>,
     mut q: Query<&mut Text, With<PromptText>>,
 ) {
     let s = link.0.session();
     let line = if s.ready {
-        crate::items::offer(&s.core, link.0.now_ms())
+        crate::items::offer(&s.core, &seen.vehicles)
             .map(|what| format!("{}  {what}", binds.key(crate::binds::Action::Use)))
     } else {
         None

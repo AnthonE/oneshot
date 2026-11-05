@@ -241,7 +241,9 @@ pub(crate) fn assign_ids(prev: Option<&Frame>, prev2: Option<&Frame>, new: &mut 
 /// Pairs `from`'s rounds (those `eligible`) with `new`'s not yet `got`.
 fn pair(from: &Frame, eligible: &[bool; MAX_SNAP_PROJ], new: &Frame, got: &mut [Option<u16>; MAX_SNAP_PROJ]) {
     let dt = new.tick.wrapping_sub(from.tick) as f32 / TICK_HZ as f32;
-    let mut cand: Vec<(f32, usize, usize)> = Vec::new();
+    // Every pair of at most MAX_SNAP_PROJ rounds a side: on the stack.
+    let mut cand = [(0.0f32, 0usize, 0usize); MAX_SNAP_PROJ * MAX_SNAP_PROJ];
+    let mut n = 0;
     for (qi, q) in from.proj.iter().enumerate().take(from.np as usize) {
         if !eligible[qi] {
             continue;
@@ -282,12 +284,16 @@ fn pair(from: &Frame, eligible: &[bool; MAX_SNAP_PROJ], new: &Frame, got: &mut [
                 }
                 d
             };
-            cand.push((d, qi, pi));
+            cand[n] = (d, qi, pi);
+            n += 1;
         }
     }
-    cand.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    // A total order (no two pairs share both rounds), so unstable is the
+    // same as stable.
+    let cand = &mut cand[..n];
+    cand.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let mut used = [false; MAX_SNAP_PROJ];
-    for (_, qi, pi) in cand {
+    for &mut (_, qi, pi) in cand {
         if used[qi] || got[pi].is_some() {
             continue;
         }

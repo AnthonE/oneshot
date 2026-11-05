@@ -95,6 +95,7 @@ pub fn draw(
     link: NonSend<LinkRes>,
     look: Res<Look>,
     st: Res<hud::HudState>,
+    seen: Res<crate::Seen>,
     mut built: Local<bool>,
     (mut want, mut foes): (Local<Vec<Wanted>>, Local<Vec<client_net::core::Drawn>>),
     root: Query<Entity, With<hud::HudRoot>>,
@@ -134,8 +135,7 @@ pub fn draw(
     // isn't, and over a wall the chase camera sees round. Teammates only.
     let driving = f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER);
     if s.ready && f.alive {
-        let now = link.0.now_ms();
-        let others = core.others(now);
+        let others = &seen.others;
         let side = core.rules.teams.then_some(core.team & 1);
         let mate = |d: &client_net::core::Drawn| side.is_some_and(|t| d.team & 1 == t);
         let over = |d: &client_net::core::Drawn| {

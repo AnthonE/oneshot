@@ -272,15 +272,14 @@ fn fly(l: &mut Lying, dt: f32) {
 /// it: a vehicle in reach with a seat free first, then the nearest pad
 /// holding its gun or gun on the floor. None for nothing (or not on foot
 /// and alive in play).
-pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
+pub fn offer(core: &NetCore, vehicles: &[client_net::core::DrawnVehicle]) -> Option<String> {
     let f: &Fighter = core.own().0;
     if !f.alive || f.riding().is_some() || core.phase() != Phase::Playing {
         return None;
     }
     let at = f.body.pos;
-    let car = core
-        .vehicles(now_ms)
-        .into_iter()
+    let car = vehicles
+        .iter()
         .filter(|v| v.seats.contains(&0) && (v.pos - at).flat().len() < ENTER_R && (v.pos.y - at.y).abs() < 2.0)
         .min_by(|a, b| (a.pos - at).flat().len().total_cmp(&(b.pos - at).flat().len()));
     if let Some(v) = car {

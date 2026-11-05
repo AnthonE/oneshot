@@ -39,6 +39,7 @@ pub fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut placed: Query<(&mut Transform, &mut Visibility)>,
+    seen: Res<crate::Seen>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -92,10 +93,9 @@ pub fn draw(
             flags.roots[t] = Some(root);
         }
     }
-    let now = link.0.now_ms();
     let snap = core.latest();
     let me = core.slot;
-    let others = core.others(now);
+    let others = &seen.others;
     for (t, f) in snap.flags().iter().enumerate().take(2) {
         let Some(root) = flags.roots[t] else {
             continue;

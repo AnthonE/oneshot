@@ -420,6 +420,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
     .init_resource::<Now>()
+    .init_resource::<Seen>()
     .add_systems(First, stamp)
     .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
@@ -546,7 +547,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             grab,
-            pump,
+            (pump, see).chain(),
             happened,
             rebuild,
             look::textures::prepare,
@@ -951,21 +952,35 @@ fn draw_fighters(
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
     (mut fx, mut shield_mats, mut shells, mut body_mats): ShieldParts,
-    (time, mut walkers, film): (Res<Time>, ResMut<look::foliage::Walkers>, Option<Res<film::Film>>),
+    (time, mut walkers, film, seen): (
+        Res<Time>,
+        ResMut<look::foliage::Walkers>,
+        Option<Res<film::Film>>,
+        Res<Seen>,
+    ),
+    mut scratch: Local<FighterScratch>,
 ) {
-    let now = link.0.now_ms();
     let core = &link.0.session().core;
     // A film's camera off the player's eye sees the player's own body
     // (`film.rs`).
     let third = film.is_some_and(|f| f.third());
-    let (mut others, live) = match &posed {
-        Some(p) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
-        None => (core.others(now), true),
+    let FighterScratch { others, hulls, shown } = &mut *scratch;
+    others.clear();
+    let live = match &posed {
+        Some(p) => {
+            others.extend(p.2.fighter.then_some(p.0));
+            false
+        }
+        None => {
+            others.extend_from_slice(&seen.others);
+            true
+        }
     };
     if third && link.0.session().ready {
         others.push(core.own_drawn());
     }
-    let mut hulls = core.vehicles(now);
+    hulls.clear();
+    hulls.extend_from_slice(&seen.vehicles);
     // Our own seat, when a film draws us in it.
     if let (true, Some((_, at, yaw)), Some((i, seat))) = (third, core.own_vehicle(), core.own().0.riding()) {
         let mut seats = [0; 2];
@@ -989,8 +1004,8 @@ fn draw_fighters(
             ..client_net::core::DrawnVehicle::default()
         });
     }
-    let seats = look::bodies::seats(&hulls);
-    look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
+    let seats = look::bodies::seats(hulls);
+    look::fx::bodies::watch(&mut fx, others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
     // The grass flattens under the feet this client draws on the ground,
     // ours first: never a seat.
@@ -1040,15 +1055,17 @@ fn draw_fighters(
         let d = core.own_drawn();
         (d, kept(&d, st.look(d.slot)))
     });
-    let mut shown: Vec<(client_net::core::Drawn, Entity)> = others
-        .iter()
-        .map(|d| (*d, kept(d, posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1))))
-        .collect();
+    shown.clear();
+    shown.extend(
+        others
+            .iter()
+            .map(|d| (*d, kept(d, posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1)))),
+    );
     if let Some((d, e)) = own {
         let _ = show(&mut vis, e, !d.alive);
         shown.push((d, e));
     }
-    for (d, e) in &shown {
+    for (d, e) in shown.iter() {
         let (d, e) = (d, *e);
         if Some(d.slot) != own.map(|(o, _)| o.slot) {
             let _ = show(&mut vis, e, true);
@@ -1086,6 +1103,14 @@ fn draw_fighters(
     }
 }
 
+/// `draw_fighters`' lists, kept from frame to frame.
+#[derive(Default)]
+struct FighterScratch {
+    others: Vec<client_net::core::Drawn>,
+    hulls: Vec<client_net::core::DrawnVehicle>,
+    shown: Vec<(client_net::core::Drawn, Entity)>,
+}
+
 /// How high over the ground a hull's origin may be and still have its
 /// wheels on it (the sim's suspension is a few centimetres).
 const WHEELS_DOWN_M: f32 = 0.3;
@@ -1105,21 +1130,23 @@ fn draw_vehicles(
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     mut walkers: ResMut<look::foliage::Walkers>,
+    seen: Res<Seen>,
+    mut list: Local<Vec<(u8, Vec3, f32)>>,
 ) {
-    let now = link.0.now_ms();
     let core = &link.0.session().core;
-    let seen = core.vehicles(now);
-    let mut list: Vec<(u8, Vec3, f32)> = seen
-        .iter()
-        .map(|v| (v.slot, Vec3::new(v.pos.x, v.pos.y, v.pos.z), v.yaw))
-        .collect();
+    let seen = &seen.vehicles;
+    list.clear();
+    list.extend(
+        seen.iter()
+            .map(|v| (v.slot, Vec3::new(v.pos.x, v.pos.y, v.pos.z), v.yaw)),
+    );
     if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
     if let Some((p, yaw)) = posed.and_then(|p| p.2.truck_at(time.elapsed_secs())) {
         list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
     }
-    for &(slot, p, yaw) in &list {
+    for &(slot, p, yaw) in list.iter() {
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
@@ -1307,6 +1334,29 @@ fn stamp(link: NonSend<LinkRes>, mut now: ResMut<Now>) {
     now.0 = link.0.now_ms();
 }
 
+/// Everyone else, the hulls and the rounds in flight as drawn this frame:
+/// interpolated once, at [`Now`], once the frame's snapshots are in
+/// (`pump`), for every system that draws, tags, aims at or hears them. Its
+/// Vecs are kept and refilled: nothing is made again a frame.
+#[derive(Resource, Default)]
+pub struct Seen {
+    pub others: Vec<client_net::core::Drawn>,
+    pub vehicles: Vec<client_net::core::DrawnVehicle>,
+    pub projectiles: Vec<client_net::core::DrawnProj>,
+    /// Our aim is on an enemy in reach (`hud::on_target`): the red reticle,
+    /// the scope's ring.
+    pub on_target: bool,
+}
+
+fn see(link: NonSend<LinkRes>, now: Res<Now>, mut seen: ResMut<Seen>) {
+    let s = link.0.session();
+    let seen = &mut *seen;
+    s.core.others_into(now.0, &mut seen.others);
+    s.core.vehicles_into(now.0, &mut seen.vehicles);
+    s.core.projectiles_into(now.0, &mut seen.projectiles);
+    seen.on_target = s.ready && hud::on_target(&s.core, &seen.others);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn happened(
     mut link: NonSendMut<LinkRes>,
@@ -1318,22 +1368,32 @@ pub(crate) fn happened(
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
     film: Option<Res<film::Film>>,
-    (mut blows, now): (ResMut<look::rag::Blows>, Res<Now>),
+    (mut blows, now, seen, mut others): (
+        ResMut<look::rag::Blows>,
+        Res<Now>,
+        Res<Seen>,
+        Local<Vec<client_net::core::Drawn>>,
+    ),
 ) {
     let now_ms = now.0;
     let s = link.0.session_mut();
-    let events = s.core.drain_events(now_ms);
+    // Into the Vec the sounds read this frame (`sound::Heard`), kept.
+    let heard = &mut heard.0;
+    s.core.drain_events_into(now_ms, heard);
+    let events = &*heard;
     let mut msgs = core::mem::take(&mut early.0);
     msgs.extend(s.take_messages());
     // A film's camera off the eye sees our shots as anyone's: from the
     // drawn body, not the gun in view (`film.rs`).
     let third = film.is_some_and(|f| f.third());
     {
-        let mut others = s.core.others(now_ms);
+        others.clear();
+        others.extend_from_slice(&seen.others);
         if third {
             others.push(s.core.own_drawn());
         }
-        let vehicles = s.core.vehicles(now_ms);
+        let others = &*others;
+        let vehicles = &seen.vehicles;
         let dir = Vec3::new(
             look.pitch.cos() * look.yaw.cos(),
             look.pitch.sin(),
@@ -1342,18 +1402,18 @@ pub(crate) fn happened(
         fx.own_swing(s.core.own().0.melee_cool, dir);
         let scene = look::fx::Scene {
             map: &s.core.map,
-            others: &others,
-            vehicles: &vehicles,
+            others,
+            vehicles,
             me: if third { u8::MAX } else { s.core.slot },
             aim: dir,
             t: time.elapsed_secs(),
         };
-        look::fx::on_events(&mut fx, &scene, &events);
+        look::fx::on_events(&mut fx, &scene, events);
         let me = s.core.own().1;
         look::rag::on_events(
             &mut blows,
-            &events,
-            &others,
+            events,
+            others,
             (s.core.slot, Vec3::new(me.x, me.y, me.z)),
             time.elapsed_secs(),
         );
@@ -1368,8 +1428,7 @@ pub(crate) fn happened(
             look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
         }
     }
-    hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
-    heard.0 = events;
+    hud::on_events(&mut st, s, &seen.others, events, &msgs, time.elapsed_secs(), look.yaw);
 }
 
 /// `expose` writes every frame for this many, then once in this long.
@@ -1533,21 +1592,20 @@ fn fly(
     link: NonSend<LinkRes>,
     models: Res<look::guns::Models>,
     time: Res<Time>,
-    now: Res<Now>,
+    seen: Res<Seen>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
     // On the render tick, with the bodies that fired them (`core.rs`).
-    let others = core.others(now.0);
     look::fx::flying::projectiles(
         &mut commands,
         &mut fx,
         &models,
         &core.map,
-        &core.projectiles(now.0),
-        &others,
+        &seen.projectiles,
+        &seen.others,
         time.elapsed_secs(),
         time.delta_secs(),
         &mut have,

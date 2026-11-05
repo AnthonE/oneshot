@@ -590,6 +590,7 @@ pub fn decide(
     cam: Query<&GlobalTransform, With<crate::look::rig::EyeCam>>,
     settings: Res<crate::settings::Settings>,
     film: Option<Res<crate::film::Film>>,
+    seen: Res<crate::Seen>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -618,7 +619,6 @@ pub fn decide(
         return;
     }
     ear.in_match = true;
-    let now_ms = link.0.now_ms();
     let me = s.core.slot;
     let dt = time.delta_secs().min(0.1);
     let (f, feet) = s.core.own();
@@ -641,8 +641,7 @@ pub fn decide(
 
     events(ear, &ears, &heard.0, me);
     own_body(ear, &ears, &f, feet, dt);
-    let others = s.core.others(now_ms);
-    everyone(ear, &ears, &others, dt);
+    everyone(ear, &ears, &seen.others, dt);
 
     // Engines: ours (predicted), and every other hull with a driver.
     let mut on = ear.own_engine;
@@ -660,14 +659,13 @@ pub fn decide(
         });
     ear.hold(Some(&ears), SLOT_OWN_ENGINE, &mut on, "engine_0", own_src);
     ear.own_engine = on;
-    let hulls = s.core.vehicles(now_ms);
-    let mut seen = [false; MAX_VEHICLES];
-    for hv in &hulls {
+    let mut seen_hull = [false; MAX_VEHICLES];
+    for hv in &seen.vehicles {
         let i = hv.slot as usize;
         if i >= MAX_VEHICLES {
             continue;
         }
-        seen[i] = true;
+        seen_hull[i] = true;
         let p = v(hv.pos);
         let h = &mut ear.hulls[i];
         let raw = if dt > 0.0 && h.pos != Vec3::ZERO {
@@ -686,7 +684,7 @@ pub fn decide(
         ear.hold(Some(&ears), SLOT_ENGINE + i as u8, &mut on, "engine_0", src);
         ear.hulls[i].on = on;
     }
-    for (i, was) in seen.iter().enumerate() {
+    for (i, was) in seen_hull.iter().enumerate() {
         if !was {
             let mut on = ear.hulls[i].on;
             ear.hold(None, SLOT_ENGINE + i as u8, &mut on, "engine_0", None);
