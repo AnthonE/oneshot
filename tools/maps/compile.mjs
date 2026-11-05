@@ -135,7 +135,9 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // A turned box drawn as a buttress pylon inside it (the client's look/boulders.rs).
   'pylon',
   // A base's metal: gunmetal plate, the same painted in a side's colour, and tread plate for a deck or a ramp.
-  'steel', 'steel_red', 'steel_blue', 'tread'];
+  'steel', 'steel_red', 'steel_blue', 'tread',
+  // Stone: dressed grey stone in the concrete set, and the same darker (Cloudbreak's spire, struts and gates).
+  'stone', 'stone_dark'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',

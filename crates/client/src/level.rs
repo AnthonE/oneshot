@@ -104,6 +104,10 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         STEEL_RED => ("steel", 5.0, Color::linear_rgb(1.5, 0.3, 0.24)),
         STEEL_BLUE => ("steel", 5.0, Color::linear_rgb(0.26, 0.44, 1.35)),
         TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
+        // Stone: smooth grey (the set's mean is 0.48), a little cool, and
+        // the same in shade, its mottle a couple of metres across.
+        STONE => ("stone", 3.0, Color::linear_rgb(0.9, 0.91, 0.95)),
+        STONE_DARK => ("stone", 3.0, Color::linear_rgb(0.5, 0.51, 0.54)),
         _ => return None,
     })
 }
@@ -115,6 +119,9 @@ const STEEL: u8 = 26;
 const STEEL_RED: u8 = 27;
 const STEEL_BLUE: u8 = 28;
 const TREAD: u8 = 29;
+/// Dressed grey stone, pale and dark, in the concrete set.
+const STONE: u8 = 30;
+const STONE_DARK: u8 = 31;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -151,6 +158,7 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
         (STEEL, _) => (0.62, 0.85),
         (STEEL_RED | STEEL_BLUE, _) => (0.7, 0.3),
         (TREAD, _) => (0.75, 0.8),
+        (STONE | STONE_DARK, _) => (0.88, 0.0),
         (_, "metal") => (0.55, 0.35),
         _ => (0.9, 0.0),
     };
@@ -565,6 +573,8 @@ fn look(i: u8) -> (Color, f32, f32) {
         STEEL_RED => (Color::srgb(0.6, 0.24, 0.2), 0.6, 0.3),
         STEEL_BLUE => (Color::srgb(0.22, 0.32, 0.6), 0.6, 0.3),
         TREAD => (Color::srgb(0.34, 0.35, 0.37), 0.7, 0.8),
+        STONE => (Color::srgb(0.6, 0.6, 0.61), 0.88, 0.0),
+        STONE_DARK => (Color::srgb(0.38, 0.38, 0.39), 0.88, 0.0),
         _ => (Color::srgb(0.61, 0.33, 0.21), 0.95, 0.0), // rock
     }
 }
