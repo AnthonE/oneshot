@@ -27,6 +27,10 @@ const MUZZLE_DOWN_M: f32 = 0.28;
 /// Our own muzzle, in view space: ahead, right, down (where the gun in
 /// view holds it), and how far ahead of it our tracer starts.
 const OWN_MUZZLE: Vec3 = Vec3::new(0.12, -0.1, 0.7);
+/// Our own flash's stars, times an impact's and the gun's `flash_scale`:
+/// [`OWN_MUZZLE`] is a hand's length from the eye, where a third person's
+/// size would cover a fifth of the view.
+const OWN_STAR_SCALE: f32 = 0.8;
 const OWN_TRACER_SKIP_M: f32 = 1.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
@@ -132,22 +136,12 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     let right = cam * Vec3::X;
     let up = cam * Vec3::Y;
     let at = own_muzzle(left, drawn);
-    let muzzle = eye + cam * at;
-    table::stars(
-        &mut fx.glow,
-        muzzle,
-        look.stars as usize,
-        1.6 * look.flash_scale,
-        look.flash_c,
-    );
-    fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
-    fx.flash(
-        muzzle,
-        super::FlashDef {
-            color: tint(&look),
-            ..MUZZLE_FLASH
-        },
-    );
+    // The flash waits for the camera and the gun the frame is drawn with
+    // (`muzzle`).
+    fx.own_flash[usize::from(left)] = Some(OwnFlash {
+        look,
+        rocket: id == ROCKET,
+    });
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
@@ -162,9 +156,6 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
     if !a.kind.ray() {
-        if id == ROCKET {
-            backblast(fx, muzzle, fwd);
-        }
         return;
     }
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };
@@ -184,6 +175,48 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
         }
         if look.wake_s > 0.0 {
             table::wake(&mut fx.soft, start, eye + dir * reach, look.wake_s);
+        }
+    }
+}
+
+/// Our own gun's flash this frame, by hand, waiting for the frame's camera
+/// and gun: the gun's look.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnFlash {
+    look: GunLook,
+    rocket: bool,
+}
+
+/// Our own flashes, at the muzzle as the frame draws it: off the camera
+/// as placed this frame (`eye`: its kick, its shake, a film's roll and
+/// easing), which carries the gun in view, and the gun as posed this frame
+/// (`drawn`, `viewmodel::ViewMuzzles`), not the aim the shot was taken down
+/// or last frame's pose. Placed off those, a star sat beside the barrel,
+/// and on a slow frame (a film's, a weak browser's) well off it.
+pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
+    for (i, drawn) in drawn.into_iter().enumerate() {
+        let Some(o) = fx.own_flash[i].take() else {
+            continue;
+        };
+        let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
+        let fwd = eye.rotation * Vec3::NEG_Z;
+        table::own_stars(
+            &mut fx.glow,
+            muzzle,
+            o.look.stars as usize,
+            OWN_STAR_SCALE * o.look.flash_scale,
+            o.look.flash_c,
+        );
+        fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
+        fx.flash(
+            muzzle,
+            super::FlashDef {
+                color: tint(&o.look),
+                ..MUZZLE_FLASH
+            },
+        );
+        if o.rocket {
+            backblast(fx, muzzle, fwd);
         }
     }
 }

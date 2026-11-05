@@ -174,6 +174,9 @@ pub struct Fx {
     pub shock: Option<Vec3>,
     /// Our own rounds drawn so far, by hand (`shots::own`).
     own_rounds: crate::look::viewmodel::Rounds,
+    /// Our own flash, by hand, until the frame's camera is placed
+    /// (`shots::muzzle`).
+    own_flash: [Option<shots::OwnFlash>; 2],
     /// Rounds of light flying last frame (`flying.rs`), to tell where one
     /// ended.
     last_light: Vec<proto::ProjState>,
@@ -408,6 +411,7 @@ pub fn setup(
         burning: [blast::Burn::default(); 4],
         shock: None,
         own_rounds: Default::default(),
+        own_flash: [None; 2],
         last_light: Vec::new(),
         swing: (0, None),
     });
@@ -521,14 +525,22 @@ fn hurt(fx: &mut Fx, scene: &Scene, e: &EventState, feet: Vec3) {
 pub fn draw(
     time: Res<Time>,
     mut fx: ResMut<Fx>,
-    cams: Query<&GlobalTransform, (With<crate::look::rig::EyeCam>, Without<FxMesh>)>,
+    cams: Query<(&GlobalTransform, &Transform), (With<crate::look::rig::EyeCam>, Without<FxMesh>, Without<FlashLight>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut q: Query<(&FxMesh, &mut Transform, &mut GlobalTransform), Without<FlashLight>>,
     mut lights: Query<(&FlashLight, &mut PointLight, &mut Transform, &mut Visibility), Without<FxMesh>>,
+    muzzles: Res<crate::look::viewmodel::ViewMuzzles>,
 ) {
     // A hitch must not fling everything a hundred metres.
     let dt = time.delta_secs().min(0.1);
     let fx = &mut *fx;
+    // Our own flash, off the camera as this frame places it (a root: its
+    // transform is this frame's, its global one last frame's) and the gun
+    // as this frame poses it (`draw_view` runs first).
+    match cams.single() {
+        Ok((_, placed)) => shots::muzzle(fx, placed, muzzles.0),
+        Err(_) => fx.own_flash = [None; 2],
+    }
     blast::burn(fx, dt);
     if let Some(mesh) = fx.marks.fade(dt).then(|| meshes.get_mut(fx.marks.mesh())).flatten() {
         fx.marks.write(mesh);
@@ -557,7 +569,7 @@ pub fn draw(
         *vis = Visibility::Visible;
     }
     // The camera this frame (ours is the only 3D one).
-    let Ok(cam_gt) = cams.single() else {
+    let Ok((cam_gt, _)) = cams.single() else {
         fx.glow.step(dt);
         fx.soft.step(dt);
         return;

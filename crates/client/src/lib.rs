@@ -439,8 +439,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (draw_fighters, draw_vehicles, look::foliage::update).chain(),
             fly,
             view,
-            look::fx::draw,
+            // The gun in view before the effects: our own flash sits on
+            // its muzzle as posed this frame (`fx/shots.rs`).
             draw_view,
+            look::fx::draw,
             hud::draw,
             hud::hurt_rim,
         )

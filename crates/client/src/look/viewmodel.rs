@@ -324,9 +324,9 @@ const RELOAD_RELATCH_TICKS: u16 = 8;
 pub struct Flash;
 
 /// Where each hand's muzzle is drawn, view space as it looks (metres,
-/// before [`SHRINK`]), as of the last frame: `[right, left]`, `None` where
-/// no gun is drawn. The flash sprite of our own shot sits on it
-/// (`fx/shots.rs`).
+/// before [`SHRINK`]), as last posed (this frame's once `draw_view` has
+/// run): `[right, left]`, `None` where no gun is drawn. The flash sprite of
+/// our own shot sits on it (`fx/shots.rs`).
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ViewMuzzles(pub [Option<Vec3>; 2]);
 
