@@ -747,7 +747,7 @@ fn mixdown(
     cues: Res<crate::sound::Cues>,
     cam: Query<&GlobalTransform, With<EyeCam>>,
     #[cfg(target_arch = "wasm32")] clips: Option<Res<crate::sound::on::Clips>>,
-    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<bevy::audio::AudioSource>>>,
+    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<crate::sound::on::Sound>>>,
 ) {
     let ear = cam.iter().next().copied().unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]

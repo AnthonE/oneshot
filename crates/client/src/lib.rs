@@ -1323,6 +1323,7 @@ fn expose(
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
     party: Option<Res<party::PartyView>>,
+    ear: Res<sound::Ear>,
     (mut frames, mut described): (Local<u32>, Local<Option<String>>),
 ) {
     use wasm_bindgen::JsValue;
@@ -1377,6 +1378,13 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // The mixer: clips decoded, still loading, and commands sent it.
+    let (decoded, loading, sent) = ear.stats();
+    set(
+        &o,
+        "sound",
+        js_sys::Array::of3(&decoded.into(), &loading.into(), &sent.into()).into(),
+    );
     set(&o, "in_match", matched.into());
     // The party as this page sees it (ci/party.mjs).
     if let Some(p) = party {

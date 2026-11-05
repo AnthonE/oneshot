@@ -23,6 +23,9 @@ sim = { path = "../sim" }
 fx = { path = "../fx" }
 proto = { path = "../proto" }
 client-net = { path = "../client-net" }
+# The mixer (sound/): the desktop plays it, a browser runs it on its audio
+# thread (crates/mix-worklet).
+mix = { path = "../mix" }
 # What the client draws with, and nothing it doesn't (no audio or gamepads
 # yet: ALSA and udev aren't on every build box).
 bevy = { version = "0.18", default-features = false, features = [
@@ -75,12 +78,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-native-certs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# Sound always in a browser (Web Audio needs nothing from the build box).
+# Sound always in a browser, not through Bevy's audio: the mixer runs on
+# the browser's audio thread (sound/, web/mix.js).
 # `webgl2` is in both modules (a feature can't take a feature away): under
 # `webgpu` Bevy takes the WebGPU path, but wgpu keeps its GL backend linked as
 # the fallback for a browser without `navigator.gpu`, so the WebGPU module
 # carries both (ci/client.sh prints both sizes).
-bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis", "bevy_gilrs"] }
+bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_gilrs"] }
 # The wgpu Bevy resolves (one entry in Cargo.lock), named so the WebGPU module
 # can hand the device an error hook: Bevy re-exports neither `wgpu::Error`
 # nor the handler (look/gpu.rs, `watch`). `default-features = false`, or
