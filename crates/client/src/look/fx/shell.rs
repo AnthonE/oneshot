@@ -33,11 +33,11 @@ pub struct Shock {
 pub fn fire(at: Vec3, big: f32) -> Shock {
     Shock {
         at,
-        left: 0.3,
-        life: 0.3,
+        left: 0.26,
+        life: 0.26,
         r0: 0.3,
         r1: 4.0 * big,
-        color: Vec3::new(2.4, 1.8, 1.1),
+        color: Vec3::new(1.6, 1.2, 0.75),
     }
 }
 
@@ -45,11 +45,11 @@ pub fn fire(at: Vec3, big: f32) -> Shock {
 pub fn ion(at: Vec3) -> Shock {
     Shock {
         at,
-        left: 0.26,
-        life: 0.26,
+        left: 0.24,
+        life: 0.24,
         r0: 0.3,
         r1: 4.0,
-        color: Vec3::new(1.0, 1.6, 3.0),
+        color: Vec3::new(0.7, 1.1, 2.1),
     }
 }
 

@@ -303,13 +303,13 @@ pub fn effect(weapon: Weapon, matter: Matter) -> EffectDef {
         (Weapon::Blade, Dirt) => of(&[(Dust, 4), (Grit, 6)], 3),
         (Weapon::Bullet, Metal | Hull) => of(&[(Sparks, 12), (Flash, 1), (Dust, 1)], 2),
         (Weapon::Bullet, Concrete) => of(&[(Sparks, 4), (Flash, 1), (Dust, 2), (Grit, 6)], 4),
-        (Weapon::Bullet, Dirt) => of(&[(Dust, 2), (Grit, 8), (DustCloud, 1)], 0),
+        (Weapon::Bullet, Dirt) => of(&[(Dust, 1), (Grit, 8), (DustCloud, 2)], 0),
         (Weapon::Pellet, Metal | Hull) => of(&[(Sparks, 4), (Flash, 1)], 1),
         (Weapon::Pellet, Concrete) => of(&[(Sparks, 1), (Dust, 1), (Grit, 2)], 2),
         (Weapon::Pellet, Dirt) => of(&[(Dust, 1), (Grit, 3)], 0),
         (Weapon::Sniper, Metal | Hull) => of(&[(Sparks, 24), (Flash, 2), (Dust, 2)], 4),
         (Weapon::Sniper, Concrete) => of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (DustCloud, 2)], 8),
-        (Weapon::Sniper, Dirt) => of(&[(Dust, 6), (Grit, 14), (DustCloud, 2)], 2),
+        (Weapon::Sniper, Dirt) => of(&[(Dust, 3), (Grit, 14), (DustCloud, 3)], 2),
         // Energy: a crack of light, a few sparks, a breath of dust, and
         // the burst in the weapon's own tone (`Fx::impact`).
         (Weapon::Carbine, Metal | Hull | Concrete) => of(&[(Zap, 1), (Sparks, 5), (Dust, 1)], 1),
@@ -426,7 +426,7 @@ pub fn built(layer: Layer) -> Recipe {
             drag: 2.8,
             life: (0.8, 1.4),
             size: (0.05, 0.08),
-            grow: 6.0,
+            grow: 4.5,
             c0: [0.95, 0.95, 0.95, 0.4],
             c1: [1.05, 1.05, 1.05, 0.0],
             tinted: true,
@@ -635,7 +635,7 @@ pub fn built(layer: Layer) -> Recipe {
             ..strip(base, sheets::DUST)
         },
         Layer::Flame => Recipe {
-            glow: 2.0,
+            glow: 1.1,
             speed: (0.0, 0.4),
             spray: 0.5,
             gravity: -1.5,
@@ -649,7 +649,7 @@ pub fn built(layer: Layer) -> Recipe {
         },
         Layer::Plasma => Recipe {
             tone: sheets::TONE_PLASMA,
-            glow: 3.0,
+            glow: 2.2,
             life: (0.3, 0.45),
             size: (0.5, 0.7),
             grow: 1.8,
@@ -659,9 +659,9 @@ pub fn built(layer: Layer) -> Recipe {
             ..strip(base, sheets::PLASMA)
         },
         Layer::MuzzleFlash => Recipe {
-            glow: 3.5,
+            glow: 3.0,
             life: (0.05, 0.07),
-            size: (0.22, 0.3),
+            size: (0.16, 0.22),
             grow: 1.3,
             c0: [1.0, 1.0, 1.0, 1.0],
             c1: [1.0, 1.0, 1.0, 1.0],
@@ -669,9 +669,9 @@ pub fn built(layer: Layer) -> Recipe {
         },
         Layer::Bloom => Recipe {
             tone: sheets::TONE_PLASMA,
-            glow: 3.0,
+            glow: 0.7,
             life: (0.06, 0.09),
-            size: (0.16, 0.22),
+            size: (0.09, 0.13),
             grow: 1.5,
             c0: [1.0, 1.0, 1.0, 1.0],
             c1: [1.0, 1.0, 1.0, 1.0],
@@ -682,10 +682,10 @@ pub fn built(layer: Layer) -> Recipe {
             spray: 0.8,
             gravity: -0.4,
             drag: 2.5,
-            life: (0.7, 1.1),
-            size: (0.12, 0.18),
+            life: (0.6, 0.9),
+            size: (0.07, 0.11),
             grow: 2.0,
-            c0: [0.6, 0.6, 0.6, 0.5],
+            c0: [0.6, 0.6, 0.6, 0.32],
             c1: [0.65, 0.65, 0.65, 0.0],
             spin: 0.5,
             ..strip(base, sheets::WISP)

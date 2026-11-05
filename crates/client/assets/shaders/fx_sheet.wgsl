@@ -59,7 +59,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 // What heat `h` (0–1) glows, HDR: powder and fuel (tone 0), ion blue (1),
 // the cannon's green (2), the SHARD GUN's pink (3); between two, a blend.
 fn ramp(h: f32, tone: f32) -> vec3<f32> {
-    let fire = vec3<f32>(smoothstep(0.0, 0.25, h), smoothstep(0.2, 0.7, h) * 0.85, smoothstep(0.55, 1.0, h) * 0.7);
+    let fire = vec3<f32>(smoothstep(0.06, 0.3, h), smoothstep(0.12, 0.7, h) * 0.85, smoothstep(0.5, 1.0, h) * 0.7);
     let blue = vec3<f32>(smoothstep(0.55, 1.0, h) * 0.9, smoothstep(0.25, 0.8, h) * 0.9, smoothstep(0.0, 0.3, h));
     let green = vec3<f32>(smoothstep(0.5, 1.0, h) * 0.7, smoothstep(0.0, 0.3, h), smoothstep(0.3, 0.9, h) * 0.5);
     let pink = vec3<f32>(smoothstep(0.0, 0.3, h), smoothstep(0.45, 1.0, h) * 0.7, smoothstep(0.1, 0.6, h) * 0.85);
@@ -68,8 +68,8 @@ fn ramp(h: f32, tone: f32) -> vec3<f32> {
     c = mix(c, green, clamp(t - 1.0, 0.0, 1.0));
     c = mix(c, pink, clamp(t - 2.0, 0.0, 1.0));
     // Brighter than linear in the heat: a core burns white, an edge
-    // smoulders.
-    return c * (0.3 + 3.7 * h * h);
+    // smoulders, and what is barely warm gives nothing to the soot.
+    return c * (0.12 + 3.9 * h * h);
 }
 
 @fragment

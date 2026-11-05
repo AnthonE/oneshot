@@ -42,7 +42,7 @@ pub struct Trailer {
 }
 
 /// A trailer puffs every this many metres.
-const TRAIL_EVERY_M: f32 = 0.22;
+const TRAIL_EVERY_M: f32 = 0.15;
 
 /// The soot a charge's smoke is tinted, sRGB.
 const SOOT: Color = Color::srgb(0.2, 0.19, 0.18);
@@ -189,9 +189,9 @@ fn sticky(fx: &mut Fx, scene: &Scene, at: Vec3) {
     let dist = at.distance(fx.eye);
     let lod = super::table::lod_far(dist);
     let n = |k: usize| ((k as f32 * lod).ceil() as usize).max(1);
-    fx.emit_tint(Layer::Zap, n(2), at, Vec3::Y, Color::WHITE, 9.0);
+    fx.emit_tint(Layer::Zap, n(2), at, Vec3::Y, Color::WHITE, 4.0);
     *super::shell::claim(&mut fx.shocks) = super::shell::ion(at);
-    fx.energy(at, TONE_PLASMA, 2.6, n(3));
+    fx.energy(at, TONE_PLASMA, 1.7, n(2));
     for _ in 0..n(12) {
         let d = fx.unit();
         fx.emit_tint(Layer::Arcs, 1, at + d * 0.6, d, Color::WHITE, 2.8);
@@ -276,11 +276,11 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
     let tint = super::table::dust_tint(dust);
     // The first frames: a hard star and a hot glow over everything, and
     // the shock blown out through the air.
-    fx.emit_tint(Layer::Flash, n(3), at, Vec3::Y, Color::WHITE, 16.0 * big);
+    fx.emit_tint(Layer::Flash, n(3), at, Vec3::Y, Color::WHITE, 10.0 + 4.0 * big);
     *super::shell::claim(&mut fx.shocks) = super::shell::fire(at, big);
     // The fireball, lifted off the ground it sits on (a billboard its size
     // would cut into it), and smaller ones flung off it.
-    fx.emit_tint(Layer::Boom, 1, at + Vec3::Y * 1.0 * big, Vec3::Y, Color::WHITE, big);
+    fx.emit_tint(Layer::Boom, 1, at + Vec3::Y * 0.6 * big, Vec3::Y, Color::WHITE, big);
     fx.emit_tint(Layer::Fireballs, n(3), at, Vec3::Y, Color::WHITE, big);
     // Smoke that outlasts the fire, rising off it, soot and the ground's
     // dust in it.

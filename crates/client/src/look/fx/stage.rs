@@ -330,6 +330,11 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
     };
     let f = &stage.framing;
     let dir = Vec3::from(f.dir);
+    // A blast goes off in the air in front of its card, a quarter of its
+    // radius out: on the card's face, what a blast throws every way is
+    // half born behind the card and never seen (a wall hides the same in
+    // the game, but a blast sits on a floor, not in a wall).
+    let standoff = dir * (0.25 * stage.staged.radius);
     for a in f.anchors {
         let at = ORIGIN + Vec3::from(a);
         match stage.staged.fire {
@@ -341,8 +346,8 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
                 }
             }
             Fire::Muzzle(arm) => shots::flash(&mut fx, at, dir, &table::gun(arm)),
-            Fire::Blast(c) => blast::blast(&mut fx, &scene, at, c, false),
-            Fire::Wreck => blast::wreck(&mut fx, &scene, at - Vec3::Y * 0.8),
+            Fire::Blast(c) => blast::blast(&mut fx, &scene, at + standoff, c, false),
+            Fire::Wreck => blast::wreck(&mut fx, &scene, at + standoff - Vec3::Y * 0.8),
             Fire::Pop => bodies::pop(&mut fx, at - Vec3::Y * 1.0),
         }
     }

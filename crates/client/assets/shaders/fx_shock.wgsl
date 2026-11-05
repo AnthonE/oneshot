@@ -18,11 +18,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let facing = clamp(abs(dot(n, v)), 0.0, 1.0);
     // The rim sharpens as the shell thins: a band at birth, a line near
     // the end.
-    let sharp = 3.0 + 7.0 * age;
+    let sharp = 5.0 + 9.0 * age;
     let rim = pow(max(1.0 - facing, 0.0), sharp);
-    // The far side of the sphere adds too (it is a shell of air): half.
-    let side = select(0.5, 1.0, is_front);
+    // The far side of the sphere adds too (it is a shell of air): less.
+    let side = select(0.35, 1.0, is_front);
     let fade = (1.0 - age) * (1.0 - age);
-    out.color = vec4<f32>(color.rgb * rim * fade * side, 1.0);
+    // Alpha 0: Bevy blends an additive material premultiplied
+    // (src + dst × (1 − a)), so anything but 0 would cover what's behind.
+    out.color = vec4<f32>(color.rgb * rim * fade * side, 0.0);
     return out;
 }

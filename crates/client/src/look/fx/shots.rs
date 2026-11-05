@@ -226,15 +226,34 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
                     ..table::recipe(Layer::MuzzleFlash)
                 };
                 let pool = fx.pool(Layer::MuzzleFlash.pool());
-                table::emit_recipe(pool, &r, 1, muzzle + fwd * 0.04, fwd, Color::WHITE, scale * 1.1);
-                table::own_stars(&mut fx.glow, muzzle, o.look.stars as usize, scale * 0.7, o.look.flash_c);
+                table::emit_recipe(pool, &r, 1, muzzle + fwd * 0.04, fwd, Color::WHITE, 0.5 + 0.4 * scale);
+                table::own_stars(
+                    &mut fx.glow,
+                    muzzle,
+                    o.look.stars as usize,
+                    0.4 + 0.3 * scale,
+                    o.look.flash_c,
+                );
                 fx.emit(Layer::Tongue, 1, muzzle, fwd, Matter::Concrete);
-                fx.emit_tint(Layer::Wisp, 1, muzzle + fwd * 0.12, fwd, Color::WHITE, scale.max(0.7));
-                fx.emit(Layer::GunSmoke, 1, muzzle, fwd, Matter::Concrete);
+                fx.emit_tint(
+                    Layer::Wisp,
+                    1,
+                    muzzle + fwd * 0.12,
+                    fwd,
+                    Color::WHITE,
+                    0.5 + 0.3 * scale,
+                );
             }
             Flash::Energy(tone) => {
-                bloom(fx, muzzle + fwd * 0.03, fwd, tone, scale, OWN_STAR_LIFE_S.1 * 2.0);
-                table::own_stars(&mut fx.glow, muzzle, 1, scale * 0.6, o.look.flash_c);
+                bloom(
+                    fx,
+                    muzzle + fwd * 0.03,
+                    fwd,
+                    tone,
+                    0.5 + 0.4 * scale,
+                    OWN_STAR_LIFE_S.1 * 2.0,
+                );
+                table::own_stars(&mut fx.glow, muzzle, 1, scale * 0.5, o.look.flash_c);
             }
         }
         fx.flash(
@@ -341,15 +360,23 @@ pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
     let scale = look.flash_scale;
     match look.flash {
         Flash::Powder => {
-            fx.emit_tint(Layer::MuzzleFlash, 1, at + dir * 0.05, dir, Color::WHITE, 1.3 * scale);
-            table::stars(&mut fx.glow, at, look.stars as usize, 1.6 * scale, look.flash_c);
+            // The petals grow with the gun, the core less: a shotgun's
+            // flash is wide, not a sun.
+            fx.emit_tint(
+                Layer::MuzzleFlash,
+                1,
+                at + dir * 0.05,
+                dir,
+                Color::WHITE,
+                0.7 + 0.5 * scale,
+            );
+            table::stars(&mut fx.glow, at, look.stars as usize, 0.8 + 0.5 * scale, look.flash_c);
             fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
-            fx.emit_tint(Layer::Wisp, 1, at + dir * 0.15, dir, Color::WHITE, scale.max(0.8));
-            fx.emit(Layer::GunSmoke, 1, at, dir, Matter::Concrete);
+            fx.emit_tint(Layer::Wisp, 1, at + dir * 0.15, dir, Color::WHITE, 0.6 + 0.4 * scale);
         }
         Flash::Energy(tone) => {
-            bloom(fx, at + dir * 0.04, dir, tone, 1.2 * scale, 0.0);
-            table::stars(&mut fx.glow, at, 1, 1.2 * scale, look.flash_c);
+            bloom(fx, at + dir * 0.04, dir, tone, 0.6 + 0.5 * scale, 0.0);
+            table::stars(&mut fx.glow, at, 1, 0.7 * scale, look.flash_c);
         }
     }
     fx.flash(
@@ -378,9 +405,9 @@ fn bloom(fx: &mut Fx, at: Vec3, dir: Vec3, tone: f32, scale: f32, life: f32) {
     // The afterglow: a soft disc in the ramp's colour, dimmer, longer.
     let after = ::fx::recipe::Recipe {
         tone,
-        glow: 0.6,
-        life: (0.16, 0.22),
-        size: (0.07, 0.09),
+        glow: 0.3,
+        life: (0.14, 0.2),
+        size: (0.04, 0.06),
         grow: 0.6,
         frames: 1,
         cells: 1,
