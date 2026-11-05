@@ -100,9 +100,13 @@ if [ "$match" = 1 ]; then
   args+=(--server "$url" --mode "$mode")
 fi
 
-# lavapipe, unless the caller named a driver.
-lvp=/usr/share/vulkan/icd.d/lvp_icd.json
-if [ -z "${VK_ICD_FILENAMES:-}${VK_DRIVER_FILES:-}" ] && [ -e "$lvp" ]; then
+# lavapipe, unless the caller named a driver (older Mesa names its file by
+# the machine: lvp_icd.x86_64.json).
+lvp=
+for f in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+  [ -e "$f" ] && { lvp=$f; break; }
+done
+if [ -z "${VK_ICD_FILENAMES:-}${VK_DRIVER_FILES:-}" ] && [ -n "$lvp" ]; then
   export VK_ICD_FILENAMES=$lvp VK_DRIVER_FILES=$lvp
 fi
 mkdir -p "$tmp/config"

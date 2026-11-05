@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A branch gated before its PR: gh workflow run ci --ref <branch>.
+  workflow_dispatch:
 
 jobs:
   sim:
@@ -63,7 +65,9 @@ jobs:
       - name: the desktop client draws
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq xvfb mesa-vulkan-drivers libxkbcommon-x11-0
+          # winit opens Xlib, Xcursor, Xlib-xcb and XInput2 by name, and
+          # xkbcommon-x11; lavapipe is mesa-vulkan-drivers.
+          sudo apt-get install -yq xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxi6 libx11-xcb1
           ci/desktop_shot.sh traces/desktop-title.png 2 0 0 0
           ci/desktop_shot.sh traces/desktop-gungame.png 4 4 2 1
       - uses: actions/upload-artifact@v4
