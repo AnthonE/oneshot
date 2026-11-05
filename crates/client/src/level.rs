@@ -76,14 +76,18 @@ const HULL_TILE_M: f32 = 8.0;
 /// photograph's colour times this).
 fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
     Some(match look {
-        0 => ("concrete", 3.0, Color::srgb(0.9, 0.88, 0.84)),
-        1 => ("metal", 2.0, Color::srgb(0.85, 0.87, 0.9)),
-        3 => ("panel", 4.0, Color::srgb(0.78, 0.36, 0.32)),
-        4 => ("panel", 4.0, Color::srgb(0.32, 0.45, 0.78)),
-        5 => ("metal", 2.0, Color::srgb(0.45, 0.47, 0.5)),
+        // The arenas are steel: their walls a mid gunmetal plate, their
+        // cover a paler one, their dark pieces a darker, a side's pieces
+        // the plate under its paint. The floor keeps its big panels: tread
+        // plate over forty metres is a field of noise.
+        0 => ("steel", 4.0, Color::linear_rgb(2.3, 2.32, 2.4)),
+        1 => ("steel", 3.0, Color::linear_rgb(2.9, 2.9, 2.95)),
+        3 => ("steel", 3.0, Color::linear_rgb(4.6, 1.0, 0.8)),
+        4 => ("steel", 3.0, Color::linear_rgb(0.9, 1.5, 4.2)),
+        5 => ("steel", 3.0, Color::linear_rgb(1.1, 1.12, 1.2)),
         ROCK => ("rock", 2.5, Color::linear_rgb(1.45, 1.6, 2.1)),
-        7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
-        11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
+        7 => ("steel", 3.0, Color::linear_rgb(1.7, 1.72, 1.78)),
+        11 => ("steel", 3.0, Color::linear_rgb(3.4, 3.4, 3.45)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
@@ -134,7 +138,9 @@ fn v3(v: sim::geom::V3) -> Vec3 {
 pub fn box_material(look: u8) -> Option<StandardMaterial> {
     let (set, _, tint) = dress(look)?;
     let (roughness, metallic) = match (look, set) {
-        (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
+        (3 | 4, _) => (0.7, 0.3),
+        (0 | 1 | 5 | 7 | 11, _) => (0.62, 0.85),
+        (FLOOR, _) => (0.75, 0.55),
         // The ship's sets carry their own roughness and metal.
         (12..=15 | RIB, _) => (1.0, 0.7),
         (DECK, _) => (1.0, 0.55),
@@ -159,9 +165,7 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
 /// What a look is, as it weathers (`look/weathering.rs`).
 fn surface(look: u8) -> Surface {
     match look {
-        1 | 5 => Surface::Steel,
-        3 | 4 | 7 | 11 => Surface::Paint,
-        PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
+        0 | 1 | 3 | 4 | 5 | 7 | 11 | PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB => Surface::Hull,
