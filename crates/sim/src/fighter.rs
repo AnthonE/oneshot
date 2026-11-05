@@ -99,6 +99,13 @@ pub struct Fighter {
     /// takes: 0 frags, 1 stickies.
     pub stickies: u8,
     pub gren_kind: u8,
+    /// The overshield is climbing (to `OVERSHIELD_MAX`); shields over full
+    /// and not climbing drain back to full. The world's.
+    pub charging: bool,
+    /// Ticks of active camouflage left, and of being shown by a shot, a
+    /// throw, a blow or a hit (`cloak`). The world's.
+    pub camo: u16,
+    pub flare: u16,
     /// Carrying the enemy's flag (Capture the Flag): both hands on it, so
     /// no gun fires and no grenade goes; a melee still swings. The world's
     /// to set; its own tick reads it.
@@ -150,6 +157,24 @@ impl Fighter {
         self.seated && self.alive
     }
 
+    /// How hidden the camouflage keeps this body, 0 (seen plainly) to
+    /// [`CAMO_BEST`]: less the faster it moves, none just after it fires,
+    /// throws, swings or is hit. What the client draws it at and what a
+    /// bot makes out.
+    pub fn cloak(&self) -> f32 {
+        if self.camo == 0 || !self.active() {
+            return 0.0;
+        }
+        let moving = ((self.body.vel.flat().len() - CAMO_WALK) / (CAMO_RUN - CAMO_WALK)).clamp(0.0, 1.0);
+        let shown = self.flare as f32 / ticks(CAMO_FLARE_MS) as f32;
+        CAMO_BEST * (1.0 - moving.max(shown).min(1.0))
+    }
+
+    /// Over full shields: the overshield, climbing or draining.
+    pub fn overshield(&self) -> bool {
+        self.shield > SHIELD_MAX || self.charging
+    }
+
     /// The vehicle and seat it rides in, if it does.
     pub fn riding(&self) -> Option<(usize, usize)> {
         (self.ride != 0).then(|| ((self.ride as usize - 1) / 2, (self.ride as usize - 1) % 2))
@@ -195,6 +220,9 @@ impl Fighter {
         self.drop_left();
         self.stickies = STICKY_START;
         self.gren_kind = 0;
+        self.charging = false;
+        self.camo = 0;
+        self.flare = 0;
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -534,6 +562,9 @@ impl Thing for Fighter {
         h.u16(self.left_charge);
         h.u8(self.stickies);
         h.u8(self.gren_kind);
+        h.bool(self.charging);
+        h.u16(self.camo);
+        h.u16(self.flare);
         // Only while true, so a mode without flags hashes as it did.
         if self.flag {
             h.u8(0xF1);

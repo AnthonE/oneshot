@@ -63,6 +63,11 @@ pub const PIP: Color = Color::srgba(0.6, 0.84, 1.0, 0.96);
 const PIP_SPENT: Color = Color::srgba(0.45, 0.65, 0.9, 0.22);
 const SHIELD: Color = Color::srgba(0.38, 0.7, 1.0, 0.95);
 const SHIELD_LOW: Color = Color::srgba(1.0, 0.32, 0.22, 0.95);
+/// The overshield, over the shield's bar: its share of the way to three
+/// times full, green as its shell is drawn.
+const OVER: Color = Color::srgba(0.35, 1.0, 0.5, 0.95);
+/// Camouflage's seconds left, pale as its shimmer.
+const CAMO_INK: Color = Color::srgba(0.7, 0.85, 1.0, 0.9);
 const HEALTH: Color = Color::srgba(0.95, 0.36, 0.3, 0.9);
 const HEAT: Color = Color::srgba(1.0, 0.62, 0.22, 0.95);
 const RED_SIDE: Color = Color::srgba(0.92, 0.24, 0.2, 0.9);
@@ -183,6 +188,12 @@ pub struct HudRoot;
 
 #[derive(Component)]
 pub struct ShieldBar;
+/// The overshield's fill, over the shield's.
+#[derive(Component)]
+pub struct OverBar;
+/// Over the shield: camouflage's seconds left, while it is on.
+#[derive(Component)]
+pub struct CamoText;
 /// The shield's box: its edge pulses red when the shield is low.
 #[derive(Component)]
 pub struct ShieldFrame;
@@ -593,6 +604,11 @@ pub fn setup(mut commands: Commands) {
             },
         ))
         .with_children(|c| {
+            c.spawn((
+                CamoText,
+                Visibility::Hidden,
+                tinted(crate::ui::semibold(14.0), CAMO_INK),
+            ));
             c.spawn(Node {
                 width: Val::Px(SHIELD_W),
                 height: Val::Px(30.0),
@@ -609,6 +625,14 @@ pub fn setup(mut commands: Commands) {
                         ..default()
                     },
                     plate::image(plate::FILL, SHIELD),
+                ));
+                c.spawn((
+                    OverBar,
+                    Node {
+                        width: Val::Px(0.0),
+                        ..abs(Some(SHIELD_PAD), None, Some(SHIELD_PAD), Some(SHIELD_PAD))
+                    },
+                    plate::image(plate::FILL, OVER),
                 ));
                 // The tenths, cut across the level.
                 let inner = SHIELD_W - 2.0 * SHIELD_PAD;
@@ -1473,21 +1497,40 @@ pub fn gear(
 }
 
 /// The shield and health: the shield's frame pulses red while it is low or
-/// gone.
-#[allow(clippy::type_complexity)]
+/// gone; an overshield's green over the shield's bar, and camouflage's
+/// seconds over the box.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn vitals(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
     mut shield: Query<(&mut Node, &mut ImageNode), (With<ShieldBar>, Without<ShieldFrame>)>,
     mut frame: Query<&mut ImageNode, With<ShieldFrame>>,
     mut health: Query<&mut Node, (With<HealthBar>, Without<ShieldBar>)>,
-    mut line: Query<&mut Visibility, With<HealthLine>>,
+    mut line: Query<&mut Visibility, (With<HealthLine>, Without<CamoText>)>,
+    mut over: Query<&mut Node, (With<OverBar>, Without<ShieldBar>, Without<HealthBar>)>,
+    mut camo: Query<(&mut Text, &mut Visibility), With<CamoText>>,
 ) {
     let s = link.0.session();
     if !s.ready {
         return;
     }
     let f = s.core.own().0;
+    if let Ok(mut n) = over.single_mut() {
+        let k = (f.shield - SHIELD_MAX) as f32 / (sim::consts::OVERSHIELD_MAX - SHIELD_MAX) as f32;
+        let k = if f.alive { k.clamp(0.0, 1.0) } else { 0.0 };
+        n.width = Val::Px(k * (SHIELD_W - 2.0 * SHIELD_PAD));
+    }
+    if let Ok((mut t, mut v)) = camo.single_mut() {
+        let on = f.alive && f.camo > 0;
+        v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
+        if on {
+            let secs = (f.camo as u32).div_ceil(sim::consts::TICK_HZ);
+            let want = format!("CAMO {secs}");
+            if t.0 != want {
+                t.0 = want;
+            }
+        }
+    }
     let sh = (f.shield as f32 / SHIELD_MAX as f32 * 100.0).clamp(0.0, 100.0);
     let low = f.alive && sh < SHIELD_LOW_PCT;
     if let Ok((mut n, mut img)) = shield.single_mut() {

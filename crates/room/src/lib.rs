@@ -17,7 +17,7 @@ use proto::{
 };
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
-use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
+use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
 use sim::geom::V3;
 use sim::input::Input;
@@ -747,21 +747,7 @@ fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usiz
         if q == s || !f.seated || !visible(q) || snap.n_remote as usize >= MAX_REMOTES {
             continue;
         }
-        snap.remotes[snap.n_remote as usize] = Remote {
-            slot: q as u8,
-            team: f.team,
-            alive: f.alive,
-            crouched: f.body.crouched,
-            grounded: f.body.grounded,
-            reloading: f.reload > 0,
-            pos: f.body.pos,
-            vel: f.body.vel,
-            yaw: f.yaw,
-            pitch: f.pitch,
-            arm: f.gun().arm,
-            shield: (f.shield.max(0) as i64 * 255 / SHIELD_MAX as i64) as u8,
-            flag: f.flag,
-        };
+        snap.remotes[snap.n_remote as usize] = Remote::of(q as u8, f);
         snap.n_remote += 1;
     }
 }
@@ -877,7 +863,7 @@ fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
     for i in 0..n {
         snap.pads[i] = PadState {
-            empty_s: (w.pads[i].empty_for.div_ceil(TICK_HZ)).min(u16::MAX as u32) as u16,
+            empty_s: (w.pads[i].empty_for.div_ceil(TICK_HZ)).min(proto::PAD_S_MAX as u32) as u16,
         };
     }
     snap.n_pads = n as u8;

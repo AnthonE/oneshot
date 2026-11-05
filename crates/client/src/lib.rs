@@ -138,7 +138,16 @@ pub enum Screen {
 struct Kept;
 
 /// The kept entities' visibility (never a shield shell's).
-type KeptVis<'w, 's> = Query<'w, 's, &'static mut Visibility, (With<Kept>, Without<look::shield::ShellPart>)>;
+type KeptVis<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Visibility,
+    (
+        With<Kept>,
+        Without<look::shield::ShellPart>,
+        Without<look::bodies::BodyPart>,
+    ),
+>;
 
 /// What a body is made of, and the kept ones' visibility.
 type BodyParts<'w, 's> = (
@@ -924,7 +933,7 @@ fn rebuild(
 type ShieldParts<'w, 's> = (
     ResMut<'w, look::fx::Fx>,
     ResMut<'w, Assets<look::shield::ShieldMaterial>>,
-    Query<'w, 's, &'static mut Visibility, With<look::shield::ShellPart>>,
+    look::bodies::Parts<'w, 's>,
     ResMut<'w, Assets<look::paint::BodyMaterial>>,
 );
 
@@ -1058,14 +1067,12 @@ fn draw_fighters(
             &mut at,
             time.delta_secs(),
         );
-        look::bodies::flare(
-            e,
-            fx.was.flare(d.slot, t),
-            &mut bodies,
-            &mut body_mats,
-            &mut shield_mats,
-            &mut shells,
-        );
+        let glow = look::bodies::Glow {
+            hit: fx.was.flare(d.slot, t),
+            over: d.over && d.alive,
+            cloak: if d.alive { d.cloak } else { 0.0 },
+        };
+        look::bodies::flare(e, glow, &mut bodies, &mut body_mats, &mut shield_mats, &mut shells);
     }
     for (slot, (e, ..)) in &drawn.fighters {
         if !shown.iter().any(|(d, _)| d.slot == *slot) && show(&mut vis, *e, false) {

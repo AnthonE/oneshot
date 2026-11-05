@@ -20,6 +20,16 @@ use crate::vehicle::{VPose, Vehicle, DRIVER};
 /// No winner (yet, or a draw).
 pub const NO_WINNER: u8 = 255;
 
+/// What a blow that kills whatever does (from behind, a sticky worn, a
+/// shard burst, a splatter): more than the most a body can hold.
+const KILL_PTS: i32 = HEALTH_MAX + OVERSHIELD_MAX;
+
+/// Whether a body standing at `at` is on the pad at `pad`.
+fn on_pad(pad: V3, at: V3) -> bool {
+    let d = pad - at;
+    crate::fmath::fabs(d.x) < PAD_REACH && crate::fmath::fabs(d.z) < PAD_REACH && crate::fmath::fabs(d.y) < 1.5
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rules {
     /// Red against blue; otherwise everyone for themselves.
@@ -464,6 +474,9 @@ impl World {
         self.seat_riders();
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
+            if l.fired || l.fired_left || l.melee || l.throw {
+                self.unveil(s);
+            }
             if l.fired {
                 self.fire(s, rewind_q8[s], l.charged, false);
             }
@@ -488,6 +501,7 @@ impl World {
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
             self.loot(s);
+            self.powers(s);
         }
         for s in 0..MAX_FIGHTERS {
             self.recover(s);
@@ -772,7 +786,7 @@ impl World {
         let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
         let toward = (v.body.pos - self.fighters[s].body.pos).flat().norm();
         if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
-            self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
+            self.damage(s, q, KILL_PTS, false, Head::None, Cause::Behind as u16);
         } else {
             self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
         }
@@ -1004,14 +1018,7 @@ impl World {
         if p.landed && (p.target as usize) < MAX_FIGHTERS {
             let q = p.target as usize;
             if !self.spared(owner, q) {
-                self.damage(
-                    owner,
-                    q,
-                    HEALTH_MAX + SHIELD_MAX,
-                    false,
-                    Head::None,
-                    Cause::Sticky as u16,
-                );
+                self.damage(owner, q, KILL_PTS, false, Head::None, Cause::Sticky as u16);
             }
         }
         self.blast(
@@ -1168,7 +1175,11 @@ impl World {
         }
         let took = v.shield;
         v.shield = 0;
+        v.charging = false;
         v.since_hit = 0;
+        if v.camo > 0 {
+            v.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
         self.events.push(Event {
             kind: Ev::Hit,
             a: att as u8,
@@ -1200,7 +1211,7 @@ impl World {
             pos: at,
             ..Event::default()
         });
-        self.damage(att, vic, HEALTH_MAX + SHIELD_MAX, false, Head::None, id as u16);
+        self.damage(att, vic, KILL_PTS, false, Head::None, id as u16);
     }
 
     /// A frag's or a lob's tick under gravity off the map's floors and
@@ -1696,7 +1707,7 @@ impl World {
                     self.damage(
                         driver.unwrap_or(q),
                         q,
-                        HEALTH_MAX + SHIELD_MAX,
+                        KILL_PTS,
                         false,
                         Head::None,
                         Cause::Splatter as u16,
@@ -1719,6 +1730,9 @@ impl World {
             return;
         }
         v.since_hit = 0;
+        if v.camo > 0 {
+            v.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
         let lethal = head && (rule == Head::Always || (rule == Head::Unshielded && v.shield == 0));
         let part = if lethal {
             v.shield = 0;
@@ -1772,6 +1786,9 @@ impl World {
         v.alive = false;
         v.health = 0;
         v.shield = 0;
+        v.charging = false;
+        v.camo = 0;
+        v.flare = 0;
         // What they held leaves their hands with some of how they moved.
         let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
@@ -1986,11 +2003,8 @@ impl World {
         // How far, a pad (or a drop), its index.
         let mut best: Option<(f32, bool, usize)> = None;
         for (i, def) in self.map.pads.iter().enumerate().take(MAX_PADS) {
-            let d = def.pos - at;
-            let near = crate::fmath::fabs(d.x) < PAD_REACH
-                && crate::fmath::fabs(d.z) < PAD_REACH
-                && crate::fmath::fabs(d.y) < 1.5;
-            let far = d.flat().len();
+            let far = (def.pos - at).flat().len();
+            let near = on_pad(def.pos, at) && !crate::arms::power(def.arm);
             if near && self.pads[i].empty_for == 0 && best.is_none_or(|b| far < b.0) {
                 best = Some((far, true, i));
             }
@@ -2169,6 +2183,46 @@ impl World {
         }
     }
 
+    /// Walking onto a pad holding a power-up takes it: the overshield
+    /// starts to climb (health whole), or the camouflage is on, full.
+    fn powers(&mut self, s: usize) {
+        let f = &self.fighters[s];
+        if !f.active() || f.riding().is_some() || self.rules.gun_game {
+            return;
+        }
+        let at = f.body.pos;
+        for i in 0..self.map.pads.len().min(MAX_PADS) {
+            let def = self.map.pads[i];
+            if !crate::arms::power(def.arm) || self.pads[i].empty_for != 0 || !on_pad(def.pos, at) {
+                continue;
+            }
+            self.pads[i].empty_for = ticks(def.respawn_ms);
+            let f = &mut self.fighters[s];
+            if def.arm == crate::arms::OVERSHIELD {
+                f.charging = true;
+                f.health = HEALTH_MAX;
+            } else {
+                f.camo = ticks(CAMO_MS) as u16;
+                f.flare = 0;
+            }
+            self.events.push(Event {
+                kind: Ev::Pickup,
+                a: s as u8,
+                c: def.arm as u16,
+                pos: def.pos,
+                ..Event::default()
+            });
+        }
+    }
+
+    /// `s` fired, threw or swung: its camouflage shows it a while.
+    fn unveil(&mut self, s: usize) {
+        let f = &mut self.fighters[s];
+        if f.camo > 0 {
+            f.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
+    }
+
     /// Shields and health come back; the dead come back.
     fn recover(&mut self, s: usize) {
         let f = &mut self.fighters[s];
@@ -2190,6 +2244,15 @@ impl World {
                 f.needles = 0;
                 f.needle_t = 0;
             }
+        }
+        f.camo = f.camo.saturating_sub(1);
+        f.flare = if f.camo == 0 { 0 } else { f.flare.saturating_sub(1) };
+        // The overshield climbs whatever hits it, then drains to full.
+        if f.charging {
+            f.shield = (f.shield + OVERSHIELD_RATE * PT / TICK_HZ as i32).min(OVERSHIELD_MAX);
+            f.charging = f.shield < OVERSHIELD_MAX;
+        } else if f.shield > SHIELD_MAX {
+            f.shield = (f.shield - OVERSHIELD_DRAIN * PT / TICK_HZ as i32).max(SHIELD_MAX);
         }
         if f.since_hit >= ticks(SHIELD_DELAY_MS) {
             if f.shield < SHIELD_MAX {
