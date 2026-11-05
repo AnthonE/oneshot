@@ -76,14 +76,18 @@ const HULL_TILE_M: f32 = 8.0;
 /// photograph's colour times this).
 fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
     Some(match look {
-        0 => ("concrete", 3.0, Color::srgb(0.9, 0.88, 0.84)),
-        1 => ("metal", 2.0, Color::srgb(0.85, 0.87, 0.9)),
-        3 => ("panel", 4.0, Color::srgb(0.78, 0.36, 0.32)),
-        4 => ("panel", 4.0, Color::srgb(0.32, 0.45, 0.78)),
-        5 => ("metal", 2.0, Color::srgb(0.45, 0.47, 0.5)),
+        // The arenas are steel: their walls a mid gunmetal plate, their
+        // cover a paler one, their dark pieces a darker, a side's pieces
+        // the plate under its paint. The floor keeps its big panels: tread
+        // plate over forty metres is a field of noise.
+        0 => ("steel", 5.0, Color::linear_rgb(0.62, 0.62, 0.64)),
+        1 => ("steel", 4.0, Color::linear_rgb(0.86, 0.86, 0.87)),
+        3 => ("steel", 4.0, Color::linear_rgb(1.5, 0.3, 0.24)),
+        4 => ("steel", 4.0, Color::linear_rgb(0.26, 0.44, 1.35)),
+        5 => ("steel", 4.0, Color::linear_rgb(0.3, 0.3, 0.32)),
         ROCK => ("rock", 2.5, Color::linear_rgb(1.45, 1.6, 2.1)),
-        7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
-        11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
+        7 => ("steel", 4.0, Color::linear_rgb(0.55, 0.55, 0.57)),
+        11 => ("steel", 4.0, Color::linear_rgb(1.0, 1.0, 1.0)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
@@ -93,9 +97,24 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
         DECK => ("deck", 4.0, Color::WHITE),
         GOLD => ("gold", 1.2, Color::WHITE),
+        // A base's metal: plates over a metre across (the set is four to
+        // its tile) in a mid steel, the same under a side's paint, and
+        // tread plate.
+        STEEL => ("steel", 5.0, Color::linear_rgb(0.7, 0.7, 0.72)),
+        STEEL_RED => ("steel", 5.0, Color::linear_rgb(1.5, 0.3, 0.24)),
+        STEEL_BLUE => ("steel", 5.0, Color::linear_rgb(0.26, 0.44, 1.35)),
+        TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
         _ => return None,
     })
 }
+
+/// A base's metal (tools/maps/compile.mjs LOOKS): its plate, its plate in
+/// each side's paint, its tread plate; and a turned box drawn as a pylon.
+pub const PYLON: u8 = 25;
+const STEEL: u8 = 26;
+const STEEL_RED: u8 = 27;
+const STEEL_BLUE: u8 = 28;
+const TREAD: u8 = 29;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -120,11 +139,18 @@ fn v3(v: sim::geom::V3) -> Vec3 {
 pub fn box_material(look: u8) -> Option<StandardMaterial> {
     let (set, _, tint) = dress(look)?;
     let (roughness, metallic) = match (look, set) {
-        (3 | 4 | 7 | 11 | FLOOR, _) => (0.75, 0.55),
+        (3 | 4, _) => (0.7, 0.3),
+        (0 | 1 | 5 | 7 | 11, _) => (0.62, 0.85),
+        (FLOOR, _) => (0.75, 0.55),
         // The ship's sets carry their own roughness and metal.
         (12..=15 | RIB, _) => (1.0, 0.7),
         (DECK, _) => (1.0, 0.55),
         (GOLD, _) => (1.0, 0.9),
+        // Bare plate is metal through and through; paint over it mostly
+        // is not; tread plate is worn dull.
+        (STEEL, _) => (0.62, 0.85),
+        (STEEL_RED | STEEL_BLUE, _) => (0.7, 0.3),
+        (TREAD, _) => (0.75, 0.8),
         (_, "metal") => (0.55, 0.35),
         _ => (0.9, 0.0),
     };
@@ -140,8 +166,7 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
 /// What a look is, as it weathers (`look/weathering.rs`).
 fn surface(look: u8) -> Surface {
     match look {
-        1 | 5 => Surface::Steel,
-        3 | 4 | 7 | 11 => Surface::Paint,
+        0 | 1 | 3 | 4 | 5 | 7 | 11 | PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB => Surface::Hull,
@@ -367,7 +392,12 @@ fn turned_mesh(size: Vec3, mid: Vec3, rot: Quat, tile: f32) -> Mesh {
 }
 
 /// A box still in its plain colour (a mass waits for its pieces first).
-type Undressed = (Without<Dressed>, Without<Mass>, Without<crate::look::boulders::Boulder>);
+type Undressed = (
+    Without<Dressed>,
+    Without<Mass>,
+    Without<crate::look::boulders::Boulder>,
+    Without<crate::look::boulders::Pylon>,
+);
 
 /// The level's ground and boxes in their textures, once those are ready:
 /// the ground (and its rock skin) in the splat material, every textured
@@ -525,12 +555,16 @@ fn look(i: u8) -> (Color, f32, f32) {
         DECK => (Color::srgb(0.1, 0.1, 0.13), 0.6, 0.5),
         GOLD => (Color::srgb(0.9, 0.7, 0.3), 0.3, 0.3),
         8..=10 | 20 | 21 => (strip(i).unwrap_or(Color::WHITE), 0.3, 0.0),
-        0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0),  // wall
-        1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2),  // block
-        2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4),  // trim
-        3 => (Color::srgb(0.54, 0.33, 0.31), 0.6, 0.2),  // red
-        4 => (Color::srgb(0.31, 0.39, 0.54), 0.6, 0.2),  // blue
-        5 => (Color::srgb(0.29, 0.31, 0.34), 0.7, 0.2),  // dark
+        0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0), // wall
+        1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2), // block
+        2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4), // trim
+        3 => (Color::srgb(0.54, 0.33, 0.31), 0.6, 0.2), // red
+        4 => (Color::srgb(0.31, 0.39, 0.54), 0.6, 0.2), // blue
+        5 => (Color::srgb(0.29, 0.31, 0.34), 0.7, 0.2), // dark
+        PYLON | STEEL => (Color::srgb(0.42, 0.44, 0.47), 0.55, 0.8),
+        STEEL_RED => (Color::srgb(0.6, 0.24, 0.2), 0.6, 0.3),
+        STEEL_BLUE => (Color::srgb(0.22, 0.32, 0.6), 0.6, 0.3),
+        TREAD => (Color::srgb(0.34, 0.35, 0.37), 0.7, 0.8),
         _ => (Color::srgb(0.61, 0.33, 0.21), 0.95, 0.0), // rock
     }
 }
@@ -829,8 +863,19 @@ pub fn build(
     }
     // Rock out of reach: the sea's stacks and stones.
     crate::look::boulders::spawn_scenery(commands, id);
-    // And trees along the rim over the walls, out of reach too.
+    // And trees along the rim over the walls, out of reach too, and the
+    // land beyond it (`look/far.rs`).
     if let Some(t) = &def.terrain {
+        crate::look::far::spawn(
+            commands,
+            meshes,
+            mats,
+            Vec2::new(t.x0, t.z0),
+            Vec2::new(t.x0 + (t.nx - 1) as f32 * t.cell, t.z0 + (t.nz - 1) as f32 * t.cell),
+            hi.0,
+            def.light.sea,
+            id as u32,
+        );
         let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z);
         for (foot, height, kind, seed) in crate::look::trees::rim(ground, lo, hi, id as u32) {
             let cards = cards.get(images);
@@ -1077,6 +1122,15 @@ pub fn build(
             e.insert(bevy::light::NotShadowCaster);
         } else {
             e.insert((BoxLook(l), block));
+        }
+        // A base's buttress: a pylon inside its turned box, once the
+        // models are in (`look/boulders.rs`).
+        if let (PYLON, sim::solid::Shape::Turned { hx, hz, .. }) = (l, sol.shape) {
+            e.insert(crate::look::boulders::Pylon {
+                at: crate::look::boulders::pylon_transform(at, hx, sol.y1 - sol.y0, hz),
+                min: v3(bounds.min),
+                max: v3(bounds.max),
+            });
         }
     }
     for &(p, c, lm) in map.light.lamps {

@@ -26,6 +26,8 @@ VIEWS=(
   "cliff|map=3&eye=-20,4.5,8&look=0,22,70|2"
   "meadow|map=3&eye=-68,5.3,20&look=-40,3,38|2"
   "vista|map=3&eye=-100,7.3,0&look=150,0,0|2"
+  "inland|map=3&eye=118,1.8,6&look=-150,34,-10|2"
+  "base|map=3&eye=-82,2.2,-13&look=-100,3.4,0|2"
 )
 
 if [ "${1:-}" = list ]; then

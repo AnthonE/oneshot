@@ -342,11 +342,14 @@ mod desktop {
         Some((addr, hash))
     }
 
-    /// `GET <server>/server.json`, over HTTPS (the system's roots) or plain
-    /// HTTP (a local server): one request, HTTP/1.0, the body back.
     /// One GET over HTTPS or HTTP: the body (`fetch::get`).
     pub fn http_get(url: &str) -> Result<String, String> {
         fetch::get(url)
+    }
+
+    /// One POST of `body` (as text) over HTTPS or HTTP: the status.
+    pub fn http_post(url: &str, body: &[u8]) -> Result<u16, String> {
+        fetch::request(url, "POST", body).map(|(status, _)| status)
     }
 
     mod fetch {
@@ -361,6 +364,17 @@ mod desktop {
 
         /// `GET url`, HTTP/1.0, the body back on a 200.
         pub fn get(server: &str) -> Result<String, String> {
+            let (status, body) = request(server, "GET", b"")?;
+            if status != 200 {
+                return Err(format!("{server}: HTTP {status}"));
+            }
+            Ok(body)
+        }
+
+        /// `method url` over HTTPS (the system's roots) or plain HTTP (a
+        /// local server), HTTP/1.0, with `body` (a POST's, as text): the
+        /// status and the body.
+        pub fn request(server: &str, method: &str, body: &[u8]) -> Result<(u16, String), String> {
             let (tls, rest) = match server.split_once("://") {
                 Some(("https", r)) => (true, r),
                 Some(("http", r)) => (false, r),
@@ -383,9 +397,17 @@ mod desktop {
                 .find_map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok())
                 .ok_or_else(|| format!("{at}: can't connect (is the server up?)"))?;
             let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-            let req = format!(
-                "GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n\r\n"
-            );
+            let mut req = format!(
+                "{method} {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n"
+            )
+            .into_bytes();
+            if method == "POST" {
+                req.extend_from_slice(
+                    format!("Content-Type: text/plain\r\nContent-Length: {}\r\n", body.len()).as_bytes(),
+                );
+            }
+            req.extend_from_slice(b"\r\n");
+            req.extend_from_slice(body);
             let mut raw = Vec::new();
             if tls {
                 let mut roots = rustls::RootCertStore::empty();
@@ -402,7 +424,7 @@ mod desktop {
                     rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| format!("{host}: {e}"))?;
                 let conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| e.to_string())?;
                 let mut s = rustls::StreamOwned::new(conn, tcp);
-                s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
+                s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
                 // A server that closes without TLS's close_notify still sent the body.
                 if let Err(e) = s.read_to_end(&mut raw) {
                     if raw.is_empty() {
@@ -411,16 +433,13 @@ mod desktop {
                 }
             } else {
                 let mut s = tcp;
-                s.write_all(req.as_bytes()).map_err(|e| format!("{at}: {e}"))?;
+                s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
                 s.read_to_end(&mut raw).map_err(|e| format!("{at}: {e}"))?;
             }
             let text = String::from_utf8_lossy(&raw);
             let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| format!("{at}: no reply"))?;
-            let status = head.split_whitespace().nth(1).unwrap_or("");
-            if status != "200" {
-                return Err(format!("{server}: HTTP {status}"));
-            }
-            Ok(body.to_string())
+            let status = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            Ok((status, body.to_string()))
         }
     }
 
@@ -692,7 +711,7 @@ mod web {
                 early.push(m);
             }
             if c.ready() {
-                push(News::In(Box::new(crate::link::Web(c)), early));
+                push(News::In(Box::new(crate::link::Web::new(c)), early));
                 return Ok(());
             }
             if c.closed() {

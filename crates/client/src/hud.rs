@@ -1206,6 +1206,23 @@ pub struct DrawLines {
     feed: String,
     net: String,
     respawn: String,
+    gone: String,
+}
+
+/// Why the match is gone for us, into `out` (cleared): over, or
+/// disconnected and why, if the link says (`Link::ended_why`); empty while
+/// it's on.
+pub(crate) fn gone_line(out: &mut String, ended: bool, link: &dyn crate::link::Link) {
+    out.clear();
+    if ended {
+        out.push_str("Match over");
+    } else if link.closed() {
+        out.push_str("Disconnected");
+        if let Some(why) = link.ended_why() {
+            out.push_str(": ");
+            out.push_str(&why);
+        }
+    }
 }
 
 /// The lines, the crosshair, the hit marker and the hurt arc, from the
@@ -1233,19 +1250,15 @@ pub fn draw(
     let now = time.elapsed_secs();
     let core = &s.core;
     let (f, _) = core.own();
-    let gone = if st.ended {
-        Some("Match over")
-    } else if link.0.closed() {
-        Some("Disconnected")
-    } else {
-        None
-    };
     let DrawLines {
         center,
         feed,
         net,
         respawn,
+        gone,
     } = &mut *lines;
+    gone_line(gone, st.ended, &*link.0);
+    let gone = (!gone.is_empty()).then_some(gone.as_str());
     if !s.ready {
         center.clear();
         match gone {
@@ -1354,7 +1367,7 @@ pub fn draw(
         }
     }
     let arm = sim::arms::arm(f.gun().arm);
-    let scoped = look.magnification(arm) > 1.0;
+    let scoped = look.scoped(arm);
     if let Ok(mut v) = reticle.single_mut() {
         v.set_if_neq(if scoped || !f.alive {
             Visibility::Hidden

@@ -55,6 +55,20 @@ struct Water {
 
 // Deep by fiat (`water::DEEP_M`): saturates every curve here.
 const DEEP_M: f32 = 64.0;
+// The lip: where the water is a hand deep it breaks on the sand in a line
+// of white that comes and goes with the surge. `LIP_M` is the depth it is
+// gone by, `LIP_WHITE` its coverage at most. The wash band behind it is a
+// patchy haze a metre out; without the lip the sea met the beach with no
+// edge at all.
+const LIP_M: f32 = 0.3;
+const LIP_WHITE: f32 = 0.9;
+// A sea is not a mirror of the horizon. Past where a pixel resolves the
+// ripples, the facets it averages lean every way and their mean reflection
+// comes from well up the sky, so far water is the sky's blue and not the
+// horizon's pale: the reflected ray is lifted this much (of a unit ray)
+// by `FAR_SKY_M` out.
+const FAR_SKY_LIFT: f32 = 0.24;
+const FAR_SKY_M: vec2<f32> = vec2<f32>(15.0, 170.0);
 const TAU: f32 = 6.28318530718;
 
 // ---------------------------------------------------------------------------
@@ -280,9 +294,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let s0 = sin(reduced(dot(water.waves[0].xy, wp.xz) * water.waves[0].z + water.phase.x));
     let surge = water.shore.y + (1.0 - water.shore.y) * (0.5 + 0.5 * s0);
     var foam = clamp(in.uv_b.x, 0.0, 1.0) * surge;
+    let lip = (1.0 - smoothstep(0.05, LIP_M, dz)) * surge;
 #else
     let dz = DEEP_M;
     var foam = 0.0;
+    let lip = 0.0;
 #endif
 
     // 2 · The body, over the refracted path (Snell bends the ray toward
@@ -305,10 +321,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // it is finer than a pixel. Half Gates' coverage: a shelf a metre
     // deep is all wash band, and at his strength it read as milk.
     let settle = smoothstep(25.0, 90.0, dist);
-    if foam > 0.0 {
+    if foam > 0.0 || lip > 0.0 {
         let fine = mix(vnoise(wp.xz * 0.9 + vec2<f32>(5.0, 11.0)), 0.5, settle);
         let clump = vnoise(wp.xz * 0.3) * 0.6 + fine * 0.4;
         foam = clamp(foam * (0.12 + 0.65 * clump), 0.0, 1.0);
+        // The lip over it: nearly whole, ragged by the same patches.
+        foam = max(foam, lip * LIP_WHITE * (0.5 + 0.5 * clump));
     }
     // The contact line itself is a polygon intersection: everything fades
     // in from it, or it is drawn as a line.
@@ -340,9 +358,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let F = (F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0)) * smooth_share;
     var R = reflect(-V, Nr);
     // A ray reflected downward would meet the next wave: read the horizon.
-    R = normalize(vec3<f32>(R.x, max(R.y, 0.0) + 1e-3, R.z));
+    // And far water reads well above it (`FAR_SKY_LIFT`).
+    let far_lift = FAR_SKY_LIFT * smoothstep(FAR_SKY_M.x, FAR_SKY_M.y, dist);
+    R = normalize(vec3<f32>(R.x, max(R.y, 0.0) + 1e-3 + far_lift, R.z));
     var Rd = reflect(-V, pbr_input.world_normal);
-    Rd = normalize(vec3<f32>(Rd.x, max(Rd.y, 0.0) + 1e-3, Rd.z));
+    Rd = normalize(vec3<f32>(Rd.x, max(Rd.y, 0.0) + 1e-3 + far_lift, Rd.z));
     let sky = sky_radiance(R, Rd) * view.exposure;
     // The swell's slope the far pixel cannot resolve, as roughness.
     let hid = water.shore.w * smoothstep(0.0, water.glint.w, dist);

@@ -123,7 +123,11 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // a box that collides but isn't drawn (`hidden`: the steps under a vault), and its light strips.
   'deck', 'gold', 'vault', 'hidden', 'magenta_glow', 'cyan_glow', 'rib',
   // Trees: a round solid on the ground drawn as a palm or a dead tree (the client's look/trees.rs).
-  'palm', 'dead_tree'];
+  'palm', 'dead_tree',
+  // A turned box drawn as a buttress pylon inside it (the client's look/boulders.rs).
+  'pylon',
+  // A base's metal: gunmetal plate, the same painted in a side's colour, and tread plate for a deck or a ramp.
+  'steel', 'steel_red', 'steel_blue', 'tread'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
@@ -263,7 +267,8 @@ export function compile(spec, where = 'map.json') {
   if (!(bx0 < bx1 && bz0 < bz1)) fail('bounds: [x0, x1, z0, z1]');
   const inside = (x, z, what) => { if (!(x >= bx0 && x <= bx1 && z >= bz0 && z <= bz1)) fail(`${what} at ${x}, ${z} is out of bounds`); };
   const mirrors = images(spec.mirror);
-  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red' };
+  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
+    steel_red: 'steel_blue', steel_blue: 'steel_red' };
   const swapLook = (l) => SWAP[l] || l;
 
   const L0 = spec.light || {};

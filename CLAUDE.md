@@ -27,8 +27,8 @@ Fireplace, engine-shim and Elo Pros.
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `tools/load` | `oneshot-load`: the load test, headless players on `client-net`'s native transport against a server, and its `/health.json` over the hold (`ops/README.md`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
-| `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE); `rocks.py` the boulders and the sea stack (`look/boulders.rs`) |
-| `tools/ground.sh`, `tools/hd.sh` | the ground's and the rock's photographs, cut from Poly Haven's CC0 sets (`sources/polyhaven`); a map's fixed views shot on the GPU for the look loop (the `hd` skill, the board's `hd-*` views) |
+| `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE); `rocks.py` the boulders, the sea stack and the bases' pylon (`look/boulders.rs`) |
+| `tools/ground.sh`, `tools/hd.sh` | the ground's and the rock's photographs, cut from Poly Haven's CC0 sets (`sources/polyhaven`), and the bases' steel and tread plate from ambientCG's (`sources/ambientcg`); a map's fixed views shot on the GPU for the look loop (the `hd` skill, the board's `hd-*` views) |
 | `tools/assets.mjs`, `tools/glb` | Triple T, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
 
@@ -131,7 +131,7 @@ ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 tools/hd.sh [view… | list]                           # a map's fixed views on this box's GPU in seconds → traces/hd/ (the hd skill)
-tools/ground.sh [sand|grass|gravel|rock]             # the ground's photographs from Poly Haven → crates/client/assets/textures
+tools/ground.sh [sand|grass|gravel|rock|steel|tread] # the ground's photographs from Poly Haven, the bases' metal from ambientCG → crates/client/assets/textures
 ci/native_shot.sh traces/x.png 'map=6&eye=…' | match 6 3   # a GPU shot of the desktop client in seconds (a pose, a match)
 tools/models/meshy_gen.py <name> [--image-only | --roll]   # a gun's mesh from Meshy, by its script's prompt → sources/meshy (credits)
 tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless); `rocks`: the boulders

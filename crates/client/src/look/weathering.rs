@@ -136,6 +136,10 @@ pub enum Surface {
     Floor,
     /// The alien hull: a ship's skin, kept, with only its value broken.
     Hull,
+    /// A base's plate: kept metal, looked after. Soil splashed at its foot
+    /// and dust on its tops, its seams its own photograph's; no rust
+    /// running down it (`Steel`'s streaks on a curved wall read as grain).
+    Plate,
 }
 
 /// Rain stains on concrete: darker and a little warm. **(knob)**
@@ -199,6 +203,7 @@ fn recipe(s: Surface) -> Recipe {
         Surface::Rock => r(0.2, 0.75, VARNISH, 0.25, (0.5, 0.09, 1.22, 0.05), 0.6),
         Surface::Floor => r(0.1, 0.0, GRIME, 0.0, (0.0, 0.05, 1.0, 0.0), 0.4),
         Surface::Hull => r(0.06, 0.0, GRIME, 0.15, (0.0, 0.05, 1.0, 0.0), 0.0),
+        Surface::Plate => r(0.13, 0.1, GRIME, 0.45, (0.55, 0.05, 1.4, -0.1), 0.3),
     }
 }
 
@@ -288,13 +293,14 @@ pub fn plugin(app: &mut App) {
 mod tests {
     use super::*;
 
-    const ALL: [Surface; 6] = [
+    const ALL: [Surface; 7] = [
         Surface::Concrete,
         Surface::Steel,
         Surface::Paint,
         Surface::Rock,
         Surface::Floor,
         Surface::Hull,
+        Surface::Plate,
     ];
 
     fn block() -> Block {

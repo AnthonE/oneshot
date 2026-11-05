@@ -419,7 +419,7 @@ fn feed(
         film.pulled = None;
         // What was heard before the jump is not this shot's.
         mix.0.hush();
-        look.zoom = false;
+        look.unscope();
         film.phase = Phase::Settle { frames: 0 };
     }
     tape.replay.clock_ms += time.delta_secs_f64() * 1000.0;

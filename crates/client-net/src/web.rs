@@ -195,6 +195,12 @@ impl Wire for WebWire<'_> {
 /// For a Rust app holding the browser's session (the Bevy client): the
 /// session, and a frame's update with the clock read here.
 impl Client {
+    /// The close's code and reason, once the connection has ended: for an
+    /// app that words it itself (`session::close_why` is the usual words).
+    pub fn ended(&self) -> Option<(u32, String)> {
+        self.ended.borrow().clone()
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }

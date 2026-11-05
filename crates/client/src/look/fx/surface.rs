@@ -19,7 +19,7 @@ use sim::solid::{Shape, Solid};
 use super::table::Matter;
 
 /// Box and solid looks drawn in metal (`level.rs::dress`).
-pub const METAL_LOOKS: [u8; 4] = [1, 3, 4, 5];
+pub const METAL_LOOKS: [u8; 9] = [1, 3, 4, 5, 25, 26, 27, 28, 29];
 
 /// What a ray met.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
