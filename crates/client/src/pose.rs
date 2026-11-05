@@ -5,7 +5,8 @@
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
 //! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
-//! `emblem=` (a `proto::Emblem`) and `team=` dress it. `reload=1` reloads it, over and over; `die=S`
+//! `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
+//! overshield and `cloak=` camouflage (0..1, how hidden). `reload=1` reloads it, over and over; `die=S`
 //! kills it S seconds after the screen is there, shot from the camera (a
 //! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
 //! doll (`look/rag.rs`) can be looked at.
@@ -96,6 +97,8 @@ impl Pose {
             crouched: get("crouch", 0.0) != 0.0,
             arm: get("arm", 1.0) as u8,
             shield: 255,
+            over: get("over", 0.0) != 0.0,
+            cloak: get("cloak", 0.0).clamp(0.0, 1.0),
             ..Drawn::default()
         };
         let look = proto::Look {

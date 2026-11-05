@@ -98,8 +98,8 @@ impl Bot {
         }
     }
 
-    /// A gun it wants, near, on its level and a straight walk away: on a
-    /// pad that holds it, or on the floor. Wanted: ranked over the best it carries that has rounds, or
+    /// A gun (or a power-up) it wants, near, on its level and a straight
+    /// walk away: on a pad that holds it, or on the floor. Wanted: ranked over the best it carries that has rounds, or
     /// rounds for one of its own running low.
     fn loot(w: &World, slot: usize) -> Option<V3> {
         if w.rules.gun_game {
@@ -110,6 +110,12 @@ impl Bot {
         let rank = |g: &Gun| if g.spent() { 0 } else { arm(g.arm).rank };
         let top = rank(&me.guns[0]).max(rank(&me.guns[1]));
         let wants = |id: u8| {
+            // A power-up, unless it is already on.
+            match id {
+                crate::arms::OVERSHIELD => return !me.overshield(),
+                crate::arms::CAMO => return me.camo == 0,
+                _ => {}
+            }
             let a = arm(id);
             match me.guns.iter().find(|g| g.arm == id) {
                 Some(g) => !a.hot() && (g.mag as u32 + g.reserve as u32) < a.mag as u32,
@@ -205,7 +211,7 @@ impl Bot {
         }
         self.ride_cool = self.ride_cool.saturating_sub(1);
         let eye = me.eye();
-        // The nearest enemy it can see.
+        // The nearest enemy it can see (one well camouflaged only near).
         let mut best = 255u8;
         let mut near = f32::INFINITY;
         for (q, v) in w.fighters.iter().enumerate() {
@@ -214,7 +220,8 @@ impl Bot {
             }
             let chest = v.body.pos + V3::new(0.0, 1.2, 0.0);
             let d = (chest - eye).len();
-            if d < near && w.map.clear(eye, chest) {
+            let unseen = v.cloak() > CAMO_BOT_HIDDEN && d > CAMO_BOT_M;
+            if d < near && !unseen && w.map.clear(eye, chest) {
                 near = d;
                 best = q as u8;
             }

@@ -95,6 +95,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // params.z takes the fill away (the arms in view: rim and lines only).
     let fill = 1.0 - params.z;
     let k = level * flicker * (rim * 1.5 + lines * (0.1 + rim) * 0.9 + (band * 0.15 + 0.02) * fill);
-    out.color = vec4<f32>(color.rgb * k, 1.0);
+    // Alpha 0: AlphaMode::Add blends as premultiplied alpha (src + (1 - a)
+    // dst), so only a = 0 adds the shell over what is behind it.
+    out.color = vec4<f32>(color.rgb * k, 0.0);
     return out;
 }

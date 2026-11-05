@@ -95,6 +95,9 @@ fn own() -> Fighter {
         respawn: 0,
         kills: 4,
         deaths: 2,
+        charging: true,
+        camo: 3000,
+        flare: 40,
         ..Fighter::default()
     }
 }
@@ -127,6 +130,8 @@ fn snapshot() -> Snapshot {
         pitch: 100,
         arm: BR,
         shield: 200,
+        over: true,
+        cloak: 9,
     };
     s.proj[0] = ProjState {
         kind: 0,
@@ -490,13 +495,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xc72a_f16d_81bf_711b,
-        0xa984_1747_0db7_abd1,
-        0xb56b_7c56_efdf_0dde,
+        0xf3b7_015c_c905_1eee,
+        0xe578_6b8e_5686_c94a,
+        0x5157_5e84_0a0c_495b,
         0x7ebe_34b8_2c10_f2d0,
         0xe3b4_a54a_5a16_6273,
         0xf3f5_af92_56b2_fbea,
-        0x7bc6_ae95_b05a_7d4a,
+        0x2de7_5365_85c7_fca3,
         0x0835_ec07_b4ee_4fb0,
         0x3f28_24ea_ec0c_5c91,
         0xd5ca_75af_c4fa_c9d7,

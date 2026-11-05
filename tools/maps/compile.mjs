@@ -27,7 +27,8 @@
 //             curve, trim on a wall); a `vault` box is always dressing
 //   spawns    [{ at: [x, z, y?], team: "red"|"blue"|"any", yaw: degrees,
 //             mirror: bool }]
-//   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]
+//   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]: a gun,
+//             or a power-up (overshield, camo)
 //   roam      [[x, z], ...]: where a bot with nobody in sight walks
 //   terrain   { cell: 0.5|1|2|4, base: m, margin: m | [-x, +x, -z, +z],
 //             gen: "canyon", canyon: {...}, shapes: [...] }: ground that
@@ -102,10 +103,12 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
-  launcher: 'LAUNCHER', cannon: 'CANNON' };
+  launcher: 'LAUNCHER', cannon: 'CANNON',
+  // Power-ups: taken by walking onto the pad.
+  overshield: 'OVERSHIELD', camo: 'CAMO' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
-const MAX_PADS = 16;
+const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
 const MAX_BOXES = 512;
 /** How far an arc's segments may stray from its circle, m. */

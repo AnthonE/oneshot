@@ -36,6 +36,19 @@ pub const CANNON: u8 = 15;
 /// Arm ids go on the wire in 4 bits.
 pub const COUNT: usize = 16;
 
+/// What a pad may hold past the guns: power-ups, taken by walking onto the
+/// pad (no USE), never carried as a gun or dropped (`World::powers`).
+/// Overshield: the shield climbs to three times full, then drains back.
+pub const OVERSHIELD: u8 = 16;
+/// Active camouflage: a while nearly unseen, shown by moving fast, firing,
+/// a throw, a blow or a hit (`Fighter::cloak`).
+pub const CAMO: u8 = 17;
+
+/// Whether a pad's `id` is a power-up rather than a gun.
+pub const fn power(id: u8) -> bool {
+    id == OVERSHIELD || id == CAMO
+}
+
 /// Gun Game's ladder: each kill moves the killer up one, the power weapons
 /// first, and a kill with the last one wins.
 pub const LADDER: [u8; 7] = [ROCKET, SHOTGUN, SMG, AR, SNIPER, BR, MAGNUM];
