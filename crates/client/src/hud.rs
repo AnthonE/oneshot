@@ -121,6 +121,9 @@ pub struct HudState {
     /// Our medals for the announcer to say, oldest first (`sound.rs` takes
     /// them).
     pub announce: Vec<u8>,
+    /// Lines about the match the feed found for the announcer (a betrayal),
+    /// oldest first (`sound.rs` takes them too).
+    pub say: Vec<&'static str>,
     /// Every medal of ours this match, by id: the end screen's.
     pub earned: BTreeMap<u8, u16>,
     /// Each seat's spree rung as the stream last told it, and the one it
@@ -968,6 +971,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         st.welcomes = s.welcomes;
         st.medals.clear();
         st.announce.clear();
+        st.say.clear();
         st.earned.clear();
         st.rung.clear();
         st.spree_ended.clear();
@@ -1053,6 +1057,14 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 let side = |q: &u8| st.teams.get(q).map(|t| t & 1);
                 let foe = !s.core.rules.teams || side(killer) != side(victim);
                 st.tally.kill(*killer, *victim, foe);
+                // A teammate killed by a teammate: the announcer tells both.
+                if !foe && killer != victim {
+                    if *killer == me {
+                        st.say.push("betrayal");
+                    } else if *victim == me {
+                        st.say.push("betrayed");
+                    }
+                }
                 if *killer == me && *victim != me {
                     st.kills += 1;
                 }

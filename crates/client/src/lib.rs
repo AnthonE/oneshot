@@ -1439,12 +1439,13 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
-    // The mixer: clips decoded, still loading, and commands sent it.
-    let (decoded, loading, sent) = ear.stats();
+    // The mixer: clips decoded, still loading, and commands sent it; and
+    // the lines about the match the announcer has said.
+    let (decoded, loading, sent, said) = ear.stats();
     set(
         &o,
         "sound",
-        js_sys::Array::of3(&decoded.into(), &loading.into(), &sent.into()).into(),
+        js_sys::Array::of4(&decoded.into(), &loading.into(), &sent.into(), &said.into()).into(),
     );
     set(&o, "in_match", matched.into());
     // The party as this page sees it (ci/party.mjs).

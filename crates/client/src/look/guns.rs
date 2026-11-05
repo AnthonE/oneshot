@@ -185,7 +185,7 @@ pub const GUNS: [(u8, Gun); 15] = [
         ),
     ),
     // The ship's line (`tools/models`: the Veil guns), each with its own
-    // model; their sounds are ours (tools/sfx.py).
+    // model; their sounds are ours (tools/sfx.mjs).
     (
         arms::SWORD,
         g(
