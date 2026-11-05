@@ -27,10 +27,10 @@ const SHADER: &str = "shaders/cloud_sea.wgsl";
 /// over the sea's level: flat to [`FLAT_M`], then the bank, its rim
 /// [`BANK_M`] up by [`REACH_M`], under the far plane however the eye turns.
 const RINGS_M: [f32; 14] = [
-    0.0, 15.0, 30.0, 50.0, 75.0, 110.0, 150.0, 200.0, 260.0, 330.0, 400.0, 470.0, 530.0, 575.0,
+    0.0, 15.0, 30.0, 50.0, 75.0, 110.0, 150.0, 200.0, 260.0, 330.0, 400.0, 460.0, 515.0, 560.0,
 ];
 pub const FLAT_M: f32 = 400.0;
-pub const REACH_M: f32 = 575.0;
+pub const REACH_M: f32 = 560.0;
 pub const BANK_M: f32 = 60.0;
 const SPOKES: usize = 96;
 /// A billow's top and the hollow between, linear: a grey white under the
@@ -199,9 +199,10 @@ mod tests {
             }
             assert!(r <= REACH_M + 0.01);
         }
-        // An eye 30 m over the island's ground (0), up to 60 m off the
-        // middle: the rim is above it and nearer than the far plane.
-        assert!(-30.0 + BANK_M >= 30.0);
-        assert!(REACH_M + 60.0 < crate::look::rig::FAR_M);
+        // An eye 30 m over the island's ground (0), up to 35 m off the
+        // middle (the island's far edge): the rim is above it and nearer
+        // than the far plane.
+        const { assert!(-30.0 + BANK_M >= 30.0) };
+        const { assert!(REACH_M + 35.0 < crate::look::rig::FAR_M) };
     }
 }
