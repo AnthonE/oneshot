@@ -32,8 +32,10 @@ pub const MAX_DEPTH: u32 = 16;
 /// Frames held by seq.
 const BUF: usize = 32;
 /// A frame that hasn't come runs as the last one that did, held as it was,
-/// for this long: jitter's worth, so a late frame costs nothing.
-pub const LOST_HOLD_MS: u32 = 100;
+/// for this long: past jitter, and past the gap between a slow page's
+/// bursts once [`MAX_DEPTH`] has run dry (a page at 3 frames a second
+/// still plays as it pressed), so only frames that stopped coming let go.
+pub const LOST_HOLD_MS: u32 = 250;
 /// Then the triggers, the scope and jump let go and the stick comes back
 /// to still over this long: a player whose frames stopped (a hidden tab, a
 /// cut cable) stands where they were rather than running and firing until
