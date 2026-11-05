@@ -31,6 +31,7 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::vehicle::{Vehicle, DRIVER};
 use sim::world::{Phase, Rules};
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 /// One tick of what this client predicts, in the server's order: its
@@ -403,6 +404,8 @@ pub struct NetCore {
     /// The next round id to give, and our own rounds since they left the gun.
     next_pid: u16,
     launches: Vec<Launch>,
+    /// Each launch's flight as last asked for, by its id (`coast_memo`).
+    coasts: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
     /// Ticks a forward clock resync added that the next `update` makes on
     /// top of the time passed: our rounds already flying don't take them.
     resync_ahead: f64,
@@ -472,6 +475,7 @@ impl NetCore {
             event_id: None,
             next_pid: 0,
             launches: Vec::with_capacity(MAX_LAUNCHES),
+            coasts: Default::default(),
             resync_ahead: 0.0,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
@@ -669,8 +673,20 @@ impl NetCore {
         // The seed is a tick before the sim's first state, made on tick
         // `q + k`.
         let age = t - (l.q as f64 + l.k - 1.0);
-        let (p, v, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age.max(0.0), &self.map);
+        let (p, v, _) = proj::coast_on(
+            self.coast_memo(l),
+            l.seed.kind,
+            l.seed.pos,
+            l.seed.vel,
+            age.max(0.0),
+            &self.map,
+        );
         (p, v)
+    }
+
+    /// Where launch `l`'s flight was last left (`proj::coast_on`).
+    fn coast_memo(&self, l: &Launch) -> &Cell<Option<proj::Coasted>> {
+        &self.coasts[l.id as usize % MAX_LAUNCHES]
     }
 
     /// Launch `l` as drawn at `now_ms`, or None once it is gone.
@@ -769,6 +785,7 @@ impl NetCore {
             let (f, p) = self.own();
             return Some((p, f.body.vel));
         }
+        let mut at = None;
         if (h as usize) < MAX_FIGHTERS {
             return self.other_at(h, now_ms).map(|d| (d.pos, d.vel));
         }
@@ -846,7 +863,8 @@ impl NetCore {
             }
             if l.ack_tick.is_none() || after <= 2 * SEND_EVERY {
                 let age = after as f64 + 1.0;
-                let (at, _, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age, &self.map);
+                let (at, _, _) =
+                    proj::coast_on(self.coast_memo(&l), l.seed.kind, l.seed.pos, l.seed.vel, age, &self.map);
                 let flown = (at - l.seed.pos).len();
                 let reach = proj::BIND_M + l.seed.cone * flown;
                 let born = l.q as f64 + ks;

@@ -10,6 +10,8 @@ pub mod replay;
 pub mod spectate;
 pub mod watch;
 
+use std::collections::VecDeque;
+
 use proto::MAX_SNAP_VEHICLES;
 use proto::{
     encode_snapshot, DropState, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_DROPS, MAX_SNAP_EVENTS, MAX_SNAP_PADS,
@@ -75,7 +77,9 @@ pub struct ClientNet {
 /// skipped: so the client keeps an event by its id and drops repeats.
 #[derive(Clone, Debug, Default)]
 pub struct EventQueue {
-    list: Vec<(Option<u32>, EventState)>,
+    /// Each with the tick of the first snapshot that carried it: those are
+    /// given oldest first, so the acked ones are always at the front.
+    list: VecDeque<(Option<u32>, EventState)>,
     next_id: u16,
     /// Events dropped because a client stopped acking.
     pub dropped: u32,
@@ -89,16 +93,23 @@ impl EventQueue {
         e.id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         if self.list.len() >= MAX_QUEUED_EVENTS {
-            self.list.remove(0);
+            self.list.pop_front();
             self.dropped += 1;
         }
-        self.list.push((None, e));
+        self.list.push_back((None, e));
     }
 
     /// The client has every snapshot up to `tick`: what those carried is
     /// home.
     pub fn ack(&mut self, tick: u32) {
-        self.list.retain(|(since, _)| since.is_none_or(|t| t > tick));
+        while self
+            .list
+            .front()
+            .is_some_and(|(since, _)| since.is_some_and(|t| t <= tick))
+        {
+            self.list.pop_front();
+        }
+        debug_assert!(self.list.iter().all(|(since, _)| since.is_none_or(|t| t > tick)));
     }
 
     /// Waiting, oldest first.
@@ -564,6 +575,17 @@ impl Room {
     /// One tick. Returns the snapshots to send (on snapshot ticks) and the
     /// stream messages.
     pub fn step(&mut self, now_ms: f64) -> (Vec<(u8, Snapshot)>, Outbox) {
+        let (mut snaps, mut out) = (Vec::new(), Vec::new());
+        self.step_into(now_ms, &mut out, |s, snap, _| snaps.push((s, *snap)));
+        (snaps, out)
+    }
+
+    /// [`Room::step`] for the server: the stream messages go onto `out`
+    /// (cleared first), and each snapshot is handed to `send` with its
+    /// seat and its bytes on the wire (empty if it can't fit a datagram),
+    /// encoded once.
+    pub fn step_into(&mut self, now_ms: f64, out: &mut Outbox, mut send: impl FnMut(u8, &Snapshot, &[u8])) {
+        out.clear();
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         let mut rewind = [0u32; MAX_FIGHTERS];
         let next = self.world.tick.wrapping_add(1);
@@ -584,9 +606,10 @@ impl Room {
         self.rec.step(&inputs, &rewind);
         self.world.step(&inputs, &rewind);
         let (fogs, tick) = (&self.fogs, self.world.tick);
-        self.watch.observe(&self.world, |v, t| fogs[v].shows(t, tick));
+        let mut plain = fog::Plain::default();
+        self.watch
+            .observe_with(&self.world, &mut plain, |v, t| fogs[v].shows(t, tick));
 
-        let mut out: Outbox = Vec::new();
         for e in self.world.events.as_slice() {
             if e.kind == Ev::Kill {
                 out.push((
@@ -646,16 +669,16 @@ impl Room {
             }
         }
 
-        let mut snaps = Vec::new();
+        let mut wire = [0u8; MAX_DATAGRAM];
         if self.world.tick.is_multiple_of(SNAP_EVERY) {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
                 if let Seat::Person(c, _) = &mut self.seats[s] {
                     let lead = fog::lead_s(c.rtt_ms, c.playout as u32);
                     let f = &mut self.fogs[s];
-                    f.update(&self.world, s, lead, tick);
+                    f.update_with(&self.world, s, lead, tick, &mut plain);
                     let low = c.take_low();
-                    let snap = build(
+                    let (snap, n) = build_encoded(
                         &self.world,
                         s,
                         (c.last_seq, low),
@@ -663,17 +686,17 @@ impl Room {
                         &mut c.queue,
                         |q| f.shows(q, tick),
                         |i| f.shows_vehicle(i, tick),
+                        &mut wire,
                     );
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
-                    snaps.push((s as u8, snap));
+                    send(s as u8, &snap, &wire[..n]);
                 }
             }
         }
         if let Some(l) = self.spectate.as_mut() {
-            l.observe(&self.world, &out);
+            l.observe(&self.world, out);
         }
-        (snaps, out)
     }
 }
 
@@ -690,6 +713,33 @@ pub fn build(
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
+    let mut wire = [0u8; MAX_DATAGRAM];
+    build_encoded(
+        w,
+        s,
+        (last_seq, depth),
+        events,
+        queue,
+        visible,
+        vehicle_visible,
+        &mut wire,
+    )
+    .0
+}
+
+/// [`build`], and the snapshot's bytes in `wire`: how many (0 if even with
+/// no events it is over a datagram, which `tests/budget.rs` rules out).
+#[allow(clippy::too_many_arguments)]
+fn build_encoded(
+    w: &World,
+    s: usize,
+    (last_seq, depth): (u32, i8),
+    events: &[Event],
+    queue: &mut EventQueue,
+    visible: impl Fn(usize) -> bool,
+    vehicle_visible: impl Fn(usize) -> bool,
+    wire: &mut [u8; MAX_DATAGRAM],
+) -> (Snapshot, usize) {
     let mut snap = Snapshot {
         tick: w.tick,
         last_seq,
@@ -730,15 +780,33 @@ pub fn build(
         snap.n_events += 1;
     }
     // Over a datagram, the snapshot would be dropped whole: the newest
-    // events wait for the next instead.
-    let mut scratch = [0u8; 2 * MAX_DATAGRAM];
-    while snap.n_events > 0 && encode_snapshot(&snap, &mut scratch).map_or(true, |n| n > MAX_DATAGRAM) {
-        snap.n_events -= 1;
-    }
+    // events wait for the next instead. It only grows with its events, so
+    // the most that fit are found in a few encodes, not one per event.
+    let n = match encode_snapshot(&snap, wire) {
+        Ok(n) => n,
+        Err(_) => {
+            let fits = |snap: &mut Snapshot, k: u8, wire: &mut [u8]| {
+                snap.n_events = k;
+                encode_snapshot(snap, wire).is_ok()
+            };
+            // `lo` fits (or is 0), `hi` doesn't.
+            let (mut lo, mut hi) = (0u8, snap.n_events);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if fits(&mut snap, mid, wire) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            snap.n_events = lo;
+            encode_snapshot(&snap, wire).unwrap_or(0)
+        }
+    };
     for (since, _) in queue.list.iter_mut().take(snap.n_events as usize) {
         since.get_or_insert(w.tick);
     }
-    snap
+    (snap, n)
 }
 
 /// The others fog shows this client, coarsely.

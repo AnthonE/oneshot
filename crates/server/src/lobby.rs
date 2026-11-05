@@ -69,11 +69,17 @@ impl Lobby {
         let Ok(n) = voice::encode_voice(&down, &mut buf) else {
             return;
         };
-        let outs = self.outs();
-        for s in to {
-            if let Some((_, conn)) = outs.get(&s) {
-                let _ = conn.send_datagram(&buf[..n]);
+        // Their connections under the lock, the sends after it: every
+        // session's talk goes through this one map.
+        let mut conns: [Option<Connection>; pp::MAX_PARTY] = Default::default();
+        {
+            let outs = self.outs();
+            for (c, s) in conns.iter_mut().zip(to.as_slice()) {
+                *c = outs.get(s).map(|(_, conn)| conn.clone());
             }
+        }
+        for conn in conns.iter().flatten() {
+            let _ = conn.send_datagram(&buf[..n]);
         }
     }
 
