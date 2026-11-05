@@ -52,6 +52,9 @@ Fireplace, engine-shim and Elo Pros.
 CI (`.github/workflows/ci.yml`) runs all of it on every PR: quick's checks,
 the crates' tests, parity, `ci/client.sh` and two e2e matches.
 
+**Merging main into a branch:** resolve the conflicts (keep both sides' intent),
+commit, push. Don't build or test; CI does. A minute, not twenty.
+
 ## Don't
 
 - Update `docs/` unless asked. `DESIGN.md` changes when the operator changes

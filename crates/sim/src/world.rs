@@ -40,6 +40,9 @@ pub struct Rules {
     /// teammate killed costs the side a point (ranked, as MLG plays). Nobody
     /// homes on, lunges at or is magnetised toward a teammate either way.
     pub friendly_fire: bool,
+    /// Capture the Flag (with sides, on a map with flag bases): the score
+    /// is captures, not kills.
+    pub ctf: bool,
 }
 
 impl Rules {
@@ -53,6 +56,7 @@ impl Rules {
             seats: 2,
             gun_game: false,
             friendly_fire: false,
+            ctf: false,
         }
     }
 
@@ -67,6 +71,7 @@ impl Rules {
             seats: 4,
             gun_game: false,
             friendly_fire: true,
+            ctf: false,
         }
     }
 
@@ -81,6 +86,7 @@ impl Rules {
             seats: 8,
             gun_game: false,
             friendly_fire: false,
+            ctf: false,
         }
     }
 
@@ -95,6 +101,7 @@ impl Rules {
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
             friendly_fire: false,
+            ctf: false,
         }
     }
 
@@ -106,6 +113,18 @@ impl Rules {
             loadout: [crate::arms::LADDER[0], NONE],
             gun_game: true,
             ..Rules::ffa()
+        }
+    }
+
+    /// Capture the Flag, four a side: first to 3 captures, or the most at
+    /// 15 minutes. Casual, bots in the empty seats.
+    pub fn ctf() -> Rules {
+        Rules {
+            score_limit: 3,
+            time_limit_ms: 900_000,
+            seats: 8,
+            ctf: true,
+            ..Rules::big_team()
         }
     }
 
@@ -260,6 +279,40 @@ impl Thing for Dropped {
     }
 }
 
+/// Where a flag is.
+pub const FLAG_HOME: u8 = 0;
+/// In an enemy's hands (`Flag::carrier`).
+pub const FLAG_HELD: u8 = 1;
+/// On the floor where its carrier fell or let go.
+pub const FLAG_DOWN: u8 = 2;
+
+/// Capture the Flag's flag: index 0 is red's, 1 blue's. Taken by an enemy
+/// who touches it, scored when that carrier reaches its own base while its
+/// own flag is home, returned by a defender's touch or on its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Flag {
+    pub state: u8,
+    /// The seat carrying it, while held.
+    pub carrier: u8,
+    /// Where it is: its base, its carrier's feet, or where it fell.
+    pub pos: V3,
+    /// Ticks till a dropped flag goes home.
+    pub down_for: u32,
+}
+
+impl Thing for Flag {
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.u8(self.state);
+        h.u8(self.carrier);
+        h.v3(self.pos);
+        h.u32(self.down_for);
+    }
+}
+
 pub struct World {
     pub tick: u32,
     pub map: Map,
@@ -270,6 +323,8 @@ pub struct World {
     /// By slot: slot `i` is always the map's vehicle `i` (`Map::vehicles`).
     pub vehicles: Pool<Vehicle, MAX_VEHICLES>,
     pub drops: Pool<Dropped, MAX_DROPS>,
+    /// Capture the Flag's, red's then blue's; at home and still otherwise.
+    pub flags: [Flag; 2],
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -291,7 +346,14 @@ impl World {
         for (i, v) in map.vehicles.iter().enumerate().take(MAX_VEHICLES) {
             vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8);
         }
+        let mut flags = [Flag::default(); 2];
+        if let Some(bases) = map.flags {
+            for (f, b) in flags.iter_mut().zip(bases) {
+                f.pos = b;
+            }
+        }
         World {
+            flags,
             tick: 0,
             map,
             rules,
@@ -329,6 +391,7 @@ impl World {
 
     pub fn unseat(&mut self, slot: usize) {
         self.leave_vehicle(slot);
+        self.drop_flag(slot, false);
         self.fighters[slot] = Fighter::default();
         self.rewind.forget(slot);
     }
@@ -413,8 +476,11 @@ impl World {
             if l.throw {
                 self.throw(s, l.sticky);
             }
-            // A vehicle in reach (or the one ridden) beats a pad.
-            if l.use_pad && self.fighters[s].active() && !self.use_vehicle(s) {
+            // A carrier's USE lets go of the flag; otherwise a vehicle in
+            // reach (or the one ridden) beats a pad.
+            if l.use_pad && self.fighters[s].flag {
+                self.drop_flag(s, false);
+            } else if l.use_pad && self.fighters[s].active() && !self.use_vehicle(s) {
                 self.pickup(s);
             }
         }
@@ -433,6 +499,7 @@ impl World {
             p.empty_for = p.empty_for.saturating_sub(1);
         }
         self.fly_drops();
+        self.flags_tick();
         for d in self.drops.iter_mut().filter(|d| d.active) {
             d.ttl = d.ttl.saturating_sub(1);
             if d.ttl == 0 {
@@ -1699,6 +1766,8 @@ impl World {
     /// `att` killed `vic` with `cause`; `head`: the blow was to the head.
     fn kill(&mut self, att: usize, vic: usize, cause: u16, head: bool) {
         self.leave_vehicle(vic);
+        // Off the map, the flag goes home; otherwise it falls with them.
+        self.drop_flag(vic, cause == crate::events::Cause::Fall as u16);
         let v = &mut self.fighters[vic];
         v.alive = false;
         v.health = 0;
@@ -1729,7 +1798,13 @@ impl World {
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
         let gun_game = self.rules.gun_game;
-        if own {
+        if self.rules.ctf {
+            // Captures score; a kill only counts for the fighter.
+            if !own {
+                k.kills += 1;
+                k.grenades = (k.grenades + 1).min(GREN_MAX);
+            }
+        } else if own {
             // A rung is never lost below the first.
             self.score[side] -= 1;
             if gun_game {
@@ -1758,9 +1833,128 @@ impl World {
             pos,
             ..Event::default()
         });
-        if self.score[side] >= self.rules.score_limit {
+        if !self.rules.ctf && self.score[side] >= self.rules.score_limit {
             self.end();
         }
+    }
+
+    /// Capture the Flag's tick: carried flags follow their carriers and
+    /// score at home; a flag at home or on the floor is taken by the first
+    /// enemy on foot to touch it (seat order), a flag on the floor returned
+    /// by the first defender, or by its clock.
+    fn flags_tick(&mut self) {
+        let Some(bases) = self.map.flags.filter(|_| self.rules.ctf && self.rules.teams) else {
+            return;
+        };
+        for t in 0..2 {
+            let fl = self.flags[t];
+            match fl.state {
+                FLAG_HELD => {
+                    let c = fl.carrier as usize;
+                    let at = self.fighters[c].body.pos;
+                    self.flags[t].pos = at;
+                    let own = t ^ 1;
+                    if self.flags[own].state == FLAG_HOME && touches(at, bases[own]) {
+                        self.fighters[c].flag = false;
+                        self.flags[t] = Flag {
+                            pos: bases[t],
+                            ..Flag::default()
+                        };
+                        self.flag_event(3, c as u8, t, bases[own]);
+                        self.score[own] += 1;
+                        if self.score[own] >= self.rules.score_limit && self.phase == Phase::Playing {
+                            self.end();
+                        }
+                    }
+                }
+                _ => {
+                    let down = fl.state == FLAG_DOWN;
+                    if down {
+                        self.flags[t].down_for = fl.down_for.saturating_sub(1);
+                        if self.flags[t].down_for == 0 {
+                            self.flag_home(t, NO_WINNER);
+                            continue;
+                        }
+                    }
+                    for s in 0..MAX_FIGHTERS {
+                        let f = self.fighters[s];
+                        if !f.active() || f.riding().is_some() || !touches(f.body.pos, fl.pos) {
+                            continue;
+                        }
+                        if f.team as usize & 1 == t {
+                            if down {
+                                self.flag_home(t, s as u8);
+                                break;
+                            }
+                        } else if !f.flag && !(down && self.flags[t].down_for > ticks(FLAG_RETURN_MS - FLAG_REGRAB_MS))
+                        {
+                            self.fighters[s].flag = true;
+                            self.flags[t] = Flag {
+                                state: FLAG_HELD,
+                                carrier: s as u8,
+                                pos: f.body.pos,
+                                down_for: 0,
+                            };
+                            self.flag_event(0, s as u8, t, fl.pos);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Seat `s` lets go of the flag it carries, if any: where it stands,
+    /// or home if `home`.
+    fn drop_flag(&mut self, s: usize, home: bool) {
+        if !self.fighters[s].flag {
+            return;
+        }
+        self.fighters[s].flag = false;
+        let Some(t) = (0..2).find(|&t| self.flags[t].state == FLAG_HELD && self.flags[t].carrier as usize == s) else {
+            return;
+        };
+        if home {
+            self.flag_home(t, NO_WINNER);
+            return;
+        }
+        // It falls to the floor under them.
+        let mut at = self.fighters[s].body.pos;
+        at.y = self.map.floor(at.x, at.z, 0.2, at.y + 0.1);
+        self.flags[t] = Flag {
+            state: FLAG_DOWN,
+            carrier: 0,
+            pos: at,
+            down_for: ticks(FLAG_RETURN_MS),
+        };
+        self.flag_event(1, s as u8, t, at);
+    }
+
+    /// Flag `t` goes home: returned by seat `by`, or by its clock
+    /// ([`NO_WINNER`]).
+    fn flag_home(&mut self, t: usize, by: u8) {
+        let Some(bases) = self.map.flags else {
+            return;
+        };
+        let at = self.flags[t].pos;
+        self.flags[t] = Flag {
+            pos: bases[t],
+            ..Flag::default()
+        };
+        self.flag_event(2, by, t, at);
+    }
+
+    /// `part`: 0 taken, 1 dropped, 2 returned, 3 captured; `a` who, `b` the
+    /// flag's side, at `pos`.
+    fn flag_event(&mut self, part: u8, a: u8, t: usize, pos: V3) {
+        self.events.push(Event {
+            kind: Ev::Flag,
+            a,
+            b: t as u8,
+            part,
+            pos,
+            ..Event::default()
+        });
     }
 
     fn end(&mut self) {
@@ -2077,6 +2271,12 @@ impl World {
                 thing::Kind::Pad => hash_all(&self.pads, &mut h),
                 thing::Kind::Vehicle => hash_all(&*self.vehicles, &mut h),
                 thing::Kind::Drop => hash_all(&*self.drops, &mut h),
+                // Only in its mode, so every other mode's golden stands.
+                thing::Kind::Flag => {
+                    if self.rules.ctf {
+                        hash_all(&self.flags, &mut h)
+                    }
+                }
             }
         }
         let (a, b) = self.rng.state();
@@ -2101,6 +2301,12 @@ impl World {
 enum Target {
     Fighter(usize, bool),
     Vehicle(usize),
+}
+
+/// A body at `at` touches a flag at `flag`.
+fn touches(at: V3, flag: V3) -> bool {
+    let d = at - flag;
+    d.flat().len() < FLAG_REACH && crate::fmath::fabs(d.y) < FLAG_RISE
 }
 
 fn pose(f: &Fighter) -> Pose {

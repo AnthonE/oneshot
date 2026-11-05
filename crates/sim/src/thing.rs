@@ -30,10 +30,20 @@ pub enum Kind {
     Vehicle,
     /// A gun (or grenades) on the floor where someone died or let it go.
     Drop,
+    /// Capture the Flag's two flags (red's, blue's); always at rest at
+    /// home outside that mode.
+    Flag,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [Kind::Fighter, Kind::Projectile, Kind::Pad, Kind::Vehicle, Kind::Drop];
+    pub const ALL: [Kind; 6] = [
+        Kind::Fighter,
+        Kind::Projectile,
+        Kind::Pad,
+        Kind::Vehicle,
+        Kind::Drop,
+        Kind::Flag,
+    ];
 }
 
 /// Hashes every slot of `items`, in play or not, so a slot's history counts.

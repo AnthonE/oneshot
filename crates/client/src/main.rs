@@ -328,7 +328,7 @@ A slow machine (a software rasterizer) starts on POTATO by itself until you
 pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
-const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam (or 0 to 6)";
+const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam, ctf, watch (or 0 to 6, 8, 9)";
 
 /// A mode by name or number (proto's `MODE_*`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -341,7 +341,13 @@ fn mode(m: &str) -> Option<u8> {
         "gungame" | "gun-game" => proto::MODE_GUN_GAME,
         "cup" => proto::MODE_CUP,
         "bigteam" | "big-team" => proto::MODE_BIG_TEAM,
-        n => return n.parse().ok().filter(|&n| n <= proto::MODE_BIG_TEAM),
+        "ctf" => proto::MODE_CTF,
+        n => {
+            return n
+                .parse()
+                .ok()
+                .filter(|&n| n <= proto::MODE_BIG_TEAM || n == proto::MODE_CTF)
+        }
     })
 }
 
@@ -352,6 +358,7 @@ mod tests {
         assert_eq!(super::mode("Duel"), Some(proto::MODE_DUEL));
         assert_eq!(super::mode("6"), Some(proto::MODE_BIG_TEAM));
         assert_eq!(super::mode("7"), None);
+        assert_eq!(super::mode("ctf"), Some(proto::MODE_CTF));
     }
 }
 

@@ -80,6 +80,9 @@ pub struct Def {
     /// walking straight at where they're going.
     pub nav: bool,
     pub light: LightDef,
+    /// Capture the Flag's bases, red's then blue's (x y z each); empty on a
+    /// map that plays no CTF.
+    pub flags: &'static [[f32; 3]],
 }
 
 /// How a map is lit: the client's, never read by the sim (like looks).
@@ -177,6 +180,10 @@ impl Def {
                     respawn_ms,
                 })
                 .collect(),
+            flags: match self.flags {
+                [r, b] => Some([v(*r), v(*b)]),
+                _ => None,
+            },
             terrain,
             nav: None,
             light: self.light,
@@ -227,6 +234,9 @@ pub struct Map {
     /// Waypoints for bots, on a map that asks for them.
     pub nav: Option<crate::nav::Nav>,
     pub light: LightDef,
+    /// Capture the Flag's bases, red's then blue's: where each flag sits
+    /// at home and where its side scores. None: no CTF here.
+    pub flags: Option<[V3; 2]>,
 }
 
 impl Map {
@@ -500,6 +510,7 @@ impl Map {
             vehicles: Vec::new(),
             nav: None,
             light: LightDef::DAY,
+            flags: None,
             id: TEST_MAP,
             name: "open",
             looks: vec![0; 4],
@@ -640,6 +651,7 @@ mod tests {
             dress_solids: &[],
             nav: false,
             light: LightDef::DAY,
+            flags: &[],
         }
         .build()
     }

@@ -280,3 +280,14 @@ pub const SPLAT_SPEED: f32 = 5.0;
 pub const SPLAT_KILL: f32 = 11.0;
 /// How much of a blast's push a vehicle takes.
 pub const VEH_PUSH_K: f32 = 0.3;
+
+// Capture the Flag.
+/// How near (flat) a fighter must come to a flag to take, return or score
+/// it, and how far above or below.
+pub const FLAG_REACH: f32 = 1.2;
+pub const FLAG_RISE: f32 = 2.0;
+/// A flag left on the floor goes home on its own after this.
+pub const FLAG_RETURN_MS: u32 = 30_000;
+/// Nobody takes a flag in its first second on the floor, so a carrier who
+/// lets go doesn't pick it straight back up.
+pub const FLAG_REGRAB_MS: u32 = 1000;

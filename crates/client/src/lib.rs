@@ -16,11 +16,13 @@
 
 pub mod asset_fetch;
 pub mod binds;
+pub mod challenges;
 pub mod clip;
 pub mod config;
 pub mod display;
 pub mod door;
 pub mod film;
+pub mod flags;
 pub mod front;
 pub mod hud;
 pub mod items;
@@ -370,6 +372,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<flags::Flags>()
+    .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
@@ -515,7 +519,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
-            items::draw,
+            (items::draw, flags::draw),
             fly,
             view,
             // The gun in view before the effects: our own flash sits on
@@ -652,6 +656,22 @@ fn pump(
     // back, turns nothing and fires nothing).
     let grabbed =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
+    // Watching a match: we look where the player we follow looks (their
+    // snapshots' aim, as a film does), and a click or Space follows the
+    // next one. Nothing we press is sent.
+    if link.0.session().watch && link.0.live() {
+        let next = grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::Space));
+        if next {
+            link.0.session_mut().follow_next();
+        }
+        let (f, _) = link.0.session().core.own();
+        let turn = core::f32::consts::TAU / 65536.0;
+        look.yaw = f.yaw as f32 * turn;
+        look.pitch = f.pitch as f32 * turn;
+        look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        link.0.update(Input::default());
+        return;
+    }
     let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
