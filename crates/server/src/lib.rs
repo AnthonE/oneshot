@@ -37,8 +37,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES,
-    MODE_DUEL, MODE_FFA, MODE_GUN_GAME,
+    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP,
+    MODE_DOUBLES, MODE_DUEL, MODE_FFA, MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -109,11 +109,12 @@ pub struct Config {
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
     /// A casual room's rules: against a bot, free for all, Gun Game, Big
-    /// Team.
+    /// Team, Capture the Flag.
     pub rules: Rules,
     pub ffa: Rules,
     pub gun_game: Rules,
     pub big_team: Rules,
+    pub ctf: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -181,6 +182,7 @@ impl Default for Config {
             ffa: Rules::ffa(),
             gun_game: Rules::gun_game(),
             big_team: Rules::big_team(),
+            ctf: Rules::ctf(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             cup: Rules {
@@ -519,11 +521,12 @@ impl Sim {
             MODE_CUP => self.cfg.cup,
             MODE_FFA => self.cfg.ffa,
             MODE_BIG_TEAM => self.cfg.big_team,
+            MODE_CTF => self.cfg.ctf,
             MODE_GUN_GAME => self.cfg.gun_game,
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
         };
-        let map = self.pick_map(seed, mode == MODE_BIG_TEAM);
+        let map = self.pick_map(seed, mode == MODE_BIG_TEAM, rules.ctf);
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
@@ -535,16 +538,24 @@ impl Sim {
 
     /// The map a room plays, from its seed (what clients may know anyway):
     /// the `--map` ones if any are given, else Big Team on the big maps and
-    /// everything else on the arenas.
-    fn pick_map(&self, seed: u64, big: bool) -> Map {
+    /// everything else on the arenas; Capture the Flag only where there are
+    /// flags.
+    fn pick_map(&self, seed: u64, big: bool, ctf: bool) -> Map {
+        let flags = |id: &u8| !ctf || sim::maps::ALL.iter().any(|d| d.id == *id && d.flags.len() == 2);
         let given: Vec<u8> = self
             .cfg
             .maps
             .iter()
             .copied()
             .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
+            .filter(flags)
             .collect();
-        let rotation = || sim::maps::ALL.iter().filter(|d| !d.practice);
+        let rotation = || {
+            sim::maps::ALL
+                .iter()
+                .filter(|d| !d.practice)
+                .filter(move |d| !ctf || d.flags.len() == 2)
+        };
         let sized: Vec<u8> = rotation().filter(|d| d.big() == big).map(|d| d.id).collect();
         let ids = if !given.is_empty() {
             given
@@ -587,7 +598,7 @@ impl Sim {
                         tx,
                     } => {
                         let mode = match mode {
-                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
+                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF => mode,
                             _ => MODE_CASUAL,
                         };
                         let live_room =
@@ -1141,6 +1152,7 @@ fn mode_name(mode: u8) -> &'static str {
         MODE_GUN_GAME => "Gun Game",
         MODE_CUP => "A cup",
         MODE_BIG_TEAM => "Big Team",
+        MODE_CTF => "Capture the Flag",
         _ => "Against the bot",
     }
 }

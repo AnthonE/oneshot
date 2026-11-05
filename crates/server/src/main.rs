@@ -77,6 +77,7 @@ fn main() {
                     &mut cfg.doubles,
                     &mut cfg.ffa,
                     &mut cfg.big_team,
+                    &mut cfg.ctf,
                     &mut cfg.duel,
                     &mut cfg.cup,
                 ] {

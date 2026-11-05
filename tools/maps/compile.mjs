@@ -55,6 +55,8 @@
 //             where a vehicle starts and comes back
 //   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
 //             rather than walking straight where they're going
+//   flag      { at: [x, z, y?] }: red's flag base for Capture the Flag,
+//             placed again at its mirror image for blue (needs "mirror")
 //   callouts  [{ name, at: [x, z, y?] }]: places tools/flow names; not compiled
 //   light     { ev100, sun, fill, lamps: [{ at: [x, z, y], color: [r, g, b],
 //             lm, mirror: bool }], floor: look, sea: y }: drawing only
@@ -423,6 +425,13 @@ export function compile(spec, where = 'map.json') {
     }
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
+  let flags = [];
+  if (spec.flag !== undefined) {
+    const p = point(spec.flag.at, 'flag');
+    const im = mirrors.find(([, , swap]) => swap);
+    if (!im) fail('flag: needs a "mirror" that swaps sides');
+    flags = [p, [p[0] * im[0], p[1], p[2] * im[1]]];
+  }
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
 
   // The boulders, last: they keep clear of everything above.
@@ -435,7 +444,7 @@ export function compile(spec, where = 'map.json') {
     rocks = planned.length;
   }
   if (boxes.length + solids.length > MAX_BOXES) fail(`${boxes.length} boxes and ${solids.length} solids, at most ${MAX_BOXES} together`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles, dress, dressSolids, rocks };
+  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles, flags, dress, dressSolids, rocks };
 }
 
 // ----------------------------------------------------------- terrain maths
@@ -1144,6 +1153,7 @@ export function rust(m, src) {
   for (const s of m.dressSolids) L.push(`        (${solidRow(s)}, ${LOOKS.indexOf(s.look)}),`);
   L.push('    ],');
   L.push(`    nav: ${m.nav},`);
+  L.push(`    flags: &[${m.flags.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   const lt = m.light;
   if (lt.ev100 === 0 && lt.sun === 1 && lt.fill === 1 && !lt.lamps.length && lt.floor === 255 && lt.sea === null) L.push('    light: crate::map::LightDef::DAY,');
   else {

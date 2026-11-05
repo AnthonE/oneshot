@@ -89,6 +89,50 @@
       }
     },
     {
+      "desc": "Win a game of Capture the Flag",
+      "hidden": false,
+      "icon": "flag",
+      "id": "CTF_WIN",
+      "name": "Flag day",
+      "progress": {
+        "max": 1,
+        "stat": "ctf_wins"
+      }
+    },
+    {
+      "desc": "Carry the enemy's flag home",
+      "hidden": false,
+      "icon": "arrowhead",
+      "id": "CAPTURE_1",
+      "name": "Home run",
+      "progress": {
+        "max": 1,
+        "stat": "captures"
+      }
+    },
+    {
+      "desc": "Capture 25 flags",
+      "hidden": false,
+      "icon": "spears",
+      "id": "CAPTURE_25",
+      "name": "Flag runner",
+      "progress": {
+        "max": 25,
+        "stat": "captures"
+      }
+    },
+    {
+      "desc": "Return your own flag 10 times",
+      "hidden": false,
+      "icon": "campfire",
+      "id": "RETURN_10",
+      "name": "Not today",
+      "progress": {
+        "max": 10,
+        "stat": "flag_returns"
+      }
+    },
+    {
       "desc": "Finish a ranked match",
       "hidden": false,
       "icon": "upgrade",
@@ -499,6 +543,21 @@
       "agg": "sum",
       "id": "big_team_wins",
       "name": "Big Team wins"
+    },
+    {
+      "agg": "sum",
+      "id": "ctf_wins",
+      "name": "Capture the Flag wins"
+    },
+    {
+      "agg": "sum",
+      "id": "captures",
+      "name": "Flags captured"
+    },
+    {
+      "agg": "sum",
+      "id": "flag_returns",
+      "name": "Flags returned"
     },
     {
       "agg": "sum",

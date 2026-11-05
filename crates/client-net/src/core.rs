@@ -1097,6 +1097,7 @@ fn as_remote(slot: u8, f: &Fighter) -> Remote {
         pitch: f.pitch,
         arm: f.gun().arm,
         shield: (f.shield.max(0) as i64 * 255 / sim::consts::SHIELD_MAX as i64) as u8,
+        flag: f.flag,
     }
 }
 

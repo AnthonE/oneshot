@@ -21,6 +21,7 @@ pub mod config;
 pub mod display;
 pub mod door;
 pub mod film;
+pub mod flags;
 pub mod front;
 pub mod hud;
 pub mod items;
@@ -384,6 +385,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<flags::Flags>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
@@ -522,7 +524,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (draw_fighters, draw_vehicles, look::foliage::update).chain(),
-            items::draw,
+            (items::draw, flags::draw),
             fly,
             view,
             // The gun in view before the effects: our own flash sits on

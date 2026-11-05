@@ -94,6 +94,7 @@ pub fn fits(mode: u8, n: usize, wallets: usize) -> bool {
         proto::MODE_DOUBLES => n <= 2 && wallets == n,
         proto::MODE_CUP => wallets == n,
         proto::MODE_FFA | proto::MODE_GUN_GAME => n <= 8,
+        proto::MODE_CTF => n <= 4,
         proto::MODE_BIG_TEAM => n <= MAX_PARTY,
         _ => false,
     }

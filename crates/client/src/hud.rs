@@ -922,6 +922,44 @@ fn feed_line(st: &HudState, me: u8, slot: u8, medal: u8, victim: u8) -> Option<S
     })
 }
 
+/// A side's name, as the flags are called.
+fn side_name(t: u8) -> &'static str {
+    if t & 1 == 0 {
+        "RED"
+    } else {
+        "BLUE"
+    }
+}
+
+/// What the feed says of a flag event (`sim::events::Kind::Flag`).
+fn flag_line(st: &HudState, part: u8, who: u8, flag: u8) -> String {
+    let f = side_name(flag);
+    match part {
+        0 => format!("{} took the {f} flag", st.name(who)),
+        1 => format!("{f} flag dropped"),
+        2 if who == 255 => format!("{f} flag returned"),
+        2 => format!("{} returned the {f} flag", st.name(who)),
+        _ => format!("{} captured the {f} flag", st.name(who)),
+    }
+}
+
+/// Capture the Flag: where each flag is, one line, over the feed.
+fn flags_line(st: &HudState, s: &proto::Snapshot) -> String {
+    s.flags()
+        .iter()
+        .enumerate()
+        .map(|(t, f)| {
+            let where_ = match f.state {
+                sim::world::FLAG_HELD => format!("TAKEN by {}", st.name(f.carrier)),
+                sim::world::FLAG_DOWN => format!("DROPPED, home in {}s", f.down_s),
+                _ => "HOME".into(),
+            };
+            format!("{} FLAG {where_}", side_name(t as u8))
+        })
+        .collect::<Vec<_>>()
+        .join("    ")
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
     let me = s.core.slot;
@@ -962,6 +1000,8 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         } else if e.kind == Kind::Kill as u8 && e.a == me && e.b != me {
             st.hit_at = now;
             st.hit_kill = true;
+        } else if e.kind == Kind::Flag as u8 {
+            st.feed.push((flag_line(st, e.part, e.a, e.b), now));
         }
     }
     // Our shield breaking.
@@ -1156,7 +1196,10 @@ pub fn draw(
         _ if !f.alive => st.death_line.clone(),
         _ => String::new(),
     };
-    let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
+    let mut feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
+    if snap.n_flags > 0 {
+        feed = format!("{}\n{feed}", flags_line(&st, snap));
+    }
     let net = if st.net {
         let n = core.stats;
         format!(

@@ -127,6 +127,20 @@ fn snapshot() -> Snapshot {
         pitch: 100,
         arm: BR,
         shield: 200,
+        flag: true,
+    };
+    // Capture the Flag: red's flag held by seat 1, blue's on the floor.
+    s.n_flags = 2;
+    s.flags[0] = FlagState {
+        state: 1,
+        carrier: 1,
+        ..FlagState::default()
+    };
+    s.flags[1] = FlagState {
+        state: 2,
+        carrier: 0,
+        pos: V3::new(18.5, 0.0, -2.0),
+        down_s: 27,
     };
     s.proj[0] = ProjState {
         kind: 0,
@@ -424,6 +438,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
+    assert_eq!(d.flags(), s.flags());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -490,13 +505,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xc72a_f16d_81bf_711b,
-        0xa984_1747_0db7_abd1,
-        0xb56b_7c56_efdf_0dde,
+        0xaec2_e834_0768_a087,
+        0xe578_6b8e_5686_c94a,
+        0x5157_5e84_0a0c_495b,
         0x7ebe_34b8_2c10_f2d0,
-        0xe3b4_a54a_5a16_6273,
-        0xf3f5_af92_56b2_fbea,
-        0x7bc6_ae95_b05a_7d4a,
+        0x7ab6_78d6_f6ba_aa53,
+        0x9571_1811_717b_689e,
+        0x2de7_5365_85c7_fca3,
         0x0835_ec07_b4ee_4fb0,
         0x3f28_24ea_ec0c_5c91,
         0xd5ca_75af_c4fa_c9d7,

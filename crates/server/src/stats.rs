@@ -11,7 +11,7 @@
 //! A player is their wallet, or their Elo Pros account's `acct_` id when they
 //! signed in without one. A guest is nobody and is never reported.
 
-use proto::{medal, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA, MODE_GUN_GAME};
+use proto::{medal, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA, MODE_GUN_GAME};
 use room::medals::Tally;
 use serde_json::{json, Value};
 
@@ -57,6 +57,9 @@ pub const STATS: &[Stat] = &[
     sum("ffa_wins", "Free for all wins"),
     sum("gun_game_wins", "Gun Game wins"),
     sum("big_team_wins", "Big Team wins"),
+    sum("ctf_wins", "Capture the Flag wins"),
+    sum("captures", "Flags captured"),
+    sum("flag_returns", "Flags returned"),
     sum("cups_played", "Cups finished"),
     sum("cup_wins", "Cups won"),
     sum("kills", "Kills"),
@@ -149,6 +152,38 @@ pub const ACHIEVEMENTS: &[Achievement] = &[
         "flag",
         "big_team_wins",
         1,
+    ),
+    ach(
+        "CTF_WIN",
+        "Flag day",
+        "Win a game of Capture the Flag",
+        "flag",
+        "ctf_wins",
+        1,
+    ),
+    ach(
+        "CAPTURE_1",
+        "Home run",
+        "Carry the enemy's flag home",
+        "arrowhead",
+        "captures",
+        1,
+    ),
+    ach(
+        "CAPTURE_25",
+        "Flag runner",
+        "Capture 25 flags",
+        "spears",
+        "captures",
+        25,
+    ),
+    ach(
+        "RETURN_10",
+        "Not today",
+        "Return your own flag 10 times",
+        "campfire",
+        "flag_returns",
+        10,
     ),
     ach(
         "RANKED_FIRST",
@@ -470,6 +505,7 @@ fn match_report(p: &Played) -> Value {
             MODE_FFA => Some("ffa_wins"),
             MODE_GUN_GAME => Some("gun_game_wins"),
             MODE_BIG_TEAM => Some("big_team_wins"),
+            MODE_CTF => Some("ctf_wins"),
             // A cup heat is counted with its cup.
             _ => None,
         };
@@ -485,6 +521,8 @@ fn match_report(p: &Played) -> Value {
     put("most_kills", t.kills as u64);
     put("best_spree", t.best_spree as u64);
     put("best_multi", t.best_multi as u64);
+    put("captures", t.captures as u64);
+    put("flag_returns", t.returns as u64);
     for (id, &n) in t.medals.iter().enumerate().skip(1) {
         put(&medal_stat(id as u8), n as u64);
     }
@@ -626,6 +664,8 @@ mod tests {
             damage: 2400,
             best_spree: 11,
             best_multi: 4,
+            captures: 2,
+            returns: 1,
             ..Tally::default()
         };
         for m in t.medals.iter_mut().skip(1) {
@@ -663,6 +703,7 @@ mod tests {
             MODE_GUN_GAME,
             MODE_CUP,
             MODE_BIG_TEAM,
+            MODE_CTF,
         ] {
             for (won, finished) in [(true, true), (false, true), (false, false)] {
                 lines.push(Line::Match(Played {

@@ -645,6 +645,7 @@ pub fn build(
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
             sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
+            sim::thing::Kind::Flag => add_flags(&mut snap, w),
         }
     }
     // What this client may be told of the new events joins its queue; the
@@ -689,6 +690,7 @@ fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usiz
             pitch: f.pitch,
             arm: f.gun().arm,
             shield: (f.shield.max(0) as i64 * 255 / SHIELD_MAX as i64) as u8,
+            flag: f.flag,
         };
         snap.n_remote += 1;
     }
@@ -782,6 +784,24 @@ fn add_vehicles(
     }
 }
 
+/// Capture the Flag's flags: at home or on the floor, where (public, as
+/// Halo's waypoints are); carried, by whom, never where.
+fn add_flags(snap: &mut Snapshot, w: &World) {
+    if !w.rules.ctf {
+        return;
+    }
+    for (t, f) in w.flags.iter().enumerate() {
+        let held = f.state == sim::world::FLAG_HELD;
+        snap.flags[t] = proto::FlagState {
+            state: f.state,
+            carrier: if held { f.carrier } else { 0 },
+            pos: if held { V3::ZERO } else { f.pos },
+            down_s: f.down_for.div_ceil(TICK_HZ).min(63) as u8,
+        };
+    }
+    snap.n_flags = 2;
+}
+
 /// Pad timers are public: they say when a gun is back, not who is near.
 fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
@@ -863,6 +883,9 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
         }
         // A wreck seen (its blast is sent as a Blast, heard or seen).
         Ev::Wreck => (known(a) || w.map.clear(eye, e.pos)).then_some(full),
+        // A flag taken, dropped, returned or scored is announced to
+        // everyone; where is a base or the flag's own public place.
+        Ev::Flag => Some(full),
         Ev::None => None,
     }
 }
