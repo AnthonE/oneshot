@@ -49,7 +49,7 @@ jobs:
           key: desktop-${{ matrix.target }}
       - name: build
         working-directory: crates/client
-        run: cargo build --release --locked --bin oneshot --features ${{ matrix.features }}
+        run: cargo build --profile desktop --locked --bin oneshot --features ${{ matrix.features }}
       - name: test
         if: runner.os == 'Linux'
         working-directory: crates/client
@@ -60,7 +60,7 @@ jobs:
           name=oneshot-${{ matrix.target }}
           mkdir -p "pkg/$name"
           exe=oneshot; [ "$RUNNER_OS" = Windows ] && exe=oneshot.exe
-          cp "crates/client/target/release/$exe" "pkg/$name/"
+          cp "crates/client/target/desktop/$exe" "pkg/$name/"
           cp -r crates/client/assets "pkg/$name/assets"
           cp NOTICE "pkg/$name/"
           cp crates/client/DESKTOP.md "pkg/$name/README.md"

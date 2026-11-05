@@ -60,11 +60,22 @@ for f in oneshot_client.js oneshot_client_bg.wasm oneshot_client_gpu.js oneshot_
 done
 grep -q '"profile":"web"' "$OUT/build.json" || {
   echo "$OUT is a dev build (ci/client.sh dev): run ci/client.sh for the real one" >&2; exit 1; }
+grep -q '"wasm_opt":true' "$OUT/build.json" || {
+  echo "$OUT's modules skipped wasm-opt: npm ci (binaryen), then ci/client.sh" >&2; exit 1; }
 # Where the page finds the game box: server.json and /nonce (its index.html).
 printf '{"server":"%s"}\n' "$SERVER" > "$OUT/origin.json"
-# nginx serves .gz beside a file when there is one (gzip_static).
+# nginx serves .gz beside a file when there is one (gzip_static). `-n`: no
+# name or time in the header, so an unchanged file gzips to the same bytes
+# and --link-dest hard-links it. Brotli twins too where the box has brotli
+# (a quarter smaller than gzip on Gates' module); inert until the page's
+# nginx block says `brotli_static on;`.
 find "$OUT" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' \) \
-  -exec gzip -kf9 {} \;
+  -exec gzip -nkf9 {} \;
+if command -v brotli >/dev/null; then
+  find "$OUT" -type f \( -name '*.wasm' -o -name '*.js' \) -exec brotli -q 11 -kf {} \;
+else
+  echo "== brotli: not installed, no .br twins (apt install brotli)"
+fi
 
 sha=$(git rev-parse --short=12 HEAD)
 dirty=$(git diff --quiet HEAD -- . && echo "" || echo "-dirty")
