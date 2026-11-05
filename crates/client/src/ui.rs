@@ -89,60 +89,59 @@ pub fn bold(size: f32) -> TextFont {
     }
 }
 
-// ---- the palette: the dashboard's (`web/index.html`) ----
+// ---- the palette: Gates' (`render/ui.rs`, `client-web/web/index.html`) ----
 //
-// Near-black green glass, pale green type, and one lit green for what is
-// picked or pressed: the page's menu and the game's own screens (the title,
-// the Esc menu, the settings) are one look. Gold is the medals' alone.
+// Warm greys (R > G > B in every one), the blue of a selection, and one
+// saturated control on a screen. Ours in one place: the mark and the PLAY
+// button are oneshot's gold where Gates has its sigil's green.
 
 /// The screen behind everything: darker than any panel.
-pub const BG: Color = Color::srgb(0.012, 0.031, 0.012);
+pub const BG: Color = Color::srgb(0.106, 0.098, 0.086);
 /// A panel on the background: the settings' rail and pane off a match.
-pub const PANEL: Color = Color::srgba(0.05, 0.12, 0.045, 0.96);
+pub const PANEL: Color = Color::srgba(0.259, 0.243, 0.224, 1.0);
 /// A clickable row at rest, and under the pointer.
-pub const ROW_IDLE: Color = Color::srgba(0.09, 0.21, 0.07, 0.86);
-pub const ROW_HOVER: Color = Color::srgba(0.18, 0.40, 0.11, 0.95);
-/// The selection: the lit green.
-pub const ACCENT: Color = Color::srgb(0.616, 1.0, 0.235);
-pub const ACCENT_HOVER: Color = Color::srgb(0.79, 1.0, 0.54);
+pub const ROW_IDLE: Color = Color::srgba(0.169, 0.153, 0.137, 0.92);
+pub const ROW_HOVER: Color = Color::srgba(0.278, 0.263, 0.235, 1.0);
+/// The selection: the one cool hue on a warm panel.
+pub const ACCENT: Color = Color::srgb(0.224, 0.510, 0.729);
+pub const ACCENT_HOVER: Color = Color::srgb(0.290, 0.580, 0.800);
 /// A selected row in a list: the accent, see-through.
-pub const PICKED: Color = Color::srgba(0.616, 1.0, 0.235, 0.26);
+pub const PICKED: Color = Color::srgba(0.224, 0.510, 0.729, 0.32);
 /// Hairlines.
-pub const RULE: Color = Color::srgba(0.67, 1.0, 0.43, 0.30);
-pub const RULE_HI: Color = Color::srgba(0.78, 1.0, 0.55, 0.62);
+pub const RULE: Color = Color::srgba(0.75, 0.72, 0.62, 0.20);
+pub const RULE_HI: Color = Color::srgba(0.75, 0.72, 0.62, 0.34);
 /// The shell's grounds: see-through, so the scene moves behind them.
-pub const PANEL_BG: Color = Color::srgba(0.03, 0.08, 0.03, 0.80);
-pub const STAGE_BG: Color = Color::srgba(0.02, 0.05, 0.02, 0.60);
+pub const PANEL_BG: Color = Color::srgba(0.118, 0.106, 0.094, 0.84);
+pub const STAGE_BG: Color = Color::srgba(0.078, 0.071, 0.063, 0.68);
 /// The settings over a live match: heavier, the type has a moving scene
 /// behind it.
-pub const PANE_BG: Color = Color::srgba(0.02, 0.05, 0.02, 0.88);
-/// A shade over a match (the Esc menu, the carnage report).
-pub const SHADE: Color = Color::srgba(0.012, 0.035, 0.012, 0.84);
+pub const PANE_BG: Color = Color::srgba(0.086, 0.078, 0.070, 0.86);
 /// The front screen's one saturated colour: the nav's bar, the PLAY
-/// button.
-pub const MARK: Color = Color::srgb(0.48, 0.86, 0.16);
-pub const GO_HOVER: Color = Color::srgb(0.616, 1.0, 0.235);
-pub const GO_INK: Color = Color::srgb(0.012, 0.024, 0.012);
-/// Type on a lit button.
-pub const INK: Color = GO_INK;
+/// button. Oneshot's gold (Gates': `#86b834`).
+pub const MARK: Color = Color::srgb(0.91, 0.725, 0.192);
+pub const GO_HOVER: Color = Color::srgb(0.96, 0.8, 0.33);
+pub const GO_INK: Color = Color::srgb(0.067, 0.059, 0.031);
 /// PLAY with nothing to do yet (connecting, waiting in a queue).
-pub const GO_WAIT: Color = Color::srgb(0.17, 0.33, 0.09);
+pub const GO_WAIT: Color = Color::srgb(0.40, 0.33, 0.13);
 /// A sunken well: a text field, the identity block.
-pub const WELL: Color = Color::srgba(0.0, 0.02, 0.0, 0.42);
+pub const WELL: Color = Color::srgba(0.0, 0.0, 0.0, 0.30);
 /// A nav entry at rest: dimmer than `DIM`, so the picked one is obvious.
-pub const NAV_IDLE: Color = Color::srgba(0.62, 0.78, 0.54, 0.62);
+pub const NAV_IDLE: Color = Color::srgba(0.67, 0.65, 0.61, 0.62);
 /// Type, in four weights of attention.
-pub const TITLE: Color = Color::srgb(0.914, 1.0, 0.85);
-pub const TEXT_COLOR: Color = Color::srgb(0.88, 0.97, 0.82);
-pub const DIM: Color = Color::srgba(0.62, 0.75, 0.55, 0.9);
-pub const FAINT: Color = Color::srgba(0.45, 0.58, 0.40, 0.85);
+pub const TITLE: Color = Color::srgb(0.93, 0.92, 0.90);
+pub const TEXT_COLOR: Color = Color::srgb(0.92, 0.90, 0.85);
+pub const DIM: Color = Color::srgba(0.74, 0.72, 0.68, 0.86);
+pub const FAINT: Color = Color::srgba(0.62, 0.60, 0.56, 0.80);
 /// A line that went wrong, or right.
-pub const BAD: Color = Color::srgb(1.0, 0.54, 0.48);
-pub const GOOD: Color = Color::srgb(0.65, 1.0, 0.43);
+pub const BAD: Color = Color::srgb(0.89, 0.54, 0.42);
+pub const GOOD: Color = Color::srgb(0.65, 0.81, 0.43);
 /// Elo Pros' own lime: a signed-in wallet.
 pub const ELO: Color = Color::srgb(0.72, 1.0, 0.22);
-/// Gold: the best medals, whatever the menus' colour.
-pub const GOLD: Color = Color::srgb(0.91, 0.725, 0.192);
+
+/// A shade over a match (the Esc menu, the carnage report).
+pub const SHADE: Color = Color::srgba(0.055, 0.047, 0.039, 0.86);
+/// Gold: the best medals.
+pub const GOLD: Color = MARK;
 
 /// A button's background at rest and under the pointer: carried per
 /// entity, so a selected row isn't repainted on the way past it.

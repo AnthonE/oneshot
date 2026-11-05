@@ -159,7 +159,8 @@ impl NativeClient {
 /// native client's party.
 pub struct NativeLobby {
     conn: Connection,
-    send: tokio::sync::Mutex<wtransport::SendStream>,
+    /// To the writer task: messages go out in the order they're given.
+    out: tokio::sync::mpsc::UnboundedSender<Msg>,
     msgs: tokio::sync::Mutex<UnboundedReceiver<Msg>>,
     voices: tokio::sync::Mutex<UnboundedReceiver<proto::voice::VoiceFrame>>,
     closed: Arc<AtomicBool>,
@@ -194,9 +195,20 @@ impl NativeLobby {
                 }
             }
         });
+        let (out, mut outq) = unbounded_channel::<Msg>();
+        let mut send = _send;
+        tokio::spawn(async move {
+            let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+            while let Some(m) = outq.recv().await {
+                let Ok(n) = frame_msg(&m, &mut f) else { continue };
+                if send.write_all(&f[..n]).await.is_err() {
+                    break;
+                }
+            }
+        });
         Ok(NativeLobby {
             conn,
-            send: tokio::sync::Mutex::new(_send),
+            out,
             msgs: tokio::sync::Mutex::new(msgs),
             voices: tokio::sync::Mutex::new(voices),
             closed,
@@ -205,14 +217,35 @@ impl NativeLobby {
     }
 
     pub async fn send(&self, m: &Msg) -> Result<(), String> {
-        let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
-        let n = frame_msg(m, &mut f).map_err(|_| "frame".to_string())?;
-        self.send
-            .lock()
-            .await
-            .write_all(&f[..n])
-            .await
-            .map_err(|e| e.to_string())
+        self.send_now(*m);
+        Ok(())
+    }
+
+    /// A message to the server, after every one before it; never waits.
+    pub fn send_now(&self, m: Msg) {
+        let _ = self.out.send(m);
+    }
+
+    /// Stream messages since the last call, without waiting.
+    pub fn take(&self) -> Vec<Msg> {
+        let mut out = Vec::new();
+        if let Ok(mut q) = self.msgs.try_lock() {
+            while let Ok(m) = q.try_recv() {
+                out.push(m);
+            }
+        }
+        out
+    }
+
+    /// Voice frames since the last call, without waiting.
+    pub fn take_voice(&self) -> Vec<proto::voice::VoiceFrame> {
+        let mut out = Vec::new();
+        if let Ok(mut q) = self.voices.try_lock() {
+            while let Ok(f) = q.try_recv() {
+                out.push(f);
+            }
+        }
+        out
     }
 
     pub fn send_voice(&self, f: &proto::voice::VoiceFrame) -> bool {

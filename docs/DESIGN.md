@@ -321,8 +321,9 @@ runs. A no-spread cheat has nothing to cancel.
 - **Ranked needs a wallet.** `ratings.py` refuses login-only `acct_` ids. A
   login plays casual.
 - **One seat per wallet per match.**
-- **Parties, friends, voice** (`server/src/party.rs`, `lobby.rs`): the page
-  keeps a lobby session (`MODE_LOBBY`) beside any match. Everyone is in a
+- **Parties, friends, voice** (`server/src/party.rs`, `lobby.rs`; the
+  client's `party.rs`, PARTY and FRIENDS on the title): the game keeps a
+  lobby session (`MODE_LOBBY`) beside any match. Everyone is in a
   party, of one until they join someone's by its code; the leader picks who
   may join (anyone with the link, the leader's Elo Pros friends, invite only)
   and starts a mode for everyone present, who are then seated together (one
