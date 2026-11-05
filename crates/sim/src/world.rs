@@ -1153,7 +1153,8 @@ impl World {
         let mut ground = false;
         vel.y -= g * DT;
         let mut n = *pos + *vel * DT;
-        let floor = self.map.floor(n.x, n.z, 0.0, pos.y + 0.001);
+        // Profile solids are met below, along their own normals.
+        let floor = self.map.floor_flat(n.x, n.z, 0.0, pos.y + 0.001);
         if n.y < floor {
             touched = true;
             ground = true;
@@ -1194,6 +1195,44 @@ impl World {
             }
         }
         for s in &self.map.solids {
+            if s.is_profile() {
+                if !s.contains(n) {
+                    continue;
+                }
+                touched = true;
+                let step = n - *pos;
+                let l = step.len();
+                let hit = if l > 0.0 {
+                    s.ray_hit(*pos, step * (1.0 / l), l)
+                } else {
+                    None
+                };
+                match hit {
+                    Some((t, piece)) if piece != crate::profile::Piece::Inside => {
+                        // Off the surface as it is there: along the part
+                        // into it, back out; on ground it can stand on, the
+                        // rest slides on as on a slope.
+                        let h = *pos + step * (t / l);
+                        let nn = s.normal(piece, h);
+                        n = h + nn * 0.01;
+                        let into = vel.dot(nn);
+                        if nn.y >= crate::consts::WALK_NY {
+                            ground = true;
+                            let along = *vel - nn * into;
+                            *vel = along * slide - nn * (into * bounce);
+                        } else if into < 0.0 {
+                            *vel = *vel - nn * (into * (1.0 + bounce));
+                        }
+                    }
+                    _ => {
+                        // It started inside: up out of the top.
+                        ground = true;
+                        n.y = s.top_at(n.x, n.z) + 0.01;
+                        vel.y = -vel.y * bounce;
+                    }
+                }
+                continue;
+            }
             let top = s.top_at(n.x, n.z);
             if !(n.y > s.y0 && n.y < top && s.over(n.x, n.z, 0.0)) {
                 continue;
@@ -2133,4 +2172,72 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
     let (sr, cr) = crate::fmath::sin_cos(r);
     let (st, ct) = crate::fmath::sin_cos(th);
     (base * cr + (right * ct + up2 * st) * sr).norm()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hemisphere 2 m round at the origin, a flat floor round it.
+    fn dome() -> Map {
+        crate::map::Def {
+            id: 250,
+            practice: true,
+            name: "dome",
+            lo: (-10.0, -10.0),
+            hi: (10.0, 10.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([-8.0, 0.0, 0.0], 0, 0), ([8.0, 0.0, 0.0], 0, 1)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[],
+            solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
+            profiles: &[(
+                3,
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[
+                    [0.0, 0.0, 2.0],
+                    [0.7, 0.0, 1.873],
+                    [1.2, 0.0, 1.6],
+                    [1.6, 0.0, 1.2],
+                    [1.873, 0.0, 0.7],
+                    [2.0, 0.0, 0.0],
+                ],
+                0,
+            )],
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+        }
+        .build()
+    }
+
+    #[test]
+    fn a_grenade_bounces_off_a_dome_along_its_normal() {
+        let w = World::new(dome(), Rules::ffa(), 1, (0, 0));
+        // Straight down onto its flank where it is 60° steep: off it,
+        // outward.
+        let until = |mut pos: V3, mut vel: V3| {
+            for _ in 0..TICK_HZ {
+                let (touched, ground) = w.bounce_at(&mut pos, &mut vel, 0.0, 0.5, 0.8);
+                if touched {
+                    return (pos, vel, ground);
+                }
+            }
+            panic!("never met it: {pos:?}");
+        };
+        let (pos, vel, ground) = until(V3::new(1.75, 2.5, 0.0), V3::new(0.0, -10.0, 0.0));
+        assert!(!ground && vel.x > 3.0 && vel.y > -8.0, "{pos:?} {vel:?}");
+        assert!(!w.map.solids[0].contains(pos), "out of it: {pos:?}");
+        // Down onto its crown: it lands, as on a floor, rolling outward
+        // off the crown's slope.
+        let (pos, vel, ground) = until(V3::new(0.1, 2.5, 0.0), V3::new(0.0, -6.0, 0.0));
+        assert!(ground && vel.y > 0.0 && vel.x > 0.0 && vel.x < 2.0, "{pos:?} {vel:?}");
+    }
 }

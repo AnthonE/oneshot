@@ -370,6 +370,10 @@ pub const DEF: Def = Def {
     ],
     dress_solids: &[
     ],
+    profiles: &[
+    ],
+    dress_profiles: &[
+    ],
     nav: false,
     light: crate::map::LightDef {
         ev100: 0.0,

@@ -12,6 +12,10 @@ use crate::terrain::{Terrain, TerrainDef};
 /// Any team may spawn here.
 pub const ANY_TEAM: u8 = 255;
 
+/// A profile solid as the compiler writes it: kind, numbers and knots
+/// ([`Solid::profile`]), and how it is drawn.
+pub type ProfileDef = (u8, [f32; 8], &'static [[f32; 3]], u8);
+
 #[derive(Clone, Copy, Debug)]
 pub struct Spawn {
     pub pos: V3,
@@ -76,6 +80,11 @@ pub struct Def {
     pub dress: &'static [([f32; 6], u8)],
     /// And solids drawn only (kind, numbers as `solids`, look).
     pub dress_solids: &'static [(u8, [f32; 8], u8)],
+    /// Profile solids ([`Solid::profile`]: kind, numbers, knots), and how
+    /// each is drawn: in [`Map::solids`] after the others.
+    pub profiles: &'static [ProfileDef],
+    /// And profile solids drawn only.
+    pub dress_profiles: &'static [ProfileDef],
     /// Bots find their way by waypoints ([`crate::nav`]) rather than
     /// walking straight at where they're going.
     pub nav: bool,
@@ -147,8 +156,18 @@ impl Def {
                 .map(|b| Aabb::new(V3::new(b[0], b[1], b[2]), V3::new(b[3], b[4], b[5])))
                 .collect(),
             looks: self.looks.to_vec(),
-            solids: self.solids.iter().map(|&(k, n)| Solid::from_def(k, n)).collect(),
-            solid_looks: self.solid_looks.to_vec(),
+            solids: self
+                .solids
+                .iter()
+                .map(|&(k, n)| Solid::from_def(k, n))
+                .chain(self.profiles.iter().map(|&(k, n, kn, _)| Solid::profile(k, n, kn)))
+                .collect(),
+            solid_looks: self
+                .solid_looks
+                .iter()
+                .copied()
+                .chain(self.profiles.iter().map(|p| p.3))
+                .collect(),
             spawns: self
                 .spawns
                 .iter()
@@ -376,6 +395,16 @@ impl Map {
     /// falling: the slope moves under it between ticks as a flat top
     /// can't). A solid's footprint is met as a circle.
     pub fn floor_with(&self, x: f32, z: f32, r: f32, reach: f32, ramp_reach: f32) -> f32 {
+        self.floor_of(x, z, r, reach, ramp_reach, true)
+    }
+
+    /// [`Map::floor`] without the profile solids: a bouncing round meets
+    /// those along their own normals (`World::bounce_at`).
+    pub fn floor_flat(&self, x: f32, z: f32, r: f32, reach: f32) -> f32 {
+        self.floor_of(x, z, r, reach, reach, false)
+    }
+
+    fn floor_of(&self, x: f32, z: f32, r: f32, reach: f32, ramp_reach: f32, profiles: bool) -> f32 {
         let mut f = self.ground(x, z);
         self.each_box_in((x - r, z - r), (x + r, z + r), |b| {
             if b.max.y <= reach && b.max.y > f && b.over_xz(x, z, r) {
@@ -385,6 +414,14 @@ impl Map {
         self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
             let (top, lim) = match s.shape {
                 crate::solid::Shape::Ramp { .. } => (s.top_at(x, z), ramp_reach),
+                crate::solid::Shape::Revolve { .. } | crate::solid::Shape::Sweep { .. } => {
+                    if profiles {
+                        if let Some(t) = s.floor_for(x, z, r, reach, ramp_reach) {
+                            f = f.max(t);
+                        }
+                    }
+                    return;
+                }
                 _ => (s.y1, reach),
             };
             if top <= lim && top > f && s.over(x, z, r) {
@@ -403,6 +440,14 @@ impl Map {
             }
         });
         self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
+            if s.is_profile() {
+                if let Some(b) = s.bot_over(x, z, r) {
+                    if b >= from && b < c {
+                        c = b;
+                    }
+                }
+                return;
+            }
             if s.y0 >= from && s.y0 < c && s.over(x, z, r) {
                 c = s.y0;
             }
@@ -420,7 +465,22 @@ impl Map {
             hit |= b.over_xz(x, z, r) && b.min.y < head && b.max.y > feet + 1e-3;
         });
         self.each_solid_in((x - r, z - r), (x + r, z + r), |s| {
-            hit |= s.over(x, z, r) && s.y0 < head && s.top_at(x, z) > feet + 1e-3;
+            hit |= if s.is_profile() {
+                let e = feet + 1e-3;
+                s.blocks(
+                    x,
+                    z,
+                    r,
+                    crate::profile::Band {
+                        feet,
+                        lo: e,
+                        hi: head,
+                        climb: e,
+                    },
+                )
+            } else {
+                s.over(x, z, r) && s.y0 < head && s.top_at(x, z) > feet + 1e-3
+            };
         });
         hit
     }
@@ -428,9 +488,11 @@ impl Map {
     /// Pushes a body of radius `r` at (x, z) back out of every solid in its
     /// band, its speed into each face taken off (it slides along). `lo` and
     /// `hi`: the band a box blocks in (movement's); a ramp blocks only where
-    /// its slope stands more than `climb` over the feet. Three rounds, for
-    /// a body in a corner where two solids meet. A push that would put the
-    /// body in a box is undone: it stays where it started the tick, `back`.
+    /// its slope stands more than `climb` over the feet, at `feet`; a
+    /// profile solid by its own rules ([`crate::profile`]). Three rounds,
+    /// for a body in a corner where two solids meet. A push that would put
+    /// the body in a box is undone: it stays where it started the tick,
+    /// `back`.
     #[allow(clippy::too_many_arguments)]
     pub fn push_out(
         &self,
@@ -438,6 +500,7 @@ impl Map {
         z: &mut f32,
         v: &mut V3,
         r: f32,
+        feet: f32,
         lo: f32,
         hi: f32,
         climb: f32,
@@ -451,14 +514,19 @@ impl Map {
             let mut moved = false;
             let (qx, qz) = (*x, *z);
             self.each_solid_in((qx - r, qz - r), (qx + r, qz + r), |s| {
-                let blocks = match s.shape {
-                    crate::solid::Shape::Ramp { .. } => s.y0 < hi && s.top_at(*x, *z) > climb,
-                    _ => s.y0 < hi && s.y1 > lo,
+                let pushed = if s.is_profile() {
+                    s.push_band(*x, *z, r, crate::profile::Band { feet, lo, hi, climb }, back)
+                } else {
+                    let blocks = match s.shape {
+                        crate::solid::Shape::Ramp { .. } => s.y0 < hi && s.top_at(*x, *z) > climb,
+                        _ => s.y0 < hi && s.y1 > lo,
+                    };
+                    if !blocks {
+                        return;
+                    }
+                    s.push(*x, *z, r)
                 };
-                if !blocks {
-                    return;
-                }
-                if let Some((nx, nz, ux, uz)) = s.push(*x, *z, r) {
+                if let Some((nx, nz, ux, uz)) = pushed {
                     *x = nx;
                     *z = nz;
                     let into = v.x * ux + v.z * uz;
@@ -588,6 +656,12 @@ mod tests {
             }
         }
         for s in &m.solids {
+            if s.is_profile() {
+                if let Some(t) = s.floor_for(x, z, r, reach, reach) {
+                    f = f.max(t);
+                }
+                continue;
+            }
             let top = s.top_at(x, z);
             if top <= reach && top > f && s.over(x, z, r) {
                 f = top;
@@ -604,6 +678,14 @@ mod tests {
             }
         }
         for s in &m.solids {
+            if s.is_profile() {
+                if let Some(b) = s.bot_over(x, z, r) {
+                    if b >= from && b < c {
+                        c = b;
+                    }
+                }
+                continue;
+            }
             if s.y0 >= from && s.y0 < c && s.over(x, z, r) {
                 c = s.y0;
             }
@@ -638,11 +720,67 @@ mod tests {
             solid_looks: &[0; 6],
             dress: &[],
             dress_solids: &[],
+            profiles: PROFILES,
+            dress_profiles: &[],
             nav: false,
             light: LightDef::DAY,
         }
         .build()
     }
+
+    /// A dome, a bulb on its foot, a ring's sector, a vault and an arch.
+    const PROFILES: &[ProfileDef] = &[
+        (
+            3,
+            [14.0, -12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[[0.0, 0.0, 1.6], [1.0, 0.0, 1.45], [2.0, 0.0, 0.9], [2.6, 0.0, 0.0]],
+            0,
+        ),
+        (
+            3,
+            [-14.0, 12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[
+                [0.0, 0.0, 2.4],
+                [0.6, 0.0, 2.3],
+                [0.6, 0.35, 2.3],
+                [1.0, 0.6, 2.0],
+                [1.2, 1.2, 1.4],
+            ],
+            0,
+        ),
+        (
+            4,
+            [4.0, 12.0, 3.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            &[[3.0, 0.0, 0.3], [3.5, -0.2, 0.4], [4.0, 0.0, 0.3]],
+            0,
+        ),
+        (
+            5,
+            [0.0, -14.0, 0.0, 1.0, 0.0, 6.0, 0.0, 0.0],
+            &[
+                [-3.0, 3.0, 5.0],
+                [-2.0, 3.8, 5.0],
+                [0.0, 4.2, 5.0],
+                [2.0, 3.8, 5.0],
+                [3.0, 3.0, 5.0],
+            ],
+            0,
+        ),
+        (
+            5,
+            [16.0, 4.0, 0.0, 0.0, 1.0, 0.4, 0.0, 0.0],
+            &[
+                [-2.0, 0.0, 3.0],
+                [-1.2, 0.0, 3.0],
+                [-1.2, 2.0, 3.0],
+                [0.0, 2.6, 3.0],
+                [1.2, 2.0, 3.0],
+                [1.2, 0.0, 3.0],
+                [2.0, 0.0, 3.0],
+            ],
+            0,
+        ),
+    ];
 
     fn unit(r: &mut Pcg32, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * (r.next_u32() >> 8) as f32 * (1.0 / 16_777_216.0)
@@ -821,28 +959,39 @@ mod tests {
                 .map(|&(a, b)| V3::new(x + c * a * hx - s * b * hz, 0.0, z + s * a * hx + c * b * hz))
                 .collect(),
             Shape::Ramp { .. } => Vec::new(),
+            Shape::Revolve { x, z, k, .. } => {
+                let r = k[k.len() - 1][0];
+                (0..36)
+                    .map(|i| {
+                        let a = i as f32 * (core::f32::consts::TAU / 36.0);
+                        V3::new(x + r * crate::fmath::cos(a), 0.0, z + r * crate::fmath::sin(a))
+                    })
+                    .collect()
+            }
+            Shape::Sweep { x, z, c, s, l, k, .. } => {
+                let (s0, sn) = (k[0][0], k[k.len() - 1][0]);
+                [(l, s0), (l, sn), (-l, s0), (-l, sn)]
+                    .iter()
+                    .map(|&(u, v)| V3::new(x + u * c - v * s, 0.0, z + u * s + v * c))
+                    .collect()
+            }
         }
     }
 
     #[test]
     fn the_rays_the_review_found_meet_the_wall() {
-        // Two lines across Chrysalis that graze a curved wall's corner from
-        // over 40 m, and every line within 5 mm of them.
-        let m = crate::maps::ALL.iter().find(|d| d.id == 6).unwrap().build();
-        let wall = |x: f32, z: f32| {
-            *m.solids
-                .iter()
-                .find(|s| s.bounds().min.x < x && s.bounds().max.x > x && s.bounds().min.z < z && s.bounds().max.z > z)
-                .unwrap()
-        };
+        // Two lines across the old Chrysalis that grazed a curved wall's
+        // corner (a turned segment of an arc) from over 40 m, and every
+        // line within 5 mm of them.
+        let wall = |x: f32, z: f32, c: f32| Solid::from_def(1, [x, z, 0.46488917, 0.25, c, -0.479249, 0.0, 8.0]);
         for (s, a, b) in [
             (
-                wall(-16.995306, 12.485494),
+                wall(-16.995306, 12.485494, -0.877679),
                 V3::new(19.827059, 1.3204271, -11.240811),
                 V3::new(-16.70709, 1.5, 12.927709),
             ),
             (
-                wall(16.995306, -12.485494),
+                wall(16.995306, -12.485494, -0.877679),
                 V3::new(-17.321032, 1.1206951, 10.461417),
                 V3::new(17.283522, 1.5, -12.043298),
             ),

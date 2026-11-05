@@ -24,6 +24,8 @@ pub const MAX_EVENTS: usize = 128;
 /// Boxes and solids in a map, together (`tools/maps/compile.mjs` holds
 /// maps to it).
 pub const MAX_MAP_BOXES: usize = 512;
+/// The most knots a profile solid has (crate::profile).
+pub const MAX_KNOTS: usize = 32;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
