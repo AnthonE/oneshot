@@ -64,7 +64,7 @@ use bevy::scene::SceneInstanceReady;
 use core::f32::consts::{FRAC_PI_2, PI, TAU};
 use sim::arms::{arm, Arm, Kind, NONE, ROCKET, SWAP_MS};
 use sim::consts::{ticks, GREN_COOL_MS, MELEE_COOL_MS, RUN, TICK_HZ};
-use sim::fighter::Fighter;
+use sim::fighter::{Fighter, Gun};
 
 use super::guns::{gun, spawn_posed, view_basis, Models};
 use super::shake::{peak_to_speed, spring};
@@ -283,15 +283,50 @@ pub struct ViewGun {
     /// it had left last frame.
     reload_of: u16,
     reload_was: u16,
+    /// The reload's pose last frame: a reload cut short (a melee, a swap,
+    /// a pickup) eases back to rest from it rather than snapping.
+    reload_lay: Lay,
+    /// Rounds in the burst under way, and seconds since its last one.
+    burst: u32,
+    since_round: f32,
 }
+
+/// An automatic's burst drifts its kick to one side, growing to all of it
+/// over this many rounds (Gates' gunfeel `DRIFT_SHOTS`); a trigger rested
+/// [`BURST_REST_S`] starts a new burst.
+pub const DRIFT_SHOTS: f32 = 6.0;
+pub const BURST_REST_S: f32 = 0.3;
+
+/// A round's cant, -1..1: random per round, an automatic's leaning toward
+/// its hand's outside as the burst `n` rounds in grows.
+pub fn burst_cant(auto: bool, n: u32, left: bool, rand: f32) -> f32 {
+    if !auto {
+        return rand;
+    }
+    let g = (n as f32 / DRIFT_SHOTS).min(1.0);
+    let side = if left { -1.0 } else { 1.0 };
+    side * g + rand * (1.0 - g) * 0.5
+}
+
+/// How much of a round's kick a crouched fighter's gun takes, in the hands
+/// and on the camera (Gates' gunfeel `CROUCH_KICK`): braced, it climbs
+/// half as far. Drawing only.
+pub const CROUCH_KICK: f32 = 0.5;
+
+/// How fast a reload cut short lets go of its pose, 1/s: two thirds of
+/// the way back to rest in a fifteenth of a second.
+const RELOAD_CUT_PER_S: f32 = 15.0;
+/// A rise in the ticks left this big or bigger is a new reload, not a
+/// correction moving the running one by a tick or two.
+const RELOAD_RELATCH_TICKS: u16 = 8;
 
 #[derive(Component)]
 pub struct Flash;
 
 /// Where each hand's muzzle is drawn, view space as it looks (metres,
-/// before [`SHRINK`]), as of the last frame: `[right, left]`, `None` where
-/// no gun is drawn. The flash sprite of our own shot sits on it
-/// (`fx/shots.rs`).
+/// before [`SHRINK`]), as last posed (this frame's once `draw_view` has
+/// run): `[right, left]`, `None` where no gun is drawn. The flash sprite of
+/// our own shot sits on it (`fx/shots.rs`).
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ViewMuzzles(pub [Option<Vec3>; 2]);
 
@@ -448,14 +483,18 @@ pub fn place(hand: Lay, body: Lay, left: bool) -> (Vec3, Quat) {
 
 /// The rounds each hand fired since the last look, `[right, left]`.
 ///
-/// The fighter counts both hands' rounds in one `shots`; each round also
-/// spends its hand's magazine (a battery's charge, for a hot gun), so with
-/// two guns out the left's share is what its magazine lost and the right
-/// takes the rest. Drawing only: the server's events say what really fired.
+/// The fighter counts both hands' rounds in one `shots`; each left round
+/// sets the left hand's refire again, so with two guns out a rise in it is
+/// the left's round (a pickup sets it too, with a full magazine) and the
+/// right takes the rest. Not the magazine alone: at the end of a reload the
+/// left fills and fires in one tick, and a charged round spends several.
+/// One a look at most from the left: a frame slow enough for two is rare,
+/// and this is drawing only (the server's events say what really fired).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rounds {
     shots: u32,
-    left: (u8, u16),
+    /// The left gun, its magazine and its refire, last look.
+    left: (u8, u16, u16),
     seen: bool,
 }
 
@@ -466,14 +505,18 @@ impl Rounds {
         } else {
             0
         };
-        let left = if f.dual() && self.left.0 == f.left.arm {
-            u32::from(self.left.1.saturating_sub(f.left.mag)).min(total)
+        let (arm, mag, refire) = self.left;
+        let left = if f.dual() && arm == f.left.arm {
+            let rose = f.left_refire > refire && f.left.mag < Gun::full(f.left.arm).mag;
+            // A round whose refire ran out between two looks still spent.
+            let spent = f.left.mag < mag;
+            u32::from(rose || spent).min(total)
         } else {
             0
         };
         *self = Rounds {
             shots: f.shots,
-            left: (f.left.arm, f.left.mag),
+            left: (f.left.arm, f.left.mag, f.left_refire),
             seen: true,
         };
         [total - left, left]
@@ -913,6 +956,7 @@ fn hand(
     let want = if v.left { f.left.arm } else { f.gun().arm };
     if k.respawned {
         v.drop = 1.0;
+        v.reload_lay = Lay::ZERO;
     }
     let (drop, change) = drop_step(v.drop, v.drawn, want, dt, own.shown);
     v.drop = drop;
@@ -928,12 +972,19 @@ fn hand(
     let up = v.drawn == want;
     let a = arm(v.drawn);
     // A round from this hand: kick and flash (a sword's is a swing).
+    v.since_round += dt;
     if k.rounds > 0 && up && a.kind != Kind::Sword {
+        let braced = if f.body.crouched { CROUCH_KICK } else { 1.0 };
         for _ in 0..k.rounds.min(2) {
-            v.kick.hit(kick_of(v.drawn, a), KICK_HZ, KICK_DAMP);
+            v.kick.hit(kick_of(v.drawn, a) * braced, KICK_HZ, KICK_DAMP);
         }
         v.flash = 1.0;
-        v.cant = cant_of(f.shots);
+        if v.since_round > BURST_REST_S {
+            v.burst = 0;
+        }
+        v.burst += k.rounds;
+        v.since_round = 0.0;
+        v.cant = burst_cant(a.auto, v.burst, v.left, cant_of(f.shots));
     }
     v.kick.toward(0.0, KICK_HZ, KICK_DAMP, dt);
     v.flash = (v.flash - dt * FLASH_FALL_PER_S).max(0.0);
@@ -944,19 +995,23 @@ fn hand(
         Visibility::Hidden
     });
 
-    // The reload: its length is what it had when it began.
+    // The reload: its length is what it had when it began. A correction
+    // that moves the running one up a tick doesn't start it again.
     let left_ticks = if v.left { f.left_reload } else { f.reload };
-    if left_ticks > v.reload_was {
+    if left_ticks > 0 && (v.reload_was == 0 || left_ticks >= v.reload_was.saturating_add(RELOAD_RELATCH_TICKS)) {
         v.reload_of = left_ticks;
     }
+    v.reload_of = v.reload_of.max(left_ticks);
     v.reload_was = left_ticks;
     let reload = if up && left_ticks > 0 && v.reload_of > 0 {
         let p = 1.0 - f32::from(left_ticks) / f32::from(v.reload_of);
         let long = gun(v.drawn).is_none_or(|g| g.long);
         reload_lay(p, long, a.hot(), k.t)
     } else {
-        Lay::ZERO
+        // Done (where the pose is at rest already) or cut short: let go.
+        v.reload_lay * (-RELOAD_CUT_PER_S * dt).exp()
     };
+    v.reload_lay = reload;
     let kick = v.kick.x.clamp(-0.4, KICK_MAX);
     let kick = Lay::hand(
         Vec3::new(KICK_CLIMB * kick, 0.0, KICK_ROLL * v.cant * kick),
@@ -1005,7 +1060,6 @@ fn no_shadows(
 mod tests {
     use super::*;
     use sim::arms::{AR, MAGNUM};
-    use sim::fighter::Gun;
 
     /// The bob is off distance: the same metres walked at 30 and at 144
     /// frames a second land on the same phase, and standing still moves it
@@ -1080,14 +1134,31 @@ mod tests {
         assert_eq!(r.take(&f), [0, 0]);
         f.shots += 1;
         f.left.mag -= 1;
+        f.left_refire = 8;
         assert_eq!(r.take(&f), [0, 1]);
         f.shots += 1;
         f.guns[0].mag -= 1;
+        f.left_refire = 5;
         assert_eq!(r.take(&f), [1, 0]);
         f.shots += 2;
         f.guns[0].mag -= 1;
         f.left.mag -= 1;
+        f.left_refire = 8;
         assert_eq!(r.take(&f), [1, 1]);
+        // The left's reload ends and it fires in the same tick: its
+        // magazine rose, and the round is still the left's.
+        f.left.mag = 0;
+        f.left_refire = 0;
+        r.take(&f);
+        f.left.mag = Gun::full(MAGNUM).mag - 1;
+        f.left_refire = 8;
+        f.shots += 1;
+        assert_eq!(r.take(&f), [0, 1]);
+        // A pickup into the left hand while the right fires: the right's.
+        f.left = Gun::full(MAGNUM);
+        f.left_refire = 30;
+        f.shots += 1;
+        assert_eq!(r.take(&f), [1, 0]);
         f.drop_left();
         f.guns[0] = Gun::full(AR);
         r.take(&f);
@@ -1217,11 +1288,14 @@ mod tests {
         }
     }
 
-    /// The melee is back down by the time the gun may fire again.
+    /// An automatic's burst leans its kick to its hand's outside as it
+    /// goes; a single shot's cant stays its own.
     #[test]
-    fn the_melee_ends_as_the_gun_may_fire() {
-        let refire = ticks(MELEE_COOL_MS / 2) as f32 / TICK_HZ as f32;
-        assert!(MELEE_S <= refire + 1e-6);
-        assert!(THROW_S < GREN_COOL_MS as f32 / 1000.0);
+    fn a_burst_drifts_to_one_side() {
+        assert_eq!(burst_cant(false, 9, false, -0.4), -0.4);
+        assert!((burst_cant(true, 0, false, 0.6) - 0.3).abs() < 1e-6);
+        assert!(burst_cant(true, DRIFT_SHOTS as u32, false, -1.0) > 0.99);
+        assert!(burst_cant(true, DRIFT_SHOTS as u32, true, 1.0) < -0.99);
+        assert!(burst_cant(true, 3, false, -1.0) > burst_cant(true, 1, false, -1.0));
     }
 }

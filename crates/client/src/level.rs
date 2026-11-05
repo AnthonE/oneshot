@@ -19,7 +19,7 @@ use sim::terrain::{TerrainDef, HEIGHT_Q};
 
 use crate::look::fresnel;
 use crate::look::rock::{self, Mass};
-use crate::look::weathering::{self, Block, Shape, Surface};
+use crate::look::weathering::{self, Block, Run, Shape, Surface, RUN};
 
 /// Everything a level spawned, to take down with it.
 #[derive(Component)]
@@ -99,6 +99,12 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
+
+/// A box longer than this, metres, on a terrain map has its grime follow
+/// the ground along it ([`Block::run`]), where the ground under it moves
+/// more than [`RUN_STEP_M`].
+const RUN_MIN_M: f32 = 6.0;
+const RUN_STEP_M: f32 = 0.3;
 
 /// A mass's face is dressed with pieces while more than this share of it
 /// shows past the boxes in front of it.
@@ -737,8 +743,30 @@ pub fn build(
             turn: (1.0, 0.0),
             shape: Shape::Box,
             ground: ground_at(mid.x, mid.z),
+            run: None,
+            hidden: rock::hidden_edges(min, max, i, &all),
             own_value: true,
         };
+        // A long box on uneven ground: its grime follows the ground along
+        // it, not the height under its middle (an end wall across a
+        // canyon's floor and up its banks).
+        if map.terrain.is_some() {
+            let size = max - min;
+            let along_x = size.x >= size.z;
+            if size.x.max(size.z) > RUN_MIN_M {
+                let g: [f32; RUN] = core::array::from_fn(|k| {
+                    let t = k as f32 / (RUN - 1) as f32;
+                    if along_x {
+                        ground_at(min.x + size.x * t, mid.z)
+                    } else {
+                        ground_at(mid.x, min.z + size.z * t)
+                    }
+                });
+                if g.iter().any(|h| (h - block.ground).abs() > RUN_STEP_M) {
+                    block.run = Some((if along_x { Run::X } else { Run::Z }, g));
+                }
+            }
+        }
         // Its faces, less what the other boxes hide or draw themselves.
         let cover = rock::covers(min, max, i, &all);
         // A rock box's faces faceted where anyone can see them; one out of
@@ -857,7 +885,8 @@ pub fn build(
             continue;
         }
         // A plain dressing box (a pod, a plate): its faces, weathered as a
-        // box is, nothing of rock on them.
+        // box is, nothing of rock on them, and no wear on an edge buried in
+        // the boxes it sits on (it is none of them: no index of its own).
         let mut soup = rock::Soup::default();
         rock::faceted_box(&mut soup, min, max, mid, rock_key(id), [false; 6], &rock::bare());
         if soup.is_empty() {
@@ -869,6 +898,8 @@ pub fn build(
             turn: (1.0, 0.0),
             shape: Shape::Box,
             ground: ground_at(mid.x, mid.z),
+            run: None,
+            hidden: rock::hidden_edges(min, max, usize::MAX, &all),
             own_value: true,
         };
         commands.spawn((
@@ -946,6 +977,8 @@ pub fn build(
                 turn: (1.0, 0.0),
                 shape: Shape::Round,
                 ground: ground_at(x, z),
+                run: None,
+                hidden: 0,
                 own_value: false,
             },
             // No wear: an arc is turned segments overlapping at their
@@ -956,6 +989,8 @@ pub fn build(
                 turn: (c, s),
                 shape: Shape::Other,
                 ground: ground_at(x, z),
+                run: None,
+                hidden: 0,
                 own_value: false,
             },
             sim::solid::Shape::Ramp { .. } => {
@@ -967,6 +1002,8 @@ pub fn build(
                     turn: (1.0, 0.0),
                     shape: Shape::Other,
                     ground: ground_at(mid.x, mid.z),
+                    run: None,
+                    hidden: 0,
                     own_value: false,
                 }
             }
@@ -1131,6 +1168,8 @@ pub fn build(
                     turn: (1.0, 0.0),
                     shape: Shape::Other,
                     ground: -1.0e3,
+                    run: None,
+                    hidden: 0,
                     own_value: false,
                 },
                 Mesh3d(meshes.add({

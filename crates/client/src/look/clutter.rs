@@ -14,12 +14,11 @@
 //! so nothing pops at the edge of what is drawn. One opaque material, no
 //! texture: WebGL2 draws exactly what WebGPU and the desktop do.
 //!
-//! **Nothing here can hide anyone, so it is a graphics row.** Every piece
-//! stands lower than [`CLUTTER_MAX_H`] (asserted when the crate compiles,
-//! and measured over every kind in the tests), under a crouching fighter's
-//! hit box and under a step the sim would climb anyway, so the GRASS rows
-//! (`quality::Cover`) thin it and draw it nearer like the grass, and POTATO
-//! draws none: what a lower rung leaves out uncovered no one.
+//! **It is drawn the same on every rung**, like the grass (`quality.rs`'
+//! fairness). Every piece stands lower than [`CLUTTER_MAX_H`] (asserted
+//! when the crate compiles, and measured over every kind in the tests),
+//! under a crouching fighter's hit box and under a step the sim would
+//! climb anyway, but a stone on a crest can still cover a foot.
 //!
 //! **And it stays out of the way of what is played** ([`clear`]): never on
 //! a spawn, a weapon pad, a launcher or a vehicle's bay, and a hand's room

@@ -17,7 +17,8 @@
 //! arriving (pieces in grey, models popping in, on the desktop a skipped
 //! draw while its pipeline compiles), and it lifts after [`LOADING_GUARD_S`]
 //! whatever is still missing, so a slow machine sees a level dressing in
-//! rather than a wall.
+//! rather than a wall; over a match already being played (a casual join
+//! mid-match) after [`LIVE_GUARD_S`].
 //!
 //! The same on the desktop and in a browser: one camera, so the overlay is
 //! drawn with the UI pipeline every screen before it already built (Gates
@@ -42,6 +43,10 @@ pub const PIPELINE_STALL_FRAMES: u32 = 300;
 /// The overlay over a new match lifts after this many seconds whatever is
 /// still arriving.
 pub const LOADING_GUARD_S: f64 = 5.0;
+/// …and after this many over a match already being played (a casual join
+/// takes a seat mid-match and spawns at once): whoever is there can shoot,
+/// so a level still dressing in beats a wall the player can't see past.
+pub const LIVE_GUARD_S: f64 = 1.5;
 /// How long the overlay takes to fade into the match.
 const FADE_S: f32 = 0.35;
 /// The bar, in pixels at 1280 by 720 (the title's panel is 380 wide).
@@ -122,6 +127,9 @@ impl Progress {
 pub struct Settle {
     /// The link (`LinkGen`) these counts are about.
     gen: Option<u32>,
+    /// And its welcome: a cup's next heat comes on the same link, and its
+    /// level is built again (`crate::Built`).
+    welcomes: u32,
     /// When that link came (real seconds).
     since: f64,
     held: u32,
@@ -206,18 +214,21 @@ fn settle(
     warming: Query<(), With<Warming>>,
     time: Res<Time<Real>>,
     mut clear: ResMut<ClearColor>,
+    link: NonSend<LinkRes>,
 ) {
     let now = time.elapsed_secs_f64();
     let g = gen.map_or(0, |g| g.0);
-    if s.gen != Some(g) {
+    let welcomes = link.0.session().welcomes;
+    if s.gen != Some(g) || s.welcomes != welcomes {
         *s = Settle {
             gen: Some(g),
+            welcomes,
             since: now,
             ..default()
         };
     }
     let p = Progress {
-        built: built.gen() == Some(g),
+        built: built.0 == Some((g, welcomes)),
         parts: parts
             .iter()
             .fold((0, 0), |(d, n), dressed| (d + dressed as usize, n + 1)),
@@ -291,7 +302,7 @@ fn start(
     front: Option<Res<Front>>,
     link: NonSend<LinkRes>,
     roots: Query<(Entity, &LoadingRoot)>,
-    mut shown_for: Local<Option<u32>>,
+    mut shown_for: Local<Option<(u32, u32)>>,
 ) {
     let (Some(in_match), Some(gen)) = (in_match, gen) else {
         return;
@@ -303,10 +314,12 @@ fn start(
         }
         return;
     }
-    if *shown_for == Some(gen.0) {
+    // A new link, or a new welcome on it (a cup's next heat).
+    let key = (gen.0, link.0.session().welcomes);
+    if *shown_for == Some(key) {
         return;
     }
-    *shown_for = Some(gen.0);
+    *shown_for = Some(key);
     for (e, _) in &roots {
         commands.entity(e).despawn();
     }
@@ -368,10 +381,11 @@ fn start(
 }
 
 /// The bar and its line; lifted once the level is there, or the guard is up.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn update(
     mut commands: Commands,
     settle: Res<Settle>,
+    link: NonSend<LinkRes>,
     time: Res<Time<Real>>,
     roots: Query<(Entity, &LoadingRoot), Without<Fading>>,
     mut bar: Query<&mut Node, (With<Bar>, Without<Sweep>)>,
@@ -380,9 +394,11 @@ fn update(
 ) {
     let now = time.elapsed_secs_f64();
     let p = settle.now;
+    let live = link.0.session().core.phase() == sim::world::Phase::Playing;
+    let guard_s = if live { LIVE_GUARD_S } else { LOADING_GUARD_S };
     for (e, root) in &roots {
         let ours = settle.gen() == Some(root.gen);
-        let guard = settle.age(now) >= LOADING_GUARD_S;
+        let guard = settle.age(now) >= guard_s;
         if ours && (settle.ready() || guard) {
             if !settle.ready() {
                 warn!("oneshot: the loading overlay lifted at its guard, at {}", p.stage());
@@ -424,6 +440,7 @@ fn fade(
         Option<&mut BackgroundColor>,
         Option<&mut BorderColor>,
         Option<&mut TextColor>,
+        Option<&mut TextShadow>,
     )>,
 ) {
     for (root, mut f) in &mut roots {
@@ -440,7 +457,7 @@ fn fade(
             c.set_alpha(a * r);
         };
         for e in std::iter::once(root).chain(children.iter_descendants(root)) {
-            let Ok((bg, border, text)) = colours.get_mut(e) else {
+            let Ok((bg, border, text, shadow)) = colours.get_mut(e) else {
                 continue;
             };
             if let Some(mut c) = bg {
@@ -454,6 +471,9 @@ fn fade(
             }
             if let Some(mut c) = text {
                 scale(&mut c.0);
+            }
+            if let Some(mut c) = shadow {
+                scale(&mut c.color);
             }
         }
     }

@@ -144,8 +144,10 @@ impl Default for Watch {
 }
 
 /// The machine this build runs on, as far as it can tell.
-fn machine(adapter: Option<&RenderAdapterInfo>, forced: bool) -> Machine {
-    let software_gpu = adapter.is_some_and(|a| is_software(&format!("{:?}", a.device_type), &a.name));
+fn machine(adapter: Option<&RenderAdapterInfo>, forced: bool, soft: bool) -> Machine {
+    // wgpu's WebGPU backend names no adapter (an empty name, device type
+    // Other), so in the WebGPU module the page's word for it counts.
+    let software_gpu = soft || adapter.is_some_and(|a| is_software(&format!("{:?}", a.device_type), &a.name));
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsValue;
@@ -190,7 +192,7 @@ pub fn at_boot(app: &mut App) {
     if picture {
         return;
     }
-    let m = machine(world.get_resource::<RenderAdapterInfo>(), opts.potato);
+    let m = machine(world.get_resource::<RenderAdapterInfo>(), opts.potato, opts.softgpu);
     let Some(why) = boot_hint(&m) else {
         return;
     };
@@ -215,8 +217,10 @@ pub fn plugin(app: &mut App) {
 }
 
 /// In a browser, in a match, the frame rate: the preset down a rung while
-/// it stays too slow.
-pub fn watch(
+/// it stays too slow. Watched again on every level: a duel on a small map
+/// settling it says nothing of a Big Team match on Dry Fork after.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn watch(
     time: Res<Time<Real>>,
     screen: Res<State<Screen>>,
     in_match: Option<Res<crate::front::InMatch>>,
@@ -224,7 +228,15 @@ pub fn watch(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut settings: ResMut<Settings>,
     mut w: ResMut<Watch>,
+    (built, mut level): (Res<crate::Built>, Local<Option<(u32, u32)>>),
 ) {
+    if *level != built.0 {
+        *level = built.0;
+        w.good = 0;
+        w.frames.clear();
+        w.sampled_s = 0.0;
+        w.warm_s = WARMUP_S;
+    }
     let playing = *screen.get() == Screen::Playing && in_match.is_some_and(|m| m.0) && settle.shown();
     let focused = windows.single().is_ok_and(|w| w.focused);
     if !cfg!(target_arch = "wasm32")
@@ -324,16 +336,18 @@ fn show_note(
     mut inks: Query<&mut TextColor>,
     kids: Query<&Children>,
 ) {
-    let Some(note) = w.note.clone() else {
+    let w = &mut *w;
+    let Some(note) = &w.note else {
         return;
     };
     if !settle.shown() {
         return;
     }
     let now = time.elapsed_secs();
+    let first = w.shown_at.is_none();
     let at = *w.shown_at.get_or_insert_with(|| {
         for mut t in &mut said {
-            t.0 = note.clone();
+            t.0.clone_from(note);
         }
         now
     });
@@ -342,6 +356,12 @@ fn show_note(
     if a <= 0.0 {
         w.note = None;
         w.shown_at = None;
+    }
+    // The colours only move on the first frame (back to whole, after an
+    // earlier note's fade) and while fading: change-detected, so not
+    // written for nothing the other seven seconds.
+    if !first && age <= NOTE_S {
+        return;
     }
     for (mut vis, children) in &mut root {
         vis.set_if_neq(if a > 0.0 {

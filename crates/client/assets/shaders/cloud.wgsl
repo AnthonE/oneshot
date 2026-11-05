@@ -26,6 +26,12 @@
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::coords_to_viewport_uv
 #import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, slab_warp, slab_shape}
+#ifdef BACKDROP
+#import "shaders/shaft_march.wgsl"::{shaft_lost}
+#endif
+#ifdef TONEMAP_IN_SHADER
+#import bevy_core_pipeline::tonemapping::tone_mapping
+#endif
 
 // Field for field `deck::CloudParams`. Colours linear, deck units (1.0 is
 // one `sky::CLOUD_NITS`), already graded by the hour and the weather.
@@ -68,7 +74,8 @@ struct Cloud {
     // x how fast a cumulus boils, m/s (the detail rising through the
     // slab, `deck::BOIL_MS`); yzw unused. The detail rides the deck's drift.
     wind: vec4<f32>,
-    // xyz the clear sky behind the deck (`rig::SKY_LIFT`); w unused.
+    // xyz the daylight added to the clear sky behind the deck
+    // (`rig::SKY_LIFT`), on both skies; w unused.
     lift: vec4<f32>,
     // xy how fast the drift moves, noise units a second; z the
     // `globals.time` `drift.xy` was taken at; w unused.
@@ -93,6 +100,11 @@ struct Cloud {
     disk: vec4<f32>,
     // xyz the sun disk's radiance, deck units; w unused.
     disk_rgb: vec4<f32>,
+    // WebGL2's light shafts (`shaft_march.wgsl`), under BACKDROP: the map's
+    // box, its mist and what a shaded ray takes back; `shaft_hi.w` 0: off.
+    shaft_lo: vec4<f32>,
+    shaft_hi: vec4<f32>,
+    shaft_tint: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> cl: Cloud;
@@ -354,6 +366,10 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     }
     let cd = dot(d, cl.disk.xyz);
     sky += cl.disk_rgb.rgb * smoothstep(cl.horizon.w, cl.glow.w, cd);
+    // The daylight lift the atmosphere's sky gets below, with no
+    // transmittance to undo: the gradient alone is the slate it was
+    // measured against.
+    sky += cl.lift.rgb * smoothstep(0.0, 0.05, d.y);
 #else
     // Daylight behind the deck: more of the air's own blue than the
     // atmosphere's sky carries, laid on through its transmittance as a
@@ -395,6 +411,24 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // weather's air takes along this ray. Where the atmosphere draws it is
     // `sky_fog.wgsl`'s, over the atmosphere too.
     rgb = mix(rgb, cl.fog.rgb, deck_haze(d.y, cl.air, cl.dust));
+    // The light shafts: the sun's share of the mist taken back where the
+    // ray crossed the map's shade on its way out of the box, in the frame's
+    // own units, as the boxes take it (`weathering.wgsl`).
+    var out = rgb * cl.shade.w * view.exposure;
+    if cl.shaft_hi.w > 0.0 {
+        let lost = shaft_lost(view.world_position, d, 1.0e4, cl.shaft_lo, cl.shaft_hi, cl.shaft_tint, in.clip.xy);
+        out = max(out - lost, vec3(0.0));
+    }
+#ifdef TONEMAP_IN_SHADER
+    // A view with no HDR target (WebGL2's: no atmosphere, no bloom) is
+    // tonemapped in each material's own shader, as Bevy's are, and the sky
+    // is one: untonemapped, it stood beside a tonemapped world in another
+    // grade, and a lit cumulus past 1 clipped to a flat white cut-out.
+    return tone_mapping(vec4(out, 1.0), view.color_grading);
+#else
+    return vec4(out, 1.0);
 #endif
+#else
     return vec4(rgb * cl.shade.w * view.exposure, 1.0);
+#endif
 }
