@@ -148,7 +148,7 @@ pub const GUNS: [(u8, Gun); 15] = [
         ),
     ),
     // The rest borrow the nearest model until they have their own; their
-    // sounds are ours (tools/sfx.py).
+    // sounds are ours (tools/sfx.mjs).
     (
         arms::SWORD,
         g(

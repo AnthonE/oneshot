@@ -119,6 +119,7 @@ node tools/board.mjs look [--views a,b]              # the reference board: view
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
 cargo run -p flow --release -- <map>                 # a map's flow (traces/flow/; node tools/flow/png.mjs)
 node tools/assets.mjs [GATES_DIR]                    # art and sound from a Gates checkout
+node tools/sfx.mjs [all | reel | name…]              # our own sounds, made by ElevenLabs (the key: .env.local); bare, it lists them
 tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip from a Gates checkout
 ```
 

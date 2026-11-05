@@ -2,3 +2,5 @@
 node_modules
 traces/
 board/passes/
+# Local secrets written by `elevenlabs onboard`
+/.env.local

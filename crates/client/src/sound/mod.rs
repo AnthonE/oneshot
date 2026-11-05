@@ -20,7 +20,7 @@
 //! - **The match:** the countdown's ticks and its start; wind on a big map.
 //!
 //! Recordings are Gates' CC0 cuts (`tools/assets.mjs`, NOTICE); the rest
-//! is ours (`tools/sfx.py`). The announcer is apart: our voiced medals one
+//! is ours (`tools/sfx.mjs`). The announcer is apart: our voiced medals one
 //! at a time (`assets/sound/voice`, `tools/voice.sh`), a newer rung of a
 //! ladder taking the place of one still waiting.
 //!

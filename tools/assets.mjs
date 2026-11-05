@@ -50,7 +50,7 @@ const SOUNDS = [
   ...[0, 1, 2, 3, 4].map((i) => `pd/impact_metal_${i}.ogg`),
   ...[0, 1, 2].map((i) => `kenney/impactMetal_light_00${i}.ogg`),
 ];
-// The rest of assets/sound is ours: tools/sfx.py synthesizes it.
+// The rest of assets/sound is ours: tools/sfx.mjs makes it.
 
 // The rock pieces a mass out of bounds is drawn with (look/rock.rs): Gates'
 // formation pieces remeshed low, geometry only (no texture to re-embed),
