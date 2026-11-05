@@ -13,7 +13,7 @@
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
 
-use std::collections::BTreeMap;
+use sim::consts::MAX_FIGHTERS;
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::NotShadowCaster;
@@ -78,7 +78,11 @@ pub struct Body {
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
     mats: Vec<Handle<BodyMaterial>>,
+    /// A rag doll poses it ([`Body::go_limp`]).
+    limp: bool,
     lit: f32,
+    /// When the flare was last put on them (s, the app's clock).
+    lit_at: f32,
     /// The shell's colour and fill last put on it (`Glow`), and whether
     /// camouflage hides the body's own meshes and its hand.
     tone: Vec4,
@@ -118,6 +122,13 @@ impl Body {
         self.gait = Gait::default();
         self.fresh = true;
         self.drawn = false;
+        self.limp = false;
+    }
+
+    /// A rag doll has it now (`rag.rs`): its root is the doll's, not the
+    /// snapshot's, till it gets up or is hidden (`afresh`).
+    pub fn go_limp(&mut self) {
+        self.limp = true;
     }
 
     /// Alive now, and the frame before (none: not drawn then).
@@ -189,7 +200,9 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         hand,
         held: 0,
         mats: Vec::new(),
+        limp: false,
         lit: 0.0,
+        lit_at: f32::NEG_INFINITY,
         tone: Vec4::ZERO,
         hidden: false,
         shell: Handle::default(),
@@ -443,12 +456,18 @@ impl Glow {
     }
 }
 
+/// How often a flare that only eases is put on a body's materials, and how
+/// big a step of its level is put on at once (a hit's flash).
+const FLARE_HZ: f32 = 30.0;
+const FLARE_JUMP: f32 = 0.1;
+
 /// A body's shell and skin this frame (`Glow`): the shell shows at its
 /// level and colour, the body under it takes a little of the light, and
 /// camouflage hides the body and its gun, leaving the shell's rim.
 pub fn flare(
     root: Entity,
     glow: Glow,
+    t: f32,
     bodies: &mut Query<&mut Body>,
     mats: &mut Assets<BodyMaterial>,
     shield_mats: &mut Assets<ShieldMaterial>,
@@ -466,6 +485,14 @@ pub fn flare(
     if same && tone == body.tone && hidden == body.hidden {
         return;
     }
+    // Only the level easing (a recharge's shimmer, a hit fading) goes at
+    // most FLARE_HZ: each write remakes the shell's and the body's material
+    // bindings, every frame of a recharge for everyone recharging.
+    let easing = (level - body.lit).abs() < FLARE_JUMP && (level > 0.0) == (body.lit > 0.0);
+    if easing && tone == body.tone && hidden == body.hidden && t - body.lit_at < 1.0 / FLARE_HZ {
+        return;
+    }
+    body.lit_at = t;
     let shown = level > 0.0;
     let show = |on: bool| if on { Visibility::Inherited } else { Visibility::Hidden };
     if shown != (body.lit > 0.0) {
@@ -530,8 +557,12 @@ pub fn pose(
         Some((hull, s)) if s == sim::vehicle::DRIVER => hull,
         _ => d.yaw,
     };
-    if let Ok(mut t) = at.get_mut(root) {
-        *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
+    // A corpse's root is its rag doll's: written here as well, the whole
+    // skeleton under it would go round the transforms again every frame.
+    if !(body.limp && !d.alive) {
+        if let Ok(mut t) = at.get_mut(root) {
+            t.set_if_neq(Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw)));
+        }
     }
     // Every gun hangs at the same `HAND`, at the chest, where the long
     // hold puts both hands. The pistol clip is Gates' first-person arms
@@ -571,8 +602,12 @@ pub fn pose(
         body.held = arm;
     }
     if let Ok(mut t) = at.get_mut(body.hand) {
-        t.translation = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
-        t.rotation = Quat::from_rotation_z(d.pitch);
+        let hand = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
+        let turn = Quat::from_rotation_z(d.pitch);
+        if t.translation != hand || t.rotation != turn {
+            t.translation = hand;
+            t.rotation = turn;
+        }
     }
 }
 
@@ -615,6 +650,16 @@ pub fn drive(
                 .insert((AnimationGraphHandle(rig.graph.clone()), AnimationTransitions::new()));
             continue;
         };
+        // Hidden (fog, a parked shadow): nothing plays. A clip left running
+        // is sampled into a skeleton nobody sees every frame; shown again,
+        // it starts afresh (`Body::afresh`).
+        if !body.drawn {
+            if player.playing_animations().next().is_some() {
+                player.stop_all();
+                body.playing = Playing::default();
+            }
+            continue;
+        }
         let b = &mut *body;
         // Spent on the first clip it starts, not while it is still hidden.
         let fresh = b.fresh && b.gait.clip.is_some();
@@ -658,8 +703,15 @@ pub fn pose_hands(
 
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
-pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {
+/// Not a rag doll's (it poses every bone) nor a hidden body's.
+pub fn pose_spines(
+    mut q: Query<(&Body, &mut SpineBones), Without<super::rag::Ragdoll>>,
+    mut bones: Query<&mut Transform>,
+) {
     for (b, mut spine) in &mut q {
+        if !b.drawn {
+            continue;
+        }
         let pose = SpinePose {
             clip: b.gait.clip,
             pitch: b.gait.pitch,
@@ -672,12 +724,12 @@ pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut
 }
 
 /// Each rider's vehicle and seat, by slot.
-pub fn seats(vehicles: &[DrawnVehicle]) -> BTreeMap<u8, (DrawnVehicle, usize)> {
-    let mut out = BTreeMap::new();
+pub fn seats(vehicles: &[DrawnVehicle]) -> [Option<(DrawnVehicle, usize)>; MAX_FIGHTERS] {
+    let mut out = [None; MAX_FIGHTERS];
     for v in vehicles {
         for (k, &s) in v.seats.iter().enumerate() {
-            if s > 0 {
-                out.insert(s - 1, (*v, k));
+            if let Some(o) = s.checked_sub(1).and_then(|i| out.get_mut(i as usize)) {
+                *o = Some((*v, k));
             }
         }
     }

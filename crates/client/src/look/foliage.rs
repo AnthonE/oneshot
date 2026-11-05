@@ -495,6 +495,7 @@ pub(crate) fn update(
     mut up: ResMut<FoliageUpload>,
     mut blast: Local<Option<(Vec2, f64)>>,
     mut level: Local<Option<(u32, u32)>>,
+    mut spare: Local<Option<Arc<Vec<u8>>>>,
 ) {
     let was_lit = trample.lit;
     if *level != built.0 {
@@ -547,10 +548,14 @@ pub(crate) fn update(
     // An untouched map sends nothing: the texture already holds zeros.
     up.trample_dirty = trample.lit || was_lit;
     if up.trample_dirty {
-        let px = Arc::make_mut(&mut up.trample_px);
+        // Into the texels the render world let go of when it took last
+        // frame's: the ones it holds, `make_mut` would copy every frame.
+        let mut next = spare.take().unwrap_or_else(|| up.trample_px.clone());
+        let px = Arc::make_mut(&mut next);
         for (dst, v) in px.iter_mut().zip(&trample.px) {
             *dst = (v * 255.0 + 0.5) as u8;
         }
+        *spare = Some(core::mem::replace(&mut up.trample_px, next));
     }
 }
 

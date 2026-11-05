@@ -33,6 +33,7 @@ impl MeshWrite for Pool {
         if !self.needs_write() {
             return false;
         }
+        untrim(mesh, self.cap());
         let (mut pos, mut uv, mut col) = (None, None, None);
         for (attr, values) in mesh.attributes_mut() {
             let id = attr.id;
@@ -52,7 +53,7 @@ impl MeshWrite for Pool {
         let (Some(pos), Some(uv), Some(col)) = (pos, uv, col) else {
             return false;
         };
-        self.fill(
+        let wrote = self.fill(
             Verts {
                 pos,
                 uv,
@@ -63,7 +64,69 @@ impl MeshWrite for Pool {
             },
             cam,
             anchor.into(),
-        )
+        );
+        trim(mesh, self.cap());
+        wrote
+    }
+}
+
+/// A trimmed pool mesh's length moves in steps of this many quads.
+const TRIM_QUADS: usize = 64;
+
+/// Before a fill: every attribute and the indices back out to `cap` quads,
+/// as the pool writes them. In place: trimming kept the capacity. The tail
+/// comes back collapsed, its normals the plain pool's (it never writes
+/// them; a flipbook pool writes its own).
+pub fn untrim(mesh: &mut Mesh, cap: usize) {
+    let n = cap * 4;
+    for (attr, values) in mesh.attributes_mut() {
+        match values {
+            VertexAttributeValues::Float32x3(v) => {
+                let rest = if attr.id == Mesh::ATTRIBUTE_NORMAL.id {
+                    ::fx::pool::NORMAL
+                } else {
+                    [0.0; 3]
+                };
+                v.resize(n, rest);
+            }
+            VertexAttributeValues::Float32x2(v) => v.resize(n, [0.0; 2]),
+            VertexAttributeValues::Float32x4(v) => v.resize(n, [0.0; 4]),
+            _ => {}
+        }
+    }
+    if let Some(Indices::U32(idx)) = mesh.indices_mut() {
+        for q in (idx.len() / 6) as u32..cap as u32 {
+            let b = q * 4;
+            idx.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+    }
+}
+
+/// After a fill: the mesh cut after the last quad in use (rounded up), so
+/// what Bevy clones, lays out and uploads each frame is what is alive, not
+/// the whole cap. A free slot's quad is all four corners at zero; the live
+/// sort to the front of a sorted pool, and take the lowest free slots of
+/// the other.
+pub fn trim(mesh: &mut Mesh, cap: usize) {
+    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        return;
+    };
+    let used = pos
+        .chunks_exact(4)
+        .rposition(|q| q.iter().any(|c| *c != [0.0; 3]))
+        .map_or(0, |i| i + 1);
+    let quads = (used.div_ceil(TRIM_QUADS).max(1) * TRIM_QUADS).min(cap);
+    let n = quads * 4;
+    for (_, values) in mesh.attributes_mut() {
+        match values {
+            VertexAttributeValues::Float32x3(v) => v.truncate(n),
+            VertexAttributeValues::Float32x2(v) => v.truncate(n),
+            VertexAttributeValues::Float32x4(v) => v.truncate(n),
+            _ => {}
+        }
+    }
+    if let Some(Indices::U32(idx)) = mesh.indices_mut() {
+        idx.truncate(quads * 6);
     }
 }
 

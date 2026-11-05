@@ -190,8 +190,10 @@ pub struct Ear {
     ready: Vec<bool>,
     secs: Vec<f32>,
     loading: u32,
-    /// This frame's one-shots, for a film (`decide` hands them to [`Cues`]).
+    /// This frame's one-shots, for a film (`decide` hands them to [`Cues`]),
+    /// kept only while one runs.
     cues: Vec<Cue>,
+    filming: bool,
     rng: u32,
     volume: f32,
     in_match: bool,
@@ -213,6 +215,8 @@ pub struct Ear {
     hulls: [Hull; MAX_VEHICLES],
     own_engine: bool,
     rounds: Vec<Round>,
+    /// The next snapshot's rounds, built here and swapped in.
+    rounds_next: Vec<Round>,
     snap_tick: u32,
     held_proj: [bool; PROJ_LOOPS],
     // The match.
@@ -228,6 +232,77 @@ pub struct Ear {
     said: u32,
     /// Commands sent the mixer, all told.
     sent: u32,
+    /// Where each held slot was last sent (`flush` drops a move that says
+    /// it again), and frames since every move went regardless.
+    placed: [Option<Place>; mix::LOOPS],
+    since_all: u32,
+}
+
+/// A clip's name, built on the stack (`base_k`): a sound played allocates
+/// nothing. Names are ASCII; one past the room matches no clip.
+#[derive(Clone, Copy)]
+struct ClipName {
+    buf: [u8; CLIP_NAME_MAX],
+    len: usize,
+}
+
+const CLIP_NAME_MAX: usize = 48;
+
+impl ClipName {
+    /// `base`, then `k` in decimal if there is one.
+    fn of(base: &str, k: Option<u8>) -> ClipName {
+        let mut n = ClipName {
+            buf: [0; CLIP_NAME_MAX],
+            len: 0,
+        };
+        n.push(base.as_bytes());
+        if let Some(k) = k {
+            n.digits(k);
+        }
+        n
+    }
+
+    fn with(mut self, b: &[u8]) -> ClipName {
+        self.push(b);
+        self
+    }
+
+    fn digits(&mut self, k: u8) {
+        let (h, t, o) = (k / 100, k / 10 % 10, k % 10);
+        if h > 0 {
+            self.push(&[b'0' + h]);
+        }
+        if h > 0 || t > 0 {
+            self.push(&[b'0' + t]);
+        }
+        self.push(&[b'0' + o]);
+    }
+
+    fn push(&mut self, b: &[u8]) {
+        let end = self.len + b.len();
+        if end > CLIP_NAME_MAX {
+            self.len = CLIP_NAME_MAX + 1;
+            return;
+        }
+        self.buf[self.len..end].copy_from_slice(b);
+        self.len = end;
+    }
+}
+
+impl core::ops::Deref for ClipName {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.buf
+            .get(..self.len)
+            .and_then(|b| core::str::from_utf8(b).ok())
+            .unwrap_or("")
+    }
+}
+
+impl From<&str> for ClipName {
+    fn from(s: &str) -> ClipName {
+        ClipName::of(s, None)
+    }
 }
 
 /// Where we hear from, this frame.
@@ -369,9 +444,11 @@ impl Ear {
         self.ready[id as usize].then_some(id)
     }
     /// One take of `base` (`base_0` … `base_{n-1}`).
-    fn take(&mut self, base: &str, n: u8) -> String {
+    fn take(&mut self, base: &str, n: u8) -> ClipName {
         let k = self.roll(n);
-        format!("{base}_{k}")
+        let mut name = ClipName::of(base, None).with(b"_");
+        name.digits(k);
+        name
     }
 
     /// A sound of our own, in our head.
@@ -385,6 +462,9 @@ impl Ear {
     }
 
     fn cue(&mut self, name: &str, at: Option<Vec3>, gain: f32, speed: f32) {
+        if !self.filming {
+            return;
+        }
         self.cues.push(Cue {
             name: name.to_string(),
             at,
@@ -590,10 +670,12 @@ pub fn decide(
     cam: Query<&GlobalTransform, With<crate::look::rig::EyeCam>>,
     settings: Res<crate::settings::Settings>,
     film: Option<Res<crate::film::Film>>,
+    seen: Res<crate::Seen>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
     cues.0.clear();
+    ear.filming = film.is_some();
     let volume = if film.is_some() { 0.0 } else { settings.volume() * LIVE };
     if volume != ear.volume {
         ear.volume = volume;
@@ -618,7 +700,6 @@ pub fn decide(
         return;
     }
     ear.in_match = true;
-    let now_ms = link.0.now_ms();
     let me = s.core.slot;
     let dt = time.delta_secs().min(0.1);
     let (f, feet) = s.core.own();
@@ -641,8 +722,7 @@ pub fn decide(
 
     events(ear, &ears, &heard.0, me);
     own_body(ear, &ears, &f, feet, dt);
-    let others = s.core.others(now_ms);
-    everyone(ear, &ears, &others, dt);
+    everyone(ear, &ears, &seen.others, dt);
 
     // Engines: ours (predicted), and every other hull with a driver.
     let mut on = ear.own_engine;
@@ -660,14 +740,13 @@ pub fn decide(
         });
     ear.hold(Some(&ears), SLOT_OWN_ENGINE, &mut on, "engine_0", own_src);
     ear.own_engine = on;
-    let hulls = s.core.vehicles(now_ms);
-    let mut seen = [false; MAX_VEHICLES];
-    for hv in &hulls {
+    let mut seen_hull = [false; MAX_VEHICLES];
+    for hv in &seen.vehicles {
         let i = hv.slot as usize;
         if i >= MAX_VEHICLES {
             continue;
         }
-        seen[i] = true;
+        seen_hull[i] = true;
         let p = v(hv.pos);
         let h = &mut ear.hulls[i];
         let raw = if dt > 0.0 && h.pos != Vec3::ZERO {
@@ -686,7 +765,7 @@ pub fn decide(
         ear.hold(Some(&ears), SLOT_ENGINE + i as u8, &mut on, "engine_0", src);
         ear.hulls[i].on = on;
     }
-    for (i, was) in seen.iter().enumerate() {
+    for (i, was) in seen_hull.iter().enumerate() {
         if !was {
             let mut on = ear.hulls[i].on;
             ear.hold(None, SLOT_ENGINE + i as u8, &mut on, "engine_0", None);
@@ -701,12 +780,62 @@ pub fn decide(
 }
 
 fn flush(ear: &mut Ear) {
+    drop_still_moves(ear);
     if let Some(m) = &ear.mixer {
         ear.sent = ear.sent.wrapping_add(ear.cmds.len() as u32);
         m.send(&mut ear.cmds);
     } else if !ear.taken_elsewhere {
         ear.cmds.clear();
     }
+}
+
+/// Frames between moves sent whether or not they moved: a command the
+/// mixer's full inbox dropped is put right within this.
+const MOVES_ALL_EVERY: u32 = 64;
+/// A held slot's move nearer the last one sent than this (gain, rate, the
+/// filter's coefficient) says nothing new.
+const MOVE_EPS: f32 = 1e-4;
+
+/// Drops this frame's moves that put a held slot where the last one sent
+/// did: the wind, a parked engine and a held charge say the same thing
+/// every frame, and each is a lock on the desktop and a message to the audio
+/// thread in a browser.
+fn drop_still_moves(ear: &mut Ear) {
+    ear.since_all += 1;
+    if ear.since_all >= MOVES_ALL_EVERY {
+        ear.since_all = 0;
+        ear.placed = [None; mix::LOOPS];
+    }
+    let same = |a: &Place, b: &Place| {
+        (a.l - b.l).abs() < MOVE_EPS
+            && (a.r - b.r).abs() < MOVE_EPS
+            && (a.rate - b.rate).abs() < MOVE_EPS
+            && (a.lp - b.lp).abs() < MOVE_EPS
+    };
+    let Ear { cmds, placed, .. } = ear;
+    cmds.retain(|c| match c {
+        Cmd::Hold { slot, at, .. } => {
+            if let Some(p) = placed.get_mut(*slot as usize) {
+                *p = Some(*at);
+            }
+            true
+        }
+        Cmd::Move { slot, at } => match placed.get_mut(*slot as usize) {
+            Some(p) if p.as_ref().is_some_and(|was| same(was, at)) => false,
+            Some(p) => {
+                *p = Some(*at);
+                true
+            }
+            None => true,
+        },
+        Cmd::Stop { slot } => {
+            if let Some(p) = placed.get_mut(*slot as usize) {
+                *p = None;
+            }
+            true
+        }
+        _ => true,
+    });
 }
 
 /// Lines the announcer may have waiting; past it the oldest goes.
@@ -777,7 +906,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                     continue;
                 }
                 let n = if at.distance(ears.at) > FAR_M || ears.walled(at) {
-                    format!("{}_0", g.far)
+                    ClipName::of(g.far, None).with(b"_0")
                 } else {
                     ear.take(g.sound, g.takes)
                 };
@@ -860,7 +989,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Pickup as u8 => {
-                let n = format!("impactMetal_light_00{}", ear.roll(3));
+                let n = ClipName::of("impactMetal_light_00", Some(ear.roll(3)));
                 if e.a == me {
                     ear.mine("equip_1", 0.6);
                     ear.mine(&n, 0.35);
@@ -869,7 +998,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Ride as u8 => {
-                let n = format!("impactMetal_light_00{}", ear.roll(3));
+                let n = ClipName::of("impactMetal_light_00", Some(ear.roll(3)));
                 if e.a == me {
                     ear.mine(&n, 0.55);
                 } else {
@@ -1056,7 +1185,8 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     if fresh {
         let gap = (snap.tick.wrapping_sub(ear.snap_tick)).min(TICK_HZ) as f32 / TICK_HZ as f32;
         ear.snap_tick = snap.tick;
-        let mut next: Vec<Round> = Vec::with_capacity(snap.n_proj as usize);
+        let mut next = core::mem::take(&mut ear.rounds_next);
+        next.clear();
         let mut taken = [false; 64];
         for p in &snap.proj[..snap.n_proj as usize] {
             let (pos, vel) = (v(p.pos), v(p.vel));
@@ -1106,7 +1236,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
                 }
             }
         }
-        ear.rounds = next;
+        ear.rounds_next = core::mem::replace(&mut ear.rounds, next);
     }
     // The roar of what flies under its own power.
     for k in 0..ear.rounds.len() {
@@ -1561,23 +1691,54 @@ pub mod on {
             }
         }
 
-        /// `window.__oneshotMix.<name>(args…)`, if the page made it.
-        fn call(name: &str, args: &[JsValue]) {
-            let Some(w) = web_sys::window() else { return };
-            let Ok(mix) = js_sys::Reflect::get(&w, &JsValue::from_str("__oneshotMix")) else {
-                return;
-            };
-            let Ok(f) = js_sys::Reflect::get(&mix, &JsValue::from_str(name)) else {
-                return;
-            };
-            let Ok(f) = f.dyn_into::<js_sys::Function>() else {
-                return;
-            };
-            let a = js_sys::Array::new();
-            for x in args {
-                a.push(x);
+        /// `window.__oneshotMix.<name>(args…)`, if the page made it. The
+        /// object and each function are found once (`send` goes every
+        /// frame), and looked for again until the page has made them.
+        fn call(name: &'static str, args: &[JsValue]) {
+            type Found = (JsValue, Vec<(&'static str, js_sys::Function)>);
+            thread_local! {
+                static MIX: std::cell::RefCell<Option<Found>> = const { std::cell::RefCell::new(None) };
             }
-            let _ = f.apply(&mix, &a);
+            MIX.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.is_none() {
+                    let Some(w) = web_sys::window() else { return };
+                    let Ok(mix) = js_sys::Reflect::get(&w, &JsValue::from_str("__oneshotMix")) else {
+                        return;
+                    };
+                    if !mix.is_object() {
+                        return;
+                    }
+                    *m = Some((mix, Vec::new()));
+                }
+                let Some((mix, fns)) = m.as_mut() else { return };
+                let i = match fns.iter().position(|(n, _)| *n == name) {
+                    Some(i) => i,
+                    None => {
+                        let Some(f) = js_sys::Reflect::get(mix, &JsValue::from_str(name))
+                            .ok()
+                            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+                        else {
+                            return;
+                        };
+                        fns.push((name, f));
+                        fns.len() - 1
+                    }
+                };
+                let f = &fns[i].1;
+                let _ = match args {
+                    [] => f.call0(mix),
+                    [a] => f.call1(mix, a),
+                    [a, b] => f.call2(mix, a, b),
+                    _ => {
+                        let a = js_sys::Array::new();
+                        for x in args {
+                            a.push(x);
+                        }
+                        f.apply(mix, &a)
+                    }
+                };
+            });
         }
 
         pub fn install(id: u16, ogg: &[u8]) {

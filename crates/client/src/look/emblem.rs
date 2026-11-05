@@ -62,6 +62,8 @@ pub fn layers(code: proto::Emblem, size: u32) -> Vec<[f32; 2]> {
         return out;
     }
     let n = (SS * SS) as f32;
+    // The polygons, once a bake: 409,600 samples at the body's size.
+    let polys = Polys::new(glyph, field);
     for py in 0..size {
         for px in 0..size {
             let (mut f_cov, mut g_cov) = (0.0f32, 0.0f32);
@@ -70,7 +72,7 @@ pub fn layers(code: proto::Emblem, size: u32) -> Vec<[f32; 2]> {
                     // [-1, 1], y up.
                     let x = ((px * SS + sx) as f32 + 0.5) / (size * SS) as f32 * 2.0 - 1.0;
                     let y = 1.0 - ((py * SS + sy) as f32 + 0.5) / (size * SS) as f32 * 2.0;
-                    if field != 0 && in_field(field, x, y) {
+                    if field != 0 && in_field(field, &polys.field, x, y) {
                         f_cov += 1.0;
                     }
                     // On a field the glyph sits a little smaller, inside it
@@ -80,7 +82,7 @@ pub fn layers(code: proto::Emblem, size: u32) -> Vec<[f32; 2]> {
                         6 => (1.9, 0.2),
                         _ => (1.3, 0.0),
                     };
-                    if in_glyph(glyph, x * k, (y + dy) * k) {
+                    if in_glyph(glyph, &polys.glyph, x * k, (y + dy) * k) {
                         g_cov += 1.0;
                     }
                 }
@@ -104,15 +106,72 @@ fn in_poly(pts: &[(f32, f32)], x: f32, y: f32) -> bool {
     inside
 }
 
-/// A regular polygon of `n` sides, radius `r`, a vertex at angle `a0`.
-fn in_ngon(n: usize, r: f32, a0: f32, x: f32, y: f32) -> bool {
-    let pts: Vec<(f32, f32)> = (0..n)
-        .map(|i| {
+/// A polygon of at most [`POLY_MAX`] corners.
+#[derive(Clone, Copy)]
+struct Poly {
+    pts: [(f32, f32); POLY_MAX],
+    n: usize,
+}
+
+/// The most corners a shape has: the star's ten.
+const POLY_MAX: usize = 10;
+
+impl Poly {
+    const NONE: Poly = Poly {
+        pts: [(0.0, 0.0); POLY_MAX],
+        n: 0,
+    };
+
+    /// A regular polygon of `n` sides, radius `r`, a vertex at angle `a0`.
+    fn ngon(n: usize, r: f32, a0: f32) -> Poly {
+        let mut p = Poly { n, ..Poly::NONE };
+        for (i, pt) in p.pts[..n].iter_mut().enumerate() {
             let a = a0 + i as f32 * core::f32::consts::TAU / n as f32;
-            (r * a.cos(), r * a.sin())
-        })
-        .collect();
-    in_poly(&pts, x, y)
+            *pt = (r * a.cos(), r * a.sin());
+        }
+        p
+    }
+
+    /// The star: five points, ten corners.
+    fn star() -> Poly {
+        use core::f32::consts::{FRAC_PI_2, PI};
+        let mut p = Poly { n: 10, ..Poly::NONE };
+        for (i, pt) in p.pts.iter_mut().enumerate() {
+            let a = FRAC_PI_2 + i as f32 * PI / 5.0;
+            let rr = if i % 2 == 0 { 0.7 } else { 0.28 };
+            *pt = (rr * a.cos(), rr * a.sin());
+        }
+        p
+    }
+
+    fn has(&self, x: f32, y: f32) -> bool {
+        in_poly(&self.pts[..self.n], x, y)
+    }
+}
+
+/// The polygons an emblem's field and glyph are cut from (none for a shape
+/// that is no polygon), made once for every sample.
+struct Polys {
+    field: Poly,
+    glyph: Poly,
+}
+
+impl Polys {
+    fn new(glyph: u8, field: u8) -> Polys {
+        use core::f32::consts::{FRAC_PI_2, PI};
+        let field = match field {
+            4 => Poly::ngon(6, 0.97, 0.0),
+            6 => Poly::ngon(3, 1.0, FRAC_PI_2),
+            7 => Poly::ngon(8, 0.97, PI / 8.0),
+            _ => Poly::NONE,
+        };
+        let glyph = match glyph {
+            1 => Poly::star(),
+            7 => Poly::ngon(3, 0.68, FRAC_PI_2),
+            _ => Poly::NONE,
+        };
+        Polys { field, glyph }
+    }
 }
 
 /// A heater shield: straight sides, a point at the bottom.
@@ -124,35 +183,28 @@ fn in_shield(s: f32, x: f32, y: f32) -> bool {
     y > -0.1 || x.abs() < 0.8 * (1.0 - ((-0.1 - y) / 0.9).powf(1.6))
 }
 
-fn in_field(field: u8, x: f32, y: f32) -> bool {
+/// Whether `(x, y)` is on `field`; `poly` is its polygon ([`Polys`]).
+fn in_field(field: u8, poly: &Poly, x: f32, y: f32) -> bool {
     let r = (x * x + y * y).sqrt();
     match field {
         1 => r < 0.96,
         2 => x.abs() < 0.86 && y.abs() < 0.86,
         3 => x.abs() + y.abs() < 0.98,
-        4 => in_ngon(6, 0.97, 0.0, x, y),
+        4 => poly.has(x, y),
         5 => in_shield(1.0, x, y),
-        6 => in_ngon(3, 1.0, core::f32::consts::FRAC_PI_2, x, y + 0.2),
-        7 => in_ngon(8, 0.97, core::f32::consts::PI / 8.0, x, y),
+        6 => poly.has(x, y + 0.2),
+        7 => poly.has(x, y),
         _ => false,
     }
 }
 
-fn in_glyph(glyph: u8, x: f32, y: f32) -> bool {
-    use core::f32::consts::{FRAC_PI_2, PI, TAU};
+/// Whether `(x, y)` is on `glyph`; `poly` is its polygon ([`Polys`]).
+fn in_glyph(glyph: u8, poly: &Poly, x: f32, y: f32) -> bool {
+    use core::f32::consts::TAU;
     let r = (x * x + y * y).sqrt();
     match glyph {
         // star
-        1 => {
-            let pts: Vec<(f32, f32)> = (0..10)
-                .map(|i| {
-                    let a = FRAC_PI_2 + i as f32 * PI / 5.0;
-                    let rr = if i % 2 == 0 { 0.7 } else { 0.28 };
-                    (rr * a.cos(), rr * a.sin())
-                })
-                .collect();
-            in_poly(&pts, x, y + 0.05)
-        }
+        1 => poly.has(x, y + 0.05),
         // chevron, pointing up
         2 => {
             let d = y - (0.45 - x.abs() * 0.9);
@@ -182,7 +234,7 @@ fn in_glyph(glyph: u8, x: f32, y: f32) -> bool {
         // diamond
         6 => x.abs() / 0.45 + y.abs() / 0.68 < 1.0,
         // triangle
-        7 => in_ngon(3, 0.68, FRAC_PI_2, x, y + 0.12),
+        7 => poly.has(x, y + 0.12),
         // cross
         8 => (x.abs() < 0.17 && y.abs() < 0.62) || (y.abs() < 0.17 && x.abs() < 0.62),
         // arrow, up

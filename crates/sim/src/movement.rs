@@ -176,6 +176,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             &mut p.z,
             &mut v,
             BODY_R,
+            p.y,
             lo,
             hi,
             p.y + STEP,
@@ -512,6 +513,8 @@ mod tests {
             solid_looks: &[],
             dress: &[],
             dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
@@ -597,6 +600,8 @@ mod tests {
             solid_looks: &[0, 0, 0],
             dress: &[],
             dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
@@ -692,5 +697,278 @@ mod tests {
         // is a little under where it is aimed, so a little past it).
         assert!(fabs(b.pos.x - -19.0) < 1.5 && fabs(b.pos.z) < 0.5, "{:?}", b.pos);
         assert!((TICK_HZ * 23 / 10..TICK_HZ * 27 / 10).contains(&ticks), "{ticks} ticks");
+    }
+
+    static ZEROS: [u8; 16] = [0; 16];
+
+    /// Open floor with these profile solids and these other solids on it.
+    fn with_profiles(profiles: &'static [crate::map::ProfileDef], solids: &'static [(u8, [f32; 8])]) -> Map {
+        crate::map::Def {
+            id: 251,
+            practice: false,
+            name: "profiles",
+            lo: (-40.0, -20.0),
+            hi: (60.0, 20.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([1.0, 0.0, 0.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids,
+            solid_looks: &ZEROS[..solids.len()],
+            dress: &[],
+            dress_solids: &[],
+            profiles,
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+            flags: &[],
+        }
+        .build()
+    }
+
+    /// A low dome (a cap 3 m across its radius, 0.8 m high: 30° at its
+    /// edge) and a steep one (a hemisphere of 2 m).
+    const DOMES: &[crate::map::ProfileDef] = &[
+        (
+            3,
+            [8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[[0.0, 0.0, 0.8], [1.0, 0.0, 0.716], [2.0, 0.0, 0.458], [3.0, 0.0, 0.0]],
+            0,
+        ),
+        (
+            3,
+            [20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[
+                [0.0, 0.0, 2.0],
+                [1.0, 0.0, 1.732],
+                [1.5, 0.0, 1.323],
+                [1.8, 0.0, 0.872],
+                [2.0, 0.0, 0.0],
+            ],
+            0,
+        ),
+    ];
+
+    #[test]
+    fn a_body_walks_over_a_low_dome() {
+        let map = with_profiles(DOMES, &[]);
+        let d = map.solids[0];
+        let mut b = standing(&map, 3.0, 0.0);
+        let mut top = 0.0f32;
+        for _ in 0..TICK_HZ * 2 {
+            step(&mut b, &run_x(), &map);
+            if fabs(b.pos.x - 8.0) < 2.5 {
+                assert!(b.grounded, "on the dome: {:?}", b);
+                // Stood on the slope under its middle, never floating.
+                assert!(fabs(b.pos.y - d.top_at(b.pos.x, b.pos.z)) < 0.02, "{:?}", b.pos);
+            }
+            top = top.max(b.pos.y);
+        }
+        assert!(
+            fabs(top - 0.8) < 0.02 && b.pos.x > 12.0 && b.pos.y == 0.0,
+            "over it: {top} {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_steep_flank_is_not_climbed_a_step_at_a_time() {
+        let map = with_profiles(DOMES, &[]);
+        let mut b = standing(&map, 15.0, 0.0);
+        for _ in 0..TICK_HZ * 3 {
+            step(&mut b, &run_x(), &map);
+            assert!(b.pos.y < 0.01, "up the hemisphere: {:?}", b.pos);
+        }
+        let s = fabs(b.pos.x - 20.0);
+        assert!(
+            s > 1.8 + BODY_R - 0.02 && s < 2.0 + BODY_R + 0.02,
+            "held at its foot: {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_jump_into_a_flat_lathe_goes_as_into_a_pillar() {
+        // A lathe the shape of a pillar at z = 4, the pillar at z = −4.
+        let map = with_profiles(
+            &[(
+                3,
+                [10.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[0.0, 0.0, 1.5], [1.0, 0.0, 1.5]],
+                0,
+            )],
+            &[(0, [10.0, -4.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.5])],
+        );
+        let jump = Input {
+            mz: 127,
+            buttons: crate::input::JUMP,
+            ..Input::default()
+        };
+        for start in [6.0, 7.5, 8.2] {
+            let (mut a, mut p) = (standing(&map, start, 4.0), standing(&map, start, -4.0));
+            for t in 0..TICK_HZ * 2 {
+                let i = if t < 2 && start > 7.0 { jump } else { run_x() };
+                step(&mut a, &i, &map);
+                step(&mut p, &i, &map);
+                assert!(
+                    fabs(a.pos.y - p.pos.y) < 1e-3,
+                    "{start} at {t}: {:?} vs {:?}",
+                    a.pos,
+                    p.pos
+                );
+                assert!(
+                    fabs((a.pos.x - p.pos.x) + 0.0) < 0.01,
+                    "{start} at {t}: {:?} vs {:?}",
+                    a.pos,
+                    p.pos
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_body_stands_under_a_bulbs_undercut() {
+        // A mushroom: a stem 0.3 m round, a cap 2 m round from 2.0 m at the
+        // stem to 2.5 at its rim.
+        let map = with_profiles(
+            &[(
+                3,
+                [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[0.0, 0.0, 3.0], [0.3, 0.0, 3.0], [0.3, 2.0, 3.0], [2.0, 2.5, 2.5]],
+                0,
+            )],
+            &[],
+        );
+        let mut b = standing(&map, 4.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ * 2);
+        let s = fabs(b.pos.x - 10.0);
+        assert!(
+            fabs(s - (0.3 + BODY_R)) < 0.02 && b.pos.y == 0.0,
+            "under the cap at the stem: {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_jump_under_a_vault_stops_at_the_arch() {
+        // A vault along x from 40 to 50 over z −3..3, springing at 1.9 m,
+        // its crown 2.6.
+        let map = with_profiles(
+            &[(
+                5,
+                [45.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0],
+                &[
+                    [-3.0, 1.9, 3.0],
+                    [-2.0, 2.42, 3.0],
+                    [-1.0, 2.56, 3.0],
+                    [0.0, 2.6, 3.0],
+                    [1.0, 2.56, 3.0],
+                    [2.0, 2.42, 3.0],
+                    [3.0, 1.9, 3.0],
+                ],
+                0,
+            )],
+            &[],
+        );
+        let jump = Input {
+            buttons: crate::input::JUMP,
+            ..Input::default()
+        };
+        for (z, roof) in [(0.0, 2.6 - 0.35 * 0.04), (2.2, 2.42 - 0.55 * 0.52)] {
+            let mut b = standing(&map, 45.0, z);
+            let mut top = 0.0f32;
+            for _ in 0..TICK_HZ {
+                step(&mut b, &jump, &map);
+                top = top.max(b.pos.y + BODY_H);
+            }
+            assert!(
+                top <= roof + 0.01 && top > roof - 0.1,
+                "{z}: the head to {top}, the arch at {roof}"
+            );
+        }
+        // Outside, the same jump goes its full height.
+        let mut b = standing(&map, 30.0, 0.0);
+        let mut top = 0.0f32;
+        for _ in 0..TICK_HZ {
+            step(&mut b, &jump, &map);
+            top = top.max(b.pos.y);
+        }
+        assert!(top > 2.5, "{top}");
+    }
+
+    #[test]
+    fn a_spiral_is_walked_up() {
+        // A quarter turn round (0, 0) on the circle r = 6, 2 m wide, from 0
+        // to 2 m: straight ramps along it, as the compiler lays them.
+        let n = 12;
+        let (r, w, rise) = (6.0f32, 2.0f32, 2.0f32);
+        let th = core::f32::consts::FRAC_PI_2 / n as f32;
+        let mut rows: Vec<crate::map::ProfileDef> = Vec::new();
+        for i in 0..n {
+            let phi = th * (i as f32 + 0.5);
+            let (sn, c) = crate::fmath::sin_cos(phi);
+            let ymid = rise * (i as f32 + 0.5) / n as f32;
+            let hx = (r + w / 2.0) * crate::fmath::tan(th / 2.0);
+            let k = (rise / (r * core::f32::consts::FRAC_PI_2)) * th / (2.0 * crate::fmath::tan(th / 2.0));
+            let knots: &'static [[f32; 3]] = Box::leak(Box::new([
+                [-hx, 0.0, (ymid - k * hx).max(0.0)],
+                [hx, 0.0, ymid + k * hx],
+            ]));
+            rows.push((5, [r * c, r * sn, 0.0, c, sn, w / 2.0, 0.0, 0.0], knots, 0));
+        }
+        let map = with_profiles(Box::leak(rows.into_boxed_slice()), &[]);
+        // From the foot (6, −1.5), up +z, then round.
+        let mut b = standing(&map, 6.0, -1.5);
+        let (mut was, mut top) = (0.0f32, 0.0f32);
+        for t in 0..TICK_HZ * 2 {
+            let (x, z) = (b.pos.x, b.pos.z);
+            // Along the circle (the tangent, (−z, x)), back toward it.
+            let rho = (x * x + z * z).sqrt();
+            let k = (rho - r) * 2.0;
+            let (dx, dz) = (-z - x * k, x - z * k);
+            let yaw = crate::geom::rad_to_yaw(crate::fmath::atan2(dz, dx));
+            let i = Input {
+                mz: 127,
+                yaw,
+                ..Input::default()
+            };
+            step(&mut b, &i, &map);
+            if b.pos.z > 0.5 && b.pos.x > 0.5 {
+                assert!(b.grounded && b.pos.y >= was - 0.01, "up the spiral at {t}: {:?}", b.pos);
+                top = top.max(b.pos.y);
+            }
+            was = b.pos.y;
+        }
+        assert!(top > 1.8, "to its top: {top}");
+    }
+
+    #[test]
+    fn a_push_ends_unblocked_on_the_side_it_came_from() {
+        // A wall 0.4 m thick on the circle r = 5 round (0, 0); a body that
+        // got past its middle from outside goes back out.
+        let map = with_profiles(
+            &[(
+                3,
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[4.8, 0.0, 3.0], [5.2, 0.0, 3.0]],
+                0,
+            )],
+            &[],
+        );
+        let s = map.solids[0];
+        let band = crate::profile::Band {
+            feet: 0.0,
+            lo: STEP,
+            hi: BODY_H,
+            climb: STEP,
+        };
+        let (x, z, ..) = s.push_band(4.9, 0.0, BODY_R, band, (5.6, 0.0)).unwrap();
+        assert!(x > 5.2 + BODY_R && fabs(z) < 1e-4, "out: {x} {z}");
+        let (x, ..) = s.push_band(5.1, 0.0, BODY_R, band, (4.4, 0.0)).unwrap();
+        assert!(x < 4.8 - BODY_R, "in: {x}");
     }
 }

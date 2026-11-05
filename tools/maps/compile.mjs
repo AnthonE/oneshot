@@ -80,16 +80,38 @@
 //   { ramp: [x0, z0, x1, z1], up: "+x"|"-x"|"+z"|"-z", from: y, to: y,
 //     base: y (default 0), look }                     a slope, `from` at its
 //                                                    low side, `to` at its high
-//   { arc: [x, z], r, from: deg, to: deg, thick: m, y: [y0, y1], look }
-//                                                    a curved wall: turned
-//                                                    segments along the circle
-//                                                    of radius r, within 2 cm Metres, y up, the floor at y = 0. On a terrain a box stands at the
+// and solids round in height too (tools/maps/curves.mjs, sim::profile): a
+// cross-section spun round an upright axis or carried along a level one,
+// each curve within 2 cm. `from`/`to` (degrees, +x toward +z) make a spun
+// one a sector; an axis [[x0, z0], [x1, z1]] may also be [x, z] with
+// `angle` and `length`:
+//   { lathe: [x, z], y, profile: [[s, bottom, top], ...], from?, to? }
+//   { sweep: axis, y, profile }                     s across the axis
+//   { dome: [x, z], r, h, y }                       a cap
+//   { pod: [x, z], r, h, y, belly?, foot? }         a bulb on a foot
+//   { column: [x, z], r, y: [y0, y1], flare?: [r, h], cap?: [r, h] }
+//   { deck: [x, z], r, hole?, y, thick, rim?, belly? }  a round slab or ring
+//                                                    (its top at y), rolled
+//   { ring: [x, z], r, tube, y }                    a torus
+//   { fin: [x, z], r, thick, y: [y0, ridge] }       a low wall with a pointed
+//                                                    top, never stood on
+//   { arc: [x, z], r, from, to, thick, y: [y0, y1], inner?, outer? }
+//                                                    a curved wall; a face's
+//                                                    bulge { depth, y: [a, b] }
+//   { wall: axis, thick, y: [y0, y1], plus?, minus? }  a straight one
+//   { vault: [x0, z0, x1, z1], along?, spring, crown, roof | band }  a barrel ceiling
+//   { cupola: [x, z], r, spring, crown, roof | band, s?, from?, to? }   a dome's
+//   { arch: axis, width, spring, crown, top, jamb }    an arched opening
+//   { pipe: axis, r, y }  { walk: axis, width, y, thick, rim? }
+//   { spiral: [x, z], r, width, from, to, y: [ya, yb], base? }  a curved ramp
+// Metres, y up, the floor at y = 0. On a terrain a box stands at the
 // y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
 // roam point at height 0 is put on the ground by the sim.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readCurve, profileRow, placeCurve, mirrorCurve } from './curves.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MAPS = join(ROOT, 'maps');
@@ -113,8 +135,6 @@ const TEAMS = { red: 0, blue: 1, any: 255 };
 const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
 const MAX_BOXES = 512;
-/** How far an arc's segments may stray from its circle, m. */
-const ARC_ERR = 0.02;
 const DIRS = ['+x', '-x', '+z', '-z'];
 const MAX_LAUNCHERS = 8;
 /** sim::consts::MAX_VEHICLES. */
@@ -140,6 +160,7 @@ export function place(box, at, turn) {
 export function placeSolid(sol, at, turn) {
   const q = ((Math.round(turn / 90) % 4) + 4) % 4;
   const rot = ([x, z]) => [[x, z], [-z, x], [-x, -z], [z, -x]][q];
+  if (isCurve(sol)) return placeCurve(sol, at, q, rot);
   const o = { ...sol };
   if (sol.kind === 'ramp') {
     const [x0, z0, x1, z1] = sol.rect;
@@ -159,6 +180,7 @@ export function placeSolid(sol, at, turn) {
 
 /** A solid's mirror image across x (sx = −1) and/or z (sz = −1). */
 function mirrorSolid(sol, sx, sz) {
+  if (isCurve(sol)) return mirrorCurve(sol, sx, sz);
   const o = { ...sol };
   if (sol.kind === 'ramp') {
     const [x0, z0, x1, z1] = sol.rect;
@@ -178,9 +200,14 @@ function mirrorSolid(sol, sx, sz) {
   return o;
 }
 
-/** A solid item of map.json as the compiler holds it (arcs become several). */
+/** A profile solid (sim::profile), not one of the flat-topped kinds. */
+const isCurve = (s) => s.kind === 'lathe' || s.kind === 'sweep';
+
+/** A solid item of map.json as the compiler holds it (some become several). */
 function readSolid(it, name, fail, terrain) {
   const look = it.look || 'block';
+  const curve = readCurve(it, name, look, fail);
+  if (curve) return curve;
   const ys = (what) => {
     const y = it.y;
     if (!Array.isArray(y) || y.length !== 2 || !(y[0] < y[1])) fail(`${name}: ${what} needs y: [y0, y1], y0 < y1`);
@@ -215,27 +242,7 @@ function readSolid(it, name, fail, terrain) {
     if ((high - low) / run > 1) fail(`${name}: a ramp steeper than 45°`);
     return [{ kind: 'ramp', rect: [x0, z0, x1, z1], dir, base, low, high, look }];
   }
-  if (it.arc) {
-    const [y0, y1] = ys('an arc');
-    const R = it.r, t = it.thick ?? 0.4;
-    if (!(R > t) || !(t >= 0.2)) fail(`${name}: an arc needs r over its thick (0.2 m or more)`);
-    const a0 = it.from, a1 = it.to;
-    if (typeof a0 !== 'number' || typeof a1 !== 'number' || a0 === a1) fail(`${name}: an arc runs "from" one angle "to" another (degrees)`);
-    const span = ((a1 - a0) * Math.PI) / 180;
-    const step = 2 * Math.acos(Math.max(-1, 1 - ARC_ERR / (R + t / 2)));
-    const n = Math.max(1, Math.ceil(Math.abs(span) / step));
-    const th = span / n;
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      const phi = (a0 * Math.PI) / 180 + th * (i + 0.5);
-      // Each segment as long as the outer face's chord needs, so neighbours'
-      // outer corners meet.
-      const hx = (R + t / 2) * Math.tan(Math.abs(th) / 2);
-      out.push({ kind: 'turned', x: it.arc[0] + R * Math.cos(phi), z: it.arc[1] + R * Math.sin(phi), hx, hz: t / 2, angle: (phi * 180) / Math.PI + 90, y0, y1, look });
-    }
-    return out;
-  }
-  fail(`${name}: an item is a box [..], or { round | turned | ramp | arc }`);
+  fail(`${name}: an item is a box [..], or a solid (see the header)`);
 }
 
 const f32 = (v) => Math.fround(v);
@@ -447,7 +454,13 @@ export function compile(spec, where = 'map.json') {
     rocks = planned.length;
   }
   if (boxes.length + solids.length > MAX_BOXES) fail(`${boxes.length} boxes and ${solids.length} solids, at most ${MAX_BOXES} together`);
-  return { id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes, solids, spawns, pads, roam, terrain, launchers, vehicles, flags, dress, dressSolids, rocks };
+  // Profile solids are a table of their own, after the others in the sim.
+  const profiles = solids.filter(isCurve), dressProfiles = dressSolids.filter(isCurve);
+  return {
+    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes,
+    solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, dress,
+    dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
+  };
 }
 
 // ----------------------------------------------------------- terrain maths
@@ -1155,6 +1168,12 @@ export function rust(m, src) {
   L.push('    dress_solids: &[');
   for (const s of m.dressSolids) L.push(`        (${solidRow(s)}, ${LOOKS.indexOf(s.look)}),`);
   L.push('    ],');
+  L.push('    profiles: &[');
+  for (const s of m.profiles) L.push(`        (${profileRow(s, lit)}, ${LOOKS.indexOf(s.look)}),`);
+  L.push('    ],');
+  L.push('    dress_profiles: &[');
+  for (const s of m.dressProfiles) L.push(`        (${profileRow(s, lit)}, ${LOOKS.indexOf(s.look)}),`);
+  L.push('    ],');
   L.push(`    nav: ${m.nav},`);
   L.push(`    flags: &[${m.flags.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   const lt = m.light;
@@ -1230,7 +1249,7 @@ function main() {
   for (const m of list) {
     const t = m.terrain ? `, terrain ${m.terrain.nx} × ${m.terrain.nz}` : '';
     const r = m.rocks ? ` (${m.rocks} rocks)` : '';
-    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes${r}, ${m.solids.length} solids, ${m.dress.length + m.dressSolids.length} dressing, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
+    console.log(`${m.id} ${m.name}: ${m.boxes.length} boxes${r}, ${m.solids.length} solids, ${m.profiles.length} profiles, ${m.dress.length + m.dressSolids.length + m.dressProfiles.length} dressing, ${m.spawns.length} spawns, ${m.pads.length} pads, ${m.roam.length} roam points, ${m.launchers.length} launchers, ${m.vehicles.length} vehicles${t}`);
   }
   if (stale) process.exit(1);
 }

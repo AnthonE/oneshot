@@ -33,15 +33,26 @@ static A: Counting = Counting;
 fn the_tick_allocates_nothing() {
     on_proving_grounds();
     on_terrain_with_vehicles();
+    on_profiles();
 }
 
 fn on_proving_grounds() {
+    doubles(Map::proving_grounds());
+}
+
+/// Chrysalis: every solid a profile (sim::profile), bots finding their
+/// way, grenades off its curves.
+fn on_profiles() {
+    doubles(sim::maps::chrysalis::DEF.build());
+}
+
+fn doubles(map: Map) {
     let rules = Rules {
         score_limit: 1000,
         time_limit_ms: 0,
         ..Rules::doubles()
     };
-    let mut w = World::new(Map::proving_grounds(), rules, 5, (1, 2));
+    let mut w = World::new(map, rules, 5, (1, 2));
     let mut bots = [Bot::new(5, 0, 0.5); MAX_FIGHTERS];
     for (s, b) in bots.iter_mut().enumerate().take(4) {
         w.seat(s, (s & 1) as u8);

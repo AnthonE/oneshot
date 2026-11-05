@@ -643,6 +643,62 @@ fn main() {
                         pz(bz - ux * wid)
                     );
                 }
+                // Its outline from above: a ring, a ring's sector, or a
+                // carried solid's rectangle (the hole a second ring, cut).
+                Shape::Revolve { x, z, sector, k, .. } => {
+                    let (s0, sn) = (k[0][0], k[k.len() - 1][0]);
+                    let (a0, a1) = match sector {
+                        None => (0.0, std::f32::consts::TAU),
+                        Some(sec) => (sec.e0[1].atan2(sec.e0[0]), {
+                            let b = sec.e1[1].atan2(sec.e1[0]);
+                            let a = sec.e0[1].atan2(sec.e0[0]);
+                            if b <= a {
+                                b + std::f32::consts::TAU
+                            } else {
+                                b
+                            }
+                        }),
+                    };
+                    let n = 48;
+                    let ring = |r: f32, rev: bool| -> Vec<String> {
+                        (0..=n)
+                            .map(|i| {
+                                let i = if rev { n - i } else { i };
+                                let a = a0 + (a1 - a0) * i as f32 / n as f32;
+                                format!("{:.1},{:.1}", px(x + r * a.cos()), pz(z + r * a.sin()))
+                            })
+                            .collect()
+                    };
+                    let path = if sector.is_none() {
+                        let mut d = format!("M{}Z", ring(sn, false).join(" L"));
+                        if s0 > 0.0 {
+                            d += &format!(" M{}Z", ring(s0, true).join(" L"));
+                        }
+                        d
+                    } else {
+                        let mut pts = ring(sn, false);
+                        pts.extend(ring(s0, true));
+                        format!("M{}Z", pts.join(" L"))
+                    };
+                    let _ = writeln!(
+                        svg,
+                        r##"<path d="{path}" fill="{fill}" fill-rule="evenodd" stroke="#0b0c0f" stroke-width="0.6"/>"##
+                    );
+                }
+                Shape::Sweep {
+                    x, z, c, s: sn, l, k, ..
+                } => {
+                    let (s0, s1) = (k[0][0], k[k.len() - 1][0]);
+                    let pts: Vec<String> = [(-l, s0), (l, s0), (l, s1), (-l, s1)]
+                        .iter()
+                        .map(|&(u, v)| format!("{:.1},{:.1}", px(x + u * c - v * sn), pz(z + u * sn + v * c)))
+                        .collect();
+                    let _ = writeln!(
+                        svg,
+                        r##"<polygon points="{}" fill="{fill}" stroke="#0b0c0f" stroke-width="0.5"/>"##,
+                        pts.join(" ")
+                    );
+                }
             },
         }
     }

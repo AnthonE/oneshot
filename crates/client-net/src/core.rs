@@ -498,10 +498,18 @@ impl NetCore {
     /// from `input` (the controls as they are now) and predicting it.
     /// Returns the input datagrams to send.
     pub fn update(&mut self, now_ms: f64, input: Input) -> Vec<InputMsg> {
+        let mut out = Vec::new();
+        self.update_each(now_ms, input, |m| out.push(*m));
+        out
+    }
+
+    /// [`NetCore::update`], handing each input datagram to `send` as it is
+    /// made rather than in a Vec (the frame's path allocates nothing).
+    pub fn update_each(&mut self, now_ms: f64, input: Input, mut send: impl FnMut(&InputMsg)) {
         if self.watch {
             self.last_ms = Some(now_ms);
             self.watched(now_ms);
-            return Vec::new();
+            return;
         }
         let input = input.sanitized();
         self.sticky |= input.buttons;
@@ -535,7 +543,6 @@ impl NetCore {
         for l in self.launches.iter_mut() {
             l.skip += skip;
         }
-        let mut out = Vec::new();
         while (self.seq as f64) < self.t.floor() {
             let s = self.seq;
             // The first tick made takes every button seen since the last.
@@ -561,7 +568,7 @@ impl NetCore {
             self.launch(s, now_ms, &local);
             self.seq = s.wrapping_add(1);
             if self.seq.is_multiple_of(SEND_EVERY) {
-                out.push(self.input_msg(now_ms));
+                send(&self.input_msg(now_ms));
             }
         }
         // Ease corrections out. Riding, the body is drawn on the hull: its
@@ -589,7 +596,6 @@ impl NetCore {
             }
         }
         self.free_launches(now_ms);
-        out
     }
 
     /// What predicted tick `q` fired, as rounds of ours to draw from the
@@ -781,15 +787,13 @@ impl NetCore {
         }
         let mut at = None;
         if (h as usize) < MAX_FIGHTERS {
-            self.each_other(now_ms, Some(h), |d| at = at.or(Some((d.pos, d.vel))));
-            return at;
+            return self.other_at(h, now_ms).map(|d| (d.pos, d.vel));
         }
         let slot = h - MAX_FIGHTERS as u8;
         if self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
             return self.own_vehicle().map(|(v, p, _)| (p, v.vel));
         }
-        self.each_vehicle(now_ms, Some(slot), |v| at = at.or(Some((v.pos, V3::ZERO))));
-        at
+        self.vehicle_at(slot, now_ms).map(|v| (v.pos, V3::ZERO))
     }
 
     /// Our own rounds still drawn from their launch, not yet on the render
@@ -804,7 +808,15 @@ impl NetCore {
     /// (`own()`) the frame it fired, its clock run at `1 - GLIDE` until it
     /// is on the render tick. A stuck sticky rides its host as drawn.
     pub fn projectiles(&self, now_ms: f64) -> Vec<DrawnProj> {
-        let mut out = Vec::with_capacity(MAX_SNAP_PROJ + self.launches.len());
+        let mut out = Vec::new();
+        self.projectiles_into(now_ms, &mut out);
+        out
+    }
+
+    /// [`NetCore::projectiles`] into `out` (cleared first): a Vec kept from
+    /// frame to frame allocates nothing.
+    pub fn projectiles_into(&self, now_ms: f64, out: &mut Vec<DrawnProj>) {
+        out.clear();
         let frames = &self.frames[..self.n_frames];
         let mut seen = [0u16; INTERP_FRAMES * MAX_SNAP_PROJ];
         let mut n_seen = 0;
@@ -828,7 +840,6 @@ impl NetCore {
                 out.push(d);
             }
         }
-        out
     }
 
     /// Our unbound launches meet the server's rounds in the newest frame:
@@ -1145,7 +1156,7 @@ impl NetCore {
             self.death = None;
         }
         self.latest = *s;
-        for (i, was) in drawn.into_iter().take(n_drawn).enumerate() {
+        for (i, &was) in drawn[..n_drawn].iter().enumerate() {
             let l = self.launches[i];
             if let (Some(p0), Some(p1)) = (was, self.launch_drawn(&l, now_ms).map(|d| d.pos)) {
                 let off = l.off + (p0 - p1);
@@ -1377,47 +1388,39 @@ impl NetCore {
     /// The vehicles we were sent (but the one we ride in), between the two
     /// snapshots around the render tick.
     pub fn vehicles(&self, now_ms: f64) -> Vec<DrawnVehicle> {
-        let mut out = Vec::with_capacity(MAX_SNAP_VEHICLES);
-        self.each_vehicle(now_ms, None, |d| out.push(d));
+        let mut out = Vec::new();
+        self.vehicles_into(now_ms, &mut out);
         out
     }
 
-    /// [`NetCore::vehicles`], one at a time to `f`: only hull `only`, if
-    /// given.
-    fn each_vehicle(&self, now_ms: f64, only: Option<u8>, mut f: impl FnMut(DrawnVehicle)) {
+    /// [`NetCore::vehicles`] into `out` (cleared first): a Vec kept from
+    /// frame to frame allocates nothing.
+    pub fn vehicles_into(&self, now_ms: f64, out: &mut Vec<DrawnVehicle>) {
+        out.clear();
         if self.n_frames == 0 {
             return;
         }
         let mine = self.pred.riding().map(|(i, _)| i as u8);
         let rt = self.render_tick(now_ms);
         let (ai, bi) = self.around(rt);
-        let a = &self.frames[ai];
-        let b = bi.map(|i| &self.frames[i]);
+        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
         for va in &a.vehicles[..a.nv as usize] {
-            if Some(va.slot) == mine || only.is_some_and(|s| s != va.slot) {
-                continue;
+            if Some(va.slot) != mine {
+                out.push(vehicle_between(va, a.tick, b, rt));
             }
-            let mut d = DrawnVehicle {
-                slot: va.slot,
-                pos: va.pos,
-                yaw: yaw_rad(va.yaw),
-                health: va.health,
-                seats: va.seats,
-            };
-            let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
-            if let (Some(b), Some(vb)) = (b, vb) {
-                if b.tick - a.tick <= ticks(LERP_SPAN_MS) {
-                    let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
-                    d.pos = va.pos + (vb.pos - va.pos) * u;
-                    d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
-                } else {
-                    d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
-                }
-            } else {
-                d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
-            }
-            f(d);
         }
+    }
+
+    /// One vehicle of [`NetCore::vehicles`], by its slot.
+    fn vehicle_at(&self, slot: u8, now_ms: f64) -> Option<DrawnVehicle> {
+        if self.n_frames == 0 || self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
+            return None;
+        }
+        let rt = self.render_tick(now_ms);
+        let (ai, bi) = self.around(rt);
+        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
+        let va = a.vehicles[..a.nv as usize].iter().find(|v| v.slot == slot)?;
+        Some(vehicle_between(va, a.tick, b, rt))
     }
 
     /// The match's phase as of the newest snapshot.
@@ -1439,8 +1442,15 @@ impl NetCore {
     /// or once held [`HOLD_MAX_MS`]; then hits, kills and our own, which
     /// play the moment they arrive (our shots the moment predicted).
     pub fn drain_events(&mut self, now_ms: f64) -> Vec<EventState> {
-        let rt = self.render_tick(now_ms);
         let mut out = Vec::new();
+        self.drain_events_into(now_ms, &mut out);
+        out
+    }
+
+    /// [`NetCore::drain_events`] into `out` (cleared first).
+    pub fn drain_events_into(&mut self, now_ms: f64, out: &mut Vec<EventState>) {
+        out.clear();
+        let rt = self.render_tick(now_ms);
         // Snapshots only come newer, so they are due in order.
         while let Some(h) = self.held.front() {
             if h.tick as f64 <= rt || now_ms - h.at_ms >= HOLD_MAX_MS {
@@ -1451,7 +1461,6 @@ impl NetCore {
             }
         }
         out.append(&mut self.events);
-        out
     }
 
     /// How far behind the newest snapshot everyone else is drawn at
@@ -1497,49 +1506,88 @@ impl NetCore {
     /// the render tick, or extrapolated at most [`EXTRAPOLATE_MS`] past the
     /// newest, then held.
     pub fn others(&self, now_ms: f64) -> Vec<Drawn> {
-        let mut out = Vec::with_capacity(MAX_REMOTES);
-        self.each_other(now_ms, None, |d| out.push(d));
+        let mut out = Vec::new();
+        self.others_into(now_ms, &mut out);
         out
     }
 
-    /// [`NetCore::others`], one at a time to `f`: only seat `only`'s, if
-    /// given.
-    fn each_other(&self, now_ms: f64, only: Option<u8>, mut f: impl FnMut(Drawn)) {
+    /// [`NetCore::others`] into `out` (cleared first): a Vec kept from
+    /// frame to frame allocates nothing.
+    pub fn others_into(&self, now_ms: f64, out: &mut Vec<Drawn>) {
+        out.clear();
         if self.n_frames == 0 {
             return;
         }
         let rt = self.render_tick(now_ms);
         let (ai, bi) = self.around(rt);
-        let a = &self.frames[ai];
-        let b = bi.map(|i| &self.frames[i]);
-        for ra in &a.remotes[..a.n as usize] {
-            if only.is_some_and(|s| s != ra.slot) {
-                continue;
+        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
+        out.extend(
+            a.remotes[..a.n as usize]
+                .iter()
+                .map(|ra| remote_between(ra, a.tick, b, rt)),
+        );
+    }
+
+    /// One fighter of [`NetCore::others`], by its slot.
+    fn other_at(&self, slot: u8, now_ms: f64) -> Option<Drawn> {
+        if self.n_frames == 0 {
+            return None;
+        }
+        let rt = self.render_tick(now_ms);
+        let (ai, bi) = self.around(rt);
+        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
+        let ra = a.remotes[..a.n as usize].iter().find(|r| r.slot == slot)?;
+        Some(remote_between(ra, a.tick, b, rt))
+    }
+}
+
+/// Remote `ra` of the frame at tick `a_tick`, drawn at render tick `rt`:
+/// toward its next frame `b` if it is in it, or run on from its velocity.
+fn remote_between(ra: &Remote, a_tick: u32, b: Option<&Frame>, rt: f64) -> Drawn {
+    let mut d = drawn(ra);
+    let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
+    match (b, rb) {
+        (Some(b), Some(rb)) if ra.alive == rb.alive => {
+            // A gap too long to draw across: as if the next hadn't
+            // come (run on, then held) until it is due, then there.
+            if b.tick - a_tick <= ticks(LERP_SPAN_MS) {
+                let u = ((rt - a_tick as f64) / (b.tick - a_tick) as f64).clamp(0.0, 1.0) as f32;
+                d.pos = ra.pos + (rb.pos - ra.pos) * u;
+                d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
+                d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
+            } else if ra.alive {
+                d.pos = ra.pos + ra.vel * (ahead(rt, a_tick) / TICK_HZ as f32);
             }
-            let mut d = drawn(ra);
-            let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
-            match (b, rb) {
-                (Some(b), Some(rb)) if ra.alive == rb.alive => {
-                    // A gap too long to draw across: as if the next hadn't
-                    // come (run on, then held) until it is due, then there.
-                    if b.tick - a.tick <= ticks(LERP_SPAN_MS) {
-                        let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
-                        d.pos = ra.pos + (rb.pos - ra.pos) * u;
-                        d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
-                        d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
-                    } else if ra.alive {
-                        d.pos = ra.pos + ra.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
-                    }
-                }
-                _ => {
-                    if ra.alive {
-                        d.pos = ra.pos + ra.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
-                    }
-                }
+        }
+        _ => {
+            if ra.alive {
+                d.pos = ra.pos + ra.vel * (ahead(rt, a_tick) / TICK_HZ as f32);
             }
-            f(d);
         }
     }
+    d
+}
+
+/// Vehicle `va` of the frame at tick `a_tick`, drawn at render tick `rt`,
+/// as [`remote_between`] draws a fighter.
+fn vehicle_between(va: &VehState, a_tick: u32, b: Option<&Frame>, rt: f64) -> DrawnVehicle {
+    let mut d = DrawnVehicle {
+        slot: va.slot,
+        pos: va.pos,
+        yaw: yaw_rad(va.yaw),
+        health: va.health,
+        seats: va.seats,
+    };
+    let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
+    match (b, vb) {
+        (Some(b), Some(vb)) if b.tick - a_tick <= ticks(LERP_SPAN_MS) => {
+            let u = ((rt - a_tick as f64) / (b.tick - a_tick) as f64).clamp(0.0, 1.0) as f32;
+            d.pos = va.pos + (vb.pos - va.pos) * u;
+            d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+        }
+        _ => d.pos = va.pos + va.vel * (ahead(rt, a_tick) / TICK_HZ as f32),
+    }
+    d
 }
 
 impl NetCore {
@@ -1574,16 +1622,13 @@ impl NetCore {
         let u = b.map_or(0.0, |b| {
             ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32
         });
-        let mut bodies = Vec::new();
-        let all = |f: &CamFrame| {
-            let mut v: Vec<Remote> = f.remotes[..f.n as usize].to_vec();
-            v.push(f.me);
-            v
-        };
-        let (ra, rb) = (all(a), b.map(all).unwrap_or_default());
-        for x in &ra {
+        let mut bodies = Vec::with_capacity(a.n as usize + 1);
+        fn all(f: &CamFrame) -> impl Iterator<Item = &Remote> {
+            f.remotes[..f.n as usize].iter().chain(core::iter::once(&f.me))
+        }
+        for x in all(a) {
             let mut d = drawn(x);
-            if let Some(y) = rb.iter().find(|y| y.slot == x.slot && y.alive == x.alive) {
+            if let Some(y) = b.and_then(|b| all(b).find(|y| y.slot == x.slot && y.alive == x.alive)) {
                 d.pos = x.pos + (y.pos - x.pos) * u;
                 d.yaw = lerp_angle(d.yaw, yaw_rad(y.yaw), u);
                 d.pitch = d.pitch + (pitch_rad(y.pitch) - d.pitch) * u;

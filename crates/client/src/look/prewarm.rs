@@ -203,6 +203,27 @@ pub fn warm_models(
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));
 }
 
+/// The paint masks of everyone in the match (`paint.rs`), baked as the
+/// roster comes in, one a frame, rather than the frame fog first shows each
+/// of them: a mask is a few tens of milliseconds of the CPU, mid-fight.
+pub fn bake_roster(
+    st: Res<crate::hud::HudState>,
+    paints: Option<ResMut<super::paint::Paints>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(mut paints) = paints else {
+        return;
+    };
+    // Read first, so a frame with nothing to bake marks nothing changed.
+    let next = st
+        .names()
+        .map(|(&slot, _)| st.look(slot).emblem)
+        .find(|&e| paints.wants(e));
+    if let Some(e) = next {
+        paints.prebake(e, &mut images);
+    }
+}
+
 /// Counts each warm draw down once it can draw, then lets it go.
 pub fn retire(
     mut commands: Commands,

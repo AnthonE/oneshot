@@ -10,12 +10,16 @@ use std::time::Instant;
 use proto::frame::LEN_PREFIX_BYTES;
 use proto::{decode_msg, frame_msg, Msg, MAX_STREAM_MSG};
 use sim::input::Input;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::mpsc::{channel, unbounded_channel, Receiver, UnboundedReceiver};
 use wtransport::datagram::Datagram;
 use wtransport::tls::Sha256Digest;
 use wtransport::{ClientConfig, Connection, Endpoint};
 
 use crate::session::{Session, Wire};
+
+/// Datagrams held for the game thread at most (`web.rs` keeps as many).
+const DATAGRAM_QUEUE: usize = 256;
 
 struct ConnWire<'a>(&'a Connection);
 
@@ -29,8 +33,9 @@ pub struct NativeClient {
     pub session: Session,
     conn: Connection,
     msgs: UnboundedReceiver<Msg>,
-    /// As they came: each holds its own bytes, never copied here.
-    datagrams: UnboundedReceiver<(Instant, Datagram)>,
+    /// The datagrams as they came (no copy), bounded as a browser's queue
+    /// is: a game that stopped taking them drops the newest.
+    datagrams: Receiver<(Instant, Datagram)>,
     closed: Arc<AtomicBool>,
     /// The close's code and reason, once the connection has ended.
     ended: Arc<std::sync::Mutex<Option<(u32, String)>>>,
@@ -98,12 +103,13 @@ impl NativeClient {
             }
             c.store(true, Ordering::Relaxed);
         });
-        let (dtx, datagrams) = unbounded_channel();
+        let (dtx, datagrams) = channel(DATAGRAM_QUEUE);
         let rconn = conn.clone();
         tokio::spawn(async move {
             while let Ok(d) = rconn.receive_datagram().await {
-                if dtx.send((Instant::now(), d)).is_err() {
-                    break;
+                match dtx.try_send((Instant::now(), d)) {
+                    Ok(()) | Err(TrySendError::Full(_)) => {}
+                    Err(TrySendError::Closed(_)) => break,
                 }
             }
         });

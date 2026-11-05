@@ -76,6 +76,10 @@ pub const DEF: Def = Def {
     ],
     dress_solids: &[
     ],
+    profiles: &[
+    ],
+    dress_profiles: &[
+    ],
     nav: false,
     flags: &[],
     light: crate::map::LightDef::DAY,
