@@ -45,6 +45,7 @@ pub mod sound;
 pub mod tags;
 pub mod tally;
 pub mod ui;
+pub mod visor;
 
 use std::collections::BTreeMap;
 
@@ -424,6 +425,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_systems(First, stamp)
     .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
+    .init_resource::<look::hands::Grips>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(plate::plugin)
@@ -433,6 +435,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::quality::plugin)
     .add_plugins(look::potato::plugin)
     .add_plugins(look::render_scale::plugin)
+    .add_plugins(visor::plugin)
     .add_plugins(display::plugin)
     .insert_state(first)
     .add_plugins(pause::plugin)
@@ -493,6 +496,12 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::rock::load,
             look::guns::load,
             look::viewmodel::kit,
+            look::counter::setup,
+            look::icons::setup.after(look::guns::load),
+            arms_setup
+                .after(setup)
+                .after(look::guns::load)
+                .after(look::viewmodel::kit),
             look::own_shadow::setup,
             look::portrait::setup,
             look::fx::setup,
@@ -570,11 +579,11 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             view,
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
-            draw_view,
+            (draw_view, look::counter::draw).chain(),
             look::viewmodel::shimmer,
             look::fx::draw,
             hud::draw,
-            (hud::gear, hud::vitals, hud::corner, scope::draw),
+            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw),
             hud::hurt_rim,
         )
             .chain(),
@@ -607,6 +616,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
+    // Our own arms in view, onto the guns as `draw_view` posed them.
+    .add_systems(Update, (look::hands::build, look::icons::develop))
+    .add_systems(
+        PostUpdate,
+        look::hands::pose
+            .after(bevy::app::AnimationSystems)
+            .before(bevy::transform::TransformSystems::Propagate),
+    )
     // Names over heads, after the camera is placed (`tags.rs`).
     .add_systems(Update, tags::draw.after(view).after(hud::draw));
     #[cfg(target_arch = "wasm32")]
@@ -620,8 +637,16 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.insert_resource(p)
             .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
     } else {
-        app.add_systems(Startup, (hud::setup, medals::setup, scope::setup.after(hud::setup)))
-            .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
+        app.add_systems(
+            Startup,
+            (
+                hud::setup,
+                medals::setup,
+                scope::setup.after(hud::setup),
+                visor::setup.after(hud::setup),
+            ),
+        )
+        .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
@@ -636,6 +661,13 @@ fn setup(
 ) {
     let eye = look::rig::camera(&mut commands, &mut images, &mut media, Eye);
     look::viewmodel::spawn(&mut commands, eye);
+}
+
+/// Our own arms in view, under the eye, once the models are asked for.
+fn arms_setup(mut commands: Commands, models: Res<look::guns::Models>, eye: Query<Entity, With<Eye>>) {
+    if let Ok(eye) = eye.single() {
+        look::hands::spawn(&mut commands, &models, eye);
+    }
 }
 
 /// The sky's clock (`look::mood::SkyClock`): the server's tick as this
@@ -1301,8 +1333,10 @@ fn draw_view(
     mut hold: look::viewmodel::Hands,
     mut flash: look::viewmodel::FlashLight,
     film: Option<Res<film::Film>>,
-    kit: Option<Res<look::viewmodel::ViewKit>>,
+    mut grips: ResMut<look::hands::Grips>,
+    mut lag: ResMut<visor::HudLag>,
 ) {
+    grips.team = link.0.session().core.team;
     let (f, p) = link.0.session().core.own();
     let scoped = look.magnification(sim::arms::arm(f.gun().arm)) > 1.0;
     let seat = f.riding().map(|(_, seat)| seat);
@@ -1317,7 +1351,7 @@ fn draw_view(
     look::viewmodel::update(
         &mut commands,
         &models,
-        kit.as_deref(),
+        &mut grips,
         own,
         time.delta_secs(),
         &mut motion,
@@ -1325,6 +1359,8 @@ fn draw_view(
         &mut hold,
         &mut flash,
     );
+    let (trail, heave) = motion.trail();
+    *lag = visor::HudLag { trail, heave };
 }
 
 /// What the session queued for us this frame: events become effects and

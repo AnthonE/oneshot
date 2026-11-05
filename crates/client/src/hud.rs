@@ -1,8 +1,9 @@
 //! The HUD, laid out as the arena shooters' is, in our own blue: the
 //! grenades top left and the kill feed under them; the gun top right (its
 //! spare rounds and name in a box, the one on our back beside it, the
-//! magazine's rounds or the battery's heat under it); the shield bottom
-//! left, health a thin line beneath; the clock, the map and the two scores
+//! magazine's rounds or the battery's heat under it); the shield top
+//! middle, long and thin, health a thin line beneath; the clock, the map
+//! and the two scores
 //! that matter bottom right. A crosshair, a hit marker on our hits (red on
 //! a kill), an arc toward whoever hurt us, and a line in the middle for the
 //! countdown, the result and who killed us (then the respawn's count, low
@@ -76,9 +77,15 @@ const BLUE_SIDE: Color = Color::srgba(0.24, 0.46, 0.98, 0.9);
 const OTHER: Color = Color::srgba(0.62, 0.66, 0.72, 0.85);
 /// Off the screen's edges, px.
 const EDGE_PX: f32 = 22.0;
-/// The shield's width, and the score bars'.
-const SHIELD_W: f32 = 290.0;
+/// The shield's width and height, how far down from the top it sits, and
+/// the score bars' width.
+const SHIELD_W: f32 = 460.0;
+const SHIELD_H: f32 = 24.0;
+const SHIELD_TOP_PX: f32 = 16.0;
 const SCORE_W: f32 = 150.0;
+/// A gun's picture in its box, px wide, and its height for its width.
+const ICON_W: f32 = 112.0;
+const ICON_ASPECT: f32 = crate::look::icons::ICON_H as f32 / crate::look::icons::ICON_W as f32;
 /// Under this share the shield is low: its frame pulses red.
 const SHIELD_LOW_PCT: f32 = 25.0;
 /// Rounds a magazine may show; a bigger one (a battery) is a number.
@@ -242,6 +249,9 @@ pub struct GunPanel(pub u8);
 pub struct GunCount(pub u8);
 #[derive(Component)]
 pub struct GunName(pub u8);
+/// A hand's gun as a picture (`look/icons.rs`), where its name was.
+#[derive(Component)]
+pub struct GunIcon(pub u8);
 #[derive(Component)]
 pub struct Pip(pub u8, pub usize);
 #[derive(Component)]
@@ -384,6 +394,16 @@ fn gun_panel(c: &mut ChildSpawnerCommands, hand: u8, right: bool) {
                 BackgroundColor(EDGE_DIM),
             ));
             c.spawn((GunName(hand), tinted(crate::ui::display(15.0), INK)));
+            c.spawn((
+                GunIcon(hand),
+                Node {
+                    width: Val::Px(ICON_W),
+                    height: Val::Px(ICON_W * ICON_ASPECT),
+                    display: Display::None,
+                    ..default()
+                },
+                ImageNode::default().with_color(INK),
+            ));
         });
         // The magazine: a round each, wrapping, from the box's side.
         c.spawn(Node {
@@ -616,15 +636,19 @@ pub fn setup(mut commands: Commands) {
             });
             c.spawn((RideText, tinted(crate::ui::semibold(15.0), INK)));
         });
-    // Bottom left: the shield in its box, cut into tenths; health a thin
-    // line under it.
+    // Top middle: the shield, long and thin in its box, cut into tenths and
+    // draining from both ends in to the middle; health a thin line under it.
     commands
         .spawn((
             ChildOf(root),
             Node {
                 flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
-                ..abs(Some(EDGE_PX), None, None, Some(20.0))
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-SHIELD_W * 0.5)),
+                width: Val::Px(SHIELD_W),
+                ..abs(None, None, Some(SHIELD_TOP_PX), None)
             },
         ))
         .with_children(|c| {
@@ -635,8 +659,9 @@ pub fn setup(mut commands: Commands) {
             ));
             c.spawn(Node {
                 width: Val::Px(SHIELD_W),
-                height: Val::Px(30.0),
+                height: Val::Px(SHIELD_H),
                 padding: UiRect::all(Val::Px(SHIELD_PAD)),
+                justify_content: JustifyContent::Center,
                 ..default()
             })
             .with_children(|c| {
@@ -681,8 +706,8 @@ pub fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 Node {
                     width: Val::Px(SHIELD_W * 0.6),
-                    height: Val::Px(5.0),
-                    margin: UiRect::left(Val::Px(2.0)),
+                    height: Val::Px(4.0),
+                    justify_content: JustifyContent::Center,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
@@ -1449,6 +1474,36 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
         } else {
             ""
         },
+    }
+}
+
+/// Each hand's gun as its picture, once it is drawn; its name until then.
+#[allow(clippy::type_complexity)]
+pub fn gun_icons(
+    link: NonSend<crate::LinkRes>,
+    icons: Option<Res<crate::look::icons::GunIcons>>,
+    mut pics: Query<(&GunIcon, &mut Node, &mut ImageNode), Without<GunName>>,
+    mut names: Query<(&GunName, &mut Node), Without<GunIcon>>,
+) {
+    let s = link.0.session();
+    let (true, Some(icons)) = (s.ready, icons) else {
+        return;
+    };
+    let f = s.core.own().0;
+    let arm = |h: u8| if h == 0 { f.gun().arm } else { f.left.arm };
+    let mut shown = [false; 2];
+    for (h, mut n, mut img) in &mut pics {
+        let pic = icons.get(arm(h.0));
+        shown[h.0 as usize & 1] = pic.is_some();
+        if let Some(pic) = pic {
+            if img.image != *pic {
+                img.image = pic.clone();
+            }
+        }
+        set_display(&mut n, pic.is_some());
+    }
+    for (h, mut n) in &mut names {
+        set_display(&mut n, !shown[h.0 as usize & 1]);
     }
 }
 

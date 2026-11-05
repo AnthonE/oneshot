@@ -142,59 +142,7 @@ impl Surface {
     /// From the model's meshes at rest (positions, normals, UVs, indices).
     /// None if one has none of them on the CPU.
     pub fn new(meshes: &[&Mesh]) -> Option<Self> {
-        let n = SIDE;
-        let mut seen = vec![false; n * n];
-        let mut texels = Vec::new();
-        for m in meshes {
-            let Some(VertexAttributeValues::Float32x3(pos)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
-                return None;
-            };
-            let Some(VertexAttributeValues::Float32x3(nor)) = m.attribute(Mesh::ATTRIBUTE_NORMAL) else {
-                return None;
-            };
-            let Some(VertexAttributeValues::Float32x2(uv)) = m.attribute(Mesh::ATTRIBUTE_UV_0) else {
-                return None;
-            };
-            let idx: Vec<usize> = match m.indices()? {
-                Indices::U16(v) => v.iter().map(|&i| i as usize).collect(),
-                Indices::U32(v) => v.iter().map(|&i| i as usize).collect(),
-            };
-            for t in idx.chunks_exact(3) {
-                let q = [t[0], t[1], t[2]].map(|k| Vec2::from(uv[k]) * n as f32);
-                let d = (q[1].y - q[2].y) * (q[0].x - q[2].x) + (q[2].x - q[1].x) * (q[0].y - q[2].y);
-                if d.abs() < 1e-12 {
-                    continue;
-                }
-                let lo = q[0].min(q[1]).min(q[2]).floor().max(Vec2::ZERO);
-                let hi = q[0].max(q[1]).max(q[2]).ceil().min(Vec2::splat(n as f32));
-                for y in lo.y as usize..hi.y as usize {
-                    for x in lo.x as usize..hi.x as usize {
-                        let c = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-                        let w0 = ((q[1].y - q[2].y) * (c.x - q[2].x) + (q[2].x - q[1].x) * (c.y - q[2].y)) / d;
-                        let w1 = ((q[2].y - q[0].y) * (c.x - q[2].x) + (q[0].x - q[2].x) * (c.y - q[2].y)) / d;
-                        let w2 = 1.0 - w0 - w1;
-                        let i = y * n + x;
-                        if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 || seen[i] {
-                            continue;
-                        }
-                        seen[i] = true;
-                        let at = |a: &[[f32; 3]]| {
-                            Vec3::from(a[t[0]]) * w0 + Vec3::from(a[t[1]]) * w1 + Vec3::from(a[t[2]]) * w2
-                        };
-                        texels.push(Texel {
-                            i: i as u32,
-                            p: at(pos),
-                            n: at(nor).normalize_or_zero(),
-                            band: 0.0,
-                            trim: 0.0,
-                        });
-                    }
-                }
-            }
-        }
-        if texels.is_empty() {
-            return None;
-        }
+        let mut texels = unroll(meshes)?;
         let band = Raster::wrap(BAND_AT, BAND_HALF, 1).spray(Drips::new(0.012, 0.045), 11);
         let trim = Raster::wrap(TRIM_AT, TRIM_HALF, 2).spray(Drips::new(0.015, 0.06), 12);
         for t in &mut texels {
@@ -245,6 +193,123 @@ impl Surface {
             .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
             .collect()
     }
+}
+
+/// Every texel of the mask a triangle of `meshes` covers, where it lies on
+/// the body at rest. None if a mesh has no positions, normals, UVs or
+/// indices on the CPU.
+fn unroll(meshes: &[&Mesh]) -> Option<Vec<Texel>> {
+    let n = SIDE;
+    let mut seen = vec![false; n * n];
+    let mut texels = Vec::new();
+    for m in meshes {
+        let Some(VertexAttributeValues::Float32x3(pos)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            return None;
+        };
+        let Some(VertexAttributeValues::Float32x3(nor)) = m.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            return None;
+        };
+        let Some(VertexAttributeValues::Float32x2(uv)) = m.attribute(Mesh::ATTRIBUTE_UV_0) else {
+            return None;
+        };
+        let idx: Vec<usize> = match m.indices()? {
+            Indices::U16(v) => v.iter().map(|&i| i as usize).collect(),
+            Indices::U32(v) => v.iter().map(|&i| i as usize).collect(),
+        };
+        for t in idx.chunks_exact(3) {
+            let q = [t[0], t[1], t[2]].map(|k| Vec2::from(uv[k]) * n as f32);
+            let d = (q[1].y - q[2].y) * (q[0].x - q[2].x) + (q[2].x - q[1].x) * (q[0].y - q[2].y);
+            if d.abs() < 1e-12 {
+                continue;
+            }
+            let lo = q[0].min(q[1]).min(q[2]).floor().max(Vec2::ZERO);
+            let hi = q[0].max(q[1]).max(q[2]).ceil().min(Vec2::splat(n as f32));
+            for y in lo.y as usize..hi.y as usize {
+                for x in lo.x as usize..hi.x as usize {
+                    let c = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                    let w0 = ((q[1].y - q[2].y) * (c.x - q[2].x) + (q[2].x - q[1].x) * (c.y - q[2].y)) / d;
+                    let w1 = ((q[2].y - q[0].y) * (c.x - q[2].x) + (q[0].x - q[2].x) * (c.y - q[2].y)) / d;
+                    let w2 = 1.0 - w0 - w1;
+                    let i = y * n + x;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 || seen[i] {
+                        continue;
+                    }
+                    seen[i] = true;
+                    let at =
+                        |a: &[[f32; 3]]| Vec3::from(a[t[0]]) * w0 + Vec3::from(a[t[1]]) * w1 + Vec3::from(a[t[2]]) * w2;
+                    texels.push(Texel {
+                        i: i as u32,
+                        p: at(pos),
+                        n: at(nor).normalize_or_zero(),
+                        band: 0.0,
+                        trim: 0.0,
+                    });
+                }
+            }
+        }
+    }
+    (!texels.is_empty()).then_some(texels)
+}
+
+// Our own arms in view (`hands.rs`): the arms mesh alone, a glove sprayed
+// over each hand and up past the wrist, and a band in the side's colour
+// round each forearm. Joints at rest in the mesh's frame (x across, the
+// right arm toward -x; y forward; z down), metres: from the skin's bind.
+const ARM_ELBOW: Vec3 = Vec3::new(0.329, -0.087, -1.054);
+const ARM_WRIST: Vec3 = Vec3::new(0.502, -0.03, -0.903);
+/// How far up the forearm from the wrist the glove's cuff reaches, and how
+/// much its edge wanders round the arm, metres.
+const GLOVE_CUFF_M: f32 = 0.045;
+const GLOVE_RAG_M: f32 = 0.008;
+/// The band: its middle as a share of the way from the elbow to the wrist,
+/// and half its width, metres.
+const ARM_BAND_AT: f32 = 0.42;
+const ARM_BAND_HALF: f32 = 0.022;
+
+/// The view arms' mask, as straight RGBA8 rows, `SIDE`² texels: r the
+/// band (the side's colour, the material's `team`), a the glove (its
+/// `trim`). None if the mesh is not on the CPU.
+pub fn arms_mask(meshes: &[&Mesh]) -> Option<Vec<u8>> {
+    let texels = unroll(meshes)?;
+    let mut cover = vec![[0.0f32; 4]; SIDE * SIDE];
+    let mut known = vec![false; SIDE * SIDE];
+    for t in &texels {
+        let side = if t.p.x < 0.0 { -1.0 } else { 1.0 };
+        let m = |v: Vec3| Vec3::new(v.x * side, v.y, v.z);
+        let (e, w) = (m(ARM_ELBOW), m(ARM_WRIST));
+        let along = (w - e).normalize();
+        let len = (w - e).length();
+        // Round the forearm, for the edges' wander.
+        let r = t.p - e - along * (t.p - e).dot(along);
+        let a = r.z.atan2(r.y);
+        let rag = |seed: u32| {
+            let ph = hash2(seed as usize, 0, 7) * core::f32::consts::TAU;
+            GLOVE_RAG_M * (0.6 * (3.0 * a + ph).sin() + 0.4 * (7.0 * a + 2.0 * ph).sin())
+        };
+        let spray = |d: f32, i: u32, seed: u32| {
+            let soft = ((d / EDGE_M) * 0.5 + 0.5).clamp(0.0, 1.0);
+            let near = (1.0 - (-d / OVERSPRAY_M)).clamp(0.0, 1.0);
+            let speck = if d < 0.0 && hash2(i as usize, 2, seed) < near * SPECKLE * 0.5 {
+                0.4 + 0.6 * hash2(i as usize, 3, seed)
+            } else {
+                0.0
+            };
+            (soft * (1.0 - UNEVEN + UNEVEN * hash2(i as usize, 1, seed))).max(speck)
+        };
+        // Past the cuff toward the fingers: the glove.
+        let glove = spray((t.p - w).dot(along) + GLOVE_CUFF_M + rag(31), t.i, 31);
+        let u = (t.p - e).dot(along) / len;
+        let band = spray(ARM_BAND_HALF - (u - ARM_BAND_AT).abs() * len + rag(32) * 0.5, t.i, 32);
+        cover[t.i as usize] = [band * (1.0 - glove), 0.0, 0.0, glove];
+        known[t.i as usize] = true;
+    }
+    bleed(&mut cover, &mut known, SIDE, 4);
+    Some(
+        cover
+            .iter()
+            .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
+            .collect(),
+    )
 }
 
 /// Where a point at rest lies on the unrolled trunk, in its texels; none
