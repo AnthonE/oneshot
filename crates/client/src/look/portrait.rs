@@ -83,8 +83,8 @@ const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
 #[derive(Resource)]
 pub struct Portrait {
     pub image: Handle<Image>,
-    /// His body and the skin it was made in.
-    body: Option<(Entity, u8)>,
+    /// His body and the look it was made in.
+    body: Option<(Entity, proto::Look)>,
 }
 
 #[derive(Component)]
@@ -200,18 +200,18 @@ pub fn stand(
         }
         return;
     }
-    let skin = player.skin;
+    let look = player.look();
     let root = match portrait.body {
-        Some((e, s)) if s == skin => e,
+        Some((e, l)) if l == look => e,
         had => {
             if let Some((old, _)) = had {
                 commands.entity(old).despawn();
             }
-            let e = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, TEAM, skin);
+            let e = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, TEAM, look);
             commands
                 .entity(e)
                 .insert((PortraitBody, Propagate(RenderLayers::layer(LAYER))));
-            portrait.body = Some((e, skin));
+            portrait.body = Some((e, look));
             return;
         }
     };

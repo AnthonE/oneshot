@@ -118,13 +118,14 @@ impl Session {
 
     /// The first message on the stream: who, what to play, and the party
     /// it comes with (its code; 0 for none).
-    pub fn hello(name: &str, pass: Pass, mode: u8, skin: u8, party: u32) -> Msg {
+    pub fn hello(name: &str, pass: Pass, mode: u8, look: proto::Look, party: u32) -> Msg {
         Msg::Hello {
             proto: PROTO_VER,
             name: Name::new(name),
             pass,
             mode,
-            skin,
+            skin: look.skin,
+            emblem: look.emblem,
             party,
         }
     }

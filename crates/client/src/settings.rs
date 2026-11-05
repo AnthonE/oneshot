@@ -104,19 +104,28 @@ impl Default for Settings {
     }
 }
 
-/// Who plays: the name others see and the skin asked for (worn only if
-/// the wallet owns it; the server checks). Set on the title screen, kept
-/// with the settings.
+/// Who plays: the name others see, the skin asked for (worn only if the
+/// wallet owns it; the server checks) and the emblem on its back. Set on
+/// the title screen, kept with the settings.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Player {
     pub name: String,
     pub skin: u8,
+    pub emblem: proto::Emblem,
 }
 
 /// How long a name may be (proto's `Name`).
 pub const NAME_MAX: usize = 16;
 
 impl Player {
+    /// What it asks to wear.
+    pub fn look(&self) -> proto::Look {
+        proto::Look {
+            skin: self.skin,
+            emblem: self.emblem,
+        }
+    }
+
     /// The name as sent: what was typed, or `player`.
     pub fn sent_name(&self) -> String {
         let n = self.name.trim();
@@ -131,6 +140,7 @@ impl Player {
         vec![
             ("name".into(), format!("{:?}", self.name)),
             ("skin".into(), self.skin.to_string()),
+            ("emblem".into(), self.emblem.to_string()),
         ]
     }
 
@@ -578,6 +588,10 @@ pub fn read(text: Option<&str>) -> (Settings, Binds, Player, u32, Lines, Lines) 
                 .unwrap_or(0);
             false
         }
+        "emblem" => {
+            p.emblem = v.parse().map(proto::emblem_valid).unwrap_or(proto::EMBLEM_NONE);
+            false
+        }
         _ => true,
     });
     let (b, other_binds) = Binds::from_lines(&doc.binds);
@@ -669,6 +683,7 @@ mod tests {
         b.set(Action::Reload, 1, Some(Bind::Mouse(MouseButton::Back)));
         p.name = Player::clean("Master \"Chief\" of the long name");
         p.skin = 3;
+        p.emblem = proto::emblem(14, 4, 6, 12);
         let t = text(&s, &b, &p, v, &other, &other_binds);
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
         let (s2, b2, p2, ..) = read(Some(&t));

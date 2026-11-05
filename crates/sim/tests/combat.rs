@@ -805,11 +805,42 @@ fn a_sword_never_lunges_through_a_wall_or_at_a_teammate() {
     assert!(!lunge_at(&mut w, Input::default()));
     assert_eq!(w.fighters[0].lunge, 0);
 
-    let mut w = duel([SWORD, MAGNUM], 4.0);
-    w.rules.teams = true;
-    w.fighters[1].team = w.fighters[0].team;
-    assert!(!lunge_at(&mut w, Input::default()));
-    assert_eq!(w.fighters[0].lunge, 0);
+    for ff in [false, true] {
+        let mut w = duel([SWORD, MAGNUM], 4.0);
+        w.rules.teams = true;
+        w.rules.friendly_fire = ff;
+        w.fighters[1].team = w.fighters[0].team;
+        assert!(!lunge_at(&mut w, Input::default()));
+        assert_eq!(w.fighters[0].lunge, 0, "friendly fire {ff}");
+    }
+}
+
+#[test]
+fn friendly_fire_hurts_a_teammate_only_when_on_and_a_team_kill_costs_a_point() {
+    for ff in [false, true] {
+        let mut w = duel([SNIPER, MAGNUM], 10.0);
+        w.rules.teams = true;
+        w.rules.friendly_fire = ff;
+        w.fighters[1].team = w.fighters[0].team;
+        let side = w.fighters[0].team as usize & 1;
+        let before = w.score[side];
+        let at = head(&w, 1);
+        shoot(&mut w, at, FIRE, NO_LAG);
+        for _ in 0..TICK_HZ {
+            shoot(&mut w, at, 0, NO_LAG);
+        }
+        if ff {
+            assert_eq!(w.score[side], before - 1, "a teammate shot dead costs the side a point");
+        } else {
+            assert_eq!(w.fighters[1].shield, SHIELD_MAX, "a teammate is untouched with it off");
+            assert_eq!(w.score[side], before);
+        }
+    }
+    assert!(
+        Rules::doubles().friendly_fire,
+        "ranked doubles plays with friendly fire, as MLG"
+    );
+    assert!(!Rules::big_team().friendly_fire);
 }
 
 #[test]

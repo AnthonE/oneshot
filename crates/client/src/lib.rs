@@ -70,14 +70,14 @@ pub struct Look {
 #[derive(Resource, Default)]
 pub(crate) struct Built(Option<(u32, u32)>);
 
-/// Drawn things by their slot (a fighter with the side and skin its body
+/// Drawn things by their slot (a fighter with the side and look its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
 /// hull, it doesn't throw it away, so their coming back costs nothing (a
 /// skinned scene, its materials and shield shells, made mid-fight, was a
 /// hitch).
 #[derive(Resource, Default)]
 struct Drawn {
-    fighters: BTreeMap<u8, (Entity, u8, u8)>,
+    fighters: BTreeMap<u8, (Entity, u8, proto::Look)>,
     vehicles: BTreeMap<u8, Entity>,
 }
 
@@ -320,6 +320,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
+    .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<look::rag::Blows>()
@@ -839,9 +840,9 @@ fn draw_fighters(
     );
     let t = time.elapsed_secs();
     for d in &others {
-        let skin = posed.as_ref().map_or_else(|| st.skin(d.slot), |p| p.1);
+        let look = posed.as_ref().map_or_else(|| st.look(d.slot), |p| p.1);
         let e = match drawn.fighters.get(&d.slot) {
-            Some(&(e, team, s)) if team == d.team && s == skin => e,
+            Some(&(e, team, l)) if team == d.team && l == look => e,
             had => {
                 if let Some(&(old, ..)) = had {
                     commands.entity(old).despawn();
@@ -849,10 +850,10 @@ fn draw_fighters(
                 let e = if opts.capsules {
                     look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
                 } else {
-                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, skin)
+                    look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, look)
                 };
                 commands.entity(e).insert(Kept);
-                drawn.fighters.insert(d.slot, (e, d.team, skin));
+                drawn.fighters.insert(d.slot, (e, d.team, look));
                 e
             }
         };

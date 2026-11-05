@@ -5,7 +5,7 @@
 use client_net::clip::{KEEP_SEGS, LEAD_S, SEG_MS};
 use client_net::session::{Session, Wire};
 use client_net::tape::{self, Lane, Replay};
-use proto::{encode_snapshot, Msg, Name, Snapshot, MAX_DATAGRAM, SKIN_STANDARD};
+use proto::{encode_snapshot, Msg, Name, Snapshot, EMBLEM_NONE, MAX_DATAGRAM, SKIN_STANDARD};
 use sim::consts::TICK_HZ;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -42,6 +42,7 @@ fn seat(slot: u8, name: &str) -> Msg {
         bot: true,
         name: Name::new(name),
         skin: SKIN_STANDARD,
+        emblem: EMBLEM_NONE,
     }
 }
 
