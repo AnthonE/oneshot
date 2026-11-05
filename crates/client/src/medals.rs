@@ -18,9 +18,9 @@ const POP_SCALE: f32 = 1.45;
 const POP_S: f32 = 0.18;
 /// The last this-long of a medal's time on screen, it fades.
 const FADE_S: f32 = 0.6;
-/// Just over the shield bar; over the net graph too while it is up.
-const ROW_BOTTOM: f32 = 64.0;
-const ROW_BOTTOM_NET: f32 = 150.0;
+/// Just over the shield; over the net graph too while it is up.
+const ROW_BOTTOM: f32 = 74.0;
+const ROW_BOTTOM_NET: f32 = 160.0;
 
 #[derive(Component)]
 pub struct MedalRow;
@@ -57,7 +57,7 @@ pub fn setup(mut commands: Commands) {
         MedalRow,
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(18.0),
+            left: Val::Px(22.0),
             bottom: Val::Px(ROW_BOTTOM),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,

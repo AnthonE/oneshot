@@ -1,5 +1,5 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--autoplay [--scope]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
 //! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
 //! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
@@ -156,6 +156,8 @@ fn run() -> Result<(), String> {
             (false, _) => Screen::Title,
         };
         let mut app = oneshot_client::game(Door::new(server), opts);
+        // The autopilot holds the scope (a picture of one; `--autoplay`).
+        app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
         if let Some(n) = arg("--name") {
             app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
                 oneshot_client::settings::Player::clean(&n);

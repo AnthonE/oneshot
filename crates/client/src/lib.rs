@@ -32,8 +32,10 @@ pub mod options;
 pub mod pad;
 pub mod party;
 pub mod pause;
+pub mod plate;
 pub mod pointer;
 pub mod pose;
+pub mod scope;
 pub mod settings;
 pub mod shot;
 pub mod sound;
@@ -142,6 +144,8 @@ fn show(vis: &mut KeptVis, e: Entity, on: bool) -> bool {
 #[derive(Resource, Default)]
 pub struct Autoplay {
     pub on: bool,
+    /// Holds the scope the whole way (`--scope`): a picture of one.
+    pub scope: bool,
     leg: usize,
     frames: u64,
     /// Where we were at the last check, and when (ms): pushing ahead and
@@ -385,6 +389,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
+    .add_plugins(plate::plugin)
     .add_plugins(settings::plugin)
     // The graphics ladder after the settings it reads: its tier exists
     // before anything is spawned with it.
@@ -522,6 +527,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             draw_view,
             look::fx::draw,
             hud::draw,
+            (hud::gear, hud::vitals, hud::corner, scope::draw),
             hud::hurt_rim,
         )
             .chain(),
@@ -567,7 +573,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.insert_resource(p)
             .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
     } else {
-        app.add_systems(Startup, (hud::setup, medals::setup))
+        app.add_systems(Startup, (hud::setup, medals::setup, scope::setup.after(hud::setup)))
             .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
     }
     if opts.fxdemo {
@@ -664,7 +670,12 @@ fn pump(
         (f.dual(), scope, driving)
     };
     // No scope at the wheel: the chase camera doesn't narrow.
-    look.zoom = button(MouseButton::Right) && !auto.on && !dual && !driving;
+    let want = if auto.on {
+        auto.scope
+    } else {
+        button(MouseButton::Right)
+    };
+    look.zoom = want && !dual && !driving;
     if grabbed {
         let base = SENS * settings.sensitivity;
         let sens = if look.zoom { base / scope as f32 } else { base };
