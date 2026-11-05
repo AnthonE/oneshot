@@ -1,8 +1,9 @@
 //! The HUD, laid out as the arena shooters' is, in our own blue: the
 //! grenades top left and the kill feed under them; the gun top right (its
 //! spare rounds and name in a box, the one on our back beside it, the
-//! magazine's rounds or the battery's heat under it); the shield bottom
-//! left, health a thin line beneath; the clock, the map and the two scores
+//! magazine's rounds or the battery's heat under it); the shield top
+//! middle, long and thin, health a thin line beneath; the clock, the map
+//! and the two scores
 //! that matter bottom right. A crosshair, a hit marker on our hits (red on
 //! a kill), an arc toward whoever hurt us, and a line in the middle for the
 //! countdown, the result and who killed us (then the respawn's count, low
@@ -70,8 +71,11 @@ const BLUE_SIDE: Color = Color::srgba(0.24, 0.46, 0.98, 0.9);
 const OTHER: Color = Color::srgba(0.62, 0.66, 0.72, 0.85);
 /// Off the screen's edges, px.
 const EDGE_PX: f32 = 22.0;
-/// The shield's width, and the score bars'.
-const SHIELD_W: f32 = 290.0;
+/// The shield's width and height, how far down from the top it sits, and
+/// the score bars' width.
+const SHIELD_W: f32 = 460.0;
+const SHIELD_H: f32 = 24.0;
+const SHIELD_TOP_PX: f32 = 16.0;
 const SCORE_W: f32 = 150.0;
 /// Under this share the shield is low: its frame pulses red.
 const SHIELD_LOW_PCT: f32 = 25.0;
@@ -581,22 +585,27 @@ pub fn setup(mut commands: Commands) {
             });
             c.spawn((RideText, tinted(crate::ui::semibold(15.0), INK)));
         });
-    // Bottom left: the shield in its box, cut into tenths; health a thin
-    // line under it.
+    // Top middle: the shield, long and thin in its box, cut into tenths and
+    // draining from both ends in to the middle; health a thin line under it.
     commands
         .spawn((
             ChildOf(root),
             Node {
                 flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
-                ..abs(Some(EDGE_PX), None, None, Some(20.0))
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-SHIELD_W * 0.5)),
+                width: Val::Px(SHIELD_W),
+                ..abs(None, None, Some(SHIELD_TOP_PX), None)
             },
         ))
         .with_children(|c| {
             c.spawn(Node {
                 width: Val::Px(SHIELD_W),
-                height: Val::Px(30.0),
+                height: Val::Px(SHIELD_H),
                 padding: UiRect::all(Val::Px(SHIELD_PAD)),
+                justify_content: JustifyContent::Center,
                 ..default()
             })
             .with_children(|c| {
@@ -633,8 +642,8 @@ pub fn setup(mut commands: Commands) {
                 Visibility::Hidden,
                 Node {
                     width: Val::Px(SHIELD_W * 0.6),
-                    height: Val::Px(5.0),
-                    margin: UiRect::left(Val::Px(2.0)),
+                    height: Val::Px(4.0),
+                    justify_content: JustifyContent::Center,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),

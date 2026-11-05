@@ -97,7 +97,7 @@ pub fn draw(
     st: Res<hud::HudState>,
     mut built: Local<bool>,
     (mut want, mut foes): (Local<Vec<Wanted>>, Local<Vec<client_net::core::Drawn>>),
-    root: Query<Entity, With<hud::HudRoot>>,
+    root: Query<Entity, With<crate::visor::TagRoot>>,
     eye: Query<(&Transform, &Projection), With<Eye>>,
     mut tags: Query<(&mut Tag, &mut Node, &mut Text, &mut TextColor, &mut Visibility)>,
 ) {

@@ -1878,7 +1878,12 @@ fn ended(
 }
 
 /// The HUD only in a match, and not under a menu.
-fn hud_shown(in_match: Res<InMatch>, screen: Res<State<Screen>>, mut q: Query<&mut Visibility, With<hud::HudRoot>>) {
+#[allow(clippy::type_complexity)]
+fn hud_shown(
+    in_match: Res<InMatch>,
+    screen: Res<State<Screen>>,
+    mut q: Query<&mut Visibility, Or<(With<hud::HudRoot>, With<crate::visor::TagRoot>)>>,
+) {
     let on = in_match.0 && *screen.get() == Screen::Playing;
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut q {
