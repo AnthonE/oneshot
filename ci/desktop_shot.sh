@@ -14,7 +14,11 @@
 #   demo's stage N alone: crates/client/src/look/fx/demo.rs), lite (POTATO),
 #   quality=potato|low|medium|high (that rung; unset, the default HIGH),
 #   capsules, name=NAME, pose=QUERY (no server: a picture,
-#   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`).
+#   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`), loadout=GUNS (the
+#   server's --loadout: everyone starts with them), scope (the autopilot
+#   holds the scope).
+#
+#   ci/desktop_shot.sh traces/scope.png 6 0 6 1 loadout=sniper scope
 #
 #   ci/desktop_shot.sh traces/title.png 2 0 0 0
 #   ci/desktop_shot.sh traces/settings.png 2 0 0 0 settings
@@ -52,6 +56,7 @@ log=$out.log
 
 args=(--shot "$out" --shot-at "$secs")
 match=0
+loadout=
 [ "$auto" = 1 ] && { match=1; args+=(--autoplay); }
 for w in "${more[@]}"; do
   case $w in
@@ -66,7 +71,9 @@ for w in "${more[@]}"; do
     capsules | capsules=1) args+=(--capsules) ;;
     name=*) args+=(--name "${w#name=}") ;;
     pose=*) args+=(--pose "${w#pose=}") ;;
-    *) echo "desktop_shot: what is '$w'? (menu settings graphics title fxdemo fxstage= lite quality= capsules name= pose=)" >&2; exit 1 ;;
+    scope | scope=1) args+=(--scope) ;;
+    loadout=*) loadout=${w#loadout=} ;;
+    *) echo "desktop_shot: what is '$w'? (menu settings graphics title fxdemo fxstage= lite quality= capsules name= pose= scope loadout=)" >&2; exit 1 ;;
   esac
 done
 case " ${args[*]} " in *" --pose "*) match=0 ;; esac
@@ -88,7 +95,7 @@ for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
 
 if [ "$match" = 1 ]; then
   [ -x target/release/oneshot-server ] || { echo "desktop_shot: no target/release/oneshot-server (cargo build --release -p server)" >&2; exit 1; }
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" ${loadout:+--loadout "$loadout"} >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do

@@ -1,8 +1,12 @@
-//! The HUD, after the three.js page's `hud.ts`: shield and health bars, the gun and
-//! its rounds, a crosshair, a hit marker on our hits (red on a kill), an
-//! arc toward whoever hurt us, the score and clock, the kill feed, and a
-//! line in the middle for the countdown, the result, the kill cam and the
-//! respawn; before the welcome, the queue's line. `N` shows the net graph.
+//! The HUD, laid out as the arena shooters' is, in our own blue: the
+//! grenades top left and the kill feed under them; the gun top right (its
+//! spare rounds and name in a box, the one on our back beside it, the
+//! magazine's rounds or the battery's heat under it); the shield bottom
+//! left, health a thin line beneath; the clock, the map and the two scores
+//! that matter bottom right. A crosshair, a hit marker on our hits (red on
+//! a kill), an arc toward whoever hurt us, and a line in the middle for the
+//! countdown, the result, the kill cam and the respawn; before the welcome,
+//! the queue's line. `N` shows the net graph. The scope is `scope.rs`'s.
 //! Medals and the carnage report are `medals.rs`'s to draw; their lines in
 //! the feed are here. Everything here is read from the session; nothing is
 //! decided.
@@ -29,6 +33,41 @@ const RIM_S: f32 = 0.5;
 const RIM_CLEAR_PCT: f32 = 52.0;
 /// How far out from the middle the damage arc sits, px.
 const DAMAGE_R: f32 = 90.0;
+
+/// The HUD's blue: its type, a box's fill (lit for what's picked, dim for
+/// what isn't) and edge, a round in the magazine and one spent.
+pub const INK: Color = Color::srgba(0.74, 0.88, 1.0, 0.96);
+const FILL: Color = Color::srgba(0.13, 0.36, 0.72, 0.62);
+const FILL_DIM: Color = Color::srgba(0.07, 0.17, 0.34, 0.5);
+const EDGE: Color = Color::srgba(0.52, 0.78, 1.0, 0.9);
+const EDGE_DIM: Color = Color::srgba(0.4, 0.6, 0.85, 0.45);
+pub const PIP: Color = Color::srgba(0.6, 0.84, 1.0, 0.96);
+const PIP_SPENT: Color = Color::srgba(0.45, 0.65, 0.9, 0.22);
+const SHIELD: Color = Color::srgba(0.38, 0.7, 1.0, 0.95);
+const SHIELD_LOW: Color = Color::srgba(1.0, 0.32, 0.22, 0.95);
+const HEALTH: Color = Color::srgba(0.95, 0.36, 0.3, 0.9);
+const HEAT: Color = Color::srgba(1.0, 0.62, 0.22, 0.95);
+const RED_SIDE: Color = Color::srgba(0.92, 0.24, 0.2, 0.9);
+const BLUE_SIDE: Color = Color::srgba(0.24, 0.46, 0.98, 0.9);
+const OTHER: Color = Color::srgba(0.62, 0.66, 0.72, 0.85);
+/// Off the screen's edges, px.
+const EDGE_PX: f32 = 22.0;
+/// The shield's width, and the score bars'.
+const SHIELD_W: f32 = 290.0;
+const SCORE_W: f32 = 150.0;
+/// Under this share the shield is low: its frame pulses red.
+const SHIELD_LOW_PCT: f32 = 25.0;
+/// Rounds a magazine may show; a bigger one (a battery) is a number.
+const PIPS: usize = 48;
+/// A box's corners: square on one diagonal, cut on the other.
+fn chamfer(cut: f32) -> BorderRadius {
+    BorderRadius {
+        top_left: Val::Px(2.0),
+        top_right: Val::Px(cut),
+        bottom_right: Val::Px(2.0),
+        bottom_left: Val::Px(cut),
+    }
+}
 
 /// Names by slot (from `Msg::Seat`), the feed, and the markers' clocks.
 #[derive(Resource, Default)]
@@ -123,14 +162,57 @@ pub struct HudRoot;
 
 #[derive(Component)]
 pub struct ShieldBar;
+/// The shield's box: its edge pulses red when the shield is low.
+#[derive(Component)]
+pub struct ShieldFrame;
 #[derive(Component)]
 pub struct HurtRim;
 #[derive(Component)]
 pub struct HealthBar;
+/// A grenade's box (0 frags, 1 stickies), and its count.
 #[derive(Component)]
-pub struct AmmoText;
+pub struct GrenBox(pub u8);
 #[derive(Component)]
-pub struct ScoreText;
+pub struct GrenCount(pub u8);
+/// A hand's gun (0 the right, 1 the left when dual), and its parts: the
+/// big number, the name, a round in the magazine, the heat bar and its
+/// fill, the line under it (reloading, venting).
+#[derive(Component)]
+pub struct GunPanel(pub u8);
+#[derive(Component)]
+pub struct GunCount(pub u8);
+#[derive(Component)]
+pub struct GunName(pub u8);
+#[derive(Component)]
+pub struct Pip(pub u8, pub usize);
+#[derive(Component)]
+pub struct HeatBox(pub u8);
+#[derive(Component)]
+pub struct HeatFill(pub u8);
+#[derive(Component)]
+pub struct GunNote(pub u8);
+/// The gun on our back, named beside the one in hand.
+#[derive(Component)]
+pub struct BackGun;
+/// Driving or riding: how to get out.
+#[derive(Component)]
+pub struct RideText;
+/// Bottom right: the clock, the map (and gun game's rung), and the two
+/// score rows: their number, swatch, bar and fill, and our marker.
+#[derive(Component)]
+pub struct ClockText;
+#[derive(Component)]
+pub struct ModeText;
+#[derive(Component)]
+pub struct ScoreRow(pub u8);
+#[derive(Component)]
+pub struct ScoreNum(pub u8);
+#[derive(Component)]
+pub struct ScoreSwatch(pub u8);
+#[derive(Component)]
+pub struct ScoreFill(pub u8);
+#[derive(Component)]
+pub struct ScoreMine(pub u8);
 #[derive(Component)]
 pub struct FeedText;
 #[derive(Component)]
@@ -160,35 +242,201 @@ pub struct HitStroke;
 /// A HUD line in `font`: the display face for numbers and banners, the
 /// text face for the feed and the net graph (`ui.rs`).
 fn text(font: TextFont) -> impl Bundle {
+    tinted(font, Color::srgba(1.0, 1.0, 1.0, 0.92))
+}
+
+/// A HUD line in `font` and `color`.
+fn tinted(font: TextFont, color: Color) -> impl Bundle {
+    (Text::new(""), font, TextColor(color), TextShadow::default())
+}
+
+/// A box in the HUD's blue: lit or dim, its corners cut by `cut`.
+fn boxed(lit: bool, cut: f32) -> (BackgroundColor, BorderColor, Node) {
     (
-        Text::new(""),
-        font,
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.92)),
-        TextShadow::default(),
+        BackgroundColor(if lit { FILL } else { FILL_DIM }),
+        BorderColor::all(if lit { EDGE } else { EDGE_DIM }),
+        Node {
+            border: UiRect::all(Val::Px(2.0)),
+            border_radius: chamfer(cut),
+            align_items: AlignItems::Center,
+            ..default()
+        },
     )
 }
 
-fn bar(color: Color, marker: impl Component, bottom: f32) -> impl Bundle {
+/// A grenade's mark: a frag's round shell, a sticky's glowing ball.
+fn gren_icon(kind: u8) -> impl Bundle {
+    let (c, glow) = if kind == 0 {
+        (Color::srgba(0.72, 0.86, 1.0, 0.95), Color::NONE)
+    } else {
+        (Color::srgba(0.75, 0.95, 1.0, 1.0), Color::srgba(0.4, 0.75, 1.0, 0.8))
+    };
     (
         Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(18.0),
-            bottom: Val::Px(bottom),
-            width: Val::Px(220.0),
-            height: Val::Px(10.0),
+            width: Val::Px(12.0),
+            height: Val::Px(if kind == 0 { 14.0 } else { 12.0 }),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
-        children![(
-            marker,
+        BackgroundColor(c),
+        BoxShadow::new(glow, Val::ZERO, Val::ZERO, Val::Px(1.0), Val::Px(5.0)),
+    )
+}
+
+/// A hand's gun: a box with the spare rounds and the name, then the
+/// magazine's rounds (or a battery's heat), then a note.
+fn gun_panel(c: &mut ChildSpawnerCommands, hand: u8, right: bool) {
+    let align = if right {
+        AlignItems::FlexEnd
+    } else {
+        AlignItems::FlexStart
+    };
+    c.spawn((
+        GunPanel(hand),
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: align,
+            row_gap: Val::Px(5.0),
+            ..default()
+        },
+    ))
+    .with_children(|c| {
+        let (bg, edge, mut node) = boxed(true, 12.0);
+        node.padding = UiRect::axes(Val::Px(12.0), Val::Px(2.0));
+        node.column_gap = Val::Px(12.0);
+        node.min_height = Val::Px(36.0);
+        c.spawn((node, bg, edge)).with_children(|c| {
+            c.spawn((GunCount(hand), tinted(crate::ui::display(26.0), INK)));
+            c.spawn((
+                Node {
+                    width: Val::Px(2.0),
+                    height: Val::Px(22.0),
+                    ..default()
+                },
+                BackgroundColor(EDGE_DIM),
+            ));
+            c.spawn((GunName(hand), tinted(crate::ui::display(15.0), INK)));
+        });
+        // The magazine: a round each, wrapping, from the box's side.
+        c.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            justify_content: if right {
+                JustifyContent::FlexEnd
+            } else {
+                JustifyContent::FlexStart
+            },
+            max_width: Val::Px(240.0),
+            column_gap: Val::Px(2.0),
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .with_children(|c| {
+            for i in 0..PIPS {
+                c.spawn((
+                    Pip(hand, i),
+                    Node {
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(PIP),
+                ));
+            }
+        });
+        c.spawn((
+            HeatBox(hand),
             Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
+                width: Val::Px(150.0),
+                height: Val::Px(8.0),
+                border: UiRect::all(Val::Px(1.5)),
+                display: Display::None,
                 ..default()
             },
-            BackgroundColor(color),
-        )],
-    )
+            BackgroundColor(FILL_DIM),
+            BorderColor::all(EDGE_DIM),
+            children![(
+                HeatFill(hand),
+                Node {
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(HEAT),
+            )],
+        ));
+        c.spawn((GunNote(hand), tinted(crate::ui::semibold(14.0), INK)));
+    });
+}
+
+/// A score row: the number, a swatch of the side, a bar to the limit, and
+/// our marker.
+fn score_row(c: &mut ChildSpawnerCommands, i: u8) {
+    c.spawn((
+        ScoreRow(i),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        },
+    ))
+    .with_children(|c| {
+        c.spawn((
+            Node {
+                min_width: Val::Px(34.0),
+                justify_content: JustifyContent::FlexEnd,
+                ..default()
+            },
+            children![(
+                ScoreNum(i),
+                tinted(crate::ui::display(20.0), INK),
+                TextLayout::new_with_justify(Justify::Right),
+            )],
+        ));
+        c.spawn((
+            ScoreSwatch(i),
+            Node {
+                width: Val::Px(14.0),
+                height: Val::Px(14.0),
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(OTHER),
+            BorderColor::all(EDGE_DIM),
+        ));
+        c.spawn((
+            Node {
+                width: Val::Px(SCORE_W),
+                height: Val::Px(16.0),
+                border: UiRect::all(Val::Px(1.5)),
+                border_radius: chamfer(6.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
+            BorderColor::all(EDGE_DIM),
+            children![(
+                ScoreFill(i),
+                Node {
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(OTHER),
+            )],
+        ));
+        // Ours: a notch pointing at the row.
+        c.spawn((
+            ScoreMine(i),
+            Node {
+                width: Val::Px(8.0),
+                height: Val::Px(8.0),
+                ..default()
+            },
+            UiTransform::from_rotation(Rot2::degrees(45.0)),
+            BackgroundColor(INK),
+            Visibility::Hidden,
+        ));
+    });
 }
 
 pub fn setup(mut commands: Commands) {
@@ -233,31 +481,171 @@ pub fn setup(mut commands: Commands) {
         ZIndex(-1),
         Visibility::Hidden,
     ));
-    commands.spawn((ChildOf(root), bar(Color::srgb(0.35, 0.7, 1.0), ShieldBar, 40.0)));
-    commands.spawn((ChildOf(root), bar(Color::srgb(0.9, 0.3, 0.25), HealthBar, 24.0)));
-    commands.spawn((
-        ChildOf(root),
-        AmmoText,
-        text(crate::ui::display(24.0)),
-        abs(None, Some(22.0), None, Some(18.0)),
-    ));
-    commands.spawn((
-        ChildOf(root),
-        ScoreText,
-        text(crate::ui::display(21.0)),
-        abs(Some(18.0), None, Some(14.0), None),
-    ));
-    commands.spawn((
-        ChildOf(root),
-        FeedText,
-        text(crate::ui::semibold(16.0)),
-        abs(None, Some(18.0), Some(14.0), None),
-    ));
+    // Top left: the grenades, the left hand's gun when there are two, and
+    // the feed.
+    commands
+        .spawn((
+            ChildOf(root),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                row_gap: Val::Px(10.0),
+                ..abs(Some(EDGE_PX), None, Some(18.0), None)
+            },
+        ))
+        .with_children(|c| {
+            c.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(6.0),
+                ..default()
+            })
+            .with_children(|c| {
+                for kind in [0u8, 1] {
+                    let (bg, edge, mut node) = boxed(kind == 0, 10.0);
+                    node.padding = UiRect::axes(Val::Px(10.0), Val::Px(3.0));
+                    node.column_gap = Val::Px(7.0);
+                    node.min_height = Val::Px(30.0);
+                    c.spawn((GrenBox(kind), node, bg, edge)).with_children(|c| {
+                        c.spawn((GrenCount(kind), tinted(crate::ui::display(20.0), INK)));
+                        c.spawn(gren_icon(kind));
+                    });
+                }
+            });
+            gun_panel(c, 1, false);
+            c.spawn((FeedText, tinted(crate::ui::semibold(17.0), INK)));
+        });
+    // Top right: the gun in hand, the one on our back beside it; under it,
+    // how to get out of a ride.
+    commands
+        .spawn((
+            ChildOf(root),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexEnd,
+                row_gap: Val::Px(6.0),
+                ..abs(None, Some(EDGE_PX), Some(18.0), None)
+            },
+        ))
+        .with_children(|c| {
+            c.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::FlexStart,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|c| {
+                c.spawn((
+                    Node {
+                        margin: UiRect::top(Val::Px(10.0)),
+                        ..default()
+                    },
+                    children![(BackGun, tinted(crate::ui::display(13.0), EDGE_DIM))],
+                ));
+                gun_panel(c, 0, true);
+            });
+            c.spawn((RideText, tinted(crate::ui::semibold(15.0), INK)));
+        });
+    // Bottom left: the shield in its box, cut into tenths; health a thin
+    // line under it.
+    commands
+        .spawn((
+            ChildOf(root),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..abs(Some(EDGE_PX), None, None, Some(20.0))
+            },
+        ))
+        .with_children(|c| {
+            c.spawn((
+                ShieldFrame,
+                Node {
+                    width: Val::Px(SHIELD_W),
+                    height: Val::Px(20.0),
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius {
+                        top_left: Val::Px(2.0),
+                        top_right: Val::Px(12.0),
+                        bottom_right: Val::Px(2.0),
+                        bottom_left: Val::Px(2.0),
+                    },
+                    padding: UiRect::all(Val::Px(2.0)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                BackgroundColor(FILL_DIM),
+                BorderColor::all(EDGE),
+            ))
+            .with_children(|c| {
+                c.spawn((
+                    ShieldBar,
+                    Node {
+                        height: Val::Percent(100.0),
+                        width: Val::Percent(100.0),
+                        border_radius: BorderRadius {
+                            top_right: Val::Px(8.0),
+                            ..BorderRadius::all(Val::Px(1.0))
+                        },
+                        ..default()
+                    },
+                    BackgroundColor(SHIELD),
+                ));
+                // The tenths.
+                for i in 1..10 {
+                    c.spawn((
+                        Node {
+                            width: Val::Px(2.0),
+                            ..abs(Some(i as f32 * SHIELD_W / 10.0 - 3.0), None, Some(0.0), Some(0.0))
+                        },
+                        BackgroundColor(Color::srgba(0.02, 0.06, 0.14, 0.55)),
+                    ));
+                }
+            });
+            c.spawn((
+                Node {
+                    width: Val::Px(SHIELD_W * 0.6),
+                    height: Val::Px(5.0),
+                    margin: UiRect::left(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                children![(
+                    HealthBar,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(HEALTH),
+                )],
+            ));
+        });
+    // Bottom right: the clock, the map, the scores.
+    commands
+        .spawn((
+            ChildOf(root),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexEnd,
+                row_gap: Val::Px(4.0),
+                ..abs(None, Some(EDGE_PX), None, Some(18.0))
+            },
+        ))
+        .with_children(|c| {
+            c.spawn((ClockText, tinted(crate::ui::display(22.0), INK)));
+            c.spawn((
+                ModeText,
+                tinted(crate::ui::semibold(16.0), INK),
+                TextLayout::new_with_justify(Justify::Right),
+            ));
+            score_row(c, 0);
+            score_row(c, 1);
+        });
     commands.spawn((
         ChildOf(root),
         NetText,
         text(crate::ui::text(14.0)),
-        abs(Some(18.0), None, None, Some(64.0)),
+        abs(Some(EDGE_PX), None, None, Some(72.0)),
     ));
     // The middle: a full-width row, its text centred.
     commands.spawn((
@@ -611,31 +999,19 @@ fn mmss(s: f32) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
-/// The widgets from the session.
+/// The lines, the crosshair, the hit marker and the hurt arc, from the
+/// session.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn draw(
     link: NonSend<crate::LinkRes>,
     look: Res<crate::Look>,
     time: Res<Time>,
     st: Res<HudState>,
-    mut shield: Query<&mut Node, With<ShieldBar>>,
-    mut health: Query<&mut Node, (With<HealthBar>, Without<ShieldBar>)>,
-    mut arc: Query<
-        (&mut Node, &mut UiTransform, &mut BackgroundColor),
-        (With<HurtArc>, Without<ShieldBar>, Without<HealthBar>),
-    >,
-    mut texts: Query<(
-        &mut Text,
-        Option<&AmmoText>,
-        Option<&ScoreText>,
-        Option<&FeedText>,
-        Option<&CenterText>,
-        Option<&NetText>,
-    )>,
+    mut arc: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<HurtArc>>,
+    mut texts: Query<(&mut Text, Option<&FeedText>, Option<&CenterText>, Option<&NetText>)>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
-    binds: Res<crate::binds::Binds>,
 ) {
     let s = link.0.session();
     let now = time.elapsed_secs();
@@ -659,56 +1035,16 @@ pub fn draw(
             },
             |g| format!("{g}\n{}", st.status),
         );
-        for (mut t, _, _, _, ce, _) in texts.iter_mut() {
+        for (mut t, _, ce, _) in texts.iter_mut() {
             if ce.is_some() && t.0 != line {
                 t.0 = line.clone();
             }
         }
         return;
     }
-    if let Ok(mut n) = shield.single_mut() {
-        n.width = Val::Percent((f.shield as f32 / SHIELD_MAX as f32 * 100.0).clamp(0.0, 100.0));
-    }
-    if let Ok(mut n) = health.single_mut() {
-        n.width = Val::Percent((f.health as f32 / HEALTH_MAX as f32 * 100.0).clamp(0.0, 100.0));
-    }
     let killcam = if f.alive { None } else { core.killcam(link.0.now_ms()) };
     let snap = core.latest();
-    let limit = core.rules.score_limit;
-    let scores = &snap.score[..snap.n_score as usize];
-    let map = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
     let clock = snap.clock as f32 / TICK_HZ as f32;
-    let mut score = vec![map.to_string()];
-    if core.rules.teams {
-        let side = |t: usize| scores.get(t).copied().unwrap_or(0);
-        let (us, them) = (side(core.team as usize & 1), side(1 - (core.team as usize & 1)));
-        score.push(format!("{us} - {them}   to {limit}"));
-    } else {
-        // Us, then the rest best first: everyone in a duel or doubles, the
-        // top four in a bigger room.
-        let mine = scores.get(core.slot as usize).copied().unwrap_or(0);
-        score.push(format!("{} {mine} / {limit}", st.name(core.slot)));
-        let mut rest: Vec<(i32, u8)> = (0..scores.len() as u8)
-            .filter(|&i| i != core.slot && st.names.contains_key(&i))
-            .map(|i| (scores[i as usize], i))
-            .collect();
-        rest.sort_by_key(|&(v, i)| (-v, i));
-        score.extend(rest.iter().take(4).map(|&(v, i)| format!("{} {v}", st.name(i))));
-    }
-    if core.rules.gun_game {
-        let mine = scores.get(core.slot as usize).copied().unwrap_or(0);
-        let next = if mine < limit - 1 {
-            format!("next {}", sim::arms::arm(sim::world::Rules::rung(mine + 1)).name)
-        } else {
-            "last gun".into()
-        };
-        score.push(format!("Rung {} of {limit}  -  {next}", mine.min(limit - 1) + 1));
-    }
-    if snap.phase == 1 {
-        score.push(mmss(clock));
-    }
-    score.push(format!("K {}  D {}  A {}", st.kills, st.deaths, st.assists));
-    let score = score.join("\n");
     let center = match snap.phase {
         0 => format!("Starting in {}", clock.ceil() as u32),
         2 => {
@@ -749,49 +1085,6 @@ pub fn draw(
         }
         _ => String::new(),
     };
-    let g = f.gun();
-    let arm = sim::arms::arm(g.arm);
-    let other = f.guns[1 - f.cur as usize];
-    let reload = match (f.reload > 0, arm.hot()) {
-        (true, true) => "  venting",
-        (true, false) => "  reloading",
-        _ => "",
-    };
-    let swap = if other.arm != 0 {
-        format!("\n{}", sim::arms::arm(other.arm).name)
-    } else {
-        String::new()
-    };
-    let out = binds.key(crate::binds::Action::Use);
-    let ride = match f.riding() {
-        Some((_, 0)) => format!("\ndriving: {out} gets out"),
-        Some(_) => format!("\nriding: {out} gets out"),
-        None => String::new(),
-    };
-    // A gun that heats has a battery, no reserve: its heat goes there.
-    let spare = if arm.hot() {
-        format!("heat {}%", g.heat as u32 * 100 / sim::arms::HEAT_FULL as u32)
-    } else {
-        g.reserve.to_string()
-    };
-    // Two guns: both named, both mags. The grenade a throw takes is marked.
-    let (name, mag) = if f.dual() {
-        let l = sim::arms::arm(f.left.arm);
-        (
-            format!("{} + {}", arm.name, l.name),
-            format!("{} | {}", g.mag, f.left.mag),
-        )
-    } else {
-        (arm.name.to_string(), g.mag.to_string())
-    };
-    let mark = |k: u8| if f.gren_kind == k { "*" } else { "" };
-    let ammo = format!(
-        "{name}{reload}\n{mag} / {spare}   frags {}{} stickies {}{}{swap}{ride}",
-        f.grenades,
-        mark(0),
-        f.stickies,
-        mark(1)
-    );
     let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
     let net = if st.net {
         let n = core.stats;
@@ -802,24 +1095,21 @@ pub fn draw(
     } else {
         String::new()
     };
-    for (mut t, a, sc, fe, ce, ne) in texts.iter_mut() {
-        let v = if a.is_some() {
-            ammo.clone()
-        } else if sc.is_some() {
-            score.clone()
-        } else if fe.is_some() {
-            feed.clone()
+    for (mut t, fe, ce, ne) in texts.iter_mut() {
+        let v = if fe.is_some() {
+            &feed
         } else if ce.is_some() {
-            center.clone()
+            &center
         } else if ne.is_some() {
-            net.clone()
+            &net
         } else {
             continue;
         };
-        if t.0 != v {
-            t.0 = v;
+        if t.0 != *v {
+            t.0.clone_from(v);
         }
     }
+    let arm = sim::arms::arm(f.gun().arm);
     let scoped = look.zoom && arm.zoom > 1;
     if let Ok(mut v) = reticle.single_mut() {
         *v = if scoped || !f.alive {
@@ -855,6 +1145,318 @@ pub fn draw(
         tr.rotation = Rot2::radians(a);
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+    }
+}
+
+fn set_text(t: &mut Text, v: String) {
+    if t.0 != v {
+        t.0 = v;
+    }
+}
+
+fn set_display(n: &mut Node, on: bool) {
+    let want = if on { Display::Flex } else { Display::None };
+    if n.display != want {
+        n.display = want;
+    }
+}
+
+/// A round's size by the magazine's: a few big ones, many small.
+fn pip_size(mag: u16) -> (f32, f32) {
+    match mag {
+        0..=8 => (7.0, 18.0),
+        9..=18 => (5.0, 14.0),
+        _ => (3.0, 10.0),
+    }
+}
+
+/// What a hand's box shows: its number, the gun's name, the rounds to draw
+/// (and how many are left), the heat (a hot gun's, 0 to 1) and its note.
+struct GunLook {
+    count: String,
+    name: &'static str,
+    pips: Option<(u16, u16)>,
+    heat: Option<(f32, bool)>,
+    note: &'static str,
+}
+
+fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
+    let arm = sim::arms::arm(g.arm);
+    let venting = reloading && arm.hot();
+    // A battery (a hot gun, the sword) is its charge, as a share.
+    let battery = arm.hot() || arm.mag as usize > PIPS;
+    let count = if battery {
+        format!("{}", (g.mag as u32 * 100).div_ceil(arm.mag.max(1) as u32))
+    } else {
+        g.reserve.to_string()
+    };
+    GunLook {
+        count,
+        name: arm.name,
+        pips: (!battery).then_some((arm.mag, g.mag)),
+        heat: arm
+            .hot()
+            .then(|| ((g.heat as f32 / sim::arms::HEAT_FULL as f32).clamp(0.0, 1.0), venting)),
+        note: if venting {
+            "VENTING"
+        } else if reloading {
+            "RELOADING"
+        } else if !battery && g.mag == 0 && g.reserve == 0 {
+            "NO AMMO"
+        } else {
+            ""
+        },
+    }
+}
+
+/// The grenades, the guns in hand and on our back, and a ride's way out.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn gear(
+    link: NonSend<crate::LinkRes>,
+    binds: Res<crate::binds::Binds>,
+    mut boxes: Query<(&GrenBox, &mut BackgroundColor, &mut BorderColor)>,
+    mut texts: Query<(
+        &mut Text,
+        Option<&GrenCount>,
+        Option<&GunCount>,
+        Option<&GunName>,
+        Option<&GunNote>,
+        Option<&BackGun>,
+        Option<&RideText>,
+    )>,
+    mut panels: Query<(&GunPanel, &mut Node), (Without<Pip>, Without<HeatBox>, Without<HeatFill>)>,
+    mut pips: Query<(&Pip, &mut Node, &mut BackgroundColor), (Without<GrenBox>, Without<HeatBox>, Without<HeatFill>)>,
+    mut heat_box: Query<(&HeatBox, &mut Node), (Without<HeatFill>, Without<GunPanel>)>,
+    mut heat: Query<(&HeatFill, &mut Node, &mut BackgroundColor), (Without<GrenBox>, Without<Pip>, Without<GunPanel>)>,
+) {
+    let s = link.0.session();
+    if !s.ready {
+        return;
+    }
+    let f = s.core.own().0;
+    let reloading = f.reload > 0;
+    let hands = [
+        Some(gun_look(f.gun(), reloading)),
+        f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
+    ];
+    for (b, mut bg, mut edge) in boxes.iter_mut() {
+        let lit = f.gren_kind == b.0;
+        let (c, e) = if lit { (FILL, EDGE) } else { (FILL_DIM, EDGE_DIM) };
+        if bg.0 != c {
+            bg.0 = c;
+            *edge = BorderColor::all(e);
+        }
+    }
+    for (p, mut n) in panels.iter_mut() {
+        set_display(&mut n, hands[p.0 as usize & 1].is_some());
+    }
+    let back = f.guns[1 - f.cur as usize];
+    let out = binds.key(crate::binds::Action::Use);
+    for (mut t, gc, count, name, note, bk, ride) in texts.iter_mut() {
+        let hand = |h: u8| hands[h as usize & 1].as_ref();
+        let v = if let Some(g) = gc {
+            let n = if g.0 == 0 { f.grenades } else { f.stickies };
+            format!("{n} x")
+        } else if let Some(c) = count {
+            hand(c.0).map_or_else(String::new, |g| g.count.clone())
+        } else if let Some(n) = name {
+            hand(n.0).map_or("", |g| g.name).to_string()
+        } else if let Some(n) = note {
+            hand(n.0).map_or("", |g| g.note).to_string()
+        } else if bk.is_some() {
+            if back.arm != 0 && !f.dual() {
+                sim::arms::arm(back.arm).name.to_string()
+            } else {
+                String::new()
+            }
+        } else if ride.is_some() {
+            f.riding().map_or_else(String::new, |_| format!("{out}  get out"))
+        } else {
+            continue;
+        };
+        set_text(&mut t, v);
+    }
+    for (p, mut n, mut bg) in pips.iter_mut() {
+        let Some((size, left)) = hands[p.0 as usize & 1].as_ref().and_then(|g| g.pips) else {
+            set_display(&mut n, false);
+            continue;
+        };
+        set_display(&mut n, p.1 < size as usize);
+        let (w, h) = pip_size(size);
+        if n.width != Val::Px(w) {
+            n.width = Val::Px(w);
+            n.height = Val::Px(h);
+            n.border_radius = BorderRadius {
+                top_left: Val::Px(w / 2.0),
+                top_right: Val::Px(w / 2.0),
+                ..default()
+            };
+        }
+        // Spent from the far end: the rounds left sit by the box's side.
+        let full = if p.0 == 0 {
+            p.1 >= size.saturating_sub(left) as usize
+        } else {
+            p.1 < left as usize
+        };
+        let c = if full { PIP } else { PIP_SPENT };
+        if bg.0 != c {
+            bg.0 = c;
+        }
+    }
+    for (h, mut n) in heat_box.iter_mut() {
+        set_display(
+            &mut n,
+            hands[h.0 as usize & 1].as_ref().is_some_and(|g| g.heat.is_some()),
+        );
+    }
+    for (h, mut n, mut bg) in heat.iter_mut() {
+        let Some((u, venting)) = hands[h.0 as usize & 1].as_ref().and_then(|g| g.heat) else {
+            continue;
+        };
+        n.width = Val::Percent(u * 100.0);
+        let c = if venting { SHIELD_LOW } else { HEAT };
+        if bg.0 != c {
+            bg.0 = c;
+        }
+    }
+}
+
+/// The shield and health: the shield's frame pulses red while it is low or
+/// gone.
+#[allow(clippy::type_complexity)]
+pub fn vitals(
+    link: NonSend<crate::LinkRes>,
+    time: Res<Time>,
+    mut shield: Query<(&mut Node, &mut BackgroundColor), With<ShieldBar>>,
+    mut frame: Query<&mut BorderColor, With<ShieldFrame>>,
+    mut health: Query<&mut Node, (With<HealthBar>, Without<ShieldBar>)>,
+) {
+    let s = link.0.session();
+    if !s.ready {
+        return;
+    }
+    let f = s.core.own().0;
+    let sh = (f.shield as f32 / SHIELD_MAX as f32 * 100.0).clamp(0.0, 100.0);
+    let low = f.alive && sh < SHIELD_LOW_PCT;
+    if let Ok((mut n, mut bg)) = shield.single_mut() {
+        n.width = Val::Percent(sh);
+        let c = if low { SHIELD_LOW } else { SHIELD };
+        if bg.0 != c {
+            bg.0 = c;
+        }
+    }
+    if let Ok(mut b) = frame.single_mut() {
+        let c = if low {
+            let u = 0.5 + 0.5 * (time.elapsed_secs() * 9.0).sin();
+            EDGE.mix(&SHIELD_LOW, u)
+        } else {
+            EDGE
+        };
+        *b = BorderColor::all(c);
+    }
+    if let Ok(mut n) = health.single_mut() {
+        n.width = Val::Percent((f.health as f32 / HEALTH_MAX as f32 * 100.0).clamp(0.0, 100.0));
+    }
+}
+
+/// Bottom right: the clock while the match runs, the map (and in gun game
+/// the rung and the gun next), and two score rows. On sides: ours and
+/// theirs, the leader on top. Alone: the leader on top, and us under it
+/// (or whoever's second, when the leader is us).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn corner(
+    link: NonSend<crate::LinkRes>,
+    st: Res<HudState>,
+    mut texts: Query<(&mut Text, Option<&ClockText>, Option<&ModeText>, Option<&ScoreNum>)>,
+    mut rows: Query<(&ScoreRow, &mut Node), Without<ScoreFill>>,
+    mut swatches: Query<(&ScoreSwatch, &mut BackgroundColor), (Without<ScoreFill>, Without<ScoreMine>)>,
+    mut fills: Query<(&ScoreFill, &mut Node, &mut BackgroundColor), (Without<ScoreRow>, Without<ScoreSwatch>)>,
+    mut mine: Query<(&ScoreMine, &mut Visibility)>,
+) {
+    let s = link.0.session();
+    if !s.ready {
+        return;
+    }
+    let core = &s.core;
+    let snap = core.latest();
+    let limit = core.rules.score_limit.max(1);
+    let scores = &snap.score[..snap.n_score as usize];
+    let score = |i: u8| scores.get(i as usize).copied().unwrap_or(0);
+    let map = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
+    let clock = snap.clock as f32 / TICK_HZ as f32;
+    // (score, colour, ours) a row.
+    let mut shown: Vec<(i32, Color, bool)> = Vec::new();
+    if core.rules.teams {
+        let us = core.team & 1;
+        let side = |t: u8| if t == 0 { RED_SIDE } else { BLUE_SIDE };
+        shown.push((score(us), side(us), true));
+        shown.push((score(1 - us), side(1 - us), false));
+    } else {
+        let mut all: Vec<(i32, u8)> = (0..scores.len() as u8)
+            .filter(|&i| i == core.slot || st.names.contains_key(&i))
+            .map(|i| (score(i), i))
+            .collect();
+        all.sort_by_key(|&(v, i)| (-v, i != core.slot, i));
+        let at = all.iter().position(|&(_, i)| i == core.slot).unwrap_or(0);
+        let pick = if at == 0 { [0, 1] } else { [0, at] };
+        for k in pick {
+            if let Some(&(v, i)) = all.get(k) {
+                let me = i == core.slot;
+                shown.push((v, if me { SHIELD } else { OTHER }, me));
+            }
+        }
+    }
+    // The leader on top.
+    shown.sort_by_key(|&(v, _, me)| (-v, !me));
+    let mut mode = map.to_string();
+    if core.rules.gun_game {
+        let mine = score(core.slot);
+        let next = if mine < limit - 1 {
+            format!("next {}", sim::arms::arm(sim::world::Rules::rung(mine + 1)).name)
+        } else {
+            "last gun".into()
+        };
+        mode = format!("Rung {} of {limit}  -  {next}\n{mode}", mine.min(limit - 1) + 1);
+    }
+    for (mut t, ck, md, num) in texts.iter_mut() {
+        let v = if ck.is_some() {
+            if snap.phase == 1 {
+                mmss(clock)
+            } else {
+                String::new()
+            }
+        } else if md.is_some() {
+            mode.clone()
+        } else if let Some(n) = num {
+            shown.get(n.0 as usize).map_or_else(String::new, |r| r.0.to_string())
+        } else {
+            continue;
+        };
+        set_text(&mut t, v);
+    }
+    for (r, mut n) in rows.iter_mut() {
+        set_display(&mut n, (r.0 as usize) < shown.len());
+    }
+    for (r, mut bg) in swatches.iter_mut() {
+        if let Some(&(_, c, _)) = shown.get(r.0 as usize) {
+            bg.0 = c;
+        }
+    }
+    for (r, mut n, mut bg) in fills.iter_mut() {
+        if let Some(&(v, c, _)) = shown.get(r.0 as usize) {
+            n.width = Val::Percent((v as f32 / limit as f32 * 100.0).clamp(0.0, 100.0));
+            bg.0 = c;
+        }
+    }
+    for (r, mut v) in mine.iter_mut() {
+        let want = if shown.get(r.0 as usize).is_some_and(|x| x.2) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *v != want {
+            *v = want;
+        }
     }
 }
 
