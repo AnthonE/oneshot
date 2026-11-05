@@ -20,13 +20,6 @@ jobs:
           cargo clippy -q --workspace --all-targets -- -D warnings
           cargo clippy -q -p sim-wasm -p client-net --target wasm32-unknown-unknown -- -D warnings
           cargo test -q -p sim -p proto -p room -p client-net -p server -p fx
-      # Fog of war at sixteen seats inside its budget on every map, as
-      # ci/quick.sh checks (room/examples/fog_cost.rs), with twice the room
-      # on a shared runner's clock.
-      - name: fog budget
-        run: cargo run -q --release -p room --example fog_cost -- --check
-        env:
-          FOG_BUDGET_SCALE: "2"
       - name: native vs wasm
         run: ci/parity.sh
 

@@ -100,6 +100,14 @@ pub struct Body {
     /// Where its head is moved, metres in the model's frame
     /// (`own_shadow.rs`).
     head_push: Vec3,
+    /// Whose body it was last drawn as, alive or not, whether it was the
+    /// frame before (none the first frame it is drawn), and how it last
+    /// moved alive: for the rag doll (`rag.rs`).
+    slot: u8,
+    alive: bool,
+    was_alive: Option<bool>,
+    drawn: bool,
+    vel: Vec3,
 }
 
 impl Body {
@@ -113,6 +121,27 @@ impl Body {
     pub fn afresh(&mut self) {
         self.gait = Gait::default();
         self.fresh = true;
+        self.drawn = false;
+    }
+
+    /// Alive now, and the frame before (none: not drawn then).
+    pub fn life(&self) -> (bool, Option<bool>) {
+        (self.alive, self.was_alive)
+    }
+
+    /// The seat it was last drawn for.
+    pub fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    /// How it moved the last frame it was drawn alive, m/s.
+    pub fn last_vel(&self) -> Vec3 {
+        self.vel
+    }
+
+    /// Your own shadow (`own_shadow.rs`).
+    pub fn is_shadow(&self) -> bool {
+        self.shadow
     }
 
     /// Where its head is moved, metres in the model's frame.
@@ -189,6 +218,11 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         gait: Gait::default(),
         playing: Playing::default(),
         head_push: Vec3::ZERO,
+        slot: 0,
+        alive: true,
+        was_alive: None,
+        drawn: false,
+        vel: Vec3::ZERO,
     });
     root
 }
@@ -283,6 +317,13 @@ fn dress(
     commands
         .entity(root)
         .insert(anim::bind_spine(model, &names, &parents, &children, &transforms));
+    match super::rag::bind(model, &names, &parents, &children) {
+        Some(r) => {
+            commands.entity(root).insert(r);
+        }
+        None if !body.shadow => error!("rag: a bone is missing or moved in models/triple-t.glb: no rag doll"),
+        None => {}
+    }
     body.dressed = true;
     if body.shadow {
         let Some(shadow) = shadow_mat else {
@@ -442,6 +483,13 @@ pub fn pose(
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
     };
+    body.was_alive = body.drawn.then_some(body.alive);
+    body.drawn = true;
+    body.alive = d.alive;
+    body.slot = d.slot;
+    if d.alive {
+        body.vel = Vec3::new(d.vel.x, d.vel.y, d.vel.z);
+    }
     let driving = seat.is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
     // A driver faces the way the hull does.
     let yaw = match seat {
@@ -463,6 +511,8 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
+            reload_s: (d.reloading && !sim::arms::arm(d.arm).hot())
+                .then(|| sim::arms::arm(d.arm).reload_ms as f32 / 1000.0),
         },
         dt,
     );
@@ -492,7 +542,7 @@ pub fn drive(
     mut commands: Commands,
     rig: Option<Res<anim::Rig>>,
     time: Res<Time>,
-    mut bodies: Query<(Entity, &mut Body)>,
+    mut bodies: Query<(Entity, &mut Body, Has<super::rag::Ragdoll>)>,
     mut players: Query<(
         &mut AnimationPlayer,
         Option<&mut AnimationTransitions>,
@@ -503,13 +553,20 @@ pub fn drive(
         return;
     };
     let dt = time.delta_secs();
-    for (e, mut body) in &mut bodies {
+    for (e, mut body, limp) in &mut bodies {
         let Some(p) = body.player else {
             continue;
         };
         let Ok((mut player, transitions, bound)) = players.get_mut(p) else {
             continue;
         };
+        // Limp, the rag doll poses it (`rag.rs`): no clip may.
+        if limp {
+            if player.playing_animations().next().is_some() {
+                player.stop_all();
+            }
+            continue;
+        }
         let Some(mut transitions) = transitions.filter(|_| bound) else {
             commands
                 .entity(p)
@@ -530,6 +587,30 @@ pub fn drive(
             &mut transitions,
             (dt, fresh, anim::desync(e)),
         );
+    }
+}
+
+/// While a body reloads, its gun goes with its right hand, by as much as the
+/// reload owns its arms: the hold's clips keep the hand at [`HAND`], a
+/// reload's take it to the magazine and back. Last frame's hand, so a frame
+/// behind, which a hand moving at a reload's pace never shows.
+pub fn pose_hands(
+    q: Query<(&Body, &super::rag::RagBones, &GlobalTransform), Without<super::rag::Ragdoll>>,
+    globals: Query<&GlobalTransform>,
+    mut at: Query<&mut Transform>,
+) {
+    for (b, bones, root) in &q {
+        let u = b.playing.reload_share();
+        if u <= 0.0 {
+            continue;
+        }
+        let Ok(hand) = globals.get(bones.right_hand()) else {
+            continue;
+        };
+        let there = root.affine().inverse().transform_point3(hand.translation());
+        if let Ok(mut t) = at.get_mut(b.hand) {
+            t.translation = t.translation.lerp(there, u);
+        }
     }
 }
 

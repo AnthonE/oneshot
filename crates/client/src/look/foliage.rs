@@ -591,11 +591,15 @@ pub fn warm(
         let Some(me) = meshes.get(&mesh.0) else {
             continue;
         };
+        // A block spawned before its atlas came has been extracted already
+        // (its vertices live on the GPU alone): its layout cannot be read,
+        // so it is warmed once per material as its own, whatever it is.
+        let has = |id| me.try_attribute_option(id).map(|a| a.is_some()).unwrap_or(false);
         let key = (
             mat.0.id(),
-            me.attribute(Mesh::ATTRIBUTE_UV_0).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_UV_1).is_some(),
-            me.attribute(Mesh::ATTRIBUTE_COLOR).is_some(),
+            has(Mesh::ATTRIBUTE_UV_0),
+            has(Mesh::ATTRIBUTE_UV_1),
+            has(Mesh::ATTRIBUTE_COLOR),
         );
         if seen.contains(&key) {
             continue;

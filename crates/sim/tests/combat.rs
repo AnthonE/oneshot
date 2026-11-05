@@ -408,6 +408,39 @@ fn the_dead_drop_what_they_held_and_a_swap_leaves_the_old_gun() {
 }
 
 #[test]
+fn a_blast_throws_a_gun_on_the_floor_and_it_comes_to_rest() {
+    let mut w = duel([ROCKET, MAGNUM], 8.0);
+    w.fighters[1].body.pos = V3::new(0.0, 0.0, 60.0);
+    let lay = V3::new(5.0, 0.0, 0.0);
+    w.drops[0] = Dropped {
+        active: true,
+        gun: Gun::full(SNIPER),
+        pos: lay,
+        ttl: 100_000,
+        ..Dropped::default()
+    };
+    shoot(&mut w, V3::new(4.0, 0.0, 0.0), FIRE, NO_LAG);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    let mut blast = None;
+    let mut high = 0.0f32;
+    for _ in 0..TICK_HZ * 6 {
+        w.step(&idle, &NO_LAG);
+        if let Some(e) = w.events.as_slice().iter().find(|e| e.kind == Ev::Blast) {
+            blast = Some(e.pos);
+        }
+        high = high.max(dropped(&w, SNIPER)[0].pos.y);
+    }
+    let at = blast.expect("the rocket went off");
+    let gun = dropped(&w, SNIPER)[0];
+    let was = (lay - at).flat().len();
+    let now = (gun.pos - at).flat().len();
+    assert!(now > was + 2.0, "thrown from {was:.2} m off the blast to {now:.2}");
+    assert!(high > 0.3, "it popped up {high:.2} m");
+    assert_eq!(gun.vel, V3::ZERO, "it came to rest");
+    assert_eq!(gun.pos.y, 0.0, "on the floor");
+}
+
+#[test]
 fn walking_over_a_gun_of_ones_own_kind_takes_its_rounds_to_a_full_reserve() {
     let mut w = duel([AR, MAGNUM], 20.0);
     let at = w.fighters[0].body.pos;

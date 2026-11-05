@@ -245,7 +245,9 @@ fn a_shot_meets_the_hull_where_the_shooter_saw_it() {
             mz: 127,
             ..Input::default()
         };
-        for _ in 0..TICK_HZ * 2 {
+        // Three seconds: up the hill beside red's base and over its top, at
+        // speed again on the way down.
+        for _ in 0..TICK_HZ * 3 {
             press(&mut w, 0, go);
         }
         let mut seen = Vec::new();

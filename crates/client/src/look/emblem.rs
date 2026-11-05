@@ -1,8 +1,7 @@
 //! Emblems, Halo's way: a glyph on a field, each in a colour of the palette,
-//! worn on Triple T's back (`bodies.rs`) and drawn in the page's menu
-//! (`emblem_rgba`). Ours: every shape is drawn here, from a few lines of
-//! geometry each, so there is no art to license and the page and the game
-//! draw the same pixels. What the wire carries is `proto::Emblem`.
+//! worn on Triple T's back (`bodies.rs`). Ours: every shape is drawn here,
+//! from a few lines of geometry each, so there is no art to license. What
+//! the wire carries is `proto::Emblem`.
 //!
 //! Cosmetic only (DESIGN.md §15): lit as paint, never emissive, small, on
 //! the back plate, never on the head.
@@ -86,12 +85,6 @@ pub fn rgba(code: proto::Emblem, size: u32) -> Vec<u8> {
         }
     }
     out
-}
-
-/// The CSS colour of palette entry `i`, for the page's pickers.
-pub fn css(i: usize) -> String {
-    let [r, g, b] = PALETTE[i % PALETTE.len()];
-    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 fn in_poly(pts: &[(f32, f32)], x: f32, y: f32) -> bool {

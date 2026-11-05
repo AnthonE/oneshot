@@ -203,6 +203,12 @@ mod tests {
             assert_eq!(p.step(true, false), Ok(None));
         }
         assert_eq!(p.step(true, false), Err(false), "refused: the row says so");
-        assert_eq!(p.step(false, true), Ok(Some(false)), "OFF asks the page out");
+        // The page came on its own (nothing here asked): the row follows it,
+        // as it does when the page leaves on its own.
+        assert_eq!(
+            p.step(false, true),
+            Err(true),
+            "the page came on its own: the row follows"
+        );
     }
 }
