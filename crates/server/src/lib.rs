@@ -54,8 +54,8 @@ pub enum ToSim {
         session: u64,
         name: Name,
         mode: u8,
-        /// A skin checked against the player's wallet.
-        skin: u8,
+        /// A skin and emblem checked against the player's wallet.
+        look: proto::Look,
         /// The party it comes with, if it is in one that started this mode.
         party: Option<party::Seating>,
         /// Who signed in: their wallet, else their account's `acct_` id.
@@ -581,7 +581,7 @@ impl Sim {
                         session,
                         name,
                         mode,
-                        skin,
+                        look,
                         party,
                         player,
                         tx,
@@ -656,7 +656,7 @@ impl Sim {
                                 live.parties.push((p.code, team));
                             }
                         }
-                        let Some((slot, out)) = live.room.join_team(name, skin, team) else {
+                        let Some((slot, out)) = live.room.join_team(name, look, team) else {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
@@ -800,7 +800,7 @@ impl Sim {
                         for (k, p) in players.iter().enumerate() {
                             // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
                             let slot = side + 2 * k;
-                            outs.push(live.room.seat_person(slot, p.name, p.skin));
+                            outs.push(live.room.seat_person(slot, p.name, p.look));
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
                             live.players[slot] = Some(p.wallet.clone());
@@ -839,7 +839,7 @@ impl Sim {
                                 session: e.session,
                                 wallet: e.wallet,
                                 name: e.name,
-                                skin: e.skin,
+                                look: e.look,
                                 points: 0,
                                 here: true,
                                 final_place: None,
@@ -972,7 +972,7 @@ impl Sim {
             let mut outs = Vec::new();
             for (slot, &i) in members.iter().enumerate() {
                 let e = &c.entrants[i];
-                outs.push(live.room.seat_person(slot, e.name, e.skin));
+                outs.push(live.room.seat_person(slot, e.name, e.look));
                 live.links[slot] = Some(e.session);
                 live.wallets[slot] = Some(e.wallet.clone());
                 live.players[slot] = Some(e.wallet.clone());

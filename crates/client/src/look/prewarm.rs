@@ -92,7 +92,15 @@ pub fn warm(
 /// What a weathered box's pipeline is specialised on: its maps (normal,
 /// occlusion-roughness-metal, glow) and whether its mesh carries the
 /// rock's value (`UV_1`).
-type LevelKey = (bool, bool, bool, bool);
+type LevelKey = (bool, bool, bool, Option<bool>);
+
+/// Whether `mesh` carries attribute `id`; `None` for a mesh whose data
+/// went to the render world (`RenderAssetUsages::RENDER_WORLD`, extracted),
+/// whose layout can't be read here: its warm is then once per material
+/// (Gates' `layout_key`), as `Mesh::attribute` would panic on it.
+pub fn carries(mesh: &Mesh, id: bevy::mesh::MeshVertexAttribute) -> Option<bool> {
+    mesh.try_attribute_option(id).ok().map(|a| a.is_some())
+}
 
 /// A warm draw of each kind of weathered box (`weathering.rs`) the frame
 /// the first of its kind is dressed, on that box's own mesh, shrunk: its
@@ -117,18 +125,14 @@ pub fn warm_level(
         let (Some(m), Some(me)) = (mats.get(&mat.0), meshes.get(&mesh.0)) else {
             continue;
         };
-        // A RENDER_WORLD mesh already sent to the GPU can't be read here
-        // (`attribute` panics): its pipeline is built when it draws.
-        let Ok(uv1) = me.try_attribute_option(Mesh::ATTRIBUTE_UV_1.id).map(|a| a.is_some()) else {
-            continue;
-        };
         let key = (
             m.base.normal_map_texture.is_some(),
             m.base.metallic_roughness_texture.is_some(),
             m.base.emissive_texture.is_some(),
-            uv1,
+            carries(me, Mesh::ATTRIBUTE_UV_1),
         );
-        if seen.contains(&key) {
+        let warmed = |k: &LevelKey| (k.0, k.1, k.2) == (key.0, key.1, key.2);
+        if seen.contains(&key) || (key.3.is_none() && seen.iter().any(warmed)) {
             continue;
         }
         seen.push(key);
@@ -182,7 +186,12 @@ pub fn warm_models(
     // neither it nor its shadow (cast down, away from the floor) can be
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
-    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, 0);
+    // In an emblem, so its cut-out pipeline is built here too.
+    let look = proto::Look {
+        skin: 0,
+        emblem: proto::emblem(1, 1, 0, 4),
+    };
+    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, look);
     commands
         .entity(body)
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));

@@ -14,7 +14,11 @@
 #   demo's stage N alone: crates/client/src/look/fx/demo.rs), lite (POTATO),
 #   quality=potato|low|medium|high (that rung; unset, the default HIGH),
 #   capsules, name=NAME, pose=QUERY (no server: a picture,
-#   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`).
+#   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`), loadout=GUNS (the
+#   server's --loadout: everyone starts with them), scope (the autopilot
+#   holds the scope), passive (the bots don't fight back).
+#
+#   ci/desktop_shot.sh traces/scope.png 6 0 3 1 loadout=sniper scope passive
 #
 #   ci/desktop_shot.sh traces/title.png 2 0 0 0
 #   ci/desktop_shot.sh traces/settings.png 2 0 0 0 settings
@@ -22,8 +26,9 @@
 #   ci/desktop_shot.sh traces/menu.png 4 6 3 1 menu
 #
 # Needs Xvfb and lavapipe (apt-get install xvfb mesa-vulkan-drivers), the
-# desktop client (ci/client.sh builds crates/client/target/debug/oneshot;
-# ONESHOT_BIN names another) and for a match the release server (cargo
+# desktop client (the newer of crates/client/target/release/oneshot, as the
+# web shots are, and the debug one ci/client.sh builds; ONESHOT_BIN names
+# another; the log says which) and for a match the release server (cargo
 # build --release -p server). The settings file is a fresh one, so a
 # player's own field of view or keys never move a shot. The client's log
 # goes beside the shot (<out>.log).
@@ -36,7 +41,12 @@ mode=${3:-6}
 map=${4:-3}
 auto=${5:-0}
 more=("${@:6}")
-bin=${ONESHOT_BIN:-crates/client/target/debug/oneshot}
+bin=${ONESHOT_BIN:-}
+if [ -z "$bin" ]; then
+  rel=crates/client/target/release/oneshot dbg=crates/client/target/debug/oneshot
+  if [ -x "$rel" ] && { [ ! -x "$dbg" ] || [ "$rel" -nt "$dbg" ]; }; then bin=$rel; else bin=$dbg; fi
+fi
+echo "desktop_shot: $bin" >&2
 [ -x "$bin" ] || { echo "desktop_shot: no $bin (ci/client.sh, or cd crates/client && cargo build)" >&2; exit 1; }
 command -v Xvfb >/dev/null || { echo "desktop_shot: no Xvfb (apt-get install xvfb mesa-vulkan-drivers)" >&2; exit 1; }
 case $out in /*) ;; *) out=$root/$out ;; esac
@@ -46,6 +56,8 @@ log=$out.log
 
 args=(--shot "$out" --shot-at "$secs")
 match=0
+loadout=
+passive=
 [ "$auto" = 1 ] && { match=1; args+=(--autoplay); }
 for w in "${more[@]}"; do
   case $w in
@@ -60,7 +72,10 @@ for w in "${more[@]}"; do
     capsules | capsules=1) args+=(--capsules) ;;
     name=*) args+=(--name "${w#name=}") ;;
     pose=*) args+=(--pose "${w#pose=}") ;;
-    *) echo "desktop_shot: what is '$w'? (menu settings graphics title fxdemo fxstage= lite quality= capsules name= pose=)" >&2; exit 1 ;;
+    scope | scope=1) args+=(--scope) ;;
+    loadout=*) loadout=${w#loadout=} ;;
+    passive | passive=1) passive=1 ;;
+    *) echo "desktop_shot: what is '$w'? (menu settings graphics title fxdemo fxstage= lite quality= capsules name= pose= scope loadout= passive)" >&2; exit 1 ;;
   esac
 done
 case " ${args[*]} " in *" --pose "*) match=0 ;; esac
@@ -82,7 +97,7 @@ for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
 
 if [ "$match" = 1 ]; then
   [ -x target/release/oneshot-server ] || { echo "desktop_shot: no target/release/oneshot-server (cargo build --release -p server)" >&2; exit 1; }
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" ${loadout:+--loadout "$loadout"} ${passive:+--passive-bots} >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do
@@ -94,9 +109,13 @@ if [ "$match" = 1 ]; then
   args+=(--server "$url" --mode "$mode")
 fi
 
-# lavapipe, unless the caller named a driver.
-lvp=/usr/share/vulkan/icd.d/lvp_icd.json
-if [ -z "${VK_ICD_FILENAMES:-}${VK_DRIVER_FILES:-}" ] && [ -e "$lvp" ]; then
+# lavapipe, unless the caller named a driver (older Mesa names its file by
+# the machine: lvp_icd.x86_64.json).
+lvp=
+for f in /usr/share/vulkan/icd.d/lvp_icd.json /usr/share/vulkan/icd.d/lvp_icd.*.json; do
+  [ -e "$f" ] && { lvp=$f; break; }
+done
+if [ -z "${VK_ICD_FILENAMES:-}${VK_DRIVER_FILES:-}" ] && [ -n "$lvp" ]; then
   export VK_ICD_FILENAMES=$lvp VK_DRIVER_FILES=$lvp
 fi
 mkdir -p "$tmp/config"

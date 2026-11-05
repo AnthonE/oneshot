@@ -23,7 +23,7 @@ pub struct Ask {
     /// An Elo Pros pass, or empty for a guest.
     pub pass: String,
     pub mode: u8,
-    pub skin: u8,
+    pub look: proto::Look,
     /// The party it comes with (its code; 0 for none), seated with it.
     pub party: u32,
 }
@@ -89,6 +89,22 @@ fn moving(m: &Msg) -> bool {
 
 const MOVING: &str = "Moving to the new server...";
 
+/// The menu's session as the game holds it (`party.rs`): the party's
+/// messages and voice in, its acts and our voice out. Never waits.
+pub trait Lobby {
+    fn take(&mut self) -> Vec<Msg>;
+    fn take_voice(&mut self) -> Vec<proto::voice::VoiceFrame>;
+    fn send(&mut self, m: Msg);
+    fn talk(&mut self, f: &proto::voice::VoiceFrame) -> bool;
+    fn closed(&self) -> bool;
+    fn close(&mut self);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub type LobbyBox = Box<dyn Lobby + Send>;
+#[cfg(target_arch = "wasm32")]
+pub type LobbyBox = Box<dyn Lobby>;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use desktop::*;
 #[cfg(target_arch = "wasm32")]
@@ -149,6 +165,65 @@ mod desktop {
         }
     }
 
+    impl Door {
+        /// Opens the menu's session (`hello` asks for `MODE_LOBBY`) on a
+        /// thread of its own, as a knock does.
+        pub fn lobby(&self, hello: proto::Msg) -> LobbyKnock {
+            let (tx, rx) = channel();
+            let server = self.server.clone();
+            std::thread::spawn(move || {
+                let got = (|| {
+                    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+                    let (addr, hash) = where_is(&server)?;
+                    let lobby = rt
+                        .block_on(client_net::native::NativeLobby::connect(&addr, hash, hello))
+                        .map_err(|e| format!("{addr}: {e}"))?;
+                    Ok(Box::new(NativeParty { lobby, _rt: rt }) as super::LobbyBox)
+                })();
+                let _ = tx.send(got);
+            });
+            LobbyKnock { rx }
+        }
+    }
+
+    /// The menu's session on its way.
+    pub struct LobbyKnock {
+        rx: Receiver<Result<super::LobbyBox, String>>,
+    }
+
+    impl LobbyKnock {
+        pub fn poll(&mut self) -> Option<Result<super::LobbyBox, String>> {
+            self.rx.try_recv().ok()
+        }
+    }
+
+    /// The native lobby, and the runtime its readers run on.
+    struct NativeParty {
+        lobby: client_net::native::NativeLobby,
+        _rt: tokio::runtime::Runtime,
+    }
+
+    impl super::Lobby for NativeParty {
+        fn take(&mut self) -> Vec<proto::Msg> {
+            self.lobby.take()
+        }
+        fn take_voice(&mut self) -> Vec<proto::voice::VoiceFrame> {
+            self.lobby.take_voice()
+        }
+        fn send(&mut self, m: proto::Msg) {
+            self.lobby.send_now(m);
+        }
+        fn talk(&mut self, f: &proto::voice::VoiceFrame) -> bool {
+            self.lobby.send_voice(f)
+        }
+        fn closed(&self) -> bool {
+            self.lobby.closed()
+        }
+        fn close(&mut self) {
+            self.lobby.close();
+        }
+    }
+
     enum Heard {
         Line(String),
         In(Box<Native>, Vec<proto::Msg>),
@@ -193,7 +268,9 @@ mod desktop {
         let (mut addr, mut hash) = where_is(server)?;
         let mut moved = false;
         'connect: loop {
-            let hello = Session::hello(&ask.name, proto::Pass::NONE, ask.mode, ask.skin, ask.party);
+            // The lobby's ticket, if it has one: who we are to the party.
+            let pass = proto::Pass::new(&ask.pass).unwrap_or(proto::Pass::NONE);
+            let hello = Session::hello(&ask.name, pass, ask.mode, ask.look, ask.party);
             let mut c = rt
                 .block_on(NativeClient::connect(&addr, hash, hello))
                 .map_err(|e| format!("{addr}: {e}"))?;
@@ -458,6 +535,59 @@ mod web {
         }
     }
 
+    impl Door {
+        /// Opens the menu's session (`hello` asks for `MODE_LOBBY`).
+        pub fn lobby(&self, hello: proto::Msg) -> LobbyKnock {
+            let slot: Rc<RefCell<Option<Result<super::LobbyBox, String>>>> = Rc::default();
+            let (addr, hash) = self.at.borrow().clone();
+            let s = slot.clone();
+            spawn_local(async move {
+                let got = client_net::web_lobby::WebLobby::open(addr, hash, hello).await;
+                // Given up on already (it took too long): close it, unheld.
+                if Rc::strong_count(&s) == 1 {
+                    if let Ok(l) = got {
+                        l.close();
+                    }
+                    return;
+                }
+                *s.borrow_mut() = Some(got.map(|l| Box::new(l) as super::LobbyBox).map_err(|e| js_text(&e)));
+            });
+            LobbyKnock { slot }
+        }
+    }
+
+    /// The menu's session on its way.
+    pub struct LobbyKnock {
+        slot: Rc<RefCell<Option<Result<super::LobbyBox, String>>>>,
+    }
+
+    impl LobbyKnock {
+        pub fn poll(&mut self) -> Option<Result<super::LobbyBox, String>> {
+            self.slot.borrow_mut().take()
+        }
+    }
+
+    impl super::Lobby for client_net::web_lobby::WebLobby {
+        fn take(&mut self) -> Vec<proto::Msg> {
+            client_net::web_lobby::WebLobby::take(self)
+        }
+        fn take_voice(&mut self) -> Vec<proto::voice::VoiceFrame> {
+            client_net::web_lobby::WebLobby::take_voice(self)
+        }
+        fn send(&mut self, m: proto::Msg) {
+            client_net::web_lobby::WebLobby::send(self, m);
+        }
+        fn talk(&mut self, f: &proto::voice::VoiceFrame) -> bool {
+            client_net::web_lobby::WebLobby::talk(self, f)
+        }
+        fn closed(&self) -> bool {
+            client_net::web_lobby::WebLobby::closed(self)
+        }
+        fn close(&mut self) {
+            client_net::web_lobby::WebLobby::close(self);
+        }
+    }
+
     /// A connection on its way.
     pub struct Knock {
         out: Rc<RefCell<Vec<News>>>,
@@ -513,7 +643,8 @@ mod web {
                 ask.name.clone(),
                 ask.pass.clone(),
                 ask.mode,
-                ask.skin,
+                ask.look.skin,
+                ask.look.emblem,
                 ask.party,
             )
         };

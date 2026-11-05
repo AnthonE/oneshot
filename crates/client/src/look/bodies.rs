@@ -4,7 +4,8 @@
 //! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
 //! the spine back to the aim, the head on the aim's pitch, the feet planted,
 //! the hold on the arms), and the gun they hold in hand. A skin is a faint
-//! sheen of its trim and a band at the waist: the side's colour still
+//! sheen of its trim and a band at the waist, an emblem (`emblem.rs`) paint
+//! on the back plate that turns with the spine: the side's colour still
 //! carries the fighter, and no hitbox or visibility changes (DESIGN.md
 //! §15). Drawing only.
 //!
@@ -52,6 +53,16 @@ const SKIN_TRIM: [Option<u32>; 6] = [
 /// The trim's sheen, against the side's glow.
 const TRIM_GLOW: f32 = 0.35;
 
+/// The emblem on the back plate, in the frame of the `Spine` bone at rest
+/// (centimetres: the rig is scaled 0.01): 30 cm square, 1.12 m up, its face
+/// 1 cm proud of the back (which stands 22.7 cm behind the spine between
+/// 0.7 m and 1.75 m), facing back. From the file's bind pose; a new model
+/// needs these again.
+const EMBLEM_BONE: &str = "Spine";
+const EMBLEM_AT: Vec3 = Vec3::new(-0.463, 1.594, -19.391);
+const EMBLEM_TURN: Quat = Quat::from_xyzw(-0.00452, -0.99971, -0.02303, 0.00452);
+const EMBLEM_SCALE: f32 = 30.0;
+
 fn trim(skin: u8) -> Option<Color> {
     SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
         let [_, r, g, b] = c.to_be_bytes();
@@ -63,6 +74,7 @@ fn trim(skin: u8) -> Option<Color> {
 pub struct Body {
     team: u8,
     skin: u8,
+    emblem: proto::Emblem,
     /// Cast in the sun's shadow and drawn by no camera (`own_shadow.rs`):
     /// no shells, no band, and every mesh on the shadow's material.
     shadow: bool,
@@ -88,6 +100,14 @@ pub struct Body {
     /// Where its head is moved, metres in the model's frame
     /// (`own_shadow.rs`).
     head_push: Vec3,
+    /// Whose body it was last drawn as, alive or not, whether it was the
+    /// frame before (none the first frame it is drawn), and how it last
+    /// moved alive: for the rag doll (`rag.rs`).
+    slot: u8,
+    alive: bool,
+    was_alive: Option<bool>,
+    drawn: bool,
+    vel: Vec3,
 }
 
 impl Body {
@@ -101,6 +121,27 @@ impl Body {
     pub fn afresh(&mut self) {
         self.gait = Gait::default();
         self.fresh = true;
+        self.drawn = false;
+    }
+
+    /// Alive now, and the frame before (none: not drawn then).
+    pub fn life(&self) -> (bool, Option<bool>) {
+        (self.alive, self.was_alive)
+    }
+
+    /// The seat it was last drawn for.
+    pub fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    /// How it moved the last frame it was drawn alive, m/s.
+    pub fn last_vel(&self) -> Vec3 {
+        self.vel
+    }
+
+    /// Your own shadow (`own_shadow.rs`).
+    pub fn is_shadow(&self) -> bool {
+        self.shadow
     }
 
     /// Where its head is moved, metres in the model's frame.
@@ -115,17 +156,17 @@ pub fn model_rotation(yaw: f32) -> Quat {
     Quat::from_rotation_y(-yaw) * Quat::from_rotation_y(FACE)
 }
 
-/// A body spawned for `team` in `skin`: its root, which the caller places.
+/// A body spawned for `team` in `look`: its root, which the caller places.
 pub fn spawn(
     commands: &mut Commands,
     models: &Models,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
     team: u8,
-    skin: u8,
+    look: proto::Look,
 ) -> Entity {
-    let root = spawn_as(commands, models, team, skin, false);
-    if let Some(c) = trim(skin) {
+    let root = spawn_as(commands, models, team, look, false);
+    if let Some(c) = trim(look.skin) {
         // The band at the waist, in the trim's colour.
         commands.spawn((
             Mesh3d(meshes.add(Torus::new(0.175, 0.225))),
@@ -144,10 +185,10 @@ pub fn spawn(
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
 pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
-    spawn_as(commands, models, team, 0, true)
+    spawn_as(commands, models, team, proto::Look::default(), true)
 }
 
-fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow: bool) -> Entity {
+fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
@@ -161,7 +202,8 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow
         .observe(dress);
     commands.entity(root).insert(Body {
         team,
-        skin,
+        skin: look.skin,
+        emblem: proto::emblem_valid(look.emblem),
         shadow,
         dressed: false,
         player: None,
@@ -176,6 +218,11 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow
         gait: Gait::default(),
         playing: Playing::default(),
         head_push: Vec3::ZERO,
+        slot: 0,
+        alive: true,
+        was_alive: None,
+        drawn: false,
+        vel: Vec3::ZERO,
     });
     root
 }
@@ -253,6 +300,11 @@ fn dress(
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
     shadow_mat: Option<Res<super::own_shadow::ShadowMat>>,
     warm: Query<(), With<super::prewarm::WarmBody>>,
+    (mut emblems, mut images, mut quads): (
+        ResMut<super::emblem::Emblems>,
+        ResMut<Assets<Image>>,
+        ResMut<Assets<Mesh>>,
+    ),
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -265,6 +317,13 @@ fn dress(
     commands
         .entity(root)
         .insert(anim::bind_spine(model, &names, &parents, &children, &transforms));
+    match super::rag::bind(model, &names, &parents, &children) {
+        Some(r) => {
+            commands.entity(root).insert(r);
+        }
+        None if !body.shadow => error!("rag: a bone is missing or moved in models/triple-t.glb: no rag doll"),
+        None => {}
+    }
     body.dressed = true;
     if body.shadow {
         let Some(shadow) = shadow_mat else {
@@ -334,6 +393,27 @@ fn dress(
         }
     }
     body.glow = (tint + sheen) * glow;
+    // The emblem: paint on the back plate, on the spine so it turns with it.
+    if body.emblem != proto::EMBLEM_NONE {
+        let spine = children
+            .iter_descendants(model)
+            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == EMBLEM_BONE));
+        if let Some(spine) = spine {
+            let mat = emblems.material(body.emblem, &mut images, &mut mats);
+            commands.spawn((
+                Mesh3d(emblems.quad(&mut quads)),
+                MeshMaterial3d(mat),
+                Transform {
+                    translation: EMBLEM_AT,
+                    rotation: EMBLEM_TURN,
+                    scale: Vec3::splat(EMBLEM_SCALE),
+                },
+                NotShadowCaster,
+                NoFrustumCulling,
+                ChildOf(spine),
+            ));
+        }
+    }
 }
 
 /// The light the shell casts on the body under it, gold, at a flare of 1:
@@ -403,6 +483,13 @@ pub fn pose(
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
     };
+    body.was_alive = body.drawn.then_some(body.alive);
+    body.drawn = true;
+    body.alive = d.alive;
+    body.slot = d.slot;
+    if d.alive {
+        body.vel = Vec3::new(d.vel.x, d.vel.y, d.vel.z);
+    }
     let driving = seat.is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
     // A driver faces the way the hull does.
     let yaw = match seat {
@@ -412,7 +499,14 @@ pub fn pose(
     if let Ok(mut t) = at.get_mut(root) {
         *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
     }
-    let hold = gun(d.arm).map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    // Every gun hangs at the same `HAND`, at the chest, where the long
+    // hold puts both hands. The pistol clip is Gates' first-person arms
+    // (hands up at the face): over a body it held nothing. A pistol's
+    // reload is still its own clip, and the gun goes with the hand while
+    // it plays (`pose_hands`).
+    let gun_of = gun(d.arm);
+    let hold = gun_of.map(|_| Hold::Long);
+    let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
     body.gait.observe(
         &Seen {
             alive: d.alive,
@@ -424,6 +518,9 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
+            reload: reload_clip
+                .filter(|_| d.reloading && !sim::arms::arm(d.arm).hot())
+                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0)),
         },
         dt,
     );
@@ -453,7 +550,7 @@ pub fn drive(
     mut commands: Commands,
     rig: Option<Res<anim::Rig>>,
     time: Res<Time>,
-    mut bodies: Query<(Entity, &mut Body)>,
+    mut bodies: Query<(Entity, &mut Body, Has<super::rag::Ragdoll>)>,
     mut players: Query<(
         &mut AnimationPlayer,
         Option<&mut AnimationTransitions>,
@@ -464,13 +561,20 @@ pub fn drive(
         return;
     };
     let dt = time.delta_secs();
-    for (e, mut body) in &mut bodies {
+    for (e, mut body, limp) in &mut bodies {
         let Some(p) = body.player else {
             continue;
         };
         let Ok((mut player, transitions, bound)) = players.get_mut(p) else {
             continue;
         };
+        // Limp, the rag doll poses it (`rag.rs`): no clip may.
+        if limp {
+            if player.playing_animations().next().is_some() {
+                player.stop_all();
+            }
+            continue;
+        }
         let Some(mut transitions) = transitions.filter(|_| bound) else {
             commands
                 .entity(p)
@@ -494,6 +598,30 @@ pub fn drive(
     }
 }
 
+/// While a body reloads, its gun goes with its right hand, by as much as the
+/// reload owns its arms: the hold's clips keep the hand at [`HAND`], a
+/// reload's take it to the magazine and back. Last frame's hand, so a frame
+/// behind, which a hand moving at a reload's pace never shows.
+pub fn pose_hands(
+    q: Query<(&Body, &super::rag::RagBones, &GlobalTransform), Without<super::rag::Ragdoll>>,
+    globals: Query<&GlobalTransform>,
+    mut at: Query<&mut Transform>,
+) {
+    for (b, bones, root) in &q {
+        let u = b.playing.reload_share();
+        if u <= 0.0 {
+            continue;
+        }
+        let Ok(hand) = globals.get(bones.right_hand()) else {
+            continue;
+        };
+        let there = root.affine().inverse().transform_point3(hand.translation());
+        if let Ok(mut t) = at.get_mut(b.hand) {
+            t.translation = t.translation.lerp(there, u);
+        }
+    }
+}
+
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
 pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {
@@ -502,6 +630,7 @@ pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut
             clip: b.gait.clip,
             pitch: b.gait.pitch,
             hip_yaw: b.gait.hip_yaw,
+            held: b.playing.held(),
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);

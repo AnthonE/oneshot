@@ -27,6 +27,13 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
 
+**Ranked plays MLG's way** (Duel, Doubles, cups):
+- No motion tracker and no minimap, in any mode. What you know is what you see and hear.
+- Equal starts, every life: the rifle (BR) and the magnum, two grenades. Nothing random on the map: power weapons sit on fixed pads with fixed timers per map.
+- Friendly fire on in Doubles (`Rules::friendly_fire`): your rounds, blasts and blows hurt your teammate, and a teammate killed costs your side a point. Nobody homes on, lunges at or is magnetised toward a teammate. Casual and Big Team keep it off.
+- A suicide costs a point. No vehicles on ranked maps.
+- Sides read as red and blue; a skin is trim on the side's colour, never in place of it.
+
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
@@ -321,8 +328,9 @@ runs. A no-spread cheat has nothing to cancel.
 - **Ranked needs a wallet.** `ratings.py` refuses login-only `acct_` ids. A
   login plays casual.
 - **One seat per wallet per match.**
-- **Parties, friends, voice** (`server/src/party.rs`, `lobby.rs`): the page
-  keeps a lobby session (`MODE_LOBBY`) beside any match. Everyone is in a
+- **Parties, friends, voice** (`server/src/party.rs`, `lobby.rs`; the
+  client's `party.rs`, PARTY and FRIENDS on the title): the game keeps a
+  lobby session (`MODE_LOBBY`) beside any match. Everyone is in a
   party, of one until they join someone's by its code; the leader picks who
   may join (anyone with the link, the leader's Elo Pros friends, invite only)
   and starts a mode for everyone present, who are then seated together (one
@@ -343,7 +351,18 @@ runs. A no-spread cheat has nothing to cancel.
   signed with its server key (`serverkeys.py`: Ed25519, nonce, 300 s skew), on
   ladders `duel` and `doubles`. The math is Weng-Lin Plackett-Luce shown on the
   Elo scale; a new player is 1500 ± 246 and appears on the board after 5
-  matches.
+  matches. The player sees the exact rating ± rd after every match: no hidden
+  number beside it, no update held back for five wins.
+- **The board orders by the floor**, mu − 3 sigma on the Elo scale, as Halo 3
+  ranked by TrueSkill's. Five lucky wins on a wide sigma don't top a record.
+  Sigma widens on reads while a player sits idle (back to a new player's
+  within 90 days), so nobody keeps a spot by not playing. The floor is also
+  what a rank-locked skin reads (§15).
+- **Seasons are windows over the log, never a reset** (`GET
+  /ratings/oneshot/season/<ladder>?from=&to=&min=`): the ratings at the
+  window's end, by floor, among wallets with at least 50 rated matches inside
+  it. A row whose most-met opponent is half or more of its 10 or more matches
+  is marked for review (win-trading between two wallets).
 
 ## 12 · Replays and evidence
 
@@ -429,15 +448,42 @@ crossed) and the bots (none).
 
 ## 15 · Skins and money (short)
 
+What Halo, Valorant and Overwatch taught: gameplay in random packs (Halo 5's
+REQ), heroes behind a pass (Overwatch 2, reversed), a rank hidden behind
+batched updates (Overwatch 2, reversed), passes that expire, and a shop with
+no path through play (Overwatch 2 after the boxes) cost more goodwill than
+they earned. Reach's earned armory, Overwatch's golden guns and Infinite's
+passes that never expire are what players kept.
+
 - Weapon and character skins are Metaplex Core NFTs on Solana, one collection
   for the game, 0 royalty, the house paying rent (Elo Pros'
   `docs/items/SOLANA-ITEMS.md`, `meter/solana_items.py`, `deploy/solana-items/`).
-- The server checks a player's skins against their wallet at sign-in and only
-  then puts a skin id in snapshots. A client can't claim one it doesn't own.
-- The free Pill skin after 10 minutes of play. Store prices in PROS. Cases
-  show their odds above the pull. Season prizes are paid by the house to the
-  top of each ladder after review (§13).
-- Skins never change a hitbox, a sound's loudness or a colour's visibility.
+  Sold directly, priced in PROS, and they trade freely.
+- **Rank-locked skins.** A skin may carry a line (`proto::SKIN_FLOOR`): a
+  wallet wears it only while its best floor on Elo Pros (§11) is at the line.
+  Owning one is a market; wearing one is a record. Below the line a wallet
+  wears the standard look, and can sell the skin to someone above it. Money
+  buys the item, never the right to show it, so a bought skin still says what
+  its wearer measured.
+- The server checks a player's skins against their wallet, and a locked one
+  against their floor, at sign-in, and only then puts a skin id in snapshots.
+  A client can't claim one it doesn't own or hasn't earned.
+- **Emblems**, Halo's way: a glyph on a shape, each in one of 16 colours,
+  painted on Triple T's back (`proto::Emblem`, drawn by `look/emblem.rs`, the
+  menu's preview the same pixels). Ours, drawn from geometry: no uploads.
+  Anyone wears one, a guest too; a few glyphs are rank-locked
+  (`proto::GLYPH_FLOOR`) the way skins are. Never lit, never on the head.
+- The free Pill skin after 10 minutes of play. Everything in the store has a
+  path through play too. A pass, if there is one, never expires.
+- **No cases at launch.** If they come, cosmetic only, odds above the pull,
+  no duplicates.
+- **No coin per match.** Wallets are free and casual seats fill with bots, so
+  a per-match payout is a printer for alts. Money goes out only on placements
+  reviewed by a person: cups and each season's top (§11, §13), with the
+  record §13 asks for.
+- Never: a gun, a character or anything that changes play behind a price or
+  an unlock. Skins never change a hitbox, a sound's loudness or a colour's
+  visibility.
 
 ## 16 · Milestones
 

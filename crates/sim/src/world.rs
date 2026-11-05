@@ -36,6 +36,10 @@ pub struct Rules {
     /// [`crate::arms::LADDER`], a kill moves the killer up a rung, pads are
     /// off, and the score is the rung.
     pub gun_game: bool,
+    /// With sides: rounds, blasts and blows hurt teammates too, and a
+    /// teammate killed costs the side a point (ranked, as MLG plays). Nobody
+    /// homes on, lunges at or is magnetised toward a teammate either way.
+    pub friendly_fire: bool,
 }
 
 impl Rules {
@@ -48,10 +52,12 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 2,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
     /// 2v2 Team Slayer: first side to 30, or the most at 12 minutes.
+    /// Ranked, so friendly fire is on.
     pub fn doubles() -> Rules {
         Rules {
             teams: true,
@@ -60,6 +66,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 4,
             gun_game: false,
+            friendly_fire: true,
         }
     }
 
@@ -73,6 +80,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -86,6 +94,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -209,8 +218,12 @@ pub struct Dropped {
     pub gun: Gun,
     pub frags: u8,
     pub stickies: u8,
-    /// On the floor, on the grid.
+    /// On the floor, on the grid; or in the air, thrown by a blast or out
+    /// of a falling hand.
     pub pos: V3,
+    /// Zero lying still; otherwise it flies and bounces as a frag does
+    /// ([`World::fly_drops`]) until it settles.
+    pub vel: V3,
     /// Ticks till it goes.
     pub ttl: u32,
 }
@@ -242,6 +255,7 @@ impl Thing for Dropped {
         h.u8(self.frags);
         h.u8(self.stickies);
         h.v3(self.pos);
+        h.v3(self.vel);
         h.u32(self.ttl);
     }
 }
@@ -367,7 +381,7 @@ impl World {
             // tick, which the client predicts): it falls here.
             let f = &self.fighters[s];
             if left.arm != NONE && f.left.arm == NONE && f.active() {
-                self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0));
+                self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
             }
         }
         // Vehicles drive under their drivers' inputs (what a driver
@@ -418,6 +432,7 @@ impl World {
         for p in self.pads.iter_mut() {
             p.empty_for = p.empty_for.saturating_sub(1);
         }
+        self.fly_drops();
         for d in self.drops.iter_mut().filter(|d| d.active) {
             d.ttl = d.ttl.saturating_sub(1);
             if d.ttl == 0 {
@@ -464,7 +479,8 @@ impl World {
                 // A homing round locks on whoever the aim was on, as seen.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
-                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD) {
+                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD, true)
+                    {
                         target = q as u8;
                     }
                 }
@@ -498,14 +514,16 @@ impl World {
         }
     }
 
-    /// The nearest enemy (or vehicle) a ray from `eye` meets, where the
-    /// server says the shooter saw them, and how far.
-    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32) -> Option<(Target, f32)> {
-        let me = &self.fighters[s];
+    /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
+    /// hurt, where the server says the shooter saw them, and how far. With
+    /// `lock` (homing, a lunge) a teammate is never the one, friendly fire
+    /// or not.
+    #[allow(clippy::too_many_arguments)]
+    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32, lock: bool) -> Option<(Target, f32)> {
         let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
         for (q, v) in self.fighters.iter().enumerate() {
-            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+            if q == s || !v.active() || (if lock { self.mate(s, q) } else { self.spared(s, q) }) {
                 continue;
             }
             let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
@@ -531,7 +549,7 @@ impl World {
             }
         }
         // Hulls, rewound like bodies. A rider hit before its hull is hit.
-        let ride = me.riding().map(|(i, _)| i);
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (i, v) in self.vehicles.iter().enumerate() {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
@@ -550,11 +568,22 @@ impl World {
         best
     }
 
-    /// Whether `att` may not hurt `v`: with sides, a teammate of theirs
-    /// rides in it.
+    /// Whether `q` is on `att`'s side (never `att` itself).
+    fn mate(&self, att: usize, q: usize) -> bool {
+        self.rules.teams && q != att && self.fighters[q].team == self.fighters[att].team
+    }
+
+    /// Whether `att` may not hurt `q`: a teammate, with friendly fire off.
+    fn spared(&self, att: usize, q: usize) -> bool {
+        !self.rules.friendly_fire && self.mate(att, q)
+    }
+
+    /// Whether `att` may not hurt `v`: with sides and friendly fire off, a
+    /// teammate of theirs rides in it.
     fn spares(&self, att: usize, v: &Vehicle) -> bool {
         let team = self.fighters[att].team;
         self.rules.teams
+            && !self.rules.friendly_fire
             && v.seats
                 .iter()
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
@@ -598,13 +627,13 @@ impl World {
     fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
         let a = arm(id);
         let mut wall = self.map.ray(eye, dir, a.range);
-        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0);
+        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
         if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
             if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
-                hit = self.trace(s, eye, dir, wall, depth, 0.0);
+                hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
             }
         }
         let t = hit.map_or(wall, |h| h.1);
@@ -647,7 +676,7 @@ impl World {
             pos: eye,
             ..Event::default()
         });
-        let hit = self.trace(s, eye, dir, wall, depth, 0.25);
+        let hit = self.trace(s, eye, dir, wall, depth, 0.25, false);
         if let Some((Target::Vehicle(i), _)) = hit {
             self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
         }
@@ -661,7 +690,7 @@ impl World {
         // Past reach but near, with the aim on them: the lunge (Halo 2's),
         // and the blow when it gets there (`lunges`).
         let wall = self.map.ray(eye, dir, MELEE_LUNGE_RANGE);
-        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD) {
+        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD, true) {
             let me = &mut self.fighters[s];
             me.lunge = q as u8 + 1;
             me.lunge_left = ticks(MELEE_LUNGE_MS) as u16;
@@ -699,13 +728,13 @@ impl World {
         });
         let reach = if lunge { LUNGE_RANGE } else { SWORD_REACH };
         let wall = self.map.ray(eye, dir, reach);
-        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD) {
+        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD, false) {
             Some((Target::Vehicle(i), t)) if t <= SWORD_REACH => {
                 let pts = arm(crate::arms::SWORD).dmg * PT;
                 self.damage_vehicle(s, i, pts, crate::arms::SWORD as u16);
             }
             Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
-            Some((Target::Fighter(q, _), _)) if lunge => {
+            Some((Target::Fighter(q, _), _)) if lunge && !self.mate(s, q) => {
                 let me = &mut self.fighters[s];
                 me.lunge = q as u8 + 1;
                 me.lunge_left = ticks(LUNGE_MS) as u16;
@@ -907,8 +936,7 @@ impl World {
         let owner = p.owner as usize;
         if p.landed && (p.target as usize) < MAX_FIGHTERS {
             let q = p.target as usize;
-            let mate = self.rules.teams && q != owner && self.fighters[q].team == self.fighters[owner].team;
-            if !mate {
+            if !self.spared(owner, q) {
                 self.damage(
                     owner,
                     q,
@@ -952,12 +980,11 @@ impl World {
         let mut met = t < reach;
         let mut who = None;
         let owner = p.owner as usize;
-        let team = self.fighters[owner].team;
         for (q, v) in self.fighters.iter().enumerate() {
             if !v.active() || (q == owner && p.age < 16) {
                 continue;
             }
-            if spares && self.rules.teams && q != owner && v.team == team {
+            if spares && self.spared(owner, q) {
                 continue;
             }
             if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.1, v.body.height(), t) {
@@ -1115,11 +1142,18 @@ impl World {
     /// touched anything, and whether that was a floor (the map's, a box's
     /// top, a solid's), not a wall.
     fn bounce(&self, p: &mut Projectile, g: f32) -> (bool, bool) {
+        self.bounce_at(&mut p.pos, &mut p.vel, g, GREN_BOUNCE, GREN_SLIDE)
+    }
+
+    /// [`Self::bounce`] for anything at `pos` moving at `vel`: `bounce` of
+    /// the speed into a surface comes back, `slide` of the speed along a
+    /// floor is kept.
+    fn bounce_at(&self, pos: &mut V3, vel: &mut V3, g: f32, bounce: f32, slide: f32) -> (bool, bool) {
         let mut touched = false;
         let mut ground = false;
-        p.vel.y -= g * DT;
-        let mut n = p.pos + p.vel * DT;
-        let floor = self.map.floor(n.x, n.z, 0.0, p.pos.y + 0.001);
+        vel.y -= g * DT;
+        let mut n = *pos + *vel * DT;
+        let floor = self.map.floor(n.x, n.z, 0.0, pos.y + 0.001);
         if n.y < floor {
             touched = true;
             ground = true;
@@ -1128,11 +1162,11 @@ impl World {
                 // Off a slope: the part into the ground bounces back, the
                 // part along it slides on.
                 let gn = self.map.ground_normal(n.x, n.z);
-                let into = p.vel.dot(gn);
-                let along = p.vel - gn * into;
-                p.vel = along * GREN_SLIDE - gn * (into * GREN_BOUNCE);
+                let into = vel.dot(gn);
+                let along = *vel - gn * into;
+                *vel = along * slide - gn * (into * bounce);
             } else {
-                p.vel = V3::new(p.vel.x * GREN_SLIDE, -p.vel.y * GREN_BOUNCE, p.vel.z * GREN_SLIDE);
+                *vel = V3::new(vel.x * slide, -vel.y * bounce, vel.z * slide);
             }
         }
         for b in &self.map.boxes {
@@ -1140,23 +1174,23 @@ impl World {
                 continue;
             }
             touched = true;
-            if p.pos.x <= b.min.x || p.pos.x >= b.max.x {
-                n.x = if p.pos.x <= b.min.x {
+            if pos.x <= b.min.x || pos.x >= b.max.x {
+                n.x = if pos.x <= b.min.x {
                     b.min.x - 0.01
                 } else {
                     b.max.x + 0.01
                 };
-                p.vel.x = -p.vel.x * GREN_BOUNCE;
-            } else if p.pos.z <= b.min.z || p.pos.z >= b.max.z {
-                n.z = if p.pos.z <= b.min.z {
+                vel.x = -vel.x * bounce;
+            } else if pos.z <= b.min.z || pos.z >= b.max.z {
+                n.z = if pos.z <= b.min.z {
                     b.min.z - 0.01
                 } else {
                     b.max.z + 0.01
                 };
-                p.vel.z = -p.vel.z * GREN_BOUNCE;
-            } else if p.pos.y <= b.min.y {
+                vel.z = -vel.z * bounce;
+            } else if pos.y <= b.min.y {
                 n.y = b.min.y - 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
+                vel.y = -vel.y * bounce;
             }
         }
         for s in &self.map.solids {
@@ -1165,26 +1199,26 @@ impl World {
                 continue;
             }
             touched = true;
-            if p.pos.y >= s.top_at(p.pos.x, p.pos.z) - 0.05 {
+            if pos.y >= s.top_at(pos.x, pos.z) - 0.05 {
                 // Onto its top (a slope moves up under a projectile).
                 ground = true;
                 n.y = top + 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
-            } else if p.pos.y <= s.y0 {
+                vel.y = -vel.y * bounce;
+            } else if pos.y <= s.y0 {
                 n.y = s.y0 - 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
+                vel.y = -vel.y * bounce;
             } else if let Some((x, z, ux, uz)) = s.push(n.x, n.z, 0.01) {
                 // Off its side: the part into the face back out.
                 n.x = x;
                 n.z = z;
-                let into = p.vel.x * ux + p.vel.z * uz;
+                let into = vel.x * ux + vel.z * uz;
                 if into < 0.0 {
-                    p.vel.x -= ux * into * (1.0 + GREN_BOUNCE);
-                    p.vel.z -= uz * into * (1.0 + GREN_BOUNCE);
+                    vel.x -= ux * into * (1.0 + bounce);
+                    vel.z -= uz * into * (1.0 + bounce);
                 }
             }
         }
-        p.pos = n;
+        *pos = n;
         (touched, ground)
     }
 
@@ -1291,10 +1325,9 @@ impl World {
             pos: at,
             ..Event::default()
         });
-        let team = self.fighters[owner].team;
         for q in 0..MAX_FIGHTERS {
             let v = self.fighters[q];
-            if !v.active() || (self.rules.teams && q != owner && v.team == team) {
+            if !v.active() || self.spared(owner, q) {
                 continue;
             }
             let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
@@ -1343,6 +1376,65 @@ impl World {
                 veh.grounded = false;
             }
             self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32, cause);
+        }
+        // Guns and grenades on the floor (the blast's own dead's among
+        // them) go flying.
+        for i in 0..MAX_DROPS {
+            let d = self.drops[i];
+            if !d.active {
+                continue;
+            }
+            let mid = d.pos + V3::new(0.0, DROP_MID, 0.0);
+            let off = mid - at;
+            let dist = off.len();
+            if dist >= radius || !self.map.clear(at, mid) {
+                continue;
+            }
+            let k = falloff(dist);
+            let away = if dist > 0.0 {
+                off * (1.0 / dist)
+            } else {
+                V3::new(0.0, 1.0, 0.0)
+            };
+            let d = &mut self.drops[i];
+            d.vel = d.vel + away * (BLAST_PUSH * DROP_PUSH_K * k) + V3::new(0.0, DROP_LIFT * k, 0.0);
+        }
+    }
+
+    /// Drops in the air: a tick of each under gravity, off the floors and
+    /// walls as a frag goes, until one lies still on a floor. Kept on the
+    /// map's floor plan; one that falls out of the world is gone.
+    fn fly_drops(&mut self) {
+        for i in 0..MAX_DROPS {
+            let mut d = self.drops[i];
+            if !d.active || d.vel == V3::ZERO {
+                continue;
+            }
+            let (_, ground) = self.bounce_at(&mut d.pos, &mut d.vel, GRAVITY, DROP_BOUNCE, DROP_SLIDE);
+            let (x, z) = (
+                d.pos.x.clamp(self.map.lo.0, self.map.hi.0),
+                d.pos.z.clamp(self.map.lo.1, self.map.hi.1),
+            );
+            if x != d.pos.x {
+                d.vel.x = 0.0;
+            }
+            if z != d.pos.z {
+                d.vel.z = 0.0;
+            }
+            d.pos.x = x;
+            d.pos.z = z;
+            if ground && d.vel.len() < DROP_SETTLE {
+                d.vel = V3::ZERO;
+                d.pos = V3::new(
+                    crate::movement::quant(d.pos.x),
+                    crate::movement::quant(d.pos.y),
+                    crate::movement::quant(d.pos.z),
+                );
+            }
+            if d.pos.y < DROP_LOST_Y {
+                d.active = false;
+            }
+            self.drops[i] = d;
         }
     }
 
@@ -1526,7 +1618,7 @@ impl World {
                 if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
                     continue;
                 }
-                if driver.is_some_and(|d| d != q && self.rules.teams && self.fighters[d].team == f.team) {
+                if driver.is_some_and(|d| self.spared(d, q)) {
                     continue;
                 }
                 let away = (f.body.pos - v.pos).flat().norm();
@@ -1611,6 +1703,8 @@ impl World {
         v.alive = false;
         v.health = 0;
         v.shield = 0;
+        // What they held leaves their hands with some of how they moved.
+        let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
         v.needles = 0;
         v.respawn = ticks(RESPAWN_MS) as u16;
@@ -1621,9 +1715,15 @@ impl World {
         // aren't for the taking).
         let (hand, left, frags, stickies) = (*v.gun(), v.left, v.grenades, v.stickies);
         if !self.rules.gun_game {
-            self.spill(hand, 0, 0, pos);
-            self.spill(left, 0, 0, pos + V3::new(DROP_APART, 0.0, 0.0));
-            self.spill(Gun::default(), frags, stickies, pos + V3::new(0.0, 0.0, DROP_APART));
+            self.spill(hand, 0, 0, pos, toss);
+            self.spill(left, 0, 0, pos + V3::new(DROP_APART, 0.0, 0.0), toss);
+            self.spill(
+                Gun::default(),
+                frags,
+                stickies,
+                pos + V3::new(0.0, 0.0, DROP_APART),
+                toss,
+            );
         }
         let k = &mut self.fighters[att];
         let own = att == vic || (self.rules.teams && k.team == vteam);
@@ -1723,8 +1823,8 @@ impl World {
         };
         let gone = self.equip(s, gun, pad);
         let feet = self.fighters[s].body.pos;
-        self.spill(gone[0], 0, 0, feet + V3::new(DROP_APART, 0.0, 0.0));
-        self.spill(gone[1], 0, 0, feet);
+        self.spill(gone[0], 0, 0, feet + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
+        self.spill(gone[1], 0, 0, feet, V3::ZERO);
         self.events.push(Event {
             kind: Ev::Pickup,
             a: s as u8,
@@ -1783,7 +1883,7 @@ impl World {
     /// A gun (with what's left in it) and grenades onto the floor under
     /// `at`. Nothing for nothing (an empty hand, a spent gun); with the
     /// floor full, the oldest drop gives its slot.
-    fn spill(&mut self, gun: Gun, frags: u8, stickies: u8, at: V3) {
+    fn spill(&mut self, gun: Gun, frags: u8, stickies: u8, at: V3, vel: V3) {
         let gun = if gun.arm == NONE || gun.spent() {
             Gun::default()
         } else {
@@ -1802,6 +1902,7 @@ impl World {
                 crate::movement::quant(y),
                 crate::movement::quant(z),
             ),
+            vel,
             ttl: ticks(DROP_MS),
         };
         if d.spent() || self.drops.alloc(d).is_some() {

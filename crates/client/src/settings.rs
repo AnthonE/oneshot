@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use crate::binds::Binds;
 use crate::config;
 use crate::look::quality::{
-    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Clouds, Cover, Effects, Gfx,
-    Quality, COVER_M_LADDER, SHADOW_M_LADDER, SHADOW_PX_LADDER,
+    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Clouds, Effects, Gfx, Quality,
+    SHADOW_M_LADDER, SHADOW_PX_LADDER,
 };
 use crate::look::render_scale;
 
@@ -104,19 +104,28 @@ impl Default for Settings {
     }
 }
 
-/// Who plays: the name others see and the skin asked for (worn only if
-/// the wallet owns it; the server checks). Set on the title screen, kept
-/// with the settings.
+/// Who plays: the name others see, the skin asked for (worn only if the
+/// wallet owns it; the server checks) and the emblem on its back. Set on
+/// the title screen, kept with the settings.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Player {
     pub name: String,
     pub skin: u8,
+    pub emblem: proto::Emblem,
 }
 
 /// How long a name may be (proto's `Name`).
 pub const NAME_MAX: usize = 16;
 
 impl Player {
+    /// What it asks to wear.
+    pub fn look(&self) -> proto::Look {
+        proto::Look {
+            skin: self.skin,
+            emblem: self.emblem,
+        }
+    }
+
     /// The name as sent: what was typed, or `player`.
     pub fn sent_name(&self) -> String {
         let n = self.name.trim();
@@ -131,6 +140,7 @@ impl Player {
         vec![
             ("name".into(), format!("{:?}", self.name)),
             ("skin".into(), self.skin.to_string()),
+            ("emblem".into(), self.emblem.to_string()),
         ]
     }
 
@@ -161,8 +171,6 @@ pub enum Knob {
     Aa,
     Bloom,
     RenderScale,
-    Cover,
-    CoverDistance,
     /// The EFFECTS row (sparks and flash lights), not the game's sounds.
     Fx,
     /// How the cloud deck is drawn (`look/deck.rs`).
@@ -186,8 +194,6 @@ impl Knob {
                 | Knob::Aa
                 | Knob::Bloom
                 | Knob::RenderScale
-                | Knob::Cover
-                | Knob::CoverDistance
                 | Knob::Fx
                 | Knob::Clouds
         )
@@ -231,8 +237,6 @@ struct GfxFile {
     aa: Option<Aa>,
     bloom: Option<bool>,
     render_scale: Option<u8>,
-    cover: Option<Cover>,
-    cover_m: Option<f32>,
     effects: Option<Effects>,
     clouds: Option<Clouds>,
 }
@@ -252,8 +256,6 @@ fn gfx_from_file(q: Quality, f: GfxFile) -> Gfx {
         aa: f.aa.unwrap_or(base.aa),
         bloom: f.bloom.unwrap_or(base.bloom),
         render_scale: render_scale::sanitize(f.render_scale.unwrap_or(base.render_scale)),
-        cover: f.cover.unwrap_or(base.cover),
-        cover_m: span(&COVER_M_LADDER, f.cover_m.unwrap_or(base.cover_m)),
         effects: f.effects.unwrap_or(base.effects),
         clouds: f.clouds.unwrap_or(base.clouds),
     })
@@ -363,8 +365,6 @@ impl Settings {
                     Knob::Aa => g.aa = g.aa.step(delta),
                     Knob::Bloom => g.bloom = !g.bloom,
                     Knob::RenderScale => g.render_scale = render_scale::step(g.render_scale, delta),
-                    Knob::Cover => g.cover = g.cover.step(delta),
-                    Knob::CoverDistance => g.cover_m = step_ladder(&COVER_M_LADDER, g.cover_m, delta),
                     Knob::Fx => g.effects = g.effects.step(delta),
                     Knob::Clouds => g.clouds = g.clouds.step(delta),
                     Knob::Fullscreen => self.fullscreen = !self.fullscreen,
@@ -395,8 +395,6 @@ impl Settings {
             Knob::Aa => g.aa.name().to_uppercase(),
             Knob::Bloom => on_off(g.bloom),
             Knob::RenderScale => format!("{}%", g.render_scale),
-            Knob::Cover => g.cover.name().to_uppercase(),
-            Knob::CoverDistance => format!("{:.0} m", g.cover_m),
             Knob::Fx => g.effects.name().to_uppercase(),
             Knob::Clouds => g.clouds.name().to_uppercase(),
             Knob::Fullscreen => on_off(self.fullscreen),
@@ -439,8 +437,6 @@ impl Settings {
                 ("aa", g.aa.name().into()),
                 ("bloom", g.bloom.to_string()),
                 ("render_scale", g.render_scale.to_string()),
-                ("cover", g.cover.name().into()),
-                ("cover_m", format!("{}", g.cover_m)),
                 ("fx", g.effects.name().into()),
                 ("clouds", g.clouds.name().into()),
             ]);
@@ -482,8 +478,9 @@ impl Settings {
                 "aa" => f.aa = Aa::from_name(v),
                 "bloom" => f.bloom = flag,
                 "render_scale" => f.render_scale = whole.map(|n| n.min(255) as u8),
-                "cover" => f.cover = Cover::from_name(v),
-                "cover_m" => f.cover_m = num,
+                // The GRASS rows' keys, from before the ground cover was
+                // the same on every rung: dropped.
+                "cover" | "cover_m" => {}
                 "fx" => f.effects = Effects::from_name(v),
                 "clouds" => f.clouds = Clouds::from_name(v),
                 "vsync" => s.vsync = flag.unwrap_or(s.vsync),
@@ -591,6 +588,10 @@ pub fn read(text: Option<&str>) -> (Settings, Binds, Player, u32, Lines, Lines) 
                 .unwrap_or(0);
             false
         }
+        "emblem" => {
+            p.emblem = v.parse().map(proto::emblem_valid).unwrap_or(proto::EMBLEM_NONE);
+            false
+        }
         _ => true,
     });
     let (b, other_binds) = Binds::from_lines(&doc.binds);
@@ -682,6 +683,7 @@ mod tests {
         b.set(Action::Reload, 1, Some(Bind::Mouse(MouseButton::Back)));
         p.name = Player::clean("Master \"Chief\" of the long name");
         p.skin = 3;
+        p.emblem = proto::emblem(14, 4, 6, 12);
         let t = text(&s, &b, &p, v, &other, &other_binds);
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
         let (s2, b2, p2, ..) = read(Some(&t));
@@ -703,7 +705,6 @@ mod tests {
         assert_eq!(s.gfx.cascades, max_cascades());
         assert_eq!(s.gfx.shadow_map_px, 2048, "snapped to the nearest rung");
         assert_eq!(s.gfx.render_scale, render_scale::RENDER_SCALE_MIN);
-        assert_eq!(s.gfx.cover_m, COVER_M_LADDER[0]);
         assert_eq!(s.gfx.ao, low.ao, "a name nobody can read keeps the preset's");
         assert_eq!(s.max_fps, MIN_FPS_CAP);
         assert!(s.vsync);
@@ -724,7 +725,7 @@ mod tests {
     fn the_graphics_rows_round_trip() {
         let mut s = Settings::with_preset(Quality::High);
         s.adjust(Knob::ShadowDistance, -1);
-        s.adjust(Knob::Cover, -1);
+        s.adjust(Knob::Clouds, -1);
         s.adjust(Knob::RenderScale, -3);
         s.adjust(Knob::FrameCap, 2);
         s.adjust(Knob::Vsync, 0);
@@ -798,8 +799,6 @@ mod tests {
                     Knob::Ambient,
                     Knob::Aa,
                     Knob::RenderScale,
-                    Knob::Cover,
-                    Knob::CoverDistance,
                     Knob::Fx,
                     Knob::Clouds,
                     Knob::FrameCap,
@@ -809,7 +808,6 @@ mod tests {
                 let g = s.gfx;
                 assert!(SHADOW_M_LADDER.contains(&g.shadow_m));
                 assert!(SHADOW_PX_LADDER.contains(&g.shadow_map_px) && g.shadow_map_px <= max_shadow_map_px());
-                assert!(COVER_M_LADDER.contains(&g.cover_m));
                 assert!(g.cascades >= 1 && g.cascades <= max_cascades());
                 assert!(MAX_FPS_LADDER.contains(&s.max_fps));
                 assert_eq!(g.render_scale % render_scale::RENDER_SCALE_STEP, 0);
@@ -833,7 +831,7 @@ mod tests {
         assert_eq!(s.gfx, for_target(preset(Quality::Potato)));
         assert!(!s.quality_auto, "nothing more is picked this run");
         assert_eq!(text(&s, &Binds::default(), &Player::default(), 1, &[], &[]), theirs);
-        s.adjust(Knob::Cover, 1);
+        s.adjust(Knob::Fx, 1);
         assert!(s.held.is_none(), "the player chose");
         let (back, ..) = read(Some(&text(&s, &Binds::default(), &Player::default(), 1, &[], &[])));
         assert_eq!(back.gfx, s.gfx);

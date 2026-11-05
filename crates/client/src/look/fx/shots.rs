@@ -27,6 +27,10 @@ const MUZZLE_DOWN_M: f32 = 0.28;
 /// Our own muzzle, in view space: ahead, right, down (where the gun in
 /// view holds it), and how far ahead of it our tracer starts.
 const OWN_MUZZLE: Vec3 = Vec3::new(0.12, -0.1, 0.7);
+/// Our own flash's stars, times an impact's and the gun's `flash_scale`:
+/// [`OWN_MUZZLE`] is a hand's length from the eye, where a third person's
+/// size would cover a fifth of the view.
+const OWN_STAR_SCALE: f32 = 0.8;
 const OWN_TRACER_SKIP_M: f32 = 1.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
@@ -102,6 +106,12 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, muzzle
     }
 }
 
+/// Our own rounds counted off and not drawn: a film's camera off the eye
+/// sees them fired from the body, as anyone's (`film.rs`).
+pub fn own_unseen(fx: &mut Fx, f: &Fighter) {
+    let _ = fx.own_rounds.take(f);
+}
+
 /// Where our flash sits in view space: on the line to the drawn muzzle, at
 /// [`OWN_MUZZLE`]'s depth.
 fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {
@@ -126,33 +136,26 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     let right = cam * Vec3::X;
     let up = cam * Vec3::Y;
     let at = own_muzzle(left, drawn);
-    let muzzle = eye + cam * at;
-    table::stars(
-        &mut fx.glow,
-        muzzle,
-        look.stars as usize,
-        1.6 * look.flash_scale,
-        look.flash_c,
-    );
-    fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
-    fx.flash(
-        muzzle,
-        super::FlashDef {
-            color: tint(&look),
-            ..MUZZLE_FLASH
-        },
-    );
+    // The flash waits for the camera and the gun the frame is drawn with
+    // (`muzzle`).
+    fx.own_flash[usize::from(left)] = Some(OwnFlash {
+        look,
+        rocket: id == ROCKET,
+    });
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
-    let k = if heavy { 0.6 } else { 0.3 };
+    // Crouched, the stock is braced: half the jolt (Gates' gunfeel).
+    let braced = if f.body.crouched {
+        crate::look::viewmodel::CROUCH_KICK
+    } else {
+        1.0
+    };
+    let k = if heavy { 0.6 } else { 0.3 } * braced;
     let jolt = fx.shake.rand() * shake::SHOT_SIDE_RAD;
     fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
     if !a.kind.ray() {
-        if id == ROCKET {
-            backblast(fx, muzzle, fwd);
-        }
         return;
     }
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };
@@ -176,6 +179,48 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     }
 }
 
+/// Our own gun's flash this frame, by hand, waiting for the frame's camera
+/// and gun: the gun's look.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnFlash {
+    look: GunLook,
+    rocket: bool,
+}
+
+/// Our own flashes, at the muzzle as the frame draws it: off the camera
+/// as placed this frame (`eye`: its kick, its shake, a film's roll and
+/// easing), which carries the gun in view, and the gun as posed this frame
+/// (`drawn`, `viewmodel::ViewMuzzles`), not the aim the shot was taken down
+/// or last frame's pose. Placed off those, a star sat beside the barrel,
+/// and on a slow frame (a film's, a weak browser's) well off it.
+pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
+    for (i, drawn) in drawn.into_iter().enumerate() {
+        let Some(o) = fx.own_flash[i].take() else {
+            continue;
+        };
+        let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
+        let fwd = eye.rotation * Vec3::NEG_Z;
+        table::own_stars(
+            &mut fx.glow,
+            muzzle,
+            o.look.stars as usize,
+            OWN_STAR_SCALE * o.look.flash_scale,
+            o.look.flash_c,
+        );
+        fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
+        fx.flash(
+            muzzle,
+            super::FlashDef {
+                color: tint(&o.look),
+                ..MUZZLE_FLASH
+            },
+        );
+        if o.rocket {
+            backblast(fx, muzzle, fwd);
+        }
+    }
+}
+
 /// The far end of a round's line: what it met, what that throws, and the
 /// mark it leaves.
 fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to: Vec3) {
@@ -184,13 +229,25 @@ fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to
         Some(Met::Face(hit, matter)) => fx.strike(scene.map, w, matter, &hit),
         Some(Met::Body(slot, Matter::Flesh)) => fx.bleed(scene.map, slot, w, to, dir),
         Some(Met::Body(_, matter)) => {
-            fx.impact(w, matter, to, -dir);
+            fx.impact(w, matter, to, -dir, super::surface::floor_under(scene.map, to, -dir));
         }
         Some(Met::Hull) => {
-            fx.impact(w, Matter::Hull, to, -dir);
+            fx.impact(
+                w,
+                Matter::Hull,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
         }
         Some(Met::Somewhere) => {
-            fx.impact(w, Matter::Concrete, to, -dir);
+            fx.impact(
+                w,
+                Matter::Concrete,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
         }
         None => {}
     }
@@ -214,7 +271,10 @@ fn met(fx: &mut Fx, scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) ->
     let t = scene.map.ray(v3(from), v3(dir), len + 0.1);
     if t <= len + 0.06 && t >= len - 0.3 {
         return Some(match super::surface::struck(scene.map, &mut fx.near, to, dir) {
-            Some(hit) => Met::Face(hit, super::surface::matter(scene.map, hit.on)),
+            Some(hit) => Met::Face(
+                hit,
+                super::surface::matter_of(scene.map, &hit, fx.marks.lift.as_deref()),
+            ),
             None => Met::Somewhere,
         });
     }

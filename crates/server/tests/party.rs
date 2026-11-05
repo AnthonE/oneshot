@@ -24,7 +24,7 @@ async fn lobby(h: &server::Handle, name: &str, pass: &str, party: u32) -> Native
     } else {
         Pass::new(pass).unwrap()
     };
-    let hello = Session::hello(name, pass, proto::MODE_LOBBY, 0, party);
+    let hello = Session::hello(name, pass, proto::MODE_LOBBY, proto::Look::default(), party);
     NativeLobby::connect(&addr, Some(h.cert_hash), hello).await.unwrap()
 }
 
@@ -94,7 +94,7 @@ async fn play(
     } else {
         Pass::new(ticket).unwrap()
     };
-    let n = frame_msg(&Session::hello("p", pass, mode, 0, code), &mut f).unwrap();
+    let n = frame_msg(&Session::hello("p", pass, mode, proto::Look::default(), code), &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
     loop {
         match tokio::time::timeout(WAIT, read_frame(&mut recv)).await {

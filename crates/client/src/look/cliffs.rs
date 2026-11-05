@@ -22,8 +22,9 @@
 //! (`level.rs`: rock from 19° and whole by 37°) — from [`SKIN_ROCK_LO`] of
 //! its rock to whole at [`SKIN_ROCK_HI`]. A face too steep to climb is rock
 //! by that rule too, on any map that has one. Where it fades it sinks under
-//! the drawn ground (which is exactly the sim's), so where the two meet
-//! they are one surface, one colour and one normal.
+//! the drawn ground (which is exactly the sim's), and it shades as the
+//! ground until it stands out of it ([`shade_weight`]), so where the two
+//! meet they are one surface, one colour and one normal.
 //!
 //! Drawn on every rung, in the ground's own material (`ground.wgsl` reads
 //! the value off `UV_1`), so it binds what the ground binds: WebGL2 draws
@@ -109,6 +110,14 @@ impl Lift {
 #[derive(Resource, Default, Clone)]
 pub struct SkinLift(pub Option<Arc<Lift>>);
 
+/// How much of the skin's own look a lattice point at height `l` over the
+/// sim's ground wears: none at or under it, all of it once it stands
+/// [`SKIN_FLOOR`] of [`SKIN_OUT_M`] out, smooth between.
+pub fn shade_weight(l: f32) -> f32 {
+    let t = (l / (SKIN_OUT_M * SKIN_FLOOR)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// How fully the skin grows at a point whose ground is `rock` rock.
 pub fn fade(rock: f32) -> f32 {
     let t = ((rock - SKIN_ROCK_LO) / (SKIN_ROCK_HI - SKIN_ROCK_LO)).clamp(0.0, 1.0);
@@ -146,6 +155,7 @@ pub fn skin(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), key: u32) -> (Option
     let n = nu * nv;
     let (mut drawn, mut virt) = (Vec::with_capacity(n), Vec::with_capacity(n));
     let (mut sim_y, mut lift) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    let mut shades = Vec::with_capacity(n);
     let (mut fades, mut cols, mut ngs, mut vals) = (
         Vec::with_capacity(n),
         Vec::with_capacity(n),
@@ -186,11 +196,18 @@ pub fn skin(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), key: u32) -> (Option
             sim_y.push(y);
             lift.push(l);
             fades.push(fd);
+            // How much the skin shades as itself: nothing where it comes up
+            // through the ground (`l` crosses zero at a fade of a quarter
+            // to three fifths, by the relief), so the line where the two
+            // meet has one colour, one value and one normal; whole once it
+            // stands its floor's height out.
+            let sw = shade_weight(l);
             // The rock's identity takes over as the skin grows.
-            let keep = 1.0 - fd;
-            cols.push([col[0] * keep, col[1] * keep, col[2] * keep, col[3] * keep + fd]);
+            let keep = 1.0 - sw;
+            cols.push([col[0] * keep, col[1] * keep, col[2] * keep, col[3] * keep + sw]);
             ngs.push(ng);
-            vals.push(1.0 + (rock::relief_value(p, local, key) - 1.0) * fd);
+            vals.push(1.0 + (rock::relief_value(p, local, key) - 1.0) * sw);
+            shades.push(sw);
         }
     }
     let (xa, xb) = (lo.0 - MARGIN_M, hi.0 + MARGIN_M);
@@ -225,11 +242,12 @@ pub fn skin(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), key: u32) -> (Option
         Vec::with_capacity(m),
     );
     for &(i, vn) in &creased.verts {
-        let fd = fades[i];
-        // The ground's own normal where the skin fades, the relief's where
-        // it is whole; darker where the relief turns from the sky.
-        let n = ngs[i].lerp(vn, fd).normalize_or(ngs[i]);
-        let value = vals[i] * (1.0 - fd * rock::SKY_DARK * (ngs[i].y - vn.y).max(0.0));
+        let (fd, sw) = (fades[i], shades[i]);
+        // The ground's own normal where the skin comes up through it, the
+        // relief's where it is whole; darker where the relief turns from
+        // the sky.
+        let n = ngs[i].lerp(vn, sw).normalize_or(ngs[i]);
+        let value = vals[i] * (1.0 - sw * rock::SKY_DARK * (ngs[i].y - vn.y).max(0.0));
         pos.push(drawn[i].to_array());
         nrm.push(n.to_array());
         col.push(cols[i]);
@@ -351,6 +369,29 @@ mod tests {
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
         assert!(hi - lo > 0.15 && lo > 0.3 && hi < 1.6, "value {lo}..{hi}");
+    }
+
+    /// Where the skin is still under the ground it shades as the ground,
+    /// so the line where it comes up through it has no step of value.
+    #[test]
+    fn the_skin_meets_the_ground_without_a_seam() {
+        let (d, t) = canyon();
+        let (mesh, lift) = skin(t, d.lo, d.hi, 7);
+        let mesh = mesh.unwrap();
+        let pos = f3(&mesh, Mesh::ATTRIBUTE_POSITION);
+        let Some(V::Float32x2(uv1)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("no UV_1");
+        };
+        let mut under = 0;
+        for (p, u) in pos.iter().zip(uv1) {
+            let (_, l) = lift.at(p.x, p.z).expect("on the lattice");
+            if l < -1e-4 {
+                under += 1;
+                assert!((u[0] - 1.0).abs() < 1e-4, "at {p}: value {} under the ground", u[0]);
+            }
+        }
+        assert!(shade_weight(0.0) == 0.0 && shade_weight(SKIN_OUT_M * SKIN_FLOOR) == 1.0);
+        assert!(under > 100, "only {under} vertices where the skin fades under");
     }
 
     /// No rock, no skin: a flat terrain draws none.

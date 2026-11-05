@@ -31,9 +31,13 @@ pub const FULLSCREEN_KEY: KeyCode = KeyCode::F11;
 pub const PAGE_GRACE_FRAMES: u32 = 60;
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, (fullscreen_key, apply_window).chain());
+    // A film's window is its list's size on its own frame clock
+    // (`film.rs`): the player's fullscreen and frame cap are not its.
+    let playing = not(resource_exists::<crate::film::Film>);
+    app.add_systems(Update, (fullscreen_key, apply_window).chain().run_if(playing));
     #[cfg(not(target_arch = "wasm32"))]
-    app.init_resource::<FrameDeadline>().add_systems(Last, limit_frames);
+    app.init_resource::<FrameDeadline>()
+        .add_systems(Last, limit_frames.run_if(not(resource_exists::<crate::film::Film>)));
 }
 
 /// F11 flips the row, from any screen; through `adjust`, so an open
@@ -203,6 +207,17 @@ mod tests {
             assert_eq!(p.step(true, false), Ok(None));
         }
         assert_eq!(p.step(true, false), Err(false), "refused: the row says so");
+        assert_eq!(p.step(false, false), Ok(None));
+        assert_eq!(p.step(true, false), Ok(Some(true)));
+        assert_eq!(p.step(true, true), Ok(None));
         assert_eq!(p.step(false, true), Ok(Some(false)), "OFF asks the page out");
+        assert_eq!(p.step(false, false), Ok(None), "and it left");
+        // The page came on its own (nothing here asked): the row follows it,
+        // as it does when the page leaves on its own.
+        assert_eq!(
+            p.step(false, true),
+            Err(true),
+            "the page came on its own: the row follows"
+        );
     }
 }

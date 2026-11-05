@@ -208,6 +208,25 @@ pub const DROP_REACH: f32 = 1.0;
 /// The left gun and the grenades fall this far aside of the gun in hand,
 /// inside the body's own footprint (so never in a wall).
 pub const DROP_APART: f32 = 0.3;
+/// A blast throws a drop as it throws a body, by this share of the push,
+/// and lifts it this fast at full strength, m/s, so one lying beside a
+/// frag pops up rather than skating (a rocket at a metre: about 8 m).
+pub const DROP_PUSH_K: f32 = 0.7;
+pub const DROP_LIFT: f32 = 4.5;
+/// Where a blast meets a drop: this far over the floor it lies on.
+pub const DROP_MID: f32 = 0.15;
+/// A drop's bounce: the speed into a surface it keeps, and the speed along
+/// a floor it keeps each tick it skids (a skid of a tenth of a second).
+/// Below this speed on a floor it lies still.
+pub const DROP_BOUNCE: f32 = 0.25;
+pub const DROP_SLIDE: f32 = 0.92;
+pub const DROP_SETTLE: f32 = 0.4;
+/// What the dead's guns leave their hands with: this share of the body's
+/// velocity, and this fast up.
+pub const DROP_CARRY: f32 = 0.6;
+pub const DROP_TOSS: f32 = 1.5;
+/// A drop below this height has fallen out of the world.
+pub const DROP_LOST_Y: f32 = -50.0;
 
 // Vehicles (sim/src/vehicle.rs): one kind so far, a light four-wheeler for
 // a driver and a passenger who shoots.

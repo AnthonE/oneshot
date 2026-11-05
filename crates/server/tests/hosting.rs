@@ -56,6 +56,7 @@ async fn join(port: u16, hash: [u8; 32], name: &str) -> Result<(Player, Option<M
             pass: proto::Pass::NONE,
             mode: proto::MODE_CASUAL,
             skin: 0,
+            emblem: 0,
             party: 0,
         },
         &mut f,

@@ -128,6 +128,9 @@ impl Clip {
 
 /// How the arms hold what is in the hands: a long gun at the shoulder
 /// (Gates' `RIFLE_HOLD_CLIP`) or a pistol up in front (`ARMS_HOLD_CLIP`).
+/// Bodies wear the long hold for every gun (`bodies::pose`: the gun hangs
+/// at the chest, and the pistol clip's hands are at the face); a pistol's
+/// reload is still its own clip ([`Seen::reload`]), the gun in its hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hold {
     Long,
@@ -141,6 +144,15 @@ impl Hold {
         match self {
             Hold::Long => "Rifle_Hold_Loop",
             Hold::Pistol => "Pistol_Idle_Loop",
+        }
+    }
+
+    /// Its reload, played once over the hold at the pace of the gun's own
+    /// (`Seen::reload`).
+    pub fn reload_name(self) -> &'static str {
+        match self {
+            Hold::Long => "Rifle_Reload",
+            Hold::Pistol => "Pistol_Reload",
         }
     }
 
@@ -247,6 +259,9 @@ pub struct Seen {
     pub pitch: f32,
     /// What its arms hold.
     pub hold: Option<Hold>,
+    /// Reloading (the wire's bit): the gun's own reload clip (a pistol's,
+    /// over the long hold) and how long the gun's reload takes, s.
+    pub reload: Option<(Hold, f32)>,
 }
 
 /// One body's locomotion: what its legs play, how they are turned, where
@@ -275,6 +290,8 @@ pub struct Gait {
     pub turning: bool,
     /// What the arms hold, if the body is shouldering anything.
     pub hold: Option<Hold>,
+    /// Reloading: whose reload clip, and how long the gun's reload takes, s.
+    pub reload: Option<(Hold, f32)>,
 }
 
 impl Gait {
@@ -298,6 +315,7 @@ impl Gait {
         self.pitch = s.pitch;
         self.clip = Some(self.gait(s));
         self.hold = s.hold.filter(|_| s.alive && !s.driving);
+        self.reload = s.reload.filter(|_| self.hold.is_some());
         self.steer(turned, dt);
     }
 
@@ -431,6 +449,8 @@ pub struct Rig {
     durations: [f32; Clip::ALL.len()],
     holds: [Option<AnimationNodeIndex>; Hold::ALL.len()],
     hold_durations: [f32; Hold::ALL.len()],
+    reloads: [Option<AnimationNodeIndex>; Hold::ALL.len()],
+    reload_durations: [f32; Hold::ALL.len()],
 }
 
 impl Rig {
@@ -471,12 +491,18 @@ pub fn build(
         }
     }
     let mut hold_durations = [1.0; Hold::ALL.len()];
+    let mut reload_durations = [1.0; Hold::ALL.len()];
     for hold in Hold::ALL {
-        if let Some(h) = gltf.named_animations.get(hold.name()) {
-            let Some(c) = clips.get(h) else {
-                return;
-            };
-            hold_durations[hold.slot()] = c.duration();
+        for (name, out) in [
+            (hold.name(), &mut hold_durations),
+            (hold.reload_name(), &mut reload_durations),
+        ] {
+            if let Some(h) = gltf.named_animations.get(name) {
+                let Some(c) = clips.get(h) else {
+                    return;
+                };
+                out[hold.slot()] = c.duration();
+            }
         }
     }
     let Some(legs) = leg_targets(gltf, &gltf_nodes) else {
@@ -493,10 +519,13 @@ pub fn build(
         }
     }
     let mut holds = [None; Hold::ALL.len()];
+    let mut reloads = [None; Hold::ALL.len()];
     for hold in Hold::ALL {
-        match gltf.named_animations.get(hold.name()) {
-            Some(h) => holds[hold.slot()] = Some(graph.add_clip_with_mask(h.clone(), LEGS_MASK, 1.0, root)),
-            None => missing.push(hold.name()),
+        for (name, out) in [(hold.name(), &mut holds), (hold.reload_name(), &mut reloads)] {
+            match gltf.named_animations.get(name) {
+                Some(h) => out[hold.slot()] = Some(graph.add_clip_with_mask(h.clone(), LEGS_MASK, 1.0, root)),
+                None => missing.push(name),
+            }
         }
     }
     if legs.is_empty() {
@@ -516,6 +545,8 @@ pub fn build(
         durations,
         holds,
         hold_durations,
+        reloads,
+        reload_durations,
     });
 }
 
@@ -577,6 +608,26 @@ pub struct Playing {
     fading: Option<Clip>,
     /// How much of the arms and spine each hold owns, 0..1.
     hold_u: [f32; Hold::ALL.len()],
+    /// How much of them the reload owns over the hold, 0..1, and whose
+    /// reload clip is playing (the gun's, whatever the hold).
+    reload_u: f32,
+    reload_of: Option<Hold>,
+}
+
+impl Playing {
+    /// How much of the arms the reload owns, 0..1.
+    pub fn reload_share(&self) -> f32 {
+        self.reload_u
+    }
+}
+
+impl Playing {
+    /// How much of the head and spine the holds own between them, 0..1:
+    /// their clips key the head as a standing body holds it, so that much
+    /// of a crouch clip's bow is already gone.
+    pub fn held(&self) -> f32 {
+        self.hold_u.iter().copied().fold(0.0, f32::max).min(HOLD_MAX)
+    }
 }
 
 /// A stable phase in `[0, 1)` per body, so a crowd standing still doesn't
@@ -659,21 +710,61 @@ pub fn drive(
     } else {
         playing.fading = None;
     }
-    // The holds, faded in and out at the blend's pace.
+    // The holds and the reload over them, faded in and out at the blend's
+    // pace.
+    let fade = |u: f32, on: bool| match (on, fresh) {
+        (true, true) => 1.0,
+        (false, true) => 0.0,
+        (true, false) => (u + dt / BLEND_S).min(1.0),
+        (false, false) => (u - dt / BLEND_S).max(0.0),
+    };
     let held = gait.holding();
+    let reload = gait.reload.filter(|_| held.is_some());
+    let reload_of = reload.map(|(h, _)| h);
+    // A reload starts its gun's clip from the top, paced to the gun's
+    // reload, over the hold the arms are in; one that ends (or a gun
+    // swapped) fades out.
+    if reload_of.is_some() && playing.reload_of != reload_of {
+        if let Some(node) = playing.reload_of.and_then(|h| rig.reloads[h.slot()]) {
+            player.stop(node);
+        }
+        playing.reload_of = reload_of;
+        playing.reload_u = 0.0;
+        if let Some((h, secs)) = reload {
+            if let Some(node) = rig.reloads[h.slot()] {
+                let pace = rig.reload_durations[h.slot()].max(1e-3) / secs.max(0.1);
+                player.start(node).set_repeat(RepeatAnimation::Never).set_speed(pace);
+            }
+        }
+    }
+    playing.reload_u = fade(playing.reload_u, reload.is_some());
+    if reload.is_none() && playing.reload_u <= 0.0 {
+        if let Some(node) = playing.reload_of.take().and_then(|h| rig.reloads[h.slot()]) {
+            player.stop(node);
+        }
+    }
+    for hold in Hold::ALL {
+        let u = &mut playing.hold_u[hold.slot()];
+        *u = fade(*u, held == Some(hold));
+    }
+    // The upper bones' shares: the reload's r of them, each hold its u of
+    // the rest, the legs' clip what is left. The gait's weights sum to 1
+    // (the transitions hold them there), so a layer weighted w/(1 − U) owns
+    // its w of every upper bone when the layers own U together.
+    let r = playing.reload_u;
+    let total = r + (1.0 - r) * playing.hold_u.iter().sum::<f32>().min(1.0);
+    let upper = total.min(HOLD_MAX);
+    let k = if total > 0.0 {
+        upper / total / (1.0 - upper)
+    } else {
+        0.0
+    };
     for hold in Hold::ALL {
         let Some(node) = rig.holds[hold.slot()] else {
             continue;
         };
-        let u = &mut playing.hold_u[hold.slot()];
-        let on = held == Some(hold);
-        *u = match (on, fresh) {
-            (true, true) => 1.0,
-            (false, true) => 0.0,
-            (true, false) => (*u + dt / BLEND_S).min(1.0),
-            (false, false) => (*u - dt / BLEND_S).max(0.0),
-        };
-        if *u <= 0.0 {
+        let u = playing.hold_u[hold.slot()];
+        if u <= 0.0 {
             if player.is_playing_animation(node) {
                 player.stop(node);
             }
@@ -686,10 +777,12 @@ pub fn drive(
                 .set_seek_time(phase0 * rig.hold_durations[hold.slot()].max(1e-3));
         }
         if let Some(a) = player.animation_mut(node) {
-            // The gait's weights sum to 1 (the transitions hold them there),
-            // so u/(1−u) hands the hold exactly u of every upper bone.
-            let w = u.min(HOLD_MAX);
-            a.set_weight(w / (1.0 - w));
+            a.set_weight(u * (1.0 - r) * k);
+        }
+    }
+    if let Some(node) = playing.reload_of.and_then(|h| rig.reloads[h.slot()]) {
+        if let Some(a) = player.animation_mut(node) {
+            a.set_weight(r * k);
         }
     }
 }
@@ -841,6 +934,8 @@ pub struct SpinePose {
     pub clip: Option<Clip>,
     pub pitch: f32,
     pub hip_yaw: f32,
+    /// How much of the head a hold owns ([`Playing::held`]).
+    pub held: f32,
     /// Where the head is moved, metres in the model's frame (the own
     /// shadow's, `own_shadow.rs`; zero for every other body).
     pub head_push: Vec3,
@@ -865,9 +960,11 @@ pub fn turn_spine(pose: SpinePose, spine: &mut SpineBones, bones: &mut Query<&mu
         pose.pitch.clamp(-LOOK_PITCH_MAX, LOOK_PITCH_MAX)
     };
     // The crouch clips bow the head ~42° further than the idle: lift it by
-    // the difference, so a crouched body looking level looks level.
+    // the difference, so a crouched body looking level looks level. A hold
+    // keys the head as a standing body holds it, so only the share of the
+    // head the crouch clip still owns is lifted.
     let lift = match pose.clip {
-        Some(Clip::CrouchIdle | Clip::CrouchWalk) => CROUCH_HEAD_LIFT,
+        Some(Clip::CrouchIdle | Clip::CrouchWalk) => CROUCH_HEAD_LIFT * (1.0 - pose.held.clamp(0.0, 1.0)),
         _ => 0.0,
     };
     let yaw = if dead { 0.0 } else { pose.hip_yaw };
@@ -1078,6 +1175,21 @@ mod tests {
         );
         assert_eq!(g.clip, Some(Clip::Death));
         assert_eq!(g.holding(), None);
+    }
+
+    #[test]
+    fn a_pistol_reloads_its_own_clip_over_the_long_hold() {
+        let mut g = Gait::default();
+        let s = Seen {
+            hold: Some(Hold::Long),
+            reload: Some((Hold::Pistol, 1.2)),
+            ..seen(Vec2::ZERO, 0.0)
+        };
+        g.observe(&s, DT);
+        assert_eq!(g.holding(), Some(Hold::Long));
+        assert_eq!(g.reload, Some((Hold::Pistol, 1.2)));
+        g.observe(&Seen { driving: true, ..s }, DT);
+        assert_eq!(g.reload, None, "no reload at the wheel");
     }
 
     #[test]

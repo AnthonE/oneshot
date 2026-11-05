@@ -1,131 +1,52 @@
 //! The menu's session in the browser: the party, its friends and its
-//! voice (proto's `party` and `voice`), handed to the page as a
-//! [`Lobby`]. The page keeps it open beside any match it plays.
+//! voice (proto's `party` and `voice`), for the game to hold beside any
+//! match (`crates/client/src/party.rs`).
 //!
-//! What arrives goes to the page's callbacks as it comes: each stream
-//! message as a plain object to `on_msg`, each voice frame as
-//! `(from, seq, flags, bytes)` to `on_voice`. What the page says goes out
-//! at once, in order; a voice frame behind a full datagram queue is
-//! dropped, never waited on.
+//! What arrives is queued as it comes (the stream's messages, the voice
+//! frames) and taken once a frame; what the game says goes out at once, in
+//! order. A voice frame behind a full datagram queue is dropped, never
+//! waited on.
 
-use js_sys::{Array, Function, Object, Reflect, Uint8Array};
-use proto::party::{self as pp, PlayerId};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
+
+use js_sys::{Reflect, Uint8Array};
 use proto::voice::{self, VoiceFrame};
-use proto::{decode_msg, Msg, Pass};
+use proto::{decode_msg, Msg};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{ReadableStreamDefaultReader, WebTransport, WritableStreamDefaultWriter};
 
-use crate::session::{refuse_why, Session};
 use crate::web::{datagram_writer, hex32, js_err, write_frame, FrameReader};
 
-fn set(o: &Object, k: &str, v: impl Into<JsValue>) {
-    let _ = Reflect::set(o, &JsValue::from_str(k), &v.into());
-}
+/// Messages and voice frames kept for the game before it takes them: a
+/// page in the background stops drawing, and the newest matter most.
+const KEEP: usize = 256;
 
-/// A stream message as the page reads it: `{kind, ...}`.
-fn to_js(m: &Msg) -> Option<Object> {
-    let o = Object::new();
-    match m {
-        Msg::Ticket { ticket } => {
-            set(&o, "kind", "ticket");
-            set(&o, "ticket", ticket.as_str());
-        }
-        Msg::Party(p) => {
-            set(&o, "kind", "party");
-            set(&o, "code", p.code);
-            set(&o, "text", pp::code_text(p.code));
-            set(&o, "privacy", p.privacy);
-            set(&o, "leader", p.leader);
-            set(&o, "me", p.me);
-            let members = Array::new();
-            for m in p.members() {
-                let r = Object::new();
-                set(&r, "tag", m.tag);
-                set(&r, "name", m.name.as_str());
-                set(&r, "player", m.player.as_str());
-                set(&r, "wallet", m.wallet());
-                set(&r, "away", m.away);
-                set(&r, "playing", m.playing);
-                members.push(&r);
-            }
-            set(&o, "members", members);
-        }
-        Msg::Go { mode, private } => {
-            set(&o, "kind", "go");
-            set(&o, "mode", *mode);
-            set(&o, "private", *private);
-        }
-        Msg::Friends { n, reachable } => {
-            set(&o, "kind", "friends");
-            set(&o, "n", *n);
-            set(&o, "reachable", *reachable);
-        }
-        Msg::Friend {
-            i,
-            name,
-            player,
-            at,
-            party,
-            size,
-            playing,
-        } => {
-            set(&o, "kind", "friend");
-            set(&o, "i", *i);
-            set(&o, "name", name.as_str());
-            set(&o, "player", player.as_str());
-            set(&o, "at", *at);
-            set(&o, "party", *party);
-            set(&o, "size", *size);
-            set(&o, "playing", *playing);
-        }
-        Msg::Invited { from, code } => {
-            set(&o, "kind", "invited");
-            set(&o, "from", from.as_str());
-            set(&o, "code", *code);
-            set(&o, "text", pp::code_text(*code));
-        }
-        Msg::Refuse { reason } => {
-            set(&o, "kind", "refuse");
-            set(&o, "reason", *reason);
-            set(&o, "why", refuse_why(*reason));
-        }
-        _ => return None,
-    }
-    Some(o)
-}
-
-#[wasm_bindgen]
-pub struct Lobby {
+pub struct WebLobby {
     transport: WebTransport,
     stream: WritableStreamDefaultWriter,
     datagrams: WritableStreamDefaultWriter,
-    max_datagram: web_sys::WebTransportDatagramDuplexStream,
+    duplex: web_sys::WebTransportDatagramDuplexStream,
+    msgs: Rc<RefCell<VecDeque<Msg>>>,
+    voices: Rc<RefCell<VecDeque<VoiceFrame>>>,
+    closed: Rc<Cell<bool>>,
 }
 
-#[wasm_bindgen]
-impl Lobby {
+fn keep<T>(q: &RefCell<VecDeque<T>>, t: T) {
+    let mut q = q.borrow_mut();
+    if q.len() >= KEEP {
+        q.pop_front();
+    }
+    q.push_back(t);
+}
+
+impl WebLobby {
     /// Opens the menu's session to `addr` (pinning `hash`, or none for a
-    /// CA's certificate) as `name`, with an Elo Pros `pass`, the server's
-    /// ticket, or nothing (a guest), asking for party `party` (its code, 0
-    /// for none). `on_msg(obj)` gets each stream message, then
-    /// `{kind: "closed"}` once; `on_voice(from, seq, flags, bytes)` each
-    /// voice frame.
-    pub async fn connect(
-        addr: String,
-        hash: String,
-        name: String,
-        pass: String,
-        party: u32,
-        on_msg: Function,
-        on_voice: Function,
-    ) -> Result<Lobby, JsValue> {
-        let pass = if pass.is_empty() {
-            Pass::NONE
-        } else {
-            Pass::new(&pass).ok_or_else(|| JsValue::from_str("that pass is not one Elo Pros gives"))?
-        };
+    /// CA's certificate) and says `hello` (`MODE_LOBBY`).
+    pub async fn open(addr: String, hash: String, hello: Msg) -> Result<WebLobby, JsValue> {
         let opts = web_sys::WebTransportOptions::new();
         opts.set_require_unreliable(true);
         if let Some(digest) = hex32(&hash) {
@@ -146,115 +67,111 @@ impl Lobby {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let stream = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        let hello = Session::hello(&name, pass, proto::MODE_LOBBY, 0, party);
         write_frame(&stream, &hello).await?;
 
+        let msgs: Rc<RefCell<VecDeque<Msg>>> = Rc::default();
+        let voices: Rc<RefCell<VecDeque<VoiceFrame>>> = Rc::default();
+        let closed = Rc::new(Cell::new(false));
         let mut reader = FrameReader::new(&bidi.readable())?;
-        let cb = on_msg.clone();
-        spawn_local(async move {
-            while let Some(f) = reader.next().await {
-                if let Some(o) = decode_msg(&f).ok().as_ref().and_then(to_js) {
-                    let _ = cb.call1(&JsValue::NULL, &o);
+        {
+            let (msgs, closed) = (msgs.clone(), closed.clone());
+            spawn_local(async move {
+                while let Some(f) = reader.next().await {
+                    if let Ok(m) = decode_msg(&f) {
+                        keep(&msgs, m);
+                    }
                 }
-            }
-            let o = Object::new();
-            set(&o, "kind", "closed");
-            let _ = cb.call1(&JsValue::NULL, &o);
-        });
-
-        let dgs = transport.datagrams();
-        let readable = dgs.readable();
-        spawn_local(async move {
-            let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
-                return;
-            };
-            loop {
-                let Ok(result) = JsFuture::from(reader.read()).await else {
-                    break;
+                closed.set(true);
+            });
+        }
+        let duplex = transport.datagrams();
+        {
+            let (voices, readable) = (voices.clone(), duplex.readable());
+            spawn_local(async move {
+                let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
+                    return;
                 };
-                if Reflect::get(&result, &JsValue::from_str("done"))
-                    .ok()
-                    .and_then(|d| d.as_bool())
-                    .unwrap_or(true)
-                {
-                    break;
+                loop {
+                    let Ok(result) = JsFuture::from(reader.read()).await else {
+                        break;
+                    };
+                    let done = Reflect::get(&result, &JsValue::from_str("done"))
+                        .ok()
+                        .and_then(|d| d.as_bool())
+                        .unwrap_or(true);
+                    if done {
+                        break;
+                    }
+                    let Ok(chunk) =
+                        Reflect::get(&result, &JsValue::from_str("value")).and_then(|v| v.dyn_into::<Uint8Array>())
+                    else {
+                        break;
+                    };
+                    let d = chunk.to_vec();
+                    if proto::datagram_kind(&d) != Some(proto::DG_VOICE) {
+                        continue;
+                    }
+                    if let Ok(f) = voice::decode_voice(&d) {
+                        if voice::is_one_frame(f.payload()) {
+                            keep(&voices, f);
+                        }
+                    }
                 }
-                let Ok(chunk) =
-                    Reflect::get(&result, &JsValue::from_str("value")).and_then(|v| v.dyn_into::<Uint8Array>())
-                else {
-                    break;
-                };
-                let d = chunk.to_vec();
-                if proto::datagram_kind(&d) != Some(proto::DG_VOICE) {
-                    continue;
-                }
-                let Ok(f) = voice::decode_voice(&d) else { continue };
-                if !voice::is_one_frame(f.payload()) {
-                    continue;
-                }
-                let bytes = Uint8Array::from(f.payload());
-                let args = Array::of4(&f.from.into(), &f.seq.into(), &f.flags.into(), &bytes);
-                let _ = on_voice.apply(&JsValue::NULL, &args);
-            }
-        });
-        let datagrams = datagram_writer(&dgs)?;
-        Ok(Lobby {
+            });
+        }
+        let datagrams = datagram_writer(&duplex)?;
+        Ok(WebLobby {
             transport,
             stream,
             datagrams,
-            max_datagram: dgs,
+            duplex,
+            msgs,
+            voices,
+            closed,
         })
     }
 
-    fn say(&self, m: Msg) {
+    /// Stream messages since the last call.
+    pub fn take(&self) -> Vec<Msg> {
+        self.msgs.borrow_mut().drain(..).collect()
+    }
+
+    /// Voice frames since the last call.
+    pub fn take_voice(&self) -> Vec<VoiceFrame> {
+        self.voices.borrow_mut().drain(..).collect()
+    }
+
+    /// A message to the server, after every one before it.
+    pub fn send(&self, m: Msg) {
         let w = self.stream.clone();
         spawn_local(async move {
             let _ = write_frame(&w, &m).await;
         });
     }
 
-    /// A party act (`ACT_*` in proto's `party`).
-    pub fn act(&self, act: u8, arg: u32) {
-        self.say(Msg::PartyAct { act, arg });
-    }
-
-    /// Asks a friend (their Elo Pros id) into the party.
-    pub fn invite(&self, player: String) {
-        if let Some(p) = PlayerId::new(&player.to_ascii_lowercase()) {
-            self.say(Msg::PartyInvite { player: p });
-        }
-    }
-
-    /// Signs this session in with a fresh Elo Pros pass.
-    pub fn sign_in(&self, pass: String) {
-        if let Some(p) = Pass::new(&pass) {
-            self.say(Msg::SignIn { pass: p });
-        }
-    }
-
     /// One Opus frame of ours to the party. False if it was dropped (too
     /// big, not one 20 ms frame, or the path is full).
-    pub fn talk(&self, seq: u16, end: bool, payload: &[u8]) -> bool {
-        let Some(f) = VoiceFrame::new(seq, if end { voice::VOICE_END } else { 0 }, payload) else {
-            return false;
-        };
-        if !voice::is_one_frame(payload) {
+    pub fn talk(&self, f: &VoiceFrame) -> bool {
+        if !voice::is_one_frame(f.payload()) {
             return false;
         }
         let mut buf = [0u8; 8 + voice::VOICE_MAX_BYTES];
-        let Ok(n) = voice::encode_voice_up(&f, &mut buf) else {
+        let Ok(n) = voice::encode_voice_up(f, &mut buf) else {
             return false;
         };
-        let max = self.max_datagram.max_datagram_size() as usize;
+        let max = self.duplex.max_datagram_size() as usize;
         if (max != 0 && n > max) || self.datagrams.desired_size().ok().flatten().is_some_and(|d| d <= 0.0) {
             return false;
         }
-        let chunk = Uint8Array::from(&buf[..n]);
-        let p = self.datagrams.write_with_chunk(&chunk);
+        let p = self.datagrams.write_with_chunk(&Uint8Array::from(&buf[..n]));
         spawn_local(async move {
             let _ = JsFuture::from(p).await;
         });
         true
+    }
+
+    pub fn closed(&self) -> bool {
+        self.closed.get()
     }
 
     pub fn close(&self) {
@@ -265,16 +182,10 @@ impl Lobby {
 /// A party code as people read it, and back (0: not a code).
 #[wasm_bindgen]
 pub fn party_text(code: u32) -> String {
-    pp::code_text(code)
+    proto::party::code_text(code)
 }
 
 #[wasm_bindgen]
 pub fn party_code(text: String) -> u32 {
-    pp::code_parse(&text).unwrap_or(0)
-}
-
-/// A mode as a player reads it.
-#[wasm_bindgen]
-pub fn mode_name(mode: u8) -> String {
-    proto::mode_name(mode).to_string()
+    proto::party::code_parse(&text).unwrap_or(0)
 }

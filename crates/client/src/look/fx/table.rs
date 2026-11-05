@@ -683,8 +683,25 @@ pub const PINK: [f32; 4] = [9.0, 2.2, 6.0, 1.0];
 
 /// A muzzle's flash: `n` stars in colour `c`, `scale` times an impact's.
 pub fn stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
+    stars_for(pool, at, n, scale, c, STAR_LIFE_S);
+}
+
+/// How long a muzzle's star burns, seconds: shortest and longest.
+const STAR_LIFE_S: (f32, f32) = (0.05, 0.08);
+/// Our own gun's: a frame or two. A star is a mark in the world, and the
+/// gun in view turns with the camera, so a longer one is left behind as
+/// the view swings or kicks.
+const OWN_STAR_LIFE_S: (f32, f32) = (0.025, 0.04);
+
+/// Our own gun's flash, at the muzzle in view: [`stars`] that burn for
+/// [`OWN_STAR_LIFE_S`].
+pub fn own_stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
+    stars_for(pool, at, n, scale, c, OWN_STAR_LIFE_S);
+}
+
+fn stars_for(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4], (short, long): (f32, f32)) {
     for _ in 0..n {
-        let life = 0.05 + 0.03 * pool.roll();
+        let life = short + (long - short) * pool.roll();
         let size = (0.06 + 0.04 * pool.roll()) * scale;
         let cell = STAR + ((pool.roll() * 3.0) as u8).min(2);
         let roll = pool.roll() * core::f32::consts::TAU;

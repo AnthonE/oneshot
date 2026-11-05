@@ -25,6 +25,28 @@ const SPIN: f32 = 1.1;
 const DISC_GLOW: f32 = 1.6;
 /// A gun on the floor lies on its side this high (its half thickness).
 const LIE_Y: f32 = 0.05;
+/// A drop thrown by a blast: how fast the drawn one follows where the
+/// snapshot says it is (1/s), how fast it tumbles for its speed (radians a
+/// metre), and how fast it settles flat on landing (1/s). Further than
+/// [`DROP_SNAP_M`] in one frame is another drop in the same slot: put down
+/// there, not flown to.
+const DROP_FOLLOW: f32 = 30.0;
+const TUMBLE_PER_M: f32 = 2.2;
+const SETTLE: f32 = 12.0;
+const DROP_SNAP_M: f32 = 3.0;
+
+/// A drop drawn in its slot: its entity and gun, where the snapshot puts
+/// it and where it is drawn, and its tumble.
+#[derive(Clone, Copy)]
+struct Lying {
+    e: Entity,
+    arm: u8,
+    to: Vec3,
+    at: Vec3,
+    /// Its turn on the floor (each slot its own) and the tumble on top.
+    turn: Quat,
+    spin: Quat,
+}
 
 /// Pad `i`'s gun.
 #[derive(Component)]
@@ -40,7 +62,7 @@ pub struct PadDisc(pub usize);
 pub struct Items {
     built: u32,
     lit: Vec<Option<bool>>,
-    drops: [Option<(Entity, u8, V3)>; MAX_DROPS],
+    drops: [Option<Lying>; MAX_DROPS],
 }
 
 /// Whether pad `i` holds its gun, as the last snapshot says.
@@ -68,6 +90,7 @@ pub fn draw(
     models: Res<Models>,
     time: Res<Time>,
     mut held: Query<(&PadGun, &mut Transform, &mut Visibility)>,
+    mut placed: Query<&mut Transform, Without<PadGun>>,
     discs: Query<(&PadDisc, &MeshMaterial3d<StandardMaterial>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -126,20 +149,30 @@ pub fn draw(
             };
         }
     }
-    // The floor as the last snapshot names it: a slot gone or changed is
-    // taken down, a new one put down.
+    // The floor as the last snapshot names it: a slot gone or holding
+    // another gun is taken down, a new one put down, one that moved (a blast
+    // threw it) followed, tumbling while it flies and settling flat.
+    let dt = time.delta_secs();
     let mut want = [None; MAX_DROPS];
     for d in core.latest().drops() {
         if let Some(w) = want.get_mut(d.slot as usize) {
-            *w = Some((d.arm, d.pos));
+            *w = Some((d.arm, Vec3::new(d.pos.x, d.pos.y + LIE_Y, d.pos.z)));
         }
     }
     for (slot, (have, want)) in items.drops.iter_mut().zip(want).enumerate() {
-        if have.is_some_and(|(_, a, p)| want == Some((a, p))) {
-            continue;
+        if let (Some(l), Some((a, p))) = (have.as_mut(), want) {
+            if l.arm == a && l.to.distance(p) < DROP_SNAP_M {
+                l.to = p;
+                fly(l, dt);
+                if let Ok(mut tr) = placed.get_mut(l.e) {
+                    tr.translation = l.at;
+                    tr.rotation = l.spin * l.turn;
+                }
+                continue;
+            }
         }
-        if let Some((e, _, _)) = have.take() {
-            commands.entity(e).despawn();
+        if let Some(l) = have.take() {
+            commands.entity(l.e).despawn();
         }
         let Some((a, p)) = want else {
             continue;
@@ -149,7 +182,7 @@ pub fn draw(
         let root = commands
             .spawn((
                 crate::level::LevelPart,
-                Transform::from_xyz(p.x, p.y + LIE_Y, p.z).with_rotation(turn),
+                Transform::from_translation(p).with_rotation(turn),
                 Visibility::default(),
             ))
             .id();
@@ -159,7 +192,34 @@ pub fn draw(
             let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
             posed(&mut commands, &models, a, side * guns::body_basis(), root);
         }
-        *have = Some((root, a, p));
+        *have = Some(Lying {
+            e: root,
+            arm: a,
+            to: p,
+            at: p,
+            turn,
+            spin: Quat::IDENTITY,
+        });
+    }
+}
+
+/// One frame of a drop drawn toward where it is: tumbling end over end
+/// about the level line across its travel while it moves, and, still,
+/// turned the short way back onto whichever side is nearer the floor.
+fn fly(l: &mut Lying, dt: f32) {
+    let was = l.at;
+    l.at += (l.to - l.at) * (1.0 - (-DROP_FOLLOW * dt).exp());
+    let step = l.at - was;
+    let across = Vec3::new(step.z, 0.0, -step.x);
+    let m = across.length();
+    if m > 1e-4 {
+        l.spin = (Quat::from_axis_angle(across / m, -m * TUMBLE_PER_M) * l.spin).normalize();
+    }
+    if m < dt * 0.5 {
+        let up = l.spin * Vec3::Y;
+        let flat = if up.y >= 0.0 { Vec3::Y } else { Vec3::NEG_Y };
+        let to = (Quat::from_rotation_arc(up, flat) * l.spin).normalize();
+        l.spin = l.spin.slerp(to, 1.0 - (-SETTLE * dt).exp());
     }
 }
 

@@ -1,8 +1,9 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
-//! [--shot out.png [--shot-at s]]`
-//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture): the
-//! desktop client. It opens on the title
+//! [--autoplay [--scope]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
+//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
+//! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
+//! a tape drawn: `film/`, `clip.rs`): the desktop client. It opens on the title
 //! screen (`front.rs`); PLAY reads the game server's address and
 //! certificate hash from the page server's `server.json` (what the browser
 //! page reads) and connects with client-net's native session. `--mode` or
@@ -54,6 +55,49 @@ fn run() -> Result<(), String> {
         Some(s) => s.parse::<f64>().map_err(|_| format!("--shot-at {s}: seconds"))?,
         None => 1.0,
     };
+    // A tape drawn, not a match played (`film/`, `clip.rs`).
+    if let Some(p) = arg("--scan") {
+        let every = arg("--every").and_then(|s| s.parse::<f64>().ok()).unwrap_or(5.0);
+        return scan(std::path::Path::new(&p), every);
+    }
+    if let Some(p) = arg("--film") {
+        let mut script = oneshot_client::film::Script::load(std::path::Path::new(&p))?;
+        if script.out.as_os_str().is_empty() {
+            let stem = std::path::Path::new(&p).file_stem().unwrap_or_default().to_owned();
+            script.out = std::path::Path::new("traces/film").join(stem);
+        }
+        return film(script, quality, None);
+    }
+    if let Some(p) = arg("--clip") {
+        use oneshot_client::clip;
+        let tape = std::path::PathBuf::from(&p);
+        let style = arg("--style").unwrap_or_else(|| clip::STYLES[0].into());
+        let json =
+            clip::script(&style).ok_or_else(|| format!("--style {style}: one of {}", clip::STYLES.join(", ")))?;
+        let mut script = oneshot_client::film::Script::parse(&json)?;
+        if !oneshot_client::film::encode::ffmpeg_here() {
+            return Err(format!(
+                "a clip's video is made with ffmpeg, and there is none on the path: install it, then `oneshot --clip {p}`"
+            ));
+        }
+        script.tape = tape.clone();
+        script.out = tape.with_extension("shots");
+        if let Some(px) = arg("--max-height").and_then(|s| s.parse::<u32>().ok()) {
+            script.fit_height(px);
+        }
+        let out = tape.with_extension("mp4");
+        return film(script, quality, Some((tape.with_extension("shots"), out)));
+    }
+    let record = match (arg("--record"), args.iter().position(|a| a == "--record")) {
+        (Some(p), Some(i)) => {
+            let secs = args
+                .get(i + 2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or_else(|| format!("--record {p}: and how many seconds"))?;
+            Some(oneshot_client::clip::Record::new(std::path::PathBuf::from(p), secs))
+        }
+        _ => None,
+    };
     let open = if flag("--settings") || flag("--graphics") {
         Screen::Settings
     } else if flag("--menu") {
@@ -92,6 +136,7 @@ fn run() -> Result<(), String> {
             autoplay,
             lite,
             potato,
+            softgpu: false,
             quality,
             pose: None,
             capsules: flag("--capsules"),
@@ -100,7 +145,7 @@ fn run() -> Result<(), String> {
             fxstage,
             open,
             front,
-            page: false,
+            party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
         };
         let joins = matches!(front, Start::Join(_));
         // On the title only the settings open over it; in a match, the
@@ -111,6 +156,8 @@ fn run() -> Result<(), String> {
             (false, _) => Screen::Title,
         };
         let mut app = oneshot_client::game(Door::new(server), opts);
+        // The autopilot holds the scope (a picture of one; `--autoplay`).
+        app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
         if let Some(n) = arg("--name") {
             app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
                 oneshot_client::settings::Player::clean(&n);
@@ -122,10 +169,116 @@ fn run() -> Result<(), String> {
             path, shot_at, want, want_match,
         ));
     }
+    if let Some(r) = record {
+        app.insert_resource(r);
+    }
     match app.run() {
         bevy::app::AppExit::Error(code) => std::process::exit(code.get().into()),
         bevy::app::AppExit::Success => Ok(()),
     }
+}
+
+/// `--film` and `--clip`: the list's tape drawn shot by shot, then out; a
+/// clip's shots joined into one video beside its tape.
+#[cfg(not(target_arch = "wasm32"))]
+fn film(
+    mut script: oneshot_client::film::Script,
+    quality: Option<oneshot_client::look::quality::Quality>,
+    cut: Option<(std::path::PathBuf, std::path::PathBuf)>,
+) -> Result<(), String> {
+    let path = script.tape.clone();
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let tape = client_net::tape::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    script.anchor(tape.end_ms() / 1000.0);
+    if let Some(q) = quality {
+        script.quality = q.name().into();
+    }
+    println!(
+        "oneshot: filming {} shot(s) from {} ({:.0} s of tape)",
+        script.shots.len(),
+        path.display(),
+        tape.end_ms() / 1000.0
+    );
+    let mut app = oneshot_client::film::app(script, tape, None)?;
+    if let bevy::app::AppExit::Error(code) = app.run() {
+        std::process::exit(code.get().into());
+    }
+    if let Some((shots, out)) = cut {
+        oneshot_client::film::encode::cut(&shots, &out)?;
+        let _ = std::fs::remove_dir_all(&shots);
+        println!("oneshot: clip {}", out.display());
+    }
+    Ok(())
+}
+
+/// `--scan x.tape [--every S]`: what a tape holds, every few seconds: where
+/// the player is, who else it was shown and where, and the kills, which is
+/// how a shot list finds its moments.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
+    use client_net::session::Session;
+    use client_net::tape::Replay;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let tape = client_net::tape::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let end = tape.end_ms();
+    let map = tape.map().and_then(|m| sim::maps::ALL.iter().find(|d| d.id == m));
+    println!(
+        "{}: {:.1} s on {}",
+        path.display(),
+        end / 1000.0,
+        map.map_or("an unknown map", |d| d.name)
+    );
+    let mut names: std::collections::BTreeMap<u8, String> = std::collections::BTreeMap::new();
+    let mut s = Session::replay();
+    let mut r = Replay::new(tape);
+    let step = 1000.0 / sim::consts::TICK_HZ as f64 * client_net::core::SEND_EVERY as f64;
+    let mut next = 0.0;
+    let every = every_s.max(0.1) * 1000.0;
+    while r.clock_ms < end + step {
+        r.clock_ms += step;
+        r.frame(&mut s);
+        for m in s.take_messages() {
+            match m {
+                proto::Msg::Seat { slot, name, .. } => {
+                    names.insert(slot, name.as_str().to_string());
+                }
+                proto::Msg::Kill { killer, victim, .. } => {
+                    let who = |k: u8| names.get(&k).cloned().unwrap_or_else(|| format!("seat {k}"));
+                    println!("{:7.1} s  {} killed {}", r.clock_ms / 1000.0, who(killer), who(victim));
+                }
+                _ => {}
+            }
+        }
+        s.core.drain_events();
+        if r.clock_ms >= next && s.ready {
+            next += every;
+            let (f, p) = s.core.own();
+            let seen: Vec<String> = s
+                .core
+                .others(r.clock_ms)
+                .iter()
+                .filter(|d| d.alive)
+                .map(|d| format!("{}@({:.0}, {:.0}, {:.0})", d.slot, d.pos.x, d.pos.y, d.pos.z))
+                .collect();
+            println!(
+                "{:7.1} s  seat {} at ({:.1}, {:.1}, {:.1}) {}  {}/{}  sees {}",
+                r.clock_ms / 1000.0,
+                s.core.slot,
+                p.x,
+                p.y,
+                p.z,
+                if f.alive { "alive" } else { "dead " },
+                f.kills,
+                f.deaths,
+                if seen.is_empty() {
+                    "nobody".into()
+                } else {
+                    seen.join(" ")
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -134,6 +287,7 @@ const HELP: &str = "oneshot: the desktop client
   oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
   --name NAME                      the name others see (the title's field)
+  --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros
                                    sign-in (the web page)
@@ -150,9 +304,19 @@ const HELP: &str = "oneshot: the desktop client
                                    it) and S seconds have passed (1), then exit 0;
                                    non-zero, saying why, if it never is
                                    (ci/desktop_shot.sh)
+  --record x.tape SECONDS          keep everything the match sends, and once it
+                                   has run SECONDS (or ends) write it as a tape
+                                   and exit (ci/film.sh record)
+  --film shots.json                draw a tape as a shot list says, each shot
+                                   into ffmpeg (ci/film.sh shoot; crates/client/
+                                   src/film/script.rs has the fields)
+  --clip x.tape [--style S]        make an F9 tape's video beside it (S: wide,
+                                   pov, chase, mix, long); needs ffmpeg
+  --scan x.tape [--every S]        what a tape holds, every S seconds (5)
 
 F12 saves a screenshot on any screen, into your pictures folder under
-oneshot/ (ONESHOT_SHOTS_DIR names another).
+oneshot/ (ONESHOT_SHOTS_DIR names another). F9 in a match saves the last
+half minute there as a tape and, with ffmpeg installed, makes it a video.
 
 Keys (by default; rebind them, with the mouse's speed, the field of view,
 the volume and the graphics, in SETTINGS, saved in your config folder under

@@ -1,6 +1,7 @@
-//! The models: Triple T and the guns (`assets/models`, made from
-//! Gates' GLBs by `tools/glb`, through `tools/assets.mjs`), and how each gun is held, after
-//! the three.js page's `art.ts`'s `GUNS` (Gates' grip numbers, `ui/hold.rs`).
+//! The models: Triple T (`assets/models`, from Gates' GLB by `tools/glb`,
+//! through `tools/assets.mjs`) and the guns, ours, each built by a Blender
+//! script in `tools/models` (its numbers here are what `finish` printed),
+//! and how each gun is held, after the three.js page's `art.ts`'s `GUNS`.
 
 use bevy::prelude::*;
 use sim::arms;
@@ -53,9 +54,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::AR,
         g(
             "ar",
-            0.888,
-            0.32,
-            0.85,
+            0.79,
+            0.3823,
+            1.0,
             true,
             "shot_rifle",
             3,
@@ -67,9 +68,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::BR,
         g(
             "br",
-            0.957,
-            0.36,
-            0.85,
+            0.88,
+            0.3489,
+            1.0,
             true,
             "shot_heli",
             3,
@@ -81,8 +82,8 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::MAGNUM,
         g(
             "magnum",
-            0.325,
-            0.17,
+            0.305,
+            0.2361,
             1.0,
             false,
             "shot_gun",
@@ -95,9 +96,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SNIPER,
         g(
             "sniper",
-            1.09,
-            0.33,
-            0.8,
+            1.25,
+            0.2816,
+            0.78,
             true,
             "shot_bolt",
             3,
@@ -109,9 +110,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SHOTGUN,
         g(
             "shotgun",
-            0.949,
-            0.3,
-            0.85,
+            0.95,
+            0.3389,
+            1.0,
             true,
             "shot_shotgun",
             3,
@@ -123,9 +124,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::ROCKET,
         g(
             "rocket-launcher",
-            1.058,
-            0.45,
-            0.8,
+            1.054,
+            0.3786,
+            1.0,
             true,
             "shot_rocket",
             3,
@@ -137,9 +138,9 @@ pub const GUNS: [(u8, Gun); 15] = [
         arms::SMG,
         g(
             "smg",
-            0.621,
-            0.42,
-            0.9,
+            0.55,
+            0.5673,
+            1.0,
             true,
             "shot_smg",
             3,
@@ -147,14 +148,14 @@ pub const GUNS: [(u8, Gun); 15] = [
             "reload_rifle_0",
         ),
     ),
-    // The rest borrow the nearest model until they have their own; their
-    // sounds are ours (tools/sfx.py).
+    // The ship's line (`tools/models`: the Veil guns), each with its own
+    // model; their sounds are ours (tools/sfx.py).
     (
         arms::SWORD,
         g(
-            "magnum",
-            0.325,
-            0.17,
+            "sword",
+            1.0095,
+            0.1288,
             1.0,
             false,
             "sword_swing",
@@ -166,10 +167,10 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::CARBINE,
         g(
-            "br",
-            0.957,
-            0.36,
-            0.85,
+            "carbine",
+            0.9544,
+            0.3612,
+            1.0,
             true,
             "shot_carbine",
             3,
@@ -180,10 +181,10 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::BEAM_RIFLE,
         g(
-            "sniper",
-            1.09,
-            0.33,
-            0.8,
+            "beam-rifle",
+            1.3013,
+            0.3468,
+            0.82,
             true,
             "shot_beam",
             3,
@@ -193,14 +194,24 @@ pub const GUNS: [(u8, Gun); 15] = [
     ),
     (
         arms::ION_RIFLE,
-        g("smg", 0.621, 0.42, 0.9, true, "shot_ion", 3, "shot_ion_far", "vent_0"),
+        g(
+            "ion-rifle",
+            0.6164,
+            0.389,
+            1.0,
+            true,
+            "shot_ion",
+            3,
+            "shot_ion_far",
+            "vent_0",
+        ),
     ),
     (
         arms::ION_PISTOL,
         g(
-            "magnum",
-            0.325,
-            0.17,
+            "ion-pistol",
+            0.3665,
+            0.2449,
             1.0,
             false,
             "shot_ionp",
@@ -212,10 +223,10 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::SHARDS,
         g(
-            "smg",
-            0.621,
-            0.42,
-            0.9,
+            "shards",
+            0.5773,
+            0.4067,
+            1.0,
             true,
             "shot_shards",
             3,
@@ -226,10 +237,10 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::LAUNCHER,
         g(
-            "shotgun",
-            0.949,
-            0.3,
-            0.85,
+            "launcher",
+            0.9048,
+            0.4087,
+            1.0,
             true,
             "shot_launcher",
             3,
@@ -240,10 +251,10 @@ pub const GUNS: [(u8, Gun); 15] = [
     (
         arms::CANNON,
         g(
-            "rocket-launcher",
-            1.058,
-            0.45,
-            0.8,
+            "cannon",
+            1.2498,
+            0.4399,
+            1.0,
             true,
             "shot_cannon",
             3,

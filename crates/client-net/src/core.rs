@@ -169,6 +169,10 @@ struct Frame {
     remotes: [Remote; MAX_REMOTES],
     nv: u8,
     vehicles: [VehState; MAX_SNAP_VEHICLES],
+    /// Our own fighter and its vehicle, exactly: what a watcher draws
+    /// between ([`NetCore::watch`]).
+    own: Fighter,
+    own_v: Option<Vehicle>,
 }
 
 /// One snapshot as the kill cam keeps it: everyone this client was shown,
@@ -238,6 +242,11 @@ pub struct NetCore {
     pub rules: Rules,
     pub map: Map,
     pub stats: Stats,
+    /// Watching, not playing: a tape's session (`tape::Replay`). With no
+    /// input to predict from, our own fighter is drawn between the
+    /// snapshots at the render tick, as everyone else is, and the clock is
+    /// the snapshots' alone; nothing is made to send.
+    pub watch: bool,
 
     // The clock, in fractional client ticks; seq is its whole part.
     t: f64,
@@ -312,6 +321,7 @@ impl NetCore {
                 rate: 1.0,
                 ..Stats::default()
             },
+            watch: false,
             t: seq as f64,
             last_ms: None,
             rate: 1.0,
@@ -339,6 +349,8 @@ impl NetCore {
                 remotes: [Remote::default(); MAX_REMOTES],
                 nv: 0,
                 vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
+                own: Fighter::default(),
+                own_v: None,
             }; INTERP_FRAMES],
             n_frames: 0,
             clock: None,
@@ -371,6 +383,11 @@ impl NetCore {
     /// from `input` (the controls as they are now) and predicting it.
     /// Returns the input datagrams to send.
     pub fn update(&mut self, now_ms: f64, input: Input) -> Vec<InputMsg> {
+        if self.watch {
+            self.last_ms = Some(now_ms);
+            self.watched(now_ms);
+            return Vec::new();
+        }
         let input = input.sanitized();
         self.sticky |= input.buttons;
         // The clock keeps real time through a stall (a tab in the
@@ -547,8 +564,11 @@ impl NetCore {
 
         // The clock: keep the low point of our inputs waiting there at about
         // TARGET_DEPTH: below it the server guesses, above it we add delay.
+        // A watcher sends no inputs: the depth was the player's, not ours.
         let d = s.depth as f64;
-        if !(-8.0..=16.0).contains(&d) {
+        if self.watch {
+            self.rate = 1.0;
+        } else if !(-8.0..=16.0).contains(&d) {
             let drawn = self.own().1;
             let drawn_v = self.own_vehicle();
             self.t += TARGET_DEPTH - d;
@@ -571,7 +591,9 @@ impl NetCore {
         }
         self.stats.rate = self.rate;
 
-        self.reconcile(s);
+        if !self.watch {
+            self.reconcile(s);
+        }
 
         // Others, for interpolation.
         let f = Frame {
@@ -580,6 +602,8 @@ impl NetCore {
             remotes: s.remotes,
             nv: s.n_vehicles,
             vehicles: s.vehicles,
+            own: s.own,
+            own_v: s.own_vehicle,
         };
         if self.n_frames < INTERP_FRAMES {
             self.frames[self.n_frames] = f;
@@ -609,7 +633,9 @@ impl NetCore {
                 continue;
             }
             self.event_id = Some(e.id);
-            let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot;
+            // Our own shots were drawn when predicted; a watcher predicts
+            // none, so it takes the server's.
+            let own_shot = e.kind == sim::events::Kind::Shot as u8 && e.a == self.slot && !self.watch;
             if !own_shot {
                 self.events.push(*e);
             }
@@ -776,6 +802,72 @@ impl NetCore {
         let turn = v.yaw.wrapping_sub(self.prev_vyaw) as i16 as f32;
         let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0) + self.vyaw_off;
         Some((v, p, yaw))
+    }
+
+    /// Our own fighter as a body anyone would draw: where [`Self::own`]
+    /// puts it, turned the way it looks (a film's camera off the eye).
+    pub fn own_drawn(&self) -> Drawn {
+        let (f, p) = self.own();
+        Drawn {
+            pos: p,
+            ..drawn(&as_remote(self.slot, f))
+        }
+    }
+
+    /// A watcher's own fighter at the render tick: the snapshots' exact
+    /// fighter before it, its body, aim and vehicle drawn on toward the one
+    /// after (or on its velocity past the newest, then held), the way
+    /// [`Self::others`] draws everyone else.
+    fn watched(&mut self, now_ms: f64) {
+        if self.n_frames == 0 {
+            return;
+        }
+        let rt = self.render_tick(now_ms);
+        let frames = &self.frames[..self.n_frames];
+        let ai = frames.iter().rposition(|f| f.tick as f64 <= rt).unwrap_or(0);
+        let a = &frames[ai];
+        let b = frames.get(ai + 1).filter(|b| b.tick as f64 > rt);
+        let mut f = a.own;
+        let mut v = a.own_v;
+        match b {
+            Some(b)
+                if b.own.alive == a.own.alive && b.own.ride == a.own.ride && b.tick - a.tick <= ticks(LERP_SPAN_MS) =>
+            {
+                let u = ((rt - a.tick as f64) / (b.tick - a.tick) as f64).clamp(0.0, 1.0) as f32;
+                f.body.pos = a.own.body.pos + (b.own.body.pos - a.own.body.pos) * u;
+                f.yaw = turn_between(a.own.yaw, b.own.yaw, u);
+                f.pitch = (a.own.pitch as f32 + (b.own.pitch as f32 - a.own.pitch as f32) * u) as i16;
+                if let (Some(va), Some(vb), Some(v)) = (a.own_v, b.own_v, v.as_mut()) {
+                    v.pos = va.pos + (vb.pos - va.pos) * u;
+                    v.yaw = turn_between(va.yaw, vb.yaw, u);
+                }
+            }
+            _ => {
+                let k = ahead(rt, a.tick) / TICK_HZ as f32;
+                if f.alive {
+                    f.body.pos = f.body.pos + f.body.vel * k;
+                }
+                if let Some(v) = v.as_mut() {
+                    v.pos = v.pos + v.vel * k;
+                }
+            }
+        }
+        if let (Some((_, seat)), Some(v)) = (f.riding(), v.as_ref()) {
+            f.body = v.seat_body(seat);
+        }
+        self.pred = f;
+        self.pred_v = v;
+        self.prev_pos = f.body.pos;
+        if let Some(v) = v {
+            self.prev_v = v.pos;
+            self.prev_vyaw = v.yaw;
+        }
+        self.offset = V3::ZERO;
+        self.voffset = V3::ZERO;
+        self.vyaw_off = 0.0;
+        // Nothing between ticks to draw through: what is drawn is the
+        // render tick's own.
+        self.t = self.seq as f64;
     }
 
     /// The vehicles we were sent (but the one we ride in), between the two
@@ -1084,6 +1176,12 @@ fn yaw_rad(y: u16) -> f32 {
 
 fn pitch_rad(p: i16) -> f32 {
     p as f32 * (core::f32::consts::TAU / 65536.0)
+}
+
+/// A heading `u` of the short way from `a` to `b`, in the wire's turns.
+fn turn_between(a: u16, b: u16, u: f32) -> u16 {
+    let d = b.wrapping_sub(a) as i16 as f32;
+    a.wrapping_add((d * u).round() as i32 as u16)
 }
 
 fn lerp_angle(a: f32, b: f32, u: f32) -> f32 {

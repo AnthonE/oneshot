@@ -14,7 +14,7 @@
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::{light_consts::lux, CascadeShadowConfigBuilder, EnvironmentMapLight, SunDisk};
-use bevy::pbr::{Atmosphere, AtmosphereSettings, DistanceFog, ScatteringMedium};
+use bevy::pbr::{Atmosphere, AtmosphereSettings, DistanceFog, FogFalloff, ScatteringMedium};
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, Msaa};
 
@@ -40,14 +40,19 @@ pub const HAZE_SCALE: f32 = 10.0;
 pub const CASCADE_MIN_M: f32 = 0.2;
 pub const CASCADE_FIRST_M: f32 = 12.0;
 pub const CASCADE_OVERLAP: f32 = 0.2;
+/// A hall's air (a roofed map, lit by its lamps): a faint haze in the
+/// hull's colour, this much a metre squared, so the near wall is clear
+/// and the far end of the hall softens. Post-exposure, before the tonemap.
+pub const HALL_HAZE: [f32; 3] = [0.07, 0.04, 0.12];
+pub const HALL_HAZE_DENSITY: f32 = 0.015;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
-/// Clear sky added behind the cloud deck where the atmosphere draws, in deck
-/// units at full sun (Gates' `SKY_LIFT`, measured against its reference
-/// frames: the atmosphere alone read a slate sky, rgb(105, 127, 159) where
-/// theirs was rgb(153, 189, 231), and no exposure brightens the sky
-/// without moving the ground).
+/// Clear sky added behind the cloud deck, in deck units at full sun (Gates'
+/// `SKY_LIFT`, measured against its reference frames: the atmosphere alone
+/// read a slate sky, rgb(105, 127, 159) where theirs was rgb(153, 189, 231),
+/// and no exposure brightens the sky without moving the ground). Added to
+/// WebGL2's own clear sky too (`deck.rs`), which read that same slate.
 pub const SKY_LIFT: f32 = 0.5;
 
 /// The world's camera, whatever else marks it: what the graphics tier
@@ -219,6 +224,19 @@ pub fn fog_for(mood: &super::mood::Mood, atmosphere: bool, carried: f32) -> Dist
     }
 }
 
+/// A hall's air (a roofed map, lit by its lamps): a faint haze in the
+/// hull's colour ([`HALL_HAZE`]), where the sky's fog would paint the hall
+/// in the horizon's blue.
+pub fn hall_haze() -> DistanceFog {
+    DistanceFog {
+        color: Color::linear_rgb(HALL_HAZE[0], HALL_HAZE[1], HALL_HAZE[2]),
+        falloff: FogFalloff::ExponentialSquared {
+            density: HALL_HAZE_DENSITY,
+        },
+        ..default()
+    }
+}
+
 /// The sun's light at the ground where nothing else reddens it: the mood's
 /// colour, and where no atmosphere draws (it reddens and dims the sun on
 /// its way down itself, `pbr_lighting.wgsl`), the same air's transmittance
@@ -285,7 +303,11 @@ pub fn fog(
     if !mood.is_changed() && !tier.is_changed() && !shafts.is_changed() {
         return;
     }
-    let want = fog_for(&mood.mood, tier.atmosphere, shafts.volume);
+    let want = if mood.roofed {
+        hall_haze()
+    } else {
+        fog_for(&mood.mood, tier.atmosphere, shafts.volume)
+    };
     for mut f in cam.iter_mut() {
         *f = want.clone();
     }

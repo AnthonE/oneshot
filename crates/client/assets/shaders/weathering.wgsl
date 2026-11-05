@@ -13,7 +13,9 @@
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
+    mesh_view_bindings::view,
 }
+#import "shaders/shaft_march.wgsl"::{shaft_lost}
 
 struct Weather {
     // x amplitude, y fine frequency /m, z broad frequency /m, w the block's
@@ -23,7 +25,8 @@ struct Weather {
     streak: vec4<f32>,
     // rgb what a streak multiplies by.
     streak_tint: vec4<f32>,
-    // x strength, y reach up from the ground m, z the ground's height m.
+    // x strength, y reach up from the ground m, z the ground's height m,
+    // w 0 that height everywhere, 1 or 2 `ground_run` along local x or z.
     grime: vec4<f32>,
     // rgb what grime multiplies by.
     grime_tint: vec4<f32>,
@@ -35,10 +38,19 @@ struct Weather {
     // xyz the block's middle, w its shape: 0 no edges, 1 a box, 2 an
     // upright cylinder.
     centre: vec4<f32>,
-    // xyz half extents (a cylinder: x its radius, y half its height).
+    // xyz half extents (a cylinder: x its radius, y half its height); w the
+    // edges another box hides, as bits (`edge_distance`).
     half: vec4<f32>,
     // x, y: cos and sin of its turn about y (local +x is (c, 0, s)).
     turn: vec4<f32>,
+    // The ground under a long block at eight points end to end along the
+    // axis `grime.w` names (`weathering::Block::run`).
+    ground_run: array<vec4<f32>, 2>,
+    // WebGL2's light shafts (`shaft_march.wgsl`): the map's box, its mist
+    // and what a shaded ray takes back. `shaft_hi.w` 0: off.
+    shaft_lo: vec4<f32>,
+    shaft_hi: vec4<f32>,
+    shaft_tint: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> weather: Weather;
@@ -83,20 +95,28 @@ fn fbm(p: vec3<f32>, freq: f32, px: f32) -> f32 {
         + vnoise_aa(p + vec3<f32>(9.7), freq * 4.07, px) * 0.125) / 0.875;
 }
 
-// The middle of three.
-fn median3(a: f32, b: f32, c: f32) -> f32 {
-    return max(min(a, b), min(max(a, b), c));
-}
-
-// How far a point on the block's surface is from its nearest edge, m: the
-// second nearest of its faces (the nearest is the one it lies on). The
-// bottom's edges are left out, where a block meets what it stands on.
-fn edge_distance(p: vec3<f32>) -> f32 {
-    let shape = weather.centre.w;
+// A world point in the block's own frame (its middle at 0, unturned).
+fn local(p: vec3<f32>) -> vec3<f32> {
     let d = p - weather.centre.xyz;
     let c = weather.turn.x;
     let s = weather.turn.y;
-    let l = vec3<f32>(d.x * c + d.z * s, d.y, d.z * c - d.x * s);
+    return vec3<f32>(d.x * c + d.z * s, d.y, d.z * c - d.x * s);
+}
+
+// Edge `bit`'s distance `e`, unless another box hides that edge.
+fn edge_if(d: f32, mask: u32, bit: u32, e: f32) -> f32 {
+    return select(min(d, e), d, ((mask >> bit) & 1u) != 0u);
+}
+
+// How far a point on the block's surface is from its nearest edge, m: for
+// each edge the further of its two faces' planes (the point lies on one).
+// The bottom's edges are left out, where a block meets what it stands on,
+// and so are the ones another box hides or carries on (`half.w`'s bits,
+// `rock::hidden_edges`: 0..3 the top's at +x, -x, +z, -z; 4..7 the
+// uprights at (+x,+z), (+x,-z), (-x,+z), (-x,-z)).
+fn edge_distance(p: vec3<f32>) -> f32 {
+    let shape = weather.centre.w;
+    let l = local(p);
     let h = weather.half.xyz;
     let top = abs(h.y - l.y);
     if shape > 1.5 {
@@ -104,9 +124,41 @@ fn edge_distance(p: vec3<f32>) -> f32 {
         return max(abs(h.x - length(l.xz)), top);
     }
     if shape > 0.5 {
-        return median3(abs(h.x - abs(l.x)), top, abs(h.z - abs(l.z)));
+        let mask = u32(weather.half.w + 0.5);
+        let xp = abs(h.x - l.x);
+        let xn = abs(h.x + l.x);
+        let zp = abs(h.z - l.z);
+        let zn = abs(h.z + l.z);
+        var d = 1.0e4;
+        d = edge_if(d, mask, 0u, max(xp, top));
+        d = edge_if(d, mask, 1u, max(xn, top));
+        d = edge_if(d, mask, 2u, max(zp, top));
+        d = edge_if(d, mask, 3u, max(zn, top));
+        d = edge_if(d, mask, 4u, max(xp, zp));
+        d = edge_if(d, mask, 5u, max(xp, zn));
+        d = edge_if(d, mask, 6u, max(xn, zp));
+        d = edge_if(d, mask, 7u, max(xn, zn));
+        return d;
     }
     return 1.0e4;
+}
+
+// Where the grime starts under `p`: the ground's height under the block's
+// middle, or along a long block its run of samples, end to end.
+fn ground_under(p: vec3<f32>) -> f32 {
+    let axis = weather.grime.w;
+    if axis < 0.5 {
+        return weather.grime.z;
+    }
+    let l = local(p);
+    let along = select(l.x, l.z, axis > 1.5);
+    let h = select(weather.half.x, weather.half.z, axis > 1.5);
+    let t = clamp((along + h) / max(2.0 * h, 1.0e-4), 0.0, 1.0) * 7.0;
+    let i = min(u32(t), 6u);
+    let f = t - f32(i);
+    let a = weather.ground_run[i / 4u][i % 4u];
+    let b = weather.ground_run[(i + 1u) / 4u][(i + 1u) % 4u];
+    return mix(a, b, f);
 }
 
 @fragment
@@ -138,7 +190,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     c *= max(1.0 + weather.mottle.x * (1.6 * fine + 1.2 * broad), 0.0);
 
     // 2 · Grime toward the ground, in a ragged band: splash and soil.
-    let above = p.y - weather.grime.z;
+    let above = p.y - ground_under(p);
     let ragged = weather.grime.y * (0.6 + 0.8 * vnoise_aa(p + vec3<f32>(47.0), 0.8, px));
     let grime = (1.0 - smoothstep(0.0, ragged, above)) * weather.grime.x;
     c = mix(c, c * weather.grime_tint.rgb, clamp(grime, 0.0, 1.0));
@@ -184,5 +236,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         out.color = pbr_input.material.base_color;
     }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    // WebGL2's shafts: the sun's share of the mist taken back where this
+    // face's ray crossed shade.
+    if weather.shaft_hi.w > 0.0 {
+        let to = pbr_input.world_position.xyz - view.world_position;
+        let len = length(to);
+        let lost = shaft_lost(view.world_position, to / max(len, 1e-4), len, weather.shaft_lo, weather.shaft_hi, weather.shaft_tint, in.position.xy);
+        out.color = vec4(max(out.color.rgb - lost, vec3(0.0)), out.color.a);
+    }
     return out;
 }
