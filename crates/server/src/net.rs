@@ -195,6 +195,8 @@ pub fn admit(busy: usize, validated: bool, capacity: usize) -> Admit {
 /// The connections held, in all and per address and prefix.
 pub struct Gate {
     pub capacity: usize,
+    /// Addresses held to no share, as loopback isn't (`Config::load_sources`).
+    exempt: Vec<IpAddr>,
     conns: AtomicUsize,
     places: Mutex<(BTreeMap<IpAddr, u16>, BTreeMap<IpAddr, u16>)>,
 }
@@ -244,9 +246,16 @@ impl Gate {
     pub fn new(capacity: usize) -> Gate {
         Gate {
             capacity: capacity.max(1),
+            exempt: Vec::new(),
             conns: AtomicUsize::new(0),
             places: Mutex::new((BTreeMap::new(), BTreeMap::new())),
         }
+    }
+
+    /// The same, with `ips` held to no share (a load test's box).
+    pub fn exempting(mut self, ips: &[IpAddr]) -> Gate {
+        self.exempt = ips.iter().map(|ip| ip.to_canonical()).collect();
+        self
     }
 
     /// Connections held now, handshakes included.
@@ -256,9 +265,10 @@ impl Gate {
 
     /// A place for a connection from `ip`, or None if its address or prefix
     /// holds its share. Loopback is the box itself (tests, local bots) and
-    /// isn't counted per source.
+    /// isn't counted per source, nor is an exempt address.
     pub fn take(self: &Arc<Self>, ip: IpAddr) -> Option<Permit> {
-        let keys = if ip.to_canonical().is_loopback() {
+        let ip = ip.to_canonical();
+        let keys = if ip.is_loopback() || self.exempt.contains(&ip) {
             None
         } else {
             let (src, pre) = source_keys(ip);

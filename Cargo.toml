@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/sim", "crates/sim-wasm", "crates/proto", "crates/room", "crates/client-net", "crates/server", "tools/flow",
+    # A load test against a server: headless players on client-net (docs/SCALING.md).
+    "tools/load",
     # The game's mixer, and its browser audio thread (crates/client's sound).
     "crates/mix", "crates/mix-worklet",
     # Vendored from Gates (tools/fx-sync.sh): the effects engine with no Bevy in it.

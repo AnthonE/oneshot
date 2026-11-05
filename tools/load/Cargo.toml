@@ -1,0 +1,20 @@
+[package]
+name = "load"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A load test: many headless players on client-net's native transport against a server, and what its /health.json says while they play"
+
+[[bin]]
+name = "oneshot-load"
+path = "src/main.rs"
+
+[dependencies]
+sim = { path = "../../crates/sim" }
+proto = { path = "../../crates/proto" }
+room = { path = "../../crates/room" }
+client-net = { path = "../../crates/client-net", features = ["native"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
+# The server's own: rustls, so an https /health.json reads too.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json = "1"
