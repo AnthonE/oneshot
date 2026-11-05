@@ -25,8 +25,8 @@ use bevy::render::render_resource::{
 /// cloth.
 pub const GROUND: [&str; 4] = ["sand", "grass", "gravel", "rock"];
 pub const GROUND_TILE_M: [f32; 4] = [2.48, 2.51, 2.0, 9.6];
-/// The boxes' sets.
-pub const BOXES: [&str; 3] = ["concrete", "metal", "rock"];
+/// The boxes' sets: the last two a base's metal (`tools/ground.sh`).
+pub const BOXES: [&str; 5] = ["concrete", "metal", "rock", "steel", "tread"];
 
 #[derive(Resource, Default)]
 pub struct Textures {

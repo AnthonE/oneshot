@@ -32,17 +32,25 @@ use super::fresnel;
 use super::rock::Bare;
 use crate::level::{Dressed, LevelPart};
 
-/// The models: three blocks, then the sea stack.
-pub const GLB: [&str; 4] = [
+/// The models: three blocks, the sea stack, and a base's pylon.
+pub const GLB: [&str; 5] = [
     "models/rock/boulder_a.glb",
     "models/rock/boulder_b.glb",
     "models/rock/boulder_c.glb",
     "models/rock/sea_stack.glb",
+    "models/base/pylon.glb",
 ];
 /// How many of them are blocks, cut to a unit cube about its middle.
 pub const BLOCKS: usize = 3;
 /// The stack: 1 m tall on its base at the origin, scaled evenly.
 pub const STACK: usize = 3;
+/// The pylon: a slab of gunmetal cut to a unit cube like a block, its
+/// face along +z and its width along x. It sits [`PYLON_INSET_MEAN`] of its
+/// box's side inside it on average and [`PYLON_INSET_MAX`] at its chamfered
+/// top corners (`rocks.py`'s numbers for it).
+pub const PYLON_MODEL: usize = 4;
+pub const PYLON_INSET_MEAN: f32 = 0.093;
+pub const PYLON_INSET_MAX: f32 = 0.201;
 /// The size each block came at before it was squared up (x, up, z;
 /// `rocks.py`'s `native`): what says which boxes it suits.
 pub const NATIVE: [[f32; 3]; BLOCKS] = [[0.918, 1.0, 0.852], [0.734, 0.2, 0.304], [0.585, 1.0, 0.513]];
@@ -63,6 +71,10 @@ pub const TINT: [f32; 3] = [0.74, 0.62, 0.52];
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
 pub const WET_ROUGH: f32 = 0.45;
 pub const DRY_ROUGH: f32 = 0.92;
+/// The pylon's metal: brushed, not polished (a mirror under the open sky
+/// is white).
+pub const PYLON_ROUGH: f32 = 0.5;
+pub const PYLON_METAL: f32 = 0.85;
 
 /// A rock box waiting for its block.
 #[derive(Component, Clone, Copy, Debug)]
@@ -70,6 +82,28 @@ pub struct Boulder {
     pub min: Vec3,
     pub max: Vec3,
     pub key: u32,
+}
+
+/// A base's buttress waiting for its pylon: a turned box the sim collides
+/// (a `pylon` look's), where the model goes in it, and its bounds, kept
+/// clear of marks.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Pylon {
+    pub at: Transform,
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+/// Where a pylon is drawn in a turned box standing at `at` (its middle and
+/// its turn, the box's own x pointing out from the base): the model's face
+/// (+z) turned to the box's x, stretched over the box's half-extents `hx`
+/// out and `hz` across and its height `h`.
+pub fn pylon_transform(at: Transform, hx: f32, h: f32, hz: f32) -> Transform {
+    Transform {
+        translation: at.translation,
+        rotation: at.rotation * Quat::from_rotation_y(core::f32::consts::FRAC_PI_2),
+        scale: Vec3::new(2.0 * hz, h, 2.0 * hx),
+    }
 }
 
 /// A piece of scenery waiting for its model: which, and whether the sea
@@ -274,13 +308,15 @@ impl Stones {
         for (i, h) in self.paints.clone().iter().enumerate() {
             let base = mats.get(h)?.clone();
             let tinted = |t: [f32; 3], rough: f32| StandardMaterial {
-                base_color: if i == STACK {
+                // The stack keeps its own paint (its top is green), and
+                // the pylon is metal, as its own material says.
+                base_color: if i == STACK || i == PYLON_MODEL {
                     Color::WHITE
                 } else {
                     Color::linear_rgb(t[0], t[1], t[2])
                 },
-                perceptual_roughness: rough,
-                metallic: 0.0,
+                perceptual_roughness: if i == PYLON_MODEL { PYLON_ROUGH } else { rough },
+                metallic: if i == PYLON_MODEL { PYLON_METAL } else { 0.0 },
                 reflectance: fresnel::DIELECTRIC,
                 ..base.clone()
             };
@@ -295,6 +331,7 @@ impl Stones {
 /// Draw each boulder and each stone once the models are in: a boulder's
 /// block in place of its faceted box, kept clear of marks. If they cannot
 /// load, the boulders are handed back to `level::dress_level` as boxes.
+#[allow(clippy::too_many_arguments)]
 pub fn dress(
     mut commands: Commands,
     stones: Option<ResMut<Stones>>,
@@ -302,9 +339,10 @@ pub fn dress(
     meshes: Res<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     boulders: Query<(Entity, &Boulder)>,
+    pylons: Query<(Entity, &Pylon)>,
     props: Query<(Entity, &Stone), Without<Dressed>>,
 ) {
-    if boulders.is_empty() && props.is_empty() {
+    if boulders.is_empty() && pylons.is_empty() && props.is_empty() {
         return;
     }
     let Some(mut stones) = stones else {
@@ -329,6 +367,25 @@ pub fn dress(
             MeshMaterial3d(stones.dry[model].clone()),
             block_transform(b.min, b.max, quarters),
             Bare(b.min, b.max),
+            Dressed,
+        ));
+    }
+    for (e, p) in &pylons {
+        let mut ec = commands.entity(e);
+        ec.remove::<Pylon>();
+        if !ok {
+            continue;
+        }
+        ec.remove::<(
+            crate::level::BoxLook,
+            super::weathering::Block,
+            MeshMaterial3d<super::weathering::LevelMaterial>,
+        )>()
+        .insert((
+            Mesh3d(stones.meshes[PYLON_MODEL].clone()),
+            MeshMaterial3d(stones.dry[PYLON_MODEL].clone()),
+            p.at,
+            Bare(p.min, p.max),
             Dressed,
         ));
     }
@@ -425,6 +482,26 @@ mod tests {
                 "{q}: {lo} {hi}"
             );
         }
+    }
+
+    /// A pylon's cube is its turned box: its face along the box's own x
+    /// (out from the base), its width across.
+    #[test]
+    fn a_pylon_fills_its_turned_box() {
+        // A box 1.5 out and 2.0 across, turned a quarter (its x along +z).
+        let (hx, hz, h) = (0.75, 1.0, 6.0);
+        let rot = Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2);
+        let at = Transform::from_xyz(4.0, 3.0, 9.0).with_rotation(rot);
+        let t = pylon_transform(at, hx, h, hz);
+        // The model's face (+z, half a unit out) lands on the box's outer
+        // face: hx along the box's x, which is the world's +z here.
+        let face = t.transform_point(Vec3::new(0.0, 0.0, 0.5));
+        assert!((face - Vec3::new(4.0, 3.0, 9.0 + hx)).length() < 1e-4, "{face}");
+        // Its width (x, half a unit) reaches the box's side, hz across.
+        let side = t.transform_point(Vec3::new(0.5, 0.0, 0.0));
+        assert!(((side - Vec3::new(4.0, 3.0, 9.0)).length() - hz).abs() < 1e-4, "{side}");
+        // And its top the box's.
+        assert!((t.transform_point(Vec3::new(0.0, 0.5, 0.0)).y - 6.0).abs() < 1e-4);
     }
 
     /// The scenery is out of reach: nothing of it inside the playable

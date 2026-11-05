@@ -12,6 +12,13 @@
 # The size each photograph was taken at is `GROUND_TILE_M` in
 # crates/client/src/look/textures.rs: change both. tools/assets.mjs no
 # longer copies these four from Gates. Needs curl, python3 and ImageMagick.
+#
+# And the bases' metal, the same way from ambientCG (ambientcg.com, CC0):
+# `steel` (gunmetal plates, their seams and bolts) and `tread` (tread
+# plate, for a deck or a ramp), each with its roughness and occlusion as
+# the boxes' sets have them (`textures::BOXES`).
+#
+#   tools/ground.sh steel tread
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,7 +29,13 @@ SETS=(
   "gravel|rocky_trail|stones and pebbles in dirt, 2.0 m"
   "rock|cliff_side|bedded sandstone, its strata level, 1.83 m"
 )
+# our name | ambientCG's id | what it is
+METAL=(
+  "steel|MetalPlates004|dark gunmetal plates, seamed and bolted"
+  "tread|DiamondPlate008C|worn tread plate"
+)
 src=sources/polyhaven
+acg=sources/ambientcg
 out=crates/client/assets/textures
 px=1024
 
@@ -54,4 +67,28 @@ for row in "${SETS[@]}"; do
   # The photograph's mean in linear light: what the tints in look/ground.rs are set against.
   mean=$(convert "$out/${name}_albedo.jpg" -colorspace RGB -resize 1x1 -format '%[fx:r] %[fx:g] %[fx:b]' info:)
   printf '%-7s %-16s linear mean %s   (%s)\n' "$name" "$id" "$mean" "$what"
+done
+
+for row in "${METAL[@]}"; do
+  IFS='|' read -r name id what <<<"$row"
+  if [ $# -gt 0 ] && [[ ! " $* " =~ " $name " ]]; then continue; fi
+  d=$acg/${id}_1K-JPG
+  if [ ! -s "$d/${id}_1K-JPG_Color.jpg" ]; then
+    mkdir -p "$d"
+    curl -fsSL -m 300 -A oneshot-ground/1 "https://ambientcg.com/get?file=${id}_1K-JPG.zip" -o "$d.zip"
+    unzip -oq "$d.zip" -d "$d" && rm "$d.zip"
+  fi
+  f=$d/${id}_1K-JPG
+  convert "${f}_Color.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 84 "$out/${name}_albedo.jpg"
+  convert "${f}_NormalGL.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 90 "$out/${name}_normal.jpg"
+  convert "${f}_Roughness.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 84 "$out/${name}_rough.jpg"
+  # A set with no occlusion map of its own has none to speak of.
+  if [ -s "${f}_AmbientOcclusion.jpg" ]; then
+    convert "${f}_AmbientOcclusion.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 84 "$out/${name}_ao.jpg"
+  else
+    convert -size ${px}x${px} xc:white -colorspace Gray -strip -quality 84 "$out/${name}_ao.jpg"
+  fi
+  mean=$(convert "$out/${name}_albedo.jpg" -colorspace RGB -resize 1x1 -format '%[fx:r] %[fx:g] %[fx:b]' info:)
+  rough=$(convert "$out/${name}_rough.jpg" -resize 1x1 -format '%[fx:r]' info:)
+  printf '%-7s %-16s linear mean %s   roughness %s   (%s)\n' "$name" "$id" "$mean" "$rough" "$what"
 done

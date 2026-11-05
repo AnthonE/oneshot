@@ -34,6 +34,13 @@ import bmesh
 
 # name: its raw's slug
 BOULDERS = {'boulder_a': 'boulder-a', 'boulder_b': 'boulder-b', 'boulder_c': 'boulder-c'}
+# Built things cut the same way, to fill the box the sim collides: name:
+# (its raw's slug, how far it is pushed out to its cube, its folder under
+# models). The pylon is a base's buttress (a `pylon` look's turned box).
+BLOCKS = {'pylon': ('pylon', 0.2, 'base')}
+# A built thing's faces are flat and its edges hard: thinned as far as a
+# boulder, its panels buckle.
+BLOCK_TRIS = 9000
 STACKS = {'sea_stack': 'sea-stack'}
 # How far a boulder's surface is pushed out toward its cube, 0..1.
 FILL = 0.35
@@ -73,7 +80,7 @@ def load(slug):
     return o
 
 
-def low(hi, tris, name):
+def low(hi, tris, name, hard=False):
     """A thinned copy of `hi` with one map of its own, Meshy's mesh and paint
     baked onto it: (the copy, its colour's mean, linear)."""
     bpy.ops.object.select_all(action='DESELECT')
@@ -106,6 +113,11 @@ def low(hi, tris, name):
     o.data.validate(clean_customdata=False)
     for p in o.data.polygons:
         p.use_smooth = True
+    if hard:
+        # A built thing's faces meet at edges: smoothed across them, each
+        # flat panel is shaded as a pillow.
+        o.data.use_auto_smooth = True
+        o.data.auto_smooth_angle = math.radians(38)
     o.data.update()
 
     # A map of its own.
@@ -181,14 +193,14 @@ def low(hi, tris, name):
     return o, mean
 
 
-def export(o, name):
-    os.makedirs(OUT, exist_ok=True)
+def export(o, name, out=OUT):
+    os.makedirs(out, exist_ok=True)
     os.makedirs(SHEETS, exist_ok=True)
     sheet(o, os.path.join(SHEETS, name + '.png'), title=name)
     bpy.ops.object.select_all(action='DESELECT')
     o.select_set(True)
     bpy.context.view_layer.objects.active = o
-    path = os.path.join(OUT, name + '.glb')
+    path = os.path.join(out, name + '.glb')
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_apply=True, export_yup=True, use_selection=True,
                               export_image_format='JPEG', export_jpeg_quality=86, export_tangents=True)
     return path
@@ -202,7 +214,8 @@ def volume(o):
     return v
 
 
-def boulder(name, slug):
+def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=False):
+    fill = FILL if fill is None else fill
     scene()
     o = load(slug)
     lo, hi = bounds(o)
@@ -213,7 +226,7 @@ def boulder(name, slug):
     co = np.array([v.co[:] for v in o.data.vertices])
     far = np.abs(co).max(axis=1, keepdims=True)
     on_cube = co * (0.5 / np.maximum(far, 1e-6))
-    co = co + (on_cube - co) * FILL
+    co = co + (on_cube - co) * fill
     # Exactly the cube again: the push never leaves it, but a face it did
     # not reach is brought up to it.
     lo2, hi2 = co.min(axis=0), co.max(axis=0)
@@ -221,10 +234,13 @@ def boulder(name, slug):
     o.data.vertices.foreach_set('co', co.ravel())
     o.data.update()
     os.makedirs(SHEETS, exist_ok=True)
-    o, mean = low(o, BOULDER_TRIS, name)
+    o, mean = low(o, tris, name, hard)
+    if rough is not None:
+        for material in o.data.materials:
+            next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED').inputs['Roughness'].default_value = rough
     co = np.array([v.co[:] for v in o.data.vertices])
     inset = 0.5 - np.abs(co).max(axis=1)
-    path = export(o, name)
+    path = export(o, name, out)
     # Blender's (x, y, z) leaves as glTF's (x, z, −y): the size it came at,
     # in the client's axes (x, up, z).
     info = {
@@ -271,6 +287,9 @@ if __name__ == '__main__':
     for name, slug in BOULDERS.items():
         if not want or name in want:
             boulder(name, slug)
+    for name, (slug, fill, folder) in BLOCKS.items():
+        if not want or name in want:
+            boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True)
     for name, slug in STACKS.items():
         if not want or name in want:
             stack(name, slug)

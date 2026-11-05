@@ -50,7 +50,8 @@ Read a view against this list, top down; the first line that fails over a large 
 - **A texture set.** `tools/ground.sh` fetches a CC0 set from Poly Haven into `sources/polyhaven` and cuts it; it prints the photograph's mean, which the tint in `ground::TINT` is set against, and the size it was shot at goes in `GROUND_TILE_M`. A cliff wants its rock far larger than life (a bed a metre thick reads from the floor; at its own size a wall is one value).
 - **A rock or a prop.** Commission it (`tools/models/meshy_gen.py <slug> --multiview --tris 12000 --image-prompt "…"`: the picture first with `--image-only`, look at it, then the mesh; about 40 credits), cut it (`tools/models/rocks.py`: thinned as a copy with its own map, Meshy's paint baked onto it), then give it a place: `boulders::GLB` and, for scenery, a line in `boulders::scenery`.
 - **The terrain's own shape.** The canyon is one height function (`maps/canyon/map.json`'s `canyon` block, `tools/maps/compile.mjs`). Above where anyone can stand (the cliff's knots past 42 m, `mesa`, `crags`) it is the skyline's to shape: change it, `node tools/maps/compile.mjs`, diff the compiled heights to see nothing reachable moved, then `cargo test -p sim --test determinism` (Dry Fork's golden moves with any ray that meets the new rock: update it in the same commit) and `--test maps`. Twenty seconds, both.
-- **A structure's trim.** A prefab placed with `"dress": true` is drawn and never collided: keep it a hand proud of the boxes it dresses, and nothing thick at head height where someone stands.
+- **A structure.** Dry Fork's bases are curved solids the sim collides (`maps/canyon/map.json`, "red's base": `lathe` walls with a battered face, `deck`s, `arc`s, `column`s, a `ramp`), in a base's metal looks (`steel`, `steel_red`/`steel_blue`, `tread`: `tools/ground.sh steel tread` cuts their sets from ambientCG, `level::dress` tints them) and a `pylon` look (a turned box drawn as the Meshy pylon inside it, `boulders::Pylon`). A change there is a layout change: `cargo test -p sim --test maps` (spawns clear, everything walked to, the roof by its ramp) and the golden, both in seconds.
+- **A structure's trim.** A structure with `"dress": true` is drawn and never collided (the bases' light rings, the slivers of light in their pylons): keep it a hand proud of what it dresses, and nothing thick at head height where someone stands.
 - **Where things grow.** `grass::by_height` and `cover`, `clutter`'s `Grows` and `drift`. The ground's colour and its tufts read the same rule.
 - **A shader.** No rebuild; shoot again. A number the shader holds is a `const` at its top with why.
 - **The air and the light.** A map's mood (`mood.rs`), one for every player on it.
@@ -64,6 +65,11 @@ Read a view against this list, top down; the first line that fails over a large 
 - **Assets are ours, CC0 or CC-BY**, credited in NOTICE; the raw download stays in `sources/` (git-ignored) and a tool makes the cut that ships.
 
 ## Traps
+
+- **A deck's rolled rim can't be stepped onto.** `"rim"` rounds a `deck`'s edge, and a steep top is never floor: a floor 12 cm up with a rim was a ring nobody could cross, and a roof with one could not be reached from its ramp. Leave `rim` off any deck that is walked onto from its side.
+- **A floor's height must be exact in f32** (0.125, not 0.15): `maps.rs` wants a spawn's `y` to equal its floor's to the bit.
+- **Thinning a built thing buckles it.** A hard-surface mesh wants a light push to its cube, three times a boulder's triangles and its hard edges kept (`rocks.py`'s `BLOCKS`, `hard`).
+- **`Surface::Steel` rusts in streaks**, which on a curved wall read as wood grain: a base's plate weathers as `Surface::Plate`.
 
 - **A debug client's sky is not the game's.** `deck::DETAIL_N` and `sky::FIELD_N` are cut down in a debug build, so its clouds are smooth lumps. Judge the sky with the release client (`cd crates/client && cargo build --release`, then `ONESHOT_BIN=…`).
 - **TAA softens the whole frame**; the sharpening after it is what a still is judged with. Compare rungs with `HD_QUALITY=low`.

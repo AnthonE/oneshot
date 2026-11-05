@@ -14,9 +14,10 @@ is commissioned from Meshy on a paid plan and owned outright, from our own
 prompt (in its script in tools/models, which cuts the mesh it gets with
 Blender: sized, turned, its maps made smaller and re-encoded as JPEG); no
 attribution is owed. The boulders and the sea stack (models/rock,
-boulder_*.glb, sea_stack.glb) are ours on the same terms: commissioned
-from Meshy from our own prompts and cut by tools/models/rocks.py (squared
-up, thinned, their paint baked onto a map of their own).
+boulder_*.glb, sea_stack.glb) and the bases' pylon (models/base/pylon.glb)
+are ours on the same terms: commissioned from Meshy from our own prompts
+and cut by tools/models/rocks.py (squared up, thinned, their paint baked
+onto a map of their own).
 
 The truck (models/truck.glb) is "Tesla Cybertruck" (https://skfb.ly/6QSBr)
 by hashikemu, licensed under Creative Commons Attribution 4.0
@@ -109,12 +110,14 @@ under the MIT licence:
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Textures in the Bevy client (crates/client/assets/textures: sand, grass,
-gravel, rock, concrete, metal; colour and normal maps, and for the rock and
-the boxes' sets roughness and occlusion) are CC0. The ground's four are cut
-from Poly Haven (polyhaven.com) by tools/ground.sh: gravelly_sand (Dario
-Barresi), grass_ground (Charlotte Baglioni), rocky_trail (Amal Kumar) and
-cliff_side (photography James Ray Cock and Dario Barresi, processing
-Jenelle van Heerden). The boxes' two are copied from Gates by
+gravel, rock, concrete, metal, steel, tread; colour and normal maps, and
+for the rock and the boxes' sets roughness and occlusion) are CC0. The
+ground's four are cut from Poly Haven (polyhaven.com) by tools/ground.sh:
+gravelly_sand (Dario Barresi), grass_ground (Charlotte Baglioni),
+rocky_trail (Amal Kumar) and cliff_side (photography James Ray Cock and
+Dario Barresi, processing Jenelle van Heerden). The bases' two are cut
+from ambientCG (ambientcg.com) by the same tool: MetalPlates004 (steel) and
+DiamondPlate008C (tread). The boxes' other two are copied from Gates by
 tools/assets.mjs: Poly Haven's concrete_wall_003 and ambientCG's
 (ambientcg.com) CorrugatedSteel009; and the grass card atlas is from Poly
 Haven's grass_medium_01 (baked by Gates). No attribution is required;

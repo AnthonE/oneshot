@@ -223,13 +223,13 @@ pub fn by_height(y: f32) -> f32 {
 /// the middle hill, to the hill on each side, and round to the truck bays:
 /// where everyone runs, the grass is gone.
 const TRAILS: [[f32; 4]; 9] = [
-    [-93.0, 0.0, -62.0, 3.0],
+    [-89.0, 0.0, -62.0, 3.0],
     [-62.0, 3.0, -34.0, -5.0],
     [-34.0, -5.0, -4.0, 0.0],
-    [-93.0, -3.0, -84.0, -20.0],
+    [-100.0, -10.0, -84.0, -20.0],
     [-84.0, -20.0, -66.0, -28.0],
     [-66.0, -28.0, -36.0, -34.0],
-    [-93.0, 3.0, -82.0, 20.0],
+    [-100.0, 10.0, -82.0, 20.0],
     [-82.0, 20.0, -60.0, 28.0],
     [-60.0, 28.0, -30.0, 30.0],
 ];
@@ -238,8 +238,18 @@ const TRAILS: [[f32; 4]; 9] = [
 const TRAIL_M: (f32, f32) = (1.1, 3.2);
 const TRAIL_WANDER_M: f32 = 5.0;
 
+/// A base stands on worn ground: bare this far from its middle (red's,
+/// and blue's its mirror), grown over again by the second, metres.
+const BASE_AT: [f32; 2] = [-100.0, 0.0];
+const BASE_APRON_M: (f32, f32) = (11.5, 15.5);
+
 /// How much of a trail (x, z) is on, 0..1: 1 on its line, 0 clear of it.
 pub fn trail(x: f32, z: f32) -> f32 {
+    let from_base = Vec2::new(-x.abs() - BASE_AT[0], z - BASE_AT[1]).length();
+    let apron = 1.0 - ((from_base - BASE_APRON_M.0) / (BASE_APRON_M.1 - BASE_APRON_M.0)).clamp(0.0, 1.0);
+    if apron >= 1.0 {
+        return 1.0;
+    }
     // The line wanders: the point is read a few metres off where it is,
     // by the meadow's own noise, the same on both halves.
     let ax = x.abs();
@@ -253,7 +263,7 @@ pub fn trail(x: f32, z: f32) -> f32 {
         let k = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
         near = near.min((p - (a + ab * k)).length());
     }
-    1.0 - ((near - TRAIL_M.0) / (TRAIL_M.1 - TRAIL_M.0)).clamp(0.0, 1.0)
+    (1.0 - ((near - TRAIL_M.0) / (TRAIL_M.1 - TRAIL_M.0)).clamp(0.0, 1.0)).max(apron)
 }
 
 /// How much grass grows at (x, z) at height `y`, by its height, its patch
@@ -283,8 +293,13 @@ fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32) -> Option<(f32, f32)> {
     if y < -0.12 {
         return Some((0.0, DUNE_DRY));
     }
+    // Nothing on a trail or a base's apron, dry tufts included.
+    let worn = trail(x, z);
+    if worn >= 0.95 {
+        return None;
+    }
     let green = cover(x, z, y);
-    Some((green, 0.07))
+    Some((green, 0.07 * (1.0 - worn)))
 }
 
 /// Smooth value noise over the ground plane, in [0, 1]: the patches a

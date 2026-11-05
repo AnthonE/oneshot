@@ -93,9 +93,23 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
         DECK => ("deck", 4.0, Color::WHITE),
         GOLD => ("gold", 1.2, Color::WHITE),
+        // A base's metal: gunmetal plate lifted to a mid steel, the same
+        // under a side's paint, and tread plate.
+        STEEL => ("steel", 3.0, Color::linear_rgb(1.7, 1.72, 1.78)),
+        STEEL_RED => ("steel", 3.0, Color::linear_rgb(4.6, 1.0, 0.8)),
+        STEEL_BLUE => ("steel", 3.0, Color::linear_rgb(0.9, 1.5, 4.2)),
+        TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
         _ => return None,
     })
 }
+
+/// A base's metal (tools/maps/compile.mjs LOOKS): its plate, its plate in
+/// each side's paint, its tread plate; and a turned box drawn as a pylon.
+pub const PYLON: u8 = 25;
+const STEEL: u8 = 26;
+const STEEL_RED: u8 = 27;
+const STEEL_BLUE: u8 = 28;
+const TREAD: u8 = 29;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -125,6 +139,11 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
         (12..=15 | RIB, _) => (1.0, 0.7),
         (DECK, _) => (1.0, 0.55),
         (GOLD, _) => (1.0, 0.9),
+        // Bare plate is metal through and through; paint over it mostly
+        // is not; tread plate is worn dull.
+        (STEEL, _) => (0.62, 0.85),
+        (STEEL_RED | STEEL_BLUE, _) => (0.7, 0.3),
+        (TREAD, _) => (0.75, 0.8),
         (_, "metal") => (0.55, 0.35),
         _ => (0.9, 0.0),
     };
@@ -142,6 +161,7 @@ fn surface(look: u8) -> Surface {
     match look {
         1 | 5 => Surface::Steel,
         3 | 4 | 7 | 11 => Surface::Paint,
+        PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB => Surface::Hull,
@@ -367,7 +387,12 @@ fn turned_mesh(size: Vec3, mid: Vec3, rot: Quat, tile: f32) -> Mesh {
 }
 
 /// A box still in its plain colour (a mass waits for its pieces first).
-type Undressed = (Without<Dressed>, Without<Mass>, Without<crate::look::boulders::Boulder>);
+type Undressed = (
+    Without<Dressed>,
+    Without<Mass>,
+    Without<crate::look::boulders::Boulder>,
+    Without<crate::look::boulders::Pylon>,
+);
 
 /// The level's ground and boxes in their textures, once those are ready:
 /// the ground (and its rock skin) in the splat material, every textured
@@ -525,12 +550,16 @@ fn look(i: u8) -> (Color, f32, f32) {
         DECK => (Color::srgb(0.1, 0.1, 0.13), 0.6, 0.5),
         GOLD => (Color::srgb(0.9, 0.7, 0.3), 0.3, 0.3),
         8..=10 | 20 | 21 => (strip(i).unwrap_or(Color::WHITE), 0.3, 0.0),
-        0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0),  // wall
-        1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2),  // block
-        2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4),  // trim
-        3 => (Color::srgb(0.54, 0.33, 0.31), 0.6, 0.2),  // red
-        4 => (Color::srgb(0.31, 0.39, 0.54), 0.6, 0.2),  // blue
-        5 => (Color::srgb(0.29, 0.31, 0.34), 0.7, 0.2),  // dark
+        0 => (Color::srgb(0.54, 0.56, 0.59), 0.9, 0.0), // wall
+        1 => (Color::srgb(0.62, 0.64, 0.67), 0.6, 0.2), // block
+        2 => (Color::srgb(0.79, 0.64, 0.15), 0.5, 0.4), // trim
+        3 => (Color::srgb(0.54, 0.33, 0.31), 0.6, 0.2), // red
+        4 => (Color::srgb(0.31, 0.39, 0.54), 0.6, 0.2), // blue
+        5 => (Color::srgb(0.29, 0.31, 0.34), 0.7, 0.2), // dark
+        PYLON | STEEL => (Color::srgb(0.42, 0.44, 0.47), 0.55, 0.8),
+        STEEL_RED => (Color::srgb(0.6, 0.24, 0.2), 0.6, 0.3),
+        STEEL_BLUE => (Color::srgb(0.22, 0.32, 0.6), 0.6, 0.3),
+        TREAD => (Color::srgb(0.34, 0.35, 0.37), 0.7, 0.8),
         _ => (Color::srgb(0.61, 0.33, 0.21), 0.95, 0.0), // rock
     }
 }
@@ -1088,6 +1117,15 @@ pub fn build(
             e.insert(bevy::light::NotShadowCaster);
         } else {
             e.insert((BoxLook(l), block));
+        }
+        // A base's buttress: a pylon inside its turned box, once the
+        // models are in (`look/boulders.rs`).
+        if let (PYLON, sim::solid::Shape::Turned { hx, hz, .. }) = (l, sol.shape) {
+            e.insert(crate::look::boulders::Pylon {
+                at: crate::look::boulders::pylon_transform(at, hx, sol.y1 - sol.y0, hz),
+                min: v3(bounds.min),
+                max: v3(bounds.max),
+            });
         }
     }
     for &(p, c, lm) in map.light.lamps {
