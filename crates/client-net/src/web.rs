@@ -181,6 +181,8 @@ pub struct Client {
     transport: WebTransport,
     datagrams: WebTransportDatagramDuplexStream,
     writer: WritableStreamDefaultWriter,
+    /// The stream's writer: what a watcher asks goes out on it.
+    stream: Rc<WritableStreamDefaultWriter>,
     inbox: Queue<(f64, Vec<u8>)>,
     msgs: Queue<Msg>,
     closed: Rc<RefCell<bool>>,
@@ -241,12 +243,10 @@ impl Client {
             .await
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
-        let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        write_frame(
-            &sw,
-            &Session::hello(&name, pass, mode, proto::Look { skin, emblem }, party),
-        )
-        .await?;
+        let sw = Rc::new(bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?);
+        let hello = Session::hello(&name, pass, mode, proto::Look { skin, emblem }, party);
+        write_frame(&sw, &hello).await?;
+        let stream = sw.clone();
         let mut reader = FrameReader::new(&bidi.readable())?;
 
         let msgs: Queue<Msg> = Rc::default();
@@ -322,10 +322,11 @@ impl Client {
         }
         let writer = datagram_writer(&datagrams)?;
         Ok(Client {
-            session: Session::new(),
+            session: Session::for_hello(&hello),
             transport,
             datagrams,
             writer,
+            stream,
             inbox,
             msgs,
             closed,
@@ -421,6 +422,12 @@ impl Client {
             writer: &self.writer,
         };
         self.session.update(now, input, &mut wire);
+        for m in self.session.take_outgoing() {
+            let sw = self.stream.clone();
+            spawn_local(async move {
+                let _ = write_frame(&sw, &m).await;
+            });
+        }
     }
 
     /// Our own fighter, drawn: x y z, eye height, yaw, pitch (radians),

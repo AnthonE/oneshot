@@ -158,8 +158,6 @@ pub fn warm_models(
     models: Option<Res<Models>>,
     assets: Res<AssetServer>,
     eye: Query<Entity, With<Eye>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
     if *done {
         return;
@@ -170,10 +168,18 @@ pub fn warm_models(
     let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
     scenes.extend([models.rocket.clone(), models.frag.clone(), models.body_scene.clone()]);
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
-    if !scenes.iter().all(settled) {
+    if !scenes.iter().all(settled) || !settled(&models.truck) {
         return;
     }
     *done = true;
+    // A truck, smaller still for its size: its steel and trim are materials
+    // of its own that wear (`truck.rs`), made when its scene is in, which
+    // says when this may count down.
+    let small = Transform::from_xyz(0.0, 0.0, -WARM_AHEAD_M).with_scale(Vec3::splat(WARM_SIZE_M / 6.0));
+    let truck = commands
+        .spawn((Warming(WARM_FRAMES), small, Visibility::default(), ChildOf(eye)))
+        .id();
+    super::truck::spawn(&mut commands, &models, truck);
     for scene in scenes.iter().take(scenes.len() - 1) {
         commands
             .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))
@@ -186,12 +192,12 @@ pub fn warm_models(
     // neither it nor its shadow (cast down, away from the floor) can be
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
-    // In an emblem, so its cut-out pipeline is built here too.
+    // In an emblem, so the paint's first mask is baked here too.
     let look = proto::Look {
         skin: 0,
         emblem: proto::emblem(1, 1, 0, 4),
     };
-    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, look);
+    let body = super::bodies::spawn(&mut commands, &models, 0, look);
     commands
         .entity(body)
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));

@@ -4,6 +4,7 @@
 // party and friends, the queue's wait and everything after are the game's
 // (crates/client/src/front.rs, party.rs).
 import { Voice, voiceWorks } from './voice.js';
+import { startMix } from './mix.js';
 
 // The game is two modules (ci/client.sh), picked below before either
 // downloads: `oneshot_client_gpu` draws through WebGPU, the desktop's
@@ -137,6 +138,8 @@ async function load(gfx) {
   const glue = await import(m.js + v);
   await glue.default({ module_or_path: res });
   window.__oneshotGfx = gfx;
+  // The game's sound (mix.js), once, before the game starts asking for it.
+  if (!window.__oneshotMix) startMix(v);
   return glue;
 }
 /* Back into the WebGL2 module, once: the failure is written against

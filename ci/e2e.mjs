@@ -177,6 +177,7 @@ try {
   mkdirSync('traces', { recursive: true });
   await page.screenshot({ path: `traces/e2e-${mode}-${map}.png` });
   console.log(JSON.stringify(s));
+  const mixed = await page.evaluate(() => window.__oneshotMix?.stats() ?? null);
   const [snaps = 0, conf = 0, corr = 0] = s?.stats ?? [];
   const b = base ?? [conf, conf, corr];
   const counted = conf - b[1] + corr - b[2];
@@ -193,6 +194,20 @@ try {
     ['snapshots flowed', snaps > 200],
     ['scored a kill', (s?.kills ?? 0) >= 1],
     [`drew with the WebGL2 module (${s?.gfx}: ${s?.tier})`, s?.gfx === 'webgl2'],
+    // The sound (crates/client/src/sound): clips handed to the mixer and
+    // cues sent it; on the browser's audio thread (web/mix.js), the context
+    // running, the clips decoded, blocks rendered, voices started, nothing
+    // thrown there.
+    [`sound: ${s?.sound?.[0]} clips handed, ${s?.sound?.[1]} loading, ${s?.sound?.[2]} commands`,
+      (s?.sound?.[0] ?? 0) > 100 && (s?.sound?.[1] ?? 99) <= 5 && (s?.sound?.[2] ?? 0) > 30],
+    // The announcer (sound/mod.rs): the mode as the countdown starts, and
+    // our kill is the lead taken.
+    [`the announcer spoke of the match (${s?.sound?.[3]} lines)`, (s?.sound?.[3] ?? 0) >= 1],
+    [`the audio thread: ${JSON.stringify(mixed)}`,
+      mixed?.state === 'running' && mixed.installed > 100 && mixed.failed === 0 && mixed.errors === 0
+        && (mixed.mixer?.[0] ?? 0) > 100 && (mixed.mixer?.[1] ?? 0) > 10
+        // Big Team's maps have wind, held all match long.
+        && (mode !== 6 || (mixed.mixer?.[6] ?? 0) >= 1)],
   );
 } catch (e) {
   errors.push(String(e));

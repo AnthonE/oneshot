@@ -52,6 +52,58 @@ pub const ACT_PLAYING: u8 = 7;
 pub const ACT_FRIENDS: u8 = 8;
 pub const START_PRIVATE: u32 = 0x100;
 
+/// A private match's own settings, in [`ACT_START`]'s arg above the mode
+/// and [`START_PRIVATE`] (a public room plays its mode as it is): the map
+/// (its id + 1 in bits 16..24; 0, the server picks), the score to win (an
+/// index into [`SCORE_LIMITS`] in 24..28) and the clock (an index into
+/// [`TIME_LIMITS_MIN`] in 28..32). Index 0 is the mode's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Custom {
+    pub map: Option<u8>,
+    pub score: u8,
+    pub time: u8,
+}
+
+/// Scores to win a private match may take (0: the mode's own; the last: no
+/// limit, the clock decides).
+pub const SCORE_LIMITS: [i32; 10] = [0, 1, 3, 5, 10, 15, 25, 50, 100, i32::MAX];
+/// Clocks in minutes (0: the mode's own; the last: none).
+pub const TIME_LIMITS_MIN: [u32; 8] = [0, 5, 10, 15, 20, 30, 60, u32::MAX];
+
+impl Custom {
+    pub fn from_arg(arg: u32) -> Custom {
+        let map = (arg >> 16) as u8;
+        Custom {
+            map: map.checked_sub(1),
+            score: ((arg >> 24) & 0xf) as u8 % SCORE_LIMITS.len() as u8,
+            time: (arg >> 28) as u8 % TIME_LIMITS_MIN.len() as u8,
+        }
+    }
+
+    pub fn to_arg(&self) -> u32 {
+        let map = self.map.map_or(0, |m| m as u32 + 1) & 0xff;
+        map << 16 | (self.score as u32 & 0xf) << 24 | (self.time as u32 & 0xf) << 28
+    }
+
+    /// Whether anything differs from the mode's own.
+    pub fn any(&self) -> bool {
+        *self != Custom::default()
+    }
+
+    /// The score to win, if not the mode's own.
+    pub fn score_limit(&self) -> Option<i32> {
+        (self.score > 0).then(|| SCORE_LIMITS[self.score as usize])
+    }
+
+    /// The clock in ms (0: none), if not the mode's own.
+    pub fn time_limit_ms(&self) -> Option<u32> {
+        (self.time > 0).then(|| match TIME_LIMITS_MIN[self.time as usize] {
+            u32::MAX => 0,
+            m => m * 60_000,
+        })
+    }
+}
+
 /// In no match: in the menu.
 pub const PLAYING_NONE: u8 = 15;
 
@@ -290,5 +342,30 @@ mod tests {
         assert_eq!(code_parse("ABCDEFG"), None);
         assert_eq!(code_parse("ABCDE0"), None, "0 isn't a letter of a code");
         assert_eq!(code_parse("222222"), None, "zero is no code");
+    }
+}
+
+#[cfg(test)]
+mod custom_tests {
+    use super::*;
+
+    #[test]
+    fn a_private_matchs_settings_ride_the_start_and_keep_the_mode() {
+        let c = Custom {
+            map: Some(5),
+            score: 2,
+            time: 7,
+        };
+        let arg = crate::MODE_CTF as u32 | START_PRIVATE | c.to_arg();
+        assert_eq!(arg & 0xff, crate::MODE_CTF as u32);
+        assert_ne!(arg & START_PRIVATE, 0);
+        assert_eq!(Custom::from_arg(arg), c);
+        assert_eq!(c.score_limit(), Some(3));
+        assert_eq!(c.time_limit_ms(), Some(0), "no clock");
+        assert_eq!(Custom::from_arg(START_PRIVATE), Custom::default());
+        assert!(!Custom::default().any());
+        // Out-of-range indexes never index past the tables.
+        let wild = Custom::from_arg(0xffff_0000);
+        assert!((wild.score as usize) < SCORE_LIMITS.len() && (wild.time as usize) < TIME_LIMITS_MIN.len());
     }
 }

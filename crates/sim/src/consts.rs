@@ -17,8 +17,9 @@ pub const fn ticks(ms: u32) -> u32 {
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
-/// Weapon pads on a map (the Range has one of every gun).
-pub const MAX_PADS: usize = 16;
+/// Weapon and power-up pads on a map (the Range has one of every gun
+/// and power-up).
+pub const MAX_PADS: usize = 24;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
 /// Boxes and solids in a map, together (`tools/maps/compile.mjs` holds
@@ -100,6 +101,28 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
+
+// Power-ups (arms::OVERSHIELD, arms::CAMO), on pads, taken by walking on.
+/// The overshield: shields climb to three times full (Halo 2's), at
+/// `OVERSHIELD_RATE` points a second from wherever they were (health whole
+/// at once), then drain at `OVERSHIELD_DRAIN` back to full: 40 s from the
+/// top. Above full, shields never recharge; below it they do as ever.
+pub const OVERSHIELD_MAX: i32 = 3 * SHIELD_MAX;
+pub const OVERSHIELD_RATE: i32 = 100;
+pub const OVERSHIELD_DRAIN: i32 = 5;
+/// Active camouflage lasts this long. Moving faster than `CAMO_WALK` shows
+/// a body, fully at `CAMO_RUN` and over; firing, a throw, a blow or taking
+/// a hit shows it whole for `CAMO_FLARE_MS`, fading.
+pub const CAMO_MS: u32 = 45_000;
+pub const CAMO_WALK: f32 = 2.0;
+pub const CAMO_RUN: f32 = 9.0;
+pub const CAMO_FLARE_MS: u32 = 1200;
+/// How hidden a camouflaged body still standing is: never all the way.
+pub const CAMO_BEST: f32 = 0.92;
+/// A bot doesn't make out a camouflaged enemy hidden past
+/// `CAMO_BOT_HIDDEN` farther than `CAMO_BOT_M`.
+pub const CAMO_BOT_HIDDEN: f32 = 0.6;
+pub const CAMO_BOT_M: f32 = 12.0;
 /// Where someone comes back (`World::respawn`): of the spawns their side
 /// may use, the one whose nearest living enemy is farthest, counted only
 /// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see
@@ -228,16 +251,26 @@ pub const DROP_TOSS: f32 = 1.5;
 /// A drop below this height has fallen out of the world.
 pub const DROP_LOST_Y: f32 = -50.0;
 
-// Vehicles (sim/src/vehicle.rs): one kind so far, a light four-wheeler for
-// a driver and a passenger who shoots.
+// Vehicles (sim/src/vehicle.rs): one kind so far, a truck for a driver in
+// its cab and a passenger who shoots from its bed. Its box is the model the
+// client draws (`models/truck.glb`, `look/truck.rs`).
 /// Vehicles on a map at once.
 pub const MAX_VEHICLES: usize = 8;
 /// Half the hull's length and width, and its height above the ground.
-pub const VEH_HALF_L: f32 = 2.2;
+pub const VEH_HALF_L: f32 = 2.86;
 pub const VEH_HALF_W: f32 = 1.1;
-pub const VEH_H: f32 = 1.5;
-/// The hull meets boxes as two circles this far fore and aft of its middle.
-pub const VEH_HULL_OFF: f32 = 1.1;
+pub const VEH_H: f32 = 1.84;
+/// What of it stops a shot (`Vehicle::ray`): its steel, never its glass.
+/// The body to the windows' sill, its whole length; and behind the cab
+/// (from this far aft of its middle), the bed's sides to their rail. A
+/// driver's head and shoulders are over the one, behind glass; a
+/// passenger's chest and head over the other.
+pub const VEH_SILL: f32 = 1.25;
+pub const VEH_BED_X: f32 = -0.84;
+pub const VEH_BED_H: f32 = 1.45;
+/// The hull meets boxes as three circles: one at its middle, and one this
+/// far fore and aft of it (to its nose and its tail).
+pub const VEH_HULL_OFF: f32 = 1.76;
 pub const VEH_HULL_R: f32 = 1.1;
 /// Driving, per second: throttle, braking against the way it rolls, top
 /// speed forward and back, rolling drag (a fraction of speed), sideways
@@ -261,11 +294,23 @@ pub const VEH_STEP: f32 = 0.6;
 pub const VEH_SNAP: f32 = 0.4;
 /// Hit points (in `PT`s, like a fighter's).
 pub const VEH_HEALTH: i32 = 900 * PT;
-/// How near a fighter must stand to get in.
-pub const ENTER_R: f32 = 3.0;
+/// How near its middle a fighter must stand to get in: at its nose or its
+/// tail it still can.
+pub const ENTER_R: f32 = 3.6;
 /// Faster than this, it runs a fighter down; past `SPLAT_KILL` the hit is
 /// lethal, below it scaled.
 pub const SPLAT_SPEED: f32 = 5.0;
 pub const SPLAT_KILL: f32 = 11.0;
 /// How much of a blast's push a vehicle takes.
 pub const VEH_PUSH_K: f32 = 0.3;
+
+// Capture the Flag.
+/// How near (flat) a fighter must come to a flag to take, return or score
+/// it, and how far above or below.
+pub const FLAG_REACH: f32 = 1.2;
+pub const FLAG_RISE: f32 = 2.0;
+/// A flag left on the floor goes home on its own after this.
+pub const FLAG_RETURN_MS: u32 = 30_000;
+/// Nobody takes a flag in its first second on the floor, so a carrier who
+/// lets go doesn't pick it straight back up.
+pub const FLAG_REGRAB_MS: u32 = 1000;

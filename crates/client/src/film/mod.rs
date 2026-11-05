@@ -432,7 +432,9 @@ fn as_player(link: NonSend<LinkRes>, mut look: ResMut<Look>) {
     let turn = core::f32::consts::TAU / 65536.0;
     look.yaw = f.yaw as f32 * turn;
     look.pitch = f.pitch as f32 * turn;
+    // The wire says scoped, not how far: the first level.
     look.zoom = f.alive && f.last_buttons & sim::input::ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+    look.level = look.zoom as u8;
 }
 
 /// A point `[x, above ground, z]` in metres.
@@ -747,7 +749,7 @@ fn mixdown(
     cues: Res<crate::sound::Cues>,
     cam: Query<&GlobalTransform, With<EyeCam>>,
     #[cfg(target_arch = "wasm32")] clips: Option<Res<crate::sound::on::Clips>>,
-    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<bevy::audio::AudioSource>>>,
+    #[cfg(target_arch = "wasm32")] sources: Option<Res<Assets<crate::sound::on::Sound>>>,
 ) {
     let ear = cam.iter().next().copied().unwrap_or_default();
     #[cfg(not(target_arch = "wasm32"))]

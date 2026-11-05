@@ -57,8 +57,9 @@ struct PartyState {
     seats: Vec<Seat>,
     invited: BTreeSet<String>,
     kicked: BTreeSet<String>,
-    /// What the leader last started, and whether the party plays alone.
-    started: Option<(u8, bool)>,
+    /// What the leader last started, whether the party plays alone, and
+    /// (alone) its own settings.
+    started: Option<(u8, bool, pp::Custom)>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,6 +79,8 @@ pub struct Seating {
     pub code: u32,
     pub size: u8,
     pub private: bool,
+    /// A private match's own map, score and clock (`pp::Custom`).
+    pub custom: pp::Custom,
 }
 
 /// The sessions a talker's voice goes to: the rest of its party, held
@@ -108,6 +111,7 @@ pub fn fits(mode: u8, n: usize, wallets: usize) -> bool {
         proto::MODE_DOUBLES => n <= 2 && wallets == n,
         proto::MODE_CUP => wallets == n,
         proto::MODE_FFA | proto::MODE_GUN_GAME => n <= 8,
+        proto::MODE_CTF => n <= 4,
         proto::MODE_BIG_TEAM => n <= MAX_PARTY,
         _ => false,
     }
@@ -459,7 +463,13 @@ impl Parties {
                     .filter_map(|s| s.session)
                     .map(|id| (id, Msg::Go { mode, private }))
                     .collect();
-                self.parties.get_mut(&code).unwrap().started = Some((mode, private));
+                // Settings of its own only for a match of its own.
+                let custom = if private {
+                    pp::Custom::from_arg(arg)
+                } else {
+                    pp::Custom::default()
+                };
+                self.parties.get_mut(&code).unwrap().started = Some((mode, private, custom));
                 Ok(out)
             }
             pp::ACT_KICK => {
@@ -629,12 +639,13 @@ impl Parties {
         if !p.seats.iter().any(|s| s.id == id) {
             return None;
         }
-        let (m, private) = p.started?;
+        let (m, private, custom) = p.started?;
         (m == mode).then_some(Seating {
             code,
             // Those away are on their way (a page reloading into the match).
             size: p.seats.len().max(1) as u8,
             private,
+            custom,
         })
     }
 
@@ -767,12 +778,34 @@ mod tests {
                 mode: proto::MODE_BIG_TEAM,
                 private: true
             }));
+        // Alone, a party's own settings ride the start; with strangers, none.
+        let custom = pp::Custom {
+            map: Some(3),
+            score: 3,
+            time: 2,
+        };
+        ps.act(
+            1,
+            pp::ACT_START,
+            proto::MODE_CTF as u32 | pp::START_PRIVATE | custom.to_arg(),
+        );
+        assert_eq!(
+            ps.seating(code, &guest.id, proto::MODE_CTF).map(|s| s.custom),
+            Some(custom)
+        );
+        ps.act(1, pp::ACT_START, proto::MODE_CTF as u32 | custom.to_arg());
+        assert_eq!(
+            ps.seating(code, &guest.id, proto::MODE_CTF).map(|s| s.custom),
+            Some(pp::Custom::default())
+        );
+        ps.act(1, pp::ACT_START, proto::MODE_BIG_TEAM as u32 | pp::START_PRIVATE);
         assert_eq!(
             ps.seating(code, &guest.id, proto::MODE_BIG_TEAM),
             Some(Seating {
                 code,
                 size: 2,
-                private: true
+                private: true,
+                custom: pp::Custom::default(),
             })
         );
         assert_eq!(

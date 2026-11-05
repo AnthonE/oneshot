@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use proto::{
     datagram_kind, decode_input, decode_msg, InputMsg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES,
-    MODE_DUEL, MODE_LOBBY, PROTO_VER,
+    MODE_DUEL, MODE_LOBBY, MODE_WATCH, PROTO_VER,
 };
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
@@ -440,6 +440,13 @@ async fn session(
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
+        // A watcher takes no seat: party `party`'s match, or any public one.
+        MODE_WATCH => ToSim::Watch {
+            session: session_id,
+            target: party,
+            player,
+            tx,
+        },
         MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
             // Ranked is a wallet's: that is what a rating belongs to.
             let Some(wallet) = who.and_then(|p| p.wallet) else {
@@ -477,6 +484,7 @@ async fn session(
             mode,
             look,
             party: seating,
+            code: party,
             player,
             tx,
         },
@@ -562,10 +570,16 @@ async fn session(
             }
         }
     });
+    // The stream says goodbye, or (a watcher) asks for the next player.
+    let fsim = to_sim.clone();
     let reader = async {
         while let Some(f) = read_frame(&mut recv).await {
-            if matches!(decode_msg(&f), Ok(Msg::Bye) | Err(_)) {
-                break;
+            match decode_msg(&f) {
+                Ok(Msg::Follow { .. }) if mode == MODE_WATCH => {
+                    let _ = fsim.send(ToSim::Follow { session: session_id });
+                }
+                Ok(Msg::Bye) | Err(_) => break,
+                _ => {}
             }
         }
     };

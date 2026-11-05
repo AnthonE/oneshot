@@ -39,8 +39,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA,
-    MODE_GUN_GAME,
+    frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
+    MODE_FFA, MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -60,6 +60,9 @@ pub enum ToSim {
         look: proto::Look,
         /// The party it comes with, if it is in one that started this mode.
         party: Option<party::Seating>,
+        /// The party code its hello carried (0 for none), seated with or
+        /// not: friends watch its match by it.
+        code: u32,
         /// Who signed in: their wallet, else their account's `acct_` id.
         /// None for a guest.
         player: Option<String>,
@@ -74,7 +77,23 @@ pub enum ToSim {
     Leave {
         session: u64,
     },
+    /// Watch a match (`MODE_WATCH`): party `target`'s (a friend's), or any
+    /// public one for 0. `player` is who asks, so nobody watches a match
+    /// they sit in.
+    Watch {
+        session: u64,
+        target: u32,
+        player: Option<String>,
+        tx: outlet::Outlet,
+    },
+    /// A watcher follows the next player.
+    Follow {
+        session: u64,
+    },
 }
+
+/// Watchers one room takes.
+pub const MAX_WATCHERS: usize = 16;
 
 /// What the sim thread hands off: slow work, off the tick.
 pub enum Job {
@@ -137,11 +156,12 @@ pub struct Config {
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
     /// A casual room's rules: against a bot, free for all, Gun Game, Big
-    /// Team.
+    /// Team, Capture the Flag.
     pub rules: Rules,
     pub ffa: Rules,
     pub gun_game: Rules,
     pub big_team: Rules,
+    pub ctf: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -212,6 +232,7 @@ impl Default for Config {
             ffa: Rules::ffa(),
             gun_game: Rules::gun_game(),
             big_team: Rules::big_team(),
+            ctf: Rules::ctf(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             cup: Rules {
@@ -547,6 +568,8 @@ struct Sess {
     since: u64,
     /// What it asked to play.
     mode: u8,
+    /// A watcher: the room it watches and the seat it follows.
+    watching: Option<(usize, u8)>,
 }
 
 struct Live {
@@ -567,6 +590,8 @@ struct Live {
     over_at: Option<Instant>,
     /// A cup heat: the cup (by index) and the heat in its stage.
     cup: Option<(usize, usize)>,
+    /// Sessions watching it (`room::spectate`).
+    watchers: Vec<u64>,
 }
 
 /// Puts a room in the first free place; returns where.
@@ -605,19 +630,36 @@ impl Sim {
     /// A new room: fresh salt (never seen until the end) and a seed drawn
     /// apart from it (what clients watch: spawn picks, bots).
     fn new_room(&self, mode: u8, ranked: bool) -> Room {
+        self.new_room_custom(mode, ranked, proto::party::Custom::default())
+    }
+
+    /// [`Sim::new_room`], with a private match's own map, score and clock
+    /// over the mode's. A map that doesn't exist, or one with no flags for
+    /// Capture the Flag, is the server's pick.
+    fn new_room_custom(&self, mode: u8, ranked: bool, custom: proto::party::Custom) -> Room {
         self.ctx.health.matches.fetch_add(1, Ordering::Relaxed);
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
-        let rules = match mode {
+        let mut rules = match mode {
             MODE_DOUBLES => self.cfg.doubles,
             MODE_CUP => self.cfg.cup,
             MODE_FFA => self.cfg.ffa,
             MODE_BIG_TEAM => self.cfg.big_team,
+            MODE_CTF => self.cfg.ctf,
             MODE_GUN_GAME => self.cfg.gun_game,
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
         };
-        let map = self.pick_map(seed, mode == MODE_BIG_TEAM);
+        if !rules.gun_game {
+            rules.score_limit = custom.score_limit().unwrap_or(rules.score_limit);
+        }
+        rules.time_limit_ms = custom.time_limit_ms().unwrap_or(rules.time_limit_ms);
+        let chosen = custom
+            .map
+            .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
+            .filter(|d| !rules.ctf || d.flags.len() == 2)
+            .map(|d| d.build());
+        let map = chosen.unwrap_or_else(|| self.pick_map(seed, mode == MODE_BIG_TEAM, rules.ctf));
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
@@ -629,16 +671,24 @@ impl Sim {
 
     /// The map a room plays, from its seed (what clients may know anyway):
     /// the `--map` ones if any are given, else Big Team on the big maps and
-    /// everything else on the arenas.
-    fn pick_map(&self, seed: u64, big: bool) -> Map {
+    /// everything else on the arenas; Capture the Flag only where there are
+    /// flags.
+    fn pick_map(&self, seed: u64, big: bool, ctf: bool) -> Map {
+        let flags = |id: &u8| !ctf || sim::maps::ALL.iter().any(|d| d.id == *id && d.flags.len() == 2);
         let given: Vec<u8> = self
             .cfg
             .maps
             .iter()
             .copied()
             .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
+            .filter(flags)
             .collect();
-        let rotation = || sim::maps::ALL.iter().filter(|d| !d.practice);
+        let rotation = || {
+            sim::maps::ALL
+                .iter()
+                .filter(|d| !d.practice)
+                .filter(move |d| !ctf || d.flags.len() == 2)
+        };
         let sized: Vec<u8> = rotation().filter(|d| d.big() == big).map(|d| d.id).collect();
         let ids = if !given.is_empty() {
             given
@@ -678,11 +728,12 @@ impl Sim {
                         mode,
                         look,
                         party,
+                        code,
                         player,
                         tx,
                     } => {
                         let mode = match mode {
-                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
+                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF => mode,
                             _ => MODE_CASUAL,
                         };
                         let live_room =
@@ -728,7 +779,11 @@ impl Sim {
                                 let i = place(
                                     &mut rooms,
                                     Live {
-                                        room: self.new_room(mode, false),
+                                        room: self.new_room_custom(
+                                            mode,
+                                            false,
+                                            party.filter(|p| p.private).map_or_else(Default::default, |p| p.custom),
+                                        ),
                                         id: format!("os-c{:016x}", random_u64()),
                                         mode,
                                         links: [None; MAX_FIGHTERS],
@@ -737,6 +792,7 @@ impl Sim {
                                         joined: [0; MAX_FIGHTERS],
                                         over_at: None,
                                         cup: None,
+                                        watchers: Vec::new(),
                                         private,
                                         parties: Vec::new(),
                                     },
@@ -750,6 +806,10 @@ impl Sim {
                             if !live.parties.iter().any(|(c, _)| *c == p.code) {
                                 live.parties.push((p.code, team));
                             }
+                        } else if code != 0 && !live.parties.iter().any(|(c, _)| *c == code) {
+                            // Alone, but watchable by its party's code; no
+                            // side, so no one is seated with it by this.
+                            live.parties.push((code, None));
                         }
                         let Some((slot, out)) = live.room.join_team(name, look, team) else {
                             continue;
@@ -766,6 +826,7 @@ impl Sim {
                                 player,
                                 since: auth::now_unix(),
                                 mode,
+                                watching: None,
                             },
                         );
                         deliver(&sessions, rooms[i].as_ref().unwrap(), out);
@@ -813,8 +874,55 @@ impl Sim {
                                 player: Some(wallet),
                                 since: auth::now_unix(),
                                 mode,
+                                watching: None,
                             },
                         );
+                    }
+                    ToSim::Watch {
+                        session,
+                        target,
+                        player,
+                        tx,
+                    } => {
+                        let pick = watch_room(&rooms, target, player.as_deref());
+                        let Some(i) = pick else {
+                            send_msg(
+                                &tx,
+                                &Msg::Refuse {
+                                    reason: proto::REFUSE_NOTHING_TO_WATCH,
+                                },
+                            );
+                            tx.close();
+                            continue;
+                        };
+                        let r = rooms[i].as_mut().unwrap();
+                        let follow = r.room.spectate_first();
+                        for m in r.room.spectate_welcome(follow) {
+                            send_msg(&tx, &m);
+                        }
+                        let team = r.room.world.fighters[follow as usize].team;
+                        send_msg(&tx, &Msg::Follow { slot: follow, team });
+                        r.watchers.push(session);
+                        sessions.insert(
+                            session,
+                            Sess {
+                                tx,
+                                at: None,
+                                player,
+                                since: auth::now_unix(),
+                                mode: proto::MODE_WATCH,
+                                watching: Some((i, follow)),
+                            },
+                        );
+                    }
+                    ToSim::Follow { session } => {
+                        let Some(s) = sessions.get_mut(&session) else { continue };
+                        let Some((i, slot)) = s.watching else { continue };
+                        let Some(r) = rooms[i].as_ref() else { continue };
+                        let next = r.room.spectate_next(slot);
+                        s.watching = Some((i, next));
+                        let team = r.room.world.fighters[next as usize].team;
+                        send_msg(&s.tx, &Msg::Follow { slot: next, team });
                     }
                     ToSim::Leave { session } => {
                         q.remove(session);
@@ -823,6 +931,18 @@ impl Sim {
                             c.leave(session);
                         }
                         let Some(s) = sessions.remove(&session) else { continue };
+                        if let Some((i, _)) = s.watching {
+                            if let Some(r) = rooms[i].as_mut() {
+                                r.watchers.retain(|&w| w != session);
+                                if r.watchers.is_empty() {
+                                    r.room.spectate = None;
+                                    if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() {
+                                        rooms[i] = None;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         let Some((i, slot)) = s.at else { continue };
                         let Some(r) = rooms[i].as_mut() else { continue };
                         r.links[slot as usize] = None;
@@ -836,7 +956,7 @@ impl Sim {
                         r.players[slot as usize] = None;
                         // A cup's heat plays out even with nobody left: the
                         // cup waits on its result.
-                        if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() {
+                        if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() && r.watchers.is_empty() {
                             // Nobody left to play or watch.
                             rooms[i] = None;
                         } else {
@@ -895,6 +1015,7 @@ impl Sim {
                         joined: [0; MAX_FIGHTERS],
                         over_at: None,
                         cup: None,
+                        watchers: Vec::new(),
                         private: false,
                         parties: Vec::new(),
                     };
@@ -981,7 +1102,14 @@ impl Sim {
                 // heat may seat its entrants in this same pass, and a
                 // snapshot of this room after that welcome is another
                 // room's to them.
-                let done = r.over_at.is_some_and(|t| now.duration_since(t) >= self.cfg.linger);
+                // Watched, it plays on until its watchers have seen the end.
+                let late = match (&r.room.spectate, r.watchers.is_empty()) {
+                    (Some(l), false) => Duration::from_millis(u64::from(l.delay) * 1000 / u64::from(TICK_HZ)),
+                    _ => Duration::ZERO,
+                };
+                let done = r
+                    .over_at
+                    .is_some_and(|t| now.duration_since(t) >= self.cfg.linger + late);
                 if !done {
                     let links = &r.links;
                     r.room.step_into(now_ms, &mut out, |slot, _, bytes| {
@@ -993,12 +1121,20 @@ impl Sim {
                         }
                     });
                     deliver(&sessions, r, out.drain(..));
+                    spectate(&sessions, r);
                     if r.room.world.phase == Phase::Over && r.over_at.is_none() {
                         r.over_at = Some(now);
                         self.finish(r);
                     }
                 }
                 if done {
+                    for id in r.watchers.iter() {
+                        if let Some(s) = sessions.get_mut(id) {
+                            send_msg(&s.tx, &Msg::Bye);
+                            s.tx.close();
+                            s.watching = None;
+                        }
+                    }
                     for id in r.links.iter().flatten() {
                         if let Some(s) = sessions.get_mut(id) {
                             // A cup's entrants stay on for the next heat.
@@ -1073,6 +1209,7 @@ impl Sim {
                 joined: [0; MAX_FIGHTERS],
                 over_at: None,
                 cup: Some((ci, h)),
+                watchers: Vec::new(),
                 private: false,
                 parties: Vec::new(),
             };
@@ -1245,6 +1382,7 @@ fn mode_name(mode: u8) -> &'static str {
         MODE_GUN_GAME => "Gun Game",
         MODE_CUP => "A cup",
         MODE_BIG_TEAM => "Big Team",
+        MODE_CTF => "Capture the Flag",
         _ => "Against the bot",
     }
 }
@@ -1395,6 +1533,51 @@ fn tell_cup(c: &cup::Cup, i: usize, sessions: &BTreeMap<u64, Sess>) {
             done,
         },
     );
+}
+
+/// The room for a watcher: party `target`'s, or with 0 the public match
+/// with the most people in it; never one `player` sits in, nor a full one.
+fn watch_room(rooms: &[Option<Live>], target: u32, player: Option<&str>) -> Option<usize> {
+    let sits = |r: &Live| player.is_some_and(|p| r.players.iter().flatten().any(|q| q == p));
+    rooms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, r)| Some((i, r.as_ref()?)))
+        .filter(|(_, r)| r.over_at.is_none() && r.watchers.len() < MAX_WATCHERS && !sits(r))
+        .filter(|(_, r)| match target {
+            0 => !r.private,
+            code => r.parties.iter().any(|(c, _)| *c == code),
+        })
+        .max_by_key(|(i, r)| (r.links.iter().flatten().count(), usize::MAX - i))
+        .map(|(i, _)| i)
+}
+
+/// What a watched room's watchers are due this tick: the seat each follows,
+/// as it was sent `delay` ago, and that seat's messages.
+fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
+    if r.watchers.is_empty() {
+        return;
+    }
+    let tick = r.room.world.tick;
+    let Some(line) = r.room.spectate.as_mut() else { return };
+    let (frames, msgs) = line.due(tick);
+    let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
+    for id in &r.watchers {
+        let Some(s) = sessions.get(id) else { continue };
+        let Some((_, follow)) = s.watching else { continue };
+        for (to, m) in &msgs {
+            if to.is_none_or(|t| t == follow) {
+                if let Ok(n) = frame_msg(m, &mut f) {
+                    s.tx.stream(f[..n].to_vec());
+                }
+            }
+        }
+        for fr in &frames {
+            if let Some(b) = &fr.snaps[follow as usize] {
+                s.tx.datagram(b.to_vec());
+            }
+        }
+    }
 }
 
 /// Room messages to their seats' sessions, each framed once and its bytes

@@ -16,11 +16,13 @@
 
 pub mod asset_fetch;
 pub mod binds;
+pub mod challenges;
 pub mod clip;
 pub mod config;
 pub mod display;
 pub mod door;
 pub mod film;
+pub mod flags;
 pub mod front;
 pub mod hud;
 pub mod items;
@@ -63,11 +65,44 @@ pub struct LinkRes(pub Box<dyn Link>);
 pub struct Look {
     yaw: f32,
     pitch: f32,
-    /// The zoom button is held.
+    /// Scoped in (`level` > 0, on a gun that has a scope).
     pub zoom: bool,
+    /// The scope's level: 0 off, 1, 2 (the snipers' second). A click steps
+    /// it, a hold lets go of it on release; a hit, a reload, a melee, a
+    /// throw or another gun takes it off, as Halo 2's.
+    pub level: u8,
+    /// When the right button last went down (ms, the link's clock).
+    scope_down: f64,
+    /// Our own fighter last frame, to see what knocks the scope off.
+    scope_was: Option<ScopeWas>,
     /// The trigger counts: not still held from the click that took the
     /// mouse (that click only takes it, as on the page).
     armed: bool,
+}
+
+/// What [`Look::level`] watches on our own fighter from frame to frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScopeWas {
+    arm: u8,
+    cur: u8,
+    vitals: i32,
+    reloading: bool,
+    meleeing: bool,
+    throwing: bool,
+}
+
+/// A press held longer than this is a hold: the scope goes on release.
+const SCOPE_HOLD_MS: f64 = 300.0;
+
+impl Look {
+    /// The magnification drawn: 1 unscoped.
+    pub fn magnification(&self, arm: &sim::arms::Arm) -> f32 {
+        if self.zoom {
+            arm.zoom_at(self.level) as f32
+        } else {
+            1.0
+        }
+    }
 }
 
 /// The link (by `front::LinkGen`) and welcome this level was built for.
@@ -98,25 +133,21 @@ pub enum Screen {
     Settings,
 }
 
-/// Where a hull's wheels are in its frame (+X forward), metres: drawn
-/// there, and pressing the grass there (`look::foliage::Walkers::hull`).
-const WHEELS: [(f32, f32); 4] = [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)];
-
-/// What every hull is made of, made with the first.
-struct HullParts {
-    hull: Handle<StandardMaterial>,
-    dark: Handle<StandardMaterial>,
-    body: Handle<Mesh>,
-    screen: Handle<Mesh>,
-    wheel: Handle<Mesh>,
-}
-
 /// A fighter's body or a vehicle's hull, shown or hidden by `Drawn`.
 #[derive(Component)]
 struct Kept;
 
 /// The kept entities' visibility (never a shield shell's).
-type KeptVis<'w, 's> = Query<'w, 's, &'static mut Visibility, (With<Kept>, Without<look::shield::ShellPart>)>;
+type KeptVis<'w, 's> = Query<
+    'w,
+    's,
+    &'static mut Visibility,
+    (
+        With<Kept>,
+        Without<look::shield::ShellPart>,
+        Without<look::bodies::BodyPart>,
+    ),
+>;
 
 /// What a body is made of, and the kept ones' visibility.
 type BodyParts<'w, 's> = (
@@ -381,9 +412,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
-    .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<flags::Flags>()
+    .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
@@ -412,9 +444,16 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     // The boxes' weathering (`look/weathering.rs`).
     .add_plugins(look::weathering::plugin)
+    // A truck's wear (`look/truck.rs`).
+    .add_plugins(look::truck::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
+    // Triple T's spray paint: the side's headband, the emblem, the trim
+    // (`look/paint.rs`).
+    .add_plugins(look::paint::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -511,7 +550,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             happened,
             rebuild,
             look::textures::prepare,
-            look::textures::mip_models,
+            (look::textures::mip_models, look::fx::sheets::mip_sheets),
             look::rock::dress_masses,
             (
                 level::dress_level,
@@ -523,8 +562,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::grass::cull,
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
-            (draw_fighters, draw_vehicles, look::foliage::update).chain(),
-            items::draw,
+            (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
+            (items::draw, flags::draw),
             fly,
             view,
             // The gun in view before the effects: our own flash sits on
@@ -661,30 +700,84 @@ fn pump(
     // back, turns nothing and fires nothing).
     let grabbed =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
+    // Watching a match: we look where the player we follow looks (their
+    // snapshots' aim, as a film does), and a click or Space follows the
+    // next one. Nothing we press is sent.
+    if link.0.session().watch && link.0.live() {
+        let next = grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::Space));
+        if next {
+            link.0.session_mut().follow_next();
+        }
+        let (f, _) = link.0.session().core.own();
+        let turn = core::f32::consts::TAU / 65536.0;
+        look.yaw = f.yaw as f32 * turn;
+        look.pitch = f.pitch as f32 * turn;
+        look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        link.0.update(Input::default());
+        return;
+    }
     let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let (dual, scope, driving) = {
+    let now = link.0.now_ms();
+    let (dual, arm, driving, was) = {
         let f = link.0.session().core.own().0;
         let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
-        let scope = if f.alive {
-            sim::arms::arm(f.gun().arm).zoom.max(1)
-        } else {
-            1
+        let was = ScopeWas {
+            arm: f.gun().arm,
+            cur: f.cur,
+            vitals: f.shield + f.health,
+            reloading: f.reload > 0,
+            meleeing: f.melee_cool > 0,
+            throwing: f.gren_cool > 0,
         };
-        (f.dual(), scope, driving)
+        (f.dual(), sim::arms::arm(f.gun().arm), driving, f.alive.then_some(was))
     };
-    // No scope at the wheel: the chase camera doesn't narrow.
-    let want = if auto.on {
-        auto.scope
-    } else {
-        button(MouseButton::Right)
+    // What takes the scope off (Halo 2's): any damage, a reload (a hot
+    // gun's vent), a melee, a throw, another gun, dying; and there's none
+    // at the wheel (the chase camera doesn't narrow) or with a gun in each
+    // hand (the right button is the left hand's trigger).
+    let knocked = match (look.scope_was, was) {
+        (Some(a), Some(b)) => {
+            b.vitals < a.vitals
+                || a.arm != b.arm
+                || a.cur != b.cur
+                || (b.reloading && !a.reloading)
+                || (b.meleeing && !a.meleeing)
+                || (b.throwing && !a.throwing)
+        }
+        _ => true,
     };
-    look.zoom = want && !dual && !driving;
+    look.scope_was = was;
+    let levels = arm.zoom_levels();
+    if knocked || dual || driving || levels == 0 {
+        look.level = 0;
+    }
+    if auto.on {
+        look.level = if auto.scope && was.is_some() && !dual && !driving {
+            levels.min(1)
+        } else {
+            0
+        };
+    } else if levels > 0 && !dual && !driving && was.is_some() {
+        if grabbed && mouse.just_pressed(MouseButton::Right) {
+            look.level = (look.level + 1) % (levels + 1);
+            look.scope_down = now;
+        } else if !mouse.pressed(MouseButton::Right) && look.scope_down > 0.0 {
+            if now - look.scope_down > SCOPE_HOLD_MS {
+                look.level = 0;
+            }
+            look.scope_down = 0.0;
+        }
+    }
+    if !mouse.pressed(MouseButton::Right) && !mouse.just_pressed(MouseButton::Right) {
+        look.scope_down = 0.0;
+    }
+    look.zoom = look.level > 0;
     if grabbed {
         let base = SENS * settings.sensitivity;
-        let sens = if look.zoom { base / scope as f32 } else { base };
+        let sens = base / look.magnification(arm);
         let up = if settings.invert { -1.0 } else { 1.0 };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
@@ -840,7 +933,8 @@ fn rebuild(
 type ShieldParts<'w, 's> = (
     ResMut<'w, look::fx::Fx>,
     ResMut<'w, Assets<look::shield::ShieldMaterial>>,
-    Query<'w, 's, &'static mut Visibility, With<look::shield::ShellPart>>,
+    look::bodies::Parts<'w, 's>,
+    ResMut<'w, Assets<look::paint::BodyMaterial>>,
 );
 
 /// Everyone else, where client-net interpolated them.
@@ -856,7 +950,7 @@ fn draw_fighters(
     (mut meshes, mut mats, mut vis): BodyParts,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    (mut fx, mut shield_mats, mut shells): ShieldParts,
+    (mut fx, mut shield_mats, mut shells, mut body_mats): ShieldParts,
     (time, mut walkers, film): (Res<Time>, ResMut<look::foliage::Walkers>, Option<Res<film::Film>>),
 ) {
     let now = link.0.now_ms();
@@ -879,6 +973,17 @@ fn draw_fighters(
         hulls.push(client_net::core::DrawnVehicle {
             slot: i as u8,
             pos: at,
+            yaw,
+            seats,
+            ..client_net::core::DrawnVehicle::default()
+        });
+    }
+    // The pose mode's truck, with its fighter in the seat it was given.
+    if let Some((slot, (at, yaw), seat)) = posed.as_ref().and_then(|p| Some((p.0.slot, p.2.truck?, p.2.seat?))) {
+        let mut seats = [0; 2];
+        seats[seat] = slot + 1;
+        hulls.push(client_net::core::DrawnVehicle {
+            pos: sim::geom::V3::new(at.x, at.y, at.z),
             yaw,
             seats,
             ..client_net::core::DrawnVehicle::default()
@@ -920,7 +1025,7 @@ fn draw_fighters(
             let e = if opts.capsules {
                 look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
             } else {
-                look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, look)
+                look::bodies::spawn(&mut commands, &models, d.team, look)
             };
             commands.entity(e).insert(Kept);
             drawn.fighters.insert(d.slot, (e, d.team, look));
@@ -962,14 +1067,12 @@ fn draw_fighters(
             &mut at,
             time.delta_secs(),
         );
-        look::bodies::flare(
-            e,
-            fx.was.flare(d.slot, t),
-            &mut bodies,
-            &mut mats,
-            &mut shield_mats,
-            &mut shells,
-        );
+        let glow = look::bodies::Glow {
+            hit: fx.was.flare(d.slot, t),
+            over: d.over && d.alive,
+            cloak: if d.alive { d.cloak } else { 0.0 },
+        };
+        look::bodies::flare(e, glow, &mut bodies, &mut body_mats, &mut shield_mats, &mut shells);
     }
     for (slot, (e, ..)) in &drawn.fighters {
         if !shown.iter().any(|(d, _)| d.slot == *slot) && show(&mut vis, *e, false) {
@@ -987,17 +1090,18 @@ fn draw_fighters(
 /// wheels on it (the sim's suspension is a few centimetres).
 const WHEELS_DOWN_M: f32 = 0.3;
 
-/// The vehicles: ours as predicted, the rest interpolated.
+/// The vehicles: ours as predicted, the rest interpolated; each a truck
+/// (`look/truck.rs`). The pose mode's stands where it was asked to.
 #[allow(clippy::too_many_arguments)]
 fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    models: Res<look::guns::Models>,
+    posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
+    mut hulls: Query<&mut look::truck::Hull>,
     mut vis: KeptVis,
-    mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     mut walkers: ResMut<look::foliage::Walkers>,
@@ -1012,6 +1116,9 @@ fn draw_vehicles(
     if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
+    if let Some((p, yaw)) = posed.and_then(|p| p.2.truck_at(time.elapsed_secs())) {
+        list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
+    }
     for &(slot, p, yaw) in &list {
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
@@ -1020,7 +1127,7 @@ fn draw_vehicles(
         // Only a live hull on its wheels presses the grass: not one in the
         // air over a crest, nor a wreck.
         if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
-            walkers.hull(p, yaw, &WHEELS);
+            walkers.hull(p, yaw, &look::truck::WHEELS);
         }
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -1029,50 +1136,14 @@ fn draw_vehicles(
                 if let Ok(mut tr) = at.get_mut(e) {
                     *tr = t;
                 }
+                if let Ok(mut hull) = hulls.get_mut(e) {
+                    hull.health = health;
+                }
             }
             None => {
-                // One set of meshes and materials for every hull.
-                let k = parts.get_or_insert_with(|| HullParts {
-                    hull: mats.add(StandardMaterial {
-                        base_color: Color::srgb(0.36, 0.42, 0.29),
-                        perceptual_roughness: 0.6,
-                        metallic: 0.3,
-                        ..default()
-                    }),
-                    dark: mats.add(StandardMaterial {
-                        base_color: Color::srgb(0.14, 0.15, 0.17),
-                        perceptual_roughness: 0.8,
-                        ..default()
-                    }),
-                    body: meshes.add(Cuboid::new(4.4, 0.7, 2.2)),
-                    screen: meshes.add(Cuboid::new(0.12, 0.9, 2.2)),
-                    wheel: meshes.add(Cylinder::new(0.42, 0.35)),
-                });
-                let (hull, dark) = (k.hull.clone(), k.dark.clone());
-                let (body, screen, wheel) = (k.body.clone(), k.screen.clone(), k.wheel.clone());
-                let e = commands
-                    .spawn((t, Visibility::default(), Kept))
-                    .with_children(|c| {
-                        c.spawn((
-                            Mesh3d(body),
-                            MeshMaterial3d(hull.clone()),
-                            Transform::from_xyz(0.0, 0.75, 0.0),
-                        ));
-                        c.spawn((
-                            Mesh3d(screen),
-                            MeshMaterial3d(dark.clone()),
-                            Transform::from_xyz(-0.9, 1.55, 0.0),
-                        ));
-                        for (x, z) in WHEELS {
-                            c.spawn((
-                                Mesh3d(wheel.clone()),
-                                MeshMaterial3d(dark.clone()),
-                                Transform::from_xyz(x, 0.42, z)
-                                    .with_rotation(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
-                            ));
-                        }
-                    })
-                    .id();
+                let hull = look::truck::Hull { slot, health };
+                let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
+                look::truck::spawn(&mut commands, &models, e);
                 drawn.vehicles.insert(slot, e);
             }
         }
@@ -1161,9 +1232,8 @@ pub(crate) fn view(
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = at + Vec3::Y * h;
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
-        let zoom = sim::arms::arm(f.gun().arm).zoom;
-        if look.zoom && f.alive && zoom > 1 {
-            fov /= zoom as f32;
+        if f.alive {
+            fov /= look.magnification(sim::arms::arm(f.gun().arm));
         }
     }
     // The effects demo stands its camera in one place (drawing only).
@@ -1202,7 +1272,7 @@ fn draw_view(
     kit: Option<Res<look::viewmodel::ViewKit>>,
 ) {
     let (f, p) = link.0.session().core.own();
-    let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    let scoped = look.magnification(sim::arms::arm(f.gun().arm)) > 1.0;
     let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
         f,
@@ -1323,6 +1393,7 @@ fn expose(
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
     party: Option<Res<party::PartyView>>,
+    ear: Res<sound::Ear>,
     (mut frames, mut described): (Local<u32>, Local<Option<String>>),
 ) {
     use wasm_bindgen::JsValue;
@@ -1377,6 +1448,14 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    // The mixer: clips decoded, still loading, and commands sent it; and
+    // the lines about the match the announcer has said.
+    let (decoded, loading, sent, said) = ear.stats();
+    set(
+        &o,
+        "sound",
+        js_sys::Array::of4(&decoded.into(), &loading.into(), &sent.into(), &said.into()).into(),
+    );
     set(&o, "in_match", matched.into());
     // The party as this page sees it (ci/party.mjs).
     if let Some(p) = party {

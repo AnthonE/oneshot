@@ -18,7 +18,8 @@ pub enum Kind {
     /// `part` 2 if the blow was to the head.
     Kill,
     Spawn,
-    /// `a` took arm `c` from a pad.
+    /// `a` took arm `c` from a pad, or the power-up `c`
+    /// (`arms::OVERSHIELD`, `arms::CAMO`).
     Pickup,
     /// A blast at `pos`; `c` is the arm id (rocket) or [`Cause::Grenade`]
     /// or [`Cause::Sticky`].
@@ -34,6 +35,10 @@ pub enum Kind {
     /// `a` got into vehicle `part`'s seat `b` (0 driver, 1 passenger), or
     /// out of it when `c` is 1.
     Ride,
+    /// Capture the Flag: side `b`'s flag, at `pos`; `part` 0 taken by `a`,
+    /// 1 dropped by `a`, 2 returned (by `a`, or 255 on its own), 3
+    /// captured by `a`.
+    Flag,
 }
 
 /// Kill causes past the arm ids.

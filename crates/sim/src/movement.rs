@@ -514,6 +514,7 @@ mod tests {
             dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
+            flags: &[],
         }
         .build()
     }
@@ -598,6 +599,7 @@ mod tests {
             dress_solids: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
+            flags: &[],
         }
         .build()
     }

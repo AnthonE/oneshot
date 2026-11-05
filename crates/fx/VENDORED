@@ -1,14 +1,14 @@
-# Vendored from Gates ad83b1d by tools/fx-sync.sh. Do not edit here: change it in Gates, then sync.
+# Vendored from Gates 2526893 by tools/fx-sync.sh. Do not edit here: change it in Gates, then sync.
 ca11f03ca9c47ed2f49bf628c8ce39a2ceecf9fb18103cf849c3126a2c181ee0  Cargo.toml
 781d969257c55fc69f0f0556dcd443e7621857de6048004f8d649d5d30569593  clippy.toml
 2f48791702699e5d718698c7cf6d383107a508afb5b26fbc9ffbc30b7ddc8973  rustfmt.toml
 a7feaf75c9c6f6c3ff2e0fbd3795cd2d684d102123e05441af4efa92de22955f  src/atlas.rs
 78bdc4d701e1eefff649d790605fa734539a7b9b2cb7eedb121949b7df2f71d8  src/lib.rs
-ebfa763bbbc8b660745860bbc586ca8fac460aff16b468ef713e35c75f04eb6a  src/pool.rs
-74d4036b5f406365efe184f7135a1448627824bd4f5f7c7be95d3d04a1db8d5d  src/recipe.rs
+9a33ac46631d20bcd0a334c57277bb73fcbfe75418900a4862ee05b98612538e  src/pool.rs
+3a5a4a1908bf812dee374b0d027e56acb24908c96727cbb1fbbc935ea6e07cf4  src/recipe.rs
 827a74444f80a96135dd902f0511b60b7bc66fc348a6eaf878fa6fe9836aa813  src/stage.rs
 17ed39aad0626efc283158fd9ca007ad4ea4214c3b9c8311277c591a39c25bb6  src/v3.rs
-071df04fd8cb844b7dd768a5bc38f70371deece6419dfd17f92c0961d78a641c  tests/alloc.rs
-17daa71a60612e48f0fddf0cdb21361dae1446ac2046f84983a7ef419c92aca1  tests/fx.rs
+76ed975c17ab0250c20d762f38fd436d5f0a3d7fa1d716aded53e74c4377e698  tests/alloc.rs
+e079bba330b399c0ad09c757bd3075fccdfb2cce9a3d774a3111aa339035902d  tests/fx.rs
 875bcf6a7ec87df46589f33b1a60a59318e6235965d5bf7f0e518bda30e7f699  tests/vendored.rs
 1138efa34000cd9e974a458dba9a72f9bc3b28254c2ceb8cd72d55387a10677f  ../../tools/fxstrip.mjs

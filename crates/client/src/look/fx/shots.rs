@@ -17,7 +17,7 @@ use sim::consts::{HEAD_Y, HIT_R};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 
-use super::table::{self, GunLook, Layer, Matter, Weapon};
+use super::table::{self, Casing, Flash, GunLook, Layer, Matter, Weapon, OWN_STAR_LIFE_S};
 use super::{Fx, Scene, MUZZLE_FLASH};
 use crate::look::shake;
 
@@ -35,6 +35,9 @@ const OWN_TRACER_SKIP_M: f32 = 1.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
 const PELLET_DRAW_RAD: f32 = 0.09;
+/// A standing shooter's eye over the floor, roughly: where their casings
+/// land.
+const EYE_OVER_FLOOR_M: f32 = 1.6;
 
 fn v3(v: Vec3) -> V3 {
     V3::new(v.x, v.y, v.z)
@@ -69,6 +72,16 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     let muzzle = from + dir * MUZZLE_FWD_M - Vec3::Y * MUZZLE_DOWN_M;
     if first {
         flash(fx, muzzle, dir, &look);
+        // The round's casing, from the port at the shooter's right (a
+        // shotgun's pellets are one round). A standing shooter's floor is
+        // about their eye's height below them.
+        eject(
+            fx,
+            &look,
+            muzzle - dir * 0.3,
+            dir.cross(Vec3::Y).normalize_or(Vec3::X),
+            from.y - EYE_OVER_FLOOR_M,
+        );
     }
     if !kind.ray() {
         if first && arm == ROCKET {
@@ -141,6 +154,7 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     fx.own_flash[usize::from(left)] = Some(OwnFlash {
         look,
         rocket: id == ROCKET,
+        rounds,
     });
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
@@ -180,11 +194,12 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
 }
 
 /// Our own gun's flash this frame, by hand, waiting for the frame's camera
-/// and gun: the gun's look.
+/// and gun: the gun's look, and how many rounds it fired this frame.
 #[derive(Clone, Copy, Debug)]
 pub struct OwnFlash {
     look: GunLook,
     rocket: bool,
+    rounds: u32,
 }
 
 /// Our own flashes, at the muzzle as the frame draws it: off the camera
@@ -200,14 +215,47 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
         };
         let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
         let fwd = eye.rotation * Vec3::NEG_Z;
-        table::own_stars(
-            &mut fx.glow,
-            muzzle,
-            o.look.stars as usize,
-            OWN_STAR_SCALE * o.look.flash_scale,
-            o.look.flash_c,
-        );
-        fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
+        let right = eye.rotation * Vec3::X;
+        let scale = OWN_STAR_SCALE * o.look.flash_scale;
+        match o.look.flash {
+            Flash::Powder => {
+                // The baked petals for a frame or two (the view swings), a
+                // hot star at the core, a tongue down the barrel, smoke.
+                let r = ::fx::recipe::Recipe {
+                    life: (OWN_STAR_LIFE_S.0 * 1.4, OWN_STAR_LIFE_S.1 * 1.4),
+                    ..table::recipe(Layer::MuzzleFlash)
+                };
+                let pool = fx.pool(Layer::MuzzleFlash.pool());
+                table::emit_recipe(pool, &r, 1, muzzle + fwd * 0.04, fwd, Color::WHITE, 0.5 + 0.4 * scale);
+                table::own_stars(
+                    &mut fx.glow,
+                    muzzle,
+                    o.look.stars as usize,
+                    0.4 + 0.3 * scale,
+                    o.look.flash_c,
+                );
+                fx.emit(Layer::Tongue, 1, muzzle, fwd, Matter::Concrete);
+                fx.emit_tint(
+                    Layer::Wisp,
+                    1,
+                    muzzle + fwd * 0.12,
+                    fwd,
+                    Color::WHITE,
+                    0.5 + 0.3 * scale,
+                );
+            }
+            Flash::Energy(tone) => {
+                bloom(
+                    fx,
+                    muzzle + fwd * 0.03,
+                    fwd,
+                    tone,
+                    0.5 + 0.4 * scale,
+                    OWN_STAR_LIFE_S.1 * 2.0,
+                );
+                table::own_stars(&mut fx.glow, muzzle, 1, scale * 0.5, o.look.flash_c);
+            }
+        }
         fx.flash(
             muzzle,
             super::FlashDef {
@@ -215,6 +263,15 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
                 ..MUZZLE_FLASH
             },
         );
+        for _ in 0..o.rounds.min(3) {
+            eject(
+                fx,
+                &o.look,
+                muzzle - fwd * 0.3 + right * 0.04,
+                (right * 0.8 + eye.rotation * Vec3::Y * 0.5).normalize_or(right),
+                eye.translation.y - EYE_OVER_FLOOR_M,
+            );
+        }
         if o.rocket {
             backblast(fx, muzzle, fwd);
         }
@@ -295,20 +352,33 @@ fn met(fx: &mut Fx, scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) ->
     None
 }
 
-/// A third-person muzzle: a star flash, a tongue of fire, smoke, a light.
+/// A third-person muzzle. Powder: the baked flash of petals, a star at its
+/// core, a tongue of fire down the barrel, a breath of smoke. Energy: a
+/// baked bloom in the gun's tone, a star, a glow that hangs on the muzzle
+/// a moment, no smoke. And a light.
 pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
-    table::stars(
-        &mut fx.glow,
-        at,
-        look.stars as usize,
-        3.0 * look.flash_scale,
-        look.flash_c,
-    );
-    // Fire out of a gun that burns powder; an energy gun's flash is its own.
-    if look.flash_c[0] > look.flash_c[2] && look.flash_c[0] > look.flash_c[1] * 1.1 {
-        fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
+    let scale = look.flash_scale;
+    match look.flash {
+        Flash::Powder => {
+            // The petals grow with the gun, the core less: a shotgun's
+            // flash is wide, not a sun.
+            fx.emit_tint(
+                Layer::MuzzleFlash,
+                1,
+                at + dir * 0.05,
+                dir,
+                Color::WHITE,
+                0.7 + 0.5 * scale,
+            );
+            table::stars(&mut fx.glow, at, look.stars as usize, 0.8 + 0.5 * scale, look.flash_c);
+            fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
+            fx.emit_tint(Layer::Wisp, 1, at + dir * 0.15, dir, Color::WHITE, 0.6 + 0.4 * scale);
+        }
+        Flash::Energy(tone) => {
+            bloom(fx, at + dir * 0.04, dir, tone, 0.6 + 0.5 * scale, 0.0);
+            table::stars(&mut fx.glow, at, 1, 0.7 * scale, look.flash_c);
+        }
     }
-    fx.emit(Layer::GunSmoke, 2, at, dir, Matter::Concrete);
     fx.flash(
         at,
         super::FlashDef {
@@ -317,6 +387,43 @@ pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
             ..MUZZLE_FLASH
         },
     );
+}
+
+/// An energy gun's muzzle: the baked bloom in `tone`, and a glow in the
+/// gun's colour that lingers a moment after. `life` overrides the
+/// bloom's (0: the recipe's).
+fn bloom(fx: &mut Fx, at: Vec3, dir: Vec3, tone: f32, scale: f32, life: f32) {
+    let mut r = ::fx::recipe::Recipe {
+        tone,
+        ..table::recipe(Layer::Bloom)
+    };
+    if life > 0.0 {
+        r.life = (life * 0.8, life);
+    }
+    let pool = fx.pool(Layer::Bloom.pool());
+    table::emit_recipe(pool, &r, 1, at, dir, Color::WHITE, scale);
+    // The afterglow: a soft disc in the ramp's colour, dimmer, longer.
+    let after = ::fx::recipe::Recipe {
+        tone,
+        glow: 0.3,
+        life: (0.14, 0.2),
+        size: (0.04, 0.06),
+        grow: 0.6,
+        frames: 1,
+        cells: 1,
+        ..table::recipe(Layer::Bloom)
+    };
+    let pool = fx.pool(Layer::Bloom.pool());
+    table::emit_recipe(pool, &after, 1, at, dir, Color::WHITE, scale);
+}
+
+/// A gun's casing out of its port at `at` along `out`, onto `floor`.
+fn eject(fx: &mut Fx, look: &GunLook, at: Vec3, out: Vec3, floor: f32) {
+    match look.casing {
+        Casing::None => {}
+        Casing::Brass => fx.chips.casing(at, out, floor, false),
+        Casing::Shell => fx.chips.casing(at, out, floor, true),
+    }
 }
 
 /// A rocket leaving the tube: fire out of the front, smoke out of both ends.

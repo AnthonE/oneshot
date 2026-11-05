@@ -349,11 +349,10 @@ const PLATE_LEN: f32 = 0.2;
 /// The plate's squash: wider than the arm, flatter than it is wide.
 const PLATE_SCALE: Vec3 = Vec3::new(1.2, 0.62, 1.0);
 const PLATE_AT: f32 = 0.06;
-/// A long gun's other hand: how far up the barrel from the grip (a share
-/// of the barrel's length past it), how far under it, and its elbow, as
-/// the right hand's are.
-const FORE_SHARE: f32 = 0.6;
-const FORE_DROP: f32 = -0.085;
+/// A long gun's other hand, where the gun says its belly is (`Gun::fore`,
+/// `Gun::under`): how far under that belly its middle sits, and its elbow,
+/// as the right hand's are.
+const FORE_CUP: f32 = 0.02;
 const OFF_WRIST: Vec3 = Vec3::new(-0.04, -0.07, 0.045);
 const OFF_ELBOW: Vec3 = Vec3::new(-0.42, -0.3, 0.3);
 /// The glove's black and the plate's lift over the side's colour.
@@ -368,6 +367,10 @@ const SHELL_HEX: f32 = 9.0;
 /// (`shield.wgsl`): it fills the frame's corner, so it is a crackle over
 /// the arms, not a coat of gold.
 const SHELL_IN_VIEW: f32 = 0.22;
+/// Our overshield, and our camouflage, on the arms in view: never under
+/// these while on (in their shells' colours, `bodies.rs`).
+const OVER_IN_VIEW: f32 = 0.12;
+const CAMO_IN_VIEW: f32 = 0.3;
 
 /// The arms' meshes and materials, and the shell they and the gun wear.
 #[derive(Resource)]
@@ -494,15 +497,16 @@ fn arms(commands: &mut Commands, kit: &ViewKit, parent: Entity, arm: u8, left: b
     let m = |v: Vec3| Vec3::new(v.x * side, v.y, v.z);
     arm_parts(commands, kit, parent, m(FIST), m(WRIST), m(ELBOW), side);
     if g.long && !left {
-        let reach = g.height * (1.0 - g.grip) * g.scale * FORE_SHARE;
-        let fist = Vec3::new(0.0, FORE_DROP, -reach);
+        let reach = g.height * (1.0 - g.grip) * g.scale * g.fore;
+        let fist = Vec3::new(0.0, -(g.under * g.scale + FORE_CUP), -reach);
         arm_parts(commands, kit, parent, fist, fist + OFF_WRIST, fist + OFF_ELBOW, -1.0);
     }
 }
 
 /// Our shield on the arms and the gun in view: as bright as its flare
-/// (`fx/bodies.rs`), hidden while it is quiet; and the armour in our
-/// side's colour.
+/// (`fx/bodies.rs`), hidden while it is quiet, green and never quite gone
+/// while an overshield is on, a pale shimmer under camouflage; and the
+/// armour in our side's colour.
 pub fn shimmer(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
@@ -523,16 +527,24 @@ pub fn shimmer(
             m.base_color = Color::LinearRgba(c * PLATE_LIFT + LinearRgba::rgb(0.02, 0.02, 0.02));
         }
     }
-    let level = if core.own().0.alive {
+    let f = core.own().0;
+    let hit = if f.alive {
         fx.was.flare(core.slot, time.elapsed_secs()) * SHELL_IN_VIEW
     } else {
         0.0
     };
+    let (rgb, level) = match () {
+        _ if f.alive && f.camo > 0 => (super::bodies::CAMO, hit.max(CAMO_IN_VIEW)),
+        _ if f.alive && f.overshield() => (super::bodies::OVER, hit.max(OVER_IN_VIEW)),
+        _ => (super::shield::GOLD, hit),
+    };
     let on = level > 0.004;
+    let want = rgb.extend(if on { level } else { 0.0 });
     if let Some(m) = shells.get(&kit.shell) {
-        if (m.extension.color.w - level).abs() > 0.002 || (!on && m.extension.color.w != 0.0) {
+        let c = m.extension.color;
+        if (c.w - want.w).abs() > 0.002 || c.truncate() != rgb || (!on && c.w != 0.0) {
             if let Some(m) = shells.get_mut(&kit.shell) {
-                m.extension.color.w = if on { level } else { 0.0 };
+                m.extension.color = want;
             }
         }
     }
@@ -1255,7 +1267,7 @@ fn hand(
     t.rotation = rot;
     let g = gun(v.drawn).filter(|_| drawn)?;
     let reach = g.height * (1.0 - g.grip) * g.scale;
-    Some(at + rot * (view_basis() * Vec3::Y * reach))
+    Some(at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale)))
 }
 
 /// A round's cant, -1..1, off the round's count: looks only.
@@ -1515,7 +1527,7 @@ mod tests {
                         continue;
                     }
                     let (at, rot) = place(lay, Lay::ZERO, false);
-                    let muzzle = at + rot * (view_basis() * Vec3::Y * reach);
+                    let muzzle = at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale));
                     for k in 0..=8 {
                         let p = at.lerp(muzzle, k as f32 / 8.0);
                         let a = off_axis(p);

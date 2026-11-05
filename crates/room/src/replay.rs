@@ -5,9 +5,9 @@
 //! the server wrote. Bots' inputs are recorded like anyone's, so a replay
 //! never depends on the bot's code.
 //!
-//! Format, little-endian: `OSR3`, u16 PROTO_VER, u64 golden tag, u64 seed,
+//! Format, little-endian: `OSR4`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
-//! gun game, friendly fire), u8 map; then records: `S` slot team (a seat),
+//! gun game, friendly fire, capture the flag), u8 map; then records: `S` slot team (a seat),
 //! `U` slot (an unseat), `T` u16 changed-input mask, inputs, u16
 //! changed-rewind mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16
 //! scores (the end).
@@ -19,7 +19,7 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::world::{Rules, World};
 
-pub const MAGIC: &[u8; 4] = b"OSR3";
+pub const MAGIC: &[u8; 4] = b"OSR4";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
@@ -60,6 +60,7 @@ impl Recorder {
         buf.push(rules.seats);
         buf.push(rules.gun_game as u8);
         buf.push(rules.friendly_fire as u8);
+        buf.push(rules.ctf as u8);
         buf.push(map);
         Recorder {
             buf,
@@ -187,6 +188,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
         seats: r.u8()?,
         gun_game: r.u8()? != 0,
         friendly_fire: r.u8()? != 0,
+        ctf: r.u8()? != 0,
     };
     if rules.seats == 0 || rules.seats as usize > MAX_FIGHTERS {
         return Err("a seat count past the last".into());
@@ -303,7 +305,7 @@ mod tests {
         let mut bytes = recorded();
         // Walk the records; past the middle of the match, turn every changed
         // input's forward stick around.
-        let mut at = 4 + 2 + 8 + 24 + 1 + 4 + 4 + 2 + 1 + 1 + 1 + 1;
+        let mut at = 4 + 2 + 8 + 24 + 1 + 4 + 4 + 2 + 1 + 1 + 1 + 1 + 1;
         let mut ticks = 0;
         let mut edited = 0;
         while bytes[at] != b'E' {

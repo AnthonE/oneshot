@@ -1,4 +1,5 @@
-//! The scope, over a zoomed gun's view (the sniper's 5x, the rifles' 2x):
+//! The scope, over a zoomed gun's view (the snipers' 5x and 10x, the
+//! rifles' 2x):
 //! a rounded window in the middle, the world dimmed around it, a black
 //! frame; a ladder of ticks up each side, the stadia lines across, a ring
 //! on the aim point (red over an enemy in reach, as the crosshair is) and a
@@ -240,7 +241,7 @@ pub fn draw(
     let s = link.0.session();
     let f = s.core.own().0;
     let arm = sim::arms::arm(f.gun().arm);
-    let up = s.ready && look.zoom && f.alive && arm.zoom > 1 && f.riding().is_none();
+    let up = s.ready && f.alive && look.magnification(arm) > 1.0 && f.riding().is_none();
     if let Ok(mut v) = root.single_mut() {
         let want = if up { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
@@ -270,7 +271,7 @@ pub fn draw(
         }
     }
     if let Ok(mut t) = zoom.single_mut() {
-        let v = format!("{}x", arm.zoom);
+        let v = format!("{}x", arm.zoom_at(look.level));
         if t.0 != v {
             t.0 = v;
         }

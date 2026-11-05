@@ -35,8 +35,9 @@ pub struct NativeClient {
     /// The close's code and reason, once the connection has ended.
     ended: Arc<std::sync::Mutex<Option<(u32, String)>>>,
     t0: Instant,
-    /// Kept open: dropping it would close our side of the stream.
-    _send: wtransport::SendStream,
+    /// Our side of the stream: kept open (dropping it would close it), and
+    /// what a watcher's asks go out on.
+    send: Arc<tokio::sync::Mutex<wtransport::SendStream>>,
     _endpoint: Endpoint<wtransport::endpoint::endpoint_side::Client>,
 }
 
@@ -122,14 +123,14 @@ impl NativeClient {
             }
         });
         Ok(NativeClient {
-            session: Session::new(),
+            session: Session::for_hello(&hello),
             conn,
             msgs,
             datagrams,
             closed,
             ended,
             t0: Instant::now(),
-            _send: send,
+            send: Arc::new(tokio::sync::Mutex::new(send)),
             _endpoint: endpoint,
         })
     }
@@ -156,6 +157,15 @@ impl NativeClient {
         let now = self.now_ms();
         let mut wire = ConnWire(&self.conn);
         self.session.update(now, input, &mut wire);
+        for m in self.session.take_outgoing() {
+            let send = self.send.clone();
+            tokio::spawn(async move {
+                let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+                if let Ok(n) = frame_msg(&m, &mut f) {
+                    let _ = send.lock().await.write_all(&f[..n]).await;
+                }
+            });
+        }
     }
 
     /// Closes the connection: we're leaving.
@@ -204,7 +214,7 @@ impl NativeLobby {
             msgs,
             datagrams,
             closed,
-            _send,
+            send,
             _endpoint,
             ..
         } = c;
@@ -223,9 +233,9 @@ impl NativeLobby {
             }
         });
         let (out, mut outq) = unbounded_channel::<Msg>();
-        let mut send = _send;
         tokio::spawn(async move {
             let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+            let mut send = send.lock().await;
             while let Some(m) = outq.recv().await {
                 let Ok(n) = frame_msg(&m, &mut f) else { continue };
                 if send.write_all(&f[..n]).await.is_err() {
