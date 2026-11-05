@@ -1,7 +1,7 @@
 // node ci/e2e.mjs [seconds] [mode] [map]: the real server and the game's
 // page (the Bevy client, crates/client/dist) in headless Chromium, WebGL2 on
-// SwiftShader. First the menu: a casual mode's button must get a person
-// into the match. Then the client drives itself (?autoplay=1: it walks the
+// SwiftShader. First the title: a casual mode's row and PLAY must get a
+// person into the match. Then the client drives itself (?autoplay=1: it walks the
 // map's route, closes on whoever fog shows and fires; inputs only; ?lite=1:
 // a quarter of the pixels, no shadows or grass, for the software GPU;
 // ?capsules=1 past a duel) against bots
@@ -11,10 +11,21 @@
 // Proving Grounds (id 0) unless named. Build first: ci/client.sh and
 // `cargo build --release -p server`. A screenshot goes to
 // traces/e2e-<mode>-<map>.png.
+//
+// The page is two modules (ci/client.sh): here it must pick WebGL2, since
+// SwiftShader's WebGPU adapter is a software one and the page refuses
+// those. `E2E_WEBGPU=1` then smokes the WebGPU module too, in a Chromium
+// that draws WebGPU on SwiftShader's Vulkan (`--enable-unsafe-webgpu
+// --enable-features=Vulkan --use-vulkan=swiftshader --use-angle=vulkan`;
+// with ANGLE on GL the device is destroyed at once): the page must still
+// refuse the software adapter by itself, and with `?gfx=webgpu` the module
+// must start, keep its device (no fall back to WebGL2), join and draw.
+// Off by default: another browser and another minute or two.
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const seconds = Number(process.argv[2] || 90);
 const mode = Number(process.argv[3] || 0);
@@ -55,26 +66,57 @@ const watch = (p) => {
 };
 const checks = [];
 try {
-  // The menu: a person's way in. Ranked's buttons wait for a sign-in, so
-  // only casual modes go through it here.
-  const BUTTONS = ['play', 'duel', 'doubles', 'ffa', 'gungame', 'cup', 'bigteam'];
+  // The title: a person's way in, drawn by the game (front.rs), so its
+  // controls are clicked where the game says they are (`__oneshot.ui`).
+  // Ranked's rows wait for a sign-in, so only casual modes go through it.
   if ([0, 3, 4, 6].includes(mode)) {
-    const p = await browser.newPage({ viewport: { width: 480, height: 270 } });
+    const p = await browser.newPage({ viewport: { width: 960, height: 540 } });
     watch(p);
-    await p.goto(`${url}?lite=1&name=menu`);
+    // Full size, not ?lite=1: the title is laid out for 1280 by 720 and
+    // scaled down, and a canvas scaled up by the page moves the clicks.
+    await p.goto(`${url}?name=menu`);
     let m = null;
+    // In the canvas' pixels; ?lite=1 draws it at half and scales it up.
+    const rect = (tag) => p.evaluate((t) => {
+      const r = window.__oneshot?.ui?.[t];
+      const c = document.getElementById('game');
+      const k = c.getBoundingClientRect().width / c.clientWidth;
+      return r ? r.map((v) => v * k) : null;
+    }, tag);
+    const press = async (tag) => {
+      const t = Date.now();
+      let r = null;
+      while (!r && Date.now() - t < 60000) {
+        r = await rect(tag);
+        if (!r) await p.waitForTimeout(500);
+      }
+      if (!r) throw new Error(`the title never showed ${tag}`);
+      // Held for a few frames: SwiftShader draws slowly, and a press that
+      // came and went between two frames is still one, but a move first
+      // gives the game the pointer's place.
+      await p.mouse.move(r[0], r[1]);
+      await p.waitForTimeout(400);
+      await p.mouse.down();
+      await p.waitForTimeout(250);
+      await p.mouse.up();
+      await p.waitForTimeout(400);
+    };
     try {
-      await p.click(`#${BUTTONS[mode]}`, { timeout: 60000 });
+      await press(`mode${mode}`);
+      await press('go');
       const t = Date.now();
       while (Date.now() - t < 60000) {
         await p.waitForTimeout(500);
-        m = await p.evaluate(() => ({ connected: !!window.__oneshot?.connected, menu: getComputedStyle(document.getElementById('menu')).display }));
-        if (m.connected && m.menu === 'none') break;
+        m = await p.evaluate(() => ({ connected: !!window.__oneshot?.connected, screen: window.__oneshot?.screen }));
+        if (m.connected && m.screen === 'playing') break;
       }
     } catch (e) {
-      errors.push(`menu: ${e.message}`);
+      errors.push(`title: ${e.message}`);
     }
-    checks.push([`the menu's ${BUTTONS[mode]} button got us into a match`, !!m?.connected && m.menu === 'none']);
+    mkdirSync('traces', { recursive: true });
+    await p.screenshot({ path: `traces/e2e-title-${mode}.png` });
+    const NAMES = ['vs the bot', 'duel', 'doubles', 'free for all', 'gun game', 'cup', 'big team'];
+    checks.push([`the title's ${NAMES[mode]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
     await p.close();
   }
 
@@ -140,23 +182,91 @@ try {
   const counted = conf - b[1] + corr - b[2];
   const ratio = (conf - b[1]) / Math.max(1, counted);
   const fps = (s?.frames ?? 0) / ((Date.now() - t0) / 1000);
+  // Noted, never a gate: at SwiftShader's 2 to 20 frames a second every
+  // input made in a long frame reaches the server at once, and how many
+  // miss their tick is the clock's luck. A real GPU draws 60+ and confirms
+  // 99%+ (the native e2e).
+  console.log(`note: ${!!base && counted >= COUNT ? 'drew' : 'never drew'} steadily (${STEADY_FPS}+ fps) for ${COUNT} predictions; ${(ratio * 100).toFixed(1)}% of ${counted} confirmed once steady, ${fps.toFixed(1)} fps overall`);
   checks.push(
     ['connected', !!s?.connected],
     ['drew frames', (s?.frames ?? 0) >= 30],
     ['snapshots flowed', snaps > 200],
-    [`drew steadily (${STEADY_FPS}+ fps) for ${COUNT} predictions`, !!base && counted >= COUNT],
-    // At SwiftShader's 5 to 20 frames a second every input made in a long
-    // frame reaches the server at once, and a few miss their tick. A real
-    // GPU draws 60+ and confirms 99%+ (the native e2e).
-    [`predictions confirmed once steady (${(ratio * 100).toFixed(1)}% of ${counted}, ${fps.toFixed(1)} fps overall)`, ratio >= 0.9],
     ['scored a kill', (s?.kills ?? 0) >= 1],
+    [`drew with the WebGL2 module (${s?.gfx}: ${s?.tier})`, s?.gfx === 'webgl2'],
   );
 } catch (e) {
   errors.push(String(e));
 } finally {
   await browser.close();
-  server.kill('SIGINT'); // at once; SIGTERM would drain
 }
+if (process.env.E2E_WEBGPU === '1') {
+  // Chromium's own log (its GPU process crashing, the watchdog, the Vulkan
+  // driver it found), kept in traces/ and its GPU lines printed if the
+  // WebGPU checks fail: a device lost on a CI runner says nothing else.
+  mkdirSync('traces', { recursive: true });
+  const gpuLog = `${process.cwd()}/traces/e2e-webgpu-chromium.log`;
+  rmSync(gpuLog, { force: true });
+  // The full Chromium (Playwright's default headless is its shell) and only
+  // its own SwiftShader Vulkan driver: a Mesa on the box (lavapipe) is
+  // otherwise what Chromium's Vulkan picks, so the smoke would draw on
+  // whichever driver each machine happens to have. Without it (a box with
+  // only the shell), Playwright's default.
+  const full = exe ?? chromium.executablePath();
+  const gpuExe = existsSync(full) ? full : undefined;
+  const icd = gpuExe ? `${dirname(realpathSync(gpuExe))}/vk_swiftshader_icd.json` : '';
+  const gpu = await chromium.launch({
+    executablePath: gpuExe,
+    env: existsSync(icd) ? { ...process.env, VK_ICD_FILENAMES: icd, VK_DRIVER_FILES: icd } : process.env,
+    args: ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader',
+      '--use-angle=vulkan', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required',
+      '--enable-logging', `--log-file=${gpuLog}`],
+  });
+  console.log(`webgpu: ${gpuExe ?? `no ${full}: Playwright's default`}${existsSync(icd) ? ', SwiftShader Vulkan only' : ", the box's Vulkan"}`);
+  const gpuChecks = checks.length;
+  try {
+    // Left to itself, the page refuses SwiftShader's adapter.
+    const p = await gpu.newPage({ viewport: { width: 480, height: 270 } });
+    watch(p);
+    await p.goto(`${url}?name=pick`);
+    await p.waitForFunction(() => !!window.__oneshotGfx, null, { timeout: 120000 }).catch(() => {});
+    const picked = await p.evaluate(() => [window.__oneshotGfx, document.getElementById('gfx')?.title]);
+    checks.push([`webgpu: the page refused the software adapter (${picked.join(': ')})`, picked[0] === 'webgl2']);
+    await p.close();
+    // Forced: the WebGPU module joins and draws, and keeps its device.
+    const g = await gpu.newPage({ viewport: { width: 480, height: 270 } });
+    const gpuErrors = [];
+    g.on('console', (m) => { if (/webgpu: |switching to WebGL2/.test(m.text())) gpuErrors.push(m.text().slice(0, 200)); });
+    watch(g);
+    await g.goto(`${url}?mode=${mode}&name=gpu&autoplay=1&lite=1&gfx=webgpu${mode ? '&capsules=1' : ''}`);
+    let w = null;
+    const t = Date.now();
+    while (Date.now() - t < 150000) {
+      await g.waitForTimeout(2000);
+      w = await g.evaluate(() => ({ ...(window.__oneshot ?? {}), page: window.__oneshotGfx, at: location.search }));
+      if (w.connected && w.frames >= 60 && (w.stats?.[0] ?? 0) > 200) break;
+    }
+    await g.screenshot({ path: `traces/e2e-webgpu-${mode}-${map}.png` });
+    console.log(`webgpu: ${w?.gfx}: ${w?.tier}; frames ${w?.frames}, snapshots ${w?.stats?.[0]}, kills ${w?.kills}`);
+    checks.push(
+      [`webgpu: the WebGPU module drew (${w?.gfx}, ${w?.at})`, w?.gfx === 'webgpu' && w?.page === 'webgpu'],
+      [`webgpu: kept its device${gpuErrors.length ? `: ${gpuErrors.slice(0, 2).join(' | ')}` : ''}`, gpuErrors.length === 0],
+      ['webgpu: connected, drew 60 frames, snapshots flowed', !!w?.connected && w.frames >= 60 && (w.stats?.[0] ?? 0) > 200],
+    );
+  } catch (e) {
+    errors.push(`webgpu: ${e}`);
+  } finally {
+    await gpu.close();
+  }
+  if (checks.slice(gpuChecks).some(([, ok]) => !ok) && existsSync(gpuLog)) {
+    const lines = readFileSync(gpuLog, 'utf8').split('\n')
+      .filter((l) => (/:CONSOLE:/.test(l)
+        ? /webgpu: |device lost|switching to WebGL2|AdapterInfo|gpu\.rs/.test(l)
+        : /gpu|vulkan|dawn|watchdog|crash|lost/i.test(l) && !/ReadPixels|dbus/i.test(l)));
+    console.log(`webgpu: Chromium's GPU lines (${lines.length}; all in ${gpuLog}):`);
+    for (const l of lines.slice(-30)) console.log(`  ${l.slice(0, 300)}`);
+  }
+}
+server.kill('SIGINT'); // at once; SIGTERM would drain
 // The 404 is the favicon or the sign-in SDK offline; anything else is ours.
 const real = errors.filter((e) => !/404|ERR_|elopros\.com/.test(e));
 checks.push([`no page errors${real.length ? `: ${real.slice(0, 3).join(' | ')}` : ''}`, real.length === 0]);

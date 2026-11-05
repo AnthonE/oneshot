@@ -36,6 +36,10 @@ pub struct Rules {
     /// [`crate::arms::LADDER`], a kill moves the killer up a rung, pads are
     /// off, and the score is the rung.
     pub gun_game: bool,
+    /// With sides: rounds, blasts and blows hurt teammates too, and a
+    /// teammate killed costs the side a point (ranked, as MLG plays). Nobody
+    /// homes on, lunges at or is magnetised toward a teammate either way.
+    pub friendly_fire: bool,
 }
 
 impl Rules {
@@ -48,10 +52,12 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 2,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
     /// 2v2 Team Slayer: first side to 30, or the most at 12 minutes.
+    /// Ranked, so friendly fire is on.
     pub fn doubles() -> Rules {
         Rules {
             teams: true,
@@ -60,6 +66,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 4,
             gun_game: false,
+            friendly_fire: true,
         }
     }
 
@@ -73,6 +80,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -86,6 +94,7 @@ impl Rules {
             loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
+            friendly_fire: false,
         }
     }
 
@@ -136,9 +145,10 @@ pub enum ProjKind {
 /// A projectile homing on nobody.
 pub const NO_TARGET: u8 = 255;
 
-/// A sticky's fuse once it sticks or lands at `age` ticks.
-fn sticky_fuse(age: u16) -> u16 {
-    ticks(STICKY_FUSE_MS).max(ticks(STICKY_ARM_MS).saturating_sub(age as u32)) as u16
+/// A grenade's fuse lit at `age` ticks from the throw: `after_ms` from now,
+/// but never sooner than `arm_ms` from the throw (Halo 2's).
+fn fuse(age: u16, after_ms: u32, arm_ms: u32) -> u16 {
+    ticks(after_ms).max(ticks(arm_ms).saturating_sub(age as u32)) as u16
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -198,6 +208,58 @@ impl Thing for Pad {
     }
 }
 
+/// A gun on the floor, with what was left in it, or the grenades someone
+/// carried (`gun.arm` [`NONE`]): left by the dead, and by a hand that let
+/// go for another gun. USE takes the gun as a pad's; walking over one takes
+/// its rounds for a gun of the same kind carried, and its grenades.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Dropped {
+    pub active: bool,
+    pub gun: Gun,
+    pub frags: u8,
+    pub stickies: u8,
+    /// On the floor, on the grid; or in the air, thrown by a blast or out
+    /// of a falling hand.
+    pub pos: V3,
+    /// Zero lying still; otherwise it flies and bounces as a frag does
+    /// ([`World::fly_drops`]) until it settles.
+    pub vel: V3,
+    /// Ticks till it goes.
+    pub ttl: u32,
+}
+
+impl Dropped {
+    /// Nothing left to take: no rounds in the gun, no grenades.
+    fn spent(&self) -> bool {
+        (self.gun.arm == NONE || self.gun.spent()) && self.frags == 0 && self.stickies == 0
+    }
+
+    /// Within reach of a body standing at `at`.
+    pub fn reach(&self, at: V3) -> bool {
+        let d = self.pos - at;
+        crate::fmath::fabs(d.x) < DROP_REACH && crate::fmath::fabs(d.z) < DROP_REACH && crate::fmath::fabs(d.y) < 1.5
+    }
+}
+
+impl Thing for Dropped {
+    fn live(&self) -> bool {
+        self.active
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.bool(self.active);
+        h.u8(self.gun.arm);
+        h.u16(self.gun.mag);
+        h.u16(self.gun.reserve);
+        h.u16(self.gun.heat);
+        h.u8(self.frags);
+        h.u8(self.stickies);
+        h.v3(self.pos);
+        h.v3(self.vel);
+        h.u32(self.ttl);
+    }
+}
+
 pub struct World {
     pub tick: u32,
     pub map: Map,
@@ -207,6 +269,7 @@ pub struct World {
     pub pads: [Pad; MAX_PADS],
     /// By slot: slot `i` is always the map's vehicle `i` (`Map::vehicles`).
     pub vehicles: Pool<Vehicle, MAX_VEHICLES>,
+    pub drops: Pool<Dropped, MAX_DROPS>,
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -236,6 +299,7 @@ impl World {
             proj: Pool::default(),
             pads: [Pad::default(); MAX_PADS],
             vehicles,
+            drops: Pool::default(),
             phase: Phase::Countdown,
             clock: ticks(COUNTDOWN_MS),
             score: [0; MAX_FIGHTERS],
@@ -311,7 +375,14 @@ impl World {
         // where everyone now is, so seat order never decides a trade.
         let mut locals = [Local::default(); MAX_FIGHTERS];
         for (s, l) in locals.iter_mut().enumerate() {
+            let left = self.fighters[s].left;
             *l = self.fighters[s].step_in(Phase::Playing, &inputs[s].sanitized(), &self.map);
+            // A melee or a swap let go of the left gun (the fighter's own
+            // tick, which the client predicts): it falls here.
+            let f = &self.fighters[s];
+            if left.arm != NONE && f.left.arm == NONE && f.active() {
+                self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
+            }
         }
         // Vehicles drive under their drivers' inputs (what a driver
         // predicts: Vehicle::step_local), then everyone riding sits.
@@ -350,6 +421,9 @@ impl World {
         self.lunges();
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
+            self.loot(s);
+        }
+        for s in 0..MAX_FIGHTERS {
             self.recover(s);
         }
         for i in 0..MAX_VEHICLES {
@@ -357,6 +431,13 @@ impl World {
         }
         for p in self.pads.iter_mut() {
             p.empty_for = p.empty_for.saturating_sub(1);
+        }
+        self.fly_drops();
+        for d in self.drops.iter_mut().filter(|d| d.active) {
+            d.ttl = d.ttl.saturating_sub(1);
+            if d.ttl == 0 {
+                d.active = false;
+            }
         }
         if self.phase == Phase::Playing {
             self.clock -= 1;
@@ -398,7 +479,8 @@ impl World {
                 // A homing round locks on whoever the aim was on, as seen.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
-                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD) {
+                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD, true)
+                    {
                         target = q as u8;
                     }
                 }
@@ -432,14 +514,16 @@ impl World {
         }
     }
 
-    /// The nearest enemy (or vehicle) a ray from `eye` meets, where the
-    /// server says the shooter saw them, and how far.
-    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32) -> Option<(Target, f32)> {
-        let me = &self.fighters[s];
+    /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
+    /// hurt, where the server says the shooter saw them, and how far. With
+    /// `lock` (homing, a lunge) a teammate is never the one, friendly fire
+    /// or not.
+    #[allow(clippy::too_many_arguments)]
+    fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32, lock: bool) -> Option<(Target, f32)> {
         let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
         for (q, v) in self.fighters.iter().enumerate() {
-            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+            if q == s || !v.active() || (if lock { self.mate(s, q) } else { self.spared(s, q) }) {
                 continue;
             }
             let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
@@ -465,7 +549,7 @@ impl World {
             }
         }
         // Hulls, rewound like bodies. A rider hit before its hull is hit.
-        let ride = me.riding().map(|(i, _)| i);
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (i, v) in self.vehicles.iter().enumerate() {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
@@ -484,20 +568,74 @@ impl World {
         best
     }
 
-    /// Whether `att` may not hurt `v`: with sides, a teammate of theirs
-    /// rides in it.
+    /// Whether `q` is on `att`'s side (never `att` itself).
+    fn mate(&self, att: usize, q: usize) -> bool {
+        self.rules.teams && q != att && self.fighters[q].team == self.fighters[att].team
+    }
+
+    /// Whether `att` may not hurt `q`: a teammate, with friendly fire off.
+    fn spared(&self, att: usize, q: usize) -> bool {
+        !self.rules.friendly_fire && self.mate(att, q)
+    }
+
+    /// Whether `att` may not hurt `v`: with sides and friendly fire off, a
+    /// teammate of theirs rides in it.
     fn spares(&self, att: usize, v: &Vehicle) -> bool {
         let team = self.fighters[att].team;
         self.rules.teams
+            && !self.rules.friendly_fire
             && v.seats
                 .iter()
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
     }
 
+    /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
+    /// misses, the one whose rewound chest it passes nearest in angle,
+    /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
+    /// and its `aim_range`, nearer than `limit` and in clear line: the way
+    /// to that chest. Only + − × ÷ and sqrt; never the head.
+    fn magnet(&self, s: usize, eye: V3, dir: V3, id: u8, depth: u32, limit: f32) -> Option<V3> {
+        let a = arm(id);
+        let me = &self.fighters[s];
+        let reach = a.aim_range.min(limit);
+        let mut best: Option<(f32, V3)> = None;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
+                continue;
+            }
+            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            if !p.alive {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, if p.crouched { CHEST_Y_CROUCH } else { CHEST_Y }, 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 || t > reach {
+                continue;
+            }
+            let off = (to - dir * t).len();
+            if off > HIT_R + t * a.magnet || best.is_some_and(|b| b.0 * t <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off / t, c));
+            }
+        }
+        best.map(|(_, c)| (c - eye).norm())
+    }
+
     fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
         let a = arm(id);
-        let wall = self.map.ray(eye, dir, a.range);
-        let hit = self.trace(s, eye, dir, wall, depth, 0.0);
+        let mut wall = self.map.ray(eye, dir, a.range);
+        let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
+        let mut dir = dir;
+        if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
+            if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
+                dir = bent;
+                wall = self.map.ray(eye, dir, a.range);
+                hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
+            }
+        }
         let t = hit.map_or(wall, |h| h.1);
         self.events.push(Event {
             kind: Ev::Shot,
@@ -538,19 +676,38 @@ impl World {
             pos: eye,
             ..Event::default()
         });
-        let hit = self.trace(s, eye, dir, wall, depth, 0.25);
+        let hit = self.trace(s, eye, dir, wall, depth, 0.25, false);
         if let Some((Target::Vehicle(i), _)) = hit {
             self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
         }
         if let Some((Target::Fighter(q, _), _)) = hit {
-            let v = &self.fighters[q];
-            let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
-            let toward = (v.body.pos - f.body.pos).flat().norm();
-            if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
-                self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
-            } else {
-                self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
-            }
+            self.blow(s, q);
+            return;
+        }
+        if hit.is_some() || f.ride != 0 {
+            return;
+        }
+        // Past reach but near, with the aim on them: the lunge (Halo 2's),
+        // and the blow when it gets there (`lunges`).
+        let wall = self.map.ray(eye, dir, MELEE_LUNGE_RANGE);
+        if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, dir, wall, depth, MELEE_LUNGE_PAD, true) {
+            let me = &mut self.fighters[s];
+            me.lunge = q as u8 + 1;
+            me.lunge_left = ticks(MELEE_LUNGE_MS) as u16;
+            me.lunge_melee = true;
+            self.steer_lunge(s, q);
+        }
+    }
+
+    /// A melee lands on `q`: from behind it kills, else it's a blow.
+    fn blow(&mut self, s: usize, q: usize) {
+        let v = &self.fighters[q];
+        let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
+        let toward = (v.body.pos - self.fighters[s].body.pos).flat().norm();
+        if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
+            self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
+        } else {
+            self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
         }
     }
 
@@ -571,13 +728,13 @@ impl World {
         });
         let reach = if lunge { LUNGE_RANGE } else { SWORD_REACH };
         let wall = self.map.ray(eye, dir, reach);
-        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD) {
+        match self.trace(s, eye, dir, wall, depth, LUNGE_PAD, false) {
             Some((Target::Vehicle(i), t)) if t <= SWORD_REACH => {
                 let pts = arm(crate::arms::SWORD).dmg * PT;
                 self.damage_vehicle(s, i, pts, crate::arms::SWORD as u16);
             }
             Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
-            Some((Target::Fighter(q, _), _)) if lunge => {
+            Some((Target::Fighter(q, _), _)) if lunge && !self.mate(s, q) => {
                 let me = &mut self.fighters[s];
                 me.lunge = q as u8 + 1;
                 me.lunge_left = ticks(LUNGE_MS) as u16;
@@ -597,7 +754,8 @@ impl World {
             }
             let q = f.lunge as usize - 1;
             let v = self.fighters[q];
-            let on = f.active() && f.ride == 0 && v.active() && v.ride == 0 && f.gun().arm == crate::arms::SWORD;
+            let armed = f.lunge_melee || f.gun().arm == crate::arms::SWORD;
+            let on = f.active() && f.ride == 0 && v.active() && v.ride == 0 && armed;
             if !on {
                 self.end_lunge(s);
                 continue;
@@ -606,7 +764,11 @@ impl World {
             let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
             if d.flat().len() <= STRIKE_R && crate::fmath::fabs(d.y) < BODY_H && self.map.clear(f.eye(), chest) {
                 self.end_lunge(s);
-                self.strike(s, q);
+                if f.lunge_melee {
+                    self.blow(s, q);
+                } else {
+                    self.strike(s, q);
+                }
                 continue;
             }
             self.fighters[s].lunge_left -= 1;
@@ -618,14 +780,20 @@ impl World {
         }
     }
 
-    /// `s`'s body driven straight at `q`'s at [`LUNGE_SPEED`].
+    /// `s`'s body driven straight at `q`'s at [`LUNGE_SPEED`] (a melee's
+    /// at [`MELEE_LUNGE_SPEED`]).
     fn steer_lunge(&mut self, s: usize, q: usize) {
         let to = self.fighters[q].body.pos - self.fighters[s].body.pos;
         let len = to.len();
         if len <= 0.0 {
             return;
         }
-        let v = to * (LUNGE_SPEED / len);
+        let speed = if self.fighters[s].lunge_melee {
+            MELEE_LUNGE_SPEED
+        } else {
+            LUNGE_SPEED
+        };
+        let v = to * (speed / len);
         let b = &mut self.fighters[s].body;
         b.vel = V3::new(
             crate::movement::quant(v.x),
@@ -646,12 +814,13 @@ impl World {
         }
         f.lunge = 0;
         f.lunge_left = 0;
+        f.lunge_melee = false;
     }
 
     /// The sword lands on `q`: a kill, unless `q` was lunging back at `s`
     /// (a clash: both thrown apart, nobody hurt).
     fn strike(&mut self, s: usize, q: usize) {
-        if self.fighters[q].lunge == s as u8 + 1 {
+        if self.fighters[q].lunge == s as u8 + 1 && !self.fighters[q].lunge_melee {
             self.end_lunge(q);
             let away = (self.fighters[q].body.pos - self.fighters[s].body.pos).flat().norm();
             for (k, dir) in [(s, away * -1.0), (q, away)] {
@@ -677,11 +846,12 @@ impl World {
         let f = self.fighters[s];
         let dir = aim_dir(f.yaw, f.pitch);
         let vel = dir * GREN_SPEED + V3::new(0.0, 2.0, 0.0);
-        // A sticky's fuse is lit when it sticks or lands; till then, long.
+        // A grenade's fuse is lit when it sticks or comes down; till then,
+        // long.
         let (kind, ttl) = if sticky {
             (ProjKind::Sticky, ticks(10_000))
         } else {
-            (ProjKind::Frag, ticks(GREN_FUSE_MS))
+            (ProjKind::Frag, ticks(GREN_LIFE_MS))
         };
         self.launch(
             Projectile {
@@ -747,13 +917,13 @@ impl World {
                     p.vel = at - base;
                     if !p.landed {
                         p.landed = true;
-                        p.ttl = sticky_fuse(p.age);
+                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
                     }
                 }
                 None => {
-                    if self.bounce(p, GRAVITY) && !p.landed {
+                    if self.bounce(p, GRAVITY).0 && !p.landed {
                         p.landed = true;
-                        p.ttl = sticky_fuse(p.age);
+                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
                     }
                 }
             }
@@ -766,8 +936,7 @@ impl World {
         let owner = p.owner as usize;
         if p.landed && (p.target as usize) < MAX_FIGHTERS {
             let q = p.target as usize;
-            let mate = self.rules.teams && q != owner && self.fighters[q].team == self.fighters[owner].team;
-            if !mate {
+            if !self.spared(owner, q) {
                 self.damage(
                     owner,
                     q,
@@ -784,6 +953,7 @@ impl World {
             STICKY_DMG,
             STICKY_RADIUS,
             STICKY_FULL,
+            STICKY_EDGE,
             1.0,
             Cause::Sticky as u16,
         );
@@ -810,12 +980,11 @@ impl World {
         let mut met = t < reach;
         let mut who = None;
         let owner = p.owner as usize;
-        let team = self.fighters[owner].team;
         for (q, v) in self.fighters.iter().enumerate() {
             if !v.active() || (q == owner && p.age < 16) {
                 continue;
             }
-            if spares && self.rules.teams && q != owner && v.team == team {
+            if spares && self.spared(owner, q) {
                 continue;
             }
             if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.1, v.body.height(), t) {
@@ -904,7 +1073,7 @@ impl World {
         let cause = p.arm as u16;
         match (p.kind, who) {
             (ProjKind::Rocket | ProjKind::Cannon | ProjKind::Lob, _) => {
-                self.blast(at, owner, a.dmg, a.radius, a.full, 0.5, cause);
+                self.blast(at, owner, a.dmg, a.radius, a.full, 0, 0.5, cause);
             }
             (ProjKind::Bolt, Some(Target::Fighter(q, _))) => {
                 self.damage_k(owner, q, a.dmg * PT, false, Head::None, cause, a.shield_k);
@@ -969,23 +1138,35 @@ impl World {
 
     /// A frag's or a lob's tick under gravity off the map's floors and
     /// walls: where it goes, and whether it touched anything.
-    fn bounce(&self, p: &mut Projectile, g: f32) -> bool {
+    /// One tick of a thrown thing under `g`, off what it meets: whether it
+    /// touched anything, and whether that was a floor (the map's, a box's
+    /// top, a solid's), not a wall.
+    fn bounce(&self, p: &mut Projectile, g: f32) -> (bool, bool) {
+        self.bounce_at(&mut p.pos, &mut p.vel, g, GREN_BOUNCE, GREN_SLIDE)
+    }
+
+    /// [`Self::bounce`] for anything at `pos` moving at `vel`: `bounce` of
+    /// the speed into a surface comes back, `slide` of the speed along a
+    /// floor is kept.
+    fn bounce_at(&self, pos: &mut V3, vel: &mut V3, g: f32, bounce: f32, slide: f32) -> (bool, bool) {
         let mut touched = false;
-        p.vel.y -= g * DT;
-        let mut n = p.pos + p.vel * DT;
-        let floor = self.map.floor(n.x, n.z, 0.0, p.pos.y + 0.001);
+        let mut ground = false;
+        vel.y -= g * DT;
+        let mut n = *pos + *vel * DT;
+        let floor = self.map.floor(n.x, n.z, 0.0, pos.y + 0.001);
         if n.y < floor {
             touched = true;
+            ground = true;
             n.y = floor;
             if self.map.terrain.is_some() && floor == self.map.ground(n.x, n.z) {
                 // Off a slope: the part into the ground bounces back, the
                 // part along it slides on.
                 let gn = self.map.ground_normal(n.x, n.z);
-                let into = p.vel.dot(gn);
-                let along = p.vel - gn * into;
-                p.vel = along * GREN_SLIDE - gn * (into * GREN_BOUNCE);
+                let into = vel.dot(gn);
+                let along = *vel - gn * into;
+                *vel = along * slide - gn * (into * bounce);
             } else {
-                p.vel = V3::new(p.vel.x * GREN_SLIDE, -p.vel.y * GREN_BOUNCE, p.vel.z * GREN_SLIDE);
+                *vel = V3::new(vel.x * slide, -vel.y * bounce, vel.z * slide);
             }
         }
         for b in &self.map.boxes {
@@ -993,23 +1174,23 @@ impl World {
                 continue;
             }
             touched = true;
-            if p.pos.x <= b.min.x || p.pos.x >= b.max.x {
-                n.x = if p.pos.x <= b.min.x {
+            if pos.x <= b.min.x || pos.x >= b.max.x {
+                n.x = if pos.x <= b.min.x {
                     b.min.x - 0.01
                 } else {
                     b.max.x + 0.01
                 };
-                p.vel.x = -p.vel.x * GREN_BOUNCE;
-            } else if p.pos.z <= b.min.z || p.pos.z >= b.max.z {
-                n.z = if p.pos.z <= b.min.z {
+                vel.x = -vel.x * bounce;
+            } else if pos.z <= b.min.z || pos.z >= b.max.z {
+                n.z = if pos.z <= b.min.z {
                     b.min.z - 0.01
                 } else {
                     b.max.z + 0.01
                 };
-                p.vel.z = -p.vel.z * GREN_BOUNCE;
-            } else if p.pos.y <= b.min.y {
+                vel.z = -vel.z * bounce;
+            } else if pos.y <= b.min.y {
                 n.y = b.min.y - 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
+                vel.y = -vel.y * bounce;
             }
         }
         for s in &self.map.solids {
@@ -1018,26 +1199,27 @@ impl World {
                 continue;
             }
             touched = true;
-            if p.pos.y >= s.top_at(p.pos.x, p.pos.z) - 0.05 {
+            if pos.y >= s.top_at(pos.x, pos.z) - 0.05 {
                 // Onto its top (a slope moves up under a projectile).
+                ground = true;
                 n.y = top + 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
-            } else if p.pos.y <= s.y0 {
+                vel.y = -vel.y * bounce;
+            } else if pos.y <= s.y0 {
                 n.y = s.y0 - 0.01;
-                p.vel.y = -p.vel.y * GREN_BOUNCE;
+                vel.y = -vel.y * bounce;
             } else if let Some((x, z, ux, uz)) = s.push(n.x, n.z, 0.01) {
                 // Off its side: the part into the face back out.
                 n.x = x;
                 n.z = z;
-                let into = p.vel.x * ux + p.vel.z * uz;
+                let into = vel.x * ux + vel.z * uz;
                 if into < 0.0 {
-                    p.vel.x -= ux * into * (1.0 + GREN_BOUNCE);
-                    p.vel.z -= uz * into * (1.0 + GREN_BOUNCE);
+                    vel.x -= ux * into * (1.0 + bounce);
+                    vel.z -= uz * into * (1.0 + bounce);
                 }
             }
         }
-        p.pos = n;
-        touched
+        *pos = n;
+        (touched, ground)
     }
 
     fn projectiles(&mut self) {
@@ -1050,7 +1232,11 @@ impl World {
             p.ttl = p.ttl.saturating_sub(1);
             match p.kind {
                 ProjKind::Frag => {
-                    self.bounce(&mut p, GRAVITY);
+                    // Its fuse lit on first coming down on a floor.
+                    if self.bounce(&mut p, GRAVITY).1 && !p.landed {
+                        p.landed = true;
+                        p.ttl = p.ttl.min(fuse(p.age, GREN_FUSE_MS, GREN_ARM_MS));
+                    }
                     if p.ttl == 0 {
                         self.proj[i].active = false;
                         self.blast(
@@ -1059,6 +1245,7 @@ impl World {
                             GREN_DMG,
                             GREN_RADIUS,
                             GREN_FULL,
+                            GREN_EDGE,
                             1.0,
                             Cause::Grenade as u16,
                         );
@@ -1081,7 +1268,7 @@ impl World {
                             continue;
                         }
                     }
-                    if self.bounce(&mut p, GRAVITY * a.gravity) && !p.landed {
+                    if self.bounce(&mut p, GRAVITY * a.gravity).0 && !p.landed {
                         p.landed = true;
                         p.ttl = p.ttl.min(ticks(a.fuse_ms) as u16);
                     }
@@ -1118,8 +1305,19 @@ impl World {
         }
     }
 
+    /// A blast of `dmg` at `at`: whole to `full`, then down to `edge` at
+    /// `radius` (0 for most; Halo 2's grenades still do 50 there), nothing
+    /// past it or through the map.
     #[allow(clippy::too_many_arguments)]
-    fn blast(&mut self, at: V3, owner: usize, dmg: i32, radius: f32, full: f32, self_k: f32, cause: u16) {
+    fn blast(&mut self, at: V3, owner: usize, dmg: i32, radius: f32, full: f32, edge: i32, self_k: f32, cause: u16) {
+        let rim = edge as f32 / dmg.max(1) as f32;
+        let falloff = |dist: f32| {
+            if dist <= full {
+                1.0
+            } else {
+                1.0 - (dist - full) / (radius - full) * (1.0 - rim)
+            }
+        };
         self.events.push(Event {
             kind: Ev::Blast,
             a: owner as u8,
@@ -1127,10 +1325,9 @@ impl World {
             pos: at,
             ..Event::default()
         });
-        let team = self.fighters[owner].team;
         for q in 0..MAX_FIGHTERS {
             let v = self.fighters[q];
-            if !v.active() || (self.rules.teams && q != owner && v.team == team) {
+            if !v.active() || self.spared(owner, q) {
                 continue;
             }
             let chest = v.body.pos + V3::new(0.0, 0.9, 0.0);
@@ -1139,11 +1336,7 @@ impl World {
             if dist >= radius || !self.map.clear(at, chest) {
                 continue;
             }
-            let k = if dist <= full {
-                1.0
-            } else {
-                (radius - dist) / (radius - full)
-            };
+            let k = falloff(dist);
             let mut pts = (dmg * PT) as f32 * k;
             if q == owner {
                 pts *= self_k;
@@ -1171,11 +1364,7 @@ impl World {
             if dist >= radius || !self.map.clear(at, mid) {
                 continue;
             }
-            let k = if dist <= full {
-                1.0
-            } else {
-                (radius - dist) / (radius - full)
-            };
+            let k = falloff(dist);
             let away = if dist > 0.0 {
                 d * (1.0 / dist)
             } else {
@@ -1187,6 +1376,65 @@ impl World {
                 veh.grounded = false;
             }
             self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32, cause);
+        }
+        // Guns and grenades on the floor (the blast's own dead's among
+        // them) go flying.
+        for i in 0..MAX_DROPS {
+            let d = self.drops[i];
+            if !d.active {
+                continue;
+            }
+            let mid = d.pos + V3::new(0.0, DROP_MID, 0.0);
+            let off = mid - at;
+            let dist = off.len();
+            if dist >= radius || !self.map.clear(at, mid) {
+                continue;
+            }
+            let k = falloff(dist);
+            let away = if dist > 0.0 {
+                off * (1.0 / dist)
+            } else {
+                V3::new(0.0, 1.0, 0.0)
+            };
+            let d = &mut self.drops[i];
+            d.vel = d.vel + away * (BLAST_PUSH * DROP_PUSH_K * k) + V3::new(0.0, DROP_LIFT * k, 0.0);
+        }
+    }
+
+    /// Drops in the air: a tick of each under gravity, off the floors and
+    /// walls as a frag goes, until one lies still on a floor. Kept on the
+    /// map's floor plan; one that falls out of the world is gone.
+    fn fly_drops(&mut self) {
+        for i in 0..MAX_DROPS {
+            let mut d = self.drops[i];
+            if !d.active || d.vel == V3::ZERO {
+                continue;
+            }
+            let (_, ground) = self.bounce_at(&mut d.pos, &mut d.vel, GRAVITY, DROP_BOUNCE, DROP_SLIDE);
+            let (x, z) = (
+                d.pos.x.clamp(self.map.lo.0, self.map.hi.0),
+                d.pos.z.clamp(self.map.lo.1, self.map.hi.1),
+            );
+            if x != d.pos.x {
+                d.vel.x = 0.0;
+            }
+            if z != d.pos.z {
+                d.vel.z = 0.0;
+            }
+            d.pos.x = x;
+            d.pos.z = z;
+            if ground && d.vel.len() < DROP_SETTLE {
+                d.vel = V3::ZERO;
+                d.pos = V3::new(
+                    crate::movement::quant(d.pos.x),
+                    crate::movement::quant(d.pos.y),
+                    crate::movement::quant(d.pos.z),
+                );
+            }
+            if d.pos.y < DROP_LOST_Y {
+                d.active = false;
+            }
+            self.drops[i] = d;
         }
     }
 
@@ -1237,16 +1485,17 @@ impl World {
                 let q = x as usize - 1;
                 self.fighters[q].ride = 0;
                 if self.fighters[q].alive {
-                    self.kill(att, q, Cause::Wreck as u16);
+                    self.kill(att, q, Cause::Wreck as u16, false);
                 }
             }
         }
         self.blast(
             v.pos + V3::new(0.0, 0.8, 0.0),
             att,
-            GREN_DMG,
-            GREN_RADIUS,
-            GREN_FULL,
+            WRECK_DMG,
+            WRECK_RADIUS,
+            WRECK_FULL,
+            0,
             1.0,
             Cause::Wreck as u16,
         );
@@ -1369,7 +1618,7 @@ impl World {
                 if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
                     continue;
                 }
-                if driver.is_some_and(|d| d != q && self.rules.teams && self.fighters[d].team == f.team) {
+                if driver.is_some_and(|d| self.spared(d, q)) {
                     continue;
                 }
                 let away = (f.body.pos - v.pos).flat().norm();
@@ -1443,22 +1692,39 @@ impl World {
             ..Event::default()
         });
         if dead {
-            self.kill(att, vic, cause);
+            self.kill(att, vic, cause, part == 2);
         }
     }
 
-    fn kill(&mut self, att: usize, vic: usize, cause: u16) {
+    /// `att` killed `vic` with `cause`; `head`: the blow was to the head.
+    fn kill(&mut self, att: usize, vic: usize, cause: u16, head: bool) {
         self.leave_vehicle(vic);
         let v = &mut self.fighters[vic];
         v.alive = false;
         v.health = 0;
         v.shield = 0;
+        // What they held leaves their hands with some of how they moved.
+        let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
         v.needles = 0;
         v.respawn = ticks(RESPAWN_MS) as u16;
         v.deaths += 1;
         let vteam = v.team;
         let pos = v.body.pos;
+        // What they held falls where they fell (Gun Game's ladder guns
+        // aren't for the taking).
+        let (hand, left, frags, stickies) = (*v.gun(), v.left, v.grenades, v.stickies);
+        if !self.rules.gun_game {
+            self.spill(hand, 0, 0, pos, toss);
+            self.spill(left, 0, 0, pos + V3::new(DROP_APART, 0.0, 0.0), toss);
+            self.spill(
+                Gun::default(),
+                frags,
+                stickies,
+                pos + V3::new(0.0, 0.0, DROP_APART),
+                toss,
+            );
+        }
         let k = &mut self.fighters[att];
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
@@ -1487,6 +1753,7 @@ impl World {
             kind: Ev::Kill,
             a: att as u8,
             b: vic as u8,
+            part: if head { 2 } else { 0 },
             c: cause,
             pos,
             ..Event::default()
@@ -1515,54 +1782,196 @@ impl World {
         self.winner = who;
     }
 
+    /// USE on foot: the nearest pad holding its gun, or gun on the floor,
+    /// in reach. What a hand lets go of for it falls at `s`'s feet.
     fn pickup(&mut self, s: usize) {
         if self.rules.gun_game {
             return;
         }
         let at = self.fighters[s].body.pos;
+        // How far, a pad (or a drop), its index.
+        let mut best: Option<(f32, bool, usize)> = None;
         for (i, def) in self.map.pads.iter().enumerate().take(MAX_PADS) {
             let d = def.pos - at;
             let near = crate::fmath::fabs(d.x) < PAD_REACH
                 && crate::fmath::fabs(d.z) < PAD_REACH
                 && crate::fmath::fabs(d.y) < 1.5;
-            if !near || self.pads[i].empty_for > 0 {
+            let far = d.flat().len();
+            if near && self.pads[i].empty_for == 0 && best.is_none_or(|b| far < b.0) {
+                best = Some((far, true, i));
+            }
+        }
+        for (i, d) in self.drops.live() {
+            let far = (d.pos - at).flat().len();
+            if d.gun.arm != NONE && d.reach(at) && best.is_none_or(|b| far < b.0) {
+                best = Some((far, false, i));
+            }
+        }
+        let Some((_, pad, i)) = best else {
+            return;
+        };
+        let (gun, pos) = if pad {
+            let def = &self.map.pads[i];
+            self.pads[i].empty_for = ticks(def.respawn_ms);
+            (Gun::full(def.arm), def.pos)
+        } else {
+            let d = &mut self.drops[i];
+            let gun = d.gun;
+            d.gun = Gun::default();
+            d.active = !d.spent();
+            (gun, d.pos)
+        };
+        let gone = self.equip(s, gun, pad);
+        let feet = self.fighters[s].body.pos;
+        self.spill(gone[0], 0, 0, feet + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
+        self.spill(gone[1], 0, 0, feet, V3::ZERO);
+        self.events.push(Event {
+            kind: Ev::Pickup,
+            a: s as u8,
+            c: gun.arm as u16,
+            pos,
+            ..Event::default()
+        });
+    }
+
+    /// `s` takes `g` by a pickup's rules, and gives back what its hands let
+    /// go of for it: the left hand's gun, then the one in hand. A
+    /// one-handed gun beside another goes in the left hand; a gun for two
+    /// hands empties the left. A gun of a kind carried is `refill`ed (a
+    /// pad's, full), or from the floor the fuller of the two is kept.
+    fn equip(&mut self, s: usize, g: Gun, refill: bool) -> [Gun; 2] {
+        let f = &mut self.fighters[s];
+        let a = arm(g.arm);
+        let swap = ticks(crate::arms::SWAP_MS) as u16;
+        let mut gone = [Gun::default(); 2];
+        if a.dual && arm(f.gun().arm).dual {
+            gone[0] = f.left;
+            f.left = g;
+            f.left_reload = 0;
+            f.left_charge = 0;
+            f.left_refire = swap;
+        } else {
+            if f.dual() {
+                gone[0] = f.left;
+                f.drop_left();
+            }
+            let cur = f.cur as usize & 1;
+            let rounds = |g: &Gun| g.mag as u32 + g.reserve as u32;
+            if let Some(h) = f.guns.iter_mut().find(|h| h.arm == g.arm) {
+                if refill || rounds(&g) > rounds(h) {
+                    if !refill {
+                        gone[1] = *h;
+                    }
+                    *h = g;
+                } else {
+                    gone[1] = g;
+                }
+            } else if f.guns[1].arm == NONE {
+                f.guns[1] = g;
+                f.cur = 1;
+            } else {
+                gone[1] = f.guns[cur];
+                f.guns[cur] = g;
+            }
+        }
+        f.reload = 0;
+        f.burst_left = 0;
+        f.refire = f.refire.max(swap);
+        gone
+    }
+
+    /// A gun (with what's left in it) and grenades onto the floor under
+    /// `at`. Nothing for nothing (an empty hand, a spent gun); with the
+    /// floor full, the oldest drop gives its slot.
+    fn spill(&mut self, gun: Gun, frags: u8, stickies: u8, at: V3, vel: V3) {
+        let gun = if gun.arm == NONE || gun.spent() {
+            Gun::default()
+        } else {
+            gun
+        };
+        let x = at.x.clamp(self.map.lo.0, self.map.hi.0);
+        let z = at.z.clamp(self.map.lo.1, self.map.hi.1);
+        let y = self.map.floor(x, z, 0.1, at.y + STEP);
+        let d = Dropped {
+            active: true,
+            gun,
+            frags,
+            stickies,
+            pos: V3::new(
+                crate::movement::quant(x),
+                crate::movement::quant(y),
+                crate::movement::quant(z),
+            ),
+            vel,
+            ttl: ticks(DROP_MS),
+        };
+        if d.spent() || self.drops.alloc(d).is_some() {
+            return;
+        }
+        let mut old = 0;
+        for i in 1..MAX_DROPS {
+            if self.drops[i].ttl < self.drops[old].ttl {
+                old = i;
+            }
+        }
+        self.drops[old] = d;
+    }
+
+    /// Walking over the floor: a dropped gun's rounds into the reserve of
+    /// the same kind of gun carried (a battery isn't poured: that's a
+    /// swap), and grenades up to what may be carried.
+    fn loot(&mut self, s: usize) {
+        let f = &self.fighters[s];
+        if !f.active() || f.riding().is_some() || self.rules.gun_game {
+            return;
+        }
+        let at = f.body.pos;
+        for i in 0..MAX_DROPS {
+            let mut d = self.drops[i];
+            if !d.active || !d.reach(at) {
                 continue;
             }
             let f = &mut self.fighters[s];
-            let full = Gun::full(def.arm);
-            let one_handed = arm(def.arm).dual && arm(f.gun().arm).dual;
-            if one_handed && !f.dual() {
-                // A one-handed gun beside one: dual wielded.
-                f.left = full;
-                f.left_reload = 0;
-                f.left_charge = 0;
-                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
-            } else if f.dual() && arm(def.arm).dual {
-                // Dual already: it takes the left hand.
-                f.left = full;
-                f.left_reload = 0;
-                f.left_charge = 0;
-                f.left_refire = ticks(crate::arms::SWAP_MS) as u16;
-            } else if let Some(g) = f.guns.iter_mut().find(|g| g.arm == def.arm) {
-                *g = full;
-            } else if f.guns[1].arm == NONE {
-                f.guns[1] = full;
-                f.cur = 1;
-            } else {
-                f.guns[f.cur as usize & 1] = full;
+            let mut took = false;
+            let frags = d.frags.min(GREN_MAX.saturating_sub(f.grenades));
+            let stickies = d.stickies.min(GREN_MAX.saturating_sub(f.stickies));
+            if frags + stickies > 0 {
+                f.grenades += frags;
+                f.stickies += stickies;
+                d.frags -= frags;
+                d.stickies -= stickies;
+                took = true;
             }
-            f.reload = 0;
-            f.burst_left = 0;
-            f.refire = f.refire.max(ticks(crate::arms::SWAP_MS) as u16);
-            self.pads[i].empty_for = ticks(def.respawn_ms);
+            let a = arm(d.gun.arm);
+            if d.gun.arm != NONE && !a.hot() {
+                for h in f.guns.iter_mut().chain(core::iter::once(&mut f.left)) {
+                    if h.arm != d.gun.arm || h.reserve >= a.reserve {
+                        continue;
+                    }
+                    let want = a.reserve - h.reserve;
+                    let from_reserve = want.min(d.gun.reserve);
+                    let from_mag = (want - from_reserve).min(d.gun.mag);
+                    h.reserve += from_reserve + from_mag;
+                    d.gun.reserve -= from_reserve;
+                    d.gun.mag -= from_mag;
+                    took |= from_reserve + from_mag > 0;
+                }
+            }
+            if !took {
+                continue;
+            }
+            if d.gun.arm != NONE && d.gun.spent() {
+                d.gun = Gun::default();
+            }
+            d.active = !d.spent();
+            self.drops[i] = d;
             self.events.push(Event {
                 kind: Ev::Pickup,
                 a: s as u8,
-                c: def.arm as u16,
-                pos: def.pos,
+                c: d.gun.arm as u16,
+                pos: d.pos,
                 ..Event::default()
             });
-            return;
         }
     }
 
@@ -1597,33 +2006,40 @@ impl World {
         }
     }
 
-    /// Back at the spawn point farthest from the nearest living enemy, of a
-    /// few drawn.
+    /// Back at the spawn its side may use that is safest: farthest from the
+    /// nearest living enemy (to [`SPAWN_FAR_M`]), out of every living
+    /// enemy's sight, near a teammate, with a little chance
+    /// (`SPAWN_JITTER_M`) between close calls.
     fn respawn(&mut self, s: usize) {
         let team = self.fighters[s].team;
         let teams = self.rules.teams;
-        let n = self.map.spawns.len() as u32;
         let mut pick = 0usize;
-        let mut far = -1.0f32;
-        for _ in 0..SPAWN_DRAWS {
-            let mut i = self.rng.next_bounded(n) as usize;
-            // Walk to the next spawn this side may use.
-            for _ in 0..n {
-                let sp = &self.map.spawns[i];
-                if !teams || sp.team == team || sp.team == ANY_TEAM {
-                    break;
-                }
-                i = (i + 1) % n as usize;
+        let mut best = f32::NEG_INFINITY;
+        for i in 0..self.map.spawns.len() {
+            let sp = self.map.spawns[i];
+            if teams && sp.team != team && sp.team != ANY_TEAM {
+                continue;
             }
-            let at = self.map.spawns[i].pos;
-            let mut near = f32::INFINITY;
+            let eye = sp.pos + V3::new(0.0, EYE, 0.0);
+            let mut near = SPAWN_FAR_M;
+            let mut seen = false;
+            let mut mate = false;
             for (q, v) in self.fighters.iter().enumerate() {
-                if q != s && v.active() && !(teams && v.team == team) {
-                    near = near.min((v.body.pos - at).len());
+                if q == s || !v.active() {
+                    continue;
                 }
+                let far = (v.body.pos - sp.pos).len();
+                if teams && v.team == team {
+                    mate = mate || far < SPAWN_MATE_R;
+                    continue;
+                }
+                near = near.min(far);
+                seen = seen || self.map.clear(v.eye(), eye);
             }
-            if near > far {
-                far = near;
+            let luck = self.rng.next_bounded(1024) as f32 * (SPAWN_JITTER_M / 1024.0);
+            let score = near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } + luck;
+            if score > best {
+                best = score;
                 pick = i;
             }
         }
@@ -1660,6 +2076,7 @@ impl World {
                 thing::Kind::Projectile => hash_all(&*self.proj, &mut h),
                 thing::Kind::Pad => hash_all(&self.pads, &mut h),
                 thing::Kind::Vehicle => hash_all(&*self.vehicles, &mut h),
+                thing::Kind::Drop => hash_all(&*self.drops, &mut h),
             }
         }
         let (a, b) = self.rng.state();

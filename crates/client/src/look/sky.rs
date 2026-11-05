@@ -1,13 +1,17 @@
-//! The sky and its clouds, at noon on a clear day: a seeded cloud field
-//! composed into a cubemap, with Gates' sky behind it in a browser (which
-//! has no atmosphere) and clear texels left to the atmosphere on the
-//! desktop.
+//! The sky's arithmetic: the seeded cloud field, how the deck is lit
+//! (`DeckLight`), the clear sky behind it where no atmosphere draws one, and
+//! the weather's air over it (`SkyFog`). The deck itself is drawn per pixel
+//! (`deck.rs`) from this field and these numbers, under the map's mood
+//! (`mood.rs`). What follows the GPU is decided at run time ([`baked`]);
+//! what follows the browser's one thread (the field's size) stays
+//! `target_arch = "wasm32"`.
 //!
 //! Ported from Gates' `crates/client/src/render/sky.rs` (MIT, © 2026
-//! MoreRight DAO; NOTICE). Its weather, moon phase, underwater fog and the
-//! composer that re-bakes the deck as the weather moves are left out: a
-//! match here is noon, clear. What remains is Gates' code as it was, so a
-//! later port of the rest lands on the same numbers.
+//! MoreRight DAO; NOTICE). Its composer (the cube re-baked as the weather
+//! moves), its underwater fog and the Verdigris are left out; the composed
+//! cube itself is kept only as Gates' reference arithmetic (nothing here
+//! reflects the sky). What remains is Gates' code as it was, so the rest
+//! of its sky lands on the same numbers.
 #![allow(dead_code, clippy::all)]
 
 /// Gates' share of night light a new moon leaves (rig.rs).
@@ -89,7 +93,7 @@ use bevy::render::render_resource::{
 /// Cube face size in texels. 6 × 256² = 393k texels, 1.5 MB of RGBA8 on the
 /// desktop and under WebGPU; a quarter of that under WebGL2, where every
 /// re-upload is a WebGL texture rebuilt.
-pub const SKY_FACE: u32 = if cfg!(target_arch = "wasm32") { 128 } else { 256 };
+pub const SKY_FACE: u32 = if cfg!(webgl2) { 128 } else { 256 };
 
 /// Cloud-deck altitude, metres. Cumulus bases sit near a kilometre; the exact
 /// value only sets how fast the deck compresses toward the horizon.
@@ -138,7 +142,14 @@ const CLOUD_BASE: [f32; 3] = [0.42, 0.45, 0.52];
 /// Whether the deck carries a clear sky behind the clouds. Zero texels
 /// wherever the atmosphere draws (the desktop, and the browser's WebGPU
 /// module), for the reason above; a sky under WebGL2, which has none.
-pub const BAKE_BACKDROP: bool = cfg!(target_arch = "wasm32");
+pub const BAKE_BACKDROP: bool = cfg!(webgl2);
+
+/// [`BAKE_BACKDROP`] as this device decides it: no atmosphere draws here
+/// (`gpu::atmosphere`), so the deck draws the sky behind its clouds and the
+/// air is a fog. What the fog's colour and glow follow at run time.
+pub fn baked() -> bool {
+    !super::gpu::atmosphere()
+}
 
 /// The horizon's luminance over the zenith's. A clear sky is brightest at
 /// the horizon, where the eye looks through the most air: measured skies
@@ -403,18 +414,18 @@ pub const FIELD_N: usize = if cfg!(target_arch = "wasm32") || cfg!(debug_asserti
 };
 /// How soft the deck's edge is where its shadow falls, metres: the sun's
 /// own disk blurs a shadow cast from 1.4 km up by 13–40 m, and a cumulus
-/// edge is a few tens of metres more. The field's mip whose texel is
-/// nearest this ([`soft_level`]) is what the rig dims the sun by
-/// ([`SkyComposer::cover_at`]) and what the ground's cloud shadows read
-/// (`cloud_shadow.rs`), so the two agree at the eye.
+/// edge is a few tens of metres more. The field the rig dims the sun by
+/// ([`SkyComposer::cover_at`]) and the ground's cloud shadows read
+/// (`cloud_shadow.rs`) has a texel about this size ([`SOFT_FIELD_N`]), so
+/// the two agree at the eye.
 pub const SOFT_M: f32 = 60.0;
 
-/// The field's mip [`SOFT_M`] reads: 1 on a desktop release, whose texel
-/// is 28 m; 0 in a browser and a debug build, whose texel is 56 m.
-pub fn soft_level() -> u32 {
-    let texel = CLOUD_SCALE_M * FIELD_PERIOD as f32 / FIELD_N as f32;
-    (SOFT_M / texel).log2().round().max(0.0) as u32
-}
+/// That field's texels per side, the same on every target: a desktop
+/// release draws its sky from a field twice as fine, but the light a
+/// fighter stands in is read off this one, so a desktop player and a
+/// browser player see the same sun on him at the same moment. Its texel is
+/// 56 m, about [`SOFT_M`].
+pub const SOFT_FIELD_N: usize = 512;
 
 /// Below this `d.y` (~2.6°) there is no deck: `1/d.y` explodes.
 pub const DECK_CUTOFF: f32 = 0.045;
@@ -473,7 +484,16 @@ const HUE_STEPS: usize = 512;
 /// the headroom they keep: [`deck_hue`] lifts a cloud top's blue by 1.5 at
 /// the zenith and more below, and a top that clipped would come out warm
 /// again. A browser has no atmosphere to undo and needs none.
-pub const DECK_GAIN: f32 = if BAKE_BACKDROP { 1.0 } else { 2.0 };
+pub const DECK_GAIN: f32 = deck_gain(BAKE_BACKDROP);
+
+/// [`DECK_GAIN`] for a cube with (`backdrop`) or without a sky baked in.
+pub const fn deck_gain(backdrop: bool) -> f32 {
+    if backdrop {
+        1.0
+    } else {
+        2.0
+    }
+}
 /// The browser's night sky floor (the desktop's atmosphere has its own).
 pub const NIGHT_SKY: [f32; 3] = [0.0015, 0.002, 0.0035];
 /// The warm glow a low sun puts on the browser's horizon near it.
@@ -967,9 +987,9 @@ impl SkyFog {
 /// periwinkle — measured 26 levels bluer than the desktop's in a SwiftShader
 /// browser. There this only evens the brightness: `grey / mean(T)`, the same
 /// in all three channels, so a cloud lands as bright as on the desktop and
-/// as grey. [`super::quality::GpuCaps::dual_source_blending`] says which.
+/// as grey. [`super::gpu::GpuCaps::dual_source_blending`] says which.
 pub fn deck_hue(y: f32) -> [f32; 3] {
-    deck_hue_for(y, true)
+    deck_hue_for(y, super::gpu::caps().dual_source_blending)
 }
 
 /// [`deck_hue`] for a composite through `T` per channel (`per_channel`) or
@@ -1299,7 +1319,7 @@ pub fn fog_rgb_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> [f32; 3] {
     if dust <= 0.0 {
         return rgb;
     }
-    let floor = if BAKE_BACKDROP {
+    let floor = if baked() {
         static AIR: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
         *AIR.get_or_init(|| super::fill::luminance(ground_air(&super::rig::medium()).0.to_array()))
     } else {
@@ -1332,7 +1352,7 @@ pub const FOG_SUN_EXPONENT: f32 = 10.0;
 /// island's clear air all day (`browser_haze`) and a glow would brighten
 /// every hill toward the sun in fine weather.
 pub fn fog_glow() -> Color {
-    if BAKE_BACKDROP {
+    if baked() {
         Color::NONE
     } else {
         Color::linear_rgba(1.0, 0.95, 0.85, FOG_SUN_GLOW)
@@ -1344,7 +1364,7 @@ pub fn fog_glow() -> Color {
 /// `sigma` is zero then. A browser has no atmosphere, so its island air
 /// ([`browser_haze`]'s) is the floor the weather adds to.
 pub fn fog_falloff(sigma: f32) -> FogFalloff {
-    if BAKE_BACKDROP {
+    if baked() {
         let (extinction, inscattering) = ground_air(&super::rig::medium());
         FogFalloff::Atmospheric {
             extinction: extinction + Vec3::splat(sigma),

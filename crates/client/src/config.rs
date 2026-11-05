@@ -98,11 +98,11 @@ pub enum HostOs {
 }
 
 #[cfg(target_os = "windows")]
-const HOST_OS: HostOs = HostOs::Windows;
+pub const HOST_OS: HostOs = HostOs::Windows;
 #[cfg(target_os = "macos")]
-const HOST_OS: HostOs = HostOs::Mac;
+pub const HOST_OS: HostOs = HostOs::Mac;
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const HOST_OS: HostOs = HostOs::Unix;
+pub const HOST_OS: HostOs = HostOs::Unix;
 
 /// Where the settings live on this machine, by its convention; None if no
 /// base directory is known (nothing is saved that run).

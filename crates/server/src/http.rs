@@ -7,8 +7,8 @@
 //! elopros.com: `server.json` names the public address and no hash (the
 //! browser checks a CA's certificate itself), and answers the page's origin
 //! (`--allow-origin`) for CORS. `/health` says the process is up, `/ready`
-//! whether it takes players (503 while it drains), `/status.json` what the
-//! server counted since it started (`stats.rs`); `POST /bugs` takes a
+//! whether it takes players (503 while it drains), `/health.json` what the
+//! server counted since it started (`health.rs`); `POST /bugs` takes a
 //! player's report (`bugs.rs`, with `--bugs`).
 
 use std::net::SocketAddr;
@@ -152,12 +152,23 @@ async fn handle(
         let body = format!("{{\"nonce\":\"{}\",\"game\":\"{}\"}}", ctx.nonces.issue(), ctx.slug);
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
+    if path == "/online.json" || path == "/status.json" {
+        // Who plays, for Elo Pros (`online`): this slot and the others.
+        let slot = merged(ctx).await;
+        let body = if path == "/online.json" {
+            crate::online::online_json(&slot)
+        } else {
+            crate::online::status_json(&slot, ctx.gate.capacity, proto::PROTO_VER)
+        };
+        return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
+    }
     if path == "/health" {
         return reply(&mut sock, 200, "text/plain", b"ok").await;
     }
-    if path == "/status.json" {
-        // Everything counted since start (`stats.rs`); one line of numbers.
-        let body = crate::stats::json(ctx.now(), &ctx.stats.read(&ctx.counts));
+    if path == "/health.json" {
+        // Everything counted since start (`health.rs`); one line of numbers.
+        // (`/status.json` is the Elo Pros server-list row, `online.rs`.)
+        let body = crate::health::json(ctx.now(), &ctx.health.read(&ctx.counts));
         return reply_cors(&mut sock, 200, "application/json", body.as_bytes(), cors).await;
     }
     if path == "/ready" {
@@ -196,6 +207,30 @@ async fn handle(
         Err(_) if path == "/origin.json" => reply(&mut sock, 200, "application/json", b"{}").await,
         Err(_) => reply(&mut sock, 404, "text/plain", b"not found").await,
     }
+}
+
+/// This slot's roster and every other slot's fresh file in the roster dir.
+async fn merged(ctx: &crate::Ctx) -> crate::online::Slot {
+    let own = ctx.roster.lock().map(|r| r.clone()).unwrap_or_default();
+    let mut others = Vec::new();
+    if let Some(dir) = &ctx.roster_dir {
+        if let Ok(mut d) = tokio::fs::read_dir(dir).await {
+            while let Ok(Some(e)) = d.next_entry().await {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name == ctx.roster_file || !name.starts_with("online-") || !name.ends_with(".json") {
+                    continue;
+                }
+                let doc = tokio::fs::read(e.path()).await.ok();
+                if let Some(s) = doc
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| crate::online::Slot::from_json(&v))
+                {
+                    others.push(s);
+                }
+            }
+        }
+    }
+    crate::online::merge(&own, &others, crate::auth::now_unix())
 }
 
 /// Where the page connects: the live slot's address (`live`, read from

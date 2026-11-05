@@ -1,12 +1,19 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
 //! [--web crates/client/dist] [--cert cert.pem --key key.pem] [--doubles]
-//! [--passive-bots] [--map <id|name>]… [--cup-min 4] [--cup-rounds 3]
+//! [--passive-bots] [--map <id|name>]… [--loadout <gun>[,<gun>]]
+//! [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900]
-//! [--nonce-key file] [--live-file file]`
+//! [--nonce-key file] [--live-file file] [--roster-dir dir]`
+//!
+//! `--loadout` starts everyone (gun game aside) with those guns, by id or
+//! name (`--loadout sniper,magnum`): for looking at a gun in a match.
+//!
+//! `oneshot-server --print-stats` prints the stats, achievements and boards
+//! the game declares on Elo Pros (`ops/elo-stats.json`) and exits.
 //!
 //! Without `--elo-pubkey` nobody can sign in and only casual play is open.
 //! Without `--elo-key` ranked results aren't reported.
@@ -59,6 +66,23 @@ fn main() {
                     .id;
                 cfg.maps.push(id);
             }
+            "--loadout" => {
+                let v = val();
+                let mut l = [sim::arms::NONE; 2];
+                for (i, g) in v.split(',').take(2).enumerate() {
+                    l[i] = gun(g).unwrap_or_else(|| die(&format!("no gun {g}")));
+                }
+                for r in [
+                    &mut cfg.rules,
+                    &mut cfg.doubles,
+                    &mut cfg.ffa,
+                    &mut cfg.big_team,
+                    &mut cfg.duel,
+                    &mut cfg.cup,
+                ] {
+                    r.loadout = l;
+                }
+            }
             "--cup-min" => cfg.cup_min = val().parse().unwrap_or_else(|_| die("--cup-min is a count")),
             "--cup-rounds" => cfg.cup_rounds = val().parse().unwrap_or_else(|_| die("--cup-rounds is a count")),
             "--slug" => cfg.slug = val(),
@@ -83,6 +107,12 @@ fn main() {
             }
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
+            "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--print-stats" => {
+                let set = server::stats::declaration();
+                println!("{}", serde_json::to_string_pretty(&set).unwrap_or_default());
+                return;
+            }
             _ => die(&format!("unknown argument {a}")),
         }
     }
@@ -167,6 +197,18 @@ fn nonce_key(path: &str) -> [u8; 32] {
 
 fn addr(s: &str) -> SocketAddr {
     s.parse().unwrap_or_else(|_| die(&format!("{s} is not host:port")))
+}
+
+/// A gun by id or by name, its spaces as dashes or not (`sniper`,
+/// `sniper-rifle`, `4`).
+fn gun(g: &str) -> Option<u8> {
+    let want = g.replace('-', " ");
+    (1..=sim::arms::CANNON).find(|&id| {
+        let name = sim::arms::arm(id).name;
+        id.to_string() == g
+            || name.eq_ignore_ascii_case(&want)
+            || name.split(' ').next().is_some_and(|w| w.eq_ignore_ascii_case(&want))
+    })
 }
 
 fn die(msg: &str) -> ! {

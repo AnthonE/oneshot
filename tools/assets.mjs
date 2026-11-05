@@ -46,6 +46,12 @@ const SOUNDS = [
   'freesound/land_0.ogg',
 ];
 
+// The rock pieces a mass out of bounds is drawn with (look/rock.rs): Gates'
+// formation pieces remeshed low, geometry only (no texture to re-embed),
+// commissioned from Meshy on a paid plan and owned (Gates'
+// assets/models/MANIFEST.md, prop/rock/).
+const ROCKS = ['a', 'b', 'c', 'd', 'e', 'f'].map((k) => `block_${k}_far.glb`);
+
 // The ground's four (sand, grass, the creek's gravel, rock) and the boxes'.
 const SETS = ['sand', 'grass', 'gravel', 'rock', 'concrete', 'metal'];
 const BOX_SETS = ['concrete', 'metal', 'rock'];
@@ -62,6 +68,12 @@ for (const [name, src] of Object.entries(MODELS)) {
 mkdirSync(join(out, 'models'), { recursive: true });
 const glb = spawnSync('cargo', ['run', '-q', '--release', '--manifest-path', 'tools/glb/Cargo.toml', '--', raw, join(out, 'models')], { stdio: 'inherit' });
 if (glb.status !== 0) process.exit(glb.status ?? 1);
+
+mkdirSync(join(out, 'models/rock'), { recursive: true });
+for (const r of ROCKS) {
+  copyFileSync(join(gates, 'assets/models/prop/rock', r), join(out, 'models/rock', r));
+  console.log(`models/rock/${r} <- models/prop/rock/${r}`);
+}
 
 mkdirSync(join(out, 'sound'), { recursive: true });
 for (const s of SOUNDS) {
@@ -82,4 +94,4 @@ for (const set of SETS) {
   // The boxes' roughness and occlusion (look/textures.rs packs them).
   if (BOX_SETS.includes(set)) for (const m of ['rough', 'ao']) copyFileSync(join(tex, `${set}_${m}.jpg`), join(out, `textures/${set}_${m}.jpg`));
 }
-console.log(`${Object.keys(MODELS).length} models, ${SOUNDS.length} sounds, ${SETS.length * 2 + 1} textures into ${out}`);
+console.log(`${Object.keys(MODELS).length} models, ${ROCKS.length} rock pieces, ${SOUNDS.length} sounds, ${SETS.length * 2 + 1} textures into ${out}`);

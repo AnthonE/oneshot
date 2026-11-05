@@ -14,7 +14,7 @@ pub struct Entrant {
     pub session: u64,
     pub wallet: String,
     pub name: proto::Name,
-    pub skin: u8,
+    pub look: proto::Look,
     /// Points over the Swiss rounds.
     pub points: u32,
     /// Still connected: one who left plays no more heats but keeps points.
@@ -222,7 +222,7 @@ mod tests {
                 session: i as u64,
                 wallet: format!("0x{i:040x}"),
                 name: proto::Name::new("p"),
-                skin: 0,
+                look: proto::Look::default(),
                 points: 0,
                 here: true,
                 final_place: None,

@@ -4,9 +4,11 @@
 //! shot arrives a round trip later and draws only what the round met.
 //! Everyone else's is drawn off the event: a star flash, a tongue of fire
 //! and smoke at their muzzle, a tracer down the line the round really took
-//! (every round, or every few for an automatic), and what it met: sparks
-//! and grit and a hole in a wall, dust in the ground, lightning off a
-//! shield, a red mist off health, sparks off a hull.
+//! (every round, or every few for an automatic), and what it met: sparks,
+//! chips and grit and a hole in the face it struck (a pillar's, a ramp's,
+//! a curved wall's segment: `surface.rs`), dust in the ground, lightning
+//! off a shield, a red mist and drops off health with blood behind the
+//! body, sparks off a hull.
 
 use bevy::prelude::*;
 use proto::EventState;
@@ -25,12 +27,14 @@ const MUZZLE_DOWN_M: f32 = 0.28;
 /// Our own muzzle, in view space: ahead, right, down (where the gun in
 /// view holds it), and how far ahead of it our tracer starts.
 const OWN_MUZZLE: Vec3 = Vec3::new(0.12, -0.1, 0.7);
+/// Our own flash's stars, times an impact's and the gun's `flash_scale`:
+/// [`OWN_MUZZLE`] is a hand's length from the eye, where a third person's
+/// size would cover a fifth of the view.
+const OWN_STAR_SCALE: f32 = 0.8;
 const OWN_TRACER_SKIP_M: f32 = 1.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
 const PELLET_DRAW_RAD: f32 = 0.09;
-/// Box looks drawn in metal (`level.rs::dress`).
-const METAL_LOOKS: [u8; 4] = [1, 3, 4, 5];
 
 fn v3(v: Vec3) -> V3 {
     V3::new(v.x, v.y, v.z)
@@ -85,19 +89,43 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     land(fx, scene, arm, from, dir, len, to);
 }
 
-/// Our own gun, this frame: each round it fired since the last, drawn now.
-pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
-    let shots = f.shots;
-    if shots <= fx.own_shots || !f.alive || f.riding().is_some() {
-        fx.own_shots = shots;
+/// Our own gun, this frame: each round it fired since the last, drawn now,
+/// from the hand that fired it (`viewmodel::Rounds`) at the muzzle the gun
+/// in view was drawn with (`muzzles`, view space as it looks; the fixed
+/// [`OWN_MUZZLE`] while none is drawn, behind a scope).
+pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, muzzles: [Option<Vec3>; 2]) {
+    let fired = fx.own_rounds.take(f);
+    // A driver doesn't shoot; a passenger does, from the seat.
+    if !f.alive || f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
         return;
     }
-    let rounds = (shots - fx.own_shots).min(3);
-    fx.own_shots = shots;
-    // Two guns out: `shots` counts both hands, so the hands take turns
-    // (drawn only; the server's events say which really fired).
-    let left = f.dual() && !fx.own_left;
-    fx.own_left = left;
+    for (i, rounds) in fired.into_iter().enumerate() {
+        if rounds > 0 {
+            hand(fx, scene, f, eye, cam, i == 1, rounds, muzzles[i]);
+        }
+    }
+}
+
+/// Our own rounds counted off and not drawn: a film's camera off the eye
+/// sees them fired from the body, as anyone's (`film.rs`).
+pub fn own_unseen(fx: &mut Fx, f: &Fighter) {
+    let _ = fx.own_rounds.take(f);
+}
+
+/// Where our flash sits in view space: on the line to the drawn muzzle, at
+/// [`OWN_MUZZLE`]'s depth.
+fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {
+    let at = Vec3::new(OWN_MUZZLE.x, OWN_MUZZLE.y, -OWN_MUZZLE.z);
+    let fixed = if left { Vec3::new(-at.x, at.y, at.z) } else { at };
+    match drawn {
+        Some(m) if m.z < -0.05 => m * (OWN_MUZZLE.z / -m.z),
+        _ => fixed,
+    }
+}
+
+/// One hand's rounds.
+#[allow(clippy::too_many_arguments)]
+fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: bool, rounds: u32, drawn: Option<Vec3>) {
     let id = if left { f.left.arm } else { f.gun().arm };
     let a = arm(id);
     if a.kind == Kind::Sword {
@@ -107,34 +135,27 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     let fwd = cam * Vec3::NEG_Z;
     let right = cam * Vec3::X;
     let up = cam * Vec3::Y;
-    let side = if left { -OWN_MUZZLE.x } else { OWN_MUZZLE.x };
-    let muzzle = eye + fwd * OWN_MUZZLE.z + right * side + up * OWN_MUZZLE.y;
-    table::stars(
-        &mut fx.glow,
-        muzzle,
-        look.stars as usize,
-        1.6 * look.flash_scale,
-        look.flash_c,
-    );
-    fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
-    fx.flash(
-        muzzle,
-        super::FlashDef {
-            color: tint(&look),
-            ..MUZZLE_FLASH
-        },
-    );
+    let at = own_muzzle(left, drawn);
+    // The flash waits for the camera and the gun the frame is drawn with
+    // (`muzzle`).
+    fx.own_flash[usize::from(left)] = Some(OwnFlash {
+        look,
+        rocket: id == ROCKET,
+    });
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
     let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
-    let k = if heavy { 0.6 } else { 0.3 };
-    let side = fx.shake.rand() * shake::SHOT_SIDE_RAD;
-    fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, side * k, 0.0));
+    // Crouched, the stock is braced: half the jolt (Gates' gunfeel).
+    let braced = if f.body.crouched {
+        crate::look::viewmodel::CROUCH_KICK
+    } else {
+        1.0
+    };
+    let k = if heavy { 0.6 } else { 0.3 } * braced;
+    let jolt = fx.shake.rand() * shake::SHOT_SIDE_RAD;
+    fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
     fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
     if !a.kind.ray() {
-        if id == ROCKET {
-            backblast(fx, muzzle, fwd);
-        }
         return;
     }
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };
@@ -145,9 +166,10 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
         } else {
             fwd
         };
-        // Down the view to the first wall, or as far as the gun reaches.
+        // Down the view to the first wall, or as far as the gun reaches,
+        // from half way between the muzzle's line and the view's.
         let reach = scene.map.ray(v3(eye), v3(dir), a.range.max(30.0));
-        let start = eye + dir * OWN_TRACER_SKIP_M + right * side * 0.5 + up * OWN_MUZZLE.y * 0.5;
+        let start = eye + dir * OWN_TRACER_SKIP_M + (right * at.x + up * at.y) * 0.5;
         if k == 0 || id == SHOTGUN {
             table::tracer(&mut fx.glow, &look, start, dir, (reach - OWN_TRACER_SKIP_M).max(0.0));
         }
@@ -157,82 +179,120 @@ pub fn own(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat) {
     }
 }
 
-/// The far end of a round's line: what it met, and what that throws.
-fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to: Vec3) {
-    if let Some((matter, away)) = met(scene, from, dir, len, to) {
-        fx.impact(Weapon::of_arm(arm), matter, to, away);
+/// Our own gun's flash this frame, by hand, waiting for the frame's camera
+/// and gun: the gun's look.
+#[derive(Clone, Copy, Debug)]
+pub struct OwnFlash {
+    look: GunLook,
+    rocket: bool,
+}
+
+/// Our own flashes, at the muzzle as the frame draws it: off the camera
+/// as placed this frame (`eye`: its kick, its shake, a film's roll and
+/// easing), which carries the gun in view, and the gun as posed this frame
+/// (`drawn`, `viewmodel::ViewMuzzles`), not the aim the shot was taken down
+/// or last frame's pose. Placed off those, a star sat beside the barrel,
+/// and on a slow frame (a film's, a weak browser's) well off it.
+pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
+    for (i, drawn) in drawn.into_iter().enumerate() {
+        let Some(o) = fx.own_flash[i].take() else {
+            continue;
+        };
+        let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
+        let fwd = eye.rotation * Vec3::NEG_Z;
+        table::own_stars(
+            &mut fx.glow,
+            muzzle,
+            o.look.stars as usize,
+            OWN_STAR_SCALE * o.look.flash_scale,
+            o.look.flash_c,
+        );
+        fx.emit(Layer::GunSmoke, 2, muzzle, fwd, Matter::Concrete);
+        fx.flash(
+            muzzle,
+            super::FlashDef {
+                color: tint(&o.look),
+                ..MUZZLE_FLASH
+            },
+        );
+        if o.rocket {
+            backblast(fx, muzzle, fwd);
+        }
     }
 }
 
-/// What a round met at `to`, and the way its effect is thrown: a surface's
-/// normal, or back along the line off a body. None: its range ran out, or
-/// the body was ours.
-fn met(scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) -> Option<(Matter, Vec3)> {
+/// The far end of a round's line: what it met, what that throws, and the
+/// mark it leaves.
+fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to: Vec3) {
+    let w = Weapon::of_arm(arm);
+    match met(fx, scene, from, dir, len, to) {
+        Some(Met::Face(hit, matter)) => fx.strike(scene.map, w, matter, &hit),
+        Some(Met::Body(slot, Matter::Flesh)) => fx.bleed(scene.map, slot, w, to, dir),
+        Some(Met::Body(_, matter)) => {
+            fx.impact(w, matter, to, -dir, super::surface::floor_under(scene.map, to, -dir));
+        }
+        Some(Met::Hull) => {
+            fx.impact(
+                w,
+                Matter::Hull,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
+        }
+        Some(Met::Somewhere) => {
+            fx.impact(
+                w,
+                Matter::Concrete,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
+        }
+        None => {}
+    }
+}
+
+/// What a round met.
+enum Met {
+    /// A face of the map: the face, its matter.
+    Face(super::surface::Hit, Matter),
+    /// A body we draw: whose, and whether its shield held.
+    Body(u8, Matter),
+    Hull,
+    /// The map, though no face is found at the end (a rounding): its
+    /// particles, no mark.
+    Somewhere,
+}
+
+/// What a round met at `to`. None: its range ran out, or the body was
+/// ours (or one we don't draw: the end of its line says no more).
+fn met(fx: &mut Fx, scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) -> Option<Met> {
     let t = scene.map.ray(v3(from), v3(dir), len + 0.1);
     if t <= len + 0.06 && t >= len - 0.3 {
-        let g = scene.map.ground(to.x, to.z);
-        if (to.y - g).abs() < 0.08 {
-            let n = scene.map.ground_normal(to.x, to.z);
-            // An arena's floor is concrete; a terrain is soil.
-            let m = if scene.map.terrain.is_some() {
-                Matter::Dirt
-            } else {
-                Matter::Concrete
-            };
-            return Some((m, Vec3::new(n.x, n.y, n.z)));
-        }
-        return Some(face(scene, to, dir));
+        return Some(match super::surface::struck(scene.map, &mut fx.near, to, dir) {
+            Some(hit) => Met::Face(
+                hit,
+                super::surface::matter_of(scene.map, &hit, fx.marks.lift.as_deref()),
+            ),
+            None => Met::Somewhere,
+        });
     }
     for d in scene.others.iter().filter(|d| d.alive) {
         let (dx, dz) = (to.x - d.pos.x, to.z - d.pos.z);
         let up = to.y - d.pos.y;
         if dx * dx + dz * dz < (HIT_R + 0.3) * (HIT_R + 0.3) && (-0.2..HEAD_Y + 0.4).contains(&up) {
             let m = if d.shield > 0 { Matter::Shield } else { Matter::Flesh };
-            return Some((m, -dir));
+            return Some(Met::Body(d.slot, m));
         }
     }
     for v in scene.vehicles {
         let c = Vec3::new(v.pos.x, v.pos.y + 1.0, v.pos.z);
         if c.distance_squared(to) < 3.4 * 3.4 {
-            return Some((Matter::Hull, -dir));
+            return Some(Met::Hull);
         }
     }
     None
-}
-
-/// The box `at` lies on: its matter and the nearest face the round came at.
-fn face(scene: &Scene, at: Vec3, dir: Vec3) -> (Matter, Vec3) {
-    const E: f32 = 0.1;
-    let mut best = (f32::MAX, -dir, Matter::Concrete);
-    for (i, b) in scene.map.boxes.iter().enumerate() {
-        if at.x < b.min.x - E
-            || at.x > b.max.x + E
-            || at.y < b.min.y - E
-            || at.y > b.max.y + E
-            || at.z < b.min.z - E
-            || at.z > b.max.z + E
-        {
-            continue;
-        }
-        let matter = match scene.map.looks.get(i) {
-            Some(l) if METAL_LOOKS.contains(l) => Matter::Metal,
-            _ => Matter::Concrete,
-        };
-        for (d, n) in [
-            ((at.x - b.min.x).abs(), Vec3::NEG_X),
-            ((at.x - b.max.x).abs(), Vec3::X),
-            ((at.y - b.min.y).abs(), Vec3::NEG_Y),
-            ((at.y - b.max.y).abs(), Vec3::Y),
-            ((at.z - b.min.z).abs(), Vec3::NEG_Z),
-            ((at.z - b.max.z).abs(), Vec3::Z),
-        ] {
-            // A face the round came at, not one behind it.
-            if d < best.0 && n.dot(dir) < 0.0 {
-                best = (d, n, matter);
-            }
-        }
-    }
-    (best.2, best.1)
 }
 
 /// A third-person muzzle: a star flash, a tongue of fire, smoke, a light.

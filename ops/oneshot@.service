@@ -18,6 +18,8 @@
 # Shared by both slots, in /home/master/oneshot-data:
 #   - nonce.key: so either slot takes the nonce the other handed a page.
 #   - live: the live slot's host:port, which every server.json names.
+#   - online/: each slot's roster (online-<port>.json), so either answers
+#     online.json and status.json for both.
 #
 # Signals (crates/server/src/main.rs):
 #   - stop sends SIGTERM: the slot DRAINS. No new players (a hello is
@@ -57,6 +59,7 @@ ExecStart=/home/master/oneshot-deploy/%i/oneshot-server \
   --key /home/master/oneshot-certs/privkey.pem \
   --public-addr game.elopros.com:${GAME_PORT} \
   --live-file /home/master/oneshot-data/live \
+  --roster-dir /home/master/oneshot-data/online \
   --nonce-key /home/master/oneshot-data/nonce.key \
   --domain elopros.com \
   --allow-origin https://elopros.com \

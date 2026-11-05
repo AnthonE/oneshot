@@ -1,112 +1,135 @@
 {
   "id": 3,
   "name": "Dry Fork",
-  "about": "a long red-rock canyon, 140 by 60 m, mirrored between red (-x) and blue (+x): a bunker at each end with a sniper on its roof, banks rising to the canyon walls, a low hill in the middle with the rocket, a dry creek bed and rocks for cover, and a launcher at each bunker's door that throws you to the middle.",
-  "bounds": [-70, 70, -30, 30],
+  "about": "a red-rock gulch, 290 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
+  "bounds": [-140, 150, -78, 78],
   "mirror": "x",
+  "light": { "sea": -6 },
   "terrain": {
-    "cell": 2,
+    "cell": 1,
     "base": 0,
-    "margin": 8,
+    "margin": [60, 60, 30, 30],
+    "gen": "canyon",
+    "canyon": {
+      "seed": 3,
+      "detail": { "h": 0.6, "wave": 14, "octaves": 2 },
+      "warp": { "m": 8, "wave": 50, "octaves": 2 },
+      "floor": { "half": 62, "wobble": 6, "wave": 40, "octaves": 2 },
+      "pockets": { "w": 12, "half": 16, "at": [[-70, -1], [-25, 1], [35, -1], [85, 1]] },
+      "flare": { "w": 50, "from": 115, "over": 60 },
+      "end": { "x": -160, "blend": 12 },
+      "gullies": { "m": 2, "wave": 16, "at": 4, "half": 6 },
+      "scree": { "h": 12, "w": 32 },
+      "cliff": [[0, 12], [3, 24], [5, 27], [8, 42], [10, 46]],
+      "mesa": { "rise": 16, "over": 30 },
+      "crags": { "h": 6, "wave": 22, "from": 8, "over": 6 },
+      "strata": { "h": 1.6, "bed": 8, "at": 5, "half": 7 },
+      "sea": { "drops": [[8, 115, 45], [10, 150, 60]], "walls": [140, 60], "terrace": [6, 0.25, 105, 30], "shelf": [0.9, 150, 12, 60] }
+    },
     "shapes": [
-      { "ridge": [[-80, 28], [80, 28]], "w": 11, "h": 6 },
-      { "ridge": [[-80, -28], [80, -28]], "w": 11, "h": 6 },
-      { "hill": [0, 0], "r": 16, "h": 2.5 },
-      { "hill": [-30, 13], "r": 10, "h": 3, "mirror": true },
-      { "hill": [-33, -13], "r": 9, "h": 2.2, "mirror": true },
-      { "ridge": [[-44, -9], [-22, 3]], "w": 4, "h": -1.1, "mirror": true },
-      { "ridge": [[-22, 3], [0, -4]], "w": 4, "h": -1.1, "mirror": true }
+      { "hill": [0, 0], "r": 32, "h": 4 },
+      { "hill": [-60, 28], "r": 20, "h": 4, "mirror": true },
+      { "hill": [-66, -28], "r": 18, "h": 3.5, "mirror": true },
+      { "ridge": [[-88, -19.5], [-44, 6.5]], "w": 8, "h": -1.6, "mirror": true },
+      { "ridge": [[-44, 6.5], [0, -8.7]], "w": 8, "h": -1.6, "mirror": true },
+      { "pad": [-100, 0], "r": 16, "h": 0, "blend": 12, "mirror": true }
     ]
   },
   "prefabs": {
     "bunker": [
-      [-6, 0, -7, -5, 4, 7, "wall"],
-      [-5, 0, -7, 6, 4, -6, "wall"],
-      [-5, 0, 6, 6, 4, 7, "wall"],
-      [5, 0, -7, 6, 4, -2, "wall"],
-      [5, 0, 2, 6, 4, 7, "wall"],
+      [-6, 0, -7, -5, 4, 7, "hull"],
+      [-5, 0, -7, 6, 4, -6, "hull"],
+      [-5, 0, 6, 6, 4, 7, "hull"],
+      [5, 0, -7, 6, 4, -2, "hull"],
+      [5, 0, 2, 6, 4, 7, "hull"],
       [-6, 4, -7, 6, 4.5, 7, "red"],
-      [-6, 4.5, -7, 6, 5.5, -6.5, "block"],
-      [-6, 4.5, 6.5, 6, 5.5, 7, "block"],
-      [5.5, 4.5, -7, 6, 5.5, -2, "block"],
-      [5.5, 4.5, 2, 6, 5.5, 7, "block"],
+      [-6, 4.5, -7, 6, 5.5, -6.5, "dark"],
+      [-6, 4.5, 6.5, 6, 5.5, 7, "dark"],
+      [5.5, 4.5, -7, 6, 5.5, -2, "dark"],
+      [5.5, 4.5, 2, 6, 5.5, 7, "dark"],
       [-2, 0, -3, 0, 1.2, 3, "dark"]
     ],
     "steps": [
-      [0, 0, -2, 1, 0.5, 2, "block"],
-      [1, 0, -2, 2, 1, 2, "block"],
-      [2, 0, -2, 3, 1.5, 2, "block"],
-      [3, 0, -2, 4, 2, 2, "block"],
-      [4, 0, -2, 5, 2.5, 2, "block"],
-      [5, 0, -2, 6, 3, 2, "block"],
-      [6, 0, -2, 7, 3.5, 2, "block"],
-      [7, 0, -2, 8, 4, 2, "block"]
+      [0, 0, -2, 1, 0.5, 2, "dark"],
+      [1, 0, -2, 2, 1, 2, "dark"],
+      [2, 0, -2, 3, 1.5, 2, "dark"],
+      [3, 0, -2, 4, 2, 2, "dark"],
+      [4, 0, -2, 5, 2.5, 2, "dark"],
+      [5, 0, -2, 6, 3, 2, "dark"],
+      [6, 0, -2, 7, 3.5, 2, "dark"],
+      [7, 0, -2, 8, 4, 2, "dark"]
     ]
   },
   "structures": [
+    { "name": "red's bunker", "prefab": "bunker", "at": [-100, 0, 0], "mirror": true },
+    { "name": "red's roof steps", "prefab": "steps", "at": [-114, 0, 0], "mirror": true },
     {
-      "name": "the canyon walls",
+      "name": "palms on the beach",
       "boxes": [
-        [-71, 0, -31, 71, 16, -30, "rock"],
-        [-71, 0, 30, 71, 16, 31, "rock"],
-        [-71, 0, -30, -70, 16, 30, "rock"],
-        [70, 0, -30, 71, 16, 30, "rock"]
+        { "round": [120, -30], "r": 0.3, "ground": true, "h": 9, "look": "palm" },
+        { "round": [126, 14], "r": 0.3, "ground": true, "h": 8, "look": "palm" },
+        { "round": [131, -10], "r": 0.3, "ground": true, "h": 10, "look": "palm" },
+        { "round": [118, 40], "r": 0.3, "ground": true, "h": 8.5, "look": "palm" },
+        { "round": [128, 44], "r": 0.3, "ground": true, "h": 9.5, "look": "palm" },
+        { "round": [134, 26], "r": 0.3, "ground": true, "h": 8, "look": "palm" }
       ]
     },
     {
-      "name": "the cliffs beyond (scenery: nobody reaches them)",
+      "name": "dead trees on the floor",
       "boxes": [
-        [-76, 0, -44, -40, 26, -31, "rock"],
-        [-40, 0, -40, -12, 21, -31, "rock"],
-        [-12, 0, -46, 14, 31, -31, "rock"],
-        [-60, 0, 31, -28, 23, 41, "rock"],
-        [-28, 0, 31, -2, 28, 45, "rock"],
-        [-90, 0, -31, -71, 24, 31, "rock"]
-      ],
-      "mirror": true
-    },
-    { "name": "red's bunker", "prefab": "bunker", "at": [-56, 0, 0], "mirror": true },
-    { "name": "red's roof steps", "prefab": "steps", "at": [-70, 0, 0], "mirror": true },
-    {
-      "name": "rocks on red's half",
-      "boxes": [
-        [-25.5, -1.5, -5, -22.5, 1.6, -3, "rock"],
-        [-21, -1.5, 5, -19, 2.2, 8, "rock"],
-        [-41, -1.5, 1, -39, 1.2, 3, "rock"],
-        [-14, -1.5, 9, -11, 1.4, 11, "rock"],
-        [-15, -1.5, -15, -12, 2.4, -12, "rock"],
-        [-46, -1.5, -16, -43, 1.8, -14, "rock"],
-        [-46, -1.5, 14, -43, 1.8, 16, "rock"]
-      ],
-      "mirror": true
+        { "round": [-80, -22], "r": 0.28, "ground": true, "h": 8, "look": "dead_tree" },
+        { "round": [-45, 32], "r": 0.28, "ground": true, "h": 7, "look": "dead_tree" },
+        { "round": [-30, -38], "r": 0.28, "ground": true, "h": 9, "look": "dead_tree" },
+        { "round": [10, 27], "r": 0.28, "ground": true, "h": 7.5, "look": "dead_tree" },
+        { "round": [50, -30], "r": 0.28, "ground": true, "h": 8.5, "look": "dead_tree" },
+        { "round": [-110, 36], "r": 0.28, "ground": true, "h": 7, "look": "dead_tree" },
+        { "round": [75, 40], "r": 0.28, "ground": true, "h": 9, "look": "dead_tree" },
+        { "round": [20, -42], "r": 0.28, "ground": true, "h": 8, "look": "dead_tree" }
+      ]
     }
   ],
+  "rocks": {
+    "seed": 8,
+    "cell": 40,
+    "inset": 8,
+    "x": [-125, 0],
+    "floor": 4,
+    "density": 0.85,
+    "strays": 0.5,
+    "big": 6,
+    "body": 16,
+    "stray": [1.2, 2.4],
+    "strayMinH": 1.4,
+    "slope": 0.5,
+    "clear": { "spawn": 5, "pad": 4, "launcher": 6, "roam": 3, "vehicle": 7, "tree": 2, "box": 2, "creek": 3, "base": 0 },
+    "max": 60
+  },
   "spawns": [
-    { "at": [-56, -4], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-56, 4], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-59, 0], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-56, 0, 4.5], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-46, -12], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-46, 12], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-65, -14], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-65, 14], "team": "red", "yaw": 0, "mirror": true }
+    { "at": [-100, -4], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-100, 4], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-103, 0], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-100, 0, 4.5], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-80, -26], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-80, 26], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-118, -30], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true }
   ],
   "pads": [
-    { "weapon": "sniper", "at": [-58, 0, 4.5], "respawn": 60, "mirror": true },
-    { "weapon": "shotgun", "at": [-54, -4], "respawn": 45, "mirror": true },
-    { "weapon": "smg", "at": [-30, 0], "respawn": 30, "mirror": true },
+    { "weapon": "sniper", "at": [-102, 0, 4.5], "respawn": 60, "mirror": true },
+    { "weapon": "shotgun", "at": [-98, -4], "respawn": 45, "mirror": true },
+    { "weapon": "launcher", "at": [-60, 0], "respawn": 60, "mirror": true },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 }
   ],
   "vehicles": [
-    { "at": [-44, -20], "yaw": 0, "respawn": 30, "mirror": true },
-    { "at": [-44, 20], "yaw": 0, "respawn": 30, "mirror": true }
+    { "at": [-88, -32], "yaw": 0, "respawn": 30, "mirror": true },
+    { "at": [-88, 32], "yaw": 0, "respawn": 30, "mirror": true }
   ],
   "launchers": [
-    { "at": [-46, 0], "to": [-10, 0, 0.8], "time": 1.5, "size": [2, 2], "mirror": true }
+    { "at": [-90, 0], "to": [-20, 0], "time": 2.5, "size": [2, 2], "mirror": true }
   ],
   "roam": [
-    [-40, 0], [-24, -9], [0, 0], [24, 9], [40, 0],
-    [-30, 16], [30, -16], [0, -16], [0, 16], [-56, 0], [56, 0],
-    [-30, -18], [30, 18]
+    [-80, 0], [-48, -19.5], [0, 0], [48, 19.5], [80, 0], [-60, 34.7], [60, -34.7], [0, -34.7], [0, 34.7], [-100, 0], [100, 0], [-60, -39], [60, 39],
+    [130, -20], [130, 20],
+    [-70, -52], [-25, 52], [35, -53], [85, 56]
   ]
 }

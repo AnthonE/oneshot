@@ -117,7 +117,7 @@ fn start_on(map: Map, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) 
 
 fn start_with(map: Map, rules: Rules, delay_ms: f64, jitter_ms: f64, loss: f64, harmless: bool) -> Run {
     let mut room = Room::new(map.clone(), rules, 11, (5, 6));
-    let (slot, out) = room.join(Name::new("tester"), 0).unwrap();
+    let (slot, out) = room.join(Name::new("tester"), proto::Look::default()).unwrap();
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
     };

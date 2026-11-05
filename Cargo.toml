@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/sim", "crates/sim-wasm", "crates/proto", "crates/room", "crates/client-net", "crates/server", "tools/flow"]
+members = ["crates/sim", "crates/sim-wasm", "crates/proto", "crates/room", "crates/client-net", "crates/server", "tools/flow",
+    # Vendored from Gates (tools/fx-sync.sh): the effects engine with no Bevy in it.
+    "crates/fx"]
 
 [workspace.package]
 edition = "2021"

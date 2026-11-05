@@ -2,7 +2,13 @@
 //! of a still camera, for looking at the art (`ci/look.mjs` shoots it for
 //! the reference board, `board/board.json`). After the three.js page's
 //! `?pose`: `yaw=` turns the fighter (radians), `arm=` picks its gun,
-//! `speed=` sets it running (m/s), `skin=` and `team=` dress it.
+//! `speed=` sets it running (m/s) and `dir=` which way, radians from its
+//! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
+//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
+//! `emblem=` (a `proto::Emblem`) and `team=` dress it. `reload=1` reloads it, over and over; `die=S`
+//! kills it S seconds after the screen is there, shot from the camera (a
+//! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
+//! doll (`look/rag.rs`) can be looked at.
 //!
 //! A map's view (the board's level shots): `map=4` builds that map instead,
 //! `eye=x,y,z` and `look=x,y,z` place the camera, and the fighter stands
@@ -12,10 +18,20 @@ use bevy::prelude::*;
 use client_net::core::Drawn;
 use sim::geom::V3;
 
-/// The fighter, as a snapshot would draw it, and its skin; then the map,
+/// The fighter, as a snapshot would draw it, and its look; then the map,
 /// the camera, and whether the fighter stands at all.
 #[derive(Resource, Clone, Copy)]
-pub struct Pose(pub Drawn, pub u8, pub View);
+pub struct Pose(pub Drawn, pub proto::Look, pub View, pub Acts);
+
+/// What the posed fighter does: reloads over and over, and dies (when,
+/// and how), if it does.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Acts {
+    pub reload: bool,
+    pub die_after_s: Option<f32>,
+    pub head: bool,
+    pub blast: bool,
+}
 
 /// Where the picture is taken.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,21 +82,72 @@ impl Pose {
         };
         let yaw = get("yaw", core::f32::consts::PI);
         let speed = get("speed", 0.0);
+        let travel = yaw + get("dir", 0.0);
         let d = Drawn {
             slot: 1,
             team: get("team", 0.0) as u8,
             alive: true,
             grounded: true,
             pos: V3::new(AT.x, AT.y, AT.z),
-            // Running the way it faces.
-            vel: V3::new(speed * yaw.cos(), 0.0, speed * yaw.sin()),
+            // Running the way it faces, or `dir` off it.
+            vel: V3::new(speed * travel.cos(), 0.0, speed * travel.sin()),
             yaw,
+            pitch: get("pitch", 0.0),
+            crouched: get("crouch", 0.0) != 0.0,
             arm: get("arm", 1.0) as u8,
             shield: 255,
             ..Drawn::default()
         };
-        Pose(d, get("skin", 0.0) as u8, view)
+        let look = proto::Look {
+            skin: get("skin", 0.0) as u8,
+            emblem: proto::emblem_valid(get("emblem", 0.0) as u16),
+        };
+        let acts = Acts {
+            reload: get("reload", 0.0) != 0.0,
+            die_after_s: Some(get("die", -1.0)).filter(|s| *s >= 0.0),
+            head: get("head", 0.0) != 0.0,
+            blast: get("blast", 0.0) != 0.0,
+        };
+        Pose(d, look, view, acts)
     }
+}
+
+/// The posed fighter's death, `die=` seconds after the screen is there:
+/// down, and pushed as a shot from the camera (or a blast at its feet)
+/// would push it. A reload starts over each time the gun's would end.
+pub fn fall(
+    mut pose: ResMut<Pose>,
+    settle: Res<crate::loading::Settle>,
+    time: Res<Time>,
+    mut since: Local<Option<f32>>,
+    mut blows: ResMut<crate::look::rag::Blows>,
+) {
+    if !settle.ready() {
+        return;
+    }
+    let t = time.elapsed_secs();
+    let t0 = *since.get_or_insert(t);
+    if pose.3.reload {
+        // The wire's bit falls between two reloads, as a gun's does.
+        let len = sim::arms::arm(pose.0.arm).reload_ms as f32 / 1000.0 + 0.3;
+        pose.0.reloading = ((t - t0) / len).fract() < 0.9;
+    }
+    let Some(after) = pose.3.die_after_s else {
+        return;
+    };
+    if !pose.0.alive || t - t0 < after {
+        return;
+    }
+    let at = Vec3::new(pose.0.pos.x, pose.0.pos.y, pose.0.pos.z);
+    let cause = if pose.3.blast {
+        // At its feet, on the camera's side.
+        blows.blast(at + (pose.2.eye - at).with_y(0.0).normalize_or_zero() * 0.6, t);
+        sim::events::Cause::Grenade as u16
+    } else {
+        sim::arms::BR as u16
+    };
+    blows.kill(pose.0.slot, at, Some(pose.2.eye), cause, pose.3.head, t);
+    pose.0.alive = false;
 }
 
 /// The still camera, over whatever `view` set.

@@ -111,7 +111,9 @@ pub fn report_body(r: &Report, evidence: bool) -> String {
         .iter()
         .map(|(players, place)| serde_json::json!({"players": players, "place": place}))
         .collect();
-    let mut m = serde_json::json!({"id": r.id, "ladder": r.ladder, "teams": teams});
+    // A ranked room seats people only (no bots, no agents' keys): saying so
+    // puts every player on the people's side of the boards.
+    let mut m = serde_json::json!({"id": r.id, "ladder": r.ladder, "teams": teams, "agents": []});
     if evidence {
         m["evidence"] = serde_json::json!({"replay_sha256": r.replay_sha256, "salt_commit": r.salt_commit});
     }
@@ -170,18 +172,69 @@ pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
     out
 }
 
-/// Where Elo Pros lists `wallet`'s items of game `slug`: the EVM
-/// collection for a `0x` wallet, the Solana one for a base58 wallet.
-pub fn items_url(origin: &str, slug: &str, wallet: &str) -> String {
+/// Where Elo Pros lists `wallet`'s items of game `slug`. A `0x` wallet's
+/// are in two places: the EVM collection, and Solana at the wallet linked to
+/// it (where the free Pill is sent; Elo Pros reads the link itself). A
+/// base58 wallet's are on Solana.
+pub fn items_urls(origin: &str, slug: &str, wallet: &str) -> Vec<String> {
+    let sol = format!("{origin}/api/items/sol/of/{wallet}");
     if wallet.starts_with("0x") || wallet.starts_with("0X") {
-        format!("{origin}/api/items/of/{wallet}?game={slug}&title={slug}")
+        vec![format!("{origin}/api/items/of/{wallet}?game={slug}&title={slug}"), sol]
     } else {
-        format!("{origin}/api/items/sol/of/{wallet}")
+        vec![sol]
     }
+}
+
+/// A wallet's best floor across the game's ladders in an Elo Pros ratings
+/// answer (`GET /api/ratings/<slug>/of/<wallet>`): what a rank-locked skin
+/// reads (`proto::SKIN_FLOOR`). None if it was never rated.
+pub fn best_floor(v: &serde_json::Value) -> Option<f64> {
+    v["ladders"]
+        .as_object()?
+        .values()
+        .filter_map(|l| l["floor"].as_f64())
+        .reduce(f64::max)
 }
 
 /// How long a ban answer is kept before it is asked again.
 pub const BAN_CACHE: Duration = Duration::from_secs(60);
+/// How long a friends list is kept: a friend added on Elo Pros shows up
+/// within this.
+pub const FRIENDS_CACHE: Duration = Duration::from_secs(30);
+
+/// One friend as Elo Pros lists them (`GET /api/friends/<player>`,
+/// `meter/friends.py`): their player id, the name they go by, and whether
+/// Elo Pros sees them online anywhere.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FriendRow {
+    pub id: String,
+    pub name: String,
+    pub online: bool,
+}
+
+/// The rows of a friends answer, in its order. A friend with no name goes
+/// by their id, shortened as Elo Pros shows one (`0x1234…abcd`).
+pub fn friend_rows(v: &serde_json::Value) -> Vec<FriendRow> {
+    v["friends"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            let id = f["wallet"].as_str()?.trim().to_ascii_lowercase();
+            proto::party::PlayerId::new(&id).filter(|p| !p.is_empty())?;
+            let name = match f["name"].as_str().map(str::trim) {
+                Some(n) if !n.is_empty() => n.to_string(),
+                _ if id.len() > 12 => format!("{}..{}", &id[..6], &id[id.len() - 4..]),
+                _ => id.clone(),
+            };
+            Some(FriendRow {
+                id,
+                name,
+                online: f["online"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
+}
 
 pub struct Elo {
     pub origin: String,
@@ -190,6 +243,8 @@ pub struct Elo {
     http: reqwest::Client,
     bans: Mutex<HashMap<String, (Instant, bool)>>,
     skins: Mutex<HashMap<String, (Instant, Vec<String>)>>,
+    floors: Mutex<HashMap<String, (Instant, Option<f64>)>>,
+    friends: Mutex<HashMap<String, (Instant, Vec<FriendRow>)>>,
 }
 
 impl Elo {
@@ -204,11 +259,74 @@ impl Elo {
                 .unwrap_or_default(),
             bans: Mutex::new(HashMap::new()),
             skins: Mutex::new(HashMap::new()),
+            floors: Mutex::new(HashMap::new()),
+            friends: Mutex::new(HashMap::new()),
         }
     }
 
+    /// `wallet`'s best floor on Elo Pros ([`best_floor`]): None if it was
+    /// never rated or Elo Pros can't be asked, which wears the standard look.
+    /// Answers are kept [`BAN_CACHE`].
+    pub async fn floor(&self, wallet: &str) -> Option<f64> {
+        let key = wallet.to_ascii_lowercase();
+        if let Ok(m) = self.floors.lock() {
+            if let Some((at, f)) = m.get(&key) {
+                if at.elapsed() < BAN_CACHE {
+                    return *f;
+                }
+            }
+        }
+        let url = format!("{}/api/ratings/{}/of/{}", self.origin, self.slug, wallet);
+        let got = async {
+            let res = self.http.get(&url).send().await.ok()?;
+            if !res.status().is_success() {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+            Some(best_floor(&v))
+        }
+        .await?;
+        if let Ok(mut m) = self.floors.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
+            }
+            m.insert(key, (Instant::now(), got));
+        }
+        got
+    }
+
+    /// `player`'s friends on Elo Pros (their list is public), or None if
+    /// Elo Pros can't be asked. `fresh`: ask again even if a list is kept.
+    /// Answers are kept [`FRIENDS_CACHE`].
+    pub async fn friends(&self, player: &str, fresh: bool) -> Option<Vec<FriendRow>> {
+        let key = player.to_ascii_lowercase();
+        if !fresh {
+            if let Ok(m) = self.friends.lock() {
+                if let Some((at, f)) = m.get(&key) {
+                    if at.elapsed() < FRIENDS_CACHE {
+                        return Some(f.clone());
+                    }
+                }
+            }
+        }
+        let url = format!("{}/api/friends/{}", self.origin, key);
+        let res = self.http.get(&url).send().await.ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
+        let got = friend_rows(&v);
+        if let Ok(mut m) = self.friends.lock() {
+            if m.len() > 10_000 {
+                m.retain(|_, (at, _)| at.elapsed() < FRIENDS_CACHE);
+            }
+            m.insert(key, (Instant::now(), got.clone()));
+        }
+        Some(got)
+    }
+
     /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
-    /// on Elo Pros ([`items_url`], read by [`owned_skins`]). Empty if Elo
+    /// on Elo Pros ([`items_urls`], read by [`owned_skins`]). Empty if Elo
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
     pub async fn skins(&self, wallet: &str) -> Vec<String> {
@@ -220,17 +338,25 @@ impl Elo {
                 }
             }
         }
-        let url = items_url(&self.origin, &self.slug, wallet);
-        let got = async {
+        let one = |url: String| async move {
             let res = self.http.get(&url).send().await.ok()?;
             if !res.status().is_success() {
                 return None;
             }
             let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
             Some(owned_skins(&v, &self.slug))
+        };
+        let mut lists = Vec::new();
+        for url in items_urls(&self.origin, &self.slug, wallet) {
+            lists.push(one(url).await);
         }
-        .await;
-        let Some(got) = got else { return Vec::new() };
+        // What any list answered; none answering is "couldn't ask", not kept.
+        if lists.iter().all(Option::is_none) {
+            return Vec::new();
+        }
+        let mut got: Vec<String> = lists.into_iter().flatten().flatten().collect();
+        got.sort();
+        got.dedup();
         if let Ok(mut m) = self.skins.lock() {
             if m.len() > 10_000 {
                 m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
@@ -317,10 +443,29 @@ impl Elo {
 
     /// Posts a result, retrying what may be passing (5xx, 429).
     pub async fn report(&self, r: &Report) -> Result<(), String> {
-        let key = self.key.as_ref().ok_or("no server key: nothing is reported")?;
-        let mut evidence = true;
-        let mut body = report_body(r, evidence);
         let path = format!("/ratings/{}/report", self.slug);
+        match self.post_signed(&path, report_body(r, true)).await {
+            // An Elo Pros from before ratings took `evidence`: the result
+            // still counts, so send it without.
+            Err(e) if e.starts_with("422") && e.contains("evidence") => {
+                self.post_signed(&path, report_body(r, false)).await.map(|_| ())
+            }
+            other => other.map(|_| ()),
+        }
+    }
+
+    /// Posts what players did (`stats::report_body`) to the game's stats,
+    /// achievements and boards. The answer names what it unlocked.
+    pub async fn stats(&self, body: String) -> Result<String, String> {
+        self.post_signed(&format!("/gamestats/{}/report", self.slug), body)
+            .await
+    }
+
+    /// A POST signed with the server key, retrying what may be passing
+    /// (5xx, 429, no answer) five times, a second then doubling. `path` is
+    /// without `/api`. Another refusal comes back as `"<code>: <text>"`.
+    async fn post_signed(&self, path: &str, body: String) -> Result<String, String> {
+        let key = self.key.as_ref().ok_or("no server key: nothing is reported")?;
         let mut wait = Duration::from_secs(1);
         for _ in 0..5 {
             let mut req = self
@@ -328,22 +473,15 @@ impl Elo {
                 .post(format!("{}/api{}", self.origin, path))
                 .header("Content-Type", "application/json")
                 .body(body.clone());
-            for (k, v) in key.headers("POST", &path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
+            for (k, v) in key.headers("POST", path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
                 req = req.header(k, v);
             }
             match req.send().await {
-                Ok(res) if res.status().is_success() => return Ok(()),
+                Ok(res) if res.status().is_success() => return Ok(res.text().await.unwrap_or_default()),
                 Ok(res) if res.status().is_server_error() || res.status().as_u16() == 429 => {}
                 Ok(res) => {
                     let code = res.status();
                     let text = res.text().await.unwrap_or_default();
-                    // An Elo Pros from before ratings took `evidence`: the
-                    // result still counts, so send it without.
-                    if code.as_u16() == 422 && evidence && text.contains("evidence") {
-                        evidence = false;
-                        body = report_body(r, evidence);
-                        continue;
-                    }
                     return Err(format!("{code}: {text}"));
                 }
                 Err(_) => {}
@@ -351,13 +489,49 @@ impl Elo {
             tokio::time::sleep(wait).await;
             wait *= 2;
         }
-        Err("Elo Pros didn't take the report after five tries".into())
+        Err(format!("Elo Pros didn't take {path} after five tries"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_best_floor_is_read_across_ladders_and_never_rated_is_none() {
+        let v = serde_json::json!({"ladders": {
+            "duel": {"rated": true, "rating": 1710, "floor": 1612},
+            "doubles": {"rated": true, "rating": 1650, "floor": 1580},
+            "cup": {"rated": false, "rating": null, "floor": null}}});
+        assert_eq!(best_floor(&v), Some(1612.0));
+        let none = serde_json::json!({"ladders": {"duel": {"rated": false, "floor": null}}});
+        assert_eq!(best_floor(&none), None);
+        assert_eq!(best_floor(&serde_json::json!({"error": "x"})), None);
+    }
+
+    #[test]
+    fn friends_are_read_as_elo_pros_lists_them() {
+        // `meter/friends.py` `view_of`: a wallet friend with a name, an
+        // account friend without one, and rows that aren't ids at all.
+        let v = serde_json::json!({"wallet": "0xaa", "friends": [
+            {"wallet": "0x24445EFDDB08D4938E3E3627042B2CF4063D9092", "name": "Chief", "online": true,
+             "playing": {"game": "gates"}},
+            {"wallet": "acct_0123456789abcdef0123", "name": null, "online": false},
+            {"wallet": "not an id!"}, {"name": "no id"}
+        ]});
+        let rows = friend_rows(&v);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            FriendRow {
+                id: "0x24445efddb08d4938e3e3627042b2cf4063d9092".into(),
+                name: "Chief".into(),
+                online: true
+            }
+        );
+        assert_eq!((rows[1].name.as_str(), rows[1].online), ("acct_0..0123", false));
+        assert!(friend_rows(&serde_json::json!({"error": "x"})).is_empty());
+    }
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
@@ -386,13 +560,17 @@ mod tests {
     #[test]
     fn a_wallet_is_asked_where_its_chain_keeps_items() {
         let o = "https://elopros.com";
+        // An EVM wallet: its RH items, and its linked Solana wallet's.
         assert_eq!(
-            items_url(o, "oneshot", "0xAbC"),
-            "https://elopros.com/api/items/of/0xAbC?game=oneshot&title=oneshot"
+            items_urls(o, "oneshot", "0xAbC"),
+            vec![
+                "https://elopros.com/api/items/of/0xAbC?game=oneshot&title=oneshot".to_string(),
+                "https://elopros.com/api/items/sol/of/0xAbC".to_string(),
+            ]
         );
         assert_eq!(
-            items_url(o, "oneshot", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"),
-            "https://elopros.com/api/items/sol/of/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+            items_urls(o, "oneshot", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"),
+            vec!["https://elopros.com/api/items/sol/of/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU".to_string()]
         );
     }
 

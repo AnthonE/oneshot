@@ -19,75 +19,13 @@ pub trait Link {
     fn closed(&self) -> bool;
     /// We're leaving: close the connection (the server lets the seat go).
     fn leave(&mut self) {}
-    /// Why the connection ended, in words, once it has (the close's code
-    /// and reason); None if nothing was said.
-    fn ended_why(&self) -> Option<String> {
-        None
-    }
-    /// Not connected yet: a stand-in while the page warms the game up
-    /// (`Pending`).
-    fn pending(&self) -> bool {
-        false
-    }
-    /// The real link, and what its stream said first, once it's here
-    /// (`Pending`); the app swaps it in.
-    fn take(&mut self) -> Option<(Box<dyn Link>, Vec<proto::Msg>)> {
-        None
-    }
-}
-
-/// Where the page's connect puts the client once it's seated, and what
-/// its stream said before (the queue's lines, the welcome).
-#[cfg(target_arch = "wasm32")]
-#[derive(Default)]
-pub struct Slot {
-    pub client: Option<client_net::web::Client>,
-    pub early: Vec<proto::Msg>,
-}
-
-/// A browser's link before it connects: a map and nobody, so the game
-/// draws a level (warming every pipeline, `warm.rs`) behind the page's
-/// menu while the page waits; then the real one, from the slot. The map is
-/// the mode's kind: a Big Team map's terrain and grass are pipelines no
-/// arena has.
-#[cfg(target_arch = "wasm32")]
-pub struct Pending {
-    idle: Still,
-    slot: std::rc::Rc<std::cell::RefCell<Slot>>,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Pending {
-    pub fn new(slot: std::rc::Rc<std::cell::RefCell<Slot>>, map: u8) -> Pending {
-        Pending {
-            idle: Still::on(map),
-            slot,
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl Link for Pending {
-    fn update(&mut self, _: Input) {}
-    fn session(&self) -> &Session {
-        self.idle.session()
-    }
-    fn session_mut(&mut self) -> &mut Session {
-        self.idle.session_mut()
-    }
-    fn now_ms(&self) -> f64 {
-        0.0
-    }
-    fn closed(&self) -> bool {
-        false
-    }
-    fn pending(&self) -> bool {
+    /// A real connection, not a stand-in.
+    fn live(&self) -> bool {
         true
     }
-    fn take(&mut self) -> Option<(Box<dyn Link>, Vec<proto::Msg>)> {
-        let mut s = self.slot.borrow_mut();
-        let client = s.client.take()?;
-        Some((Box::new(Web(client)), core::mem::take(&mut s.early)))
+    /// A tape's link (film mode, `film.rs`), whose clock the film moves.
+    fn tape(&mut self) -> Option<&mut Tape> {
+        None
     }
 }
 
@@ -121,9 +59,6 @@ impl Link for Native {
     fn leave(&mut self) {
         self.client.close();
     }
-    fn ended_why(&self) -> Option<String> {
-        self.client.ended_why()
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -149,9 +84,6 @@ impl Link for Web {
     fn leave(&mut self) {
         self.0.close();
     }
-    fn ended_why(&self) -> Option<String> {
-        self.0.ended_why()
-    }
 }
 
 /// No server: a stand-in session, ready on a map (Proving Grounds unless
@@ -169,6 +101,11 @@ impl Still {
         s.welcomes = 1;
         s.map_id = map;
         Still(s)
+    }
+
+    /// Not even a map: nothing is built until a real link comes.
+    pub fn idle() -> Still {
+        Still(Session::new())
     }
 }
 
@@ -191,5 +128,50 @@ impl Link for Still {
     }
     fn closed(&self) -> bool {
         false
+    }
+    fn live(&self) -> bool {
+        false
+    }
+}
+
+/// A tape played back (`film.rs`): a watching session fed by a
+/// `client_net::tape::Replay` at the film's clock, on its own frame clock,
+/// however long a frame takes to draw. What it draws is what the player
+/// was sent, through client-net's interpolation; nothing goes anywhere.
+pub struct Tape {
+    pub session: Session,
+    pub replay: client_net::tape::Replay,
+}
+
+impl Tape {
+    pub fn new(tape: client_net::tape::Tape) -> Tape {
+        Tape {
+            session: Session::replay(),
+            replay: client_net::tape::Replay::new(tape),
+        }
+    }
+}
+
+impl Link for Tape {
+    fn update(&mut self, _: Input) {
+        self.replay.frame(&mut self.session);
+    }
+    fn session(&self) -> &Session {
+        &self.session
+    }
+    fn session_mut(&mut self) -> &mut Session {
+        &mut self.session
+    }
+    fn now_ms(&self) -> f64 {
+        self.replay.clock_ms
+    }
+    fn closed(&self) -> bool {
+        false
+    }
+    fn live(&self) -> bool {
+        false
+    }
+    fn tape(&mut self) -> Option<&mut Tape> {
+        Some(self)
     }
 }

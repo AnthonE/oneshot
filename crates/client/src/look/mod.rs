@@ -1,16 +1,45 @@
 //! The look: Gates' renderer, ported piece by piece (docs/RIP.md §9).
 //! Drawing only: nothing here reads anything but the map and the camera.
 
+pub mod anim;
 pub mod bodies;
+pub mod cliffs;
+pub mod cloud_shadow;
+pub mod clutter;
+pub mod deck;
+pub mod emblem;
 pub mod fill;
+pub mod foliage;
+pub mod fresnel;
 pub mod fx;
+pub mod gpu;
 pub mod grass;
 pub mod ground;
 pub mod guns;
+pub mod mood;
+pub mod moon;
+pub mod own_shadow;
+pub mod pipelines;
+pub mod portrait;
+pub mod potato;
 pub mod prewarm;
+pub mod quality;
+pub mod rag;
+pub mod rain;
+pub mod rainbow;
+pub mod render_scale;
 pub mod rig;
+pub mod rock;
+pub mod shafts;
 pub mod shake;
 pub mod shield;
+pub mod ship;
+pub mod shot;
 pub mod sky;
+pub mod stars;
 pub mod textures;
+pub mod trees;
+pub mod vault;
 pub mod viewmodel;
+pub mod water;
+pub mod weathering;

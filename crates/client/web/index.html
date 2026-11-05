@@ -4,424 +4,94 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>oneshot</title>
+    <meta name="theme-color" content="#1b1916" />
     <link rel="icon" href="data:," />
     <style>
-      /* The game's own faces (assets/fonts, CC0): Unitblock for the title,
-         Aileron for the rest. */
+      /* The game's own faces (assets/fonts, CC0) and the title's palette
+         (crates/client/src/ui.rs, Gates'): only for the splash while the
+         game loads. Every screen after it is the game's, drawn in Bevy. */
       @font-face { font-family: Unitblock; src: url(assets/fonts/Unitblock.ttf) format('truetype'); font-display: swap; }
-      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Regular.otf) format('opentype'); font-weight: 400; font-display: swap; }
-      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-SemiBold.otf) format('opentype'); font-weight: 600; font-display: swap; }
       @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Bold.otf) format('opentype'); font-weight: 700; font-display: swap; }
-      @font-face { font-family: Aileron; src: url(assets/fonts/Aileron-Black.otf) format('opentype'); font-weight: 900; font-display: swap; }
-      [hidden] { display: none !important; }
-      html, body { margin: 0; height: 100%; background: #10141a; overflow: hidden; }
+      html, body { margin: 0; height: 100%; background: #1b1916; overflow: hidden; }
       #wrap { width: 100vw; height: 100vh; }
       /* ?lite=1: a quarter of the pixels, scaled back up (a software GPU). */
       #wrap.lite { width: 50vw; height: 50vh; transform: scale(2); transform-origin: 0 0; }
       canvas#game { width: 100%; height: 100%; display: block; outline: none; }
-      #menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
-        gap: 14px; background: radial-gradient(circle at 50% 40%, #1d2733cc, #0b0f14f2); color: #e9eef5;
-        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-        font: 16px Aileron, system-ui, sans-serif; padding: 0 16px; box-sizing: border-box; text-align: center; }
-      #menu h1 { margin: 0; font: 400 72px Unitblock, system-ui, sans-serif; letter-spacing: 4px; }
-      #menu p { margin: 0; opacity: 0.75; }
-      #menu input, #menu button, #menu select { font: inherit; padding: 10px 16px; border-radius: 6px; border: 1px solid #fff3;
-        background: #0008; color: inherit; }
-      #menu button { background: #e8b931; color: #111; border: 0; font-weight: 700; cursor: pointer; min-width: 180px; }
-      #menu button:disabled { opacity: 0.35; cursor: default; }
-      #menu button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
-      #menu .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
-      #who { min-height: 1.2em; font-size: 14px; opacity: 0.8; }
-      #status { min-height: 1.2em; opacity: 0.8; }
-      .keys { font-size: 13px; opacity: 0.6; line-height: 1.6; }
-      #stopped { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 20; max-width: min(640px, 92vw);
-        display: flex; gap: 14px; align-items: center; padding: 12px 16px; border-radius: 8px; background: #2a1414f2;
-        border: 1px solid #ff6a5a66; color: #f4e9e7; font: 15px Aileron, system-ui, sans-serif; }
-      #stopped button { font: inherit; font-weight: 700; padding: 8px 14px; border-radius: 6px; border: 0; background: #e8b931; color: #111; cursor: pointer; }
-      #report { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
-        background: #0009; padding: 16px; box-sizing: border-box; font: 15px Aileron, system-ui, sans-serif; color: #e9eef5; }
-      #report[hidden] { display: none; }
-      #report form { width: min(520px, 100%); display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 10px;
-        background: #141b24f5; border: 1px solid #fff2; }
-      #report h2 { margin: 0; font: 400 28px Unitblock, system-ui, sans-serif; letter-spacing: 2px; }
-      #report textarea { font: inherit; min-height: 140px; resize: vertical; padding: 10px; border-radius: 6px; border: 1px solid #fff3;
-        background: #0b0f14; color: inherit; box-sizing: border-box; width: 100%; }
-      #report .row { display: flex; gap: 10px; justify-content: flex-end; }
-      #report button { font: inherit; font-weight: 700; padding: 9px 16px; border-radius: 6px; border: 0; background: #e8b931; color: #111; cursor: pointer; }
-      #report button.quiet { background: #0008; color: inherit; border: 1px solid #fff3; font-weight: 600; }
-      #report small { opacity: 0.65; }
-      #menu a.small { font-size: 13px; opacity: 0.6; color: inherit; }
-      #dl { width: min(360px, 90vw); font-size: 14px; opacity: 0.85; }
-      #dl .bar { height: 6px; border-radius: 3px; background: #fff2; overflow: hidden; margin-bottom: 6px; }
-      #dl .bar i { display: block; height: 100%; width: 0; background: #e8b931; transition: width 0.12s linear; }
+      /* Above the canvas until the game draws (`window.__oneshot`), then
+         faded out. Clicks go through it. */
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center;
+        padding: 0 clamp(16px, 3vw, 40px); gap: 10px; background: #1b1916; color: #ebe6d9;
+        font: 700 13px Aileron, system-ui, sans-serif; letter-spacing: .1em; pointer-events: none;
+        transition: opacity .4s ease-out; }
+      #boot.gone { opacity: 0; }
+      #boot .word { font: 400 52px Unitblock, system-ui, sans-serif; color: #edebe6; letter-spacing: 0; }
+      #boot .line { display: flex; align-items: center; gap: 10px; color: rgba(158, 153, 143, .8); font-size: 11px; }
+      #boot .line::before { content: ""; width: 26px; height: 3px; background: #e8b931; }
+      /* The renderer, after the line's own words: a space's width, not the gap. */
+      #boot .line #gfx { margin-left: -6px; }
+      #boot .bar { width: min(320px, 70vw); height: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; margin-top: 18px; }
+      #boot .bar i { display: block; width: 40%; height: 100%; background: #e8b931; animation: slide 1.2s ease-in-out infinite; }
+      #boot.failed .bar i { animation: none; width: 100%; background: #e3896a; }
+      #boot .say { min-height: 1.2em; color: rgba(189, 184, 173, .86); text-transform: uppercase; }
+      @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+      /* Over the canvas when WebGPU refused part of the frame mid-match. */
+      #gpubar { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 5; max-width: min(92vw, 640px);
+        padding: 10px 14px; background: rgba(27, 25, 22, .94); color: #ebe6d9; font: 700 12px Aileron, system-ui, sans-serif;
+        letter-spacing: .06em; border-left: 3px solid #e3896a; }
+      #gpubar a { color: #e8b931; margin-left: 8px; }
+      /* F9's clip (crates/client/src/clip.rs): the last half minute drawn by
+         the game in a frame of its own (clip.html) and made into a video on
+         this machine. A card in the corner: the match goes on behind it. */
+      #clip { position: fixed; right: 16px; bottom: 16px; z-index: 6; box-sizing: border-box;
+        width: min(380px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 12px 14px;
+        background: rgba(27, 25, 22, .96); color: #ebe6d9; border-left: 3px solid #e8b931;
+        font: 700 12px Aileron, system-ui, sans-serif; letter-spacing: .06em; }
+      #clip[hidden] { display: none; }
+      #clip .head { display: flex; justify-content: space-between; align-items: center; }
+      #clip .word { color: #e8b931; letter-spacing: .1em; }
+      #clip p { margin: 8px 0 0; color: rgba(189, 184, 173, .9); font-weight: 400; letter-spacing: .02em; line-height: 1.35; }
+      #clip p.bad { color: #e3896a; }
+      #clip .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      #clip button, #clip a.btn { background: transparent; color: #ebe6d9; border: 1px solid rgba(235, 230, 217, .25);
+        font: inherit; padding: 6px 10px; cursor: pointer; text-decoration: none; }
+      #clip button.on { border-color: #e8b931; color: #e8b931; }
+      #clip button:disabled { opacity: .45; cursor: default; }
+      #clip .view { margin-top: 10px; background: #000; aspect-ratio: 16 / 9; }
+      #clip .view.tall { aspect-ratio: 9 / 16; width: min(100%, 28vh); margin-left: auto; margin-right: auto; }
+      #clip .view:empty { display: none; }
+      #clip iframe, #clip video { width: 100%; height: 100%; border: 0; display: block; }
+      #clip .bar { height: 3px; background: rgba(255, 255, 255, .1); margin-top: 10px; }
+      #clip .bar i { display: block; height: 100%; width: 0; background: #e8b931; }
     </style>
   </head>
   <body>
     <div id="wrap"><canvas id="game" tabindex="0"></canvas></div>
-    <div id="stopped" hidden><span id="stopline"></span><button onclick="location.reload()">Reload</button></div>
-    <div id="report" hidden>
-      <form id="reportform">
-        <h2>REPORT A BUG</h2>
-        <textarea id="reporttext" maxlength="4000" placeholder="What happened, and what you expected. Where on the map, if it matters."></textarea>
-        <small>Sent with it: the game's build, your browser and graphics card, and this match's map, tick and net counts. Not your name or address.</small>
-        <span id="reportline"></span>
-        <div class="row"><button type="button" class="quiet" id="reportcancel">Cancel</button><button type="submit" id="reportsend">Send</button></div>
-      </form>
+    <div id="boot">
+      <div class="word">ONESHOT</div>
+      <div class="line">ARENA SLAYER · RANKED ON ELO PROS<span id="gfx"></span></div>
+      <div class="bar"><i></i></div>
+      <div class="say" id="say">Loading</div>
     </div>
-    <div id="menu">
-      <h1>ONESHOT</h1>
-      <p>1v1 and 2v2 · ranked on Elo Pros · free for all, Gun Game and Big Team with bots</p>
-      <div class="row">
-        <input id="name" maxlength="16" placeholder="name" autocomplete="off" />
-        <select id="skin" title="Skin: worn if your wallet owns it"></select>
+    <section id="clip" hidden role="dialog" aria-labelledby="clip-word">
+      <div class="head"><span class="word" id="clip-word">CLIP</span><button id="clip-close" type="button">CLOSE</button></div>
+      <p id="clip-held"></p>
+      <div class="row" id="clip-styles">
+        <button type="button" data-style="wide" class="on">WIDE</button>
+        <button type="button" data-style="pov">VERTICAL</button>
+        <button type="button" data-style="chase">CHASE</button>
+        <button type="button" data-style="mix">MIX</button>
       </div>
-      <button id="signin" class="quiet" hidden>Sign in with Elo Pros</button>
-      <div id="who"></div>
-      <div class="row modes">
-        <button id="play">Play the bot</button>
+      <div class="view" id="clip-view"></div>
+      <div class="bar"><i id="clip-bar"></i></div>
+      <p id="clip-status"></p>
+      <div class="row" id="clip-done" hidden>
+        <a class="btn" id="clip-save" download>SAVE THE VIDEO</a>
+        <button type="button" id="clip-share" hidden>SHARE</button>
       </div>
-      <div class="row modes">
-        <button id="ffa" class="quiet">Free for all</button>
-        <button id="gungame" class="quiet">Gun Game</button>
-        <button id="bigteam" class="quiet">Big Team</button>
-      </div>
-      <div class="row modes">
-        <button id="duel" disabled>Ranked Duel</button>
-        <button id="doubles" disabled>Ranked Doubles</button>
-        <button id="cup" disabled>Enter a cup</button>
-      </div>
-      <div id="dl" hidden><div class="bar"><i id="dlbar"></i></div><span id="dlline"></span></div>
-      <div id="status"></div>
-      <button id="cancel" class="quiet" hidden>Cancel</button>
-      <div class="keys">WASD move · Space jump · Ctrl crouch · Mouse aim and fire · Right mouse zoom (the left gun, with two)<br />
-        R reload · 1, X or wheel swap · Q melee · G grenade · T frag or sticky · E pick up, get in · N net graph<br />
-        Esc in a match: the menu, and the settings (keys, mouse speed, field of view, volume)</div>
-      <a href="#" id="reportlink" class="small">Report a bug</a>
-    </div>
+    </section>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
-         doesn't load, sign-in is hidden and the bot is still there. -->
+         doesn't load, the title says ranked is off and the rest still plays. -->
     <script async src="https://elopros.com/sdk/elo-signin-1.js"></script>
-    <script type="module">
-      // The Bevy client in the browser, with the three.js page's menu
-      // (web/index.html, web/src/main.ts): the page only picks what to play
-      // and signs in; the game, the queue's wait and everything after are
-      // the client's.
-      import init, { play, pose, skin_names } from './oneshot_client.js';
-      // The game stopped (a panic, which in wasm is a trap; the client's
-      // hook calls this) or never could (no WebGL2): say so over whatever
-      // is on screen, with a way back, rather than leave a frozen canvas
-      // (Gates' gatesPanic).
-      const stopped = (line) => {
-        // play() reads this: a dead game takes no seat.
-        window.__oneshotDead = true;
-        const bar = document.getElementById('stopped');
-        if (!bar.hidden) return;
-        document.getElementById('stopline').textContent = line;
-        bar.hidden = false;
-        try { document.exitPointerLock(); } catch { /* not locked */ }
-      };
-      // Reports (crates/server/src/bugs.rs) go to the game's own origin,
-      // known once origin.json is read; a crash before that waits for it.
-      let reportTo = null, build = {}, crash = null, crashSent = false;
-      const gpu = () => {
-        try {
-          const g = document.createElement('canvas').getContext('webgl2');
-          const x = g && g.getExtension('WEBGL_debug_renderer_info');
-          return x ? String(g.getParameter(x.UNMASKED_RENDERER_WEBGL)) : (g ? 'webgl2' : 'none');
-        } catch { return ''; }
-      };
-      const reportDoc = (kind, text) => {
-        const s = window.__oneshot || {};
-        return {
-          kind, text: String(text).slice(0, 4000),
-          build: { commit: build.commit || '', wasm_bytes: build.wasm_bytes || 0, proto: s.proto ?? null },
-          where: { ua: navigator.userAgent, gpu: gpu(), screen: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, page: location.pathname },
-          game: {
-            connected: !!s.connected, match: s.match || '', map: s.map ?? null, tick: s.tick ?? null,
-            stats: s.stats ? Array.from(s.stats) : [], frames: s.frames ?? 0, ended: !!s.ended, reason: s.reason || '',
-          },
-        };
-      };
-      // A crash goes as a beacon (it survives the page going); a player's
-      // report as a request, so the page can say it went.
-      const sendReport = async (doc, beacon) => {
-        if (reportTo === null) return 0;
-        const url = `${reportTo}bugs`, body = JSON.stringify(doc);
-        if (beacon && navigator.sendBeacon) return navigator.sendBeacon(url, body) ? 204 : 0;
-        try {
-          return (await fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain' }, keepalive: true })).status;
-        } catch { return 0; }
-      };
-      const sendCrash = () => {
-        if (crash && !crashSent && reportTo !== null) { crashSent = true; sendReport(crash, true); }
-      };
-      // `said` is the panic's own words; `line` all of it, where included.
-      window.oneshotStopped = (said, line) => {
-        if (!crash) { crash = reportDoc('crash', line || said); sendCrash(); }
-        stopped(
-          /webgl2|unable to find a gpu|no suitable adapter|webgl context/i.test(String(said))
-            ? "This browser wouldn't give the game WebGL2. Turn on hardware acceleration (or try another browser), then reload."
-            : 'The game stopped. Reload the page to play again.');
-      };
-      // A player's report, from the page's menu or the game's Esc menu.
-      {
-        const box = document.getElementById('report'), text = document.getElementById('reporttext');
-        const line = document.getElementById('reportline'), send = document.getElementById('reportsend');
-        const close = () => {
-          box.hidden = true;
-          document.getElementById('game').focus();
-        };
-        window.oneshotReportOpen = () => {
-          try { document.exitPointerLock(); } catch { /* not locked */ }
-          line.textContent = '';
-          send.disabled = false;
-          box.hidden = false;
-          text.focus();
-        };
-        document.getElementById('reportlink').addEventListener('click', (e) => { e.preventDefault(); window.oneshotReportOpen(); });
-        document.getElementById('reportcancel').addEventListener('click', close);
-        box.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
-        document.getElementById('reportform').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          if (!text.value.trim()) { line.textContent = 'Say what happened first.'; return; }
-          send.disabled = true;
-          line.textContent = 'Sending…';
-          const code = await sendReport(reportDoc('player', text.value), false);
-          if (code === 204) {
-            text.value = '';
-            line.textContent = 'Sent. Thank you.';
-            setTimeout(close, 1200);
-          } else {
-            send.disabled = false;
-            line.textContent = code === 429 ? 'Too many reports from here just now: try again later.'
-              : reportTo === null ? "The page hasn't found the game's server yet: try again in a moment."
-              : "It didn't go through. Try again in a moment.";
-          }
-        });
-      }
-      // A trap with no panic behind it (out of memory, an unreachable).
-      window.addEventListener('error', (e) => {
-        if (e.error instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.error));
-      });
-      // The same from a promise (the renderer starts in one).
-      window.addEventListener('unhandledrejection', (e) => {
-        if (e.reason instanceof WebAssembly.RuntimeError) window.oneshotStopped(String(e.reason));
-      });
-      if (!document.createElement('canvas').getContext('webgl2')) window.oneshotStopped('webgl2 unavailable');
-      // Raw mouse: the game's lock (winit asks with no options) asks the
-      // browser for unadjusted movement, so the OS's acceleration doesn't
-      // bend aim. Not on Linux, where Chrome refuses and a second request
-      // can lose the click; a refusal anywhere is remembered and asked
-      // plainly at once (Gates' app.js).
-      {
-        const canvas = document.getElementById('game');
-        const plain = canvas.requestPointerLock;
-        const RAW_REFUSED = 'oneshot.rawMouseRefused';
-        let refused = /Linux/.test(navigator.platform) && !/CrOS/.test(navigator.userAgent);
-        try { refused = refused || localStorage.getItem(RAW_REFUSED) === '1'; } catch { /* private window */ }
-        canvas.requestPointerLock = function () {
-          if (refused) return plain.call(this);
-          let p;
-          try { p = plain.call(this, { unadjustedMovement: true }); } catch { return plain.call(this); }
-          if (p && p.catch) p.catch((err) => {
-            if (!err || err.name !== 'NotSupportedError') return;
-            refused = true;
-            try { localStorage.setItem(RAW_REFUSED, '1'); } catch { /* private window */ }
-            plain.call(this);
-          });
-          return p;
-        };
-      }
-      const params = new URLSearchParams(location.search);
-      const flag = (k) => params.get(k) === '1';
-      const AUTOPLAY = flag('autoplay');
-      // The effects demo (`?fxdemo=1`, `?fxstage=N`) skips the menu too.
-      const SKIP_MENU = AUTOPLAY || flag('fxdemo') || params.has('fxstage');
-      if (flag('lite')) document.getElementById('wrap').classList.add('lite');
-      const $ = (id) => document.getElementById(id);
-      const menu = $('menu'), status = $('status'), cancel = $('cancel'), nameInput = $('name'), skin = $('skin');
-      const say = (line) => { status.textContent = line; };
-      const MODES = { play: 0, duel: 1, doubles: 2, ffa: 3, gungame: 4, cup: 5, bigteam: 6 };
-      const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch { /* private window */ } return v; };
-
-      // Where the game's own endpoints are: beside the page in dev, the game
-      // box when the page is published to elopros.com (ci/publish_web.sh
-      // writes origin.json). Read first, so a report can go while the game
-      // downloads, or after it failed to.
-      let base = '';
-      try {
-        const o = await fetch('origin.json');
-        if (o.ok) base = (await o.json()).server ?? '';
-      } catch { /* none: beside the page */ }
-      reportTo = base;
-      sendCrash();
-
-      // The game's 31 MB, with a bar: the bytes are counted off a copy of the
-      // download while the compiler takes the original (so it still
-      // compiles as it streams, and the browser's code cache keys to its
-      // URL). The total is the build's (build.json): a gzipped page's
-      // Content-Length isn't the module's size (Gates' app.js `counted`).
-      {
-        const modes = document.querySelectorAll('.modes');
-        const dl = $('dl'), bar = $('dlbar'), line = $('dlline');
-        let want = 0;
-        try {
-          const b = await (await fetch('build.json', { cache: 'no-cache' })).json();
-          build = b;
-          want = Number(b.wasm_bytes) || 0;
-        } catch { /* an older build: count in megabytes */ }
-        const mb = (n) => (n / 1048576).toFixed(0);
-        const paint = (got, done) => {
-          bar.style.width = want ? `${Math.min(100, (100 * got) / want).toFixed(1)}%` : (done ? '100%' : '30%');
-          line.textContent = done ? 'Starting the game…' : `Downloading the game · ${mb(got)}${want ? ' / ' + mb(want) : ''} MB`;
-        };
-        const counted = (res) => {
-          if (!want && !res.headers.get('content-encoding')) want = Number(res.headers.get('content-length')) || 0;
-          const reader = res.clone().body?.getReader();
-          if (!reader) return res;
-          let got = 0, last = 0;
-          (async () => {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              got += value.byteLength;
-              const now = performance.now();
-              if (now - last > 120) { last = now; paint(got, false); }
-            }
-            paint(got, true);
-          })().catch(() => {});
-          return res;
-        };
-        for (const m of modes) m.hidden = true;
-        dl.hidden = false;
-        paint(0, false);
-        try {
-          await init({ module_or_path: fetch('oneshot_client_bg.wasm', { priority: 'high' }).then(counted) });
-        } catch (e) {
-          // Offline, cut off mid-way, or not the game (a 404 page): say so.
-          console.error(e);
-          stopped("The game didn't download. Check the connection, then reload.");
-          dl.hidden = true;
-          await new Promise(() => {});
-        }
-        dl.hidden = true;
-        for (const m of modes) m.hidden = false;
-      }
-      if (params.has('pose')) {
-        // No server: one fighter for a picture (ci/look.mjs).
-        menu.style.display = 'none';
-        pose(location.search, ['lite'].filter(flag).join(','));
-        await new Promise(() => {}); // nothing more for the page to do
-      }
-      nameInput.value = params.get('name') || store('oneshot.name') || '';
-      // Skins: worn only if the signed-in wallet owns one; the server checks.
-      skin_names().forEach((n, i) => skin.add(new Option(n[0].toUpperCase() + n.slice(1), String(i))));
-      skin.value = store('oneshot.skin') || '0';
-
-      const info = await (await fetch(`${base}server.json`)).json();
-      const signin = await setupSignIn(info, $('signin'), $('who'), [$('duel'), $('doubles'), $('cup')]);
-
-      // A server on its way down: the live one, if it is now another.
-      const follow = async () => {
-        try {
-          const now = await (await fetch(`${base}server.json`)).json();
-          return now.addr && now.addr !== info.addr ? [now.addr, now.hash ?? ''] : null;
-        } catch { return null; }
-      };
-
-      const mode = SKIP_MENU
-        ? Number(params.get('mode') || 0)
-        : await new Promise((go) => {
-            for (const id of Object.keys(MODES)) $(id).addEventListener('click', () => go(MODES[id]), { once: true });
-          });
-      const name = nameInput.value.trim() || 'player';
-      store('oneshot.name', name);
-      store('oneshot.skin', skin.value);
-      for (const b of document.querySelectorAll('.modes')) b.hidden = true;
-      cancel.hidden = false;
-      cancel.onclick = () => location.reload();
-      say('connecting…');
-      const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'panic'].filter(flag).concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).join(',');
-      let playing = false;
-      try {
-        // No hash with a CA's certificate: checked by the browser, never pinned.
-        playing = await play(info.addr, info.hash ?? '', name, signin.pass(), mode, Number(skin.value) || 0, opts, say, follow);
-      } catch (e) {
-        say(String(e));
-      }
-      if (playing) {
-        menu.style.display = 'none';
-        if (!SKIP_MENU) $('game').focus();
-        // When the tab last went to the background and came back.
-        let hiddenAt = -1e9, shownAt = -1e9;
-        document.addEventListener('visibilitychange', () => {
-          if (document.hidden) hiddenAt = performance.now(); else shownAt = performance.now();
-        });
-        // The match over (or the line dropped): back to the menu.
-        const watch = () => {
-          const s = window.__oneshot;
-          // Left from the Esc menu: straight back to the menu.
-          if (s && s.left) {
-            location.reload();
-            return;
-          }
-          if (s && s.ended) {
-            // A browser isn't told why the server closed (client_net's
-            // close_why); a tab in the background is the usual reason, and
-            // the page can see that itself.
-            const now = performance.now();
-            const asleep = document.hidden || (now - shownAt < 5000 && shownAt - hiddenAt > 2000);
-            const why = asleep && !s.bye
-              ? 'the tab was in the background, and the game can’t keep up from there'
-              : s.reason;
-            say([s.bye ? 'Match over' : (why ? `Disconnected: ${why}` : 'Disconnected'), s.cup].filter(Boolean).join(' · '));
-            cancel.textContent = 'Back to menu';
-            menu.style.display = 'flex';
-            document.exitPointerLock();
-            return;
-          }
-          setTimeout(watch, 500);
-        };
-        watch();
-      } else {
-        cancel.textContent = 'Back to menu';
-      }
-
-      /** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup.
-       * The server hands out the nonce the pass must carry; we fetch one
-       * ahead so the popup opens on the click itself (a popup opened later is
-       * blocked). Ranked needs a wallet linked to the account. */
-      async function setupSignIn(info, button, who, ranked) {
-        let pass = '';
-        let nonce = '';
-        const fresh = async () => {
-          try { nonce = (await (await fetch(`${base}nonce`)).json()).nonce; } catch { nonce = ''; }
-        };
-        const sdk = () => window.EloSignIn;
-        // The SDK script is async: give it a moment.
-        for (let i = 0; i < 20 && !sdk(); i++) await new Promise((r) => setTimeout(r, 100));
-        if (info.signin && sdk()) {
-          button.hidden = false;
-          await fresh();
-          button.onclick = async () => {
-            try {
-              const res = await sdk().popup({ game: info.game, nonce });
-              pass = res.pass;
-              const text = atob(pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
-              const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1];
-              who.textContent = wallet ? `Signed in · ${wallet.slice(0, 6)}…${wallet.slice(-4)}` : 'Signed in · link a wallet on Elo Pros to play ranked';
-              for (const b of ranked) b.disabled = !wallet;
-              button.hidden = true;
-            } catch (e) {
-              who.textContent = e?.code === 'cancelled' || e?.code === 'closed' ? '' : `Sign-in failed: ${e?.message ?? e}`;
-            }
-            await fresh();
-          };
-        } else {
-          who.textContent = info.signin ? '' : 'Ranked is off on this server';
-        }
-        return { pass: () => pass };
-      }
-    </script>
+    <script type="module" src="boot.js"></script>
   </body>
 </html>

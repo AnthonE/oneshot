@@ -92,7 +92,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A band of light sweeping up the body, and a flicker across it.
     let band = smoothstep(0.35, 0.0, abs(fract(in.world_position.y * 0.6 - t * 1.4) - 0.5));
     let flicker = 0.75 + 0.25 * sin(t * 47.0 + in.world_position.y * 9.0);
-    let k = level * flicker * (rim * 1.5 + lines * (0.1 + rim) * 0.9 + band * 0.15 + 0.02);
+    // params.z takes the fill away (the arms in view: rim and lines only).
+    let fill = 1.0 - params.z;
+    let k = level * flicker * (rim * 1.5 + lines * (0.1 + rim) * 0.9 + (band * 0.15 + 0.02) * fill);
     out.color = vec4<f32>(color.rgb * k, 1.0);
     return out;
 }

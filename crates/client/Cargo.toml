@@ -18,6 +18,9 @@ path = "src/main.rs"
 
 [dependencies]
 sim = { path = "../sim" }
+# The particle pool, sprite sheet and recipes with no Bevy in them, vendored
+# from Gates (tools/fx-sync.sh); look/fx is their Bevy half.
+fx = { path = "../fx" }
 proto = { path = "../proto" }
 client-net = { path = "../client-net" }
 # What the client draws with, and nothing it doesn't (no audio or gamepads
@@ -36,12 +39,31 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_scene",
     "gltf_animation",
 ] }
+# F12's PNG (look/shot.rs): the encoder Bevy's own image loading already
+# builds, named so the client can write one.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Film mode's shot lists (film/script.rs), JSON as Gates' are: both already
+# in the build (bevy_gltf reads glTF's JSON with them).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A film's own mix (film/mix.rs): the game's .ogg cuts decoded off the frame
+# clock. The decoder Bevy's audio already builds into the browser's module.
+lewton = "0.10"
 
 [features]
 # Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
 sound = ["bevy/bevy_audio", "bevy/vorbis"]
 # Wayland beside X11 on Linux: needs libwayland-dev (the release builds have it).
 wayland = ["bevy/wayland"]
+# Gamepads on the desktop's screens (`pad.rs`): needs libudev's headers on
+# Linux (libudev-dev; the release builds have it). Always in a browser.
+pad = ["bevy/bevy_gilrs"]
+# The browser's WebGPU module (after Gates' `webgpu`): ci/client.sh builds the
+# page's wasm twice, with and without this, and web/index.html loads the one
+# the browser can draw with. Bevy picks its GPU API when it is compiled and
+# drops every WebGL workaround under this, so it is a second module, not a
+# switch; build.rs names its absence on wasm32 `cfg(webgl2)`. Nothing natively.
+webgpu = ["bevy/webgpu"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 client-net = { path = "../client-net", features = ["native"] }
@@ -54,11 +76,41 @@ rustls-native-certs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Sound always in a browser (Web Audio needs nothing from the build box).
-bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis"] }
+# `webgl2` is in both modules (a feature can't take a feature away): under
+# `webgpu` Bevy takes the WebGPU path, but wgpu keeps its GL backend linked as
+# the fallback for a browser without `navigator.gpu`, so the WebGPU module
+# carries both (ci/client.sh prints both sizes).
+bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis", "bevy_gilrs"] }
+# The wgpu Bevy resolves (one entry in Cargo.lock), named so the WebGPU module
+# can hand the device an error hook: Bevy re-exports neither `wgpu::Error`
+# nor the handler (look/gpu.rs, `watch`). `default-features = false`, or
+# wgpu's own defaults would put its WebGPU backend in the WebGL2 module too.
+wgpu = { version = "27", default-features = false }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Performance", "Document", "Element", "Storage"] }
+web-sys = { version = "0.3", features = [
+    "Window",
+    # Panics to the console (look/gpu.rs, `hook_panics`).
+    "console",
+    "Performance",
+    "Document",
+    "Element",
+    "Storage",
+    "Location",
+    # F12's download (look/shot.rs).
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "HtmlElement",
+    "HtmlAnchorElement",
+    # The retrying asset reader (asset_fetch.rs).
+    "Response",
+    # …made by the browser's own encoder, off the page's thread.
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
+] }
 
 # Quick to build and quick enough to play: our code a little optimised,
 # Bevy fully, and no debug info for it (Gates measured 20 GB without that).
@@ -72,10 +124,22 @@ debug = false
 codegen-units = 16
 lto = "thin"
 
-# The browser's build (ci/client.sh): every byte is a download, so small
-# over fast, and the whole program optimised as one.
+# What ships on the desktop (.github/workflows/desktop.yml): Gates' release,
+# one codegen unit under thin LTO. `release` stays quick for the dev loops
+# (ci/client.sh dev, the shots).
+[profile.desktop]
+inherits = "release"
+codegen-units = 1
+
+# The browser's build (ci/client.sh), after Gates' `[profile.web]`: the whole
+# program optimised as one, at 3 rather than "s" (Gates measured its sim
+# 19-25% faster in V8 for ~25% more bytes; the frame is CPU on one thread).
+# No `strip`: wasm-bindgen's --remove-name-section drops the names (the bulk
+# Gates strips for), and `strip` would take the `target_features` section
+# wasm-bindgen reads the module's features from.
 [profile.web]
 inherits = "release"
-opt-level = "s"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
+panic = "abort"

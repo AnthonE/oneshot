@@ -173,8 +173,9 @@ pub fn near(d: f32, full: f32, zero: f32) -> f32 {
     k * k
 }
 
-/// Advance an underdamped spring at rest length 0 by `h` seconds, exactly.
-fn spring(x: &mut f32, v: &mut f32, hz: f32, damp: f32, h: f32) {
+/// Advance an underdamped spring at rest length 0 by `h` seconds, exactly
+/// (`viewmodel.rs` rides the same arithmetic).
+pub(crate) fn spring(x: &mut f32, v: &mut f32, hz: f32, damp: f32, h: f32) {
     let w = core::f32::consts::TAU * hz;
     let wd = w * (1.0 - damp * damp).sqrt();
     let e = (-damp * w * h).exp();
@@ -187,7 +188,7 @@ fn spring(x: &mut f32, v: &mut f32, hz: f32, damp: f32, h: f32) {
 }
 
 /// The initial speed that makes a damped spring at `hz`/`damp` peak at 1.
-fn peak_to_speed(hz: f32, damp: f32) -> f32 {
+pub(crate) fn peak_to_speed(hz: f32, damp: f32) -> f32 {
     let w = core::f32::consts::TAU * hz;
     let wd = w * (1.0 - damp * damp).sqrt();
     let tp = ((1.0 - damp * damp).sqrt() / damp).atan() / wd;

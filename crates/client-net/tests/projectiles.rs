@@ -812,8 +812,10 @@ fn running_us() -> impl Fn(u32) -> Fighter {
 }
 
 fn running() -> Input {
+    // Toward +x: from the spawn at x = -40 the open map's far edge is a
+    // long run away (toward -x it is 10 m, and the run stops there).
     Input {
-        yaw: 32768,
+        yaw: 0,
         mz: 127,
         ..Input::default()
     }

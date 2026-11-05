@@ -8,6 +8,7 @@ use proto::{decode_snapshot, encode_input, Msg, Name, Pass, MAX_DATAGRAM, PROTO_
 use sim::input::Input;
 use sim::map::Map;
 
+use crate::clip::Clipper;
 use crate::core::NetCore;
 
 /// Where a session's datagrams go. Sending never waits: a full queue drops
@@ -42,6 +43,14 @@ pub fn refuse_why(reason: u8) -> &'static str {
         proto::REFUSE_BUSY => "that wallet is already queued or playing",
         proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
         proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
+        proto::REFUSE_NO_PARTY => "that party has broken up",
+        proto::REFUSE_PARTY_FULL => "that party is full",
+        proto::REFUSE_FRIENDS_ONLY => "that party is for the leader's friends",
+        proto::REFUSE_INVITE_ONLY => "that party is invite only: ask its leader to invite you",
+        proto::REFUSE_KICKED => "the party's leader removed you",
+        proto::REFUSE_NOT_LEADER => "only the party's leader can do that",
+        proto::REFUSE_PARTY_MODE => "the party doesn't fit that game: too many, or ranked without everyone's wallet",
+        proto::REFUSE_NOT_FRIEND => "you can invite your Elo Pros friends once you're signed in",
         _ => "the server is full",
     }
 }
@@ -58,6 +67,13 @@ pub struct Session {
     pub dropped: u32,
     /// Stream messages for the app, until it takes them.
     out: Vec<Msg>,
+    /// A tape's session (`Session::replay`): its own fighter is drawn off
+    /// the snapshots like everyone else's (`NetCore::watch`) and nothing
+    /// it makes is sent.
+    pub watch: bool,
+    /// The last minute it was sent, for the clip key (`crate::clip`). On
+    /// for every live session; a replay keeps none.
+    clip: Option<Box<Clipper>>,
 }
 
 impl Default for Session {
@@ -76,23 +92,69 @@ impl Session {
             welcomes: 0,
             dropped: 0,
             out: Vec::new(),
+            watch: false,
+            clip: Some(Box::default()),
         }
     }
 
-    /// The first message on the stream: who, and what to play.
-    pub fn hello(name: &str, pass: Pass, mode: u8, skin: u8) -> Msg {
+    /// A session with no server behind it, for a tape (`tape::Replay`
+    /// feeds it): it watches, and keeps no clip of its own.
+    pub fn replay() -> Session {
+        Session {
+            watch: true,
+            clip: None,
+            ..Session::new()
+        }
+    }
+
+    /// Keep at least `secs` seconds for the tape, not the clip key's minute
+    /// (a recorder's session).
+    pub fn clip_keep_s(&mut self, secs: f64) {
+        if let Some(c) = self.clip.as_mut() {
+            c.keep_s(secs);
+        }
+    }
+
+    /// No clip key's memory (a test's or a tool's session).
+    pub fn no_clips(&mut self) {
+        self.clip = None;
+    }
+
+    /// A tape of at least the last `want_s` seconds (and the lead a film
+    /// needs), or as much as is held; `None` with clips off or before the
+    /// first snapshot (`clip::Clipper::tape`).
+    pub fn clip_tape(&self, want_s: f64) -> Option<Vec<u8>> {
+        self.clip.as_ref()?.tape(want_s)
+    }
+
+    /// Seconds a clip can reach back over now; 0 with clips off.
+    pub fn clip_held_s(&self) -> f64 {
+        self.clip.as_ref().map_or(0.0, |c| c.held_s())
+    }
+
+    /// The first message on the stream: who, what to play, and the party
+    /// it comes with (its code; 0 for none).
+    pub fn hello(name: &str, pass: Pass, mode: u8, look: proto::Look, party: u32) -> Msg {
         Msg::Hello {
             proto: PROTO_VER,
             name: Name::new(name),
             pass,
             mode,
-            skin,
+            skin: look.skin,
+            emblem: look.emblem,
+            party,
         }
     }
 
     /// A stream message: a welcome starts the netcode, a reveal is checked
     /// against the welcome's commitment, the rest wait for the app.
     pub fn on_msg(&mut self, m: Msg) {
+        if let Some(c) = self.clip.as_mut() {
+            match m {
+                Msg::Welcome { .. } => c.on_welcome(m),
+                _ => c.on_msg(&m),
+            }
+        }
         match m {
             Msg::Welcome {
                 slot,
@@ -113,6 +175,7 @@ impl Session {
                 self.map_id = map;
                 self.welcomes += 1;
                 self.core = NetCore::new(slot, team, tick, rules, m);
+                self.core.watch = self.watch;
                 self.core.salt_commit = salt_commit;
                 self.ready = true;
             }
@@ -130,13 +193,24 @@ impl Session {
             return;
         }
         if let Ok(s) = decode_snapshot(d) {
+            let had = self.core.stats.snapshots;
             self.core.on_snapshot(at_ms, &s);
+            // Only what was drawn goes on the clip: an old one (late, or a
+            // last heat's) is nothing a replay would show either.
+            if self.core.stats.snapshots != had {
+                if let Some(c) = self.clip.as_mut() {
+                    c.on_snapshot(at_ms, s.tick, d);
+                }
+            }
         }
     }
 
     /// Once a frame: advances the clock with the controls as they are and
     /// sends what is due.
     pub fn update(&mut self, now_ms: f64, input: Input, wire: &mut impl Wire) {
+        if let Some(c) = self.clip.as_mut() {
+            c.tick(now_ms);
+        }
         if !self.ready {
             return;
         }

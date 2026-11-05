@@ -4,7 +4,9 @@
 //! stand-in signed with the server's key; the replay on disk re-runs to the
 //! same hash, and the report's evidence names it. And what is refused: a
 //! ranked player without a wallet, a pass whose nonce was already used, and
-//! a wallet the game has banned.
+//! a wallet the game has banned. What each signed-in player did, ranked or
+//! casual, reaches the game's stats on the stand-in the same way, and
+//! `online.json` lists them while they play.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -85,15 +87,25 @@ async fn stand_in(old: bool) -> (String, Seen) {
                     seen.lock().unwrap().push((first, headers, body));
                     (200, r#"{"ok":true}"#.to_string())
                 } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
-                    // The first wallet owns the ember skin; nobody else owns any.
+                    // The first wallet owns the ember skin, the second the
+                    // gilded one; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
                         r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"}]"#
+                    } else if first.contains(WALLETS[1]) {
+                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"}]"#
                     } else {
                         "[]"
                     };
                     (200, format!(r#"{{"items":{items}}}"#))
                 } else if first.starts_with("GET /api/bans/oneshot/of/") {
                     (200, format!(r#"{{"banned":{}}}"#, first.contains(BANNED)))
+                } else if first.starts_with("GET /api/ratings/oneshot/of/") {
+                    // Both floors clear ember's line; neither clears gilded's.
+                    let floor = if first.contains(WALLETS[0]) { 1350 } else { 1400 };
+                    (
+                        200,
+                        format!(r#"{{"ladders":{{"duel":{{"rating":1500,"floor":{floor}}}}}}}"#),
+                    )
                 } else {
                     (200, r#"{"ladders":{"duel":{"rating":1500}}}"#.to_string())
                 };
@@ -111,6 +123,21 @@ async fn stand_in(old: bool) -> (String, Seen) {
         }
     });
     (origin, seen)
+}
+
+/// A GET of the server's own HTTP, as JSON.
+async fn get_json(http: std::net::SocketAddr, path: &str) -> serde_json::Value {
+    let Ok(mut s) = tokio::net::TcpStream::connect(http).await else {
+        return serde_json::Value::Null;
+    };
+    let _ = s
+        .write_all(format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").as_bytes())
+        .await;
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out).await;
+    out.split_once("\r\n\r\n")
+        .and_then(|(_, b)| serde_json::from_str(b).ok())
+        .unwrap_or_default()
 }
 
 /// A pass from the stand-in account key, as Elo Pros mints them.
@@ -148,11 +175,11 @@ async fn read_msg(r: &mut wtransport::RecvStream) -> Option<Msg> {
 /// Connects, says hello, and returns every stream message until the server
 /// closes the session (or 30 s pass).
 async fn play(h: &server::Handle, pass: &str, mode: u8) -> Vec<Msg> {
-    play_as(h, pass, mode, proto::SKIN_STANDARD).await
+    play_as(h, pass, mode, proto::Look::default()).await
 }
 
 /// [`play`], asking to wear `skin`.
-async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg> {
+async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) -> Vec<Msg> {
     let cfg = ClientConfig::builder()
         .with_bind_address("127.0.0.1:0".parse().unwrap())
         .with_server_certificate_hashes([Sha256Digest::from(h.cert_hash)])
@@ -169,7 +196,9 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, skin: u8) -> Vec<Msg>
         name: Name::new("ranked"),
         pass: Pass::new(pass).unwrap(),
         mode,
-        skin,
+        skin: look.skin,
+        emblem: look.emblem,
+        party: 0,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
@@ -253,9 +282,42 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     // Two players queue and play.
     let (n0, n1) = (nonce(http).await, nonce(http).await);
     let (p0, p1) = (pass(Some(WALLETS[0]), &n0), pass(Some(WALLETS[1]), &n1));
-    // Each asks for a skin: the first owns ember, the second doesn't own
-    // gilded and plays in the standard look.
-    let (a, b) = tokio::join!(play_as(&h, &p0, MODE_DUEL, 2), play_as(&h, &p1, MODE_DUEL, 5));
+    // While they play, `online.json` lists both with what they're doing.
+    let watcher = tokio::spawn(async move {
+        for _ in 0..100 {
+            let doc = get_json(http, "/online.json").await;
+            let rows = doc["online"].as_array().cloned().unwrap_or_default();
+            if rows.len() == 2
+                && rows
+                    .iter()
+                    .all(|r| r["status"].as_str().unwrap_or("").starts_with("Ranked Duel on "))
+            {
+                return Some((doc, get_json(http, "/status.json").await));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        None
+    });
+    // Each asks for a skin it owns: the first's floor is at ember's line, the
+    // second's is under gilded's (rank-locked), so it plays in the standard look.
+    // And an emblem: the first asks for the crown, locked at 1800, which its
+    // 1350 doesn't reach; the second for a free star.
+    let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
+    let (a, b) = tokio::join!(
+        play_as(&h, &p0, MODE_DUEL, proto::Look { skin: 2, emblem: crown }),
+        play_as(&h, &p1, MODE_DUEL, proto::Look { skin: 5, emblem: star })
+    );
+    let (online, status) = watcher.await.unwrap().expect("online.json listed both players");
+    let mut listed: Vec<&str> = online["online"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["wallet"].as_str().unwrap())
+        .collect();
+    listed.sort();
+    assert_eq!(listed, WALLETS.to_vec());
+    assert!(online["at"].as_u64().unwrap() > 1_700_000_000);
+    assert_eq!(status["players"], 2);
     let slot_of = |got: &[Msg]| {
         got.iter().find_map(|m| match m {
             Msg::Welcome { slot, .. } => Some(*slot),
@@ -268,13 +330,25 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
             _ => None,
         })
     };
+    let emblem_of = |got: &[Msg], who: u8| {
+        got.iter().rev().find_map(|m| match m {
+            Msg::Seat { slot, emblem, .. } if *slot == who => Some(*emblem),
+            _ => None,
+        })
+    };
     let (sa, sb) = (slot_of(&a).unwrap(), slot_of(&b).unwrap());
     for got in [&a, &b] {
+        assert_eq!(
+            emblem_of(got, sa),
+            Some(proto::EMBLEM_NONE),
+            "a locked glyph under its line"
+        );
+        assert_eq!(emblem_of(got, sb), Some(star), "a free emblem, seen by both");
         assert_eq!(skin_of(got, sa), Some(2), "the owned skin, seen by both");
         assert_eq!(
             skin_of(got, sb),
             Some(proto::SKIN_STANDARD),
-            "an unowned skin is not worn"
+            "a skin above the wallet's floor is not worn"
         );
     }
     for got in [&a, &b] {
@@ -296,10 +370,18 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     }
 
     // The report, signed with the server's key.
+    let posted = |path: &str| {
+        let line = format!("POST /api{path} ");
+        seen.lock()
+            .unwrap()
+            .iter()
+            .find(|(l, _, _)| l.starts_with(&line))
+            .cloned()
+    };
     let mut report = None;
     for _ in 0..50 {
-        if let Some(r) = seen.lock().unwrap().first().cloned() {
-            report = Some(r);
+        report = posted("/ratings/oneshot/report");
+        if report.is_some() && posted("/gamestats/oneshot/report").is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -335,6 +417,43 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     assert_eq!(players, WALLETS.map(String::from).to_vec());
     // Nobody fired: a draw, both first.
     assert!(m["teams"].as_array().unwrap().iter().all(|t| t["place"] == 1));
+    assert_eq!(m["agents"], serde_json::json!([]), "a ranked room seats people only");
+
+    // And what each did, for the game's stats and achievements, signed the
+    // same way: a ranked match finished, nobody won a draw.
+    let (_, sh, sbody) = posted("/gamestats/oneshot/report").expect("stats reached Elo Pros");
+    let sget = |k: &str| sh.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap();
+    let text = server::elo::server_text(
+        "POST",
+        "/gamestats/oneshot/report",
+        "oneshot/t-1",
+        sget("x-elo-time").parse().unwrap(),
+        sbody.as_bytes(),
+        &sget("x-elo-nonce"),
+    );
+    let sig = base64::engine::general_purpose::STANDARD
+        .decode(sget("x-elo-signature"))
+        .unwrap();
+    ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ED25519,
+        Ed25519KeyPair::from_seed_unchecked(&SERVER_SEED)
+            .unwrap()
+            .public_key()
+            .as_ref(),
+    )
+    .verify(text.as_bytes(), &sig)
+    .expect("stats signed with the server's key");
+    let sv: serde_json::Value = serde_json::from_str(&sbody).unwrap();
+    let reps = sv["reports"].as_array().unwrap();
+    let mut who: Vec<&str> = reps.iter().map(|r| r["wallet"].as_str().unwrap()).collect();
+    who.sort();
+    assert_eq!(who, WALLETS.to_vec());
+    for r in reps {
+        assert_eq!(r["stats"]["matches"], 1);
+        assert_eq!(r["stats"]["ranked_matches"], 1);
+        assert!(r["stats"].get("wins").is_none(), "a draw is nobody's win");
+        assert!(r["stats"]["seconds_played"].as_u64().unwrap() >= 3);
+    }
 
     // The replay on disk re-runs to the same end; a changed byte doesn't.
     let file = std::fs::read_dir(&dir)
@@ -524,6 +643,28 @@ async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
         assert_eq!(r["matches"][0]["teams"].as_array().unwrap().len(), 4);
         assert!(r["matches"][0]["evidence"]["replay_sha256"].is_string());
     }
+    // Each entrant's cup, for the game's stats: played, and its place on the
+    // best-finish board.
+    let mut cupped = Vec::new();
+    for _ in 0..50 {
+        cupped = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _, b)| l.starts_with("POST /api/gamestats/") && b.contains("cup_place"))
+            .flat_map(|(_, _, b)| {
+                let v: serde_json::Value = serde_json::from_str(b).unwrap();
+                v["reports"].as_array().cloned().unwrap_or_default()
+            })
+            .collect();
+        if cupped.len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(cupped.len(), 4, "{cupped:?}");
+    assert!(cupped.iter().all(|r| r["stats"]["cups_played"] == 1));
+    assert!(cupped.iter().any(|r| r["scores"]["cup_place"] == 1));
     // The cup's file, and its top two waiting on a review before a prize.
     let mut cup = None;
     for _ in 0..50 {
@@ -560,5 +701,64 @@ async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
         let bytes = std::fs::read(dir.join(heat["replay"].as_str().unwrap())).expect("the heat's replay");
         room::replay::verify(&bytes).expect("replays");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn casual_play_is_counted_for_whoever_signed_in() {
+    // A pass without a wallet plays casual and is counted under its account;
+    // a guest is counted nowhere.
+    let (origin, seen) = stand_in(false).await;
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-casual-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("server.pem");
+    std::fs::write(&key_path, pem(&SERVER_SEED)).unwrap();
+    let account = Ed25519KeyPair::from_seed_unchecked(&ACCOUNT_SEED).unwrap();
+    let h = server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        rules: Rules {
+            time_limit_ms: 3000,
+            ..Rules::duel()
+        },
+        passive_bots: true,
+        domains: vec!["127.0.0.1".into()],
+        elo_pubkey: Some(account.public_key().as_ref().try_into().unwrap()),
+        elo_origin: origin,
+        elo_key: Some((key_path, "t-1".into())),
+        roster_dir: Some(dir.join("online")),
+        ..server::Config::default()
+    })
+    .await
+    .unwrap();
+    let http = h.http.unwrap();
+    let signed = pass(None, &nonce(http).await);
+    let (a, _) = tokio::join!(play(&h, &signed, proto::MODE_CASUAL), play(&h, "", proto::MODE_CASUAL));
+    assert_eq!(a.last(), Some(&Msg::Bye));
+    let mut reps = Vec::new();
+    for _ in 0..50 {
+        reps = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _, _)| l.starts_with("POST /api/gamestats/oneshot/report "))
+            .flat_map(|(_, _, b)| {
+                let v: serde_json::Value = serde_json::from_str(b).unwrap();
+                v["reports"].as_array().cloned().unwrap_or_default()
+            })
+            .collect();
+        if !reps.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(reps.len(), 1, "the guest isn't reported: {reps:?}");
+    assert_eq!(reps[0]["wallet"], "acct_0123456789abcdef0123");
+    assert_eq!(reps[0]["stats"]["matches"], 1);
+    assert!(reps[0]["stats"].get("ranked_matches").is_none());
+    // The roster went to the shared dir, under this slot's port.
+    let file = dir.join("online").join(server::online::file_name(h.addr.port()));
+    let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).expect("the slot's roster")).unwrap();
+    assert!(doc["at"].as_u64().is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }

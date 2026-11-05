@@ -50,7 +50,7 @@ fn plasma(fx: &mut Fx, at: Vec3) {
     let green = super::pool::Particle {
         left: 0.25,
         life: 0.25,
-        pos: at,
+        pos: at.into(),
         size0: 1.0,
         size1: 4.0,
         c0: [3.0, 12.0, 4.0, 1.0],
@@ -66,7 +66,7 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         life: 0.35,
         cell: super::atlas::RING,
         orient: super::pool::Orient::Flat,
-        pos: at - Vec3::Y * 0.4,
+        pos: (at - Vec3::Y * 0.4).into(),
         c0: [1.5, 6.0, 2.0, 0.8],
         c1: [0.2, 0.8, 0.3, 0.0],
         ..green
@@ -78,8 +78,8 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         fx.glow.spawn(super::pool::Particle {
             left: life,
             life,
-            pos: at,
-            vel: d * speed,
+            pos: at.into(),
+            vel: (d * speed).into(),
             gravity: 6.0,
             drag: 1.5,
             size0: 0.012,
@@ -114,7 +114,7 @@ fn burst(fx: &mut Fx, at: Vec3) {
         fx.glow.spawn(super::pool::Particle {
             left: 0.12,
             life: 0.12,
-            pos: at,
+            pos: at.into(),
             size0: 0.6,
             size1: 1.3,
             c0: super::table::PINK,
@@ -156,6 +156,8 @@ pub fn wreck(fx: &mut Fx, scene: &Scene, at: Vec3) {
 }
 
 fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
+    // Its shock through the grass and the dry scrub (`foliage.rs`).
+    fx.shock = Some(at);
     let dust = if scene.map.terrain.is_some() {
         Matter::Dirt
     } else {
@@ -191,8 +193,14 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
         } else {
             Vec3::Y
         };
+        // Lit debris off the ground it tore up (the table's Blast row).
+        let chips = n(usize::from(super::table::effect(Weapon::Blast, dust).chips));
+        fx.chips.throw(base, up, dust, chips, floor);
+        // Laid on the floor as drawn: over a ramp's slope, the terrain's
+        // folds, and faded off a platform's edge.
         if let Some((k, size)) = super::marks::kind(Weapon::Blast, dust) {
-            fx.marks.place(k, size * big, Vec3::new(at.x, floor, at.z), up, dust);
+            fx.marks
+                .lay(scene.map, k, size * big, Vec3::new(at.x, floor, at.z), up, dust);
         }
     }
 }

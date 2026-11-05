@@ -17,11 +17,12 @@ differences a ranked game needs:
 |---|---|---|
 | The game (WebTransport, UDP) | `game.elopros.com:61250` (slot a), `:61251` (slot b) | `oneshot@.service`, user `master` |
 | Which slot is live | `/home/master/oneshot-data/live` (`host:port`) | written by `ci/deploy_server.sh`; every `server.json` names it |
-| `server.json`, `/nonce`, `/ready`, `/status.json` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
+| `server.json`, `/nonce`, `/ready`, `/health.json` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
 | The page | `https://elopros.com/games/oneshot/play/` | the platform's nginx, `alias /data/apps/scry-data/oneshot-web/current/` on `morr` (`ci/publish_web.sh`) |
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live` |
+| `online.json`, `status.json` | `https://game.elopros.com/oneshot/…` | either slot, for both: each writes its roster to `oneshot-data/online/` (`--roster-dir`) |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -74,6 +75,29 @@ stops and says so (`--cut` ends those matches).
    workstation `ci/publish_web.sh`.
 7. On Elo Pros: the listing's `play_url` and the nginx block for the page
    (scry-forge `deploy/nginx/elopros.com.conf`, both ports in its CSP).
+8. **Stats, achievements and boards.** `ops/elo-stats.json` is the set the
+   server reports against (`crates/server/src/stats.rs`); save it on the dev
+   desk for `oneshot` (the console's players pane, "load a set", then sign).
+   Until it's saved, Elo Pros answers each report 409 and the journal says
+   so; nothing else is affected.
+9. **Playtime.** Copy `ops/servers.json` to `$SCRY_DEPOTS_DIR/oneshot/servers.json`
+   on `morr`. Elo Pros then reads `online.json` once a minute: hours on
+   record, playing now and the status line, card drops, the free skin.
+
+## Elo Pros, from the game's side
+
+| What | How the server does it |
+|---|---|
+| Ratings | `POST /api/ratings/oneshot/report` at a ranked match's end, with evidence |
+| Stats, achievements, boards | `POST /api/gamestats/oneshot/report` at every match's end and when a signed-in player leaves one, ranked or casual. A player is their wallet, else their account's `acct_` id; guests are nobody. Achievements unlock on Elo Pros when their stat reaches its target |
+| Playing now, hours, rich presence | `online.json` lists each signed-in player with a line ("Ranked Duel on Bulkhead · 7–5") |
+| Skins | checked against the wallet's items at sign-in (`elo.rs`) |
+| Bans | the game's list on Elo Pros, read at ranked sign-in |
+
+A change to `stats.rs` is two steps: `oneshot-server --print-stats > ops/elo-stats.json`
+(a test fails until it matches), then save the new set on the desk before
+the server that reports it is deployed. An achievement someone holds is never
+renamed or removed; dropping it archives it on their profile.
 
 ## Day to day
 
@@ -91,7 +115,10 @@ stops and says so (`--cut` ends those matches).
   and stop the other (or deploy the previous commit).
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
-- **Logs:** `journalctl -u 'oneshot@*' -f`: reports sent, drains, reloads.
+- **Logs:** `journalctl -u 'oneshot@*' -f`: reports and stats sent, drains, reloads.
+- **The service file** changed (a new flag)? `sudo cp 'ops/oneshot@.service' /etc/systemd/system/ && sudo systemctl daemon-reload`
+  before the deploy; the nginx file is staged by the deploy, then
+  `sudo nginx -t && sudo systemctl reload nginx`.
 - **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD-<port>.jsonl`
   (one file per slot per day), one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
   carries the panic's line; any report the build, browser, GPU, the match
@@ -102,7 +129,7 @@ stops and says so (`--cut` ends those matches).
   30; nginx's `oneshot_bugs` zone (6 a minute per address, a burst of 5) is
   the cap both share, so a deploy's overlap doesn't double it. The zone's
   `limit_req_zone` line goes in `oneshot-upstream.conf` with the upstream.
-- **Health:** `curl -s https://game.elopros.com/oneshot/status.json`: joins,
+- **Health:** `curl -s https://game.elopros.com/oneshot/health.json`: joins,
   refusals by code (`proto::REFUSE_*`), late and skipped ticks, tick p50/p99/max,
   snapshot drops, cut sessions, loss and round trip, since that slot started.
   Every busy 10 s a `oneshot: status` line in the journal says what changed;

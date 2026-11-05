@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A branch gated before its PR: gh workflow run ci --ref <branch>.
+  workflow_dispatch:
 
 jobs:
   sim:
@@ -19,14 +21,7 @@ jobs:
           cargo fmt --all --check
           cargo clippy -q --workspace --all-targets -- -D warnings
           cargo clippy -q -p sim-wasm -p client-net --target wasm32-unknown-unknown -- -D warnings
-          cargo test -q -p sim -p proto -p room -p client-net -p server
-      # Fog of war at sixteen seats inside its budget on every map, as
-      # ci/quick.sh checks (room/examples/fog_cost.rs), with twice the room
-      # on a shared runner's clock.
-      - name: fog budget
-        run: cargo run -q --release -p room --example fog_cost -- --check
-        env:
-          FOG_BUDGET_SCALE: "2"
+          cargo test -q -p sim -p proto -p room -p client-net -p server -p fx
       - name: native vs wasm
         run: ci/parity.sh
 
@@ -47,16 +42,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: build the client (clippy, native, the browser's) and the server
+      - name: build the client (clippy, native, the browser's two modules) and the server
         run: |
+          npm ci
           ci/client.sh
           cargo build -q --release -p server
       - name: play it in headless Chromium
         run: |
-          npm ci
           npx playwright install --with-deps chromium
-          node ci/e2e.mjs 150
+          E2E_WEBGPU=1 node ci/e2e.mjs 150
           node ci/e2e.mjs 150 4 2
+          node ci/party.mjs
+      # The desktop client too, under Xvfb on lavapipe: its title, and Gun
+      # Game on Cistern with the autopilot playing, as the second e2e match
+      # (`--shot` exits non-zero if the screen is never there).
+      - name: the desktop client draws
+        # Informational: it shows, it doesn't gate a PR.
+        continue-on-error: true
+        run: |
+          sudo apt-get update -q
+          # winit opens Xlib, Xcursor, Xlib-xcb and XInput2 by name, and
+          # xkbcommon-x11; lavapipe is mesa-vulkan-drivers.
+          sudo apt-get install -yq xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxi6 libx11-xcb1
+          ci/desktop_shot.sh traces/desktop-title.png 2 0 0 0
+          ci/desktop_shot.sh traces/desktop-gungame.png 4 4 2 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

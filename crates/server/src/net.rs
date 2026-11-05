@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use proto::{
     datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
-    PROTO_VER,
+    MODE_LOBBY, PROTO_VER,
 };
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
@@ -32,7 +32,9 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// Connections one address may hold (an IPv4 address, an IPv6 /64), and one
 /// prefix (a /24, a /48): a household plays, a flood from one place doesn't.
-pub const PER_SOURCE: u16 = 8;
+/// Each player holds two (the lobby beside the match), so eight at one
+/// address fit.
+pub const PER_SOURCE: u16 = 16;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 
 /// The certificate the server presents: its PEM files, or a fresh
@@ -240,19 +242,19 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
         let incoming = ep.accept().await;
         match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
             Admit::Refuse => {
-                ctx.stats.conn_refused.fetch_add(1, Ordering::Relaxed);
+                ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
                 incoming.refuse();
                 continue;
             }
             Admit::Retry => {
-                ctx.stats.conn_retried.fetch_add(1, Ordering::Relaxed);
+                ctx.health.conn_retried.fetch_add(1, Ordering::Relaxed);
                 incoming.retry();
                 continue;
             }
             Admit::Take => {}
         }
         let Some(permit) = ctx.gate.take(incoming.remote_address().ip()) else {
-            ctx.stats.conn_refused.fetch_add(1, Ordering::Relaxed);
+            ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
             incoming.refuse();
             continue;
         };
@@ -260,7 +262,7 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
     }
 }
 
-async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
+pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     let mut len = [0u8; LEN_PREFIX_BYTES];
     r.read_exact(&mut len).await.ok()?;
     let n = u16::from_le_bytes(len) as usize;
@@ -273,7 +275,7 @@ async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
 }
 
 async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
-    ctx.stats.refuse(reason);
+    ctx.health.refuse(reason);
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     if let Ok(n) = proto::frame_msg(&Msg::Refuse { reason }, &mut f) {
         let _ = send.write_all(&f[..n]).await;
@@ -291,7 +293,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     })
     .await;
     let Ok(Some((conn, mut send, mut recv, hello))) = opened else {
-        ctx.stats.handshake_failed.fetch_add(1, Ordering::Relaxed);
+        ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     let Msg::Hello {
@@ -300,9 +302,11 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         pass,
         mode,
         skin,
+        emblem,
+        party,
     } = hello
     else {
-        ctx.stats.handshake_failed.fetch_add(1, Ordering::Relaxed);
+        ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
     if proto != PROTO_VER {
@@ -312,10 +316,18 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
         return refuse(&mut send, proto::REFUSE_FULL, &ctx).await;
     }
-    // Who: a pass from Elo Pros, or a guest.
+    // Who: a pass from Elo Pros, a ticket of ours a pass earned, or a
+    // guest.
     let ranked = matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP);
-    let who = if pass.is_empty() {
+    let ticket = pass.as_str().starts_with(auth::TICKET_PREFIX);
+    let who: Option<auth::Who> = if pass.is_empty() {
         None
+    } else if ticket {
+        match ctx.nonces.check_ticket(pass.as_str()) {
+            Some(w) => Some(w),
+            None if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
+            None => None,
+        }
     } else if let Some(key) = ctx.elo_pubkey {
         match auth::verify_pass(
             pass.as_str(),
@@ -325,7 +337,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             |n| ctx.nonces.take(n),
             auth::now_unix(),
         ) {
-            Ok(p) => Some(p),
+            Ok(p) => Some(auth::Who::from(p)),
             Err(_) if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
             // Casual is open to anyone: a pass that doesn't check out (say,
             // older than its ten minutes) only costs its skin.
@@ -337,12 +349,27 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         None
     };
 
-    // A skin is worn only if the pass's wallet owns it (docs/DESIGN.md §15);
-    // a guest, or a list that can't be read, wears the standard look.
+    // The menu's own session: its party, friends and voice (`lobby.rs`).
+    if mode == MODE_LOBBY {
+        let who = who.unwrap_or_else(auth::Who::guest);
+        return crate::lobby::session(conn, send, recv, who, name, party, ctx).await;
+    }
+    // A match with a party: seated with it if they're in it and its leader
+    // started this mode, else alone.
+    let seating = match (&who, party) {
+        (Some(w), code) if code != 0 => ctx.lobby.parties().seating(code, &w.id, mode),
+        _ => None,
+    };
+
+    // A skin is worn only if the pass's wallet owns it and, for a rank-locked
+    // one, its floor is at the line (docs/DESIGN.md §15); a guest, or a list
+    // or rating that can't be read, wears the standard look.
     let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
         Some(w) if skin != proto::SKIN_STANDARD => {
             let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
-            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+            let line = proto::SKIN_FLOOR.get(skin as usize).copied().unwrap_or(u16::MAX);
+            let owned = ctx.elo.skins(w).await.iter().any(|s| s == want);
+            if owned && (line == 0 || ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line))) {
                 skin
             } else {
                 proto::SKIN_STANDARD
@@ -350,7 +377,19 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         }
         _ => proto::SKIN_STANDARD,
     };
+    // An emblem is anyone's, a guest's too, but a rank-locked glyph
+    // (`proto::GLYPH_FLOOR`) is worn only at its line, as a skin.
+    let emblem = proto::emblem_valid(emblem);
+    let line = proto::GLYPH_FLOOR[proto::emblem_parts(emblem).0 as usize];
+    let emblem = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if line == 0 => emblem,
+        Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
+        _ => proto::EMBLEM_NONE,
+    };
+    let look = proto::Look { skin, emblem };
 
+    // Who to count casual play for: the wallet, else the account itself.
+    let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
@@ -379,7 +418,8 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
                     mode,
                     rating,
                     since: std::time::Instant::now(),
-                    skin,
+                    look,
+                    party: seating.filter(|_| mode == MODE_DOUBLES),
                 }),
                 tx,
             }
@@ -388,11 +428,13 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             session: session_id,
             name,
             mode,
-            skin,
+            look,
+            party: seating,
+            player,
             tx,
         },
     };
-    // Counted as a join by the sim once it seats or queues it (`stats.rs`).
+    // Counted as a join by the sim once it seats or queues it (`health.rs`).
     if to_sim.send(join).is_err() {
         return;
     }
@@ -410,7 +452,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
             let d = outlet::newest(&mut datagrams, d, &wctx.counts);
             if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
                 if wconn.send_datagram(d).is_err() {
-                    wctx.stats.send_errors.fetch_add(1, Ordering::Relaxed);
+                    wctx.health.send_errors.fetch_add(1, Ordering::Relaxed);
                 }
             } else {
                 wctx.counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
@@ -418,14 +460,14 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         }
     });
     // The connection's round trip and loss, each journal window and at
-    // the end (`stats.rs`).
+    // the end (`health.rs`).
     let seen = Arc::new(Mutex::new((0u64, 0u64)));
     let sample = {
         let (conn, ctx, seen) = (conn.clone(), ctx.clone(), seen.clone());
         move || {
             let q = conn.quic_connection().stats();
             if let Ok(mut last) = seen.lock() {
-                ctx.stats
+                ctx.health
                     .sample(conn.rtt(), q.path.sent_packets, q.path.lost_packets, &mut last);
             }
         }
@@ -433,7 +475,7 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
     let sampler = {
         let sample = sample.clone();
         tokio::spawn(async move {
-            let mut every = tokio::time::interval(crate::stats::JOURNAL);
+            let mut every = tokio::time::interval(crate::health::JOURNAL);
             every.tick().await;
             loop {
                 every.tick().await;

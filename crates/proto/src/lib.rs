@@ -10,8 +10,12 @@
 
 pub mod bits;
 pub mod frame;
+pub mod medal;
+pub mod party;
+pub mod voice;
 
 use bits::{BitReader, BitWriter, WireError};
+use party::{Party, PlayerId};
 use sim::consts::MAX_FIGHTERS;
 use sim::fighter::{Fighter, Gun};
 use sim::geom::V3;
@@ -20,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 12;
+pub const PROTO_VER: u16 = 19;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -31,6 +35,8 @@ pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
 pub const MAX_SNAP_PADS: usize = 15;
 pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
+/// Guns on the floor a snapshot names, nearest first (`room::build`).
+pub const MAX_SNAP_DROPS: usize = 8;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
 pub const SLOT_BITS: u32 = 4;
@@ -64,7 +70,7 @@ fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
     Ok(((v << shift) as i32) >> shift)
 }
 
-fn done(r: &BitReader) -> R<()> {
+pub(crate) fn done(r: &BitReader) -> R<()> {
     if r.remaining_bits() >= 8 {
         Err(WireError::Malformed)
     } else {
@@ -192,6 +198,8 @@ pub fn datagram_kind(buf: &[u8]) -> Option<u8> {
 }
 pub const DG_INPUT: u8 = KIND_INPUT as u8;
 pub const DG_SNAPSHOT: u8 = KIND_SNAPSHOT as u8;
+/// Party voice, both ways, on a lobby session ([`voice`]).
+pub const DG_VOICE: u8 = voice::KIND_VOICE as u8;
 
 // ------------------------------------------------------------- snapshots
 
@@ -435,6 +443,34 @@ fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     Ok(v)
 }
 
+/// A gun on the floor, as this client may see it: its slot (so a drawn one
+/// is kept), the gun (`sim::arms::NONE`: grenades), where it lies, coarse.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DropState {
+    pub slot: u8,
+    pub arm: u8,
+    pub pos: V3,
+}
+
+impl Pack for DropState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, 5)?;
+        w.write(self.arm as u32, 4)?;
+        w_v3c(w, self.pos)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        let d = DropState {
+            slot: r.read(5)? as u8,
+            arm: r.read(4)? as u8,
+            pos: r_v3c(r)?,
+        };
+        if d.slot as usize >= sim::consts::MAX_DROPS || d.arm as usize >= sim::arms::COUNT {
+            return Err(WireError::Malformed);
+        }
+        Ok(d)
+    }
+}
+
 impl Pack for PadState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
         w.write(self.empty_s as u32, 16)
@@ -467,6 +503,8 @@ pub struct Snapshot {
     pub pads: [PadState; MAX_SNAP_PADS],
     pub n_vehicles: u8,
     pub vehicles: [VehState; MAX_SNAP_VEHICLES],
+    pub n_drops: u8,
+    pub drops: [DropState; MAX_SNAP_DROPS],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -494,6 +532,8 @@ impl Default for Snapshot {
             pads: [PadState::default(); MAX_SNAP_PADS],
             n_vehicles: 0,
             vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
+            n_drops: 0,
+            drops: [DropState::default(); MAX_SNAP_DROPS],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -518,6 +558,9 @@ impl Snapshot {
     }
     pub fn pads(&self) -> &[PadState] {
         &self.pads[..self.n_pads as usize]
+    }
+    pub fn drops(&self) -> &[DropState] {
+        &self.drops[..self.n_drops as usize]
     }
 }
 
@@ -649,6 +692,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_pads as usize, MAX_SNAP_PADS),
         (s.n_score as usize, MAX_FIGHTERS),
         (s.n_vehicles as usize, MAX_SNAP_VEHICLES),
+        (s.n_drops as usize, MAX_SNAP_DROPS),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -668,6 +712,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.events(), 6)?;
     w_list(&mut w, s.pads(), 4)?;
     w_list(&mut w, s.vehicles(), 4)?;
+    w_list(&mut w, s.drops(), 4)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
@@ -698,6 +743,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_events = r_list(&mut r, &mut s.events, 6)?;
     s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
     s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
+    s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);
@@ -781,6 +827,85 @@ impl Pass {
 /// standard look everyone has.
 pub const SKINS: [&str; 6] = ["standard", "pill", "ember", "glacier", "verdant", "gilded"];
 pub const SKIN_STANDARD: u8 = 0;
+/// The rank lock, by skin (`SKINS` order): the floor on Elo Pros (its
+/// ratings' mu − 3 sigma on the Elo scale, idle time counted; a wallet's best
+/// across the ladders) a wallet needs to wear the skin it owns. 0 is no lock.
+/// Owning one is a market; wearing one is a record. A wallet below the line
+/// wears the standard look, and can sell the skin to one above it.
+pub const SKIN_FLOOR: [u16; 6] = [0, 0, 1300, 1500, 1650, 1800];
+
+/// An emblem, Halo's way: a glyph on a field, each in its own colour, worn
+/// on the back. Cosmetic only, as a skin: never lit, never on a hitbox, never
+/// changes how well a fighter shows (docs/DESIGN.md §15). Sixteen bits: the
+/// glyph (`EMBLEM_GLYPHS`, 5 bits; 0 is no emblem at all), the field
+/// (`EMBLEM_FIELDS`, 3 bits; 0 is none), the glyph's colour and the field's
+/// (4 bits each, the client's palette).
+pub type Emblem = u16;
+pub const EMBLEM_NONE: Emblem = 0;
+pub const EMBLEM_GLYPHS: [&str; 17] = [
+    "none",
+    "star",
+    "chevron",
+    "bolt",
+    "crosshair",
+    "ring",
+    "diamond",
+    "triangle",
+    "cross",
+    "arrow",
+    "moon",
+    "heart",
+    "eye",
+    "shield",
+    "sun",
+    "wings",
+    "crown",
+];
+pub const EMBLEM_FIELDS: [&str; 8] = [
+    "none", "circle", "square", "diamond", "hexagon", "shield", "triangle", "octagon",
+];
+/// Colours in the palette.
+pub const EMBLEM_COLOURS: u16 = 16;
+/// The rank lock, by glyph (`EMBLEM_GLYPHS` order), as [`SKIN_FLOOR`]: a
+/// wallet whose floor is under the line wears no emblem. 0 is no lock.
+pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1500, 1650, 1800];
+
+/// What a fighter wears, as the server checked it: its skin and its emblem.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub skin: u8,
+    pub emblem: Emblem,
+}
+
+/// An emblem's parts: (glyph, field, glyph colour, field colour).
+pub const fn emblem_parts(e: Emblem) -> (u8, u8, u8, u8) {
+    (
+        (e & 31) as u8,
+        ((e >> 5) & 7) as u8,
+        ((e >> 8) & 15) as u8,
+        ((e >> 12) & 15) as u8,
+    )
+}
+
+/// An emblem from its parts, each taken modulo its range.
+pub const fn emblem(glyph: u8, field: u8, glyph_colour: u8, field_colour: u8) -> Emblem {
+    let g = glyph as u16 % EMBLEM_GLYPHS.len() as u16;
+    if g == 0 {
+        return EMBLEM_NONE;
+    }
+    g | (field as u16 & 7) << 5 | (glyph_colour as u16 & 15) << 8 | (field_colour as u16 & 15) << 12
+}
+
+/// `e` if it names a glyph that exists, else [`EMBLEM_NONE`]: what a room
+/// keeps of what a client asked for.
+pub const fn emblem_valid(e: Emblem) -> Emblem {
+    let (g, ..) = emblem_parts(e);
+    if g == 0 || g as usize >= EMBLEM_GLYPHS.len() {
+        EMBLEM_NONE
+    } else {
+        e
+    }
+}
 
 /// What a client asks to play (`Msg::Hello::mode`): casual against a bot,
 /// ranked Duel or Doubles, casual free-for-all or Gun Game with bots in the
@@ -794,8 +919,28 @@ pub const MODE_GUN_GAME: u8 = 4;
 pub const MODE_CUP: u8 = 5;
 /// Big Team: 8v8 Team Slayer, casual, bots in the empty seats.
 pub const MODE_BIG_TEAM: u8 = 6;
+/// No match: the menu's own session, for a party, its friends and its
+/// voice ([`party`]). Kept open beside a match.
+pub const MODE_LOBBY: u8 = 7;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
+
+/// A mode as a player reads it.
+pub fn mode_name(mode: u8) -> &'static str {
+    match mode {
+        MODE_CASUAL => "the bot",
+        MODE_DUEL => "Ranked Duel",
+        MODE_DOUBLES => "Ranked Doubles",
+        MODE_FFA => "Free for all",
+        MODE_GUN_GAME => "Gun Game",
+        MODE_CUP => "a cup",
+        MODE_BIG_TEAM => "Big Team",
+        _ => "oneshot",
+    }
+}
+/// Bits a medal id takes (`medal::COUNT` fits).
+const MEDAL_BITS: u32 = 6;
+const _: () = assert!(medal::COUNT <= 1 << MEDAL_BITS);
 
 // The hello carries a pass (640 bytes) and so sizes every message; stream
 // messages are a handful a second, so `Copy` is worth more than the bytes.
@@ -811,6 +956,11 @@ pub enum Msg {
         mode: u8,
         /// The skin it would wear: worn only if the pass's wallet owns it.
         skin: u8,
+        /// The emblem it would wear on its back ([`Emblem`]).
+        emblem: Emblem,
+        /// A match: the party it comes with (its code), to be seated with
+        /// it; a lobby: the party to join. 0: none.
+        party: u32,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -841,11 +991,15 @@ pub enum Msg {
         name: Name,
         /// The skin the server checked it owns; [`SKIN_STANDARD`] otherwise.
         skin: u8,
+        /// The emblem the server checked; [`EMBLEM_NONE`] otherwise.
+        emblem: Emblem,
     },
     Kill {
         killer: u8,
         victim: u8,
         cause: u16,
+        /// The blow was to the head.
+        head: bool,
     },
     Phase {
         phase: u8,
@@ -868,6 +1022,85 @@ pub enum Msg {
         salt: [u64; 2],
     },
     Bye,
+    /// Server → whoever earned it, or everyone for a public one
+    /// ([`medal::Info::public`]): a medal (`medal`), for the kill on
+    /// `victim`.
+    Medal {
+        slot: u8,
+        medal: u8,
+        victim: u8,
+    },
+    /// Server → everyone, once the match is over: one seat's carnage
+    /// report. Rounds are hitscan rounds; damage is in points.
+    Carnage {
+        slot: u8,
+        kills: u16,
+        deaths: u16,
+        assists: u16,
+        betrayals: u16,
+        shots: u16,
+        hits: u16,
+        heads: u16,
+        damage: u16,
+        taken: u16,
+        best_spree: u16,
+        best_multi: u8,
+        /// Each medal's count, by id (saturated).
+        medals: [u8; medal::COUNT],
+    },
+    /// Server → a session that signed in, and a guest's lobby: what the
+    /// server takes in place of a pass for a while (`server::auth`), so a
+    /// page that reloads after a match is still who it was.
+    Ticket {
+        ticket: Pass,
+    },
+    /// Client → server on a lobby: sign in now, with a fresh pass.
+    SignIn {
+        pass: Pass,
+    },
+    /// Client → server on a lobby: a party act (`party::ACT_*`).
+    PartyAct {
+        act: u8,
+        arg: u32,
+    },
+    /// Client → server on a lobby: let this friend into my party, and tell
+    /// them if they're here.
+    PartyInvite {
+        player: PlayerId,
+    },
+    /// Server → a lobby: its party as it is now.
+    Party(Party),
+    /// Server → each member present: the leader started `mode`. Each opens
+    /// a match session with the party's code; `private`: the party alone.
+    Go {
+        mode: u8,
+        private: bool,
+    },
+    /// Server → a lobby: `n` friend rows follow ([`Msg::Friend`]).
+    /// `reachable`: Elo Pros answered (false: we couldn't ask).
+    Friends {
+        n: u8,
+        reachable: bool,
+    },
+    /// Server → a lobby: one of my friends, and where they are.
+    Friend {
+        i: u8,
+        name: Name,
+        player: PlayerId,
+        /// `party::AT_*`.
+        at: u8,
+        /// The party they're in, if I may join it; 0 otherwise.
+        party: u32,
+        /// How many are in their party.
+        size: u8,
+        /// What they're in: a mode, or `party::PLAYING_NONE`.
+        playing: u8,
+    },
+    /// Server → a lobby: `from` asks me into party `code`.
+    Invited {
+        from: Name,
+        code: u32,
+    },
 }
 
 /// The commitment to a match's salt: SHA-256 of its two words, little-endian.
@@ -889,8 +1122,24 @@ pub const REFUSE_NEEDS_WALLET: u8 = 4;
 pub const REFUSE_BUSY: u8 = 5;
 /// The game has banned this wallet from ranked (Elo Pros `/bans/oneshot`).
 pub const REFUSE_BANNED: u8 = 6;
+/// No party has that code (any more).
+pub const REFUSE_NO_PARTY: u8 = 7;
+pub const REFUSE_PARTY_FULL: u8 = 8;
+/// The party is for the leader's friends, and you aren't one.
+pub const REFUSE_FRIENDS_ONLY: u8 = 9;
+/// The party is invite only, and you weren't asked.
+pub const REFUSE_INVITE_ONLY: u8 = 10;
+/// The leader removed you from that party.
+pub const REFUSE_KICKED: u8 = 11;
+/// Only the party's leader does that.
+pub const REFUSE_NOT_LEADER: u8 = 12;
+/// The party doesn't fit that mode (too many, or someone without a wallet
+/// for ranked).
+pub const REFUSE_PARTY_MODE: u8 = 13;
+/// Not one of your friends on Elo Pros, or not signed in.
+pub const REFUSE_NOT_FRIEND: u8 = 14;
 
-fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
+pub(crate) fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
     for &b in &n.bytes[..n.len as usize] {
         w.write(b as u32, 8)?;
@@ -898,7 +1147,7 @@ fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     Ok(())
 }
 
-fn r_name(r: &mut BitReader) -> R<Name> {
+pub(crate) fn r_name(r: &mut BitReader) -> R<Name> {
     let len = r.read(5)? as usize;
     if len > MAX_NAME {
         return Err(WireError::Cap);
@@ -926,16 +1175,17 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             pass,
             mode,
             skin,
+            emblem,
+            party,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
             w_name(&mut w, name)?;
-            w.write(pass.len as u32, 10)?;
-            for &b in &pass.bytes[..pass.len as usize] {
-                w.write(b as u32, 7)?;
-            }
+            w_pass(&mut w, pass)?;
             w.write(*mode as u32, MODE_BITS)?;
             w.write(*skin as u32, 8)?;
+            w.write(*emblem as u32, 16)?;
+            w.write(*party, party::CODE_BITS)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -964,6 +1214,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.loadout[1] as u32, 4)?;
             w.write(rules.seats as u32, SLOT_BITS + 1)?;
             w.write_bit(rules.gun_game)?;
+            w.write_bit(rules.friendly_fire)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
             }
@@ -978,6 +1229,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             bot,
             name,
             skin,
+            emblem,
         } => {
             w.write(4, 8)?;
             w.write(*slot as u32, SLOT_BITS)?;
@@ -985,12 +1237,19 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write_bit(*bot)?;
             w_name(&mut w, name)?;
             w.write(*skin as u32, 8)?;
+            w.write(*emblem as u32, 16)?;
         }
-        Msg::Kill { killer, victim, cause } => {
+        Msg::Kill {
+            killer,
+            victim,
+            cause,
+            head,
+        } => {
             w.write(5, 8)?;
             w.write(*killer as u32, SLOT_BITS)?;
             w.write(*victim as u32, SLOT_BITS)?;
             w.write(*cause as u32, 16)?;
+            w.write_bit(*head)?;
         }
         Msg::Phase { phase, winner } => {
             w.write(6, 8)?;
@@ -1021,8 +1280,137 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
                 w.write((x >> 32) as u32, 32)?;
             }
         }
+        Msg::Medal { slot, medal, victim } => {
+            w.write(11, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            w.write(*medal as u32, MEDAL_BITS)?;
+            w.write(*victim as u32, SLOT_BITS)?;
+        }
+        Msg::Carnage {
+            slot,
+            kills,
+            deaths,
+            assists,
+            betrayals,
+            shots,
+            hits,
+            heads,
+            damage,
+            taken,
+            best_spree,
+            best_multi,
+            medals,
+        } => {
+            w.write(12, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            for &x in &[
+                *kills,
+                *deaths,
+                *assists,
+                *betrayals,
+                *shots,
+                *hits,
+                *heads,
+                *damage,
+                *taken,
+                *best_spree,
+            ] {
+                w.write(x as u32, 16)?;
+            }
+            w.write(*best_multi as u32, 8)?;
+            // Only the medals earned: an id and its count each.
+            let n = medals.iter().filter(|&&c| c > 0).count();
+            w.write(n as u32, MEDAL_BITS)?;
+            for (id, &c) in medals.iter().enumerate().filter(|(_, &c)| c > 0) {
+                w.write(id as u32, MEDAL_BITS)?;
+                w.write(c as u32, 8)?;
+            }
+        }
+        Msg::Ticket { ticket: p } | Msg::SignIn { pass: p } => {
+            w.write(if matches!(m, Msg::Ticket { .. }) { 13 } else { 14 }, 8)?;
+            w_pass(&mut w, p)?;
+        }
+        Msg::PartyAct { act, arg } => {
+            w.write(15, 8)?;
+            w.write(*act as u32, 8)?;
+            w.write(*arg, 32)?;
+        }
+        Msg::PartyInvite { player } => {
+            w.write(16, 8)?;
+            player.pack(&mut w)?;
+        }
+        Msg::Party(p) => {
+            w.write(17, 8)?;
+            p.pack(&mut w)?;
+        }
+        Msg::Go { mode, private } => {
+            w.write(18, 8)?;
+            w.write(*mode as u32, MODE_BITS)?;
+            w.write_bit(*private)?;
+        }
+        Msg::Friends { n, reachable } => {
+            w.write(19, 8)?;
+            w.write(*n as u32, 8)?;
+            w.write_bit(*reachable)?;
+        }
+        Msg::Friend {
+            i,
+            name,
+            player,
+            at,
+            party: code,
+            size,
+            playing,
+        } => {
+            w.write(20, 8)?;
+            w.write(*i as u32, 8)?;
+            w_name(&mut w, name)?;
+            player.pack(&mut w)?;
+            party::w_at(&mut w, *at)?;
+            w.write(*code, party::CODE_BITS)?;
+            w.write(*size as u32, 4)?;
+            party::w_play(&mut w, *playing)?;
+        }
+        Msg::Invited { from, code } => {
+            w.write(21, 8)?;
+            w_name(&mut w, from)?;
+            w.write(*code, party::CODE_BITS)?;
+        }
     }
     Ok(w.finish())
+}
+
+/// A pass or a ticket: printable ASCII, counted.
+fn w_pass(w: &mut BitWriter, p: &Pass) -> R<()> {
+    w.write(p.len as u32, 10)?;
+    for &b in &p.bytes[..p.len as usize] {
+        w.write(b as u32, 7)?;
+    }
+    Ok(())
+}
+
+fn r_pass(r: &mut BitReader) -> R<Pass> {
+    let len = r.read(10)? as usize;
+    if len > MAX_PASS {
+        return Err(WireError::Cap);
+    }
+    let mut p = Pass::NONE;
+    for b in p.bytes[..len].iter_mut() {
+        *b = r.read(7)? as u8;
+        if !(0x21..0x7f).contains(b) {
+            return Err(WireError::Malformed);
+        }
+    }
+    p.len = len as u16;
+    Ok(p)
+}
+
+/// A medal id: [`medal::NONE`] or past the table is malformed.
+fn r_medal(r: &mut BitReader) -> R<u8> {
+    match r.read(MEDAL_BITS)? as usize {
+        id if id > 0 && id < medal::COUNT => Ok(id as u8),
+        _ => Err(WireError::Malformed),
+    }
 }
 
 pub fn decode_msg(buf: &[u8]) -> R<Msg> {
@@ -1031,23 +1419,11 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
         1 => Msg::Hello {
             proto: r.read(16)? as u16,
             name: r_name(&mut r)?,
-            pass: {
-                let len = r.read(10)? as usize;
-                if len > MAX_PASS {
-                    return Err(WireError::Cap);
-                }
-                let mut p = Pass::NONE;
-                for b in p.bytes[..len].iter_mut() {
-                    *b = r.read(7)? as u8;
-                    if !(0x21..0x7f).contains(b) {
-                        return Err(WireError::Malformed);
-                    }
-                }
-                p.len = len as u16;
-                p
-            },
+            pass: r_pass(&mut r)?,
             mode: r.read(MODE_BITS)? as u8,
             skin: r.read(8)? as u8,
+            emblem: r.read(16)? as u16,
+            party: r.read(party::CODE_BITS)?,
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -1069,6 +1445,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                     _ => return Err(WireError::Malformed),
                 },
                 gun_game: r.read_bit()?,
+                friendly_fire: r.read_bit()?,
             },
             salt_commit: {
                 let mut c = [0u8; 32];
@@ -1087,11 +1464,13 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             bot: r.read_bit()?,
             name: r_name(&mut r)?,
             skin: r.read(8)? as u8,
+            emblem: r.read(16)? as u16,
         },
         5 => Msg::Kill {
             killer: r.read(SLOT_BITS)? as u8,
             victim: r.read(SLOT_BITS)? as u8,
             cause: r.read(16)? as u16,
+            head: r.read_bit()?,
         },
         6 => Msg::Phase {
             phase: r.read(2)? as u8,
@@ -1113,6 +1492,83 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             }
             Msg::Reveal { salt }
         }
+        11 => Msg::Medal {
+            slot: r.read(SLOT_BITS)? as u8,
+            medal: r_medal(&mut r)?,
+            victim: r.read(SLOT_BITS)? as u8,
+        },
+        12 => {
+            let slot = r.read(SLOT_BITS)? as u8;
+            let mut v = [0u16; 10];
+            for x in v.iter_mut() {
+                *x = r.read(16)? as u16;
+            }
+            let best_multi = r.read(8)? as u8;
+            let n = r.read(MEDAL_BITS)? as usize;
+            if n >= medal::COUNT {
+                return Err(WireError::Cap);
+            }
+            // Ascending, each earned: one way to write any tally.
+            let mut medals = [0u8; medal::COUNT];
+            let mut last = 0;
+            for _ in 0..n {
+                let id = r_medal(&mut r)? as usize;
+                let c = r.read(8)? as u8;
+                if id <= last || c == 0 {
+                    return Err(WireError::Malformed);
+                }
+                medals[id] = c;
+                last = id;
+            }
+            Msg::Carnage {
+                slot,
+                kills: v[0],
+                deaths: v[1],
+                assists: v[2],
+                betrayals: v[3],
+                shots: v[4],
+                hits: v[5],
+                heads: v[6],
+                damage: v[7],
+                taken: v[8],
+                best_spree: v[9],
+                best_multi,
+                medals,
+            }
+        }
+        13 => Msg::Ticket {
+            ticket: r_pass(&mut r)?,
+        },
+        14 => Msg::SignIn { pass: r_pass(&mut r)? },
+        15 => Msg::PartyAct {
+            act: r.read(8)? as u8,
+            arg: r.read(32)?,
+        },
+        16 => Msg::PartyInvite {
+            player: PlayerId::unpack(&mut r)?,
+        },
+        17 => Msg::Party(Party::unpack(&mut r)?),
+        18 => Msg::Go {
+            mode: r.read(MODE_BITS)? as u8,
+            private: r.read_bit()?,
+        },
+        19 => Msg::Friends {
+            n: r.read(8)? as u8,
+            reachable: r.read_bit()?,
+        },
+        20 => Msg::Friend {
+            i: r.read(8)? as u8,
+            name: r_name(&mut r)?,
+            player: PlayerId::unpack(&mut r)?,
+            at: party::r_at(&mut r)?,
+            party: r.read(party::CODE_BITS)?,
+            size: r.read(4)? as u8,
+            playing: party::r_play(&mut r)?,
+        },
+        21 => Msg::Invited {
+            from: r_name(&mut r)?,
+            code: r.read(party::CODE_BITS)?,
+        },
         _ => return Err(WireError::Malformed),
     };
     done(&r)?;

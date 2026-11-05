@@ -15,6 +15,7 @@
 //! so a warm draw only has to survive frustum culling.
 
 use bevy::asset::LoadState;
+use bevy::camera::primitives::MeshAabb;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 
@@ -46,17 +47,12 @@ pub struct SceneDone;
 #[derive(Component)]
 pub struct WarmBody;
 
-/// The models have been put up to warm (`warm.rs` waits for it).
-#[derive(Resource, Default)]
-pub struct WarmModels(pub bool);
-
 /// The triangle every material is warmed on.
 #[derive(Resource)]
 pub struct WarmMesh(Handle<Mesh>);
 
 pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     commands.insert_resource(WarmMesh(meshes.add(Triangle3d::default())));
-    commands.init_resource::<WarmModels>();
 }
 
 fn at() -> Transform {
@@ -93,19 +89,79 @@ pub fn warm(
     }
 }
 
+/// What a weathered box's pipeline is specialised on: its maps (normal,
+/// occlusion-roughness-metal, glow) and whether its mesh carries the
+/// rock's value (`UV_1`).
+type LevelKey = (bool, bool, bool, Option<bool>);
+
+/// Whether `mesh` carries attribute `id`; `None` for a mesh whose data
+/// went to the render world (`RenderAssetUsages::RENDER_WORLD`, extracted),
+/// whose layout can't be read here: its warm is then once per material
+/// (Gates' `layout_key`), as `Mesh::attribute` would panic on it.
+pub fn carries(mesh: &Mesh, id: bevy::mesh::MeshVertexAttribute) -> Option<bool> {
+    mesh.try_attribute_option(id).ok().map(|a| a.is_some())
+}
+
+/// A warm draw of each kind of weathered box (`weathering.rs`) the frame
+/// the first of its kind is dressed, on that box's own mesh, shrunk: its
+/// pipeline wants its mesh's layout (tangents, the rock's `UV_1`), which
+/// the warm triangle doesn't carry, and a box behind the eye at the start
+/// would otherwise build it mid-fight.
+pub fn warm_level(
+    mut commands: Commands,
+    mut seen: Local<Vec<LevelKey>>,
+    mats: Res<Assets<super::weathering::LevelMaterial>>,
+    meshes: Res<Assets<Mesh>>,
+    fresh: Query<
+        (&Mesh3d, &MeshMaterial3d<super::weathering::LevelMaterial>),
+        Added<MeshMaterial3d<super::weathering::LevelMaterial>>,
+    >,
+    eye: Query<Entity, With<Eye>>,
+) {
+    let Ok(eye) = eye.single() else {
+        return;
+    };
+    for (mesh, mat) in &fresh {
+        let (Some(m), Some(me)) = (mats.get(&mat.0), meshes.get(&mesh.0)) else {
+            continue;
+        };
+        let key = (
+            m.base.normal_map_texture.is_some(),
+            m.base.metallic_roughness_texture.is_some(),
+            m.base.emissive_texture.is_some(),
+            carries(me, Mesh::ATTRIBUTE_UV_1),
+        );
+        let warmed = |k: &LevelKey| (k.0, k.1, k.2) == (key.0, key.1, key.2);
+        if seen.contains(&key) || (key.3.is_none() && seen.iter().any(warmed)) {
+            continue;
+        }
+        seen.push(key);
+        let extent = me
+            .compute_aabb()
+            .map_or(1.0, |b| (Vec3::from(b.half_extents) * 2.0).max_element().max(1e-3));
+        commands.entity(eye).with_child((
+            Warming(WARM_FRAMES),
+            SceneDone,
+            Mesh3d(mesh.0.clone()),
+            MeshMaterial3d(mat.0.clone()),
+            Transform::from_xyz(0.0, 0.0, -WARM_AHEAD_M).with_scale(Vec3::splat(WARM_SIZE_M / extent)),
+        ));
+    }
+}
+
 /// Once, when every model is in: a fighter, every gun, the rocket and the
 /// frag, drawn warm.
 #[allow(clippy::too_many_arguments)]
 pub fn warm_models(
     mut commands: Commands,
-    mut done: ResMut<WarmModels>,
+    mut done: Local<bool>,
     models: Option<Res<Models>>,
     assets: Res<AssetServer>,
     eye: Query<Entity, With<Eye>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
-    if done.0 {
+    if *done {
         return;
     }
     let (Some(models), Ok(eye)) = (models, eye.single()) else {
@@ -117,7 +173,7 @@ pub fn warm_models(
     if !scenes.iter().all(settled) {
         return;
     }
-    done.0 = true;
+    *done = true;
     for scene in scenes.iter().take(scenes.len() - 1) {
         commands
             .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))
@@ -130,7 +186,12 @@ pub fn warm_models(
     // neither it nor its shadow (cast down, away from the floor) can be
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
-    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, 0);
+    // In an emblem, so its cut-out pipeline is built here too.
+    let look = proto::Look {
+        skin: 0,
+        emblem: proto::emblem(1, 1, 0, 4),
+    };
+    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, look);
     commands
         .entity(body)
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));

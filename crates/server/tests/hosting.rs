@@ -56,6 +56,8 @@ async fn join(port: u16, hash: [u8; 32], name: &str) -> Result<(Player, Option<M
             pass: proto::Pass::NONE,
             mode: proto::MODE_CASUAL,
             skin: 0,
+            emblem: 0,
+            party: 0,
         },
         &mut f,
     )
@@ -350,7 +352,7 @@ async fn two_slots_hand_new_players_from_the_old_to_the_new() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// One number out of `/status.json` (a flat document of numbers).
+/// One number out of `/health.json` (a flat document of numbers).
 fn field(doc: &str, key: &str) -> u64 {
     let at = doc
         .find(&format!("\"{key}\":"))
@@ -375,12 +377,15 @@ async fn the_status_counts_joins_refusals_and_ticks() {
     let (_b, second) = join(h.addr.port(), h.cert_hash, "second").await.unwrap();
     assert!(matches!(second, Some(Msg::Refuse { .. })), "{second:?}");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let (code, head, doc) = get(port, "/status.json", None).await;
+    let (code, head, doc) = get(port, "/health.json", None).await;
     assert_eq!(code, 200);
     assert!(head.contains("application/json"), "{head}");
     assert_eq!(field(&doc, "joins_casual"), 1, "{doc}");
     assert_eq!(field(&doc, "matches"), 1, "{doc}");
-    assert!(doc.contains("\"refused\":[0,0,1,0,0,0,0,0]"), "one REFUSE_FULL: {doc}");
+    assert!(
+        doc.contains("\"refused\":[0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]"),
+        "one REFUSE_FULL: {doc}"
+    );
     assert!(field(&doc, "ticks") > 10, "{doc}");
     assert!(field(&doc, "tick_p50_us") > 0, "{doc}");
     assert_eq!(field(&doc, "proto"), PROTO_VER as u64, "{doc}");

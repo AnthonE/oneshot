@@ -1,393 +1,734 @@
-//! What the server counted since it started, for `GET /status.json` and a
-//! journal line every ten seconds (after Gates' `server/src/stats.rs` and
-//! `status.rs`, MIT, trimmed): joins, refusals by cause, ticks run late or
-//! skipped, how long a tick takes, and the connections' loss and round
-//! trip. Atomics only: the sim thread and every session write without
-//! waiting on each other, and a reader takes what is there.
+//! Stats, achievements and leaderboards on Elo Pros (`meter/gamestats.py`).
 //!
-//! Counters are totals since start (a rate is two reads and a
-//! subtraction); gauges (`players`, `rooms`) are what is true now. Every
-//! value is a number.
+//! The game declares a set once ([`declaration`], committed as
+//! `ops/elo-stats.json` and saved on the dev desk), and the server reports
+//! what each signed-in player did at the end of every match they played, or
+//! when they leave one: `POST /api/gamestats/oneshot/report`, signed with the
+//! server key the way ratings are. Elo Pros adds the counts up and unlocks an
+//! achievement when its stat reaches its target, so the server never keeps a
+//! record of its own. Boards keep each player's best ranked number.
+//!
+//! A player is their wallet, or their Elo Pros account's `acct_` id when they
+//! signed in without one. A guest is nobody and is never reported.
 
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-use std::time::Duration;
+use proto::{medal, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA, MODE_GUN_GAME};
+use room::medals::Tally;
+use serde_json::{json, Value};
 
-use crate::outlet::Counts;
-
-/// Log2 buckets: index 0 is under one unit, index `b` is `[2^(b-1), 2^b)`,
-/// the last everything above. In µs that is up to ~0.5 s; in ms, ~9 min.
-pub const BUCKETS: usize = 21;
-/// Refusal causes by `proto::REFUSE_*` code (0 unused; past the last known
-/// code is counted in the last).
-pub const REFUSALS: usize = 8;
-/// The journal's window.
-pub const JOURNAL: Duration = Duration::from_secs(10);
-
-/// A log2 histogram, and its largest sample.
-#[derive(Debug, Default)]
-pub struct Hist {
-    pub buckets: [AtomicU64; BUCKETS],
-    pub max: AtomicU64,
+/// How a stat's reports add up on Elo Pros.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Agg {
+    Sum,
+    Max,
 }
 
-impl Hist {
-    pub fn record(&self, v: u64) {
-        let b = ((u64::BITS - v.leading_zeros()) as usize).min(BUCKETS - 1);
-        self.buckets[b].fetch_add(1, Relaxed);
-        self.max.fetch_max(v, Relaxed);
-    }
+pub struct Stat {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub agg: Agg,
+}
 
-    pub fn read(&self) -> [u64; BUCKETS] {
-        core::array::from_fn(|b| self.buckets[b].load(Relaxed))
+const fn sum(id: &'static str, name: &'static str) -> Stat {
+    Stat {
+        id,
+        name,
+        agg: Agg::Sum,
     }
 }
 
-/// The upper edge of the bucket below which `pct` percent of `counts` fall
-/// (an over-estimate by at most 2×); 0 with none.
-pub fn pct(counts: &[u64; BUCKETS], pct: u64) -> u64 {
-    let total: u64 = counts.iter().sum();
-    if total == 0 {
-        return 0;
+const fn max(id: &'static str, name: &'static str) -> Stat {
+    Stat {
+        id,
+        name,
+        agg: Agg::Max,
     }
-    let want = (total * pct).div_ceil(100);
-    let mut seen = 0;
-    for (b, n) in counts.iter().enumerate() {
-        seen += n;
-        if seen >= want {
-            return 1 << b;
+}
+
+/// The stats every report draws from, besides one per medal
+/// ([`medal_stat`]).
+pub const STATS: &[Stat] = &[
+    sum("matches", "Matches finished"),
+    sum("wins", "Wins"),
+    sum("ranked_matches", "Ranked matches finished"),
+    sum("ranked_wins", "Ranked wins"),
+    sum("bot_wins", "Wins against the bot"),
+    sum("duel_wins", "Ranked Duel wins"),
+    sum("doubles_wins", "Ranked Doubles wins"),
+    sum("ffa_wins", "Free for all wins"),
+    sum("gun_game_wins", "Gun Game wins"),
+    sum("big_team_wins", "Big Team wins"),
+    sum("cups_played", "Cups finished"),
+    sum("cup_wins", "Cups won"),
+    sum("kills", "Kills"),
+    sum("deaths", "Deaths"),
+    sum("assists", "Assists"),
+    sum("damage", "Damage done"),
+    sum("seconds_played", "Seconds played"),
+    max("most_kills", "Most kills in a match"),
+    max("best_spree", "Longest spree"),
+    max("best_multi", "Longest multi-kill"),
+];
+
+/// A medal's stat: how many times it was earned.
+pub fn medal_stat(id: u8) -> String {
+    format!("medal.{}", medal::slug(id))
+}
+
+pub struct Achievement {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub desc: &'static str,
+    pub hidden: bool,
+    /// A stem of Elo Pros' `art/achievements/oneshot/`.
+    pub icon: &'static str,
+    /// Unlocks when this stat reaches `max`.
+    pub stat: &'static str,
+    pub max: u64,
+}
+
+const fn ach(
+    id: &'static str,
+    name: &'static str,
+    desc: &'static str,
+    icon: &'static str,
+    stat: &'static str,
+    max: u64,
+) -> Achievement {
+    Achievement {
+        id,
+        name,
+        desc,
+        hidden: false,
+        icon,
+        stat,
+        max,
+    }
+}
+
+const fn hidden(a: Achievement) -> Achievement {
+    Achievement { hidden: true, ..a }
+}
+
+/// Every achievement unlocks itself on Elo Pros when its stat gets there,
+/// so a report never names one. Never remove or rename a row someone
+/// holds: drop it from the list and Elo Pros keeps it as archived on the
+/// profiles that have it.
+pub const ACHIEVEMENTS: &[Achievement] = &[
+    ach("FIRST_MATCH", "Boots on", "Finish a match", "gamepad", "matches", 1),
+    ach("FIRST_WIN", "On the board", "Win a match", "trophy", "wins", 1),
+    ach("WINS_25", "Regular", "Win 25 matches", "laurels", "wins", 25),
+    ach("WINS_100", "Hundred up", "Win 100 matches", "podium", "wins", 100),
+    ach(
+        "BOT_WIN",
+        "Beat the bot",
+        "Win a match against the bot",
+        "target",
+        "bot_wins",
+        1,
+    ),
+    ach(
+        "FFA_WIN",
+        "Last one standing",
+        "Win a free for all",
+        "star",
+        "ffa_wins",
+        1,
+    ),
+    ach(
+        "GUN_GAME_WIN",
+        "Through the ladder",
+        "Win a game of Gun Game",
+        "revolver",
+        "gun_game_wins",
+        1,
+    ),
+    ach(
+        "BIG_TEAM_WIN",
+        "Big win",
+        "Win a Big Team match",
+        "flag",
+        "big_team_wins",
+        1,
+    ),
+    ach(
+        "RANKED_FIRST",
+        "Rated",
+        "Finish a ranked match",
+        "upgrade",
+        "ranked_matches",
+        1,
+    ),
+    ach(
+        "RANKED_WIN",
+        "First rated win",
+        "Win a ranked match",
+        "medal",
+        "ranked_wins",
+        1,
+    ),
+    ach(
+        "RANKED_WINS_50",
+        "Climber",
+        "Win 50 ranked matches",
+        "upgrade",
+        "ranked_wins",
+        50,
+    ),
+    ach("DUEL_WIN", "One on one", "Win a Ranked Duel", "spears", "duel_wins", 1),
+    ach(
+        "DOUBLES_WIN",
+        "Two on two",
+        "Win a Ranked Doubles match",
+        "crowd",
+        "doubles_wins",
+        1,
+    ),
+    ach("CUP_ENTER", "Cup run", "Play a cup to the end", "cup", "cups_played", 1),
+    ach("CUP_WIN", "Cup winner", "Win a cup", "cup", "cup_wins", 1),
+    ach("KILLS_100", "Hundred down", "Get 100 kills", "target", "kills", 100),
+    ach(
+        "KILLS_1000",
+        "Thousand down",
+        "Get 1,000 kills",
+        "target",
+        "kills",
+        1000,
+    ),
+    hidden(ach(
+        "KILLS_10000",
+        "Ten thousand down",
+        "Get 10,000 kills",
+        "target",
+        "kills",
+        10_000,
+    )),
+    ach("ASSISTS_100", "Wingman", "Get 100 assists", "crowd", "assists", 100),
+    ach(
+        "SPREE_5",
+        "Killing Spree",
+        "Get 5 kills without dying",
+        "embers",
+        "best_spree",
+        5,
+    ),
+    ach(
+        "SPREE_10",
+        "Killing Frenzy",
+        "Get 10 kills without dying",
+        "embers",
+        "best_spree",
+        10,
+    ),
+    ach(
+        "SPREE_15",
+        "Running Riot",
+        "Get 15 kills without dying",
+        "embers",
+        "best_spree",
+        15,
+    ),
+    hidden(ach(
+        "SPREE_25",
+        "Untouchable",
+        "Get 25 kills without dying",
+        "embers",
+        "best_spree",
+        25,
+    )),
+    ach(
+        "MULTI_3",
+        "Triple Kill",
+        "Get three kills, each within four seconds of the last",
+        "bullets",
+        "best_multi",
+        3,
+    ),
+    ach(
+        "MULTI_4",
+        "Overkill",
+        "Get four kills, each within four seconds of the last",
+        "bullets",
+        "best_multi",
+        4,
+    ),
+    hidden(ach(
+        "MULTI_5",
+        "Killstorm",
+        "Get five kills, each within four seconds of the last",
+        "bullets",
+        "best_multi",
+        5,
+    )),
+    ach(
+        "PERFECT",
+        "Perfect",
+        "Make a precision kill in the gun's fewest shots, none missed",
+        "arrowhead",
+        "medal.perfect",
+        1,
+    ),
+    hidden(ach(
+        "PERFECTION",
+        "Perfection",
+        "Win with 15 or more kills and no deaths",
+        "star",
+        "medal.perfection",
+        1,
+    )),
+    ach(
+        "NO_SCOPE",
+        "No Scope",
+        "Kill with a sniper or beam rifle without its scope up",
+        "arrowhead",
+        "medal.no_scope",
+        1,
+    ),
+    ach(
+        "NO_SCOPE_360",
+        "360 No Scope",
+        "Turn a full circle and kill with a sniper or beam rifle without its scope up",
+        "energy",
+        "medal.360_no_scope",
+        1,
+    ),
+    ach(
+        "SPLATTER_10",
+        "Road rage",
+        "Run down 10 people with a vehicle",
+        "energy",
+        "medal.splatter",
+        10,
+    ),
+    ach(
+        "STICK_25",
+        "Sticky fingers",
+        "Kill 25 people with a sticky grenade stuck to them",
+        "dynamite",
+        "medal.stick",
+        25,
+    ),
+    ach(
+        "ASSASSIN_10",
+        "Quiet work",
+        "Kill 10 people from behind with a melee",
+        "hatchet",
+        "medal.assassination",
+        10,
+    ),
+    ach(
+        "FROM_THE_GRAVE",
+        "From the grave",
+        "Make a kill after you've died",
+        "meteor",
+        "medal.kill_from_the_grave",
+        1,
+    ),
+    ach(
+        "HAIL_MARY",
+        "Hail Mary",
+        "Make a grenade kill from far off",
+        "dynamite",
+        "medal.hail_mary",
+        1,
+    ),
+    ach(
+        "HOURS_1",
+        "An hour in",
+        "Play for an hour",
+        "campfire",
+        "seconds_played",
+        3600,
+    ),
+    ach(
+        "HOURS_10",
+        "Ten hours in",
+        "Play for ten hours",
+        "campfire",
+        "seconds_played",
+        36_000,
+    ),
+    ach(
+        "HOURS_100",
+        "A hundred hours in",
+        "Play for a hundred hours",
+        "campfire",
+        "seconds_played",
+        360_000,
+    ),
+];
+
+pub struct Board {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Lowest first (a time, a place) rather than highest.
+    pub asc: bool,
+    pub time_ms: bool,
+}
+
+/// One score per player: their best.
+pub const BOARDS: &[Board] = &[
+    Board {
+        id: "ranked_kills",
+        name: "Most kills in a ranked match",
+        asc: false,
+        time_ms: false,
+    },
+    Board {
+        id: "ranked_spree",
+        name: "Longest spree in a ranked match",
+        asc: false,
+        time_ms: false,
+    },
+    Board {
+        id: "gun_game_ms",
+        name: "Fastest Gun Game win",
+        asc: true,
+        time_ms: true,
+    },
+    Board {
+        id: "cup_place",
+        name: "Best cup finish",
+        asc: true,
+        time_ms: false,
+    },
+];
+
+/// The set as Elo Pros' dev desk saves it (act `gamestats`, or the `stats`
+/// block of an `elo.json`). `ops/elo-stats.json` is this, written by
+/// `oneshot-server --print-stats`.
+pub fn declaration() -> Value {
+    let mut stats: Vec<Value> = STATS
+        .iter()
+        .map(|s| json!({"id": s.id, "name": s.name, "agg": match s.agg { Agg::Sum => "sum", Agg::Max => "max" }}))
+        .collect();
+    for id in 1..medal::COUNT as u8 {
+        stats.push(json!({"id": medal_stat(id), "name": medal::info(id).name, "agg": "sum"}));
+    }
+    let achievements: Vec<Value> = ACHIEVEMENTS
+        .iter()
+        .map(|a| {
+            json!({"id": a.id, "name": a.name, "desc": a.desc, "hidden": a.hidden, "icon": a.icon,
+                   "progress": {"stat": a.stat, "max": a.max}})
+        })
+        .collect();
+    let boards: Vec<Value> = BOARDS
+        .iter()
+        .map(|b| {
+            json!({"id": b.id, "name": b.name, "sort": if b.asc { "asc" } else { "desc" }, "keep": "best",
+                   "format": if b.time_ms { "time_ms" } else { "number" }})
+        })
+        .collect();
+    json!({"stats": stats, "achievements": achievements, "boards": boards})
+}
+
+/// One person's part in one match, as the sim thread saw it.
+#[derive(Clone, Debug)]
+pub struct Played {
+    /// The wallet, or the account's `acct_` id.
+    pub player: String,
+    pub mode: u8,
+    pub ranked: bool,
+    /// Played to the end (a leaver's counts still count, not the match).
+    pub finished: bool,
+    pub won: bool,
+    /// From the seat being taken to the end or the leave.
+    pub ms: u64,
+    pub tally: Tally,
+}
+
+/// A cup's end, for one entrant.
+#[derive(Clone, Debug)]
+pub struct Cupped {
+    pub player: String,
+    pub place: u32,
+}
+
+/// What the server sends: matches and cups, one report each.
+#[derive(Clone, Debug)]
+pub enum Line {
+    Match(Played),
+    Cup(Cupped),
+}
+
+fn match_report(p: &Played) -> Value {
+    let t = &p.tally;
+    let mut stats = serde_json::Map::new();
+    let mut put = |k: &str, v: u64| {
+        if v > 0 {
+            stats.insert(k.into(), v.into());
         }
-    }
-    1 << (BUCKETS - 1)
-}
-
-#[derive(Debug, Default)]
-pub struct Stats {
-    /// Connections refused before a session: the server full, or an address
-    /// over its share (`net::admit`, `Gate::take`).
-    pub conn_refused: AtomicU64,
-    /// Connections asked to prove their address first (a crowd).
-    pub conn_retried: AtomicU64,
-    /// Sessions that never said hello in time, or said something else.
-    pub handshake_failed: AtomicU64,
-    /// Hellos turned away, by `proto::REFUSE_*` code.
-    pub refused: [AtomicU64; REFUSALS],
-    /// Hellos the sim seated in casual play, and took into a ranked queue
-    /// or cup (counted there, not at the hello: a busy wallet's isn't).
-    pub joins_casual: AtomicU64,
-    pub joins_ranked: AtomicU64,
-    /// Ranked players waiting when a drain began, let go to the new slot.
-    pub let_go: AtomicU64,
-    /// Matches opened.
-    pub matches: AtomicU64,
-    /// Ticks run.
-    pub ticks: AtomicU64,
-    /// Ticks whose work took longer than a tick.
-    pub ticks_late: AtomicU64,
-    /// Ticks never run: the loop fell so far behind (a stall) that it
-    /// started again from now rather than sprint.
-    pub ticks_skipped: AtomicU64,
-    /// One tick's work, in µs.
-    pub tick_us: Hist,
-    /// The largest tick in the journal's window, taken by the journal.
-    pub tick_window_max_us: AtomicU64,
-    /// Snapshots the QUIC connection refused to send (closed, too big).
-    pub send_errors: AtomicU64,
-    /// QUIC packets sent and lost, summed over sessions as they're sampled.
-    pub packets_sent: AtomicU64,
-    pub packets_lost: AtomicU64,
-    /// Sessions' round trips as sampled (every journal window and at the
-    /// end), in ms.
-    pub rtt_ms: Hist,
-}
-
-impl Stats {
-    pub fn refuse(&self, reason: u8) {
-        self.refused[(reason as usize).min(REFUSALS - 1)].fetch_add(1, Relaxed);
-    }
-
-    /// A tick's work took `took`, with `tick` the budget.
-    pub fn tick(&self, took: Duration, tick: Duration) {
-        let us = took.as_micros().min(u64::MAX as u128) as u64;
-        self.ticks.fetch_add(1, Relaxed);
-        if took > tick {
-            self.ticks_late.fetch_add(1, Relaxed);
-        }
-        self.tick_us.record(us);
-        self.tick_window_max_us.fetch_max(us, Relaxed);
-    }
-
-    /// A QUIC connection's numbers since the last sample (`last` holds
-    /// what was seen before, so each packet is counted once).
-    pub fn sample(&self, rtt: Duration, sent: u64, lost: u64, last: &mut (u64, u64)) {
-        self.rtt_ms.record(rtt.as_millis().min(u64::MAX as u128) as u64);
-        self.packets_sent.fetch_add(sent.saturating_sub(last.0), Relaxed);
-        self.packets_lost.fetch_add(lost.saturating_sub(last.1), Relaxed);
-        *last = (sent.max(last.0), lost.max(last.1));
-    }
-
-    /// Everything, as numbers.
-    pub fn read(&self, counts: &Counts) -> Read {
-        let g = |a: &AtomicU64| a.load(Relaxed);
-        Read {
-            conn_refused: g(&self.conn_refused),
-            conn_retried: g(&self.conn_retried),
-            handshake_failed: g(&self.handshake_failed),
-            refused: core::array::from_fn(|i| g(&self.refused[i])),
-            joins_casual: g(&self.joins_casual),
-            joins_ranked: g(&self.joins_ranked),
-            let_go: g(&self.let_go),
-            matches: g(&self.matches),
-            ticks: g(&self.ticks),
-            ticks_late: g(&self.ticks_late),
-            ticks_skipped: g(&self.ticks_skipped),
-            tick_us: self.tick_us.read(),
-            tick_max_us: g(&self.tick_us.max),
-            send_errors: g(&self.send_errors),
-            packets_sent: g(&self.packets_sent),
-            packets_lost: g(&self.packets_lost),
-            rtt_ms: self.rtt_ms.read(),
-            rtt_max_ms: g(&self.rtt_ms.max),
-            snapshots_dropped: g(&counts.datagrams_dropped),
-            snapshots_oversize: g(&counts.datagrams_oversize),
-            cut_behind: g(&counts.stream_overflows),
-        }
-    }
-}
-
-/// One read of [`Stats`] and the outlet's [`Counts`].
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Read {
-    pub conn_refused: u64,
-    pub conn_retried: u64,
-    pub handshake_failed: u64,
-    pub refused: [u64; REFUSALS],
-    pub joins_casual: u64,
-    pub joins_ranked: u64,
-    pub let_go: u64,
-    pub matches: u64,
-    pub ticks: u64,
-    pub ticks_late: u64,
-    pub ticks_skipped: u64,
-    pub tick_us: [u64; BUCKETS],
-    pub tick_max_us: u64,
-    pub send_errors: u64,
-    pub packets_sent: u64,
-    pub packets_lost: u64,
-    pub rtt_ms: [u64; BUCKETS],
-    pub rtt_max_ms: u64,
-    pub snapshots_dropped: u64,
-    pub snapshots_oversize: u64,
-    pub cut_behind: u64,
-}
-
-/// What `/status.json` carries beside the counters: what is true now.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Now {
-    pub ready: bool,
-    pub proto: u16,
-    pub players: usize,
-    pub capacity: usize,
-    pub rooms: usize,
-    pub uptime_s: u64,
-}
-
-fn list(v: &[u64]) -> String {
-    let parts: Vec<String> = v.iter().map(u64::to_string).collect();
-    format!("[{}]", parts.join(","))
-}
-
-/// The `/status.json` document: one line, numbers and one boolean.
-pub fn json(now: Now, r: &Read) -> String {
-    format!(
-        "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{},\"uptime_s\":{},\
-         \"joins_casual\":{},\"joins_ranked\":{},\"let_go\":{},\"matches\":{},\
-         \"conn_refused\":{},\"conn_retried\":{},\"handshake_failed\":{},\"refused\":{},\
-         \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
-         \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\
-         \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\
-         \"packets_sent\":{},\"packets_lost\":{},\
-         \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
-        now.ready,
-        now.proto,
-        now.players,
-        now.capacity,
-        now.rooms,
-        now.uptime_s,
-        r.joins_casual,
-        r.joins_ranked,
-        r.let_go,
-        r.matches,
-        r.conn_refused,
-        r.conn_retried,
-        r.handshake_failed,
-        list(&r.refused),
-        r.ticks,
-        r.ticks_late,
-        r.ticks_skipped,
-        pct(&r.tick_us, 50),
-        pct(&r.tick_us, 99),
-        r.tick_max_us,
-        r.snapshots_dropped,
-        r.snapshots_oversize,
-        r.cut_behind,
-        r.send_errors,
-        r.packets_sent,
-        r.packets_lost,
-        pct(&r.rtt_ms, 50),
-        pct(&r.rtt_ms, 99),
-        r.rtt_max_ms,
-    )
-}
-
-/// Whether a window is worth a line: someone was on, or something other
-/// than an idle tick happened (a stalled idle server still says so).
-pub fn eventful(now: Now, was: &Read, is: &Read) -> bool {
-    let mut quiet = is.clone();
-    quiet.ticks = was.ticks;
-    quiet.tick_us = was.tick_us;
-    quiet.tick_max_us = was.tick_max_us;
-    now.players > 0 || now.rooms > 0 || quiet != *was
-}
-
-/// The journal's line for a window: what changed since `was`, the tick's
-/// percentiles over the window alone, and its largest tick.
-pub fn line(now: Now, was: &Read, is: &Read, window_max_us: u64) -> String {
-    let d = |a: u64, b: u64| b.saturating_sub(a);
-    let window: [u64; BUCKETS] = core::array::from_fn(|b| d(was.tick_us[b], is.tick_us[b]));
-    let refused = d(was.refused.iter().sum(), is.refused.iter().sum());
-    let (sent, lost) = (
-        d(was.packets_sent, is.packets_sent),
-        d(was.packets_lost, is.packets_lost),
-    );
-    let loss = if sent == 0 {
-        0.0
-    } else {
-        100.0 * lost as f64 / sent as f64
     };
-    format!(
-        "oneshot: status players={} rooms={} joins=+{} refused=+{} conn_refused=+{} \
-         ticks=+{} late=+{} skipped=+{} tick_p50={}us tick_p99={}us tick_max={}us \
-         dropped=+{} cut=+{} send_err=+{} loss={loss:.2}%",
-        now.players,
-        now.rooms,
-        d(was.joins_casual + was.joins_ranked, is.joins_casual + is.joins_ranked),
-        refused,
-        d(was.conn_refused, is.conn_refused),
-        d(was.ticks, is.ticks),
-        d(was.ticks_late, is.ticks_late),
-        d(was.ticks_skipped, is.ticks_skipped),
-        pct(&window, 50),
-        pct(&window, 99),
-        window_max_us,
-        d(was.snapshots_dropped, is.snapshots_dropped),
-        d(was.cut_behind, is.cut_behind),
-        d(was.send_errors, is.send_errors),
-    )
+    put("matches", p.finished as u64);
+    put("wins", p.won as u64);
+    put("ranked_matches", (p.ranked && p.finished) as u64);
+    put("ranked_wins", (p.ranked && p.won) as u64);
+    if p.won {
+        let by_mode = match p.mode {
+            MODE_CASUAL => Some("bot_wins"),
+            MODE_DUEL => Some("duel_wins"),
+            MODE_DOUBLES => Some("doubles_wins"),
+            MODE_FFA => Some("ffa_wins"),
+            MODE_GUN_GAME => Some("gun_game_wins"),
+            MODE_BIG_TEAM => Some("big_team_wins"),
+            // A cup heat is counted with its cup.
+            _ => None,
+        };
+        if let Some(k) = by_mode {
+            put(k, 1);
+        }
+    }
+    put("kills", t.kills as u64);
+    put("deaths", t.deaths as u64);
+    put("assists", t.assists as u64);
+    put("damage", t.damage as u64);
+    put("seconds_played", p.ms / 1000);
+    put("most_kills", t.kills as u64);
+    put("best_spree", t.best_spree as u64);
+    put("best_multi", t.best_multi as u64);
+    for (id, &n) in t.medals.iter().enumerate().skip(1) {
+        put(&medal_stat(id as u8), n as u64);
+    }
+    let mut scores = serde_json::Map::new();
+    if p.ranked && p.mode != MODE_CUP {
+        if t.kills > 0 {
+            scores.insert("ranked_kills".into(), (t.kills as u64).into());
+        }
+        if t.best_spree > 0 {
+            scores.insert("ranked_spree".into(), (t.best_spree as u64).into());
+        }
+    }
+    if p.mode == MODE_GUN_GAME && p.won && p.ms > 0 {
+        scores.insert("gun_game_ms".into(), p.ms.into());
+    }
+    let mut r = json!({"wallet": p.player, "stats": stats});
+    if !scores.is_empty() {
+        r["scores"] = scores.into();
+    }
+    r
+}
+
+fn cup_report(c: &Cupped) -> Value {
+    let mut stats = serde_json::Map::new();
+    stats.insert("cups_played".into(), 1.into());
+    if c.place == 1 {
+        stats.insert("cup_wins".into(), 1.into());
+    }
+    json!({"wallet": c.player, "stats": stats, "scores": {"cup_place": c.place}})
+}
+
+/// The body of one report call (`{"reports": [...]}`), at most
+/// [`MAX_REPORTS`] players.
+pub fn report_body(lines: &[Line]) -> String {
+    let reports: Vec<Value> = lines
+        .iter()
+        .map(|l| match l {
+            Line::Match(p) => match_report(p),
+            Line::Cup(c) => cup_report(c),
+        })
+        .collect();
+    json!({ "reports": reports }).to_string()
+}
+
+/// Elo Pros' cap on players in one call (`gamestats.MAX_REPORTS`).
+pub const MAX_REPORTS: usize = 500;
+
+/// Whether `id` is a player Elo Pros keeps a record for: a wallet, or an
+/// account's own id (`gamestats._PLAYER_RE`).
+pub fn is_player(id: &str) -> bool {
+    let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit());
+    id.strip_prefix("0x").is_some_and(|h| hex(h, 40)) || id.strip_prefix("acct_").is_some_and(|h| hex(h, 20))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+
+    fn stat_ok(id: &str) -> bool {
+        (1..=64).contains(&id.len())
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.:".contains(&b))
+    }
 
     #[test]
-    fn buckets_and_percentiles() {
-        let h = Hist::default();
-        // 0 → bucket 0; 1 → 1; 2..3 → 2; 1000 → 10 (512..1023).
-        for v in [0, 1, 3, 3, 1000] {
-            h.record(v);
+    fn the_set_fits_what_elo_pros_takes() {
+        let d = declaration();
+        let stats = d["stats"].as_array().unwrap();
+        let achs = d["achievements"].as_array().unwrap();
+        let boards = d["boards"].as_array().unwrap();
+        // gamestats.MAX_STATS, MAX_ACHIEVEMENTS, MAX_BOARDS
+        assert!(stats.len() <= 100 && achs.len() <= 500 && boards.len() <= 32);
+        let ids: BTreeSet<&str> = stats.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert_eq!(ids.len(), stats.len(), "a stat declared twice");
+        for s in stats {
+            let id = s["id"].as_str().unwrap();
+            assert!(stat_ok(id), "{id}");
+            assert!(s["name"].as_str().unwrap().len() <= 48);
         }
-        let c = h.read();
-        assert_eq!((c[0], c[1], c[2], c[10]), (1, 1, 2, 1));
-        assert_eq!(h.max.load(Relaxed), 1000);
-        assert_eq!(pct(&c, 50), 4);
-        assert_eq!(pct(&c, 99), 1024);
-        assert_eq!(pct(&[0; BUCKETS], 50), 0);
-        h.record(u64::MAX);
-        assert_eq!(h.read()[BUCKETS - 1], 1);
+        let mut seen = BTreeSet::new();
+        for a in achs {
+            let id = a["id"].as_str().unwrap();
+            assert!(seen.insert(id), "{id} twice");
+            assert!(id
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'));
+            assert!(a["name"].as_str().unwrap().len() <= 48 && a["desc"].as_str().unwrap().len() <= 200);
+            let icon = a["icon"].as_str().unwrap();
+            assert!(icon
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'));
+            let st = a["progress"]["stat"].as_str().unwrap();
+            assert!(ids.contains(st), "{id} counts {st}, which isn't declared");
+            assert!(a["progress"]["max"].as_u64().unwrap() > 0);
+        }
+        // A board id isn't a field every board row has (gamestats.ROW_FIELDS)
+        // nor a key Elo Pros refuses (leaderboard.REFUSED_KEYS).
+        let fields = [
+            "wallet", "at", "agent", "rank", "name", "place", "harness", "model", "key",
+        ];
+        let refused = [
+            "meter",
+            "meter_score",
+            "meter_number",
+            "profile",
+            "scry",
+            "elo",
+            "reserve",
+            "balance",
+            "holdings",
+        ];
+        for b in boards {
+            let id = b["id"].as_str().unwrap();
+            assert!(stat_ok(id) && !fields.contains(&id) && !refused.contains(&id), "{id}");
+        }
     }
 
     #[test]
-    fn a_tick_over_budget_is_late() {
-        let s = Stats::default();
-        let tick = Duration::from_micros(7812);
-        s.tick(Duration::from_micros(500), tick);
-        s.tick(Duration::from_micros(9000), tick);
-        let r = s.read(&Counts::default());
-        assert_eq!((r.ticks, r.ticks_late, r.tick_max_us), (2, 1, 9000));
-    }
-
-    #[test]
-    fn packets_are_counted_once_across_samples() {
-        let s = Stats::default();
-        let mut last = (0, 0);
-        s.sample(Duration::from_millis(40), 100, 2, &mut last);
-        s.sample(Duration::from_millis(42), 250, 3, &mut last);
-        let r = s.read(&Counts::default());
-        assert_eq!((r.packets_sent, r.packets_lost), (250, 3));
-        assert_eq!(r.rtt_max_ms, 42);
-    }
-
-    #[test]
-    fn refusals_land_by_code_and_odd_codes_in_the_last() {
-        let s = Stats::default();
-        s.refuse(proto::REFUSE_FULL);
-        s.refuse(200);
-        let r = s.read(&Counts::default());
-        assert_eq!(r.refused[proto::REFUSE_FULL as usize], 1);
-        assert_eq!(r.refused[REFUSALS - 1], 1);
-    }
-
-    #[test]
-    fn the_document_is_json_of_numbers() {
-        let s = Stats::default();
-        s.tick(Duration::from_micros(300), Duration::from_millis(8));
-        let doc = json(
-            Now {
-                ready: true,
-                proto: 9,
-                players: 3,
-                capacity: 64,
-                rooms: 1,
-                uptime_s: 5,
-            },
-            &s.read(&Counts::default()),
+    fn the_committed_set_is_this_one() {
+        // `oneshot-server --print-stats > ops/elo-stats.json` after a change,
+        // then save it on the dev desk.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ops/elo-stats.json");
+        let text = std::fs::read_to_string(path).expect("ops/elo-stats.json");
+        let committed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            committed,
+            declaration(),
+            "ops/elo-stats.json is stale: oneshot-server --print-stats"
         );
-        assert!(doc.starts_with("{\"ready\":true,\"proto\":9,\"players\":3,"));
-        assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0]"));
-        assert!(doc.contains("\"tick_p50_us\":512"));
-        assert!(!doc.contains('\n'));
     }
 
-    #[test]
-    fn the_journal_line_is_the_window_only() {
-        let s = Stats::default();
-        let tick = Duration::from_millis(8);
-        s.tick(Duration::from_micros(4000), tick);
-        let was = s.read(&Counts::default());
-        s.tick(Duration::from_micros(100), tick);
-        s.joins_casual.fetch_add(2, Relaxed);
-        let is = s.read(&Counts::default());
-        let l = line(Now::default(), &was, &is, 100);
-        assert!(l.contains("joins=+2"), "{l}");
-        assert!(l.contains("ticks=+1"), "{l}");
-        assert!(l.contains("tick_p99=128us"), "{l}");
-        assert!(l.contains("tick_max=100us"), "{l}");
-    }
-
-    #[test]
-    fn an_idle_window_says_nothing_but_a_late_tick_does() {
-        let s = Stats::default();
-        let tick = Duration::from_millis(8);
-        let was = s.read(&Counts::default());
-        s.tick(Duration::from_micros(5), tick);
-        let idle = s.read(&Counts::default());
-        assert!(!eventful(Now::default(), &was, &idle));
-        s.tick(Duration::from_millis(20), tick);
-        assert!(eventful(Now::default(), &idle, &s.read(&Counts::default())));
-        let on = Now {
-            players: 1,
-            ..Now::default()
+    fn full_tally() -> Tally {
+        let mut t = Tally {
+            kills: 15,
+            deaths: 3,
+            assists: 4,
+            damage: 2400,
+            best_spree: 11,
+            best_multi: 4,
+            ..Tally::default()
         };
-        assert!(eventful(on, &was, &idle));
+        for m in t.medals.iter_mut().skip(1) {
+            *m = 2;
+        }
+        t
+    }
+
+    #[test]
+    fn a_report_names_only_what_is_declared() {
+        // Elo Pros refuses a whole call naming one undeclared id: every mode,
+        // won or not, finished or not, and a cup's end.
+        let d = declaration();
+        let stats: BTreeSet<String> = d["stats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().into())
+            .collect();
+        let boards: BTreeSet<String> = d["boards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().into())
+            .collect();
+        let mut lines = vec![Line::Cup(Cupped {
+            player: "acct_0123456789abcdef0123".into(),
+            place: 1,
+        })];
+        for mode in [
+            MODE_CASUAL,
+            MODE_DUEL,
+            MODE_DOUBLES,
+            MODE_FFA,
+            MODE_GUN_GAME,
+            MODE_CUP,
+            MODE_BIG_TEAM,
+        ] {
+            for (won, finished) in [(true, true), (false, true), (false, false)] {
+                lines.push(Line::Match(Played {
+                    player: "0x00000000000000000000000000000000000000aa".into(),
+                    mode,
+                    ranked: matches!(mode, MODE_DUEL | MODE_DOUBLES | MODE_CUP),
+                    finished,
+                    won,
+                    ms: 300_000,
+                    tally: full_tally(),
+                }));
+            }
+        }
+        let body: Value = serde_json::from_str(&report_body(&lines)).unwrap();
+        let reps = body["reports"].as_array().unwrap();
+        assert_eq!(reps.len(), lines.len());
+        let mut used = BTreeSet::new();
+        for r in reps {
+            assert!(is_player(r["wallet"].as_str().unwrap()));
+            for (k, v) in r["stats"].as_object().unwrap() {
+                assert!(stats.contains(k), "{k} isn't declared");
+                assert!(v.as_u64().unwrap() > 0, "{k}: a zero is left out");
+                used.insert(k.clone());
+            }
+            for (k, _) in r["scores"].as_object().into_iter().flatten() {
+                assert!(boards.contains(k), "board {k} isn't declared");
+                used.insert(k.clone());
+            }
+        }
+        // And everything declared is something a report can say.
+        for k in stats.iter().chain(&boards) {
+            assert!(used.contains(k), "{k} is declared and never reported");
+        }
+    }
+
+    #[test]
+    fn a_win_counts_once_by_mode_and_a_leaver_no_match() {
+        let p = Played {
+            player: "0x00000000000000000000000000000000000000aa".into(),
+            mode: MODE_DUEL,
+            ranked: true,
+            finished: true,
+            won: true,
+            ms: 61_500,
+            tally: Tally::default(),
+        };
+        let r = match_report(&p);
+        assert_eq!(r["stats"]["wins"], 1);
+        assert_eq!(r["stats"]["ranked_wins"], 1);
+        assert_eq!(r["stats"]["duel_wins"], 1);
+        assert_eq!(r["stats"]["seconds_played"], 61);
+        assert!(r.get("scores").is_none(), "no kills, no spree: nothing for a board");
+        let left = match_report(&Played {
+            finished: false,
+            won: false,
+            ..p
+        });
+        assert!(left["stats"].get("matches").is_none() && left["stats"].get("ranked_matches").is_none());
+        assert_eq!(left["stats"]["seconds_played"], 61);
+    }
+
+    #[test]
+    fn players_are_wallets_and_accounts() {
+        assert!(is_player("0x00000000000000000000000000000000000000aa"));
+        assert!(is_player("acct_0123456789abcdef0123"));
+        assert!(!is_player("acct_0123"));
+        assert!(!is_player("player"));
     }
 }

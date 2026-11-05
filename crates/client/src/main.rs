@@ -1,19 +1,19 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay] [--lite] [--capsules]` (or `oneshot --pose 'yaw=1.57&arm=3'`,
-//! no server, for a picture): the desktop client. It reads the game
-//! server's address and certificate hash from the page server's
-//! `server.json` (what the browser page reads), connects with client-net's
-//! native session, and runs the Bevy client.
+//! [--autoplay [--scope]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
+//! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
+//! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
+//! a tape drawn: `film/`, `clip.rs`): the desktop client. It opens on the title
+//! screen (`front.rs`); PLAY reads the game server's address and
+//! certificate hash from the page server's `server.json` (what the browser
+//! page reads) and connects with client-net's native session. `--mode` or
+//! `--autoplay` goes straight into a match.
 //!
 //! The server is the public one unless `--server` names another:
 //! `https://game.elopros.com/oneshot` (production: a CA certificate, so
 //! `server.json` sends no hash and the system's roots are trusted), or a
 //! local `oneshot-server` as `127.0.0.1:8080` / `http://127.0.0.1:8080`
 //! (its own certificate, pinned by the hash it sends).
-
-/// Where the desktop client plays unless told otherwise (ops/README.md).
-#[cfg(not(target_arch = "wasm32"))]
-const PUBLIC: &str = "https://game.elopros.com/oneshot";
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -25,72 +25,307 @@ fn main() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
+    use oneshot_client::door::{Door, PUBLIC};
+    use oneshot_client::front::Start;
+    use oneshot_client::Screen;
+
     let args: Vec<String> = std::env::args().collect();
     let arg = |k: &str| args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned();
-    if args.iter().any(|a| a == "--help" || a == "-h") {
+    let flag = |k: &str| args.iter().any(|a| a == k);
+    if flag("--help") || flag("-h") {
         println!("{}", HELP.replace("{PUBLIC}", PUBLIC));
         return Ok(());
     }
-    let lite = args.iter().any(|a| a == "--lite");
-    if let Some(q) = arg("--pose") {
+    let lite = flag("--lite");
+    let potato = flag("--potato");
+    let quality = match arg("--quality") {
+        Some(q) => Some(
+            oneshot_client::look::quality::Quality::from_name(&q.to_ascii_lowercase())
+                .ok_or_else(|| format!("--quality {q}: potato, low, medium or high"))?,
+        ),
+        None => None,
+    };
+    // `--shot x.png [--shot-at s]`: one frame once the screen is there, then out.
+    let shot = match arg("--shot") {
+        Some(p) if p.to_ascii_lowercase().ends_with(".png") => Some(std::path::PathBuf::from(p)),
+        Some(p) => return Err(format!("--shot {p}: a .png path")),
+        None => None,
+    };
+    let shot_at = match arg("--shot-at") {
+        Some(s) => s.parse::<f64>().map_err(|_| format!("--shot-at {s}: seconds"))?,
+        None => 1.0,
+    };
+    // A tape drawn, not a match played (`film/`, `clip.rs`).
+    if let Some(p) = arg("--scan") {
+        let every = arg("--every").and_then(|s| s.parse::<f64>().ok()).unwrap_or(5.0);
+        return scan(std::path::Path::new(&p), every);
+    }
+    if let Some(p) = arg("--film") {
+        let mut script = oneshot_client::film::Script::load(std::path::Path::new(&p))?;
+        if script.out.as_os_str().is_empty() {
+            let stem = std::path::Path::new(&p).file_stem().unwrap_or_default().to_owned();
+            script.out = std::path::Path::new("traces/film").join(stem);
+        }
+        return film(script, quality, None);
+    }
+    if let Some(p) = arg("--clip") {
+        use oneshot_client::clip;
+        let tape = std::path::PathBuf::from(&p);
+        let style = arg("--style").unwrap_or_else(|| clip::STYLES[0].into());
+        let json =
+            clip::script(&style).ok_or_else(|| format!("--style {style}: one of {}", clip::STYLES.join(", ")))?;
+        let mut script = oneshot_client::film::Script::parse(&json)?;
+        if !oneshot_client::film::encode::ffmpeg_here() {
+            return Err(format!(
+                "a clip's video is made with ffmpeg, and there is none on the path: install it, then `oneshot --clip {p}`"
+            ));
+        }
+        script.tape = tape.clone();
+        script.out = tape.with_extension("shots");
+        if let Some(px) = arg("--max-height").and_then(|s| s.parse::<u32>().ok()) {
+            script.fit_height(px);
+        }
+        let out = tape.with_extension("mp4");
+        return film(script, quality, Some((tape.with_extension("shots"), out)));
+    }
+    let record = match (arg("--record"), args.iter().position(|a| a == "--record")) {
+        (Some(p), Some(i)) => {
+            let secs = args
+                .get(i + 2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .ok_or_else(|| format!("--record {p}: and how many seconds"))?;
+            Some(oneshot_client::clip::Record::new(std::path::PathBuf::from(p), secs))
+        }
+        _ => None,
+    };
+    let open = if flag("--settings") || flag("--graphics") {
+        Screen::Settings
+    } else if flag("--menu") {
+        Screen::Paused
+    } else {
+        Screen::Playing
+    };
+    let (mut app, want, want_match) = if let Some(q) = arg("--pose") {
         // No server: one fighter for a picture (`--pose 'yaw=1.57&arm=3'`).
         let pose = oneshot_client::pose::Pose::parse(&q);
         let opts = oneshot_client::Opts {
             lite,
+            potato,
+            quality,
             pose: Some(pose),
             ..Default::default()
         };
-        oneshot_client::app(Box::new(oneshot_client::link::Still::on(pose.2.map)), opts).run();
-        return Ok(());
+        let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
+        (oneshot_client::app(link, opts), Screen::Playing, false)
+    } else {
+        let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
+        let mode = match arg("--mode") {
+            Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
+            None => None,
+        };
+        let autoplay = flag("--autoplay");
+        // `--fxstage N`: the demo's stage N alone (`look/fx/demo.rs`).
+        let fxstage = arg("--fxstage").and_then(|n| n.parse::<u32>().ok());
+        let fxdemo = flag("--fxdemo") || fxstage.is_some();
+        let front = match mode {
+            Some(m) => Start::Join(m),
+            None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
+            None => Start::Title,
+        };
+        let opts = oneshot_client::Opts {
+            autoplay,
+            lite,
+            potato,
+            softgpu: false,
+            quality,
+            pose: None,
+            capsules: flag("--capsules"),
+            graphics: flag("--graphics"),
+            fxdemo,
+            fxstage,
+            open,
+            front,
+            party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
+        };
+        let joins = matches!(front, Start::Join(_));
+        // On the title only the settings open over it; in a match, the
+        // screen asked for.
+        let want = match (joins, open) {
+            (true, o) => o,
+            (false, Screen::Settings) => Screen::Settings,
+            (false, _) => Screen::Title,
+        };
+        let mut app = oneshot_client::game(Door::new(server), opts);
+        // The autopilot holds the scope (a picture of one; `--autoplay`).
+        app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
+        if let Some(n) = arg("--name") {
+            app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
+                oneshot_client::settings::Player::clean(&n);
+        }
+        (app, want, joins)
+    };
+    if let Some(path) = shot {
+        app.insert_resource(oneshot_client::look::shot::Capture::new(
+            path, shot_at, want, want_match,
+        ));
     }
-    let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
-    let name = arg("--name").unwrap_or_else(|| "player".into());
-    let mode = match arg("--mode") {
-        Some(m) => mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?,
-        None => proto::MODE_CASUAL,
-    };
+    if let Some(r) = record {
+        app.insert_resource(r);
+    }
+    match app.run() {
+        bevy::app::AppExit::Error(code) => std::process::exit(code.get().into()),
+        bevy::app::AppExit::Success => Ok(()),
+    }
+}
 
-    let body = fetch::server_json(&server)?;
-    crash::hook(server.clone());
-    let (addr, hash) =
-        parse_server_json(&body).ok_or_else(|| format!("{server}: server.json doesn't name a game server"))?;
+/// `--film` and `--clip`: the list's tape drawn shot by shot, then out; a
+/// clip's shots joined into one video beside its tape.
+#[cfg(not(target_arch = "wasm32"))]
+fn film(
+    mut script: oneshot_client::film::Script,
+    quality: Option<oneshot_client::look::quality::Quality>,
+    cut: Option<(std::path::PathBuf, std::path::PathBuf)>,
+) -> Result<(), String> {
+    let path = script.tape.clone();
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let tape = client_net::tape::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    script.anchor(tape.end_ms() / 1000.0);
+    if let Some(q) = quality {
+        script.quality = q.name().into();
+    }
+    println!(
+        "oneshot: filming {} shot(s) from {} ({:.0} s of tape)",
+        script.shots.len(),
+        path.display(),
+        tape.end_ms() / 1000.0
+    );
+    let mut app = oneshot_client::film::app(script, tape, None)?;
+    if let bevy::app::AppExit::Error(code) = app.run() {
+        std::process::exit(code.get().into());
+    }
+    if let Some((shots, out)) = cut {
+        oneshot_client::film::encode::cut(&shots, &out)?;
+        let _ = std::fs::remove_dir_all(&shots);
+        println!("oneshot: clip {}", out.display());
+    }
+    Ok(())
+}
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let hello = client_net::session::Session::hello(&name, proto::Pass::NONE, mode, 0);
-    let client = rt
-        .block_on(client_net::native::NativeClient::connect(&addr, hash, hello))
-        .map_err(|e| format!("{addr}: {e}"))?;
-    let opts = oneshot_client::Opts {
-        autoplay: args.iter().any(|a| a == "--autoplay"),
-        lite,
-        pose: None,
-        capsules: args.iter().any(|a| a == "--capsules"),
-        fxdemo: args.iter().any(|a| a == "--fxdemo"),
-        fxstage: None,
-        open: oneshot_client::Screen::Playing,
-        panic: args.iter().any(|a| a == "--panic"),
-    };
-    oneshot_client::app(Box::new(oneshot_client::link::Native { client, _rt: rt }), opts).run();
+/// `--scan x.tape [--every S]`: what a tape holds, every few seconds: where
+/// the player is, who else it was shown and where, and the kills, which is
+/// how a shot list finds its moments.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
+    use client_net::session::Session;
+    use client_net::tape::Replay;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let tape = client_net::tape::read(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let end = tape.end_ms();
+    let map = tape.map().and_then(|m| sim::maps::ALL.iter().find(|d| d.id == m));
+    println!(
+        "{}: {:.1} s on {}",
+        path.display(),
+        end / 1000.0,
+        map.map_or("an unknown map", |d| d.name)
+    );
+    let mut names: std::collections::BTreeMap<u8, String> = std::collections::BTreeMap::new();
+    let mut s = Session::replay();
+    let mut r = Replay::new(tape);
+    let step = 1000.0 / sim::consts::TICK_HZ as f64 * client_net::core::SEND_EVERY as f64;
+    let mut next = 0.0;
+    let every = every_s.max(0.1) * 1000.0;
+    while r.clock_ms < end + step {
+        r.clock_ms += step;
+        r.frame(&mut s);
+        for m in s.take_messages() {
+            match m {
+                proto::Msg::Seat { slot, name, .. } => {
+                    names.insert(slot, name.as_str().to_string());
+                }
+                proto::Msg::Kill { killer, victim, .. } => {
+                    let who = |k: u8| names.get(&k).cloned().unwrap_or_else(|| format!("seat {k}"));
+                    println!("{:7.1} s  {} killed {}", r.clock_ms / 1000.0, who(killer), who(victim));
+                }
+                _ => {}
+            }
+        }
+        s.core.drain_events(r.clock_ms);
+        if r.clock_ms >= next && s.ready {
+            next += every;
+            let (f, p) = s.core.own();
+            let seen: Vec<String> = s
+                .core
+                .others(r.clock_ms)
+                .iter()
+                .filter(|d| d.alive)
+                .map(|d| format!("{}@({:.0}, {:.0}, {:.0})", d.slot, d.pos.x, d.pos.y, d.pos.z))
+                .collect();
+            println!(
+                "{:7.1} s  seat {} at ({:.1}, {:.1}, {:.1}) {}  {}/{}  sees {}",
+                r.clock_ms / 1000.0,
+                s.core.slot,
+                p.x,
+                p.y,
+                p.z,
+                if f.alive { "alive" } else { "dead " },
+                f.kills,
+                f.deaths,
+                if seen.is_empty() {
+                    "nobody".into()
+                } else {
+                    seen.join(" ")
+                }
+            );
+        }
+    }
     Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 const HELP: &str = "oneshot: the desktop client
 
-  oneshot                          play on the public server ({PUBLIC})
+  oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
-  --name NAME                      the name others see (default: player)
-  --mode MODE                      casual (default), ffa, gungame, bigteam; duel and doubles
-                                   are ranked, which needs an Elo Pros sign-in (the web page)
-  --lite                           the light tier: for a slow or software GPU
+  --name NAME                      the name others see (the title's field)
+  --party CODE                     join the party with that code (its leader picks the game)
+  --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
+                                   duel and doubles are ranked, which needs an Elo Pros
+                                   sign-in (the web page)
+  --lite                           POTATO for this run (your own graphics are kept)
+  --potato                         POTATO from now on (SETTINGS > GRAPHICS to change it)
+  --quality NAME                   potato, low, medium or high, for this run only
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
+  --menu, --settings               open the match on the Esc menu or the settings
+                                   (--settings alone: over the title)
+  --graphics                       the settings, on GRAPHICS
+  --shot out.png [--shot-at S]     save one frame once the screen is there (its
+                                   level built, its shaders compiled, nothing over
+                                   it) and S seconds have passed (1), then exit 0;
+                                   non-zero, saying why, if it never is
+                                   (ci/desktop_shot.sh)
+  --record x.tape SECONDS          keep everything the match sends, and once it
+                                   has run SECONDS (or ends) write it as a tape
+                                   and exit (ci/film.sh record)
+  --film shots.json                draw a tape as a shot list says, each shot
+                                   into ffmpeg (ci/film.sh shoot; crates/client/
+                                   src/film/script.rs has the fields)
+  --clip x.tape [--style S]        make an F9 tape's video beside it (S: wide,
+                                   pov, chase, mix, long); needs ffmpeg
+  --scan x.tape [--every S]        what a tape holds, every S seconds (5)
 
-Keys (by default; rebind them, with the mouse's speed, the field of view
-and the volume, in the settings, saved in your config folder under
+F12 saves a screenshot on any screen, into your pictures folder under
+oneshot/ (ONESHOT_SHOTS_DIR names another). F9 in a match saves the last
+half minute there as a tape and, with ffmpeg installed, makes it a video.
+
+Keys (by default; rebind them, with the mouse's speed, the field of view,
+the volume and the graphics, in SETTINGS, saved in your config folder under
 oneshot/settings.toml): WASD and the mouse, space jumps, Ctrl or C crouches,
 R reloads, E uses, G throws a frag, T picks frag or sticky, Q or V melees,
-X, 1 or the wheel swaps, N the net graph, Esc lets the mouse go.";
+X, 1 or the wheel swaps, N the net graph, F11 fullscreen, Esc the menu.
+
+A slow machine (a software rasterizer) starts on POTATO by itself until you
+pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
 const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam (or 0 to 6)";
@@ -110,207 +345,8 @@ fn mode(m: &str) -> Option<u8> {
     })
 }
 
-/// server.json's `addr` and, when it pins one, the certificate's hash:
-/// `{"addr": "host:port", "hash": "hex" | null, ...}`.
-#[cfg(not(target_arch = "wasm32"))]
-fn parse_server_json(body: &str) -> Option<(String, Option<[u8; 32]>)> {
-    let field = |k: &str| {
-        let at = body.find(&format!("\"{k}\""))? + k.len() + 2;
-        let rest = body[at..].trim_start().strip_prefix(':')?.trim_start();
-        let rest = rest.strip_prefix('"')?;
-        Some(rest[..rest.find('"')?].to_string())
-    };
-    let addr = field("addr")?;
-    let hash = field("hash").and_then(|h| {
-        let h: String = h.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-        (h.len() == 64).then(|| {
-            let mut out = [0u8; 32];
-            for (i, b) in out.iter_mut().enumerate() {
-                *b = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap_or(0);
-            }
-            out
-        })
-    });
-    Some((addr, hash))
-}
-
-/// A panic, reported: the default hook's words on stderr as before, a copy
-/// beside the settings (`crashes/`), and the same to the server's `/bugs`
-/// (`server/src/bugs.rs`), as the page does for a browser's.
-#[cfg(not(target_arch = "wasm32"))]
-mod crash {
-    pub fn hook(server: String) {
-        let before = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            before(info);
-            let doc = doc(&format!("{info}"));
-            let mut saved = None;
-            if let Some(dir) = oneshot_client::config::settings_path().and_then(|p| Some(p.parent()?.join("crashes"))) {
-                let unix = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs());
-                let path = dir.join(format!("crash-{unix}.json"));
-                if std::fs::create_dir_all(&dir)
-                    .and_then(|_| std::fs::write(&path, &doc))
-                    .is_ok()
-                {
-                    eprintln!("oneshot: the crash is written to {}", path.display());
-                    saved = Some(path);
-                }
-            }
-            match (super::fetch::post_bug(&server, &doc), saved) {
-                (Ok(s), _) if s == "204" => eprintln!("oneshot: and reported. Thank you."),
-                (_, Some(p)) => eprintln!("oneshot: it couldn't be reported; {} has it.", p.display()),
-                (_, None) => eprintln!("oneshot: it couldn't be saved or reported; the lines above are all there is."),
-            }
-        }));
-    }
-
-    /// The report: what the page sends, as far as the desktop knows it.
-    pub fn doc(line: &str) -> String {
-        format!(
-            "{{\"kind\":\"crash\",\"text\":{},\"build\":{{\"version\":{},\"proto\":{}}},\
-             \"where\":{{\"desktop\":true,\"os\":{},\"arch\":{}}}}}",
-            quote(&line.chars().take(4000).collect::<String>()),
-            quote(env!("CARGO_PKG_VERSION")),
-            proto::PROTO_VER,
-            quote(std::env::consts::OS),
-            quote(std::env::consts::ARCH),
-        )
-    }
-
-    /// `s` as a JSON string.
-    pub fn quote(s: &str) -> String {
-        let mut out = String::with_capacity(s.len() + 2);
-        out.push('"');
-        for c in s.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-                c => out.push(c),
-            }
-        }
-        out.push('"');
-        out
-    }
-}
-
-/// `GET <server>/server.json`, over HTTPS (the system's roots) or plain
-/// HTTP (a local server): one request, HTTP/1.0, the body back.
-#[cfg(not(target_arch = "wasm32"))]
-mod fetch {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    pub fn server_json(server: &str) -> Result<String, String> {
-        let (status, body) = request(server, "GET", "server.json", b"")?;
-        if status != "200" {
-            return Err(format!("{server}/server.json: HTTP {status}"));
-        }
-        Ok(body)
-    }
-
-    /// A report to the server's `/bugs` (`server/src/bugs.rs`); its status.
-    pub fn post_bug(server: &str, doc: &str) -> Result<String, String> {
-        request(server, "POST", "bugs", doc.as_bytes()).map(|(s, _)| s)
-    }
-
-    /// `method` `file` beside `server` (a URL, or `host:port`): the status
-    /// and the body.
-    fn request(server: &str, method: &str, file: &str, body: &[u8]) -> Result<(String, String), String> {
-        let (tls, rest) = match server.split_once("://") {
-            Some(("https", r)) => (true, r),
-            Some(("http", r)) => (false, r),
-            Some((s, _)) => return Err(format!("{server}: http:// or https://, not {s}://")),
-            None => (false, server),
-        };
-        let (hostport, path) = match rest.find('/') {
-            Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')),
-            None => (rest, ""),
-        };
-        let (host, port) = match hostport.rsplit_once(':') {
-            Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => {
-                (h, p.parse::<u16>().map_err(|_| format!("{server}: bad port {p}"))?)
-            }
-            _ => (hostport, if tls { 443 } else { 80 }),
-        };
-        let at = format!("{host}:{port}");
-        let tcp = std::net::ToSocketAddrs::to_socket_addrs(&at)
-            .map_err(|e| format!("{at}: {e}"))?
-            .find_map(|a| TcpStream::connect_timeout(&a, Duration::from_secs(10)).ok())
-            .ok_or_else(|| format!("{at}: can't connect (is the server up?)"))?;
-        let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
-        let mut req = format!(
-            "{method} {path}/{file} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n"
-        )
-        .into_bytes();
-        if method == "POST" {
-            req.extend_from_slice(format!("Content-Type: text/plain\r\nContent-Length: {}\r\n", body.len()).as_bytes());
-        }
-        req.extend_from_slice(b"\r\n");
-        req.extend_from_slice(body);
-        let mut raw = Vec::new();
-        if tls {
-            let mut roots = rustls::RootCertStore::empty();
-            for c in rustls_native_certs::load_native_certs().certs {
-                let _ = roots.add(c);
-            }
-            let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()
-                .map_err(|e| e.to_string())?
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            let name = rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|e| format!("{host}: {e}"))?;
-            let conn = rustls::ClientConnection::new(Arc::new(cfg), name).map_err(|e| e.to_string())?;
-            let mut s = rustls::StreamOwned::new(conn, tcp);
-            s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
-            // A server that closes without TLS's close_notify still sent the body.
-            if let Err(e) = s.read_to_end(&mut raw) {
-                if raw.is_empty() {
-                    return Err(format!("{at}: {e}"));
-                }
-            }
-        } else {
-            let mut s = tcp;
-            s.write_all(&req).map_err(|e| format!("{at}: {e}"))?;
-            s.read_to_end(&mut raw).map_err(|e| format!("{at}: {e}"))?;
-        }
-        let text = String::from_utf8_lossy(&raw);
-        let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| format!("{at}: no reply"))?;
-        let status = head.split_whitespace().nth(1).unwrap_or("");
-        Ok((status.to_string(), body.to_string()))
-    }
-}
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    #[test]
-    fn a_crash_report_quotes_what_the_panic_said() {
-        assert_eq!(super::crash::quote("a \"b\"\\c\nd\u{1}"), r#""a \"b\"\\c\nd\u0001""#);
-        let doc = super::crash::doc("panicked at src/x.rs:1:2:\nboom");
-        assert!(
-            doc.starts_with(r#"{"kind":"crash","text":"panicked at src/x.rs:1:2:\nboom","build":{"version":""#),
-            "{doc}"
-        );
-        assert!(doc.ends_with("}}"), "{doc}");
-    }
-
-    #[test]
-    fn server_json_reads_both_forms() {
-        let (a, h) =
-            super::parse_server_json(r#"{"addr":"game.example.com:4433","hash":null,"game":"oneshot"}"#).unwrap();
-        assert_eq!(a, "game.example.com:4433");
-        assert!(h.is_none());
-        let hex = "ab".repeat(32);
-        let (a, h) = super::parse_server_json(&format!(r#"{{"addr": "127.0.0.1:4433", "hash": "{hex}"}}"#)).unwrap();
-        assert_eq!(a, "127.0.0.1:4433");
-        assert_eq!(h, Some([0xab; 32]));
-    }
-
     #[test]
     fn modes_by_name() {
         assert_eq!(super::mode("Duel"), Some(proto::MODE_DUEL));

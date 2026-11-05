@@ -33,9 +33,9 @@ pub fn normalize(k: KeyCode) -> KeyCode {
     }
 }
 
-/// Keys a player may not bind: Esc (the menu), and F11 and F12 (the
-/// browser's fullscreen and tools).
-pub const RESERVED: [KeyCode; 3] = [KeyCode::Escape, KeyCode::F11, KeyCode::F12];
+/// Keys a player may not bind: Esc (the menu), F9 (the clip, `clip.rs`),
+/// and F11 and F12 (fullscreen and the screenshot).
+pub const RESERVED: [KeyCode; 4] = [KeyCode::Escape, KeyCode::F9, KeyCode::F11, KeyCode::F12];
 
 /// The mouse buttons a bind may use. Left and right are not among them (see
 /// the module header).
@@ -225,9 +225,10 @@ pub enum Action {
     Swap,
     Use,
     NetGraph,
+    Scores,
 }
 
-pub const COUNT: usize = 13;
+pub const COUNT: usize = 14;
 
 pub struct Spec {
     pub action: Action,
@@ -322,6 +323,12 @@ pub static SPECS: [Spec; COUNT] = [
         token: "net_graph",
         name: "Net graph",
         default: [k(KeyCode::KeyN), None],
+    },
+    Spec {
+        action: Action::Scores,
+        token: "scoreboard",
+        name: "Scoreboard (hold)",
+        default: [k(KeyCode::Tab), None],
     },
 ];
 

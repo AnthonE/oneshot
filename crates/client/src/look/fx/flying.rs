@@ -5,13 +5,13 @@
 //! frame: an ion bolt's blue core and streak, a charged bolt's bigger one
 //! with its light, the cannon's green ball, the SHARD GUN's pink crystals.
 //!
-//! Each round comes with an id that holds while it flies
-//! (`client_net::core::NetCore::projectiles`), so a model and its trail
-//! stay with one round, and a round of light whose id is gone has ended.
+//! Rounds come drawn at the render tick, each with an id that holds while
+//! it flies (`client_net::core::DrawnProj`): a model keeps its round by id.
 //! No event says where a bolt or a shard ended (a hit is the two fighters'
-//! business), so it is inferred, cosmetically: where it was last drawn. A
-//! shard that ended in a body we see sticks there (`bodies.rs` glints it);
-//! anywhere else it shatters. A bolt splashes. Drawing only.
+//! business), so it is inferred, cosmetically: one whose id was flying last
+//! frame and is gone now ended where it was last drawn. A shard that ended in
+//! a body we see sticks there (`bodies.rs` glints it); anywhere else it
+//! shatters. A bolt splashes. Drawing only.
 
 use bevy::prelude::*;
 use client_net::core::{Drawn, DrawnProj};
@@ -95,25 +95,23 @@ pub struct Flying {
     lit: bool,
 }
 
-/// This frame's rounds: `proj` as `NetCore::projectiles` draws them, on
-/// the render tick `others` is drawn on. `quiet`: none of last frame's
-/// rounds of light ended (the kill cam took the view, and `proj` is
-/// empty while it does).
+/// The rounds in flight this frame, as drawn at the render tick.
 #[allow(clippy::too_many_arguments)]
 pub fn projectiles(
     commands: &mut Commands,
     fx: &mut Fx,
     models: &Models,
+    map: &sim::map::Map,
     proj: &[DrawnProj],
     others: &[Drawn],
     t: f32,
-    quiet: bool,
+    dt: f32,
     have: &mut Query<(Entity, &mut Flying, &mut Transform, &mut Visibility)>,
 ) {
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
         light(fx, &p.state());
     }
-    ended(fx, proj, others, t, quiet);
+    ended(fx, map, proj, others, t, dt);
     // The models in flight, kept: each round keeps the model that drew its
     // id (so a rocket's trail stays its own), else takes a hidden one of
     // its kind, else a new one; the rest are hidden. Never despawned: a
@@ -188,7 +186,7 @@ pub fn projectiles(
             fx.glow.spawn(Particle {
                 left: 0.05,
                 life: 0.05,
-                pos: at + back * 0.45,
+                pos: (at + back * 0.45).into(),
                 size0: 0.35,
                 size1: 0.15,
                 c0: [14.0, 6.0, 1.6, 1.0],
@@ -219,7 +217,7 @@ pub fn projectiles(
             fx.glow.spawn(Particle {
                 left: 0.1,
                 life: 0.1,
-                pos: at + Vec3::Y * 0.1,
+                pos: (at + Vec3::Y * 0.1).into(),
                 size0: 0.12,
                 size1: 0.06,
                 c0: c,
@@ -237,7 +235,7 @@ fn dot(at: Vec3, size: f32, c: [f32; 4]) -> Particle {
     Particle {
         left: 0.001,
         life: 0.001,
-        pos: at,
+        pos: at.into(),
         size0: size,
         size1: size,
         c0: c,
@@ -252,8 +250,8 @@ fn streak(at: Vec3, v: Vec3, cell: u8, width: f32, len: f32, c: [f32; 4]) -> Par
     Particle {
         left: 0.001,
         life: 0.001,
-        pos: at,
-        vel: v,
+        pos: at.into(),
+        vel: v.into(),
         size0: width,
         size1: width,
         c0: c,
@@ -319,8 +317,8 @@ fn trail(fx: &mut Fx, at: Vec3, v: Vec3, c: [f32; 4]) {
     fx.glow.spawn(Particle {
         left: life,
         life,
-        pos: at - v * 0.01,
-        vel: drift,
+        pos: (at - v * 0.01).into(),
+        vel: drift.into(),
         size0: 0.025,
         size1: 0.005,
         c0: [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, 0.9],
@@ -340,35 +338,64 @@ pub fn crystal(fx: &mut Fx, p: &ProjState) {
     trail(fx, at, v, [5.0, 1.2, 3.4, 0.9]);
 }
 
-/// Rounds of light that were flying last frame and are gone now: where they
-/// ended (where they were last drawn), and what that looks like. Quiet,
-/// none ended: they only went out of view.
-fn ended(fx: &mut Fx, proj: &[DrawnProj], others: &[Drawn], t: f32, quiet: bool) {
+/// Rounds of light that were flying last frame and are gone now: ended
+/// where they were last drawn, and what that looks like; an ion bolt that
+/// ended on the map leaves a burn on the face it met (`marks.rs`), only
+/// ever for a bolt the server sent us.
+fn ended(fx: &mut Fx, map: &sim::map::Map, proj: &[DrawnProj], others: &[Drawn], t: f32, dt: f32) {
     let last = std::mem::take(&mut fx.last_light);
-    for was in last.iter().filter(|_| !quiet) {
-        if proj.iter().any(|p| p.id == was.id && p.kind == was.kind) {
-            continue;
-        }
-        let wv = Vec3::new(was.vel.x, was.vel.y, was.vel.z);
-        let at = Vec3::new(was.pos.x, was.pos.y, was.pos.z);
-        match was.kind {
-            NEEDLE => match in_body(others, at) {
-                Some(slot) => {
-                    super::bodies::needle_in(fx, slot, t);
-                    super::table::shatter(&mut fx.glow, at, 3, 1.5);
-                }
-                None => super::table::shatter(&mut fx.glow, at, 8, 3.0),
-            },
-            BOLT | CHARGE => {
-                let big = if was.kind == CHARGE { 2.0 } else { 1.0 };
-                splash(fx, at, -wv.normalize_or(Vec3::Y), big);
+    {
+        for was in &last {
+            // Still flying: its id, and its kind (an id may come round again).
+            if proj.iter().any(|p| p.id == was.id && p.kind == was.kind) {
+                continue;
             }
-            // The cannon's ball ends in a Blast event (`blast.rs`).
-            _ => {}
+            let wv = Vec3::new(was.vel.x, was.vel.y, was.vel.z);
+            let at = Vec3::new(was.pos.x, was.pos.y, was.pos.z);
+            match was.kind {
+                NEEDLE => match in_body(others, at) {
+                    Some(slot) => {
+                        super::bodies::needle_in(fx, slot, t);
+                        super::table::shatter(&mut fx.glow, at, 3, 1.5);
+                    }
+                    None => super::table::shatter(&mut fx.glow, at, 8, 3.0),
+                },
+                BOLT | CHARGE => {
+                    let big = if was.kind == CHARGE { 2.0 } else { 1.0 };
+                    splash(fx, at, -wv.normalize_or(Vec3::Y), big);
+                    if in_body(others, at).is_none() {
+                        burn(fx, map, at, wv, dt, big);
+                    }
+                }
+                // The cannon's ball ends in a Blast event (`blast.rs`).
+                _ => {}
+            }
         }
     }
     fx.last_light.clear();
     fx.last_light.extend(proj.iter().filter(|p| !modelled(p.kind)).copied());
+}
+
+/// The face a bolt from `wp` flying `wv` met in its last frame, if it met
+/// one near enough to be where it ended, and the burn it left there.
+fn burn(fx: &mut Fx, map: &sim::map::Map, wp: Vec3, wv: Vec3, dt: f32, big: f32) {
+    let speed = wv.length();
+    if speed < 1e-3 || super::table::lod(wp.distance(fx.eye)) <= 0.0 {
+        return;
+    }
+    let dir = wv / speed;
+    let reach = speed * dt * 2.0 + 0.5;
+    if let Some(hit) = super::surface::cast(map, &mut fx.near, wp - dir * 0.2, dir, reach) {
+        let matter = super::surface::matter_of(map, &hit, fx.marks.lift.as_deref());
+        fx.marks.lay(
+            map,
+            super::marks::Kind::Scorch,
+            super::marks::BURN_M * big,
+            hit.at,
+            hit.normal,
+            matter,
+        );
+    }
 }
 
 /// The fighter whose body `at` is in, if we draw them.
@@ -389,7 +416,7 @@ pub fn splash(fx: &mut Fx, at: Vec3, back: Vec3, big: f32) {
     fx.glow.spawn(Particle {
         left: 0.1,
         life: 0.1,
-        pos: at,
+        pos: at.into(),
         size0: 0.25 * big,
         size1: 0.6 * big,
         c0: ION,
@@ -405,8 +432,8 @@ pub fn splash(fx: &mut Fx, at: Vec3, back: Vec3, big: f32) {
         fx.glow.spawn(Particle {
             left: life,
             life,
-            pos: at,
-            vel: d * speed,
+            pos: at.into(),
+            vel: (d * speed).into(),
             gravity: 4.0,
             drag: 3.0,
             size0: 0.008,
