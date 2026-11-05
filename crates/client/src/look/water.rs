@@ -209,8 +209,10 @@ pub const GLINT_A2_NEAR: f32 = 0.0016;
 pub const GLINT_A2_FAR: f32 = 0.0141;
 pub const GLINT_FAR_M: f32 = 400.0;
 /// How far the reflected clear sky's chroma is pulled toward grey: the
-/// air's raw single-scatter blue is bluer than the sky the desktop draws.
-pub const SKY_DESAT: f32 = 0.45;
+/// air's raw single-scatter blue is a little bluer than the sky the
+/// desktop draws (less so since its daylight was pushed toward blue,
+/// `rig::SKY_LIFT_SATURATION`; at 0.45 the sea lay grey under a blue sky).
+pub const SKY_DESAT: f32 = 0.15;
 
 /// Water's normal-incidence Fresnel reflectance as Bevy derives it.
 pub fn water_f0() -> f32 {

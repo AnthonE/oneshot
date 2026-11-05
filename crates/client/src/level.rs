@@ -829,6 +829,24 @@ pub fn build(
     }
     // Rock out of reach: the sea's stacks and stones.
     crate::look::boulders::spawn_scenery(commands, id);
+    // And trees along the rim over the walls, out of reach too.
+    if let Some(t) = &def.terrain {
+        let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z);
+        for (foot, height, kind, seed) in crate::look::trees::rim(ground, lo, hi, id as u32) {
+            let cards = cards.get(images);
+            for (mesh, mat, at) in
+                crate::look::trees::tree(kind, seed, crate::look::trees::RIM_TRUNK_R, height, cards, meshes, mats)
+            {
+                commands.spawn((
+                    LevelPart,
+                    TreePart,
+                    Mesh3d(mesh),
+                    MeshMaterial3d(mat),
+                    Transform::from_translation(foot).mul_transform(at),
+                ));
+            }
+        }
+    }
     // The dressing (`def.dress`: drawn, never collided): the ship's pods,
     // trims, vaults and ribs, each by its look, over the sim's boxes.
     for &(b, l) in def.dress {
@@ -950,6 +968,11 @@ pub fn build(
         if let Some(kind) = kind {
             let sim::solid::Shape::Round { x, z, r } = sol.shape else {
                 continue;
+            };
+            // Most of the canyon's trees are in leaf (`trees::in_leaf`).
+            let kind = match kind {
+                crate::look::trees::Kind::Dead if crate::look::trees::in_leaf(x, z) => crate::look::trees::Kind::Live,
+                k => k,
             };
             // Each tree its own, from where it stands (a mirrored twin differs).
             let seed = (x * 31.0 + z * 7.0 + sol.y0) as i32 as u32;
@@ -1091,7 +1114,7 @@ pub fn build(
             // them would light a fighter's feet they shade).
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
-            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear) {
+            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea) {
                 commands.spawn((
                     LevelPart,
                     GrassPart,

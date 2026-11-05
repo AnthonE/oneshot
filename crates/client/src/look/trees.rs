@@ -1,8 +1,11 @@
-//! Trees: a palm for the beach and a dead tree for the canyon floor, drawn
-//! where a map puts a round solid with a tree look (`palm`, `dead_tree`):
-//! level.rs spawns [`tree`]'s parts at the solid's base with the solid's
-//! radius as the trunk's. Nothing here reaches the sim: a tree collides as
-//! the cylinder the map says, and its limbs and fronds are scenery.
+//! Trees: a palm for the beach and, for the canyon floor, a dead tree and
+//! a live one (the dead tree's limbs under a crown of leaf cards), drawn
+//! where a map puts a round solid with a tree look (`palm`, `dead_tree`:
+//! which of that look's trees are in leaf is [`in_leaf`]'s, the same for a
+//! tree and its twin across the map). level.rs spawns [`tree`]'s parts at
+//! the solid's base with the solid's radius as the trunk's. Nothing here
+//! reaches the sim: a tree collides as the cylinder the map says, and its
+//! limbs, fronds and leaves are scenery, the same on every rung.
 //!
 //! After Gates' `render/tree.rs` (`palm`, `palm_crown`, `palm_bark_rgba`)
 //! and `render/plants.rs` (`frond`, `frond_rgba`, `dead_scrub` and its
@@ -25,6 +28,59 @@ use super::textures::{bake, Texel};
 pub enum Kind {
     Palm,
     Dead,
+    /// A dead tree's limbs in leaf.
+    Live,
+}
+
+/// Whether the canyon tree standing at (x, z) is in leaf: about two in
+/// three, by where it stands, read off `|x|` so a tree and its twin across
+/// the map's mirror are the same kind and neither side has the shade.
+pub fn in_leaf(x: f32, z: f32) -> bool {
+    hash01((x.abs() * 4.0) as u32, (z * 4.0 + 4096.0) as u32 ^ 0x1eaf) < LIVE_SHARE
+}
+
+/// Trees along the rim: where a terrain stands high and near level just
+/// outside the playable rectangle (a canyon's mesas over its walls), one
+/// to a cell of [`RIM_STEP_M`] in a band [`RIM_OUT_M`] out from the bound,
+/// most of the cells ([`RIM_SHARE`]), most of them in leaf. Nobody reaches
+/// them and they stand behind the walls' crest, so they hide no one: they
+/// are the skyline. `ground` is the terrain's height. Each: its foot, its
+/// height, its kind and its seed.
+pub fn rim(
+    ground: impl Fn(f32, f32) -> Option<f32>,
+    lo: (f32, f32),
+    hi: (f32, f32),
+    seed: u32,
+) -> Vec<(Vec3, f32, Kind, u32)> {
+    let mut out = Vec::new();
+    let (x0, z0) = (lo.0 - RIM_OUT_M.1, lo.1 - RIM_OUT_M.1);
+    let (nx, nz) = (
+        ((hi.0 - lo.0 + 2.0 * RIM_OUT_M.1) / RIM_STEP_M).ceil() as u32,
+        ((hi.1 - lo.1 + 2.0 * RIM_OUT_M.1) / RIM_STEP_M).ceil() as u32,
+    );
+    for j in 0..nz {
+        for i in 0..nx {
+            let cell = hash2(seed ^ 0x51a7_0b1e, i * 8191 + j);
+            let x = x0 + (i as f32 + hash01(cell, 1)) * RIM_STEP_M;
+            let z = z0 + (j as f32 + hash01(cell, 2)) * RIM_STEP_M;
+            // Clear of the bound by the band's near edge, on some side.
+            let out_by = (lo.0 - x).max(x - hi.0).max(lo.1 - z).max(z - hi.1);
+            if !(RIM_OUT_M.0..=RIM_OUT_M.1).contains(&out_by) || hash01(cell, 3) >= RIM_SHARE {
+                continue;
+            }
+            let (Some(y), Some(yx), Some(yz)) = (ground(x, z), ground(x + 1.5, z), ground(x, z + 1.5)) else {
+                continue;
+            };
+            let slope = ((yx - y) / 1.5).abs().max(((yz - y) / 1.5).abs());
+            if y < RIM_MIN_Y || slope > RIM_SLOPE {
+                continue;
+            }
+            let kind = if hash01(cell, 4) < 0.8 { Kind::Live } else { Kind::Dead };
+            let height = RIM_H.0 + (RIM_H.1 - RIM_H.0) * hash01(cell, 5);
+            out.push((Vec3::new(x, y, z), height, kind, cell));
+        }
+    }
+    out
 }
 
 /// One drawn part of a tree: its mesh, its material, and where it goes
@@ -35,6 +91,7 @@ pub type Part = (Handle<Mesh>, Handle<StandardMaterial>, Transform);
 /// bark (albedo and normal, tiling).
 pub struct Cards {
     pub frond: Handle<Image>,
+    pub leaf: Handle<Image>,
     pub bark: Handle<Image>,
     pub bark_normal: Handle<Image>,
 }
@@ -52,6 +109,7 @@ impl TreeCards {
             let [bark, bark_normal] = palm_bark_images();
             Cards {
                 frond: images.add(frond_image()),
+                leaf: images.add(cutout_image(leaf_rgba(LEAF_PX), LEAF_PX)),
                 bark: images.add(bark),
                 bark_normal: images.add(bark_normal),
             }
@@ -62,6 +120,7 @@ impl TreeCards {
 /// Ceilings on one tree's triangles (`tests`): a palm, a dead tree.
 pub const PALM_MAX_TRIS: usize = 8_000;
 pub const DEAD_MAX_TRIS: usize = 2_000;
+pub const LIVE_MAX_TRIS: usize = 3_000;
 
 /// A tree's foot sinks this far below the origin, so a slope under it
 /// shows no gap.
@@ -109,6 +168,32 @@ const DEAD_STRAIGHT_M: f32 = 2.5;
 const DEAD_LIMBS: (u32, u32) = (4, 6);
 const DEAD_FORKS: u32 = 3;
 const DEAD_TRUNK_SIDES: usize = 8;
+/// The rim's trees ([`rim`]): a cell's side, how far out from the bound
+/// the band runs, how high and how near level the ground must be, the
+/// share of cells that grow one, and a tree's height and trunk.
+pub const RIM_STEP_M: f32 = 14.0;
+pub const RIM_OUT_M: (f32, f32) = (4.0, 28.0);
+pub const RIM_MIN_Y: f32 = 20.0;
+pub const RIM_SLOPE: f32 = 0.45;
+pub const RIM_SHARE: f32 = 0.8;
+pub const RIM_H: (f32, f32) = (8.0, 13.0);
+pub const RIM_TRUNK_R: f32 = 0.3;
+/// The share of the canyon's trees that are in leaf ([`in_leaf`]).
+const LIVE_SHARE: f32 = 0.66;
+/// A live tree's bark over the dead wood's grey: darker and browner.
+const LIVE_BARK: [f32; 3] = [0.62, 0.5, 0.42];
+/// A leaf card's half-size, metres, least and most, on a tree 8 m tall;
+/// how many stand at each twig's end, and how far the cards' normals are
+/// turned out from the crown's middle, so it is lit as one mass.
+const LEAF_CARD_M: (f32, f32) = (0.62, 1.0);
+const LEAF_CARDS: u32 = 3;
+const LEAF_VOLUME: f32 = 0.75;
+/// The leaf card's texels a side and how many leaves it carries.
+const LEAF_PX: u32 = 256;
+const LEAF_COUNT: u32 = 110;
+/// A leaf's colours, sRGB: the blade and where the sun is on it.
+const LEAF_BLADE: [f32; 3] = [44.0, 72.0, 30.0];
+const LEAF_SUN: [f32; 3] = [98.0, 124.0, 52.0];
 
 /// The parts of a `kind` of tree grown from `seed`, its trunk `trunk_r`
 /// across at the foot (the solid's radius) and `height` tall, relative to
@@ -157,6 +242,28 @@ pub fn tree(
                 ..default()
             });
             vec![(meshes.add(dead(seed, trunk_r, height)), wood, Transform::IDENTITY)]
+        }
+        Kind::Live => {
+            let (wood, crown) = live(seed, trunk_r, height);
+            let bark = mats.add(StandardMaterial {
+                base_color: Color::linear_rgb(v * LIVE_BARK[0], v * LIVE_BARK[1], v * LIVE_BARK[2]),
+                perceptual_roughness: 0.95,
+                ..default()
+            });
+            let leaves = mats.add(StandardMaterial {
+                base_color: tint,
+                base_color_texture: Some(cards.leaf.clone()),
+                perceptual_roughness: 0.85,
+                specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
+                alpha_mode: AlphaMode::Mask(0.5),
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            });
+            vec![
+                (meshes.add(wood), bark, Transform::IDENTITY),
+                (meshes.add(crown), leaves, Transform::IDENTITY),
+            ]
         }
     }
 }
@@ -356,8 +463,55 @@ fn frond(
 /// three times into thinner sticks, the topmost carrying the trunk on as
 /// its leader; grey wood in the vertices, no card. Fitted to `height`.
 fn dead(seed: u32, trunk_r: f32, height: f32) -> Mesh {
+    let (s, _) = skeleton(seed, trunk_r, height);
+    let mut m = s.mesh();
+    fit_height(&mut [&mut m], height);
+    m
+}
+
+/// A live tree, `(wood, crown)`: the dead tree's limbs, and at every
+/// twig's end a few leaf cards crossed through it, their normals turned
+/// out from the crown's middle. Fitted to `height` together.
+fn live(seed: u32, trunk_r: f32, height: f32) -> (Mesh, Mesh) {
+    let (wood, tips) = skeleton(seed, trunk_r, height);
+    let seed = hash2(0x1eaf_c4a2, seed);
+    let mut crown = Soup::default();
+    let middle = tips.iter().copied().sum::<Vec3>() / tips.len().max(1) as f32;
+    let white = |_: Vec3| [1.0, 1.0, 1.0, 1.0];
+    let k = height / 8.0;
+    for (i, &tip) in tips.iter().enumerate() {
+        let i = i as u32;
+        let half = (LEAF_CARD_M.0 + (LEAF_CARD_M.1 - LEAF_CARD_M.0) * hash01(seed, i * 7 + 1)) * k;
+        let a0 = hash01(seed, i * 7 + 2) * TAU;
+        for c in 0..LEAF_CARDS {
+            let a = a0 + c as f32 * PI / LEAF_CARDS as f32;
+            let lean = (hash01(seed, i * 7 + 3 + c) - 0.5) * 0.9;
+            let across = Vec3::new(a.cos(), 0.0, a.sin());
+            let up = (Vec3::Y + Vec3::new(-a.sin(), 0.0, a.cos()) * lean).normalize_or(Vec3::Y);
+            let (u, v) = (across * half, up * half);
+            // Hung a little under the twig's end, so the twig is in it.
+            let o = tip + up * half * 0.35;
+            let q = [
+                (o - u - v, [0.0, 1.0]),
+                (o + u - v, [1.0, 1.0]),
+                (o + u + v, [1.0, 0.0]),
+                (o - u + v, [0.0, 0.0]),
+            ];
+            crown.tri_uv([q[0], q[1], q[2]], white, Some(middle), LEAF_VOLUME);
+            crown.tri_uv([q[0], q[2], q[3]], white, Some(middle), LEAF_VOLUME);
+        }
+    }
+    let (mut wood, mut crown) = (wood.mesh(), crown.mesh());
+    fit_height(&mut [&mut wood, &mut crown], height);
+    (wood, crown)
+}
+
+/// The dead tree's wood before it is fitted, and where each of its twigs
+/// ends (a live tree's leaves hang there).
+fn skeleton(seed: u32, trunk_r: f32, height: f32) -> (Soup, Vec<Vec3>) {
     let seed = hash2(0xdead_7ee5, seed);
     let mut s = Soup::default();
+    let mut tips = Vec::new();
     let col = move |p: Vec3| {
         let c = lerp3(DEAD_ROOT, DEAD_TIP, smooth01(p.y / height));
         // Streaks and flecks of weathering, at a hand's scale.
@@ -417,11 +571,19 @@ fn dead(seed: u32, trunk_r: f32, height: f32) -> Mesh {
         let r = if k == n - 1 { r * 0.9 } else { r * 0.55 };
         let len = height * (0.18 + 0.08 * hash01(seed, 30 + k)) * (0.85 + 0.15 * t);
         let dir = Vec3::new(a.sin() * elev.cos(), elev.sin(), a.cos() * elev.cos());
-        branch(&mut s, seed ^ (k + 1).wrapping_mul(0x9e37), base, dir, len, r, 0, col);
+        branch(
+            &mut s,
+            &mut tips,
+            seed ^ (k + 1).wrapping_mul(0x9e37),
+            base,
+            dir,
+            len,
+            r,
+            0,
+            col,
+        );
     }
-    let mut m = s.mesh();
-    fit_height(&mut [&mut m], height);
-    m
+    (s, tips)
 }
 
 /// One limb from `a` along `dir`, kinked halfway, forking in two at its
@@ -429,6 +591,7 @@ fn dead(seed: u32, trunk_r: f32, height: f32) -> Mesh {
 #[allow(clippy::too_many_arguments)]
 fn branch(
     s: &mut Soup,
+    tips: &mut Vec<Vec3>,
     seed: u32,
     a: Vec3,
     dir: Vec3,
@@ -463,6 +626,10 @@ fn branch(
         },
     ];
     tube(s, &rings, sides, 1.0, col);
+    // A twig's end, from the first fork out.
+    if depth >= 1 {
+        tips.push(end);
+    }
     if depth >= DEAD_FORKS {
         return;
     }
@@ -474,7 +641,7 @@ fn branch(
         let spread = 0.3 + 0.35 * hash01(seed, 10 + k);
         let d = (Quat::from_axis_angle(axis, side * spread) * on + Vec3::Y * 0.12).normalize_or(on);
         let next = seed.wrapping_mul(0x2c1b_3c6d) ^ (k + 1);
-        branch(s, next, end, d, len * 0.62, r * 0.6, depth + 1, col);
+        branch(s, tips, next, end, d, len * 0.62, r * 0.6, depth + 1, col);
     }
 }
 
@@ -625,8 +792,12 @@ impl Soup {
 /// some forty pairs of stiff, narrow leaflets angled toward the tip,
 /// shortest at the base and the tip. An alpha cutout with its mip chain.
 fn frond_image() -> Image {
-    let n = FROND_PX;
-    let level0 = frond_rgba(n);
+    cutout_image(frond_rgba(FROND_PX), FROND_PX)
+}
+
+/// A cutout card (`level0`, RGBA8 sRGB, `n` texels square) as an image with
+/// its mip chain.
+fn cutout_image(level0: Vec<u8>, n: u32) -> Image {
     let (chain, levels) = cutout_chain(&level0, n);
     let mut img = Image::new(
         Extent3d {
@@ -737,6 +908,72 @@ fn frond_rgba(n: u32) -> Vec<u8> {
             };
             let a = (cover * 255 / (SS * SS)) as u8;
             out[i..i + 4].copy_from_slice(&[c.x.min(255.0) as u8, c.y.min(255.0) as u8, c.z.min(255.0) as u8, a]);
+        }
+    }
+    out
+}
+
+/// The leaf card's level 0, RGBA8 sRGB, `n` texels square: a clump of
+/// small pointed leaves every way round the card's middle, thick there and
+/// ragged at its rim, each its own green. The clear texels carry the
+/// blade's colour, so a mip never fringes.
+fn leaf_rgba(n: u32) -> Vec<u8> {
+    let blade = Vec3::from_array(LEAF_BLADE);
+    let sun = Vec3::from_array(LEAF_SUN);
+    let nf = n as f32;
+    let mut out = vec![0u8; (n * n * 4) as usize];
+    for p in out.chunks_mut(4) {
+        p.copy_from_slice(&[blade.x as u8, blade.y as u8, blade.z as u8, 0]);
+    }
+    const SS: u32 = 2;
+    for l in 0..LEAF_COUNT {
+        // Where it is, which way it points, how long and how wide.
+        let r = 0.42 * hash01(0x1eaf, l * 5).sqrt();
+        let at = hash01(0x1eaf, l * 5 + 1) * TAU;
+        let (cx, cy) = (0.5 + r * at.cos(), 0.5 + r * at.sin());
+        let dir = hash01(0x1eaf, l * 5 + 2) * TAU;
+        let (dx, dy) = (dir.cos(), dir.sin());
+        let len = 0.05 + 0.035 * hash01(0x1eaf, l * 5 + 3);
+        let wid = len * 0.36;
+        let lit = hash01(0x1eaf, l * 5 + 4);
+        let (x0, x1) = (
+            ((cx - len) * nf).floor().max(0.0) as u32,
+            ((cx + len) * nf).ceil().min(nf - 1.0) as u32,
+        );
+        let (y0, y1) = (
+            ((cy - len) * nf).floor().max(0.0) as u32,
+            ((cy + len) * nf).ceil().min(nf - 1.0) as u32,
+        );
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let mut cover = 0u32;
+                let mut along_sum = 0.0;
+                for sy in 0..SS {
+                    for sx in 0..SS {
+                        let u = (x as f32 + (sx as f32 + 0.5) / SS as f32) / nf - cx;
+                        let v = (y as f32 + (sy as f32 + 0.5) / SS as f32) / nf - cy;
+                        let along = (u * dx + v * dy) / len;
+                        let across = (-u * dy + v * dx) / wid;
+                        // Pointed at both ends: a lens.
+                        if along.abs() < 1.0 && across.abs() < 1.0 - along * along {
+                            cover += 1;
+                            along_sum += along;
+                        }
+                    }
+                }
+                if cover == 0 {
+                    continue;
+                }
+                let i = ((y * n + x) * 4) as usize;
+                let a = (cover * 255 / (SS * SS)) as u8;
+                if a < out[i + 3] {
+                    continue;
+                }
+                // Lighter toward its tip, and each leaf its own value.
+                let t = smooth01(0.5 + 0.5 * along_sum / cover as f32);
+                let c = blade.lerp(sun, 0.25 * t + 0.75 * lit * lit) * (0.85 + 0.3 * hash01(0xb1ade, l));
+                out[i..i + 4].copy_from_slice(&[c.x.min(255.0) as u8, c.y.min(255.0) as u8, c.z.min(255.0) as u8, a]);
+            }
         }
     }
     out
@@ -968,6 +1205,51 @@ mod tests {
             let r = positions(&m).iter().map(|p| p.xz().length()).fold(0.0, f32::max);
             assert!(r > 1.0 && r < 6.0, "dead {seed}: the limbs reach {r}");
         }
+    }
+
+    #[test]
+    fn a_live_tree_is_the_dead_one_in_leaf() {
+        for seed in 0..8u32 {
+            let height = 7.0 + 0.3 * seed as f32;
+            let (wood, crown) = live(seed, 0.28, height);
+            let n = tris(&wood) + tris(&crown);
+            assert!(n <= LIVE_MAX_TRIS, "live {seed}: {n} triangles");
+            stands(&[&wood, &crown], 0.28, height, "live tree");
+            // Its leaves are up in its limbs, over a standing fighter's head.
+            let lo = positions(&crown).iter().map(|p| p.y).fold(f32::MAX, f32::min);
+            assert!(lo > 2.0, "live {seed}: leaves down at {lo}");
+            let r = positions(&crown).iter().map(|p| p.xz().length()).fold(0.0, f32::max);
+            assert!(r > 1.5 && r < 7.0, "live {seed}: the crown reaches {r}");
+        }
+        // A tree and its twin across the mirror are the same kind, and
+        // the canyon has both kinds.
+        let trees = [
+            (-80.0, -22.0),
+            (-45.0, 32.0),
+            (-30.0, -38.0),
+            (10.0, 27.0),
+            (50.0, -30.0),
+        ];
+        for (x, z) in trees {
+            assert_eq!(in_leaf(x, z), in_leaf(-x, z));
+        }
+        let card = leaf_rgba(64);
+        let cover = card.chunks(4).filter(|p| p[3] >= 128).count() as f32 / (64.0 * 64.0);
+        assert!(cover > 0.2 && cover < 0.75, "the leaves cover {cover} of their card");
+    }
+
+    #[test]
+    fn the_rim_trees_stand_out_of_bounds_on_high_ground() {
+        // A mesa 40 m up all round a 100 by 60 m floor.
+        let ground = |x: f32, z: f32| Some(if x.abs() < 50.0 && z.abs() < 30.0 { 0.0 } else { 40.0 });
+        let trees = rim(ground, (-50.0, -30.0), (50.0, 30.0), 3);
+        assert!(trees.len() > 8, "only {} trees on the rim", trees.len());
+        for (foot, h, _, _) in &trees {
+            assert!(foot.x.abs() >= 50.0 + RIM_OUT_M.0 - 1e-3 || foot.z.abs() >= 30.0 + RIM_OUT_M.0 - 1e-3);
+            assert!(foot.y >= RIM_MIN_Y && (RIM_H.0..=RIM_H.1).contains(h));
+        }
+        // A flat arena has no rim to stand them on.
+        assert!(rim(|_, _| Some(0.0), (-50.0, -30.0), (50.0, 30.0), 3).is_empty());
     }
 
     #[test]

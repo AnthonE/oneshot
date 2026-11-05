@@ -101,7 +101,7 @@ pub struct GroundParams {
 /// bedded sandstone lifted to a sunlit red (its photograph is in shade).
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
-    Vec4::new(0.8, 1.3, 0.85, 1.0),
+    Vec4::new(0.66, 1.2, 0.62, 1.0),
     Vec4::new(0.95, 0.92, 0.88, 1.0),
     Vec4::new(1.45, 1.6, 2.1, 1.0),
 ];

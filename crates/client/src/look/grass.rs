@@ -224,16 +224,25 @@ pub fn cover(x: f32, z: f32, y: f32) -> f32 {
     by_height(y) * (1.0 - PATCH_BARE + PATCH_BARE * patch(x, z))
 }
 
+/// Under the floor (the beach, the creek's bed) nothing green grows, but
+/// the dunes and the bed keep a dry tuft here and there, down to this far
+/// above the sea, where the swash reaches.
+const DUNE_DRY: f32 = 0.06;
+const DUNE_ABOVE_SEA_M: f32 = 1.3;
+
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
 /// rule (level.rs): grass up the hills, none on steep rock or in the creek,
-/// in patches.
-fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
+/// in patches; dry tufts alone under the floor, above the sea at `sea`.
+fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
     let dz = ground(t, x, z + 0.5)? - ground(t, x, z - 0.5)?;
     let slope = (dx * dx + dz * dz).sqrt();
-    if slope > 0.55 || y < -0.12 {
+    if slope > 0.55 || y < sea + DUNE_ABOVE_SEA_M {
         return None;
+    }
+    if y < -0.12 {
+        return Some((0.0, DUNE_DRY));
     }
     let green = cover(x, z, y);
     Some((green, 0.07))
@@ -336,8 +345,16 @@ impl Soup {
 }
 
 /// The blocks of grass for a map's terrain: a mesh per block and density
-/// layer, its centre and its layer. Nothing grows where `clear` says.
-pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: &Clear) -> Vec<(Mesh, Vec2, u8)> {
+/// layer, its centre and its layer. Nothing grows where `clear` says, nor
+/// down by the sea at `sea` (`NEG_INFINITY`: none).
+pub fn blocks(
+    t: &TerrainDef,
+    lo: (f32, f32),
+    hi: (f32, f32),
+    seed: u32,
+    clear: &Clear,
+    sea: f32,
+) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let mut bz = lo.1;
     while bz < hi.1 {
@@ -353,7 +370,7 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: 
                     if x > hi.0 || z > hi.1 || clear.blocked(Vec2::new(x, z)) {
                         continue;
                     }
-                    let Some((green, dry)) = growth(t, x, z) else {
+                    let Some((green, dry)) = growth(t, x, z, sea) else {
                         continue;
                     };
                     let r = hash01(cell, 3);
@@ -511,8 +528,8 @@ mod tests {
             nz: 9,
             heights: &HILL,
         };
-        let all = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &Clear::default());
-        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c);
+        let all = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &Clear::default(), f32::NEG_INFINITY);
+        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c, f32::NEG_INFINITY);
         let near = |b: &[(Mesh, Vec2, u8)]| {
             b.iter()
                 .flat_map(|(m, ..)| {

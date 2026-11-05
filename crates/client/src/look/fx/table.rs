@@ -128,7 +128,7 @@ pub enum Layer {
     /// Glowing specks that drift and fall long after the sparks are gone.
     Embers,
     /// White water thrown up where the swell meets rock, falling back
-    /// (`sheets::DUST`'s low wide puff, in the sea's white: `ambient.rs`).
+    /// (`sheets::SMOKE`'s rolling puff, in the sea's white: `ambient.rs`).
     Spray,
     /// A mote in the sun: pollen, dust, a seed on the wind (`ambient.rs`).
     Mote,
@@ -265,7 +265,7 @@ impl Layer {
             Layer::MuzzleFlash => sheets::FLASH,
             Layer::Bloom => sheets::BLOOM,
             Layer::Wisp => sheets::WISP,
-            Layer::Spray => sheets::DUST,
+            Layer::Spray => sheets::SMOKE,
             Layer::Boom | Layer::Fireballs => sheets::EXPLOSION,
             _ => return None,
         })
@@ -766,7 +766,7 @@ pub fn built(layer: Layer) -> Recipe {
             c1: [1.0, 1.0, 1.0, 0.0],
             tinted: true,
             spin: 0.2,
-            ..strip(base, sheets::DUST)
+            ..strip(base, sheets::SMOKE)
         },
         // A few millimetres of light riding the wind and sinking a little:
         // it is there, then fades. Faint: a field of them is air, not snow.
