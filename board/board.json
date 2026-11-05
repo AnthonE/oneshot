@@ -1,6 +1,6 @@
 {
   "game": "oneshot",
-  "about": "The reference board: the art seen with no match running (the Bevy client's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/client.sh). The fx-* views are the fx stage's strips (tools/fx.sh, the fx skill): one effect over a dark and a light card, every frame of it, measured against the plate and the last run.",
+  "about": "The reference board: the art seen with no match running (the Bevy client's ?pose mode, ci/look.mjs on SwiftShader), beside references and the operator's marks. node tools/board.mjs look shoots every view and draws the sheet; build first (cargo build --release -p server, ci/client.sh). The fx-* views are the fx stage's strips (tools/fx.sh, the fx skill): one effect over a dark and a light card, every frame of it, measured against the plate and the last run. The hd-* views are Dry Fork from four fixed eyes, shot on this box's GPU at HIGH in seconds (tools/hd.sh; the hd skill is the loop), each beside the moodboard picture it is measured against (private: ELO_REF_DIR=moodboard).",
   "refs": "refs",
   "private_refs_env": "ELO_REF_DIR",
   "views": [
@@ -362,6 +362,84 @@
       ],
       "png": "traces/fx/shield-pop/strip.png",
       "refs": []
+    },
+    {
+      "id": "hd-beach",
+      "name": "Dry Fork: the beach, out to sea",
+      "what": "the beach at blue's back, looking out over the shallows to the horizon",
+      "take": "a shore you would stop to look at: rock in the water and on the sand, something standing out at sea, the sand's grain underfoot, a horizon under built cloud",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/beach.png",
+      "refs": [
+        {
+          "file": "hdlook4.jpeg",
+          "take": "dark rocks standing in the shallows and lying on the sand; sea stacks with green tops offshore; tufts and scrub on the beach; a hard clear horizon under built-up cumulus; sand with grain and tracks in it",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-cliff",
+      "name": "Dry Fork: the canyon wall from the floor",
+      "what": "the south wall from the middle of the floor, across the scree",
+      "take": "a wall that is rock: broken into faces and beds, lit and shaded, with growth on its ledges and at its foot",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/cliff.png",
+      "refs": [
+        {
+          "file": "hdlook2.webp",
+          "take": "a sunlit cliff broken into faces, trees and grass on its ledges and along its foot, green ground running up to it",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        },
+        {
+          "file": "hdlook1.jpg",
+          "take": "rock crisp close up: fractured planes, strata, moss and grass where a ledge holds soil",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-meadow",
+      "name": "Dry Fork: a hill's grass",
+      "what": "across red's north hill toward the wall and the far end",
+      "take": "ground cover that reads as a meadow, not tufts on sand: a carpet with clumps in it, flowers in drifts, bare tracks between",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/meadow.png",
+      "refs": [
+        {
+          "file": "hdlook3.jpg",
+          "take": "grass as a continuous carpet with taller clumps; yellow flowers in drifts; a worn dirt track; stones with moss; trees closing the view; shade dappled over the ground",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-vista",
+      "name": "Dry Fork: the canyon from red's roof",
+      "what": "from red's bunker roof down the canyon to the sea",
+      "take": "depth: near things crisp and saturated, each further thing a step paler; a sky with clouds that have tops and bases",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/vista.png",
+      "refs": [
+        {
+          "file": "hdlook1.jpg",
+          "take": "layers of distance, the near rock crisp and the far ridges stepping back into haze; cloud with lit tops and shaded bases, some below the skyline; water far below",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
     }
   ]
 }

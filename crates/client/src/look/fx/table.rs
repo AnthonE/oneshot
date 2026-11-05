@@ -127,6 +127,11 @@ pub enum Layer {
     Fireballs,
     /// Glowing specks that drift and fall long after the sparks are gone.
     Embers,
+    /// White water thrown up where the swell meets rock, falling back
+    /// (`sheets::DUST`'s low wide puff, in the sea's white: `ambient.rs`).
+    Spray,
+    /// A mote in the sun: pollen, dust, a seed on the wind (`ambient.rs`).
+    Mote,
 }
 
 /// Which pool a layer draws in.
@@ -144,7 +149,7 @@ pub enum Which {
 
 impl Layer {
     /// Every layer, in the order the knobs name them.
-    pub const ALL: [Layer; 25] = [
+    pub const ALL: [Layer; 27] = [
         Layer::Sparks,
         Layer::Flash,
         Layer::Dust,
@@ -170,6 +175,8 @@ impl Layer {
         Layer::Boom,
         Layer::Fireballs,
         Layer::Embers,
+        Layer::Spray,
+        Layer::Mote,
     ];
 
     /// Its name, as a knob names it (`Sparks.speed=4,12`).
@@ -200,6 +207,8 @@ impl Layer {
             Layer::Boom => "Boom",
             Layer::Fireballs => "Fireballs",
             Layer::Embers => "Embers",
+            Layer::Spray => "Spray",
+            Layer::Mote => "Mote",
         }
     }
 
@@ -225,7 +234,8 @@ impl Layer {
             | Layer::ShieldSparks
             | Layer::Shock
             | Layer::Tongue
-            | Layer::Embers => Which::Glow,
+            | Layer::Embers
+            | Layer::Mote => Which::Glow,
             Layer::Dust
             | Layer::Grit
             | Layer::Smoke
@@ -239,7 +249,8 @@ impl Layer {
             | Layer::Plasma
             | Layer::MuzzleFlash
             | Layer::Bloom
-            | Layer::Wisp => Which::Cloud,
+            | Layer::Wisp
+            | Layer::Spray => Which::Cloud,
             Layer::Boom | Layer::Fireballs => Which::Boom,
         }
     }
@@ -254,6 +265,7 @@ impl Layer {
             Layer::MuzzleFlash => sheets::FLASH,
             Layer::Bloom => sheets::BLOOM,
             Layer::Wisp => sheets::WISP,
+            Layer::Spray => sheets::DUST,
             Layer::Boom | Layer::Fireballs => sheets::EXPLOSION,
             _ => return None,
         })
@@ -736,6 +748,38 @@ pub fn built(layer: Layer) -> Recipe {
             grow: 0.6,
             c0: [8.0, 8.0, 8.0, 1.0],
             c1: [1.6, 1.6, 1.6, 0.0],
+            tinted: true,
+            ..base
+        },
+        // Thrown up a couple of metres and let fall, swelling as it thins:
+        // a wave breaking on a rock, seen from the beach.
+        Layer::Spray => Recipe {
+            speed: (2.0, 4.5),
+            spray: 0.75,
+            up: 1.0,
+            gravity: 5.0,
+            drag: 1.4,
+            life: (0.9, 1.5),
+            size: (0.7, 1.2),
+            grow: 2.2,
+            c0: [1.0, 1.0, 1.0, 0.8],
+            c1: [1.0, 1.0, 1.0, 0.0],
+            tinted: true,
+            spin: 0.2,
+            ..strip(base, sheets::DUST)
+        },
+        // A few millimetres of light riding the wind and sinking a little:
+        // it is there, then fades. Faint: a field of them is air, not snow.
+        Layer::Mote => Recipe {
+            cell: GLOW,
+            speed: (0.15, 0.6),
+            spray: 0.8,
+            gravity: 0.03,
+            drag: 0.1,
+            life: (3.5, 6.5),
+            size: (0.012, 0.022),
+            c0: [1.5, 1.35, 0.95, 0.9],
+            c1: [1.5, 1.35, 0.95, 0.0],
             tinted: true,
             ..base
         },

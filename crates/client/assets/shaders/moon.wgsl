@@ -7,7 +7,7 @@
     mesh_view_bindings::{view, globals},
     view_transformations::position_world_to_clip,
 }
-#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_value, deck_drift, slab_step, slab_warp, slab_shape}
+#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_value, deck_drift, slab_step, slab_warp, slab_shape, slab_wide_lod}
 
 // Steps through the raymarched slab for a cover reading (`deck.wgsl`'s
 // `slab_shape`): the shape alone, no erosion, so a cloud hides a little
@@ -148,8 +148,11 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
             let s = slab_step(d, view.world_position.y, moon.slab, moon.deck.y, i, SLAB_STEPS);
             let h = (s.y - moon.slab.x) / (moon.slab.y - moon.slab.x);
             let sq = (s.xz + slab_warp(s.xyz, h)) / moon.slab.z + drift;
-            let sf = textureSampleLevel(field_tex, field_samp, sq * moon.field.x + moon.field.y, 1.0).r;
-            tau += slab_shape(h, (sf - moon.cloud.z) / moon.cloud.w) * moon.slab.w * s.w;
+            let suv = sq * moon.field.x + moon.field.y;
+            let sf = textureSampleLevel(field_tex, field_samp, suv, 1.0).r;
+            let wide_lod = slab_wide_lod(f32(textureDimensions(field_tex).x), moon.field.x / moon.slab.z);
+            let sw = textureSampleLevel(field_tex, field_samp, suv, max(wide_lod, 1.0)).r;
+            tau += slab_shape(h, (sf - moon.cloud.z) / moon.cloud.w, (sw - moon.cloud.z) / moon.cloud.w) * moon.slab.w * s.w;
         }
         cov = (1.0 - exp(-tau)) * deck_fade(d.y, moon.deck.y, moon.deck.z);
     }

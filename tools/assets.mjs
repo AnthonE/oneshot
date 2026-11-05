@@ -49,9 +49,11 @@ const SOUNDS = [
 // assets/models/MANIFEST.md, prop/rock/).
 const ROCKS = ['a', 'b', 'c', 'd', 'e', 'f'].map((k) => `block_${k}_far.glb`);
 
-// The ground's four (sand, grass, the creek's gravel, rock) and the boxes'.
-const SETS = ['sand', 'grass', 'gravel', 'rock', 'concrete', 'metal'];
-const BOX_SETS = ['concrete', 'metal', 'rock'];
+// The boxes' two. The ground's four (sand, grass, the creek's gravel, and
+// the rock, which the rock boxes wear too) are ours to pick now:
+// tools/ground.sh cuts them from Poly Haven.
+const SETS = ['concrete', 'metal'];
+const BOX_SETS = ['concrete', 'metal'];
 
 // The models: Gates' files as they are into a scratch folder, then tools/glb
 // re-embeds their textures into ours.

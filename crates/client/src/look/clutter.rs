@@ -66,6 +66,32 @@ const _: () = assert!(
     "a dry plant must stay under CLUTTER_MAX_H"
 );
 
+/// A flower's stalk, metres, least and most, its radius at the root, and
+/// its head's half-extents: a drift of them reads from across a hill, and
+/// the tallest is still under a crouching fighter's knee.
+const FLOWER_H: (f32, f32) = (0.12, 0.26);
+const FLOWER_STALK_R: f32 = 0.004;
+const FLOWER_HEAD: Vec3 = Vec3::new(0.04, 0.018, 0.04);
+/// How many stand in one cell's clump, least and most, and how far from
+/// its middle.
+const FLOWER_CLUMP: (u32, u32) = (2, 5);
+const FLOWER_CLUMP_R: f32 = 0.3;
+/// The share of a drift's cells that flower, and where in the drift noise
+/// ([`drift`]) a drift starts and is whole: a few percent of a meadow.
+const FLOWER_SHARE: f32 = 0.7;
+const FLOWER_DRIFT: (f32, f32) = (0.54, 0.66);
+/// Flowers want turf: none where the grass's share of the ground is under
+/// this.
+const FLOWER_TURF: f32 = 0.45;
+const _: () = assert!(
+    FLOWER_H.1 + FLOWER_HEAD.y < CLUTTER_MAX_H,
+    "a flower must stay under CLUTTER_MAX_H"
+);
+/// A drift's colours, sRGB: most of them yellow, some white, a few violet;
+/// and a stalk's green.
+const FLOWER_C: [u32; 3] = [0xf0c02a, 0xf1eee2, 0x9a7fe0];
+const STALK_C: u32 = 0x4f6a2a;
+
 /// A pebble's half-extents at scale 1 (Gates'), and its scale range.
 const PEBBLE: Vec3 = Vec3::new(0.06, 0.028, 0.05);
 const PEBBLE_K: (f32, f32) = (0.7, 1.6);
@@ -427,6 +453,74 @@ fn dry_plant(s: &mut Soup, at: Vec3, seed: u32) {
     }
 }
 
+/// How much of a flower drift (x, z) is in, 0..1: the meadow's own patch
+/// noise read elsewhere and broader, so the drifts are not the grass's
+/// patches.
+pub(crate) fn drift(x: f32, z: f32) -> f32 {
+    let n = grass::patch(x * 0.7 + 91.0, z * 0.7 - 37.0);
+    ((n - FLOWER_DRIFT.0) / (FLOWER_DRIFT.1 - FLOWER_DRIFT.0)).clamp(0.0, 1.0)
+}
+
+/// A clump of flowers round `at`: each a thin green stalk that sways as the
+/// dry plants do, and a small bright head on it, the drift's colour.
+fn flowers(s: &mut Soup, t: &TerrainDef, at: Vec3, seed: u32) {
+    // One colour a drift, mostly: the hue varies over tens of metres.
+    let hue = grass::patch(at.x * 0.15 + 7.0, at.z * 0.15 + 3.0) + (hash01(seed, 31) - 0.5) * 0.12;
+    let head = linear(
+        FLOWER_C[if hue < 0.56 {
+            0
+        } else if hue < 0.68 {
+            1
+        } else {
+            2
+        }],
+    );
+    let stalk = linear(STALK_C);
+    let n = FLOWER_CLUMP.0 + (hash01(seed, 32) * (FLOWER_CLUMP.1 - FLOWER_CLUMP.0 + 1) as f32) as u32;
+    for k in 0..n.min(FLOWER_CLUMP.1) {
+        let a = hash01(seed, 40 + k) * TAU;
+        let r = hash01(seed, 50 + k).sqrt() * FLOWER_CLUMP_R;
+        let (x, z) = (at.x + a.cos() * r, at.z + a.sin() * r);
+        let Some(y) = grass::ground(t, x, z) else {
+            continue;
+        };
+        let h = FLOWER_H.0 + (FLOWER_H.1 - FLOWER_H.0) * hash01(seed, 60 + k);
+        let root = Vec3::new(x, y - 0.01, z);
+        let lean = Vec3::new(hash01(seed, 70 + k) - 0.5, 0.0, hash01(seed, 80 + k) - 0.5) * 0.25 * h;
+        let top = Vec3::new(x, y + h, z) + lean;
+        let rand = hash01(seed, 211 + k);
+        // The stalk: three sides, round normals.
+        let side = Vec3::X;
+        let other = Vec3::Z;
+        let base = s.pos.len() as u32;
+        for (p, rad) in [(root, FLOWER_STALK_R), (top, FLOWER_STALK_R * 0.6)] {
+            for i in 0..3 {
+                let t3 = i as f32 * TAU / 3.0;
+                let out = side * t3.cos() + other * t3.sin();
+                let q = p + out * rad;
+                s.vert(q, out, stalk, [(q.y - y).max(0.0), rand]);
+            }
+        }
+        for i in 0..3u32 {
+            let j = (i + 1) % 3;
+            s.idx
+                .extend_from_slice(&[base + i, base + j, base + 3 + i, base + j, base + 3 + j, base + 3 + i]);
+        }
+        // The head: a stone's lump, lit as the sky sees it so it stays
+        // bright from any side, riding the stalk's tip.
+        let size = FLOWER_HEAD * (0.8 + 0.5 * hash01(seed, 90 + k));
+        let (corners, _) = stone_corners(top, a, size, seed ^ (k + 1));
+        let c = scale3(head, 0.9 + 0.2 * hash01(seed, 100 + k));
+        let hb = s.pos.len() as u32;
+        for p in corners {
+            s.vert(p, Vec3::Y, c, [h, rand]);
+        }
+        for tri in STONE_TRIS {
+            s.idx.extend(tri.map(|i| hb + i as u32));
+        }
+    }
+}
+
 /// What a cell grows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Piece {
@@ -562,6 +656,10 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: 
                     // ground (`cliffs.rs`): a pebble there would sink under it.
                     if w[3] >= super::cliffs::SKIN_ROCK_LO {
                         continue;
+                    }
+                    // Flowers in drifts over the turf, a roll of their own.
+                    if w[1] >= FLOWER_TURF && hash01(cell, 15) < drift(x, z) * FLOWER_SHARE {
+                        flowers(&mut soups[layer_of(hash01(cell, 16))], t, Vec3::new(x, y, z), cell);
                     }
                     let Some(kind) = piece_of(&Grows::at(w), hash01(cell, 3)) else {
                         continue;

@@ -53,7 +53,11 @@ pub const SUN_DISK_PEAK: f32 = 2000.0;
 /// read a slate sky, rgb(105, 127, 159) where theirs was rgb(153, 189, 231),
 /// and no exposure brightens the sky without moving the ground). Added to
 /// WebGL2's own clear sky too (`deck.rs`), which read that same slate.
-pub const SKY_LIFT: f32 = 0.5;
+pub const SKY_LIFT: f32 = 0.42;
+/// How far that daylight's colour is pushed from grey toward the air's own
+/// blue (1: the air's scatter as it is, haze and all, which lifted the sky
+/// to a pale lavender; the references' is a deep clear blue).
+pub const SKY_LIFT_SATURATION: f32 = 1.9;
 
 /// The world's camera, whatever else marks it: what the graphics tier
 /// (`quality::apply`) and the render scale (`render_scale.rs`) dress.
@@ -103,6 +107,15 @@ pub fn sun_disk_intensity(illuminance: f32, ev100: f32) -> f32 {
     } else {
         SUN_DISK_INTENSITY.min(SUN_DISK_PEAK / per)
     }
+}
+
+/// The colour of the daylight added behind the deck ([`SKY_LIFT`]): the
+/// air's own scatter at luminance 1, pushed [`SKY_LIFT_SATURATION`] from
+/// grey and brought back to luminance 1.
+pub fn sky_lift_chroma() -> Vec3 {
+    let c = Vec3::from_array(super::sky::air_chroma());
+    let s = (Vec3::ONE + (c - Vec3::ONE) * SKY_LIFT_SATURATION).max(Vec3::splat(0.02));
+    s / super::fill::luminance(s.to_array()).max(1e-4)
 }
 
 /// The camera, with its whole post stack.

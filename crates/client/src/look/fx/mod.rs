@@ -33,8 +33,10 @@
 //! - `blast`: explosions and a wreck's fire. `flying`: rockets and frags.
 //! - `bodies`: shields flaring and breaking, landings, spawns, pickups.
 //! - `hulls`: vehicles' dust, and smoke and fire when hurt.
+//! - `ambient`: the map's own motion: sea spray, motes in the sun.
 //! - `demo`: `?fxdemo=1`, each effect staged in front of the camera.
 
+pub mod ambient;
 pub mod atlas;
 pub mod blast;
 pub mod bodies;

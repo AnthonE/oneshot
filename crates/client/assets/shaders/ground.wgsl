@@ -24,6 +24,29 @@
 // Wet ground's roughness (dry is the material's), and how far the wet
 // line wanders (m) over its noise's wavelength (m).
 const WET_ROUGHNESS: f32 = 0.35;
+// The rock's beds. Its photograph repeats every few metres, and a 45 m
+// wall of one tile is a striped cloth; a cliff is beds of different stone,
+// each a metre or three thick and its own tone, dipping and wandering along
+// the wall. `BED_M` is a bed's thickness and `BED_RUN_M` how far one runs
+// before it changes; the thick ones (`BED_THICK`) ride over them, some of
+// them pale (`BED_PALE`, a cream caprock against the red). `BED_DIP_M` is
+// how far a bed wanders off level over `BED_DIP_WAVE_M`, and the
+// photograph is slid by the same so its laminations follow.
+const BED_M: f32 = 1.9;
+const BED_RUN_M: f32 = 70.0;
+const BED_THICK: f32 = 3.6;
+const BED_TONE: f32 = 0.2;
+const BED_TONE_THICK: f32 = 0.16;
+const BED_PALE: vec3<f32> = vec3<f32>(1.12, 1.16, 1.22);
+const BED_DIP_M: f32 = 3.0;
+const BED_DIP_WAVE_M: f32 = 27.0;
+// The soil is never one value either: broad patches over the floor, this
+// far either side of the photograph's mean, `SOIL_PATCH_M` across.
+const SOIL_PATCH: f32 = 0.14;
+const SOIL_PATCH_M: f32 = 19.0;
+// How much of the skin's baked value the rock keeps: at full strength its
+// recesses read as stains across the beds.
+const SKIN_VALUE: f32 = 0.25;
 const WET_WANDER_M: f32 = 0.25;
 const WET_WANDER_WAVE_M: f32 = 3.0;
 
@@ -368,12 +391,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let kb = (ka + 1) % 4;
         var wall: Wall;
         wall.share_b = clamp((steps - f32(ka) - 0.5) / ground.wall_planes.x + 0.5, 0.0, 1.0);
+        // The beds' dip (`BED_DIP_M`): smooth and tens of metres long, so
+        // the gradients below still pick the photograph's mip.
+        let dip = (value3(wp / BED_DIP_WAVE_M) - 0.5) * BED_DIP_M;
         wall.axis_a = wall_axis(ka);
-        wall.uv_a = vec2<f32>(dot(wp.xz, wall.axis_a), -wp.y);
+        wall.uv_a = vec2<f32>(dot(wp.xz, wall.axis_a), -wp.y - dip);
         wall.dx_a = vec2<f32>(dot(dp_dx.xz, wall.axis_a), -dp_dx.y);
         wall.dy_a = vec2<f32>(dot(dp_dy.xz, wall.axis_a), -dp_dy.y);
         wall.axis_b = wall_axis(kb);
-        wall.uv_b = vec2<f32>(dot(wp.xz, wall.axis_b), -wp.y);
+        wall.uv_b = vec2<f32>(dot(wp.xz, wall.axis_b), -wp.y - dip);
         wall.dx_b = vec2<f32>(dot(dp_dx.xz, wall.axis_b), -dp_dx.y);
         wall.dy_b = vec2<f32>(dot(dp_dy.xz, wall.axis_b), -dp_dy.y);
         if w.x > 0.0 {
@@ -412,9 +438,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let near_big = 1.0 - smoothstep(0.05, 0.25, big_px);
     let near_fine = 1.0 - smoothstep(0.05, 0.25, fine_px);
     var rock_shade = 1.0;
+    var rock_hue = vec3<f32>(1.0);
     var rock_tilt = vec3<f32>(0.0);
     if w.w > 0.002 && !lite {
         var shade = 1.0;
+        // The beds: each its own tone, the thick ones over the thin, a few
+        // of the thick ones pale.
+        let by = wp.y + (value3(wp / BED_DIP_WAVE_M) - 0.5) * BED_DIP_M;
+        let bed = value3(vec3<f32>(wp.x / BED_RUN_M, by / BED_M, wp.z / BED_RUN_M));
+        let thick = value3(vec3<f32>(wp.x / (BED_RUN_M * 1.7) + 5.3, by / (BED_M * BED_THICK), wp.z / (BED_RUN_M * 1.7) + 2.9));
+        shade = 1.0 + BED_TONE * (2.0 * smoothstep(0.3, 0.7, bed) - 1.0) + BED_TONE_THICK * (2.0 * smoothstep(0.35, 0.65, thick) - 1.0);
+        rock_hue = mix(vec3<f32>(1.0), BED_PALE, smoothstep(0.62, 0.8, thick));
         var t_big = vec3<f32>(0.0);
         // Skipped where it would add nothing: every output of the block pass
         // is scaled by `near_big`, and a crack needs half a pixel of width,
@@ -471,13 +505,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     //
     // Each photograph times the map's own soil, the rock's by its blocks'
     // shade.
-    var c = a0.rgb * ground.tint[0].rgb * w.x
+    let soil = 1.0 + SOIL_PATCH * (2.0 * (0.65 * value3(vec3<f32>(wp.x, 0.0, wp.z) / SOIL_PATCH_M)
+        + 0.35 * value3(vec3<f32>(wp.x, 0.0, wp.z) / (SOIL_PATCH_M * 0.31) + vec3<f32>(9.1, 0.0, 4.7))) - 1.0);
+    var c = (a0.rgb * ground.tint[0].rgb * w.x
         + a1.rgb * ground.tint[1].rgb * w.y
-        + a2.rgb * ground.tint[2].rgb * w.z
-        + a3.rgb * ground.tint[3].rgb * (w.w * rock_shade);
+        + a2.rgb * ground.tint[2].rgb * w.z) * soil
+        + a3.rgb * ground.tint[3].rgb * rock_hue * (w.w * rock_shade);
 #ifdef VERTEX_UVS_B
     // The skin's facets: recessed darker, proud lighter.
-    c *= in.uv_b.x;
+    c *= mix(1.0, in.uv_b.x, SKIN_VALUE);
 #endif
 
     // The swash: from under the water to `sea.y` above it the ground is

@@ -45,18 +45,39 @@ fn slab_warp(p: vec3<f32>, h: f32) -> vec2<f32> {
 }
 
 // The slab's density before erosion at height `h` (`0..1` through it) in a
-// column `c` edges past the field's threshold. A flat base at the
+// column `c` edges past the field's threshold, `wide` edges past it in the
+// field blurred to `SLAB_WIDE_M` (`slab_wide_lod`). A flat base at the
 // condensation level and a dome over it: the field is near linear across a
 // cloud's edge, so a height linear in it builds cones, and its square root
-// builds the rounded top of a hemisphere. Steeper than the flat deck's edge:
-// a cumulus has a skin.
-fn slab_shape(h: f32, c: f32) -> f32 {
+// builds the rounded top of a hemisphere.
+//
+// **A cloud is as tall as it is broad.** The dome's height is read off the
+// blurred field, which only a broad cloud's middle stands above: a puff a
+// couple of hundred metres across stays a low scrap (`SLAB_EDGE_TOP` of the
+// slab), and a cloud a kilometre across builds to `SLAB_DOME` of it. Read
+// off the column's own value, as it was, every peak in the field stood a
+// sixth of the slab tall at its very edge: each cloud had a wall for a
+// side, and a small one was a pillar. Its skin is a little soft
+// (`SLAB_SKIN` edges to full density), so the erosion has an edge to carve.
+const SLAB_WIDE_M: f32 = 260.0;
+const SLAB_EDGE_TOP: f32 = 0.06;
+const SLAB_DOME: f32 = 0.8;
+const SLAB_DOME_OVER: f32 = 0.45;
+const SLAB_SKIN: f32 = 0.7;
+
+// The field's mip whose texel is `SLAB_WIDE_M` across: `texels` a side,
+// `uv_per_m` of its UV to a metre across the deck.
+fn slab_wide_lod(texels: f32, uv_per_m: f32) -> f32 {
+    return max(log2(SLAB_WIDE_M * uv_per_m * texels), 0.0);
+}
+
+fn slab_shape(h: f32, c: f32, wide: f32) -> f32 {
     if c <= 0.0 || h <= 0.0 || h >= 1.0 {
         return 0.0;
     }
-    let top = 0.15 + 0.7 * sqrt(clamp(c * 0.4, 0.0, 1.0));
-    let profile = smoothstep(0.0, 0.06, h) * (1.0 - smoothstep(top * 0.55, top, h));
-    return smoothstep(0.0, 0.45, c) * profile;
+    let top = SLAB_EDGE_TOP + SLAB_DOME * sqrt(clamp(wide * SLAB_DOME_OVER, 0.0, 1.0));
+    let profile = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(top * 0.5, top, h));
+    return smoothstep(0.0, SLAB_SKIN, c) * profile;
 }
 
 // Where a ray from the eye (at height `eye_y`) is at its `i`th of `n` even

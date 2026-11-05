@@ -66,7 +66,7 @@ pub const DRY_STEPS: f32 = 15.0;
 const COLS: u32 = 2;
 const ROWS: u32 = 2;
 /// The scatter's cell, and a block's side.
-const STEP_M: f32 = 0.7;
+const STEP_M: f32 = 0.58;
 pub const BLOCK_M: f32 = 16.0;
 /// Past this a block isn't drawn, on any rung (Gates fades grass out by
 /// 46 m).
@@ -198,19 +198,24 @@ pub fn ground(t: &TerrainDef, x: f32, z: f32) -> Option<f32> {
 
 /// The grass is patchy: its patches ([`patch`], metres across) bare the
 /// ground this far, in the splat and the tufts alike.
-const PATCH_BARE: f32 = 0.75;
+const PATCH_BARE: f32 = 0.6;
 
-/// Where grass grows by height: none on the creek's floor, full from
-/// this height, and gone again above the next (the scree's top and the
-/// cliffs' ledges are bare).
-const GREEN_FROM: (f32, f32) = (1.0, 2.5);
-const GREEN_TO: (f32, f32) = (6.0, 10.0);
+/// Where grass grows by height: none in the creek's bed or down the beach
+/// (both under the floor), a meadow over the canyon's floor and its hills
+/// from this height, and gone again above the next (the scree's top is
+/// bare). Then again on what lies flat far above the walls: the mesas'
+/// tops are green from the floor, a thinner cover.
+const GREEN_FROM: (f32, f32) = (-0.3, 0.2);
+const GREEN_TO: (f32, f32) = (8.0, 13.0);
+const TOP_FROM: (f32, f32) = (30.0, 38.0);
+const TOP_COVER: f32 = 0.7;
 
 /// How much grass the height `y` allows, 0..1.
 pub fn by_height(y: f32) -> f32 {
     let up = ((y - GREEN_FROM.0) / (GREEN_FROM.1 - GREEN_FROM.0)).clamp(0.0, 1.0);
     let down = 1.0 - ((y - GREEN_TO.0) / (GREEN_TO.1 - GREEN_TO.0)).clamp(0.0, 1.0);
-    up * down
+    let top = ((y - TOP_FROM.0) / (TOP_FROM.1 - TOP_FROM.0)).clamp(0.0, 1.0) * TOP_COVER;
+    (up * down).max(top)
 }
 
 /// How much grass grows at (x, z) at height `y`, by its height and its

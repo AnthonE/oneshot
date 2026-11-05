@@ -25,7 +25,7 @@
 // frame.
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::coords_to_viewport_uv
-#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, slab_warp, slab_shape}
+#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, slab_warp, slab_shape, slab_wide_lod}
 #ifdef BACKDROP
 #import "shaders/shaft_march.wgsl"::{shaft_lost}
 #endif
@@ -205,8 +205,15 @@ fn density(p: vec3<f32>, lod: f32, dlod: f32, detail: i32) -> f32 {
     if h <= 0.0 || h >= 1.0 {
         return 0.0;
     }
-    let c = (field_at(p.xz + slab_warp(p, h), lod + 0.5) - cl.top.w) / cl.base.w;
-    let shape = slab_shape(h, c);
+    let xz = p.xz + slab_warp(p, h);
+    let c = (field_at(xz, lod + 0.5) - cl.top.w) / cl.base.w;
+    if c <= 0.0 {
+        return 0.0;
+    }
+    // How broad the cloud is here: the field blurred, for its height.
+    let wide_lod = slab_wide_lod(f32(textureDimensions(field_tex).x), cl.drift.z / cl.slab.z);
+    let wide = (field_at(xz, max(wide_lod, lod + 0.5)) - cl.top.w) / cl.base.w;
+    let shape = slab_shape(h, c, wide);
     if shape <= 0.0 || detail == 0 {
         return shape;
     }
@@ -225,7 +232,10 @@ fn density(p: vec3<f32>, lod: f32, dlod: f32, detail: i32) -> f32 {
         let nf = textureSampleLevel(detail_tex, detail_samp, wf, dlod + 1.63).r;
         n = n * 0.7 + nf * 0.3;
     }
-    let e = (1.0 - n) * (0.55 + 0.3 * h);
+    // The noise's middle is stretched to its ends first: read as it comes,
+    // most of it sits near one value and the erosion only shrinks the
+    // cloud evenly; stretched, it bites lumps out of the skin.
+    let e = (1.0 - smoothstep(0.2, 0.8, n)) * (0.72 + 0.26 * h);
     return clamp((shape - e) / (1.0 - e), 0.0, 1.0);
 }
 

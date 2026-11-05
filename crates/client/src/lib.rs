@@ -470,6 +470,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::SkyClock>()
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
+    .init_resource::<look::fx::ambient::Ambient>()
     .init_resource::<look::shafts::WebShafts>()
     .init_resource::<look::cliffs::SkinLift>()
     // The sea (look/water.rs) and its waves.
@@ -481,6 +482,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             setup,
             look::textures::load,
             look::rock::load,
+            look::boulders::load,
             look::guns::load,
             look::viewmodel::kit,
             look::own_shadow::setup,
@@ -542,7 +544,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             rebuild,
             look::textures::prepare,
             (look::textures::mip_models, look::fx::sheets::mip_sheets),
-            look::rock::dress_masses,
+            (look::rock::dress_masses, look::boulders::dress),
             (
                 level::dress_level,
                 look::grass::dress,
@@ -561,7 +563,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             // its muzzle as posed this frame (`fx/shots.rs`).
             draw_view,
             look::viewmodel::shimmer,
-            look::fx::draw,
+            (look::fx::ambient::drive, look::fx::draw).chain(),
             hud::draw,
             (hud::gear, hud::vitals, hud::corner, scope::draw),
             hud::hurt_rim,

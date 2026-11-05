@@ -81,7 +81,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         3 => ("panel", 4.0, Color::srgb(0.78, 0.36, 0.32)),
         4 => ("panel", 4.0, Color::srgb(0.32, 0.45, 0.78)),
         5 => ("metal", 2.0, Color::srgb(0.45, 0.47, 0.5)),
-        ROCK => ("rock", 2.5, Color::srgb(0.95, 0.58, 0.42)),
+        ROCK => ("rock", 2.5, Color::linear_rgb(1.45, 1.6, 2.1)),
         7 => ("panel", 4.0, Color::srgb(0.42, 0.46, 0.53)),
         11 => ("panel", 4.0, Color::srgb(0.78, 0.8, 0.83)),
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
@@ -367,7 +367,7 @@ fn turned_mesh(size: Vec3, mid: Vec3, rot: Quat, tile: f32) -> Mesh {
 }
 
 /// A box still in its plain colour (a mass waits for its pieces first).
-type Undressed = (Without<Dressed>, Without<Mass>);
+type Undressed = (Without<Dressed>, Without<Mass>, Without<crate::look::boulders::Boulder>);
 
 /// The level's ground and boxes in their textures, once those are ready:
 /// the ground (and its rock skin) in the splat material, every textured
@@ -817,8 +817,18 @@ pub fn build(
         ));
         if let Some(m) = mass {
             e.insert(m);
+        } else if l == ROCK && !out {
+            // A rock a fighter can reach: a boulder inside its box, once
+            // the models are in (`look/boulders.rs`).
+            e.insert(crate::look::boulders::Boulder {
+                min,
+                max,
+                key: box_key(mid, id),
+            });
         }
     }
+    // Rock out of reach: the sea's stacks and stones.
+    crate::look::boulders::spawn_scenery(commands, id);
     // The dressing (`def.dress`: drawn, never collided): the ship's pods,
     // trims, vaults and ribs, each by its look, over the sim's boxes.
     for &(b, l) in def.dress {

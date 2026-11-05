@@ -95,13 +95,15 @@ pub struct GroundParams {
     pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
-/// Dry Fork's soils over Gates' photographs: warm desert sand, dry grass,
-/// the creek's tan gravel, red rock.
+/// Dry Fork's soils over their photographs (`tools/ground.sh`, which
+/// prints each one's mean): the sand a shade paler and less orange than it
+/// was shot, the turf greener, the creek's stones as they are, and the
+/// bedded sandstone lifted to a sunlit red (its photograph is in shade).
 pub const TINT: [Vec4; 4] = [
-    Vec4::new(1.18, 0.96, 0.74, 1.0),
-    Vec4::new(1.05, 0.98, 0.8, 1.0),
-    Vec4::new(1.1, 0.9, 0.72, 1.0),
-    Vec4::new(1.0, 0.54, 0.38, 1.0),
+    Vec4::new(1.0, 1.1, 1.25, 1.0),
+    Vec4::new(0.8, 1.3, 0.85, 1.0),
+    Vec4::new(0.95, 0.92, 0.88, 1.0),
+    Vec4::new(1.45, 1.6, 2.1, 1.0),
 ];
 
 // --- The cliff, per pixel ---------------------------------------------------
@@ -404,13 +406,17 @@ mod tests {
             "an implicit sample under the wall branch"
         );
         // Each plane's axis is a constant of an integer plane index, and
-        // its UV reads nothing per fragment but the world position.
+        // its UV reads nothing per fragment but the world position: linear
+        // in it but for the beds' dip, a smooth slide of the photograph
+        // (`BED_DIP_M` over `BED_DIP_WAVE_M`, a slope under a fifth) that
+        // the gradients below leave out, so the mip is the linear UV's.
         let axis = body("wall_axis");
         assert!(axis.contains("array<vec2<f32>, 4>") && !axis.contains("normal"));
+        assert!(block.contains("let dip = (value3(wp / BED_DIP_WAVE_M) - 0.5) * BED_DIP_M;"));
         for side in ["a", "b"] {
             assert!(block.contains(&format!("wall.axis_{side} = wall_axis(k{side});")));
             assert!(block.contains(&format!(
-                "wall.uv_{side} = vec2<f32>(dot(wp.xz, wall.axis_{side}), -wp.y);"
+                "wall.uv_{side} = vec2<f32>(dot(wp.xz, wall.axis_{side}), -wp.y - dip);"
             )));
             assert!(block.contains(&format!(
                 "wall.dx_{side} = vec2<f32>(dot(dp_dx.xz, wall.axis_{side}), -dp_dx.y);"

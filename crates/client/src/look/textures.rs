@@ -17,9 +17,14 @@ use bevy::render::render_resource::{
 };
 
 /// The ground's sets in splat order, and how many metres each repeats
-/// over (Gates' `GROUND_TILE_M`: each drawn at its photographed size).
+/// over (Gates' `GROUND_TILE_M`): the soils at the size they were
+/// photographed (`tools/ground.sh`), the rock at five times its own, so a
+/// bed of its strata is a metre thick and reads from the canyon floor
+/// (a centimetre a texel, still finer than anyone stands to a cliff);
+/// at its own 1.8 m a 45 m wall was one flat value, and at 4 m a striped
+/// cloth.
 pub const GROUND: [&str; 4] = ["sand", "grass", "gravel", "rock"];
-pub const GROUND_TILE_M: [f32; 4] = [2.14, 2.0, 1.6, 1.8];
+pub const GROUND_TILE_M: [f32; 4] = [2.48, 2.51, 2.0, 9.6];
 /// The boxes' sets.
 pub const BOXES: [&str; 3] = ["concrete", "metal", "rock"];
 

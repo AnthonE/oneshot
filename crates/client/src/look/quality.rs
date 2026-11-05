@@ -59,6 +59,7 @@
 //! WebGL2); and bloom veils a little round a bright flash on the rungs
 //! that have it. Both are a few percent of fill light, never a shadow.
 
+use bevy::anti_alias::contrast_adaptive_sharpening::ContrastAdaptiveSharpening;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
 use bevy::anti_alias::taa::TemporalAntiAliasing;
@@ -654,11 +655,27 @@ fn dress(e: &mut EntityCommands, t: &Tier) {
     let taa = t.gfx.aa == Aa::Taa;
     if taa {
         e.remove::<(Smaa, Fxaa)>();
-        e.insert(TemporalAntiAliasing::default());
+        // TAA resolves the jitter into a frame a little out of focus (the
+        // grass and every far edge, measured against SMAA's on the same
+        // view): the sharpening Bevy pairs with it takes that back.
+        e.insert((
+            TemporalAntiAliasing::default(),
+            ContrastAdaptiveSharpening {
+                enabled: true,
+                sharpening_strength: TAA_SHARPEN,
+                denoise: false,
+            },
+        ));
     } else {
         // TAA's required components outlive it: left behind, the frame
         // jitters with nothing to resolve it.
-        e.remove::<(TemporalAntiAliasing, TemporalJitter, MipBias, MotionVectorPrepass)>();
+        e.remove::<(
+            TemporalAntiAliasing,
+            TemporalJitter,
+            MipBias,
+            MotionVectorPrepass,
+            ContrastAdaptiveSharpening,
+        )>();
         match t.gfx.aa {
             Aa::Smaa => {
                 e.remove::<Fxaa>();
@@ -688,6 +705,9 @@ fn dress(e: &mut EntityCommands, t: &Tier) {
         }
     }
 }
+
+/// How hard the frame is sharpened after TAA (Bevy's CAS, 0 to 1).
+pub const TAA_SHARPEN: f32 = 0.7;
 
 /// The prepass room (`gpu::GpuCaps::prepass_room`) from which a prepass a
 /// rung no longer needs is kept rather than taken off (Gates' three).

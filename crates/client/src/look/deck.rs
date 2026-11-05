@@ -82,8 +82,10 @@ pub const SKY_FOG_ORDER: f32 = -0.5e8;
 /// How thick the raymarched slab is, metres, from `sky::CLOUD_ALT_M` up.
 pub const SLAB_M: f32 = 1000.0;
 /// Extinction per metre at density 1: thin enough that the edges read as
-/// soft, while three hundred metres of core still stops the sun.
-pub const CLOUD_SIGMA: f32 = 0.018;
+/// soft, while two hundred metres of core still stops the sun. Thinner
+/// (0.018), the lumps the erosion cuts in a cloud's skin were lost in its
+/// own haze.
+pub const CLOUD_SIGMA: f32 = 0.029;
 /// One tile of the detail noise, metres. It divides the field's own period
 /// (`FIELD_PERIOD × CLOUD_SCALE_M`, 28.8 km), so when the drift wraps the
 /// detail riding on it lands where it was.
@@ -220,7 +222,7 @@ impl CloudParams {
         // skies: the backdrop under WebGL2 is the slate the atmosphere alone
         // drew (`rig::SKY_LIFT`), and without it a browser's sky read a
         // stop darker than the desktop's and, through Dry Fork's dust, grey.
-        let lift = Vec3::from_array(sky::air_chroma())
+        let lift = super::rig::sky_lift_chroma()
             * super::rig::SKY_LIFT
             * p.light
             * (p.sun.y / 0.25).clamp(0.0, 1.0)
