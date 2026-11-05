@@ -5,7 +5,8 @@
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
 //! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
-//! `emblem=` (a `proto::Emblem`) and `team=` dress it. `reload=1` reloads it, over and over; `die=S`
+//! `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
+//! overshield and `cloak=` camouflage (0..1, how hidden). `reload=1` reloads it, over and over; `die=S`
 //! kills it S seconds after the screen is there, shot from the camera (a
 //! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
 //! doll (`look/rag.rs`) can be looked at.
@@ -13,6 +14,13 @@
 //! A map's view (the board's level shots): `map=4` builds that map instead,
 //! `eye=x,y,z` and `look=x,y,z` place the camera, and the fighter stands
 //! only when `fighter=1` (it always does on Proving Grounds' default view).
+//! `truck=x,y,z` stands a truck there (`look/truck.rs`), `y` over the
+//! ground, turned by `truckyaw=` (radians); `drive=` drives it from there
+//! round a circle to its right, m/s. `seat=0` puts the fighter at its
+//! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
+//! standing still). `truckhurt=` wears it as a hull with that share of its
+//! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
+//! blasts would.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -40,6 +48,29 @@ pub struct View {
     pub eye: Vec3,
     pub look: Vec3,
     pub fighter: bool,
+    /// A truck for the picture: where it stands (over the ground) and its
+    /// yaw, and how fast it drives its circle from there.
+    pub truck: Option<(Vec3, f32)>,
+    pub drive: f32,
+    /// How hurt it is drawn (0 whole, 1 nothing left), and whether marked.
+    pub truck_hurt: f32,
+    pub truck_marks: bool,
+    /// The fighter rides it, in this seat.
+    pub seat: Option<usize>,
+}
+
+/// The radius of the circle a posed truck drives, metres.
+const CIRCLE_M: f32 = 8.0;
+
+impl View {
+    /// The truck's place and yaw `t` seconds in: where it was put, or as
+    /// far round its circle as it has driven.
+    pub fn truck_at(&self, t: f32) -> Option<(Vec3, f32)> {
+        let (at, yaw) = self.truck?;
+        let turned = yaw + self.drive * t / CIRCLE_M;
+        let right = |a: f32| Vec3::new(-a.sin(), 0.0, a.cos());
+        Some((at + (right(yaw) - right(turned)) * CIRCLE_M, turned))
+    }
 }
 
 /// Where the fighter stands, and the camera's eye: 3 m apart on open floor
@@ -79,6 +110,22 @@ impl Pose {
             eye: vec("eye").unwrap_or(EYE),
             look: vec("look").unwrap_or(LOOK),
             fighter: get("fighter", if map == 0 && !moved { 1.0 } else { 0.0 }) != 0.0,
+            truck: vec("truck").map(|at| (at, get("truckyaw", 0.0))),
+            drive: get("drive", 0.0),
+            truck_hurt: get("truckhurt", 0.0).clamp(0.0, 1.0),
+            truck_marks: get("truckmarks", 0.0) != 0.0,
+            seat: Some(get("seat", -1.0))
+                .filter(|s| *s >= 0.0)
+                .map(|s| (s as usize).min(1)),
+        };
+        // A rider stands where the sim mounts one.
+        let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
+            let hull = sim::vehicle::Vehicle::new(V3::new(at.x, at.y, at.z), sim::geom::rad_to_yaw(yaw), 0);
+            hull.mount(seat)
+        });
+        let view = View {
+            fighter: view.fighter || mount.is_some(),
+            ..view
         };
         let yaw = get("yaw", core::f32::consts::PI);
         let speed = get("speed", 0.0);
@@ -88,7 +135,7 @@ impl Pose {
             team: get("team", 0.0) as u8,
             alive: true,
             grounded: true,
-            pos: V3::new(AT.x, AT.y, AT.z),
+            pos: mount.unwrap_or(V3::new(AT.x, AT.y, AT.z)),
             // Running the way it faces, or `dir` off it.
             vel: V3::new(speed * travel.cos(), 0.0, speed * travel.sin()),
             yaw,
@@ -96,6 +143,8 @@ impl Pose {
             crouched: get("crouch", 0.0) != 0.0,
             arm: get("arm", 1.0) as u8,
             shield: 255,
+            over: get("over", 0.0) != 0.0,
+            cloak: get("cloak", 0.0).clamp(0.0, 1.0),
             ..Drawn::default()
         };
         let look = proto::Look {

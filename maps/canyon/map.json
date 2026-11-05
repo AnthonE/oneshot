@@ -114,11 +114,14 @@
     { "at": [-118, -30], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true }
   ],
+  "flag": {"at": [-91, 0]},
   "pads": [
     { "weapon": "sniper", "at": [-102, 0, 4.5], "respawn": 60, "mirror": true },
     { "weapon": "shotgun", "at": [-98, -4], "respawn": 45, "mirror": true },
     { "weapon": "launcher", "at": [-60, 0], "respawn": 60, "mirror": true },
-    { "weapon": "rocket", "at": [0, 0], "respawn": 120 }
+    { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
+    { "weapon": "overshield", "at": [0, 34.75], "respawn": 120 },
+    { "weapon": "camo", "at": [0, -34.75], "respawn": 120 }
   ],
   "vehicles": [
     { "at": [-88, -32], "yaw": 0, "respawn": 30, "mirror": true },

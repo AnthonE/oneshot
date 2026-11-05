@@ -27,7 +27,8 @@
 //             curve, trim on a wall); a `vault` box is always dressing
 //   spawns    [{ at: [x, z, y?], team: "red"|"blue"|"any", yaw: degrees,
 //             mirror: bool }]
-//   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]
+//   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]: a gun,
+//             or a power-up (overshield, camo)
 //   roam      [[x, z], ...]: where a bot with nobody in sight walks
 //   terrain   { cell: 0.5|1|2|4, base: m, margin: m | [-x, +x, -z, +z],
 //             gen: "canyon", canyon: {...}, shapes: [...] }: ground that
@@ -55,6 +56,8 @@
 //             where a vehicle starts and comes back
 //   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
 //             rather than walking straight where they're going
+//   flag      { at: [x, z, y?] }: red's flag base for Capture the Flag,
+//             placed again at its mirror image for blue (needs "mirror")
 //   callouts  [{ name, at: [x, z, y?] }]: places tools/flow names; not compiled
 //   light     { ev100, sun, fill, lamps: [{ at: [x, z, y], color: [r, g, b],
 //             lm, mirror: bool }], floor: look, sea: y }: drawing only
@@ -124,10 +127,12 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
-  launcher: 'LAUNCHER', cannon: 'CANNON' };
+  launcher: 'LAUNCHER', cannon: 'CANNON',
+  // Power-ups: taken by walking onto the pad.
+  overshield: 'OVERSHIELD', camo: 'CAMO' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
-const MAX_PADS = 16;
+const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
 const MAX_BOXES = 512;
 const DIRS = ['+x', '-x', '+z', '-z'];
@@ -430,6 +435,13 @@ export function compile(spec, where = 'map.json') {
     }
   }
   if (vehicles.length > MAX_VEHICLES) fail(`${vehicles.length} vehicles, at most ${MAX_VEHICLES}`);
+  let flags = [];
+  if (spec.flag !== undefined) {
+    const p = point(spec.flag.at, 'flag');
+    const im = mirrors.find(([, , swap]) => swap);
+    if (!im) fail('flag: needs a "mirror" that swaps sides');
+    flags = [p, [p[0] * im[0], p[1], p[2] * im[1]]];
+  }
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
 
   // The boulders, last: they keep clear of everything above.
@@ -446,7 +458,7 @@ export function compile(spec, where = 'map.json') {
   const profiles = solids.filter(isCurve), dressProfiles = dressSolids.filter(isCurve);
   return {
     id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes,
-    solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, dress,
+    solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, dress,
     dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
   };
 }
@@ -1163,6 +1175,7 @@ export function rust(m, src) {
   for (const s of m.dressProfiles) L.push(`        (${profileRow(s, lit)}, ${LOOKS.indexOf(s.look)}),`);
   L.push('    ],');
   L.push(`    nav: ${m.nav},`);
+  L.push(`    flags: &[${m.flags.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   const lt = m.light;
   if (lt.ev100 === 0 && lt.sun === 1 && lt.fill === 1 && !lt.lamps.length && lt.floor === 255 && lt.sea === null) L.push('    light: crate::map::LightDef::DAY,');
   else {

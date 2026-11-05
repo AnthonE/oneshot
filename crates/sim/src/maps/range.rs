@@ -60,6 +60,8 @@ pub const DEF: Def = Def {
         ([15.0, 0.2, -18.0], SHARDS, 5000),
         ([18.0, 0.2, -18.0], LAUNCHER, 5000),
         ([21.0, 0.2, -18.0], CANNON, 5000),
+        ([-24.0, 0.2, -18.0], OVERSHIELD, 5000),
+        ([24.0, 0.2, -18.0], CAMO, 5000),
     ],
     roam: &[[0.0, 0.0], [-10.0, -8.0], [10.0, -8.0], [-10.0, 8.0], [10.0, 8.0], [0.0, 17.0], [-24.0, 0.0], [24.0, 0.0]],
     terrain: None,
@@ -79,5 +81,6 @@ pub const DEF: Def = Def {
     dress_profiles: &[
     ],
     nav: false,
+    flags: &[],
     light: crate::map::LightDef::DAY,
 };

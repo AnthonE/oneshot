@@ -1,5 +1,6 @@
 //! The leak gate (docs/DESIGN.md §17): whole matches (Doubles, an
-//! eight-seat Gun Game, a sixteen-seat Big Team) with one person seat (played by a bot, through the same input path a client
+//! eight-seat Gun Game, a sixteen-seat Big Team, Capture the Flag) with
+//! one person seat (played by a bot, through the same input path a client
 //! uses), every snapshot and stream message it is sent checked against the
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
@@ -81,7 +82,21 @@ impl Gate {
         // doesn't compile until it has one.
         for k in sim::thing::Kind::ALL {
             match k {
-                sim::thing::Kind::Fighter => {}
+                // 11. A fighter sent shows its overshield and camouflage
+                // as they are now, and nothing more (never the
+                // camouflage's time left).
+                sim::thing::Kind::Fighter => {
+                    for r in s.remotes() {
+                        let t = proto::Remote::of(r.slot, &w.fighters[r.slot as usize]);
+                        assert_eq!(
+                            (r.over, r.cloak),
+                            (t.over, t.cloak),
+                            "tick {}: seat {}'s overshield or camouflage",
+                            w.tick,
+                            r.slot
+                        );
+                    }
+                }
                 // 8. A projectile is sent only if its owner is known to
                 // this client or it is in clear line of sight.
                 sim::thing::Kind::Projectile => {
@@ -103,6 +118,28 @@ impl Gate {
                 }
                 // Pad timers are public (room::build).
                 sim::thing::Kind::Pad => {}
+                // 11. Capture the Flag: a flag at home or on the floor is
+                // public, where it truly is (its base, or where its
+                // carrier fell or let go: told to everyone, as Halo's
+                // waypoint is); a carried one names its carrier, never
+                // where they are.
+                sim::thing::Kind::Flag => {
+                    assert_eq!(s.flags().len(), if w.rules.ctf { 2 } else { 0 });
+                    for (t, f) in s.flags().iter().enumerate() {
+                        let truth = &w.flags[t];
+                        assert_eq!(f.state, truth.state, "tick {}: flag {t}", w.tick);
+                        if f.state == sim::world::FLAG_HELD {
+                            assert_eq!(f.carrier, truth.carrier);
+                            assert_eq!(f.pos, V3::ZERO, "tick {}: a carried flag's place was sent", w.tick);
+                        } else {
+                            assert!(
+                                (f.pos - truth.pos).len() < 0.05,
+                                "tick {}: {f:?} is not where flag {t} is",
+                                w.tick
+                            );
+                        }
+                    }
+                }
                 // 10. A gun on the floor only if it is a true one, in clear
                 // line of this client's eye: never by who dropped it, so
                 // never where a hidden enemy fell.
@@ -282,6 +319,19 @@ fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
                 score_limit: 60,
                 time_limit_ms: 120_000,
                 ..Rules::big_team()
+            },
+        );
+    }
+}
+
+#[test]
+fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
+    for d in sim::maps::ALL.iter().filter(|d| d.flags.len() == 2) {
+        gate(
+            d.build(),
+            Rules {
+                time_limit_ms: 120_000,
+                ..Rules::ctf()
             },
         );
     }

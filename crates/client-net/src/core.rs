@@ -332,6 +332,9 @@ pub struct Drawn {
     pub pitch: f32,
     pub arm: u8,
     pub shield: u8,
+    /// An overshield on, and how hidden its camouflage keeps it (0..1).
+    pub over: bool,
+    pub cloak: f32,
 }
 
 pub struct NetCore {
@@ -1068,7 +1071,7 @@ impl NetCore {
             tick: s.tick,
             n: s.n_remote,
             remotes: s.remotes,
-            me: as_remote(self.slot, &s.own),
+            me: Remote::of(self.slot, &s.own),
         };
         if self.cam.len() < KILLCAM_FRAMES {
             self.cam.push(cf);
@@ -1236,6 +1239,9 @@ impl NetCore {
         p.alive = auth.alive;
         p.shield = auth.shield;
         p.health = auth.health;
+        p.charging = auth.charging;
+        p.camo = auth.camo;
+        p.flare = auth.flare;
         p.respawn = auth.respawn;
         p.kills = auth.kills;
         p.deaths = auth.deaths;
@@ -1293,7 +1299,7 @@ impl NetCore {
         let (f, p) = self.own();
         Drawn {
             pos: p,
-            ..drawn(&as_remote(self.slot, f))
+            ..drawn(&Remote::of(self.slot, f))
         }
     }
 
@@ -1584,24 +1590,6 @@ impl NetCore {
     }
 }
 
-/// A fighter as the kill cam draws it: the coarse fields any remote has.
-fn as_remote(slot: u8, f: &Fighter) -> Remote {
-    Remote {
-        slot,
-        team: f.team,
-        alive: f.alive,
-        crouched: f.body.crouched,
-        grounded: f.body.grounded,
-        reloading: f.reload > 0,
-        pos: f.body.pos,
-        vel: f.body.vel,
-        yaw: f.yaw,
-        pitch: f.pitch,
-        arm: f.gun().arm,
-        shield: (f.shield.max(0) as i64 * 255 / sim::consts::SHIELD_MAX as i64) as u8,
-    }
-}
-
 /// The fields `step_local` owns: what prediction must get exactly right.
 pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
     a.body == b.body
@@ -1712,6 +1700,8 @@ fn drawn(r: &Remote) -> Drawn {
         pitch: pitch_rad(r.pitch),
         arm: r.arm,
         shield: r.shield,
+        over: r.over,
+        cloak: (r.cloak as f32 / proto::CLOAK_STEPS).min(1.0),
     }
 }
 

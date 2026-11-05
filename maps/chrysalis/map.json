@@ -274,6 +274,11 @@
       "at": [-9.0, 11.0],
       "respawn": 45,
       "mirror": true
+    },
+    {
+      "weapon": "overshield",
+      "at": [0, -7.5],
+      "respawn": 120
     }
   ],
   "launchers": [

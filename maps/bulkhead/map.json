@@ -100,13 +100,16 @@
     { "at": [-18, 14, 1.5], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-18, -14, 1.5], "team": "red", "yaw": 0, "mirror": true }
   ],
+  "flag": {"at": [-22, 0]},
   "pads": [
     { "weapon": "sniper", "at": [0, 0, 3], "respawn": 120 },
     { "weapon": "sword", "at": [0, 0], "respawn": 120 },
     { "weapon": "br", "at": [-21, 0, 3], "respawn": 30, "mirror": true },
     { "weapon": "magnum", "at": [-21, 0], "respawn": 30, "mirror": true },
     { "weapon": "ion_rifle", "at": [0, 14, 1.5], "respawn": 30 },
-    { "weapon": "ion_rifle", "at": [0, -14, 1.5], "respawn": 30 }
+    { "weapon": "ion_rifle", "at": [0, -14, 1.5], "respawn": 30 },
+    { "weapon": "overshield", "at": [0, 6.5], "respawn": 120 },
+    { "weapon": "camo", "at": [0, -6.5], "respawn": 120 }
   ],
   "launchers": [
     { "at": [0, 6.5], "to": [0, 2.3, 3], "time": 0.9, "size": [2, 2] },

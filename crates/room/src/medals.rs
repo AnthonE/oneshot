@@ -80,6 +80,9 @@ pub struct Tally {
     pub heads: u32,
     /// Each medal's count, by id.
     pub medals: [u16; md::COUNT],
+    /// Capture the Flag: flags scored, and our own flag sent home by a touch.
+    pub captures: u16,
+    pub returns: u16,
 }
 
 impl Default for Tally {
@@ -98,6 +101,8 @@ impl Default for Tally {
             hits: 0,
             heads: 0,
             medals: [0; md::COUNT],
+            captures: 0,
+            returns: 0,
         }
     }
 }
@@ -311,6 +316,17 @@ impl Medals {
             s.turn_at[i] = now;
         }
         let events = w.events.as_slice();
+        for e in events
+            .iter()
+            .filter(|e| e.kind == Ev::Flag && (e.a as usize) < MAX_FIGHTERS)
+        {
+            let t = &mut self.seats[e.a as usize].tally;
+            match e.part {
+                2 => t.returns += 1,
+                3 => t.captures += 1,
+                _ => {}
+            }
+        }
         for (i, e) in events.iter().enumerate() {
             let (a, b) = (e.a as usize, e.b as usize);
             if a >= MAX_FIGHTERS || b >= MAX_FIGHTERS {

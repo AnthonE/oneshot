@@ -108,6 +108,31 @@ async fn play(
     }
 }
 
+/// A match session's welcome: its map and rules.
+async fn play_rules(h: &server::Handle, ticket: &str, mode: u8, code: u32) -> (u8, sim::world::Rules) {
+    let cfg = ClientConfig::builder()
+        .with_bind_address("127.0.0.1:0".parse().unwrap())
+        .with_server_certificate_hashes([Sha256Digest::from(h.cert_hash)])
+        .build();
+    let ep = Endpoint::client(cfg).unwrap();
+    let conn = ep
+        .connect(format!("https://127.0.0.1:{}/", h.addr.port()))
+        .await
+        .unwrap();
+    let (mut send, mut recv) = conn.open_bi().await.unwrap().await.unwrap();
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    let pass = Pass::new(ticket).unwrap();
+    let n = frame_msg(&Session::hello("p", pass, mode, proto::Look::default(), code), &mut f).unwrap();
+    send.write_all(&f[..n]).await.unwrap();
+    loop {
+        match tokio::time::timeout(WAIT, read_frame(&mut recv)).await {
+            Ok(Some(Msg::Welcome { map, rules, .. })) => return (map, rules),
+            Ok(Some(_)) => {}
+            other => panic!("no welcome: {other:?}"),
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_party_talks_lands_together_and_survives_a_reload() {
     let h = server::run(server::Config {
@@ -193,6 +218,25 @@ async fn a_party_talks_lands_together_and_survives_a_reload() {
     assert_eq!(own_a, own_b);
     let (stranger, _, _c3, _e3) = play(&h, "", proto::MODE_FFA, 0).await;
     assert_ne!(stranger, own_a, "a stranger plays elsewhere");
+
+    // Alone, a match of the party's own: its map, score and clock.
+    let custom = pp::Custom {
+        map: Some(sim::maps::bulkhead::DEF.id),
+        score: 1,
+        time: 1,
+    };
+    a.send(&Msg::PartyAct {
+        act: pp::ACT_START,
+        arg: proto::MODE_CTF as u32 | pp::START_PRIVATE | custom.to_arg(),
+    })
+    .await
+    .unwrap();
+    until(&b, go).await;
+    let (map, rules) = play_rules(&h, &ta, proto::MODE_CTF, pa.code).await;
+    assert_eq!(map, sim::maps::bulkhead::DEF.id);
+    assert!(rules.ctf);
+    assert_eq!(rules.score_limit, 1);
+    assert_eq!(rules.time_limit_ms, 5 * 60_000);
 
     // The second page reloads (after its match): away, then back in its
     // place on its ticket, with no code at all.

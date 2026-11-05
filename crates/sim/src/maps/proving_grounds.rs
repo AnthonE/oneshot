@@ -57,6 +57,8 @@ pub const DEF: Def = Def {
         ([0.0, 0.0, -20.0], SHOTGUN, 60000),
         ([-16.0, 2.5, 0.0], SMG, 30000),
         ([16.0, 2.5, 0.0], SMG, 30000),
+        ([0.0, 0.0, 10.0], OVERSHIELD, 120000),
+        ([0.0, 0.0, -10.0], CAMO, 120000),
     ],
     roam: &[],
     terrain: None,
@@ -76,5 +78,6 @@ pub const DEF: Def = Def {
     dress_profiles: &[
     ],
     nav: false,
+    flags: &[],
     light: crate::map::LightDef::DAY,
 };
