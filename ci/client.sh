@@ -41,7 +41,7 @@ if [ "$mode" = check ]; then
   cargo clippy -q --lib --target wasm32-unknown-unknown -- -D warnings
   cargo clippy -q --lib --target wasm32-unknown-unknown --features webgpu -- -D warnings
   # Its own tests (textures, the pointer lock, the GPU tiers): not run anywhere else.
-  cargo test -q --lib
+  cargo test -q --lib --bins
   cargo build -q
   profile=web
 else

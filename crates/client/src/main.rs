@@ -249,7 +249,7 @@ fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
                 _ => {}
             }
         }
-        s.core.drain_events();
+        s.core.drain_events(r.clock_ms);
         if r.clock_ms >= next && s.ready {
             next += every;
             let (f, p) = s.core.own();

@@ -387,6 +387,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
+    .init_resource::<Now>()
+    .add_systems(First, stamp)
     .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
@@ -1225,6 +1227,16 @@ fn draw_view(
 
 /// What the session queued for us this frame: events become effects and
 /// HUD marks, stream messages names and the feed.
+/// The netcode's clock for this frame, read once: what is drawn at the
+/// render tick and the events played on it agree to the frame (a round
+/// goes the frame its blast plays).
+#[derive(Resource, Default)]
+pub(crate) struct Now(pub f64);
+
+fn stamp(link: NonSend<LinkRes>, mut now: ResMut<Now>) {
+    now.0 = link.0.now_ms();
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn happened(
     mut link: NonSendMut<LinkRes>,
@@ -1236,11 +1248,11 @@ pub(crate) fn happened(
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
     film: Option<Res<film::Film>>,
-    mut blows: ResMut<look::rag::Blows>,
+    (mut blows, now): (ResMut<look::rag::Blows>, Res<Now>),
 ) {
-    let now_ms = link.0.now_ms();
+    let now_ms = now.0;
     let s = link.0.session_mut();
-    let events = s.core.drain_events();
+    let events = s.core.drain_events(now_ms);
     let mut msgs = core::mem::take(&mut early.0);
     msgs.extend(s.take_messages());
     // A film's camera off the eye sees our shots as anyone's: from the
@@ -1422,22 +1434,25 @@ fn expose(
 }
 
 /// Rockets and frags in flight.
+#[allow(clippy::too_many_arguments)]
 fn fly(
     link: NonSend<LinkRes>,
     models: Res<look::guns::Models>,
     time: Res<Time>,
+    now: Res<Now>,
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
 ) {
     let core = &link.0.session().core;
-    let others = core.others(link.0.now_ms());
+    // On the render tick, with the bodies that fired them (`core.rs`).
+    let others = core.others(now.0);
     look::fx::flying::projectiles(
         &mut commands,
         &mut fx,
         &models,
         &core.map,
-        core.latest().proj(),
+        &core.projectiles(now.0),
         &others,
         time.elapsed_secs(),
         time.delta_secs(),
