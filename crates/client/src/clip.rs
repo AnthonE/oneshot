@@ -11,6 +11,11 @@
 //! it; without `ffmpeg` the line says where the tape is and how to make the
 //! video later. Nothing leaves the machine either way.
 //!
+//! The film draws on the same GPU as the match still being played, so it
+//! draws at the player's own rung (their preset; [`quality::default_quality`]
+//! for rows of their own), never a HIGH frame beside a machine that had to
+//! step down, and on the desktop one at a time.
+//!
 //! `--record <tape> <seconds>` is the same memory kept for longer, for
 //! `ci/film.sh record`: once the match has run that long, or ends, the tape
 //! is written and the client exits.
@@ -18,6 +23,7 @@
 use bevy::prelude::*;
 pub use client_net::clip::CLIP_S;
 
+use crate::look::quality;
 use crate::LinkRes;
 
 /// The key. Next to the screenshot's F12 and reserved with it
@@ -87,6 +93,7 @@ fn take(
     link: NonSend<LinkRes>,
     monitors: Query<&bevy::window::Monitor>,
     shots: Res<crate::look::shot::Shots>,
+    tier: Res<quality::Tier>,
 ) {
     if !keys.just_pressed(KEY) {
         return;
@@ -110,11 +117,19 @@ fn take(
     // The film draws in a window of its own; on a screen shorter than the
     // video it draws smaller and the encoder scales it up.
     let screen = monitors.iter().map(|m| m.physical_height).max();
-    hand_over(tape, held, on, screen, line);
+    let rung = tier.preset.unwrap_or(quality::default_quality());
+    hand_over(tape, held, on, rung, screen, line);
 }
 
 #[cfg(target_arch = "wasm32")]
-fn hand_over(tape: Vec<u8>, held: f64, on: bool, _screen: Option<u32>, line: crate::look::shot::Line) {
+fn hand_over(
+    tape: Vec<u8>,
+    held: f64,
+    on: bool,
+    rung: quality::Quality,
+    _screen: Option<u32>,
+    line: crate::look::shot::Line,
+) {
     use wasm_bindgen::{JsCast, JsValue};
     let global = js_sys::global();
     let f = js_sys::Reflect::get(&global, &JsValue::from_str("__oneshotClip"))
@@ -125,11 +140,12 @@ fn hand_over(tape: Vec<u8>, held: f64, on: bool, _screen: Option<u32>, line: cra
         return;
     };
     let bytes = js_sys::Uint8Array::from(&tape[..]);
-    let args = js_sys::Array::of4(
+    let args = js_sys::Array::of5(
         &bytes,
         &JsValue::from(held),
         &JsValue::from_str(crate::look::gpu::api()),
         &JsValue::from(on),
+        &JsValue::from_str(rung.name()),
     );
     match f.apply(&global, &args) {
         Ok(_) => line.say(WORD, format!("the last {held:.0} s: making your video"), false),
@@ -143,11 +159,28 @@ fn hand_over(tape: Vec<u8>, held: f64, on: bool, _screen: Option<u32>, line: cra
 /// The tape beside the screenshots, and a second copy of this binary to
 /// draw it, on a thread: a file and a process are not a frame's work.
 #[cfg(not(target_arch = "wasm32"))]
-fn hand_over(tape: Vec<u8>, held: f64, _on: bool, screen: Option<u32>, line: crate::look::shot::Line) {
+fn hand_over(
+    tape: Vec<u8>,
+    held: f64,
+    _on: bool,
+    rung: quality::Quality,
+    screen: Option<u32>,
+    line: crate::look::shot::Line,
+) {
     let Some(dir) = crate::shot::dir() else {
         line.say(FAILED, "no folder for it: set ONESHOT_SHOTS_DIR", true);
         return;
     };
+    // One film at a time: each is a second Bevy app on this GPU.
+    if FILMING
+        .lock()
+        .ok()
+        .and_then(|mut c| c.as_mut().map(|c| matches!(c.try_wait(), Ok(None))))
+        .unwrap_or(false)
+    {
+        line.say(FAILED, "still making the last one", true);
+        return;
+    }
     std::thread::spawn(move || {
         let stamp = crate::shot::stamp(crate::shot::now_secs());
         let path = dir.join(format!("{}clip-{stamp}.tape", crate::shot::PREFIX));
@@ -168,7 +201,7 @@ fn hand_over(tape: Vec<u8>, held: f64, _on: bool, screen: Option<u32>, line: cra
         }
         let drawn = std::env::current_exe().and_then(|exe| {
             let mut film = std::process::Command::new(exe);
-            film.arg("--clip").arg(&path);
+            film.arg("--clip").arg(&path).arg("--quality").arg(rung.name());
             if let Some(h) = screen {
                 // Room for a title bar and a task bar.
                 film.arg("--max-height").arg(h.saturating_sub(160).max(240).to_string());
@@ -177,7 +210,12 @@ fn hand_over(tape: Vec<u8>, held: f64, _on: bool, screen: Option<u32>, line: cra
         });
         let mp4 = crate::shot::shown(&path.with_extension("mp4"));
         match drawn {
-            Ok(_) => line.say(WORD, format!("the last {held:.0} s: making {mp4}"), false),
+            Ok(child) => {
+                if let Ok(mut c) = FILMING.lock() {
+                    *c = Some(child);
+                }
+                line.say(WORD, format!("the last {held:.0} s: making {mp4}"), false)
+            }
             Err(e) => {
                 error!("oneshot: cannot start the clip's film: {e}");
                 line.say(
@@ -189,6 +227,10 @@ fn hand_over(tape: Vec<u8>, held: f64, _on: bool, screen: Option<u32>, line: cra
         }
     });
 }
+
+/// The desktop's film in flight (`hand_over`).
+#[cfg(not(target_arch = "wasm32"))]
+static FILMING: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
 
 /// `--record`: where the tape goes and how much match it holds.
 #[derive(Resource)]

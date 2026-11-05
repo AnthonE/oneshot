@@ -39,6 +39,12 @@ pub const GLINT: f32 = 0.12;
 /// travel, so the travel wrapped at `SPEED_STEPS` box lengths moves every
 /// drop by whole boxes (`rain.wgsl`).
 pub const SPEED_STEPS: f32 = 20.0;
+/// Under a roof the drops within this of the eye, across, are put out
+/// (Gates' `SHELTER_CLEAR_M`): rain doesn't fall through Overpass's bridge
+/// onto whoever stands under it.
+pub const SHELTER_CLEAR_M: f32 = 5.0;
+/// How far up something over the eye counts as a roof, metres.
+pub const SHELTER_UP_M: f32 = 12.0;
 
 /// The uniform, laid out to match `Rain` in the shader. 48 bytes: WebGL2
 /// wants uniforms of at least 16.
@@ -48,7 +54,8 @@ pub struct RainParams {
     pub fall: Vec4,
     /// xyz the box's half extents (m), w the intensity `0..1`.
     pub box_: Vec4,
-    /// rgb the streak's lit colour; w unused.
+    /// rgb the streak's lit colour; w the radius round the eye that is
+    /// clear under a roof ([`SHELTER_CLEAR_M`]), 0 in the open.
     pub look: Vec4,
 }
 
@@ -174,18 +181,35 @@ pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mater
     commands.insert_resource(RainHandle(material));
 }
 
-/// The map's rain, when the map changes.
+/// The map's rain, when the map changes, and its shelter when the eye goes
+/// under a roof or out from one (the map's own boxes, as the sim has them).
 pub fn drive(
     now: Res<MoodNow>,
     handle: Option<Res<RainHandle>>,
     mut materials: ResMut<Assets<RainMaterial>>,
     mut rain: Query<&mut Visibility, With<Rain>>,
+    link: NonSend<crate::LinkRes>,
+    eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
+    mut sheltered: Local<bool>,
 ) {
-    if !now.is_changed() {
+    let mut want = params_for(&now.mood, now.roofed);
+    let show = want.box_.w > 0.0;
+    let under = show
+        && eye.single().is_ok_and(|g| {
+            let p = g.translation();
+            let up = sim::geom::V3::new(0.0, 1.0, 0.0);
+            link.0
+                .session()
+                .core
+                .map
+                .ray(sim::geom::V3::new(p.x, p.y, p.z), up, SHELTER_UP_M)
+                < SHELTER_UP_M
+        });
+    if !now.is_changed() && under == *sheltered {
         return;
     }
-    let want = params_for(&now.mood, now.roofed);
-    let show = want.box_.w > 0.0;
+    *sheltered = under;
+    want.look.w = if under { SHELTER_CLEAR_M } else { 0.0 };
     for mut v in rain.iter_mut() {
         let vis = if show {
             Visibility::Inherited

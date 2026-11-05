@@ -11,14 +11,12 @@
     forward_io::{VertexOutput, FragmentOutput},
     mesh_view_bindings::view,
 }
-#import "shaders/cloud_shadow.wgsl"::{cloud_shadow, ground_wet, wetted}
+#import "shaders/cloud_shadow.wgsl"::{cloud_shadow, ground_wet, wetted, tile_m, tint}
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var albedo_tex: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var albedo_smp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var normal_tex: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var normal_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> tile_m: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105) var<uniform> tint: array<vec4<f32>, 4>;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -36,8 +34,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var c = vec3<f32>(0.0);
     var n = vec3<f32>(0.0);
     for (var i = 0; i < 4; i += 1) {
-        let uv = p / tile_m[i];
-        c += textureSample(albedo_tex, albedo_smp, uv, i).rgb * tint[i].rgb * w[i];
+        let uv = p / tile_m(i);
+        c += textureSample(albedo_tex, albedo_smp, uv, i).rgb * tint(i) * w[i];
         n += (textureSample(normal_tex, normal_smp, uv, i).rgb * 2.0 - 1.0) * w[i];
     }
 

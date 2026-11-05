@@ -26,6 +26,9 @@
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::coords_to_viewport_uv
 #import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, slab_warp, slab_shape}
+#ifdef BACKDROP
+#import "shaders/shaft_march.wgsl"::{shaft_lost}
+#endif
 
 // Field for field `deck::CloudParams`. Colours linear, deck units (1.0 is
 // one `sky::CLOUD_NITS`), already graded by the hour and the weather.
@@ -93,6 +96,11 @@ struct Cloud {
     disk: vec4<f32>,
     // xyz the sun disk's radiance, deck units; w unused.
     disk_rgb: vec4<f32>,
+    // WebGL2's light shafts (`shaft_march.wgsl`), under BACKDROP: the map's
+    // box, its mist and what a shaded ray takes back; `shaft_hi.w` 0: off.
+    shaft_lo: vec4<f32>,
+    shaft_hi: vec4<f32>,
+    shaft_tint: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> cl: Cloud;
@@ -395,6 +403,16 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // weather's air takes along this ray. Where the atmosphere draws it is
     // `sky_fog.wgsl`'s, over the atmosphere too.
     rgb = mix(rgb, cl.fog.rgb, deck_haze(d.y, cl.air, cl.dust));
-#endif
+    // The light shafts: the sun's share of the mist taken back where the
+    // ray crossed the map's shade on its way out of the box, in the frame's
+    // own units, as the boxes take it (`weathering.wgsl`).
+    var out = rgb * cl.shade.w * view.exposure;
+    if cl.shaft_hi.w > 0.0 {
+        let lost = shaft_lost(view.world_position, d, 1.0e4, cl.shaft_lo, cl.shaft_hi, cl.shaft_tint, in.clip.xy);
+        out = max(out - lost, vec3(0.0));
+    }
+    return vec4(out, 1.0);
+#else
     return vec4(rgb * cl.shade.w * view.exposure, 1.0);
+#endif
 }

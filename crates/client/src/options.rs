@@ -389,10 +389,10 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
             "through a misty map's air, at HIGH"
         } else if tier.atmosphere {
             "at HIGH clouds: the sun's beams through a misty map's air"
-        } else if crate::look::gpu::WEBGL2 {
-            "not under WebGL2: Bevy's volumetric pass wants WebGPU; the mist glows toward the sun instead"
+        } else if tier.gfx.clouds == crate::look::quality::Clouds::High {
+            "through a misty map's air, at HIGH: marched over the walls and the sky, with no volumetric pass here"
         } else {
-            "not on this GPU: it can't filter the atmosphere's tables; the mist glows toward the sun instead"
+            "at HIGH clouds, over the walls and the sky: no volumetric pass here, so a march of the sun's shadow"
         },
     );
     pane.spawn(ui::group("WORLD"));

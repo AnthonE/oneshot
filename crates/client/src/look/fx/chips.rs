@@ -9,7 +9,9 @@
 //! as an entity; ours are one mesh of [`CHIPS`] small boxes in world space,
 //! written while any fly, so they are one draw on WebGL2 as on the desktop
 //! (the particles' way, `pool.rs`). They bounce off the plane of the face
-//! they came off instead of falling through it, and shrink out at the end
+//! they came off and off the floor under where they were struck (a level
+//! plane, found once at the throw) instead of falling through either, and
+//! shrink out at the end
 //! rather than fade (no sort, no blend). A fixed pool, drop-oldest: a chip
 //! has half a second and the oldest is the smallest. The same on every rung:
 //! a 3 cm chip can't hide anything, and a lower rung never sees more.
@@ -72,6 +74,8 @@ struct Chip {
     /// The face it came off: a point on it and its normal.
     at: Vec3,
     n: Vec3,
+    /// The floor's height under the blow (`surface::floor_under`).
+    floor: f32,
 }
 
 pub struct Chips {
@@ -150,8 +154,9 @@ impl Chips {
         self.slots.iter().filter(|c| c.left > 0.0).count()
     }
 
-    /// Throw `n` chips of `matter` off the face at `at` facing `away`.
-    pub fn throw(&mut self, at: Vec3, away: Vec3, matter: Matter, n: usize) {
+    /// Throw `n` chips of `matter` off the face at `at` facing `away`, over
+    /// a floor at height `floor` (`f32::NEG_INFINITY`: none).
+    pub fn throw(&mut self, at: Vec3, away: Vec3, matter: Matter, n: usize, floor: f32) {
         let away = away.normalize_or(Vec3::Y);
         let c = color(matter).to_linear();
         for _ in 0..n {
@@ -181,12 +186,14 @@ impl Chips {
                 color: [c.red * j, c.green * j, c.blue * j, 1.0],
                 at,
                 n: away,
+                floor,
             };
             self.thrown += 1;
         }
     }
 
-    /// Every chip on by `dt`: falling, tumbling, bouncing off its face.
+    /// Every chip on by `dt`: falling, tumbling, bouncing off its face and
+    /// the floor.
     pub fn step(&mut self, dt: f32) {
         if dt <= 0.0 {
             return;
@@ -205,6 +212,14 @@ impl Chips {
                 if into < 0.0 {
                     let along = c.vel - c.n * into;
                     c.vel = along * SKID - c.n * (into * BOUNCE);
+                    c.spin *= SKID;
+                }
+            }
+            let low = c.pos.y - SIZE_M * 0.5 - c.floor;
+            if low < 0.0 {
+                c.pos.y -= low;
+                if c.vel.y < 0.0 {
+                    c.vel = Vec3::new(c.vel.x * SKID, -c.vel.y * BOUNCE, c.vel.z * SKID);
                     c.spin *= SKID;
                 }
             }
@@ -348,7 +363,7 @@ mod tests {
     fn chips_fly_off_their_face_and_go() {
         let mut c = Chips::default();
         for _ in 0..20 {
-            c.throw(Vec3::ZERO, Vec3::Y, Matter::Concrete, BURST);
+            c.throw(Vec3::ZERO, Vec3::Y, Matter::Concrete, BURST, 0.0);
         }
         assert_eq!(c.live(), CHIPS);
         assert_eq!(c.stolen, 20 * BURST as u64 - CHIPS as u64);
@@ -374,5 +389,20 @@ mod tests {
             panic!("positions");
         };
         assert!(p.iter().all(|v| *v == [0.0; 3]));
+    }
+
+    /// Chips off a wall low down land on the floor under it, not through.
+    #[test]
+    fn chips_off_a_wall_stop_on_the_floor() {
+        let mut c = Chips::default();
+        c.throw(Vec3::new(0.0, 0.3, 0.0), Vec3::X, Matter::Concrete, BURST, 0.0);
+        for _ in 0..40 {
+            c.step(1.0 / 60.0);
+            for i in 0..CHIPS {
+                if let Some((p, _, _)) = c.draw(i) {
+                    assert!(p.y >= SIZE_M * 0.5 - 1e-4, "through the floor: {p}");
+                }
+            }
+        }
     }
 }

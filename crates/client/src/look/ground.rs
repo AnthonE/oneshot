@@ -9,7 +9,7 @@
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
 pub type GroundMaterial = ExtendedMaterial<StandardMaterial, Ground>;
@@ -22,17 +22,24 @@ pub struct Ground {
     #[texture(102, dimension = "2d_array")]
     #[sampler(103)]
     pub normal: Handle<Image>,
-    /// Metres each set repeats over, in splat order.
+    /// Everything else in one uniform block: under WebGL2 a fragment shader
+    /// may read only twelve on many devices (ANGLE on D3D11 and on Metal),
+    /// and Bevy's view, mesh and `StandardMaterial` take eleven of them.
     #[uniform(104)]
+    pub params: GroundParams,
+}
+
+/// The ground's uniform, laid out as `GroundLook` in `cloud_shadow.wgsl`.
+#[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
+pub struct GroundParams {
+    /// Metres each set repeats over, in splat order.
     pub tile_m: Vec4,
     /// What each set's photograph is multiplied by: the map's own soil (a
     /// red-rock canyon's sand is not a beach's).
-    #[uniform(105)]
     pub tint: [Vec4; 4],
     /// The deck's shadows and the rain's wet (`cloud_shadow::drive` keeps
     /// it): a uniform, not a texture or a buffer, so the ground binds what
     /// it did on every target.
-    #[uniform(106)]
     pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
@@ -65,9 +72,11 @@ pub fn material(
         extension: Ground {
             albedo,
             normal,
-            tile_m: Vec4::from_array(super::textures::GROUND_TILE_M),
-            tint: TINT,
-            cloud,
+            params: GroundParams {
+                tile_m: Vec4::from_array(super::textures::GROUND_TILE_M),
+                tint: TINT,
+                cloud,
+            },
         },
     }
 }

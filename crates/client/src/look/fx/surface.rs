@@ -76,6 +76,23 @@ pub fn matter_of(map: &Map, hit: &Hit, lift: Option<&crate::look::cliffs::Lift>)
     }
 }
 
+/// How far down [`floor_under`] looks, metres.
+const FLOOR_PROBE_M: f32 = 30.0;
+
+/// The height of the floor under a blow at `at` on a face facing `away`:
+/// the first thing straight down from just off the face, so a wall's
+/// chips land on the floor at its foot and a ceiling's on the one below.
+/// `f32::NEG_INFINITY` over nothing.
+pub fn floor_under(map: &Map, at: Vec3, away: Vec3) -> f32 {
+    let from = at + away.normalize_or(Vec3::Y) * 0.05;
+    let t = map.ray(v3(from), V3::new(0.0, -1.0, 0.0), FLOOR_PROBE_M);
+    if t < FLOOR_PROBE_M {
+        from.y - t
+    } else {
+        f32::NEG_INFINITY
+    }
+}
+
 /// The round solid `on` is, and its radius, if it is one: a mark on its
 /// side is bent round it (`marks.rs`).
 pub fn round(map: &Map, on: On) -> Option<(Vec2, f32)> {

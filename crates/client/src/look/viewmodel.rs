@@ -286,6 +286,26 @@ pub struct ViewGun {
     /// The reload's pose last frame: a reload cut short (a melee, a swap,
     /// a pickup) eases back to rest from it rather than snapping.
     reload_lay: Lay,
+    /// Rounds in the burst under way, and seconds since its last one.
+    burst: u32,
+    since_round: f32,
+}
+
+/// An automatic's burst drifts its kick to one side, growing to all of it
+/// over this many rounds (Gates' gunfeel `DRIFT_SHOTS`); a trigger rested
+/// [`BURST_REST_S`] starts a new burst.
+pub const DRIFT_SHOTS: f32 = 6.0;
+pub const BURST_REST_S: f32 = 0.3;
+
+/// A round's cant, -1..1: random per round, an automatic's leaning toward
+/// its hand's outside as the burst `n` rounds in grows.
+pub fn burst_cant(auto: bool, n: u32, left: bool, rand: f32) -> f32 {
+    if !auto {
+        return rand;
+    }
+    let g = (n as f32 / DRIFT_SHOTS).min(1.0);
+    let side = if left { -1.0 } else { 1.0 };
+    side * g + rand * (1.0 - g) * 0.5
 }
 
 /// How much of a round's kick a crouched fighter's gun takes, in the hands
@@ -952,13 +972,19 @@ fn hand(
     let up = v.drawn == want;
     let a = arm(v.drawn);
     // A round from this hand: kick and flash (a sword's is a swing).
+    v.since_round += dt;
     if k.rounds > 0 && up && a.kind != Kind::Sword {
         let braced = if f.body.crouched { CROUCH_KICK } else { 1.0 };
         for _ in 0..k.rounds.min(2) {
             v.kick.hit(kick_of(v.drawn, a) * braced, KICK_HZ, KICK_DAMP);
         }
         v.flash = 1.0;
-        v.cant = cant_of(f.shots);
+        if v.since_round > BURST_REST_S {
+            v.burst = 0;
+        }
+        v.burst += k.rounds;
+        v.since_round = 0.0;
+        v.cant = burst_cant(a.auto, v.burst, v.left, cant_of(f.shots));
     }
     v.kick.toward(0.0, KICK_HZ, KICK_DAMP, dt);
     v.flash = (v.flash - dt * FLASH_FALL_PER_S).max(0.0);
@@ -1256,5 +1282,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An automatic's burst leans its kick to its hand's outside as it
+    /// goes; a single shot's cant stays its own.
+    #[test]
+    fn a_burst_drifts_to_one_side() {
+        assert_eq!(burst_cant(false, 9, false, -0.4), -0.4);
+        assert!((burst_cant(true, 0, false, 0.6) - 0.3).abs() < 1e-6);
+        assert!(burst_cant(true, DRIFT_SHOTS as u32, false, -1.0) > 0.99);
+        assert!(burst_cant(true, DRIFT_SHOTS as u32, true, 1.0) < -0.99);
+        assert!(burst_cant(true, 3, false, -1.0) > burst_cant(true, 1, false, -1.0));
     }
 }

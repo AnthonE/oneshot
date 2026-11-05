@@ -635,9 +635,9 @@ pub fn apply(
 }
 
 /// The camera's post stack for a tier. What a rung leaves out is removed,
-/// with the prepasses only it wanted: each is a geometry pass, and on a
-/// device short of textures a sampled texture in every main-pass pipeline
-/// (`gpu::GpuCaps`).
+/// and on a device short of textures the prepasses only it wanted (each is
+/// a sampled texture in every main-pass pipeline, `gpu::GpuCaps`); where
+/// there is room they stay, as Gates keeps them.
 fn dress(e: &mut EntityCommands, t: &Tier) {
     let ssao = t.ssao();
     match ssao {
@@ -678,13 +678,20 @@ fn dress(e: &mut EntityCommands, t: &Tier) {
     } else {
         e.remove::<Bloom>();
     }
-    if ssao.is_none() {
+    // A prepass's presence is in every mesh pipeline's key, so taking one
+    // off re-specialises them all (a stall, in a browser's one thread):
+    // only where the device is short of the textures they bind, as Gates.
+    if ssao.is_none() && gpu::caps().prepass_room() < PREPASS_KEEP_ROOM {
         e.remove::<NormalPrepass>();
         if !taa {
             e.remove::<DepthPrepass>();
         }
     }
 }
+
+/// The prepass room (`gpu::GpuCaps::prepass_room`) from which a prepass a
+/// rung no longer needs is kept rather than taken off (Gates' three).
+pub const PREPASS_KEEP_ROOM: u32 = 3;
 
 #[cfg(test)]
 mod tests {
@@ -1029,7 +1036,14 @@ mod tests {
         assert_eq!(has(&app), (false, false, false, false), "POTATO: no post");
         let e = app.world().entity(cam);
         assert!(!e.contains::<TemporalJitter>() && !e.contains::<MipBias>() && !e.contains::<MotionVectorPrepass>());
-        assert!(!e.contains::<DepthPrepass>() && !e.contains::<NormalPrepass>() && !e.contains::<Fxaa>());
+        assert!(!e.contains::<Fxaa>());
+        // No device here, so room to spare: the prepasses HIGH brought stay
+        // rather than re-specialise every pipeline.
+        assert_eq!(
+            e.contains::<DepthPrepass>(),
+            gpu::caps().prepass_room() >= PREPASS_KEEP_ROOM,
+            "the depth prepass kept where there is room"
+        );
     }
 
     #[test]

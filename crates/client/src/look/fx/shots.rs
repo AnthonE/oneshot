@@ -196,13 +196,25 @@ fn land(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, dir: Vec3, len: f32, to
         Some(Met::Face(hit, matter)) => fx.strike(scene.map, w, matter, &hit),
         Some(Met::Body(slot, Matter::Flesh)) => fx.bleed(scene.map, slot, w, to, dir),
         Some(Met::Body(_, matter)) => {
-            fx.impact(w, matter, to, -dir);
+            fx.impact(w, matter, to, -dir, super::surface::floor_under(scene.map, to, -dir));
         }
         Some(Met::Hull) => {
-            fx.impact(w, Matter::Hull, to, -dir);
+            fx.impact(
+                w,
+                Matter::Hull,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
         }
         Some(Met::Somewhere) => {
-            fx.impact(w, Matter::Concrete, to, -dir);
+            fx.impact(
+                w,
+                Matter::Concrete,
+                to,
+                -dir,
+                super::surface::floor_under(scene.map, to, -dir),
+            );
         }
         None => {}
     }

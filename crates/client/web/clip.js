@@ -320,13 +320,13 @@ let started = false;
 window.addEventListener("message", async (ev) => {
   if (ev.origin !== location.origin || !ev.data || ev.data.type !== "clip-tape" || started) return;
   started = true;
-  const { tape, style, line, link, tag: withTag } = ev.data;
+  const { tape, style, line, link, tag: withTag, quality } = ev.data;
   try {
     const mod = await load(q.get("gfx") || "webgl2");
     await fonts;
     const s = sink({ line: String(line || "").slice(0, 60), link: link || "elopros.com/games/oneshot/play", tag: withTag !== false });
     /* Bevy's loop owns the page from here (`film`, crates/client/src/lib.rs). */
-    mod.film(new Uint8Array(tape), style || "wide", "#film", s);
+    mod.film(new Uint8Array(tape), style || "wide", "#film", s, String(quality || ""));
   } catch (e) {
     const why = (e && e.message) || String(e);
     /* winit hands Bevy's loop to the browser with a throw it says is not an

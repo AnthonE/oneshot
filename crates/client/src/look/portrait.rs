@@ -34,9 +34,15 @@ use super::guns::Models;
 /// The render layer only the portrait's camera, lights and body are on.
 pub const LAYER: usize = 7;
 
-/// The picture's size, px: an upright figure, 2:3.
+/// The picture's smallest size, px: an upright figure, 2:3. It is drawn at
+/// the size the title shows it ([`fit`]), from this up to [`H_MAX_PX`].
 pub const W_PX: u32 = 400;
 pub const H_PX: u32 = 600;
+/// The tallest it is drawn, px: a 4K window's [`VIEW_VH`] fits.
+pub const H_MAX_PX: u32 = 1260;
+/// How tall the title shows him, a share of the window's height
+/// (`front.rs`' stage), percent.
+pub const VIEW_VH: f32 = 56.0;
 
 /// Where he stands: well under every map, out of every world query's way.
 const AT: Vec3 = Vec3::new(0.0, -400.0, 0.0);
@@ -187,6 +193,11 @@ pub fn stand(
         return;
     };
     if views.is_empty() {
+        // Off the title: no body posed, animated and drawn into an image
+        // nobody shows; made again when the title is back.
+        if let Some((e, _)) = portrait.body.take() {
+            commands.entity(e).despawn();
+        }
         return;
     }
     let skin = player.skin;
@@ -229,6 +240,41 @@ pub fn stand(
     );
 }
 
+/// The picture's pixels for a window `physical_h` tall: as many as it is
+/// shown at, within [`H_PX`]..=[`H_MAX_PX`], at 2:3.
+pub fn size_for(physical_h: u32) -> (u32, u32) {
+    let h = ((physical_h as f32 * VIEW_VH / 100.0).round() as u32).clamp(H_PX, H_MAX_PX);
+    // A multiple of three, so the 2:3 width is whole.
+    let h = h - h % 3;
+    (h * W_PX / H_PX, h)
+}
+
+/// The picture drawn at the size it is shown, so a tall window doesn't
+/// show it stretched and soft: resized when the window's height moves.
+pub fn fit(
+    windows: Query<&Window, (With<bevy::window::PrimaryWindow>, Changed<Window>)>,
+    portrait: Option<Res<Portrait>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let (Ok(w), Some(portrait)) = (windows.single(), portrait) else {
+        return;
+    };
+    let (pw, ph) = size_for(w.physical_height());
+    let Some(img) = images.get(&portrait.image) else {
+        return;
+    };
+    if img.width() == pw && img.height() == ph {
+        return;
+    }
+    if let Some(img) = images.get_mut(&portrait.image) {
+        img.resize(bevy::render::render_resource::Extent3d {
+            width: pw,
+            height: ph,
+            depth_or_array_layers: 1,
+        });
+    }
+}
+
 /// The camera on while something shows the picture.
 pub fn activate(views: Query<(), With<PortraitView>>, mut cams: Query<&mut Camera, With<PortraitCam>>) {
     let on = !views.is_empty();
@@ -236,5 +282,20 @@ pub fn activate(views: Query<(), With<PortraitView>>, mut cams: Query<&mut Camer
         if cam.is_active != on {
             cam.is_active = on;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drawn at the size shown, within its bounds, at its aspect.
+    #[test]
+    fn the_picture_is_drawn_at_the_size_shown() {
+        assert_eq!(size_for(720), (W_PX, H_PX));
+        let (w, h) = size_for(1440);
+        assert_eq!(h, 804);
+        assert_eq!(w * H_PX, h * W_PX);
+        assert_eq!(size_for(4320).1, H_MAX_PX);
     }
 }

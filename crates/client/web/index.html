@@ -302,7 +302,7 @@
          under the card. The frame posts back an MP4 made on this machine;
          nothing is uploaded. One frame per video, so another style is
          another frame over the same tape. */
-      const clipUi = { tape: null, frame: null, url: null, send: null, style: 'wide', live: true };
+      const clipUi = { tape: null, frame: null, url: null, send: null, style: 'wide', live: true, quality: '' };
       const $c = (id) => document.getElementById(id);
       const clipSay = (text, bad) => { $c('clip-status').textContent = text; $c('clip-status').className = bad ? 'bad' : ''; };
       function clipReset() {
@@ -335,13 +335,15 @@
         view.append(frame);
         clipUi.frame = frame;
         clipSay('Loading the camera...');
-        const send = { type: 'clip-tape', tape: clipUi.tape.slice(0), style, line: '', tag: true };
+        const send = { type: 'clip-tape', tape: clipUi.tape.slice(0), style, line: '', tag: true, quality: clipUi.quality };
         clipUi.send = () => frame.contentWindow.postMessage(send, location.origin, [send.tape]);
       }
-      window.__oneshotClip = (bytes, held, api, live) => {
+      window.__oneshotClip = (bytes, held, api, live, quality) => {
         /* A copy the page owns: the game's view of its memory moves on. */
         clipUi.tape = new Uint8Array(bytes).buffer;
         clipUi.live = live !== false;
+        /* The player's rung (clip.rs): the film draws no more than the match. */
+        clipUi.quality = String(quality || '');
         for (const b of $c('clip-styles').querySelectorAll('button')) {
           const shut = clipUi.live && !CLIP_LIVE.includes(b.dataset.style);
           b.disabled = shut;

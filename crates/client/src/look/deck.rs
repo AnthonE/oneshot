@@ -165,6 +165,10 @@ pub struct CloudParams {
     pub dust: Vec4,
     pub disk: Vec4,
     pub disk_rgb: Vec4,
+    /// WebGL2's light shafts over the sky (`shafts::WebShafts`).
+    pub shaft_lo: Vec4,
+    pub shaft_hi: Vec4,
+    pub shaft_tint: Vec4,
 }
 
 /// What the WebGL2 deck draws its sun disk with: toward the sun, and its
@@ -293,6 +297,9 @@ impl CloudParams {
             dust: p.fog.dust_lanes(),
             disk: disk_dir.extend(0.0),
             disk_rgb: disk_rgb.extend(0.0),
+            shaft_lo: Vec4::ZERO,
+            shaft_hi: Vec4::ZERO,
+            shaft_tint: Vec4::ZERO,
         }
     }
 }
@@ -672,6 +679,7 @@ pub fn drive(
     drift: Res<Drift>,
     tier: Res<Tier>,
     shafts: Res<super::shafts::Shafts>,
+    web: Res<super::shafts::WebShafts>,
     deck: Option<Res<DeckHandles>>,
     cam: Query<(Has<TemporalAntiAliasing>, &Exposure), With<EyeCam>>,
     mut clouds: ResMut<Assets<CloudMaterial>>,
@@ -683,14 +691,19 @@ pub fn drive(
     let m = &mood.mood;
     let (temporal, ev) = cam.single().map_or((false, m.ev100), |(t, e)| (t, e.ev100));
     let at = drift.anchor;
-    let want = CloudParams::new(
-        &m.compose(at.off, sky::baked()),
-        sky::CLOUD_NITS,
-        tier.cloud_steps(),
-        temporal,
-        &at,
-        Disk::of(m, ev),
-    );
+    let want = CloudParams {
+        shaft_lo: web.lo,
+        shaft_hi: web.hi,
+        shaft_tint: web.tint,
+        ..CloudParams::new(
+            &m.compose(at.off, sky::baked()),
+            sky::CLOUD_NITS,
+            tier.cloud_steps(),
+            temporal,
+            &at,
+            Disk::of(m, ev),
+        )
+    };
     if clouds.get(&deck.cloud).is_some_and(|c| c.params != want) {
         if let Some(c) = clouds.get_mut(&deck.cloud) {
             c.params = want;
@@ -724,15 +737,15 @@ mod tests {
         assert!((worley(3, p, 4) - worley(3, p + Vec3::splat(4.0), 4)).abs() < 1e-6);
     }
 
-    /// The uniform holds every lane `cloud.wgsl` declares, in order: 26
+    /// The uniform holds every lane `cloud.wgsl` declares, in order: 29
     /// four-float lanes.
     #[test]
     fn the_deck_uniform_matches_the_shader() {
-        assert_eq!(CloudParams::min_size().get(), 26 * 16);
+        assert_eq!(CloudParams::min_size().get(), 29 * 16);
         let src = include_str!("../../assets/shaders/cloud.wgsl");
         let body = &src[src.find("struct Cloud {").unwrap()..];
         let body = &body[..body.find('}').unwrap()];
-        assert_eq!(body.matches(": vec4<f32>,").count(), 26);
+        assert_eq!(body.matches(": vec4<f32>,").count(), 29);
     }
 
     /// The flat deck at LOW, the slab above it, and the stars and the moon

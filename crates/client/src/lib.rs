@@ -357,6 +357,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::SkyClock>()
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
+    .init_resource::<look::shafts::WebShafts>()
     .init_resource::<look::cliffs::SkinLift>()
     .add_systems(
         Startup,
@@ -390,6 +391,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 look::moon::drive,
                 look::rain::drive,
                 look::rainbow::drive,
+                look::shafts::paint_web,
                 look::cloud_shadow::drive,
                 look::rig::fog,
             ),
@@ -454,6 +456,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::own_shadow::stream.after(draw_fighters),
             look::portrait::stand,
             look::portrait::activate,
+            look::portrait::fit,
         ),
     )
     .add_systems(
@@ -1078,6 +1081,7 @@ pub(crate) fn happened(
             look.pitch.sin(),
             look.pitch.cos() * look.yaw.sin(),
         );
+        fx.own_swing(s.core.own().0.melee_cool, dir);
         let scene = look::fx::Scene {
             map: &s.core.map,
             others: &others,
@@ -1277,7 +1281,7 @@ mod web_start {
     /// doesn't return: a page holds one Bevy app, so a clip draws in a
     /// frame of its own.
     #[wasm_bindgen]
-    pub fn film(tape: Vec<u8>, style: String, canvas: String, sink: JsValue) -> Result<(), JsValue> {
+    pub fn film(tape: Vec<u8>, style: String, canvas: String, sink: JsValue, quality: String) -> Result<(), JsValue> {
         use super::{clip, film};
         let tape = client_net::tape::read(&tape).map_err(|e| JsValue::from_str(&format!("not a clip: {e}")))?;
         let json = if style.trim_start().starts_with('{') {
@@ -1288,6 +1292,11 @@ mod web_start {
             })?
         };
         let mut script = film::Script::parse(&json).map_err(|e| JsValue::from_str(&format!("shot list: {e}")))?;
+        // The player's rung, from the page (`clip::take`): a film beside a
+        // match draws no more than the match does.
+        if let Some(q) = super::look::quality::Quality::from_name(quality.trim()) {
+            script.quality = q.name().into();
+        }
         script.anchor(tape.end_ms() / 1000.0);
         let mut app = film::app(script, tape, Some(canvas)).map_err(|e| JsValue::from_str(&e))?;
         app.insert_non_send_resource(film::encode::Sink(sink));

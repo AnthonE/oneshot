@@ -27,9 +27,10 @@
 //! on the eye or the gun.
 //!
 //! While there is no body of yours to shadow it waits far under the map,
-//! idle, holding a rifle, still drawn (and discarded) there, so its
-//! pipelines are built before the match needs them, the way `prewarm.rs`
-//! builds everyone else's.
+//! idle, holding a rifle, still drawn (and discarded) there for
+//! [`PARKED_WARM_S`], so its pipelines are built before the match needs
+//! them, the way `prewarm.rs` builds everyone else's; then hidden and left
+//! unposed until you have a body again.
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::prelude::*;
@@ -55,6 +56,9 @@ pub const HEAD_PUSH_M: f32 = 0.75;
 /// nothing it casts can land on anything (it is further from the sun than
 /// every floor).
 const PARKED: Vec3 = Vec3::new(0.0, -500.0, 0.0);
+/// How long it is drawn there before it is hidden, seconds: its pipelines
+/// are built within a few frames, a slow GPU's within a few seconds.
+pub const PARKED_WARM_S: f32 = 6.0;
 
 /// Drawn by no camera, cast in full. The uniform is never read but by the
 /// discard (WebGL2 wants a binding of 16 bytes at least).
@@ -82,6 +86,8 @@ pub struct ShadowMat(pub Handle<ShadowOnly>);
 #[derive(Component)]
 pub struct OwnShadow {
     shown: bool,
+    /// Seconds parked since it was last shown (or spawned).
+    parked_s: f32,
 }
 
 pub fn setup(mut commands: Commands, mut mats: ResMut<Assets<ShadowOnly>>) {
@@ -139,9 +145,13 @@ pub fn stream(
     let core = &s.core;
     let Ok((root, mut own)) = own.single_mut() else {
         let e = super::bodies::spawn_shadow(&mut commands, &models, core.team);
-        commands
-            .entity(e)
-            .insert((OwnShadow { shown: false }, Transform::from_translation(PARKED)));
+        commands.entity(e).insert((
+            OwnShadow {
+                shown: false,
+                parked_s: 0.0,
+            },
+            Transform::from_translation(PARKED),
+        ));
         return;
     };
     let (f, p) = core.own();
@@ -154,6 +164,24 @@ pub fn stream(
         own.shown = shown;
         if let Ok(mut b) = bodies.get_mut(root) {
             b.afresh();
+        }
+        if shown {
+            if own.parked_s >= PARKED_WARM_S {
+                commands.entity(root).insert(Visibility::Inherited);
+            }
+            own.parked_s = 0.0;
+        }
+    }
+    // Warmed under the map: hidden, and not posed, until there is a body
+    // of yours again.
+    if !shown {
+        let was = own.parked_s;
+        own.parked_s += time.delta_secs();
+        if own.parked_s >= PARKED_WARM_S {
+            if was < PARKED_WARM_S {
+                commands.entity(root).insert(Visibility::Hidden);
+            }
+            return;
         }
     }
     // Parked, it stands idle holding a rifle, so its skinned and its gun's

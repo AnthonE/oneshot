@@ -524,6 +524,65 @@ pub fn covers(min: Vec3, max: Vec3, me: usize, all: &[Other]) -> [Cover; 6] {
     out
 }
 
+/// The edges of box `me` of `all` (its extent `min..max`) that another
+/// box hides or carries on, as bits (`weathering.wgsl`'s `edge_distance`):
+/// 0..3 the top's at +x, −x, +z, −z; 4..7 the uprights at (+x, +z),
+/// (+x, −z), (−x, +z), (−x, −z). An edge is hidden where, just past it on
+/// either of its faces (and just inside the other), there is another box:
+/// a slab on a wall's top, a parapet on a slab's rim, an end wall against a
+/// side wall's end, a flush box going on with the face. Wear along those
+/// would draw a worn band where the wall has no edge. Sampled at a quarter,
+/// a half and three quarters along; hidden where two of the three are.
+pub fn hidden_edges(min: Vec3, max: Vec3, me: usize, all: &[Other]) -> u8 {
+    const D: f32 = 0.02;
+    const EPS: f32 = 1e-4;
+    let inside = |q: Vec3| {
+        all.iter()
+            .enumerate()
+            .any(|(j, o)| j != me && !o.gone && (0..3).all(|k| q[k] >= o.min[k] - EPS && q[k] <= o.max[k] + EPS))
+    };
+    let (x, z) = (Vec3::X, Vec3::Z);
+    // Each edge: a point on it at `t` of its run, and its two faces' normals.
+    let top = |t: f32, n: Vec3| -> (Vec3, Vec3, Vec3) {
+        let y = max.y;
+        let p = if n.x != 0.0 {
+            Vec3::new(if n.x > 0.0 { max.x } else { min.x }, y, min.z + (max.z - min.z) * t)
+        } else {
+            Vec3::new(min.x + (max.x - min.x) * t, y, if n.z > 0.0 { max.z } else { min.z })
+        };
+        (p, n, Vec3::Y)
+    };
+    let upright = |t: f32, a: Vec3, b: Vec3| -> (Vec3, Vec3, Vec3) {
+        let px = if a.x > 0.0 { max.x } else { min.x };
+        let pz = if b.z > 0.0 { max.z } else { min.z };
+        (Vec3::new(px, min.y + (max.y - min.y) * t, pz), a, b)
+    };
+    let edges: [&dyn Fn(f32) -> (Vec3, Vec3, Vec3); 8] = [
+        &|t| top(t, x),
+        &|t| top(t, -x),
+        &|t| top(t, z),
+        &|t| top(t, -z),
+        &|t| upright(t, x, z),
+        &|t| upright(t, x, -z),
+        &|t| upright(t, -x, z),
+        &|t| upright(t, -x, -z),
+    ];
+    let mut mask = 0u8;
+    for (bit, edge) in edges.iter().enumerate() {
+        let hid = [0.25, 0.5, 0.75]
+            .iter()
+            .filter(|&&t| {
+                let (p, a, b) = edge(t);
+                inside(p + (a - b) * D) || inside(p + (b - a) * D)
+            })
+            .count();
+        if hid >= 2 {
+            mask |= 1 << bit;
+        }
+    }
+    mask
+}
+
 /// The box two boxes make together, when they make one: the same extent
 /// on two axes, and overlapping or touching on the third.
 pub fn union_box(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> Option<(Vec3, Vec3)> {
@@ -1355,5 +1414,25 @@ mod tests {
             hi = hi.max(push);
         }
         assert!(hi - lo > 0.3, "the relief is flat: {lo}..{hi}");
+    }
+
+    /// A slab on a wall hides the wall's top edges; an end wall against a
+    /// side wall's end hides that end's uprights; a lone box hides none.
+    #[test]
+    fn edges_another_box_covers_wear_nothing() {
+        let wall = (Vec3::new(-10.0, 0.0, 6.5), Vec3::new(10.0, 4.0, 7.0));
+        let slab = Other::new(Vec3::new(-10.0, 4.0, -7.0), Vec3::new(10.0, 4.5, 7.0));
+        let end = Other::new(Vec3::new(10.0, 0.0, -7.0), Vec3::new(10.5, 4.0, 7.0));
+        let all = [Other::new(wall.0, wall.1), slab, end];
+        let m = hidden_edges(wall.0, wall.1, 0, &all);
+        assert_eq!(m & 0b1111, 0b1111, "the slab hides every top edge: {m:08b}");
+        assert_eq!(
+            m & 0b0011_0000,
+            0b0011_0000,
+            "the end wall hides the +x uprights: {m:08b}"
+        );
+        assert_eq!(m & 0b1100_0000, 0, "the -x uprights are open: {m:08b}");
+        let lone = [Other::new(wall.0, wall.1)];
+        assert_eq!(hidden_edges(wall.0, wall.1, 0, &lone), 0);
     }
 }

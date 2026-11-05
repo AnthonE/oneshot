@@ -552,8 +552,8 @@ fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool) {
 }
 
 /// How tall Triple T stands on the stage: tall enough to read at 720p
-/// without reaching the wordmark.
-const HERO_VH: f32 = 56.0;
+/// without reaching the wordmark (his picture is drawn at that size).
+const HERO_VH: f32 = crate::look::portrait::VIEW_VH;
 
 /// The open stage: Triple T beside the panel, and the picked mode over the
 /// scene.
