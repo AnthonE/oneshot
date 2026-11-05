@@ -1,7 +1,7 @@
 oneshot: third-party notices
 
-Code is MIT (the workspace Cargo.toml). Assets are ours or CC0; nothing
-here is NC or SA.
+Code is MIT (the workspace Cargo.toml). Assets are ours, CC0, or CC-BY and
+credited here; nothing here is NC or SA.
 
 Models (crates/client/assets/models): Triple T is commissioned from Meshy
 on a paid plan, owned outright, from the Gates repository (AnthonE/Gates,
@@ -14,6 +14,15 @@ is commissioned from Meshy on a paid plan and owned outright, from our own
 prompt (in its script in tools/models, which cuts the mesh it gets with
 Blender: sized, turned, its maps made smaller and re-encoded as JPEG); no
 attribution is owed.
+
+The truck (models/truck.glb) is "Tesla Cybertruck" (https://skfb.ly/6QSBr)
+by hashikemu, licensed under Creative Commons Attribution 4.0
+(http://creativecommons.org/licenses/by/4.0/). Changed by
+tools/models/truck.py: its far LOD and its cracked-glass decal removed, its
+tyres split into four wheels, turned and centred, the cover taken off its
+bed and a deck put in it, its textures made smaller and re-encoded as JPEG.
+Its steel panels and its tyres wear photographed materials from ambientCG
+(ambientcg.com, CC0): Metal009 (brushed steel) and Rubber004.
 
 Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):

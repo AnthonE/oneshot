@@ -100,6 +100,11 @@ impl Still {
         s.ready = true;
         s.welcomes = 1;
         s.map_id = map;
+        // The map itself too: what stands on its ground asks it where that
+        // is (a posed truck on a terrain).
+        if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == map) {
+            s.core.map = d.build();
+        }
         Still(s)
     }
 

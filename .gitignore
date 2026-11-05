@@ -1,8 +1,9 @@
 /target
-# Downloads as they came: tools/models reads Meshy's raw meshes from sources/meshy
-/sources/
 __pycache__/
 node_modules
 traces/
 board/passes/
 moodboard/
+# Downloads as they came: tools/models reads Meshy's raw meshes (sources/meshy)
+# and the truck from here
+/sources/
