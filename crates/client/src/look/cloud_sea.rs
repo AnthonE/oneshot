@@ -111,7 +111,13 @@ fn mesh(mid: Vec2, y: f32) -> Mesh {
 }
 
 /// Spawns the sea of cloud at `y` (the map's `light.sea`) round `mid`.
-pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut Assets<CloudSeaMaterial>, mid: Vec2, y: f32) {
+pub fn spawn(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<CloudSeaMaterial>,
+    mid: Vec2,
+    y: f32,
+) {
     commands.spawn((
         crate::level::LevelPart,
         CloudSea::default(),
@@ -123,7 +129,9 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
                 reflectance: 0.0,
                 ..default()
             },
-            extension: Sea { params: params(Vec2::ZERO) },
+            extension: Sea {
+                params: params(Vec2::ZERO),
+            },
         })),
         Transform::IDENTITY,
         // Its billows are the shader's: the sheet itself shades nothing.
@@ -158,7 +166,9 @@ mod tests {
             panic!("positions");
         };
         assert!(p.iter().all(|v| v[1] == -30.0));
-        let (lo, hi) = p.iter().fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v[0]), hi.max(v[0])));
+        let (lo, hi) = p
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v[0]), hi.max(v[0])));
         assert!(lo <= 3.0 - REACH_M + 1.0 && hi >= 3.0 + REACH_M - 1.0);
     }
 }

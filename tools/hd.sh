@@ -53,7 +53,7 @@ for v in "${VIEWS[@]}"; do
   if [ ${#want[@]} -gt 0 ] && [[ ! " ${want[*]} " =~ " $id " ]] && [[ ! " ${want[*]} " =~ " hd-$id " ]]; then continue; fi
   png=$out/$id.png
   rm -f "$png"
-  if timeout 120 "$bin" --pose "$q" --quality "${HD_QUALITY:-high}" --shot "$png" --shot-at "$secs" >"$out/$id.log" 2>&1 && [ -s "$png" ]; then
+  if timeout "${HD_TIMEOUT:-120}" "$bin" --pose "$q" --quality "${HD_QUALITY:-high}" --shot "$png" --shot-at "$secs" >"$out/$id.log" 2>&1 && [ -s "$png" ]; then
     echo "$png  $q"
   else
     echo "hd: $id was not shot (see $out/$id.log)" >&2

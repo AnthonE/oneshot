@@ -233,6 +233,36 @@ pub const DUSK: Mood = Mood {
     field_at: [25.0, 5.0],
 };
 
+/// Cloudbreak: an island over a sea of cloud under a heavy grey deck with
+/// breaks in it. The sun (41°) in the south, across the line between the
+/// bases, comes through the breaks: its light dimmed, the deck's shadows
+/// sweeping the island, the fill opened for the grey.
+pub const OVERCAST: Mood = Mood {
+    name: "overcast",
+    sun_elev: 0.72,
+    sun_azim: core::f32::consts::PI,
+    sun_rgb: [1.0, 0.97, 0.92],
+    sun: 0.7,
+    light: 0.75,
+    fill: 1.1,
+    ev100: 13.9,
+    cover: 0.85,
+    dark: 0.35,
+    mist: 0.0,
+    rain: 0.0,
+    dust: 0.0,
+    wet: 0.0,
+    wind_azim: 0.9,
+    wind_ms: 5.0,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.0,
+    moon_lit: 1.0,
+    shade: 0.45,
+    field_at: [33.0, 7.0],
+};
+
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
 /// light (`LightDef`: its exposure, no sun, the fill all but closed) is
 /// what draws it; the sky above the roof is never seen.
@@ -257,8 +287,7 @@ pub fn of(id: u8) -> Mood {
         },
         5 => DUSK,
         6 => INTERIOR,
-        // Cloudbreak, over its sea of cloud, till the look loop gives it its own.
-        7 => MIST,
+        7 => OVERCAST,
         _ => NOON,
     }
 }

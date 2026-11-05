@@ -138,7 +138,13 @@ fn weights(fu: f32, fv: f32) -> [f32; 4] {
 /// The skin over terrain `t`'s rock inside `lo..hi` (and [`MARGIN_M`]
 /// past it), keyed by `key`: its mesh for the ground's material (`None`
 /// where the map has no rock) and its [`Lift`].
-pub fn skin(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), key: u32) -> (Option<Mesh>, Lift) {
+pub fn skin(
+    t: &TerrainDef,
+    lo: (f32, f32),
+    hi: (f32, f32),
+    key: u32,
+    land: crate::level::Land,
+) -> (Option<Mesh>, Lift) {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     if nx < 2 || nz < 2 || t.heights.len() < nx * nz {
         return (None, Lift::default());
@@ -149,7 +155,7 @@ pub fn skin(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), key: u32) -> (Option
     let h = |k: usize| t.heights[k] as f32 / HEIGHT_Q;
     // The ground's own, per vertex: its slope and splat, its normal.
     let ground: Vec<(f32, [f32; 4])> = (0..nx * nz)
-        .map(|k| crate::level::ground_point(t, k % nx, k / nx))
+        .map(|k| crate::level::ground_point(t, k % nx, k / nx, land))
         .collect();
     let normals = crate::level::ground_normals(t);
     let n = nu * nv;
@@ -302,7 +308,7 @@ mod tests {
     fn the_skin_lies_on_the_ground_the_sim_stands_on() {
         let (d, t) = canyon();
         let sim_t = sim::terrain::Terrain::build(t);
-        let (mesh, lift) = skin(t, d.lo, d.hi, 7);
+        let (mesh, lift) = skin(t, d.lo, d.hi, 7, crate::level::Land::Canyon);
         let mesh = mesh.expect("Dry Fork's banks carry a skin");
         let pos = f3(&mesh, Mesh::ATTRIBUTE_POSITION);
         let band = |p: Vec3| {
@@ -344,7 +350,7 @@ mod tests {
     #[test]
     fn the_skin_is_shaded_broken() {
         let (d, t) = canyon();
-        let (mesh, _) = skin(t, d.lo, d.hi, 7);
+        let (mesh, _) = skin(t, d.lo, d.hi, 7, crate::level::Land::Canyon);
         let mesh = mesh.unwrap();
         let nrm = f3(&mesh, Mesh::ATTRIBUTE_NORMAL);
         let Some(V::Float32x2(uv1)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
@@ -376,7 +382,7 @@ mod tests {
     #[test]
     fn the_skin_meets_the_ground_without_a_seam() {
         let (d, t) = canyon();
-        let (mesh, lift) = skin(t, d.lo, d.hi, 7);
+        let (mesh, lift) = skin(t, d.lo, d.hi, 7, crate::level::Land::Canyon);
         let mesh = mesh.unwrap();
         let pos = f3(&mesh, Mesh::ATTRIBUTE_POSITION);
         let Some(V::Float32x2(uv1)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
@@ -406,7 +412,7 @@ mod tests {
             nz: 5,
             heights: &FLAT,
         };
-        let (mesh, lift) = skin(&t, (-4.0, -4.0), (4.0, 4.0), 1);
+        let (mesh, lift) = skin(&t, (-4.0, -4.0), (4.0, 4.0), 1, crate::level::Land::Canyon);
         assert!(mesh.is_none());
         let (g, l) = lift.at(0.3, -1.1).unwrap();
         assert!((g - 0.5).abs() < 1e-5 && l < 0.0);

@@ -589,7 +589,27 @@ const CREEK_BASIN: (f32, f32) = (0.6, 1.2);
 /// differences) and its splat weights (sand, grass, gravel, rock): rock
 /// where it is steep, gravel down in the creek's trough, grass up on the
 /// hills in patches, sand the rest.
-pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize) -> (f32, [f32; 4]) {
+/// What kind of land a terrain is, for what grows on it and what lies
+/// round it: a canyon (Dry Fork: grass up its hills, gravel in its creek,
+/// land beyond its rim, a sea at its mouth), or an island over a void (a map
+/// with a `void`: bare sandstone and its rock, cloud all round and under).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Land {
+    Canyon,
+    Isle,
+}
+
+impl Land {
+    pub fn of(def: &sim::map::Def) -> Land {
+        if def.void > f32::NEG_INFINITY {
+            Land::Isle
+        } else {
+            Land::Canyon
+        }
+    }
+}
+
+pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f32, [f32; 4]) {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
     let dx = (h((i + 1).min(nx - 1), j) - h(i.saturating_sub(1), j)) / (2.0 * t.cell);
@@ -600,6 +620,10 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize) -> (f32, [f32; 4]
     let along_x = h((i + s).min(nx - 1), j).min(h(i.saturating_sub(s), j)) - y;
     let along_z = h(i, (j + s).min(nz - 1)).min(h(i, j.saturating_sub(s))) - y;
     let trough = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
+    if land == Land::Isle {
+        // Sandstone: sand where it lies, rock where it stands.
+        return (slope, splat_in(slope, y, 0.0, 0.0));
+    }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
     (slope, splat_in(slope, y, trough, cover))
 }
@@ -655,7 +679,7 @@ pub(crate) fn ground_normals(t: &TerrainDef) -> Vec<Vec3> {
 /// The ground mesh: the sim's vertices and its split of each cell (low
 /// corner to high corner), with its splat weights in the vertex colour
 /// ([`ground_point`]).
-fn terrain_mesh(t: &TerrainDef) -> Mesh {
+fn terrain_mesh(t: &TerrainDef, land: Land) -> Mesh {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
     let mut pos = Vec::with_capacity(nx * nz);
@@ -663,7 +687,7 @@ fn terrain_mesh(t: &TerrainDef) -> Mesh {
     for j in 0..nz {
         for i in 0..nx {
             pos.push([t.x0 + i as f32 * t.cell, h(i, j), t.z0 + j as f32 * t.cell]);
-            col.push(ground_point(t, i, j).1);
+            col.push(ground_point(t, i, j, land).1);
         }
     }
     let mut idx = Vec::with_capacity((nx - 1) * (nz - 1) * 6);
@@ -691,6 +715,7 @@ pub fn build(
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
     water_mats: &mut Assets<crate::look::water::WaterMaterial>,
+    cloud_mats: &mut Assets<crate::look::cloud_sea::CloudSeaMaterial>,
     images: &mut Assets<Image>,
     cards: &mut crate::look::trees::TreeCards,
     old: &Query<Entity, With<LevelPart>>,
@@ -703,6 +728,7 @@ pub fn build(
         return;
     };
     let map = def.build();
+    let land = Land::of(def);
     let (lo, hi) = (map.lo, map.hi);
     let (cx, cz) = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let half = (hi.0 - lo.0).max(hi.1 - lo.1) * 0.5 + 8.0;
@@ -865,7 +891,8 @@ pub fn build(
     crate::look::boulders::spawn_scenery(commands, id);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
-    if let Some(t) = &def.terrain {
+    // An island has none: the cloud is its distance.
+    if let Some(t) = def.terrain.as_ref().filter(|_| land == Land::Canyon) {
         crate::look::far::spawn(
             commands,
             meshes,
@@ -1179,9 +1206,14 @@ pub fn build(
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
             // them would light a fighter's feet they shade).
+            // Bare sandstone grows none of it.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
-            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea) {
+            let canyon = land == Land::Canyon;
+            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea)
+                .into_iter()
+                .filter(|_| canyon)
+            {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
@@ -1197,7 +1229,10 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear) {
+            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear)
+                .into_iter()
+                .filter(|_| canyon)
+            {
                 commands.spawn((
                     LevelPart,
                     ClutterPart,
@@ -1212,6 +1247,12 @@ pub fn build(
                     bevy::light::NotShadowCaster,
                 ));
             }
+            // Cloud wets nothing: an island's ground is dry to its foot.
+            let wet_from = if land == Land::Isle {
+                f32::NEG_INFINITY
+            } else {
+                map.light.sea
+            };
             let soil = mats.add(StandardMaterial {
                 base_color: Color::srgb(0.75, 0.62, 0.48),
                 perceptual_roughness: 0.95,
@@ -1220,18 +1261,18 @@ pub fn build(
             });
             commands.spawn((
                 LevelPart,
-                GroundMesh { sea: map.light.sea },
-                Mesh3d(meshes.add(terrain_mesh(t))),
+                GroundMesh { sea: wet_from },
+                Mesh3d(meshes.add(terrain_mesh(t, land))),
                 MeshMaterial3d(soil.clone()),
                 Transform::default(),
             ));
             // The rock skin over its rock faces (`look/cliffs.rs`): no
             // shadow of its own, the ground under it casts it.
-            let (skin, lift) = crate::look::cliffs::skin(t, lo, hi, rock_key(id));
+            let (skin, lift) = crate::look::cliffs::skin(t, lo, hi, rock_key(id), land);
             if let Some(skin) = skin {
                 commands.spawn((
                     LevelPart,
-                    GroundMesh { sea: map.light.sea },
+                    GroundMesh { sea: wet_from },
                     Mesh3d(meshes.add(skin)),
                     MeshMaterial3d(soil),
                     Transform::default(),
@@ -1239,8 +1280,11 @@ pub fn build(
                 ));
             }
             commands.insert_resource(crate::look::cliffs::SkinLift(Some(Arc::new(lift))));
-            // The sea, where the map has one, under the mood's sun.
-            if map.light.sea.is_finite() {
+            // The sea, where the map has one, under the mood's sun; under an
+            // island, cloud.
+            if map.light.sea.is_finite() && land == Land::Isle {
+                crate::look::cloud_sea::spawn(commands, meshes, cloud_mats, Vec2::new(cx, cz), map.light.sea);
+            } else if map.light.sea.is_finite() {
                 crate::look::water::spawn(
                     commands,
                     meshes,

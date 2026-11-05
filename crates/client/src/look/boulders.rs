@@ -180,10 +180,26 @@ const DRY_FORK: [Prop; 19] = [
     stone(2, [157.5, -5.9, 70.0], [5.0, 5.2, 4.4], 0.8, -0.6),
 ];
 
+/// Cloudbreak's sky: stacks standing out of the sea of cloud (at −30) all
+/// round, their feet under it, each further one paler in the air, some
+/// over the island's own height so the skyline is never empty.
+const CLOUDBREAK: [Prop; 9] = [
+    stack(-150.0, -230.0, -45.0, 55.0, 0.6),
+    stack(-320.0, -420.0, -45.0, 80.0, 2.1),
+    stack(120.0, -300.0, -45.0, 45.0, 4.0),
+    stack(260.0, 90.0, -45.0, 60.0, 1.3),
+    stack(-260.0, 160.0, -45.0, 50.0, 3.3),
+    stack(60.0, 420.0, -45.0, 75.0, 5.0),
+    stack(-520.0, -60.0, -45.0, 95.0, 0.2),
+    stack(480.0, -380.0, -45.0, 70.0, 2.7),
+    stack(-90.0, -600.0, -45.0, 85.0, 1.8),
+];
+
 /// The scenery of map `id`.
 pub fn scenery(id: u8) -> &'static [Prop] {
     match id {
         3 => &DRY_FORK,
+        7 => &CLOUDBREAK,
         _ => &[],
     }
 }
