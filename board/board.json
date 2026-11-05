@@ -522,7 +522,7 @@
     {
       "id": "hd-coast",
       "name": "Cloudbreak: the island from off its edge",
-      "what": "from the void east of the island, a little above it, the cliff and its underside, the ring and the spire beyond",
+      "what": "from the void south-east of the island, level with its rim and looking down a little, its cliff, the keel it hangs from and the cloud far under it, the ring and the spire beyond",
       "take": "an island high over nothing: its edge, the rock under it, undercut, and the void a third of the frame",
       "shoot": [
         "tools/hd.sh"
