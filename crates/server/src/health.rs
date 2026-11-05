@@ -92,6 +92,10 @@ pub struct Health {
     pub tick_window_max_us: AtomicU64,
     /// Snapshots the QUIC connection refused to send (closed, too big).
     pub send_errors: AtomicU64,
+    /// Input datagrams dropped: a session over its rate, or the sim's input
+    /// lane full (`net::INPUT_LANE`). Each carries the frames before it,
+    /// so an honest client loses nothing to one.
+    pub inputs_dropped: AtomicU64,
     /// QUIC packets sent and lost, summed over sessions as they're sampled.
     pub packets_sent: AtomicU64,
     pub packets_lost: AtomicU64,
@@ -143,6 +147,7 @@ impl Health {
             tick_us: self.tick_us.read(),
             tick_max_us: g(&self.tick_us.max),
             send_errors: g(&self.send_errors),
+            inputs_dropped: g(&self.inputs_dropped),
             packets_sent: g(&self.packets_sent),
             packets_lost: g(&self.packets_lost),
             rtt_ms: self.rtt_ms.read(),
@@ -171,6 +176,7 @@ pub struct Read {
     pub tick_us: [u64; BUCKETS],
     pub tick_max_us: u64,
     pub send_errors: u64,
+    pub inputs_dropped: u64,
     pub packets_sent: u64,
     pub packets_lost: u64,
     pub rtt_ms: [u64; BUCKETS],
@@ -204,7 +210,7 @@ pub fn json(now: Now, r: &Read) -> String {
          \"conn_refused\":{},\"conn_retried\":{},\"handshake_failed\":{},\"refused\":{},\
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
          \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\
-         \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\
+         \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
          \"packets_sent\":{},\"packets_lost\":{},\
          \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
         now.ready,
@@ -231,6 +237,7 @@ pub fn json(now: Now, r: &Read) -> String {
         r.snapshots_oversize,
         r.cut_behind,
         r.send_errors,
+        r.inputs_dropped,
         r.packets_sent,
         r.packets_lost,
         pct(&r.rtt_ms, 50),
@@ -267,7 +274,7 @@ pub fn line(now: Now, was: &Read, is: &Read, window_max_us: u64) -> String {
     format!(
         "oneshot: status players={} rooms={} joins=+{} refused=+{} conn_refused=+{} \
          ticks=+{} late=+{} skipped=+{} tick_p50={}us tick_p99={}us tick_max={}us \
-         dropped=+{} cut=+{} send_err=+{} loss={loss:.2}%",
+         dropped=+{} cut=+{} send_err=+{} inputs_dropped=+{} loss={loss:.2}%",
         now.players,
         now.rooms,
         d(was.joins_casual + was.joins_ranked, is.joins_casual + is.joins_ranked),
@@ -282,6 +289,7 @@ pub fn line(now: Now, was: &Read, is: &Read, window_max_us: u64) -> String {
         d(was.snapshots_dropped, is.snapshots_dropped),
         d(was.cut_behind, is.cut_behind),
         d(was.send_errors, is.send_errors),
+        d(was.inputs_dropped, is.inputs_dropped),
     )
 }
 

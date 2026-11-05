@@ -13,8 +13,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use proto::{
-    datagram_kind, decode_input, decode_msg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
-    MODE_LOBBY, PROTO_VER,
+    datagram_kind, decode_input, decode_msg, InputMsg, Msg, DG_INPUT, MAX_STREAM_MSG, MODE_CUP, MODE_DOUBLES,
+    MODE_DUEL, MODE_LOBBY, PROTO_VER,
 };
 use wtransport::endpoint::endpoint_side::Server;
 use wtransport::endpoint::IncomingSession;
@@ -36,6 +36,47 @@ pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// address fit.
 pub const PER_SOURCE: u16 = 16;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
+/// Input datagrams the sim may have waiting, every session's together: a
+/// full server sends about 128 a tick. Past it an input is dropped, not
+/// queued: the sim never falls behind on a flood.
+pub const INPUT_LANE: usize = 4096;
+/// One session's inputs a second, and a burst over that: a client sends
+/// 64 a second (`client_net::core::SEND_EVERY`), a page that stalled a
+/// little more at once. Each carries the frames before it, so one dropped
+/// costs an honest client nothing.
+pub const INPUTS_PER_S: f64 = 128.0;
+pub const INPUT_BURST: f64 = 64.0;
+
+/// A session's input allowance (as `proto::voice::Bucket`).
+#[derive(Clone, Copy, Debug)]
+pub struct InputBucket {
+    tokens: f64,
+    at: std::time::Instant,
+}
+
+impl InputBucket {
+    pub fn new(now: std::time::Instant) -> Self {
+        InputBucket {
+            tokens: INPUT_BURST,
+            at: now,
+        }
+    }
+
+    pub fn allow(&mut self, now: std::time::Instant) -> bool {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.at = now;
+        self.tokens = (self.tokens + dt * INPUTS_PER_S).min(INPUT_BURST);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// The sim's end of a session's inputs: its id and what it sent.
+pub type Inputs = mpsc::SyncSender<(u64, InputMsg)>;
 
 /// The certificate the server presents: its PEM files, or a fresh
 /// self-signed one (14 days, which the page pins by hash).
@@ -237,7 +278,7 @@ impl Gate {
     }
 }
 
-pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
+pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>, inputs: Inputs, ctx: Arc<Ctx>) {
     loop {
         let incoming = ep.accept().await;
         match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
@@ -258,7 +299,7 @@ pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>,
             incoming.refuse();
             continue;
         };
-        tokio::spawn(session(incoming, permit, to_sim.clone(), ctx.clone()));
+        tokio::spawn(session(incoming, permit, to_sim.clone(), inputs.clone(), ctx.clone()));
     }
 }
 
@@ -283,7 +324,13 @@ async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
     }
 }
 
-async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sender<ToSim>, ctx: Arc<Ctx>) {
+async fn session(
+    incoming: IncomingSession,
+    _permit: Permit,
+    to_sim: mpsc::Sender<ToSim>,
+    inputs: Inputs,
+    ctx: Arc<Ctx>,
+) {
     let opened = tokio::time::timeout(HANDSHAKE, async {
         let request = incoming.await.ok()?;
         let conn = request.accept().await.ok()?;
@@ -491,19 +538,27 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
         ended
     });
 
-    // Inputs as datagrams; the stream only says goodbye.
-    let dconn = conn.clone();
-    let dsim = to_sim.clone();
+    // Inputs as datagrams, up to the session's rate, never waiting on the
+    // sim; the stream only says goodbye.
+    let (dconn, dctx) = (conn.clone(), ctx.clone());
     let datagrams = tokio::spawn(async move {
+        let mut bucket = InputBucket::new(std::time::Instant::now());
         while let Ok(d) = dconn.receive_datagram().await {
             if datagram_kind(&d) != Some(DG_INPUT) {
                 continue;
             }
+            if !bucket.allow(std::time::Instant::now()) {
+                dctx.health.inputs_dropped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
             if let Ok(m) = decode_input(&d) {
-                let _ = dsim.send(ToSim::Input {
-                    session: session_id,
-                    msg: Box::new(m),
-                });
+                match inputs.try_send((session_id, m)) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        dctx.health.inputs_dropped.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                }
             }
         }
     });
@@ -541,6 +596,20 @@ async fn session(incoming: IncomingSession, _permit: Permit, to_sim: mpsc::Sende
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_is_held_to_its_input_rate() {
+        let t0 = std::time::Instant::now();
+        let mut b = InputBucket::new(t0);
+        // The burst at once, then nothing.
+        assert_eq!((0..200).filter(|_| b.allow(t0)).count(), INPUT_BURST as usize);
+        // A second on, the rate (the burst caps what was saved).
+        let t1 = t0 + Duration::from_secs(1);
+        assert_eq!((0..1000).filter(|_| b.allow(t1)).count(), INPUT_BURST as usize);
+        // An honest client, 64 a second for ten seconds, loses none.
+        let mut b = InputBucket::new(t0);
+        assert!((1..=640).all(|k| b.allow(t0 + Duration::from_micros(k * 15_625))));
+    }
 
     #[test]
     fn a_crowd_is_retried_then_refused() {

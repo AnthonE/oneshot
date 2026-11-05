@@ -39,8 +39,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES,
-    MODE_DUEL, MODE_FFA, MODE_GUN_GAME,
+    frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA,
+    MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -71,10 +71,6 @@ pub enum ToSim {
         entry: Box<queue::Entry>,
         tx: outlet::Outlet,
     },
-    Input {
-        session: u64,
-        msg: Box<InputMsg>,
-    },
     Leave {
         session: u64,
     },
@@ -92,8 +88,38 @@ pub enum Job {
         path: PathBuf,
         bytes: Vec<u8>,
     },
+    /// A match that ended: its replay, hashed here and not on the sim
+    /// thread, then (with a replay directory) written beside its aim
+    /// review, and a ranked one's result reported with the hash.
+    Finished(Box<Finished>),
     /// Answered once every job before it is done (reports included).
     Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// What [`Job::Finished`] takes.
+pub struct Finished {
+    pub replay: Vec<u8>,
+    /// Where replays are kept and the match's id, and its aim review (its
+    /// `replay_sha256` left to fill in) with whether it crosses a line.
+    pub files: Option<(PathBuf, String, serde_json::Value, bool)>,
+    /// The result for Elo Pros, its `replay_sha256` left to fill in.
+    pub report: Option<elo::Report>,
+}
+
+/// Writes a file whole or not at all: a reader (the review tool, a backup)
+/// never sees half of one, nor does a crash leave one.
+async fn write_whole(path: &std::path::Path, bytes: Vec<u8>) {
+    if let Some(dir) = path.parent() {
+        let _ = tokio::fs::create_dir_all(dir).await;
+    }
+    let tmp = path.with_extension("part");
+    let wrote = async {
+        tokio::fs::write(&tmp, bytes).await?;
+        tokio::fs::rename(&tmp, path).await
+    };
+    if let Err(e) = wrote.await {
+        eprintln!("oneshot: {}: {e}", path.display());
+    }
 }
 
 /// A finished match stays up this long, for the end screen (`Config::linger`).
@@ -340,6 +366,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     let endpoint = Arc::new(bound.endpoint);
     let addr = endpoint.local_addr().map_err(|e| e.to_string())?;
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
+    let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg)>(net::INPUT_LANE);
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -382,6 +409,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     let sim = Sim {
         cfg: cfg.clone(),
         rx: from_net,
+        inputs,
         jobs: jobs_tx.clone(),
         stop: stop.clone(),
         ctx: ctx.clone(),
@@ -393,7 +421,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
     tokio::spawn(journal(ctx.clone()));
     tokio::spawn(ctx.lobby.clone().sweeper());
-    tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
+    tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, inputs_tx, ctx.clone()));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
     // only on a certificate of 14 days or less).
@@ -424,19 +452,31 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                 while reports.join_next().await.is_some() {}
                 let _ = done.send(());
             }
-            Job::Write { path, bytes } => {
-                if let Some(dir) = path.parent() {
-                    let _ = tokio::fs::create_dir_all(dir).await;
+            Job::Write { path, bytes } => write_whole(&path, bytes).await,
+            Job::Finished(f) => {
+                let Finished { replay, files, report } = *f;
+                let sha = elo::sha256_hex(&replay);
+                if let Some((dir, id, mut doc, flagged)) = files {
+                    doc["replay_sha256"] = sha.clone().into();
+                    let text = serde_json::to_vec_pretty(&doc).unwrap_or_default();
+                    write_whole(&dir.join(format!("{id}.osr")), replay).await;
+                    if flagged {
+                        write_whole(&dir.join("review").join(format!("{id}.json")), text.clone()).await;
+                    }
+                    write_whole(&dir.join(format!("{id}.watch.json")), text).await;
                 }
-                // Whole or not at all: a reader (the review tool, a backup)
-                // never sees half a file, nor does a crash leave one.
-                let tmp = path.with_extension("part");
-                let wrote = async {
-                    tokio::fs::write(&tmp, bytes).await?;
-                    tokio::fs::rename(&tmp, &path).await
-                };
-                if let Err(e) = wrote.await {
-                    eprintln!("oneshot: {}: {e}", path.display());
+                if let Some(mut r) = report {
+                    r.replay_sha256 = sha;
+                    let ctx = ctx.clone();
+                    reports.spawn(async move {
+                        match ctx.elo.report(&r).await {
+                            Ok(()) => eprintln!(
+                                "oneshot: reported {} ({}) replay sha256 {} salt commit {}",
+                                r.id, r.ladder, r.replay_sha256, r.salt_commit
+                            ),
+                            Err(e) => eprintln!("oneshot: report {}: {e}", r.id),
+                        }
+                    });
                 }
             }
             Job::Stats(lines) => {
@@ -547,6 +587,8 @@ type HeatDone = (usize, usize, String, Vec<i32>);
 struct Sim {
     cfg: Config,
     rx: mpsc::Receiver<ToSim>,
+    /// Sessions' inputs: bounded, and none of them queued on the heap.
+    inputs: mpsc::Receiver<(u64, InputMsg)>,
     jobs: tmpsc::UnboundedSender<Job>,
     stop: Arc<AtomicBool>,
     ctx: Arc<Ctx>,
@@ -555,7 +597,7 @@ struct Sim {
 pub(crate) fn send_msg(tx: &outlet::Outlet, m: &Msg) {
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
     if let Ok(n) = frame_msg(m, &mut f) {
-        tx.stream(f[..n].to_vec());
+        tx.stream(&f[..n]);
     }
 }
 
@@ -615,7 +657,8 @@ impl Sim {
         let mut sessions: BTreeMap<u64, Sess> = BTreeMap::new();
         let mut rooms: Vec<Option<Live>> = Vec::new();
         let mut q = queue::Queue::default();
-        let mut buf = [0u8; MAX_DATAGRAM];
+        // The stream messages of a room's tick, kept between ticks.
+        let mut out: room::Outbox = Vec::new();
         let mut last_second = Instant::now();
         let mut seconds: u64 = 0;
 
@@ -773,13 +816,6 @@ impl Sim {
                             },
                         );
                     }
-                    ToSim::Input { session, msg } => {
-                        if let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) {
-                            if let Some(r) = rooms[i].as_mut() {
-                                r.room.on_input(slot, &msg, now_ms);
-                            }
-                        }
-                    }
                     ToSim::Leave { session } => {
                         q.remove(session);
                         cup_wait.retain(|e| e.session != session);
@@ -807,6 +843,16 @@ impl Sim {
                             let out = r.room.leave(slot);
                             deliver(&sessions, r, out);
                         }
+                    }
+                }
+            }
+
+            // Then the inputs (one for a session gone or not seated yet is
+            // nothing): the lane is bounded, so this is too.
+            while let Ok((session, msg)) = self.inputs.try_recv() {
+                if let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) {
+                    if let Some(r) = rooms[i].as_mut() {
+                        r.room.on_input(slot, &msg, now_ms);
                     }
                 }
             }
@@ -937,16 +983,16 @@ impl Sim {
                 // room's to them.
                 let done = r.over_at.is_some_and(|t| now.duration_since(t) >= self.cfg.linger);
                 if !done {
-                    let (snaps, out) = r.room.step(now_ms);
-                    for (slot, snap) in snaps {
-                        let link = r.links[slot as usize].and_then(|id| sessions.get(&id));
-                        if let (Some(s), Ok(n)) = (link, encode_snapshot(&snap, &mut buf)) {
+                    let links = &r.links;
+                    r.room.step_into(now_ms, &mut out, |slot, _, bytes| {
+                        let link = links[slot as usize].and_then(|id| sessions.get(&id));
+                        if let (Some(s), false) = (link, bytes.is_empty()) {
                             // Full means the session is behind: this snapshot
                             // goes, the next replaces it.
-                            s.tx.datagram(buf[..n].to_vec());
+                            s.tx.datagram(bytes.to_vec());
                         }
-                    }
-                    deliver(&sessions, r, out);
+                    });
+                    deliver(&sessions, r, out.drain(..));
                     if r.room.world.phase == Phase::Over && r.over_at.is_none() {
                         r.over_at = Some(now);
                         self.finish(r);
@@ -1115,9 +1161,9 @@ impl Sim {
         });
     }
 
-    /// A match ended: its replay and its aim review's numbers to disk (and
+    /// A match ended: its stats now; its replay and aim review to disk (and
     /// to `review/` if they cross a line), and a ranked one's result to Elo
-    /// Pros.
+    /// Pros, once the jobs task has hashed the replay.
     fn finish(&self, r: &Live) {
         let lines: Vec<stats::Line> = (0..MAX_FIGHTERS)
             .filter_map(|s| played(r, s, true))
@@ -1126,29 +1172,26 @@ impl Sim {
         if !lines.is_empty() {
             let _ = self.jobs.send(Job::Stats(lines));
         }
-        let bytes = r.room.replay();
-        let sha = elo::sha256_hex(&bytes);
         let salt_commit = hex(&r.room.salt_commit());
-        if let Some(dir) = &self.cfg.replays {
-            let _ = self.jobs.send(Job::Write {
-                path: dir.join(format!("{}.osr", r.id)),
-                bytes,
-            });
-            let (doc, flagged) = watch_doc(r, &sha, &salt_commit);
-            let text = serde_json::to_vec_pretty(&doc).unwrap_or_default();
-            if flagged {
-                let _ = self.jobs.send(Job::Write {
-                    path: dir.join("review").join(format!("{}.json", r.id)),
-                    bytes: text.clone(),
-                });
-            }
-            let _ = self.jobs.send(Job::Write {
-                path: dir.join(format!("{}.watch.json", r.id)),
-                bytes: text,
-            });
-        }
-        if !r.room.ranked {
+        let files = self.cfg.replays.as_ref().map(|dir| {
+            let (doc, flagged) = watch_doc(r, &salt_commit);
+            (dir.clone(), r.id.clone(), doc, flagged)
+        });
+        let report = self.report(r, salt_commit);
+        if files.is_none() && report.is_none() {
             return;
+        }
+        let _ = self.jobs.send(Job::Finished(Box::new(Finished {
+            replay: r.room.replay(),
+            files,
+            report,
+        })));
+    }
+
+    /// A ranked match's result, but for the replay's hash.
+    fn report(&self, r: &Live, salt_commit: String) -> Option<elo::Report> {
+        if !r.room.ranked {
+            return None;
         }
         let w = &r.room.world;
         // Sides and their scores: each seat for a duel or a cup heat, each
@@ -1169,13 +1212,13 @@ impl Sim {
                 .collect()
         };
         if sides.len() < 2 || sides.iter().any(|(ws, _)| ws.is_empty()) {
-            return;
+            return None;
         }
         let placed = sides
             .iter()
             .map(|(ws, sc)| (ws.clone(), 1 + sides.iter().filter(|(_, o)| o > sc).count() as u32))
             .collect();
-        let _ = self.jobs.send(Job::Report(elo::Report {
+        Some(elo::Report {
             id: r.id.clone(),
             ladder: match r.mode {
                 MODE_DOUBLES => "doubles",
@@ -1184,9 +1227,9 @@ impl Sim {
             }
             .into(),
             sides: placed,
-            replay_sha256: sha,
+            replay_sha256: String::new(),
             salt_commit,
-        }));
+        })
     }
 }
 
@@ -1275,7 +1318,8 @@ fn played(r: &Live, s: usize, finished: bool) -> Option<stats::Played> {
 
 /// A match's aim review: each person's numbers and the lines they cross
 /// (`room::watch`). Whether any did.
-fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool) {
+/// Its `replay_sha256` is the jobs task's to fill in.
+fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
     let mut flagged = false;
     let seats: Vec<serde_json::Value> = (0..MAX_FIGHTERS)
         .filter_map(|s| {
@@ -1328,7 +1372,7 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
         "ranked": r.room.ranked,
         "mode": r.mode,
         "replay": format!("{}.osr", r.id),
-        "replay_sha256": sha,
+        "replay_sha256": "",
         "salt_commit": salt_commit,
         "seats": seats,
     });
@@ -1353,16 +1397,20 @@ fn tell_cup(c: &cup::Cup, i: usize, sessions: &BTreeMap<u64, Sess>) {
     );
 }
 
-fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: room::Outbox) {
+/// Room messages to their seats' sessions, each framed once and its bytes
+/// shared by everyone it goes to.
+fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: impl IntoIterator<Item = (Option<u8>, Msg)>) {
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
     for (to, m) in out {
         let Ok(n) = frame_msg(&m, &mut f) else { continue };
+        let mut shared: Option<std::sync::Arc<[u8]>> = None;
         for (s, id) in r.links.iter().enumerate() {
             let Some(sess) = id.and_then(|id| sessions.get(&id)) else {
                 continue;
             };
             if to.is_none_or(|t| t as usize == s) {
-                sess.tx.stream(f[..n].to_vec());
+                let bytes = shared.get_or_insert_with(|| f[..n].into());
+                sess.tx.stream(bytes.clone());
             }
         }
     }

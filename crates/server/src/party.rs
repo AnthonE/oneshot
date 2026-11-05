@@ -80,6 +80,20 @@ pub struct Seating {
     pub private: bool,
 }
 
+/// The sessions a talker's voice goes to: the rest of its party, held
+/// without an allocation (a frame comes fifty times a second).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Peers {
+    ids: [u64; MAX_PARTY],
+    n: usize,
+}
+
+impl Peers {
+    pub fn as_slice(&self) -> &[u64] {
+        &self.ids[..self.n]
+    }
+}
+
 #[derive(Default)]
 pub struct Parties {
     parties: BTreeMap<u32, PartyState>,
@@ -594,16 +608,17 @@ impl Parties {
 
     /// The tag `session` talks under and the sessions that hear it: the
     /// rest of its party, present.
-    pub fn voice(&self, session: u64) -> Option<(u8, Vec<u64>)> {
+    pub fn voice(&self, session: u64) -> Option<(u8, Peers)> {
         let l = self.sessions.get(&session)?;
         let p = self.parties.get(&l.party)?;
         let tag = p.seats.iter().find(|s| s.session == Some(session))?.tag;
-        let to = p
-            .seats
-            .iter()
-            .filter_map(|s| s.session)
-            .filter(|&s| s != session)
-            .collect();
+        let mut to = Peers::default();
+        for s in p.seats.iter().filter_map(|s| s.session).filter(|&s| s != session) {
+            if to.n < MAX_PARTY {
+                to.ids[to.n] = s;
+                to.n += 1;
+            }
+        }
         Some((tag, to))
     }
 
@@ -767,8 +782,8 @@ mod tests {
         );
         assert_eq!(ps.seating(code, "0xnobody", proto::MODE_BIG_TEAM), None);
         // Voice: each hears the other.
-        assert_eq!(ps.voice(1).unwrap().1, vec![2]);
-        assert_eq!(ps.voice(2).unwrap().1, vec![1]);
+        assert_eq!(ps.voice(1).unwrap().1.as_slice(), [2]);
+        assert_eq!(ps.voice(2).unwrap().1.as_slice(), [1]);
     }
 
     #[test]

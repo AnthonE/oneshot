@@ -38,7 +38,8 @@ pub struct Counts {
 /// A stream frame, or the end of the session after every frame before it.
 #[derive(Debug)]
 pub enum Frame {
-    Bytes(Vec<u8>),
+    /// Shared: one message to a room goes to each of its sessions.
+    Bytes(Arc<[u8]>),
     Close,
 }
 
@@ -99,8 +100,8 @@ impl Outlet {
     }
 
     /// A stream frame: sent in order, or the session is cut.
-    pub fn stream(&self, f: Vec<u8>) {
-        self.push(Frame::Bytes(f));
+    pub fn stream(&self, f: impl Into<Arc<[u8]>>) {
+        self.push(Frame::Bytes(f.into()));
     }
 
     /// Ends the session once every frame before this is written.
