@@ -19,6 +19,7 @@
 //!
 //! Pure: no clock, no I/O, no allocation in [`Engine::render`].
 
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 
 /// The mixer's rate: the browser's context is made at it, and the desktop's
@@ -207,28 +208,45 @@ impl Reader<'_> {
     }
 }
 
-/// What the game thread and the desktop's audio thread share: the inbox.
-#[derive(Default)]
+/// What the game thread and the desktop's audio thread share: the inbox, a
+/// bounded channel (std's array channel: no lock and no allocation a
+/// command, either side, while neither waits on it). Full, the rest of a
+/// frame's commands are dropped: the audio thread stalled.
 pub struct Shared {
-    inbox: Mutex<Vec<Cmd>>,
+    tx: SyncSender<Cmd>,
+    /// The audio thread's end, till the one stream takes it.
+    rx: Mutex<Option<Receiver<Cmd>>>,
+}
+
+impl Default for Shared {
+    fn default() -> Self {
+        let (tx, rx) = sync_channel(INBOX);
+        Shared {
+            tx,
+            rx: Mutex::new(Some(rx)),
+        }
+    }
 }
 
 impl Shared {
     /// Hand over a frame's commands (emptying `cmds`).
     pub fn send(&self, cmds: &mut Vec<Cmd>) {
-        if cmds.is_empty() {
-            return;
-        }
-        if let Ok(mut q) = self.inbox.lock() {
-            let room = INBOX.saturating_sub(q.len());
-            if cmds.len() > room {
-                cmds.truncate(room);
+        for c in cmds.drain(..) {
+            if self.tx.try_send(c).is_err() {
+                break;
             }
-            q.append(cmds);
         }
-        cmds.clear();
+    }
+
+    /// The audio thread's end of the inbox: the first stream's (one plays
+    /// the engine), taken once when it is made.
+    fn inbox(&self) -> Option<Inbox> {
+        self.rx.lock().ok()?.take().map(Inbox)
     }
 }
+
+/// The audio thread's end of [`Shared`]'s inbox.
+pub struct Inbox(Receiver<Cmd>);
 
 #[derive(Clone, Default)]
 struct Voice {
@@ -280,7 +298,6 @@ pub struct Engine {
     held: Vec<Held>,
     master: f32,
     limit: f32,
-    taken: Vec<Cmd>,
     stats: Stats,
 }
 
@@ -292,7 +309,6 @@ impl Default for Engine {
             held: vec![Held::default(); LOOPS],
             master: 1.0,
             limit: 1.0,
-            taken: Vec::with_capacity(INBOX),
             stats: Stats::default(),
         }
     }
@@ -303,16 +319,12 @@ fn step_of(src_rate: f32, rate: f32) -> f32 {
 }
 
 impl Engine {
-    /// Take what the game sent, if the inbox is free this block.
-    pub fn take(&mut self, shared: &Shared) {
-        if let Ok(mut q) = shared.inbox.try_lock() {
-            core::mem::swap(&mut *q, &mut self.taken);
-        }
-        let mut cmds = core::mem::take(&mut self.taken);
-        for c in cmds.drain(..) {
+    /// Take what the game has sent, never waiting for it.
+    pub fn take(&mut self, inbox: &Inbox) {
+        for _ in 0..INBOX {
+            let Ok(c) = inbox.0.try_recv() else { break };
             self.apply(c);
         }
-        self.taken = cmds;
     }
 
     /// Apply [`encode`]'s bytes; a malformed tail is dropped.
@@ -524,7 +536,7 @@ impl Engine {
 
 /// The desktop's stream: the engine, a block at a time, as samples.
 pub struct Stream {
-    shared: Arc<Shared>,
+    inbox: Option<Inbox>,
     engine: Engine,
     buf: [f32; BLOCK * 2],
     at: usize,
@@ -533,7 +545,7 @@ pub struct Stream {
 impl Stream {
     pub fn new(shared: Arc<Shared>) -> Stream {
         Stream {
-            shared,
+            inbox: shared.inbox(),
             engine: Engine::default(),
             buf: [0.0; BLOCK * 2],
             at: BLOCK * 2,
@@ -546,7 +558,9 @@ impl Iterator for Stream {
 
     fn next(&mut self) -> Option<f32> {
         if self.at >= BLOCK * 2 {
-            self.engine.take(&self.shared);
+            if let Some(inbox) = &self.inbox {
+                self.engine.take(inbox);
+            }
             self.engine.render(&mut self.buf);
             self.at = 0;
         }
