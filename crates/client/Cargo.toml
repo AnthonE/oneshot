@@ -104,6 +104,8 @@ web-sys = { version = "0.3", features = [
     "Url",
     "HtmlElement",
     "HtmlAnchorElement",
+    # The retrying asset reader (asset_fetch.rs).
+    "Response",
     # …made by the browser's own encoder, off the page's thread.
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
@@ -122,10 +124,22 @@ debug = false
 codegen-units = 16
 lto = "thin"
 
-# The browser's build (ci/client.sh): every byte is a download, so small
-# over fast, and the whole program optimised as one.
+# What ships on the desktop (.github/workflows/desktop.yml): Gates' release,
+# one codegen unit under thin LTO. `release` stays quick for the dev loops
+# (ci/client.sh dev, the shots).
+[profile.desktop]
+inherits = "release"
+codegen-units = 1
+
+# The browser's build (ci/client.sh), after Gates' `[profile.web]`: the whole
+# program optimised as one, at 3 rather than "s" (Gates measured its sim
+# 19-25% faster in V8 for ~25% more bytes; the frame is CPU on one thread).
+# No `strip`: wasm-bindgen's --remove-name-section drops the names (the bulk
+# Gates strips for), and `strip` would take the `target_features` section
+# wasm-bindgen reads the module's features from.
 [profile.web]
 inherits = "release"
-opt-level = "s"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
+panic = "abort"

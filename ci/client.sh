@@ -17,10 +17,10 @@
 # a WebGPU adapter before either downloads and fetches the one it can draw
 # with. The server serves dist by default:
 #   target/release/oneshot-server --web crates/client/dist
-# The browser's build is its own profile (crates/client/Cargo.toml: small,
-# fat LTO) without wasm's name section: ~31 MB, ~8 MB gzipped a module,
-# against 95 MB for a plain release build. Needs wasm-bindgen-cli at the
-# version in crates/client/Cargo.lock.
+# The browser's build is its own profile (crates/client/Cargo.toml: opt-level
+# 3, fat LTO, no name section), then wasm-opt -Os where there is one (`npm ci`
+# brings binaryen). Needs wasm-bindgen-cli at the version in
+# crates/client/Cargo.lock.
 set -eu
 mode=${1:-check}
 case "$mode" in
@@ -47,6 +47,13 @@ if [ "$mode" = check ]; then
 else
   profile=release
 fi
+# wasm-opt: $WASM_OPT, else one on PATH, else npm's (`npm ci`: binaryen).
+opt=""
+if [ "$mode" = check ]; then
+  opt=${WASM_OPT:-$(command -v wasm-opt || true)}
+  [ -n "$opt" ] || [ ! -x ../../node_modules/binaryen/bin/wasm-opt ] || opt=../../node_modules/binaryen/bin/wasm-opt
+  [ -n "$opt" ] || echo "== wasm-opt: none (npm ci, or WASM_OPT=...): the modules ship unoptimised" >&2
+fi
 rm -rf dist
 mkdir -p dist
 mods=""
@@ -66,6 +73,16 @@ for m in $modules; do
   cargo build -q --profile "$profile" --lib --target wasm32-unknown-unknown $feat
   wasm-bindgen --target web --remove-name-section --remove-producers-section --out-name "$stem" --out-dir dist \
     "target/wasm32-unknown-unknown/$profile/oneshot_client.wasm"
+  # binaryen, after Gates' ci/build_web.sh: what actually shrinks a Bevy
+  # module. The real build only (dev stays quick). The features are the
+  # module's own: rustc's wasm32 defaults and +simd128 (.cargo/config.toml).
+  if [ -n "$opt" ]; then
+    "$opt" -Os --enable-bulk-memory --enable-nontrapping-float-to-int \
+      --enable-mutable-globals --enable-sign-ext --enable-reference-types \
+      --enable-simd --enable-multivalue \
+      -o "dist/${stem}_bg.wasm.opt" "dist/${stem}_bg.wasm"
+    mv "dist/${stem}_bg.wasm.opt" "dist/${stem}_bg.wasm"
+  fi
   # Prove which one was bound: only wgpu's WebGPU backend imports
   # `requestAdapter`. One that has it under the WebGL2 name (a feature
   # unified in from somewhere), or lacks it under the WebGPU one, is the
@@ -94,7 +111,8 @@ done
 commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 # What the page reads before it downloads (index.html, pickModule), and what
 # ci/publish_web.sh checks it is publishing (both modules, the web profile).
-printf '{"commit":"%s","profile":"%s","modules":{%s}}\n' "$commit" "$profile" "$mods" > dist/build.json
+wasm_opt=$([ -n "$opt" ] && echo true || echo false)
+printf '{"commit":"%s","profile":"%s","wasm_opt":%s,"modules":{%s}}\n' "$commit" "$profile" "$wasm_opt" "$mods" > dist/build.json
 # The page, the clip page F9 opens in a frame of its own (web/clip.js), the
 # dashboard's scripts, and the credits.
 cp web/*.html web/*.js dist/
