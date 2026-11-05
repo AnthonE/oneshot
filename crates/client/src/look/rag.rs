@@ -20,9 +20,12 @@
 //!
 //! **Drawing only.** The dead have no hit volume and nothing here is read
 //! back or sent, so a corpse that lies a little differently on two screens
-//! decides nothing. A body first seen already dead (the kill cam's victim
-//! shown again, a corpse coming into view) skips it and lies in
-//! `Death01`'s last pose (`anim.rs`).
+//! decides nothing. A body first seen already dead (a corpse coming into
+//! view) skips it and lies in `Death01`'s last pose (`anim.rs`).
+//!
+//! Our own body too: drawn hidden where we stand (`lib.rs`), it is shown
+//! the frame we die and goes limp like anyone's; where its hips are is
+//! [`OwnRag`], which the death cam watches.
 
 use bevy::prelude::*;
 use proto::EventState;
@@ -285,6 +288,12 @@ const BUCKLE_MPS: f32 = 0.5;
 /// A blast's heard from this long ago is the one that killed.
 const BLAST_KEEP_S: f32 = 1.0;
 const BLASTS: usize = 8;
+
+/// Where our own body lies, limp (its hips, world metres), as the last
+/// step left it: what the death cam watches (`lib.rs`'s `view`). None while
+/// we stand, or before the rag doll takes our body.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub struct OwnRag(pub Option<Vec3>);
 
 /// What killed whom, as this client heard it, for the bodies that will be
 /// seen falling.
@@ -740,7 +749,7 @@ fn collide(map: &Map, p: &mut Vec3, was: &mut Vec3, r: f32) {
 /// one living or hidden again stands up (its clip from the top). In
 /// `PostUpdate`, after the clips and the spine's turns and before the
 /// transforms propagate.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn step(
     mut commands: Commands,
     link: NonSend<LinkRes>,
@@ -749,8 +758,12 @@ pub fn step(
     mut bodies: Query<(Entity, &mut Body, Option<&RagBones>, Option<&mut Ragdoll>, &Visibility)>,
     globals: Query<&GlobalTransform>,
     mut at: Query<&mut Transform>,
+    mut own: ResMut<OwnRag>,
 ) {
-    let map = &link.0.session().core.map;
+    let core = &link.0.session().core;
+    let map = &core.map;
+    let me = core.slot;
+    own.0 = None;
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
     for (e, mut body, bones, rag, vis) in &mut bodies {
@@ -768,6 +781,9 @@ pub fn step(
                 }
                 if let Ok(mut tr) = at.get_mut(e) {
                     *tr = rag.root;
+                }
+                if body.slot() == me {
+                    own.0 = Some(rag.now[HIPS]);
                 }
                 if rag.asleep {
                     continue;
@@ -798,6 +814,9 @@ pub fn step(
                     *tr = rag.root;
                 }
                 rag.pose(bones, &mut at);
+                if body.slot() == me {
+                    own.0 = Some(rag.now[HIPS]);
+                }
                 commands.entity(e).insert(rag);
             }
         }

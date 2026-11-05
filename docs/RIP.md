@@ -56,7 +56,9 @@ files and trim**; we never depend on Gates' crates.
 **Not taken from Gates:** `sim-core`'s survival world (`world.rs`, terrain,
 building, crafting), `protocol/src/event.rs` (12,889 lines of survival
 events), `server/src/core.rs` and `client-core/src/core.rs` (whole-game
-state), the Bevy client and its shaders.
+state), the Bevy client and its shaders (§9 takes some of it later; its
+`tracer.rs` flies a round from its shot event alone, which we don't: ours
+are in the snapshots).
 
 ## 2 · Game rules, bot and maps, from Fireplace (WAT/JS → Rust/JS)
 
@@ -286,9 +288,12 @@ depend on Gates' crates. The same Bevy version keeps the ports close.
 | `client-core/src/core.rs` `server_est`, slewed playout, `interp.rs` `sample` | `client-net/src/core.rs` `Slew`, `others`, `vehicles` | A render clock that never steps back, a slewed delay, bounded extrapolation, the long-gap rule |
 | `client-core/src/core.rs` `sticky_buttons` | `client-net/src/core.rs` `sticky` | A tap reaches one tick |
 | `server/src/net.rs` `writer_task` (the idea: newest snapshot wins, a stream never drops silently) | `server/src/outlet.rs` | Two lanes per session |
+| `client/src/report.rs` (the idea: a report carries the build, the GPU and the netcode's counts; `sane` strips what hides text), `client-web/src/lib.rs` `report_trap`, `render/report.rs` `install_panic_hook` | `server/src/bugs.rs`, `client/web/index.html` (`oneshotStopped`, the report form), `client/src/main.rs` `crash` | Reports kept on our server (`--bugs`), not the platform's intake |
+| `server/src/stats.rs` (`record_phase`, `phase_pct_us`), `status.rs` | `server/src/stats.rs`, `/status.json` in `http.rs` | Atomic counters, log2 tick histogram, one JSON line of numbers, a journal line per busy 10 s |
 | `client/src/ui/pointer.rs` `BrowserLock`, `render/web.rs` `pointer_locked`; `client-web/web/app.js` raw mouse | `client/src/pointer.rs`, `client/web/index.html` | The page's real pointer lock; unadjusted movement |
 | `client/src/render/prewarm.rs` | `client/src/look/prewarm.rs` | Every material and model drawn warm at load |
 | `client/src/render/ui.rs` (fonts, hover, buttons) | `client/src/ui.rs` | Embedded fonts at fixed handles; our CC0 faces, not Gates' Apache-2.0 Roboto |
+| `client/src/render/tracer.rs` (the idea) | `client-net/src/proj.rs`, `core.rs` `projectiles`, `client/src/look/fx/flying.rs` | Our own round launched from the drawn body, flown in fractional ticks with the sim's own arithmetic, a fixed pool of 16 launches that refuses the newest. Not its event-only flight: our rounds are in the snapshots, so a remote's is drawn from them on the render tick, and ours hands off to them |
 
 The types Gates' modules read become ours: `Eye` → `OwnView` (from
 `NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the

@@ -25,7 +25,8 @@ pub struct Shell {
     /// rgb: the colour at full; a: the level now (0 hides it).
     #[uniform(100)]
     pub color: Vec4,
-    /// x: the push, metres; y: hexagons per uv unit.
+    /// x: the push, metres; y: hexagons per uv unit; z: 1 drops the
+    /// fill and the band, leaving the rim and the lines (the arms in view).
     #[uniform(101)]
     pub params: Vec4,
 }
