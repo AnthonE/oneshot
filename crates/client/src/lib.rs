@@ -214,10 +214,10 @@ const AUTO_LANES: [(f32, f32); 6] = [
 #[derive(Resource, Default)]
 pub struct Early(pub Vec<proto::Msg>);
 
-/// Radians per pixel of mouse. Scoped, divided by the scope's zoom: the
-/// view narrows by it, so the world moves under the crosshair at one speed
-/// (Gates' `input.rs`).
-const SENS: f32 = 0.0022;
+/// Radians per pixel of mouse at sensitivity 1 (`settings::SENS_DEG`).
+/// Scoped, divided by the scope's zoom: the view narrows by it, so the
+/// world moves under the crosshair at one speed (Gates' `input.rs`).
+const SENS: f32 = settings::SENS_DEG * core::f32::consts::PI / 180.0;
 
 /// The bound actions that are buttons (the player's keys, `binds.rs`).
 /// The wheel swaps too.
@@ -1263,7 +1263,7 @@ pub(crate) fn view(
     let core = &link.0.session().core;
     let (f, p) = core.own();
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
-    let mut fov = settings.fov;
+    let mut fov = look::rig::fov_tall(settings.fov);
     let at = Vec3::new(p.x, p.y, p.z);
     let dead = !f.alive && link.0.session().ready;
     if !dead {

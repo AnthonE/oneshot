@@ -20,6 +20,7 @@ use bevy::prelude::*;
 
 use crate::binds::{normalize, Action, Bind, Binds, MOUSE, SPECS};
 use crate::look::quality::{self, Tier};
+use crate::look::rig;
 use crate::settings::{Disk, Knob, Settings};
 use crate::{ui, Screen};
 
@@ -222,12 +223,12 @@ fn spawn(
                 ))
                 .with_children(|pane| match st.cat {
                     0 => {
-                        number(pane, settings, Knob::Sensitivity, "MOUSE SENSITIVITY", "times");
+                        number(pane, settings, Knob::Sensitivity, "MOUSE SENSITIVITY", "CS2 / Apex");
                         toggle(pane, settings, Knob::Invert, "INVERT LOOK");
-                        number(pane, settings, Knob::Fov, "FIELD OF VIEW", "unscoped");
+                        number(pane, settings, Knob::Fov, "FIELD OF VIEW", "across");
                         note(
                             pane,
-                            "Scoped, the mouse turns slower by the zoom, so the world moves under the crosshair at one speed.",
+                            "Sensitivity is on CS2's and Apex's scale (0.022° a count). Scoped, the mouse turns slower by the zoom, so the world moves under the crosshair at one speed. The field of view is across a 16:9 screen.",
                         );
                     }
                     1 => {
@@ -426,7 +427,7 @@ fn far_edge(s: &Settings, tier: &Tier) -> String {
     let g = &tier.gfx;
     format!(
         "{:.0} cm a texel at {:.0} m · {:.0} MiB",
-        quality::far_texel_m(g.cascades, tier.shadow_m, g.shadow_map_px, s.fov) * 100.0,
+        quality::far_texel_m(g.cascades, tier.shadow_m, g.shadow_map_px, rig::fov_tall(s.fov)) * 100.0,
         tier.shadow_m,
         quality::shadow_vram_mb(g.cascades, g.shadow_map_px),
     )

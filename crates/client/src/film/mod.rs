@@ -499,7 +499,7 @@ fn aim(
         // The player's eye as `view` placed it, their field of view (and
         // scope) unless the list names one.
         if let (Some(f), Projection::Perspective(p)) = (fov, &mut *proj) {
-            let scoped = p.fov < settings.fov.to_radians() - 1e-4;
+            let scoped = p.fov < crate::look::rig::fov_tall(settings.fov).to_radians() - 1e-4;
             if !scoped {
                 p.fov = f.to_radians();
             }
