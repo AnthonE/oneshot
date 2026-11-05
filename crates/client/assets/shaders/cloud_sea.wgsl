@@ -49,23 +49,43 @@ fn band(px: f32, freq: f32) -> f32 {
     return clamp(1.5 - px * freq * 3.0, 0.0, 1.0);
 }
 
-// Billows: rounded, so the noise is folded to puff up (1 − |2n − 1|
-// squared is a ridge; its square root a dome), four octaves, each
-// fainter and finer, each fading out where the pixel can't hold it.
+// Puffs: a cap of a sphere on a point scattered in each cell, the highest
+// over (x, z) of the nine nearest, so they crowd and fold into each other
+// as cumulus tops do (value noise folded gives long winding creases, a
+// snowfield's). 0 between them, 1 on a top.
+fn puffs(p: vec2<f32>) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    var top = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let c = i + vec2<i32>(x, y);
+            let at = vec2<f32>(f32(x), f32(y)) + vec2<f32>(hash2(c), hash2(c + vec2<i32>(91, 17)));
+            // Each its own size, 0.6 to 1.1 of a cell across.
+            let r = 0.6 + 0.5 * hash2(c + vec2<i32>(-33, 58));
+            let d = length(f - at) / r;
+            top = max(top, sqrt(max(1.0 - d * d, 0.0)));
+        }
+    }
+    return top;
+}
+
+// Billows: three octaves of puffs, each fainter and finer and fading out
+// to its own mean where the pixel can't hold it, over a broad swell of
+// value noise so whole fields of them rise and sink.
 fn billows(p: vec2<f32>, px: f32) -> f32 {
-    var sum = 0.0;
-    var amp = 0.5;
     var freq = 1.0 / sea.shape.x;
+    let swell = mix(0.5, vnoise(p * freq * 0.25), band(px, freq * 0.25));
+    var sum = swell * 0.3;
+    var amp = 0.4;
     var q = p;
-    for (var k = 0; k < 4; k++) {
-        let n = vnoise(q * freq);
-        let dome = sqrt(clamp(1.0 - abs(2.0 * n - 1.0), 0.0, 1.0));
-        sum += mix(0.6, dome, band(px, freq)) * amp;
+    for (var k = 0; k < 3; k++) {
+        sum += mix(0.55, puffs(q * freq), band(px, freq)) * amp;
         amp *= 0.5;
-        freq *= 2.13;
+        freq *= 2.37;
         q += vec2<f32>(37.1, 11.7);
     }
-    return sum / 0.9375;
+    return sum / 1.0;
 }
 
 @fragment
@@ -73,7 +93,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
     let wp = in.world_position.xyz;
-    let px = max(length(dpdx(wp)), length(dpdy(wp)));
+    // A pixel's footprint: the mean of its two sides, so a grazing look
+    // (long one way, short the other) keeps the big billows far out.
+    let px = sqrt(length(dpdx(wp)) * length(dpdy(wp)));
     let p = wp.xz + sea.shape.zw;
     // The height of the billows here and a step aside, for their slope:
     // the step a pixel's width at least, so a far pixel's normal is flat.
@@ -82,12 +104,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let hx = billows(p + vec2<f32>(e, 0.0), px);
     let hz = billows(p + vec2<f32>(0.0, e), px);
     let k = sea.shape.y * sea.shape.x * 0.08 / e;
-    let n = normalize(vec3<f32>(-(hx - h) * k, 1.0, -(hz - h) * k));
+    // Tilted off the sheet's own normal (the bank leans in).
+    let up = normalize(in.world_normal);
+    let n = normalize(up + vec3<f32>(-(hx - h) * k, 0.0, -(hz - h) * k));
     pbr_input.N = n;
     pbr_input.world_normal = n;
 
-    // Tops pale, hollows grey: the light does the rest.
-    let c = mix(sea.hollow.rgb, sea.top.rgb, smoothstep(0.25, 0.85, h));
+    // Tops pale, folds grey: the light does the rest.
+    let c = mix(sea.hollow.rgb, sea.top.rgb, smoothstep(0.15, 0.75, h));
     pbr_input.material.base_color = vec4<f32>(c, 1.0);
 
     var out: FragmentOutput;

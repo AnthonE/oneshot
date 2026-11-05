@@ -5,12 +5,16 @@
 //!
 //! Drawing only, like the sea: the sim's void is far above where this is
 //! drawn, so whoever falls is dead before they reach it, and nothing in it
-//! hides or shows a fighter. One flat sheet out to the far plane; the
-//! shader draws the billows per pixel, flattening them where a pixel can't
-//! hold them, so it is the same sheet on every rung and on WebGL2.
+//! hides or shows a fighter. One sheet of rings round the map's middle,
+//! flat out to [`FLAT_M`], then curling up into a bank of cloud that stands
+//! over the horizon inside the far plane (`rig::FAR_M`): a flat sheet cut
+//! off by the far plane leaves a band under the horizon where the
+//! atmosphere draws its warm ground, a hard line round the world. The shader
+//! draws the billows per pixel, flattening them where a pixel can't hold
+//! them, so it is the same sheet on every rung and on WebGL2.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::light::NotShadowCaster;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -19,16 +23,23 @@ use bevy::shader::ShaderRef;
 
 const SHADER: &str = "shaders/cloud_sea.wgsl";
 
-/// How far the sheet reaches from the map's middle, metres: past the far
-/// plane, so its edge is never seen.
-pub const REACH_M: f32 = 6_000.0;
-/// A billow's top and the hollow between, linear: the deck's white, and a
-/// cool grey under it.
-pub const TOP: [f32; 3] = [0.80, 0.81, 0.83];
-pub const HOLLOW: [f32; 3] = [0.42, 0.44, 0.49];
+/// The sheet's rings, metres from the map's middle, and how far each stands
+/// over the sea's level: flat to [`FLAT_M`], then the bank, its rim
+/// [`BANK_M`] up by [`REACH_M`], under the far plane however the eye turns.
+const RINGS_M: [f32; 14] = [
+    0.0, 15.0, 30.0, 50.0, 75.0, 110.0, 150.0, 200.0, 260.0, 330.0, 400.0, 470.0, 530.0, 575.0,
+];
+pub const FLAT_M: f32 = 400.0;
+pub const REACH_M: f32 = 575.0;
+pub const BANK_M: f32 = 60.0;
+const SPOKES: usize = 96;
+/// A billow's top and the hollow between, linear: a grey white under the
+/// lit sand's value, and a cool grey in the folds.
+pub const TOP: [f32; 3] = [0.6, 0.61, 0.64];
+pub const HOLLOW: [f32; 3] = [0.34, 0.36, 0.41];
 /// The big billows' size, metres, and how steeply they stand.
 pub const BILLOW_M: f32 = 70.0;
-pub const RELIEF: f32 = 0.9;
+pub const RELIEF: f32 = 1.6;
 /// How fast it drifts, m/s, along x and z: slower than the sky's deck.
 pub const DRIFT: [f32; 2] = [0.9, 0.35];
 /// The drift wraps at this, metres (a whole number of the biggest
@@ -81,32 +92,42 @@ fn params(drift: Vec2) -> SeaParams {
     }
 }
 
-/// The sheet: a square [`REACH_M`] out each way from `mid`, at `y`, facing
-/// up, in a few cells (it is flat; the cells keep the far triangles from
-/// being thousands of metres across).
+/// How far the sheet stands over the sea's level `r` metres out: nothing
+/// to [`FLAT_M`], then up a smooth quarter-pipe to [`BANK_M`].
+pub fn lift(r: f32) -> f32 {
+    let t = ((r - FLAT_M) / (REACH_M - FLAT_M)).clamp(0.0, 1.0);
+    BANK_M * t * t
+}
+
+/// The sheet: rings round `mid` at `y` and their bank, facing up and in.
 fn mesh(mid: Vec2, y: f32) -> Mesh {
-    const N: usize = 16;
-    let mut pos = Vec::with_capacity((N + 1) * (N + 1));
-    for j in 0..=N {
-        for i in 0..=N {
-            let u = i as f32 / N as f32 * 2.0 - 1.0;
-            let v = j as f32 / N as f32 * 2.0 - 1.0;
-            pos.push([mid.x + u * REACH_M, y, mid.y + v * REACH_M]);
+    let mut pos = vec![[mid.x, y, mid.y]];
+    let mut nrm = vec![[0.0, 1.0, 0.0]];
+    for &r in &RINGS_M[1..] {
+        // The bank's slope, for its normal: up and in toward the middle.
+        let slope = (lift(r + 1.0) - lift(r - 1.0)) * 0.5;
+        for k in 0..SPOKES {
+            let a = k as f32 / SPOKES as f32 * core::f32::consts::TAU;
+            let (s, c) = a.sin_cos();
+            pos.push([mid.x + c * r, y + lift(r), mid.y + s * r]);
+            nrm.push(Vec3::new(-c * slope, 1.0, -s * slope).normalize().to_array());
         }
     }
-    let mut idx = Vec::with_capacity(N * N * 6);
-    for j in 0..N {
-        for i in 0..N {
-            let a = (j * (N + 1) + i) as u32;
-            let (b, c) = (a + 1, a + (N + 1) as u32);
-            let d = c + 1;
-            idx.extend_from_slice(&[a, c, b, b, c, d]);
+    let ring = |i: usize, k: usize| (1 + i * SPOKES + k % SPOKES) as u32;
+    let mut idx = Vec::new();
+    for k in 0..SPOKES {
+        idx.extend_from_slice(&[0, ring(0, k + 1), ring(0, k)]);
+    }
+    for i in 0..RINGS_M.len() - 2 {
+        for k in 0..SPOKES {
+            let (a, b) = (ring(i, k), ring(i, k + 1));
+            let (c, d) = (ring(i + 1, k), ring(i + 1, k + 1));
+            idx.extend_from_slice(&[a, b, c, b, d, c]);
         }
     }
-    let n = pos.len();
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; n])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, nrm)
         .with_inserted_indices(Indices::U32(idx))
 }
 
@@ -134,8 +155,10 @@ pub fn spawn(
             },
         })),
         Transform::IDENTITY,
-        // Its billows are the shader's: the sheet itself shades nothing.
+        // Its billows are the shader's: the sheet itself shades nothing,
+        // and an island's shadow on it would make it a floor close under.
         NotShadowCaster,
+        NotShadowReceiver,
     ));
 }
 
@@ -158,17 +181,27 @@ fn drift(
 mod tests {
     use super::*;
 
-    /// The sheet reaches past the far plane all round, flat at its height.
+    /// Flat at its height out to the bank; the bank's rim stands over the
+    /// height of any eye on the island and within the far plane from
+    /// anywhere on it, so no band of the atmosphere's ground shows under
+    /// the horizon.
     #[test]
-    fn the_sheet_is_flat_and_reaches_the_horizon() {
-        let m = mesh(Vec2::new(3.0, -2.0), -30.0);
+    fn the_sheet_is_flat_then_banks_up_inside_the_far_plane() {
+        let mid = Vec2::new(3.0, -2.0);
+        let m = mesh(mid, -30.0);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = m.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("positions");
         };
-        assert!(p.iter().all(|v| v[1] == -30.0));
-        let (lo, hi) = p
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v[0]), hi.max(v[0])));
-        assert!(lo <= 3.0 - REACH_M + 1.0 && hi >= 3.0 + REACH_M - 1.0);
+        for v in p {
+            let r = Vec2::new(v[0], v[2]).distance(mid);
+            if r <= FLAT_M {
+                assert_eq!(v[1], -30.0);
+            }
+            assert!(r <= REACH_M + 0.01);
+        }
+        // An eye 30 m over the island's ground (0), up to 60 m off the
+        // middle: the rim is above it and nearer than the far plane.
+        assert!(-30.0 + BANK_M >= 30.0);
+        assert!(REACH_M + 60.0 < crate::look::rig::FAR_M);
     }
 }

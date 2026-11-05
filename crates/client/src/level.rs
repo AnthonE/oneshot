@@ -30,6 +30,8 @@ pub struct LevelPart;
 #[derive(Component)]
 pub struct GroundMesh {
     pub sea: f32,
+    /// An island's (`Land::Isle`): its own pale sandstone tints.
+    pub isle: bool,
 }
 
 /// A box by its look, waiting for its textured material.
@@ -440,6 +442,7 @@ pub fn dress_level(
             normal.clone(),
             g.sea,
             lite,
+            g.isle,
             crate::look::cloud_shadow::CloudShadowParams::off(wet),
         ));
         commands
@@ -894,11 +897,12 @@ pub fn build(
                 min,
                 max,
                 key: box_key(mid, id),
+                pale: land == Land::Isle,
             });
         }
     }
     // Rock out of reach: the sea's stacks and stones.
-    crate::look::boulders::spawn_scenery(commands, id);
+    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.
@@ -1271,7 +1275,10 @@ pub fn build(
             });
             commands.spawn((
                 LevelPart,
-                GroundMesh { sea: wet_from },
+                GroundMesh {
+                    sea: wet_from,
+                    isle: land == Land::Isle,
+                },
                 Mesh3d(meshes.add(terrain_mesh(t, land))),
                 MeshMaterial3d(soil.clone()),
                 Transform::default(),
@@ -1282,7 +1289,10 @@ pub fn build(
             if let Some(skin) = skin {
                 commands.spawn((
                     LevelPart,
-                    GroundMesh { sea: wet_from },
+                    GroundMesh {
+                        sea: wet_from,
+                        isle: land == Land::Isle,
+                    },
                     Mesh3d(meshes.add(skin)),
                     MeshMaterial3d(soil),
                     Transform::default(),
