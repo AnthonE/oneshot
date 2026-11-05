@@ -26,6 +26,9 @@ pub const SUN_AZIMUTH: f32 = 2.35;
 /// measured it against its reference frames).
 pub const DAY_EV100: f32 = 14.2;
 pub const FOV_DEG: f32 = 75.0;
+/// The camera's near plane, metres: the gun in view sits a few centimetres
+/// out (`viewmodel.rs`, which holds every gun off it on screen).
+pub const NEAR_M: f32 = 0.012;
 pub const FAR_M: f32 = 600.0;
 /// The air: Gates' Mie term, thickened for sightlines of hundreds of
 /// metres rather than tens of kilometres, and how many metres a scene unit
@@ -120,8 +123,7 @@ pub fn camera<M: Component>(
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: FOV_DEG.to_radians(),
-                // The gun in view sits a few centimetres out (viewmodel.rs).
-                near: 0.02,
+                near: NEAR_M,
                 far: FAR_M,
                 ..default()
             }),

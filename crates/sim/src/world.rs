@@ -20,6 +20,16 @@ use crate::vehicle::{VPose, Vehicle, DRIVER};
 /// No winner (yet, or a draw).
 pub const NO_WINNER: u8 = 255;
 
+/// What a blow that kills whatever does (from behind, a sticky worn, a
+/// shard burst, a splatter): more than the most a body can hold.
+const KILL_PTS: i32 = HEALTH_MAX + OVERSHIELD_MAX;
+
+/// Whether a body standing at `at` is on the pad at `pad`.
+fn on_pad(pad: V3, at: V3) -> bool {
+    let d = pad - at;
+    crate::fmath::fabs(d.x) < PAD_REACH && crate::fmath::fabs(d.z) < PAD_REACH && crate::fmath::fabs(d.y) < 1.5
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rules {
     /// Red against blue; otherwise everyone for themselves.
@@ -464,6 +474,9 @@ impl World {
         self.seat_riders();
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
+            if l.fired || l.fired_left || l.melee || l.throw {
+                self.unveil(s);
+            }
             if l.fired {
                 self.fire(s, rewind_q8[s], l.charged, false);
             }
@@ -488,6 +501,7 @@ impl World {
         self.projectiles();
         for s in 0..MAX_FIGHTERS {
             self.loot(s);
+            self.powers(s);
         }
         for s in 0..MAX_FIGHTERS {
             self.recover(s);
@@ -772,7 +786,7 @@ impl World {
         let (sy, cy) = crate::geom::yaw_sincos(v.yaw);
         let toward = (v.body.pos - self.fighters[s].body.pos).flat().norm();
         if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
-            self.damage(s, q, HEALTH_MAX + SHIELD_MAX, false, Head::None, Cause::Behind as u16);
+            self.damage(s, q, KILL_PTS, false, Head::None, Cause::Behind as u16);
         } else {
             self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
         }
@@ -1004,14 +1018,7 @@ impl World {
         if p.landed && (p.target as usize) < MAX_FIGHTERS {
             let q = p.target as usize;
             if !self.spared(owner, q) {
-                self.damage(
-                    owner,
-                    q,
-                    HEALTH_MAX + SHIELD_MAX,
-                    false,
-                    Head::None,
-                    Cause::Sticky as u16,
-                );
+                self.damage(owner, q, KILL_PTS, false, Head::None, Cause::Sticky as u16);
             }
         }
         self.blast(
@@ -1168,7 +1175,11 @@ impl World {
         }
         let took = v.shield;
         v.shield = 0;
+        v.charging = false;
         v.since_hit = 0;
+        if v.camo > 0 {
+            v.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
         self.events.push(Event {
             kind: Ev::Hit,
             a: att as u8,
@@ -1200,7 +1211,7 @@ impl World {
             pos: at,
             ..Event::default()
         });
-        self.damage(att, vic, HEALTH_MAX + SHIELD_MAX, false, Head::None, id as u16);
+        self.damage(att, vic, KILL_PTS, false, Head::None, id as u16);
     }
 
     /// A frag's or a lob's tick under gravity off the map's floors and
@@ -1220,7 +1231,8 @@ impl World {
         let mut ground = false;
         vel.y -= g * DT;
         let mut n = *pos + *vel * DT;
-        let floor = self.map.floor(n.x, n.z, 0.0, pos.y + 0.001);
+        // Profile solids are met below, along their own normals.
+        let floor = self.map.floor_flat(n.x, n.z, 0.0, pos.y + 0.001);
         if n.y < floor {
             touched = true;
             ground = true;
@@ -1261,6 +1273,44 @@ impl World {
             }
         }
         for s in &self.map.solids {
+            if s.is_profile() {
+                if !s.contains(n) {
+                    continue;
+                }
+                touched = true;
+                let step = n - *pos;
+                let l = step.len();
+                let hit = if l > 0.0 {
+                    s.ray_hit(*pos, step * (1.0 / l), l)
+                } else {
+                    None
+                };
+                match hit {
+                    Some((t, piece)) if piece != crate::profile::Piece::Inside => {
+                        // Off the surface as it is there: along the part
+                        // into it, back out; on ground it can stand on, the
+                        // rest slides on as on a slope.
+                        let h = *pos + step * (t / l);
+                        let nn = s.normal(piece, h);
+                        n = h + nn * 0.01;
+                        let into = vel.dot(nn);
+                        if nn.y >= crate::consts::WALK_NY {
+                            ground = true;
+                            let along = *vel - nn * into;
+                            *vel = along * slide - nn * (into * bounce);
+                        } else if into < 0.0 {
+                            *vel = *vel - nn * (into * (1.0 + bounce));
+                        }
+                    }
+                    _ => {
+                        // It started inside: up out of the top.
+                        ground = true;
+                        n.y = s.top_at(n.x, n.z) + 0.01;
+                        vel.y = -vel.y * bounce;
+                    }
+                }
+                continue;
+            }
             let top = s.top_at(n.x, n.z);
             if !(n.y > s.y0 && n.y < top && s.over(n.x, n.z, 0.0)) {
                 continue;
@@ -1696,7 +1746,7 @@ impl World {
                     self.damage(
                         driver.unwrap_or(q),
                         q,
-                        HEALTH_MAX + SHIELD_MAX,
+                        KILL_PTS,
                         false,
                         Head::None,
                         Cause::Splatter as u16,
@@ -1719,6 +1769,9 @@ impl World {
             return;
         }
         v.since_hit = 0;
+        if v.camo > 0 {
+            v.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
         let lethal = head && (rule == Head::Always || (rule == Head::Unshielded && v.shield == 0));
         let part = if lethal {
             v.shield = 0;
@@ -1772,6 +1825,9 @@ impl World {
         v.alive = false;
         v.health = 0;
         v.shield = 0;
+        v.charging = false;
+        v.camo = 0;
+        v.flare = 0;
         // What they held leaves their hands with some of how they moved.
         let toss = v.body.vel * DROP_CARRY + V3::new(0.0, DROP_TOSS, 0.0);
         v.body.vel = V3::ZERO;
@@ -1986,11 +2042,8 @@ impl World {
         // How far, a pad (or a drop), its index.
         let mut best: Option<(f32, bool, usize)> = None;
         for (i, def) in self.map.pads.iter().enumerate().take(MAX_PADS) {
-            let d = def.pos - at;
-            let near = crate::fmath::fabs(d.x) < PAD_REACH
-                && crate::fmath::fabs(d.z) < PAD_REACH
-                && crate::fmath::fabs(d.y) < 1.5;
-            let far = d.flat().len();
+            let far = (def.pos - at).flat().len();
+            let near = on_pad(def.pos, at) && !crate::arms::power(def.arm);
             if near && self.pads[i].empty_for == 0 && best.is_none_or(|b| far < b.0) {
                 best = Some((far, true, i));
             }
@@ -2169,6 +2222,46 @@ impl World {
         }
     }
 
+    /// Walking onto a pad holding a power-up takes it: the overshield
+    /// starts to climb (health whole), or the camouflage is on, full.
+    fn powers(&mut self, s: usize) {
+        let f = &self.fighters[s];
+        if !f.active() || f.riding().is_some() || self.rules.gun_game {
+            return;
+        }
+        let at = f.body.pos;
+        for i in 0..self.map.pads.len().min(MAX_PADS) {
+            let def = self.map.pads[i];
+            if !crate::arms::power(def.arm) || self.pads[i].empty_for != 0 || !on_pad(def.pos, at) {
+                continue;
+            }
+            self.pads[i].empty_for = ticks(def.respawn_ms);
+            let f = &mut self.fighters[s];
+            if def.arm == crate::arms::OVERSHIELD {
+                f.charging = true;
+                f.health = HEALTH_MAX;
+            } else {
+                f.camo = ticks(CAMO_MS) as u16;
+                f.flare = 0;
+            }
+            self.events.push(Event {
+                kind: Ev::Pickup,
+                a: s as u8,
+                c: def.arm as u16,
+                pos: def.pos,
+                ..Event::default()
+            });
+        }
+    }
+
+    /// `s` fired, threw or swung: its camouflage shows it a while.
+    fn unveil(&mut self, s: usize) {
+        let f = &mut self.fighters[s];
+        if f.camo > 0 {
+            f.flare = ticks(CAMO_FLARE_MS) as u16;
+        }
+    }
+
     /// Shields and health come back; the dead come back.
     fn recover(&mut self, s: usize) {
         let f = &mut self.fighters[s];
@@ -2190,6 +2283,15 @@ impl World {
                 f.needles = 0;
                 f.needle_t = 0;
             }
+        }
+        f.camo = f.camo.saturating_sub(1);
+        f.flare = if f.camo == 0 { 0 } else { f.flare.saturating_sub(1) };
+        // The overshield climbs whatever hits it, then drains to full.
+        if f.charging {
+            f.shield = (f.shield + OVERSHIELD_RATE * PT / TICK_HZ as i32).min(OVERSHIELD_MAX);
+            f.charging = f.shield < OVERSHIELD_MAX;
+        } else if f.shield > SHIELD_MAX {
+            f.shield = (f.shield - OVERSHIELD_DRAIN * PT / TICK_HZ as i32).max(SHIELD_MAX);
         }
         if f.since_hit >= ticks(SHIELD_DELAY_MS) {
             if f.shield < SHIELD_MAX {
@@ -2339,4 +2441,73 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
     let (sr, cr) = crate::fmath::sin_cos(r);
     let (st, ct) = crate::fmath::sin_cos(th);
     (base * cr + (right * ct + up2 * st) * sr).norm()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hemisphere 2 m round at the origin, a flat floor round it.
+    fn dome() -> Map {
+        crate::map::Def {
+            id: 250,
+            practice: true,
+            name: "dome",
+            lo: (-10.0, -10.0),
+            hi: (10.0, 10.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([-8.0, 0.0, 0.0], 0, 0), ([8.0, 0.0, 0.0], 0, 1)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[],
+            solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
+            profiles: &[(
+                3,
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[
+                    [0.0, 0.0, 2.0],
+                    [0.7, 0.0, 1.873],
+                    [1.2, 0.0, 1.6],
+                    [1.6, 0.0, 1.2],
+                    [1.873, 0.0, 0.7],
+                    [2.0, 0.0, 0.0],
+                ],
+                0,
+            )],
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+            flags: &[],
+        }
+        .build()
+    }
+
+    #[test]
+    fn a_grenade_bounces_off_a_dome_along_its_normal() {
+        let w = World::new(dome(), Rules::ffa(), 1, (0, 0));
+        // Straight down onto its flank where it is 60° steep: off it,
+        // outward.
+        let until = |mut pos: V3, mut vel: V3| {
+            for _ in 0..TICK_HZ {
+                let (touched, ground) = w.bounce_at(&mut pos, &mut vel, 0.0, 0.5, 0.8);
+                if touched {
+                    return (pos, vel, ground);
+                }
+            }
+            panic!("never met it: {pos:?}");
+        };
+        let (pos, vel, ground) = until(V3::new(1.75, 2.5, 0.0), V3::new(0.0, -10.0, 0.0));
+        assert!(!ground && vel.x > 3.0 && vel.y > -8.0, "{pos:?} {vel:?}");
+        assert!(!w.map.solids[0].contains(pos), "out of it: {pos:?}");
+        // Down onto its crown: it lands, as on a floor, rolling outward
+        // off the crown's slope.
+        let (pos, vel, ground) = until(V3::new(0.1, 2.5, 0.0), V3::new(0.0, -6.0, 0.0));
+        assert!(ground && vel.y > 0.0 && vel.x > 0.0 && vel.x < 2.0, "{pos:?} {vel:?}");
+    }
 }

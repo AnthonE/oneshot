@@ -17,13 +17,16 @@ pub const fn ticks(ms: u32) -> u32 {
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
-/// Weapon pads on a map (the Range has one of every gun).
-pub const MAX_PADS: usize = 16;
+/// Weapon and power-up pads on a map (the Range has one of every gun
+/// and power-up).
+pub const MAX_PADS: usize = 24;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
 /// Boxes and solids in a map, together (`tools/maps/compile.mjs` holds
 /// maps to it).
 pub const MAX_MAP_BOXES: usize = 512;
+/// The most knots a profile solid has (crate::profile).
+pub const MAX_KNOTS: usize = 32;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
@@ -103,6 +106,28 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
+
+// Power-ups (arms::OVERSHIELD, arms::CAMO), on pads, taken by walking on.
+/// The overshield: shields climb to three times full (Halo 2's), at
+/// `OVERSHIELD_RATE` points a second from wherever they were (health whole
+/// at once), then drain at `OVERSHIELD_DRAIN` back to full: 40 s from the
+/// top. Above full, shields never recharge; below it they do as ever.
+pub const OVERSHIELD_MAX: i32 = 3 * SHIELD_MAX;
+pub const OVERSHIELD_RATE: i32 = 100;
+pub const OVERSHIELD_DRAIN: i32 = 5;
+/// Active camouflage lasts this long. Moving faster than `CAMO_WALK` shows
+/// a body, fully at `CAMO_RUN` and over; firing, a throw, a blow or taking
+/// a hit shows it whole for `CAMO_FLARE_MS`, fading.
+pub const CAMO_MS: u32 = 45_000;
+pub const CAMO_WALK: f32 = 2.0;
+pub const CAMO_RUN: f32 = 9.0;
+pub const CAMO_FLARE_MS: u32 = 1200;
+/// How hidden a camouflaged body still standing is: never all the way.
+pub const CAMO_BEST: f32 = 0.92;
+/// A bot doesn't make out a camouflaged enemy hidden past
+/// `CAMO_BOT_HIDDEN` farther than `CAMO_BOT_M`.
+pub const CAMO_BOT_HIDDEN: f32 = 0.6;
+pub const CAMO_BOT_M: f32 = 12.0;
 /// Where someone comes back (`World::respawn`): of the spawns their side
 /// may use, the one whose nearest living enemy is farthest, counted only
 /// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see

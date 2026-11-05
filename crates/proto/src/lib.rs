@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 21;
+pub const PROTO_VER: u16 = 22;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -33,7 +33,7 @@ pub const MAX_INPUT_FRAMES: usize = 16;
 pub const MAX_REMOTES: usize = MAX_FIGHTERS - 1;
 pub const MAX_SNAP_PROJ: usize = 16;
 pub const MAX_SNAP_EVENTS: usize = 32;
-pub const MAX_SNAP_PADS: usize = 15;
+pub const MAX_SNAP_PADS: usize = sim::consts::MAX_PADS;
 pub const MAX_SNAP_VEHICLES: usize = sim::consts::MAX_VEHICLES;
 /// Guns on the floor a snapshot names, nearest first (`room::build`).
 pub const MAX_SNAP_DROPS: usize = 8;
@@ -249,6 +249,11 @@ pub struct Remote {
     pub arm: u8,
     /// Shields as a fraction of full, 0..255, for the flare.
     pub shield: u8,
+    /// An overshield on (climbing, or over full).
+    pub over: bool,
+    /// How hidden its camouflage keeps it (`Fighter::cloak`), 0 to
+    /// [`CLOAK_STEPS`] of all the way: what this client draws it at.
+    pub cloak: u8,
     /// Carrying a flag (Capture the Flag).
     pub flag: bool,
 }
@@ -330,8 +335,43 @@ impl Pack for FlagState {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PadState {
-    /// Whole seconds until the gun is back; 0 means it's there.
+    /// Whole seconds until the gun (or power-up) is back, to
+    /// [`PAD_S_MAX`]; 0 means it's there.
     pub empty_s: u16,
+}
+
+/// The longest wait a pad's timer says on the wire (8 bits, over 4
+/// minutes; no pad waits more than 2).
+pub const PAD_S_MAX: u16 = 255;
+/// The most camouflage ticks the own fighter's field says (14 bits).
+const CAMO_TICKS_MAX: u16 = (1 << 14) - 1;
+const _: () = assert!(sim::consts::ticks(sim::consts::CAMO_MS) <= CAMO_TICKS_MAX as u32);
+const _: () = assert!(sim::consts::ticks(sim::consts::CAMO_FLARE_MS) <= u8::MAX as u32);
+/// How finely a remote's camouflage is told (3 bits).
+pub const CLOAK_STEPS: f32 = 7.0;
+
+impl Remote {
+    /// `f` in seat `slot`, coarsened: what a client may draw of it.
+    pub fn of(slot: u8, f: &Fighter) -> Remote {
+        let full = sim::consts::SHIELD_MAX as i64;
+        Remote {
+            slot,
+            team: f.team,
+            alive: f.alive,
+            crouched: f.body.crouched,
+            grounded: f.body.grounded,
+            reloading: f.reload > 0,
+            pos: f.body.pos,
+            vel: f.body.vel,
+            yaw: f.yaw,
+            pitch: f.pitch,
+            arm: f.gun().arm,
+            shield: (f.shield.max(0) as i64 * 255 / full).min(255) as u8,
+            over: f.overshield(),
+            cloak: (f.cloak() * CLOAK_STEPS + 0.5) as u8,
+            flag: f.flag,
+        }
+    }
 }
 
 impl Pack for Remote {
@@ -348,6 +388,8 @@ impl Pack for Remote {
         w.write(self.pitch as u16 as u32, 16)?;
         w.write(self.arm as u32, 4)?;
         w.write(self.shield as u32, 8)?;
+        w.write_bit(self.over)?;
+        w.write(self.cloak as u32, 3)?;
         w.write_bit(self.flag)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
@@ -364,6 +406,8 @@ impl Pack for Remote {
             pitch: r.read(16)? as u16 as i16,
             arm: r.read(4)? as u8,
             shield: r.read(8)? as u8,
+            over: r.read_bit()?,
+            cloak: r.read(3)? as u8,
             flag: r.read_bit()?,
         })
     }
@@ -524,11 +568,11 @@ impl Pack for DropState {
 
 impl Pack for PadState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
-        w.write(self.empty_s as u32, 16)
+        w.write(self.empty_s.min(PAD_S_MAX) as u32, 8)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(PadState {
-            empty_s: r.read(16)? as u16,
+            empty_s: r.read(8)? as u16,
         })
     }
 }
@@ -667,6 +711,10 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.left_charge as u32, 16)?;
     w.write(f.stickies as u32, 8)?;
     w.write(f.gren_kind as u32, 1)?;
+    w.write_bit(f.charging)?;
+    // Camouflage's 45 s and its 1.2 s flare, in ticks, with room.
+    w.write(f.camo.min(CAMO_TICKS_MAX) as u32, 14)?;
+    w.write(f.flare.min(u8::MAX as u16) as u32, 8)?;
     w.write_bit(f.flag)
 }
 
@@ -741,6 +789,9 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.left_charge = r.read(16)? as u16;
     f.stickies = r.read(8)? as u8;
     f.gren_kind = r.read(1)? as u8;
+    f.charging = r.read_bit()?;
+    f.camo = r.read(14)? as u16;
+    f.flare = r.read(8)? as u16;
     f.flag = r.read_bit()?;
     Ok(f)
 }
@@ -772,7 +823,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.remotes(), 4)?;
     w_list(&mut w, s.proj(), 5)?;
     w_list(&mut w, s.events(), 6)?;
-    w_list(&mut w, s.pads(), 4)?;
+    w_list(&mut w, s.pads(), 5)?;
     w_list(&mut w, s.vehicles(), 4)?;
     w_list(&mut w, s.drops(), 4)?;
     w_list(&mut w, s.flags(), 2)?;
@@ -804,7 +855,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_remote = r_list(&mut r, &mut s.remotes, 4)?;
     s.n_proj = r_list(&mut r, &mut s.proj, 5)?;
     s.n_events = r_list(&mut r, &mut s.events, 6)?;
-    s.n_pads = r_list(&mut r, &mut s.pads, 4)?;
+    s.n_pads = r_list(&mut r, &mut s.pads, 5)?;
     s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
     s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
     s.n_flags = r_list(&mut r, &mut s.flags, 2)?;

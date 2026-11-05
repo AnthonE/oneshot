@@ -25,7 +25,7 @@ use sim::events::Kind as Ev;
 use sim::geom::{aim_dir, V3};
 use sim::world::World;
 
-use crate::fog::plainly_sees;
+use crate::fog::Plain;
 
 /// A sighting ends after this long out of plain sight.
 pub const SIGHT_GAP_MS: u32 = 250;
@@ -150,6 +150,11 @@ impl Watch {
     /// Reads the tick the world just stepped. `shown(v, t)`: whether fog
     /// sent seat `t` to seat `v` this tick.
     pub fn observe(&mut self, w: &World, shown: impl Fn(usize, usize) -> bool) {
+        self.observe_with(w, &mut Plain::default(), shown);
+    }
+
+    /// [`Watch::observe`], sharing this tick's plain tests (`plain`, of `w`).
+    pub fn observe_with(&mut self, w: &World, plain: &mut Plain, shown: impl Fn(usize, usize) -> bool) {
         let tick = w.tick;
         let gap = ms_to_ticks(SIGHT_GAP_MS);
         let hidden_for = ms_to_ticks(PREAIM_HIDDEN_MS);
@@ -164,13 +169,8 @@ impl Watch {
             };
             // Aimed at an enemy in plain sight: one behind a wall on the
             // same line is no evidence (Doubles and free for all have many).
-            let honest = w.fighters.iter().enumerate().any(|(t, them)| {
-                t != v
-                    && them.active()
-                    && !(w.rules.teams && them.team == me.team)
-                    && on(them)
-                    && plainly_sees(&w.map, me, them)
-            });
+            // Asked only when it matters.
+            let mut honest: Option<bool> = None;
             for (t, them) in w.fighters.iter().enumerate() {
                 let enemy = t != v && them.seated && !(w.rules.teams && them.team == me.team);
                 let s = &mut self.sight[v][t];
@@ -178,7 +178,7 @@ impl Watch {
                     *s = Sight::default();
                     continue;
                 }
-                if plainly_sees(&w.map, me, them) {
+                if plain.sees(w, v, t) {
                     if s.last.is_none_or(|l| tick.saturating_sub(l) > gap) {
                         s.since = Some(tick);
                         s.hit = false;
@@ -187,8 +187,19 @@ impl Watch {
                     continue;
                 }
                 let long_hidden = s.last.is_none_or(|l| tick.saturating_sub(l) > hidden_for);
-                if long_hidden && !honest && shown(v, t) && on(them) {
-                    self.preaim_ticks[v] += 1;
+                if long_hidden && shown(v, t) && on(them) {
+                    let honest = *honest.get_or_insert_with(|| {
+                        w.fighters.iter().enumerate().any(|(u, other)| {
+                            u != v
+                                && other.active()
+                                && !(w.rules.teams && other.team == me.team)
+                                && on(other)
+                                && plain.sees(w, v, u)
+                        })
+                    });
+                    if !honest {
+                        self.preaim_ticks[v] += 1;
+                    }
                 }
             }
             self.stats[v].preaim_ms = ticks_to_ms(self.preaim_ticks[v]);

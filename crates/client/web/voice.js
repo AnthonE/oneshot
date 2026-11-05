@@ -151,6 +151,9 @@ export class Voice {
     }
     let t = 0;
     let was = false;
+    // Each frame goes back to the tap once it is copied (AudioData copies
+    // what it is made from), to be filled again.
+    const giveBack = (pcm) => { try { node.port.postMessage(pcm, [pcm.buffer]); } catch { /* gone */ } };
     node.port.onmessage = (e) => {
       const pcm = e.data;
       const now = performance.now();
@@ -162,7 +165,10 @@ export class Voice {
         if (db > GATE_DB) this.gateUntil = now + GATE_HOLD_MS;
         want = now < this.gateUntil;
       }
-      if (!want && !was) return;
+      if (!want && !was) {
+        giveBack(pcm);
+        return;
+      }
       // The last frame of a go at talking: silence, flagged so the light goes out.
       const end = was && !want;
       const data = end ? new Float32Array(pcm.length) : pcm;
@@ -172,6 +178,7 @@ export class Voice {
           numberOfChannels: 1, timestamp: t, data }));
         t += Math.round((data.length / this.ctx.sampleRate) * 1e6);
       }
+      giveBack(pcm);
       if (want) this.sentAt = now;
       if (want !== was) this.changed();
       was = want;
@@ -221,7 +228,9 @@ export class Voice {
   play(l, ad) {
     const n = ad.numberOfFrames;
     const buf = this.ctx.createBuffer(1, n, ad.sampleRate);
-    const pcm = new Float32Array(n);
+    // copyToChannel copies: one scratch a listener does every frame.
+    if (!l.pcm || l.pcm.length !== n) l.pcm = new Float32Array(n);
+    const pcm = l.pcm;
     try {
       ad.copyTo(pcm, { planeIndex: 0, format: 'f32-planar' });
     } catch {

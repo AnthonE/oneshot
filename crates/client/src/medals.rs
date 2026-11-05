@@ -136,11 +136,11 @@ pub fn row(
             xf.scale = Vec2::splat(scale);
         }
         let a = ((MEDAL_S - age) / FADE_S).clamp(0.0, 1.0);
-        bg.0 = Color::srgba(0.04, 0.06, 0.08, 0.78 * a);
-        *border = BorderColor::all(b.colour.with_alpha(a));
+        bg.set_if_neq(BackgroundColor(Color::srgba(0.04, 0.06, 0.08, 0.78 * a)));
+        border.set_if_neq(BorderColor::all(b.colour.with_alpha(a)));
         for k in kids {
             if let Ok(mut t) = texts.get_mut(*k) {
-                t.0 = b.colour.with_alpha(a);
+                t.set_if_neq(TextColor(b.colour.with_alpha(a)));
             }
         }
     }
