@@ -26,6 +26,8 @@ pub mod loading;
 pub mod look;
 pub mod medals;
 pub mod options;
+pub mod pad;
+pub mod party;
 pub mod pause;
 pub mod pointer;
 pub mod pose;
@@ -226,9 +228,8 @@ pub struct Opts {
     pub graphics: bool,
     /// The title, or straight into a mode, or neither (a picture).
     pub front: front::Start,
-    /// `page`: the page's own menu is the title (a browser's, `web/menu.js`):
-    /// the backdrop behind it, and matches asked for by `knock()`.
-    pub page: bool,
+    /// A party a link asked for (`party=CODE`, `--party CODE`): joined.
+    pub party: u32,
 }
 
 impl Opts {
@@ -248,7 +249,11 @@ impl Opts {
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
-            page: has("page"),
+            party: s
+                .split([',', ' '])
+                .find_map(|w| w.strip_prefix("party="))
+                .and_then(proto::party::code_parse)
+                .unwrap_or(0),
             front: front::Start::Off,
             graphics: has("graphics"),
             open: if has("settings") || has("graphics") {
@@ -272,7 +277,7 @@ pub fn game(door: door::Door, opts: Opts) -> App {
     };
     let mut app = app_on(link, opts, first);
     front::install(&mut app, door, opts.front, opts.open);
-    app.insert_resource(front::PageMenu(opts.page));
+    party::install(&mut app, opts.party);
     app
 }
 
@@ -319,6 +324,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<items::Items>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<Early>()
+    .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
@@ -332,6 +338,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
+    .add_plugins(pad::plugin)
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
@@ -366,6 +373,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
     .init_resource::<look::cliffs::SkinLift>()
+    // The sea (look/water.rs) and its waves.
+    .add_plugins(MaterialPlugin::<look::water::WaterMaterial>::default())
+    .add_systems(Update, look::water::animate.after(view))
     .add_systems(
         Startup,
         (
@@ -701,6 +711,9 @@ fn rebuild(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
+    mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
     mut shade: ResMut<look::quality::MapShade>,
@@ -714,7 +727,16 @@ fn rebuild(
     built.0 = now;
     // The map's mood first: the level's sun and its wet are the mood's.
     look::mood::set(&mut mood, s.map_id);
-    level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
+    level::build(
+        &mut commands,
+        &mut meshes,
+        &mut mats,
+        &mut water_mats,
+        &mut images,
+        &mut cards,
+        &old,
+        s.map_id,
+    );
     if let Ok((mut exposure, mut env)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
             look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
@@ -1089,7 +1111,7 @@ fn expose(
     settle: Res<loading::Settle>,
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
-    page: Option<Res<front::PageState>>,
+    party: Option<Res<party::PartyView>>,
     mut frames: Local<u32>,
 ) {
     use wasm_bindgen::JsValue;
@@ -1140,12 +1162,23 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
-    // For the page's menu: in a match, a knock out, and the line it gave.
     set(&o, "in_match", matched.into());
-    if let Some(p) = page {
-        set(&o, "knocking", p.knocking.into());
-        set(&o, "front_status", p.status.as_str().into());
-        set(&o, "front_bad", p.bad.into());
+    // The party as this page sees it (ci/party.mjs).
+    if let Some(p) = party {
+        let po = js_sys::Object::new();
+        set(&po, "connected", p.connected.into());
+        set(&po, "code", p.code_text().into());
+        set(&po, "n", (p.members().len() as u32).into());
+        set(&po, "leads", p.leads().into());
+        let names = js_sys::Array::new();
+        for m in p.members() {
+            names.push(&JsValue::from_str(m.name.as_str()));
+        }
+        set(&po, "names", names.into());
+        let (heard, sent) = party::voice_counts();
+        set(&po, "heard", heard.into());
+        set(&po, "sent", sent.into());
+        set(&o, "party", po.into());
     }
     // Which module this is and what it draws (`look/gpu.rs`).
     set(&o, "gfx", look::gpu::api().into());
@@ -1246,35 +1279,6 @@ mod web_start {
             app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
         }
         app.run();
-    }
-
-    /// The page's menu asks for a match (`page` in `launch`'s opts): as
-    /// `name`, with an Elo Pros pass or the server's ticket (or nothing, a
-    /// guest), `mode` in `skin`, with the `party` it comes with (its code;
-    /// 0 for none). How it goes is `__oneshot.knocking`, `.front_status`,
-    /// `.in_match`.
-    #[wasm_bindgen]
-    pub fn knock(name: String, pass: String, mode: u8, skin: u8, party: u32) {
-        let ask = super::door::Ask {
-            name,
-            pass,
-            mode,
-            skin,
-            party,
-        };
-        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Knock(ask)));
-    }
-
-    /// Stop waiting for a match (the queue, a cup).
-    #[wasm_bindgen]
-    pub fn cancel() {
-        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Cancel));
-    }
-
-    /// Leave the match, back to the page's menu.
-    #[wasm_bindgen]
-    pub fn leave() {
-        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Leave));
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;

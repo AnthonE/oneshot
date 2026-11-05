@@ -196,8 +196,32 @@ pub fn ground(t: &TerrainDef, x: f32, z: f32) -> Option<f32> {
     })
 }
 
+/// The grass is patchy: its patches ([`patch`], metres across) bare the
+/// ground this far, in the splat and the tufts alike.
+const PATCH_BARE: f32 = 0.75;
+
+/// Where grass grows by height: none on the creek's floor, full from
+/// this height, and gone again above the next (the scree's top and the
+/// cliffs' ledges are bare).
+const GREEN_FROM: (f32, f32) = (1.0, 2.5);
+const GREEN_TO: (f32, f32) = (6.0, 10.0);
+
+/// How much grass the height `y` allows, 0..1.
+pub fn by_height(y: f32) -> f32 {
+    let up = ((y - GREEN_FROM.0) / (GREEN_FROM.1 - GREEN_FROM.0)).clamp(0.0, 1.0);
+    let down = 1.0 - ((y - GREEN_TO.0) / (GREEN_TO.1 - GREEN_TO.0)).clamp(0.0, 1.0);
+    up * down
+}
+
+/// How much grass grows at (x, z) at height `y`, by its height and its
+/// patch, 0..1: the splat's share (`level::ground_point`) and the tufts'.
+pub fn cover(x: f32, z: f32, y: f32) -> f32 {
+    by_height(y) * (1.0 - PATCH_BARE + PATCH_BARE * patch(x, z))
+}
+
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
-/// rule (level.rs): grass up the hills, none on steep rock or in the creek.
+/// rule (level.rs): grass up the hills, none on steep rock or in the creek,
+/// in patches.
 fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
@@ -206,7 +230,7 @@ fn growth(t: &TerrainDef, x: f32, z: f32) -> Option<(f32, f32)> {
     if slope > 0.55 || y < -0.12 {
         return None;
     }
-    let green = ((y - 1.0) / 1.5).clamp(0.0, 1.0);
+    let green = cover(x, z, y);
     Some((green, 0.07))
 }
 

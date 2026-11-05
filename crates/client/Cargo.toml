@@ -48,6 +48,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 sound = ["bevy/bevy_audio", "bevy/vorbis"]
 # Wayland beside X11 on Linux: needs libwayland-dev (the release builds have it).
 wayland = ["bevy/wayland"]
+# Gamepads on the desktop's screens (`pad.rs`): needs libudev's headers on
+# Linux (libudev-dev; the release builds have it). Always in a browser.
+pad = ["bevy/bevy_gilrs"]
 # The browser's WebGPU module (after Gates' `webgpu`): ci/client.sh builds the
 # page's wasm twice, with and without this, and web/index.html loads the one
 # the browser can draw with. Bevy picks its GPU API when it is compiled and
@@ -68,7 +71,7 @@ rustls-native-certs = "0.8"
 # Sound always in a browser (Web Audio needs nothing from the build box).
 # `webgl2` is in both modules: under `webgpu` Bevy takes the WebGPU path and
 # the GL backend is dead code (a feature can't take a feature away).
-bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis"] }
+bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis", "bevy_gilrs"] }
 # The wgpu Bevy resolves (one entry in Cargo.lock), named so the WebGPU module
 # can hand the device an error hook: Bevy re-exports neither `wgpu::Error`
 # nor the handler (look/gpu.rs, `watch`). `default-features = false`, or
