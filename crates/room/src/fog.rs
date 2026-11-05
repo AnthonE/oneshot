@@ -144,7 +144,14 @@ pub fn ground_hides(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
 /// chest's edges are left out (at 40 m they turn a line by half a degree):
 /// 18 rays, not 70. A pair found hidden is given the plain test as well, so
 /// no shortcut can hide what is in plain sight.
-fn sees_full(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, far: bool) -> bool {
+fn sees_full(
+    map: &Map,
+    viewer: &Fighter,
+    target: &Fighter,
+    lead: f32,
+    far: bool,
+    plain: impl FnOnce() -> bool,
+) -> bool {
     let side = across(viewer.body.pos, target.body.pos);
     let all_eyes = eyes(viewer, side, lead, PEEK_M);
     let all = fighter_points(target, side, lead);
@@ -160,7 +167,7 @@ fn sees_full(map: &Map, viewer: &Fighter, target: &Fighter, lead: f32, far: bool
             !ground_hides(map, one, group) && sees_points(map, one, group)
         })
     });
-    seen || plainly_sees(map, viewer, target)
+    seen || plain()
 }
 
 /// The plain test: is the target's chest or head in clear line from the
@@ -171,6 +178,31 @@ pub fn plainly_sees(map: &Map, viewer: &Fighter, target: &Fighter) -> bool {
     let e = eye(viewer);
     map.clear(e, target.body.pos + V3::new(0.0, chest_h(target), 0.0))
         || map.clear(e, target.body.pos + V3::new(0.0, head, 0.0))
+}
+
+/// Each ordered pair's [`plainly_sees`] for one tick, cast on first ask:
+/// the aim review asks every tick and fog again on a snapshot tick, of the
+/// same world. A fresh one each tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Plain {
+    asked: [u16; MAX_FIGHTERS],
+    seen: [u16; MAX_FIGHTERS],
+}
+
+const _: () = assert!(MAX_FIGHTERS <= u16::BITS as usize);
+
+impl Plain {
+    /// [`plainly_sees`] from seat `v` to seat `t` in `w`.
+    pub fn sees(&mut self, w: &World, v: usize, t: usize) -> bool {
+        let bit = 1u16 << t;
+        if self.asked[v] & bit == 0 {
+            self.asked[v] |= bit;
+            if plainly_sees(&w.map, &w.fighters[v], &w.fighters[t]) {
+                self.seen[v] |= bit;
+            }
+        }
+        self.seen[v] & bit != 0
+    }
 }
 
 /// Points of a hull a vehicle has, a time.
@@ -263,6 +295,11 @@ impl Fog {
     /// plain sight is ever held back. The hold ([`HOLD_TICKS`]) outlasts
     /// the gap, so a pair in sight stays sent (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
+        self.update_with(w, viewer, lead, tick, &mut Plain::default());
+    }
+
+    /// [`Fog::update`], sharing this tick's plain tests (`plain`, of `w`).
+    pub fn update_with(&mut self, w: &World, viewer: usize, lead: f32, tick: u32, plain: &mut Plain) {
         let me = &w.fighters[viewer];
         let turn = (tick / crate::SNAP_EVERY) as usize + viewer;
         for (q, f) in w.fighters.iter().enumerate() {
@@ -273,9 +310,11 @@ impl Fog {
             } else {
                 let k = every(me, f);
                 let seen = if (turn + q).is_multiple_of(k) {
-                    sees_full(&w.map, me, f, full_lead(lead, k), k == FAR_EVERY)
+                    sees_full(&w.map, me, f, full_lead(lead, k), k == FAR_EVERY, || {
+                        plain.sees(w, viewer, q)
+                    })
                 } else {
-                    plainly_sees(&w.map, me, f)
+                    plain.sees(w, viewer, q)
                 };
                 if seen {
                     self.until[q] = tick + HOLD_TICKS;
