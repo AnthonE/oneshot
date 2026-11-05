@@ -71,7 +71,8 @@ struct Edge {
     nb: Vec2,
     la: f32,
     lb: f32,
-    /// Nearer upright than level: its texture runs by height.
+    /// Upright, in a run of upright faces between creases: its texture
+    /// runs by height.
     wall: bool,
 }
 
@@ -114,24 +115,47 @@ fn outline(k: &[[f32; 3]], axis: bool) -> Vec<Edge> {
     };
     let cos_crease = CREASE_DEG.to_radians().cos();
     let m = raw.len();
+    // Whether each edge runs on smoothly from the one before it (an edge on
+    // the axis was cut: no join there).
+    let smooth_from_prev: Vec<bool> = (0..m)
+        .map(|i| {
+            let (p, e) = (raw[(i + m - 1) % m], raw[i]);
+            (p.1 - e.0).length() < 1e-5 && normal(p).dot(normal(e)) >= cos_crease
+        })
+        .collect();
+    // The smooth runs between creases: one that is all upright faces is
+    // textured by height, so pieces stacked on one circle line up; one
+    // that bends over (a dome, a bulb, a rolled rim) along its outline, so
+    // no seam crosses a smooth surface.
+    let mut run = vec![0usize; m];
+    for i in 1..m {
+        run[i] = run[i - 1] + usize::from(!smooth_from_prev[i]);
+    }
+    if m > 0 && smooth_from_prev[0] {
+        // The loop closes smoothly: its last run is its first.
+        let last = run[m - 1];
+        for r in run.iter_mut().filter(|r| **r == last) {
+            *r = 0;
+        }
+    }
+    let upright = |e: (Vec2, Vec2)| normal(e).y.abs() < 0.7;
+    let level_in = |r: usize| (0..m).any(|j| run[j] == r && !upright(raw[j]));
     let mut out = Vec::with_capacity(m);
     let mut l = 0.0;
     for i in 0..m {
         let e = raw[i];
         let n0 = normal(e);
-        // Neighbours only where they join (an edge on the axis was cut).
         let prev = raw[(i + m - 1) % m];
         let next = raw[(i + 1) % m];
-        let smooth = |other: (Vec2, Vec2), joins: bool| {
-            let no = normal(other);
-            if joins && no.dot(n0) >= cos_crease {
-                (no + n0).normalize_or(n0)
+        let blend = |other: (Vec2, Vec2), smooth: bool| {
+            if smooth {
+                (normal(other) + n0).normalize_or(n0)
             } else {
                 n0
             }
         };
-        let na = smooth(prev, (prev.1 - e.0).length() < 1e-5);
-        let nb = smooth(next, (next.0 - e.1).length() < 1e-5);
+        let na = blend(prev, smooth_from_prev[i]);
+        let nb = blend(next, smooth_from_prev[(i + 1) % m]);
         let len = (e.1 - e.0).length();
         out.push(Edge {
             a: e.0,
@@ -140,7 +164,7 @@ fn outline(k: &[[f32; 3]], axis: bool) -> Vec<Edge> {
             nb,
             la: l,
             lb: l + len,
-            wall: n0.y.abs() < 0.7,
+            wall: upright(e) && !level_in(run[i]),
         });
         l += len;
     }
@@ -227,11 +251,23 @@ pub fn profile_mesh(sol: &Solid, tile: f32) -> Option<Mesh> {
             let at = |v: f32, h: f32, u: f32| Vec3::new(x, y + h, z) + along * u + across * v;
             let dir = |nn: Vec2| (across * nn.x + Vec3::Y * nn.y).normalize_or(Vec3::Y);
             for e in outline(k, false) {
+                // A level face (a walkway's top, a ramp's) in the world's x
+                // and z, as a box's top is: the straight pieces of a curved
+                // ramp then carry one pattern.
+                let level = (e.b - e.a).y.abs() < 0.7 * (e.b - e.a).length();
+                let corner = |p: Vec2, u: f32, second: bool| {
+                    let w = at(p.x, p.y, u);
+                    if level {
+                        [w.x, w.z]
+                    } else {
+                        [u0 + u, e.v(second, y)]
+                    }
+                };
                 let v = [
-                    f.vert(at(e.a.x, e.a.y, -l), dir(e.na), [u0 - l, e.v(false, y)]),
-                    f.vert(at(e.b.x, e.b.y, -l), dir(e.nb), [u0 - l, e.v(true, y)]),
-                    f.vert(at(e.b.x, e.b.y, l), dir(e.nb), [u0 + l, e.v(true, y)]),
-                    f.vert(at(e.a.x, e.a.y, l), dir(e.na), [u0 + l, e.v(false, y)]),
+                    f.vert(at(e.a.x, e.a.y, -l), dir(e.na), corner(e.a, -l, false)),
+                    f.vert(at(e.b.x, e.b.y, -l), dir(e.nb), corner(e.b, -l, true)),
+                    f.vert(at(e.b.x, e.b.y, l), dir(e.nb), corner(e.b, l, true)),
+                    f.vert(at(e.a.x, e.a.y, l), dir(e.na), corner(e.a, l, false)),
                 ];
                 f.quad(v);
             }
