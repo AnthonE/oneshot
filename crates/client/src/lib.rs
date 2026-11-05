@@ -1372,6 +1372,12 @@ pub(crate) fn happened(
     heard.0 = events;
 }
 
+/// `expose` writes every frame for this many, then once in this long.
+#[cfg(target_arch = "wasm32")]
+const EXPOSE_EVERY_FRAME: u32 = 8;
+#[cfg(target_arch = "wasm32")]
+const EXPOSE_EVERY_S: f64 = 0.1;
+
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
 /// three.js page has it, and where the title's controls are (`ui`: a tag's
 /// centre and size in the page's pixels, for a click).
@@ -1394,10 +1400,19 @@ fn expose(
     mood: Res<look::mood::MoodNow>,
     party: Option<Res<party::PartyView>>,
     ear: Res<sound::Ear>,
-    (mut frames, mut described): (Local<u32>, Local<Option<String>>),
+    real: Res<Time<Real>>,
+    (mut frames, mut described, mut wrote): (Local<u32>, Local<Option<String>>, Local<f64>),
 ) {
     use wasm_bindgen::JsValue;
     *frames += 1;
+    // A hundred-odd calls into JS and a fresh JS string for every key: the
+    // page's gates poll it, so every frame for the splash, then a few times a
+    // second, not every frame of a match.
+    let now = real.elapsed_secs_f64();
+    if *frames > EXPOSE_EVERY_FRAME && now - *wrote < EXPOSE_EVERY_S {
+        return;
+    }
+    *wrote = now;
     // Written again only when the tier moves (a row, the frame-rate watch).
     if tier.is_changed() || described.is_none() {
         *described = Some(tier.describe());
