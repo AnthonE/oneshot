@@ -233,10 +233,11 @@ fn shots_wreck_a_hull_and_its_riders_and_it_comes_back() {
     assert_eq!(w.vehicles[0].pos, w.map.vehicles[0].pos);
 }
 
-/// The cab covers its driver: a shot at where they sit meets the hull.
-/// The bed doesn't cover its passenger, whose chest and head stand over it.
+/// The truck's steel stops a shot and its glass doesn't: a driver's chest
+/// is behind the door, their head behind the window; the bed's sides are
+/// higher than the sill, and a passenger's chest stands over them.
 #[test]
-fn the_cab_covers_its_driver_and_the_bed_not_its_passenger() {
+fn steel_stops_a_shot_and_glass_does_not() {
     let rules = Rules {
         teams: false,
         score_limit: 100,
@@ -279,14 +280,32 @@ fn the_cab_covers_its_driver_and_the_bed_not_its_passenger() {
         }
     };
     let hull = w.vehicles[0].health;
+    let chest = w.vehicles[0].mount(DRIVER) + V3::new(0.0, CHEST_Y_CROUCH, 0.0);
+    shoot(&mut w, chest);
+    assert!(
+        w.vehicles[0].health < hull,
+        "the door took the shot at its driver's chest"
+    );
+    assert_eq!(w.fighters[0].shield, SHIELD_MAX, "and the driver none of it");
+    let hull = w.vehicles[0].health;
     let head = w.vehicles[0].mount(DRIVER) + V3::new(0.0, HEAD_Y_CROUCH, 0.0);
     shoot(&mut w, head);
-    assert!(w.vehicles[0].health < hull, "the hull took the shot at its driver");
-    assert_eq!(w.fighters[0].shield, SHIELD_MAX, "and the driver none of it");
+    assert!(w.fighters[0].shield < SHIELD_MAX, "the window stopped nothing");
+    assert_eq!(w.vehicles[0].health, hull, "and the hull took none of that");
+    // Between the sill and the bed's rail, behind the cab: steel.
+    let hull = w.vehicles[0].health;
+    let (f, _) = w.vehicles[0].axes();
+    let rail = w.vehicles[0].pos + f * (VEH_BED_X - 1.5) + V3::new(0.0, (VEH_SILL + VEH_BED_H) / 2.0, 0.0);
+    shoot(&mut w, rail);
+    assert!(w.vehicles[0].health < hull, "the bed's side took it");
+    assert_eq!(w.fighters[2].shield, SHIELD_MAX, "not the passenger standing behind it");
     let hull = w.vehicles[0].health;
     let chest = w.vehicles[0].mount(PASSENGER) + V3::new(0.0, CHEST_Y, 0.0);
     shoot(&mut w, chest);
-    assert!(w.fighters[2].shield < SHIELD_MAX, "the passenger is over the hull");
+    assert!(
+        w.fighters[2].shield < SHIELD_MAX,
+        "the passenger is over the bed's sides"
+    );
     assert_eq!(w.vehicles[0].health, hull, "which that shot went over");
 }
 

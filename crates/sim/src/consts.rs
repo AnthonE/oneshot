@@ -237,6 +237,14 @@ pub const MAX_VEHICLES: usize = 8;
 pub const VEH_HALF_L: f32 = 2.86;
 pub const VEH_HALF_W: f32 = 1.1;
 pub const VEH_H: f32 = 1.84;
+/// What of it stops a shot (`Vehicle::ray`): its steel, never its glass.
+/// The body to the windows' sill, its whole length; and behind the cab
+/// (from this far aft of its middle), the bed's sides to their rail. A
+/// driver's head and shoulders are over the one, behind glass; a
+/// passenger's chest and head over the other.
+pub const VEH_SILL: f32 = 1.25;
+pub const VEH_BED_X: f32 = -0.84;
+pub const VEH_BED_H: f32 = 1.45;
 /// The hull meets boxes as three circles: one at its middle, and one this
 /// far fore and aft of it (to its nose and its tail).
 pub const VEH_HULL_OFF: f32 = 1.76;

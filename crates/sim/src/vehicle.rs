@@ -96,10 +96,10 @@ impl Vehicle {
     }
 
     /// A rider's body in `seat`: at its mount, moving with the hull; the
-    /// driver sitting (a crouched body's height: under the roof, so the
-    /// hull takes what is shot at it), the passenger on its feet, chest
-    /// and head over the hull. What the world and a rider's prediction
-    /// both put there.
+    /// driver sitting (a crouched body's height: under the roof, its head
+    /// behind the glass), the passenger on its feet, chest and head over
+    /// the bed's sides. What the world and a rider's prediction both put
+    /// there.
     pub fn seat_body(&self, seat: usize) -> crate::movement::Body {
         crate::movement::Body {
             pos: self.mount(seat),
@@ -109,12 +109,16 @@ impl Vehicle {
         }
     }
 
-    /// The hull in its own frame: x forward, z right, y up from the ground.
-    pub fn hull() -> Aabb {
-        Aabb::new(
-            V3::new(-VEH_HALF_L, 0.0, -VEH_HALF_W),
-            V3::new(VEH_HALF_L, VEH_H, VEH_HALF_W),
-        )
+    /// What of the hull stops a shot, in its own frame (x forward, z right,
+    /// y up from the ground): the body to the windows' sill, and the bed's
+    /// sides behind the cab. Over them is glass, or nothing: a shot goes
+    /// through to whoever sits or stands there.
+    pub fn hull() -> [Aabb; 2] {
+        let lo = V3::new(-VEH_HALF_L, 0.0, -VEH_HALF_W);
+        [
+            Aabb::new(lo, V3::new(VEH_HALF_L, VEH_SILL, VEH_HALF_W)),
+            Aabb::new(lo, V3::new(VEH_BED_X, VEH_BED_H, VEH_HALF_W)),
+        ]
     }
 
     /// A point or direction from the world into the hull's frame.
@@ -122,10 +126,18 @@ impl Vehicle {
         V3::new(p.x * f.x + p.z * f.z, p.y, p.x * r.x + p.z * r.z)
     }
 
-    /// Where a ray from `o` along unit `d` meets the hull, within `tmax`.
+    /// Where a ray from `o` along unit `d` first meets the hull's steel,
+    /// within `tmax`.
     pub fn ray(&self, o: V3, d: V3, tmax: f32) -> Option<f32> {
         let ax = self.axes();
-        ray_aabb(self.local(o - self.pos, ax), self.local(d, ax), &Vehicle::hull(), tmax)
+        let (o, d) = (self.local(o - self.pos, ax), self.local(d, ax));
+        let mut near = None;
+        for b in Vehicle::hull() {
+            if let Some(t) = ray_aabb(o, d, &b, near.unwrap_or(tmax)) {
+                near = Some(t);
+            }
+        }
+        near
     }
 
     /// Whether a fighter's body (radius `r`, from `feet` up `h`) touches the

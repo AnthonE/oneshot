@@ -8,9 +8,11 @@
 //!
 //! It is drawn at the size it came, a real truck's (5.7 m long, 2.1 wide,
 //! 1.8 tall), and the sim's hull is that box (`VEH_HALF_L`, `VEH_HALF_W`,
-//! `VEH_H`), its middle the model's: what is drawn is what takes a shot and
-//! meets a wall. The sim's seats are its seats (`Vehicle::mount`): the
-//! driver in the cab's left one, the passenger standing in the bed.
+//! `VEH_H`), its middle the model's: what is drawn is what meets a wall,
+//! and its steel is what takes a shot, to the windows' sill and the bed's
+//! rail (`VEH_SILL`, `VEH_BED_H`); its glass stops nothing. The sim's seats
+//! are its seats (`Vehicle::mount`): the driver in the cab's left one, head
+//! and shoulders behind the glass, the passenger standing in the bed.
 
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
