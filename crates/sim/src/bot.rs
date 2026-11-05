@@ -59,6 +59,19 @@ const LOOT_RISE: f32 = 0.6;
 const OBJECTIVE_IGNORE_M: f32 = 30.0;
 /// A bot's waist, for a straight walk's line.
 const WAIST: f32 = 0.9;
+/// On a map with a void: how far ahead a bot looks for the edge the way
+/// it means to go (a run stops in about a metre), and how far it keeps
+/// from it to jump (a jump at a run carries some 9 m; air control turns
+/// the rest).
+const EDGE_LOOK: [f32; 4] = [0.5, 1.0, 1.5, 2.0];
+const EDGE_JUMP: [f32; 4] = [1.5, 3.0, 4.5, 6.0];
+/// In the air, along the way it is going: where it would come down.
+const EDGE_AIR: [f32; 4] = [0.5, 1.5, 2.5, 3.5];
+/// The turns it tries, smallest first, when the way it means to go is
+/// over the edge: along it, then back from it. (sin, cos) of ±45°, ±90°,
+/// ±135°.
+const H: f32 = core::f32::consts::FRAC_1_SQRT_2;
+const EDGE_TURNS: [(f32, f32); 6] = [(H, H), (-H, H), (1.0, 0.0), (-1.0, 0.0), (H, -H), (-H, -H)];
 
 impl Bot {
     pub fn new(seed: u64, slot: usize, skill: f32) -> Bot {
@@ -248,7 +261,14 @@ impl Bot {
         self.rng.next_u32() as f32 * (1.0 / 4_294_967_296.0)
     }
 
+    /// This tick's input for the bot in `slot`.
     pub fn think(&mut self, w: &World, slot: usize) -> Input {
+        let mut inp = self.decide(w, slot);
+        mind_the_edge(w, slot, &mut inp);
+        inp
+    }
+
+    fn decide(&mut self, w: &World, slot: usize) -> Input {
         let me = &w.fighters[slot];
         let mut inp = Input {
             yaw: me.yaw,
@@ -491,6 +511,61 @@ impl Bot {
         }
         inp
     }
+}
+
+/// On a map with a void, on foot: never walk or jump over the edge. The way
+/// the stick points is looked along [`EDGE_LOOK`]; over the void it turns
+/// to the nearest way that holds ([`EDGE_TURNS`]), or lets go. No jump
+/// with the edge within [`EDGE_JUMP`] the way the stick points or the way
+/// the body is going; in the air headed over it ([`EDGE_AIR`]), the stick
+/// pulls back.
+fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
+    let me = &w.fighters[slot];
+    if w.map.void == f32::NEG_INFINITY || !me.active() || me.riding().is_some() {
+        return;
+    }
+    let p = me.body.pos;
+    let over = |dx: f32, dz: f32, look: &[f32]| look.iter().any(|&d| w.map.over_void(p.x + dx * d, p.z + dz * d, p.y));
+    let (sn, cs) = crate::geom::yaw_sincos(inp.yaw);
+    // The stick in the world's x and z, as movement turns it.
+    let fwd = inp.mz as f32 * (1.0 / 127.0);
+    let side = inp.mx as f32 * (1.0 / 127.0);
+    let (wx, wz) = (cs * fwd - sn * side, sn * fwd + cs * side);
+    let len = (wx * wx + wz * wz).sqrt();
+    let set = |inp: &mut Input, dx: f32, dz: f32, k: f32| {
+        inp.mz = ((cs * dx + sn * dz) * k * 127.0) as i8;
+        inp.mx = ((-sn * dx + cs * dz) * k * 127.0) as i8;
+    };
+    let v = me.body.vel.flat();
+    let speed = v.len();
+    let going_over = |look: &[f32]| speed > 0.5 && over(v.x / speed, v.z / speed, look);
+    if !me.body.grounded {
+        if going_over(&EDGE_AIR) {
+            set(inp, -v.x / speed, -v.z / speed, 1.0);
+        }
+        return;
+    }
+    if len < 0.01 {
+        inp.buttons &= !JUMP;
+        return;
+    }
+    let (ux, uz) = (wx / len, wz / len);
+    if inp.held(JUMP) && (over(ux, uz, &EDGE_JUMP) || going_over(&EDGE_JUMP)) {
+        inp.buttons &= !JUMP;
+    }
+    if !over(ux, uz, &EDGE_LOOK) {
+        return;
+    }
+    inp.buttons &= !JUMP;
+    for (s, c) in EDGE_TURNS {
+        let (dx, dz) = (ux * c - uz * s, ux * s + uz * c);
+        if !over(dx, dz, &EDGE_LOOK) {
+            set(inp, dx, dz, len.min(1.0));
+            return;
+        }
+    }
+    inp.mz = 0;
+    inp.mx = 0;
 }
 
 /// Capture the Flag: whether the bot in `slot` attacks or defends. Seats

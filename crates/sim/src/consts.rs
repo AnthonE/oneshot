@@ -106,6 +106,11 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
+/// On a map with a void (`Map::void`): a fall is the kill of whoever last
+/// hurt the faller, if it was within this long on the faller's feet. The
+/// clock stops in the air, so a blast that throws a body off an edge is
+/// the thrower's however long the fall.
+pub const FALL_CREDIT_MS: u32 = 3000;
 
 // Power-ups (arms::OVERSHIELD, arms::CAMO), on pads, taken by walking on.
 /// The overshield: shields climb to three times full (Halo 2's), at

@@ -7,6 +7,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 use sim::bot::Bot;
 use sim::consts::*;
+use sim::events::{Cause, Kind as Ev};
 use sim::fmath::{fabs, round};
 use sim::input::Input;
 use sim::map::{by_id, Map, ANY_TEAM};
@@ -50,6 +51,7 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
                 m.name
             );
             assert!(!blocked(&m, p.x, p.z, p.y, BODY_R), "{} spawn {i}: in a box", m.name);
+            assert!(!m.over_void(p.x, p.z, p.y), "{} spawn {i}: over the void", m.name);
         }
         assert!(m.pads.len() <= MAX_PADS, "{}", m.name);
         for (i, pad) in m.pads.iter().enumerate() {
@@ -61,6 +63,7 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
                 m.name
             );
             assert!(!blocked(&m, p.x, p.z, p.y, BODY_R), "{} pad {i}: in a box", m.name);
+            assert!(!m.over_void(p.x, p.z, p.y), "{} pad {i}: over the void", m.name);
         }
         let side = |t: u8| m.spawns.iter().filter(|s| s.team == t || s.team == ANY_TEAM).count();
         assert!(
@@ -95,7 +98,7 @@ fn walk(m: &Map, from: (f32, f32, f32)) -> BTreeSet<(i32, i32, i32)> {
                 continue;
             }
             let ny = m.floor(x, z, r, y + STEP);
-            if blocked(m, x, z, ny, r) {
+            if m.lost_floor(x, z, ny) || blocked(m, x, z, ny, r) {
                 continue;
             }
             // Up ground steeper than movement climbs (movement::too_steep).
@@ -167,11 +170,19 @@ fn bots_fight_on_every_map() {
                 w.seat(s, (s & 1) as u8);
             }
             let mut inputs = [Input::default(); MAX_FIGHTERS];
+            // Off the edge with nobody's help (a map with a void).
+            let mut own_falls = 0;
             for _ in 0..20_000 {
                 for (s, b) in bots.iter_mut().enumerate() {
                     inputs[s] = b.think(&w, s);
                 }
                 w.step(&inputs, &[0; MAX_FIGHTERS]);
+                own_falls += w
+                    .events
+                    .as_slice()
+                    .iter()
+                    .filter(|e| e.kind == Ev::Kill && e.c == Cause::Fall as u16 && e.a == e.b)
+                    .count();
             }
             let kills: u16 = w.fighters.iter().map(|f| f.kills).sum();
             assert!(
@@ -179,6 +190,7 @@ fn bots_fight_on_every_map() {
                 "{} with {n} seats: only {kills} kills in 20000 ticks",
                 d.name
             );
+            assert_eq!(own_falls, 0, "{} with {n} seats: bots walked off the edge", d.name);
         }
     }
 }

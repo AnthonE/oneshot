@@ -16,6 +16,7 @@ pub const DEF: Def = Def {
     practice: false,
     lo: (-22.0, -13.7),
     hi: (22.0, 13.7),
+    void: f32::NEG_INFINITY,
     boxes: &[
     ],
     looks: &[],

@@ -257,6 +257,8 @@ pub fn of(id: u8) -> Mood {
         },
         5 => DUSK,
         6 => INTERIOR,
+        // Cloudbreak, over its sea of cloud, till the look loop gives it its own.
+        7 => MIST,
         _ => NOON,
     }
 }

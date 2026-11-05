@@ -101,6 +101,10 @@ impl Nav {
                     continue;
                 }
                 let ny = m.floor_with(x, z, r, p.y + STEP, p.y + STEP);
+                // Over the edge of a void is no way anywhere.
+                if m.lost_floor(x, z, ny) {
+                    continue;
+                }
                 if !m.occupied(x, z, r, ny, ny + BODY_H) {
                     to[n] = Some(key(x, z, ny));
                 }
