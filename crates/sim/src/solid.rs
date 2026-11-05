@@ -149,10 +149,7 @@ impl Solid {
                 x: n[0],
                 z: n[1],
                 y: n[2],
-                sector: Some(Sector {
-                    e0: [n[3], n[4]],
-                    e1: [n[5], n[6]],
-                }),
+                sector: Some(Sector::new([n[3], n[4]], [n[5], n[6]], k[0][0], k[k.len() - 1][0])),
                 k,
             },
             _ => Shape::Sweep {
@@ -191,25 +188,10 @@ impl Solid {
             }
             Shape::Ramp { x0, z0, x1, z1, .. } => (x0, z0, x1, z1),
             Shape::Revolve { x, z, sector, k, .. } => {
-                let (s0, sn) = (k[0][0], k[k.len() - 1][0]);
+                let sn = k[k.len() - 1][0];
                 match sector {
                     None => (x - sn, z - sn, x + sn, z + sn),
-                    Some(sec) => {
-                        let mut b = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-                        let mut put = |px: f32, pz: f32| {
-                            b = (b.0.min(px), b.1.min(pz), b.2.max(px), b.3.max(pz));
-                        };
-                        for e in [sec.e0, sec.e1] {
-                            put(e[0] * sn, e[1] * sn);
-                            put(e[0] * s0, e[1] * s0);
-                        }
-                        for (ax, az) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
-                            if sec.holds(ax, az, 0.0) {
-                                put(ax * sn, az * sn);
-                            }
-                        }
-                        (x + b.0, z + b.1, x + b.2, z + b.3)
-                    }
+                    Some(sec) => (x + sec.bb[0], z + sec.bb[1], x + sec.bb[2], z + sec.bb[3]),
                 }
             }
             Shape::Sweep { x, z, c, s, l, k, .. } => {
@@ -449,9 +431,23 @@ impl Solid {
     pub fn ray_hit(&self, o: V3, d: V3, tmax: f32) -> Option<(f32, Piece)> {
         match self.shape {
             Shape::Revolve { x, z, y, sector, k } => {
-                let t0 = ray_aabb(o, d, &self.bounds(), tmax)?;
+                // A ray whose ends are both in a ring's hole never meets it
+                // (the farthest it gets from the axis is at an end).
+                let s0 = k[0][0];
+                if s0 > 0.0 {
+                    let (ax, az) = (o.x - x, o.z - z);
+                    let (bx, bz) = (ax + d.x * tmax, az + d.z * tmax);
+                    let lim = s0 * s0 * (1.0 - 1e-4);
+                    if ax * ax + az * az < lim && bx * bx + bz * bz < lim {
+                        return None;
+                    }
+                }
+                // From where the ray enters the box round it to where it
+                // leaves: nearer the axis, so the quadratics keep their
+                // bits, and no longer than it is in there.
+                let (t0, t1) = slabs(o, d, &self.bounds(), tmax)?;
                 let p = o + d * t0;
-                profile::ray_spun(k, sector, [p.x - x, p.y - y, p.z - z], [d.x, d.y, d.z], tmax - t0)
+                profile::ray_spun(k, sector, [p.x - x, p.y - y, p.z - z], [d.x, d.y, d.z], t1 - t0)
                     .map(|(t, piece)| (t0 + t, piece))
             }
             Shape::Sweep { x, z, y, c, s, l, k } => {
@@ -786,6 +782,21 @@ impl Solid {
     /// its square, and the circle is widened past that rounding at any
     /// distance on a map (`a_ray_past_a_curve_is_answered_as_the_exact_test_does`).
     fn wide_of(&self, o: V3, d: V3) -> bool {
+        // A sector: also the circle round its box, far smaller than the
+        // whole turn's for a short stretch of a big circle.
+        if let Shape::Revolve {
+            x,
+            z,
+            sector: Some(sec),
+            ..
+        } = self.shape
+        {
+            let (cx, cz) = (x + (sec.bb[0] + sec.bb[2]) * 0.5, z + (sec.bb[1] + sec.bb[3]) * 0.5);
+            let (hx, hz) = ((sec.bb[2] - sec.bb[0]) * 0.5, (sec.bb[3] - sec.bb[1]) * 0.5);
+            if Self::wide_of_circle(o, d, cx, cz, hx * hx + hz * hz) {
+                return true;
+            }
+        }
         let (x, z, r2) = match self.shape {
             Shape::Round { x, z, r } => (x, z, r * r),
             Shape::Turned { x, z, hx, hz, .. } => (x, z, hx * hx + hz * hz),
@@ -799,6 +810,12 @@ impl Solid {
                 (x, z, l * l + (s0 * s0).max(sn * sn))
             }
         };
+        Self::wide_of_circle(o, d, x, z, r2)
+    }
+
+    /// Whether a ray passes wide of the circle of radius² `r2` about (x, z)
+    /// ([`Self::wide_of`]'s test).
+    fn wide_of_circle(o: V3, d: V3, x: f32, z: f32, r2: f32) -> bool {
         let dd = d.x * d.x + d.z * d.z;
         // Nearly straight up or down: the exact test.
         if dd < 1e-4 {

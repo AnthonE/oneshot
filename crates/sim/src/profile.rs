@@ -391,10 +391,37 @@ fn clip(a: f32, b: f32, piece: Piece, t0: &mut f32, t1: &mut f32, at0: &mut Piec
 /// either side. Each segment is a convex prism: the first entry over all
 /// of them. A ray starting inside reports 0.
 pub fn ray_carried(k: Knots, l: f32, o: [f32; 3], d: [f32; 3], tmax: f32) -> Option<(f32, Piece)> {
+    // First the box round it in its own frame: most rays miss that, and
+    // one that meets it crosses only some of the segments.
+    let (yb, yt) = span_y(k);
+    let n = k.len();
+    let (mut t0, mut t1) = (0.0f32, tmax);
+    for (o, d, lo, hi) in [
+        (o[0], d[0], -l, l),
+        (o[1], d[1], k[0][0], k[n - 1][0]),
+        (o[2], d[2], yb, yt),
+    ] {
+        if d == 0.0 {
+            if o < lo || o > hi {
+                return None;
+            }
+        } else {
+            let (a, b) = ((lo - o) / d, (hi - o) / d);
+            t0 = t0.max(a.min(b));
+            t1 = t1.min(a.max(b));
+        }
+    }
+    if t0 > t1 {
+        return None;
+    }
+    // The span of s the ray crosses in the box, with slack for its rounding.
+    let (va, vb) = (o[1] + d[1] * t0, o[1] + d[1] * t1);
+    let slack = 1e-3 + 1e-4 * (fabs(va) + fabs(vb));
+    let (vlo, vhi) = (va.min(vb) - slack, va.max(vb) + slack);
     let mut best: Option<(f32, Piece)> = None;
-    for i in 0..k.len() - 1 {
+    for i in 0..n - 1 {
         let (p, q) = (k[i], k[i + 1]);
-        if p[0] == q[0] {
+        if p[0] == q[0] || q[0] < vlo || p[0] > vhi {
             continue;
         }
         let (mut t0, mut t1) = (0.0f32, best.map_or(tmax, |b| b.0));
@@ -450,14 +477,37 @@ pub fn ray_carried(k: Knots, l: f32, o: [f32; 3], d: [f32; 3], tmax: f32) -> Opt
 }
 
 /// A spun profile's sector: the edges' directions (cos, sin, from +x
-/// toward +z), the sector between them, at most half a turn.
+/// toward +z), the sector between them, at most half a turn; and the box
+/// round it from the axis (min x, min z, max x, max z), kept so the grid
+/// and the rays' quick looks needn't work it out again.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sector {
     pub e0: [f32; 2],
     pub e1: [f32; 2],
+    pub bb: [f32; 4],
 }
 
 impl Sector {
+    /// Between the edges `e0` and `e1`, from `s0` to `sn` off the axis.
+    pub fn new(e0: [f32; 2], e1: [f32; 2], s0: f32, sn: f32) -> Sector {
+        let mut sec = Sector { e0, e1, bb: [0.0; 4] };
+        let mut b = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        let mut put = |px: f32, pz: f32| {
+            b = [b[0].min(px), b[1].min(pz), b[2].max(px), b[3].max(pz)];
+        };
+        for e in [e0, e1] {
+            put(e[0] * sn, e[1] * sn);
+            put(e[0] * s0, e[1] * s0);
+        }
+        for (ax, az) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
+            if sec.holds(ax, az, 0.0) {
+                put(ax * sn, az * sn);
+            }
+        }
+        sec.bb = b;
+        sec
+    }
+
     /// Whether (x, z) (from the axis) is within the sector, by `eps`.
     pub fn holds(&self, x: f32, z: f32, eps: f32) -> bool {
         self.e0[0] * z - self.e0[1] * x >= -eps && x * self.e1[1] - z * self.e1[0] >= -eps
@@ -481,13 +531,34 @@ impl Sector {
 pub fn ray_spun(k: Knots, sector: Option<Sector>, o: [f32; 3], d: [f32; 3], tmax: f32) -> Option<(f32, Piece)> {
     let rho = |p: [f32; 3]| (p[0] * p[0] + p[2] * p[2]).sqrt();
     let in_sector = |p: [f32; 3], eps: f32| sector.is_none_or(|s| s.holds(p[0], p[2], eps));
+    let a2 = d[0] * d[0] + d[2] * d[2];
+    let a1 = 2.0 * (o[0] * d[0] + o[2] * d[2]);
+    let a0 = o[0] * o[0] + o[2] * o[2];
+    // How far from the axis and how high the ray goes over [0, tmax]: the
+    // distance's square is a parabola in t, least at its vertex or an end,
+    // most at an end. A ray that stays in a ring's hole never meets it
+    // (most of the lines in a round room against its own wall).
+    let r2 = |t: f32| a0 + (a1 + a2 * t) * t;
+    let (e0, e1) = (r2(0.0), r2(tmax));
+    let s0 = k[0][0];
+    if s0 > 0.0 && e0.max(e1) < s0 * s0 * (1.0 - 1e-4) {
+        return None;
+    }
+    let tv = if a2 > 0.0 {
+        (-a1 / (2.0 * a2)).clamp(0.0, tmax)
+    } else {
+        0.0
+    };
+    let (near, far) = (r2(tv).min(e0).min(e1).max(0.0).sqrt(), e0.max(e1).sqrt());
+    let (ylo, yhi) = (o[1].min(o[1] + d[1] * tmax), o[1].max(o[1] + d[1] * tmax));
+    // Slack past the ranges for the rounding in them.
+    let slack = 1e-3 + 1e-4 * far;
+    let ys = |a: f32, b: f32| a.max(b) >= ylo - slack && a.min(b) <= yhi + slack;
+    let ss = |a: f32, b: f32| b >= near - slack && a <= far + slack;
     if holds(k, rho(o), o[1], 0.0) && in_sector(o, 0.0) {
         // Strictly: on its surface counts as inside.
         return Some((0.0, Piece::Inside));
     }
-    let a2 = d[0] * d[0] + d[2] * d[2];
-    let a1 = 2.0 * (o[0] * d[0] + o[2] * d[2]);
-    let a0 = o[0] * o[0] + o[2] * o[2];
     let pt = |t: f32| [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
     let mut best: Option<(f32, Piece)> = None;
     let take = |t: f32, piece: Piece, best: &mut Option<(f32, Piece)>| {
@@ -498,11 +569,14 @@ pub fn ray_spun(k: Knots, sector: Option<Sector>, o: [f32; 3], d: [f32; 3], tmax
     let n = k.len();
     for i in 0..n - 1 {
         let (p, q) = (k[i], k[i + 1]);
-        if p[0] == q[0] {
+        if p[0] == q[0] || !ss(p[0], q[0]) {
             continue;
         }
         for (top, piece) in [(true, Piece::Top(i as u8)), (false, Piece::Bot(i as u8))] {
             let (y0, y1) = if top { (p[2], q[2]) } else { (p[1], q[1]) };
+            if !ys(y0, y1) {
+                continue;
+            }
             let m = (y1 - y0) / (q[0] - p[0]);
             let a = y0 - m * p[0];
             let on = |t: f32| {
@@ -540,7 +614,7 @@ pub fn ray_spun(k: Knots, sector: Option<Sector>, o: [f32; 3], d: [f32; 3], tmax
             continue;
         };
         let s = k[j][0];
-        if s <= 0.0 || a2 == 0.0 {
+        if s <= 0.0 || a2 == 0.0 || !ss(s, s) || !ys(fb, ft) {
             continue;
         }
         for t in roots(a2, a1, a0 - s * s).into_iter().flatten() {
