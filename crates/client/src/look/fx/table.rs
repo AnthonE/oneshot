@@ -426,8 +426,8 @@ pub fn built(layer: Layer) -> Recipe {
             drag: 2.8,
             life: (0.8, 1.4),
             size: (0.05, 0.08),
-            grow: 4.5,
-            c0: [0.95, 0.95, 0.95, 0.4],
+            grow: 3.2,
+            c0: [0.95, 0.95, 0.95, 0.3],
             c1: [1.05, 1.05, 1.05, 0.0],
             tinted: true,
             spin: 0.8,
@@ -620,9 +620,9 @@ pub fn built(layer: Layer) -> Recipe {
             ..strip(base, sheets::SMOKE)
         },
         Layer::DustCloud => Recipe {
-            speed: (0.8, 2.4),
+            speed: (0.3, 1.0),
             spray: 0.4,
-            up: 0.2,
+            up: 0.15,
             gravity: 0.2,
             drag: 2.4,
             life: (1.0, 1.8),

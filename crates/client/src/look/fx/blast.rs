@@ -305,7 +305,7 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
                 base + out * 0.5 * big + Vec3::Y * 0.25,
                 out,
                 tint,
-                5.0 * big,
+                6.0 * big,
             );
         }
         let up = ground_up(scene, at, floor);
