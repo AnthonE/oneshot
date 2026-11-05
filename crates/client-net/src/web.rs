@@ -486,11 +486,7 @@ impl Client {
         } else {
             0.0
         };
-        let eye = if f.body.crouched {
-            sim::consts::CROUCH_EYE
-        } else {
-            sim::consts::EYE
-        };
+        let eye = f.body.eye_h();
         let rad = core::f32::consts::TAU / 65536.0;
         vec![
             p.x,

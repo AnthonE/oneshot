@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 22;
+pub const PROTO_VER: u16 = 23;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -667,12 +667,18 @@ impl Snapshot {
     }
 }
 
+/// How far down our own crouch has gone, 0 to `CROUCH_TICKS`: what our
+/// prediction steps on from.
+const DUCK_BITS: u32 = 5;
+const _: () = assert!((sim::consts::CROUCH_TICKS as u32) < 1 << DUCK_BITS);
+
 fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write_bit(f.seated)?;
     w.write(f.team as u32, 1)?;
     w.write_bit(f.alive)?;
     w.write_bit(f.body.grounded)?;
     w.write_bit(f.body.crouched)?;
+    w.write(f.body.duck.min(sim::consts::CROUCH_TICKS) as u32, DUCK_BITS)?;
     for v in [
         f.body.pos.x,
         f.body.pos.y,
@@ -744,6 +750,10 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     let alive = r.read_bit()?;
     let grounded = r.read_bit()?;
     let crouched = r.read_bit()?;
+    let duck = r.read(DUCK_BITS)? as u8;
+    if duck > sim::consts::CROUCH_TICKS {
+        return Err(WireError::Malformed);
+    }
     let pos = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
     let vel = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
     let mut f = Fighter {
@@ -755,6 +765,7 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
             vel,
             grounded,
             crouched,
+            duck,
         },
         yaw: r.read(16)? as u16,
         pitch: r.read(16)? as u16 as i16,

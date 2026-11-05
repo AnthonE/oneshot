@@ -52,7 +52,7 @@ use std::collections::BTreeMap;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use sim::consts::{CROUCH_EYE, EYE, PITCH_MAX, VEH_H};
+use sim::consts::{PITCH_MAX, VEH_H};
 use sim::input::*;
 
 use crate::link::Link;
@@ -916,7 +916,7 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         look.pitch = 0.0;
         return (0, 0, 127);
     };
-    let eye = if f.body.crouched { CROUCH_EYE } else { EYE };
+    let eye = f.body.eye_h();
     let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
     look.yaw = dz.atan2(dx);
     look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
@@ -1311,7 +1311,7 @@ pub(crate) fn view(
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
+        let h = f.body.eye_h();
         let eye = at + Vec3::Y * h;
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
         if f.alive {
@@ -1478,7 +1478,7 @@ pub(crate) fn happened(
         );
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
+        let h = f.body.eye_h();
         let eye = Vec3::new(p.x, p.y + h, p.z);
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
         if third {
