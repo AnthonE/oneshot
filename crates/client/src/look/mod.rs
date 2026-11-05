@@ -23,6 +23,7 @@ pub mod portrait;
 pub mod potato;
 pub mod prewarm;
 pub mod quality;
+pub mod rag;
 pub mod rain;
 pub mod rainbow;
 pub mod render_scale;
