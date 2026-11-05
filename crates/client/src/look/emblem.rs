@@ -1,16 +1,10 @@
 //! Emblems, Halo's way: a glyph on a field, each in a colour of the palette,
-//! worn on Triple T's back (`bodies.rs`). Ours: every shape is drawn here,
+//! sprayed on Triple T's back (`paint.rs`). Ours: every shape is drawn here,
 //! from a few lines of geometry each, so there is no art to license. What
 //! the wire carries is `proto::Emblem`.
 //!
-//! Cosmetic only (DESIGN.md §15): lit as paint, never emissive, small, on
-//! the back plate, never on the head.
-
-use bevy::asset::RenderAssetUsages;
-use bevy::image::{Image, ImageSampler};
-use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use std::collections::BTreeMap;
+//! Cosmetic only (DESIGN.md §15): lit as paint, never emissive, on the
+//! back, never on the head.
 
 /// The palette, sRGB: whites to blacks, then round the wheel. Muted, so no
 /// colour reads as a light.
@@ -33,20 +27,40 @@ pub const PALETTE: [[u8; 3]; proto::EMBLEM_COLOURS as usize] = [
     [118, 78, 48],
 ];
 
-/// Texels a side of an emblem's texture on the body.
-pub const SIDE: u32 = 128;
 /// Samples a side of a texel (its coverage, so edges are smooth).
 const SS: u32 = 4;
 
 /// `code` drawn `size`² as straight RGBA8, rows top down: the field, then
 /// the glyph over it; clear where neither is. All clear for no emblem.
 pub fn rgba(code: proto::Emblem, size: u32) -> Vec<u8> {
-    let (glyph, field, gc, fc) = proto::emblem_parts(proto::emblem_valid(code));
+    let (_, _, gc, fc) = proto::emblem_parts(proto::emblem_valid(code));
+    let (g_rgb, f_rgb) = (PALETTE[gc as usize & 15], PALETTE[fc as usize & 15]);
     let mut out = vec![0u8; (size * size * 4) as usize];
+    for (i, [ga, fa]) in layers(code, size).into_iter().enumerate() {
+        // The glyph over the field: straight alpha, "over".
+        let a = ga + fa * (1.0 - ga);
+        let i = i * 4;
+        if a > 0.0 {
+            for c in 0..3 {
+                let v = (g_rgb[c] as f32 * ga + f_rgb[c] as f32 * fa * (1.0 - ga)) / a;
+                out[i + c] = v.round() as u8;
+            }
+        }
+        out[i + 3] = (a * 255.0).round() as u8;
+    }
+    out
+}
+
+/// `code`'s shapes drawn `size`², rows top down: each texel's coverage by
+/// the glyph and by the field (under the glyph too), 0 to 1. The colours
+/// are left out: the body's paint takes them as uniforms (`paint.rs`). All
+/// clear for no emblem.
+pub fn layers(code: proto::Emblem, size: u32) -> Vec<[f32; 2]> {
+    let (glyph, field, ..) = proto::emblem_parts(proto::emblem_valid(code));
+    let mut out = vec![[0.0; 2]; (size * size) as usize];
     if glyph == 0 {
         return out;
     }
-    let (g_rgb, f_rgb) = (PALETTE[gc as usize & 15], PALETTE[fc as usize & 15]);
     let n = (SS * SS) as f32;
     for py in 0..size {
         for px in 0..size {
@@ -71,17 +85,7 @@ pub fn rgba(code: proto::Emblem, size: u32) -> Vec<u8> {
                     }
                 }
             }
-            let (fa, ga) = (f_cov / n, g_cov / n);
-            // The glyph over the field: straight alpha, "over".
-            let a = ga + fa * (1.0 - ga);
-            let i = ((py * size + px) * 4) as usize;
-            if a > 0.0 {
-                for c in 0..3 {
-                    let v = (g_rgb[c] as f32 * ga + f_rgb[c] as f32 * fa * (1.0 - ga)) / a;
-                    out[i + c] = v.round() as u8;
-                }
-            }
-            out[i + 3] = (a * 255.0).round() as u8;
+            out[(py * size + px) as usize] = [g_cov / n, f_cov / n];
         }
     }
     out
@@ -226,57 +230,6 @@ fn in_glyph(glyph: u8, x: f32, y: f32) -> bool {
             band || (x.abs() < 0.6 && (-0.2..peak).contains(&y))
         }
         _ => false,
-    }
-}
-
-/// One material per emblem worn, made the first time it is.
-#[derive(Resource, Default)]
-pub struct Emblems {
-    mats: BTreeMap<proto::Emblem, Handle<StandardMaterial>>,
-    quad: Option<Handle<Mesh>>,
-}
-
-impl Emblems {
-    /// The square every emblem is drawn on, 1 m a side, facing +Z.
-    pub fn quad(&mut self, meshes: &mut Assets<Mesh>) -> Handle<Mesh> {
-        self.quad
-            .get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0)))
-            .clone()
-    }
-
-    /// The material `code` is drawn with: paint on the back plate, its
-    /// clear part cut away, lit like the body and never glowing.
-    pub fn material(
-        &mut self,
-        code: proto::Emblem,
-        images: &mut Assets<Image>,
-        mats: &mut Assets<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
-        self.mats
-            .entry(code)
-            .or_insert_with(|| {
-                let mut img = Image::new(
-                    Extent3d {
-                        width: SIDE,
-                        height: SIDE,
-                        depth_or_array_layers: 1,
-                    },
-                    TextureDimension::D2,
-                    rgba(code, SIDE),
-                    TextureFormat::Rgba8UnormSrgb,
-                    RenderAssetUsages::RENDER_WORLD,
-                );
-                img.sampler = ImageSampler::linear();
-                mats.add(StandardMaterial {
-                    base_color_texture: Some(images.add(img)),
-                    alpha_mode: AlphaMode::Mask(0.5),
-                    perceptual_roughness: 0.55,
-                    metallic: 0.1,
-                    cull_mode: None,
-                    ..default()
-                })
-            })
-            .clone()
     }
 }
 

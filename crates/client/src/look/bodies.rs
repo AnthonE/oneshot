@@ -3,11 +3,12 @@
 //! NOTICE): the model lifted and tinted by side, moving the way its
 //! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
 //! the spine back to the aim, the head on the aim's pitch, the feet planted,
-//! the hold on the arms), and the gun they hold in hand. A skin is a faint
-//! sheen of its trim and a band at the waist, an emblem (`emblem.rs`) paint
-//! on the back plate that turns with the spine: the side's colour still
-//! carries the fighter, and no hitbox or visibility changes (DESIGN.md
-//! §15). Drawing only.
+//! the hold on the arms), and the gun they hold in hand. The wood is left
+//! its own colour; the side, the emblem and a skin's trim are sprayed on it
+//! (`paint.rs`): a headband in the side's colour, glowing a little so a
+//! fighter reads in shade, the emblem on the back, the trim a stripe round
+//! the waist. No hitbox or visibility changes (DESIGN.md §15). Drawing
+//! only.
 //!
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
@@ -23,6 +24,7 @@ use client_net::core::{Drawn, DrawnVehicle};
 
 use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
 use super::guns::{body_basis, gun, spawn_posed, Models};
+use super::paint::{BodyMaterial, Paint, Paints};
 use super::shield::{ShellPart, ShieldMaterial};
 
 /// Triple T faces +Z in its file; our bodies face +X.
@@ -33,13 +35,12 @@ const FACE: f32 = core::f32::consts::FRAC_PI_2;
 const HAND: Vec3 = Vec3::new(0.18, 1.18, 0.2);
 const HAND_CROUCHED_Y: f32 = 0.85;
 
-/// The albedo is very dark (Gates' MANIFEST: luma 0.056): this much lift,
-/// and this much of it toward the side's colour.
+/// The albedo is very dark (Gates' MANIFEST: luma 0.056): this much lift.
 const LIFT: f32 = 2.6;
-const TINT: f32 = 0.42;
-/// A faint glow of the side's colour, as a share of a white surface's
-/// brightness in full sun, so a fighter reads at a glance even in shade.
-const GLOW: f32 = 0.1;
+/// The headband's glow in the side's colour, as a share of a white
+/// surface's brightness in full sun, so a fighter reads at a glance even in
+/// shade.
+const GLOW: f32 = 0.12;
 
 /// Each skin's trim (`proto::SKINS` order); none for the standard look.
 const SKIN_TRIM: [Option<u32>; 6] = [
@@ -52,16 +53,6 @@ const SKIN_TRIM: [Option<u32>; 6] = [
 ];
 /// The trim's sheen, against the side's glow.
 const TRIM_GLOW: f32 = 0.35;
-
-/// The emblem on the back plate, in the frame of the `Spine` bone at rest
-/// (centimetres: the rig is scaled 0.01): 30 cm square, 1.12 m up, its face
-/// 1 cm proud of the back (which stands 22.7 cm behind the spine between
-/// 0.7 m and 1.75 m), facing back. From the file's bind pose; a new model
-/// needs these again.
-const EMBLEM_BONE: &str = "Spine";
-const EMBLEM_AT: Vec3 = Vec3::new(-0.463, 1.594, -19.391);
-const EMBLEM_TURN: Quat = Quat::from_xyzw(-0.00452, -0.99971, -0.02303, 0.00452);
-const EMBLEM_SCALE: f32 = 30.0;
 
 fn trim(skin: u8) -> Option<Color> {
     SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
@@ -84,10 +75,9 @@ pub struct Body {
     player: Option<Entity>,
     hand: Entity,
     held: u8,
-    /// Its materials (its own: `dress` copies them per body), their glow
-    /// at rest, and the shield's flare last put on them.
-    mats: Vec<Handle<StandardMaterial>>,
-    glow: LinearRgba,
+    /// Its materials (its own: `dress` copies them per body) and the
+    /// shield's flare last put on them.
+    mats: Vec<Handle<BodyMaterial>>,
     lit: f32,
     /// The shield's shell (`shield.rs`): its material and its meshes.
     shell: Handle<ShieldMaterial>,
@@ -157,30 +147,8 @@ pub fn model_rotation(yaw: f32) -> Quat {
 }
 
 /// A body spawned for `team` in `look`: its root, which the caller places.
-pub fn spawn(
-    commands: &mut Commands,
-    models: &Models,
-    meshes: &mut Assets<Mesh>,
-    mats: &mut Assets<StandardMaterial>,
-    team: u8,
-    look: proto::Look,
-) -> Entity {
-    let root = spawn_as(commands, models, team, look, false);
-    if let Some(c) = trim(look.skin) {
-        // The band at the waist, in the trim's colour.
-        commands.spawn((
-            Mesh3d(meshes.add(Torus::new(0.175, 0.225))),
-            MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: c,
-                perceptual_roughness: 0.4,
-                metallic: 0.5,
-                ..default()
-            })),
-            Transform::from_xyz(0.0, 1.0, 0.0),
-            ChildOf(root),
-        ));
-    }
-    root
+pub fn spawn(commands: &mut Commands, models: &Models, team: u8, look: proto::Look) -> Entity {
+    spawn_as(commands, models, team, look, false)
 }
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
@@ -210,7 +178,6 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         hand,
         held: 0,
         mats: Vec::new(),
-        glow: LinearRgba::BLACK,
         lit: 0.0,
         shell: Handle::default(),
         shells: Vec::new(),
@@ -279,9 +246,10 @@ pub fn team_color(team: u8) -> Color {
     }
 }
 
-/// The scene is in: tint its materials by side, find its player and its
-/// spine, and give each of its meshes a shield shell beside it. Your own
-/// shadow's meshes take the shadow's material instead, and no shells.
+/// The scene is in: paint it (`paint.rs`: the side's headband, the emblem,
+/// the trim), find its player and its spine, and give each of its meshes a
+/// shield shell beside it. Your own shadow's meshes take the shadow's
+/// material instead, and no shells.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dress(
     ev: On<SceneInstanceReady>,
@@ -296,15 +264,11 @@ fn dress(
         &Transform,
     )>,
     (names, transforms): (Query<&Name>, Query<&Transform>),
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    (mats, mut body_mats): (Res<Assets<StandardMaterial>>, ResMut<Assets<BodyMaterial>>),
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
     shadow_mat: Option<Res<super::own_shadow::ShadowMat>>,
     warm: Query<(), With<super::prewarm::WarmBody>>,
-    (mut emblems, mut images, mut quads): (
-        ResMut<super::emblem::Emblems>,
-        ResMut<Assets<Image>>,
-        ResMut<Assets<Mesh>>,
-    ),
+    (mut paints, mut images, mesh_assets): (ResMut<Paints>, ResMut<Assets<Image>>, Res<Assets<Mesh>>),
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -349,22 +313,30 @@ fn dress(
     } else {
         Visibility::Hidden
     };
-    let tint = team_color(body.team).to_linear();
-    let base = LinearRgba::rgb(
-        LIFT * (1.0 - TINT) + tint.red * 3.0 * TINT,
-        LIFT * (1.0 - TINT) + tint.green * 3.0 * TINT,
-        LIFT * (1.0 - TINT) + tint.blue * 3.0 * TINT,
+    // The paint's mask, the body unrolled from its meshes the first time.
+    let model_meshes: Vec<&Mesh> = children
+        .iter_descendants(model)
+        .filter_map(|e| meshes.get(e).ok())
+        .filter_map(|(_, mesh, ..)| mesh_assets.get(&mesh.0))
+        .collect();
+    let mask = paints.mask(body.emblem, &model_meshes, &mut images);
+    let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
+    let params = super::paint::params(
+        team_color(body.team).to_linear(),
+        body.emblem,
+        trim(body.skin).map(|c| c.to_linear()),
+        GLOW * sun,
+        GLOW * TRIM_GLOW * sun,
+        LIFT,
     );
-    let glow = GLOW * bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
     let shell = shield_mats.add(super::shield::material());
     body.shell = shell.clone();
-    let sheen = trim(body.skin).map_or(LinearRgba::BLACK, |c| c.to_linear() * TRIM_GLOW);
     for e in children.iter_descendants(model) {
         if players.contains(e) {
             body.player = Some(e);
         }
         if let Ok((m, mesh, skin, at)) = meshes.get(e) {
-            let Some(mut mat) = mats.get(&m.0).cloned() else {
+            let Some(mut base) = mats.get(&m.0).cloned() else {
                 continue;
             };
             if let Ok(&ChildOf(parent)) = parents.get(e) {
@@ -383,35 +355,22 @@ fn dress(
                 }
                 body.shells.push(s.id());
             }
-            mat.base_color = base.into();
-            mat.emissive = (tint + sheen) * glow;
+            base.base_color = LinearRgba::rgb(LIFT, LIFT, LIFT).into();
+            base.emissive = LinearRgba::BLACK;
             // In nits, under the camera's exposure like everything lit.
-            mat.emissive_exposure_weight = 1.0;
-            let h = mats.add(mat);
-            body.mats.push(h.clone());
-            commands.entity(e).insert((MeshMaterial3d(h), NoFrustumCulling));
-        }
-    }
-    body.glow = (tint + sheen) * glow;
-    // The emblem: paint on the back plate, on the spine so it turns with it.
-    if body.emblem != proto::EMBLEM_NONE {
-        let spine = children
-            .iter_descendants(model)
-            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == EMBLEM_BONE));
-        if let Some(spine) = spine {
-            let mat = emblems.material(body.emblem, &mut images, &mut mats);
-            commands.spawn((
-                Mesh3d(emblems.quad(&mut quads)),
-                MeshMaterial3d(mat),
-                Transform {
-                    translation: EMBLEM_AT,
-                    rotation: EMBLEM_TURN,
-                    scale: Vec3::splat(EMBLEM_SCALE),
+            base.emissive_exposure_weight = 1.0;
+            let h = body_mats.add(BodyMaterial {
+                base,
+                extension: Paint {
+                    params,
+                    mask: mask.clone(),
                 },
-                NotShadowCaster,
-                NoFrustumCulling,
-                ChildOf(spine),
-            ));
+            });
+            body.mats.push(h.clone());
+            commands
+                .entity(e)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert((MeshMaterial3d(h), NoFrustumCulling));
         }
     }
 }
@@ -426,7 +385,7 @@ pub fn flare(
     root: Entity,
     level: f32,
     bodies: &mut Query<&mut Body>,
-    mats: &mut Assets<StandardMaterial>,
+    mats: &mut Assets<BodyMaterial>,
     shield_mats: &mut Assets<ShieldMaterial>,
     shells: &mut Query<&mut Visibility, With<ShellPart>>,
 ) {
@@ -454,14 +413,10 @@ pub fn flare(
     }
     let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
     let k = level * sun;
-    let e = LinearRgba::rgb(
-        body.glow.red + FLARE_GOLD[0] * k,
-        body.glow.green + FLARE_GOLD[1] * k,
-        body.glow.blue + FLARE_GOLD[2] * k,
-    );
+    let e = LinearRgba::rgb(FLARE_GOLD[0] * k, FLARE_GOLD[1] * k, FLARE_GOLD[2] * k);
     for h in &body.mats {
         if let Some(m) = mats.get_mut(h) {
-            m.emissive = e;
+            m.base.emissive = e;
         }
     }
 }

@@ -19,15 +19,19 @@ Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
   - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
   - USC Sunset Editorial / Red Library sound effects (archive.org), public
-    domain: reloads, dry fire, headshots, footsteps
+    domain: reloads, dry fire, headshots, footsteps on stone and metal,
+    rounds flying past, metal struck
   - Kenney (kenney.nl) Interface and UI audio, CC0: hit marker, equip
   - Freesound uploaders, CC0: klangfabrik (revolver), felix.blume,
     alienistcog, julujanus (blasts), tortillathrilla, unfa, leonelmail
-    (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
-    manifest
+    (flesh, hurt, death), Nox_Sound (landing; footsteps on grass and rock),
+    cedarstudios (ricochets), and others listed in Gates' manifest
+  - Kenney RPG and Impact audio, CC0: cloth (equip_1, equip_2), light metal
+    impacts
 
-The shield's alarm and recharge (crates/client/assets/sound/shield_*.ogg) are
-ours, synthesized by tools/shield_sounds.sh with ffmpeg.
+Ours, synthesized by tools/sfx.py: the shield's alarm, recharge, hits and
+pop; the alien guns, the vent and the charge; the engine, a rocket in
+flight, the wind; a grenade's bounce, the spawn, the countdown.
 
 The announcer (crates/client/assets/sound/voice) is ours: placeholder lines
 synthesized by tools/voice.sh with Flite (Carnegie Mellon University's

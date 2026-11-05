@@ -55,7 +55,7 @@ fi
 [ -f "$OUT/index.html" ] || { echo "$OUT/index.html is missing: run ci/client.sh" >&2; exit 1; }
 # Both modules, from the real build: the page picks WebGPU or WebGL2 by
 # build.json, and `ci/client.sh dev` skips the fat LTO.
-for f in oneshot_client.js oneshot_client_bg.wasm oneshot_client_gpu.js oneshot_client_gpu_bg.wasm build.json; do
+for f in oneshot_client.js oneshot_client_bg.wasm oneshot_client_gpu.js oneshot_client_gpu_bg.wasm mix_worklet.wasm mix-worklet.js build.json; do
   [ -f "$OUT/$f" ] || { echo "$OUT/$f is missing: run ci/client.sh" >&2; exit 1; }
 done
 grep -q '"profile":"web"' "$OUT/build.json" || {

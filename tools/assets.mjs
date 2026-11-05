@@ -33,9 +33,15 @@ const SOUNDS = [
   'kenney/hit_0.ogg', 'kenney/equip_0.ogg',
   'freesound/blast_0.ogg', 'freesound/blast_1.ogg', 'freesound/fuse_0.ogg',
   'freesound/flesh_0.ogg', 'freesound/flesh_1.ogg', 'freesound/hurt_0.ogg', 'freesound/death_0.ogg', 'freesound/swing_0.ogg',
-  ...[0, 1, 2, 3].map((i) => `pd/step_concrete_${i}.ogg`),
+  ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) =>
+    [`pd/step_concrete_${i}.ogg`, `pd/step_metal_${i}.ogg`, `freesound/step_grass_${i}.ogg`, `freesound/step_rock_${i}.ogg`]),
   'freesound/land_0.ogg',
+  'kenney/equip_1.ogg', 'kenney/equip_2.ogg',
+  ...[0, 1, 2, 3].flatMap((i) => [`pd/flyby_${i}.ogg`, `freesound/ricochet_${i}.ogg`]),
+  ...[0, 1, 2, 3, 4].map((i) => `pd/impact_metal_${i}.ogg`),
+  ...[0, 1, 2].map((i) => `kenney/impactMetal_light_00${i}.ogg`),
 ];
+// The rest of assets/sound is ours: tools/sfx.py synthesizes it.
 
 // The rock pieces a mass out of bounds is drawn with (look/rock.rs): Gates'
 // formation pieces remeshed low, geometry only (no texture to re-embed),

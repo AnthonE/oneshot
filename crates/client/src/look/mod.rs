@@ -19,6 +19,7 @@ pub mod guns;
 pub mod mood;
 pub mod moon;
 pub mod own_shadow;
+pub mod paint;
 pub mod pipelines;
 pub mod portrait;
 pub mod potato;
