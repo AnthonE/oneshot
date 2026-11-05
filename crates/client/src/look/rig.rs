@@ -43,11 +43,11 @@ pub const CASCADE_OVERLAP: f32 = 0.2;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
-/// Clear sky added behind the cloud deck where the atmosphere draws, in deck
-/// units at full sun (Gates' `SKY_LIFT`, measured against its reference
-/// frames: the atmosphere alone read a slate sky, rgb(105, 127, 159) where
-/// theirs was rgb(153, 189, 231), and no exposure brightens the sky
-/// without moving the ground).
+/// Clear sky added behind the cloud deck, in deck units at full sun (Gates'
+/// `SKY_LIFT`, measured against its reference frames: the atmosphere alone
+/// read a slate sky, rgb(105, 127, 159) where theirs was rgb(153, 189, 231),
+/// and no exposure brightens the sky without moving the ground). Added to
+/// WebGL2's own clear sky too (`deck.rs`), which read that same slate.
 pub const SKY_LIFT: f32 = 0.5;
 
 /// The world's camera, whatever else marks it: what the graphics tier

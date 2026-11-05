@@ -29,6 +29,9 @@
 #ifdef BACKDROP
 #import "shaders/shaft_march.wgsl"::{shaft_lost}
 #endif
+#ifdef TONEMAP_IN_SHADER
+#import bevy_core_pipeline::tonemapping::tone_mapping
+#endif
 
 // Field for field `deck::CloudParams`. Colours linear, deck units (1.0 is
 // one `sky::CLOUD_NITS`), already graded by the hour and the weather.
@@ -71,7 +74,8 @@ struct Cloud {
     // x how fast a cumulus boils, m/s (the detail rising through the
     // slab, `deck::BOIL_MS`); yzw unused. The detail rides the deck's drift.
     wind: vec4<f32>,
-    // xyz the clear sky behind the deck (`rig::SKY_LIFT`); w unused.
+    // xyz the daylight added to the clear sky behind the deck
+    // (`rig::SKY_LIFT`), on both skies; w unused.
     lift: vec4<f32>,
     // xy how fast the drift moves, noise units a second; z the
     // `globals.time` `drift.xy` was taken at; w unused.
@@ -362,6 +366,10 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     }
     let cd = dot(d, cl.disk.xyz);
     sky += cl.disk_rgb.rgb * smoothstep(cl.horizon.w, cl.glow.w, cd);
+    // The daylight lift the atmosphere's sky gets below, with no
+    // transmittance to undo: the gradient alone is the slate it was
+    // measured against.
+    sky += cl.lift.rgb * smoothstep(0.0, 0.05, d.y);
 #else
     // Daylight behind the deck: more of the air's own blue than the
     // atmosphere's sky carries, laid on through its transmittance as a
@@ -411,7 +419,15 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
         let lost = shaft_lost(view.world_position, d, 1.0e4, cl.shaft_lo, cl.shaft_hi, cl.shaft_tint, in.clip.xy);
         out = max(out - lost, vec3(0.0));
     }
+#ifdef TONEMAP_IN_SHADER
+    // A view with no HDR target (WebGL2's: no atmosphere, no bloom) is
+    // tonemapped in each material's own shader, as Bevy's are, and the sky
+    // is one: untonemapped, it stood beside a tonemapped world in another
+    // grade, and a lit cumulus past 1 clipped to a flat white cut-out.
+    return tone_mapping(vec4(out, 1.0), view.color_grading);
+#else
     return vec4(out, 1.0);
+#endif
 #else
     return vec4(rgb * cl.shade.w * view.exposure, 1.0);
 #endif

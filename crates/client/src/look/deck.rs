@@ -214,9 +214,19 @@ impl CloudParams {
             }))
         };
         let r = SunDisk::EARTH.angular_size * 0.5;
-        let (lift, zenith, horizon, night, glow, fog, disk_dir, disk_rgb) = if p.backdrop {
+        // Daylight's, so it fades with the sun and under an overcast, and is
+        // gone as the sun drops toward the horizon (where `DeckLight` starts
+        // warming the deck), so a dusk sky is not greyed by blue. On both
+        // skies: the backdrop under WebGL2 is the slate the atmosphere alone
+        // drew (`rig::SKY_LIFT`), and without it a browser's sky read a
+        // stop darker than the desktop's and, through Dry Fork's dust, grey.
+        let lift = Vec3::from_array(sky::air_chroma())
+            * super::rig::SKY_LIFT
+            * p.light
+            * (p.sun.y / 0.25).clamp(0.0, 1.0)
+            * (1.0 - p.dark);
+        let (zenith, horizon, night, glow, fog, disk_dir, disk_rgb) = if p.backdrop {
             (
-                Vec3::ZERO,
                 grade(sky::backdrop_at(Vec3::Y)).extend(sky::AIR_FLOOR),
                 grade(sky::backdrop_at(Vec3::X)).extend((r * DISK_SOFT).cos()),
                 (v3(sky::NIGHT_SKY) * p.night).extend(0.0),
@@ -226,17 +236,7 @@ impl CloudParams {
                 disk.rgb,
             )
         } else {
-            // Daylight's, so it fades with the sun and under an overcast,
-            // and is gone as the sun drops toward the horizon (where
-            // `DeckLight` starts warming the deck), so a dusk sky is the
-            // atmosphere's orange, not greyed by blue.
-            let lift = Vec3::from_array(sky::air_chroma())
-                * super::rig::SKY_LIFT
-                * p.light
-                * (p.sun.y / 0.25).clamp(0.0, 1.0)
-                * (1.0 - p.dark);
             (
-                lift,
                 Vec4::ZERO,
                 Vec4::ZERO,
                 Vec4::ZERO,
