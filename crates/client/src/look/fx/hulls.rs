@@ -11,7 +11,7 @@ const DUST_MPS: f32 = 4.0;
 const DUST_FULL_MPS: f32 = 14.0;
 /// Smoke below this share of health (of 255), fire below the second.
 const SMOKE_BELOW: u8 = 128;
-const FIRE_BELOW: u8 = 50;
+pub const FIRE_BELOW: u8 = 50;
 /// Puffs per second at most.
 const PUFF_HZ: f32 = 14.0;
 

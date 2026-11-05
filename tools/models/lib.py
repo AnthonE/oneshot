@@ -1,23 +1,30 @@
-"""The models' kit: every gun is a Blender script in this folder that builds
-it from these primitives and hands the parts to `finish`, which joins them,
-exports `crates/client/assets/models/<name>.glb` in the client's frame
+"""The models' kit. A gun is a Blender script in this folder, of two kinds:
+
+  - from Meshy: `meshy_gen.py <name>` commissions it from the script's
+    IMAGE and TEXTURE into sources/meshy, and the script brings that raw
+    mesh into gun space with `generated` (sized, turned, its bore on the
+    axis, its textures cut down, what it painted bright set glowing);
+  - from the kit: built of these primitives (the rocket, the frag, and any
+    part bolted onto a generated gun).
+
+Either hands its parts to `finish`, which joins them, exports
+`crates/client/assets/models/<name>.glb` in the client's frame
 (`look/guns.rs`: barrel along +Y, top toward +Z, stock at y = 0, metres),
 writes the numbers guns.rs wants to `traces/guns/<name>.json`, and renders a
-three-view sheet to `traces/guns/<name>.png` to judge it by.
+four-view sheet to `traces/guns/<name>.png` to judge it by.
 
     blender -b --python tools/models/ar.py          one gun
     tools/models/build.sh                            all of them
 
-A script models in **gun space**: +X forward (the muzzle at the far end),
-+Z up, +Y the gun's left, the barrel's axis along X at y = z = 0, the rear
-of the stock near x = 0 (finish moves the rear to exactly 0). Metres.
+**Gun space**: +X forward (the muzzle at the far end), +Z up, +Y the gun's
+left, the barrel's axis along X at y = z = 0, the rear of the stock near
+x = 0 (finish moves the rear to exactly 0). Metres.
 
-Materials are named from PALETTE, two lines of them: Forge, the human guns
-(gunmetal, polymer, steel, a display that glows blue), and Veil, the ship's
-(pearl-purple shells, cyan and magenta light). No textures: colour, metal,
-roughness, glow and coat on each part; the silhouette, bevels and the light
-slits carry the look (DESIGN.md: ours by name and look, never another
-game's art).
+The kit's materials are named from PALETTE, two lines of them: Forge, the
+human guns (gunmetal, polymer, steel, a display that glows blue), and Veil,
+the ship's (pearl-purple shells, cyan and magenta light): colour, metal,
+roughness, glow and coat, no textures. A generated gun carries Meshy's maps
+(DESIGN.md: ours by name and look, never another game's art).
 """
 
 import json
@@ -27,11 +34,33 @@ import sys
 
 import bmesh
 import bpy
+import numpy as np
 from mathutils import Matrix, Vector
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 MODELS = os.path.join(ROOT, 'crates', 'client', 'assets', 'models')
 TRACES = os.path.join(ROOT, 'traces', 'guns')
+# Meshy's raw meshes (meshy_gen.py), not in the repo.
+SOURCES = os.environ.get('MESHY_SRC', os.path.join(ROOT, 'sources', 'meshy'))
+# The longest side a generated gun's colour map keeps, and its other maps
+# (the normals, the roughness and metal, the glow): every one of them is in
+# memory from the title on, on a phone's page too.
+TEX_PX = 1024
+MAP_PX = 512
+# The middle of the fist under the axis a gun is held by
+# (look/viewmodel.rs's FIST); where a long gun's other hand goes unless its
+# script says, as a share of the barrel past the grip; and how far under
+# the gun's belly that hand's middle sits (viewmodel.rs's FORE_CUP).
+FIST_DROP = 0.05
+FORE_SHARE = 0.6
+FORE_CUP = 0.02
+# Meshy paints a gun glossier and more of a metal than the game's sky
+# likes (in the hand, seen along its top, it takes the sky's colour and
+# reads chrome): the least roughness a generated gun keeps (the rest
+# squeezed above it), its metal's scale, and its normal map's strength.
+ROUGH = 0.5
+METAL = 0.4
+NORMAL = 0.5
 
 # name: (sRGB hex, metallic, roughness, emissive (hex, strength) or None, coat weight)
 PALETTE = {
@@ -318,6 +347,205 @@ def join(objs, name='Mesh_0'):
     return o
 
 
+def _hsv(rgb):
+    """Hue (degrees), saturation and value of an (h, w, 3) array."""
+    hi = rgb.max(axis=-1)
+    lo = rgb.min(axis=-1)
+    d = hi - lo
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    safe = np.where(d > 1e-6, d, 1.0)
+    hue = np.where(hi == r, ((g - b) / safe) % 6.0, np.where(hi == g, (b - r) / safe + 2.0, (r - g) / safe + 4.0))
+    return np.where(d > 1e-6, hue * 60.0, 0.0), np.where(hi > 1e-6, d / np.where(hi > 1e-6, hi, 1.0), 0.0), hi
+
+
+def _hue_of(hexs):
+    h = hexs.lstrip('#')
+    rgb = np.array([[[int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]]], dtype=np.float32)
+    return float(_hsv(rgb)[0][0, 0])
+
+
+def _ramp(x, lo, hi):
+    return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+
+
+def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0):
+    """Lights what the paint made bright: an emissive map that is the base
+    colour where its hue is within `window` degrees of one of `hues` (all
+    of it within half that), it is saturated, and its value is over
+    `floor` (all of it a quarter above); black elsewhere (Gates' fel_veins
+    rule, by hue). `pale`: a light near white (a blade's) counts, by a
+    tenth of the saturation, and burns in the first of `hues`. Returns the
+    lit share of the map."""
+    nt = material.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+    node = bsdf.inputs['Base Color'].links[0].from_node
+    while node.type != 'TEX_IMAGE':
+        node = next(i.links[0].from_node for i in node.inputs if i.links)
+    im = node.image
+    w, h = im.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    rgb = px.reshape(h, w, 4)[..., :3]
+    hue, sat, val = _hsv(rgb)
+    mask = np.zeros((h, w), dtype=np.float32)
+    for hx in hues:
+        d = np.abs((hue - _hue_of(hx) + 180.0) % 360.0 - 180.0)
+        full = _ramp(sat, 0.08, 0.20) if pale else _ramp(sat, 0.35, 0.55)
+        mask = np.maximum(mask, _ramp(window - d, 0.0, window / 2) * full * _ramp(val, floor, floor + 0.25))
+    out = np.ones((h, w, 4), dtype=np.float32)
+    # A pale light burns in the colour named: its own paint is near white.
+    out[..., :3] = (np.array(srgb(hues[0]), dtype=np.float32) if pale else rgb) * mask[..., None]
+    lit = bpy.data.images.new(material.name + '_glow', w, h, alpha=False)
+    lit.pixels.foreach_set(out.ravel())
+    k = MAP_PX / max(w, h)
+    if k < 1.0:
+        lit.scale(max(1, round(w * k)), max(1, round(h * k)))
+    lit.pack()
+    tex = nt.nodes.new('ShaderNodeTexImage')
+    tex.image = lit
+    for l in node.inputs['Vector'].links:
+        nt.links.new(l.from_socket, tex.inputs['Vector'])
+    nt.links.new(tex.outputs['Color'], bsdf.inputs['Emission Color'])
+    bsdf.inputs['Emission Strength'].default_value = strength
+    return float(mask.mean())
+
+
+def _surface(material, rough, metal):
+    """Squeezes the roughness (the map's green) into `rough`..1 and scales
+    the metal (its blue) by `metal`, in the map itself: the exporter writes
+    maps, not node arithmetic."""
+    nt = material.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+    if not bsdf.inputs['Roughness'].links:
+        return
+    node = bsdf.inputs['Roughness'].links[0].from_node
+    while node.type != 'TEX_IMAGE':
+        node = next(i.links[0].from_node for i in node.inputs if i.links)
+    im = node.image
+    px = np.empty(im.size[0] * im.size[1] * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    px = px.reshape(-1, 4)
+    px[:, 1] = rough + (1.0 - rough) * px[:, 1]
+    px[:, 2] *= metal
+    im.pixels.foreach_set(px.ravel())
+    im.pack()
+
+
+def generated(name, length, hold=None, flip=None, over=False, width=None, bore=None, glow=(), glow_strength=4.0,
+              glow_floor=0.45, pale=False, tris=None, rough=ROUGH, metal=METAL):
+    """Meshy's raw mesh of `name` (sources/meshy/<name>_raw.glb, from
+    meshy_gen.py) in gun space, `length` metres from its rear at x = 0 to
+    its muzzle, scaled evenly: `(object, rise)`, the rise for `finish`.
+
+    Its longest side is taken for the barrel, its thinnest for its width;
+    the muzzle is the end with the smaller cross-section (`flip` says
+    otherwise: True turns it end for end) and up is as it came (`over`
+    turns it over). `width` squeezes or fattens it across to that many
+    metres: one picture's depth is a guess.
+
+    The axis the client holds it by (y = z = 0) runs FIST_DROP over `hold`:
+    where the middle of the fist goes on its grip, as a share of the gun's
+    height from its bottom (read it off the sheet's ruler). The muzzle is
+    the middle of its foremost 3% (`bore`: its height instead, the same
+    kind of share), and `rise` is how far over the axis that is. With no
+    `hold` (a rocket) the axis is the muzzle's own.
+
+    The colour map comes down to TEX_PX, the others to MAP_PX. The glow map
+    Meshy ships is dropped (a stick's peaked at 0.53); `glow` names the
+    colours of light the paint carries (hex) and those texels are lit at
+    `glow_strength` (`glow_floor`: how bright a texel must be painted to
+    count, where the hull's own sheen is near the light's hue; `pale`:
+    light that is nearly white counts too). `rough` and `metal` are ROUGH
+    and METAL for this gun; its normal map is drawn at NORMAL. `tris` thins
+    the mesh to about that many."""
+    path = os.path.join(SOURCES, name + '_raw.glb')
+    if not os.path.exists(path):
+        print(f'Error: no {path}; tools/models/meshy_gen.py {name} commissions it (credits)')
+        sys.exit(1)
+    bpy.ops.import_scene.gltf(filepath=path)
+    meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+    bpy.ops.object.select_all(action='DESELECT')
+    for m in meshes:
+        m.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    if len(meshes) > 1:
+        bpy.ops.object.join()
+    o = bpy.context.view_layer.objects.active
+    for x in [x for x in bpy.context.scene.objects if x.type != 'MESH']:
+        bpy.data.objects.remove(x, do_unlink=True)
+    while len(o.data.uv_layers) > 1:
+        o.data.uv_layers.remove(o.data.uv_layers[-1])
+    o.name = name
+
+    # Into gun space: the long side forward, the thin side across.
+    lo, hi = bounds(o)
+    ext = hi - lo
+    side_i, up_i, fwd_i = sorted(range(3), key=lambda i: ext[i])
+    co = np.array([v.co[:] for v in o.data.vertices])
+
+    def section(a, b):
+        part = co[(co[:, fwd_i] >= lo[fwd_i] + a * ext[fwd_i]) & (co[:, fwd_i] <= lo[fwd_i] + b * ext[fwd_i])]
+        return float(np.ptp(part[:, up_i]) * np.ptp(part[:, side_i])) if len(part) else 0.0
+
+    front = 1.0 if section(0.9, 1.0) < section(0.0, 0.1) else -1.0
+    if flip:
+        front = -front
+    f = Vector([front if i == fwd_i else 0.0 for i in range(3)])
+    u = Vector([(-1.0 if over else 1.0) if i == up_i else 0.0 for i in range(3)])
+    turn = Matrix((f, u.cross(f), u)).to_4x4()
+    k = length / ext[fwd_i]
+    o.data.transform(Matrix.Scale(k, 4) @ turn)
+    if width:
+        lo, hi = bounds(o)
+        o.data.transform(Matrix.Scale(width / (hi.y - lo.y), 4, Vector((0, 1, 0))))
+    o.data.update()
+    lo, hi = bounds(o)
+    co = np.array([v.co[:] for v in o.data.vertices])
+    nose = co[co[:, 0] >= hi.x - 0.03 * (hi.x - lo.x)]
+    y = (nose[:, 1].min() + nose[:, 1].max()) / 2
+    muzzle = (nose[:, 2].min() + nose[:, 2].max()) / 2
+    if bore is not None:
+        y, muzzle = (lo.y + hi.y) / 2, lo.z + bore * (hi.z - lo.z)
+    axis = muzzle if hold is None else lo.z + hold * (hi.z - lo.z) + FIST_DROP
+    o.data.transform(Matrix.Translation(Vector((-lo.x, -y, -axis))))
+    o.data.update()
+
+    count = sum(len(p.vertices) - 2 for p in o.data.polygons)
+    if tris and count > tris:
+        m = o.modifiers.new('thin', 'DECIMATE')
+        m.ratio = tris / count
+
+    colour = set()
+    for material in o.data.materials:
+        bsdf = next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        node = bsdf.inputs['Base Color'].links[0].from_node
+        while node.type != 'TEX_IMAGE':
+            node = next(i.links[0].from_node for i in node.inputs if i.links)
+        colour.add(node.image)
+    for im in bpy.data.images:
+        w, h = im.size
+        px = TEX_PX if im in colour else MAP_PX
+        if max(w, h) > px:
+            s = px / max(w, h)
+            im.scale(max(1, round(w * s)), max(1, round(h * s)))
+    for material in o.data.materials:
+        nt = material.node_tree
+        bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+        for l in list(bsdf.inputs['Emission Color'].links):
+            nt.links.remove(l)
+        bsdf.inputs['Emission Strength'].default_value = 0.0
+        _surface(material, rough, metal)
+        for n in nt.nodes:
+            if n.type == 'NORMAL_MAP':
+                n.inputs['Strength'].default_value = NORMAL
+        if glow:
+            lit = _glow(material, glow, glow_strength, glow_floor, pale)
+            print(f'GLOW {name}: {lit * 100:.2f}% of the map is lit')
+    return o, muzzle - axis
+
+
 # Gun space (fwd X, up Z, left Y) to the client's export frame (fwd Z, top −Y)
 # in Blender; Blender's glTF export then makes fwd +Y, top +Z.
 TO_EXPORT = Matrix(((0, -1, 0, 0), (0, 0, -1, 0), (1, 0, 0, 0), (0, 0, 0, 1)))
@@ -333,19 +561,30 @@ def bounds(o):
     return lo, hi
 
 
-def finish(name, parts, grip, long=True, note=''):
+def finish(name, parts, grip, long=True, note='', rise=0.0, fore=None, under=None):
     """Joins `parts`, puts the stock's rear at x = 0, exports the GLB and the
-    numbers (`grip`: the x of the hand on the pistol grip, gun space), and
-    renders the sheet. Call last."""
+    numbers (`grip`: the x of the hand on the pistol grip, gun space;
+    `rise`: the muzzle's height over the axis, `generated`'s), and renders
+    the sheet, the hands and the muzzle marked on it. Call last.
+
+    A long gun's other hand cups its belly FORE_SHARE of the way from the
+    grip to the muzzle, where the belly is measured; `fore` is another x
+    for it (a foregrip's), `under` how far under the axis what it holds is
+    (a foregrip's middle, not its foot)."""
     o = join(parts)
     lo, hi = bounds(o)
     o.data.transform(Matrix.Translation(Vector((-lo.x, 0, 0))))
     o.data.update()
     height = hi.x - lo.x
     grip_x = grip - lo.x
+    fore_x = grip_x + FORE_SHARE * (height - grip_x) if fore is None else fore - lo.x
+    if under is None:
+        belly = [v.co.z for v in o.data.vertices if abs(v.co.x - fore_x) < 0.03]
+        under = -min(belly) if belly else FIST_DROP
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(TRACES, exist_ok=True)
-    sheet(o, os.path.join(TRACES, name + '.png'), title=name)
+    sheet(o, os.path.join(TRACES, name + '.png'), title=name, fist=(grip_x, -FIST_DROP), muzzle=(height, rise),
+          other=(fore_x, -under - FORE_CUP) if long else None)
     lo2, hi2 = bounds(o)
     o.data.transform(TO_EXPORT)
     o.data.update()
@@ -353,14 +592,20 @@ def finish(name, parts, grip, long=True, note=''):
     o.select_set(True)
     bpy.context.view_layer.objects.active = o
     path = os.path.join(MODELS, name + '.glb')
-    bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_apply=True, export_yup=True, use_selection=True)
+    # A generated gun's maps go out as JPEG; the kit's guns have none.
+    bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_apply=True, export_yup=True, use_selection=True,
+                              export_image_format='JPEG', export_jpeg_quality=88)
     info = {
         'file': name,
         'height': round(height, 4),
         'grip': round(grip_x / height, 4),
+        'rise': round(rise, 4),
+        'fore': round((fore_x - grip_x) / (height - grip_x), 4),
+        'under': round(under, 4),
         'long': bool(long),
         'tris': sum(len(p.vertices) - 2 for p in o.data.polygons),
         'size_m': [round(v, 3) for v in (hi2 - lo2)],
+        'bytes': os.path.getsize(path),
         'note': note,
     }
     with open(os.path.join(TRACES, name + '.json'), 'w') as f:
@@ -369,17 +614,62 @@ def finish(name, parts, grip, long=True, note=''):
     return info
 
 
-def sheet(o, path, title=''):
-    """Three views of a gun-space object on one 1500 × 500 sheet: its left
-    side, a three-quarter from the front left and above, and from the top.
-    Eevee, a sun and a soft fill, a mid-grey plate."""
+def _ruler(lo, hi, fist, muzzle, other):
+    """The side view's ruler, in gun space, between the gun and the camera:
+    a white tick every tenth of the length under the gun and of the height
+    behind it (the ends and the middle longer), a yellow cross on the fist,
+    a red one on the muzzle and a green one on the other hand (each an
+    (x, z), or None)."""
+    size = max(hi - lo)
+    t = size * 0.004
+    y = lo.y - 0.01
+    bm = bmesh.new()
+
+    def bar(x, z, dx, dz, slot):
+        verts = bmesh.ops.create_cube(bm, size=1.0)['verts']
+        bmesh.ops.scale(bm, vec=Vector((dx, t, dz)), verts=verts)
+        bmesh.ops.translate(bm, vec=Vector((x, y, z)), verts=verts)
+        for f in {f for v in verts for f in v.link_faces}:
+            f.material_index = slot
+
+    for i in range(11):
+        n = size * (0.03 if i % 5 == 0 else 0.015)
+        bar(lo.x + (hi.x - lo.x) * i / 10, lo.z - size * 0.04, t, n, 0)
+        bar(lo.x - size * 0.04, lo.z + (hi.z - lo.z) * i / 10, n, t, 0)
+    for at, slot in ((fist, 1), (muzzle, 2), (other, 3)):
+        if at:
+            bar(at[0], at[1], size * 0.04, t, slot)
+            bar(at[0], at[1], t, size * 0.04, slot)
+    me = bpy.data.meshes.new('ruler')
+    bm.to_mesh(me)
+    bm.free()
+    for name, hexs in (('tick', '#ffffff'), ('fist', '#ffd400'), ('muzzle', '#ff2020'), ('other', '#30ff40')):
+        m = bpy.data.materials.new(name)
+        m.use_nodes = True
+        b = m.node_tree.nodes['Principled BSDF']
+        b.inputs['Base Color'].default_value = (0, 0, 0, 1)
+        b.inputs['Emission Color'].default_value = (*srgb(hexs), 1.0)
+        b.inputs['Emission Strength'].default_value = 1.5
+        me.materials.append(m)
+    r = bpy.data.objects.new('ruler', me)
+    bpy.context.scene.collection.objects.link(r)
+    return r
+
+
+def sheet(o, path, title='', fist=None, muzzle=None, other=None):
+    """Four views of a gun-space object on one 2000 × 500 sheet: its side,
+    a three-quarter from the front and above, from the top, and from behind
+    its left shoulder, as its holder sees it (the end a side-on picture
+    never showed Meshy, so the one it made up). Eevee, a sun and a soft
+    fill, a mid-grey plate. With `fist` or `muzzle` the side view carries a
+    ruler (`_ruler`)."""
     s = bpy.context.scene
     s.render.engine = 'BLENDER_EEVEE'
     s.eevee.taa_render_samples = 24
     s.eevee.use_bloom = True
     s.eevee.bloom_intensity = 0.04
     s.view_settings.view_transform = 'Standard'
-    s.render.resolution_x = 1500
+    s.render.resolution_x = 2000
     s.render.resolution_y = 500
     s.render.film_transparent = False
     w = bpy.data.worlds.new('w')
@@ -390,13 +680,14 @@ def sheet(o, path, title=''):
     lo, hi = bounds(o)
     size = max(hi - lo)
     centre = (lo + hi) / 2
-    # Three copies on a line along X, one view each, facing a camera on -Y.
+    # Four copies on a line along X, one view each, facing a camera on -Y.
     # The camera is on -Y: tipping the top toward it is a positive turn
     # about X.
     views = [
         Matrix.Identity(4),
         Matrix.Rotation(math.radians(25), 4, 'X') @ Matrix.Rotation(math.radians(35), 4, 'Z'),
         Matrix.Rotation(math.radians(90), 4, 'X'),
+        Matrix.Rotation(math.radians(26), 4, 'X') @ Matrix.Rotation(math.radians(121), 4, 'Z'),
     ]
     # The original stays out of the picture.
     was_hidden = o.hide_render
@@ -408,12 +699,16 @@ def sheet(o, path, title=''):
         # A copy inherits the hiding; these are the picture.
         c.hide_render = False
         bpy.context.scene.collection.objects.link(c)
-        c.matrix_world = Matrix.Translation(Vector(((i - 1) * size * 1.15, 0, 0))) @ m @ Matrix.Translation(-centre)
+        c.matrix_world = Matrix.Translation(Vector(((i - 1.5) * size * 1.15, 0, 0))) @ m @ Matrix.Translation(-centre)
         copies.append(c)
+    if fist or muzzle:
+        r = _ruler(lo, hi, fist, muzzle, other)
+        r.matrix_world = Matrix.Translation(Vector((-1.5 * size * 1.15, 0, 0))) @ Matrix.Translation(-centre)
+        copies.append(r)
     cam = bpy.data.objects.new('cam', bpy.data.cameras.new('cam'))
     s.collection.objects.link(cam)
     cam.data.type = 'ORTHO'
-    cam.data.ortho_scale = size * 3.5
+    cam.data.ortho_scale = size * 4.67
     cam.location = (0, -5, 0)
     cam.rotation_euler = (math.radians(90), 0, 0)
     s.camera = cam

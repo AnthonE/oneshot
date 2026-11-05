@@ -100,6 +100,7 @@
     { "at": [-18, 14, 1.5], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-18, -14, 1.5], "team": "red", "yaw": 0, "mirror": true }
   ],
+  "flag": {"at": [-22, 0]},
   "pads": [
     { "weapon": "sniper", "at": [0, 0, 3], "respawn": 120 },
     { "weapon": "sword", "at": [0, 0], "respawn": 120 },

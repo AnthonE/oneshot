@@ -16,11 +16,13 @@
 
 pub mod asset_fetch;
 pub mod binds;
+pub mod challenges;
 pub mod clip;
 pub mod config;
 pub mod display;
 pub mod door;
 pub mod film;
+pub mod flags;
 pub mod front;
 pub mod hud;
 pub mod items;
@@ -129,19 +131,6 @@ pub enum Screen {
     Playing,
     Paused,
     Settings,
-}
-
-/// Where a hull's wheels are in its frame (+X forward), metres: drawn
-/// there, and pressing the grass there (`look::foliage::Walkers::hull`).
-const WHEELS: [(f32, f32); 4] = [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)];
-
-/// What every hull is made of, made with the first.
-struct HullParts {
-    hull: Handle<StandardMaterial>,
-    dark: Handle<StandardMaterial>,
-    body: Handle<Mesh>,
-    screen: Handle<Mesh>,
-    wheel: Handle<Mesh>,
 }
 
 /// A fighter's body or a vehicle's hull, shown or hidden by `Drawn`.
@@ -416,6 +405,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<flags::Flags>()
+    .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
@@ -444,6 +435,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     // The boxes' weathering (`look/weathering.rs`).
     .add_plugins(look::weathering::plugin)
+    // A truck's wear (`look/truck.rs`).
+    .add_plugins(look::truck::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     // Triple T's spray paint: the side's headband, the emblem, the trim
@@ -558,8 +551,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::grass::cull,
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
-            (draw_fighters, draw_vehicles, look::foliage::update).chain(),
-            items::draw,
+            (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
+            (items::draw, flags::draw),
             fly,
             view,
             // The gun in view before the effects: our own flash sits on
@@ -696,6 +689,22 @@ fn pump(
     // back, turns nothing and fires nothing).
     let grabbed =
         cursor.single().is_ok_and(|c| c.grab_mode != CursorGrabMode::None) && pointer::pointer_locked().unwrap_or(true);
+    // Watching a match: we look where the player we follow looks (their
+    // snapshots' aim, as a film does), and a click or Space follows the
+    // next one. Nothing we press is sent.
+    if link.0.session().watch && link.0.live() {
+        let next = grabbed && (mouse.just_pressed(MouseButton::Left) || keys.just_pressed(KeyCode::Space));
+        if next {
+            link.0.session_mut().follow_next();
+        }
+        let (f, _) = link.0.session().core.own();
+        let turn = core::f32::consts::TAU / 65536.0;
+        look.yaw = f.yaw as f32 * turn;
+        look.pitch = f.pitch as f32 * turn;
+        look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        link.0.update(Input::default());
+        return;
+    }
     let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
@@ -958,6 +967,17 @@ fn draw_fighters(
             ..client_net::core::DrawnVehicle::default()
         });
     }
+    // The pose mode's truck, with its fighter in the seat it was given.
+    if let Some((slot, (at, yaw), seat)) = posed.as_ref().and_then(|p| Some((p.0.slot, p.2.truck?, p.2.seat?))) {
+        let mut seats = [0; 2];
+        seats[seat] = slot + 1;
+        hulls.push(client_net::core::DrawnVehicle {
+            pos: sim::geom::V3::new(at.x, at.y, at.z),
+            yaw,
+            seats,
+            ..client_net::core::DrawnVehicle::default()
+        });
+    }
     let seats = look::bodies::seats(&hulls);
     look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
@@ -1061,17 +1081,18 @@ fn draw_fighters(
 /// wheels on it (the sim's suspension is a few centimetres).
 const WHEELS_DOWN_M: f32 = 0.3;
 
-/// The vehicles: ours as predicted, the rest interpolated.
+/// The vehicles: ours as predicted, the rest interpolated; each a truck
+/// (`look/truck.rs`). The pose mode's stands where it was asked to.
 #[allow(clippy::too_many_arguments)]
 fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    models: Res<look::guns::Models>,
+    posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
+    mut hulls: Query<&mut look::truck::Hull>,
     mut vis: KeptVis,
-    mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     mut walkers: ResMut<look::foliage::Walkers>,
@@ -1086,6 +1107,9 @@ fn draw_vehicles(
     if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
+    if let Some((p, yaw)) = posed.and_then(|p| p.2.truck_at(time.elapsed_secs())) {
+        list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
+    }
     for &(slot, p, yaw) in &list {
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
@@ -1094,7 +1118,7 @@ fn draw_vehicles(
         // Only a live hull on its wheels presses the grass: not one in the
         // air over a crest, nor a wreck.
         if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
-            walkers.hull(p, yaw, &WHEELS);
+            walkers.hull(p, yaw, &look::truck::WHEELS);
         }
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -1103,50 +1127,14 @@ fn draw_vehicles(
                 if let Ok(mut tr) = at.get_mut(e) {
                     *tr = t;
                 }
+                if let Ok(mut hull) = hulls.get_mut(e) {
+                    hull.health = health;
+                }
             }
             None => {
-                // One set of meshes and materials for every hull.
-                let k = parts.get_or_insert_with(|| HullParts {
-                    hull: mats.add(StandardMaterial {
-                        base_color: Color::srgb(0.36, 0.42, 0.29),
-                        perceptual_roughness: 0.6,
-                        metallic: 0.3,
-                        ..default()
-                    }),
-                    dark: mats.add(StandardMaterial {
-                        base_color: Color::srgb(0.14, 0.15, 0.17),
-                        perceptual_roughness: 0.8,
-                        ..default()
-                    }),
-                    body: meshes.add(Cuboid::new(4.4, 0.7, 2.2)),
-                    screen: meshes.add(Cuboid::new(0.12, 0.9, 2.2)),
-                    wheel: meshes.add(Cylinder::new(0.42, 0.35)),
-                });
-                let (hull, dark) = (k.hull.clone(), k.dark.clone());
-                let (body, screen, wheel) = (k.body.clone(), k.screen.clone(), k.wheel.clone());
-                let e = commands
-                    .spawn((t, Visibility::default(), Kept))
-                    .with_children(|c| {
-                        c.spawn((
-                            Mesh3d(body),
-                            MeshMaterial3d(hull.clone()),
-                            Transform::from_xyz(0.0, 0.75, 0.0),
-                        ));
-                        c.spawn((
-                            Mesh3d(screen),
-                            MeshMaterial3d(dark.clone()),
-                            Transform::from_xyz(-0.9, 1.55, 0.0),
-                        ));
-                        for (x, z) in WHEELS {
-                            c.spawn((
-                                Mesh3d(wheel.clone()),
-                                MeshMaterial3d(dark.clone()),
-                                Transform::from_xyz(x, 0.42, z)
-                                    .with_rotation(Quat::from_rotation_x(core::f32::consts::FRAC_PI_2)),
-                            ));
-                        }
-                    })
-                    .id();
+                let hull = look::truck::Hull { slot, health };
+                let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
+                look::truck::spawn(&mut commands, &models, e);
                 drawn.vehicles.insert(slot, e);
             }
         }
