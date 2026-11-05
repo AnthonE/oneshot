@@ -31,14 +31,37 @@
       #boot .line #gfx { margin-left: -6px; }
       #boot .bar { width: min(320px, 70vw); height: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; margin-top: 18px; }
       #boot .bar i { display: block; width: 40%; height: 100%; background: #e8b931; animation: slide 1.2s ease-in-out infinite; }
+      /* The download's bytes (boot.js, `counted`): the bar is the share. */
+      #boot.counting .bar i { animation: none; width: 0; transition: width .12s linear; }
       #boot.failed .bar i { animation: none; width: 100%; background: #e3896a; }
       #boot .say { min-height: 1.2em; color: rgba(189, 184, 173, .86); text-transform: uppercase; }
       @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
       /* Over the canvas when WebGPU refused part of the frame mid-match. */
-      #gpubar { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 5; max-width: min(92vw, 640px);
+      #gpubar, #stopbar { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 5; max-width: min(92vw, 640px);
         padding: 10px 14px; background: rgba(27, 25, 22, .94); color: #ebe6d9; font: 700 12px Aileron, system-ui, sans-serif;
         letter-spacing: .06em; border-left: 3px solid #e3896a; }
-      #gpubar a { color: #e8b931; margin-left: 8px; }
+      #gpubar a, #stopbar a { color: #e8b931; margin-left: 8px; }
+      /* REPORT A BUG from the game's Esc menu (crates/client/src/pause.rs):
+         a text box Bevy hasn't, sent to the server's /bugs (boot.js). */
+      #report { position: fixed; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center;
+        padding: 16px; box-sizing: border-box; background: rgba(14, 12, 10, .55); }
+      #report[hidden] { display: none; }
+      #report form { box-sizing: border-box; width: min(520px, 100%); padding: 14px 16px; display: flex; flex-direction: column;
+        gap: 10px; background: rgba(27, 25, 22, .97); color: #ebe6d9; border-left: 3px solid #e8b931;
+        font: 700 12px Aileron, system-ui, sans-serif; letter-spacing: .06em; }
+      #report .word { color: #e8b931; letter-spacing: .1em; }
+      #report textarea { box-sizing: border-box; width: 100%; min-height: 140px; resize: vertical; padding: 10px;
+        background: #0e0c0a; color: #ebe6d9; border: 1px solid rgba(235, 230, 217, .25);
+        font: 400 14px Aileron, system-ui, sans-serif; letter-spacing: .02em; }
+      #report textarea:focus { outline: none; border-color: #e8b931; }
+      #report p { margin: 0; color: rgba(189, 184, 173, .9); font-weight: 400; letter-spacing: .02em; line-height: 1.35; }
+      #report p.bad { color: #e3896a; }
+      #report p:empty { display: none; }
+      #report .row { display: flex; gap: 6px; justify-content: flex-end; }
+      #report button { background: transparent; color: #ebe6d9; border: 1px solid rgba(235, 230, 217, .25);
+        font: inherit; padding: 6px 12px; cursor: pointer; }
+      #report button[type=submit] { border-color: #e8b931; color: #e8b931; }
+      #report button:disabled { opacity: .45; cursor: default; }
       /* F9's clip (crates/client/src/clip.rs): the last half minute drawn by
          the game in a frame of its own (clip.html) and made into a video on
          this machine. A card in the corner: the match goes on behind it. */
@@ -88,6 +111,16 @@
         <a class="btn" id="clip-save" download>SAVE THE VIDEO</a>
         <button type="button" id="clip-share" hidden>SHARE</button>
       </div>
+    </section>
+    <section id="report" hidden role="dialog" aria-labelledby="report-word">
+      <form id="report-form">
+        <span class="word" id="report-word">REPORT A BUG</span>
+        <textarea id="report-text" maxlength="2000" aria-labelledby="report-word"
+          placeholder="What happened, and what you expected. Where on the map, if it matters."></textarea>
+        <p>Sent with it: the game's build, your browser and graphics card, and this match's map, tick and net counts. Not your name or address.</p>
+        <p id="report-status"></p>
+        <div class="row"><button type="button" id="report-cancel">CANCEL</button><button type="submit" id="report-send">SEND</button></div>
+      </form>
     </section>
     <!-- Sign in with Elo Pros: a pass for this game, from a popup. If it
          doesn't load, the title says ranked is off and the rest still plays. -->

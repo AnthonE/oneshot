@@ -20,11 +20,12 @@ Fireplace, engine-shim and Elo Pros.
 | `sim-wasm` | the sim as a bare wasm module, for the parity gate |
 | `proto` | the wire: bit-packed messages, goldens, `PROTO_VER` |
 | `room` | a match with no transport: seats, input buffers, rewind, fog, snapshots, replays, the aim review (`watch.rs`) |
-| `server` | sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
+| `server` | sessions, rooms (seated on the sim thread, stepped side by side on its pool, `--sim-threads`), the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
 | `client-net` | the client's netcode: clock, prediction, interpolation (`core`), the session, the web and native transports |
 | `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/boot.js` finds the server, signs in and does the party's voice, `web/voice.js`). Its screens are Gates' style, on both: the title (`front.rs`: PLAY, PARTY, FRIENDS; connecting is its state, `door.rs`), the Esc menu, the settings; a pad moves on them (`pad.rs`). The party's lobby is held from the title on (`party.rs`). Its own workspace (`ci/client.sh`). Draws, never decides |
 | `mix`, `mix-worklet` | the game's sound mixer, no engine in it: the desktop plays it as a Bevy audio source, the browser runs it on its audio thread (`mix-worklet`, an AudioWorklet: `web/mix.js`, `web/mix-worklet.js`); `crates/client/src/sound` decides what it plays |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
+| `tools/load` | `oneshot-load`: the load test, headless players on `client-net`'s native transport against a server, and its `/health.json` over the hold (`ops/README.md`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
 | `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE); `rocks.py` the boulders, the sea stack and the bases' pylon (`look/boulders.rs`) |
 | `tools/ground.sh`, `tools/hd.sh` | the ground's and the rock's photographs, cut from Poly Haven's CC0 sets (`sources/polyhaven`), and the bases' steel and tread plate from ambientCG's (`sources/ambientcg`); a map's fixed views shot on the GPU for the look loop (the `hd` skill, the board's `hd-*` views) |
@@ -119,6 +120,7 @@ ci/client.sh dev                                     # just the page, quickly (r
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
 node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too)
+target/release/oneshot-load --page http://127.0.0.1:8080 --players 160 --mode big   # the load test: kept up or not (exit 1)
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo;
                                                      #   GFX=webgpu for the WebGPU module, ?gfx=webgpu|webgl2 on the page)
 ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (Xvfb, lavapipe; title: … 2 0 0 0,

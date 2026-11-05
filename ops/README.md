@@ -134,6 +134,16 @@ renamed or removed; dropping it archives it on their profile.
   snapshot drops, cut sessions, loss and round trip, since that slot started.
   Every busy 10 s a `oneshot: status` line in the journal says what changed;
   `skipped`, `cut` or `send_err` above zero is worth a look.
+- **Load test** (`tools/load`; never against a live slot, and at a quiet
+  hour: it takes cores from Gates too): build `-p server -p load` in release
+  and copy both over, start a third server on loopback
+  (`oneshot-server --bind 127.0.0.1:4500 --http 127.0.0.1:8500`, self-signed),
+  then `oneshot-load --page http://127.0.0.1:8500 --players 256 --mode big --hold 120`.
+  It prints the players' side and the server's over the hold, and exits 1 if
+  the server didn't keep up. Players on the box take cores from the server:
+  for a clean number run `oneshot-load` from another box, the test server
+  started with `--load-from <that box's ip>` and its UDP port open to it.
+  `--sim-threads 1` is the one-thread loop, for a before and after.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo

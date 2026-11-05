@@ -17,6 +17,12 @@ pub trait Link {
     fn now_ms(&self) -> f64;
     /// The server closed the stream (a refusal, the match's end, a drain).
     fn closed(&self) -> bool;
+    /// Why the connection ended, in the player's words
+    /// (`client_net::session::close_why`), once it has; None before, or
+    /// for a stand-in.
+    fn ended_why(&self) -> Option<String> {
+        None
+    }
     /// We're leaving: close the connection (the server lets the seat go).
     fn leave(&mut self) {}
     /// A real connection, not a stand-in.
@@ -56,34 +62,86 @@ impl Link for Native {
     fn closed(&self) -> bool {
         self.client.closed()
     }
+    fn ended_why(&self) -> Option<String> {
+        self.client.ended_why()
+    }
     fn leave(&mut self) {
         self.client.close();
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub struct Web(pub client_net::web::Client);
+pub struct Web {
+    pub client: client_net::web::Client,
+    /// Why it ended, once read: whether the tab was asleep is known only
+    /// around when it came back.
+    why: std::cell::RefCell<Option<String>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Web {
+    pub fn new(client: client_net::web::Client) -> Web {
+        Web {
+            client,
+            why: Default::default(),
+        }
+    }
+}
+
+/// What a browser says when the tab was in the background as it closed.
+#[cfg(target_arch = "wasm32")]
+const ASLEEP: &str = "the tab was in the background, and the game can't keep up from there";
 
 #[cfg(target_arch = "wasm32")]
 impl Link for Web {
     fn update(&mut self, input: Input) {
-        self.0.tick(input);
+        self.client.tick(input);
     }
     fn session(&self) -> &Session {
-        self.0.session()
+        self.client.session()
     }
     fn session_mut(&mut self) -> &mut Session {
-        self.0.session_mut()
+        self.client.session_mut()
     }
     fn now_ms(&self) -> f64 {
-        self.0.now()
+        self.client.now()
     }
     fn closed(&self) -> bool {
-        self.0.closed()
+        self.client.closed()
+    }
+    /// A browser is told nothing by the server's plain QUIC close
+    /// (`close_why`: code 0, no reason). A tab in the background draws no
+    /// frames, falls behind and is cut: the usual cause, and one the page
+    /// can see (boot.js, `__oneshotAsleep`). Read once, as it ended.
+    fn ended_why(&self) -> Option<String> {
+        if let Some(w) = self.why.borrow().as_ref() {
+            return Some(w.clone());
+        }
+        let (code, reason) = self.client.ended()?;
+        let said = code != 0 || !(reason.is_empty() || reason == "bye");
+        let why = if !said && page_says("__oneshotAsleep") {
+            ASLEEP.to_string()
+        } else {
+            client_net::session::close_why(code, &reason)
+        };
+        *self.why.borrow_mut() = Some(why.clone());
+        Some(why)
     }
     fn leave(&mut self) {
-        self.0.close();
+        self.client.close();
     }
+}
+
+/// `window[hook]()`, if the page installed it, is true.
+#[cfg(target_arch = "wasm32")]
+fn page_says(hook: &str) -> bool {
+    use wasm_bindgen::{JsCast, JsValue};
+    let global = js_sys::global();
+    js_sys::Reflect::get(&global, &JsValue::from_str(hook))
+        .ok()
+        .and_then(|v| v.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&global).ok())
+        .is_some_and(|v| v.is_truthy())
 }
 
 /// No server: a stand-in session, ready on a map (Proving Grounds unless
