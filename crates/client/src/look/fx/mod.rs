@@ -208,9 +208,50 @@ pub struct Fx {
     /// swing began, which the server's event comes back to a round trip
     /// later (`bodies::swung`).
     swing: (u16, Option<Vec3>),
+    /// The trail clock ([`TRAIL_HZ`]).
+    trail: TrailClock,
 }
 
+/// Ticks at [`TRAIL_HZ`] on a frame clock: its carry, and the ticks it
+/// struck this frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrailClock {
+    acc: f32,
+    n: u32,
+}
+
+impl TrailClock {
+    /// On by `dt`: one tick a frame at 60 frames a second, every fourth
+    /// frame at 240, two at 30.
+    pub fn step(&mut self, dt: f32) -> u32 {
+        self.acc += dt.max(0.0) * TRAIL_HZ;
+        // A hair over: sixty frames of 1/60 s strike sixty, not fifty-nine.
+        let n = (self.acc + 1e-3).floor();
+        self.acc -= n;
+        self.n = (n as u32).min(TRAIL_MAX);
+        self.n
+    }
+}
+
+/// What a round in flight leaves behind each frame at 60 frames a second
+/// (`flying.rs`: the sparks behind a round of light, the light that rides
+/// a charged bolt) is left at this rate on any screen, so a faster one
+/// draws no more of it and a slower one no less.
+pub const TRAIL_HZ: f32 = 60.0;
+/// The most ticks one frame strikes (a hitch's 0.1 s).
+const TRAIL_MAX: u32 = 6;
+
 impl Fx {
+    /// The trail clock moves on `dt` (once a frame, `flying::projectiles`).
+    pub fn trail_clock(&mut self, dt: f32) {
+        self.trail.step(dt);
+    }
+
+    /// Ticks of the trail clock this frame ([`TrailClock::step`]).
+    pub fn trail_ticks(&self) -> u32 {
+        self.trail.n
+    }
+
     /// In `[0, 1)`: looks only, so any spread will do.
     pub fn rand(&mut self) -> f32 {
         let mut x = self.rng;
@@ -501,6 +542,7 @@ pub fn setup(
         last_light: Vec::new(),
         fly: Default::default(),
         swing: (0, None),
+        trail: TrailClock::default(),
     });
 }
 
@@ -723,4 +765,28 @@ pub fn draw(
     fx.soft.step(dt);
     fx.cloud.step(dt);
     fx.boom.step(dt);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A second of frames strikes sixty ticks at any rate, spread evenly.
+    #[test]
+    fn the_trail_clock_strikes_sixty_a_second_at_any_frame_rate() {
+        for hz in [30.0, 59.94, 60.0, 75.0, 144.0, 165.0, 240.0, 360.0] {
+            let mut c = TrailClock::default();
+            let frames = (hz * 10.0) as usize;
+            let ticks: Vec<u32> = (0..frames).map(|_| c.step(1.0 / hz)).collect();
+            let sum: u32 = ticks.iter().sum();
+            assert!((599..=601).contains(&sum), "{hz} Hz: {sum} ticks in 10 s");
+            let most = ticks.iter().max().copied().unwrap_or(0);
+            assert!(most <= (TRAIL_HZ / hz).ceil().max(1.0) as u32, "{hz} Hz: never bunched ({most})");
+        }
+        let mut c = TrailClock::default();
+        assert!(
+            (0..600).all(|_| c.step(1.0 / 60.0) == 1),
+            "one a frame at 60, every frame"
+        );
+    }
 }
