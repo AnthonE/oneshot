@@ -201,6 +201,20 @@ pub fn match_pass(view: &PartyView, door: &Door) -> String {
     }
 }
 
+/// How often the page's mic and the sign-in are looked at, seconds: each
+/// look is calls into the page and a string made, too many for every frame.
+const POLL_S: f32 = 0.1;
+
+/// The name a hello sends (`Player::sent_name`), borrowed, not made.
+fn sent_name(player: &Player) -> &str {
+    let n = player.name.trim();
+    if n.is_empty() {
+        "player"
+    } else {
+        n
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pump(
     mut lobby: NonSendMut<LobbyRes>,
@@ -211,9 +225,10 @@ fn pump(
     in_match: Res<InMatch>,
     settle: Res<crate::loading::Settle>,
     time: Res<Time<Real>>,
+    (mut polled, mut mic_frames): (Local<f32>, Local<Vec<proto::voice::VoiceFrame>>),
 ) {
     let now = time.elapsed_secs();
-    let name = player.sent_name();
+    let name = sent_name(&player);
     // Not while the first level is still arriving (see FIRST_AFTER_S).
     if lobby.link.is_none() && lobby.knock.is_none() && lobby.tries == 0 && !settle.shown() && now < FIRST_AFTER_S {
         return;
@@ -238,7 +253,7 @@ fn pump(
                     info!("oneshot: the party's line is open");
                     lobby.link = Some(l);
                     lobby.tries = 0;
-                    lobby.name = name.clone();
+                    lobby.name = name.to_string();
                     lobby.sent_pass = door.signin().pass();
                     view.connected = true;
                     view.touch();
@@ -253,7 +268,7 @@ fn pump(
     }
     if lobby.link.is_none() && lobby.knock.is_none() && now >= lobby.retry_at {
         let want = view.party.as_ref().map_or(lobby.want, |p| p.code);
-        lobby.knock = Some(door.lobby(hello(&view, &door, &name, want)));
+        lobby.knock = Some(door.lobby(hello(&view, &door, name, want)));
         lobby.knocked_at = now;
         lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
     }
@@ -268,16 +283,24 @@ fn pump(
     // Its fields apart, so the link and what it was told borrow side by side.
     let lobby = &mut *lobby;
     let Some(link) = lobby.link.as_mut() else {
-        asks.0.clear();
+        if !asks.0.is_empty() {
+            asks.0.clear();
+        }
         return;
     };
+    let poll = now - *polled >= POLL_S || now < *polled;
+    if poll {
+        *polled = now;
+    }
     // Signed in since: the session is that player now.
-    let pass = door.signin().pass();
-    if !pass.is_empty() && pass != lobby.sent_pass {
-        if let Some(p) = Pass::new(&pass) {
-            link.send(Msg::SignIn { pass: p });
+    if poll {
+        let pass = door.signin().pass();
+        if !pass.is_empty() && pass != lobby.sent_pass {
+            if let Some(p) = Pass::new(&pass) {
+                link.send(Msg::SignIn { pass: p });
+            }
+            lobby.sent_pass = pass;
         }
-        lobby.sent_pass = pass;
     }
     for d in asks.0.drain(..) {
         match d {
@@ -309,7 +332,7 @@ fn pump(
                 if !in_match.0 {
                     let party = view.party.as_ref().map_or(0, |p| p.code);
                     let ask = Ask {
-                        name: name.clone(),
+                        name: name.to_string(),
                         pass: match_pass(&view, &door),
                         mode,
                         look: player.look(),
@@ -386,8 +409,12 @@ fn pump(
         };
         play_voice(&f, &key);
     }
-    for f in take_mic() {
+    take_mic(&mut mic_frames);
+    for f in mic_frames.drain(..) {
         link.talk(&f);
+    }
+    if !poll {
+        return;
     }
     let mic = mic_state();
     let open = open_mic();
@@ -518,25 +545,54 @@ mod page {
         true
     }
 
-    pub fn take_mic() -> Vec<VoiceFrame> {
-        MIC.with(|q| std::mem::take(&mut *q.borrow_mut()))
+    /// The page's frames since the last call, swapped into `out` (empty):
+    /// both Vecs keep what they hold room for.
+    pub fn take_mic(out: &mut Vec<VoiceFrame>) {
+        MIC.with(|q| std::mem::swap(&mut *q.borrow_mut(), out));
     }
 
-    fn bridge() -> Option<JsValue> {
-        let w = web_sys::window()?;
-        Reflect::get(&w, &JsValue::from_str("__oneshotVoice"))
+    /// The page's bridge once it is there, and its functions as asked for.
+    type Bridge = (JsValue, Vec<(&'static str, Function)>);
+
+    thread_local! {
+        /// Looked up once, not on every call.
+        static BRIDGE: RefCell<Option<Bridge>> = const { RefCell::new(None) };
+    }
+
+    fn call(name: &'static str, args: &[JsValue]) -> Option<JsValue> {
+        BRIDGE.with(|b| {
+            let mut b = b.borrow_mut();
+            if b.is_none() {
+                let w = web_sys::window()?;
+                let o = Reflect::get(&w, &JsValue::from_str("__oneshotVoice"))
+                    .ok()
+                    .filter(|v| v.is_object())?;
+                *b = Some((o, Vec::new()));
+            }
+            let (o, fns) = b.as_mut()?;
+            let f = match fns.iter().find(|(n, _)| *n == name) {
+                Some((_, f)) => f.clone(),
+                None => {
+                    let f: Function = Reflect::get(o, &JsValue::from_str(name)).ok()?.dyn_into().ok()?;
+                    fns.push((name, f.clone()));
+                    f
+                }
+            };
+            match args {
+                [] => f.call0(o),
+                [x] => f.call1(o, x),
+                [x, y] => f.call2(o, x, y),
+                [x, y, z] => f.call3(o, x, y, z),
+                _ => {
+                    let a = js_sys::Array::new();
+                    for x in args {
+                        a.push(x);
+                    }
+                    f.apply(o, &a)
+                }
+            }
             .ok()
-            .filter(|v| v.is_object())
-    }
-
-    fn call(name: &str, args: &[JsValue]) -> Option<JsValue> {
-        let b = bridge()?;
-        let f: Function = Reflect::get(&b, &JsValue::from_str(name)).ok()?.dyn_into().ok()?;
-        let a = js_sys::Array::new();
-        for x in args {
-            a.push(x);
-        }
-        f.apply(&b, &a).ok()
+        })
     }
 
     pub fn play_voice(f: &VoiceFrame, key: &str) {
@@ -618,7 +674,7 @@ mod page {
 
     /// For the browser gates: frames the page played and sent.
     pub fn voice_counts() -> (u32, u32) {
-        let n = |k| call(k, &[]).and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+        let n = |k: &'static str| call(k, &[]).and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
         (n("heard"), n("sent"))
     }
 }
@@ -629,9 +685,7 @@ mod page {
 
     use super::Mic;
 
-    pub fn take_mic() -> Vec<VoiceFrame> {
-        Vec::new()
-    }
+    pub fn take_mic(_: &mut Vec<VoiceFrame>) {}
     pub fn play_voice(_: &VoiceFrame, _: &str) {}
     pub fn mic_state() -> Mic {
         Mic::None

@@ -255,12 +255,13 @@ impl Session {
             return;
         }
         let mut buf = [0u8; MAX_DATAGRAM];
-        for m in self.core.update(now_ms, input) {
-            let Ok(n) = encode_input(&m, &mut buf) else { continue };
+        let dropped = &mut self.dropped;
+        self.core.update_each(now_ms, input, |m| {
+            let Ok(n) = encode_input(m, &mut buf) else { return };
             if !wire.send_datagram(&buf[..n]) {
-                self.dropped += 1;
+                *dropped += 1;
             }
-        }
+        });
     }
 
     /// Stream messages since the last call.

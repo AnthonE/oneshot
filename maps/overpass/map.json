@@ -72,7 +72,9 @@
     { "weapon": "sniper", "at": [0, 0, 3], "respawn": 90 },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
     { "weapon": "shotgun", "at": [-10, -15], "respawn": 60, "mirror": true },
-    { "weapon": "shards", "at": [-25, 0, 2], "respawn": 45, "mirror": true }
+    { "weapon": "shards", "at": [-25, 0, 2], "respawn": 45, "mirror": true },
+    { "weapon": "overshield", "at": [0, 18.5], "respawn": 120 },
+    { "weapon": "camo", "at": [0, -18.5], "respawn": 120 }
   ],
   "roam": [
     [0, 0], [-10, 0], [10, 0], [-20, -15], [-20, 15], [20, -15], [20, 15],

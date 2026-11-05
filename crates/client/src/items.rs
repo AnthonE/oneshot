@@ -1,4 +1,5 @@
-//! What lies about the map for the taking: each pad's gun, turning over its
+//! What lies about the map for the taking: each pad's gun (or power-up: a
+//! glowing orb, green the overshield, pale the camouflage), turning over its
 //! disc and gone while the pad waits (the snapshot's `empty_s`), the disc
 //! lit while it holds one; the guns and grenades on the floor that the
 //! snapshot names; and the line that says what USE would take here. All
@@ -23,6 +24,22 @@ const BOB_HZ: f32 = 0.45;
 const SPIN: f32 = 1.1;
 /// A loaded pad's disc glows this, a waiting one's not at all.
 const DISC_GLOW: f32 = 1.6;
+/// A power-up's orb: its radius, and its glow in its colour; and how far
+/// it swells and shrinks, how fast.
+const ORB_R: f32 = 0.26;
+const ORB_GLOW: f32 = 6.0;
+const ORB_PULSE: f32 = 0.08;
+const ORB_HZ: f32 = 1.3;
+
+/// A power-up's colour, linear: the overshield's green, camouflage's pale
+/// blue (as their shells are drawn: `look/bodies.rs`).
+fn orb_color(id: u8) -> LinearRgba {
+    if id == sim::arms::OVERSHIELD {
+        LinearRgba::rgb(0.25, 1.0, 0.45)
+    } else {
+        LinearRgba::rgb(0.6, 0.78, 1.0)
+    }
+}
 /// A gun on the floor lies on its side this high (its half thickness).
 const LIE_Y: f32 = 0.05;
 /// A drop thrown by a blast: how fast the drawn one follows where the
@@ -93,6 +110,7 @@ pub fn draw(
     mut placed: Query<&mut Transform, Without<PadGun>>,
     discs: Query<(&PadDisc, &MeshMaterial3d<StandardMaterial>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -113,7 +131,23 @@ pub fn draw(
                     Visibility::Hidden,
                 ))
                 .id();
-            posed(&mut commands, &models, p.arm, guns::body_basis(), root);
+            if sim::arms::power(p.arm) {
+                let c = orb_color(p.arm);
+                commands.spawn((
+                    Mesh3d(meshes.add(Sphere::new(ORB_R))),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: Color::LinearRgba(c * 0.2),
+                        emissive: c * ORB_GLOW,
+                        perceptual_roughness: 0.2,
+                        ..default()
+                    })),
+                    Transform::default(),
+                    bevy::light::NotShadowCaster,
+                    ChildOf(root),
+                ));
+            } else {
+                posed(&mut commands, &models, p.arm, guns::body_basis(), root);
+            }
         }
         return;
     }
@@ -127,10 +161,20 @@ pub fn draw(
         if *vis != want {
             *vis = want;
         }
+        // Nothing to bob while it's away: each write turns the gun's whole
+        // scene over again.
+        if !on {
+            continue;
+        }
         // Each pad a little out of step with the next.
         let phase = pad.0 as f32 * 1.7;
         tr.translation.y = def.pos.y + FLOAT_Y + BOB_M * (t * BOB_HZ * core::f32::consts::TAU + phase).sin();
         tr.rotation = Quat::from_rotation_y(t * SPIN + phase);
+        tr.scale = if sim::arms::power(def.arm) {
+            Vec3::splat(1.0 + ORB_PULSE * (t * ORB_HZ * core::f32::consts::TAU + phase).sin())
+        } else {
+            Vec3::ONE
+        };
     }
     for (disc, mat) in discs.iter() {
         let on = loaded(core, disc.0);
@@ -141,9 +185,15 @@ pub fn draw(
             continue;
         }
         *was = Some(on);
+        let power = core
+            .map
+            .pads
+            .get(disc.0)
+            .map(|p| p.arm)
+            .filter(|&a| sim::arms::power(a));
         if let Some(m) = mats.get_mut(&mat.0) {
             m.emissive = if on {
-                LinearRgba::rgb(0.79, 0.6, 0.12) * DISC_GLOW
+                power.map_or(LinearRgba::rgb(0.79, 0.6, 0.12), orb_color) * DISC_GLOW
             } else {
                 LinearRgba::BLACK
             };
@@ -164,9 +214,13 @@ pub fn draw(
             if l.arm == a && l.to.distance(p) < DROP_SNAP_M {
                 l.to = p;
                 fly(l, dt);
+                // Settled, it stays put: no write to turn its scene over.
+                let rot = l.spin * l.turn;
                 if let Ok(mut tr) = placed.get_mut(l.e) {
-                    tr.translation = l.at;
-                    tr.rotation = l.spin * l.turn;
+                    if tr.translation != l.at || tr.rotation != rot {
+                        tr.translation = l.at;
+                        tr.rotation = rot;
+                    }
                 }
                 continue;
             }
@@ -227,19 +281,21 @@ fn fly(l: &mut Lying, dt: f32) {
 /// it: a vehicle in reach with a seat free first, then the nearest pad
 /// holding its gun or gun on the floor. None for nothing (or not on foot
 /// and alive in play).
-pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
+pub fn offer(core: &NetCore, vehicles: &[client_net::core::DrawnVehicle]) -> Option<Offer> {
     let f: &Fighter = core.own().0;
     if !f.alive || f.riding().is_some() || core.phase() != Phase::Playing {
         return None;
     }
     let at = f.body.pos;
-    let car = core
-        .vehicles(now_ms)
-        .into_iter()
+    let car = vehicles
+        .iter()
         .filter(|v| v.seats.contains(&0) && (v.pos - at).flat().len() < ENTER_R && (v.pos.y - at.y).abs() < 2.0)
         .min_by(|a, b| (a.pos - at).flat().len().total_cmp(&(b.pos - at).flat().len()));
     if let Some(v) = car {
-        return Some(if v.seats[DRIVER] == 0 { "drive" } else { "ride" }.into());
+        return Some(Offer {
+            verb: if v.seats[DRIVER] == 0 { "drive" } else { "ride" },
+            gun: "",
+        });
     }
     if core.rules.gun_game {
         return None;
@@ -253,7 +309,7 @@ pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
         .pads
         .iter()
         .enumerate()
-        .filter(|&(i, _)| loaded(core, i))
+        .filter(|&(i, p)| loaded(core, i) && !sim::arms::power(p.arm))
         .filter_map(|(_, p)| near(p.pos, PAD_REACH).map(|d| (d, p.arm, true)));
     let drops = core
         .latest()
@@ -267,16 +323,35 @@ pub fn offer(core: &NetCore, now_ms: f64) -> Option<String> {
 
 /// How taking `id` would land, in pickup's words. A gun of a kind carried,
 /// from the floor, is no offer: walking over took its rounds.
-fn take(f: &Fighter, id: u8, pad: bool) -> Option<String> {
+fn take(f: &Fighter, id: u8, pad: bool) -> Option<Offer> {
     let a = arm(id);
-    Some(if a.dual && arm(f.gun().arm).dual {
-        format!("dual wield {}", a.name)
+    let verb = if a.dual && arm(f.gun().arm).dual {
+        "dual wield"
     } else if f.guns.iter().any(|g| g.arm == id) {
         if !pad {
             return None;
         }
-        format!("refill {}", a.name)
+        "refill"
     } else {
-        format!("pick up {}", a.name)
-    })
+        "pick up"
+    };
+    Some(Offer { verb, gun: a.name })
+}
+
+/// What USE would do ([`offer`]): "drive", or "pick up" and the gun's
+/// name. Nothing made to hold it: the prompt writes it when it changes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Offer {
+    pub verb: &'static str,
+    pub gun: &'static str,
+}
+
+impl std::fmt::Display for Offer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.verb)?;
+        if !self.gun.is_empty() {
+            write!(f, " {}", self.gun)?;
+        }
+        Ok(())
+    }
 }

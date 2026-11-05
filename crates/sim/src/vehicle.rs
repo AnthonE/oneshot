@@ -290,6 +290,7 @@ impl Vehicle {
                     &mut cz,
                     &mut v,
                     VEH_HULL_R,
+                    p.y,
                     lo,
                     hi,
                     p.y + VEH_STEP,

@@ -265,6 +265,7 @@ pub fn write(pool: &mut Pool, mesh: &mut Mesh, cam: &Cam, anchor: Vec3) -> bool 
     if !pool.needs_write() {
         return false;
     }
+    super::pool::untrim(mesh, pool.cap());
     let (mut pos, mut nrm, mut uv, mut uv2, mut aux, mut col) = (None, None, None, None, None, None);
     for (attr, values) in mesh.attributes_mut() {
         let id = attr.id;
@@ -296,7 +297,7 @@ pub fn write(pool: &mut Pool, mesh: &mut Mesh, cam: &Cam, anchor: Vec3) -> bool 
     let (Some(pos), Some(nrm), Some(uv), Some(uv2), Some(aux), Some(col)) = (pos, nrm, uv, uv2, aux, col) else {
         return false;
     };
-    pool.fill(
+    let wrote = pool.fill(
         Verts {
             pos,
             uv,
@@ -307,7 +308,9 @@ pub fn write(pool: &mut Pool, mesh: &mut Mesh, cam: &Cam, anchor: Vec3) -> bool 
         },
         cam,
         anchor.into(),
-    )
+    );
+    super::pool::trim(mesh, pool.cap());
+    wrote
 }
 
 #[cfg(test)]

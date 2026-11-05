@@ -1,227 +1,362 @@
 {
   "id": 6,
   "name": "Chrysalis",
-  "about": "Inside a ship's purple hull, 40 by 28 m under a ribbed vault, mirrored red (-x) to blue (+x). Bottom mid is a pit ringed by round pods; top mid is a round platform 3.5 m over half of it, a lift up from the pit, the spine rising through its north edge so no line runs base to base. Each base has a curved front with a window from its top, a lift inside its door, and three ways out: the north gallery to top mid, the south ramp down into the hall, the door to the pit.",
-  "bounds": [-20, 20, -13, 13],
+  "about": "Inside a ship's purple hold, 44 by 28 m and round at both ends under a barrel vault and two half domes, mirrored red (-x) to blue (+x). In the middle a chrysalis hangs from the vault on its spine; top mid is a ring round the spine 3.5 m up, its hole over the pit, a lift from the pit. Each base is a round pod against its end wall: arched doors to the hall and the north lane, a lift up through its roof, a gallery curving north from its roof to the ring, and a ramp spiralling down its south side to the south lane.",
+  "bounds": [-22, 22, -13.7, 13.7],
   "mirror": "x",
   "nav": true,
   "structures": [
     {
-      "name": "the hull",
+      "name": "the long walls' plates, bulging into the hall",
+      "mirror": true,
       "boxes": [
-        [-14, 0, 13, 14, 8, 13.5, "alien_dark"],
-        [-14, 0, -13.5, 14, 8, -13, "alien_dark"],
-        { "round": [0, 13.6], "r": 2.9, "y": [0, 8], "look": "alien_dark" }
-      ]
-    },
-    {
-      "name": "the vault, and the steps under it that it collides as",
-      "boxes": [
-        [-20, 8, -14, 20, 10.8, 14, "vault"],
-        [-21, 8, -14, 21, 11.5, -13, "hidden"],
-        [-21, 8, 13, 21, 11.5, 14, "hidden"],
-        [-21, 9, -13, 21, 11.5, -11, "hidden"],
-        [-21, 9, 11, 21, 11.5, 13, "hidden"],
-        [-21, 9.7, -11, 21, 11.5, -8.5, "hidden"],
-        [-21, 9.7, 8.5, 21, 11.5, 11, "hidden"],
-        [-21, 10.2, -8.5, 21, 11.5, -5.5, "hidden"],
-        [-21, 10.2, 5.5, 21, 11.5, 8.5, "hidden"],
-        [-21, 10.55, -5.5, 21, 11.5, 5.5, "hidden"]
+        {"wall": [[-7.8, 14], [-4.2, 14]], "thick": 0.6, "y": [0, 7.5], "minus": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"wall": [[-7.8, -14], [-4.2, -14]], "thick": 0.6, "y": [0, 7.5], "plus": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"wall": [[-3.8, 14], [-0.2, 14]], "thick": 0.6, "y": [0, 7.5], "minus": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"wall": [[-3.8, -14], [-0.2, -14]], "thick": 0.6, "y": [0, 7.5], "plus": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"}
       ]
     },
     {
       "name": "the long walls' ribs",
-      "boxes": [
-        [-12.25, 0, 12.6, -11.75, 8, 13, "rib"],
-        [-8.25, 0, 12.6, -7.75, 8, 13, "rib"],
-        [-4.25, 0, 12.6, -3.75, 8, 13, "rib"],
-        [3.75, 0, 12.6, 4.25, 8, 13, "rib"],
-        [7.75, 0, 12.6, 8.25, 8, 13, "rib"],
-        [11.75, 0, 12.6, 12.25, 8, 13, "rib"],
-        [-12.25, 0, -13, -11.75, 8, -12.6, "rib"],
-        [-8.25, 0, -13, -7.75, 8, -12.6, "rib"],
-        [-4.25, 0, -13, -3.75, 8, -12.6, "rib"],
-        [3.75, 0, -13, 4.25, 8, -12.6, "rib"],
-        [7.75, 0, -13, 8.25, 8, -12.6, "rib"],
-        [11.75, 0, -13, 12.25, 8, -12.6, "rib"]
-      ]
-    },
-    {
-      "name": "the long walls' windows and light",
-      "dress": true,
-      "boxes": [
-        [-14, 7.55, 12.92, 14, 7.65, 13, "cyan_glow"],
-        [-14, 7.55, -13, 14, 7.65, -12.92, "cyan_glow"],
-        [-11.5, 5.6, 12.97, -6.5, 7.2, 13.02, "gold"],
-        [6.5, 5.6, 12.97, 11.5, 7.2, 13.02, "gold"],
-        [-11.5, 5.6, -13.02, -6.5, 7.2, -12.97, "gold"],
-        [6.5, 5.6, -13.02, 11.5, 7.2, -12.97, "gold"],
-        [-2.5, 5.6, -13.02, 2.5, 7.2, -12.97, "gold"]
-      ]
-    },
-    {
-      "name": "the long walls' pods between the ribs, and the cove at their feet",
-      "dress": true,
       "mirror": true,
       "boxes": [
-        [-14, 0, 12.6, 0, 0.8, 13.4, "rib"],
-        [-14, 0, -13.4, 0, 0.8, -12.6, "rib"],
-        { "round": [-10, 15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
-        { "round": [-6, 15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
-        { "round": [-10, -15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" },
-        { "round": [-6, -15.75], "r": 3.15, "y": [0, 5.2], "look": "alien" }
+        {"column": [-8, 13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"},
+        {"column": [-8, -13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"},
+        {"column": [-4, 13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"},
+        {"column": [-4, -13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"}
       ]
     },
     {
-      "name": "the south wall's wide pod under its window",
-      "dress": true,
+      "name": "the long walls' middle ribs",
       "boxes": [
-        { "round": [0, -20.6], "r": 8, "y": [0, 5.2], "look": "alien" }
+        {"column": [0, 13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"},
+        {"column": [0, -13.75], "r": 0.25, "y": [0, 7.5], "flare": [0.5, 0.5], "look": "alien_dark"}
       ]
     },
     {
-      "name": "the hull's ends",
+      "name": "the ends: half circles of plates bulging in, ribbed",
       "mirror": true,
       "boxes": [
-        [-20.5, 0, -7, -20, 8, 7, "alien_red"],
-        { "arc": [-14, 7], "r": 6.25, "from": 90, "to": 180, "thick": 0.5, "y": [0, 8], "look": "alien_dark" },
-        { "arc": [-14, -7], "r": 6.25, "from": 180, "to": 270, "thick": 0.5, "y": [0, 8], "look": "alien_dark" },
-        [-21.5, 8, -14, -20, 11.5, 14, "alien_dark"]
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 90.5, "to": 119.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 120.5, "to": 149.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 150.5, "to": 179.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 180.5, "to": 209.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 210.5, "to": 239.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"arc": [-8.0, 0.0], "r": 14, "thick": 0.6, "from": 240.5, "to": 269.5, "y": [0, 7.5], "inner": {"depth": 0.45, "y": [0.4, 5.6]}, "look": "alien"},
+        {"column": [-14.875, 11.908], "r": 0.3, "y": [0, 7.5], "flare": [0.55, 0.5], "look": "alien_dark"},
+        {"column": [-19.908, 6.875], "r": 0.3, "y": [0, 7.5], "flare": [0.55, 0.5], "look": "alien_dark"},
+        {"column": [-21.75, 0.0], "r": 0.3, "y": [0, 7.5], "flare": [0.55, 0.5], "look": "alien_dark"},
+        {"column": [-19.908, -6.875], "r": 0.3, "y": [0, 7.5], "flare": [0.55, 0.5], "look": "alien_dark"},
+        {"column": [-14.875, -11.908], "r": 0.3, "y": [0, 7.5], "flare": [0.55, 0.5], "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "the vault over the middle",
+      "boxes": [
+        {"vault": [-8, -14, 8, 14], "along": "x", "spring": 7.5, "crown": 11.0, "roof": 11.5, "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "the half domes over the ends",
+      "mirror": true,
+      "boxes": [
+        {"cupola": [-8.0, 0.0], "r": 14, "spring": 7.5, "crown": 11.0, "roof": 11.5, "from": 90, "to": 270, "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "the vault's ribs",
+      "dress": true,
+      "boxes": [
+        {"vault": [-4.25, -14, -3.75, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.3, "look": "alien_dark"},
+        {"vault": [-0.25, -14, 0.25, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.3, "look": "alien_dark"},
+        {"vault": [3.75, -14, 4.25, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.3, "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "the half domes' ribs",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"cupola": [-8.0, 0.0], "r": 14, "spring": 7.5, "crown": 11.0, "band": 0.3, "s": [6.8, 7.3], "from": 90, "to": 270, "look": "alien_dark"},
+        {"cupola": [-8.0, 0.0], "r": 14, "spring": 7.5, "crown": 11.0, "band": 0.3, "s": [11.2, 11.7], "from": 90, "to": 270, "look": "alien_dark"},
+        {"vault": [-8.25, -14, -7.75, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.3, "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "the gold panes overhead",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"vault": [-7.6, -14, -4.4, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.03, "s": [-4.5, 4.5], "look": "gold"},
+        {"vault": [-3.6, -14, -0.4, 14], "along": "x", "spring": 7.5, "crown": 11.0, "band": 0.03, "s": [-4.5, 4.5], "look": "gold"},
+        {"cupola": [-8.0, 0.0], "r": 14, "spring": 7.5, "crown": 11.0, "band": 0.03, "s": [0.3, 6.6], "from": 90, "to": 270, "look": "gold"}
+      ]
+    },
+    {
+      "name": "the long walls' light",
+      "dress": true,
+      "boxes": [
+        {"wall": [[-8, 13.67], [8, 13.67]], "thick": 0.06, "y": [7.25, 7.35], "look": "cyan_glow"},
+        {"wall": [[-8, -13.67], [8, -13.67]], "thick": 0.06, "y": [7.25, 7.35], "look": "cyan_glow"}
       ]
     },
     {
       "name": "the ends' light",
-      "dress": true,
       "mirror": true,
+      "dress": true,
       "boxes": [
-        { "arc": [-14, 7], "r": 6.07, "from": 90, "to": 180, "thick": 0.2, "y": [7.55, 7.65], "look": "cyan_glow" },
-        { "arc": [-14, -7], "r": 6.07, "from": 180, "to": 270, "thick": 0.2, "y": [7.55, 7.65], "look": "cyan_glow" },
-        [-20, 6.8, -3, -19.95, 7, 3, "red_glow"]
+        {"lathe": [-8.0, 0.0], "profile": [[13.6, 7.25, 7.35], [13.7, 7.25, 7.35]], "from": 90, "to": 270, "look": "cyan_glow"}
       ]
     },
     {
-      "name": "the ends' viewports",
+      "name": "the long walls' windows over the plates",
+      "mirror": true,
       "dress": true,
+      "boxes": [[-7.6, 5.9, 13.65, -4.4, 7.1, 13.7, "gold"], [-7.6, 5.9, -13.7, -4.4, 7.1, -13.65, "gold"], [-3.6, 5.9, 13.65, -0.4, 7.1, 13.7, "gold"], [-3.6, 5.9, -13.7, -0.4, 7.1, -13.65, "gold"]]
+    },
+    {
+      "name": "red's pod: a round room against its end, arched doors to the hall and the north lane, its roof a deck with a rolled parapet, a ramp spiralling down its south side",
       "mirror": true,
       "boxes": [
-        [-20.02, 8.4, -5, -20, 10.3, 5, "gold"]
+        {"arc": [-16.8, 0.0], "r": 4.3, "thick": 0.6, "from": 21.319, "to": 88.681, "y": [0, 3.1], "outer": {"depth": 0.35, "y": [0.3, 2.8]}, "look": "alien_red"},
+        {"arc": [-16.8, 0.0], "r": 4.3, "thick": 0.6, "from": 131.319, "to": 338.681, "y": [0, 3.1], "outer": {"depth": 0.35, "y": [0.3, 2.8]}, "look": "alien_red"},
+        {"arch": [-12.5, 0.0], "angle": 0, "length": 1.5, "width": 2.2, "jamb": 0.5, "spring": 2.1, "crown": 2.7, "top": 3.1, "look": "alien_dark"},
+        {"arch": [-18.271, 4.041], "angle": 110, "length": 1.5, "width": 2.2, "jamb": 0.5, "spring": 2.1, "crown": 2.7, "top": 3.1, "look": "alien_dark"},
+        {"deck": [-16.8, 0.0], "r": 4.6, "hole": 1.6, "y": 3.5, "thick": 0.4, "rim": 0.2, "look": "alien_red"},
+        {"fin": [-16.8, 0.0], "r": 4.25, "thick": 0.5, "y": [3.5, 4.5], "from": 25, "to": 38, "look": "alien_red"},
+        {"fin": [-16.8, 0.0], "r": 4.25, "thick": 0.5, "y": [3.5, 4.5], "from": 78, "to": 238, "look": "alien_red"},
+        {"fin": [-16.8, 0.0], "r": 4.25, "thick": 0.5, "y": [3.5, 4.5], "from": 262, "to": 335, "look": "alien_red"},
+        {"spiral": [-16.8, 0.0], "r": 5.6, "width": 2.0, "from": 250, "to": 335, "y": [3.5, 0], "look": "alien_dark"}
       ]
     },
     {
-      "name": "top mid and the spine",
+      "name": "red's pod's light",
+      "mirror": true,
+      "dress": true,
       "boxes": [
-        { "round": [0, 2.5], "r": 5, "y": [3.1, 3.5], "look": "alien" },
-        { "round": [0, 0.5], "r": 0.9, "y": [0, 8], "look": "alien" },
-        { "round": [0, 8.5], "r": 2.2, "y": [0, 8], "look": "alien" }
+        {"lathe": [-16.8, 0.0], "profile": [[4.6, 0, 0.12], [4.7, 0, 0.12]], "from": 21.319, "to": 88.681, "look": "red_glow"},
+        {"lathe": [-16.8, 0.0], "profile": [[4.6, 0, 0.12], [4.7, 0, 0.12]], "from": 131.319, "to": 338.681, "look": "red_glow"},
+        {"ring": [-16.8, 0.0], "r": 4.62, "tube": 0.05, "y": 3.3, "look": "red_glow"},
+        {"ring": [-16.8, 0.0], "r": 1.55, "tube": 0.05, "y": 3.3, "look": "red_glow"}
+      ]
+    },
+    {
+      "name": "red's gallery: a walkway curving north from its pod's roof to the ring",
+      "mirror": true,
+      "boxes": [
+        {"deck": [-8.0, 0.0], "r": 8.5, "hole": 6.5, "y": 3.48, "thick": 0.5, "rim": 0.2, "from": 37.5, "to": 160, "look": "alien"},
+        {"column": [-6.059, 7.244], "r": 0.3, "y": [0, 3.0], "flare": [0.6, 0.5], "cap": [0.6, 0.4], "look": "alien_dark"},
+        {"column": [-11.521, 6.622], "r": 0.3, "y": [0, 3.0], "flare": [0.6, 0.5], "cap": [0.6, 0.4], "look": "alien_dark"}
+      ]
+    },
+    {
+      "name": "red's gallery's light",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"ring": [-8.0, 0.0], "r": 8.55, "tube": 0.04, "y": 3.25, "from": 37.5, "to": 160, "look": "cyan_glow"}
+      ]
+    },
+    {
+      "name": "mid: the chrysalis hung on its spine, top mid a ring round it 3.5 m up over the pit",
+      "boxes": [
+        {"deck": [0, 0], "r": 6.5, "hole": 3.5, "y": 3.5, "thick": 0.5, "rim": 0.25, "look": "alien"},
+        {"column": [0, 0], "r": 1.3, "y": [0, 11.5], "flare": [1.9, 0.7], "look": "alien"},
+        {"lathe": [0, 0], "y": 0, "profile": [[0.0, 5.0, 11.5], [0.3, 5.115, 11.5], [0.6, 5.291, 11.5], [0.9, 5.5, 11.5], [1.2, 5.744, 11.126], [1.5, 6.022, 10.741], [1.8, 6.344, 10.327], [2.05, 6.662, 9.938], [2.25, 6.976, 9.571], [2.4, 7.277, 9.228], [2.5, 7.548, 8.923], [2.56, 7.788, 8.656], [2.595, 8.055, 8.361]], "look": "alien"}
+      ]
+    },
+    {
+      "name": "the ring's fins: rolled walls on its ends, between the bases' roofs",
+      "mirror": true,
+      "boxes": [
+        {"fin": [0, 0], "r": 5.95, "thick": 0.7, "y": [3.5, 5.45], "from": 136, "to": 224, "look": "alien"}
+      ]
+    },
+    {
+      "name": "the ring's legs",
+      "mirror": true,
+      "boxes": [
+        {"column": [-3.536, 3.536], "r": 0.35, "y": [0, 3.0], "flare": [0.75, 0.5], "cap": [0.75, 0.45], "look": "alien_dark"},
+        {"column": [-3.536, -3.536], "r": 0.35, "y": [0, 3.0], "flare": [0.75, 0.5], "cap": [0.75, 0.45], "look": "alien_dark"}
       ]
     },
     {
       "name": "mid's light",
       "dress": true,
       "boxes": [
-        { "round": [0, 2.5], "r": 5.04, "y": [3.42, 3.5], "look": "magenta_glow" },
-        { "round": [0, 0.5], "r": 0.94, "y": [2.85, 2.95], "look": "cyan_glow" },
-        { "round": [0, 0.5], "r": 0.94, "y": [5.9, 6], "look": "cyan_glow" },
-        { "round": [0, 8.5], "r": 2.24, "y": [2.85, 2.95], "look": "cyan_glow" },
-        { "round": [0, 8.5], "r": 2.24, "y": [5.9, 6], "look": "cyan_glow" }
+        {"ring": [0, 0], "r": 6.55, "tube": 0.05, "y": 3.25, "look": "magenta_glow"},
+        {"ring": [0, 0], "r": 3.45, "tube": 0.05, "y": 3.25, "look": "cyan_glow"},
+        {"ring": [0, 0], "r": 1.33, "tube": 0.05, "y": 2.2, "look": "cyan_glow"},
+        {"ring": [0, 0], "r": 1.33, "tube": 0.05, "y": 5.0, "look": "cyan_glow"},
+        {"ring": [0, 0], "r": 2.62, "tube": 0.07, "y": 8.2, "look": "magenta_glow"}
       ]
     },
     {
-      "name": "red's base",
+      "name": "pods: under the ring, down the lanes",
       "mirror": true,
       "boxes": [
-        [-20, 3.1, -7, -15, 3.5, 7, "alien_red"],
-        { "arc": [-24, 0], "r": 11, "from": -32, "to": -9, "thick": 0.4, "y": [0, 3.1], "look": "alien_red" },
-        { "arc": [-24, 0], "r": 11, "from": 9, "to": 32, "thick": 0.4, "y": [0, 3.1], "look": "alien_red" },
-        { "arc": [-24, 0], "r": 11, "from": -32, "to": 32, "thick": 0.4, "y": [3.1, 4.4], "look": "alien_red" },
-        { "arc": [-24, 0], "r": 11, "from": -32, "to": 32, "thick": 0.4, "y": [6.4, 8], "look": "alien_red" },
-        { "arc": [-24, 0], "r": 11, "from": -32, "to": -16, "thick": 0.4, "y": [4.4, 6.4], "look": "alien_red" },
-        { "arc": [-24, 0], "r": 11, "from": 16, "to": 32, "thick": 0.4, "y": [4.4, 6.4], "look": "alien_red" },
-        [-17, 3.1, -10.5, -12, 3.5, -7, "alien_red"],
-        { "ramp": [-12, -10.5, -5, -8], "up": "-x", "from": 0, "to": 3.5, "look": "alien_dark" },
-        [-17, 3.1, 5.5, -3, 3.5, 9, "alien"]
+        {"pod": [-5.4, -2.0], "r": 0.9, "h": 1.7, "look": "alien_dark"},
+        {"pod": [-5.4, 2.0], "r": 0.9, "h": 1.7, "look": "alien_dark"},
+        {"pod": [-4.5, 11.0], "r": 1.1, "h": 2.0, "look": "alien_red"},
+        {"pod": [-5.0, -10.0], "r": 1.1, "h": 2.0, "look": "alien_red"},
+        {"pod": [-11.5, -9.6], "r": 0.9, "h": 1.8, "look": "alien_dark"}
       ]
     },
     {
-      "name": "the glowing trim at red's front's foot, either side of its door",
-      "dress": true,
-      "mirror": true,
+      "name": "the lanes' middle pods",
       "boxes": [
-        { "arc": [-24, 0], "r": 11.3, "from": -32, "to": -9, "thick": 0.2, "y": [0, 0.12], "look": "red_glow" },
-        { "arc": [-24, 0], "r": 11.3, "from": 9, "to": 32, "thick": 0.2, "y": [0, 0.12], "look": "red_glow" }
-      ]
-    },
-    {
-      "name": "red's light",
-      "dress": true,
-      "mirror": true,
-      "boxes": [
-        { "arc": [-24, 0], "r": 10.87, "from": -32, "to": 32, "thick": 0.2, "y": [3.0, 3.1], "look": "red_glow" },
-        { "arc": [-24, 0], "r": 10.87, "from": -32, "to": 32, "thick": 0.2, "y": [7.55, 7.65], "look": "red_glow" },
-        [-20, 3.0, -0.1, -15.5, 3.1, 0.1, "red_glow"]
-      ]
-    },
-    {
-      "name": "the decks on the platforms",
-      "dress": true,
-      "mirror": true,
-      "boxes": [
-        [-20, 3.5, -7, -15, 3.52, 7, "deck"],
-        [-17, 3.5, -10.5, -12, 3.52, -7, "deck"],
-        [-17, 3.5, 5.5, -3, 3.52, 9, "deck"]
-      ]
-    },
-    {
-      "name": "top mid's deck",
-      "dress": true,
-      "boxes": [
-        { "round": [0, 2.5], "r": 5, "y": [3.5, 3.52], "look": "deck" }
-      ]
-    },
-    {
-      "name": "pods, and the galleries' legs",
-      "mirror": true,
-      "boxes": [
-        { "round": [-4, -2.5], "r": 0.9, "y": [0, 2.2], "look": "alien_dark" },
-        { "round": [-4.5, 4], "r": 0.9, "y": [0, 2.2], "look": "alien_dark" },
-        { "round": [-9.5, -4.2], "r": 1.2, "y": [0, 2.4], "look": "alien_red" },
-        { "round": [-9.5, 4.2], "r": 1.2, "y": [0, 2.4], "look": "alien_red" },
-        { "round": [-6.5, 8.4], "r": 0.5, "y": [0, 3.1], "look": "alien_dark" },
-        { "round": [-12, 8.4], "r": 0.5, "y": [0, 3.1], "look": "alien_dark" }
+        {"pod": [0, 10.2], "r": 1.0, "h": 1.6, "look": "alien_dark"}
       ]
     }
   ],
   "spawns": [
-    { "at": [-18.5, -4.5, 3.5], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-18.5, 4.5, 3.5], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-18, -3], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-18, 3], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-15.5, -11.5], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-15, 11], "team": "red", "yaw": 0, "mirror": true }
+    {
+      "at": [-18.8, -1.4],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    },
+    {
+      "at": [-18.8, 1.4],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    },
+    {
+      "at": [-19.0, -1.5, 3.5],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    },
+    {
+      "at": [-19.0, 1.5, 3.5],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    },
+    {
+      "at": [-16.5, 7.5],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    },
+    {
+      "at": [-15.0, -10.0],
+      "team": "red",
+      "yaw": 0,
+      "mirror": true
+    }
   ],
   "pads": [
-    { "weapon": "beam_rifle", "at": [0, 3.2, 3.5], "respawn": 90 },
-    { "weapon": "shotgun", "at": [0, -1.8], "respawn": 90 },
-    { "weapon": "carbine", "at": [-18.5, 0, 3.5], "respawn": 30, "mirror": true },
-    { "weapon": "shards", "at": [0, -11.8], "respawn": 45 },
-    { "weapon": "ion_pistol", "at": [-9, 11.5], "respawn": 45, "mirror": true }
+    {
+      "weapon": "beam_rifle",
+      "at": [0, 5.0, 3.5],
+      "respawn": 90
+    },
+    {
+      "weapon": "shotgun",
+      "at": [0, 2.4],
+      "respawn": 90
+    },
+    {
+      "weapon": "carbine",
+      "at": [-19.6, 0, 3.5],
+      "respawn": 30,
+      "mirror": true
+    },
+    {
+      "weapon": "shards",
+      "at": [0, -11.0],
+      "respawn": 45
+    },
+    {
+      "weapon": "ion_pistol",
+      "at": [-9.0, 11.0],
+      "respawn": 45,
+      "mirror": true
+    },
+    {
+      "weapon": "overshield",
+      "at": [0, -7.5],
+      "respawn": 120
+    }
   ],
   "launchers": [
-    { "at": [-13.9, 0], "to": [-17, 0, 3.5], "time": 1.1, "size": [1.2, 2.4], "mirror": true },
-    { "at": [0, -6.5], "to": [0, -1.3, 3.5], "time": 1.1, "size": [2, 2] }
+    {
+      "at": [-16.8, 0],
+      "to": [-14.100000000000001, 0, 3.5],
+      "time": 1.4,
+      "size": [1.4, 1.4],
+      "mirror": true
+    },
+    {
+      "at": [0, -2.4],
+      "to": [0, -5.2, 3.5],
+      "time": 1.6,
+      "size": [1.2, 1.2]
+    }
   ],
   "callouts": [
-    { "name": "top mid", "at": [0, 3, 3.5] },
-    { "name": "bottom mid", "at": [0, -1.8, 0] },
-    { "name": "red top", "at": [-17.5, 0, 3.5] },
-    { "name": "blue top", "at": [17.5, 0, 3.5] },
-    { "name": "red bubble", "at": [-12.5, 0, 0] },
-    { "name": "blue bubble", "at": [12.5, 0, 0] },
-    { "name": "red ramp", "at": [-9, -9.2, 1.7] },
-    { "name": "blue ramp", "at": [9, -9.2, 1.7] },
-    { "name": "south hall", "at": [0, -11.8, 0] },
-    { "name": "red gallery", "at": [-10, 7.2, 3.5] },
-    { "name": "blue gallery", "at": [10, 7.2, 3.5] }
+    {
+      "name": "top mid",
+      "at": [0, 5.0, 3.5]
+    },
+    {
+      "name": "bottom mid",
+      "at": [0, 2.4, 0]
+    },
+    {
+      "name": "the pit lift",
+      "at": [0, -2.4, 0]
+    },
+    {
+      "name": "red top",
+      "at": [-18.5, 0, 3.5]
+    },
+    {
+      "name": "blue top",
+      "at": [18.5, 0, 3.5]
+    },
+    {
+      "name": "red pod",
+      "at": [-18.5, 0, 0]
+    },
+    {
+      "name": "blue pod",
+      "at": [18.5, 0, 0]
+    },
+    {
+      "name": "red door",
+      "at": [-11.0, 0, 0]
+    },
+    {
+      "name": "blue door",
+      "at": [11.0, 0, 0]
+    },
+    {
+      "name": "red spiral",
+      "at": [-14.0, -4.85, 1.4]
+    },
+    {
+      "name": "blue spiral",
+      "at": [14.0, -4.85, 1.4]
+    },
+    {
+      "name": "red gallery",
+      "at": [-8.0, 7.5, 3.5]
+    },
+    {
+      "name": "blue gallery",
+      "at": [8.0, 7.5, 3.5]
+    },
+    {
+      "name": "north lane",
+      "at": [0, 12.0, 0]
+    },
+    {
+      "name": "south lane",
+      "at": [0, -11.0, 0]
+    }
   ],
   "light": {
     "ev100": 9.8,
@@ -229,19 +364,32 @@
     "fill": 0.03,
     "floor": "deck",
     "lamps": [
-      { "at": [-18, 0, 2.6], "color": [1, 0.6, 0.55], "lm": 150000, "mirror": true },
-      { "at": [-17.5, 0, 10.6], "color": [1, 0.72, 0.68], "lm": 600000, "mirror": true },
-      { "at": [0, 2.5, 10.6], "color": [0.8, 0.85, 1], "lm": 500000 },
-      { "at": [0, 0.5, 2.7], "color": [0.55, 0.85, 1], "lm": 150000 },
-      { "at": [-8, -11.5, 9.4], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true },
-      { "at": [-9, 11, 9.6], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true },
-      { "at": [-10, 7.2, 10.25], "color": [0.85, 0.85, 1], "lm": 450000, "mirror": true },
-      { "at": [-9, -12.2, 7.3], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true },
-      { "at": [-9, 12.2, 7.3], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true }
+      {"at": [-18.2, 0, 2.6], "color": [1, 0.6, 0.55], "lm": 150000, "mirror": true},
+      {"at": [-17.5, 0, 7.6], "color": [1, 0.72, 0.68], "lm": 600000, "mirror": true},
+      {"at": [0, 0, 2.6], "color": [0.55, 0.85, 1], "lm": 150000},
+      {"at": [0, -5.0, 6.9], "color": [0.8, 0.85, 1], "lm": 500000},
+      {"at": [0, 5.0, 6.9], "color": [0.8, 0.85, 1], "lm": 450000},
+      {"at": [0, 0, 5.5], "color": [0.95, 0.6, 1], "lm": 250000},
+      {"at": [-8.0, -11.0, 6.6], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true},
+      {"at": [-9.0, 11.0, 6.6], "color": [0.8, 0.82, 1], "lm": 800000, "mirror": true},
+      {"at": [-8.0, 7.5, 6.8], "color": [0.85, 0.85, 1], "lm": 400000, "mirror": true},
+      {"at": [-12.0, -12.4, 7.0], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true},
+      {"at": [-12.0, 12.4, 7.0], "color": [0.9, 0.72, 1], "lm": 180000, "mirror": true}
     ]
   },
   "roam": [
-    [0, -1.8], [0, -11.8], [-9, 11], [9, 11], [-18, 0], [18, 0], [0, -6.5],
-    [-8, -11.5], [8, -11.5], [-8, 3], [8, 3], [-13.9, 0], [13.9, 0]
+    [0, 2.4],
+    [0, -11.0],
+    [-9.0, 11.0],
+    [9.0, 11.0],
+    [-18.5, 0],
+    [18.5, 0],
+    [0, -2.4],
+    [-5.0, -7.5],
+    [5.0, -7.5],
+    [-11.0, 0],
+    [11.0, 0],
+    [-16.5, 7.5],
+    [16.5, 7.5]
   ]
 }

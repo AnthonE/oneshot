@@ -82,7 +82,21 @@ impl Gate {
         // doesn't compile until it has one.
         for k in sim::thing::Kind::ALL {
             match k {
-                sim::thing::Kind::Fighter => {}
+                // 11. A fighter sent shows its overshield and camouflage
+                // as they are now, and nothing more (never the
+                // camouflage's time left).
+                sim::thing::Kind::Fighter => {
+                    for r in s.remotes() {
+                        let t = proto::Remote::of(r.slot, &w.fighters[r.slot as usize]);
+                        assert_eq!(
+                            (r.over, r.cloak),
+                            (t.over, t.cloak),
+                            "tick {}: seat {}'s overshield or camouflage",
+                            w.tick,
+                            r.slot
+                        );
+                    }
+                }
                 // 8. A projectile is sent only if its owner is known to
                 // this client or it is in clear line of sight.
                 sim::thing::Kind::Projectile => {

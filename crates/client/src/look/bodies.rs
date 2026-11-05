@@ -13,7 +13,7 @@
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
 
-use std::collections::BTreeMap;
+use sim::consts::MAX_FIGHTERS;
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::NotShadowCaster;
@@ -78,10 +78,20 @@ pub struct Body {
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
     mats: Vec<Handle<BodyMaterial>>,
+    /// A rag doll poses it ([`Body::go_limp`]).
+    limp: bool,
     lit: f32,
+    /// When the flare was last put on them (s, the app's clock).
+    lit_at: f32,
+    /// The shell's colour and fill last put on it (`Glow`), and whether
+    /// camouflage hides the body's own meshes and its hand.
+    tone: Vec4,
+    hidden: bool,
     /// The shield's shell (`shield.rs`): its material and its meshes.
     shell: Handle<ShieldMaterial>,
     shells: Vec<Entity>,
+    /// The body's own meshes, which camouflage hides.
+    parts: Vec<Entity>,
     /// Shown again after hiding: its next clip starts at once.
     fresh: bool,
     /// How it moves (`anim.rs`), and what its player plays.
@@ -112,6 +122,13 @@ impl Body {
         self.gait = Gait::default();
         self.fresh = true;
         self.drawn = false;
+        self.limp = false;
+    }
+
+    /// A rag doll has it now (`rag.rs`): its root is the doll's, not the
+    /// snapshot's, till it gets up or is hidden (`afresh`).
+    pub fn go_limp(&mut self) {
+        self.limp = true;
     }
 
     /// Alive now, and the frame before (none: not drawn then).
@@ -159,7 +176,12 @@ pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entit
 fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
-        .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
+        .spawn((
+            Transform::from_translation(HAND),
+            Visibility::default(),
+            BodyPart,
+            ChildOf(root),
+        ))
         .id();
     commands
         .spawn((
@@ -178,9 +200,14 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         hand,
         held: 0,
         mats: Vec::new(),
+        limp: false,
         lit: 0.0,
+        lit_at: f32::NEG_INFINITY,
+        tone: Vec4::ZERO,
+        hidden: false,
         shell: Handle::default(),
         shells: Vec::new(),
+        parts: Vec::new(),
         fresh: false,
         gait: Gait::default(),
         playing: Playing::default(),
@@ -367,53 +394,132 @@ fn dress(
                 },
             });
             body.mats.push(h.clone());
-            commands
-                .entity(e)
-                .remove::<MeshMaterial3d<StandardMaterial>>()
-                .insert((MeshMaterial3d(h), NoFrustumCulling));
+            body.parts.push(e);
+            commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert((
+                MeshMaterial3d(h),
+                NoFrustumCulling,
+                BodyPart,
+            ));
         }
     }
 }
 
-/// The light the shell casts on the body under it, gold, at a flare of 1:
-/// a share of a white surface's brightness in full sun.
-const FLARE_GOLD: [f32; 3] = [0.25, 0.18, 0.05];
+/// A body's own mesh, or its hand (and the gun in it): what camouflage
+/// hides.
+#[derive(Component)]
+pub struct BodyPart;
 
-/// The shield's flare on a body: `level` 0 is none (`fx/bodies.rs`). The
-/// shell shows at that level, and the body under it takes a little gold.
+/// What shows and hides by itself on a body: its shield's shells, and its
+/// own meshes and hand.
+pub type Parts<'w, 's> = Query<'w, 's, &'static mut Visibility, Or<(With<ShellPart>, With<BodyPart>)>>;
+
+/// The light the shell casts on the body under it at a flare of 1, gold
+/// (the shield) or green (an overshield): a share of a white surface's
+/// brightness in full sun.
+const FLARE_GOLD: [f32; 3] = [0.25, 0.18, 0.05];
+const FLARE_OVER: [f32; 3] = [0.06, 0.24, 0.12];
+
+/// An overshield's shell: green, never under `OVER_REST` while it is on.
+pub const OVER: Vec3 = Vec3::new(0.7, 3.0, 1.3);
+const OVER_REST: f32 = 0.32;
+/// Camouflage: hidden past `CAMO_HIDE`, the body is only a pale rim and
+/// the crawl of lines (the shell with no fill), `CAMO_EDGE` bright just
+/// past it, down to `CAMO_FAINT` at its best.
+pub const CAMO: Vec3 = Vec3::new(1.4, 1.8, 2.3);
+const CAMO_HIDE: f32 = 0.3;
+const CAMO_EDGE: f32 = 0.6;
+const CAMO_FAINT: f32 = 0.08;
+
+/// What a body's shell shows this frame: the shield's flare (`fx/bodies.rs`,
+/// 0 none), an overshield, and how hidden its camouflage keeps it (0..1).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Glow {
+    pub hit: f32,
+    pub over: bool,
+    pub cloak: f32,
+}
+
+impl Glow {
+    /// The shell's colour (rgb) and fill (w: 1 rim and lines only), its
+    /// level, and whether the body itself is hidden.
+    fn shell(self) -> (Vec4, f32, bool) {
+        if self.cloak > CAMO_HIDE {
+            let best = sim::consts::CAMO_BEST;
+            let k = ((self.cloak - CAMO_HIDE) / (best - CAMO_HIDE)).clamp(0.0, 1.0);
+            let level = CAMO_EDGE + (CAMO_FAINT - CAMO_EDGE) * k;
+            (CAMO.extend(1.0), level.max(self.hit * 0.5), true)
+        } else if self.over {
+            (OVER.extend(0.0), self.hit.max(OVER_REST), false)
+        } else {
+            (super::shield::GOLD.extend(0.0), self.hit, false)
+        }
+    }
+}
+
+/// How often a flare that only eases is put on a body's materials, and how
+/// big a step of its level is put on at once (a hit's flash).
+const FLARE_HZ: f32 = 30.0;
+const FLARE_JUMP: f32 = 0.1;
+
+/// A body's shell and skin this frame (`Glow`): the shell shows at its
+/// level and colour, the body under it takes a little of the light, and
+/// camouflage hides the body and its gun, leaving the shell's rim.
 pub fn flare(
     root: Entity,
-    level: f32,
+    glow: Glow,
+    t: f32,
     bodies: &mut Query<&mut Body>,
     mats: &mut Assets<BodyMaterial>,
     shield_mats: &mut Assets<ShieldMaterial>,
-    shells: &mut Query<&mut Visibility, With<ShellPart>>,
+    parts: &mut Parts,
 ) {
+    // Its shells and meshes come with its scene: till then, nothing to set.
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
     };
-    if (level - body.lit).abs() < 0.02 && (level > 0.0 || body.lit == 0.0) {
+    if !body.dressed {
         return;
     }
+    let (tone, level, hidden) = glow.shell();
+    let same = (level - body.lit).abs() < 0.02 && (level > 0.0 || body.lit == 0.0);
+    if same && tone == body.tone && hidden == body.hidden {
+        return;
+    }
+    // Only the level easing (a recharge's shimmer, a hit fading) goes at
+    // most FLARE_HZ: each write remakes the shell's and the body's material
+    // bindings, every frame of a recharge for everyone recharging.
+    let easing = (level - body.lit).abs() < FLARE_JUMP && (level > 0.0) == (body.lit > 0.0);
+    if easing && tone == body.tone && hidden == body.hidden && t - body.lit_at < 1.0 / FLARE_HZ {
+        return;
+    }
+    body.lit_at = t;
     let shown = level > 0.0;
+    let show = |on: bool| if on { Visibility::Inherited } else { Visibility::Hidden };
     if shown != (body.lit > 0.0) {
         for &e in &body.shells {
-            if let Ok(mut v) = shells.get_mut(e) {
-                *v = if shown {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                };
+            if let Ok(mut v) = parts.get_mut(e) {
+                *v = show(shown);
+            }
+        }
+    }
+    if hidden != body.hidden {
+        for &e in body.parts.iter().chain(core::iter::once(&body.hand)) {
+            if let Ok(mut v) = parts.get_mut(e) {
+                *v = show(!hidden);
             }
         }
     }
     body.lit = level;
+    body.tone = tone;
+    body.hidden = hidden;
     if let Some(m) = shield_mats.get_mut(&body.shell) {
-        m.extension.color.w = level;
+        m.extension.color = tone.truncate().extend(level);
+        m.extension.params.z = tone.w;
     }
     let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
-    let k = level * sun;
-    let e = LinearRgba::rgb(FLARE_GOLD[0] * k, FLARE_GOLD[1] * k, FLARE_GOLD[2] * k);
+    let k = if hidden { 0.0 } else { level * sun };
+    let c = if glow.over { FLARE_OVER } else { FLARE_GOLD };
+    let e = LinearRgba::rgb(c[0] * k, c[1] * k, c[2] * k);
     for h in &body.mats {
         if let Some(m) = mats.get_mut(h) {
             m.base.emissive = e;
@@ -451,8 +557,12 @@ pub fn pose(
         Some((hull, s)) if s == sim::vehicle::DRIVER => hull,
         _ => d.yaw,
     };
-    if let Ok(mut t) = at.get_mut(root) {
-        *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
+    // A corpse's root is its rag doll's: written here as well, the whole
+    // skeleton under it would go round the transforms again every frame.
+    if !(body.limp && !d.alive) {
+        if let Ok(mut t) = at.get_mut(root) {
+            t.set_if_neq(Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw)));
+        }
     }
     // Every gun hangs at the same `HAND`, at the chest, where the long
     // hold puts both hands. The pistol clip is Gates' first-person arms
@@ -492,8 +602,12 @@ pub fn pose(
         body.held = arm;
     }
     if let Ok(mut t) = at.get_mut(body.hand) {
-        t.translation = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
-        t.rotation = Quat::from_rotation_z(d.pitch);
+        let hand = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
+        let turn = Quat::from_rotation_z(d.pitch);
+        if t.translation != hand || t.rotation != turn {
+            t.translation = hand;
+            t.rotation = turn;
+        }
     }
 }
 
@@ -536,6 +650,16 @@ pub fn drive(
                 .insert((AnimationGraphHandle(rig.graph.clone()), AnimationTransitions::new()));
             continue;
         };
+        // Hidden (fog, a parked shadow): nothing plays. A clip left running
+        // is sampled into a skeleton nobody sees every frame; shown again,
+        // it starts afresh (`Body::afresh`).
+        if !body.drawn {
+            if player.playing_animations().next().is_some() {
+                player.stop_all();
+                body.playing = Playing::default();
+            }
+            continue;
+        }
         let b = &mut *body;
         // Spent on the first clip it starts, not while it is still hidden.
         let fresh = b.fresh && b.gait.clip.is_some();
@@ -579,8 +703,15 @@ pub fn pose_hands(
 
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
-pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {
+/// Not a rag doll's (it poses every bone) nor a hidden body's.
+pub fn pose_spines(
+    mut q: Query<(&Body, &mut SpineBones), Without<super::rag::Ragdoll>>,
+    mut bones: Query<&mut Transform>,
+) {
     for (b, mut spine) in &mut q {
+        if !b.drawn {
+            continue;
+        }
         let pose = SpinePose {
             clip: b.gait.clip,
             pitch: b.gait.pitch,
@@ -593,12 +724,12 @@ pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut
 }
 
 /// Each rider's vehicle and seat, by slot.
-pub fn seats(vehicles: &[DrawnVehicle]) -> BTreeMap<u8, (DrawnVehicle, usize)> {
-    let mut out = BTreeMap::new();
+pub fn seats(vehicles: &[DrawnVehicle]) -> [Option<(DrawnVehicle, usize)>; MAX_FIGHTERS] {
+    let mut out = [None; MAX_FIGHTERS];
     for v in vehicles {
         for (k, &s) in v.seats.iter().enumerate() {
-            if s > 0 {
-                out.insert(s - 1, (*v, k));
+            if let Some(o) = s.checked_sub(1).and_then(|i| out.get_mut(i as usize)) {
+                *o = Some((*v, k));
             }
         }
     }

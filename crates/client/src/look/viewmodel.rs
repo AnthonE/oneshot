@@ -354,6 +354,10 @@ const SHELL_HEX: f32 = 9.0;
 /// (`shield.wgsl`): it fills the frame's corner, so it is a crackle over
 /// the arms, not a coat of gold.
 const SHELL_IN_VIEW: f32 = 0.22;
+/// Our overshield, and our camouflage, on the arms in view: never under
+/// these while on (in their shells' colours, `bodies.rs`).
+const OVER_IN_VIEW: f32 = 0.12;
+const CAMO_IN_VIEW: f32 = 0.3;
 
 /// The shell the arms and the gun in view wear.
 #[derive(Resource)]
@@ -374,7 +378,8 @@ pub fn kit(mut commands: Commands, mut shells: ResMut<Assets<ShieldMaterial>>) {
 }
 
 /// Our shield on the arms and the gun in view: as bright as its flare
-/// (`fx/bodies.rs`), hidden while it is quiet.
+/// (`fx/bodies.rs`), hidden while it is quiet, green and never quite gone
+/// while an overshield is on, a pale shimmer under camouflage.
 pub fn shimmer(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
@@ -387,16 +392,24 @@ pub fn shimmer(
         return;
     };
     let core = &link.0.session().core;
-    let level = if core.own().0.alive {
+    let f = core.own().0;
+    let hit = if f.alive {
         fx.was.flare(core.slot, time.elapsed_secs()) * SHELL_IN_VIEW
     } else {
         0.0
     };
+    let (rgb, level) = match () {
+        _ if f.alive && f.camo > 0 => (super::bodies::CAMO, hit.max(CAMO_IN_VIEW)),
+        _ if f.alive && f.overshield() => (super::bodies::OVER, hit.max(OVER_IN_VIEW)),
+        _ => (super::shield::GOLD, hit),
+    };
     let on = level > 0.004;
+    let want = rgb.extend(if on { level } else { 0.0 });
     if let Some(m) = shells.get(&kit.shell) {
-        if (m.extension.color.w - level).abs() > 0.002 || (!on && m.extension.color.w != 0.0) {
+        let c = m.extension.color;
+        if (c.w - want.w).abs() > 0.002 || c.truncate() != rgb || (!on && c.w != 0.0) {
             if let Some(m) = shells.get_mut(&kit.shell) {
-                m.extension.color.w = if on { level } else { 0.0 };
+                m.extension.color = want;
             }
         }
     }

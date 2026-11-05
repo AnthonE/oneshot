@@ -95,6 +95,17 @@ pub struct Flying {
     lit: bool,
 }
 
+/// [`projectiles`]' lists: the models there are and which are taken, the
+/// rounds that get one, and which kept theirs.
+#[derive(Default)]
+pub struct Scratch {
+    pool: Vec<(Entity, bool, u16, bool)>,
+    taken: Vec<bool>,
+    go: Vec<(Entity, DrawnProj, bool)>,
+    live: Vec<DrawnProj>,
+    matched: Vec<bool>,
+}
+
 /// The rounds in flight this frame, as drawn at the render tick.
 #[allow(clippy::too_many_arguments)]
 pub fn projectiles(
@@ -116,14 +127,26 @@ pub fn projectiles(
     // id (so a rocket's trail stays its own), else takes a hidden one of
     // its kind, else a new one; the rest are hidden. Never despawned: a
     // model made mid-fight is a scene spawned mid-fight.
-    let mut pool: Vec<(Entity, bool, u16, bool)> = have
-        .iter()
-        .map(|(e, f, _, v)| (e, f.kind == ROCKET, f.id, *v != Visibility::Hidden))
-        .collect();
-    let mut taken = vec![false; pool.len()];
-    let mut go: Vec<(Entity, DrawnProj, bool)> = Vec::new();
-    let live: Vec<&DrawnProj> = proj.iter().filter(|p| modelled(p.kind)).collect();
-    let mut matched = vec![false; live.len()];
+    let mut scratch = std::mem::take(&mut fx.fly);
+    let Scratch {
+        pool,
+        taken,
+        go,
+        live,
+        matched,
+    } = &mut scratch;
+    pool.clear();
+    pool.extend(
+        have.iter()
+            .map(|(e, f, _, v)| (e, f.kind == ROCKET, f.id, *v != Visibility::Hidden)),
+    );
+    taken.clear();
+    taken.resize(pool.len(), false);
+    go.clear();
+    live.clear();
+    live.extend(proj.iter().filter(|p| modelled(p.kind)));
+    matched.clear();
+    matched.resize(live.len(), false);
     // First every shown model to its own round, then the rest a free
     // model, hidden ones first, then a new one.
     for (i, p) in live.iter().enumerate() {
@@ -131,7 +154,7 @@ pub fn projectiles(
         if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == rocket && pool[k].2 == p.id) {
             matched[i] = true;
             taken[k] = true;
-            go.push((pool[k].0, **p, false));
+            go.push((pool[k].0, *p, false));
         }
     }
     for (i, p) in live.iter().enumerate() {
@@ -145,7 +168,7 @@ pub fn projectiles(
         match free {
             Some(k) => {
                 taken[k] = true;
-                go.push((pool[k].0, **p, true));
+                go.push((pool[k].0, *p, true));
             }
             None => {
                 let e = spawn(commands, fx, models, p);
@@ -163,7 +186,7 @@ pub fn projectiles(
             }
         }
     }
-    for (e, p, fresh) in go {
+    for &(e, p, fresh) in go.iter() {
         let Ok((_, mut f, mut tr, mut v)) = have.get_mut(e) else {
             continue;
         };
@@ -228,6 +251,7 @@ pub fn projectiles(
         }
         f.lit = lit;
     }
+    fx.fly = scratch;
 }
 
 /// A glow that lives one frame.
@@ -343,7 +367,7 @@ pub fn crystal(fx: &mut Fx, p: &ProjState) {
 /// ended on the map leaves a burn on the face it met (`marks.rs`), only
 /// ever for a bolt the server sent us.
 fn ended(fx: &mut Fx, map: &sim::map::Map, proj: &[DrawnProj], others: &[Drawn], t: f32, dt: f32) {
-    let last = std::mem::take(&mut fx.last_light);
+    let mut last = std::mem::take(&mut fx.last_light);
     {
         for was in &last {
             // Still flying: its id, and its kind (an id may come round again).
@@ -372,8 +396,10 @@ fn ended(fx: &mut Fx, map: &sim::map::Map, proj: &[DrawnProj], others: &[Drawn],
             }
         }
     }
-    fx.last_light.clear();
-    fx.last_light.extend(proj.iter().filter(|p| !modelled(p.kind)).copied());
+    // The same Vec again, refilled: taken above only to read it beside `fx`.
+    last.clear();
+    last.extend(proj.iter().filter(|p| !modelled(p.kind)).copied());
+    fx.last_light = last;
 }
 
 /// The face a bolt from `wp` flying `wv` met in its last frame, if it met
