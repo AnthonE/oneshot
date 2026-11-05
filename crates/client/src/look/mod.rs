@@ -6,6 +6,7 @@ pub mod bodies;
 pub mod cliffs;
 pub mod cloud_shadow;
 pub mod clutter;
+pub mod curve;
 pub mod deck;
 pub mod emblem;
 pub mod fill;

@@ -372,6 +372,10 @@ pub const DEF: Def = Def {
     ],
     dress_solids: &[
     ],
+    profiles: &[
+    ],
+    dress_profiles: &[
+    ],
     nav: false,
     flags: &[[-91.0, 0.0, 0.0], [91.0, 0.0, 0.0]],
     light: crate::map::LightDef {

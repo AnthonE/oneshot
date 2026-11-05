@@ -20,6 +20,7 @@ pub mod maps;
 pub mod movement;
 pub mod nav;
 pub mod pool;
+pub mod profile;
 pub mod rewind;
 pub mod rng;
 pub mod solid;

@@ -150,6 +150,10 @@ pub const DEF: Def = Def {
     ],
     dress_solids: &[
     ],
+    profiles: &[
+    ],
+    dress_profiles: &[
+    ],
     nav: false,
     flags: &[[-22.0, 0.0, 0.0], [22.0, 0.0, 0.0]],
     light: crate::map::LightDef::DAY,

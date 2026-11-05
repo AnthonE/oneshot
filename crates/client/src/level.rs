@@ -921,12 +921,17 @@ pub fn build(
         .dress_solids
         .iter()
         .map(|&(k, n, l)| (sim::solid::Solid::from_def(k, n), l));
+    let dress_profiles = def
+        .dress_profiles
+        .iter()
+        .map(|&(k, n, kn, l)| (sim::solid::Solid::profile(k, n, kn), l));
     for (sol, l) in map
         .solids
         .iter()
         .copied()
         .zip(map.solid_looks.iter().copied())
         .chain(dress_solids)
+        .chain(dress_profiles)
     {
         let sol = &sol;
         if l == HIDDEN {
@@ -993,7 +998,9 @@ pub fn build(
                 hidden: 0,
                 own_value: false,
             },
-            sim::solid::Shape::Ramp { .. } => {
+            // No wear either: the edges a box's wear is laid along aren't
+            // there on a curve.
+            sim::solid::Shape::Ramp { .. } | sim::solid::Shape::Revolve { .. } | sim::solid::Shape::Sweep { .. } => {
                 let (a, b) = (bounds.min, bounds.max);
                 let mid = Vec3::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
                 Block {
@@ -1025,6 +1032,12 @@ pub fn build(
                 Some(m) => (m, Transform::default()),
                 None => continue,
             },
+            sim::solid::Shape::Revolve { .. } | sim::solid::Shape::Sweep { .. } => {
+                match crate::look::curve::profile_mesh(sol, tile) {
+                    Some(m) => (m, Transform::default()),
+                    None => continue,
+                }
+            }
         };
         let mut e = commands.spawn((LevelPart, Mesh3d(meshes.add(mesh)), MeshMaterial3d(mat), at));
         if glow.is_some() {
