@@ -119,11 +119,12 @@ codegen-units = 1
 # The browser's build (ci/client.sh), after Gates' `[profile.web]`: the whole
 # program optimised as one, at 3 rather than "s" (Gates measured its sim
 # 19-25% faster in V8 for ~25% more bytes; the frame is CPU on one thread).
-# wasm-bindgen drops the name section; `strip` drops the rest.
+# No `strip`: wasm-bindgen's --remove-name-section drops the names (the bulk
+# Gates strips for), and `strip` would take the `target_features` section
+# wasm-bindgen reads the module's features from.
 [profile.web]
 inherits = "release"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-strip = true
 panic = "abort"

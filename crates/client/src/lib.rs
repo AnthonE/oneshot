@@ -347,6 +347,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "oneshot".into(),
+                    // WM_CLASS on X11, app_id on Wayland: what a desktop entry matches.
+                    name: Some("oneshot".into()),
                     canvas: Some("#game".into()),
                     fit_canvas_to_parent: true,
                     ..default()

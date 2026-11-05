@@ -16,7 +16,7 @@
 # with. The server serves dist by default:
 #   target/release/oneshot-server --web crates/client/dist
 # The browser's build is its own profile (crates/client/Cargo.toml: opt-level
-# 3, fat LTO, stripped), then wasm-opt -Os where there is one (`npm ci`
+# 3, fat LTO, no name section), then wasm-opt -Os where there is one (`npm ci`
 # brings binaryen). Needs wasm-bindgen-cli at the version in
 # crates/client/Cargo.lock.
 set -eu
