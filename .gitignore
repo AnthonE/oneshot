@@ -3,3 +3,5 @@ node_modules
 traces/
 board/passes/
 moodboard/
+# Downloads as they came (tools/models/truck.py reads the truck from here)
+/sources/
