@@ -10,7 +10,7 @@ use crate::fmath;
 use crate::geom::{rad_to_yaw, V3};
 use crate::input::*;
 use crate::rng::Pcg32;
-use crate::world::{Phase, Rules, World};
+use crate::world::{Phase, Rules, World, FLAG_HOME};
 
 #[derive(Clone, Copy)]
 pub struct Bot {
@@ -54,6 +54,9 @@ const VEHICLE_WALK: f32 = 25.0;
 /// or below it may be: on its own level, as it walks there straight.
 const LOOT_M: f32 = 20.0;
 const LOOT_RISE: f32 = 0.6;
+/// Capture the Flag: an attacker on its way ignores enemies farther than
+/// this.
+const OBJECTIVE_IGNORE_M: f32 = 30.0;
 /// A bot's waist, for a straight walk's line.
 const WAIST: f32 = 0.9;
 
@@ -149,6 +152,53 @@ impl Bot {
     }
 
     /// USE pressed this tick, as a tap: let go first if it was held.
+    /// Capture the Flag: where this bot wants to be with nobody in sight.
+    /// Half of each side attacks ([`attacker`]: the enemy's flag, or with
+    /// the teammate carrying it), the other half defends (their own flag while it is away, else their base); a
+    /// carrier runs home. None: nothing to do but roam.
+    fn objective(w: &World, slot: usize) -> Option<V3> {
+        let bases = w.map.flags.filter(|_| w.rules.ctf)?;
+        let me = &w.fighters[slot];
+        let mine = me.team as usize & 1;
+        if me.flag {
+            return Some(bases[mine]);
+        }
+        let theirs = &w.flags[mine ^ 1];
+        let ours = &w.flags[mine];
+        // Held, the enemy's flag is where its carrier (one of ours) is: an
+        // attacker goes along.
+        if attacker(slot) {
+            return Some(theirs.pos);
+        }
+        // A defender goes after its own flag while it is away, and
+        // otherwise holds its base (a few metres off the flag, its own way).
+        if ours.state != FLAG_HOME {
+            return Some(ours.pos);
+        }
+        let off = (slot / 4) as f32 * 1.7;
+        Some(bases[mine] + V3::new(fmath::cos(off) * 4.0, 0.0, fmath::sin(off) * 4.0))
+    }
+
+    /// Where to steer for `goal` from `at`: straight if the way is clear at
+    /// the waist, else the map's roam point in clear sight that is nearest
+    /// the goal and nearer it than we are (a step around what's between).
+    fn toward(w: &World, at: V3, goal: V3) -> V3 {
+        let waist = V3::new(0.0, WAIST, 0.0);
+        if w.map.clear(at + waist, goal + waist) {
+            return goal;
+        }
+        let mut best = goal;
+        let mut bd = (goal - at).flat().len() - 1.0;
+        for &r in &w.map.roam {
+            let d = (goal - r).flat().len();
+            if d < bd && (r - at).flat().len() > GOAL_NEAR && w.map.clear(at + waist, r + waist) {
+                bd = d;
+                best = r;
+            }
+        }
+        best
+    }
+
     fn tap_use(inp: &mut Input, last: u16) {
         if last & USE == 0 {
             inp.buttons |= USE;
@@ -212,6 +262,7 @@ impl Bot {
         self.ride_cool = self.ride_cool.saturating_sub(1);
         let eye = me.eye();
         // The nearest enemy it can see (one well camouflaged only near).
+        let objective = attacker(slot) && Self::objective(w, slot).is_some();
         let mut best = 255u8;
         let mut near = f32::INFINITY;
         for (q, v) in w.fighters.iter().enumerate() {
@@ -220,6 +271,10 @@ impl Bot {
             }
             let chest = v.body.pos + V3::new(0.0, 1.2, 0.0);
             let d = (chest - eye).len();
+            // An attacker with a flag to go for lets the far ones be.
+            if objective && d > OBJECTIVE_IGNORE_M {
+                continue;
+            }
             let unseen = v.cloak() > CAMO_BOT_HIDDEN && d > CAMO_BOT_M;
             if d < near && !unseen && w.map.clear(eye, chest) {
                 near = d;
@@ -248,6 +303,24 @@ impl Bot {
                     self.ride_for = 0;
                     self.ride_cool = ticks(RIDE_COOL_MS) as u16;
                 }
+            }
+        }
+
+        // A carrier can't shoot: it runs home, swinging at whoever is in
+        // its way.
+        if me.flag && me.riding().is_none() {
+            if let Some(home) = Self::objective(w, slot) {
+                let to = Self::toward(w, me.body.pos, home) - me.body.pos;
+                inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
+                inp.pitch = 0;
+                inp.mz = 127;
+                if near < MELEE_RANGE {
+                    inp.buttons |= MELEE;
+                }
+                if self.unit() < 0.01 {
+                    inp.buttons |= JUMP;
+                }
+                return inp;
             }
         }
 
@@ -308,6 +381,14 @@ impl Bot {
                 }
                 return inp;
             }
+            // Capture the Flag: to its flag business.
+            if let Some(at) = Self::objective(w, slot) {
+                let to = Self::toward(w, me.body.pos, at) - me.body.pos;
+                inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
+                inp.pitch = 0;
+                inp.mz = 127;
+                return inp;
+            }
             // Else to a free vehicle near if it may, else the roam goal.
             let free = (self.ride_cool == 0 && me.riding().is_none())
                 .then(|| {
@@ -363,16 +444,31 @@ impl Bot {
         let tp = (want_pitch - cur_pitch).clamp(-max_turn, max_turn);
         inp.pitch = fmath::round((cur_pitch + tp) * 65536.0).clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
 
-        // Keep a fighting distance and strafe; with a sword, close in.
+        // Keep a fighting distance and strafe; with a sword, close in. An
+        // attacker in Capture the Flag fights on the move to the flag.
         let a = arm(g.arm);
-        inp.mz = if a.kind == crate::arms::Kind::Sword || near > 14.0 {
-            127
-        } else if near < 6.0 {
-            -100
-        } else {
-            0
-        };
-        inp.mx = self.strafe * 127;
+        let push = if attacker(slot) { Self::objective(w, slot) } else { None };
+        match push
+            .map(|at| (Self::toward(w, me.body.pos, at) - me.body.pos).flat())
+            .filter(|to| to.len() > 0.5)
+        {
+            Some(to) => {
+                let (sn, cs) = crate::geom::yaw_sincos(inp.yaw);
+                let d = to * (1.0 / to.len());
+                inp.mz = ((cs * d.x + sn * d.z) * 127.0) as i8;
+                inp.mx = ((-sn * d.x + cs * d.z) * 127.0) as i8;
+            }
+            None => {
+                inp.mz = if a.kind == crate::arms::Kind::Sword || near > 14.0 {
+                    127
+                } else if near < 6.0 {
+                    -100
+                } else {
+                    0
+                };
+                inp.mx = self.strafe * 127;
+            }
+        }
 
         let react = (TICK_HZ as f32 * (0.6 - 0.35 * self.skill)) as u16;
         let on = fmath::fabs(dy) < 0.006 + 0.01 * rough && self.seen > react;
@@ -397,6 +493,12 @@ impl Bot {
     }
 }
 
+/// Capture the Flag: whether the bot in `slot` attacks or defends. Seats
+/// alternate sides (`slot & 1`), so the role alternates within a side.
+fn attacker(slot: usize) -> bool {
+    (slot / 2).is_multiple_of(2)
+}
+
 /// A whole bot match, for the determinism gate: four bots, red against
 /// blue, a high score limit so it never ends, each seat checked a different
 /// depth back to exercise the rewind. Returns the world's hash, folded over
@@ -406,7 +508,8 @@ pub fn bot_match(seed: u64, ticks_n: u32) -> u64 {
 }
 
 /// [`bot_match`] on map `map` in `mode`: 0 Doubles, 1 an eight-seat Gun
-/// Game, 2 a sixteen-seat Big Team. What `ci/parity.sh` runs on every map.
+/// Game, 2 a sixteen-seat Big Team, 3 Capture the Flag (on a map with
+/// flags). What `ci/parity.sh` runs on every map.
 /// 0 if there is no such map or mode.
 pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
     let Some(m) = crate::map::by_id(map) else {
@@ -416,6 +519,7 @@ pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
         0 => Rules::doubles(),
         1 => Rules::gun_game(),
         2 => Rules::big_team(),
+        3 if m.flags.is_some() => Rules::ctf(),
         _ => return 0,
     };
     let rules = Rules {

@@ -1701,7 +1701,7 @@ fn drawn(r: &Remote) -> Drawn {
         arm: r.arm,
         shield: r.shield,
         over: r.over,
-        cloak: r.cloak.min(15) as f32 / 15.0,
+        cloak: (r.cloak as f32 / proto::CLOAK_STEPS).min(1.0),
     }
 }
 

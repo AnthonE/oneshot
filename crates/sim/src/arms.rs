@@ -121,8 +121,11 @@ pub struct Arm {
     pub falloff: f32,
     pub falloff_min: f32,
     pub reload_ms: u32,
-    /// Scope magnification, for the client.
+    /// Scope magnification, for the client (1: no scope), and a second
+    /// level a further click steps to (0: none). Halo 2's: 2x on the
+    /// rifles and launchers, 5x then 10x on the snipers.
     pub zoom: u8,
+    pub zoom2: u8,
     /// Rocket speed off the tube in m/s, rising (evenly over distance) to
     /// `speed_max` once it has flown `ramp` m.
     pub speed: f32,
@@ -174,6 +177,22 @@ pub struct Arm {
 }
 
 impl Arm {
+    /// The magnification at scope level `level` (0 unscoped, 1, 2), 1 for
+    /// none.
+    pub fn zoom_at(&self, level: u8) -> u8 {
+        match level {
+            0 => 1,
+            1 => self.zoom.max(1),
+            _ if self.zoom2 > 1 => self.zoom2,
+            _ => self.zoom.max(1),
+        }
+    }
+
+    /// Scope levels: 0, 1 or 2.
+    pub fn zoom_levels(&self) -> u8 {
+        (self.zoom > 1) as u8 + (self.zoom > 1 && self.zoom2 > 1) as u8
+    }
+
     pub fn hot(&self) -> bool {
         self.heat_shot > 0
     }
@@ -222,6 +241,7 @@ const BASE: Arm = Arm {
     falloff_min: 1.0,
     reload_ms: 2000,
     zoom: 1,
+    zoom2: 0,
     speed: 0.0,
     speed_max: 0.0,
     ramp: 1.0,
@@ -290,14 +310,14 @@ pub static ARMS: [Arm; COUNT] = [
         aim_range: 30.0,
         rank: 1,
         refire_ms: 176,
-        mag: 8,
-        reserve: 40,
+        // Halo 2's: 12 a magazine, 48 more, and no scope.
+        mag: 12,
+        reserve: 48,
         dmg: 28,
         head: Head::Unshielded,
         spread: q14(4.0),
         range: 110.0,
         reload_ms: 1280,
-        zoom: 2,
         dual: true,
         dual_spread: q14(14.0),
         ..BASE
@@ -314,15 +334,17 @@ pub static ARMS: [Arm; COUNT] = [
         range: 420.0,
         reload_ms: 1920,
         zoom: 5,
+        zoom2: 10,
         ..BASE
     },
     Arm {
         name: "SHOTGUN",
         aim_range: 10.0,
         rank: 5,
-        refire_ms: 840,
-        mag: 6,
-        reserve: 18,
+        // Halo 2's: a second a shell, 12 in the tube and 36 more.
+        refire_ms: 1000,
+        mag: 12,
+        reserve: 36,
         // Halo 2's: ten pellets, seven of them a kill.
         dmg: 29,
         spread: q14(260.0),
@@ -362,8 +384,9 @@ pub static ARMS: [Arm; COUNT] = [
         auto: true,
         // Halo 2's: 15 rounds a second, 25 to kill.
         refire_ms: 67,
-        mag: 48,
-        reserve: 192,
+        // Halo 2's: 60 a magazine, 180 more.
+        mag: 60,
+        reserve: 180,
         dmg: 8,
         spread: q14(80.0),
         range: 50.0,
@@ -423,6 +446,7 @@ pub static ARMS: [Arm; COUNT] = [
         head: Head::Always,
         range: 366.0,
         zoom: 5,
+        zoom2: 10,
         heat_shot: 65,
         heat_cool: 58,
         heat_vent: 30,

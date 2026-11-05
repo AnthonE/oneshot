@@ -32,4 +32,16 @@ for map in $(sed -n 's/^    id: \([0-9]*\),$/\1/p' crates/sim/src/maps/*.rs); do
     fi
   done
 done
+# Capture the Flag on every map with flag bases.
+for f in $(grep -l '^    flags: &\[\[' crates/sim/src/maps/*.rs); do
+  map=$(sed -n 's/^    id: \([0-9]*\),$/\1/p' "$f")
+  n=$(target/release/examples/bot_match 7 6000 "$map" 3)
+  w=$(node ci/parity.mjs "$wasm" 7 6000 "$map" 3)
+  if [ "$n" = "$w" ] && [ "$n" != "0000000000000000" ]; then
+    echo "map $map, CTF: $n"
+  else
+    echo "MISMATCH map $map, CTF: native $n, wasm $w"
+    fail=1
+  fi
+done
 exit $fail

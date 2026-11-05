@@ -75,6 +75,8 @@ pub struct PartyView {
     pub open_mic: bool,
     /// PLAY puts the party alone in a room of its own, bots in the rest.
     pub alone: bool,
+    /// That room's own map, score and clock (the leader's to pick).
+    pub custom: pp::Custom,
     /// Bumped when anything the title draws moved.
     pub gen: u32,
     /// Each member's last voice frame (s since start), by tag; negative:

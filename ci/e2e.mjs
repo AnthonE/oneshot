@@ -200,6 +200,9 @@ try {
     // thrown there.
     [`sound: ${s?.sound?.[0]} clips handed, ${s?.sound?.[1]} loading, ${s?.sound?.[2]} commands`,
       (s?.sound?.[0] ?? 0) > 100 && (s?.sound?.[1] ?? 99) <= 5 && (s?.sound?.[2] ?? 0) > 30],
+    // The announcer (sound/mod.rs): the mode as the countdown starts, and
+    // our kill is the lead taken.
+    [`the announcer spoke of the match (${s?.sound?.[3]} lines)`, (s?.sound?.[3] ?? 0) >= 1],
     [`the audio thread: ${JSON.stringify(mixed)}`,
       mixed?.state === 'running' && mixed.installed > 100 && mixed.failed === 0 && mixed.errors === 0
         && (mixed.mixer?.[0] ?? 0) > 100 && (mixed.mixer?.[1] ?? 0) > 10

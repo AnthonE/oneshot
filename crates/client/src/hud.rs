@@ -81,7 +81,7 @@ const SCORE_W: f32 = 150.0;
 /// Under this share the shield is low: its frame pulses red.
 const SHIELD_LOW_PCT: f32 = 25.0;
 /// Rounds a magazine may show; a bigger one (a battery) is a number.
-const PIPS: usize = 48;
+const PIPS: usize = 60;
 /// The shield plate's inset to its level: its glow and edge, and a gap.
 const SHIELD_PAD: f32 = 8.0;
 
@@ -126,6 +126,9 @@ pub struct HudState {
     /// Our medals for the announcer to say, oldest first (`sound.rs` takes
     /// them).
     pub announce: Vec<u8>,
+    /// Lines about the match the feed found for the announcer (a betrayal),
+    /// oldest first (`sound.rs` takes them too).
+    pub say: Vec<&'static str>,
     /// Every medal of ours this match, by id: the end screen's.
     pub earned: BTreeMap<u8, u16>,
     /// Each seat's spree rung as the stream last told it, and the one it
@@ -946,6 +949,44 @@ fn feed_line(st: &HudState, me: u8, slot: u8, medal: u8, victim: u8) -> Option<S
     })
 }
 
+/// A side's name, as the flags are called.
+fn side_name(t: u8) -> &'static str {
+    if t & 1 == 0 {
+        "RED"
+    } else {
+        "BLUE"
+    }
+}
+
+/// What the feed says of a flag event (`sim::events::Kind::Flag`).
+fn flag_line(st: &HudState, part: u8, who: u8, flag: u8) -> String {
+    let f = side_name(flag);
+    match part {
+        0 => format!("{} took the {f} flag", st.name(who)),
+        1 => format!("{f} flag dropped"),
+        2 if who == 255 => format!("{f} flag returned"),
+        2 => format!("{} returned the {f} flag", st.name(who)),
+        _ => format!("{} captured the {f} flag", st.name(who)),
+    }
+}
+
+/// Capture the Flag: where each flag is, one line, over the feed.
+fn flags_line(st: &HudState, s: &proto::Snapshot) -> String {
+    s.flags()
+        .iter()
+        .enumerate()
+        .map(|(t, f)| {
+            let where_ = match f.state {
+                sim::world::FLAG_HELD => format!("TAKEN by {}", st.name(f.carrier)),
+                sim::world::FLAG_DOWN => format!("DROPPED, home in {}s", f.down_s),
+                _ => "HOME".into(),
+            };
+            format!("{} FLAG {where_}", side_name(t as u8))
+        })
+        .collect::<Vec<_>>()
+        .join("    ")
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventState], msgs: &[Msg], now: f32, yaw: f32) {
     let me = s.core.slot;
@@ -954,6 +995,7 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         st.welcomes = s.welcomes;
         st.medals.clear();
         st.announce.clear();
+        st.say.clear();
         st.earned.clear();
         st.rung.clear();
         st.spree_ended.clear();
@@ -986,6 +1028,8 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         } else if e.kind == Kind::Kill as u8 && e.a == me && e.b != me {
             st.hit_at = now;
             st.hit_kill = true;
+        } else if e.kind == Kind::Flag as u8 {
+            st.feed.push((flag_line(st, e.part, e.a, e.b), now));
         }
     }
     // Our shield breaking.
@@ -1037,6 +1081,14 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
                 let side = |q: &u8| st.teams.get(q).map(|t| t & 1);
                 let foe = !s.core.rules.teams || side(killer) != side(victim);
                 st.tally.kill(*killer, *victim, foe);
+                // A teammate killed by a teammate: the announcer tells both.
+                if !foe && killer != victim {
+                    if *killer == me {
+                        st.say.push("betrayal");
+                    } else if *victim == me {
+                        st.say.push("betrayed");
+                    }
+                }
                 if *killer == me && *victim != me {
                     st.kills += 1;
                 }
@@ -1180,7 +1232,16 @@ pub fn draw(
         _ if !f.alive => st.death_line.clone(),
         _ => String::new(),
     };
-    let feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
+    let mut feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
+    if snap.n_flags > 0 {
+        feed = format!("{}\n{feed}", flags_line(&st, snap));
+    }
+    if s.watch && core.slot < sim::consts::MAX_FIGHTERS as u8 {
+        feed = format!(
+            "WATCHING {}, a little behind  ·  CLICK for the next player\n{feed}",
+            st.name(core.slot)
+        );
+    }
     let net = if st.net {
         let n = core.stats;
         format!(
@@ -1212,7 +1273,7 @@ pub fn draw(
         }
     }
     let arm = sim::arms::arm(f.gun().arm);
-    let scoped = look.zoom && arm.zoom > 1;
+    let scoped = look.magnification(arm) > 1.0;
     if let Ok(mut v) = reticle.single_mut() {
         *v = if scoped || !f.alive {
             Visibility::Hidden

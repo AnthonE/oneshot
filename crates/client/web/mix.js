@@ -28,6 +28,12 @@ export function startMix(v) {
       if (waiting.length > WAITING) waiting.shift();
     }
   };
+  // The theme (assets/sound/music/intro.ogg): too long for the worklet's
+  // bank, so the browser streams it itself, looping, at the level the game
+  // last asked for. Not fetched until it is asked for.
+  let tune = null;
+  let tuneAt = 0;
+  const tunePlay = () => { if (tune && tuneAt > 0 && tune.paused) tune.play().catch(() => {}); };
   if (ctx) {
     (async () => {
       await ctx.audioWorklet.addModule(`mix-worklet.js${v}`);
@@ -50,6 +56,9 @@ export function startMix(v) {
     addEventListener('pointerdown', wake, { capture: true });
     addEventListener('keydown', wake, { capture: true });
   }
+  // A browser plays a tune, too, only after a gesture.
+  addEventListener('pointerdown', tunePlay, { capture: true });
+  addEventListener('keydown', tunePlay, { capture: true });
   window.__oneshotMix = {
     /** Clip `id`'s Ogg, decoded by the browser into the worklet's bank. */
     install(id, ogg) {
@@ -68,6 +77,21 @@ export function startMix(v) {
     send(bytes) {
       st.sent++;
       post({ kind: 'cmds', bytes }, [bytes.buffer]);
+    },
+    /** The theme at `level` (0: stopped, and from its start the next time). */
+    theme(level) {
+      tuneAt = level;
+      if (!tune) {
+        if (level <= 0) return;
+        tune = new Audio(`assets/sound/music/intro.ogg${v}`);
+        tune.loop = true;
+      }
+      tune.volume = Math.min(1, Math.max(0, level));
+      if (level > 0) tunePlay();
+      else {
+        tune.pause();
+        tune.currentTime = 0;
+      }
     },
     /** For the browser test: decoded, failed, frames sent, the context's
      * state, worklet errors, and the worklet's gauges (crates/mix Stats:

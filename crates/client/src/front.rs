@@ -91,7 +91,7 @@ struct Mode {
     tag: &'static str,
 }
 
-const MODES: [Mode; 7] = [
+const MODES: [Mode; 9] = [
     Mode {
         id: proto::MODE_CASUAL,
         name: "VS THE BOT",
@@ -123,6 +123,23 @@ const MODES: [Mode; 7] = [
         about: "Team Slayer on terrain, with vehicles. Bots fill the empty seats.",
         ranked: false,
         tag: "mode6",
+    },
+    Mode {
+        id: proto::MODE_CTF,
+        name: "CAPTURE THE FLAG",
+        short: "4V4 · FLAGS",
+        about:
+            "Take their flag and bring it to yours while yours is home. First to 3 captures. Bots fill the empty seats.",
+        ranked: false,
+        tag: "mode8",
+    },
+    Mode {
+        id: proto::MODE_WATCH,
+        name: "WATCH",
+        short: "A LIVE MATCH",
+        about: "Watch a live match through one of its players' eyes, a little behind. Click for the next player.",
+        ranked: false,
+        tag: "mode9",
     },
     Mode {
         id: proto::MODE_DUEL,
@@ -166,6 +183,7 @@ pub(crate) enum Tab {
     Play,
     Party,
     Friends,
+    Challenges,
 }
 
 /// The title's own state.
@@ -175,6 +193,8 @@ pub(crate) struct Front {
     tab: Tab,
     /// The party's state as last drawn (`PartyView::gen`).
     drawn_party: u32,
+    /// The challenges as last drawn (`Challenges::gen`).
+    drawn_challenges: u32,
     /// The mode PLAY asks for.
     pub(crate) mode: u8,
     /// The line over PLAY: what the stream said, or why we're back.
@@ -257,10 +277,15 @@ enum Hit {
     CopyLink,
     Leave,
     Alone,
+    /// The party's own room: map (0), score to win (1) or clock (2), a
+    /// step either way.
+    Custom(u8, i8),
     Mic,
     TalkMode,
-    /// Friends: join their party (its code), invite them (their row).
+    /// Friends: join their party (its code), watch their match (the same
+    /// code), invite them (their row).
     Join(u32),
+    Watch(u32),
     Invite(u8),
     Friends,
     /// The invite on the title: join, or not now.
@@ -292,6 +317,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
             scroll: 0.0,
             tab: Tab::Play,
             drawn_party: u32::MAX,
+            drawn_challenges: u32::MAX,
         })
         .init_resource::<InMatch>()
         .init_resource::<Leaving>()
@@ -346,6 +372,7 @@ fn exit(mut commands: Commands, roots: Query<Entity, With<TitleRoot>>, mut front
 /// The gutter either side of the shell.
 const GUT: f32 = 40.0;
 
+#[allow(clippy::too_many_arguments)]
 fn build(
     commands: &mut Commands,
     front: &Front,
@@ -354,6 +381,7 @@ fn build(
     knocking: bool,
     portrait: Option<&crate::look::portrait::Portrait>,
     party: &PartyView,
+    challenges: &crate::challenges::Challenges,
 ) {
     let signin = door.signin();
     commands
@@ -397,6 +425,7 @@ fn build(
                     Tab::Play => panel(body, front, player, &signin, knocking, party),
                     Tab::Party => party_panel(body, party),
                     Tab::Friends => friends_panel(body, party, &signin),
+                    Tab::Challenges => challenges_panel(body, challenges, &signin),
                 }
                 stage(body, front.mode, portrait);
             });
@@ -490,6 +519,11 @@ fn nav(body: &mut ChildSpawnerCommands, quits: bool, tab: Tab, party: &PartyView
             ui::nav_item("FRIENDS", tab == Tab::Friends, 26.0),
             Hit::Tab(Tab::Friends),
             Tag("nav-friends"),
+        ));
+        n.spawn((
+            ui::nav_item("CHALLENGES", tab == Tab::Challenges, 26.0),
+            Hit::Tab(Tab::Challenges),
+            Tag("nav-challenges"),
         ));
         n.spawn(Node {
             height: Val::Px(12.0),
@@ -852,6 +886,44 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
             r.spawn((chip(44.0), Hit::Alone, Tag("party-alone")))
                 .with_child(chip_label(alone));
         });
+        // Alone, the leader sets the room's own map, score and clock.
+        if party.alone && lead {
+            let c = party.custom;
+            let map = c
+                .map
+                .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
+                .map_or("THE SERVER'S PICK".to_string(), |d| d.name.to_uppercase());
+            let score = match pp::SCORE_LIMITS[c.score as usize] {
+                0 => "THE MODE'S".to_string(),
+                i32::MAX => "NO LIMIT".to_string(),
+                n => n.to_string(),
+            };
+            let time = match pp::TIME_LIMITS_MIN[c.time as usize] {
+                0 => "THE MODE'S".to_string(),
+                u32::MAX => "NO CLOCK".to_string(),
+                m => format!("{m} MIN"),
+            };
+            for (k, what, word) in [(0u8, "MAP", map), (1, "TO WIN", score), (2, "CLOCK", time)] {
+                p.spawn(line_row()).with_children(|r| {
+                    r.spawn(Node {
+                        width: Val::Px(64.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_child(ui::label(what, 11.0, ui::FAINT));
+                    r.spawn((ui::stepper(), Hit::Custom(k, -1)))
+                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                    r.spawn(Node {
+                        flex_grow: 1.0,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child(ui::strong(word, 12.5, ui::TEXT_COLOR));
+                    r.spawn((ui::stepper(), Hit::Custom(k, 1)))
+                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                });
+            }
+        }
 
         p.spawn(ui::group("VOICE"));
         if party.mic == Mic::None {
@@ -902,6 +974,74 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
 }
 
 /// FRIENDS: your Elo Pros friends, where they are, and a way in or to ask.
+/// Today's and this week's challenges, as Elo Pros has them
+/// (`challenges.rs`), with our progress once we're signed in.
+fn challenges_panel(body: &mut ChildSpawnerCommands, ch: &crate::challenges::Challenges, signin: &SignIn) {
+    use crate::challenges::{left_words, progress_words};
+    body.spawn(ui::panel(380.0)).with_children(|p| {
+        let Some(v) = &ch.view else {
+            p.spawn(ui::group("CHALLENGES"));
+            p.spawn(ui::label(
+                if ch.failed {
+                    "Elo Pros didn't answer just now."
+                } else {
+                    "Reading today's challenges..."
+                },
+                13.0,
+                if ch.failed { ui::BAD } else { ui::DIM },
+            ));
+            return;
+        };
+        let now = crate::challenges::unix_now();
+        for (title, per) in [("TODAY", &v.day), ("THIS WEEK", &v.week)] {
+            p.spawn(ui::group(&format!("{title} · {} LEFT", left_words(per.ends_at, now))));
+            if per.challenges.is_empty() {
+                p.spawn(ui::label("None yet.", 12.5, ui::FAINT));
+            }
+            for c in &per.challenges {
+                p.spawn(line_row()).with_children(|r| {
+                    r.spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        flex_grow: 1.0,
+                        ..default()
+                    })
+                    .with_children(|t| {
+                        t.spawn(ui::strong(c.name.to_uppercase(), 13.5, ui::TITLE));
+                        if !c.desc.is_empty() {
+                            t.spawn(ui::label(c.desc.clone(), 11.0, ui::FAINT));
+                        }
+                    });
+                    let done = c.done == Some(true);
+                    r.spawn(ui::strong(
+                        progress_words(c),
+                        12.0,
+                        if done { ui::GOOD } else { ui::TEXT_COLOR },
+                    ));
+                    if c.cards > 0 {
+                        let cards = if c.cards == 1 {
+                            "1 CARD".to_string()
+                        } else {
+                            format!("{} CARDS", c.cards)
+                        };
+                        r.spawn(ui::label(cards, 10.5, ui::ACCENT));
+                    }
+                });
+            }
+        }
+        p.spawn(ui::spacer());
+        if !matches!(signin, SignIn::In(_)) {
+            p.spawn(ui::label(
+                "Sign in with Elo Pros to count your progress.",
+                12.5,
+                ui::DIM,
+            ));
+        }
+        if !v.rules.is_empty() {
+            p.spawn(ui::label(v.rules.clone(), 10.5, ui::FAINT));
+        }
+    });
+}
+
 fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &SignIn) {
     body.spawn(ui::panel(380.0)).with_children(|p| {
         let here = party.friends.iter().filter(|f| f.at >= pp::AT_HERE).count();
@@ -976,6 +1116,10 @@ fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &Si
                 r.spawn(ui::label(where_, 10.5, ui::FAINT));
                 if f.party != 0 && !in_mine {
                     r.spawn((chip(44.0), Hit::Join(f.party))).with_child(chip_label("JOIN"));
+                }
+                if f.party != 0 && f.at == pp::AT_MATCH && !in_mine {
+                    r.spawn((chip(56.0), Hit::Watch(f.party)))
+                        .with_child(chip_label("WATCH"));
                 }
                 if f.at >= pp::AT_HERE && !in_mine {
                     r.spawn((chip(56.0), Hit::Invite(i as u8)))
@@ -1335,12 +1479,46 @@ fn click(
             party.alone = !party.alone;
             front.dirty = true;
         }
+        Hit::Custom(k, d) => {
+            let step = |i: u8, n: usize| (i as i32 + d as i32).rem_euclid(n as i32) as u8;
+            let c = &mut party.custom;
+            match k {
+                0 => {
+                    // None (the server's pick), then every map in order.
+                    let ids: Vec<Option<u8>> = core::iter::once(None)
+                        .chain(sim::maps::ALL.iter().map(|m| Some(m.id)))
+                        .collect();
+                    let at = ids.iter().position(|&m| m == c.map).unwrap_or(0);
+                    c.map = ids[step(at as u8, ids.len()) as usize];
+                }
+                1 => c.score = step(c.score, pp::SCORE_LIMITS.len()),
+                _ => c.time = step(c.time, pp::TIME_LIMITS_MIN.len()),
+            }
+            front.dirty = true;
+        }
         Hit::Mic => party::mic_toggle(),
         Hit::TalkMode => party::set_open_mic(!party.open_mic),
         Hit::Join(code) => {
             asks.0.push(Do::Act(pp::ACT_JOIN, code));
             front.tab = Tab::Party;
             front.dirty = true;
+        }
+        Hit::Watch(code) => {
+            if knocking.0.is_none() {
+                front.mode = proto::MODE_WATCH;
+                let ask = Ask {
+                    name: player.sent_name(),
+                    pass: party::match_pass(&party, &door),
+                    mode: proto::MODE_WATCH,
+                    look: player.look(),
+                    party: code,
+                };
+                knocking.0 = Some(door.knock(ask));
+                front.knocked_at = time.elapsed_secs();
+                front.status.clear();
+                front.bad = false;
+                front.dirty = true;
+            }
         }
         Hit::Invite(i) => {
             if let Some(f) = party.friends.get(i as usize) {
@@ -1377,11 +1555,15 @@ fn click(
                 if m.ranked && !signin.ranked() {
                     front.status = "Ranked needs a sign-in with a wallet".into();
                     front.bad = true;
-                } else if party.connected && (party.size() > 1 || party.alone) {
+                } else if m.id != proto::MODE_WATCH && party.connected && (party.size() > 1 || party.alone) {
                     // A party's game: its leader starts it, and the server
                     // tells each of us to go (`party.rs`).
                     if party.leads() {
-                        let alone = if party.alone { pp::START_PRIVATE } else { 0 };
+                        let alone = if party.alone {
+                            pp::START_PRIVATE | party.custom.to_arg()
+                        } else {
+                            0
+                        };
                         asks.0.push(Do::Act(pp::ACT_START, m.id as u32 | alone));
                         front.status = "Starting for the party...".into();
                         front.bad = false;
@@ -1393,12 +1575,15 @@ fn click(
                         front.bad = false;
                     }
                 } else {
+                    // Our party's code goes with us (friends watch by it); a
+                    // watcher's own is no match to watch, so none.
+                    let code = party.party.as_ref().map_or(0, |p| p.code);
                     let ask = Ask {
                         name: player.sent_name(),
                         pass: party::match_pass(&party, &door),
                         mode: m.id,
                         look: player.look(),
-                        party: 0,
+                        party: if m.id == proto::MODE_WATCH { 0 } else { code },
                     };
                     knocking.0 = Some(door.knock(ask));
                     front.knocked_at = now;
@@ -1466,14 +1651,27 @@ fn rebuild(
     roots: Query<Entity, With<TitleRoot>>,
     portrait: Option<Res<crate::look::portrait::Portrait>>,
     party: Res<PartyView>,
+    (mut challenges, time): (ResMut<crate::challenges::Challenges>, Res<Time>),
 ) {
     let signin = door.signin();
-    if !front.dirty && front.drawn.as_ref() == Some(&signin) && front.drawn_party == party.gen {
+    // Challenges: asked for while the title is up, for whoever is signed in.
+    let wallet = match &signin {
+        SignIn::In(p) => p.wallet.clone(),
+        _ => None,
+    };
+    challenges.want(wallet, time.elapsed_secs_f64());
+    challenges.poll();
+    if !front.dirty
+        && front.drawn.as_ref() == Some(&signin)
+        && front.drawn_party == party.gen
+        && front.drawn_challenges == challenges.gen
+    {
         return;
     }
     front.dirty = false;
     front.drawn = Some(signin);
     front.drawn_party = party.gen;
+    front.drawn_challenges = challenges.gen;
     for e in &roots {
         commands.entity(e).despawn();
     }
@@ -1485,6 +1683,7 @@ fn rebuild(
         knocking.0.is_some(),
         portrait.as_deref(),
         &party,
+        &challenges,
     );
 }
 

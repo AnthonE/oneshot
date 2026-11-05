@@ -35,6 +35,10 @@ pub enum Kind {
     /// `a` got into vehicle `part`'s seat `b` (0 driver, 1 passenger), or
     /// out of it when `c` is 1.
     Ride,
+    /// Capture the Flag: side `b`'s flag, at `pos`; `part` 0 taken by `a`,
+    /// 1 dropped by `a`, 2 returned (by `a`, or 255 on its own), 3
+    /// captured by `a`.
+    Flag,
 }
 
 /// Kill causes past the arm ids.

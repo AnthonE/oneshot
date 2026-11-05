@@ -168,10 +168,18 @@ pub fn warm_models(
     let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
     scenes.extend([models.rocket.clone(), models.frag.clone(), models.body_scene.clone()]);
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
-    if !scenes.iter().all(settled) {
+    if !scenes.iter().all(settled) || !settled(&models.truck) {
         return;
     }
     *done = true;
+    // A truck, smaller still for its size: its steel and trim are materials
+    // of its own that wear (`truck.rs`), made when its scene is in, which
+    // says when this may count down.
+    let small = Transform::from_xyz(0.0, 0.0, -WARM_AHEAD_M).with_scale(Vec3::splat(WARM_SIZE_M / 6.0));
+    let truck = commands
+        .spawn((Warming(WARM_FRAMES), small, Visibility::default(), ChildOf(eye)))
+        .id();
+    super::truck::spawn(&mut commands, &models, truck);
     for scene in scenes.iter().take(scenes.len() - 1) {
         commands
             .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))

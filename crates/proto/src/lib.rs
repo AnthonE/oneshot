@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 20;
+pub const PROTO_VER: u16 = 22;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -251,9 +251,11 @@ pub struct Remote {
     pub shield: u8,
     /// An overshield on (climbing, or over full).
     pub over: bool,
-    /// How hidden its camouflage keeps it (`Fighter::cloak`), 0..15 of
-    /// all the way: what this client draws it at.
+    /// How hidden its camouflage keeps it (`Fighter::cloak`), 0 to
+    /// [`CLOAK_STEPS`] of all the way: what this client draws it at.
     pub cloak: u8,
+    /// Carrying a flag (Capture the Flag).
+    pub flag: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -284,6 +286,53 @@ pub struct EventState {
     pub end: V3,
 }
 
+/// Capture the Flag's flag, as every client may know it: at home or on
+/// the floor, where it is; carried, by whom, never where (the carrier is
+/// drawn with it when fog shows them).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FlagState {
+    /// `sim::world::FLAG_HOME`, `FLAG_HELD` or `FLAG_DOWN`.
+    pub state: u8,
+    /// The carrier's seat, while held.
+    pub carrier: u8,
+    /// Zero while held.
+    pub pos: V3,
+    /// Whole seconds till a dropped flag goes home.
+    pub down_s: u8,
+}
+
+impl Pack for FlagState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        // Held: who, never where. At home or down: where (and down, how
+        // long till it goes home).
+        w.write(self.state as u32, 2)?;
+        if self.state == 1 {
+            return w.write(self.carrier as u32, SLOT_BITS);
+        }
+        w_v3c(w, self.pos)?;
+        if self.state == 2 {
+            w.write(self.down_s as u32, 6)?;
+        }
+        Ok(())
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        let mut f = FlagState {
+            state: r.read(2)? as u8,
+            ..FlagState::default()
+        };
+        match f.state {
+            0 => f.pos = r_v3c(r)?,
+            1 => f.carrier = r.read(SLOT_BITS)? as u8,
+            2 => {
+                f.pos = r_v3c(r)?;
+                f.down_s = r.read(6)? as u8;
+            }
+            _ => return Err(WireError::Malformed),
+        }
+        Ok(f)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PadState {
     /// Whole seconds until the gun (or power-up) is back, to
@@ -291,8 +340,15 @@ pub struct PadState {
     pub empty_s: u16,
 }
 
-/// The longest wait a pad's timer says on the wire (10 bits, 17 minutes).
-pub const PAD_S_MAX: u16 = 1023;
+/// The longest wait a pad's timer says on the wire (8 bits, over 4
+/// minutes; no pad waits more than 2).
+pub const PAD_S_MAX: u16 = 255;
+/// The most camouflage ticks the own fighter's field says (14 bits).
+const CAMO_TICKS_MAX: u16 = (1 << 14) - 1;
+const _: () = assert!(sim::consts::ticks(sim::consts::CAMO_MS) <= CAMO_TICKS_MAX as u32);
+const _: () = assert!(sim::consts::ticks(sim::consts::CAMO_FLARE_MS) <= u8::MAX as u32);
+/// How finely a remote's camouflage is told (3 bits).
+pub const CLOAK_STEPS: f32 = 7.0;
 
 impl Remote {
     /// `f` in seat `slot`, coarsened: what a client may draw of it.
@@ -312,7 +368,8 @@ impl Remote {
             arm: f.gun().arm,
             shield: (f.shield.max(0) as i64 * 255 / full).min(255) as u8,
             over: f.overshield(),
-            cloak: (f.cloak() * 15.0 + 0.5) as u8,
+            cloak: (f.cloak() * CLOAK_STEPS + 0.5) as u8,
+            flag: f.flag,
         }
     }
 }
@@ -332,7 +389,8 @@ impl Pack for Remote {
         w.write(self.arm as u32, 4)?;
         w.write(self.shield as u32, 8)?;
         w.write_bit(self.over)?;
-        w.write(self.cloak as u32, 4)
+        w.write(self.cloak as u32, 3)?;
+        w.write_bit(self.flag)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(Remote {
@@ -349,7 +407,8 @@ impl Pack for Remote {
             arm: r.read(4)? as u8,
             shield: r.read(8)? as u8,
             over: r.read_bit()?,
-            cloak: r.read(4)? as u8,
+            cloak: r.read(3)? as u8,
+            flag: r.read_bit()?,
         })
     }
 }
@@ -509,11 +568,11 @@ impl Pack for DropState {
 
 impl Pack for PadState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
-        w.write(self.empty_s.min(PAD_S_MAX) as u32, 10)
+        w.write(self.empty_s.min(PAD_S_MAX) as u32, 8)
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
         Ok(PadState {
-            empty_s: r.read(10)? as u16,
+            empty_s: r.read(8)? as u16,
         })
     }
 }
@@ -541,6 +600,9 @@ pub struct Snapshot {
     pub vehicles: [VehState; MAX_SNAP_VEHICLES],
     pub n_drops: u8,
     pub drops: [DropState; MAX_SNAP_DROPS],
+    /// Capture the Flag's two flags, red's then blue's; none in other modes.
+    pub n_flags: u8,
+    pub flags: [FlagState; 2],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -570,6 +632,8 @@ impl Default for Snapshot {
             vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
             n_drops: 0,
             drops: [DropState::default(); MAX_SNAP_DROPS],
+            n_flags: 0,
+            flags: [FlagState::default(); 2],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -597,6 +661,9 @@ impl Snapshot {
     }
     pub fn drops(&self) -> &[DropState] {
         &self.drops[..self.n_drops as usize]
+    }
+    pub fn flags(&self) -> &[FlagState] {
+        &self.flags[..self.n_flags as usize]
     }
 }
 
@@ -645,8 +712,10 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.stickies as u32, 8)?;
     w.write(f.gren_kind as u32, 1)?;
     w.write_bit(f.charging)?;
-    w.write(f.camo as u32, 16)?;
-    w.write(f.flare as u32, 16)
+    // Camouflage's 45 s and its 1.2 s flare, in ticks, with room.
+    w.write(f.camo.min(CAMO_TICKS_MAX) as u32, 14)?;
+    w.write(f.flare.min(u8::MAX as u16) as u32, 8)?;
+    w.write_bit(f.flag)
 }
 
 fn w_gun(w: &mut BitWriter, g: &Gun) -> R<()> {
@@ -721,8 +790,9 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.stickies = r.read(8)? as u8;
     f.gren_kind = r.read(1)? as u8;
     f.charging = r.read_bit()?;
-    f.camo = r.read(16)? as u16;
-    f.flare = r.read(16)? as u16;
+    f.camo = r.read(14)? as u16;
+    f.flare = r.read(8)? as u16;
+    f.flag = r.read_bit()?;
     Ok(f)
 }
 
@@ -735,6 +805,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_score as usize, MAX_FIGHTERS),
         (s.n_vehicles as usize, MAX_SNAP_VEHICLES),
         (s.n_drops as usize, MAX_SNAP_DROPS),
+        (s.n_flags as usize, 2),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -755,6 +826,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.pads(), 5)?;
     w_list(&mut w, s.vehicles(), 4)?;
     w_list(&mut w, s.drops(), 4)?;
+    w_list(&mut w, s.flags(), 2)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
@@ -786,6 +858,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_pads = r_list(&mut r, &mut s.pads, 5)?;
     s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
     s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
+    s.n_flags = r_list(&mut r, &mut s.flags, 2)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);
@@ -964,6 +1037,12 @@ pub const MODE_BIG_TEAM: u8 = 6;
 /// No match: the menu's own session, for a party, its friends and its
 /// voice ([`party`]). Kept open beside a match.
 pub const MODE_LOBBY: u8 = 7;
+/// Capture the Flag: four a side, casual, bots in the empty seats.
+pub const MODE_CTF: u8 = 8;
+/// No seat: watch a match as one of its players saw it, late
+/// (`room::spectate`). The hello's `party` names whose: a party's code
+/// (a friend's), or 0 for any public match.
+pub const MODE_WATCH: u8 = 9;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
 
@@ -977,6 +1056,8 @@ pub fn mode_name(mode: u8) -> &'static str {
         MODE_GUN_GAME => "Gun Game",
         MODE_CUP => "a cup",
         MODE_BIG_TEAM => "Big Team",
+        MODE_CTF => "Capture the Flag",
+        MODE_WATCH => "watching",
         _ => "oneshot",
     }
 }
@@ -1064,6 +1145,13 @@ pub enum Msg {
         salt: [u64; 2],
     },
     Bye,
+    /// A watcher: client → server, follow the next player; server → client,
+    /// the seat it follows now (`slot`, on side `team`). Its snapshots'
+    /// own fighter is that seat's.
+    Follow {
+        slot: u8,
+        team: u8,
+    },
     /// Server → whoever earned it, or everyone for a public one
     /// ([`medal::Info::public`]): a medal (`medal`), for the kill on
     /// `victim`.
@@ -1180,6 +1268,9 @@ pub const REFUSE_NOT_LEADER: u8 = 12;
 pub const REFUSE_PARTY_MODE: u8 = 13;
 /// Not one of your friends on Elo Pros, or not signed in.
 pub const REFUSE_NOT_FRIEND: u8 = 14;
+/// Nothing to watch: no public match, that party isn't in one, or it is
+/// your own.
+pub const REFUSE_NOTHING_TO_WATCH: u8 = 15;
 
 pub(crate) fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
@@ -1257,6 +1348,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(rules.seats as u32, SLOT_BITS + 1)?;
             w.write_bit(rules.gun_game)?;
             w.write_bit(rules.friendly_fire)?;
+            w.write_bit(rules.ctf)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
             }
@@ -1299,6 +1391,11 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Follow { slot, team } => {
+            w.write(22, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            w.write(*team as u32, 1)?;
+        }
         Msg::Cup {
             round,
             rounds,
@@ -1488,6 +1585,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 },
                 gun_game: r.read_bit()?,
                 friendly_fire: r.read_bit()?,
+                ctf: r.read_bit()?,
             },
             salt_commit: {
                 let mut c = [0u8; 32];
@@ -1519,6 +1617,10 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        22 => Msg::Follow {
+            slot: r.read(SLOT_BITS)? as u8,
+            team: r.read(1)? as u8,
+        },
         10 => Msg::Cup {
             round: r.read(8)? as u8,
             rounds: r.read(8)? as u8,
