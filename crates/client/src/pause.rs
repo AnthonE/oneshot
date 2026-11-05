@@ -3,6 +3,10 @@
 //! saying what it does. The match goes on underneath (it's everyone's): the
 //! cursor is free, so the controls send nothing (`pump`'s grab gate) while
 //! the session keeps running. Esc resumes; so does a number or a click.
+//!
+//! A browser's has REPORT A BUG too: the page's form (`web/boot.js`, a text
+//! box Bevy hasn't), sent to the server's `/bugs`. The desktop's crashes
+//! report themselves (`crash.rs`).
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -19,9 +23,12 @@ enum Verb {
     Resume,
     Settings,
     Leave,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Report,
 }
 
-const VERBS: [(Verb, &str, &str); 3] = [
+/// Last, so LEAVE is 3 on both.
+const VERBS: &[(Verb, &str, &str)] = &[
     (Verb::Resume, "RESUME", "Back into the match"),
     (
         Verb::Settings,
@@ -29,6 +36,12 @@ const VERBS: [(Verb, &str, &str); 3] = [
         "The mouse, the view, the sound and your keys",
     ),
     (Verb::Leave, "LEAVE THE MATCH", "Back to the title screen"),
+    #[cfg(target_arch = "wasm32")]
+    (
+        Verb::Report,
+        "REPORT A BUG",
+        "Tell us what went wrong; this match's details go with it",
+    ),
 ];
 
 pub fn plugin(app: &mut App) {
@@ -112,6 +125,12 @@ fn choose(
             next.set(Screen::Playing);
         }
         Verb::Settings => next.set(Screen::Settings),
+        // The page's form, over the menu (the cursor is already free).
+        Verb::Report =>
+        {
+            #[cfg(target_arch = "wasm32")]
+            crate::look::gpu::tell_page("__oneshotReport", "", "")
+        }
         // Back to the title (`front::ended`); with no title (a picture),
         // the window closes.
         Verb::Leave => match leaving {

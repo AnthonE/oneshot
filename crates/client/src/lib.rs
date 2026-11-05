@@ -19,6 +19,8 @@ pub mod binds;
 pub mod challenges;
 pub mod clip;
 pub mod config;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod crash;
 pub mod display;
 pub mod door;
 pub mod film;
@@ -79,7 +81,21 @@ pub struct Look {
     /// The trigger counts: not still held from the click that took the
     /// mouse (that click only takes it, as on the page).
     armed: bool,
+    /// The scope's magnification as drawn: eased toward
+    /// [`Look::magnification`] at [`ZOOM_RATE`] (`view`). The view narrows
+    /// by it and the mouse slows by it; 0 until the first frame (read as 1).
+    mag: f32,
+    /// Crouched, as drawn: 0 standing to 1, eased at [`CROUCH_RATE`]. Only
+    /// the eye; the sim's shot leaves from where the sim says.
+    crouch: f32,
 }
+
+/// How fast a scope comes up and goes down: `1 − exp(−k·dt)` a frame
+/// (Gates' `VIEWMODEL_RAISE_RATE`): halfway to a 2x in 50 ms.
+const ZOOM_RATE: f32 = 14.0;
+/// How fast the eye goes between standing and crouched (Gates'
+/// `CROUCH_EASE_S`, 60 ms, as a rate).
+const CROUCH_RATE: f32 = 1.0 / 0.06;
 
 /// What [`Look::level`] watches on our own fighter from frame to frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -103,6 +119,49 @@ impl Look {
         } else {
             1.0
         }
+    }
+
+    /// The magnification as drawn, eased (`mag`): what the view, the
+    /// mouse and everything shown behind a scope go by.
+    pub fn drawn_mag(&self) -> f32 {
+        self.mag.max(1.0)
+    }
+
+    /// Behind the scope, as drawn: the eased zoom halfway to `arm`'s
+    /// first level. The gun goes and the scope's ring comes together.
+    pub fn scoped(&self, arm: &sim::arms::Arm) -> bool {
+        let first = arm.zoom_at(1) as f32;
+        first > 1.0 && self.drawn_mag() >= 1.0 + (first - 1.0) * 0.5
+    }
+
+    /// The eye over the feet, as drawn (`crouch`).
+    pub fn eye_h(&self) -> f32 {
+        EYE - (EYE - CROUCH_EYE) * self.crouch
+    }
+
+    /// One frame's ease toward what `f` is: scoped (`level`) and crouched.
+    fn ease(&mut self, f: &sim::fighter::Fighter, dt: f32) {
+        let want = if f.alive {
+            self.magnification(sim::arms::arm(f.gun().arm))
+        } else {
+            1.0
+        };
+        let mag = self.drawn_mag();
+        self.mag = mag + (want - mag) * (1.0 - (-ZOOM_RATE * dt).exp());
+        // A hair from there is there: no tail of 1.0001 a scope never
+        // leaves.
+        if (self.mag - want).abs() < 0.005 {
+            self.mag = want;
+        }
+        let crouched = f32::from(u8::from(f.body.crouched));
+        self.crouch += (crouched - self.crouch) * (1.0 - (-CROUCH_RATE * dt).exp());
+    }
+
+    /// Out of the scope at once, no ease (a film's cut).
+    pub fn unscope(&mut self) {
+        self.zoom = false;
+        self.level = 0;
+        self.mag = 1.0;
     }
 }
 
@@ -812,8 +871,10 @@ fn pump(
     }
     look.zoom = look.level > 0;
     if grabbed {
+        // Slowed as the view narrows, with it (`view`): the world moves
+        // under the crosshair at one speed while the scope comes up.
         let base = SENS * settings.sensitivity;
-        let sens = base / look.magnification(arm);
+        let sens = base / look.drawn_mag();
         let up = if settings.invert { -1.0 } else { 1.0 };
         // Kept to a turn: an f32 summed without end loses the low bits a
         // slow hand moves it by.
@@ -1248,7 +1309,7 @@ pub(crate) struct DeathCam {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn view(
     link: NonSend<LinkRes>,
-    look: Res<Look>,
+    mut look: ResMut<Look>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     opts: Res<Opts>,
@@ -1269,6 +1330,8 @@ pub(crate) fn view(
     if !dead {
         death.from = None;
     }
+    // The scope and the crouch, eased toward what they are.
+    look.ease(f, time.delta_secs());
     if dead {
         let now = time.elapsed_secs();
         // The body: where the rag doll has it, else where we fell.
@@ -1297,12 +1360,9 @@ pub(crate) fn view(
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
-        let eye = at + Vec3::Y * h;
+        let eye = at + Vec3::Y * look.eye_h();
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
-        if f.alive {
-            fov /= look.magnification(sim::arms::arm(f.gun().arm));
-        }
+        fov /= look.drawn_mag();
     }
     // The effects demo stands its camera in one place (drawing only).
     // Worked out once a map, not every frame.
@@ -1342,7 +1402,8 @@ fn draw_view(
 ) {
     grips.team = link.0.session().core.team;
     let (f, p) = link.0.session().core.own();
-    let scoped = look.magnification(sim::arms::arm(f.gun().arm)) > 1.0;
+    // The gun goes once the scope is halfway up.
+    let scoped = look.scoped(sim::arms::arm(f.gun().arm));
     let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
         f,
@@ -1464,8 +1525,8 @@ pub(crate) fn happened(
         );
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
-        let eye = Vec3::new(p.x, p.y + h, p.z);
+        // From the eye as drawn, as the camera is.
+        let eye = Vec3::new(p.x, p.y + look.eye_h(), p.z);
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
         if third {
             look::fx::shots::own_unseen(&mut fx, f);
@@ -1612,6 +1673,25 @@ fn expose(
     set(&o, "cup", st.cup.as_str().into());
     set(&o, "bye", st.ended.into());
     set(&o, "ended", (st.ended || (live && link.0.closed())).into());
+    // Why it closed, as the HUD says it (`Link::ended_why`).
+    if live && link.0.closed() {
+        set(&o, "reason", link.0.ended_why().unwrap_or_default().into());
+    }
+    // For a bug report (boot.js): which match (its salt's commitment,
+    // which the server's review files carry), where and when in it, on
+    // which wire and build.
+    set(&o, "map", s.map_id.into());
+    set(&o, "tick", s.core.tick().into());
+    set(&o, "proto", proto::PROTO_VER.into());
+    set(&o, "version", env!("CARGO_PKG_VERSION").into());
+    if live && s.ready {
+        use std::fmt::Write as _;
+        let mut hex = String::with_capacity(64);
+        for b in s.core.salt_commit {
+            let _ = write!(hex, "{b:02x}");
+        }
+        set(&o, "match", hex.into());
+    }
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;

@@ -155,7 +155,9 @@ fn run() -> Result<(), String> {
             (false, Screen::Settings) => Screen::Settings,
             (false, _) => Screen::Title,
         };
-        let mut app = oneshot_client::game(Door::new(server), opts);
+        let mut app = oneshot_client::game(Door::new(server.clone()), opts);
+        // After the app is made, so whatever hook Bevy set is wrapped.
+        oneshot_client::crash::hook(server);
         // The autopilot holds the scope (a picture of one; `--autoplay`).
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
         if let Some(n) = arg("--name") {
