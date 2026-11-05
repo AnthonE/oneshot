@@ -95,6 +95,9 @@ fn own() -> Fighter {
         respawn: 0,
         kills: 4,
         deaths: 2,
+        charging: true,
+        camo: 3000,
+        flare: 40,
         ..Fighter::default()
     }
 }
@@ -127,6 +130,8 @@ fn snapshot() -> Snapshot {
         pitch: 100,
         arm: BR,
         shield: 200,
+        over: true,
+        cloak: 5,
         flag: true,
     };
     // Capture the Flag: red's flag held by seat 1, blue's on the floor.
@@ -506,13 +511,13 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xaec2_e834_0768_a087,
-        0xa8c0_0e4b_a193_2523,
-        0x8b6a_379d_4857_e0a8,
+        0x37c8_7839_93cb_1fe0,
+        0xbebc_6fb6_22f9_04d4,
+        0x46ad_ac8b_617e_6a9d,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x4c32_e1d0_bab3_9dec,
+        0x946e_e525_ef0e_080d,
         0x0835_ec07_b4ee_4fb0,
         0x3f28_24ea_ec0c_5c91,
         0xd5ca_75af_c4fa_c9d7,

@@ -202,6 +202,8 @@ pub struct Fx {
     /// Rounds of light flying last frame (`flying.rs`), to tell where one
     /// ended.
     last_light: Vec<client_net::core::DrawnProj>,
+    /// `flying::projectiles`' lists, kept from frame to frame.
+    fly: flying::Scratch,
     /// Our own melee: its cooldown last frame, and where we looked as the
     /// swing began, which the server's event comes back to a round trip
     /// later (`bodies::swung`).
@@ -497,6 +499,7 @@ pub fn setup(
         own_rounds: Default::default(),
         own_flash: [None; 2],
         last_light: Vec::new(),
+        fly: Default::default(),
         swing: (0, None),
     });
 }
@@ -638,8 +641,13 @@ pub fn draw(
     blast::burn(fx, dt);
     blast::trail(fx, dt);
     shell::draw(&mut fx.shocks, dt, &mut shells, &mut shock_mats);
-    if let Some(mesh) = fx.marks.fade(dt).then(|| meshes.get_mut(fx.marks.mesh())).flatten() {
-        fx.marks.write(mesh);
+    let dirty = fx.marks.fade(dt);
+    for (c, h) in fx.marks.meshes().iter().enumerate() {
+        if dirty & (1 << c.min(63)) != 0 {
+            if let Some(mesh) = meshes.get_mut(h) {
+                fx.marks.write(c, mesh);
+            }
+        }
     }
     // Written, then stepped: a chip is drawn once where it was born.
     if fx.chips.needs_write() {
@@ -661,8 +669,10 @@ pub fn draw(
         light.intensity = f.lumens * k;
         light.range = f.range;
         light.color = Color::linear_rgb(f.color[0], f.color[1], f.color[2]);
-        tf.translation = f.at;
-        *vis = Visibility::Visible;
+        if tf.translation != f.at {
+            tf.translation = f.at;
+        }
+        vis.set_if_neq(Visibility::Visible);
     }
     // The camera this frame (ours is the only 3D one).
     let Ok((cam_gt, _)) = cams.single() else {

@@ -114,6 +114,8 @@
       "weapon": "smg",
       "at": [16, 0, 2.5],
       "respawn": 30
-    }
+    },
+    { "weapon": "overshield", "at": [0, 10], "respawn": 120 },
+    { "weapon": "camo", "at": [0, -10], "respawn": 120 }
   ]
 }

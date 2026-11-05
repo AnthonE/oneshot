@@ -10,6 +10,8 @@ pub mod replay;
 pub mod spectate;
 pub mod watch;
 
+use std::collections::VecDeque;
+
 use proto::MAX_SNAP_VEHICLES;
 use proto::{
     encode_snapshot, DropState, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_DROPS, MAX_SNAP_EVENTS, MAX_SNAP_PADS,
@@ -17,7 +19,7 @@ use proto::{
 };
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
-use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
+use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
 use sim::geom::V3;
 use sim::input::Input;
@@ -39,10 +41,20 @@ pub const SNAP_EVERY: u32 = 2;
 /// Snapshot send times kept, for RTT.
 const SENT: usize = 64;
 
+/// What a client had been shown when it made a frame: its newest snapshot
+/// (as the server accepted its ack) and how far behind that it drew
+/// everyone else. Taken from the datagram a frame first came in, so a
+/// frame run later is rewound to its own moment, not to the newest ack's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct View {
+    acked: Option<u32>,
+    playout: u8,
+}
+
 /// One client's netcode state on the server (after Gates' `ClientNetState`).
 #[derive(Clone)]
 pub struct ClientNet {
-    frames: [Option<(u32, Input)>; BUF],
+    frames: [Option<(u32, Input, View)>; BUF],
     /// The next seq to run; set by the first frame that arrives.
     cursor: Option<u32>,
     newest_seq: Option<u32>,
@@ -52,6 +64,8 @@ pub struct ClientNet {
     /// The newest snapshot tick this client has acked, as the server saw.
     pub acked: Option<u32>,
     pub playout: u8,
+    /// The view of the frame last run (a repeat's: the newest).
+    ran: View,
     sent: [(u32, f64); SENT],
     pub rtt_ms: f64,
     /// Frames that came too late or too early, and repeats used.
@@ -75,7 +89,9 @@ pub struct ClientNet {
 /// skipped: so the client keeps an event by its id and drops repeats.
 #[derive(Clone, Debug, Default)]
 pub struct EventQueue {
-    list: Vec<(Option<u32>, EventState)>,
+    /// Each with the tick of the first snapshot that carried it: those are
+    /// given oldest first, so the acked ones are always at the front.
+    list: VecDeque<(Option<u32>, EventState)>,
     next_id: u16,
     /// Events dropped because a client stopped acking.
     pub dropped: u32,
@@ -89,16 +105,23 @@ impl EventQueue {
         e.id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         if self.list.len() >= MAX_QUEUED_EVENTS {
-            self.list.remove(0);
+            self.list.pop_front();
             self.dropped += 1;
         }
-        self.list.push((None, e));
+        self.list.push_back((None, e));
     }
 
     /// The client has every snapshot up to `tick`: what those carried is
     /// home.
     pub fn ack(&mut self, tick: u32) {
-        self.list.retain(|(since, _)| since.is_none_or(|t| t > tick));
+        while self
+            .list
+            .front()
+            .is_some_and(|(since, _)| since.is_some_and(|t| t <= tick))
+        {
+            self.list.pop_front();
+        }
+        debug_assert!(self.list.iter().all(|(since, _)| since.is_none_or(|t| t > tick)));
     }
 
     /// Waiting, oldest first.
@@ -121,6 +144,7 @@ impl Default for ClientNet {
             last_seq: 0,
             acked: None,
             playout: PLAYOUT_MIN as u8,
+            ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
             rtt_ms: 0.0,
             late: 0,
@@ -155,6 +179,10 @@ impl ClientNet {
             }
         }
         self.playout = m.playout;
+        let view = View {
+            acked: self.acked,
+            playout: m.playout,
+        };
         for (i, f) in m.frames().iter().enumerate() {
             let seq = m.first_seq.wrapping_add(i as u32);
             let cursor = *self.cursor.get_or_insert(seq);
@@ -171,7 +199,12 @@ impl ClientNet {
                 self.frames = [None; BUF];
                 self.newest_seq = None;
             }
-            self.frames[seq as usize % BUF] = Some((seq, f.sanitized()));
+            // Sent again (every datagram carries what isn't acked): it
+            // keeps the view it first came with.
+            let slot = &mut self.frames[seq as usize % BUF];
+            if !slot.is_some_and(|(s, ..)| s == seq) {
+                *slot = Some((seq, f.sanitized(), view));
+            }
             if self.newest_seq.is_none_or(|n| seq.wrapping_sub(n) < 0x8000_0000) {
                 self.newest_seq = Some(seq);
             }
@@ -193,8 +226,9 @@ impl ClientNet {
         }
         let slot = &mut self.frames[cursor as usize % BUF];
         let (inp, spare) = match slot.take() {
-            Some((s, f)) if s == cursor => {
+            Some((s, f, view)) if s == cursor => {
                 let n = self.newest_seq.unwrap_or(cursor);
+                self.ran = view;
                 (f, n.wrapping_sub(cursor) as i32)
             }
             _ => {
@@ -202,6 +236,10 @@ impl ClientNet {
                 // How far behind the client is: frames it hasn't sent yet
                 // count against it, so its clock can jump rather than crawl.
                 let behind = self.newest_seq.map_or(-1, |n| (n.wrapping_sub(cursor) as i32).min(-1));
+                self.ran = View {
+                    acked: self.acked,
+                    playout: self.playout,
+                };
                 (self.last.repeated(), behind)
             }
         };
@@ -231,15 +269,19 @@ impl ClientNet {
         self.sent[tick as usize % SENT] = (tick, now_ms);
     }
 
-    /// How far back this client's hitscan is checked at `tick`, in 1/256
-    /// tick: how old its newest acked snapshot is plus how far behind that
-    /// it draws others, both as the server measures, capped.
+    /// How far back the frame last taken ([`Self::take_frame`]) has this
+    /// client's hitscan checked at `tick`, in 1/256 tick: how old the
+    /// newest snapshot it had acked when it sent that frame is, plus how
+    /// far behind that it drew others then, capped. The newest ack instead
+    /// would rewind a frame that waited in the buffer to a later moment
+    /// than its shooter saw (a frame or two of ticks: a strafing target
+    /// ten centimetres on).
     pub fn rewind_q8(&self, tick: u32) -> u32 {
-        let Some(acked) = self.acked else {
+        let Some(acked) = self.ran.acked else {
             return 0;
         };
         let age = tick.saturating_sub(acked);
-        let play = (self.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
+        let play = (self.ran.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
         (age + play).min(ticks(MAX_FAVOUR_MS)) << 8
     }
 }
@@ -564,6 +606,17 @@ impl Room {
     /// One tick. Returns the snapshots to send (on snapshot ticks) and the
     /// stream messages.
     pub fn step(&mut self, now_ms: f64) -> (Vec<(u8, Snapshot)>, Outbox) {
+        let (mut snaps, mut out) = (Vec::new(), Vec::new());
+        self.step_into(now_ms, &mut out, |s, snap, _| snaps.push((s, *snap)));
+        (snaps, out)
+    }
+
+    /// [`Room::step`] for the server: the stream messages go onto `out`
+    /// (cleared first), and each snapshot is handed to `send` with its
+    /// seat and its bytes on the wire (empty if it can't fit a datagram),
+    /// encoded once.
+    pub fn step_into(&mut self, now_ms: f64, out: &mut Outbox, mut send: impl FnMut(u8, &Snapshot, &[u8])) {
+        out.clear();
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         let mut rewind = [0u32; MAX_FIGHTERS];
         let next = self.world.tick.wrapping_add(1);
@@ -584,9 +637,10 @@ impl Room {
         self.rec.step(&inputs, &rewind);
         self.world.step(&inputs, &rewind);
         let (fogs, tick) = (&self.fogs, self.world.tick);
-        self.watch.observe(&self.world, |v, t| fogs[v].shows(t, tick));
+        let mut plain = fog::Plain::default();
+        self.watch
+            .observe_with(&self.world, &mut plain, |v, t| fogs[v].shows(t, tick));
 
-        let mut out: Outbox = Vec::new();
         for e in self.world.events.as_slice() {
             if e.kind == Ev::Kill {
                 out.push((
@@ -646,16 +700,16 @@ impl Room {
             }
         }
 
-        let mut snaps = Vec::new();
+        let mut wire = [0u8; MAX_DATAGRAM];
         if self.world.tick.is_multiple_of(SNAP_EVERY) {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
                 if let Seat::Person(c, _) = &mut self.seats[s] {
                     let lead = fog::lead_s(c.rtt_ms, c.playout as u32);
                     let f = &mut self.fogs[s];
-                    f.update(&self.world, s, lead, tick);
+                    f.update_with(&self.world, s, lead, tick, &mut plain);
                     let low = c.take_low();
-                    let snap = build(
+                    let (snap, n) = build_encoded(
                         &self.world,
                         s,
                         (c.last_seq, low),
@@ -663,17 +717,17 @@ impl Room {
                         &mut c.queue,
                         |q| f.shows(q, tick),
                         |i| f.shows_vehicle(i, tick),
+                        &mut wire,
                     );
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
-                    snaps.push((s as u8, snap));
+                    send(s as u8, &snap, &wire[..n]);
                 }
             }
         }
         if let Some(l) = self.spectate.as_mut() {
-            l.observe(&self.world, &out);
+            l.observe(&self.world, out);
         }
-        (snaps, out)
     }
 }
 
@@ -690,6 +744,33 @@ pub fn build(
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
+    let mut wire = [0u8; MAX_DATAGRAM];
+    build_encoded(
+        w,
+        s,
+        (last_seq, depth),
+        events,
+        queue,
+        visible,
+        vehicle_visible,
+        &mut wire,
+    )
+    .0
+}
+
+/// [`build`], and the snapshot's bytes in `wire`: how many (0 if even with
+/// no events it is over a datagram, which `tests/budget.rs` rules out).
+#[allow(clippy::too_many_arguments)]
+fn build_encoded(
+    w: &World,
+    s: usize,
+    (last_seq, depth): (u32, i8),
+    events: &[Event],
+    queue: &mut EventQueue,
+    visible: impl Fn(usize) -> bool,
+    vehicle_visible: impl Fn(usize) -> bool,
+    wire: &mut [u8; MAX_DATAGRAM],
+) -> (Snapshot, usize) {
     let mut snap = Snapshot {
         tick: w.tick,
         last_seq,
@@ -730,15 +811,33 @@ pub fn build(
         snap.n_events += 1;
     }
     // Over a datagram, the snapshot would be dropped whole: the newest
-    // events wait for the next instead.
-    let mut scratch = [0u8; 2 * MAX_DATAGRAM];
-    while snap.n_events > 0 && encode_snapshot(&snap, &mut scratch).map_or(true, |n| n > MAX_DATAGRAM) {
-        snap.n_events -= 1;
-    }
+    // events wait for the next instead. It only grows with its events, so
+    // the most that fit are found in a few encodes, not one per event.
+    let n = match encode_snapshot(&snap, wire) {
+        Ok(n) => n,
+        Err(_) => {
+            let fits = |snap: &mut Snapshot, k: u8, wire: &mut [u8]| {
+                snap.n_events = k;
+                encode_snapshot(snap, wire).is_ok()
+            };
+            // `lo` fits (or is 0), `hi` doesn't.
+            let (mut lo, mut hi) = (0u8, snap.n_events);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if fits(&mut snap, mid, wire) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            snap.n_events = lo;
+            encode_snapshot(&snap, wire).unwrap_or(0)
+        }
+    };
     for (since, _) in queue.list.iter_mut().take(snap.n_events as usize) {
         since.get_or_insert(w.tick);
     }
-    snap
+    (snap, n)
 }
 
 /// The others fog shows this client, coarsely.
@@ -747,21 +846,7 @@ fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usiz
         if q == s || !f.seated || !visible(q) || snap.n_remote as usize >= MAX_REMOTES {
             continue;
         }
-        snap.remotes[snap.n_remote as usize] = Remote {
-            slot: q as u8,
-            team: f.team,
-            alive: f.alive,
-            crouched: f.body.crouched,
-            grounded: f.body.grounded,
-            reloading: f.reload > 0,
-            pos: f.body.pos,
-            vel: f.body.vel,
-            yaw: f.yaw,
-            pitch: f.pitch,
-            arm: f.gun().arm,
-            shield: (f.shield.max(0) as i64 * 255 / SHIELD_MAX as i64) as u8,
-            flag: f.flag,
-        };
+        snap.remotes[snap.n_remote as usize] = Remote::of(q as u8, f);
         snap.n_remote += 1;
     }
 }
@@ -877,7 +962,7 @@ fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
     for i in 0..n {
         snap.pads[i] = PadState {
-            empty_s: (w.pads[i].empty_for.div_ceil(TICK_HZ)).min(u16::MAX as u32) as u16,
+            empty_s: (w.pads[i].empty_for.div_ceil(TICK_HZ)).min(proto::PAD_S_MAX as u32) as u16,
         };
     }
     snap.n_pads = n as u8;

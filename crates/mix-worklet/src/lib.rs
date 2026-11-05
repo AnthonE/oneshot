@@ -20,10 +20,14 @@ struct Worklet {
     stats: [u32; 7],
 }
 
+/// What [`mix_buf`] holds from the start: a frame's commands fit many times
+/// over, so it grows only for a clip (at load), never mid-game.
+const BUF_START: usize = 64 << 10;
+
 thread_local! {
     static W: RefCell<Worklet> = RefCell::new(Worklet {
         engine: Engine::default(),
-        buf: Vec::new(),
+        buf: Vec::with_capacity(BUF_START),
         mixed: [0.0; BLOCK * 2],
         planes: [0.0; BLOCK * 2],
         stats: [0; 7],
@@ -31,12 +35,15 @@ thread_local! {
 }
 
 /// Room for `len` bytes to be written; its address. Valid until the next
-/// call here (memory may grow under it).
+/// call here (memory may grow under it). It only grows: what is past `len`
+/// is stale, and the calls below read only the `len` they are told.
 #[no_mangle]
 pub extern "C" fn mix_buf(len: usize) -> *mut u8 {
     W.with(|w| {
         let w = &mut *w.borrow_mut();
-        w.buf.resize(len, 0);
+        if w.buf.len() < len {
+            w.buf.resize(len, 0);
+        }
         w.buf.as_mut_ptr()
     })
 }

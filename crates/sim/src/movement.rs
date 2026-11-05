@@ -45,15 +45,28 @@ fn quant3(v: V3) -> V3 {
     V3::new(quant(v.x), quant(v.y), quant(v.z))
 }
 
-/// Quake's accelerate: speed along `w` (unit) up to `cap`, gaining at most
-/// `rate · wish · DT` this tick.
-fn accelerate(vel: V3, w: V3, cap: f32, wish: f32, rate: f32) -> V3 {
-    let add = cap - vel.dot(w);
+/// Quake's accelerate, speed along `w` (unit) up to `wish` gaining at most
+/// `acc` this tick, but Halo's top speed: the flat speed after it is never
+/// more than the greater of the speed before and `wish`. So it turns,
+/// slows and brings a body up to a run, and never adds past it. Quake's
+/// lets a strafe that turns with the mouse gain a little every tick: a run
+/// held 5% over its top on the ground, and in the air (with its cap) a
+/// jump doubled a run at 128 Hz and each hop doubled it again.
+fn accelerate(vel: V3, w: V3, wish: f32, acc: f32) -> V3 {
+    let add = wish - vel.dot(w);
     if add <= 0.0 {
         return vel;
     }
-    let acc = (rate * wish * DT).min(add);
-    V3::new(vel.x + w.x * acc, vel.y, vel.z + w.z * acc)
+    let acc = acc.min(add);
+    let (mut x, mut z) = (vel.x + w.x * acc, vel.z + w.z * acc);
+    let cap = (vel.x * vel.x + vel.z * vel.z).max(wish * wish);
+    let now = x * x + z * z;
+    if now > cap {
+        let k = (cap / now).sqrt();
+        x *= k;
+        z *= k;
+    }
+    V3::new(x, vel.y, z)
 }
 
 /// One tick of a body under one input.
@@ -86,7 +99,8 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let mut wish = 0.0;
     if len > 0.0 {
         w = w * (1.0 / len);
-        let top = if b.crouched {
+        // Tucked legs in the air never slow it: crouch speed is a walk's.
+        let top = if b.crouched && b.grounded {
             CROUCH_RUN
         } else {
             // Halo 2's: full speed ahead, a little less backing up or to
@@ -107,13 +121,17 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             v.x *= k;
             v.z *= k;
         }
-        v = accelerate(v, w, wish, wish, ACCEL);
-        if inp.held(JUMP) && !b.crouched {
+        v = accelerate(v, w, wish, ACCEL * wish * DT);
+        // From a crouch too, as in any shooter: a crouch pressed a tick
+        // before the jump (a crouch jump's two buttons, mashed) must not
+        // eat it. Held, the legs stay tucked; let go, they come down in
+        // the air where there's room, the head staying.
+        if inp.held(JUMP) {
             v.y = JUMP_SPEED;
             b.grounded = false;
         }
     } else {
-        v = accelerate(v, w, wish.min(AIR_CAP), wish, AIR_ACCEL);
+        v = accelerate(v, w, wish, AIR_ACCEL * len.min(1.0) * DT);
         v.y -= GRAVITY * DT;
     }
     let sp = v.dot(v);
@@ -176,6 +194,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             &mut p.z,
             &mut v,
             BODY_R,
+            p.y,
             lo,
             hi,
             p.y + STEP,
@@ -395,6 +414,159 @@ mod tests {
         assert!(fabs(speed(127, 127) - diag) < 0.05, "{} vs {diag}", speed(127, 127));
     }
 
+    /// Open floor, nothing on it: room to strafe.
+    fn open() -> Map {
+        crate::map::Def {
+            id: 252,
+            practice: true,
+            name: "open",
+            lo: (-500.0, -500.0),
+            hi: (500.0, 500.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([0.0, 0.0, 0.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[],
+            solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+            flags: &[],
+        }
+        .build()
+    }
+
+    fn flat_speed(b: &Body) -> f32 {
+        (b.vel.x * b.vel.x + b.vel.z * b.vel.z).sqrt()
+    }
+
+    #[test]
+    fn air_strafing_and_bunny_hops_never_gain_speed() {
+        // Each tick in the air, of the turns and strafes a mouse and keys
+        // could make, the one that leaves the body fastest; jump held, so
+        // it hops the tick it lands. Quake's air took a run to 13 m/s in
+        // one jump and 22 by the fourth.
+        let map = open();
+        let mut b = standing(&map, 0.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ);
+        let mut yaw = 0u16;
+        let mut top = 0.0f32;
+        for _ in 0..3 {
+            step(
+                &mut b,
+                &Input {
+                    buttons: JUMP,
+                    mz: 127,
+                    yaw,
+                    ..Input::default()
+                },
+                &map,
+            );
+            let mut air = 0;
+            while !b.grounded && air < TICK_HZ * 2 {
+                let mut best = (f32::MIN, b, yaw);
+                for turn in (-1500i32..=1500).step_by(100) {
+                    for (mx, mz) in [(127, 0), (-127, 0), (127, 127), (-127, 127)] {
+                        let y = yaw.wrapping_add(turn as u16);
+                        let mut c = b;
+                        step(
+                            &mut c,
+                            &Input {
+                                buttons: JUMP,
+                                yaw: y,
+                                mx,
+                                mz,
+                                ..Input::default()
+                            },
+                            &map,
+                        );
+                        if flat_speed(&c) > best.0 {
+                            best = (flat_speed(&c), c, y);
+                        }
+                    }
+                }
+                (_, b, yaw) = best;
+                top = top.max(flat_speed(&b));
+                air += 1;
+            }
+        }
+        // A landing tick's Quake ground step may turn a run a hair over it;
+        // nothing compounds.
+        assert!(top < RUN * 1.02, "{top} m/s");
+    }
+
+    #[test]
+    fn the_air_steers_a_jump_but_commits_it() {
+        let map = open();
+        // From a standstill, the stick ahead: it drifts to a run.
+        let mut b = standing(&map, 0.0, 0.0);
+        step(
+            &mut b,
+            &Input {
+                buttons: JUMP,
+                ..Input::default()
+            },
+            &map,
+        );
+        run(&mut b, run_x(), &map, TICK_HZ / 2);
+        let half = b.vel.x;
+        assert!(half > 3.0 && half < 4.5, "{half} m/s half a second in");
+        // A running jump pulled back: slowed, not stopped dead.
+        let mut b = standing(&map, 0.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ);
+        step(
+            &mut b,
+            &Input {
+                buttons: JUMP,
+                mz: 127,
+                ..Input::default()
+            },
+            &map,
+        );
+        let back = Input {
+            mz: -127,
+            ..Input::default()
+        };
+        run(&mut b, back, &map, TICK_HZ / 4);
+        assert!(b.vel.x > 4.0, "{} m/s a quarter second in", b.vel.x);
+        // Let go of the stick: the jump keeps what it has.
+        let was = b.vel.x;
+        run(&mut b, Input::default(), &map, TICK_HZ / 4);
+        assert_eq!(b.vel.x, was);
+    }
+
+    #[test]
+    fn a_crouch_jumps() {
+        let map = open();
+        let mut b = standing(&map, 0.0, 0.0);
+        let crouch = Input {
+            buttons: CROUCH,
+            ..Input::default()
+        };
+        run(&mut b, crouch, &map, 4);
+        assert!(b.crouched && b.grounded);
+        // Jump with crouch still held (pressed a tick early): it goes.
+        let both = Input {
+            buttons: CROUCH | JUMP,
+            ..Input::default()
+        };
+        step(&mut b, &both, &map);
+        assert!(!b.grounded && b.vel.y > 0.0, "{b:?}");
+        let mut top = 0.0f32;
+        while !b.grounded {
+            step(&mut b, &crouch, &map);
+            top = top.max(b.pos.y);
+        }
+        assert!(top > 2.6 && top < 2.9, "apex {top}");
+    }
+
     #[test]
     fn a_crouch_jump_reaches_a_ledge_a_jump_does_not() {
         // Proving Grounds' 3 m pillar at x 7.25..8.75, z 11.25..12.75: a
@@ -512,6 +684,8 @@ mod tests {
             solid_looks: &[],
             dress: &[],
             dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
@@ -597,6 +771,8 @@ mod tests {
             solid_looks: &[0, 0, 0],
             dress: &[],
             dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
@@ -692,5 +868,278 @@ mod tests {
         // is a little under where it is aimed, so a little past it).
         assert!(fabs(b.pos.x - -19.0) < 1.5 && fabs(b.pos.z) < 0.5, "{:?}", b.pos);
         assert!((TICK_HZ * 23 / 10..TICK_HZ * 27 / 10).contains(&ticks), "{ticks} ticks");
+    }
+
+    static ZEROS: [u8; 16] = [0; 16];
+
+    /// Open floor with these profile solids and these other solids on it.
+    fn with_profiles(profiles: &'static [crate::map::ProfileDef], solids: &'static [(u8, [f32; 8])]) -> Map {
+        crate::map::Def {
+            id: 251,
+            practice: false,
+            name: "profiles",
+            lo: (-40.0, -20.0),
+            hi: (60.0, 20.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([1.0, 0.0, 0.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids,
+            solid_looks: &ZEROS[..solids.len()],
+            dress: &[],
+            dress_solids: &[],
+            profiles,
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+            flags: &[],
+        }
+        .build()
+    }
+
+    /// A low dome (a cap 3 m across its radius, 0.8 m high: 30° at its
+    /// edge) and a steep one (a hemisphere of 2 m).
+    const DOMES: &[crate::map::ProfileDef] = &[
+        (
+            3,
+            [8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[[0.0, 0.0, 0.8], [1.0, 0.0, 0.716], [2.0, 0.0, 0.458], [3.0, 0.0, 0.0]],
+            0,
+        ),
+        (
+            3,
+            [20.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            &[
+                [0.0, 0.0, 2.0],
+                [1.0, 0.0, 1.732],
+                [1.5, 0.0, 1.323],
+                [1.8, 0.0, 0.872],
+                [2.0, 0.0, 0.0],
+            ],
+            0,
+        ),
+    ];
+
+    #[test]
+    fn a_body_walks_over_a_low_dome() {
+        let map = with_profiles(DOMES, &[]);
+        let d = map.solids[0];
+        let mut b = standing(&map, 3.0, 0.0);
+        let mut top = 0.0f32;
+        for _ in 0..TICK_HZ * 2 {
+            step(&mut b, &run_x(), &map);
+            if fabs(b.pos.x - 8.0) < 2.5 {
+                assert!(b.grounded, "on the dome: {:?}", b);
+                // Stood on the slope under its middle, never floating.
+                assert!(fabs(b.pos.y - d.top_at(b.pos.x, b.pos.z)) < 0.02, "{:?}", b.pos);
+            }
+            top = top.max(b.pos.y);
+        }
+        assert!(
+            fabs(top - 0.8) < 0.02 && b.pos.x > 12.0 && b.pos.y == 0.0,
+            "over it: {top} {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_steep_flank_is_not_climbed_a_step_at_a_time() {
+        let map = with_profiles(DOMES, &[]);
+        let mut b = standing(&map, 15.0, 0.0);
+        for _ in 0..TICK_HZ * 3 {
+            step(&mut b, &run_x(), &map);
+            assert!(b.pos.y < 0.01, "up the hemisphere: {:?}", b.pos);
+        }
+        let s = fabs(b.pos.x - 20.0);
+        assert!(
+            s > 1.8 + BODY_R - 0.02 && s < 2.0 + BODY_R + 0.02,
+            "held at its foot: {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_jump_into_a_flat_lathe_goes_as_into_a_pillar() {
+        // A lathe the shape of a pillar at z = 4, the pillar at z = −4.
+        let map = with_profiles(
+            &[(
+                3,
+                [10.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[0.0, 0.0, 1.5], [1.0, 0.0, 1.5]],
+                0,
+            )],
+            &[(0, [10.0, -4.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.5])],
+        );
+        let jump = Input {
+            mz: 127,
+            buttons: crate::input::JUMP,
+            ..Input::default()
+        };
+        for start in [6.0, 7.5, 8.2] {
+            let (mut a, mut p) = (standing(&map, start, 4.0), standing(&map, start, -4.0));
+            for t in 0..TICK_HZ * 2 {
+                let i = if t < 2 && start > 7.0 { jump } else { run_x() };
+                step(&mut a, &i, &map);
+                step(&mut p, &i, &map);
+                assert!(
+                    fabs(a.pos.y - p.pos.y) < 1e-3,
+                    "{start} at {t}: {:?} vs {:?}",
+                    a.pos,
+                    p.pos
+                );
+                assert!(
+                    fabs((a.pos.x - p.pos.x) + 0.0) < 0.01,
+                    "{start} at {t}: {:?} vs {:?}",
+                    a.pos,
+                    p.pos
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_body_stands_under_a_bulbs_undercut() {
+        // A mushroom: a stem 0.3 m round, a cap 2 m round from 2.0 m at the
+        // stem to 2.5 at its rim.
+        let map = with_profiles(
+            &[(
+                3,
+                [10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[0.0, 0.0, 3.0], [0.3, 0.0, 3.0], [0.3, 2.0, 3.0], [2.0, 2.5, 2.5]],
+                0,
+            )],
+            &[],
+        );
+        let mut b = standing(&map, 4.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ * 2);
+        let s = fabs(b.pos.x - 10.0);
+        assert!(
+            fabs(s - (0.3 + BODY_R)) < 0.02 && b.pos.y == 0.0,
+            "under the cap at the stem: {:?}",
+            b.pos
+        );
+    }
+
+    #[test]
+    fn a_jump_under_a_vault_stops_at_the_arch() {
+        // A vault along x from 40 to 50 over z −3..3, springing at 1.9 m,
+        // its crown 2.6.
+        let map = with_profiles(
+            &[(
+                5,
+                [45.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0],
+                &[
+                    [-3.0, 1.9, 3.0],
+                    [-2.0, 2.42, 3.0],
+                    [-1.0, 2.56, 3.0],
+                    [0.0, 2.6, 3.0],
+                    [1.0, 2.56, 3.0],
+                    [2.0, 2.42, 3.0],
+                    [3.0, 1.9, 3.0],
+                ],
+                0,
+            )],
+            &[],
+        );
+        let jump = Input {
+            buttons: crate::input::JUMP,
+            ..Input::default()
+        };
+        for (z, roof) in [(0.0, 2.6 - 0.35 * 0.04), (2.2, 2.42 - 0.55 * 0.52)] {
+            let mut b = standing(&map, 45.0, z);
+            let mut top = 0.0f32;
+            for _ in 0..TICK_HZ {
+                step(&mut b, &jump, &map);
+                top = top.max(b.pos.y + BODY_H);
+            }
+            assert!(
+                top <= roof + 0.01 && top > roof - 0.1,
+                "{z}: the head to {top}, the arch at {roof}"
+            );
+        }
+        // Outside, the same jump goes its full height.
+        let mut b = standing(&map, 30.0, 0.0);
+        let mut top = 0.0f32;
+        for _ in 0..TICK_HZ {
+            step(&mut b, &jump, &map);
+            top = top.max(b.pos.y);
+        }
+        assert!(top > 2.5, "{top}");
+    }
+
+    #[test]
+    fn a_spiral_is_walked_up() {
+        // A quarter turn round (0, 0) on the circle r = 6, 2 m wide, from 0
+        // to 2 m: straight ramps along it, as the compiler lays them.
+        let n = 12;
+        let (r, w, rise) = (6.0f32, 2.0f32, 2.0f32);
+        let th = core::f32::consts::FRAC_PI_2 / n as f32;
+        let mut rows: Vec<crate::map::ProfileDef> = Vec::new();
+        for i in 0..n {
+            let phi = th * (i as f32 + 0.5);
+            let (sn, c) = crate::fmath::sin_cos(phi);
+            let ymid = rise * (i as f32 + 0.5) / n as f32;
+            let hx = (r + w / 2.0) * crate::fmath::tan(th / 2.0);
+            let k = (rise / (r * core::f32::consts::FRAC_PI_2)) * th / (2.0 * crate::fmath::tan(th / 2.0));
+            let knots: &'static [[f32; 3]] = Box::leak(Box::new([
+                [-hx, 0.0, (ymid - k * hx).max(0.0)],
+                [hx, 0.0, ymid + k * hx],
+            ]));
+            rows.push((5, [r * c, r * sn, 0.0, c, sn, w / 2.0, 0.0, 0.0], knots, 0));
+        }
+        let map = with_profiles(Box::leak(rows.into_boxed_slice()), &[]);
+        // From the foot (6, −1.5), up +z, then round.
+        let mut b = standing(&map, 6.0, -1.5);
+        let (mut was, mut top) = (0.0f32, 0.0f32);
+        for t in 0..TICK_HZ * 2 {
+            let (x, z) = (b.pos.x, b.pos.z);
+            // Along the circle (the tangent, (−z, x)), back toward it.
+            let rho = (x * x + z * z).sqrt();
+            let k = (rho - r) * 2.0;
+            let (dx, dz) = (-z - x * k, x - z * k);
+            let yaw = crate::geom::rad_to_yaw(crate::fmath::atan2(dz, dx));
+            let i = Input {
+                mz: 127,
+                yaw,
+                ..Input::default()
+            };
+            step(&mut b, &i, &map);
+            if b.pos.z > 0.5 && b.pos.x > 0.5 {
+                assert!(b.grounded && b.pos.y >= was - 0.01, "up the spiral at {t}: {:?}", b.pos);
+                top = top.max(b.pos.y);
+            }
+            was = b.pos.y;
+        }
+        assert!(top > 1.8, "to its top: {top}");
+    }
+
+    #[test]
+    fn a_push_ends_unblocked_on_the_side_it_came_from() {
+        // A wall 0.4 m thick on the circle r = 5 round (0, 0); a body that
+        // got past its middle from outside goes back out.
+        let map = with_profiles(
+            &[(
+                3,
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                &[[4.8, 0.0, 3.0], [5.2, 0.0, 3.0]],
+                0,
+            )],
+            &[],
+        );
+        let s = map.solids[0];
+        let band = crate::profile::Band {
+            feet: 0.0,
+            lo: STEP,
+            hi: BODY_H,
+            climb: STEP,
+        };
+        let (x, z, ..) = s.push_band(4.9, 0.0, BODY_R, band, (5.6, 0.0)).unwrap();
+        assert!(x > 5.2 + BODY_R && fabs(z) < 1e-4, "out: {x} {z}");
+        let (x, ..) = s.push_band(5.1, 0.0, BODY_R, band, (4.4, 0.0)).unwrap();
+        assert!(x < 4.8 - BODY_R, "in: {x}");
     }
 }

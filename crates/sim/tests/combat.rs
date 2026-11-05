@@ -365,6 +365,79 @@ fn a_pad_gives_its_gun_and_comes_back() {
     assert_eq!(w.pads[0].empty_for, 0);
 }
 
+/// Fighter 0 walks onto the open map's pad, holding `power` instead of its
+/// shotgun: taken on touch, no USE.
+fn take_power(power: u8) -> World {
+    let mut w = duel([BR, MAGNUM], 20.0);
+    w.map.pads[0].arm = power;
+    w.fighters[0].body.pos = V3::new(0.0, 0.0, -30.0);
+    w.step(&[Input::default(); MAX_FIGHTERS], &NO_LAG);
+    assert!(w.pads[0].empty_for > 0, "taken");
+    assert_eq!(w.fighters[0].gun().arm, BR, "a power-up is no gun");
+    w.fighters[0].body.pos = V3::ZERO;
+    w
+}
+
+#[test]
+fn the_overshield_climbs_to_three_times_full_then_drains_back() {
+    let mut w = take_power(sim::arms::OVERSHIELD);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    let mut n = 0;
+    while w.fighters[0].charging {
+        w.step(&idle, &NO_LAG);
+        n += 1;
+    }
+    assert_eq!(w.fighters[0].shield, OVERSHIELD_MAX);
+    assert!(n <= ticks(2000), "full in 2 s from full shields, not {n} ticks");
+    // A sticky worn still kills, whatever the shield.
+    w.fighters[1].body.pos = V3::new(3.0, 0.0, 0.0);
+    let mut sticky = [Input::default(); MAX_FIGHTERS];
+    sticky[1] = Input {
+        buttons: GRENADE | GREN_SWITCH,
+        yaw: 32768,
+        pitch: -2000,
+        ..Input::default()
+    };
+    w.step(&sticky, &NO_LAG);
+    for _ in 0..ticks(3000) {
+        w.step(&idle, &NO_LAG);
+        if !w.fighters[0].alive {
+            break;
+        }
+    }
+    assert!(!w.fighters[0].alive, "a sticky worn kills through an overshield");
+    // Another, left alone, drains to full and stays.
+    let mut w = take_power(sim::arms::OVERSHIELD);
+    for _ in 0..ticks(45_000) {
+        w.step(&idle, &NO_LAG);
+    }
+    assert_eq!(w.fighters[0].shield, SHIELD_MAX);
+    assert!(!w.fighters[0].overshield());
+}
+
+#[test]
+fn camouflage_hides_a_body_standing_still_until_it_fires() {
+    let mut w = take_power(sim::arms::CAMO);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].cloak(), CAMO_BEST, "standing still");
+    w.fighters[0].body.vel = V3::new(RUN, 0.0, 0.0);
+    assert!(w.fighters[0].cloak() < CAMO_BEST, "running shows it");
+    w.fighters[0].body.vel = V3::ZERO;
+    let at = w.fighters[1].body.pos + V3::new(0.0, 1.0, 0.0);
+    shoot(&mut w, at, FIRE, NO_LAG);
+    assert!(w.fighters[0].cloak() < 0.01, "firing shows it whole");
+    // The burst's last round, then the flare.
+    for _ in 0..ticks(CAMO_FLARE_MS + 500) {
+        w.step(&idle, &NO_LAG);
+    }
+    assert_eq!(w.fighters[0].cloak(), CAMO_BEST, "and it fades back");
+    for _ in 0..ticks(CAMO_MS) {
+        w.step(&idle, &NO_LAG);
+    }
+    assert_eq!((w.fighters[0].camo, w.fighters[0].cloak()), (0, 0.0), "it runs out");
+}
+
 /// The live drops, by gun.
 fn dropped(w: &World, arm: u8) -> Vec<Dropped> {
     w.drops
@@ -732,9 +805,11 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
     let (mut launched, mut climbed) = (false, 0.0f32);
     for t in 0..TICK_HZ * 40 {
         let r = rng.next_u32();
+        // Standing on the launcher it is thrown, not jumping off it first.
+        let jump = if t == 0 { 0 } else { JUMP };
         let inp = Input {
             // No grenades: a frag's blast on its own thrower is the world's.
-            buttons: (r as u16) & (FIRE | JUMP | CROUCH | RELOAD | SWAP),
+            buttons: (r as u16) & (FIRE | jump | CROUCH | RELOAD | SWAP),
             yaw: (fmath::sin(t as f32 * 0.003) * 30000.0) as i16 as u16,
             pitch: 2000,
             mx: (r >> 16) as i8 / 4,

@@ -37,9 +37,16 @@ pub struct Recorder {
     ticks: u32,
 }
 
+/// A tick's record with a few people moving: its tag, masks and inputs.
+const TYPICAL_TICK_BYTES: usize = 48;
+
 impl Recorder {
     pub fn new(seed: u64, salt: (u64, u64), rules: &Rules, map: u8) -> Recorder {
-        let mut buf = Vec::with_capacity(1 << 16);
+        // Room for a typical match up to its time limit, so the buffer
+        // doesn't grow by copying megabytes on the sim thread mid-match
+        // (pages not written are never touched).
+        let ticks = rules.time_limit_ms as usize * sim::consts::TICK_HZ as usize / 1000;
+        let mut buf = Vec::with_capacity((ticks * TYPICAL_TICK_BYTES).clamp(1 << 16, 8 << 20));
         buf.extend_from_slice(MAGIC);
         buf.extend_from_slice(&PROTO_VER.to_le_bytes());
         buf.extend_from_slice(&RULES_TAG.to_le_bytes());

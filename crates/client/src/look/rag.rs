@@ -780,7 +780,7 @@ pub fn step(
                     continue;
                 }
                 if let Ok(mut tr) = at.get_mut(e) {
-                    *tr = rag.root;
+                    tr.set_if_neq(rag.root);
                 }
                 if body.slot() == me {
                     own.0 = Some(rag.now[HIPS]);
@@ -817,6 +817,7 @@ pub fn step(
                 if body.slot() == me {
                     own.0 = Some(rag.now[HIPS]);
                 }
+                body.go_limp();
                 commands.entity(e).insert(rag);
             }
         }

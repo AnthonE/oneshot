@@ -17,20 +17,23 @@ pub const fn ticks(ms: u32) -> u32 {
 pub const MAX_FIGHTERS: usize = 16;
 /// Rockets and frags in flight at once.
 pub const MAX_PROJ: usize = 32;
-/// Weapon pads on a map (the Range has one of every gun).
-pub const MAX_PADS: usize = 16;
+/// Weapon and power-up pads on a map (the Range has one of every gun
+/// and power-up).
+pub const MAX_PADS: usize = 24;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
 /// Boxes and solids in a map, together (`tools/maps/compile.mjs` holds
 /// maps to it).
 pub const MAX_MAP_BOXES: usize = 512;
+/// The most knots a profile solid has (crate::profile).
+pub const MAX_KNOTS: usize = 32;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
-// Movement: Quake's model (Fireplace's `PHYS`), restated per second, at
-// Halo 2's speeds and jump. Its world unit is 10 ft (3.048 m), the scale
-// the guns are in: 2.25 wu/s ahead, 2.0 backing up and to the side (the
-// Editing Kit's player metrics); between, on the ellipse
+// Movement: Quake's model on the ground (Fireplace's `PHYS`), restated
+// per second, at Halo 2's speeds and jump. Its world unit is 10 ft (3.048
+// m), the scale the guns are in: 2.25 wu/s ahead, 2.0 backing up and to
+// the side (the Editing Kit's player metrics); between, on the ellipse
 // (`movement::step`).
 pub const RUN: f32 = 6.86;
 pub const RUN_BACK: f32 = 6.10;
@@ -40,9 +43,12 @@ pub const CROUCH_RUN: f32 = 3.5;
 pub const STOP: f32 = 2.5;
 pub const FRICTION: f32 = 6.0;
 pub const ACCEL: f32 = 10.0;
-pub const AIR_ACCEL: f32 = 10.0;
-/// Quake's air wish-speed cap: air strafing works, air running doesn't.
-pub const AIR_CAP: f32 = 1.0;
+/// Halo's air, not Quake's: the stick steers a body toward its run at this
+/// many m/s², and nothing in the air makes it faster than it took off or
+/// than that run (no strafe jumping, no bunny hops). A jump is a
+/// commitment: from a standstill it drifts to a run in most of a jump, and
+/// a running jump pulled back stops in under one.
+pub const AIR_ACCEL: f32 = 8.0;
 /// Halo 2's jump in proportion to our body (it jumps half again its own
 /// height and is 1.4 s in the air: Halo 3's measured, the same jump
 /// velocity): an apex of v²/2g = 2.76 m, 2v/g = 1.40 s up and down.
@@ -100,6 +106,28 @@ pub const SHIELD_RATE: i32 = 60;
 /// Health comes back once shields are full.
 pub const HEALTH_RATE: i32 = 30;
 pub const RESPAWN_MS: u32 = 3000;
+
+// Power-ups (arms::OVERSHIELD, arms::CAMO), on pads, taken by walking on.
+/// The overshield: shields climb to three times full (Halo 2's), at
+/// `OVERSHIELD_RATE` points a second from wherever they were (health whole
+/// at once), then drain at `OVERSHIELD_DRAIN` back to full: 40 s from the
+/// top. Above full, shields never recharge; below it they do as ever.
+pub const OVERSHIELD_MAX: i32 = 3 * SHIELD_MAX;
+pub const OVERSHIELD_RATE: i32 = 100;
+pub const OVERSHIELD_DRAIN: i32 = 5;
+/// Active camouflage lasts this long. Moving faster than `CAMO_WALK` shows
+/// a body, fully at `CAMO_RUN` and over; firing, a throw, a blow or taking
+/// a hit shows it whole for `CAMO_FLARE_MS`, fading.
+pub const CAMO_MS: u32 = 45_000;
+pub const CAMO_WALK: f32 = 2.0;
+pub const CAMO_RUN: f32 = 9.0;
+pub const CAMO_FLARE_MS: u32 = 1200;
+/// How hidden a camouflaged body still standing is: never all the way.
+pub const CAMO_BEST: f32 = 0.92;
+/// A bot doesn't make out a camouflaged enemy hidden past
+/// `CAMO_BOT_HIDDEN` farther than `CAMO_BOT_M`.
+pub const CAMO_BOT_HIDDEN: f32 = 0.6;
+pub const CAMO_BOT_M: f32 = 12.0;
 /// Where someone comes back (`World::respawn`): of the spawns their side
 /// may use, the one whose nearest living enemy is farthest, counted only
 /// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see

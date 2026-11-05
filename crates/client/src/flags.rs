@@ -39,6 +39,7 @@ pub fn draw(
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut placed: Query<(&mut Transform, &mut Visibility)>,
+    seen: Res<crate::Seen>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -92,10 +93,9 @@ pub fn draw(
             flags.roots[t] = Some(root);
         }
     }
-    let now = link.0.now_ms();
     let snap = core.latest();
     let me = core.slot;
-    let others = core.others(now);
+    let others = &seen.others;
     for (t, f) in snap.flags().iter().enumerate().take(2) {
         let Some(root) = flags.roots[t] else {
             continue;
@@ -122,11 +122,17 @@ pub fn draw(
             Some((p, yaw)) => {
                 let rot = Quat::from_rotation_y(yaw);
                 let off = if f.state == FLAG_HELD { rot * CARRY } else { Vec3::ZERO };
-                tr.translation = Vec3::new(p.x, p.y, p.z) + off;
-                tr.rotation = rot;
-                *vis = Visibility::Inherited;
+                let at = Vec3::new(p.x, p.y, p.z) + off;
+                // A flag at home or lying still isn't moved again.
+                if tr.translation != at || tr.rotation != rot {
+                    tr.translation = at;
+                    tr.rotation = rot;
+                }
+                vis.set_if_neq(Visibility::Inherited);
             }
-            None => *vis = Visibility::Hidden,
+            None => {
+                vis.set_if_neq(Visibility::Hidden);
+            }
         }
     }
 }

@@ -239,6 +239,13 @@ fn solid_face(s: &Solid, o: Vec3, d: Vec3, tmax: f32) -> Option<(f32, Vec3)> {
                 .map_or(Vec3::Y, |f| f.1);
             Some((t, n))
         }
+        // The piece the sim's ray met, and its normal there (smooth across
+        // the facets, as the mesh is drawn).
+        Shape::Revolve { .. } | Shape::Sweep { .. } => {
+            let (t, piece) = s.ray_hit(v3(o), v3(d), tmax)?;
+            let n = s.normal(piece, v3(o + d * t));
+            Some((t, Vec3::new(n.x, n.y, n.z)))
+        }
     }
 }
 
