@@ -674,7 +674,7 @@ pub fn drive(
         let active = transitions.play(player, rig.node(want), fade);
         if want.one_shot() {
             active.set_repeat(RepeatAnimation::Never);
-            // Shown again already dead (a kill cam's victim): down already,
+            // Shown again already dead (a corpse come into view): down already,
             // not falling again.
             if fresh {
                 active.set_seek_time(d);

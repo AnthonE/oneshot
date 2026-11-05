@@ -41,6 +41,33 @@ pub fn how(cause: u16) -> &'static str {
     causes.iter().find(|(c, _)| *c as u16 == cause).map_or("", |&(_, n)| n)
 }
 
+/// What a death screen says was done to us by `cause`, after Halo 2's
+/// ("You were sniped by ...").
+pub fn verb(cause: u16) -> &'static str {
+    use sim::arms::{BEAM_RIFLE, CANNON, LAUNCHER, ROCKET, SHOTGUN, SNIPER, SWORD};
+    if (cause as usize) < sim::arms::COUNT {
+        return match cause as u8 {
+            SNIPER | BEAM_RIFLE => "sniped",
+            SHOTGUN => "shotgunned",
+            ROCKET | LAUNCHER | CANNON => "blown up",
+            SWORD => "sliced",
+            _ => "killed",
+        };
+    }
+    let causes = [
+        (Cause::Grenade, "blown up"),
+        (Cause::Melee, "beaten down"),
+        (Cause::Behind, "assassinated"),
+        (Cause::Splatter, "splattered"),
+        (Cause::Wreck, "blown up"),
+        (Cause::Sticky, "stuck"),
+    ];
+    causes
+        .iter()
+        .find(|(c, _)| *c as u16 == cause)
+        .map_or("killed", |&(_, n)| n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

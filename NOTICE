@@ -23,6 +23,9 @@ Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
     (flesh, hurt, death), Nox_Sound (landing), and others listed in Gates'
     manifest
 
+The shield's alarm and recharge (crates/client/assets/sound/shield_*.ogg) are
+ours, synthesized by tools/shield_sounds.sh with ffmpeg.
+
 The announcer (crates/client/assets/sound/voice) is ours: placeholder lines
 synthesized by tools/voice.sh with Flite (Carnegie Mellon University's
 speech synthesizer, BSD-style licence) through ffmpeg.
