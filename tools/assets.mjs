@@ -1,7 +1,7 @@
 // node tools/assets.mjs [GATES_DIR]: what the Bevy client draws and plays,
 // from a Gates checkout into crates/client/assets (docs/RIP.md §3–5, §9):
-// the models (Triple T and the guns) with their KTX2 textures re-embedded as
-// JPEG by tools/glb, so no build needs a transcoder; the sounds; and the
+// the model (Triple T) with its KTX2 textures re-embedded as JPEG by
+// tools/glb, so no build needs a transcoder; the sounds; and the
 // ground's and the boxes' textures. All CC0 or public domain (Gates'
 // MANIFEST.md files); credited in NOTICE.
 
@@ -16,18 +16,9 @@ if (!existsSync(join(gates, 'assets/models/stumpy.glb')) || !existsSync(join(gat
   process.exit(1);
 }
 
-// Triple T, and the guns by role (docs/RIP.md §3).
+// Triple T (docs/RIP.md §3). The guns are ours: tools/models.
 const MODELS = {
   'triple-t.glb': 'models/stumpy.glb',
-  'ar.glb': 'models/held/assault_rifle.glb',
-  'br.glb': 'models/held/semi_automatic_rifle.glb',
-  'magnum.glb': 'models/held/python_revolver.glb',
-  'sniper.glb': 'models/held/bolt_action_rifle.glb',
-  'shotgun.glb': 'models/held/pump_shotgun.glb',
-  'rocket-launcher.glb': 'models/held/rocket_launcher.glb',
-  'rocket.glb': 'models/held/rocket.glb',
-  'smg.glb': 'models/held/custom_smg.glb',
-  'frag.glb': 'models/held/beancan_grenade.glb',
 };
 
 // All CC0 or public domain; credits in NOTICE.
@@ -42,9 +33,15 @@ const SOUNDS = [
   'kenney/hit_0.ogg', 'kenney/equip_0.ogg',
   'freesound/blast_0.ogg', 'freesound/blast_1.ogg', 'freesound/fuse_0.ogg',
   'freesound/flesh_0.ogg', 'freesound/flesh_1.ogg', 'freesound/hurt_0.ogg', 'freesound/death_0.ogg', 'freesound/swing_0.ogg',
-  ...[0, 1, 2, 3].map((i) => `pd/step_concrete_${i}.ogg`),
+  ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) =>
+    [`pd/step_concrete_${i}.ogg`, `pd/step_metal_${i}.ogg`, `freesound/step_grass_${i}.ogg`, `freesound/step_rock_${i}.ogg`]),
   'freesound/land_0.ogg',
+  'kenney/equip_1.ogg', 'kenney/equip_2.ogg',
+  ...[0, 1, 2, 3].flatMap((i) => [`pd/flyby_${i}.ogg`, `freesound/ricochet_${i}.ogg`]),
+  ...[0, 1, 2, 3, 4].map((i) => `pd/impact_metal_${i}.ogg`),
+  ...[0, 1, 2].map((i) => `kenney/impactMetal_light_00${i}.ogg`),
 ];
+// The rest of assets/sound is ours: tools/sfx.py synthesizes it.
 
 // The rock pieces a mass out of bounds is drawn with (look/rock.rs): Gates'
 // formation pieces remeshed low, geometry only (no texture to re-embed),

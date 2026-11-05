@@ -140,13 +140,14 @@ try {
   // room of them), as the three.js page's gate drew them.
   await page.goto(`${url}?mode=${mode}&name=e2e&autoplay=1&lite=1${mode ? '&capsules=1' : ''}`);
   const state = () => page.evaluate(() => window.__oneshot ?? null);
-  // Predictions count from the end of the first sample the page drew
-  // steadily (5 fps or more): before that it is loading models and
-  // compiling shaders, frames take seconds, and inputs made in one miss
-  // their ticks.
+  // Predictions count from the end of the second sample in a row the page
+  // drew steadily (5 fps or more): before that it is loading models and
+  // compiling shaders (the page warms up before it joins, so the match's
+  // first seconds still draw its bodies for the first time), frames take
+  // seconds, and inputs made in one miss their ticks.
   const STEADY_FPS = 5;
   const COUNT = 600;
-  let s = null, base = null, prev = null;
+  let s = null, base = null, prev = null, steady = 0;
   const t0 = Date.now();
   while (Date.now() - t0 < seconds * 1000) {
     await page.waitForTimeout(2000);
@@ -156,7 +157,8 @@ try {
     const now = Date.now();
     const fps = prev ? (s.frames - prev.frames) / ((now - prev.at) / 1000) : 0;
     console.log(`${Math.round((now - t0) / 1000)}s frames ${s.frames} (${fps.toFixed(1)} fps) snapshots ${snaps} confirmed ${conf} corrected ${corr} kills ${s.kills}`);
-    if (!base && fps >= STEADY_FPS) {
+    steady = fps >= STEADY_FPS ? steady + 1 : 0;
+    if (!base && steady >= 2) {
       base = s.stats.slice();
       await page.evaluate(() => { window.__countGaps = true; });
     }
@@ -175,6 +177,7 @@ try {
   mkdirSync('traces', { recursive: true });
   await page.screenshot({ path: `traces/e2e-${mode}-${map}.png` });
   console.log(JSON.stringify(s));
+  const mixed = await page.evaluate(() => window.__oneshotMix?.stats() ?? null);
   const [snaps = 0, conf = 0, corr = 0] = s?.stats ?? [];
   const b = base ?? [conf, conf, corr];
   const counted = conf - b[1] + corr - b[2];
@@ -191,6 +194,17 @@ try {
     ['snapshots flowed', snaps > 200],
     ['scored a kill', (s?.kills ?? 0) >= 1],
     [`drew with the WebGL2 module (${s?.gfx}: ${s?.tier})`, s?.gfx === 'webgl2'],
+    // The sound (crates/client/src/sound): clips handed to the mixer and
+    // cues sent it; on the browser's audio thread (web/mix.js), the context
+    // running, the clips decoded, blocks rendered, voices started, nothing
+    // thrown there.
+    [`sound: ${s?.sound?.[0]} clips handed, ${s?.sound?.[1]} loading, ${s?.sound?.[2]} commands`,
+      (s?.sound?.[0] ?? 0) > 100 && (s?.sound?.[1] ?? 99) <= 5 && (s?.sound?.[2] ?? 0) > 30],
+    [`the audio thread: ${JSON.stringify(mixed)}`,
+      mixed?.state === 'running' && mixed.installed > 100 && mixed.failed === 0 && mixed.errors === 0
+        && (mixed.mixer?.[0] ?? 0) > 100 && (mixed.mixer?.[1] ?? 0) > 10
+        // Big Team's maps have wind, held all match long.
+        && (mode !== 6 || (mixed.mixer?.[6] ?? 0) >= 1)],
   );
 } catch (e) {
   errors.push(String(e));

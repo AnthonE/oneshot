@@ -1,26 +1,24 @@
 """The frag: a canister grenade. A dark cylinder with a polymer band, a
-bottom cap, a top cap narrowing to the fuze head with its clip ring, an
-amber LED ring at the shoulder. 0.16 m along X, radius 0.045. Not held:
-the grip at its middle."""
+bottom cap, a top cap narrowing to the fuze head with its lever and ring,
+an amber light ring at the shoulder. 0.16 m. Not held: the grip at its
+middle.
+From Meshy (tools/models/meshy_gen.py frag)."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import *
-from forge import *
+
+IMAGE = ('A single futuristic military fragmentation grenade, a canister. A short cylinder of dark gunmetal, '
+         '9 centimetres across, with a black polymer band around its middle, a flat bottom cap, and a top '
+         'cap narrowing to a fuze head with a safety lever and a pull ring; a ring of small glowing amber '
+         'indicator lights around its shoulder. 16 centimetres long. Scuffed, the paint chipped to bare '
+         'steel on the edges.')
+TEXTURE = ('Dark gunmetal chipped to bare steel on the edges, a matte black polymer band, a steel fuze head '
+           'with a lever and a pull ring, small glowing amber lights, scuffs')
+ASPECT = '4:3'
+FRONT = 'the fuze'
 
 scene()
-P = []
-
-P.append(cyl(0.045, 0.110, 'x', (0.070, 0, 0), 'gunmetal_dark', verts=32, bevel=0.003))
-P.append(cyl(0.038, 0.016, 'x', (0.008, 0, 0), 'polymer', verts=32, bevel=0.002, r2=0.045))
-P.append(cyl(0.0465, 0.026, 'x', (0.062, 0, 0), 'polymer', verts=32, bevel=0.002))
-for x in (0.040, 0.092):
-    P.append(cyl(0.0455, 0.004, 'x', (x, 0, 0), 'polymer', verts=32, bevel=0))
-P.append(cyl(0.0458, 0.004, 'x', (0.125, 0, 0), 'amber', verts=32, bevel=0))
-P.append(cyl(0.045, 0.020, 'x', (0.135, 0, 0), 'gunmetal', verts=32, bevel=0.002, r2=0.034))
-P.append(cyl(0.024, 0.016, 'x', (0.152, 0, 0), 'gunmetal_dark', verts=24, bevel=0.002))
-P.append(torus(0.014, 0.0035, 'y', (0.150, 0, 0.034), 'steel', segments=24, ring=8))
-P.append(box(0.010, 0.016, 0.006, (0.150, 0, 0.024), 'steel', bevel=0.001, seg=1))
-
-finish('frag', P, grip=0.08, long=False, note='a canister, not held')
+gun, rise = generated('frag', 0.16, glow=['#ff8000'], tris=4000)
+finish('frag', [gun], grip=0.08, rise=rise, long=False, note='a canister, not held')

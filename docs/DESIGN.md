@@ -174,6 +174,25 @@ Remote fighters are drawn **between** two snapshots, never guessed ahead:
   from 30 Hz; `client-net/tests/loopback.rs` holds it to even steps through
   25 ms of jitter.
 
+Rounds in flight share that render tick: a remote's rocket is drawn from the
+same snapshots, at the same tick, as the remote who fired it, so it leaves
+his drawn hands and never leads or lags him; run on and held by the same
+gap rule, never drawn before it was first sent, kept by an id the client
+gives it (the wire has none). Events are played on that tick too (a
+remote's shot, a Blast, a pickup are held until the render tick reaches the
+snapshot that brought them, never long: `HOLD_MAX_MS`), so a rocket goes the frame
+its Blast plays, and a hull its Wreck. Hits, kills and our own shots stay
+immediate, and the wreck of the hull we ride. Our own round
+is drawn from our predicted muzzle on the frame we fire, flown as the sim
+flies it, then glides onto the render tick (its clock runs a little slow
+until it gets there, `GLIDE`); when the server's copy comes it takes
+it over without a pop, and one the server never made is held where it is
+drawn until the render tick reaches the snapshot that said so. A passenger
+predicts no hull, so its rounds are drawn as anyone's. A stuck sticky rides
+its host as drawn, and one flying onto its host lands on it as drawn. The kill cam
+draws no rounds. `client-net/src/proj.rs`, `NetCore::projectiles`;
+`client-net/tests/projectiles.rs` and `loopback.rs` hold it.
+
 ## 7 · Lag compensation: the server chooses
 
 A hitscan shot is checked against where the shooter saw the target. **The
@@ -520,7 +539,7 @@ keeps every gate in §17 green and moves a golden only on purpose.
    experiment.
 10. **Vehicles:** one ground vehicle, a driver and a passenger who shoots,
     rewound for hitscan, splatter. Done (`sim/src/vehicle.rs`): it turns
-    about y only and meets boxes as two hull circles; USE gets in and out
+    about y only and meets boxes as three hull circles; USE gets in and out
     (a vehicle in reach beats a pad); hitscan, melee, rockets and blasts
     hurt it, and it blows up with its riders and comes back after its
     respawn; past 11 m/s it runs down whoever is on foot in its way. Two a

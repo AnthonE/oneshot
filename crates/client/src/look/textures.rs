@@ -264,7 +264,7 @@ pub(crate) fn bake(
 }
 
 /// A square RGBA8 level 0 as a repeating, mipped image.
-fn baked_image(data: Vec<u8>, n: usize, srgb: bool, normal: bool) -> Image {
+pub(crate) fn baked_image(data: Vec<u8>, n: usize, srgb: bool, normal: bool) -> Image {
     let (all, levels) = chain(&data, n, n, srgb, normal);
     let mut img = mipped(
         Extent3d {

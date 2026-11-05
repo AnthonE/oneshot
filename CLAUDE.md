@@ -23,9 +23,10 @@ Fireplace, engine-shim and Elo Pros.
 | `server` | sessions, rooms on the sim thread, the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
 | `client-net` | the client's netcode: clock, prediction, interpolation (`core`), the session, the web and native transports |
 | `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/boot.js` finds the server, signs in and does the party's voice, `web/voice.js`). Its screens are Gates' style, on both: the title (`front.rs`: PLAY, PARTY, FRIENDS; connecting is its state, `door.rs`), the Esc menu, the settings; a pad moves on them (`pad.rs`). The party's lobby is held from the title on (`party.rs`). Its own workspace (`ci/client.sh`). Draws, never decides |
+| `mix`, `mix-worklet` | the game's sound mixer, no engine in it: the desktop plays it as a Bevy audio source, the browser runs it on its audio thread (`mix-worklet`, an AudioWorklet: `web/mix.js`, `web/mix-worklet.js`); `crates/client/src/sound` decides what it plays |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
-| `tools/models` | the guns, ours: a Blender script each on `lib.py`'s kit, exported to `crates/client/assets/models` |
+| `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE) |
 | `tools/assets.mjs`, `tools/glb` | Triple T, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
 
@@ -43,7 +44,8 @@ Fireplace, engine-shim and Elo Pros.
      `cargo build --release -p server && node ci/e2e.mjs`;
    - **an effect:** `tools/fx.sh <name>` (the `fx` skill);
    - **a model:** `tools/models/build.sh <name>` (Blender headless; the
-     sheet lands in `traces/guns/`, the numbers go in `look/guns.rs`);
+     sheet lands in `traces/guns/`, the numbers go in `look/guns.rs`); a
+     new mesh for it first is `tools/models/meshy_gen.py <name>` (credits);
    - **the look:** `node tools/board.mjs look`.
 3. Commit with a short message. Push your branch.
 
@@ -125,6 +127,7 @@ ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 ci/native_shot.sh traces/x.png 'map=6&eye=…' | match 6 3   # a GPU shot of the desktop client in seconds (a pose, a match)
+tools/models/meshy_gen.py <name> [--image-only | --roll]   # a gun's mesh from Meshy, by its script's prompt → sources/meshy (credits)
 tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless)
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
 cargo run -p flow --release -- <map>                 # a map's flow (traces/flow/; node tools/flow/png.mjs)
@@ -161,6 +164,10 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 - The desktop client needs `libwayland-dev libudev-dev libxkbcommon-x11-0`;
   native sound (`--features sound`) needs `libasound2-dev`. Its headless
   shots (`ci/desktop_shot.sh`) need `apt-get install xvfb mesa-vulkan-drivers`.
+- `MESHY_API_KEY` in `.env.local` to commission a model
+  (`tools/models/meshy_gen.py`). The raw meshes it makes are in
+  `sources/meshy`, not in the repo: a gun can't be rebuilt without its own,
+  and the GLBs in `crates/client/assets/models` are what ships.
 - A Gates checkout beside this one (`../Gates`) for `tools/assets.mjs` and
   `tools/fx-sync.sh`.
 

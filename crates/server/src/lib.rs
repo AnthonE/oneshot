@@ -18,8 +18,10 @@
 //! files go to a tokio task for the same reason.
 
 pub mod auth;
+pub mod bugs;
 pub mod cup;
 pub mod elo;
+pub mod health;
 pub mod http;
 pub mod lobby;
 pub mod net;
@@ -167,6 +169,9 @@ pub struct Config {
     pub elo_key: Option<(PathBuf, String)>,
     /// Where replays are written.
     pub replays: Option<PathBuf>,
+    /// Where players' bug and crash reports are kept (`bugs.rs`). None:
+    /// `/bugs` isn't taken.
+    pub bugs: Option<PathBuf>,
     /// Where players reach the game (`host:port`), told to the page in
     /// `server.json`. None: the host the page was asked on, at the bound
     /// port.
@@ -223,6 +228,7 @@ impl Default for Config {
             elo_origin: "https://elopros.com".into(),
             elo_key: None,
             replays: None,
+            bugs: None,
             public_addr: None,
             allow_origins: Vec::new(),
             capacity: 256,
@@ -261,6 +267,43 @@ pub struct Ctx {
     pub roster_dir: Option<PathBuf>,
     /// This slot's file in `roster_dir`.
     pub roster_file: String,
+    /// Everything else counted since start (`health.rs`).
+    pub health: health::Health,
+    /// Players' reports, if they're taken (`--bugs`).
+    pub bugs: Option<bugs::Intake>,
+    pub started: Instant,
+}
+
+impl Ctx {
+    /// What is true now, for `/health.json` and the journal.
+    pub fn now(&self) -> health::Now {
+        health::Now {
+            ready: !self.draining.load(Ordering::Relaxed),
+            proto: proto::PROTO_VER,
+            players: self.gate.busy(),
+            capacity: self.gate.capacity,
+            rooms: self.rooms.load(Ordering::Relaxed),
+            uptime_s: self.started.elapsed().as_secs(),
+        }
+    }
+}
+
+/// A line to the journal every [`health::JOURNAL`] that had anything in it:
+/// what changed.
+async fn journal(ctx: Arc<Ctx>) {
+    let mut every = tokio::time::interval(health::JOURNAL);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    every.tick().await;
+    let mut was = ctx.health.read(&ctx.counts);
+    loop {
+        every.tick().await;
+        let max = ctx.health.tick_window_max_us.swap(0, Ordering::Relaxed);
+        let (now, is) = (ctx.now(), ctx.health.read(&ctx.counts));
+        if health::eventful(now, &was, &is) {
+            eprintln!("{}", health::line(now, &was, &is, max));
+        }
+        was = is;
+    }
 }
 
 pub struct Handle {
@@ -343,6 +386,13 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         public_addr: cfg.public_addr.clone(),
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
+        health: health::Health::default(),
+        // Each slot its own file, by the HTTP port it answers on.
+        bugs: cfg.bugs.clone().map(|d| {
+            let tag = cfg.http.map_or(String::new(), |a| a.port().to_string());
+            bugs::Intake::new(d, &tag)
+        }),
+        started: Instant::now(),
         allow_origins: cfg.allow_origins.clone(),
         lobby: Arc::default(),
         roster: std::sync::Mutex::new(online::Slot::default()),
@@ -362,6 +412,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .spawn(move || sim.run())
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
+    tokio::spawn(journal(ctx.clone()));
     tokio::spawn(ctx.lobby.clone().sweeper());
     tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
     // A certificate from a CA is checked by the browser against its own
@@ -544,6 +595,7 @@ impl Sim {
     /// over the mode's. A map that doesn't exist, or one with no flags for
     /// Capture the Flag, is the server's pick.
     fn new_room_custom(&self, mode: u8, ranked: bool, custom: proto::party::Custom) -> Room {
+        self.ctx.health.matches.fetch_add(1, Ordering::Relaxed);
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
         let mut rules = match mode {
@@ -720,6 +772,7 @@ impl Sim {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
+                        self.ctx.health.joins_casual.fetch_add(1, Ordering::Relaxed);
                         live.players[slot as usize] = player.clone();
                         live.joined[slot as usize] = live.room.world.tick;
                         sessions.insert(
@@ -752,6 +805,7 @@ impl Sim {
                                     reason: proto::REFUSE_BUSY,
                                 },
                             );
+                            self.ctx.health.refuse(proto::REFUSE_BUSY);
                             tx.close();
                             continue;
                         }
@@ -768,6 +822,7 @@ impl Sim {
                         } else {
                             q.push(*entry);
                         }
+                        self.ctx.health.joins_ranked.fetch_add(1, Ordering::Relaxed);
                         sessions.insert(
                             session,
                             Sess {
@@ -887,6 +942,8 @@ impl Sim {
                                 reason: proto::REFUSE_FULL,
                             },
                         );
+                        // Joined, then let go: not a hello turned away.
+                        self.ctx.health.let_go.fetch_add(1, Ordering::Relaxed);
                         s.tx.close();
                     }
                 }
@@ -1068,12 +1125,16 @@ impl Sim {
             }
 
             next += tick;
-            let now = Instant::now();
-            if now < next {
-                std::thread::sleep(next - now);
-            } else if now - next > tick * 8 {
-                // Far behind (a stall): don't sprint to catch up.
-                next = now;
+            let done = Instant::now();
+            self.ctx.health.tick(done - now, tick);
+            if done < next {
+                std::thread::sleep(next - done);
+            } else if done - next > tick * 8 {
+                // Far behind (a stall): don't sprint to catch up; those
+                // ticks are never run, and counted.
+                let lost = ((done - next).as_nanos() / tick.as_nanos()) as u64;
+                self.ctx.health.ticks_skipped.fetch_add(lost, Ordering::Relaxed);
+                next = done;
             }
         }
     }

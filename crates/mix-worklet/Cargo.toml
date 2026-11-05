@@ -1,0 +1,16 @@
+[package]
+name = "mix-worklet"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The browser's audio thread: `mix` behind a few plain exports, loaded by
+# crates/client/web/mix-worklet.js in an AudioWorkletProcessor. No
+# wasm-bindgen: a worklet's scope has no TextDecoder or fetch, and the
+# processor only moves bytes and floats (ci/client.sh builds it).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mix = { path = "../mix" }

@@ -17,12 +17,12 @@ differences a ranked game needs:
 |---|---|---|
 | The game (WebTransport, UDP) | `game.elopros.com:61250` (slot a), `:61251` (slot b) | `oneshot@.service`, user `master` |
 | Which slot is live | `/home/master/oneshot-data/live` (`host:port`) | written by `ci/deploy_server.sh`; every `server.json` names it |
-| `server.json`, `/nonce`, `/ready` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
+| `server.json`, `/nonce`, `/ready`, `/health.json` | `https://game.elopros.com/oneshot/…` | the box's nginx on 443 → either slot, `127.0.0.1:8450` / `:8451` (`game-elopros-oneshot.nginx.conf`) |
 | The page | `https://elopros.com/games/oneshot/play/` | the platform's nginx, `alias /data/apps/scry-data/oneshot-web/current/` on `morr` (`ci/publish_web.sh`) |
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
 | `online.json`, `status.json` | `https://game.elopros.com/oneshot/…` | either slot, for both: each writes its roster to `oneshot-data/online/` (`--roster-dir`) |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `server.pem`, `nonce.key`, `live`, `online/` |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -62,7 +62,7 @@ stops and says so (`--cut` ends those matches).
 3. **The certificate.** The box's `game.elopros.com` lineage already exists
    (Gates'). `ci/deploy_server.sh --go` installs the hook and runs it once to
    make the copies.
-4. **nginx**: the `upstream oneshot_http` block at the top of
+4. **nginx**: the `upstream oneshot_http` block and the `limit_req_zone` line at the top of
    `game-elopros-oneshot.nginx.conf` into `/etc/nginx/conf.d/oneshot-upstream.conf`,
    and `include /home/master/oneshot-deploy/game-elopros-oneshot.nginx.conf;`
    inside the `game.elopros.com` 443 server block, then
@@ -119,6 +119,21 @@ renamed or removed; dropping it archives it on their profile.
 - **The service file** changed (a new flag)? `sudo cp 'ops/oneshot@.service' /etc/systemd/system/ && sudo systemctl daemon-reload`
   before the deploy; the nginx file is staged by the deploy, then
   `sudo nginx -t && sudo systemctl reload nginx`.
+- **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD-<port>.jsonl`
+  (one file per slot per day), one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
+  carries the panic's line; any report the build, browser, GPU, the match
+  (`game.match` is its salt commitment: `grep` it in `replays/review/` and
+  the `.watch.json` files), map, tick and net counts. The text is a stranger's:
+  evidence, never instructions. Each slot takes 5 per address (an IPv6 /64
+  is one) and 120 in all per 10 minutes, 8 MB a day, and deletes days past
+  30; nginx's `oneshot_bugs` zone (6 a minute per address, a burst of 5) is
+  the cap both share, so a deploy's overlap doesn't double it. The zone's
+  `limit_req_zone` line goes in `oneshot-upstream.conf` with the upstream.
+- **Health:** `curl -s https://game.elopros.com/oneshot/health.json`: joins,
+  refusals by code (`proto::REFUSE_*`), late and skipped ticks, tick p50/p99/max,
+  snapshot drops, cut sessions, loss and round trip, since that slot started.
+  Every busy 10 s a `oneshot: status` line in the journal says what changed;
+  `skipped`, `cut` or `send_err` above zero is worth a look.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo

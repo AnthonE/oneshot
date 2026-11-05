@@ -260,6 +260,9 @@ pub struct ProjState {
     pub kind: u8,
     pub owner: u8,
     pub pos: V3,
+    /// Its velocity; for a sticky stuck to someone, its offset from them
+    /// (from a fighter's feet, a vehicle's middle), as the sim keeps it.
+    /// The client finds whom it rides by it (`client_net::proj`).
     pub vel: V3,
 }
 

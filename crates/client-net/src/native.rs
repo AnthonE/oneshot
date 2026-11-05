@@ -30,6 +30,8 @@ pub struct NativeClient {
     msgs: UnboundedReceiver<Msg>,
     datagrams: UnboundedReceiver<(Instant, Vec<u8>)>,
     closed: Arc<AtomicBool>,
+    /// The close's code and reason, once the connection has ended.
+    ended: Arc<std::sync::Mutex<Option<(u32, String)>>>,
     t0: Instant,
     /// Our side of the stream: kept open (dropping it would close it), and
     /// what a watcher's asks go out on.
@@ -103,12 +105,28 @@ impl NativeClient {
                 }
             }
         });
+        let ended = Arc::new(std::sync::Mutex::new(None));
+        let (econn, e) = (conn.clone(), ended.clone());
+        tokio::spawn(async move {
+            let why = match econn.closed().await {
+                wtransport::error::ConnectionError::ApplicationClosed(c) => (
+                    c.code().into_inner() as u32,
+                    String::from_utf8_lossy(c.reason()).into_owned(),
+                ),
+                wtransport::error::ConnectionError::TimedOut => (0, "the server stopped answering".into()),
+                _ => (0, String::new()),
+            };
+            if let Ok(mut e) = e.lock() {
+                *e = Some(why);
+            }
+        });
         Ok(NativeClient {
             session: Session::for_hello(&hello),
             conn,
             msgs,
             datagrams,
             closed,
+            ended,
             t0: Instant::now(),
             send: Arc::new(tokio::sync::Mutex::new(send)),
             _endpoint: endpoint,
@@ -156,6 +174,13 @@ impl NativeClient {
     /// Whether the server closed the stream.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
+    }
+
+    /// Why the connection ended, once it has (`session::close_why`).
+    pub fn ended_why(&self) -> Option<String> {
+        let e = self.ended.lock().ok()?;
+        let (code, reason) = e.as_ref()?;
+        Some(crate::session::close_why(*code, reason))
     }
 
     /// Stream messages since the last call (the welcome is the session's).

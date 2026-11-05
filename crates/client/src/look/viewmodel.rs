@@ -349,11 +349,10 @@ const PLATE_LEN: f32 = 0.2;
 /// The plate's squash: wider than the arm, flatter than it is wide.
 const PLATE_SCALE: Vec3 = Vec3::new(1.2, 0.62, 1.0);
 const PLATE_AT: f32 = 0.06;
-/// A long gun's other hand: how far up the barrel from the grip (a share
-/// of the barrel's length past it), how far under it, and its elbow, as
-/// the right hand's are.
-const FORE_SHARE: f32 = 0.6;
-const FORE_DROP: f32 = -0.085;
+/// A long gun's other hand, where the gun says its belly is (`Gun::fore`,
+/// `Gun::under`): how far under that belly its middle sits, and its elbow,
+/// as the right hand's are.
+const FORE_CUP: f32 = 0.02;
 const OFF_WRIST: Vec3 = Vec3::new(-0.04, -0.07, 0.045);
 const OFF_ELBOW: Vec3 = Vec3::new(-0.42, -0.3, 0.3);
 /// The glove's black and the plate's lift over the side's colour.
@@ -494,8 +493,8 @@ fn arms(commands: &mut Commands, kit: &ViewKit, parent: Entity, arm: u8, left: b
     let m = |v: Vec3| Vec3::new(v.x * side, v.y, v.z);
     arm_parts(commands, kit, parent, m(FIST), m(WRIST), m(ELBOW), side);
     if g.long && !left {
-        let reach = g.height * (1.0 - g.grip) * g.scale * FORE_SHARE;
-        let fist = Vec3::new(0.0, FORE_DROP, -reach);
+        let reach = g.height * (1.0 - g.grip) * g.scale * g.fore;
+        let fist = Vec3::new(0.0, -(g.under * g.scale + FORE_CUP), -reach);
         arm_parts(commands, kit, parent, fist, fist + OFF_WRIST, fist + OFF_ELBOW, -1.0);
     }
 }
@@ -1255,7 +1254,7 @@ fn hand(
     t.rotation = rot;
     let g = gun(v.drawn).filter(|_| drawn)?;
     let reach = g.height * (1.0 - g.grip) * g.scale;
-    Some(at + rot * (view_basis() * Vec3::Y * reach))
+    Some(at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale)))
 }
 
 /// A round's cant, -1..1, off the round's count: looks only.
@@ -1515,7 +1514,7 @@ mod tests {
                         continue;
                     }
                     let (at, rot) = place(lay, Lay::ZERO, false);
-                    let muzzle = at + rot * (view_basis() * Vec3::Y * reach);
+                    let muzzle = at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale));
                     for k in 0..=8 {
                         let p = at.lerp(muzzle, k as f32 / 8.0);
                         let a = off_axis(p);

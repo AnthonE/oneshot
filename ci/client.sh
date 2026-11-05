@@ -41,7 +41,7 @@ if [ "$mode" = check ]; then
   cargo clippy -q --lib --target wasm32-unknown-unknown -- -D warnings
   cargo clippy -q --lib --target wasm32-unknown-unknown --features webgpu -- -D warnings
   # Its own tests (textures, the pointer lock, the GPU tiers): not run anywhere else.
-  cargo test -q --lib
+  cargo test -q --lib --bins
   cargo build -q
   profile=web
 else
@@ -116,6 +116,10 @@ printf '{"commit":"%s","profile":"%s","wasm_opt":%s,"modules":{%s}}\n' "$commit"
 # The page, the clip page F9 opens in a frame of its own (web/clip.js), the
 # dashboard's scripts, and the credits.
 cp web/*.html web/*.js dist/
+# The mixer the browser's audio thread runs (web/mix-worklet.js): crates/mix
+# behind plain exports, built in the root workspace, tens of kilobytes.
+(cd ../.. && cargo build -q --release -p mix-worklet --target wasm32-unknown-unknown)
+cp ../../target/wasm32-unknown-unknown/release/mix_worklet.wasm dist/
 cp ../../NOTICE dist/
 cp -r assets dist/assets
 du -sh dist

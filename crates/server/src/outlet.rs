@@ -180,6 +180,11 @@ mod tests {
     use super::*;
     use tokio::io::AsyncReadExt;
 
+    #[test]
+    fn the_client_reads_the_same_close_code() {
+        assert_eq!(CLOSE_BEHIND, client_net::session::CLOSE_BEHIND);
+    }
+
     fn pair() -> (Outlet, Inlet, Arc<Counts>) {
         let counts = Arc::new(Counts::default());
         let (o, i) = outlet(counts.clone());

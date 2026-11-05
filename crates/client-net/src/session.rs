@@ -18,6 +18,22 @@ pub trait Wire {
     fn send_datagram(&mut self, payload: &[u8]) -> bool;
 }
 
+/// The QUIC close code the server cuts a session with when it fell behind
+/// on the stream (`server/src/outlet.rs` `CLOSE_BEHIND`).
+pub const CLOSE_BEHIND: u32 = 1;
+
+/// Why the connection ended, as a player reads it, from the close's code
+/// and reason. Only the desktop gets them: wtransport closes with a plain
+/// QUIC close, and a browser reads a code only from WebTransport's own
+/// close (code 0 and no reason here, so the page says what it can).
+pub fn close_why(code: u32, reason: &str) -> String {
+    match (code, reason) {
+        (CLOSE_BEHIND, _) => "the game fell too far behind (a slow connection, or the game was asleep)".into(),
+        (_, r) if !r.is_empty() && r != "bye" => r.to_string(),
+        _ => "the connection was lost".into(),
+    }
+}
+
 /// Why the server said no, as a player reads it (`Msg::Refuse`).
 pub fn refuse_why(reason: u8) -> &'static str {
     match reason {
