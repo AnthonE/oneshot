@@ -57,7 +57,8 @@ pub const TARGET_DEPTH: f64 = 1.0;
 pub const KILLCAM_MS: u32 = 2500;
 /// Snapshots kept for it: the window and a little more.
 pub const KILLCAM_FRAMES: usize = (KILLCAM_MS as usize * TICK_HZ as usize / 1000) / SEND_EVERY as usize + 8;
-/// Ticks between snapshots (and between input datagrams).
+/// Ticks between snapshots, and the fewest new input frames a datagram
+/// goes for (`NetCore::update`).
 pub const SEND_EVERY: u32 = 2;
 /// Ticks owed past which the clock skips rather than makes them all.
 pub const SKIP_AFTER: u32 = TICK_HZ / 2;
@@ -360,6 +361,8 @@ pub struct NetCore {
     /// The predicted fighter after each seq, and the vehicle it rode.
     after: [Fighter; RING],
     after_v: [Option<Vehicle>; RING],
+    /// Frames made since the last input datagram.
+    unsent: u32,
     /// The newest seq the server says it ran.
     acked_seq: u32,
     /// The server's tick at the welcome: the first snapshot must be near
@@ -442,6 +445,7 @@ impl NetCore {
             sticky: 0,
             after: [Fighter::default(); RING],
             after_v: [None; RING],
+            unsent: 0,
             acked_seq: seq.wrapping_sub(1),
             welcome_tick: tick,
             pred: Fighter::default(),
@@ -507,9 +511,15 @@ impl NetCore {
         self.t += dt / TICK_MS * self.rate;
         // Owed more than half a second of ticks (a stall, not a slow
         // frame): skip to the newest. The server runs repeats for the ones
-        // skipped. Short of that, every owed tick is made and sent: a
-        // datagram goes every SEND_EVERY ticks inside the loop below, each
-        // carrying the last MAX_INPUT_FRAMES.
+        // skipped. Short of that, every owed tick is made and sent, each
+        // datagram carrying the last MAX_INPUT_FRAMES: one at the end of
+        // the page's frame once SEND_EVERY are new, and one inside the loop
+        // whenever a datagram's worth piles up. The server rewinds a
+        // frame's shots to the view of the datagram it first came in, so
+        // at 64 Hz or slower every frame leaves with the page frame that
+        // made it (sent in the loop on even seqs, a frame's last often
+        // waited for the next, two ticks on at 60 Hz); faster, one may wait
+        // a page frame, a tick at most.
         let owed = self.t.floor() - self.seq as f64;
         if owed > SKIP_AFTER as f64 {
             let to = (self.t.floor() as u32).wrapping_sub(SEND_EVERY);
@@ -553,9 +563,15 @@ impl NetCore {
             }
             self.launch(s, now_ms, &local);
             self.seq = s.wrapping_add(1);
-            if self.seq.is_multiple_of(SEND_EVERY) {
+            self.unsent += 1;
+            if self.unsent >= MAX_INPUT_FRAMES as u32 {
                 out.push(self.input_msg(now_ms));
+                self.unsent = 0;
             }
+        }
+        if self.unsent >= SEND_EVERY {
+            out.push(self.input_msg(now_ms));
+            self.unsent = 0;
         }
         // Ease corrections out. Riding, the body is drawn on the hull: its
         // own offset is the hull's, and must not linger for getting out.

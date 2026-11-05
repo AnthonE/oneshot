@@ -39,10 +39,20 @@ pub const SNAP_EVERY: u32 = 2;
 /// Snapshot send times kept, for RTT.
 const SENT: usize = 64;
 
+/// What a client had been shown when it made a frame: its newest snapshot
+/// (as the server accepted its ack) and how far behind that it drew
+/// everyone else. Taken from the datagram a frame first came in, so a
+/// frame run later is rewound to its own moment, not to the newest ack's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct View {
+    acked: Option<u32>,
+    playout: u8,
+}
+
 /// One client's netcode state on the server (after Gates' `ClientNetState`).
 #[derive(Clone)]
 pub struct ClientNet {
-    frames: [Option<(u32, Input)>; BUF],
+    frames: [Option<(u32, Input, View)>; BUF],
     /// The next seq to run; set by the first frame that arrives.
     cursor: Option<u32>,
     newest_seq: Option<u32>,
@@ -52,6 +62,8 @@ pub struct ClientNet {
     /// The newest snapshot tick this client has acked, as the server saw.
     pub acked: Option<u32>,
     pub playout: u8,
+    /// The view of the frame last run (a repeat's: the newest).
+    ran: View,
     sent: [(u32, f64); SENT],
     pub rtt_ms: f64,
     /// Frames that came too late or too early, and repeats used.
@@ -121,6 +133,7 @@ impl Default for ClientNet {
             last_seq: 0,
             acked: None,
             playout: PLAYOUT_MIN as u8,
+            ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
             rtt_ms: 0.0,
             late: 0,
@@ -155,6 +168,10 @@ impl ClientNet {
             }
         }
         self.playout = m.playout;
+        let view = View {
+            acked: self.acked,
+            playout: m.playout,
+        };
         for (i, f) in m.frames().iter().enumerate() {
             let seq = m.first_seq.wrapping_add(i as u32);
             let cursor = *self.cursor.get_or_insert(seq);
@@ -171,7 +188,12 @@ impl ClientNet {
                 self.frames = [None; BUF];
                 self.newest_seq = None;
             }
-            self.frames[seq as usize % BUF] = Some((seq, f.sanitized()));
+            // Sent again (every datagram carries what isn't acked): it
+            // keeps the view it first came with.
+            let slot = &mut self.frames[seq as usize % BUF];
+            if !slot.is_some_and(|(s, ..)| s == seq) {
+                *slot = Some((seq, f.sanitized(), view));
+            }
             if self.newest_seq.is_none_or(|n| seq.wrapping_sub(n) < 0x8000_0000) {
                 self.newest_seq = Some(seq);
             }
@@ -193,8 +215,9 @@ impl ClientNet {
         }
         let slot = &mut self.frames[cursor as usize % BUF];
         let (inp, spare) = match slot.take() {
-            Some((s, f)) if s == cursor => {
+            Some((s, f, view)) if s == cursor => {
                 let n = self.newest_seq.unwrap_or(cursor);
+                self.ran = view;
                 (f, n.wrapping_sub(cursor) as i32)
             }
             _ => {
@@ -202,6 +225,10 @@ impl ClientNet {
                 // How far behind the client is: frames it hasn't sent yet
                 // count against it, so its clock can jump rather than crawl.
                 let behind = self.newest_seq.map_or(-1, |n| (n.wrapping_sub(cursor) as i32).min(-1));
+                self.ran = View {
+                    acked: self.acked,
+                    playout: self.playout,
+                };
                 (self.last.repeated(), behind)
             }
         };
@@ -231,15 +258,19 @@ impl ClientNet {
         self.sent[tick as usize % SENT] = (tick, now_ms);
     }
 
-    /// How far back this client's hitscan is checked at `tick`, in 1/256
-    /// tick: how old its newest acked snapshot is plus how far behind that
-    /// it draws others, both as the server measures, capped.
+    /// How far back the frame last taken ([`Self::take_frame`]) has this
+    /// client's hitscan checked at `tick`, in 1/256 tick: how old the
+    /// newest snapshot it had acked when it sent that frame is, plus how
+    /// far behind that it drew others then, capped. The newest ack instead
+    /// would rewind a frame that waited in the buffer to a later moment
+    /// than its shooter saw (a frame or two of ticks: a strafing target
+    /// ten centimetres on).
     pub fn rewind_q8(&self, tick: u32) -> u32 {
-        let Some(acked) = self.acked else {
+        let Some(acked) = self.ran.acked else {
             return 0;
         };
         let age = tick.saturating_sub(acked);
-        let play = (self.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
+        let play = (self.ran.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
         (age + play).min(ticks(MAX_FAVOUR_MS)) << 8
     }
 }

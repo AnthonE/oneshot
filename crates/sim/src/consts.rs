@@ -27,10 +27,10 @@ pub const MAX_MAP_BOXES: usize = 512;
 /// Ticks of pose history for lag compensation (250 ms at 128 Hz).
 pub const REWIND_TICKS: usize = 32;
 
-// Movement: Quake's model (Fireplace's `PHYS`), restated per second, at
-// Halo 2's speeds and jump. Its world unit is 10 ft (3.048 m), the scale
-// the guns are in: 2.25 wu/s ahead, 2.0 backing up and to the side (the
-// Editing Kit's player metrics); between, on the ellipse
+// Movement: Quake's model on the ground (Fireplace's `PHYS`), restated
+// per second, at Halo 2's speeds and jump. Its world unit is 10 ft (3.048
+// m), the scale the guns are in: 2.25 wu/s ahead, 2.0 backing up and to
+// the side (the Editing Kit's player metrics); between, on the ellipse
 // (`movement::step`).
 pub const RUN: f32 = 6.86;
 pub const RUN_BACK: f32 = 6.10;
@@ -40,9 +40,12 @@ pub const CROUCH_RUN: f32 = 3.5;
 pub const STOP: f32 = 2.5;
 pub const FRICTION: f32 = 6.0;
 pub const ACCEL: f32 = 10.0;
-pub const AIR_ACCEL: f32 = 10.0;
-/// Quake's air wish-speed cap: air strafing works, air running doesn't.
-pub const AIR_CAP: f32 = 1.0;
+/// Halo's air, not Quake's: the stick steers a body toward its run at this
+/// many m/s², and nothing in the air makes it faster than it took off or
+/// than that run (no strafe jumping, no bunny hops). A jump is a
+/// commitment: from a standstill it drifts to a run in most of a jump, and
+/// a running jump pulled back stops in under one.
+pub const AIR_ACCEL: f32 = 8.0;
 /// Halo 2's jump in proportion to our body (it jumps half again its own
 /// height and is 1.4 s in the air: Halo 3's measured, the same jump
 /// velocity): an apex of v²/2g = 2.76 m, 2v/g = 1.40 s up and down.

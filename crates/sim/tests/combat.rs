@@ -732,9 +732,11 @@ fn the_prediction_matches_the_server_on_terrain_and_launchers() {
     let (mut launched, mut climbed) = (false, 0.0f32);
     for t in 0..TICK_HZ * 40 {
         let r = rng.next_u32();
+        // Standing on the launcher it is thrown, not jumping off it first.
+        let jump = if t == 0 { 0 } else { JUMP };
         let inp = Input {
             // No grenades: a frag's blast on its own thrower is the world's.
-            buttons: (r as u16) & (FIRE | JUMP | CROUCH | RELOAD | SWAP),
+            buttons: (r as u16) & (FIRE | jump | CROUCH | RELOAD | SWAP),
             yaw: (fmath::sin(t as f32 * 0.003) * 30000.0) as i16 as u16,
             pitch: 2000,
             mx: (r >> 16) as i8 / 4,

@@ -770,7 +770,9 @@ fn pump(
         let base = SENS * settings.sensitivity;
         let sens = base / look.magnification(arm);
         let up = if settings.invert { -1.0 } else { 1.0 };
-        look.yaw += motion.delta.x * sens;
+        // Kept to a turn: an f32 summed without end loses the low bits a
+        // slow hand moves it by.
+        look.yaw = (look.yaw + motion.delta.x * sens).rem_euclid(core::f32::consts::TAU);
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }

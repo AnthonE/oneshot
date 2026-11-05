@@ -777,3 +777,47 @@ fn nothing_is_drawn_that_was_not_sent() {
     println!("{checked} rounds checked");
     assert!(checked > 30, "{checked} rounds checked");
 }
+
+/// A shot is checked against where its shooter saw everyone (DESIGN §7):
+/// for every input, the tick the server rewinds it to is the render tick
+/// the client drew at when it made it, to within the rounding of a tick.
+/// The newest ack's view instead, as it once was, put a shot's target up
+/// to a frame's worth of ticks further on than the shooter saw it.
+#[test]
+fn a_shot_is_rewound_to_what_its_shooter_saw() {
+    for (delay, jitter) in [(20.0, 0.0), (45.0, 10.0)] {
+        let mut r = start(delay, jitter, 0.0, true);
+        let slot = r.slot as usize;
+        r.run(3000.0, player);
+        let mut made = std::collections::BTreeMap::new();
+        let mut errs: Vec<f64> = Vec::new();
+        r.run_seen(6000.0, player, |s| match s {
+            Seen::Frame(c, now, n) => {
+                let rt = c.render_tick(now);
+                for k in 0..n {
+                    made.insert(c.tick().wrapping_sub(n - k), rt);
+                }
+            }
+            Seen::Tick(room) => {
+                let Seat::Person(c, _) = &room.seats[slot] else {
+                    return;
+                };
+                let t = room.world.tick;
+                let back = t as f64 - c.rewind_q8(t) as f64 / 256.0;
+                if let Some(rt) = made.remove(&c.last_seq) {
+                    errs.push(back - rt);
+                }
+            }
+            Seen::Snap(_) => {}
+        });
+        let mean = errs.iter().sum::<f64>() / errs.len() as f64;
+        let worst = errs.iter().fold(0.0f64, |m, e| m.max(e.abs()));
+        println!(
+            "{delay} ms ± {jitter}: {} inputs, mean {mean:+.2} ticks, worst {worst:.2}",
+            errs.len()
+        );
+        assert!(errs.len() > 600, "{}", errs.len());
+        assert!(mean.abs() < 0.5, "{delay} ms: rewound {mean:+.2} ticks off on average");
+        assert!(worst < 1.6, "{delay} ms: one input rewound {worst:.2} ticks off");
+    }
+}
