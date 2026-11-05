@@ -236,6 +236,8 @@ enum Hit {
     Quit,
     Mode(u8),
     Skin(i32),
+    /// A part of the emblem (`EMBLEM_PARTS`), one step either way.
+    Emblem(usize, i32),
     Name,
     SignIn,
     Go,
@@ -541,6 +543,38 @@ fn panel(
             r.spawn((ui::stepper(), Hit::Skin(1)))
                 .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
         });
+        // The emblem on the back: a glyph, the shape behind it, their colours.
+        let parts = proto::emblem_parts(player.emblem);
+        for (k, (label, hint)) in EMBLEM_PARTS.iter().enumerate() {
+            if k > 0 && parts.0 == 0 {
+                break;
+            }
+            p.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(ui::strong(*label, 12.0, ui::FAINT));
+                r.spawn(ui::label(*hint, 11.0, ui::FAINT));
+                r.spawn(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
+                r.spawn((ui::stepper(), Hit::Emblem(k, -1)))
+                    .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                r.spawn(Node {
+                    width: Val::Px(96.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                })
+                .with_child(ui::strong(emblem_part_name(k, parts), 14.0, ui::TEXT_COLOR));
+                r.spawn((ui::stepper(), Hit::Emblem(k, 1)))
+                    .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+            });
+        }
 
         p.spawn(ui::group("CASUAL"));
         for m in MODES.iter().filter(|m| !m.ranked) {
@@ -1072,6 +1106,45 @@ fn stage(body: &mut ChildSpawnerCommands, id: u8, portrait: Option<&crate::look:
     });
 }
 
+/// The emblem's rows on the title: its label and a hint.
+const EMBLEM_PARTS: [(&str, &str); 4] = [
+    ("EMBLEM", "on your back"),
+    ("SHAPE", "behind it"),
+    ("COLOUR", "the emblem's"),
+    ("COLOUR", "the shape's"),
+];
+
+fn emblem_part_name(k: usize, (g, f, gc, fc): (u8, u8, u8, u8)) -> String {
+    match k {
+        0 if g == 0 => "NONE".into(),
+        0 => {
+            let line = proto::GLYPH_FLOOR[g as usize];
+            let name = proto::EMBLEM_GLYPHS[g as usize].to_uppercase();
+            if line > 0 {
+                format!("{name} {line}+")
+            } else {
+                name
+            }
+        }
+        1 => proto::EMBLEM_FIELDS[f as usize].to_uppercase(),
+        2 => format!("{}", gc + 1),
+        _ => format!("{}", fc + 1),
+    }
+}
+
+/// `e` with part `k` stepped by `d`, round its range.
+fn step_emblem(e: proto::Emblem, k: usize, d: i32) -> proto::Emblem {
+    let (mut p, n) = (proto::emblem_parts(e), proto::EMBLEM_COLOURS as i32);
+    let step = |v: u8, range: i32| (v as i32 + d).rem_euclid(range) as u8;
+    match k {
+        0 => p.0 = step(p.0, proto::EMBLEM_GLYPHS.len() as i32),
+        1 => p.1 = step(p.1, proto::EMBLEM_FIELDS.len() as i32),
+        2 => p.2 = step(p.2, n),
+        _ => p.3 = step(p.3, n),
+    }
+    proto::emblem(p.0, p.1, p.2, p.3)
+}
+
 fn skin_name(i: u8) -> String {
     proto::SKINS
         .get(i as usize)
@@ -1159,6 +1232,10 @@ fn click(
         Hit::Skin(d) => {
             let n = proto::SKINS.len() as i32;
             player.skin = (player.skin as i32 + d).rem_euclid(n) as u8;
+            front.dirty = true;
+        }
+        Hit::Emblem(k, d) => {
+            player.emblem = step_emblem(player.emblem, k, d);
             front.dirty = true;
         }
         Hit::Name => {
@@ -1265,7 +1342,7 @@ fn click(
                         name: player.sent_name(),
                         pass: party::match_pass(&party, &door),
                         mode: m.id,
-                        skin: player.skin,
+                        look: player.look(),
                         party: 0,
                     };
                     knocking.0 = Some(door.knock(ask));
@@ -1427,7 +1504,7 @@ fn join(mut front: ResMut<Front>, player: Res<Player>, mut door: NonSendMut<Door
         name: player.sent_name(),
         pass: String::new(),
         mode: m,
-        skin: player.skin,
+        look: player.look(),
         party: 0,
     }));
     front.dirty = true;

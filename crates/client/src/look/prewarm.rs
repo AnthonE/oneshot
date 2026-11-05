@@ -177,7 +177,12 @@ pub fn warm_models(
     // neither it nor its shadow (cast down, away from the floor) can be
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
-    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, 0);
+    // In an emblem, so its cut-out pipeline is built here too.
+    let look = proto::Look {
+        skin: 0,
+        emblem: proto::emblem(1, 1, 0, 4),
+    };
+    let body = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, 0, look);
     commands
         .entity(body)
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));

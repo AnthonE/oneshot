@@ -19,8 +19,8 @@ pub struct Entry {
     pub mode: u8,
     pub rating: f64,
     pub since: Instant,
-    /// A skin checked against the wallet.
-    pub skin: u8,
+    /// A skin and emblem checked against the wallet.
+    pub look: proto::Look,
     /// Doubles: the party it queues with, kept on one side.
     pub party: Option<crate::party::Seating>,
 }
@@ -198,7 +198,7 @@ mod tests {
             mode,
             rating,
             since,
-            skin: 0,
+            look: proto::Look::default(),
             party: None,
         }
     }

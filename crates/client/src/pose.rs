@@ -4,8 +4,8 @@
 //! `?pose`: `yaw=` turns the fighter (radians), `arm=` picks its gun,
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
-//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`
-//! and `team=` dress it. `reload=1` reloads it, over and over; `die=S`
+//! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
+//! `emblem=` (a `proto::Emblem`) and `team=` dress it. `reload=1` reloads it, over and over; `die=S`
 //! kills it S seconds after the screen is there, shot from the camera (a
 //! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
 //! doll (`look/rag.rs`) can be looked at.
@@ -18,10 +18,10 @@ use bevy::prelude::*;
 use client_net::core::Drawn;
 use sim::geom::V3;
 
-/// The fighter, as a snapshot would draw it, and its skin; then the map,
+/// The fighter, as a snapshot would draw it, and its look; then the map,
 /// the camera, and whether the fighter stands at all.
 #[derive(Resource, Clone, Copy)]
-pub struct Pose(pub Drawn, pub u8, pub View, pub Acts);
+pub struct Pose(pub Drawn, pub proto::Look, pub View, pub Acts);
 
 /// What the posed fighter does: reloads over and over, and dies (when,
 /// and how), if it does.
@@ -98,13 +98,17 @@ impl Pose {
             shield: 255,
             ..Drawn::default()
         };
+        let look = proto::Look {
+            skin: get("skin", 0.0) as u8,
+            emblem: proto::emblem_valid(get("emblem", 0.0) as u16),
+        };
         let acts = Acts {
             reload: get("reload", 0.0) != 0.0,
             die_after_s: Some(get("die", -1.0)).filter(|s| *s >= 0.0),
             head: get("head", 0.0) != 0.0,
             blast: get("blast", 0.0) != 0.0,
         };
-        Pose(d, get("skin", 0.0) as u8, view, acts)
+        Pose(d, look, view, acts)
     }
 }
 

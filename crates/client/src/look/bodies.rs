@@ -4,7 +4,8 @@
 //! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
 //! the spine back to the aim, the head on the aim's pitch, the feet planted,
 //! the hold on the arms), and the gun they hold in hand. A skin is a faint
-//! sheen of its trim and a band at the waist: the side's colour still
+//! sheen of its trim and a band at the waist, an emblem (`emblem.rs`) paint
+//! on the back plate that turns with the spine: the side's colour still
 //! carries the fighter, and no hitbox or visibility changes (DESIGN.md
 //! §15). Drawing only.
 //!
@@ -52,6 +53,16 @@ const SKIN_TRIM: [Option<u32>; 6] = [
 /// The trim's sheen, against the side's glow.
 const TRIM_GLOW: f32 = 0.35;
 
+/// The emblem on the back plate, in the frame of the `Spine` bone at rest
+/// (centimetres: the rig is scaled 0.01): 30 cm square, 1.12 m up, its face
+/// 1 cm proud of the back (which stands 22.7 cm behind the spine between
+/// 0.7 m and 1.75 m), facing back. From the file's bind pose; a new model
+/// needs these again.
+const EMBLEM_BONE: &str = "Spine";
+const EMBLEM_AT: Vec3 = Vec3::new(-0.463, 1.594, -19.391);
+const EMBLEM_TURN: Quat = Quat::from_xyzw(-0.00452, -0.99971, -0.02303, 0.00452);
+const EMBLEM_SCALE: f32 = 30.0;
+
 fn trim(skin: u8) -> Option<Color> {
     SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
         let [_, r, g, b] = c.to_be_bytes();
@@ -63,6 +74,7 @@ fn trim(skin: u8) -> Option<Color> {
 pub struct Body {
     team: u8,
     skin: u8,
+    emblem: proto::Emblem,
     /// Cast in the sun's shadow and drawn by no camera (`own_shadow.rs`):
     /// no shells, no band, and every mesh on the shadow's material.
     shadow: bool,
@@ -144,17 +156,17 @@ pub fn model_rotation(yaw: f32) -> Quat {
     Quat::from_rotation_y(-yaw) * Quat::from_rotation_y(FACE)
 }
 
-/// A body spawned for `team` in `skin`: its root, which the caller places.
+/// A body spawned for `team` in `look`: its root, which the caller places.
 pub fn spawn(
     commands: &mut Commands,
     models: &Models,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
     team: u8,
-    skin: u8,
+    look: proto::Look,
 ) -> Entity {
-    let root = spawn_as(commands, models, team, skin, false);
-    if let Some(c) = trim(skin) {
+    let root = spawn_as(commands, models, team, look, false);
+    if let Some(c) = trim(look.skin) {
         // The band at the waist, in the trim's colour.
         commands.spawn((
             Mesh3d(meshes.add(Torus::new(0.175, 0.225))),
@@ -173,10 +185,10 @@ pub fn spawn(
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
 pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
-    spawn_as(commands, models, team, 0, true)
+    spawn_as(commands, models, team, proto::Look::default(), true)
 }
 
-fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow: bool) -> Entity {
+fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
@@ -190,7 +202,8 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow
         .observe(dress);
     commands.entity(root).insert(Body {
         team,
-        skin,
+        skin: look.skin,
+        emblem: proto::emblem_valid(look.emblem),
         shadow,
         dressed: false,
         player: None,
@@ -287,6 +300,11 @@ fn dress(
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
     shadow_mat: Option<Res<super::own_shadow::ShadowMat>>,
     warm: Query<(), With<super::prewarm::WarmBody>>,
+    (mut emblems, mut images, mut quads): (
+        ResMut<super::emblem::Emblems>,
+        ResMut<Assets<Image>>,
+        ResMut<Assets<Mesh>>,
+    ),
     mut commands: Commands,
 ) {
     let model = ev.entity;
@@ -375,6 +393,27 @@ fn dress(
         }
     }
     body.glow = (tint + sheen) * glow;
+    // The emblem: paint on the back plate, on the spine so it turns with it.
+    if body.emblem != proto::EMBLEM_NONE {
+        let spine = children
+            .iter_descendants(model)
+            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == EMBLEM_BONE));
+        if let Some(spine) = spine {
+            let mat = emblems.material(body.emblem, &mut images, &mut mats);
+            commands.spawn((
+                Mesh3d(emblems.quad(&mut quads)),
+                MeshMaterial3d(mat),
+                Transform {
+                    translation: EMBLEM_AT,
+                    rotation: EMBLEM_TURN,
+                    scale: Vec3::splat(EMBLEM_SCALE),
+                },
+                NotShadowCaster,
+                NoFrustumCulling,
+                ChildOf(spine),
+            ));
+        }
+    }
 }
 
 /// The light the shell casts on the body under it, gold, at a flare of 1:

@@ -34,8 +34,8 @@ const DAMAGE_R: f32 = 90.0;
 #[derive(Resource, Default)]
 pub struct HudState {
     names: BTreeMap<u8, String>,
-    /// Each seat's skin, as the server checked it.
-    skins: BTreeMap<u8, u8>,
+    /// Each seat's skin and emblem, as the server checked them.
+    looks: BTreeMap<u8, proto::Look>,
     /// Each seat's side (`Msg::Seat`).
     teams: BTreeMap<u8, u8>,
     feed: Vec<(String, f32)>,
@@ -100,8 +100,8 @@ impl HudState {
         }
     }
 
-    pub fn skin(&self, slot: u8) -> u8 {
-        self.skins.get(&slot).copied().unwrap_or(proto::SKIN_STANDARD)
+    pub fn look(&self, slot: u8) -> proto::Look {
+        self.looks.get(&slot).copied().unwrap_or_default()
     }
 
     /// Every seat's name, by slot (bots' too).
@@ -547,10 +547,21 @@ pub fn on_events(st: &mut HudState, s: &Session, now_ms: f64, events: &[EventSta
         }
         match m {
             Msg::Seat {
-                slot, name, skin, team, ..
+                slot,
+                name,
+                skin,
+                emblem,
+                team,
+                ..
             } => {
                 st.names.insert(*slot, name.as_str().to_string());
-                st.skins.insert(*slot, *skin);
+                st.looks.insert(
+                    *slot,
+                    proto::Look {
+                        skin: *skin,
+                        emblem: *emblem,
+                    },
+                );
                 st.teams.insert(*slot, *team);
             }
             Msg::Kill {

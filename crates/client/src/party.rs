@@ -180,7 +180,13 @@ fn hello(view: &PartyView, door: &Door, name: &str, want: u32) -> Msg {
     } else {
         door.signin().pass()
     };
-    client_net::session::Session::hello(name, Pass::new(&pass).unwrap_or(Pass::NONE), proto::MODE_LOBBY, 0, want)
+    client_net::session::Session::hello(
+        name,
+        Pass::new(&pass).unwrap_or(Pass::NONE),
+        proto::MODE_LOBBY,
+        proto::Look::default(),
+        want,
+    )
 }
 
 /// The pass a match's hello carries: the ticket (who the party knows us
@@ -304,7 +310,7 @@ fn pump(
                         name: name.clone(),
                         pass: match_pass(&view, &door),
                         mode,
-                        skin: player.skin,
+                        look: player.look(),
                         party,
                     };
                     crate::front::PAGE.with(|q| q.borrow_mut().push(crate::front::PageCmd::Knock(ask)));

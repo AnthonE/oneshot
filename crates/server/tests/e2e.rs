@@ -38,7 +38,15 @@ async fn a_native_client_plays_the_bot() {
 
     // The native client the desktop build will use: client_net's session
     // on wtransport.
-    let hello = Session::hello("native", proto::Pass::NONE, proto::MODE_CASUAL, 2, 0);
+    // A skin a guest can't own, and an emblem anyone may wear.
+    let star = proto::emblem(1, 1, 3, 4);
+    let hello = Session::hello(
+        "native",
+        proto::Pass::NONE,
+        proto::MODE_CASUAL,
+        proto::Look { skin: 2, emblem: star },
+        0,
+    );
     let addr = format!("127.0.0.1:{}", h.addr.port());
     let mut c = NativeClient::connect(&addr, Some(h.cert_hash), hello).await.unwrap();
 
@@ -47,6 +55,7 @@ async fn a_native_client_plays_the_bot() {
     let mut bot_moved = false;
     let mut bot_start = None;
     let mut seats = 0;
+    let mut starred = false;
     while t0.elapsed() < Duration::from_secs(8) {
         frame.tick().await;
         let now = c.now_ms();
@@ -57,9 +66,12 @@ async fn a_native_client_plays_the_bot() {
             ..Input::default()
         });
         for m in c.messages() {
-            if let Msg::Seat { skin, .. } = m {
-                // A guest owns nothing: the skin asked for is not worn.
+            if let Msg::Seat { skin, emblem, bot, .. } = m {
+                // A guest owns nothing: the skin asked for is not worn; the
+                // free emblem is, and a bot wears none.
                 assert_eq!(skin, proto::SKIN_STANDARD);
+                assert_eq!(emblem, if bot { proto::EMBLEM_NONE } else { star });
+                starred |= !bot;
                 seats += 1;
             }
         }
@@ -70,6 +82,7 @@ async fn a_native_client_plays_the_bot() {
     }
     assert!(c.session.ready, "welcomed");
     assert!(seats >= 2, "told who sits where");
+    assert!(starred, "and the guest's emblem is worn");
     let s = c.session.core.stats;
     eprintln!("{s:?}");
     // 8 s at 64 a second, less the first moments.
@@ -109,6 +122,7 @@ async fn hello(
             pass: proto::Pass::NONE,
             mode,
             skin: 0,
+            emblem: 0,
             party: 0,
         },
         &mut f,

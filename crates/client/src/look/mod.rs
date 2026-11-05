@@ -7,6 +7,7 @@ pub mod cliffs;
 pub mod cloud_shadow;
 pub mod clutter;
 pub mod deck;
+pub mod emblem;
 pub mod fill;
 pub mod foliage;
 pub mod fresnel;
