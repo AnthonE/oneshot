@@ -176,6 +176,18 @@ fn snapshot() -> Snapshot {
         health: 128,
         seats: [2, 0],
     };
+    // A rocket launcher on the floor, and someone's grenades.
+    s.n_drops = 2;
+    s.drops[0] = DropState {
+        slot: 3,
+        arm: 6,
+        pos: V3::new(4.0, 0.0, -7.5),
+    };
+    s.drops[1] = DropState {
+        slot: 23,
+        arm: 0,
+        pos: V3::new(-12.25, 2.5, 1.0),
+    };
     s.n_score = 2;
     s.score[0] = 3;
     s.score[1] = -1;
@@ -190,6 +202,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_CASUAL,
             skin: SKIN_STANDARD,
+            party: 0,
         },
         Msg::Hello {
             proto: PROTO_VER,
@@ -197,6 +210,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
             mode: MODE_DUEL,
             skin: 2,
+            party: 0,
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -226,6 +240,7 @@ fn msgs() -> Vec<Msg> {
             pass: Pass::NONE,
             mode: MODE_GUN_GAME,
             skin: 5,
+            party: party::code_parse("K7Q2XD").unwrap(),
         },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
@@ -246,6 +261,7 @@ fn msgs() -> Vec<Msg> {
             killer: 0,
             victim: 1,
             cause: 102,
+            head: true,
         },
         Msg::Phase { phase: 2, winner: 0 },
         Msg::Cup {
@@ -260,7 +276,116 @@ fn msgs() -> Vec<Msg> {
         Msg::Reveal {
             salt: [0x0123_4567_89ab_cdef, u64::MAX],
         },
+        Msg::Medal {
+            slot: 3,
+            medal: medal::TRIPLE_KILL,
+            victim: 14,
+        },
+        Msg::Carnage {
+            slot: 15,
+            kills: 25,
+            deaths: 7,
+            assists: 9,
+            betrayals: 1,
+            shots: 1312,
+            hits: 655,
+            heads: 31,
+            damage: 4321,
+            taken: 1789,
+            best_spree: 11,
+            best_multi: 3,
+            medals: {
+                let mut m = [0u8; medal::COUNT];
+                m[medal::DOUBLE_KILL as usize] = 4;
+                m[medal::KILLING_FRENZY as usize] = 1;
+                m[medal::EXTERMINATION as usize] = 255;
+                m
+            },
+        },
+        Msg::Ticket {
+            ticket: Pass::new("os1.Z3Vlc3Q.c2ln").unwrap(),
+        },
+        Msg::SignIn {
+            pass: Pass::new("ZWxvIGFjY291bnQ.c2ln-_").unwrap(),
+        },
+        Msg::PartyAct {
+            act: party::ACT_START,
+            arg: MODE_BIG_TEAM as u32 | party::START_PRIVATE,
+        },
+        Msg::PartyInvite {
+            player: party::PlayerId::new("0x1111111111111111111111111111111111111111").unwrap(),
+        },
+        Msg::Party(a_party()),
+        Msg::Go {
+            mode: MODE_FFA,
+            private: true,
+        },
+        Msg::Friends { n: 2, reachable: true },
+        Msg::Friend {
+            i: 1,
+            name: Name::new("chief"),
+            player: party::PlayerId::new("acct_0123456789abcdef0123").unwrap(),
+            at: party::AT_HERE,
+            party: 77,
+            size: 3,
+            playing: party::PLAYING_NONE,
+        },
+        Msg::Invited {
+            from: Name::new("arbiter"),
+            code: 0x2aaa_aaaa,
+        },
     ]
+}
+
+/// A full party: eight members, a guest among them.
+fn a_party() -> party::Party {
+    let mut p = party::Party {
+        code: party::code_parse("K7Q2XD").unwrap(),
+        privacy: party::PRIVACY_FRIENDS,
+        leader: 3,
+        me: 0,
+        n: party::MAX_PARTY as u8,
+        members: [party::Member::EMPTY; party::MAX_PARTY],
+    };
+    for (i, m) in p.members.iter_mut().enumerate() {
+        *m = party::Member {
+            tag: i as u8,
+            name: Name::new(&format!("member {i} long name")),
+            player: if i == 5 {
+                party::PlayerId::NONE
+            } else {
+                party::PlayerId::new(&format!("0x{:040x}", i + 1)).unwrap()
+            },
+            away: i == 2,
+            playing: if i == 1 { MODE_DOUBLES } else { party::PLAYING_NONE },
+        };
+    }
+    p
+}
+
+#[test]
+fn a_full_party_fits_a_stream_message() {
+    let mut buf = [0u8; MAX_STREAM_MSG];
+    let n = encode_msg(&Msg::Party(a_party()), &mut buf).unwrap();
+    assert!(n <= MAX_STREAM_MSG / 2, "{n} bytes");
+}
+
+#[test]
+fn voice_frames_have_their_goldens() {
+    let mut f = voice::VoiceFrame::new(300, voice::VOICE_END, &[9 << 3, 0xde, 0xad]).unwrap();
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let up = voice::encode_voice_up(&f, &mut buf).unwrap();
+    assert_eq!(datagram_kind(&buf[..up]), Some(DG_VOICE));
+    let a = fnv(&buf[..up]);
+    f.from = 5;
+    let n = voice::encode_voice(&f, &mut buf).unwrap();
+    let b = fnv(&buf[..n]);
+    assert_eq!(
+        [a, b],
+        [0xf76d_1c0a_fc9a_e4cc, 0x90a3_e271_cfc2_d6d1],
+        "got {:#018x?}",
+        [a, b]
+    );
 }
 
 #[test]
@@ -293,6 +418,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own.ride, s.own.ride);
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
+    assert_eq!(d.drops(), s.drops());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -303,6 +429,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_events: 0,
         n_pads: MAX_SNAP_PADS as u8,
         n_vehicles: MAX_SNAP_VEHICLES as u8,
+        n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
         ..s
     };
@@ -328,6 +455,20 @@ fn decoders_refuse_garbage() {
     assert!(decode_input(&buf[..n + 1]).is_err(), "trailing byte");
     assert!(decode_snapshot(&buf[..n]).is_err(), "wrong kind");
     assert!(decode_msg(&[99]).is_err());
+    // A medal past the table, or none.
+    let mut buf = [0u8; 64];
+    for medal in [0, medal::COUNT as u8] {
+        let n = encode_msg(
+            &Msg::Medal {
+                slot: 1,
+                medal,
+                victim: 2,
+            },
+            &mut buf,
+        )
+        .unwrap();
+        assert!(decode_msg(&buf[..n]).is_err(), "medal {medal}");
+    }
 }
 
 #[test]
@@ -344,21 +485,32 @@ fn the_bytes_match_their_goldens() {
     }
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0x7578_0987_9b7c_1ac2,
-        0xd724_beda_f252_12c2,
-        0xecdc_9032_25ab_e115,
+        0xc72a_f16d_81bf_711b,
+        0x51ca_7147_32d8_a0df,
+        0x20fb_63c8_54bb_461a,
         0x7ebe_34b8_2c10_f2d0,
         0x3a33_e7d9_9d0c_85a6,
         0xb8d3_9fbc_28b2_b2b7,
-        0x9b51_4e6b_3773_df6f,
+        0x31fb_12ef_3b97_e478,
         0x0835_ec07_b4ee_4fb0,
         0x9e6a_3369_2998_8329,
         0x227f_c9e3_d4c4_2705,
-        0xb77f_6e56_3cf6_3da6,
+        0xc3c6_2389_966a_c2c5,
         0xc800_e818_6244_f8b3,
         0x522b_412f_5f51_3ede,
         0xaf63_ba4c_8601_b2c6,
         0xdfb3_0ed7_79ac_056f,
+        0x26d2_6718_97d8_1f69,
+        0xcf3f_7643_a904_811f,
+        0x4627_86ee_7e74_8b4f,
+        0x84e5_706c_e958_be03,
+        0x519c_8b9c_47dc_7be6,
+        0xba4d_2217_aeb8_fb47,
+        0xb06e_95f9_23e4_b9c4,
+        0x086f_a507_b51f_4f52,
+        0x6c87_7218_bf71_5473,
+        0x88d8_ddf9_f436_7356,
+        0x8461_28ae_94ef_0f4c,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

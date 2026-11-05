@@ -21,11 +21,15 @@ pub mod door;
 pub mod film;
 pub mod front;
 pub mod hud;
+pub mod items;
 pub mod level;
 pub mod link;
 pub mod loading;
 pub mod look;
+pub mod medals;
 pub mod options;
+pub mod pad;
+pub mod party;
 pub mod pause;
 pub mod pointer;
 pub mod pose;
@@ -33,6 +37,7 @@ pub mod settings;
 pub mod shot;
 pub mod sound;
 pub mod tags;
+pub mod tally;
 pub mod ui;
 
 use std::collections::BTreeMap;
@@ -222,6 +227,8 @@ pub struct Opts {
     pub graphics: bool,
     /// The title, or straight into a mode, or neither (a picture).
     pub front: front::Start,
+    /// A party a link asked for (`party=CODE`, `--party CODE`): joined.
+    pub party: u32,
 }
 
 impl Opts {
@@ -242,6 +249,11 @@ impl Opts {
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
+            party: s
+                .split([',', ' '])
+                .find_map(|w| w.strip_prefix("party="))
+                .and_then(proto::party::code_parse)
+                .unwrap_or(0),
             front: front::Start::Off,
             graphics: has("graphics"),
             open: if has("settings") || has("graphics") {
@@ -265,6 +277,7 @@ pub fn game(door: door::Door, opts: Opts) -> App {
     };
     let mut app = app_on(link, opts, first);
     front::install(&mut app, door, opts.front, opts.open);
+    party::install(&mut app, opts.party);
     app
 }
 
@@ -308,7 +321,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
+    .init_resource::<items::Items>()
+    .init_resource::<look::rag::Blows>()
     .init_resource::<Early>()
+    .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
@@ -322,6 +338,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
+    .add_plugins(pad::plugin)
     .add_plugins(loading::plugin)
     .add_plugins(look::shot::plugin)
     // F9's clip of the last half minute, and `--record` (`clip.rs`).
@@ -359,6 +376,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::shafts::Shafts>()
     .init_resource::<look::shafts::WebShafts>()
     .init_resource::<look::cliffs::SkinLift>()
+    // The sea (look/water.rs) and its waves.
+    .add_plugins(MaterialPlugin::<look::water::WaterMaterial>::default())
+    .add_systems(Update, look::water::animate.after(view))
     .add_systems(
         Startup,
         (
@@ -437,6 +457,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (draw_fighters, draw_vehicles, look::foliage::update).chain(),
+            items::draw,
             fly,
             view,
             // The gun in view before the effects: our own flash sits on
@@ -448,6 +469,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         )
             .chain(),
     );
+    app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
@@ -470,7 +492,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        look::bodies::pose_spines
+        (look::bodies::pose_spines, look::rag::step, look::bodies::pose_hands)
+            .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
@@ -484,9 +507,11 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
     if let Some(p) = opts.pose {
-        app.insert_resource(p).add_systems(Update, pose::aim.after(view));
+        app.insert_resource(p)
+            .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
     } else {
-        app.add_systems(Startup, hud::setup);
+        app.add_systems(Startup, (hud::setup, medals::setup))
+            .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
@@ -693,6 +718,9 @@ fn rebuild(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
+    mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
     mut shade: ResMut<look::quality::MapShade>,
@@ -713,7 +741,16 @@ fn rebuild(
     }
     // The map's mood first: the level's sun and its wet are the mood's.
     look::mood::set(&mut mood, s.map_id);
-    level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
+    level::build(
+        &mut commands,
+        &mut meshes,
+        &mut mats,
+        &mut water_mats,
+        &mut images,
+        &mut cards,
+        &old,
+        s.map_id,
+    );
     if let Ok((mut exposure, mut env)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
             look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
@@ -1063,6 +1100,7 @@ pub(crate) fn happened(
     mut early: ResMut<Early>,
     muzzles: Res<look::viewmodel::ViewMuzzles>,
     film: Option<Res<film::Film>>,
+    mut blows: ResMut<look::rag::Blows>,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
@@ -1093,6 +1131,14 @@ pub(crate) fn happened(
             t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, &events);
+        let me = s.core.own().1;
+        look::rag::on_events(
+            &mut blows,
+            &events,
+            &others,
+            (s.core.slot, Vec3::new(me.x, me.y, me.z)),
+            time.elapsed_secs(),
+        );
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
@@ -1128,6 +1174,7 @@ fn expose(
     settle: Res<loading::Settle>,
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
+    party: Option<Res<party::PartyView>>,
     (mut frames, mut described): (Local<u32>, Local<Option<String>>),
 ) {
     use wasm_bindgen::JsValue;
@@ -1144,13 +1191,29 @@ fn expose(
     let set = |o: &js_sys::Object, k: &str, v: JsValue| {
         let _ = js_sys::Reflect::set(o, &JsValue::from_str(k), &v);
     };
-    let live = link.0.live() && in_match.is_none_or(|m| m.0);
+    let matched = in_match.as_ref().is_some_and(|m| m.0);
+    let live = link.0.live() && (in_match.is_none() || matched);
     set(&o, "connected", (live && s.ready).into());
     set(&o, "frames", (*frames).into());
     set(&o, "kills", st.kills.into());
     set(&o, "deaths", st.deaths.into());
+    set(&o, "assists", st.assists.into());
+    // Our medals this match, by name, and the carnage report's rows.
+    let medals = js_sys::Object::new();
+    for (&id, &n) in &st.earned {
+        let _ = js_sys::Reflect::set(&medals, &JsValue::from_str(proto::medal::info(id).name), &n.into());
+    }
+    set(&o, "medals", medals.into());
+    set(&o, "carnage", st.carnage.len().into());
     set(&o, "alive", s.core.own().0.alive.into());
     set(&o, "slot", s.core.slot.into());
+    set(&o, "team", s.core.team.into());
+    // Who sits where, by name: a party's page sees its members (ci/party.mjs).
+    let names = js_sys::Array::new();
+    for (_, n) in st.names() {
+        names.push(&JsValue::from_str(n));
+    }
+    set(&o, "names", names.into());
     let (f, p) = s.core.own();
     set(
         &o,
@@ -1166,6 +1229,24 @@ fn expose(
         Screen::Settings => "settings",
     };
     set(&o, "screen", name.into());
+    set(&o, "in_match", matched.into());
+    // The party as this page sees it (ci/party.mjs).
+    if let Some(p) = party {
+        let po = js_sys::Object::new();
+        set(&po, "connected", p.connected.into());
+        set(&po, "code", p.code_text().into());
+        set(&po, "n", (p.members().len() as u32).into());
+        set(&po, "leads", p.leads().into());
+        let names = js_sys::Array::new();
+        for m in p.members() {
+            names.push(&JsValue::from_str(m.name.as_str()));
+        }
+        set(&po, "names", names.into());
+        let (heard, sent) = party::voice_counts();
+        set(&po, "heard", heard.into());
+        set(&po, "sent", sent.into());
+        set(&o, "party", po.into());
+    }
     // Which module this is and what it draws (`look/gpu.rs`).
     set(&o, "gfx", look::gpu::api().into());
     set(&o, "tier", described.as_deref().unwrap_or_default().into());

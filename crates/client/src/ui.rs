@@ -138,6 +138,11 @@ pub const GOOD: Color = Color::srgb(0.65, 0.81, 0.43);
 /// Elo Pros' own lime: a signed-in wallet.
 pub const ELO: Color = Color::srgb(0.72, 1.0, 0.22);
 
+/// A shade over a match (the Esc menu, the carnage report).
+pub const SHADE: Color = Color::srgba(0.055, 0.047, 0.039, 0.86);
+/// Gold: the best medals.
+pub const GOLD: Color = MARK;
+
 /// A button's background at rest and under the pointer: carried per
 /// entity, so a selected row isn't repainted on the way past it.
 #[derive(Component, Clone, Copy)]

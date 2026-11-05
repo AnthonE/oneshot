@@ -5,11 +5,15 @@
 //! WebTransport; the netcode tests drive it directly.
 
 pub mod fog;
+pub mod medals;
 pub mod replay;
 pub mod watch;
 
 use proto::MAX_SNAP_VEHICLES;
-use proto::{encode_snapshot, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_EVENTS, MAX_SNAP_PADS, MAX_SNAP_PROJ};
+use proto::{
+    encode_snapshot, DropState, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_DROPS, MAX_SNAP_EVENTS, MAX_SNAP_PADS,
+    MAX_SNAP_PROJ,
+};
 use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, SHIELD_MAX, TICK_HZ};
@@ -270,6 +274,8 @@ pub struct Room {
     pub ranked: bool,
     /// The aim review's numbers, for every seat.
     watch: watch::Watch,
+    /// Medals and the carnage report, for every seat.
+    medals: medals::Medals,
     /// The skin each person wears, checked by the server against their
     /// wallet before they were seated. Cosmetic: never reaches the world.
     skins: [u8; MAX_FIGHTERS],
@@ -308,6 +314,7 @@ impl Room {
             fogs: Default::default(),
             ranked: false,
             watch: watch::Watch::default(),
+            medals: medals::Medals::default(),
             skins: [proto::SKIN_STANDARD; MAX_FIGHTERS],
         }
     }
@@ -322,6 +329,37 @@ impl Room {
         &self.watch
     }
 
+    /// Medals and the carnage report so far.
+    pub fn medals(&self) -> &medals::Medals {
+        &self.medals
+    }
+
+    /// Seat `s`'s carnage report as the stream gives it: the medals' tally
+    /// and the aim review's rounds.
+    pub fn carnage(&self, s: usize) -> Msg {
+        let t = self.medals.tally(s);
+        let c16 = |x: u32| x.min(u16::MAX as u32) as u16;
+        let mut medals = [0u8; proto::medal::COUNT];
+        for (m, &n) in medals.iter_mut().zip(&t.medals) {
+            *m = n.min(u8::MAX as u16) as u8;
+        }
+        Msg::Carnage {
+            slot: s as u8,
+            kills: t.kills,
+            deaths: t.deaths,
+            assists: t.assists,
+            betrayals: t.betrayals,
+            shots: c16(t.shots),
+            hits: c16(t.hits),
+            heads: c16(t.heads),
+            damage: c16(t.damage),
+            taken: c16(t.taken),
+            best_spree: t.best_spree,
+            best_multi: t.best_multi,
+            medals,
+        }
+    }
+
     /// The commitment to this match's salt.
     pub fn salt_commit(&self) -> [u8; 32] {
         proto::salt_commit([self.salt.0, self.salt.1])
@@ -330,6 +368,7 @@ impl Room {
     fn world_seat(&mut self, s: usize, team: u8) {
         self.rec.seat(s, team);
         self.world.seat(s, team);
+        self.medals.reset(s);
     }
 
     fn team_of(&self, s: usize) -> u8 {
@@ -347,11 +386,31 @@ impl Room {
     /// server checked they own). Returns the seat and the stream messages: a
     /// welcome for them, the seats for everyone.
     pub fn join(&mut self, name: Name, skin: u8) -> Option<(u8, Outbox)> {
+        self.join_team(name, skin, None)
+    }
+
+    /// [`Room::join`], on `team`'s side while it has a seat (a party sits
+    /// together; the sides are the seats' parity).
+    pub fn join_team(&mut self, name: Name, skin: u8, team: Option<u8>) -> Option<(u8, Outbox)> {
         if self.ranked {
             return None;
         }
-        let s = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Bot(_) | Seat::Empty))?;
+        let s = (0..self.size)
+            .find(|&s| self.open(s) && team.is_none_or(|t| self.team_of(s) == t))
+            .or_else(|| (0..self.size).find(|&s| self.open(s)))?;
         Some((s as u8, self.seat_person(s, name, skin)))
+    }
+
+    /// Whether a person could take seat `s` (a bot holds it, or nobody).
+    fn open(&self, s: usize) -> bool {
+        matches!(self.seats[s], Seat::Bot(_) | Seat::Empty)
+    }
+
+    /// Seats a person could take, on `team`'s side or anywhere.
+    pub fn open_seats(&self, team: Option<u8>) -> usize {
+        (0..self.size)
+            .filter(|&s| self.open(s) && team.is_none_or(|t| self.team_of(s) == t))
+            .count()
     }
 
     /// A person in seat `s`: the welcome for them, the seats for everyone.
@@ -465,9 +524,23 @@ impl Room {
                         killer: e.a,
                         victim: e.b,
                         cause: e.c,
+                        head: e.part == 2,
                     },
                 ));
             }
+        }
+        // After the feed's lines: a medal to its earner, or to everyone if
+        // it says no more than the feed.
+        for a in self.medals.observe(&self.world) {
+            let to = (!proto::medal::info(a.medal).public).then_some(a.slot);
+            out.push((
+                to,
+                Msg::Medal {
+                    slot: a.slot,
+                    medal: a.medal,
+                    victim: a.victim,
+                },
+            ));
         }
         if self.world.phase != self.phase {
             self.phase = self.world.phase;
@@ -479,6 +552,13 @@ impl Room {
                 },
             ));
             if self.phase == Phase::Over {
+                // The carnage report: everyone's, now nothing in it can
+                // help anyone.
+                for q in 0..self.size {
+                    if self.world.fighters[q].seated {
+                        out.push((None, self.carnage(q)));
+                    }
+                }
                 // The match is decided: the salt can be checked now.
                 out.push((
                     None,
@@ -560,6 +640,7 @@ pub fn build(
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
+            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
         }
     }
     // What this client may be told of the new events joins its queue; the
@@ -626,6 +707,38 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
             vel: p.vel,
         };
         snap.n_proj += 1;
+    }
+}
+
+/// How far a gun on the floor is named to a client that sees it.
+pub const SEE_DROP_M: f32 = 50.0;
+/// A drop is seen if a line from the eye clears the map to this far over
+/// where it lies.
+pub const DROP_LOOK_Y: f32 = 0.3;
+
+/// The guns on the floor this client sees, nearest first: in clear line of
+/// its eye and within [`SEE_DROP_M`]. Never by who left it, so a fresh one
+/// (where someone fell) never tells where a hidden enemy died.
+fn add_drops(snap: &mut Snapshot, w: &World, eye: V3) {
+    let mut seen = [(f32::INFINITY, 0usize); sim::consts::MAX_DROPS];
+    let mut n = 0;
+    for (i, d) in w.drops.live() {
+        let far = (d.pos - eye).len();
+        if far <= SEE_DROP_M && w.map.clear(eye, d.pos + V3::new(0.0, DROP_LOOK_Y, 0.0)) {
+            seen[n] = (far, i);
+            n += 1;
+        }
+    }
+    let seen = &mut seen[..n];
+    seen.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for &(_, i) in seen.iter().take(MAX_SNAP_DROPS) {
+        let d = &w.drops[i];
+        snap.drops[snap.n_drops as usize] = DropState {
+            slot: i as u8,
+            arm: d.gun.arm,
+            pos: d.pos,
+        };
+        snap.n_drops += 1;
     }
 }
 

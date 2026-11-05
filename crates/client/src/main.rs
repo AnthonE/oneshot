@@ -145,6 +145,7 @@ fn run() -> Result<(), String> {
             fxstage,
             open,
             front,
+            party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
         };
         let joins = matches!(front, Start::Join(_));
         // On the title only the settings open over it; in a match, the
@@ -284,6 +285,7 @@ const HELP: &str = "oneshot: the desktop client
   oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
   --name NAME                      the name others see (the title's field)
+  --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros
                                    sign-in (the web page)

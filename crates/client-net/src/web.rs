@@ -26,7 +26,7 @@ use web_sys::{
 
 use crate::session::{Session, Wire};
 
-fn js_err(what: &str, v: &JsValue) -> JsValue {
+pub(crate) fn js_err(what: &str, v: &JsValue) -> JsValue {
     let msg = js_sys::Reflect::get(v, &JsValue::from_str("message"))
         .ok()
         .and_then(|m| m.as_string())
@@ -39,7 +39,7 @@ fn now_ms() -> f64 {
     web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
 }
 
-fn hex32(s: &str) -> Option<[u8; 32]> {
+pub(crate) fn hex32(s: &str) -> Option<[u8; 32]> {
     let s: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if s.len() != 64 {
         return None;
@@ -52,7 +52,7 @@ fn hex32(s: &str) -> Option<[u8; 32]> {
 }
 
 /// Reads length-prefixed frames off a stream, whatever sizes reads return.
-struct FrameReader {
+pub(crate) struct FrameReader {
     reader: ReadableStreamDefaultReader,
     buf: Box<FrameBuf<MAX_STREAM_MSG>>,
     pending: Vec<u8>,
@@ -60,7 +60,7 @@ struct FrameReader {
 }
 
 impl FrameReader {
-    fn new(stream: &ReadableStream) -> Result<Self, JsValue> {
+    pub(crate) fn new(stream: &ReadableStream) -> Result<Self, JsValue> {
         Ok(FrameReader {
             reader: ReadableStreamDefaultReader::new(stream).map_err(|e| js_err("stream reader", &e))?,
             buf: Box::new(FrameBuf::new()),
@@ -69,7 +69,7 @@ impl FrameReader {
         })
     }
 
-    async fn next(&mut self) -> Option<Vec<u8>> {
+    pub(crate) async fn next(&mut self) -> Option<Vec<u8>> {
         loop {
             while self.at < self.pending.len() {
                 let (used, done) = self.buf.push(&self.pending[self.at..]).ok()?;
@@ -100,7 +100,7 @@ impl FrameReader {
     }
 }
 
-async fn write_frame(w: &WritableStreamDefaultWriter, m: &Msg) -> Result<(), JsValue> {
+pub(crate) async fn write_frame(w: &WritableStreamDefaultWriter, m: &Msg) -> Result<(), JsValue> {
     let mut out = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     let n = frame_msg(m, &mut out).map_err(|_| JsValue::from_str("frame"))?;
     let chunk = Uint8Array::new_with_length(n as u32);
@@ -112,7 +112,7 @@ async fn write_frame(w: &WritableStreamDefaultWriter, m: &Msg) -> Result<(), JsV
 }
 
 /// The datagram writer: Safari has only `createWritable()`.
-fn datagram_writer(d: &WebTransportDatagramDuplexStream) -> Result<WritableStreamDefaultWriter, JsValue> {
+pub(crate) fn datagram_writer(d: &WebTransportDatagramDuplexStream) -> Result<WritableStreamDefaultWriter, JsValue> {
     let create = js_sys::Reflect::get(d, &JsValue::from_str("createWritable"))
         .ok()
         .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
@@ -195,7 +195,8 @@ impl Client {
     /// 5 a cup)
     /// as `name` wearing `skin` (worn only if the pass's wallet owns it),
     /// signed in with an
-    /// Elo Pros `pass` (empty for a guest). Returns once the hello is sent:
+    /// Elo Pros `pass` (empty for a guest; or the server's ticket), with the
+    /// `party` it comes with (its code, 0 for none). Returns once the hello is sent:
     /// the welcome comes when a room is ready (at once for casual, when the
     /// queue forms a match for ranked), and `ready` turns true. A refusal
     /// comes through `messages()`.
@@ -206,6 +207,7 @@ impl Client {
         pass: String,
         mode: u8,
         skin: u8,
+        party: u32,
     ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
             proto::Pass::NONE
@@ -233,7 +235,7 @@ impl Client {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let sw = bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?;
-        write_frame(&sw, &Session::hello(&name, pass, mode, skin)).await?;
+        write_frame(&sw, &Session::hello(&name, pass, mode, skin, party)).await?;
         let mut reader = FrameReader::new(&bidi.readable())?;
 
         let msgs: Queue<Msg> = Rc::default();
@@ -573,11 +575,17 @@ impl Client {
                     set("bot", bot.into());
                     set("name", name.as_str().into());
                 }
-                Msg::Kill { killer, victim, cause } => {
+                Msg::Kill {
+                    killer,
+                    victim,
+                    cause,
+                    head,
+                } => {
                     set("type", "kill".into());
                     set("killer", killer.into());
                     set("victim", victim.into());
                     set("cause", cause.into());
+                    set("head", head.into());
                 }
                 Msg::Phase { phase, winner } => {
                     set("type", "phase".into());
@@ -615,6 +623,34 @@ impl Client {
                     set("done", done.into());
                 }
                 Msg::Bye => set("type", "bye".into()),
+                Msg::Medal { slot, medal, victim } => {
+                    set("type", "medal".into());
+                    set("slot", slot.into());
+                    set("medal", medal.into());
+                    set("name", proto::medal::info(medal).name.into());
+                    set("victim", victim.into());
+                }
+                Msg::Carnage {
+                    slot,
+                    kills,
+                    deaths,
+                    assists,
+                    shots,
+                    hits,
+                    damage,
+                    best_spree,
+                    ..
+                } => {
+                    set("type", "carnage".into());
+                    set("slot", slot.into());
+                    set("kills", kills.into());
+                    set("deaths", deaths.into());
+                    set("assists", assists.into());
+                    set("shots", shots.into());
+                    set("hits", hits.into());
+                    set("damage", damage.into());
+                    set("best_spree", best_spree.into());
+                }
                 _ => continue,
             }
             out.push(&o);

@@ -1,7 +1,10 @@
 //! Sound, after the three.js page's `art.ts`'s `Sfx`: shots placed where they were
 //! fired (each gun its own takes, a far one past 35 m, our own unplaced),
 //! hits and headshots, blasts, reloads, the swap, a dry trigger, steps
-//! and landings. Gates' CC0 cuts (`assets/sound`, NOTICE).
+//! and landings. Gates' CC0 cuts (`assets/sound`, NOTICE). And the
+//! announcer: our voiced medals one at a time (`assets/sound/voice`,
+//! `tools/voice.sh`), a newer rung of a ladder taking the place of one
+//! still waiting.
 //!
 //! Two halves. What to play is decided every frame on every build
 //! ([`decide`]): a list of [`Cue`]s off the frame's events and our own
@@ -60,6 +63,10 @@ pub fn names() -> Vec<String> {
         "step_concrete_1",
         "step_concrete_2",
         "step_concrete_3",
+        "swing_0",
+        "fuse_0",
+        "hurt_0",
+        "death_0",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -70,6 +77,11 @@ pub fn names() -> Vec<String> {
         }
         names.push(format!("{}_0", g.far));
         names.push(g.reload.to_string());
+    }
+    for id in 1..proto::medal::COUNT as u8 {
+        if proto::medal::info(id).voiced {
+            names.push(format!("voice/{}", proto::medal::slug(id)));
+        }
     }
     names
 }
@@ -83,6 +95,8 @@ pub struct Ear {
     last_arm: u8,
     last_grounded: bool,
     last_mag: u16,
+    last_shield: i32,
+    last_alive: bool,
     step: f32,
     dry: f32,
 }
@@ -95,6 +109,8 @@ impl Default for Ear {
             last_arm: 0,
             last_grounded: false,
             last_mag: 0,
+            last_shield: 0,
+            last_alive: false,
             step: 0.0,
             dry: 0.0,
         }
@@ -183,10 +199,25 @@ pub fn decide(
         } else if e.kind == Kind::Blast as u8 || e.kind == Kind::Wreck as u8 {
             let n = format!("blast_{}", ear.roll(2));
             ear.cue(cues, &n, Some(at), 1.2);
+        } else if e.kind == Kind::Melee as u8 {
+            let at = (e.a != me).then_some(at);
+            ear.cue(cues, "swing_0", at, 0.7);
+        } else if e.kind == Kind::Throw as u8 {
+            let at = (e.a != me || e.part == HEARD).then_some(at);
+            ear.cue(cues, "fuse_0", at, 0.6);
         }
     }
-    // Our own body: reloads, the swap, a dry trigger, steps, landing.
+    // Our own body: shields gone, a death, reloads, the swap, a dry
+    // trigger, steps, landing.
     let (f, _) = s.core.own();
+    if f.alive && f.shield == 0 && ear.last_shield > 0 {
+        ear.cue(cues, "hurt_0", None, 0.6);
+    }
+    ear.last_shield = f.shield;
+    if !f.alive && ear.last_alive {
+        ear.cue(cues, "death_0", None, 0.7);
+    }
+    ear.last_alive = f.alive;
     let g = f.gun();
     let gun = crate::look::guns::gun(g.arm);
     let dt = time.delta_secs();
@@ -224,8 +255,8 @@ pub fn decide(
     ear.last_grounded = grounded;
 }
 
-/// The cues through Bevy's audio, live. A film mixes its own and plays
-/// none of them (`film.rs`).
+/// The cues through Bevy's audio, live, and the announcer. A film mixes
+/// its own and plays none of them (`film.rs`).
 #[cfg(any(target_arch = "wasm32", feature = "sound"))]
 pub mod on {
     use std::collections::BTreeMap;
@@ -239,13 +270,26 @@ pub mod on {
     #[derive(Resource, Default)]
     pub struct Clips(pub BTreeMap<String, Handle<AudioSource>>);
 
+    /// Medals waiting for the announcer, oldest first.
+    #[derive(Resource, Default)]
+    struct Announcer(Vec<u8>);
+
+    /// The announcer's line now playing.
+    #[derive(Component)]
+    struct Voice;
+
+    /// Lines the announcer may have waiting; past it the oldest goes.
+    const VOICE_WAIT: usize = 4;
+    const VOICE_GAIN: f32 = 1.1;
+
     pub fn build(app: &mut App) {
         app.init_resource::<Clips>()
+            .init_resource::<Announcer>()
             .insert_resource(DefaultSpatialScale(SpatialScale::new(SCALE)))
             .add_systems(Startup, load)
             .add_systems(
                 Update,
-                (listen, play)
+                (listen, play, announce)
                     .chain()
                     .after(super::decide)
                     .run_if(not(resource_exists::<crate::film::Film>)),
@@ -288,5 +332,39 @@ pub mod on {
                 }
             }
         }
+    }
+
+    /// Takes our new voiced medals and says the next when the last is done.
+    fn announce(
+        mut st: ResMut<crate::hud::HudState>,
+        mut waiting: ResMut<Announcer>,
+        clips: Res<Clips>,
+        settings: Res<crate::settings::Settings>,
+        mut commands: Commands,
+        speaking: Query<(), With<Voice>>,
+    ) {
+        use proto::medal as md;
+        let voice = &mut waiting.0;
+        for id in core::mem::take(&mut st.announce) {
+            let family = md::info(id).family;
+            let ladder = matches!(family, md::Family::Multi | md::Family::Spree);
+            // A higher rung says what the lower one waiting would have.
+            match voice.iter_mut().find(|q| ladder && md::info(**q).family == family) {
+                Some(q) => *q = id,
+                None => voice.push(id),
+            }
+            if voice.len() > VOICE_WAIT {
+                voice.remove(0);
+            }
+        }
+        if !speaking.is_empty() || voice.is_empty() {
+            return;
+        }
+        let id = voice.remove(0);
+        let Some(h) = clips.0.get(&format!("voice/{}", md::slug(id))).cloned() else {
+            return;
+        };
+        let s = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(VOICE_GAIN * MASTER * settings.volume()));
+        commands.spawn((Voice, AudioPlayer::new(h), s));
     }
 }

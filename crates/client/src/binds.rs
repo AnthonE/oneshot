@@ -225,9 +225,10 @@ pub enum Action {
     Swap,
     Use,
     NetGraph,
+    Scores,
 }
 
-pub const COUNT: usize = 13;
+pub const COUNT: usize = 14;
 
 pub struct Spec {
     pub action: Action,
@@ -322,6 +323,12 @@ pub static SPECS: [Spec; COUNT] = [
         token: "net_graph",
         name: "Net graph",
         default: [k(KeyCode::KeyN), None],
+    },
+    Spec {
+        action: Action::Scores,
+        token: "scoreboard",
+        name: "Scoreboard (hold)",
+        default: [k(KeyCode::Tab), None],
     },
 ];
 

@@ -61,26 +61,31 @@ struct CloudShadow {
     texels: array<vec4<u32>, 16>,
 }
 
-// Field for field `ground::GroundParams`: the ground's one uniform block
-// (WebGL2 lets many devices' fragment shaders read only twelve, and Bevy's
-// view, mesh and material take eleven).
-struct GroundLook {
-    // Metres each set repeats over, in splat order.
+// The ground's one uniform block, here so this file and `ground.wgsl` both
+// read it: under WebGL2 many devices' fragment shaders may read only twelve
+// (ANGLE on D3D11 and on Metal), and Bevy's view, mesh and material take
+// eleven.
+//
+// ⚠ This struct's field list and order must match `GroundParams` in
+// look/ground.rs exactly: a uniform whose two sides disagree about layout
+// binds fine and is garbage in every field after the first mismatch. A test
+// in ground.rs scrapes both. What each field holds is written there.
+struct GroundParams {
     tile_m: vec4<f32>,
-    // What each set's photograph is multiplied by.
     tint: array<vec4<f32>, 4>,
+    cliff: vec4<f32>,
+    wall: vec4<f32>,
+    wall_planes: vec4<f32>,
+    rock_a: vec4<f32>,
+    rock_b: vec4<f32>,
+    rock_c: vec4<f32>,
+    rock_d: vec4<f32>,
+    rock_e: vec4<f32>,
+    sea: vec4<f32>,
     cloud: CloudShadow,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> ground: GroundLook;
-
-// Set `i`'s tile, metres, and its tint (`ground.wgsl`).
-fn tile_m(i: i32) -> f32 {
-    return ground.tile_m[i];
-}
-fn tint(i: i32) -> vec3<f32> {
-    return ground.tint[i].rgb;
-}
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> ground: GroundParams;
 
 const LUMA: vec3<f32> = vec3<f32>(0.2126, 0.7152, 0.0722);
 

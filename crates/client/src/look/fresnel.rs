@@ -98,7 +98,13 @@ mod tests {
                 "look {look} delivers less specular than either of its halves"
             );
         }
-        let g = super::super::ground::material(Handle::default(), Handle::default(), default());
+        let g = super::super::ground::material(
+            Handle::default(),
+            Handle::default(),
+            f32::NEG_INFINITY,
+            false,
+            default(),
+        );
         assert!((F0_MIN..=F0_MAX).contains(&f0_of(g.base.reflectance)));
     }
 }

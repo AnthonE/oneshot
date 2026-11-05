@@ -146,6 +146,15 @@ impl Hold {
         }
     }
 
+    /// Its reload, played once over the hold at the pace of the gun's own
+    /// (`Seen::reload_s`).
+    pub fn reload_name(self) -> &'static str {
+        match self {
+            Hold::Long => "Rifle_Reload",
+            Hold::Pistol => "Pistol_Reload",
+        }
+    }
+
     fn slot(self) -> usize {
         match self {
             Hold::Long => 0,
@@ -249,6 +258,8 @@ pub struct Seen {
     pub pitch: f32,
     /// What its arms hold.
     pub hold: Option<Hold>,
+    /// Reloading (the wire's bit): how long the gun's reload takes, s.
+    pub reload_s: Option<f32>,
 }
 
 /// One body's locomotion: what its legs play, how they are turned, where
@@ -277,6 +288,8 @@ pub struct Gait {
     pub turning: bool,
     /// What the arms hold, if the body is shouldering anything.
     pub hold: Option<Hold>,
+    /// Reloading: how long the gun's reload takes, s.
+    pub reload_s: Option<f32>,
 }
 
 impl Gait {
@@ -300,6 +313,7 @@ impl Gait {
         self.pitch = s.pitch;
         self.clip = Some(self.gait(s));
         self.hold = s.hold.filter(|_| s.alive && !s.driving);
+        self.reload_s = s.reload_s.filter(|_| self.hold.is_some());
         self.steer(turned, dt);
     }
 
@@ -433,6 +447,8 @@ pub struct Rig {
     durations: [f32; Clip::ALL.len()],
     holds: [Option<AnimationNodeIndex>; Hold::ALL.len()],
     hold_durations: [f32; Hold::ALL.len()],
+    reloads: [Option<AnimationNodeIndex>; Hold::ALL.len()],
+    reload_durations: [f32; Hold::ALL.len()],
 }
 
 impl Rig {
@@ -473,12 +489,18 @@ pub fn build(
         }
     }
     let mut hold_durations = [1.0; Hold::ALL.len()];
+    let mut reload_durations = [1.0; Hold::ALL.len()];
     for hold in Hold::ALL {
-        if let Some(h) = gltf.named_animations.get(hold.name()) {
-            let Some(c) = clips.get(h) else {
-                return;
-            };
-            hold_durations[hold.slot()] = c.duration();
+        for (name, out) in [
+            (hold.name(), &mut hold_durations),
+            (hold.reload_name(), &mut reload_durations),
+        ] {
+            if let Some(h) = gltf.named_animations.get(name) {
+                let Some(c) = clips.get(h) else {
+                    return;
+                };
+                out[hold.slot()] = c.duration();
+            }
         }
     }
     let Some(legs) = leg_targets(gltf, &gltf_nodes) else {
@@ -495,10 +517,13 @@ pub fn build(
         }
     }
     let mut holds = [None; Hold::ALL.len()];
+    let mut reloads = [None; Hold::ALL.len()];
     for hold in Hold::ALL {
-        match gltf.named_animations.get(hold.name()) {
-            Some(h) => holds[hold.slot()] = Some(graph.add_clip_with_mask(h.clone(), LEGS_MASK, 1.0, root)),
-            None => missing.push(hold.name()),
+        for (name, out) in [(hold.name(), &mut holds), (hold.reload_name(), &mut reloads)] {
+            match gltf.named_animations.get(name) {
+                Some(h) => out[hold.slot()] = Some(graph.add_clip_with_mask(h.clone(), LEGS_MASK, 1.0, root)),
+                None => missing.push(name),
+            }
         }
     }
     if legs.is_empty() {
@@ -518,6 +543,8 @@ pub fn build(
         durations,
         holds,
         hold_durations,
+        reloads,
+        reload_durations,
     });
 }
 
@@ -579,6 +606,17 @@ pub struct Playing {
     fading: Option<Clip>,
     /// How much of the arms and spine each hold owns, 0..1.
     hold_u: [f32; Hold::ALL.len()],
+    /// How much of them the reload owns over the hold, 0..1, and the hold
+    /// whose reload is playing.
+    reload_u: f32,
+    reload_of: Option<Hold>,
+}
+
+impl Playing {
+    /// How much of the arms the reload owns, 0..1.
+    pub fn reload_share(&self) -> f32 {
+        self.reload_u
+    }
 }
 
 impl Playing {
@@ -670,21 +708,59 @@ pub fn drive(
     } else {
         playing.fading = None;
     }
-    // The holds, faded in and out at the blend's pace.
+    // The holds and the reload over them, faded in and out at the blend's
+    // pace.
+    let fade = |u: f32, on: bool| match (on, fresh) {
+        (true, true) => 1.0,
+        (false, true) => 0.0,
+        (true, false) => (u + dt / BLEND_S).min(1.0),
+        (false, false) => (u - dt / BLEND_S).max(0.0),
+    };
     let held = gait.holding();
+    let reload = gait.reload_s.and(held);
+    // A reload starts its clip from the top, paced to the gun's reload, on
+    // the hold the arms are in; one that ends (or a gun swapped) fades out.
+    if reload.is_some() && playing.reload_of != reload {
+        if let Some(node) = playing.reload_of.and_then(|h| rig.reloads[h.slot()]) {
+            player.stop(node);
+        }
+        playing.reload_of = reload;
+        playing.reload_u = 0.0;
+        if let (Some(h), Some(secs)) = (reload, gait.reload_s) {
+            if let Some(node) = rig.reloads[h.slot()] {
+                let pace = rig.reload_durations[h.slot()].max(1e-3) / secs.max(0.1);
+                player.start(node).set_repeat(RepeatAnimation::Never).set_speed(pace);
+            }
+        }
+    }
+    playing.reload_u = fade(playing.reload_u, reload.is_some());
+    if reload.is_none() && playing.reload_u <= 0.0 {
+        if let Some(node) = playing.reload_of.take().and_then(|h| rig.reloads[h.slot()]) {
+            player.stop(node);
+        }
+    }
+    for hold in Hold::ALL {
+        let u = &mut playing.hold_u[hold.slot()];
+        *u = fade(*u, held == Some(hold));
+    }
+    // The upper bones' shares: the reload's r of them, each hold its u of
+    // the rest, the legs' clip what is left. The gait's weights sum to 1
+    // (the transitions hold them there), so a layer weighted w/(1 − U) owns
+    // its w of every upper bone when the layers own U together.
+    let r = playing.reload_u;
+    let total = r + (1.0 - r) * playing.hold_u.iter().sum::<f32>().min(1.0);
+    let upper = total.min(HOLD_MAX);
+    let k = if total > 0.0 {
+        upper / total / (1.0 - upper)
+    } else {
+        0.0
+    };
     for hold in Hold::ALL {
         let Some(node) = rig.holds[hold.slot()] else {
             continue;
         };
-        let u = &mut playing.hold_u[hold.slot()];
-        let on = held == Some(hold);
-        *u = match (on, fresh) {
-            (true, true) => 1.0,
-            (false, true) => 0.0,
-            (true, false) => (*u + dt / BLEND_S).min(1.0),
-            (false, false) => (*u - dt / BLEND_S).max(0.0),
-        };
-        if *u <= 0.0 {
+        let u = playing.hold_u[hold.slot()];
+        if u <= 0.0 {
             if player.is_playing_animation(node) {
                 player.stop(node);
             }
@@ -697,10 +773,12 @@ pub fn drive(
                 .set_seek_time(phase0 * rig.hold_durations[hold.slot()].max(1e-3));
         }
         if let Some(a) = player.animation_mut(node) {
-            // The gait's weights sum to 1 (the transitions hold them there),
-            // so u/(1−u) hands the hold exactly u of every upper bone.
-            let w = u.min(HOLD_MAX);
-            a.set_weight(w / (1.0 - w));
+            a.set_weight(u * (1.0 - r) * k);
+        }
+    }
+    if let Some(node) = playing.reload_of.and_then(|h| rig.reloads[h.slot()]) {
+        if let Some(a) = player.animation_mut(node) {
+            a.set_weight(r * k);
         }
     }
 }

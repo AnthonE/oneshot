@@ -606,9 +606,7 @@ const WARM_UNDER_M: f32 = -500.0;
 
 /// What a foliage pipeline is specialised on: its material and its mesh's
 /// layout.
-/// `None` for a mesh already extracted to the render world: warmed once per
-/// material then (`prewarm::carries`).
-type WarmKey = (AssetId<FoliageMaterial>, Option<(bool, bool, bool)>);
+type WarmKey = (AssetId<FoliageMaterial>, bool, bool, bool);
 
 /// A warm draw of each foliage pipeline the frame the first block wearing
 /// it is dressed (after `prewarm.rs`): a block is hidden until the eye
@@ -626,17 +624,17 @@ pub fn warm(
         let Some(me) = meshes.get(&mesh.0) else {
             continue;
         };
-        use super::prewarm::carries;
-        let layout = (
-            carries(me, Mesh::ATTRIBUTE_UV_0),
-            carries(me, Mesh::ATTRIBUTE_UV_1),
-            carries(me, Mesh::ATTRIBUTE_COLOR),
+        // A block spawned before its atlas came has been extracted already
+        // (its vertices live on the GPU alone): its layout cannot be read,
+        // so it is warmed once per material as its own, whatever it is.
+        let has = |id| me.try_attribute_option(id).map(|a| a.is_some()).unwrap_or(false);
+        let key = (
+            mat.0.id(),
+            has(Mesh::ATTRIBUTE_UV_0),
+            has(Mesh::ATTRIBUTE_UV_1),
+            has(Mesh::ATTRIBUTE_COLOR),
         );
-        let key = match layout {
-            (Some(a), Some(b), Some(c)) => (mat.0.id(), Some((a, b, c))),
-            _ => (mat.0.id(), None),
-        };
-        if seen.contains(&key) || (key.1.is_none() && seen.iter().any(|k| k.0 == key.0)) {
+        if seen.contains(&key) {
             continue;
         }
         seen.push(key);

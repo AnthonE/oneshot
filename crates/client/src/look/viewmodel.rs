@@ -1241,11 +1241,12 @@ mod tests {
 
     /// No stroke but the sword's slash puts the gun on the crosshair: along
     /// the whole gun, grip to muzzle, it stays at least 7° off the view's
-    /// middle, for the longest gun and the shortest.
+    /// middle, for the longest gun and the shortest, in the strokes each
+    /// gun makes (a long gun reloads as a long gun).
     #[test]
     fn the_gun_keeps_off_the_crosshair() {
         let off_axis = |p: Vec3| Vec2::new(p.x, p.y).length().atan2(-p.z);
-        let poses = |u: f32| {
+        let poses = |u: f32, long: bool| {
             let kick = Lay::hand(
                 Vec3::new(KICK_CLIMB * KICK_MAX, 0.0, KICK_ROLL * KICK_MAX),
                 Vec3::new(0.0, KICK_UP_M * KICK_MAX, KICK_BACK_M * KICK_MAX),
@@ -1258,9 +1259,8 @@ mod tests {
             [
                 melee_lay(u * MELEE_S, false),
                 throw_lay(u * THROW_S),
-                reload_lay(u, true, false, u),
-                reload_lay(u, false, false, u),
-                reload_lay(u, true, true, u),
+                reload_lay(u, long, false, u),
+                reload_lay(u, long, true, u),
                 Lay::arm(DROP_ANG * u, DROP_OFF * u),
                 kick * u,
                 crouch + melee_lay(u * MELEE_S, false),
@@ -1271,13 +1271,17 @@ mod tests {
             let reach = g.height * (1.0 - g.grip) * g.scale;
             for i in 0..=200 {
                 let u = i as f32 / 200.0;
-                for (n, lay) in poses(u).into_iter().enumerate() {
+                for (n, lay) in poses(u, g.long).into_iter().enumerate() {
+                    // A sword never reloads: its strokes are the slash's.
+                    if *arm == sim::arms::SWORD && (2..=3).contains(&n) {
+                        continue;
+                    }
                     let (at, rot) = place(lay, Lay::ZERO, false);
                     let muzzle = at + rot * (view_basis() * Vec3::Y * reach);
                     for k in 0..=8 {
                         let p = at.lerp(muzzle, k as f32 / 8.0);
                         let a = off_axis(p);
-                        assert!(a > 0.12, "pose {n} at {u}: {a} rad off the middle at {p}");
+                        assert!(a > 0.12, "{}: pose {n} at {u}: {a} rad off the middle at {p}", g.file);
                     }
                 }
             }

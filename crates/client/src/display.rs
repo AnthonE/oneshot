@@ -212,5 +212,12 @@ mod tests {
         assert_eq!(p.step(true, true), Ok(None));
         assert_eq!(p.step(false, true), Ok(Some(false)), "OFF asks the page out");
         assert_eq!(p.step(false, false), Ok(None), "and it left");
+        // The page came on its own (nothing here asked): the row follows it,
+        // as it does when the page leaves on its own.
+        assert_eq!(
+            p.step(false, true),
+            Err(true),
+            "the page came on its own: the row follows"
+        );
     }
 }

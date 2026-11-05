@@ -192,6 +192,110 @@ impl Nonces {
     }
 }
 
+/// How long a ticket is good for: a day's play without signing in again.
+pub const TICKET_TTL: Duration = Duration::from_secs(12 * 3600);
+/// What a ticket starts with: a pass never does (a pass is base64url).
+pub const TICKET_PREFIX: &str = "os1.";
+
+/// Who a session is: an Elo Pros player (a pass, or a ticket a pass
+/// earned), or a guest of ours with an id we made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Who {
+    /// The player id Elo Pros uses (the wallet if there is one, else the
+    /// account), or `guest_` and 16 hex for a guest.
+    pub id: String,
+    pub account: Option<String>,
+    pub wallet: Option<String>,
+}
+
+impl Who {
+    pub fn guest() -> Who {
+        let mut b = [0u8; 8];
+        let _ = getrandom::fill(&mut b);
+        Who {
+            id: format!("guest_{}", crate::hex(&b)),
+            account: None,
+            wallet: None,
+        }
+    }
+
+    /// Signed in on Elo Pros (not a guest).
+    pub fn signed(&self) -> bool {
+        self.account.is_some()
+    }
+}
+
+impl From<Passed> for Who {
+    fn from(p: Passed) -> Who {
+        Who {
+            id: p.wallet.clone().unwrap_or_else(|| p.account.clone()),
+            account: Some(p.account),
+            wallet: p.wallet,
+        }
+    }
+}
+
+/// A ticket's id, account or wallet: what may sit in one.
+fn ticket_field(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+impl Nonces {
+    fn ticket_mac(&self, text: &str) -> String {
+        let mut m = String::from("oneshot ticket\n");
+        m.push_str(text);
+        crate::hex(&ring::hmac::sign(&self.key, m.as_bytes()).as_ref()[..16])
+    }
+
+    /// A ticket for `who`: `os1.` b64url(text) `.` its MAC under our key,
+    /// so any server holding the key (the other slot) takes it, until it
+    /// expires. Printable ASCII and under a pass's length, so it rides
+    /// where a pass does.
+    pub fn ticket(&self, who: &Who) -> String {
+        self.ticket_at(who, now_unix())
+    }
+
+    pub fn ticket_at(&self, who: &Who, now: u64) -> String {
+        let text = format!(
+            "{}\n{}\n{}\n{}",
+            who.id,
+            who.account.as_deref().unwrap_or("none"),
+            who.wallet.as_deref().unwrap_or("none"),
+            now + TICKET_TTL.as_secs()
+        );
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!("{TICKET_PREFIX}{}.{}", b64.encode(&text), self.ticket_mac(&text))
+    }
+
+    /// Who a ticket of ours names, if it is ours and still good.
+    pub fn check_ticket(&self, t: &str) -> Option<Who> {
+        self.check_ticket_at(t, now_unix())
+    }
+
+    pub fn check_ticket_at(&self, t: &str, now: u64) -> Option<Who> {
+        let (body, mac) = t.strip_prefix(TICKET_PREFIX)?.split_once('.')?;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let text = String::from_utf8(b64.decode(body).ok()?).ok()?;
+        if !constant_eq(self.ticket_mac(&text).as_bytes(), mac.as_bytes()) {
+            return None;
+        }
+        let mut f = text.split('\n');
+        let (id, account, wallet, exp) = (f.next()?, f.next()?, f.next()?, f.next()?);
+        if f.next().is_some() || ![id, account, wallet].iter().all(|s| ticket_field(s)) {
+            return None;
+        }
+        if exp.parse::<u64>().ok()? <= now {
+            return None;
+        }
+        let some = |s: &str| (s != "none").then(|| s.to_string());
+        Some(Who {
+            id: id.to_string(),
+            account: some(account),
+            wallet: some(wallet),
+        })
+    }
+}
+
 fn constant_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -271,6 +375,36 @@ mod tests {
         assert!(!n.take(&a));
         assert!(!n.take("00000000000000000000000000000000"));
         assert!(!n.take(&"0".repeat(64)));
+    }
+
+    #[test]
+    fn a_ticket_names_who_earned_it_until_it_expires() {
+        let k = [3u8; 32];
+        let (a, b, other) = (Nonces::with_key(&k), Nonces::with_key(&k), Nonces::default());
+        let who = Who {
+            id: "0x24445efddb08d4938e3e3627042b2cf4063d9092".into(),
+            account: Some("acct_0123456789abcdef0123".into()),
+            wallet: Some("0x24445efddb08d4938e3e3627042b2cf4063d9092".into()),
+        };
+        let t = a.ticket_at(&who, 1000);
+        assert!(proto::Pass::new(&t).is_some(), "rides where a pass does: {t}");
+        assert_eq!(
+            b.check_ticket_at(&t, 1001),
+            Some(who.clone()),
+            "either slot, again and again"
+        );
+        assert_eq!(b.check_ticket_at(&t, 1002), Some(who.clone()));
+        assert_eq!(other.check_ticket_at(&t, 1001), None, "another key");
+        assert_eq!(b.check_ticket_at(&t, 1000 + TICKET_TTL.as_secs()), None, "expired");
+        // A guest's, and a tampered one.
+        let g = Who::guest();
+        assert!(!g.signed());
+        assert_eq!(a.check_ticket_at(&a.ticket_at(&g, 5), 6), Some(g));
+        let mut bad = t.clone().into_bytes();
+        bad[6] = if bad[6] == b'A' { b'B' } else { b'A' };
+        assert_eq!(a.check_ticket_at(std::str::from_utf8(&bad).unwrap(), 1001), None);
+        // A nonce's MAC is no ticket's.
+        assert_eq!(a.check_ticket_at(&a.issue_at(1000), 1001), None);
     }
 
     #[test]
