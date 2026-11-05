@@ -1,6 +1,7 @@
-//! The authoritative server: rooms on one thread at the sim's tick,
-//! WebTransport sessions on tokio around it, and a small HTTP server for the
-//! page (docs/DESIGN.md §2, §4, §11, §14).
+//! The authoritative server: rooms at the sim's tick, matched and seated on
+//! one thread and stepped side by side on a pool of them, WebTransport
+//! sessions on tokio around it, and a small HTTP server for the page
+//! (docs/DESIGN.md §2, §4, §11, §14; docs/SCALING.md).
 //!
 //! A casual player gets a room of their own against a bot. A ranked player
 //! (an Elo Pros pass with a wallet) waits in the queue until a match forms,
@@ -42,6 +43,7 @@ use proto::{
     frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA,
     MODE_GUN_GAME,
 };
+use rayon::prelude::*;
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::map::Map;
@@ -219,6 +221,12 @@ pub struct Config {
     /// (`online`), so either answers `online.json` for both. None: this
     /// process's own roster only.
     pub roster_dir: Option<PathBuf>,
+    /// Threads the rooms step on, side by side: 0 is one a core, 1 the sim
+    /// thread alone (one room after another).
+    pub sim_threads: usize,
+    /// Addresses whose connections aren't held to a source's share (a load
+    /// test's box; `net::Gate`). Loopback never is.
+    pub load_sources: Vec<std::net::IpAddr>,
 }
 
 impl Default for Config {
@@ -261,6 +269,18 @@ impl Default for Config {
             nonce_key: None,
             live_file: None,
             roster_dir: None,
+            sim_threads: 0,
+            load_sources: Vec::new(),
+        }
+    }
+}
+
+impl Config {
+    /// The threads rooms step on: `sim_threads`, or one a core for 0.
+    pub fn step_threads(&self) -> usize {
+        match self.sim_threads {
+            0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+            n => n,
         }
     }
 }
@@ -298,6 +318,8 @@ pub struct Ctx {
     /// Players' reports, if they're taken (`--bugs`).
     pub bugs: Option<bugs::Intake>,
     pub started: Instant,
+    /// The threads rooms step on.
+    pub sim_threads: usize,
 }
 
 impl Ctx {
@@ -310,6 +332,7 @@ impl Ctx {
             capacity: self.gate.capacity,
             rooms: self.rooms.load(Ordering::Relaxed),
             uptime_s: self.started.elapsed().as_secs(),
+            sim_threads: self.sim_threads,
         }
     }
 }
@@ -390,6 +413,18 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg)>(net::INPUT_LANE);
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
     let stop = Arc::new(AtomicBool::new(false));
+    let threads = cfg.step_threads();
+    // One thread needs no pool: the sim thread steps them itself.
+    let pool = match threads {
+        1 => None,
+        n => Some(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .thread_name(|i| format!("sim-{i}"))
+                .build()
+                .map_err(|e| format!("sim threads: {e}"))?,
+        ),
+    };
 
     let key = match &cfg.elo_key {
         Some((path, id)) => {
@@ -407,7 +442,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
             .map_or_else(auth::Nonces::default, |k| auth::Nonces::with_key(&k)),
         elo: elo::Elo::new(&cfg.elo_origin, &cfg.slug, key),
         sessions: AtomicU64::new(1),
-        gate: Arc::new(net::Gate::new(cfg.capacity)),
+        gate: Arc::new(net::Gate::new(cfg.capacity).exempting(&cfg.load_sources)),
         draining: AtomicBool::new(false),
         rooms: AtomicUsize::new(0),
         public_addr: cfg.public_addr.clone(),
@@ -425,19 +460,19 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         roster: std::sync::Mutex::new(online::Slot::default()),
         roster_dir: cfg.roster_dir.clone(),
         roster_file: online::file_name(addr.port()),
+        sim_threads: threads,
     });
 
     let sim = Sim {
         cfg: cfg.clone(),
-        rx: from_net,
-        inputs,
         jobs: jobs_tx.clone(),
         stop: stop.clone(),
         ctx: ctx.clone(),
+        pool,
     };
     std::thread::Builder::new()
         .name("sim".into())
-        .spawn(move || sim.run())
+        .spawn(move || sim.run(from_net, inputs))
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
     tokio::spawn(journal(ctx.clone()));
@@ -592,6 +627,9 @@ struct Live {
     cup: Option<(usize, usize)>,
     /// Sessions watching it (`room::spectate`).
     watchers: Vec<u64>,
+    /// The stream messages of its tick, kept between ticks: each room its
+    /// own, whichever thread steps it.
+    out: room::Outbox,
 }
 
 /// Puts a room in the first free place; returns where.
@@ -609,14 +647,15 @@ fn place_room(rooms: &mut Vec<Option<Live>>, live: Live) -> usize {
 /// heat's order).
 type HeatDone = (usize, usize, String, Vec<i32>);
 
+/// The sim thread's own: what it needs, and the rooms' threads with it
+/// (all of it shared by them, read only, while rooms step).
 struct Sim {
     cfg: Config,
-    rx: mpsc::Receiver<ToSim>,
-    /// Sessions' inputs: bounded, and none of them queued on the heap.
-    inputs: mpsc::Receiver<(u64, InputMsg)>,
     jobs: tmpsc::UnboundedSender<Job>,
     stop: Arc<AtomicBool>,
     ctx: Arc<Ctx>,
+    /// The threads rooms step on; None steps them on the sim thread.
+    pool: Option<rayon::ThreadPool>,
 }
 
 pub(crate) fn send_msg(tx: &outlet::Outlet, m: &Msg) {
@@ -700,15 +739,15 @@ impl Sim {
         sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
     }
 
-    fn run(self) {
+    /// The sim thread: what sessions say (`rx`), their inputs (bounded, and
+    /// none of them queued on the heap), then every room's tick.
+    fn run(self, rx: mpsc::Receiver<ToSim>, inputs: mpsc::Receiver<(u64, InputMsg)>) {
         let start = Instant::now();
         let tick = Duration::from_nanos(1_000_000_000 / TICK_HZ as u64);
         let mut next = Instant::now();
         let mut sessions: BTreeMap<u64, Sess> = BTreeMap::new();
         let mut rooms: Vec<Option<Live>> = Vec::new();
         let mut q = queue::Queue::default();
-        // The stream messages of a room's tick, kept between ticks.
-        let mut out: room::Outbox = Vec::new();
         let mut last_second = Instant::now();
         let mut seconds: u64 = 0;
 
@@ -720,7 +759,7 @@ impl Sim {
         while !self.stop.load(Ordering::Relaxed) {
             let now = Instant::now();
             let now_ms = start.elapsed().as_secs_f64() * 1000.0;
-            while let Ok(m) = self.rx.try_recv() {
+            while let Ok(m) = rx.try_recv() {
                 match m {
                     ToSim::Casual {
                         session,
@@ -795,6 +834,7 @@ impl Sim {
                                         watchers: Vec::new(),
                                         private,
                                         parties: Vec::new(),
+                                        out: Vec::new(),
                                     },
                                 );
                                 let team = side_for(rooms[i].as_ref().unwrap(), need).flatten();
@@ -969,7 +1009,7 @@ impl Sim {
 
             // Then the inputs (one for a session gone or not seated yet is
             // nothing): the lane is bounded, so this is too.
-            while let Ok((session, msg)) = self.inputs.try_recv() {
+            while let Ok((session, msg)) = inputs.try_recv() {
                 if let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) {
                     if let Some(r) = rooms[i].as_mut() {
                         r.room.on_input(slot, &msg, now_ms);
@@ -1018,6 +1058,7 @@ impl Sim {
                         watchers: Vec::new(),
                         private: false,
                         parties: Vec::new(),
+                        out: Vec::new(),
                     };
                     let mut outs = Vec::new();
                     for (side, players) in sides.iter().enumerate() {
@@ -1095,13 +1136,13 @@ impl Sim {
                 }
             }
 
+            // A room whose linger is over closes first, here: it changes
+            // the sessions. It sends nothing more: a cup's next heat may
+            // seat its entrants this tick, and a snapshot of this room after
+            // that welcome is another room's to them.
             let mut heats_done: Vec<HeatDone> = Vec::new();
             for entry in rooms.iter_mut() {
                 let Some(r) = entry.as_mut() else { continue };
-                // Its linger over, a room sends nothing more: a cup's next
-                // heat may seat its entrants in this same pass, and a
-                // snapshot of this room after that welcome is another
-                // room's to them.
                 // Watched, it plays on until its watchers have seen the end.
                 let late = match (&r.room.spectate, r.watchers.is_empty()) {
                     (Some(l), false) => Duration::from_millis(u64::from(l.delay) * 1000 / u64::from(TICK_HZ)),
@@ -1111,47 +1152,43 @@ impl Sim {
                     .over_at
                     .is_some_and(|t| now.duration_since(t) >= self.cfg.linger + late);
                 if !done {
-                    let links = &r.links;
-                    r.room.step_into(now_ms, &mut out, |slot, _, bytes| {
-                        let link = links[slot as usize].and_then(|id| sessions.get(&id));
-                        if let (Some(s), false) = (link, bytes.is_empty()) {
-                            // Full means the session is behind: this snapshot
-                            // goes, the next replaces it.
-                            s.tx.datagram(bytes.to_vec());
-                        }
-                    });
-                    deliver(&sessions, r, out.drain(..));
-                    spectate(&sessions, r);
-                    if r.room.world.phase == Phase::Over && r.over_at.is_none() {
-                        r.over_at = Some(now);
-                        self.finish(r);
+                    continue;
+                }
+                for id in r.watchers.iter() {
+                    if let Some(s) = sessions.get_mut(id) {
+                        send_msg(&s.tx, &Msg::Bye);
+                        s.tx.close();
+                        s.watching = None;
                     }
                 }
-                if done {
-                    for id in r.watchers.iter() {
-                        if let Some(s) = sessions.get_mut(id) {
+                for id in r.links.iter().flatten() {
+                    if let Some(s) = sessions.get_mut(id) {
+                        // A cup's entrants stay on for the next heat.
+                        if r.cup.is_none() {
                             send_msg(&s.tx, &Msg::Bye);
                             s.tx.close();
-                            s.watching = None;
                         }
+                        s.at = None;
                     }
-                    for id in r.links.iter().flatten() {
-                        if let Some(s) = sessions.get_mut(id) {
-                            // A cup's entrants stay on for the next heat.
-                            if r.cup.is_none() {
-                                send_msg(&s.tx, &Msg::Bye);
-                                s.tx.close();
-                            }
-                            s.at = None;
-                        }
-                    }
-                    if let Some((ci, h)) = r.cup {
-                        // Seats 0.. are the heat's entrants in its order.
-                        let n = cups[ci].as_ref().map_or(0, |c| c.heats.get(h).map_or(0, |x| x.0.len()));
-                        heats_done.push((ci, h, r.id.clone(), r.room.world.score[..n].to_vec()));
-                    }
-                    *entry = None;
                 }
+                if let Some((ci, h)) = r.cup {
+                    // Seats 0.. are the heat's entrants in its order.
+                    let n = cups[ci].as_ref().map_or(0, |c| c.heats.get(h).map_or(0, |x| x.0.len()));
+                    heats_done.push((ci, h, r.id.clone(), r.room.world.score[..n].to_vec()));
+                }
+                *entry = None;
+            }
+            // Then every other room steps, side by side on the pool. Rooms
+            // share nothing and each is stepped by one thread, so this is
+            // the same as one after another: each room's world, replay and
+            // messages are what they would be alone. The sessions are only
+            // read while they step.
+            let step = |r: &mut Live| self.step_room(r, &sessions, now, now_ms);
+            match &self.pool {
+                Some(pool) if rooms.iter().flatten().nth(1).is_some() => {
+                    pool.install(|| rooms.par_iter_mut().filter_map(Option::as_mut).for_each(step));
+                }
+                _ => rooms.iter_mut().filter_map(Option::as_mut).for_each(step),
             }
             for (ci, h, id, scores) in heats_done {
                 let Some(c) = cups[ci].as_mut() else { continue };
@@ -1185,6 +1222,29 @@ impl Sim {
         }
     }
 
+    /// One room's tick, on whichever thread steps it: its snapshots and
+    /// messages to its sessions and watchers, and its end noticed (its
+    /// stats, replay and report handed to the jobs task).
+    fn step_room(&self, r: &mut Live, sessions: &BTreeMap<u64, Sess>, now: Instant, now_ms: f64) {
+        let mut out = std::mem::take(&mut r.out);
+        let links = &r.links;
+        r.room.step_into(now_ms, &mut out, |slot, _, bytes| {
+            let link = links[slot as usize].and_then(|id| sessions.get(&id));
+            if let (Some(s), false) = (link, bytes.is_empty()) {
+                // Full means the session is behind: this snapshot goes,
+                // the next replaces it.
+                s.tx.datagram(bytes.to_vec());
+            }
+        });
+        deliver(sessions, r, out.drain(..));
+        r.out = out;
+        spectate(sessions, r);
+        if r.room.world.phase == Phase::Over && r.over_at.is_none() {
+            r.over_at = Some(now);
+            self.finish(r);
+        }
+    }
+
     /// Seats the heats of cup `ci`'s current stage, each in a ranked room
     /// of its own, and tells every entrant where they stand.
     fn start_stage(
@@ -1212,6 +1272,7 @@ impl Sim {
                 watchers: Vec::new(),
                 private: false,
                 parties: Vec::new(),
+                out: Vec::new(),
             };
             let mut outs = Vec::new();
             for (slot, &i) in members.iter().enumerate() {

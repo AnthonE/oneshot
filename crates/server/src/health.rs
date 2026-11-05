@@ -195,6 +195,8 @@ pub struct Now {
     pub capacity: usize,
     pub rooms: usize,
     pub uptime_s: u64,
+    /// The threads rooms step on (`Config::sim_threads`).
+    pub sim_threads: usize,
 }
 
 fn list(v: &[u64]) -> String {
@@ -202,14 +204,16 @@ fn list(v: &[u64]) -> String {
     format!("[{}]", parts.join(","))
 }
 
-/// The `/health.json` document: one line, numbers and one boolean.
+/// The `/health.json` document: one line, numbers and one boolean. Beside
+/// the tick's percentiles since start, its buckets (`tick_us`, as
+/// [`Hist`]'s): two reads give a window's (a load test's).
 pub fn json(now: Now, r: &Read) -> String {
     format!(
-        "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{},\"uptime_s\":{},\
+        "{{\"ready\":{},\"proto\":{},\"players\":{},\"capacity\":{},\"rooms\":{},\"uptime_s\":{},\"sim_threads\":{},\
          \"joins_casual\":{},\"joins_ranked\":{},\"let_go\":{},\"matches\":{},\
          \"conn_refused\":{},\"conn_retried\":{},\"handshake_failed\":{},\"refused\":{},\
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
-         \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\
+         \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\"tick_us\":{},\
          \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
          \"packets_sent\":{},\"packets_lost\":{},\
          \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
@@ -219,6 +223,7 @@ pub fn json(now: Now, r: &Read) -> String {
         now.capacity,
         now.rooms,
         now.uptime_s,
+        now.sim_threads,
         r.joins_casual,
         r.joins_ranked,
         r.let_go,
@@ -233,6 +238,7 @@ pub fn json(now: Now, r: &Read) -> String {
         pct(&r.tick_us, 50),
         pct(&r.tick_us, 99),
         r.tick_max_us,
+        list(&r.tick_us),
         r.snapshots_dropped,
         r.snapshots_oversize,
         r.cut_behind,
@@ -357,12 +363,15 @@ mod tests {
                 capacity: 64,
                 rooms: 1,
                 uptime_s: 5,
+                sim_threads: 4,
             },
             &s.read(&Counts::default()),
         );
         assert!(doc.starts_with("{\"ready\":true,\"proto\":9,\"players\":3,"));
         assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"));
         assert!(doc.contains("\"tick_p50_us\":512"));
+        assert!(doc.contains("\"sim_threads\":4,"));
+        assert!(doc.contains("\"tick_us\":[0,0,0,0,0,0,0,0,0,1,0,"), "{doc}");
         assert!(!doc.contains('\n'));
     }
 

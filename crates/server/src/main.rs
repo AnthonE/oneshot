@@ -7,7 +7,12 @@
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900]
-//! [--nonce-key file] [--live-file file] [--roster-dir dir]`
+//! [--nonce-key file] [--live-file file] [--roster-dir dir]
+//! [--sim-threads 0] [--load-from ip]…`
+//!
+//! `--sim-threads` is how many threads the rooms step on: 0 (the default)
+//! one a core, 1 the sim thread alone. `--load-from` lets a load test's box
+//! (`tools/load`) hold more than an address's share of connections.
 //!
 //! `--loadout` starts everyone (gun game aside) with those guns, by id or
 //! name (`--loadout sniper,magnum`): for looking at a gun in a match.
@@ -109,6 +114,10 @@ fn main() {
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--sim-threads" => cfg.sim_threads = val().parse().unwrap_or_else(|_| die("--sim-threads is a count")),
+            "--load-from" => cfg
+                .load_sources
+                .push(val().parse().unwrap_or_else(|_| die("--load-from is an IP address"))),
             "--print-stats" => {
                 let set = server::stats::declaration();
                 println!("{}", serde_json::to_string_pretty(&set).unwrap_or_default());
@@ -134,6 +143,7 @@ fn main() {
         // Tests read these lines: keep their shape.
         println!("game: {} (WebTransport)", h.addr);
         println!("cert sha-256: {}", server::hex(&h.cert_hash));
+        println!("sim threads: {}", h.ctx.sim_threads);
         if let Some(http) = h.http {
             println!("play: http://127.0.0.1:{}/", http.port());
         }
