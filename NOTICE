@@ -10,7 +10,10 @@ textures re-encoded as JPEG by tools/glb. The rock pieces (models/rock,
 block_*_far.glb) are Gates' formation rock pieces (assets/models/prop/rock),
 commissioned from Meshy on the same terms, geometry only, copied as they
 are by tools/assets.mjs. The guns, the rocket and the frag are ours: each
-is built by a Blender script in tools/models (MIT, with the code).
+is commissioned from Meshy on a paid plan and owned outright, from our own
+prompt (in its script in tools/models, which cuts the mesh it gets with
+Blender: sized, turned, its maps made smaller and re-encoded as JPEG); no
+attribution is owed.
 
 Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
 (assets/sound/MANIFEST.md has every source page):
