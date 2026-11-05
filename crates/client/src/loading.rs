@@ -227,6 +227,11 @@ fn settle(
             ..default()
         };
     }
+    // Latched for the link: nothing left to count (every part, every gun
+    // scene's state) until the next one.
+    if s.ready {
+        return;
+    }
     let p = Progress {
         built: built.0 == Some((g, welcomes)),
         parts: parts
@@ -239,9 +244,6 @@ fn settle(
     s.now = p;
     if p.built && clear.0 != SKY_CLEAR {
         clear.0 = SKY_CLEAR;
-    }
-    if s.ready {
-        return;
     }
     s.held = if p.done() { s.held + 1 } else { 0 };
     let (last, frames) = s.stall;

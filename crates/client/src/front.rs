@@ -1640,6 +1640,9 @@ fn typing(
     }
 }
 
+/// How often the title looks at the sign-in for a change, seconds.
+const SIGNIN_LOOK_S: f64 = 0.1;
+
 /// Built again when anything on it moved, or the sign-in did.
 #[allow(clippy::too_many_arguments)]
 fn rebuild(
@@ -1651,15 +1654,29 @@ fn rebuild(
     roots: Query<Entity, With<TitleRoot>>,
     portrait: Option<Res<crate::look::portrait::Portrait>>,
     party: Res<PartyView>,
-    (mut challenges, time): (ResMut<crate::challenges::Challenges>, Res<Time>),
+    (mut challenges, time, mut looked): (ResMut<crate::challenges::Challenges>, Res<Time>, Local<f64>),
 ) {
+    // The sign-in looked at a few times a second, or on a change here: each
+    // look clones it (a string made, on the desktop).
+    let now = time.elapsed_secs_f64();
+    let due = front.dirty
+        || front.drawn.is_none()
+        || front.drawn_party != party.gen
+        || front.drawn_challenges != challenges.gen
+        || now - *looked >= SIGNIN_LOOK_S
+        || now < *looked;
+    if !due {
+        challenges.poll();
+        return;
+    }
+    *looked = now;
     let signin = door.signin();
     // Challenges: asked for while the title is up, for whoever is signed in.
     let wallet = match &signin {
         SignIn::In(p) => p.wallet.clone(),
         _ => None,
     };
-    challenges.want(wallet, time.elapsed_secs_f64());
+    challenges.want(wallet, now);
     challenges.poll();
     if !front.dirty
         && front.drawn.as_ref() == Some(&signin)

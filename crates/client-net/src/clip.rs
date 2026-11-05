@@ -168,12 +168,24 @@ impl Clipper {
         self.clock_ms = self.clock_ms.max(at_ms);
         let due = self.segs.back().is_none_or(|s| self.clock_ms - s.start_ms >= SEG_MS);
         if due {
-            self.segs.push_back(Seg {
-                start_ms: self.clock_ms,
-                start_tick: tick,
+            // The segment falling out of the window lends the new one its
+            // buffers: a quarter-minute's bytes, grown once, not every time.
+            let mut seg = if self.segs.len() >= self.keep {
+                self.segs.pop_front()
+            } else {
+                None
+            }
+            .unwrap_or(Seg {
+                start_ms: 0.0,
+                start_tick: 0,
                 dgrams: Vec::new(),
                 bytes: Vec::new(),
             });
+            seg.start_ms = self.clock_ms;
+            seg.start_tick = tick;
+            seg.dgrams.clear();
+            seg.bytes.clear();
+            self.segs.push_back(seg);
             while self.segs.len() > self.keep {
                 self.segs.pop_front();
             }

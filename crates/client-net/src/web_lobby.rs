@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use js_sys::{Reflect, Uint8Array};
+use js_sys::Uint8Array;
 use proto::voice::{self, VoiceFrame};
 use proto::{decode_msg, Msg};
 use wasm_bindgen::prelude::*;
@@ -91,23 +91,16 @@ impl WebLobby {
                 let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
                     return;
                 };
+                let keys = crate::web::ReadKeys::new();
+                // One buffer for every frame heard: decoding copies out of it.
+                let mut d = Vec::new();
                 loop {
                     let Ok(result) = JsFuture::from(reader.read()).await else {
                         break;
                     };
-                    let done = Reflect::get(&result, &JsValue::from_str("done"))
-                        .ok()
-                        .and_then(|d| d.as_bool())
-                        .unwrap_or(true);
-                    if done {
-                        break;
-                    }
-                    let Ok(chunk) =
-                        Reflect::get(&result, &JsValue::from_str("value")).and_then(|v| v.dyn_into::<Uint8Array>())
-                    else {
-                        break;
-                    };
-                    let d = chunk.to_vec();
+                    let Some(chunk) = keys.chunk(&result) else { break };
+                    d.resize(chunk.length() as usize, 0);
+                    chunk.copy_to(&mut d);
                     if proto::datagram_kind(&d) != Some(proto::DG_VOICE) {
                         continue;
                     }
@@ -163,10 +156,7 @@ impl WebLobby {
         if (max != 0 && n > max) || self.datagrams.desired_size().ok().flatten().is_some_and(|d| d <= 0.0) {
             return false;
         }
-        let p = self.datagrams.write_with_chunk(&Uint8Array::from(&buf[..n]));
-        spawn_local(async move {
-            let _ = JsFuture::from(p).await;
-        });
+        crate::web::settle(&self.datagrams.write_with_chunk(&Uint8Array::from(&buf[..n])));
         true
     }
 

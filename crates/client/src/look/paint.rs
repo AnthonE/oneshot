@@ -284,9 +284,12 @@ fn wrap_width() -> usize {
 /// texels out, so a texel sampled across an island's edge finds the
 /// island's paint, not bare.
 fn bleed(cover: &mut [[f32; 4]], known: &mut [bool], n: usize, passes: usize) {
+    // What was known as a pass began, one buffer for every pass. The cover
+    // needs no copy: a pass reads only texels known before it, and writes
+    // only ones that weren't.
+    let mut was = known.to_vec();
     for _ in 0..passes {
-        let was = known.to_vec();
-        let prev = cover.to_vec();
+        was.copy_from_slice(known);
         for y in 0..n {
             for x in 0..n {
                 let i = y * n + x;
@@ -302,7 +305,7 @@ fn bleed(cover: &mut [[f32; 4]], known: &mut [bool], n: usize, passes: usize) {
                     let j = ny as usize * n + nx as usize;
                     if was[j] {
                         for c in 0..4 {
-                            sum[c] += prev[j][c];
+                            sum[c] += cover[j][c];
                         }
                         k += 1.0;
                     }
@@ -564,6 +567,27 @@ impl Paints {
                 images.add(super::textures::baked_image(data, SIDE, false, false))
             })
             .clone()
+    }
+
+    /// Whether `emblem`'s mask could be baked now and isn't yet: the body
+    /// has been unrolled (by the first one dressed, the warm one), and no
+    /// body has worn its shapes.
+    pub fn wants(&self, emblem: proto::Emblem) -> bool {
+        let (g, f, ..) = proto::emblem_parts(proto::emblem_valid(emblem));
+        self.surface.is_some() && !self.masks.contains_key(&(g, f))
+    }
+
+    /// Bakes `emblem`'s mask ahead of the body that wears it
+    /// (`prewarm::bake_roster`), if [`Paints::wants`] it.
+    pub fn prebake(&mut self, emblem: proto::Emblem, images: &mut Assets<Image>) {
+        let (g, f, ..) = proto::emblem_parts(proto::emblem_valid(emblem));
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        self.masks.entry((g, f)).or_insert_with(|| {
+            let data = surface.bake(proto::emblem(g, f, 0, 0));
+            images.add(super::textures::baked_image(data, SIDE, false, false))
+        });
     }
 }
 
