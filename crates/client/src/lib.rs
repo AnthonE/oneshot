@@ -323,6 +323,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<Early>()
+    .init_resource::<look::trees::TreeCards>()
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
@@ -371,6 +372,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::mood::Drift>()
     .init_resource::<look::shafts::Shafts>()
     .init_resource::<look::cliffs::SkinLift>()
+    // The sea (look/water.rs) and its waves.
+    .add_plugins(MaterialPlugin::<look::water::WaterMaterial>::default())
+    .add_systems(Update, look::water::animate.after(view))
     .add_systems(
         Startup,
         (
@@ -704,6 +708,9 @@ fn rebuild(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
+    mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
     mut shade: ResMut<look::quality::MapShade>,
@@ -717,7 +724,16 @@ fn rebuild(
     built.0 = now;
     // The map's mood first: the level's sun and its wet are the mood's.
     look::mood::set(&mut mood, s.map_id);
-    level::build(&mut commands, &mut meshes, &mut mats, &old, s.map_id);
+    level::build(
+        &mut commands,
+        &mut meshes,
+        &mut mats,
+        &mut water_mats,
+        &mut images,
+        &mut cards,
+        &old,
+        s.map_id,
+    );
     if let Ok((mut exposure, mut env)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
             look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
