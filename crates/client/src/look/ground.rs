@@ -13,10 +13,12 @@
 //! (`cliffs.rs`) wears it too, its value off `UV_1`.
 //!
 //! Every number the shader reads arrives in one uniform block
-//! ([`GroundParams`], binding 104) beside the deck's and the rain's
-//! (`cloud_shadow::CloudShadowParams`, binding 106). WebGL2 allows few
-//! uniform blocks a stage and Bevy's forward pass binds twelve of them,
-//! so these two are all the material adds.
+//! ([`GroundParams`], binding 104), the deck's and the rain's
+//! (`cloud_shadow::CloudShadowParams`) its last field. Under WebGL2 a
+//! fragment shader may read only twelve blocks on many devices (ANGLE on
+//! D3D11 and on Metal), and Bevy's view, mesh and `StandardMaterial` take
+//! eleven of them, so this one is all the material adds. The block is
+//! declared in `cloud_shadow.wgsl`, which both shaders read it through.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -36,20 +38,17 @@ pub struct Ground {
     /// Every number the shader reads, in one block.
     #[uniform(104)]
     pub params: GroundParams,
-    /// The deck's shadows and the rain's wet (`cloud_shadow::drive` keeps
-    /// it): a uniform, not a texture or a buffer, so the ground binds what
-    /// it did on every target.
-    #[uniform(106)]
-    pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
-/// The shader's numbers: `shaders/ground.wgsl`'s `GroundParams`.
+/// The shader's numbers: `GroundParams` in `shaders/cloud_shadow.wgsl`,
+/// which `shaders/ground.wgsl` reads it through.
 ///
 /// ⚠ The field list and order must match the WGSL struct exactly. A
 /// uniform whose two sides disagree about layout binds fine and is garbage
 /// in every field after the first mismatch, and nothing about that failure
 /// looks like a layout bug. Every field is a `Vec4` (std140 pads anything
-/// smaller to one anyway); `tests` below scrapes both sides.
+/// smaller to one anyway) but the last, the deck's own struct; `tests`
+/// below scrapes both sides.
 #[derive(Clone, Debug, ShaderType)]
 pub struct GroundParams {
     /// Metres each set repeats over, in splat order.
@@ -90,6 +89,10 @@ pub struct GroundParams {
     /// how far above it the ground is wet, z = over how much further it
     /// dries, w = how dark wet ground is against dry.
     pub sea: Vec4,
+    /// The deck's shadows and the rain's wet (`cloud_shadow::drive` keeps
+    /// it): in the uniform, not a texture or a buffer, so the ground binds
+    /// what it did on every target.
+    pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
 /// Dry Fork's soils over Gates' photographs: warm desert sand, dry grass,
@@ -247,6 +250,7 @@ impl Default for GroundParams {
             rock_d: Vec4::new(ROCK_STREAK_W_M, ROCK_STREAK_H_M, ROCK_FACE_ON, ROCK_FACE_FULL),
             rock_e: Vec4::new(ROCK_SEAM, ROCK_FLAT_LEAN, ROCK_LEAN_ON, ROCK_LEAN_FULL),
             sea: Vec4::new(NO_SEA, WET_M, WET_FADE_M, WET_DARK),
+            cloud: default(),
         }
     }
 }
@@ -271,18 +275,14 @@ pub fn material(
     let mut params = GroundParams::default();
     params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
     params.wall.z = if lite { 1.0 } else { 0.0 };
+    params.cloud = cloud;
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,
             reflectance: super::fresnel::DIELECTRIC,
             ..default()
         },
-        extension: Ground {
-            albedo,
-            normal,
-            params,
-            cloud,
-        },
+        extension: Ground { albedo, normal, params },
     }
 }
 
@@ -294,6 +294,8 @@ pub fn material(
 #[cfg(test)]
 mod tests {
     const WGSL: &str = include_str!("../../assets/shaders/ground.wgsl");
+    /// Where the block is declared, beside the deck's struct it holds.
+    const BLOCK: &str = include_str!("../../assets/shaders/cloud_shadow.wgsl");
     const RUST: &str = include_str!("ground.rs");
 
     /// The field names of the struct that `header` opens, in order.
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn the_uniform_declares_the_same_fields_on_both_sides() {
-        let shader_fields = fields(WGSL, "struct GroundParams {", "");
+        let shader_fields = fields(BLOCK, "struct GroundParams {", "");
         let rust_fields = fields(RUST, "pub struct GroundParams {", "pub ");
         assert_eq!(
             shader_fields, rust_fields,
@@ -326,7 +328,10 @@ mod tests {
             "only {} fields scraped: the parse broke",
             shader_fields.len()
         );
-        assert!(WGSL.contains("@binding(104) var<uniform>") && !WGSL.contains("@binding(105)"));
+        // One block the material adds, and only one (the module's doc).
+        let both = format!("{WGSL}{BLOCK}");
+        assert_eq!(both.matches("var<uniform>").count(), 1);
+        assert!(BLOCK.contains("@binding(104) var<uniform> ground: GroundParams;"));
     }
 
     #[test]

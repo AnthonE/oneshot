@@ -7,10 +7,11 @@
 // rock face). After Gates' shaders/ground_splat.wgsl (MIT, NOTICE): its
 // hash, value noise, rock cells, wall planes, cliff veto and rock face,
 // copied and trimmed; without the island's roads, blight, snow, caustics and
-// height blend. Every number arrives in `GroundParams` (binding 104).
-// The rain's wet and the cloud deck's shadows come from `cloud_shadow.wgsl`
-// (binding 106). The rock skin (look/cliffs.rs) carries its value multiplier
-// in `UV_1.x`; the ground has no `UV_1`.
+// height blend. Every number arrives in `GroundParams` (binding 104, the
+// ground's one uniform block), declared in `cloud_shadow.wgsl` with the
+// rain's wet and the cloud deck's shadows it holds. The rock skin
+// (look/cliffs.rs) carries its value multiplier in `UV_1.x`; the ground has
+// no `UV_1`.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
@@ -18,25 +19,7 @@
     forward_io::{VertexOutput, FragmentOutput},
     mesh_view_bindings::view,
 }
-#import "shaders/cloud_shadow.wgsl"::{cloud_shadow, ground_wet, wetted}
-
-// ⚠ This struct's field list and order must match `GroundParams` in
-// look/ground.rs exactly: a uniform whose two sides disagree about layout
-// binds fine and is garbage in every field after the first mismatch. A test
-// in ground.rs scrapes both. What each field holds is written there.
-struct GroundParams {
-    tile_m: vec4<f32>,
-    tint: array<vec4<f32>, 4>,
-    cliff: vec4<f32>,
-    wall: vec4<f32>,
-    wall_planes: vec4<f32>,
-    rock_a: vec4<f32>,
-    rock_b: vec4<f32>,
-    rock_c: vec4<f32>,
-    rock_d: vec4<f32>,
-    rock_e: vec4<f32>,
-    sea: vec4<f32>,
-}
+#import "shaders/cloud_shadow.wgsl"::{ground, cloud_shadow, ground_wet, wetted}
 
 // Wet ground's roughness (dry is the material's), and how far the wet
 // line wanders (m) over its noise's wavelength (m).
@@ -48,7 +31,6 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var albedo_smp: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var normal_tex: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var normal_smp: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var<uniform> ground: GroundParams;
 
 // A tangent-space normal as a surface gradient. Summing GRADIENTS is what
 // makes a blend of normals mean anything: averaging the vectors pulls every

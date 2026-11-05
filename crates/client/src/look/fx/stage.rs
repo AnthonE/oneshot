@@ -308,7 +308,7 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
         match stage.staged.fire {
             // The mark flat on the card's plane: no map is drawn here.
             Fire::Hit(w, m) => {
-                fx.impact(w, m, at, dir);
+                fx.impact(w, m, at, dir, f32::NEG_INFINITY);
                 if let Some((k, size)) = super::marks::kind(w, m) {
                     fx.marks.place(k, size, at, dir, m);
                 }

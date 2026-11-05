@@ -49,7 +49,8 @@ if [ "$BUILD" = 1 ]; then
   fi
   rm -rf "$DIST"
   wasm-bindgen --target web --out-dir "$DIST" crates/client/target/wasm32-unknown-unknown/release/oneshot_client.wasm
-  cp crates/client/web/index.html "$DIST/"
+  # The page and its scripts (boot.js starts it), as ci/client.sh copies them.
+  cp crates/client/web/*.html crates/client/web/*.js "$DIST/"
   ln -s ../../assets "$DIST/assets"
 fi
 [ -f "$DIST/oneshot_client_bg.wasm" ] || { echo "fx: no page at $DIST: run without --no-build" >&2; exit 1; }

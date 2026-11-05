@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A branch gated before its PR: gh workflow run ci --ref <branch>.
+  workflow_dispatch:
 
 jobs:
   sim:
@@ -51,6 +53,19 @@ jobs:
           E2E_WEBGPU=1 node ci/e2e.mjs 150
           node ci/e2e.mjs 150 4 2
           node ci/party.mjs
+      # The desktop client too, under Xvfb on lavapipe: its title, and Gun
+      # Game on Cistern with the autopilot playing, as the second e2e match
+      # (`--shot` exits non-zero if the screen is never there).
+      - name: the desktop client draws
+        # Informational: it shows, it doesn't gate a PR.
+        continue-on-error: true
+        run: |
+          sudo apt-get update -q
+          # winit opens Xlib, Xcursor, Xlib-xcb and XInput2 by name, and
+          # xkbcommon-x11; lavapipe is mesa-vulkan-drivers.
+          sudo apt-get install -yq xvfb mesa-vulkan-drivers libxkbcommon-x11-0 libxcursor1 libxi6 libx11-xcb1
+          ci/desktop_shot.sh traces/desktop-title.png 2 0 0 0
+          ci/desktop_shot.sh traces/desktop-gungame.png 4 4 2 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

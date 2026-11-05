@@ -321,7 +321,9 @@ pub fn swung(fx: &mut Fx, scene: &Scene, e: &EventState, eye: Vec3) {
     let own = slot == scene.me;
     let d = scene.others.iter().find(|d| d.slot == slot).copied();
     let aim = match (own, d) {
-        (true, _) => scene.aim,
+        // Where we looked as the swing began, not now: the event comes
+        // back a round trip after the press.
+        (true, _) => fx.take_swing().unwrap_or(scene.aim),
         (false, Some(d)) => Vec3::new(d.pitch.cos() * d.yaw.cos(), d.pitch.sin(), d.pitch.cos() * d.yaw.sin()),
         (false, None) => return,
     };
@@ -392,7 +394,7 @@ fn wall(fx: &mut Fx, scene: &Scene, slot: u8, eye: Vec3, aim: Vec3, sword: bool)
     let Some(hit) = super::surface::cast(scene.map, &mut fx.near, eye, aim, t + 0.05) else {
         return false;
     };
-    let matter = super::surface::matter(scene.map, hit.on);
+    let matter = super::surface::matter_of(scene.map, &hit, fx.marks.lift.as_deref());
     let w = if sword { Weapon::Blade } else { Weapon::Melee };
     fx.strike(scene.map, w, matter, &hit);
     true

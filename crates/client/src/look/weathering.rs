@@ -47,6 +47,18 @@ pub struct WeatherParams {
     pub centre: Vec4,
     pub half: Vec4,
     pub turn: Vec4,
+    /// The ground under a long block, end to end ([`Block::run`]).
+    pub ground_run: [Vec4; 2],
+    /// WebGL2's light shafts (`shafts::WebShafts`, `shaft_march.wgsl`): the
+    /// same in every box, zero where none are drawn.
+    pub shaft_lo: Vec4,
+    pub shaft_hi: Vec4,
+    pub shaft_tint: Vec4,
+}
+
+/// A block's shaft lanes, to compare with `shafts::WebShafts`.
+pub fn shaft_lanes(p: &WeatherParams) -> (Vec4, Vec4, Vec4) {
+    (p.shaft_lo, p.shaft_hi, p.shaft_tint)
 }
 
 /// The extension. **Not `#[bindless]`**, as the ground's isn't: one
@@ -78,11 +90,28 @@ pub struct Block {
     pub shape: Shape,
     /// The ground's height under its middle, where its grime starts.
     pub ground: f32,
+    /// A long block on uneven ground: the ground under it at [`RUN`]
+    /// points end to end along its local x (`Run::X`) or z, so its grime
+    /// follows the ground, not the height under its middle.
+    pub run: Option<(Run, [f32; RUN])>,
+    /// Its edges another box hides or carries on (`rock::hidden_edges`,
+    /// bits as `weathering.wgsl`'s `edge_distance`): no wear along them.
+    pub hidden: u8,
     /// Whether it has a value of its own ([`block_value`]): a box does,
     /// its faces cut where another box draws the same plane (`rock::covers`);
     /// a solid does not, since an arc's turned segments overlap at their
     /// ends and two values on one plane would flicker.
     pub own_value: bool,
+}
+
+/// The ground's samples along a long block ([`Block::run`]).
+pub const RUN: usize = 8;
+
+/// The axis a block's ground samples run along, in its own frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Run {
+    X,
+    Z,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -217,13 +246,27 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         mottle: Vec4::new(mottle, 0.65, 0.17, if b.own_value { block_value(b.mid) } else { 1.0 }),
         streak: Vec4::new(streak, 2.2, 0.0, 0.0),
         streak_tint: Vec4::new(tint[0], tint[1], tint[2], 0.0),
-        grime: Vec4::new(grime, GRIME_REACH_M, b.ground, 0.0),
+        grime: Vec4::new(
+            grime,
+            GRIME_REACH_M,
+            b.ground,
+            match b.run {
+                None => 0.0,
+                Some((Run::X, _)) => 1.0,
+                Some((Run::Z, _)) => 2.0,
+            },
+        ),
         grime_tint: Vec4::new(SOIL[0], SOIL[1], SOIL[2], 0.0),
         wear: Vec4::new(dust, wear, width, lift),
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
-        half: b.half.extend(0.0),
+        half: b.half.extend(f32::from(b.hidden)),
         turn: Vec4::new(b.turn.0, b.turn.1, 0.0, 0.0),
+        ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
+            [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
+        }),
+        // Painted in by `shafts::paint_web` where WebGL2 marches.
+        ..default()
     }
 }
 
@@ -261,6 +304,8 @@ mod tests {
             turn: (1.0, 0.0),
             shape: Shape::Box,
             ground: 0.0,
+            run: None,
+            hidden: 0,
             own_value: true,
         }
     }

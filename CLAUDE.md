@@ -98,7 +98,8 @@ the crates' tests, parity, `ci/client.sh` and two e2e matches.
     picks one before either downloads. Their gzipped sizes are printed, not
     gated (no size, fog or frame-rate budget stops a build any more; the
     tools that measure them stay). What WebGL2 can't do is `cfg(webgl2)`
-    (`build.rs`), never `target_arch = "wasm32"`; the tier is `look/gpu.rs`.
+    (`build.rs`), never `target_arch = "wasm32"`; the tier is `look/quality.rs`
+    (`Tier`, `for_target`, `effective_on`), the device's caps `look/gpu.rs`.
 11. **`crates/fx` is Gates'** (`crates/fx/tests/vendored.rs`).
 
 ## Commands

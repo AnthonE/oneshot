@@ -42,6 +42,13 @@ bevy = { version = "0.18", default-features = false, features = [
 # F12's PNG (look/shot.rs): the encoder Bevy's own image loading already
 # builds, named so the client can write one.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Film mode's shot lists (film/script.rs), JSON as Gates' are: both already
+# in the build (bevy_gltf reads glTF's JSON with them).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A film's own mix (film/mix.rs): the game's .ogg cuts decoded off the frame
+# clock. The decoder Bevy's audio already builds into the browser's module.
+lewton = "0.10"
 
 [features]
 # Sound on the desktop: needs ALSA's headers on Linux (libasound2-dev).
@@ -69,8 +76,10 @@ rustls-native-certs = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Sound always in a browser (Web Audio needs nothing from the build box).
-# `webgl2` is in both modules: under `webgpu` Bevy takes the WebGPU path and
-# the GL backend is dead code (a feature can't take a feature away).
+# `webgl2` is in both modules (a feature can't take a feature away): under
+# `webgpu` Bevy takes the WebGPU path, but wgpu keeps its GL backend linked as
+# the fallback for a browser without `navigator.gpu`, so the WebGPU module
+# carries both (ci/client.sh prints both sizes).
 bevy = { version = "0.18", default-features = false, features = ["webgl2", "bevy_audio", "vorbis", "bevy_gilrs"] }
 # The wgpu Bevy resolves (one entry in Cargo.lock), named so the WebGPU module
 # can hand the device an error hook: Bevy re-exports neither `wgpu::Error`
@@ -82,6 +91,8 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "Window",
+    # Panics to the console (look/gpu.rs, `hook_panics`).
+    "console",
     "Performance",
     "Document",
     "Element",
@@ -95,6 +106,10 @@ web-sys = { version = "0.3", features = [
     "HtmlAnchorElement",
     # The retrying asset reader (asset_fetch.rs).
     "Response",
+    # …made by the browser's own encoder, off the page's thread.
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
 ] }
 
 # Quick to build and quick enough to play: our code a little optimised,

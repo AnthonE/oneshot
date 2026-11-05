@@ -20,7 +20,10 @@
 //! across its slopes while everything on it stands in the light the middle
 //! has. Only the ground: a fighter, a box, a rock are lit as the middle is,
 //! so the shadows never hide anyone. Every rung draws them: a uniform read
-//! and, where a shadow's edge is, the sun's term once more.
+//! and, wherever a point's sun differs from the middle's (on Dry Fork, much
+//! of the canyon at a time), the sun's term once more with one
+//! hardware-compared shadow tap (not Bevy's filtered fetch: the term is a
+//! soft share of the sun and the main pass already filtered the edge).
 //!
 //! **One path on three targets.** The field the ground reads is a 16 × 16
 //! window of [`sky::SoftField`] in the ground's uniform, moved with the
@@ -248,12 +251,12 @@ pub fn drive(
     };
     let stale: Vec<AssetId<GroundMaterial>> = ground
         .iter()
-        .filter(|(_, g)| g.extension.cloud != want)
+        .filter(|(_, g)| g.extension.params.cloud != want)
         .map(|(id, _)| id)
         .collect();
     for id in stale {
         if let Some(g) = ground.get_mut(id) {
-            g.extension.cloud = want;
+            g.extension.params.cloud = want;
         }
     }
 }

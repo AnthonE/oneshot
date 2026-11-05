@@ -24,7 +24,8 @@
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const seconds = Number(process.argv[2] || 90);
 const mode = Number(process.argv[3] || 0);
@@ -197,11 +198,29 @@ try {
   await browser.close();
 }
 if (process.env.E2E_WEBGPU === '1') {
+  // Chromium's own log (its GPU process crashing, the watchdog, the Vulkan
+  // driver it found), kept in traces/ and its GPU lines printed if the
+  // WebGPU checks fail: a device lost on a CI runner says nothing else.
+  mkdirSync('traces', { recursive: true });
+  const gpuLog = `${process.cwd()}/traces/e2e-webgpu-chromium.log`;
+  rmSync(gpuLog, { force: true });
+  // The full Chromium (Playwright's default headless is its shell) and only
+  // its own SwiftShader Vulkan driver: a Mesa on the box (lavapipe) is
+  // otherwise what Chromium's Vulkan picks, so the smoke would draw on
+  // whichever driver each machine happens to have. Without it (a box with
+  // only the shell), Playwright's default.
+  const full = exe ?? chromium.executablePath();
+  const gpuExe = existsSync(full) ? full : undefined;
+  const icd = gpuExe ? `${dirname(realpathSync(gpuExe))}/vk_swiftshader_icd.json` : '';
   const gpu = await chromium.launch({
-    executablePath: exe,
+    executablePath: gpuExe,
+    env: existsSync(icd) ? { ...process.env, VK_ICD_FILENAMES: icd, VK_DRIVER_FILES: icd } : process.env,
     args: ['--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader',
-      '--use-angle=vulkan', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
+      '--use-angle=vulkan', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required',
+      '--enable-logging', `--log-file=${gpuLog}`],
   });
+  console.log(`webgpu: ${gpuExe ?? `no ${full}: Playwright's default`}${existsSync(icd) ? ', SwiftShader Vulkan only' : ", the box's Vulkan"}`);
+  const gpuChecks = checks.length;
   try {
     // Left to itself, the page refuses SwiftShader's adapter.
     const p = await gpu.newPage({ viewport: { width: 480, height: 270 } });
@@ -235,6 +254,14 @@ if (process.env.E2E_WEBGPU === '1') {
     errors.push(`webgpu: ${e}`);
   } finally {
     await gpu.close();
+  }
+  if (checks.slice(gpuChecks).some(([, ok]) => !ok) && existsSync(gpuLog)) {
+    const lines = readFileSync(gpuLog, 'utf8').split('\n')
+      .filter((l) => (/:CONSOLE:/.test(l)
+        ? /webgpu: |device lost|switching to WebGL2|AdapterInfo|gpu\.rs/.test(l)
+        : /gpu|vulkan|dawn|watchdog|crash|lost/i.test(l) && !/ReadPixels|dbus/i.test(l)));
+    console.log(`webgpu: Chromium's GPU lines (${lines.length}; all in ${gpuLog}):`);
+    for (const l of lines.slice(-30)) console.log(`  ${l.slice(0, 300)}`);
   }
 }
 server.kill('SIGINT'); // at once; SIGTERM would drain

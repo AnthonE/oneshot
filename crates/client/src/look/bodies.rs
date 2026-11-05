@@ -499,7 +499,14 @@ pub fn pose(
     if let Ok(mut t) = at.get_mut(root) {
         *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
     }
-    let hold = gun(d.arm).map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    // Every gun hangs at the same `HAND`, at the chest, where the long
+    // hold puts both hands. The pistol clip is Gates' first-person arms
+    // (hands up at the face): over a body it held nothing. A pistol's
+    // reload is still its own clip, and the gun goes with the hand while
+    // it plays (`pose_hands`).
+    let gun_of = gun(d.arm);
+    let hold = gun_of.map(|_| Hold::Long);
+    let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
     body.gait.observe(
         &Seen {
             alive: d.alive,
@@ -511,8 +518,9 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
-            reload_s: (d.reloading && !sim::arms::arm(d.arm).hot())
-                .then(|| sim::arms::arm(d.arm).reload_ms as f32 / 1000.0),
+            reload: reload_clip
+                .filter(|_| d.reloading && !sim::arms::arm(d.arm).hot())
+                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0)),
         },
         dt,
     );
@@ -622,6 +630,7 @@ pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut
             clip: b.gait.clip,
             pitch: b.gait.pitch,
             hip_yaw: b.gait.hip_yaw,
+            held: b.playing.held(),
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);

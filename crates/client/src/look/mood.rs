@@ -115,12 +115,13 @@ pub const NOON: Mood = Mood {
 };
 
 /// Overpass: a sun shower late in the day. Broken cloud with the sun under
-/// its edge in the west-south-west, low enough (22°) that the bow over the
-/// blue base clears the walls, a light rain and wet concrete.
+/// its edge off one long side (22°), across the line between the bases so
+/// neither team looks into it ([`tests`]), low enough that the bow over the
+/// far side clears the walls, a light rain and wet concrete.
 pub const SUN_SHOWER: Mood = Mood {
     name: "sun shower",
     sun_elev: 0.38,
-    sun_azim: 4.4,
+    sun_azim: core::f32::consts::PI,
     sun_rgb: [1.0, 0.96, 0.9],
     sun: 0.8,
     light: 0.8,
@@ -143,13 +144,14 @@ pub const SUN_SHOWER: Mood = Mood {
     field_at: [7.3, 3.1],
 };
 
-/// Cistern: a misty morning. A low sun (21°) over the north-east wall
-/// through a ground mist, so the walls and the pillars cut its light into
-/// shafts; a thin mist, a fifth of the light across the arena.
+/// Cistern: a misty morning. A low sun (21°) over the wall between the two
+/// sides' spawns (red holds -x, blue +x), through a ground mist, so the
+/// walls and the pillars cut its light into shafts; a thin mist, a fifth
+/// of the light across the arena.
 pub const MIST: Mood = Mood {
     name: "misty morning",
     sun_elev: 0.37,
-    sun_azim: 0.9,
+    sun_azim: 0.0,
     sun_rgb: [1.0, 0.93, 0.82],
     sun: 0.85,
     light: 0.85,
@@ -201,13 +203,14 @@ pub const DESERT: Mood = Mood {
     field_at: [3.0, 22.0],
 };
 
-/// Bulkhead: dusk. The sun low (11°) down the long axis from red's end, so
-/// the side walls shade nothing, the exposure opened a stop; a gibbous moon
-/// up over blue's end and the first stars.
+/// Bulkhead: dusk. The sun low (11°) over one long side, across the line
+/// between the bases (down the long axis one team would look into it all
+/// match), the exposure opened a stop; a gibbous moon up over the other
+/// side and the first stars.
 pub const DUSK: Mood = Mood {
     name: "dusk",
     sun_elev: 0.2,
-    sun_azim: 4.62,
+    sun_azim: core::f32::consts::PI,
     sun_rgb: [1.0, 0.92, 0.82],
     sun: 0.6,
     light: 0.55,
@@ -224,7 +227,7 @@ pub const DUSK: Mood = Mood {
     stars: 0.35,
     moon: 0.85,
     moon_elev: 0.3,
-    moon_azim: 1.45,
+    moon_azim: 0.0,
     moon_lit: 0.9,
     shade: 0.0,
     field_at: [25.0, 5.0],
@@ -477,6 +480,55 @@ mod tests {
             // Across an 80 m sightline more than three fifths gets through.
             assert!((-m.fog_sigma() * 80.0).exp() > 0.6, "{}: the air", m.name);
             assert!(m.rain <= 0.4 && m.shade <= 0.5, "{}", m.name);
+        }
+    }
+
+    /// On a map split between two teams neither looks into the sun at the
+    /// other: no sun stands in a level look from one side's spawns toward
+    /// the other's, and a low one (whose backlight is strongest) stands
+    /// across the line between them, so each side sees the other in the
+    /// same light.
+    #[test]
+    fn no_team_looks_into_the_sun() {
+        let half_h = (super::super::rig::FOV_DEG.to_radians() * 0.5).tan();
+        let half_w = half_h * 16.0 / 9.0;
+        for def in sim::maps::ALL {
+            let mid = |team: u8| {
+                let at: Vec<Vec2> = def
+                    .spawns
+                    .iter()
+                    .filter(|s| s.2 == team)
+                    .map(|s| Vec2::new(s.0[0], s.0[2]))
+                    .collect();
+                (!at.is_empty()).then(|| at.iter().sum::<Vec2>() / at.len() as f32)
+            };
+            let (Some(red), Some(blue)) = (mid(0), mid(1)) else {
+                continue;
+            };
+            let axis = (blue - red).normalize();
+            let m = of(def.id);
+            let sun = m.to_sun();
+            let in_view = |look: Vec2| {
+                let f = Vec3::new(look.x, 0.0, look.y);
+                let right = f.cross(Vec3::Y);
+                let z = sun.dot(f);
+                z > 0.0 && (sun.y / z).abs() < half_h && (sun.dot(right) / z).abs() < half_w
+            };
+            assert!(
+                !in_view(axis) && !in_view(-axis),
+                "{}: {} in a team's look",
+                def.name,
+                m.name
+            );
+            if m.sun_elev < 30f32.to_radians() {
+                let flat = Vec2::new(sun.x, sun.z).normalize();
+                assert!(
+                    flat.dot(axis).abs() < 5f32.to_radians().sin(),
+                    "{}: {}'s low sun is down the line between the teams",
+                    def.name,
+                    m.name
+                );
+            }
         }
     }
 
