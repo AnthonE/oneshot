@@ -607,7 +607,15 @@ fn hurt(fx: &mut Fx, scene: &Scene, e: &EventState, feet: Vec3) {
 pub fn draw(
     time: Res<Time>,
     mut fx: ResMut<Fx>,
-    cams: Query<(&GlobalTransform, &Transform), (With<crate::look::rig::EyeCam>, Without<FxMesh>, Without<FlashLight>)>,
+    cams: Query<
+        (&GlobalTransform, &Transform),
+        (
+            With<crate::look::rig::EyeCam>,
+            Without<FxMesh>,
+            Without<FlashLight>,
+            Without<shell::ShockShell>,
+        ),
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut q: Query<(&FxMesh, &mut Transform, &mut GlobalTransform), Without<FlashLight>>,
     mut lights: Query<(&FlashLight, &mut PointLight, &mut Transform, &mut Visibility), Without<FxMesh>>,

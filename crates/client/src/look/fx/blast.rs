@@ -200,12 +200,12 @@ fn sticky(fx: &mut Fx, scene: &Scene, at: Vec3) {
     fx.emit_tint(Layer::Embers, n(16), at, Vec3::Y, Color::srgb(0.5, 0.7, 1.0), 1.0);
     // The vapour the heat leaves: thin, pale, quick.
     fx.emit_tint(
-        Layer::Cloud,
+        Layer::Wisp,
         n(3),
         at + Vec3::Y * 0.4,
         Vec3::Y,
         Color::srgb(0.6, 0.68, 0.85),
-        1.0,
+        2.5,
     );
     let floor = scene.map.floor(at.x, at.z, 0.2, at.y + 0.5);
     if at.y - floor < 2.5 {
@@ -278,8 +278,9 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
     // the shock blown out through the air.
     fx.emit_tint(Layer::Flash, n(3), at, Vec3::Y, Color::WHITE, 16.0 * big);
     *super::shell::claim(&mut fx.shocks) = super::shell::fire(at, big);
-    // The fireball, and smaller ones flung off it.
-    fx.emit_tint(Layer::Boom, 1, at + Vec3::Y * 0.5 * big, Vec3::Y, Color::WHITE, big);
+    // The fireball, lifted off the ground it sits on (a billboard its size
+    // would cut into it), and smaller ones flung off it.
+    fx.emit_tint(Layer::Boom, 1, at + Vec3::Y * 1.0 * big, Vec3::Y, Color::WHITE, big);
     fx.emit_tint(Layer::Fireballs, n(3), at, Vec3::Y, Color::WHITE, big);
     // Smoke that outlasts the fire, rising off it, soot and the ground's
     // dust in it.

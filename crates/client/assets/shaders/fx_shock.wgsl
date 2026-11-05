@@ -14,11 +14,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let age = color.a;
     let n = normalize(in.world_normal);
     let v = normalize(view.world_position.xyz - in.world_position.xyz);
-    let facing = abs(dot(n, v));
-    // The rim sharpens as the shell thins: a wide glow at birth, a line
-    // near the end.
-    let sharp = 2.0 + 6.0 * age;
-    let rim = pow(1.0 - facing, sharp);
+    // Clamped: a hair over 1 would make pow NaN, and a NaN adds black.
+    let facing = clamp(abs(dot(n, v)), 0.0, 1.0);
+    // The rim sharpens as the shell thins: a band at birth, a line near
+    // the end.
+    let sharp = 3.0 + 7.0 * age;
+    let rim = pow(max(1.0 - facing, 0.0), sharp);
     // The far side of the sphere adds too (it is a shell of air): half.
     let side = select(0.5, 1.0, is_front);
     let fade = (1.0 - age) * (1.0 - age);

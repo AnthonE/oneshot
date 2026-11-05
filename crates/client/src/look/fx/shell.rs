@@ -29,15 +29,15 @@ pub struct Shock {
     pub color: Vec3,
 }
 
-/// A fire blast's shell: a warm rim, 0.3 to `6 × big` metres in 0.35 s.
+/// A fire blast's shell: a warm rim, 0.3 to `4 × big` metres in 0.3 s.
 pub fn fire(at: Vec3, big: f32) -> Shock {
     Shock {
         at,
-        left: 0.35,
-        life: 0.35,
+        left: 0.3,
+        life: 0.3,
         r0: 0.3,
-        r1: 6.0 * big,
-        color: Vec3::new(5.0, 3.6, 2.2),
+        r1: 4.0 * big,
+        color: Vec3::new(2.4, 1.8, 1.1),
     }
 }
 
@@ -45,11 +45,11 @@ pub fn fire(at: Vec3, big: f32) -> Shock {
 pub fn ion(at: Vec3) -> Shock {
     Shock {
         at,
-        left: 0.3,
-        life: 0.3,
+        left: 0.26,
+        life: 0.26,
         r0: 0.3,
-        r1: 5.5,
-        color: Vec3::new(2.0, 3.2, 6.0),
+        r1: 4.0,
+        color: Vec3::new(1.0, 1.6, 3.0),
     }
 }
 
