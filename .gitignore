@@ -4,3 +4,5 @@ traces/
 board/passes/
 # Local secrets written by `elevenlabs onboard`
 /.env.local
+# Recordings as they came: the announcer's lines and the theme (tools/voice.sh cut)
+/voicemusic/

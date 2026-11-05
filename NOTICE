@@ -31,9 +31,15 @@ shield's alarm, recharge, hits and pop; the alien guns, the vent and the
 charge; the engine, a rocket in flight, the wind; a grenade's bounce, the
 spawn, the countdown.
 
-The announcer (crates/client/assets/sound/voice) is ours: placeholder lines
+The announcer (crates/client/assets/sound/voice) is ours. The kill ladders'
+lines and the lines about the match were made with ElevenLabs' text to
+speech (eleven_v4, the library voice Kallixis) on a paid plan (Starter,
+2026-11-04) and cut by tools/voice.sh. The rest are placeholders
 synthesized by tools/voice.sh with Flite (Carnegie Mellon University's
 speech synthesizer, BSD-style licence) through ffmpeg.
+
+The theme (crates/client/assets/sound/music) is ours: made with ElevenLabs'
+music model on a paid plan (Starter, 2026-11-04).
 
 Fonts (crates/client/assets/fonts, FONTS.md), CC0 1.0:
   - Unitblock, by GGBotNet (ggbot.net, github.com/ggbotnet/fonts-cc0)

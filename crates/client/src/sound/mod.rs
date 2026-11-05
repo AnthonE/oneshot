@@ -20,12 +20,16 @@
 //! - **The match:** the countdown's ticks and its start; wind on a big map.
 //!
 //! Recordings are Gates' CC0 cuts (`tools/assets.mjs`, NOTICE); the rest
-//! is ours (`tools/sfx.mjs`). The announcer is apart: our voiced medals one
-//! at a time (`assets/sound/voice`, `tools/voice.sh`), a newer rung of a
-//! ladder taking the place of one still waiting.
+//! is ours (`tools/sfx.mjs`). The announcer is apart: our voiced medals and
+//! its lines about the match (the mode, the lead, the clock's last calls, a
+//! betrayal, the end), one at a time (`assets/sound/voice`,
+//! `tools/voice.sh`), a newer rung of a ladder taking the place of one still
+//! waiting. So is the theme, under the title (`assets/sound/music`).
 //!
 //! Always in a browser; on the desktop with the `sound` feature (it needs
 //! ALSA's headers on Linux). Without it the plugin does nothing.
+
+use core::cmp::Ordering;
 
 use bevy::prelude::*;
 
@@ -45,6 +49,20 @@ impl Plugin for SoundPlugin {
     }
 }
 
+/// What the announcer says when our score's standing against the best of
+/// the rest changes: the lead taken, tied for, or lost. Nothing the first
+/// time it is looked at.
+#[cfg_attr(not(any(target_arch = "wasm32", feature = "sound")), allow(dead_code))]
+fn lead_line(was: Option<Ordering>, now: Ordering) -> Option<&'static str> {
+    use Ordering::{Equal, Greater, Less};
+    match (was?, now) {
+        (Less | Equal, Greater) => Some("taken_lead"),
+        (Less | Greater, Equal) => Some("tied_for_lead"),
+        (Greater | Equal, Less) => Some("lost_lead"),
+        _ => None,
+    }
+}
+
 #[cfg(any(target_arch = "wasm32", feature = "sound"))]
 pub use on::*;
 
@@ -55,14 +73,14 @@ mod on {
 
     use bevy::audio::{AddAudioSource, Decodable, Volume};
     use bevy::prelude::*;
-    use client_net::core::Drawn;
+    use client_net::core::{Drawn, NetCore};
     use sim::arms;
     use sim::consts::{MAX_FIGHTERS, MAX_VEHICLES, SHIELD_MAX, TICK_HZ};
     use sim::events::Kind;
     use sim::geom::V3;
 
     use super::mix::{self, Clip, Cmd, Place, Shared, Stream};
-    use super::{Heard, SoundPlugin};
+    use super::{lead_line, Heard, SoundPlugin};
     use crate::look::fx::HEARD;
     use crate::look::guns::GUNS;
     use crate::LinkRes;
@@ -132,7 +150,8 @@ mod on {
                 .init_resource::<Ear>()
                 .add_audio_source::<Mixer>()
                 .add_systems(Startup, (load, start))
-                .add_systems(Update, (decode, play, announce).chain().after(crate::happened));
+                .add_systems(Update, (decode, play, announce).chain().after(crate::happened))
+                .add_systems(Update, theme);
         }
     }
 
@@ -228,9 +247,17 @@ mod on {
         // The match.
         last_phase: u8,
         last_count: u32,
+        last_clock: u32,
+        /// How our score stood against the best of the rest.
+        standing: Option<core::cmp::Ordering>,
         wind: bool,
         /// Medals waiting for the announcer, oldest first.
         voice: Vec<u8>,
+        /// Its lines about the match waiting, said before a medal.
+        lines: Vec<&'static str>,
+        /// Lines about the match it has said, all told.
+        said: u32,
+        theme: Handle<AudioSource>,
         /// Commands sent the mixer, all told.
         sent: u32,
     }
@@ -242,6 +269,34 @@ mod on {
     /// Lines the announcer may have waiting; past it the oldest goes.
     const VOICE_WAIT: usize = 4;
     const VOICE_GAIN: f32 = 1.1;
+    /// What the announcer says about the match, past the medals (recorded:
+    /// `tools/voice.sh cut`).
+    const LINES: [&str; 12] = [
+        "free_for_all",
+        "team_slayer",
+        "one_minute",
+        "thirty_seconds",
+        "taken_lead",
+        "lost_lead",
+        "tied_for_lead",
+        "game_over",
+        "game_over_you_win",
+        "game_over_you_lose",
+        "betrayal",
+        "betrayed",
+    ];
+    /// The clock's last calls: seconds left, and the line.
+    const CALLS: [(u32, &str); 2] = [(60, "one_minute"), (30, "thirty_seconds")];
+
+    /// The theme playing (`assets/sound/music/intro.ogg`: the track as it
+    /// came, its silent lead-in off, Vorbis at `-q:a 4`).
+    #[derive(Component)]
+    struct Theme;
+
+    /// The theme against the master volume, and how long it takes to come
+    /// and to go.
+    const THEME_GAIN: f32 = 0.35;
+    const THEME_FADE_S: f32 = 1.5;
 
     /// Where we hear from, this frame.
     struct Ears<'a> {
@@ -317,9 +372,10 @@ mod on {
     }
 
     impl Ear {
-        /// Clips decoded, clips still loading, commands sent the mixer.
-        pub fn stats(&self) -> (u32, u32, u32) {
-            (self.bank.len() as u32, self.waiting.len() as u32, self.sent)
+        /// Clips decoded, clips still loading, commands sent the mixer,
+        /// lines about the match the announcer has said.
+        pub fn stats(&self) -> (u32, u32, u32, u32) {
+            (self.bank.len() as u32, self.waiting.len() as u32, self.sent, self.said)
         }
 
         fn roll(&mut self, n: u8) -> u8 {
@@ -329,6 +385,18 @@ mod on {
         }
         fn pitch(&mut self) -> f32 {
             0.96 + self.roll(9) as f32 * 0.01
+        }
+        /// A line about the match for the announcer; news of the lead takes
+        /// the place of older news of it still waiting.
+        fn say(&mut self, line: &'static str) {
+            let lead = |l: &str| l.ends_with("_lead");
+            match self.lines.iter_mut().find(|q| lead(q) && lead(line)) {
+                Some(q) => *q = line,
+                None => self.lines.push(line),
+            }
+            if self.lines.len() > VOICE_WAIT {
+                self.lines.remove(0);
+            }
         }
         fn chance(&mut self, pct: u8) -> bool {
             self.roll(100) < pct
@@ -496,6 +564,12 @@ mod on {
                 ear.voices.insert(n, h);
             }
         }
+        for n in LINES {
+            let n = format!("voice/{n}");
+            let h = assets.load(format!("sound/{n}.ogg"));
+            ear.voices.insert(n, h);
+        }
+        ear.theme = assets.load("sound/music/intro.ogg");
         ear.rng = 0x9e37_79b9;
         ear.cmds = Vec::with_capacity(256);
     }
@@ -705,7 +779,7 @@ mod on {
         }
 
         rounds(ear, &ears, s.core.latest());
-        the_match(ear, &ears, s.core.latest(), s.core.map.terrain.is_some());
+        the_match(ear, &s.core, s.core.map.terrain.is_some());
         flush(ear);
     }
 
@@ -1092,9 +1166,23 @@ mod on {
     }
 
     /// The countdown's ticks and its start; the wind on a big map.
-    fn the_match(ear: &mut Ear, _ears: &Ears, snap: &proto::Snapshot, big: bool) {
+    /// The countdown and the wind; and what the announcer says of the match:
+    /// its mode as the countdown starts, who leads, the clock's last calls,
+    /// the end.
+    fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
+        let snap = net.latest();
         if snap.phase == 0 {
             let secs = snap.clock.div_ceil(TICK_HZ);
+            // A countdown begun (the title's backdrop has no clock): the
+            // mode, if it is one of the two the announcer knows.
+            if secs > ear.last_count {
+                ear.lines.clear();
+                if net.rules.teams {
+                    ear.say("team_slayer");
+                } else if net.rules.seats > 2 {
+                    ear.say("free_for_all");
+                }
+            }
             if secs != ear.last_count && (1..=3).contains(&secs) {
                 ear.mine("tick_0", 0.5);
             }
@@ -1102,14 +1190,60 @@ mod on {
         } else if snap.phase == 1 && ear.last_phase == 0 {
             ear.mine("go_0", 0.55);
             ear.last_count = 0;
+        } else if snap.phase == 2 && ear.last_phase == 1 {
+            let won = if net.rules.teams {
+                snap.winner & 1 == net.team & 1
+            } else {
+                snap.winner == net.slot
+            };
+            ear.lines.clear();
+            ear.say(match (snap.winner == sim::world::NO_WINNER, won) {
+                (true, _) => "game_over",
+                (_, true) => "game_over_you_win",
+                _ => "game_over_you_lose",
+            });
         }
         ear.last_phase = snap.phase;
+        if snap.phase == 1 {
+            // The lead: our score (our side's) against the best of the rest.
+            let me = if net.rules.teams {
+                net.team as usize & 1
+            } else {
+                net.slot as usize
+            };
+            let scores = &snap.score[..snap.n_score as usize];
+            let mine = scores.get(me).copied().unwrap_or(0);
+            let best = scores
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| i != me)
+                .map(|(_, &v)| v)
+                .max();
+            if let Some(best) = best {
+                let now = mine.cmp(&best);
+                if let Some(line) = lead_line(ear.standing, now) {
+                    ear.say(line);
+                }
+                ear.standing = Some(now);
+            }
+            for (at, line) in CALLS {
+                let t = at * TICK_HZ;
+                if snap.clock <= t && ear.last_clock > t {
+                    ear.say(line);
+                }
+            }
+            ear.last_clock = snap.clock;
+        } else {
+            ear.standing = None;
+            ear.last_clock = 0;
+        }
         let mut on = ear.wind;
         ear.hold_mine(SLOT_WIND, &mut on, "wind_0", big.then_some((0.12, 1.0)));
         ear.wind = on;
     }
 
-    /// Takes our new voiced medals and says the next when the last is done.
+    /// Takes our new voiced medals and the feed's lines, and says the next
+    /// when the last is done.
     fn announce(
         mut st: ResMut<crate::hud::HudState>,
         mut ear: ResMut<Ear>,
@@ -1129,14 +1263,79 @@ mod on {
                 ear.voice.remove(0);
             }
         }
-        if !speaking.is_empty() || ear.voice.is_empty() {
+        for line in core::mem::take(&mut st.say) {
+            ear.say(line);
+        }
+        if !speaking.is_empty() {
             return;
         }
-        let id = ear.voice.remove(0);
-        let Some(h) = ear.voices.get(&format!("voice/{}", md::slug(id))).cloned() else {
+        // A line about the match goes before a medal.
+        let name = if !ear.lines.is_empty() {
+            ear.said = ear.said.wrapping_add(1);
+            ear.lines.remove(0).to_string()
+        } else if !ear.voice.is_empty() {
+            md::slug(ear.voice.remove(0))
+        } else {
+            return;
+        };
+        let Some(h) = ear.voices.get(&format!("voice/{name}")).cloned() else {
             return;
         };
         let s = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(VOICE_GAIN * ear.volume));
         commands.spawn((Voice, AudioPlayer::new(h), s));
+    }
+
+    /// The theme plays under the title (and its settings), looping, and
+    /// fades away when a match starts. No title (a picture, the pose mode),
+    /// no theme.
+    fn theme(
+        in_match: Option<Res<crate::front::InMatch>>,
+        settings: Res<crate::settings::Settings>,
+        time: Res<Time>,
+        ear: Res<Ear>,
+        mut level: Local<f32>,
+        mut commands: Commands,
+        mut playing: Query<(Entity, Option<&mut AudioSink>), With<Theme>>,
+    ) {
+        let want = in_match.is_some_and(|m| !m.0);
+        let step = time.delta_secs() / THEME_FADE_S;
+        *level = if want {
+            (*level + step).min(1.0)
+        } else {
+            (*level - step).max(0.0)
+        };
+        let volume = Volume::Linear(*level * THEME_GAIN * settings.master);
+        match playing.single_mut() {
+            Ok((e, _)) if *level <= 0.0 => commands.entity(e).despawn(),
+            Ok((_, Some(mut sink))) => sink.set_volume(volume),
+            Ok(_) => {}
+            Err(_) if want => {
+                let s = PlaybackSettings::LOOP.with_volume(volume);
+                commands.spawn((Theme, AudioPlayer::new(ear.theme.clone()), s));
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cmp::Ordering;
+
+    use super::lead_line;
+
+    #[test]
+    fn the_lead_is_taken_tied_for_and_lost() {
+        // A duel's scores, ours then theirs, as they go.
+        let scores = [(0, 0), (1, 0), (2, 0), (2, 2), (2, 3), (2, 4), (3, 4), (4, 4), (5, 4)];
+        let mut was: Option<Ordering> = None;
+        let mut said = Vec::new();
+        for (us, them) in scores {
+            let now = us.cmp(&them);
+            said.push(lead_line(was, now));
+            was = Some(now);
+        }
+        let (taken, tied, lost) = (Some("taken_lead"), Some("tied_for_lead"), Some("lost_lead"));
+        assert_eq!(said, [None, taken, None, tied, lost, None, None, tied, taken]);
     }
 }

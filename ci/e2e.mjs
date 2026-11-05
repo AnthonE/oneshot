@@ -169,6 +169,9 @@ try {
     // and the match sent it cues.
     [`sound: ${s?.sound?.[0]} clips decoded, ${s?.sound?.[1]} loading, ${s?.sound?.[2]} commands`,
       (s?.sound?.[0] ?? 0) > 100 && (s?.sound?.[1] ?? 99) <= 5 && (s?.sound?.[2] ?? 0) > 30],
+    // The announcer (sound/mod.rs): the mode as the countdown starts, and
+    // our kill is the lead taken.
+    [`the announcer spoke of the match (${s?.sound?.[3]} lines)`, (s?.sound?.[3] ?? 0) >= 1],
   );
 } catch (e) {
   errors.push(String(e));
