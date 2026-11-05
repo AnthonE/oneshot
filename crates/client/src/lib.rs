@@ -415,6 +415,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -511,7 +513,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             happened,
             rebuild,
             look::textures::prepare,
-            look::textures::mip_models,
+            (look::textures::mip_models, look::fx::sheets::mip_sheets),
             look::rock::dress_masses,
             (
                 level::dress_level,

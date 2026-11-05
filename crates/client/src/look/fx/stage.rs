@@ -12,7 +12,9 @@
 use ::fx::stage::{Clock, Framing, Tick};
 use bevy::prelude::*;
 use bevy::time::{TimeSystems, TimeUpdateStrategy};
-use sim::arms::{AR, BR, MAGNUM, ROCKET, SHOTGUN, SNIPER};
+use sim::arms::{
+    AR, BEAM_RIFLE, BR, CANNON, CARBINE, ION_PISTOL, ION_RIFLE, LAUNCHER, MAGNUM, ROCKET, SHARDS, SHOTGUN, SMG, SNIPER,
+};
 use sim::events::Cause;
 
 use super::table::{self, Matter, Weapon};
@@ -37,6 +39,8 @@ pub enum Fire {
     Blast(u16),
     /// A shield breaking on a fighter: `bodies::pop`.
     Pop,
+    /// A vehicle blowing up and burning: `blast::wreck`.
+    Wreck,
 }
 
 /// One effect the stage can fire.
@@ -51,12 +55,14 @@ pub struct Staged {
     pub fire: Fire,
 }
 
-const WEAPONS: [(Weapon, &str); 5] = [
+const WEAPONS: [(Weapon, &str); 7] = [
     (Weapon::Bullet, "bullet"),
     (Weapon::Pellet, "pellet"),
     (Weapon::Sniper, "sniper"),
     (Weapon::Melee, "melee"),
     (Weapon::Blade, "blade"),
+    (Weapon::Carbine, "carbine"),
+    (Weapon::Beam, "beam"),
 ];
 
 const MATTERS: [(Matter, &str); 6] = [
@@ -93,9 +99,17 @@ pub fn list() -> Vec<Staged> {
         (AR, "rifle"),
         (BR, "br"),
         (MAGNUM, "magnum"),
+        (SMG, "smg"),
         (SHOTGUN, "shotgun"),
         (SNIPER, "sniper"),
         (ROCKET, "rocket"),
+        (LAUNCHER, "launcher"),
+        (CARBINE, "carbine"),
+        (BEAM_RIFLE, "beam"),
+        (ION_RIFLE, "ion"),
+        (ION_PISTOL, "pistol"),
+        (SHARDS, "shards"),
+        (CANNON, "cannon"),
     ] {
         out.push(s(
             &format!("muzzle-{n}"),
@@ -113,6 +127,14 @@ pub fn list() -> Vec<Staged> {
         Fire::Blast(Cause::Grenade as u16),
     ));
     out.push(s("rocket", "a rocket going off", 2.4, 2.5, Fire::Blast(ROCKET as u16)));
+    out.push(s(
+        "sticky",
+        "a sticky going off",
+        2.0,
+        1.6,
+        Fire::Blast(Cause::Sticky as u16),
+    ));
+    out.push(s("wreck", "a vehicle blowing up and burning", 3.2, 4.0, Fire::Wreck));
     out.push(s(
         "cannon",
         "the ion cannon's ball bursting",
@@ -284,9 +306,14 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
     if tick.clear || (tick.fire && tick.step == 1) {
         fx.glow.clear();
         fx.soft.clear();
+        fx.cloud.clear();
+        fx.boom.clear();
         fx.chips.clear();
+        fx.shocks = [super::shell::Shock::default(); super::shell::SHELLS];
         fx.glow.seed(stage.seed);
         fx.soft.seed(stage.seed.wrapping_mul(0x9E37_79B9));
+        fx.cloud.seed(stage.seed.wrapping_mul(0x85EB_CA6B));
+        fx.boom.seed(stage.seed.wrapping_mul(0xC2B2_AE35));
         fx.chips.seed(stage.seed);
     }
     if !tick.fire {
@@ -315,6 +342,7 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
             }
             Fire::Muzzle(arm) => shots::flash(&mut fx, at, dir, &table::gun(arm)),
             Fire::Blast(c) => blast::blast(&mut fx, &scene, at, c, false),
+            Fire::Wreck => blast::wreck(&mut fx, &scene, at - Vec3::Y * 0.8),
             Fire::Pop => bodies::pop(&mut fx, at - Vec3::Y * 1.0),
         }
     }
@@ -342,7 +370,13 @@ fn expose(stage: Res<Stage>, fx: Res<Fx>) {
     set("knobs", stage.knobs.as_str().into());
     set(
         "live",
-        js_sys::Array::of2(&(fx.glow.live() as u32).into(), &(fx.soft.live() as u32).into()).into(),
+        js_sys::Array::of4(
+            &(fx.glow.live() as u32).into(),
+            &(fx.soft.live() as u32).into(),
+            &(fx.cloud.live() as u32).into(),
+            &(fx.boom.live() as u32).into(),
+        )
+        .into(),
     );
     let recipes = js_sys::Object::new();
     for l in table::Layer::ALL {

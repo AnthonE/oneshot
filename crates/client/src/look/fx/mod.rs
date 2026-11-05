@@ -17,7 +17,13 @@
 //!   grit, smoke, mist. The same pool on every rung: smoke can hide a
 //!   player.
 //!
+//! - **cloud** and **boom**: the baked sheets (`sheets`: smoke, dust,
+//!   fire, plasma, flashes; the explosions), premultiplied, lit six ways
+//!   in their own shader, faded against the wall behind. The same pool on
+//!   every rung, as the soft one.
+//!
 //! - `atlas`: the generated sprite sheet. `pool`: the pools and their mesh.
+//!   `sheets`: the baked flipbooks and their material.
 //! - `table`: what a blow throws by weapon × matter, and each gun's look.
 //! - `surface`: what a blow met in the map as drawn: the face, its normal,
 //!   its matter.
@@ -38,6 +44,8 @@ pub mod flying;
 pub mod hulls;
 pub mod marks;
 pub mod pool;
+pub mod sheets;
+pub mod shell;
 pub mod shots;
 pub mod stage;
 pub mod surface;
@@ -55,7 +63,8 @@ use sim::map::Map;
 use crate::look::quality::{Effects, Tier};
 use crate::look::shake::Shake;
 use pool::{pool_mesh, MeshWrite, Pool};
-use table::{Layer, Matter, Weapon};
+use sheets::SheetMaterial;
+use table::{Layer, Matter, Weapon, Which};
 
 /// `EventState::part` on a shot fog lets us only hear (room's `HEARD`):
 /// no tracer, no spark, its place rounded.
@@ -75,13 +84,16 @@ pub struct Caps {
 /// out of them sooner would see more (`quality.rs`' fairness).
 pub const SOFT: usize = 512;
 pub const MARKS: usize = 192;
+/// The baked pools, the same on every rung for the same reason: smoke.
+pub const CLOUD: usize = 384;
+pub const BOOM: usize = 48;
 
 impl Caps {
     /// The EFFECTS row (`quality::Effects`): how many sparks and tracers
     /// may fly and how many flash lights burn. Those only show, never hide.
     pub fn for_effects(e: Effects) -> Caps {
         let (glow, lights) = match e {
-            Effects::High => (1024, 6),
+            Effects::High => (2048, 8),
             Effects::Low => (512, 2),
         };
         Caps {
@@ -94,7 +106,7 @@ impl Caps {
 }
 
 /// Flash lights spawned (the tier uses the first `Caps::lights`).
-const MAX_LIGHTS: usize = 6;
+const MAX_LIGHTS: usize = 8;
 
 /// A light flash: peak intensity (lumens), range (metres), life (seconds),
 /// linear colour.
@@ -142,6 +154,8 @@ pub struct Flash {
 pub struct Fx {
     pub glow: Pool,
     pub soft: Pool,
+    pub cloud: Pool,
+    pub boom: Pool,
     pub marks: marks::Marks,
     pub chips: chips::Chips,
     /// The faces near a blow, reused for the casts that find them.
@@ -154,6 +168,8 @@ pub struct Fx {
     flashes: [Flash; MAX_LIGHTS],
     glow_mesh: Handle<Mesh>,
     soft_mesh: Handle<Mesh>,
+    cloud_mesh: Handle<Mesh>,
+    boom_mesh: Handle<Mesh>,
     /// The camera last frame: where it is and its turn.
     pub eye: Vec3,
     pub cam: Quat,
@@ -169,6 +185,10 @@ pub struct Fx {
     hulls: [hulls::Hull; 16],
     /// Wrecks burning (`blast.rs`).
     burning: [blast::Burn; 4],
+    /// Debris flung off a blast, trailing smoke (`blast.rs`).
+    trailers: [blast::Trailer; 16],
+    /// Blasts' shock shells (`shell.rs`).
+    pub shocks: [shell::Shock; shell::SHELLS],
     /// The last blast seen (not heard) this frame, for the grass's shock
     /// (`foliage::update` takes it).
     pub shock: Option<Vec3>,
@@ -221,15 +241,25 @@ impl Fx {
         self.swing.1.take()
     }
 
+    /// The pool `which` names.
+    pub fn pool(&mut self, which: Which) -> &mut Pool {
+        match which {
+            Which::Glow => &mut self.glow,
+            Which::Soft => &mut self.soft,
+            Which::Cloud => &mut self.cloud,
+            Which::Boom => &mut self.boom,
+        }
+    }
+
     /// Throws `n` of `layer` at `at` around `dir`, into the pool it draws in.
     pub fn emit(&mut self, layer: Layer, n: usize, at: Vec3, dir: Vec3, matter: Matter) {
-        let pool = if layer.glow() { &mut self.glow } else { &mut self.soft };
+        let pool = self.pool(layer.pool());
         table::emit(pool, layer, n, at, dir, matter);
     }
 
     /// [`Fx::emit`] in a colour of ours, at `scale` times the layer's size.
     pub fn emit_tint(&mut self, layer: Layer, n: usize, at: Vec3, dir: Vec3, tint: Color, scale: f32) {
-        let pool = if layer.glow() { &mut self.glow } else { &mut self.soft };
+        let pool = self.pool(layer.pool());
         table::emit_tint(pool, layer, n, at, dir, tint, scale);
     }
 
@@ -259,7 +289,24 @@ impl Fx {
         if matter == Matter::Shield && lod > 0.0 {
             self.flash(at, ZAP_FLASH);
         }
+        if let Some(tone) = weapon.tone() {
+            if lod > 0.0 && matter != Matter::Shield {
+                let big = if weapon == Weapon::Beam { 0.5 } else { 0.3 };
+                self.energy(at + away * 0.05, tone, big, 1);
+            }
+        }
         lod
+    }
+
+    /// `n` baked bursts of energy at `at` in `tone`, `scale` times the
+    /// layer's size, each its own roll of the sheet.
+    pub fn energy(&mut self, at: Vec3, tone: f32, scale: f32, n: usize) {
+        let r = ::fx::recipe::Recipe {
+            tone,
+            ..table::recipe(Layer::Plasma)
+        };
+        let pool = self.pool(Layer::Plasma.pool());
+        table::emit_recipe(pool, &r, n, at, Vec3::Y, Color::WHITE, scale);
     }
 
     /// [`Fx::impact`] on the map's face `hit`, and the mark the blow leaves
@@ -320,26 +367,37 @@ impl Fx {
 #[derive(Component)]
 pub struct FlashLight(usize);
 
-/// One of the two particle meshes.
+/// One of the particle meshes.
 #[derive(Component)]
-pub struct FxMesh {
-    glow: bool,
-}
+pub struct FxMesh(Which);
 
 /// Both pools, their meshes and materials over the generated sheet, the
 /// flash lights, the marks. Always drawn (collapsed quads until something
 /// flies), so their pipelines compile at load and not on the first spark.
+#[allow(clippy::too_many_arguments)]
 pub fn setup(
     mut commands: Commands,
     tier: Res<Tier>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut sheet_mats: ResMut<Assets<SheetMaterial>>,
+    mut shock_mats: ResMut<Assets<shell::ShockMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    assets: Res<AssetServer>,
 ) {
     let caps = Caps::for_effects(tier.gfx.effects);
     let sheet = images.add(atlas::sprite_image());
     let glow_mesh = meshes.add(pool_mesh(caps.glow));
     let soft_mesh = meshes.add(pool_mesh(caps.soft));
+    let cloud_mesh = meshes.add(sheets::sheet_mesh(CLOUD));
+    let boom_mesh = meshes.add(sheets::sheet_mesh(BOOM));
+    // The sun's shadow on the smoke where the frame has room for the read:
+    // not under WebGL2, whose fragment binds are counted (`gpu.rs`).
+    let shadowed = !crate::look::gpu::WEBGL2;
+    let (ca, cb) = sheets::load(&assets, "cloud");
+    let cloud_mat = sheet_mats.add(sheets::material(ca, cb, shadowed));
+    let (ba, bb) = sheets::load(&assets, "boom");
+    let boom_mat = sheet_mats.add(sheets::material(ba, bb, shadowed));
     let glow = mats.add(StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: Some(sheet.clone()),
@@ -374,9 +432,12 @@ pub fn setup(
             Visibility::Hidden,
         ));
     }
-    for (is_glow, mesh, mat) in [(false, soft_mesh.clone(), soft), (true, glow_mesh.clone(), glow)] {
+    for (which, mesh, mat) in [
+        (Which::Soft, soft_mesh.clone(), soft),
+        (Which::Glow, glow_mesh.clone(), glow),
+    ] {
         commands.spawn((
-            FxMesh { glow: is_glow },
+            FxMesh(which),
             Mesh3d(mesh),
             MeshMaterial3d(mat),
             Transform::IDENTITY,
@@ -385,6 +446,21 @@ pub fn setup(
             NotShadowCaster,
         ));
     }
+    for (which, mesh, mat) in [
+        (Which::Cloud, cloud_mesh.clone(), cloud_mat),
+        (Which::Boom, boom_mesh.clone(), boom_mat),
+    ] {
+        commands.spawn((
+            FxMesh(which),
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            Transform::IDENTITY,
+            Visibility::Visible,
+            NoFrustumCulling,
+            NotShadowCaster,
+        ));
+    }
+    shell::setup(&mut commands, &mut meshes, &mut shock_mats);
     let mut marks = marks::Marks::new(caps.marks);
     marks::setup(&mut commands, &mut marks, &mut meshes, &mut mats, &mut images);
     let mut chips = chips::Chips::default();
@@ -392,6 +468,8 @@ pub fn setup(
     commands.insert_resource(Fx {
         glow: Pool::new(caps.glow, false),
         soft: Pool::new(caps.soft, true),
+        cloud: Pool::with_sheet(CLOUD, true, sheets::CLOUD),
+        boom: Pool::with_sheet(BOOM, true, sheets::BOOM),
         marks,
         chips,
         near: surface::Near::default(),
@@ -401,6 +479,8 @@ pub fn setup(
         flashes: [Flash::default(); MAX_LIGHTS],
         glow_mesh,
         soft_mesh,
+        cloud_mesh,
+        boom_mesh,
         eye: Vec3::ZERO,
         cam: Quat::IDENTITY,
         rounds: [0; 64],
@@ -409,6 +489,8 @@ pub fn setup(
         was: bodies::Was::default(),
         hulls: [hulls::Hull::default(); 16],
         burning: [blast::Burn::default(); 4],
+        trailers: [blast::Trailer::default(); 16],
+        shocks: [shell::Shock::default(); shell::SHELLS],
         shock: None,
         own_rounds: Default::default(),
         own_flash: [None; 2],
@@ -520,8 +602,8 @@ fn hurt(fx: &mut Fx, scene: &Scene, e: &EventState, feet: Vec3) {
 
 /// Every frame, after the camera is placed: the pools step and are copied
 /// into their meshes, the wrecks burn, the lights dim, the marks fade, the
-/// chips fly.
-#[allow(clippy::type_complexity)]
+/// chips fly, the shocks spread.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn draw(
     time: Res<Time>,
     mut fx: ResMut<Fx>,
@@ -530,6 +612,8 @@ pub fn draw(
     mut q: Query<(&FxMesh, &mut Transform, &mut GlobalTransform), Without<FlashLight>>,
     mut lights: Query<(&FlashLight, &mut PointLight, &mut Transform, &mut Visibility), Without<FxMesh>>,
     muzzles: Res<crate::look::viewmodel::ViewMuzzles>,
+    mut shells: Query<(&shell::ShockShell, &mut Transform, &mut Visibility), (Without<FxMesh>, Without<FlashLight>)>,
+    mut shock_mats: ResMut<Assets<shell::ShockMaterial>>,
 ) {
     // A hitch must not fling everything a hundred metres.
     let dt = time.delta_secs().min(0.1);
@@ -542,6 +626,8 @@ pub fn draw(
         Err(_) => fx.own_flash = [None; 2],
     }
     blast::burn(fx, dt);
+    blast::trail(fx, dt);
+    shell::draw(&mut fx.shocks, dt, &mut shells, &mut shock_mats);
     if let Some(mesh) = fx.marks.fade(dt).then(|| meshes.get_mut(fx.marks.mesh())).flatten() {
         fx.marks.write(mesh);
     }
@@ -572,6 +658,8 @@ pub fn draw(
     let Ok((cam_gt, _)) = cams.single() else {
         fx.glow.step(dt);
         fx.soft.step(dt);
+        fx.cloud.step(dt);
+        fx.boom.step(dt);
         return;
     };
     let cam = pool::cam(cam_gt);
@@ -580,12 +668,15 @@ pub fn draw(
     fx.cam = cam_gt.compute_transform().rotation;
     let ahead: Vec3 = cam_gt.forward().into();
     for (m, mut tf, mut gt) in &mut q {
-        // The additive mesh sorts at the eye, the soft one a metre ahead of
-        // it: transparent draws go far to near, so sparks land over dust.
-        let (pool, handle, anchor) = if m.glow {
-            (&mut fx.glow, &fx.glow_mesh, eye)
-        } else {
-            (&mut fx.soft, &fx.soft_mesh, eye + ahead)
+        // Transparent draws go far to near, and each mesh sorts where its
+        // anchor stands: the baked clouds two metres ahead of the eye, the
+        // soft dust one, the explosions half, the additive sparks at the
+        // eye, so fire lands over smoke and sparks over all of it.
+        let (pool, handle, anchor) = match m.0 {
+            Which::Glow => (&mut fx.glow, &fx.glow_mesh, eye),
+            Which::Soft => (&mut fx.soft, &fx.soft_mesh, eye + ahead),
+            Which::Cloud => (&mut fx.cloud, &fx.cloud_mesh, eye + ahead * 2.0),
+            Which::Boom => (&mut fx.boom, &fx.boom_mesh, eye + ahead * 0.5),
         };
         if tf.translation != anchor {
             tf.translation = anchor;
@@ -595,7 +686,14 @@ pub fn draw(
             continue;
         }
         if let Some(mesh) = meshes.get_mut(handle) {
-            pool.write(mesh, &cam, anchor);
+            match m.0 {
+                Which::Cloud | Which::Boom => {
+                    sheets::write(pool, mesh, &cam, anchor);
+                }
+                _ => {
+                    pool.write(mesh, &cam, anchor);
+                }
+            }
         }
     }
     // Stepped after they are written, so everything thrown this frame is
@@ -603,4 +701,6 @@ pub fn draw(
     // (a browser on a weak GPU) would otherwise never be seen.
     fx.glow.step(dt);
     fx.soft.step(dt);
+    fx.cloud.step(dt);
+    fx.boom.step(dt);
 }

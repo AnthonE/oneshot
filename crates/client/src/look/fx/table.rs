@@ -10,11 +10,12 @@
 
 use bevy::prelude::*;
 use sim::arms::{
-    AR, BEAM_RIFLE, BR, CANNON, CARBINE, ION_PISTOL, ION_RIFLE, LAUNCHER, MAGNUM, SHARDS, SHOTGUN, SMG, SNIPER,
+    AR, BEAM_RIFLE, BR, CANNON, CARBINE, ION_PISTOL, ION_RIFLE, LAUNCHER, MAGNUM, ROCKET, SHARDS, SHOTGUN, SMG, SNIPER,
 };
 
 use super::atlas::{ARC, FLAME, GLOW, PUFF, RING, SMOKE, SPECK, STAR, STREAK};
 use super::pool::{Orient, Particle, Pool};
+use super::sheets::{self, Strip, TONE_FIRE};
 use ::fx::recipe::Recipe;
 use std::sync::OnceLock;
 
@@ -32,14 +33,29 @@ pub enum Weapon {
     /// The sword's cut.
     Blade,
     Blast,
+    /// The carbine's green round: energy, a scorch.
+    Carbine,
+    /// The beam rifle's beam: energy, a bigger scorch.
+    Beam,
 }
 
 impl Weapon {
     pub fn of_arm(arm: u8) -> Weapon {
         match arm {
             SHOTGUN => Weapon::Pellet,
-            SNIPER | BEAM_RIFLE => Weapon::Sniper,
+            SNIPER => Weapon::Sniper,
+            CARBINE => Weapon::Carbine,
+            BEAM_RIFLE => Weapon::Beam,
             _ => Weapon::Bullet,
+        }
+    }
+
+    /// An energy weapon's tone (`sheets`), for the burst its round leaves.
+    pub fn tone(self) -> Option<f32> {
+        match self {
+            Weapon::Carbine => Some(sheets::TONE_GREEN),
+            Weapon::Beam => Some(sheets::TONE_PINK),
+            _ => None,
         }
     }
 }
@@ -91,11 +107,44 @@ pub enum Layer {
     Shock,
     /// A muzzle's tongue of fire.
     Tongue,
+    /// A baked puff of smoke (`sheets::SMOKE`): lit six ways, rolling.
+    Cloud,
+    /// A baked cloud of dust off the ground (`sheets::DUST`), low and wide.
+    DustCloud,
+    /// Baked tongues of fire (`sheets::FIRE`), for a thing that burns.
+    Flame,
+    /// A baked burst of energy (`sheets::PLASMA`): heat only, in a tone.
+    Plasma,
+    /// A gun's baked flash (`sheets::FLASH`): a core and petals, four frames.
+    MuzzleFlash,
+    /// An energy gun's baked flash (`sheets::BLOOM`): a disc and a ring.
+    Bloom,
+    /// The baked breath of smoke off a muzzle (`sheets::WISP`).
+    Wisp,
+    /// A baked explosion (`sheets::EXPLOSION`): fire to soot, in place.
+    Boom,
+    /// Smaller explosions flung off the main one, each its own roll.
+    Fireballs,
+    /// Glowing specks that drift and fall long after the sparks are gone.
+    Embers,
+}
+
+/// Which pool a layer draws in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Which {
+    /// Additive, unlit, HDR: light.
+    Glow,
+    /// Blended, lit like the world, sorted: matter, on the generated sheet.
+    Soft,
+    /// The baked cloud sheet (`sheets::CLOUD`).
+    Cloud,
+    /// The baked explosions (`sheets::BOOM`).
+    Boom,
 }
 
 impl Layer {
     /// Every layer, in the order the knobs name them.
-    pub const ALL: [Layer; 15] = [
+    pub const ALL: [Layer; 25] = [
         Layer::Sparks,
         Layer::Flash,
         Layer::Dust,
@@ -111,6 +160,16 @@ impl Layer {
         Layer::BloodDrops,
         Layer::Shock,
         Layer::Tongue,
+        Layer::Cloud,
+        Layer::DustCloud,
+        Layer::Flame,
+        Layer::Plasma,
+        Layer::MuzzleFlash,
+        Layer::Bloom,
+        Layer::Wisp,
+        Layer::Boom,
+        Layer::Fireballs,
+        Layer::Embers,
     ];
 
     /// Its name, as a knob names it (`Sparks.speed=4,12`).
@@ -131,6 +190,16 @@ impl Layer {
             Layer::BloodDrops => "BloodDrops",
             Layer::Shock => "Shock",
             Layer::Tongue => "Tongue",
+            Layer::Cloud => "Cloud",
+            Layer::DustCloud => "DustCloud",
+            Layer::Flame => "Flame",
+            Layer::Plasma => "Plasma",
+            Layer::MuzzleFlash => "MuzzleFlash",
+            Layer::Bloom => "Bloom",
+            Layer::Wisp => "Wisp",
+            Layer::Boom => "Boom",
+            Layer::Fireballs => "Fireballs",
+            Layer::Embers => "Embers",
         }
     }
 
@@ -142,17 +211,52 @@ impl Layer {
     /// Whether this layer is light (the additive pool) or matter (the alpha
     /// pool, lit like the world).
     pub fn glow(self) -> bool {
-        matches!(
-            self,
+        self.pool() == Which::Glow
+    }
+
+    /// The pool it draws in.
+    pub fn pool(self) -> Which {
+        match self {
             Layer::Sparks
-                | Layer::Flash
-                | Layer::Fireball
-                | Layer::Arcs
-                | Layer::Zap
-                | Layer::ShieldSparks
-                | Layer::Shock
-                | Layer::Tongue
-        )
+            | Layer::Flash
+            | Layer::Fireball
+            | Layer::Arcs
+            | Layer::Zap
+            | Layer::ShieldSparks
+            | Layer::Shock
+            | Layer::Tongue
+            | Layer::Embers => Which::Glow,
+            Layer::Dust
+            | Layer::Grit
+            | Layer::Smoke
+            | Layer::GunSmoke
+            | Layer::Plume
+            | Layer::Hurt
+            | Layer::BloodDrops => Which::Soft,
+            Layer::Cloud
+            | Layer::DustCloud
+            | Layer::Flame
+            | Layer::Plasma
+            | Layer::MuzzleFlash
+            | Layer::Bloom
+            | Layer::Wisp => Which::Cloud,
+            Layer::Boom | Layer::Fireballs => Which::Boom,
+        }
+    }
+
+    /// A baked layer's strip on its sheet.
+    pub fn strip(self) -> Option<Strip> {
+        Some(match self {
+            Layer::Cloud => sheets::SMOKE,
+            Layer::DustCloud => sheets::DUST,
+            Layer::Flame => sheets::FIRE,
+            Layer::Plasma => sheets::PLASMA,
+            Layer::MuzzleFlash => sheets::FLASH,
+            Layer::Bloom => sheets::BLOOM,
+            Layer::Wisp => sheets::WISP,
+            Layer::Boom | Layer::Fireballs => sheets::EXPLOSION,
+            _ => return None,
+        })
     }
 }
 
@@ -199,13 +303,19 @@ pub fn effect(weapon: Weapon, matter: Matter) -> EffectDef {
         (Weapon::Blade, Dirt) => of(&[(Dust, 4), (Grit, 6)], 3),
         (Weapon::Bullet, Metal | Hull) => of(&[(Sparks, 12), (Flash, 1), (Dust, 1)], 2),
         (Weapon::Bullet, Concrete) => of(&[(Sparks, 4), (Flash, 1), (Dust, 2), (Grit, 6)], 4),
-        (Weapon::Bullet, Dirt) => of(&[(Dust, 3), (Grit, 8)], 0),
+        (Weapon::Bullet, Dirt) => of(&[(Dust, 2), (Grit, 8), (DustCloud, 1)], 0),
         (Weapon::Pellet, Metal | Hull) => of(&[(Sparks, 4), (Flash, 1)], 1),
         (Weapon::Pellet, Concrete) => of(&[(Sparks, 1), (Dust, 1), (Grit, 2)], 2),
         (Weapon::Pellet, Dirt) => of(&[(Dust, 1), (Grit, 3)], 0),
         (Weapon::Sniper, Metal | Hull) => of(&[(Sparks, 24), (Flash, 2), (Dust, 2)], 4),
-        (Weapon::Sniper, Concrete) => of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (Plume, 2)], 8),
-        (Weapon::Sniper, Dirt) => of(&[(Dust, 6), (Grit, 14), (Plume, 2)], 2),
+        (Weapon::Sniper, Concrete) => of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (DustCloud, 2)], 8),
+        (Weapon::Sniper, Dirt) => of(&[(Dust, 6), (Grit, 14), (DustCloud, 2)], 2),
+        // Energy: a crack of light, a few sparks, a breath of dust, and
+        // the burst in the weapon's own tone (`Fx::impact`).
+        (Weapon::Carbine, Metal | Hull | Concrete) => of(&[(Zap, 1), (Sparks, 5), (Dust, 1)], 1),
+        (Weapon::Carbine, Dirt) => of(&[(Zap, 1), (Dust, 2), (Grit, 4)], 0),
+        (Weapon::Beam, Metal | Hull | Concrete) => of(&[(Zap, 2), (Sparks, 10), (Dust, 2)], 2),
+        (Weapon::Beam, Dirt) => of(&[(Zap, 2), (Dust, 4), (Grit, 8), (DustCloud, 1)], 0),
     }
 }
 
@@ -260,6 +370,9 @@ pub fn built(layer: Layer) -> Recipe {
         orient: Orient::Billboard,
         cell: PUFF,
         cells: 1,
+        frames: 0,
+        tone: TONE_FIRE,
+        glow: 1.0,
         speed: (0.0, 0.0),
         spray: 0.5,
         up: 0.0,
@@ -470,8 +583,9 @@ pub fn built(layer: Layer) -> Recipe {
             life: (0.28, 0.32),
             size: (0.4, 0.5),
             grow: 13.0,
-            c0: [3.0, 2.4, 1.6, 0.6],
-            c1: [0.6, 0.4, 0.2, 0.0],
+            c0: [3.0, 3.0, 3.0, 0.6],
+            c1: [0.6, 0.6, 0.6, 0.0],
+            tinted: true,
             ..base
         },
         Layer::Tongue => Recipe {
@@ -488,6 +602,147 @@ pub fn built(layer: Layer) -> Recipe {
             len_max: 0.6,
             ..base
         },
+        // The baked sheets: each plays its strip once over its life. The
+        // sheet does the rolling and the thinning, so a puff hardly grows.
+        Layer::Cloud => Recipe {
+            speed: (0.3, 1.2),
+            spray: 0.6,
+            up: 0.3,
+            gravity: -0.5,
+            drag: 1.6,
+            life: (1.8, 3.0),
+            size: (0.45, 0.7),
+            grow: 1.6,
+            c0: [1.0, 1.0, 1.0, 0.9],
+            c1: [1.2, 1.2, 1.2, 0.0],
+            tinted: true,
+            spin: 0.25,
+            ..strip(base, sheets::SMOKE)
+        },
+        Layer::DustCloud => Recipe {
+            speed: (0.8, 2.4),
+            spray: 0.4,
+            up: 0.2,
+            gravity: 0.2,
+            drag: 2.4,
+            life: (1.0, 1.8),
+            size: (0.12, 0.18),
+            grow: 1.8,
+            c0: [0.95, 0.95, 0.95, 0.85],
+            c1: [1.0, 1.0, 1.0, 0.0],
+            tinted: true,
+            spin: 0.1,
+            ..strip(base, sheets::DUST)
+        },
+        Layer::Flame => Recipe {
+            glow: 2.0,
+            speed: (0.0, 0.4),
+            spray: 0.5,
+            gravity: -1.5,
+            drag: 2.0,
+            life: (0.45, 0.7),
+            size: (0.3, 0.45),
+            grow: 1.3,
+            c0: [0.2, 0.2, 0.2, 0.8],
+            c1: [0.3, 0.3, 0.3, 0.0],
+            ..strip(base, sheets::FIRE)
+        },
+        Layer::Plasma => Recipe {
+            tone: sheets::TONE_PLASMA,
+            glow: 3.0,
+            life: (0.3, 0.45),
+            size: (0.5, 0.7),
+            grow: 1.8,
+            c0: [1.0, 1.0, 1.0, 1.0],
+            c1: [1.0, 1.0, 1.0, 0.2],
+            spin: 1.0,
+            ..strip(base, sheets::PLASMA)
+        },
+        Layer::MuzzleFlash => Recipe {
+            glow: 3.5,
+            life: (0.05, 0.07),
+            size: (0.22, 0.3),
+            grow: 1.3,
+            c0: [1.0, 1.0, 1.0, 1.0],
+            c1: [1.0, 1.0, 1.0, 1.0],
+            ..strip(base, sheets::FLASH)
+        },
+        Layer::Bloom => Recipe {
+            tone: sheets::TONE_PLASMA,
+            glow: 3.0,
+            life: (0.06, 0.09),
+            size: (0.16, 0.22),
+            grow: 1.5,
+            c0: [1.0, 1.0, 1.0, 1.0],
+            c1: [1.0, 1.0, 1.0, 1.0],
+            ..strip(base, sheets::BLOOM)
+        },
+        Layer::Wisp => Recipe {
+            speed: (0.5, 1.4),
+            spray: 0.8,
+            gravity: -0.4,
+            drag: 2.5,
+            life: (0.7, 1.1),
+            size: (0.12, 0.18),
+            grow: 2.0,
+            c0: [0.6, 0.6, 0.6, 0.5],
+            c1: [0.65, 0.65, 0.65, 0.0],
+            spin: 0.5,
+            ..strip(base, sheets::WISP)
+        },
+        Layer::Boom => Recipe {
+            glow: 2.5,
+            speed: (0.0, 0.5),
+            spray: 0.4,
+            gravity: -0.6,
+            drag: 1.5,
+            life: (1.3, 1.7),
+            size: (1.8, 2.4),
+            grow: 1.5,
+            c0: [0.28, 0.26, 0.25, 1.0],
+            c1: [0.4, 0.4, 0.4, 0.0],
+            spin: 0.15,
+            ..strip(base, sheets::EXPLOSION)
+        },
+        Layer::Fireballs => Recipe {
+            glow: 2.2,
+            speed: (2.5, 5.5),
+            spray: 0.35,
+            up: 1.5,
+            gravity: -0.4,
+            drag: 2.6,
+            life: (0.9, 1.3),
+            size: (0.8, 1.2),
+            grow: 1.6,
+            c0: [0.28, 0.26, 0.25, 1.0],
+            c1: [0.4, 0.4, 0.4, 0.0],
+            spin: 0.3,
+            ..strip(base, sheets::EXPLOSION)
+        },
+        Layer::Embers => Recipe {
+            cell: GLOW,
+            speed: (2.0, 7.0),
+            spray: 0.3,
+            up: 2.0,
+            gravity: 3.0,
+            drag: 1.2,
+            life: (0.8, 1.8),
+            size: (0.012, 0.02),
+            grow: 0.6,
+            c0: [10.0, 4.0, 0.8, 1.0],
+            c1: [2.0, 0.4, 0.05, 0.0],
+            ..base
+        },
+    }
+}
+
+/// `base` on a baked strip: its first cell, its variants, its frames.
+fn strip(base: Recipe, s: Strip) -> Recipe {
+    Recipe {
+        cell: s.cell,
+        cells: s.variants,
+        frames: s.frames,
+        ..base
     }
 }
 
@@ -496,6 +751,13 @@ pub fn built(layer: Layer) -> Recipe {
 /// `dir`: the surface they came off.
 pub fn emit(pool: &mut Pool, layer: Layer, n: usize, at: Vec3, dir: Vec3, matter: Matter) {
     emit_tint(pool, layer, n, at, dir, dust_tint(matter), 1.0);
+}
+
+/// Throw `n` of a recipe of the caller's own (a layer's, retuned: another
+/// tone, another size) from `at` around `dir`.
+pub fn emit_recipe(pool: &mut Pool, r: &Recipe, n: usize, at: Vec3, dir: Vec3, tint: Color, scale: f32) {
+    let t = tint.to_linear();
+    ::fx::recipe::emit(pool, r, n, at.into(), dir.into(), [t.red, t.green, t.blue], scale);
 }
 
 /// [`emit`] in a colour of the caller's, at `scale` times the layer's size.
@@ -545,9 +807,28 @@ pub fn set_knobs(text: &str) -> Result<(), String> {
     KNOBS.set(out).map_err(|_| "knobs are set once a run".to_string())
 }
 
+/// What a gun's muzzle puts out: burning powder (a baked flash of petals,
+/// a tongue of fire, a breath of smoke) or energy (a baked bloom in a
+/// tone, no smoke).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Flash {
+    Powder,
+    Energy(f32),
+}
+
+/// What a gun throws out of its port each round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Casing {
+    None,
+    Brass,
+    Shell,
+}
+
 /// A gun's look when it fires.
 #[derive(Clone, Copy, Debug)]
 pub struct GunLook {
+    pub flash: Flash,
+    pub casing: Casing,
     /// The tracer's colour, linear HDR, at its head and as it goes.
     pub c0: [f32; 4],
     pub c1: [f32; 4],
@@ -567,6 +848,8 @@ pub struct GunLook {
 }
 
 const RIFLE: GunLook = GunLook {
+    flash: Flash::Powder,
+    casing: Casing::Brass,
     c0: [6.0, 3.6, 1.1, 0.9],
     c1: [3.5, 1.8, 0.5, 0.5],
     every: 1,
@@ -618,6 +901,7 @@ pub fn gun(arm: u8) -> GunLook {
             ..RIFLE
         },
         SHOTGUN => GunLook {
+            casing: Casing::Shell,
             every: 3,
             mps: 220.0,
             len_m: 2.5,
@@ -629,6 +913,8 @@ pub fn gun(arm: u8) -> GunLook {
         },
         // Green rounds, a green flash.
         CARBINE => GunLook {
+            flash: Flash::Energy(sheets::TONE_GREEN),
+            casing: Casing::None,
             c0: [2.0, 9.0, 3.0, 0.9],
             c1: [0.6, 3.5, 1.0, 0.5],
             flash_c: [3.0, 9.0, 3.5, 1.0],
@@ -637,6 +923,8 @@ pub fn gun(arm: u8) -> GunLook {
         },
         // A beam: pink-violet, all of its line in a frame.
         BEAM_RIFLE => GunLook {
+            flash: Flash::Energy(sheets::TONE_PINK),
+            casing: Casing::None,
             c0: [9.0, 3.0, 14.0, 1.0],
             c1: [3.0, 0.8, 5.0, 0.6],
             flash_c: [8.0, 3.0, 12.0, 1.0],
@@ -650,18 +938,24 @@ pub fn gun(arm: u8) -> GunLook {
         },
         // What flies is drawn in flight (`flying.rs`): only the muzzle here.
         ION_RIFLE | ION_PISTOL => GunLook {
+            flash: Flash::Energy(sheets::TONE_PLASMA),
+            casing: Casing::None,
             flash_c: [2.0, 5.0, 14.0, 1.0],
             flash_scale: 0.8,
             light_lm: 90_000.0,
             ..RIFLE
         },
         SHARDS => GunLook {
+            flash: Flash::Energy(sheets::TONE_PINK),
+            casing: Casing::None,
             flash_c: PINK,
             flash_scale: 0.8,
             light_lm: 90_000.0,
             ..RIFLE
         },
         CANNON => GunLook {
+            flash: Flash::Energy(sheets::TONE_GREEN),
+            casing: Casing::None,
             flash_c: [3.0, 12.0, 4.0, 1.0],
             stars: 3,
             flash_scale: 2.2,
@@ -669,9 +963,14 @@ pub fn gun(arm: u8) -> GunLook {
             ..RIFLE
         },
         LAUNCHER => GunLook {
+            casing: Casing::None,
             stars: 3,
             flash_scale: 1.8,
             light_lm: 200_000.0,
+            ..RIFLE
+        },
+        ROCKET => GunLook {
+            casing: Casing::None,
             ..RIFLE
         },
         _ => RIFLE,
@@ -691,7 +990,7 @@ const STAR_LIFE_S: (f32, f32) = (0.05, 0.08);
 /// Our own gun's: a frame or two. A star is a mark in the world, and the
 /// gun in view turns with the camera, so a longer one is left behind as
 /// the view swings or kicks.
-const OWN_STAR_LIFE_S: (f32, f32) = (0.025, 0.04);
+pub const OWN_STAR_LIFE_S: (f32, f32) = (0.025, 0.04);
 
 /// Our own gun's flash, at the muzzle in view: [`stars`] that burn for
 /// [`OWN_STAR_LIFE_S`].
