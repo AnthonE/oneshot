@@ -21,6 +21,8 @@ use sim::events::Kind;
 
 use client_net::session::{refuse_why, Session};
 
+use crate::plate;
+
 const FEED_S: f32 = 5.0;
 const FEED_LINES: usize = 5;
 const HIT_S: f32 = 0.22;
@@ -37,9 +39,10 @@ const DAMAGE_R: f32 = 90.0;
 /// The HUD's blue: its type, a box's fill (lit for what's picked, dim for
 /// what isn't) and edge, a round in the magazine and one spent.
 pub const INK: Color = Color::srgba(0.74, 0.88, 1.0, 0.96);
-const FILL: Color = Color::srgba(0.13, 0.36, 0.72, 0.62);
-const FILL_DIM: Color = Color::srgba(0.07, 0.17, 0.34, 0.5);
-const EDGE: Color = Color::srgba(0.52, 0.78, 1.0, 0.9);
+const INK_DIM: Color = Color::srgba(0.74, 0.88, 1.0, 0.7);
+/// A plate's tint (`plate.rs`), lit and dim.
+const PLATE: Color = Color::srgba(0.3, 0.6, 1.0, 1.0);
+const PLATE_DIM: Color = Color::srgba(0.3, 0.5, 0.86, 0.85);
 const EDGE_DIM: Color = Color::srgba(0.4, 0.6, 0.85, 0.45);
 pub const PIP: Color = Color::srgba(0.6, 0.84, 1.0, 0.96);
 const PIP_SPENT: Color = Color::srgba(0.45, 0.65, 0.9, 0.22);
@@ -59,15 +62,8 @@ const SCORE_W: f32 = 150.0;
 const SHIELD_LOW_PCT: f32 = 25.0;
 /// Rounds a magazine may show; a bigger one (a battery) is a number.
 const PIPS: usize = 48;
-/// A box's corners: square on one diagonal, cut on the other.
-fn chamfer(cut: f32) -> BorderRadius {
-    BorderRadius {
-        top_left: Val::Px(2.0),
-        top_right: Val::Px(cut),
-        bottom_right: Val::Px(2.0),
-        bottom_left: Val::Px(cut),
-    }
-}
+/// The shield plate's inset to its level: its glow and edge, and a gap.
+const SHIELD_PAD: f32 = 8.0;
 
 /// Names by slot (from `Msg::Seat`), the feed, and the markers' clocks.
 #[derive(Resource, Default)]
@@ -169,6 +165,9 @@ pub struct ShieldFrame;
 pub struct HurtRim;
 #[derive(Component)]
 pub struct HealthBar;
+/// Health's track: shown only once health has been taken.
+#[derive(Component)]
+pub struct HealthLine;
 /// A grenade's box (0 frags, 1 stickies), and its count.
 #[derive(Component)]
 pub struct GrenBox(pub u8);
@@ -191,9 +190,11 @@ pub struct HeatBox(pub u8);
 pub struct HeatFill(pub u8);
 #[derive(Component)]
 pub struct GunNote(pub u8);
-/// The gun on our back, named beside the one in hand.
+/// The gun on our back, named on a dim plate beside the one in hand.
 #[derive(Component)]
 pub struct BackGun;
+#[derive(Component)]
+pub struct BackPlate;
 /// Driving or riding: how to get out.
 #[derive(Component)]
 pub struct RideText;
@@ -245,23 +246,25 @@ fn text(font: TextFont) -> impl Bundle {
     tinted(font, Color::srgba(1.0, 1.0, 1.0, 0.92))
 }
 
+/// A thin dark shadow under the HUD's type: legible on a bright sky
+/// without doubling it.
+pub const SHADOW: TextShadow = TextShadow {
+    offset: Vec2::new(1.0, 1.5),
+    color: Color::srgba(0.0, 0.02, 0.06, 0.55),
+};
+
 /// A HUD line in `font` and `color`.
 fn tinted(font: TextFont, color: Color) -> impl Bundle {
-    (Text::new(""), font, TextColor(color), TextShadow::default())
+    (Text::new(""), font, TextColor(color), SHADOW)
 }
 
 /// A box in the HUD's blue: lit or dim, its corners cut by `cut`.
-fn boxed(lit: bool, cut: f32) -> (BackgroundColor, BorderColor, Node) {
-    (
-        BackgroundColor(if lit { FILL } else { FILL_DIM }),
-        BorderColor::all(if lit { EDGE } else { EDGE_DIM }),
-        Node {
-            border: UiRect::all(Val::Px(2.0)),
-            border_radius: chamfer(cut),
-            align_items: AlignItems::Center,
-            ..default()
-        },
-    )
+fn boxed(pad_x: f32, pad_y: f32) -> Node {
+    Node {
+        padding: UiRect::axes(Val::Px(pad_x), Val::Px(pad_y)),
+        align_items: AlignItems::Center,
+        ..default()
+    }
 }
 
 /// A grenade's mark: a frag's round shell, a sticky's glowing ball.
@@ -301,18 +304,20 @@ fn gun_panel(c: &mut ChildSpawnerCommands, hand: u8, right: bool) {
         },
     ))
     .with_children(|c| {
-        let (bg, edge, mut node) = boxed(true, 12.0);
-        node.padding = UiRect::axes(Val::Px(12.0), Val::Px(2.0));
+        let mut node = boxed(18.0, 6.0);
         node.column_gap = Val::Px(12.0);
-        node.min_height = Val::Px(36.0);
-        c.spawn((node, bg, edge)).with_children(|c| {
+        node.min_height = Val::Px(plate::BOX_MIN + 6.0);
+        let plate = if right { plate::BOX_R } else { plate::BOX };
+        c.spawn(node).with_children(|c| {
+            c.spawn(plate::behind(plate, PLATE));
             c.spawn((GunCount(hand), tinted(crate::ui::display(26.0), INK)));
             c.spawn((
                 Node {
                     width: Val::Px(2.0),
-                    height: Val::Px(22.0),
+                    height: Val::Px(24.0),
                     ..default()
                 },
+                UiTransform::from_rotation(Rot2::degrees(-20.0)),
                 BackgroundColor(EDGE_DIM),
             ));
             c.spawn((GunName(hand), tinted(crate::ui::display(15.0), INK)));
@@ -346,22 +351,23 @@ fn gun_panel(c: &mut ChildSpawnerCommands, hand: u8, right: bool) {
         c.spawn((
             HeatBox(hand),
             Node {
-                width: Val::Px(150.0),
-                height: Val::Px(8.0),
-                border: UiRect::all(Val::Px(1.5)),
+                width: Val::Px(160.0),
+                height: Val::Px(plate::BAR_MIN),
+                padding: UiRect::all(Val::Px(8.0)),
                 display: Display::None,
                 ..default()
             },
-            BackgroundColor(FILL_DIM),
-            BorderColor::all(EDGE_DIM),
-            children![(
-                HeatFill(hand),
-                Node {
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                BackgroundColor(HEAT),
-            )],
+            children![
+                plate::behind(plate::BAR, PLATE_DIM),
+                (
+                    HeatFill(hand),
+                    Node {
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    plate::image(plate::FILL, HEAT),
+                )
+            ],
         ));
         c.spawn((GunNote(hand), tinted(crate::ui::semibold(14.0), INK)));
     });
@@ -396,33 +402,29 @@ fn score_row(c: &mut ChildSpawnerCommands, i: u8) {
             ScoreSwatch(i),
             Node {
                 width: Val::Px(14.0),
-                height: Val::Px(14.0),
-                border: UiRect::all(Val::Px(1.5)),
-                border_radius: BorderRadius::all(Val::Px(2.0)),
+                height: Val::Px(16.0),
                 ..default()
             },
-            BackgroundColor(OTHER),
-            BorderColor::all(EDGE_DIM),
+            plate::image(plate::FILL, OTHER),
         ));
         c.spawn((
             Node {
                 width: Val::Px(SCORE_W),
-                height: Val::Px(16.0),
-                border: UiRect::all(Val::Px(1.5)),
-                border_radius: chamfer(6.0),
-                overflow: Overflow::clip(),
+                height: Val::Px(plate::BAR_MIN),
+                padding: UiRect::all(Val::Px(7.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-            BorderColor::all(EDGE_DIM),
-            children![(
-                ScoreFill(i),
-                Node {
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                BackgroundColor(OTHER),
-            )],
+            children![
+                plate::behind(plate::BAR, PLATE_DIM),
+                (
+                    ScoreFill(i),
+                    Node {
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    plate::image(plate::FILL, OTHER),
+                )
+            ],
         ));
         // Ours: a notch pointing at the row.
         c.spawn((
@@ -501,12 +503,13 @@ pub fn setup(mut commands: Commands) {
             })
             .with_children(|c| {
                 for kind in [0u8, 1] {
-                    let (bg, edge, mut node) = boxed(kind == 0, 10.0);
-                    node.padding = UiRect::axes(Val::Px(10.0), Val::Px(3.0));
+                    let mut node = boxed(16.0, 5.0);
                     node.column_gap = Val::Px(7.0);
-                    node.min_height = Val::Px(30.0);
-                    c.spawn((GrenBox(kind), node, bg, edge)).with_children(|c| {
-                        c.spawn((GrenCount(kind), tinted(crate::ui::display(20.0), INK)));
+                    node.min_height = Val::Px(plate::BOX_MIN);
+                    c.spawn(node).with_children(|c| {
+                        c.spawn((GrenBox(kind), plate::behind(plate::BOX, PLATE)));
+                        c.spawn((GrenCount(kind), tinted(crate::ui::display(22.0), INK)));
+                        c.spawn((Text::new("\u{d7}"), crate::ui::semibold(16.0), TextColor(INK), SHADOW));
                         c.spawn(gren_icon(kind));
                     });
                 }
@@ -535,11 +538,16 @@ pub fn setup(mut commands: Commands) {
             })
             .with_children(|c| {
                 c.spawn((
+                    BackPlate,
                     Node {
-                        margin: UiRect::top(Val::Px(10.0)),
-                        ..default()
+                        margin: UiRect::top(Val::Px(8.0)),
+                        min_height: Val::Px(plate::BAR_MIN),
+                        ..boxed(12.0, 4.0)
                     },
-                    children![(BackGun, tinted(crate::ui::display(13.0), EDGE_DIM))],
+                    children![
+                        plate::behind(plate::BAR, PLATE_DIM),
+                        (BackGun, tinted(crate::ui::display(13.0), INK_DIM))
+                    ],
                 ));
                 gun_panel(c, 0, true);
             });
@@ -557,51 +565,44 @@ pub fn setup(mut commands: Commands) {
             },
         ))
         .with_children(|c| {
-            c.spawn((
-                ShieldFrame,
-                Node {
-                    width: Val::Px(SHIELD_W),
-                    height: Val::Px(20.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius {
-                        top_left: Val::Px(2.0),
-                        top_right: Val::Px(12.0),
-                        bottom_right: Val::Px(2.0),
-                        bottom_left: Val::Px(2.0),
-                    },
-                    padding: UiRect::all(Val::Px(2.0)),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BackgroundColor(FILL_DIM),
-                BorderColor::all(EDGE),
-            ))
+            c.spawn(Node {
+                width: Val::Px(SHIELD_W),
+                height: Val::Px(30.0),
+                padding: UiRect::all(Val::Px(SHIELD_PAD)),
+                ..default()
+            })
             .with_children(|c| {
+                c.spawn((ShieldFrame, plate::behind(plate::BAR, PLATE)));
                 c.spawn((
                     ShieldBar,
                     Node {
                         height: Val::Percent(100.0),
                         width: Val::Percent(100.0),
-                        border_radius: BorderRadius {
-                            top_right: Val::Px(8.0),
-                            ..BorderRadius::all(Val::Px(1.0))
-                        },
                         ..default()
                     },
-                    BackgroundColor(SHIELD),
+                    plate::image(plate::FILL, SHIELD),
                 ));
-                // The tenths.
+                // The tenths, cut across the level.
+                let inner = SHIELD_W - 2.0 * SHIELD_PAD;
                 for i in 1..10 {
                     c.spawn((
                         Node {
                             width: Val::Px(2.0),
-                            ..abs(Some(i as f32 * SHIELD_W / 10.0 - 3.0), None, Some(0.0), Some(0.0))
+                            ..abs(
+                                Some(SHIELD_PAD + i as f32 * inner / 10.0 - 1.0),
+                                None,
+                                Some(SHIELD_PAD),
+                                Some(SHIELD_PAD),
+                            )
                         },
-                        BackgroundColor(Color::srgba(0.02, 0.06, 0.14, 0.55)),
+                        UiTransform::from_rotation(Rot2::degrees(-20.0)),
+                        BackgroundColor(Color::srgba(0.02, 0.06, 0.14, 0.6)),
                     ));
                 }
             });
             c.spawn((
+                HealthLine,
+                Visibility::Hidden,
                 Node {
                     width: Val::Px(SHIELD_W * 0.6),
                     height: Val::Px(5.0),
@@ -1214,7 +1215,7 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
 pub fn gear(
     link: NonSend<crate::LinkRes>,
     binds: Res<crate::binds::Binds>,
-    mut boxes: Query<(&GrenBox, &mut BackgroundColor, &mut BorderColor)>,
+    mut boxes: Query<(&GrenBox, &mut ImageNode)>,
     mut texts: Query<(
         &mut Text,
         Option<&GrenCount>,
@@ -1227,7 +1228,17 @@ pub fn gear(
     mut panels: Query<(&GunPanel, &mut Node), (Without<Pip>, Without<HeatBox>, Without<HeatFill>)>,
     mut pips: Query<(&Pip, &mut Node, &mut BackgroundColor), (Without<GrenBox>, Without<HeatBox>, Without<HeatFill>)>,
     mut heat_box: Query<(&HeatBox, &mut Node), (Without<HeatFill>, Without<GunPanel>)>,
-    mut heat: Query<(&HeatFill, &mut Node, &mut BackgroundColor), (Without<GrenBox>, Without<Pip>, Without<GunPanel>)>,
+    mut back_plate: Query<
+        &mut Node,
+        (
+            With<BackPlate>,
+            Without<HeatBox>,
+            Without<HeatFill>,
+            Without<GunPanel>,
+            Without<Pip>,
+        ),
+    >,
+    mut heat: Query<(&HeatFill, &mut Node, &mut ImageNode), (Without<GrenBox>, Without<Pip>, Without<GunPanel>)>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -1239,24 +1250,26 @@ pub fn gear(
         Some(gun_look(f.gun(), reloading)),
         f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
     ];
-    for (b, mut bg, mut edge) in boxes.iter_mut() {
-        let lit = f.gren_kind == b.0;
-        let (c, e) = if lit { (FILL, EDGE) } else { (FILL_DIM, EDGE_DIM) };
-        if bg.0 != c {
-            bg.0 = c;
-            *edge = BorderColor::all(e);
+    for (b, mut img) in boxes.iter_mut() {
+        let c = if f.gren_kind == b.0 { PLATE } else { PLATE_DIM };
+        if img.color != c {
+            img.color = c;
         }
     }
     for (p, mut n) in panels.iter_mut() {
         set_display(&mut n, hands[p.0 as usize & 1].is_some());
     }
     let back = f.guns[1 - f.cur as usize];
+    let carried = back.arm != 0 && !f.dual();
+    for mut n in back_plate.iter_mut() {
+        set_display(&mut n, carried);
+    }
     let out = binds.key(crate::binds::Action::Use);
     for (mut t, gc, count, name, note, bk, ride) in texts.iter_mut() {
         let hand = |h: u8| hands[h as usize & 1].as_ref();
         let v = if let Some(g) = gc {
             let n = if g.0 == 0 { f.grenades } else { f.stickies };
-            format!("{n} x")
+            n.to_string()
         } else if let Some(c) = count {
             hand(c.0).map_or_else(String::new, |g| g.count.clone())
         } else if let Some(n) = name {
@@ -1264,7 +1277,7 @@ pub fn gear(
         } else if let Some(n) = note {
             hand(n.0).map_or("", |g| g.note).to_string()
         } else if bk.is_some() {
-            if back.arm != 0 && !f.dual() {
+            if carried {
                 sim::arms::arm(back.arm).name.to_string()
             } else {
                 String::new()
@@ -1309,14 +1322,14 @@ pub fn gear(
             hands[h.0 as usize & 1].as_ref().is_some_and(|g| g.heat.is_some()),
         );
     }
-    for (h, mut n, mut bg) in heat.iter_mut() {
+    for (h, mut n, mut img) in heat.iter_mut() {
         let Some((u, venting)) = hands[h.0 as usize & 1].as_ref().and_then(|g| g.heat) else {
             continue;
         };
         n.width = Val::Percent(u * 100.0);
         let c = if venting { SHIELD_LOW } else { HEAT };
-        if bg.0 != c {
-            bg.0 = c;
+        if img.color != c {
+            img.color = c;
         }
     }
 }
@@ -1327,9 +1340,10 @@ pub fn gear(
 pub fn vitals(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
-    mut shield: Query<(&mut Node, &mut BackgroundColor), With<ShieldBar>>,
-    mut frame: Query<&mut BorderColor, With<ShieldFrame>>,
+    mut shield: Query<(&mut Node, &mut ImageNode), (With<ShieldBar>, Without<ShieldFrame>)>,
+    mut frame: Query<&mut ImageNode, With<ShieldFrame>>,
     mut health: Query<&mut Node, (With<HealthBar>, Without<ShieldBar>)>,
+    mut line: Query<&mut Visibility, With<HealthLine>>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -1338,21 +1352,28 @@ pub fn vitals(
     let f = s.core.own().0;
     let sh = (f.shield as f32 / SHIELD_MAX as f32 * 100.0).clamp(0.0, 100.0);
     let low = f.alive && sh < SHIELD_LOW_PCT;
-    if let Ok((mut n, mut bg)) = shield.single_mut() {
+    if let Ok((mut n, mut img)) = shield.single_mut() {
         n.width = Val::Percent(sh);
-        let c = if low { SHIELD_LOW } else { SHIELD };
-        if bg.0 != c {
-            bg.0 = c;
-        }
+        img.color = if low { SHIELD_LOW } else { SHIELD };
     }
     if let Ok(mut b) = frame.single_mut() {
         let c = if low {
             let u = 0.5 + 0.5 * (time.elapsed_secs() * 9.0).sin();
-            EDGE.mix(&SHIELD_LOW, u)
+            PLATE.mix(&SHIELD_LOW, u)
         } else {
-            EDGE
+            PLATE
         };
-        *b = BorderColor::all(c);
+        b.color = c;
+    }
+    if let Ok(mut v) = line.single_mut() {
+        let want = if f.alive && f.health < HEALTH_MAX {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *v != want {
+            *v = want;
+        }
     }
     if let Ok(mut n) = health.single_mut() {
         n.width = Val::Percent((f.health as f32 / HEALTH_MAX as f32 * 100.0).clamp(0.0, 100.0));
@@ -1369,8 +1390,8 @@ pub fn corner(
     st: Res<HudState>,
     mut texts: Query<(&mut Text, Option<&ClockText>, Option<&ModeText>, Option<&ScoreNum>)>,
     mut rows: Query<(&ScoreRow, &mut Node), Without<ScoreFill>>,
-    mut swatches: Query<(&ScoreSwatch, &mut BackgroundColor), (Without<ScoreFill>, Without<ScoreMine>)>,
-    mut fills: Query<(&ScoreFill, &mut Node, &mut BackgroundColor), (Without<ScoreRow>, Without<ScoreSwatch>)>,
+    mut swatches: Query<(&ScoreSwatch, &mut ImageNode), Without<ScoreFill>>,
+    mut fills: Query<(&ScoreFill, &mut Node, &mut ImageNode), (Without<ScoreRow>, Without<ScoreSwatch>)>,
     mut mine: Query<(&ScoreMine, &mut Visibility)>,
 ) {
     let s = link.0.session();
@@ -1437,15 +1458,15 @@ pub fn corner(
     for (r, mut n) in rows.iter_mut() {
         set_display(&mut n, (r.0 as usize) < shown.len());
     }
-    for (r, mut bg) in swatches.iter_mut() {
+    for (r, mut img) in swatches.iter_mut() {
         if let Some(&(_, c, _)) = shown.get(r.0 as usize) {
-            bg.0 = c;
+            img.color = c;
         }
     }
-    for (r, mut n, mut bg) in fills.iter_mut() {
+    for (r, mut n, mut img) in fills.iter_mut() {
         if let Some(&(v, c, _)) = shown.get(r.0 as usize) {
             n.width = Val::Percent((v as f32 / limit as f32 * 100.0).clamp(0.0, 100.0));
-            bg.0 = c;
+            img.color = c;
         }
     }
     for (r, mut v) in mine.iter_mut() {

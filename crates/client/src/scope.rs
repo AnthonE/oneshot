@@ -111,7 +111,6 @@ pub fn setup(mut commands: Commands, root: Query<Entity, With<hud::HudRoot>>) {
                 Node {
                     border: UiRect::all(Val::Px(FRAME_PX)),
                     border_radius: BorderRadius::all(Val::Px(CORNER_PX)),
-                    overflow: Overflow::clip(),
                     ..abs(pct(SIDE_PCT), pct(SIDE_PCT), pct(TOP_PCT), pct(TOP_PCT))
                 },
                 BorderColor::all(FRAME),
@@ -220,7 +219,7 @@ pub fn setup(mut commands: Commands, root: Query<Entity, With<hud::HudRoot>>) {
                     Text::new(""),
                     crate::ui::display(24.0),
                     TextColor(hud::INK),
-                    TextShadow::default(),
+                    hud::SHADOW,
                     abs(Val::Auto, Val::Px(18.0), Val::Auto, Val::Px(12.0)),
                 ));
             });

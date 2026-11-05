@@ -31,6 +31,7 @@ pub mod options;
 pub mod pad;
 pub mod party;
 pub mod pause;
+pub mod plate;
 pub mod pointer;
 pub mod pose;
 pub mod scope;
@@ -332,6 +333,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
+    .add_plugins(plate::plugin)
     .add_plugins(settings::plugin)
     // The graphics ladder after the settings it reads: its tier exists
     // before anything is spawned with it.
