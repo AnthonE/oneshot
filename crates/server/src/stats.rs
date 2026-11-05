@@ -77,6 +77,84 @@ pub fn medal_stat(id: u8) -> String {
     format!("medal.{}", medal::slug(id))
 }
 
+/// A daily or weekly challenge (Elo Pros' `challenges.py`): a goal over one
+/// of our stats, counted from the same reports. Elo Pros picks each day's
+/// and week's from this pool and says what they pay; we only declare them.
+pub struct Challenge {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub desc: &'static str,
+    /// A sum stat (added up over the period) or a max (reached in a match).
+    pub stat: &'static str,
+    pub goal: u64,
+    pub week: bool,
+}
+
+const fn day(id: &'static str, name: &'static str, desc: &'static str, stat: &'static str, goal: u64) -> Challenge {
+    Challenge {
+        id,
+        name,
+        desc,
+        stat,
+        goal,
+        week: false,
+    }
+}
+
+const fn week(id: &'static str, name: &'static str, desc: &'static str, stat: &'static str, goal: u64) -> Challenge {
+    Challenge {
+        id,
+        name,
+        desc,
+        stat,
+        goal,
+        week: true,
+    }
+}
+
+pub const CHALLENGES: &[Challenge] = &[
+    day("kills_25", "Twenty-five down", "Get 25 kills today", "kills", 25),
+    day("matches_3", "Three in", "Finish 3 matches today", "matches", 3),
+    day("win_1", "Take one", "Win a match today", "wins", 1),
+    day("assists_8", "Set them up", "Get 8 assists today", "assists", 8),
+    day(
+        "spree_5",
+        "On a roll",
+        "Kill 5 without dying in one life",
+        "best_spree",
+        5,
+    ),
+    day("double_1", "Two at once", "Get a Double Kill", "medal.double_kill", 1),
+    day(
+        "heads_10",
+        "Aim high",
+        "Get 10 headshot kills today",
+        "medal.headshot",
+        10,
+    ),
+    day(
+        "capture_1",
+        "Bring it home",
+        "Capture a flag in Capture the Flag",
+        "captures",
+        1,
+    ),
+    day("melee_5", "Up close", "Get 5 Beat Downs today", "medal.beat_down", 5),
+    week("kills_200", "Two hundred", "Get 200 kills this week", "kills", 200),
+    week("wins_10", "Ten wins", "Win 10 matches this week", "wins", 10),
+    week("matches_20", "Regular", "Finish 20 matches this week", "matches", 20),
+    week("captures_5", "Flag runner", "Capture 5 flags this week", "captures", 5),
+    week(
+        "returns_5",
+        "Home guard",
+        "Return your own flag 5 times this week",
+        "flag_returns",
+        5,
+    ),
+    week("triple_1", "Three at once", "Get a Triple Kill", "best_multi", 3),
+    week("sticks_10", "Stuck", "Get 10 sticky kills this week", "medal.stick", 10),
+];
+
 pub struct Achievement {
     pub id: &'static str,
     pub name: &'static str,
@@ -453,7 +531,14 @@ pub fn declaration() -> Value {
                    "format": if b.time_ms { "time_ms" } else { "number" }})
         })
         .collect();
-    json!({"stats": stats, "achievements": achievements, "boards": boards})
+    let challenges: Vec<Value> = CHALLENGES
+        .iter()
+        .map(|c| {
+            json!({"id": c.id, "name": c.name, "desc": c.desc, "stat": c.stat, "goal": c.goal,
+                   "every": if c.week { "week" } else { "day" }})
+        })
+        .collect();
+    json!({"stats": stats, "achievements": achievements, "boards": boards, "challenges": challenges})
 }
 
 /// One person's part in one match, as the sim thread saw it.
@@ -639,6 +724,30 @@ mod tests {
         for b in boards {
             let id = b["id"].as_str().unwrap();
             assert!(stat_ok(id) && !fields.contains(&id) && !refused.contains(&id), "{id}");
+        }
+        // Challenges (challenges.validate): over a declared sum or max stat,
+        // by day or week, each id once.
+        let aggs: std::collections::BTreeMap<&str, &str> = stats
+            .iter()
+            .map(|s| (s["id"].as_str().unwrap(), s["agg"].as_str().unwrap()))
+            .collect();
+        let chs = d["challenges"].as_array().unwrap();
+        assert!(chs.len() <= 64);
+        let mut seen = BTreeSet::new();
+        for c in chs {
+            let id = c["id"].as_str().unwrap();
+            assert!(seen.insert(id), "{id} twice");
+            assert!(
+                (1..=48).contains(&id.len())
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            );
+            assert!((1..=48).contains(&c["name"].as_str().unwrap().len()) && c["desc"].as_str().unwrap().len() <= 200);
+            let st = c["stat"].as_str().unwrap();
+            assert!(matches!(aggs.get(st), Some(&"sum") | Some(&"max")), "{id} counts {st}");
+            assert!(c["goal"].as_u64().unwrap() >= 1);
+            assert!(matches!(c["every"].as_str(), Some("day" | "week")));
         }
     }
 

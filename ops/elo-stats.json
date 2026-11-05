@@ -493,6 +493,136 @@
       "sort": "asc"
     }
   ],
+  "challenges": [
+    {
+      "desc": "Get 25 kills today",
+      "every": "day",
+      "goal": 25,
+      "id": "kills_25",
+      "name": "Twenty-five down",
+      "stat": "kills"
+    },
+    {
+      "desc": "Finish 3 matches today",
+      "every": "day",
+      "goal": 3,
+      "id": "matches_3",
+      "name": "Three in",
+      "stat": "matches"
+    },
+    {
+      "desc": "Win a match today",
+      "every": "day",
+      "goal": 1,
+      "id": "win_1",
+      "name": "Take one",
+      "stat": "wins"
+    },
+    {
+      "desc": "Get 8 assists today",
+      "every": "day",
+      "goal": 8,
+      "id": "assists_8",
+      "name": "Set them up",
+      "stat": "assists"
+    },
+    {
+      "desc": "Kill 5 without dying in one life",
+      "every": "day",
+      "goal": 5,
+      "id": "spree_5",
+      "name": "On a roll",
+      "stat": "best_spree"
+    },
+    {
+      "desc": "Get a Double Kill",
+      "every": "day",
+      "goal": 1,
+      "id": "double_1",
+      "name": "Two at once",
+      "stat": "medal.double_kill"
+    },
+    {
+      "desc": "Get 10 headshot kills today",
+      "every": "day",
+      "goal": 10,
+      "id": "heads_10",
+      "name": "Aim high",
+      "stat": "medal.headshot"
+    },
+    {
+      "desc": "Capture a flag in Capture the Flag",
+      "every": "day",
+      "goal": 1,
+      "id": "capture_1",
+      "name": "Bring it home",
+      "stat": "captures"
+    },
+    {
+      "desc": "Get 5 Beat Downs today",
+      "every": "day",
+      "goal": 5,
+      "id": "melee_5",
+      "name": "Up close",
+      "stat": "medal.beat_down"
+    },
+    {
+      "desc": "Get 200 kills this week",
+      "every": "week",
+      "goal": 200,
+      "id": "kills_200",
+      "name": "Two hundred",
+      "stat": "kills"
+    },
+    {
+      "desc": "Win 10 matches this week",
+      "every": "week",
+      "goal": 10,
+      "id": "wins_10",
+      "name": "Ten wins",
+      "stat": "wins"
+    },
+    {
+      "desc": "Finish 20 matches this week",
+      "every": "week",
+      "goal": 20,
+      "id": "matches_20",
+      "name": "Regular",
+      "stat": "matches"
+    },
+    {
+      "desc": "Capture 5 flags this week",
+      "every": "week",
+      "goal": 5,
+      "id": "captures_5",
+      "name": "Flag runner",
+      "stat": "captures"
+    },
+    {
+      "desc": "Return your own flag 5 times this week",
+      "every": "week",
+      "goal": 5,
+      "id": "returns_5",
+      "name": "Home guard",
+      "stat": "flag_returns"
+    },
+    {
+      "desc": "Get a Triple Kill",
+      "every": "week",
+      "goal": 3,
+      "id": "triple_1",
+      "name": "Three at once",
+      "stat": "best_multi"
+    },
+    {
+      "desc": "Get 10 sticky kills this week",
+      "every": "week",
+      "goal": 10,
+      "id": "sticks_10",
+      "name": "Stuck",
+      "stat": "medal.stick"
+    }
+  ],
   "stats": [
     {
       "agg": "sum",

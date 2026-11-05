@@ -344,6 +344,11 @@ mod desktop {
 
     /// `GET <server>/server.json`, over HTTPS (the system's roots) or plain
     /// HTTP (a local server): one request, HTTP/1.0, the body back.
+    /// One GET over HTTPS or HTTP: the body (`fetch::get`).
+    pub fn http_get(url: &str) -> Result<String, String> {
+        fetch::get(url)
+    }
+
     mod fetch {
         use std::io::{Read, Write};
         use std::net::TcpStream;
@@ -351,6 +356,11 @@ mod desktop {
         use std::time::Duration;
 
         pub fn server_json(server: &str) -> Result<String, String> {
+            get(&format!("{}/server.json", server.trim_end_matches('/')))
+        }
+
+        /// `GET url`, HTTP/1.0, the body back on a 200.
+        pub fn get(server: &str) -> Result<String, String> {
             let (tls, rest) = match server.split_once("://") {
                 Some(("https", r)) => (true, r),
                 Some(("http", r)) => (false, r),
@@ -358,8 +368,8 @@ mod desktop {
                 None => (false, server),
             };
             let (hostport, path) = match rest.find('/') {
-                Some(i) => (&rest[..i], rest[i..].trim_end_matches('/')),
-                None => (rest, ""),
+                Some(i) => (&rest[..i], &rest[i..]),
+                None => (rest, "/"),
             };
             let (host, port) = match hostport.rsplit_once(':') {
                 Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => {
@@ -374,7 +384,7 @@ mod desktop {
                 .ok_or_else(|| format!("{at}: can't connect (is the server up?)"))?;
             let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
             let req = format!(
-                "GET {path}/server.json HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n\r\n"
+                "GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oneshot-desktop\r\nConnection: close\r\n\r\n"
             );
             let mut raw = Vec::new();
             if tls {
@@ -408,7 +418,7 @@ mod desktop {
             let (head, body) = text.split_once("\r\n\r\n").ok_or_else(|| format!("{at}: no reply"))?;
             let status = head.split_whitespace().nth(1).unwrap_or("");
             if status != "200" {
-                return Err(format!("{server}/server.json: HTTP {status}"));
+                return Err(format!("{server}: HTTP {status}"));
             }
             Ok(body.to_string())
         }

@@ -16,6 +16,7 @@
 
 pub mod asset_fetch;
 pub mod binds;
+pub mod challenges;
 pub mod clip;
 pub mod config;
 pub mod display;
@@ -386,6 +387,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<flags::Flags>()
+    .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
     .init_resource::<Early>()
