@@ -584,12 +584,16 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (draw_view, look::counter::draw).chain(),
             look::viewmodel::shimmer,
             (look::fx::ambient::drive, look::fx::draw).chain(),
-            hud::draw,
-            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw),
-            hud::hurt_rim,
+            // The HUD is hidden off a match (`front::hud_shown`): nothing
+            // to draw into it there.
+            hud::draw.run_if(in_match),
+            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw).run_if(in_match),
+            hud::hurt_rim.run_if(in_match),
         )
             .chain(),
     );
+    // Not gated: the medal row and the carnage report are their own roots,
+    // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
@@ -627,7 +631,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .before(bevy::transform::TransformSystems::Propagate),
     )
     // Names over heads, after the camera is placed (`tags.rs`).
-    .add_systems(Update, tags::draw.after(view).after(hud::draw));
+    .add_systems(Update, tags::draw.after(view).after(hud::draw).run_if(in_match));
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
@@ -648,12 +652,22 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 visor::setup.after(hud::setup),
             ),
         )
-        .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
+        .add_systems(
+            Update,
+            (hud::prompt, hud::reticle_tint, hud::board)
+                .after(hud::draw)
+                .run_if(in_match),
+        );
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
     }
     app
+}
+
+/// In a match: what the HUD and the names over heads draw for.
+fn in_match(m: Res<front::InMatch>) -> bool {
+    m.0
 }
 
 fn setup(

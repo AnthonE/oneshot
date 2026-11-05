@@ -94,6 +94,78 @@ pub struct Cards {
     pub leaf: Handle<Image>,
     pub bark: Handle<Image>,
     pub bark_normal: Handle<Image>,
+    /// The materials trees wear, by part and shade ([`Cards::wear`]): made
+    /// the first time one is worn and shared from then on, so trees of a
+    /// shade batch rather than each drawing on a material of its own.
+    worn: [Option<Handle<StandardMaterial>>; WORN],
+}
+
+/// A tree's parts, each with its own material.
+#[derive(Clone, Copy)]
+enum Wear {
+    PalmBark,
+    Frond,
+    DeadWood,
+    LiveBark,
+    Leaves,
+}
+
+/// Each tree is a shade lighter or darker than the next, from
+/// `1 - SHADE_SPREAD` to `1 + SHADE_SPREAD`, on this many steps.
+const SHADES: usize = 5;
+const SHADE_SPREAD: f32 = 0.1;
+const WORN: usize = 5 * SHADES;
+
+impl Cards {
+    /// The material `part` wears at `shade` (of [`SHADES`]).
+    fn wear(&mut self, part: Wear, shade: usize, mats: &mut Assets<StandardMaterial>) -> Handle<StandardMaterial> {
+        let slot = &mut self.worn[part as usize * SHADES + shade.min(SHADES - 1)];
+        if let Some(h) = slot {
+            return h.clone();
+        }
+        let v = 1.0 - SHADE_SPREAD + 2.0 * SHADE_SPREAD * shade as f32 / (SHADES - 1) as f32;
+        let tint = Color::linear_rgb(v, v, v);
+        let m = match part {
+            Wear::PalmBark => StandardMaterial {
+                base_color: tint,
+                base_color_texture: Some(self.bark.clone()),
+                normal_map_texture: Some(self.bark_normal.clone()),
+                perceptual_roughness: 0.92,
+                ..default()
+            },
+            Wear::Frond => StandardMaterial {
+                base_color: tint,
+                base_color_texture: Some(self.frond.clone()),
+                perceptual_roughness: 0.8,
+                specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
+                alpha_mode: AlphaMode::Mask(0.5),
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            },
+            Wear::DeadWood => StandardMaterial {
+                base_color: tint,
+                perceptual_roughness: 0.95,
+                ..default()
+            },
+            Wear::LiveBark => StandardMaterial {
+                base_color: Color::linear_rgb(v * LIVE_BARK[0], v * LIVE_BARK[1], v * LIVE_BARK[2]),
+                perceptual_roughness: 0.95,
+                ..default()
+            },
+            Wear::Leaves => StandardMaterial {
+                base_color: tint,
+                base_color_texture: Some(self.leaf.clone()),
+                perceptual_roughness: 0.85,
+                specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
+                alpha_mode: AlphaMode::Mask(0.5),
+                cull_mode: None,
+                double_sided: true,
+                ..default()
+            },
+        };
+        slot.insert(mats.add(m)).clone()
+    }
 }
 
 /// The cards, drawn the first time a map grows a tree and kept: a map with
@@ -104,7 +176,7 @@ pub struct TreeCards(Option<Cards>);
 
 impl TreeCards {
     /// The cards, drawn now if they never were.
-    pub fn get(&mut self, images: &mut Assets<Image>) -> &Cards {
+    pub fn get(&mut self, images: &mut Assets<Image>) -> &mut Cards {
         self.0.get_or_insert_with(|| {
             let [bark, bark_normal] = palm_bark_images();
             Cards {
@@ -112,6 +184,7 @@ impl TreeCards {
                 leaf: images.add(cutout_image(leaf_rgba(LEAF_PX), LEAF_PX)),
                 bark: images.add(bark),
                 bark_normal: images.add(bark_normal),
+                worn: Default::default(),
             }
         })
     }
@@ -203,66 +276,31 @@ pub fn tree(
     seed: u32,
     trunk_r: f32,
     height: f32,
-    cards: &Cards,
+    cards: &mut Cards,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<StandardMaterial>,
 ) -> Vec<Part> {
-    // Each tree wears the cards a little lighter or darker than the next.
-    let v = 0.9 + 0.2 * hash01(seed, 0x7e11);
-    let tint = Color::linear_rgb(v, v, v);
+    // Each tree wears the cards a shade lighter or darker than the next.
+    let shade = ((hash01(seed, 0x7e11) * SHADES as f32) as usize).min(SHADES - 1);
+    let mut wear = |part| cards.wear(part, shade, mats);
     match kind {
         Kind::Palm => {
             let (bark, crown) = palm(seed, trunk_r, height);
-            let bark_mat = mats.add(StandardMaterial {
-                base_color: tint,
-                base_color_texture: Some(cards.bark.clone()),
-                normal_map_texture: Some(cards.bark_normal.clone()),
-                perceptual_roughness: 0.92,
-                ..default()
-            });
-            let frond_mat = mats.add(StandardMaterial {
-                base_color: tint,
-                base_color_texture: Some(cards.frond.clone()),
-                perceptual_roughness: 0.8,
-                specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
-                alpha_mode: AlphaMode::Mask(0.5),
-                cull_mode: None,
-                double_sided: true,
-                ..default()
-            });
             vec![
-                (meshes.add(bark), bark_mat, Transform::IDENTITY),
-                (meshes.add(crown), frond_mat, Transform::IDENTITY),
+                (meshes.add(bark), wear(Wear::PalmBark), Transform::IDENTITY),
+                (meshes.add(crown), wear(Wear::Frond), Transform::IDENTITY),
             ]
         }
-        Kind::Dead => {
-            let wood = mats.add(StandardMaterial {
-                base_color: tint,
-                perceptual_roughness: 0.95,
-                ..default()
-            });
-            vec![(meshes.add(dead(seed, trunk_r, height)), wood, Transform::IDENTITY)]
-        }
+        Kind::Dead => vec![(
+            meshes.add(dead(seed, trunk_r, height)),
+            wear(Wear::DeadWood),
+            Transform::IDENTITY,
+        )],
         Kind::Live => {
             let (wood, crown) = live(seed, trunk_r, height);
-            let bark = mats.add(StandardMaterial {
-                base_color: Color::linear_rgb(v * LIVE_BARK[0], v * LIVE_BARK[1], v * LIVE_BARK[2]),
-                perceptual_roughness: 0.95,
-                ..default()
-            });
-            let leaves = mats.add(StandardMaterial {
-                base_color: tint,
-                base_color_texture: Some(cards.leaf.clone()),
-                perceptual_roughness: 0.85,
-                specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
-                alpha_mode: AlphaMode::Mask(0.5),
-                cull_mode: None,
-                double_sided: true,
-                ..default()
-            });
             vec![
-                (meshes.add(wood), bark, Transform::IDENTITY),
-                (meshes.add(crown), leaves, Transform::IDENTITY),
+                (meshes.add(wood), wear(Wear::LiveBark), Transform::IDENTITY),
+                (meshes.add(crown), wear(Wear::Leaves), Transform::IDENTITY),
             ]
         }
     }
