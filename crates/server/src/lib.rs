@@ -39,8 +39,8 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use proto::{
-    frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL,
-    MODE_FFA, MODE_GUN_GAME,
+    frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA,
+    MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};

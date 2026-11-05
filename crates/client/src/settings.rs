@@ -21,9 +21,16 @@ use crate::look::quality::{
 };
 use crate::look::render_scale;
 
-pub const SENS_MIN: f32 = 0.25;
+/// Mouse sensitivity, times `SENS` (0.126° a count at 1). Down to where a
+/// 3200-dpi mouse turns once in a metre: 0.25 held a 1600-dpi mouse to 18
+/// cm a turn, and a shooter's players play two to three times that.
+pub const SENS_MIN: f32 = 0.02;
 pub const SENS_MAX: f32 = 3.0;
+/// Its step: a twentieth, and a hundredth below `SENS_FINE`, where a
+/// twentieth is a share of it a hand feels.
 pub const SENS_STEP: f32 = 0.05;
+pub const SENS_FINE: f32 = 0.5;
+pub const SENS_STEP_FINE: f32 = 0.01;
 pub const FOV_MIN: f32 = 60.0;
 pub const FOV_MAX: f32 = 110.0;
 pub const FOV_STEP: f32 = 5.0;
@@ -204,6 +211,20 @@ fn step(v: f32, s: f32) -> f32 {
     (v / s).round() * s
 }
 
+/// The sensitivity's step just above `v`.
+fn sens_step(v: f32) -> f32 {
+    if v < SENS_FINE - 1e-4 {
+        SENS_STEP_FINE
+    } else {
+        SENS_STEP
+    }
+}
+
+/// `v` on the sensitivity's steps, within its bounds.
+fn sens_snap(v: f32) -> f32 {
+    step(v, sens_step(v)).clamp(SENS_MIN, SENS_MAX)
+}
+
 /// One click of the FRAME CAP row, stopping at its ends: uncapped is the
 /// far end, never one click below 30. A value off the ladder (a 165 Hz
 /// panel's, by hand) steps from the rung at or above it.
@@ -322,7 +343,7 @@ impl Settings {
         let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
         let d = Self::default();
         Self {
-            sensitivity: step(fin(self.sensitivity, d.sensitivity), SENS_STEP).clamp(SENS_MIN, SENS_MAX),
+            sensitivity: sens_snap(fin(self.sensitivity, d.sensitivity)),
             fov: step(fin(self.fov, d.fov), FOV_STEP).clamp(FOV_MIN, FOV_MAX),
             master: step(fin(self.master, d.master), VOL_STEP).clamp(0.0, 1.0),
             effects: step(fin(self.effects, d.effects), VOL_STEP).clamp(0.0, 1.0),
@@ -338,7 +359,14 @@ impl Settings {
             self.held = None;
         }
         match knob {
-            Knob::Sensitivity => self.sensitivity += d * SENS_STEP,
+            Knob::Sensitivity => {
+                // A click at a time: down from 0.5 is fine, up from it coarse.
+                for _ in 0..delta.unsigned_abs() {
+                    let at = self.sensitivity;
+                    let s = sens_step(if delta > 0 { at } else { at - 1e-3 });
+                    self.sensitivity = sens_snap(at + s * delta.signum() as f32);
+                }
+            }
             Knob::Invert => self.invert = !self.invert,
             Knob::Fov => self.fov += d * FOV_STEP,
             Knob::Master => self.master += d * VOL_STEP,
@@ -671,6 +699,27 @@ mod tests {
         assert!((s.master - 0.3).abs() < 1e-6);
         assert_eq!(s.effects, Settings::default().effects);
         assert!(s.invert);
+    }
+
+    #[test]
+    fn sensitivity_steps_finely_below_a_half() {
+        let mut s = Settings {
+            sensitivity: 0.5,
+            ..Settings::default()
+        };
+        let at = |s: &Settings| (s.sensitivity * 100.0).round() as i32;
+        s.adjust(Knob::Sensitivity, -1);
+        assert_eq!(at(&s), 49);
+        s.adjust(Knob::Sensitivity, 1);
+        assert_eq!(at(&s), 50);
+        s.adjust(Knob::Sensitivity, 1);
+        assert_eq!(at(&s), 55);
+        s.adjust(Knob::Sensitivity, -100);
+        assert_eq!(s.sensitivity, SENS_MIN);
+        let (r, ..) = read(Some("sensitivity = 0.13\n"));
+        assert_eq!(at(&r), 13);
+        let (r, ..) = read(Some("sensitivity = 0.62\n"));
+        assert_eq!(at(&r), 60);
     }
 
     #[test]

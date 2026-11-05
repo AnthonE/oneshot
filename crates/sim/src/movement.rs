@@ -45,15 +45,28 @@ fn quant3(v: V3) -> V3 {
     V3::new(quant(v.x), quant(v.y), quant(v.z))
 }
 
-/// Quake's accelerate: speed along `w` (unit) up to `cap`, gaining at most
-/// `rate · wish · DT` this tick.
-fn accelerate(vel: V3, w: V3, cap: f32, wish: f32, rate: f32) -> V3 {
-    let add = cap - vel.dot(w);
+/// Quake's accelerate, speed along `w` (unit) up to `wish` gaining at most
+/// `acc` this tick, but Halo's top speed: the flat speed after it is never
+/// more than the greater of the speed before and `wish`. So it turns,
+/// slows and brings a body up to a run, and never adds past it. Quake's
+/// lets a strafe that turns with the mouse gain a little every tick: a run
+/// held 5% over its top on the ground, and in the air (with its cap) a
+/// jump doubled a run at 128 Hz and each hop doubled it again.
+fn accelerate(vel: V3, w: V3, wish: f32, acc: f32) -> V3 {
+    let add = wish - vel.dot(w);
     if add <= 0.0 {
         return vel;
     }
-    let acc = (rate * wish * DT).min(add);
-    V3::new(vel.x + w.x * acc, vel.y, vel.z + w.z * acc)
+    let acc = acc.min(add);
+    let (mut x, mut z) = (vel.x + w.x * acc, vel.z + w.z * acc);
+    let cap = (vel.x * vel.x + vel.z * vel.z).max(wish * wish);
+    let now = x * x + z * z;
+    if now > cap {
+        let k = (cap / now).sqrt();
+        x *= k;
+        z *= k;
+    }
+    V3::new(x, vel.y, z)
 }
 
 /// One tick of a body under one input.
@@ -86,7 +99,8 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let mut wish = 0.0;
     if len > 0.0 {
         w = w * (1.0 / len);
-        let top = if b.crouched {
+        // Tucked legs in the air never slow it: crouch speed is a walk's.
+        let top = if b.crouched && b.grounded {
             CROUCH_RUN
         } else {
             // Halo 2's: full speed ahead, a little less backing up or to
@@ -107,13 +121,17 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             v.x *= k;
             v.z *= k;
         }
-        v = accelerate(v, w, wish, wish, ACCEL);
-        if inp.held(JUMP) && !b.crouched {
+        v = accelerate(v, w, wish, ACCEL * wish * DT);
+        // From a crouch too, as in any shooter: a crouch pressed a tick
+        // before the jump (a crouch jump's two buttons, mashed) must not
+        // eat it. Held, the legs stay tucked; let go, they come down in
+        // the air where there's room, the head staying.
+        if inp.held(JUMP) {
             v.y = JUMP_SPEED;
             b.grounded = false;
         }
     } else {
-        v = accelerate(v, w, wish.min(AIR_CAP), wish, AIR_ACCEL);
+        v = accelerate(v, w, wish, AIR_ACCEL * len.min(1.0) * DT);
         v.y -= GRAVITY * DT;
     }
     let sp = v.dot(v);
@@ -394,6 +412,159 @@ mod tests {
         let k = core::f32::consts::FRAC_1_SQRT_2;
         let diag = ((k * RUN) * (k * RUN) + (k * RUN_SIDE) * (k * RUN_SIDE)).sqrt();
         assert!(fabs(speed(127, 127) - diag) < 0.05, "{} vs {diag}", speed(127, 127));
+    }
+
+    /// Open floor, nothing on it: room to strafe.
+    fn open() -> Map {
+        crate::map::Def {
+            id: 252,
+            practice: true,
+            name: "open",
+            lo: (-500.0, -500.0),
+            hi: (500.0, 500.0),
+            boxes: &[],
+            looks: &[],
+            spawns: &[([0.0, 0.0, 0.0], 0, 0)],
+            pads: &[],
+            roam: &[],
+            terrain: None,
+            launchers: &[],
+            vehicles: &[],
+            solids: &[],
+            solid_looks: &[],
+            dress: &[],
+            dress_solids: &[],
+            profiles: &[],
+            dress_profiles: &[],
+            nav: false,
+            light: crate::map::LightDef::DAY,
+            flags: &[],
+        }
+        .build()
+    }
+
+    fn flat_speed(b: &Body) -> f32 {
+        (b.vel.x * b.vel.x + b.vel.z * b.vel.z).sqrt()
+    }
+
+    #[test]
+    fn air_strafing_and_bunny_hops_never_gain_speed() {
+        // Each tick in the air, of the turns and strafes a mouse and keys
+        // could make, the one that leaves the body fastest; jump held, so
+        // it hops the tick it lands. Quake's air took a run to 13 m/s in
+        // one jump and 22 by the fourth.
+        let map = open();
+        let mut b = standing(&map, 0.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ);
+        let mut yaw = 0u16;
+        let mut top = 0.0f32;
+        for _ in 0..3 {
+            step(
+                &mut b,
+                &Input {
+                    buttons: JUMP,
+                    mz: 127,
+                    yaw,
+                    ..Input::default()
+                },
+                &map,
+            );
+            let mut air = 0;
+            while !b.grounded && air < TICK_HZ * 2 {
+                let mut best = (f32::MIN, b, yaw);
+                for turn in (-1500i32..=1500).step_by(100) {
+                    for (mx, mz) in [(127, 0), (-127, 0), (127, 127), (-127, 127)] {
+                        let y = yaw.wrapping_add(turn as u16);
+                        let mut c = b;
+                        step(
+                            &mut c,
+                            &Input {
+                                buttons: JUMP,
+                                yaw: y,
+                                mx,
+                                mz,
+                                ..Input::default()
+                            },
+                            &map,
+                        );
+                        if flat_speed(&c) > best.0 {
+                            best = (flat_speed(&c), c, y);
+                        }
+                    }
+                }
+                (_, b, yaw) = best;
+                top = top.max(flat_speed(&b));
+                air += 1;
+            }
+        }
+        // A landing tick's Quake ground step may turn a run a hair over it;
+        // nothing compounds.
+        assert!(top < RUN * 1.02, "{top} m/s");
+    }
+
+    #[test]
+    fn the_air_steers_a_jump_but_commits_it() {
+        let map = open();
+        // From a standstill, the stick ahead: it drifts to a run.
+        let mut b = standing(&map, 0.0, 0.0);
+        step(
+            &mut b,
+            &Input {
+                buttons: JUMP,
+                ..Input::default()
+            },
+            &map,
+        );
+        run(&mut b, run_x(), &map, TICK_HZ / 2);
+        let half = b.vel.x;
+        assert!(half > 3.0 && half < 4.5, "{half} m/s half a second in");
+        // A running jump pulled back: slowed, not stopped dead.
+        let mut b = standing(&map, 0.0, 0.0);
+        run(&mut b, run_x(), &map, TICK_HZ);
+        step(
+            &mut b,
+            &Input {
+                buttons: JUMP,
+                mz: 127,
+                ..Input::default()
+            },
+            &map,
+        );
+        let back = Input {
+            mz: -127,
+            ..Input::default()
+        };
+        run(&mut b, back, &map, TICK_HZ / 4);
+        assert!(b.vel.x > 4.0, "{} m/s a quarter second in", b.vel.x);
+        // Let go of the stick: the jump keeps what it has.
+        let was = b.vel.x;
+        run(&mut b, Input::default(), &map, TICK_HZ / 4);
+        assert_eq!(b.vel.x, was);
+    }
+
+    #[test]
+    fn a_crouch_jumps() {
+        let map = open();
+        let mut b = standing(&map, 0.0, 0.0);
+        let crouch = Input {
+            buttons: CROUCH,
+            ..Input::default()
+        };
+        run(&mut b, crouch, &map, 4);
+        assert!(b.crouched && b.grounded);
+        // Jump with crouch still held (pressed a tick early): it goes.
+        let both = Input {
+            buttons: CROUCH | JUMP,
+            ..Input::default()
+        };
+        step(&mut b, &both, &map);
+        assert!(!b.grounded && b.vel.y > 0.0, "{b:?}");
+        let mut top = 0.0f32;
+        while !b.grounded {
+            step(&mut b, &crouch, &map);
+            top = top.max(b.pos.y);
+        }
+        assert!(top > 2.6 && top < 2.9, "apex {top}");
     }
 
     #[test]
