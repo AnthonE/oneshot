@@ -229,7 +229,7 @@ pub fn setup(mut commands: Commands, root: Query<Entity, With<hud::HudRoot>>) {
 
 /// Up while the scope is held on a gun that has one, alive and on foot;
 /// its rounds, its zoom, and its ring red over an enemy in reach.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn draw(
     link: NonSend<crate::LinkRes>,
     look: Res<crate::Look>,
@@ -238,6 +238,7 @@ pub fn draw(
     mut ring: Query<&mut BorderColor, With<ScopeRing>>,
     mut rounds: Query<(&mut Node, &ScopeRound)>,
     mut zoom: Query<&mut Text, With<ScopeZoom>>,
+    mut line: Local<String>,
 ) {
     let s = link.0.session();
     let f = s.core.own().0;
@@ -272,9 +273,11 @@ pub fn draw(
         }
     }
     if let Ok(mut t) = zoom.single_mut() {
-        let v = format!("{}x", arm.zoom_at(look.level));
-        if t.0 != v {
-            t.0 = v;
+        use std::fmt::Write as _;
+        line.clear();
+        let _ = write!(line, "{}x", arm.zoom_at(look.level));
+        if t.0 != *line {
+            t.0.clone_from(&line);
         }
     }
 }

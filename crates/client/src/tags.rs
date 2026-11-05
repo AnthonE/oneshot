@@ -97,6 +97,7 @@ pub fn draw(
     st: Res<hud::HudState>,
     seen: Res<crate::Seen>,
     mut built: Local<bool>,
+    mut name: Local<String>,
     (mut want, mut foes): (Local<Vec<Wanted>>, Local<Vec<client_net::core::Drawn>>),
     root: Query<Entity, With<hud::HudRoot>>,
     eye: Query<(&Transform, &Projection), With<Eye>>,
@@ -188,10 +189,12 @@ pub fn draw(
             tag.slot = Some(w.slot);
         }
         // The name can land after the body does (the seat's message).
-        if st.names.get(&w.slot) != Some(&text.0) {
-            let name = st.name(w.slot);
-            if text.0 != name {
-                text.0 = name;
+        {
+            use std::fmt::Write as _;
+            name.clear();
+            let _ = write!(name, "{}", st.shown(w.slot));
+            if text.0 != *name {
+                text.0.clone_from(&name);
             }
         }
         ink.set_if_neq(TextColor(if w.mate { MATE_INK } else { FOE_INK }));

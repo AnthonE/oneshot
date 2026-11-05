@@ -122,11 +122,17 @@ pub fn draw(
             Some((p, yaw)) => {
                 let rot = Quat::from_rotation_y(yaw);
                 let off = if f.state == FLAG_HELD { rot * CARRY } else { Vec3::ZERO };
-                tr.translation = Vec3::new(p.x, p.y, p.z) + off;
-                tr.rotation = rot;
-                *vis = Visibility::Inherited;
+                let at = Vec3::new(p.x, p.y, p.z) + off;
+                // A flag at home or lying still isn't moved again.
+                if tr.translation != at || tr.rotation != rot {
+                    tr.translation = at;
+                    tr.rotation = rot;
+                }
+                vis.set_if_neq(Visibility::Inherited);
             }
-            None => *vis = Visibility::Hidden,
+            None => {
+                vis.set_if_neq(Visibility::Hidden);
+            }
         }
     }
 }

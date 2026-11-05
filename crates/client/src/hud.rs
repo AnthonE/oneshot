@@ -15,6 +15,7 @@
 //! decided.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use bevy::prelude::*;
 use proto::medal as md;
@@ -179,6 +180,29 @@ impl HudState {
             .get(&slot)
             .cloned()
             .unwrap_or_else(|| format!("P{}", slot + 1))
+    }
+
+    /// [`HudState::name`] to write, with nothing made.
+    pub fn shown(&self, slot: u8) -> Shown<'_> {
+        match self.names.get(&slot) {
+            Some(n) => Shown::Name(n),
+            None => Shown::Seat(slot),
+        }
+    }
+}
+
+/// A seat's name as [`HudState::name`] spells it, for `write!`.
+pub enum Shown<'a> {
+    Name(&'a str),
+    Seat(u8),
+}
+
+impl std::fmt::Display for Shown<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Shown::Name(n) => f.write_str(n),
+            Shown::Seat(slot) => write!(f, "P{}", slot + 1),
+        }
     }
 }
 
@@ -970,21 +994,20 @@ fn flag_line(st: &HudState, part: u8, who: u8, flag: u8) -> String {
     }
 }
 
-/// Capture the Flag: where each flag is, one line, over the feed.
-fn flags_line(st: &HudState, s: &proto::Snapshot) -> String {
-    s.flags()
-        .iter()
-        .enumerate()
-        .map(|(t, f)| {
-            let where_ = match f.state {
-                sim::world::FLAG_HELD => format!("TAKEN by {}", st.name(f.carrier)),
-                sim::world::FLAG_DOWN => format!("DROPPED, home in {}s", f.down_s),
-                _ => "HOME".into(),
-            };
-            format!("{} FLAG {where_}", side_name(t as u8))
-        })
-        .collect::<Vec<_>>()
-        .join("    ")
+/// Capture the Flag: where each flag is, one line, over the feed, onto
+/// `out`.
+fn flags_line(out: &mut String, st: &HudState, s: &proto::Snapshot) {
+    for (t, f) in s.flags().iter().enumerate() {
+        if t > 0 {
+            out.push_str("    ");
+        }
+        let _ = write!(out, "{} FLAG ", side_name(t as u8));
+        let _ = match f.state {
+            sim::world::FLAG_HELD => write!(out, "TAKEN by {}", st.shown(f.carrier)),
+            sim::world::FLAG_DOWN => write!(out, "DROPPED, home in {}s", f.down_s),
+            _ => write!(out, "HOME"),
+        };
+    }
 }
 
 /// This frame's events and stream messages: the markers, names, the feed.
@@ -1151,6 +1174,15 @@ fn mmss(s: f32) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
+/// `draw`'s lines, written into the same Strings every frame.
+#[derive(Default)]
+pub struct DrawLines {
+    center: String,
+    feed: String,
+    net: String,
+    respawn: String,
+}
+
 /// The lines, the crosshair, the hit marker and the hurt arc, from the
 /// session.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1170,6 +1202,7 @@ pub fn draw(
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
+    mut lines: Local<DrawLines>,
 ) {
     let s = link.0.session();
     let now = time.elapsed_secs();
@@ -1182,20 +1215,24 @@ pub fn draw(
     } else {
         None
     };
+    let DrawLines {
+        center,
+        feed,
+        net,
+        respawn,
+    } = &mut *lines;
     if !s.ready {
-        let line = gone.map_or_else(
-            || {
-                if st.status.is_empty() {
-                    "connecting...".to_string()
-                } else {
-                    st.status.clone()
-                }
-            },
-            |g| format!("{g}\n{}", st.status),
-        );
+        center.clear();
+        match gone {
+            Some(g) => {
+                let _ = write!(center, "{g}\n{}", st.status);
+            }
+            None if st.status.is_empty() => center.push_str("connecting..."),
+            None => center.push_str(&st.status),
+        }
         for (mut t, _, ce, _, _) in texts.iter_mut() {
-            if ce.is_some() && t.0 != line {
-                t.0 = line.clone();
+            if ce.is_some() && t.0 != *center {
+                t.0.clone_from(center);
             }
         }
         return;
@@ -1205,74 +1242,85 @@ pub fn draw(
     let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
-    let center = match snap.phase {
-        0 => format!("Starting in {}", clock.ceil() as u32),
+    center.clear();
+    match snap.phase {
+        0 => {
+            let _ = write!(center, "Starting in {}", clock.ceil() as u32);
+        }
         2 => {
             let w = snap.winner;
-            let mut c = if w == 255 {
-                "Draw".to_string()
+            let _ = if w == 255 {
+                write!(center, "Draw")
             } else if core.rules.teams {
                 if w & 1 == core.team & 1 {
-                    "Your side wins".into()
+                    write!(center, "Your side wins")
                 } else {
-                    "Your side lost".into()
+                    write!(center, "Your side lost")
                 }
             } else if w == core.slot {
-                "You win".into()
+                write!(center, "You win")
             } else {
-                format!("{} wins", st.name(w))
+                write!(center, "{} wins", st.shown(w))
             };
             match core.verified {
-                Some(true) => c.push_str("  -  match verified"),
-                Some(false) => c.push_str("  -  verification FAILED"),
+                Some(true) => center.push_str("  -  match verified"),
+                Some(false) => center.push_str("  -  verification FAILED"),
                 None => {}
             }
             if !st.cup.is_empty() {
-                c = format!("{c}\n{}", st.cup);
+                center.push('\n');
+                center.push_str(&st.cup);
             }
             if let Some(g) = gone {
-                c = format!("{c}\n{g}");
+                center.push('\n');
+                center.push_str(g);
             }
-            c
         }
-        _ if gone.is_some() => gone.unwrap_or_default().to_string(),
-        _ if !f.alive && boarded => format!("Respawn in {back}"),
-        _ if !f.alive => st.death_line.clone(),
-        _ => String::new(),
-    };
-    let mut feed: String = st.feed.iter().map(|(l, _)| format!("{l}\n")).collect();
-    if snap.n_flags > 0 {
-        feed = format!("{}\n{feed}", flags_line(&st, snap));
+        _ if gone.is_some() => center.push_str(gone.unwrap_or_default()),
+        _ if !f.alive && boarded => {
+            let _ = write!(center, "Respawn in {back}");
+        }
+        _ if !f.alive => center.push_str(&st.death_line),
+        _ => {}
     }
+    feed.clear();
     if s.watch && core.slot < sim::consts::MAX_FIGHTERS as u8 {
-        feed = format!(
-            "WATCHING {}, a little behind  ·  CLICK for the next player\n{feed}",
-            st.name(core.slot)
+        let _ = writeln!(
+            feed,
+            "WATCHING {}, a little behind  ·  CLICK for the next player",
+            st.shown(core.slot)
         );
     }
-    let net = if st.net {
+    if snap.n_flags > 0 {
+        flags_line(feed, &st, snap);
+        feed.push('\n');
+    }
+    for (l, _) in &st.feed {
+        feed.push_str(l);
+        feed.push('\n');
+    }
+    net.clear();
+    if st.net {
         let n = core.stats;
-        format!(
+        let _ = write!(
+            net,
             "snapshots {}\nconfirmed {}  corrected {}\ndepth {}  rate {:.2}\ninterp {:.1} ticks  dropped {}",
             n.snapshots, n.confirmations, n.corrections, n.depth, n.rate, n.delay_ticks, s.dropped
-        )
-    } else {
-        String::new()
-    };
-    let respawn = if snap.phase == 1 && gone.is_none() && !f.alive && !boarded {
-        format!("Respawn in {back}")
-    } else {
-        String::new()
-    };
+        );
+    }
+    respawn.clear();
+    if snap.phase == 1 && gone.is_none() && !f.alive && !boarded {
+        let _ = write!(respawn, "Respawn in {back}");
+    }
     for (mut t, fe, ce, ne, re) in texts.iter_mut() {
         let v = if re.is_some() {
-            &respawn
+            &*respawn
         } else if fe.is_some() {
-            &feed
+            &*feed
         } else if ce.is_some() {
-            &center
+            &*center
         } else if ne.is_some() {
-            &net
+            &*net
         } else {
             continue;
         };
@@ -1283,19 +1331,19 @@ pub fn draw(
     let arm = sim::arms::arm(f.gun().arm);
     let scoped = look.magnification(arm) > 1.0;
     if let Ok(mut v) = reticle.single_mut() {
-        *v = if scoped || !f.alive {
+        v.set_if_neq(if scoped || !f.alive {
             Visibility::Hidden
         } else {
             Visibility::Inherited
-        };
+        });
     }
     let hit_u = (now - st.hit_at) / HIT_S;
     if let Ok(mut v) = hitmark.single_mut() {
-        *v = if (0.0..1.0).contains(&hit_u) {
+        v.set_if_neq(if (0.0..1.0).contains(&hit_u) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
     let c = if st.hit_kill {
         Color::srgb(1.0, 0.25, 0.2)
@@ -1303,19 +1351,27 @@ pub fn draw(
         Color::WHITE
     };
     for mut bg in strokes.iter_mut() {
-        bg.0 = c;
+        bg.set_if_neq(BackgroundColor(c));
     }
+    // Moved only when a hit turns it: a margin is the layout's, and writing
+    // one lays the HUD out again.
     if let Ok((mut n, mut tr, mut bg)) = arc.single_mut() {
         let u = (now - st.arc_at) / DAMAGE_S;
         let a = st.hurt_angle;
-        n.margin = UiRect {
+        let margin = UiRect {
             left: Val::Px(DAMAGE_R * a.sin() - 28.0),
             top: Val::Px(-DAMAGE_R * a.cos() - 3.0),
             ..default()
         };
-        tr.rotation = Rot2::radians(a);
+        if n.margin != margin {
+            n.margin = margin;
+        }
+        let turn = Rot2::radians(a);
+        if tr.rotation != turn {
+            tr.rotation = turn;
+        }
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
-        bg.0 = Color::srgba(1.0, 0.2, 0.15, alpha);
+        bg.set_if_neq(BackgroundColor(Color::srgba(1.0, 0.2, 0.15, alpha)));
     }
 }
 
@@ -1332,6 +1388,21 @@ fn set_display(n: &mut Node, on: bool) {
     }
 }
 
+fn set_width(n: &mut Node, w: Val) {
+    if n.width != w {
+        n.width = w;
+    }
+}
+
+/// An image's tint, without telling the layout: a sliced plate's change
+/// drops its measure and lays the HUD out again, and its colour is read
+/// when it is drawn whatever.
+fn tint(img: &mut Mut<ImageNode>, c: Color) {
+    if img.color != c {
+        img.bypass_change_detection().color = c;
+    }
+}
+
 /// A round's size by the magazine's: a few big ones, many small.
 fn pip_size(mag: u16) -> (f32, f32) {
     match mag {
@@ -1343,8 +1414,9 @@ fn pip_size(mag: u16) -> (f32, f32) {
 
 /// What a hand's box shows: its number, the gun's name, the rounds to draw
 /// (and how many are left), the heat (a hot gun's, 0 to 1) and its note.
+#[derive(Clone, Copy, PartialEq)]
 struct GunLook {
-    count: String,
+    count: u32,
     name: &'static str,
     pips: Option<(u16, u16)>,
     heat: Option<(f32, bool)>,
@@ -1357,9 +1429,9 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
     // A battery (a hot gun, the sword) is its charge, as a share.
     let battery = arm.hot() || arm.mag as usize > PIPS;
     let count = if battery {
-        format!("{}", (g.mag as u32 * 100).div_ceil(arm.mag.max(1) as u32))
+        (g.mag as u32 * 100).div_ceil(arm.mag.max(1) as u32)
     } else {
-        g.reserve.to_string()
+        g.reserve as u32
     };
     GunLook {
         count,
@@ -1378,6 +1450,15 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
             ""
         },
     }
+}
+
+/// What `gear`'s lines say: written again only when it changes.
+#[derive(Clone, Copy, PartialEq)]
+pub struct GearText {
+    gren: [u8; 2],
+    hands: [Option<(u32, &'static str, &'static str)>; 2],
+    back: &'static str,
+    ride: Option<&'static str>,
 }
 
 /// The grenades, the guns in hand and on our back, and a ride's way out.
@@ -1409,6 +1490,7 @@ pub fn gear(
         ),
     >,
     mut heat: Query<(&HeatFill, &mut Node, &mut ImageNode), (Without<GrenBox>, Without<Pip>, Without<GunPanel>)>,
+    mut said: Local<Option<GearText>>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -1421,10 +1503,7 @@ pub fn gear(
         f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
     ];
     for (b, mut img) in boxes.iter_mut() {
-        let c = if f.gren_kind == b.0 { PLATE } else { PLATE_DIM };
-        if img.color != c {
-            img.color = c;
-        }
+        tint(&mut img, if f.gren_kind == b.0 { PLATE } else { PLATE_DIM });
     }
     for (p, mut n) in panels.iter_mut() {
         set_display(&mut n, hands[p.0 as usize & 1].is_some());
@@ -1435,13 +1514,21 @@ pub fn gear(
         set_display(&mut n, carried);
     }
     let out = binds.key(crate::binds::Action::Use);
-    for (mut t, gc, count, name, note, bk, ride) in texts.iter_mut() {
+    let text = GearText {
+        gren: [f.grenades, f.stickies],
+        hands: hands.map(|h| h.map(|g| (g.count, g.name, g.note))),
+        back: if carried { sim::arms::arm(back.arm).name } else { "" },
+        ride: f.riding().map(|_| out),
+    };
+    let texts_due = *said != Some(text);
+    *said = Some(text);
+    for (mut t, gc, count, name, note, bk, ride) in texts.iter_mut().filter(|_| texts_due) {
         let hand = |h: u8| hands[h as usize & 1].as_ref();
         let v = if let Some(g) = gc {
             let n = if g.0 == 0 { f.grenades } else { f.stickies };
             n.to_string()
         } else if let Some(c) = count {
-            hand(c.0).map_or_else(String::new, |g| g.count.clone())
+            hand(c.0).map_or_else(String::new, |g| g.count.to_string())
         } else if let Some(n) = name {
             hand(n.0).map_or("", |g| g.name).to_string()
         } else if let Some(n) = note {
@@ -1496,11 +1583,8 @@ pub fn gear(
         let Some((u, venting)) = hands[h.0 as usize & 1].as_ref().and_then(|g| g.heat) else {
             continue;
         };
-        n.width = Val::Percent(u * 100.0);
-        let c = if venting { SHIELD_LOW } else { HEAT };
-        if img.color != c {
-            img.color = c;
-        }
+        set_width(&mut n, Val::Percent(u * 100.0));
+        tint(&mut img, if venting { SHIELD_LOW } else { HEAT });
     }
 }
 
@@ -1517,6 +1601,7 @@ pub fn vitals(
     mut line: Query<&mut Visibility, (With<HealthLine>, Without<CamoText>)>,
     mut over: Query<&mut Node, (With<OverBar>, Without<ShieldBar>, Without<HealthBar>)>,
     mut camo: Query<(&mut Text, &mut Visibility), With<CamoText>>,
+    mut camo_secs: Local<u32>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -1526,24 +1611,23 @@ pub fn vitals(
     if let Ok(mut n) = over.single_mut() {
         let k = (f.shield - SHIELD_MAX) as f32 / (sim::consts::OVERSHIELD_MAX - SHIELD_MAX) as f32;
         let k = if f.alive { k.clamp(0.0, 1.0) } else { 0.0 };
-        n.width = Val::Px(k * (SHIELD_W - 2.0 * SHIELD_PAD));
+        set_width(&mut n, Val::Px(k * (SHIELD_W - 2.0 * SHIELD_PAD)));
     }
     if let Ok((mut t, mut v)) = camo.single_mut() {
         let on = f.alive && f.camo > 0;
         v.set_if_neq(if on { Visibility::Inherited } else { Visibility::Hidden });
-        if on {
-            let secs = (f.camo as u32).div_ceil(sim::consts::TICK_HZ);
-            let want = format!("CAMO {secs}");
-            if t.0 != want {
-                t.0 = want;
-            }
+        let secs = (f.camo as u32).div_ceil(sim::consts::TICK_HZ);
+        if on && *camo_secs != secs {
+            *camo_secs = secs;
+            t.0.clear();
+            let _ = write!(t.0, "CAMO {secs}");
         }
     }
     let sh = (f.shield as f32 / SHIELD_MAX as f32 * 100.0).clamp(0.0, 100.0);
     let low = f.alive && sh < SHIELD_LOW_PCT;
     if let Ok((mut n, mut img)) = shield.single_mut() {
-        n.width = Val::Percent(sh);
-        img.color = if low { SHIELD_LOW } else { SHIELD };
+        set_width(&mut n, Val::Percent(sh));
+        tint(&mut img, if low { SHIELD_LOW } else { SHIELD });
     }
     if let Ok(mut b) = frame.single_mut() {
         let c = if low {
@@ -1552,7 +1636,7 @@ pub fn vitals(
         } else {
             PLATE
         };
-        b.color = c;
+        tint(&mut b, c);
     }
     if let Ok(mut v) = line.single_mut() {
         let want = if f.alive && f.health < HEALTH_MAX {
@@ -1565,8 +1649,20 @@ pub fn vitals(
         }
     }
     if let Ok(mut n) = health.single_mut() {
-        n.width = Val::Percent((f.health as f32 / HEALTH_MAX as f32 * 100.0).clamp(0.0, 100.0));
+        set_width(
+            &mut n,
+            Val::Percent((f.health as f32 / HEALTH_MAX as f32 * 100.0).clamp(0.0, 100.0)),
+        );
     }
+}
+
+/// What `corner`'s lines say: written again only when it changes.
+#[derive(Clone, Copy, PartialEq)]
+pub struct CornerText {
+    clock: Option<u32>,
+    map: u8,
+    rung: Option<(i32, i32)>,
+    rows: [Option<i32>; 2],
 }
 
 /// Bottom right: the clock while the match runs, the map (and in gun game
@@ -1582,6 +1678,7 @@ pub fn corner(
     mut swatches: Query<(&ScoreSwatch, &mut ImageNode), Without<ScoreFill>>,
     mut fills: Query<(&ScoreFill, &mut Node, &mut ImageNode), (Without<ScoreRow>, Without<ScoreSwatch>)>,
     mut mine: Query<(&ScoreMine, &mut Visibility)>,
+    mut said: Local<Option<CornerText>>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -1592,70 +1689,92 @@ pub fn corner(
     let limit = core.rules.score_limit.max(1);
     let scores = &snap.score[..snap.n_score as usize];
     let score = |i: u8| scores.get(i as usize).copied().unwrap_or(0);
-    let map = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
     let clock = snap.clock as f32 / TICK_HZ as f32;
-    // (score, colour, ours) a row.
-    let mut shown: Vec<(i32, Color, bool)> = Vec::new();
+    // (score, colour, ours) a row: at most two.
+    let mut rows_at = [(0, Color::NONE, false); 2];
+    let mut n_shown = 0;
+    let mut show = |r: (i32, Color, bool)| {
+        rows_at[n_shown] = r;
+        n_shown += 1;
+    };
     if core.rules.teams {
         let us = core.team & 1;
         let side = |t: u8| if t == 0 { RED_SIDE } else { BLUE_SIDE };
-        shown.push((score(us), side(us), true));
-        shown.push((score(1 - us), side(1 - us), false));
+        show((score(us), side(us), true));
+        show((score(1 - us), side(1 - us), false));
     } else {
-        let mut all: Vec<(i32, u8)> = (0..scores.len() as u8)
-            .filter(|&i| i == core.slot || st.names.contains_key(&i))
-            .map(|i| (score(i), i))
-            .collect();
-        all.sort_by_key(|&(v, i)| (-v, i != core.slot, i));
-        let at = all.iter().position(|&(_, i)| i == core.slot).unwrap_or(0);
-        let pick = if at == 0 { [0, 1] } else { [0, at] };
-        for k in pick {
-            if let Some(&(v, i)) = all.get(k) {
+        // The leader, and us under it, or whoever's second when the leader
+        // is us (or we have no score yet): ranked as the board ranks.
+        let key = |i: u8| (-score(i), i != core.slot, i);
+        let seats = || (0..scores.len() as u8).filter(|&i| i == core.slot || st.names.contains_key(&i));
+        if let Some(top) = seats().min_by_key(|&i| key(i)) {
+            let we = seats().any(|i| i == core.slot);
+            let next = if top == core.slot || !we {
+                seats().filter(|&i| i != top).min_by_key(|&i| key(i))
+            } else {
+                Some(core.slot)
+            };
+            for i in [Some(top), next].into_iter().flatten() {
                 let me = i == core.slot;
-                shown.push((v, if me { SHIELD } else { OTHER }, me));
+                show((score(i), if me { SHIELD } else { OTHER }, me));
             }
         }
     }
     // The leader on top.
+    let shown = &mut rows_at[..n_shown];
     shown.sort_by_key(|&(v, _, me)| (-v, !me));
-    let mut mode = map.to_string();
-    if core.rules.gun_game {
-        let mine = score(core.slot);
-        let next = if mine < limit - 1 {
-            format!("next {}", sim::arms::arm(sim::world::Rules::rung(mine + 1)).name)
-        } else {
-            "last gun".into()
-        };
-        mode = format!("Rung {} of {limit}  -  {next}\n{mode}", mine.min(limit - 1) + 1);
-    }
-    for (mut t, ck, md, num) in texts.iter_mut() {
-        let v = if ck.is_some() {
-            if snap.phase == 1 {
-                mmss(clock)
+    let shown = &*shown;
+    let text = CornerText {
+        clock: (snap.phase == 1).then(|| clock.max(0.0) as u32),
+        map: s.map_id,
+        rung: core.rules.gun_game.then(|| (score(core.slot), limit)),
+        rows: [0, 1].map(|k| shown.get(k).map(|r| r.0)),
+    };
+    if *said != Some(text) {
+        *said = Some(text);
+        let map = sim::maps::ALL.iter().find(|d| d.id == s.map_id).map_or("", |d| d.name);
+        let mut mode = map.to_string();
+        if core.rules.gun_game {
+            let mine = score(core.slot);
+            let next = if mine < limit - 1 {
+                format!("next {}", sim::arms::arm(sim::world::Rules::rung(mine + 1)).name)
             } else {
-                String::new()
-            }
-        } else if md.is_some() {
-            mode.clone()
-        } else if let Some(n) = num {
-            shown.get(n.0 as usize).map_or_else(String::new, |r| r.0.to_string())
-        } else {
-            continue;
-        };
-        set_text(&mut t, v);
+                "last gun".into()
+            };
+            mode = format!("Rung {} of {limit}  -  {next}\n{mode}", mine.min(limit - 1) + 1);
+        }
+        for (mut t, ck, md, num) in texts.iter_mut() {
+            let v = if ck.is_some() {
+                if snap.phase == 1 {
+                    mmss(clock)
+                } else {
+                    String::new()
+                }
+            } else if md.is_some() {
+                mode.clone()
+            } else if let Some(n) = num {
+                shown.get(n.0 as usize).map_or_else(String::new, |r| r.0.to_string())
+            } else {
+                continue;
+            };
+            set_text(&mut t, v);
+        }
     }
     for (r, mut n) in rows.iter_mut() {
         set_display(&mut n, (r.0 as usize) < shown.len());
     }
     for (r, mut img) in swatches.iter_mut() {
         if let Some(&(_, c, _)) = shown.get(r.0 as usize) {
-            img.color = c;
+            tint(&mut img, c);
         }
     }
     for (r, mut n, mut img) in fills.iter_mut() {
         if let Some(&(v, c, _)) = shown.get(r.0 as usize) {
-            n.width = Val::Percent((v as f32 / limit as f32 * 100.0).clamp(0.0, 100.0));
-            img.color = c;
+            set_width(
+                &mut n,
+                Val::Percent((v as f32 / limit as f32 * 100.0).clamp(0.0, 100.0)),
+            );
+            tint(&mut img, c);
         }
     }
     for (r, mut v) in mine.iter_mut() {
@@ -1724,7 +1843,7 @@ pub fn reticle_tint(seen: Res<crate::Seen>, mut q: Query<&mut BackgroundColor, W
 /// comes.
 /// Every seat by side (teams first, each side's score) then by score:
 /// name, kills, deaths, score.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn board(
     link: NonSend<crate::LinkRes>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -1733,10 +1852,14 @@ pub fn board(
     mut st: ResMut<HudState>,
     mut panel: Query<&mut Visibility, With<Board>>,
     mut cols: Query<(&mut Text, &BoardColumn)>,
+    (mut out, mut seats): (Local<[String; 4]>, Local<Vec<u8>>),
 ) {
     let s = link.0.session();
     let over = s.ready && s.core.latest().phase == 2;
-    st.board = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
+    let held = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
+    if st.board != held {
+        st.board = held;
+    }
     // Once the match is over the carnage report (`medals.rs`) is the
     // board, as soon as its rows come.
     // Dead a moment, it comes up on its own until the respawn (Halo 2's).
@@ -1754,44 +1877,50 @@ pub fn board(
     let core = &s.core;
     let snap = core.latest();
     let score = |i: usize| snap.score.get(i).copied().unwrap_or(0);
-    let mut rows: Vec<[String; 4]> = Vec::new();
-    let mut seats: Vec<u8> = st.names.keys().copied().collect();
     let side = |q: u8| st.teams.get(&q).copied().unwrap_or(0) & 1;
     let kd = |q: u8| st.tally.kd.get(&q).copied().unwrap_or((0, 0));
+    // Each column written row by row into the same Strings every frame.
+    let heads = ["", "K", "D", "SCORE"];
+    for (o, h) in out.iter_mut().zip(heads) {
+        o.clear();
+        o.push_str(h);
+        o.push('\n');
+    }
+    let [name, kills, deaths, total] = &mut *out;
+    seats.clear();
     if core.rules.teams {
         for t in [core.team & 1, 1 - (core.team & 1)] {
-            let name = if t == 0 { "RED" } else { "BLUE" };
-            rows.push([name.into(), String::new(), String::new(), score(t as usize).to_string()]);
-            let mut mine: Vec<u8> = seats.iter().copied().filter(|&q| side(q) == t).collect();
-            mine.sort_by_key(|&q| (std::cmp::Reverse(kd(q).0), kd(q).1, q));
-            for q in mine {
+            name.push_str(if t == 0 { "RED\n" } else { "BLUE\n" });
+            kills.push('\n');
+            deaths.push('\n');
+            let _ = writeln!(total, "{}", score(t as usize));
+            seats.clear();
+            seats.extend(st.names.keys().copied().filter(|&q| side(q) == t));
+            seats.sort_by_key(|&q| (std::cmp::Reverse(kd(q).0), kd(q).1, q));
+            for &q in seats.iter() {
                 let (k, d) = kd(q);
-                rows.push([format!("  {}", st.name(q)), k.to_string(), d.to_string(), String::new()]);
+                let _ = writeln!(name, "  {}", st.shown(q));
+                let _ = writeln!(kills, "{k}");
+                let _ = writeln!(deaths, "{d}");
+                total.push('\n');
             }
         }
     } else {
+        seats.extend(st.names.keys().copied());
         seats.sort_by_key(|&q| (std::cmp::Reverse(score(q as usize)), q));
-        for q in seats {
+        for &q in seats.iter() {
             let (k, d) = kd(q);
             let me = if q == core.slot { " <" } else { "" };
-            rows.push([
-                format!("{}{me}", st.name(q)),
-                k.to_string(),
-                d.to_string(),
-                score(q as usize).to_string(),
-            ]);
+            let _ = writeln!(name, "{}{me}", st.shown(q));
+            let _ = writeln!(kills, "{k}");
+            let _ = writeln!(deaths, "{d}");
+            let _ = writeln!(total, "{}", score(q as usize));
         }
     }
-    let heads = ["", "K", "D", "SCORE"];
     for (mut t, c) in cols.iter_mut() {
-        let i = c.0 as usize;
-        let mut v = format!("{}\n", heads[i]);
-        for r in &rows {
-            v.push_str(&r[i]);
-            v.push('\n');
-        }
-        if t.0 != v {
-            t.0 = v;
+        let v = &out[c.0 as usize];
+        if t.0 != *v {
+            t.0.clone_from(v);
         }
     }
 }
@@ -1802,18 +1931,27 @@ pub fn prompt(
     binds: Res<crate::binds::Binds>,
     seen: Res<crate::Seen>,
     mut q: Query<&mut Text, With<PromptText>>,
+    mut said: Local<Option<(&'static str, crate::items::Offer)>>,
 ) {
     let s = link.0.session();
-    let line = if s.ready {
-        crate::items::offer(&s.core, &seen.vehicles)
-            .map(|what| format!("{}  {what}", binds.key(crate::binds::Action::Use)))
-    } else {
-        None
+    let key = binds.key(crate::binds::Action::Use);
+    let offer = s
+        .ready
+        .then(|| crate::items::offer(&s.core, &seen.vehicles))
+        .flatten()
+        .map(|what| (key, what));
+    // Written when it changes, not a fresh line a frame.
+    if *said == offer {
+        return;
     }
-    .unwrap_or_default();
+    *said = offer;
+    let mut line = String::new();
+    if let Some((key, what)) = offer {
+        let _ = write!(line, "{key}  {what}");
+    }
     for mut t in q.iter_mut() {
         if t.0 != line {
-            t.0 = line.clone();
+            t.0.clone_from(&line);
         }
     }
 }
