@@ -402,6 +402,12 @@
           "take": "rock crisp close up: fractured planes, strata, moss and grass where a ledge holds soil",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
+        },
+        {
+          "file": "bloodgulch.jpg",
+          "take": "a wall that stands sheer from a short bank to a hard, angular crest, green on its top",
+          "ignore": "the gun in view, the HUD, the figures, the ring in the sky",
+          "private": true
         }
       ]
     },
@@ -437,6 +443,48 @@
           "file": "hdlook1.jpg",
           "take": "layers of distance, the near rock crisp and the far ridges stepping back into haze; cloud with lit tops and shaded bases, some below the skyline; water far below",
           "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        },
+        {
+          "file": "1200px-Blood_gulch.webp",
+          "take": "trails worn from base to base through the grass; walls with peaks and notches along their tops",
+          "ignore": "the gun in view, the HUD, the figures, the ring in the sky",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-inland",
+      "name": "Dry Fork: back up the canyon from the beach",
+      "what": "from blue's side by the beach, looking west up the canyon over blue's bunker",
+      "take": "a canyon cut into higher country: walls with a hard crest, more land standing beyond the far end, trails worn across the floor",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/inland.png",
+      "refs": [
+        {
+          "file": "1200px-Blood_gulch.webp",
+          "take": "sheer walls ending in sharp angular crests; higher cliffs beyond the far end, paler with distance; dirt trails winding between patches of grass; a few rounded boulders",
+          "ignore": "the gun in view, the HUD, the figures, the ring in the sky",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-base",
+      "name": "Dry Fork: red's bunker",
+      "what": "red's bunker from the floor, the wall behind it",
+      "take": "a base that was built: trim, piers, lights in its team's colour, standing on worn ground under a wall with a jagged skyline",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/base.png",
+      "refs": [
+        {
+          "file": "bloodgulch.jpg",
+          "take": "a base with battered walls, trim bands, posts and lights in its team's colour; a sheer wall behind with an angular crest and green on its top; big natural boulders; conifers",
+          "ignore": "the gun in view, the HUD, the figures, the ring in the sky",
           "private": true
         }
       ]

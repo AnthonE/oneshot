@@ -71,15 +71,15 @@ const _: () = assert!(
 /// the tallest is still under a crouching fighter's knee.
 const FLOWER_H: (f32, f32) = (0.12, 0.26);
 const FLOWER_STALK_R: f32 = 0.004;
-const FLOWER_HEAD: Vec3 = Vec3::new(0.04, 0.018, 0.04);
+const FLOWER_HEAD: Vec3 = Vec3::new(0.03, 0.014, 0.03);
 /// How many stand in one cell's clump, least and most, and how far from
 /// its middle.
-const FLOWER_CLUMP: (u32, u32) = (2, 5);
+const FLOWER_CLUMP: (u32, u32) = (1, 4);
 const FLOWER_CLUMP_R: f32 = 0.3;
 /// The share of a drift's cells that flower, and where in the drift noise
 /// ([`drift`]) a drift starts and is whole: a few percent of a meadow.
-const FLOWER_SHARE: f32 = 0.7;
-const FLOWER_DRIFT: (f32, f32) = (0.54, 0.66);
+const FLOWER_SHARE: f32 = 0.42;
+const FLOWER_DRIFT: (f32, f32) = (0.6, 0.74);
 /// Flowers want turf: none where the grass's share of the ground is under
 /// this.
 const FLOWER_TURF: f32 = 0.45;

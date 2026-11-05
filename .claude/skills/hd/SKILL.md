@@ -19,12 +19,12 @@ tools/hd.sh beach cliff             # some
 tools/hd.sh list                    # the views and their poses
 HD_TAG=before tools/hd.sh           # → traces/hd/before/…, to keep a round by hand
 ONESHOT_BIN=crates/client/target/release/oneshot tools/hd.sh   # the release client: the sky as it ships (below)
-ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-beach,hd-cliff,hd-meadow,hd-vista
+ELO_REF_DIR=moodboard node tools/board.mjs look --views hd-beach,hd-cliff,hd-meadow,hd-vista,hd-inland,hd-base
                                     # shoot, then the sheet: reference | now | last pass, with the marks
 node ci/look.mjs 'map=3&eye=127,-0.2,4&look=150,-5,-6'         # the same eye in the WebGL2 page (SwiftShader, minutes)
 ```
 
-Build first: `cd crates/client && cargo build` (a minute or two after a change; a shader in `assets/shaders` or a file in `assets` needs none). The references are other games' screenshots in `moodboard/` (git-ignored, the board's private refs): a target for the look, never an asset. Nothing is traced, copied or published from them, and no prompt names them.
+Build first: `cd crates/client && cargo build` (a minute or two after a change; a shader in `assets/shaders` or a file in `assets` needs none). The references are other games' screenshots in `moodboard/` (the hdlook pictures for nature up close, the Blood Gulch ones for a canyon's walls, trails and bases; git-ignored, the board's private refs): a target for the look, never an asset. Nothing is traced, copied or published from them, and no prompt names them.
 
 The views are `tools/hd.sh`'s `VIEWS` and the board's `hd-*` (`board/board.json`: each with what to take from its reference and what to ignore). A new one goes in both. `hd-judge` (`.claude/agents/hd-judge.md`) reads a view against its reference without your hopes for it.
 
@@ -36,10 +36,10 @@ Read a view against this list, top down; the first line that fails over a large 
 |---|---|---|
 | **focus** | every edge crisp | `quality.rs` (`TAA_SHARPEN`), the render scale |
 | **ground** | a photograph with grain at the feet, never one flat value across a field | `tools/ground.sh` (the four sets), `textures::GROUND_TILE_M`, `ground::TINT`, `ground.wgsl` (`SOIL_PATCH`) |
-| **cover** | grass as a carpet with clumps in it, flowers in drifts, bare tracks | `grass.rs` (where it grows, how thick), `clutter.rs` (stones, twigs, flowers) |
+| **cover** | grass as a carpet with clumps in it, flowers in drifts, bare tracks | `grass.rs` (where it grows, how thick, the trails), `clutter.rs` (stones, twigs, flowers) |
 | **rock** | faces, beds and cracks; a boulder is a boulder | `ground.wgsl` (the beds, the rock face), `cliffs.rs`, `rock.rs`, `boulders.rs` |
 | **things standing** | trees with crowns, stacks, structures breaking the skyline | `trees.rs`, `boulders.rs` (`scenery`), the map's `map.json` |
-| **distance** | each further thing a step paler; something beyond the map | `rig.rs` (the air), `mood.rs` (dust, mist), `boulders.rs` (scenery out of bounds) |
+| **distance** | each further thing a step paler; something beyond the map | `rig.rs` (the air), `mood.rs` (dust, mist), `boulders.rs` (scenery out of bounds), `far.rs` (the land beyond the rim) |
 | **sky** | cloud with lit tops and grey bases, a deep clear blue | `deck.rs`, `cloud.wgsl`, `deck.wgsl`, `mood.rs` |
 | **water** | a hard horizon, the sky in it, rock standing in it | `water.rs`, `water.wgsl` |
 | **life** | something moving: spray, dust, motes, grass in wind | `look/fx/` (the pools), `foliage.rs` |
@@ -49,6 +49,8 @@ Read a view against this list, top down; the first line that fails over a large 
 
 - **A texture set.** `tools/ground.sh` fetches a CC0 set from Poly Haven into `sources/polyhaven` and cuts it; it prints the photograph's mean, which the tint in `ground::TINT` is set against, and the size it was shot at goes in `GROUND_TILE_M`. A cliff wants its rock far larger than life (a bed a metre thick reads from the floor; at its own size a wall is one value).
 - **A rock or a prop.** Commission it (`tools/models/meshy_gen.py <slug> --multiview --tris 12000 --image-prompt "…"`: the picture first with `--image-only`, look at it, then the mesh; about 40 credits), cut it (`tools/models/rocks.py`: thinned as a copy with its own map, Meshy's paint baked onto it), then give it a place: `boulders::GLB` and, for scenery, a line in `boulders::scenery`.
+- **The terrain's own shape.** The canyon is one height function (`maps/canyon/map.json`'s `canyon` block, `tools/maps/compile.mjs`). Above where anyone can stand (the cliff's knots past 42 m, `mesa`, `crags`) it is the skyline's to shape: change it, `node tools/maps/compile.mjs`, diff the compiled heights to see nothing reachable moved, then `cargo test -p sim --test determinism` (Dry Fork's golden moves with any ray that meets the new rock: update it in the same commit) and `--test maps`. Twenty seconds, both.
+- **A structure's trim.** A prefab placed with `"dress": true` is drawn and never collided: keep it a hand proud of the boxes it dresses, and nothing thick at head height where someone stands.
 - **Where things grow.** `grass::by_height` and `cover`, `clutter`'s `Grows` and `drift`. The ground's colour and its tufts read the same rule.
 - **A shader.** No rebuild; shoot again. A number the shader holds is a `const` at its top with why.
 - **The air and the light.** A map's mood (`mood.rs`), one for every player on it.

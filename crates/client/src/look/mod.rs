@@ -11,6 +11,7 @@ pub mod counter;
 pub mod curve;
 pub mod deck;
 pub mod emblem;
+pub mod far;
 pub mod fill;
 pub mod foliage;
 pub mod fresnel;

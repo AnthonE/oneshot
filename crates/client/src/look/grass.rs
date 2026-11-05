@@ -218,10 +218,49 @@ pub fn by_height(y: f32) -> f32 {
     (up * down).max(top)
 }
 
-/// How much grass grows at (x, z) at height `y`, by its height and its
-/// patch, 0..1: the splat's share (`level::ground_point`) and the tufts'.
+/// The trails worn into the canyon's floor, as legs between points (x, z)
+/// on red's half; blue's are their mirror. From the bunker's door out to
+/// the middle hill, to the hill on each side, and round to the truck bays:
+/// where everyone runs, the grass is gone.
+const TRAILS: [[f32; 4]; 9] = [
+    [-93.0, 0.0, -62.0, 3.0],
+    [-62.0, 3.0, -34.0, -5.0],
+    [-34.0, -5.0, -4.0, 0.0],
+    [-93.0, -3.0, -84.0, -20.0],
+    [-84.0, -20.0, -66.0, -28.0],
+    [-66.0, -28.0, -36.0, -34.0],
+    [-93.0, 3.0, -82.0, 20.0],
+    [-82.0, 20.0, -60.0, 28.0],
+    [-60.0, 28.0, -30.0, 30.0],
+];
+/// A trail is bare this far either side of its line and grown over again
+/// by the second, metres; it wanders off the line by up to `TRAIL_WANDER_M`.
+const TRAIL_M: (f32, f32) = (1.1, 3.2);
+const TRAIL_WANDER_M: f32 = 5.0;
+
+/// How much of a trail (x, z) is on, 0..1: 1 on its line, 0 clear of it.
+pub fn trail(x: f32, z: f32) -> f32 {
+    // The line wanders: the point is read a few metres off where it is,
+    // by the meadow's own noise, the same on both halves.
+    let ax = x.abs();
+    let wx = ax + (patch(ax * 0.9 + 40.0, z * 0.9) - 0.5) * 2.0 * TRAIL_WANDER_M;
+    let wz = z + (patch(ax * 0.9, z * 0.9 + 70.0) - 0.5) * 2.0 * TRAIL_WANDER_M;
+    let p = Vec2::new(-wx, wz);
+    let mut near = f32::INFINITY;
+    for t in TRAILS {
+        let (a, b) = (Vec2::new(t[0], t[1]), Vec2::new(t[2], t[3]));
+        let ab = b - a;
+        let k = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+        near = near.min((p - (a + ab * k)).length());
+    }
+    1.0 - ((near - TRAIL_M.0) / (TRAIL_M.1 - TRAIL_M.0)).clamp(0.0, 1.0)
+}
+
+/// How much grass grows at (x, z) at height `y`, by its height, its patch
+/// and the trails, 0..1: the splat's share (`level::ground_point`) and the
+/// tufts'.
 pub fn cover(x: f32, z: f32, y: f32) -> f32 {
-    by_height(y) * (1.0 - PATCH_BARE + PATCH_BARE * patch(x, z))
+    by_height(y) * (1.0 - PATCH_BARE + PATCH_BARE * patch(x, z)) * (1.0 - trail(x, z))
 }
 
 /// Under the floor (the beach, the creek's bed) nothing green grows, but

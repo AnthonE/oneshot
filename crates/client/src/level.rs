@@ -829,8 +829,19 @@ pub fn build(
     }
     // Rock out of reach: the sea's stacks and stones.
     crate::look::boulders::spawn_scenery(commands, id);
-    // And trees along the rim over the walls, out of reach too.
+    // And trees along the rim over the walls, out of reach too, and the
+    // land beyond it (`look/far.rs`).
     if let Some(t) = &def.terrain {
+        crate::look::far::spawn(
+            commands,
+            meshes,
+            mats,
+            Vec2::new(t.x0, t.z0),
+            Vec2::new(t.x0 + (t.nx - 1) as f32 * t.cell, t.z0 + (t.nz - 1) as f32 * t.cell),
+            hi.0,
+            def.light.sea,
+            id as u32,
+        );
         let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z);
         for (foot, height, kind, seed) in crate::look::trees::rim(ground, lo, hi, id as u32) {
             let cards = cards.get(images);
