@@ -243,7 +243,8 @@ pub fn draw(
     let s = link.0.session();
     let f = s.core.own().0;
     let arm = sim::arms::arm(f.gun().arm);
-    let up = s.ready && f.alive && look.magnification(arm) > 1.0 && f.riding().is_none();
+    // Up with the eased zoom, as the gun goes (`draw_view`).
+    let up = s.ready && f.alive && look.scoped(arm) && f.riding().is_none();
     if let Ok(mut v) = root.single_mut() {
         let want = if up { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
@@ -275,7 +276,8 @@ pub fn draw(
     if let Ok(mut t) = zoom.single_mut() {
         use std::fmt::Write as _;
         line.clear();
-        let _ = write!(line, "{}x", arm.zoom_at(look.level));
+        // Still up while it eases out: the level it was at.
+        let _ = write!(line, "{}x", arm.zoom_at(look.level.max(1)));
         if t.0 != *line {
             t.0.clone_from(&line);
         }

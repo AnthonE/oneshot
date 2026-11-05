@@ -1869,7 +1869,9 @@ fn ended(
         if now - at < END_HOLD_S {
             return;
         }
-        [if st.ended { "Match over" } else { "Disconnected" }, st.cup.as_str()]
+        let mut gone = String::new();
+        hud::gone_line(&mut gone, st.ended, &*link.0);
+        [gone.as_str(), st.cup.as_str()]
             .iter()
             .filter(|s| !s.is_empty())
             .copied()

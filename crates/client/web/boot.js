@@ -33,6 +33,7 @@ import { startMix } from './mix.js';
     return p;
   };
 }
+const $id = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const flag = (k) => params.get(k) === '1';
 if (flag('lite')) document.getElementById('wrap').classList.add('lite');
@@ -57,6 +58,34 @@ document.addEventListener('fullscreenchange', () => {
 });
 const boot = document.getElementById('boot');
 const say = (line, bad) => { document.getElementById('say').textContent = line; boot.classList.toggle('failed', !!bad); };
+/* The splash's bar: `share` 0..1 of the download, or null for the
+   sliding bar (a wait with no end the page can see). */
+const bar = (share) => {
+  boot.classList.toggle('counting', share !== null);
+  boot.querySelector('.bar i').style.width = share === null ? '' : `${(Math.min(1, share) * 100).toFixed(1)}%`;
+};
+/* Whether the tab was just in the background: a browser isn't told why
+   the server closed the connection (client-net's close_why), and a tab
+   that drew nothing for a while fell behind and was cut, so the game
+   says that instead (crates/client/src/link.rs, `Web::ended_why`). */
+{
+  let hiddenAt = -1e9;
+  let shownAt = -1e9;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = performance.now();
+    else shownAt = performance.now();
+  });
+  window.__oneshotAsleep = () =>
+    document.hidden || (performance.now() - shownAt < 5000 && shownAt - hiddenAt > 2000);
+}
+// Where the game's own endpoints are: beside the page in dev, the game
+// box when the page is published to elopros.com (ci/publish_web.sh
+// writes origin.json). Asked at once, so a report can go while the game
+// downloads, or after it failed to.
+const origin = fetch('origin.json')
+  .then((o) => (o.ok ? o.json() : {}))
+  .then((o) => o.server ?? '')
+  .catch(() => '');
 // The splash goes once the game has drawn a few frames.
 const shown = () => {
   if ((window.__oneshot?.frames ?? 0) > 3) { boot.classList.add('gone'); return; }
@@ -95,14 +124,16 @@ const gpuProbe = (async () => {
     ]);
     if (!adapter) return { ok: false, why: 'no WebGPU adapter' };
     const info = adapter.info || {};
-    if (info.isFallbackAdapter || adapter.isFallbackAdapter) return { ok: false, soft: true, why: 'a software WebGPU adapter' };
-    if (!adapter.features.has('float32-filterable')) return { ok: false, why: 'no float32-filterable' };
-    return { ok: true, why: 'a WebGPU adapter' };
+    const name = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ');
+    if (info.isFallbackAdapter || adapter.isFallbackAdapter) return { ok: false, soft: true, name, why: 'a software WebGPU adapter' };
+    if (!adapter.features.has('float32-filterable')) return { ok: false, name, why: 'no float32-filterable' };
+    return { ok: true, name, why: 'a WebGPU adapter' };
   } catch {
     return { ok: false, why: 'the WebGPU adapter was refused' };
   }
 })();
 let mods = null;
+let buildInfo = null;
 const key = () => String(mods?.webgpu?.sha256 ?? mods?.webgpu?.wasm_bytes ?? '');
 async function pickModule() {
   const has = (k) => (mods ? !!mods[k] : k === 'webgl2');
@@ -133,14 +164,59 @@ async function load(gfx) {
   const v = sha ? `?v=${sha.slice(0, 12)}` : '';
   // The module's fetch goes out before the glue's import: it is the
   // long one.
-  const res = fetch(new URL(m.wasm + v, location.href));
+  downloading = true;
+  const res = fetch(new URL(m.wasm + v, location.href)).then((r) => counted(r, mods?.[gfx]?.wasm_bytes));
   res.catch(() => { /* awaited by the glue */ });
-  const glue = await import(m.js + v);
-  await glue.default({ module_or_path: res });
+  let glue;
+  try {
+    glue = await import(m.js + v);
+    await glue.default({ module_or_path: res });
+  } finally {
+    downloading = false;
+    bar(null);
+  }
   window.__oneshotGfx = gfx;
   // The game's sound (mix.js), once, before the game starts asking for it.
   if (!window.__oneshotMix) startMix(v);
   return glue;
+}
+/* The download, on the splash: "Downloading the game · 13 / 30 MB".
+   The bytes are counted off a copy of the response while the compiler
+   takes the original, so it still compiles as it streams and the
+   browser's code cache still keys to its URL. The whole is the build's
+   (build.json): a gzipped page's Content-Length isn't the module's size
+   (Gates' app.js `counted`). */
+let downloading = false;
+function counted(res, whole) {
+  if (!res.ok) throw new Error(`The game didn't download (HTTP ${res.status}). Reload to try again`);
+  let want = Number(whole) || 0;
+  if (!want && !res.headers.get('content-encoding')) want = Number(res.headers.get('content-length')) || 0;
+  const reader = res.clone().body?.getReader();
+  if (!reader) return res;
+  const mb = (n) => (n / 1048576).toFixed(0);
+  // Only while it's the download the splash is on (a late chunk's count
+  // never paints over what came after).
+  const paint = (got) => {
+    if (!downloading) return;
+    say(`Downloading the game · ${mb(got)}${want ? ` / ${mb(want)}` : ''} MB`);
+    bar(want ? got / want : null);
+  };
+  paint(0);
+  let got = 0;
+  let last = 0;
+  (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.byteLength;
+      const now = performance.now();
+      if (now - last > 100) { last = now; paint(got); }
+    }
+    if (!downloading) return;
+    bar(null);
+    say('Starting the game');
+  })().catch(() => { /* the original's failure is the glue's to say */ });
+  return res;
 }
 /* Back into the WebGL2 module, once: the failure is written against
    this build first, and the WebGL2 module has no hook that could send
@@ -148,7 +224,10 @@ async function load(gfx) {
    context never takes a WebGL2 one, and Bevy's run() doesn't return,
    so the way there is a reload. */
 let started = 0;
+// Going back into WebGL2: what the dying module does next isn't a crash.
+let switching = false;
 function gpuFallBack(why) {
+  switching = true;
   let kept = false;
   try {
     localStorage.setItem(GPU_FAILED, key());
@@ -203,8 +282,134 @@ window.__oneshotPanic = (msg) => {
     gpuFallBack('the graphics card refused WebGPU');
     return;
   }
-  if (!boot.classList.contains('gone')) say('The game stopped. Reload to try again', true);
+  stopped(m);
 };
+
+/* ── reports: crashes and a player's, to the server's /bugs ──────────
+   (crates/server/src/bugs.rs: a JSON object of at most 16 KB, kept with
+   the time it came and nothing about the sender.) Each carries the
+   build, the browser and its GPU, and the match: its salt commitment
+   (which the server's review files carry), map, tick and net counts
+   (window.__oneshot, crates/client/src/lib.rs `expose`). */
+let webglName = null;
+function gpuName() {
+  if (webglName === null) {
+    webglName = '';
+    try {
+      const g = document.createElement('canvas').getContext('webgl2');
+      const x = g && g.getExtension('WEBGL_debug_renderer_info');
+      webglName = x ? String(g.getParameter(x.UNMASKED_RENDERER_WEBGL)) : g ? 'webgl2' : 'no webgl2';
+      g?.getExtension('WEBGL_lose_context')?.loseContext();
+    } catch { /* none */ }
+  }
+  return webglName;
+}
+async function reportDoc(kind, text) {
+  const s = window.__oneshot || {};
+  buildInfo ??= await built;
+  const gfx = window.__oneshotGfx || '';
+  const probe = await Promise.race([gpuProbe, new Promise((r) => setTimeout(() => r({}), 500))]);
+  const doc = {
+    kind,
+    text: String(text).slice(0, 4000),
+    build: {
+      commit: buildInfo?.commit || '', gfx, sha: (mods?.[gfx]?.sha256 || '').slice(0, 12),
+      version: s.version || '', proto: s.proto ?? null,
+    },
+    where: {
+      ua: navigator.userAgent, gpu: gfx === 'webgpu' && probe.name ? probe.name : gpuName(),
+      tier: s.tier || '', quality: s.quality || '',
+      screen: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, page: location.pathname,
+    },
+    game: {
+      screen: s.screen || '', in_match: !!s.in_match, connected: !!s.connected, match: s.match || '',
+      map: s.map ?? null, tick: s.tick ?? null, stats: s.stats ? Array.from(s.stats) : [],
+      frames: s.frames ?? 0, ended: !!s.ended, reason: s.reason || '',
+    },
+  };
+  // Under the server's 16 KB whatever the text's letters weigh.
+  if (new Blob([JSON.stringify(doc)]).size > 15000) doc.text = doc.text.slice(0, 1000);
+  return doc;
+}
+/* A crash goes as a beacon (it survives the page going); a player's
+   report as a request, so the page can say it went. The status, or 0. */
+async function sendReport(doc, beacon) {
+  const url = `${await origin}bugs`;
+  const body = JSON.stringify(doc);
+  if (beacon && navigator.sendBeacon) return navigator.sendBeacon(url, body) ? 204 : 0;
+  try {
+    return (await fetch(url, { method: 'POST', body, headers: { 'Content-Type': 'text/plain' }, keepalive: true })).status;
+  } catch { return 0; }
+}
+/* The game stopped (a panic, or a trap with no panic behind it: out of
+   memory, an unreachable): reported once, and said, with a way back,
+   rather than a frozen canvas. A panic is followed by its trap; the
+   first, which has the panic's words, is the one sent. */
+let crashed = false;
+function stopped(line) {
+  if (crashed || switching) return;
+  crashed = true;
+  reportDoc('crash', line).then((d) => sendReport(d, true)).catch(() => {});
+  if (!boot.classList.contains('gone')) { say('The game stopped. Reload to try again', true); return; }
+  try { document.exitPointerLock(); } catch { /* not locked */ }
+  const note = document.createElement('div');
+  note.id = 'stopbar';
+  note.setAttribute('role', 'alert');
+  const a = document.createElement('a');
+  a.href = location.href;
+  a.textContent = 'RELOAD';
+  note.append('THE GAME STOPPED. WHAT IT SAID WAS SENT TO US', a);
+  note.title = String(line).slice(0, 400);
+  document.body.append(note);
+}
+const trap = (e) => e instanceof WebAssembly.RuntimeError;
+addEventListener('error', (e) => { if (trap(e.error)) stopped(String(e.error)); });
+addEventListener('unhandledrejection', (e) => { if (trap(e.reason)) stopped(String(e.reason)); });
+
+/* A player's report: the game's Esc menu (REPORT A BUG, crates/client/
+   src/pause.rs) opens this over it. The cursor is already free there. */
+{
+  const box = $id('report');
+  const text = $id('report-text');
+  const line = $id('report-status');
+  const send = $id('report-send');
+  const close = () => {
+    box.hidden = true;
+    document.getElementById('game').focus();
+  };
+  window.__oneshotReport = () => {
+    try { document.exitPointerLock(); } catch { /* not locked */ }
+    line.textContent = '';
+    line.className = '';
+    send.disabled = false;
+    box.hidden = false;
+    text.focus();
+  };
+  $id('report-cancel').addEventListener('click', close);
+  box.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') close();
+  });
+  $id('report-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!text.value.trim()) { line.textContent = 'Say what happened first.'; return; }
+    send.disabled = true;
+    line.className = '';
+    line.textContent = 'Sending...';
+    const code = await sendReport(await reportDoc('player', text.value), false);
+    if (code === 204) {
+      text.value = '';
+      line.textContent = 'Sent. Thank you.';
+      setTimeout(close, 1200);
+      return;
+    }
+    send.disabled = false;
+    line.className = 'bad';
+    line.textContent = code === 429 ? 'Too many reports from here just now: try again later.'
+      : code === 404 ? "This server doesn't take reports."
+      : "It didn't go through. Try again in a moment.";
+  });
+}
 
 /* ── the clip: F9 in a match (after Gates' web/app.js) ───────────────
    The game keeps its last minute (client-net's clip.rs) and F9 hands
@@ -308,12 +513,10 @@ window.addEventListener('message', (ev) => {
 for (const b of $c('clip-styles').querySelectorAll('button')) b.addEventListener('click', () => clipMake(b.dataset.style));
 $c('clip-close').addEventListener('click', () => { clipReset(); clipUi.tape = null; $c('clip').hidden = true; });
 
-// Where the game's own endpoints are: beside the page in dev, the game
-// box when the page is published to elopros.com (ci/publish_web.sh
-// writes origin.json).
 let base = '';
 try {
-  mods = (await built)?.modules ?? null;
+  buildInfo = await built;
+  mods = buildInfo?.modules ?? null;
   let { gfx, why } = await pickModule();
   let switched = null;
   try {
@@ -345,10 +548,7 @@ try {
     pose(location.search, ['lite'].filter(flag).concat(gfxOpts).join(','));
     await new Promise(() => {}); // nothing more for the page to do
   }
-  try {
-    const o = await fetch('origin.json');
-    if (o.ok) base = (await o.json()).server ?? '';
-  } catch { /* none: beside the page */ }
+  base = await origin;
   say('Finding the server');
   const info = await (await fetch(`${base}server.json`)).json();
   // A server on its way down: the live one, if it is now another.
