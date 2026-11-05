@@ -288,6 +288,8 @@ pub struct Models {
     pub guns: Vec<Option<Handle<Scene>>>,
     pub rocket: Handle<Scene>,
     pub frag: Handle<Scene>,
+    /// A vehicle's hull (`look/truck.rs`).
+    pub truck: Handle<Scene>,
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -302,6 +304,7 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         guns,
         rocket: scene("rocket"),
         frag: scene("frag"),
+        truck: scene("truck"),
     });
 }
 

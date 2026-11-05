@@ -39,6 +39,7 @@ pub mod sky;
 pub mod stars;
 pub mod textures;
 pub mod trees;
+pub mod truck;
 pub mod vault;
 pub mod viewmodel;
 pub mod water;

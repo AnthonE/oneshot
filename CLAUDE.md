@@ -25,7 +25,7 @@ Fireplace, engine-shim and Elo Pros.
 | `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/boot.js` finds the server, signs in and does the party's voice, `web/voice.js`). Its screens are Gates' style, on both: the title (`front.rs`: PLAY, PARTY, FRIENDS; connecting is its state, `door.rs`), the Esc menu, the settings; a pad moves on them (`pad.rs`). The party's lobby is held from the title on (`party.rs`). Its own workspace (`ci/client.sh`). Draws, never decides |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
-| `tools/models` | the guns, ours: a Blender script each on `lib.py`'s kit, exported to `crates/client/assets/models` |
+| `tools/models` | the guns, ours: a Blender script each on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE) |
 | `tools/assets.mjs`, `tools/glb` | Triple T, sounds and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
 
