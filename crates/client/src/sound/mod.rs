@@ -1,5 +1,8 @@
-//! Sound. Every effect goes through our own mixer (`mix.rs`): one stream
-//! Bevy plays, the game deciding each voice's ear gains, pitch and filter.
+//! Sound. Every effect goes through our own mixer (`crates/mix`), the game
+//! deciding each voice's ear gains, pitch and filter: on the desktop one
+//! stream Bevy plays, in a browser the browser's audio thread (an
+//! AudioWorklet: `web/mix.js`, `web/mix-worklet.js`, `crates/mix-worklet`),
+//! never a timer on the page's own.
 //!
 //! - **Where a sound is:** its gain falls with distance (a near-field
 //!   `near / (near + d)` times `(1 − d/reach)²`, silent at its reach), it
@@ -26,13 +29,10 @@
 //!
 //! What to hear is decided every frame on every build ([`decide`]). It is
 //! played live always in a browser and on the desktop with the `sound`
-//! feature (it needs ALSA's headers on Linux); a film mixes the one-shots
-//! itself from [`Cues`], on its own frame clock (`film/mix.rs`).
+//! feature (it needs ALSA's headers on Linux) ([`on`]); a film mixes the
+//! one-shots itself from [`Cues`], on its own frame clock (`film/mix.rs`).
 
 use bevy::prelude::*;
-
-#[cfg_attr(not(any(target_arch = "wasm32", feature = "sound")), allow(dead_code))]
-pub mod mix;
 
 /// This frame's events, for the ear (`happened` in lib.rs fills it).
 #[derive(Resource, Default)]
@@ -43,7 +43,7 @@ pub struct SoundPlugin;
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Heard>()
-            .init_resource::<Ear>()
+            .insert_resource(Ear::new())
             .init_resource::<Cues>()
             .add_systems(Update, decide.after(crate::happened));
         #[cfg(any(target_arch = "wasm32", feature = "sound"))]
@@ -78,7 +78,7 @@ use sim::geom::V3;
 use crate::look::fx::HEARD;
 use crate::look::guns::GUNS;
 use crate::LinkRes;
-use mix::{Clip, Cmd, Place, Shared};
+use mix::{Cmd, Place, Shared};
 
 /// Past this, a shot is its far take.
 pub const FAR_M: f32 = 35.0;
@@ -172,13 +172,18 @@ struct Round {
     slot: Option<u8>,
 }
 
-/// What the ear remembers between frames, and the live mixer's bank.
+/// What the ear remembers between frames, and which clips the mixer has.
 #[derive(Resource, Default)]
 pub struct Ear {
+    /// The desktop's mixer; in a browser `on::post` takes the commands.
     mixer: Option<Arc<Shared>>,
+    taken_elsewhere: bool,
     cmds: Vec<Cmd>,
-    /// Decoded clips (`on::decode` fills it), and how many are still to come.
-    bank: BTreeMap<String, Clip>,
+    /// Every clip's id in the mixer's bank, whether the mixer has it yet,
+    /// and its length (the announcer waits it out); clips still loading.
+    ids: BTreeMap<String, u16>,
+    ready: Vec<bool>,
+    secs: Vec<f32>,
     loading: u32,
     /// This frame's one-shots, for a film (`decide` hands them to [`Cues`]).
     cues: Vec<Cue>,
@@ -287,9 +292,37 @@ fn sim_v(p: Vec3) -> V3 {
 }
 
 impl Ear {
-    /// Clips decoded, clips still loading, commands sent the mixer.
+    fn new() -> Ear {
+        let ids: BTreeMap<String, u16> = names()
+            .into_iter()
+            .chain(voices())
+            .take(mix::CLIPS)
+            .enumerate()
+            .map(|(i, n)| (n, i as u16))
+            .collect();
+        Ear {
+            ready: vec![false; ids.len()],
+            secs: vec![0.0; ids.len()],
+            ids,
+            cmds: Vec::with_capacity(256),
+            ..Ear::default()
+        }
+    }
+
+    /// Clips handed to the mixer, clips still loading, commands sent it.
     pub fn stats(&self) -> (u32, u32, u32) {
-        (self.bank.len() as u32, self.loading, self.sent)
+        let ready = self.ready.iter().filter(|r| **r).count() as u32;
+        (ready, self.loading, self.sent)
+    }
+
+    /// Clip `name` is the mixer's now (or will be by the time it plays:
+    /// a browser decodes it off the page's thread), `secs` long.
+    #[cfg_attr(not(any(target_arch = "wasm32", feature = "sound")), allow(dead_code))]
+    fn handed(&mut self, name: &str, secs: f32) -> Option<u16> {
+        let id = *self.ids.get(name)?;
+        self.ready[id as usize] = true;
+        self.secs[id as usize] = secs;
+        Some(id)
     }
 
     fn roll(&mut self, n: u8) -> u8 {
@@ -306,8 +339,9 @@ impl Ear {
     fn chance(&mut self, pct: u8) -> bool {
         self.roll(100) < pct
     }
-    fn clip(&self, name: &str) -> Option<Clip> {
-        self.bank.get(name).cloned()
+    fn clip(&self, name: &str) -> Option<u16> {
+        let id = *self.ids.get(name)?;
+        self.ready[id as usize].then_some(id)
     }
     /// One take of `base` (`base_0` … `base_{n-1}`).
     fn take(&mut self, base: &str, n: u8) -> String {
@@ -645,9 +679,27 @@ fn flush(ear: &mut Ear) {
     if let Some(m) = &ear.mixer {
         ear.sent = ear.sent.wrapping_add(ear.cmds.len() as u32);
         m.send(&mut ear.cmds);
-    } else {
+    } else if !ear.taken_elsewhere {
         ear.cmds.clear();
     }
+}
+
+/// The announcer's lines, by name.
+fn voices() -> impl Iterator<Item = String> {
+    (1..proto::medal::COUNT as u8)
+        .filter(|id| proto::medal::info(*id).voiced)
+        .map(|id| format!("voice/{}", proto::medal::slug(id)))
+}
+
+/// How long an Ogg Vorbis file plays: its last page's granule position
+/// (samples) over the rate in its first header.
+#[cfg_attr(not(any(target_arch = "wasm32", feature = "sound")), allow(dead_code))]
+fn ogg_secs(b: &[u8]) -> Option<f32> {
+    let id = b.windows(7).position(|w| w == b"\x01vorbis")?;
+    let rate = u32::from_le_bytes(b.get(id + 12..id + 16)?.try_into().ok()?);
+    let last = b.windows(4).rposition(|w| w == b"OggS")?;
+    let gran = u64::from_le_bytes(b.get(last + 6..last + 14)?.try_into().ok()?);
+    (rate > 0).then(|| gran as f32 / rate as f32)
 }
 
 fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
@@ -1041,29 +1093,43 @@ fn the_match(ear: &mut Ear, _ears: &Ears, snap: &proto::Snapshot, big: bool) {
     ear.wind = on;
 }
 
-/// The live half: the mixer's stream through Bevy's audio, the bank decoded
-/// into the ear, and the announcer. A film plays none of it (`film.rs`).
+/// The live half: the clips handed to the mixer, the mixer's output, and
+/// the announcer. On the desktop the mixer is a stream Bevy plays and clips
+/// are decoded here; in a browser it runs on the audio thread (`web/mix.js`
+/// makes it), the browser decodes the clips, and each frame's commands go
+/// down as bytes. A film plays none of it (`film.rs`).
 #[cfg(any(target_arch = "wasm32", feature = "sound"))]
 pub mod on {
     use std::collections::BTreeMap;
-    use std::sync::Arc;
 
-    use bevy::audio::{AddAudioSource, Decodable, Volume};
     use bevy::prelude::*;
+    use mix::{Cmd, Place};
 
-    use super::mix::{self, Clip, Shared, Stream};
     use super::{Ear, MASTER};
 
-    /// Milliseconds a frame spent decoding clips (the bank fills over the
-    /// title screen), past the first clip.
-    const DECODE_MS: f32 = 3.0;
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use desktop::Sound;
+    #[cfg(target_arch = "wasm32")]
+    pub use page::Sound;
+
+    /// Milliseconds a frame spends handing clips over (decoding them, on the
+    /// desktop), past the first.
+    const HAND_MS: f32 = 3.0;
+    /// Lines the announcer may have waiting; past it the oldest goes.
+    const VOICE_WAIT: usize = 4;
+    const VOICE_GAIN: f32 = 1.1;
+    /// A breath between two of the announcer's lines.
+    const VOICE_GAP_S: f32 = 0.15;
 
     pub fn build(app: &mut App) {
-        app.add_audio_source::<Mixer>()
-            .init_resource::<Clips>()
+        #[cfg(not(target_arch = "wasm32"))]
+        desktop::build(app);
+        #[cfg(target_arch = "wasm32")]
+        page::build(app);
+        app.init_resource::<Clips>()
             .init_resource::<Announcer>()
-            .add_systems(Startup, (load, start))
-            .add_systems(Update, decode.before(super::decide))
+            .add_systems(Startup, load)
+            .add_systems(Update, hand.before(super::decide))
             .add_systems(
                 Update,
                 announce
@@ -1072,92 +1138,46 @@ pub mod on {
             );
     }
 
-    /// The cuts by name (a film reads their bytes in a browser), and those not
-    /// yet decoded into the bank.
+    /// The cuts by name (a film reads their bytes in a browser), and those
+    /// not yet handed to the mixer.
     #[derive(Resource, Default)]
-    pub struct Clips(pub BTreeMap<String, Handle<AudioSource>>, Vec<String>);
+    pub struct Clips(pub BTreeMap<String, Handle<Sound>>, Vec<String>);
 
-    /// Medals waiting for the announcer, oldest first.
+    /// Medals waiting for the announcer, oldest first, and when the line
+    /// playing ends (seconds of the app's clock).
     #[derive(Resource, Default)]
-    struct Announcer(Vec<u8>);
-
-    /// The mixer, as an asset Bevy can play: its stream is the engine.
-    #[derive(Asset, TypePath)]
-    pub struct Mixer(Arc<Shared>);
-
-    impl Decodable for Mixer {
-        type DecoderItem = f32;
-        type Decoder = Stream;
-
-        fn decoder(&self) -> Stream {
-            Stream::new(self.0.clone())
-        }
-    }
-
-    impl bevy::audio::Source for Stream {
-        fn current_frame_len(&self) -> Option<usize> {
-            None
-        }
-        fn channels(&self) -> u16 {
-            2
-        }
-        fn sample_rate(&self) -> u32 {
-            mix::RATE
-        }
-        fn total_duration(&self) -> Option<std::time::Duration> {
-            None
-        }
-    }
-
-    /// The announcer's line now playing.
-    #[derive(Component)]
-    struct Voice;
-
-    /// Lines the announcer may have waiting; past it the oldest goes.
-    const VOICE_WAIT: usize = 4;
-    const VOICE_GAIN: f32 = 1.1;
+    struct Announcer(Vec<u8>, f32);
 
     fn load(mut clips: ResMut<Clips>, assets: Res<AssetServer>) {
-        for n in super::names() {
+        for n in super::names().into_iter().chain(super::voices()) {
             let h = assets.load(format!("sound/{n}.ogg"));
             clips.0.insert(n.clone(), h);
             clips.1.push(n);
         }
-        for id in 1..proto::medal::COUNT as u8 {
-            if proto::medal::info(id).voiced {
-                let n = format!("voice/{}", proto::medal::slug(id));
-                let h = assets.load(format!("sound/{n}.ogg"));
-                clips.0.insert(n, h);
-            }
-        }
     }
 
-    /// The mixer's one stream, playing from the start.
-    fn start(mut commands: Commands, mut ear: ResMut<Ear>, mut mixers: ResMut<Assets<Mixer>>) {
-        let shared = Arc::new(Shared::default());
-        let h = mixers.add(Mixer(shared.clone()));
-        commands.spawn(AudioPlayer::<Mixer>(h));
-        ear.mixer = Some(shared);
-    }
-
-    /// Decodes clips into the bank as they arrive, a few milliseconds a frame.
-    fn decode(
-        mut ear: ResMut<Ear>,
-        mut clips: ResMut<Clips>,
-        sources: Res<Assets<AudioSource>>,
-        assets: Res<AssetServer>,
-    ) {
+    /// Hands clips to the mixer as they load, a few milliseconds a frame.
+    fn hand(mut ear: ResMut<Ear>, mut clips: ResMut<Clips>, sources: Res<Assets<Sound>>, assets: Res<AssetServer>) {
         let clips = &mut *clips;
         let t0 = bevy::platform::time::Instant::now();
         let mut i = 0;
-        while i < clips.1.len() && t0.elapsed().as_secs_f32() * 1000.0 < DECODE_MS {
+        while i < clips.1.len() && t0.elapsed().as_secs_f32() * 1000.0 < HAND_MS {
             let Some(h) = clips.0.get(&clips.1[i]) else {
                 clips.1.swap_remove(i);
                 continue;
             };
             if let Some(src) = sources.get(h) {
                 let name = clips.1.swap_remove(i);
-                ear.bank.insert(name, to_clip(src));
+                let secs = super::ogg_secs(&src.bytes).unwrap_or(1.0);
+                if let Some(id) = ear.handed(&name, secs) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ear.cmds.push(Cmd::Install {
+                        id,
+                        clip: desktop::decode(src),
+                    });
+                    #[cfg(target_arch = "wasm32")]
+                    page::install(id, &src.bytes);
+                }
             } else if assets.load_state(h).is_failed() {
                 clips.1.swap_remove(i);
             } else {
@@ -1167,37 +1187,15 @@ pub mod on {
         ear.loading = clips.1.len() as u32;
     }
 
-    /// An Ogg's samples, mono.
-    fn to_clip(src: &AudioSource) -> Clip {
-        use bevy::audio::{Sample, Source};
-        let d = src.decoder();
-        let ch = d.channels().max(1) as usize;
-        let rate = d.sample_rate();
-        let mut pcm = Vec::new();
-        let (mut acc, mut k) = (0.0f32, 0);
-        for s in d {
-            acc += s.to_f32();
-            k += 1;
-            if k == ch {
-                pcm.push((acc / ch as f32 * 32767.0).clamp(-32768.0, 32767.0) as i16);
-                acc = 0.0;
-                k = 0;
-            }
-        }
-        Clip { pcm: pcm.into(), rate }
-    }
-
     /// Takes our new voiced medals and says the next when the last is done.
     fn announce(
         mut st: ResMut<crate::hud::HudState>,
         mut waiting: ResMut<Announcer>,
-        clips: Res<Clips>,
-        settings: Res<crate::settings::Settings>,
-        mut commands: Commands,
-        speaking: Query<(), With<Voice>>,
+        mut ear: ResMut<Ear>,
+        time: Res<Time>,
     ) {
         use proto::medal as md;
-        let voice = &mut waiting.0;
+        let Announcer(voice, until) = &mut *waiting;
         for id in core::mem::take(&mut st.announce) {
             let family = md::info(id).family;
             let ladder = matches!(family, md::Family::Multi | md::Family::Spree);
@@ -1210,14 +1208,208 @@ pub mod on {
                 voice.remove(0);
             }
         }
-        if !speaking.is_empty() || voice.is_empty() {
+        let now = time.elapsed_secs();
+        if now < *until || voice.is_empty() {
             return;
         }
         let id = voice.remove(0);
-        let Some(h) = clips.0.get(&format!("voice/{}", md::slug(id))).cloned() else {
+        let Some(clip) = ear.clip(&format!("voice/{}", md::slug(id))) else {
             return;
         };
-        let s = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(VOICE_GAIN * MASTER * settings.volume()));
-        commands.spawn((Voice, AudioPlayer::new(h), s));
+        *until = now + ear.secs[clip as usize] + VOICE_GAP_S;
+        // The level it had through Bevy, in both ears: the mixer's master
+        // carries the player's volume and LIVE already.
+        let gain = VOICE_GAIN * MASTER / super::LIVE * core::f32::consts::SQRT_2;
+        ear.cmds.push(Cmd::Play {
+            clip,
+            at: Place::centre(gain),
+            delay: 0,
+        });
+    }
+
+    /// The desktop: the mixer as a Bevy audio source, its clips decoded here.
+    #[cfg(not(target_arch = "wasm32"))]
+    mod desktop {
+        use std::sync::Arc;
+
+        use bevy::audio::{AddAudioSource, Decodable};
+        use bevy::prelude::*;
+        use mix::{Clip, Shared, Stream};
+
+        use super::super::Ear;
+
+        pub type Sound = bevy::audio::AudioSource;
+
+        pub fn build(app: &mut App) {
+            app.add_audio_source::<Mixer>().add_systems(Startup, start);
+        }
+
+        /// The mixer, as an asset Bevy can play: its stream is the engine.
+        #[derive(Asset, TypePath)]
+        pub struct Mixer(Arc<Shared>);
+
+        impl Decodable for Mixer {
+            type DecoderItem = f32;
+            type Decoder = Player;
+
+            fn decoder(&self) -> Player {
+                Player(Stream::new(self.0.clone()))
+            }
+        }
+
+        /// [`Stream`] as rodio's source.
+        pub struct Player(Stream);
+
+        impl Iterator for Player {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                self.0.next()
+            }
+        }
+
+        impl bevy::audio::Source for Player {
+            fn current_frame_len(&self) -> Option<usize> {
+                None
+            }
+            fn channels(&self) -> u16 {
+                2
+            }
+            fn sample_rate(&self) -> u32 {
+                mix::RATE
+            }
+            fn total_duration(&self) -> Option<std::time::Duration> {
+                None
+            }
+        }
+
+        /// The mixer's one stream, playing from the start.
+        fn start(mut commands: Commands, mut ear: ResMut<Ear>, mut mixers: ResMut<Assets<Mixer>>) {
+            let shared = Arc::new(Shared::default());
+            let h = mixers.add(Mixer(shared.clone()));
+            commands.spawn(AudioPlayer::<Mixer>(h));
+            ear.mixer = Some(shared);
+        }
+
+        /// An Ogg's samples, mono.
+        pub fn decode(src: &Sound) -> Clip {
+            use bevy::audio::{Sample, Source};
+            let d = src.decoder();
+            let ch = d.channels().max(1) as usize;
+            let rate = d.sample_rate();
+            let mut pcm = Vec::new();
+            let (mut acc, mut k) = (0.0f32, 0);
+            for s in d {
+                acc += s.to_f32();
+                k += 1;
+                if k == ch {
+                    pcm.push((acc / ch as f32 * 32767.0).clamp(-32768.0, 32767.0) as i16);
+                    acc = 0.0;
+                    k = 0;
+                }
+            }
+            Clip { pcm: pcm.into(), rate }
+        }
+    }
+
+    /// The browser: the mixer on its audio thread (`web/mix.js`), handed
+    /// each clip's Ogg and each frame's commands as bytes.
+    #[cfg(target_arch = "wasm32")]
+    mod page {
+        use bevy::asset::io::Reader;
+        use bevy::asset::{AssetLoader, LoadContext};
+        use bevy::prelude::*;
+        use wasm_bindgen::{JsCast, JsValue};
+
+        use super::super::Ear;
+
+        /// A sound file's bytes, as Bevy loads it (the browser decodes it).
+        #[derive(Asset, TypePath)]
+        pub struct Sound {
+            pub bytes: Vec<u8>,
+        }
+
+        #[derive(Default, TypePath)]
+        struct OggLoader;
+
+        impl AssetLoader for OggLoader {
+            type Asset = Sound;
+            type Settings = ();
+            type Error = std::io::Error;
+
+            async fn load(
+                &self,
+                reader: &mut dyn Reader,
+                _settings: &(),
+                _load: &mut LoadContext<'_>,
+            ) -> Result<Sound, Self::Error> {
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes).await?;
+                Ok(Sound { bytes })
+            }
+
+            fn extensions(&self) -> &[&str] {
+                &["ogg"]
+            }
+        }
+
+        pub fn build(app: &mut App) {
+            app.init_asset::<Sound>()
+                .init_asset_loader::<OggLoader>()
+                .add_systems(Update, post.after(super::super::decide));
+            app.world_mut().resource_mut::<Ear>().taken_elsewhere = true;
+        }
+
+        /// `window.__oneshotMix.<name>(args…)`, if the page made it.
+        fn call(name: &str, args: &[JsValue]) {
+            let Some(w) = web_sys::window() else { return };
+            let Ok(mix) = js_sys::Reflect::get(&w, &JsValue::from_str("__oneshotMix")) else {
+                return;
+            };
+            let Ok(f) = js_sys::Reflect::get(&mix, &JsValue::from_str(name)) else {
+                return;
+            };
+            let Ok(f) = f.dyn_into::<js_sys::Function>() else {
+                return;
+            };
+            let a = js_sys::Array::new();
+            for x in args {
+                a.push(x);
+            }
+            let _ = f.apply(&mix, &a);
+        }
+
+        pub fn install(id: u16, ogg: &[u8]) {
+            call("install", &[id.into(), js_sys::Uint8Array::from(ogg).into()]);
+        }
+
+        /// This frame's commands down to the audio thread, as one message.
+        fn post(mut ear: ResMut<Ear>, mut bytes: Local<Vec<u8>>) {
+            if ear.cmds.is_empty() {
+                return;
+            }
+            bytes.clear();
+            mix::encode(&ear.cmds, &mut bytes);
+            ear.sent = ear.sent.wrapping_add(ear.cmds.len() as u32);
+            ear.cmds.clear();
+            if !bytes.is_empty() {
+                call("send", &[js_sys::Uint8Array::from(&bytes[..]).into()]);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The announcer waits a line out by this: it must read the file's own
+    /// length (ffprobe: 1.210 s and 0.090 s).
+    #[test]
+    fn an_oggs_length_is_its_last_granule_over_its_rate() {
+        let read = |n: &str| {
+            let b = std::fs::read(format!("assets/sound/{n}.ogg")).expect(n);
+            super::ogg_secs(&b).expect(n)
+        };
+        assert!((read("voice/double_kill") - 1.2101).abs() < 0.002);
+        assert!((read("tick_0") - 0.09).abs() < 0.002);
+        assert_eq!(super::ogg_secs(b"not an ogg"), None);
     }
 }
