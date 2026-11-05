@@ -193,6 +193,8 @@ pub(crate) struct Front {
     join: Option<u8>,
     /// When PLAY last knocked (s).
     knocked_at: f32,
+    /// How far the PLAY panel's rows are scrolled (px), kept over rebuilds.
+    scroll: f32,
 }
 
 impl Front {
@@ -220,6 +222,10 @@ thread_local! {
 
 #[derive(Component)]
 struct TitleRoot;
+
+/// The PLAY panel's rows, over PLAY: they scroll.
+#[derive(Component)]
+struct Rows;
 
 /// Over the backdrop until its level is there (`loading::Settle`).
 #[derive(Component)]
@@ -283,6 +289,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
                 _ => None,
             },
             knocked_at: 0.0,
+            scroll: 0.0,
             tab: Tab::Play,
             drawn_party: u32::MAX,
         })
@@ -293,7 +300,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
         .add_systems(OnExit(Screen::Title), exit)
         .add_systems(
             Update,
-            (click, typing, rebuild, curtain)
+            (click, typing, scroll, rebuild, curtain)
                 .chain()
                 .run_if(in_state(Screen::Title)),
         )
@@ -304,6 +311,29 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
 fn enter(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut front: ResMut<Front>) {
     crate::pause::free(&mut cursor);
     front.dirty = true;
+}
+
+/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane).
+fn scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    mut rows: Query<&mut ScrollPosition, With<Rows>>,
+    mut front: ResMut<Front>,
+) {
+    use bevy::input::mouse::MouseScrollUnit;
+    let dy: f32 = wheel
+        .read()
+        .map(|w| match w.unit {
+            MouseScrollUnit::Line => w.y * 32.0,
+            MouseScrollUnit::Pixel => w.y,
+        })
+        .sum();
+    if dy == 0.0 {
+        return;
+    }
+    for mut r in &mut rows {
+        r.y = (r.y - dy).max(0.0);
+        front.scroll = r.y;
+    }
 }
 
 fn exit(mut commands: Commands, roots: Query<Entity, With<TitleRoot>>, mut front: ResMut<Front>) {
@@ -489,112 +519,132 @@ fn panel(
     knocking: bool,
     party: &PartyView,
 ) {
-    body.spawn(ui::panel(380.0)).with_children(|p| {
-        p.spawn(ui::group("WHO"));
-        // The name: a field that takes the keys when clicked.
-        let edge = if front.editing { ui::ACCENT_HOVER } else { ui::RULE_HI };
-        p.spawn((
-            Button,
-            Hit::Name,
-            Tag("name"),
-            Node {
-                height: Val::Px(32.0),
-                padding: UiRect::horizontal(Val::Px(10.0)),
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                flex_shrink: 0.0,
-                border_radius: BorderRadius::all(Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(ui::WELL),
-            BorderColor::all(edge),
-        ))
-        .with_child((
-            NameText,
-            ui::strong(
-                name_shown(player, front.editing, true),
-                15.0,
-                name_color(player, front.editing),
-            ),
-        ));
-        // The skin: worn if the wallet owns it.
-        p.spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(8.0),
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|r| {
-            r.spawn(ui::strong("SKIN", 12.0, ui::FAINT));
-            r.spawn(ui::label("if your wallet owns it", 11.0, ui::FAINT));
-            r.spawn(Node {
-                flex_grow: 1.0,
-                ..default()
-            });
-            r.spawn((ui::stepper(), Hit::Skin(-1)))
-                .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
-            r.spawn(Node {
-                width: Val::Px(96.0),
-                justify_content: JustifyContent::Center,
-                ..default()
-            })
-            .with_child(ui::strong(skin_name(player.skin), 14.0, ui::TEXT_COLOR));
-            r.spawn((ui::stepper(), Hit::Skin(1)))
-                .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
-        });
-        // The emblem on the back: a glyph, the shape behind it, their colours.
-        let parts = proto::emblem_parts(player.emblem);
-        for (k, (label, hint)) in EMBLEM_PARTS.iter().enumerate() {
-            if k > 0 && parts.0 == 0 {
-                break;
-            }
-            p.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                flex_shrink: 0.0,
-                ..default()
-            })
-            .with_children(|r| {
-                r.spawn(ui::strong(*label, 12.0, ui::FAINT));
-                r.spawn(ui::label(*hint, 11.0, ui::FAINT));
-                r.spawn(Node {
+    body.spawn(ui::panel(380.0)).with_children(|panel| {
+        // The rows scroll under the wheel when the panel can't hold them
+        // (an emblem's four rows); PLAY stays at its foot.
+        panel
+            .spawn((
+                Rows,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(7.0),
                     flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
-                });
-                r.spawn((ui::stepper(), Hit::Emblem(k, -1)))
-                    .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
-                r.spawn(Node {
-                    width: Val::Px(96.0),
-                    justify_content: JustifyContent::Center,
+                },
+                ScrollPosition(Vec2::new(0.0, front.scroll)),
+            ))
+            .with_children(|p| {
+                p.spawn(ui::group("WHO"));
+                // The name: a field that takes the keys when clicked.
+                let edge = if front.editing { ui::ACCENT_HOVER } else { ui::RULE_HI };
+                p.spawn((
+                    Button,
+                    Hit::Name,
+                    Tag("name"),
+                    Node {
+                        height: Val::Px(32.0),
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        flex_shrink: 0.0,
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(ui::WELL),
+                    BorderColor::all(edge),
+                ))
+                .with_child((
+                    NameText,
+                    ui::strong(
+                        name_shown(player, front.editing, true),
+                        15.0,
+                        name_color(player, front.editing),
+                    ),
+                ));
+                // The skin: worn if the wallet owns it and its floor is at the line.
+                p.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    flex_shrink: 0.0,
                     ..default()
                 })
-                .with_child(ui::strong(emblem_part_name(k, parts), 14.0, ui::TEXT_COLOR));
-                r.spawn((ui::stepper(), Hit::Emblem(k, 1)))
-                    .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                .with_children(|r| {
+                    r.spawn(ui::strong("SKIN", 12.0, ui::FAINT));
+                    r.spawn(ui::label("if your wallet owns it", 11.0, ui::FAINT));
+                    r.spawn(Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    });
+                    r.spawn((ui::stepper(), Hit::Skin(-1)))
+                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                    r.spawn(Node {
+                        width: Val::Px(96.0),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child(ui::strong(skin_name(player.skin), 14.0, ui::TEXT_COLOR));
+                    r.spawn((ui::stepper(), Hit::Skin(1)))
+                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                });
+                // The emblem on the back: a glyph, the shape behind it, their colours.
+                let parts = proto::emblem_parts(player.emblem);
+                for (k, (label, hint)) in EMBLEM_PARTS.iter().enumerate() {
+                    if k > 0 && parts.0 == 0 {
+                        break;
+                    }
+                    p.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_children(|r| {
+                        r.spawn(ui::strong(*label, 12.0, ui::FAINT));
+                        r.spawn(ui::label(*hint, 11.0, ui::FAINT));
+                        r.spawn(Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        });
+                        r.spawn((ui::stepper(), Hit::Emblem(k, -1)))
+                            .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                        r.spawn(Node {
+                            width: Val::Px(96.0),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        })
+                        .with_child(ui::strong(
+                            emblem_part_name(k, parts),
+                            14.0,
+                            ui::TEXT_COLOR,
+                        ));
+                        r.spawn((ui::stepper(), Hit::Emblem(k, 1)))
+                            .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                    });
+                }
+
+                p.spawn(ui::group("CASUAL"));
+                for m in MODES.iter().filter(|m| !m.ranked) {
+                    mode_row(p, m, front.mode == m.id, true);
+                }
+                p.spawn(ui::group("RANKED"));
+                let open = signin.ranked();
+                if !open {
+                    let why = match signin {
+                        SignIn::Off(why) => why.clone(),
+                        SignIn::In(_) => "Link a wallet on Elo Pros to play ranked.".into(),
+                        _ => "Sign in with Elo Pros, a wallet linked, to play ranked.".into(),
+                    };
+                    p.spawn(ui::label(why, 12.0, ui::FAINT));
+                }
+                for m in MODES.iter().filter(|m| m.ranked) {
+                    mode_row(p, m, front.mode == m.id, open);
+                }
             });
-        }
-
-        p.spawn(ui::group("CASUAL"));
-        for m in MODES.iter().filter(|m| !m.ranked) {
-            mode_row(p, m, front.mode == m.id, true);
-        }
-        p.spawn(ui::group("RANKED"));
-        let open = signin.ranked();
-        if !open {
-            let why = match signin {
-                SignIn::Off(why) => why.clone(),
-                SignIn::In(_) => "Link a wallet on Elo Pros to play ranked.".into(),
-                _ => "Sign in with Elo Pros, a wallet linked, to play ranked.".into(),
-            };
-            p.spawn(ui::label(why, 12.0, ui::FAINT));
-        }
-        for m in MODES.iter().filter(|m| m.ranked) {
-            mode_row(p, m, front.mode == m.id, open);
-        }
-
-        p.spawn(ui::spacer());
+        let p = panel;
         p.spawn((
             ui::label(front.status.clone(), 13.5, if front.bad { ui::BAD } else { ui::DIM }),
             Node {
@@ -1145,12 +1195,17 @@ fn step_emblem(e: proto::Emblem, k: usize, d: i32) -> proto::Emblem {
     proto::emblem(p.0, p.1, p.2, p.3)
 }
 
+/// A skin's name, with its rank lock (`proto::SKIN_FLOOR`) when it has one.
 fn skin_name(i: u8) -> String {
-    proto::SKINS
+    let name = proto::SKINS
         .get(i as usize)
         .copied()
         .unwrap_or("standard")
-        .to_uppercase()
+        .to_uppercase();
+    match proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0) {
+        0 => name,
+        line => format!("{name} {line}+"),
+    }
 }
 
 /// The name as the field shows it: what's typed, a caret while editing, a
