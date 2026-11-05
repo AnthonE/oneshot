@@ -76,7 +76,15 @@ struct Chip {
     n: Vec3,
     /// The floor's height under the blow (`surface::floor_under`).
     floor: f32,
+    /// Its box, metres: a flake for a chip, a cylinder's worth for a casing.
+    dims: Vec3,
 }
+
+/// A casing out of a gun: brass, 9 by 25 mm; a shotgun's shell, red, 18
+/// by 60. How long it lies glinting before it is gone, seconds.
+pub const CASING_S: f32 = 1.6;
+const BRASS: Vec3 = Vec3::new(0.009, 0.009, 0.025);
+const SHELL: Vec3 = Vec3::new(0.018, 0.018, 0.06);
 
 pub struct Chips {
     slots: Vec<Chip>,
@@ -174,6 +182,7 @@ impl Chips {
             );
             let life = LIFE_S * (0.7 + 0.6 * self.roll());
             let j = 0.85 + 0.3 * self.roll();
+            let edge = SIZE_M * (0.8 + 0.4 * self.roll());
             let i = self.claim();
             self.slots[i] = Chip {
                 left: life,
@@ -187,9 +196,50 @@ impl Chips {
                 at,
                 n: away,
                 floor,
+                dims: Vec3::new(edge, edge, edge * THIN),
             };
             self.thrown += 1;
         }
+    }
+
+    /// A casing thrown out of a gun at `at`, out its port along `out`
+    /// (the shooter's right, a little up), tumbling, onto a floor at
+    /// `floor`. A shotgun throws its `shell`.
+    pub fn casing(&mut self, at: Vec3, out: Vec3, floor: f32, shell: bool) {
+        let out = out.normalize_or(Vec3::X);
+        let scatter = Vec3::new(self.signed(), self.signed(), self.signed()) * 0.35;
+        let dir = (out + Vec3::Y * 0.5 + scatter).normalize_or(out);
+        let speed = (2.2 + 1.4 * self.roll()) * if shell { 0.8 } else { 1.0 };
+        let spin = Vec3::new(self.signed(), self.signed(), self.signed()) * SPIN_RAD_S * 2.5;
+        let rot = Quat::from_euler(
+            EulerRot::YXZ,
+            self.signed() * core::f32::consts::PI,
+            self.signed() * core::f32::consts::PI,
+            self.signed() * core::f32::consts::PI,
+        );
+        let c = if shell {
+            Color::srgb(0.75, 0.12, 0.1)
+        } else {
+            Color::srgb(0.9, 0.7, 0.32)
+        }
+        .to_linear();
+        let life = CASING_S * (0.85 + 0.3 * self.roll());
+        let i = self.claim();
+        self.slots[i] = Chip {
+            left: life,
+            life,
+            pos: at,
+            vel: dir * speed,
+            spin,
+            rot,
+            color: [c.red, c.green, c.blue, 1.0],
+            // No face to bounce off: the plane is put behind it.
+            at: at - out,
+            n: out,
+            floor,
+            dims: if shell { SHELL } else { BRASS },
+        };
+        self.thrown += 1;
     }
 
     /// Every chip on by `dt`: falling, tumbling, bouncing off its face and
@@ -250,13 +300,13 @@ impl Chips {
     }
 
     /// Chip `i`'s place, turn and edge, None for a free slot.
-    pub fn draw(&self, i: usize) -> Option<(Vec3, Quat, f32)> {
+    pub fn draw(&self, i: usize) -> Option<(Vec3, Quat, Vec3)> {
         let c = self.slots.get(i)?;
         if c.left <= 0.0 {
             return None;
         }
         let k = (c.left / (c.life * SHRINK).max(1e-4)).min(1.0);
-        Some((c.pos, c.rot, SIZE_M * k))
+        Some((c.pos, c.rot, c.dims * k))
     }
 
     /// Copy the chips into `mesh`, in place: a free slot collapsed.
@@ -287,9 +337,8 @@ impl Chips {
             }
             match self.draw(i) {
                 None => pos[base..base + VERTS].fill([0.0; 3]),
-                Some((at, rot, size)) => {
+                Some((at, rot, scale)) => {
                     any = true;
-                    let scale = Vec3::new(size, size, size * THIN);
                     for (f, (corners, n)) in FACES.iter().enumerate() {
                         let n = (rot * Vec3::from_array(*n)).to_array();
                         for (k, &ci) in corners.iter().enumerate() {
