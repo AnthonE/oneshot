@@ -6,7 +6,10 @@
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900]
-//! [--nonce-key file] [--live-file file]`
+//! [--nonce-key file] [--live-file file] [--roster-dir dir]`
+//!
+//! `oneshot-server --print-stats` prints the stats, achievements and boards
+//! the game declares on Elo Pros (`ops/elo-stats.json`) and exits.
 //!
 //! Without `--elo-pubkey` nobody can sign in and only casual play is open.
 //! Without `--elo-key` ranked results aren't reported.
@@ -82,6 +85,12 @@ fn main() {
             }
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
+            "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--print-stats" => {
+                let set = server::stats::declaration();
+                println!("{}", serde_json::to_string_pretty(&set).unwrap_or_default());
+                return;
+            }
             _ => die(&format!("unknown argument {a}")),
         }
     }

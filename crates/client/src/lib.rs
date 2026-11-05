@@ -7,21 +7,33 @@
 //! The level from the sim's map in Gates' light, sky, ground and grass
 //! (docs/RIP.md §9); Triple T bodies with guns in hand; the gun in view,
 //! effects and sound; a first-person camera (a chase camera at the wheel,
-//! the kill cam when dead); the three.js page's controls; the HUD. In a
-//! browser the page (`crates/client/web/index.html`) has the menu and calls `play()`.
+//! the kill cam when dead); the three.js page's controls; the HUD; and the
+//! game's own screens in Gates' style: the title (`front`), the Esc menu
+//! (`pause`) and the settings (`options`), the same on the desktop and in a
+//! browser, where the page (`crates/client/web/index.html`) only finds the
+//! server and signs in, and calls `launch()`.
 
 pub mod binds;
 pub mod config;
+pub mod display;
+pub mod door;
+pub mod front;
 pub mod hud;
+pub mod items;
 pub mod level;
 pub mod link;
+pub mod loading;
 pub mod look;
+pub mod medals;
 pub mod options;
 pub mod pause;
 pub mod pointer;
 pub mod pose;
 pub mod settings;
+pub mod shot;
 pub mod sound;
+pub mod tags;
+pub mod tally;
 pub mod ui;
 
 use std::collections::BTreeMap;
@@ -50,9 +62,15 @@ pub struct Look {
     armed: bool,
 }
 
-/// The welcome this level was built for.
+/// The link (by `front::LinkGen`) and welcome this level was built for.
 #[derive(Resource, Default)]
-struct Built(u32);
+pub(crate) struct Built(Option<(u32, u32)>);
+
+impl Built {
+    pub(crate) fn gen(&self) -> Option<u32> {
+        self.0.map(|(g, _)| g)
+    }
+}
 
 /// Drawn things by their slot (a fighter with the side and skin its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
@@ -68,14 +86,19 @@ struct Drawn {
 #[derive(Component)]
 pub struct Eye;
 
-/// What has the mouse: the match, the Esc menu, or the settings.
+/// What has the mouse: the title, the match, the Esc menu, or the settings.
 #[derive(States, Default, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Screen {
+    Title,
     #[default]
     Playing,
     Paused,
     Settings,
 }
+
+/// Where a hull's wheels are in its frame (+X forward), metres: drawn
+/// there, and pressing the grass there (`look::foliage::Walkers::hull`).
+const WHEELS: [(f32, f32); 4] = [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)];
 
 /// What every hull is made of, made with the first.
 struct HullParts {
@@ -173,14 +196,20 @@ const BUTTONS: [(binds::Action, u16); 8] = [
     (binds::Action::GrenSwitch, GREN_SWITCH),
 ];
 
-/// How the app runs: `autoplay` drives it (tests); `lite` draws with no
-/// shadows or SMAA, for a software GPU (the browser gates on SwiftShader;
-/// the page also halves its canvas); `fxdemo` stages the effects in front
-/// of the camera (drawing only, `look/fx/demo.rs`).
+/// How the app runs: `autoplay` drives it (tests); `lite` draws POTATO
+/// for this run, keeping the player's own rung for the file (the browser
+/// gates on SwiftShader; the page also halves its canvas); `fxdemo` stages
+/// the effects in front of the camera (drawing only, `look/fx/demo.rs`).
 #[derive(Clone, Copy, Default, Resource)]
 pub struct Opts {
     pub autoplay: bool,
     pub lite: bool,
+    /// `potato` (`?potato`, `--potato`): POTATO whatever was chosen, and
+    /// kept (`look/potato.rs`).
+    pub potato: bool,
+    /// `quality=<name>` (`?quality=`, `--quality`): that rung for this run
+    /// only, and no picking for the machine: what a picture of a rung asks.
+    pub quality: Option<look::quality::Quality>,
     pub fxdemo: bool,
     /// `fxstage<N>`: the demo plays only its stage `N` (`demo.rs`).
     pub fxstage: Option<u32>,
@@ -189,9 +218,17 @@ pub struct Opts {
     /// Everyone else as a capsule in the side's colour, not Triple T: a
     /// software GPU can't skin a room of them (the gate, eight seats on).
     pub capsules: bool,
-    /// Start in the Esc menu (`menu`) or the settings (`settings`): for
-    /// pictures of them (`ci/client_shot.mjs ... menu=1`).
+    /// Open the match on the Esc menu (`menu`) or the settings
+    /// (`settings`): for pictures of them (`ci/client_shot.mjs ... menu=1`).
+    /// On the title, `settings` opens the settings over it.
     pub open: Screen,
+    /// `graphics`: the settings, on their GRAPHICS tab.
+    pub graphics: bool,
+    /// The title, or straight into a mode, or neither (a picture).
+    pub front: front::Start,
+    /// `page`: the page's own menu is the title (a browser's, `web/menu.js`):
+    /// the backdrop behind it, and matches asked for by `knock()`.
+    pub page: bool,
 }
 
 impl Opts {
@@ -201,13 +238,20 @@ impl Opts {
         Opts {
             autoplay: has("autoplay"),
             lite: has("lite"),
+            potato: has("potato"),
+            quality: s
+                .split([',', ' '])
+                .find_map(|w| w.strip_prefix("quality=").and_then(look::quality::Quality::from_name)),
             fxdemo: has("fxdemo") || s.contains("fxstage"),
             fxstage: s
                 .split([',', ' '])
                 .find_map(|w| w.strip_prefix("fxstage").and_then(|n| n.parse().ok())),
             pose: None,
             capsules: has("capsules"),
-            open: if has("settings") {
+            page: has("page"),
+            front: front::Start::Off,
+            graphics: has("graphics"),
+            open: if has("settings") || has("graphics") {
                 Screen::Settings
             } else if has("menu") {
                 Screen::Paused
@@ -218,7 +262,26 @@ impl Opts {
     }
 }
 
+/// The game: the title (or straight into a mode, `opts.front`) on `door`.
+pub fn game(door: door::Door, opts: Opts) -> App {
+    let (link, first): (Box<dyn Link>, Screen) = match opts.front {
+        // Nothing behind it: the match's level is the first built.
+        front::Start::Join(_) | front::Start::Off => (Box::new(link::Still::idle()), Screen::Title),
+        front::Start::Title if opts.open == Screen::Settings => (front::backdrop(), Screen::Settings),
+        front::Start::Title => (front::backdrop(), Screen::Title),
+    };
+    let mut app = app_on(link, opts, first);
+    front::install(&mut app, door, opts.front, opts.open);
+    app.insert_resource(front::PageMenu(opts.page));
+    app
+}
+
+/// The client on `link` with no title: a picture (`pose`), or the fx stage.
 pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
+    app_on(link, opts, opts.open)
+}
+
+fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -237,8 +300,13 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
                 ..default()
             }),
     )
+    // What the device can bind, read before `Startup` spawns the camera.
+    .add_plugins(look::gpu::GpuPlugin)
     .insert_non_send_resource(LinkRes(link))
-    .insert_resource(ClearColor(Color::srgb(0.62, 0.77, 0.91)))
+    // The shell's ground until a level is spawned (`loading::settle` then
+    // gives it the sky's): the frames before the first UI draw are the
+    // title's colour, not a flash of blue.
+    .insert_resource(ClearColor(ui::BG))
     .insert_resource(Autoplay {
         on: opts.autoplay,
         ..default()
@@ -248,16 +316,57 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
+    .init_resource::<items::Items>()
     .init_resource::<Early>()
     .init_resource::<look::trees::TreeCards>()
+    .init_resource::<look::viewmodel::ViewMuzzles>()
     .add_plugins(sound::SoundPlugin)
     .add_plugins(ui::plugin)
     .add_plugins(settings::plugin)
-    .insert_state(opts.open)
+    // The graphics ladder after the settings it reads: its tier exists
+    // before anything is spawned with it.
+    .add_plugins(look::quality::plugin)
+    .add_plugins(look::potato::plugin)
+    .add_plugins(look::render_scale::plugin)
+    .add_plugins(display::plugin)
+    .insert_state(first)
     .add_plugins(pause::plugin)
     .add_plugins(options::plugin)
+    .add_plugins(loading::plugin)
+    .add_plugins(look::shot::plugin)
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
+    // The boxes' weathering (`look/weathering.rs`).
+    .add_plugins(look::weathering::plugin)
+    // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
+    .add_plugins(look::foliage::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
+    // Your own body, cast in the sun's shadow and drawn by no camera
+    // (`look/own_shadow.rs`).
+    .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
+    // The title's Triple T is on a layer of his own, and every node his
+    // scene spawns takes it before visibility is worked out
+    // (`look/portrait.rs`).
+    .add_plugins(bevy::app::HierarchyPropagatePlugin::<
+        bevy::camera::visibility::RenderLayers,
+    >::new(PostUpdate))
+    .configure_sets(
+        PostUpdate,
+        bevy::app::PropagateSet::<bevy::camera::visibility::RenderLayers>::default()
+            .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+    )
+    // The sky (look/deck.rs and its layers) under each map's mood.
+    .add_plugins(MaterialPlugin::<look::deck::CloudMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::deck::SkyFogMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::stars::StarMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::moon::MoonMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::rain::RainMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::rainbow::RainbowMaterial>::default())
+    .init_resource::<look::mood::MoodNow>()
+    .init_resource::<look::mood::SkyClock>()
+    .init_resource::<look::mood::Drift>()
+    .init_resource::<look::shafts::Shafts>()
+    .init_resource::<look::cliffs::SkinLift>()
+    // The sea (look/water.rs) and its waves.
     .add_plugins(MaterialPlugin::<look::water::WaterMaterial>::default())
     .add_systems(Update, look::water::animate.after(view))
     .add_systems(
@@ -265,15 +374,57 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
         (
             setup,
             look::textures::load,
+            look::rock::load,
             look::guns::load,
+            look::own_shadow::setup,
+            look::portrait::setup,
             look::fx::setup,
             look::prewarm::setup,
+            (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
+            look::rain::setup,
+            look::rainbow::setup,
+            look::shafts::setup,
         ),
+    )
+    // The sky after the level is built for its map: the clock, the drift
+    // off it, then everything drawn from the mood and the drift, each
+    // written only when it moves.
+    .add_systems(
+        Update,
+        (
+            sky_clock,
+            look::mood::drift,
+            look::shafts::drive,
+            (
+                look::deck::drive,
+                look::stars::drive,
+                look::moon::drive,
+                look::rain::drive,
+                look::rainbow::drive,
+                look::cloud_shadow::drive,
+                look::rig::fog,
+            ),
+        )
+            .chain()
+            .after(rebuild),
     )
     .add_systems(
         Update,
-        (look::prewarm::warm, look::prewarm::warm_models, look::prewarm::retire).chain(),
+        (
+            look::prewarm::warm,
+            look::prewarm::warm_level,
+            look::prewarm::warm_models,
+            look::prewarm::retire,
+        )
+            .chain(),
     )
+    // The marks keep off what is drawn back from its box, and onto the
+    // rock skin (`look/rock.rs`, `look/cliffs.rs`).
+    .add_systems(
+        Update,
+        (look::rock::bare_marks, look::cliffs::lift_marks).after(level::dress_level),
+    )
+    .add_systems(PreUpdate, look::fx::retier.after(look::quality::resolve))
     .add_systems(
         Update,
         (
@@ -283,11 +434,19 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
             rebuild,
             look::textures::prepare,
             look::textures::mip_models,
-            level::dress_level,
+            look::rock::dress_masses,
+            (
+                level::dress_level,
+                look::grass::dress,
+                look::clutter::dress,
+                look::foliage::warm,
+            )
+                .chain(),
             look::grass::cull,
-            look::bodies::graph,
-            draw_fighters,
-            draw_vehicles,
+            look::anim::build,
+            // What presses the grass is what is drawn (`look/foliage.rs`).
+            (draw_fighters, draw_vehicles, look::foliage::update).chain(),
+            items::draw,
             fly,
             view,
             look::fx::draw,
@@ -297,17 +456,46 @@ pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
         )
             .chain(),
     );
+    app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
+    // Your shadow and the title's Triple T are bodies too, posed beside
+    // everyone else's; then every body's player is driven; then, between
+    // the animation and the transforms, every spine is turned
+    // (`look/anim.rs`).
+    app.add_systems(
+        Update,
+        (
+            look::own_shadow::stream.after(draw_fighters),
+            look::portrait::stand,
+            look::portrait::activate,
+        ),
+    )
+    .add_systems(
+        Update,
+        look::bodies::drive
+            .after(look::own_shadow::stream)
+            .after(look::portrait::stand)
+            .after(draw_fighters),
+    )
+    .add_systems(
+        PostUpdate,
+        look::bodies::pose_spines
+            .after(bevy::app::AnimationSystems)
+            .before(bevy::transform::TransformSystems::Propagate),
+    )
+    // Names over heads, after the camera is placed (`tags.rs`).
+    .add_systems(Update, tags::draw.after(view).after(hud::draw));
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
     app.insert_resource(opts);
-    if opts.lite {
-        app.add_systems(Update, lite);
+    if opts.graphics {
+        app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(Update, pose::aim.after(view));
     } else {
-        app.add_systems(Startup, hud::setup);
+        app.add_systems(Startup, (hud::setup, medals::setup))
+            .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
@@ -322,6 +510,23 @@ fn setup(
 ) {
     let eye = look::rig::camera(&mut commands, &mut images, &mut media, Eye);
     look::viewmodel::spawn(&mut commands, eye);
+}
+
+/// The sky's clock (`look::mood::SkyClock`): the server's tick as this
+/// client estimates it, so the deck drifts the same for everyone in a
+/// match; the app's own clock where no server keeps one (the title).
+fn sky_clock(link: NonSend<LinkRes>, time: Res<Time>, mut clock: ResMut<look::mood::SkyClock>) {
+    let s = link.0.session();
+    let tick = if s.ready {
+        s.core.render_tick(link.0.now_ms())
+    } else {
+        0.0
+    };
+    clock.s = if tick > 0.0 {
+        tick / f64::from(sim::consts::TICK_HZ)
+    } else {
+        time.elapsed_secs_f64()
+    };
 }
 
 /// In a match: a click takes the mouse; Escape opens the menu (in a
@@ -395,7 +600,7 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
+    if grabbed && binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
         st.net = !st.net;
     }
     let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
@@ -493,28 +698,26 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
 fn rebuild(
     link: NonSend<LinkRes>,
     mut built: ResMut<Built>,
+    gen: Option<Res<front::LinkGen>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
     mut cards: ResMut<look::trees::TreeCards>,
-    opts: Res<Opts>,
     old: Query<Entity, With<level::LevelPart>>,
-    mut eye: Query<
-        (
-            Entity,
-            &mut bevy::camera::Exposure,
-            &mut bevy::light::EnvironmentMapLight,
-        ),
-        With<Eye>,
-    >,
+    mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
+    mut shade: ResMut<look::quality::MapShade>,
+    mut mood: ResMut<look::mood::MoodNow>,
 ) {
     let s = link.0.session();
-    if !s.ready || s.welcomes == built.0 {
+    let now = Some((gen.map_or(0, |g| g.0), s.welcomes));
+    if !s.ready || built.0 == now {
         return;
     }
-    built.0 = s.welcomes;
+    built.0 = now;
+    // The map's mood first: the level's sun and its wet are the mood's.
+    look::mood::set(&mut mood, s.map_id);
     level::build(
         &mut commands,
         &mut meshes,
@@ -524,14 +727,15 @@ fn rebuild(
         &mut cards,
         &old,
         s.map_id,
-        opts.lite,
     );
-    if let Ok((eye, mut exposure, mut env)) = eye.single_mut() {
-        look::rig::sky_for(&mut commands, &mut images, eye, s.map_id as u64 + 1);
+    if let Ok((mut exposure, mut env)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mut exposure, &mut env);
-            look::rig::haze_for(&mut commands, eye, &d.light);
+            look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
         }
+    }
+    // Every rung's shade reaches across this map (`look/quality.rs`).
+    if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
+        shade.set_if_neq(look::quality::MapShade::of(d));
     }
 }
 
@@ -553,26 +757,37 @@ fn draw_fighters(
     posed: Option<Res<pose::Pose>>,
     opts: Res<Opts>,
     (mut meshes, mut mats, mut vis): BodyParts,
-    graph: Option<Res<look::bodies::Graph>>,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    mut players: Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
-    mut playing: Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
     (mut fx, mut shield_mats, mut shells): ShieldParts,
-    time: Res<Time>,
+    (time, mut walkers): (Res<Time>, ResMut<look::foliage::Walkers>),
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
     // Dead, and we saw who did it: the kill cam's bodies (ourselves among
     // them) instead of the living.
-    let others = match (core.killcam(now), &posed) {
-        (_, Some(p)) => p.2.fighter.then_some(p.0).into_iter().collect(),
-        (Some(k), _) if !core.own().0.alive => k.bodies,
-        _ => core.others(now),
+    let (others, live) = match (core.killcam(now), &posed) {
+        (_, Some(p)) => (p.2.fighter.then_some(p.0).into_iter().collect(), false),
+        (Some(k), _) if !core.own().0.alive => (k.bodies, false),
+        _ => (core.others(now), true),
     };
     let seats = look::bodies::seats(&core.vehicles(now));
     look::fx::bodies::watch(&mut fx, &others, time.delta_secs(), time.elapsed_secs());
     let (f, p) = core.own();
+    // The grass flattens under the feet this client draws on the ground,
+    // ours first: never a kill cam's replay, never a seat.
+    walkers.feet.clear();
+    if live && f.alive && f.body.grounded && f.riding().is_none() {
+        walkers.fighter(Vec3::new(p.x, p.y, p.z));
+    }
+    if live {
+        for d in others
+            .iter()
+            .filter(|d| d.alive && d.grounded && !seats.contains_key(&d.slot))
+        {
+            walkers.fighter(Vec3::new(d.pos.x, d.pos.y, d.pos.z));
+        }
+    }
     look::fx::bodies::watch_own(
         &mut fx,
         core.slot,
@@ -607,14 +822,12 @@ fn draw_fighters(
         look::bodies::pose(
             &mut commands,
             &models,
-            graph.as_deref(),
             d,
-            seats.get(&d.slot).map(|(v, k)| (v, *k)),
+            seats.get(&d.slot).map(|(v, k)| (v.yaw, *k)),
             e,
             &mut bodies,
             &mut at,
-            &mut players,
-            &mut playing,
+            time.delta_secs(),
         );
         look::bodies::flare(
             e,
@@ -650,6 +863,7 @@ fn draw_vehicles(
     mut parts: Local<Option<HullParts>>,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
+    mut walkers: ResMut<look::foliage::Walkers>,
 ) {
     let now = link.0.now_ms();
     let core = &link.0.session().core;
@@ -665,6 +879,7 @@ fn draw_vehicles(
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
+        walkers.hull(p, yaw, &WHEELS);
         let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
@@ -707,7 +922,7 @@ fn draw_vehicles(
                             MeshMaterial3d(dark.clone()),
                             Transform::from_xyz(-0.9, 1.55, 0.0),
                         ));
-                        for (x, z) in [(1.5, 1.05), (1.5, -1.05), (-1.5, 1.05), (-1.5, -1.05)] {
+                        for (x, z) in WHEELS {
                             c.spawn((
                                 Mesh3d(wheel.clone()),
                                 MeshMaterial3d(dark.clone()),
@@ -729,7 +944,7 @@ fn draw_vehicles(
 }
 
 /// From our eye, or behind our vehicle at the wheel; dead, the kill cam.
-fn view(
+pub(crate) fn view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
     mut fx: ResMut<look::fx::Fx>,
@@ -765,7 +980,7 @@ fn view(
     }
     // The effects demo stands its camera in one place (drawing only).
     if opts.fxdemo {
-        *t = look::fx::demo::pose(&core.map);
+        *t = look::fx::demo::pose(&core.map, opts.fxstage);
     }
     // Shake and kick: the drawn camera only, never the aim we send.
     let o = fx.shake.step(time.delta_secs());
@@ -775,29 +990,41 @@ fn view(
     }
 }
 
-/// The gun in our view.
+/// The gun in our view: hidden dead, at the wheel and behind a scope; a
+/// passenger, who fights from the seat in first person, holds it.
+#[allow(clippy::too_many_arguments)]
 fn draw_view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
     time: Res<Time>,
     models: Res<look::guns::Models>,
     mut commands: Commands,
-    mut hold: Query<(Entity, &mut look::viewmodel::ViewGun, &mut Transform, &mut Visibility)>,
-    mut flash: Query<&mut PointLight, With<look::viewmodel::Flash>>,
+    mut motion: Local<look::viewmodel::Motion>,
+    mut muzzles: ResMut<look::viewmodel::ViewMuzzles>,
+    mut hold: look::viewmodel::Hands,
+    mut flash: look::viewmodel::FlashLight,
 ) {
-    let (f, _) = link.0.session().core.own();
-    let v = f.body.vel;
+    let (f, p) = link.0.session().core.own();
     let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
         f,
-        speed: if f.body.grounded {
-            (v.x * v.x + v.z * v.z).sqrt()
-        } else {
-            0.0
-        },
-        shown: f.alive && f.riding().is_none() && !scoped,
+        at: Vec3::new(p.x, p.y, p.z),
+        yaw: look.yaw,
+        pitch: look.pitch,
+        riding: seat.is_some(),
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped,
     };
-    look::viewmodel::update(&mut commands, &models, own, time.delta_secs(), &mut hold, &mut flash);
+    look::viewmodel::update(
+        &mut commands,
+        &models,
+        own,
+        time.delta_secs(),
+        &mut motion,
+        &mut muzzles,
+        &mut hold,
+        &mut flash,
+    );
 }
 
 /// What the session queued for us this frame: events become effects and
@@ -811,6 +1038,7 @@ pub(crate) fn happened(
     mut fx: ResMut<look::fx::Fx>,
     mut st: ResMut<hud::HudState>,
     mut early: ResMut<Early>,
+    muzzles: Res<look::viewmodel::ViewMuzzles>,
 ) {
     let now_ms = link.0.now_ms();
     let s = link.0.session_mut();
@@ -820,11 +1048,17 @@ pub(crate) fn happened(
     {
         let others = s.core.others(now_ms);
         let vehicles = s.core.vehicles(now_ms);
+        let dir = Vec3::new(
+            look.pitch.cos() * look.yaw.cos(),
+            look.pitch.sin(),
+            look.pitch.cos() * look.yaw.sin(),
+        );
         let scene = look::fx::Scene {
             map: &s.core.map,
             others: &others,
             vehicles: &vehicles,
             me: s.core.slot,
+            aim: dir,
             t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, &events);
@@ -832,62 +1066,36 @@ pub(crate) fn happened(
         let (f, p) = s.core.own();
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = Vec3::new(p.x, p.y + h, p.z);
-        let dir = Vec3::new(
-            look.pitch.cos() * look.yaw.cos(),
-            look.pitch.sin(),
-            look.pitch.cos() * look.yaw.sin(),
-        );
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
-        look::fx::shots::own(&mut fx, &scene, f, eye, cam);
+        look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
     }
     hud::on_events(&mut st, s, now_ms, &events, &msgs, time.elapsed_secs(), look.yaw);
     heard.0 = events;
 }
 
-/// A software GPU's frame: no shadows, no SMAA, no grass, and the ground on
-/// a coarser grid (`level::LITE_TERRAIN_STEP`) drawn without its per-pixel
-/// rock; `level::build` spawned no sea and no trees for it (the sim still
-/// has the trunks); every box stays.
-fn lite(
-    mut commands: Commands,
-    link: NonSend<LinkRes>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut suns: Query<&mut DirectionalLight>,
-    aa: Query<Entity, With<bevy::anti_alias::smaa::Smaa>>,
-    grass: Query<Entity, With<level::GrassPart>>,
-    ground: Query<Entity, (With<level::GroundMesh>, Without<level::Lightened>)>,
-) {
-    for e in &grass {
-        commands.entity(e).despawn();
-    }
-    if !ground.is_empty() {
-        let id = link.0.session().map_id;
-        let terrain = sim::maps::ALL
-            .iter()
-            .find(|d| d.id == id)
-            .and_then(|d| d.terrain.as_ref());
-        for e in &ground {
-            let mut e = commands.entity(e);
-            e.insert(level::Lightened);
-            if let Some(t) = terrain {
-                e.insert(Mesh3d(meshes.add(level::terrain_mesh_at(t, level::LITE_TERRAIN_STEP))));
-            }
-        }
-    }
-    for mut s in &mut suns {
-        if s.shadows_enabled {
-            s.shadows_enabled = false;
-        }
-    }
-    for e in &aa {
-        commands.entity(e).remove::<bevy::anti_alias::smaa::Smaa>();
-    }
-}
-
 /// For the browser gate (`ci/e2e.mjs`): `window.__oneshot`, as the
-/// three.js page has it.
+/// three.js page has it, and where the title's controls are (`ui`: a tag's
+/// centre and size in the page's pixels, for a click).
 #[cfg(target_arch = "wasm32")]
-fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>, mut frames: Local<u32>) {
+#[allow(clippy::too_many_arguments)]
+fn expose(
+    link: NonSend<LinkRes>,
+    st: Res<hud::HudState>,
+    in_match: Option<Res<front::InMatch>>,
+    screen: Res<State<Screen>>,
+    tags: Query<(
+        &front::Tag,
+        &ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+        &InheritedVisibility,
+    )>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    settle: Res<loading::Settle>,
+    tier: Res<look::quality::Tier>,
+    mood: Res<look::mood::MoodNow>,
+    page: Option<Res<front::PageState>>,
+    mut frames: Local<u32>,
+) {
     use wasm_bindgen::JsValue;
     *frames += 1;
     let Some(w) = web_sys::window() else {
@@ -895,31 +1103,89 @@ fn expose(link: NonSend<LinkRes>, st: Res<hud::HudState>, left: Res<pause::Left>
     };
     let s = link.0.session();
     let o = js_sys::Object::new();
-    let set = |k: &str, v: JsValue| {
-        let _ = js_sys::Reflect::set(&o, &JsValue::from_str(k), &v);
+    let set = |o: &js_sys::Object, k: &str, v: JsValue| {
+        let _ = js_sys::Reflect::set(o, &JsValue::from_str(k), &v);
     };
-    set("connected", s.ready.into());
-    set("frames", (*frames).into());
-    set("kills", st.kills.into());
-    set("deaths", st.deaths.into());
-    set("alive", s.core.own().0.alive.into());
-    set("slot", s.core.slot.into());
+    let matched = in_match.as_ref().is_some_and(|m| m.0);
+    let live = link.0.live() && (in_match.is_none() || matched);
+    set(&o, "connected", (live && s.ready).into());
+    set(&o, "frames", (*frames).into());
+    set(&o, "kills", st.kills.into());
+    set(&o, "deaths", st.deaths.into());
+    set(&o, "assists", st.assists.into());
+    // Our medals this match, by name, and the carnage report's rows.
+    let medals = js_sys::Object::new();
+    for (&id, &n) in &st.earned {
+        let _ = js_sys::Reflect::set(&medals, &JsValue::from_str(proto::medal::info(id).name), &n.into());
+    }
+    set(&o, "medals", medals.into());
+    set(&o, "carnage", st.carnage.len().into());
+    set(&o, "alive", s.core.own().0.alive.into());
+    set(&o, "slot", s.core.slot.into());
+    set(&o, "team", s.core.team.into());
+    // Who sits where, by name: a party's page sees its members (ci/party.mjs).
+    let names = js_sys::Array::new();
+    for (_, n) in st.names() {
+        names.push(&JsValue::from_str(n));
+    }
+    set(&o, "names", names.into());
     let (f, p) = s.core.own();
-    set("pos", js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into());
-    set("health", f.health.into());
-    set("killcam", s.core.killcam(link.0.now_ms()).is_some().into());
-    // For the page's menu: what the stream last said, and whether it's over.
-    set("status", st.status.as_str().into());
-    set("cup", st.cup.as_str().into());
-    set("bye", st.ended.into());
-    set("ended", (st.ended || link.0.closed()).into());
-    // The player left (the Esc menu): straight back to the menu.
-    set("left", left.0.into());
+    set(
+        &o,
+        "pos",
+        js_sys::Array::of3(&p.x.into(), &p.y.into(), &p.z.into()).into(),
+    );
+    set(&o, "health", f.health.into());
+    set(&o, "killcam", s.core.killcam(link.0.now_ms()).is_some().into());
+    let name = match screen.get() {
+        Screen::Title => "title",
+        Screen::Playing => "playing",
+        Screen::Paused => "paused",
+        Screen::Settings => "settings",
+    };
+    set(&o, "screen", name.into());
+    // For the page's menu: in a match, a knock out, and the line it gave.
+    set(&o, "in_match", matched.into());
+    if let Some(p) = page {
+        set(&o, "knocking", p.knocking.into());
+        set(&o, "front_status", p.status.as_str().into());
+        set(&o, "front_bad", p.bad.into());
+    }
+    // Which module this is and what it draws (`look/gpu.rs`).
+    set(&o, "gfx", look::gpu::api().into());
+    set(&o, "tier", tier.describe().into());
+    // The map's sky (`look/mood.rs`).
+    set(&o, "sky", mood.mood.name.into());
+    set(
+        &o,
+        "quality",
+        tier.preset.map_or("custom", look::quality::Quality::name).into(),
+    );
+    // The screen's level is there with nothing over it (`loading::Settle`):
+    // what `ci/client_shot.mjs` waits for before its seconds.
+    set(&o, "ready", settle.shown().into());
+    set(&o, "stage", settle.now.stage().into());
+    // What the stream last said, and whether it's over.
+    set(&o, "status", st.status.as_str().into());
+    set(&o, "cup", st.cup.as_str().into());
+    set(&o, "bye", st.ended.into());
+    set(&o, "ended", (st.ended || (live && link.0.closed())).into());
     // The netcode's health, as the three.js page gave it: snapshots,
     // confirmed predictions, corrected ones.
     let n = s.core.stats;
     let stats = js_sys::Array::of3(&n.snapshots.into(), &n.confirmations.into(), &n.corrections.into());
-    set("stats", stats.into());
+    set(&o, "stats", stats.into());
+    let ui = js_sys::Object::new();
+    let k = windows.single().map_or(1.0, |w| w.scale_factor());
+    for (t, node, at, vis) in &tags {
+        if !vis.get() {
+            continue;
+        }
+        let (c, size) = (at.translation / k, node.size() / k);
+        let r = [c.x, c.y, size.x, size.y].map(JsValue::from);
+        set(&ui, t.0, js_sys::Array::of4(&r[0], &r[1], &r[2], &r[3]).into());
+    }
+    set(&o, "ui", ui.into());
     let _ = js_sys::Reflect::set(&w, &JsValue::from_str("__oneshot"), &o);
 }
 
@@ -938,6 +1204,7 @@ fn fly(
         &mut commands,
         &mut fx,
         &models,
+        &core.map,
         core.latest().proj(),
         &others,
         time.elapsed_secs(),
@@ -948,90 +1215,70 @@ fn fly(
 
 #[cfg(target_arch = "wasm32")]
 mod web_start {
-    use client_net::web::Client;
     use wasm_bindgen::prelude::*;
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
 
-    async fn sleep(ms: i32) {
-        let p = js_sys::Promise::new(&mut |done, _| {
-            if let Some(w) = web_sys::window() {
-                let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(&done, ms);
-            }
-        });
-        let _ = JsFuture::from(p).await;
-    }
-
-    /// The page's entry, as the three.js page plays: connect to `addr`
-    /// (pinning `hash`, or none for a CA's certificate) as `name`, signed in
-    /// with an Elo Pros `pass` (empty for a guest), asking for `mode` in
-    /// `skin`; wait for the welcome, handing each line the stream gives
-    /// (the queue, a cup, a refusal) to `status`; then run the game.
-    ///
-    /// A server on its way down refuses as full: `follow()` then resolves
-    /// to the live server's `[addr, hash]` (the deploy's other slot,
-    /// ops/README.md), or null if it is this one, and we go there once
-    /// with the same pass. Resolves true once the game runs, false if the
-    /// server said no (`status` has had why). `opts`: a comma list of
-    /// `autoplay` and `lite` (see `Opts`).
+    /// The page's entry: the game, on the title (or straight into `mode`
+    /// with `autoplay`, `fxdemo` or `fxstage` in `opts`, a comma list: see
+    /// `Opts`). `addr` and `hash` are `server.json`'s game server (no hash
+    /// with a CA's certificate: checked by the browser, never pinned);
+    /// `follow()` resolves to the live server's `[addr, hash]` when this one
+    /// is on its way down (or null); `signin()` opens Elo Pros' popup and
+    /// resolves to `{pass, wallet}`, or is null with `off` saying why.
+    /// `name`, if not empty, is the name for this run.
     #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen]
-    pub async fn play(
+    pub fn launch(
         addr: String,
         hash: String,
-        name: String,
-        pass: String,
-        mode: u8,
-        skin: u8,
         opts: String,
-        status: js_sys::Function,
+        name: String,
+        mode: u8,
+        signin: JsValue,
+        off: String,
         follow: js_sys::Function,
-    ) -> Result<bool, JsValue> {
-        let connect = |addr: String, hash: String| Client::connect(addr, hash, name.clone(), pass.clone(), mode, skin);
-        let say = |line: &str| {
-            let _ = status.call1(&JsValue::NULL, &JsValue::from_str(line));
+    ) {
+        let mut o = super::Opts::parse(&opts);
+        o.front = if o.autoplay || o.fxdemo {
+            super::front::Start::Join(mode)
+        } else {
+            super::front::Start::Title
         };
-        let mut c = connect(addr, hash).await?;
-        let mut moved = false;
-        let mut early = Vec::new();
-        'wait: loop {
-            c.tick(sim::input::Input::default());
-            for m in c.session_mut().take_messages() {
-                if m == (proto::Msg::Refuse {
-                    reason: proto::REFUSE_FULL,
-                }) && !moved
-                {
-                    moved = true;
-                    say("moving to the new server...");
-                    let to = follow.call0(&JsValue::NULL)?.dyn_into::<js_sys::Promise>()?;
-                    if let Some(a) = JsFuture::from(to).await?.dyn_ref::<js_sys::Array>() {
-                        c.close();
-                        c = connect(
-                            a.get(0).as_string().unwrap_or_default(),
-                            a.get(1).as_string().unwrap_or_default(),
-                        )
-                        .await?;
-                        early.clear();
-                        continue 'wait;
-                    }
-                }
-                if let Some(line) = super::hud::status_line(&m) {
-                    say(&line);
-                }
-                early.push(m);
-            }
-            if c.ready() {
-                break;
-            }
-            if c.closed() {
-                return Ok(false);
-            }
-            sleep(100).await;
+        let door = super::door::Door::new(addr, hash, follow, signin, off);
+        let mut app = super::game(door, o);
+        super::look::gpu::hook_panics();
+        if !name.is_empty() {
+            app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
         }
-        let mut app = super::app(Box::new(super::link::Web(c)), super::Opts::parse(&opts));
-        app.insert_resource(super::Early(early));
         app.run();
-        Ok(true)
+    }
+
+    /// The page's menu asks for a match (`page` in `launch`'s opts): as
+    /// `name`, with an Elo Pros pass or the server's ticket (or nothing, a
+    /// guest), `mode` in `skin`, with the `party` it comes with (its code;
+    /// 0 for none). How it goes is `__oneshot.knocking`, `.front_status`,
+    /// `.in_match`.
+    #[wasm_bindgen]
+    pub fn knock(name: String, pass: String, mode: u8, skin: u8, party: u32) {
+        let ask = super::door::Ask {
+            name,
+            pass,
+            mode,
+            skin,
+            party,
+        };
+        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Knock(ask)));
+    }
+
+    /// Stop waiting for a match (the queue, a cup).
+    #[wasm_bindgen]
+    pub fn cancel() {
+        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Cancel));
+    }
+
+    /// Leave the match, back to the page's menu.
+    #[wasm_bindgen]
+    pub fn leave() {
+        super::front::PAGE.with(|p| p.borrow_mut().push(super::front::PageCmd::Leave));
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;
@@ -1046,6 +1293,7 @@ mod web_start {
         };
         let stage = super::look::fx::stage::Stage::parse(&query);
         let mut app = super::app(Box::new(super::link::Still::on(pose.2.map)), opts);
+        super::look::gpu::hook_panics();
         // `fx=<name>`: the fx stage instead of a fighter (`look/fx/stage.rs`).
         if let Some(s) = stage {
             super::look::fx::stage::install(&mut app, s);

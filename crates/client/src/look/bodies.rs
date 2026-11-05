@@ -1,55 +1,31 @@
-//! Everyone else as Triple T, after the three.js page's `art.ts`'s `bodyFactory`: the
-//! model lifted and tinted by side, an animation picked from what the
-//! snapshot says (alive, grounded, crouched, speed, seated), with Gates'
-//! 0.15 s crossfades, and the gun they hold in hand. A skin is a faint
+//! Everyone else as Triple T, after the three.js page's `art.ts`'s
+//! `bodyFactory` and Gates' `crates/client/src/render/anim.rs` (MIT,
+//! NOTICE): the model lifted and tinted by side, moving the way its
+//! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
+//! the spine back to the aim, the head on the aim's pitch, the feet planted,
+//! the hold on the arms), and the gun they hold in hand. A skin is a faint
 //! sheen of its trim and a band at the waist: the side's colour still
 //! carries the fighter, and no hitbox or visibility changes (DESIGN.md
 //! §15). Drawing only.
+//!
+//! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
+//! the title's Triple T (`portrait.rs`).
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
-use bevy::animation::RepeatAnimation;
 use bevy::camera::visibility::NoFrustumCulling;
+use bevy::light::NotShadowCaster;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use client_net::core::{Drawn, DrawnVehicle};
 
+use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
 use super::guns::{body_basis, gun, spawn_posed, Models};
 use super::shield::{ShellPart, ShieldMaterial};
-use bevy::light::NotShadowCaster;
-use bevy::mesh::skinning::SkinnedMesh;
 
 /// Triple T faces +Z in its file; our bodies face +X.
 const FACE: f32 = core::f32::consts::FRAC_PI_2;
-
-/// The clips we play, by name in the file.
-const CLIPS: [&str; 12] = [
-    "Idle_Loop",
-    "Walk_Loop",
-    "Jog_Fwd_Loop",
-    "Sprint_Loop",
-    "Crouch_Idle_Loop",
-    "Crouch_Fwd_Loop",
-    "Jump_Loop",
-    "Death01",
-    "Rifle_Hold_Loop",
-    "Pistol_Idle_Loop",
-    "Driving_Loop",
-    "Sitting_Idle_Loop",
-];
-const WALK: usize = 1;
-const JOG: usize = 2;
-const SPRINT: usize = 3;
-const CROUCH_IDLE: usize = 4;
-const CROUCH_FWD: usize = 5;
-const JUMP: usize = 6;
-const DEATH: usize = 7;
-const RIFLE: usize = 8;
-const PISTOL: usize = 9;
-const DRIVING: usize = 10;
-
-const FADE: Duration = Duration::from_millis(150);
 
 /// Where the gun hangs, in the body's frame (+X forward): art.ts's hand,
 /// a little lower, at Triple T's chest rather than its eyes.
@@ -83,45 +59,17 @@ fn trim(skin: u8) -> Option<Color> {
     })
 }
 
-/// The animation graph, once the model has loaded.
-#[derive(Resource)]
-pub struct Graph {
-    handle: Handle<AnimationGraph>,
-    nodes: Vec<AnimationNodeIndex>,
-}
-
-/// Builds the graph when the model's clips are in.
-pub fn graph(
-    mut commands: Commands,
-    models: Option<Res<Models>>,
-    have: Option<Res<Graph>>,
-    gltfs: Res<Assets<bevy::gltf::Gltf>>,
-    mut graphs: ResMut<Assets<AnimationGraph>>,
-) {
-    let (Some(models), None) = (models, have) else {
-        return;
-    };
-    let Some(g) = gltfs.get(&models.body) else {
-        return;
-    };
-    let clips: Vec<Handle<AnimationClip>> = CLIPS
-        .iter()
-        .map(|n| g.named_animations.get(*n).cloned().unwrap_or_default())
-        .collect();
-    let (graph, nodes) = AnimationGraph::from_clips(clips);
-    commands.insert_resource(Graph {
-        handle: graphs.add(graph),
-        nodes,
-    });
-}
-
 #[derive(Component)]
 pub struct Body {
     team: u8,
     skin: u8,
+    /// Cast in the sun's shadow and drawn by no camera (`own_shadow.rs`):
+    /// no shells, no band, and every mesh on the shadow's material.
+    shadow: bool,
+    /// Its scene has spawned and been dressed.
+    dressed: bool,
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
-    clip: Option<usize>,
     hand: Entity,
     held: u8,
     /// Its materials (its own: `dress` copies them per body), their glow
@@ -134,22 +82,40 @@ pub struct Body {
     shells: Vec<Entity>,
     /// Shown again after hiding: its next clip starts at once.
     fresh: bool,
+    /// How it moves (`anim.rs`), and what its player plays.
+    gait: Gait,
+    playing: Playing,
+    /// Where its head is moved, metres in the model's frame
+    /// (`own_shadow.rs`).
+    head_push: Vec3,
 }
 
-/// A body spawned for `team` in `skin`: its root, which the caller places.
 impl Body {
     /// Its scene has spawned and been dressed: it draws.
     pub fn dressed(&self) -> bool {
-        !self.mats.is_empty()
+        self.dressed
     }
 
-    /// Hidden: the next clip starts at once, not faded from this pose.
+    /// Hidden: the next clip starts at once, not faded from this pose, and
+    /// its legs start from under it.
     pub fn afresh(&mut self) {
-        self.clip = None;
+        self.gait = Gait::default();
         self.fresh = true;
+    }
+
+    /// Where its head is moved, metres in the model's frame.
+    pub fn set_head_push(&mut self, push: Vec3) {
+        self.head_push = push;
     }
 }
 
+/// The rotation of a body's model (the Triple T scene) for a body facing
+/// `yaw`: what turns a direction in the world into the model's frame.
+pub fn model_rotation(yaw: f32) -> Quat {
+    Quat::from_rotation_y(-yaw) * Quat::from_rotation_y(FACE)
+}
+
+/// A body spawned for `team` in `skin`: its root, which the caller places.
 pub fn spawn(
     commands: &mut Commands,
     models: &Models,
@@ -158,7 +124,7 @@ pub fn spawn(
     team: u8,
     skin: u8,
 ) -> Entity {
-    let root = commands.spawn((Transform::default(), Visibility::default())).id();
+    let root = spawn_as(commands, models, team, skin, false);
     if let Some(c) = trim(skin) {
         // The band at the waist, in the trim's colour.
         commands.spawn((
@@ -173,6 +139,16 @@ pub fn spawn(
             ChildOf(root),
         ));
     }
+    root
+}
+
+/// Your own body, for its shadow only (`own_shadow.rs`).
+pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
+    spawn_as(commands, models, team, 0, true)
+}
+
+fn spawn_as(commands: &mut Commands, models: &Models, team: u8, skin: u8, shadow: bool) -> Entity {
+    let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::from_translation(HAND), Visibility::default(), ChildOf(root)))
         .id();
@@ -186,8 +162,9 @@ pub fn spawn(
     commands.entity(root).insert(Body {
         team,
         skin,
+        shadow,
+        dressed: false,
         player: None,
-        clip: None,
         hand,
         held: 0,
         mats: Vec::new(),
@@ -196,6 +173,9 @@ pub fn spawn(
         shell: Handle::default(),
         shells: Vec::new(),
         fresh: false,
+        gait: Gait::default(),
+        playing: Playing::default(),
+        head_push: Vec3::ZERO,
     });
     root
 }
@@ -252,8 +232,9 @@ pub fn team_color(team: u8) -> Color {
     }
 }
 
-/// The scene is in: tint its materials by side, find its player, and give
-/// each of its meshes a shield shell beside it.
+/// The scene is in: tint its materials by side, find its player and its
+/// spine, and give each of its meshes a shield shell beside it. Your own
+/// shadow's meshes take the shadow's material instead, and no shells.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dress(
     ev: On<SceneInstanceReady>,
@@ -267,8 +248,10 @@ fn dress(
         Option<&SkinnedMesh>,
         &Transform,
     )>,
+    (names, transforms): (Query<&Name>, Query<&Transform>),
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut shield_mats: ResMut<Assets<ShieldMaterial>>,
+    shadow_mat: Option<Res<super::own_shadow::ShadowMat>>,
     warm: Query<(), With<super::prewarm::WarmBody>>,
     mut commands: Commands,
 ) {
@@ -279,6 +262,27 @@ fn dress(
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
     };
+    commands
+        .entity(root)
+        .insert(anim::bind_spine(model, &names, &parents, &children, &transforms));
+    body.dressed = true;
+    if body.shadow {
+        let Some(shadow) = shadow_mat else {
+            return;
+        };
+        for e in children.iter_descendants(model) {
+            if players.contains(e) {
+                body.player = Some(e);
+            }
+            if meshes.contains(e) {
+                commands
+                    .entity(e)
+                    .remove::<MeshMaterial3d<StandardMaterial>>()
+                    .insert((MeshMaterial3d(shadow.0.clone()), NoFrustumCulling));
+            }
+        }
+        return;
+    }
     // A body drawn only to warm shows its shell, so the shield's pipeline
     // is built with it (`prewarm.rs`).
     let shell_shown = if warm.contains(root) {
@@ -382,19 +386,19 @@ pub fn flare(
     }
 }
 
-/// One fighter's body this frame: where, which clip, which gun.
+/// One fighter's body this frame: where it stands, how it moves (its gait,
+/// read off the snapshot: `anim.rs`), which gun it holds. `seat` is its
+/// hull's yaw and its seat, riding. `dt` is the frame's.
 #[allow(clippy::too_many_arguments)]
 pub fn pose(
     commands: &mut Commands,
     models: &Models,
-    graph: Option<&Graph>,
     d: &Drawn,
-    seat: Option<(&DrawnVehicle, usize)>,
+    seat: Option<(f32, usize)>,
     root: Entity,
     bodies: &mut Query<&mut Body>,
     at: &mut Query<&mut Transform>,
-    players: &mut Query<(&mut AnimationPlayer, Option<&mut AnimationTransitions>), Without<AnimationGraphHandle>>,
-    playing: &mut Query<(&mut AnimationPlayer, &mut AnimationTransitions), With<AnimationGraphHandle>>,
+    dt: f32,
 ) {
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
@@ -402,70 +406,105 @@ pub fn pose(
     let driving = seat.is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
     // A driver faces the way the hull does.
     let yaw = match seat {
-        Some((v, s)) if s == sim::vehicle::DRIVER => v.yaw,
+        Some((hull, s)) if s == sim::vehicle::DRIVER => hull,
         _ => d.yaw,
     };
     if let Ok(mut t) = at.get_mut(root) {
         *t = Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw));
     }
-    let speed = (d.vel.x * d.vel.x + d.vel.z * d.vel.z).sqrt();
-    let long = gun(d.arm).is_none_or(|g| g.long);
-    let clip = if !d.alive {
-        DEATH
-    } else if driving {
-        DRIVING
-    } else if seat.is_some() {
-        RIFLE
-    } else if !d.grounded {
-        JUMP
-    } else if d.crouched {
-        if speed > 0.5 {
-            CROUCH_FWD
-        } else {
-            CROUCH_IDLE
-        }
-    } else if speed > 6.5 {
-        SPRINT
-    } else if speed > 3.5 {
-        JOG
-    } else if speed > 0.4 {
-        WALK
-    } else if long {
-        RIFLE
-    } else {
-        PISTOL
-    };
-    if let (Some(p), Some(graph)) = (body.player, graph) {
-        // The first frame with a player: hand it the graph.
-        if players.get_mut(p).is_ok() {
-            commands
-                .entity(p)
-                .insert((AnimationGraphHandle(graph.handle.clone()), AnimationTransitions::new()));
-        } else if let Ok((mut player, mut tr)) = playing.get_mut(p) {
-            if body.clip != Some(clip) {
-                let fade = if body.fresh { Duration::ZERO } else { FADE };
-                body.fresh = false;
-                let a = tr.play(&mut player, graph.nodes[clip], fade);
-                if clip == DEATH {
-                    a.set_repeat(RepeatAnimation::Never);
-                } else {
-                    a.repeat();
-                }
-                body.clip = Some(clip);
-            }
-        }
-    }
+    let hold = gun(d.arm).map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    body.gait.observe(
+        &Seen {
+            alive: d.alive,
+            grounded: d.grounded,
+            crouched: d.crouched,
+            driving,
+            riding: seat.is_some(),
+            vel: Vec2::new(d.vel.x, d.vel.z),
+            yaw,
+            pitch: d.pitch,
+            hold,
+        },
+        dt,
+    );
     // The gun: swapped when the arm changes, hidden on the dead and at the
     // wheel, pitched with the aim.
     let arm = if d.alive && !driving { d.arm } else { 0 };
     if arm != body.held {
         commands.entity(body.hand).despawn_related::<Children>();
-        spawn_posed(commands, models, arm, body_basis(), body.hand);
+        let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
+        // Your shadow's gun is a shadow too.
+        if let (true, Some((_, scene))) = (body.shadow, posed) {
+            commands.entity(scene).observe(super::own_shadow::shade_gun);
+        }
         body.held = arm;
     }
     if let Ok(mut t) = at.get_mut(body.hand) {
         t.translation = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
         t.rotation = Quat::from_rotation_z(d.pitch);
+    }
+}
+
+/// Every body's player, crossfaded to what its gait wants (`anim::drive`),
+/// once a frame after the bodies are posed. The first frame a body has a
+/// player, the player is handed the rig's graph.
+#[allow(clippy::type_complexity)]
+pub fn drive(
+    mut commands: Commands,
+    rig: Option<Res<anim::Rig>>,
+    time: Res<Time>,
+    mut bodies: Query<(Entity, &mut Body)>,
+    mut players: Query<(
+        &mut AnimationPlayer,
+        Option<&mut AnimationTransitions>,
+        Has<AnimationGraphHandle>,
+    )>,
+) {
+    let Some(rig) = rig else {
+        return;
+    };
+    let dt = time.delta_secs();
+    for (e, mut body) in &mut bodies {
+        let Some(p) = body.player else {
+            continue;
+        };
+        let Ok((mut player, transitions, bound)) = players.get_mut(p) else {
+            continue;
+        };
+        let Some(mut transitions) = transitions.filter(|_| bound) else {
+            commands
+                .entity(p)
+                .insert((AnimationGraphHandle(rig.graph.clone()), AnimationTransitions::new()));
+            continue;
+        };
+        let b = &mut *body;
+        // Spent on the first clip it starts, not while it is still hidden.
+        let fresh = b.fresh && b.gait.clip.is_some();
+        if fresh {
+            b.fresh = false;
+        }
+        anim::drive(
+            &rig,
+            &b.gait,
+            &mut b.playing,
+            &mut player,
+            &mut transitions,
+            (dt, fresh, anim::desync(e)),
+        );
+    }
+}
+
+/// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
+/// the animation and before the transforms propagate.
+pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {
+    for (b, mut spine) in &mut q {
+        let pose = SpinePose {
+            clip: b.gait.clip,
+            pitch: b.gait.pitch,
+            hip_yaw: b.gait.hip_yaw,
+            head_push: b.head_push,
+        };
+        anim::turn_spine(pose, &mut spine, &mut bones);
     }
 }
 

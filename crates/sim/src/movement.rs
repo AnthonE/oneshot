@@ -58,11 +58,22 @@ fn accelerate(vel: V3, w: V3, cap: f32, wish: f32, rate: f32) -> V3 {
 
 /// One tick of a body under one input.
 pub fn step(b: &mut Body, inp: &Input, map: &Map) {
-    // Crouch while held; stand back up only where the head fits.
+    // Crouch while held; stand back up only where the head fits. In the
+    // air (Halo's crouch jump) crouching tucks the legs up under a head
+    // that stays, and letting go puts them back down where there's room.
+    let was = b.crouched;
     if inp.held(CROUCH) {
         b.crouched = true;
-    } else if b.crouched && map.ceiling(b.pos.x, b.pos.z, BODY_R, b.pos.y + 0.01) >= b.pos.y + BODY_H {
+    } else if b.crouched && b.grounded {
+        if map.ceiling(b.pos.x, b.pos.z, BODY_R, b.pos.y + 0.01) >= b.pos.y + BODY_H {
+            b.crouched = false;
+        }
+    } else if b.crouched && map.floor_with(b.pos.x, b.pos.z, BODY_R, b.pos.y, b.pos.y) <= b.pos.y - CROUCH_LIFT {
+        b.pos.y -= CROUCH_LIFT;
         b.crouched = false;
+    }
+    if b.crouched && !was && !b.grounded {
+        b.pos.y += CROUCH_LIFT;
     }
 
     // The wish direction from the stick, turned by yaw: forward is the
@@ -75,7 +86,15 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     let mut wish = 0.0;
     if len > 0.0 {
         w = w * (1.0 / len);
-        let top = if b.crouched { CROUCH_RUN } else { RUN };
+        let top = if b.crouched {
+            CROUCH_RUN
+        } else {
+            // Halo 2's: full speed ahead, a little less backing up or to
+            // the side; between, on the ellipse.
+            let ahead = fwd / len * if fwd >= 0.0 { RUN } else { RUN_BACK };
+            let aside = side / len * RUN_SIDE;
+            (ahead * ahead + aside * aside).sqrt()
+        };
         wish = top * len.min(1.0);
     }
 
@@ -333,12 +352,90 @@ mod tests {
         );
         assert!(!b.grounded);
         let mut top = 0.0f32;
-        for _ in 0..TICK_HZ {
+        let mut air = 1;
+        while !b.grounded && air < TICK_HZ * 2 {
             step(&mut b, &Input::default(), &map);
             top = top.max(b.pos.y);
+            air += 1;
         }
+        // Halo 2's: half again a body's height, 1.4 s up and down.
         assert!(b.grounded && b.pos.y == 0.0);
-        assert!(top > 1.1 && top < 1.3, "apex {top}");
+        assert!(top > 2.6 && top < 2.9, "apex {top}");
+        let secs = air as f32 / TICK_HZ as f32;
+        assert!((1.35..1.45).contains(&secs), "{secs} s in the air");
+    }
+
+    #[test]
+    fn backs_up_and_strafes_slower_than_it_runs_ahead() {
+        let map = Map::proving_grounds();
+        let speed = |mz: i8, mx: i8| {
+            let mut b = Body {
+                pos: V3::new(-20.0, 0.0, 20.0),
+                grounded: true,
+                ..Body::default()
+            };
+            run(
+                &mut b,
+                Input {
+                    mz,
+                    mx,
+                    ..Input::default()
+                },
+                &map,
+                TICK_HZ / 2,
+            );
+            (b.vel.x * b.vel.x + b.vel.z * b.vel.z).sqrt()
+        };
+        assert!(fabs(speed(127, 0) - RUN) < 0.05);
+        assert!(fabs(speed(-127, 0) - RUN_BACK) < 0.05);
+        assert!(fabs(speed(0, 127) - RUN_SIDE) < 0.05);
+        // Ahead and aside at once: on the ellipse between.
+        let k = core::f32::consts::FRAC_1_SQRT_2;
+        let diag = ((k * RUN) * (k * RUN) + (k * RUN_SIDE) * (k * RUN_SIDE)).sqrt();
+        assert!(fabs(speed(127, 127) - diag) < 0.05, "{} vs {diag}", speed(127, 127));
+    }
+
+    #[test]
+    fn a_crouch_jump_reaches_a_ledge_a_jump_does_not() {
+        // Proving Grounds' 3 m pillar at x 7.25..8.75, z 11.25..12.75: a
+        // running jump from 2 m short peaks at its face.
+        let map = Map::proving_grounds();
+        for crouch in [false, true] {
+            // A run-up from 8 m short, the jump at 2 m.
+            let mut b = Body {
+                pos: V3::new(-6.0, 0.0, 12.0),
+                grounded: true,
+                ..Body::default()
+            };
+            let mut eye = b.eye().y;
+            let mut jumped = None;
+            for t in 0..TICK_HZ * 4 {
+                let mut buttons = 0;
+                if jumped.is_none() && b.pos.x >= 2.0 {
+                    buttons = JUMP;
+                    jumped = Some(t);
+                } else if crouch && jumped.is_some() {
+                    buttons = CROUCH;
+                }
+                step(
+                    &mut b,
+                    &Input {
+                        buttons,
+                        mz: 127,
+                        ..Input::default()
+                    },
+                    &map,
+                );
+                // Tucking the legs never moves the eye.
+                assert!(fabs(b.eye().y - eye) < 0.2, "tick {t}: eye {eye} to {}", b.eye().y);
+                eye = b.eye().y;
+                if jumped.is_some_and(|j| t > j + 4) && b.grounded {
+                    break;
+                }
+            }
+            let on_top = b.pos.y == 3.0;
+            assert_eq!(on_top, crouch, "crouch {crouch}: {:?}", b);
+        }
     }
 
     #[test]
@@ -583,7 +680,7 @@ mod tests {
         let at = (l.area.min + l.area.max) * 0.5;
         let mut b = standing(&map, at.x, at.z);
         step(&mut b, &Input::default(), &map);
-        assert!(!b.grounded && b.vel.y > 10.0, "thrown: {:?}", b);
+        assert!(!b.grounded && b.vel.y > JUMP_SPEED, "thrown: {:?}", b);
         let mut ticks = 0;
         while !b.grounded && ticks < TICK_HZ * 4 {
             step(&mut b, &Input::default(), &map);

@@ -117,7 +117,7 @@
   "pads": [
     { "weapon": "sniper", "at": [-102, 0, 4.5], "respawn": 60, "mirror": true },
     { "weapon": "shotgun", "at": [-98, -4], "respawn": 45, "mirror": true },
-    { "weapon": "smg", "at": [-60, 0], "respawn": 30, "mirror": true },
+    { "weapon": "launcher", "at": [-60, 0], "respawn": 60, "mirror": true },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 }
   ],
   "vehicles": [

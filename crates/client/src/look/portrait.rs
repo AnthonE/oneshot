@@ -1,0 +1,240 @@
+//! Triple T on the title, beside the play panel, after Gates'
+//! `crates/client/src/render/portrait.rs` (MIT, NOTICE): the body every
+//! fighter wears (`bodies.rs`), in the skin picked in the panel, holding a
+//! rifle and idling (a slow look round: his feet stay planted while his
+//! torso turns, `anim.rs`), on his own render layer, filmed by his own
+//! camera into an image the title shows ([`view`]).
+//!
+//! He stands far under every map, on [`LAYER`], which only his camera and
+//! his lights are on (his scene's descendants inherit the layer through
+//! Bevy's `Propagate`), so the world's camera never draws him and the
+//! level's sun never lights him. His camera renders only while a
+//! [`PortraitView`] node exists. Exposed as the world is, his lights are
+//! Gates' key, fill and rim at the world's exposure, and his shade is the
+//! world's sky fill: he looks on the title as he does in a match. The same
+//! on the desktop, WebGPU and WebGL2: a second camera into an image is a
+//! render pass any of them draws.
+//!
+//! **He decides nothing**: what he wears is the panel's pick, and a skin
+//! the wallet doesn't own is still only what the server lets you wear.
+
+use bevy::app::Propagate;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
+use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::EnvironmentMapLight;
+use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
+use bevy::render::view::Msaa;
+use client_net::core::Drawn;
+use sim::geom::V3;
+
+use super::guns::Models;
+
+/// The render layer only the portrait's camera, lights and body are on.
+pub const LAYER: usize = 7;
+
+/// The picture's size, px: an upright figure, 2:3.
+pub const W_PX: u32 = 400;
+pub const H_PX: u32 = 600;
+
+/// Where he stands: well under every map, out of every world query's way.
+const AT: Vec3 = Vec3::new(0.0, -400.0, 0.0);
+
+/// A three-quarter turn toward the picture's left, radians: a figure
+/// square to the lens reads as a mugshot.
+const TURN: f32 = 0.42;
+/// His look round: how far either way and how long a sweep takes, for the
+/// yaw and the pitch (radians, seconds). Under `anim::IDLE_TWIST_MAX`, so his
+/// feet stay where they are.
+const SWAY_YAW: f32 = 0.3;
+const SWAY_YAW_S: f32 = 9.0;
+const SWAY_PITCH: f32 = 0.12;
+const SWAY_PITCH_S: f32 = 6.5;
+
+/// Vertical field of view, degrees, and the distance it frames the whole
+/// 1.8 m body from, and where the lens looks, metres above the feet.
+const FOV_DEG: f32 = 26.0;
+const DIST_M: f32 = 4.9;
+const AIM_Y_M: f32 = 0.95;
+
+/// His side's colour: the title's accent is blue.
+const TEAM: u8 = 1;
+/// What he holds.
+const ARM: u8 = sim::arms::AR;
+
+/// The exposure Gates' portrait lights were set under (Bevy's default),
+/// and those lights, lux there: key high on the camera's left, a cool weak
+/// fill from the right, a warm rim from behind that pulls him off a dark
+/// title. Scaled to the world's exposure here.
+const GATES_EV100: f32 = 9.7;
+const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
+    (3_400.0, [1.0, 1.0, 1.0], Vec3::new(-0.7, 1.0, 0.8)),
+    (900.0, [0.80, 0.86, 1.0], Vec3::new(1.0, 0.3, 0.5)),
+    (2_400.0, [1.0, 0.86, 0.66], Vec3::new(0.4, 0.7, -1.0)),
+];
+
+#[derive(Resource)]
+pub struct Portrait {
+    pub image: Handle<Image>,
+    /// His body and the skin it was made in.
+    body: Option<(Entity, u8)>,
+}
+
+#[derive(Component)]
+pub struct PortraitCam;
+
+#[derive(Component)]
+pub struct PortraitBody;
+
+/// A UI node showing the picture. While one exists the camera renders.
+#[derive(Component)]
+pub struct PortraitView;
+
+/// The picture as a UI node, `height` tall at the picture's aspect.
+pub fn view(portrait: &Portrait, height: Val) -> impl Bundle {
+    (
+        PortraitView,
+        ImageNode::new(portrait.image.clone()),
+        Node {
+            height,
+            aspect_ratio: Some(W_PX as f32 / H_PX as f32),
+            flex_shrink: 0.0,
+            ..default()
+        },
+    )
+}
+
+/// The target, the camera and the lights (`Startup`). The body waits for
+/// the models ([`stand`]).
+pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let image = images.add(Image::new_target_texture(
+        W_PX,
+        H_PX,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    ));
+    let fill = images.add(super::fill::cubemap(super::fill::FILL_FACE));
+    let layer = RenderLayers::layer(LAYER);
+    let aim = AT + Vec3::Y * AIM_Y_M;
+    commands.spawn((
+        PortraitCam,
+        Camera3d::default(),
+        Camera {
+            // Before the world's camera, so the UI reads this frame's picture.
+            order: -10,
+            is_active: false,
+            clear_color: ClearColorConfig::Custom(Color::NONE),
+            ..default()
+        },
+        RenderTarget::Image(image.clone().into()),
+        Projection::Perspective(PerspectiveProjection {
+            fov: FOV_DEG.to_radians(),
+            near: 0.1,
+            far: 20.0,
+            ..default()
+        }),
+        Exposure {
+            ev100: super::rig::DAY_EV100,
+        },
+        Tonemapping::TonyMcMapface,
+        EnvironmentMapLight {
+            diffuse_map: fill.clone(),
+            specular_map: fill,
+            intensity: super::fill::peak_lux(),
+            rotation: Quat::IDENTITY,
+            affects_lightmapped_mesh_diffuse: false,
+        },
+        AmbientLight {
+            brightness: 0.0,
+            ..default()
+        },
+        Msaa::Sample4,
+        Transform::from_translation(aim + Vec3::Z * DIST_M).looking_at(aim, Vec3::Y),
+        layer.clone(),
+    ));
+    let k = 2f32.powf(super::rig::DAY_EV100 - GATES_EV100);
+    for (lux, [r, g, b], from) in LIGHTS {
+        commands.spawn((
+            DirectionalLight {
+                illuminance: lux * k,
+                color: Color::srgb(r, g, b),
+                shadows_enabled: false,
+                ..default()
+            },
+            Transform::from_translation(AT + from).looking_at(AT, Vec3::Y),
+            layer.clone(),
+        ));
+    }
+    commands.insert_resource(Portrait { image, body: None });
+}
+
+/// While the title shows him: his body in the panel's skin (made again
+/// when the skin changes), standing, holding his rifle, looking round.
+#[allow(clippy::too_many_arguments)]
+pub fn stand(
+    mut commands: Commands,
+    mut portrait: ResMut<Portrait>,
+    player: Res<crate::settings::Player>,
+    models: Option<Res<Models>>,
+    views: Query<(), With<PortraitView>>,
+    time: Res<Time>,
+    (mut meshes, mut mats): (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    mut bodies: Query<&mut super::bodies::Body>,
+    mut at: Query<&mut Transform>,
+) {
+    let Some(models) = models else {
+        return;
+    };
+    if views.is_empty() {
+        return;
+    }
+    let skin = player.skin;
+    let root = match portrait.body {
+        Some((e, s)) if s == skin => e,
+        had => {
+            if let Some((old, _)) = had {
+                commands.entity(old).despawn();
+            }
+            let e = super::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, TEAM, skin);
+            commands
+                .entity(e)
+                .insert((PortraitBody, Propagate(RenderLayers::layer(LAYER))));
+            portrait.body = Some((e, skin));
+            return;
+        }
+    };
+    let t = time.elapsed_secs();
+    let wave = |period: f32| (t * core::f32::consts::TAU / period).sin();
+    let d = Drawn {
+        alive: true,
+        grounded: true,
+        pos: V3::new(AT.x, AT.y, AT.z),
+        // Facing the lens (+Z), turned toward the picture's left.
+        yaw: core::f32::consts::FRAC_PI_2 + TURN + SWAY_YAW * wave(SWAY_YAW_S),
+        pitch: SWAY_PITCH * wave(SWAY_PITCH_S),
+        arm: ARM,
+        team: TEAM,
+        ..Drawn::default()
+    };
+    super::bodies::pose(
+        &mut commands,
+        &models,
+        &d,
+        None,
+        root,
+        &mut bodies,
+        &mut at,
+        time.delta_secs(),
+    );
+}
+
+/// The camera on while something shows the picture.
+pub fn activate(views: Query<(), With<PortraitView>>, mut cams: Query<&mut Camera, With<PortraitCam>>) {
+    let on = !views.is_empty();
+    for mut cam in &mut cams {
+        if cam.is_active != on {
+            cam.is_active = on;
+        }
+    }
+}

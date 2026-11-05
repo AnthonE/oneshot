@@ -5,7 +5,10 @@
 //! A casual player gets a room of their own against a bot. A ranked player
 //! (an Elo Pros pass with a wallet) waits in the queue until a match forms,
 //! then plays in a room of people only; when it ends its result goes to the
-//! Elo Pros ladder and its replay to disk.
+//! Elo Pros ladder and its replay to disk. Whoever signed in, ranked or not,
+//! has what they did sent to the game's stats, achievements and boards on
+//! Elo Pros (`stats`), and is listed in `online.json` while they play
+//! (`online`).
 //!
 //! The sim thread never blocks on the network: sessions hand it what they
 //! got over a channel, and it hands each session its datagrams and stream
@@ -18,9 +21,13 @@ pub mod auth;
 pub mod cup;
 pub mod elo;
 pub mod http;
+pub mod lobby;
 pub mod net;
+pub mod online;
 pub mod outlet;
+pub mod party;
 pub mod queue;
+pub mod stats;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -31,7 +38,7 @@ use std::time::{Duration, Instant};
 
 use proto::{
     encode_snapshot, frame_msg, InputMsg, Msg, Name, MAX_DATAGRAM, MODE_BIG_TEAM, MODE_CASUAL, MODE_CUP, MODE_DOUBLES,
-    MODE_FFA, MODE_GUN_GAME,
+    MODE_DUEL, MODE_FFA, MODE_GUN_GAME,
 };
 use room::Room;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
@@ -49,6 +56,11 @@ pub enum ToSim {
         mode: u8,
         /// A skin checked against the player's wallet.
         skin: u8,
+        /// The party it comes with, if it is in one that started this mode.
+        party: Option<party::Seating>,
+        /// Who signed in: their wallet, else their account's `acct_` id.
+        /// None for a guest.
+        player: Option<String>,
         tx: outlet::Outlet,
     },
     /// Into the ranked queue.
@@ -69,6 +81,10 @@ pub enum ToSim {
 /// What the sim thread hands off: slow work, off the tick.
 pub enum Job {
     Report(elo::Report),
+    /// What players did, for the game's stats on Elo Pros.
+    Stats(Vec<stats::Line>),
+    /// Who this slot holds now, for `online.json`.
+    Roster(online::Slot),
     /// A file to write: a replay, its watch, a review.
     Write {
         path: PathBuf,
@@ -148,6 +164,10 @@ pub struct Config {
     /// the page, from whichever slot answers. Missing or unreadable: our
     /// own address.
     pub live_file: Option<PathBuf>,
+    /// A directory both slots share, where each writes who it holds
+    /// (`online`), so either answers `online.json` for both. None: this
+    /// process's own roster only.
+    pub roster_dir: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -187,6 +207,7 @@ impl Default for Config {
             capacity: 256,
             nonce_key: None,
             live_file: None,
+            roster_dir: None,
         }
     }
 }
@@ -211,6 +232,14 @@ pub struct Ctx {
     pub allow_origins: Vec<String>,
     /// Snapshots dropped and sessions cut (`outlet`).
     pub counts: Arc<outlet::Counts>,
+    /// The menu's sessions: parties, friends, voice (`lobby.rs`).
+    pub lobby: Arc<lobby::Lobby>,
+    /// Who this process holds (the sim writes it every few seconds), and
+    /// where the slots share theirs.
+    pub roster: std::sync::Mutex<online::Slot>,
+    pub roster_dir: Option<PathBuf>,
+    /// This slot's file in `roster_dir`.
+    pub roster_file: String,
 }
 
 pub struct Handle {
@@ -294,6 +323,10 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
         allow_origins: cfg.allow_origins.clone(),
+        lobby: Arc::default(),
+        roster: std::sync::Mutex::new(online::Slot::default()),
+        roster_dir: cfg.roster_dir.clone(),
+        roster_file: online::file_name(addr.port()),
     });
 
     let sim = Sim {
@@ -308,6 +341,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .spawn(move || sim.run())
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
+    tokio::spawn(ctx.lobby.clone().sweeper());
     tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, ctx.clone()));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
@@ -354,6 +388,42 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                     eprintln!("oneshot: {}: {e}", path.display());
                 }
             }
+            Job::Stats(lines) => {
+                let ctx = ctx.clone();
+                reports.spawn(async move {
+                    for part in lines.chunks(stats::MAX_REPORTS) {
+                        match ctx.elo.stats(stats::report_body(part)).await {
+                            Ok(answer) => {
+                                let v: serde_json::Value = serde_json::from_str(&answer).unwrap_or_default();
+                                let unlocked = v["unlocked"].as_array().map_or(0, Vec::len);
+                                eprintln!("oneshot: stats for {} player(s), {unlocked} unlock(s)", part.len());
+                            }
+                            Err(e) => eprintln!("oneshot: stats: {e}"),
+                        }
+                    }
+                });
+            }
+            Job::Roster(slot) => {
+                let file = ctx
+                    .roster_dir
+                    .as_ref()
+                    .map(|d| (d.clone(), serde_json::to_vec(&slot.to_json()).unwrap_or_default()));
+                if let Ok(mut r) = ctx.roster.lock() {
+                    *r = slot;
+                }
+                if let Some((dir, bytes)) = file {
+                    let path = dir.join(&ctx.roster_file);
+                    let _ = tokio::fs::create_dir_all(&dir).await;
+                    let tmp = path.with_extension("part");
+                    let wrote = async {
+                        tokio::fs::write(&tmp, bytes).await?;
+                        tokio::fs::rename(&tmp, &path).await
+                    };
+                    if let Err(e) = wrote.await {
+                        eprintln!("oneshot: {}: {e}", path.display());
+                    }
+                }
+            }
             Job::Report(r) => {
                 let ctx = ctx.clone();
                 reports.spawn(async move {
@@ -380,14 +450,29 @@ struct Sess {
     tx: outlet::Outlet,
     /// The room and seat it plays in.
     at: Option<(usize, u8)>,
+    /// Who signed in (a wallet, else an `acct_` id); None for a guest.
+    player: Option<String>,
+    /// Unix seconds it came in.
+    since: u64,
+    /// What it asked to play.
+    mode: u8,
 }
 
 struct Live {
     room: Room,
     id: String,
     mode: u8,
+    /// Made for a party alone: no stranger is seated in it.
+    private: bool,
+    /// The parties seated here, and the side each took (Big Team).
+    parties: Vec<(u32, Option<u8>)>,
     links: [Option<u64>; MAX_FIGHTERS],
     wallets: [Option<String>; MAX_FIGHTERS],
+    /// Who sits in each seat, for stats: the wallet, else the account's
+    /// `acct_` id. Cleared when they leave (and are reported then).
+    players: [Option<String>; MAX_FIGHTERS],
+    /// The world tick each seat's person sat down at.
+    joined: [u32; MAX_FIGHTERS],
     over_at: Option<Instant>,
     /// A cup heat: the cup (by index) and the heat in its stage.
     cup: Option<(usize, usize)>,
@@ -416,7 +501,7 @@ struct Sim {
     ctx: Arc<Ctx>,
 }
 
-fn send_msg(tx: &outlet::Outlet, m: &Msg) {
+pub(crate) fn send_msg(tx: &outlet::Outlet, m: &Msg) {
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
     if let Ok(n) = frame_msg(m, &mut f) {
         tx.stream(f[..n].to_vec());
@@ -480,6 +565,7 @@ impl Sim {
         let mut q = queue::Queue::default();
         let mut buf = [0u8; MAX_DATAGRAM];
         let mut last_second = Instant::now();
+        let mut seconds: u64 = 0;
 
         let place = place_room;
         let mut cups: Vec<Option<cup::Cup>> = Vec::new();
@@ -496,51 +582,94 @@ impl Sim {
                         name,
                         mode,
                         skin,
+                        party,
+                        player,
                         tx,
                     } => {
                         let mode = match mode {
                             MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM => mode,
                             _ => MODE_CASUAL,
                         };
-                        // Free for all and Gun Game are shared: a seat a bot
-                        // holds in a room still playing, else a new room.
-                        let open = (mode != MODE_CASUAL)
+                        let live_room =
+                            |r: &Live| r.mode == mode && r.over_at.is_none() && r.room.world.phase != Phase::Over;
+                        // A party's room: where its first member went, on
+                        // the side it took, while that side has a seat.
+                        let with_party = party.and_then(|p| {
+                            rooms.iter().enumerate().find_map(|(i, r)| {
+                                let r = r.as_ref()?;
+                                let &(_, team) = r.parties.iter().find(|(c, _)| *c == p.code)?;
+                                (live_room(r) && r.room.open_seats(team) > 0).then_some((i, team))
+                            })
+                        });
+                        // Big Team's side with room for the whole party.
+                        let side_for = |r: &Live, n: usize| -> Option<Option<u8>> {
+                            if !r.room.world.rules.teams {
+                                return (r.room.open_seats(None) >= n).then_some(None);
+                            }
+                            [0u8, 1]
+                                .into_iter()
+                                .find(|&t| r.room.open_seats(Some(t)) >= n)
+                                .map(Some)
+                        };
+                        let need = party.map_or(1, |p| p.size as usize);
+                        let private = party.is_some_and(|p| p.private);
+                        // Free for all, Gun Game and Big Team are shared: a
+                        // room still playing with seats for all of us, else
+                        // a new room. A party alone always gets its own.
+                        let open = (mode != MODE_CASUAL && !private)
                             .then(|| {
-                                rooms.iter().position(|r| {
-                                    r.as_ref().is_some_and(|r| {
-                                        r.mode == mode
-                                            && r.over_at.is_none()
-                                            && r.room.world.phase != Phase::Over
-                                            && r.links.iter().take(r.room.size).any(|l| l.is_none())
-                                    })
+                                rooms.iter().enumerate().find_map(|(i, r)| {
+                                    let r = r.as_ref()?;
+                                    if !live_room(r) || r.private {
+                                        return None;
+                                    }
+                                    side_for(r, need).map(|t| (i, t))
                                 })
                             })
                             .flatten();
-                        let i = match open {
-                            Some(i) => i,
-                            None => place(
-                                &mut rooms,
-                                Live {
-                                    room: self.new_room(mode, false),
-                                    id: format!("os-c{:016x}", random_u64()),
-                                    mode,
-                                    links: [None; MAX_FIGHTERS],
-                                    wallets: Default::default(),
-                                    over_at: None,
-                                    cup: None,
-                                },
-                            ),
+                        let (i, team) = match with_party.or(open) {
+                            Some(at) => at,
+                            None => {
+                                let i = place(
+                                    &mut rooms,
+                                    Live {
+                                        room: self.new_room(mode, false),
+                                        id: format!("os-c{:016x}", random_u64()),
+                                        mode,
+                                        links: [None; MAX_FIGHTERS],
+                                        wallets: Default::default(),
+                                        players: Default::default(),
+                                        joined: [0; MAX_FIGHTERS],
+                                        over_at: None,
+                                        cup: None,
+                                        private,
+                                        parties: Vec::new(),
+                                    },
+                                );
+                                let team = side_for(rooms[i].as_ref().unwrap(), need).flatten();
+                                (i, team)
+                            }
                         };
                         let live = rooms[i].as_mut().unwrap();
-                        let Some((slot, out)) = live.room.join(name, skin) else {
+                        if let Some(p) = party {
+                            if !live.parties.iter().any(|(c, _)| *c == p.code) {
+                                live.parties.push((p.code, team));
+                            }
+                        }
+                        let Some((slot, out)) = live.room.join_team(name, skin, team) else {
                             continue;
                         };
                         live.links[slot as usize] = Some(session);
+                        live.players[slot as usize] = player.clone();
+                        live.joined[slot as usize] = live.room.world.tick;
                         sessions.insert(
                             session,
                             Sess {
                                 tx,
                                 at: Some((i, slot)),
+                                player,
+                                since: auth::now_unix(),
+                                mode,
                             },
                         );
                         deliver(&sessions, rooms[i].as_ref().unwrap(), out);
@@ -572,12 +701,22 @@ impl Sim {
                                 waiting_s: 0,
                             },
                         );
+                        let (wallet, mode) = (entry.wallet.clone(), entry.mode);
                         if entry.mode == MODE_CUP {
                             cup_wait.push(*entry);
                         } else {
                             q.push(*entry);
                         }
-                        sessions.insert(session, Sess { tx, at: None });
+                        sessions.insert(
+                            session,
+                            Sess {
+                                tx,
+                                at: None,
+                                player: Some(wallet),
+                                since: auth::now_unix(),
+                                mode,
+                            },
+                        );
                     }
                     ToSim::Input { session, msg } => {
                         if let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) {
@@ -596,6 +735,14 @@ impl Sim {
                         let Some((i, slot)) = s.at else { continue };
                         let Some(r) = rooms[i].as_mut() else { continue };
                         r.links[slot as usize] = None;
+                        // What they did before they left counts; the match
+                        // doesn't (a match over was reported at its end).
+                        if r.over_at.is_none() {
+                            if let Some(p) = played(r, slot as usize, false) {
+                                let _ = self.jobs.send(Job::Stats(vec![stats::Line::Match(p)]));
+                            }
+                        }
+                        r.players[slot as usize] = None;
                         // A cup's heat plays out even with nobody left: the
                         // cup waits on its result.
                         if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() {
@@ -629,6 +776,10 @@ impl Sim {
             // Once a second: form matches, tell the waiting how long.
             if now.duration_since(last_second) >= Duration::from_secs(1) {
                 last_second = now;
+                seconds += 1;
+                if seconds % ROSTER_EVERY_S == 1 {
+                    let _ = self.jobs.send(Job::Roster(roster(&sessions, &rooms)));
+                }
                 while let Some(sides) = q.form(now) {
                     let mode = sides[0][0].mode;
                     let mut live = Live {
@@ -637,8 +788,12 @@ impl Sim {
                         mode,
                         links: [None; MAX_FIGHTERS],
                         wallets: Default::default(),
+                        players: Default::default(),
+                        joined: [0; MAX_FIGHTERS],
                         over_at: None,
                         cup: None,
+                        private: false,
+                        parties: Vec::new(),
                     };
                     let mut outs = Vec::new();
                     for (side, players) in sides.iter().enumerate() {
@@ -648,6 +803,7 @@ impl Sim {
                             outs.push(live.room.seat_person(slot, p.name, p.skin));
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
+                            live.players[slot] = Some(p.wallet.clone());
                         }
                     }
                     let i = place(&mut rooms, live);
@@ -806,8 +962,12 @@ impl Sim {
                 mode: MODE_CUP,
                 links: [None; MAX_FIGHTERS],
                 wallets: Default::default(),
+                players: Default::default(),
+                joined: [0; MAX_FIGHTERS],
                 over_at: None,
                 cup: Some((ci, h)),
+                private: false,
+                parties: Vec::new(),
             };
             let mut outs = Vec::new();
             for (slot, &i) in members.iter().enumerate() {
@@ -815,6 +975,7 @@ impl Sim {
                 outs.push(live.room.seat_person(slot, e.name, e.skin));
                 live.links[slot] = Some(e.session);
                 live.wallets[slot] = Some(e.wallet.clone());
+                live.players[slot] = Some(e.wallet.clone());
             }
             let at = place_room(rooms, live);
             for (slot, &i) in members.iter().enumerate() {
@@ -832,6 +993,18 @@ impl Sim {
     /// its file beside the replays; and the top places' heats to the
     /// review queue, which a prize waits on (docs/DESIGN.md §13).
     fn finish_cup(&self, c: &cup::Cup, sessions: &mut BTreeMap<u64, Sess>) {
+        let lines = c
+            .entrants
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                stats::Line::Cup(stats::Cupped {
+                    player: e.wallet.clone(),
+                    place: c.place_of(i),
+                })
+            })
+            .collect();
+        let _ = self.jobs.send(Job::Stats(lines));
         for (i, e) in c.entrants.iter().enumerate() {
             tell_cup(c, i, sessions);
             if let Some(s) = sessions.get_mut(&e.session) {
@@ -885,6 +1058,13 @@ impl Sim {
     /// to `review/` if they cross a line), and a ranked one's result to Elo
     /// Pros.
     fn finish(&self, r: &Live) {
+        let lines: Vec<stats::Line> = (0..MAX_FIGHTERS)
+            .filter_map(|s| played(r, s, true))
+            .map(stats::Line::Match)
+            .collect();
+        if !lines.is_empty() {
+            let _ = self.jobs.send(Job::Stats(lines));
+        }
         let bytes = r.room.replay();
         let sha = elo::sha256_hex(&bytes);
         let salt_commit = hex(&r.room.salt_commit());
@@ -949,6 +1129,89 @@ impl Sim {
     }
 }
 
+/// How often the sim hands over who it holds (`online`).
+const ROSTER_EVERY_S: u64 = 5;
+
+/// What a mode is called, to the people who see someone play it.
+fn mode_name(mode: u8) -> &'static str {
+    match mode {
+        MODE_DUEL => "Ranked Duel",
+        MODE_DOUBLES => "Ranked Doubles",
+        MODE_FFA => "Free for all",
+        MODE_GUN_GAME => "Gun Game",
+        MODE_CUP => "A cup",
+        MODE_BIG_TEAM => "Big Team",
+        _ => "Against the bot",
+    }
+}
+
+/// Seat `s`'s side's score and the best other side's, as `own–theirs`.
+fn score_line(r: &Live, s: usize) -> String {
+    let w = &r.room.world;
+    let (own, n) = if w.rules.teams { (s & 1, 2) } else { (s, r.room.size) };
+    let theirs = (0..n).filter(|&i| i != own).map(|i| w.score[i]).max().unwrap_or(0);
+    format!("{}\u{2013}{}", w.score[own], theirs)
+}
+
+/// One player's status line: the mode and the map, and in a duel, doubles
+/// or against the bot, the score.
+fn presence(r: &Live, s: usize) -> String {
+    let mut line = format!("{} on {}", mode_name(r.mode), r.room.world.map.name);
+    if matches!(r.mode, MODE_DUEL | MODE_DOUBLES | MODE_CASUAL) {
+        line = format!("{line} \u{b7} {}", score_line(r, s));
+    }
+    online::clip(line)
+}
+
+/// Who this slot holds: every session (guests count), and each signed-in
+/// player's line.
+fn roster(sessions: &BTreeMap<u64, Sess>, rooms: &[Option<Live>]) -> online::Slot {
+    let online = sessions
+        .values()
+        .filter_map(|s| {
+            let player = s.player.clone()?;
+            let status = match s.at.and_then(|(i, slot)| Some((rooms.get(i)?.as_ref()?, slot))) {
+                Some((r, slot)) => presence(r, slot as usize),
+                None if s.mode == MODE_CUP => "Waiting for a cup".into(),
+                None => format!("In the {} queue", mode_name(s.mode)),
+            };
+            Some(online::Row {
+                player,
+                since: s.since,
+                status,
+            })
+        })
+        .collect();
+    online::Slot {
+        at: auth::now_unix(),
+        players: sessions.len(),
+        rooms: rooms.iter().flatten().count(),
+        online,
+    }
+}
+
+/// Seat `s`'s person's part in room `r`, if they signed in: `finished` at
+/// the end of the match, else as they leave it.
+fn played(r: &Live, s: usize, finished: bool) -> Option<stats::Played> {
+    let player = r.players[s].clone()?;
+    if !matches!(r.room.seats[s], room::Seat::Person(..)) || !stats::is_player(&player) {
+        return None;
+    }
+    let w = &r.room.world;
+    let side = if w.rules.teams { (s & 1) as u8 } else { s as u8 };
+    let won = finished && w.winner != sim::world::NO_WINNER && w.winner == side;
+    let ticks = w.tick.saturating_sub(r.joined[s]) as u64;
+    Some(stats::Played {
+        player,
+        mode: r.mode,
+        ranked: r.room.ranked,
+        finished,
+        won,
+        ms: ticks * 1000 / TICK_HZ as u64,
+        tally: *r.room.medals().tally(s),
+    })
+}
+
 /// A match's aim review: each person's numbers and the lines they cross
 /// (`room::watch`). Whether any did.
 fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool) {
@@ -961,6 +1224,14 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
             let st = &r.room.watch().stats[s];
             let flags = st.flags();
             flagged |= !flags.is_empty();
+            let t = r.room.medals().tally(s);
+            let medals: serde_json::Map<String, serde_json::Value> = t
+                .medals
+                .iter()
+                .enumerate()
+                .filter(|(_, &n)| n > 0)
+                .map(|(id, &n)| (proto::medal::slug(id as u8), n.into()))
+                .collect();
             Some(serde_json::json!({
                 "seat": s,
                 "name": name.as_str(),
@@ -975,6 +1246,19 @@ fn watch_doc(r: &Live, sha: &str, salt_commit: &str) -> (serde_json::Value, bool
                 "snaps": st.snaps,
                 "preaim_ms": st.preaim_ms,
                 "flags": flags,
+                // The carnage report: what the players saw at the end.
+                "carnage": {
+                    "kills": t.kills,
+                    "deaths": t.deaths,
+                    "assists": t.assists,
+                    "betrayals": t.betrayals,
+                    "suicides": t.suicides,
+                    "damage": t.damage,
+                    "taken": t.taken,
+                    "best_spree": t.best_spree,
+                    "best_multi": t.best_multi,
+                    "medals": medals,
+                },
             }))
         })
         .collect();

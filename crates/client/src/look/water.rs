@@ -22,7 +22,6 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
-use bevy::core_pipeline::Skybox;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
 use bevy::math::Affine2;
@@ -435,14 +434,13 @@ pub struct WaterParams {
     /// xyz [`FOAM_BODY`], w [`FOAM_ALPHA`].
     pub foam: Vec4,
     /// xyz the clear sky's zenith, cd/m²; w the analytic sky's share of the
-    /// reflection: 1 on the desktop (the atmosphere's sky cannot be sampled
-    /// by a forward material, so this stands in), 0 in a browser (its
-    /// `Skybox` cube carries the baked sky).
+    /// reflection: 1 (the deck's sky is drawn per pixel and cannot be
+    /// sampled by a forward material, so the clear sky stands in).
     pub zenith: Vec4,
     /// xyz the clear sky's horizon, cd/m²; w `sky::AIR_FLOOR`.
     pub horizon: Vec4,
-    /// xyz toward the sun; w cd/m² per texel of the sky cube (the
-    /// `Skybox`'s brightness).
+    /// xyz toward the sun (the map's mood's); w cd/m² per texel of the sky
+    /// cube: 0, the cube is black.
     pub sun: Vec4,
     /// x `F0`, y [`GLINT_A2_NEAR`], z [`GLINT_A2_FAR`], w [`GLINT_FAR_M`].
     pub glint: Vec4,
@@ -471,19 +469,16 @@ fn sky_lanes() -> ([f32; 3], [f32; 3]) {
 }
 
 impl WaterParams {
-    /// Noon on a clear day, every phase at zero.
-    pub fn noon() -> Self {
+    /// A clear day under the sun at `sun`, every phase at zero.
+    pub fn noon(sun: Vec3) -> Self {
         let (zenith, horizon) = sky_lanes();
-        let clear = if super::sky::BAKE_BACKDROP { 0.0 } else { 1.0 };
         Self {
             optics: Vec4::new(EXTINCT[0], EXTINCT[1], EXTINCT[2], ALPHA_MAX),
             scatter: Vec4::new(SCATTER_ALBEDO[0], SCATTER_ALBEDO[1], SCATTER_ALBEDO[2], WATER_IOR),
             foam: Vec4::new(FOAM_BODY[0], FOAM_BODY[1], FOAM_BODY[2], FOAM_ALPHA),
-            zenith: Vec4::new(zenith[0], zenith[1], zenith[2], clear),
+            zenith: Vec4::new(zenith[0], zenith[1], zenith[2], 1.0),
             horizon: Vec4::new(horizon[0], horizon[1], horizon[2], super::sky::AIR_FLOOR),
-            sun: super::rig::to_sun()
-                .normalize_or(Vec3::Y)
-                .extend(super::sky::CLOUD_NITS * super::sky::DECK_GAIN),
+            sun: sun.normalize_or(Vec3::Y).extend(0.0),
             glint: Vec4::new(water_f0(), GLINT_A2_NEAR, GLINT_A2_FAR, GLINT_FAR_M),
             shore: Vec4::new(EDGE_M, FOAM_SURGE_FLOOR, HORIZON_NDOTV, hidden_slope()),
             waves: WAVES.map(|w| Vec4::new(w.dir[0], w.dir[1], 1.0 / w.len_m, w.amp_m)),
@@ -548,8 +543,9 @@ fn black_cube() -> Image {
     image
 }
 
-/// The sea's material over `ripples` ([`ripple_map`]) and `sky` (a cube).
-pub fn material(ripples: Handle<Image>, sky: Handle<Image>) -> WaterMaterial {
+/// The sea's material over `ripples` ([`ripple_map`]) and `sky` (a cube),
+/// under the sun toward `sun`.
+pub fn material(ripples: Handle<Image>, sky: Handle<Image>, sun: Vec3) -> WaterMaterial {
     ExtendedMaterial {
         base: StandardMaterial {
             // White: the shader writes the body colour itself, off the depth.
@@ -573,7 +569,7 @@ pub fn material(ripples: Handle<Image>, sky: Handle<Image>) -> WaterMaterial {
             ..default()
         },
         extension: Water {
-            params: WaterParams::noon(),
+            params: WaterParams::noon(sun),
             sky,
         },
     }
@@ -730,7 +726,8 @@ pub struct WaterPart {
     pub drift: Vec2,
 }
 
-/// Spawns the sea over `terrain` at `sea_y` (the map's `light.sea`).
+/// Spawns the sea over `terrain` at `sea_y` (the map's `light.sea`), under
+/// the sun toward `sun` (the map's mood's).
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -738,6 +735,7 @@ pub fn spawn(
     images: &mut Assets<Image>,
     terrain: &TerrainDef,
     sea_y: f32,
+    sun: Vec3,
 ) -> Entity {
     let (mesh, aabb) = mesh(terrain, sea_y);
     let ripples = images.add(ripple_map());
@@ -747,7 +745,7 @@ pub fn spawn(
             crate::level::LevelPart,
             WaterPart::default(),
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(material(ripples, sky))),
+            MeshMaterial3d(materials.add(material(ripples, sky, sun))),
             Transform::IDENTITY,
             // The box the vertex stage can reach, and `calculate_bounds`
             // kept off it: the CPU mesh is flat.
@@ -761,17 +759,13 @@ pub fn spawn(
 
 /// Once a frame: each wave's phase on by `ω·dt` (in cycles, wrapped, never
 /// `k·x − ω·t` off a clock: f32 seconds times a wavenumber loses its low
-/// bits within an hour), the ripple layer's drift wrapped to one tile, and
-/// in a browser the camera's `Skybox` image as the reflection's deck once
-/// there is one.
+/// bits within an hour) and the ripple layer's drift wrapped to one tile.
 pub fn animate(
     time: Res<Time>,
     mut materials: ResMut<Assets<WaterMaterial>>,
-    sky: Query<&Skybox, With<crate::Eye>>,
     mut seas: Query<(&mut WaterPart, &MeshMaterial3d<WaterMaterial>)>,
 ) {
     let dt = time.delta_secs();
-    let deck = sky.iter().next().map(|s| s.image.clone());
     for (mut sea, handle) in &mut seas {
         for (p, w) in sea.phase.iter_mut().zip(WAVES) {
             *p = (*p - omega(w.len_m) / core::f32::consts::TAU * dt).rem_euclid(1.0);
@@ -782,11 +776,6 @@ pub fn animate(
         };
         m.base.uv_transform = Affine2::from_translation(sea.drift);
         m.extension.params.phase = Vec4::from_array(sea.phase);
-        if let Some(d) = &deck {
-            if m.extension.sky != *d {
-                m.extension.sky = d.clone();
-            }
-        }
     }
 }
 

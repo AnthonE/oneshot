@@ -9,3 +9,5 @@ pub mod native;
 pub mod session;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
+#[cfg(target_arch = "wasm32")]
+pub mod web_lobby;

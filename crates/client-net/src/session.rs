@@ -26,6 +26,14 @@ pub fn refuse_why(reason: u8) -> &'static str {
         proto::REFUSE_BUSY => "that wallet is already queued or playing",
         proto::REFUSE_BANNED => "that wallet is banned from ranked after a review: casual is open",
         proto::REFUSE_FULL => "the server is full or restarting: try again in a minute",
+        proto::REFUSE_NO_PARTY => "that party has broken up",
+        proto::REFUSE_PARTY_FULL => "that party is full",
+        proto::REFUSE_FRIENDS_ONLY => "that party is for the leader's friends",
+        proto::REFUSE_INVITE_ONLY => "that party is invite only: ask its leader to invite you",
+        proto::REFUSE_KICKED => "the party's leader removed you",
+        proto::REFUSE_NOT_LEADER => "only the party's leader can do that",
+        proto::REFUSE_PARTY_MODE => "the party doesn't fit that game: too many, or ranked without everyone's wallet",
+        proto::REFUSE_NOT_FRIEND => "you can invite your Elo Pros friends once you're signed in",
         _ => "the server is full",
     }
 }
@@ -63,14 +71,16 @@ impl Session {
         }
     }
 
-    /// The first message on the stream: who, and what to play.
-    pub fn hello(name: &str, pass: Pass, mode: u8, skin: u8) -> Msg {
+    /// The first message on the stream: who, what to play, and the party
+    /// it comes with (its code; 0 for none).
+    pub fn hello(name: &str, pass: Pass, mode: u8, skin: u8, party: u32) -> Msg {
         Msg::Hello {
             proto: PROTO_VER,
             name: Name::new(name),
             pass,
             mode,
             skin,
+            party,
         }
     }
 

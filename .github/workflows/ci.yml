@@ -47,7 +47,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: build the client (clippy, native, the browser's) and the server
+      - name: build the client (clippy, native, the browser's two modules) and the server
         run: |
           ci/client.sh
           cargo build -q --release -p server
@@ -55,8 +55,9 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps chromium
-          node ci/e2e.mjs 150
+          E2E_WEBGPU=1 node ci/e2e.mjs 150
           node ci/e2e.mjs 150 4 2
+          node ci/party.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

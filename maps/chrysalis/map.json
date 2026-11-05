@@ -200,11 +200,11 @@
     { "at": [-15, 11], "team": "red", "yaw": 0, "mirror": true }
   ],
   "pads": [
-    { "weapon": "sniper", "at": [0, 3.2, 3.5], "respawn": 120 },
+    { "weapon": "beam_rifle", "at": [0, 3.2, 3.5], "respawn": 90 },
     { "weapon": "shotgun", "at": [0, -1.8], "respawn": 90 },
-    { "weapon": "br", "at": [-18.5, 0, 3.5], "respawn": 30, "mirror": true },
-    { "weapon": "smg", "at": [0, -11.8], "respawn": 45 },
-    { "weapon": "smg", "at": [-9, 11.5], "respawn": 45, "mirror": true }
+    { "weapon": "carbine", "at": [-18.5, 0, 3.5], "respawn": 30, "mirror": true },
+    { "weapon": "shards", "at": [0, -11.8], "respawn": 45 },
+    { "weapon": "ion_pistol", "at": [-9, 11.5], "respawn": 45, "mirror": true }
   ],
   "launchers": [
     { "at": [-13.9, 0], "to": [-17, 0, 3.5], "time": 1.1, "size": [1.2, 2.4], "mirror": true },

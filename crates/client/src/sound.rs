@@ -1,7 +1,10 @@
 //! Sound, after the three.js page's `art.ts`'s `Sfx`: shots placed where they were
 //! fired (each gun its own takes, a far one past 35 m, our own unplaced),
 //! hits and headshots, blasts, reloads, the swap, a dry trigger, steps
-//! and landings. Gates' CC0 cuts (`assets/sound`, NOTICE).
+//! and landings. Gates' CC0 cuts (`assets/sound`, NOTICE). And the
+//! announcer: our voiced medals one at a time (`assets/sound/voice`,
+//! `tools/voice.sh`), a newer rung of a ladder taking the place of one
+//! still waiting.
 //!
 //! Always in a browser; on the desktop with the `sound` feature (it needs
 //! ALSA's headers on Linux). Without it the plugin does nothing.
@@ -50,7 +53,7 @@ mod on {
                 .init_resource::<Ear>()
                 .insert_resource(DefaultSpatialScale(SpatialScale::new(SCALE)))
                 .add_systems(Startup, load)
-                .add_systems(Update, (listen, play).chain().after(crate::happened));
+                .add_systems(Update, (listen, play, announce).chain().after(crate::happened));
         }
     }
 
@@ -64,9 +67,21 @@ mod on {
         last_arm: u8,
         last_grounded: bool,
         last_mag: u16,
+        last_shield: i32,
+        last_alive: bool,
         step: f32,
         dry: f32,
+        /// Medals waiting for the announcer, oldest first.
+        voice: Vec<u8>,
     }
+
+    /// The announcer's line now playing.
+    #[derive(Component)]
+    struct Voice;
+
+    /// Lines the announcer may have waiting; past it the oldest goes.
+    const VOICE_WAIT: usize = 4;
+    const VOICE_GAIN: f32 = 1.1;
 
     impl Ear {
         fn roll(&mut self, n: u8) -> u8 {
@@ -95,6 +110,10 @@ mod on {
             "step_concrete_1",
             "step_concrete_2",
             "step_concrete_3",
+            "swing_0",
+            "fuse_0",
+            "hurt_0",
+            "death_0",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -106,6 +125,11 @@ mod on {
             names.push(format!("{}_0", g.far));
             names.push(g.reload.to_string());
         }
+        for id in 1..proto::medal::COUNT as u8 {
+            if proto::medal::info(id).voiced {
+                names.push(format!("voice/{}", proto::medal::slug(id)));
+            }
+        }
         for n in names {
             let h = assets.load(format!("sound/{n}.ogg"));
             ear.clips.insert(n, h);
@@ -114,7 +138,7 @@ mod on {
     }
 
     /// The listener rides the camera.
-    fn listen(mut commands: Commands, eye: Query<Entity, (With<Camera3d>, Without<SpatialListener>)>) {
+    fn listen(mut commands: Commands, eye: Query<Entity, (With<crate::look::rig::EyeCam>, Without<SpatialListener>)>) {
         for e in &eye {
             commands.entity(e).insert(SpatialListener::new(0.2));
         }
@@ -148,7 +172,7 @@ mod on {
         time: Res<Time>,
         mut ear: ResMut<Ear>,
         mut commands: Commands,
-        cam: Query<&GlobalTransform, With<Camera3d>>,
+        cam: Query<&GlobalTransform, With<crate::look::rig::EyeCam>>,
         settings: Res<crate::settings::Settings>,
     ) {
         ear.volume = settings.volume();
@@ -189,10 +213,25 @@ mod on {
             } else if e.kind == Kind::Blast as u8 || e.kind == Kind::Wreck as u8 {
                 let n = format!("blast_{}", ear.roll(2));
                 sfx(&mut commands, &mut ear, &n, Some(at), 1.2);
+            } else if e.kind == Kind::Melee as u8 {
+                let at = (e.a != me).then_some(at);
+                sfx(&mut commands, &mut ear, "swing_0", at, 0.7);
+            } else if e.kind == Kind::Throw as u8 {
+                let at = (e.a != me || e.part == HEARD).then_some(at);
+                sfx(&mut commands, &mut ear, "fuse_0", at, 0.6);
             }
         }
-        // Our own body: reloads, the swap, a dry trigger, steps, landing.
+        // Our own body: shields gone, a death, reloads, the swap, a dry
+        // trigger, steps, landing.
         let (f, _) = s.core.own();
+        if f.alive && f.shield == 0 && ear.last_shield > 0 {
+            sfx(&mut commands, &mut ear, "hurt_0", None, 0.6);
+        }
+        ear.last_shield = f.shield;
+        if !f.alive && ear.last_alive {
+            sfx(&mut commands, &mut ear, "death_0", None, 0.7);
+        }
+        ear.last_alive = f.alive;
         let g = f.gun();
         let gun = crate::look::guns::gun(g.arm);
         let dt = time.delta_secs();
@@ -228,5 +267,36 @@ mod on {
             sfx(&mut commands, &mut ear, "land_0", None, 0.35);
         }
         ear.last_grounded = grounded;
+    }
+
+    /// Takes our new voiced medals and says the next when the last is done.
+    fn announce(
+        mut st: ResMut<crate::hud::HudState>,
+        mut ear: ResMut<Ear>,
+        mut commands: Commands,
+        speaking: Query<(), With<Voice>>,
+    ) {
+        use proto::medal as md;
+        for id in core::mem::take(&mut st.announce) {
+            let family = md::info(id).family;
+            let ladder = matches!(family, md::Family::Multi | md::Family::Spree);
+            // A higher rung says what the lower one waiting would have.
+            match ear.voice.iter_mut().find(|q| ladder && md::info(**q).family == family) {
+                Some(q) => *q = id,
+                None => ear.voice.push(id),
+            }
+            if ear.voice.len() > VOICE_WAIT {
+                ear.voice.remove(0);
+            }
+        }
+        if !speaking.is_empty() || ear.voice.is_empty() {
+            return;
+        }
+        let id = ear.voice.remove(0);
+        let Some(h) = ear.clips.get(&format!("voice/{}", md::slug(id))).cloned() else {
+            return;
+        };
+        let s = PlaybackSettings::DESPAWN.with_volume(Volume::Linear(VOICE_GAIN * MASTER * ear.volume));
+        commands.spawn((Voice, AudioPlayer::new(h), s));
     }
 }

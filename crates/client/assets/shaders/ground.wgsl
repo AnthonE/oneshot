@@ -8,12 +8,17 @@
 // hash, value noise, rock cells, wall planes, cliff veto and rock face,
 // copied and trimmed; without the island's roads, blight, snow, caustics and
 // height blend. Every number arrives in `GroundParams` (binding 104).
+// The rain's wet and the cloud deck's shadows come from `cloud_shadow.wgsl`
+// (binding 106). The rock skin (look/cliffs.rs) carries its value multiplier
+// in `UV_1.x`; the ground has no `UV_1`.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     forward_io::{VertexOutput, FragmentOutput},
+    mesh_view_bindings::view,
 }
+#import "shaders/cloud_shadow.wgsl"::{cloud_shadow, ground_wet, wetted}
 
 // ⚠ This struct's field list and order must match `GroundParams` in
 // look/ground.rs exactly: a uniform whose two sides disagree about layout
@@ -488,6 +493,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         + a1.rgb * ground.tint[1].rgb * w.y
         + a2.rgb * ground.tint[2].rgb * w.z
         + a3.rgb * ground.tint[3].rgb * (w.w * rock_shade);
+#ifdef VERTEX_UVS_B
+    // The skin's facets: recessed darker, proud lighter.
+    c *= in.uv_b.x;
+#endif
 
     // The swash: from under the water to `sea.y` above it the ground is
     // wet, darker and glossy, dry again `sea.z` higher, the line wandering
@@ -520,10 +529,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let lean = (rock_tilt - dot(rock_tilt, n0) * n0) * w.w;
     pbr_input.N = normalize(n0 + lean);
 
-    pbr_input.material.base_color = vec4<f32>(c, 1.0);
+    // Rain: darker and more saturated where the ground faces the sky, and
+    // smoother (Gates' `WET_ROUGH`, the wet term's keep).
+    let wet = ground_wet(wn);
+    pbr_input.material.base_color = vec4<f32>(wetted(c, wet), 1.0);
+    pbr_input.material.perceptual_roughness = pbr_input.material.perceptual_roughness * (1.0 - wet * 0.25);
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
+    out.color = vec4(out.color.rgb + view.exposure * cloud_shadow(pbr_input), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

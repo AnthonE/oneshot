@@ -8,12 +8,15 @@
 //! `shaders/ground_splat.wgsl` (MIT, NOTICE): its extension of
 //! `StandardMaterial`, its texture arrays, its sizes, its cliff, wall and
 //! rock knobs; without the island's roads, blight, snow and caustics.
+//! The rain's wet and the cloud deck's shadows come with it
+//! (`cloud_shadow.rs`), and the rock skin over the terrain's rock faces
+//! (`cliffs.rs`) wears it too, its value off `UV_1`.
 //!
 //! Every number the shader reads arrives in one uniform block
-//! ([`GroundParams`], binding 104). WebGL2 allows about twelve uniform
-//! blocks a stage and Bevy's forward pass already binds twelve, so this
-//! material adds exactly one, as Gates' does; a second (the old 105) is a
-//! refused pipeline layout and a missing ground, never a crash.
+//! ([`GroundParams`], binding 104) beside the deck's and the rain's
+//! (`cloud_shadow::CloudShadowParams`, binding 106). WebGL2 allows few
+//! uniform blocks a stage and Bevy's forward pass binds twelve of them,
+//! so these two are all the material adds.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -33,6 +36,11 @@ pub struct Ground {
     /// Every number the shader reads, in one block.
     #[uniform(104)]
     pub params: GroundParams,
+    /// The deck's shadows and the rain's wet (`cloud_shadow::drive` keeps
+    /// it): a uniform, not a texture or a buffer, so the ground binds what
+    /// it did on every target.
+    #[uniform(106)]
+    pub cloud: super::cloud_shadow::CloudShadowParams,
 }
 
 /// The shader's numbers: `shaders/ground.wgsl`'s `GroundParams`.
@@ -251,17 +259,30 @@ impl MaterialExtension for Ground {
 
 /// The ground's material over its photographs, wet up from the sea at
 /// `sea_y` (the map's `light.sea`; not finite means no sea); `lite` is the
-/// light tier, which draws no wall planes or rock face.
-pub fn material(albedo: Handle<Image>, normal: Handle<Image>, sea_y: f32, lite: bool) -> GroundMaterial {
+/// lowest rung, which draws no wall planes or rock face; `cloud` the deck's
+/// shadows and the rain's wet as the map's mood has them.
+pub fn material(
+    albedo: Handle<Image>,
+    normal: Handle<Image>,
+    sea_y: f32,
+    lite: bool,
+    cloud: super::cloud_shadow::CloudShadowParams,
+) -> GroundMaterial {
     let mut params = GroundParams::default();
     params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
     params.wall.z = if lite { 1.0 } else { 0.0 };
     ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.92,
+            reflectance: super::fresnel::DIELECTRIC,
             ..default()
         },
-        extension: Ground { albedo, normal, params },
+        extension: Ground {
+            albedo,
+            normal,
+            params,
+            cloud,
+        },
     }
 }
 

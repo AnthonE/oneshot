@@ -649,7 +649,7 @@ fn frond_image() -> Image {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        anisotropy_clamp: if cfg!(target_arch = "wasm32") { 4 } else { 16 },
+        anisotropy_clamp: if cfg!(webgl2) { 4 } else { 16 },
         ..default()
     });
     img
