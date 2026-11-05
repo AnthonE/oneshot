@@ -885,7 +885,8 @@ pub fn build(
             continue;
         }
         // A plain dressing box (a pod, a plate): its faces, weathered as a
-        // box is, nothing of rock on them.
+        // box is, nothing of rock on them, and no wear on an edge buried in
+        // the boxes it sits on (it is none of them: no index of its own).
         let mut soup = rock::Soup::default();
         rock::faceted_box(&mut soup, min, max, mid, rock_key(id), [false; 6], &rock::bare());
         if soup.is_empty() {
@@ -898,7 +899,7 @@ pub fn build(
             shape: Shape::Box,
             ground: ground_at(mid.x, mid.z),
             run: None,
-            hidden: 0,
+            hidden: rock::hidden_edges(min, max, usize::MAX, &all),
             own_value: true,
         };
         commands.spawn((

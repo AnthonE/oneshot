@@ -207,9 +207,11 @@ if (process.env.E2E_WEBGPU === '1') {
   // The full Chromium (Playwright's default headless is its shell) and only
   // its own SwiftShader Vulkan driver: a Mesa on the box (lavapipe) is
   // otherwise what Chromium's Vulkan picks, so the smoke would draw on
-  // whichever driver each machine happens to have.
-  const gpuExe = exe ?? chromium.executablePath();
-  const icd = `${dirname(realpathSync(gpuExe))}/vk_swiftshader_icd.json`;
+  // whichever driver each machine happens to have. Without it (a box with
+  // only the shell), Playwright's default.
+  const full = exe ?? chromium.executablePath();
+  const gpuExe = existsSync(full) ? full : undefined;
+  const icd = gpuExe ? `${dirname(realpathSync(gpuExe))}/vk_swiftshader_icd.json` : '';
   const gpu = await chromium.launch({
     executablePath: gpuExe,
     env: existsSync(icd) ? { ...process.env, VK_ICD_FILENAMES: icd, VK_DRIVER_FILES: icd } : process.env,
@@ -217,7 +219,7 @@ if (process.env.E2E_WEBGPU === '1') {
       '--use-angle=vulkan', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required',
       '--enable-logging', `--log-file=${gpuLog}`],
   });
-  console.log(`webgpu: ${gpuExe}${existsSync(icd) ? ', SwiftShader Vulkan only' : `, no ${icd}: the box's Vulkan`}`);
+  console.log(`webgpu: ${gpuExe ?? `no ${full}: Playwright's default`}${existsSync(icd) ? ', SwiftShader Vulkan only' : ", the box's Vulkan"}`);
   const gpuChecks = checks.length;
   try {
     // Left to itself, the page refuses SwiftShader's adapter.

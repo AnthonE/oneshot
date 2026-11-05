@@ -44,7 +44,7 @@ pub const STYLES: [&str; 5] = ["wide", "pov", "chase", "mix", "long"];
 /// be seen soon, not only the ones the player saw; a chase of the last
 /// fifteen seconds mid-match would show where they went. Once the match
 /// is over every style is open.
-/// The page offers only these until the match is over (`web/index.html`'s
+/// The page offers only these until the match is over (`web/boot.js`'s
 /// `__oneshotClip`, told by [`take`]).
 pub const LIVE_STYLES: [&str; 3] = ["wide", "pov", "long"];
 

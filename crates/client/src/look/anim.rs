@@ -129,7 +129,8 @@ impl Clip {
 /// How the arms hold what is in the hands: a long gun at the shoulder
 /// (Gates' `RIFLE_HOLD_CLIP`) or a pistol up in front (`ARMS_HOLD_CLIP`).
 /// Bodies wear the long hold for every gun (`bodies::pose`: the gun hangs
-/// at the chest, and the pistol clip's hands are at the face).
+/// at the chest, and the pistol clip's hands are at the face); a pistol's
+/// reload is still its own clip ([`Seen::reload`]), the gun in its hand.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hold {
     Long,
@@ -147,7 +148,7 @@ impl Hold {
     }
 
     /// Its reload, played once over the hold at the pace of the gun's own
-    /// (`Seen::reload_s`).
+    /// (`Seen::reload`).
     pub fn reload_name(self) -> &'static str {
         match self {
             Hold::Long => "Rifle_Reload",
@@ -258,8 +259,9 @@ pub struct Seen {
     pub pitch: f32,
     /// What its arms hold.
     pub hold: Option<Hold>,
-    /// Reloading (the wire's bit): how long the gun's reload takes, s.
-    pub reload_s: Option<f32>,
+    /// Reloading (the wire's bit): the gun's own reload clip (a pistol's,
+    /// over the long hold) and how long the gun's reload takes, s.
+    pub reload: Option<(Hold, f32)>,
 }
 
 /// One body's locomotion: what its legs play, how they are turned, where
@@ -288,8 +290,8 @@ pub struct Gait {
     pub turning: bool,
     /// What the arms hold, if the body is shouldering anything.
     pub hold: Option<Hold>,
-    /// Reloading: how long the gun's reload takes, s.
-    pub reload_s: Option<f32>,
+    /// Reloading: whose reload clip, and how long the gun's reload takes, s.
+    pub reload: Option<(Hold, f32)>,
 }
 
 impl Gait {
@@ -313,7 +315,7 @@ impl Gait {
         self.pitch = s.pitch;
         self.clip = Some(self.gait(s));
         self.hold = s.hold.filter(|_| s.alive && !s.driving);
-        self.reload_s = s.reload_s.filter(|_| self.hold.is_some());
+        self.reload = s.reload.filter(|_| self.hold.is_some());
         self.steer(turned, dt);
     }
 
@@ -606,8 +608,8 @@ pub struct Playing {
     fading: Option<Clip>,
     /// How much of the arms and spine each hold owns, 0..1.
     hold_u: [f32; Hold::ALL.len()],
-    /// How much of them the reload owns over the hold, 0..1, and the hold
-    /// whose reload is playing.
+    /// How much of them the reload owns over the hold, 0..1, and whose
+    /// reload clip is playing (the gun's, whatever the hold).
     reload_u: f32,
     reload_of: Option<Hold>,
 }
@@ -717,16 +719,18 @@ pub fn drive(
         (false, false) => (u - dt / BLEND_S).max(0.0),
     };
     let held = gait.holding();
-    let reload = gait.reload_s.and(held);
-    // A reload starts its clip from the top, paced to the gun's reload, on
-    // the hold the arms are in; one that ends (or a gun swapped) fades out.
-    if reload.is_some() && playing.reload_of != reload {
+    let reload = gait.reload.filter(|_| held.is_some());
+    let reload_of = reload.map(|(h, _)| h);
+    // A reload starts its gun's clip from the top, paced to the gun's
+    // reload, over the hold the arms are in; one that ends (or a gun
+    // swapped) fades out.
+    if reload_of.is_some() && playing.reload_of != reload_of {
         if let Some(node) = playing.reload_of.and_then(|h| rig.reloads[h.slot()]) {
             player.stop(node);
         }
-        playing.reload_of = reload;
+        playing.reload_of = reload_of;
         playing.reload_u = 0.0;
-        if let (Some(h), Some(secs)) = (reload, gait.reload_s) {
+        if let Some((h, secs)) = reload {
             if let Some(node) = rig.reloads[h.slot()] {
                 let pace = rig.reload_durations[h.slot()].max(1e-3) / secs.max(0.1);
                 player.start(node).set_repeat(RepeatAnimation::Never).set_speed(pace);
@@ -1171,6 +1175,21 @@ mod tests {
         );
         assert_eq!(g.clip, Some(Clip::Death));
         assert_eq!(g.holding(), None);
+    }
+
+    #[test]
+    fn a_pistol_reloads_its_own_clip_over_the_long_hold() {
+        let mut g = Gait::default();
+        let s = Seen {
+            hold: Some(Hold::Long),
+            reload: Some((Hold::Pistol, 1.2)),
+            ..seen(Vec2::ZERO, 0.0)
+        };
+        g.observe(&s, DT);
+        assert_eq!(g.holding(), Some(Hold::Long));
+        assert_eq!(g.reload, Some((Hold::Pistol, 1.2)));
+        g.observe(&Seen { driving: true, ..s }, DT);
+        assert_eq!(g.reload, None, "no reload at the wheel");
     }
 
     #[test]

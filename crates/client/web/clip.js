@@ -1,7 +1,7 @@
 /* clip.js — the clip page: a player's last half minute drawn by the game
    itself and encoded on their own machine. After Gates' web/clip.js (MIT).
 
-   The game page (`index.html`, `window.__oneshotClip`) frames this page and
+   The game page (`boot.js`, `window.__oneshotClip`) frames this page and
    posts it the tape the clip key took (crates/client/src/clip.rs). This page
    loads the same module the game runs, hands it the tape (`film`,
    crates/client/src/film/), and takes each frame and each slice of the mix
