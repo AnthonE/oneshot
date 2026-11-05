@@ -294,18 +294,20 @@ impl Client {
                 let Ok(reader) = ReadableStreamDefaultReader::new(&readable) else {
                     return;
                 };
+                // The result's keys, made once, not two strings a datagram.
+                let (done_key, value_key) = (JsValue::from_str("done"), JsValue::from_str("value"));
                 loop {
                     let Ok(result) = JsFuture::from(reader.read()).await else {
                         break;
                     };
-                    let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                    let done = js_sys::Reflect::get(&result, &done_key)
                         .ok()
                         .and_then(|d| d.as_bool())
                         .unwrap_or(true);
                     if done {
                         break;
                     }
-                    let Ok(v) = js_sys::Reflect::get(&result, &JsValue::from_str("value")) else {
+                    let Ok(v) = js_sys::Reflect::get(&result, &value_key) else {
                         break;
                     };
                     let Ok(chunk) = v.dyn_into::<Uint8Array>() else { break };
@@ -384,8 +386,10 @@ impl Client {
 
     /// Takes in stream messages (the session's to read).
     fn absorb(&mut self) {
-        let msgs: Vec<Msg> = self.msgs.borrow_mut().drain(..).collect();
-        for m in msgs {
+        loop {
+            let Some(m) = self.msgs.borrow_mut().pop_front() else {
+                break;
+            };
             self.session.on_msg(m);
         }
     }
@@ -398,8 +402,11 @@ impl Client {
             self.inbox.borrow_mut().clear();
             return;
         }
-        let arrived: Vec<(f64, Vec<u8>)> = self.inbox.borrow_mut().drain(..).collect();
-        for (at, d) in arrived {
+        // One at a time, not collected into a list every frame.
+        loop {
+            let Some((at, d)) = self.inbox.borrow_mut().pop_front() else {
+                break;
+            };
             self.session.on_datagram(at, &d);
         }
         let input = Input {

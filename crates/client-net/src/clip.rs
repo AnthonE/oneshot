@@ -168,11 +168,21 @@ impl Clipper {
         self.clock_ms = self.clock_ms.max(at_ms);
         let due = self.segs.back().is_none_or(|s| self.clock_ms - s.start_ms >= SEG_MS);
         if due {
+            // The segment that goes lends the new one its buffers, grown to
+            // a segment's size already.
+            let (mut dgrams, mut held) = (Vec::new(), Vec::new());
+            if self.segs.len() >= self.keep {
+                if let Some(old) = self.segs.pop_front() {
+                    (dgrams, held) = (old.dgrams, old.bytes);
+                    dgrams.clear();
+                    held.clear();
+                }
+            }
             self.segs.push_back(Seg {
                 start_ms: self.clock_ms,
                 start_tick: tick,
-                dgrams: Vec::new(),
-                bytes: Vec::new(),
+                dgrams,
+                bytes: held,
             });
             while self.segs.len() > self.keep {
                 self.segs.pop_front();

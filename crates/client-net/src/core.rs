@@ -31,6 +31,7 @@ use sim::input::Input;
 use sim::map::Map;
 use sim::vehicle::{Vehicle, DRIVER};
 use sim::world::{Phase, Rules};
+use std::cell::Cell;
 use std::collections::VecDeque;
 
 /// One tick of what this client predicts, in the server's order: its
@@ -400,6 +401,8 @@ pub struct NetCore {
     /// The next round id to give, and our own rounds since they left the gun.
     next_pid: u16,
     launches: Vec<Launch>,
+    /// Each launch's flight as last asked for, by its id (`coast_memo`).
+    coasts: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
     /// Ticks a forward clock resync added that the next `update` makes on
     /// top of the time passed: our rounds already flying don't take them.
     resync_ahead: f64,
@@ -469,6 +472,7 @@ impl NetCore {
             event_id: None,
             next_pid: 0,
             launches: Vec::with_capacity(MAX_LAUNCHES),
+            coasts: Default::default(),
             resync_ahead: 0.0,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
@@ -660,8 +664,20 @@ impl NetCore {
         // The seed is a tick before the sim's first state, made on tick
         // `q + k`.
         let age = t - (l.q as f64 + l.k - 1.0);
-        let (p, v, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age.max(0.0), &self.map);
+        let (p, v, _) = proj::coast_on(
+            self.coast_memo(l),
+            l.seed.kind,
+            l.seed.pos,
+            l.seed.vel,
+            age.max(0.0),
+            &self.map,
+        );
         (p, v)
+    }
+
+    /// Where launch `l`'s flight was last left (`proj::coast_on`).
+    fn coast_memo(&self, l: &Launch) -> &Cell<Option<proj::Coasted>> {
+        &self.coasts[l.id as usize % MAX_LAUNCHES]
     }
 
     /// Launch `l` as drawn at `now_ms`, or None once it is gone.
@@ -760,21 +776,17 @@ impl NetCore {
             let (f, p) = self.own();
             return Some((p, f.body.vel));
         }
+        let mut at = None;
         if (h as usize) < MAX_FIGHTERS {
-            return self
-                .others(now_ms)
-                .into_iter()
-                .find(|d| d.slot == h)
-                .map(|d| (d.pos, d.vel));
+            self.each_other(now_ms, Some(h), |d| at = at.or(Some((d.pos, d.vel))));
+            return at;
         }
         let slot = h - MAX_FIGHTERS as u8;
         if self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
             return self.own_vehicle().map(|(v, p, _)| (p, v.vel));
         }
-        self.vehicles(now_ms)
-            .into_iter()
-            .find(|v| v.slot == slot)
-            .map(|v| (v.pos, V3::ZERO))
+        self.each_vehicle(now_ms, Some(slot), |v| at = at.or(Some((v.pos, V3::ZERO))));
+        at
     }
 
     /// Our own rounds still drawn from their launch, not yet on the render
@@ -789,15 +801,17 @@ impl NetCore {
     /// (`own()`) the frame it fired, its clock run at `1 - GLIDE` until it
     /// is on the render tick. A stuck sticky rides its host as drawn.
     pub fn projectiles(&self, now_ms: f64) -> Vec<DrawnProj> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(MAX_SNAP_PROJ + self.launches.len());
         let frames = &self.frames[..self.n_frames];
-        let mut seen: Vec<u16> = Vec::new();
+        let mut seen = [0u16; INTERP_FRAMES * MAX_SNAP_PROJ];
+        let mut n_seen = 0;
         for f in frames {
             for &pid in &f.pid[..f.np as usize] {
-                if seen.contains(&pid) {
+                if seen[..n_seen].contains(&pid) {
                     continue;
                 }
-                seen.push(pid);
+                seen[n_seen] = pid;
+                n_seen += 1;
                 if self.launches.iter().any(|l| l.bound && l.id == pid) {
                     continue;
                 }
@@ -835,7 +849,8 @@ impl NetCore {
             }
             if l.ack_tick.is_none() || after <= 2 * SEND_EVERY {
                 let age = after as f64 + 1.0;
-                let (at, _, _) = proj::coast(l.seed.kind, l.seed.pos, l.seed.vel, age, &self.map);
+                let (at, _, _) =
+                    proj::coast_on(self.coast_memo(&l), l.seed.kind, l.seed.pos, l.seed.vel, age, &self.map);
                 let flown = (at - l.seed.pos).len();
                 let reach = proj::BIND_M + l.seed.cone * flown;
                 let born = l.q as f64 + ks;
@@ -951,11 +966,11 @@ impl NetCore {
         // Where our rounds are drawn before this snapshot: after it, they
         // carry what it would move them by (the clock, the binding, the
         // server's own path) as a correction to ease out, never a pop.
-        let drawn: Vec<Option<V3>> = self
-            .launches
-            .iter()
-            .map(|l| self.launch_drawn(l, now_ms).map(|d| d.pos))
-            .collect();
+        let mut drawn = [None; MAX_LAUNCHES];
+        let n_drawn = self.launches.len();
+        for (d, l) in drawn.iter_mut().zip(&self.launches) {
+            *d = self.launch_drawn(l, now_ms).map(|d| d.pos);
+        }
         // The hull we rode in before this snapshot says otherwise (a wreck).
         let rode = self.pred.riding();
         self.newest = Some(s.tick);
@@ -1127,7 +1142,7 @@ impl NetCore {
             self.death = None;
         }
         self.latest = *s;
-        for (i, was) in drawn.into_iter().enumerate() {
+        for (i, was) in drawn.into_iter().take(n_drawn).enumerate() {
             let l = self.launches[i];
             if let (Some(p0), Some(p1)) = (was, self.launch_drawn(&l, now_ms).map(|d| d.pos)) {
                 let off = l.off + (p0 - p1);
@@ -1356,9 +1371,16 @@ impl NetCore {
     /// The vehicles we were sent (but the one we ride in), between the two
     /// snapshots around the render tick.
     pub fn vehicles(&self, now_ms: f64) -> Vec<DrawnVehicle> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(MAX_SNAP_VEHICLES);
+        self.each_vehicle(now_ms, None, |d| out.push(d));
+        out
+    }
+
+    /// [`NetCore::vehicles`], one at a time to `f`: only hull `only`, if
+    /// given.
+    fn each_vehicle(&self, now_ms: f64, only: Option<u8>, mut f: impl FnMut(DrawnVehicle)) {
         if self.n_frames == 0 {
-            return out;
+            return;
         }
         let mine = self.pred.riding().map(|(i, _)| i as u8);
         let rt = self.render_tick(now_ms);
@@ -1366,7 +1388,7 @@ impl NetCore {
         let a = &self.frames[ai];
         let b = bi.map(|i| &self.frames[i]);
         for va in &a.vehicles[..a.nv as usize] {
-            if Some(va.slot) == mine {
+            if Some(va.slot) == mine || only.is_some_and(|s| s != va.slot) {
                 continue;
             }
             let mut d = DrawnVehicle {
@@ -1388,9 +1410,8 @@ impl NetCore {
             } else {
                 d.pos = va.pos + va.vel * (ahead(rt, a.tick) / TICK_HZ as f32);
             }
-            out.push(d);
+            f(d);
         }
-        out
     }
 
     /// The match's phase as of the newest snapshot.
@@ -1470,15 +1491,25 @@ impl NetCore {
     /// the render tick, or extrapolated at most [`EXTRAPOLATE_MS`] past the
     /// newest, then held.
     pub fn others(&self, now_ms: f64) -> Vec<Drawn> {
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(MAX_REMOTES);
+        self.each_other(now_ms, None, |d| out.push(d));
+        out
+    }
+
+    /// [`NetCore::others`], one at a time to `f`: only seat `only`'s, if
+    /// given.
+    fn each_other(&self, now_ms: f64, only: Option<u8>, mut f: impl FnMut(Drawn)) {
         if self.n_frames == 0 {
-            return out;
+            return;
         }
         let rt = self.render_tick(now_ms);
         let (ai, bi) = self.around(rt);
         let a = &self.frames[ai];
         let b = bi.map(|i| &self.frames[i]);
         for ra in &a.remotes[..a.n as usize] {
+            if only.is_some_and(|s| s != ra.slot) {
+                continue;
+            }
             let mut d = drawn(ra);
             let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
             match (b, rb) {
@@ -1500,9 +1531,8 @@ impl NetCore {
                     }
                 }
             }
-            out.push(d);
+            f(d);
         }
-        out
     }
 }
 

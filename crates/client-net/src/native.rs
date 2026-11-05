@@ -11,6 +11,7 @@ use proto::frame::LEN_PREFIX_BYTES;
 use proto::{decode_msg, frame_msg, Msg, MAX_STREAM_MSG};
 use sim::input::Input;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use wtransport::datagram::Datagram;
 use wtransport::tls::Sha256Digest;
 use wtransport::{ClientConfig, Connection, Endpoint};
 
@@ -28,7 +29,8 @@ pub struct NativeClient {
     pub session: Session,
     conn: Connection,
     msgs: UnboundedReceiver<Msg>,
-    datagrams: UnboundedReceiver<(Instant, Vec<u8>)>,
+    /// As they came: each holds its own bytes, never copied here.
+    datagrams: UnboundedReceiver<(Instant, Datagram)>,
     closed: Arc<AtomicBool>,
     /// The close's code and reason, once the connection has ended.
     ended: Arc<std::sync::Mutex<Option<(u32, String)>>>,
@@ -99,7 +101,7 @@ impl NativeClient {
         let rconn = conn.clone();
         tokio::spawn(async move {
             while let Ok(d) = rconn.receive_datagram().await {
-                if dtx.send((Instant::now(), d.to_vec())).is_err() {
+                if dtx.send((Instant::now(), d)).is_err() {
                     break;
                 }
             }

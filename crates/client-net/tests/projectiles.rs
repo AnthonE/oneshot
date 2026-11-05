@@ -718,6 +718,24 @@ fn coast_steps_like_the_sim() {
 }
 
 #[test]
+fn coasting_on_from_the_last_ask_is_coasting_from_the_seed() {
+    // The rocket meets the far wall, the frag the floor.
+    let map = Map::open();
+    let memo = std::cell::Cell::new(None);
+    for (kind, vel) in [(K_ROCKET, V3::new(0.0, 0.0, 30.0)), (K_FRAG, V3::new(3.0, 8.0, 12.0))] {
+        let pos = V3::new(0.0, 1.5, 0.0);
+        // On, back, on again, past where it stops, fractions between.
+        let mut stopped = false;
+        for t in [0.0, 1.0, 2.5, 2.5, 7.25, 3.0, 40.0, 41.5, 12.0, 300.0, 299.0, 1e9] {
+            let want = coast(kind, pos, vel, t, &map);
+            assert_eq!(proj::coast_on(&memo, kind, pos, vel, t, &map), want, "{kind} at {t}");
+            stopped |= want.2;
+        }
+        assert!(stopped, "{kind} never met the map");
+    }
+}
+
+#[test]
 fn the_predicted_launch_is_the_sims() {
     for shot in SHOTS {
         let (w, seed) = launched(shot, 1000);

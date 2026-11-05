@@ -10,6 +10,8 @@
 //! ([`assign_ids`]), and a sticky stuck to someone rides them as drawn
 //! ([`detect_hosts`]). The client never decides: no body tests, no blasts.
 
+use std::cell::Cell;
+
 use crate::core::{Frame, LERP_SPAN_MS};
 use proto::{ProjState, Snapshot, MAX_SNAP_PROJ};
 use sim::arms::{arm, Kind, CANNON, LAUNCHER, ROCKET};
@@ -124,22 +126,64 @@ fn quant3(v: V3) -> V3 {
 /// is held there (the flag says so). No bounce and no bodies: what it
 /// meets is the server's to say.
 pub fn coast(kind: u8, pos: V3, vel: V3, ticks: f64, map: &Map) -> (V3, V3, bool) {
+    coast_on(&Cell::new(None), kind, pos, vel, ticks, map)
+}
+
+/// Where [`coast_on`] last left a round: what it was flown from, how many
+/// whole ticks, and how it stood then (stopped by the map, or not).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Coasted {
+    kind: u8,
+    from: (V3, V3),
+    whole: u32,
+    at: (V3, V3),
+    stopped: bool,
+}
+
+/// [`coast`], going on from where `memo` left this same round when that is
+/// no later than `ticks` (the same steps, so the same bits), and leaving
+/// it there: a round drawn every frame is flown a tick or two a frame,
+/// not from its seed each time.
+pub fn coast_on(memo: &Cell<Option<Coasted>>, kind: u8, pos: V3, vel: V3, ticks: f64, map: &Map) -> (V3, V3, bool) {
     let t = if ticks.is_finite() {
         ticks.clamp(0.0, COAST_MAX)
     } else {
         0.0
     };
-    let whole = t.floor();
-    let frac = (t - whole) as f32;
-    let (mut p, mut v) = (pos, vel);
-    for _ in 0..whole as u32 {
+    let whole = t.floor() as u32;
+    let frac = (t - t.floor()) as f32;
+    let this = |m: &Coasted| m.kind == kind && m.from == (pos, vel);
+    let last = memo.get().filter(this);
+    let (mut done, mut p, mut v) = (0, pos, vel);
+    if let Some(m) = last.filter(|m| m.whole <= whole) {
+        if m.stopped {
+            return (m.at.0, m.at.1, true);
+        }
+        (done, p, v) = (m.whole, m.at.0, m.at.1);
+    }
+    // Only ever moved on: an earlier ask flies from the seed and leaves it.
+    let keep = |done: u32, at: (V3, V3), stopped: bool| {
+        if last.is_none_or(|m| done >= m.whole) {
+            memo.set(Some(Coasted {
+                kind,
+                from: (pos, vel),
+                whole: done,
+                at,
+                stopped,
+            }));
+        }
+    };
+    while done < whole {
         let (np, nv, clipped) = step(kind, p, v, map);
+        done += 1;
         if clipped {
+            keep(done, (np, nv), true);
             return (np, nv, true);
         }
         p = np;
         v = nv;
     }
+    keep(whole, (p, v), false);
     if frac > 0.0 {
         let (np, nv, _) = step(kind, p, v, map);
         return (p + (np - p) * frac, v + (nv - v) * frac, false);
@@ -241,7 +285,8 @@ pub(crate) fn assign_ids(prev: Option<&Frame>, prev2: Option<&Frame>, new: &mut 
 /// Pairs `from`'s rounds (those `eligible`) with `new`'s not yet `got`.
 fn pair(from: &Frame, eligible: &[bool; MAX_SNAP_PROJ], new: &Frame, got: &mut [Option<u16>; MAX_SNAP_PROJ]) {
     let dt = new.tick.wrapping_sub(from.tick) as f32 / TICK_HZ as f32;
-    let mut cand: Vec<(f32, usize, usize)> = Vec::new();
+    let mut cand = [(0.0f32, 0usize, 0usize); MAX_SNAP_PROJ * MAX_SNAP_PROJ];
+    let mut n = 0;
     for (qi, q) in from.proj.iter().enumerate().take(from.np as usize) {
         if !eligible[qi] {
             continue;
@@ -282,12 +327,16 @@ fn pair(from: &Frame, eligible: &[bool; MAX_SNAP_PROJ], new: &Frame, got: &mut [
                 }
                 d
             };
-            cand.push((d, qi, pi));
+            cand[n] = (d, qi, pi);
+            n += 1;
         }
     }
-    cand.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    // A total order (no two share both indices), so unstable is the same
+    // order, sorted in place.
+    let cand = &mut cand[..n];
+    cand.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let mut used = [false; MAX_SNAP_PROJ];
-    for (_, qi, pi) in cand {
+    for &mut (_, qi, pi) in cand {
         if used[qi] || got[pi].is_some() {
             continue;
         }
