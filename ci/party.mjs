@@ -41,7 +41,7 @@ const browser = await chromium.launch({
 });
 const errors = [];
 const checks = [];
-const until = async (what, fn, ms = 90000) => {
+const until = async (what, fn, ms = 180000) => {
   const t = Date.now();
   while (Date.now() - t < ms) {
     try {
@@ -59,7 +59,9 @@ try {
     const p = await ctx.newPage();
     p.on('pageerror', (e) => errors.push(e.message));
     p.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-    await p.goto(`${url}?${q}`);
+    // ?lite=1: a quarter of the pixels, POTATO. Two games at once on a
+    // software GPU starve each other otherwise.
+    await p.goto(`${url}?lite=1&${q}`);
     return p;
   };
   const party = (p) => p.evaluate(() => window.__oneshot?.party ?? null);
@@ -80,6 +82,7 @@ try {
     await p.waitForTimeout(400);
   };
   const a = await open('name=alpha&mic=open');
+  // The second page once the first is in: its level loaded, its party up.
   const pa = await until('the first page has a party', async () => {
     const x = await party(a);
     return x?.connected && x.code ? x : null;

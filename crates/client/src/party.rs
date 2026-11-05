@@ -22,6 +22,11 @@ use crate::settings::Player;
 pub const TALKING_S: f32 = 0.35;
 /// The wait before opening the lobby again, doubling to the last.
 const RETRY_S: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 15.0];
+/// An attempt that hasn't answered in this long is let go and made again.
+const KNOCK_GIVE_UP_S: f32 = 20.0;
+/// The lobby opens once the title's level is in (a page loading it can
+/// stall long enough for the server to give up on a hello), or after this.
+const FIRST_AFTER_S: f32 = 30.0;
 
 /// One friend as the title lists them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +148,8 @@ pub struct PartyAsks(pub Vec<Do>);
 struct LobbyRes {
     link: Option<LobbyBox>,
     knock: Option<LobbyKnock>,
+    /// When the attempt out was made.
+    knocked_at: f32,
     retry_at: f32,
     tries: usize,
     /// The party a link asked for (`?party=`, `--party`), until we're in one.
@@ -194,10 +201,21 @@ fn pump(
     mut view: ResMut<PartyView>,
     mut asks: ResMut<PartyAsks>,
     in_match: Res<InMatch>,
+    settle: Res<crate::loading::Settle>,
     time: Res<Time<Real>>,
 ) {
     let now = time.elapsed_secs();
     let name = player.sent_name();
+    // Not while the first level is still arriving (see FIRST_AFTER_S).
+    if lobby.link.is_none() && lobby.knock.is_none() && lobby.tries == 0 && !settle.shown() && now < FIRST_AFTER_S {
+        return;
+    }
+    if lobby.knock.is_some() && now - lobby.knocked_at > KNOCK_GIVE_UP_S {
+        warn!("oneshot: the party's line didn't answer; asking again");
+        lobby.knock = None;
+        lobby.tries += 1;
+        lobby.retry_at = now;
+    }
     // Open it, or again after it closed, waiting longer each time.
     if lobby.link.as_ref().is_some_and(|l| l.closed()) {
         lobby.link = None;
@@ -209,6 +227,7 @@ fn pump(
             lobby.knock = None;
             match got {
                 Ok(l) => {
+                    info!("oneshot: the party's line is open");
                     lobby.link = Some(l);
                     lobby.tries = 0;
                     lobby.name = name.clone();
@@ -216,7 +235,8 @@ fn pump(
                     view.connected = true;
                     view.touch();
                 }
-                Err(_) => {
+                Err(e) => {
+                    warn!("oneshot: the party's line didn't open: {e}");
                     lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
                     lobby.tries += 1;
                 }
@@ -226,6 +246,7 @@ fn pump(
     if lobby.link.is_none() && lobby.knock.is_none() && now >= lobby.retry_at {
         let want = view.party.as_ref().map_or(lobby.want, |p| p.code);
         lobby.knock = Some(door.lobby(hello(&view, &door, &name, want)));
+        lobby.knocked_at = now;
         lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
     }
     // A new name says hello again (the party sees it then).

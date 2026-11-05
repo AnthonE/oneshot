@@ -542,11 +542,15 @@ mod web {
             let (addr, hash) = self.at.borrow().clone();
             let s = slot.clone();
             spawn_local(async move {
-                let got = client_net::web_lobby::WebLobby::open(addr, hash, hello)
-                    .await
-                    .map(|l| Box::new(l) as super::LobbyBox)
-                    .map_err(|e| js_text(&e));
-                *s.borrow_mut() = Some(got);
+                let got = client_net::web_lobby::WebLobby::open(addr, hash, hello).await;
+                // Given up on already (it took too long): close it, unheld.
+                if Rc::strong_count(&s) == 1 {
+                    if let Ok(l) = got {
+                        l.close();
+                    }
+                    return;
+                }
+                *s.borrow_mut() = Some(got.map(|l| Box::new(l) as super::LobbyBox).map_err(|e| js_text(&e)));
             });
             LobbyKnock { slot }
         }
