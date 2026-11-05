@@ -102,7 +102,8 @@ impl WebLobby {
                     if done {
                         break;
                     }
-                    let Ok(chunk) = Reflect::get(&result, &JsValue::from_str("value")).and_then(|v| v.dyn_into::<Uint8Array>())
+                    let Ok(chunk) =
+                        Reflect::get(&result, &JsValue::from_str("value")).and_then(|v| v.dyn_into::<Uint8Array>())
                     else {
                         break;
                     };
