@@ -381,7 +381,6 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<Built>()
     .init_resource::<Drawn>()
     .init_resource::<look::textures::Textures>()
-    .init_resource::<look::emblem::Emblems>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<look::rag::Blows>()
@@ -414,6 +413,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::weathering::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
+    // Triple T's spray paint: the side's headband, the emblem, the trim
+    // (`look/paint.rs`).
+    .add_plugins(look::paint::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
@@ -841,6 +843,7 @@ type ShieldParts<'w, 's> = (
     ResMut<'w, look::fx::Fx>,
     ResMut<'w, Assets<look::shield::ShieldMaterial>>,
     Query<'w, 's, &'static mut Visibility, With<look::shield::ShellPart>>,
+    ResMut<'w, Assets<look::paint::BodyMaterial>>,
 );
 
 /// Everyone else, where client-net interpolated them.
@@ -856,7 +859,7 @@ fn draw_fighters(
     (mut meshes, mut mats, mut vis): BodyParts,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    (mut fx, mut shield_mats, mut shells): ShieldParts,
+    (mut fx, mut shield_mats, mut shells, mut body_mats): ShieldParts,
     (time, mut walkers, film): (Res<Time>, ResMut<look::foliage::Walkers>, Option<Res<film::Film>>),
 ) {
     let now = link.0.now_ms();
@@ -920,7 +923,7 @@ fn draw_fighters(
             let e = if opts.capsules {
                 look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
             } else {
-                look::bodies::spawn(&mut commands, &models, &mut meshes, &mut mats, d.team, look)
+                look::bodies::spawn(&mut commands, &models, d.team, look)
             };
             commands.entity(e).insert(Kept);
             drawn.fighters.insert(d.slot, (e, d.team, look));
@@ -966,7 +969,7 @@ fn draw_fighters(
             e,
             fx.was.flare(d.slot, t),
             &mut bodies,
-            &mut mats,
+            &mut body_mats,
             &mut shield_mats,
             &mut shells,
         );
