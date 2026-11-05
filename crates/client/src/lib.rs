@@ -533,6 +533,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::prewarm::warm_level,
             look::prewarm::warm_models,
             look::prewarm::retire,
+            look::prewarm::bake_roster,
         )
             .chain(),
     )
@@ -1016,7 +1017,7 @@ fn draw_fighters(
     if live {
         for d in others
             .iter()
-            .filter(|d| d.alive && d.grounded && !seats.contains_key(&d.slot))
+            .filter(|d| d.alive && d.grounded && seats.get(d.slot as usize).is_none_or(|s| s.is_none()))
         {
             walkers.fighter(Vec3::new(d.pos.x, d.pos.y, d.pos.z));
         }
@@ -1078,7 +1079,7 @@ fn draw_fighters(
             &mut commands,
             &models,
             d,
-            seats.get(&d.slot).map(|(v, k)| (v.yaw, *k)),
+            seats.get(d.slot as usize).copied().flatten().map(|(v, k)| (v.yaw, k)),
             e,
             &mut bodies,
             &mut at,
@@ -1089,7 +1090,7 @@ fn draw_fighters(
             over: d.over && d.alive,
             cloak: if d.alive { d.cloak } else { 0.0 },
         };
-        look::bodies::flare(e, glow, &mut bodies, &mut body_mats, &mut shield_mats, &mut shells);
+        look::bodies::flare(e, glow, t, &mut bodies, &mut body_mats, &mut shield_mats, &mut shells);
     }
     for (slot, (e, ..)) in &drawn.fighters {
         if !shown.iter().any(|(d, _)| d.slot == *slot) && show(&mut vis, *e, false) {
@@ -1160,11 +1161,15 @@ fn draw_vehicles(
         let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
         match drawn.vehicles.get(&slot) {
             Some(&e) => {
+                // A parked hull stays put: its wheels and body don't go
+                // round the transforms again.
                 if let Ok(mut tr) = at.get_mut(e) {
-                    *tr = t;
+                    tr.set_if_neq(t);
                 }
                 if let Ok(mut hull) = hulls.get_mut(e) {
-                    hull.health = health;
+                    if hull.health != health {
+                        hull.health = health;
+                    }
                 }
             }
             None => {

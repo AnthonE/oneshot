@@ -84,6 +84,8 @@ pub const BURN_M: f32 = 0.32;
 /// slope both ways.
 pub const MARK_GRID: usize = 5;
 const VERTS: usize = MARK_GRID * MARK_GRID;
+/// Marks a mesh holds ([`Marks::meshes`]).
+const CHUNK: usize = 24;
 
 /// The atlas: [`ATLAS_COLS`] × [`ATLAS_ROWS`] cells of [`CELL_TEX`]² texels.
 pub const ATLAS_COLS: u32 = 8;
@@ -308,8 +310,14 @@ pub struct Marks {
     /// The slot to recycle when every one is busy: a rotating hand.
     hand: usize,
     rng: u32,
-    dirty: bool,
-    mesh: Handle<Mesh>,
+    /// Which chunks' meshes must be rewritten, a bit each.
+    dirty: u64,
+    /// Seconds since the fades last stepped: every mark's on one clock,
+    /// so they rewrite their chunks together, not each on its own frame.
+    since: f32,
+    /// A mesh for each [`CHUNK`] slots: a mark laid or a fade step rewrites
+    /// its own, not every mark's (the whole set is ~300 KB a write).
+    meshes: Vec<Handle<Mesh>>,
     /// The faces a mark is being fitted to, reused.
     near: Near,
     /// Marks laid, and live ones recycled for want of a slot.
@@ -330,8 +338,9 @@ impl Marks {
             slots: vec![Mark::default(); cap.max(1)],
             hand: 0,
             rng: 0x2545_f491,
-            dirty: false,
-            mesh: Handle::default(),
+            dirty: 0,
+            since: 0.0,
+            meshes: Vec::new(),
             near: Near::default(),
             placed: 0,
             stolen: 0,
@@ -434,7 +443,7 @@ impl Marks {
             grid: grid_of(at, n, tangent, size, bend_r, flip, spin),
         };
         self.placed += 1;
-        self.dirty = true;
+        self.touch(i);
         i
     }
 
@@ -527,7 +536,7 @@ impl Marks {
         }
         self.near = near;
         self.slots[i].grid = grid;
-        self.dirty = true;
+        self.touch(i);
     }
 
     /// Blood for a body hit at `at` by a blow along `dir`: a splat on what
@@ -561,30 +570,44 @@ impl Marks {
             *m = Mark::default();
         }
         self.hand = 0;
-        self.dirty = true;
+        self.dirty = u64::MAX;
     }
 
-    /// The mesh the marks are drawn in.
-    pub fn mesh(&self) -> &Handle<Mesh> {
-        &self.mesh
+    /// Slot `i`'s chunk must be rewritten.
+    fn touch(&mut self, i: usize) {
+        self.dirty |= 1 << (i / CHUNK).min(63);
     }
 
-    /// Age every mark; whether the mesh must be rewritten.
-    pub fn fade(&mut self, dt: f32) -> bool {
-        for m in &mut self.slots {
+    /// The meshes the marks are drawn in, a chunk each.
+    pub fn meshes(&self) -> &[Handle<Mesh>] {
+        &self.meshes
+    }
+
+    /// Age every mark; which chunks' meshes must be rewritten (a bit each).
+    pub fn fade(&mut self, dt: f32) -> u64 {
+        self.since += dt;
+        let stepped = self.since >= FADE_S / ALPHA_STEPS;
+        if stepped {
+            self.since = 0.0;
+        }
+        for i in 0..self.slots.len() {
+            let m = &mut self.slots[i];
             if m.left <= 0.0 {
                 continue;
             }
             m.left -= dt;
             if m.left <= 0.0 {
                 *m = Mark::default();
-                self.dirty = true;
+                self.touch(i);
+                continue;
+            }
+            if !stepped {
                 continue;
             }
             let s = step(m.left);
             if s != m.step {
                 m.step = s;
-                self.dirty = true;
+                self.touch(i);
             }
         }
         std::mem::take(&mut self.dirty)
@@ -621,8 +644,9 @@ impl Marks {
         out
     }
 
-    /// Copy the marks into `mesh`, in place, one pass over its attributes.
-    pub fn write(&self, mesh: &mut Mesh) {
+    /// Copy chunk `c`'s marks into its mesh, in place, one pass over its
+    /// attributes.
+    pub fn write(&self, c: usize, mesh: &mut Mesh) {
         let (mut pos, mut nrm, mut uv, mut col, mut tan) = (None, None, None, None, None);
         for (attr, values) in mesh.attributes_mut() {
             let id = attr.id;
@@ -648,9 +672,10 @@ impl Marks {
         let (Some(pos), Some(nrm), Some(uv), Some(col), Some(tan)) = (pos, nrm, uv, col, tan) else {
             return;
         };
-        for i in 0..self.slots.len() {
+        let from = c * CHUNK;
+        for i in from..self.slots.len().min(from + CHUNK) {
             for (k, (p, n, t, c, g)) in self.vertices(i).into_iter().enumerate() {
-                let at = i * VERTS + k;
+                let at = (i - from) * VERTS + k;
                 if at >= pos.len() {
                     return;
                 }
@@ -707,7 +732,6 @@ pub fn setup(
     mats: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
 ) {
-    marks.mesh = meshes.add(grid_mesh(marks.slots.len()));
     let (albedo, relief) = atlas_images();
     let mat = mats.add(StandardMaterial {
         base_color: Color::WHITE,
@@ -726,14 +750,20 @@ pub fn setup(
         cull_mode: None,
         ..default()
     });
-    commands.spawn((
-        Mesh3d(marks.mesh.clone()),
-        MeshMaterial3d(mat),
-        Transform::IDENTITY,
-        Visibility::Visible,
-        NoFrustumCulling,
-        NotShadowCaster,
-    ));
+    let n = marks.slots.len();
+    marks.meshes = (0..n.div_ceil(CHUNK))
+        .map(|c| meshes.add(grid_mesh((n - c * CHUNK).min(CHUNK))))
+        .collect();
+    for mesh in &marks.meshes {
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Transform::IDENTITY,
+            Visibility::Visible,
+            NoFrustumCulling,
+            NotShadowCaster,
+        ));
+    }
 }
 
 // ─── The atlas (Gates' texels) ──────────────────────────────────────────────

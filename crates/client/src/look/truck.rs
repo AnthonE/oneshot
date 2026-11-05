@@ -306,15 +306,22 @@ pub fn drive(
             truck.bank += (bank.clamp(-LEAN_MAX, LEAN_MAX) - truck.bank) * ease;
             truck.lift += (lift.clamp(-LIFT_MAX, LIFT_MAX) - truck.lift) * ease;
         }
-        *body = Transform::from_translation(Vec3::Y * truck.lift)
-            .with_rotation(Quat::from_rotation_z(truck.pitch) * Quat::from_rotation_x(truck.bank));
+        // Parked, nothing moves: written only on a change, or every part
+        // under the hull goes round the transforms again.
+        body.set_if_neq(
+            Transform::from_translation(Vec3::Y * truck.lift)
+                .with_rotation(Quat::from_rotation_z(truck.pitch) * Quat::from_rotation_x(truck.bank)),
+        );
         for w in children.iter_descendants(e) {
             let Ok((wheel, mut tr)) = wheels.get_mut(w) else {
                 continue;
             };
             let steer = if wheel.front { truck.steer } else { 0.0 };
             // Forward is +X and the axle +Z: the top goes forward about -Z.
-            tr.rotation = Quat::from_rotation_y(steer) * Quat::from_rotation_z(-truck.roll);
+            let turn = Quat::from_rotation_y(steer) * Quat::from_rotation_z(-truck.roll);
+            if tr.rotation != turn {
+                tr.rotation = turn;
+            }
         }
 
         // The world into its own frame, for what is drawn on it.
