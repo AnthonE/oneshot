@@ -781,7 +781,10 @@ mod tests {
             let sum: u32 = ticks.iter().sum();
             assert!((599..=601).contains(&sum), "{hz} Hz: {sum} ticks in 10 s");
             let most = ticks.iter().max().copied().unwrap_or(0);
-            assert!(most <= (TRAIL_HZ / hz).ceil().max(1.0) as u32, "{hz} Hz: never bunched ({most})");
+            assert!(
+                most <= (TRAIL_HZ / hz).ceil().max(1.0) as u32,
+                "{hz} Hz: never bunched ({most})"
+            );
         }
         let mut c = TrailClock::default();
         assert!(
