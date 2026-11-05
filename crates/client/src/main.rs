@@ -328,7 +328,7 @@ A slow machine (a software rasterizer) starts on POTATO by itself until you
 pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
-const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam, ctf (or 0 to 6, 8)";
+const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam, ctf, watch (or 0 to 6, 8, 9)";
 
 /// A mode by name or number (proto's `MODE_*`).
 #[cfg(not(target_arch = "wasm32"))]

@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 20;
+pub const PROTO_VER: u16 = 21;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -985,6 +985,10 @@ pub const MODE_BIG_TEAM: u8 = 6;
 pub const MODE_LOBBY: u8 = 7;
 /// Capture the Flag: four a side, casual, bots in the empty seats.
 pub const MODE_CTF: u8 = 8;
+/// No seat: watch a match as one of its players saw it, late
+/// (`room::spectate`). The hello's `party` names whose: a party's code
+/// (a friend's), or 0 for any public match.
+pub const MODE_WATCH: u8 = 9;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
 
@@ -999,6 +1003,7 @@ pub fn mode_name(mode: u8) -> &'static str {
         MODE_CUP => "a cup",
         MODE_BIG_TEAM => "Big Team",
         MODE_CTF => "Capture the Flag",
+        MODE_WATCH => "watching",
         _ => "oneshot",
     }
 }
@@ -1086,6 +1091,13 @@ pub enum Msg {
         salt: [u64; 2],
     },
     Bye,
+    /// A watcher: client → server, follow the next player; server → client,
+    /// the seat it follows now (`slot`, on side `team`). Its snapshots'
+    /// own fighter is that seat's.
+    Follow {
+        slot: u8,
+        team: u8,
+    },
     /// Server → whoever earned it, or everyone for a public one
     /// ([`medal::Info::public`]): a medal (`medal`), for the kill on
     /// `victim`.
@@ -1202,6 +1214,9 @@ pub const REFUSE_NOT_LEADER: u8 = 12;
 pub const REFUSE_PARTY_MODE: u8 = 13;
 /// Not one of your friends on Elo Pros, or not signed in.
 pub const REFUSE_NOT_FRIEND: u8 = 14;
+/// Nothing to watch: no public match, that party isn't in one, or it is
+/// your own.
+pub const REFUSE_NOTHING_TO_WATCH: u8 = 15;
 
 pub(crate) fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
@@ -1322,6 +1337,11 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Follow { slot, team } => {
+            w.write(22, 8)?;
+            w.write(*slot as u32, SLOT_BITS)?;
+            w.write(*team as u32, 1)?;
+        }
         Msg::Cup {
             round,
             rounds,
@@ -1543,6 +1563,10 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        22 => Msg::Follow {
+            slot: r.read(SLOT_BITS)? as u8,
+            team: r.read(1)? as u8,
+        },
         10 => Msg::Cup {
             round: r.read(8)? as u8,
             rounds: r.read(8)? as u8,

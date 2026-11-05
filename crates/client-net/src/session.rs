@@ -35,6 +35,7 @@ pub fn refuse_why(reason: u8) -> &'static str {
         proto::REFUSE_NOT_LEADER => "only the party's leader can do that",
         proto::REFUSE_PARTY_MODE => "the party doesn't fit that game: too many, or ranked without everyone's wallet",
         proto::REFUSE_NOT_FRIEND => "you can invite your Elo Pros friends once you're signed in",
+        proto::REFUSE_NOTHING_TO_WATCH => "no match to watch right now",
         _ => "the server is full",
     }
 }
@@ -58,6 +59,8 @@ pub struct Session {
     /// The last minute it was sent, for the clip key (`crate::clip`). On
     /// for every live session; a replay keeps none.
     clip: Option<Box<Clipper>>,
+    /// Stream messages for the server, until the transport takes them.
+    outgoing: Vec<Msg>,
 }
 
 impl Default for Session {
@@ -78,7 +81,37 @@ impl Session {
             out: Vec::new(),
             watch: false,
             clip: Some(Box::default()),
+            outgoing: Vec::new(),
         }
+    }
+
+    /// A live session that watches a match (`proto::MODE_WATCH`): it draws
+    /// the followed player off the snapshots and sends no inputs.
+    pub fn watching() -> Session {
+        Session {
+            watch: true,
+            ..Session::new()
+        }
+    }
+
+    /// The session a hello opens: a watcher's for `MODE_WATCH`.
+    pub fn for_hello(hello: &Msg) -> Session {
+        match hello {
+            Msg::Hello { mode, .. } if *mode == proto::MODE_WATCH => Session::watching(),
+            _ => Session::new(),
+        }
+    }
+
+    /// A watcher asks to follow the next player.
+    pub fn follow_next(&mut self) {
+        if self.watch && self.ready {
+            self.outgoing.push(Msg::Follow { slot: 0, team: 0 });
+        }
+    }
+
+    /// Stream messages for the server since the last call.
+    pub fn take_outgoing(&mut self) -> Vec<Msg> {
+        core::mem::take(&mut self.outgoing)
     }
 
     /// A session with no server behind it, for a tape (`tape::Replay`
@@ -165,6 +198,13 @@ impl Session {
             }
             Msg::Reveal { salt } => {
                 self.core.on_reveal(salt);
+                self.out.push(m);
+            }
+            // A watcher follows another seat: its snapshots' own fighter is
+            // that seat's from here.
+            Msg::Follow { slot, team } if self.watch => {
+                self.core.slot = slot;
+                self.core.team = team;
                 self.out.push(m);
             }
             m => self.out.push(m),

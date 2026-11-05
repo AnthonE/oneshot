@@ -1200,6 +1200,12 @@ pub fn draw(
     if snap.n_flags > 0 {
         feed = format!("{}\n{feed}", flags_line(&st, snap));
     }
+    if s.watch && core.slot < sim::consts::MAX_FIGHTERS as u8 {
+        feed = format!(
+            "WATCHING {}, a little behind  ·  CLICK for the next player\n{feed}",
+            st.name(core.slot)
+        );
+    }
     let net = if st.net {
         let n = core.stats;
         format!(

@@ -91,7 +91,7 @@ struct Mode {
     tag: &'static str,
 }
 
-const MODES: [Mode; 8] = [
+const MODES: [Mode; 9] = [
     Mode {
         id: proto::MODE_CASUAL,
         name: "VS THE BOT",
@@ -132,6 +132,14 @@ const MODES: [Mode; 8] = [
             "Take their flag and bring it to yours while yours is home. First to 3 captures. Bots fill the empty seats.",
         ranked: false,
         tag: "mode8",
+    },
+    Mode {
+        id: proto::MODE_WATCH,
+        name: "WATCH",
+        short: "A LIVE MATCH",
+        about: "Watch a live match through one of its players' eyes, a little behind. Click for the next player.",
+        ranked: false,
+        tag: "mode9",
     },
     Mode {
         id: proto::MODE_DUEL,
@@ -266,10 +274,15 @@ enum Hit {
     CopyLink,
     Leave,
     Alone,
+    /// The party's own room: map (0), score to win (1) or clock (2), a
+    /// step either way.
+    Custom(u8, i8),
     Mic,
     TalkMode,
-    /// Friends: join their party (its code), invite them (their row).
+    /// Friends: join their party (its code), watch their match (the same
+    /// code), invite them (their row).
     Join(u32),
+    Watch(u32),
     Invite(u8),
     Friends,
     /// The invite on the title: join, or not now.
@@ -861,6 +874,44 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
             r.spawn((chip(44.0), Hit::Alone, Tag("party-alone")))
                 .with_child(chip_label(alone));
         });
+        // Alone, the leader sets the room's own map, score and clock.
+        if party.alone && lead {
+            let c = party.custom;
+            let map = c
+                .map
+                .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
+                .map_or("THE SERVER'S PICK".to_string(), |d| d.name.to_uppercase());
+            let score = match pp::SCORE_LIMITS[c.score as usize] {
+                0 => "THE MODE'S".to_string(),
+                i32::MAX => "NO LIMIT".to_string(),
+                n => n.to_string(),
+            };
+            let time = match pp::TIME_LIMITS_MIN[c.time as usize] {
+                0 => "THE MODE'S".to_string(),
+                u32::MAX => "NO CLOCK".to_string(),
+                m => format!("{m} MIN"),
+            };
+            for (k, what, word) in [(0u8, "MAP", map), (1, "TO WIN", score), (2, "CLOCK", time)] {
+                p.spawn(line_row()).with_children(|r| {
+                    r.spawn(Node {
+                        width: Val::Px(64.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    })
+                    .with_child(ui::label(what, 11.0, ui::FAINT));
+                    r.spawn((ui::stepper(), Hit::Custom(k, -1)))
+                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                    r.spawn(Node {
+                        flex_grow: 1.0,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    })
+                    .with_child(ui::strong(word, 12.5, ui::TEXT_COLOR));
+                    r.spawn((ui::stepper(), Hit::Custom(k, 1)))
+                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                });
+            }
+        }
 
         p.spawn(ui::group("VOICE"));
         if party.mic == Mic::None {
@@ -985,6 +1036,10 @@ fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &Si
                 r.spawn(ui::label(where_, 10.5, ui::FAINT));
                 if f.party != 0 && !in_mine {
                     r.spawn((chip(44.0), Hit::Join(f.party))).with_child(chip_label("JOIN"));
+                }
+                if f.party != 0 && f.at == pp::AT_MATCH && !in_mine {
+                    r.spawn((chip(56.0), Hit::Watch(f.party)))
+                        .with_child(chip_label("WATCH"));
                 }
                 if f.at >= pp::AT_HERE && !in_mine {
                     r.spawn((chip(56.0), Hit::Invite(i as u8)))
@@ -1344,12 +1399,46 @@ fn click(
             party.alone = !party.alone;
             front.dirty = true;
         }
+        Hit::Custom(k, d) => {
+            let step = |i: u8, n: usize| (i as i32 + d as i32).rem_euclid(n as i32) as u8;
+            let c = &mut party.custom;
+            match k {
+                0 => {
+                    // None (the server's pick), then every map in order.
+                    let ids: Vec<Option<u8>> = core::iter::once(None)
+                        .chain(sim::maps::ALL.iter().map(|m| Some(m.id)))
+                        .collect();
+                    let at = ids.iter().position(|&m| m == c.map).unwrap_or(0);
+                    c.map = ids[step(at as u8, ids.len()) as usize];
+                }
+                1 => c.score = step(c.score, pp::SCORE_LIMITS.len()),
+                _ => c.time = step(c.time, pp::TIME_LIMITS_MIN.len()),
+            }
+            front.dirty = true;
+        }
         Hit::Mic => party::mic_toggle(),
         Hit::TalkMode => party::set_open_mic(!party.open_mic),
         Hit::Join(code) => {
             asks.0.push(Do::Act(pp::ACT_JOIN, code));
             front.tab = Tab::Party;
             front.dirty = true;
+        }
+        Hit::Watch(code) => {
+            if knocking.0.is_none() {
+                front.mode = proto::MODE_WATCH;
+                let ask = Ask {
+                    name: player.sent_name(),
+                    pass: party::match_pass(&party, &door),
+                    mode: proto::MODE_WATCH,
+                    look: player.look(),
+                    party: code,
+                };
+                knocking.0 = Some(door.knock(ask));
+                front.knocked_at = time.elapsed_secs();
+                front.status.clear();
+                front.bad = false;
+                front.dirty = true;
+            }
         }
         Hit::Invite(i) => {
             if let Some(f) = party.friends.get(i as usize) {
@@ -1386,11 +1475,15 @@ fn click(
                 if m.ranked && !signin.ranked() {
                     front.status = "Ranked needs a sign-in with a wallet".into();
                     front.bad = true;
-                } else if party.connected && (party.size() > 1 || party.alone) {
+                } else if m.id != proto::MODE_WATCH && party.connected && (party.size() > 1 || party.alone) {
                     // A party's game: its leader starts it, and the server
                     // tells each of us to go (`party.rs`).
                     if party.leads() {
-                        let alone = if party.alone { pp::START_PRIVATE } else { 0 };
+                        let alone = if party.alone {
+                            pp::START_PRIVATE | party.custom.to_arg()
+                        } else {
+                            0
+                        };
                         asks.0.push(Do::Act(pp::ACT_START, m.id as u32 | alone));
                         front.status = "Starting for the party...".into();
                         front.bad = false;
@@ -1402,12 +1495,15 @@ fn click(
                         front.bad = false;
                     }
                 } else {
+                    // Our party's code goes with us (friends watch by it); a
+                    // watcher's own is no match to watch, so none.
+                    let code = party.party.as_ref().map_or(0, |p| p.code);
                     let ask = Ask {
                         name: player.sent_name(),
                         pass: party::match_pass(&party, &door),
                         mode: m.id,
                         look: player.look(),
-                        party: 0,
+                        party: if m.id == proto::MODE_WATCH { 0 } else { code },
                     };
                     knocking.0 = Some(door.knock(ask));
                     front.knocked_at = now;

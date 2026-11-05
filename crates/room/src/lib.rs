@@ -7,6 +7,7 @@
 pub mod fog;
 pub mod medals;
 pub mod replay;
+pub mod spectate;
 pub mod watch;
 
 use proto::MAX_SNAP_VEHICLES;
@@ -279,6 +280,9 @@ pub struct Room {
     /// The skin and emblem each person wears, checked by the server against
     /// their wallet before they were seated. Cosmetic: never reaches the world.
     looks: [proto::Look; MAX_FIGHTERS],
+    /// What its watchers are shown, late (`spectate`); None with nobody
+    /// watching.
+    pub spectate: Option<Box<spectate::Line>>,
 }
 
 impl Room {
@@ -316,7 +320,54 @@ impl Room {
             watch: watch::Watch::default(),
             medals: medals::Medals::default(),
             looks: [proto::Look::default(); MAX_FIGHTERS],
+            spectate: None,
         }
+    }
+
+    /// Someone watches: the line starts (if it hasn't), a ranked match
+    /// shown later than a casual one. Returns what the watcher is sent
+    /// first: a welcome to the shown tick, as `follow`'s seat, and every
+    /// seat's name.
+    pub fn spectate_welcome(&mut self, follow: u8) -> Vec<Msg> {
+        let ms = if self.ranked {
+            spectate::DELAY_RANKED_MS
+        } else {
+            spectate::DELAY_CASUAL_MS
+        };
+        let line = self
+            .spectate
+            .get_or_insert_with(|| Box::new(spectate::Line::new(ticks(ms))));
+        let tick = line.shown_tick(self.world.tick);
+        let mut out = vec![Msg::Welcome {
+            slot: follow,
+            team: self.team_of(follow as usize),
+            tick,
+            tick_hz: TICK_HZ as u16,
+            map: self.world.map.id,
+            rules: self.world.rules,
+            salt_commit: self.salt_commit(),
+        }];
+        for q in 0..self.size {
+            out.push(self.seat_msg(q));
+        }
+        out
+    }
+
+    /// The seat a new watcher follows: the first person, else the first
+    /// seated.
+    pub fn spectate_first(&self) -> u8 {
+        let person = (0..self.size).find(|&s| matches!(self.seats[s], Seat::Person(..)));
+        person
+            .or_else(|| (0..self.size).find(|&s| self.world.fighters[s].seated))
+            .unwrap_or(0) as u8
+    }
+
+    /// The seat after `s` a watcher may follow (seated), wrapping.
+    pub fn spectate_next(&self, s: u8) -> u8 {
+        (1..=self.size)
+            .map(|k| (s as usize + k) % self.size)
+            .find(|&q| self.world.fighters[q].seated)
+            .unwrap_or(s as usize) as u8
     }
 
     /// The replay so far (the whole match once it is over).
@@ -443,7 +494,21 @@ impl Room {
             out.push((Some(s as u8), self.seat_msg(q)));
         }
         out.push((None, self.seat_msg(s)));
+        self.note(&out);
         out
+    }
+
+    /// Messages made outside the tick (a seat taken or left) join the
+    /// watchers' line too.
+    fn note(&mut self, out: &Outbox) {
+        if let Some(l) = self.spectate.as_mut() {
+            let now: Outbox = out
+                .iter()
+                .filter(|(_, m)| !matches!(m, Msg::Welcome { .. }))
+                .copied()
+                .collect();
+            l.observe_msgs(self.world.tick, &now);
+        }
     }
 
     /// A person left: a bot takes the seat, or in a ranked room nobody does
@@ -455,7 +520,9 @@ impl Room {
         } else {
             self.seat_bot(s as usize);
         }
-        vec![(None, self.seat_msg(s as usize))]
+        let out = vec![(None, self.seat_msg(s as usize))];
+        self.note(&out);
+        out
     }
 
     fn seat_msg(&self, s: usize) -> Msg {
@@ -602,6 +669,9 @@ impl Room {
                     snaps.push((s as u8, snap));
                 }
             }
+        }
+        if let Some(l) = self.spectate.as_mut() {
+            l.observe(&self.world, &out);
         }
         (snaps, out)
     }

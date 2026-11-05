@@ -222,6 +222,7 @@ mod tests {
             code: 9,
             size: 2,
             private: false,
+            custom: Default::default(),
         });
         let mut q = Queue::default();
         // Half of a pair and three singles: no match; the pair waits whole.
