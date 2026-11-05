@@ -551,6 +551,30 @@ pub fn drive(
     }
 }
 
+/// While a body reloads, its gun goes with its right hand, by as much as the
+/// reload owns its arms: the hold's clips keep the hand at [`HAND`], a
+/// reload's take it to the magazine and back. Last frame's hand, so a frame
+/// behind, which a hand moving at a reload's pace never shows.
+pub fn pose_hands(
+    q: Query<(&Body, &super::rag::RagBones, &GlobalTransform), Without<super::rag::Ragdoll>>,
+    globals: Query<&GlobalTransform>,
+    mut at: Query<&mut Transform>,
+) {
+    for (b, bones, root) in &q {
+        let u = b.playing.reload_share();
+        if u <= 0.0 {
+            continue;
+        }
+        let Ok(hand) = globals.get(bones.right_hand()) else {
+            continue;
+        };
+        let there = root.affine().inverse().transform_point3(hand.translation());
+        if let Ok(mut t) = at.get_mut(b.hand) {
+            t.translation = t.translation.lerp(there, u);
+        }
+    }
+}
+
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
 pub fn pose_spines(mut q: Query<(&Body, &mut SpineBones)>, mut bones: Query<&mut Transform>) {

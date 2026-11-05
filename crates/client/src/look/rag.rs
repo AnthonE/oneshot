@@ -248,7 +248,7 @@ const TURNS: [Turn; 20] = [
 /// The step, seconds, and the most of them a frame takes (a long frame
 /// runs slow rather than blowing up).
 const STEP_S: f32 = 1.0 / 120.0;
-const MAX_STEPS: u32 = 4;
+const MAX_STEPS: u32 = 12;
 /// Passes over the sticks a step.
 const PASSES: usize = 8;
 /// Velocity kept a step in the air, and along a floor while touching it.
@@ -267,7 +267,7 @@ const BLOW_KEEP_S: f32 = 2.0;
 /// How hard each kind of death pushes, m/s at the chest: a round, a head
 /// shot's extra on the head, a melee, a vehicle, and a blast at its middle
 /// (falling off to nothing at [`BLAST_REACH_M`]) with its lift.
-const SHOT_MPS: f32 = 2.2;
+const SHOT_MPS: f32 = 3.2;
 const HEAD_MPS: f32 = 2.5;
 const MELEE_MPS: f32 = 3.5;
 const SPLATTER_MPS: f32 = 8.0;
@@ -275,11 +275,13 @@ const SPLATTER_LIFT: f32 = 3.0;
 const BLAST_MPS: f32 = 9.0;
 const BLAST_LIFT: f32 = 5.0;
 const BLAST_REACH_M: f32 = 8.0;
-/// How much of a push the legs take against the chest's 1.
-const LEGS_SHARE: f32 = 0.35;
+/// How much of a push the hips take against the chest's 1, and the legs
+/// (a body shot topples over its feet rather than sliding off them).
+const HIPS_SHARE: f32 = 0.5;
+const LEGS_SHARE: f32 = 0.1;
 /// The knees are given this much forward as the body goes, m/s, so the
 /// legs fold under it rather than it toppling like a plank.
-const BUCKLE_MPS: f32 = 0.9;
+const BUCKLE_MPS: f32 = 0.5;
 /// A blast's heard from this long ago is the one that killed.
 const BLAST_KEEP_S: f32 = 1.0;
 const BLASTS: usize = 8;
@@ -316,43 +318,53 @@ pub fn on_events(blows: &mut Blows, events: &[EventState], others: &[client_net:
     };
     for e in events {
         if e.kind == Kind::Blast as u8 {
-            let i = blows.next_blast % BLASTS;
-            blows.blasts[i] = (v(e.pos), t);
-            blows.next_blast = blows.next_blast.wrapping_add(1);
-            continue;
+            blows.blast(v(e.pos), t);
+        } else if e.kind == Kind::Kill as u8 {
+            let victim = if e.pos != V3::ZERO { Some(v(e.pos)) } else { at(e.b) };
+            let from = if e.a != e.b { at(e.a) } else { None };
+            match victim {
+                Some(victim) => blows.kill(e.b, victim, from, e.c, e.part == 2, t),
+                None => {
+                    if let Some(b) = blows.by_slot.get_mut(e.b as usize) {
+                        *b = None;
+                    }
+                }
+            }
         }
-        if e.kind != Kind::Kill as u8 {
-            continue;
-        }
-        let Some(slot) = blows.by_slot.get_mut(e.b as usize) else {
-            continue;
-        };
-        let victim = if e.pos != V3::ZERO { Some(v(e.pos)) } else { at(e.b) };
-        let Some(victim) = victim else {
-            *slot = None;
-            continue;
-        };
-        let chest = victim + Vec3::Y;
-        let from = if e.a != e.b { at(e.a) } else { None };
+    }
+}
+
+impl Blows {
+    /// A blast at `at`, heard at `t`.
+    pub fn blast(&mut self, at: Vec3, t: f32) {
+        let i = self.next_blast % BLASTS;
+        self.blasts[i] = (at, t);
+        self.next_blast = self.next_blast.wrapping_add(1);
+    }
+
+    /// `victim`, standing at `at`, killed by `cause` from `from` (where the
+    /// killer stood, if seen); `head`: a head shot.
+    pub fn kill(&mut self, victim: u8, at: Vec3, from: Option<Vec3>, cause: u16, head: bool, t: f32) {
+        let chest = at + Vec3::Y;
         let away = |o: Vec3| {
             let d = chest - o;
             let flat = Vec3::new(d.x, 0.0, d.z);
-            if flat.length() > 0.05 {
-                (flat.normalize(), d.length())
+            let dir = if flat.length() > 0.05 {
+                flat.normalize()
             } else {
-                (Vec3::ZERO, d.length())
-            }
+                Vec3::ZERO
+            };
+            (dir, d.length())
         };
-        let cause = e.c;
         let blasted = cause == Cause::Grenade as u16
             || cause == Cause::Sticky as u16
             || cause == Cause::Wreck as u16
             || ((cause as usize) < sim::arms::COUNT && sim::arms::arm(cause as u8).radius > 0.0);
-        let (push, lift, head) = if blasted {
-            let near = blows
+        let (push, lift, extra) = if blasted {
+            let near = self
                 .blasts
                 .iter()
-                .filter(|(p, bt)| t - bt <= BLAST_KEEP_S && *bt > 0.0 && p.distance(chest) < BLAST_REACH_M)
+                .filter(|(p, bt)| *bt > 0.0 && t - bt <= BLAST_KEEP_S && p.distance(chest) < BLAST_REACH_M)
                 .min_by(|a, b| a.0.distance(chest).total_cmp(&b.0.distance(chest)));
             match near {
                 Some(&(p, _)) => {
@@ -371,14 +383,16 @@ pub fn on_events(blows: &mut Blows, events: &[EventState], others: &[client_net:
             } else if cause == Cause::Melee as u16 || cause == Cause::Behind as u16 {
                 (dir * MELEE_MPS, 0.0, 0.0)
             } else {
-                (dir * SHOT_MPS, 0.0, if e.part == 2 { HEAD_MPS } else { 0.0 })
+                (dir * SHOT_MPS, 0.0, if head { HEAD_MPS } else { 0.0 })
             }
         };
         let flat = Vec3::new(push.x, 0.0, push.z);
-        let along = flat.normalize_or_zero();
+        let Some(slot) = self.by_slot.get_mut(victim as usize) else {
+            return;
+        };
         *slot = Some(Blow {
             chest: push + Vec3::Y * lift,
-            head: push + Vec3::Y * lift + along * head,
+            head: push + Vec3::Y * lift + flat.normalize_or_zero() * extra,
             legs: flat * LEGS_SHARE + Vec3::Y * lift * LEGS_SHARE,
             t,
         });
@@ -394,6 +408,13 @@ pub struct RagBones {
     bones: [Entity; 20],
     /// The hips' parent, which nothing animates.
     hips_up: Entity,
+}
+
+impl RagBones {
+    /// The right hand's bone, which a gun is held in.
+    pub fn right_hand(&self) -> Entity {
+        self.bones[13]
+    }
 }
 
 pub fn bind(
@@ -524,7 +545,8 @@ impl Ragdoll {
         for i in 0..POINTS {
             let push = blow.map_or(Vec3::ZERO, |b| match i {
                 TOP => b.head,
-                L_HIP | R_HIP | L_KNEE | R_KNEE | L_ANKLE | R_ANKLE | L_TOE | R_TOE => b.legs,
+                HIPS | L_HIP | R_HIP => b.chest * HIPS_SHARE,
+                L_KNEE | R_KNEE | L_ANKLE | R_ANKLE | L_TOE | R_TOE => b.legs,
                 _ => b.chest,
             });
             let buckle = if i == L_KNEE || i == R_KNEE {

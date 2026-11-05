@@ -475,7 +475,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        (look::bodies::pose_spines, look::rag::step)
+        (look::bodies::pose_spines, look::rag::step, look::bodies::pose_hands)
             .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
@@ -490,7 +490,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
     if let Some(p) = opts.pose {
-        app.insert_resource(p).add_systems(Update, pose::aim.after(view));
+        app.insert_resource(p)
+            .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
     } else {
         app.add_systems(Startup, (hud::setup, medals::setup))
             .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));

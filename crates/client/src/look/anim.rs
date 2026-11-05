@@ -610,6 +610,13 @@ pub struct Playing {
     reload_of: Option<Hold>,
 }
 
+impl Playing {
+    /// How much of the arms the reload owns, 0..1.
+    pub fn reload_share(&self) -> f32 {
+        self.reload_u
+    }
+}
+
 /// A stable phase in `[0, 1)` per body, so a crowd standing still doesn't
 /// breathe in unison.
 pub fn desync(e: Entity) -> f32 {
