@@ -334,6 +334,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::ground::GroundMaterial>::default())
     // The boxes' weathering (`look/weathering.rs`).
     .add_plugins(look::weathering::plugin)
+    // A truck's wear (`look/truck.rs`).
+    .add_plugins(look::truck::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
@@ -905,6 +907,7 @@ fn draw_vehicles(
     models: Res<look::guns::Models>,
     posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
+    mut hulls: Query<&mut look::truck::Hull>,
     mut vis: KeptVis,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
@@ -940,9 +943,13 @@ fn draw_vehicles(
                 if let Ok(mut tr) = at.get_mut(e) {
                     *tr = t;
                 }
+                if let Ok(mut hull) = hulls.get_mut(e) {
+                    hull.health = health;
+                }
             }
             None => {
-                let e = commands.spawn((t, Visibility::default(), Kept)).id();
+                let hull = look::truck::Hull { slot, health };
+                let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
                 look::truck::spawn(&mut commands, &models, e);
                 drawn.vehicles.insert(slot, e);
             }

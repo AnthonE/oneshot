@@ -17,7 +17,9 @@
 //! ground, turned by `truckyaw=` (radians); `drive=` drives it from there
 //! round a circle to its right, m/s. `seat=0` puts the fighter at its
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
-//! standing still).
+//! standing still). `truckhurt=` wears it as a hull with that share of its
+//! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
+//! blasts would.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -49,6 +51,9 @@ pub struct View {
     /// yaw, and how fast it drives its circle from there.
     pub truck: Option<(Vec3, f32)>,
     pub drive: f32,
+    /// How hurt it is drawn (0 whole, 1 nothing left), and whether marked.
+    pub truck_hurt: f32,
+    pub truck_marks: bool,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
 }
@@ -106,6 +111,8 @@ impl Pose {
             fighter: get("fighter", if map == 0 && !moved { 1.0 } else { 0.0 }) != 0.0,
             truck: vec("truck").map(|at| (at, get("truckyaw", 0.0))),
             drive: get("drive", 0.0),
+            truck_hurt: get("truckhurt", 0.0).clamp(0.0, 1.0),
+            truck_marks: get("truckmarks", 0.0) != 0.0,
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
