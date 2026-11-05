@@ -63,11 +63,44 @@ pub struct LinkRes(pub Box<dyn Link>);
 pub struct Look {
     yaw: f32,
     pitch: f32,
-    /// The zoom button is held.
+    /// Scoped in (`level` > 0, on a gun that has a scope).
     pub zoom: bool,
+    /// The scope's level: 0 off, 1, 2 (the snipers' second). A click steps
+    /// it, a hold lets go of it on release; a hit, a reload, a melee, a
+    /// throw or another gun takes it off, as Halo 2's.
+    pub level: u8,
+    /// When the right button last went down (ms, the link's clock).
+    scope_down: f64,
+    /// Our own fighter last frame, to see what knocks the scope off.
+    scope_was: Option<ScopeWas>,
     /// The trigger counts: not still held from the click that took the
     /// mouse (that click only takes it, as on the page).
     armed: bool,
+}
+
+/// What [`Look::level`] watches on our own fighter from frame to frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ScopeWas {
+    arm: u8,
+    cur: u8,
+    vitals: i32,
+    reloading: bool,
+    meleeing: bool,
+    throwing: bool,
+}
+
+/// A press held longer than this is a hold: the scope goes on release.
+const SCOPE_HOLD_MS: f64 = 300.0;
+
+impl Look {
+    /// The magnification drawn: 1 unscoped.
+    pub fn magnification(&self, arm: &sim::arms::Arm) -> f32 {
+        if self.zoom {
+            arm.zoom_at(self.level) as f32
+        } else {
+            1.0
+        }
+    }
 }
 
 /// The link (by `front::LinkGen`) and welcome this level was built for.
@@ -667,26 +700,64 @@ fn pump(
     let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
     // A gun in each hand: the right button is the left hand's trigger,
     // not the scope.
-    let (dual, scope, driving) = {
+    let now = link.0.now_ms();
+    let (dual, arm, driving, was) = {
         let f = link.0.session().core.own().0;
         let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
-        let scope = if f.alive {
-            sim::arms::arm(f.gun().arm).zoom.max(1)
-        } else {
-            1
+        let was = ScopeWas {
+            arm: f.gun().arm,
+            cur: f.cur,
+            vitals: f.shield + f.health,
+            reloading: f.reload > 0,
+            meleeing: f.melee_cool > 0,
+            throwing: f.gren_cool > 0,
         };
-        (f.dual(), scope, driving)
+        (f.dual(), sim::arms::arm(f.gun().arm), driving, f.alive.then_some(was))
     };
-    // No scope at the wheel: the chase camera doesn't narrow.
-    let want = if auto.on {
-        auto.scope
-    } else {
-        button(MouseButton::Right)
+    // What takes the scope off (Halo 2's): any damage, a reload (a hot
+    // gun's vent), a melee, a throw, another gun, dying; and there's none
+    // at the wheel (the chase camera doesn't narrow) or with a gun in each
+    // hand (the right button is the left hand's trigger).
+    let knocked = match (look.scope_was, was) {
+        (Some(a), Some(b)) => {
+            b.vitals < a.vitals
+                || a.arm != b.arm
+                || a.cur != b.cur
+                || (b.reloading && !a.reloading)
+                || (b.meleeing && !a.meleeing)
+                || (b.throwing && !a.throwing)
+        }
+        _ => true,
     };
-    look.zoom = want && !dual && !driving;
+    look.scope_was = was;
+    let levels = arm.zoom_levels();
+    if knocked || dual || driving || levels == 0 {
+        look.level = 0;
+    }
+    if auto.on {
+        look.level = if auto.scope && was.is_some() && !dual && !driving {
+            levels.min(1)
+        } else {
+            0
+        };
+    } else if levels > 0 && !dual && !driving && was.is_some() {
+        if grabbed && mouse.just_pressed(MouseButton::Right) {
+            look.level = (look.level + 1) % (levels + 1);
+            look.scope_down = now;
+        } else if !mouse.pressed(MouseButton::Right) && look.scope_down > 0.0 {
+            if now - look.scope_down > SCOPE_HOLD_MS {
+                look.level = 0;
+            }
+            look.scope_down = 0.0;
+        }
+    }
+    if !mouse.pressed(MouseButton::Right) && !mouse.just_pressed(MouseButton::Right) {
+        look.scope_down = 0.0;
+    }
+    look.zoom = look.level > 0;
     if grabbed {
         let base = SENS * settings.sensitivity;
-        let sens = if look.zoom { base / scope as f32 } else { base };
+        let sens = base / look.magnification(arm);
         let up = if settings.invert { -1.0 } else { 1.0 };
         look.yaw += motion.delta.x * sens;
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
@@ -1164,9 +1235,8 @@ pub(crate) fn view(
         let h = if f.body.crouched { CROUCH_EYE } else { EYE };
         let eye = at + Vec3::Y * h;
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
-        let zoom = sim::arms::arm(f.gun().arm).zoom;
-        if look.zoom && f.alive && zoom > 1 {
-            fov /= zoom as f32;
+        if f.alive {
+            fov /= look.magnification(sim::arms::arm(f.gun().arm));
         }
     }
     // The effects demo stands its camera in one place (drawing only).
@@ -1205,7 +1275,7 @@ fn draw_view(
     kit: Option<Res<look::viewmodel::ViewKit>>,
 ) {
     let (f, p) = link.0.session().core.own();
-    let scoped = look.zoom && sim::arms::arm(f.gun().arm).zoom > 1;
+    let scoped = look.magnification(sim::arms::arm(f.gun().arm)) > 1.0;
     let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
         f,

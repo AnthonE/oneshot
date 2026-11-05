@@ -76,7 +76,7 @@ const SCORE_W: f32 = 150.0;
 /// Under this share the shield is low: its frame pulses red.
 const SHIELD_LOW_PCT: f32 = 25.0;
 /// Rounds a magazine may show; a bigger one (a battery) is a number.
-const PIPS: usize = 48;
+const PIPS: usize = 60;
 /// The shield plate's inset to its level: its glow and edge, and a gap.
 const SHIELD_PAD: f32 = 8.0;
 
@@ -1188,7 +1188,7 @@ pub fn draw(
         }
     }
     let arm = sim::arms::arm(f.gun().arm);
-    let scoped = look.zoom && arm.zoom > 1;
+    let scoped = look.magnification(arm) > 1.0;
     if let Ok(mut v) = reticle.single_mut() {
         *v = if scoped || !f.alive {
             Visibility::Hidden

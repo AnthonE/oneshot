@@ -432,7 +432,9 @@ fn as_player(link: NonSend<LinkRes>, mut look: ResMut<Look>) {
     let turn = core::f32::consts::TAU / 65536.0;
     look.yaw = f.yaw as f32 * turn;
     look.pitch = f.pitch as f32 * turn;
+    // The wire says scoped, not how far: the first level.
     look.zoom = f.alive && f.last_buttons & sim::input::ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+    look.level = look.zoom as u8;
 }
 
 /// A point `[x, above ground, z]` in metres.
