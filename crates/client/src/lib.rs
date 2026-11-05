@@ -13,6 +13,7 @@
 //! browser, where the page (`crates/client/web/index.html`) only finds the
 //! server and signs in, and calls `launch()`.
 
+pub mod asset_fetch;
 pub mod binds;
 pub mod clip;
 pub mod config;
@@ -281,18 +282,73 @@ pub fn game(door: door::Door, opts: Opts) -> App {
     app
 }
 
+/// Switch off `bevy_render`'s `present_frames` span, the one span Bevy opens
+/// every frame without its `trace` feature (Gates' `client-web`). In a
+/// browser the logger answers a span with `performance.mark` and
+/// `performance.measure`: two calls into JS a frame, and two User Timing
+/// entries a frame that nothing clears, ~430,000 an hour, held by the tab.
+/// A layer not interested in a callsite disables it for every layer, so the
+/// span is never built at all.
+fn quiet_frame_span(_: &mut App) -> Option<bevy::log::BoxedLayer> {
+    use bevy::log::tracing::{subscriber::Interest, Metadata, Subscriber};
+    use bevy::log::tracing_subscriber::layer::{Context, Layer};
+
+    struct Quiet;
+    fn frame_span(m: &Metadata<'_>) -> bool {
+        m.is_span() && m.name() == "present_frames"
+    }
+    impl<S: Subscriber> Layer<S> for Quiet {
+        fn register_callsite(&self, m: &'static Metadata<'static>) -> Interest {
+            if frame_span(m) {
+                Interest::never()
+            } else {
+                Interest::always()
+            }
+        }
+        fn enabled(&self, m: &Metadata<'_>, _: Context<'_, S>) -> bool {
+            !frame_span(m)
+        }
+    }
+    Some(Box::new(Quiet))
+}
+
 /// The client on `link` with no title: a picture (`pose`), or the fx stage.
 pub fn app(link: Box<dyn Link>, opts: Opts) -> App {
     app_on(link, opts, opts.open)
 }
 
 fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
+    // The asset loader's threads get a deep stack (Gates' `bin/gates.rs`):
+    // `bevy_gltf` blocks on a scope while a model's textures load, and the
+    // waiting IO thread runs the next queued load inside it, one nest of
+    // frames per model in flight; Gates' boot overflowed the default 2 MiB
+    // on a busy 4-core box. Same thread count Bevy picks; `TaskPoolPlugin`
+    // keeps a pool that already exists. A browser has one thread and no pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    bevy::tasks::IoTaskPool::get_or_init(|| {
+        bevy::tasks::TaskPoolBuilder::default()
+            .num_threads((bevy::tasks::available_parallelism() / 4).clamp(1, 4))
+            .stack_size(32 << 20)
+            .thread_name("IO Task Pool".to_string())
+            .build()
+    });
     let mut app = App::new();
+    // Before `AssetPlugin`, which keeps a source already registered: Bevy's
+    // wasm reader panics on a download that breaks mid-body, this one
+    // retries it (`asset_fetch.rs`).
+    #[cfg(target_arch = "wasm32")]
+    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"));
     app.add_plugins(
         DefaultPlugins
+            .set(bevy::log::LogPlugin {
+                custom_layer: quiet_frame_span,
+                ..default()
+            })
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "oneshot".into(),
+                    // WM_CLASS on X11, app_id on Wayland: what a desktop entry matches.
+                    name: Some("oneshot".into()),
                     canvas: Some("#game".into()),
                     fit_canvas_to_parent: true,
                     ..default()
