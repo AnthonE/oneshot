@@ -373,10 +373,51 @@ pub struct Room {
     /// Snapshots go as deltas against what each client acked, when that
     /// is smaller (`proto::delta`); off, every one goes whole.
     pub deltas: bool,
-    /// The snapshot being cut into records, before it joins its client's
-    /// bases.
-    keyed: Box<proto::delta::Keyed>,
+    /// What each seat's snapshot work made this tick, before it is sent in
+    /// seat order (`SeatOut`).
+    outs: Box<[SeatOut; MAX_FIGHTERS]>,
+    /// People seated from which seats' snapshots are worked on side by side
+    /// ([`PARALLEL_FROM`]); fewer, one after another. The bytes are the
+    /// same either way.
+    pub parallel_from: usize,
 }
+
+/// One seat's snapshot as its own thread made it: the snapshot, its bytes
+/// on the wire (whole or a delta), and its records' scratch.
+struct SeatOut {
+    snap: Snapshot,
+    wire: [u8; MAX_DATAGRAM],
+    delta: [u8; MAX_DATAGRAM],
+    keyed: proto::delta::Keyed,
+    /// Which of `wire` and `delta` goes, and how many bytes; None: no
+    /// snapshot this tick.
+    sent: Option<(bool, usize)>,
+}
+
+impl Default for SeatOut {
+    fn default() -> Self {
+        SeatOut {
+            snap: Snapshot::default(),
+            wire: [0; MAX_DATAGRAM],
+            delta: [0; MAX_DATAGRAM],
+            keyed: proto::delta::Keyed::default(),
+            sent: None,
+        }
+    }
+}
+
+impl SeatOut {
+    fn bytes(&self) -> Option<&[u8]> {
+        self.sent
+            .map(|(d, n)| if d { &self.delta[..n] } else { &self.wire[..n] })
+    }
+}
+
+/// People seated before a snapshot's seats are worked on side by side.
+/// Measured on 8v8 Dry Fork: a seat's fog and snapshot is about 15 µs,
+/// about what waking the pool's threads costs, and the server already
+/// steps rooms side by side, so 16 seats gain nothing; a bigger room does.
+pub const PARALLEL_FROM: usize = 24;
 
 impl Room {
     /// A room with bots in every seat until people come.
@@ -416,7 +457,8 @@ impl Room {
             spectate: None,
             snap_every: SNAP_EVERY,
             deltas: true,
-            keyed: Box::default(),
+            outs: Box::new(core::array::from_fn(|_| SeatOut::default())),
+            parallel_from: PARALLEL_FROM,
         }
     }
 
@@ -767,51 +809,102 @@ impl Room {
             }
         }
 
-        let mut wire = [0u8; MAX_DATAGRAM];
-        let mut dwire = [0u8; MAX_DATAGRAM];
         if self.world.tick.is_multiple_of(self.snap_every) {
-            for s in 0..MAX_FIGHTERS {
-                let tick = self.world.tick;
-                if let Seat::Person(c, _) = &mut self.seats[s] {
-                    let lead = fog::lead_s(c.rtt_ms, c.playout as u32, self.snap_every);
-                    let f = &mut self.fogs[s];
-                    f.update_with(&self.world, s, lead, tick, &mut plain, self.snap_every);
-                    let low = c.take_low();
-                    let (snap, n) = build_encoded(
-                        &self.world,
-                        s,
-                        (c.last_seq, low),
-                        &c.pending,
-                        &mut c.queue,
-                        |q| f.shows(q, tick),
-                        |i| f.shows_vehicle(i, tick),
-                        &mut wire,
-                    );
-                    c.pending.clear();
-                    c.sent_snapshot(tick, now_ms);
-                    // Against the newest it acked, if both ends still keep
-                    // it and that is smaller; it then joins the bases.
-                    let k = &mut self.keyed;
-                    let mut bytes = &wire[..n];
-                    if n > 0 && self.deltas && k.fill(&snap).is_ok() {
-                        let base = c
-                            .acked
-                            .filter(|&a| tick.wrapping_sub(a) < proto::delta::DELTA_WINDOW)
-                            .and_then(|a| c.bases.get(a));
-                        if let Some(m) = base.and_then(|b| proto::delta::encode_delta(k, b, &mut dwire).ok()) {
-                            if m < n {
-                                bytes = &dwire[..m];
-                            }
-                        }
-                        core::mem::swap(c.bases.slot(tick), k);
-                    }
-                    send(s as u8, &snap, bytes);
+            // Each person's fog, snapshot and delta: one seat's state each,
+            // the world read-only, so seats are worked on side by side and
+            // the snapshots are the same as one after another. Sent after,
+            // in seat order.
+            let Room {
+                world,
+                seats,
+                fogs,
+                outs,
+                snap_every,
+                deltas,
+                parallel_from,
+                ..
+            } = self;
+            let (world, plain, snap_every, deltas) = (&*world, &plain, *snap_every, *deltas);
+            let work = |(s, ((seat, f), o)): (usize, ((&mut Seat, &mut fog::Fog), &mut SeatOut))| {
+                o.sent = None;
+                if let Seat::Person(c, _) = seat {
+                    seat_snapshot(world, s, c, f, o, plain, snap_every, deltas, now_ms);
+                }
+            };
+            let people = seats.iter().filter(|x| matches!(x, Seat::Person(..))).count();
+            if people >= *parallel_from {
+                use rayon::prelude::*;
+                seats
+                    .par_iter_mut()
+                    .zip(fogs.par_iter_mut())
+                    .zip(outs.par_iter_mut())
+                    .enumerate()
+                    .for_each(work);
+            } else {
+                seats
+                    .iter_mut()
+                    .zip(fogs.iter_mut())
+                    .zip(outs.iter_mut())
+                    .enumerate()
+                    .for_each(work);
+            }
+            for (s, o) in self.outs.iter().enumerate() {
+                if let Some(b) = o.bytes() {
+                    send(s as u8, &o.snap, b);
                 }
             }
         }
         if let Some(l) = self.spectate.as_mut() {
             l.observe(&self.world, out);
         }
+    }
+}
+
+/// Seat `s`'s snapshot on a snapshot tick, on whichever thread: its fog
+/// looks again, its snapshot is built and encoded, and, against the newest
+/// one it acked if both ends still keep it and that is smaller, made a
+/// delta; it then joins the seat's bases. Into `o`.
+#[allow(clippy::too_many_arguments)]
+fn seat_snapshot(
+    world: &World,
+    s: usize,
+    c: &mut ClientNet,
+    f: &mut fog::Fog,
+    o: &mut SeatOut,
+    plain: &fog::Plain,
+    snap_every: u32,
+    deltas: bool,
+    now_ms: f64,
+) {
+    let tick = world.tick;
+    let lead = fog::lead_s(c.rtt_ms, c.playout as u32, snap_every);
+    f.update_with(world, s, lead, tick, plain, snap_every);
+    let low = c.take_low();
+    let (snap, n) = build_encoded(
+        world,
+        s,
+        (c.last_seq, low),
+        &c.pending,
+        &mut c.queue,
+        |q| f.shows(q, tick),
+        |i| f.shows_vehicle(i, tick),
+        &mut o.wire,
+    );
+    c.pending.clear();
+    c.sent_snapshot(tick, now_ms);
+    o.snap = snap;
+    o.sent = Some((false, n));
+    if n > 0 && deltas && o.keyed.fill(&snap).is_ok() {
+        let base = c
+            .acked
+            .filter(|&a| tick.wrapping_sub(a) < proto::delta::DELTA_WINDOW)
+            .and_then(|a| c.bases.get(a));
+        if let Some(m) = base.and_then(|b| proto::delta::encode_delta(&o.keyed, b, &mut o.delta).ok()) {
+            if m < n {
+                o.sent = Some((true, m));
+            }
+        }
+        core::mem::swap(c.bases.slot(tick), &mut o.keyed);
     }
 }
 

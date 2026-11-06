@@ -208,6 +208,18 @@ impl Plain {
         }
         self.seen[v] & bit != 0
     }
+
+    /// [`Plain::sees`] without keeping the answer: the cached one if this
+    /// tick has cast it, else cast now. For the seats' fogs, each on its own
+    /// thread, each asking only of its own row.
+    pub fn look(&self, w: &World, v: usize, t: usize) -> bool {
+        let bit = 1u16 << t;
+        if self.asked[v] & bit != 0 {
+            self.seen[v] & bit != 0
+        } else {
+            plainly_sees(&w.map, &w.fighters[v], &w.fighters[t])
+        }
+    }
 }
 
 /// Points of a hull a vehicle has, a time.
@@ -307,12 +319,12 @@ impl Fog {
     /// plain sight is ever held back. The hold ([`HOLD_TICKS`]) outlasts
     /// the gap, so a pair in sight stays sent (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
-        self.update_with(w, viewer, lead, tick, &mut Plain::default(), crate::SNAP_EVERY);
+        self.update_with(w, viewer, lead, tick, &Plain::default(), crate::SNAP_EVERY);
     }
 
     /// [`Fog::update`], sharing this tick's plain tests (`plain`, of `w`),
     /// for snapshots `snap_every` ticks apart.
-    pub fn update_with(&mut self, w: &World, viewer: usize, lead: f32, tick: u32, plain: &mut Plain, snap_every: u32) {
+    pub fn update_with(&mut self, w: &World, viewer: usize, lead: f32, tick: u32, plain: &Plain, snap_every: u32) {
         let me = &w.fighters[viewer];
         let snap_every = snap_every.max(1);
         let hold = hold_ticks(snap_every);
@@ -326,10 +338,10 @@ impl Fog {
                 let k = every(me, f);
                 let seen = if (turn + q).is_multiple_of(k) {
                     sees_full(&w.map, me, f, full_lead(lead, k, snap_every), k == FAR_EVERY, || {
-                        plain.sees(w, viewer, q)
+                        plain.look(w, viewer, q)
                     })
                 } else {
-                    plain.sees(w, viewer, q)
+                    plain.look(w, viewer, q)
                 };
                 if seen {
                     self.until[q] = tick + hold;
