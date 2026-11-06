@@ -409,6 +409,10 @@ pub struct NetCore {
     launches: Vec<Launch>,
     /// Each launch's flight as last asked for, by its id (`coast_memo`).
     coasts: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
+    /// Each bound launch's run-on past the server's newest state of it,
+    /// by its id: drawn ahead every frame, flown on a tick or two a frame,
+    /// not from that state each time (`proj::sample`).
+    run_ons: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
     /// Ticks a forward clock resync added that the next `update` makes on
     /// top of the time passed: our rounds already flying don't take them.
     resync_ahead: f64,
@@ -480,6 +484,7 @@ impl NetCore {
             next_pid: 0,
             launches: Vec::with_capacity(MAX_LAUNCHES),
             coasts: Default::default(),
+            run_ons: Default::default(),
             resync_ahead: 0.0,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
@@ -716,7 +721,8 @@ impl NetCore {
                 // Not yet as far as the server's first state of it.
                 self.stand_in(l, t)
             } else {
-                let s = proj::sample(frames, l.id, t, rt, ticks(OWN_AHEAD_MS) as f64, &self.map)?;
+                let run_on = &self.run_ons[l.id as usize % MAX_LAUNCHES];
+                let s = proj::sample(frames, l.id, (t, rt, ticks(OWN_AHEAD_MS) as f64), &self.map, run_on)?;
                 self.placed(&s, now_ms)
             }
         } else {
@@ -764,7 +770,13 @@ impl NetCore {
     fn plain(&self, pid: u16, now_ms: f64) -> Option<DrawnProj> {
         let frames = &self.frames[..self.n_frames];
         let rt = self.render_tick(now_ms);
-        let s = proj::sample(frames, pid, rt, rt, ticks(EXTRAPOLATE_MS) as f64, &self.map)?;
+        let s = proj::sample(
+            frames,
+            pid,
+            (rt, rt, ticks(EXTRAPOLATE_MS) as f64),
+            &self.map,
+            &Cell::new(None),
+        )?;
         let (pos, vel) = self.placed(&s, now_ms);
         Some(DrawnProj {
             id: pid,

@@ -765,7 +765,7 @@ impl Room {
             }
         }
         if let Some(l) = self.spectate.as_mut() {
-            l.observe(&self.world, out);
+            l.observe(&self.world, out, &mut plain);
         }
     }
 }
