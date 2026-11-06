@@ -180,6 +180,7 @@ fn surface(look: u8) -> Surface {
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB => Surface::Hull,
+        STONE | STONE_DARK => Surface::Stone,
         _ => Surface::Concrete,
     }
 }
@@ -649,6 +650,12 @@ pub(crate) fn splat(slope: f32, y: f32) -> [f32; 4] {
     splat_in(slope, y, 1.0, crate::look::grass::by_height(y))
 }
 
+/// The same on bare sandstone (an island's, [`Land::Isle`]): sand where it
+/// lies, rock where it stands, nothing else.
+pub(crate) fn splat_bare(slope: f32, y: f32) -> [f32; 4] {
+    splat_in(slope, y, 0.0, 0.0)
+}
+
 /// The weights, given how much of a trough the spot lies in (0..1) and how
 /// much grass its height and its patch allow (0..1).
 fn splat_in(slope: f32, y: f32, trough: f32, cover: f32) -> [f32; 4] {
@@ -902,7 +909,7 @@ pub fn build(
         }
     }
     // Rock out of reach: the sea's stacks and stones.
-    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
+    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle, map.light.sea);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.
@@ -1219,15 +1226,12 @@ pub fn build(
             // and the launchers, the clutter off those, the spawns, the
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
-            // them would light a fighter's feet they shade).
-            // Bare sandstone grows none of it.
+            // them would light a fighter's feet they shade). An island's
+            // bare sandstone grows dry tufts and sheds its own chips.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
-            let canyon = land == Land::Canyon;
-            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea)
-                .into_iter()
-                .filter(|_| canyon)
-            {
+            let isle = land == Land::Isle;
+            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle) {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
@@ -1243,10 +1247,7 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear)
-                .into_iter()
-                .filter(|_| canyon)
-            {
+            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, isle) {
                 commands.spawn((
                     LevelPart,
                     ClutterPart,
@@ -1261,12 +1262,10 @@ pub fn build(
                     bevy::light::NotShadowCaster,
                 ));
             }
-            // Cloud wets nothing: an island's ground is dry to its foot.
-            let wet_from = if land == Land::Isle {
-                f32::NEG_INFINITY
-            } else {
-                map.light.sea
-            };
+            // The sea's height: a canyon's shore is wet up from it, an
+            // island's keel and stacks are lapped by the cloud at it
+            // (`look/ground.rs`, the lap).
+            let wet_from = map.light.sea;
             let soil = mats.add(StandardMaterial {
                 base_color: Color::srgb(0.75, 0.62, 0.48),
                 perceptual_roughness: 0.95,
@@ -1275,7 +1274,6 @@ pub fn build(
             });
             // An island's ground ends at its void: its keel hangs there
             // instead (`look/keel.rs`).
-            let isle = land == Land::Isle;
             let cut = |m: Mesh| {
                 if isle {
                     crate::look::keel::clip_below(&m, def.void)

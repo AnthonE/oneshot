@@ -5,7 +5,7 @@
 //! A pass is `b64url(text) "." b64url(ed25519 signature over text)`, signed
 //! by Elo Pros' account key (`GET /api/account/pubkey`). The text is exactly
 //! seven lines: `elo account`, `id: acct_…`, `for: play:<slug>`,
-//! `shard: <the page's host>`, `nonce: <ours, once>`, `wallet: 0x…|none`,
+//! `shard: <the page's host>`, `nonce: <ours, once>`, `wallet: 0x…|base58|none`,
 //! `exp: <unix>`. The nonce is one this server (or its other slot, holding
 //! the same key) handed out (`Nonces`), so a pass can't be replayed at
 //! another join.
@@ -21,7 +21,8 @@ use base64::Engine;
 pub struct Passed {
     /// `acct_` and 20 lower-case hex.
     pub account: String,
-    /// A linked wallet, lower-case `0x…`: what a rating belongs to.
+    /// A linked wallet, lower-case `0x…` or a Solana wallet as base58 spells
+    /// it: what a rating belongs to.
     pub wallet: Option<String>,
 }
 
@@ -89,6 +90,7 @@ pub fn verify_pass(
     let wallet = match wallet {
         "none" => None,
         w if w.strip_prefix("0x").is_some_and(|h| hexn(h, 40)) => Some(w.to_string()),
+        w if !w.starts_with("0x") && proto::party::is_wallet(w) => Some(w.to_string()),
         _ => return Err(PassError::Malformed),
     };
     let exp: u64 = exp.parse().map_err(|_| PassError::Malformed)?;
@@ -337,6 +339,16 @@ mod tests {
         assert_eq!(
             check(without, "gates", "elopros.com", 1_700_000_000).unwrap().wallet,
             None
+        );
+    }
+
+    #[test]
+    fn a_pass_may_name_a_solana_wallet() {
+        let pass = field(VECTOR, "solana_wallet", "pass");
+        let p = check(pass, "gates", "elopros.com", 1_700_000_000).unwrap();
+        assert_eq!(
+            p.wallet.as_deref(),
+            Some("4uV4Yccau69gBh88Z8d7TbQJYCVgqsugJQuhQ1LCqYSd")
         );
     }
 

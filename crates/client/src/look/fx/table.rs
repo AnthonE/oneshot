@@ -134,6 +134,13 @@ pub enum Layer {
     Spray,
     /// A mote in the sun: pollen, dust, a seed on the wind (`ambient.rs`).
     Mote,
+    /// A wisp of the sea of cloud rolling up over an island's rim and
+    /// thinning as it drifts inland (`ambient.rs`): the smoke sheet's
+    /// puff, large, slow and faint.
+    Mist,
+    /// A grain of sand the wind lifts off a dune and drops a few metres
+    /// on (`ambient.rs`): a mote's spark of light, low and quick.
+    Sand,
 }
 
 /// Which pool a layer draws in.
@@ -151,7 +158,7 @@ pub enum Which {
 
 impl Layer {
     /// Every layer, in the order the knobs name them.
-    pub const ALL: [Layer; 28] = [
+    pub const ALL: [Layer; 30] = [
         Layer::Sparks,
         Layer::Flash,
         Layer::Hot,
@@ -180,6 +187,8 @@ impl Layer {
         Layer::Embers,
         Layer::Spray,
         Layer::Mote,
+        Layer::Mist,
+        Layer::Sand,
     ];
 
     /// Its name, as a knob names it (`Sparks.speed=4,12`).
@@ -213,6 +222,8 @@ impl Layer {
             Layer::Embers => "Embers",
             Layer::Spray => "Spray",
             Layer::Mote => "Mote",
+            Layer::Mist => "Mist",
+            Layer::Sand => "Sand",
         }
     }
 
@@ -240,7 +251,8 @@ impl Layer {
             | Layer::Shock
             | Layer::Tongue
             | Layer::Embers
-            | Layer::Mote => Which::Glow,
+            | Layer::Mote
+            | Layer::Sand => Which::Glow,
             Layer::Dust
             | Layer::Grit
             | Layer::Smoke
@@ -255,7 +267,8 @@ impl Layer {
             | Layer::MuzzleFlash
             | Layer::Bloom
             | Layer::Wisp
-            | Layer::Spray => Which::Cloud,
+            | Layer::Spray
+            | Layer::Mist => Which::Cloud,
             Layer::Boom | Layer::Fireballs => Which::Boom,
         }
     }
@@ -271,6 +284,7 @@ impl Layer {
             Layer::Bloom => sheets::BLOOM,
             Layer::Wisp => sheets::WISP,
             Layer::Spray => sheets::SMOKE,
+            Layer::Mist => sheets::SMOKE,
             Layer::Boom | Layer::Fireballs => sheets::EXPLOSION,
             _ => return None,
         })
@@ -802,6 +816,41 @@ pub fn built(layer: Layer) -> Recipe {
             size: (0.012, 0.022),
             c0: [1.5, 1.35, 0.95, 0.9],
             c1: [1.5, 1.35, 0.95, 0.0],
+            tinted: true,
+            ..base
+        },
+        // The sea of cloud's wisps: born under an island's rim, lifted
+        // over it and let drift, swelling as they thin. Faint from birth,
+        // so nothing behind one is hidden, and slow, so the edge breathes.
+        Layer::Mist => Recipe {
+            speed: (0.5, 1.1),
+            spray: 0.85,
+            up: 0.35,
+            gravity: -0.03,
+            drag: 0.35,
+            life: (5.0, 8.0),
+            size: (1.4, 2.6),
+            grow: 2.0,
+            c0: [1.0, 1.0, 1.0, 0.3],
+            c1: [1.0, 1.0, 1.0, 0.0],
+            tinted: true,
+            spin: 0.08,
+            ..strip(base, sheets::SMOKE)
+        },
+        // Blown sand: a grain of light low over a dune, quick along the
+        // wind, dropping as it goes.
+        Layer::Sand => Recipe {
+            cell: GLOW,
+            speed: (2.0, 4.5),
+            spray: 0.92,
+            up: 0.15,
+            gravity: 0.6,
+            drag: 0.4,
+            life: (0.7, 1.4),
+            size: (0.012, 0.02),
+            grow: 1.3,
+            c0: [1.3, 1.1, 0.8, 0.8],
+            c1: [1.3, 1.1, 0.8, 0.0],
             tinted: true,
             ..base
         },

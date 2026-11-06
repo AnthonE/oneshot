@@ -21,6 +21,13 @@ struct Sea {
     // x the big billows' size, m; y how steeply they stand (the normal's
     // tilt at full); zw the drift, m, already wrapped.
     shape: vec4<f32>,
+    // xy the sheet's middle (world x, z); z how far out from it the sheet
+    // begins to go to the fog's colour, w where it has gone as far as it
+    // goes, m.
+    fade: vec4<f32>,
+    // xyz the colour it goes to (the weather fog's, `rig::fog_for`, in the
+    // lit frame's units); w how far toward it the rim gets.
+    far: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> sea: Sea;
@@ -49,10 +56,12 @@ fn band(px: f32, freq: f32) -> f32 {
     return clamp(1.5 - px * freq * 3.0, 0.0, 1.0);
 }
 
-// Puffs: a cap of a sphere on a point scattered in each cell, the highest
-// over (x, z) of the nine nearest, so they crowd and fold into each other
-// as cumulus tops do (value noise folded gives long winding creases, a
-// snowfield's). 0 between them, 1 on a top.
+// Puffs: a rounded cap on a point scattered in each cell, the highest over
+// (x, z) of the nine nearest, so they crowd and fold into each other as
+// cumulus tops do (value noise folded gives long winding creases, a
+// snowfield's). 0 between them, 1 on a top. A cap's skirt runs out flat
+// (a smoothstep, not a sphere's rim), so where two meet is a fold and not
+// a ridge, and a field of them is not a honeycomb.
 fn puffs(p: vec2<f32>) -> f32 {
     let i = vec2<i32>(floor(p));
     let f = fract(p);
@@ -64,7 +73,7 @@ fn puffs(p: vec2<f32>) -> f32 {
             // Each its own size, 0.6 to 1.1 of a cell across.
             let r = 0.6 + 0.5 * hash2(c + vec2<i32>(-33, 58));
             let d = length(f - at) / r;
-            top = max(top, sqrt(max(1.0 - d * d, 0.0)));
+            top = max(top, 1.0 - smoothstep(0.0, 1.0, d));
         }
     }
     return top;
@@ -72,20 +81,35 @@ fn puffs(p: vec2<f32>) -> f32 {
 
 // Billows: three octaves of puffs, each fainter and finer and fading out
 // to its own mean where the pixel can't hold it, over a broad swell of
-// value noise so whole fields of them rise and sink.
+// value noise so whole fields of them rise and sink. The puffs are read
+// through a warp a billow wide, so no cell lines up with the next and the
+// masses wander as cloud does.
 fn billows(p: vec2<f32>, px: f32) -> f32 {
     var freq = 1.0 / sea.shape.x;
-    let swell = mix(0.5, vnoise(p * freq * 0.25), band(px, freq * 0.25));
-    var sum = swell * 0.3;
-    var amp = 0.4;
-    var q = p;
+    let wb = band(px, freq * 0.5);
+    let warp = (vec2<f32>(
+        vnoise(p * freq * 0.5 + vec2<f32>(13.1, 71.7)),
+        vnoise(p * freq * 0.5 + vec2<f32>(57.3, 9.2))
+    ) - 0.5) * (sea.shape.x * 0.7 * wb);
+    let q0 = p + warp;
+    let swell = mix(0.5, vnoise(q0 * freq * 0.25), band(px, freq * 0.25));
+    var sum = swell * 0.35;
+    var amp = 0.38;
+    var q = q0;
     for (var k = 0; k < 3; k++) {
         sum += mix(0.55, puffs(q * freq), band(px, freq)) * amp;
         amp *= 0.5;
         freq *= 2.37;
         q += vec2<f32>(37.1, 11.7);
     }
-    return sum / 1.0;
+    return sum;
+}
+
+// Light and shade over the sea in broad fields, three billows across: the
+// deck's shadows on it, which no shadow map reaches so far down.
+fn fields(p: vec2<f32>, px: f32) -> f32 {
+    let freq = 1.0 / (sea.shape.x * 3.0);
+    return mix(0.5, vnoise(p * freq + vec2<f32>(101.0, 47.0)), band(px, freq));
 }
 
 @fragment
@@ -110,8 +134,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.N = n;
     pbr_input.world_normal = n;
 
-    // Tops pale, folds grey: the light does the rest.
-    let c = mix(sea.hollow.rgb, sea.top.rgb, smoothstep(0.15, 0.75, h));
+    // Tops pale, folds grey, and broad fields of light and shade over
+    // all of it: the light does the rest.
+    let shade = 0.78 + 0.44 * fields(p, px);
+    let c = mix(sea.hollow.rgb, sea.top.rgb, smoothstep(0.3, 0.85, h)) * shade;
     pbr_input.material.base_color = vec4<f32>(c, 1.0);
 
     var out: FragmentOutput;
@@ -120,6 +146,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     } else {
         out.color = pbr_input.material.base_color;
     }
+    // The bank goes to the fog's colour as it climbs, so its rim is lost
+    // against the sky's own haze and never reads as an edge.
+    let out_m = distance(wp.xz, sea.fade.xy);
+    let far = smoothstep(sea.fade.z, sea.fade.w, out_m) * sea.far.w;
+    out.color = vec4<f32>(mix(out.color.rgb, sea.far.rgb, far), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

@@ -4,9 +4,10 @@
 //! from off the edge reads as a pillar standing in the cloud. Under the
 //! void (`sim::map::Map::void`), where nobody is alive, the ground and its
 //! rock skin are cut off ([`clip_below`]) and the keel hangs there instead:
-//! rings under the island's own outline, each further down drawn in
-//! further and lobed, to a point, and fingers of rock hanging off its
-//! shoulders.
+//! rings under the island's own outline: a lip at the cut, a recess under
+//! it (the rim overhangs), the shoulder back out, then each ring further
+//! down drawn in further and lobed, to a point, and fingers of rock
+//! hanging off the recess.
 //!
 //! Drawing only, and inside what collides (the column it replaces is the
 //! sim's): only rounds fired down past the void could tell, and they stop
@@ -22,17 +23,19 @@ use sim::terrain::{Terrain, TerrainDef};
 const SPOKES: usize = 160;
 /// Its rings: metres under the cut, the share of the island's own reach
 /// each keeps, and how far its edge wanders in and out (a share of it).
-const RINGS: [(f32, f32, f32); 10] = [
+const RINGS: [(f32, f32, f32); 12] = [
     (0.0, 1.0, 0.0),
-    (2.5, 0.96, 0.03),
-    (6.0, 0.88, 0.07),
-    (10.0, 0.78, 0.11),
-    (15.0, 0.67, 0.15),
-    (21.0, 0.56, 0.18),
-    (29.0, 0.45, 0.2),
-    (39.0, 0.34, 0.22),
-    (51.0, 0.22, 0.22),
+    (1.5, 0.98, 0.01),
+    (4.0, 0.83, 0.05),
+    (8.0, 0.8, 0.08),
+    (12.0, 0.86, 0.1),
+    (17.0, 0.74, 0.14),
+    (23.0, 0.6, 0.18),
+    (30.0, 0.47, 0.2),
+    (40.0, 0.35, 0.22),
+    (52.0, 0.22, 0.22),
     (64.0, 0.1, 0.2),
+    (72.0, 0.04, 0.1),
 ];
 /// Its point, metres under the cut.
 const TIP_M: f32 = 78.0;
@@ -153,7 +156,7 @@ pub fn mesh(t: &TerrainDef, top: f32, seed: u32) -> Mesh {
     for f in 0..FINGERS as u32 {
         let i = (hash(seed ^ 0xf1, f) * SPOKES as f32) as usize % SPOKES;
         let a = i as f32 / SPOKES as f32 * core::f32::consts::TAU;
-        let ring = 2 + (hash(seed ^ 0xf2, f) * 2.0) as usize;
+        let ring = 3 + (hash(seed ^ 0xf2, f) * 2.0) as usize;
         let (down, keep, _) = RINGS[ring];
         // A finger is narrow beside its island: within a sixth of the
         // keel's reach there, so it hangs inside the outline.

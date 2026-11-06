@@ -17,7 +17,7 @@ type R<T> = Result<T, WireError>;
 pub const MAX_PARTY: usize = 8;
 /// A player id as Elo Pros writes it: `0x` and 40 hex (a wallet), or
 /// `acct_` and 20 hex (a login with no wallet).
-pub const MAX_PLAYER_ID: usize = 42;
+pub const MAX_PLAYER_ID: usize = 44;
 /// Friends one session is told of: the first this many Elo Pros lists.
 pub const MAX_FRIENDS: usize = 100;
 /// A party's code: this many bits, never zero.
@@ -120,7 +120,8 @@ const AT_BITS: u32 = 2;
 /// Bits a mode or [`PLAYING_NONE`] takes.
 const PLAY_BITS: u32 = 4;
 
-/// An Elo Pros player id, or none for a guest: `[0-9a-z_]` only.
+/// An Elo Pros player id, or none for a guest: `0x` and 40 hex, `acct_` and
+/// 20 hex, or a Solana wallet as base58 spells it, whose case is part of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlayerId {
     pub len: u8,
@@ -134,10 +135,10 @@ impl PlayerId {
     };
 
     fn ok(b: u8) -> bool {
-        b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'_'
+        b.is_ascii_alphanumeric() || b == b'_'
     }
 
-    /// None if it is too long or holds anything but `[0-9a-z_]`.
+    /// None if it is too long or holds anything but `[0-9A-Za-z_]`.
     pub fn new(s: &str) -> Option<PlayerId> {
         let b = s.as_bytes();
         if b.len() > MAX_PLAYER_ID || !b.iter().all(|&c| Self::ok(c)) {
@@ -182,6 +183,29 @@ impl PlayerId {
     }
 }
 
+/// A wallet on either chain: `0x` and 40 hex, or base58 of a Solana key.
+/// Never an `acct_` id: `_` isn't in base58.
+pub fn is_wallet(id: &str) -> bool {
+    let hex = id
+        .strip_prefix("0x")
+        .is_some_and(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    let base58 = (32..=44).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() && !matches!(b, b'0' | b'O' | b'I' | b'l'));
+    hex || base58
+}
+
+/// A wallet's one spelling: an `0x` address is lower-case; base58 is exactly
+/// as written, because lower-casing it names somebody else.
+pub fn spell(id: &str) -> String {
+    if id.starts_with("0x") || id.starts_with("0X") {
+        id.to_ascii_lowercase()
+    } else {
+        id.to_string()
+    }
+}
+
 /// One member as the party sees them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Member {
@@ -211,7 +235,7 @@ impl Member {
 
     /// Signed in with a wallet: what ranked needs.
     pub fn wallet(&self) -> bool {
-        self.player.as_str().starts_with("0x")
+        is_wallet(self.player.as_str())
     }
 }
 
@@ -329,6 +353,25 @@ pub(crate) fn r_play(r: &mut BitReader) -> R<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_solana_wallet_is_a_player_and_a_wallet() {
+        let w = "4uV4Yccau69gBh88Z8d7TbQJYCVgqsugJQuhQ1LCqYSd";
+        let p = PlayerId::new(w).unwrap();
+        assert_eq!(p.as_str(), w, "its case is part of it");
+        let mut m = Member::EMPTY;
+        m.player = p;
+        assert!(m.wallet());
+        assert!(is_wallet("0x00000000000000000000000000000000000000aa"));
+        assert!(!is_wallet("acct_0123456789abcdef0123"));
+        assert!(!is_wallet("short"));
+        assert!(
+            !is_wallet("0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl0OIl"),
+            "not base58's letters"
+        );
+        assert_eq!(spell("0xABab"), "0xabab");
+        assert_eq!(spell(w), w);
+    }
 
     #[test]
     fn a_code_reads_back_and_never_needs_a_lookalike() {

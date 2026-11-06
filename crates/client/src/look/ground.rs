@@ -253,6 +253,12 @@ pub const ROCK_LEAN_FULL: f32 = 0.7;
 /// Where there is no sea: a height no ground reaches, so the wet band
 /// never shows (never `NEG_INFINITY`: the shader subtracts it).
 pub const NO_SEA: f32 = -1.0e5;
+/// An island's cloud laps its stone instead of wetting it: from the sea's
+/// height to this far over it the rock goes to the cloud's own colour,
+/// whole again `LAP_FADE_M` higher (the `sea` lanes with `w` under zero),
+/// so a keel's point and a stack's foot are lost in it, not cut by it.
+pub const LAP_M: f32 = 9.0;
+pub const LAP_FADE_M: f32 = 12.0;
 /// The swash: ground is wet from the water to this far above it, and dry
 /// again `WET_FADE_M` higher; wet ground is darker by `WET_DARK`.
 pub const WET_M: f32 = 0.5;
@@ -306,6 +312,9 @@ pub fn material(
         params.rock_c = ISLE_ROCK_C;
     }
     params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
+    if isle && sea_y.is_finite() {
+        params.sea = Vec4::new(sea_y, LAP_M, LAP_FADE_M, -1.0);
+    }
     params.wall.z = if lite { 1.0 } else { 0.0 };
     params.cloud = cloud;
     ExtendedMaterial {
