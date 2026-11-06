@@ -16,8 +16,10 @@ use super::table::{Layer, Matter, Weapon};
 use super::{Fx, Scene, BLAST_FLASH};
 use crate::look::shake;
 
-/// A wreck burns this long.
-const BURN_S: f32 = 4.5;
+/// A wreck burns this long (its husk smoulders after: `look/truck.rs`).
+const BURN_S: f32 = 7.0;
+/// A wreck's fire rides its husk (`carry`) if the husk is within this of it.
+const CARRY_M: f32 = 2.5;
 /// Flames and smoke puffs a burning hull throws a second.
 const BURN_HZ: f32 = 9.0;
 
@@ -404,6 +406,27 @@ pub fn trail(fx: &mut Fx, dt: f32) {
             ..Default::default()
         });
         fx.trailers[i] = t;
+    }
+}
+
+/// The fire burning nearest `from` (within [`CARRY_M`]), moved to `to`: a
+/// wreck's, riding its husk as it flies. How much of its burn is left (0:
+/// none was there).
+pub fn carry(fx: &mut Fx, from: Vec3, to: Vec3) -> f32 {
+    let near = (0..fx.burning.len())
+        .filter(|&i| fx.burning[i].left > 0.0)
+        .min_by(|&a, &b| {
+            fx.burning[a]
+                .at
+                .distance_squared(from)
+                .total_cmp(&fx.burning[b].at.distance_squared(from))
+        });
+    match near {
+        Some(i) if fx.burning[i].at.distance(from) < CARRY_M => {
+            fx.burning[i].at = to;
+            fx.burning[i].left / BURN_S
+        }
+        _ => 0.0,
     }
 }
 

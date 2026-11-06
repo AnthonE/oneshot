@@ -1510,11 +1510,16 @@ impl World {
             } else {
                 V3::new(0.0, 1.0, 0.0)
             };
+            // Thrown, by how big a charge it was (a rocket's whole): along
+            // the ground away from it, and up off its wheels. How it turns
+            // over in the air is the renderer's (`look/truck.rs`).
+            let heft = (dmg as f32 / VEH_LIFT_DMG as f32).min(1.0) * k;
             let veh = &mut self.vehicles[i];
-            veh.vel = veh.vel + away * (BLAST_PUSH * VEH_PUSH_K * k);
-            if away.y > 0.0 {
-                veh.grounded = false;
-            }
+            let flat = V3::new(away.x, 0.0, away.z);
+            let up = (veh.vel.y.max(0.0) + VEH_BLAST_LIFT * heft).min(VEH_LIFT_MAX);
+            veh.vel = veh.vel + flat * (BLAST_PUSH * VEH_PUSH_K * heft);
+            veh.vel.y = up;
+            veh.grounded = false;
             self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32, cause);
         }
         // Guns and grenades on the floor (the blast's own dead's among

@@ -20,7 +20,9 @@
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
 //! standing still). `truckhurt=` wears it as a hull with that share of its
 //! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
-//! blasts would.
+//! blasts would. `fling=S` sets a rocket off under its right door S seconds
+//! after the screen is there, throwing it as the sim would; `wreck=S` blows
+//! it up then, its husk thrown.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -57,6 +59,13 @@ pub struct View {
     pub truck_marks: bool,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
+    /// Seconds after the screen is there that it is thrown by a rocket,
+    /// and blown up; when it was thrown (the clock `truck_at` reads), and
+    /// whether it is gone.
+    pub fling: Option<f32>,
+    pub wreck: Option<f32>,
+    pub flung_at: Option<f32>,
+    pub wrecked: bool,
 }
 
 /// The radius of the circle a posed truck drives, metres.
@@ -67,9 +76,22 @@ impl View {
     /// far round its circle as it has driven.
     pub fn truck_at(&self, t: f32) -> Option<(Vec3, f32)> {
         let (at, yaw) = self.truck?;
+        if self.wrecked {
+            return None;
+        }
         let turned = yaw + self.drive * t / CIRCLE_M;
         let right = |a: f32| Vec3::new(-a.sin(), 0.0, a.cos());
-        Some((at + (right(yaw) - right(turned)) * CIRCLE_M, turned))
+        let mut p = at + (right(yaw) - right(turned)) * CIRCLE_M;
+        // Thrown, as the sim throws it from a rocket under its right door:
+        // away to its left and up, until it is down again.
+        if let Some(t0) = self.flung_at {
+            let g = sim::consts::GRAVITY;
+            let up = sim::consts::VEH_BLAST_LIFT;
+            let air = (t - t0).clamp(0.0, 2.0 * up / g);
+            let push = sim::consts::BLAST_PUSH * sim::consts::VEH_PUSH_K;
+            p += -right(yaw) * push * air + Vec3::Y * (up * air - 0.5 * g * air * air);
+        }
+        Some((p, turned))
     }
 }
 
@@ -117,6 +139,10 @@ impl Pose {
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
+            fling: Some(get("fling", -1.0)).filter(|s| *s >= 0.0),
+            wreck: Some(get("wreck", -1.0)).filter(|s| *s >= 0.0),
+            flung_at: None,
+            wrecked: false,
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
@@ -197,6 +223,62 @@ pub fn fall(
     };
     blows.kill(pose.0.slot, at, Some(pose.2.eye), cause, pose.3.head, t);
     pose.0.alive = false;
+}
+
+/// The posed truck thrown by a rocket (`fling=`) and blown up (`wreck=`),
+/// as the server would tell it: the blast or the wreck heard and drawn.
+/// After the frame's events, before the hulls are drawn.
+pub fn throw(
+    mut pose: ResMut<Pose>,
+    settle: Res<crate::loading::Settle>,
+    time: Res<Time>,
+    mut since: Local<Option<f32>>,
+    link: NonSend<crate::LinkRes>,
+    mut heard: ResMut<crate::sound::Heard>,
+    mut fx: ResMut<crate::look::fx::Fx>,
+) {
+    if !settle.ready() {
+        return;
+    }
+    let t = time.elapsed_secs();
+    let t0 = *since.get_or_insert(t);
+    let view = pose.2;
+    let Some((at, yaw)) = view.truck_at(t) else {
+        return;
+    };
+    let ground = link.0.session().core.map.ground(at.x, at.z);
+    let at = at + Vec3::Y * ground;
+    let right = Vec3::new(-yaw.sin(), 0.0, yaw.cos());
+    let mut ev = None;
+    if view.fling.is_some_and(|s| t - t0 >= s) && view.flung_at.is_none() {
+        pose.2.flung_at = Some(t);
+        let b = at + right * (sim::consts::VEH_HALF_W + 0.4) + Vec3::Y * 0.2;
+        ev = Some(proto::EventState {
+            kind: sim::events::Kind::Blast as u8,
+            c: sim::arms::ROCKET as u16,
+            pos: V3::new(b.x, b.y, b.z),
+            ..proto::EventState::default()
+        });
+    } else if view.wreck.is_some_and(|s| t - t0 >= s) && !view.wrecked {
+        pose.2.wrecked = true;
+        ev = Some(proto::EventState {
+            kind: sim::events::Kind::Wreck as u8,
+            part: 0,
+            pos: V3::new(at.x, at.y, at.z),
+            ..proto::EventState::default()
+        });
+    }
+    let Some(ev) = ev else { return };
+    heard.0.push(ev);
+    let scene = crate::look::fx::Scene {
+        map: &link.0.session().core.map,
+        others: &[],
+        vehicles: &[],
+        me: u8::MAX,
+        aim: Vec3::X,
+        t,
+    };
+    crate::look::fx::on_events(&mut fx, &scene, &[ev]);
 }
 
 /// The still camera, over whatever `view` set.
