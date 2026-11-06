@@ -312,7 +312,8 @@ const HELP: &str = "oneshot: the desktop client
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
   --name NAME                      the name others see (the title's field)
   --look SKIN,HEAD,FEET,EMBLEM     what you wear, by id (the armory's picks)
-  --tab NAME                       the title opens on ARMORY, PARTY, FRIENDS or CHALLENGES
+  --tab NAME                       the title opens on ARMORY (armory:emblem for a page of it),
+                                   PARTY, FRIENDS or CHALLENGES
   --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros

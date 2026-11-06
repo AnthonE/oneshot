@@ -222,10 +222,21 @@ pub(crate) struct Front {
 }
 
 /// The title opens on a panel other than PLAY (`--tab`, for a picture of
-/// it): armory, party, friends or challenges. False for another word.
+/// it): armory (`armory:head`, `armory:emblem`: its page), party, friends
+/// or challenges. False for another word.
 pub fn open_tab(world: &mut World, name: &str) -> bool {
+    // The armory's page too: `armory:emblem`.
+    let (name, page) = name.split_once(':').unwrap_or((name, ""));
     let tab = match name {
-        "armory" => Tab::Armory,
+        "armory" => {
+            if !page.is_empty() {
+                let Some(k) = ARMORY_TABS.iter().position(|t| t.eq_ignore_ascii_case(page)) else {
+                    return false;
+                };
+                world.resource_mut::<Front>().armory = k;
+            }
+            Tab::Armory
+        }
         "party" => Tab::Party,
         "friends" => Tab::Friends,
         "challenges" => Tab::Challenges,
@@ -461,7 +472,7 @@ fn build(
                     }),
                 }
                 let words = match front.tab {
-                    Tab::Armory => armory_words(player),
+                    Tab::Armory => armory_words(player, front.armory),
                     _ => {
                         let m = mode(front.mode);
                         (m.short.to_string(), m.name.to_string(), m.about.to_string())
@@ -1124,8 +1135,9 @@ fn emblem_page(p: &mut ChildSpawnerCommands, player: &Player, pics: &mut EmblemP
     }
 }
 
-/// The stage's words in the armory: what you wear, said as a person would.
-fn armory_words(player: &Player) -> (String, String, String) {
+/// The stage's words in the armory: the page's pick, and what you wear,
+/// said as a person would.
+fn armory_words(player: &Player, page: usize) -> (String, String, String) {
     let mut worn: Vec<String> = Vec::new();
     for (k, (_, slot)) in GEAR_ROWS.iter().enumerate() {
         let g = proto::gear_valid(slot, player.gear(k));
@@ -1158,7 +1170,24 @@ fn armory_words(player: &Player) -> (String, String, String) {
         }
     };
     about.push_str(" Drag him to turn him round.");
-    ("ARMORY".into(), skin_word(player.skin), about)
+    let (g, ..) = proto::emblem_parts(proto::emblem_valid(player.emblem));
+    let name = match page {
+        0 => skin_word(player.skin),
+        k if k <= GEAR_ROWS.len() => {
+            let (label, slot) = GEAR_ROWS[k - 1];
+            match proto::gear_valid(slot, player.gear(k - 1)) {
+                proto::GEAR_NONE => format!("BARE {label}"),
+                g => slot[g as usize].to_uppercase(),
+            }
+        }
+        _ if g == 0 => "NO EMBLEM".into(),
+        _ => proto::EMBLEM_GLYPHS[g as usize].to_uppercase(),
+    };
+    (
+        format!("ARMORY · {}", ARMORY_TABS[page.min(ARMORY_EMBLEM)]),
+        name,
+        about,
+    )
 }
 
 /// A palette colour's name (`look/emblem.rs`' order).
@@ -1797,13 +1826,6 @@ fn stage(
     });
 }
 
-/// Triple T turned to show his back (the emblem) or his front.
-fn turn(portrait: &mut Option<ResMut<crate::look::portrait::Portrait>>, back: bool) {
-    if let Some(p) = portrait {
-        p.show_back(back);
-    }
-}
-
 /// A skin's name.
 fn skin_word(i: u8) -> String {
     proto::SKINS
@@ -1859,9 +1881,7 @@ fn click(
     time: Res<Time>,
     mut party: ResMut<PartyView>,
     mut asks: ResMut<PartyAsks>,
-    mut portrait: Option<ResMut<crate::look::portrait::Portrait>>,
 ) {
-    let portrait = &mut portrait;
     let hit = hits.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| *h);
     // A click anywhere but the field puts the keys back.
     if front.editing && mouse.just_pressed(MouseButton::Left) && hit != Some(Hit::Name) {
@@ -1905,12 +1925,10 @@ fn click(
         }
         Hit::Skin(i) => {
             player.skin = i;
-            turn(portrait, false);
             front.dirty = true;
         }
         Hit::Gear(k, g) => {
             *player.gear_mut(k) = proto::gear_valid(GEAR_ROWS[k].1, g);
-            turn(portrait, false);
             front.dirty = true;
         }
         Hit::Armory(k) => {
@@ -1918,20 +1936,16 @@ fn click(
                 front.scroll = 0.0;
             }
             front.armory = k;
-            let (g, ..) = proto::emblem_parts(player.emblem);
-            turn(portrait, k == ARMORY_EMBLEM && g != 0);
             front.dirty = true;
         }
         Hit::Glyph(g) => {
             let p = proto::emblem_parts(player.emblem);
             player.emblem = proto::emblem(g, p.1, p.2, p.3);
-            turn(portrait, g != 0);
             front.dirty = true;
         }
         Hit::Field(f) => {
             let p = proto::emblem_parts(player.emblem);
             player.emblem = proto::emblem(p.0, f, p.2, p.3);
-            turn(portrait, p.0 != 0);
             front.dirty = true;
         }
         Hit::EmblemColour(k, c) => {
@@ -1942,7 +1956,6 @@ fn click(
                 p.3 = c;
             }
             player.emblem = proto::emblem(p.0, p.1, p.2, p.3);
-            turn(portrait, true);
             front.dirty = true;
         }
         Hit::Name => {
@@ -1958,8 +1971,6 @@ fn click(
                 front.scroll = 0.0;
             }
             front.tab = t;
-            let (g, ..) = proto::emblem_parts(player.emblem);
-            turn(portrait, t == Tab::Armory && front.armory == ARMORY_EMBLEM && g != 0);
             if t == Tab::Friends {
                 asks.0.push(Do::Act(pp::ACT_FRIENDS, 0));
             }
@@ -2165,7 +2176,7 @@ fn rebuild(
     door: NonSend<Door>,
     knocking: NonSend<Knocking>,
     roots: Query<Entity, With<TitleRoot>>,
-    portrait: Option<Res<crate::look::portrait::Portrait>>,
+    mut portrait: Option<ResMut<crate::look::portrait::Portrait>>,
     party: Res<PartyView>,
     (mut challenges, time, mut looked): (ResMut<crate::challenges::Challenges>, Res<Time>, Local<f64>),
     (mut pics, mut images): (ResMut<EmblemPics>, ResMut<Assets<Image>>),
@@ -2200,6 +2211,11 @@ fn rebuild(
         return;
     }
     front.dirty = false;
+    // Triple T shows his back while the emblem is being picked.
+    if let Some(p) = portrait.as_deref_mut() {
+        let (g, ..) = proto::emblem_parts(player.emblem);
+        p.show_back(front.tab == Tab::Armory && front.armory == ARMORY_EMBLEM && g != 0);
+    }
     front.drawn = Some(signin);
     front.drawn_party = party.gen;
     front.drawn_challenges = challenges.gen;
