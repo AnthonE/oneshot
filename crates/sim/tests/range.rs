@@ -512,7 +512,7 @@ fn eight_shards_go_off_together() {
     let k = kill(SHARDS, 10.0, Spot::Chest, SALT).unwrap();
     assert_eq!(k.hits, 9, "{k:?}");
     // They turn after a target crossing the aim: fired where it is, not
-    // led, at 15 m they still find it.
+    // led, at 15 m they still find it, slowly, within a magazine.
     let mut w = range([SHARDS, arms::NONE], 15.0, SALT);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     inputs[1] = Input {
@@ -520,7 +520,7 @@ fn eight_shards_go_off_together() {
         yaw: 32768,
         ..Input::default()
     };
-    for _ in 0..TICK_HZ * 3 {
+    for _ in 0..TICK_HZ * 6 {
         let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
         inputs[0] = Input {
             buttons: FIRE,

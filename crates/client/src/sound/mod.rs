@@ -1182,6 +1182,9 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
 const STICKY_GAIN: f32 = 1.8;
 const STICKY_CLIMB: f32 = 0.5;
 const STICKY_WHINE_GAIN: f32 = 0.7;
+/// A charged bolt in flight: the same sizzle, lower.
+const ORB_SIZZLE_GAIN: f32 = 1.4;
+const ORB_SIZZLE_RATE: f32 = 0.72;
 const STICKY_FUSE_S: f32 = sim::consts::STICKY_FUSE_MS as f32 / 1000.0;
 
 /// The rounds in flight: a rocket's roar following it, a sticky's sizzle and
@@ -1262,7 +1265,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     // The roar of what flies under its own power.
     for k in 0..ear.rounds.len() {
         let r = ear.rounds[k];
-        if r.kind != ROCKET && r.kind != CANNON && r.kind != STICKY {
+        if r.kind != ROCKET && r.kind != CANNON && r.kind != STICKY && r.kind != CHARGED {
             continue;
         }
         let slot = match r.slot {
@@ -1281,6 +1284,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
                 STICKY_GAIN,
                 1.0 + STICKY_CLIMB * (r.stuck / STICKY_FUSE_S).min(1.0),
             ),
+            CHARGED => ("sticky_sizzle_0", ORB_SIZZLE_GAIN, ORB_SIZZLE_RATE),
             _ => ("rocket_fly_0", 0.8, 1.0),
         };
         ear.hold(

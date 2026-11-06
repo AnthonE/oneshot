@@ -38,6 +38,8 @@ const OWN_FLASH_SCALE: f32 = 1.5;
 /// and an energy gun's with its afterglow.
 const OWN_FLASH_S: (f32, f32) = (0.062, 0.078);
 const OWN_ENERGY_S: f32 = 0.16;
+/// How far off the gun an energy gun's flash burns, in view (`clear_of_gun`).
+const ENERGY_CLEAR_M: f32 = 0.05;
 /// The share of an energy flash's life its bloom plays in.
 const OWN_BLOOM_SHARE: f32 = 0.5;
 /// A sprite drawn for the frame it is spawned in and gone by the next
@@ -122,6 +124,13 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     land(fx, scene, arm, from, dir, len, to);
 }
 
+/// `at` (in view space, on the line to a muzzle) moved `by` metres toward the
+/// view's middle: the gun in view is nearer than what is drawn on its muzzle, so
+/// a thing centred there is half behind it, a crescent.
+pub(crate) fn clear_of_gun(at: Vec3, by: f32) -> Vec3 {
+    at - Vec3::new(at.x, at.y, 0.0).normalize_or_zero() * by
+}
+
 /// Our own gun, this frame: each round it fired since the last, drawn now,
 /// from the hand that fired it (`viewmodel::Rounds`) at the muzzle the gun
 /// in view was drawn with (`muzzles`, view space as it looks; the fixed
@@ -147,7 +156,7 @@ pub fn own_unseen(fx: &mut Fx, f: &Fighter) {
 
 /// Where our flash sits in view space: on the line to the drawn muzzle, at
 /// [`OWN_MUZZLE`]'s depth.
-fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {
+pub(crate) fn own_muzzle(left: bool, drawn: Option<Vec3>) -> Vec3 {
     let at = Vec3::new(OWN_MUZZLE.x, OWN_MUZZLE.y, -OWN_MUZZLE.z);
     let fixed = if left { Vec3::new(-at.x, at.y, at.z) } else { at };
     match drawn {
@@ -260,7 +269,12 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2], dt: f32) {
         let Some(mut o) = fx.own_flash[i] else {
             continue;
         };
-        let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
+        let at = own_muzzle(i == 1, drawn);
+        let at = match o.look.flash {
+            Flash::Energy(_) => clear_of_gun(at, ENERGY_CLEAR_M),
+            Flash::Powder => at,
+        };
+        let muzzle = eye.translation + eye.rotation * at;
         let fwd = eye.rotation * Vec3::NEG_Z;
         let right = eye.rotation * Vec3::X;
         let up = eye.rotation * Vec3::Y;
