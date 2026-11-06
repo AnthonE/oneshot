@@ -598,7 +598,7 @@ async function setupSignIn(info) {
     try {
       const res = await sdk().popup({ game: info.game, nonce });
       const text = atob(res.pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
-      const wallet = /wallet: (0x[0-9a-f]{40})/.exec(text)?.[1] ?? null;
+      const wallet = /wallet: (0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/.exec(text)?.[1] ?? null;
       return { pass: res.pass, wallet };
     } finally {
       await fresh();

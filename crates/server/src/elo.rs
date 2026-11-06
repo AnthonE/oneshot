@@ -220,7 +220,7 @@ pub fn friend_rows(v: &serde_json::Value) -> Vec<FriendRow> {
         .into_iter()
         .flatten()
         .filter_map(|f| {
-            let id = f["wallet"].as_str()?.trim().to_ascii_lowercase();
+            let id = proto::party::spell(f["wallet"].as_str()?.trim());
             proto::party::PlayerId::new(&id).filter(|p| !p.is_empty())?;
             let name = match f["name"].as_str().map(str::trim) {
                 Some(n) if !n.is_empty() => n.to_string(),
@@ -268,7 +268,7 @@ impl Elo {
     /// never rated or Elo Pros can't be asked, which wears the standard look.
     /// Answers are kept [`BAN_CACHE`].
     pub async fn floor(&self, wallet: &str) -> Option<f64> {
-        let key = wallet.to_ascii_lowercase();
+        let key = proto::party::spell(wallet);
         if let Ok(m) = self.floors.lock() {
             if let Some((at, f)) = m.get(&key) {
                 if at.elapsed() < BAN_CACHE {
@@ -299,7 +299,7 @@ impl Elo {
     /// Elo Pros can't be asked. `fresh`: ask again even if a list is kept.
     /// Answers are kept [`FRIENDS_CACHE`].
     pub async fn friends(&self, player: &str, fresh: bool) -> Option<Vec<FriendRow>> {
-        let key = player.to_ascii_lowercase();
+        let key = proto::party::spell(player);
         if !fresh {
             if let Ok(m) = self.friends.lock() {
                 if let Some((at, f)) = m.get(&key) {
@@ -330,7 +330,7 @@ impl Elo {
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
     pub async fn skins(&self, wallet: &str) -> Vec<String> {
-        let key = wallet.to_ascii_lowercase();
+        let key = proto::party::spell(wallet);
         if let Ok(m) = self.skins.lock() {
             if let Some((at, s)) = m.get(&key) {
                 if at.elapsed() < BAN_CACHE {
@@ -369,7 +369,7 @@ impl Elo {
     /// Whether the game has banned `wallet`: None if Elo Pros couldn't be
     /// asked, which never refuses anyone. Answers are kept [`BAN_CACHE`].
     pub async fn banned(&self, wallet: &str) -> Option<bool> {
-        let key = wallet.to_ascii_lowercase();
+        let key = proto::party::spell(wallet);
         if let Ok(m) = self.bans.lock() {
             if let Some(&(at, b)) = m.get(&key) {
                 if at.elapsed() < BAN_CACHE {
