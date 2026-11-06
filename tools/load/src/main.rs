@@ -51,7 +51,20 @@ fn main() {
                 .await
                 .unwrap_or_else(|e| die(&e));
             let (addr, pin) = load::server_json(&doc).unwrap_or_else(|e| die(&e));
-            o.addr = addr;
+            // A server with several endpoints hands them out in turn: take
+            // every one it names, and spread the players over them.
+            let mut addrs = vec![addr];
+            for _ in 0..15 {
+                let Ok(doc) = load::get(&http, &format!("{p}/server.json")).await else {
+                    break;
+                };
+                if let Ok((a, _)) = load::server_json(&doc) {
+                    if !addrs.contains(&a) {
+                        addrs.push(a);
+                    }
+                }
+            }
+            o.addr = addrs.join(",");
             o.pin = o.pin.or(pin);
             o.health = o.health.take().or_else(|| Some(format!("{p}/health.json")));
         }

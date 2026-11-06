@@ -8,7 +8,7 @@
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
-//! [--sim-threads 0] [--load-from ip]… [--match-secs N]`
+//! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--load-from ip]… [--match-secs N]`
 //!
 //! `--match-secs` puts every mode's match on an N-second clock: for tests
 //! that play one match after another (`ci/e2e.mjs`'s `E2E_AGAIN`).
@@ -16,6 +16,12 @@
 //! `--sim-threads` is how many threads the rooms step on: 0 (the default)
 //! one a core, 1 the sim thread alone. `--load-from` lets a load test's box
 //! (`tools/load`) hold more than an address's share of connections.
+//!
+//! `--endpoints N` listens on N UDP ports, `--bind`'s and each
+//! `--endpoint-step` after (10: slot a on 61250, 61260, 61270, slot b on
+//! 61251, 61261, 61271), each its own socket and receive loop; `server.json`
+//! hands pages one in turn. Both slots must run the same two flags, and
+//! every port must be open in the firewalls.
 //!
 //! `--capacity` is in players (a player's lobby beside its match isn't
 //! another). `--big-snapshot-hz` is the snapshot rate on a big map (Big
@@ -126,6 +132,10 @@ fn main() {
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
             "--no-delta" => cfg.deltas = false,
+            "--endpoints" => cfg.endpoints = val().parse().unwrap_or_else(|_| die("--endpoints is a count")),
+            "--endpoint-step" => {
+                cfg.endpoint_step = val().parse().unwrap_or_else(|_| die("--endpoint-step is a port count"))
+            }
             "--big-snapshot-hz" => {
                 cfg.big_snapshot_hz = val()
                     .parse()
@@ -177,6 +187,9 @@ fn main() {
         let h = server::run(cfg).await.unwrap_or_else(|e| die(&e));
         // Tests read these lines: keep their shape.
         println!("game: {} (WebTransport)", h.addr);
+        for a in &h.addrs[1..] {
+            println!("game: {a} (WebTransport, another endpoint)");
+        }
         println!("cert sha-256: {}", server::hex(&h.cert_hash));
         println!("sim threads: {}", h.ctx.sim_threads);
         if let Some(http) = h.http {

@@ -35,7 +35,8 @@ const STAY: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct Opts {
-    /// The game's `host:port`.
+    /// The game's `host:port`, or several by commas (a server's endpoints):
+    /// players spread over them in turn.
     pub addr: String,
     /// The certificate's SHA-256 to pin (a self-signed server); None trusts
     /// the system's roots.
@@ -248,6 +249,8 @@ enum End {
 
 async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instant), live: Arc<Live>) -> Played {
     let mode = o.modes[i % o.modes.len()];
+    let addrs: Vec<&str> = o.addr.split(',').collect();
+    let addr = addrs[i % addrs.len()];
     let end = window.1 + STAY;
     let mut p = Played {
         never: true,
@@ -266,7 +269,7 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
             proto::Look::default(),
             0,
         );
-        NativeLobby::connect(&o.addr, o.pin, hello).await.ok()
+        NativeLobby::connect(addr, o.pin, hello).await.ok()
     } else {
         None
     };
@@ -277,7 +280,7 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
         let name = format!("load{i}");
         let hello = Session::hello(&name, proto::Pass::NONE, mode, proto::Look::default(), 0);
         let asked = Instant::now();
-        let mut c = match NativeClient::connect(&o.addr, o.pin, hello).await {
+        let mut c = match NativeClient::connect(addr, o.pin, hello).await {
             Ok(c) => c,
             Err(_) => {
                 p.failed += 1;

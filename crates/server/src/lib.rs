@@ -233,6 +233,11 @@ pub struct Config {
     /// Threads the rooms step on, side by side: 0 is one a core, 1 the sim
     /// thread alone (one room after another).
     pub sim_threads: usize,
+    /// UDP endpoints, each its own socket and receive loop, on `bind`'s port
+    /// and every `endpoint_step` after (`net::ports`); `server.json` hands
+    /// pages one of them in turn.
+    pub endpoints: usize,
+    pub endpoint_step: u16,
     /// Addresses whose connections aren't held to a source's share (a load
     /// test's box; `net::Gate`). Loopback never is.
     pub load_sources: Vec<std::net::IpAddr>,
@@ -281,6 +286,8 @@ impl Default for Config {
             live_file: None,
             roster_dir: None,
             sim_threads: 0,
+            endpoints: 1,
+            endpoint_step: 10,
             load_sources: Vec::new(),
         }
     }
@@ -331,6 +338,12 @@ pub struct Ctx {
     pub started: Instant,
     /// The threads rooms step on.
     pub sim_threads: usize,
+    /// The UDP ports this process listens on, `--bind`'s first; the
+    /// endpoints a slot runs and how far apart (`Config::endpoints`); and
+    /// the next one `server.json` hands out.
+    pub ports: Vec<u16>,
+    pub endpoints: (usize, u16),
+    pub next_port: AtomicUsize,
 }
 
 impl Ctx {
@@ -375,7 +388,9 @@ pub struct Handle {
     pub udp_buffers: (usize, usize),
     pub stop: Arc<AtomicBool>,
     pub ctx: Arc<Ctx>,
-    endpoint: Arc<wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>>,
+    /// Every UDP address listened on, `addr` first.
+    pub addrs: Vec<SocketAddr>,
+    endpoints: Vec<Arc<wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>>>,
     jobs: tmpsc::UnboundedSender<Job>,
     cfg: Config,
 }
@@ -409,17 +424,22 @@ impl Handle {
     /// handshakes present the new one, live sessions keep theirs. Returns
     /// its hash.
     pub async fn reload(&self) -> Result<[u8; 32], String> {
-        net::reload(&self.endpoint, &self.cfg).await
+        net::reload(&self.endpoints, &self.cfg).await
     }
 }
 
 /// Starts the server on the current tokio runtime. Returns once it is
 /// listening.
 pub async fn run(cfg: Config) -> Result<Handle, String> {
-    let bound = net::endpoint(&cfg).await?;
-    let cert_hash = bound.cert_hash;
-    let endpoint = Arc::new(bound.endpoint);
-    let addr = endpoint.local_addr().map_err(|e| e.to_string())?;
+    let bound = net::endpoints(&cfg).await?;
+    let cert_hash = bound[0].cert_hash;
+    let udp_buffers = (bound[0].udp_recv, bound[0].udp_send);
+    let endpoints: Vec<_> = bound.into_iter().map(|b| Arc::new(b.endpoint)).collect();
+    let addrs = endpoints
+        .iter()
+        .map(|e| e.local_addr().map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let addr = addrs[0];
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
     let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg)>(net::INPUT_LANE);
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
@@ -472,6 +492,9 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         roster_dir: cfg.roster_dir.clone(),
         roster_file: online::file_name(addr.port()),
         sim_threads: threads,
+        ports: addrs.iter().map(|a| a.port()).collect(),
+        endpoints: (cfg.endpoints.max(1), cfg.endpoint_step),
+        next_port: AtomicUsize::new(0),
     });
 
     let sim = Sim {
@@ -488,7 +511,15 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
     tokio::spawn(journal(ctx.clone()));
     tokio::spawn(ctx.lobby.clone().sweeper());
-    tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, inputs_tx, ctx.clone()));
+    for ep in &endpoints {
+        tokio::spawn(net::accept_loop(
+            ep.clone(),
+            to_sim.clone(),
+            inputs_tx.clone(),
+            ctx.clone(),
+        ));
+    }
+    drop((to_sim, inputs_tx));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
     // only on a certificate of 14 days or less).
@@ -501,10 +532,11 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         addr,
         http,
         cert_hash,
-        udp_buffers: (bound.udp_recv, bound.udp_send),
+        udp_buffers,
         stop,
         ctx,
-        endpoint,
+        addrs,
+        endpoints,
         jobs: jobs_tx,
         cfg,
     })

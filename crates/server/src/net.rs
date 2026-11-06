@@ -142,32 +142,60 @@ pub struct Bound {
     pub udp_send: usize,
 }
 
-pub async fn endpoint(cfg: &Config) -> Result<Bound, String> {
-    let identity = identity(cfg).await?;
-    let cert_hash = cert_hash(&identity)?;
-    let (socket, udp_recv, udp_send) = bind_udp(cfg.bind)?;
-    let config = server_config(ServerConfig::builder().with_bind_socket(socket), identity)?;
-    let endpoint = Endpoint::server(config).map_err(|e| format!("bind {}: {e}", cfg.bind))?;
-    Ok(Bound {
-        endpoint,
-        cert_hash,
-        udp_recv,
-        udp_send,
-    })
+/// The ports a server with `n` endpoints from `port` listens on, `step`
+/// apart: the first is `--bind`'s (what the live file names).
+pub fn ports(port: u16, n: usize, step: u16) -> Vec<u16> {
+    (0..n.max(1) as u16)
+        .map_while(|i| port.checked_add(i.checked_mul(step)?))
+        .collect()
 }
 
-/// Reads the PEM files again and hands the endpoint the new certificate:
+/// Every endpoint `cfg` names ([`ports`]), one certificate across them.
+/// Each is its own UDP socket and QUIC endpoint: its own receive loop,
+/// so a box's packets are read on as many threads.
+pub async fn endpoints(cfg: &Config) -> Result<Vec<Bound>, String> {
+    let identity = identity(cfg).await?;
+    let cert_hash = cert_hash(&identity)?;
+    let mut out = Vec::new();
+    for port in ports(cfg.bind.port(), cfg.endpoints, cfg.endpoint_step) {
+        let mut at = cfg.bind;
+        // Port 0 (a test's): each its own free port.
+        if cfg.bind.port() != 0 {
+            at.set_port(port);
+        }
+        let (socket, udp_recv, udp_send) = bind_udp(at)?;
+        let config = server_config(
+            ServerConfig::builder().with_bind_socket(socket),
+            identity.clone_identity(),
+        )?;
+        let endpoint = Endpoint::server(config).map_err(|e| format!("bind {at}: {e}"))?;
+        out.push(Bound {
+            endpoint,
+            cert_hash,
+            udp_recv,
+            udp_send,
+        });
+    }
+    Ok(out)
+}
+
+/// Reads the PEM files again and hands every endpoint the new certificate:
 /// new handshakes present it, live sessions keep theirs (an ACME renewal
 /// without a restart). Returns the new certificate's hash.
-pub async fn reload(ep: &Endpoint<Server>, cfg: &Config) -> Result<[u8; 32], String> {
+pub async fn reload(eps: &[Arc<Endpoint<Server>>], cfg: &Config) -> Result<[u8; 32], String> {
     if cfg.cert.is_none() {
         return Err("no --cert to reload".into());
     }
     let identity = identity(cfg).await?;
     let hash = cert_hash(&identity)?;
-    // The bind address is ignored without a rebind: the socket stays.
-    let config = server_config(ServerConfig::builder().with_bind_address(cfg.bind), identity)?;
-    ep.reload_config(config, false).map_err(|e| e.to_string())?;
+    for ep in eps {
+        // The bind address is ignored without a rebind: the socket stays.
+        let config = server_config(
+            ServerConfig::builder().with_bind_address(cfg.bind),
+            identity.clone_identity(),
+        )?;
+        ep.reload_config(config, false).map_err(|e| e.to_string())?;
+    }
     Ok(hash)
 }
 

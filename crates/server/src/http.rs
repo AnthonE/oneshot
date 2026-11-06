@@ -248,6 +248,7 @@ pub fn server_json(
         .map(str::to_string)
         .or_else(|| ctx.public_addr.clone())
         .unwrap_or_else(|| format!("{host}:{}", game.port()));
+    let addr = spread(ctx, &addr);
     let hash = hash.map_or("null".to_string(), |h| format!("\"{}\"", crate::hex(&h)));
     format!(
         "{{\"addr\":\"{addr}\",\"hash\":{hash},\"game\":\"{}\",\"signin\":{},\"proto\":{}}}",
@@ -255,6 +256,28 @@ pub fn server_json(
         ctx.elo_pubkey.is_some(),
         proto::PROTO_VER
     )
+}
+
+/// One of the endpoints of the slot `addr` names, in turn: ours as bound,
+/// or the other slot's by the same flags (`net::ports`).
+fn spread(ctx: &crate::Ctx, addr: &str) -> String {
+    let Some((host, port)) = addr
+        .rsplit_once(':')
+        .and_then(|(h, p)| Some((h, p.parse::<u16>().ok()?)))
+    else {
+        return addr.to_string();
+    };
+    let (n, step) = ctx.endpoints;
+    let ports = if ctx.ports.first() == Some(&port) {
+        ctx.ports.clone()
+    } else {
+        crate::net::ports(port, n, step)
+    };
+    if ports.len() <= 1 {
+        return addr.to_string();
+    }
+    let k = ctx.next_port.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{host}:{}", ports[k % ports.len()])
 }
 
 /// A live file's `host:port`, if that's what it holds (it is written by
