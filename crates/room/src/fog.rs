@@ -144,8 +144,9 @@ pub fn ground_hides(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
 /// its points ahead, a group at a time; a group the ground plainly hides
 /// ([`ground_hides`]) casts no rays. Past [`FAR_M`] the leans and the
 /// chest's edges are left out (at 40 m they turn a line by half a degree):
-/// 18 rays, not 70. A pair found hidden is given the plain test as well, so
-/// no shortcut can hide what is in plain sight.
+/// 18 rays, not 70. The plain test goes first (the aim review has cast it
+/// this tick already, `Plain`): a pair in plain sight needs no more, and no
+/// shortcut can hide what is in plain sight.
 fn sees_full(
     map: &Map,
     viewer: &Fighter,
@@ -154,6 +155,9 @@ fn sees_full(
     far: bool,
     plain: impl FnOnce() -> bool,
 ) -> bool {
+    if plain() {
+        return true;
+    }
     let side = across(viewer.body.pos, target.body.pos);
     let all_eyes = eyes(viewer, side, lead, PEEK_M);
     let all = fighter_points(target, side, lead);
@@ -163,13 +167,12 @@ fn sees_full(
     } else {
         (&all_eyes, [&all[0..5], &all[5..10]])
     };
-    let seen = e.iter().any(|eye| {
+    e.iter().any(|eye| {
         p.iter().any(|group| {
             let one = core::slice::from_ref(eye);
             !ground_hides(map, one, group) && sees_points(map, one, group)
         })
-    });
-    seen || plain()
+    })
 }
 
 /// The plain test: is the target's chest or head in clear line from the
@@ -236,7 +239,7 @@ pub fn sees_vehicle(map: &Map, eye: V3, v: &Vehicle, lead: f32) -> bool {
 
 /// [`sees_vehicle`], as fog runs it: the points now and the points ahead a
 /// group at a time, a group the ground plainly hides casting no rays; past
-/// [`FAR_M`], only the middles and two opposite corners. Then the plain test.
+/// [`FAR_M`], only the middles and two opposite corners. The plain test first.
 fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> bool {
     let p = vehicle_points(v, lead);
     let groups: [&[V3]; 2] = if far {
@@ -245,10 +248,10 @@ fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> b
         [&p[0..VPOINTS], &p[VPOINTS..]]
     };
     let one = core::slice::from_ref(&eye);
-    groups
-        .iter()
-        .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
-        || plainly_sees_vehicle(map, eye, v)
+    plainly_sees_vehicle(map, eye, v)
+        || groups
+            .iter()
+            .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
 }
 
 /// The plain test for a hull: its middle or the middle of its top in clear
