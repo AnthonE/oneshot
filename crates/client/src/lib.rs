@@ -719,9 +719,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app
 }
 
-/// In a match: what the HUD and the names over heads draw for.
-fn in_match(m: Res<front::InMatch>) -> bool {
-    m.0
+/// In a match: what the HUD and the names over heads draw for. With no title
+/// screen at all (a film, a picture, the fx stage) there is nothing else to be in.
+fn in_match(m: Option<Res<front::InMatch>>) -> bool {
+    m.is_none_or(|m| m.0)
 }
 
 fn setup(
