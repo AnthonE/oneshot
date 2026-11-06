@@ -84,6 +84,12 @@ fn accelerate(vel: V3, w: V3, wish: f32, acc: f32) -> V3 {
 
 /// One tick of a body under one input.
 pub fn step(b: &mut Body, inp: &Input, map: &Map) {
+    step_paced(b, inp, map, 1.0);
+}
+
+/// [`step`], its top speed on the ground and in the air times `pace` (a
+/// flag carrier's, `FLAG_PACE`).
+pub fn step_paced(b: &mut Body, inp: &Input, map: &Map, pace: f32) {
     // Crouch while held; stand back up only where the head fits. In the
     // air (Halo's crouch jump) crouching tucks the legs up under a head
     // that stays, and letting go puts them back down where there's room.
@@ -133,7 +139,7 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
             let aside = side / len * RUN_SIDE;
             (ahead * ahead + aside * aside).sqrt()
         };
-        wish = top * len.min(1.0);
+        wish = top * len.min(1.0) * pace;
     }
 
     let mut v = b.vel;

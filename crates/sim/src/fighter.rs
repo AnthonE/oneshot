@@ -107,8 +107,9 @@ pub struct Fighter {
     pub camo: u16,
     pub flare: u16,
     /// Carrying the enemy's flag (Capture the Flag): both hands on it, so
-    /// no gun fires and no grenade goes; a melee still swings. The world's
-    /// to set; its own tick reads it.
+    /// no gun fires, no grenade goes and no gun is swapped (SWAP lets go
+    /// of it); a melee swings it, and kills; it walks at `FLAG_PACE`. The
+    /// world's to set; its own tick reads it.
     pub flag: bool,
     /// On a map with a void: who last hurt this fighter, their seat plus 1
     /// (0 nobody), and ticks left on its feet before a fall is its own
@@ -134,6 +135,8 @@ pub struct Local {
     pub sticky: bool,
     /// USE went down this tick.
     pub use_pad: bool,
+    /// A carrier let go of the flag (SWAP, while carrying).
+    pub drop_flag: bool,
 }
 
 impl Fighter {
@@ -265,7 +268,8 @@ impl Fighter {
         self.pitch = inp.pitch;
         let seat = self.riding().map(|(_, s)| s);
         if seat.is_none() {
-            movement::step(&mut self.body, inp, map);
+            let pace = if self.flag { FLAG_PACE } else { 1.0 };
+            movement::step_paced(&mut self.body, inp, map, pace);
         }
         let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag;
         let on_foot = seat.is_none();
@@ -287,9 +291,14 @@ impl Fighter {
         self.right().tick_reload();
         self.left_hand(&mut spare).tick_reload();
 
+        // A carrier's swap lets go of the flag (Halo 3's): the world tosses
+        // it ahead.
+        if pressed & SWAP != 0 && self.flag {
+            out.drop_flag = true;
+        }
         // Swap: cancels a reload, a burst and a charge. Dual, it drops the
         // left gun first (and takes the back one, if there is one).
-        if pressed & SWAP != 0 {
+        if pressed & SWAP != 0 && !self.flag {
             let had_left = self.dual();
             if had_left {
                 self.drop_left();

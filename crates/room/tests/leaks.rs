@@ -402,7 +402,13 @@ fn gate(map: Map, rules: Rules) {
     let (mut medals, mut carnage) = (0, 0);
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
-    for t in 0..TICK_HZ * 125 {
+    // Past the clock: Capture the Flag's sudden death too.
+    let overtime = if rules.ctf {
+        sim::consts::SUDDEN_DEATH_MS / 1000
+    } else {
+        0
+    };
+    for t in 0..TICK_HZ * (125 + overtime) {
         let now = t as f64 * 1000.0 / TICK_HZ as f64;
         // The person seat plays through the client's path: a frame a tick,
         // acking the newest snapshot, a 4-tick playout.

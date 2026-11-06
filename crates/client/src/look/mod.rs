@@ -5,6 +5,7 @@ pub mod anim;
 pub mod bodies;
 pub mod boulders;
 pub mod cliffs;
+pub mod cloth;
 pub mod cloud_sea;
 pub mod cloud_shadow;
 pub mod clutter;
