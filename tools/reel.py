@@ -28,7 +28,7 @@ def first_rise(clip, t0, t1, crop, least=4.0):
     return None
 
 
-def biggest_rise(clip, t0, t1, crop="", least=6.0):
+def biggest_rise(clip, t0, t1, crop="", least=3.0):
     r = strip.rises(clip, crop, t0, t1)
     t, v = max(r, key=lambda x: x[1], default=(None, 0.0))
     return t if v >= least else None
