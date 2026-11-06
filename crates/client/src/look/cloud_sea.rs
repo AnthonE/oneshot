@@ -186,6 +186,9 @@ fn drift(
     mut materials: ResMut<Assets<CloudSeaMaterial>>,
     mut seas: Query<(&mut CloudSea, &MeshMaterial3d<CloudSeaMaterial>)>,
 ) {
+    if seas.is_empty() {
+        return;
+    }
     let dt = time.delta_secs();
     let far = super::rig::fog_for(&mood.mood, tier.atmosphere, 0.0).color.to_linear();
     let far = Vec3::new(far.red, far.green, far.blue);

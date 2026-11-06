@@ -118,6 +118,10 @@ pub struct Body {
     player: Option<Entity>,
     hand: Entity,
     held: u8,
+    /// The guns it has held of late, each posed in its hand and hidden
+    /// while another is out (by arm, the longest unheld first): a swap, a
+    /// death and a respawn show one again rather than load its scene anew.
+    rack: Vec<(u8, Entity)>,
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
     mats: Vec<Handle<BodyMaterial>>,
@@ -277,6 +281,7 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         player: None,
         hand,
         held: 0,
+        rack: Vec::with_capacity(RACK),
         mats: Vec::new(),
         limp: false,
         lit: 0.0,
@@ -689,19 +694,37 @@ pub fn pose(
     // wheel. It waits for the hand it goes in.
     let arm = if d.alive && !driving { d.arm } else { 0 };
     if arm != body.held && body.dressed {
-        commands.entity(body.hand).despawn_related::<Children>();
-        let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
-        if let Some((_, scene)) = posed {
+        let held = body.held;
+        if let Some(&(_, out)) = body.rack.iter().find(|r| r.0 == held) {
+            commands.entity(out).insert(Visibility::Hidden);
+        }
+        if let Some(i) = body.rack.iter().position(|r| r.0 == arm) {
+            // Racked: shown again, now the latest held.
+            let r = body.rack.remove(i);
+            commands.entity(r.1).insert(Visibility::Inherited);
+            body.rack.push(r);
+        } else if let Some((pivot, scene)) = spawn_posed(commands, models, arm, body_basis(), body.hand) {
             if body.shadow {
                 // Your shadow's gun is a shadow too.
                 commands.entity(scene).observe(super::own_shadow::shade_gun);
             } else {
                 super::gun_skin::wear(commands, scene, body.skin, arm);
             }
+            if body.rack.len() >= RACK {
+                // The one held longest ago goes (never the one just put
+                // away: it is the latest after this).
+                let (_, old) = body.rack.remove(0);
+                commands.entity(old).despawn();
+            }
+            body.rack.push((arm, pivot));
         }
         body.held = arm;
     }
 }
+
+/// Guns a body keeps posed in its hand: the two it carries and one more
+/// (the last it dropped or the one on the floor it took).
+const RACK: usize = 3;
 
 /// Every body's player, crossfaded to what its gait wants (`anim::drive`),
 /// once a frame after the bodies are posed. The first frame a body has a

@@ -308,6 +308,10 @@ pub struct ViewGun {
     drawn: u8,
     /// The skin it was spawned in.
     skin: u8,
+    /// The guns this hand has had out of late, posed and hidden while
+    /// another is (by arm and skin, the longest put away first): a swap
+    /// shows one again rather than load its scene anew.
+    rack: Vec<(u8, u8, Entity)>,
     /// How far down for a change, 0..=1.
     drop: f32,
     kick: Spring,
@@ -1102,6 +1106,9 @@ struct Hand {
     t: f32,
 }
 
+/// Guns a hand keeps posed: the two carried and the last one put down.
+const RACK: usize = 3;
+
 /// One hand's gun, posed for the frame: where its muzzle is drawn, if it is.
 #[allow(clippy::too_many_arguments)]
 fn hand(
@@ -1126,9 +1133,22 @@ fn hand(
     v.drop = drop;
     // The roster can say what we wear after the first gun is up.
     if change || v.skin != own.skin {
+        let out = (v.drawn, v.skin);
+        if let Some(&(.., gun)) = v.rack.iter().find(|r| (r.0, r.1) == out) {
+            commands.entity(gun).insert(Visibility::Hidden);
+        }
         v.skin = own.skin;
-        commands.entity(e).despawn_related::<Children>();
-        if let Some((_, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
+        if let Some(i) = v.rack.iter().position(|r| (r.0, r.1) == (want, own.skin)) {
+            // Racked: out again, now the latest.
+            let r = v.rack.remove(i);
+            commands.entity(r.2).insert(Visibility::Inherited);
+            v.rack.push(r);
+        } else if let Some((pivot, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
+            if v.rack.len() >= RACK {
+                let (.., old) = v.rack.remove(0);
+                commands.entity(old).despawn();
+            }
+            v.rack.push((want, own.skin, pivot));
             commands.entity(scene).observe(no_shadows);
             super::gun_skin::wear(commands, scene, own.skin, want);
             // A gun that runs hot wears its heat (`fx/vent.rs`).
