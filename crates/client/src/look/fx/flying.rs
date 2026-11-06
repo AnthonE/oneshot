@@ -1,6 +1,6 @@
 //! What's in flight. Things with weight are drawn with their models: a
 //! rocket with its exhaust's glow and a trail of smoke, a frag or a
-//! launcher's grenade with its fuse blinking, a sticky glowing blue. Light
+//! launcher's grenade with its fuse blinking, a sticky in its own cage glowing blue. Light
 //! is drawn as light, straight into the glow pool from where it is this
 //! frame: an ion bolt's blue core and streak, a charged bolt's bigger one
 //! with its light, the cannon's green ball, the SHARD GUN's pink crystals.
@@ -43,11 +43,32 @@ const ION: [f32; 4] = [2.0, 5.5, 14.0, 1.0];
 const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
+/// A sticky's glow round its cage, and its core's, metres across: it reads from
+/// across a room, and on whoever it is stuck to.
+const STICKY_HALO_M: f32 = 0.34;
+const STICKY_CORE_M: f32 = 0.11;
+/// How far each model stands from its base to its middle.
+const ROCKET_MID_M: f32 = 0.3;
+const FRAG_MID_M: f32 = 0.08;
+const STICKY_MID_M: f32 = 0.067;
+
+/// Which model draws a kind of round: a hidden one goes to any round of its own.
+fn model_of(kind: u8) -> u8 {
+    match kind {
+        ROCKET => ROCKET,
+        STICKY => STICKY,
+        _ => FRAG,
+    }
+}
 
 /// A new model for `p`, kept from then on.
 fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &DrawnProj) -> Entity {
     let rocket = p.kind == ROCKET;
-    let scene = if rocket { &models.rocket } else { &models.frag };
+    let (scene, mid) = match model_of(p.kind) {
+        ROCKET => (&models.rocket, ROCKET_MID_M),
+        STICKY => (&models.sticky, STICKY_MID_M),
+        _ => (&models.frag, FRAG_MID_M),
+    };
     let place = place(&p.state());
     let mut e = commands.spawn((
         Flying {
@@ -61,8 +82,8 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &DrawnProj) -> En
     ));
     e.with_child((
         SceneRoot(scene.clone()),
-        // Both models stand on their base, +Y up: centre them.
-        Transform::from_xyz(0.0, if rocket { -0.3 } else { -0.08 }, 0.0),
+        // Each model stands on its base, +Y up: centre it.
+        Transform::from_xyz(0.0, -mid, 0.0),
     ));
     if rocket && fx.caps.lights > 2 {
         e.with_child((
@@ -99,7 +120,7 @@ pub struct Flying {
 /// rounds that get one, and which kept theirs.
 #[derive(Default)]
 pub struct Scratch {
-    pool: Vec<(Entity, bool, u16, bool)>,
+    pool: Vec<(Entity, u8, u16, bool)>,
     taken: Vec<bool>,
     go: Vec<(Entity, DrawnProj, bool)>,
     live: Vec<DrawnProj>,
@@ -139,7 +160,7 @@ pub fn projectiles(
     pool.clear();
     pool.extend(
         have.iter()
-            .map(|(e, f, _, v)| (e, f.kind == ROCKET, f.id, *v != Visibility::Hidden)),
+            .map(|(e, f, _, v)| (e, model_of(f.kind), f.id, *v != Visibility::Hidden)),
     );
     taken.clear();
     taken.resize(pool.len(), false);
@@ -151,8 +172,8 @@ pub fn projectiles(
     // First every shown model to its own round, then the rest a free
     // model, hidden ones first, then a new one.
     for (i, p) in live.iter().enumerate() {
-        let rocket = p.kind == ROCKET;
-        if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == rocket && pool[k].2 == p.id) {
+        let model = model_of(p.kind);
+        if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == model && pool[k].2 == p.id) {
             matched[i] = true;
             taken[k] = true;
             go.push((pool[k].0, *p, false));
@@ -162,9 +183,9 @@ pub fn projectiles(
         if matched[i] {
             continue;
         }
-        let rocket = p.kind == ROCKET;
+        let model = model_of(p.kind);
         let free = (0..pool.len())
-            .filter(|&k| !taken[k] && pool[k].1 == rocket)
+            .filter(|&k| !taken[k] && pool[k].1 == model)
             .min_by_key(|&k| pool[k].3);
         match free {
             Some(k) => {
@@ -173,7 +194,7 @@ pub fn projectiles(
             }
             None => {
                 let e = spawn(commands, fx, models, p);
-                pool.push((e, rocket, p.id, true));
+                pool.push((e, model, p.id, true));
                 taken.push(true);
             }
         }
@@ -236,8 +257,8 @@ pub fn projectiles(
         }
         // A sticky glows blue the whole while; a fuse blinks red.
         if p.kind == STICKY {
-            fx.glow.spawn(dot(at, 0.18, ION_HALO));
-            fx.glow.spawn(dot(at, 0.06, ION));
+            fx.glow.spawn(dot(at, STICKY_HALO_M, ION_HALO));
+            fx.glow.spawn(dot(at, STICKY_CORE_M, ION));
         }
         let lit = (t * BLINK_HZ).fract() < 0.5;
         if lit && !f.lit {

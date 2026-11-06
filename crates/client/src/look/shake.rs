@@ -3,8 +3,9 @@
 //! Ported from Gates' `crates/client/src/render/shake.rs` (MIT, © 2026
 //! MoreRight DAO). Two parts. **Trauma** (Eiserloh, GDC 2016, "Juicing Your
 //! Cameras With Math"): events add trauma in `0..=1`, it decays linearly,
-//! and trauma² drives smooth noise on pitch and yaw plus a few centimetres
-//! of translation. **Kicks** are directional and ride a damped spring on
+//! and trauma² drives smooth noise on pitch and yaw plus a little translation,
+//! reached over [`ATTACK_S`] and slow enough to read as a rumble: all at once
+//! or quick, at a steady 60 fps it reads as the game stuttering. **Kicks** are directional and ride a damped spring on
 //! top: our own shot's recoil, a flinch from a hit, the dip of a landing.
 //! No roll and no field-of-view pulse (Gates' note: those are what make
 //! players sick).
@@ -16,13 +17,16 @@
 use bevy::prelude::*;
 
 /// Largest rotation trauma 1 reaches, radians: pitch, yaw, roll (none).
-const MAX_ROT: Vec3 = Vec3::new(0.028, 0.016, 0.0);
+const MAX_ROT: Vec3 = Vec3::new(0.018, 0.011, 0.0);
 /// Largest translation trauma 1 reaches, metres.
-const MAX_OFF_M: f32 = 0.05;
+const MAX_OFF_M: f32 = 0.02;
 /// How fast the noise moves, samples per second.
-const NOISE_HZ: f32 = 17.0;
-/// Trauma lost per second: a full blast shakes for about a second.
-const DECAY_PER_S: f32 = 1.1;
+const NOISE_HZ: f32 = 9.0;
+/// Trauma lost per second: a full blast shakes for under a second.
+const DECAY_PER_S: f32 = 1.4;
+/// How long the shake takes to come up to its trauma, seconds (a time
+/// constant), so an event never pops the frame in one step.
+const ATTACK_S: f32 = 0.035;
 /// The kick spring: ~5 Hz, a little under critically damped.
 const KICK_HZ: f32 = 5.0;
 const KICK_DAMP: f32 = 0.72;
@@ -40,8 +44,8 @@ pub const HURT_TRAUMA_PER_PT: f32 = 0.004;
 pub const HURT_TRAUMA_MAX: f32 = 0.5;
 pub const FLINCH_RAD: f32 = 0.02;
 /// A blast: full trauma inside `BLAST_FULL_M`, none past `BLAST_ZERO_M`.
-pub const BLAST_FULL_M: f32 = 6.0;
-pub const BLAST_ZERO_M: f32 = 45.0;
+pub const BLAST_FULL_M: f32 = 4.0;
+pub const BLAST_ZERO_M: f32 = 28.0;
 /// Landing: a fall faster than this (m/s) dips the camera.
 const LAND_MIN_MPS: f32 = 3.5;
 const LAND_DIP_M: f32 = 0.012;
@@ -55,6 +59,8 @@ const LAND_HARD_MPS: f32 = 10.0;
 #[derive(Resource, Clone, Debug)]
 pub struct Shake {
     trauma: f32,
+    /// The trauma² the camera has come up to ([`ATTACK_S`]).
+    level: f32,
     t: f32,
     kick: Vec3,
     kick_vel: Vec3,
@@ -69,6 +75,7 @@ impl Default for Shake {
     fn default() -> Self {
         Self {
             trauma: 0.0,
+            level: 0.0,
             t: 0.0,
             kick: Vec3::ZERO,
             kick_vel: Vec3::ZERO,
@@ -154,7 +161,8 @@ impl Shake {
             spring(&mut self.kick[i], &mut self.kick_vel[i], KICK_HZ, KICK_DAMP, dt);
         }
         spring(&mut self.dip, &mut self.dip_vel, DIP_HZ, DIP_DAMP, dt);
-        let s = self.trauma * self.trauma;
+        self.level += (self.trauma * self.trauma - self.level) * (1.0 - (-dt / ATTACK_S).exp());
+        let s = self.level;
         let t = self.t;
         let rot = MAX_ROT * s * Vec3::new(fbm(t, 11), fbm(t, 23), fbm(t, 37)) + self.kick;
         let local = Vec3::new(fbm(t, 41), fbm(t, 53), fbm(t, 67)) * MAX_OFF_M * s;
@@ -225,4 +233,32 @@ pub fn apply(t: &mut Transform, o: Offsets) {
     t.rotation *= Quat::from_euler(EulerRot::YXZ, o.rot.y, o.rot.x, o.rot.z);
     let local = t.rotation * o.local;
     t.translation += local - Vec3::Y * o.dip;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A full blast comes on over a few frames, not in one: a pop of the whole
+    /// frame at a steady 60 fps reads as the game stuttering.
+    #[test]
+    fn a_blast_never_pops_the_frame() {
+        let dt = 1.0 / 60.0;
+        for seed in 0..64 {
+            let mut shake = Shake::default();
+            for _ in 0..seed {
+                shake.step(dt);
+            }
+            shake.add(1.0);
+            let first = shake.step(dt);
+            assert!(first.rot.x.abs() <= MAX_ROT.x * 0.4, "{}", first.rot.x);
+            assert!(first.rot.y.abs() <= MAX_ROT.y * 0.4, "{}", first.rot.y);
+            let mut last = first.rot;
+            for _ in 0..30 {
+                let now = shake.step(dt).rot;
+                assert!((now.x - last.x).abs() <= MAX_ROT.x * 0.5, "{} to {}", last.x, now.x);
+                last = now;
+            }
+        }
+    }
 }
