@@ -211,6 +211,10 @@ pub struct Ghost(f32);
 #[derive(Component)]
 pub struct Lit;
 
+/// A blade's aura.
+#[derive(Component)]
+pub struct Aura;
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn lit(
     ev: On<SceneInstanceReady>,
@@ -262,6 +266,7 @@ fn lit(
         }
         if let Some(strip) = kit.strip.clone() {
             commands.spawn((
+                Aura,
                 Mesh3d(strip),
                 MeshMaterial3d(kit.aura.clone()),
                 born.clone(),
@@ -284,6 +289,21 @@ fn lit(
             Transform::from_xyz(0.0, LIGHT_AT_M, 0.0),
             ChildOf(ev.entity),
         ));
+    }
+}
+
+/// A sword taken out of the rack (`bodies.rs`, `viewmodel.rs`) is lit anew: it
+/// draws itself out of the hilt as a new one does.
+#[allow(clippy::type_complexity)]
+pub fn redrawn(
+    time: Res<Time>,
+    mut shown: Query<(&InheritedVisibility, &mut MeshTag), (Or<(With<Lit>, With<Aura>)>, Changed<InheritedVisibility>)>,
+) {
+    let born = time.elapsed_secs_wrapped().to_bits();
+    for (seen, mut tag) in &mut shown {
+        if seen.get() {
+            tag.0 = born;
+        }
     }
 }
 

@@ -797,16 +797,19 @@ pub fn pose(
     let arm = if d.alive && !driving { d.arm } else { 0 };
     if arm != body.held && body.dressed {
         // A sword sits in the hand its own way (`Sword_Idle`), a gun as it did.
-        let (at, rotation) = if arm == sim::arms::SWORD {
-            (SWORD_HELD_AT, SWORD_HELD_TURN)
-        } else {
-            (HELD_AT, HELD_TURN)
-        };
-        commands.entity(body.hand).insert(Transform {
-            translation: at,
-            rotation: rotation.normalize(),
-            scale: Vec3::splat(HELD_SCALE),
-        });
+        // The title's body can go the same frame, its hand with it.
+        if arm == sim::arms::SWORD || body.held == sim::arms::SWORD {
+            let (at, rotation) = if arm == sim::arms::SWORD {
+                (SWORD_HELD_AT, SWORD_HELD_TURN)
+            } else {
+                (HELD_AT, HELD_TURN)
+            };
+            commands.entity(body.hand).try_insert(Transform {
+                translation: at,
+                rotation: rotation.normalize(),
+                scale: Vec3::splat(HELD_SCALE),
+            });
+        }
         let held = body.held;
         if let Some(&(_, out)) = body.rack.iter().find(|r| r.0 == held) {
             commands.entity(out).insert(Visibility::Hidden);

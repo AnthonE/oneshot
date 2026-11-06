@@ -683,6 +683,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app.add_systems(Update, look::fx::vent::spawn_orbs);
     app.add_systems(Update, look::bodies::stand_up);
     app.add_systems(Update, (look::blade::trail, look::cels::sweep, look::cels::warm));
+    app.add_systems(
+        PostUpdate,
+        look::blade::redrawn.after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
