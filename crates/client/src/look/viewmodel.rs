@@ -91,6 +91,10 @@ pub const GUN_FOV: f32 = 2.5;
 /// Gates' `VIEWMODEL_HOLD`: where the right hand's grip sits in view space,
 /// as it looks (metres, before [`SHRINK`]).
 const HOLD: Vec3 = Vec3::new(0.2, -0.12, -0.55);
+/// The most of a gun that may lie behind the hand, metres as it looks: one
+/// with more (a cannon, a launcher) is held that much further off, or its
+/// back end fills the corner of the frame, a blur right against the eye.
+const REAR_CLEAR_M: f32 = 0.35;
 /// The rest yaw: the muzzle turned in toward the crosshair, radians.
 const REST_YAW: f32 = 0.08;
 /// The rest pitch: the muzzle lifted, so the gun's rear runs out of the frame
@@ -370,7 +374,7 @@ const SHELL_HEX: f32 = 9.0;
 /// The shell in view against a body's at the same flare, with no fill
 /// (`shield.wgsl`): it fills the frame's corner, so it is a crackle over
 /// the arms, not a coat of gold.
-const SHELL_IN_VIEW: f32 = 0.22;
+const SHELL_IN_VIEW: f32 = 0.1;
 /// Our overshield, and our camouflage, on the arms in view: never under
 /// these while on (in their shells' colours, `bodies.rs`).
 const OVER_IN_VIEW: f32 = 0.12;
@@ -604,6 +608,12 @@ pub fn place(hand: Lay, body: Lay, left: bool) -> (Vec3, Quat) {
     let bq = turn(body.ang);
     let wrist = turn(body.wrist) * turn(hand.wrist);
     (pivot + bq * (p - pivot) + body.off, bq * hq * rest * wrist)
+}
+
+/// How much further off a gun is held for what lies behind its hand.
+fn stand_off(g: &super::guns::Gun) -> Lay {
+    let back = g.height * g.grip * g.scale;
+    Lay::arm(Vec3::ZERO, Vec3::new(0.0, 0.0, -(back - REAR_CLEAR_M).max(0.0)))
 }
 
 /// The rounds each hand fired since the last look, `[right, left]`.
@@ -1177,7 +1187,8 @@ fn hand(
     };
     let d = smooth(v.drop);
     let change = Lay::arm(DROP_ANG * d, DROP_OFF * d);
-    let (at, rot) = place(k.hand + reload + kick + charge + change, k.body, v.left);
+    let stand = gun(v.drawn).map_or(Lay::ZERO, stand_off);
+    let (at, rot) = place(k.hand + reload + kick + charge + change + stand, k.body, v.left);
     t.translation = at * SHRINK;
     t.rotation = rot;
     let g = gun(v.drawn).filter(|_| drawn)?;
@@ -1451,7 +1462,7 @@ mod tests {
                     if *arm == sim::arms::SWORD && (2..=3).contains(&n) {
                         continue;
                     }
-                    let (at, rot) = place(lay, Lay::ZERO, false);
+                    let (at, rot) = place(lay + stand_off(g), Lay::ZERO, false);
                     let muzzle = at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale));
                     for k in 0..=8 {
                         let p = at.lerp(muzzle, k as f32 / 8.0);
@@ -1501,7 +1512,7 @@ mod tests {
                 ];
                 for (n, lay) in poses.into_iter().enumerate() {
                     for left in [false, true] {
-                        let (at, rot) = place(lay, Lay::ZERO, left);
+                        let (at, rot) = place(lay + stand_off(g), Lay::ZERO, left);
                         for k in 0..=12 {
                             let along = -back + len * k as f32 / 12.0;
                             for up in [-0.15, 0.0, 0.15] {
