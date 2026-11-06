@@ -41,7 +41,8 @@ struct Weather {
     // xyz half extents (a cylinder: x its radius, y half its height); w the
     // edges another box hides, as bits (`edge_distance`).
     half: vec4<f32>,
-    // x, y: cos and sin of its turn about y (local +x is (c, 0, s)).
+    // x, y: cos and sin of its turn about y (local +x is (c, 0, s)); z 1:
+    // a plaza's round slab, its top carved as a seal (`weathering::seal`).
     turn: vec4<f32>,
     // The ground under a long block at eight points end to end along the
     // axis `grime.w` names (`weathering::Block::run`).
@@ -54,6 +55,22 @@ struct Weather {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> weather: Weather;
+
+// A plaza's seal: its rings as shares of its radius, how many spokes, a
+// groove's half-width m, and how much darker a groove and the rim's band
+// are and how much paler the hub.
+const SEAL_RINGS: vec4<f32> = vec4<f32>(0.14, 0.36, 0.6, 0.86);
+const SEAL_SPOKES: f32 = 12.0;
+const SEAL_GROOVE_M: f32 = 0.05;
+const SEAL_GROOVE_DARK: f32 = 0.5;
+const SEAL_RIM_DARK: f32 = 0.84;
+const SEAL_HUB_PALE: f32 = 1.12;
+
+// 1 on a groove of the seal at `at` metres (across `x` metres), fading
+// over the pixel's footprint.
+fn seal_line(x: f32, at: f32, aa: f32) -> f32 {
+    return 1.0 - smoothstep(SEAL_GROOVE_M, SEAL_GROOVE_M + aa, abs(x - at));
+}
 
 // An integer hash: world coordinates run to hundreds of metres, where a
 // `fract(sin(·))` hash has lost its low bits.
@@ -188,6 +205,29 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let fine = fbm(p, weather.mottle.y, px) - 0.5;
     let broad = vnoise_aa(p + vec3<f32>(31.0), weather.mottle.z, px) - 0.5;
     c *= max(1.0 + weather.mottle.x * (1.6 * fine + 1.2 * broad), 0.0);
+
+    // 1b · A plaza's seal: on its top, grooves cut in rings and in spokes
+    // between the hub's ring and the third, the band outside the last ring
+    // darker, the hub paler. Value and roughness only: the floor stays the
+    // flat top the sim walks on.
+    if weather.turn.z > 0.5 && ng.y > 0.9 {
+        let d = p.xz - weather.centre.xz;
+        let rm = length(d);
+        let big_r = weather.half.x;
+        let aa = max(px, 0.004);
+        var groove = max(
+            max(seal_line(rm, SEAL_RINGS.x * big_r, aa), seal_line(rm, SEAL_RINGS.y * big_r, aa)),
+            max(seal_line(rm, SEAL_RINGS.z * big_r, aa), seal_line(rm, SEAL_RINGS.w * big_r, aa)),
+        );
+        let sector = atan2(d.y, d.x) * SEAL_SPOKES / 6.2831853;
+        let off = abs(fract(sector + 0.5) - 0.5) * 6.2831853 / SEAL_SPOKES * rm;
+        let spans = step(SEAL_RINGS.x * big_r, rm) * step(rm, SEAL_RINGS.z * big_r);
+        groove = max(groove, seal_line(off, 0.0, aa) * spans);
+        c *= mix(1.0, SEAL_GROOVE_DARK, groove);
+        rough = mix(rough, 1.0, groove);
+        c *= mix(1.0, SEAL_RIM_DARK, smoothstep(SEAL_RINGS.w * big_r, SEAL_RINGS.w * big_r + aa, rm));
+        c *= mix(1.0, SEAL_HUB_PALE, 1.0 - smoothstep(SEAL_RINGS.x * big_r - aa, SEAL_RINGS.x * big_r, rm));
+    }
 
     // 2 · Grime toward the ground, in a ragged band: splash and soil.
     let above = p.y - ground_under(p);

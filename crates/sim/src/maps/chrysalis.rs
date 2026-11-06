@@ -14,8 +14,10 @@ pub const DEF: Def = Def {
     id: 6,
     name: "Chrysalis",
     practice: false,
+    modes: 0,
     lo: (-22.0, -13.7),
     hi: (22.0, 13.7),
+    void: f32::NEG_INFINITY,
     boxes: &[
     ],
     looks: &[],

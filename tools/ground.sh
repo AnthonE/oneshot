@@ -15,10 +15,10 @@
 #
 # And the bases' metal, the same way from ambientCG (ambientcg.com, CC0):
 # `steel` (plates with seams and bolts) and `tread` (tread
-# plate, for a deck or a ramp), each with its roughness and occlusion as
-# the boxes' sets have them (`textures::BOXES`).
+# plate, for a deck or a ramp), and Cloudbreak's grey `stone`, each with its
+# roughness and occlusion as the boxes' sets have them (`textures::BOXES`).
 #
-#   tools/ground.sh steel tread
+#   tools/ground.sh steel tread stone
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,6 +33,7 @@ SETS=(
 METAL=(
   "steel|MetalPlates001|steel plates a quarter of the tile across, staggered, bolted at their corners"
   "tread|DiamondPlate008C|worn tread plate"
+  "stone|Concrete034|smooth light grey concrete, dressed stone's"
 )
 src=sources/polyhaven
 acg=sources/ambientcg

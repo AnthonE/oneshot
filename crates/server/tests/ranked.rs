@@ -199,6 +199,7 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) ->
         skin: look.skin,
         emblem: look.emblem,
         party: 0,
+        stamp: sim::STAMP,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();

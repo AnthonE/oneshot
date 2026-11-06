@@ -176,6 +176,7 @@ impl Session {
             skin: look.skin,
             emblem: look.emblem,
             party,
+            stamp: sim::STAMP,
         }
     }
 

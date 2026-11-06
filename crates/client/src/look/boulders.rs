@@ -67,6 +67,11 @@ const FIT_TIE: f32 = 1.2;
 /// The models' paint over Meshy's (linear): toward the cliffs' own red
 /// (`ground::TINT`), a little darker so a boulder sits in the ground.
 pub const TINT: [f32; 3] = [0.74, 0.62, 0.52];
+/// An island's (`level::Land::Isle`): pale cream sandstone, its boulders
+/// of the sand's family; and its stacks, far off in the air, plain cream
+/// without the stack's own paint (its top is green).
+pub const PALE_TINT: [f32; 3] = [2.0, 3.2, 4.0];
+pub const PALE_STACK: [f32; 3] = [0.5, 0.41, 0.3];
 /// Stone the sea washes: darker and glossier.
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
 pub const WET_ROUGH: f32 = 0.45;
@@ -85,6 +90,8 @@ pub struct Boulder {
     pub min: Vec3,
     pub max: Vec3,
     pub key: u32,
+    /// An island's: in [`PALE_TINT`].
+    pub pale: bool,
 }
 
 /// A base's buttress waiting for its pylon: a turned box the sim collides
@@ -115,6 +122,8 @@ pub fn pylon_transform(at: Transform, hx: f32, h: f32, hz: f32) -> Transform {
 pub struct Stone {
     pub model: usize,
     pub wet: bool,
+    /// An island's: in [`PALE_TINT`] ([`PALE_STACK`] for a stack).
+    pub pale: bool,
 }
 
 /// Rock nobody reaches, by map: the model, where its middle (a block) or
@@ -180,10 +189,26 @@ const DRY_FORK: [Prop; 19] = [
     stone(2, [157.5, -5.9, 70.0], [5.0, 5.2, 4.4], 0.8, -0.6),
 ];
 
+/// Cloudbreak's sky: stacks standing out of the sea of cloud (at −60) all
+/// round, their feet under it, each further one paler in the air, some
+/// over the island's own height so the skyline is never empty.
+const CLOUDBREAK: [Prop; 9] = [
+    stack(-150.0, -230.0, -75.0, 85.0, 0.6),
+    stack(-290.0, -380.0, -75.0, 110.0, 2.1),
+    stack(120.0, -300.0, -75.0, 75.0, 4.0),
+    stack(260.0, 90.0, -75.0, 105.0, 1.3),
+    stack(-260.0, 160.0, -75.0, 100.0, 3.3),
+    stack(60.0, 380.0, -75.0, 105.0, 5.0),
+    stack(-460.0, -60.0, -75.0, 125.0, 0.2),
+    stack(380.0, -300.0, -75.0, 100.0, 2.7),
+    stack(-90.0, -480.0, -75.0, 115.0, 1.8),
+];
+
 /// The scenery of map `id`.
 pub fn scenery(id: u8) -> &'static [Prop] {
     match id {
         3 => &DRY_FORK,
+        7 => &CLOUDBREAK,
         _ => &[],
     }
 }
@@ -256,6 +281,7 @@ pub struct Stones {
     paints: Vec<Handle<StandardMaterial>>,
     dry: Vec<Handle<StandardMaterial>>,
     wet: Vec<Handle<StandardMaterial>>,
+    pale: Vec<Handle<StandardMaterial>>,
     failed: bool,
 }
 
@@ -326,8 +352,20 @@ impl Stones {
                 ..base.clone()
             };
             let (dry, wet) = (tinted(TINT, DRY_ROUGH), tinted(WET_TINT, WET_ROUGH));
+            let pale = if i == STACK {
+                StandardMaterial {
+                    base_color: Color::linear_rgb(PALE_STACK[0], PALE_STACK[1], PALE_STACK[2]),
+                    base_color_texture: None,
+                    ..dry.clone()
+                }
+            } else if i == PYLON_MODEL {
+                dry.clone()
+            } else {
+                tinted(PALE_TINT, DRY_ROUGH)
+            };
             self.dry.push(mats.add(dry));
             self.wet.push(mats.add(wet));
+            self.pale.push(mats.add(pale));
         }
         Some(true)
     }
@@ -369,7 +407,7 @@ pub fn dress(
         )>()
         .insert((
             Mesh3d(stones.meshes[model].clone()),
-            MeshMaterial3d(stones.dry[model].clone()),
+            MeshMaterial3d(if b.pale { &stones.pale } else { &stones.dry }[model].clone()),
             block_transform(b.min, b.max, quarters),
             Bare(b.min, b.max),
             Dressed,
@@ -400,7 +438,13 @@ pub fn dress(
         if !ok {
             continue;
         }
-        let paint = if s.wet { &stones.wet } else { &stones.dry };
+        let paint = if s.pale {
+            &stones.pale
+        } else if s.wet {
+            &stones.wet
+        } else {
+            &stones.dry
+        };
         ec.insert((
             Mesh3d(stones.meshes[s.model].clone()),
             MeshMaterial3d(paint[s.model].clone()),
@@ -408,14 +452,16 @@ pub fn dress(
     }
 }
 
-/// The scenery of map `id`, each piece waiting for its model.
-pub fn spawn_scenery(commands: &mut Commands, id: u8) {
+/// The scenery of map `id`, each piece waiting for its model; `pale` on an
+/// island.
+pub fn spawn_scenery(commands: &mut Commands, id: u8, pale: bool) {
     for p in scenery(id) {
         commands.spawn((
             LevelPart,
             Stone {
                 model: p.model,
                 wet: p.wet,
+                pale,
             },
             prop_transform(p),
             Visibility::default(),

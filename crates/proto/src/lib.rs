@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 23;
+pub const PROTO_VER: u16 = 24;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -1095,6 +1095,11 @@ pub enum Msg {
         /// A match: the party it comes with (its code), to be seated with
         /// it; a lobby: the party to join. 0: none.
         party: u32,
+        /// The client's sim's stamp (`sim::STAMP`): a server whose own
+        /// differs refuses it ([`REFUSE_VERSION`]), as it does an old
+        /// `proto`. Last on the wire, and 0 when a client from before it
+        /// sent none, so that client still reads its refusal.
+        stamp: u32,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -1321,6 +1326,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             skin,
             emblem,
             party,
+            stamp,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
@@ -1330,6 +1336,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*skin as u32, 8)?;
             w.write(*emblem as u32, 16)?;
             w.write(*party, party::CODE_BITS)?;
+            w.write(*stamp, 32)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -1574,6 +1581,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             skin: r.read(8)? as u8,
             emblem: r.read(16)? as u16,
             party: r.read(party::CODE_BITS)?,
+            stamp: if r.remaining_bits() >= 32 { r.read(32)? } else { 0 },
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -1735,4 +1743,30 @@ pub fn frame_msg(m: &Msg, out: &mut [u8; MAX_STREAM_MSG + frame::LEN_PREFIX_BYTE
     let mut body = [0u8; MAX_STREAM_MSG];
     let n = encode_msg(m, &mut body)?;
     frame::encode_into(out, &body[..n]).ok_or(WireError::Overflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hello from a page from before the stamp (no stamp on the wire)
+    /// still reads, its stamp 0, so the server can tell it to reload.
+    #[test]
+    fn a_hello_without_a_stamp_reads_as_stamp_zero() {
+        let mut buf = [0u8; MAX_STREAM_MSG];
+        let mut w = BitWriter::new(&mut buf);
+        w.write(1, 8).unwrap();
+        w.write(23, 16).unwrap();
+        w_name(&mut w, &Name::new("old page")).unwrap();
+        w_pass(&mut w, &Pass::NONE).unwrap();
+        w.write(MODE_CASUAL as u32, MODE_BITS).unwrap();
+        w.write(0, 8).unwrap();
+        w.write(0, 16).unwrap();
+        w.write(0, party::CODE_BITS).unwrap();
+        let n = w.finish();
+        match decode_msg(&buf[..n]).unwrap() {
+            Msg::Hello { proto, stamp, .. } => assert_eq!((proto, stamp), (23, 0)),
+            m => panic!("{m:?}"),
+        }
+    }
 }

@@ -110,6 +110,11 @@ pub struct Fighter {
     /// no gun fires and no grenade goes; a melee still swings. The world's
     /// to set; its own tick reads it.
     pub flag: bool,
+    /// On a map with a void: who last hurt this fighter, their seat plus 1
+    /// (0 nobody), and ticks left on its feet before a fall is its own
+    /// again ([`FALL_CREDIT_MS`]). The world's.
+    pub hurt_by: u8,
+    pub hurt_t: u16,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -211,6 +216,8 @@ impl Fighter {
         self.grenades = GREN_START;
         self.respawn = 0;
         self.flag = false;
+        self.hurt_by = 0;
+        self.hurt_t = 0;
         self.ride = 0;
         self.lunge = 0;
         self.lunge_left = 0;
@@ -570,6 +577,12 @@ impl Thing for Fighter {
         // Only while true, so a mode without flags hashes as it did.
         if self.flag {
             h.u8(0xF1);
+        }
+        // Only on a map with a void, the only place it is set.
+        if self.hurt_by != 0 {
+            h.u8(0xF2);
+            h.u8(self.hurt_by);
+            h.u16(self.hurt_t);
         }
     }
 }

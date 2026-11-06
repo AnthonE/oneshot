@@ -14,8 +14,10 @@ pub const DEF: Def = Def {
     id: 4,
     name: "The Range",
     practice: true,
+    modes: 0,
     lo: (-30.0, -20.0),
     hi: (30.0, 20.0),
+    void: f32::NEG_INFINITY,
     boxes: &[
         [-31.0, 0.0, -21.0, 31.0, 8.0, -20.0],
         [-31.0, 0.0, 20.0, 31.0, 8.0, 21.0],
