@@ -513,6 +513,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // Triple T's spray paint: the side's headband, the emblem, the trim
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
+    .add_plugins(look::gun_skin::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
@@ -661,6 +662,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     app.add_systems(Update, look::fx::vent::spawn_orbs);
+    app.add_systems(Update, look::bodies::stand_up);
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
@@ -1289,7 +1291,7 @@ fn draw_fighters(
             let e = if opts.capsules {
                 look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
             } else {
-                look::bodies::spawn(&mut commands, &models, d.team, look)
+                look::bodies::spawn(&mut commands, d.team, look)
             };
             commands.entity(e).insert(Kept);
             drawn.fighters.insert(d.slot, (e, d.team, look));
@@ -1542,6 +1544,7 @@ pub(crate) fn view(
 fn draw_view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
+    st: Res<hud::HudState>,
     time: Res<Time>,
     models: Res<look::guns::Models>,
     mut commands: Commands,
@@ -1559,6 +1562,7 @@ fn draw_view(
     let scoped = look.scoped(sim::arms::arm(f.gun().arm));
     let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
+        skin: st.look(link.0.session().core.slot).skin,
         f,
         at: Vec3::new(p.x, p.y, p.z),
         yaw: look.yaw,

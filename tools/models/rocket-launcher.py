@@ -22,4 +22,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('rocket-launcher', 1.054, hold=0.22, glow=['#49b8ff'])
+temper(gun)
 finish('rocket-launcher', [gun], grip=0.455, rise=rise, fore=0.727, under=0.03, long=True, note='one fat tube, shouldered; the display box on its side')

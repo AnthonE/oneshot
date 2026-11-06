@@ -18,5 +18,5 @@ ASPECT = '16:9'
 FRONT = 'the nose'
 
 scene()
-gun, rise = generated('rocket', 0.6, tris=4000)
+gun, rise = generated('rocket', 0.6, tris=4000, tex_px=SMALL_TEX_PX, map_px=SMALL_MAP_PX)
 finish('rocket', [gun], grip=0.3, rise=rise, long=True, note='the projectile, not held')

@@ -43,10 +43,12 @@ TRACES = os.path.join(ROOT, 'traces', 'guns')
 # Meshy's raw meshes (meshy_gen.py), not in the repo.
 SOURCES = os.environ.get('MESHY_SRC', os.path.join(ROOT, 'sources', 'meshy'))
 # The longest side a generated gun's colour map keeps, and its other maps
-# (the normals, the roughness and metal, the glow): every one of them is in
-# memory from the title on, on a phone's page too.
-TEX_PX = int(os.environ.get('MODEL_TEX_PX', 1024))
-MAP_PX = int(os.environ.get('MODEL_MAP_PX', 512))
+# (the normals, the roughness and metal, the glow); a small prop, a rocket or
+# a frag, keeps less of each (`generated`'s `tex_px`, `map_px`).
+TEX_PX = 2048
+MAP_PX = 1024
+SMALL_TEX_PX = 1024
+SMALL_MAP_PX = 512
 # Another paint on a gun's mesh (meshy_gen.py --paint): built beside it as
 # `<name>~<tag>` from `<name>~<tag>_raw.glb`.
 PAINT = os.environ.get('MODEL_PAINT', '')
@@ -386,7 +388,7 @@ def _ramp(x, lo, hi):
     return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
 
 
-def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0):
+def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0, map_px=MAP_PX):
     """Lights what the paint made bright: an emissive map that is the base
     colour where its hue is within `window` degrees of one of `hues` (all
     of it within half that), it is saturated, and its value is over
@@ -415,7 +417,7 @@ def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0):
     out[..., :3] = (np.array(srgb(hues[0]), dtype=np.float32) if pale else rgb) * mask[..., None]
     lit = bpy.data.images.new(material.name + '_glow', w, h, alpha=False)
     lit.pixels.foreach_set(out.ravel())
-    k = MAP_PX / max(w, h)
+    k = map_px / max(w, h)
     if k < 1.0:
         lit.scale(max(1, round(w * k)), max(1, round(h * k)))
     lit.pack()
@@ -454,7 +456,7 @@ def _painted(name):
 
 
 def generated(name, length, hold=None, flip=None, over=False, width=None, bore=None, glow=(), glow_strength=4.0,
-              glow_floor=0.45, pale=False, tris=None, rough=ROUGH, metal=METAL):
+              glow_floor=0.45, pale=False, tris=None, rough=ROUGH, metal=METAL, tex_px=TEX_PX, map_px=MAP_PX):
     """Meshy's raw mesh of `name` (sources/meshy/<name>_raw.glb, from
     meshy_gen.py) in gun space, `length` metres from its rear at x = 0 to
     its muzzle, scaled evenly: `(object, rise)`, the rise for `finish`.
@@ -472,7 +474,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
     kind of share), and `rise` is how far over the axis that is. With no
     `hold` (a rocket) the axis is the muzzle's own.
 
-    The colour map comes down to TEX_PX, the others to MAP_PX. The glow map
+    The colour map comes down to `tex_px`, the others to `map_px`. The glow map
     Meshy ships is dropped (a stick's peaked at 0.53); `glow` names the
     colours of light the paint carries (hex) and those texels are lit at
     `glow_strength` (`glow_floor`: how bright a texel must be painted to
@@ -548,7 +550,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
         colour.add(node.image)
     for im in bpy.data.images:
         w, h = im.size
-        px = TEX_PX if im in colour else MAP_PX
+        px = tex_px if im in colour else map_px
         if max(w, h) > px:
             s = px / max(w, h)
             im.scale(max(1, round(w * s)), max(1, round(h * s)))
@@ -563,7 +565,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
             if n.type == 'NORMAL_MAP':
                 n.inputs['Strength'].default_value = NORMAL
         if glow:
-            lit = _glow(material, glow, glow_strength, glow_floor, pale)
+            lit = _glow(material, glow, glow_strength, glow_floor, pale, map_px=map_px)
             print(f'GLOW {name}: {lit * 100:.2f}% of the map is lit')
     return o, muzzle - axis
 
