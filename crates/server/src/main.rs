@@ -6,9 +6,9 @@
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
-//! [--capacity 256] [--drain-max 900]
+//! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta] [--no-far-rates]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
-//! [--sim-threads 0] [--load-from ip]… [--match-secs N]`
+//! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--elo-queue] [--load-from ip]… [--match-secs N]`
 //!
 //! `--match-secs` puts every mode's match on an N-second clock: for tests
 //! that play one match after another (`ci/e2e.mjs`'s `E2E_AGAIN`).
@@ -16,6 +16,26 @@
 //! `--sim-threads` is how many threads the rooms step on: 0 (the default)
 //! one a core, 1 the sim thread alone. `--load-from` lets a load test's box
 //! (`tools/load`) hold more than an address's share of connections.
+//!
+//! `--endpoints N` listens on N UDP ports, `--bind`'s and each
+//! `--endpoint-step` after (10: slot a on 61250, 61260, 61270, slot b on
+//! 61251, 61261, 61271), each its own socket and receive loop; `server.json`
+//! hands pages one in turn. Both slots must run the same two flags, and
+//! every port must be open in the firewalls. `--elo-queue` queues ranked
+//! players in Elo Pros' queue, shared by every server in the game's list,
+//! which puts each match on one with room; a player matched onto another
+//! server is moved there (`Msg::Moved`). Every server then needs the same
+//! `--nonce-key`, so a ticket from one is good on the rest. `--net-nice` is how far below
+//! the sim the network's threads run (Linux's nice, 0 for the same).
+//!
+//! `--capacity` is in players (a player's lobby beside its match isn't
+//! another). `--big-snapshot-hz` is the snapshot rate on a big map (Big
+//! Team, and Capture the Flag there): 64 as everywhere by default, 32 to
+//! halve a box's packets; the arenas and ranked always get 64. `--no-delta`
+//! sends every snapshot whole rather than as what changed since the one
+//! the client acked (`proto::delta`). `--no-far-rates` updates everyone in
+//! every snapshot on a big map too (by default one past 60 m is updated
+//! every other, past 120 m every fourth: `room::update_every`).
 //!
 //! `--loadout` starts everyone (gun game aside) with those guns, by id or
 //! name (`--loadout sniper,magnum`): for looking at a gun in a match.
@@ -118,6 +138,19 @@ fn main() {
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--no-delta" => cfg.deltas = false,
+            "--no-far-rates" => cfg.far_rates = false,
+            "--elo-queue" => cfg.elo_queue = true,
+            "--net-nice" => cfg.net_nice = val().parse().unwrap_or_else(|_| die("--net-nice is 0 to 19")),
+            "--endpoints" => cfg.endpoints = val().parse().unwrap_or_else(|_| die("--endpoints is a count")),
+            "--endpoint-step" => {
+                cfg.endpoint_step = val().parse().unwrap_or_else(|_| die("--endpoint-step is a port count"))
+            }
+            "--big-snapshot-hz" => {
+                cfg.big_snapshot_hz = val()
+                    .parse()
+                    .unwrap_or_else(|_| die("--big-snapshot-hz is 64, 32 or 16"))
+            }
             "--sim-threads" => cfg.sim_threads = val().parse().unwrap_or_else(|_| die("--sim-threads is a count")),
             "--load-from" => cfg
                 .load_sources
@@ -159,11 +192,22 @@ fn main() {
         (None, None) => {}
         _ => die("--elo-key and --elo-key-id go together"),
     }
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| die(&e.to_string()));
+    // The network's threads a little below the sim's: on a busy box the
+    // tick takes its cores first and sending fills what's left, rather than
+    // a burst of sends holding up every room's tick.
+    let nice = cfg.net_nice;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(move || server::lower_this_thread(nice))
+        .build()
+        .unwrap_or_else(|e| die(&e.to_string()));
     rt.block_on(async {
         let h = server::run(cfg).await.unwrap_or_else(|e| die(&e));
         // Tests read these lines: keep their shape.
         println!("game: {} (WebTransport)", h.addr);
+        for a in &h.addrs[1..] {
+            println!("game: {a} (WebTransport, another endpoint)");
+        }
         println!("cert sha-256: {}", server::hex(&h.cert_hash));
         println!("sim threads: {}", h.ctx.sim_threads);
         if let Some(http) = h.http {

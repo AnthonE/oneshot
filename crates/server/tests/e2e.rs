@@ -141,6 +141,7 @@ async fn hello(
             stamp: sim::STAMP,
             headwear: 0,
             footwear: 0,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )

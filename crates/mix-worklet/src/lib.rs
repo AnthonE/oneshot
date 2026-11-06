@@ -67,14 +67,11 @@ pub extern "C" fn mix_install(id: u32, rate: u32, n: usize) {
     W.with(|w| {
         let w = &mut *w.borrow_mut();
         let n = n.min(w.buf.len() / 4);
-        let pcm: Vec<f32> = w.buf[..n * 4]
+        let pcm = w.buf[..n * 4]
             .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .collect();
-        w.engine.apply(Cmd::Install {
-            id: id as u16,
-            clip: Clip::from_f32(&pcm, rate),
-        });
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let clip = Clip::from_samples(pcm, rate);
+        w.engine.apply(Cmd::Install { id: id as u16, clip });
     })
 }
 

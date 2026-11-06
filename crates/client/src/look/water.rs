@@ -17,14 +17,13 @@
 //! and the waterline falls where the two meshes cross; past the terrain a
 //! skirt of geometric rings reaches the camera's far plane. The vertex
 //! stage draws the swell (`water.wgsl`); the CPU writes the phases, once a
-//! frame, and nothing else.
+//! frame, into the seas' motion texture (`sea_motion.rs`), and nothing else.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::NoAutoAabb;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
-use bevy::math::Affine2;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -450,10 +449,10 @@ pub struct WaterParams {
     /// [`hidden_slope`].
     pub shore: Vec4,
     /// A wave of [`WAVES`] a slot: xy its direction, z one over its length
-    /// (cycles a metre), w its amplitude.
+    /// (cycles a metre), w its amplitude. Their phases and the ripples'
+    /// drift move every frame, so they are not here but in
+    /// `sea_motion::MOTION` ([`animate`]).
     pub waves: [Vec4; WAVE_COUNT],
-    /// The waves' phases, cycles. Written once a frame by [`animate`].
-    pub phase: Vec4,
 }
 
 /// The clear sky the sea reflects, cd/m²: the browser's backdrop
@@ -471,7 +470,7 @@ fn sky_lanes() -> ([f32; 3], [f32; 3]) {
 }
 
 impl WaterParams {
-    /// A clear day under the sun at `sun`, every phase at zero.
+    /// A clear day under the sun at `sun`.
     pub fn noon(sun: Vec3) -> Self {
         let (zenith, horizon) = sky_lanes();
         Self {
@@ -484,7 +483,6 @@ impl WaterParams {
             glint: Vec4::new(water_f0(), GLINT_A2_NEAR, GLINT_A2_FAR, GLINT_FAR_M),
             shore: Vec4::new(EDGE_M, FOAM_SURGE_FLOOR, HORIZON_NDOTV, hidden_slope()),
             waves: WAVES.map(|w| Vec4::new(w.dir[0], w.dir[1], 1.0 / w.len_m, w.amp_m)),
-            phase: Vec4::ZERO,
         }
     }
 }
@@ -500,6 +498,9 @@ pub struct Water {
     #[texture(101, dimension = "cube")]
     #[sampler(102)]
     pub sky: Handle<Image>,
+    /// The waves' phases and the ripples' drift (`sea_motion.rs`).
+    #[texture(103, sample_type = "float", filterable = false)]
+    pub motion: Handle<Image>,
 }
 
 pub type WaterMaterial = ExtendedMaterial<StandardMaterial, Water>;
@@ -573,6 +574,7 @@ pub fn material(ripples: Handle<Image>, sky: Handle<Image>, sun: Vec3) -> WaterM
         extension: Water {
             params: WaterParams::noon(sun),
             sky,
+            motion: super::sea_motion::MOTION,
         },
     }
 }
@@ -719,14 +721,10 @@ pub fn mesh(t: &TerrainDef, sea_y: f32) -> (Mesh, Aabb) {
 // The entity and its one system.
 // ---------------------------------------------------------------------------
 
-/// The sea's entity: the waves' phases (cycles) and the ripple layer's
-/// drift (tiles), advanced by [`animate`]. A `LevelPart`, so it goes down
-/// with its map.
+/// The sea's entity, its waves moved by [`animate`]. A `LevelPart`, so it
+/// goes down with its map.
 #[derive(Component, Default)]
-pub struct WaterPart {
-    pub phase: [f32; WAVE_COUNT],
-    pub drift: Vec2,
-}
+pub struct WaterPart;
 
 /// Spawns the sea over `terrain` at `sea_y` (the map's `light.sea`), under
 /// the sun toward `sun` (the map's mood's).
@@ -745,7 +743,7 @@ pub fn spawn(
     commands
         .spawn((
             crate::level::LevelPart,
-            WaterPart::default(),
+            WaterPart,
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(material(ripples, sky, sun))),
             Transform::IDENTITY,
@@ -759,26 +757,20 @@ pub fn spawn(
         .id()
 }
 
-/// Once a frame: each wave's phase on by `ω·dt` (in cycles, wrapped, never
-/// `k·x − ω·t` off a clock: f32 seconds times a wavenumber loses its low
-/// bits within an hour) and the ripple layer's drift wrapped to one tile.
-pub fn animate(
-    time: Res<Time>,
-    mut materials: ResMut<Assets<WaterMaterial>>,
-    mut seas: Query<(&mut WaterPart, &MeshMaterial3d<WaterMaterial>)>,
-) {
-    let dt = time.delta_secs();
-    for (mut sea, handle) in &mut seas {
-        for (p, w) in sea.phase.iter_mut().zip(WAVES) {
-            *p = (*p - omega(w.len_m) / core::f32::consts::TAU * dt).rem_euclid(1.0);
-        }
-        sea.drift = (sea.drift + Vec2::from_array(RIPPLE_DRIFT) * dt).rem_euclid(Vec2::ONE);
-        let Some(m) = materials.get_mut(&handle.0) else {
-            continue;
-        };
-        m.base.uv_transform = Affine2::from_translation(sea.drift);
-        m.extension.params.phase = Vec4::from_array(sea.phase);
+/// Once a frame, where there is a sea: each wave's phase on by `ω·dt` (in
+/// cycles, wrapped, never `k·x − ω·t` off a clock: f32 seconds times a
+/// wavenumber loses its low bits within an hour) and the ripple layer's
+/// drift wrapped to one tile, into the seas' motion texture, not the
+/// material (`sea_motion.rs`).
+pub fn animate(time: Res<Time>, mut motion: ResMut<super::sea_motion::SeaMotion>, seas: Query<(), With<WaterPart>>) {
+    if seas.is_empty() {
+        return;
     }
+    let dt = time.delta_secs();
+    for (p, w) in motion.phase.iter_mut().zip(WAVES) {
+        *p = (*p - omega(w.len_m) / core::f32::consts::TAU * dt).rem_euclid(1.0);
+    }
+    motion.ripples = (motion.ripples + Vec2::from_array(RIPPLE_DRIFT) * dt).rem_euclid(Vec2::ONE);
 }
 
 #[cfg(test)]

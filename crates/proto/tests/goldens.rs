@@ -227,6 +227,7 @@ fn msgs() -> Vec<Msg> {
             stamp: 0x1234_5678,
             headwear: GEAR_NONE,
             footwear: GEAR_NONE,
+            queued: proto::QueueMatch::NONE,
         },
         Msg::Hello {
             proto: PROTO_VER,
@@ -239,6 +240,7 @@ fn msgs() -> Vec<Msg> {
             stamp: 0,
             headwear: 1,
             footwear: 0,
+            queued: proto::QueueMatch::new("q-Ab3_xYz9-LmN0pQr").unwrap(),
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -273,8 +275,13 @@ fn msgs() -> Vec<Msg> {
             stamp: u32::MAX,
             headwear: 0,
             footwear: 1,
+            queued: proto::QueueMatch::NONE,
         },
         Msg::Refuse { reason: REFUSE_FULL },
+        Msg::Moved {
+            addr: proto::ServerAddr::new("eu2.game.example:61250").unwrap(),
+            queued: proto::QueueMatch::new("q-Ab3_xYz9-LmN0pQr").unwrap(),
+        },
         Msg::Seat {
             slot: 0,
             team: 0,
@@ -511,6 +518,48 @@ fn decoders_refuse_garbage() {
     }
 }
 
+/// The golden snapshot as a delta against itself two ticks before: our
+/// fighter a little along, the clock on, one remote gone.
+fn encode_delta_golden(buf: &mut [u8]) -> usize {
+    use proto::delta::{encode_delta, Keyed};
+    let cur = snapshot();
+    let mut base = cur;
+    base.tick -= 2;
+    base.clock -= 1;
+    base.own.body.pos.x -= 0.25;
+    base.n_remote = 1;
+    let (mut k, mut b) = (Keyed::default(), Keyed::default());
+    k.fill(&cur).unwrap();
+    b.fill(&base).unwrap();
+    encode_delta(&k, &b, buf).unwrap()
+}
+
+#[test]
+fn a_delta_round_trips_and_is_smaller() {
+    use proto::delta::{decode_delta, Keyed};
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_delta_golden(&mut buf);
+    let cur = snapshot();
+    let mut base = cur;
+    base.tick -= 2;
+    base.clock -= 1;
+    base.own.body.pos.x -= 0.25;
+    base.n_remote = 1;
+    let mut b = Keyed::default();
+    b.fill(&base).unwrap();
+    let mut out = Keyed::default();
+    decode_delta(&buf[..n], &b, &mut out).unwrap();
+    let mut full = [0u8; MAX_DATAGRAM];
+    let f = encode_snapshot(&cur, &mut full).unwrap();
+    assert_eq!(out.snapshot().unwrap(), decode_snapshot(&full[..f]).unwrap());
+    assert!(n * 2 < f, "{n} B as a delta, {f} B whole");
+    // Against the wrong base, or cut short, it is refused.
+    let mut wrong = b.clone();
+    wrong.tick += 1;
+    assert!(decode_delta(&buf[..n], &wrong, &mut out).is_err());
+    assert!(decode_delta(&buf[..n - 1], &b, &mut out).is_err());
+}
+
 #[test]
 fn the_bytes_match_their_goldens() {
     let mut buf = [0u8; MAX_DATAGRAM];
@@ -523,16 +572,19 @@ fn the_bytes_match_their_goldens() {
         let n = encode_msg(&m, &mut buf).unwrap();
         got.push(fnv(&buf[..n]));
     }
+    let n = encode_delta_golden(&mut buf);
+    got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0x6e38_c4b5_9200_3873,
-        0xc252_e844_4842_8630,
-        0x0292_3aea_f729_e531,
+        0x8d65_ab7c_73f8_4251,
+        0x78c0_ea04_7bec_a55f,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x47cb_5655_153f_d13f,
+        0xdc4a_71af_e7d8_b744,
         0x0835_ec07_b4ee_4fb0,
+        0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
         0xb3b0_e0c6_597a_e9cf,
         0xc3c6_2389_966a_c2c5,
@@ -552,6 +604,7 @@ fn the_bytes_match_their_goldens() {
         0x6c87_7218_bf71_5473,
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
+        0x547f_b8fe_3513_fdb0,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

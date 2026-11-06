@@ -1,6 +1,6 @@
 //! `oneshot-load [--page http://127.0.0.1:8080 | --addr host:port [--pin hex]
 //! [--health url]] [--players 64] [--mode big[,ffa,gun,ctf,bot]]
-//! [--ramp 10] [--hold 60] [--fps 60] [--every 5]`
+//! [--ramp 10] [--hold 60] [--fps 60] [--every 5] [--no-lobby]`
 //!
 //! Many headless players against a server (`load`'s docs): they join
 //! over `--ramp` seconds, play `--hold` more, and the report says whether
@@ -34,6 +34,7 @@ fn main() {
             }
             "--ramp" => o.ramp = secs(val()),
             "--hold" => o.hold = secs(val()),
+            "--no-lobby" => o.lobby = false,
             "--fps" => o.fps = val().parse().unwrap_or_else(|_| die("--fps is a count")),
             "--every" => {
                 let s = secs(val());
@@ -50,7 +51,20 @@ fn main() {
                 .await
                 .unwrap_or_else(|e| die(&e));
             let (addr, pin) = load::server_json(&doc).unwrap_or_else(|e| die(&e));
-            o.addr = addr;
+            // A server with several endpoints hands them out in turn: take
+            // every one it names, and spread the players over them.
+            let mut addrs = vec![addr];
+            for _ in 0..15 {
+                let Ok(doc) = load::get(&http, &format!("{p}/server.json")).await else {
+                    break;
+                };
+                if let Ok((a, _)) = load::server_json(&doc) {
+                    if !addrs.contains(&a) {
+                        addrs.push(a);
+                    }
+                }
+            }
+            o.addr = addrs.join(",");
             o.pin = o.pin.or(pin);
             o.health = o.health.take().or_else(|| Some(format!("{p}/health.json")));
         }

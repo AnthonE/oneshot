@@ -45,13 +45,19 @@ struct Water {
     // A wave a slot: xy its direction, z one over its length (cycles a
     // metre), w its amplitude.
     waves: array<vec4<f32>, 4>,
-    // The waves' phases, cycles.
-    phase: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: Water;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var sky_cube: texture_cube<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var sky_sampler: sampler;
+// What moves every frame (`sea_motion.rs`), written in place so the
+// material never changes: texel 0 the waves' phases, cycles; texel 1 xy the
+// ripples' drift, tiles.
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var sea_motion: texture_2d<f32>;
+
+fn phases() -> vec4<f32> {
+    return textureLoad(sea_motion, vec2<i32>(0, 0), 0);
+}
 
 // Deep by fiat (`water::DEEP_M`): saturates every curve here.
 const DEEP_M: f32 = 64.0;
@@ -107,10 +113,11 @@ fn vertex(in: Vertex) -> VertexOutput {
 #endif
     // Unrolled: constant indices only, which WebGL2's GLSL takes without a
     // second thought.
-    let sw = swell_term(water.waves[0], water.phase.x, share.x, local)
-        + swell_term(water.waves[1], water.phase.y, share.y, local)
-        + swell_term(water.waves[2], water.phase.z, share.z, local)
-        + swell_term(water.waves[3], water.phase.w, share.w, local);
+    let phase = phases();
+    let sw = swell_term(water.waves[0], phase.x, share.x, local)
+        + swell_term(water.waves[1], phase.y, share.y, local)
+        + swell_term(water.waves[2], phase.z, share.z, local)
+        + swell_term(water.waves[3], phase.w, share.w, local);
 
     var out: VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(in.instance_index);
@@ -265,6 +272,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #ifdef VERTEX_COLORS
     vin.color = vec4<f32>(1.0);
 #endif
+#ifdef VERTEX_UVS_A
+    // The ripples' drift, as a `uv_transform` translation would put it.
+    vin.uv = in.uv + textureLoad(sea_motion, vec2<i32>(1, 0), 0).xy;
+#endif
     // The swell's normal from the vertex. A face turned past the eye at
     // the horizon reflects the sea under it, which a mirror sky cannot
     // draw: it is bent back to graze, never past the flat sea's own.
@@ -291,7 +302,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // a hard edge.
 #ifdef VERTEX_UVS_B
     let dz = max(in.uv_b.y, 0.0);
-    let s0 = sin(reduced(dot(water.waves[0].xy, wp.xz) * water.waves[0].z + water.phase.x));
+    let s0 = sin(reduced(dot(water.waves[0].xy, wp.xz) * water.waves[0].z + phases().x));
     let surge = water.shore.y + (1.0 - water.shore.y) * (0.5 + 0.5 * s0);
     var foam = clamp(in.uv_b.x, 0.0, 1.0) * surge;
     let lip = (1.0 - smoothstep(0.05, LIP_M, dz)) * surge;

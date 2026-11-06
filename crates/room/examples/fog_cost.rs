@@ -47,7 +47,7 @@ fn main() {
             *b = Bot::new(7, s, 0.3 + 0.2 * (s % 4) as f32);
         }
         let mut fogs: Vec<Fog> = (0..MAX_FIGHTERS).map(|_| Fog::default()).collect();
-        let lead = lead_s(60.0, 4);
+        let lead = lead_s(60.0, 4, room::SNAP_EVERY);
         let mut times: Vec<f64> = Vec::new();
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         for t in 0..ticks {

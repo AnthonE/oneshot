@@ -22,6 +22,7 @@ pub mod auth;
 pub mod bugs;
 pub mod cup;
 pub mod elo;
+pub mod eloqueue;
 pub mod health;
 pub mod http;
 pub mod lobby;
@@ -74,6 +75,17 @@ pub enum ToSim {
     Queue {
         session: u64,
         entry: Box<queue::Entry>,
+        tx: outlet::Outlet,
+    },
+    /// Ranked, for a match Elo Pros' queue formed (`queue::Gathers`): its
+    /// id, every side's wallets, and the side this one is on, checked
+    /// against Elo Pros already.
+    Matched {
+        session: u64,
+        entry: Box<queue::Entry>,
+        id: String,
+        sides: Vec<Vec<String>>,
+        side: usize,
         tx: outlet::Outlet,
     },
     Leave {
@@ -207,9 +219,21 @@ pub struct Config {
     /// Origins whose pages may read `server.json` and `/nonce` (CORS): the
     /// page on elopros.com asking the game box.
     pub allow_origins: Vec<String>,
-    /// Players the server takes before a hello is answered "full"; QUIC
-    /// Retry past twice this, refusal past four times (docs/DESIGN.md §14).
+    /// Players the server takes before a hello is answered "full" (a
+    /// player's lobby beside its match isn't another); QUIC Retry past
+    /// twice every player's connections, refusal past four times
+    /// (docs/DESIGN.md §14, `net::CONNS_PER_PLAYER`).
     pub capacity: usize,
+    /// Snapshots a second on a big map (Big Team, and Capture the Flag
+    /// there): 64 as every mode by default; 32 halves its packets on a box
+    /// short of them. The arenas and ranked always get 64.
+    pub big_snapshot_hz: u32,
+    /// Snapshots go as deltas against what each client acked when that is
+    /// smaller (`proto::delta`); off (`--no-delta`), every one goes whole.
+    pub deltas: bool,
+    /// On a big map, others far from a client are updated every few
+    /// snapshots (`room::update_every`); off (`--no-far-rates`), every one.
+    pub far_rates: bool,
     /// The key nonces are signed with, shared by the two slots so either
     /// takes the other's (`auth::Nonces`). None: a key of this process's own.
     pub nonce_key: Option<[u8; 32]>,
@@ -224,6 +248,17 @@ pub struct Config {
     /// Threads the rooms step on, side by side: 0 is one a core, 1 the sim
     /// thread alone (one room after another).
     pub sim_threads: usize,
+    /// UDP endpoints, each its own socket and receive loop, on `bind`'s port
+    /// and every `endpoint_step` after (`net::ports`); `server.json` hands
+    /// pages one of them in turn.
+    pub endpoints: usize,
+    pub endpoint_step: u16,
+    /// How far below the sim's the network threads' priority is (Linux's
+    /// nice; `lower_this_thread`), so a tick isn't held up by sends.
+    pub net_nice: i32,
+    /// Ranked waits in Elo Pros' queue (`eloqueue`), which every server of
+    /// the game shares, rather than this server's own: needs `elo_key`.
+    pub elo_queue: bool,
     /// Addresses whose connections aren't held to a source's share (a load
     /// test's box; `net::Gate`). Loopback never is.
     pub load_sources: Vec<std::net::IpAddr>,
@@ -266,10 +301,17 @@ impl Default for Config {
             public_addr: None,
             allow_origins: Vec::new(),
             capacity: 256,
+            big_snapshot_hz: TICK_HZ / room::SNAP_EVERY,
+            deltas: true,
+            far_rates: true,
             nonce_key: None,
             live_file: None,
             roster_dir: None,
             sim_threads: 0,
+            endpoints: 1,
+            endpoint_step: 10,
+            net_nice: 5,
+            elo_queue: false,
             load_sources: Vec::new(),
         }
     }
@@ -320,6 +362,15 @@ pub struct Ctx {
     pub started: Instant,
     /// The threads rooms step on.
     pub sim_threads: usize,
+    /// The UDP ports this process listens on, `--bind`'s first; the
+    /// endpoints a slot runs and how far apart (`Config::endpoints`); and
+    /// the next one `server.json` hands out.
+    pub ports: Vec<u16>,
+    pub endpoints: (usize, u16),
+    pub next_port: AtomicUsize,
+    /// Ranked waits in Elo Pros' queue (`Config::elo_queue`), and who waits.
+    pub elo_queue: bool,
+    pub waiters: eloqueue::Waiters,
 }
 
 impl Ctx {
@@ -328,7 +379,7 @@ impl Ctx {
         health::Now {
             ready: !self.draining.load(Ordering::Relaxed),
             proto: proto::PROTO_VER,
-            players: self.gate.busy(),
+            players: self.gate.players(),
             capacity: self.gate.capacity,
             rooms: self.rooms.load(Ordering::Relaxed),
             uptime_s: self.started.elapsed().as_secs(),
@@ -364,7 +415,9 @@ pub struct Handle {
     pub udp_buffers: (usize, usize),
     pub stop: Arc<AtomicBool>,
     pub ctx: Arc<Ctx>,
-    endpoint: Arc<wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>>,
+    /// Every UDP address listened on, `addr` first.
+    pub addrs: Vec<SocketAddr>,
+    endpoints: Vec<Arc<wtransport::Endpoint<wtransport::endpoint::endpoint_side::Server>>>,
     jobs: tmpsc::UnboundedSender<Job>,
     cfg: Config,
 }
@@ -398,17 +451,22 @@ impl Handle {
     /// handshakes present the new one, live sessions keep theirs. Returns
     /// its hash.
     pub async fn reload(&self) -> Result<[u8; 32], String> {
-        net::reload(&self.endpoint, &self.cfg).await
+        net::reload(&self.endpoints, &self.cfg).await
     }
 }
 
 /// Starts the server on the current tokio runtime. Returns once it is
 /// listening.
 pub async fn run(cfg: Config) -> Result<Handle, String> {
-    let bound = net::endpoint(&cfg).await?;
-    let cert_hash = bound.cert_hash;
-    let endpoint = Arc::new(bound.endpoint);
-    let addr = endpoint.local_addr().map_err(|e| e.to_string())?;
+    let bound = net::endpoints(&cfg).await?;
+    let cert_hash = bound[0].cert_hash;
+    let udp_buffers = (bound[0].udp_recv, bound[0].udp_send);
+    let endpoints: Vec<_> = bound.into_iter().map(|b| Arc::new(b.endpoint)).collect();
+    let addrs = endpoints
+        .iter()
+        .map(|e| e.local_addr().map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let addr = addrs[0];
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
     let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg)>(net::INPUT_LANE);
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
@@ -461,7 +519,15 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         roster_dir: cfg.roster_dir.clone(),
         roster_file: online::file_name(addr.port()),
         sim_threads: threads,
+        ports: addrs.iter().map(|a| a.port()).collect(),
+        endpoints: (cfg.endpoints.max(1), cfg.endpoint_step),
+        next_port: AtomicUsize::new(0),
+        elo_queue: cfg.elo_queue && cfg.elo_key.is_some(),
+        waiters: eloqueue::Waiters::default(),
     });
+    if cfg.elo_queue && cfg.elo_key.is_none() {
+        eprintln!("oneshot: --elo-queue needs --elo-key: ranked uses this server's own queue");
+    }
 
     let sim = Sim {
         cfg: cfg.clone(),
@@ -476,8 +542,19 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
     tokio::spawn(journal(ctx.clone()));
+    if ctx.elo_queue {
+        tokio::spawn(eloqueue::poller(ctx.clone()));
+    }
     tokio::spawn(ctx.lobby.clone().sweeper());
-    tokio::spawn(net::accept_loop(endpoint.clone(), to_sim, inputs_tx, ctx.clone()));
+    for ep in &endpoints {
+        tokio::spawn(net::accept_loop(
+            ep.clone(),
+            to_sim.clone(),
+            inputs_tx.clone(),
+            ctx.clone(),
+        ));
+    }
+    drop((to_sim, inputs_tx));
     // A certificate from a CA is checked by the browser against its own
     // roots; only the self-signed one is pinned (and Chrome takes a pin
     // only on a certificate of 14 days or less).
@@ -490,10 +567,11 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         addr,
         http,
         cert_hash,
-        udp_buffers: (bound.udp_recv, bound.udp_send),
+        udp_buffers,
         stop,
         ctx,
-        endpoint,
+        addrs,
+        endpoints,
         jobs: jobs_tx,
         cfg,
     })
@@ -802,13 +880,20 @@ impl Sim {
             rotation_of(mode)
         };
         let map = chosen.unwrap_or_else(|| self.pick_map(seed, rot, avoid));
-        if ranked {
+        let big = !ranked && sim::maps::ALL.iter().any(|d| d.id == map.id && d.big());
+        let mut room = if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
             let mut r = Room::new(map, rules, seed, salt);
             r.passive_bots = self.cfg.passive_bots;
+            if big {
+                r.set_snap_every(snap_every(self.cfg.big_snapshot_hz));
+            }
             r
-        }
+        };
+        room.deltas = self.cfg.deltas;
+        room.far_rates = self.cfg.far_rates;
+        room
     }
 
     /// The map a room plays in rotation `rot` (`sim::map::ROT_*`), from its
@@ -846,6 +931,7 @@ impl Sim {
         let mut sessions: BTreeMap<u64, Sess> = BTreeMap::new();
         let mut rooms: Vec<Option<Live>> = Vec::new();
         let mut q = queue::Queue::default();
+        let mut gathers = queue::Gathers::default();
         let mut recent = Recent::default();
         let mut last_second = Instant::now();
         let mut seconds: u64 = 0;
@@ -984,7 +1070,7 @@ impl Sim {
                                 c.stage != cup::Stage::Done
                                     && c.entrants.iter().any(|e| e.here && e.wallet == entry.wallet)
                             });
-                        if playing || in_cup || q.has_wallet(&entry.wallet) {
+                        if playing || in_cup || q.has_wallet(&entry.wallet) || gathers.has_wallet(&entry.wallet) {
                             send_msg(
                                 &tx,
                                 &Msg::Refuse {
@@ -1007,6 +1093,55 @@ impl Sim {
                             cup_wait.push(*entry);
                         } else {
                             q.push(*entry);
+                        }
+                        self.ctx.health.joins_ranked.fetch_add(1, Ordering::Relaxed);
+                        sessions.insert(
+                            session,
+                            Sess {
+                                tx,
+                                at: None,
+                                player: Some(wallet),
+                                since: auth::now_unix(),
+                                mode,
+                                watching: None,
+                            },
+                        );
+                    }
+                    ToSim::Matched {
+                        session,
+                        entry,
+                        id,
+                        sides,
+                        side,
+                        tx,
+                    } => {
+                        let playing = rooms.iter().flatten().any(|r| {
+                            (r.over_at.is_none() && r.wallets.iter().flatten().any(|w| *w == entry.wallet))
+                                || r.id == id
+                        });
+                        let elsewhere =
+                            q.has_wallet(&entry.wallet) || cup_wait.iter().any(|e| e.wallet == entry.wallet);
+                        let refuse = if gathers.done(&id) {
+                            // Started without it, or called off: never twice.
+                            Some(proto::REFUSE_MATCH)
+                        } else if playing || elsewhere {
+                            Some(proto::REFUSE_BUSY)
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = refuse {
+                            send_msg(&tx, &Msg::Refuse { reason });
+                            self.ctx.health.refuse(reason);
+                            tx.close();
+                            continue;
+                        }
+                        let (wallet, mode) = (entry.wallet.clone(), entry.mode);
+                        send_msg(&tx, &Msg::Queued { mode, waiting_s: 0 });
+                        // A reconnect: the session it replaces is done.
+                        if let Some(old) = gathers.arrive(&id, sides, side, *entry, now) {
+                            if let Some(s) = sessions.remove(&old) {
+                                s.tx.close();
+                            }
                         }
                         self.ctx.health.joins_ranked.fetch_add(1, Ordering::Relaxed);
                         sessions.insert(
@@ -1069,6 +1204,7 @@ impl Sim {
                     }
                     ToSim::Leave { session } => {
                         q.remove(session);
+                        gathers.leave(session);
                         cup_wait.retain(|e| e.session != session);
                         for c in cups.iter_mut().flatten() {
                             c.leave(session);
@@ -1123,7 +1259,7 @@ impl Sim {
             // Going down: those still waiting are let go (no match will
             // form), the rooms play out.
             if self.ctx.draining.load(Ordering::Relaxed) {
-                for e in q.entries.drain(..).chain(cup_wait.drain(..)) {
+                for e in q.entries.drain(..).chain(cup_wait.drain(..)).chain(gathers.take_all()) {
                     if let Some(s) = sessions.remove(&e.session) {
                         send_msg(
                             &s.tx,
@@ -1148,51 +1284,25 @@ impl Sim {
                     let _ = self.jobs.send(Job::Roster(roster(&sessions, &rooms)));
                 }
                 while let Some(sides) = q.form(now) {
-                    let mode = sides[0][0].mode;
-                    let avoid = recent.of(sides.iter().flatten().map(|p| p.wallet.as_str()));
-                    let mut live = Live {
-                        room: self.new_room(mode, true, &avoid),
-                        id: format!("os-{:016x}", random_u64()),
-                        mode,
-                        links: [None; MAX_FIGHTERS],
-                        wallets: Default::default(),
-                        players: Default::default(),
-                        joined: [0; MAX_FIGHTERS],
-                        over_at: None,
-                        cup: None,
-                        watchers: Vec::new(),
-                        private: false,
-                        parties: Vec::new(),
-                        out: Vec::new(),
-                    };
-                    let mut outs = Vec::new();
-                    for (side, players) in sides.iter().enumerate() {
-                        for (k, p) in players.iter().enumerate() {
-                            // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
-                            let slot = side + 2 * k;
-                            outs.push(live.room.seat_person(slot, p.name, p.look));
-                            live.links[slot] = Some(p.session);
-                            live.wallets[slot] = Some(p.wallet.clone());
-                            live.players[slot] = Some(p.wallet.clone());
-                            recent.note(p.wallet.clone(), live.room.world.map.id, now);
-                        }
-                    }
-                    let i = place(&mut rooms, live);
-                    for side in &sides {
-                        for p in side {
-                            if let Some(s) = sessions.get_mut(&p.session) {
-                                let slot = rooms[i]
-                                    .as_ref()
-                                    .unwrap()
-                                    .links
-                                    .iter()
-                                    .position(|l| *l == Some(p.session));
-                                s.at = slot.map(|sl| (i, sl as u8));
-                            }
-                        }
-                    }
-                    for out in outs {
-                        deliver(&sessions, rooms[i].as_ref().unwrap(), out);
+                    let id = format!("os-{:016x}", random_u64());
+                    self.seat_ranked(&sides, id, &mut rooms, &mut sessions, &mut recent, now);
+                }
+                // Elo Pros' queue: a match everyone has come for starts;
+                // one not everyone came for in time is called off.
+                let due = gathers.due(now);
+                for (id, sides) in due.start {
+                    self.seat_ranked(&sides, id, &mut rooms, &mut sessions, &mut recent, now);
+                }
+                for e in due.called_off {
+                    if let Some(s) = sessions.remove(&e.session) {
+                        send_msg(
+                            &s.tx,
+                            &Msg::Refuse {
+                                reason: proto::REFUSE_MATCH,
+                            },
+                        );
+                        self.ctx.health.refuse(proto::REFUSE_MATCH);
+                        s.tx.close();
                     }
                 }
                 // A cup: once enough have entered, when it fills or the wait
@@ -1328,6 +1438,69 @@ impl Sim {
         }
     }
 
+    /// A ranked match whose sides are all here: a room of its own, seats
+    /// alternating sides (0 and 2 red, 1 and 3 blue), each told where it
+    /// sits. `id` is what its result is reported under: the server's own
+    /// for its queue, Elo Pros' match id for one its queue formed.
+    fn seat_ranked(
+        &self,
+        sides: &[Vec<queue::Entry>],
+        id: String,
+        rooms: &mut Vec<Option<Live>>,
+        sessions: &mut BTreeMap<u64, Sess>,
+        recent: &mut Recent,
+        now: Instant,
+    ) {
+        let Some(mode) = sides.iter().flatten().next().map(|e| e.mode) else {
+            return;
+        };
+        let avoid = recent.of(sides.iter().flatten().map(|p| p.wallet.as_str()));
+        let mut live = Live {
+            room: self.new_room(mode, true, &avoid),
+            id,
+            mode,
+            links: [None; MAX_FIGHTERS],
+            wallets: Default::default(),
+            players: Default::default(),
+            joined: [0; MAX_FIGHTERS],
+            over_at: None,
+            cup: None,
+            watchers: Vec::new(),
+            private: false,
+            parties: Vec::new(),
+            out: Vec::new(),
+        };
+        let mut outs = Vec::new();
+        for (side, players) in sides.iter().enumerate() {
+            for (k, p) in players.iter().enumerate() {
+                // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
+                let slot = side + 2 * k;
+                outs.push(live.room.seat_person(slot, p.name, p.look));
+                live.links[slot] = Some(p.session);
+                live.wallets[slot] = Some(p.wallet.clone());
+                live.players[slot] = Some(p.wallet.clone());
+                recent.note(p.wallet.clone(), live.room.world.map.id, now);
+            }
+        }
+        let i = place_room(rooms, live);
+        for side in sides {
+            for p in side {
+                if let Some(s) = sessions.get_mut(&p.session) {
+                    let slot = rooms[i]
+                        .as_ref()
+                        .unwrap()
+                        .links
+                        .iter()
+                        .position(|l| *l == Some(p.session));
+                    s.at = slot.map(|sl| (i, sl as u8));
+                }
+            }
+        }
+        for out in outs {
+            deliver(sessions, rooms[i].as_ref().unwrap(), out);
+        }
+    }
+
     /// One room's tick, on whichever thread steps it: its snapshots and
     /// messages to its sessions and watchers, and its end noticed (its
     /// stats, replay and report handed to the jobs task).
@@ -1339,7 +1512,7 @@ impl Sim {
             if let (Some(s), false) = (link, bytes.is_empty()) {
                 // Full means the session is behind: this snapshot goes,
                 // the next replaces it.
-                s.tx.datagram(bytes.to_vec());
+                s.tx.datagram(bytes);
             }
         });
         deliver(sessions, r, out.drain(..));
@@ -1747,10 +1920,33 @@ fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
         }
         for fr in &frames {
             if let Some(b) = &fr.snaps[follow as usize] {
-                s.tx.datagram(b.to_vec());
+                s.tx.datagram(b);
             }
         }
     }
+}
+
+/// Lowers the calling thread's priority by `nice` (Linux keeps nice a
+/// thread; raising it needs no privilege). Elsewhere, nothing.
+pub fn lower_this_thread(nice: i32) {
+    #[cfg(target_os = "linux")]
+    if nice > 0 {
+        // SAFETY: gettid and setpriority on the calling thread touch no memory.
+        unsafe {
+            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+            libc::setpriority(libc::PRIO_PROCESS, tid, nice.min(19));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = nice;
+}
+
+/// Ticks between snapshots for `hz` a second: the nearest rate that
+/// divides the tick (128: 64, 32, 16).
+pub fn snap_every(hz: u32) -> u32 {
+    (TICK_HZ / hz.clamp(16, TICK_HZ / room::SNAP_EVERY))
+        .next_power_of_two()
+        .min(8)
 }
 
 /// Room messages to their seats' sessions, each framed once and its bytes

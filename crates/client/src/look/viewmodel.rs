@@ -79,7 +79,7 @@ use super::fx::vent::ViewHeat;
 use super::guns::{gun, spawn_posed, view_basis, Models};
 use super::hands::{Grip, Grips};
 use super::shake::{peak_to_speed, spring};
-use super::shield::ShieldMaterial;
+use super::shield::{Flare, ShieldMaterial, Tone};
 
 /// How much smaller, and nearer, the gun is than it looks.
 pub const SHRINK: f32 = 0.25;
@@ -308,6 +308,10 @@ pub struct ViewGun {
     drawn: u8,
     /// The skin it was spawned in.
     skin: u8,
+    /// The guns this hand has had out of late, posed and hidden while
+    /// another is (by arm and skin, the longest put away first): a swap
+    /// shows one again rather than load its scene anew.
+    rack: Vec<(u8, u8, Entity)>,
     /// How far down for a change, 0..=1.
     drop: f32,
     kick: Spring,
@@ -410,13 +414,8 @@ pub fn shimmer(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
     fx: Res<super::fx::Fx>,
-    kit: Option<Res<ViewKit>>,
-    mut shells: ResMut<Assets<ShieldMaterial>>,
-    mut q: Query<&mut Visibility, With<ViewShell>>,
+    mut q: Query<(&mut Visibility, &mut MeshTag), With<ViewShell>>,
 ) {
-    let Some(kit) = kit else {
-        return;
-    };
     let core = &link.0.session().core;
     let f = core.own().0;
     let hit = if f.alive {
@@ -424,24 +423,24 @@ pub fn shimmer(
     } else {
         0.0
     };
-    let (rgb, level) = match () {
-        _ if f.alive && f.camo > 0 => (super::bodies::CAMO, hit.max(CAMO_IN_VIEW)),
-        _ if f.alive && f.overshield() => (super::bodies::OVER, hit.max(OVER_IN_VIEW)),
-        _ => (super::shield::GOLD, hit),
+    let (tone, level) = match () {
+        _ if f.alive && f.camo > 0 => (Tone::Camo, hit.max(CAMO_IN_VIEW)),
+        _ if f.alive && f.overshield() => (Tone::Over, hit.max(OVER_IN_VIEW)),
+        _ => (Tone::Gold, hit),
     };
     let on = level > 0.004;
-    let want = rgb.extend(if on { level } else { 0.0 });
-    if let Some(m) = shells.get(&kit.shell) {
-        let c = m.extension.color;
-        if (c.w - want.w).abs() > 0.002 || c.truncate() != rgb || (!on && c.w != 0.0) {
-            if let Some(m) = shells.get_mut(&kit.shell) {
-                m.extension.color = want;
-            }
-        }
+    // By tag, as a body's shell (`shield::Flare`): the material is never
+    // written.
+    let tag = Flare {
+        level: if on { level } else { 0.0 },
+        tone,
+        hidden: false,
     }
+    .tag();
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };
-    for mut v in &mut q {
+    for (mut v, mut t) in &mut q {
         v.set_if_neq(want);
+        t.set_if_neq(MeshTag(tag.0));
     }
 }
 
@@ -1102,6 +1101,9 @@ struct Hand {
     t: f32,
 }
 
+/// Guns a hand keeps posed: the two carried and the last one put down.
+const RACK: usize = 3;
+
 /// One hand's gun, posed for the frame: where its muzzle is drawn, if it is.
 #[allow(clippy::too_many_arguments)]
 fn hand(
@@ -1126,9 +1128,22 @@ fn hand(
     v.drop = drop;
     // The roster can say what we wear after the first gun is up.
     if change || v.skin != own.skin {
+        let out = (v.drawn, v.skin);
+        if let Some(&(.., gun)) = v.rack.iter().find(|r| (r.0, r.1) == out) {
+            commands.entity(gun).insert(Visibility::Hidden);
+        }
         v.skin = own.skin;
-        commands.entity(e).despawn_related::<Children>();
-        if let Some((_, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
+        if let Some(i) = v.rack.iter().position(|r| (r.0, r.1) == (want, own.skin)) {
+            // Racked: out again, now the latest.
+            let r = v.rack.remove(i);
+            commands.entity(r.2).insert(Visibility::Inherited);
+            v.rack.push(r);
+        } else if let Some((pivot, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
+            if v.rack.len() >= RACK {
+                let (.., old) = v.rack.remove(0);
+                commands.entity(old).despawn();
+            }
+            v.rack.push((want, own.skin, pivot));
             commands.entity(scene).observe(no_shadows);
             super::gun_skin::wear(commands, scene, own.skin, want);
             // A gun that runs hot wears its heat (`fx/vent.rs`).
@@ -1275,6 +1290,7 @@ pub(super) fn no_shadows(
                     Transform::IDENTITY,
                     Visibility::Hidden,
                     ViewShell,
+                    MeshTag(0),
                     NotShadowCaster,
                     ChildOf(e),
                 ));

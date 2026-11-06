@@ -10,7 +10,7 @@ use crate::fmath;
 use crate::geom::{rad_to_yaw, V3};
 use crate::input::*;
 use crate::rng::Pcg32;
-use crate::world::{Phase, Rules, World, FLAG_HOME};
+use crate::world::{Phase, Rules, World, FLAG_HELD, FLAG_HOME};
 
 #[derive(Clone, Copy)]
 pub struct Bot {
@@ -214,6 +214,17 @@ impl Bot {
         best
     }
 
+    /// The enemy's flag is on the floor or at home, landed, in reach.
+    fn flag_in_reach(w: &World, slot: usize) -> bool {
+        if !w.rules.ctf || w.map.flags.is_none() {
+            return false;
+        }
+        let me = &w.fighters[slot];
+        let f = &w.flags[(me.team as usize & 1) ^ 1];
+        let d = f.pos - me.body.pos;
+        f.state != FLAG_HELD && !f.flying && d.flat().len() < FLAG_REACH && fmath::fabs(d.y) < FLAG_RISE
+    }
+
     fn tap_use(inp: &mut Input, last: u16) {
         if last & USE == 0 {
             inp.buttons |= USE;
@@ -326,6 +337,11 @@ impl Bot {
                     self.ride_cool = ticks(RIDE_COOL_MS) as u16;
                 }
             }
+        }
+
+        // The enemy's flag in reach, on foot: take it (USE, Halo 3's).
+        if !me.flag && me.riding().is_none() && Self::flag_in_reach(w, slot) {
+            Self::tap_use(&mut inp, me.last_buttons);
         }
 
         // A carrier can't shoot: it runs home, swinging at whoever is in

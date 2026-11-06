@@ -510,6 +510,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::cloud_sea::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
+    .add_plugins(look::sea_motion::plugin)
     // Triple T's spray paint: the side's headband, the emblem, the trim
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
@@ -643,9 +644,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 look::foliage::update,
             )
                 .chain(),
-            (items::draw, flags::draw),
+            items::draw,
             fly,
-            view,
+            // After the camera: ours is held across our view as it is now.
+            (view, flags::draw).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             (
@@ -1203,9 +1205,8 @@ fn rebuild(
 /// The effects' share of drawing bodies: the shield's flare and shells.
 type ShieldParts<'w, 's> = (
     ResMut<'w, look::fx::Fx>,
-    ResMut<'w, Assets<look::shield::ShieldMaterial>>,
+    look::bodies::Tags<'w, 's>,
     look::bodies::Parts<'w, 's>,
-    ResMut<'w, Assets<look::paint::BodyMaterial>>,
 );
 
 /// Everyone else, where client-net interpolated them.
@@ -1221,7 +1222,7 @@ fn draw_fighters(
     (mut meshes, mut mats, mut vis): BodyParts,
     mut bodies: Query<&mut look::bodies::Body>,
     mut at: Query<&mut Transform>,
-    (mut fx, mut shield_mats, mut shells, mut body_mats): ShieldParts,
+    (mut fx, mut tags, mut shells): ShieldParts,
     (time, mut walkers, film, seen): (
         Res<Time>,
         ResMut<look::foliage::Walkers>,
@@ -1359,7 +1360,7 @@ fn draw_fighters(
             over: d.over && d.alive,
             cloak: if d.alive { d.cloak } else { 0.0 },
         };
-        look::bodies::flare(e, glow, t, &mut bodies, &mut body_mats, &mut shield_mats, &mut shells);
+        look::bodies::flare(e, glow, &mut bodies, &mut tags, &mut shells);
     }
     for (slot, (e, ..)) in &drawn.fighters {
         if !shown.iter().any(|(d, _)| d.slot == *slot) && show(&mut vis, *e, false) {
@@ -1596,7 +1597,8 @@ fn draw_view(
         yaw: look.yaw,
         pitch: look.pitch,
         riding: seat.is_some(),
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !film.is_some_and(|f| f.third()),
+        // Carrying the flag, both hands are on it (`flags.rs` draws it).
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !f.flag && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,
