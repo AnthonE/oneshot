@@ -39,6 +39,9 @@ pub struct Bot {
     /// nowhere, and ticks left walking along it instead.
     foot_stuck: u16,
     detour: u16,
+    /// Ticks left going to its objective by the roam points rather than
+    /// straight: it got stuck going straight (a doorway's corner).
+    round: u16,
 }
 
 /// How long a bot walks at one roam point before it picks another.
@@ -91,6 +94,7 @@ impl Bot {
             backing: 0,
             foot_stuck: 0,
             detour: 0,
+            round: 0,
         }
     }
 
@@ -172,6 +176,9 @@ impl Bot {
     /// the teammate carrying it), the other half defends (their own flag while it is away, else their base); a
     /// carrier runs home. None: nothing to do but roam.
     fn objective(w: &World, slot: usize) -> Option<V3> {
+        if w.rules.siege {
+            return Self::siege_goal(w, slot);
+        }
         let bases = w.map.flags.filter(|_| w.rules.ctf)?;
         let me = &w.fighters[slot];
         let mine = me.team as usize & 1;
@@ -194,12 +201,52 @@ impl Bot {
         Some(bases[mine] + V3::new(fmath::cos(off) * 4.0, 0.0, fmath::sin(off) * 4.0))
     }
 
+    /// Siege: an attacker goes for the enemy's core once it is open, else
+    /// for a generator of theirs still standing, two attackers to one (one
+    /// alone dies before it is overloaded); a defender holds a generator of
+    /// its own (by seat; the core once they are down) and goes for whoever
+    /// is overloading it. A few metres apart in a ring, each its own way.
+    fn siege_goal(w: &World, slot: usize) -> Option<V3> {
+        let at = w.map.siege?;
+        let me = &w.fighters[slot];
+        let mine = me.team as usize & 1;
+        let off = (slot / 4) as f32 * 1.7;
+        let spread = V3::new(fmath::cos(off) * 1.5, 0.0, fmath::sin(off) * 1.5);
+        let node = |side: usize, k: usize| side * (SIEGE_GENS + 1) + k;
+        let standing = |side: usize| {
+            (0..SIEGE_GENS)
+                .map(move |k| node(side, k))
+                .filter(|&n| !w.nodes[n].broken)
+        };
+        let pick = |side: usize, by: usize| {
+            let n = standing(side).count();
+            (n > 0).then(|| standing(side).nth(by % n)).flatten()
+        };
+        let n = if attacker(slot) {
+            let theirs = mine ^ 1;
+            if w.core_open(theirs) {
+                node(theirs, SIEGE_GENS)
+            } else {
+                pick(theirs, slot / 8 + 1)?
+            }
+        } else {
+            pick(mine, slot / 4).unwrap_or(node(mine, SIEGE_GENS))
+        };
+        Some(at[n] + spread)
+    }
+
     /// Where to steer for `goal` from `at`: straight if the way is clear at
     /// the waist, else the map's roam point in clear sight that is nearest
     /// the goal and nearer it than we are (a step around what's between).
     fn toward(w: &World, at: V3, goal: V3) -> V3 {
+        Self::toward_by(w, at, goal, false)
+    }
+
+    /// [`Self::toward`], by the roam points even when the way looks clear
+    /// with `round`.
+    fn toward_by(w: &World, at: V3, goal: V3, round: bool) -> V3 {
         let waist = V3::new(0.0, WAIST, 0.0);
-        if w.map.clear(at + waist, goal + waist) {
+        if !round && w.map.clear(at + waist, goal + waist) {
             return goal;
         }
         let mut best = goal;
@@ -401,7 +448,9 @@ impl Bot {
                 self.detour = TICK_HZ as u16;
                 self.goal_for = 0;
                 self.strafe = -self.strafe;
+                self.round = (3 * TICK_HZ) as u16;
             }
+            self.round = self.round.saturating_sub(1);
             let detour = if self.detour > 0 {
                 self.detour -= 1;
                 self.strafe as f32 * core::f32::consts::FRAC_PI_2
@@ -421,7 +470,7 @@ impl Bot {
             }
             // Capture the Flag: to its flag business.
             if let Some(at) = Self::objective(w, slot) {
-                let to = Self::toward(w, me.body.pos, at) - me.body.pos;
+                let to = Self::toward_by(w, me.body.pos, at, self.round > 0) - me.body.pos;
                 inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
                 inp.pitch = 0;
                 inp.mz = 127;
@@ -602,7 +651,8 @@ pub fn bot_match(seed: u64, ticks_n: u32) -> u64 {
 
 /// [`bot_match`] on map `map` in `mode`: 0 Doubles, 1 an eight-seat Gun
 /// Game, 2 a sixteen-seat Big Team, 3 Capture the Flag (on a map with
-/// flags). What `ci/parity.sh` runs on every map.
+/// flags), 4 Siege (on a map with nodes). What `ci/parity.sh` runs on
+/// every map.
 /// 0 if there is no such map or mode.
 pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
     let Some(m) = crate::map::by_id(map) else {
@@ -613,6 +663,7 @@ pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
         1 => Rules::gun_game(),
         2 => Rules::big_team(),
         3 if m.flags.is_some() => Rules::ctf(),
+        4 if m.siege.is_some() => Rules::siege(),
         _ => return 0,
     };
     let rules = Rules {

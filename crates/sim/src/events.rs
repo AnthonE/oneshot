@@ -39,6 +39,11 @@ pub enum Kind {
     /// 1 dropped by `a`, 2 returned (by `a`, or 255 on its own), 3
     /// captured by `a`.
     Flag,
+    /// Siege: node `b` (`world::World::nodes`); `part` 0 broken (`a` the
+    /// first of the side that broke it in its ring, or 255), 1 a core's
+    /// shield down (every generator of its side broken), 2 sudden death
+    /// (every core's shield down).
+    Node,
 }
 
 /// Kill causes past the arm ids.

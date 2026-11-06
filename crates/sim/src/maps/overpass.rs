@@ -111,5 +111,6 @@ pub const DEF: Def = Def {
     ],
     nav: false,
     flags: &[[-18.5, 0.0, 0.0], [18.5, 0.0, 0.0]],
+    siege: &[],
     light: crate::map::LightDef::DAY,
 };

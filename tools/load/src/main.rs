@@ -1,5 +1,5 @@
 //! `oneshot-load [--page http://127.0.0.1:8080 | --addr host:port [--pin hex]
-//! [--health url]] [--players 64] [--mode big[,ffa,gun,ctf,bot]]
+//! [--health url]] [--players 64] [--mode big[,ffa,gun,ctf,siege,bot]]
 //! [--ramp 10] [--hold 60] [--fps 60] [--every 5] [--no-lobby]`
 //!
 //! Many headless players against a server (`load`'s docs): they join
@@ -29,7 +29,9 @@ fn main() {
             "--mode" => {
                 o.modes = val()
                     .split(',')
-                    .map(|m| load::mode(m).unwrap_or_else(|| die(&format!("no mode {m}: bot, ffa, gun, big, ctf"))))
+                    .map(|m| {
+                        load::mode(m).unwrap_or_else(|| die(&format!("no mode {m}: bot, ffa, gun, big, ctf, siege")))
+                    })
                     .collect()
             }
             "--ramp" => o.ramp = secs(val()),

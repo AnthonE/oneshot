@@ -15,7 +15,7 @@ use proto::{encode_msg, encode_snapshot, salt_commit, InputMsg, Msg, Name, Snaps
 use room::fog::{plainly_sees, sees};
 use room::{Room, HEARD, HEARD_GRID_M};
 use sim::bot::Bot;
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{MAX_FIGHTERS, SIEGE_NODES, TICK_HZ};
 use sim::events::Kind as Ev;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -153,6 +153,20 @@ impl Gate {
                                 "tick {}: {f:?} is not where flag {t} is",
                                 w.tick
                             );
+                        }
+                    }
+                }
+                // 12. Siege: a node's overload, whether it is broken and
+                // what its ring holds are public, as Halo's territories
+                // are; never who or how many stand in it.
+                sim::thing::Kind::Node => {
+                    let siege = w.rules.siege && w.map.siege.is_some();
+                    assert_eq!(s.nodes().len(), if siege { SIEGE_NODES } else { 0 });
+                    for (n, x) in s.nodes().iter().enumerate() {
+                        let truth = &w.nodes[n];
+                        assert_eq!(x.broken, truth.broken, "tick {}: node {n}", w.tick);
+                        if !x.broken {
+                            assert_eq!(x.held, truth.held, "tick {}: node {n}", w.tick);
                         }
                     }
                 }
@@ -371,6 +385,19 @@ fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_in_siege() {
+    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
+        gate(
+            d.build(),
+            Rules {
+                time_limit_ms: 120_000,
+                ..Rules::siege()
+            },
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
@@ -444,9 +471,11 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
     let mut rx = proto::delta::Receiver::default();
-    // Past the clock: Capture the Flag's sudden death too.
+    // Past the clock: Capture the Flag's sudden death too, and Siege's.
     let overtime = if rules.ctf {
         sim::consts::SUDDEN_DEATH_MS / 1000
+    } else if rules.siege {
+        sim::consts::SIEGE_SUDDEN_DEATH_MS / 1000
     } else {
         0
     };

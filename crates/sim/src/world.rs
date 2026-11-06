@@ -53,6 +53,9 @@ pub struct Rules {
     /// Capture the Flag (with sides, on a map with flag bases): the score
     /// is captures, not kills.
     pub ctf: bool,
+    /// Siege (with sides, on a map with nodes; docs/DESIGN.md §18): the
+    /// score is the enemy's generators broken; breaking their core wins.
+    pub siege: bool,
 }
 
 impl Rules {
@@ -67,6 +70,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -82,6 +86,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: true,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -97,6 +102,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -112,6 +118,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -136,6 +143,24 @@ impl Rules {
             ctf: true,
             ..Rules::big_team()
         }
+    }
+
+    /// Siege, Big Team's sixteen seats: overload the enemy's generators by
+    /// standing in their rings, then their core; or, at 25 minutes, sudden
+    /// death with every core open. Casual, bots in the empty seats.
+    pub fn siege() -> Rules {
+        Rules {
+            score_limit: SIEGE_GENS as i32 + 1,
+            time_limit_ms: 1_500_000,
+            siege: true,
+            ..Rules::big_team()
+        }
+    }
+
+    /// Whether the score is an objective's, not kills: a kill counts only
+    /// for the fighter.
+    pub fn objective(&self) -> bool {
+        self.ctf || self.siege
     }
 
     /// The gun on rung `score` of Gun Game's ladder.
@@ -343,6 +368,38 @@ impl Thing for Flag {
     }
 }
 
+/// A Siege node: a generator or a core (`World::nodes`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Node {
+    /// Overload so far, in one enemy's ticks, of [`World::node_full`].
+    pub load: u32,
+    pub broken: bool,
+    /// What its ring holds this tick: [`NODE_QUIET`] and the rest.
+    pub held: u8,
+}
+
+/// Nobody in a node's ring (or a core with its shield up).
+pub const NODE_QUIET: u8 = 0;
+/// Enemies alone in it: the overload climbs.
+pub const NODE_RISING: u8 = 1;
+/// Both sides in it: it holds.
+pub const NODE_CONTESTED: u8 = 2;
+/// Its defenders alone in it, the overload not yet gone: it winds back.
+pub const NODE_FALLING: u8 = 3;
+
+impl Thing for Node {
+    /// A node is part of its map: always there, broken or not.
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.u32(self.load);
+        h.bool(self.broken);
+        h.u8(self.held);
+    }
+}
+
 pub struct World {
     pub tick: u32,
     pub map: Map,
@@ -355,6 +412,9 @@ pub struct World {
     pub drops: Pool<Dropped, MAX_DROPS>,
     /// Capture the Flag's, red's then blue's; at home and still otherwise.
     pub flags: [Flag; 2],
+    /// Siege's nodes, as the map's (`Map::siege`): red's generators, red's
+    /// core, then blue's; untouched outside that mode.
+    pub nodes: [Node; SIEGE_NODES],
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -386,6 +446,7 @@ impl World {
         }
         World {
             flags,
+            nodes: [Node::default(); SIEGE_NODES],
             tick: 0,
             map,
             rules,
@@ -545,6 +606,7 @@ impl World {
         }
         self.fly_drops();
         self.flags_tick();
+        self.nodes_tick();
         for d in self.drops.iter_mut().filter(|d| d.active) {
             d.ttl = d.ttl.saturating_sub(1);
             if d.ttl == 0 {
@@ -555,8 +617,14 @@ impl World {
             self.clock = self.clock.saturating_sub(1);
             if self.clock == 0 {
                 // Sudden death (Capture the Flag): a flag away from home
-                // when time runs out plays on till it is settled.
-                if self.flag_out() && self.overtime < ticks(SUDDEN_DEATH_MS) {
+                // when time runs out plays on till it is settled. Siege's:
+                // every core open, till one falls or it runs out.
+                if self.siege_on() && self.overtime < ticks(SIEGE_SUDDEN_DEATH_MS) {
+                    if self.overtime == 0 {
+                        self.node_event(2, NO_WINNER, 0);
+                    }
+                    self.overtime += 1;
+                } else if self.flag_out() && self.overtime < ticks(SUDDEN_DEATH_MS) {
                     self.overtime += 1;
                 } else {
                     self.end();
@@ -2047,8 +2115,9 @@ impl World {
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
         let gun_game = self.rules.gun_game;
-        if self.rules.ctf {
-            // Captures score; a kill only counts for the fighter.
+        if self.rules.objective() {
+            // Captures (or generators) score; a kill only counts for the
+            // fighter.
             if !own {
                 k.kills += 1;
                 k.grenades = (k.grenades + 1).min(GREN_MAX);
@@ -2082,7 +2151,7 @@ impl World {
             pos,
             ..Event::default()
         });
-        if !self.rules.ctf && self.score[side] >= self.rules.score_limit {
+        if !self.rules.objective() && self.score[side] >= self.rules.score_limit {
             self.end();
         }
     }
@@ -2294,6 +2363,114 @@ impl World {
             ..Flag::default()
         };
         self.flag_event(2, by, t, at);
+    }
+
+    /// Siege is played here: the mode, sides and a map with nodes.
+    fn siege_on(&self) -> bool {
+        self.rules.siege && self.rules.teams && self.map.siege.is_some()
+    }
+
+    /// Ticks of one enemy's overload that break node `n`.
+    pub fn node_full(n: usize) -> u32 {
+        if Self::is_core(n) {
+            ticks(CORE_OVERLOAD_MS)
+        } else {
+            ticks(GEN_OVERLOAD_MS)
+        }
+    }
+
+    /// Whether node `n` is a core (else a generator).
+    pub fn is_core(n: usize) -> bool {
+        n % (SIEGE_GENS + 1) == SIEGE_GENS
+    }
+
+    /// The side node `n` belongs to: 0 red, 1 blue.
+    pub fn node_side(n: usize) -> usize {
+        n / (SIEGE_GENS + 1)
+    }
+
+    /// Whether side `side`'s core can be overloaded: its shield is down,
+    /// every generator of its side broken, or it is sudden death.
+    pub fn core_open(&self, side: usize) -> bool {
+        let first = side * (SIEGE_GENS + 1);
+        self.overtime > 0 || self.nodes[first..first + SIEGE_GENS].iter().all(|n| n.broken)
+    }
+
+    /// Siege's tick: each node's ring, on foot and alive, counted by side;
+    /// enemies alone climb its overload, defenders alone wind it back, both
+    /// hold it. A generator overloaded breaks for good and scores; the core,
+    /// once open, breaks and wins.
+    fn nodes_tick(&mut self) {
+        let Some(at) = self.map.siege.filter(|_| self.siege_on()) else {
+            return;
+        };
+        for (n, &ring) in at.iter().enumerate() {
+            if self.nodes[n].broken {
+                continue;
+            }
+            let side = Self::node_side(n);
+            if Self::is_core(n) && !self.core_open(side) {
+                self.nodes[n].held = NODE_QUIET;
+                continue;
+            }
+            let (mut ours, mut theirs, mut first) = (0u32, 0u32, NO_WINNER);
+            for (s, f) in self.fighters.iter().enumerate() {
+                if !f.active() || f.riding().is_some() || !in_ring(f.body.pos, ring) {
+                    continue;
+                }
+                if f.team as usize & 1 == side {
+                    ours += 1;
+                } else {
+                    theirs += 1;
+                    if first == NO_WINNER {
+                        first = s as u8;
+                    }
+                }
+            }
+            let node = &mut self.nodes[n];
+            let (load, held) = match (ours, theirs) {
+                (0, 0) => (node.load, NODE_QUIET),
+                (0, t) => (node.load + t.min(NODE_PUSHERS), NODE_RISING),
+                (_, 0) if node.load > 0 => (node.load.saturating_sub(ours.min(NODE_PUSHERS)), NODE_FALLING),
+                (_, 0) => (0, NODE_QUIET),
+                _ => (node.load, NODE_CONTESTED),
+            };
+            let full = Self::node_full(n);
+            node.load = load.min(full);
+            node.held = held;
+            if load < full {
+                continue;
+            }
+            node.broken = true;
+            node.held = NODE_QUIET;
+            let by = side ^ 1;
+            self.node_event(0, first, n);
+            self.score[by] += 1;
+            if Self::is_core(n) {
+                if self.phase == Phase::Playing {
+                    self.phase = Phase::Over;
+                    self.winner = by as u8;
+                }
+                return;
+            }
+            if self.core_open(side) && self.overtime == 0 {
+                self.node_event(1, NO_WINNER, side * (SIEGE_GENS + 1) + SIEGE_GENS);
+            }
+        }
+    }
+
+    /// `part`: 0 node `n` broken (`a` the first enemy in its ring), 1 a
+    /// core's shield down, 2 sudden death.
+    fn node_event(&mut self, part: u8, a: u8, n: usize) {
+        let pos = self.map.siege.map_or(V3::ZERO, |at| at[n]);
+        self.events.push(Event {
+            kind: Ev::Node,
+            a,
+            b: n as u8,
+            part,
+            pos,
+            ..Event::default()
+        });
     }
 
     /// `part`: 0 taken, 1 dropped, 2 returned, 3 captured; `a` who, `b` the
@@ -2700,6 +2877,11 @@ impl World {
                         hash_all(&self.flags, &mut h)
                     }
                 }
+                thing::Kind::Node => {
+                    if self.rules.siege {
+                        hash_all(&self.nodes, &mut h)
+                    }
+                }
             }
         }
         let (a, b) = self.rng.state();
@@ -2724,6 +2906,12 @@ impl World {
 enum Target {
     Fighter(usize, bool),
     Vehicle(usize),
+}
+
+/// A body at `at` stands in the ring of a node at `node`.
+fn in_ring(at: V3, node: V3) -> bool {
+    let d = at - node;
+    d.flat().len() < NODE_REACH && crate::fmath::fabs(d.y) < NODE_RISE
 }
 
 /// A body at `at` touches a flag at `flag`.
@@ -2807,6 +2995,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }

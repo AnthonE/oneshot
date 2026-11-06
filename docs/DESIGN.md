@@ -625,12 +625,18 @@ its base. Casual.
 - **The middle is a town:** the fight is there. Power weapons on pads, and
   the healing gun among them (restores a teammate's shields; anyone may carry
   it). There is no healer and no role; shields recharge as everywhere.
-- **Generators.** Each side has several, out from the middle. Each powers the
-  side's base shield; while any stands, the base cannot be hurt. Break them
-  all and the base's shield falls; break the base and the match is won.
-  Generators are rebuilt by nobody: a broken one stays broken.
-- **Longer than Halo's:** a starting value of 25 minutes, then sudden death
-  (every base shield falls). Respawn starts at Halo's 3 s and lengthens late.
+- **Generators.** Each side has three, out from the middle; each powers the
+  side's core shield. A generator is broken by standing in its ring, as a
+  territory is taken, not by shooting it: an enemy alone in the ring
+  overloads it in 15 s, more of them faster (three at most); a defender in
+  it holds it; defenders alone wind it back; an empty ring keeps what it
+  had. A broken one stays broken and scores. With all three down the core's
+  shield falls; the core is overloaded the same way (30 s) and breaking it
+  wins. The ring's state is public, as Halo's territories are: how far, and
+  whether it is under attack, never who or how many.
+- **Longer than Halo's:** 25 minutes, then two minutes of sudden death with
+  every core open, then the side that broke more wins. Respawn is Halo's 3 s
+  (lengthening late is still to come).
 - No motion tracker and no minimap, as every mode (§1).
 
 **How it sits in the sim:**
@@ -639,8 +645,8 @@ its base. Casual.
 - A card that reads only its fighter and the map (grapple, hover, rewind) is
   in `Fighter::step_local` and predicted like walking; one that touches
   another body is `World`'s (§17's prediction gate).
-- Generators, the base and caches are kinds of `Thing` (milestone 7). A
-  generator, a base and a cache on the ground are the map's and always sent.
+- Generators and cores are a kind of `Thing` (`World::nodes`), placed by a
+  map's `"siege"` (Dry Fork's), always sent; caches will be one too.
 - Fog: an enemy's cards are never sent; a card is known when it is used
   where it can be seen or heard, as a shot is (§8). An offer is told only to
   its fighter. Every card's projectile, area and reveal has a rule in
@@ -656,10 +662,13 @@ its base. Casual.
 
 | Phase | What | The question |
 |---|---|---|
-| 0 · Mayhem | a few cards (grapple, rewind, the frost bird) offered in casual FFA | do cards feel right in this sim and netcode, and on maps built for walking? |
-| 1 · The base | the town, the generators and the base on a new terrain map; Siege with bots | does a purpose keep Big Team's players? |
+| 0 · The base | generators and cores on Dry Fork, Siege's playlist with bots, no cards (done) | does a purpose keep Big Team's players? |
+| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege | do cards feel right in this sim and netcode, and on maps built for walking? |
 | 2 · Caches | air drops, rare ultimates, a deck worth dealing from | do players come back for the luck? |
 | 3 · A ladder | a Siege ladder, then cups | only if phase 2 holds players |
+
+The same objectives can carry other modes (Capture the Flag is already
+one); Siege is the first built for it.
 
 Open: team size (Big Team's 8v8, or fewer to fill matches sooner); troopers
 in the middle or none; how many cards are offered and how often.

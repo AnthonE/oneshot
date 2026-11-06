@@ -148,6 +148,24 @@ fn snapshot() -> Snapshot {
         pos: V3::new(18.5, 0.0, -2.0),
         down_s: 27,
     };
+    // Siege: red's first generator broken, its second half overloaded and
+    // contested, blue's core being wound back.
+    s.n_nodes = sim::consts::SIEGE_NODES as u8;
+    s.nodes[0] = NodeState {
+        broken: true,
+        load: NODE_LOAD_MAX,
+        held: 0,
+    };
+    s.nodes[1] = NodeState {
+        load: 32,
+        held: 2,
+        broken: false,
+    };
+    s.nodes[7] = NodeState {
+        load: 10,
+        held: 3,
+        broken: false,
+    };
     s.proj[0] = ProjState {
         kind: 0,
         owner: 1,
@@ -466,6 +484,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
     assert_eq!(d.flags(), s.flags());
+    assert_eq!(d.nodes(), s.nodes());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -478,11 +497,21 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_vehicles: MAX_SNAP_VEHICLES as u8,
         n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
+        // Capture the Flag's flags; never beside Siege's nodes.
+        n_nodes: 0,
         ..s
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
     assert!(n + 200 <= MAX_DATAGRAM, "{n} bytes before events");
+    // Siege's nodes in their place.
+    let siege = Snapshot {
+        n_flags: 0,
+        n_nodes: sim::consts::SIEGE_NODES as u8,
+        ..full
+    };
+    let n = encode_snapshot(&siege, &mut big).unwrap();
+    assert!(n + 200 <= MAX_DATAGRAM, "{n} bytes before events in Siege");
 }
 
 #[test]
@@ -576,13 +605,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0x6e38_c4b5_9200_3873,
-        0x8d65_ab7c_73f8_4251,
-        0x78c0_ea04_7bec_a55f,
+        0xcfa9_2145_80ab_470b,
+        0x48df_89db_e731_9992,
+        0xc9e7_7867_65d8_6bf6,
         0x7ebe_34b8_2c10_f2d0,
-        0x7ab6_78d6_f6ba_aa53,
-        0x9571_1811_717b_689e,
-        0xdc4a_71af_e7d8_b744,
+        0xec88_5efc_d9ac_e183,
+        0x0f4a_a0e7_f967_a718,
+        0x96f2_91d2_4185_ba95,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -604,7 +633,7 @@ fn the_bytes_match_their_goldens() {
         0x6c87_7218_bf71_5473,
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
-        0x547f_b8fe_3513_fdb0,
+        0xb9d4_d8b1_7ed4_ec09,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

@@ -362,3 +362,25 @@ pub const FLAG_TOSS_UP: f32 = 3.0;
 /// Overtime: the clock run out with a flag away from home, the match
 /// goes on until it is home or captured, or for this long at most.
 pub const SUDDEN_DEATH_MS: u32 = 90_000;
+
+// Siege (docs/DESIGN.md §18).
+/// Generators a side has; each powers its base's shield. A side's nodes
+/// are its generators, then its core: [`SIEGE_NODES`] in all, red's first.
+pub const SIEGE_GENS: usize = 3;
+pub const SIEGE_NODES: usize = 2 * (SIEGE_GENS + 1);
+/// How near (flat) a fighter on foot must stand to a node to overload or
+/// hold it, and how far above or below.
+pub const NODE_REACH: f32 = 4.0;
+pub const NODE_RISE: f32 = 2.5;
+/// One enemy alone in a generator's ring breaks it in this long; each more
+/// of them, up to `NODE_PUSHERS`, adds their own pace. A defender in the
+/// ring holds it; defenders alone wind it back at the same pace. Nobody
+/// there, it stays where it was.
+pub const GEN_OVERLOAD_MS: u32 = 15_000;
+/// The core, once its shield is down: every generator of its side broken,
+/// or sudden death.
+pub const CORE_OVERLOAD_MS: u32 = 30_000;
+pub const NODE_PUSHERS: u32 = 3;
+/// Siege's clock run out: every core's shield falls and the match goes on
+/// this long at most, then the side that broke more wins.
+pub const SIEGE_SUDDEN_DEATH_MS: u32 = 120_000;

@@ -33,16 +33,19 @@ pub enum Kind {
     /// Capture the Flag's two flags (red's, blue's); always at rest at
     /// home outside that mode.
     Flag,
+    /// Siege's generators and cores; untouched outside that mode.
+    Node,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Fighter,
         Kind::Projectile,
         Kind::Pad,
         Kind::Vehicle,
         Kind::Drop,
         Kind::Flag,
+        Kind::Node,
     ];
 }
 

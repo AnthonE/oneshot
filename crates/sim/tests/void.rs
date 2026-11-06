@@ -70,6 +70,7 @@ fn island() -> Def {
         nav: false,
         light: LightDef::DAY,
         flags: &[],
+        siege: &[],
     }
 }
 

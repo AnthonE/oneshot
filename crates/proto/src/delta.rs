@@ -115,7 +115,11 @@ impl Keyed {
             rec(&mut w, K_OWN_VEHICLE, &mut |w| w_vehicle(w, v))?;
         }
         rec(&mut w, K_PADS, &mut |w| w_list(w, s.pads(), 5))?;
-        rec(&mut w, K_FLAGS, &mut |w| w_list(w, s.flags(), 2))?;
+        // The objectives: Capture the Flag's flags, then Siege's nodes.
+        rec(&mut w, K_FLAGS, &mut |w| {
+            w_list(w, s.flags(), 2)?;
+            w_list(w, s.nodes(), NODE_BITS)
+        })?;
         rec(&mut w, K_TAIL, &mut |w| {
             if s.n_score as usize > MAX_FIGHTERS {
                 return Err(WireError::Cap);
@@ -177,7 +181,10 @@ impl Keyed {
                 }
                 K_OWN_VEHICLE => s.own_vehicle = Some(r_vehicle(&mut r)?),
                 K_PADS => s.n_pads = r_list(&mut r, &mut s.pads, 5)?,
-                K_FLAGS => s.n_flags = r_list(&mut r, &mut s.flags, 2)?,
+                K_FLAGS => {
+                    s.n_flags = r_list(&mut r, &mut s.flags, 2)?;
+                    s.n_nodes = r_list(&mut r, &mut s.nodes, NODE_BITS)?;
+                }
                 K_TAIL => {
                     s.n_score = r.read(SLOT_BITS + 1)? as u8;
                     if s.n_score as usize > MAX_FIGHTERS {

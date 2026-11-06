@@ -4,6 +4,7 @@
 //! (`maps/*/map.json`), compiled to the tables in [`crate::maps`].
 
 use crate::arms::SHOTGUN;
+use crate::consts::SIEGE_NODES;
 use crate::geom::{ray_aabb, Aabb, V3};
 use crate::grid::Grid;
 use crate::solid::Solid;
@@ -98,6 +99,9 @@ pub struct Def {
     /// Capture the Flag's bases, red's then blue's (x y z each); empty on a
     /// map that plays no CTF.
     pub flags: &'static [[f32; 3]],
+    /// Siege's nodes (x y z each), [`SIEGE_NODES`] of them: red's
+    /// generators, red's core, then blue's; empty on a map without Siege.
+    pub siege: &'static [[f32; 3]],
 }
 
 /// How a map is lit: the client's, never read by the sim (like looks).
@@ -142,6 +146,7 @@ pub const ROT_GUN_GAME: u16 = 1 << 4;
 pub const ROT_CUP: u16 = 1 << 5;
 pub const ROT_BIG_TEAM: u16 = 1 << 6;
 pub const ROT_CTF: u16 = 1 << 7;
+pub const ROT_SIEGE: u16 = 1 << 8;
 
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
 pub const BIG_M2: f32 = 4000.0;
@@ -159,6 +164,10 @@ impl Def {
     pub fn plays(&self, rot: u16) -> bool {
         if self.practice || (rot & ROT_CTF != 0 && self.flags.len() != 2) {
             return false;
+        }
+        // Siege is wherever a map has its nodes.
+        if rot & ROT_SIEGE != 0 {
+            return self.siege.len() == SIEGE_NODES;
         }
         if self.modes != 0 {
             return self.modes & rot != 0;
@@ -239,6 +248,7 @@ impl Def {
                 [r, b] => Some([v(*r), v(*b)]),
                 _ => None,
             },
+            siege: (self.siege.len() == SIEGE_NODES).then(|| core::array::from_fn(|i| v(self.siege[i]))),
             terrain,
             nav: None,
             light: self.light,
@@ -300,6 +310,9 @@ pub struct Map {
     /// Capture the Flag's bases, red's then blue's: where each flag sits
     /// at home and where its side scores. None: no CTF here.
     pub flags: Option<[V3; 2]>,
+    /// Siege's nodes, on the floor: red's generators and core, then
+    /// blue's (`world::World::nodes`). None: no Siege here.
+    pub siege: Option<[V3; SIEGE_NODES]>,
 }
 
 impl Map {
@@ -663,6 +676,7 @@ impl Map {
             nav: None,
             light: LightDef::DAY,
             flags: None,
+            siege: None,
             id: TEST_MAP,
             practice: false,
             name: "open",
@@ -824,6 +838,7 @@ mod tests {
             nav: false,
             light: LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }

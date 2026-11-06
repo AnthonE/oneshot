@@ -1035,6 +1035,65 @@ fn flags_line(out: &mut String, st: &HudState, s: &proto::Snapshot) {
     }
 }
 
+/// A Siege node's name: a side's generators A, B and C, then its core.
+fn node_name(n: u8) -> String {
+    let k = n as usize % (sim::consts::SIEGE_GENS + 1);
+    let side = side_name((n as usize / (sim::consts::SIEGE_GENS + 1)) as u8);
+    if k == sim::consts::SIEGE_GENS {
+        format!("{side} CORE")
+    } else {
+        format!("{side} GENERATOR {}", (b'A' + k as u8) as char)
+    }
+}
+
+/// What the feed says of a Siege event (`sim::events::Kind::Node`).
+fn node_line(st: &HudState, part: u8, who: u8, n: u8) -> String {
+    match part {
+        0 if who == 255 => format!("{} broken", node_name(n)),
+        0 => format!("{} broke the {}", st.name(who), node_name(n)),
+        1 => format!("{} SHIELD DOWN", node_name(n)),
+        _ => "SUDDEN DEATH: every core is open".into(),
+    }
+}
+
+/// Siege: each side's generators and core, ours first, one line each, over
+/// the feed, onto `out`.
+fn nodes_line(out: &mut String, s: &proto::Snapshot, team: u8) {
+    let per = sim::consts::SIEGE_GENS + 1;
+    for (i, t) in [team as usize & 1, (team as usize & 1) ^ 1].into_iter().enumerate() {
+        let _ = write!(
+            out,
+            "{} {}  ",
+            if i == 0 { "OURS" } else { "THEIRS" },
+            side_name(t as u8)
+        );
+        for k in 0..per {
+            let n = t * per + k;
+            let x = s.nodes()[n];
+            let name = if k == sim::consts::SIEGE_GENS {
+                "CORE".to_string()
+            } else {
+                ((b'A' + k as u8) as char).to_string()
+            };
+            let pct = x.load as u32 * 100 / proto::NODE_LOAD_MAX as u32;
+            let what = if x.broken {
+                "BROKEN".to_string()
+            } else if crate::nodes::shielded(s, n) {
+                "SHIELDED".to_string()
+            } else {
+                match x.held {
+                    sim::world::NODE_RISING => format!("{pct}% UNDER ATTACK"),
+                    sim::world::NODE_CONTESTED => format!("{pct}% CONTESTED"),
+                    _ if pct > 0 => format!("{pct}%"),
+                    _ => "OK".to_string(),
+                }
+            };
+            let _ = write!(out, "{}{name} {what}", if k > 0 { "  ·  " } else { "" });
+        }
+        out.push('\n');
+    }
+}
+
 /// This frame's events and stream messages: the markers, names, the feed.
 pub fn on_events(
     st: &mut HudState,
@@ -1086,6 +1145,8 @@ pub fn on_events(
             st.hit_kill = true;
         } else if e.kind == Kind::Flag as u8 {
             st.feed.push((flag_line(st, e.part, e.a, e.b), now));
+        } else if e.kind == Kind::Node as u8 {
+            st.feed.push((node_line(st, e.part, e.a, e.b), now));
         }
     }
     // Our shield breaking.
@@ -1336,6 +1397,9 @@ pub fn draw(
     if snap.n_flags > 0 {
         flags_line(feed, &st, snap);
         feed.push('\n');
+    }
+    if snap.n_nodes as usize == sim::consts::SIEGE_NODES {
+        nodes_line(feed, snap, core.team);
     }
     for (l, _) in &st.feed {
         feed.push_str(l);

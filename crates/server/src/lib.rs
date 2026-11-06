@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 
 use proto::{
     frame_msg, InputMsg, Msg, Name, MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_CUP, MODE_DOUBLES, MODE_DUEL, MODE_FFA,
-    MODE_GUN_GAME,
+    MODE_GUN_GAME, MODE_SIEGE,
 };
 use rayon::prelude::*;
 use room::Room;
@@ -170,12 +170,13 @@ pub struct Config {
     /// (14 days, pinned by the page with its hash).
     pub cert: Option<(String, String)>,
     /// A casual room's rules: against a bot, free for all, Gun Game, Big
-    /// Team, Capture the Flag.
+    /// Team, Capture the Flag, Siege.
     pub rules: Rules,
     pub ffa: Rules,
     pub gun_game: Rules,
     pub big_team: Rules,
     pub ctf: Rules,
+    pub siege: Rules,
     /// Ranked rooms' rules.
     pub duel: Rules,
     pub doubles: Rules,
@@ -276,6 +277,7 @@ impl Default for Config {
             gun_game: Rules::gun_game(),
             big_team: Rules::big_team(),
             ctf: Rules::ctf(),
+            siege: Rules::siege(),
             duel: Rules::duel(),
             doubles: Rules::doubles(),
             cup: Rules {
@@ -721,6 +723,7 @@ fn rotation_of(mode: u8) -> u16 {
         MODE_CUP => ROT_CUP,
         MODE_BIG_TEAM => ROT_BIG_TEAM,
         MODE_CTF => ROT_CTF,
+        MODE_SIEGE => ROT_SIEGE,
         _ => ROT_CASUAL,
     }
 }
@@ -737,9 +740,11 @@ fn pool(given: Vec<u8>, rot: u16) -> Vec<u8> {
         return fits;
     }
     let ctf = rot & sim::map::ROT_CTF != 0;
+    let siege = rot & sim::map::ROT_SIEGE != 0;
     sim::maps::ALL
         .iter()
         .filter(|d| !d.practice && (!ctf || d.flags.len() == 2))
+        .filter(|d| !siege || d.siege.len() == sim::consts::SIEGE_NODES)
         .map(|d| d.id)
         .collect()
 }
@@ -861,6 +866,7 @@ impl Sim {
             MODE_FFA => self.cfg.ffa,
             MODE_BIG_TEAM => self.cfg.big_team,
             MODE_CTF => self.cfg.ctf,
+            MODE_SIEGE => self.cfg.siege,
             MODE_GUN_GAME => self.cfg.gun_game,
             _ if ranked => self.cfg.duel,
             _ => self.cfg.rules,
@@ -873,9 +879,12 @@ impl Sim {
             .map
             .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
             .filter(|d| !rules.ctf || d.flags.len() == 2)
+            .filter(|d| !rules.siege || d.siege.len() == sim::consts::SIEGE_NODES)
             .map(|d| d.build());
         let rot = if rules.ctf {
             sim::map::ROT_CTF
+        } else if rules.siege {
+            sim::map::ROT_SIEGE
         } else {
             rotation_of(mode)
         };
@@ -905,7 +914,13 @@ impl Sim {
     /// running (a playlist's rule since Halo 2's).
     fn pick_map(&self, seed: u64, rot: u16, avoid: &[u8]) -> Map {
         let ctf = rot & sim::map::ROT_CTF != 0;
+        let siege = rot & sim::map::ROT_SIEGE != 0;
         let has_flags = |id: u8| sim::maps::ALL.iter().any(|d| d.id == id && d.flags.len() == 2);
+        let has_nodes = |id: u8| {
+            sim::maps::ALL
+                .iter()
+                .any(|d| d.id == id && d.siege.len() == sim::consts::SIEGE_NODES)
+        };
         let given: Vec<u8> = self
             .cfg
             .maps
@@ -913,6 +928,7 @@ impl Sim {
             .copied()
             .filter(|&id| sim::maps::ALL.iter().any(|d| d.id == id))
             .filter(|&id| !ctf || has_flags(id))
+            .filter(|&id| !siege || has_nodes(id))
             .collect();
         let ids = pool(given, rot);
         let ids = steer_off(ids, avoid);
@@ -957,7 +973,7 @@ impl Sim {
                         tx,
                     } => {
                         let mode = match mode {
-                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF => mode,
+                            MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF | MODE_SIEGE => mode,
                             _ => MODE_CASUAL,
                         };
                         let live_room =
@@ -1729,6 +1745,7 @@ fn mode_name(mode: u8) -> &'static str {
         MODE_CUP => "A cup",
         MODE_BIG_TEAM => "Big Team",
         MODE_CTF => "Capture the Flag",
+        MODE_SIEGE => "Siege",
         _ => "Against the bot",
     }
 }
@@ -1997,6 +2014,11 @@ mod tests {
         assert!(ctf
             .iter()
             .all(|id| sim::maps::ALL.iter().any(|d| d.id == *id && d.flags.len() == 2)));
+        let siege = pool(Vec::new(), sim::map::ROT_SIEGE);
+        assert!(!siege.is_empty());
+        assert!(siege.iter().all(|id| sim::maps::ALL
+            .iter()
+            .any(|d| d.id == *id && d.siege.len() == sim::consts::SIEGE_NODES)));
         // A server's own list is played as given.
         assert_eq!(pool(vec![7, 0], ROT_FFA), vec![7, 0]);
     }

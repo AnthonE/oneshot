@@ -1002,6 +1002,7 @@ fn build_encoded(
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
             sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
             sim::thing::Kind::Flag => add_flags(&mut snap, w),
+            sim::thing::Kind::Node => add_nodes(&mut snap, w),
         }
     }
     // What this client may be told of the new events joins its queue; the
@@ -1236,6 +1237,25 @@ fn add_flags(snap: &mut Snapshot, w: &World) {
     snap.n_flags = 2;
 }
 
+/// Siege's nodes are public, as Halo's territories are: how far each is
+/// overloaded, and whether its ring is being overloaded, held or wound back
+/// (the HUD's "under attack"), never by whom or how many.
+fn add_nodes(snap: &mut Snapshot, w: &World) {
+    if !w.rules.siege || w.map.siege.is_none() {
+        return;
+    }
+    for (n, node) in w.nodes.iter().enumerate() {
+        let full = World::node_full(n) as u64;
+        let max = proto::NODE_LOAD_MAX as u64;
+        snap.nodes[n] = proto::NodeState {
+            load: (node.load as u64 * max / full).min(max) as u8,
+            broken: node.broken,
+            held: node.held,
+        };
+    }
+    snap.n_nodes = sim::consts::SIEGE_NODES as u8;
+}
+
 /// Pad timers are public: they say when a gun is back, not who is near.
 fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
@@ -1344,6 +1364,9 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
         // A flag taken, dropped, returned or scored is announced to
         // everyone; where is a base or the flag's own public place.
         Ev::Flag => Some(full),
+        // A node broken, a core's shield down, sudden death: everyone's;
+        // who broke it is named (a kill feed's line) but never placed.
+        Ev::Node => Some(full),
         Ev::None => None,
     }
 }

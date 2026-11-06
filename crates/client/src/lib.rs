@@ -33,6 +33,7 @@ pub mod link;
 pub mod loading;
 pub mod look;
 pub mod medals;
+pub mod nodes;
 pub mod options;
 pub mod pad;
 pub mod party;
@@ -473,6 +474,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<flags::Flags>()
+    .init_resource::<nodes::Nodes>()
     .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
@@ -647,7 +649,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             items::draw,
             fly,
             // After the camera: ours is held across our view as it is now.
-            (view, flags::draw).chain(),
+            (view, flags::draw, nodes::draw).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             (

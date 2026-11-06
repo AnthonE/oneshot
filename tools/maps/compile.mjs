@@ -70,6 +70,9 @@
 //             rather than walking straight where they're going
 //   flag      { at: [x, z, y?] }: red's flag base for Capture the Flag,
 //             placed again at its mirror image for blue (needs "mirror")
+//   siege     { gens: [[x, z, y?] × SIEGE_GENS], core: [x, z, y?] }: red's
+//             generators and core for Siege, placed again at their mirror
+//             images for blue (needs "mirror")
 //   callouts  [{ name, at: [x, z, y?] }]: places tools/flow names; not compiled
 //   light     { ev100, sun, fill, lamps: [{ at: [x, z, y], color: [r, g, b],
 //             lm, mirror: bool }], floor: look, sea: y }: drawing only
@@ -151,7 +154,9 @@ export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER',
   overshield: 'OVERSHIELD', camo: 'CAMO', frags: 'FRAGS', stickies: 'STICKIES' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 /** sim::map::ROT_*: the rotations a map may name in `modes`. */
-export const ROTATIONS = { casual: 1, duel: 2, doubles: 4, ffa: 8, gun_game: 16, cup: 32, big_team: 64, ctf: 128 };
+export const ROTATIONS = { casual: 1, duel: 2, doubles: 4, ffa: 8, gun_game: 16, cup: 32, big_team: 64, ctf: 128, siege: 256 };
+/** sim::consts::SIEGE_GENS: a side's generators. */
+const SIEGE_GENS = 3;
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
@@ -468,12 +473,22 @@ export function compile(spec, where = 'map.json') {
     if (!im) fail('flag: needs a "mirror" that swaps sides');
     flags = [p, [p[0] * im[0], p[1], p[2] * im[1]]];
   }
+  let siege = [];
+  if (spec.siege !== undefined) {
+    const g = spec.siege.gens;
+    if (!Array.isArray(g) || g.length !== SIEGE_GENS) fail(`siege: "gens" is ${SIEGE_GENS} points`);
+    const im = mirrors.find(([, , swap]) => swap);
+    if (!im) fail('siege: needs a "mirror" that swaps sides');
+    const red = [...g.map((at, k) => point(at, `siege gen ${k}`)), point(spec.siege.core, 'siege core')];
+    siege = [...red, ...red.map((p) => [p[0] * im[0], p[1], p[2] * im[1]])];
+  }
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
   let modes = 0;
   if (spec.modes !== undefined) {
     if (!Array.isArray(spec.modes) || !spec.modes.length) fail(`modes: a list of ${Object.keys(ROTATIONS).join(', ')}`);
     for (const m of spec.modes) modes |= ROTATIONS[m] ?? fail(`modes: no rotation "${m}" (${Object.keys(ROTATIONS).join(', ')})`);
     if (modes & ROTATIONS.ctf && spec.flag === undefined) fail('modes: ctf needs a "flag"');
+    if (modes & ROTATIONS.siege && spec.siege === undefined) fail('modes: siege needs a "siege"');
   }
 
   // The boulders, last: they keep clear of everything above.
@@ -491,7 +506,7 @@ export function compile(spec, where = 'map.json') {
   return {
     id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, modes, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1],
     void: spec.void ?? null, boxes,
-    solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, dress,
+    solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, siege, dress,
     dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
   };
 }
@@ -1235,6 +1250,7 @@ export function rust(m, src) {
   L.push('    ],');
   L.push(`    nav: ${m.nav},`);
   L.push(`    flags: &[${m.flags.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
+  L.push(`    siege: &[${m.siege.map((f) => `[${f.map(lit).join(', ')}]`).join(', ')}],`);
   const lt = m.light;
   if (lt.ev100 === 0 && lt.sun === 1 && lt.fill === 1 && !lt.lamps.length && lt.floor === 255 && lt.sea === null) L.push('    light: crate::map::LightDef::DAY,');
   else {
