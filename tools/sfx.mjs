@@ -66,6 +66,10 @@ const SOUNDS = [
 
   // Things moving.
   one('engine', 1, 4.0, 0, -2, 'The engine of a light military off-road buggy held at a steady low speed: a constant throaty mechanical rumble at a fixed RPM. No revving, no gear changes, no tyres.', { loop: true, low: 35 }),
+  // The sticky: what it sounds like flying and on what it is stuck to, and it landing.
+  one('sticky_sizzle', 1, 3.0, 0, -3, 'A fierce high-voltage electric arc burning without stopping: a loud full buzzing electrical crackle like a welding arc, a deep angry electric hum under a sharp frying sizzle and random violent snaps. Constant, never changing, never fading.', { loop: true, low: 90 }),
+  one('sticky_stick', 1, 0.6, 0.45, -2, 'A blob of molten plasma hitting metal: one sharp bright wet spit and hot fizz, like water thrown on a red-hot pan. Quick, no low thud.', { low: 500 }),
+  one('sticky_whine', 1, 1.2, 0, -5, 'An electronic energy whine rising steadily in pitch for one second, thin and high and getting faster and more urgent, ending abruptly at its peak. One rising tone only.', { low: 400 }),
   one('rocket_fly', 1, 2.0, 0, -3, 'A rocket motor burning in flight: a constant roaring rush of flame with a hiss, never changing.', { loop: true, low: 35 }),
   one('wind', 1, 12.0, 0, -3, 'Soft steady wind over an open valley: a gentle airy outdoor breeze. No gusts, no birds, no leaves, nothing else.', { loop: true, low: 150 }),
 

@@ -66,10 +66,14 @@ const COAST_MAX: f64 = 1024.0;
 /// One tick of the sim's free flight (`World::projectiles`), stopped at
 /// the map: where it is, how fast, and whether the map stopped it.
 fn step(kind: u8, pos: V3, vel: V3, map: &Map) -> (V3, V3, bool) {
+    // A sticky stuck to the map: still.
+    if kind == K_STICKY && vel == V3::ZERO {
+        return (pos, vel, true);
+    }
     let mut v = vel;
     let mut ramp = None;
     match kind {
-        // `bounce` under gravity.
+        // Under gravity: `bounce`; a sticky's own flight.
         K_FRAG | K_STICKY => v.y -= GRAVITY * DT,
         // `bounce` under the launcher's share of it, never ramped.
         K_LOB => {

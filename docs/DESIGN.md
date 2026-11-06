@@ -22,7 +22,7 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Power weapons (sniper, rocket, shotgun, the sword) on pads with timed respawns, so a match is about map control.
 - Halo 2's arsenal as archetypes, ours by name and look: a carbine, a beam rifle that runs hot, ion guns that strip shields (a charge shot that homes), homing shards that go off together, a skipping grenade launcher, a heavy ion cannon. Its counts and times are the baseline (`sim/tests/range.rs`); tuning makes them our own.
 - Dual wielding, as Halo 2's: a one-handed gun (magnum, SMG, the ion guns, the shard gun) taken beside another goes in the left hand, on its own trigger; no grenades while dual, a melee or a swap drops the left, both reload together and slower.
-- Two grenades: frags, and stickies that stick to a body or a hull (never to the map) and kill whoever wears one; a switch picks the next throw.
+- Two grenades, as Halo's: frags, and stickies that stick to whatever they touch (a body, a hull, the map) and kill whoever wears one; a switch picks the next throw, and a kind run out goes over to the other. Everyone starts with two frags and no stickies; both lie on pads about the map and fall from the dead, four of each at most. A blast sets off the grenades in its reach, those lying on the floor too.
 - The Range: a practice map with every gun on a pad, out of the rotation.
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).

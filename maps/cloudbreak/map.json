@@ -115,6 +115,26 @@
     { "at": [-17, -13], "team": "red", "yaw": 40, "mirror": true }
   ],
   "pads": [
+    {
+      "weapon": "stickies",
+      "at": [-13.5, 0],
+      "respawn": 30
+    },
+    {
+      "weapon": "stickies",
+      "at": [13.5, 0],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [-15, 14],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [15, 14],
+      "respawn": 30
+    },
     { "weapon": "rocket", "at": [0, 0, 0.4], "respawn": 120 },
     { "weapon": "sniper", "at": [0, 16, 4.5], "respawn": 90 },
     { "weapon": "shotgun", "at": [0, 21], "respawn": 60 },

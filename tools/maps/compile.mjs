@@ -36,7 +36,7 @@
 //   spawns    [{ at: [x, z, y?], team: "red"|"blue"|"any", yaw: degrees,
 //             mirror: bool }]
 //   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]: a gun,
-//             or a power-up (overshield, camo)
+//             or what is taken by walking on (overshield, camo, frags, stickies)
 //   roam      [[x, z], ...]: where a bot with nobody in sight walks
 //   terrain   { cell: 0.5|1|2|4, base: m, margin: m | [-x, +x, -z, +z],
 //             gen: "canyon", canyon: {...}, shapes: [...] }: ground that
@@ -147,7 +147,7 @@ export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
   launcher: 'LAUNCHER', cannon: 'CANNON',
   // Power-ups: taken by walking onto the pad.
-  overshield: 'OVERSHIELD', camo: 'CAMO' };
+  overshield: 'OVERSHIELD', camo: 'CAMO', frags: 'FRAGS', stickies: 'STICKIES' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
 /** sim::map::ROT_*: the rotations a map may name in `modes`. */
 export const ROTATIONS = { casual: 1, duel: 2, doubles: 4, ffa: 8, gun_game: 16, cup: 32, big_team: 64, ctf: 128 };

@@ -186,7 +186,7 @@ fn models_in(models: Option<&crate::look::guns::Models>, assets: &AssetServer) -
     m.guns
         .iter()
         .flatten()
-        .chain([&m.rocket, &m.frag, &m.sticky, &m.body_scene])
+        .chain([&m.rocket, &m.frag, &m.body_scene])
         .all(settled)
 }
 

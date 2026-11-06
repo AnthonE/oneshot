@@ -331,7 +331,9 @@ impl Fighter {
             self.shots = self.shots.wrapping_add(fired as u32);
         }
 
-        if pressed & GREN_SWITCH != 0 {
+        let release = ticks(GREN_COOL_MS - GREN_RELEASE_MS) as u16;
+        // Once the arm is moving, the kind is settled.
+        if pressed & GREN_SWITCH != 0 && self.gren_cool <= release {
             self.gren_kind ^= 1;
         }
         if on_foot && pressed & MELEE != 0 && self.melee_cool == 0 {
@@ -343,8 +345,13 @@ impl Fighter {
             self.burst_left = 0;
             self.refire = self.refire.max(ticks(MELEE_COOL_MS / 2) as u16);
         }
-        // A throw takes the kind chosen, or the other if none of it is left;
-        // never with a gun in each hand.
+        // It leaves the hand as the arm flings it.
+        if on_foot && self.gren_cool == release {
+            out.throw = true;
+            out.sticky = self.gren_kind == 1;
+        }
+        // A throw takes the kind chosen, or goes over to the other if none of
+        // it is left; never with a gun in each hand.
         if on_foot && !self.flag && !self.dual() && pressed & GRENADE != 0 && self.gren_cool == 0 {
             let sticky = match self.gren_kind {
                 1 => self.stickies > 0 || self.grenades == 0,
@@ -353,8 +360,7 @@ impl Fighter {
             let n = if sticky { &mut self.stickies } else { &mut self.grenades };
             if *n > 0 {
                 *n -= 1;
-                out.throw = true;
-                out.sticky = sticky;
+                self.gren_kind = sticky as u8;
                 self.gren_cool = ticks(GREN_COOL_MS) as u16;
             }
         }

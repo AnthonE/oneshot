@@ -642,6 +642,7 @@ fn a_one_handed_gun_off_a_pad_goes_in_the_left_hand() {
 fn sticky_at(dist: f32) -> (bool, Option<u32>) {
     let mut w = range([BR, arms::NONE], dist, SALT);
     w.fighters[0].gren_kind = 1;
+    w.fighters[0].stickies = 1;
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
     inputs[0] = Input {
@@ -666,7 +667,7 @@ fn sticky_at(dist: f32) -> (bool, Option<u32>) {
             };
         }
         if !w.fighters[1].alive {
-            return (stuck, Some(t * 1000 / TICK_HZ));
+            return (stuck, Some((t - ticks(GREN_RELEASE_MS)) * 1000 / TICK_HZ));
         }
     }
     (stuck, None)
@@ -687,9 +688,10 @@ fn w_sticky_count() -> u8 {
 }
 
 #[test]
-fn a_sticky_skips_off_the_floor_and_goes_off_after_it_lands() {
+fn a_sticky_sticks_to_the_floor_and_goes_off_where_it_lands() {
     let mut w = range([BR, arms::NONE], 30.0, SALT);
     w.fighters[0].gren_kind = 1;
+    w.fighters[0].stickies = 1;
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     inputs[0] = Input {
         buttons: GRENADE,
@@ -700,7 +702,7 @@ fn a_sticky_skips_off_the_floor_and_goes_off_after_it_lands() {
         w.step(&inputs, &NO_LAG);
         inputs[0].buttons = 0;
         if w.events.as_slice().iter().any(|e| e.kind == Ev::Blast) {
-            let ms = t * 1000 / TICK_HZ;
+            let ms = (t - ticks(GREN_RELEASE_MS)) * 1000 / TICK_HZ;
             assert!((1280..=1600).contains(&ms), "off at {ms} ms");
             assert!(w.fighters[1].alive && w.fighters[0].alive);
             return;
@@ -712,6 +714,7 @@ fn a_sticky_skips_off_the_floor_and_goes_off_after_it_lands() {
 #[test]
 fn the_grenade_switch_picks_the_throw() {
     let mut w = range([BR, arms::NONE], 30.0, SALT);
+    w.fighters[0].stickies = 1;
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     let (frags, stickies) = (w.fighters[0].grenades, w.fighters[0].stickies);
     for b in [GREN_SWITCH, 0, GRENADE, 0] {

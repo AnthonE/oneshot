@@ -45,6 +45,7 @@ pub mod demo;
 pub mod flying;
 pub mod hulls;
 pub mod marks;
+pub mod plasma;
 pub mod pool;
 pub mod sheets;
 pub mod shell;

@@ -158,6 +158,7 @@ pub fn warm_models(
     models: Option<Res<Models>>,
     assets: Res<AssetServer>,
     eye: Query<Entity, With<Eye>>,
+    plasma: Option<Res<super::fx::plasma::Kit>>,
 ) {
     if *done {
         return;
@@ -172,6 +173,19 @@ pub fn warm_models(
         return;
     }
     *done = true;
+    // A plasma ball: its pipeline is built before the first one is thrown.
+    if let Some(kit) = plasma {
+        for material in [&kit.material, &kit.corona] {
+            commands.entity(eye).with_child((
+                Warming(WARM_FRAMES),
+                SceneDone,
+                Mesh3d(kit.mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                bevy::mesh::MeshTag(0),
+                at(),
+            ));
+        }
+    }
     // A truck, smaller still for its size: its steel and trim are materials
     // of its own that wear (`truck.rs`), made when its scene is in, which
     // says when this may count down.

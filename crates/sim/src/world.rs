@@ -935,10 +935,13 @@ impl World {
         } else {
             (ProjKind::Frag, ticks(GREN_LIFE_MS))
         };
+        // Never from the far side of a wall it was thrown up against.
+        let reach = self.map.ray(f.eye(), dir, 0.4);
+        let out = if reach < 0.4 { (reach - 0.05).max(0.0) } else { 0.4 };
         self.launch(
             Projectile {
                 kind,
-                pos: f.eye() + dir * 0.4,
+                pos: f.eye() + dir * out,
                 vel,
                 ttl: ttl as u16,
                 target: NO_TARGET,
@@ -955,59 +958,54 @@ impl World {
         });
     }
 
-    /// A sticky's tick: riding what it is stuck to; else flying, sticking
-    /// to the first body or hull it meets, skipping off the map. Whether it
-    /// is still about (it goes off at the end of its fuse).
+    /// A sticky's tick: riding what it is stuck to, or still where it stuck
+    /// to the map; else flying, sticking to the first thing it meets. Whether
+    /// it is still about (it goes off at the end of its fuse).
     fn sticky(&mut self, p: &mut Projectile) -> bool {
-        let stuck = p.landed && p.target != NO_TARGET;
-        if stuck {
-            let t = p.target as usize;
-            let on = if t < MAX_FIGHTERS {
-                let v = &self.fighters[t];
-                v.active().then_some(v.body.pos)
-            } else {
-                let v = &self.vehicles[t - MAX_FIGHTERS];
-                v.active.then_some(v.pos)
-            };
-            match on {
-                Some(at) => p.pos = at + p.vel,
-                // What it was on is gone: it drops where it is.
-                None => {
-                    p.target = NO_TARGET;
-                    p.vel = V3::ZERO;
+        if p.landed {
+            if p.target != NO_TARGET {
+                let t = p.target as usize;
+                let on = if t < MAX_FIGHTERS {
+                    let v = &self.fighters[t];
+                    v.active().then_some(v.body.pos)
+                } else {
+                    let v = &self.vehicles[t - MAX_FIGHTERS];
+                    v.active.then_some(v.pos)
+                };
+                match on {
+                    Some(at) => p.pos = at + p.vel,
+                    // What it was on is gone: it falls, its fuse running, and
+                    // sticks to what it meets.
+                    None => {
+                        p.target = NO_TARGET;
+                        p.vel = V3::ZERO;
+                        p.landed = false;
+                    }
                 }
             }
         } else {
+            p.vel.y -= GRAVITY * DT;
             let speed = p.vel.len();
-            let hit = if speed > 0.0 {
-                let d = p.vel * (1.0 / speed);
-                match self.flight_hit(p, d, speed * DT, false) {
-                    (t, true, Some(who)) => Some((who, p.pos + d * t)),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            match hit {
-                Some((who, at)) => {
+            let d = if speed > 0.0 { p.vel * (1.0 / speed) } else { V3::ZERO };
+            match self.flight_hit(p, d, speed * DT, false) {
+                (t, true, Some(who)) => {
                     let (target, base) = match who {
                         Target::Fighter(q, _) => (q as u8, self.fighters[q].body.pos),
                         Target::Vehicle(i) => ((MAX_FIGHTERS + i) as u8, self.vehicles[i].pos),
                     };
                     p.target = target;
-                    p.pos = at;
-                    p.vel = at - base;
-                    if !p.landed {
-                        p.landed = true;
-                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
-                    }
+                    p.pos = p.pos + d * t;
+                    p.vel = p.pos - base;
+                    p.landed = true;
+                    p.ttl = p.ttl.min(fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS));
                 }
-                None => {
-                    if self.bounce(p, GRAVITY).0 && !p.landed {
-                        p.landed = true;
-                        p.ttl = fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS);
-                    }
+                (t, true, None) => {
+                    p.pos = p.pos + d * (t - STICKY_OFF_M).max(0.0);
+                    p.vel = V3::ZERO;
+                    p.landed = true;
+                    p.ttl = p.ttl.min(fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS));
                 }
+                _ => p.pos = p.pos + p.vel * DT,
             }
         }
         if p.ttl > 0 {
@@ -1022,7 +1020,7 @@ impl World {
                 self.damage(owner, q, KILL_PTS, false, Head::None, Cause::Sticky as u16);
             }
         }
-        self.blast(
+        self.blast_k(
             p.pos + V3::new(0.0, 0.05, 0.0),
             owner,
             STICKY_DMG,
@@ -1031,6 +1029,7 @@ impl World {
             STICKY_EDGE,
             1.0,
             Cause::Sticky as u16,
+            GREN_SHIELD_K,
         );
         false
     }
@@ -1357,7 +1356,7 @@ impl World {
                     }
                     if p.ttl == 0 {
                         self.proj[i].active = false;
-                        self.blast(
+                        self.blast_k(
                             p.pos + V3::new(0.0, 0.05, 0.0),
                             p.owner as usize,
                             GREN_DMG,
@@ -1366,6 +1365,7 @@ impl World {
                             GREN_EDGE,
                             1.0,
                             Cause::Grenade as u16,
+                            GREN_SHIELD_K,
                         );
                         continue;
                     }
@@ -1433,6 +1433,23 @@ impl World {
     /// past it or through the map.
     #[allow(clippy::too_many_arguments)]
     fn blast(&mut self, at: V3, owner: usize, dmg: i32, radius: f32, full: f32, edge: i32, self_k: f32, cause: u16) {
+        self.blast_k(at, owner, dmg, radius, full, edge, self_k, cause, 1.0);
+    }
+
+    /// [`Self::blast`] with shields taking `shield_k` of it: a grenade's.
+    #[allow(clippy::too_many_arguments)]
+    fn blast_k(
+        &mut self,
+        at: V3,
+        owner: usize,
+        dmg: i32,
+        radius: f32,
+        full: f32,
+        edge: i32,
+        self_k: f32,
+        cause: u16,
+        shield_k: f32,
+    ) {
         let rim = edge as f32 / dmg.max(1) as f32;
         let falloff = |dist: f32| {
             if dist <= full {
@@ -1474,7 +1491,7 @@ impl World {
             if away.y > 0.0 {
                 b.grounded = false;
             }
-            self.damage(owner, q, pts as i32, false, Head::None, cause);
+            self.damage_k(owner, q, pts as i32, false, Head::None, cause, shield_k);
         }
         for i in 0..MAX_VEHICLES {
             let v = self.vehicles[i];
@@ -1521,7 +1538,58 @@ impl World {
             };
             let d = &mut self.drops[i];
             d.vel = d.vel + away * (BLAST_PUSH * DROP_PUSH_K * k) + V3::new(0.0, DROP_LIFT * k, 0.0);
+            // Grenades lying in it cook off, a pile of a kind as one.
+            let (frags, stickies, pos) = (d.frags > 0, d.stickies > 0, d.pos);
+            d.frags = 0;
+            d.stickies = 0;
+            if d.spent() {
+                d.active = false;
+            }
+            if frags {
+                self.cook_off(ProjKind::Frag, pos, owner);
+            }
+            if stickies {
+                self.cook_off(ProjKind::Sticky, pos, owner);
+            }
         }
+        // Grenades in its reach go off a moment after it, each its own
+        // thrower's; one not stuck to anything is thrown by it too.
+        for j in 0..MAX_PROJ {
+            let g = self.proj[j];
+            if !g.active || !matches!(g.kind, ProjKind::Frag | ProjKind::Sticky | ProjKind::Lob) {
+                continue;
+            }
+            let off = g.pos - at;
+            let dist = off.len();
+            if dist >= radius || !self.map.clear(at, g.pos) {
+                continue;
+            }
+            let away = if dist > 0.0 {
+                off * (1.0 / dist)
+            } else {
+                V3::new(0.0, 1.0, 0.0)
+            };
+            let g = &mut self.proj[j];
+            g.ttl = g.ttl.min(ticks(GREN_CHAIN_MS) as u16);
+            if !(g.kind == ProjKind::Sticky && g.landed) {
+                g.vel = g.vel + away * (BLAST_PUSH * falloff(dist));
+            }
+        }
+    }
+
+    /// A grenade going off where it lies, `owner`'s doing.
+    fn cook_off(&mut self, kind: ProjKind, pos: V3, owner: usize) {
+        // A full pool leaves it unlit, as a full pool drops a throw.
+        let _ = self.proj.alloc(Projectile {
+            active: true,
+            kind,
+            owner: owner as u8,
+            pos: pos + V3::new(0.0, DROP_MID, 0.0),
+            ttl: ticks(GREN_CHAIN_MS) as u16,
+            target: NO_TARGET,
+            landed: true,
+            ..Projectile::default()
+        });
     }
 
     /// Drops in the air: a tick of each under gravity, off the floors and
@@ -2296,7 +2364,8 @@ impl World {
     }
 
     /// Walking onto a pad holding a power-up takes it: the overshield
-    /// starts to climb (health whole), or the camouflage is on, full.
+    /// starts to climb (health whole), or the camouflage is on, full; or
+    /// grenades, as many as fit.
     fn powers(&mut self, s: usize) {
         let f = &self.fighters[s];
         if !f.active() || f.riding().is_some() || self.rules.gun_game {
@@ -2308,15 +2377,30 @@ impl World {
             if !crate::arms::power(def.arm) || self.pads[i].empty_for != 0 || !on_pad(def.pos, at) {
                 continue;
             }
-            self.pads[i].empty_for = ticks(def.respawn_ms);
             let f = &mut self.fighters[s];
-            if def.arm == crate::arms::OVERSHIELD {
-                f.charging = true;
-                f.health = HEALTH_MAX;
-            } else {
-                f.camo = ticks(CAMO_MS) as u16;
-                f.flare = 0;
+            match def.arm {
+                crate::arms::OVERSHIELD => {
+                    f.charging = true;
+                    f.health = HEALTH_MAX;
+                }
+                crate::arms::CAMO => {
+                    f.camo = ticks(CAMO_MS) as u16;
+                    f.flare = 0;
+                }
+                kind => {
+                    // Left lying for whoever has room.
+                    let have = if kind == crate::arms::FRAGS {
+                        &mut f.grenades
+                    } else {
+                        &mut f.stickies
+                    };
+                    if *have >= GREN_MAX {
+                        continue;
+                    }
+                    *have = (*have + GREN_PAD_GIVES).min(GREN_MAX);
+                }
             }
+            self.pads[i].empty_for = ticks(def.respawn_ms);
             self.events.push(Event {
                 kind: Ev::Pickup,
                 a: s as u8,
@@ -2419,6 +2503,11 @@ impl World {
             self.rules.loadout
         };
         self.fighters[s].spawn(sp.pos, sp.yaw, loadout);
+        // A practice map is for feeling them: all that can be carried.
+        if self.map.practice {
+            self.fighters[s].grenades = GREN_MAX;
+            self.fighters[s].stickies = GREN_MAX;
+        }
         self.rewind.forget(s);
         self.events.push(Event {
             kind: Ev::Spawn,

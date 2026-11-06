@@ -513,6 +513,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::plasma::PlasmaMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -561,7 +562,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 .after(look::viewmodel::kit),
             look::own_shadow::setup,
             look::portrait::setup,
-            look::fx::setup,
+            (look::fx::setup, look::fx::plasma::setup),
             look::prewarm::setup,
             (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
             look::rain::setup,
@@ -1848,6 +1849,8 @@ fn fly(
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
+    mut parts: look::fx::flying::BallParts,
+    kit: Option<Res<look::fx::plasma::Kit>>,
 ) {
     let core = &link.0.session().core;
     // On the render tick, with the bodies that fired them (`core.rs`).
@@ -1861,6 +1864,8 @@ fn fly(
         time.elapsed_secs(),
         time.delta_secs(),
         &mut have,
+        &mut parts,
+        kit.as_deref(),
     );
 }
 

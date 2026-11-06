@@ -162,6 +162,26 @@
   ],
   "flag": { "at": [-100, 0, 0.125] },
   "pads": [
+    {
+      "weapon": "stickies",
+      "at": [-48, -19.5],
+      "respawn": 30
+    },
+    {
+      "weapon": "stickies",
+      "at": [48, 19.5],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [-60, -39],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [60, 39],
+      "respawn": 30
+    },
     { "weapon": "sniper", "at": [-105.5, 0, 4.5], "respawn": 60, "mirror": true },
     { "weapon": "shotgun", "at": [-98, -4, 0.125], "respawn": 45, "mirror": true },
     { "weapon": "launcher", "at": [-60, 0], "respawn": 60, "mirror": true },

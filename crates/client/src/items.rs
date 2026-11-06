@@ -34,12 +34,17 @@ const ORB_HZ: f32 = 1.3;
 /// A power-up's colour, linear: the overshield's green, camouflage's pale
 /// blue (as their shells are drawn: `look/bodies.rs`).
 fn orb_color(id: u8) -> LinearRgba {
-    if id == sim::arms::OVERSHIELD {
-        LinearRgba::rgb(0.25, 1.0, 0.45)
-    } else {
-        LinearRgba::rgb(0.6, 0.78, 1.0)
+    match id {
+        sim::arms::OVERSHIELD => LinearRgba::rgb(0.25, 1.0, 0.45),
+        sim::arms::FRAGS => LinearRgba::rgb(0.95, 0.5, 0.12),
+        sim::arms::STICKIES => LinearRgba::rgb(0.2, 0.5, 1.0),
+        _ => LinearRgba::rgb(0.6, 0.78, 1.0),
     }
 }
+/// Frags on a pad: how far apart, and how far their middles are off the
+/// model's base.
+const PAD_FRAG_APART_M: f32 = 0.07;
+const PAD_FRAG_MID_M: f32 = 0.08;
 /// A gun on the floor lies on its side this high (its half thickness).
 const LIE_Y: f32 = 0.05;
 /// A drop thrown by a blast: how fast the drawn one follows where the
@@ -111,6 +116,7 @@ pub fn draw(
     discs: Query<(&PadDisc, &MeshMaterial3d<StandardMaterial>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    plasma: Option<Res<crate::look::fx::plasma::Kit>>,
 ) {
     let s = link.0.session();
     if !s.ready {
@@ -131,7 +137,21 @@ pub fn draw(
                     Visibility::Hidden,
                 ))
                 .id();
-            if sim::arms::power(p.arm) {
+            if p.arm == sim::arms::FRAGS {
+                for side in [-1.0, 1.0] {
+                    commands.spawn((
+                        SceneRoot(models.frag.clone()),
+                        Transform::from_xyz(side * PAD_FRAG_APART_M, -PAD_FRAG_MID_M, 0.0),
+                        ChildOf(root),
+                    ));
+                }
+            } else if p.arm == sim::arms::STICKIES {
+                if let Some(kit) = &plasma {
+                    commands
+                        .entity(root)
+                        .with_children(|c| crate::look::fx::plasma::spawn_lying(c, kit));
+                }
+            } else if sim::arms::power(p.arm) {
                 let c = orb_color(p.arm);
                 commands.spawn((
                     Mesh3d(meshes.add(Sphere::new(ORB_R))),

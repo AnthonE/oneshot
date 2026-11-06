@@ -55,6 +55,16 @@
     { "at": [24, 0], "team": "any", "yaw": 180 }
   ],
   "pads": [
+    {
+      "weapon": "frags",
+      "at": [-27, -18],
+      "respawn": 5
+    },
+    {
+      "weapon": "stickies",
+      "at": [27, -18],
+      "respawn": 5
+    },
     { "weapon": "ar", "at": [-21, -18, 0.2], "respawn": 5 },
     { "weapon": "br", "at": [-18, -18, 0.2], "respawn": 5 },
     { "weapon": "magnum", "at": [-15, -18, 0.2], "respawn": 5 },

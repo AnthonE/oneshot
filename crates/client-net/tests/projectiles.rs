@@ -684,6 +684,13 @@ fn launched(shot: Shot, pitch: i16) -> (World, proj::Seed) {
         Shot::Throw(_) => GRENADE,
     };
     w.step(&inputs, &[0; MAX_FIGHTERS]);
+    // A throw leaves the hand a moment after the press.
+    if let Shot::Throw(_) = shot {
+        inputs[0].buttons = 0;
+        for _ in 0..sim::consts::ticks(sim::consts::GREN_RELEASE_MS) {
+            w.step(&inputs, &[0; MAX_FIGHTERS]);
+        }
+    }
     let f = &w.fighters[0];
     let seed = match shot {
         Shot::Gun(_) => proj::seed_fire(f, false, false).expect("a round"),
