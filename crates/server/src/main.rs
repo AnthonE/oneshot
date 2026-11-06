@@ -8,7 +8,10 @@
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
-//! [--sim-threads 0] [--load-from ip]…`
+//! [--sim-threads 0] [--load-from ip]… [--match-secs N]`
+//!
+//! `--match-secs` puts every mode's match on an N-second clock: for tests
+//! that play one match after another (`ci/e2e.mjs`'s `E2E_AGAIN`).
 //!
 //! `--sim-threads` is how many threads the rooms step on: 0 (the default)
 //! one a core, 1 the sim thread alone. `--load-from` lets a load test's box
@@ -44,6 +47,7 @@ fn main() {
     let mut elo_key_id = None;
     let mut domains = Vec::new();
     let mut drain_max = std::time::Duration::from_secs(900);
+    let mut match_secs: Option<u32> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut val = || args.next().unwrap_or_else(|| die(&format!("{a} needs a value")));
@@ -118,12 +122,30 @@ fn main() {
             "--load-from" => cfg
                 .load_sources
                 .push(val().parse().unwrap_or_else(|_| die("--load-from is an IP address"))),
+            "--match-secs" => {
+                match_secs = Some(val().parse().unwrap_or_else(|_| die("--match-secs: whole seconds")));
+            }
             "--print-stats" => {
                 let set = server::stats::declaration();
                 println!("{}", serde_json::to_string_pretty(&set).unwrap_or_default());
                 return;
             }
             _ => die(&format!("unknown argument {a}")),
+        }
+    }
+    if let Some(s) = match_secs {
+        let ms = s.max(1) * 1000;
+        for r in [
+            &mut cfg.rules,
+            &mut cfg.duel,
+            &mut cfg.doubles,
+            &mut cfg.cup,
+            &mut cfg.ffa,
+            &mut cfg.gun_game,
+            &mut cfg.big_team,
+            &mut cfg.ctf,
+        ] {
+            r.time_limit_ms = ms;
         }
     }
     if let (Some(c), Some(k)) = (cert, key) {

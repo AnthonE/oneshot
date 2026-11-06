@@ -8,7 +8,13 @@
 // that stand still: one (mode 0, the default), seven (3 free for all, 4 Gun
 // Game) or fifteen (6 Big Team). Passes when it connected, drew, snapshots
 // flowed, its predictions confirmed and it scored a kill. The map is
-// Proving Grounds (id 0) unless named. Build first: ci/client.sh and
+// Proving Grounds (id 0) unless named (several: `0,7`, the server's
+// rotation). `E2E_AGAIN=N` (`E2E_MATCH_SECS`, 30): matches on that clock,
+// and the title's player sits through each, rides its end back to the
+// title and presses PLAY again, N more times: each next match must start,
+// draw, and (given two maps or more) be on another map than the last, as
+// in the browser between rounds; `node ci/e2e.mjs 60 0 0,7` with
+// `E2E_AGAIN=2` goes 0, 7, 0 or 7, 0, 7. Build first: ci/client.sh and
 // `cargo build --release -p server`. A screenshot goes to
 // traces/e2e-<mode>-<map>.png.
 //
@@ -30,6 +36,9 @@ import { dirname } from 'node:path';
 const seconds = Number(process.argv[2] || 90);
 const mode = Number(process.argv[3] || 0);
 const map = process.argv[4] || '0';
+const maps = map.split(',');
+const again = Number(process.env.E2E_AGAIN || 0);
+const matchSecs = Number(process.env.E2E_MATCH_SECS || 30);
 // Playwright is the repo's one Node dependency (package.json).
 const require = createRequire(new URL('../package.json', import.meta.url));
 const { chromium } = (() => {
@@ -40,7 +49,9 @@ const { chromium } = (() => {
 })();
 
 const server = spawn('target/release/oneshot-server', [
-  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots', '--map', map,
+  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots',
+  ...maps.flatMap((m) => ['--map', m]),
+  ...(again ? ['--match-secs', String(matchSecs)] : []),
 ], { stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((ok, fail) => {
   let out = '';
@@ -117,9 +128,51 @@ try {
     await p.screenshot({ path: `traces/e2e-title-${mode}.png` });
     const NAMES = ['vs the bot', 'duel', 'doubles', 'free for all', 'gun game', 'cup', 'big team'];
     checks.push([`the title's ${NAMES[mode]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
+    // Again and again: each match runs out its clock, the page rides its
+    // end back to the title, and PLAY starts the next, on another map.
+    if (again && m?.connected) {
+      const look = () => p.evaluate(() => ({
+        connected: !!window.__oneshot?.connected, screen: window.__oneshot?.screen,
+        map: window.__oneshot?.map, frames: window.__oneshot?.frames ?? 0,
+      }));
+      const played = [(await look()).map];
+      let ok = true;
+      for (let k = 1; k <= again && ok; k++) {
+        // The clock, the countdown and the end's hold, at SwiftShader's pace.
+        const t = Date.now();
+        let s = await look();
+        while (Date.now() - t < (matchSecs + 90) * 1000 && s.screen === 'playing') {
+          await p.waitForTimeout(1000);
+          s = await look();
+        }
+        const back = s.screen === 'title' && !s.connected;
+        checks.push([`match ${k} ran out and the page came back to the title`, back]);
+        if (!back) { ok = false; break; }
+        await press('go');
+        const t2 = Date.now();
+        while (Date.now() - t2 < 90000) {
+          await p.waitForTimeout(1000);
+          s = await look();
+          if (s.connected && s.screen === 'playing') break;
+        }
+        const f0 = s.frames;
+        await p.waitForTimeout(8000);
+        const drew = (await look()).frames - f0;
+        await p.screenshot({ path: `traces/e2e-again-${k}.png` });
+        played.push(s.map);
+        const fresh = maps.length < 2 || s.map !== played[played.length - 2];
+        checks.push([`PLAY again started match ${k + 1} on map ${s.map} and drew it (${drew} frames in 8 s)`,
+          s.connected && s.screen === 'playing' && drew > 0]);
+        checks.push([`match ${k + 1} is on another map than the last (${played.join(' → ')})`, fresh]);
+        ok = s.connected && fresh;
+      }
+    }
     await p.close();
   }
 
+  // Matches on a short clock (`E2E_AGAIN`) are the title's loop alone: the
+  // driven match below wants its whole clock for a kill.
+  if (!again) {
   // Small, as the three.js page's gate ran: SwiftShader is fill-bound.
   const page = await browser.newPage({ viewport: { width: 480, height: 270 } });
   watch(page);
@@ -209,6 +262,7 @@ try {
         // Big Team's maps have wind, held all match long.
         && (mode !== 6 || (mixed.mixer?.[6] ?? 0) >= 1)],
   );
+  }
 } catch (e) {
   errors.push(String(e));
 } finally {
