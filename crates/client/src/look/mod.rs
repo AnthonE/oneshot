@@ -40,6 +40,7 @@ pub mod rainbow;
 pub mod render_scale;
 pub mod rig;
 pub mod rock;
+pub mod sea_motion;
 pub mod shafts;
 pub mod shake;
 pub mod shield;

@@ -79,7 +79,7 @@ use super::fx::vent::ViewHeat;
 use super::guns::{gun, spawn_posed, view_basis, Models};
 use super::hands::{Grip, Grips};
 use super::shake::{peak_to_speed, spring};
-use super::shield::ShieldMaterial;
+use super::shield::{Flare, ShieldMaterial, Tone};
 
 /// How much smaller, and nearer, the gun is than it looks.
 pub const SHRINK: f32 = 0.25;
@@ -414,13 +414,8 @@ pub fn shimmer(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
     fx: Res<super::fx::Fx>,
-    kit: Option<Res<ViewKit>>,
-    mut shells: ResMut<Assets<ShieldMaterial>>,
-    mut q: Query<&mut Visibility, With<ViewShell>>,
+    mut q: Query<(&mut Visibility, &mut MeshTag), With<ViewShell>>,
 ) {
-    let Some(kit) = kit else {
-        return;
-    };
     let core = &link.0.session().core;
     let f = core.own().0;
     let hit = if f.alive {
@@ -428,24 +423,24 @@ pub fn shimmer(
     } else {
         0.0
     };
-    let (rgb, level) = match () {
-        _ if f.alive && f.camo > 0 => (super::bodies::CAMO, hit.max(CAMO_IN_VIEW)),
-        _ if f.alive && f.overshield() => (super::bodies::OVER, hit.max(OVER_IN_VIEW)),
-        _ => (super::shield::GOLD, hit),
+    let (tone, level) = match () {
+        _ if f.alive && f.camo > 0 => (Tone::Camo, hit.max(CAMO_IN_VIEW)),
+        _ if f.alive && f.overshield() => (Tone::Over, hit.max(OVER_IN_VIEW)),
+        _ => (Tone::Gold, hit),
     };
     let on = level > 0.004;
-    let want = rgb.extend(if on { level } else { 0.0 });
-    if let Some(m) = shells.get(&kit.shell) {
-        let c = m.extension.color;
-        if (c.w - want.w).abs() > 0.002 || c.truncate() != rgb || (!on && c.w != 0.0) {
-            if let Some(m) = shells.get_mut(&kit.shell) {
-                m.extension.color = want;
-            }
-        }
+    // By tag, as a body's shell (`shield::Flare`): the material is never
+    // written.
+    let tag = Flare {
+        level: if on { level } else { 0.0 },
+        tone,
+        hidden: false,
     }
+    .tag();
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };
-    for mut v in &mut q {
+    for (mut v, mut t) in &mut q {
         v.set_if_neq(want);
+        t.set_if_neq(MeshTag(tag.0));
     }
 }
 
@@ -1295,6 +1290,7 @@ pub(super) fn no_shadows(
                     Transform::IDENTITY,
                     Visibility::Hidden,
                     ViewShell,
+                    MeshTag(0),
                     NotShadowCaster,
                     ChildOf(e),
                 ));

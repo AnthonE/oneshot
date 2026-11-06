@@ -12,8 +12,18 @@
     mesh_view_bindings::{view, globals},
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> color: vec4<f32>;
+// The three colours at full; each mesh's tag picks one (`shield::Flare`).
+struct Tones {
+    gold: vec4<f32>,
+    over: vec4<f32>,
+    camo: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> tones: Tones;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> params: vec4<f32>;
+
+// `shield::LEVEL_MAX`: what the tag's 16 bits of level run to.
+const LEVEL_MAX: f32 = 4.0;
 
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
@@ -77,7 +87,16 @@ fn hex_edge(p: vec2<f32>) -> f32 {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var out: FragmentOutput;
-    let level = color.a;
+    // The flare this mesh's tag says (`shield::Flare::tag`).
+    let tag = mesh_functions::get_tag(in.instance_index);
+    let level = f32(tag & 0xffffu) / 65535.0 * LEVEL_MAX;
+    let tone = (tag >> 16u) & 3u;
+    var rgb = tones.gold.rgb;
+    if tone == 1u {
+        rgb = tones.over.rgb;
+    } else if tone == 2u {
+        rgb = tones.camo.rgb;
+    }
     let n = normalize(in.world_normal);
     let v = normalize(view.world_position.xyz - in.world_position.xyz);
     let rim = pow(1.0 - abs(dot(n, v)), 2.2);
@@ -92,11 +111,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A band of light sweeping up the body, and a flicker across it.
     let band = smoothstep(0.35, 0.0, abs(fract(in.world_position.y * 0.6 - t * 1.4) - 0.5));
     let flicker = 0.75 + 0.25 * sin(t * 47.0 + in.world_position.y * 9.0);
-    // params.z takes the fill away (the arms in view: rim and lines only).
-    let fill = 1.0 - params.z;
+    // params.z takes the fill away (the arms in view: rim and lines only),
+    // as camouflage does.
+    let fill = 1.0 - max(params.z, select(0.0, 1.0, tone == 2u));
     let k = level * flicker * (rim * 1.5 + lines * (0.1 + rim) * 0.9 + (band * 0.15 + 0.02) * fill);
     // Alpha 0: AlphaMode::Add blends as premultiplied alpha (src + (1 - a)
     // dst), so only a = 0 adds the shell over what is behind it.
-    out.color = vec4<f32>(color.rgb * k, 0.0);
+    out.color = vec4<f32>(rgb * k, 0.0);
     return out;
 }
