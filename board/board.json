@@ -560,6 +560,93 @@
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-hold",
+      "name": "Chrysalis: red's top",
+      "what": "from red's pod roof down the hold to the chrysalis, the vault and its panes over it",
+      "take": "the hull's plates read as metal with a sheen, not lavender plastic; the vault's gold panes as cells of lit glass; the far end softer in the hall's air",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/hold.png",
+      "refs": [
+        {
+          "file": "h2_map_002.jpg",
+          "take": "a ship's hall: pearl-purple curved hull plates, dark floor grating, round ceiling lamps, light strips along plate edges, gold hex windows overhead",
+          "ignore": "the vehicle, the logo",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit",
+      "name": "Chrysalis: bottom mid",
+      "what": "in the pit under the ring, its legs, the spine and the chrysalis overhead",
+      "take": "under the ring is darker than the hall; the ring's light rings and the lift's beam carry it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit.png",
+      "refs": [
+        {
+          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "take": "a ship interior lit from within: purple walls with magenta slits, blue-white lift beams, a column through the middle; lit enough to read a fighter",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-topmid",
+      "name": "Chrysalis: top mid",
+      "what": "on the ring by the spine, looking at blue's end",
+      "take": "where the fights are reads; the hull's veins glow without hiding fighters; nothing grey",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/topmid.png",
+      "refs": [
+        {
+          "file": "h2_map_002.jpg",
+          "take": "curved ribbed ceiling with lamps, the hall reads long and tall",
+          "ignore": "the vehicle, the logo",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-lane",
+      "name": "Chrysalis: the south lane",
+      "what": "down the south lane from red's end, the pods and the ring",
+      "take": "the deck reads as a ship's: dark plates with cut corners, grates lit from under it; the pods as fittings with bands of light, not balls",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/lane.png",
+      "refs": [
+        {
+          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "take": "the walls' plates read as sculpted hull, not boxes; cyan and magenta accents, nothing grey",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-door",
+      "name": "Chrysalis: red's door",
+      "what": "out of red's door to the ring over the pit",
+      "take": "the hall framed by the arch; the pods under the ring banded in cyan; the floor dark and purple, nothing grey",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/door.png",
+      "refs": [
+        {
+          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "take": "the walls' plates read as sculpted hull, not boxes; cyan and magenta accents, nothing grey",
+          "private": true
+        }
+      ]
     }
   ]
 }
