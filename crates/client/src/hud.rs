@@ -6,12 +6,12 @@
 //! and the two scores
 //! that matter bottom right. A crosshair, a hit marker on our hits (red on
 //! a kill), an arc toward whoever hurt us, and a line in the middle for the
-//! countdown, the result and who killed us (then the respawn's count, low
-//! in the middle until the scoreboard comes up); the screen's rim (red as
+//! countdown and the result; the screen's rim (red as
 //! health goes, gold as the shield takes a round, a crackle of blue as it
 //! breaks); before the welcome, the queue's line. `N` shows the net graph.
 //! The scope is `scope.rs`'s.
-//! Medals and the carnage report are `medals.rs`'s to draw; their lines in
+//! Who killed us and the scoreboard are `scores.rs`'s to draw (the death
+//! card); medals and the carnage report `medals.rs`'s; their lines in
 //! the feed are here. Everything here is read from the session; nothing is
 //! decided.
 
@@ -129,8 +129,8 @@ pub struct HudState {
     last_shield: i32,
     arc_at: f32,
     hurt_angle: f32,
-    /// How we last died, as a line ("You were sniped by ...").
-    pub death_line: String,
+    /// How we last died (`scores.rs`'s death card).
+    pub death: Option<Death>,
     /// The scoreboard is held up.
     pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
@@ -169,6 +169,15 @@ pub struct HudState {
     pub net: bool,
 }
 
+/// How we died, as the stream told it: by whom, with what (a gun's arm, or
+/// a `sim::events::Cause`), and whether it was the head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Death {
+    pub killer: u8,
+    pub cause: u16,
+    pub head: bool,
+}
+
 /// Medals on screen at once, and how long each stays.
 pub const MEDALS_SHOWN: usize = 6;
 pub const MEDAL_S: f32 = 4.0;
@@ -182,6 +191,16 @@ impl HudState {
             net: self.net,
             ..default()
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_seat_side(&mut self, slot: u8, team: u8) {
+        self.teams.insert(slot, team);
+    }
+
+    /// A seat's side (0 red, 1 blue), as its seat message said.
+    pub fn side(&self, slot: u8) -> Option<u8> {
+        self.teams.get(&slot).map(|t| t & 1)
     }
 
     pub fn look(&self, slot: u8) -> proto::Look {
@@ -302,16 +321,8 @@ pub struct FeedText;
 pub struct FeedPart(pub usize);
 #[derive(Component)]
 pub struct CenterText;
-/// "Respawn in N", low in the middle while we are dead.
-#[derive(Component)]
-pub struct RespawnText;
 #[derive(Component)]
 pub struct NetText;
-/// The scoreboard's panel, and its columns: names, kills, deaths, score.
-#[derive(Component)]
-pub struct Board;
-#[derive(Component)]
-pub struct BoardColumn(pub u8);
 /// What USE would take here (`items::offer`): the row, the key on its
 /// cap, the verb, and the gun.
 #[derive(Component)]
@@ -794,54 +805,6 @@ pub fn setup(mut commands: Commands) {
         },
         children![(CenterText, text(crate::ui::display(26.0)))],
     ));
-    commands.spawn((
-        ChildOf(root),
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            bottom: Val::Percent(16.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        children![(RespawnText, tinted(crate::ui::display(20.0), INK))],
-    ));
-    // The scoreboard: a panel in the middle, four columns.
-    commands
-        .spawn((
-            Board,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Percent(37.0),
-                width: Val::Px(520.0),
-                margin: UiRect::left(Val::Px(-260.0)),
-                padding: UiRect::axes(Val::Px(18.0), Val::Px(14.0)),
-                column_gap: Val::Px(24.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            // The game's own panel (`ui.rs`), as the Esc menu's.
-            BackgroundColor(crate::ui::PANEL_BG),
-            BorderColor::all(crate::ui::RULE),
-            Visibility::Hidden,
-        ))
-        .with_children(|c| {
-            for (i, grow) in [(0u8, 1.0), (1, 0.0), (2, 0.0), (3, 0.0)] {
-                c.spawn((
-                    Node {
-                        flex_grow: grow,
-                        min_width: Val::Px(56.0),
-                        ..default()
-                    },
-                    children![(
-                        BoardColumn(i),
-                        tinted(crate::ui::semibold(16.0), crate::ui::TEXT_COLOR),
-                        TextLayout::new_with_justify(if i == 0 { Justify::Left } else { Justify::Right }),
-                    )],
-                ));
-            }
-        });
     // Under the crosshair: what USE would take, small: the key on a cap,
     // then the verb, dim, and the gun.
     commands.spawn((
@@ -1195,12 +1158,12 @@ pub fn on_events(
                 head,
             } => {
                 let how = crate::tally::how(*cause);
-                let head = if *head { " \u{b7} HEAD" } else { "" };
+                let at_head = if *head { " \u{b7} HEAD" } else { "" };
                 // Name, how, name: the parts `feed` draws (a tab ends one).
                 let line = if killer == victim {
-                    format!("{} died\t{how}{head}", st.name(*victim))
+                    format!("{} died\t{how}{at_head}", st.name(*victim))
                 } else {
-                    format!("{}\t{how}{head}\t{}", st.name(*killer), st.name(*victim))
+                    format!("{}\t{how}{at_head}\t{}", st.name(*killer), st.name(*victim))
                 };
                 st.feed.push((line, now));
                 let side = |q: &u8| st.teams.get(q).map(|t| t & 1);
@@ -1219,7 +1182,11 @@ pub fn on_events(
                 }
                 if *victim == me {
                     st.deaths += 1;
-                    st.death_line = death_line(st, s.core.rules.teams, me, *killer, *cause);
+                    st.death = Some(Death {
+                        killer: *killer,
+                        cause: *cause,
+                        head: *head,
+                    });
                 }
                 if let Some(r) = st.rung.remove(victim) {
                     st.spree_ended.insert(*victim, r);
@@ -1242,25 +1209,9 @@ pub fn on_events(
 
 /// Dead long enough for the scoreboard ([`DEAD_BOARD_S`]), on the
 /// respawn's own clock.
-fn boarded(f: &sim::fighter::Fighter) -> bool {
+pub(crate) fn boarded(f: &sim::fighter::Fighter) -> bool {
     let gone = sim::consts::ticks(sim::consts::RESPAWN_MS).saturating_sub(u32::from(f.respawn));
     !f.alive && gone as f32 >= DEAD_BOARD_S * TICK_HZ as f32
-}
-
-/// What the screen says when we die, after Halo 2's.
-fn death_line(st: &HudState, teams: bool, me: u8, killer: u8, cause: u16) -> String {
-    if killer == me {
-        return if cause == sim::events::Cause::Fall as u16 {
-            "You fell to your death".into()
-        } else {
-            "You killed yourself".into()
-        };
-    }
-    let side = |q: u8| st.teams.get(&q).map(|t| t & 1);
-    if teams && side(killer) == side(me) {
-        return format!("You were betrayed by {}", st.name(killer));
-    }
-    format!("You were {} by {}", crate::tally::verb(cause), st.name(killer))
 }
 
 fn mmss(s: f32) -> String {
@@ -1273,7 +1224,6 @@ fn mmss(s: f32) -> String {
 pub struct DrawLines {
     center: String,
     net: String,
-    respawn: String,
     gone: String,
 }
 
@@ -1302,7 +1252,7 @@ pub fn draw(
     time: Res<Time>,
     st: Res<HudState>,
     mut arc: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<HurtArc>>,
-    mut texts: Query<(&mut Text, Option<&CenterText>, Option<&NetText>, Option<&RespawnText>)>,
+    mut texts: Query<(&mut Text, Option<&CenterText>, Option<&NetText>)>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
@@ -1312,12 +1262,7 @@ pub fn draw(
     let now = time.elapsed_secs();
     let core = &s.core;
     let (f, _) = core.own();
-    let DrawLines {
-        center,
-        net,
-        respawn,
-        gone,
-    } = &mut *lines;
+    let DrawLines { center, net, gone } = &mut *lines;
     gone_line(gone, st.ended, &*link.0);
     let gone = (!gone.is_empty()).then_some(gone.as_str());
     if !s.ready {
@@ -1329,7 +1274,7 @@ pub fn draw(
             None if st.status.is_empty() => center.push_str("connecting..."),
             None => center.push_str(&st.status),
         }
-        for (mut t, ce, _, _) in texts.iter_mut() {
+        for (mut t, ce, _) in texts.iter_mut() {
             if ce.is_some() && t.0 != *center {
                 t.0.clone_from(center);
             }
@@ -1337,8 +1282,6 @@ pub fn draw(
         return;
     }
     // Dead: who did it, then (with the scoreboard up) the count.
-    let boarded = boarded(f);
-    let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
     center.clear();
@@ -1376,10 +1319,7 @@ pub fn draw(
             }
         }
         _ if gone.is_some() => center.push_str(gone.unwrap_or_default()),
-        _ if !f.alive && boarded => {
-            let _ = write!(center, "Respawn in {back}");
-        }
-        _ if !f.alive => center.push_str(&st.death_line),
+        // Dead: the death card says it (`scores.rs`).
         _ => {}
     }
     net.clear();
@@ -1391,14 +1331,8 @@ pub fn draw(
             n.snapshots, n.confirmations, n.corrections, n.depth, n.rate, n.delay_ticks, s.dropped
         );
     }
-    respawn.clear();
-    if snap.phase == 1 && gone.is_none() && !f.alive && !boarded {
-        let _ = write!(respawn, "Respawn in {back}");
-    }
-    for (mut t, ce, ne, re) in texts.iter_mut() {
-        let v = if re.is_some() {
-            &*respawn
-        } else if ce.is_some() {
+    for (mut t, ce, ne) in texts.iter_mut() {
+        let v = if ce.is_some() {
             &*center
         } else if ne.is_some() {
             &*net
@@ -2049,93 +1983,6 @@ pub fn reticle_tint(seen: Res<crate::Seen>, mut q: Query<&mut BackgroundColor, W
     for mut bg in q.iter_mut() {
         if bg.0 != c {
             bg.0 = c;
-        }
-    }
-}
-
-/// The scoreboard: held up (its key), while we are dead (after
-/// [`DEAD_BOARD_S`]), and once the match is over until the carnage report
-/// comes.
-/// Every seat by side (teams first, each side's score) then by score:
-/// name, kills, deaths, score.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub fn board(
-    link: NonSend<crate::LinkRes>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    binds: Res<crate::binds::Binds>,
-    mut st: ResMut<HudState>,
-    mut panel: Query<&mut Visibility, With<Board>>,
-    mut cols: Query<(&mut Text, &BoardColumn)>,
-    (mut out, mut seats): (Local<[String; 4]>, Local<Vec<u8>>),
-) {
-    let s = link.0.session();
-    let over = s.ready && s.core.latest().phase == 2;
-    let held = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
-    if st.board != held {
-        st.board = held;
-    }
-    // Once the match is over the carnage report (`medals.rs`) is the
-    // board, as soon as its rows come.
-    // Dead a moment, it comes up on its own until the respawn (Halo 2's).
-    let dead = s.ready && !over && boarded(s.core.own().0);
-    let up = s.ready && (st.board || dead || (over && st.carnage.is_empty()));
-    if let Ok(mut v) = panel.single_mut() {
-        let want = if up { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
-    }
-    if !up {
-        return;
-    }
-    let core = &s.core;
-    let snap = core.latest();
-    let score = |i: usize| snap.score.get(i).copied().unwrap_or(0);
-    let side = |q: u8| st.teams.get(&q).copied().unwrap_or(0) & 1;
-    let kd = |q: u8| st.tally.kd.get(&q).copied().unwrap_or((0, 0));
-    // Each column written row by row into the same Strings every frame.
-    let heads = ["", "K", "D", "SCORE"];
-    for (o, h) in out.iter_mut().zip(heads) {
-        o.clear();
-        o.push_str(h);
-        o.push('\n');
-    }
-    let [name, kills, deaths, total] = &mut *out;
-    seats.clear();
-    if core.rules.teams {
-        for t in [core.team & 1, 1 - (core.team & 1)] {
-            name.push_str(if t == 0 { "RED\n" } else { "BLUE\n" });
-            kills.push('\n');
-            deaths.push('\n');
-            let _ = writeln!(total, "{}", score(t as usize));
-            seats.clear();
-            seats.extend(st.names.keys().copied().filter(|&q| side(q) == t));
-            seats.sort_by_key(|&q| (std::cmp::Reverse(kd(q).0), kd(q).1, q));
-            for &q in seats.iter() {
-                let (k, d) = kd(q);
-                let _ = writeln!(name, "  {}", st.shown(q));
-                let _ = writeln!(kills, "{k}");
-                let _ = writeln!(deaths, "{d}");
-                total.push('\n');
-            }
-        }
-    } else {
-        seats.extend(st.names.keys().copied());
-        seats.sort_by_key(|&q| (std::cmp::Reverse(score(q as usize)), q));
-        for &q in seats.iter() {
-            let (k, d) = kd(q);
-            let me = if q == core.slot { " <" } else { "" };
-            let _ = writeln!(name, "{}{me}", st.shown(q));
-            let _ = writeln!(kills, "{k}");
-            let _ = writeln!(deaths, "{d}");
-            let _ = writeln!(total, "{}", score(q as usize));
-        }
-    }
-    for (mut t, c) in cols.iter_mut() {
-        let v = &out[c.0 as usize];
-        if t.0 != *v {
-            t.0.clone_from(v);
         }
     }
 }

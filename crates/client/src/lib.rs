@@ -41,6 +41,7 @@ pub mod plate;
 pub mod pointer;
 pub mod pose;
 pub mod scope;
+pub mod scores;
 pub mod settings;
 pub mod shot;
 pub mod sound;
@@ -730,13 +731,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (
                 hud::setup,
                 medals::setup,
+                scores::setup,
                 scope::setup.after(hud::setup),
                 visor::setup.after(hud::setup),
             ),
         )
         .add_systems(
             Update,
-            (hud::prompt, hud::feed, hud::reticle_tint, hud::board)
+            (hud::prompt, hud::feed, hud::reticle_tint, scores::board, scores::card)
                 .after(hud::draw)
                 .run_if(in_match),
         );
