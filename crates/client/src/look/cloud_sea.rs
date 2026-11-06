@@ -9,9 +9,12 @@
 //! flat out to [`FLAT_M`], then curling up into a bank of cloud that stands
 //! over the horizon inside the far plane (`rig::FAR_M`): a flat sheet cut
 //! off by the far plane leaves a band under the horizon where the
-//! atmosphere draws its warm ground, a hard line round the world. The shader
-//! draws the billows per pixel, flattening them where a pixel can't hold
-//! them, so it is the same sheet on every rung and on WebGL2.
+//! atmosphere draws its warm ground, a hard line round the world. The bank
+//! goes to the weather fog's colour as it climbs ([`FADE_M`] to
+//! [`REACH_M`], by [`FAR_SHARE`] of the way: the colour the sky's own haze
+//! band is, `rig::fog_for`), so its rim is lost against the horizon. The
+//! shader draws the billows per pixel, flattening them where a pixel can't
+//! hold them, so it is the same sheet on every rung and on WebGL2.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -31,17 +34,22 @@ const RINGS_M: [f32; 14] = [
 ];
 pub const FLAT_M: f32 = 400.0;
 pub const REACH_M: f32 = 560.0;
+/// From here out the sheet goes to the fog's colour, [`FAR_SHARE`] of the
+/// way by [`REACH_M`].
+pub const FADE_M: f32 = 300.0;
+pub const FAR_SHARE: f32 = 0.9;
 /// The bank's rim: over the eye of anyone on the island (a strut's tip is
 /// 9 m up), so from there it stands just over the horizon.
 pub const RIM_Y: f32 = 20.0;
 const SPOKES: usize = 96;
 /// A billow's top and the hollow between, linear: a grey white under the
-/// lit sand's value, and a cool grey in the folds.
-pub const TOP: [f32; 3] = [0.6, 0.61, 0.64];
-pub const HOLLOW: [f32; 3] = [0.34, 0.36, 0.41];
+/// lit sand's value, and a cool blue grey deep in the folds, so a sea of
+/// them reads as rolling masses and not a snowfield.
+pub const TOP: [f32; 3] = [0.62, 0.63, 0.66];
+pub const HOLLOW: [f32; 3] = [0.27, 0.3, 0.38];
 /// The big billows' size, metres, and how steeply they stand.
-pub const BILLOW_M: f32 = 70.0;
-pub const RELIEF: f32 = 1.6;
+pub const BILLOW_M: f32 = 100.0;
+pub const RELIEF: f32 = 6.0;
 /// How fast it drifts, m/s, along x and z: slower than the sky's deck.
 pub const DRIFT: [f32; 2] = [0.9, 0.35];
 /// The drift wraps at this, metres (a whole number of the biggest
@@ -54,6 +62,8 @@ pub struct SeaParams {
     pub top: Vec4,
     pub hollow: Vec4,
     pub shape: Vec4,
+    pub fade: Vec4,
+    pub far: Vec4,
 }
 
 /// The extension. Not bindless, as the level's isn't.
@@ -75,9 +85,10 @@ impl MaterialExtension for Sea {
     }
 }
 
-/// The sheet and how far it has drifted.
+/// The sheet, its middle and how far it has drifted.
 #[derive(Component, Default)]
 pub struct CloudSea {
+    mid: Vec2,
     drift: Vec2,
 }
 
@@ -86,11 +97,13 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, drift);
 }
 
-fn params(drift: Vec2) -> SeaParams {
+fn params(mid: Vec2, drift: Vec2, far: Vec3) -> SeaParams {
     SeaParams {
         top: Vec3::from_array(TOP).extend(1.0),
         hollow: Vec3::from_array(HOLLOW).extend(1.0),
         shape: Vec4::new(BILLOW_M, RELIEF, drift.x, drift.y),
+        fade: Vec4::new(mid.x, mid.y, FADE_M, REACH_M),
+        far: far.extend(FAR_SHARE),
     }
 }
 
@@ -143,7 +156,7 @@ pub fn spawn(
 ) {
     commands.spawn((
         crate::level::LevelPart,
-        CloudSea::default(),
+        CloudSea { mid, drift: Vec2::ZERO },
         Mesh3d(meshes.add(mesh(mid, y))),
         MeshMaterial3d(materials.add(CloudSeaMaterial {
             base: StandardMaterial {
@@ -153,7 +166,7 @@ pub fn spawn(
                 ..default()
             },
             extension: Sea {
-                params: params(Vec2::ZERO),
+                params: params(mid, Vec2::ZERO, Vec3::splat(0.5)),
             },
         })),
         Transform::IDENTITY,
@@ -164,17 +177,22 @@ pub fn spawn(
     ));
 }
 
-/// Once a frame: the drift on by [`DRIFT`], wrapped.
+/// Once a frame: the drift on by [`DRIFT`], wrapped, and the colour the
+/// far sheet goes to (the mood's fog, as the deck's haze band has it).
 fn drift(
     time: Res<Time>,
+    mood: Res<super::mood::MoodNow>,
+    tier: Res<super::quality::Tier>,
     mut materials: ResMut<Assets<CloudSeaMaterial>>,
     mut seas: Query<(&mut CloudSea, &MeshMaterial3d<CloudSeaMaterial>)>,
 ) {
     let dt = time.delta_secs();
+    let far = super::rig::fog_for(&mood.mood, tier.atmosphere, 0.0).color.to_linear();
+    let far = Vec3::new(far.red, far.green, far.blue);
     for (mut sea, handle) in &mut seas {
         sea.drift = (sea.drift + Vec2::from_array(DRIFT) * dt).rem_euclid(Vec2::splat(WRAP_M));
         if let Some(m) = materials.get_mut(&handle.0) {
-            m.extension.params = params(sea.drift);
+            m.extension.params = params(sea.mid, sea.drift, far);
         }
     }
 }
@@ -205,8 +223,10 @@ mod tests {
         assert!(p.iter().any(|v| (v[1] - RIM_Y).abs() < 1e-3));
         // An eye 30 m over the island's ground (0), up to 35 m off the
         // middle (the island's far edge): the rim is above it and nearer
-        // than the far plane.
+        // than the far plane. The sheet is whole under the island and
+        // only thins once it has begun to bank.
         const { assert!(RIM_Y >= 12.0) };
         const { assert!(REACH_M + 35.0 < crate::look::rig::FAR_M) };
+        const { assert!(FADE_M < REACH_M && FADE_M > 100.0) };
     }
 }

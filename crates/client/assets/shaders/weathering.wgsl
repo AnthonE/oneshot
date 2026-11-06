@@ -42,7 +42,8 @@ struct Weather {
     // edges another box hides, as bits (`edge_distance`).
     half: vec4<f32>,
     // x, y: cos and sin of its turn about y (local +x is (c, 0, s)); z 1:
-    // a plaza's round slab, its top carved as a seal (`weathering::seal`).
+    // a plaza's round slab, its top carved as a seal (`weathering::seal`);
+    // w 1: cut stone, in courses with joints (`Surface::Stone`).
     turn: vec4<f32>,
     // The ground under a long block at eight points end to end along the
     // axis `grime.w` names (`weathering::Block::run`).
@@ -65,6 +66,53 @@ const SEAL_GROOVE_M: f32 = 0.05;
 const SEAL_GROOVE_DARK: f32 = 0.5;
 const SEAL_RIM_DARK: f32 = 0.84;
 const SEAL_HUB_PALE: f32 = 1.12;
+
+// Cut stone's courses: a course's height and a block's length, m, the
+// blocks of each course staggered half a block on the last; a joint's
+// half-width m and how dark it is; how far a block's own value strays.
+const COURSE_H: f32 = 0.6;
+const COURSE_LEN: f32 = 1.3;
+const JOINT_W: f32 = 0.014;
+const JOINT_DARK: f32 = 0.58;
+const COURSE_VALUE: f32 = 0.09;
+
+// Cut stone at `p`: the joint (1 in it) and the block's own value, read
+// in the block's own frame so the courses run level along every face and
+// a top is flagged in squares. `aa` is the pixel's size, m.
+fn courses(p: vec3<f32>, ng: vec3<f32>, aa: f32) -> vec2<f32> {
+    let l = local(p) + weather.half.xyz;
+    let c = weather.turn.x;
+    let s = weather.turn.y;
+    let nl = vec3<f32>(ng.x * c + ng.z * s, ng.y, ng.z * c - ng.x * s);
+    var u = l.x;
+    var v = l.y;
+    var h = COURSE_H;
+    var face = 0.0;
+    if abs(nl.y) > 0.7 {
+        // A top: square flags.
+        u = l.x;
+        v = l.z;
+        h = COURSE_LEN;
+        face = 3.0;
+    } else if abs(nl.x) > abs(nl.z) {
+        u = l.z;
+        face = select(1.0, 2.0, nl.x < 0.0);
+    } else {
+        face = select(4.0, 5.0, nl.z < 0.0);
+    }
+    let row = floor(v / h);
+    let shift = select(0.0, COURSE_LEN * 0.5, (row - 2.0 * floor(row * 0.5)) > 0.5);
+    let col = floor((u + shift) / COURSE_LEN);
+    let dv = abs(fract(v / h) - 0.5) * h;
+    let du = abs(fract((u + shift) / COURSE_LEN) - 0.5) * COURSE_LEN;
+    let edge = min(h * 0.5 - dv, COURSE_LEN * 0.5 - du);
+    var joint = 1.0 - smoothstep(JOINT_W, JOINT_W + aa, edge);
+    // Gone where it is thinner than a pixel: a far wall keeps its courses'
+    // values and loses the lines.
+    joint *= clamp(JOINT_W / max(aa, 1.0e-4) - 0.3, 0.0, 1.0);
+    let value = 1.0 + COURSE_VALUE * (hash3(vec3<i32>(i32(col) + 17, i32(row) * 3 + 5, i32(face) * 11)) * 2.0 - 1.0);
+    return vec2<f32>(joint, value);
+}
 
 // 1 on a groove of the seal at `at` metres (across `x` metres), fading
 // over the pixel's footprint.
@@ -205,6 +253,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let fine = fbm(p, weather.mottle.y, px) - 0.5;
     let broad = vnoise_aa(p + vec3<f32>(31.0), weather.mottle.z, px) - 0.5;
     c *= max(1.0 + weather.mottle.x * (1.6 * fine + 1.2 * broad), 0.0);
+
+    // 1a · Cut stone: courses of blocks, each its own value, a dark joint
+    // between them. Shading only: the faces stay the sim's planes. A seal's
+    // top keeps its own carving.
+    if weather.turn.w > 0.5 && !(weather.turn.z > 0.5 && ng.y > 0.9) {
+        let cs = courses(p, ng, max(px, 0.002));
+        c *= cs.y;
+        c *= mix(1.0, JOINT_DARK, cs.x);
+        rough = mix(rough, 1.0, cs.x * 0.5);
+    }
 
     // 1b · A plaza's seal: on its top, grooves cut in rings and in spokes
     // between the hub's ring and the third, the band outside the last ring

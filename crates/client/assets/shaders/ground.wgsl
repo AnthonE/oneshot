@@ -24,6 +24,10 @@
 // Wet ground's roughness (dry is the material's), and how far the wet
 // line wanders (m) over its noise's wavelength (m).
 const WET_ROUGHNESS: f32 = 0.35;
+// What an island's stone goes to where its cloud laps it (`ground.sea.w`
+// under zero, `ground::LAP_M`): the sea of cloud's own top
+// (`cloud_sea::TOP`), linear.
+const LAP_RGB: vec3<f32> = vec3<f32>(0.62, 0.63, 0.66);
 // The rock's beds. Its photograph repeats every few metres, and a 45 m
 // wall of one tile is a striped cloth; a cliff is beds of different stone,
 // each a metre or three thick and its own tone, dipping and wandering along
@@ -523,8 +527,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if in.world_position.y < wet_top + ground.sea.z + WET_WANDER_M {
         let wander = (value3(in.world_position.xyz / WET_WANDER_WAVE_M) - 0.5) * 2.0 * WET_WANDER_M;
         let wet = 1.0 - smoothstep(wet_top + wander, wet_top + wander + ground.sea.z, in.world_position.y);
-        c = c * (1.0 - ground.sea.w * wet);
-        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, WET_ROUGHNESS, wet);
+        if ground.sea.w < 0.0 {
+            // An island's cloud: the stone lost in it from its foot up.
+            c = mix(c, LAP_RGB, wet);
+        } else {
+            c = c * (1.0 - ground.sea.w * wet);
+            pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, WET_ROUGHNESS, wet);
+        }
     }
 
     // The relief, blended as gradients. The planar taps' share is laid in

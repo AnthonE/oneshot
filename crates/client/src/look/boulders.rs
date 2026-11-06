@@ -68,10 +68,15 @@ const FIT_TIE: f32 = 1.2;
 /// (`ground::TINT`), a little darker so a boulder sits in the ground.
 pub const TINT: [f32; 3] = [0.74, 0.62, 0.52];
 /// An island's (`level::Land::Isle`): pale cream sandstone, its boulders
-/// of the sand's family; and its stacks, far off in the air, plain cream
-/// without the stack's own paint (its top is green).
-pub const PALE_TINT: [f32; 3] = [2.0, 3.2, 4.0];
+/// of the sand's family. Its stacks are drawn in the island's own ground
+/// material instead (`ground.wgsl` over the stack's mesh carrying sand
+/// weights, [`STACK_SPLAT`]: every face too steep for sand turns to bedded
+/// rock per pixel, its ledges keep the sand), so they are the keel's
+/// stone, not a clay model; `PALE_STACK` is the plain cream they wear
+/// until the ground's textures are in.
+pub const PALE_TINT: [f32; 3] = [2.3, 3.0, 3.1];
 pub const PALE_STACK: [f32; 3] = [0.5, 0.41, 0.3];
+pub const STACK_SPLAT: [f32; 4] = [1.0, 0.0, 0.0, 0.0];
 /// Stone the sea washes: darker and glossier.
 pub const WET_TINT: [f32; 3] = [0.4, 0.35, 0.31];
 pub const WET_ROUGH: f32 = 0.45;
@@ -124,6 +129,8 @@ pub struct Stone {
     pub wet: bool,
     /// An island's: in [`PALE_TINT`] ([`PALE_STACK`] for a stack).
     pub pale: bool,
+    /// The map's sea (an island's cloud), for the lap up a stack's foot.
+    pub sea: f32,
 }
 
 /// Rock nobody reaches, by map: the model, where its middle (a block) or
@@ -191,8 +198,10 @@ const DRY_FORK: [Prop; 19] = [
 
 /// Cloudbreak's sky: stacks standing out of the sea of cloud (at −60) all
 /// round, their feet under it, each further one paler in the air, some
-/// over the island's own height so the skyline is never empty.
-const CLOUDBREAK: [Prop; 9] = [
+/// over the island's own height so the skyline is never empty. A near
+/// ring of them within two hundred metres, mostly under the island's rim
+/// so they are looked down on over the edge, and a far ring over it.
+const CLOUDBREAK: [Prop; 17] = [
     stack(-150.0, -230.0, -75.0, 85.0, 0.6),
     stack(-290.0, -380.0, -75.0, 110.0, 2.1),
     stack(120.0, -300.0, -75.0, 75.0, 4.0),
@@ -202,6 +211,14 @@ const CLOUDBREAK: [Prop; 9] = [
     stack(-460.0, -60.0, -75.0, 125.0, 0.2),
     stack(380.0, -300.0, -75.0, 100.0, 2.7),
     stack(-90.0, -480.0, -75.0, 115.0, 1.8),
+    stack(-105.0, -70.0, -75.0, 62.0, 1.1),
+    stack(118.0, -62.0, -75.0, 48.0, 2.9),
+    stack(-72.0, 95.0, -75.0, 55.0, 0.4),
+    stack(150.0, 140.0, -75.0, 90.0, 3.7),
+    stack(-185.0, 40.0, -75.0, 70.0, 5.3),
+    stack(40.0, -150.0, -75.0, 58.0, 2.0),
+    stack(-20.0, 130.0, -75.0, 42.0, 4.4),
+    stack(205.0, -175.0, -75.0, 95.0, 0.9),
 ];
 
 /// The scenery of map `id`.
@@ -282,7 +299,19 @@ pub struct Stones {
     dry: Vec<Handle<StandardMaterial>>,
     wet: Vec<Handle<StandardMaterial>>,
     pale: Vec<Handle<StandardMaterial>>,
+    /// The stack's mesh with the ground's splat on it, for an island's
+    /// stacks ([`STACK_SPLAT`]); made with the first one.
+    ground_stack: Option<Handle<Mesh>>,
     failed: bool,
+}
+
+/// `mesh` carrying the ground's splat weights `w` on every vertex, so the
+/// ground material draws it (`level::dress_level`).
+pub fn with_splat(mesh: &Mesh, w: [f32; 4]) -> Mesh {
+    let mut m = mesh.clone();
+    let n = m.count_vertices();
+    m.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![w; n]);
+    m
 }
 
 pub fn load(mut commands: Commands, server: Res<AssetServer>) {
@@ -379,7 +408,7 @@ pub fn dress(
     mut commands: Commands,
     stones: Option<ResMut<Stones>>,
     server: Res<AssetServer>,
-    meshes: Res<Assets<Mesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     boulders: Query<(Entity, &Boulder)>,
     pylons: Query<(Entity, &Pylon)>,
@@ -434,6 +463,25 @@ pub fn dress(
     }
     for (e, s) in &props {
         let mut ec = commands.entity(e);
+        if ok && s.pale && s.model == STACK {
+            // An island's stack in the island's own stone: the ground's
+            // material over the stack's mesh carrying sand weights, which
+            // `level::dress_level` gives it (and `Dressed` with it).
+            let mesh = match &stones.ground_stack {
+                Some(h) => h.clone(),
+                None => {
+                    let Some(made) = meshes.get(&stones.meshes[STACK]).map(|b| with_splat(b, STACK_SPLAT)) else {
+                        continue;
+                    };
+                    let h = meshes.add(made);
+                    stones.ground_stack = Some(h.clone());
+                    h
+                }
+            };
+            ec.remove::<Stone>()
+                .insert((Mesh3d(mesh), crate::level::GroundMesh { sea: s.sea, isle: true }));
+            continue;
+        }
         ec.insert(Dressed);
         if !ok {
             continue;
@@ -453,8 +501,8 @@ pub fn dress(
 }
 
 /// The scenery of map `id`, each piece waiting for its model; `pale` on an
-/// island.
-pub fn spawn_scenery(commands: &mut Commands, id: u8, pale: bool) {
+/// island, whose cloud is at `sea`.
+pub fn spawn_scenery(commands: &mut Commands, id: u8, pale: bool, sea: f32) {
     for p in scenery(id) {
         commands.spawn((
             LevelPart,
@@ -462,6 +510,7 @@ pub fn spawn_scenery(commands: &mut Commands, id: u8, pale: bool) {
                 model: p.model,
                 wet: p.wet,
                 pale,
+                sea,
             },
             prop_transform(p),
             Visibility::default(),
