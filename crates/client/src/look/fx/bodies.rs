@@ -46,6 +46,9 @@ struct One {
     /// when the last stuck (s).
     stuck: u8,
     stuck_at: f32,
+    /// Their hot gun was venting, and the vapour it owes (`vent.rs`).
+    venting: bool,
+    steam: f32,
 }
 
 /// Each slot as it was last frame.
@@ -168,7 +171,11 @@ pub fn watch(fx: &mut Fx, others: &[Drawn], dt: f32, t: f32) {
             charging: false,
             stuck: if d.alive { was.stuck } else { 0 },
             stuck_at: was.stuck_at,
+            venting: was.venting,
+            steam: was.steam,
         };
+        let vent_was = was.seen && was.venting;
+        o.venting = super::vent::theirs(fx, d, at, vent_was, &mut o.steam, dt);
         if o.stuck > 0 && t - o.stuck_at < STUCK_S {
             crystals(fx, d, o.stuck, t);
         }

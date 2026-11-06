@@ -22,5 +22,7 @@ TEXTURE = ('Deep violet iridescent alien metal plates turning blue at the edges,
 ASPECT = '16:9'
 
 scene()
-gun, rise = generated('ion-rifle', 0.616, hold=0.17, glow=['#4ff2ff'], glow_strength=0.6)
+gun, rise = generated('ion-rifle', 0.616, hold=0.17, glow=['#4ff2ff'], glow_strength=0.4)
+# Near the eye, under the gun's own field of view, its bright slit is a flat band.
+dim_paint(gun, ['#4ff2ff'], 0.3)
 finish('ion-rifle', [gun], grip=0.228, rise=rise, long=True, note='Veil ion rifle: fat clamshell, two prongs, five vents a side')

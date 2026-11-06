@@ -55,6 +55,8 @@ const SOOT: Color = Color::srgb(0.2, 0.19, 0.18);
 const FIRE_RING: Color = Color::srgb(1.0, 0.8, 0.55);
 /// Ion blue, for the sticky's.
 const ION_RING: Color = Color::srgb(0.45, 0.65, 1.0);
+/// What an arc's blue is tinted in a green burst.
+const GREEN_ARC: Color = Color::srgb(0.45, 1.0, 0.5);
 /// An ember's orange: what the Embers layer's white is tinted.
 const EMBER: Color = Color::srgb(1.0, 0.45, 0.1);
 
@@ -83,35 +85,62 @@ pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     boom(fx, scene, at, big);
 }
 
-/// The ion cannon's ball bursting: green light, a green ring, a baked
-/// burst of green plasma, sparks, no fire or smoke.
+/// The ion cannon's ball bursting.
 fn plasma(fx: &mut Fx, at: Vec3) {
+    burst_green(fx, at, 1.0, true);
+}
+
+/// Green plasma bursting, `k` of the cannon's (a charged bolt's is smaller): a
+/// hard white-green flash, a mint shell, a baked burst of plasma, lightning
+/// crawling out of it, sparks. Light and lines, no fire or smoke. `ring`: a ring
+/// across the floor under it too, for what goes off on the ground; on a wall or
+/// a body, a flat ring is a line in the air.
+pub fn burst_green(fx: &mut Fx, at: Vec3, k: f32, ring: bool) {
     let green = super::pool::Particle {
         left: 0.25,
         life: 0.25,
         pos: at.into(),
-        size0: 1.0,
-        size1: 4.0,
+        size0: 1.0 * k,
+        size1: 4.0 * k,
         c0: [3.0, 12.0, 4.0, 1.0],
         c1: [0.3, 1.5, 0.4, 0.0],
         cell: super::atlas::GLOW,
         ..Default::default()
     };
     fx.glow.spawn(green);
+    if ring {
+        fx.glow.spawn(super::pool::Particle {
+            size0: 0.5 * k,
+            size1: 9.0 * k,
+            left: 0.35,
+            life: 0.35,
+            cell: super::atlas::RING,
+            orient: super::pool::Orient::Flat,
+            pos: (at - Vec3::Y * 0.4 * k).into(),
+            c0: [1.5, 6.0, 2.0, 0.8],
+            c1: [0.2, 0.8, 0.3, 0.0],
+            ..green
+        });
+    }
+    // Its first frame, white inside.
     fx.glow.spawn(super::pool::Particle {
-        size0: 0.5,
-        size1: 9.0,
-        left: 0.35,
-        life: 0.35,
-        cell: super::atlas::RING,
-        orient: super::pool::Orient::Flat,
-        pos: (at - Vec3::Y * 0.4).into(),
-        c0: [1.5, 6.0, 2.0, 0.8],
-        c1: [0.2, 0.8, 0.3, 0.0],
-        ..green
+        left: 0.05,
+        life: 0.05,
+        pos: at.into(),
+        size0: 1.5 * k,
+        size1: 0.9 * k,
+        c0: [14.0, 22.0, 15.0, 1.0],
+        c1: [2.0, 8.0, 3.0, 0.0],
+        cell: super::atlas::GLOW,
+        ..Default::default()
     });
-    fx.energy(at, TONE_GREEN, 2.0, 3);
-    for _ in 0..24 {
+    *super::shell::claim(&mut fx.shocks) = super::shell::mint(at, k);
+    fx.energy(at, TONE_GREEN, 2.0 * k, ((3.0 * k).ceil() as usize).max(2));
+    for _ in 0..((9.0 * k).ceil() as usize).max(4) {
+        let d = fx.unit();
+        fx.emit_tint(Layer::Arcs, 1, at + d * 0.4 * k, d, GREEN_ARC, 2.2 * k);
+    }
+    for _ in 0..((24.0 * k).ceil() as usize).max(8) {
         let d = fx.unit();
         let life = fx.range(0.3, 0.6);
         let speed = fx.range(4.0, 11.0);
@@ -133,12 +162,13 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         });
     }
     let eye = fx.eye;
-    fx.shake.add_at(0.8, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
+    fx.shake
+        .add_at(0.8 * k, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
     fx.flash(
         at,
         super::FlashDef {
-            lumens: 1_500_000.0,
-            range: 14.0,
+            lumens: 1_500_000.0 * k,
+            range: 14.0 * k.sqrt(),
             life: 0.35,
             color: [0.4, 1.0, 0.45],
         },

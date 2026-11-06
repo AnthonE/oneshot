@@ -7,6 +7,10 @@
     tools/models/meshy_gen.py ar --image-only     just the picture, to look at first;
                                                   then without the flag: the mesh of it
     tools/models/meshy_gen.py crate --image-prompt "…" [--mesh-prompt "…"]   anything else
+    tools/models/meshy_gen.py ar --paint gilded --style "…"   a new paint on the mesh it has
+
+A paint keeps the gun's triangles and UVs and comes back as `<slug>~<tag>_raw.glb`;
+`MODEL_PAINT=<tag> tools/models/build.sh <slug>` cuts it (10 credits).
 
 It writes `<slug>.png` (the picture), `<slug>_raw.glb` (the mesh as it came)
 and `<slug>.json` (the prompts, both task ids, the credits, the date) into
@@ -69,6 +73,8 @@ SIDE = (' Lying horizontally on a plain white background, seen exactly from the 
         'No ground, no shadow, no people, no hands, no text, no labels, no logos, no scale bar.')
 # Added to a gun's TEXTURE.
 PAINT = ', no text, no logos'
+# The paint stage's model: the one that takes the light back out of a paint.
+PAINT_MODEL = 'meshy-6'
 
 
 def key():
@@ -142,7 +148,8 @@ def script_prompts(slug):
 def set_aside(out, slug):
     """The roll before this one, kept under rolls/ by its mesh task."""
     side = os.path.join(out, slug + '.json')
-    tag = json.load(open(side)).get('mesh_task', 'old')[:8] if os.path.exists(side) else 'old'
+    done = json.load(open(side)) if os.path.exists(side) else {}
+    tag = (done.get('paint_task') or done.get('mesh_task', 'old'))[:8]
     dest = os.path.join(out, 'rolls', f'{slug}-{tag}')
     os.makedirs(dest, exist_ok=True)
     for f in os.listdir(out):
@@ -150,6 +157,51 @@ def set_aside(out, slug):
         if stem in (slug, slug + '_raw') or stem.startswith(slug + '_') and stem[len(slug) + 1:].isdigit():
             shutil.move(os.path.join(out, f), os.path.join(dest, f))
     print(f'  the last roll is in {dest}')
+
+
+def paint(a, own):
+    """A new paint on the mesh `a.slug` already has, from a style prompt or a
+    picture. The mesh task has to be one of this account's, and Meshy's tasks
+    expire: past that, it needs its raw uploading as `model_url`."""
+    made = json.load(open(os.path.join(a.out, a.slug + '.json')))
+    tag = f'{a.slug}~{a.paint}'
+    glb = os.path.join(a.out, tag + '_raw.glb')
+    if os.path.exists(glb):
+        if not a.roll:
+            sys.exit(f'{glb} is there; --roll makes another (and spends the credits)')
+        set_aside(a.out, tag)
+    style = a.style or own.get('TEXTURE')
+    if not (style or a.style_image):
+        sys.exit(f'{a.slug}: no --style or --style-image, and no TEXTURE in its script')
+    ep = '/openapi/v1/retexture'
+    bal0 = call('GET', '/openapi/v1/balance')['balance']
+    print(f'balance {bal0}')
+    task = call('POST', ep, {
+        'input_task_id': made['mesh_task'],
+        **({'image_style_url': data_uri(a.style_image)} if a.style_image else {'text_style_prompt': style.strip() + PAINT}),
+        'ai_model': a.paint_model,
+        'enable_original_uv': True,
+        'enable_pbr': True,
+        'texture_resolution': PAINT_PX,
+        'target_formats': ['glb'],
+    })['result']
+    done = wait(ep, task, 'paint')
+    size = fetch(done['model_urls']['glb'], glb)
+    bal1 = call('GET', '/openapi/v1/balance')['balance']
+    json.dump({
+        'slug': tag,
+        'date': datetime.date.today().isoformat(),
+        'vendor': 'Meshy',
+        'style': None if a.style_image else style,
+        'style_image': os.path.basename(a.style_image) if a.style_image else None,
+        'mesh_task': made['mesh_task'],
+        'paint_task': task,
+        'paint_model': a.paint_model,
+        'paint_px': PAINT_PX,
+        'credits': bal0 - bal1,
+        'glb_bytes': size,
+    }, open(os.path.join(a.out, tag + '.json'), 'w'), indent=1)
+    print(f'\n{glb}  {size / 1e6:.1f} MB   {bal0 - bal1} credits (paint {task})')
 
 
 def main():
@@ -168,9 +220,15 @@ def main():
     ap.add_argument('--resume-image', help='this picture task, not a new one')
     ap.add_argument('--resume-mesh', help='this mesh task, not a new one')
     ap.add_argument('--roll', action='store_true', help='again, though a raw is there')
+    ap.add_argument('--paint', metavar='TAG', help='a new paint on the mesh it has, not a new gun')
+    ap.add_argument('--style', help="what the paint is; default: the script's TEXTURE")
+    ap.add_argument('--style-image', help='or a picture it should look like')
+    ap.add_argument('--paint-model', default=PAINT_MODEL, help=f'{PAINT_MODEL}, or latest')
     a = ap.parse_args()
 
     own = script_prompts(a.slug)
+    if a.paint:
+        return paint(a, own)
     side = SIDE.format(front=own.get('FRONT', 'the muzzle'))
     image_prompt = a.image_prompt or (own['IMAGE'].strip() + side if 'IMAGE' in own else None)
     mesh_prompt = a.mesh_prompt or (own['TEXTURE'].strip() + PAINT if 'TEXTURE' in own else None)

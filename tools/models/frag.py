@@ -20,5 +20,5 @@ ASPECT = '4:3'
 FRONT = 'the fuze'
 
 scene()
-gun, rise = generated('frag', 0.16, glow=['#ff8000'], tris=4000)
+gun, rise = generated('frag', 0.16, glow=['#ff8000'], tris=4000, tex_px=SMALL_TEX_PX, map_px=SMALL_MAP_PX)
 finish('frag', [gun], grip=0.08, rise=rise, long=False, note='a canister, not held')

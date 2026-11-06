@@ -37,6 +37,8 @@ const seconds = Number(process.argv[2] || 90);
 const mode = Number(process.argv[3] || 0);
 const map = process.argv[4] || '0';
 const maps = map.split(',');
+// A screenshot waits for a frame: under software GL the title can take minutes.
+const SHOT_MS = 180_000;
 const again = Number(process.env.E2E_AGAIN || 0);
 const matchSecs = Number(process.env.E2E_MATCH_SECS || 30);
 // Playwright is the repo's one Node dependency (package.json).
@@ -125,7 +127,7 @@ try {
       errors.push(`title: ${e.message}`);
     }
     mkdirSync('traces', { recursive: true });
-    await p.screenshot({ path: `traces/e2e-title-${mode}.png` });
+    await p.screenshot({ path: `traces/e2e-title-${mode}.png`, timeout: SHOT_MS });
     const NAMES = ['vs the bot', 'duel', 'doubles', 'free for all', 'gun game', 'cup', 'big team'];
     checks.push([`the title's ${NAMES[mode]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
     // Again and again: each match runs out its clock, the page rides its
@@ -158,7 +160,7 @@ try {
         const f0 = s.frames;
         await p.waitForTimeout(8000);
         const drew = (await look()).frames - f0;
-        await p.screenshot({ path: `traces/e2e-again-${k}.png` });
+        await p.screenshot({ path: `traces/e2e-again-${k}.png`, timeout: SHOT_MS });
         played.push(s.map);
         const fresh = maps.length < 2 || s.map !== played[played.length - 2];
         checks.push([`PLAY again started match ${k + 1} on map ${s.map} and drew it (${drew} frames in 8 s)`,
@@ -246,7 +248,7 @@ try {
     console.log(`frames ${gaps.length}: median ${med.toFixed(0)} ms, p99 ${at(0.99).toFixed(0)} ms, worst ${gaps[gaps.length - 1].toFixed(0)} ms, ${over} over 3x the median`);
   }
   mkdirSync('traces', { recursive: true });
-  await page.screenshot({ path: `traces/e2e-${mode}-${map}.png` });
+  await page.screenshot({ path: `traces/e2e-${mode}-${map}.png`, timeout: SHOT_MS });
   console.log(JSON.stringify(s));
   const mixed = await page.evaluate(() => window.__oneshotMix?.stats() ?? null);
   const heard = await page.evaluate(() => window.__heard ?? 0);
@@ -338,7 +340,7 @@ if (process.env.E2E_WEBGPU === '1') {
     }
     // For a person to look at, never a check: SwiftShader's Vulkan can
     // take longer than Playwright's half minute to hand a frame over.
-    await g.screenshot({ path: `traces/e2e-webgpu-${mode}-${map}.png`, timeout: 60000 })
+    await g.screenshot({ path: `traces/e2e-webgpu-${mode}-${map}.png`, timeout: SHOT_MS })
       .catch((e) => console.log(`note: webgpu: no screenshot (${String(e).split('\n')[0]})`));
     console.log(`webgpu: ${w?.gfx}: ${w?.tier}; frames ${w?.frames}, snapshots ${w?.stats?.[0]}, kills ${w?.kills}`);
     checks.push(

@@ -22,4 +22,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('sniper', 1.25, hold=0.22)
+temper(gun)
 finish('sniper', [gun], grip=0.3, rise=rise, long=True, note='skeletal stock, big scope in rings, bipod folded under the barrel')

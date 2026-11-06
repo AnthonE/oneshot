@@ -221,24 +221,50 @@ pub fn model_rotation(yaw: f32) -> Quat {
 }
 
 /// A body spawned for `team` in `look`: its root, which the caller places.
-pub fn spawn(commands: &mut Commands, models: &Models, team: u8, look: proto::Look) -> Entity {
-    spawn_as(commands, models, team, look, false)
+pub fn spawn(commands: &mut Commands, team: u8, look: proto::Look) -> Entity {
+    spawn_as(commands, team, look, false)
 }
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
-pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
-    spawn_as(commands, models, team, proto::Look::default(), true)
+pub fn spawn_shadow(commands: &mut Commands, team: u8) -> Entity {
+    spawn_as(commands, team, proto::Look::default(), true)
 }
 
-fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
+/// A body's model, till Triple T's file is in.
+#[derive(Component)]
+pub struct WantsScene;
+
+/// Every body waiting for its model gets it, the file once in.
+pub fn stand_up(
+    mut commands: Commands,
+    models: Option<Res<Models>>,
+    gltfs: Res<Assets<bevy::gltf::Gltf>>,
+    waiting: Query<Entity, With<WantsScene>>,
+) {
+    let Some(scene) = models
+        .and_then(|m| gltfs.get(&m.body))
+        .and_then(|g| g.scenes.first().cloned())
+    else {
+        return;
+    };
+    for e in &waiting {
+        commands
+            .entity(e)
+            .remove::<WantsScene>()
+            .insert(SceneRoot(scene.clone()));
+    }
+}
+
+fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
     commands
         .spawn((
-            SceneRoot(models.body_scene.clone()),
+            WantsScene,
             Transform::from_rotation(Quat::from_rotation_y(FACE)),
+            Visibility::default(),
             ChildOf(root),
         ))
         .observe(dress);
@@ -665,9 +691,13 @@ pub fn pose(
     if arm != body.held && body.dressed {
         commands.entity(body.hand).despawn_related::<Children>();
         let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
-        // Your shadow's gun is a shadow too.
-        if let (true, Some((_, scene))) = (body.shadow, posed) {
-            commands.entity(scene).observe(super::own_shadow::shade_gun);
+        if let Some((_, scene)) = posed {
+            if body.shadow {
+                // Your shadow's gun is a shadow too.
+                commands.entity(scene).observe(super::own_shadow::shade_gun);
+            } else {
+                super::gun_skin::wear(commands, scene, body.skin, arm);
+            }
         }
         body.held = arm;
     }
