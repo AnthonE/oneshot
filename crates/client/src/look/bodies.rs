@@ -47,7 +47,7 @@ const SWORD_HELD_AT: Vec3 = Vec3::new(1.757, 10.096, 1.561);
 const SWORD_HELD_TURN: Quat = Quat::from_xyzw(0.87036, 0.04145, -0.49012, -0.02334);
 /// How long a body's cut takes, seconds: quick, and short enough of the sword's
 /// `refire_ms` for its fade to end before the next begins (`anim::BLEND_S`).
-pub const CUT_S: f32 = 0.36;
+pub const CUT_S: f32 = 0.3;
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as

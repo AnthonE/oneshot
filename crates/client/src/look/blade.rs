@@ -44,14 +44,14 @@ const LIGHT_AT_M: f32 = 0.62;
 /// for every so far it went, at most so many a frame, and how long they last.
 const GHOST_SPEED_M_S: f32 = 5.5;
 const GHOST_EVERY_M: f32 = 0.05;
-const GHOST_MAX: u32 = 9;
+const GHOST_MAX: u32 = 11;
 const GHOST_S: f32 = 0.12;
 /// Its tip, up the model.
 const TIP_M: f32 = 1.07;
 /// In view, where it stands up and would run far off the frame: how much of its
 /// length it keeps, how much of that its width keeps, and how far it is turned
 /// about its length, radians, its face to the eye where its edge would be.
-const IN_VIEW_LONG: f32 = 0.46;
+const IN_VIEW_LONG: f32 = 0.44;
 const IN_VIEW_WIDE: f32 = 0.85;
 const IN_VIEW_TURN: f32 = 0.76;
 

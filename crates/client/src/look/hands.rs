@@ -35,6 +35,11 @@ pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.04, 0.501, -0.864);
 /// And which way along its knuckles the thumb's side is: the hilt leans a little
 /// from that line toward the knuckles, as a held sword's does.
 pub const SWORD_THUMB: Vec3 = Vec3::new(0.024, 0.865, 0.501);
+/// How far the sword sits to the right in the hand, the hand staying where it is,
+/// metres as it looks: its hilt in the middle of the palm. And the view's right at
+/// rest, in the sword's frame.
+pub const SWORD_SLIDE: f32 = 0.011;
+pub const SWORD_RIGHT: Vec3 = Vec3::new(0.8414, -0.2877, 0.4575);
 /// Where the off hand's hole sits on a long gun's fore-end, metres as it looks:
 /// this far up into its belly (`Gun::under`) and to its right, so the fingers go
 /// round the far side and the heel of the palm and the thumb show on ours.
@@ -166,7 +171,12 @@ fn thrown() -> Quat {
 }
 
 fn right_hand(g: Grip) -> (Vec3, Quat) {
-    (g.at + g.rot * GRIP_IN_GUN, g.fist * fist(g.arm))
+    let slide = if g.arm == sim::arms::SWORD {
+        SWORD_RIGHT * SWORD_SLIDE
+    } else {
+        Vec3::ZERO
+    };
+    (g.at + g.rot * (GRIP_IN_GUN - slide), g.fist * fist(g.arm))
 }
 
 fn left_hand(g: &Grips) -> Option<(Vec3, Quat)> {
