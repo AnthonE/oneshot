@@ -508,6 +508,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::weathering::plugin)
     // A truck's wear (`look/truck.rs`).
     .add_plugins(look::truck::plugin)
+    .add_plugins(look::turret::plugin)
     .add_plugins(look::cloud_sea::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
@@ -641,6 +642,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 draw_fighters,
                 draw_vehicles,
                 look::truck::drive,
+                look::turret::aim,
                 look::truck::husks,
                 look::foliage::update,
             )
@@ -681,6 +683,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             look::own_shadow::stream.after(draw_fighters),
+            look::portrait::drag.before(look::portrait::stand),
             look::portrait::stand,
             look::portrait::activate,
             look::portrait::fit,
@@ -1395,7 +1398,7 @@ fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    models: Res<look::guns::Models>,
+    (models, turrets): (Res<look::guns::Models>, Res<look::turret::Kit>),
     posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
     mut hulls: Query<&mut look::truck::Hull>,
@@ -1416,7 +1419,7 @@ fn draw_vehicles(
     if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
-    if let Some((p, yaw)) = posed.and_then(|p| p.2.truck_at(time.elapsed_secs())) {
+    if let Some((p, yaw)) = posed.as_ref().and_then(|p| p.2.truck_at(time.elapsed_secs())) {
         list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
     }
     for &(slot, p, yaw) in list.iter() {
@@ -1456,7 +1459,12 @@ fn draw_vehicles(
             None => {
                 let hull = look::truck::Hull { slot, health, driven };
                 let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
-                look::truck::spawn(&mut commands, &models, e);
+                let body = look::truck::spawn(&mut commands, &models, e);
+                let kind = match posed.as_ref().map(|p| p.2.truck_turret) {
+                    Some(k) => k,
+                    None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
+                };
+                look::turret::spawn(&mut commands, &turrets, body, slot, kind);
                 drawn.vehicles.insert(slot, e);
             }
         }
@@ -1600,7 +1608,13 @@ fn draw_view(
         pitch: look.pitch,
         riding: seat.is_some(),
         // Carrying the flag, both hands are on it (`flags.rs` draws it).
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !f.flag && !film.is_some_and(|f| f.third()),
+        // Gunning a turret, the hands are on its grips (`look/turret.rs`).
+        shown: f.alive
+            && seat != Some(sim::vehicle::DRIVER)
+            && f.gunning(&link.0.session().core.map) == sim::vehicle::NO_TURRET
+            && !scoped
+            && !f.flag
+            && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,

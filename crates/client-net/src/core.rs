@@ -587,6 +587,9 @@ impl NetCore {
             if local.fired {
                 self.own_shot();
             }
+            if local.mounted {
+                self.own_turret_shot();
+            }
             self.launch(s, now_ms, &local);
             self.seq = s.wrapping_add(1);
             self.unsent += 1;
@@ -978,6 +981,27 @@ impl NetCore {
             a: self.slot,
             c: f.gun().arm as u16,
             pos: eye,
+            end: eye + dir * t,
+            ..EventState::default()
+        });
+    }
+
+    /// A round of the turret we gun, as predicted: from its muzzle on the
+    /// hull we were last sent, to where our aim meets the map.
+    fn own_turret_shot(&mut self) {
+        let f = &self.pred;
+        let (Some(v), Some((a, cause))) = (self.pred_v, self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)))
+        else {
+            return;
+        };
+        let eye = f.eye();
+        let dir = aim_dir(f.yaw, f.pitch);
+        let t = self.map.ray(eye, dir, a.range);
+        self.events.push(EventState {
+            kind: sim::events::Kind::Shot as u8,
+            a: self.slot,
+            c: cause,
+            pos: v.muzzle(dir),
             end: eye + dir * t,
             ..EventState::default()
         });
@@ -1764,6 +1788,7 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.shots == b.shots
         && a.last_buttons == b.last_buttons
         && a.ride == b.ride
+        && a.mount == b.mount
 }
 
 /// What is left of a correction `dt` ms on: eased out over

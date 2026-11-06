@@ -198,6 +198,7 @@ fn a_carrier_rides_never_drives_and_scores_from_the_seat() {
         pos: V3::new(0.0, 0.0, 10.0),
         yaw: 0,
         respawn_ms: 30_000,
+        turret: 0,
     });
     let mut w = world_on(map, Rules::ctf());
     take(&mut w, 1, RED);
@@ -236,6 +237,7 @@ fn a_carrier_rides_never_drives_and_scores_from_the_seat() {
                 pos: V3::new(0.0, 0.0, 10.0),
                 yaw: 0,
                 respawn_ms: 30_000,
+                turret: 0,
             });
             m
         },
