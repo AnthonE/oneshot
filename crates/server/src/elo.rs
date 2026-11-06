@@ -92,6 +92,106 @@ fn new_nonce() -> String {
     crate::hex(&b)
 }
 
+/// A match from Elo Pros' queue, as the server seats it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueMatch {
+    pub id: String,
+    pub game: String,
+    pub ladder: String,
+    pub teams: usize,
+    pub size: usize,
+    /// The server it was launched onto, `host:port` as the game's list has it.
+    pub addr: String,
+    /// Each side's wallets, as Elo Pros spells them.
+    pub sides: Vec<Vec<String>>,
+}
+
+impl QueueMatch {
+    /// The side `wallet` plays on, if any (EVM wallets in any case).
+    pub fn side_of(&self, wallet: &str) -> Option<usize> {
+        let same = |w: &str| {
+            if w.starts_with("0x") {
+                w.eq_ignore_ascii_case(wallet)
+            } else {
+                w == wallet
+            }
+        };
+        self.sides.iter().position(|s| s.iter().any(|w| same(w)))
+    }
+
+    /// Players it seats.
+    pub fn players(&self) -> usize {
+        self.sides.iter().map(Vec::len).sum()
+    }
+}
+
+/// Where a player stands in Elo Pros' queue, as its game's server is told.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueState {
+    pub player: String,
+    /// queued, launched (matched), open or closed (out of the queue), or
+    /// None: in no lobby of this game.
+    pub state: Option<String>,
+    pub match_id: Option<String>,
+    /// The server its match was launched onto.
+    pub server: Option<String>,
+    pub waited_s: Option<u64>,
+    pub unqueued_why: Option<String>,
+}
+
+pub fn parse_queue_states(text: &str) -> Result<Vec<QueueState>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("a queue answer: {e}"))?;
+    let s = |x: &serde_json::Value, k: &str| x[k].as_str().map(str::to_string);
+    Ok(v["players"]
+        .as_array()
+        .ok_or("a queue answer names no players")?
+        .iter()
+        .map(|p| QueueState {
+            player: s(p, "player").unwrap_or_default(),
+            state: s(p, "state"),
+            match_id: s(p, "match"),
+            server: s(p, "server"),
+            waited_s: p["waited_s"].as_u64(),
+            unqueued_why: s(p, "unqueued_why"),
+        })
+        .collect())
+}
+
+/// `GET /api/lobbies/match/{id}`'s body (`meter/lobbies.py` `_match`).
+pub fn parse_queue_match(text: &str) -> Result<QueueMatch, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("a queue match: {e}"))?;
+    let s = |k: &str| {
+        v[k].as_str()
+            .map(str::to_string)
+            .ok_or(format!("a queue match has no {k}"))
+    };
+    let n = |k: &str| {
+        v[k].as_u64()
+            .map(|x| x as usize)
+            .ok_or(format!("a queue match has no {k}"))
+    };
+    let sides: Vec<Vec<String>> = v["sides"]
+        .as_array()
+        .ok_or("a queue match has no sides")?
+        .iter()
+        .map(|side| {
+            side["players"]
+                .as_array()
+                .map(|ps| ps.iter().filter_map(|p| p.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+    Ok(QueueMatch {
+        id: s("id")?,
+        game: s("game")?,
+        ladder: s("ladder")?,
+        teams: n("teams")?,
+        size: n("size")?,
+        addr: v["server"]["addr"].as_str().unwrap_or("").to_string(),
+        sides,
+    })
+}
+
 /// One match's result: each side's wallets and place (1 best; a draw shares
 /// a place).
 #[derive(Clone, Debug)]
@@ -427,6 +527,54 @@ impl Elo {
         } else {
             Err(format!("{code}: {text}"))
         }
+    }
+
+    /// One call on Elo Pros' queue for this game's own players
+    /// (`POST /api/lobbies/serve/{slug}`, signed with the server key):
+    /// where each player in it now stands.
+    pub async fn serve(&self, body: &serde_json::Value) -> Result<Vec<QueueState>, String> {
+        let key = self
+            .key
+            .as_ref()
+            .ok_or("no server key: Elo Pros' queue is called with it")?;
+        let body = body.to_string();
+        let path = format!("/lobbies/serve/{}", self.slug);
+        let mut req = self
+            .http
+            .post(format!("{}/api{}", self.origin, path))
+            .header("Content-Type", "application/json")
+            .body(body.clone());
+        for (k, v) in key.headers("POST", &path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
+            req = req.header(k, v);
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("Elo Pros couldn't be reached: {e}"))?;
+        let code = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !code.is_success() {
+            return Err(format!("{code}: {text}"));
+        }
+        parse_queue_states(&text)
+    }
+
+    /// A match Elo Pros' queue formed (`GET /api/lobbies/match/{id}`): who
+    /// plays it on which side, on which ladder and server.
+    pub async fn queue_match(&self, id: &str) -> Result<QueueMatch, String> {
+        let url = format!("{}/api/lobbies/match/{}", self.origin, id);
+        let res = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Elo Pros couldn't be reached: {e}"))?;
+        let code = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !code.is_success() {
+            return Err(format!("{code}: {text}"));
+        }
+        parse_queue_match(&text)
     }
 
     /// A wallet's rating on a ladder; 1500 (a new player's) if it has none

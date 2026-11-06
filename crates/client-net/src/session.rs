@@ -52,6 +52,7 @@ pub fn refuse_why(reason: u8) -> &'static str {
         proto::REFUSE_PARTY_MODE => "the party doesn't fit that game: too many, or ranked without everyone's wallet",
         proto::REFUSE_NOT_FRIEND => "you can invite your Elo Pros friends once you're signed in",
         proto::REFUSE_NOTHING_TO_WATCH => "no match to watch right now",
+        proto::REFUSE_MATCH => "that match couldn't start (not everyone came, or it isn't here): queue again",
         _ => "the server is full",
     }
 }
@@ -181,6 +182,35 @@ impl Session {
             emblem: look.emblem,
             party,
             stamp: sim::STAMP,
+            queued: proto::QueueMatch::NONE,
+        }
+    }
+
+    /// [`Session::hello`] for a ranked match Elo Pros' queue sent us to.
+    pub fn hello_queued(name: &str, pass: Pass, mode: u8, look: proto::Look, queued: proto::QueueMatch) -> Msg {
+        match Session::hello(name, pass, mode, look, 0) {
+            Msg::Hello {
+                proto,
+                name,
+                pass,
+                mode,
+                skin,
+                emblem,
+                party,
+                stamp,
+                ..
+            } => Msg::Hello {
+                proto,
+                name,
+                pass,
+                mode,
+                skin,
+                emblem,
+                party,
+                stamp,
+                queued,
+            },
+            m => m,
         }
     }
 

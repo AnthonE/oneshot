@@ -97,6 +97,18 @@ async fn stand_in(old: bool) -> (String, Seen) {
                         "[]"
                     };
                     (200, format!(r#"{{"items":{items}}}"#))
+                } else if first.starts_with("GET /api/lobbies/match/q-duel-0001 ") {
+                    // A duel Elo Pros' queue formed: the two wallets, on this
+                    // game's server.
+                    (
+                        200,
+                        format!(
+                            r#"{{"id":"q-duel-0001","game":"oneshot","ladder":"duel","pool":"human","teams":2,"size":1,"at":0,"server":{{"addr":"127.0.0.1:4433","picked":"queue"}},"sides":[{{"players":["{}"],"lobbies":["a"],"rating":1500}},{{"players":["{}"],"lobbies":["b"],"rating":1500}}]}}"#,
+                            WALLETS[0], WALLETS[1]
+                        ),
+                    )
+                } else if first.starts_with("GET /api/lobbies/match/") {
+                    (404, r#"{"error":"no match with that id"}"#.to_string())
                 } else if first.starts_with("GET /api/bans/oneshot/of/") {
                     (200, format!(r#"{{"banned":{}}}"#, first.contains(BANNED)))
                 } else if first.starts_with("GET /api/ratings/oneshot/of/") {
@@ -178,8 +190,24 @@ async fn play(h: &server::Handle, pass: &str, mode: u8) -> Vec<Msg> {
     play_as(h, pass, mode, proto::Look::default()).await
 }
 
+/// [`play_as`], for a match Elo Pros' queue formed.
+async fn play_queued(h: &server::Handle, pass: &str, mode: u8, queued: &str) -> Vec<Msg> {
+    play_with(
+        h,
+        pass,
+        mode,
+        proto::Look::default(),
+        proto::QueueMatch::new(queued).unwrap(),
+    )
+    .await
+}
+
 /// [`play`], asking to wear `skin`.
 async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) -> Vec<Msg> {
+    play_with(h, pass, mode, look, proto::QueueMatch::NONE).await
+}
+
+async fn play_with(h: &server::Handle, pass: &str, mode: u8, look: proto::Look, queued: proto::QueueMatch) -> Vec<Msg> {
     let cfg = ClientConfig::builder()
         .with_bind_address("127.0.0.1:0".parse().unwrap())
         .with_server_certificate_hashes([Sha256Digest::from(h.cert_hash)])
@@ -200,6 +228,7 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) ->
         emblem: look.emblem,
         party: 0,
         stamp: sim::STAMP,
+        queued,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
@@ -208,7 +237,7 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) ->
         while let Some(m) = read_msg(&mut recv).await {
             // A cup's entrant plays several matches on one session: only a
             // bye or a refusal ends it.
-            let end = matches!(m, Msg::Bye | Msg::Refuse { .. });
+            let end = matches!(m, Msg::Bye | Msg::Refuse { .. } | Msg::Moved { .. });
             got.push(m);
             if end {
                 break;
@@ -761,5 +790,321 @@ async fn casual_play_is_counted_for_whoever_signed_in() {
     let file = dir.join("online").join(server::online::file_name(h.addr.port()));
     let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).expect("the slot's roster")).unwrap();
     assert!(doc["at"].as_u64().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_match_from_elo_pros_queue_seats_its_sides_and_is_reported_under_its_id() {
+    let (origin, seen) = stand_in(false).await;
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-queued-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("server.pem");
+    std::fs::write(&key_path, pem(&SERVER_SEED)).unwrap();
+    let account = Ed25519KeyPair::from_seed_unchecked(&ACCOUNT_SEED).unwrap();
+    let h = server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        duel: Rules {
+            time_limit_ms: 3000,
+            ..Rules::duel()
+        },
+        domains: vec!["127.0.0.1".into()],
+        elo_pubkey: Some(account.public_key().as_ref().try_into().unwrap()),
+        elo_origin: origin,
+        elo_key: Some((key_path, "t-1".into())),
+        linger: Duration::from_millis(300),
+        ..server::Config::default()
+    })
+    .await
+    .unwrap();
+    let http = h.http.unwrap();
+
+    // A match Elo Pros never formed, or one this wallet isn't in.
+    let got = play_queued(
+        &h,
+        &pass(Some(WALLETS[0]), &nonce(http).await),
+        MODE_DUEL,
+        "q-nope-0000",
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![Msg::Refuse {
+            reason: proto::REFUSE_MATCH
+        }]
+    );
+    let got = play_queued(
+        &h,
+        &pass(Some(BANNED.replace('3', "4").as_str()), &nonce(http).await),
+        MODE_DUEL,
+        "q-duel-0001",
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![Msg::Refuse {
+            reason: proto::REFUSE_MATCH
+        }]
+    );
+    // On the wrong ladder (a doubles hello for a duel).
+    let got = play_queued(
+        &h,
+        &pass(Some(WALLETS[0]), &nonce(http).await),
+        proto::MODE_DOUBLES,
+        "q-duel-0001",
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![Msg::Refuse {
+            reason: proto::REFUSE_MATCH
+        }]
+    );
+
+    // Both sides come, one after the other: seated together, played, over.
+    let (p0, p1) = (
+        pass(Some(WALLETS[0]), &nonce(http).await),
+        pass(Some(WALLETS[1]), &nonce(http).await),
+    );
+    let first = {
+        let h2 = &h;
+        async move { play_queued(h2, &p0, MODE_DUEL, "q-duel-0001").await }
+    };
+    let second = async {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        play_queued(&h, &p1, MODE_DUEL, "q-duel-0001").await
+    };
+    let (a, b) = tokio::join!(first, second);
+    for got in [&a, &b] {
+        assert!(
+            matches!(got.first(), Some(Msg::Queued { mode: MODE_DUEL, .. })),
+            "{got:?}"
+        );
+        assert!(got.iter().any(|m| matches!(m, Msg::Welcome { .. })), "{got:?}");
+        assert_eq!(got.last(), Some(&Msg::Bye), "{got:?}");
+    }
+    // Reported under Elo Pros' id, with both wallets.
+    let report = (0..50)
+        .find_map(|_| {
+            let r = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(l, _, _)| l.starts_with("POST /api/ratings/oneshot/report"))
+                .cloned();
+            if r.is_none() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            r
+        })
+        .expect("the result reported");
+    let body: serde_json::Value = serde_json::from_str(&report.2).unwrap();
+    assert_eq!(body["matches"][0]["id"], "q-duel-0001");
+    assert!(report.2.contains(WALLETS[0]) && report.2.contains(WALLETS[1]));
+    // Never twice.
+    let got = play_queued(
+        &h,
+        &pass(Some(WALLETS[0]), &nonce(http).await),
+        MODE_DUEL,
+        "q-duel-0001",
+    )
+    .await;
+    assert_eq!(
+        got,
+        vec![Msg::Refuse {
+            reason: proto::REFUSE_MATCH
+        }]
+    );
+    h.drain(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stand-in Elo Pros with a queue (`POST /api/lobbies/serve/oneshot`):
+/// two wallets queued for a duel make match `q-auto-1` on `server`.
+async fn queue_stand_in(server: &'static str) -> (String, Seen) {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", l.local_addr().unwrap());
+    let seen: Seen = Arc::default();
+    let queued: Arc<Mutex<Vec<String>>> = Arc::default();
+    let s2 = seen.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = l.accept().await {
+            let (seen, queued) = (s2.clone(), queued.clone());
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let head_end = loop {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break i + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                let first = head.lines().next().unwrap_or("").to_string();
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                while buf.len() < head_end + len {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let body = String::from_utf8_lossy(&buf[head_end..]).to_string();
+                let state = |w: &str, q: &[String]| {
+                    if q.len() >= 2 && q[..2].iter().any(|x| x == w) {
+                        format!(r#"{{"player":"{w}","state":"launched","match":"q-auto-1","server":"{server}"}}"#)
+                    } else if q.iter().any(|x| x == w) {
+                        format!(r#"{{"player":"{w}","state":"queued","waited_s":1}}"#)
+                    } else {
+                        format!(r#"{{"player":"{w}","state":null}}"#)
+                    }
+                };
+                let reply = if first.starts_with("POST /api/lobbies/serve/oneshot") {
+                    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                    let players: Vec<String> = v["players"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|p| p.as_str().map(str::to_lowercase)).collect())
+                        .unwrap_or_default();
+                    let mut q = queued.lock().unwrap();
+                    match v["op"].as_str() {
+                        Some("queue") => q.extend(players.iter().cloned()),
+                        Some("unqueue") => q.retain(|x| !players.contains(x)),
+                        _ => {}
+                    }
+                    let rows: Vec<String> = players.iter().map(|w| state(w, &q)).collect();
+                    seen.lock().unwrap().push((first.clone(), Vec::new(), body.clone()));
+                    format!(r#"{{"ok":true,"players":[{}]}}"#, rows.join(","))
+                } else if first.starts_with("GET /api/lobbies/match/q-auto-1 ") {
+                    let q = queued.lock().unwrap();
+                    format!(
+                        r#"{{"id":"q-auto-1","game":"oneshot","ladder":"duel","teams":2,"size":1,"server":{{"addr":"{server}"}},"sides":[{{"players":["{}"]}},{{"players":["{}"]}}]}}"#,
+                        q.first().cloned().unwrap_or_default(),
+                        q.get(1).cloned().unwrap_or_default()
+                    )
+                } else if first.starts_with("POST ") {
+                    seen.lock().unwrap().push((first.clone(), Vec::new(), body.clone()));
+                    r#"{"ok":true}"#.to_string()
+                } else if first.starts_with("GET /api/bans/") {
+                    r#"{"banned":false}"#.to_string()
+                } else if first.starts_with("GET /api/items/") {
+                    r#"{"items":[]}"#.to_string()
+                } else {
+                    r#"{"ladders":{"duel":{"rating":1500,"floor":1300}}}"#.to_string()
+                };
+                let _ = sock
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            reply.len(),
+                            reply
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            });
+        }
+    });
+    (origin, seen)
+}
+
+/// A server on Elo Pros' queue, its public address on `host`.
+async fn queue_server(origin: String, host: &str, dir: &std::path::Path) -> server::Handle {
+    let key_path = dir.join("server.pem");
+    std::fs::write(&key_path, pem(&SERVER_SEED)).unwrap();
+    let account = Ed25519KeyPair::from_seed_unchecked(&ACCOUNT_SEED).unwrap();
+    server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        duel: Rules {
+            time_limit_ms: 3000,
+            ..Rules::duel()
+        },
+        domains: vec!["127.0.0.1".into()],
+        elo_pubkey: Some(account.public_key().as_ref().try_into().unwrap()),
+        elo_origin: origin,
+        elo_key: Some((key_path, "t-1".into())),
+        elo_queue: true,
+        public_addr: Some(format!("{host}:4433")),
+        linger: Duration::from_millis(300),
+        ..server::Config::default()
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn elo_pros_queue_plays_a_match_put_here_and_moves_one_put_elsewhere() {
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-eloq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Put on this server: queued there, matched, played here.
+    let (origin, seen) = queue_stand_in("127.0.0.1:4433").await;
+    let h = queue_server(origin, "127.0.0.1", &dir).await;
+    let http = h.http.unwrap();
+    let (p0, p1) = (
+        pass(Some(WALLETS[0]), &nonce(http).await),
+        pass(Some(WALLETS[1]), &nonce(http).await),
+    );
+    let (a, b) = tokio::join!(play(&h, &p0, MODE_DUEL), play(&h, &p1, MODE_DUEL));
+    for got in [&a, &b] {
+        assert!(matches!(got.first(), Some(Msg::Queued { .. })), "{got:?}");
+        assert!(got.iter().any(|m| matches!(m, Msg::Welcome { .. })), "{got:?}");
+        assert_eq!(got.last(), Some(&Msg::Bye), "{got:?}");
+    }
+    let calls = seen.lock().unwrap().clone();
+    assert!(calls
+        .iter()
+        .any(|(l, _, b)| l.starts_with("POST /api/lobbies/serve/") && b.contains("\"queue\"")));
+    let report = (0..50)
+        .find_map(|_| {
+            let r = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(l, _, _)| l.starts_with("POST /api/ratings/oneshot/report"))
+                .cloned();
+            if r.is_none() {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            r
+        })
+        .expect("the result reported");
+    assert!(report.2.contains("\"id\":\"q-auto-1\""), "{}", report.2);
+    h.drain(Duration::from_secs(5)).await;
+
+    // Put on another server: both told to go there, for that match.
+    let (origin, _) = queue_stand_in("eu2.game.example:61250").await;
+    let h = queue_server(origin, "127.0.0.1", &dir).await;
+    let http = h.http.unwrap();
+    let (p0, p1) = (
+        pass(Some(WALLETS[0]), &nonce(http).await),
+        pass(Some(WALLETS[1]), &nonce(http).await),
+    );
+    let (a, b) = tokio::join!(play(&h, &p0, MODE_DUEL), play(&h, &p1, MODE_DUEL));
+    let to = Msg::Moved {
+        addr: proto::ServerAddr::new("eu2.game.example:61250").unwrap(),
+        queued: proto::QueueMatch::new("q-auto-1").unwrap(),
+    };
+    for got in [&a, &b] {
+        assert_eq!(
+            got.iter().find(|m| matches!(m, Msg::Moved { .. })),
+            Some(&to),
+            "{got:?}"
+        );
+        assert!(!got.iter().any(|m| matches!(m, Msg::Welcome { .. })), "{got:?}");
+    }
+    h.drain(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);
 }

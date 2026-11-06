@@ -19,7 +19,7 @@ use crate::outlet::Counts;
 pub const BUCKETS: usize = 21;
 /// Refusal causes by `proto::REFUSE_*` code (0 unused; past the last known
 /// code is counted in the last).
-pub const REFUSALS: usize = 15;
+pub const REFUSALS: usize = 17;
 /// The journal's window.
 pub const JOURNAL: Duration = Duration::from_secs(10);
 
@@ -374,7 +374,7 @@ mod tests {
             &s.read(&Counts::default()),
         );
         assert!(doc.starts_with("{\"ready\":true,\"proto\":9,\"players\":3,"));
-        assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"));
+        assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"));
         assert!(doc.contains("\"tick_p50_us\":512"));
         assert!(doc.contains("\"sim_threads\":4,"));
         assert!(doc.contains("\"tick_us\":[0,0,0,0,0,0,0,0,0,1,0,"), "{doc}");

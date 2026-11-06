@@ -914,6 +914,87 @@ impl Name {
     }
 }
 
+/// A game server's `host:port`, as a server list names it: at most
+/// [`MAX_SERVER_ADDR`] of letters, digits and `.-:[]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerAddr {
+    pub len: u8,
+    pub bytes: [u8; MAX_SERVER_ADDR],
+}
+
+pub const MAX_SERVER_ADDR: usize = 96;
+const _: () = assert!(MAX_SERVER_ADDR < 1 << 7);
+
+impl ServerAddr {
+    pub const NONE: ServerAddr = ServerAddr {
+        len: 0,
+        bytes: [0; MAX_SERVER_ADDR],
+    };
+
+    fn ok(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b".-:[]".contains(&b)
+    }
+
+    /// None unless it is 1 to [`MAX_SERVER_ADDR`] of the characters above.
+    pub fn new(s: &str) -> Option<ServerAddr> {
+        let b = s.trim().as_bytes();
+        if b.is_empty() || b.len() > MAX_SERVER_ADDR || !b.iter().all(|&c| Self::ok(c)) {
+            return None;
+        }
+        let mut a = ServerAddr::NONE;
+        a.bytes[..b.len()].copy_from_slice(b);
+        a.len = b.len() as u8;
+        Some(a)
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+}
+
+/// A match id from Elo Pros' queue (`q-` and 16 url-safe characters
+/// today), at most [`MAX_QUEUE_MATCH`]: the match a ranked hello comes for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueueMatch {
+    pub len: u8,
+    pub bytes: [u8; MAX_QUEUE_MATCH],
+}
+
+pub const MAX_QUEUE_MATCH: usize = 32;
+const QUEUE_MATCH_LEN_BITS: u32 = 6;
+const _: () = assert!(MAX_QUEUE_MATCH < 1 << QUEUE_MATCH_LEN_BITS);
+
+impl QueueMatch {
+    pub const NONE: QueueMatch = QueueMatch {
+        len: 0,
+        bytes: [0; MAX_QUEUE_MATCH],
+    };
+
+    fn ok(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
+    }
+
+    /// None unless it is 1 to [`MAX_QUEUE_MATCH`] of A-Z a-z 0-9 - _.
+    pub fn new(s: &str) -> Option<QueueMatch> {
+        let b = s.trim().as_bytes();
+        if b.is_empty() || b.len() > MAX_QUEUE_MATCH || !b.iter().all(|&c| Self::ok(c)) {
+            return None;
+        }
+        let mut q = QueueMatch::NONE;
+        q.bytes[..b.len()].copy_from_slice(b);
+        q.len = b.len() as u8;
+        Some(q)
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+
+    pub fn is_none(&self) -> bool {
+        self.len == 0
+    }
+}
+
 /// An Elo Pros pass as the client was handed it: `b64url(text).b64url(sig)`,
 /// printable ASCII. Empty for a guest. Opaque here; the server checks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1103,6 +1184,17 @@ pub enum Msg {
         /// `proto`. Last on the wire, and 0 when a client from before it
         /// sent none, so that client still reads its refusal.
         stamp: u32,
+        /// Ranked: the match Elo Pros' queue sent it to (`lobbies.py`),
+        /// whose sides the server seats; none for the server's own queue.
+        /// After the stamp, and none when a client sent none.
+        queued: QueueMatch,
+    },
+    /// Server → client, while queued: Elo Pros' queue put the match on
+    /// another server. The client goes there for match `queued` (with the
+    /// same pass or ticket), and this session ends.
+    Moved {
+        addr: ServerAddr,
+        queued: QueueMatch,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -1290,6 +1382,10 @@ pub const REFUSE_NOT_FRIEND: u8 = 14;
 /// Nothing to watch: no public match, that party isn't in one, or it is
 /// your own.
 pub const REFUSE_NOTHING_TO_WATCH: u8 = 15;
+/// Ranked: the match Elo Pros' queue named isn't one this server can play
+/// for this wallet (not on its sides, not this game or server, gone), or
+/// not everyone came for it in time: queue again.
+pub const REFUSE_MATCH: u8 = 16;
 
 pub(crate) fn w_name(w: &mut BitWriter, n: &Name) -> R<()> {
     w.write(n.len as u32, 5)?;
@@ -1330,6 +1426,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             emblem,
             party,
             stamp,
+            queued,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
@@ -1340,6 +1437,10 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*emblem as u32, 16)?;
             w.write(*party, party::CODE_BITS)?;
             w.write(*stamp, 32)?;
+            w.write(queued.len as u32, QUEUE_MATCH_LEN_BITS)?;
+            for &b in &queued.bytes[..queued.len as usize] {
+                w.write(b as u32, 7)?;
+            }
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -1412,6 +1513,17 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Moved { addr, queued } => {
+            w.write(23, 8)?;
+            w.write(addr.len as u32, 7)?;
+            for &b in &addr.bytes[..addr.len as usize] {
+                w.write(b as u32, 7)?;
+            }
+            w.write(queued.len as u32, QUEUE_MATCH_LEN_BITS)?;
+            for &b in &queued.bytes[..queued.len as usize] {
+                w.write(b as u32, 7)?;
+            }
+        }
         Msg::Follow { slot, team } => {
             w.write(22, 8)?;
             w.write(*slot as u32, SLOT_BITS)?;
@@ -1541,6 +1653,22 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
 }
 
 /// A pass or a ticket: printable ASCII, counted.
+fn r_queue_match(r: &mut BitReader) -> R<QueueMatch> {
+    let len = r.read(QUEUE_MATCH_LEN_BITS)? as usize;
+    if len > MAX_QUEUE_MATCH {
+        return Err(WireError::Cap);
+    }
+    let mut q = QueueMatch::NONE;
+    for b in q.bytes[..len].iter_mut() {
+        *b = r.read(7)? as u8;
+        if !QueueMatch::ok(*b) {
+            return Err(WireError::Malformed);
+        }
+    }
+    q.len = len as u8;
+    Ok(q)
+}
+
 fn w_pass(w: &mut BitWriter, p: &Pass) -> R<()> {
     w.write(p.len as u32, 10)?;
     for &b in &p.bytes[..p.len as usize] {
@@ -1585,6 +1713,11 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             emblem: r.read(16)? as u16,
             party: r.read(party::CODE_BITS)?,
             stamp: if r.remaining_bits() >= 32 { r.read(32)? } else { 0 },
+            queued: if r.remaining_bits() >= QUEUE_MATCH_LEN_BITS as usize {
+                r_queue_match(&mut r)?
+            } else {
+                QueueMatch::NONE
+            },
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -1639,6 +1772,24 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        23 => {
+            let len = r.read(7)? as usize;
+            if len > MAX_SERVER_ADDR {
+                return Err(WireError::Cap);
+            }
+            let mut addr = ServerAddr::NONE;
+            for b in addr.bytes[..len].iter_mut() {
+                *b = r.read(7)? as u8;
+                if !ServerAddr::ok(*b) {
+                    return Err(WireError::Malformed);
+                }
+            }
+            addr.len = len as u8;
+            Msg::Moved {
+                addr,
+                queued: r_queue_match(&mut r)?,
+            }
+        }
         22 => Msg::Follow {
             slot: r.read(SLOT_BITS)? as u8,
             team: r.read(1)? as u8,

@@ -22,6 +22,7 @@ pub mod auth;
 pub mod bugs;
 pub mod cup;
 pub mod elo;
+pub mod eloqueue;
 pub mod health;
 pub mod http;
 pub mod lobby;
@@ -74,6 +75,17 @@ pub enum ToSim {
     Queue {
         session: u64,
         entry: Box<queue::Entry>,
+        tx: outlet::Outlet,
+    },
+    /// Ranked, for a match Elo Pros' queue formed (`queue::Gathers`): its
+    /// id, every side's wallets, and the side this one is on, checked
+    /// against Elo Pros already.
+    Matched {
+        session: u64,
+        entry: Box<queue::Entry>,
+        id: String,
+        sides: Vec<Vec<String>>,
+        side: usize,
         tx: outlet::Outlet,
     },
     Leave {
@@ -241,6 +253,9 @@ pub struct Config {
     /// How far below the sim's the network threads' priority is (Linux's
     /// nice; `lower_this_thread`), so a tick isn't held up by sends.
     pub net_nice: i32,
+    /// Ranked waits in Elo Pros' queue (`eloqueue`), which every server of
+    /// the game shares, rather than this server's own: needs `elo_key`.
+    pub elo_queue: bool,
     /// Addresses whose connections aren't held to a source's share (a load
     /// test's box; `net::Gate`). Loopback never is.
     pub load_sources: Vec<std::net::IpAddr>,
@@ -292,6 +307,7 @@ impl Default for Config {
             endpoints: 1,
             endpoint_step: 10,
             net_nice: 5,
+            elo_queue: false,
             load_sources: Vec::new(),
         }
     }
@@ -348,6 +364,9 @@ pub struct Ctx {
     pub ports: Vec<u16>,
     pub endpoints: (usize, u16),
     pub next_port: AtomicUsize,
+    /// Ranked waits in Elo Pros' queue (`Config::elo_queue`), and who waits.
+    pub elo_queue: bool,
+    pub waiters: eloqueue::Waiters,
 }
 
 impl Ctx {
@@ -499,7 +518,12 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         ports: addrs.iter().map(|a| a.port()).collect(),
         endpoints: (cfg.endpoints.max(1), cfg.endpoint_step),
         next_port: AtomicUsize::new(0),
+        elo_queue: cfg.elo_queue && cfg.elo_key.is_some(),
+        waiters: eloqueue::Waiters::default(),
     });
+    if cfg.elo_queue && cfg.elo_key.is_none() {
+        eprintln!("oneshot: --elo-queue needs --elo-key: ranked uses this server's own queue");
+    }
 
     let sim = Sim {
         cfg: cfg.clone(),
@@ -514,6 +538,9 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .map_err(|e| e.to_string())?;
     tokio::spawn(jobs(ctx.clone(), jobs_rx));
     tokio::spawn(journal(ctx.clone()));
+    if ctx.elo_queue {
+        tokio::spawn(eloqueue::poller(ctx.clone()));
+    }
     tokio::spawn(ctx.lobby.clone().sweeper());
     for ep in &endpoints {
         tokio::spawn(net::accept_loop(
@@ -899,6 +926,7 @@ impl Sim {
         let mut sessions: BTreeMap<u64, Sess> = BTreeMap::new();
         let mut rooms: Vec<Option<Live>> = Vec::new();
         let mut q = queue::Queue::default();
+        let mut gathers = queue::Gathers::default();
         let mut recent = Recent::default();
         let mut last_second = Instant::now();
         let mut seconds: u64 = 0;
@@ -1037,7 +1065,7 @@ impl Sim {
                                 c.stage != cup::Stage::Done
                                     && c.entrants.iter().any(|e| e.here && e.wallet == entry.wallet)
                             });
-                        if playing || in_cup || q.has_wallet(&entry.wallet) {
+                        if playing || in_cup || q.has_wallet(&entry.wallet) || gathers.has_wallet(&entry.wallet) {
                             send_msg(
                                 &tx,
                                 &Msg::Refuse {
@@ -1060,6 +1088,55 @@ impl Sim {
                             cup_wait.push(*entry);
                         } else {
                             q.push(*entry);
+                        }
+                        self.ctx.health.joins_ranked.fetch_add(1, Ordering::Relaxed);
+                        sessions.insert(
+                            session,
+                            Sess {
+                                tx,
+                                at: None,
+                                player: Some(wallet),
+                                since: auth::now_unix(),
+                                mode,
+                                watching: None,
+                            },
+                        );
+                    }
+                    ToSim::Matched {
+                        session,
+                        entry,
+                        id,
+                        sides,
+                        side,
+                        tx,
+                    } => {
+                        let playing = rooms.iter().flatten().any(|r| {
+                            (r.over_at.is_none() && r.wallets.iter().flatten().any(|w| *w == entry.wallet))
+                                || r.id == id
+                        });
+                        let elsewhere =
+                            q.has_wallet(&entry.wallet) || cup_wait.iter().any(|e| e.wallet == entry.wallet);
+                        let refuse = if gathers.done(&id) {
+                            // Started without it, or called off: never twice.
+                            Some(proto::REFUSE_MATCH)
+                        } else if playing || elsewhere {
+                            Some(proto::REFUSE_BUSY)
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = refuse {
+                            send_msg(&tx, &Msg::Refuse { reason });
+                            self.ctx.health.refuse(reason);
+                            tx.close();
+                            continue;
+                        }
+                        let (wallet, mode) = (entry.wallet.clone(), entry.mode);
+                        send_msg(&tx, &Msg::Queued { mode, waiting_s: 0 });
+                        // A reconnect: the session it replaces is done.
+                        if let Some(old) = gathers.arrive(&id, sides, side, *entry, now) {
+                            if let Some(s) = sessions.remove(&old) {
+                                s.tx.close();
+                            }
                         }
                         self.ctx.health.joins_ranked.fetch_add(1, Ordering::Relaxed);
                         sessions.insert(
@@ -1122,6 +1199,7 @@ impl Sim {
                     }
                     ToSim::Leave { session } => {
                         q.remove(session);
+                        gathers.leave(session);
                         cup_wait.retain(|e| e.session != session);
                         for c in cups.iter_mut().flatten() {
                             c.leave(session);
@@ -1176,7 +1254,7 @@ impl Sim {
             // Going down: those still waiting are let go (no match will
             // form), the rooms play out.
             if self.ctx.draining.load(Ordering::Relaxed) {
-                for e in q.entries.drain(..).chain(cup_wait.drain(..)) {
+                for e in q.entries.drain(..).chain(cup_wait.drain(..)).chain(gathers.take_all()) {
                     if let Some(s) = sessions.remove(&e.session) {
                         send_msg(
                             &s.tx,
@@ -1201,51 +1279,25 @@ impl Sim {
                     let _ = self.jobs.send(Job::Roster(roster(&sessions, &rooms)));
                 }
                 while let Some(sides) = q.form(now) {
-                    let mode = sides[0][0].mode;
-                    let avoid = recent.of(sides.iter().flatten().map(|p| p.wallet.as_str()));
-                    let mut live = Live {
-                        room: self.new_room(mode, true, &avoid),
-                        id: format!("os-{:016x}", random_u64()),
-                        mode,
-                        links: [None; MAX_FIGHTERS],
-                        wallets: Default::default(),
-                        players: Default::default(),
-                        joined: [0; MAX_FIGHTERS],
-                        over_at: None,
-                        cup: None,
-                        watchers: Vec::new(),
-                        private: false,
-                        parties: Vec::new(),
-                        out: Vec::new(),
-                    };
-                    let mut outs = Vec::new();
-                    for (side, players) in sides.iter().enumerate() {
-                        for (k, p) in players.iter().enumerate() {
-                            // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
-                            let slot = side + 2 * k;
-                            outs.push(live.room.seat_person(slot, p.name, p.look));
-                            live.links[slot] = Some(p.session);
-                            live.wallets[slot] = Some(p.wallet.clone());
-                            live.players[slot] = Some(p.wallet.clone());
-                            recent.note(p.wallet.clone(), live.room.world.map.id, now);
-                        }
-                    }
-                    let i = place(&mut rooms, live);
-                    for side in &sides {
-                        for p in side {
-                            if let Some(s) = sessions.get_mut(&p.session) {
-                                let slot = rooms[i]
-                                    .as_ref()
-                                    .unwrap()
-                                    .links
-                                    .iter()
-                                    .position(|l| *l == Some(p.session));
-                                s.at = slot.map(|sl| (i, sl as u8));
-                            }
-                        }
-                    }
-                    for out in outs {
-                        deliver(&sessions, rooms[i].as_ref().unwrap(), out);
+                    let id = format!("os-{:016x}", random_u64());
+                    self.seat_ranked(&sides, id, &mut rooms, &mut sessions, &mut recent, now);
+                }
+                // Elo Pros' queue: a match everyone has come for starts;
+                // one not everyone came for in time is called off.
+                let due = gathers.due(now);
+                for (id, sides) in due.start {
+                    self.seat_ranked(&sides, id, &mut rooms, &mut sessions, &mut recent, now);
+                }
+                for e in due.called_off {
+                    if let Some(s) = sessions.remove(&e.session) {
+                        send_msg(
+                            &s.tx,
+                            &Msg::Refuse {
+                                reason: proto::REFUSE_MATCH,
+                            },
+                        );
+                        self.ctx.health.refuse(proto::REFUSE_MATCH);
+                        s.tx.close();
                     }
                 }
                 // A cup: once enough have entered, when it fills or the wait
@@ -1378,6 +1430,69 @@ impl Sim {
                 self.ctx.health.ticks_skipped.fetch_add(lost, Ordering::Relaxed);
                 next = done;
             }
+        }
+    }
+
+    /// A ranked match whose sides are all here: a room of its own, seats
+    /// alternating sides (0 and 2 red, 1 and 3 blue), each told where it
+    /// sits. `id` is what its result is reported under: the server's own
+    /// for its queue, Elo Pros' match id for one its queue formed.
+    fn seat_ranked(
+        &self,
+        sides: &[Vec<queue::Entry>],
+        id: String,
+        rooms: &mut Vec<Option<Live>>,
+        sessions: &mut BTreeMap<u64, Sess>,
+        recent: &mut Recent,
+        now: Instant,
+    ) {
+        let Some(mode) = sides.iter().flatten().next().map(|e| e.mode) else {
+            return;
+        };
+        let avoid = recent.of(sides.iter().flatten().map(|p| p.wallet.as_str()));
+        let mut live = Live {
+            room: self.new_room(mode, true, &avoid),
+            id,
+            mode,
+            links: [None; MAX_FIGHTERS],
+            wallets: Default::default(),
+            players: Default::default(),
+            joined: [0; MAX_FIGHTERS],
+            over_at: None,
+            cup: None,
+            watchers: Vec::new(),
+            private: false,
+            parties: Vec::new(),
+            out: Vec::new(),
+        };
+        let mut outs = Vec::new();
+        for (side, players) in sides.iter().enumerate() {
+            for (k, p) in players.iter().enumerate() {
+                // Seats alternate sides: 0 and 2 red, 1 and 3 blue.
+                let slot = side + 2 * k;
+                outs.push(live.room.seat_person(slot, p.name, p.look));
+                live.links[slot] = Some(p.session);
+                live.wallets[slot] = Some(p.wallet.clone());
+                live.players[slot] = Some(p.wallet.clone());
+                recent.note(p.wallet.clone(), live.room.world.map.id, now);
+            }
+        }
+        let i = place_room(rooms, live);
+        for side in sides {
+            for p in side {
+                if let Some(s) = sessions.get_mut(&p.session) {
+                    let slot = rooms[i]
+                        .as_ref()
+                        .unwrap()
+                        .links
+                        .iter()
+                        .position(|l| *l == Some(p.session));
+                    s.at = slot.map(|sl| (i, sl as u8));
+                }
+            }
+        }
+        for out in outs {
+            deliver(sessions, rooms[i].as_ref().unwrap(), out);
         }
     }
 

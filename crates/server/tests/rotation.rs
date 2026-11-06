@@ -40,6 +40,7 @@ async fn play(port: u16, hash: [u8; 32], party: u32) -> u8 {
             emblem: 0,
             party,
             stamp: sim::STAMP,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )

@@ -64,6 +64,7 @@ async fn join_stamped(port: u16, hash: [u8; 32], name: &str, stamp: u32) -> Resu
             emblem: 0,
             party: 0,
             stamp,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )
@@ -407,7 +408,7 @@ async fn the_status_counts_joins_refusals_and_ticks() {
     assert_eq!(field(&doc, "joins_casual"), 1, "{doc}");
     assert_eq!(field(&doc, "matches"), 1, "{doc}");
     assert!(
-        doc.contains("\"refused\":[0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]"),
+        doc.contains("\"refused\":[0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"),
         "one REFUSE_FULL: {doc}"
     );
     assert!(field(&doc, "ticks") > 10, "{doc}");

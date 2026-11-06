@@ -125,6 +125,7 @@ async fn hello(
             emblem: 0,
             party: 0,
             stamp: sim::STAMP,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )

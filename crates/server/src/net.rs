@@ -394,6 +394,87 @@ pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
+/// Waits in Elo Pros' queue with `players` (a party whole; its first
+/// wallet queues it) as `me`, telling the client how long, until matched
+/// (`Ok((match id, server))`), out (`Err`), or the client goes (`None`; it
+/// is taken out).
+async fn wait_in_elo_queue(
+    ctx: &Ctx,
+    players: &[String],
+    me: &str,
+    mode: u8,
+    ladder: &str,
+    send: &mut wtransport::SendStream,
+    recv: &mut RecvStream,
+) -> Option<Result<(String, String), ()>> {
+    use crate::eloqueue::{self, Waited};
+    let mut rx = ctx.waiters.wait(me);
+    let queues = players.iter().map(|p| eloqueue::norm(p)).min() == Some(eloqueue::norm(me));
+    if queues {
+        let body = serde_json::json!({"op": "queue", "players": players, "ladder": ladder,
+                                      "teams": 2, "size": queue::size(mode) / 2});
+        if let Err(e) = ctx.elo.serve(&body).await {
+            eprintln!("oneshot: Elo Pros' queue refused {me}: {e}");
+            ctx.waiters.done(me);
+            return Some(Err(()));
+        }
+    }
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    // The newest wait to tell the client, plus one (0: nothing new).
+    let told = std::sync::atomic::AtomicU64::new(0);
+    let waited = {
+        let wait = eloqueue::wait(&mut rx, |s| told.store(s + 1, Ordering::Relaxed));
+        tokio::pin!(wait);
+        loop {
+            tokio::select! {
+                w = &mut wait => break Some(w),
+                m = read_frame(recv) => {
+                    if m.is_none() || matches!(m.and_then(|b| decode_msg(&b).ok()), Some(Msg::Bye)) {
+                        break None;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
+            if let Some(s) = told.swap(0, Ordering::Relaxed).checked_sub(1) {
+                let m = Msg::Queued {
+                    mode,
+                    waiting_s: s.min(u16::MAX as u64) as u16,
+                };
+                if let Ok(n) = proto::frame_msg(&m, &mut f) {
+                    let _ = send.write_all(&f[..n]).await;
+                }
+            }
+        }
+    };
+    ctx.waiters.done(me);
+    match waited {
+        Some(Waited::Matched { id, server }) => Some(Ok((id, server))),
+        Some(Waited::Out(why)) => {
+            if let Some(w) = why {
+                eprintln!("oneshot: {me} left Elo Pros' queue: {w}");
+            }
+            Some(Err(()))
+        }
+        None => {
+            let _ = ctx
+                .elo
+                .serve(&serde_json::json!({"op": "unqueue", "players": [me]}))
+                .await;
+            None
+        }
+    }
+}
+
+/// Elo Pros put this player's match on another server: where, and the
+/// match, then goodbye.
+async fn moved(send: &mut wtransport::SendStream, addr: proto::ServerAddr, queued: proto::QueueMatch, _ctx: &Ctx) {
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    if let Ok(n) = proto::frame_msg(&Msg::Moved { addr, queued }, &mut f) {
+        let _ = send.write_all(&f[..n]).await;
+        let _ = send.finish().await;
+    }
+}
+
 async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
     ctx.health.refuse(reason);
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
@@ -401,6 +482,29 @@ async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
         let _ = send.write_all(&f[..n]).await;
         let _ = send.finish().await;
     }
+}
+
+/// The side `wallet` plays on in Elo Pros' match `m`, if `m` is the match
+/// `id` asked for, of this game, on this ladder and format, launched onto
+/// this server's host (either slot: a drain hands over to the other).
+fn queue_match_side(
+    m: &crate::elo::QueueMatch,
+    id: &str,
+    ctx: &Ctx,
+    mode: u8,
+    ladder: &str,
+    wallet: &str,
+) -> Option<usize> {
+    let size = if mode == MODE_DOUBLES { 2 } else { 1 };
+    let host = |a: &str| a.rsplit_once(':').map_or(a, |(h, _)| h).to_ascii_lowercase();
+    let here = ctx
+        .public_addr
+        .as_deref()
+        .is_none_or(|ours| host(ours) == host(&m.addr));
+    let fits = m.id == id && m.game == ctx.slug && m.ladder == ladder && m.teams == 2 && m.size == size;
+    (fits && here && m.players() <= queue::size(mode))
+        .then(|| m.side_of(wallet))
+        .flatten()
 }
 
 async fn session(
@@ -431,6 +535,7 @@ async fn session(
         emblem,
         party,
         stamp,
+        mut queued,
     } = hello
     else {
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
@@ -546,20 +651,85 @@ async fn session(
                 MODE_CUP => "cup",
                 _ => "duel",
             };
-            let rating = ctx.elo.rating(&wallet, ladder).await;
-            ToSim::Queue {
-                session: session_id,
-                entry: Box::new(queue::Entry {
+            // Elo Pros' queue, which every server of the game shares: wait
+            // there; a match put on this server is played here, one on
+            // another is moved there.
+            if ctx.elo_queue && queued.is_none() && mode != MODE_CUP {
+                let party = match &seating {
+                    Some(sit) if mode == MODE_DOUBLES => ctx.lobby.parties().members(sit.code),
+                    _ => Vec::new(),
+                };
+                if party.iter().any(|m| !m.starts_with("0x") && m.len() < 32) {
+                    return refuse(&mut send, proto::REFUSE_PARTY_MODE, &ctx).await;
+                }
+                let players = if party.len() > 1 { party } else { vec![wallet.clone()] };
+                match wait_in_elo_queue(&ctx, &players, &wallet, mode, ladder, &mut send, &mut recv).await {
+                    Some(Ok((id, server))) => {
+                        let ours = |a: &str| {
+                            let host = |a: &str| a.rsplit_once(':').map_or(a, |(h, _)| h).to_ascii_lowercase();
+                            ctx.public_addr.as_deref().is_none_or(|p| host(p) == host(a))
+                        };
+                        let (Some(q), Some(addr)) = (proto::QueueMatch::new(&id), proto::ServerAddr::new(&server))
+                        else {
+                            return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                        };
+                        if !ours(&server) {
+                            return moved(&mut send, addr, q, &ctx).await;
+                        }
+                        queued = q;
+                    }
+                    Some(Err(())) => return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await,
+                    // The player left while it waited.
+                    None => return,
+                }
+            }
+            // For a match Elo Pros' queue formed: seated with its sides, on
+            // the server it named, once Elo Pros says this wallet is in it.
+            if !queued.is_none() && mode != MODE_CUP {
+                let m = match ctx.elo.queue_match(queued.as_str()).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("oneshot: queue match {}: {e}", queued.as_str());
+                        return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                    }
+                };
+                let Some(side) = queue_match_side(&m, queued.as_str(), &ctx, mode, ladder, &wallet) else {
+                    return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                };
+                let tx_entry = queue::Entry {
                     session: session_id,
                     wallet,
                     name,
                     mode,
-                    rating,
+                    rating: 0.0,
                     since: std::time::Instant::now(),
                     look,
-                    party: seating.filter(|_| mode == MODE_DOUBLES),
-                }),
-                tx,
+                    party: None,
+                };
+                ToSim::Matched {
+                    session: session_id,
+                    entry: Box::new(tx_entry),
+                    id: m.id,
+                    sides: m.sides,
+                    side,
+                    tx,
+                }
+            } else {
+                let rating = ctx.elo.rating(&wallet, ladder).await;
+                ToSim::Queue {
+                    session: session_id,
+                    entry: Box::new(queue::Entry {
+                        session: session_id,
+                        wallet,
+                        name,
+                        mode,
+                        rating,
+                        since: std::time::Instant::now(),
+                        look,
+                        party: seating.filter(|_| mode == MODE_DOUBLES),
+                    }),
+                    tx,
+                }
             }
         }
         _ => ToSim::Casual {

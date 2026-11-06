@@ -149,6 +149,30 @@ renamed or removed; dropping it archives it on their profile.
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo
   Pros, signed with the server key.
 
+## More than one box
+
+Ranked can wait in Elo Pros' queue instead of each server's own
+(`--elo-queue`), so every box of the game shares one queue and Elo Pros puts
+each match on a box in the list with room (`meter/lobbies.py`, `POST
+/lobbies/serve/oneshot`, signed with the server key). A player matched onto
+another box is moved there (`Msg::Moved`) and plays there.
+
+1. The new box: the same install as above, with the **same** `server.pem`
+   (its public half is already on the dev desk) and the **same**
+   `nonce.key`, so a ticket from one box is good on the other.
+2. Its row in `ops/servers.json` (`addr`, `status_url`, `max_players`), then
+   republish the list: Elo Pros reads `players`/`max_players` from each
+   box's `status.json` to pick one.
+3. `--elo-queue` on every box's `ExecStart`, then a deploy on each.
+
+Without `--elo-queue` a box keeps its own queue, as before. Casual modes
+need none of this: any box with a seat will do.
+
+Other knobs on `ExecStart`: `--endpoints N` (N UDP ports, `--bind`'s and
+every `--endpoint-step` after, each open in both firewalls), `--net-nice`
+(the network threads under the sim's, 5 by default), `--big-snapshot-hz`
+and `--no-delta` (snapshots, below `--help`'s defaults only when measured).
+
 ## Backups
 
 `/home/master/oneshot-data` is the record: replays are the evidence behind

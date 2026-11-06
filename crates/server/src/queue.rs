@@ -268,3 +268,187 @@ mod tests {
         assert_eq!(side(1), 1520.0 + 1500.0);
     }
 }
+
+/// How long a match from Elo Pros' queue waits for everyone on its sides
+/// before it is called off (its players are told to queue again).
+pub const GATHER_S: u64 = 30;
+/// Matches remembered as started or called off, so one is never played
+/// twice.
+const DONE_KEPT: usize = 4096;
+
+/// A match Elo Pros' queue formed (`meter/lobbies.py`), as its players come
+/// for it: who is on which side, who is here.
+#[derive(Clone, Debug)]
+pub struct Gather {
+    pub id: String,
+    pub mode: u8,
+    pub sides: Vec<Vec<String>>,
+    /// Each with its side.
+    pub here: Vec<(usize, Entry)>,
+    pub first: Instant,
+}
+
+/// The matches being gathered, and those already started or called off.
+#[derive(Default)]
+pub struct Gathers {
+    pub list: Vec<Gather>,
+    done: std::collections::VecDeque<String>,
+}
+
+/// What [`Gathers::due`] hands back.
+pub struct Due {
+    /// Everyone came: the match's id and its sides, in Elo Pros' order.
+    pub start: Vec<(String, Vec<Vec<Entry>>)>,
+    /// Not everyone came in time: those who did, to be told.
+    pub called_off: Vec<Entry>,
+}
+
+impl Gathers {
+    /// Whether match `id` was already started or called off.
+    pub fn done(&self, id: &str) -> bool {
+        self.done.iter().any(|d| d == id)
+    }
+
+    pub fn has_wallet(&self, w: &str) -> bool {
+        self.list.iter().any(|g| g.here.iter().any(|(_, e)| e.wallet == w))
+    }
+
+    /// `e` comes for match `id` (`sides` its wallets), on side `side`. A
+    /// wallet already here for it is replaced (a reconnect): its old
+    /// session is returned to be closed.
+    pub fn arrive(&mut self, id: &str, sides: Vec<Vec<String>>, side: usize, e: Entry, now: Instant) -> Option<u64> {
+        let g = match self.list.iter().position(|g| g.id == id) {
+            Some(i) => &mut self.list[i],
+            None => {
+                self.list.push(Gather {
+                    id: id.to_string(),
+                    mode: e.mode,
+                    sides,
+                    here: Vec::new(),
+                    first: now,
+                });
+                self.list.last_mut().unwrap()
+            }
+        };
+        let old = g
+            .here
+            .iter()
+            .position(|(_, x)| x.wallet == e.wallet)
+            .map(|i| g.here.remove(i).1.session);
+        g.here.push((side, e));
+        old
+    }
+
+    /// A session gone: out of whatever it waited for.
+    pub fn leave(&mut self, session: u64) {
+        for g in &mut self.list {
+            g.here.retain(|(_, e)| e.session != session);
+        }
+        self.list.retain(|g| !g.here.is_empty());
+    }
+
+    /// Everyone in every gathered match, let go (a drain).
+    pub fn take_all(&mut self) -> Vec<Entry> {
+        let all = self
+            .list
+            .drain(..)
+            .flat_map(|g| g.here.into_iter().map(|(_, e)| e))
+            .collect();
+        all
+    }
+
+    /// The matches everyone has come for, and those whose wait is up.
+    pub fn due(&mut self, now: Instant) -> Due {
+        let mut due = Due {
+            start: Vec::new(),
+            called_off: Vec::new(),
+        };
+        let mut keep = Vec::new();
+        for g in self.list.drain(..) {
+            let want: usize = g.sides.iter().map(Vec::len).sum();
+            if g.here.len() >= want {
+                let mut sides: Vec<Vec<Entry>> = vec![Vec::new(); g.sides.len()];
+                for (s, wallets) in g.sides.iter().enumerate() {
+                    for w in wallets {
+                        if let Some((_, e)) = g.here.iter().find(|(_, e)| e.wallet.eq_ignore_ascii_case(w)) {
+                            sides[s].push(e.clone());
+                        }
+                    }
+                }
+                due.start.push((g.id.clone(), sides));
+            } else if now.duration_since(g.first).as_secs() >= GATHER_S {
+                due.called_off.extend(g.here.iter().map(|(_, e)| e.clone()));
+            } else {
+                keep.push(g);
+                continue;
+            }
+            // Started or called off: never again.
+            let id = g.id;
+            if self.done.len() >= DONE_KEPT {
+                self.done.pop_front();
+            }
+            self.done.push_back(id);
+        }
+        self.list = keep;
+        due
+    }
+}
+
+#[cfg(test)]
+mod gather_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn entry(session: u64, wallet: &str) -> Entry {
+        Entry {
+            session,
+            wallet: wallet.into(),
+            name: proto::Name::new("x"),
+            mode: MODE_DUEL,
+            rating: 1500.0,
+            since: Instant::now(),
+            look: proto::Look::default(),
+            party: None,
+        }
+    }
+
+    #[test]
+    fn a_match_starts_once_everyone_is_here_and_never_again() {
+        let t0 = Instant::now();
+        let sides = vec![vec!["0xaa".to_string()], vec!["0xbb".to_string()]];
+        let mut g = Gathers::default();
+        assert_eq!(g.arrive("q-1", sides.clone(), 1, entry(2, "0xbb"), t0), None);
+        assert!(g.due(t0).start.is_empty(), "one of two");
+        // A reconnect replaces the session.
+        assert_eq!(g.arrive("q-1", sides.clone(), 1, entry(3, "0xbb"), t0), Some(2));
+        g.arrive("q-1", sides, 0, entry(1, "0xAA"), t0);
+        let due = g.due(t0);
+        assert_eq!(due.start.len(), 1);
+        let (id, s) = &due.start[0];
+        assert_eq!(id, "q-1");
+        assert_eq!((s[0][0].session, s[1][0].session), (1, 3), "in Elo Pros' side order");
+        assert!(g.done("q-1") && g.list.is_empty());
+    }
+
+    #[test]
+    fn a_match_nobody_else_comes_for_is_called_off() {
+        let t0 = Instant::now();
+        let sides = vec![vec!["0xaa".to_string()], vec!["0xbb".to_string()]];
+        let mut g = Gathers::default();
+        g.arrive("q-2", sides, 0, entry(1, "0xaa"), t0);
+        assert!(g.due(t0 + Duration::from_secs(GATHER_S - 1)).called_off.is_empty());
+        let due = g.due(t0 + Duration::from_secs(GATHER_S));
+        assert_eq!(due.called_off.len(), 1);
+        assert!(g.done("q-2"));
+        // Someone leaving takes them out.
+        g.arrive(
+            "q-3",
+            vec![vec!["0xaa".into()], vec!["0xbb".into()]],
+            0,
+            entry(5, "0xaa"),
+            t0,
+        );
+        g.leave(5);
+        assert!(g.list.is_empty());
+    }
+}

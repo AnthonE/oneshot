@@ -8,7 +8,7 @@
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
-//! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--load-from ip]… [--match-secs N]`
+//! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--elo-queue] [--load-from ip]… [--match-secs N]`
 //!
 //! `--match-secs` puts every mode's match on an N-second clock: for tests
 //! that play one match after another (`ci/e2e.mjs`'s `E2E_AGAIN`).
@@ -21,7 +21,11 @@
 //! `--endpoint-step` after (10: slot a on 61250, 61260, 61270, slot b on
 //! 61251, 61261, 61271), each its own socket and receive loop; `server.json`
 //! hands pages one in turn. Both slots must run the same two flags, and
-//! every port must be open in the firewalls. `--net-nice` is how far below
+//! every port must be open in the firewalls. `--elo-queue` queues ranked
+//! players in Elo Pros' queue, shared by every server in the game's list,
+//! which puts each match on one with room; a player matched onto another
+//! server is moved there (`Msg::Moved`). Every server then needs the same
+//! `--nonce-key`, so a ticket from one is good on the rest. `--net-nice` is how far below
 //! the sim the network's threads run (Linux's nice, 0 for the same).
 //!
 //! `--capacity` is in players (a player's lobby beside its match isn't
@@ -133,6 +137,7 @@ fn main() {
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
             "--no-delta" => cfg.deltas = false,
+            "--elo-queue" => cfg.elo_queue = true,
             "--net-nice" => cfg.net_nice = val().parse().unwrap_or_else(|_| die("--net-nice is 0 to 19")),
             "--endpoints" => cfg.endpoints = val().parse().unwrap_or_else(|_| die("--endpoints is a count")),
             "--endpoint-step" => {
