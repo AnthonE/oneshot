@@ -34,9 +34,9 @@ const MAX_SUB: usize = 8;
 const ITERS: usize = 4;
 /// Of the velocity kept each substep (air and the cloth's own damping).
 const KEEP: f32 = 0.996;
-/// The cloth's weight, kg per square metre (a heavy nylon), and the air's
+/// The cloth's weight, kg per square metre (a flag's nylon), and the air's
 /// density times a flat plate's drag coefficient over two.
-const AREAL: f32 = 0.22;
+const AREAL: f32 = 0.16;
 const PRESSURE: f32 = 0.5 * 1.2 * 1.15;
 /// Skin friction along the sheet, per m/s of the wind across it.
 const FRICTION: f32 = 0.03;

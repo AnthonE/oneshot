@@ -40,12 +40,14 @@ const CARRY_LEAN: Vec3 = Vec3::new(-0.6, 1.0, -0.35);
 /// Carried by us, in our view: the foot from the eye (right, up, forward)
 /// and the lean (right, up, forward), so it crosses the view from the
 /// bottom right with its banner up at the left, as Halo 3 held it.
-const VIEW_FOOT: Vec3 = Vec3::new(0.34, -0.8, 0.55);
-const VIEW_LEAN: Vec3 = Vec3::new(-0.62, 1.0, 0.42);
-/// The wind a banner feels, m/s, for the map's (`Mood::wind_ms`, the
-/// clouds' drift): never quite still in the open, a breath under a roof.
-const WIND_MIN: f32 = 2.5;
-const WIND_MAX: f32 = 9.0;
+const VIEW_FOOT: Vec3 = Vec3::new(0.65, -0.8, 0.55);
+const VIEW_LEAN: Vec3 = Vec3::new(-0.45, 1.0, 0.42);
+/// The wind a banner feels, m/s, from the map's (`Mood::wind_ms`, the
+/// clouds' drift): a breeze at the least, so it flies on every map in the
+/// open, and more the windier the map; a breath under a roof.
+const WIND_BASE: f32 = 4.5;
+const WIND_PER: f32 = 0.9;
+const WIND_MAX: f32 = 11.0;
 const WIND_ROOFED: f32 = 0.7;
 
 /// One flag's parts and its sheet.
@@ -199,7 +201,7 @@ pub fn draw(
     let ms = if mood.roofed {
         WIND_ROOFED
     } else {
-        m.wind_ms.clamp(WIND_MIN, WIND_MAX)
+        (WIND_BASE + m.wind_ms * WIND_PER).min(WIND_MAX)
     };
     let w2 = m.wind();
     let wind = Vec3::new(w2.x, 0.0, w2.y) * ms;
@@ -224,62 +226,63 @@ pub fn draw(
         },
         floor: at.y,
     };
-    let (key, bases): (u32, [Option<V3>; 2]) = if let Some(view) = posed.as_ref().and_then(|p| p.2.flag.map(|f| (p, f)))
-    {
-        // The pose mode: red's flag, planted on its stand or over the
-        // posed fighter's shoulder.
-        let (p, (at, held)) = view;
-        let at = V3::new(at.x, at.y, at.z);
-        poles[0] = Some(if held {
-            carried(p.0.pos, p.0.yaw)
-        } else {
-            planted(at, false)
-        });
-        (POSED, [Some(at), None])
-    } else {
-        let s = link.0.session();
-        if !s.ready {
-            return;
+    // Held across our view: the eye's own axes.
+    let in_view = |e: &Transform, floor: f32| {
+        let (r, u, fw) = (e.right().as_vec3(), e.up().as_vec3(), e.forward().as_vec3());
+        let at = |k: Vec3| r * k.x + u * k.y + fw * k.z;
+        Pole {
+            foot: e.translation + at(VIEW_FOOT),
+            up: at(VIEW_LEAN).normalize(),
+            floor,
         }
-        let core = &s.core;
-        let Some(bases) = core.map.flags.filter(|_| core.rules.ctf) else {
-            return;
-        };
-        let snap = core.latest();
-        let me = core.slot;
-        let third = film.is_some_and(|f| f.third());
-        for (t, f) in snap.flags().iter().enumerate().take(2) {
-            // Planted at its base or where it fell, over its carrier's
-            // shoulder, or across our view; None while the carrier is
-            // hidden from us.
-            poles[t] = if f.state == FLAG_HELD {
-                if f.carrier == me {
-                    let d = core.own_drawn();
-                    match eye.single().ok() {
-                        _ if !d.alive => None,
-                        Some(e) if !third => {
-                            let (r, u, fw) = (e.right().as_vec3(), e.up().as_vec3(), e.forward().as_vec3());
-                            let at = |k: Vec3| r * k.x + u * k.y + fw * k.z;
-                            Some(Pole {
-                                foot: e.translation + at(VIEW_FOOT),
-                                up: at(VIEW_LEAN).normalize(),
-                                floor: d.pos.y,
-                            })
+    };
+    let (key, bases): (u32, [Option<V3>; 2]) =
+        if let Some((p, (at, held))) = posed.as_ref().and_then(|p| p.2.flag.map(|f| (p, f))) {
+            // The pose mode: red's flag, planted on its stand, over the posed
+            // fighter's shoulder, or across the camera's view.
+            let at = V3::new(at.x, at.y, at.z);
+            poles[0] = match (held, eye.single().ok()) {
+                (0, _) => Some(planted(at, false)),
+                (2, Some(e)) => Some(in_view(e, at.y)),
+                _ => Some(carried(p.0.pos, p.0.yaw)),
+            };
+            (POSED, [Some(at), None])
+        } else {
+            let s = link.0.session();
+            if !s.ready {
+                return;
+            }
+            let core = &s.core;
+            let Some(bases) = core.map.flags.filter(|_| core.rules.ctf) else {
+                return;
+            };
+            let snap = core.latest();
+            let me = core.slot;
+            let third = film.is_some_and(|f| f.third());
+            for (t, f) in snap.flags().iter().enumerate().take(2) {
+                // Planted at its base or where it fell, over its carrier's
+                // shoulder, or across our view; None while the carrier is
+                // hidden from us.
+                poles[t] = if f.state == FLAG_HELD {
+                    if f.carrier == me {
+                        let d = core.own_drawn();
+                        match eye.single().ok() {
+                            _ if !d.alive => None,
+                            Some(e) if !third => Some(in_view(e, d.pos.y)),
+                            _ => Some(carried(d.pos, d.yaw)),
                         }
-                        _ => Some(carried(d.pos, d.yaw)),
+                    } else {
+                        seen.others
+                            .iter()
+                            .find(|d| d.slot == f.carrier && d.alive)
+                            .map(|d| carried(d.pos, d.yaw))
                     }
                 } else {
-                    seen.others
-                        .iter()
-                        .find(|d| d.slot == f.carrier && d.alive)
-                        .map(|d| carried(d.pos, d.yaw))
-                }
-            } else {
-                Some(planted(f.pos, f.state == FLAG_DOWN))
-            };
-        }
-        (s.welcomes, bases.map(Some))
-    };
+                    Some(planted(f.pos, f.state == FLAG_DOWN))
+                };
+            }
+            (s.welcomes, bases.map(Some))
+        };
     if key != flags.built {
         // The level's parts go with the level (`level::build`).
         flags.built = key;
