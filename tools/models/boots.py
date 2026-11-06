@@ -35,11 +35,11 @@ NAME = 'boot'
 # splayed to 0.2 wide at the toes; the boot is chunky enough to cover them.
 LENGTH = 0.46
 WIDTH = 0.27
-TRIS = 4000
+TRIS = 10000
 # The thin boot's maps, baked from Meshy's whole mesh (`bake`): colour,
 # and the detail its triangles lost as a normal map; px.
 COLOUR_PX = TEX_PX
-DETAIL_PX = MAP_PX
+DETAIL_PX = TEX_PX
 # Its surface where no map says: black leather and steel buckles.
 ROUGH_ALL = 0.45
 METAL_ALL = 0.25
