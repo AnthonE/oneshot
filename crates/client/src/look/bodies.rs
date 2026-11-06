@@ -40,6 +40,14 @@ const HAND_BONE: &str = "RightHand";
 const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
 const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
 const HELD_SCALE: f32 = 100.0;
+/// The sword's holder in the right hand's frame, for `Sword_Idle`: its hilt
+/// through the fist's hole, from the little finger to the index, its blade out
+/// of the thumb's side and its edge toward the knuckles.
+const SWORD_HELD_AT: Vec3 = Vec3::new(1.757, 10.096, 1.561);
+const SWORD_HELD_TURN: Quat = Quat::from_xyzw(0.87036, 0.04145, -0.49012, -0.02334);
+/// How long a body's cut takes, seconds: quick, and short enough of the sword's
+/// `refire_ms` for its fade to end before the next begins (`anim::BLEND_S`).
+pub const CUT_S: f32 = 0.36;
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -118,6 +126,10 @@ pub struct Body {
     player: Option<Entity>,
     hand: Entity,
     held: u8,
+    /// Drawn in stop-motion, lunging (`cels.rs`).
+    pub step: super::cels::Step,
+    /// Seconds left of the cut it is making.
+    pub cutting: f32,
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
     mats: Vec<Handle<BodyMaterial>>,
@@ -204,6 +216,10 @@ impl Body {
     }
 
     /// Your own shadow (`own_shadow.rs`).
+    pub fn holds_sword(&self) -> bool {
+        self.held == sim::arms::SWORD
+    }
+
     pub fn is_shadow(&self) -> bool {
         self.shadow
     }
@@ -277,6 +293,8 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         player: None,
         hand,
         held: 0,
+        step: super::cels::Step::default(),
+        cutting: 0.0,
         mats: Vec::new(),
         limp: false,
         lit: 0.0,
@@ -666,8 +684,11 @@ pub fn pose(
     // first-person arms (hands up at the face): over a body it held nothing.
     // A pistol's reload is still its own clip.
     let gun_of = gun(d.arm);
-    let hold = gun_of.map(|_| Hold::Long);
+    let sword = d.arm == sim::arms::SWORD;
+    let hold = gun_of.map(|_| if sword { Hold::Sword } else { Hold::Long });
     let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    body.cutting = (body.cutting - dt).max(0.0);
+    let cut = (sword && body.cutting > 0.0).then_some((Hold::Sword, CUT_S));
     body.gait.observe(
         &Seen {
             alive: d.alive,
@@ -679,9 +700,9 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
-            reload: reload_clip
+            reload: cut.or(reload_clip
                 .filter(|_| d.reloading && !sim::arms::arm(d.arm).hot())
-                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0)),
+                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0))),
         },
         dt,
     );
@@ -690,6 +711,16 @@ pub fn pose(
     let arm = if d.alive && !driving { d.arm } else { 0 };
     if arm != body.held && body.dressed {
         commands.entity(body.hand).despawn_related::<Children>();
+        let (at, rotation) = if arm == sim::arms::SWORD {
+            (SWORD_HELD_AT, SWORD_HELD_TURN)
+        } else {
+            (HELD_AT, HELD_TURN)
+        };
+        commands.entity(body.hand).insert(Transform {
+            translation: at,
+            rotation: rotation.normalize(),
+            scale: Vec3::splat(HELD_SCALE),
+        });
         let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
         if let Some((_, scene)) = posed {
             if body.shadow {
@@ -697,6 +728,7 @@ pub fn pose(
                 commands.entity(scene).observe(super::own_shadow::shade_gun);
             } else {
                 super::gun_skin::wear(commands, scene, body.skin, arm);
+                super::blade::light(commands, scene, arm);
             }
         }
         body.held = arm;

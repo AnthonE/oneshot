@@ -99,7 +99,7 @@ pub fn setup(mut commands: Commands, mut mats: ResMut<Assets<ShadowOnly>>) {
 pub fn shade_gun(
     ev: On<SceneInstanceReady>,
     children: Query<&Children>,
-    lit: Query<(), With<MeshMaterial3d<StandardMaterial>>>,
+    lit: Query<Option<&bevy::gltf::GltfMaterialName>, With<MeshMaterial3d<StandardMaterial>>>,
     shadow: Option<Res<ShadowMat>>,
     mut commands: Commands,
 ) {
@@ -107,7 +107,12 @@ pub fn shade_gun(
         return;
     };
     for e in children.iter_descendants(ev.entity) {
-        if lit.contains(e) {
+        if let Ok(name) = lit.get(e) {
+            // A sword's blade is light, and throws no shadow.
+            if super::blade::is_blade(name) {
+                commands.entity(e).despawn();
+                continue;
+            }
             commands
                 .entity(e)
                 .remove::<MeshMaterial3d<StandardMaterial>>()

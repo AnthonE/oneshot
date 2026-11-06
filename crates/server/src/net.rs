@@ -25,7 +25,9 @@ use crate::{auth, queue, Config, Ctx, ToSim};
 
 const KEEP_ALIVE: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
-const HANDSHAKE: Duration = Duration::from_secs(10);
+/// Accept to Hello. A page pressing PLAY while it loads can stall this long
+/// before it sends its Hello; each address's limits still hold.
+const HANDSHAKE: Duration = Duration::from_secs(60);
 /// The UDP socket's buffers (Gates' `bind_udp`): a burst of snapshots to a
 /// full server fits rather than drops. Linux clamps to `net.core.rmem_max`
 /// and `wmem_max`, so what was granted is read back and printed.

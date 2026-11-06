@@ -29,6 +29,9 @@ pub const GRIP_IN_GUN: Vec3 = Vec3::new(0.0, -0.01, -0.04);
 /// The fist turned on the grip: its knuckles up by this much about the gun's
 /// own x, so the wrist drops under the stock, radians.
 pub const FIST_TILT: f32 = 0.42;
+/// The right hand round a sword's hilt, in the sword's frame: which way its
+/// knuckles lie from its wrist.
+pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.95, 0.0, 0.3);
 /// Where the off hand's hole sits on a long gun's fore-end, metres as it looks:
 /// this far up into its belly (`Gun::under`) and to its right, so the fingers go
 /// round the far side and the heel of the palm and the thumb show on ours.
@@ -58,6 +61,8 @@ pub const THROW_OUT: Vec3 = Vec3::new(0.1, 0.3, -0.22);
 pub struct Grip {
     pub at: Vec3,
     pub rot: Quat,
+    /// The same for the fist on it, which a cut's blade turns ahead of.
+    pub fist: Quat,
     pub arm: u8,
 }
 
@@ -120,11 +125,14 @@ pub fn off_hand(g: &Grips, fore: Vec3, mag: Vec3) -> Option<(Vec3, bool)> {
 
 /// The right fist on a grip, in the gun's frame. The hand's model has x
 /// against the thumb, y along the knuckles, z out of its back: thumb up, the
-/// back of the hand to the gun's right. A sword's handle runs along its blade,
-/// so there the thumb runs along it and the forearm stands below.
+/// back of the hand to the gun's right. A sword's hilt goes through the fist
+/// from the little finger to the thumb, its blade out of the thumb's side, the
+/// palm to the eye and the forearm in from the frame's lower right
+/// ([`SWORD_KNUCKLES`]).
 fn fist(arm: u8) -> Quat {
     if arm == sim::arms::SWORD {
-        return Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Y, Vec3::Z, Vec3::NEG_X));
+        let y = SWORD_KNUCKLES.normalize();
+        return Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Y, y, Vec3::NEG_Y.cross(y)));
     }
     Quat::from_rotation_x(FIST_TILT) * Quat::from_rotation_y(FRAC_PI_2)
 }
@@ -148,7 +156,7 @@ fn thrown() -> Quat {
 }
 
 fn right_hand(g: Grip) -> (Vec3, Quat) {
-    (g.at + g.rot * GRIP_IN_GUN, g.rot * fist(g.arm))
+    (g.at + g.rot * GRIP_IN_GUN, g.fist * fist(g.arm))
 }
 
 fn left_hand(g: &Grips) -> Option<(Vec3, Quat)> {

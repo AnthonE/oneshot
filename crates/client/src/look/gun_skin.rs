@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use bevy::gltf::GltfMaterialName;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
@@ -134,7 +135,7 @@ fn coat(
     ev: On<SceneInstanceReady>,
     worn: Query<&Worn>,
     children: Query<&Children>,
-    plain: Query<&MeshMaterial3d<StandardMaterial>>,
+    plain: Query<(&MeshMaterial3d<StandardMaterial>, Option<&GltfMaterialName>)>,
     own: Res<Assets<StandardMaterial>>,
     mut coats: ResMut<Coats>,
     mut mats: ResMut<Assets<GunMaterial>>,
@@ -147,9 +148,12 @@ fn coat(
         return;
     };
     for e in children.iter_descendants(ev.entity) {
-        let Ok(m) = plain.get(e) else {
+        let Ok((m, name)) = plain.get(e) else {
             continue;
         };
+        if super::blade::is_blade(name) {
+            continue;
+        }
         let Some(base) = own.get(&m.0) else {
             continue;
         };
