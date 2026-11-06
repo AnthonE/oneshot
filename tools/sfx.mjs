@@ -58,6 +58,8 @@ const SOUNDS = [
   one('shot_rocket', 3, 1.1, 0, -4, 'A shoulder rocket launcher firing one rocket: a huge deep thump and blast at its very start, then a roaring whoosh of flame trailing away. One shot only.', { far: -6, low: 35, many: true }),
   one('shot_smg', 3, 0.5, 0.3, -3, 'One single round from a compact submachine gun: a fast light snappy crack with a quick mechanical clack. One shot only.', { far: -6 }),
 
+  one('shot_minigun', 3, 0.5, 0.2, -5, 'One single round from a heavy rotary minigun on a truck: a very short hard metallic crack with a fast mechanical buzz. One shot only.', { far: -6 }),
+
   // The reloads, each as long as its gun's (`arms.rs`), played once and never cut off.
   one('reload_rifle', 1, 1.8, 1.76, -2, 'A soldier reloading an assault rifle: an empty magazine clicks out, a full magazine slaps in, the charging handle snaps back. Three quick metal sounds. No gunshot.', { low: 150, many: true, push: 4 }),
   one('reload_br', 1, 1.8, 1.76, -2, 'A soldier reloading a heavy battle rifle: a long magazine latch clacks open, a full magazine is rammed in with a solid thunk, a heavy bolt snaps forward. No gunshot.', { low: 150, many: true, push: 5 }),

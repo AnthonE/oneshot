@@ -329,8 +329,8 @@ pub fn gun(arm: u8) -> Option<&'static Gun> {
 }
 
 /// The gun whose sound a shot carrying `c` (an arm id, or a turret's
-/// cause: `sim::arms::fired`) is heard with: a truck's minigun sounds as
-/// the rifle does, till it has its own.
+/// cause: `sim::arms::fired`) is heard with: a truck's minigun has the rifle's
+/// row, and its own shot (`sound::events`).
 pub fn heard_as(c: u16) -> Option<&'static Gun> {
     if c == sim::events::Cause::Minigun as u16 {
         return gun(arms::AR);

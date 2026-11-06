@@ -635,6 +635,8 @@ pub fn names() -> Vec<String> {
     .map(|s| s.to_string())
     .collect();
     for (base, n) in [
+        ("shot_minigun", 3),
+        ("shot_minigun_far", 1),
         ("step_concrete", 8),
         ("step_metal", 8),
         ("step_grass", 8),
@@ -1086,14 +1088,19 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                     continue;
                 };
                 let ours = e.a == me && e.part != HEARD;
+                let (sound, takes, far) = if e.c == sim::events::Cause::Minigun as u16 {
+                    ("shot_minigun", 3, "shot_minigun_far")
+                } else {
+                    (g.sound, g.takes, g.far)
+                };
                 if ours {
-                    let n = ear.take(g.sound, g.takes);
+                    let n = ear.take(sound, takes);
                     ear.mine(&n, 0.75);
                 } else {
                     let n = if at.distance(ears.at) > FAR_M || ears.walled(at) {
-                        ClipName::of(g.far, None).with(b"_0")
+                        ClipName::of(far, None).with(b"_0")
                     } else {
-                        ear.take(g.sound, g.takes)
+                        ear.take(sound, takes)
                     };
                     ear.at(ears, &n, at, 1.0, GUN);
                 }
