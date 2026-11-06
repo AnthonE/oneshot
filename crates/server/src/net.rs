@@ -535,6 +535,8 @@ async fn session(
         emblem,
         party,
         stamp,
+        headwear,
+        footwear,
         mut queued,
     } = hello
     else {
@@ -620,7 +622,36 @@ async fn session(
         Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
         _ => proto::EMBLEM_NONE,
     };
-    let look = proto::Look { skin, emblem };
+    // Gear is worn only if the wallet owns it, as a skin, but with no rank
+    // lock; a guest wears none.
+    let wallet = who.as_ref().and_then(|p| p.wallet.as_deref());
+    let mut gear = [
+        (
+            proto::HEADWEAR.as_slice(),
+            proto::gear_valid(&proto::HEADWEAR, headwear),
+        ),
+        (
+            proto::FOOTWEAR.as_slice(),
+            proto::gear_valid(&proto::FOOTWEAR, footwear),
+        ),
+    ];
+    if gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
+        let owned = match wallet {
+            Some(w) => ctx.elo.skins(w).await,
+            None => Vec::new(),
+        };
+        for (slot, g) in &mut gear {
+            if !owned.iter().any(|s| s == slot[*g as usize]) {
+                *g = proto::GEAR_NONE;
+            }
+        }
+    }
+    let look = proto::Look {
+        skin,
+        emblem,
+        headwear: gear[0].1,
+        footwear: gear[1].1,
+    };
 
     // A player from here on (the checks below may still refuse it).
     let _playing = ctx.gate.play();

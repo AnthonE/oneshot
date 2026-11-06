@@ -233,6 +233,52 @@ fn shots_wreck_a_hull_and_its_riders_and_it_comes_back() {
     assert_eq!(w.vehicles[0].pos, w.map.vehicles[0].pos);
 }
 
+/// A rocket beside a truck throws it: up off its wheels and away from
+/// the blast, a second or more in the air, and down again on the ground a
+/// few metres off, hurt but whole.
+#[test]
+fn a_rocket_throws_a_truck() {
+    let mut w = world(false);
+    w.fighters[0].body.pos = V3::new(-50.0, 0.0, 0.0);
+    let v = w.vehicles[0];
+    let (_, r) = v.axes();
+    // Blue with a rocket, 14 m off its right flank, aimed at the ground
+    // under its door.
+    let at = v.pos + r * 14.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.fighters[1].guns[w.fighters[1].cur as usize & 1] = sim::fighter::Gun::full(sim::arms::ROCKET);
+    let door = v.pos + r * (VEH_HALF_W + 0.3);
+    let d = V3::new(door.x, w.map.ground(door.x, door.z) + 0.2, door.z) - w.fighters[1].eye();
+    let yaw = rad_to_yaw(fmath::atan2(d.z, d.x));
+    let pitch = fmath::round(fmath::atan2(d.y, d.flat().len()) * (65536.0 / core::f32::consts::TAU)) as i16;
+    let aim = Input {
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    press(&mut w, 1, Input { buttons: FIRE, ..aim });
+    let (mut air, mut top, mut landed) = (0u32, 0.0f32, false);
+    for _ in 0..TICK_HZ * 4 {
+        press(&mut w, 1, aim);
+        let h = &w.vehicles[0];
+        let off = h.pos.y - w.map.ground(h.pos.x, h.pos.z);
+        top = top.max(off);
+        if !h.grounded {
+            air += 1;
+        } else if air > 0 {
+            landed = true;
+        }
+    }
+    let h = w.vehicles[0];
+    assert!(h.active && h.health < VEH_HEALTH, "hurt, not wrecked: {}", h.health);
+    assert!(top > 2.0, "thrown {top} m up");
+    assert!(air as f32 * DT > 1.0, "{} s in the air", air as f32 * DT);
+    assert!(landed && h.grounded, "down again");
+    let gone = (h.pos - v.pos).flat();
+    assert!(gone.len() > 5.0, "thrown {} m", gone.len());
+    assert!(gone.dot(r) < 0.0, "away from the blast");
+}
+
 /// The truck's steel stops a shot and its glass doesn't: a driver's chest
 /// is behind the door, their head behind the window; the bed's sides are
 /// higher than the sill, and a passenger's chest stands over them.

@@ -8,8 +8,9 @@
 //! its own colour; the side, the emblem and a skin's trim are sprayed on it
 //! (`paint.rs`): a headband in the side's colour, glowing a little so a
 //! fighter reads in shade, the emblem on the back, the trim a stripe round
-//! the waist. No hitbox or visibility changes (DESIGN.md §15). Drawing
-//! only.
+//! the waist. Its gear hangs on its bones, the gun's way: the headwear
+//! (`proto::HEADWEAR`) on the head, a boot (`proto::FOOTWEAR`) on each
+//! foot. No hitbox or visibility changes (DESIGN.md §15). Drawing only.
 //!
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
@@ -40,6 +41,39 @@ const HAND_BONE: &str = "RightHand";
 const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
 const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
 const HELD_SCALE: f32 = 100.0;
+
+/// A piece of gear's place on a bone of triple-t.glb, in the bone's own
+/// units (centimetres, as the hand's). Each model's script prints its own
+/// (FIT): `tools/models/shades.py`, `tools/models/boots.py`.
+pub struct Fit {
+    bone: &'static str,
+    at: Vec3,
+    turn: Quat,
+    scale: f32,
+}
+
+/// The shades: the lens's middle over the eyes, tipped a little onto the
+/// nose.
+const SHADES: Fit = Fit {
+    bone: "Head",
+    at: Vec3::new(0.545, 36.774, 14.136),
+    turn: Quat::from_xyzw(-0.12787, 0.00560, -0.00601, 0.99176),
+    scale: 100.0,
+};
+/// The boots, a left and a right: each sole under its root foot, turned
+/// out with the toes.
+const BOOT_LEFT: Fit = Fit {
+    bone: "LeftFoot",
+    at: Vec3::new(1.531, 16.321, 5.974),
+    turn: Quat::from_xyzw(-0.90881, -0.01571, -0.03615, 0.41535),
+    scale: 100.0,
+};
+const BOOT_RIGHT: Fit = Fit {
+    bone: "RightFoot",
+    at: Vec3::new(-0.412, 16.452, 6.000),
+    turn: Quat::from_xyzw(-0.90600, 0.04448, 0.00651, 0.42088),
+    scale: 100.0,
+};
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -117,6 +151,8 @@ pub struct Body {
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
     hand: Entity,
+    /// Its gear, each piece on its bone once dressed.
+    worn: Vec<(Entity, &'static Fit)>,
     held: u8,
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
@@ -221,24 +257,88 @@ pub fn model_rotation(yaw: f32) -> Quat {
 }
 
 /// A body spawned for `team` in `look`: its root, which the caller places.
-pub fn spawn(commands: &mut Commands, models: &Models, team: u8, look: proto::Look) -> Entity {
-    spawn_as(commands, models, team, look, false)
+pub fn spawn(commands: &mut Commands, team: u8, look: proto::Look) -> Entity {
+    spawn_as(commands, team, look, false)
 }
 
 /// Your own body, for its shadow only (`own_shadow.rs`).
-pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entity {
-    spawn_as(commands, models, team, proto::Look::default(), true)
+pub fn spawn_shadow(commands: &mut Commands, team: u8) -> Entity {
+    spawn_as(commands, team, proto::Look::default(), true)
 }
 
-fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
+/// A body's model, till Triple T's file is in.
+#[derive(Component)]
+pub struct WantsScene;
+
+/// A piece of gear's model, till the models are in (as [`WantsScene`]).
+#[derive(Component, Clone, Copy)]
+pub enum WantsGear {
+    Shades,
+    BootLeft,
+    BootRight,
+}
+
+/// Every body waiting for its model gets it, the file once in, and every
+/// piece of gear its own.
+pub fn stand_up(
+    mut commands: Commands,
+    models: Option<Res<Models>>,
+    gltfs: Res<Assets<bevy::gltf::Gltf>>,
+    waiting: Query<Entity, With<WantsScene>>,
+    gear: Query<(Entity, &WantsGear)>,
+) {
+    let Some(models) = models else { return };
+    for (e, piece) in &gear {
+        let scene = match piece {
+            WantsGear::Shades => &models.shades,
+            WantsGear::BootLeft => &models.boot_left,
+            WantsGear::BootRight => &models.boot_right,
+        };
+        commands
+            .entity(e)
+            .remove::<WantsGear>()
+            .insert(SceneRoot(scene.clone()));
+    }
+    let Some(scene) = gltfs.get(&models.body).and_then(|g| g.scenes.first().cloned()) else {
+        return;
+    };
+    for e in &waiting {
+        commands
+            .entity(e)
+            .remove::<WantsScene>()
+            .insert(SceneRoot(scene.clone()));
+    }
+}
+
+fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
         .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
+    // Its gear, each piece hidden till `dress` puts it on its bone.
+    // Their models come once the models are in (`stand_up`).
+    let mut pieces: Vec<(WantsGear, &'static Fit)> = Vec::new();
+    if proto::gear_valid(&proto::HEADWEAR, look.headwear) == 1 {
+        pieces.push((WantsGear::Shades, &SHADES));
+    }
+    if proto::gear_valid(&proto::FOOTWEAR, look.footwear) == 1 {
+        pieces.push((WantsGear::BootLeft, &BOOT_LEFT));
+        pieces.push((WantsGear::BootRight, &BOOT_RIGHT));
+    }
+    let worn = if shadow { Vec::new() } else { pieces }
+        .into_iter()
+        .map(|(piece, fit)| {
+            let e = commands
+                .spawn((piece, Transform::default(), Visibility::Hidden, BodyPart, ChildOf(root)))
+                .id();
+            (e, fit)
+        })
+        .collect();
     commands
         .spawn((
-            SceneRoot(models.body_scene.clone()),
+            WantsScene,
             Transform::from_rotation(Quat::from_rotation_y(FACE)),
+            Visibility::default(),
             ChildOf(root),
         ))
         .observe(dress);
@@ -250,6 +350,7 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         dressed: false,
         player: None,
         hand,
+        worn,
         held: 0,
         mats: Vec::new(),
         limp: false,
@@ -383,6 +484,26 @@ fn dress(
             ));
         }
         None => error!("bodies: no {HAND_BONE} in models/triple-t.glb: its gun lies at its feet"),
+    }
+    // Its gear goes on its bones: it goes where they go.
+    for &(worn, fit) in &body.worn {
+        let bone = children
+            .iter_descendants(model)
+            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == fit.bone));
+        match bone {
+            Some(bone) => {
+                commands.entity(worn).insert((
+                    ChildOf(bone),
+                    Transform {
+                        translation: fit.at,
+                        rotation: fit.turn.normalize(),
+                        scale: Vec3::splat(fit.scale),
+                    },
+                    Visibility::Inherited,
+                ));
+            }
+            None => error!("bodies: no {} in models/triple-t.glb: gear left off", fit.bone),
+        }
     }
     body.dressed = true;
     if body.shadow {
@@ -575,7 +696,12 @@ pub fn flare(
         }
     }
     if hidden != body.hidden {
-        for &e in body.parts.iter().chain(core::iter::once(&body.hand)) {
+        for &e in body
+            .parts
+            .iter()
+            .chain(core::iter::once(&body.hand))
+            .chain(body.worn.iter().map(|(e, _)| e))
+        {
             if let Ok(mut v) = parts.get_mut(e) {
                 *v = show(!hidden);
             }
@@ -665,9 +791,13 @@ pub fn pose(
     if arm != body.held && body.dressed {
         commands.entity(body.hand).despawn_related::<Children>();
         let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
-        // Your shadow's gun is a shadow too.
-        if let (true, Some((_, scene))) = (body.shadow, posed) {
-            commands.entity(scene).observe(super::own_shadow::shade_gun);
+        if let Some((_, scene)) = posed {
+            if body.shadow {
+                // Your shadow's gun is a shadow too.
+                commands.entity(scene).observe(super::own_shadow::shade_gun);
+            } else {
+                super::gun_skin::wear(commands, scene, body.skin, arm);
+            }
         }
         body.held = arm;
     }

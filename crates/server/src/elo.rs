@@ -233,7 +233,8 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
     b.to_string()
 }
 
-/// The skin names in an items answer that are skins of this game (`slug`).
+/// The names in an items answer that are skins or gear of this game
+/// (`slug`).
 ///
 /// Elo Pros answers two shapes. The EVM collection
 /// (`GET /api/items/of/<wallet>?game=<slug>&title=<slug>`, `meter/items.py`)
@@ -242,7 +243,7 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
 /// `meter/solana_items.py`) lists every title's items, each with its
 /// `title`, its `item` key and its `name`. A row of another title is
 /// dropped; a name counts if it, or its first word, is one of
-/// `proto::SKINS`.
+/// `proto::SKINS`, `proto::HEADWEAR` or `proto::FOOTWEAR` (but "none").
 pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
     let rows = v["items"].as_array().into_iter().flatten();
     let names = rows.filter_map(|i| {
@@ -263,7 +264,9 @@ pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
             let first = n.split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
             [n.as_str(), first]
                 .into_iter()
-                .find(|c| proto::SKINS.contains(c))
+                .find(|c| {
+                    proto::SKINS.contains(c) || proto::HEADWEAR[1..].contains(c) || proto::FOOTWEAR[1..].contains(c)
+                })
                 .map(str::to_string)
         })
         .collect();
@@ -425,7 +428,8 @@ impl Elo {
         Some(got)
     }
 
-    /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
+    /// The skins and gear `wallet` owns, by name (`proto::SKINS`,
+    /// `proto::HEADWEAR`, `proto::FOOTWEAR`): the game's items
     /// on Elo Pros ([`items_urls`], read by [`owned_skins`]). Empty if Elo
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
@@ -683,8 +687,11 @@ mod tests {
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
-        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, 7]});
-        assert_eq!(owned_skins(&v, "oneshot"), vec!["ember", "gilded", "pill"]);
+        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, "Shades", "Boots", "none", 7]});
+        assert_eq!(
+            owned_skins(&v, "oneshot"),
+            vec!["boots", "ember", "gilded", "pill", "shades"]
+        );
         assert!(owned_skins(&serde_json::json!({}), "oneshot").is_empty());
     }
 

@@ -699,6 +699,8 @@ mod web {
                 ask.mode,
                 ask.look.skin,
                 ask.look.emblem,
+                ask.look.headwear,
+                ask.look.footwear,
                 ask.party,
                 queued,
             )

@@ -108,10 +108,13 @@ pub enum Kind {
     ScuffSoil,
     Scorch,
     Blood,
+    /// A tyre's track, along +u: a truck skidding, braking hard or
+    /// landing (`look/truck.rs`).
+    Tread,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::HoleSoil,
         Kind::HoleStone,
         Kind::HoleMetal,
@@ -121,6 +124,7 @@ impl Kind {
         Kind::ScuffSoil,
         Kind::Scorch,
         Kind::Blood,
+        Kind::Tread,
     ];
 
     /// The first atlas cell and how many variants follow it.
@@ -135,6 +139,7 @@ impl Kind {
             Kind::ScuffSoil => (12, 2),
             Kind::Scorch => (14, 2),
             Kind::Blood => (16, 4),
+            Kind::Tread => (20, 2),
         }
     }
 
@@ -178,6 +183,7 @@ pub fn tint(kind: Kind, matter: Matter) -> Color {
     match (kind, matter) {
         (Kind::Blood, _) => Color::srgb(0.40, 0.03, 0.03),
         (Kind::Scorch, _) => Color::srgb(0.17, 0.15, 0.13),
+        (Kind::Tread, _) => Color::srgb(0.2, 0.16, 0.12),
         (_, Matter::Metal | Matter::Hull) => Color::srgb(0.84, 0.84, 0.86),
         (_, Matter::Dirt) => Color::srgb(0.36, 0.27, 0.19),
         _ => Color::srgb(0.80, 0.78, 0.74),
@@ -803,6 +809,7 @@ fn gates_cell(cell: u32) -> u32 {
         6..=13 => cell + 2,  // chop, chip, dent, scuff
         14 | 15 => cell + 4, // scorch
         16..=19 => cell + 4, // blood
+        20 | 21 => cell + 4, // a tyre's track (ours)
         _ => u32::MAX,
     }
 }
@@ -1004,6 +1011,20 @@ fn texel(cell: u32, u: f32, v: f32) -> (f32, f32, f32) {
             }
             let wet = body.max(drops);
             (0.75 + 0.25 * n, wet * 0.92, 0.004 * wet)
+        }
+        // A tyre's track along +u: a band of pressed earth with the
+        // tread's lugs in it, soft at both ends so a run of them reads as
+        // one track.
+        24 | 25 => {
+            let band = 1.0 - smooth(0.32, 0.5, v.abs() + 0.06 * (n - 0.5));
+            let ends = 1.0 - smooth(0.6, 0.98, u.abs());
+            let lug = smooth(0.35, 0.55, (u * 7.0 + v.abs() * 2.2 + 0.4 * n).rem_euclid(1.0));
+            let body = band * ends;
+            (
+                0.32 + 0.3 * lug + 0.15 * (n - 0.5),
+                body * (0.66 + 0.3 * n),
+                (-0.012 + 0.008 * lug) * body,
+            )
         }
         _ => (0.0, 0.0, 0.0),
     };

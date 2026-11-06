@@ -130,6 +130,11 @@ pub fn cubemap(n: u32) -> Image {
             }
         }
     }
+    cube_image(n, data)
+}
+
+/// Six faces of `n`² sRGB texels, as a cube.
+fn cube_image(n: u32, data: Vec<u8>) -> Image {
     let mut image = Image::new(
         Extent3d {
             width: n,
@@ -146,6 +151,98 @@ pub fn cubemap(n: u32) -> Image {
         ..default()
     });
     image
+}
+
+/// A hall's fill (a roofed map: `LightDef::sun` 0), in the hull's
+/// colours: its walls a dark purple, its deck darker, the vault over it
+/// lit by bands of the windows' gold, a ring of the strips' cyan round it
+/// at their height. A hull is metal, and metal shows what it reflects: the
+/// sky's fill made the hold a ship of lavender plastic. The diffuse cube is
+/// the same hall blurred to its hemisphere (the bands averaged in); the
+/// specular one keeps the bands, so a curved plate carries them.
+pub mod hall {
+    use super::*;
+
+    /// How much brighter than the sky's a hall's fill is at the map's own
+    /// `LightDef::fill`: the hall's cube is darker than the sky's.
+    pub const GAIN: f32 = 2.0;
+    /// The face size: the bands want more than the sky's 32.
+    pub const FACE: u32 = 64;
+    /// Linear, as a share of the fill's peak: the walls, the deck, the
+    /// vault between its panes, the panes, the strips. **(knobs)**
+    pub const WALL: [f32; 3] = [0.16, 0.09, 0.3];
+    pub const DECK: [f32; 3] = [0.035, 0.025, 0.055];
+    pub const VAULT: [f32; 3] = [0.1, 0.06, 0.2];
+    pub const PANE: [f32; 3] = [1.0, 0.55, 0.16];
+    pub const STRIP: [f32; 3] = [0.18, 0.5, 0.55];
+    /// Where the strips run: the sine of their elevation from the floor's
+    /// middle (7.3 m up the wall, 14 m away), and half their width.
+    pub const STRIP_AT: f32 = 0.42;
+    pub const STRIP_HALF: f32 = 0.03;
+    /// The panes: bands across the hall's axis (x), this many a radian of
+    /// bearing along it, and the share of each band that is glass.
+    pub const PANE_FREQ: f32 = 3.0;
+    pub const PANE_SHARE: f32 = 0.35;
+
+    fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+        [0, 1, 2].map(|c| a[c] + (b[c] - a[c]) * t)
+    }
+
+    fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    /// What the hall shows toward `d`.
+    pub fn specular_at(d: Vec3) -> [f32; 3] {
+        let y = d.y;
+        // The deck under the horizon, the wall to the vault's spring.
+        let mut c = mix(DECK, WALL, smooth(-0.25, 0.05, y));
+        // The vault, darker than the wall, and its panes: bands across the
+        // hall by the bearing along it.
+        let over = smooth(0.5, 0.7, y);
+        let along = d.x.atan2(y.max(1e-3));
+        let band = (along * PANE_FREQ / core::f32::consts::TAU).rem_euclid(1.0);
+        let pane = smooth(PANE_SHARE + 0.05, PANE_SHARE, band) * smooth(0.6, 0.8, y);
+        c = mix(c, mix(VAULT, PANE, pane), over);
+        // The strips round the hall.
+        let strip = smooth(STRIP_HALF, 0.0, (y - STRIP_AT).abs());
+        mix(c, STRIP, strip)
+    }
+
+    /// The hall blurred to its hemisphere: the bands as their average.
+    pub fn diffuse_at(d: Vec3) -> [f32; 3] {
+        let up = mix(VAULT, PANE, PANE_SHARE * 0.5);
+        let side = mix(WALL, STRIP, 0.15);
+        let y = d.y.clamp(-1.0, 1.0);
+        if y >= 0.0 {
+            mix(side, up, y)
+        } else {
+            mix(side, DECK, -y)
+        }
+    }
+
+    fn cube(n: u32, at: fn(Vec3) -> [f32; 3]) -> Image {
+        let mut data = vec![0u8; (n * n * 6 * 4) as usize];
+        for face in 0..6usize {
+            for y in 0..n {
+                for x in 0..n {
+                    let f = at(cube_dir(face, x, y, n));
+                    let i = (((face as u32 * n + y) * n + x) * 4) as usize;
+                    for c in 0..3 {
+                        data[i + c] = (linear_to_srgb(f[c].clamp(0.0, 1.0)) * 255.0).round() as u8;
+                    }
+                    data[i + 3] = 255;
+                }
+            }
+        }
+        cube_image(n, data)
+    }
+
+    /// The hall's two cubes: diffuse, specular.
+    pub fn cubemaps() -> (Image, Image) {
+        (cube(16, diffuse_at), cube(FACE, specular_at))
+    }
 }
 
 #[cfg(test)]

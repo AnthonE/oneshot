@@ -182,36 +182,19 @@ impl Session {
             emblem: look.emblem,
             party,
             stamp: sim::STAMP,
+            headwear: look.headwear,
+            footwear: look.footwear,
             queued: proto::QueueMatch::NONE,
         }
     }
 
     /// [`Session::hello`] for a ranked match Elo Pros' queue sent us to.
     pub fn hello_queued(name: &str, pass: Pass, mode: u8, look: proto::Look, queued: proto::QueueMatch) -> Msg {
-        match Session::hello(name, pass, mode, look, 0) {
-            Msg::Hello {
-                proto,
-                name,
-                pass,
-                mode,
-                skin,
-                emblem,
-                party,
-                stamp,
-                ..
-            } => Msg::Hello {
-                proto,
-                name,
-                pass,
-                mode,
-                skin,
-                emblem,
-                party,
-                stamp,
-                queued,
-            },
-            m => m,
+        let mut m = Session::hello(name, pass, mode, look, 0);
+        if let Msg::Hello { queued: q, .. } = &mut m {
+            *q = queued;
         }
+        m
     }
 
     /// A stream message: a welcome starts the netcode, a reveal is checked

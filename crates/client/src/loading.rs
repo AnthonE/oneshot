@@ -183,11 +183,8 @@ fn models_in(models: Option<&crate::look::guns::Models>, assets: &AssetServer) -
         return false;
     };
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
-    m.guns
-        .iter()
-        .flatten()
-        .chain([&m.rocket, &m.frag, &m.body_scene])
-        .all(settled)
+    let body = matches!(assets.load_state(&m.body), LoadState::Loaded | LoadState::Failed(_));
+    body && m.guns.iter().flatten().chain([&m.rocket, &m.frag]).all(settled)
 }
 
 /// A level's parts that wait for their textures, and whether each has them.

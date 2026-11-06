@@ -144,7 +144,7 @@ pub fn stream(
     let s = link.0.session();
     let core = &s.core;
     let Ok((root, mut own)) = own.single_mut() else {
-        let e = super::bodies::spawn_shadow(&mut commands, &models, core.team);
+        let e = super::bodies::spawn_shadow(&mut commands, core.team);
         commands.entity(e).insert((
             OwnShadow {
                 shown: false,

@@ -424,6 +424,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .build()
     });
     let mut app = App::new();
+    // A command on something already gone is logged as an error, which fails
+    // e2e, and doesn't crash a player's match.
+    app.set_error_handler(bevy::ecs::error::error);
     // Before `AssetPlugin`, which keeps a source already registered: Bevy's
     // wasm reader panics on a download that breaks mid-body, this one
     // retries it (`asset_fetch.rs`).
@@ -510,6 +513,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // Triple T's spray paint: the side's headband, the emblem, the trim
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
+    .add_plugins(look::gun_skin::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
@@ -631,13 +635,27 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::grass::cull,
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
-            (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
-            (items::draw, flags::draw),
+            (
+                draw_fighters,
+                draw_vehicles,
+                look::truck::drive,
+                look::truck::husks,
+                look::foliage::update,
+            )
+                .chain(),
+            items::draw,
             fly,
-            view,
+            // After the camera: ours is held across our view as it is now.
+            (view, flags::draw).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
-            (draw_view, look::counter::draw).chain(),
+            (
+                draw_view,
+                look::counter::draw,
+                look::fx::vent::charge_up,
+                look::fx::vent::heat_skin,
+            )
+                .chain(),
             look::viewmodel::shimmer,
             (look::fx::ambient::drive, look::fx::draw).chain(),
             // The HUD is hidden off a match (`front::hud_shown`): nothing
@@ -651,6 +669,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // Not gated: the medal row and the carnage report are their own roots,
     // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
+    app.add_systems(Update, look::fx::vent::spawn_orbs);
+    app.add_systems(Update, look::bodies::stand_up);
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
@@ -694,8 +714,15 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         app.world_mut().resource_mut::<options::Page>().cat = options::GRAPHICS;
     }
     if let Some(p) = opts.pose {
-        app.insert_resource(p)
-            .add_systems(Update, (pose::aim.after(view), pose::fall.before(draw_fighters)));
+        app.insert_resource(p).add_systems(
+            Update,
+            (
+                pose::aim.after(view),
+                pose::fall.before(draw_fighters),
+                pose::throw.after(happened).before(draw_vehicles),
+                pose::stand_orb,
+            ),
+        );
     } else {
         app.add_systems(
             Startup,
@@ -1069,10 +1096,23 @@ fn drill(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore,
     }
     let t = (now - auto.stood) / 1000.0;
     let within = |(from, to): (f64, f64)| (from..to).contains(&t);
-    // An automatic holds its trigger; anything else is pulled again and
-    // again, by tick (as the autopilot's).
-    let fire = |on: bool| if a.auto && on { FIRE } else { tap(on) };
-    let mut buttons = fire(within(DRILL_BURST_S));
+    // An automatic holds its trigger, and a gun that charges, to let go a
+    // charged round; anything else is pulled again and again, by tick (as the
+    // autopilot's).
+    let fire = |on: bool| {
+        if (a.auto || a.charge_ms > 0) && on {
+            FIRE
+        } else {
+            tap(on)
+        }
+    };
+    // An automatic that heats holds on through the floor, until it vents.
+    let held = if a.auto && a.hot() {
+        (DRILL_BURST_S.0, DRILL_MELEE_S)
+    } else {
+        DRILL_BURST_S
+    };
+    let mut buttons = fire(within(held));
     // Into the floor three metres ahead: never with a round that blows up.
     if within(DRILL_FLOOR_S) && a.radius == 0.0 {
         look.pitch = DRILL_FLOOR_PITCH;
@@ -1113,7 +1153,14 @@ fn rebuild(
     mut cloud_mats: ResMut<Assets<look::cloud_sea::CloudSeaMaterial>>,
     mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
-    mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
+    mut eye: Query<
+        (
+            &mut bevy::camera::Exposure,
+            &mut bevy::light::EnvironmentMapLight,
+            &look::rig::Fills,
+        ),
+        With<Eye>,
+    >,
     mut shade: ResMut<look::quality::MapShade>,
     mut mood: ResMut<look::mood::MoodNow>,
     fx: Option<ResMut<look::fx::Fx>>,
@@ -1143,9 +1190,9 @@ fn rebuild(
         &old,
         s.map_id,
     );
-    if let Ok((mut exposure, mut env)) = eye.single_mut() {
+    if let Ok((mut exposure, mut env, fills)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
+            look::rig::expose_for(&d.light, &mood.mood, fills, &mut exposure, &mut env);
         }
     }
     // Every rung's shade reaches across this map (`look/quality.rs`).
@@ -1264,7 +1311,7 @@ fn draw_fighters(
             let e = if opts.capsules {
                 look::bodies::spawn_capsule(&mut commands, &mut meshes, &mut mats, d.team)
             } else {
-                look::bodies::spawn(&mut commands, &models, d.team, look)
+                look::bodies::spawn(&mut commands, d.team, look)
             };
             commands.entity(e).insert(Kept);
             drawn.fighters.insert(d.slot, (e, d.team, look));
@@ -1374,7 +1421,15 @@ fn draw_vehicles(
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
-        let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
+        let sent = seen.iter().find(|v| v.slot == slot);
+        let health = sent.map_or(255, |v| v.health);
+        let own = core
+            .own_vehicle()
+            .filter(|_| core.own().0.riding().is_some_and(|(i, _)| i as u8 == slot));
+        let driven = match own {
+            Some((veh, ..)) => veh.seats[sim::vehicle::DRIVER] != 0,
+            None => sent.is_some_and(|v| v.seats[sim::vehicle::DRIVER] != 0),
+        };
         // Only a live hull on its wheels presses the grass: not one in the
         // air over a crest, nor a wreck.
         if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
@@ -1390,13 +1445,14 @@ fn draw_vehicles(
                     tr.set_if_neq(t);
                 }
                 if let Ok(mut hull) = hulls.get_mut(e) {
-                    if hull.health != health {
+                    if hull.health != health || hull.driven != driven {
                         hull.health = health;
+                        hull.driven = driven;
                     }
                 }
             }
             None => {
-                let hull = look::truck::Hull { slot, health };
+                let hull = look::truck::Hull { slot, health, driven };
                 let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
                 look::truck::spawn(&mut commands, &models, e);
                 drawn.vehicles.insert(slot, e);
@@ -1517,6 +1573,7 @@ pub(crate) fn view(
 fn draw_view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
+    st: Res<hud::HudState>,
     time: Res<Time>,
     models: Res<look::guns::Models>,
     mut commands: Commands,
@@ -1534,12 +1591,14 @@ fn draw_view(
     let scoped = look.scoped(sim::arms::arm(f.gun().arm));
     let seat = f.riding().map(|(_, seat)| seat);
     let own = look::viewmodel::Own {
+        skin: st.look(link.0.session().core.slot).skin,
         f,
         at: Vec3::new(p.x, p.y, p.z),
         yaw: look.yaw,
         pitch: look.pitch,
         riding: seat.is_some(),
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !film.is_some_and(|f| f.third()),
+        // Carrying the flag, both hands are on it (`flags.rs` draws it).
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !f.flag && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,
@@ -1660,6 +1719,7 @@ pub(crate) fn happened(
             look::fx::shots::own_unseen(&mut fx, f);
         } else {
             look::fx::shots::own(&mut fx, &scene, f, eye, cam, muzzles.0);
+            look::fx::vent::own(&mut fx, f, eye, cam, muzzles.0, time.delta_secs());
         }
     }
     hud::on_events(&mut st, s, &seen.others, events, &msgs, time.elapsed_secs(), look.yaw);

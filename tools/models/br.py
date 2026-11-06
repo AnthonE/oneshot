@@ -23,4 +23,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('br', 0.88, hold=0.33, glow=['#49b8ff'])
+temper(gun)
 finish('br', [gun], grip=0.255, rise=rise, long=True, note='a boxed scope on the rail, the mag in front of the grip, a brake')

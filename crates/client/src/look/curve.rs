@@ -190,8 +190,11 @@ fn cap(k: &[[f32; 3]]) -> Vec<[Vec2; 4]> {
 }
 
 /// A profile solid's mesh in world coordinates, or None for the other
-/// kinds.
-pub fn profile_mesh(sol: &Solid, tile: f32) -> Option<Mesh> {
+/// kinds. `planar`: a turned solid's level faces take the world's x and z,
+/// as a sweep's always do, not the run round the axis at its outer radius
+/// (which squeezes a pattern toward the hub: a dome's honeycomb shimmered
+/// there, its cells a sliver wide).
+pub fn profile_mesh(sol: &Solid, tile: f32, planar: bool) -> Option<Mesh> {
     let mut f = Build::default();
     match sol.shape {
         Shape::Revolve { x, z, y, sector, k } => {
@@ -215,12 +218,15 @@ pub fn profile_mesh(sol: &Solid, tile: f32) -> Option<Mesh> {
             let at = |s: f32, h: f32, a: f32| Vec3::new(x + s * a.cos(), y + h, z + s * a.sin());
             let dir = |nn: Vec2, a: f32| Vec3::new(nn.x * a.cos(), nn.y, nn.x * a.sin()).normalize_or(Vec3::Y);
             for e in outline(k, k[0][0] <= 0.0) {
+                let level = planar && (e.b - e.a).y.abs() < 0.7 * (e.b - e.a).length();
+                let uv = |p: Vec3, u: f32, second: bool| if level { [p.x, p.z] } else { [u, e.v(second, y)] };
                 let mut ring = Vec::with_capacity((n + 1) * 2);
                 for j in 0..=n {
                     let a = ang(j);
                     let u = a * ru;
-                    ring.push(f.vert(at(e.a.x, e.a.y, a), dir(e.na, a), [u, e.v(false, y)]));
-                    ring.push(f.vert(at(e.b.x, e.b.y, a), dir(e.nb, a), [u, e.v(true, y)]));
+                    let (pa, pb) = (at(e.a.x, e.a.y, a), at(e.b.x, e.b.y, a));
+                    ring.push(f.vert(pa, dir(e.na, a), uv(pa, u, false)));
+                    ring.push(f.vert(pb, dir(e.nb, a), uv(pb, u, true)));
                 }
                 for j in 0..n {
                     let (i, o) = (2 * j as u32, 2 * j as u32 + 2);

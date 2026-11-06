@@ -206,7 +206,7 @@ pub fn stand(
             if let Some((old, _)) = had {
                 commands.entity(old).despawn();
             }
-            let e = super::bodies::spawn(&mut commands, &models, TEAM, look);
+            let e = super::bodies::spawn(&mut commands, TEAM, look);
             commands
                 .entity(e)
                 .insert((PortraitBody, Propagate(RenderLayers::layer(LAYER))));

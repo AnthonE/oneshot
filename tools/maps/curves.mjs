@@ -376,8 +376,28 @@ export function readCurve(it, name, look, fail) {
     const axis = axisOf(it, 'arch', fail, what);
     const w = num(it.width, `${what}: width`, fail), j = num(it.jamb ?? 0.6, `${what}: jamb`, fail);
     const { spring, crown, top } = it;
-    if (!(spring > 0 && spring < crown && crown < top)) fail(`${what}: 0 < spring < crown < top`);
+    if (!(spring > 0 && spring < crown && (it.frame !== undefined || crown < top))) fail(`${what}: 0 < spring < crown < top`);
     const h = w / 2;
+    if (it.frame !== undefined) {
+      // Only a band round the opening, `frame` wide, `off` out from it: up
+      // each side from the floor and over (a door's frame, or a line of
+      // light on one); its top and jamb are the opening's own.
+      const t = num(it.frame, `${what}: frame`, fail), o = it.off ?? 0;
+      if (!(o >= 0)) fail(`${what}: off, out from the opening`);
+      const ih = h + o, oh = h + o + t;
+      const inner = (s) => spring + (crown + o - spring) * ell(s / ih);
+      const outer = (s) => spring + (crown + o + t - spring) * ell(s / oh);
+      const k = knotsOf(
+        [
+          { s: [-oh, -ih], bot: () => 0, top: outer, min: 2 },
+          { s: [-ih, ih], bot: inner, top: outer, min: 2 },
+          { s: [ih, oh], bot: () => 0, top: outer, min: 2 },
+        ],
+        fail,
+        what,
+      );
+      return [sweepAlong(axis, 0, k, look, fail, what)];
+    }
     const k = knotsOf(
       [
         { s: [-h - j, -h], bot: () => 0, top: () => top },

@@ -49,7 +49,11 @@ impl Plugin for SoundPlugin {
         app.init_resource::<Heard>()
             .insert_resource(Ear::new())
             .init_resource::<Cues>()
-            .add_systems(Update, decide.after(crate::happened));
+            .add_systems(
+                Update,
+                // After the trucks: their sounds this frame (`look/truck.rs`).
+                decide.after(crate::happened).after(crate::look::truck::husks),
+            );
         #[cfg(any(target_arch = "wasm32", feature = "sound"))]
         on::build(app);
     }
@@ -143,7 +147,11 @@ const SLOT_WIND: u8 = 0;
 const SLOT_CHARGE: u8 = 1;
 const SLOT_OWN_ENGINE: u8 = 2;
 const SLOT_ENGINE: u8 = 3;
-const SLOT_PROJ: u8 = SLOT_ENGINE + MAX_VEHICLES as u8;
+/// The nearest tyres skidding and the nearest fire (a hull's, a husk's):
+/// one each.
+const SLOT_SKID: u8 = SLOT_ENGINE + MAX_VEHICLES as u8;
+const SLOT_FIRE: u8 = SLOT_SKID + 1;
+const SLOT_PROJ: u8 = SLOT_FIRE + 1;
 const PROJ_LOOPS: usize = mix::LOOPS - SLOT_PROJ as usize;
 
 /// A remote fighter, as last heard.
@@ -216,6 +224,8 @@ pub struct Ear {
     bodies: [Body; MAX_FIGHTERS],
     hulls: [Hull; MAX_VEHICLES],
     own_engine: bool,
+    skid: bool,
+    fire: bool,
     rounds: Vec<Round>,
     /// The next snapshot's rounds, built here and swapped in.
     rounds_next: Vec<Round>,
@@ -487,6 +497,19 @@ impl Ear {
         self.cmds.push(Cmd::Play { clip, at, delay });
     }
 
+    /// [`Ear::at`] at `rate` and `secs` later than its distance says.
+    #[allow(clippy::too_many_arguments)]
+    fn at_rate(&mut self, ears: &Ears, name: &str, p: Vec3, gain: f32, c: Carry, secs: f32, rate: f32) {
+        let Some((mut at, delay)) = ears.place(p, gain, c) else {
+            return;
+        };
+        self.cue(name, Some(p), gain, rate);
+        let Some(clip) = self.clip(name) else { return };
+        at.rate = rate;
+        let delay = delay + (secs.max(0.0) * mix::RATE as f32) as u32;
+        self.cmds.push(Cmd::Play { clip, at, delay });
+    }
+
     /// Keep a held slot going at `p` (start it if it's quiet), or stop it.
     fn hold(
         &mut self,
@@ -572,6 +595,11 @@ pub fn names() -> Vec<String> {
         "vent_0",
         "engine_0",
         "rocket_fly_0",
+        "truck_land_0",
+        "truck_land_1",
+        "crash_0",
+        "skid_0",
+        "fire_0",
         "sticky_sizzle_0",
         "sticky_stick_0",
         "sticky_whine_0",
@@ -676,6 +704,7 @@ pub fn decide(
     settings: Res<crate::settings::Settings>,
     film: Option<Res<crate::film::Film>>,
     seen: Res<crate::Seen>,
+    mut trucks: ResMut<crate::look::truck::HullSound>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -694,6 +723,8 @@ pub fn decide(
             }
             ear.in_match = false;
             ear.own_engine = false;
+            ear.skid = false;
+            ear.fire = false;
             ear.charging = false;
             ear.wind = false;
             ear.held_proj = [false; PROJ_LOOPS];
@@ -778,10 +809,55 @@ pub fn decide(
         }
     }
 
+    hull_sounds(ear, &ears, &mut trucks);
     rounds(ear, &ears, s.core.latest());
     the_match(ear, &s.core, s.core.map.terrain.is_some());
     cues.0.append(&mut ear.cues);
     flush(ear);
+}
+
+/// Pieces of a wreck heard coming down after it.
+const DEBRIS: u8 = 5;
+/// How a truck's tyres and its fire carry.
+const SKID: Carry = Carry { near: 6.0, reach: 70.0 };
+const FIRE: Carry = Carry { near: 4.0, reach: 45.0 };
+
+/// The trucks' own (`look/truck.rs`): a landing's slam, a crash, a husk
+/// striking the ground; the nearest tyres skidding and fire burning, held.
+fn hull_sounds(ear: &mut Ear, ears: &Ears, trucks: &mut crate::look::truck::HullSound) {
+    use crate::look::truck::Clunk;
+    for (what, at, k) in trucks.hits.drain(..) {
+        match what {
+            Clunk::Land => {
+                let n = ear.take("truck_land", 2);
+                ear.at_rate(ears, &n, at, 0.45 + 0.55 * k, SMALL, 0.0, 1.08 - 0.16 * k);
+            }
+            Clunk::Crash => {
+                ear.at_rate(ears, "crash_0", at, 0.4 + 0.6 * k, SMALL, 0.0, 1.1 - 0.2 * k);
+            }
+            Clunk::Bounce => {
+                let n = ear.take("impact_metal", 5);
+                ear.at_rate(ears, &n, at, 0.3 + 0.5 * k, SMALL, 0.0, 0.6 + 0.2 * (1.0 - k));
+                if k > 0.4 {
+                    let n = ear.take("truck_land", 2);
+                    ear.at_rate(ears, &n, at, 0.5 * k, SMALL, 0.0, 0.85);
+                }
+            }
+        }
+    }
+    let nearest = |list: &[(Vec3, f32)]| {
+        list.iter()
+            .copied()
+            .min_by(|a, b| a.0.distance_squared(ears.at).total_cmp(&b.0.distance_squared(ears.at)))
+    };
+    let skid = nearest(&trucks.skids).map(|(p, k)| (p, Vec3::ZERO, 0.25 + 0.6 * k, 0.9 + 0.2 * k, SKID));
+    let mut on = ear.skid;
+    ear.hold(Some(ears), SLOT_SKID, &mut on, "skid_0", skid);
+    ear.skid = on;
+    let fire = nearest(&trucks.fires).map(|(p, k)| (p, Vec3::ZERO, 0.3 + 0.5 * k, 0.9 + 0.15 * k, FIRE));
+    let mut on = ear.fire;
+    ear.hold(Some(ears), SLOT_FIRE, &mut on, "fire_0", fire);
+    ear.fire = on;
 }
 
 fn flush(ear: &mut Ear) {
@@ -972,6 +1048,15 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 ear.at(ears, &n, at, 1.4, BLAST);
                 let n = ear.take("impact_metal", 5);
                 ear.at(ears, &n, at, 1.0, SMALL);
+                ear.at_rate(ears, "crash_0", at, 0.9, BLAST, 0.0, 0.8);
+                // What it threw coming down around it.
+                for k in 0..DEBRIS {
+                    let n = ear.take("impact_metal", 5);
+                    let rate = 0.7 + ear.roll(40) as f32 * 0.01;
+                    let secs = 0.6 + k as f32 * 0.22 + ear.roll(20) as f32 * 0.01;
+                    let off = Vec3::new(ear.roll(9) as f32 - 4.0, 0.0, ear.roll(9) as f32 - 4.0);
+                    ear.at_rate(ears, &n, at + off, 0.45 - k as f32 * 0.06, SMALL, secs, rate);
+                }
             }
             k if k == Kind::Melee as u8 => {
                 let sword = e.c == arms::SWORD as u16;
@@ -1182,6 +1267,9 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
 const STICKY_GAIN: f32 = 1.8;
 const STICKY_CLIMB: f32 = 0.5;
 const STICKY_WHINE_GAIN: f32 = 0.7;
+/// A charged bolt in flight: the same sizzle, lower.
+const ORB_SIZZLE_GAIN: f32 = 1.4;
+const ORB_SIZZLE_RATE: f32 = 0.72;
 const STICKY_FUSE_S: f32 = sim::consts::STICKY_FUSE_MS as f32 / 1000.0;
 
 /// The rounds in flight: a rocket's roar following it, a sticky's sizzle and
@@ -1262,7 +1350,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     // The roar of what flies under its own power.
     for k in 0..ear.rounds.len() {
         let r = ear.rounds[k];
-        if r.kind != ROCKET && r.kind != CANNON && r.kind != STICKY {
+        if r.kind != ROCKET && r.kind != CANNON && r.kind != STICKY && r.kind != CHARGED {
             continue;
         }
         let slot = match r.slot {
@@ -1281,6 +1369,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
                 STICKY_GAIN,
                 1.0 + STICKY_CLIMB * (r.stuck / STICKY_FUSE_S).min(1.0),
             ),
+            CHARGED => ("sticky_sizzle_0", ORB_SIZZLE_GAIN, ORB_SIZZLE_RATE),
             _ => ("rocket_fly_0", 0.8, 1.0),
         };
         ear.hold(

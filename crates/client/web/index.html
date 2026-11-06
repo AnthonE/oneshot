@@ -41,6 +41,11 @@
         padding: 10px 14px; background: rgba(27, 25, 22, .94); color: #ebe6d9; font: 700 12px Aileron, system-ui, sans-serif;
         letter-spacing: .06em; border-left: 3px solid #e3896a; }
       #gpubar a, #stopbar a { color: #e8b931; margin-left: 8px; }
+      /* No sound, and why (web/mix.js): failed, or held by the browser. */
+      #soundbar { position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 5; max-width: min(92vw, 640px);
+        padding: 10px 14px; background: rgba(27, 25, 22, .94); color: #ebe6d9; font: 700 12px Aileron, system-ui, sans-serif;
+        letter-spacing: .06em; border-left: 3px solid #e3896a; pointer-events: none; }
+      #soundbar[hidden] { display: none; }
       /* REPORT A BUG from the game's Esc menu (crates/client/src/pause.rs):
          a text box Bevy hasn't, sent to the server's /bugs (boot.js). */
       #report { position: fixed; inset: 0; z-index: 7; display: flex; align-items: center; justify-content: center;

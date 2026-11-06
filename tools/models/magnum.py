@@ -21,4 +21,5 @@ ASPECT = '4:3'
 
 scene()
 gun, rise = generated('magnum', 0.305, hold=0.39, glow=['#49b8ff'])
+temper(gun)
 finish('magnum', [gun], grip=0.052, rise=rise, long=False, note='a pistol: held by the grip, the barrel forward of it')

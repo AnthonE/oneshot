@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 26;
+pub const PROTO_VER: u16 = 27;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -1108,11 +1108,32 @@ pub const EMBLEM_COLOURS: u16 = 16;
 /// wallet whose floor is under the line wears no emblem. 0 is no lock.
 pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1500, 1650, 1800];
 
-/// What a fighter wears, as the server checked it: its skin and its emblem.
+/// Gear, by the id the wire carries, a slot each: worn with any skin, and
+/// with each other. Cosmetic only, as a skin (docs/DESIGN.md §15). Every
+/// slot is open to everyone, with no rank lock; what goes in it is worn
+/// only if the wallet owns it on Elo Pros, under its name here. Nobody
+/// owns any by default: none is the only gear everyone has.
+pub const HEADWEAR: [&str; 2] = ["none", "shades"];
+pub const FOOTWEAR: [&str; 2] = ["none", "boots"];
+pub const GEAR_NONE: u8 = 0;
+
+/// `g` if it names gear in `slot` ([`HEADWEAR`], [`FOOTWEAR`]), else none.
+pub const fn gear_valid(slot: &[&str], g: u8) -> u8 {
+    if (g as usize) < slot.len() {
+        g
+    } else {
+        GEAR_NONE
+    }
+}
+
+/// What a fighter wears, as the server checked it: its skin, its emblem and
+/// its gear.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Look {
     pub skin: u8,
     pub emblem: Emblem,
+    pub headwear: u8,
+    pub footwear: u8,
 }
 
 /// An emblem's parts: (glyph, field, glyph colour, field colour).
@@ -1209,12 +1230,16 @@ pub enum Msg {
         party: u32,
         /// The client's sim's stamp (`sim::STAMP`): a server whose own
         /// differs refuses it ([`REFUSE_VERSION`]), as it does an old
-        /// `proto`. Last on the wire, and 0 when a client from before it
-        /// sent none, so that client still reads its refusal.
+        /// `proto`. 0 when a client from before it sent none, so that
+        /// client still reads its refusal.
         stamp: u32,
+        /// The gear it would wear ([`HEADWEAR`], [`FOOTWEAR`]): none when
+        /// an older client sent none, so it reads its refusal.
+        headwear: u8,
+        footwear: u8,
         /// Ranked: the match Elo Pros' queue sent it to (`lobbies.py`),
         /// whose sides the server seats; none for the server's own queue.
-        /// After the stamp, and none when a client sent none.
+        /// Last on the wire, and none when a client sent none.
         queued: QueueMatch,
     },
     /// Server → client, while queued: Elo Pros' queue put the match on
@@ -1255,6 +1280,9 @@ pub enum Msg {
         skin: u8,
         /// The emblem the server checked; [`EMBLEM_NONE`] otherwise.
         emblem: Emblem,
+        /// The gear the server checked; [`GEAR_NONE`] otherwise.
+        headwear: u8,
+        footwear: u8,
     },
     Kill {
         killer: u8,
@@ -1454,6 +1482,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             emblem,
             party,
             stamp,
+            headwear,
+            footwear,
             queued,
         } => {
             w.write(1, 8)?;
@@ -1465,6 +1495,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*emblem as u32, 16)?;
             w.write(*party, party::CODE_BITS)?;
             w.write(*stamp, 32)?;
+            w.write(*headwear as u32, 8)?;
+            w.write(*footwear as u32, 8)?;
             w.write(queued.len as u32, QUEUE_MATCH_LEN_BITS)?;
             for &b in &queued.bytes[..queued.len as usize] {
                 w.write(b as u32, 7)?;
@@ -1514,6 +1546,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             name,
             skin,
             emblem,
+            headwear,
+            footwear,
         } => {
             w.write(4, 8)?;
             w.write(*slot as u32, SLOT_BITS)?;
@@ -1522,6 +1556,8 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_name(&mut w, name)?;
             w.write(*skin as u32, 8)?;
             w.write(*emblem as u32, 16)?;
+            w.write(*headwear as u32, 8)?;
+            w.write(*footwear as u32, 8)?;
         }
         Msg::Kill {
             killer,
@@ -1741,6 +1777,8 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             emblem: r.read(16)? as u16,
             party: r.read(party::CODE_BITS)?,
             stamp: if r.remaining_bits() >= 32 { r.read(32)? } else { 0 },
+            headwear: if r.remaining_bits() >= 8 { r.read(8)? as u8 } else { 0 },
+            footwear: if r.remaining_bits() >= 8 { r.read(8)? as u8 } else { 0 },
             queued: if r.remaining_bits() >= QUEUE_MATCH_LEN_BITS as usize {
                 r_queue_match(&mut r)?
             } else {
@@ -1788,6 +1826,8 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             name: r_name(&mut r)?,
             skin: r.read(8)? as u8,
             emblem: r.read(16)? as u16,
+            headwear: r.read(8)? as u8,
+            footwear: r.read(8)? as u8,
         },
         5 => Msg::Kill {
             killer: r.read(SLOT_BITS)? as u8,

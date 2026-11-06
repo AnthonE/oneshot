@@ -20,4 +20,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('ar', 0.78, hold=0.34, glow=['#49b8ff'])
+temper(gun)
 finish('ar', [gun], grip=0.35, rise=rise, fore=0.51, long=True, note='bullpup: the mag behind the grip, the display over it')

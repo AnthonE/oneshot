@@ -263,9 +263,24 @@ impl Client {
         mode: u8,
         skin: u8,
         emblem: u16,
+        headwear: u8,
+        footwear: u8,
         party: u32,
     ) -> Result<Client, JsValue> {
-        Client::connect_queued(addr, hash, name, pass, mode, skin, emblem, party, String::new()).await
+        Client::connect_queued(
+            addr,
+            hash,
+            name,
+            pass,
+            mode,
+            skin,
+            emblem,
+            headwear,
+            footwear,
+            party,
+            String::new(),
+        )
+        .await
     }
 
     /// [`Client::connect`] for match `queued` (Elo Pros' queue's id, as a
@@ -279,6 +294,8 @@ impl Client {
         mode: u8,
         skin: u8,
         emblem: u16,
+        headwear: u8,
+        footwear: u8,
         party: u32,
         queued: String,
     ) -> Result<Client, JsValue> {
@@ -308,9 +325,15 @@ impl Client {
             .map_err(|e| js_err("stream", &e))?
             .unchecked_into();
         let sw = Rc::new(bidi.writable().get_writer().map_err(|e| js_err("stream writer", &e))?);
+        let look = proto::Look {
+            skin,
+            emblem,
+            headwear,
+            footwear,
+        };
         let hello = match proto::QueueMatch::new(&queued) {
-            Some(q) => Session::hello_queued(&name, pass, mode, proto::Look { skin, emblem }, q),
-            None => Session::hello(&name, pass, mode, proto::Look { skin, emblem }, party),
+            Some(q) => Session::hello_queued(&name, pass, mode, look, q),
+            None => Session::hello(&name, pass, mode, look, party),
         };
         write_frame(&sw, &hello).await?;
         let stream = sw.clone();
@@ -681,10 +704,14 @@ impl Client {
                     name,
                     skin,
                     emblem,
+                    headwear,
+                    footwear,
                 } => {
                     set("type", "seat".into());
                     set("skin", skin.into());
                     set("emblem", emblem.into());
+                    set("headwear", headwear.into());
+                    set("footwear", footwear.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());

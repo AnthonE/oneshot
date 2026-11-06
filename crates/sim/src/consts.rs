@@ -328,16 +328,37 @@ pub const ENTER_R: f32 = 3.6;
 /// lethal, below it scaled.
 pub const SPLAT_SPEED: f32 = 5.0;
 pub const SPLAT_KILL: f32 = 11.0;
-/// How much of a blast's push a vehicle takes.
-pub const VEH_PUSH_K: f32 = 0.3;
+/// How much of a blast's push a vehicle takes along the ground, and the
+/// speed up off its wheels it is thrown at (m/s), each at full strength
+/// from a charge of `VEH_LIFT_DMG` or more (a rocket's: a hit beside it
+/// throws it about 3 m up and 9 m off, a second and a half in the air); a
+/// smaller one's less. Never faster up than `VEH_LIFT_MAX`.
+pub const VEH_PUSH_K: f32 = 0.7;
+pub const VEH_BLAST_LIFT: f32 = 8.5;
+pub const VEH_LIFT_DMG: i32 = 230;
+pub const VEH_LIFT_MAX: f32 = 12.0;
 
 // Capture the Flag.
 /// How near (flat) a fighter must come to a flag to take, return or score
 /// it, and how far above or below.
 pub const FLAG_REACH: f32 = 1.2;
 pub const FLAG_RISE: f32 = 2.0;
-/// A flag left on the floor goes home on its own after this.
-pub const FLAG_RETURN_MS: u32 = 30_000;
-/// Nobody takes a flag in its first second on the floor, so a carrier who
-/// lets go doesn't pick it straight back up.
-pub const FLAG_REGRAB_MS: u32 = 1000;
+/// A flag left on the floor goes home on its own after this, untouched
+/// (Halo 3's reset; an enemy's hand on it starts it again).
+pub const FLAG_RESET_MS: u32 = 30_000;
+/// A defender standing by their own flag on the floor takes it home in
+/// this long (Halo 3's return); each more of them in reach, up to
+/// `FLAG_RETURNERS`, adds their own pace; an enemy in reach holds it.
+pub const FLAG_RETURN_MS: u32 = 15_000;
+pub const FLAG_RETURNERS: u32 = 3;
+/// A carrier's pace: Halo 2's "slow with flag". Why a carrier juggles it
+/// (drops it ahead and runs on at full speed to take it up again).
+pub const FLAG_PACE: f32 = 0.85;
+/// A dropped flag is tossed ahead of the carrier, m/s (forward along the
+/// aim, flat, and up), on top of how they were moving. Nobody takes it
+/// until it lands.
+pub const FLAG_TOSS: f32 = 3.5;
+pub const FLAG_TOSS_UP: f32 = 3.0;
+/// Overtime: the clock run out with a flag away from home, the match
+/// goes on until it is home or captured, or for this long at most.
+pub const SUDDEN_DEATH_MS: u32 = 90_000;

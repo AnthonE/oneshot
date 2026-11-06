@@ -16,8 +16,10 @@ use super::table::{Layer, Matter, Weapon};
 use super::{Fx, Scene, BLAST_FLASH};
 use crate::look::shake;
 
-/// A wreck burns this long.
-const BURN_S: f32 = 4.5;
+/// A wreck burns this long (its husk smoulders after: `look/truck.rs`).
+const BURN_S: f32 = 7.0;
+/// A wreck's fire rides its husk (`carry`) if the husk is within this of it.
+const CARRY_M: f32 = 2.5;
 /// Flames and smoke puffs a burning hull throws a second.
 const BURN_HZ: f32 = 9.0;
 
@@ -55,6 +57,8 @@ const SOOT: Color = Color::srgb(0.2, 0.19, 0.18);
 const FIRE_RING: Color = Color::srgb(1.0, 0.8, 0.55);
 /// Ion blue, for the sticky's.
 const ION_RING: Color = Color::srgb(0.45, 0.65, 1.0);
+/// What an arc's blue is tinted in a green burst.
+const GREEN_ARC: Color = Color::srgb(0.45, 1.0, 0.5);
 /// An ember's orange: what the Embers layer's white is tinted.
 const EMBER: Color = Color::srgb(1.0, 0.45, 0.1);
 
@@ -83,35 +87,62 @@ pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     boom(fx, scene, at, big);
 }
 
-/// The ion cannon's ball bursting: green light, a green ring, a baked
-/// burst of green plasma, sparks, no fire or smoke.
+/// The ion cannon's ball bursting.
 fn plasma(fx: &mut Fx, at: Vec3) {
+    burst_green(fx, at, 1.0, true);
+}
+
+/// Green plasma bursting, `k` of the cannon's (a charged bolt's is smaller): a
+/// hard white-green flash, a mint shell, a baked burst of plasma, lightning
+/// crawling out of it, sparks. Light and lines, no fire or smoke. `ring`: a ring
+/// across the floor under it too, for what goes off on the ground; on a wall or
+/// a body, a flat ring is a line in the air.
+pub fn burst_green(fx: &mut Fx, at: Vec3, k: f32, ring: bool) {
     let green = super::pool::Particle {
         left: 0.25,
         life: 0.25,
         pos: at.into(),
-        size0: 1.0,
-        size1: 4.0,
+        size0: 1.0 * k,
+        size1: 4.0 * k,
         c0: [3.0, 12.0, 4.0, 1.0],
         c1: [0.3, 1.5, 0.4, 0.0],
         cell: super::atlas::GLOW,
         ..Default::default()
     };
     fx.glow.spawn(green);
+    if ring {
+        fx.glow.spawn(super::pool::Particle {
+            size0: 0.5 * k,
+            size1: 9.0 * k,
+            left: 0.35,
+            life: 0.35,
+            cell: super::atlas::RING,
+            orient: super::pool::Orient::Flat,
+            pos: (at - Vec3::Y * 0.4 * k).into(),
+            c0: [1.5, 6.0, 2.0, 0.8],
+            c1: [0.2, 0.8, 0.3, 0.0],
+            ..green
+        });
+    }
+    // Its first frame, white inside.
     fx.glow.spawn(super::pool::Particle {
-        size0: 0.5,
-        size1: 9.0,
-        left: 0.35,
-        life: 0.35,
-        cell: super::atlas::RING,
-        orient: super::pool::Orient::Flat,
-        pos: (at - Vec3::Y * 0.4).into(),
-        c0: [1.5, 6.0, 2.0, 0.8],
-        c1: [0.2, 0.8, 0.3, 0.0],
-        ..green
+        left: 0.05,
+        life: 0.05,
+        pos: at.into(),
+        size0: 1.5 * k,
+        size1: 0.9 * k,
+        c0: [14.0, 22.0, 15.0, 1.0],
+        c1: [2.0, 8.0, 3.0, 0.0],
+        cell: super::atlas::GLOW,
+        ..Default::default()
     });
-    fx.energy(at, TONE_GREEN, 2.0, 3);
-    for _ in 0..24 {
+    *super::shell::claim(&mut fx.shocks) = super::shell::mint(at, k);
+    fx.energy(at, TONE_GREEN, 2.0 * k, ((3.0 * k).ceil() as usize).max(2));
+    for _ in 0..((9.0 * k).ceil() as usize).max(4) {
+        let d = fx.unit();
+        fx.emit_tint(Layer::Arcs, 1, at + d * 0.4 * k, d, GREEN_ARC, 2.2 * k);
+    }
+    for _ in 0..((24.0 * k).ceil() as usize).max(8) {
         let d = fx.unit();
         let life = fx.range(0.3, 0.6);
         let speed = fx.range(4.0, 11.0);
@@ -133,12 +164,13 @@ fn plasma(fx: &mut Fx, at: Vec3) {
         });
     }
     let eye = fx.eye;
-    fx.shake.add_at(0.8, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
+    fx.shake
+        .add_at(0.8 * k, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
     fx.flash(
         at,
         super::FlashDef {
-            lumens: 1_500_000.0,
-            range: 14.0,
+            lumens: 1_500_000.0 * k,
+            range: 14.0 * k.sqrt(),
             life: 0.35,
             color: [0.4, 1.0, 0.45],
         },
@@ -404,6 +436,27 @@ pub fn trail(fx: &mut Fx, dt: f32) {
             ..Default::default()
         });
         fx.trailers[i] = t;
+    }
+}
+
+/// The fire burning nearest `from` (within [`CARRY_M`]), moved to `to`: a
+/// wreck's, riding its husk as it flies. How much of its burn is left (0:
+/// none was there).
+pub fn carry(fx: &mut Fx, from: Vec3, to: Vec3) -> f32 {
+    let near = (0..fx.burning.len())
+        .filter(|&i| fx.burning[i].left > 0.0)
+        .min_by(|&a, &b| {
+            fx.burning[a]
+                .at
+                .distance_squared(from)
+                .total_cmp(&fx.burning[b].at.distance_squared(from))
+        });
+    match near {
+        Some(i) if fx.burning[i].at.distance(from) < CARRY_M => {
+            fx.burning[i].at = to;
+            fx.burning[i].left / BURN_S
+        }
+        _ => 0.0,
     }
 }
 

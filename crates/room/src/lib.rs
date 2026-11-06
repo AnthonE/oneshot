@@ -642,6 +642,8 @@ impl Room {
                 proto::SKIN_STANDARD
             },
             emblem: proto::emblem_valid(look.emblem),
+            headwear: proto::gear_valid(&proto::HEADWEAR, look.headwear),
+            footwear: proto::gear_valid(&proto::FOOTWEAR, look.footwear),
         };
         self.fogs[s] = fog::Fog::default();
         let team = self.team_of(s);
@@ -705,6 +707,8 @@ impl Room {
             name,
             skin: self.looks[s].skin,
             emblem: self.looks[s].emblem,
+            headwear: self.looks[s].headwear,
+            footwear: self.looks[s].footwear,
         }
     }
 
@@ -1007,6 +1011,10 @@ fn build_encoded(
             queue.push(e);
         }
     }
+    // What still waits for its first snapshot (a firefight's backlog) is
+    // told as fog has it now: who went out of sight while it waited is
+    // only heard, or not told at all.
+    queue.list.retain_mut(|(since, e)| since.is_some() || refog(e, &known));
     for (_, e) in queue.list.iter().take(MAX_SNAP_EVENTS) {
         snap.events[snap.n_events as usize] = *e;
         snap.n_events += 1;
@@ -1221,7 +1229,8 @@ fn add_flags(snap: &mut Snapshot, w: &World) {
             state: f.state,
             carrier: if held { f.carrier } else { 0 },
             pos: if held { V3::ZERO } else { f.pos },
-            down_s: f.down_for.div_ceil(TICK_HZ).min(63) as u8,
+            // Its clock, or its defenders' return if that is sooner.
+            down_s: f.home_in.div_ceil(TICK_HZ).min(63) as u8,
         };
     }
     snap.n_flags = 2;
@@ -1250,6 +1259,30 @@ pub const HEARD: u8 = 1;
 fn coarse(p: V3) -> V3 {
     let g = HEARD_GRID_M;
     V3::new((p.x / g).round() * g, (p.y / g).round() * g, (p.z / g).round() * g)
+}
+
+/// An event filtered when it happened, again for a snapshot later: `false`
+/// if it may no longer be told at all. Only ever tells less.
+fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
+    use sim::events::Kind as Ev;
+    let a = e.a as usize;
+    match e.kind {
+        k if (k == Ev::Shot as u8 || k == Ev::Throw as u8) && e.part != HEARD && !known(a) => {
+            let at = coarse(e.pos);
+            e.part = HEARD;
+            e.pos = at;
+            e.end = at;
+            true
+        }
+        k if k == Ev::Hit as u8 || k == Ev::Kill as u8 => {
+            if !known(e.b as usize) {
+                e.pos = V3::ZERO;
+            }
+            true
+        }
+        k if k == Ev::Spawn as u8 || k == Ev::Pickup as u8 || k == Ev::Melee as u8 || k == Ev::Ride as u8 => known(a),
+        _ => true,
+    }
 }
 
 /// What client `s` may be told of an event: all of it, a heard version
