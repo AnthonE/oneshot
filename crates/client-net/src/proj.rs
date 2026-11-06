@@ -424,8 +424,15 @@ pub(crate) fn ended(frames: &[Frame], pid: u16) -> bool {
 /// frames around it, or run on at most `cap` ticks past the last, then
 /// held. None once the render tick `rt` reaches the frame it is missing
 /// from (it went: its held blast plays then), and before the frame it was
-/// first sent in.
-pub(crate) fn sample(frames: &[Frame], pid: u16, t: f64, rt: f64, cap: f64, map: &Map) -> Option<Sample> {
+/// first sent in. A run-on goes on from where `memo` left this round
+/// ([`coast_on`]: the same steps, so the same bits).
+pub(crate) fn sample(
+    frames: &[Frame],
+    pid: u16,
+    (t, rt, cap): (f64, f64, f64),
+    map: &Map,
+    memo: &Cell<Option<Coasted>>,
+) -> Option<Sample> {
     let li = frames.iter().rposition(|f| find(f, pid).is_some())?;
     let fi = frames.iter().position(|f| find(f, pid).is_some())?;
     let end = frames.get(li + 1).map(|f| f.tick as f64);
@@ -477,7 +484,7 @@ pub(crate) fn sample(frames: &[Frame], pid: u16, t: f64, rt: f64, cap: f64, map:
             return Some(out);
         }
     }
-    let (pos, vel, _) = coast(pa.kind, pa.pos, pa.vel, (t - a.tick as f64).clamp(0.0, cap), map);
+    let (pos, vel, _) = coast_on(memo, pa.kind, pa.pos, pa.vel, (t - a.tick as f64).clamp(0.0, cap), map);
     out.pos = pos;
     out.vel = vel;
     Some(out)

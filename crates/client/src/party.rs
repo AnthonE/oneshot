@@ -135,6 +135,30 @@ pub fn voice_key(m: &Member) -> String {
     }
 }
 
+/// Each tag's [`voice_key`], made again only when the party changes, not
+/// a string a voice frame.
+#[derive(Default)]
+struct VoiceKeys {
+    gen: Option<u32>,
+    keys: [String; 16],
+}
+
+impl VoiceKeys {
+    fn of(&mut self, view: &PartyView, tag: u8) -> &str {
+        if self.gen != Some(view.gen) {
+            self.gen = Some(view.gen);
+            for (t, k) in self.keys.iter_mut().enumerate() {
+                *k = view
+                    .members()
+                    .iter()
+                    .find(|m| m.tag as usize == t)
+                    .map_or_else(|| format!("tag:{t}"), voice_key);
+            }
+        }
+        &self.keys[(tag & 15) as usize]
+    }
+}
+
 /// What the title asks of the party.
 #[derive(Clone, Debug)]
 pub enum Do {
@@ -225,7 +249,7 @@ fn pump(
     in_match: Res<InMatch>,
     settle: Res<crate::loading::Settle>,
     time: Res<Time<Real>>,
-    (mut polled, mut mic_frames): (Local<f32>, Local<Vec<proto::voice::VoiceFrame>>),
+    (mut polled, mut mic_frames, mut keys): (Local<f32>, Local<Vec<proto::voice::VoiceFrame>>, Local<VoiceKeys>),
 ) {
     let now = time.elapsed_secs();
     let name = sent_name(&player);
@@ -397,17 +421,13 @@ fn pump(
     // Voice: theirs to the page's speakers, ours from its mic.
     for f in link.take_voice() {
         let tag = f.from & 15;
-        let key = view
-            .members()
-            .iter()
-            .find(|m| m.tag == tag)
-            .map_or_else(|| format!("tag:{tag}"), voice_key);
+        let key = keys.of(&view, tag);
         view.heard[tag as usize] = if f.flags & proto::voice::VOICE_END != 0 {
             -1.0
         } else {
             now
         };
-        play_voice(&f, &key);
+        play_voice(&f, key);
     }
     take_mic(&mut mic_frames);
     for f in mic_frames.drain(..) {
@@ -445,6 +465,9 @@ fn lights(view: Res<PartyView>, time: Res<Time<Real>>, mut q: Query<(&TalkLight,
 #[derive(Component)]
 struct TalkHud;
 
+/// Who was talking (a bit a tag) in which party (its `gen`), last shown.
+type Said = Option<(u16, u32)>;
+
 /// In a match: who in the party is talking, at the left, out of the way.
 fn talk_hud(
     view: Res<PartyView>,
@@ -452,9 +475,23 @@ fn talk_hud(
     time: Res<Time<Real>>,
     mut commands: Commands,
     huds: Query<Entity, With<TalkHud>>,
-    mut shown: Local<Vec<String>>,
+    (mut shown, mut said): (Local<Vec<String>>, Local<Said>),
 ) {
     let now = time.elapsed_secs();
+    // Who talks, and the party they're in: the names are made only when
+    // that changes, not every frame someone talks.
+    let talking = if in_match.0 {
+        view.members()
+            .iter()
+            .filter(|m| view.talking(m.tag, now))
+            .fold(0u16, |b, m| b | 1 << (m.tag & 15))
+    } else {
+        0
+    };
+    if *said == Some((talking, view.gen)) {
+        return;
+    }
+    *said = Some((talking, view.gen));
     let want: Vec<String> = if in_match.0 {
         view.members()
             .iter()

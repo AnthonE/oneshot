@@ -543,19 +543,26 @@ async fn session(
     // messages in order until the sim closes the session or cuts it.
     let outlet::Inlet {
         mut datagrams,
+        spare,
         mut streams,
     } = inlet;
     let (wconn, wctx) = (conn.clone(), ctx.clone());
     let snapshots = tokio::spawn(async move {
         while let Some(d) = datagrams.recv().await {
-            let d = outlet::newest(&mut datagrams, d, &wctx.counts);
-            if wconn.max_datagram_size().is_some_and(|max| d.len() <= max) {
-                if wconn.send_datagram(d).is_err() {
+            let d = outlet::newest(&mut datagrams, d, &wctx.counts, &spare);
+            // One lock of the connection, not two: the send itself says
+            // when a snapshot is over what the path takes.
+            match wconn.send_datagram(&d) {
+                Ok(()) => {}
+                Err(wtransport::error::SendDatagramError::TooLarge) => {
+                    wctx.counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
                     wctx.health.send_errors.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                wctx.counts.datagrams_oversize.fetch_add(1, Ordering::Relaxed);
             }
+            // QUIC copied it: the buffer is the next snapshot's.
+            spare.give(d);
         }
     });
     // The connection's round trip and loss, each journal window and at

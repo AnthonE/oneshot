@@ -7,6 +7,7 @@
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
+    mesh_functions,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
@@ -24,7 +25,14 @@ struct Paint {
     // x, y: the bark's luma (before the lift) where paint starts to take and
     // where it covers; z the lift; w the paint's roughness.
     bite: vec4<f32>,
+    // rgb: the light the shield's shell casts on it at a flare of 1, nits:
+    // gold, and an overshield's green.
+    flare_gold: vec4<f32>,
+    flare_over: vec4<f32>,
 }
+
+// `shield::LEVEL_MAX`: what the tag's 16 bits of level run to.
+const LEVEL_MAX: f32 = 4.0;
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> paint: Paint;
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var mask_tex: texture_2d<f32>;
@@ -56,6 +64,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         pbr_input.material.emissive.a,
     );
 #endif
+
+    // The shell's light on it, as this mesh's tag says (`shield::Flare`):
+    // none while camouflage hides it.
+    let tag = mesh_functions::get_tag(in.instance_index);
+    if (tag & (1u << 18u)) == 0u {
+        let level = f32(tag & 0xffffu) / 65535.0 * LEVEL_MAX;
+        let flare = select(paint.flare_gold.rgb, paint.flare_over.rgb, ((tag >> 16u) & 3u) == 1u);
+        pbr_input.material.emissive = vec4<f32>(
+            pbr_input.material.emissive.rgb + flare * level,
+            pbr_input.material.emissive.a,
+        );
+    }
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

@@ -19,7 +19,7 @@ struct Sea {
     top: vec4<f32>,
     hollow: vec4<f32>,
     // x the big billows' size, m; y how steeply they stand (the normal's
-    // tilt at full); zw the drift, m, already wrapped.
+    // tilt at full); zw 0 (the drift is `sea_motion`'s).
     shape: vec4<f32>,
     // xy the sheet's middle (world x, z); z how far out from it the sheet
     // begins to go to the fog's colour, w where it has gone as far as it
@@ -31,6 +31,9 @@ struct Sea {
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> sea: Sea;
+// What moves every frame (`sea_motion.rs`), written in place so the
+// material never changes: texel 1's zw is the drift, m, already wrapped.
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var sea_motion: texture_2d<f32>;
 
 fn hash2(c: vec2<i32>) -> f32 {
     var h = (bitcast<u32>(c.x) * 0x8da6b343u) ^ (bitcast<u32>(c.y) * 0xd8163841u);
@@ -120,7 +123,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A pixel's footprint: the mean of its two sides, so a grazing look
     // (long one way, short the other) keeps the big billows far out.
     let px = sqrt(length(dpdx(wp)) * length(dpdy(wp)));
-    let p = wp.xz + sea.shape.zw;
+    let p = wp.xz + textureLoad(sea_motion, vec2<i32>(1, 0), 0).zw;
     // The height of the billows here and a step aside, for their slope:
     // the step a pixel's width at least, so a far pixel's normal is flat.
     let e = max(px, sea.shape.x * 0.02);

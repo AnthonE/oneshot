@@ -119,6 +119,16 @@ pub fn medium() -> ScatteringMedium {
     m.with_density_multiplier(AIR_DENSITY)
 }
 
+/// [`sky::ground_air`] of [`medium`]: the same air every time, worked out
+/// once (fog is asked for every frame on some screens, and the medium's
+/// terms are on the heap).
+///
+/// [`sky::ground_air`]: super::sky::ground_air
+fn ground_air() -> (Vec3, Vec3) {
+    static AIR: std::sync::OnceLock<(Vec3, Vec3)> = std::sync::OnceLock::new();
+    *AIR.get_or_init(|| super::sky::ground_air(&medium()))
+}
+
 /// `SunDisk::intensity` for a light of `illuminance` lux seen at `ev100`:
 /// [`SUN_DISK_INTENSITY`], lowered where the disk would pass
 /// [`SUN_DISK_PEAK`] (TAA's half-float history rounds it to a flicker past
@@ -261,7 +271,7 @@ pub fn fog_for(mood: &super::mood::Mood, atmosphere: bool, carried: f32) -> Dist
     let glow = if atmosphere {
         sky::FOG_SUN_GLOW
     } else {
-        let floor = super::fill::luminance(sky::ground_air(&medium()).0.to_array()) * HAZE_SCALE;
+        let floor = super::fill::luminance(ground_air().0.to_array()) * HAZE_SCALE;
         sky::FOG_SUN_GLOW * all / (all + floor).max(f32::EPSILON)
     };
     let tint = sun_light(mood, atmosphere);
@@ -270,7 +280,7 @@ pub fn fog_for(mood: &super::mood::Mood, atmosphere: bool, carried: f32) -> Dist
         falloff: if atmosphere {
             bevy::pbr::FogFalloff::Exponential { density: sigma }
         } else {
-            let (extinction, inscattering) = sky::ground_air(&medium());
+            let (extinction, inscattering) = ground_air();
             bevy::pbr::FogFalloff::Atmospheric {
                 extinction: extinction * HAZE_SCALE + Vec3::splat(sigma),
                 inscattering: inscattering * HAZE_SCALE + Vec3::splat(sigma),
