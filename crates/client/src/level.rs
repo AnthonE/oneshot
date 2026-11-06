@@ -1163,7 +1163,9 @@ pub fn build(
                 None => continue,
             },
             sim::solid::Shape::Revolve { .. } | sim::solid::Shape::Sweep { .. } => {
-                match crate::look::curve::profile_mesh(sol, tile) {
+                // The windows' honeycomb lies flat over a dome, its cells
+                // one size from rim to hub.
+                match crate::look::curve::profile_mesh(sol, tile, l == GOLD) {
                     Some(m) => (m, Transform::default()),
                     None => continue,
                 }

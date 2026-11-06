@@ -141,6 +141,28 @@
       ]
     },
     {
+      "name": "red's doors' frames, proud of each face",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"arch": [[-11.75, 0.0], [-11.65, 0.0]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.3, "look": "alien_red"},
+        {"arch": [[-13.25, 0.0], [-13.35, 0.0]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.3, "look": "alien_red"},
+        {"arch": [[-18.528, 4.746], [-18.562, 4.84]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.3, "look": "alien_red"},
+        {"arch": [[-18.014, 3.336], [-17.98, 3.242]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.3, "look": "alien_red"}
+      ]
+    },
+    {
+      "name": "red's doors' frames' light",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"arch": [[-11.68, 0.0], [-11.62, 0.0]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.04, "off": 0.12, "look": "red_glow"},
+        {"arch": [[-13.32, 0.0], [-13.38, 0.0]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.04, "off": 0.12, "look": "red_glow"},
+        {"arch": [[-18.551, 4.812], [-18.572, 4.868]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.04, "off": 0.12, "look": "red_glow"},
+        {"arch": [[-17.991, 3.27], [-17.97, 3.214]], "width": 2.2, "spring": 2.1, "crown": 2.7, "frame": 0.04, "off": 0.12, "look": "red_glow"}
+      ]
+    },
+    {
       "name": "red's gallery: a walkway curving north from its pod's roof to the ring",
       "mirror": true,
       "boxes": [

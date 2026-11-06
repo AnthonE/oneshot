@@ -114,6 +114,7 @@
 //   { vault: [x0, z0, x1, z1], along?, spring, crown, roof | band }  a barrel ceiling
 //   { cupola: [x, z], r, spring, crown, roof | band, s?, from?, to? }   a dome's
 //   { arch: axis, width, spring, crown, top, jamb }    an arched opening
+//   { arch: axis, width, spring, crown, frame, off? }  a band round one
 //   { pipe: axis, r, y }  { walk: axis, width, y, thick, rim? }
 //   { spiral: [x, z], r, width, from, to, y: [ya, yb], base? }  a curved ramp
 // Metres, y up, the floor at y = 0. On a terrain a box stands at the
