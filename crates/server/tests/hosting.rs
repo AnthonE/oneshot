@@ -33,6 +33,11 @@ struct Player {
 /// Connects pinning `hash`, says hello for casual, and returns the player
 /// and the first message back.
 async fn join(port: u16, hash: [u8; 32], name: &str) -> Result<(Player, Option<Msg>), String> {
+    join_stamped(port, hash, name, sim::STAMP).await
+}
+
+/// [`join`], its hello carrying `stamp` for its sim's.
+async fn join_stamped(port: u16, hash: [u8; 32], name: &str, stamp: u32) -> Result<(Player, Option<Msg>), String> {
     let cfg = ClientConfig::builder()
         .with_bind_address("127.0.0.1:0".parse().unwrap())
         .with_server_certificate_hashes([Sha256Digest::from(hash)])
@@ -58,6 +63,7 @@ async fn join(port: u16, hash: [u8; 32], name: &str) -> Result<(Player, Option<M
             skin: 0,
             emblem: 0,
             party: 0,
+            stamp,
         },
         &mut f,
     )
@@ -101,6 +107,24 @@ async fn past_capacity_a_hello_is_answered_full() {
             reason: proto::REFUSE_FULL
         })
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_whose_sim_is_not_ours_is_told_to_reload() {
+    // A map or a rule changed since the page loaded: the wire is the same,
+    // the walls are not.
+    let h = server::run(local()).await.unwrap();
+    let (_a, first) = join_stamped(h.addr.port(), h.cert_hash, "stale", sim::STAMP ^ 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        first,
+        Some(Msg::Refuse {
+            reason: proto::REFUSE_VERSION
+        })
+    );
+    let (_b, second) = join(h.addr.port(), h.cert_hash, "fresh").await.unwrap();
+    assert!(matches!(second, Some(Msg::Welcome { .. })), "{second:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
