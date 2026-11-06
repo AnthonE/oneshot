@@ -736,7 +736,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         )
         .add_systems(
             Update,
-            (hud::prompt, hud::reticle_tint, hud::board)
+            (hud::prompt, hud::feed, hud::reticle_tint, hud::board)
                 .after(hud::draw)
                 .run_if(in_match),
         );
