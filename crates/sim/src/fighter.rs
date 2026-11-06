@@ -198,6 +198,7 @@ impl Fighter {
             vel: V3::ZERO,
             grounded: true,
             crouched: false,
+            duck: 0,
         };
         self.yaw = yaw;
         self.pitch = 0;
@@ -529,6 +530,7 @@ impl Thing for Fighter {
         h.v3(self.body.vel);
         h.bool(self.body.grounded);
         h.bool(self.body.crouched);
+        h.u8(self.body.duck);
         h.u16(self.yaw);
         h.u16(self.pitch as u16);
         h.i32(self.shield);

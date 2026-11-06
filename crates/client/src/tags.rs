@@ -24,7 +24,7 @@
 //! the session's state and nothing is sent.
 
 use bevy::prelude::*;
-use sim::consts::{CROUCH_EYE, EYE, HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH};
+use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH};
 use sim::geom::{ray_cylinder, ray_sphere, V3};
 
 use crate::{hud, ui, Eye, LinkRes, Look};
@@ -150,7 +150,7 @@ pub fn draw(
                 mate: true,
             });
         }
-        let h = if f.body.crouched { CROUCH_EYE } else { EYE };
+        let h = f.body.eye_h();
         let from = V3::new(p.x, p.y + h, p.z);
         let (sy, cy) = look.yaw.sin_cos();
         let (sp, cp) = look.pitch.sin_cos();
@@ -229,6 +229,7 @@ fn to_ndc(view_from_world: bevy::math::Affine3A, proj: &Projection, at: Vec3) ->
 mod tests {
     use super::*;
     use client_net::core::Drawn;
+    use sim::consts::EYE;
 
     fn foe(slot: u8, x: f32, z: f32) -> Drawn {
         Drawn {

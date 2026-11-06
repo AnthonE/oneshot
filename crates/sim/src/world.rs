@@ -612,11 +612,8 @@ impl World {
             if !p.alive {
                 continue;
             }
-            let (hy, top) = if p.crouched {
-                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
-            } else {
-                (HEAD_Y, HIT_TOP)
-            };
+            let hy = crate::movement::ducked(p.duck, HEAD_Y, HEAD_Y_CROUCH);
+            let top = crate::movement::ducked(p.duck, HIT_TOP, HIT_TOP_CROUCH);
             if let Some(t) = ray_sphere(eye, dir, p.pos + V3::new(0.0, hy, 0.0), HEAD_R + pad, near) {
                 if t < near || best.is_none() {
                     near = t;
@@ -689,7 +686,7 @@ impl World {
             if !p.alive {
                 continue;
             }
-            let c = p.pos + V3::new(0.0, if p.crouched { CHEST_Y_CROUCH } else { CHEST_Y }, 0.0);
+            let c = p.pos + V3::new(0.0, crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH), 0.0);
             let to = c - eye;
             let t = to.dot(dir);
             if t <= 0.0 || t > reach {
@@ -2490,7 +2487,7 @@ fn touches(at: V3, flag: V3) -> bool {
 fn pose(f: &Fighter) -> Pose {
     Pose {
         pos: f.body.pos,
-        crouched: f.body.crouched,
+        duck: f.body.duck,
         alive: f.active(),
     }
 }

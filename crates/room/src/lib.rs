@@ -22,7 +22,7 @@ use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
 use sim::geom::V3;
-use sim::input::Input;
+use sim::input::{Input, FIRE, FIRE_LEFT, JUMP, ZOOM};
 use sim::map::Map;
 use sim::world::{Phase, Rules, World};
 
@@ -31,6 +31,16 @@ use sim::world::{Phase, Rules, World};
 pub const MAX_DEPTH: u32 = 16;
 /// Frames held by seq.
 const BUF: usize = 32;
+/// A frame that hasn't come runs as the last one that did, held as it was,
+/// for this long: past jitter, and past the gap between a slow page's
+/// bursts once [`MAX_DEPTH`] has run dry (a page at 3 frames a second
+/// still plays as it pressed), so only frames that stopped coming let go.
+pub const LOST_HOLD_MS: u32 = 250;
+/// Then the triggers, the scope and jump let go and the stick comes back
+/// to still over this long: a player whose frames stopped (a hidden tab, a
+/// cut cable) stands where they were rather than running and firing until
+/// the session times out.
+pub const LOST_STOP_MS: u32 = 150;
 /// The most a shot is rewound: 160 ms (docs/DESIGN.md §7).
 pub const MAX_FAVOUR_MS: u32 = 160;
 /// The playout a client may claim, in ticks.
@@ -40,6 +50,29 @@ pub const PLAYOUT_MAX: u32 = 12;
 pub const SNAP_EVERY: u32 = 2;
 /// Snapshot send times kept, for RTT.
 const SENT: usize = 64;
+
+/// The frame run for the `n`th tick in a row (from 1) whose frame hasn't
+/// come, `last` being the last that did (docs/DESIGN.md §4): held as it
+/// was for [`LOST_HOLD_MS`], then the triggers, the scope and jump let go
+/// and the stick comes back to still over [`LOST_STOP_MS`]. Taps stay as
+/// they were ([`Input::repeated`]), and so does a crouch, a pose and not
+/// an act; the view stays where it was.
+pub fn lost_frame(last: Input, n: u32) -> Input {
+    let hold = ticks(LOST_HOLD_MS);
+    let held = last.repeated();
+    if n <= hold {
+        return held;
+    }
+    let stop = ticks(LOST_STOP_MS) as i32;
+    let left = (stop - (n - hold).min(stop as u32) as i32).max(0);
+    let ease = |v: i8| (v as i32 * left / stop) as i8;
+    Input {
+        buttons: held.buttons & !(FIRE | FIRE_LEFT | ZOOM | JUMP),
+        mx: ease(held.mx),
+        mz: ease(held.mz),
+        ..held
+    }
+}
 
 /// What a client had been shown when it made a frame: its newest snapshot
 /// (as the server accepted its ack) and how far behind that it drew
@@ -58,7 +91,10 @@ pub struct ClientNet {
     /// The next seq to run; set by the first frame that arrives.
     cursor: Option<u32>,
     newest_seq: Option<u32>,
+    /// The last frame that came, and the ticks run in a row since without
+    /// one.
     last: Input,
+    dry: u32,
     /// The seq the last tick ran (a real frame or a repeat in its place).
     pub last_seq: u32,
     /// The newest snapshot tick this client has acked, as the server saw.
@@ -141,6 +177,7 @@ impl Default for ClientNet {
             cursor: None,
             newest_seq: None,
             last: Input::default(),
+            dry: 0,
             last_seq: 0,
             acked: None,
             playout: PLAYOUT_MIN as u8,
@@ -211,8 +248,8 @@ impl ClientNet {
         }
     }
 
-    /// The frame for this tick: the one at the cursor, or the last one
-    /// repeated with its taps cleared if it hasn't come.
+    /// The frame for this tick: the one at the cursor, or if it hasn't
+    /// come, the last that did winding down ([`lost_frame`]).
     pub fn take_frame(&mut self) -> Input {
         let Some(mut cursor) = self.cursor else {
             return Input::default();
@@ -229,10 +266,13 @@ impl ClientNet {
             Some((s, f, view)) if s == cursor => {
                 let n = self.newest_seq.unwrap_or(cursor);
                 self.ran = view;
+                self.last = f;
+                self.dry = 0;
                 (f, n.wrapping_sub(cursor) as i32)
             }
             _ => {
                 self.repeats += 1;
+                self.dry = self.dry.saturating_add(1);
                 // How far behind the client is: frames it hasn't sent yet
                 // count against it, so its clock can jump rather than crawl.
                 let behind = self.newest_seq.map_or(-1, |n| (n.wrapping_sub(cursor) as i32).min(-1));
@@ -240,11 +280,10 @@ impl ClientNet {
                     acked: self.acked,
                     playout: self.playout,
                 };
-                (self.last.repeated(), behind)
+                (lost_frame(self.last, self.dry), behind)
             }
         };
         self.low = Some(self.low.map_or(spare, |l| l.min(spare)));
-        self.last = inp;
         self.last_seq = cursor;
         self.cursor = Some(cursor.wrapping_add(1));
         inp

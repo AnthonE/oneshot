@@ -19,7 +19,8 @@ pub trait Posed: Copy + Default {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pose {
     pub pos: V3,
-    pub crouched: bool,
+    /// How far down a crouch had gone (`movement::Body::duck`).
+    pub duck: u8,
     pub alive: bool,
 }
 
@@ -33,7 +34,7 @@ impl Posed for Pose {
     fn between(a: &Self, b: &Self, frac: f32) -> Self {
         Pose {
             pos: a.pos + (b.pos - a.pos) * frac,
-            crouched: if frac < 0.5 { a.crouched } else { b.crouched },
+            duck: if frac < 0.5 { a.duck } else { b.duck },
             alive: true,
         }
     }

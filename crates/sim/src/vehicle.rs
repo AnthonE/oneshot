@@ -106,6 +106,7 @@ impl Vehicle {
             vel: self.vel,
             grounded: true,
             crouched: seat == DRIVER,
+            duck: if seat == DRIVER { crate::consts::CROUCH_TICKS } else { 0 },
         }
     }
 
