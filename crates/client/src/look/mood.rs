@@ -237,7 +237,11 @@ pub const DUSK: Mood = Mood {
 /// breaks in it. The sun (41°) in the south, across the line between the
 /// bases, comes through a break whole, so what it lights and what it
 /// shades stand far apart, as under a broken deck; the deck's shadows
-/// sweep the island.
+/// sweep the island. The cover is held under where the deck closes into
+/// one flat sheet (0.78), so the sky is masses with lit tops and blue in
+/// the breaks; a thin mist grades the stacks paler with their distance
+/// (a tenth of the light across the island) and hazes the horizon the
+/// sea of cloud goes into.
 pub const OVERCAST: Mood = Mood {
     name: "overcast",
     sun_elev: 0.72,
@@ -247,9 +251,9 @@ pub const OVERCAST: Mood = Mood {
     light: 0.75,
     fill: 0.8,
     ev100: 13.9,
-    cover: 0.71,
-    dark: 0.6,
-    mist: 0.0,
+    cover: 0.74,
+    dark: 0.5,
+    mist: 0.0012,
     rain: 0.0,
     dust: 0.0,
     wet: 0.0,

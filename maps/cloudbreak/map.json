@@ -106,6 +106,34 @@
         [-13, -0.5, -15.5, -11.5, 1.2, -14, "rock"],
         [-6.5, -0.5, 11, -5, 1.0, 12.5, "rock"]
       ]
+    },
+    {
+      "name": "the spire's trim, drawn and never collided: a cornice where each tier steps in and a cap on the finial, a plinth along the hall's back, the door's frame, slit windows up the south face and a cap on the balcony's parapet",
+      "dress": true,
+      "boxes": [
+        [-4.25, 11.55, 17.55, 4.25, 12.0, 24.25, "stone_dark"],
+        [-3.75, 21.55, 17.95, 3.75, 22.0, 24.05, "stone_dark"],
+        [-2.75, 26.55, 18.75, 2.75, 27.0, 23.25, "stone_dark"],
+        [-1.25, 30.6, 19.95, 1.25, 31.0, 22.05, "stone_dark"],
+        [-4.1, -0.5, 24.0, 4.1, 0.4, 24.1, "stone_dark"],
+        [-1.9, 2.8, 16.9, 1.9, 3.3, 17.0, "stone_dark"],
+        [-1.9, -0.5, 16.9, -1.5, 2.8, 17.0, "stone_dark"],
+        [1.5, -0.5, 16.9, 1.9, 2.8, 17.0, "stone_dark"],
+        [-3.1, 5.3, 14.4, 3.1, 5.45, 14.9, "stone"],
+        [-2.3, 6.5, 17.75, -1.5, 10.5, 17.8, "stone_dark"],
+        [1.5, 6.5, 17.75, 2.3, 10.5, 17.8, "stone_dark"],
+        [-0.4, 13.5, 18.15, 0.4, 19.5, 18.2, "stone_dark"],
+        [-0.3, 23.0, 18.95, 0.3, 26.0, 19.0, "stone_dark"]
+      ]
+    },
+    {
+      "name": "the spire's plinth along its side, either side of the door there (drawn, never collided)",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        [-4.1, -0.5, 17.0, -4.0, 0.4, 19.5, "stone_dark"],
+        [-4.1, -0.5, 21.5, -4.0, 0.4, 24.1, "stone_dark"]
+      ]
     }
   ],
   "spawns": [

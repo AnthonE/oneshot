@@ -159,12 +159,22 @@ const GRAVEL: Grows = Grows {
     twig: 0.012,
     plant: 0.0,
 };
+/// An island's sand (`level::Land::Isle`): chips of its own sandstone
+/// lying about, a stone weathered off a boulder, dry scrub, hardly a
+/// twig (nothing grows there to shed one).
+const ISLE_SAND: Grows = Grows {
+    pebble: 0.16,
+    stone: 0.025,
+    twig: 0.006,
+    plant: 0.025,
+};
 
 impl Grows {
     /// The ground's weights (`level::splat`'s sand, grass, gravel; rock
-    /// grows nothing) over the three.
-    fn at(w: [f32; 4]) -> Grows {
-        let mix = |f: fn(&Grows) -> f32| w[0] * f(&SAND) + w[1] * f(&GRASSLAND) + w[2] * f(&GRAVEL);
+    /// grows nothing) over the three; an island's sand is its own.
+    fn at(w: [f32; 4], isle: bool) -> Grows {
+        let sand = if isle { &ISLE_SAND } else { &SAND };
+        let mix = |f: fn(&Grows) -> f32| w[0] * f(sand) + w[1] * f(&GRASSLAND) + w[2] * f(&GRAVEL);
         Grows {
             pebble: mix(|g| g.pebble),
             stone: mix(|g| g.stone),
@@ -179,6 +189,11 @@ impl Grows {
 const GRANITE_C: u32 = 0x8a8880;
 const MEADOW_STONE_C: u32 = 0xa9a59c;
 const SANDSTONE_C: u32 = 0xb09a7c;
+/// An island's sandstone, pale cream (its ground's own tint,
+/// `ground::ISLE_TINT`): its chips and its stones, half of them a shade
+/// paler still.
+const ISLE_STONE_C: u32 = 0xc4ae8e;
+const ISLE_PALE_STONE_C: u32 = 0xd6c4a6;
 /// Red rock fallen off the canyon's walls (the rock look's tint over its
 /// photograph, `level::dress`), on the sand.
 const RED_ROCK_C: u32 = 0x9c6448;
@@ -547,8 +562,9 @@ fn piece_of(g: &Grows, r: f32) -> Option<Piece> {
     None
 }
 
-/// One piece of `kind` at `at` on ground of weights `w`, `seed` its own.
-fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32) {
+/// One piece of `kind` at `at` on ground of weights `w`, `seed` its own;
+/// on an island (`isle`) its stone is the island's pale sandstone.
+fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, isle: bool) {
     let yaw = hash01(seed, 9) * TAU;
     let k = |(lo, hi): (f32, f32)| lo + (hi - lo) * hash01(seed, 8);
     // Which of its ground's colours, dithered by the weights.
@@ -560,13 +576,25 @@ fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32) {
     } else {
         2
     };
+    let isle_stone = || {
+        if hash01(seed, 13) < 0.5 {
+            ISLE_STONE_C
+        } else {
+            ISLE_PALE_STONE_C
+        }
+    };
     match kind {
         Piece::Pebble => {
-            let c = [SANDSTONE_C, MEADOW_STONE_C, GRANITE_C][ground];
+            let c = if isle && ground == 0 {
+                isle_stone()
+            } else {
+                [SANDSTONE_C, MEADOW_STONE_C, GRANITE_C][ground]
+            };
             pebble(s, at, yaw, PEBBLE * k(PEBBLE_K), linear(c), seed);
         }
         Piece::Stone => {
             let c = match ground {
+                0 if isle => isle_stone(),
                 0 if hash01(seed, 13) < 0.5 => RED_ROCK_C,
                 0 => SANDSTONE_C,
                 1 => MEADOW_STONE_C,
@@ -623,7 +651,16 @@ pub fn clear(map: &sim::map::Map, t: &TerrainDef) -> Clear {
 /// The clutter for a map's terrain: a mesh per block and density layer
 /// (`grass::LAYER_SHARE`, the GRASS row's), its centre and its layer.
 /// Nothing lies where `clear` says, on the rock, or off the ground's edge.
-pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: &Clear) -> Vec<(Mesh, Vec2, u8)> {
+/// An island (`isle`) is bare sandstone: its sand's own pieces, no creek
+/// and no turf.
+pub fn blocks(
+    t: &TerrainDef,
+    lo: (f32, f32),
+    hi: (f32, f32),
+    seed: u32,
+    clear: &Clear,
+    isle: bool,
+) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let n = (BLOCK_M / STEP_M).round() as u32;
     let mut bz = lo.1;
@@ -651,7 +688,11 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: 
                     let (Some(y), Some(sl)) = (grass::ground(t, x, z), slope(t, x, z)) else {
                         continue;
                     };
-                    let w = crate::level::splat(sl, y);
+                    let w = if isle {
+                        crate::level::splat_bare(sl, y)
+                    } else {
+                        crate::level::splat(sl, y)
+                    };
                     // Nothing on the rock, nor where its skin starts to grow over the
                     // ground (`cliffs.rs`): a pebble there would sink under it.
                     if w[3] >= super::cliffs::SKIN_ROCK_LO {
@@ -661,10 +702,17 @@ pub fn blocks(t: &TerrainDef, lo: (f32, f32), hi: (f32, f32), seed: u32, clear: 
                     if w[1] >= FLOWER_TURF && hash01(cell, 15) < drift(x, z) * FLOWER_SHARE {
                         flowers(&mut soups[layer_of(hash01(cell, 16))], t, Vec3::new(x, y, z), cell);
                     }
-                    let Some(kind) = piece_of(&Grows::at(w), hash01(cell, 3)) else {
+                    let Some(kind) = piece_of(&Grows::at(w, isle), hash01(cell, 3)) else {
                         continue;
                     };
-                    piece(&mut soups[layer_of(hash01(cell, 6))], kind, Vec3::new(x, y, z), w, cell);
+                    piece(
+                        &mut soups[layer_of(hash01(cell, 6))],
+                        kind,
+                        Vec3::new(x, y, z),
+                        w,
+                        cell,
+                        isle,
+                    );
                 }
             }
             let centre = Vec2::new(bx + BLOCK_M * 0.5, bz + BLOCK_M * 0.5);
@@ -743,9 +791,14 @@ mod tests {
                 (Piece::Twig, STONE_MAX_H),
                 (Piece::Plant, CLUTTER_MAX_H),
             ] {
-                for w in [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]] {
+                for (w, isle) in [
+                    ([1.0, 0.0, 0.0, 0.0], false),
+                    ([0.0, 1.0, 0.0, 0.0], false),
+                    ([0.0, 0.0, 1.0, 0.0], false),
+                    ([1.0, 0.0, 0.0, 0.0], true),
+                ] {
                     let mut s = Soup::default();
-                    piece(&mut s, kind, at, w, seed.wrapping_mul(2_654_435_761));
+                    piece(&mut s, kind, at, w, seed.wrapping_mul(2_654_435_761), isle);
                     let (top, sway, rigid) = measure(&s, at.y);
                     assert!(top > 0.0 && top <= cap, "{kind:?} seed {seed}: {top} m over the ground");
                     if kind == Piece::Plant {
@@ -779,15 +832,22 @@ mod tests {
 
     #[test]
     fn the_rolls_share_out_by_the_ground() {
-        let g = Grows::at([0.0, 0.0, 1.0, 0.0]);
+        let g = Grows::at([0.0, 0.0, 1.0, 0.0], false);
         assert_eq!(g, GRAVEL);
         assert_eq!(piece_of(&g, 0.0), Some(Piece::Pebble));
         assert_eq!(piece_of(&g, GRAVEL.pebble + 0.01), Some(Piece::Stone));
         assert_eq!(piece_of(&g, 0.99), None);
-        assert_eq!(Grows::at([0.0, 0.0, 0.0, 1.0]), Grows::default(), "rock grows nothing");
+        assert_eq!(
+            Grows::at([0.0, 0.0, 0.0, 1.0], false),
+            Grows::default(),
+            "rock grows nothing"
+        );
+        assert_eq!(Grows::at([1.0, 0.0, 0.0, 0.0], true), ISLE_SAND);
         for w in [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]] {
-            let g = Grows::at(w);
-            assert!(g.pebble + g.stone + g.twig + g.plant < 1.0);
+            for isle in [false, true] {
+                let g = Grows::at(w, isle);
+                assert!(g.pebble + g.stone + g.twig + g.plant < 1.0);
+            }
         }
     }
 
@@ -801,7 +861,7 @@ mod tests {
         let t = def.terrain.as_ref().expect("terrain");
         let map = def.build();
         let clear = clear(&map, t);
-        let blocks = blocks(t, map.lo, map.hi, 17, &clear);
+        let blocks = blocks(t, map.lo, map.hi, 17, &clear, false);
         assert!(!blocks.is_empty(), "a map with ground has clutter");
         let mut pts = 0usize;
         for (m, ..) in &blocks {
