@@ -126,6 +126,10 @@ fn frag(w: &mut World, at: V3) {
         ..Input::default()
     };
     w.step(&inputs, &NO_LAG);
+    inputs[1].buttons = 0;
+    for _ in 0..ticks(GREN_RELEASE_MS) {
+        w.step(&inputs, &NO_LAG);
+    }
     for i in 0..MAX_PROJ {
         if w.proj[i].active {
             w.proj[i].pos = at;

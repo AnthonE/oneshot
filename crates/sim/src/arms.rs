@@ -43,10 +43,13 @@ pub const OVERSHIELD: u8 = 16;
 /// Active camouflage: a while nearly unseen, shown by moving fast, firing,
 /// a throw, a blow or a hit (`Fighter::cloak`).
 pub const CAMO: u8 = 17;
+/// Grenades lying on a pad: walking on takes `GREN_PAD_GIVES`, if any fit.
+pub const FRAGS: u8 = 18;
+pub const STICKIES: u8 = 19;
 
-/// Whether a pad's `id` is a power-up rather than a gun.
+/// Whether a pad's `id` is taken by walking on rather than a gun.
 pub const fn power(id: u8) -> bool {
-    id == OVERSHIELD || id == CAMO
+    id == OVERSHIELD || id == CAMO || id == FRAGS || id == STICKIES
 }
 
 /// Gun Game's ladder: each kill moves the killer up one, the power weapons

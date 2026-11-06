@@ -60,6 +60,26 @@
     { "at": [-10, -18, 1.5], "team": "red", "yaw": 90, "mirror": true }
   ],
   "pads": [
+    {
+      "weapon": "stickies",
+      "at": [-10, -10],
+      "respawn": 30
+    },
+    {
+      "weapon": "stickies",
+      "at": [10, 10],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [-10, 10],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [10, -10],
+      "respawn": 30
+    },
     { "weapon": "sword", "at": [0, 0, 1], "respawn": 120 },
     { "weapon": "carbine", "at": [0, 18, 1.5], "respawn": 30 },
     { "weapon": "carbine", "at": [0, -18, 1.5], "respawn": 30 },

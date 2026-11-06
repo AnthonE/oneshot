@@ -8,6 +8,7 @@ a puff from wherever its sun stands. Ours, made here; no pack.
     python3 tools/flipbooks/bake.py            # every sheet into crates/client/assets/fx
     python3 tools/flipbooks/bake.py cloud      # one sheet
     python3 tools/flipbooks/bake.py --preview  # traces/fx/sheets/*.png, lit, to look at
+    python3 tools/flipbooks/bake.py --only flash,bloom   # those strips alone, the rest of their sheet kept
 
 Each sheet is a pair of RGBA PNGs, linear (not sRGB):
   <name>_a.png  R, G, B: light arriving from the sprite's right, left and
@@ -25,6 +26,7 @@ same constant in look/fx/sheets.rs; change both.
 import os
 import sys
 import time
+import zlib
 
 import numpy as np
 from PIL import Image
@@ -380,11 +382,15 @@ def explosion(seed, n, frames):
             churn(F, fields, 1.2 * n * dt, hot, F.t)
             late = smoothstep(0.3, 1.3, F.t)
             F.step(
-                dt, buoy=0.7 - 0.45 * late, weight=0.03, cool=0.95, burn=7.0, heat=1.3,
-                soot=2.2, ignite=0.3, diss=0.1, damp=0.8 + 1.6 * late, eps=4.0,
+                dt, buoy=0.7 - 0.45 * late, weight=0.03, cool=1.3, burn=7.0, heat=1.3,
+                soot=3.0, ignite=0.3, diss=0.1, damp=0.8 + 1.6 * late, eps=4.0,
                 iters=2, swell=2.6 * (1.0 - 0.8 * late), visc=0.05,
             )
-        out.append(render(F, sd=1.7, st=0.9, t0=0.28, t1=1.6, gamma=0.8, k=2.4, hide=0.2))
+        # The ball burns at 1.5 to 3 for a while (its middle and its hottest
+        # tenth): the ramp spans that, so it is white in places and orange in
+        # others, and fire is done while the gas is still warm. Lower, and
+        # the whole ball clips to one flat colour and lasts half a second.
+        out.append(render(F, sd=1.7, st=0.9, t0=1.0, t1=2.9, gamma=1.0, k=2.4, grain=1.0, hide=0.1))
     return out
 
 
@@ -525,43 +531,80 @@ def wisp(seed, n, frames):
 
 
 def muzzle(seed, n, frames, kind="powder"):
-    """A gun's flash, drawn, not simulated: a hot core and petals of fire
-    flung out the barrel and sideways, that grow, split and go. `plasma`:
-    a soft bloom with a ring and no petals."""
+    """A gun's flash, drawn, not simulated. `powder`: burning gas out of a
+    barrel, seen from behind or in front: on its first frame a hard star of
+    thick spikes about a white-hot core, in a few fat lobes of fire lumpy at
+    their edges; then the spikes are gone and the lobes swell, cool and tear
+    through. `plasma`: a soft bloom with a ring and no lobes."""
     rng = np.random.default_rng(seed)
     ys, xs = np.mgrid[0:n, 0:n]
     x = (xs + 0.5) / n - 0.5
     y = (ys + 0.5) / n - 0.5
     r = np.sqrt(x * x + y * y)
-    ang = np.arctan2(y, x)
-    petals = []
-    k = int(rng.integers(5, 9))
-    for i in range(k):
-        a = (i / k) * 2 * np.pi + rng.uniform(-0.25, 0.25)
-        petals.append((a, rng.uniform(0.22, 0.46), rng.uniform(0.06, 0.13), rng.uniform(0.6, 1.0)))
     grain = fbm(rng, n, 4, 6)
+    if kind != "plasma":
+        # Three to five lobes, unevenly spaced and of uneven reach: no two
+        # shots the same, and none of them a star.
+        k = int(rng.integers(3, 6))
+        turn = rng.uniform(0, 2 * np.pi)
+        lobes = [
+            ((i / k) * 2 * np.pi + turn + rng.uniform(-0.5, 0.5), rng.uniform(0.07, 0.27), rng.uniform(0.44, 0.8))
+            for i in range(k)
+        ]
+        # The gas is turbulent: the whole shape is drawn through a warp,
+        # which grows as it goes, and eaten by a second noise.
+        wx, wy = fbm(rng, n, 4, 3), fbm(rng, n, 4, 3)
+        eat = fbm(rng, n, 4, 7)
+        # The first frame's star: thick at the root, to a point, no two alike.
+        ks = int(rng.integers(5, 8))
+        turn = rng.uniform(0, 2 * np.pi)
+        spikes = [
+            ((i / ks) * 2 * np.pi + turn + rng.uniform(-0.3, 0.3), rng.uniform(0.27, 0.46), rng.uniform(0.04, 0.07))
+            for i in range(ks)
+        ]
     out = []
     for f in range(frames):
         t = f / max(frames - 1, 1)
-        grow = smoothstep(0.0, 0.45, t)
-        fade = 1.0 - smoothstep(0.35, 1.0, t)
         if kind == "plasma":
+            grow = smoothstep(0.0, 0.45, t)
+            fade = 1.0 - smoothstep(0.35, 1.0, t)
             core = np.exp(-((r / (0.06 + 0.1 * grow)) ** 2)) * 1.4
             ring_r = 0.08 + 0.3 * t
             ring = np.exp(-(((r - ring_r) / 0.035) ** 2)) * (1.0 - t) * 0.9
             halo = np.exp(-((r / (0.2 + 0.15 * grow)) ** 1.5)) * 0.35
             heat = (core + ring + halo) * fade * (1.0 + 0.25 * grain)
         else:
-            core = np.exp(-((r / (0.07 + 0.05 * grow)) ** 2)) * 1.6 * (1.0 - 0.5 * t)
-            heat = core
-            for a, length, width, bright in petals:
+            warp = 0.03 + 0.05 * t
+            xw, yw = x + wx * warp, y + wy * warp
+            rw = np.sqrt(xw * xw + yw * yw)
+            ang = np.arctan2(yw, xw)
+            swell = 1.0 + 0.3 * t
+            # The flame's edge, as a radius round the muzzle.
+            edge = np.full_like(rw, 0.085)
+            for a, reach, wide in lobes:
                 da = np.angle(np.exp(1j * (ang - a)))
-                along = r / (length * (0.35 + 0.65 * grow))
-                # The petal tears into bits as it goes.
-                tear = 1.0 - smoothstep(0.3, 0.9, t) * smoothstep(-0.2, 0.3, grain)
-                p = np.exp(-((da / width) ** 2) * (1.0 + 3.0 * along)) * smoothstep(1.0, 0.25, along) * bright
-                heat += p * tear * (0.4 + 0.6 * smoothstep(0.0, 0.15, along))
-            heat *= fade * (1.0 + 0.3 * grain)
+                edge = edge + reach * np.exp(-((da / wide) ** 2))
+            rho = rw / (edge * swell)
+            # Hot at the muzzle, cooler out along a lobe, and a hard enough
+            # edge that it reads as flame, not as a glow.
+            body = smoothstep(1.0, 0.72, rho) * (0.5 + 0.5 * smoothstep(1.0, 0.0, rho))
+            core = np.exp(-((rw / (0.075 * swell)) ** 2))
+            heat = np.maximum(body * (0.86 + 0.22 * grain), core * 1.2)
+            # Torn through as it goes, its thin parts first.
+            holes = smoothstep(0.2, 0.75, eat * 0.5 + 0.5 + 0.9 * t - 0.75 * (1.0 - rho) - 0.35)
+            heat = heat * (1.0 - holes * smoothstep(0.0, 0.3, t))
+            star = np.zeros_like(rw)
+            for a, length, root in spikes:
+                da = np.angle(np.exp(1j * (ang - a)))
+                # How far off the spike's axis, against its width here.
+                off = rw * np.abs(np.sin(da)) * (np.cos(da) > 0)
+                half = root * np.clip(1.0 - rw / length, 0.0, 1.0)
+                on = (np.cos(da) > 0) * smoothstep(1.0, 0.45, off / np.maximum(half, 1e-4))
+                star = np.maximum(star, on * (1.0 - 0.45 * rw / length))
+            heat = np.maximum(heat, star * (1.0 - smoothstep(0.0, 0.34, t)))
+            # A soft rim of light about it, so it sits in the air.
+            heat = heat + 0.16 * np.exp(-((rw / (0.2 * swell)) ** 2)) * (1.0 - t)
+            heat = heat * (1.0 - 0.94 * smoothstep(0.0, 1.0, t) ** 1.2)
         heat = np.clip(heat, 0.0, 1.0) * window(n)
         A = np.zeros((n, n, 4), np.float32)
         B = np.zeros((n, n, 4), np.float32)
@@ -592,16 +635,25 @@ SHEETS = {
 OVERSAMPLE = 2
 
 
-def bake(name, preview):
+def bake(name, preview, only=()):
     cells, tex, parts = SHEETS[name]
     side = cells * tex
     A = np.zeros((side, side, 4), np.float32)
     B = np.zeros((side, side, 4), np.float32)
+    if only:
+        # The other strips as they are: a strip is redrawn without every
+        # puff of smoke in the game changing its shape with it.
+        for tag, arr in (("a", A), ("b", B)):
+            arr[:] = np.asarray(Image.open(os.path.join(OUT, f"{name}_{tag}.png")).convert("RGBA"), np.float32) / 255.0
     cell = 0
     for what, variants, frames, how in parts:
+        if only and what not in only:
+            cell += variants * frames
+            continue
         for v in range(variants):
             t0 = time.time()
-            seed = (hash(name) & 0xFFFF) * 131 + (hash(what) & 0xFFFF) * 17 + v
+            # The same seed every run (Python's own hash of a string is not).
+            seed = (zlib.crc32(name.encode()) & 0xFFFF) * 131 + (zlib.crc32(what.encode()) & 0xFFFF) * 17 + v
             seed = abs(seed) % (2**31)
             frames_out = how(seed, tex * OVERSAMPLE, frames)
             for a, b in frames_out:
@@ -652,10 +704,17 @@ def light(A, B, sun=(0.6, 0.7, 0.4), bg=0.35):
 
 def main(argv):
     preview = "--preview" in argv
+    only = ()
+    if "--only" in argv:
+        i = argv.index("--only")
+        only = tuple(argv[i + 1].split(","))
+        argv = argv[:i] + argv[i + 2:]
     names = [a for a in argv if not a.startswith("--")] or list(SHEETS)
     for n in names:
+        if only and not any(what in only for what, *_ in SHEETS[n][2]):
+            continue
         print(f"== {n}", flush=True)
-        bake(n, preview)
+        bake(n, preview, only)
 
 
 if __name__ == "__main__":

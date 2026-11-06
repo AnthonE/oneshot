@@ -8,9 +8,9 @@
 //! the kick a round gives the gun the frame its trigger breaks. Timed by
 //! what our own predicted fighter says.
 //!
-//! **The arms** are Triple T's own (`hands.rs`): solved every frame onto
-//! the grips posed here ([`Grips`](super::hands::Grips)), so every motion
-//! below moves them with the gun. Both they and the gun wear our own
+//! **The hands** are made for this (`hands.rs`): rigid on the grips posed
+//! here ([`Grips`](super::hands::Grips)), so every motion below moves them
+//! with the gun. Both they and the gun wear our own
 //! shield as it flares (`shield.rs`'s shell, a hair proud of them:
 //! [`shimmer`]): gold as it takes a round, bright as it breaks, crawling as
 //! it climbs back.
@@ -80,11 +80,26 @@ use super::shield::ShieldMaterial;
 
 /// How much smaller, and nearer, the gun is than it looks.
 pub const SHRINK: f32 = 0.25;
+/// The gun's own field of view, against the world's: everything in view is
+/// drawn under a parent that widens it this many times across the view and
+/// leaves its depth alone, which is what a narrower lens does to it. So the
+/// gun is big and seen from the side, where only bringing it nearer makes a
+/// stub pointing away. The world's field of view is the player's own; this
+/// holds at any of them. No second camera: one scale on one parent.
+pub const GUN_FOV: f32 = 2.5;
+
 /// Gates' `VIEWMODEL_HOLD`: where the right hand's grip sits in view space,
 /// as it looks (metres, before [`SHRINK`]).
-const HOLD: Vec3 = Vec3::new(0.26, -0.28, -0.42);
+const HOLD: Vec3 = Vec3::new(0.2, -0.11, -0.55);
+/// The most of a gun that may lie behind the hand, metres as it looks: one
+/// with more (a cannon, a launcher) is held that much further off, or its
+/// back end fills the corner of the frame, a blur right against the eye.
+const REAR_CLEAR_M: f32 = 0.35;
 /// The rest yaw: the muzzle turned in toward the crosshair, radians.
-const REST_YAW: f32 = 0.06;
+const REST_YAW: f32 = 0.08;
+/// The rest pitch: the muzzle lifted, so the gun's rear runs out of the frame
+/// past the corner, radians.
+const REST_PITCH: f32 = 0.05;
 /// Gates' `VIEWMODEL_SWING_PIVOT`: the right shoulder, behind and below the
 /// eye. The arm turns about it, so a turn sweeps the gun across the frame
 /// rather than into the lens.
@@ -93,14 +108,20 @@ const PIVOT: Vec3 = Vec3::new(0.05, -0.10, 0.30);
 /// not a leap.
 const MAX_DT: f32 = 0.1;
 
-/// The flash's peak, in lumens: a few thousand lux on a wall a metre off,
-/// enough to read against noon.
-const FLASH_LM: f32 = 400_000.0;
-const FLASH_RANGE_M: f32 = 6.0;
-/// The flash's fall, per second: gone in 40 ms.
-const FLASH_FALL_PER_S: f32 = 25.0;
+/// The flash on the gun and the hands that hold it, the frame a round
+/// breaks: its peak in lumens, about a sun on the receiver a hand's length
+/// off as drawn ([`SHRINK`]), and its reach, which stops short of the world
+/// (`fx/shots.rs` lights that).
+const FLASH_LM: f32 = 18_000.0;
+const FLASH_RANGE_M: f32 = 0.9;
+/// The flash's fall, per second: gone in 70 ms, as the flame is. Squared
+/// where it is drawn, so its first frame is a strobe.
+const FLASH_FALL_PER_S: f32 = 14.0;
 /// Where the flash light sits before a gun has drawn a muzzle.
-const FLASH_AT: Vec3 = Vec3::new(0.3, -0.2, -1.0);
+const FLASH_AT: Vec3 = Vec3::new(0.3 * SHRINK, -0.2 * SHRINK, -SHRINK);
+/// Off the muzzle as drawn, toward the eye and up: over the barrel, so it
+/// falls on the faces we see and not only on the muzzle's own.
+const FLASH_OFF: Vec3 = Vec3::new(0.0, 0.018, 0.03);
 
 // ── Bob ─────────────────────────────────────────────────────────────────
 /// Bob cycles per metre walked: one cycle is two footfalls, a footfall
@@ -188,7 +209,7 @@ pub const KICK_HZ: f32 = 6.5;
 pub const KICK_DAMP: f32 = 0.55;
 /// At a single shot's peak: back toward the eye and up (metres), the muzzle
 /// climbing about the grip (radians), and a random cant either way.
-pub const KICK_BACK_M: f32 = 0.055;
+pub const KICK_BACK_M: f32 = 0.04;
 pub const KICK_UP_M: f32 = 0.012;
 pub const KICK_CLIMB: f32 = 0.085;
 pub const KICK_ROLL: f32 = 0.035;
@@ -223,8 +244,8 @@ pub const DROP_ANG: Vec3 = Vec3::new(-0.45, 0.0, -0.3);
 /// How a reload holds the gun at its middle, turned in the hand about its
 /// grip: a long gun tipped in, muzzle up, the magazine toward us; a pistol
 /// lower and turned further.
-pub const RELOAD_LONG_OFF: Vec3 = Vec3::new(-0.05, -0.05, 0.03);
-pub const RELOAD_LONG_ANG: Vec3 = Vec3::new(0.2, 0.08, 0.5);
+pub const RELOAD_LONG_OFF: Vec3 = Vec3::new(-0.01, -0.05, 0.03);
+pub const RELOAD_LONG_ANG: Vec3 = Vec3::new(0.03, 0.05, 0.5);
 pub const RELOAD_PISTOL_OFF: Vec3 = Vec3::new(-0.04, -0.07, 0.05);
 pub const RELOAD_PISTOL_ANG: Vec3 = Vec3::new(0.3, 0.2, 0.75);
 /// A hot gun vents instead: muzzle up, canted out, held off and buzzing.
@@ -259,8 +280,8 @@ const MELEE_HOLD: f32 = 0.18;
 /// the grip stops under the crosshair, never on it.
 pub const BASH_COCK: Vec3 = Vec3::new(-0.05, -0.12, -0.15);
 pub const BASH_DRAW: Vec3 = Vec3::new(0.03, -0.02, 0.06);
-pub const BASH_STRIKE: Vec3 = Vec3::new(0.0, 0.35, 0.35);
-pub const BASH_THROW: Vec3 = Vec3::new(-0.04, 0.0, -0.08);
+pub const BASH_STRIKE: Vec3 = Vec3::new(-0.1, 0.0, 0.35);
+pub const BASH_THROW: Vec3 = Vec3::new(0.0, 0.0, -0.08);
 /// A sword's swing (its melee and its trigger): raised out, then slashed
 /// right to left.
 pub const SLASH_COCK: Vec3 = Vec3::new(0.25, -0.3, -0.4);
@@ -353,7 +374,7 @@ const SHELL_HEX: f32 = 9.0;
 /// The shell in view against a body's at the same flare, with no fill
 /// (`shield.wgsl`): it fills the frame's corner, so it is a crackle over
 /// the arms, not a coat of gold.
-const SHELL_IN_VIEW: f32 = 0.22;
+const SHELL_IN_VIEW: f32 = 0.1;
 /// Our overshield, and our camouflage, on the arms in view: never under
 /// these while on (in their shells' colours, `bodies.rs`).
 const OVER_IN_VIEW: f32 = 0.12;
@@ -426,14 +447,26 @@ pub fn shimmer(
 #[derive(Resource, Default, Clone, Copy, Debug)]
 pub struct ViewMuzzles(pub [Option<Vec3>; 2]);
 
-/// The hold and the flash, on the camera.
+/// The parent of everything drawn in view: its scale is [`GUN_FOV`].
+#[derive(Component)]
+pub struct InView;
+
+/// The hold and the flash, on the camera, under the gun's own field of view.
 pub fn spawn(commands: &mut Commands, eye: Entity) {
+    let root = commands
+        .spawn((
+            InView,
+            Transform::from_scale(Vec3::new(GUN_FOV, GUN_FOV, 1.0)),
+            Visibility::default(),
+            ChildOf(eye),
+        ))
+        .id();
     for left in [false, true] {
         commands.spawn((
             ViewGun { left, ..default() },
             Transform::from_translation(HOLD * SHRINK).with_scale(Vec3::splat(SHRINK)),
             Visibility::Hidden,
-            ChildOf(eye),
+            ChildOf(root),
         ));
     }
     commands.spawn((
@@ -446,7 +479,7 @@ pub fn spawn(commands: &mut Commands, eye: Entity) {
             ..default()
         },
         Transform::from_translation(FLASH_AT),
-        ChildOf(eye),
+        ChildOf(root),
     ));
 }
 
@@ -568,13 +601,19 @@ pub fn mirror_q(q: Quat) -> Quat {
 pub fn place(hand: Lay, body: Lay, left: bool) -> (Vec3, Quat) {
     let side = |v: Vec3| if left { Vec3::new(-v.x, v.y, v.z) } else { v };
     let hand = if left { hand.mirror() } else { hand };
-    let rest = Quat::from_rotation_y(if left { -REST_YAW } else { REST_YAW });
+    let rest = Quat::from_rotation_y(if left { -REST_YAW } else { REST_YAW }) * Quat::from_rotation_x(REST_PITCH);
     let pivot = side(PIVOT);
     let hq = turn(hand.ang);
     let p = pivot + hq * (side(HOLD) - pivot) + hand.off;
     let bq = turn(body.ang);
     let wrist = turn(body.wrist) * turn(hand.wrist);
     (pivot + bq * (p - pivot) + body.off, bq * hq * rest * wrist)
+}
+
+/// How much further off a gun is held for what lies behind its hand.
+fn stand_off(g: &super::guns::Gun) -> Lay {
+    let back = g.height * g.grip * g.scale;
+    Lay::arm(Vec3::ZERO, Vec3::new(0.0, 0.0, -(back - REAR_CLEAR_M).max(0.0)))
 }
 
 /// The rounds each hand fired since the last look, `[right, left]`.
@@ -1004,7 +1043,7 @@ pub fn update(
     let body = m.body(&own, dt);
     let (both, right) = m.strokes(f, rounds[0], dt);
     m.alive = f.alive;
-    let mut lit = (0.0, FLASH_AT);
+    let mut lit = (0.0, FLASH_AT, NONE);
     *muzzles = ViewMuzzles::default();
     *grips = Grips {
         shown: own.shown,
@@ -1023,19 +1062,25 @@ pub fn update(
         };
         let at = hand(commands, models, grips, &own, &k, dt, e, &mut v, &mut t, vis);
         if let Some(mz) = at {
-            muzzles.0[usize::from(left)] = Some(mz);
+            // Where it looks to be is under the gun's field of view.
+            muzzles.0[usize::from(left)] = Some(mz * Vec3::new(GUN_FOV, GUN_FOV, 1.0));
             if v.flash > lit.0 {
-                lit = (v.flash, mz);
+                // `mz` is where the muzzle looks to be: the gun is drawn
+                // SHRINK small and that much nearer, and so is its light.
+                lit = (v.flash, mz * SHRINK + FLASH_OFF, v.drawn);
             }
         }
     }
     if let Ok((mut l, mut lt)) = flash.single_mut() {
-        let lm = if own.shown { lit.0 * FLASH_LM } else { 0.0 };
+        let lm = if own.shown { lit.0 * lit.0 * FLASH_LM } else { 0.0 };
         if l.intensity != lm {
             l.intensity = lm;
         }
-        if lit.0 > 0.0 && lt.translation != lit.1 {
-            lt.translation = lit.1;
+        if lit.0 > 0.0 {
+            if lt.translation != lit.1 {
+                lt.translation = lit.1;
+            }
+            l.color = super::fx::shots::light_of(lit.2);
         }
     }
 }
@@ -1142,7 +1187,8 @@ fn hand(
     };
     let d = smooth(v.drop);
     let change = Lay::arm(DROP_ANG * d, DROP_OFF * d);
-    let (at, rot) = place(k.hand + reload + kick + charge + change, k.body, v.left);
+    let stand = gun(v.drawn).map_or(Lay::ZERO, stand_off);
+    let (at, rot) = place(k.hand + reload + kick + charge + change + stand, k.body, v.left);
     t.translation = at * SHRINK;
     t.rotation = rot;
     let g = gun(v.drawn).filter(|_| drawn)?;
@@ -1171,7 +1217,7 @@ fn cant_of(shots: u32) -> f32 {
 
 /// The gun's scene is in: it casts nothing, and each of its meshes wears
 /// our shield's shell ([`shimmer`]).
-fn no_shadows(
+pub(super) fn no_shadows(
     ev: On<SceneInstanceReady>,
     children: Query<&Children>,
     meshes: Query<&Mesh3d>,
@@ -1385,7 +1431,7 @@ mod tests {
     /// gun makes (a long gun reloads as a long gun).
     #[test]
     fn the_gun_keeps_off_the_crosshair() {
-        let off_axis = |p: Vec3| Vec2::new(p.x, p.y).length().atan2(-p.z);
+        let off_axis = |p: Vec3| (Vec2::new(p.x, p.y).length() * GUN_FOV).atan2(-p.z);
         let poses = |u: f32, long: bool| {
             let kick = Lay::hand(
                 Vec3::new(KICK_CLIMB * KICK_MAX, 0.0, KICK_ROLL * KICK_MAX),
@@ -1416,7 +1462,7 @@ mod tests {
                     if *arm == sim::arms::SWORD && (2..=3).contains(&n) {
                         continue;
                     }
-                    let (at, rot) = place(lay, Lay::ZERO, false);
+                    let (at, rot) = place(lay + stand_off(g), Lay::ZERO, false);
                     let muzzle = at + rot * (view_basis() * Vec3::new(0.0, reach, g.rise * g.scale));
                     for k in 0..=8 {
                         let p = at.lerp(muzzle, k as f32 / 8.0);
@@ -1430,8 +1476,9 @@ mod tests {
 
     /// No part of a gun that could be on screen comes nearer the eye than
     /// the camera's near plane, in any stroke, at the widest field of view
-    /// on the widest screen: no gun is ever cut open by it. Its whole
-    /// length, stock to muzzle, and its height over and under the axis.
+    /// on the widest screen: no gun is ever cut open by it, nor seen through.
+    /// Its whole length, stock to muzzle, its height over and under the axis,
+    /// and its flanks.
     #[test]
     fn no_gun_is_cut_by_the_near_plane() {
         let near = crate::look::rig::NEAR_M / SHRINK;
@@ -1465,17 +1512,21 @@ mod tests {
                 ];
                 for (n, lay) in poses.into_iter().enumerate() {
                     for left in [false, true] {
-                        let (at, rot) = place(lay, Lay::ZERO, left);
+                        let (at, rot) = place(lay + stand_off(g), Lay::ZERO, left);
                         for k in 0..=12 {
                             let along = -back + len * k as f32 / 12.0;
                             for up in [-0.15, 0.0, 0.15] {
-                                let p = at + rot * (view_basis() * Vec3::new(0.0, along, up * len.min(1.0)));
-                                let depth = -p.z;
-                                let seen = depth > 0.0 && p.x.abs() < depth * half * aspect && p.y.abs() < depth * half;
-                                if seen && depth <= near {
-                                    let worst = cut.entry((g.file, n)).or_insert((depth, u));
-                                    if depth < worst.0 {
-                                        *worst = (depth, u);
+                                for flank in [-0.15, 0.0, 0.15] {
+                                    let q = Vec3::new(flank * len.min(1.0), along, up * len.min(1.0));
+                                    let p = at + rot * (view_basis() * q);
+                                    let depth = -p.z;
+                                    let (x, y) = (p.x * GUN_FOV, p.y * GUN_FOV);
+                                    let seen = depth > 0.0 && x.abs() < depth * half * aspect && y.abs() < depth * half;
+                                    if seen && depth <= near {
+                                        let worst = cut.entry((g.file, n)).or_insert((depth, u));
+                                        if depth < worst.0 {
+                                            *worst = (depth, u);
+                                        }
                                     }
                                 }
                             }

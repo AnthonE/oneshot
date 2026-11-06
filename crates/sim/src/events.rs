@@ -19,7 +19,7 @@ pub enum Kind {
     Kill,
     Spawn,
     /// `a` took arm `c` from a pad, or the power-up `c`
-    /// (`arms::OVERSHIELD`, `arms::CAMO`).
+    /// (`arms::OVERSHIELD`, `arms::CAMO`, `arms::FRAGS`, `arms::STICKIES`).
     Pickup,
     /// A blast at `pos`; `c` is the arm id (rocket) or [`Cause::Grenade`]
     /// or [`Cause::Sticky`].

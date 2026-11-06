@@ -3,7 +3,8 @@
 //! NOTICE): the model lifted and tinted by side, moving the way its
 //! snapshot says (`anim.rs`: the clip, the legs turned toward the travel and
 //! the spine back to the aim, the head on the aim's pitch, the feet planted,
-//! the hold on the arms), and the gun they hold in hand. The wood is left
+//! the hold on the arms), and the gun in its right hand, a child of the
+//! hand's bone, so it goes wherever the clips take the hand. The wood is left
 //! its own colour; the side, the emblem and a skin's trim are sprayed on it
 //! (`paint.rs`): a headband in the side's colour, glowing a little so a
 //! fighter reads in shade, the emblem on the back, the trim a stripe round
@@ -31,10 +32,14 @@ use super::shield::{ShellPart, ShieldMaterial};
 /// Triple T faces +Z in its file; our bodies face +X.
 const FACE: f32 = core::f32::consts::FRAC_PI_2;
 
-/// Where the gun hangs, in the body's frame (+X forward): art.ts's hand,
-/// a little lower, at Triple T's chest rather than its eyes.
-const HAND: Vec3 = Vec3::new(0.18, 1.18, 0.2);
-const HAND_CROUCHED_Y: f32 = 0.85;
+/// The bone a gun is held in, and the gun's place on it: on the axis just over
+/// the fist (`guns::Gun`), level and straight ahead where `Rifle_Hold_Loop` over
+/// `Idle_Loop` has the hand, with the aim level (`anim::CHEST_HELD`). In the
+/// bone's own units, which are centimetres (its scale takes that back out).
+const HAND_BONE: &str = "RightHand";
+const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
+const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
+const HELD_SCALE: f32 = 100.0;
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -228,12 +233,7 @@ pub fn spawn_shadow(commands: &mut Commands, models: &Models, team: u8) -> Entit
 fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Look, shadow: bool) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::default())).id();
     let hand = commands
-        .spawn((
-            Transform::from_translation(HAND),
-            Visibility::default(),
-            BodyPart,
-            ChildOf(root),
-        ))
+        .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
     commands
         .spawn((
@@ -366,6 +366,23 @@ fn dress(
         }
         None if !body.shadow => error!("rag: a bone is missing or moved in models/triple-t.glb: no rag doll"),
         None => {}
+    }
+    // The gun goes in the hand: it goes where the hand goes.
+    let bone = children
+        .iter_descendants(model)
+        .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == HAND_BONE));
+    match bone {
+        Some(bone) => {
+            commands.entity(body.hand).insert((
+                ChildOf(bone),
+                Transform {
+                    translation: HELD_AT,
+                    rotation: HELD_TURN.normalize(),
+                    scale: Vec3::splat(HELD_SCALE),
+                },
+            ));
+        }
+        None => error!("bodies: no {HAND_BONE} in models/triple-t.glb: its gun lies at its feet"),
     }
     body.dressed = true;
     if body.shadow {
@@ -619,11 +636,9 @@ pub fn pose(
             t.set_if_neq(Transform::from_xyz(d.pos.x, d.pos.y, d.pos.z).with_rotation(Quat::from_rotation_y(-yaw)));
         }
     }
-    // Every gun hangs at the same `HAND`, at the chest, where the long
-    // hold puts both hands. The pistol clip is Gates' first-person arms
-    // (hands up at the face): over a body it held nothing. A pistol's
-    // reload is still its own clip, and the gun goes with the hand while
-    // it plays (`pose_hands`).
+    // Every gun is held in the long hold. The pistol clip is Gates'
+    // first-person arms (hands up at the face): over a body it held nothing.
+    // A pistol's reload is still its own clip.
     let gun_of = gun(d.arm);
     let hold = gun_of.map(|_| Hold::Long);
     let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
@@ -645,9 +660,9 @@ pub fn pose(
         dt,
     );
     // The gun: swapped when the arm changes, hidden on the dead and at the
-    // wheel, pitched with the aim.
+    // wheel. It waits for the hand it goes in.
     let arm = if d.alive && !driving { d.arm } else { 0 };
-    if arm != body.held {
+    if arm != body.held && body.dressed {
         commands.entity(body.hand).despawn_related::<Children>();
         let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
         // Your shadow's gun is a shadow too.
@@ -655,14 +670,6 @@ pub fn pose(
             commands.entity(scene).observe(super::own_shadow::shade_gun);
         }
         body.held = arm;
-    }
-    if let Ok(mut t) = at.get_mut(body.hand) {
-        let hand = Vec3::new(HAND.x, if d.crouched { HAND_CROUCHED_Y } else { HAND.y }, HAND.z);
-        let turn = Quat::from_rotation_z(d.pitch);
-        if t.translation != hand || t.rotation != turn {
-            t.translation = hand;
-            t.rotation = turn;
-        }
     }
 }
 
@@ -732,30 +739,6 @@ pub fn drive(
     }
 }
 
-/// While a body reloads, its gun goes with its right hand, by as much as the
-/// reload owns its arms: the hold's clips keep the hand at [`HAND`], a
-/// reload's take it to the magazine and back. Last frame's hand, so a frame
-/// behind, which a hand moving at a reload's pace never shows.
-pub fn pose_hands(
-    q: Query<(&Body, &super::rag::RagBones, &GlobalTransform), Without<super::rag::Ragdoll>>,
-    globals: Query<&GlobalTransform>,
-    mut at: Query<&mut Transform>,
-) {
-    for (b, bones, root) in &q {
-        let u = b.playing.reload_share();
-        if u <= 0.0 {
-            continue;
-        }
-        let Ok(hand) = globals.get(bones.right_hand()) else {
-            continue;
-        };
-        let there = root.affine().inverse().transform_point3(hand.translation());
-        if let Ok(mut t) = at.get_mut(b.hand) {
-            t.translation = t.translation.lerp(there, u);
-        }
-    }
-}
-
 /// Every body's spine turned (`anim::turn_spine`): in `PostUpdate`, after
 /// the animation and before the transforms propagate.
 /// Not a rag doll's (it poses every bone) nor a hidden body's.
@@ -772,6 +755,7 @@ pub fn pose_spines(
             pitch: b.gait.pitch,
             hip_yaw: b.gait.hip_yaw,
             held: b.playing.held(),
+            reload: b.playing.reload_share(),
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);

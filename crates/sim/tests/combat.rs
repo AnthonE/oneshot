@@ -280,7 +280,7 @@ fn frag_at(pitch: i16) -> (Option<u32>, Option<u32>) {
 fn a_frag_goes_off_half_a_second_after_it_comes_down_never_before_its_arming() {
     // Thrown at the feet: down at once, so off at the arming time.
     let (_, off) = frag_at(-PITCH_MAX);
-    let arm = ticks(GREN_ARM_MS);
+    let arm = ticks(GREN_RELEASE_MS) + ticks(GREN_ARM_MS);
     assert!(off.is_some_and(|t| t.abs_diff(arm) <= 2), "{off:?} vs {arm}");
     // Lofted: down after the arming time, so off half a second after.
     let (down, off) = frag_at(1820);
@@ -305,6 +305,9 @@ fn a_frag_still_hurts_at_its_rim() {
     };
     w.step(&inputs, &NO_LAG);
     inputs[0].buttons = 0;
+    for _ in 0..ticks(GREN_RELEASE_MS) {
+        w.step(&inputs, &NO_LAG);
+    }
     // Set down at the thrower's feet (one thrown down at 30 m/s bounces
     // high).
     for i in 0..MAX_PROJ {
@@ -317,7 +320,8 @@ fn a_frag_still_hurts_at_its_rim() {
         w.step(&inputs, &NO_LAG);
     }
     let took = (SHIELD_MAX - w.fighters[1].shield) / PT;
-    assert!((GREN_EDGE..GREN_DMG / 2).contains(&took), "took {took}");
+    // Half of it, on shields.
+    assert!((GREN_EDGE / 2..GREN_DMG / 4).contains(&took), "took {took}");
 }
 
 #[test]
@@ -391,6 +395,7 @@ fn the_overshield_climbs_to_three_times_full_then_drains_back() {
     assert!(n <= ticks(2000), "full in 2 s from full shields, not {n} ticks");
     // A sticky worn still kills, whatever the shield.
     w.fighters[1].body.pos = V3::new(3.0, 0.0, 0.0);
+    w.fighters[1].stickies = 1;
     let mut sticky = [Input::default(); MAX_FIGHTERS];
     sticky[1] = Input {
         buttons: GRENADE | GREN_SWITCH,
@@ -399,6 +404,10 @@ fn the_overshield_climbs_to_three_times_full_then_drains_back() {
         ..Input::default()
     };
     w.step(&sticky, &NO_LAG);
+    sticky[1].buttons = 0;
+    for _ in 0..ticks(GREN_RELEASE_MS) {
+        w.step(&sticky, &NO_LAG);
+    }
     for _ in 0..ticks(3000) {
         w.step(&idle, &NO_LAG);
         if !w.fighters[0].alive {
@@ -1110,4 +1119,161 @@ fn a_tap_held_through_a_missing_frame_acts_once() {
     inputs[0] = held;
     w.step(&inputs, &NO_LAG);
     assert_eq!(w.fighters[0].cur, start, "and a new press swaps back");
+}
+
+/// Seat 0, on the open map facing +x, with the grenade `kind` selected: the
+/// press, and on until it has left the hand.
+fn thrown(w: &mut sim::world::World, kind: u8, pitch: i16) {
+    w.fighters[0].gren_kind = kind;
+    w.fighters[0].stickies = 2;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        buttons: GRENADE,
+        pitch,
+        ..Input::default()
+    };
+    w.step(&inputs, &NO_LAG);
+    inputs[0].buttons = 0;
+    for _ in 0..ticks(GREN_RELEASE_MS) {
+        w.step(&inputs, &NO_LAG);
+    }
+}
+
+fn live_grenade(w: &sim::world::World) -> Option<sim::world::Projectile> {
+    (0..MAX_PROJ).map(|i| w.proj[i]).find(|p| p.active)
+}
+
+#[test]
+fn a_grenade_leaves_the_hand_as_the_arm_flings_it() {
+    let mut w = duel([AR, MAGNUM], 60.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = GRENADE;
+    w.step(&inputs, &NO_LAG);
+    assert_eq!(w.fighters[0].grenades, GREN_START - 1, "spent on the press");
+    assert!(live_grenade(&w).is_none(), "not yet out of the hand");
+    inputs[0].buttons = 0;
+    for _ in 0..ticks(GREN_RELEASE_MS) {
+        assert!(live_grenade(&w).is_none());
+        w.step(&inputs, &NO_LAG);
+    }
+    assert!(live_grenade(&w).is_some(), "out of the hand");
+}
+
+#[test]
+fn a_stuck_sticky_stays_exactly_where_it_stuck() {
+    let mut w = duel([AR, MAGNUM], 60.0);
+    thrown(&mut w, 1, -PITCH_MAX / 2);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    let mut stuck = None;
+    for _ in 0..ticks(4000) {
+        w.step(&idle, &NO_LAG);
+        match live_grenade(&w) {
+            Some(p) if p.landed => {
+                let at = *stuck.get_or_insert(p.pos);
+                assert_eq!(p.pos, at, "it stays where it stuck");
+                assert_eq!(p.vel, V3::ZERO);
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(stuck.is_some(), "it stuck");
+    assert!(live_grenade(&w).is_none(), "and went off");
+}
+
+#[test]
+fn a_grenade_takes_half_off_shields() {
+    // Set off beside them, in full reach: 160 is 80 off a shield of 100.
+    let mut w = duel([AR, MAGNUM], 60.0);
+    thrown(&mut w, 0, 0);
+    let i = (0..MAX_PROJ).find(|&i| w.proj[i].active).expect("thrown");
+    w.fighters[1].body.pos = V3::new(30.0, 0.0, 30.0);
+    w.proj[i].pos = w.fighters[1].body.pos + V3::new(0.5, 0.9, 0.0);
+    w.proj[i].vel = V3::ZERO;
+    w.proj[i].ttl = 1;
+    let (shield, health) = (w.fighters[1].shield, w.fighters[1].health);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[1].health, health, "the shields took it all");
+    assert_eq!(shield - w.fighters[1].shield, (GREN_DMG * PT) / 2);
+}
+
+#[test]
+fn a_blast_sets_off_the_grenades_in_its_reach_and_no_others() {
+    let mut w = duel([AR, MAGNUM], 60.0);
+    thrown(&mut w, 0, 0);
+    let first = (0..MAX_PROJ).find(|&i| w.proj[i].active).expect("thrown");
+    let mut near = w.proj[first];
+    near.pos = V3::new(40.0, 0.5, 2.0);
+    near.vel = V3::ZERO;
+    near.ttl = ticks(4000) as u16;
+    let mut far = near;
+    far.pos = V3::new(40.0, 0.5, 30.0);
+    w.proj[first].pos = V3::new(40.0, 0.5, 0.0);
+    w.proj[first].vel = V3::ZERO;
+    w.proj[first].ttl = 1;
+    let (near_at, far_at) = ((first + 1) % MAX_PROJ, (first + 2) % MAX_PROJ);
+    w.proj[near_at] = near;
+    w.proj[far_at] = far;
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert!(!w.proj[first].active);
+    assert!(
+        w.proj[near_at].ttl <= ticks(GREN_CHAIN_MS) as u16,
+        "its fuse is cut short"
+    );
+    assert!(w.proj[far_at].ttl > ticks(GREN_CHAIN_MS) as u16, "out of its reach");
+    for _ in 0..ticks(GREN_CHAIN_MS) + 1 {
+        w.step(&idle, &NO_LAG);
+    }
+    assert!(!w.proj[near_at].active, "the chain went off");
+    assert!(w.proj[far_at].active);
+}
+
+#[test]
+fn a_grenade_pad_gives_what_fits_and_is_left_for_whoever_has_room() {
+    let mut map = Map::open();
+    map.pads = vec![sim::map::PadDef {
+        pos: V3::new(0.0, 0.0, 0.0),
+        arm: sim::arms::STICKIES,
+        respawn_ms: 30_000,
+    }];
+    let mut w = World::new(map, Rules::duel(), 1, (1, 2));
+    w.seat(0, 0);
+    w.seat(1, 1);
+    let idle = [Input::default(); MAX_FIGHTERS];
+    while w.phase == Phase::Countdown {
+        w.step(&idle, &NO_LAG);
+    }
+    w.fighters[0].stickies = GREN_MAX;
+    w.fighters[0].body.pos = V3::new(0.0, 0.0, 0.0);
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.pads[0].empty_for, 0, "full up: left lying");
+    w.fighters[0].stickies = GREN_MAX - 1;
+    w.step(&idle, &NO_LAG);
+    assert_eq!(w.fighters[0].stickies, GREN_MAX);
+    assert!(w.pads[0].empty_for > 0, "taken");
+}
+
+#[test]
+fn a_blast_cooks_off_grenades_lying_on_the_floor() {
+    let mut w = duel([AR, MAGNUM], 60.0);
+    thrown(&mut w, 0, 0);
+    let i = (0..MAX_PROJ).find(|&i| w.proj[i].active).expect("thrown");
+    w.drops[0] = sim::world::Dropped {
+        active: true,
+        frags: 2,
+        stickies: 1,
+        pos: V3::new(40.0, 0.0, 2.0),
+        ttl: ticks(30_000),
+        ..Default::default()
+    };
+    w.proj[i].pos = V3::new(40.0, 0.5, 0.0);
+    w.proj[i].vel = V3::ZERO;
+    w.proj[i].ttl = 1;
+    let idle = [Input::default(); MAX_FIGHTERS];
+    w.step(&idle, &NO_LAG);
+    assert!(!w.drops[0].active, "nothing left of the pile");
+    let lit = (0..MAX_PROJ).filter(|&k| w.proj[k].active).count();
+    assert_eq!(lit, 2, "a pile of a kind goes off as one");
 }

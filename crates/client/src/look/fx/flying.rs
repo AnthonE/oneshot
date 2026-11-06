@@ -1,6 +1,7 @@
 //! What's in flight. Things with weight are drawn with their models: a
 //! rocket with its exhaust's glow and a trail of smoke, a frag or a
-//! launcher's grenade with its fuse blinking, a sticky glowing blue. Light
+//! launcher's grenade with its fuse blinking, a sticky a ball of plasma
+//! (`plasma.rs`) with its light, its sparks and, once stuck, its arcs. Light
 //! is drawn as light, straight into the glow pool from where it is this
 //! frame: an ion bolt's blue core and streak, a charged bolt's bigger one
 //! with its light, the cannon's green ball, the SHARD GUN's pink crystals.
@@ -13,12 +14,16 @@
 //! a body we see sticks there (`bodies.rs` glints it); anywhere else it
 //! shatters. A bolt splashes. Drawing only.
 
+use bevy::ecs::system::SystemParam;
+use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use client_net::core::{Drawn, DrawnProj};
+use client_net::proj::STUCK_V;
 use proto::ProjState;
 use sim::consts::{HEAD_Y, HIT_R};
 
 use super::atlas::{GLOW, SHARD, STREAK};
+use super::plasma;
 use super::pool::{Orient, Particle};
 use super::table::{Layer, PINK};
 use super::{FlashDef, Fx};
@@ -43,11 +48,44 @@ const ION: [f32; 4] = [2.0, 5.5, 14.0, 1.0];
 const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
+/// A sticky's glow round the ball and at its heart, metres across, and how
+/// much bigger with its fuse run out: it reads from across a room, and on
+/// whoever it is stuck to.
+const STICKY_HALO_M: f32 = 0.42;
+const STICKY_CORE_M: f32 = 0.12;
+const STICKY_GLOW_SWELL: f32 = 0.7;
+/// Once stuck: arcs a second, from its fuse's start to its end, how big, and
+/// the vapour it boils off, a second.
+const STICKY_ARCS_HZ: (f32, f32) = (9.0, 34.0);
+const STICKY_ARC_SIZE: f32 = 0.32;
+const STICKY_ARC_OUT_M: f32 = 0.07;
+const STICKY_VAPOUR_HZ: f32 = 7.0;
+const STICKY_VAPOUR_SIZE: f32 = 0.4;
+const STICKY_VAPOUR: Color = Color::srgb(0.6, 0.72, 0.95);
+/// How long its fuse runs once it has stuck, seconds (`sim`'s, most throws).
+const STICKY_FUSE_S: f32 = sim::consts::STICKY_FUSE_MS as f32 / 1000.0;
+/// How far each model stands from its base to its middle.
+const ROCKET_MID_M: f32 = 0.3;
+const FRAG_MID_M: f32 = 0.08;
+
+/// Which model draws a kind of round: a hidden one goes to any round of its own.
+fn model_of(kind: u8) -> u8 {
+    match kind {
+        ROCKET => ROCKET,
+        STICKY => STICKY,
+        _ => FRAG,
+    }
+}
+
+/// A ball's parts, moved as its fuse runs.
+#[derive(SystemParam)]
+pub struct BallParts<'w, 's> {
+    balls: Query<'w, 's, (&'static mut Transform, &'static mut MeshTag), Without<Flying>>,
+    lights: Query<'w, 's, &'static mut PointLight, Without<Flying>>,
+}
 
 /// A new model for `p`, kept from then on.
-fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &DrawnProj) -> Entity {
-    let rocket = p.kind == ROCKET;
-    let scene = if rocket { &models.rocket } else { &models.frag };
+fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, kit: Option<&plasma::Kit>, p: &DrawnProj) -> Entity {
     let place = place(&p.state());
     let mut e = commands.spawn((
         Flying {
@@ -55,28 +93,132 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, p: &DrawnProj) -> En
             kind: p.kind,
             last: place.translation,
             lit: false,
+            ball: None,
+            glow: None,
+            stuck: 0.0,
+            arcs: 0.0,
+            vapour: 0.0,
         },
         place,
         Visibility::default(),
     ));
-    e.with_child((
-        SceneRoot(scene.clone()),
-        // Both models stand on their base, +Y up: centre them.
-        Transform::from_xyz(0.0, if rocket { -0.3 } else { -0.08 }, 0.0),
-    ));
-    if rocket && fx.caps.lights > 2 {
-        e.with_child((
-            Transform::from_xyz(0.0, -0.5, 0.0),
-            PointLight {
-                intensity: 200_000.0,
-                range: 7.0,
-                color: Color::srgb(1.0, 0.6, 0.3),
-                shadows_enabled: false,
-                ..default()
-            },
-        ));
+    let mut ball = None;
+    let mut glow = None;
+    match model_of(p.kind) {
+        ROCKET => {
+            // It stands on its base, +Y up: centre it.
+            e.with_child((
+                SceneRoot(models.rocket.clone()),
+                Transform::from_xyz(0.0, -ROCKET_MID_M, 0.0),
+            ));
+            if fx.caps.lights > 2 {
+                e.with_child((
+                    Transform::from_xyz(0.0, -0.5, 0.0),
+                    PointLight {
+                        intensity: 200_000.0,
+                        range: 7.0,
+                        color: Color::srgb(1.0, 0.6, 0.3),
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                ));
+            }
+        }
+        STICKY => {
+            if let Some(kit) = kit {
+                e.with_children(|c| {
+                    ball = Some(plasma::spawn_ball(c, kit, plasma::FLIGHT_HEAT));
+                });
+            }
+            if fx.caps.lights > 2 {
+                let [r, g, b] = plasma::LIGHT_RGB;
+                e.with_children(|c| {
+                    glow = Some(
+                        c.spawn((
+                            Transform::default(),
+                            PointLight {
+                                intensity: plasma::LUMENS,
+                                range: plasma::LIGHT_M,
+                                color: Color::linear_rgb(r, g, b),
+                                shadows_enabled: false,
+                                ..default()
+                            },
+                        ))
+                        .id(),
+                    );
+                });
+            }
+        }
+        _ => {
+            e.with_child((
+                SceneRoot(models.frag.clone()),
+                Transform::from_xyz(0.0, -FRAG_MID_M, 0.0),
+            ));
+        }
     }
-    e.id()
+    let id = e.id();
+    commands.entity(id).queue(move |mut e: EntityWorldMut| {
+        if let Some(mut f) = e.get_mut::<Flying>() {
+            f.ball = ball;
+            f.glow = glow;
+        }
+    });
+    id
+}
+
+/// A frame of a sticky: its heat, the ball and its light at it, its glow, and
+/// what comes off it.
+#[allow(clippy::too_many_arguments)]
+fn sticky_frame(fx: &mut Fx, f: &mut Flying, parts: &mut BallParts, at: Vec3, vel: Vec3, fresh: bool, t: f32, dt: f32) {
+    // A stuck one's velocity on the wire is its offset from what it is on.
+    let still = vel.length() < STUCK_V;
+    f.stuck = if still && !fresh { f.stuck + dt } else { 0.0 };
+    let heat = if still {
+        plasma::FLIGHT_HEAT.max((f.stuck / STICKY_FUSE_S).min(1.0))
+    } else {
+        plasma::FLIGHT_HEAT
+    };
+    let hot = heat * heat;
+    if let Some((mut tr, mut tag)) = f.ball.and_then(|b| parts.balls.get_mut(b).ok()) {
+        tr.scale = Vec3::splat(plasma::RADIUS_M * (1.0 + plasma::SWELL * hot));
+        let want = plasma::tag(heat);
+        if tag.0 != want.0 {
+            *tag = want;
+        }
+    }
+    // Two beats that never line up: it never settles to a steady lamp.
+    if let Some(mut light) = f.glow.and_then(|g| parts.lights.get_mut(g).ok()) {
+        let flicker = 0.78 + 0.22 * (t * 37.0).sin() * (t * 53.0 + 1.3).sin();
+        light.intensity = plasma::LUMENS * (1.0 + (plasma::LUMENS_HOT - 1.0) * hot) * flicker;
+    }
+    let glow = 1.0 + STICKY_GLOW_SWELL * hot;
+    fx.glow.spawn(dot(at, STICKY_HALO_M * glow, ION_HALO));
+    fx.glow.spawn(dot(at, STICKY_CORE_M * glow, ION));
+    if !still {
+        trail(fx, at, vel, ION);
+        return;
+    }
+    if super::table::lod(at.distance(fx.eye)) <= 0.0 {
+        return;
+    }
+    f.arcs += dt * (STICKY_ARCS_HZ.0 + (STICKY_ARCS_HZ.1 - STICKY_ARCS_HZ.0) * hot);
+    while f.arcs >= 1.0 {
+        f.arcs -= 1.0;
+        let d = fx.unit();
+        fx.emit_tint(
+            Layer::Arcs,
+            1,
+            at + d * STICKY_ARC_OUT_M,
+            d,
+            Color::WHITE,
+            STICKY_ARC_SIZE,
+        );
+    }
+    f.vapour += dt * STICKY_VAPOUR_HZ;
+    while f.vapour >= 1.0 {
+        f.vapour -= 1.0;
+        fx.emit_tint(Layer::Wisp, 1, at, Vec3::Y, STICKY_VAPOUR, STICKY_VAPOUR_SIZE);
+    }
 }
 
 /// Drawn with a model (the rest are light).
@@ -93,13 +235,20 @@ pub struct Flying {
     last: Vec3,
     /// A fuse was lit last frame.
     lit: bool,
+    /// A sticky's ball and light, and how long it has been seen stuck, with
+    /// what its arcs and vapour have owing.
+    ball: Option<Entity>,
+    glow: Option<Entity>,
+    stuck: f32,
+    arcs: f32,
+    vapour: f32,
 }
 
 /// [`projectiles`]' lists: the models there are and which are taken, the
 /// rounds that get one, and which kept theirs.
 #[derive(Default)]
 pub struct Scratch {
-    pool: Vec<(Entity, bool, u16, bool)>,
+    pool: Vec<(Entity, u8, u16, bool)>,
     taken: Vec<bool>,
     go: Vec<(Entity, DrawnProj, bool)>,
     live: Vec<DrawnProj>,
@@ -118,6 +267,8 @@ pub fn projectiles(
     t: f32,
     dt: f32,
     have: &mut Query<(Entity, &mut Flying, &mut Transform, &mut Visibility)>,
+    parts: &mut BallParts,
+    kit: Option<&plasma::Kit>,
 ) {
     fx.trail_clock(dt);
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
@@ -139,7 +290,7 @@ pub fn projectiles(
     pool.clear();
     pool.extend(
         have.iter()
-            .map(|(e, f, _, v)| (e, f.kind == ROCKET, f.id, *v != Visibility::Hidden)),
+            .map(|(e, f, _, v)| (e, model_of(f.kind), f.id, *v != Visibility::Hidden)),
     );
     taken.clear();
     taken.resize(pool.len(), false);
@@ -151,8 +302,8 @@ pub fn projectiles(
     // First every shown model to its own round, then the rest a free
     // model, hidden ones first, then a new one.
     for (i, p) in live.iter().enumerate() {
-        let rocket = p.kind == ROCKET;
-        if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == rocket && pool[k].2 == p.id) {
+        let model = model_of(p.kind);
+        if let Some(k) = (0..pool.len()).find(|&k| !taken[k] && pool[k].3 && pool[k].1 == model && pool[k].2 == p.id) {
             matched[i] = true;
             taken[k] = true;
             go.push((pool[k].0, *p, false));
@@ -162,9 +313,9 @@ pub fn projectiles(
         if matched[i] {
             continue;
         }
-        let rocket = p.kind == ROCKET;
+        let model = model_of(p.kind);
         let free = (0..pool.len())
-            .filter(|&k| !taken[k] && pool[k].1 == rocket)
+            .filter(|&k| !taken[k] && pool[k].1 == model)
             .min_by_key(|&k| pool[k].3);
         match free {
             Some(k) => {
@@ -172,8 +323,8 @@ pub fn projectiles(
                 go.push((pool[k].0, *p, true));
             }
             None => {
-                let e = spawn(commands, fx, models, p);
-                pool.push((e, rocket, p.id, true));
+                let e = spawn(commands, fx, models, kit, p);
+                pool.push((e, model, p.id, true));
                 taken.push(true);
             }
         }
@@ -234,14 +385,15 @@ pub fn projectiles(
             }
             continue;
         }
-        // A sticky glows blue the whole while; a fuse blinks red.
         if p.kind == STICKY {
-            fx.glow.spawn(dot(at, 0.18, ION_HALO));
-            fx.glow.spawn(dot(at, 0.06, ION));
+            let vel = Vec3::new(p.vel.x, p.vel.y, p.vel.z);
+            sticky_frame(fx, &mut f, parts, at, vel, fresh, t, dt);
+            continue;
         }
+        // A fuse blinks red.
         let lit = (t * BLINK_HZ).fract() < 0.5;
         if lit && !f.lit {
-            let c = if p.kind == STICKY { ION } else { [10.0, 1.5, 0.8, 1.0] };
+            let c = [10.0, 1.5, 0.8, 1.0];
             fx.glow.spawn(Particle {
                 left: 0.1,
                 life: 0.1,

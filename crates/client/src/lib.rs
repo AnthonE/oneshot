@@ -237,6 +237,13 @@ pub struct Autoplay {
     /// Stuck chasing someone fog shows behind a wall: the route instead
     /// until this time (ms).
     detour: f64,
+    /// The range drill instead of a fight (`--drill`, `tools/reel.sh`):
+    /// stand off a wall and work the gun through its beats, [`drill`].
+    pub drill: bool,
+    /// When the drill took its stand (ms; 0: still walking up), and when
+    /// it began to.
+    stood: f64,
+    walking: f64,
 }
 
 /// How often the autopilot checks it is getting somewhere, how far counts,
@@ -506,6 +513,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::plasma::PlasmaMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -554,7 +562,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 .after(look::viewmodel::kit),
             look::own_shadow::setup,
             look::portrait::setup,
-            look::fx::setup,
+            (look::fx::setup, look::fx::plasma::setup),
             look::prewarm::setup,
             (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
             look::rain::setup,
@@ -665,18 +673,16 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        (look::bodies::pose_spines, look::rag::step, look::bodies::pose_hands)
+        (look::bodies::pose_spines, look::rag::step)
             .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
-    // Our own arms in view, onto the guns as `draw_view` posed them.
-    .add_systems(Update, (look::hands::build, look::icons::develop))
+    // Our own hands in view, onto the guns as `draw_view` posed them.
+    .add_systems(Update, look::icons::develop)
     .add_systems(
         PostUpdate,
-        look::hands::pose
-            .after(bevy::app::AnimationSystems)
-            .before(bevy::transform::TransformSystems::Propagate),
+        look::hands::pose.before(bevy::transform::TransformSystems::Propagate),
     )
     // Names over heads, after the camera is placed (`tags.rs`).
     .add_systems(Update, tags::draw.after(view).after(hud::draw).run_if(in_match));
@@ -728,10 +734,14 @@ fn setup(
     look::viewmodel::spawn(&mut commands, eye);
 }
 
-/// Our own arms in view, under the eye, once the models are asked for.
-fn arms_setup(mut commands: Commands, models: Res<look::guns::Models>, eye: Query<Entity, With<Eye>>) {
-    if let Ok(eye) = eye.single() {
-        look::hands::spawn(&mut commands, &models, eye);
+/// Our own hands in view, beside the gun, once the models are asked for.
+fn arms_setup(
+    mut commands: Commands,
+    models: Res<look::guns::Models>,
+    in_view: Query<Entity, With<look::viewmodel::InView>>,
+) {
+    if let Ok(in_view) = in_view.single() {
+        look::hands::spawn(&mut commands, &models, in_view);
     }
 }
 
@@ -928,6 +938,9 @@ fn pump(
 /// One frame of the autopilot: buttons and the two axes, and where to look.
 fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore, now: f64) -> (u16, i32, i32) {
     auto.frames += 1;
+    if auto.drill {
+        return drill(auto, look, core, now);
+    }
     let (f, me) = core.own();
     let mate = core.rules.teams.then_some(core.team);
     let best = core
@@ -976,6 +989,113 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     let fire = if f.last_buttons & FIRE == 0 { FIRE } else { 0 };
     let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
+}
+
+/// The drill's beats, seconds from when it took its stand: a burst at the
+/// wall, a burst into the floor, a melee, a walk backward, a frag at the wall
+/// from there, a reload; then the other gun, from the top. `tools/reel.sh`
+/// finds them in the picture by these.
+pub const DRILL_BURST_S: (f64, f64) = (1.0, 2.2);
+pub const DRILL_FLOOR_S: (f64, f64) = (3.4, 4.0);
+pub const DRILL_MELEE_S: f64 = 5.2;
+pub const DRILL_BACK_S: (f64, f64) = (5.6, 7.0);
+pub const DRILL_THROW_S: f64 = 7.2;
+pub const DRILL_RELOAD_S: f64 = 10.8;
+pub const DRILL_LOOP_S: f64 = 14.2;
+/// How far off its wall the drill stands, metres, and how much further
+/// for a gun whose round blows up (times its blast's radius).
+const DRILL_STAND_M: f32 = 6.0;
+const DRILL_STAND_PER_RADIUS: f32 = 1.8;
+/// It waits this long where it spawned before anything (the first seconds
+/// of a session compile what they draw, and a film can't show a tape's
+/// first three), then walks to its wall for this long at most before it
+/// drills where it is, ms.
+const DRILL_SETTLE_MS: f64 = 4000.0;
+const DRILL_WALK_MS: f64 = 9000.0;
+/// Where it aims its floor burst (radians down) and its throw (level: it
+/// backs off first, or a frag off a wall this near comes straight back).
+const DRILL_FLOOR_PITCH: f32 = -0.5;
+const DRILL_THROW_PITCH: f32 = 0.03;
+
+/// One frame of the range drill (`--drill`): inputs only, as the autopilot's.
+/// It squares up to the wall that needs the least walking, walks until it
+/// is a few metres off, stands, and works the gun in hand through the beats
+/// above on the session's clock, so a tape of it shows every gun the same
+/// way: at rest, firing at a wall and at the floor, a blow, a frag going
+/// off against the wall, a reload.
+fn drill(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore, now: f64) -> (u16, i32, i32) {
+    let (f, me) = core.own();
+    if !f.alive {
+        (auto.stood, auto.walking) = (0.0, 0.0);
+        return (0, 0, 0);
+    }
+    let a = sim::arms::arm(f.gun().arm);
+    let tap = |on: bool| if on && f.last_buttons & FIRE == 0 { FIRE } else { 0 };
+    look.pitch = 0.0;
+    if auto.stood == 0.0 {
+        // Clear of our own blast, for a gun that has one.
+        let stand = DRILL_STAND_M.max(a.radius * DRILL_STAND_PER_RADIUS + 3.0);
+        let eye = sim::geom::V3::new(me.x, me.y + f.body.eye_h(), me.z);
+        let wall_at = |yaw: f32| core.map.ray(eye, sim::geom::V3::new(yaw.cos(), 0.0, yaw.sin()), 200.0);
+        if auto.walking == 0.0 {
+            auto.walking = now;
+            // Square on to a wall, of the four ways: the nearest that is
+            // far enough off, or failing that the furthest.
+            let ways = [0.0, 1.0, 2.0, 3.0].map(|k: f32| k * core::f32::consts::FRAC_PI_2);
+            let far_enough = ways
+                .iter()
+                .filter(|y| wall_at(**y) >= stand)
+                .min_by(|a, b| wall_at(**a).total_cmp(&wall_at(**b)));
+            let furthest = ways.iter().max_by(|a, b| wall_at(**a).total_cmp(&wall_at(**b)));
+            if let Some(yaw) = far_enough.or(furthest) {
+                look.yaw = *yaw;
+            }
+        }
+        let since = now - auto.walking;
+        if since < DRILL_SETTLE_MS {
+            return (0, 0, 0);
+        }
+        let wall = wall_at(look.yaw);
+        if since < DRILL_SETTLE_MS + DRILL_WALK_MS {
+            if wall > stand + 0.4 {
+                return (0, 0, 127);
+            }
+            if wall < stand - 1.5 {
+                return (0, 0, -127);
+            }
+        }
+        auto.stood = now;
+        info!("oneshot: drill stands at {now:.0} ms with the {}", a.name);
+    }
+    let t = (now - auto.stood) / 1000.0;
+    let within = |(from, to): (f64, f64)| (from..to).contains(&t);
+    // An automatic holds its trigger; anything else is pulled again and
+    // again, by tick (as the autopilot's).
+    let fire = |on: bool| if a.auto && on { FIRE } else { tap(on) };
+    let mut buttons = fire(within(DRILL_BURST_S));
+    // Into the floor three metres ahead: never with a round that blows up.
+    if within(DRILL_FLOOR_S) && a.radius == 0.0 {
+        look.pitch = DRILL_FLOOR_PITCH;
+        // The first tenth only turns the view down.
+        buttons |= fire(t > DRILL_FLOOR_S.0 + 0.1);
+    }
+    if within((DRILL_MELEE_S, DRILL_MELEE_S + 0.05)) {
+        buttons |= MELEE;
+    }
+    if within((DRILL_THROW_S - 0.2, DRILL_THROW_S + 0.3)) {
+        look.pitch = DRILL_THROW_PITCH;
+    }
+    if within((DRILL_THROW_S, DRILL_THROW_S + 0.05)) {
+        buttons |= GRENADE;
+    }
+    if within((DRILL_RELOAD_S, DRILL_RELOAD_S + 0.05)) {
+        buttons |= RELOAD;
+    }
+    if t >= DRILL_LOOP_S {
+        (auto.stood, auto.walking) = (0.0, 0.0);
+        buttons |= SWAP;
+    }
+    (buttons, 0, if within(DRILL_BACK_S) { -127 } else { 0 })
 }
 
 /// A new welcome: the map it names. (Bevy hands a system its world in
@@ -1729,6 +1849,8 @@ fn fly(
     mut fx: ResMut<look::fx::Fx>,
     mut commands: Commands,
     mut have: Query<(Entity, &mut look::fx::flying::Flying, &mut Transform, &mut Visibility)>,
+    mut parts: look::fx::flying::BallParts,
+    kit: Option<Res<look::fx::plasma::Kit>>,
 ) {
     let core = &link.0.session().core;
     // On the render tick, with the bodies that fired them (`core.rs`).
@@ -1742,6 +1864,8 @@ fn fly(
         time.elapsed_secs(),
         time.delta_secs(),
         &mut have,
+        &mut parts,
+        kit.as_deref(),
     );
 }
 

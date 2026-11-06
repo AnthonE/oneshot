@@ -184,6 +184,7 @@ impl Def {
                 })
                 .collect(),
             id: self.id,
+            practice: self.practice,
             name: self.name,
             lo: self.lo,
             hi: self.hi,
@@ -263,6 +264,8 @@ pub const TEST_MAP: u8 = 255;
 pub struct Map {
     /// What the wire and replays call it.
     pub id: u8,
+    /// Out of the rotation, to practise on ([`Def::practice`]).
+    pub practice: bool,
     pub name: &'static str,
     /// Walkable area in x and z: (min x, min z) to (max x, max z).
     pub lo: (f32, f32),
@@ -649,6 +652,7 @@ impl Map {
             light: LightDef::DAY,
             flags: None,
             id: TEST_MAP,
+            practice: false,
             name: "open",
             looks: vec![0; 4],
             solids: Vec::new(),

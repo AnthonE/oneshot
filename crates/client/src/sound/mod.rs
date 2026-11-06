@@ -175,6 +175,8 @@ struct Round {
     pos: Vec3,
     vel: Vec3,
     slot: Option<u8>,
+    /// A sticky: how long it has been stuck, seconds.
+    stuck: f32,
 }
 
 /// What the ear remembers between frames, and which clips the mixer has.
@@ -570,6 +572,9 @@ pub fn names() -> Vec<String> {
         "vent_0",
         "engine_0",
         "rocket_fly_0",
+        "sticky_sizzle_0",
+        "sticky_stick_0",
+        "sticky_whine_0",
         "wind_0",
         "spawn_0",
         "tick_0",
@@ -1173,14 +1178,21 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
     }
 }
 
-/// The rounds in flight: a rocket's roar following it, a grenade's
-/// bounce, a charged bolt's whoomp as it leaves.
+/// A sticky's sizzle: how loud, and how much higher with its fuse run out.
+const STICKY_GAIN: f32 = 1.8;
+const STICKY_CLIMB: f32 = 0.5;
+const STICKY_WHINE_GAIN: f32 = 0.7;
+const STICKY_FUSE_S: f32 = sim::consts::STICKY_FUSE_MS as f32 / 1000.0;
+
+/// The rounds in flight: a rocket's roar following it, a sticky's sizzle and
+/// it landing, a grenade's bounce, a charged bolt's whoomp as it leaves.
 fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     const ROCKET: u8 = 0;
     const FRAG: u8 = 1;
     const CHARGED: u8 = 3;
     const LOB: u8 = 5;
     const CANNON: u8 = 6;
+    const STICKY: u8 = 7;
     let fresh = snap.tick != ear.snap_tick;
     if fresh {
         let gap = (snap.tick.wrapping_sub(ear.snap_tick)).min(TICK_HZ) as f32 / TICK_HZ as f32;
@@ -1206,12 +1218,21 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
                 pos,
                 vel,
                 slot: None,
+                stuck: 0.0,
             };
             match best {
                 Some((i, _)) => {
                     taken[i] = true;
                     let was = ear.rounds[i];
                     r.slot = was.slot;
+                    // On the wire a stuck one's velocity is its offset.
+                    if p.kind == STICKY && vel.length() < client_net::proj::STUCK_V {
+                        r.stuck = was.stuck + gap;
+                        if was.vel.length() >= client_net::proj::STUCK_V {
+                            ear.at(ears, "sticky_stick_0", pos, 1.0, SMALL);
+                            ear.at(ears, "sticky_whine_0", pos, STICKY_WHINE_GAIN, SMALL);
+                        }
+                    }
                     let bounced = (was.vel.y < -1.0 && vel.y > 0.3)
                         || Vec3::new(was.vel.x, 0.0, was.vel.z).dot(Vec3::new(vel.x, 0.0, vel.z)) < 0.0;
                     if (p.kind == FRAG || p.kind == LOB) && bounced {
@@ -1241,7 +1262,7 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     // The roar of what flies under its own power.
     for k in 0..ear.rounds.len() {
         let r = ear.rounds[k];
-        if r.kind != ROCKET && r.kind != CANNON {
+        if r.kind != ROCKET && r.kind != CANNON && r.kind != STICKY {
             continue;
         }
         let slot = match r.slot {
@@ -1253,13 +1274,21 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
         };
         let j = (slot - SLOT_PROJ) as usize;
         let mut on = ear.held_proj[j];
-        let rate = if r.kind == CANNON { 0.7 } else { 1.0 };
+        let (clip, gain, rate) = match r.kind {
+            CANNON => ("rocket_fly_0", 0.8, 0.7),
+            STICKY => (
+                "sticky_sizzle_0",
+                STICKY_GAIN,
+                1.0 + STICKY_CLIMB * (r.stuck / STICKY_FUSE_S).min(1.0),
+            ),
+            _ => ("rocket_fly_0", 0.8, 1.0),
+        };
         ear.hold(
             Some(ears),
             slot,
             &mut on,
-            "rocket_fly_0",
-            Some((r.pos, r.vel, 0.8, rate, FLIGHT)),
+            clip,
+            Some((r.pos, r.vel, gain, rate, FLIGHT)),
         );
         ear.held_proj[j] = on;
         ear.rounds[k].slot = on.then_some(slot);

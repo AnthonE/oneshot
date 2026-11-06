@@ -2,8 +2,8 @@
 //! predict fires: its flash and smoke at the muzzle, its tracer down the
 //! view (DESIGN §5; after Gates' `fx/gun.rs`). The server's word on that
 //! shot arrives a round trip later and draws only what the round met.
-//! Everyone else's is drawn off the event: a star flash, a tongue of fire
-//! and smoke at their muzzle, a tracer down the line the round really took
+//! Everyone else's is drawn off the event: a baked flash about a hot core, a
+//! tongue of fire and smoke at their muzzle, a tracer down the line the round really took
 //! (every round, or every few for an automatic), and what it met: sparks,
 //! chips and grit and a hole in the face it struck (a pillar's, a ramp's,
 //! a curved wall's segment: `surface.rs`), dust in the ground, lightning
@@ -17,7 +17,9 @@ use sim::consts::{HEAD_Y, HIT_R};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 
-use super::table::{self, Casing, Flash, GunLook, Layer, Matter, Weapon, OWN_STAR_LIFE_S};
+use super::atlas::{FLAME, GLOW};
+use super::pool::{Orient, Particle};
+use super::table::{self, Casing, Flash, GunLook, Layer, Matter, Weapon};
 use super::{Fx, Scene, MUZZLE_FLASH};
 use crate::look::shake;
 
@@ -27,10 +29,28 @@ const MUZZLE_DOWN_M: f32 = 0.28;
 /// Our own muzzle, in view space: ahead, right, down (where the gun in
 /// view holds it), and how far ahead of it our tracer starts.
 const OWN_MUZZLE: Vec3 = Vec3::new(0.12, -0.1, 0.7);
-/// Our own flash's stars, times an impact's and the gun's `flash_scale`:
+/// Our own flash, times a third person's and the gun's `flash_scale`:
 /// [`OWN_MUZZLE`] is a hand's length from the eye, where a third person's
 /// size would cover a fifth of the view.
-const OWN_STAR_SCALE: f32 = 0.8;
+const OWN_FLASH_SCALE: f32 = 1.5;
+/// How long our own flash burns, seconds: four or five frames at 60, the
+/// first its fullest, so an automatic's fire all but overlaps. Powder's,
+/// and an energy gun's with its afterglow.
+const OWN_FLASH_S: (f32, f32) = (0.062, 0.078);
+const OWN_ENERGY_S: f32 = 0.16;
+/// The share of an energy flash's life its bloom plays in.
+const OWN_BLOOM_SHARE: f32 = 0.5;
+/// A sprite drawn for the frame it is spawned in and gone by the next
+/// (the pools step after they are written, by more than this).
+const ONE_FRAME_S: f32 = 0.001;
+/// Our own flash's hot core, metres across at a `flash_scale` of 1.
+const OWN_CORE_M: f32 = 0.05;
+/// An energy gun's core against that: it is the flash, where powder has fire.
+const ENERGY_CORE: f32 = 1.8;
+/// The world's share of our flash, times the gun's `light_lm`. The gun in
+/// view has a light of its own (`viewmodel.rs`), a hand's length off, that
+/// lights nothing further.
+const OWN_WORLD_LIGHT: f32 = 3.0;
 const OWN_TRACER_SKIP_M: f32 = 1.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
@@ -150,11 +170,22 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     let up = cam * Vec3::Y;
     let at = own_muzzle(left, drawn);
     // The flash waits for the camera and the gun the frame is drawn with
-    // (`muzzle`).
+    // (`muzzle`), and burns there from now: a round on top of one still
+    // burning starts it again, another shape.
+    let life = match look.flash {
+        Flash::Powder => fx.range(OWN_FLASH_S.0, OWN_FLASH_S.1),
+        Flash::Energy(_) => OWN_ENERGY_S,
+    };
+    let (roll, seed) = (fx.range(0.0, core::f32::consts::TAU), fx.rand());
     fx.own_flash[usize::from(left)] = Some(OwnFlash {
         look,
         rocket: id == ROCKET,
         rounds,
+        age: 0.0,
+        life,
+        fresh: true,
+        roll,
+        seed,
     });
     // The stock's jolt: light for an automatic's every round, full for a
     // heavy single shot.
@@ -193,48 +224,50 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     }
 }
 
-/// Our own gun's flash this frame, by hand, waiting for the frame's camera
-/// and gun: the gun's look, and how many rounds it fired this frame.
+/// Our own gun's flash, by hand: lit the frame its round broke, burning
+/// until it is spent, and drawn each frame of that at the muzzle as that
+/// frame holds it.
 #[derive(Clone, Copy, Debug)]
 pub struct OwnFlash {
     look: GunLook,
     rocket: bool,
     rounds: u32,
+    /// Seconds burnt, and how long it burns.
+    age: f32,
+    life: f32,
+    /// Not yet drawn: its smoke, its light and its casings are still owed.
+    fresh: bool,
+    /// Its turn about the barrel and which of the sheet's flashes it is.
+    roll: f32,
+    seed: f32,
 }
 
 /// Our own flashes, at the muzzle as the frame draws it: off the camera
 /// as placed this frame (`eye`: its kick, its shake, a film's roll and
 /// easing), which carries the gun in view, and the gun as posed this frame
 /// (`drawn`, `viewmodel::ViewMuzzles`), not the aim the shot was taken down
-/// or last frame's pose. Placed off those, a star sat beside the barrel,
-/// and on a slow frame (a film's, a weak browser's) well off it.
-pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
+/// or last frame's pose.
+///
+/// **The fire is the gun's, not the world's**: it is drawn again every
+/// frame it burns, where the muzzle is that frame (sprites that live one
+/// frame, each as far through its life as the flash is). Left in the world
+/// where it was lit, a flash two frames long stood off the barrel the
+/// moment the view turned or the gun kicked, and read as a spark in the
+/// air beside the gun. What a round leaves behind is the world's: its
+/// smoke, its light, its casing.
+pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2], dt: f32) {
     for (i, drawn) in drawn.into_iter().enumerate() {
-        let Some(o) = fx.own_flash[i].take() else {
+        let Some(mut o) = fx.own_flash[i] else {
             continue;
         };
         let muzzle = eye.translation + eye.rotation * own_muzzle(i == 1, drawn);
         let fwd = eye.rotation * Vec3::NEG_Z;
         let right = eye.rotation * Vec3::X;
-        let scale = OWN_STAR_SCALE * o.look.flash_scale;
-        match o.look.flash {
-            Flash::Powder => {
-                // The baked petals for a frame or two (the view swings), a
-                // hot star at the core, a tongue down the barrel, smoke.
-                let r = ::fx::recipe::Recipe {
-                    life: (OWN_STAR_LIFE_S.0 * 1.4, OWN_STAR_LIFE_S.1 * 1.4),
-                    ..table::recipe(Layer::MuzzleFlash)
-                };
-                let pool = fx.pool(Layer::MuzzleFlash.pool());
-                table::emit_recipe(pool, &r, 1, muzzle + fwd * 0.04, fwd, Color::WHITE, 0.5 + 0.4 * scale);
-                table::own_stars(
-                    &mut fx.glow,
-                    muzzle,
-                    o.look.stars as usize,
-                    0.4 + 0.3 * scale,
-                    o.look.flash_c,
-                );
-                fx.emit(Layer::Tongue, 1, muzzle, fwd, Matter::Concrete);
+        let up = eye.rotation * Vec3::Y;
+        let scale = OWN_FLASH_SCALE * o.look.flash_scale;
+        if o.fresh {
+            o.fresh = false;
+            if o.look.flash == Flash::Powder {
                 fx.emit_tint(
                     Layer::Wisp,
                     1,
@@ -244,36 +277,138 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2]) {
                     0.5 + 0.3 * scale,
                 );
             }
-            Flash::Energy(tone) => {
-                bloom(
+            fx.flash(
+                muzzle,
+                super::FlashDef {
+                    lumens: o.look.light_lm * OWN_WORLD_LIGHT,
+                    color: tint(&o.look),
+                    ..MUZZLE_FLASH
+                },
+            );
+            // Out of the port to the right and a little back, quick enough
+            // to be out of the view in a few frames.
+            for _ in 0..o.rounds.min(3) {
+                eject(
                     fx,
-                    muzzle + fwd * 0.03,
-                    fwd,
-                    tone,
-                    0.5 + 0.4 * scale,
-                    OWN_STAR_LIFE_S.1 * 2.0,
+                    &o.look,
+                    muzzle - fwd * 0.3 + right * 0.04,
+                    (right - fwd * 0.3 - up * 0.15).normalize_or(right),
+                    eye.translation.y - EYE_OVER_FLOOR_M,
                 );
-                table::own_stars(&mut fx.glow, muzzle, 1, scale * 0.5, o.look.flash_c);
+            }
+            if o.rocket {
+                backblast(fx, muzzle, fwd);
             }
         }
-        fx.flash(
-            muzzle,
-            super::FlashDef {
-                color: tint(&o.look),
-                ..MUZZLE_FLASH
-            },
-        );
-        for _ in 0..o.rounds.min(3) {
-            eject(
-                fx,
-                &o.look,
-                muzzle - fwd * 0.3 + right * 0.04,
-                (right * 0.8 + eye.rotation * Vec3::Y * 0.5).normalize_or(right),
-                eye.translation.y - EYE_OVER_FLOOR_M,
-            );
+        // A frame held (the fx stage's clock stopped) keeps what it drew.
+        if dt > 0.0 {
+            burn(fx, &o, muzzle, fwd, scale);
+            o.age += dt;
         }
-        if o.rocket {
-            backblast(fx, muzzle, fwd);
+        fx.own_flash[i] = (o.age < o.life).then_some(o);
+    }
+}
+
+/// One frame of our own flash, at the muzzle as this frame holds it.
+fn burn(fx: &mut Fx, o: &OwnFlash, at: Vec3, fwd: Vec3, scale: f32) {
+    let u = (o.age / o.life.max(1e-4)).clamp(0.0, 0.98);
+    // A sprite `u` through its life that is gone by the next frame.
+    let frame = |u: f32, p: Particle| Particle {
+        left: ONE_FRAME_S,
+        life: ONE_FRAME_S / (1.0 - u.clamp(0.0, 0.98)),
+        ..p
+    };
+    // A sheet's flash: the recipe's, this flash's own roll of it.
+    let baked = |r: &::fx::recipe::Recipe, size: f32, tone: f32, at: Vec3| Particle {
+        pos: at.into(),
+        size0: size,
+        size1: size * r.grow,
+        c0: r.c0,
+        c1: r.c1,
+        roll: o.roll,
+        cell: r
+            .cell
+            .wrapping_add(((o.seed * r.cells.max(1) as f32) as u8).min(r.cells.max(1) - 1) * r.frames.max(1)),
+        frames: r.frames,
+        seed: (o.seed * 7.0).fract(),
+        tone,
+        glow: r.glow,
+        ..Particle::default()
+    };
+    let c = o.look.flash_c;
+    match o.look.flash {
+        Flash::Powder => {
+            // The gas out of the barrel, fullest on its first frame; a
+            // white-hot core at the bore for bloom to take hold of; and a
+            // tongue down the line of fire while it is young.
+            let r = table::recipe(Layer::MuzzleFlash);
+            let size = (r.size.0 + (r.size.1 - r.size.0) * o.seed) * (0.5 + 0.4 * scale);
+            let p = baked(&r, size, r.tone, at + fwd * 0.04);
+            fx.pool(Layer::MuzzleFlash.pool()).spawn(frame(u, p));
+            let core = OWN_CORE_M * (0.6 + 0.4 * scale);
+            fx.glow.spawn(frame(
+                u,
+                Particle {
+                    pos: at.into(),
+                    size0: core,
+                    size1: core * 1.8,
+                    c0: c,
+                    c1: [c[0] * 0.15, c[1] * 0.08, c[2] * 0.03, 0.0],
+                    cell: GLOW,
+                    ..Particle::default()
+                },
+            ));
+            if u < 0.5 {
+                let t = table::recipe(Layer::Tongue);
+                fx.glow.spawn(frame(
+                    u * 2.0,
+                    Particle {
+                        pos: at.into(),
+                        vel: (fwd * t.speed.0.max(0.1)).into(),
+                        size0: t.size.0 * (0.6 + 0.4 * scale),
+                        size1: t.size.0 * (0.6 + 0.4 * scale) * t.grow,
+                        c0: t.c0,
+                        c1: t.c1,
+                        cell: FLAME,
+                        orient: Orient::Stretch,
+                        stretch: t.stretch,
+                        len_max: t.len_max,
+                        ..Particle::default()
+                    },
+                ));
+            }
+        }
+        Flash::Energy(tone) => {
+            // The bloom, then a glow in the gun's colour that hangs on the
+            // muzzle a moment: on the muzzle, wherever the gun goes.
+            let r = table::recipe(Layer::Bloom);
+            let size = (r.size.0 + (r.size.1 - r.size.0) * o.seed) * (0.5 + 0.4 * scale);
+            if u < OWN_BLOOM_SHARE {
+                let p = baked(&r, size, tone, at + fwd * 0.03);
+                fx.pool(Layer::Bloom.pool()).spawn(frame(u / OWN_BLOOM_SHARE, p));
+            }
+            let after = Particle {
+                size0: size * 0.45,
+                size1: size * 0.25,
+                frames: 1,
+                glow: 0.3,
+                c1: [1.0, 1.0, 1.0, 0.0],
+                ..baked(&r, size, tone, at + fwd * 0.03)
+            };
+            fx.pool(Layer::Bloom.pool()).spawn(frame(u, after));
+            let core = OWN_CORE_M * ENERGY_CORE * (0.6 + 0.4 * scale);
+            fx.glow.spawn(frame(
+                (u * 2.5).min(0.98),
+                Particle {
+                    pos: at.into(),
+                    size0: core,
+                    size1: core * 1.6,
+                    c0: c,
+                    c1: [c[0] * 0.1, c[1] * 0.1, c[2] * 0.1, 0.0],
+                    cell: GLOW,
+                    ..Particle::default()
+                },
+            ));
         }
     }
 }
@@ -352,10 +487,10 @@ fn met(fx: &mut Fx, scene: &Scene, from: Vec3, dir: Vec3, len: f32, to: Vec3) ->
     None
 }
 
-/// A third-person muzzle. Powder: the baked flash of petals, a star at its
-/// core, a tongue of fire down the barrel, a breath of smoke. Energy: a
-/// baked bloom in the gun's tone, a star, a glow that hangs on the muzzle
-/// a moment, no smoke. And a light.
+/// A third-person muzzle. Powder: the baked flash of gas, a white-hot core
+/// at the bore, a tongue of fire down the barrel, a breath of smoke.
+/// Energy: a baked bloom in the gun's tone about a core, a glow that hangs
+/// on the muzzle a moment, no smoke. And a light.
 pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
     let scale = look.flash_scale;
     match look.flash {
@@ -370,13 +505,13 @@ pub fn flash(fx: &mut Fx, at: Vec3, dir: Vec3, look: &GunLook) {
                 Color::WHITE,
                 0.7 + 0.5 * scale,
             );
-            table::stars(&mut fx.glow, at, look.stars as usize, 0.8 + 0.5 * scale, look.flash_c);
+            table::core(&mut fx.glow, at, 0.8 + 0.5 * scale, look.flash_c);
             fx.emit(Layer::Tongue, 1, at, dir, Matter::Concrete);
             fx.emit_tint(Layer::Wisp, 1, at + dir * 0.15, dir, Color::WHITE, 0.6 + 0.4 * scale);
         }
         Flash::Energy(tone) => {
             bloom(fx, at + dir * 0.04, dir, tone, 0.6 + 0.5 * scale, 0.0);
-            table::stars(&mut fx.glow, at, 1, 0.7 * scale, look.flash_c);
+            table::core(&mut fx.glow, at, 0.7 * scale, look.flash_c);
         }
     }
     fx.flash(
@@ -426,10 +561,19 @@ fn eject(fx: &mut Fx, look: &GunLook, at: Vec3, out: Vec3, floor: f32) {
     }
 }
 
+/// How long a rocket's fire burns at the tube, seconds: a blink. Smoke is
+/// what stays; left any longer, it hangs in the air like a lamp.
+const BACKBLAST_FIRE_S: (f32, f32) = (0.05, 0.1);
+
 /// A rocket leaving the tube: fire out of the front, smoke out of both ends.
 fn backblast(fx: &mut Fx, at: Vec3, dir: Vec3) {
-    fx.emit_tint(Layer::Flash, 3, at + dir * 0.4, dir, Color::WHITE, 5.0);
-    fx.emit_tint(Layer::Fireball, 3, at + dir * 0.3, dir, Color::WHITE, 0.6);
+    fx.emit_tint(Layer::Flash, 2, at + dir * 0.4, dir, Color::WHITE, 3.5);
+    let fire = ::fx::recipe::Recipe {
+        life: BACKBLAST_FIRE_S,
+        ..table::recipe(Layer::Fireball)
+    };
+    let pool = fx.pool(Layer::Fireball.pool());
+    table::emit_recipe(pool, &fire, 3, at + dir * 0.3, dir, Color::WHITE, 0.6);
     fx.emit_tint(Layer::GunSmoke, 4, at - dir * 0.6, -dir, Color::WHITE, 4.0);
     fx.emit_tint(Layer::GunSmoke, 3, at + dir * 0.5, dir, Color::WHITE, 3.0);
     fx.flash(
@@ -441,6 +585,12 @@ fn backblast(fx: &mut Fx, at: Vec3, dir: Vec3) {
             ..MUZZLE_FLASH
         },
     );
+}
+
+/// The colour `arm`'s flash lights things.
+pub fn light_of(arm: u8) -> Color {
+    let [r, g, b] = tint(&table::gun(arm));
+    Color::linear_rgb(r, g, b)
 }
 
 /// A muzzle light's colour: the flash's, at a peak of 1.

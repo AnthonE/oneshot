@@ -130,6 +130,8 @@ impl Bot {
             match id {
                 crate::arms::OVERSHIELD => return !me.overshield(),
                 crate::arms::CAMO => return me.camo == 0,
+                crate::arms::FRAGS => return me.grenades < GREN_MAX,
+                crate::arms::STICKIES => return me.stickies < GREN_MAX,
                 _ => {}
             }
             let a = arm(id);

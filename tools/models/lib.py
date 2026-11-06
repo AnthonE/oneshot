@@ -546,6 +546,43 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
     return o, muzzle - axis
 
 
+def cut_above(o, x0, x1, margin=0.004):
+    """Takes off what stands up from a gun between x0 and x1 (gun space, as
+    `generated` leaves it): a sight, a hoop. Its height is judged from the
+    gun's top just either side, and the hole it leaves is closed."""
+    co = [v.co for v in o.data.vertices]
+    span = x1 - x0
+    beside = [c.z for c in co if x0 - span < c.x < x0 or x1 < c.x < x1 + span]
+    top = max(beside) + margin
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    gone = [v for v in bm.verts if x0 < v.co.x < x1 and v.co.z > top]
+    print(f'CUT {o.name}: {len(gone)} vertices above z {top:.3f}')
+    bmesh.ops.delete(bm, geom=gone, context='VERTS')
+    bmesh.ops.holes_fill(bm, edges=bm.edges, sides=128)
+    bm.to_mesh(o.data)
+    bm.free()
+    o.data.update()
+
+
+def darken(o, k):
+    """The colour map's paint times `k`, in the map itself (the glTF exporter
+    drops node arithmetic)."""
+    for material in o.data.materials:
+        bsdf = next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        node = bsdf.inputs['Base Color'].links[0].from_node
+        while node.type != 'TEX_IMAGE':
+            node = next(i.links[0].from_node for i in node.inputs if i.links)
+        im = node.image
+        px = np.empty(im.size[0] * im.size[1] * 4, np.float32)
+        im.pixels.foreach_get(px)
+        px[0::4] *= k
+        px[1::4] *= k
+        px[2::4] *= k
+        im.pixels.foreach_set(px)
+        im.update()
+
+
 # Gun space (fwd X, up Z, left Y) to the client's export frame (fwd Z, top −Y)
 # in Blender; Blender's glTF export then makes fwd +Y, top +Z.
 TO_EXPORT = Matrix(((0, -1, 0, 0), (0, 0, -1, 0), (1, 0, 0, 0), (0, 0, 0, 1)))

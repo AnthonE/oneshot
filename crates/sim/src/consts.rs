@@ -189,10 +189,10 @@ pub const NEEDLE_KEEP_MS: u32 = 1500;
 pub const CHARGE_VEH_DMG: i32 = 60;
 
 /// A frag, as Halo 2's multiplayer throws it (Halopedia's H2 weapon data,
-/// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu;
-/// thrown at 10 wu/s; off `GREN_FUSE_MS` after it first comes down on a
-/// floor (not a wall), never sooner than `GREN_ARM_MS` from the throw, and
-/// at `GREN_LIFE_MS` if it never does.
+/// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu, half
+/// that on shields; thrown at 10 wu/s; off `GREN_FUSE_MS` after it first comes
+/// down on a floor (not a wall), never sooner than `GREN_ARM_MS` from the
+/// throw, and at `GREN_LIFE_MS` if it never does.
 pub const GREN_DMG: i32 = 160;
 pub const GREN_RADIUS: f32 = 5.3;
 pub const GREN_FULL: f32 = 1.5;
@@ -201,15 +201,25 @@ pub const GREN_FUSE_MS: u32 = 500;
 pub const GREN_ARM_MS: u32 = 1300;
 pub const GREN_LIFE_MS: u32 = 5000;
 pub const GREN_SPEED: f32 = 30.5;
+/// What shields take of a grenade's blast (Halo 2's and Halo 3's, both kinds).
+pub const GREN_SHIELD_K: f32 = 0.5;
+/// How long after the press a grenade leaves the hand, as the arm flings it
+/// (`viewmodel::throw_lay`, `hands::off_hand`). Ours: the sources give no number.
+pub const GREN_RELEASE_MS: u32 = 170;
+/// How long after a blast a grenade in its reach goes off, for a chain to be
+/// seen as one. Ours. Halo: Combat Evolved's frags chain (Halopedia).
+pub const GREN_CHAIN_MS: u32 = 70;
 pub const GREN_START: u8 = 2;
-/// Sticky grenades at a spawn (at most `GREN_MAX` too). Halo 2 gives
-/// plasma grenades from the map; ours has no grenade pickups yet.
-pub const STICKY_START: u8 = 1;
-/// A sticky (Halo 2's plasma grenade in multiplayer): it sticks to the
-/// first body or hull it touches (not to the map: it skips off that), and
-/// goes off `STICKY_FUSE_MS` after it sticks or first lands, never before
-/// `STICKY_ARM_MS` from the throw. Its blast kills to `STICKY_FULL`; the
-/// one it is stuck to dies whatever.
+/// Sticky grenades at a spawn: none, as Halo 2's multiplayer on most maps.
+/// They come from pads (`arms::STICKIES`) and from the dead.
+pub const STICKY_START: u8 = 0;
+/// What a grenade pad gives (at most `GREN_MAX` carried).
+pub const GREN_PAD_GIVES: u8 = 2;
+/// A sticky (Halo 2's plasma grenade in multiplayer): thrown as a frag is. It
+/// sticks to the first thing it touches, a body, a hull or the map (Halo 2's
+/// bounces off the map; here it never does), and goes off `STICKY_FUSE_MS`
+/// after it sticks, never before `STICKY_ARM_MS` from the throw. Its blast
+/// kills to `STICKY_FULL`; the one it is stuck to dies whatever.
 pub const STICKY_FUSE_MS: u32 = 900;
 pub const STICKY_ARM_MS: u32 = 1300;
 pub const STICKY_DMG: i32 = 200;
@@ -217,6 +227,8 @@ pub const STICKY_RADIUS: f32 = 5.3;
 pub const STICKY_FULL: f32 = 1.5;
 /// What the sticky's blast still does at its rim (Halo 2's, as the frag's).
 pub const STICKY_EDGE: i32 = 50;
+/// How far off the map it sits, stuck, so its blast isn't inside the wall.
+pub const STICKY_OFF_M: f32 = 0.06;
 /// Dual wielding: both hands reload together, this much slower.
 pub const DUAL_RELOAD_K: f32 = 1.5;
 pub const GREN_MAX: u8 = 4;

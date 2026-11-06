@@ -91,6 +91,26 @@
   ],
   "pads": [
     {
+      "weapon": "stickies",
+      "at": [-8, 8],
+      "respawn": 30
+    },
+    {
+      "weapon": "stickies",
+      "at": [8, -8],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [-18, -14],
+      "respawn": 30
+    },
+    {
+      "weapon": "frags",
+      "at": [18, 14],
+      "respawn": 30
+    },
+    {
       "weapon": "rocket",
       "at": [0, 0, 1],
       "respawn": 120

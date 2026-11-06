@@ -24,4 +24,6 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('carbine', 0.954, hold=0.34, glow=['#4ffff0'])
-finish('carbine', [gun], grip=0.29, rise=rise, long=True, note='Veil carbine: slanted muzzle, hoop sight, loop grip')
+# The hoop sight stands right in front of the eye, a white horn across the view.
+cut_above(gun, 0.14, 0.34)
+finish('carbine', [gun], grip=0.29, rise=rise, long=True, note='Veil carbine: slanted muzzle, loop grip')
