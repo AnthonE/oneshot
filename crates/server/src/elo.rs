@@ -434,11 +434,17 @@ impl Elo {
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
     pub async fn skins(&self, wallet: &str) -> Vec<String> {
+        self.owned(wallet).await.unwrap_or_default()
+    }
+
+    /// As [`Elo::skins`], but None when Elo Pros couldn't be asked (the
+    /// armory says so, rather than that the wallet owns nothing).
+    pub async fn owned(&self, wallet: &str) -> Option<Vec<String>> {
         let key = proto::party::spell(wallet);
         if let Ok(m) = self.skins.lock() {
             if let Some((at, s)) = m.get(&key) {
                 if at.elapsed() < BAN_CACHE {
-                    return s.clone();
+                    return Some(s.clone());
                 }
             }
         }
@@ -456,7 +462,7 @@ impl Elo {
         }
         // What any list answered; none answering is "couldn't ask", not kept.
         if lists.iter().all(Option::is_none) {
-            return Vec::new();
+            return None;
         }
         let mut got: Vec<String> = lists.into_iter().flatten().flatten().collect();
         got.sort();
@@ -467,7 +473,7 @@ impl Elo {
             }
             m.insert(key, (Instant::now(), got.clone()));
         }
-        got
+        Some(got)
     }
 
     /// Whether the game has banned `wallet`: None if Elo Pros couldn't be

@@ -15,6 +15,10 @@
 //! on the desktop, WebGPU and WebGL2: a second camera into an image is a
 //! render pass any of them draws.
 //!
+//! In the armory he turns round to show what is being picked: his back
+//! while the emblem is ([`Portrait::show_back`]), and a drag across him
+//! turns him by hand ([`drag`]).
+//!
 //! **He decides nothing**: what he wears is the panel's pick, and a skin
 //! the wallet doesn't own is still only what the server lets you wear.
 
@@ -57,6 +61,14 @@ const SWAY_YAW: f32 = 0.3;
 const SWAY_YAW_S: f32 = 9.0;
 const SWAY_PITCH: f32 = 0.12;
 const SWAY_PITCH_S: f32 = 6.5;
+/// His turn to show his back (the emblem), radians: a little short of a
+/// half turn, so the emblem reads three-quarter on, as his front does.
+const BACK: f32 = core::f32::consts::PI - 2.0 * TURN;
+/// How fast he turns to what is asked (1/s): about a second round, his feet
+/// stepping under him (`anim.rs`).
+const TURN_RATE: f32 = 3.5;
+/// A drag across him turns him this far a pixel, radians.
+const DRAG_PER_PX: f32 = 0.012;
 
 /// Vertical field of view, degrees, and the distance it frames the whole
 /// 1.8 m body from, and where the lens looks, metres above the feet.
@@ -73,8 +85,8 @@ const ARM: u8 = sim::arms::AR;
 /// and those lights, lux there: key high on the camera's left, a cool weak
 /// fill from the right, a warm rim from behind that pulls him off a dark
 /// title. Scaled to the world's exposure here.
-const GATES_EV100: f32 = 9.7;
-const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
+pub(super) const GATES_EV100: f32 = 9.7;
+pub(super) const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
     (3_400.0, [1.0, 1.0, 1.0], Vec3::new(-0.7, 1.0, 0.8)),
     (900.0, [0.80, 0.86, 1.0], Vec3::new(1.0, 0.3, 0.5)),
     (2_400.0, [1.0, 0.86, 0.66], Vec3::new(0.4, 0.7, -1.0)),
@@ -85,6 +97,22 @@ pub struct Portrait {
     pub image: Handle<Image>,
     /// His body and the look it was made in.
     body: Option<(Entity, proto::Look)>,
+    /// He turns to show his back (the armory's emblem).
+    back: bool,
+    /// How far a drag has turned him, and how far he is turned now, past
+    /// his three-quarter (radians).
+    dragged: f32,
+    turned: f32,
+}
+
+impl Portrait {
+    /// Turn to show his back (the emblem) or his front; either undoes a drag.
+    pub fn show_back(&mut self, back: bool) {
+        if self.back != back {
+            self.back = back;
+            self.dragged = 0.0;
+        }
+    }
 }
 
 #[derive(Component)]
@@ -102,6 +130,8 @@ pub fn view(portrait: &Portrait, height: Val) -> impl Bundle {
     (
         PortraitView,
         ImageNode::new(portrait.image.clone()),
+        // A drag across him turns him ([`drag`]).
+        Interaction::default(),
         Node {
             height,
             aspect_ratio: Some(W_PX as f32 / H_PX as f32),
@@ -172,7 +202,13 @@ pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             layer.clone(),
         ));
     }
-    commands.insert_resource(Portrait { image, body: None });
+    commands.insert_resource(Portrait {
+        image,
+        body: None,
+        back: false,
+        dragged: 0.0,
+        turned: 0.0,
+    });
 }
 
 /// While the title shows him: his body in the panel's skin (made again
@@ -197,6 +233,9 @@ pub fn stand(
         if let Some((e, _)) = portrait.body.take() {
             commands.entity(e).despawn();
         }
+        portrait.back = false;
+        portrait.dragged = 0.0;
+        portrait.turned = 0.0;
         return;
     }
     let look = player.look();
@@ -214,6 +253,9 @@ pub fn stand(
             return;
         }
     };
+    let want = if portrait.back { BACK } else { 0.0 } + portrait.dragged;
+    let ease = 1.0 - (-TURN_RATE * time.delta_secs()).exp();
+    portrait.turned += (want - portrait.turned) * ease;
     let t = time.elapsed_secs();
     let wave = |period: f32| (t * core::f32::consts::TAU / period).sin();
     let d = Drawn {
@@ -221,7 +263,7 @@ pub fn stand(
         grounded: true,
         pos: V3::new(AT.x, AT.y, AT.z),
         // Facing the lens (+Z), turned toward the picture's left.
-        yaw: core::f32::consts::FRAC_PI_2 + TURN + SWAY_YAW * wave(SWAY_YAW_S),
+        yaw: core::f32::consts::FRAC_PI_2 + TURN + portrait.turned + SWAY_YAW * wave(SWAY_YAW_S),
         pitch: SWAY_PITCH * wave(SWAY_PITCH_S),
         arm: ARM,
         team: TEAM,
@@ -238,6 +280,21 @@ pub fn stand(
         &mut at,
         time.delta_secs(),
     );
+}
+
+/// A drag across the picture turns him: held down on him, the pointer's
+/// sideways travel.
+pub fn drag(
+    views: Query<&Interaction, With<PortraitView>>,
+    motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
+    portrait: Option<ResMut<Portrait>>,
+) {
+    let Some(mut portrait) = portrait else {
+        return;
+    };
+    if motion.delta.x != 0.0 && views.iter().any(|i| *i == Interaction::Pressed) {
+        portrait.dragged += motion.delta.x * DRAG_PER_PX;
+    }
 }
 
 /// The picture's pixels for a window `physical_h` tall: as many as it is

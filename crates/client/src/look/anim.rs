@@ -128,23 +128,27 @@ impl Clip {
 }
 
 /// How the arms hold what is in the hands: a long gun at the shoulder
-/// (Gates' `RIFLE_HOLD_CLIP`) or a pistol up in front (`ARMS_HOLD_CLIP`).
-/// Bodies wear the long hold for every gun (`bodies::pose`: the gun hangs
-/// at the chest, and the pistol clip's hands are at the face); a pistol's
-/// reload is still its own clip ([`Seen::reload`]), the gun in its hand.
+/// (Gates' `RIFLE_HOLD_CLIP`), a pistol up in front (`ARMS_HOLD_CLIP`) or a
+/// sword in the right hand.
+/// Bodies wear the long hold for every gun but the sword (`bodies::pose`: the
+/// gun hangs at the chest, and the pistol clip's hands are at the face); a
+/// pistol's reload is still its own clip ([`Seen::reload`]), the gun in its
+/// hand, and a sword's "reload" is its cut.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hold {
     Long,
     Pistol,
+    Sword,
 }
 
 impl Hold {
-    pub const ALL: [Hold; 2] = [Hold::Long, Hold::Pistol];
+    pub const ALL: [Hold; 3] = [Hold::Long, Hold::Pistol, Hold::Sword];
 
     pub fn name(self) -> &'static str {
         match self {
             Hold::Long => "Rifle_Hold_Loop",
             Hold::Pistol => "Pistol_Idle_Loop",
+            Hold::Sword => "Sword_Idle",
         }
     }
 
@@ -154,6 +158,7 @@ impl Hold {
         match self {
             Hold::Long => "Rifle_Reload",
             Hold::Pistol => "Pistol_Reload",
+            Hold::Sword => "Sword_Attack",
         }
     }
 
@@ -161,6 +166,7 @@ impl Hold {
         match self {
             Hold::Long => 0,
             Hold::Pistol => 1,
+            Hold::Sword => 2,
         }
     }
 }

@@ -221,6 +221,14 @@ pub fn warm_models(
             .id();
         super::gun_skin::wear(&mut commands, coated, WARM_SKIN, sim::arms::AR);
     }
+    // A sword's blade lit: the shader is its own.
+    if let Some(scene) = models.guns.get(sim::arms::SWORD as usize).cloned().flatten() {
+        let lit = commands
+            .spawn((Warming(WARM_FRAMES), SceneRoot(scene), at(), ChildOf(eye)))
+            .observe(done)
+            .id();
+        super::blade::light(&mut commands, lit, sim::arms::SWORD);
+    }
     // Far under the map at full size: a body's meshes and shells are never
     // culled (`bodies::dress`), so it is queued, shadow and all, where
     // neither it nor its shadow (cast down, away from the floor) can be

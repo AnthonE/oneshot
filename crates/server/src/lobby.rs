@@ -132,6 +132,28 @@ async fn friends(ctx: &Ctx, session: u64, who: &Who, fresh: bool) {
     ctx.lobby.send(msgs.into_iter().map(|m| (session, m)).collect());
 }
 
+/// Tells `session` what its wallet owns and its floor, for the armory
+/// (a guest, or a pass with no wallet: the standard look and no gear).
+async fn wardrobe(ctx: &Ctx, session: u64, who: &Who) {
+    let d = match who.wallet.as_deref() {
+        None => proto::Wardrobe::BARE,
+        Some(w) => {
+            let owned = ctx.elo.owned(w).await;
+            let (skins, headwear, footwear) = proto::Wardrobe::from_names(owned.iter().flatten().map(String::as_str));
+            proto::Wardrobe {
+                wallet: true,
+                known: owned.is_some(),
+                skins,
+                headwear,
+                footwear,
+                // Down to the whole point, as the hello's check compares.
+                floor: ctx.elo.floor(w).await.map(|f| f.max(0.0) as u16),
+            }
+        }
+    };
+    ctx.lobby.send(vec![(session, Msg::Wardrobe(d))]);
+}
+
 /// One page's lobby: it is `who` (checked by the caller), named `name`,
 /// asking for the party `want` (0: none). Returns when the page goes.
 #[allow(clippy::too_many_arguments)]
@@ -185,6 +207,7 @@ pub async fn session(
     }
     ctx.lobby.send(out);
     friends(&ctx, session, &who, false).await;
+    wardrobe(&ctx, session, &who).await;
 
     // Voice, straight from this reader to the party.
     let vctx = ctx.clone();
@@ -244,6 +267,7 @@ pub async fn session(
                         ctx.lobby.send(vec![(session, ticket(&who))]);
                         ctx.lobby.send(out);
                         friends(&ctx, session, &who, true).await;
+                        wardrobe(&ctx, session, &who).await;
                     }
                     _ => {}
                 }

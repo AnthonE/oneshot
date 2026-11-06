@@ -66,6 +66,9 @@ pub struct PartyView {
     friends_n: usize,
     /// The server's ticket: who we are, on every hello after this one.
     pub ticket: String,
+    /// What our wallet owns and its floor, as the server read them (none
+    /// till it has said): the armory's cards (`front.rs`).
+    pub wardrobe: Option<proto::Wardrobe>,
     /// The last invite: who, and their party's code.
     pub invite: Option<(String, u32)>,
     /// The last thing the party said no to.
@@ -406,6 +409,12 @@ fn pump(
             Msg::Invited { from, code } => {
                 view.invite = Some((from.as_str().to_string(), code));
                 view.touch();
+            }
+            Msg::Wardrobe(d) => {
+                if view.wardrobe != Some(d) {
+                    view.wardrobe = Some(d);
+                    view.touch();
+                }
             }
             Msg::Refuse { reason } => {
                 if reason == proto::REFUSE_BUSY {

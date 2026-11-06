@@ -42,6 +42,14 @@ const HAND_BONE: &str = "RightHand";
 const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
 const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
 const HELD_SCALE: f32 = 100.0;
+/// The sword's holder in the right hand's frame, for `Sword_Idle`: its hilt
+/// through the fist's hole, from the little finger to the index, its blade out
+/// of the thumb's side and its edge toward the knuckles.
+const SWORD_HELD_AT: Vec3 = Vec3::new(1.757, 10.096, 1.561);
+const SWORD_HELD_TURN: Quat = Quat::from_xyzw(0.87036, 0.04145, -0.49012, -0.02334);
+/// How long a body's cut takes, seconds: quick, and short enough of the sword's
+/// `refire_ms` for its fade to end before the next begins (`anim::BLEND_S`).
+pub const CUT_S: f32 = 0.3;
 
 /// A piece of gear's place on a bone of triple-t.glb, in the bone's own
 /// units (centimetres, as the hand's). Each model's script prints its own
@@ -132,7 +140,8 @@ const SKIN_TRIM: [Option<u32>; 6] = [
 /// The trim's sheen, against the side's glow.
 const TRIM_GLOW: f32 = 0.35;
 
-fn trim(skin: u8) -> Option<Color> {
+/// A skin's trim colour, none for the standard look (the armory's tiles too).
+pub fn trim(skin: u8) -> Option<Color> {
     SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
         let [_, r, g, b] = c.to_be_bytes();
         Color::srgb_u8(r, g, b)
@@ -155,6 +164,10 @@ pub struct Body {
     /// Its gear, each piece on its bone once dressed.
     worn: Vec<(Entity, &'static Fit)>,
     held: u8,
+    /// Drawn in stop-motion, lunging (`cels.rs`).
+    pub step: super::cels::Step,
+    /// Seconds left of the cut it is making.
+    pub cutting: f32,
     /// The guns it has held of late, each posed in its hand and hidden
     /// while another is out (by arm, the longest unheld first): a swap, a
     /// death and a respawn show one again rather than load its scene anew.
@@ -237,6 +250,10 @@ impl Body {
     }
 
     /// Your own shadow (`own_shadow.rs`).
+    pub fn holds_sword(&self) -> bool {
+        self.held == sim::arms::SWORD
+    }
+
     pub fn is_shadow(&self) -> bool {
         self.shadow
     }
@@ -349,6 +366,8 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         hand,
         worn,
         held: 0,
+        step: super::cels::Step::default(),
+        cutting: 0.0,
         rack: Vec::with_capacity(RACK),
         limp: false,
         flare: Flare {
@@ -754,13 +773,17 @@ pub fn pose(
     // Every gun is held in the long hold. The pistol clip is Gates'
     // first-person arms (hands up at the face): over a body it held nothing.
     // A pistol's reload is still its own clip.
+    // On a turret, the hands are on its grips, its own gun put away.
     let gun_of = gun(d.arm).filter(|_| !gunning);
+    let sword = d.arm == sim::arms::SWORD && !gunning;
     let hold = if gunning {
         Some(Hold::Long)
     } else {
-        gun_of.map(|_| Hold::Long)
+        gun_of.map(|_| if sword { Hold::Sword } else { Hold::Long })
     };
     let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
+    body.cutting = (body.cutting - dt).max(0.0);
+    let cut = (sword && body.cutting > 0.0).then_some((Hold::Sword, CUT_S));
     body.gait.observe(
         &Seen {
             alive: d.alive,
@@ -772,9 +795,9 @@ pub fn pose(
             yaw,
             pitch: d.pitch,
             hold,
-            reload: reload_clip
+            reload: cut.or(reload_clip
                 .filter(|_| d.reloading && !sim::arms::arm(d.arm).hot())
-                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0)),
+                .map(|h| (h, sim::arms::arm(d.arm).reload_ms as f32 / 1000.0))),
         },
         dt,
     );
@@ -782,6 +805,20 @@ pub fn pose(
     // wheel. It waits for the hand it goes in.
     let arm = if d.alive && !driving && !gunning { d.arm } else { 0 };
     if arm != body.held && body.dressed {
+        // A sword sits in the hand its own way (`Sword_Idle`), a gun as it did.
+        // The title's body can go the same frame, its hand with it.
+        if arm == sim::arms::SWORD || body.held == sim::arms::SWORD {
+            let (at, rotation) = if arm == sim::arms::SWORD {
+                (SWORD_HELD_AT, SWORD_HELD_TURN)
+            } else {
+                (HELD_AT, HELD_TURN)
+            };
+            commands.entity(body.hand).try_insert(Transform {
+                translation: at,
+                rotation: rotation.normalize(),
+                scale: Vec3::splat(HELD_SCALE),
+            });
+        }
         let held = body.held;
         if let Some(&(_, out)) = body.rack.iter().find(|r| r.0 == held) {
             commands.entity(out).insert(Visibility::Hidden);
@@ -797,6 +834,7 @@ pub fn pose(
                 commands.entity(scene).observe(super::own_shadow::shade_gun);
             } else {
                 super::gun_skin::wear(commands, scene, body.skin, arm);
+                super::blade::light(commands, scene, arm);
             }
             if body.rack.len() >= RACK {
                 // The one held longest ago goes (never the one just put
