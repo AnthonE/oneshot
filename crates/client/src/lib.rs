@@ -1461,7 +1461,7 @@ fn draw_vehicles(
                     Some(k) => k,
                     None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
                 };
-                look::turret::spawn(&mut commands, &turrets, body, slot, kind);
+                look::turret::spawn(&mut commands, &turrets, &models, body, slot, kind);
                 drawn.vehicles.insert(slot, e);
             }
         }

@@ -151,8 +151,8 @@ pub fn warm_level(
     }
 }
 
-/// Once, when every model is in: a fighter, every gun, the rocket and the
-/// frag, drawn warm.
+/// Once, when every model is in: a fighter, every gun, the rocket, the
+/// frag and the truck's minigun, drawn warm.
 #[allow(clippy::too_many_arguments)]
 pub fn warm_models(
     mut commands: Commands,
@@ -169,7 +169,12 @@ pub fn warm_models(
         return;
     };
     let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
-    scenes.extend([models.rocket.clone(), models.frag.clone()]);
+    scenes.extend([
+        models.rocket.clone(),
+        models.frag.clone(),
+        models.turret.clone(),
+        models.turret_barrels.clone(),
+    ]);
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
     let body = matches!(
         assets.load_state(&models.body),

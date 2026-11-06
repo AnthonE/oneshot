@@ -982,14 +982,20 @@ const RIFLE: GunLook = GunLook {
     light_lm: 120_000.0,
 };
 
-/// A truck's minigun: a tracer every other round, a big flash at its
-/// barrels' ends, brass out of its side.
+/// A truck's minigun: a fat hot-orange tracer every other round, quicker
+/// and longer than a rifle's, a big flash at its barrels' ends, brass out
+/// of its side (two a frame: `shots.rs`). Its barrels' heat and smoke are
+/// `look/turret.rs`'s.
 pub const MINIGUN: GunLook = GunLook {
+    c0: [9.0, 4.2, 1.0, 1.0],
+    c1: [5.0, 1.8, 0.35, 0.6],
     every: 2,
-    width: 0.018,
-    len_m: 7.0,
-    flash_scale: 1.4,
-    light_lm: 160_000.0,
+    mps: 380.0,
+    width: 0.024,
+    len_m: 9.0,
+    flash_c: [8.0, 4.8, 1.8, 1.0],
+    flash_scale: 1.7,
+    light_lm: 220_000.0,
     ..RIFLE
 };
 

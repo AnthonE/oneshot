@@ -646,7 +646,7 @@ impl World {
         };
         let eye = f.eye();
         let base = aim_dir(f.yaw, f.pitch);
-        let dir = spread(base, a.spread, self.salt, s, f.shots, 0);
+        let dir = spread(base, a.cone(f.mount.heat), self.salt, s, f.shots, 0);
         self.hitscan(s, eye, dir, a, cause, depth, v.muzzle(base));
     }
 
@@ -794,7 +794,7 @@ impl World {
             let pts = (a.dmg * PT) as f32 * k;
             match target {
                 Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id),
-                Target::Vehicle(i) => self.damage_vehicle(s, i, pts as i32, id),
+                Target::Vehicle(i) => self.damage_vehicle(s, i, (pts * a.hull_k) as i32, id),
             }
         }
     }

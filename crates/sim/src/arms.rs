@@ -180,6 +180,11 @@ pub struct Arm {
     /// A turret's barrels spin up this long, the trigger held, before the
     /// first round (0: none).
     pub spin_ms: u32,
+    /// A hot gun's cone at full heat (0: `spread`, hot or cold): it opens
+    /// from `spread` with the heat, so a burst is tighter than a hose.
+    pub bloom: f32,
+    /// Damage to a vehicle's hull is this times `dmg`.
+    pub hull_k: f32,
 }
 
 impl Arm {
@@ -197,6 +202,15 @@ impl Arm {
     /// Scope levels: 0, 1 or 2.
     pub fn zoom_levels(&self) -> u8 {
         (self.zoom > 1) as u8 + (self.zoom > 1 && self.zoom2 > 1) as u8
+    }
+
+    /// Its cone at `heat` (1/128 %): `spread`, opening to `bloom` at full.
+    pub fn cone(&self, heat: u16) -> f32 {
+        if self.bloom <= 0.0 {
+            return self.spread;
+        }
+        let k = heat.min(crate::arms::HEAT_FULL) as f32 / crate::arms::HEAT_FULL as f32;
+        self.spread + (self.bloom - self.spread) * k
     }
 
     pub fn hot(&self) -> bool {
@@ -271,6 +285,8 @@ const BASE: Arm = Arm {
     magnet: 0.0,
     aim_range: 0.0,
     spin_ms: 0,
+    bloom: 0.0,
+    hull_k: 1.0,
 };
 
 pub static ARMS: [Arm; COUNT] = [
@@ -593,16 +609,23 @@ pub static MINIGUN: Arm = Arm {
     refire_ms: 62,
     mag: 1,
     dmg: 7,
-    spread: q14(60.0),
+    // Tight cold, a hose hot: a second's burst still lands at 40 m, five
+    // seconds held paints a wall.
+    spread: q14(25.0),
+    bloom: q14(120.0),
     range: 130.0,
-    falloff: 50.0,
-    falloff_min: 0.5,
-    // 2% a round at 16 a second, 10% a second off: five seconds held,
-    // then a vent of two and a half.
-    heat_shot: 2,
-    heat_cool: 10,
+    falloff: 45.0,
+    falloff_min: 0.4,
+    // 3% a round at 16 a second, 20% a second off: about three and a half
+    // seconds held, then a vent of two and a half; let go, it is cold again
+    // as fast as it heated.
+    heat_shot: 3,
+    heat_cool: 20,
     heat_vent: 40,
     spin_ms: 350,
+    // Small rounds on armour: a truck takes a minigun's two vents and more,
+    // not one.
+    hull_k: 0.5,
     ..BASE
 };
 

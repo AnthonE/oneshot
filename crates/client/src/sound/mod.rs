@@ -209,6 +209,8 @@ pub struct Ear {
     in_match: bool,
     // Our own body.
     last_reload: bool,
+    /// The turret we gun was venting.
+    last_vent: bool,
     last_arm: u8,
     last_grounded: bool,
     last_mag: u16,
@@ -1150,6 +1152,11 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
         ear.mine(reload_of(g.arm), 0.7);
     }
     ear.last_reload = reloading;
+    // The turret we gun running hot to its vent: the gun's own vent, louder.
+    if f.mount.vent && !ear.last_vent {
+        ear.mine("vent_0", 0.95);
+    }
+    ear.last_vent = f.mount.vent;
     if g.arm != ear.last_arm {
         if g.arm == arms::SWORD {
             ear.mine("sword_on_0", 0.5);
