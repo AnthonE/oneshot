@@ -344,6 +344,9 @@ pub fn view_basis() -> Quat {
 pub struct Models {
     pub body: Handle<bevy::gltf::Gltf>,
     pub body_scene: Handle<Scene>,
+    /// The hands in view (`hands.rs`).
+    pub hand: Handle<Scene>,
+    pub hand_left: Handle<Scene>,
     /// By arm id; index 0 (no gun) is unused.
     pub guns: Vec<Option<Handle<Scene>>>,
     pub rocket: Handle<Scene>,
@@ -361,6 +364,8 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(Models {
         body: assets.load("models/triple-t.glb"),
         body_scene: scene("triple-t"),
+        hand: scene("hand"),
+        hand_left: scene("hand-left"),
         guns,
         rocket: scene("rocket"),
         frag: scene("frag"),

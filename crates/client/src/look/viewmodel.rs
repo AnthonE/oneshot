@@ -8,9 +8,9 @@
 //! the kick a round gives the gun the frame its trigger breaks. Timed by
 //! what our own predicted fighter says.
 //!
-//! **The arms** are Triple T's own (`hands.rs`): solved every frame onto
-//! the grips posed here ([`Grips`](super::hands::Grips)), so every motion
-//! below moves them with the gun. Both they and the gun wear our own
+//! **The hands** are made for this (`hands.rs`): rigid on the grips posed
+//! here ([`Grips`](super::hands::Grips)), so every motion below moves them
+//! with the gun. Both they and the gun wear our own
 //! shield as it flares (`shield.rs`'s shell, a hair proud of them:
 //! [`shimmer`]): gold as it takes a round, bright as it breaks, crawling as
 //! it climbs back.
@@ -86,13 +86,16 @@ pub const SHRINK: f32 = 0.25;
 /// gun is big and seen from the side, where only bringing it nearer makes a
 /// stub pointing away. The world's field of view is the player's own; this
 /// holds at any of them. No second camera: one scale on one parent.
-pub const GUN_FOV: f32 = 2.0;
+pub const GUN_FOV: f32 = 2.5;
 
 /// Gates' `VIEWMODEL_HOLD`: where the right hand's grip sits in view space,
 /// as it looks (metres, before [`SHRINK`]).
-const HOLD: Vec3 = Vec3::new(0.2, -0.2, -0.43);
+const HOLD: Vec3 = Vec3::new(0.2, -0.12, -0.55);
 /// The rest yaw: the muzzle turned in toward the crosshair, radians.
 const REST_YAW: f32 = 0.08;
+/// The rest pitch: the muzzle lifted, so the gun's rear runs out of the frame
+/// past the corner, radians.
+const REST_PITCH: f32 = 0.05;
 /// Gates' `VIEWMODEL_SWING_PIVOT`: the right shoulder, behind and below the
 /// eye. The arm turns about it, so a turn sweeps the gun across the frame
 /// rather than into the lens.
@@ -273,8 +276,8 @@ const MELEE_HOLD: f32 = 0.18;
 /// the grip stops under the crosshair, never on it.
 pub const BASH_COCK: Vec3 = Vec3::new(-0.05, -0.12, -0.15);
 pub const BASH_DRAW: Vec3 = Vec3::new(0.03, -0.02, 0.06);
-pub const BASH_STRIKE: Vec3 = Vec3::new(0.0, 0.35, 0.35);
-pub const BASH_THROW: Vec3 = Vec3::new(-0.04, 0.0, -0.08);
+pub const BASH_STRIKE: Vec3 = Vec3::new(-0.1, 0.0, 0.35);
+pub const BASH_THROW: Vec3 = Vec3::new(0.0, 0.0, -0.08);
 /// A sword's swing (its melee and its trigger): raised out, then slashed
 /// right to left.
 pub const SLASH_COCK: Vec3 = Vec3::new(0.25, -0.3, -0.4);
@@ -594,7 +597,7 @@ pub fn mirror_q(q: Quat) -> Quat {
 pub fn place(hand: Lay, body: Lay, left: bool) -> (Vec3, Quat) {
     let side = |v: Vec3| if left { Vec3::new(-v.x, v.y, v.z) } else { v };
     let hand = if left { hand.mirror() } else { hand };
-    let rest = Quat::from_rotation_y(if left { -REST_YAW } else { REST_YAW });
+    let rest = Quat::from_rotation_y(if left { -REST_YAW } else { REST_YAW }) * Quat::from_rotation_x(REST_PITCH);
     let pivot = side(PIVOT);
     let hq = turn(hand.ang);
     let p = pivot + hq * (side(HOLD) - pivot) + hand.off;
@@ -1203,7 +1206,7 @@ fn cant_of(shots: u32) -> f32 {
 
 /// The gun's scene is in: it casts nothing, and each of its meshes wears
 /// our shield's shell ([`shimmer`]).
-fn no_shadows(
+pub(super) fn no_shadows(
     ev: On<SceneInstanceReady>,
     children: Query<&Children>,
     meshes: Query<&Mesh3d>,
@@ -1462,8 +1465,9 @@ mod tests {
 
     /// No part of a gun that could be on screen comes nearer the eye than
     /// the camera's near plane, in any stroke, at the widest field of view
-    /// on the widest screen: no gun is ever cut open by it. Its whole
-    /// length, stock to muzzle, and its height over and under the axis.
+    /// on the widest screen: no gun is ever cut open by it, nor seen through.
+    /// Its whole length, stock to muzzle, its height over and under the axis,
+    /// and its flanks.
     #[test]
     fn no_gun_is_cut_by_the_near_plane() {
         let near = crate::look::rig::NEAR_M / SHRINK;
@@ -1501,14 +1505,17 @@ mod tests {
                         for k in 0..=12 {
                             let along = -back + len * k as f32 / 12.0;
                             for up in [-0.15, 0.0, 0.15] {
-                                let p = at + rot * (view_basis() * Vec3::new(0.0, along, up * len.min(1.0)));
-                                let depth = -p.z;
-                                let (x, y) = (p.x * GUN_FOV, p.y * GUN_FOV);
-                                let seen = depth > 0.0 && x.abs() < depth * half * aspect && y.abs() < depth * half;
-                                if seen && depth <= near {
-                                    let worst = cut.entry((g.file, n)).or_insert((depth, u));
-                                    if depth < worst.0 {
-                                        *worst = (depth, u);
+                                for flank in [-0.15, 0.0, 0.15] {
+                                    let q = Vec3::new(flank * len.min(1.0), along, up * len.min(1.0));
+                                    let p = at + rot * (view_basis() * q);
+                                    let depth = -p.z;
+                                    let (x, y) = (p.x * GUN_FOV, p.y * GUN_FOV);
+                                    let seen = depth > 0.0 && x.abs() < depth * half * aspect && y.abs() < depth * half;
+                                    if seen && depth <= near {
+                                        let worst = cut.entry((g.file, n)).or_insert((depth, u));
+                                        if depth < worst.0 {
+                                            *worst = (depth, u);
+                                        }
                                     }
                                 }
                             }

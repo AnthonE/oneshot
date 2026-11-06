@@ -251,67 +251,6 @@ fn unroll(meshes: &[&Mesh]) -> Option<Vec<Texel>> {
     (!texels.is_empty()).then_some(texels)
 }
 
-// Our own arms in view (`hands.rs`): the arms mesh alone, a glove sprayed
-// over each hand and up past the wrist, and a band in the side's colour
-// round each forearm. Joints at rest in the mesh's frame (x across, the
-// right arm toward -x; y forward; z down), metres: from the skin's bind.
-const ARM_ELBOW: Vec3 = Vec3::new(0.329, -0.087, -1.054);
-const ARM_WRIST: Vec3 = Vec3::new(0.502, -0.03, -0.903);
-/// How far up the forearm from the wrist the glove's cuff reaches, and how
-/// much its edge wanders round the arm, metres.
-const GLOVE_CUFF_M: f32 = 0.045;
-const GLOVE_RAG_M: f32 = 0.008;
-/// The band: its middle as a share of the way from the elbow to the wrist,
-/// and half its width, metres.
-const ARM_BAND_AT: f32 = 0.42;
-const ARM_BAND_HALF: f32 = 0.022;
-
-/// The view arms' mask, as straight RGBA8 rows, `SIDE`² texels: r the
-/// band (the side's colour, the material's `team`), a the glove (its
-/// `trim`). None if the mesh is not on the CPU.
-pub fn arms_mask(meshes: &[&Mesh]) -> Option<Vec<u8>> {
-    let texels = unroll(meshes)?;
-    let mut cover = vec![[0.0f32; 4]; SIDE * SIDE];
-    let mut known = vec![false; SIDE * SIDE];
-    for t in &texels {
-        let side = if t.p.x < 0.0 { -1.0 } else { 1.0 };
-        let m = |v: Vec3| Vec3::new(v.x * side, v.y, v.z);
-        let (e, w) = (m(ARM_ELBOW), m(ARM_WRIST));
-        let along = (w - e).normalize();
-        let len = (w - e).length();
-        // Round the forearm, for the edges' wander.
-        let r = t.p - e - along * (t.p - e).dot(along);
-        let a = r.z.atan2(r.y);
-        let rag = |seed: u32| {
-            let ph = hash2(seed as usize, 0, 7) * core::f32::consts::TAU;
-            GLOVE_RAG_M * (0.6 * (3.0 * a + ph).sin() + 0.4 * (7.0 * a + 2.0 * ph).sin())
-        };
-        let spray = |d: f32, i: u32, seed: u32| {
-            let soft = ((d / EDGE_M) * 0.5 + 0.5).clamp(0.0, 1.0);
-            let near = (1.0 - (-d / OVERSPRAY_M)).clamp(0.0, 1.0);
-            let speck = if d < 0.0 && hash2(i as usize, 2, seed) < near * SPECKLE * 0.5 {
-                0.4 + 0.6 * hash2(i as usize, 3, seed)
-            } else {
-                0.0
-            };
-            (soft * (1.0 - UNEVEN + UNEVEN * hash2(i as usize, 1, seed))).max(speck)
-        };
-        // Past the cuff toward the fingers: the glove.
-        let glove = spray((t.p - w).dot(along) + GLOVE_CUFF_M + rag(31), t.i, 31);
-        let u = (t.p - e).dot(along) / len;
-        let band = spray(ARM_BAND_HALF - (u - ARM_BAND_AT).abs() * len + rag(32) * 0.5, t.i, 32);
-        cover[t.i as usize] = [band * (1.0 - glove), 0.0, 0.0, glove];
-        known[t.i as usize] = true;
-    }
-    bleed(&mut cover, &mut known, SIDE, 4);
-    Some(
-        cover
-            .iter()
-            .flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))
-            .collect(),
-    )
-}
-
 /// Where a point at rest lies on the unrolled trunk, in its texels; none
 /// off the trunk or its rings' heights.
 fn on_wrap(p: Vec3) -> Option<(f32, f32)> {

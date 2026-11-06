@@ -676,13 +676,11 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),
     )
-    // Our own arms in view, onto the guns as `draw_view` posed them.
-    .add_systems(Update, (look::hands::build, look::icons::develop))
+    // Our own hands in view, onto the guns as `draw_view` posed them.
+    .add_systems(Update, look::icons::develop)
     .add_systems(
         PostUpdate,
-        look::hands::pose
-            .after(bevy::app::AnimationSystems)
-            .before(bevy::transform::TransformSystems::Propagate),
+        look::hands::pose.before(bevy::transform::TransformSystems::Propagate),
     )
     // Names over heads, after the camera is placed (`tags.rs`).
     .add_systems(Update, tags::draw.after(view).after(hud::draw).run_if(in_match));
@@ -734,7 +732,7 @@ fn setup(
     look::viewmodel::spawn(&mut commands, eye);
 }
 
-/// Our own arms in view, beside the gun, once the models are asked for.
+/// Our own hands in view, beside the gun, once the models are asked for.
 fn arms_setup(
     mut commands: Commands,
     models: Res<look::guns::Models>,
