@@ -1,12 +1,12 @@
-//! Our own hands in view: Triple T's wooden hand and forearm, cut from its model
-//! with the fingers closed (`tools/models/hand.py`, the left its mirror), and
-//! held rigid to the gun, as the guns in view of every shooter are held. No rig:
+//! Our own hands in view: Triple T's wooden hands and forearms, cut from its model
+//! with the fingers as its hold has them (`tools/models/hand.py`), and held
+//! rigid to the gun, as the guns in view of every shooter are held. No rig:
 //! arms dragged from where they were skinned to reach a gun tear and twist up
 //! close, and these are the nearest thing on the screen.
 //!
 //! **The right hand** is on the gun's grip, the wrist dropping under the stock
-//! ([`FIST_TILT`]). **The left** cups a long gun's fore-end, or holds its own
-//! gun with two out; a pistol's is out of the frame. It leaves the fore-end
+//! ([`FIST_TILT`]). **The left** wraps a long gun's fore-end from below ([`cup`]),
+//! or holds its own gun with two out; a pistol's is out of the frame. It leaves the fore-end
 //! only to reach the magazine and to throw ([`off_hand`]). So every motion the
 //! gun makes (the bob, the sway, a kick, a reload, a melee, a change) moves
 //! the hands with it. Each forearm runs out of the frame from there.
@@ -29,14 +29,19 @@ pub const GRIP_IN_GUN: Vec3 = Vec3::new(0.0, -0.01, -0.04);
 /// The fist turned on the grip: its knuckles up by this much about the gun's
 /// own x, so the wrist drops under the stock, radians.
 pub const FIST_TILT: f32 = 0.42;
-/// How far under a long gun's belly (`Gun::under`) the off hand's hole sits,
-/// metres as it looks.
-pub const FORE_CUP: f32 = 0.025;
-/// The off hand round the fore-end: how far round from straight below the
-/// knuckles come, toward the gun's right, and how far the forearm trails back
-/// toward us, radians.
-pub const CUP_ROUND: f32 = 0.75;
-pub const CUP_TRAIL: f32 = 0.55;
+/// Where the off hand's hole sits on a long gun's fore-end, metres as it looks:
+/// this far up into its belly (`Gun::under`) and to its right, so the fingers go
+/// round the far side and the heel of the palm and the thumb show on ours.
+pub const FORE_INTO: f32 = 0.03;
+pub const FORE_ACROSS: f32 = 0.02;
+/// The furthest up a gun from the grip the off hand goes, metres as it looks:
+/// further and its arm lies flat across the frame, its cut end in view.
+pub const FORE_MAX_M: f32 = 0.18;
+/// The off hand round a fore-end, in the gun's frame: which way its knuckles lie
+/// from its wrist (across under the gun, so the forearm comes in from the lower
+/// left), and which way along them its thumb's side is.
+pub const CUP_KNUCKLES: Vec3 = Vec3::new(0.85, 0.3, 0.4);
+pub const CUP_THUMB: Vec3 = Vec3::new(-0.4, 0.8, 0.45);
 /// The off hand's reach to the magazine in a reload: a share of the way
 /// from the grip to the fore-end, and how far under the axis.
 pub const MAG_SHARE: f32 = 0.22;
@@ -125,20 +130,16 @@ fn fist(arm: u8) -> Quat {
 }
 
 /// The left fist on a grip: as the right's, the back of the hand to the gun's
-/// left (its model is the right's mirror: x along the thumb).
+/// left (its model has x along the thumb, where the right's is against it).
 fn fist_left() -> Quat {
     Quat::from_rotation_x(FIST_TILT) * Quat::from_rotation_y(-FRAC_PI_2)
 }
 
-/// The left hand round a fore-end, in the gun's frame: thumb along the barrel,
-/// the knuckles up the gun's right side, the forearm running away down and
-/// left and trailing back.
+/// The left hand round a fore-end, in the gun's frame ([`CUP_KNUCKLES`]).
 fn cup() -> Quat {
-    let (s, c) = CUP_ROUND.sin_cos();
-    let thumb = Vec3::Y;
-    let knuckles = Vec3::new(s, 0.0, c);
-    let back = thumb.cross(knuckles);
-    Quat::from_axis_angle(back, -CUP_TRAIL) * Quat::from_mat3(&Mat3::from_cols(thumb, knuckles, back))
+    let knuckles = CUP_KNUCKLES.normalize();
+    let thumb = (CUP_THUMB - knuckles * CUP_THUMB.dot(knuckles)).normalize();
+    Quat::from_mat3(&Mat3::from_cols(thumb, knuckles, thumb.cross(knuckles)))
 }
 
 /// The left hand as it throws, in the view's frame: fist forward, thumb up.
@@ -163,7 +164,13 @@ fn left_hand(g: &Grips) -> Option<(Vec3, Quat)> {
         };
     }
     let reach = held.height * (1.0 - held.grip) * held.scale;
-    let fore = right.at + right.rot * Vec3::new(0.0, reach * held.fore, -(held.under * held.scale + FORE_CUP));
+    let fore = right.at
+        + right.rot
+            * Vec3::new(
+                FORE_ACROSS,
+                (reach * held.fore).min(FORE_MAX_M),
+                FORE_INTO - held.under * held.scale,
+            );
     let mag = right.at + right.rot * Vec3::new(0.0, reach * MAG_SHARE, -MAG_UNDER_M);
     Some(match off_hand(g, fore, mag) {
         Some((at, true)) => (at, thrown()),
@@ -206,11 +213,13 @@ mod tests {
         let t = Quat::from_rotation_y(-FRAC_PI_2) * Vec3::X;
         assert!((t - Vec3::Z).length() < 1e-5, "{t}");
         // Round a fore-end the forearm (the knuckles' opposite) runs away
-        // down, left and back toward us; the turn has no mirror in it.
+        // down, left and back toward us, the back of the hand down; the turn
+        // has no mirror in it.
         let q = cup();
         assert!((q.length() - 1.0).abs() < 1e-5);
         let forearm = q * Vec3::NEG_Y;
         assert!(forearm.x < 0.0 && forearm.y < 0.0 && forearm.z < 0.0, "{forearm}");
+        assert!((q * Vec3::Z).z < 0.0, "{}", q * Vec3::Z);
     }
 
     /// A reload takes the off hand to the magazine and brings it back; a

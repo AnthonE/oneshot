@@ -755,6 +755,7 @@ pub fn pose_spines(
             pitch: b.gait.pitch,
             hip_yaw: b.gait.hip_yaw,
             held: b.playing.held(),
+            reload: b.playing.reload_share(),
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);

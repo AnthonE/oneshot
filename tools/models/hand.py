@@ -1,8 +1,8 @@
-"""The hands in view: Triple T's own wooden arm, cut from its model's `char1_arms`
-and held rigid to the gun (look/hands.rs). Only the fingers are posed, closed as
-its hold clip closes them; the arm stays as it was skinned, so nothing is dragged
-or twisted. The fist's hole is at the origin; the right is the mesh, the left its
-mirror."""
+"""The hands in view: Triple T's own wooden arms, cut from its model's `char1_arms`
+and held rigid to the gun (look/hands.rs). Only the fingers are posed, as its hold
+clip has them: the right closed on a grip, the left cupped for a fore-end. The arm
+stays as it was skinned, so nothing is dragged or twisted. The hole each hand
+holds by is at the origin."""
 import os
 import sys
 
@@ -12,29 +12,30 @@ import math
 
 import bmesh
 from lib import *
-from mathutils import Matrix, Vector
+from mathutils import Matrix
 
-# Both of what it builds; build.sh finds a model's script by this.
-HANDS = ('hand', 'hand-left')
+# What it builds, each from that side's arm; build.sh finds a model's script by this.
+HANDS = {'Right': 'hand', 'Left': 'hand-left'}
 CLIP = 'Rifle_Hold_Loop'
 # Triple T's hands are a big man's: how big it is drawn against the guns.
 SCALE = 0.85
 # The body's material lifts its dark albedo 2.6 times (look/bodies.rs' LIFT);
 # the map's own values are sRGB, so here that is 2.6 ** (1 / 2.2).
 LIFT = 1.54
-# Where the arm is cut, as a share of the way from the wrist past the elbow.
-CUT = 1.12
-# The fist's hole against the middle finger's joints: along the hand from the
-# knuckle, and from the back of the hand toward the palm, metres at its own size.
-HOLE = (-0.018, 0.036)
+# Where each arm is cut, as a share of the way from the wrist to the elbow: the
+# right runs straight out of the frame, the left across it, past the elbow.
+CUT = {'Right': 1.12, 'Left': 1.9}
+# The hole against the middle finger's joints: along the hand from the knuckle,
+# and from the back of the hand toward the palm, metres at its own size.
+HOLE = {'Right': (-0.018, 0.036), 'Left': (-0.018, 0.036)}
 
 
 def bone(rig, name):
     return rig.matrix_world @ rig.pose.bones[name].head
 
 
-def fingers_closed(rig):
-    """The rig at rest, but for the right hand's fingers as the clip has them."""
+def fingers_closed(rig, side):
+    """The rig at rest, but for this hand's fingers as the clip has them."""
     action = bpy.data.actions[CLIP + '_' + rig.name]
     start = action.frame_range[0]
     rig.animation_data_clear()
@@ -45,30 +46,34 @@ def fingers_closed(rig):
         b.scale = (1, 1, 1)
     for curve in action.fcurves:
         name = curve.data_path.split('"')[1]
-        if curve.data_path.endswith('rotation_quaternion') and name.startswith('RightHand') and name != 'RightHand':
+        if curve.data_path.endswith('rotation_quaternion') and name.startswith(side + 'Hand') and name != side + 'Hand':
             rig.pose.bones[name].rotation_quaternion[curve.array_index] = curve.evaluate(start)
     bpy.context.view_layer.update()
 
 
-def hand_frame(rig):
-    """World to gun space with the hand laid in it: the fist's hole at the
-    origin, the knuckles toward +X, the thumb's side +Y, the back of the hand +Z."""
-    wrist = bone(rig, 'RightHand')
-    knuckle = bone(rig, 'RightHandMiddle1')
+def hand_frame(rig, side):
+    """World to gun space with the hand laid in it: its hole at the origin, the
+    knuckles toward +X, the back of the hand +Z; the thumb's side +Y on the right
+    hand and -Y on the left, as one's mirror lies against the other."""
+    wrist = bone(rig, side + 'Hand')
+    knuckle = bone(rig, side + 'HandMiddle1')
     along = (knuckle - wrist).normalized()
-    thumb = bone(rig, 'RightHandIndex1') - bone(rig, 'RightHandPinky1')
+    thumb = bone(rig, side + 'HandIndex1') - bone(rig, side + 'HandPinky1')
     thumb = (thumb - along * thumb.dot(along)).normalized()
+    if side == 'Left':
+        thumb = -thumb
     back = along.cross(thumb)
-    hole = knuckle + along * HOLE[0] - back * HOLE[1]
+    at = HOLE[side]
+    hole = knuckle + along * at[0] - back * at[1]
     turn = Matrix((along, thumb, back)).to_4x4()
     return Matrix.Scale(SCALE, 4) @ turn @ Matrix.Translation(-hole)
 
 
-def cut_arm(me, rig):
-    """Only the right arm, wrist to just past the elbow, its end capped."""
-    wrist = bone(rig, 'RightHand')
-    elbow = bone(rig, 'RightForeArm')
-    at = wrist + (elbow - wrist) * CUT
+def cut_arm(me, rig, side):
+    """Only this arm, wrist to just past the elbow, its end capped."""
+    wrist = bone(rig, side + 'Hand')
+    elbow = bone(rig, side + 'ForeArm')
+    at = wrist + (elbow - wrist) * CUT[side]
     bm = bmesh.new()
     bm.from_mesh(me)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
@@ -92,17 +97,17 @@ def cut_arm(me, rig):
     bm.free()
 
 
-def baked():
-    """The arm as one still mesh in gun space."""
+def baked(side):
+    """This arm as one still mesh in gun space."""
     bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, 'triple-t.glb'))
     arms = bpy.data.objects['char1_arms']
     rig = arms.parent
-    fingers_closed(rig)
+    fingers_closed(rig, side)
     dg = bpy.context.evaluated_depsgraph_get()
     me = bpy.data.meshes.new_from_object(arms.evaluated_get(dg), depsgraph=dg)
     me.transform(arms.matrix_world)
-    cut_arm(me, rig)
-    me.transform(hand_frame(rig))
+    cut_arm(me, rig, side)
+    me.transform(hand_frame(rig, side))
     # Its seams were split for the file: smooth across them again.
     me.polygons.foreach_set('use_smooth', [True] * len(me.polygons))
     me.use_auto_smooth = True
@@ -128,25 +133,12 @@ def export(o, name):
 
 
 if __name__ == '__main__':
-    scene()
-    o = baked()
-    darken(o, LIFT)
-    os.makedirs(TRACES, exist_ok=True)
-    sheet(o, os.path.join(TRACES, 'hand.png'), title='hand', fist=(0.0, 0.0))
-
-    # The left: a true mirror, its faces turned back out.
-    left = o.copy()
-    left.data = o.data.copy()
-    bpy.context.collection.objects.link(left)
-    left.data.transform(Matrix.Scale(-1, 4, Vector((0, 1, 0))))
-    bm = bmesh.new()
-    bm.from_mesh(left.data)
-    bmesh.ops.reverse_faces(bm, faces=bm.faces)
-    bm.to_mesh(left.data)
-    bm.free()
-    left.data.update()
-
-    for mesh, name in ((o, 'hand'), (left, 'hand-left')):
-        mesh.data.transform(TO_EXPORT)
-        mesh.data.update()
-        export(mesh, name)
+    for side, name in HANDS.items():
+        scene()
+        o = baked(side)
+        darken(o, LIFT)
+        os.makedirs(TRACES, exist_ok=True)
+        sheet(o, os.path.join(TRACES, name + '.png'), title=name, fist=(0.0, 0.0))
+        o.data.transform(TO_EXPORT)
+        o.data.update()
+        export(o, name)

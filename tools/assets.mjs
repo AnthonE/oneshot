@@ -67,6 +67,9 @@ for (const [name, src] of Object.entries(MODELS)) {
 mkdirSync(join(out, 'models'), { recursive: true });
 const glb = spawnSync('cargo', ['run', '-q', '--release', '--manifest-path', 'tools/glb/Cargo.toml', '--', raw, join(out, 'models')], { stdio: 'inherit' });
 if (glb.status !== 0) process.exit(glb.status ?? 1);
+// Triple T's clips put right: Gates' file has them as they were.
+const clips = spawnSync('blender', ['-b', '--python-exit-code', '1', '--python', 'tools/models/triple-t.py'], { stdio: 'inherit' });
+if (clips.status !== 0) process.exit(clips.status ?? 1);
 
 mkdirSync(join(out, 'models/rock'), { recursive: true });
 for (const r of ROCKS) {
