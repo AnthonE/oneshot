@@ -25,6 +25,7 @@ pub mod gun_skin;
 pub mod guns;
 pub mod hands;
 pub mod icons;
+pub mod thumbs;
 pub mod keel;
 pub mod mood;
 pub mod moon;
