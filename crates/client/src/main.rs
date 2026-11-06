@@ -181,8 +181,10 @@ fn run() -> Result<(), String> {
             p.footwear = proto::gear_valid(&proto::FOOTWEAR, at(2) as u8);
             p.emblem = proto::emblem_valid(at(3));
         }
-        if flag("--armory") {
-            oneshot_client::front::open_armory(app.world_mut());
+        if let Some(t) = arg("--tab") {
+            if !oneshot_client::front::open_tab(app.world_mut(), &t) {
+                return Err(format!("--tab {t}: play, armory, party, friends or challenges"));
+            }
         }
         (app, want, joins)
     };
@@ -310,7 +312,7 @@ const HELP: &str = "oneshot: the desktop client
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
   --name NAME                      the name others see (the title's field)
   --look SKIN,HEAD,FEET,EMBLEM     what you wear, by id (the armory's picks)
-  --armory                         the title opens on ARMORY
+  --tab NAME                       the title opens on ARMORY, PARTY, FRIENDS or CHALLENGES
   --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros
