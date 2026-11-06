@@ -192,7 +192,7 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     // grating, the windows' honeycomb.
     for (name, [albedo, normal, orm, glow], glows) in [
         ("alien", super::ship::hull_images(super::ship::HULL_PX), true),
-        ("deck", super::ship::deck_images(PANEL_PX), false),
+        ("deck", super::ship::deck_images(super::ship::DECK_PX), true),
         ("gold", super::ship::gold_images(PANEL_PX), true),
     ] {
         let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));
@@ -680,10 +680,10 @@ mod tests {
     #[test]
     fn the_ships_surfaces_tile_and_glow_only_in_their_lights() {
         // Each set, and how much of it may glow: the hull's seams a
-        // little, the windows' glass most of them, the deck nothing.
+        // little, the windows' glass most of them, the deck's grates.
         for (name, [a, _, _, g], most) in [
             ("hull", crate::look::ship::hull_images(64), 0.25),
-            ("deck", crate::look::ship::deck_images(64), 0.0),
+            ("deck", crate::look::ship::deck_images(64), 0.2),
             ("gold", crate::look::ship::gold_images(64), 0.9),
         ] {
             assert_eq!(a.texture_descriptor.mip_level_count, 7, "{name}");

@@ -207,6 +207,25 @@
       "boxes": [
         {"pod": [0, 10.2], "r": 1.0, "h": 1.6, "look": "alien_dark"}
       ]
+    },
+    {
+      "name": "the pods' light: a band round each at its belly",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        {"ring": [-5.4, -2.0], "r": 0.92, "tube": 0.035, "y": 0.765, "look": "cyan_glow"},
+        {"ring": [-5.4, 2.0], "r": 0.92, "tube": 0.035, "y": 0.765, "look": "cyan_glow"},
+        {"ring": [-4.5, 11.0], "r": 1.12, "tube": 0.035, "y": 0.9, "look": "red_glow"},
+        {"ring": [-5.0, -10.0], "r": 1.12, "tube": 0.035, "y": 0.9, "look": "red_glow"},
+        {"ring": [-11.5, -9.6], "r": 0.92, "tube": 0.035, "y": 0.81, "look": "cyan_glow"}
+      ]
+    },
+    {
+      "name": "the lanes' middle pod's light",
+      "dress": true,
+      "boxes": [
+        {"ring": [0, 10.2], "r": 1.02, "tube": 0.035, "y": 0.72, "look": "magenta_glow"}
+      ]
     }
   ],
   "spawns": [

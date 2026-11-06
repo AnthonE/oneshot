@@ -93,12 +93,12 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         FLOOR => ("panel", 6.0, Color::srgb(0.34, 0.36, 0.39)),
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
-        12 => ("alien", HULL_TILE_M, Color::srgb(0.54, 0.38, 0.77)),
-        13 => ("alien", HULL_TILE_M, Color::srgb(0.34, 0.25, 0.51)),
-        14 => ("alien", HULL_TILE_M, Color::srgb(0.75, 0.22, 0.36)),
-        15 => ("alien", HULL_TILE_M, Color::srgb(0.29, 0.42, 0.77)),
-        DECK => ("deck", 4.0, Color::WHITE),
-        GOLD => ("gold", 1.2, Color::WHITE),
+        12 => ("alien", HULL_TILE_M, Color::srgb(0.47, 0.33, 0.68)),
+        13 => ("alien", HULL_TILE_M, Color::srgb(0.3, 0.22, 0.45)),
+        14 => ("alien", HULL_TILE_M, Color::srgb(0.66, 0.19, 0.32)),
+        15 => ("alien", HULL_TILE_M, Color::srgb(0.25, 0.37, 0.68)),
+        DECK => ("deck", 8.0, Color::WHITE),
+        GOLD => ("gold", 2.4, Color::WHITE),
         // A base's metal: plates over a metre across (the set is four to
         // its tile) in a mid steel, the same under a side's paint, and
         // tread plate.
@@ -506,15 +506,19 @@ const STRIP_GLOW: f32 = 4.0;
 const VEIN_GLOW: f32 = 3.0;
 /// And the windows' honeycomb.
 const GLASS_GLOW: f32 = 1.6;
+/// And the light under the deck, through its grates.
+const GRATE_GLOW: f32 = 1.0;
 
 /// A glowing set's light by look: the hull's seams magenta, faint on the
-/// dark hull, red's and blue's on a side's, the windows gold.
+/// dark hull, red's and blue's on a side's, the windows gold, the deck's
+/// grates violet.
 fn vein(look: u8) -> (Color, f32) {
     match look {
         13 | RIB => (Color::srgb(0.6, 0.3, 0.7), VEIN_GLOW * 0.5),
         14 => (Color::srgb(1.0, 0.32, 0.3), VEIN_GLOW),
         15 => (Color::srgb(0.3, 0.55, 1.0), VEIN_GLOW),
         GOLD => (Color::srgb(1.0, 0.74, 0.35), GLASS_GLOW),
+        DECK => (Color::srgb(0.55, 0.35, 1.0), GRATE_GLOW),
         _ => (Color::srgb(1.0, 0.4, 0.9), VEIN_GLOW),
     }
 }
