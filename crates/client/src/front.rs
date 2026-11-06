@@ -1846,6 +1846,7 @@ fn poll(
     mut next: ResMut<NextState<Screen>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut look: ResMut<crate::Look>,
+    mut ear: ResMut<crate::sound::Ear>,
 ) {
     let Some(k) = knocking.0.as_mut() else {
         return;
@@ -1854,6 +1855,9 @@ fn poll(
         front.dirty = true;
         match news {
             News::Line(l) => {
+                if l == crate::door::MATCHED {
+                    ear.ping("match_found_0");
+                }
                 front.status = l;
                 front.bad = false;
             }

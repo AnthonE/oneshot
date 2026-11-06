@@ -175,12 +175,12 @@ fn line(m: &Msg) -> Option<Line> {
     else {
         return None;
     };
-    // The rare first (what the announcer would say), then the most.
+    // The rare first, then the most.
     let mut ms: Vec<(u8, u8)> = (1..md::COUNT as u8)
         .filter(|&id| medals[id as usize] > 0)
         .map(|id| (id, medals[id as usize]))
         .collect();
-    ms.sort_by_key(|&(id, n)| (!md::info(id).voiced, std::cmp::Reverse(n), id));
+    ms.sort_by_key(|&(id, n)| (!md::rare(id), std::cmp::Reverse(n), id));
     Some(Line {
         slot,
         kills,

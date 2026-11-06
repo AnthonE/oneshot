@@ -77,7 +77,7 @@ impl Line {
                 continue;
             }
             let f = &mut self.fogs[s];
-            f.update_with(w, s, 0.0, tick, plain);
+            f.update_with(w, s, 0.0, tick, plain, WATCH_EVERY);
             let q = &mut self.queues[s];
             let snap = build(
                 w,

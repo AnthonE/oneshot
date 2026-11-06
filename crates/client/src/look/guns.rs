@@ -93,10 +93,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             -0.0096,
             1.0,
             true,
-            "shot_heli",
+            "shot_br",
             3,
-            "shot_heli_far",
-            "reload_rifle_0",
+            "shot_br_far",
+            "reload_br_0",
         ),
     ),
     (
@@ -110,10 +110,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             -0.0044,
             1.0,
             false,
-            "shot_gun",
-            2,
-            "shot_gun_far",
-            "reload_pistol_0",
+            "shot_magnum",
+            3,
+            "shot_magnum_far",
+            "reload_magnum_0",
         ),
     ),
     (
@@ -127,10 +127,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             0.0127,
             0.72,
             true,
-            "shot_bolt",
+            "shot_sniper",
             3,
-            "shot_bolt_far",
-            "reload_bolt_0",
+            "shot_sniper_far",
+            "reload_sniper_0",
         ),
     ),
     (
@@ -163,8 +163,8 @@ pub const GUNS: [(u8, Gun); 15] = [
             true,
             "shot_rocket",
             3,
-            "shot_launcher_far",
-            "reload_rifle_0",
+            "shot_rocket_far",
+            "reload_rocket_0",
         ),
     ),
     (
@@ -181,11 +181,11 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_smg",
             3,
             "shot_smg_far",
-            "reload_rifle_0",
+            "reload_smg_0",
         ),
     ),
     // The ship's line (`tools/models`: the Veil guns), each with its own
-    // model; their sounds are ours (tools/sfx.mjs).
+    // model.
     (
         arms::SWORD,
         g(
@@ -217,7 +217,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_carbine",
             3,
             "shot_carbine_far",
-            "reload_rifle_0",
+            "reload_carbine_0",
         ),
     ),
     (
@@ -285,7 +285,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_shards",
             3,
             "shot_shards_far",
-            "reload_rifle_0",
+            "reload_shards_0",
         ),
     ),
     (
@@ -302,7 +302,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_launcher",
             3,
             "shot_launcher_far",
-            "reload_shotgun_0",
+            "reload_launcher_0",
         ),
     ),
     (
@@ -319,7 +319,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_cannon",
             3,
             "shot_cannon_far",
-            "reload_rifle_0",
+            "reload_cannon_0",
         ),
     ),
 ];
