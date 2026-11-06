@@ -222,11 +222,12 @@ pub fn warm_models(
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
     // In an emblem, so the paint's first mask is baked here too, and the
-    // shades, so their maps are in before anyone wears them.
+    // gear, so its maps are in before anyone wears it.
     let look = proto::Look {
         skin: 0,
         emblem: proto::emblem(1, 1, 0, 4),
-        accessory: 1,
+        headwear: 1,
+        footwear: 1,
     };
     let body = super::bodies::spawn(&mut commands, 0, look);
     commands

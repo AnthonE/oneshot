@@ -262,8 +262,8 @@ enum Hit {
     Quit,
     Mode(u8),
     Skin(i32),
-    /// What's worn on the head (`proto::ACCESSORIES`), a step either way.
-    Accessory(i32),
+    /// A gear slot (`GEAR_ROWS`), a step either way.
+    Gear(usize, i32),
     /// A part of the emblem (`EMBLEM_PARTS`), one step either way.
     Emblem(usize, i32),
     Name,
@@ -625,36 +625,38 @@ fn panel(
                     r.spawn((ui::stepper(), Hit::Skin(1)))
                         .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
                 });
-                // On the head: anyone's (`proto::ACCESSORY_FREE`), else the wallet's.
-                p.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(8.0),
-                    flex_shrink: 0.0,
-                    ..default()
-                })
-                .with_children(|r| {
-                    r.spawn(ui::strong("WEAR", 12.0, ui::FAINT));
-                    r.spawn(ui::label("on your head", 11.0, ui::FAINT));
-                    r.spawn(Node {
-                        flex_grow: 1.0,
-                        ..default()
-                    });
-                    r.spawn((ui::stepper(), Hit::Accessory(-1)))
-                        .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
-                    r.spawn(Node {
-                        width: Val::Px(96.0),
-                        justify_content: JustifyContent::Center,
+                // The gear, a slot a row: worn if the wallet owns it.
+                for (k, (label, hint, slot)) in GEAR_ROWS.iter().enumerate() {
+                    p.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        flex_shrink: 0.0,
                         ..default()
                     })
-                    .with_child(ui::strong(
-                        accessory_name(player.accessory),
-                        14.0,
-                        ui::TEXT_COLOR,
-                    ));
-                    r.spawn((ui::stepper(), Hit::Accessory(1)))
-                        .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
-                });
+                    .with_children(|r| {
+                        r.spawn(ui::strong(*label, 12.0, ui::FAINT));
+                        r.spawn(ui::label(*hint, 11.0, ui::FAINT));
+                        r.spawn(Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        });
+                        r.spawn((ui::stepper(), Hit::Gear(k, -1)))
+                            .with_child(ui::strong("<", 14.0, ui::TEXT_COLOR));
+                        r.spawn(Node {
+                            width: Val::Px(96.0),
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        })
+                        .with_child(ui::strong(
+                            gear_name(slot, player.gear(k)),
+                            14.0,
+                            ui::TEXT_COLOR,
+                        ));
+                        r.spawn((ui::stepper(), Hit::Gear(k, 1)))
+                            .with_child(ui::strong(">", 14.0, ui::TEXT_COLOR));
+                    });
+                }
                 // The emblem on the back: a glyph, the shape behind it, their colours.
                 let parts = proto::emblem_parts(player.emblem);
                 for (k, (label, hint)) in EMBLEM_PARTS.iter().enumerate() {
@@ -1384,9 +1386,15 @@ fn skin_name(i: u8) -> String {
     }
 }
 
-/// An accessory's name.
-fn accessory_name(i: u8) -> String {
-    proto::ACCESSORIES[proto::accessory_valid(i) as usize].to_uppercase()
+/// The gear's rows on the title: its label, a hint and its slot.
+const GEAR_ROWS: [(&str, &str, &[&str]); 2] = [
+    ("HEAD", "if your wallet owns it", &proto::HEADWEAR),
+    ("FEET", "if your wallet owns them", &proto::FOOTWEAR),
+];
+
+/// Gear `i`'s name in `slot`.
+fn gear_name(slot: &[&str], i: u8) -> String {
+    slot[proto::gear_valid(slot, i) as usize].to_uppercase()
 }
 
 /// The name as the field shows it: what's typed, a caret while editing, a
@@ -1470,9 +1478,10 @@ fn click(
             player.skin = (player.skin as i32 + d).rem_euclid(n) as u8;
             front.dirty = true;
         }
-        Hit::Accessory(d) => {
-            let n = proto::ACCESSORIES.len() as i32;
-            player.accessory = (player.accessory as i32 + d).rem_euclid(n) as u8;
+        Hit::Gear(k, d) => {
+            let n = GEAR_ROWS[k].2.len() as i32;
+            let g = player.gear_mut(k);
+            *g = (*g as i32 + d).rem_euclid(n) as u8;
             front.dirty = true;
         }
         Hit::Emblem(k, d) => {

@@ -21,7 +21,10 @@ onto a map of their own). The shades (models/shades.glb) are ours on the
 same terms: the operator's own model on Meshy, cut by
 tools/models/shades.py (sized, fitted to Triple T's face, thinned, the
 maker's lettering Meshy painted on the lens painted out, its maps made
-smaller and re-encoded as JPEG).
+smaller and re-encoded as JPEG). The boots (models/boot-left.glb,
+boot-right.glb) are ours on the same terms: the operator's own model on
+Meshy, cut by tools/models/boots.py (thinned, its colour and detail baked
+onto maps of its own, the left made as the right's mirror image).
 
 The truck (models/truck.glb) is "Tesla Cybertruck" (https://skfb.ly/6QSBr)
 by hashikemu, licensed under Creative Commons Attribution 4.0

@@ -263,7 +263,8 @@ impl Client {
         mode: u8,
         skin: u8,
         emblem: u16,
-        accessory: u8,
+        headwear: u8,
+        footwear: u8,
         party: u32,
     ) -> Result<Client, JsValue> {
         let pass = if pass.is_empty() {
@@ -299,7 +300,8 @@ impl Client {
             proto::Look {
                 skin,
                 emblem,
-                accessory,
+                headwear,
+                footwear,
             },
             party,
         );
@@ -672,12 +674,14 @@ impl Client {
                     name,
                     skin,
                     emblem,
-                    accessory,
+                    headwear,
+                    footwear,
                 } => {
                     set("type", "seat".into());
                     set("skin", skin.into());
                     set("emblem", emblem.into());
-                    set("accessory", accessory.into());
+                    set("headwear", headwear.into());
+                    set("footwear", footwear.into());
                     set("slot", slot.into());
                     set("team", team.into());
                     set("bot", bot.into());

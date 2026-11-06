@@ -356,8 +356,10 @@ pub struct Models {
     pub frag: Handle<Scene>,
     /// A vehicle's hull (`look/truck.rs`).
     pub truck: Handle<Scene>,
-    /// The accessory on a body's head (`bodies.rs`).
+    /// Gear on a body (`bodies.rs`): the shades, and a boot for each foot.
     pub shades: Handle<Scene>,
+    pub boot_left: Handle<Scene>,
+    pub boot_right: Handle<Scene>,
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -375,6 +377,8 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         frag: scene("frag"),
         truck: scene("truck"),
         shades: scene("shades"),
+        boot_left: scene("boot-left"),
+        boot_right: scene("boot-right"),
     });
 }
 

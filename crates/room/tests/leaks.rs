@@ -26,7 +26,8 @@ const SALT: (u64, u64) = (0x5a17_0123_4567_89ab, 0xfeed_beef_cafe_d00d);
 /// The skin the person seat wears (the server checked it owns it).
 const SKIN: u8 = 3;
 const EMBLEM: proto::Emblem = proto::emblem(3, 2, 5, 9);
-const ACCESSORY: u8 = 1;
+const HEADWEAR: u8 = 1;
+const FOOTWEAR: u8 = 1;
 
 /// Whether the 64 bits of `w` appear in `buf` at any bit offset (the wire
 /// is bit-packed, so a leak need not be byte-aligned).
@@ -359,7 +360,8 @@ fn gate(map: Map, rules: Rules) {
             proto::Look {
                 skin: SKIN,
                 emblem: EMBLEM,
-                accessory: ACCESSORY,
+                headwear: HEADWEAR,
+                footwear: FOOTWEAR,
             },
         )
         .unwrap();
@@ -480,7 +482,7 @@ fn gate(map: Map, rules: Rules) {
     );
 }
 
-/// Check 7: skins, emblems and accessories are public by design
+/// Check 7: skins, emblems and gear are public by design
 /// (docs/DESIGN.md §15) and say nothing of the world. A seat names the
 /// look its person was checked to wear, and a bot's is the standard one.
 fn check_seat(m: &Msg, me: u8) {
@@ -489,7 +491,8 @@ fn check_seat(m: &Msg, me: u8) {
         bot,
         skin,
         emblem,
-        accessory,
+        headwear,
+        footwear,
         ..
     } = *m
     {
@@ -505,9 +508,13 @@ fn check_seat(m: &Msg, me: u8) {
             "seat {slot}'s emblem"
         );
         assert_eq!(
-            accessory,
-            if mine { ACCESSORY } else { proto::ACCESSORY_NONE },
-            "seat {slot}'s accessory"
+            (headwear, footwear),
+            if mine {
+                (HEADWEAR, FOOTWEAR)
+            } else {
+                (proto::GEAR_NONE, proto::GEAR_NONE)
+            },
+            "seat {slot}'s gear"
         );
     }
 }
