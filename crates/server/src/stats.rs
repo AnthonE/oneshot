@@ -659,7 +659,7 @@ pub const MAX_REPORTS: usize = 500;
 /// account's own id (`gamestats._PLAYER_RE`).
 pub fn is_player(id: &str) -> bool {
     let hex = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit());
-    id.strip_prefix("0x").is_some_and(|h| hex(h, 40)) || id.strip_prefix("acct_").is_some_and(|h| hex(h, 20))
+    proto::party::is_wallet(id) || id.strip_prefix("acct_").is_some_and(|h| hex(h, 20))
 }
 
 #[cfg(test)]
@@ -878,6 +878,10 @@ mod tests {
     fn players_are_wallets_and_accounts() {
         assert!(is_player("0x00000000000000000000000000000000000000aa"));
         assert!(is_player("acct_0123456789abcdef0123"));
+        assert!(
+            is_player("4uV4Yccau69gBh88Z8d7TbQJYCVgqsugJQuhQ1LCqYSd"),
+            "a Solana wallet"
+        );
         assert!(!is_player("acct_0123"));
         assert!(!is_player("player"));
     }

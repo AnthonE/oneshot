@@ -76,7 +76,7 @@ impl Challenges {
             }
         }
         let url = match &wallet {
-            Some(w) => format!("{API}/{}", w.to_ascii_lowercase()),
+            Some(w) => format!("{API}/{}", proto::party::spell(w)),
             None => API.to_string(),
         };
         self.asked = Some((wallet, now));

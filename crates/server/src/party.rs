@@ -454,7 +454,10 @@ impl Parties {
                 let mode = (arg & 0xff) as u8;
                 let private = arg & pp::START_PRIVATE != 0;
                 let here: Vec<&Seat> = p.seats.iter().filter(|s| s.session.is_some()).collect();
-                let wallets = here.iter().filter(|s| s.player.as_str().starts_with("0x")).count();
+                let wallets = here
+                    .iter()
+                    .filter(|s| proto::party::is_wallet(s.player.as_str()))
+                    .count();
                 if !fits(mode, here.len(), wallets) {
                     return Err(proto::REFUSE_PARTY_MODE);
                 }
