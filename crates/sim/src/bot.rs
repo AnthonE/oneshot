@@ -10,7 +10,7 @@ use crate::fmath;
 use crate::geom::{rad_to_yaw, V3};
 use crate::input::*;
 use crate::rng::Pcg32;
-use crate::world::{Phase, Rules, World, FLAG_HOME};
+use crate::world::{Phase, Rules, World, FLAG_HELD, FLAG_HOME};
 
 #[derive(Clone, Copy)]
 pub struct Bot {
@@ -214,6 +214,17 @@ impl Bot {
         best
     }
 
+    /// The enemy's flag is on the floor or at home, landed, in reach.
+    fn flag_in_reach(w: &World, slot: usize) -> bool {
+        if !w.rules.ctf || w.map.flags.is_none() {
+            return false;
+        }
+        let me = &w.fighters[slot];
+        let f = &w.flags[(me.team as usize & 1) ^ 1];
+        let d = f.pos - me.body.pos;
+        f.state != FLAG_HELD && !f.flying && d.flat().len() < FLAG_REACH && fmath::fabs(d.y) < FLAG_RISE
+    }
+
     fn tap_use(inp: &mut Input, last: u16) {
         if last & USE == 0 {
             inp.buttons |= USE;
@@ -326,6 +337,11 @@ impl Bot {
                     self.ride_cool = ticks(RIDE_COOL_MS) as u16;
                 }
             }
+        }
+
+        // The enemy's flag in reach, on foot: take it (USE, Halo 3's).
+        if !me.flag && me.riding().is_none() && Self::flag_in_reach(w, slot) {
+            Self::tap_use(&mut inp, me.last_buttons);
         }
 
         // A carrier can't shoot: it runs home, swinging at whoever is in
@@ -467,8 +483,9 @@ impl Bot {
         inp.pitch = fmath::round((cur_pitch + tp) * 65536.0).clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
 
         // Keep a fighting distance and strafe; with a sword, close in. An
-        // attacker in Capture the Flag fights on the move to the flag.
-        let a = arm(g.arm);
+        // attacker in Capture the Flag fights on the move to the flag. A
+        // gunner fights with its turret's gun.
+        let a = crate::vehicle::turret(me.gunning(&w.map)).map_or(arm(g.arm), |t| t.0);
         let push = if attacker(slot) { Self::objective(w, slot) } else { None };
         match push
             .map(|at| (Self::toward(w, me.body.pos, at) - me.body.pos).flat())

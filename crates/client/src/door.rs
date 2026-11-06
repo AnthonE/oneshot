@@ -89,6 +89,16 @@ fn moving(m: &Msg) -> bool {
 
 const MOVING: &str = "Moving to the new server...";
 
+/// Elo Pros' queue put the match on another server: where, and the match.
+fn moved_to(m: &Msg) -> Option<(String, String)> {
+    match m {
+        Msg::Moved { addr, queued } => Some((addr.as_str().to_string(), queued.as_str().to_string())),
+        _ => None,
+    }
+}
+
+const MATCHED: &str = "Matched: joining the match's server...";
+
 /// The menu's session as the game holds it (`party.rs`): the party's
 /// messages and voice in, its acts and our voice out. Never waits.
 pub trait Lobby {
@@ -120,7 +130,7 @@ mod desktop {
     use client_net::native::NativeClient;
     use client_net::session::Session;
 
-    use super::{moving, Ask, News, SignIn, MOVING};
+    use super::{moved_to, moving, Ask, News, SignIn, MATCHED, MOVING};
     use crate::link::Native;
 
     /// Where the desktop client plays unless told otherwise (ops/README.md).
@@ -267,10 +277,15 @@ mod desktop {
         say("Connecting...".into());
         let (mut addr, mut hash) = where_is(server)?;
         let mut moved = false;
+        // A match Elo Pros' queue put on another server: its id.
+        let mut queued: Option<proto::QueueMatch> = None;
         'connect: loop {
             // The lobby's ticket, if it has one: who we are to the party.
             let pass = proto::Pass::new(&ask.pass).unwrap_or(proto::Pass::NONE);
-            let hello = Session::hello(&ask.name, pass, ask.mode, ask.look, ask.party);
+            let hello = match queued {
+                Some(q) => Session::hello_queued(&ask.name, pass, ask.mode, ask.look, q),
+                None => Session::hello(&ask.name, pass, ask.mode, ask.look, ask.party),
+            };
             let mut c = rt
                 .block_on(NativeClient::connect(&addr, hash, hello))
                 .map_err(|e| format!("{addr}: {e}"))?;
@@ -285,6 +300,16 @@ mod desktop {
                     c.update(sim::input::Input::default());
                 }
                 for m in c.session.take_messages() {
+                    if let Some((to, id)) = moved_to(&m) {
+                        if queued.is_none() {
+                            say(MATCHED.into());
+                            c.close();
+                            // A server of the game's own list: its
+                            // certificate is a CA's, never pinned.
+                            (addr, hash, queued) = (to, None, proto::QueueMatch::new(&id));
+                            continue 'connect;
+                        }
+                    }
                     if moving(&m) && !moved {
                         moved = true;
                         if let Ok((a, h)) = where_is(server) {
@@ -470,7 +495,7 @@ mod web {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::{spawn_local, JsFuture};
 
-    use super::{moving, Ask, News, Pass, SignIn, MOVING};
+    use super::{moved_to, moving, Ask, News, Pass, SignIn, MATCHED, MOVING};
 
     /// What the page gave: the game server (from `server.json`), how to
     /// find the live one (`follow`), and how to sign in (`signin`, or none).
@@ -665,8 +690,8 @@ mod web {
         cancel: Rc<Cell<bool>>,
     ) -> Result<(), JsValue> {
         let push = |n: News| out.borrow_mut().push(n);
-        let connect = |(addr, hash): (String, String)| {
-            Client::connect(
+        let connect_for = |(addr, hash): (String, String), queued: String| {
+            Client::connect_queued(
                 addr,
                 hash,
                 ask.name.clone(),
@@ -674,13 +699,18 @@ mod web {
                 ask.mode,
                 ask.look.skin,
                 ask.look.emblem,
+                ask.look.headwear,
+                ask.look.footwear,
                 ask.party,
+                queued,
             )
         };
+        let connect = |at: (String, String)| connect_for(at, String::new());
         push(News::Line("Connecting...".into()));
         let first = at.borrow().clone();
         let mut c = connect(first).await?;
         let mut moved = false;
+        let mut matched = false;
         let mut early = Vec::new();
         'wait: loop {
             if cancel.get() {
@@ -689,6 +719,20 @@ mod web {
             }
             c.tick(sim::input::Input::default());
             for m in c.session_mut().take_messages() {
+                if let Some((to, id)) = moved_to(&m) {
+                    if !matched {
+                        matched = true;
+                        push(News::Line(MATCHED.into()));
+                        c.close();
+                        // A server of the game's own list: its certificate is
+                        // a CA's, never pinned.
+                        let next = (to, String::new());
+                        *at.borrow_mut() = next.clone();
+                        c = connect_for(next, id).await?;
+                        early.clear();
+                        continue 'wait;
+                    }
+                }
                 if moving(&m) && !moved {
                     moved = true;
                     let to = follow.call0(&JsValue::NULL)?.dyn_into::<js_sys::Promise>()?;

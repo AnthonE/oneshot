@@ -110,7 +110,7 @@ pub fn shade_gun(
         if let Ok(name) = lit.get(e) {
             // A sword's blade is light, and throws no shadow.
             if super::blade::is_blade(name) {
-                commands.entity(e).despawn();
+                commands.entity(e).insert(Visibility::Hidden);
                 continue;
             }
             commands

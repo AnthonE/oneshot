@@ -8,8 +8,9 @@
 //! its own colour; the side, the emblem and a skin's trim are sprayed on it
 //! (`paint.rs`): a headband in the side's colour, glowing a little so a
 //! fighter reads in shade, the emblem on the back, the trim a stripe round
-//! the waist. No hitbox or visibility changes (DESIGN.md §15). Drawing
-//! only.
+//! the waist. Its gear hangs on its bones, the gun's way: the headwear
+//! (`proto::HEADWEAR`) on the head, a boot (`proto::FOOTWEAR`) on each
+//! foot. No hitbox or visibility changes (DESIGN.md §15). Drawing only.
 //!
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
@@ -20,6 +21,7 @@ use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::{NoAutoAabb, NoFrustumCulling};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::skinning::SkinnedMesh;
+use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use client_net::core::{Drawn, DrawnVehicle};
@@ -27,7 +29,7 @@ use client_net::core::{Drawn, DrawnVehicle};
 use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
 use super::guns::{body_basis, gun, spawn_posed, Models};
 use super::paint::{BodyMaterial, Paint, Paints};
-use super::shield::{ShellPart, ShieldMaterial};
+use super::shield::{Flare, ShellPart, ShieldMaterial, Tone};
 
 /// Triple T faces +Z in its file; our bodies face +X.
 const FACE: f32 = core::f32::consts::FRAC_PI_2;
@@ -48,6 +50,39 @@ const SWORD_HELD_TURN: Quat = Quat::from_xyzw(0.87036, 0.04145, -0.49012, -0.023
 /// How long a body's cut takes, seconds: quick, and short enough of the sword's
 /// `refire_ms` for its fade to end before the next begins (`anim::BLEND_S`).
 pub const CUT_S: f32 = 0.3;
+
+/// A piece of gear's place on a bone of triple-t.glb, in the bone's own
+/// units (centimetres, as the hand's). Each model's script prints its own
+/// (FIT): `tools/models/shades.py`, `tools/models/boots.py`.
+pub struct Fit {
+    bone: &'static str,
+    at: Vec3,
+    turn: Quat,
+    scale: f32,
+}
+
+/// The shades: the lens's middle over the eyes, tipped a little onto the
+/// nose.
+const SHADES: Fit = Fit {
+    bone: "Head",
+    at: Vec3::new(0.545, 36.774, 14.136),
+    turn: Quat::from_xyzw(-0.12787, 0.00560, -0.00601, 0.99176),
+    scale: 100.0,
+};
+/// The boots, a left and a right: each sole under its root foot, turned
+/// out with the toes.
+const BOOT_LEFT: Fit = Fit {
+    bone: "LeftFoot",
+    at: Vec3::new(1.531, 16.321, 5.974),
+    turn: Quat::from_xyzw(-0.90881, -0.01571, -0.03615, 0.41535),
+    scale: 100.0,
+};
+const BOOT_RIGHT: Fit = Fit {
+    bone: "RightFoot",
+    at: Vec3::new(-0.412, 16.452, 6.000),
+    turn: Quat::from_xyzw(-0.90600, 0.04448, 0.00651, 0.42088),
+    scale: 100.0,
+};
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -125,25 +160,23 @@ pub struct Body {
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
     hand: Entity,
+    /// Its gear, each piece on its bone once dressed.
+    worn: Vec<(Entity, &'static Fit)>,
     held: u8,
     /// Drawn in stop-motion, lunging (`cels.rs`).
     pub step: super::cels::Step,
     /// Seconds left of the cut it is making.
     pub cutting: f32,
-    /// Its materials (its own: `dress` copies them per body) and the
-    /// shield's flare last put on them.
-    mats: Vec<Handle<BodyMaterial>>,
+    /// The guns it has held of late, each posed in its hand and hidden
+    /// while another is out (by arm, the longest unheld first): a swap, a
+    /// death and a respawn show one again rather than load its scene anew.
+    rack: Vec<(u8, Entity)>,
     /// A rag doll poses it ([`Body::go_limp`]).
     limp: bool,
-    lit: f32,
-    /// When the flare was last put on them (s, the app's clock).
-    lit_at: f32,
-    /// The shell's colour and fill last put on it (`Glow`), and whether
-    /// camouflage hides the body's own meshes and its hand.
-    tone: Vec4,
-    hidden: bool,
-    /// The shield's shell (`shield.rs`): its material and its meshes.
-    shell: Handle<ShieldMaterial>,
+    /// The shield's flare last put on its meshes' tags (`Glow`), and with
+    /// it whether camouflage hides the body's own meshes and its hand.
+    flare: Flare,
+    /// The shield's shell (`shield.rs`): its meshes.
     shells: Vec<Entity>,
     /// The body's own meshes, which camouflage hides.
     parts: Vec<Entity>,
@@ -250,17 +283,36 @@ pub fn spawn_shadow(commands: &mut Commands, team: u8) -> Entity {
 #[derive(Component)]
 pub struct WantsScene;
 
-/// Every body waiting for its model gets it, the file once in.
+/// A piece of gear's model, till the models are in (as [`WantsScene`]).
+#[derive(Component, Clone, Copy)]
+pub enum WantsGear {
+    Shades,
+    BootLeft,
+    BootRight,
+}
+
+/// Every body waiting for its model gets it, the file once in, and every
+/// piece of gear its own.
 pub fn stand_up(
     mut commands: Commands,
     models: Option<Res<Models>>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     waiting: Query<Entity, With<WantsScene>>,
+    gear: Query<(Entity, &WantsGear)>,
 ) {
-    let Some(scene) = models
-        .and_then(|m| gltfs.get(&m.body))
-        .and_then(|g| g.scenes.first().cloned())
-    else {
+    let Some(models) = models else { return };
+    for (e, piece) in &gear {
+        let scene = match piece {
+            WantsGear::Shades => &models.shades,
+            WantsGear::BootLeft => &models.boot_left,
+            WantsGear::BootRight => &models.boot_right,
+        };
+        commands
+            .entity(e)
+            .remove::<WantsGear>()
+            .insert(SceneRoot(scene.clone()));
+    }
+    let Some(scene) = gltfs.get(&models.body).and_then(|g| g.scenes.first().cloned()) else {
         return;
     };
     for e in &waiting {
@@ -276,6 +328,25 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
     let hand = commands
         .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
+    // Its gear, each piece hidden till `dress` puts it on its bone.
+    // Their models come once the models are in (`stand_up`).
+    let mut pieces: Vec<(WantsGear, &'static Fit)> = Vec::new();
+    if proto::gear_valid(&proto::HEADWEAR, look.headwear) == 1 {
+        pieces.push((WantsGear::Shades, &SHADES));
+    }
+    if proto::gear_valid(&proto::FOOTWEAR, look.footwear) == 1 {
+        pieces.push((WantsGear::BootLeft, &BOOT_LEFT));
+        pieces.push((WantsGear::BootRight, &BOOT_RIGHT));
+    }
+    let worn = if shadow { Vec::new() } else { pieces }
+        .into_iter()
+        .map(|(piece, fit)| {
+            let e = commands
+                .spawn((piece, Transform::default(), Visibility::Hidden, BodyPart, ChildOf(root)))
+                .id();
+            (e, fit)
+        })
+        .collect();
     commands
         .spawn((
             WantsScene,
@@ -292,16 +363,17 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         dressed: false,
         player: None,
         hand,
+        worn,
         held: 0,
         step: super::cels::Step::default(),
         cutting: 0.0,
-        mats: Vec::new(),
+        rack: Vec::with_capacity(RACK),
         limp: false,
-        lit: 0.0,
-        lit_at: f32::NEG_INFINITY,
-        tone: Vec4::ZERO,
-        hidden: false,
-        shell: Handle::default(),
+        flare: Flare {
+            level: 0.0,
+            tone: Tone::Gold,
+            hidden: false,
+        },
         shells: Vec::new(),
         parts: Vec::new(),
         fresh: false,
@@ -428,6 +500,26 @@ fn dress(
         }
         None => error!("bodies: no {HAND_BONE} in models/triple-t.glb: its gun lies at its feet"),
     }
+    // Its gear goes on its bones: it goes where they go.
+    for &(worn, fit) in &body.worn {
+        let bone = children
+            .iter_descendants(model)
+            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == fit.bone));
+        match bone {
+            Some(bone) => {
+                commands.entity(worn).insert((
+                    ChildOf(bone),
+                    Transform {
+                        translation: fit.at,
+                        rotation: fit.turn.normalize(),
+                        scale: Vec3::splat(fit.scale),
+                    },
+                    Visibility::Inherited,
+                ));
+            }
+            None => error!("bodies: no {} in models/triple-t.glb: gear left off", fit.bone),
+        }
+    }
     body.dressed = true;
     if body.shadow {
         let Some(shadow) = shadow_mat else {
@@ -461,7 +553,7 @@ fn dress(
         .collect();
     let mask = paints.mask(body.emblem, &model_meshes, &mut images);
     let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
-    let params = super::paint::params(
+    let mut params = super::paint::params(
         team_color(body.team).to_linear(),
         body.emblem,
         trim(body.skin).map(|c| c.to_linear()),
@@ -469,8 +561,9 @@ fn dress(
         GLOW * TRIM_GLOW * sun,
         LIFT,
     );
+    params.flare_gold = (Vec3::from_array(FLARE_GOLD) * sun).extend(0.0);
+    params.flare_over = (Vec3::from_array(FLARE_OVER) * sun).extend(0.0);
     let shell = shield_mats.add(super::shield::material());
-    body.shell = shell.clone();
     for e in children.iter_descendants(model) {
         if players.contains(e) {
             body.player = Some(e);
@@ -487,6 +580,7 @@ fn dress(
                     *at,
                     shell_shown,
                     ShellPart,
+                    MeshTag(0),
                     NotShadowCaster,
                     bounds,
                     NoAutoAabb,
@@ -508,13 +602,13 @@ fn dress(
                     mask: mask.clone(),
                 },
             });
-            body.mats.push(h.clone());
             body.parts.push(e);
             commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert((
                 MeshMaterial3d(h),
                 bounds,
                 NoAutoAabb,
                 BodyPart,
+                MeshTag(0),
             ));
         }
     }
@@ -528,6 +622,9 @@ pub struct BodyPart;
 /// What shows and hides by itself on a body: its shield's shells, and its
 /// own meshes and hand.
 pub type Parts<'w, 's> = Query<'w, 's, &'static mut Visibility, Or<(With<ShellPart>, With<BodyPart>)>>;
+
+/// How its shells and its meshes flare: their tags (`shield::Flare`).
+pub type Tags<'w, 's> = Query<'w, 's, &'static mut MeshTag, Or<(With<ShellPart>, With<BodyPart>)>>;
 
 /// The light the shell casts on the body under it at a flare of 1, gold
 /// (the shield) or green (an overshield): a share of a white surface's
@@ -556,39 +653,40 @@ pub struct Glow {
 }
 
 impl Glow {
-    /// The shell's colour (rgb) and fill (w: 1 rim and lines only), its
-    /// level, and whether the body itself is hidden.
-    fn shell(self) -> (Vec4, f32, bool) {
+    /// The shell's flare: its level, its colour, and whether the body
+    /// itself is hidden.
+    fn shell(self) -> Flare {
         if self.cloak > CAMO_HIDE {
             let best = sim::consts::CAMO_BEST;
             let k = ((self.cloak - CAMO_HIDE) / (best - CAMO_HIDE)).clamp(0.0, 1.0);
             let level = CAMO_EDGE + (CAMO_FAINT - CAMO_EDGE) * k;
-            (CAMO.extend(1.0), level.max(self.hit * 0.5), true)
+            Flare {
+                level: level.max(self.hit * 0.5),
+                tone: Tone::Camo,
+                hidden: true,
+            }
         } else if self.over {
-            (OVER.extend(0.0), self.hit.max(OVER_REST), false)
+            Flare {
+                level: self.hit.max(OVER_REST),
+                tone: Tone::Over,
+                hidden: false,
+            }
         } else {
-            (super::shield::GOLD.extend(0.0), self.hit, false)
+            Flare {
+                level: self.hit,
+                tone: Tone::Gold,
+                hidden: false,
+            }
         }
     }
 }
 
-/// How often a flare that only eases is put on a body's materials, and how
-/// big a step of its level is put on at once (a hit's flash).
-const FLARE_HZ: f32 = 30.0;
-const FLARE_JUMP: f32 = 0.1;
-
 /// A body's shell and skin this frame (`Glow`): the shell shows at its
 /// level and colour, the body under it takes a little of the light, and
-/// camouflage hides the body and its gun, leaving the shell's rim.
-pub fn flare(
-    root: Entity,
-    glow: Glow,
-    t: f32,
-    bodies: &mut Query<&mut Body>,
-    mats: &mut Assets<BodyMaterial>,
-    shield_mats: &mut Assets<ShieldMaterial>,
-    parts: &mut Parts,
-) {
+/// camouflage hides the body and its gun, leaving the shell's rim. All of
+/// it by its meshes' tags and visibility: no material is written, so a
+/// hit or a recharge costs a fight nothing but those.
+pub fn flare(root: Entity, glow: Glow, bodies: &mut Query<&mut Body>, tags: &mut Tags, parts: &mut Parts) {
     // Its shells and meshes come with its scene: till then, nothing to set.
     let Ok(mut body) = bodies.get_mut(root) else {
         return;
@@ -596,51 +694,39 @@ pub fn flare(
     if !body.dressed {
         return;
     }
-    let (tone, level, hidden) = glow.shell();
-    let same = (level - body.lit).abs() < 0.02 && (level > 0.0 || body.lit == 0.0);
-    if same && tone == body.tone && hidden == body.hidden {
+    let f = glow.shell();
+    let was = body.flare;
+    if f == was {
         return;
     }
-    // Only the level easing (a recharge's shimmer, a hit fading) goes at
-    // most FLARE_HZ: each write remakes the shell's and the body's material
-    // bindings, every frame of a recharge for everyone recharging.
-    let easing = (level - body.lit).abs() < FLARE_JUMP && (level > 0.0) == (body.lit > 0.0);
-    if easing && tone == body.tone && hidden == body.hidden && t - body.lit_at < 1.0 / FLARE_HZ {
-        return;
-    }
-    body.lit_at = t;
-    let shown = level > 0.0;
     let show = |on: bool| if on { Visibility::Inherited } else { Visibility::Hidden };
-    if shown != (body.lit > 0.0) {
+    let shown = f.level > 0.0;
+    if shown != (was.level > 0.0) {
         for &e in &body.shells {
             if let Ok(mut v) = parts.get_mut(e) {
                 *v = show(shown);
             }
         }
     }
-    if hidden != body.hidden {
-        for &e in body.parts.iter().chain(core::iter::once(&body.hand)) {
+    if f.hidden != was.hidden {
+        for &e in body
+            .parts
+            .iter()
+            .chain(core::iter::once(&body.hand))
+            .chain(body.worn.iter().map(|(e, _)| e))
+        {
             if let Ok(mut v) = parts.get_mut(e) {
-                *v = show(!hidden);
+                *v = show(!f.hidden);
             }
         }
     }
-    body.lit = level;
-    body.tone = tone;
-    body.hidden = hidden;
-    if let Some(m) = shield_mats.get_mut(&body.shell) {
-        m.extension.color = tone.truncate().extend(level);
-        m.extension.params.z = tone.w;
-    }
-    let sun = bevy::light::light_consts::lux::DIRECT_SUNLIGHT / core::f32::consts::PI;
-    let k = if hidden { 0.0 } else { level * sun };
-    let c = if glow.over { FLARE_OVER } else { FLARE_GOLD };
-    let e = LinearRgba::rgb(c[0] * k, c[1] * k, c[2] * k);
-    for h in &body.mats {
-        if let Some(m) = mats.get_mut(h) {
-            m.base.emissive = e;
+    let tag = f.tag();
+    for &e in body.parts.iter().chain(&body.shells) {
+        if let Ok(mut t) = tags.get_mut(e) {
+            t.set_if_neq(MeshTag(tag.0));
         }
     }
+    body.flare = f;
 }
 
 /// One fighter's body this frame: where it stands, how it moves (its gait,
@@ -710,7 +796,7 @@ pub fn pose(
     // wheel. It waits for the hand it goes in.
     let arm = if d.alive && !driving { d.arm } else { 0 };
     if arm != body.held && body.dressed {
-        commands.entity(body.hand).despawn_related::<Children>();
+        // A sword sits in the hand its own way (`Sword_Idle`), a gun as it did.
         let (at, rotation) = if arm == sim::arms::SWORD {
             (SWORD_HELD_AT, SWORD_HELD_TURN)
         } else {
@@ -721,8 +807,16 @@ pub fn pose(
             rotation: rotation.normalize(),
             scale: Vec3::splat(HELD_SCALE),
         });
-        let posed = spawn_posed(commands, models, arm, body_basis(), body.hand);
-        if let Some((_, scene)) = posed {
+        let held = body.held;
+        if let Some(&(_, out)) = body.rack.iter().find(|r| r.0 == held) {
+            commands.entity(out).insert(Visibility::Hidden);
+        }
+        if let Some(i) = body.rack.iter().position(|r| r.0 == arm) {
+            // Racked: shown again, now the latest held.
+            let r = body.rack.remove(i);
+            commands.entity(r.1).insert(Visibility::Inherited);
+            body.rack.push(r);
+        } else if let Some((pivot, scene)) = spawn_posed(commands, models, arm, body_basis(), body.hand) {
             if body.shadow {
                 // Your shadow's gun is a shadow too.
                 commands.entity(scene).observe(super::own_shadow::shade_gun);
@@ -730,10 +824,21 @@ pub fn pose(
                 super::gun_skin::wear(commands, scene, body.skin, arm);
                 super::blade::light(commands, scene, arm);
             }
+            if body.rack.len() >= RACK {
+                // The one held longest ago goes (never the one just put
+                // away: it is the latest after this).
+                let (_, old) = body.rack.remove(0);
+                commands.entity(old).despawn();
+            }
+            body.rack.push((arm, pivot));
         }
         body.held = arm;
     }
 }
+
+/// Guns a body keeps posed in its hand: the two it carries and one more
+/// (the last it dropped or the one on the floor it took).
+const RACK: usize = 3;
 
 /// Every body's player, crossfaded to what its gait wants (`anim::drive`),
 /// once a frame after the bodies are posed. The first frame a body has a

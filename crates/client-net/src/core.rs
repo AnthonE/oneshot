@@ -170,6 +170,9 @@ pub struct Stats {
     pub depth: i8,
     pub rate: f64,
     pub delay_ticks: f64,
+    /// Ticks between the server's snapshots, as they come: the least gap
+    /// seen (a mode may have its own rate); 0 before two have.
+    pub snap_every: u32,
 }
 
 /// One snapshot as interpolation keeps it: everyone else, the vehicles,
@@ -179,6 +182,9 @@ pub(crate) struct Frame {
     pub(crate) tick: u32,
     n: u8,
     remotes: [Remote; MAX_REMOTES],
+    /// Which of `remotes` are held, not updated (`Snapshot::held`): drawn
+    /// from their own updates either side.
+    held: u16,
     nv: u8,
     vehicles: [VehState; MAX_SNAP_VEHICLES],
     pub(crate) np: u8,
@@ -201,6 +207,7 @@ impl Frame {
             tick: 0,
             n: 0,
             remotes: [Remote::default(); MAX_REMOTES],
+            held: 0,
             nv: 0,
             vehicles: [VehState::default(); MAX_SNAP_VEHICLES],
             np: 0,
@@ -409,6 +416,10 @@ pub struct NetCore {
     launches: Vec<Launch>,
     /// Each launch's flight as last asked for, by its id (`coast_memo`).
     coasts: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
+    /// Each bound launch's run-on past the server's newest state of it,
+    /// by its id: drawn ahead every frame, flown on a tick or two a frame,
+    /// not from that state each time (`proj::sample`).
+    run_ons: [Cell<Option<proj::Coasted>>; MAX_LAUNCHES],
     /// Ticks a forward clock resync added that the next `update` makes on
     /// top of the time passed: our rounds already flying don't take them.
     resync_ahead: f64,
@@ -480,6 +491,7 @@ impl NetCore {
             next_pid: 0,
             launches: Vec::with_capacity(MAX_LAUNCHES),
             coasts: Default::default(),
+            run_ons: Default::default(),
             resync_ahead: 0.0,
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
@@ -574,6 +586,9 @@ impl NetCore {
             self.after_v[s as usize % RING] = self.pred_v;
             if local.fired {
                 self.own_shot();
+            }
+            if local.mounted {
+                self.own_turret_shot();
             }
             self.launch(s, now_ms, &local);
             self.seq = s.wrapping_add(1);
@@ -716,7 +731,8 @@ impl NetCore {
                 // Not yet as far as the server's first state of it.
                 self.stand_in(l, t)
             } else {
-                let s = proj::sample(frames, l.id, t, rt, ticks(OWN_AHEAD_MS) as f64, &self.map)?;
+                let run_on = &self.run_ons[l.id as usize % MAX_LAUNCHES];
+                let s = proj::sample(frames, l.id, (t, rt, ticks(OWN_AHEAD_MS) as f64), &self.map, run_on)?;
                 self.placed(&s, now_ms)
             }
         } else {
@@ -764,7 +780,13 @@ impl NetCore {
     fn plain(&self, pid: u16, now_ms: f64) -> Option<DrawnProj> {
         let frames = &self.frames[..self.n_frames];
         let rt = self.render_tick(now_ms);
-        let s = proj::sample(frames, pid, rt, rt, ticks(EXTRAPOLATE_MS) as f64, &self.map)?;
+        let s = proj::sample(
+            frames,
+            pid,
+            (rt, rt, ticks(EXTRAPOLATE_MS) as f64),
+            &self.map,
+            &Cell::new(None),
+        )?;
         let (pos, vel) = self.placed(&s, now_ms);
         Some(DrawnProj {
             id: pid,
@@ -964,6 +986,27 @@ impl NetCore {
         });
     }
 
+    /// A round of the turret we gun, as predicted: from its muzzle on the
+    /// hull we were last sent, to where our aim meets the map.
+    fn own_turret_shot(&mut self) {
+        let f = &self.pred;
+        let (Some(v), Some((a, cause))) = (self.pred_v, self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)))
+        else {
+            return;
+        };
+        let eye = f.eye();
+        let dir = aim_dir(f.yaw, f.pitch);
+        let t = self.map.ray(eye, dir, a.range);
+        self.events.push(EventState {
+            kind: sim::events::Kind::Shot as u8,
+            a: self.slot,
+            c: cause,
+            pos: v.muzzle(dir),
+            end: eye + dir * t,
+            ..EventState::default()
+        });
+    }
+
     /// A snapshot arrived at `now_ms`.
     pub fn on_snapshot(&mut self, now_ms: f64, s: &Snapshot) {
         // Acks: the newest tick, and which of the 32 before it we have.
@@ -977,6 +1020,9 @@ impl NetCore {
             }
             Some(n) => {
                 let fwd = s.tick - n;
+                if self.stats.snap_every == 0 || fwd < self.stats.snap_every {
+                    self.stats.snap_every = fwd;
+                }
                 // Exactly 32 on shifts every old bit out (and `<< 32` on a
                 // u32 is an overflow: a panic in a debug build, which a
                 // half-second hitch at a level's load found).
@@ -1038,7 +1084,13 @@ impl NetCore {
                         .clamp(CLOCK_SLEW, CLOCK_SLEW_FAR);
                     c.aim_at(now_ms, target, rate, rate);
                 }
-                let target = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
+                // Two snapshots' gap and twice the jitter: a mode whose
+                // snapshots are further apart is drawn as far behind again.
+                let gap = match self.stats.snap_every {
+                    0 => SEND_EVERY,
+                    n => n.min(8),
+                };
+                let target = (gap as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
                 self.delay.aim(now_ms, target);
             }
         }
@@ -1089,6 +1141,7 @@ impl NetCore {
             tick: s.tick,
             n: s.n_remote,
             remotes: s.remotes,
+            held: s.held,
             nv: s.n_vehicles,
             vehicles: s.vehicles,
             np: s.n_proj.min(MAX_SNAP_PROJ as u8),
@@ -1537,12 +1590,12 @@ impl NetCore {
             return;
         }
         let rt = self.render_tick(now_ms);
-        let (ai, bi) = self.around(rt);
-        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
+        let (ai, _) = self.around(rt);
+        let a = &self.frames[ai];
         out.extend(
             a.remotes[..a.n as usize]
                 .iter()
-                .map(|ra| remote_between(ra, a.tick, b, rt)),
+                .filter_map(|r| self.other_between(r.slot, ai, rt)),
         );
     }
 
@@ -1552,24 +1605,52 @@ impl NetCore {
             return None;
         }
         let rt = self.render_tick(now_ms);
-        let (ai, bi) = self.around(rt);
-        let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
-        let ra = a.remotes[..a.n as usize].iter().find(|r| r.slot == slot)?;
-        Some(remote_between(ra, a.tick, b, rt))
+        let (ai, _) = self.around(rt);
+        let a = &self.frames[ai];
+        let shown = a.remotes[..a.n as usize].iter().any(|r| r.slot == slot);
+        shown.then(|| self.other_between(slot, ai, rt)).flatten()
+    }
+
+    /// Fighter `slot` at render tick `rt` (frame `ai` the one at or before
+    /// it, where it is in view): from its newest update up to that frame
+    /// toward its next one after, or run on. A far one on a big map is
+    /// updated every few snapshots and held between (`Snapshot::held`), so
+    /// its updates, not the frames, are what it is drawn between.
+    fn other_between(&self, slot: u8, ai: usize, rt: f64) -> Option<Drawn> {
+        let frames = &self.frames[..self.n_frames];
+        // Its updates: a held one repeats an update, never is one.
+        let find = |f: &Frame| {
+            let r = f.remotes[..f.n as usize].iter().find(|r| r.slot == slot).copied();
+            r.filter(|_| f.held & (1 << slot) == 0)
+        };
+        // Its update at or before the frame, through frames that held it.
+        let mut from = None;
+        for f in frames[..=ai].iter().rev() {
+            if let Some(r) = find(f) {
+                from = Some((r, f.tick));
+                break;
+            }
+            if f.held & (1 << slot) == 0 {
+                break;
+            }
+        }
+        let (ra, a_tick) = from?;
+        let next = frames[ai + 1..].iter().find_map(|f| find(f).map(|r| (r, f.tick)));
+        Some(remote_between(&ra, a_tick, next, rt))
     }
 }
 
-/// Remote `ra` of the frame at tick `a_tick`, drawn at render tick `rt`:
-/// toward its next frame `b` if it is in it, or run on from its velocity.
-fn remote_between(ra: &Remote, a_tick: u32, b: Option<&Frame>, rt: f64) -> Drawn {
+/// Remote `ra`, updated at tick `a_tick`, drawn at render tick `rt`:
+/// toward its next update `next` (the remote and its tick) if there is one,
+/// or run on from its velocity.
+fn remote_between(ra: &Remote, a_tick: u32, next: Option<(Remote, u32)>, rt: f64) -> Drawn {
     let mut d = drawn(ra);
-    let rb = b.and_then(|b| b.remotes[..b.n as usize].iter().find(|r| r.slot == ra.slot));
-    match (b, rb) {
-        (Some(b), Some(rb)) if ra.alive == rb.alive => {
+    match next {
+        Some((rb, b_tick)) if ra.alive == rb.alive => {
             // A gap too long to draw across: as if the next hadn't
             // come (run on, then held) until it is due, then there.
-            if b.tick - a_tick <= ticks(LERP_SPAN_MS) {
-                let u = ((rt - a_tick as f64) / (b.tick - a_tick) as f64).clamp(0.0, 1.0) as f32;
+            if b_tick - a_tick <= ticks(LERP_SPAN_MS) {
+                let u = ((rt - a_tick as f64) / (b_tick - a_tick) as f64).clamp(0.0, 1.0) as f32;
                 d.pos = ra.pos + (rb.pos - ra.pos) * u;
                 d.yaw = lerp_angle(d.yaw, yaw_rad(rb.yaw), u);
                 d.pitch = d.pitch + (pitch_rad(rb.pitch) - d.pitch) * u;
@@ -1707,6 +1788,7 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.shots == b.shots
         && a.last_buttons == b.last_buttons
         && a.ride == b.ride
+        && a.mount == b.mount
 }
 
 /// What is left of a correction `dt` ms on: eased out over

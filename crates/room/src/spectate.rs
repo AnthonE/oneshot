@@ -16,7 +16,8 @@ use sim::consts::MAX_FIGHTERS;
 use sim::events::Event;
 use sim::world::World;
 
-use crate::{build, fog::Fog, EventQueue};
+use crate::fog::{Fog, Plain};
+use crate::{build, EventQueue};
 
 /// Ticks between frames on the line.
 pub const WATCH_EVERY: u32 = 4;
@@ -57,8 +58,9 @@ impl Line {
     }
 
     /// After the world's tick: its events and the room's messages join the
-    /// line, and on a frame tick every seated seat's view is built.
-    pub fn observe(&mut self, w: &World, out: &[(Option<u8>, Msg)]) {
+    /// line, and on a frame tick every seated seat's view is built,
+    /// sharing the room's plain sight tests of this tick (`plain`, of `w`).
+    pub fn observe(&mut self, w: &World, out: &[(Option<u8>, Msg)], plain: &mut Plain) {
         let tick = w.tick;
         self.pending.extend_from_slice(w.events.as_slice());
         self.observe_msgs(tick, out);
@@ -75,7 +77,7 @@ impl Line {
                 continue;
             }
             let f = &mut self.fogs[s];
-            f.update(w, s, 0.0, tick);
+            f.update_with(w, s, 0.0, tick, plain, crate::SNAP_EVERY);
             let q = &mut self.queues[s];
             let snap = build(
                 w,

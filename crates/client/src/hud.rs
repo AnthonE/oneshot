@@ -1107,6 +1107,8 @@ pub fn on_events(
                 name,
                 skin,
                 emblem,
+                headwear,
+                footwear,
                 team,
                 ..
             } => {
@@ -1116,6 +1118,8 @@ pub fn on_events(
                     proto::Look {
                         skin: *skin,
                         emblem: *emblem,
+                        headwear: *headwear,
+                        footwear: *footwear,
                     },
                 );
                 st.teams.insert(*slot, *team);
@@ -1490,6 +1494,19 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
     }
 }
 
+/// A turret's box: its name and its heat (its share as the count), no
+/// rounds to run out of.
+fn turret_look(a: &sim::arms::Arm, m: sim::fighter::Mount) -> GunLook {
+    let heat = (m.heat as f32 / sim::arms::HEAT_FULL as f32).clamp(0.0, 1.0);
+    GunLook {
+        count: (heat * 100.0).round() as u32,
+        name: a.name,
+        pips: None,
+        heat: Some((heat, m.vent)),
+        note: if m.vent { "VENTING" } else { "" },
+    }
+}
+
 /// Each hand's gun as its picture, once it is drawn; its name until then.
 #[allow(clippy::type_complexity)]
 pub fn gun_icons(
@@ -1504,9 +1521,11 @@ pub fn gun_icons(
     };
     let f = s.core.own().0;
     let arm = |h: u8| if h == 0 { f.gun().arm } else { f.left.arm };
+    // A turret has no picture yet: its name.
+    let gunning = f.gunning(&s.core.map) != sim::vehicle::NO_TURRET;
     let mut shown = [false; 2];
     for (h, mut n, mut img) in &mut pics {
-        let pic = icons.get(arm(h.0));
+        let pic = icons.get(arm(h.0)).filter(|_| !gunning);
         shown[h.0 as usize & 1] = pic.is_some();
         if let Some(pic) = pic {
             if img.image != *pic {
@@ -1526,7 +1545,9 @@ pub struct GearText {
     gren: [u8; 2],
     hands: [Option<(u32, &'static str, &'static str)>; 2],
     back: &'static str,
-    ride: Option<&'static str>,
+    /// The keys to press and what for, over the gear: getting out of a
+    /// ride, and Capture the Flag's take and drop.
+    prompt: [Option<(&'static str, &'static str)>; 2],
 }
 
 /// The grenades, the guns in hand and on our back, and a ride's way out.
@@ -1566,10 +1587,15 @@ pub fn gear(
     }
     let f = s.core.own().0;
     let reloading = f.reload > 0;
-    let hands = [
-        Some(gun_look(f.gun(), reloading)),
-        f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
-    ];
+    // Gunning a turret, its box is the turret's; the guns wait.
+    let turret = sim::vehicle::turret(f.gunning(&s.core.map));
+    let hands = match turret {
+        Some((a, _)) => [Some(turret_look(a, f.mount)), None],
+        None => [
+            Some(gun_look(f.gun(), reloading)),
+            f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
+        ],
+    };
     for (b, mut img) in boxes.iter_mut() {
         tint(&mut img, if f.gren_kind == b.0 { PLATE } else { PLATE_DIM });
     }
@@ -1577,16 +1603,41 @@ pub fn gear(
         set_display(&mut n, hands[p.0 as usize & 1].is_some());
     }
     let back = f.guns[1 - f.cur as usize];
-    let carried = back.arm != 0 && !f.dual();
+    let carried = back.arm != 0 && !f.dual() && turret.is_none();
     for mut n in back_plate.iter_mut() {
         set_display(&mut n, carried);
     }
     let out = binds.key(crate::binds::Action::Use);
+    let swap = binds.key(crate::binds::Action::Swap);
+    // The enemy's flag at our feet, on the floor or at its base.
+    let at = s.core.own().1;
+    let flag_here = !f.flag
+        && f.alive
+        && f.riding().is_none()
+        && s.core
+            .latest()
+            .flags()
+            .get((s.core.team as usize & 1) ^ 1)
+            .is_some_and(|fl| {
+                let d = fl.pos - at;
+                fl.state != sim::world::FLAG_HELD
+                    && d.flat().len() < sim::consts::FLAG_REACH
+                    && d.y.abs() < sim::consts::FLAG_RISE
+            });
     let text = GearText {
         gren: [f.grenades, f.stickies],
         hands: hands.map(|h| h.map(|g| (g.count, g.name, g.note))),
         back: if carried { sim::arms::arm(back.arm).name } else { "" },
-        ride: f.riding().map(|_| out),
+        prompt: [
+            if f.riding().is_some() {
+                Some((out, "get out"))
+            } else if flag_here {
+                Some((out, "take the flag"))
+            } else {
+                None
+            },
+            f.flag.then_some((swap, "drop the flag")),
+        ],
     };
     let texts_due = *said != Some(text);
     *said = Some(text);
@@ -1608,7 +1659,14 @@ pub fn gear(
                 String::new()
             }
         } else if ride.is_some() {
-            f.riding().map_or_else(String::new, |_| format!("{out}  get out"))
+            let mut line = String::new();
+            for (key, what) in text.prompt.iter().flatten() {
+                if !line.is_empty() {
+                    line.push_str("    ");
+                }
+                let _ = write!(line, "{key}  {what}");
+            }
+            line
         } else {
             continue;
         };
@@ -1813,7 +1871,9 @@ pub fn corner(
         }
         for (mut t, ck, md, num) in texts.iter_mut() {
             let v = if ck.is_some() {
-                if snap.phase == 1 {
+                if snap.phase == 1 && snap.clock == 0 && snap.n_flags > 0 {
+                    "SUDDEN DEATH".to_string()
+                } else if snap.phase == 1 {
                     mmss(clock)
                 } else {
                     String::new()

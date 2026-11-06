@@ -328,6 +328,16 @@ pub fn gun(arm: u8) -> Option<&'static Gun> {
     GUNS.iter().find(|(a, _)| *a == arm).map(|(_, g)| g)
 }
 
+/// The gun whose sound a shot carrying `c` (an arm id, or a turret's
+/// cause: `sim::arms::fired`) is heard with: a truck's minigun sounds as
+/// the rifle does, till it has its own.
+pub fn heard_as(c: u16) -> Option<&'static Gun> {
+    if c == sim::events::Cause::Minigun as u16 {
+        return gun(arms::AR);
+    }
+    (c < arms::COUNT as u16).then(|| gun(c as u8)).flatten()
+}
+
 /// Model axes onto a holder's: barrel (+Y) along its forward, top (+Z) up.
 /// A body faces +X.
 pub fn body_basis() -> Quat {
@@ -358,6 +368,10 @@ pub struct Models {
     pub frag: Handle<Scene>,
     /// A vehicle's hull (`look/truck.rs`).
     pub truck: Handle<Scene>,
+    /// Gear on a body (`bodies.rs`): the shades, and a boot for each foot.
+    pub shades: Handle<Scene>,
+    pub boot_left: Handle<Scene>,
+    pub boot_right: Handle<Scene>,
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -375,6 +389,9 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         rocket: scene("rocket"),
         frag: scene("frag"),
         truck: scene("truck"),
+        shades: scene("shades"),
+        boot_left: scene("boot-left"),
+        boot_right: scene("boot-right"),
     });
 }
 

@@ -38,13 +38,18 @@ async fn a_native_client_plays_the_bot() {
 
     // The native client the desktop build will use: client_net's session
     // on wtransport.
-    // A skin a guest can't own, and an emblem anyone may wear.
+    // A skin and gear a guest can't own, and an emblem anyone may wear.
     let star = proto::emblem(1, 1, 3, 4);
     let hello = Session::hello(
         "native",
         proto::Pass::NONE,
         proto::MODE_CASUAL,
-        proto::Look { skin: 2, emblem: star },
+        proto::Look {
+            skin: 2,
+            emblem: star,
+            headwear: 1,
+            footwear: 1,
+        },
         0,
     );
     let addr = format!("127.0.0.1:{}", h.addr.port());
@@ -66,11 +71,20 @@ async fn a_native_client_plays_the_bot() {
             ..Input::default()
         });
         for m in c.messages() {
-            if let Msg::Seat { skin, emblem, bot, .. } = m {
+            if let Msg::Seat {
+                skin,
+                emblem,
+                headwear,
+                footwear,
+                bot,
+                ..
+            } = m
+            {
                 // A guest owns nothing: the skin asked for is not worn; the
                 // free emblem is, and a bot wears none.
                 assert_eq!(skin, proto::SKIN_STANDARD);
                 assert_eq!(emblem, if bot { proto::EMBLEM_NONE } else { star });
+                assert_eq!((headwear, footwear), (proto::GEAR_NONE, proto::GEAR_NONE));
                 starred |= !bot;
                 seats += 1;
             }
@@ -125,6 +139,9 @@ async fn hello(
             emblem: 0,
             party: 0,
             stamp: sim::STAMP,
+            headwear: 0,
+            footwear: 0,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )

@@ -85,7 +85,14 @@ pub struct Items {
     built: u32,
     lit: Vec<Option<bool>>,
     drops: [Option<Lying>; MAX_DROPS],
+    /// Drops picked up, hidden, by arm: a gun of that arm put down again
+    /// shows one rather than load its scene anew (the oldest go past
+    /// [`SPARE`]).
+    spare: Vec<(u8, Entity)>,
 }
+
+/// Drops kept hidden for the next of their arm.
+const SPARE: usize = 8;
 
 /// Whether pad `i` holds its gun, as the last snapshot says.
 fn loaded(core: &NetCore, i: usize) -> bool {
@@ -129,6 +136,7 @@ pub fn draw(
         items.built = s.welcomes;
         items.lit = vec![None; core.map.pads.len()];
         items.drops = [None; MAX_DROPS];
+        items.spare.clear();
         for (i, p) in core.map.pads.iter().enumerate() {
             let root = commands
                 .spawn((
@@ -230,7 +238,8 @@ pub fn draw(
             *w = Some((d.arm, Vec3::new(d.pos.x, d.pos.y + LIE_Y, d.pos.z)));
         }
     }
-    for (slot, (have, want)) in items.drops.iter_mut().zip(want).enumerate() {
+    let Items { drops, spare, .. } = &mut *items;
+    for (slot, (have, want)) in drops.iter_mut().zip(want).enumerate() {
         if let (Some(l), Some((a, p))) = (have.as_mut(), want) {
             if l.arm == a && l.to.distance(p) < DROP_SNAP_M {
                 l.to = p;
@@ -247,26 +256,34 @@ pub fn draw(
             }
         }
         if let Some(l) = have.take() {
-            commands.entity(l.e).despawn();
+            commands.entity(l.e).insert(Visibility::Hidden);
+            if spare.len() >= SPARE {
+                commands.entity(spare.remove(0).1).despawn();
+            }
+            spare.push((l.arm, l.e));
         }
         let Some((a, p)) = want else {
             continue;
         };
         // On its side, each slot turned its own way.
         let turn = Quat::from_rotation_y(slot as f32 * 2.4);
-        let root = commands
-            .spawn((
-                crate::level::LevelPart,
-                Transform::from_translation(p).with_rotation(turn),
-                Visibility::default(),
-            ))
-            .id();
-        if a == NONE {
-            commands.spawn((SceneRoot(models.frag.clone()), Transform::default(), ChildOf(root)));
+        let at = Transform::from_translation(p).with_rotation(turn);
+        let root = if let Some(i) = spare.iter().position(|s| s.0 == a) {
+            let (_, e) = spare.remove(i);
+            commands.entity(e).insert((at, Visibility::Inherited));
+            e
         } else {
-            let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
-            posed(&mut commands, &models, a, side * guns::body_basis(), root);
-        }
+            let root = commands
+                .spawn((crate::level::LevelPart, at, Visibility::default()))
+                .id();
+            if a == NONE {
+                commands.spawn((SceneRoot(models.frag.clone()), Transform::default(), ChildOf(root)));
+            } else {
+                let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
+                posed(&mut commands, &models, a, side * guns::body_basis(), root);
+            }
+            root
+        };
         *have = Some(Lying {
             e: root,
             arm: a,

@@ -982,6 +982,17 @@ const RIFLE: GunLook = GunLook {
     light_lm: 120_000.0,
 };
 
+/// A truck's minigun: a tracer every other round, a big flash at its
+/// barrels' ends, brass out of its side.
+pub const MINIGUN: GunLook = GunLook {
+    every: 2,
+    width: 0.018,
+    len_m: 7.0,
+    flash_scale: 1.4,
+    light_lm: 160_000.0,
+    ..RIFLE
+};
+
 pub fn gun(arm: u8) -> GunLook {
     // Blue-white, the precision rifles' and the SMG's; the sniper's a hot red.
     let blue = ([4.0, 7.0, 12.0, 0.9], [1.5, 3.0, 6.0, 0.5]);

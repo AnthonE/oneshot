@@ -293,7 +293,12 @@ pub fn own(
 type Worn<'w, 's> = Query<
     'w,
     's,
-    (&'static Mesh3d, Option<&'static SkinnedMesh>, &'static GlobalTransform),
+    (
+        &'static Mesh3d,
+        Option<&'static SkinnedMesh>,
+        &'static GlobalTransform,
+        &'static InheritedVisibility,
+    ),
     (
         Or<(
             With<MeshMaterial3d<BodyMaterial>>,
@@ -306,7 +311,8 @@ type Worn<'w, 's> = Query<
 >;
 
 /// `root`'s body as it stands, frozen: each skinned mesh on joints of its own,
-/// set where its real ones are, and whatever it holds.
+/// set where its real ones are, and whatever it holds. Only what is shown: not a
+/// gun racked in its hand, nor a body camouflage hides. Whether anything was.
 #[allow(clippy::too_many_arguments)]
 fn freeze(
     commands: &mut Commands,
@@ -317,13 +323,18 @@ fn freeze(
     children: &Query<&Children>,
     worn: &Worn,
     joints: &Query<&GlobalTransform>,
-) {
+) -> bool {
+    let mut any = false;
     let mut frozen: HashMap<Entity, Entity> = HashMap::new();
     let born = MeshTag(clock.to_bits());
     for e in children.iter_descendants(root) {
-        let Ok((mesh, skin, at)) = worn.get(e) else {
+        let Ok((mesh, skin, at, shown)) = worn.get(e) else {
             continue;
         };
+        if !shown.get() {
+            continue;
+        }
+        any = true;
         let mut pose = commands.spawn((
             mesh.clone(),
             MeshMaterial3d(material.clone()),
@@ -355,6 +366,7 @@ fn freeze(
             joints: list,
         });
     }
+    any
 }
 
 /// Everyone else's lunge (and ours, filmed from outside): a body in steps,
@@ -414,7 +426,7 @@ pub fn bodies(
         let Some(left) = left else {
             continue;
         };
-        freeze(
+        if !freeze(
             &mut commands,
             root,
             &kit.pose,
@@ -423,7 +435,9 @@ pub fn bodies(
             &children,
             &worn,
             &joints,
-        );
+        ) {
+            continue;
+        }
         commands.spawn((
             Mesh3d(kit.quad.clone()),
             MeshMaterial3d(kit.frame.clone()),
@@ -454,7 +468,7 @@ pub fn killed(
     worn: &Worn,
     joints: &Query<&GlobalTransform>,
 ) {
-    freeze(
+    if !freeze(
         commands,
         root,
         &kit.kill_pose,
@@ -463,7 +477,9 @@ pub fn killed(
         children,
         worn,
         joints,
-    );
+    ) {
+        return;
+    }
     commands.spawn((
         Mesh3d(kit.quad.clone()),
         MeshMaterial3d(kit.kill_frame.clone()),

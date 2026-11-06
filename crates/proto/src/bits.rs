@@ -124,10 +124,19 @@ impl<'a> BitReader<'a> {
     }
 
     /// Read `bits` bits (1..=32), LSB-first.
+    #[inline]
     pub fn read(&mut self, bits: u32) -> Result<u32, WireError> {
         debug_assert!((1..=32).contains(&bits));
         if self.pos + bits as usize > self.buf.len() * 8 {
             return Err(WireError::Truncated);
+        }
+        // The writer's fast path read back: one 8-byte load wherever eight
+        // bytes remain (a field reaches at most 39 bits past its byte).
+        let (byte, bit) = (self.pos / 8, self.pos % 8);
+        if let Some(word) = self.buf.get(byte..byte + 8) {
+            let word = u64::from_le_bytes(word.try_into().unwrap());
+            self.pos += bits as usize;
+            return Ok(((word >> bit) & ((1u64 << bits) - 1)) as u32);
         }
         let mut out: u32 = 0;
         let mut got = 0usize;

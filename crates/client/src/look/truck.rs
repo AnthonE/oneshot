@@ -77,6 +77,9 @@ const MET_M: f32 = 0.3;
 /// unmarked.
 const WEAR_EASE: f32 = 3.0;
 const MENDED: f32 = 0.3;
+/// Below this hurt, unmarked and unburnt, no layer of its wear shows
+/// (`truck_wear.wgsl`'s first smoothstep).
+const PRISTINE: f32 = 0.03;
 /// The share of its health gone it burns from (`fx/hulls.rs`'s fire).
 const BURN_FROM: f32 = 1.0 - super::fx::hulls::FIRE_BELOW as f32 / 255.0;
 
@@ -189,6 +192,8 @@ pub struct Truck {
     puff: f32,
     scraped: f32,
     skins: Vec<Handle<TruckMaterial>>,
+    /// Its four wheels, found once its scene is in (`bind`).
+    wheels: Vec<Entity>,
     hurt: f32,
     marks: [Vec4; MARKS],
     next: usize,
@@ -220,6 +225,7 @@ impl Default for Truck {
             puff: 0.0,
             scraped: 0.0,
             skins: Vec::new(),
+            wheels: Vec::new(),
             hurt: 0.0,
             marks: [Vec4::ZERO; MARKS],
             next: 0,
@@ -252,8 +258,8 @@ pub struct Wheel {
 }
 
 /// The truck as a child of `hull`, an entity at the sim's hull turned by
-/// its yaw.
-pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) {
+/// its yaw: its body, what leans and turns over (a turret goes on it).
+pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) -> Entity {
     commands
         .spawn((
             Truck::default(),
@@ -261,7 +267,8 @@ pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) {
             Transform::default(),
             ChildOf(hull),
         ))
-        .observe(bind);
+        .observe(bind)
+        .id()
 }
 
 /// The scene is in: its wheels, by name, and its steel and trim in
@@ -285,9 +292,11 @@ fn bind(
         match names.get(e).map(Name::as_str) {
             Ok("wheel_fl" | "wheel_fr") => {
                 commands.entity(e).insert(Wheel { front: true });
+                truck.wheels.push(e);
             }
             Ok("wheel_rl" | "wheel_rr") => {
                 commands.entity(e).insert(Wheel { front: false });
+                truck.wheels.push(e);
             }
             _ => {}
         }
@@ -325,12 +334,11 @@ fn v(p: V3) -> Vec3 {
 /// own (`ours`) is drawn as predicted, its end the map's: a hull on its
 /// way took it.
 fn holed(steel: &sim::vehicle::Vehicle, ev: &proto::EventState, ours: bool) -> Option<Vec3> {
-    let arm = ev.c as usize;
-    if ev.kind != Kind::Shot as u8 || ev.part == HEARD || arm == 0 || arm >= sim::arms::COUNT {
+    if ev.kind != Kind::Shot as u8 || ev.part == HEARD {
         return None;
     }
     // A rocket or a bolt leaves its mark as a blast, where it goes off.
-    if sim::arms::arm(arm as u8).speed != 0.0 {
+    if sim::arms::fired(ev.c).is_none_or(|a| a.speed != 0.0) {
         return None;
     }
     let (from, to) = (v(ev.pos), v(ev.end));
@@ -402,8 +410,7 @@ pub fn drive(
     heard: Res<crate::sound::Heard>,
     posed: Option<Res<crate::pose::Pose>>,
     hulls: Query<(&Transform, Option<&Hull>, Option<&Visibility>), (Without<Truck>, Without<Wheel>)>,
-    mut trucks: Query<(Entity, &mut Truck, &mut Transform, &ChildOf), Without<Wheel>>,
-    children: Query<&Children>,
+    mut trucks: Query<(&mut Truck, &mut Transform, &ChildOf), Without<Wheel>>,
     mut wheels: Query<(&Wheel, &mut Transform), Without<Truck>>,
     mut worn: ResMut<Assets<TruckMaterial>>,
     (mut fx, mut noise, models, mut commands): (ResMut<super::fx::Fx>, ResMut<HullSound>, Res<Models>, Commands),
@@ -417,7 +424,7 @@ pub fn drive(
     let core = &link.0.session().core;
     let map = &core.map;
     let ease = (EASE * dt).min(1.0);
-    for (e, mut truck, mut body, &ChildOf(hull)) in &mut trucks {
+    for (mut truck, mut body, &ChildOf(hull)) in &mut trucks {
         let Ok((at, hull, vis)) = hulls.get(hull) else { continue };
         let truck = &mut *truck;
         let shown = vis.is_none_or(|v| *v != Visibility::Hidden);
@@ -556,7 +563,9 @@ pub fn drive(
         let placed = Transform::from_translation(Vec3::Y * (truck.lift + truck.squat) + mid - truck.tumble * mid)
             .with_rotation(truck.tumble * lean);
         body.set_if_neq(placed);
-        for w in children.iter_descendants(e) {
+        // Its wheels by what `bind` found: not a walk of the whole scene
+        // a truck a frame.
+        for &w in &truck.wheels {
             let Ok((wheel, mut tr)) = wheels.get_mut(w) else {
                 continue;
             };
@@ -635,8 +644,13 @@ pub fn drive(
         truck.hurt += (want - truck.hurt) * (WEAR_EASE * dt).min(1.0);
         // Where it was hit this frame: a round whose way ends on its steel
         // (the sim's own shape of it), a blast beside it.
-        let steel = sim::vehicle::Vehicle::new(V3::new(p.x, p.y, p.z), sim::geom::rad_to_yaw(fwd.z.atan2(fwd.x)), 0);
+        let steel = sim::vehicle::Vehicle::new(V3::new(p.x, p.y, p.z), sim::geom::rad_to_yaw(fwd.z.atan2(fwd.x)), 0, 0);
+        // Our rounds never meet the hull we ride (the sim's never do).
+        let ours = core.own().0.riding().map(|(i, _)| i as u8) == hull.map(|h| h.slot);
         for ev in &heard.0 {
+            if ev.a == core.slot && ours && ev.kind == Kind::Shot as u8 {
+                continue;
+            }
             if let Some(at) = holed(&steel, ev, ev.a == core.slot) {
                 truck.mark(to_local.transform_point3(at), HOLE_M);
             } else if ev.kind == Kind::Blast as u8 {
@@ -659,6 +673,15 @@ pub fn drive(
             }
         }
         let burnt = ((truck.hurt - BURN_FROM) / (1.0 - BURN_FROM)).clamp(0.0, 1.0);
+        // Whole and unmarked, nothing in its wear reads its frame
+        // (truck_wear.wgsl: every layer is off below a hurt of 0.03), so a
+        // clean truck going about keeps the frame last written and its
+        // material isn't prepared again every frame it moves.
+        let pristine = truck.hurt < PRISTINE && burnt == 0.0 && truck.marks.iter().all(|m| m.w == 0.0);
+        let to_local = match truck.skins.first().and_then(|s| worn.get(s)) {
+            Some(m) if pristine => m.extension.params.to_local,
+            _ => to_local,
+        };
         let params = WearParams {
             to_local,
             state: Vec4::new(truck.hurt, burnt, hull.map_or(0.0, |h| h.slot as f32), 0.0),
@@ -900,11 +923,21 @@ pub fn husks(
                 }
             }
             Some((turn, high)) => {
-                h.turn = h.turn.slerp(turn, (SETTLE_RATE * dt).min(1.0));
+                // Settled at last, not eased by ever less: at rest it is
+                // written no more (below) until it sinks.
+                h.turn = if h.turn.angle_between(turn) < SETTLED {
+                    turn
+                } else {
+                    h.turn.slerp(turn, (SETTLE_RATE * dt).min(1.0))
+                };
                 let floor = map.floor(h.mid.x, h.mid.z, 0.5, h.mid.y + 1.5);
                 let sink = ((h.age - (HUSK_S - SINK_S)) / SINK_S).clamp(0.0, 1.0) * SINK_M;
                 let want = floor + high - sink;
-                h.mid.y += (want - h.mid.y) * (SETTLE_RATE * dt).min(1.0);
+                if (want - h.mid.y).abs() < SETTLED {
+                    h.mid.y = want;
+                } else {
+                    h.mid.y += (want - h.mid.y) * (SETTLE_RATE * dt).min(1.0);
+                }
             }
         }
         // Its fire rides it; once that is out, it smoulders.
@@ -923,15 +956,19 @@ pub fn husks(
         }
         let mid = Vec3::Y * MID_Y;
         let placed = Transform::from_translation(h.mid - h.turn * mid).with_rotation(h.turn);
-        *tr = placed;
+        // At rest, nothing: its scene isn't gone round again nor its
+        // steel prepared again every frame for the same.
+        tr.set_if_neq(placed);
         let params = WearParams {
             to_local: placed.to_matrix().inverse(),
             state: Vec4::new(1.0, 1.0, 0.0, 0.0),
             marks: truck.marks,
         };
         for skin in &truck.skins {
-            if let Some(m) = worn.get_mut(skin) {
-                m.extension.params = params;
+            if worn.get(skin).is_some_and(|m| m.extension.params != params) {
+                if let Some(m) = worn.get_mut(skin) {
+                    m.extension.params = params;
+                }
             }
         }
     }
@@ -1102,6 +1139,8 @@ const HUSK_GRIP: f32 = 0.6;
 const HUSK_SCRUB: f32 = 1.5;
 /// How fast it settles on its side, per second.
 const SETTLE_RATE: f32 = 5.0;
+/// Close enough to where it settles (radians, metres) to be there.
+const SETTLED: f32 = 1e-4;
 /// How long a husk lasts, seconds; the last `SINK_S` of it sinking `SINK_M`
 /// into the ground. Its wheels come off `SHED_S` in.
 const HUSK_S: f32 = 18.0;
@@ -1145,7 +1184,7 @@ mod tests {
     #[test]
     fn a_round_marks_the_steel_it_met_and_nothing_else() {
         // A hull at the origin facing +X: its right flank is the plane z = 1.1.
-        let steel = sim::vehicle::Vehicle::new(V3::ZERO, 0, 0);
+        let steel = sim::vehicle::Vehicle::new(V3::ZERO, 0, 0, 0);
         let off = Vec3::new(0.5, 0.9, 12.0);
         let door = Vec3::new(0.5, 0.9, VEH_HALF_W);
         // Someone's shot that ended on the door: a hole there.

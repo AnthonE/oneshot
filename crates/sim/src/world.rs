@@ -3,7 +3,7 @@
 //! [`World::step`] is the server's tick. The browser never runs it for
 //! anyone but itself (docs/DESIGN.md §4–5).
 
-use crate::arms::{arm, Head, Kind, NONE};
+use crate::arms::{arm, Arm, Head, Kind, NONE};
 use crate::consts::*;
 use crate::events::{Cause, Event, Events, Kind as Ev};
 use crate::fighter::{Fighter, Gun, Local};
@@ -296,9 +296,16 @@ pub const FLAG_HELD: u8 = 1;
 /// On the floor where its carrier fell or let go.
 pub const FLAG_DOWN: u8 = 2;
 
-/// Capture the Flag's flag: index 0 is red's, 1 blue's. Taken by an enemy
-/// who touches it, scored when that carrier reaches its own base while its
-/// own flag is home, returned by a defender's touch or on its own.
+/// Capture the Flag's flag: index 0 is red's, 1 blue's, played as Halo 3
+/// played it. An enemy on foot in reach takes it with USE; its carrier
+/// walks slower, can't shoot or throw, kills with a swing of it, may ride
+/// a vehicle's passenger seat (never drive), and lets go with SWAP, which
+/// tosses it ahead: nobody takes it till it lands, so a carrier can
+/// juggle it (drop, run on at full speed, take it up again), at the cost
+/// of having it on the floor. Scored when the carrier reaches its own
+/// base while its own flag is home. On the floor it goes home after
+/// [`FLAG_RESET_MS`] untouched, or sooner with defenders standing by it
+/// ([`FLAG_RETURN_MS`]) and no enemy in reach.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Flag {
     pub state: u8,
@@ -306,8 +313,17 @@ pub struct Flag {
     pub carrier: u8,
     /// Where it is: its base, its carrier's feet, or where it fell.
     pub pos: V3,
-    /// Ticks till a dropped flag goes home.
+    /// Ticks till a dropped flag goes home on its own.
     pub down_for: u32,
+    /// Down and still in the air (tossed, or falling from a carrier who
+    /// died off the ground), at `vel`.
+    pub flying: bool,
+    pub vel: V3,
+    /// Ticks of defenders' return it has, of `ticks(FLAG_RETURN_MS)`.
+    pub ret: u32,
+    /// Ticks till it is home at the pace it is going now (its own clock,
+    /// or the defenders' return if that is sooner): what the HUD shows.
+    pub home_in: u32,
 }
 
 impl Thing for Flag {
@@ -320,6 +336,10 @@ impl Thing for Flag {
         h.u8(self.carrier);
         h.v3(self.pos);
         h.u32(self.down_for);
+        h.bool(self.flying);
+        h.v3(self.vel);
+        h.u32(self.ret);
+        h.u32(self.home_in);
     }
 }
 
@@ -341,6 +361,8 @@ pub struct World {
     /// Each fighter's score (everyone for themselves) or each side's.
     pub score: [i32; MAX_FIGHTERS],
     pub winner: u8,
+    /// Ticks of sudden death played, the clock run out (`SUDDEN_DEATH_MS`).
+    pub overtime: u32,
     pub events: Events,
     rewind: Box<Rewind<Pose, MAX_FIGHTERS>>,
     vrewind: Box<Rewind<VPose, MAX_VEHICLES>>,
@@ -354,7 +376,7 @@ impl World {
     pub fn new(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> World {
         let mut vehicles = Pool::default();
         for (i, v) in map.vehicles.iter().enumerate().take(MAX_VEHICLES) {
-            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8);
+            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8, v.turret);
         }
         let mut flags = [Flag::default(); 2];
         if let Some(bases) = map.flags {
@@ -376,6 +398,7 @@ impl World {
             clock: ticks(COUNTDOWN_MS),
             score: [0; MAX_FIGHTERS],
             winner: NO_WINNER,
+            overtime: 0,
             events: Events::default(),
             rewind: Box::default(),
             vrewind: Box::default(),
@@ -401,7 +424,7 @@ impl World {
 
     pub fn unseat(&mut self, slot: usize) {
         self.leave_vehicle(slot);
-        self.drop_flag(slot, false);
+        self.drop_flag(slot, false, false);
         self.fighters[slot] = Fighter::default();
         self.rewind.forget(slot);
     }
@@ -475,8 +498,11 @@ impl World {
         self.falls();
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
-            if l.fired || l.fired_left || l.melee || l.throw {
+            if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
                 self.unveil(s);
+            }
+            if l.mounted {
+                self.fire_turret(s, rewind_q8[s]);
             }
             if l.fired {
                 self.fire(s, rewind_q8[s], l.charged, false);
@@ -490,11 +516,18 @@ impl World {
             if l.throw {
                 self.throw(s, l.sticky);
             }
-            // A carrier's USE lets go of the flag; otherwise a vehicle in
-            // reach (or the one ridden) beats a pad.
-            if l.use_pad && self.fighters[s].flag {
-                self.drop_flag(s, false);
-            } else if l.use_pad && self.fighters[s].active() && !self.use_vehicle(s) {
+            // A carrier's SWAP lets go of the flag, tossed ahead. USE takes
+            // a flag in reach, else gets in (or out of) a vehicle, else
+            // takes a gun off a pad; a carrier takes no gun.
+            if l.drop_flag {
+                self.drop_flag(s, false, true);
+            }
+            if l.use_pad
+                && self.fighters[s].active()
+                && !self.take_flag(s)
+                && !self.use_vehicle(s)
+                && !self.fighters[s].flag
+            {
                 self.pickup(s);
             }
         }
@@ -522,9 +555,15 @@ impl World {
             }
         }
         if self.phase == Phase::Playing {
-            self.clock -= 1;
+            self.clock = self.clock.saturating_sub(1);
             if self.clock == 0 {
-                self.end();
+                // Sudden death (Capture the Flag): a flag away from home
+                // when time runs out plays on till it is settled.
+                if self.flag_out() && self.overtime < ticks(SUDDEN_DEATH_MS) {
+                    self.overtime += 1;
+                } else {
+                    self.end();
+                }
             }
         }
     }
@@ -544,7 +583,7 @@ impl World {
             Kind::Hitscan => {
                 for k in 0..a.pellets {
                     let dir = spread(base, cone, self.salt, s, f.shots, pk + k);
-                    self.hitscan(s, eye, dir, id, depth);
+                    self.hitscan(s, eye, dir, a, id as u16, depth, eye);
                 }
             }
             Kind::Sword => self.swing(s, depth, true),
@@ -596,6 +635,21 @@ impl World {
         }
     }
 
+    /// `s` fires the turret it guns: from its eye along its aim (its cone
+    /// the turret gun's), the round drawn from the turret's muzzle.
+    fn fire_turret(&mut self, s: usize, depth: u32) {
+        let f = self.fighters[s];
+        let Some((i, _)) = f.riding() else { return };
+        let v = self.vehicles[i];
+        let Some((a, cause)) = crate::vehicle::turret(v.turret) else {
+            return;
+        };
+        let eye = f.eye();
+        let base = aim_dir(f.yaw, f.pitch);
+        let dir = spread(base, a.spread, self.salt, s, f.shots, 0);
+        self.hitscan(s, eye, dir, a, cause, depth, v.muzzle(base));
+    }
+
     /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
     /// hurt, where the server says the shooter saw them, and how far. With
     /// `lock` (homing, a lunge) a teammate is never the one, friendly fire
@@ -604,8 +658,13 @@ impl World {
     fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32, lock: bool) -> Option<(Target, f32)> {
         let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
+        // Whoever rides with `s` is never in its way.
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (q, v) in self.fighters.iter().enumerate() {
             if q == s || !v.active() || (if lock { self.mate(s, q) } else { self.spared(s, q) }) {
+                continue;
+            }
+            if ride.is_some() && v.riding().map(|(i, _)| i) == ride {
                 continue;
             }
             let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
@@ -628,7 +687,6 @@ impl World {
             }
         }
         // Hulls, rewound like bodies. A rider hit before its hull is hit.
-        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (i, v) in self.vehicles.iter().enumerate() {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
@@ -673,8 +731,8 @@ impl World {
     /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
     /// and its `aim_range`, nearer than `limit` and in clear line: the way
     /// to that chest. Only + − × ÷ and sqrt; never the head.
-    fn magnet(&self, s: usize, eye: V3, dir: V3, id: u8, depth: u32, limit: f32) -> Option<V3> {
-        let a = arm(id);
+    #[allow(clippy::too_many_arguments)]
+    fn magnet(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32, limit: f32) -> Option<V3> {
         let me = &self.fighters[s];
         let reach = a.aim_range.min(limit);
         let mut best: Option<(f32, V3)> = None;
@@ -703,13 +761,15 @@ impl World {
         best.map(|(_, c)| (c - eye).norm())
     }
 
-    fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
-        let a = arm(id);
+    /// A round of gun `a` from `eye` along `dir`, its shot and its hurt
+    /// carrying `id` (an arm id, or a turret's cause), drawn from `from`.
+    #[allow(clippy::too_many_arguments)]
+    fn hitscan(&mut self, s: usize, eye: V3, dir: V3, a: &Arm, id: u16, depth: u32, from: V3) {
         let mut wall = self.map.ray(eye, dir, a.range);
         let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
         if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
-            if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
+            if let Some(bent) = self.magnet(s, eye, dir, a, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
                 hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
@@ -719,8 +779,8 @@ impl World {
         self.events.push(Event {
             kind: Ev::Shot,
             a: s as u8,
-            c: id as u16,
-            pos: eye,
+            c: id,
+            pos: from,
             end: eye + dir * t,
             ..Event::default()
         });
@@ -733,8 +793,8 @@ impl World {
             };
             let pts = (a.dmg * PT) as f32 * k;
             match target {
-                Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id as u16),
-                Target::Vehicle(i) => self.damage_vehicle(s, i, pts as i32, id as u16),
+                Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id),
+                Target::Vehicle(i) => self.damage_vehicle(s, i, pts as i32, id),
             }
         }
     }
@@ -785,6 +845,9 @@ impl World {
         let toward = (v.body.pos - self.fighters[s].body.pos).flat().norm();
         if V3::new(cy, 0.0, sy).dot(toward) > BEHIND_COS {
             self.damage(s, q, KILL_PTS, false, Head::None, Cause::Behind as u16);
+        } else if self.fighters[s].flag {
+            // A swing of the flag kills (Halo 2's "massive" flag hit).
+            self.damage(s, q, KILL_PTS, false, Head::None, Cause::Melee as u16);
         } else {
             self.damage(s, q, MELEE_DMG * PT, false, Head::None, Cause::Melee as u16);
         }
@@ -1706,7 +1769,7 @@ impl World {
         v.respawn -= 1;
         if v.respawn == 0 {
             if let Some(d) = self.map.vehicles.get(v.home as usize) {
-                *v = Vehicle::new(d.pos, d.yaw, v.home);
+                *v = Vehicle::new(d.pos, d.yaw, v.home, d.turret);
             }
         }
     }
@@ -1746,11 +1809,19 @@ impl World {
             return true;
         }
         let at = self.fighters[s].body.pos;
+        // A flag carrier rides, never drives (Halo 3's): only a free
+        // passenger seat will do.
+        let carrier = self.fighters[s].flag;
         let mut best: Option<usize> = None;
         let mut near = ENTER_R;
         for (i, v) in self.vehicles.iter().enumerate() {
             let d = (v.pos - at).flat().len();
-            if v.active && v.seats.contains(&0) && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0 {
+            let room = if carrier {
+                v.seats[crate::vehicle::PASSENGER] == 0
+            } else {
+                v.seats.contains(&0)
+            };
+            if v.active && room && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0 {
                 near = d;
                 best = Some(i);
             }
@@ -1758,7 +1829,7 @@ impl World {
         let Some(i) = best else {
             return false;
         };
-        let seat = if self.vehicles[i].seats[DRIVER] == 0 {
+        let seat = if self.vehicles[i].seats[DRIVER] == 0 && !carrier {
             DRIVER
         } else {
             crate::vehicle::PASSENGER
@@ -1965,7 +2036,7 @@ impl World {
     fn kill(&mut self, att: usize, vic: usize, cause: u16, head: bool) {
         self.leave_vehicle(vic);
         // Off the map, the flag goes home; otherwise it falls with them.
-        self.drop_flag(vic, cause == crate::events::Cause::Fall as u16);
+        self.drop_flag(vic, cause == crate::events::Cause::Fall as u16, false);
         let v = &mut self.fighters[vic];
         v.alive = false;
         v.health = 0;
@@ -2040,10 +2111,10 @@ impl World {
         }
     }
 
-    /// Capture the Flag's tick: carried flags follow their carriers and
-    /// score at home; a flag at home or on the floor is taken by the first
-    /// enemy on foot to touch it (seat order), a flag on the floor returned
-    /// by the first defender, or by its clock.
+    /// Capture the Flag's tick: carried flags follow their carriers (in a
+    /// passenger seat too) and score at home; a tossed flag flies till it
+    /// lands; a flag on the floor goes home on its clock, or sooner with
+    /// defenders by it and no enemy.
     fn flags_tick(&mut self) {
         let Some(bases) = self.map.flags.filter(|_| self.rules.ctf && self.rules.teams) else {
             return;
@@ -2056,7 +2127,12 @@ impl World {
                     let at = self.fighters[c].body.pos;
                     self.flags[t].pos = at;
                     let own = t ^ 1;
-                    if self.flags[own].state == FLAG_HOME && touches(at, bases[own]) {
+                    // Riding, the hull on the base's ring is the carrier there.
+                    let there = touches(at, bases[own])
+                        || self.fighters[c]
+                            .riding()
+                            .is_some_and(|(i, _)| self.vehicles[i].touches(bases[own], 0.0, FLAG_RISE));
+                    if self.flags[own].state == FLAG_HOME && there {
                         self.fighters[c].flag = false;
                         self.flags[t] = Flag {
                             pos: bases[t],
@@ -2069,46 +2145,122 @@ impl World {
                         }
                     }
                 }
-                _ => {
-                    let down = fl.state == FLAG_DOWN;
-                    if down {
-                        self.flags[t].down_for = fl.down_for.saturating_sub(1);
-                        if self.flags[t].down_for == 0 {
-                            self.flag_home(t, NO_WINNER);
-                            continue;
-                        }
+                FLAG_DOWN => {
+                    if fl.flying {
+                        self.fly_flag(t);
                     }
-                    for s in 0..MAX_FIGHTERS {
-                        let f = self.fighters[s];
-                        if !f.active() || f.riding().is_some() || !touches(f.body.pos, fl.pos) {
+                    let fl = self.flags[t];
+                    // Out of the world, home.
+                    if fl.pos.y < self.map.void {
+                        self.flag_home(t, NO_WINNER);
+                        continue;
+                    }
+                    self.flags[t].down_for = fl.down_for.saturating_sub(1);
+                    if self.flags[t].down_for == 0 {
+                        self.flag_home(t, NO_WINNER);
+                        continue;
+                    }
+                    // Its defenders in reach return it, an enemy holds them.
+                    let (mut ours, mut theirs, mut first) = (0u32, 0u32, NO_WINNER);
+                    for (s, f) in self.fighters.iter().enumerate() {
+                        if !f.active() || fl.flying || !touches(f.body.pos, fl.pos) {
                             continue;
                         }
                         if f.team as usize & 1 == t {
-                            if down {
-                                self.flag_home(t, s as u8);
-                                break;
+                            ours += 1;
+                            if first == NO_WINNER {
+                                first = s as u8;
                             }
-                        } else if !f.flag && !(down && self.flags[t].down_for > ticks(FLAG_RETURN_MS - FLAG_REGRAB_MS))
-                        {
-                            self.fighters[s].flag = true;
-                            self.flags[t] = Flag {
-                                state: FLAG_HELD,
-                                carrier: s as u8,
-                                pos: f.body.pos,
-                                down_for: 0,
-                            };
-                            self.flag_event(0, s as u8, t, fl.pos);
-                            break;
+                        } else {
+                            theirs += 1;
                         }
                     }
+                    let full = ticks(FLAG_RETURN_MS);
+                    let pace = if theirs == 0 { ours.min(FLAG_RETURNERS) } else { 0 };
+                    let ret = (fl.ret + pace).min(full);
+                    self.flags[t].ret = ret;
+                    if ret >= full {
+                        self.flag_home(t, first);
+                        continue;
+                    }
+                    let by_hand = if pace > 0 {
+                        (full - ret).div_ceil(pace)
+                    } else {
+                        u32::MAX
+                    };
+                    self.flags[t].home_in = self.flags[t].down_for.min(by_hand);
                 }
+                _ => {}
             }
         }
     }
 
-    /// Seat `s` lets go of the flag it carries, if any: where it stands,
-    /// or home if `home`.
-    fn drop_flag(&mut self, s: usize, home: bool) {
+    /// One tick of tossed flag `t`'s flight: it falls, stops at a wall and
+    /// lands on the floor.
+    fn fly_flag(&mut self, t: usize) {
+        let fl = self.flags[t];
+        let mut vel = fl.vel;
+        vel.y -= GRAVITY * DT;
+        let flat = V3::new(vel.x, 0.0, vel.z);
+        let run = flat.len() * DT;
+        let mut at = fl.pos;
+        if run > 0.0 {
+            let dir = flat * (1.0 / flat.len());
+            let lift = V3::new(0.0, 0.3, 0.0);
+            let room = self.map.ray(at + lift, dir, run + 0.2) - 0.2;
+            if room < run {
+                // A wall: it drops down it.
+                at = at + dir * room.max(0.0);
+                vel.x = 0.0;
+                vel.z = 0.0;
+            } else {
+                at = at + dir * run;
+            }
+        }
+        at.x = at.x.clamp(self.map.lo.0, self.map.hi.0);
+        at.z = at.z.clamp(self.map.lo.1, self.map.hi.1);
+        let floor = self.map.floor(at.x, at.z, 0.2, at.y.max(fl.pos.y) + 0.1);
+        at.y += vel.y * DT;
+        let f = &mut self.flags[t];
+        if at.y <= floor {
+            at.y = floor;
+            f.flying = false;
+            f.vel = V3::ZERO;
+        } else {
+            f.vel = vel;
+        }
+        f.pos = at;
+    }
+
+    /// Seat `s` takes a flag in reach with USE: the enemy's, on foot, with
+    /// no flag already and the flag not in the air. Taken or not.
+    fn take_flag(&mut self, s: usize) -> bool {
+        if !self.rules.ctf || !self.rules.teams || self.map.flags.is_none() {
+            return false;
+        }
+        let f = self.fighters[s];
+        if !f.active() || f.flag || f.riding().is_some() {
+            return false;
+        }
+        let t = (f.team as usize & 1) ^ 1;
+        let fl = self.flags[t];
+        if fl.state == FLAG_HELD || fl.flying || !touches(f.body.pos, fl.pos) {
+            return false;
+        }
+        self.fighters[s].flag = true;
+        self.flags[t] = Flag {
+            state: FLAG_HELD,
+            carrier: s as u8,
+            pos: f.body.pos,
+            ..Flag::default()
+        };
+        self.flag_event(0, s as u8, t, fl.pos);
+        true
+    }
+
+    /// Seat `s` lets go of the flag it carries, if any: home if `home`,
+    /// tossed ahead if `toss`, else falling from where they are.
+    fn drop_flag(&mut self, s: usize, home: bool, toss: bool) {
         if !self.fighters[s].flag {
             return;
         }
@@ -2120,16 +2272,38 @@ impl World {
             self.flag_home(t, NO_WINNER);
             return;
         }
-        // It falls to the floor under them.
-        let mut at = self.fighters[s].body.pos;
-        at.y = self.map.floor(at.x, at.z, 0.2, at.y + 0.1);
+        let f = &self.fighters[s];
+        let at = f.body.pos;
+        let vel = if toss {
+            let (sy, cy) = crate::geom::yaw_sincos(f.yaw);
+            let mut v = V3::new(cy * FLAG_TOSS, FLAG_TOSS_UP, sy * FLAG_TOSS);
+            // On top of how they move (or the vehicle they ride).
+            let carry = match f.riding() {
+                Some((i, _)) => self.vehicles[i].vel,
+                None => f.body.vel,
+            };
+            v = v + V3::new(carry.x, carry.y.max(0.0), carry.z);
+            v
+        } else {
+            V3::ZERO
+        };
         self.flags[t] = Flag {
             state: FLAG_DOWN,
-            carrier: 0,
             pos: at,
-            down_for: ticks(FLAG_RETURN_MS),
+            down_for: ticks(FLAG_RESET_MS),
+            home_in: ticks(FLAG_RESET_MS),
+            flying: true,
+            vel,
+            ..Flag::default()
         };
+        // Lying on the floor already (it was dropped standing), it is down.
+        self.fly_flag(t);
         self.flag_event(1, s as u8, t, at);
+    }
+
+    /// Clock run out: a flag is away from home, so it is sudden death.
+    fn flag_out(&self) -> bool {
+        self.rules.ctf && self.map.flags.is_some() && self.flags.iter().any(|f| f.state != FLAG_HOME)
     }
 
     /// Flag `t` goes home: returned by seat `by`, or by its clock
@@ -2529,6 +2703,10 @@ impl World {
         h.u8(self.phase as u8);
         h.u32(self.clock);
         h.u8(self.winner);
+        // Only once there is any, so every golden stands.
+        if self.overtime != 0 {
+            h.u32(self.overtime);
+        }
         for &s in &self.score {
             h.i32(s);
         }

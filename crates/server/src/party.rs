@@ -652,6 +652,14 @@ impl Parties {
         })
     }
 
+    /// The ids of party `code`'s members (their wallets, if signed in with
+    /// one), in seat order.
+    pub fn members(&self, code: u32) -> Vec<String> {
+        self.parties
+            .get(&code)
+            .map_or_else(Vec::new, |p| p.seats.iter().map(|s| s.id.clone()).collect())
+    }
+
     /// Who `session` is.
     pub fn who(&self, session: u64) -> Option<&Who> {
         self.sessions.get(&session).map(|l| &l.who)

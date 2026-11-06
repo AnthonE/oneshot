@@ -26,6 +26,8 @@ const SALT: (u64, u64) = (0x5a17_0123_4567_89ab, 0xfeed_beef_cafe_d00d);
 /// The skin the person seat wears (the server checked it owns it).
 const SKIN: u8 = 3;
 const EMBLEM: proto::Emblem = proto::emblem(3, 2, 5, 9);
+const HEADWEAR: u8 = 1;
+const FOOTWEAR: u8 = 1;
 
 /// Whether the 64 bits of `w` appear in `buf` at any bit offset (the wire
 /// is bit-packed, so a leak need not be byte-aligned).
@@ -66,16 +68,30 @@ struct Gate {
     proj_seen: usize,
     vehicles_seen: usize,
     drops_seen: usize,
+    /// Others held in view (updated in an earlier snapshot), checked.
+    held_seen: usize,
+    /// Ticks between the room's snapshots.
+    every: u32,
 }
 
 impl Gate {
     fn check_snapshot(&mut self, s: &Snapshot) {
         let c = self.room.client(self.me as u8).map(|c| (c.rtt_ms, c.playout as u32));
-        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play));
+        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play, self.every));
         let w = &self.room.world;
         let me = &w.fighters[self.me];
         let now = &self.history[0];
+        // In view: updated in this snapshot, or held (a far one on a big
+        // map, its last update repeated): a held one is one sent, and held
+        // to the same checks.
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
+        assert!(
+            (0..MAX_FIGHTERS).all(|q| s.held & (1 << q) == 0 || sent.contains(&q)),
+            "tick {}: held {:016b} beyond {sent:?}",
+            w.tick,
+            s.held
+        );
+        self.held_seen += s.held.count_ones() as usize;
         let mate = |q: usize| q != self.me && w.rules.teams && w.fighters[q].team == me.team;
         let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
         // Every kind on the wire has its check; no wildcard, so a new kind
@@ -177,8 +193,8 @@ impl Gate {
                         0.1,
                         0.2,
                         0.3,
-                        room::fog::full_lead(fog_lead, 2),
-                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                        room::fog::full_lead(fog_lead, 2, self.every),
+                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY, self.every),
                     ];
                     for v in s.vehicles() {
                         self.vehicles_seen += 1;
@@ -228,8 +244,8 @@ impl Gate {
                 // the last 16 ticks.
                 let leads = [
                     fog_lead,
-                    room::fog::full_lead(fog_lead, 2),
-                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                    room::fog::full_lead(fog_lead, 2, self.every),
+                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY, self.every),
                     0.0,
                     0.05,
                     0.1,
@@ -325,6 +341,23 @@ fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_at_a_slower_snapshot_rate() {
+    // A mode given its own rate (the server's `--big-snapshot-hz`): fog
+    // holds a pair as many snapshots, never longer than it could be seen.
+    for d in sim::maps::ALL.iter().filter(|d| d.big()) {
+        gate_at(
+            d.build(),
+            Rules {
+                score_limit: 60,
+                time_limit_ms: 120_000,
+                ..Rules::big_team()
+            },
+            4,
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
     for d in sim::maps::ALL.iter().filter(|d| d.flags.len() == 2) {
         gate(
@@ -351,13 +384,23 @@ fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
 /// One match of `rules` on `map`, the person in the first seat, checked
 /// from start to end.
 fn gate(map: Map, rules: Rules) {
+    gate_at(map, rules, room::SNAP_EVERY);
+}
+
+/// [`gate`], the room's snapshots `every` ticks apart.
+fn gate_at(map: Map, rules: Rules, every: u32) {
     let mut room = Room::new(map, rules, 77, SALT);
+    room.set_snap_every(every);
+    // What the checks look back over: fog's hold, and two snapshots more.
+    let looks = (room::fog::hold_ticks(every) + 2 * every) as usize;
     let (slot, out) = room
         .join(
             Name::new("gate"),
             proto::Look {
                 skin: SKIN,
                 emblem: EMBLEM,
+                headwear: HEADWEAR,
+                footwear: FOOTWEAR,
             },
         )
         .unwrap();
@@ -385,6 +428,8 @@ fn gate(map: Map, rules: Rules) {
         proj_seen: 0,
         vehicles_seen: 0,
         drops_seen: 0,
+        held_seen: 0,
+        every,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -398,7 +443,14 @@ fn gate(map: Map, rules: Rules) {
     let (mut medals, mut carnage) = (0, 0);
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
-    for t in 0..TICK_HZ * 125 {
+    let mut rx = proto::delta::Receiver::default();
+    // Past the clock: Capture the Flag's sudden death too.
+    let overtime = if rules.ctf {
+        sim::consts::SUDDEN_DEATH_MS / 1000
+    } else {
+        0
+    };
+    for t in 0..TICK_HZ * (125 + overtime) {
         let now = t as f64 * 1000.0 / TICK_HZ as f64;
         // The person seat plays through the client's path: a frame a tick,
         // acking the newest snapshot, a 4-tick playout.
@@ -411,17 +463,24 @@ fn gate(map: Map, rules: Rules) {
         };
         m.frames[0] = driver.think(&g.room.world, me);
         g.room.on_input(slot, &m, now);
-        let (snaps, out) = g.room.step(now);
+        // What goes on the wire, deltas and all, made whole as the client
+        // does: exactly the snapshot checked.
+        let mut snaps: Vec<(u8, Snapshot, Vec<u8>)> = Vec::new();
+        let mut out = Vec::new();
+        g.room
+            .step_into(now, &mut out, |q, s, b| snaps.push((q, *s, b.to_vec())));
         g.history.push_front(g.room.world.fighters);
-        g.history.truncate(16);
+        g.history.truncate(looks);
         g.vhistory.push_front(*g.room.world.vehicles);
-        g.vhistory.truncate(16);
-        for (_, s) in &snaps {
+        g.vhistory.truncate(looks);
+        for (_, s, wire) in &snaps {
             acked = s.tick;
             g.check_snapshot(s);
             let n = encode_snapshot(s, &mut buf).unwrap();
+            let made = rx.take(wire).expect("the client makes every snapshot whole");
+            assert_eq!(made, proto::decode_snapshot(&buf[..n]).unwrap(), "tick {}", s.tick);
             if !g.over {
-                g.sent.push(buf[..n].to_vec());
+                g.sent.push(wire.clone());
             }
         }
         for (to, m) in &out {
@@ -467,6 +526,10 @@ fn gate(map: Map, rules: Rules) {
     if !g.room.world.rules.gun_game {
         assert!(g.drops_seen > 100, "only {} drops sent to check", g.drops_seen);
     }
+    // A big map holds far ones between their updates; the gate checks them.
+    if sim::maps::ALL.iter().any(|d| d.id == g.room.world.map.id && d.big()) {
+        assert!(g.held_seen > 100, "only {} held to check", g.held_seen);
+    }
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
     }
@@ -478,15 +541,17 @@ fn gate(map: Map, rules: Rules) {
     );
 }
 
-/// Check 7: skins and emblems are public by design (docs/DESIGN.md §15)
-/// and say nothing of the world. A seat names the skin and emblem its
-/// person was checked to wear, and a bot's are the standard look and none.
+/// Check 7: skins, emblems and gear are public by design
+/// (docs/DESIGN.md §15) and say nothing of the world. A seat names the
+/// look its person was checked to wear, and a bot's is the standard one.
 fn check_seat(m: &Msg, me: u8) {
     if let Msg::Seat {
         slot,
         bot,
         skin,
         emblem,
+        headwear,
+        footwear,
         ..
     } = *m
     {
@@ -500,6 +565,15 @@ fn check_seat(m: &Msg, me: u8) {
             emblem,
             if mine { EMBLEM } else { proto::EMBLEM_NONE },
             "seat {slot}'s emblem"
+        );
+        assert_eq!(
+            (headwear, footwear),
+            if mine {
+                (HEADWEAR, FOOTWEAR)
+            } else {
+                (proto::GEAR_NONE, proto::GEAR_NONE)
+            },
+            "seat {slot}'s gear"
         );
     }
 }

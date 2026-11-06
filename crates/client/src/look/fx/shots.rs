@@ -67,8 +67,11 @@ fn v3(v: Vec3) -> V3 {
 
 /// Someone's shot, off the server's event.
 pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
-    let arm = e.c as u8;
-    let look = table::gun(arm);
+    // A turret's round leaves its muzzle (the event's start), ours too: no
+    // gun in view fires it. It lands as a rifle's.
+    let turret = e.c == sim::events::Cause::Minigun as u16;
+    let arm = if turret { sim::arms::AR } else { e.c as u8 };
+    let look = if turret { table::MINIGUN } else { table::gun(arm) };
     let v = to - from;
     let len = v.length();
     if len < 0.05 {
@@ -81,7 +84,7 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     fx.flashed |= bit;
     // A ray is drawn as a tracer; anything else flies (`flying.rs`).
     let kind = sim::arms::arm(arm).kind;
-    if own {
+    if own && !turret {
         // Drawn when it broke (`own`): only what it met is new.
         if kind.ray() {
             land(fx, scene, arm, from, dir, len, to);
@@ -91,7 +94,11 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     if kind == Kind::Sword {
         return;
     }
-    let muzzle = from + dir * MUZZLE_FWD_M - Vec3::Y * MUZZLE_DOWN_M;
+    let muzzle = if turret {
+        from
+    } else {
+        from + dir * MUZZLE_FWD_M - Vec3::Y * MUZZLE_DOWN_M
+    };
     if first {
         flash(fx, muzzle, dir, &look);
         // The round's casing, from the port at the shooter's right (a

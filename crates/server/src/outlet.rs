@@ -10,7 +10,7 @@
 //! counted in [`Counts`].
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Notify};
@@ -43,6 +43,36 @@ pub enum Frame {
     Close,
 }
 
+/// A session's snapshot buffers: the sim thread copies a snapshot into
+/// one, the writer hands it back once it is sent (or a newer one replaced
+/// it), so a session sends its whole match on a handful, not an
+/// allocation (freed on another thread) a snapshot.
+#[derive(Debug, Default)]
+pub struct Spare(Mutex<Vec<Vec<u8>>>);
+
+/// Buffers a session keeps: its lane's and the two in hand.
+const SPARE: usize = DATAGRAM_QUEUE + 2;
+
+impl Spare {
+    fn take(&self) -> Vec<u8> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|mut s| s.pop())
+            .unwrap_or_else(|| Vec::with_capacity(proto::MAX_DATAGRAM))
+    }
+
+    /// A buffer done with, kept for the next snapshot.
+    pub fn give(&self, mut d: Vec<u8>) {
+        d.clear();
+        if let Ok(mut s) = self.0.lock() {
+            if s.len() < SPARE {
+                s.push(d);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct Cut {
     flag: AtomicBool,
@@ -56,6 +86,7 @@ pub struct Outlet {
     st: mpsc::Sender<Frame>,
     cut: Arc<Cut>,
     counts: Arc<Counts>,
+    spare: Arc<Spare>,
 }
 
 /// The session's end: its snapshots and its [`Streams`], each for a
@@ -63,6 +94,8 @@ pub struct Outlet {
 #[derive(Debug)]
 pub struct Inlet {
     pub datagrams: mpsc::Receiver<Vec<u8>>,
+    /// Where a sent snapshot's buffer goes back to.
+    pub spare: Arc<Spare>,
     pub streams: Streams,
 }
 
@@ -77,25 +110,32 @@ pub fn outlet(counts: Arc<Counts>) -> (Outlet, Inlet) {
     let (dg, datagrams) = mpsc::channel(DATAGRAM_QUEUE);
     let (st, stream) = mpsc::channel(STREAM_QUEUE);
     let cut = Arc::new(Cut::default());
+    let spare = Arc::new(Spare::default());
     (
         Outlet {
             dg,
             st,
             cut: cut.clone(),
             counts,
+            spare: spare.clone(),
         },
         Inlet {
             datagrams,
+            spare,
             streams: Streams { stream, cut },
         },
     )
 }
 
 impl Outlet {
-    /// A snapshot: sent if there's room, else counted and dropped.
-    pub fn datagram(&self, d: Vec<u8>) {
-        if self.dg.try_send(d).is_err() {
+    /// A snapshot, copied into one of the session's buffers: sent if
+    /// there's room, else counted and dropped.
+    pub fn datagram(&self, bytes: &[u8]) {
+        let mut d = self.spare.take();
+        d.extend_from_slice(bytes);
+        if let Err(e) = self.dg.try_send(d) {
             self.counts.datagrams_dropped.fetch_add(1, Ordering::Relaxed);
+            self.spare.give(e.into_inner());
         }
     }
 
@@ -167,11 +207,12 @@ impl Streams {
     }
 }
 
-/// The newest of what's waiting, counting the ones it replaces.
-pub fn newest(rx: &mut mpsc::Receiver<Vec<u8>>, mut d: Vec<u8>, counts: &Counts) -> Vec<u8> {
+/// The newest of what's waiting, counting the ones it replaces (their
+/// buffers back to `spare`).
+pub fn newest(rx: &mut mpsc::Receiver<Vec<u8>>, mut d: Vec<u8>, counts: &Counts, spare: &Spare) -> Vec<u8> {
     while let Ok(n) = rx.try_recv() {
         counts.datagrams_dropped.fetch_add(1, Ordering::Relaxed);
-        d = n;
+        spare.give(std::mem::replace(&mut d, n));
     }
     d
 }
@@ -239,12 +280,15 @@ mod tests {
     async fn datagrams_drop_counted_and_the_newest_wins() {
         let (o, mut i, counts) = pair();
         for k in 0..DATAGRAM_QUEUE as u8 + 3 {
-            o.datagram(vec![k]);
+            o.datagram(&[k]);
         }
         assert_eq!(counts.datagrams_dropped.load(Ordering::Relaxed), 3);
         let first = i.datagrams.recv().await.unwrap();
-        let d = newest(&mut i.datagrams, first, &counts);
+        let d = newest(&mut i.datagrams, first, &counts, &i.spare);
         assert_eq!(d, vec![DATAGRAM_QUEUE as u8 - 1]);
+        // What it replaced waits to be used again, and the one buffer the
+        // 3 refused went round (each refused one is the next one's).
+        assert_eq!(i.spare.0.lock().unwrap().len(), DATAGRAM_QUEUE);
         assert_eq!(
             counts.datagrams_dropped.load(Ordering::Relaxed),
             3 + DATAGRAM_QUEUE as u64 - 1

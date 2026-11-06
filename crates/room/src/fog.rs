@@ -30,9 +30,9 @@ pub const JUMP_M: f32 = 0.6;
 pub const MAX_LEAD_S: f32 = 0.2;
 
 /// How far ahead to look for this viewer: half its round trip, one
-/// snapshot, and how far behind it draws others.
-pub fn lead_s(rtt_ms: f64, playout_ticks: u32) -> f32 {
-    let snap = crate::SNAP_EVERY as f64 / TICK_HZ as f64;
+/// snapshot (`snap_every` ticks), and how far behind it draws others.
+pub fn lead_s(rtt_ms: f64, playout_ticks: u32, snap_every: u32) -> f32 {
+    let snap = snap_every as f64 / TICK_HZ as f64;
     let play = playout_ticks.clamp(crate::PLAYOUT_MIN, crate::PLAYOUT_MAX) as f64 / TICK_HZ as f64;
     ((rtt_ms / 2000.0 + snap + play) as f32).min(MAX_LEAD_S)
 }
@@ -144,8 +144,9 @@ pub fn ground_hides(map: &Map, eyes: &[V3], points: &[V3]) -> bool {
 /// its points ahead, a group at a time; a group the ground plainly hides
 /// ([`ground_hides`]) casts no rays. Past [`FAR_M`] the leans and the
 /// chest's edges are left out (at 40 m they turn a line by half a degree):
-/// 18 rays, not 70. A pair found hidden is given the plain test as well, so
-/// no shortcut can hide what is in plain sight.
+/// 18 rays, not 70. The plain test goes first (the aim review has cast it
+/// this tick already, `Plain`): a pair in plain sight needs no more, and no
+/// shortcut can hide what is in plain sight.
 fn sees_full(
     map: &Map,
     viewer: &Fighter,
@@ -154,6 +155,9 @@ fn sees_full(
     far: bool,
     plain: impl FnOnce() -> bool,
 ) -> bool {
+    if plain() {
+        return true;
+    }
     let side = across(viewer.body.pos, target.body.pos);
     let all_eyes = eyes(viewer, side, lead, PEEK_M);
     let all = fighter_points(target, side, lead);
@@ -163,13 +167,12 @@ fn sees_full(
     } else {
         (&all_eyes, [&all[0..5], &all[5..10]])
     };
-    let seen = e.iter().any(|eye| {
+    e.iter().any(|eye| {
         p.iter().any(|group| {
             let one = core::slice::from_ref(eye);
             !ground_hides(map, one, group) && sees_points(map, one, group)
         })
-    });
-    seen || plain()
+    })
 }
 
 /// The plain test: is the target's chest or head in clear line from the
@@ -205,6 +208,18 @@ impl Plain {
         }
         self.seen[v] & bit != 0
     }
+
+    /// [`Plain::sees`] without keeping the answer: the cached one if this
+    /// tick has cast it, else cast now. For the seats' fogs, each on its own
+    /// thread, each asking only of its own row.
+    pub fn look(&self, w: &World, v: usize, t: usize) -> bool {
+        let bit = 1u16 << t;
+        if self.asked[v] & bit != 0 {
+            self.seen[v] & bit != 0
+        } else {
+            plainly_sees(&w.map, &w.fighters[v], &w.fighters[t])
+        }
+    }
 }
 
 /// Points of a hull a vehicle has, a time.
@@ -236,7 +251,7 @@ pub fn sees_vehicle(map: &Map, eye: V3, v: &Vehicle, lead: f32) -> bool {
 
 /// [`sees_vehicle`], as fog runs it: the points now and the points ahead a
 /// group at a time, a group the ground plainly hides casting no rays; past
-/// [`FAR_M`], only the middles and two opposite corners. Then the plain test.
+/// [`FAR_M`], only the middles and two opposite corners. The plain test first.
 fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> bool {
     let p = vehicle_points(v, lead);
     let groups: [&[V3]; 2] = if far {
@@ -245,10 +260,10 @@ fn sees_vehicle_full(map: &Map, eye: V3, v: &Vehicle, lead: f32, far: bool) -> b
         [&p[0..VPOINTS], &p[VPOINTS..]]
     };
     let one = core::slice::from_ref(&eye);
-    groups
-        .iter()
-        .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
-        || plainly_sees_vehicle(map, eye, v)
+    plainly_sees_vehicle(map, eye, v)
+        || groups
+            .iter()
+            .any(|g| !ground_hides(map, one, g) && sees_points(map, one, g))
 }
 
 /// The plain test for a hull: its middle or the middle of its top in clear
@@ -283,10 +298,17 @@ pub fn every(viewer: &Fighter, target: &Fighter) -> usize {
     }
 }
 
-/// The look ahead of a full look `every` snapshots apart: `lead`, and the
-/// snapshots until the pair's next full look.
-pub fn full_lead(lead: f32, every: usize) -> f32 {
-    lead + (every - 1) as f32 * crate::SNAP_EVERY as f32 / TICK_HZ as f32
+/// The look ahead of a full look `every` snapshots apart, `snap_every`
+/// ticks each: `lead`, and the snapshots until the pair's next full look.
+pub fn full_lead(lead: f32, every: usize, snap_every: u32) -> f32 {
+    lead + (every - 1) as f32 * snap_every as f32 / TICK_HZ as f32
+}
+
+/// How long a pair stays sent after its last clear line, with snapshots
+/// `snap_every` ticks apart: [`HOLD_TICKS`] at the arenas' rate, and as many
+/// snapshots at a slower one, so it still outlasts the gap between full looks.
+pub fn hold_ticks(snap_every: u32) -> u32 {
+    HOLD_TICKS.max(HOLD_TICKS / crate::SNAP_EVERY * snap_every)
 }
 
 impl Fog {
@@ -297,13 +319,16 @@ impl Fog {
     /// plain sight is ever held back. The hold ([`HOLD_TICKS`]) outlasts
     /// the gap, so a pair in sight stays sent (docs/DESIGN.md §8).
     pub fn update(&mut self, w: &World, viewer: usize, lead: f32, tick: u32) {
-        self.update_with(w, viewer, lead, tick, &mut Plain::default());
+        self.update_with(w, viewer, lead, tick, &Plain::default(), crate::SNAP_EVERY);
     }
 
-    /// [`Fog::update`], sharing this tick's plain tests (`plain`, of `w`).
-    pub fn update_with(&mut self, w: &World, viewer: usize, lead: f32, tick: u32, plain: &mut Plain) {
+    /// [`Fog::update`], sharing this tick's plain tests (`plain`, of `w`),
+    /// for snapshots `snap_every` ticks apart.
+    pub fn update_with(&mut self, w: &World, viewer: usize, lead: f32, tick: u32, plain: &Plain, snap_every: u32) {
         let me = &w.fighters[viewer];
-        let turn = (tick / crate::SNAP_EVERY) as usize + viewer;
+        let snap_every = snap_every.max(1);
+        let hold = hold_ticks(snap_every);
+        let turn = (tick / snap_every) as usize + viewer;
         for (q, f) in w.fighters.iter().enumerate() {
             if q == viewer || !f.seated {
                 self.until[q] = 0;
@@ -312,14 +337,14 @@ impl Fog {
             } else {
                 let k = every(me, f);
                 let seen = if (turn + q).is_multiple_of(k) {
-                    sees_full(&w.map, me, f, full_lead(lead, k), k == FAR_EVERY, || {
-                        plain.sees(w, viewer, q)
+                    sees_full(&w.map, me, f, full_lead(lead, k, snap_every), k == FAR_EVERY, || {
+                        plain.look(w, viewer, q)
                     })
                 } else {
-                    plain.sees(w, viewer, q)
+                    plain.look(w, viewer, q)
                 };
                 if seen {
-                    self.until[q] = tick + HOLD_TICKS;
+                    self.until[q] = tick + hold;
                 }
             }
         }
@@ -336,12 +361,12 @@ impl Fog {
                 let far = (v.pos - me.body.pos).flat().len() > FAR_M;
                 let k = if far { FAR_EVERY } else { 2 };
                 let seen = if (turn + i).is_multiple_of(k) {
-                    sees_vehicle_full(&w.map, eye, v, full_lead(lead, k), far)
+                    sees_vehicle_full(&w.map, eye, v, full_lead(lead, k, snap_every), far)
                 } else {
                     plainly_sees_vehicle(&w.map, eye, v)
                 };
                 if seen {
-                    self.vuntil[i] = tick + HOLD_TICKS;
+                    self.vuntil[i] = tick + hold;
                 } else if self.vuntil[i] == u32::MAX {
                     self.vuntil[i] = 0;
                 }

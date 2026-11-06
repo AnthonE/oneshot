@@ -5,7 +5,7 @@
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
 //! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
-//! `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
+//! `headwear=`, `footwear=`, `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
 //! overshield and `cloak=` camouflage (0..1, how hidden). `reload=1` reloads it, over and over; `die=S`
 //! kills it S seconds after the screen is there, shot from the camera (a
 //! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
@@ -20,10 +20,15 @@
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
 //! standing still). `truckhurt=` wears it as a hull with that share of its
 //! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
-//! blasts would. `fling=S` sets a rocket off under its right door S seconds
+//! blasts would; `truckturret=1` stands a minigun on its bed
+//! (`look/turret.rs`). `fling=S` sets a rocket off under its right door S seconds
 //! after the screen is there, throwing it as the sim would; `wreck=S` blows
 //! it up then, its husk thrown. `orb=1|2|3`
-//! stands a ball of plasma at `look` (`stand_orb`).
+//! stands a ball of plasma at `look` (`stand_orb`). `flag=x,y,z` plants
+//! red's flag on its stand there (`flags.rs`, its cloth blowing on the
+//! map's wind); `flagheld=1` puts it over the fighter's shoulder instead,
+//! as a carrier holds it, and `flagheld=2` across the camera's view, as a
+//! carrier sees it.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -58,8 +63,13 @@ pub struct View {
     /// How hurt it is drawn (0 whole, 1 nothing left), and whether marked.
     pub truck_hurt: f32,
     pub truck_marks: bool,
+    /// What its bed carries (`sim::vehicle::MINIGUN`: `truckturret=1`).
+    pub truck_turret: u8,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
+    /// A flag's stand for the picture, and who holds it: 0 nobody, 1 the
+    /// fighter, 2 the camera (as in our own view).
+    pub flag: Option<(Vec3, u8)>,
     /// Seconds after the screen is there that it is thrown by a rocket,
     /// and blown up; when it was thrown (the clock `truck_at` reads), and
     /// whether it is gone.
@@ -163,9 +173,11 @@ impl Pose {
             drive: get("drive", 0.0),
             truck_hurt: get("truckhurt", 0.0).clamp(0.0, 1.0),
             truck_marks: get("truckmarks", 0.0) != 0.0,
+            truck_turret: get("truckturret", 0.0) as u8,
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
+            flag: vec("flag").map(|at| (at, get("flagheld", 0.0) as u8)),
             fling: Some(get("fling", -1.0)).filter(|s| *s >= 0.0),
             wreck: Some(get("wreck", -1.0)).filter(|s| *s >= 0.0),
             flung_at: None,
@@ -176,7 +188,12 @@ impl Pose {
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
-            let hull = sim::vehicle::Vehicle::new(V3::new(at.x, at.y, at.z), sim::geom::rad_to_yaw(yaw), 0);
+            let hull = sim::vehicle::Vehicle::new(
+                V3::new(at.x, at.y, at.z),
+                sim::geom::rad_to_yaw(yaw),
+                0,
+                view.truck_turret,
+            );
             hull.mount(seat)
         });
         let view = View {
@@ -206,6 +223,8 @@ impl Pose {
         let look = proto::Look {
             skin: get("skin", 0.0) as u8,
             emblem: proto::emblem_valid(get("emblem", 0.0) as u16),
+            headwear: proto::gear_valid(&proto::HEADWEAR, get("headwear", 0.0) as u8),
+            footwear: proto::gear_valid(&proto::FOOTWEAR, get("footwear", 0.0) as u8),
         };
         let acts = Acts {
             reload: get("reload", 0.0) != 0.0,

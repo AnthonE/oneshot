@@ -52,11 +52,14 @@ pub struct Clip {
 impl Clip {
     /// From floats in ±1 (the browser's decoder gives these).
     pub fn from_f32(pcm: &[f32], rate: u32) -> Clip {
-        let pcm: Vec<i16> = pcm
-            .iter()
-            .map(|s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
-            .collect();
-        Clip { pcm: pcm.into(), rate }
+        Clip::from_samples(pcm.iter().copied(), rate)
+    }
+
+    /// From floats in ±1 as they come, straight into the clip's one
+    /// allocation (the worklet reads them off its byte buffer).
+    pub fn from_samples(pcm: impl ExactSizeIterator<Item = f32>, rate: u32) -> Clip {
+        let pcm: Arc<[i16]> = pcm.map(|s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16).collect();
+        Clip { pcm, rate }
     }
 }
 
@@ -495,14 +498,19 @@ impl Engine {
                     *now += d;
                 }
                 let a = pcm[h.pos] as f32 * PCM;
-                let b = pcm[(h.pos + 1) % n] as f32 * PCM;
+                // The loop's wrap without a division a sample.
+                let next = if h.pos + 1 == n { 0 } else { h.pos + 1 };
+                let b = pcm[next] as f32 * PCM;
                 let x = a + (b - a) * h.frac;
                 h.y += h.now[3] * (x - h.y);
                 out[2 * i] += h.y * h.now[0];
                 out[2 * i + 1] += h.y * h.now[1];
                 h.frac += h.now[2];
                 let whole = h.frac as usize;
-                h.pos = (h.pos + whole) % n;
+                h.pos += whole;
+                if h.pos >= n {
+                    h.pos %= n;
+                }
                 h.frac -= whole as f32;
             }
             h.now = h.to;

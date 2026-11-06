@@ -52,6 +52,11 @@ pub struct PaintParams {
     /// x, y: the bark's albedo (luma, before the lift) where paint starts
     /// to take and where it covers; z the lift; w the paint's roughness.
     pub bite: Vec4,
+    /// rgb: the light its shield's shell casts on it at a flare of 1, nits:
+    /// gold, and an overshield's green. How much is each mesh's tag
+    /// (`shield::Flare`); none where there is no tag.
+    pub flare_gold: Vec4,
+    pub flare_over: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
@@ -625,6 +630,8 @@ pub fn params(
         glow: (rgb(team) * glow).extend(0.0),
         sheen: (trim_rgb * sheen).extend(0.0),
         bite: Vec4::new(BITE_START, BITE_FULL, lift, PAINT_ROUGH),
+        flare_gold: Vec4::ZERO,
+        flare_over: Vec4::ZERO,
     }
 }
 

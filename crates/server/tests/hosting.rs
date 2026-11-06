@@ -64,6 +64,9 @@ async fn join_stamped(port: u16, hash: [u8; 32], name: &str, stamp: u32) -> Resu
             emblem: 0,
             party: 0,
             stamp,
+            headwear: 0,
+            footwear: 0,
+            queued: proto::QueueMatch::NONE,
         },
         &mut f,
     )
@@ -407,7 +410,7 @@ async fn the_status_counts_joins_refusals_and_ticks() {
     assert_eq!(field(&doc, "joins_casual"), 1, "{doc}");
     assert_eq!(field(&doc, "matches"), 1, "{doc}");
     assert!(
-        doc.contains("\"refused\":[0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]"),
+        doc.contains("\"refused\":[0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"),
         "one REFUSE_FULL: {doc}"
     );
     assert!(field(&doc, "ticks") > 10, "{doc}");
@@ -474,4 +477,33 @@ async fn without_a_place_for_them_reports_are_not_taken() {
     .await
     .unwrap();
     assert_eq!(post(h.http.unwrap().port(), "/bugs", "", b"{}").await, 404);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_endpoint_takes_players_and_server_json_hands_them_out_in_turn() {
+    let h = server::run(server::Config {
+        endpoints: 2,
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        ..local()
+    })
+    .await
+    .unwrap();
+    assert_eq!(h.addrs.len(), 2);
+    let (a, b) = (h.addrs[0].port(), h.addrs[1].port());
+    assert_ne!(a, b);
+    for (port, name) in [(a, "first"), (b, "second")] {
+        let (_p, said) = join(port, h.cert_hash, name).await.unwrap();
+        assert!(matches!(said, Some(Msg::Welcome { .. })), "on {port}: {said:?}");
+    }
+    let http = h.http.unwrap().port();
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        let (_, _, doc) = get(http, "/server.json", None).await;
+        let v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        let addr = v["addr"].as_str().unwrap().to_string();
+        seen.push(addr.rsplit_once(':').unwrap().1.parse::<u16>().unwrap());
+    }
+    assert_eq!(seen, vec![a, b, a, b]);
+    // The other slot, by the same flags: its port and every step after.
+    assert_eq!(server::net::ports(61251, 3, 10), vec![61251, 61261, 61271]);
 }

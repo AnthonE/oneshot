@@ -9,7 +9,8 @@ use crate::geom::V3;
 pub enum Kind {
     #[default]
     None,
-    /// A round left `a`'s gun `c` (an arm id): from `pos` to `end`.
+    /// A round left `a`'s gun `c` (an arm id, or a turret's [`Cause`]:
+    /// `arms::fired`): from `pos` to `end`.
     Shot,
     /// `a` hurt `b` for `c` points; `part` 0 shields, 1 health, 2 head (to
     /// health), 3 head (the shields took it all).
@@ -55,6 +56,9 @@ pub enum Cause {
     Wreck = 105,
     /// A sticky grenade: stuck to, or in its blast.
     Sticky = 106,
+    /// A truck's minigun (`arms::MINIGUN`): its shots carry it as their
+    /// gun.
+    Minigun = 107,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

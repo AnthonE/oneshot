@@ -92,6 +92,106 @@ fn new_nonce() -> String {
     crate::hex(&b)
 }
 
+/// A match from Elo Pros' queue, as the server seats it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueMatch {
+    pub id: String,
+    pub game: String,
+    pub ladder: String,
+    pub teams: usize,
+    pub size: usize,
+    /// The server it was launched onto, `host:port` as the game's list has it.
+    pub addr: String,
+    /// Each side's wallets, as Elo Pros spells them.
+    pub sides: Vec<Vec<String>>,
+}
+
+impl QueueMatch {
+    /// The side `wallet` plays on, if any (EVM wallets in any case).
+    pub fn side_of(&self, wallet: &str) -> Option<usize> {
+        let same = |w: &str| {
+            if w.starts_with("0x") {
+                w.eq_ignore_ascii_case(wallet)
+            } else {
+                w == wallet
+            }
+        };
+        self.sides.iter().position(|s| s.iter().any(|w| same(w)))
+    }
+
+    /// Players it seats.
+    pub fn players(&self) -> usize {
+        self.sides.iter().map(Vec::len).sum()
+    }
+}
+
+/// Where a player stands in Elo Pros' queue, as its game's server is told.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueState {
+    pub player: String,
+    /// queued, launched (matched), open or closed (out of the queue), or
+    /// None: in no lobby of this game.
+    pub state: Option<String>,
+    pub match_id: Option<String>,
+    /// The server its match was launched onto.
+    pub server: Option<String>,
+    pub waited_s: Option<u64>,
+    pub unqueued_why: Option<String>,
+}
+
+pub fn parse_queue_states(text: &str) -> Result<Vec<QueueState>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("a queue answer: {e}"))?;
+    let s = |x: &serde_json::Value, k: &str| x[k].as_str().map(str::to_string);
+    Ok(v["players"]
+        .as_array()
+        .ok_or("a queue answer names no players")?
+        .iter()
+        .map(|p| QueueState {
+            player: s(p, "player").unwrap_or_default(),
+            state: s(p, "state"),
+            match_id: s(p, "match"),
+            server: s(p, "server"),
+            waited_s: p["waited_s"].as_u64(),
+            unqueued_why: s(p, "unqueued_why"),
+        })
+        .collect())
+}
+
+/// `GET /api/lobbies/match/{id}`'s body (`meter/lobbies.py` `_match`).
+pub fn parse_queue_match(text: &str) -> Result<QueueMatch, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("a queue match: {e}"))?;
+    let s = |k: &str| {
+        v[k].as_str()
+            .map(str::to_string)
+            .ok_or(format!("a queue match has no {k}"))
+    };
+    let n = |k: &str| {
+        v[k].as_u64()
+            .map(|x| x as usize)
+            .ok_or(format!("a queue match has no {k}"))
+    };
+    let sides: Vec<Vec<String>> = v["sides"]
+        .as_array()
+        .ok_or("a queue match has no sides")?
+        .iter()
+        .map(|side| {
+            side["players"]
+                .as_array()
+                .map(|ps| ps.iter().filter_map(|p| p.as_str().map(str::to_string)).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+    Ok(QueueMatch {
+        id: s("id")?,
+        game: s("game")?,
+        ladder: s("ladder")?,
+        teams: n("teams")?,
+        size: n("size")?,
+        addr: v["server"]["addr"].as_str().unwrap_or("").to_string(),
+        sides,
+    })
+}
+
 /// One match's result: each side's wallets and place (1 best; a draw shares
 /// a place).
 #[derive(Clone, Debug)]
@@ -133,7 +233,8 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
     b.to_string()
 }
 
-/// The skin names in an items answer that are skins of this game (`slug`).
+/// The names in an items answer that are skins or gear of this game
+/// (`slug`).
 ///
 /// Elo Pros answers two shapes. The EVM collection
 /// (`GET /api/items/of/<wallet>?game=<slug>&title=<slug>`, `meter/items.py`)
@@ -142,7 +243,7 @@ pub fn ban_body(wallet: &str, banned: bool, reason: &str, match_id: Option<&str>
 /// `meter/solana_items.py`) lists every title's items, each with its
 /// `title`, its `item` key and its `name`. A row of another title is
 /// dropped; a name counts if it, or its first word, is one of
-/// `proto::SKINS`.
+/// `proto::SKINS`, `proto::HEADWEAR` or `proto::FOOTWEAR` (but "none").
 pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
     let rows = v["items"].as_array().into_iter().flatten();
     let names = rows.filter_map(|i| {
@@ -163,7 +264,9 @@ pub fn owned_skins(v: &serde_json::Value, slug: &str) -> Vec<String> {
             let first = n.split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
             [n.as_str(), first]
                 .into_iter()
-                .find(|c| proto::SKINS.contains(c))
+                .find(|c| {
+                    proto::SKINS.contains(c) || proto::HEADWEAR[1..].contains(c) || proto::FOOTWEAR[1..].contains(c)
+                })
                 .map(str::to_string)
         })
         .collect();
@@ -325,7 +428,8 @@ impl Elo {
         Some(got)
     }
 
-    /// The skins `wallet` owns, by name (`proto::SKINS`): the game's items
+    /// The skins and gear `wallet` owns, by name (`proto::SKINS`,
+    /// `proto::HEADWEAR`, `proto::FOOTWEAR`): the game's items
     /// on Elo Pros ([`items_urls`], read by [`owned_skins`]). Empty if Elo
     /// Pros can't be asked: a skin is cosmetic, so not knowing costs the
     /// look, never the game. Answers are kept [`BAN_CACHE`].
@@ -427,6 +531,54 @@ impl Elo {
         } else {
             Err(format!("{code}: {text}"))
         }
+    }
+
+    /// One call on Elo Pros' queue for this game's own players
+    /// (`POST /api/lobbies/serve/{slug}`, signed with the server key):
+    /// where each player in it now stands.
+    pub async fn serve(&self, body: &serde_json::Value) -> Result<Vec<QueueState>, String> {
+        let key = self
+            .key
+            .as_ref()
+            .ok_or("no server key: Elo Pros' queue is called with it")?;
+        let body = body.to_string();
+        let path = format!("/lobbies/serve/{}", self.slug);
+        let mut req = self
+            .http
+            .post(format!("{}/api{}", self.origin, path))
+            .header("Content-Type", "application/json")
+            .body(body.clone());
+        for (k, v) in key.headers("POST", &path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
+            req = req.header(k, v);
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("Elo Pros couldn't be reached: {e}"))?;
+        let code = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !code.is_success() {
+            return Err(format!("{code}: {text}"));
+        }
+        parse_queue_states(&text)
+    }
+
+    /// A match Elo Pros' queue formed (`GET /api/lobbies/match/{id}`): who
+    /// plays it on which side, on which ladder and server.
+    pub async fn queue_match(&self, id: &str) -> Result<QueueMatch, String> {
+        let url = format!("{}/api/lobbies/match/{}", self.origin, id);
+        let res = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Elo Pros couldn't be reached: {e}"))?;
+        let code = res.status();
+        let text = res.text().await.unwrap_or_default();
+        if !code.is_success() {
+            return Err(format!("{code}: {text}"));
+        }
+        parse_queue_match(&text)
     }
 
     /// A wallet's rating on a ladder; 1500 (a new player's) if it has none
@@ -535,8 +687,11 @@ mod tests {
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
-        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, 7]});
-        assert_eq!(owned_skins(&v, "oneshot"), vec!["ember", "gilded", "pill"]);
+        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, "Shades", "Boots", "none", 7]});
+        assert_eq!(
+            owned_skins(&v, "oneshot"),
+            vec!["boots", "ember", "gilded", "pill", "shades"]
+        );
         assert!(owned_skins(&serde_json::json!({}), "oneshot").is_empty());
     }
 

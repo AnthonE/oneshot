@@ -71,6 +71,10 @@ pub struct SeaParams {
 pub struct Sea {
     #[uniform(100)]
     pub params: SeaParams,
+    /// Its drift (`sea_motion.rs`), so the material is written only when
+    /// the fog's colour changes.
+    #[texture(101, sample_type = "float", filterable = false)]
+    pub motion: Handle<Image>,
 }
 
 pub type CloudSeaMaterial = ExtendedMaterial<StandardMaterial, Sea>;
@@ -89,7 +93,6 @@ impl MaterialExtension for Sea {
 #[derive(Component, Default)]
 pub struct CloudSea {
     mid: Vec2,
-    drift: Vec2,
 }
 
 pub fn plugin(app: &mut App) {
@@ -97,11 +100,11 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, drift);
 }
 
-fn params(mid: Vec2, drift: Vec2, far: Vec3) -> SeaParams {
+fn params(mid: Vec2, far: Vec3) -> SeaParams {
     SeaParams {
         top: Vec3::from_array(TOP).extend(1.0),
         hollow: Vec3::from_array(HOLLOW).extend(1.0),
-        shape: Vec4::new(BILLOW_M, RELIEF, drift.x, drift.y),
+        shape: Vec4::new(BILLOW_M, RELIEF, 0.0, 0.0),
         fade: Vec4::new(mid.x, mid.y, FADE_M, REACH_M),
         far: far.extend(FAR_SHARE),
     }
@@ -156,7 +159,7 @@ pub fn spawn(
 ) {
     commands.spawn((
         crate::level::LevelPart,
-        CloudSea { mid, drift: Vec2::ZERO },
+        CloudSea { mid },
         Mesh3d(meshes.add(mesh(mid, y))),
         MeshMaterial3d(materials.add(CloudSeaMaterial {
             base: StandardMaterial {
@@ -166,7 +169,8 @@ pub fn spawn(
                 ..default()
             },
             extension: Sea {
-                params: params(mid, Vec2::ZERO, Vec3::splat(0.5)),
+                params: params(mid, Vec3::splat(0.5)),
+                motion: super::sea_motion::MOTION,
             },
         })),
         Transform::IDENTITY,
@@ -184,15 +188,27 @@ fn drift(
     mood: Res<super::mood::MoodNow>,
     tier: Res<super::quality::Tier>,
     mut materials: ResMut<Assets<CloudSeaMaterial>>,
-    mut seas: Query<(&mut CloudSea, &MeshMaterial3d<CloudSeaMaterial>)>,
+    mut motion: ResMut<super::sea_motion::SeaMotion>,
+    seas: Query<(Ref<CloudSea>, &MeshMaterial3d<CloudSeaMaterial>)>,
 ) {
+    if seas.is_empty() {
+        return;
+    }
     let dt = time.delta_secs();
+    motion.cloud = (motion.cloud + Vec2::from_array(DRIFT) * dt).rem_euclid(Vec2::splat(WRAP_M));
+    // The fog's colour moves only with the mood: the material is written
+    // then (or for a new sheet), not every frame.
+    if !mood.is_changed() && !tier.is_changed() && !seas.iter().any(|(s, _)| s.is_added()) {
+        return;
+    }
     let far = super::rig::fog_for(&mood.mood, tier.atmosphere, 0.0).color.to_linear();
     let far = Vec3::new(far.red, far.green, far.blue);
-    for (mut sea, handle) in &mut seas {
-        sea.drift = (sea.drift + Vec2::from_array(DRIFT) * dt).rem_euclid(Vec2::splat(WRAP_M));
-        if let Some(m) = materials.get_mut(&handle.0) {
-            m.extension.params = params(sea.mid, sea.drift, far);
+    for (sea, handle) in &seas {
+        let want = params(sea.mid, far);
+        if materials.get(&handle.0).is_some_and(|m| m.extension.params != want) {
+            if let Some(m) = materials.get_mut(&handle.0) {
+                m.extension.params = want;
+            }
         }
     }
 }
