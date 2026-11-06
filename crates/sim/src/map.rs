@@ -380,14 +380,26 @@ impl Map {
             return self.ray(a, v * (1.0 / l), l) >= l;
         }
         let d = v * (1.0 / l);
+        // Clear of both the boxes and solids and the ground: the boxes'
+        // grid first, as it is the cheaper walk, so a line a rock or a wall
+        // stops never walks the terrain. The answer is the same either way.
+        if !self.clear_of_solids(a, b, d, l) {
+            return false;
+        }
         let ground = match &self.terrain {
             None if d.y < 0.0 && a.y >= 0.0 => -a.y / d.y,
             None => l,
             Some(g) => g.ray(a, d, l),
         };
-        if ground < l {
-            return false;
-        }
+        // As before for a NaN: only a hit nearer than the end blocks.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let clear = !(ground < l);
+        clear
+    }
+
+    /// Whether the line from `a` to `b` (direction `d`, length `l`) misses
+    /// every box and solid.
+    fn clear_of_solids(&self, a: V3, b: V3, d: V3, l: f32) -> bool {
         let n = self.boxes.len();
         // A box or solid wholly over or under the line can't be in its way
         // (a roof, a platform): skipped, with a millimetre to spare so no

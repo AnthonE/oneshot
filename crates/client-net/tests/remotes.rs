@@ -187,3 +187,43 @@ fn the_server_is_told_how_far_behind_we_draw() {
     }
     assert!(checked > 100);
 }
+
+#[test]
+fn a_far_runner_updated_every_few_snapshots_is_drawn_as_smoothly() {
+    // The same runner, updated in every fourth snapshot and held in the
+    // others, its last update repeated (a far one on a big map): drawn
+    // between its own updates, it stays on its path.
+    let mut c = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let mut full = NetCore::new(0, 0, 0, Rules::duel(), Map::open());
+    let mut last = snap(0, 0.0).remotes[0];
+    for t in (2..=400u32).step_by(2) {
+        let at = t as f64 * TICK_MS + LATE_MS;
+        let s = snap(t, t as f32 * 5.0 / TICK_HZ as f32);
+        full.on_snapshot(at, &s);
+        let s = if (t / 2).is_multiple_of(4) {
+            last = s.remotes[0];
+            s
+        } else {
+            let mut h = Snapshot { held: 1 << 1, ..s };
+            h.remotes[0] = last;
+            h
+        };
+        c.on_snapshot(at, &s);
+        if t > 40 {
+            let now = at + 3.0;
+            let (x, want) = (x_at(&c, now), x_at(&full, now));
+            assert!(
+                (x - want).abs() < 0.05,
+                "tick {t}: drawn at {x}, updated every snapshot {want}"
+            );
+        }
+    }
+    // Held, then gone from view: no longer drawn.
+    let gone = Snapshot {
+        n_remote: 0,
+        held: 0,
+        ..snap(402, 0.0)
+    };
+    c.on_snapshot(402.0 * TICK_MS + LATE_MS, &gone);
+    assert!(c.others(402.0 * TICK_MS + LATE_MS + 200.0).iter().all(|d| d.slot != 1));
+}

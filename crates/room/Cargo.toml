@@ -8,3 +8,5 @@ description = "A match as the server runs it: seats, input buffers, rewind depth
 [dependencies]
 sim = { path = "../sim" }
 proto = { path = "../proto" }
+# Each seat's fog and snapshot on its own core (`Room::step_into`).
+rayon = "1"

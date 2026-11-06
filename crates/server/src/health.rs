@@ -19,7 +19,7 @@ use crate::outlet::Counts;
 pub const BUCKETS: usize = 21;
 /// Refusal causes by `proto::REFUSE_*` code (0 unused; past the last known
 /// code is counted in the last).
-pub const REFUSALS: usize = 15;
+pub const REFUSALS: usize = 17;
 /// The journal's window.
 pub const JOURNAL: Duration = Duration::from_secs(10);
 
@@ -99,6 +99,8 @@ pub struct Health {
     /// QUIC packets sent and lost, summed over sessions as they're sampled.
     pub packets_sent: AtomicU64,
     pub packets_lost: AtomicU64,
+    /// UDP bytes sent to match sessions (headers and all), summed as above.
+    pub bytes_sent: AtomicU64,
     /// Sessions' round trips as sampled (every journal window and at the
     /// end), in ms.
     pub rtt_ms: Hist,
@@ -121,12 +123,13 @@ impl Health {
     }
 
     /// A QUIC connection's numbers since the last sample (`last` holds
-    /// what was seen before, so each packet is counted once).
-    pub fn sample(&self, rtt: Duration, sent: u64, lost: u64, last: &mut (u64, u64)) {
+    /// what was seen before, so each packet and byte is counted once).
+    pub fn sample(&self, rtt: Duration, sent: u64, lost: u64, bytes: u64, last: &mut (u64, u64, u64)) {
         self.rtt_ms.record(rtt.as_millis().min(u64::MAX as u128) as u64);
         self.packets_sent.fetch_add(sent.saturating_sub(last.0), Relaxed);
         self.packets_lost.fetch_add(lost.saturating_sub(last.1), Relaxed);
-        *last = (sent.max(last.0), lost.max(last.1));
+        self.bytes_sent.fetch_add(bytes.saturating_sub(last.2), Relaxed);
+        *last = (sent.max(last.0), lost.max(last.1), bytes.max(last.2));
     }
 
     /// Everything, as numbers.
@@ -150,6 +153,7 @@ impl Health {
             inputs_dropped: g(&self.inputs_dropped),
             packets_sent: g(&self.packets_sent),
             packets_lost: g(&self.packets_lost),
+            bytes_sent: g(&self.bytes_sent),
             rtt_ms: self.rtt_ms.read(),
             rtt_max_ms: g(&self.rtt_ms.max),
             snapshots_dropped: g(&counts.datagrams_dropped),
@@ -179,6 +183,7 @@ pub struct Read {
     pub inputs_dropped: u64,
     pub packets_sent: u64,
     pub packets_lost: u64,
+    pub bytes_sent: u64,
     pub rtt_ms: [u64; BUCKETS],
     pub rtt_max_ms: u64,
     pub snapshots_dropped: u64,
@@ -215,7 +220,7 @@ pub fn json(now: Now, r: &Read) -> String {
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
          \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\"tick_us\":{},\
          \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
-         \"packets_sent\":{},\"packets_lost\":{},\
+         \"packets_sent\":{},\"packets_lost\":{},\"bytes_sent\":{},\
          \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
         now.ready,
         now.proto,
@@ -246,6 +251,7 @@ pub fn json(now: Now, r: &Read) -> String {
         r.inputs_dropped,
         r.packets_sent,
         r.packets_lost,
+        r.bytes_sent,
         pct(&r.rtt_ms, 50),
         pct(&r.rtt_ms, 99),
         r.rtt_max_ms,
@@ -333,11 +339,11 @@ mod tests {
     #[test]
     fn packets_are_counted_once_across_samples() {
         let s = Health::default();
-        let mut last = (0, 0);
-        s.sample(Duration::from_millis(40), 100, 2, &mut last);
-        s.sample(Duration::from_millis(42), 250, 3, &mut last);
+        let mut last = (0, 0, 0);
+        s.sample(Duration::from_millis(40), 100, 2, 9000, &mut last);
+        s.sample(Duration::from_millis(42), 250, 3, 20000, &mut last);
         let r = s.read(&Counts::default());
-        assert_eq!((r.packets_sent, r.packets_lost), (250, 3));
+        assert_eq!((r.packets_sent, r.packets_lost, r.bytes_sent), (250, 3, 20000));
         assert_eq!(r.rtt_max_ms, 42);
     }
 
@@ -368,7 +374,7 @@ mod tests {
             &s.read(&Counts::default()),
         );
         assert!(doc.starts_with("{\"ready\":true,\"proto\":9,\"players\":3,"));
-        assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"));
+        assert!(doc.contains("\"refused\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]"));
         assert!(doc.contains("\"tick_p50_us\":512"));
         assert!(doc.contains("\"sim_threads\":4,"));
         assert!(doc.contains("\"tick_us\":[0,0,0,0,0,0,0,0,0,1,0,"), "{doc}");

@@ -35,6 +35,9 @@ pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// Each player holds two (the lobby beside the match), so eight at one
 /// address fit.
 pub const PER_SOURCE: u16 = 16;
+/// Connections a player holds: the lobby beside the match. `--capacity` is
+/// in players; the gate's flood thresholds are in connections.
+pub const CONNS_PER_PLAYER: usize = 2;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 /// Input datagrams the sim may have waiting, every session's together: a
 /// full server sends about 128 a tick. Past it an input is dropped, not
@@ -139,32 +142,60 @@ pub struct Bound {
     pub udp_send: usize,
 }
 
-pub async fn endpoint(cfg: &Config) -> Result<Bound, String> {
-    let identity = identity(cfg).await?;
-    let cert_hash = cert_hash(&identity)?;
-    let (socket, udp_recv, udp_send) = bind_udp(cfg.bind)?;
-    let config = server_config(ServerConfig::builder().with_bind_socket(socket), identity)?;
-    let endpoint = Endpoint::server(config).map_err(|e| format!("bind {}: {e}", cfg.bind))?;
-    Ok(Bound {
-        endpoint,
-        cert_hash,
-        udp_recv,
-        udp_send,
-    })
+/// The ports a server with `n` endpoints from `port` listens on, `step`
+/// apart: the first is `--bind`'s (what the live file names).
+pub fn ports(port: u16, n: usize, step: u16) -> Vec<u16> {
+    (0..n.max(1) as u16)
+        .map_while(|i| port.checked_add(i.checked_mul(step)?))
+        .collect()
 }
 
-/// Reads the PEM files again and hands the endpoint the new certificate:
+/// Every endpoint `cfg` names ([`ports`]), one certificate across them.
+/// Each is its own UDP socket and QUIC endpoint: its own receive loop,
+/// so a box's packets are read on as many threads.
+pub async fn endpoints(cfg: &Config) -> Result<Vec<Bound>, String> {
+    let identity = identity(cfg).await?;
+    let cert_hash = cert_hash(&identity)?;
+    let mut out = Vec::new();
+    for port in ports(cfg.bind.port(), cfg.endpoints, cfg.endpoint_step) {
+        let mut at = cfg.bind;
+        // Port 0 (a test's): each its own free port.
+        if cfg.bind.port() != 0 {
+            at.set_port(port);
+        }
+        let (socket, udp_recv, udp_send) = bind_udp(at)?;
+        let config = server_config(
+            ServerConfig::builder().with_bind_socket(socket),
+            identity.clone_identity(),
+        )?;
+        let endpoint = Endpoint::server(config).map_err(|e| format!("bind {at}: {e}"))?;
+        out.push(Bound {
+            endpoint,
+            cert_hash,
+            udp_recv,
+            udp_send,
+        });
+    }
+    Ok(out)
+}
+
+/// Reads the PEM files again and hands every endpoint the new certificate:
 /// new handshakes present it, live sessions keep theirs (an ACME renewal
 /// without a restart). Returns the new certificate's hash.
-pub async fn reload(ep: &Endpoint<Server>, cfg: &Config) -> Result<[u8; 32], String> {
+pub async fn reload(eps: &[Arc<Endpoint<Server>>], cfg: &Config) -> Result<[u8; 32], String> {
     if cfg.cert.is_none() {
         return Err("no --cert to reload".into());
     }
     let identity = identity(cfg).await?;
     let hash = cert_hash(&identity)?;
-    // The bind address is ignored without a rebind: the socket stays.
-    let config = server_config(ServerConfig::builder().with_bind_address(cfg.bind), identity)?;
-    ep.reload_config(config, false).map_err(|e| e.to_string())?;
+    for ep in eps {
+        // The bind address is ignored without a rebind: the socket stays.
+        let config = server_config(
+            ServerConfig::builder().with_bind_address(cfg.bind),
+            identity.clone_identity(),
+        )?;
+        ep.reload_config(config, false).map_err(|e| e.to_string())?;
+    }
     Ok(hash)
 }
 
@@ -198,7 +229,18 @@ pub struct Gate {
     /// Addresses held to no share, as loopback isn't (`Config::load_sources`).
     exempt: Vec<IpAddr>,
     conns: AtomicUsize,
+    /// Sessions in a match, the queue or watching: what costs snapshots.
+    playing: Arc<AtomicUsize>,
     places: Mutex<(BTreeMap<IpAddr, u16>, BTreeMap<IpAddr, u16>)>,
+}
+
+/// One session's place among the players, given back when it drops.
+pub struct Playing(Arc<AtomicUsize>);
+
+impl Drop for Playing {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// One connection's place at the gate, given back when it drops (whatever
@@ -248,6 +290,7 @@ impl Gate {
             capacity: capacity.max(1),
             exempt: Vec::new(),
             conns: AtomicUsize::new(0),
+            playing: Arc::new(AtomicUsize::new(0)),
             places: Mutex::new((BTreeMap::new(), BTreeMap::new())),
         }
     }
@@ -261,6 +304,28 @@ impl Gate {
     /// Connections held now, handshakes included.
     pub fn busy(&self) -> usize {
         self.conns.load(Ordering::Relaxed)
+    }
+
+    /// Players held now: sessions in a match, the queue or watching (the
+    /// lobby beside them isn't another player).
+    pub fn players(&self) -> usize {
+        self.playing.load(Ordering::Relaxed)
+    }
+
+    /// Whether a session in `mode` is answered "full": a match past
+    /// capacity in players, the lobby past every player's connections.
+    pub fn full(&self, lobby: bool) -> bool {
+        if lobby {
+            self.busy() > CONNS_PER_PLAYER * self.capacity
+        } else {
+            self.players() >= self.capacity
+        }
+    }
+
+    /// A player's place, held by the session that plays.
+    pub fn play(&self) -> Playing {
+        self.playing.fetch_add(1, Ordering::Relaxed);
+        Playing(self.playing.clone())
     }
 
     /// A place for a connection from `ip`, or None if its address or prefix
@@ -291,7 +356,11 @@ impl Gate {
 pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>, inputs: Inputs, ctx: Arc<Ctx>) {
     loop {
         let incoming = ep.accept().await;
-        match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
+        match admit(
+            ctx.gate.busy(),
+            incoming.remote_address_validated(),
+            CONNS_PER_PLAYER * ctx.gate.capacity,
+        ) {
             Admit::Refuse => {
                 ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
                 incoming.refuse();
@@ -325,6 +394,87 @@ pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
+/// Waits in Elo Pros' queue with `players` (a party whole; its first
+/// wallet queues it) as `me`, telling the client how long, until matched
+/// (`Ok((match id, server))`), out (`Err`), or the client goes (`None`; it
+/// is taken out).
+async fn wait_in_elo_queue(
+    ctx: &Ctx,
+    players: &[String],
+    me: &str,
+    mode: u8,
+    ladder: &str,
+    send: &mut wtransport::SendStream,
+    recv: &mut RecvStream,
+) -> Option<Result<(String, String), ()>> {
+    use crate::eloqueue::{self, Waited};
+    let mut rx = ctx.waiters.wait(me);
+    let queues = players.iter().map(|p| eloqueue::norm(p)).min() == Some(eloqueue::norm(me));
+    if queues {
+        let body = serde_json::json!({"op": "queue", "players": players, "ladder": ladder,
+                                      "teams": 2, "size": queue::size(mode) / 2});
+        if let Err(e) = ctx.elo.serve(&body).await {
+            eprintln!("oneshot: Elo Pros' queue refused {me}: {e}");
+            ctx.waiters.done(me);
+            return Some(Err(()));
+        }
+    }
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    // The newest wait to tell the client, plus one (0: nothing new).
+    let told = std::sync::atomic::AtomicU64::new(0);
+    let waited = {
+        let wait = eloqueue::wait(&mut rx, |s| told.store(s + 1, Ordering::Relaxed));
+        tokio::pin!(wait);
+        loop {
+            tokio::select! {
+                w = &mut wait => break Some(w),
+                m = read_frame(recv) => {
+                    if m.is_none() || matches!(m.and_then(|b| decode_msg(&b).ok()), Some(Msg::Bye)) {
+                        break None;
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            }
+            if let Some(s) = told.swap(0, Ordering::Relaxed).checked_sub(1) {
+                let m = Msg::Queued {
+                    mode,
+                    waiting_s: s.min(u16::MAX as u64) as u16,
+                };
+                if let Ok(n) = proto::frame_msg(&m, &mut f) {
+                    let _ = send.write_all(&f[..n]).await;
+                }
+            }
+        }
+    };
+    ctx.waiters.done(me);
+    match waited {
+        Some(Waited::Matched { id, server }) => Some(Ok((id, server))),
+        Some(Waited::Out(why)) => {
+            if let Some(w) = why {
+                eprintln!("oneshot: {me} left Elo Pros' queue: {w}");
+            }
+            Some(Err(()))
+        }
+        None => {
+            let _ = ctx
+                .elo
+                .serve(&serde_json::json!({"op": "unqueue", "players": [me]}))
+                .await;
+            None
+        }
+    }
+}
+
+/// Elo Pros put this player's match on another server: where, and the
+/// match, then goodbye.
+async fn moved(send: &mut wtransport::SendStream, addr: proto::ServerAddr, queued: proto::QueueMatch, _ctx: &Ctx) {
+    let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
+    if let Ok(n) = proto::frame_msg(&Msg::Moved { addr, queued }, &mut f) {
+        let _ = send.write_all(&f[..n]).await;
+        let _ = send.finish().await;
+    }
+}
+
 async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
     ctx.health.refuse(reason);
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
@@ -332,6 +482,29 @@ async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
         let _ = send.write_all(&f[..n]).await;
         let _ = send.finish().await;
     }
+}
+
+/// The side `wallet` plays on in Elo Pros' match `m`, if `m` is the match
+/// `id` asked for, of this game, on this ladder and format, launched onto
+/// this server's host (either slot: a drain hands over to the other).
+fn queue_match_side(
+    m: &crate::elo::QueueMatch,
+    id: &str,
+    ctx: &Ctx,
+    mode: u8,
+    ladder: &str,
+    wallet: &str,
+) -> Option<usize> {
+    let size = if mode == MODE_DOUBLES { 2 } else { 1 };
+    let host = |a: &str| a.rsplit_once(':').map_or(a, |(h, _)| h).to_ascii_lowercase();
+    let here = ctx
+        .public_addr
+        .as_deref()
+        .is_none_or(|ours| host(ours) == host(&m.addr));
+    let fits = m.id == id && m.game == ctx.slug && m.ladder == ladder && m.teams == 2 && m.size == size;
+    (fits && here && m.players() <= queue::size(mode))
+        .then(|| m.side_of(wallet))
+        .flatten()
 }
 
 async fn session(
@@ -364,6 +537,7 @@ async fn session(
         stamp,
         headwear,
         footwear,
+        mut queued,
     } = hello
     else {
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
@@ -375,7 +549,7 @@ async fn session(
         return refuse(&mut send, proto::REFUSE_VERSION, &ctx).await;
     }
     // Past capacity, or on its way down for a restart: come back soon.
-    if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
+    if ctx.draining.load(Ordering::Relaxed) || ctx.gate.full(mode == MODE_LOBBY) {
         return refuse(&mut send, proto::REFUSE_FULL, &ctx).await;
     }
     // Who: a pass from Elo Pros, a ticket of ours a pass earned, or a
@@ -479,6 +653,8 @@ async fn session(
         footwear: gear[1].1,
     };
 
+    // A player from here on (the checks below may still refuse it).
+    let _playing = ctx.gate.play();
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
@@ -506,20 +682,85 @@ async fn session(
                 MODE_CUP => "cup",
                 _ => "duel",
             };
-            let rating = ctx.elo.rating(&wallet, ladder).await;
-            ToSim::Queue {
-                session: session_id,
-                entry: Box::new(queue::Entry {
+            // Elo Pros' queue, which every server of the game shares: wait
+            // there; a match put on this server is played here, one on
+            // another is moved there.
+            if ctx.elo_queue && queued.is_none() && mode != MODE_CUP {
+                let party = match &seating {
+                    Some(sit) if mode == MODE_DOUBLES => ctx.lobby.parties().members(sit.code),
+                    _ => Vec::new(),
+                };
+                if party.iter().any(|m| !m.starts_with("0x") && m.len() < 32) {
+                    return refuse(&mut send, proto::REFUSE_PARTY_MODE, &ctx).await;
+                }
+                let players = if party.len() > 1 { party } else { vec![wallet.clone()] };
+                match wait_in_elo_queue(&ctx, &players, &wallet, mode, ladder, &mut send, &mut recv).await {
+                    Some(Ok((id, server))) => {
+                        let ours = |a: &str| {
+                            let host = |a: &str| a.rsplit_once(':').map_or(a, |(h, _)| h).to_ascii_lowercase();
+                            ctx.public_addr.as_deref().is_none_or(|p| host(p) == host(a))
+                        };
+                        let (Some(q), Some(addr)) = (proto::QueueMatch::new(&id), proto::ServerAddr::new(&server))
+                        else {
+                            return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                        };
+                        if !ours(&server) {
+                            return moved(&mut send, addr, q, &ctx).await;
+                        }
+                        queued = q;
+                    }
+                    Some(Err(())) => return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await,
+                    // The player left while it waited.
+                    None => return,
+                }
+            }
+            // For a match Elo Pros' queue formed: seated with its sides, on
+            // the server it named, once Elo Pros says this wallet is in it.
+            if !queued.is_none() && mode != MODE_CUP {
+                let m = match ctx.elo.queue_match(queued.as_str()).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("oneshot: queue match {}: {e}", queued.as_str());
+                        return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                    }
+                };
+                let Some(side) = queue_match_side(&m, queued.as_str(), &ctx, mode, ladder, &wallet) else {
+                    return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                };
+                let tx_entry = queue::Entry {
                     session: session_id,
                     wallet,
                     name,
                     mode,
-                    rating,
+                    rating: 0.0,
                     since: std::time::Instant::now(),
                     look,
-                    party: seating.filter(|_| mode == MODE_DOUBLES),
-                }),
-                tx,
+                    party: None,
+                };
+                ToSim::Matched {
+                    session: session_id,
+                    entry: Box::new(tx_entry),
+                    id: m.id,
+                    sides: m.sides,
+                    side,
+                    tx,
+                }
+            } else {
+                let rating = ctx.elo.rating(&wallet, ladder).await;
+                ToSim::Queue {
+                    session: session_id,
+                    entry: Box::new(queue::Entry {
+                        session: session_id,
+                        wallet,
+                        name,
+                        mode,
+                        rating,
+                        since: std::time::Instant::now(),
+                        look,
+                        party: seating.filter(|_| mode == MODE_DOUBLES),
+                    }),
+                    tx,
+                }
             }
         }
         _ => ToSim::Casual {
@@ -567,14 +808,19 @@ async fn session(
     });
     // The connection's round trip and loss, each journal window and at
     // the end (`health.rs`).
-    let seen = Arc::new(Mutex::new((0u64, 0u64)));
+    let seen = Arc::new(Mutex::new((0u64, 0u64, 0u64)));
     let sample = {
         let (conn, ctx, seen) = (conn.clone(), ctx.clone(), seen.clone());
         move || {
             let q = conn.quic_connection().stats();
             if let Ok(mut last) = seen.lock() {
-                ctx.health
-                    .sample(conn.rtt(), q.path.sent_packets, q.path.lost_packets, &mut last);
+                ctx.health.sample(
+                    conn.rtt(),
+                    q.path.sent_packets,
+                    q.path.lost_packets,
+                    q.udp_tx.bytes,
+                    &mut last,
+                );
             }
         }
     };
@@ -678,7 +924,7 @@ mod tests {
 
     #[test]
     fn a_crowd_is_retried_then_refused() {
-        // 100 players: anyone up to 200 connections, then an address must
+        // 100 connections' capacity: anyone up to 200, then an address must
         // prove itself, then past 400 nobody.
         assert_eq!(admit(0, false, 100), Admit::Take);
         assert_eq!(admit(199, false, 100), Admit::Take);
@@ -733,5 +979,24 @@ mod tests {
         assert!(gate.take("198.51.100.200".parse().unwrap()).is_none());
         assert!(gate.take("198.51.101.1".parse().unwrap()).is_some());
         drop(held);
+    }
+
+    #[test]
+    fn players_are_counted_not_their_lobbies() {
+        let gate = Arc::new(Gate::new(2));
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        // Two players, each with a lobby and a match: four connections.
+        let conns: Vec<Permit> = (0..4).map(|_| gate.take(lo).unwrap()).collect();
+        let a = gate.play();
+        assert!(!gate.full(false), "one player of two");
+        let b = gate.play();
+        assert!(gate.full(false), "a third player is full");
+        assert!(!gate.full(true), "their lobbies still fit");
+        let more = gate.take(lo).unwrap();
+        assert!(gate.full(true), "past every player's connections");
+        drop((a, more));
+        assert!(!gate.full(false));
+        drop((b, conns));
+        assert_eq!(gate.players(), 0);
     }
 }

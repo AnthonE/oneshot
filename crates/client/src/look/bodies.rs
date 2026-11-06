@@ -267,17 +267,36 @@ pub fn spawn_shadow(commands: &mut Commands, team: u8) -> Entity {
 #[derive(Component)]
 pub struct WantsScene;
 
-/// Every body waiting for its model gets it, the file once in.
+/// A piece of gear's model, till the models are in (as [`WantsScene`]).
+#[derive(Component, Clone, Copy)]
+pub enum WantsGear {
+    Shades,
+    BootLeft,
+    BootRight,
+}
+
+/// Every body waiting for its model gets it, the file once in, and every
+/// piece of gear its own.
 pub fn stand_up(
     mut commands: Commands,
     models: Option<Res<Models>>,
     gltfs: Res<Assets<bevy::gltf::Gltf>>,
     waiting: Query<Entity, With<WantsScene>>,
+    gear: Query<(Entity, &WantsGear)>,
 ) {
-    let Some(scene) = models
-        .and_then(|m| gltfs.get(&m.body))
-        .and_then(|g| g.scenes.first().cloned())
-    else {
+    let Some(models) = models else { return };
+    for (e, piece) in &gear {
+        let scene = match piece {
+            WantsGear::Shades => &models.shades,
+            WantsGear::BootLeft => &models.boot_left,
+            WantsGear::BootRight => &models.boot_right,
+        };
+        commands
+            .entity(e)
+            .remove::<WantsGear>()
+            .insert(SceneRoot(scene.clone()));
+    }
+    let Some(scene) = gltfs.get(&models.body).and_then(|g| g.scenes.first().cloned()) else {
         return;
     };
     for e in &waiting {
@@ -294,25 +313,20 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
     // Its gear, each piece hidden till `dress` puts it on its bone.
-    let mut pieces: Vec<(&Handle<Scene>, &'static Fit)> = Vec::new();
+    // Their models come once the models are in (`stand_up`).
+    let mut pieces: Vec<(WantsGear, &'static Fit)> = Vec::new();
     if proto::gear_valid(&proto::HEADWEAR, look.headwear) == 1 {
-        pieces.push((&models.shades, &SHADES));
+        pieces.push((WantsGear::Shades, &SHADES));
     }
     if proto::gear_valid(&proto::FOOTWEAR, look.footwear) == 1 {
-        pieces.push((&models.boot_left, &BOOT_LEFT));
-        pieces.push((&models.boot_right, &BOOT_RIGHT));
+        pieces.push((WantsGear::BootLeft, &BOOT_LEFT));
+        pieces.push((WantsGear::BootRight, &BOOT_RIGHT));
     }
     let worn = if shadow { Vec::new() } else { pieces }
         .into_iter()
-        .map(|(scene, fit)| {
+        .map(|(piece, fit)| {
             let e = commands
-                .spawn((
-                    SceneRoot(scene.clone()),
-                    Transform::default(),
-                    Visibility::Hidden,
-                    BodyPart,
-                    ChildOf(root),
-                ))
+                .spawn((piece, Transform::default(), Visibility::Hidden, BodyPart, ChildOf(root)))
                 .id();
             (e, fit)
         })
