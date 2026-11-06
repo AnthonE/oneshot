@@ -1034,7 +1034,7 @@ fn drill(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore,
     if auto.stood == 0.0 {
         // Clear of our own blast, for a gun that has one.
         let stand = DRILL_STAND_M.max(a.radius * DRILL_STAND_PER_RADIUS + 3.0);
-        let eye = sim::geom::V3::new(me.x, me.y + EYE, me.z);
+        let eye = sim::geom::V3::new(me.x, me.y + f.body.eye_h(), me.z);
         let wall_at = |yaw: f32| core.map.ray(eye, sim::geom::V3::new(yaw.cos(), 0.0, yaw.sin()), 200.0);
         if auto.walking == 0.0 {
             auto.walking = now;
