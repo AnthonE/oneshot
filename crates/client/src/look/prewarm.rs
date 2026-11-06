@@ -175,7 +175,7 @@ pub fn warm_models(
     *done = true;
     // A plasma ball: its pipeline is built before the first one is thrown.
     if let Some(kit) = plasma {
-        for material in [&kit.material, &kit.corona] {
+        for material in kit.all() {
             commands.entity(eye).with_child((
                 Warming(WARM_FRAMES),
                 SceneDone,

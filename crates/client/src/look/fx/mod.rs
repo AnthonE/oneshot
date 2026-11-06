@@ -53,6 +53,7 @@ pub mod shots;
 pub mod stage;
 pub mod surface;
 pub mod table;
+pub mod vent;
 
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::NotShadowCaster;
@@ -197,6 +198,8 @@ pub struct Fx {
     pub shock: Option<Vec3>,
     /// Our own rounds drawn so far, by hand (`shots::own`).
     own_rounds: crate::look::viewmodel::Rounds,
+    /// What our own hot guns' vents were doing (`vent.rs`).
+    own_vent: vent::OwnVent,
     /// Our own flash, by hand, until the frame's camera is placed
     /// (`shots::muzzle`).
     own_flash: [Option<shots::OwnFlash>; 2],
@@ -539,6 +542,7 @@ pub fn setup(
         shocks: [shell::Shock::default(); shell::SHELLS],
         shock: None,
         own_rounds: Default::default(),
+        own_vent: Default::default(),
         own_flash: [None; 2],
         last_light: Vec::new(),
         fly: Default::default(),

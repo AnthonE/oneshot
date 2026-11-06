@@ -1,10 +1,11 @@
 //! What's in flight. Things with weight are drawn with their models: a
 //! rocket with its exhaust's glow and a trail of smoke, a frag or a
 //! launcher's grenade with its fuse blinking, a sticky a ball of plasma
-//! (`plasma.rs`) with its light, its sparks and, once stuck, its arcs. Light
-//! is drawn as light, straight into the glow pool from where it is this
-//! frame: an ion bolt's blue core and streak, a charged bolt's bigger one
-//! with its light, the cannon's green ball, the SHARD GUN's pink crystals.
+//! (`plasma.rs`) with its light, its sparks and, once stuck, its arcs; a charged
+//! bolt and the cannon's round green balls of it. Light is drawn as light,
+//! straight into the glow pool from where it is this frame: an ion bolt's white
+//! core and blue streak, what glows round a ball of plasma with its light, the
+//! SHARD GUN's pink crystals.
 //!
 //! Rounds come drawn at the render tick, each with an id that holds while
 //! it flies (`client_net::core::DrawnProj`): a model keeps its round by id.
@@ -23,7 +24,7 @@ use proto::ProjState;
 use sim::consts::{HEAD_Y, HIT_R};
 
 use super::atlas::{GLOW, SHARD, STREAK};
-use super::plasma;
+use super::plasma::{self, Tone};
 use super::pool::{Orient, Particle};
 use super::table::{Layer, PINK};
 use super::{FlashDef, Fx};
@@ -48,6 +49,37 @@ const ION: [f32; 4] = [2.0, 5.5, 14.0, 1.0];
 const ION_HALO: [f32; 4] = [0.5, 1.4, 4.0, 0.7];
 const GREEN: [f32; 4] = [3.0, 12.0, 4.0, 1.0];
 const GREEN_HALO: [f32; 4] = [0.8, 3.5, 1.0, 0.7];
+/// An ion bolt: its halo and its heart, metres across, each frame this much
+/// bigger or smaller, so no two look the same; its streak's length; and how far
+/// across the view it must be flying to have one (end on, a streak is a square).
+const BOLT_HALO_M: f32 = 0.26;
+const BOLT_HEART_M: f32 = 0.07;
+const BOLT_FLICKER: (f32, f32) = (0.82, 1.18);
+const BOLT_STREAK_M: f32 = 0.6;
+const BOLT_SIDE_ON: f32 = 0.22;
+const BOLT_WHITE: [f32; 4] = [8.0, 10.0, 14.0, 1.0];
+/// A charged bolt's ball: its radius, its heat and how it beats; its heart and
+/// glow; its light; how big its burst is against the cannon's.
+const ORB_R_M: f32 = 0.15;
+const ORB_FLY_HEAT: f32 = 0.34;
+const ORB_BEAT_HZ: f32 = 7.0;
+const ORB_BEAT: f32 = 0.09;
+const ORB_GLOW_M: f32 = 0.62;
+const ORB_HEART_M: f32 = 0.2;
+const ORB_WHITE: [f32; 4] = [6.0, 14.0, 8.0, 1.0];
+const ORB_LM: f32 = 340_000.0;
+const ORB_LIGHT_M: f32 = 9.0;
+const ORB_BURST: f32 = 0.8;
+/// A shard: tiny, pink. Its sliver's width and length, its glow and heart.
+const SHARD_W_M: f32 = 0.022;
+const SHARD_LEN_M: f32 = 0.2;
+const SHARD_GLOW_M: f32 = 0.1;
+const SHARD_HEART_M: f32 = 0.035;
+const SHARD_WHITE: [f32; 4] = [12.0, 7.0, 10.0, 1.0];
+/// The cannon's ball.
+const CANNON_R_M: f32 = 0.3;
+const CANNON_HEAT: f32 = 0.4;
+const CANNON_GLOW_M: f32 = 1.1;
 /// A sticky's glow round the ball and at its heart, metres across, and how
 /// much bigger with its fuse run out: it reads from across a room, and on
 /// whoever it is stuck to.
@@ -71,10 +103,14 @@ const FRAG_MID_M: f32 = 0.08;
 /// Which model draws a kind of round: a hidden one goes to any round of its own.
 fn model_of(kind: u8) -> u8 {
     match kind {
-        ROCKET => ROCKET,
-        STICKY => STICKY,
+        ROCKET | STICKY | CHARGE | CANNON => kind,
         _ => FRAG,
     }
+}
+
+/// Has a body in the pool: a model, or a ball of plasma.
+fn bodied(kind: u8) -> bool {
+    modelled(kind) || kind == CHARGE || kind == CANNON
 }
 
 /// A ball's parts, moved as its fuse runs.
@@ -127,7 +163,13 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, kit: Option<&plasma:
         STICKY => {
             if let Some(kit) = kit {
                 e.with_children(|c| {
-                    ball = Some(plasma::spawn_ball(c, kit, plasma::FLIGHT_HEAT));
+                    ball = Some(plasma::spawn_ball(
+                        c,
+                        kit,
+                        Tone::Blue,
+                        plasma::RADIUS_M,
+                        plasma::FLIGHT_HEAT,
+                    ));
                 });
             }
             if fx.caps.lights > 2 {
@@ -146,6 +188,18 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, kit: Option<&plasma:
                         ))
                         .id(),
                     );
+                });
+            }
+        }
+        kind @ (CHARGE | CANNON) => {
+            if let Some(kit) = kit {
+                let (radius, heat) = if kind == CHARGE {
+                    (ORB_R_M, ORB_FLY_HEAT)
+                } else {
+                    (CANNON_R_M, CANNON_HEAT)
+                };
+                e.with_children(|c| {
+                    ball = Some(plasma::spawn_ball(c, kit, Tone::Green, radius, heat));
                 });
             }
         }
@@ -296,7 +350,7 @@ pub fn projectiles(
     taken.resize(pool.len(), false);
     go.clear();
     live.clear();
-    live.extend(proj.iter().filter(|p| modelled(p.kind)));
+    live.extend(proj.iter().filter(|p| bodied(p.kind)));
     matched.clear();
     matched.resize(live.len(), false);
     // First every shown model to its own round, then the rest a free
@@ -390,6 +444,14 @@ pub fn projectiles(
             sticky_frame(fx, &mut f, parts, at, vel, fresh, t, dt);
             continue;
         }
+        if p.kind == CHARGE || p.kind == CANNON {
+            let radius = if p.kind == CHARGE { ORB_R_M } else { CANNON_R_M };
+            if let Some((mut tr, _)) = f.ball.and_then(|b| parts.balls.get_mut(b).ok()) {
+                let beat = 1.0 + ORB_BEAT * (t * ORB_BEAT_HZ * core::f32::consts::TAU).sin();
+                tr.scale = Vec3::splat(radius * beat);
+            }
+            continue;
+        }
         // A fuse blinks red.
         let lit = (t * BLINK_HZ).fract() < 0.5;
         if lit && !f.lit {
@@ -452,31 +514,35 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
     match p.kind {
         NEEDLE => crystal(fx, p),
         BOLT => {
-            fx.glow.spawn(dot(at, 0.3, ION_HALO));
-            fx.glow.spawn(streak(at, v, STREAK, 0.05, 0.6, ION));
-            fx.glow.spawn(dot(at, 0.08, [8.0, 10.0, 14.0, 1.0]));
+            let flicker = fx.range(BOLT_FLICKER.0, BOLT_FLICKER.1);
+            fx.glow.spawn(dot(at, BOLT_HALO_M * flicker, ION_HALO));
+            // Its length is how much of it can be seen side on.
+            let to = (at - fx.eye).normalize_or(Vec3::NEG_Z);
+            let across = v.normalize_or(to).cross(to).length();
+            if across > BOLT_SIDE_ON {
+                fx.glow.spawn(streak(at, v, STREAK, 0.05, BOLT_STREAK_M * across, ION));
+            }
+            fx.glow.spawn(dot(at, BOLT_HEART_M * flicker, BOLT_WHITE));
             trail(fx, at, v, ION);
         }
+        // The ball itself is `plasma.rs`'s; this is what glows round it.
         CHARGE => {
-            fx.glow.spawn(dot(at, 0.7, ION_HALO));
-            fx.glow.spawn(streak(at, v, STREAK, 0.12, 1.0, ION));
-            fx.glow.spawn(dot(at, 0.18, [8.0, 10.0, 14.0, 1.0]));
-            trail(fx, at, v, ION);
+            fx.glow.spawn(dot(at, ORB_GLOW_M, GREEN_HALO));
+            fx.glow.spawn(dot(at, ORB_HEART_M, ORB_WHITE));
+            trail(fx, at, v, GREEN);
             ride(
                 fx,
                 at,
                 FlashDef {
-                    lumens: 150_000.0,
-                    range: 6.0,
+                    lumens: ORB_LM,
+                    range: ORB_LIGHT_M,
                     life: 0.08,
-                    color: [0.4, 0.6, 1.0],
+                    color: [0.4, 1.0, 0.45],
                 },
             );
         }
         CANNON => {
-            fx.glow.spawn(dot(at, 1.0, GREEN_HALO));
-            fx.glow.spawn(dot(at, 0.35, GREEN));
-            fx.glow.spawn(dot(at, 0.12, [9.0, 14.0, 9.0, 1.0]));
+            fx.glow.spawn(dot(at, CANNON_GLOW_M, GREEN_HALO));
             trail(fx, at, v, GREEN);
             ride(
                 fx,
@@ -529,8 +595,15 @@ fn trail(fx: &mut Fx, at: Vec3, v: Vec3, c: [f32; 4]) {
 pub fn crystal(fx: &mut Fx, p: &ProjState) {
     let at = Vec3::new(p.pos.x, p.pos.y, p.pos.z);
     let v = Vec3::new(p.vel.x, p.vel.y, p.vel.z);
-    fx.glow.spawn(streak(at, v, SHARD, 0.045, 0.36, PINK));
-    fx.glow.spawn(dot(at, 0.2, [3.0, 0.6, 2.0, 0.8]));
+    // As a bolt's streak: end on, a sliver is a square.
+    let to = (at - fx.eye).normalize_or(Vec3::NEG_Z);
+    let across = v.normalize_or(to).cross(to).length();
+    if across > BOLT_SIDE_ON {
+        fx.glow
+            .spawn(streak(at, v, SHARD, SHARD_W_M, SHARD_LEN_M * across, PINK));
+    }
+    fx.glow.spawn(dot(at, SHARD_GLOW_M, [3.0, 0.6, 2.0, 0.8]));
+    fx.glow.spawn(dot(at, SHARD_HEART_M, SHARD_WHITE));
     trail(fx, at, v, [5.0, 1.2, 3.4, 0.9]);
 }
 
@@ -556,11 +629,16 @@ fn ended(fx: &mut Fx, map: &sim::map::Map, proj: &[DrawnProj], others: &[Drawn],
                     }
                     None => super::table::shatter(&mut fx.glow, at, 8, 3.0),
                 },
-                BOLT | CHARGE => {
-                    let big = if was.kind == CHARGE { 2.0 } else { 1.0 };
-                    splash(fx, at, -wv.normalize_or(Vec3::Y), big);
+                BOLT => {
+                    splash(fx, at, -wv.normalize_or(Vec3::Y), 1.0);
                     if in_body(others, at).is_none() {
-                        burn(fx, map, at, wv, dt, big);
+                        burn(fx, map, at, wv, dt, 1.0);
+                    }
+                }
+                CHARGE => {
+                    super::blast::burst_green(fx, at, ORB_BURST, false);
+                    if in_body(others, at).is_none() {
+                        burn(fx, map, at, wv, dt, 2.0);
                     }
                 }
                 // The cannon's ball ends in a Blast event (`blast.rs`).
@@ -615,14 +693,18 @@ pub fn splash(fx: &mut Fx, at: Vec3, back: Vec3, big: f32) {
         left: 0.1,
         life: 0.1,
         pos: at.into(),
-        size0: 0.25 * big,
-        size1: 0.6 * big,
+        size0: 0.2 * big,
+        size1: 0.42 * big,
         c0: ION,
         c1: [0.3, 0.8, 2.0, 0.0],
         cell: GLOW,
         ..Particle::default()
     });
-    fx.emit_tint(Layer::Arcs, (2.0 * big) as usize, at, back, Color::WHITE, 0.6 * big);
+    // A nest of filaments, where a round's own blob would be: light and lines.
+    for _ in 0..(3.0 * big) as usize {
+        let d = (back + fx.unit()).normalize_or(back);
+        fx.emit_tint(Layer::Arcs, 1, at + d * 0.08 * big, d, Color::WHITE, 0.55 * big);
+    }
     for _ in 0..(6.0 * big) as usize {
         let d = (back + fx.unit() * 0.9).normalize_or(back);
         let life = fx.range(0.12, 0.25);

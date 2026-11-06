@@ -20,7 +20,7 @@
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
 //! standing still). `truckhurt=` wears it as a hull with that share of its
 //! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
-//! blasts would.
+//! blasts would. `orb=1|2|3` stands a ball of plasma at `look` (`stand_orb`).
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -57,6 +57,32 @@ pub struct View {
     pub truck_marks: bool,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
+    /// A ball of plasma at `look`: its tone, heat and radius.
+    pub orb: Option<(u8, f32, f32)>,
+}
+
+/// A ball of plasma for the picture (`look/fx/plasma.rs`), standing at `look`:
+/// `orb=1` blue, `orb=2` green, `orb=3` pink; `heat=` 0 to 1, `orbr=` its radius.
+pub fn stand_orb(
+    mut commands: Commands,
+    pose: Res<Pose>,
+    kit: Option<Res<crate::look::fx::plasma::Kit>>,
+    mut done: Local<bool>,
+) {
+    use crate::look::fx::plasma::{spawn_ball, Tone};
+    let (Some(kit), false) = (kit, *done) else {
+        return;
+    };
+    *done = true;
+    let Some((tone, heat, radius)) = pose.2.orb else {
+        return;
+    };
+    let tone = Tone::ALL[(tone as usize).min(Tone::ALL.len() - 1)];
+    commands
+        .spawn((Transform::from_translation(pose.2.look), Visibility::default()))
+        .with_children(|c| {
+            spawn_ball(c, &kit, tone, radius, heat);
+        });
 }
 
 /// The radius of the circle a posed truck drives, metres.
@@ -117,6 +143,9 @@ impl Pose {
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
+            orb: Some(get("orb", 0.0))
+                .filter(|o| *o >= 1.0)
+                .map(|o| (o as u8 - 1, get("heat", 0.3), get("orbr", 0.15))),
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {

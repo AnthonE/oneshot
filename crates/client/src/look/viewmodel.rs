@@ -65,7 +65,8 @@
 //! ([`ViewMuzzles`], for the flash sprite); the aim we send never sees it,
 //! and the camera's kick on our shots is `shake.rs`'s, on the drawn camera.
 
-use bevy::light::NotShadowCaster;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use core::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -73,6 +74,8 @@ use sim::arms::{arm, Arm, Kind, NONE, ROCKET, SWAP_MS};
 use sim::consts::{ticks, GREN_COOL_MS, MELEE_COOL_MS, RUN, TICK_HZ};
 use sim::fighter::{Fighter, Gun};
 
+use super::fx::plasma::Kit as PlasmaKit;
+use super::fx::vent::ViewHeat;
 use super::guns::{gun, spawn_posed, view_basis, Models};
 use super::hands::{Grip, Grips};
 use super::shake::{peak_to_speed, spring};
@@ -1121,6 +1124,37 @@ fn hand(
         commands.entity(e).despawn_related::<Children>();
         if let Some((_, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
             commands.entity(scene).observe(no_shadows);
+            // A gun that runs hot wears its heat (`fx/vent.rs`).
+            if arm(want).hot() {
+                let left = v.left;
+                commands.entity(scene).observe(
+                    move |ev: On<SceneInstanceReady>,
+                          children: Query<&Children>,
+                          meshes: Query<&Mesh3d, (Without<ViewShell>, Without<ViewHeat>)>,
+                          kit: Option<Res<PlasmaKit>>,
+                          mut commands: Commands| {
+                        let Some(kit) = kit else {
+                            return;
+                        };
+                        let skin = super::fx::vent::skin_of(&kit, want);
+                        for e in children.iter_descendants(ev.entity) {
+                            if let Ok(mesh) = meshes.get(e) {
+                                commands.spawn((
+                                    mesh.clone(),
+                                    MeshMaterial3d(skin.clone()),
+                                    MeshTag(0),
+                                    Transform::IDENTITY,
+                                    Visibility::Hidden,
+                                    ViewHeat { left },
+                                    NotShadowCaster,
+                                    NotShadowReceiver,
+                                    ChildOf(e),
+                                ));
+                            }
+                        }
+                    },
+                );
+            }
         }
         v.drawn = want;
         v.kick = Spring::default();

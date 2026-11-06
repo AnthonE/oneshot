@@ -1,10 +1,16 @@
-// The sticky (look/fx/plasma.rs): a ball of plasma, no model. A sphere, its
-// silhouette boiling, flowing noise bent by more of itself with dark gaps in it,
-// thin white-hot filaments where that noise crosses its middle and a heart that
-// burns through, thinning to nothing at its edge (gas has no surface), and a
-// corona round it, all HDR for the bloom. The mesh's tag is its heat, 0 to 255:
-// how far its fuse has run. It flows faster, burns whiter and strobes as it goes.
-// Additive; WebGL2 runs it: no compute, no textures.
+// Plasma (look/fx/plasma.rs), no model, in three modes.
+//
+// A ball (a sticky, a charged bolt, the cannon's): a sphere, its silhouette
+// boiling, flowing noise bent by more of itself with dark gaps in it, thin
+// white-hot filaments where that noise crosses its middle and a heart that burns
+// through, thinning to nothing at its edge (gas has no surface).
+// A corona: the larger shell of glow round a ball.
+// A skin: a hot gun's own meshes again, a rim of light and heat crawling on it.
+//
+// All HDR for the bloom, added to what is behind. The mesh's tag is its heat, 0
+// to 255: how far its fuse has run, how full its charge, how hot the gun. Its
+// colours are the material's, white-hot inside and the colour at the rim. WebGL2
+// runs it: no compute, no textures.
 
 #import bevy_pbr::{
     mesh_functions,
@@ -12,9 +18,17 @@
     view_transformations::position_world_to_clip,
 }
 
-// x: how bright, y: how far its surface boils, as a share of its radius, z: 1
-// for its corona, the larger shell of glow round it.
-@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> knobs: vec4<f32>;
+struct Plasma {
+    // x: how bright; y: how far a ball boils, as a share of its radius, or how
+    // far a skin stands off, metres; z: 0 a ball, 1 a corona, 2 a skin; w: how
+    // fine a skin's crawl is, a metre.
+    knobs: vec4<f32>,
+    deep: vec4<f32>,
+    mid: vec4<f32>,
+    hot: vec4<f32>,
+};
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> plasma: Plasma;
 
 struct Vertex {
     @builtin(instance_index) instance_index: u32,
@@ -50,7 +64,7 @@ fn fbm(p: vec3<f32>) -> f32 {
     return noise(p) * 0.55 + noise(p * 2.03 + 11.7) * 0.3 + noise(p * 4.1 + 5.3) * 0.15;
 }
 
-// Its clock, faster as its fuse runs.
+// Its clock, faster as it heats.
 fn flow(heat: f32) -> f32 {
     return globals.time * mix(1.0, 2.6, heat);
 }
@@ -61,9 +75,15 @@ fn vertex(v: Vertex) -> Out {
     let world_from_local = mesh_functions::get_world_from_local(v.instance_index);
     let heat = f32(mesh_functions::get_tag(v.instance_index)) / 255.0;
     let t = flow(heat);
-    let boil = noise(v.position * 2.4 + vec3<f32>(0.0, t * 1.9, t * 1.3)) - 0.5;
-    // The ball's surface boils; its corona stays round, or its edge shows.
-    let p = v.position * (1.0 + (1.0 - knobs.z) * knobs.y * boil * (1.0 + heat));
+    var p = v.position;
+    if plasma.knobs.z > 1.5 {
+        // A skin stands a hair off what it is on.
+        p += v.normal * plasma.knobs.y;
+    } else if plasma.knobs.z < 0.5 {
+        // A ball's surface boils; its corona stays round, or its edge shows.
+        let boil = noise(v.position * 2.4 + vec3<f32>(0.0, t * 1.9, t * 1.3)) - 0.5;
+        p *= 1.0 + plasma.knobs.y * boil * (1.0 + heat);
+    }
     let world = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(p, 1.0));
     out.world = world.xyz;
     out.clip = position_world_to_clip(world.xyz);
@@ -78,14 +98,29 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
     let to_eye = normalize(view.world_position - in.world);
     let facing = clamp(dot(normalize(in.normal), to_eye), 0.0, 1.0);
     let t = flow(in.heat);
+    let hot2 = in.heat * in.heat;
+    let deep = plasma.deep.rgb;
+    let mid = plasma.mid.rgb;
+    let hot = plasma.hot.rgb;
 
-    // Its corona: only glow, thickest looking through the middle of the shell
+    // A skin: light at the gun's edges, and thin veins of heat crawling up its
+    // plates as it nears its limit. The gun stays a gun under it.
+    if plasma.knobs.z > 1.5 {
+        let crawl = fbm(in.local * plasma.knobs.w + vec3<f32>(0.0, -t * 1.7, t * 0.6));
+        let vein = pow(clamp(1.0 - abs(crawl * 2.0 - 1.0), 0.0, 1.0), 42.0);
+        let rim = pow(1.0 - facing, 2.8);
+        let c = mid * rim + hot * vein * 0.38 * hot2 * hot2;
+        let beat = 1.0 + hot2 * 0.3 * sin(globals.time * 31.0);
+        return vec4<f32>(c * plasma.knobs.x * in.heat * beat, 0.0);
+    }
+
+    // A corona: only glow, thickest looking through the middle of the shell
     // and gone at its edge, so it has no edge. Its veins of light drift in it.
-    if knobs.z > 0.5 {
+    if plasma.knobs.z > 0.5 {
         let drift = 0.72 + 0.56 * noise(in.local * 3.2 + vec3<f32>(t * 0.9, -t * 0.7, t * 0.5));
         let thick = pow(facing, 2.6) * drift;
-        let glow = vec3<f32>(0.05, 0.3, 1.25) + vec3<f32>(0.3, 0.45, 0.6) * in.heat * in.heat;
-        return vec4<f32>(glow * thick * knobs.x * mix(1.0, 2.2, in.heat * in.heat), 0.0);
+        let glow = mid * 1.08 + hot * 0.28 * hot2;
+        return vec4<f32>(glow * thick * plasma.knobs.x * mix(1.0, 2.2, hot2), 0.0);
     }
 
     // The flow: noise bent by more of itself, so it curls.
@@ -110,22 +145,18 @@ fn fragment(in: Out) -> @location(0) vec4<f32> {
 
     // Saturated all the way up but for the filaments: the tone curve bleaches
     // anything brighter to white, and white reads as a light bulb.
-    let deep = vec3<f32>(0.006, 0.035, 0.42);
-    let ion = vec3<f32>(0.03, 0.26, 1.15);
-    let hot = vec3<f32>(0.85, 1.25, 2.1);
-
     var c = deep * (0.8 + body * 2.4);
-    c += ion * (0.3 + body * 1.1) * core;
+    c += mid * (0.3 + body * 1.1) * core;
     c += hot * filament * (1.6 + core * 3.2);
     // A heart that burns through it.
     c += hot * pow(facing, 6.0) * 0.75;
-    // White-hot from the middle as the fuse runs out.
-    c = mix(c, hot * (0.5 + body), in.heat * in.heat * core * 0.8);
+    // White-hot from the middle as it nears its end.
+    c = mix(c, hot * (0.5 + body), hot2 * core * 0.8);
     c *= limb;
 
     // It beats, faster and harder toward the end.
-    let beat = 1.0 + (0.12 + in.heat * in.heat * 0.6) * sin(globals.time * mix(11.0, 52.0, in.heat));
-    let gain = knobs.x * mix(1.0, 2.6, in.heat * in.heat) * beat;
+    let beat = 1.0 + (0.12 + hot2 * 0.6) * sin(globals.time * mix(11.0, 52.0, in.heat));
+    let gain = plasma.knobs.x * mix(1.0, 2.6, hot2) * beat;
     // No alpha: added to what is behind it (`AlphaMode::Add`).
     return vec4<f32>(c * gain, 0.0);
 }

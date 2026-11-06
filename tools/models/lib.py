@@ -565,6 +565,30 @@ def cut_above(o, x0, x1, margin=0.004):
     o.data.update()
 
 
+def dim_paint(o, hues, k, window=24.0):
+    """The colour map's paint times `k` where its hue is within `window` degrees
+    of one of `hues` and it is saturated: a glow's paint, which reads as a flat
+    patch close up, whatever its light does."""
+    for material in o.data.materials:
+        bsdf = next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        node = bsdf.inputs['Base Color'].links[0].from_node
+        while node.type != 'TEX_IMAGE':
+            node = next(i.links[0].from_node for i in node.inputs if i.links)
+        im = node.image
+        w, h = im.size
+        px = np.empty(w * h * 4, np.float32)
+        im.pixels.foreach_get(px)
+        rgba = px.reshape(h, w, 4)
+        hue, sat, _ = _hsv(rgba[..., :3])
+        mask = np.zeros((h, w), np.float32)
+        for hx in hues:
+            d = np.abs((hue - _hue_of(hx) + 180.0) % 360.0 - 180.0)
+            mask = np.maximum(mask, _ramp(window - d, 0.0, window / 2) * _ramp(sat, 0.25, 0.45))
+        rgba[..., :3] *= (1.0 - mask * (1.0 - k))[..., None]
+        im.pixels.foreach_set(rgba.ravel())
+        im.update()
+
+
 def darken(o, k):
     """The colour map's paint times `k`, in the map itself (the glTF exporter
     drops node arithmetic)."""
