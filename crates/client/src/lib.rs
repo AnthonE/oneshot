@@ -1140,7 +1140,14 @@ fn rebuild(
     mut cloud_mats: ResMut<Assets<look::cloud_sea::CloudSeaMaterial>>,
     mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
-    mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
+    mut eye: Query<
+        (
+            &mut bevy::camera::Exposure,
+            &mut bevy::light::EnvironmentMapLight,
+            &look::rig::Fills,
+        ),
+        With<Eye>,
+    >,
     mut shade: ResMut<look::quality::MapShade>,
     mut mood: ResMut<look::mood::MoodNow>,
     fx: Option<ResMut<look::fx::Fx>>,
@@ -1170,9 +1177,9 @@ fn rebuild(
         &old,
         s.map_id,
     );
-    if let Ok((mut exposure, mut env)) = eye.single_mut() {
+    if let Ok((mut exposure, mut env, fills)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mood.mood, &mut exposure, &mut env);
+            look::rig::expose_for(&d.light, &mood.mood, fills, &mut exposure, &mut env);
         }
     }
     // Every rung's shade reaches across this map (`look/quality.rs`).

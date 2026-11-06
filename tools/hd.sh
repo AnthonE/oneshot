@@ -31,6 +31,11 @@ VIEWS=(
   "ring|map=7&eye=-6,4.5,-13&look=4,4,8|2"
   "coast|map=7&eye=36,4,-20&look=4,-16,2|2"
   "void|map=7&eye=0,1.7,-21&look=-25,-6,-60|2"
+  "hold|map=6&eye=-19,5.1,-1.5&look=0,4,0|2"
+  "pit|map=6&eye=-4.5,1.6,-5.5&look=0,4.5,1|2"
+  "topmid|map=6&eye=-2,5.1,-4.6&look=14,4,0|2"
+  "lane|map=6&eye=-15,1.6,-11&look=0,2,-8|2"
+  "door|map=6&eye=-13,1.7,0.5&look=10,2.5,-1|2"
 )
 
 if [ "${1:-}" = list ]; then
