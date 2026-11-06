@@ -54,6 +54,18 @@ pub fn ion(at: Vec3) -> Shock {
     }
 }
 
+/// Green plasma bursting: mint, `k` times the cannon's.
+pub fn mint(at: Vec3, k: f32) -> Shock {
+    Shock {
+        at,
+        left: 0.28,
+        life: 0.28,
+        r0: 0.25 * k,
+        r1: 2.6 * k,
+        color: Vec3::new(0.3, 1.0, 0.55),
+    }
+}
+
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
 pub struct ShockMaterial {
     /// rgb: the rim's colour; a: how far through its life (0 born, 1 gone).

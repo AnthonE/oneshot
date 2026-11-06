@@ -31,6 +31,8 @@ const WARM_AHEAD_M: f32 = 0.5;
 /// measured; their first 1e-4 was a visible speck).
 const WARM_SIZE_M: f32 = 0.000_02;
 
+/// The skin the warm gun wears: any but the standard look.
+const WARM_SKIN: u8 = 1;
 /// Where the warm fighter stands: far under every map.
 const UNDER_M: f32 = -500.0;
 
@@ -167,15 +169,19 @@ pub fn warm_models(
         return;
     };
     let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
-    scenes.extend([models.rocket.clone(), models.frag.clone(), models.body_scene.clone()]);
+    scenes.extend([models.rocket.clone(), models.frag.clone()]);
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
-    if !scenes.iter().all(settled) || !settled(&models.truck) {
+    let body = matches!(
+        assets.load_state(&models.body),
+        LoadState::Loaded | LoadState::Failed(_)
+    );
+    if !body || !scenes.iter().all(settled) || !settled(&models.truck) {
         return;
     }
     *done = true;
     // A plasma ball: its pipeline is built before the first one is thrown.
     if let Some(kit) = plasma {
-        for material in [&kit.material, &kit.corona] {
+        for material in kit.all() {
             commands.entity(eye).with_child((
                 Warming(WARM_FRAMES),
                 SceneDone,
@@ -194,24 +200,36 @@ pub fn warm_models(
         .spawn((Warming(WARM_FRAMES), small, Visibility::default(), ChildOf(eye)))
         .id();
     super::truck::spawn(&mut commands, &models, truck);
-    for scene in scenes.iter().take(scenes.len() - 1) {
+    let done = |ev: On<SceneInstanceReady>, mut commands: Commands| {
+        commands.entity(ev.entity).insert(SceneDone);
+    };
+    for scene in &scenes {
         commands
             .spawn((Warming(WARM_FRAMES), SceneRoot(scene.clone()), at(), ChildOf(eye)))
-            .observe(|ev: On<SceneInstanceReady>, mut commands: Commands| {
-                commands.entity(ev.entity).insert(SceneDone);
-            });
+            .observe(done);
+    }
+    // One gun in a coat: every coat is the one pipeline.
+    if let Some(scene) = models.guns.get(sim::arms::AR as usize).cloned().flatten() {
+        let coated = commands
+            .spawn((Warming(WARM_FRAMES), SceneRoot(scene), at(), ChildOf(eye)))
+            .observe(done)
+            .id();
+        super::gun_skin::wear(&mut commands, coated, WARM_SKIN, sim::arms::AR);
     }
     // Far under the map at full size: a body's meshes and shells are never
     // culled (`bodies::dress`), so it is queued, shadow and all, where
     // neither it nor its shadow (cast down, away from the floor) can be
     // seen. In front of the eye, however small, its shell (pushed out along
     // the normals by a fixed distance, `shield.wgsl`) would be a disc.
-    // In an emblem, so the paint's first mask is baked here too.
+    // In an emblem, so the paint's first mask is baked here too, and the
+    // gear, so its maps are in before anyone wears it.
     let look = proto::Look {
         skin: 0,
         emblem: proto::emblem(1, 1, 0, 4),
+        headwear: 1,
+        footwear: 1,
     };
-    let body = super::bodies::spawn(&mut commands, &models, 0, look);
+    let body = super::bodies::spawn(&mut commands, 0, look);
     commands
         .entity(body)
         .insert((Warming(WARM_FRAMES), WarmBody, Transform::from_xyz(0.0, UNDER_M, 0.0)));

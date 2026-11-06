@@ -60,7 +60,7 @@ pub const CASCADE_OVERLAP: f32 = 0.2;
 /// hull's colour, this much a metre squared, so the near wall is clear
 /// and the far end of the hall softens. Post-exposure, before the tonemap.
 pub const HALL_HAZE: [f32; 3] = [0.07, 0.04, 0.12];
-pub const HALL_HAZE_DENSITY: f32 = 0.015;
+pub const HALL_HAZE_DENSITY: f32 = 0.03;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
@@ -74,6 +74,15 @@ pub const SKY_LIFT: f32 = 0.42;
 /// blue (1: the air's scatter as it is, haze and all, which lifted the sky
 /// to a pale lavender; the references' is a deep clear blue).
 pub const SKY_LIFT_SATURATION: f32 = 1.9;
+
+/// The camera's two fills: the sky's (outdoors) and a hall's (a roofed
+/// map, `fill::hall`), each a diffuse and a specular cube; [`expose_for`]
+/// hands the map's to the camera.
+#[derive(Component, Clone)]
+pub struct Fills {
+    pub sky: Handle<Image>,
+    pub hall: (Handle<Image>, Handle<Image>),
+}
 
 /// The world's camera, whatever else marks it: what the graphics tier
 /// (`quality::apply`) and the render scale (`render_scale.rs`) dress.
@@ -142,10 +151,16 @@ pub fn camera<M: Component>(
     marker: M,
 ) -> Entity {
     let fill = images.add(super::fill::cubemap(super::fill::FILL_FACE));
+    let (hall_d, hall_s) = super::fill::hall::cubemaps();
+    let fills = Fills {
+        sky: fill.clone(),
+        hall: (images.add(hall_d), images.add(hall_s)),
+    };
     let eye = commands
         .spawn((
             marker,
             EyeCam,
+            fills,
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
                 fov: fov_tall(FOV_DEG).to_radians(),
@@ -199,18 +214,32 @@ pub fn camera<M: Component>(
 
 /// The map's exposure and sky fill: the mood's, under the map's own
 /// `sim::map::LightDef` (an interior is exposed for its lamps, its fill
-/// turned down under its roof).
+/// turned down under its roof, and its fill its hall's, not the sky's).
 pub fn expose_for(
     light: &sim::map::LightDef,
     mood: &super::mood::Mood,
+    fills: &Fills,
     exposure: &mut Exposure,
     env: &mut EnvironmentMapLight,
 ) {
+    let roofed = light.sun <= 0.0;
+    let (d, s) = if roofed {
+        fills.hall.clone()
+    } else {
+        (fills.sky.clone(), fills.sky.clone())
+    };
+    if env.diffuse_map != d {
+        env.diffuse_map = d;
+    }
+    if env.specular_map != s {
+        env.specular_map = s;
+    }
     let ev = if light.ev100 > 0.0 { light.ev100 } else { mood.ev100 };
     if exposure.ev100 != ev {
         exposure.ev100 = ev;
     }
-    let fill = super::fill::peak_lux() * light.fill * mood.fill;
+    let gain = if roofed { super::fill::hall::GAIN } else { 1.0 };
+    let fill = super::fill::peak_lux() * light.fill * mood.fill * gain;
     if env.intensity != fill {
         env.intensity = fill;
     }

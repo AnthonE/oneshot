@@ -22,4 +22,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('smg', 0.55, hold=0.43, flip=True, glow=['#49b8ff'])
+temper(gun)
 finish('smg', [gun], grip=0.23, rise=rise, long=True, note='compact: folding stock bar, stick mag, low display sight')

@@ -87,12 +87,12 @@ async fn stand_in(old: bool) -> (String, Seen) {
                     seen.lock().unwrap().push((first, headers, body));
                     (200, r#"{"ok":true}"#.to_string())
                 } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
-                    // The first wallet owns the ember skin, the second the
-                    // gilded one; nobody else owns any.
+                    // The first wallet owns the ember skin and the shades, the
+                    // second the gilded one and the boots; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
-                        r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"}]"#
+                        r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"},{"token_id":3,"catalog_id":201,"catalog_name":"Shades"}]"#
                     } else if first.contains(WALLETS[1]) {
-                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"}]"#
+                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"},{"token_id":4,"catalog_id":202,"catalog_name":"Boots"}]"#
                     } else {
                         "[]"
                     };
@@ -200,6 +200,8 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) ->
         emblem: look.emblem,
         party: 0,
         stamp: sim::STAMP,
+        headwear: look.headwear,
+        footwear: look.footwear,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
@@ -302,11 +304,32 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     // Each asks for a skin it owns: the first's floor is at ember's line, the
     // second's is under gilded's (rank-locked), so it plays in the standard look.
     // And an emblem: the first asks for the crown, locked at 1800, which its
-    // 1350 doesn't reach; the second for a free star.
+    // 1350 doesn't reach; the second for a free star. Both ask for the
+    // shades and the boots, and each wears only the gear it owns.
     let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
     let (a, b) = tokio::join!(
-        play_as(&h, &p0, MODE_DUEL, proto::Look { skin: 2, emblem: crown }),
-        play_as(&h, &p1, MODE_DUEL, proto::Look { skin: 5, emblem: star })
+        play_as(
+            &h,
+            &p0,
+            MODE_DUEL,
+            proto::Look {
+                skin: 2,
+                emblem: crown,
+                headwear: 1,
+                footwear: 1,
+            }
+        ),
+        play_as(
+            &h,
+            &p1,
+            MODE_DUEL,
+            proto::Look {
+                skin: 5,
+                emblem: star,
+                headwear: 1,
+                footwear: 1,
+            }
+        )
     );
     let (online, status) = watcher.await.unwrap().expect("online.json listed both players");
     let mut listed: Vec<&str> = online["online"]
@@ -331,6 +354,17 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
             _ => None,
         })
     };
+    let gear_of = |got: &[Msg], who: u8| {
+        got.iter().rev().find_map(|m| match m {
+            Msg::Seat {
+                slot,
+                headwear,
+                footwear,
+                ..
+            } if *slot == who => Some((*headwear, *footwear)),
+            _ => None,
+        })
+    };
     let emblem_of = |got: &[Msg], who: u8| {
         got.iter().rev().find_map(|m| match m {
             Msg::Seat { slot, emblem, .. } if *slot == who => Some(*emblem),
@@ -346,6 +380,16 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         );
         assert_eq!(emblem_of(got, sb), Some(star), "a free emblem, seen by both");
         assert_eq!(skin_of(got, sa), Some(2), "the owned skin, seen by both");
+        assert_eq!(
+            gear_of(got, sa),
+            Some((1, proto::GEAR_NONE)),
+            "the first owns the shades only"
+        );
+        assert_eq!(
+            gear_of(got, sb),
+            Some((proto::GEAR_NONE, 1)),
+            "the second the boots only"
+        );
         assert_eq!(
             skin_of(got, sb),
             Some(proto::SKIN_STANDARD),

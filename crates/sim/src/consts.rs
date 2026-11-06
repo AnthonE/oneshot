@@ -328,8 +328,15 @@ pub const ENTER_R: f32 = 3.6;
 /// lethal, below it scaled.
 pub const SPLAT_SPEED: f32 = 5.0;
 pub const SPLAT_KILL: f32 = 11.0;
-/// How much of a blast's push a vehicle takes.
-pub const VEH_PUSH_K: f32 = 0.3;
+/// How much of a blast's push a vehicle takes along the ground, and the
+/// speed up off its wheels it is thrown at (m/s), each at full strength
+/// from a charge of `VEH_LIFT_DMG` or more (a rocket's: a hit beside it
+/// throws it about 3 m up and 9 m off, a second and a half in the air); a
+/// smaller one's less. Never faster up than `VEH_LIFT_MAX`.
+pub const VEH_PUSH_K: f32 = 0.7;
+pub const VEH_BLAST_LIFT: f32 = 8.5;
+pub const VEH_LIFT_DMG: i32 = 230;
+pub const VEH_LIFT_MAX: f32 = 12.0;
 
 // Capture the Flag.
 /// How near (flat) a fighter must come to a flag to take, return or score
