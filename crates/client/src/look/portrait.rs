@@ -85,8 +85,8 @@ const ARM: u8 = sim::arms::AR;
 /// and those lights, lux there: key high on the camera's left, a cool weak
 /// fill from the right, a warm rim from behind that pulls him off a dark
 /// title. Scaled to the world's exposure here.
-const GATES_EV100: f32 = 9.7;
-const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
+pub(super) const GATES_EV100: f32 = 9.7;
+pub(super) const LIGHTS: [(f32, [f32; 3], Vec3); 3] = [
     (3_400.0, [1.0, 1.0, 1.0], Vec3::new(-0.7, 1.0, 0.8)),
     (900.0, [0.80, 0.86, 1.0], Vec3::new(1.0, 0.3, 0.5)),
     (2_400.0, [1.0, 0.86, 0.66], Vec3::new(0.4, 0.7, -1.0)),

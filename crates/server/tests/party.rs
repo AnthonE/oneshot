@@ -158,6 +158,13 @@ async fn a_party_talks_lands_together_and_survives_a_reload() {
     let c = lobby(&h, "charlie", "", 0).await;
     let pc = party(&c, 1).await;
     assert_ne!(pc.code, pa.code);
+    // A guest owns nothing: the armory says so.
+    let worn = until(&c, |m| match m {
+        Msg::Wardrobe(d) => Some(*d),
+        _ => None,
+    })
+    .await;
+    assert_eq!(worn, proto::Wardrobe::BARE);
 
     // Voice: the party hears it, under the talker's tag; nobody else does,
     // and a packet that isn't one 20 ms frame goes nowhere.

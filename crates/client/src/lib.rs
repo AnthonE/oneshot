@@ -565,6 +565,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::viewmodel::kit,
             look::counter::setup,
             look::icons::setup.after(look::guns::load),
+            look::thumbs::setup.after(look::guns::load),
             arms_setup
                 .after(setup)
                 .after(look::guns::load)
@@ -717,7 +718,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .before(bevy::transform::TransformSystems::Propagate),
     )
     // Our own hands in view, onto the guns as `draw_view` posed them.
-    .add_systems(Update, look::icons::develop)
+    .add_systems(Update, (look::icons::develop, look::thumbs::develop))
     .add_systems(
         PostUpdate,
         look::hands::pose.before(bevy::transform::TransformSystems::Propagate),

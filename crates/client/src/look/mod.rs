@@ -52,6 +52,7 @@ pub mod shot;
 pub mod sky;
 pub mod stars;
 pub mod textures;
+pub mod thumbs;
 pub mod trees;
 pub mod truck;
 pub mod turret;

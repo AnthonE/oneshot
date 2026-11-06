@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 28;
+pub const PROTO_VER: u16 = 29;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -1445,7 +1445,67 @@ pub enum Msg {
         from: Name,
         code: u32,
     },
+    /// Server → a lobby, on joining and on signing in: what its wallet
+    /// owns and its rating floor, so the armory can say what it may wear.
+    /// The server still checks every hello (`server::net`); this only
+    /// shows it.
+    Wardrobe(Wardrobe),
 }
+
+/// What a lobby's wallet owns ([`Msg::Wardrobe`]): a bit an item, by the id
+/// the wire carries ([`SKINS`], [`HEADWEAR`], [`FOOTWEAR`]); the standard
+/// look and no gear are everyone's, so their bits are always set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wardrobe {
+    /// A wallet is signed in (false: a guest, or a pass without one, who
+    /// wears the standard look and no gear).
+    pub wallet: bool,
+    /// Elo Pros answered the items list (false: we couldn't ask).
+    pub known: bool,
+    pub skins: u32,
+    pub headwear: u32,
+    pub footwear: u32,
+    /// The wallet's floor (`SKIN_FLOOR`'s scale), if it is rated.
+    pub floor: Option<u16>,
+}
+
+impl Wardrobe {
+    /// Owns nothing: the standard look and no gear.
+    pub const BARE: Wardrobe = Wardrobe {
+        wallet: false,
+        known: true,
+        skins: 1,
+        headwear: 1,
+        footwear: 1,
+        floor: None,
+    };
+
+    /// Item `i` of a list (`skins`, `headwear` or `footwear`) is owned.
+    pub const fn has(mask: u32, i: u8) -> bool {
+        i == 0 || (i < 32 && mask & (1 << i) != 0)
+    }
+
+    /// The masks from a list of item names (a server's items answer).
+    pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> (u32, u32, u32) {
+        let bit = |list: &[&str], n: &str| list.iter().position(|s| *s == n).map_or(0, |i| 1u32 << i);
+        let (mut s, mut h, mut f) = (1, 1, 1);
+        for n in names {
+            s |= bit(&SKINS, n);
+            h |= bit(&HEADWEAR, n);
+            f |= bit(&FOOTWEAR, n);
+        }
+        (s, h, f)
+    }
+
+    /// May wear skin `i`: owned and at its line.
+    pub fn may_wear_skin(&self, i: u8) -> bool {
+        let line = SKIN_FLOOR.get(i as usize).copied().unwrap_or(u16::MAX);
+        Self::has(self.skins, i) && (line == 0 || self.floor.is_some_and(|f| f >= line))
+    }
+}
+
+// Every list's items fit a wardrobe's masks.
+const _: () = assert!(SKINS.len() <= 32 && HEADWEAR.len() <= 32 && FOOTWEAR.len() <= 32);
 
 /// The commitment to a match's salt: SHA-256 of its two words, little-endian.
 pub fn salt_commit(salt: [u64; 2]) -> [u8; 32] {
@@ -1759,6 +1819,18 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_name(&mut w, from)?;
             w.write(*code, party::CODE_BITS)?;
         }
+        Msg::Wardrobe(d) => {
+            w.write(24, 8)?;
+            w.write_bit(d.wallet)?;
+            w.write_bit(d.known)?;
+            w.write(d.skins, 32)?;
+            w.write(d.headwear, 32)?;
+            w.write(d.footwear, 32)?;
+            w.write_bit(d.floor.is_some())?;
+            if let Some(f) = d.floor {
+                w.write(f as u32, 16)?;
+            }
+        }
     }
     Ok(w.finish())
 }
@@ -2001,6 +2073,14 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             from: r_name(&mut r)?,
             code: r.read(party::CODE_BITS)?,
         },
+        24 => Msg::Wardrobe(Wardrobe {
+            wallet: r.read_bit()?,
+            known: r.read_bit()?,
+            skins: r.read(32)?,
+            headwear: r.read(32)?,
+            footwear: r.read(32)?,
+            floor: if r.read_bit()? { Some(r.read(16)? as u16) } else { None },
+        }),
         _ => return Err(WireError::Malformed),
     };
     done(&r)?;

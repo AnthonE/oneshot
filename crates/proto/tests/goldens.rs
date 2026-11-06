@@ -388,6 +388,14 @@ fn msgs() -> Vec<Msg> {
             from: Name::new("arbiter"),
             code: 0x2aaa_aaaa,
         },
+        Msg::Wardrobe(Wardrobe {
+            wallet: true,
+            known: true,
+            skins: 0b10_0101,
+            headwear: 0b11,
+            footwear: 1,
+            floor: Some(1612),
+        }),
     ]
 }
 
@@ -498,7 +506,7 @@ fn stream_messages_round_trip() {
     for m in msgs() {
         let mut buf = [0u8; MAX_STREAM_MSG];
         let n = encode_msg(&m, &mut buf).unwrap();
-        assert_eq!(decode_msg(&buf[..n]).unwrap(), m);
+        assert_eq!(decode_msg(&buf[..n]).unwrap_or_else(|e| panic!("{m:?}: {e:?}")), m);
     }
 }
 
@@ -585,12 +593,12 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0xde06_a479_afb3_a3f2,
-        0x48df_89db_e731_9992,
-        0xc9e7_7867_65d8_6bf6,
+        0x5ce9_6b87_c1a0_92e3,
+        0x973c_a470_aea6_5075,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x96f2_91d2_4185_ba95,
+        0x2be4_5209_424b_07ba,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -612,6 +620,7 @@ fn the_bytes_match_their_goldens() {
         0x6c87_7218_bf71_5473,
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
+        0x451f_c0f0_80a6_2b96,
         0x547f_b8fe_3513_fdb0,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
