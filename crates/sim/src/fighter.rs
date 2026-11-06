@@ -38,6 +38,48 @@ impl Gun {
     }
 }
 
+/// A vehicle's turret as its gunner works it (`vehicle::turret`): the
+/// barrels' spin (ticks of the gun's `spin_ms`), its heat (1/128 %, as a hot
+/// gun's), ticks till it may fire again, and whether it is venting from
+/// full (when it may not). The gunner's own, so it predicts it; off the
+/// turret it spins down and cools as it would on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mount {
+    pub spin: u16,
+    pub heat: u16,
+    pub refire: u16,
+    pub vent: bool,
+}
+
+impl Mount {
+    /// One tick of turret `kind` (`vehicle::NO_TURRET`: not on one), the
+    /// trigger `held`: whether a round left it.
+    pub fn step(&mut self, kind: u8, held: bool) -> bool {
+        let a = crate::vehicle::turret(kind).map_or(&crate::arms::MINIGUN, |t| t.0);
+        dec(&mut self.refire);
+        let pulled = kind != crate::vehicle::NO_TURRET && held && !self.vent;
+        let full = ticks(a.spin_ms) as u16;
+        self.spin = if pulled {
+            (self.spin + 1).min(full)
+        } else {
+            self.spin.saturating_sub(1)
+        };
+        if self.vent {
+            self.heat = self.heat.saturating_sub(a.heat_vent);
+            self.vent = self.heat > 0;
+        } else {
+            self.heat = self.heat.saturating_sub(a.heat_cool);
+        }
+        if !pulled || self.spin < full || self.refire > 0 {
+            return false;
+        }
+        self.refire = ticks(a.refire_ms) as u16;
+        self.heat = self.heat.saturating_add(a.heat_shot.saturating_mul(128)).min(HEAT_FULL);
+        self.vent = self.heat >= HEAT_FULL;
+        true
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fighter {
     /// The seat is taken.
@@ -116,6 +158,8 @@ pub struct Fighter {
     /// again ([`FALL_CREDIT_MS`]). The world's.
     pub hurt_by: u8,
     pub hurt_t: u16,
+    /// The turret it guns, or last gunned.
+    pub mount: Mount,
 }
 
 /// What a fighter's own tick did, for the world (or the prediction's
@@ -137,6 +181,8 @@ pub struct Local {
     pub use_pad: bool,
     /// A carrier let go of the flag (SWAP, while carrying).
     pub drop_flag: bool,
+    /// A round left the turret it guns (`shots` already counts it).
+    pub mounted: bool,
 }
 
 impl Fighter {
@@ -188,6 +234,18 @@ impl Fighter {
         (self.ride != 0).then(|| ((self.ride as usize - 1) / 2, (self.ride as usize - 1) % 2))
     }
 
+    /// The turret it guns (a passenger's seat on a vehicle that has one,
+    /// by the map's spawn: vehicle `i` is the map's `i`), not carrying a
+    /// flag; `vehicle::NO_TURRET` if none.
+    pub fn gunning(&self, map: &Map) -> u8 {
+        match self.riding() {
+            Some((i, crate::vehicle::PASSENGER)) if !self.flag => {
+                map.vehicles.get(i).map_or(crate::vehicle::NO_TURRET, |d| d.turret)
+            }
+            _ => crate::vehicle::NO_TURRET,
+        }
+    }
+
     /// The `ride` value for `seat` of vehicle `vehicle`.
     pub fn ride_of(vehicle: usize, seat: usize) -> u8 {
         (vehicle * 2 + seat + 1) as u8
@@ -234,6 +292,7 @@ impl Fighter {
         self.charging = false;
         self.camo = 0;
         self.flare = 0;
+        self.mount = Mount::default();
     }
 
     /// One tick of this fighter in a match `phase`: what the browser runs to
@@ -256,7 +315,7 @@ impl Fighter {
     /// One tick of this fighter's own state under `inp` (already
     /// sanitized). Deterministic in (self, inp, map) alone. A rider doesn't
     /// walk (the world puts it at its seat); a driver doesn't fight, a
-    /// passenger only shoots.
+    /// passenger only shoots, and a gunner only fires its turret.
     pub fn step_local(&mut self, inp: &Input, map: &Map) -> Local {
         let mut out = Local::default();
         if !self.active() {
@@ -271,7 +330,10 @@ impl Fighter {
             let pace = if self.flag { FLAG_PACE } else { 1.0 };
             movement::step_paced(&mut self.body, inp, map, pace);
         }
-        let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag;
+        let gunning = self.gunning(map);
+        let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag && gunning == crate::vehicle::NO_TURRET;
+        out.mounted = self.mount.step(gunning, inp.held(FIRE));
+        self.shots = self.shots.wrapping_add(out.mounted as u32);
         let on_foot = seat.is_none();
 
         let mut spare = (0u8, 0u16);
@@ -598,6 +660,14 @@ impl Thing for Fighter {
             h.u8(0xF2);
             h.u8(self.hurt_by);
             h.u16(self.hurt_t);
+        }
+        // Only once it has gunned a turret.
+        if self.mount != Mount::default() {
+            h.u8(0xF3);
+            h.u16(self.mount.spin);
+            h.u16(self.mount.heat);
+            h.u16(self.mount.refire);
+            h.bool(self.mount.vent);
         }
     }
 }

@@ -335,8 +335,9 @@ impl Medals {
             match e.kind {
                 Ev::Shot => {
                     blast = None;
+                    // A gun's arm id, or a turret's cause: a round all the same.
                     let id = e.c as u8;
-                    let hitscan = arm(id).kind == ArmKind::Hitscan;
+                    let hitscan = sim::arms::fired(e.c).is_some_and(|a| a.kind == ArmKind::Hitscan);
                     round[a] = hitscan.then_some(id);
                     let s = &mut self.seats[a];
                     if hitscan {

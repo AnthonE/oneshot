@@ -186,7 +186,15 @@ fn snapshot() -> Snapshot {
         seats: [0, 1],
         respawn: 0,
         home: 2,
+        turret: sim::vehicle::MINIGUN,
     });
+    // Gunning its minigun.
+    s.own.mount = sim::fighter::Mount {
+        spin: 45,
+        heat: 3000,
+        refire: 4,
+        vent: false,
+    };
     s.n_vehicles = 1;
     s.vehicles[0] = VehState {
         slot: 5,
@@ -576,13 +584,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0x6e38_c4b5_9200_3873,
-        0x8d65_ab7c_73f8_4251,
-        0x78c0_ea04_7bec_a55f,
+        0xde06_a479_afb3_a3f2,
+        0x48df_89db_e731_9992,
+        0xc9e7_7867_65d8_6bf6,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0xdc4a_71af_e7d8_b744,
+        0x96f2_91d2_4185_ba95,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,

@@ -18,14 +18,14 @@ pub mod voice;
 use bits::{BitReader, BitWriter, WireError};
 use party::{Party, PlayerId};
 use sim::consts::MAX_FIGHTERS;
-use sim::fighter::{Fighter, Gun};
+use sim::fighter::{Fighter, Gun, Mount};
 use sim::geom::V3;
 use sim::input::{Input, BUTTONS, BUTTON_BITS};
 use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 27;
+pub const PROTO_VER: u16 = 28;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -517,8 +517,15 @@ fn w_vehicle(w: &mut BitWriter, v: &Vehicle) -> R<()> {
         w.write(s as u32, SLOT_BITS + 1)?;
     }
     w.write(v.respawn, 32)?;
-    w.write(v.home as u32, 8)
+    w.write(v.home as u32, 8 - TURRET_BITS)?;
+    w.write(v.turret as u32, TURRET_BITS)
 }
+
+/// A hull's turret kind (`sim::vehicle::TURRETS`), in the byte its home
+/// had to itself.
+const TURRET_BITS: u32 = 2;
+const _: () = assert!((sim::vehicle::TURRETS as u32) <= 1 << TURRET_BITS);
+const _: () = assert!(sim::consts::MAX_VEHICLES <= 1 << (8 - TURRET_BITS));
 
 fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     let active = r.read_bit()?;
@@ -537,7 +544,11 @@ fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
         *s = r.read(SLOT_BITS + 1)? as u8;
     }
     v.respawn = r.read(32)?;
-    v.home = r.read(8)? as u8;
+    v.home = r.read(8 - TURRET_BITS)? as u8;
+    v.turret = r.read(TURRET_BITS)? as u8;
+    if v.turret >= sim::vehicle::TURRETS {
+        return Err(WireError::Malformed);
+    }
     Ok(v)
 }
 
@@ -712,28 +723,56 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
     w.write(f.reload as u32, 16)?;
     w.write(f.burst_left as u32, 8)?;
     w.write(f.burst_gap as u32, 16)?;
-    w.write(f.melee_cool as u32, 16)?;
+    w.write(f.melee_cool as u32, COOL_BITS)?;
     w.write(f.charge as u32, 16)?;
-    w.write(f.gren_cool as u32, 16)?;
-    w.write(f.grenades as u32, 8)?;
+    w.write(f.gren_cool as u32, COOL_BITS)?;
+    w.write(f.grenades as u32, GREN_BITS)?;
     w.write(f.shots, 32)?;
     w.write(f.last_buttons as u32, 16)?;
     w.write(f.respawn as u32, 16)?;
     w.write(f.kills as u32, 16)?;
     w.write(f.deaths as u32, 16)?;
-    w.write(f.ride as u32, 8)?;
+    w.write(f.ride as u32, RIDE_BITS)?;
     w_gun(w, &f.left)?;
     w.write(f.left_refire as u32, 16)?;
     w.write(f.left_reload as u32, 16)?;
     w.write(f.left_charge as u32, 16)?;
-    w.write(f.stickies as u32, 8)?;
+    w.write(f.stickies as u32, GREN_BITS)?;
     w.write(f.gren_kind as u32, 1)?;
     w.write_bit(f.charging)?;
     // Camouflage's 45 s and its 1.2 s flare, in ticks, with room.
     w.write(f.camo.min(CAMO_TICKS_MAX) as u32, 14)?;
     w.write(f.flare.min(u8::MAX as u16) as u32, 8)?;
-    w.write_bit(f.flag)
+    w.write_bit(f.flag)?;
+    // The turret it guns: a bit, then its state only if any.
+    let m = f.mount;
+    w.write_bit(m != Mount::default())?;
+    if m != Mount::default() {
+        w.write(m.spin as u32, MOUNT_TICK_BITS)?;
+        w.write(m.heat as u32, HEAT_BITS)?;
+        w.write(m.refire as u32, MOUNT_TICK_BITS)?;
+        w.write_bit(m.vent)?;
+    }
+    Ok(())
 }
+
+/// Grenades of a kind carried, to `GREN_MAX`; a seat in a vehicle (its
+/// slot × 2 + the seat, plus 1).
+const GREN_BITS: u32 = 3;
+/// A melee's and a throw's cooldown, in ticks.
+const COOL_BITS: u32 = 8;
+const _: () = assert!(sim::consts::ticks(sim::consts::MELEE_COOL_MS) < 1 << COOL_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::GREN_COOL_MS) < 1 << COOL_BITS);
+const RIDE_BITS: u32 = 5;
+const _: () = assert!((sim::consts::GREN_MAX as u32) < 1 << GREN_BITS);
+const _: () = assert!(2 * sim::consts::MAX_VEHICLES < 1 << RIDE_BITS);
+
+/// A turret's spin and refire in ticks, and its heat (1/128 %, to full).
+const MOUNT_TICK_BITS: u32 = 6;
+const HEAT_BITS: u32 = 14;
+const _: () = assert!(sim::consts::ticks(sim::arms::MINIGUN.spin_ms) < 1 << MOUNT_TICK_BITS);
+const _: () = assert!(sim::consts::ticks(sim::arms::MINIGUN.refire_ms) < 1 << MOUNT_TICK_BITS);
+const _: () = assert!((sim::arms::HEAT_FULL as u32) < 1 << HEAT_BITS);
 
 fn w_gun(w: &mut BitWriter, g: &Gun) -> R<()> {
     w.write(g.arm as u32, 4)?;
@@ -792,16 +831,16 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.reload = r.read(16)? as u16;
     f.burst_left = r.read(8)? as u8;
     f.burst_gap = r.read(16)? as u16;
-    f.melee_cool = r.read(16)? as u16;
+    f.melee_cool = r.read(COOL_BITS)? as u16;
     f.charge = r.read(16)? as u16;
-    f.gren_cool = r.read(16)? as u16;
-    f.grenades = r.read(8)? as u8;
+    f.gren_cool = r.read(COOL_BITS)? as u16;
+    f.grenades = r.read(GREN_BITS)? as u8;
     f.shots = r.read(32)?;
     f.last_buttons = r.read(16)? as u16;
     f.respawn = r.read(16)? as u16;
     f.kills = r.read(16)? as u16;
     f.deaths = r.read(16)? as u16;
-    f.ride = r.read(8)? as u8;
+    f.ride = r.read(RIDE_BITS)? as u8;
     if f.ride as usize > 2 * sim::consts::MAX_VEHICLES {
         return Err(WireError::Malformed);
     }
@@ -809,12 +848,20 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     f.left_refire = r.read(16)? as u16;
     f.left_reload = r.read(16)? as u16;
     f.left_charge = r.read(16)? as u16;
-    f.stickies = r.read(8)? as u8;
+    f.stickies = r.read(GREN_BITS)? as u8;
     f.gren_kind = r.read(1)? as u8;
     f.charging = r.read_bit()?;
     f.camo = r.read(14)? as u16;
     f.flare = r.read(8)? as u16;
     f.flag = r.read_bit()?;
+    if r.read_bit()? {
+        f.mount = Mount {
+            spin: r.read(MOUNT_TICK_BITS)? as u16,
+            heat: r.read(HEAT_BITS)? as u16,
+            refire: r.read(MOUNT_TICK_BITS)? as u16,
+            vent: r.read_bit()?,
+        };
+    }
     Ok(f)
 }
 

@@ -6,7 +6,14 @@
 //! (`World::step`); driving is [`Vehicle::step_local`], what a driver's
 //! client predicts, reading only the vehicle, the driver's input and the
 //! map.
+//!
+//! A truck may carry a turret on its bed (the map says which: [`turret`]).
+//! Then its passenger is its gunner: it fires the turret, never its own
+//! guns. The turret's spin and heat are the gunner's (`Fighter::mount`), so
+//! a gunner predicts them as it does its own gun; where it points is where
+//! the gunner aims.
 
+use crate::arms::Arm;
 use crate::consts::*;
 use crate::fmath::{self, fabs};
 use crate::geom::{ray_aabb, yaw_sincos, Aabb, V3};
@@ -20,6 +27,21 @@ use crate::thing::Thing;
 /// Seats: the driver, then the passenger.
 pub const DRIVER: usize = 0;
 pub const PASSENGER: usize = 1;
+
+/// What a truck's bed carries (`VehicleSpawn::turret`): nothing, its
+/// passenger fighting with its own guns; or a turret its gunner fires.
+pub const NO_TURRET: u8 = 0;
+pub const MINIGUN: u8 = 1;
+/// Turret kinds, nothing among them.
+pub const TURRETS: u8 = 2;
+
+/// A turret's gun, and the cause its shots and kills carry.
+pub fn turret(kind: u8) -> Option<(&'static Arm, u16)> {
+    match kind {
+        MINIGUN => Some((&crate::arms::MINIGUN, crate::events::Cause::Minigun as u16)),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vehicle {
@@ -37,6 +59,8 @@ pub struct Vehicle {
     pub respawn: u32,
     /// Its spawn on the map (`Map::vehicles`).
     pub home: u8,
+    /// What its bed carries: [`NO_TURRET`], or a turret's kind.
+    pub turret: u8,
 }
 
 impl Thing for Vehicle {
@@ -55,12 +79,18 @@ impl Thing for Vehicle {
         h.u8(self.seats[1]);
         h.u32(self.respawn);
         h.u8(self.home);
+        // Only on a hull that has one, so a map without hashes as it did.
+        if self.turret != NO_TURRET {
+            h.u8(0xF1);
+            h.u8(self.turret);
+        }
     }
 }
 
 impl Vehicle {
-    /// New at `pos` facing `yaw`, whole and empty.
-    pub fn new(pos: V3, yaw: u16, home: u8) -> Vehicle {
+    /// New at `pos` facing `yaw`, whole and empty, its bed carrying
+    /// `turret`.
+    pub fn new(pos: V3, yaw: u16, home: u8, turret: u8) -> Vehicle {
         Vehicle {
             active: true,
             pos,
@@ -68,8 +98,20 @@ impl Vehicle {
             grounded: true,
             health: VEH_HEALTH,
             home,
+            turret,
             ..Vehicle::default()
         }
+    }
+
+    /// Where its turret's barrels pivot, in the world.
+    pub fn pivot(&self) -> V3 {
+        let (f, _) = self.axes();
+        self.pos + f * TURRET_X + V3::new(0.0, TURRET_Y, 0.0)
+    }
+
+    /// Where a turret aimed along unit `dir` fires from.
+    pub fn muzzle(&self, dir: V3) -> V3 {
+        self.pivot() + dir * TURRET_REACH
     }
 
     /// Forward and right, flat.
@@ -84,11 +126,14 @@ impl Vehicle {
     }
 
     /// Where a fighter in `seat` is (its feet), by the hull: the driver
-    /// in the cab's left seat, the passenger standing in the bed.
+    /// in the cab's left seat, the passenger standing in the bed (behind
+    /// the turret's post, if it has one).
     pub fn mount(&self, seat: usize) -> V3 {
         let (f, r) = self.axes();
         let at = if seat == DRIVER {
             self.pos + f * 0.45 + r * -0.45 + V3::new(0.0, 0.4, 0.0)
+        } else if self.turret != NO_TURRET {
+            self.pos + f * TURRET_GUNNER_X + V3::new(0.0, 0.9, 0.0)
         } else {
             self.pos + f * -1.7 + V3::new(0.0, 0.9, 0.0)
         };

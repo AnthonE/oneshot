@@ -337,6 +337,13 @@ pub const VEH_PUSH_K: f32 = 0.7;
 pub const VEH_BLAST_LIFT: f32 = 8.5;
 pub const VEH_LIFT_DMG: i32 = 230;
 pub const VEH_LIFT_MAX: f32 = 12.0;
+/// A turret on the bed (`vehicle::turret`): its post's pivot, this far aft
+/// of the middle and this high off the ground; its gunner standing behind
+/// it, this far aft; its muzzle this far out along the aim from the pivot.
+pub const TURRET_X: f32 = -1.45;
+pub const TURRET_Y: f32 = 2.05;
+pub const TURRET_GUNNER_X: f32 = -2.2;
+pub const TURRET_REACH: f32 = 1.05;
 
 // Capture the Flag.
 /// How near (flat) a fighter must come to a flag to take, return or score

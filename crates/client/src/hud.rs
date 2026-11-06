@@ -1494,6 +1494,19 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
     }
 }
 
+/// A turret's box: its name and its heat (its share as the count), no
+/// rounds to run out of.
+fn turret_look(a: &sim::arms::Arm, m: sim::fighter::Mount) -> GunLook {
+    let heat = (m.heat as f32 / sim::arms::HEAT_FULL as f32).clamp(0.0, 1.0);
+    GunLook {
+        count: (heat * 100.0).round() as u32,
+        name: a.name,
+        pips: None,
+        heat: Some((heat, m.vent)),
+        note: if m.vent { "VENTING" } else { "" },
+    }
+}
+
 /// Each hand's gun as its picture, once it is drawn; its name until then.
 #[allow(clippy::type_complexity)]
 pub fn gun_icons(
@@ -1508,9 +1521,11 @@ pub fn gun_icons(
     };
     let f = s.core.own().0;
     let arm = |h: u8| if h == 0 { f.gun().arm } else { f.left.arm };
+    // A turret has no picture yet: its name.
+    let gunning = f.gunning(&s.core.map) != sim::vehicle::NO_TURRET;
     let mut shown = [false; 2];
     for (h, mut n, mut img) in &mut pics {
-        let pic = icons.get(arm(h.0));
+        let pic = icons.get(arm(h.0)).filter(|_| !gunning);
         shown[h.0 as usize & 1] = pic.is_some();
         if let Some(pic) = pic {
             if img.image != *pic {
@@ -1572,10 +1587,15 @@ pub fn gear(
     }
     let f = s.core.own().0;
     let reloading = f.reload > 0;
-    let hands = [
-        Some(gun_look(f.gun(), reloading)),
-        f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
-    ];
+    // Gunning a turret, its box is the turret's; the guns wait.
+    let turret = sim::vehicle::turret(f.gunning(&s.core.map));
+    let hands = match turret {
+        Some((a, _)) => [Some(turret_look(a, f.mount)), None],
+        None => [
+            Some(gun_look(f.gun(), reloading)),
+            f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
+        ],
+    };
     for (b, mut img) in boxes.iter_mut() {
         tint(&mut img, if f.gren_kind == b.0 { PLATE } else { PLATE_DIM });
     }
@@ -1583,7 +1603,7 @@ pub fn gear(
         set_display(&mut n, hands[p.0 as usize & 1].is_some());
     }
     let back = f.guns[1 - f.cur as usize];
-    let carried = back.arm != 0 && !f.dual();
+    let carried = back.arm != 0 && !f.dual() && turret.is_none();
     for mut n in back_plate.iter_mut() {
         set_display(&mut n, carried);
     }

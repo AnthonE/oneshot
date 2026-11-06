@@ -37,6 +37,8 @@ pub struct VehicleSpawn {
     pub pos: V3,
     pub yaw: u16,
     pub respawn_ms: u32,
+    /// What its bed carries (`vehicle::NO_TURRET`, `vehicle::MINIGUN`).
+    pub turret: u8,
 }
 
 /// A launcher: a grounded fighter whose feet are in `area` is thrown at
@@ -75,8 +77,8 @@ pub struct Def {
     pub roam: &'static [[f32; 2]],
     pub terrain: Option<TerrainDef>,
     pub launchers: &'static [([f32; 6], [f32; 3])],
-    /// (x y z, yaw, respawn ms) each.
-    pub vehicles: &'static [([f32; 3], u16, u32)],
+    /// (x y z, yaw, respawn ms, turret) each.
+    pub vehicles: &'static [([f32; 3], u16, u32, u8)],
     /// The solids that aren't boxes ([`Solid::from_def`]: kind, numbers),
     /// and how each is drawn.
     pub solids: &'static [(u8, [f32; 8])],
@@ -229,10 +231,11 @@ impl Def {
             vehicles: self
                 .vehicles
                 .iter()
-                .map(|&(p, yaw, respawn_ms)| VehicleSpawn {
+                .map(|&(p, yaw, respawn_ms, turret)| VehicleSpawn {
                     pos: v(p),
                     yaw,
                     respawn_ms,
+                    turret,
                 })
                 .collect(),
             flags: match self.flags {
