@@ -54,7 +54,7 @@ use std::collections::BTreeMap;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use sim::consts::{CROUCH_EYE, EYE, PITCH_MAX, VEH_H};
+use sim::consts::{PITCH_MAX, VEH_H};
 use sim::input::*;
 
 use crate::link::Link;
@@ -85,17 +85,11 @@ pub struct Look {
     /// [`Look::magnification`] at [`ZOOM_RATE`] (`view`). The view narrows
     /// by it and the mouse slows by it; 0 until the first frame (read as 1).
     mag: f32,
-    /// Crouched, as drawn: 0 standing to 1, eased at [`CROUCH_RATE`]. Only
-    /// the eye; the sim's shot leaves from where the sim says.
-    crouch: f32,
 }
 
 /// How fast a scope comes up and goes down: `1 − exp(−k·dt)` a frame
 /// (Gates' `VIEWMODEL_RAISE_RATE`): halfway to a 2x in 50 ms.
 const ZOOM_RATE: f32 = 14.0;
-/// How fast the eye goes between standing and crouched (Gates'
-/// `CROUCH_EASE_S`, 60 ms, as a rate).
-const CROUCH_RATE: f32 = 1.0 / 0.06;
 
 /// What [`Look::level`] watches on our own fighter from frame to frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,12 +128,8 @@ impl Look {
         first > 1.0 && self.drawn_mag() >= 1.0 + (first - 1.0) * 0.5
     }
 
-    /// The eye over the feet, as drawn (`crouch`).
-    pub fn eye_h(&self) -> f32 {
-        EYE - (EYE - CROUCH_EYE) * self.crouch
-    }
-
-    /// One frame's ease toward what `f` is: scoped (`level`) and crouched.
+    /// One frame's ease toward what `f` is: scoped (`level`). The crouch
+    /// is the sim's own, over `CROUCH_TICKS` (`Body::eye_h`).
     fn ease(&mut self, f: &sim::fighter::Fighter, dt: f32) {
         let want = if f.alive {
             self.magnification(sim::arms::arm(f.gun().arm))
@@ -153,8 +143,6 @@ impl Look {
         if (self.mag - want).abs() < 0.005 {
             self.mag = want;
         }
-        let crouched = f32::from(u8::from(f.body.crouched));
-        self.crouch += (crouched - self.crouch) * (1.0 - (-CROUCH_RATE * dt).exp());
     }
 
     /// Out of the scope at once, no ease (a film's cut).
@@ -273,10 +261,10 @@ const AUTO_LANES: [(f32, f32); 6] = [
 #[derive(Resource, Default)]
 pub struct Early(pub Vec<proto::Msg>);
 
-/// Radians per pixel of mouse. Scoped, divided by the scope's zoom: the
-/// view narrows by it, so the world moves under the crosshair at one speed
-/// (Gates' `input.rs`).
-const SENS: f32 = 0.0022;
+/// Radians per pixel of mouse at sensitivity 1 (`settings::SENS_DEG`).
+/// Scoped, divided by the scope's zoom: the view narrows by it, so the
+/// world moves under the crosshair at one speed (Gates' `input.rs`).
+const SENS: f32 = settings::SENS_DEG * core::f32::consts::PI / 180.0;
 
 /// The bound actions that are buttons (the player's keys, `binds.rs`).
 /// The wheel swaps too.
@@ -643,12 +631,16 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (draw_view, look::counter::draw).chain(),
             look::viewmodel::shimmer,
             (look::fx::ambient::drive, look::fx::draw).chain(),
-            hud::draw,
-            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw),
-            hud::hurt_rim,
+            // The HUD is hidden off a match (`front::hud_shown`): nothing
+            // to draw into it there.
+            hud::draw.run_if(in_match),
+            (hud::gear, hud::gun_icons, hud::vitals, hud::corner, scope::draw).run_if(in_match),
+            hud::hurt_rim.run_if(in_match),
         )
             .chain(),
     );
+    // Not gated: the medal row and the carnage report are their own roots,
+    // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
@@ -686,7 +678,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .before(bevy::transform::TransformSystems::Propagate),
     )
     // Names over heads, after the camera is placed (`tags.rs`).
-    .add_systems(Update, tags::draw.after(view).after(hud::draw));
+    .add_systems(Update, tags::draw.after(view).after(hud::draw).run_if(in_match));
     #[cfg(target_arch = "wasm32")]
     app.add_systems(Update, expose.after(hud::draw))
         .add_systems(PostUpdate, pointer::follow);
@@ -707,12 +699,22 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 visor::setup.after(hud::setup),
             ),
         )
-        .add_systems(Update, (hud::prompt, hud::reticle_tint, hud::board).after(hud::draw));
+        .add_systems(
+            Update,
+            (hud::prompt, hud::reticle_tint, hud::board)
+                .after(hud::draw)
+                .run_if(in_match),
+        );
     }
     if opts.fxdemo {
         app.add_systems(Update, look::fx::demo::run.after(happened).before(look::fx::draw));
     }
     app
+}
+
+/// In a match: what the HUD and the names over heads draw for.
+fn in_match(m: Res<front::InMatch>) -> bool {
+    m.0
 }
 
 fn setup(
@@ -963,7 +965,7 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
         look.pitch = 0.0;
         return (0, 0, 127);
     };
-    let eye = if f.body.crouched { CROUCH_EYE } else { EYE };
+    let eye = f.body.eye_h();
     let (dx, dz) = (d.pos.x - me.x, d.pos.z - me.z);
     look.yaw = dz.atan2(dx);
     look.pitch = (d.pos.y + 1.3 - (me.y + eye)).atan2(dx.hypot(dz));
@@ -1324,13 +1326,13 @@ pub(crate) fn view(
     let core = &link.0.session().core;
     let (f, p) = core.own();
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
-    let mut fov = settings.fov;
+    let mut fov = look::rig::fov_tall(settings.fov);
     let at = Vec3::new(p.x, p.y, p.z);
     let dead = !f.alive && link.0.session().ready;
     if !dead {
         death.from = None;
     }
-    // The scope and the crouch, eased toward what they are.
+    // The scope, eased toward what it is.
     look.ease(f, time.delta_secs());
     if dead {
         let now = time.elapsed_secs();
@@ -1360,7 +1362,9 @@ pub(crate) fn view(
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
     } else {
-        let eye = at + Vec3::Y * look.eye_h();
+        // The sim's eye: a crouch already goes down over a moment there
+        // (`sim::movement::Body::duck`), and a tuck in the air keeps it.
+        let eye = at + Vec3::Y * f.body.eye_h();
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
         fov /= look.drawn_mag();
     }
@@ -1526,7 +1530,7 @@ pub(crate) fn happened(
         // Our own gun, drawn the frame it fires, down where we look.
         let (f, p) = s.core.own();
         // From the eye as drawn, as the camera is.
-        let eye = Vec3::new(p.x, p.y + look.eye_h(), p.z);
+        let eye = Vec3::new(p.x, p.y + f.body.eye_h(), p.z);
         let cam = Transform::from_translation(eye).looking_at(eye + dir, Vec3::Y).rotation;
         if third {
             look::fx::shots::own_unseen(&mut fx, f);

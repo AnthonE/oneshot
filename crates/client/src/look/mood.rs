@@ -490,7 +490,7 @@ mod tests {
     /// same light.
     #[test]
     fn no_team_looks_into_the_sun() {
-        let half_h = (super::super::rig::FOV_DEG.to_radians() * 0.5).tan();
+        let half_h = (super::super::rig::fov_tall(super::super::rig::FOV_DEG).to_radians() * 0.5).tan();
         let half_w = half_h * 16.0 / 9.0;
         for def in sim::maps::ALL {
             let mid = |team: u8| {
