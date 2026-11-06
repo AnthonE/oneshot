@@ -562,7 +562,7 @@ fn events_play_on_the_render_tick() {
         let mut s = base(t);
         let hull = Vehicle {
             seats: [2, 1],
-            ..Vehicle::new(V3::new(4.0, 0.0, 0.0), 0, 0)
+            ..Vehicle::new(V3::new(4.0, 0.0, 0.0), 0, 0, 0)
         };
         s.own = Fighter {
             ride: Fighter::ride_of(3, PASSENGER),
@@ -935,6 +935,7 @@ fn a_passengers_round_is_drawn_as_sent() {
         seats: [2, 1],
         ..Vehicle::new(
             V3::new((20.0 * t as f64 / TICK_HZ as f64) as f32 - 30.0, 0.0, 0.0),
+            0,
             0,
             0,
         )
