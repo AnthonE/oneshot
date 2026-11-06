@@ -29,6 +29,13 @@ pub mod thing;
 pub mod vehicle;
 pub mod world;
 
+/// This sim's stamp: a hash of its sources, its rules and every compiled
+/// map (`build.rs`). Sent in the handshake (`proto::Msg::Hello`); the
+/// server refuses a client whose stamp is not its own, so a page left over
+/// from before a map or a rule changed never predicts against walls or
+/// numbers the server doesn't have.
+pub const STAMP: u32 = include!(concat!(env!("OUT_DIR"), "/stamp.rs"));
+
 pub use input::Input;
 pub use map::Map;
 pub use world::{Phase, Rules, World};

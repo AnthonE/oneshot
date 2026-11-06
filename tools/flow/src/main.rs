@@ -118,7 +118,8 @@ impl Walk {
                     continue;
                 }
                 let ny = m.floor_with(x, z, r, p.y + STEP, p.y + STEP);
-                if m.occupied(x, z, r, ny, ny + BODY_H) {
+                // Over the edge of a void: a fall, not a walk.
+                if m.lost_floor(x, z, ny) || m.occupied(x, z, r, ny, ny + BODY_H) {
                     continue;
                 }
                 // A diagonal needs both of its sides clear (no corner-cutting).
@@ -549,6 +550,35 @@ fn main() {
         (m.hi.1 - m.lo.1) * s,
         height_colour(0.0, top)
     );
+    // The void, where there is one: nothing to stand on, the page's dark
+    // (a run of half-metre cells a row).
+    if m.void > f32::NEG_INFINITY {
+        const V: f32 = 0.5;
+        let (nx, nz) = (((m.hi.0 - m.lo.0) / V) as i32, ((m.hi.1 - m.lo.1) / V) as i32);
+        for j in 0..nz {
+            let z = m.lo.1 + (j as f32 + 0.5) * V;
+            let mut run: Option<i32> = None;
+            for i in 0..=nx {
+                let x = m.lo.0 + (i as f32 + 0.5) * V;
+                let lost = i < nx && m.over_void(x, z, m.ground(x, z));
+                match (lost, run) {
+                    (true, None) => run = Some(i),
+                    (false, Some(i0)) => {
+                        let _ = writeln!(
+                            svg,
+                            r##"<rect x="{:.1}" y="{:.1}" width="{:.1}" height="{:.1}" fill="#16181d"/>"##,
+                            px(m.lo.0 + i0 as f32 * V),
+                            pz(z + V * 0.5),
+                            (i - i0) as f32 * V * s,
+                            V * s + 0.5
+                        );
+                        run = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     // Lower tops first, so higher ones cover them.
     enum Item<'a> {
         Box(&'a sim::geom::Aabb),

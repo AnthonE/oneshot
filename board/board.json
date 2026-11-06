@@ -500,6 +500,66 @@
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-ring",
+      "name": "Cloudbreak: the ring under the struts",
+      "what": "the plaza from the south-west dune, up a little, the struts across it and the spire beyond",
+      "take": "a round stone floor with a strong silhouette over it; warm rounded sandstone against cool hard grey stone; the edge and the cloud beyond in view",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/ring.png",
+      "refs": [
+        {
+          "file": "isle2.webp",
+          "take": "a round plaza cut with a pattern, two leaning struts that never meet, sand mounded round it with rounded boulders, a grey stone tower to one side, an overcast sky, a flat sea of mist and pale stacks of rock far off",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-coast",
+      "name": "Cloudbreak: the island from off its edge",
+      "what": "from the void south-east of the island, level with its rim and looking down a little, its cliff, the keel it hangs from and the cloud far under it, the ring and the spire beyond",
+      "take": "an island high over nothing: its edge, the rock under it, undercut, and the void a third of the frame",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/coast.png",
+      "refs": [
+        {
+          "file": "isle1.jpg",
+          "take": "sandstone undercut into arches and fingers under the island's edge; rounded boulders along the rim; grey architecture on the cliff; mist below, stacks of rock behind",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-void",
+      "name": "Cloudbreak: out over the void",
+      "what": "from the south point, out over the sea of cloud",
+      "take": "distance that reads as height: a flat sea of cloud far below, stacks of rock standing out of it each a step paler, an overcast with a break in it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/void.png",
+      "refs": [
+        {
+          "file": "isle2.webp",
+          "take": "the sea of mist, flat to the horizon; stacks of rock standing out of it, paler with distance; the cloud deck grey with a lighter break",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        },
+        {
+          "file": "isle1.jpg",
+          "take": "rocks far off on the mist, pale; the light coming through the cloud",
+          "ignore": "the gun in view, the HUD, the figures",
+          "private": true
+        }
+      ]
     }
   ]
 }

@@ -124,6 +124,7 @@ async fn hello(
             skin: 0,
             emblem: 0,
             party: 0,
+            stamp: sim::STAMP,
         },
         &mut f,
     )

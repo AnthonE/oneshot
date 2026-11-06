@@ -57,11 +57,17 @@ pub struct Launcher {
 pub struct Def {
     pub id: u8,
     pub name: &'static str,
-    /// A practice map (the Range): played only when a server names it,
-    /// never in the rotation.
+    /// Out of the rotation (the Range; a new map not yet played): played
+    /// only when a server or a private match names it.
     pub practice: bool,
+    /// The rotations it is played in ([`ROT_DUEL`] and the rest, by bit);
+    /// 0: by its size, as before there were any (Big Team on a big map,
+    /// every other mode on an arena, Capture the Flag only with flags).
+    pub modes: u16,
     pub lo: (f32, f32),
     pub hi: (f32, f32),
+    /// [`Map::void`].
+    pub void: f32,
     pub boxes: &'static [[f32; 6]],
     pub looks: &'static [u8],
     pub spawns: &'static [([f32; 3], u16, u8)],
@@ -122,6 +128,21 @@ impl LightDef {
     };
 }
 
+/// How far down a slope too steep to stand on [`Map::lost_floor`] looks
+/// for the void: a cliff's foot, past the cell or two it falls over.
+pub const CLIFF_LOOK: f32 = 2.0;
+
+/// The rotations a map can be in (`Def::modes`, `map.json`'s `modes`): the
+/// server's modes, by bit.
+pub const ROT_CASUAL: u16 = 1 << 0;
+pub const ROT_DUEL: u16 = 1 << 1;
+pub const ROT_DOUBLES: u16 = 1 << 2;
+pub const ROT_FFA: u16 = 1 << 3;
+pub const ROT_GUN_GAME: u16 = 1 << 4;
+pub const ROT_CUP: u16 = 1 << 5;
+pub const ROT_BIG_TEAM: u16 = 1 << 6;
+pub const ROT_CTF: u16 = 1 << 7;
+
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
 pub const BIG_M2: f32 = 4000.0;
 
@@ -130,6 +151,19 @@ impl Def {
     /// bounds), not an arena.
     pub fn big(&self) -> bool {
         (self.hi.0 - self.lo.0) * (self.hi.1 - self.lo.1) >= BIG_M2
+    }
+
+    /// Whether it is in rotation `rot` (a `ROT_` bit): never out of the
+    /// rotation ([`Def::practice`]) or without flags for Capture the Flag;
+    /// else by its `modes`, or by its size when it names none.
+    pub fn plays(&self, rot: u16) -> bool {
+        if self.practice || (rot & ROT_CTF != 0 && self.flags.len() != 2) {
+            return false;
+        }
+        if self.modes != 0 {
+            return self.modes & rot != 0;
+        }
+        self.big() == (rot == ROT_BIG_TEAM)
     }
 
     pub fn build(&self) -> Map {
@@ -153,6 +187,7 @@ impl Def {
             name: self.name,
             lo: self.lo,
             hi: self.hi,
+            void: self.void,
             boxes: self
                 .boxes
                 .iter()
@@ -232,6 +267,12 @@ pub struct Map {
     /// Walkable area in x and z: (min x, min z) to (max x, max z).
     pub lo: (f32, f32),
     pub hi: (f32, f32),
+    /// Below this height there is nothing to stand on: a fighter whose feet
+    /// pass it has fallen to its death, and a round, a drop or a vehicle is
+    /// lost (`World::falls`). The ground under it is a terrain dug far
+    /// down (an island's cliffs), never stood on. `f32::NEG_INFINITY`: no
+    /// void, the ground holds everywhere.
+    pub void: f32,
     pub boxes: Vec<Aabb>,
     /// How each box is drawn (the client's `level.rs`): drawing only.
     pub looks: Vec<u8>,
@@ -390,6 +431,34 @@ impl Map {
             None => V3::new(0.0, 1.0, 0.0),
             Some(g) => g.normal(x, z),
         }
+    }
+
+    /// Whether a body with its feet at `y` would find nothing under (x, z)
+    /// but the void: [`Map::lost_floor`] of the floor there, as a step from
+    /// `y` reaches it. Never on a map without one.
+    pub fn over_void(&self, x: f32, z: f32, y: f32) -> bool {
+        self.void > f32::NEG_INFINITY && self.lost_floor(x, z, self.floor(x, z, 0.0, y + crate::consts::STEP))
+    }
+
+    /// Whether `f`, the floor found at (x, z), holds nobody on a map with a
+    /// void: it is under the void, or it is the ground of a cliff down into
+    /// it, too steep to stand on with the ground [`CLIFF_LOOK`] down its
+    /// fall line under the void (a body there slides off: the cliff starts
+    /// up to a cell inside the coast). Never on a map without one.
+    pub fn lost_floor(&self, x: f32, z: f32, f: f32) -> bool {
+        if self.void == f32::NEG_INFINITY || f < self.void {
+            return f < self.void;
+        }
+        if f != self.ground(x, z) {
+            return false;
+        }
+        let n = self.ground_normal(x, z);
+        if n.y >= crate::consts::WALK_NY {
+            return false;
+        }
+        // Too steep: downhill is the normal's lean.
+        let k = CLIFF_LOOK / (n.x * n.x + n.z * n.z).sqrt();
+        self.ground(x + n.x * k, z + n.z * k) < self.void
     }
 
     /// The highest floor under a footprint of half-width `r` at (x, z) whose
@@ -587,6 +656,7 @@ impl Map {
             roam: Vec::new(),
             lo: (-50.0, -50.0),
             hi: (50.0, 50.0),
+            void: f32::NEG_INFINITY,
             boxes: vec![
                 b(-51.0, -51.0, 51.0, -50.0),
                 b(-51.0, 50.0, 51.0, 51.0),
@@ -709,9 +779,11 @@ mod tests {
         Def {
             id: 252,
             practice: false,
+            modes: 0,
             name: "with solids",
             lo: (-20.0, -20.0),
             hi: (20.0, 20.0),
+            void: f32::NEG_INFINITY,
             boxes: &[[-3.0, 0.0, -3.0, 3.0, 1.0, 3.0], [9.0, 0.0, -1.0, 12.0, 4.0, 1.0]],
             looks: &[0, 0],
             spawns: &[([0.0, 0.0, -10.0], 0, 0)],

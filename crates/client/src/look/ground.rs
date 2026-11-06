@@ -99,6 +99,28 @@ pub struct GroundParams {
 /// prints each one's mean): the sand a shade paler and less orange than it
 /// was shot, the turf greener, the creek's stones as they are, and the
 /// bedded sandstone lifted to a sunlit red (its photograph is in shade).
+/// An island's (`level::Land::Isle`): the sand lifted to a pale cream (the
+/// photograph is a warm orange, linear mean 0.29 0.16 0.08) and its rock
+/// to a tan sandstone (0.21 0.09 0.03, a canyon's red); the other two
+/// lanes are never weighted there.
+pub const ISLE_TINT: [Vec4; 4] = [
+    Vec4::new(1.9, 2.6, 3.5, 1.0),
+    Vec4::new(0.66, 1.2, 0.62, 1.0),
+    Vec4::new(0.95, 0.92, 0.88, 1.0),
+    Vec4::new(2.3, 3.2, 4.4, 1.0),
+];
+
+/// An island's rock face: sandstone the wind has rounded, not a canyon's
+/// split wall. Blocks twice as big and leaning half as far (the lanes of
+/// `rock_a`: cell, fine cell, tilt, fine tilt), less value between them and
+/// broad soft weathering over a wandering lattice (`rock_b`: shade,
+/// weathering's wavelength and depth, warp), few cracks, faint, and faint
+/// streaks (`rock_c`: crack share, width, darkness, streaks). Against the
+/// canyon's [`ROCK_CELL_M`] and the rest below.
+pub const ISLE_ROCK_A: Vec4 = Vec4::new(14.0, 4.5, 0.28, 0.1);
+pub const ISLE_ROCK_B: Vec4 = Vec4::new(0.05, 20.0, 0.12, 2.5);
+pub const ISLE_ROCK_C: Vec4 = Vec4::new(0.06, 0.03, 0.15, 0.05);
+
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
     Vec4::new(0.66, 1.2, 0.62, 1.0),
@@ -265,16 +287,24 @@ impl MaterialExtension for Ground {
 
 /// The ground's material over its photographs, wet up from the sea at
 /// `sea_y` (the map's `light.sea`; not finite means no sea); `lite` is the
-/// lowest rung, which draws no wall planes or rock face; `cloud` the deck's
-/// shadows and the rain's wet as the map's mood has them.
+/// lowest rung, which draws no wall planes or rock face; `isle` an island's
+/// ground, in its own tints; `cloud` the deck's shadows and the rain's wet
+/// as the map's mood has them.
 pub fn material(
     albedo: Handle<Image>,
     normal: Handle<Image>,
     sea_y: f32,
     lite: bool,
+    isle: bool,
     cloud: super::cloud_shadow::CloudShadowParams,
 ) -> GroundMaterial {
     let mut params = GroundParams::default();
+    if isle {
+        params.tint = ISLE_TINT;
+        params.rock_a = ISLE_ROCK_A;
+        params.rock_b = ISLE_ROCK_B;
+        params.rock_c = ISLE_ROCK_C;
+    }
     params.sea.x = if sea_y.is_finite() { sea_y } else { NO_SEA };
     params.wall.z = if lite { 1.0 } else { 0.0 };
     params.cloud = cloud;

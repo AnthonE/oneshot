@@ -266,13 +266,23 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
         half: b.half.extend(f32::from(b.hidden)),
-        turn: Vec4::new(b.turn.0, b.turn.1, 0.0, 0.0),
+        turn: Vec4::new(b.turn.0, b.turn.1, if seal(b) { 1.0 } else { 0.0 }, 0.0),
         ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
             [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
         }),
         // Painted in by `shafts::paint_web` where WebGL2 marches.
         ..default()
     }
+}
+
+/// A plaza's round slab ([`Shape::Round`], at least [`SEAL_R_M`] across
+/// and no taller than [`SEAL_H_M`]: Cloudbreak's ring) has its top carved
+/// as a seal in its shading (`weathering.wgsl`).
+pub const SEAL_R_M: f32 = 5.0;
+pub const SEAL_H_M: f32 = 2.5;
+
+pub fn seal(b: &Block) -> bool {
+    matches!(b.shape, Shape::Round) && b.half.x >= SEAL_R_M && b.half.y * 2.0 <= SEAL_H_M
 }
 
 /// `base` weathered as a block of `surface`.
