@@ -31,7 +31,10 @@ pub const GRIP_IN_GUN: Vec3 = Vec3::new(0.0, -0.01, -0.04);
 pub const FIST_TILT: f32 = 0.42;
 /// The right hand round a sword's hilt, in the sword's frame: which way its
 /// knuckles lie from its wrist.
-pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.58, 0.0, -0.81);
+pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.04, 0.501, -0.864);
+/// And which way along its knuckles the thumb's side is: the hilt leans a little
+/// from that line toward the knuckles, as a held sword's does.
+pub const SWORD_THUMB: Vec3 = Vec3::new(0.024, 0.865, 0.501);
 /// Where the off hand's hole sits on a long gun's fore-end, metres as it looks:
 /// this far up into its belly (`Gun::under`) and to its right, so the fingers go
 /// round the far side and the heel of the palm and the thumb show on ours.
@@ -132,13 +135,14 @@ pub fn off_hand(g: &Grips, fore: Vec3, mag: Vec3) -> Option<(Vec3, bool)> {
 /// The right fist on a grip, in the gun's frame. The hand's model has x
 /// against the thumb, y along the knuckles, z out of its back: thumb up, the
 /// back of the hand to the gun's right. A sword's hilt goes through the fist
-/// from the little finger to the thumb, its blade out of the thumb's side, the
-/// palm on edge ([`SWORD_KNUCKLES`]); its own hand's wrist is bent, so the forearm
-/// runs out at the frame's lower right (`tools/models/hand.py`).
+/// from the little finger toward the thumb, the blade leaning out over the
+/// knuckles ([`SWORD_KNUCKLES`], [`SWORD_THUMB`]); its own hand's wrist is flexed,
+/// the forearm running out at the frame's lower right (`tools/models/hand.py`).
 fn fist(arm: u8) -> Quat {
     if arm == sim::arms::SWORD {
         let y = SWORD_KNUCKLES.normalize();
-        return Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Y, y, Vec3::NEG_Y.cross(y)));
+        let x = -(SWORD_THUMB - y * SWORD_THUMB.dot(y)).normalize();
+        return Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y)));
     }
     Quat::from_rotation_x(FIST_TILT) * Quat::from_rotation_y(FRAC_PI_2)
 }
@@ -219,6 +223,22 @@ pub fn pose(grips: Res<Grips>, mut hands: Query<(&ViewHand, &mut Transform, &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hand on a sword at rest, as chosen by eye: the wrist's flex lies in
+    /// `tools/models/hand.py`, and this is the rest of it. In the sword's frame,
+    /// the knuckles and thumb are where they were; a change here turns the palm.
+    #[test]
+    fn the_sword_hand_stays_as_it_was_chosen() {
+        let q = fist(sim::arms::SWORD);
+        let knuckles = q * Vec3::Y;
+        let thumb = q * Vec3::NEG_X;
+        assert!((q.length() - 1.0).abs() < 1e-5);
+        assert!(
+            (knuckles - Vec3::new(-0.04, 0.501, -0.864)).length() < 2e-3,
+            "{knuckles}"
+        );
+        assert!((thumb - Vec3::new(0.024, 0.865, 0.501)).length() < 2e-3, "{thumb}");
+    }
 
     /// Each hand's turn is a true rotation, the thumb where it is meant to be.
     #[test]

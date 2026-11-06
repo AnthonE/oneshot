@@ -98,13 +98,13 @@ const HOLD: Vec3 = Vec3::new(0.2, -0.11, -0.55);
 /// with more (a cannon, a launcher) is held that much further off, or its
 /// back end fills the corner of the frame, a blur right against the eye.
 const REAR_CLEAR_M: f32 = 0.35;
-/// How far the sword stands up in the fist, as a `Lay`'s wrist, and how far its
-/// hand is held in and off, metres as it looks: upright through a fist with the
-/// palm on edge, tip to the frame's top right, clear of the crosshair, its forearm
-/// running out at the lower right. How big it is drawn in view.
-const SWORD_STANDS: Vec3 = Vec3::new(0.72, 0.12, 0.0);
-const SWORD_RAISED: Vec3 = Vec3::new(-0.09, 0.07, -0.1);
-const SWORD_IN_VIEW: f32 = 0.75;
+/// How the sword stands in the fist, as a `Lay`'s wrist, and where its hand is
+/// held, metres as it looks: the forearm straight out to the frame's lower right,
+/// the wrist flexed (`tools/models/hand.py`) so the palm turns in to the arm, the
+/// blade up to the top right, clear of the crosshair. How big it is drawn in view.
+const SWORD_STANDS: Vec3 = Vec3::new(1.002, 0.491, 0.0);
+const SWORD_RAISED: Vec3 = Vec3::new(0.0, 0.012, -0.195);
+const SWORD_IN_VIEW: f32 = 0.85;
 /// The rest yaw: the muzzle turned in toward the crosshair, radians.
 const REST_YAW: f32 = 0.08;
 /// The rest pitch: the muzzle lifted, so the gun's rear runs out of the frame
@@ -314,10 +314,10 @@ const CUTS: [[Key; 8]; 2] = [
         key(0.0, [0.0; 3], [0.0; 3], [0.0; 3]),
         key(CUT_COCKED_S, [0.1, -0.07, -0.12], [0.2, -0.3, -0.25], [0.02, 0.04, 0.04]),
         key(0.085, [0.05, 0.0, -0.03], [0.1, -0.2, -0.16], [0.01, 0.02, 0.0]),
-        key(0.125, [-0.04, 0.08, 0.08], [-0.45, 0.32, 0.12], [-0.01, -0.01, -0.05]),
-        key(0.16, [-0.08, 0.12, 0.14], [-1.05, 0.8, 0.34], [-0.015, -0.04, -0.07]),
-        key(0.235, [-0.07, 0.1, 0.12], [-0.88, 0.66, 0.28], [-0.012, -0.03, -0.045]),
-        key(0.33, [-0.02, 0.02, 0.03], [-0.2, 0.14, 0.06], [-0.003, -0.005, -0.01]),
+        key(0.125, [-0.02, 0.08, 0.02], [-0.42, 0.32, 0.12], [-0.01, -0.005, -0.05]),
+        key(0.16, [-0.03, 0.12, 0.04], [-0.86, 0.8, 0.34], [0.025, -0.01, -0.07]),
+        key(0.235, [-0.025, 0.1, 0.03], [-0.72, 0.66, 0.28], [0.02, -0.008, -0.045]),
+        key(0.33, [-0.01, 0.02, 0.01], [-0.16, 0.14, 0.06], [-0.003, -0.002, -0.01]),
         key(MELEE_S, [0.0; 3], [0.0; 3], [0.0; 3]),
     ],
     [
@@ -339,7 +339,7 @@ const CUT_COCKED_S: f32 = 0.05;
 const LUNGE_WAIT_S: f32 = 0.16;
 /// How much of a cut's wrist the hand and forearm share: the rest is the blade's
 /// alone, or its arm swings out flat across the frame, its cut end in view.
-const CUT_ARM_SHARE: f32 = 0.45;
+const CUT_ARM_SHARE: f32 = 0.22;
 /// Seconds after a swing the next is still the other cut.
 const CUT_AGAIN_S: f32 = 1.1;
 /// The blade thrust ahead for the length of a lunge, and how fast it gets there,

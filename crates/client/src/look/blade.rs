@@ -51,9 +51,9 @@ const TIP_M: f32 = 1.07;
 /// In view, where it stands up and would run far off the frame: how much of its
 /// length it keeps, how much of that its width keeps, and how far it is turned
 /// about its length, radians, its face to the eye where its edge would be.
-const IN_VIEW_LONG: f32 = 0.62;
-const IN_VIEW_WIDE: f32 = 0.62;
-const IN_VIEW_TURN: f32 = 1.2;
+const IN_VIEW_LONG: f32 = 0.46;
+const IN_VIEW_WIDE: f32 = 0.85;
+const IN_VIEW_TURN: f32 = 0.76;
 
 /// Field for field `Blade` in the shader.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]

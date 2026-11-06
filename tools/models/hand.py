@@ -4,9 +4,9 @@ clip has them: the right closed on a grip, the left cupped for a fore-end. The a
 stays as it was skinned, so nothing is dragged or twisted. The hole each hand
 holds by is at the origin.
 
-`hand-sword` is the right again for a sword's hilt: its wrist bent, as a real one
-is to hold a blade forward of the forearm, and fingers and thumb closed on the
-hilt, its arm cut longer so more of it shows. `-- <name>…` builds only those."""
+`hand-sword` is the right again for a sword's hilt: its wrist flexed, the palm
+turned in toward the inner arm, fingers and thumb closed on the hilt, its arm cut
+longer so more of it shows. `-- <name>…` builds only those."""
 import os
 import sys
 
@@ -28,14 +28,16 @@ SCALE = 0.85
 LIFT = 1.54
 # Where each arm is cut, as a share of the way from the wrist to the elbow: the
 # right runs straight out of the frame, the left across it, past the elbow.
-CUT = {'hand': 1.12, 'hand-left': 1.9, 'hand-sword': 1.7}
+CUT = {'hand': 1.12, 'hand-left': 1.9, 'hand-sword': 2.7}
 # The hole against the middle finger's joints: along the hand from the knuckle,
 # and from the back of the hand toward the palm, metres at its own size.
 HOLE = {'Right': (-0.018, 0.036), 'Left': (-0.018, 0.036)}
 # The sword's: which way the forearm comes to the hand, in the hand's frame (along
-# the knuckles, toward the thumb's side, toward the back of the hand); how much
-# further each finger joint closes and each thumb joint comes in over the hilt, degrees.
-SWORD_FOREARM = (0.38, 0.8, -0.46)
+# the knuckles, toward the thumb's side, toward the back of the hand): the wrist
+# flexed 35 degrees and nothing else, as the operator chose it. To move the arm,
+# move the whole arm in viewmodel.rs; this changes the wrist. How much further each
+# finger joint closes and each thumb joint comes in over the hilt, degrees.
+SWORD_FOREARM = (0.819, 0.0, 0.574)
 SWORD_CURL = 14.0
 SWORD_THUMB = (24.0, 22.0)
 
