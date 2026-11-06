@@ -25,7 +25,20 @@ pub const SUN_AZIMUTH: f32 = 2.35;
 /// Sunlit exterior, 0.8 stop under Bevy's `Exposure::SUNLIGHT` (Gates
 /// measured it against its reference frames).
 pub const DAY_EV100: f32 = 14.2;
-pub const FOV_DEG: f32 = 75.0;
+/// The field of view by default, as the settings name it: degrees across
+/// a 16:9 screen, as PC shooters label it (Overwatch's 103). The camera
+/// holds its height on any other shape (Hor+): Bevy's `fov` is the height.
+pub const FOV_DEG: f32 = 103.0;
+
+/// The height, degrees, of a view `across` degrees wide on a 16:9 screen.
+pub fn fov_tall(across: f32) -> f32 {
+    2.0 * ((across.to_radians() * 0.5).tan() * 9.0 / 16.0).atan().to_degrees()
+}
+
+/// The width on a 16:9 screen, degrees, of a view `tall` degrees high.
+pub fn fov_across(tall: f32) -> f32 {
+    2.0 * ((tall.to_radians() * 0.5).tan() * 16.0 / 9.0).atan().to_degrees()
+}
 /// The camera's near plane, metres: the gun in view sits a few centimetres
 /// out (`viewmodel.rs`, which holds every gun off it on screen).
 pub const NEAR_M: f32 = 0.012;
@@ -135,7 +148,7 @@ pub fn camera<M: Component>(
             EyeCam,
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
-                fov: FOV_DEG.to_radians(),
+                fov: fov_tall(FOV_DEG).to_radians(),
                 near: NEAR_M,
                 far: FAR_M,
                 ..default()

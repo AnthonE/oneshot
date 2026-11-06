@@ -7,7 +7,7 @@
 //!
 //! **What comes off disk is clamped where it is read**, by the same bounds
 //! the steppers keep (`clamped`, `gfx_from_file`): a hand-edited
-//! `fov = 500` loads as 110, and a file can't reach a state the screen
+//! `fov = 500` loads as 120, and a file can't reach a state the screen
 //! can't. The graphics half is the preset, then whatever rows the file
 //! overrode, so a file written before the rows existed opens on its preset.
 
@@ -21,19 +21,29 @@ use crate::look::quality::{
 };
 use crate::look::render_scale;
 
-/// Mouse sensitivity, times `SENS` (0.126° a count at 1). Down to where a
-/// 3200-dpi mouse turns once in a metre: 0.25 held a 1600-dpi mouse to 18
-/// cm a turn, and a shooter's players play two to three times that.
-pub const SENS_MIN: f32 = 0.02;
-pub const SENS_MAX: f32 = 3.0;
-/// Its step: a twentieth, and a hundredth below `SENS_FINE`, where a
-/// twentieth is a share of it a hand feels.
-pub const SENS_STEP: f32 = 0.05;
-pub const SENS_FINE: f32 = 0.5;
+/// Degrees a mouse count turns at sensitivity 1: Source's, so CS2's and
+/// Apex's numbers mean the same here (Valorant's times 3.18, Overwatch's
+/// over 3.33). Scoped, divided by the scope's zoom (`lib.rs`).
+pub const SENS_DEG: f32 = 0.022;
+/// What a count turned at 1 before (settings version 1): a file from then
+/// is read times `SENS_V1_DEG / SENS_DEG`, so a hand keeps its speed.
+const SENS_V1_DEG: f32 = 0.0022 * 180.0 / core::f32::consts::PI;
+/// 0.066° a count: Valorant's default, between CS2's and Overwatch's.
+pub const SENS_DEFAULT: f32 = 3.0;
+/// Down to where a 3200-dpi mouse turns once in a metre; up to a trackpad.
+pub const SENS_MIN: f32 = 0.1;
+pub const SENS_MAX: f32 = 20.0;
+/// Its step: a hundredth below `SENS_FINE`, a twentieth up to
+/// `SENS_COARSE`, a quarter above, each a share of it a hand feels.
 pub const SENS_STEP_FINE: f32 = 0.01;
-pub const FOV_MIN: f32 = 60.0;
-pub const FOV_MAX: f32 = 110.0;
-pub const FOV_STEP: f32 = 5.0;
+pub const SENS_FINE: f32 = 1.0;
+pub const SENS_STEP: f32 = 0.05;
+pub const SENS_COARSE: f32 = 5.0;
+pub const SENS_STEP_COARSE: f32 = 0.25;
+/// The field of view, degrees across a 16:9 screen (`look::rig::FOV_DEG`).
+pub const FOV_MIN: f32 = 70.0;
+pub const FOV_MAX: f32 = 120.0;
+pub const FOV_STEP: f32 = 1.0;
 pub const VOL_STEP: f32 = 0.1;
 /// The browser's key.
 pub const BROWSER_KEY: &str = "oneshot.settings";
@@ -47,11 +57,12 @@ pub const MIN_FPS_CAP: u16 = MAX_FPS_LADDER[0];
 
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
-    /// Times the base mouse speed (`lib.rs` `SENS`).
+    /// Times [`SENS_DEG`] a count.
     pub sensitivity: f32,
     /// Mouse up looks down.
     pub invert: bool,
-    /// The field of view, degrees, unscoped (a scope divides it).
+    /// The field of view, degrees across a 16:9 screen, unscoped (a scope
+    /// divides it); drawn at its height on any screen (`rig::fov_tall`).
     pub fov: f32,
     /// Every sound, and the game's own (shots, steps, hits), 0 to 1.
     pub master: f32,
@@ -91,7 +102,7 @@ pub struct Held {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            sensitivity: 1.0,
+            sensitivity: SENS_DEFAULT,
             invert: false,
             fov: crate::look::rig::FOV_DEG,
             master: 1.0,
@@ -215,8 +226,10 @@ fn step(v: f32, s: f32) -> f32 {
 fn sens_step(v: f32) -> f32 {
     if v < SENS_FINE - 1e-4 {
         SENS_STEP_FINE
-    } else {
+    } else if v < SENS_COARSE - 1e-4 {
         SENS_STEP
+    } else {
+        SENS_STEP_COARSE
     }
 }
 
@@ -360,7 +373,8 @@ impl Settings {
         }
         match knob {
             Knob::Sensitivity => {
-                // A click at a time: down from 0.5 is fine, up from it coarse.
+                // A click at a time: each from where it is, on its side of a
+                // tier's edge.
                 for _ in 0..delta.unsigned_abs() {
                     let at = self.sensitivity;
                     let s = sens_step(if delta > 0 { at } else { at - 1e-3 });
@@ -479,7 +493,10 @@ impl Settings {
 
     /// From a file's pairs over the defaults, and the pairs it didn't know.
     /// A known key with a value that doesn't read keeps its default.
-    fn from_pairs(pairs: &[(String, String)]) -> (Self, Vec<(String, String)>) {
+    /// From a file's pairs; one of `version` 1 named the sensitivity on
+    /// the old base and the field of view by its height.
+    fn from_pairs(pairs: &[(String, String)], version: u32) -> (Self, Vec<(String, String)>) {
+        let v1 = version < 2;
         let mut s = Self::default();
         let mut f = GfxFile::default();
         let mut other = Vec::new();
@@ -492,8 +509,10 @@ impl Settings {
                 _ => None,
             };
             match k.as_str() {
-                "sensitivity" => s.sensitivity = num.unwrap_or(s.sensitivity),
-                "fov" => s.fov = num.unwrap_or(s.fov),
+                "sensitivity" => {
+                    s.sensitivity = num.map_or(s.sensitivity, |n| if v1 { n * SENS_V1_DEG / SENS_DEG } else { n })
+                }
+                "fov" => s.fov = num.map_or(s.fov, |n| if v1 { crate::look::rig::fov_across(n) } else { n }),
                 "master" => s.master = num.unwrap_or(s.master),
                 "effects" => s.effects = num.unwrap_or(s.effects),
                 "invert" => s.invert = v == "true",
@@ -601,7 +620,7 @@ pub type Lines = Vec<(String, String)>;
 /// version, and the pairs and binds this build doesn't know.
 pub fn read(text: Option<&str>) -> (Settings, Binds, Player, u32, Lines, Lines) {
     let doc = config::parse(text.unwrap_or(""));
-    let (s, mut other) = Settings::from_pairs(&doc.pairs);
+    let (s, mut other) = Settings::from_pairs(&doc.pairs, doc.version);
     let mut p = Player::default();
     other.retain(|(k, v)| match k.as_str() {
         "name" => {
@@ -692,7 +711,7 @@ mod tests {
     #[test]
     fn what_is_read_is_clamped_to_its_steps() {
         let (s, ..) = read(Some(
-            "sensitivity = 9\nfov = 12\nmaster = 0.33\neffects = nan\ninvert = true\n",
+            "sensitivity = 99\nfov = 12\nmaster = 0.33\neffects = nan\ninvert = true\n",
         ));
         assert_eq!(s.sensitivity, SENS_MAX);
         assert_eq!(s.fov, FOV_MIN);
@@ -702,24 +721,44 @@ mod tests {
     }
 
     #[test]
-    fn sensitivity_steps_finely_below_a_half() {
+    fn sensitivity_steps_finely_low_and_coarsely_high() {
         let mut s = Settings {
-            sensitivity: 0.5,
+            sensitivity: 1.0,
             ..Settings::default()
         };
         let at = |s: &Settings| (s.sensitivity * 100.0).round() as i32;
         s.adjust(Knob::Sensitivity, -1);
-        assert_eq!(at(&s), 49);
+        assert_eq!(at(&s), 99);
         s.adjust(Knob::Sensitivity, 1);
-        assert_eq!(at(&s), 50);
+        assert_eq!(at(&s), 100);
         s.adjust(Knob::Sensitivity, 1);
-        assert_eq!(at(&s), 55);
-        s.adjust(Knob::Sensitivity, -100);
+        assert_eq!(at(&s), 105);
+        s.sensitivity = 5.0;
+        s.adjust(Knob::Sensitivity, -1);
+        assert_eq!(at(&s), 495);
+        s.adjust(Knob::Sensitivity, 2);
+        assert_eq!(at(&s), 525);
+        s.adjust(Knob::Sensitivity, -1000);
         assert_eq!(s.sensitivity, SENS_MIN);
-        let (r, ..) = read(Some("sensitivity = 0.13\n"));
-        assert_eq!(at(&r), 13);
-        let (r, ..) = read(Some("sensitivity = 0.62\n"));
-        assert_eq!(at(&r), 60);
+        let (r, ..) = read(Some("sensitivity = 0.63\n"));
+        assert_eq!(at(&r), 63);
+        let (r, ..) = read(Some("sensitivity = 2.62\n"));
+        assert_eq!(at(&r), 260);
+    }
+
+    /// A file from before the base moved turns a hand as fast as it did,
+    /// and shows as wide a view, now named across.
+    #[test]
+    fn a_version_1_file_keeps_its_speed_and_its_view() {
+        let (s, ..) = read(Some("version = 1\nsensitivity = 0.5\nfov = 75\n"));
+        assert_eq!((s.sensitivity * 100.0).round(), 285.0, "0.063° a count, as it was");
+        assert_eq!(s.fov, 108.0, "75° tall is 107.5° across");
+        let (s, ..) = read(Some("version = 1\nsensitivity = 3\nfov = 110\n"));
+        assert_eq!((s.sensitivity, s.fov), (17.25, FOV_MAX));
+        let (s, ..) = read(Some("version = 2\nsensitivity = 0.5\nfov = 75\n"));
+        assert_eq!((s.sensitivity, s.fov), (0.5, 75.0));
+        let t = text(&s, &Binds::default(), &Player::default(), 1, &[], &[]);
+        assert!(t.contains("version = 2"), "written, it says what it means");
     }
 
     #[test]
@@ -890,8 +929,8 @@ mod tests {
     fn a_knob_turns_by_its_step_and_stops_at_its_ends() {
         let mut s = Settings::default();
         s.adjust(Knob::Fov, 1);
-        assert_eq!(s.fov, 80.0);
-        for _ in 0..20 {
+        assert_eq!(s.fov, crate::look::rig::FOV_DEG + 1.0);
+        for _ in 0..50 {
             s.adjust(Knob::Fov, 1);
         }
         assert_eq!(s.fov, FOV_MAX);

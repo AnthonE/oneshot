@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// Bumped only when a key is renamed or changes meaning; a newer file's
 /// number is kept on save.
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
 
 /// A file, read.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,10 +134,10 @@ mod tests {
     fn a_round_trip_is_identity() {
         let p = pairs(&[("sensitivity", "1.25"), ("invert", "true"), ("from_a_newer_build", "7")]);
         let b = pairs(&[("jump", "Space Mouse4")]);
-        let doc = parse(&serialize(1, &p, &b));
+        let doc = parse(&serialize(SETTINGS_VERSION, &p, &b));
         assert_eq!(doc.pairs, p);
         assert_eq!(doc.binds, b);
-        assert_eq!(doc.version, 1);
+        assert_eq!(doc.version, SETTINGS_VERSION);
     }
 
     #[test]

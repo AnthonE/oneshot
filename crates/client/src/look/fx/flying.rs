@@ -119,6 +119,7 @@ pub fn projectiles(
     dt: f32,
     have: &mut Query<(Entity, &mut Flying, &mut Transform, &mut Visibility)>,
 ) {
+    fx.trail_clock(dt);
     for p in proj.iter().filter(|p| !modelled(p.kind)) {
         light(fx, &p.state());
     }
@@ -205,15 +206,19 @@ pub fn projectiles(
         let at = tr.translation;
         if p.kind == ROCKET {
             let back = tr.rotation * Vec3::NEG_Y;
-            // The exhaust: a white-hot core in an orange glow.
+            // The exhaust: a white-hot core in an orange glow, left every
+            // frame so it stays on the nozzle, each as bright as its share
+            // of a 60th of a second, so the glows it leaves add up the same
+            // on any screen.
+            let k = (dt * super::TRAIL_HZ).min(1.0);
             fx.glow.spawn(Particle {
                 left: 0.05,
                 life: 0.05,
                 pos: (at + back * 0.45).into(),
                 size0: 0.35,
                 size1: 0.15,
-                c0: [14.0, 6.0, 1.6, 1.0],
-                c1: [3.0, 0.8, 0.1, 0.0],
+                c0: [14.0 * k, 6.0 * k, 1.6 * k, 1.0],
+                c1: [3.0 * k, 0.8 * k, 0.1 * k, 0.0],
                 cell: GLOW,
                 ..Particle::default()
             });
@@ -318,7 +323,8 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
             fx.glow.spawn(streak(at, v, STREAK, 0.12, len, ION));
             fx.glow.spawn(dot(at, 0.18, [8.0, 10.0, 14.0, 1.0]));
             trail(fx, at, v, ION);
-            fx.flash(
+            ride(
+                fx,
                 at,
                 FlashDef {
                     lumens: 150_000.0,
@@ -333,7 +339,8 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
             fx.glow.spawn(dot(at, 0.35, GREEN));
             fx.glow.spawn(dot(at, 0.12, [9.0, 14.0, 9.0, 1.0]));
             trail(fx, at, v, GREEN);
-            fx.flash(
+            ride(
+                fx,
                 at,
                 FlashDef {
                     lumens: 250_000.0,
@@ -347,22 +354,35 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
     }
 }
 
-/// A spark left behind a round of light.
+/// The light that rides a round, lit again on each tick of the trail
+/// clock: one light a 60th of a second, however fast the screen, so a bolt
+/// never takes more of the flash lights than it does at 60.
+fn ride(fx: &mut Fx, at: Vec3, def: FlashDef) {
+    if fx.trail_ticks() > 0 {
+        fx.flash(at, def);
+    }
+}
+
+/// The sparks left behind a round of light: one on each tick of the trail
+/// clock, a 60th of a second's flight apart.
 fn trail(fx: &mut Fx, at: Vec3, v: Vec3, c: [f32; 4]) {
     let life = 0.2;
-    let drift = Vec3::new(fx.range(-0.3, 0.3), fx.range(-0.3, 0.3), fx.range(-0.3, 0.3));
-    fx.glow.spawn(Particle {
-        left: life,
-        life,
-        pos: (at - v * 0.01).into(),
-        vel: drift.into(),
-        size0: 0.025,
-        size1: 0.005,
-        c0: [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, 0.9],
-        c1: [c[0] * 0.1, c[1] * 0.1, c[2] * 0.1, 0.0],
-        cell: GLOW,
-        ..Particle::default()
-    });
+    for k in 0..fx.trail_ticks() {
+        let drift = Vec3::new(fx.range(-0.3, 0.3), fx.range(-0.3, 0.3), fx.range(-0.3, 0.3));
+        let back = v * (0.01 + k as f32 / super::TRAIL_HZ);
+        fx.glow.spawn(Particle {
+            left: life,
+            life,
+            pos: (at - back).into(),
+            vel: drift.into(),
+            size0: 0.025,
+            size1: 0.005,
+            c0: [c[0] * 0.6, c[1] * 0.6, c[2] * 0.6, 0.9],
+            c1: [c[0] * 0.1, c[1] * 0.1, c[2] * 0.1, 0.0],
+            cell: GLOW,
+            ..Particle::default()
+        });
+    }
 }
 
 /// One shard this frame: a pink sliver along its flight in a glow, and a

@@ -19,6 +19,15 @@ pub struct Body {
     pub vel: V3,
     pub grounded: bool,
     pub crouched: bool,
+    /// Ticks into a crouch, 0 standing to [`CROUCH_TICKS`] down: how far
+    /// the eye and the hit volume have gone. A tuck in the air is the legs
+    /// and not the head, so it is whole at once.
+    pub duck: u8,
+}
+
+/// `up` standing, `down` crouched, and between as far as `duck` has gone.
+pub fn ducked(duck: u8, up: f32, down: f32) -> f32 {
+    up + (down - up) * (duck.min(CROUCH_TICKS) as f32 * (1.0 / CROUCH_TICKS as f32))
 }
 
 impl Body {
@@ -31,8 +40,12 @@ impl Body {
     }
 
     pub fn eye(&self) -> V3 {
-        let e = if self.crouched { CROUCH_EYE } else { EYE };
-        V3::new(self.pos.x, self.pos.y + e, self.pos.z)
+        V3::new(self.pos.x, self.pos.y + self.eye_h(), self.pos.z)
+    }
+
+    /// The eye over the feet, as far down as the crouch has gone.
+    pub fn eye_h(&self) -> f32 {
+        ducked(self.duck, EYE, CROUCH_EYE)
     }
 }
 
@@ -74,7 +87,10 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     // Crouch while held; stand back up only where the head fits. In the
     // air (Halo's crouch jump) crouching tucks the legs up under a head
     // that stays, and letting go puts them back down where there's room.
+    // On the ground the head goes down and up over CROUCH_TICKS; in the
+    // air the legs move and the head stays, so the eye is there at once.
     let was = b.crouched;
+    let mut legs = false;
     if inp.held(CROUCH) {
         b.crouched = true;
     } else if b.crouched && b.grounded {
@@ -84,10 +100,18 @@ pub fn step(b: &mut Body, inp: &Input, map: &Map) {
     } else if b.crouched && map.floor_with(b.pos.x, b.pos.z, BODY_R, b.pos.y, b.pos.y) <= b.pos.y - CROUCH_LIFT {
         b.pos.y -= CROUCH_LIFT;
         b.crouched = false;
+        legs = true;
     }
     if b.crouched && !was && !b.grounded {
         b.pos.y += CROUCH_LIFT;
+        legs = true;
     }
+    b.duck = match (legs, b.crouched) {
+        (true, true) => CROUCH_TICKS,
+        (true, false) => 0,
+        (false, true) => (b.duck + 1).min(CROUCH_TICKS),
+        (false, false) => b.duck.saturating_sub(1),
+    };
 
     // The wish direction from the stick, turned by yaw: forward is the
     // yaw's direction, right is a quarter turn toward +z from it.
@@ -565,6 +589,41 @@ mod tests {
             top = top.max(b.pos.y);
         }
         assert!(top > 2.6 && top < 2.9, "apex {top}");
+    }
+
+    /// On the ground the eye goes down over CROUCH_TICKS and comes back
+    /// up over as many, a step a tick, while the walking box and the speed
+    /// are the crouch's at once.
+    #[test]
+    fn a_crouch_takes_a_moment_down_and_up() {
+        let map = open();
+        let mut b = standing(&map, 0.0, 0.0);
+        let crouch = Input {
+            buttons: CROUCH,
+            ..Input::default()
+        };
+        let mut eye = b.eye_h();
+        assert_eq!(eye, EYE);
+        for t in 1..=CROUCH_TICKS {
+            step(&mut b, &crouch, &map);
+            assert!(b.crouched && b.height() == CROUCH_H, "the box at once");
+            assert!(b.eye_h() < eye, "tick {t}: down a step");
+            eye = b.eye_h();
+        }
+        assert_eq!(b.eye_h(), CROUCH_EYE);
+        step(&mut b, &crouch, &map);
+        assert_eq!(b.eye_h(), CROUCH_EYE, "and stays there");
+        for t in 1..=CROUCH_TICKS {
+            step(&mut b, &Input::default(), &map);
+            assert!(!b.crouched && b.eye_h() > eye, "tick {t}: up a step");
+            eye = b.eye_h();
+        }
+        assert_eq!(b.eye_h(), EYE);
+        // A tap: halfway down and straight back.
+        run(&mut b, crouch, &map, (CROUCH_TICKS / 2) as u32);
+        assert_eq!(b.duck, CROUCH_TICKS / 2);
+        run(&mut b, Input::default(), &map, (CROUCH_TICKS / 2) as u32);
+        assert_eq!(b.duck, 0);
     }
 
     #[test]

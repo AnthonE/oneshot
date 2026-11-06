@@ -15,7 +15,8 @@
 
 use sim::consts::MAX_FIGHTERS;
 
-use bevy::camera::visibility::NoFrustumCulling;
+use bevy::camera::primitives::Aabb;
+use bevy::camera::visibility::{NoAutoAabb, NoFrustumCulling};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
@@ -34,6 +35,43 @@ const FACE: f32 = core::f32::consts::FRAC_PI_2;
 /// a little lower, at Triple T's chest rather than its eyes.
 const HAND: Vec3 = Vec3::new(0.18, 1.18, 0.2);
 const HAND_CROUCHED_Y: f32 = 0.85;
+
+/// Where a body can be drawn, metres in its root's frame (at its feet,
+/// +Y up): standing, crouched, its legs tucked in a jump, or lying as
+/// `Death01` leaves it. Its meshes are skinned, so Bevy's own box is the
+/// bind pose's; this one is drawn round all of them, so a body behind the
+/// camera or outside a shadow cascade is skipped. A rag doll, which can be
+/// thrown metres from its root, is never culled ([`Body::cull`]).
+const REACH_LO: Vec3 = Vec3::new(-2.2, -0.6, -2.2);
+const REACH_HI: Vec3 = Vec3::new(2.2, 2.6, 2.2);
+
+/// [`REACH_LO`]..[`REACH_HI`] as a box in `e`'s own frame, `e` being a
+/// mesh under `root`: the root's box carried down through every transform
+/// between them (a scene's scale and turn included).
+fn reach(e: Entity, root: Entity, parents: &Query<&ChildOf>, transforms: &Query<&Transform>) -> Aabb {
+    let mut root_from_e = bevy::math::Affine3A::IDENTITY;
+    let mut at = e;
+    while at != root {
+        let (Ok(t), Ok(&ChildOf(up))) = (transforms.get(at), parents.get(at)) else {
+            break;
+        };
+        root_from_e = t.compute_affine() * root_from_e;
+        at = up;
+    }
+    let to_e = root_from_e.inverse();
+    let (mut lo, mut hi) = (Vec3::INFINITY, Vec3::NEG_INFINITY);
+    for i in 0..8 {
+        let c = Vec3::new(
+            if i & 1 == 0 { REACH_LO.x } else { REACH_HI.x },
+            if i & 2 == 0 { REACH_LO.y } else { REACH_HI.y },
+            if i & 4 == 0 { REACH_LO.z } else { REACH_HI.z },
+        );
+        let p = to_e.transform_point3(c);
+        lo = lo.min(p);
+        hi = hi.max(p);
+    }
+    Aabb::from_min_max(lo, hi)
+}
 
 /// The albedo is very dark (Gates' MANIFEST: luma 0.056): this much lift.
 const LIFT: f32 = 2.6;
@@ -129,6 +167,20 @@ impl Body {
     /// snapshot's, till it gets up or is hidden (`afresh`).
     pub fn go_limp(&mut self) {
         self.limp = true;
+    }
+
+    /// Culled by its box ([`REACH_LO`]) while it stands, and not while a
+    /// rag doll has it: that can be anywhere a blow throws it.
+    pub fn cull(&self, commands: &mut Commands, on: bool) {
+        for &e in self.parts.iter().chain(&self.shells) {
+            if let Ok(mut c) = commands.get_entity(e) {
+                if on {
+                    c.try_remove::<NoFrustumCulling>();
+                } else {
+                    c.try_insert(NoFrustumCulling);
+                }
+            }
+        }
     }
 
     /// Alive now, and the frame before (none: not drawn then).
@@ -366,6 +418,7 @@ fn dress(
             let Some(mut base) = mats.get(&m.0).cloned() else {
                 continue;
             };
+            let bounds = reach(e, root, &parents, &transforms);
             if let Ok(&ChildOf(parent)) = parents.get(e) {
                 let mut s = commands.spawn((
                     mesh.clone(),
@@ -374,7 +427,8 @@ fn dress(
                     shell_shown,
                     ShellPart,
                     NotShadowCaster,
-                    NoFrustumCulling,
+                    bounds,
+                    NoAutoAabb,
                     ChildOf(parent),
                 ));
                 if let Some(skin) = skin {
@@ -397,7 +451,8 @@ fn dress(
             body.parts.push(e);
             commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert((
                 MeshMaterial3d(h),
-                NoFrustumCulling,
+                bounds,
+                NoAutoAabb,
                 BodyPart,
             ));
         }

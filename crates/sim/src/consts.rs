@@ -63,6 +63,11 @@ pub const BODY_H: f32 = 1.8;
 pub const CROUCH_H: f32 = 1.3;
 pub const EYE: f32 = 1.6;
 pub const CROUCH_EYE: f32 = 1.1;
+/// A crouch on the ground takes this long to go down, and as long to come
+/// back up: the eye and the hit volume go over it, so a crouch can't snap a
+/// head out of a sight in a tick (Halo 2 lowers it over a moment). The box
+/// a body walks in, and its speed, are the crouch's at once.
+pub const CROUCH_TICKS: u8 = ticks(125) as u8;
 /// Crouching in the air tucks the legs up this far (Halo's crouch jump:
 /// the head stays, the feet rise, a higher ledge is reached), and letting
 /// go puts them back down where there is room.

@@ -1467,7 +1467,7 @@ mod tests {
     #[test]
     fn no_gun_is_cut_by_the_near_plane() {
         let near = crate::look::rig::NEAR_M / SHRINK;
-        let half = (crate::settings::FOV_MAX.to_radians() * 0.5).tan();
+        let half = (crate::look::rig::fov_tall(crate::settings::FOV_MAX).to_radians() * 0.5).tan();
         let aspect = 21.0 / 9.0;
         let crouch = Lay {
             ang: CROUCH_ANG,

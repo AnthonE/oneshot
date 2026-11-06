@@ -11,11 +11,12 @@
 //! person and every enemy. At 2v2 that is a few thousand box tests a
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
-use sim::consts::{CROUCH_EYE, EYE, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::consts::{HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
 use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 use sim::map::Map;
+use sim::movement::ducked;
 use sim::vehicle::Vehicle;
 use sim::world::World;
 
@@ -37,16 +38,17 @@ pub fn lead_s(rtt_ms: f64, playout_ticks: u32) -> f32 {
 }
 
 fn eye(f: &Fighter) -> V3 {
-    let e = if f.body.crouched { CROUCH_EYE } else { EYE };
-    f.body.pos + V3::new(0.0, e, 0.0)
+    f.body.eye()
 }
 
+/// The chest and the head over the feet, as far down as a crouch has gone
+/// (`sim::movement::ducked`): where the hit volume is.
 fn chest_h(f: &Fighter) -> f32 {
-    if f.body.crouched {
-        0.75
-    } else {
-        1.1
-    }
+    ducked(f.body.duck, 1.1, 0.75)
+}
+
+fn head_h(f: &Fighter) -> f32 {
+    ducked(f.body.duck, HEAD_Y, HEAD_Y_CROUCH)
 }
 
 /// Where `viewer`'s eye could be within `lead` seconds: now, pushed ahead
@@ -70,7 +72,7 @@ pub fn eyes(viewer: &Fighter, side: V3, lead: f32, peek: f32) -> [V3; 7] {
 /// speed over `lead` seconds. A new kind on the wire (a vehicle) names its
 /// own points and goes through [`sees_points`].
 pub fn fighter_points(target: &Fighter, side: V3, lead: f32) -> [V3; 10] {
-    let head = if target.body.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
+    let head = head_h(target);
     let ch = chest_h(target);
     let edge = side * (HIT_R + 0.1);
     let p0 = target.body.pos;
@@ -174,7 +176,7 @@ fn sees_full(
 /// viewer's eye right now (a head over waist-high cover is in plain sight).
 /// Fog must never hide what passes this.
 pub fn plainly_sees(map: &Map, viewer: &Fighter, target: &Fighter) -> bool {
-    let head = if target.body.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
+    let head = head_h(target);
     let e = eye(viewer);
     map.clear(e, target.body.pos + V3::new(0.0, chest_h(target), 0.0))
         || map.clear(e, target.body.pos + V3::new(0.0, head, 0.0))
