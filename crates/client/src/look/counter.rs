@@ -1,5 +1,5 @@
 //! The rounds left, on the gun in our own view: a readout in the gun's
-//! light on the flank of the receiver, turned toward the eye, as the HUD
+//! light lying on the display its model paints, as the HUD
 //! says it (the magazine of the gun in that hand), and red when the
 //! magazine runs low. The ship's guns carry none: their batteries are the
 //! HUD's.
@@ -22,20 +22,29 @@ use super::guns::{gun, view_basis};
 use super::viewmodel::ViewGun;
 
 /// Each gun's readout, in its model's frame and units (x right, y from the
-/// stock along the barrel, z up over the axis it is held by): where its
-/// middle is on the left flank (measured off each model's receiver), and
-/// how tall a digit is.
-pub const PLACES: [(u8, Vec3, f32); 7] = [
-    (arms::AR, Vec3::new(-0.031, 0.41, 0.055), 0.024),
-    (arms::BR, Vec3::new(-0.028, 0.30, 0.045), 0.022),
-    (arms::MAGNUM, Vec3::new(-0.032, 0.105, 0.03), 0.016),
-    (arms::SNIPER, Vec3::new(-0.034, 0.36, 0.05), 0.022),
-    (arms::SHOTGUN, Vec3::new(-0.033, 0.24, 0.035), 0.022),
-    (arms::ROCKET, Vec3::new(-0.073, 0.50, 0.08), 0.03),
-    (arms::SMG, Vec3::new(-0.024, 0.27, 0.04), 0.02),
+/// stock along the barrel, z up over the axis it is held by): the middle of
+/// the display its model paints glowing (measured off each GLB's glow map),
+/// the way that display faces, and how tall a digit is on it. The AR's
+/// looks back at the eye from its sight; the rocket's is on its right
+/// flank, the BR's a thin strip in a slot. The sniper paints none: its
+/// readout lies on the receiver's left flank.
+pub const PLACES: [(u8, Vec3, Vec3, f32); 7] = [
+    (
+        arms::AR,
+        Vec3::new(0.0, 0.3434, 0.1114),
+        Vec3::new(-0.065, -0.945, 0.319),
+        0.022,
+    ),
+    (arms::BR, Vec3::new(-0.0122, 0.3163, 0.0088), Vec3::NEG_X, 0.0068),
+    (arms::MAGNUM, Vec3::new(-0.0214, 0.0963, 0.0348), Vec3::NEG_X, 0.0095),
+    (arms::SNIPER, Vec3::new(-0.0266, 0.36, 0.05), Vec3::NEG_X, 0.02),
+    (arms::SHOTGUN, Vec3::new(-0.0209, 0.3348, 0.0543), Vec3::NEG_X, 0.016),
+    (arms::ROCKET, Vec3::new(0.1103, 0.6555, 0.1005), Vec3::X, 0.024),
+    (arms::SMG, Vec3::new(-0.009, 0.2765, 0.086), Vec3::NEG_X, 0.0085),
 ];
-/// How far the readout is turned off the flank toward the eye, radians.
-const TURN: f32 = 0.6;
+/// How far the readout stands off its display, in the model's units, so
+/// the two never fight for depth.
+const LIFT: f32 = 0.0008;
 /// A digit's width for its height, and the gap between two.
 const ASPECT: f32 = 0.6;
 const GAP: f32 = 0.18;
@@ -168,27 +177,40 @@ pub fn digits(n: u16) -> Vec<u8> {
     }
 }
 
+/// The turn that lays a digit's quad (+Z out of it, +X along the line)
+/// flat on a display facing `out`, upright as the gun is and reading left
+/// to right as one facing it sees it.
+fn lay(out: Vec3) -> Quat {
+    let up = (Vec3::Z - out * out.z).normalize();
+    Quat::from_mat3(&Mat3::from_cols(up.cross(out), up, out))
+}
+
+/// Where place `k` (from the right) of `places` sits on the line, in digit
+/// heights from the readout's middle.
+fn place_x(k: usize, places: usize) -> f32 {
+    ASPECT * (1.0 + GAP) * ((places as f32 - 1.0) * 0.5 - k as f32)
+}
+
 /// A readout under `view` (a hand's gun) for `arm`'s gun, if it carries one.
 fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMaterial>, view: Entity, arm: u8) {
-    let (Some(&(_, at, size)), Some(g)) = (PLACES.iter().find(|(a, ..)| *a == arm), gun(arm)) else {
+    let (Some(&(_, at, out, size)), Some(g)) = (PLACES.iter().find(|(a, ..)| *a == arm), gun(arm)) else {
         return;
     };
+    let out = out.normalize();
+    let at = at + out * LIFT;
     // Its middle in the hand's frame: the model's, its grip at the origin,
     // turned as the gun is (`guns::view_basis`).
     let p = view_basis() * (Vec3::new(at.x, at.y - g.height * g.grip, at.z) * g.scale);
-    // Facing out of the left flank (−x), reading front to back, turned
-    // toward the eye.
     let root = commands
         .spawn((
             Counter { arm, shown: None },
             Transform::from_translation(p)
-                .with_rotation(Quat::from_rotation_y(-core::f32::consts::FRAC_PI_2 + TURN))
+                .with_rotation(view_basis() * lay(out))
                 .with_scale(Vec3::splat(size * g.scale)),
             Visibility::Hidden,
             ChildOf(view),
         ))
         .id();
-    let step = ASPECT * (1.0 + GAP);
     for k in 0..PLACES_MAX as u8 {
         let m = mats.add(StandardMaterial {
             base_color: light(false),
@@ -205,9 +227,9 @@ fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMa
             Digit(k),
             Mesh3d(kit.quad.clone()),
             MeshMaterial3d(m),
-            // Places run right to left from the middle of a two-digit
-            // readout.
-            Transform::from_xyz(step * (0.5 - f32::from(k)), 0.0, 0.0),
+            // Places run right to left about the middle (`draw` centres
+            // them on as many as show).
+            Transform::from_xyz(place_x(usize::from(k), 2), 0.0, 0.0),
             Visibility::Hidden,
             NotShadowCaster,
             ChildOf(root),
@@ -223,7 +245,15 @@ pub fn draw(
     kit: Option<Res<CounterKit>>,
     hands: Query<(Entity, &ViewGun, Option<&Children>)>,
     mut counters: Query<(&mut Counter, &mut Visibility, &Children), Without<Digit>>,
-    mut digits_q: Query<(&Digit, &MeshMaterial3d<StandardMaterial>, &mut Visibility), Without<Counter>>,
+    mut digits_q: Query<
+        (
+            &Digit,
+            &MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+            &mut Transform,
+        ),
+        Without<Counter>,
+    >,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
@@ -264,7 +294,7 @@ pub fn draw(
         // width as the magazine empties.
         let places = ds.len().max(2.min(digits(full).len()));
         for kid in kids.iter() {
-            let Ok((d, m, mut dv)) = digits_q.get_mut(kid) else {
+            let Ok((d, m, mut dv, mut t)) = digits_q.get_mut(kid) else {
                 continue;
             };
             let k = usize::from(d.0);
@@ -273,6 +303,7 @@ pub fn draw(
                 continue;
             }
             dv.set_if_neq(Visibility::Inherited);
+            t.translation.x = place_x(k, places);
             if let Some(mat) = mats.get_mut(&m.0) {
                 mat.uv_transform = cell(ds.get(k).copied().unwrap_or(0));
                 mat.base_color = light(low);
@@ -294,14 +325,35 @@ mod tests {
         assert_eq!(digits(4321), vec![1, 2, 3]);
     }
 
-    /// Every readout is for a gun there is, on its left flank, within the
-    /// model's length.
+    /// Every readout is for a gun there is, within the model's length,
+    /// facing out of it.
     #[test]
     fn every_readout_sits_on_its_gun() {
-        for (arm, at, size) in PLACES {
+        for (arm, at, out, size) in PLACES {
             let g = gun(arm).expect("a gun");
-            assert!(at.x < 0.0 && at.y > 0.0 && at.y < g.height, "{}", g.file);
-            assert!(size > 0.005 && size < 0.05, "{}", g.file);
+            assert!(at.y > 0.0 && at.y < g.height, "{}", g.file);
+            assert!((out.length() - 1.0).abs() < 0.01, "{}", g.file);
+            assert!(size > 0.004 && size < 0.05, "{}", g.file);
         }
+    }
+
+    /// Laid on a display, a digit faces out of it, stands up and reads
+    /// left to right for one looking at it: on the left flank front to
+    /// back, on the AR's sight left to right from behind.
+    #[test]
+    fn a_readout_lies_on_its_display() {
+        let q = lay(Vec3::NEG_X);
+        assert!((q * Vec3::Z - Vec3::NEG_X).length() < 1e-5);
+        assert!((q * Vec3::Y - Vec3::Z).length() < 1e-5);
+        assert!((q * Vec3::X - Vec3::NEG_Y).length() < 1e-5);
+        let q = lay(Vec3::NEG_Y);
+        assert!((q * Vec3::X - Vec3::X).length() < 1e-5);
+    }
+
+    #[test]
+    fn the_places_are_centred() {
+        assert!(place_x(0, 1).abs() < 1e-6);
+        assert!((place_x(0, 2) + place_x(1, 2)).abs() < 1e-6);
+        assert!(place_x(1, 3).abs() < 1e-6);
     }
 }
