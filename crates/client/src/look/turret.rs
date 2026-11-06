@@ -55,9 +55,9 @@ const REST_EASE: f32 = 2.0;
 /// The barrels' glow: none below `GLOW_FROM` of full heat, then up to
 /// `GLOW_MAX` (times the colour) at full, dull red turning orange.
 const GLOW_FROM: f32 = 0.2;
-const GLOW_MAX: f32 = 7.0;
-const GLOW_DULL: [f32; 3] = [1.0, 0.12, 0.02];
-const GLOW_HOT: [f32; 3] = [1.0, 0.42, 0.1];
+const GLOW_MAX: f32 = 2.2;
+const GLOW_DULL: [f32; 3] = [1.0, 0.06, 0.01];
+const GLOW_HOT: [f32; 3] = [1.0, 0.3, 0.05];
 /// Over `SMOKE_FROM` of full heat and not firing, its muzzle smokes, a
 /// puff every `SMOKE_EVERY_S` at full, rarer as it cools; venting, every
 /// `VENT_EVERY_S`, and the vent's first breath off the receiver is
@@ -250,14 +250,18 @@ fn bind(
     };
     for e in children.iter_descendants(ev.entity) {
         let Ok(skin) = skins.get(e) else { continue };
-        let Some(base) = mats.get(&skin.0) else { continue };
+        let Some(base) = mats.get(&skin.0).cloned() else {
+            continue;
+        };
         let own = mats.add(StandardMaterial {
             emissive: LinearRgba::BLACK,
-            ..base.clone()
+            ..base
         });
         commands.entity(e).insert(MeshMaterial3d(own.clone()));
         t.glow.push(own);
     }
+    // Lit afresh by `aim`, whatever it last lit.
+    t.lit = -1.0;
 }
 
 /// A turret gun's heat as another's is drawn: up by its rounds while it is
