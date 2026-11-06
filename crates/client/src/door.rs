@@ -154,7 +154,7 @@ mod desktop {
         pub fn sign_in(&mut self) {}
 
         pub fn signin(&self) -> SignIn {
-            SignIn::Off("Ranked needs an Elo Pros sign-in: play it in the browser".into())
+            SignIn::Off("Ranked plays in the browser".into())
         }
 
         pub fn quits(&self) -> bool {

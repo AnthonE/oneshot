@@ -145,7 +145,7 @@ const MODES: [Mode; 9] = [
         id: proto::MODE_DUEL,
         name: "DUEL",
         short: "1V1 · RATED",
-        about: "1v1 Slayer: first to 15 kills or 10 minutes. Rated on Elo Pros.",
+        about: "1v1 Slayer: first to 15 kills or 10 minutes. Rated.",
         ranked: true,
         tag: "mode1",
     },
@@ -153,7 +153,7 @@ const MODES: [Mode; 9] = [
         id: proto::MODE_DOUBLES,
         name: "DOUBLES",
         short: "2V2 · RATED",
-        about: "2v2 Team Slayer: first to 30 or 12 minutes. Rated on Elo Pros.",
+        about: "2v2 Team Slayer: first to 30 or 12 minutes. Rated.",
         ranked: true,
         tag: "mode2",
     },
@@ -217,6 +217,8 @@ pub(crate) struct Front {
     knocked_at: f32,
     /// How far the PLAY panel's rows are scrolled (px), kept over rebuilds.
     scroll: f32,
+    /// The armory's page (`ARMORY_TABS`).
+    armory: usize,
 }
 
 /// The title opens on a panel other than PLAY (`--tab`, for a picture of
@@ -282,8 +284,11 @@ enum Hit {
     Skin(u8),
     /// A gear slot (`GEAR_ROWS`) and what goes in it.
     Gear(usize, u8),
-    /// The emblem's glyph (0) or shape (1), one step either way.
-    Emblem(usize, i32),
+    /// The armory's page (`ARMORY_TABS`).
+    Armory(usize),
+    /// The emblem's glyph, and the shape behind it.
+    Glyph(u8),
+    Field(u8),
     /// The emblem's glyph's colour (0) or its shape's (1), from the palette.
     EmblemColour(usize, u8),
     Name,
@@ -337,10 +342,12 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
             },
             knocked_at: 0.0,
             scroll: 0.0,
+            armory: 0,
             tab: Tab::Play,
             drawn_party: u32::MAX,
             drawn_challenges: u32::MAX,
         })
+        .init_resource::<EmblemPics>()
         .init_resource::<InMatch>()
         .init_resource::<Leaving>()
         .init_resource::<LinkGen>()
@@ -404,7 +411,7 @@ fn build(
     portrait: Option<&crate::look::portrait::Portrait>,
     party: &PartyView,
     challenges: &crate::challenges::Challenges,
-    emblem: &Handle<Image>,
+    pics: (&mut EmblemPics, &mut Assets<Image>),
 ) {
     let signin = door.signin();
     commands
@@ -431,7 +438,7 @@ fn build(
                 ..default()
             })
             .with_children(|top| {
-                top.spawn(ui::wordmark("ARENA SLAYER · RANKED ON ELO PROS"));
+                top.spawn(ui::wordmark("ARENA SLAYER"));
                 account(top, &signin);
             });
             // The body: the nav, the panel, the stage.
@@ -446,7 +453,7 @@ fn build(
                 nav(body, door.quits(), front.tab, party);
                 match front.tab {
                     Tab::Play => panel(body, front, player, &signin, knocking, party),
-                    Tab::Armory => armory_panel(body, front, player, knocking, party, emblem),
+                    Tab::Armory => armory_panel(body, front, player, knocking, party, pics),
                     Tab::Party => with_play(body, front, party, knocking, |p| party_panel(p, party)),
                     Tab::Friends => with_play(body, front, party, knocking, |p| friends_panel(p, party, &signin)),
                     Tab::Challenges => with_play(body, front, party, knocking, |p| {
@@ -506,13 +513,13 @@ fn account(top: &mut ChildSpawnerCommands, signin: &SignIn) {
                 .with_child(ui::button_label("SIGN IN WITH ELO PROS"));
         }
         SignIn::Asking => {
-            a.spawn(ui::label("Signing in on Elo Pros...", 13.0, ui::DIM));
+            a.spawn(ui::label("Signing in...", 13.0, ui::DIM));
         }
         SignIn::In(p) => {
             a.spawn(ui::strong("SIGNED IN", 15.0, ui::TITLE));
             match &p.wallet {
                 Some(w) => a.spawn(ui::strong(door::short_wallet(w), 12.5, ui::ELO)),
-                None => a.spawn(ui::label("Link a wallet on Elo Pros to play ranked", 12.5, ui::DIM)),
+                None => a.spawn(ui::label("Link a wallet to play ranked", 12.5, ui::DIM)),
             };
         }
         SignIn::Failed(e) => {
@@ -634,8 +641,8 @@ fn panel(
             if !open {
                 let why = match signin {
                     SignIn::Off(why) => why.clone(),
-                    SignIn::In(_) => "Link a wallet on Elo Pros to play ranked.".into(),
-                    _ => "Sign in with Elo Pros, a wallet linked, to play ranked.".into(),
+                    SignIn::In(_) => "Link a wallet to play ranked.".into(),
+                    _ => "Sign in, a wallet linked, to play ranked.".into(),
                 };
                 p.spawn(ui::label(why, 12.0, ui::FAINT));
             }
@@ -783,6 +790,25 @@ fn swatch_bar(c: Color, w: f32, h: f32) -> impl Bundle {
 /// The armory's inner width: the panel's, less its padding.
 const ARMORY_W: f32 = 380.0 - 36.0;
 const TILE_GAP: f32 = 6.0;
+/// A card's width, three a row, and the skin cards' colour block.
+const CARD_W: f32 = 110.0;
+const CARD_BLOCK_H: f32 = 40.0;
+/// The emblem's own picture, px; a glyph's tile and its picture; a shape's.
+const EMBLEM_BOX: f32 = 96.0;
+const GLYPH_TILE: f32 = 45.0;
+const GLYPH_PX: f32 = 32.0;
+const FIELD_TILE: f32 = 44.0;
+/// The palette's swatches.
+const SWATCH: f32 = 16.0;
+const SWATCH_GAP: f32 = 2.0;
+/// The emblem pictures' pixels a side: the preview's and a tile's.
+const EMBLEM_PX: u32 = 96;
+const TILE_PX: u32 = 40;
+
+/// The armory's pages: the skins, a page a gear slot (`GEAR_ROWS`), the
+/// emblem.
+const ARMORY_TABS: [&str; 4] = ["ARMOUR", "HEAD", "FEET", "EMBLEM"];
+const ARMORY_EMBLEM: usize = 3;
 
 /// A choice in the armory, `w` by `h` px: lit under the pointer, blue when
 /// it's what you wear.
@@ -800,8 +826,9 @@ fn tile(w: f32, h: f32, picked: bool) -> impl Bundle {
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
-            row_gap: Val::Px(4.0),
+            row_gap: Val::Px(3.0),
             flex_shrink: 0.0,
+            overflow: Overflow::clip(),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
@@ -824,207 +851,280 @@ fn tiles() -> Node {
     }
 }
 
-/// ARMORY: the skin, the gear and the emblem, each a choice you can see,
-/// with PLAY at the foot. Triple T beside it wears what is picked, and turns
-/// round for the emblem (`look/portrait.rs`).
+/// An item card: a block of colour over its name, and a note under it (a
+/// rank lock), `h` tall.
+fn card(p: &mut ChildSpawnerCommands, hit: Hit, picked: bool, h: f32, block: Option<Color>, name: &str, note: &str) {
+    p.spawn((tile(CARD_W, h, picked), hit)).with_children(|c| {
+        if let Some(colour) = block {
+            c.spawn((
+                Node {
+                    width: Val::Px(CARD_W - 2.0),
+                    height: Val::Px(CARD_BLOCK_H),
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(0.0),
+                    left: Val::Px(0.0),
+                    ..default()
+                },
+                BackgroundColor(colour.with_alpha(0.85)),
+            ));
+            c.spawn(Node {
+                height: Val::Px(CARD_BLOCK_H - 6.0),
+                ..default()
+            });
+        }
+        c.spawn(ui::strong(name.to_uppercase(), 13.0, ui::TITLE));
+        if !note.is_empty() {
+            c.spawn(ui::strong(note.to_string(), 9.5, ui::MARK));
+        }
+    });
+}
+
+/// The armory's pages across its top: the picked one blocked out in the blue.
+fn armory_tabs(p: &mut ChildSpawnerCommands, at: usize) {
+    p.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(4.0),
+        flex_shrink: 0.0,
+        margin: UiRect::bottom(Val::Px(4.0)),
+        ..default()
+    })
+    .with_children(|r| {
+        let w = ((ARMORY_W - 3.0 * 4.0) / 4.0).floor();
+        for (k, name) in ARMORY_TABS.iter().enumerate() {
+            let picked = k == at;
+            let (idle, over) = if picked {
+                (ui::ACCENT, ui::ACCENT_HOVER)
+            } else {
+                (ui::ROW_IDLE, ui::ROW_HOVER)
+            };
+            r.spawn((
+                Button,
+                Hit::Armory(k),
+                Node {
+                    width: Val::Px(w),
+                    height: Val::Px(28.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(idle),
+                BorderColor::all(if picked { Color::NONE } else { ui::RULE }),
+                ui::Hover::new(idle, over),
+            ))
+            .with_child(ui::strong(*name, 11.5, if picked { ui::TITLE } else { ui::DIM }));
+        }
+    });
+}
+
+/// ARMORY: what you wear, a page each (the skins, a gear slot, the emblem),
+/// every choice a card you can see, with PLAY at the foot. Triple T beside
+/// it wears what is picked, and turns round for the emblem
+/// (`look/portrait.rs`).
 fn armory_panel(
     body: &mut ChildSpawnerCommands,
     front: &Front,
     player: &Player,
     knocking: bool,
     party: &PartyView,
-    emblem: &Handle<Image>,
+    (pics, images): (&mut EmblemPics, &mut Assets<Image>),
 ) {
     body.spawn(ui::panel(380.0)).with_children(|panel| {
-        panel.spawn(rows(front.scroll)).with_children(|p| {
-            // The skins, three a row.
-            p.spawn(ui::group("ARMOUR"));
-            let w = ((ARMORY_W - 2.0 * TILE_GAP) / 3.0).floor();
-            p.spawn(tiles()).with_children(|t| {
-                for i in 0..proto::SKINS.len() as u8 {
-                    t.spawn((tile(w, 48.0, player.skin == i), Hit::Skin(i)))
-                        .with_children(|c| {
-                            c.spawn(swatch_bar(skin_colour(i), 34.0, 4.0));
-                            c.spawn(ui::strong(skin_word(i), 13.0, ui::TITLE));
-                            c.spawn(ui::label(skin_note(i), 10.0, ui::FAINT));
-                        });
-                }
-            });
-            // The gear, a slot a row.
-            p.spawn(ui::group("GEAR"));
-            for (k, (label, slot)) in GEAR_ROWS.iter().enumerate() {
-                let on = proto::gear_valid(slot, player.gear(k));
-                p.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(TILE_GAP),
-                    flex_shrink: 0.0,
-                    ..default()
-                })
-                .with_children(|r| {
-                    r.spawn(Node {
-                        width: Val::Px(44.0),
-                        flex_shrink: 0.0,
-                        ..default()
-                    })
-                    .with_child(ui::strong(*label, 12.0, ui::FAINT));
-                    let n = slot.len() as f32;
-                    let w = ((ARMORY_W - 44.0 - n * TILE_GAP) / n).floor();
+        armory_tabs(panel, front.armory);
+        panel.spawn(rows(front.scroll)).with_children(|p| match front.armory {
+            0 => {
+                p.spawn(ui::group(&format!("ARMOUR · {}", proto::SKINS.len())));
+                p.spawn(tiles()).with_children(|t| {
+                    for i in 0..proto::SKINS.len() as u8 {
+                        card(
+                            t,
+                            Hit::Skin(i),
+                            player.skin == i,
+                            CARD_BLOCK_H + 36.0,
+                            Some(skin_colour(i)),
+                            &skin_word(i),
+                            &skin_note(i),
+                        );
+                    }
+                });
+                p.spawn(ui::spacer());
+                p.spawn(ui::label(
+                    "Worn if your wallet owns it. A rating is the floor to wear one.",
+                    11.0,
+                    ui::FAINT,
+                ));
+            }
+            k if k <= GEAR_ROWS.len() => {
+                let (label, slot) = GEAR_ROWS[k - 1];
+                let on = proto::gear_valid(slot, player.gear(k - 1));
+                p.spawn(ui::group(&format!("{label} · {}", slot.len() - 1)));
+                p.spawn(tiles()).with_children(|t| {
                     for (g, name) in slot.iter().enumerate() {
                         let g = g as u8;
-                        r.spawn((tile(w, 36.0, on == g), Hit::Gear(k, g))).with_children(|c| {
-                            c.spawn(ui::strong(name.to_uppercase(), 13.0, ui::TITLE));
-                            c.spawn(ui::label(
-                                if g == proto::GEAR_NONE {
-                                    "EVERYONE"
-                                } else {
-                                    "ON ELO PROS"
-                                },
-                                10.0,
-                                ui::FAINT,
-                            ));
-                        });
+                        card(t, Hit::Gear(k - 1, g), on == g, 40.0, None, name, "");
                     }
                 });
+                p.spawn(ui::spacer());
+                p.spawn(ui::label("Worn if your wallet owns it.", 11.0, ui::FAINT));
             }
-            // The emblem: what it looks like, its glyph and shape, their colours.
-            p.spawn(ui::group("EMBLEM · ON YOUR BACK"));
-            let parts = proto::emblem_parts(proto::emblem_valid(player.emblem));
-            p.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(12.0),
-                flex_shrink: 0.0,
-                ..default()
-            })
-            .with_children(|r| {
-                r.spawn((
-                    Node {
-                        width: Val::Px(EMBLEM_BOX),
-                        height: Val::Px(EMBLEM_BOX),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        flex_shrink: 0.0,
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(ui::WELL),
-                    BorderColor::all(ui::RULE),
-                ))
-                .with_children(|b| {
-                    if parts.0 == 0 {
-                        b.spawn(ui::strong("NONE", 12.0, ui::FAINT));
-                    } else {
-                        b.spawn((
-                            ImageNode::new(emblem.clone()),
-                            Node {
-                                width: Val::Px(EMBLEM_BOX - 14.0),
-                                height: Val::Px(EMBLEM_BOX - 14.0),
-                                ..default()
-                            },
-                        ));
-                    }
-                });
-                r.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    flex_grow: 1.0,
-                    row_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|c| {
-                    for (k, label) in ["GLYPH", "SHAPE"].into_iter().enumerate() {
-                        if k > 0 && parts.0 == 0 {
-                            break;
-                        }
-                        c.spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(6.0),
-                            ..default()
-                        })
-                        .with_children(|r| {
-                            r.spawn(ui::strong(label, 12.0, ui::FAINT));
-                            r.spawn(ui::spacer());
-                            r.spawn((ui::stepper(), Hit::Emblem(k, -1))).with_child(ui::strong(
-                                "<",
-                                14.0,
-                                ui::TEXT_COLOR,
-                            ));
-                            r.spawn(Node {
-                                width: Val::Px(104.0),
-                                justify_content: JustifyContent::Center,
-                                ..default()
-                            })
-                            .with_child(ui::strong(
-                                emblem_part_name(k, parts),
-                                13.0,
-                                ui::TEXT_COLOR,
-                            ));
-                            r.spawn((ui::stepper(), Hit::Emblem(k, 1))).with_child(ui::strong(
-                                ">",
-                                14.0,
-                                ui::TEXT_COLOR,
-                            ));
-                        });
-                    }
-                });
-            });
-            if parts.0 != 0 {
-                let colours = [("GLYPH", parts.2, true), ("SHAPE", parts.3, parts.1 != 0)];
-                for (k, (label, at, shown)) in colours.into_iter().enumerate() {
-                    if !shown {
-                        continue;
-                    }
-                    p.spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(SWATCH_GAP),
-                        flex_shrink: 0.0,
-                        ..default()
-                    })
-                    .with_children(|r| {
-                        r.spawn(Node {
-                            width: Val::Px(44.0 + TILE_GAP - SWATCH_GAP),
-                            flex_shrink: 0.0,
-                            ..default()
-                        })
-                        .with_child(ui::strong(label, 12.0, ui::FAINT));
-                        for (i, [cr, cg, cb]) in crate::look::emblem::PALETTE.iter().enumerate() {
-                            let c = Color::srgb_u8(*cr, *cg, *cb);
-                            let picked = at as usize == i;
-                            r.spawn((
-                                Button,
-                                Hit::EmblemColour(k, i as u8),
-                                Node {
-                                    width: Val::Px(SWATCH),
-                                    height: Val::Px(SWATCH),
-                                    flex_shrink: 0.0,
-                                    border: UiRect::all(Val::Px(2.0)),
-                                    border_radius: BorderRadius::all(Val::Px(2.0)),
-                                    ..default()
-                                },
-                                BackgroundColor(c),
-                                BorderColor::all(if picked { ui::TITLE } else { ui::RULE }),
-                                ui::Hover::new(c, c),
-                            ));
-                        }
-                    });
-                }
-            }
-            p.spawn(ui::spacer());
-            p.spawn(ui::label(
-                "Worn if your wallet owns it on Elo Pros; a skin's rating is the floor to wear it.",
-                11.0,
-                ui::FAINT,
-            ));
+            _ => emblem_page(p, player, pics, images),
         });
         play_foot(panel, front, party, knocking);
     });
 }
 
-/// The stage's words in the armory: what you wear, said as a person would,
-/// and what a wallet needs to wear it.
+/// The emblem's page: its picture, the shapes beside it with the glyph on
+/// each, every glyph, then the two colours.
+fn emblem_page(p: &mut ChildSpawnerCommands, player: &Player, pics: &mut EmblemPics, images: &mut Assets<Image>) {
+    let (g, f, gc, fc) = proto::emblem_parts(proto::emblem_valid(player.emblem));
+    p.spawn(ui::group("EMBLEM · ON YOUR BACK"));
+    p.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::FlexStart,
+        column_gap: Val::Px(10.0),
+        flex_shrink: 0.0,
+        ..default()
+    })
+    .with_children(|r| {
+        // The picture.
+        r.spawn((
+            Node {
+                width: Val::Px(EMBLEM_BOX),
+                height: Val::Px(EMBLEM_BOX),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                flex_shrink: 0.0,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(ui::WELL),
+            BorderColor::all(ui::RULE),
+        ))
+        .with_children(|b| {
+            if g == 0 {
+                b.spawn(ui::strong("NONE", 12.0, ui::FAINT));
+            } else {
+                b.spawn((
+                    ImageNode::new(pics.pic(images, player.emblem, EMBLEM_PX)),
+                    Node {
+                        width: Val::Px(EMBLEM_BOX - 16.0),
+                        height: Val::Px(EMBLEM_BOX - 16.0),
+                        ..default()
+                    },
+                ));
+            }
+        });
+        // The shapes, the glyph (a star while there is none) on each.
+        let shown = if g == 0 { 1 } else { g };
+        r.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(4.0),
+            row_gap: Val::Px(4.0),
+            width: Val::Px(4.0 * FIELD_TILE + 3.0 * 4.0),
+            ..default()
+        })
+        .with_children(|t| {
+            for i in 0..proto::EMBLEM_FIELDS.len() as u8 {
+                t.spawn((tile(FIELD_TILE, FIELD_TILE, f == i), Hit::Field(i)))
+                    .with_children(|c| {
+                        if i == 0 {
+                            c.spawn(ui::strong("NONE", 9.0, ui::FAINT));
+                        } else {
+                            c.spawn((
+                                ImageNode::new(pics.pic(images, proto::emblem(shown, i, gc, fc), TILE_PX)),
+                                Node {
+                                    width: Val::Px(FIELD_TILE - 10.0),
+                                    height: Val::Px(FIELD_TILE - 10.0),
+                                    ..default()
+                                },
+                            ));
+                        }
+                    });
+            }
+        });
+    });
+    // Every glyph, white, as an icon; a rank lock under the ones that have one.
+    p.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Wrap,
+        column_gap: Val::Px(4.0),
+        row_gap: Val::Px(4.0),
+        flex_shrink: 0.0,
+        ..default()
+    })
+    .with_children(|t| {
+        for i in 0..proto::EMBLEM_GLYPHS.len() as u8 {
+            t.spawn((tile(GLYPH_TILE, GLYPH_TILE, g == i), Hit::Glyph(i)))
+                .with_children(|c| {
+                    if i == 0 {
+                        c.spawn(ui::strong("NONE", 9.0, ui::FAINT));
+                        return;
+                    }
+                    let line = proto::GLYPH_FLOOR[i as usize];
+                    let px = if line > 0 { GLYPH_PX - 8.0 } else { GLYPH_PX };
+                    c.spawn((
+                        ImageNode::new(pics.pic(images, proto::emblem(i, 0, 0, 0), TILE_PX)),
+                        Node {
+                            width: Val::Px(px),
+                            height: Val::Px(px),
+                            ..default()
+                        },
+                    ));
+                    if line > 0 {
+                        c.spawn(ui::strong(format!("{line}+"), 8.5, ui::MARK));
+                    }
+                });
+        }
+    });
+    // The colours.
+    if g != 0 {
+        let colours = [("GLYPH", gc, true), ("SHAPE", fc, f != 0)];
+        for (k, (label, at, shown)) in colours.into_iter().enumerate() {
+            if !shown {
+                continue;
+            }
+            p.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(SWATCH_GAP),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(Node {
+                    width: Val::Px(44.0 + TILE_GAP - SWATCH_GAP),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .with_child(ui::strong(label, 11.0, ui::FAINT));
+                for (i, [cr, cg, cb]) in crate::look::emblem::PALETTE.iter().enumerate() {
+                    let c = Color::srgb_u8(*cr, *cg, *cb);
+                    let picked = at as usize == i;
+                    r.spawn((
+                        Button,
+                        Hit::EmblemColour(k, i as u8),
+                        Node {
+                            width: Val::Px(SWATCH),
+                            height: Val::Px(SWATCH),
+                            flex_shrink: 0.0,
+                            border: UiRect::all(Val::Px(2.0)),
+                            border_radius: BorderRadius::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BackgroundColor(c),
+                        BorderColor::all(if picked { ui::TITLE } else { ui::RULE }),
+                        ui::Hover::new(c, c),
+                    ));
+                }
+            });
+        }
+    }
+}
+
+/// The stage's words in the armory: what you wear, said as a person would.
 fn armory_words(player: &Player) -> (String, String, String) {
     let mut worn: Vec<String> = Vec::new();
     for (k, (_, slot)) in GEAR_ROWS.iter().enumerate() {
@@ -1070,60 +1170,54 @@ fn colour_word(i: u8) -> &'static str {
     NAMES[i as usize & 15]
 }
 
-/// The emblem's picture's box in the armory, and the palette's swatches.
-const EMBLEM_BOX: f32 = 92.0;
-const SWATCH: f32 = 16.0;
-const SWATCH_GAP: f32 = 2.0;
-/// The emblem's picture, px a side.
-const EMBLEM_PX: u32 = 96;
-
-/// The armory's emblem picture: its image and the emblem it shows.
-#[derive(Resource)]
-struct EmblemPicture {
-    image: Handle<Image>,
-    code: proto::Emblem,
+/// The armory's emblem pictures, each an emblem drawn `size` px a side
+/// (`look/emblem.rs`), kept while a build shows them.
+#[derive(Resource, Default)]
+struct EmblemPics {
+    pics: std::collections::HashMap<(proto::Emblem, u32), Handle<Image>>,
+    used: Vec<(proto::Emblem, u32)>,
 }
 
-/// The emblem's picture, drawn again when the emblem moves.
-fn emblem_picture(
-    commands: &mut Commands,
-    pic: Option<&mut EmblemPicture>,
-    images: &mut Assets<Image>,
-    code: proto::Emblem,
-) -> Handle<Image> {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    let code = proto::emblem_valid(code);
-    let make = || {
-        Image::new(
-            Extent3d {
-                width: EMBLEM_PX,
-                height: EMBLEM_PX,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            crate::look::emblem::rgba(code, EMBLEM_PX),
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
-        )
-    };
-    match pic {
-        Some(p) if p.code == code => p.image.clone(),
-        Some(p) => {
-            if let Some(img) = images.get_mut(&p.image) {
-                *img = make();
+impl EmblemPics {
+    /// `code`'s picture, drawn if it isn't yet.
+    fn pic(&mut self, images: &mut Assets<Image>, code: proto::Emblem, size: u32) -> Handle<Image> {
+        use bevy::asset::RenderAssetUsages;
+        use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+        let key = (proto::emblem_valid(code), size);
+        self.used.push(key);
+        self.pics
+            .entry(key)
+            .or_insert_with(|| {
+                images.add(Image::new(
+                    Extent3d {
+                        width: size,
+                        height: size,
+                        depth_or_array_layers: 1,
+                    },
+                    TextureDimension::D2,
+                    crate::look::emblem::rgba(key.0, size),
+                    TextureFormat::Rgba8UnormSrgb,
+                    RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+                ))
+            })
+            .clone()
+    }
+
+    /// A build starts: nothing used yet.
+    fn begin(&mut self) {
+        self.used.clear();
+    }
+
+    /// A build is done: the pictures it didn't show are dropped.
+    fn end(&mut self, images: &mut Assets<Image>) {
+        let used = std::mem::take(&mut self.used);
+        self.pics.retain(|k, h| {
+            if used.contains(k) {
+                return true;
             }
-            p.code = code;
-            p.image.clone()
-        }
-        None => {
-            let image = images.add(make());
-            commands.insert_resource(EmblemPicture {
-                image: image.clone(),
-                code,
-            });
-            image
-        }
+            images.remove(h.id());
+            false
+        });
     }
 }
 
@@ -1398,7 +1492,7 @@ fn challenges_panel(body: &mut ChildSpawnerCommands, ch: &crate::challenges::Cha
             p.spawn(ui::group("CHALLENGES"));
             p.spawn(ui::label(
                 if ch.failed {
-                    "Elo Pros didn't answer just now."
+                    "The challenges didn't come through just now."
                 } else {
                     "Reading today's challenges..."
                 },
@@ -1445,11 +1539,7 @@ fn challenges_panel(body: &mut ChildSpawnerCommands, ch: &crate::challenges::Cha
         }
         p.spawn(ui::spacer());
         if !matches!(signin, SignIn::In(_)) {
-            p.spawn(ui::label(
-                "Sign in with Elo Pros to count your progress.",
-                12.5,
-                ui::DIM,
-            ));
+            p.spawn(ui::label("Sign in to count your progress.", 12.5, ui::DIM));
         }
         if !v.rules.is_empty() {
             p.spawn(ui::label(v.rules.clone(), 10.5, ui::FAINT));
@@ -1466,11 +1556,7 @@ fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &Si
             format!("FRIENDS · {here} HERE")
         }));
         if !matches!(signin, SignIn::In(_)) && party.friends.is_empty() {
-            p.spawn(ui::label(
-                "Sign in with Elo Pros to see your friends here.",
-                13.0,
-                ui::DIM,
-            ));
+            p.spawn(ui::label("Sign in to see your friends here.", 13.0, ui::DIM));
             if matches!(signin, SignIn::Ready | SignIn::Failed(_)) {
                 p.spawn((ui::button(220.0, false), Hit::SignIn))
                     .with_child(ui::button_label("SIGN IN WITH ELO PROS"));
@@ -1478,13 +1564,9 @@ fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &Si
             return;
         }
         if !party.reachable && party.friends_known {
-            p.spawn(ui::label("Elo Pros didn't answer just now.", 12.5, ui::BAD));
+            p.spawn(ui::label("Your friends didn't come through just now.", 12.5, ui::BAD));
         } else if party.friends_known && party.friends.is_empty() {
-            p.spawn(ui::label(
-                "No friends yet. Add them on your Elo Pros profile.",
-                13.0,
-                ui::DIM,
-            ));
+            p.spawn(ui::label("No friends yet. Add them on your profile.", 13.0, ui::DIM));
         } else if !party.friends_known {
             p.spawn(ui::label("Reading your friends...", 13.0, ui::DIM));
         }
@@ -1524,7 +1606,7 @@ fn friends_panel(body: &mut ChildSpawnerCommands, party: &PartyView, signin: &Si
                         pp::AT_MATCH => playing_words(f.playing),
                         pp::AT_HERE if f.size > 1 => format!("PARTY OF {}", f.size),
                         pp::AT_HERE => "IN THE MENU".into(),
-                        pp::AT_ELSEWHERE => "ON ELO PROS".into(),
+                        pp::AT_ELSEWHERE => "ONLINE".into(),
                         _ => "OFFLINE".into(),
                     }
                 };
@@ -1715,36 +1797,6 @@ fn stage(
     });
 }
 
-fn emblem_part_name(k: usize, (g, f, gc, fc): (u8, u8, u8, u8)) -> String {
-    match k {
-        0 if g == 0 => "NONE".into(),
-        0 => {
-            let line = proto::GLYPH_FLOOR[g as usize];
-            let name = proto::EMBLEM_GLYPHS[g as usize].to_uppercase();
-            if line > 0 {
-                format!("{name} {line}+")
-            } else {
-                name
-            }
-        }
-        1 => proto::EMBLEM_FIELDS[f as usize].to_uppercase(),
-        2 => format!("{}", gc + 1),
-        _ => format!("{}", fc + 1),
-    }
-}
-
-/// `e` with part `k` stepped by `d`, round its range.
-fn step_emblem(e: proto::Emblem, k: usize, d: i32) -> proto::Emblem {
-    let mut p = proto::emblem_parts(e);
-    let step = |v: u8, range: usize| (v as i32 + d).rem_euclid(range as i32) as u8;
-    if k == 0 {
-        p.0 = step(p.0, proto::EMBLEM_GLYPHS.len());
-    } else {
-        p.1 = step(p.1, proto::EMBLEM_FIELDS.len());
-    }
-    proto::emblem(p.0, p.1, p.2, p.3)
-}
-
 /// Triple T turned to show his back (the emblem) or his front.
 fn turn(portrait: &mut Option<ResMut<crate::look::portrait::Portrait>>, back: bool) {
     if let Some(p) = portrait {
@@ -1761,13 +1813,12 @@ fn skin_word(i: u8) -> String {
         .to_uppercase()
 }
 
-/// Under a skin's name in the armory: everyone's, or owned, and its rank
-/// lock (`proto::SKIN_FLOOR`) when it has one.
+/// Under a skin's name in the armory: its rank lock (`proto::SKIN_FLOOR`)
+/// when it has one.
 fn skin_note(i: u8) -> String {
-    match (i, proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0)) {
-        (proto::SKIN_STANDARD, _) => "EVERYONE".into(),
-        (_, 0) => "ON ELO PROS".into(),
-        (_, line) => format!("RATED {line}+"),
+    match proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0) {
+        0 => String::new(),
+        line => format!("{line}+"),
     }
 }
 
@@ -1862,10 +1913,25 @@ fn click(
             turn(portrait, false);
             front.dirty = true;
         }
-        Hit::Emblem(k, d) => {
-            player.emblem = step_emblem(player.emblem, k, d);
+        Hit::Armory(k) => {
+            if front.armory != k {
+                front.scroll = 0.0;
+            }
+            front.armory = k;
             let (g, ..) = proto::emblem_parts(player.emblem);
+            turn(portrait, k == ARMORY_EMBLEM && g != 0);
+            front.dirty = true;
+        }
+        Hit::Glyph(g) => {
+            let p = proto::emblem_parts(player.emblem);
+            player.emblem = proto::emblem(g, p.1, p.2, p.3);
             turn(portrait, g != 0);
+            front.dirty = true;
+        }
+        Hit::Field(f) => {
+            let p = proto::emblem_parts(player.emblem);
+            player.emblem = proto::emblem(p.0, f, p.2, p.3);
+            turn(portrait, p.0 != 0);
             front.dirty = true;
         }
         Hit::EmblemColour(k, c) => {
@@ -1892,7 +1958,8 @@ fn click(
                 front.scroll = 0.0;
             }
             front.tab = t;
-            turn(portrait, false);
+            let (g, ..) = proto::emblem_parts(player.emblem);
+            turn(portrait, t == Tab::Armory && front.armory == ARMORY_EMBLEM && g != 0);
             if t == Tab::Friends {
                 asks.0.push(Do::Act(pp::ACT_FRIENDS, 0));
             }
@@ -2101,7 +2168,7 @@ fn rebuild(
     portrait: Option<Res<crate::look::portrait::Portrait>>,
     party: Res<PartyView>,
     (mut challenges, time, mut looked): (ResMut<crate::challenges::Challenges>, Res<Time>, Local<f64>),
-    (mut pic, mut images): (Option<ResMut<EmblemPicture>>, ResMut<Assets<Image>>),
+    (mut pics, mut images): (ResMut<EmblemPics>, ResMut<Assets<Image>>),
 ) {
     // The sign-in looked at a few times a second, or on a change here: each
     // look clones it (a string made, on the desktop).
@@ -2139,7 +2206,7 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let emblem = emblem_picture(&mut commands, pic.as_deref_mut(), &mut images, player.emblem);
+    pics.begin();
     build(
         &mut commands,
         &front,
@@ -2149,8 +2216,9 @@ fn rebuild(
         portrait.as_deref(),
         &party,
         &challenges,
-        &emblem,
+        (&mut pics, &mut images),
     );
+    pics.end(&mut images);
 }
 
 /// The curtain over the backdrop: up until its level is there (built,
