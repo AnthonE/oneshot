@@ -309,13 +309,13 @@ pub static SPECS: [Spec; COUNT] = [
     Spec {
         action: Action::Swap,
         token: "swap",
-        name: "Swap weapon",
+        name: "Swap weapon, drop flag",
         default: [k(KeyCode::KeyX), k(KeyCode::Digit1)],
     },
     Spec {
         action: Action::Use,
         token: "use",
-        name: "Pick up, get in",
+        name: "Pick up, take flag, get in",
         default: [k(KeyCode::KeyE), None],
     },
     Spec {

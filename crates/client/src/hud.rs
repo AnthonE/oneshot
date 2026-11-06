@@ -1107,6 +1107,8 @@ pub fn on_events(
                 name,
                 skin,
                 emblem,
+                headwear,
+                footwear,
                 team,
                 ..
             } => {
@@ -1116,6 +1118,8 @@ pub fn on_events(
                     proto::Look {
                         skin: *skin,
                         emblem: *emblem,
+                        headwear: *headwear,
+                        footwear: *footwear,
                     },
                 );
                 st.teams.insert(*slot, *team);
@@ -1526,7 +1530,9 @@ pub struct GearText {
     gren: [u8; 2],
     hands: [Option<(u32, &'static str, &'static str)>; 2],
     back: &'static str,
-    ride: Option<&'static str>,
+    /// The keys to press and what for, over the gear: getting out of a
+    /// ride, and Capture the Flag's take and drop.
+    prompt: [Option<(&'static str, &'static str)>; 2],
 }
 
 /// The grenades, the guns in hand and on our back, and a ride's way out.
@@ -1582,11 +1588,36 @@ pub fn gear(
         set_display(&mut n, carried);
     }
     let out = binds.key(crate::binds::Action::Use);
+    let swap = binds.key(crate::binds::Action::Swap);
+    // The enemy's flag at our feet, on the floor or at its base.
+    let at = s.core.own().1;
+    let flag_here = !f.flag
+        && f.alive
+        && f.riding().is_none()
+        && s.core
+            .latest()
+            .flags()
+            .get((s.core.team as usize & 1) ^ 1)
+            .is_some_and(|fl| {
+                let d = fl.pos - at;
+                fl.state != sim::world::FLAG_HELD
+                    && d.flat().len() < sim::consts::FLAG_REACH
+                    && d.y.abs() < sim::consts::FLAG_RISE
+            });
     let text = GearText {
         gren: [f.grenades, f.stickies],
         hands: hands.map(|h| h.map(|g| (g.count, g.name, g.note))),
         back: if carried { sim::arms::arm(back.arm).name } else { "" },
-        ride: f.riding().map(|_| out),
+        prompt: [
+            if f.riding().is_some() {
+                Some((out, "get out"))
+            } else if flag_here {
+                Some((out, "take the flag"))
+            } else {
+                None
+            },
+            f.flag.then_some((swap, "drop the flag")),
+        ],
     };
     let texts_due = *said != Some(text);
     *said = Some(text);
@@ -1608,7 +1639,14 @@ pub fn gear(
                 String::new()
             }
         } else if ride.is_some() {
-            f.riding().map_or_else(String::new, |_| format!("{out}  get out"))
+            let mut line = String::new();
+            for (key, what) in text.prompt.iter().flatten() {
+                if !line.is_empty() {
+                    line.push_str("    ");
+                }
+                let _ = write!(line, "{key}  {what}");
+            }
+            line
         } else {
             continue;
         };
@@ -1813,7 +1851,9 @@ pub fn corner(
         }
         for (mut t, ck, md, num) in texts.iter_mut() {
             let v = if ck.is_some() {
-                if snap.phase == 1 {
+                if snap.phase == 1 && snap.clock == 0 && snap.n_flags > 0 {
+                    "SUDDEN DEATH".to_string()
+                } else if snap.phase == 1 {
                     mmss(clock)
                 } else {
                     String::new()

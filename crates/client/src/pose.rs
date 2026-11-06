@@ -5,7 +5,7 @@
 //! `speed=` sets it running (m/s) and `dir=` which way, radians from its
 //! facing (1.57: strafing to its right, 3.14: backpedalling), `pitch=`
 //! where it looks (radians, up positive), `crouch=1` crouches it, `skin=`,
-//! `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
+//! `headwear=`, `footwear=`, `emblem=` (a `proto::Emblem`) and `team=` dress it; `over=1` gives it an
 //! overshield and `cloak=` camouflage (0..1, how hidden). `reload=1` reloads it, over and over; `die=S`
 //! kills it S seconds after the screen is there, shot from the camera (a
 //! head shot with `head=1`, a blast at its feet with `blast=1`), so the rag
@@ -23,7 +23,11 @@
 //! blasts would. `fling=S` sets a rocket off under its right door S seconds
 //! after the screen is there, throwing it as the sim would; `wreck=S` blows
 //! it up then, its husk thrown. `orb=1|2|3`
-//! stands a ball of plasma at `look` (`stand_orb`).
+//! stands a ball of plasma at `look` (`stand_orb`). `flag=x,y,z` plants
+//! red's flag on its stand there (`flags.rs`, its cloth blowing on the
+//! map's wind); `flagheld=1` puts it over the fighter's shoulder instead,
+//! as a carrier holds it, and `flagheld=2` across the camera's view, as a
+//! carrier sees it.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -60,6 +64,9 @@ pub struct View {
     pub truck_marks: bool,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
+    /// A flag's stand for the picture, and who holds it: 0 nobody, 1 the
+    /// fighter, 2 the camera (as in our own view).
+    pub flag: Option<(Vec3, u8)>,
     /// Seconds after the screen is there that it is thrown by a rocket,
     /// and blown up; when it was thrown (the clock `truck_at` reads), and
     /// whether it is gone.
@@ -166,6 +173,7 @@ impl Pose {
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
+            flag: vec("flag").map(|at| (at, get("flagheld", 0.0) as u8)),
             fling: Some(get("fling", -1.0)).filter(|s| *s >= 0.0),
             wreck: Some(get("wreck", -1.0)).filter(|s| *s >= 0.0),
             flung_at: None,
@@ -206,6 +214,8 @@ impl Pose {
         let look = proto::Look {
             skin: get("skin", 0.0) as u8,
             emblem: proto::emblem_valid(get("emblem", 0.0) as u16),
+            headwear: proto::gear_valid(&proto::HEADWEAR, get("headwear", 0.0) as u8),
+            footwear: proto::gear_valid(&proto::FOOTWEAR, get("footwear", 0.0) as u8),
         };
         let acts = Acts {
             reload: get("reload", 0.0) != 0.0,

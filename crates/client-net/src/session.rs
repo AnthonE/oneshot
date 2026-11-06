@@ -177,6 +177,8 @@ impl Session {
             emblem: look.emblem,
             party,
             stamp: sim::STAMP,
+            headwear: look.headwear,
+            footwear: look.footwear,
         }
     }
 
