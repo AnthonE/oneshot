@@ -1923,10 +1923,21 @@ pub fn corner(
 /// `aim_range`, its magnetism widening the bodies with distance (as
 /// `World::magnet` bends a near miss); the sword's, its lunge's.
 pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
+    aim_on(core, others).is_some()
+}
+
+/// A sword's press now would lunge: the enemy the aim is on is past its reach.
+pub fn lunge_ahead(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
+    sim::arms::arm(core.own().0.gun().arm).kind == sim::arms::Kind::Sword
+        && aim_on(core, others).is_some_and(|t| t > sim::consts::SWORD_REACH)
+}
+
+/// How far along the aim the nearest enemy in reach is.
+fn aim_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> Option<f32> {
     use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH, LUNGE_PAD, LUNGE_RANGE};
     let f = core.own().0;
     if !f.alive || f.riding().is_some() {
-        return false;
+        return None;
     }
     let a = sim::arms::arm(f.gun().arm);
     let sword = a.kind == sim::arms::Kind::Sword;
@@ -1935,20 +1946,25 @@ pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::D
     let dir = sim::geom::aim_dir(f.yaw, f.pitch);
     let wall = core.map.ray(eye, dir, reach);
     let mate = core.rules.teams.then_some(core.team & 1);
-    others.iter().filter(|d| d.alive && Some(d.team & 1) != mate).any(|d| {
-        let pad = if sword {
-            LUNGE_PAD
-        } else {
-            (d.pos - eye).len() * a.magnet
-        };
-        let (hy, top) = if d.crouched {
-            (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
-        } else {
-            (HEAD_Y, HIT_TOP)
-        };
-        sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).is_some()
-            || sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall).is_some()
-    })
+    others
+        .iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate)
+        .filter_map(|d| {
+            let pad = if sword {
+                LUNGE_PAD
+            } else {
+                (d.pos - eye).len() * a.magnet
+            };
+            let (hy, top) = if d.crouched {
+                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+            } else {
+                (HEAD_Y, HIT_TOP)
+            };
+            sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).or_else(|| {
+                sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall)
+            })
+        })
+        .min_by(f32::total_cmp)
 }
 
 /// The crosshair red while it is on an enemy in reach ([`on_target`]).

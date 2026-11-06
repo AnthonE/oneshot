@@ -98,6 +98,13 @@ const HOLD: Vec3 = Vec3::new(0.2, -0.11, -0.55);
 /// with more (a cannon, a launcher) is held that much further off, or its
 /// back end fills the corner of the frame, a blur right against the eye.
 const REAR_CLEAR_M: f32 = 0.35;
+/// How the sword stands in the fist, as a `Lay`'s wrist, and where its hand is
+/// held, metres as it looks: the forearm straight out to the frame's lower right,
+/// the wrist flexed (`tools/models/hand.py`) so the palm turns in to the arm, the
+/// blade up to the top right, clear of the crosshair. How big it is drawn in view.
+const SWORD_STANDS: Vec3 = Vec3::new(1.002, 0.491, 0.0);
+const SWORD_RAISED: Vec3 = Vec3::new(0.0, 0.012, -0.195);
+const SWORD_IN_VIEW: f32 = 0.95;
 /// The rest yaw: the muzzle turned in toward the crosshair, radians.
 const REST_YAW: f32 = 0.08;
 /// The rest pitch: the muzzle lifted, so the gun's rear runs out of the frame
@@ -285,12 +292,64 @@ pub const BASH_COCK: Vec3 = Vec3::new(-0.05, -0.12, -0.15);
 pub const BASH_DRAW: Vec3 = Vec3::new(0.03, -0.02, 0.06);
 pub const BASH_STRIKE: Vec3 = Vec3::new(-0.1, 0.0, 0.35);
 pub const BASH_THROW: Vec3 = Vec3::new(0.0, 0.0, -0.08);
-/// A sword's swing (its melee and its trigger): raised out, then slashed
-/// right to left.
-pub const SLASH_COCK: Vec3 = Vec3::new(0.25, -0.3, -0.4);
-pub const SLASH_DRAW: Vec3 = Vec3::new(0.05, 0.08, 0.04);
-pub const SLASH_STRIKE: Vec3 = Vec3::new(0.0, 0.6, 0.6);
-pub const SLASH_THROW: Vec3 = Vec3::new(-0.06, 0.06, -0.06);
+/// One pose of a stroke: seconds in, about the shoulder, at the wrist, off.
+#[derive(Clone, Copy)]
+struct Key(f32, Vec3, Vec3, Vec3);
+
+const fn key(s: f32, ang: [f32; 3], wrist: [f32; 3], off: [f32; 3]) -> Key {
+    Key(
+        s,
+        Vec3::new(ang[0], ang[1], ang[2]),
+        Vec3::new(wrist[0], wrist[1], wrist[2]),
+        Vec3::new(off[0], off[1], off[2]),
+    )
+}
+
+/// A sword's two cuts, in turn: from high right down through the middle to low
+/// left, and rising back the other way. The arm goes first and the wrist whips
+/// after it, on past where the blow lands, settling there before it comes home.
+#[rustfmt::skip]
+const CUTS: [[Key; 8]; 2] = [
+    [
+        key(0.0, [0.0; 3], [0.0; 3], [0.0; 3]),
+        key(CUT_COCKED_S, [0.1, -0.07, -0.12], [0.2, -0.3, -0.25], [0.02, 0.04, 0.04]),
+        key(0.06, [0.05, 0.0, -0.03], [0.1, -0.2, -0.16], [0.01, 0.02, 0.0]),
+        key(0.09, [-0.02, 0.08, 0.02], [-0.42, 0.32, 0.12], [-0.01, -0.005, -0.05]),
+        key(0.115, [-0.03, 0.12, 0.04], [-0.86, 0.8, 0.34], [0.025, -0.01, -0.07]),
+        key(0.18, [-0.025, 0.1, 0.03], [-0.72, 0.66, 0.28], [0.02, -0.008, -0.045]),
+        key(0.27, [-0.01, 0.02, 0.01], [-0.16, 0.14, 0.06], [-0.003, -0.002, -0.01]),
+        key(MELEE_S, [0.0; 3], [0.0; 3], [0.0; 3]),
+    ],
+    [
+        key(0.0, [0.0; 3], [0.0; 3], [0.0; 3]),
+        key(CUT_COCKED_S, [-0.06, 0.1, 0.12], [-0.85, 0.55, 0.28], [-0.01, -0.04, 0.04]),
+        key(0.06, [-0.04, 0.06, 0.06], [-0.72, 0.44, 0.2], [-0.01, -0.03, 0.01]),
+        key(0.09, [0.02, -0.02, -0.04], [-0.2, 0.0, -0.02], [0.01, 0.0, -0.05]),
+        key(0.115, [0.08, -0.08, -0.14], [0.22, -0.34, -0.36], [0.03, 0.03, -0.06]),
+        key(0.18, [0.06, -0.06, -0.12], [0.17, -0.28, -0.3], [0.02, 0.025, -0.04]),
+        key(0.27, [0.02, -0.02, -0.03], [0.04, -0.07, -0.08], [0.005, 0.005, -0.01]),
+        key(MELEE_S, [0.0; 3], [0.0; 3], [0.0; 3]),
+    ],
+];
+/// Where a cut is cocked: the blow lands the tick the button goes down, so
+/// early. A lunge holds it here until it arrives.
+const CUT_COCKED_S: f32 = 0.035;
+/// How long to wait there for a lunge the aim says is coming: it starts a round
+/// trip after the press.
+const LUNGE_WAIT_S: f32 = 0.16;
+/// How much of a cut's wrist the hand and forearm share: the rest is the blade's
+/// alone, or its arm swings out flat across the frame, its cut end in view.
+const CUT_ARM_SHARE: f32 = 0.22;
+/// Seconds after a swing the next is still the other cut.
+const CUT_AGAIN_S: f32 = 1.1;
+/// The blade thrust ahead for the length of a lunge, and how fast it gets there,
+/// per second.
+const LUNGE_LAY: Lay = Lay {
+    ang: Vec3::new(-0.04, 0.05, 0.0),
+    wrist: Vec3::new(-0.3, 0.3, 0.1),
+    off: Vec3::new(-0.02, -0.01, -0.07),
+};
+const LUNGE_RISE_PER_S: f32 = 24.0;
 /// A grenade's throw takes most of its cooldown; the gun dips out of the
 /// throwing arm's way and comes back.
 pub const THROW_S: f32 = GREN_COOL_MS as f32 * 0.85 / 1000.0;
@@ -500,6 +559,9 @@ pub struct Own<'a> {
     pub shown: bool,
     /// What the server says we wear (`gun_skin.rs`).
     pub skin: u8,
+    /// A lunge is driving us (`cels.rs`), or the aim says the press starts one.
+    pub lunging: bool,
+    pub lunge_ahead: bool,
 }
 
 /// An exactly integrated spring about a moving rest.
@@ -616,10 +678,18 @@ pub fn place(hand: Lay, body: Lay, left: bool) -> (Vec3, Quat) {
     (pivot + bq * (p - pivot) + body.off, bq * hq * rest * wrist)
 }
 
-/// How much further off a gun is held for what lies behind its hand.
+/// How much further off a gun is held for what lies behind its hand. A sword
+/// stands up in the fist, the hand raised so its forearm shows.
 fn stand_off(g: &super::guns::Gun) -> Lay {
     let back = g.height * g.grip * g.scale;
-    Lay::arm(Vec3::ZERO, Vec3::new(0.0, 0.0, -(back - REAR_CLEAR_M).max(0.0)))
+    let far = Vec3::new(0.0, 0.0, -(back - REAR_CLEAR_M).max(0.0));
+    if g.file == "sword" {
+        return Lay {
+            wrist: SWORD_STANDS,
+            ..Lay::arm(Vec3::ZERO, far + SWORD_RAISED + Vec3::X * super::hands::SWORD_SLIDE)
+        };
+    }
+    Lay::arm(Vec3::ZERO, far)
 }
 
 /// The rounds each hand fired since the last look, `[right, left]`.
@@ -695,6 +765,15 @@ pub struct Motion {
     /// Seconds into the melee under way, and whether it is a sword's.
     melee: Option<f32>,
     slash: bool,
+    /// Which cut it is, seconds since the last began, and how much longer it
+    /// waits, cocked, for a lunge.
+    cut: usize,
+    since_cut: f32,
+    lunge_wait: f32,
+    /// How far into the thrust a lunge holds, 0 to 1.
+    thrust: f32,
+    /// What of the wrist this frame is the cut's.
+    cut_wrist: Vec3,
     melee_was: u16,
     /// Seconds into the throw under way.
     throw: Option<f32>,
@@ -847,15 +926,45 @@ pub fn reload_lay(p: f32, long: bool, vent: bool, t: f32) -> Lay {
     )
 }
 
-/// A melee's pose `s` seconds in: a gun's bash, or a sword's slash.
-pub fn melee_lay(s: f32, sword: bool) -> Lay {
-    let (cock, strike) = stroke(s / MELEE_S, MELEE_WINDUP, MELEE_APEX, MELEE_HOLD);
-    let (c, d, k, w) = if sword {
-        (SLASH_COCK, SLASH_DRAW, SLASH_STRIKE, SLASH_THROW)
-    } else {
-        (BASH_COCK, BASH_DRAW, BASH_STRIKE, BASH_THROW)
+/// Cut `cut`'s pose `s` seconds in, through its keys on a Catmull-Rom curve:
+/// it never stops at one, and it starts and ends at rest.
+pub fn cut_lay(s: f32, cut: usize) -> Lay {
+    let keys = &CUTS[cut % CUTS.len()];
+    let n = keys.len();
+    let i = keys.iter().rposition(|k| k.0 <= s).unwrap_or(0).min(n - 2);
+    let (a, b) = (keys[i], keys[i + 1]);
+    let h = b.0 - a.0;
+    let u = ((s - a.0) / h).clamp(0.0, 1.0);
+    let tangent = |j: usize, pick: fn(&Key) -> Vec3| {
+        if j == 0 || j == n - 1 {
+            return Vec3::ZERO;
+        }
+        (pick(&keys[j + 1]) - pick(&keys[j - 1])) / (keys[j + 1].0 - keys[j - 1].0)
     };
-    Lay::arm(c * cock + k * strike, d * cock + w * strike)
+    let (u2, u3) = (u * u, u * u * u);
+    let curve = |pick: fn(&Key) -> Vec3| {
+        pick(&a) * (2.0 * u3 - 3.0 * u2 + 1.0)
+            + tangent(i, pick) * h * (u3 - 2.0 * u2 + u)
+            + pick(&b) * (-2.0 * u3 + 3.0 * u2)
+            + tangent(i + 1, pick) * h * (u3 - u2)
+    };
+    Lay {
+        ang: curve(|k| k.1),
+        wrist: curve(|k| k.2),
+        off: curve(|k| k.3),
+    }
+}
+
+/// A melee's pose `s` seconds in: a gun's bash, or a sword's first cut.
+pub fn melee_lay(s: f32, sword: bool) -> Lay {
+    if sword {
+        return cut_lay(s, 0);
+    }
+    let (cock, strike) = stroke(s / MELEE_S, MELEE_WINDUP, MELEE_APEX, MELEE_HOLD);
+    Lay::arm(
+        BASH_COCK * cock + BASH_STRIKE * strike,
+        BASH_DRAW * cock + BASH_THROW * strike,
+    )
 }
 
 /// A throw's pose `s` seconds in.
@@ -970,14 +1079,17 @@ impl Motion {
 
     /// The right hand's strokes this frame (a melee, a throw), and the
     /// crouch both hands take: `(both, right only)`.
-    fn strokes(&mut self, f: &Fighter, right_rounds: u32, dt: f32) -> (Lay, Lay) {
+    fn strokes(&mut self, own: &Own, right_rounds: u32, dt: f32) -> (Lay, Lay) {
+        let f = own.f;
         let tick = 1.0 / TICK_HZ as f32;
         let advance = |c: &mut Option<f32>, len: f32| {
             *c = c.map(|s| s + dt).filter(|&s| s < len);
         };
         advance(&mut self.melee, MELEE_S);
         advance(&mut self.throw, THROW_S);
+        self.since_cut += dt;
         let sword = arm(f.gun().arm).kind == Kind::Sword;
+        let mut began = false;
         // A melee: its cooldown jumping up, timed from the tick it began.
         // One under way already is the same melee, its cooldown corrected
         // by the server: the cooldown outlasts the stroke.
@@ -985,13 +1097,31 @@ impl Motion {
             let full = ticks(MELEE_COOL_MS) as u16;
             self.melee = Some(f32::from(full.saturating_sub(f.melee_cool)) * tick);
             self.slash = sword;
+            began = sword;
         }
         self.melee_was = f.melee_cool;
         // A sword's trigger is a swing too.
         if sword && right_rounds > 0 {
             self.melee = Some(0.0);
             self.slash = true;
+            began = true;
         }
+        if began {
+            self.cut = if self.since_cut < CUT_AGAIN_S { self.cut + 1 } else { 0 };
+            self.since_cut = 0.0;
+            self.lunge_wait = if own.lunge_ahead { LUNGE_WAIT_S } else { 0.0 };
+        }
+        // A lunge's blade stays cocked until it arrives.
+        self.lunge_wait = if own.lunging {
+            0.0
+        } else {
+            (self.lunge_wait - dt).max(0.0)
+        };
+        if self.slash && (own.lunging || self.lunge_wait > 0.0) {
+            self.melee = self.melee.map(|s| s.min(CUT_COCKED_S));
+        }
+        let aim = if own.lunging { 1.0 } else { 0.0 };
+        self.thrust += (aim - self.thrust).clamp(-LUNGE_RISE_PER_S * dt, LUNGE_RISE_PER_S * dt);
         if f.gren_cool > self.gren_was && self.alive && self.throw.is_none() {
             let full = ticks(GREN_COOL_MS) as u16;
             self.throw = Some(f32::from(full.saturating_sub(f.gren_cool)) * tick);
@@ -1003,9 +1133,19 @@ impl Motion {
             off: CROUCH_OFF,
         } * self.crouch;
         let mut right = Lay::ZERO;
+        self.cut_wrist = Vec3::ZERO;
         if let Some(s) = self.melee {
-            right = right + melee_lay(s, self.slash);
+            let lay = if self.slash {
+                cut_lay(s, self.cut)
+            } else {
+                melee_lay(s, false)
+            };
+            if self.slash {
+                self.cut_wrist = lay.wrist;
+            }
+            right = right + lay;
         }
+        right = right + LUNGE_LAY * self.thrust;
         if let Some(s) = self.throw {
             right = right + throw_lay(s);
         }
@@ -1047,7 +1187,7 @@ pub fn update(
     let rounds = m.rounds.take(f);
     let respawned = f.alive && !m.alive && m.started;
     let body = m.body(&own, dt);
-    let (both, right) = m.strokes(f, rounds[0], dt);
+    let (both, right) = m.strokes(&own, rounds[0], dt);
     m.alive = f.alive;
     let mut lit = (0.0, FLASH_AT, NONE);
     *muzzles = ViewMuzzles::default();
@@ -1062,6 +1202,7 @@ pub fn update(
         let k = Hand {
             body,
             hand: if left { both } else { both + right },
+            cut_wrist: if left { Vec3::ZERO } else { m.cut_wrist },
             rounds: rounds[usize::from(left)],
             respawned,
             t: m.t,
@@ -1096,6 +1237,8 @@ struct Hand {
     body: Lay,
     /// The strokes this hand takes, before its own (a right hand's).
     hand: Lay,
+    /// What of that's wrist is a cut's.
+    cut_wrist: Vec3,
     rounds: u32,
     respawned: bool,
     t: f32,
@@ -1146,6 +1289,7 @@ fn hand(
             v.rack.push((want, own.skin, pivot));
             commands.entity(scene).observe(no_shadows);
             super::gun_skin::wear(commands, scene, own.skin, want);
+            super::blade::light(commands, scene, want);
             // A gun that runs hot wears its heat (`fx/vent.rs`).
             if arm(want).hot() {
                 let left = v.left;
@@ -1244,13 +1388,27 @@ fn hand(
     let d = smooth(v.drop);
     let change = Lay::arm(DROP_ANG * d, DROP_OFF * d);
     let stand = gun(v.drawn).map_or(Lay::ZERO, stand_off);
-    let (at, rot) = place(k.hand + reload + kick + charge + change + stand, k.body, v.left);
+    let lay = k.hand + reload + kick + charge + change + stand;
+    let (at, rot) = place(lay, k.body, v.left);
+    let steady = Lay {
+        wrist: lay.wrist - k.cut_wrist * (1.0 - CUT_ARM_SHARE),
+        ..lay
+    };
+    let (_, fist) = place(steady, k.body, v.left);
     t.translation = at * SHRINK;
     t.rotation = rot;
+    // A sword stands up in view, where the gun's field of view would make it huge.
+    let size = if v.drawn == sim::arms::SWORD {
+        SWORD_IN_VIEW
+    } else {
+        1.0
+    };
+    t.scale = Vec3::splat(SHRINK * size);
     let g = gun(v.drawn).filter(|_| drawn)?;
     let grip = Grip {
         at,
         rot: rot * view_basis(),
+        fist: fist * view_basis(),
         arm: v.drawn,
     };
     if v.left {
@@ -1276,13 +1434,16 @@ fn cant_of(shots: u32) -> f32 {
 pub(super) fn no_shadows(
     ev: On<SceneInstanceReady>,
     children: Query<&Children>,
-    meshes: Query<&Mesh3d>,
+    meshes: Query<(&Mesh3d, Option<&bevy::gltf::GltfMaterialName>)>,
     kit: Option<Res<ViewKit>>,
     mut commands: Commands,
 ) {
     for e in children.iter_descendants(ev.entity) {
-        if let Ok(mesh) = meshes.get(e) {
+        if let Ok((mesh, name)) = meshes.get(e) {
             commands.entity(e).insert(NotShadowCaster);
+            if super::blade::is_blade(name) {
+                continue;
+            }
             if let Some(kit) = &kit {
                 commands.spawn((
                     mesh.clone(),
@@ -1325,6 +1486,8 @@ mod tests {
                     yaw: 0.0,
                     pitch: 0.0,
                     riding: false,
+                    lunging: false,
+                    lunge_ahead: false,
                     shown: true,
                     skin: 0,
                 };
@@ -1516,8 +1679,8 @@ mod tests {
             for i in 0..=200 {
                 let u = i as f32 / 200.0;
                 for (n, lay) in poses(u, g.long).into_iter().enumerate() {
-                    // A sword never reloads: its strokes are the slash's.
-                    if *arm == sim::arms::SWORD && (2..=3).contains(&n) {
+                    // A sword never bashes or reloads: its strokes are the slash's.
+                    if *arm == sim::arms::SWORD && matches!(n, 0 | 2 | 3 | 6) {
                         continue;
                     }
                     let (at, rot) = place(lay + stand_off(g), Lay::ZERO, false);
@@ -1561,6 +1724,16 @@ mod tests {
                 let poses = [
                     Lay::ZERO,
                     melee_lay(u * MELEE_S, g.file == "sword"),
+                    if g.file == "sword" {
+                        cut_lay(u * MELEE_S, 1)
+                    } else {
+                        Lay::ZERO
+                    },
+                    if g.file == "sword" {
+                        cut_lay(CUT_COCKED_S, 0) + LUNGE_LAY
+                    } else {
+                        Lay::ZERO
+                    },
                     throw_lay(u * THROW_S),
                     reload_lay(u, g.long, false, u),
                     reload_lay(u, g.long, true, u),

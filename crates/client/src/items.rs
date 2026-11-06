@@ -101,7 +101,8 @@ fn loaded(core: &NetCore, i: usize) -> bool {
 
 /// `arm`'s gun under `root`, turned about its middle rather than its grip.
 fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
-    if let (Some(g), Some((pivot, _))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
+    if let (Some(g), Some((pivot, scene))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
+        crate::look::blade::light(commands, scene, arm);
         let half = g.height * g.scale * (0.5 - g.grip);
         commands.entity(pivot).insert(Transform {
             translation: basis * Vec3::new(0.0, -half, 0.0),
