@@ -258,8 +258,8 @@ pub struct Wheel {
 }
 
 /// The truck as a child of `hull`, an entity at the sim's hull turned by
-/// its yaw.
-pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) {
+/// its yaw: its body, what leans and turns over (a turret goes on it).
+pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) -> Entity {
     commands
         .spawn((
             Truck::default(),
@@ -267,7 +267,8 @@ pub fn spawn(commands: &mut Commands, models: &Models, hull: Entity) {
             Transform::default(),
             ChildOf(hull),
         ))
-        .observe(bind);
+        .observe(bind)
+        .id()
 }
 
 /// The scene is in: its wheels, by name, and its steel and trim in
@@ -333,12 +334,11 @@ fn v(p: V3) -> Vec3 {
 /// own (`ours`) is drawn as predicted, its end the map's: a hull on its
 /// way took it.
 fn holed(steel: &sim::vehicle::Vehicle, ev: &proto::EventState, ours: bool) -> Option<Vec3> {
-    let arm = ev.c as usize;
-    if ev.kind != Kind::Shot as u8 || ev.part == HEARD || arm == 0 || arm >= sim::arms::COUNT {
+    if ev.kind != Kind::Shot as u8 || ev.part == HEARD {
         return None;
     }
     // A rocket or a bolt leaves its mark as a blast, where it goes off.
-    if sim::arms::arm(arm as u8).speed != 0.0 {
+    if sim::arms::fired(ev.c).is_none_or(|a| a.speed != 0.0) {
         return None;
     }
     let (from, to) = (v(ev.pos), v(ev.end));
@@ -644,8 +644,13 @@ pub fn drive(
         truck.hurt += (want - truck.hurt) * (WEAR_EASE * dt).min(1.0);
         // Where it was hit this frame: a round whose way ends on its steel
         // (the sim's own shape of it), a blast beside it.
-        let steel = sim::vehicle::Vehicle::new(V3::new(p.x, p.y, p.z), sim::geom::rad_to_yaw(fwd.z.atan2(fwd.x)), 0);
+        let steel = sim::vehicle::Vehicle::new(V3::new(p.x, p.y, p.z), sim::geom::rad_to_yaw(fwd.z.atan2(fwd.x)), 0, 0);
+        // Our rounds never meet the hull we ride (the sim's never do).
+        let ours = core.own().0.riding().map(|(i, _)| i as u8) == hull.map(|h| h.slot);
         for ev in &heard.0 {
+            if ev.a == core.slot && ours && ev.kind == Kind::Shot as u8 {
+                continue;
+            }
             if let Some(at) = holed(&steel, ev, ev.a == core.slot) {
                 truck.mark(to_local.transform_point3(at), HOLE_M);
             } else if ev.kind == Kind::Blast as u8 {
@@ -1179,7 +1184,7 @@ mod tests {
     #[test]
     fn a_round_marks_the_steel_it_met_and_nothing_else() {
         // A hull at the origin facing +X: its right flank is the plane z = 1.1.
-        let steel = sim::vehicle::Vehicle::new(V3::ZERO, 0, 0);
+        let steel = sim::vehicle::Vehicle::new(V3::ZERO, 0, 0, 0);
         let off = Vec3::new(0.5, 0.9, 12.0);
         let door = Vec3::new(0.5, 0.9, VEH_HALF_W);
         // Someone's shot that ended on the door: a hole there.

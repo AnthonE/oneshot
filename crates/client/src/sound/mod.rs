@@ -1082,7 +1082,9 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
         let at = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
         match e.kind {
             k if k == Kind::Shot as u8 => {
-                let Some(g) = gun_takes(e.c as u8) else { continue };
+                let Some(g) = crate::look::guns::heard_as(e.c) else {
+                    continue;
+                };
                 let ours = e.a == me && e.part != HEARD;
                 if ours {
                     let n = ear.take(g.sound, g.takes);
@@ -1100,7 +1102,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
                 // A round past our head, one striking near us, one off a wall.
                 let end = Vec3::new(e.end.x, e.end.y, e.end.z);
-                let hitscan = arms::arm(e.c as u8).speed == 0.0;
+                let hitscan = arms::fired(e.c).is_some_and(|a| a.speed == 0.0);
                 if hitscan {
                     let seg = end - at;
                     let len2 = seg.length_squared();

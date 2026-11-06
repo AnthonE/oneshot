@@ -20,7 +20,8 @@
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
 //! standing still). `truckhurt=` wears it as a hull with that share of its
 //! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
-//! blasts would. `fling=S` sets a rocket off under its right door S seconds
+//! blasts would; `truckturret=1` stands a minigun on its bed
+//! (`look/turret.rs`). `fling=S` sets a rocket off under its right door S seconds
 //! after the screen is there, throwing it as the sim would; `wreck=S` blows
 //! it up then, its husk thrown. `orb=1|2|3`
 //! stands a ball of plasma at `look` (`stand_orb`). `flag=x,y,z` plants
@@ -62,6 +63,8 @@ pub struct View {
     /// How hurt it is drawn (0 whole, 1 nothing left), and whether marked.
     pub truck_hurt: f32,
     pub truck_marks: bool,
+    /// What its bed carries (`sim::vehicle::MINIGUN`: `truckturret=1`).
+    pub truck_turret: u8,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
     /// A flag's stand for the picture, and who holds it: 0 nobody, 1 the
@@ -170,6 +173,7 @@ impl Pose {
             drive: get("drive", 0.0),
             truck_hurt: get("truckhurt", 0.0).clamp(0.0, 1.0),
             truck_marks: get("truckmarks", 0.0) != 0.0,
+            truck_turret: get("truckturret", 0.0) as u8,
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
@@ -184,7 +188,12 @@ impl Pose {
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
-            let hull = sim::vehicle::Vehicle::new(V3::new(at.x, at.y, at.z), sim::geom::rad_to_yaw(yaw), 0);
+            let hull = sim::vehicle::Vehicle::new(
+                V3::new(at.x, at.y, at.z),
+                sim::geom::rad_to_yaw(yaw),
+                0,
+                view.truck_turret,
+            );
             hull.mount(seat)
         });
         let view = View {

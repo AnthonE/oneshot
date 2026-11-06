@@ -177,6 +177,9 @@ pub struct Arm {
     /// The red reticle's reach (the client's, over an enemy), and
     /// magnetism's.
     pub aim_range: f32,
+    /// A turret's barrels spin up this long, the trigger held, before the
+    /// first round (0: none).
+    pub spin_ms: u32,
 }
 
 impl Arm {
@@ -267,6 +270,7 @@ const BASE: Arm = Arm {
     rank: 0,
     magnet: 0.0,
     aim_range: 0.0,
+    spin_ms: 0,
 };
 
 pub static ARMS: [Arm; COUNT] = [
@@ -573,6 +577,44 @@ pub static ARMS: [Arm; COUNT] = [
         ..BASE
     },
 ];
+
+/// The guns a vehicle's turret mounts (`vehicle::turret`): never held, on
+/// a pad or dropped, so no arm id. Their rounds and kills carry a
+/// [`crate::events::Cause`] instead.
+///
+/// The minigun on the truck's bed: Halo's chaingun. Its barrels spin up,
+/// then it pours rounds out as long as the trigger is held and it is cool
+/// enough; past full it vents. About two seconds on target kill.
+pub static MINIGUN: Arm = Arm {
+    name: "MINIGUN",
+    magnet: deg(0.3),
+    aim_range: 45.0,
+    auto: true,
+    refire_ms: 62,
+    mag: 1,
+    dmg: 7,
+    spread: q14(60.0),
+    range: 130.0,
+    falloff: 50.0,
+    falloff_min: 0.5,
+    // 2% a round at 16 a second, 10% a second off: five seconds held,
+    // then a vent of two and a half.
+    heat_shot: 2,
+    heat_cool: 10,
+    heat_vent: 40,
+    spin_ms: 350,
+    ..BASE
+};
+
+/// What fired a round, by the id its shot carries (`Event::c`): a gun's arm
+/// id, or a turret's cause.
+pub fn fired(c: u16) -> Option<&'static Arm> {
+    match c {
+        c if (1..COUNT as u16).contains(&c) => Some(&ARMS[c as usize]),
+        c if c == crate::events::Cause::Minigun as u16 => Some(&MINIGUN),
+        _ => None,
+    }
+}
 
 pub fn arm(id: u8) -> &'static Arm {
     &ARMS[(id as usize).min(COUNT - 1)]
