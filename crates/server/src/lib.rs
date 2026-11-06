@@ -231,6 +231,9 @@ pub struct Config {
     /// Snapshots go as deltas against what each client acked when that is
     /// smaller (`proto::delta`); off (`--no-delta`), every one goes whole.
     pub deltas: bool,
+    /// On a big map, others far from a client are updated every few
+    /// snapshots (`room::update_every`); off (`--no-far-rates`), every one.
+    pub far_rates: bool,
     /// The key nonces are signed with, shared by the two slots so either
     /// takes the other's (`auth::Nonces`). None: a key of this process's own.
     pub nonce_key: Option<[u8; 32]>,
@@ -300,6 +303,7 @@ impl Default for Config {
             capacity: 256,
             big_snapshot_hz: TICK_HZ / room::SNAP_EVERY,
             deltas: true,
+            far_rates: true,
             nonce_key: None,
             live_file: None,
             roster_dir: None,
@@ -888,6 +892,7 @@ impl Sim {
             r
         };
         room.deltas = self.cfg.deltas;
+        room.far_rates = self.cfg.far_rates;
         room
     }
 

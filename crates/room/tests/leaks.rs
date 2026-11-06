@@ -66,6 +66,8 @@ struct Gate {
     proj_seen: usize,
     vehicles_seen: usize,
     drops_seen: usize,
+    /// Others held in view (updated in an earlier snapshot), checked.
+    held_seen: usize,
     /// Ticks between the room's snapshots.
     every: u32,
 }
@@ -77,7 +79,17 @@ impl Gate {
         let w = &self.room.world;
         let me = &w.fighters[self.me];
         let now = &self.history[0];
+        // In view: updated in this snapshot, or held (a far one on a big
+        // map, its last update repeated): a held one is one sent, and held
+        // to the same checks.
         let sent: Vec<usize> = s.remotes().iter().map(|r| r.slot as usize).collect();
+        assert!(
+            (0..MAX_FIGHTERS).all(|q| s.held & (1 << q) == 0 || sent.contains(&q)),
+            "tick {}: held {:016b} beyond {sent:?}",
+            w.tick,
+            s.held
+        );
+        self.held_seen += s.held.count_ones() as usize;
         let mate = |q: usize| q != self.me && w.rules.teams && w.fighters[q].team == me.team;
         let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
         // Every kind on the wire has its check; no wildcard, so a new kind
@@ -412,6 +424,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         proj_seen: 0,
         vehicles_seen: 0,
         drops_seen: 0,
+        held_seen: 0,
         every,
     };
     for (_, m) in &out {
@@ -502,6 +515,10 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
     if !g.room.world.rules.gun_game {
         assert!(g.drops_seen > 100, "only {} drops sent to check", g.drops_seen);
+    }
+    // A big map holds far ones between their updates; the gate checks them.
+    if sim::maps::ALL.iter().any(|d| d.id == g.room.world.map.id && d.big()) {
+        assert!(g.held_seen > 100, "only {} held to check", g.held_seen);
     }
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);

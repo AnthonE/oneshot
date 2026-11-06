@@ -6,7 +6,7 @@
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
-//! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta]
+//! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta] [--no-far-rates]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
 //! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--elo-queue] [--load-from ip]… [--match-secs N]`
 //!
@@ -33,7 +33,9 @@
 //! Team, and Capture the Flag there): 64 as everywhere by default, 32 to
 //! halve a box's packets; the arenas and ranked always get 64. `--no-delta`
 //! sends every snapshot whole rather than as what changed since the one
-//! the client acked (`proto::delta`).
+//! the client acked (`proto::delta`). `--no-far-rates` updates everyone in
+//! every snapshot on a big map too (by default one past 60 m is updated
+//! every other, past 120 m every fourth: `room::update_every`).
 //!
 //! `--loadout` starts everyone (gun game aside) with those guns, by id or
 //! name (`--loadout sniper,magnum`): for looking at a gun in a match.
@@ -137,6 +139,7 @@ fn main() {
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
             "--no-delta" => cfg.deltas = false,
+            "--no-far-rates" => cfg.far_rates = false,
             "--elo-queue" => cfg.elo_queue = true,
             "--net-nice" => cfg.net_nice = val().parse().unwrap_or_else(|_| die("--net-nice is 0 to 19")),
             "--endpoints" => cfg.endpoints = val().parse().unwrap_or_else(|_| die("--endpoints is a count")),

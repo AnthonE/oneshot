@@ -126,7 +126,8 @@ impl Keyed {
             }
             w.write(s.phase as u32, 2)?;
             w.write(s.clock, 32)?;
-            w.write(s.winner as u32, 8)
+            w.write(s.winner as u32, 8)?;
+            w_held(w, s.held)
         })?;
         rec(&mut w, K_DROPS, &mut |w| w_list(w, s.drops(), 4))?;
         rec(&mut w, K_PROJ, &mut |w| w_list(w, s.proj(), 5))?;
@@ -188,6 +189,7 @@ impl Keyed {
                     s.phase = r.read(2)? as u8;
                     s.clock = r.read(32)?;
                     s.winner = r.read(8)? as u8;
+                    s.held = r_held(&mut r)?;
                     tail = true;
                 }
                 K_DROPS => s.n_drops = r_list(&mut r, &mut s.drops, 4)?,

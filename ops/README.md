@@ -171,7 +171,7 @@ need none of this: any box with a seat will do.
 Other knobs on `ExecStart`: `--endpoints N` (N UDP ports, `--bind`'s and
 every `--endpoint-step` after, each open in both firewalls), `--net-nice`
 (the network threads under the sim's, 5 by default), `--big-snapshot-hz`
-and `--no-delta` (snapshots: leave them at their defaults unless a load test says otherwise).
+`--no-delta` and `--no-far-rates` (snapshots: leave them at their defaults unless a load test says otherwise).
 
 ## Backups
 

@@ -119,7 +119,15 @@ pub struct ClientNet {
     pub queue: EventQueue,
     /// What it was sent, cut into records: the bases of its deltas.
     bases: Box<proto::delta::Ring>,
+    /// Snapshots since each other seat was last updated in one, while it
+    /// stays in view; [`UNSEEN`] while it isn't (`update_every`); and what
+    /// that update said, repeated while it is held.
+    since: [u8; MAX_FIGHTERS],
+    updates: [Remote; MAX_FIGHTERS],
 }
+
+/// A seat not in this client's last snapshot: updated the moment it is.
+pub const UNSEEN: u8 = u8::MAX;
 
 /// A client's events as it may be told them (filtered by `room::build`),
 /// each sent in every snapshot from the first that carries it until the
@@ -192,6 +200,8 @@ impl Default for ClientNet {
             pending: Vec::new(),
             queue: EventQueue::default(),
             bases: Box::default(),
+            since: [UNSEEN; MAX_FIGHTERS],
+            updates: [Remote::default(); MAX_FIGHTERS],
         }
     }
 }
@@ -376,6 +386,11 @@ pub struct Room {
     /// What each seat's snapshot work made this tick, before it is sent in
     /// seat order (`SeatOut`).
     outs: Box<[SeatOut; MAX_FIGHTERS]>,
+    /// On a big map, others far from a client are updated every few
+    /// snapshots (`update_every`); off, or on an arena, every snapshot.
+    pub far_rates: bool,
+    /// Whether this is a big map (`sim::map::Def::big`).
+    big: bool,
     /// People seated from which seats' snapshots are worked on side by side
     /// ([`PARALLEL_FROM`]); fewer, one after another. The bytes are the
     /// same either way.
@@ -440,6 +455,7 @@ impl Room {
 
     fn empty(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> Room {
         let size = (rules.seats as usize).clamp(1, MAX_FIGHTERS);
+        let map_id = map.id;
         Room {
             rec: replay::Recorder::new(seed, salt, &rules, map.id),
             world: World::new(map, rules, seed, salt),
@@ -459,6 +475,8 @@ impl Room {
             deltas: true,
             outs: Box::new(core::array::from_fn(|_| SeatOut::default())),
             parallel_from: PARALLEL_FROM,
+            far_rates: true,
+            big: sim::maps::ALL.iter().any(|d| d.id == map_id && d.big()),
         }
     }
 
@@ -822,13 +840,16 @@ impl Room {
                 snap_every,
                 deltas,
                 parallel_from,
+                far_rates,
+                big,
                 ..
             } = self;
+            let rated = *far_rates && *big;
             let (world, plain, snap_every, deltas) = (&*world, &plain, *snap_every, *deltas);
             let work = |(s, ((seat, f), o)): (usize, ((&mut Seat, &mut fog::Fog), &mut SeatOut))| {
                 o.sent = None;
                 if let Seat::Person(c, _) = seat {
-                    seat_snapshot(world, s, c, f, o, plain, snap_every, deltas, now_ms);
+                    seat_snapshot(world, s, c, f, o, plain, (snap_every, rated), deltas, now_ms);
                 }
             };
             let people = seats.iter().filter(|x| matches!(x, Seat::Person(..))).count();
@@ -872,7 +893,7 @@ fn seat_snapshot(
     f: &mut fog::Fog,
     o: &mut SeatOut,
     plain: &fog::Plain,
-    snap_every: u32,
+    (snap_every, rated): (u32, bool),
     deltas: bool,
     now_ms: f64,
 ) {
@@ -888,6 +909,7 @@ fn seat_snapshot(
         &mut c.queue,
         |q| f.shows(q, tick),
         |i| f.shows_vehicle(i, tick),
+        rated.then_some((&mut c.since, &mut c.updates)),
         &mut o.wire,
     );
     c.pending.clear();
@@ -930,6 +952,7 @@ pub fn build(
         queue,
         visible,
         vehicle_visible,
+        None,
         &mut wire,
     )
     .0
@@ -946,6 +969,7 @@ fn build_encoded(
     queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
+    mut rates: Option<Rates>,
     wire: &mut [u8; MAX_DATAGRAM],
 ) -> (Snapshot, usize) {
     let mut snap = Snapshot {
@@ -968,7 +992,7 @@ fn build_encoded(
     // say what this client may see of it.
     for k in sim::thing::Kind::ALL {
         match k {
-            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible),
+            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible, rates.as_mut()),
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
@@ -1018,13 +1042,82 @@ fn build_encoded(
 }
 
 /// The others fog shows this client, coarsely.
-fn add_fighters(snap: &mut Snapshot, w: &World, s: usize, visible: &impl Fn(usize) -> bool) {
+/// With `rates` (a big map's), each is updated every [`update_every`]
+/// snapshots, `rates` counting the snapshots since and keeping that update;
+/// between, it is held (`Snapshot::held`): its last update, repeated, as
+/// long as nothing but where it is and faces has changed.
+fn add_fighters(
+    snap: &mut Snapshot,
+    w: &World,
+    s: usize,
+    visible: &impl Fn(usize) -> bool,
+    mut rates: Option<&mut Rates>,
+) {
+    let me = &w.fighters[s];
     for (q, f) in w.fighters.iter().enumerate() {
-        if q == s || !f.seated || !visible(q) || snap.n_remote as usize >= MAX_REMOTES {
+        let shown = q != s && f.seated && visible(q);
+        if !shown || snap.n_remote as usize >= MAX_REMOTES {
+            if let Some((since, _)) = rates.as_deref_mut() {
+                since[q] = UNSEEN;
+            }
             continue;
         }
-        snap.remotes[snap.n_remote as usize] = Remote::of(q as u8, f);
+        let mut r = Remote::of(q as u8, f);
+        if let Some((since, last)) = rates.as_deref_mut() {
+            // Only where it is and faces is ever held: a death, a cloak, a
+            // shield, a gun, a crouch or a flag goes out the moment it is.
+            let moved_only = Remote {
+                pos: r.pos,
+                vel: r.vel,
+                yaw: r.yaw,
+                pitch: r.pitch,
+                ..last[q]
+            } == r;
+            if since[q] == UNSEEN || !moved_only || since[q].saturating_add(1) >= update_every(me, f) {
+                since[q] = 0;
+                last[q] = r;
+            } else {
+                since[q] += 1;
+                r = last[q];
+                snap.held |= 1 << q;
+            }
+        }
+        snap.remotes[snap.n_remote as usize] = r;
         snap.n_remote += 1;
+    }
+}
+
+/// A client's counts of snapshots since each seat's last update, and those
+/// updates (`add_fighters`).
+type Rates<'a> = (&'a mut [u8; MAX_FIGHTERS], &'a mut [Remote; MAX_FIGHTERS]);
+
+/// Past this, another fighter is updated every other snapshot on a big map.
+pub const FAR_M: f32 = 60.0;
+/// Past this, every fourth.
+pub const FARTHER_M: f32 = 120.0;
+/// Firing within this of the line to a viewer: shooting at it.
+pub const AT_ME_DEG: f32 = 15.0;
+
+/// How many snapshots apart `them` is updated for `me` on a big map: every
+/// one near, riding, or firing toward `me`; every other past [`FAR_M`];
+/// every fourth past [`FARTHER_M`].
+pub fn update_every(me: &sim::fighter::Fighter, them: &sim::fighter::Fighter) -> u8 {
+    let to_me = me.body.pos + V3::new(0.0, 1.1, 0.0) - them.eye();
+    let far = to_me.len();
+    if far <= FAR_M || them.riding().is_some() {
+        return 1;
+    }
+    let firing = them.last_buttons & FIRE != 0;
+    let aim = sim::geom::aim_dir(them.yaw, them.pitch);
+    // cos 15°, written out: trig is the sim's to do (`sim::fmath`).
+    const COS_AT_ME: f32 = 0.965_925_8;
+    if firing && aim.dot(to_me) >= COS_AT_ME * far {
+        return 1;
+    }
+    if far <= FARTHER_M {
+        2
+    } else {
+        4
     }
 }
 

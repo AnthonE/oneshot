@@ -613,7 +613,14 @@ pub struct Snapshot {
     pub phase: u8,
     pub clock: u32,
     pub winner: u8,
+    /// Which of `remotes` (by slot) are held, not updated: a far one on a
+    /// big map is updated every few snapshots (`room::build`) and between
+    /// repeats its last update unchanged, so a delta of it costs almost
+    /// nothing. The client draws it from its updates. Never one fog hides.
+    pub held: u16,
 }
+
+const _: () = assert!(MAX_FIGHTERS <= u16::BITS as usize, "held is a u16 by slot");
 
 impl Default for Snapshot {
     fn default() -> Self {
@@ -642,6 +649,7 @@ impl Default for Snapshot {
             phase: 0,
             clock: 0,
             winner: 255,
+            held: 0,
         }
     }
 }
@@ -810,6 +818,24 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
     Ok(f)
 }
 
+/// [`Snapshot::held`]: a bit, then the slots only if any (an arena never
+/// holds anyone, so it pays one bit).
+fn w_held(w: &mut BitWriter, held: u16) -> R<()> {
+    w.write_bit(held != 0)?;
+    if held != 0 {
+        w.write(held as u32, MAX_FIGHTERS as u32)?;
+    }
+    Ok(())
+}
+
+fn r_held(r: &mut BitReader) -> R<u16> {
+    Ok(if r.read_bit()? {
+        r.read(MAX_FIGHTERS as u32)? as u16
+    } else {
+        0
+    })
+}
+
 pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     let caps = [
         (s.n_remote as usize, MAX_REMOTES),
@@ -848,6 +874,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w.write(s.phase as u32, 2)?;
     w.write(s.clock, 32)?;
     w.write(s.winner as u32, 8)?;
+    w_held(&mut w, s.held)?;
     Ok(w.finish())
 }
 
@@ -883,6 +910,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.phase = r.read(2)? as u8;
     s.clock = r.read(32)?;
     s.winner = r.read(8)? as u8;
+    s.held = r_held(&mut r)?;
     done(&r)?;
     Ok(s)
 }
