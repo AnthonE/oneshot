@@ -58,8 +58,12 @@ pub struct Def {
     pub id: u8,
     pub name: &'static str,
     /// Out of the rotation (the Range; a new map not yet played): played
-    /// only when a server names it.
+    /// only when a server or a private match names it.
     pub practice: bool,
+    /// The rotations it is played in ([`ROT_DUEL`] and the rest, by bit);
+    /// 0: by its size, as before there were any (Big Team on a big map,
+    /// every other mode on an arena, Capture the Flag only with flags).
+    pub modes: u16,
     pub lo: (f32, f32),
     pub hi: (f32, f32),
     /// [`Map::void`].
@@ -128,6 +132,17 @@ impl LightDef {
 /// for the void: a cliff's foot, past the cell or two it falls over.
 pub const CLIFF_LOOK: f32 = 2.0;
 
+/// The rotations a map can be in (`Def::modes`, `map.json`'s `modes`): the
+/// server's modes, by bit.
+pub const ROT_CASUAL: u16 = 1 << 0;
+pub const ROT_DUEL: u16 = 1 << 1;
+pub const ROT_DOUBLES: u16 = 1 << 2;
+pub const ROT_FFA: u16 = 1 << 3;
+pub const ROT_GUN_GAME: u16 = 1 << 4;
+pub const ROT_CUP: u16 = 1 << 5;
+pub const ROT_BIG_TEAM: u16 = 1 << 6;
+pub const ROT_CTF: u16 = 1 << 7;
+
 /// A map this big (in m²) is for Big Team; smaller ones are arenas.
 pub const BIG_M2: f32 = 4000.0;
 
@@ -136,6 +151,19 @@ impl Def {
     /// bounds), not an arena.
     pub fn big(&self) -> bool {
         (self.hi.0 - self.lo.0) * (self.hi.1 - self.lo.1) >= BIG_M2
+    }
+
+    /// Whether it is in rotation `rot` (a `ROT_` bit): never out of the
+    /// rotation ([`Def::practice`]) or without flags for Capture the Flag;
+    /// else by its `modes`, or by its size when it names none.
+    pub fn plays(&self, rot: u16) -> bool {
+        if self.practice || (rot & ROT_CTF != 0 && self.flags.len() != 2) {
+            return false;
+        }
+        if self.modes != 0 {
+            return self.modes & rot != 0;
+        }
+        self.big() == (rot == ROT_BIG_TEAM)
     }
 
     pub fn build(&self) -> Map {
@@ -751,6 +779,7 @@ mod tests {
         Def {
             id: 252,
             practice: false,
+            modes: 0,
             name: "with solids",
             lo: (-20.0, -20.0),
             hi: (20.0, 20.0),

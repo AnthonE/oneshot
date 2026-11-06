@@ -3,6 +3,7 @@
   "name": "Cloudbreak",
   "about": "A sandstone island over a void, mirrored between red (-x) and blue (+x): a stone spire on its north edge with the sniper on its balcony and the shotgun in its hall, a round plaza in the middle with the rocket under two leaning struts that never meet, a gate and a raised deck each side, the overshield out on the south point. Off the edge is death. Grey boxes: out of the rotation until it has been played.",
   "practice": true,
+  "modes": ["doubles", "ffa"],
   "bounds": [-30, 30, -26, 27],
   "void": -10,
   "mirror": "x",

@@ -14,6 +14,7 @@ pub const DEF: Def = Def {
     id: 1,
     name: "Overpass",
     practice: false,
+    modes: 0,
     lo: (-30.0, -20.0),
     hi: (30.0, 20.0),
     void: f32::NEG_INFINITY,

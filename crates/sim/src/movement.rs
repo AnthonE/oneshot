@@ -443,6 +443,7 @@ mod tests {
         crate::map::Def {
             id: 252,
             practice: true,
+            modes: 0,
             name: "open",
             lo: (-500.0, -500.0),
             hi: (500.0, 500.0),
@@ -723,6 +724,7 @@ mod tests {
             id: 254,
             name: "cliff",
             practice: true,
+            modes: 0,
             lo: (0.5, 0.5),
             hi: (15.5, 1.5),
             void: f32::NEG_INFINITY,
@@ -813,6 +815,7 @@ mod tests {
         crate::map::Def {
             id: 253,
             practice: false,
+            modes: 0,
             name: "solids",
             lo: (0.0, -10.0),
             hi: (40.0, 10.0),
@@ -939,6 +942,7 @@ mod tests {
         crate::map::Def {
             id: 251,
             practice: false,
+            modes: 0,
             name: "profiles",
             lo: (-40.0, -20.0),
             hi: (60.0, 20.0),

@@ -14,6 +14,7 @@ pub const DEF: Def = Def {
     id: 7,
     name: "Cloudbreak",
     practice: true,
+    modes: 12,
     lo: (-30.0, -26.0),
     hi: (30.0, 27.0),
     void: -10.0,

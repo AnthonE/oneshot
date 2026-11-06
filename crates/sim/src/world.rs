@@ -2525,6 +2525,7 @@ mod tests {
         crate::map::Def {
             id: 250,
             practice: true,
+            modes: 0,
             name: "dome",
             lo: (-10.0, -10.0),
             hi: (10.0, 10.0),

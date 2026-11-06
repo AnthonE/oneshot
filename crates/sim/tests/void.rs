@@ -37,6 +37,7 @@ fn island() -> Def {
         id: 250,
         name: "island",
         practice: true,
+        modes: 0,
         lo: (-18.0, -18.0),
         hi: (18.0, 18.0),
         void: VOID,

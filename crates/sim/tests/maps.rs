@@ -154,6 +154,29 @@ fn everything_can_be_walked_to() {
     }
 }
 
+/// Every rotation the server plays has a map in it (else it falls back to
+/// any map that can play the mode), and a map out of the rotation is in
+/// none of them.
+#[test]
+fn every_rotation_has_a_map() {
+    use sim::map::*;
+    for (rot, name) in [
+        (ROT_CASUAL, "casual"),
+        (ROT_DUEL, "duel"),
+        (ROT_DOUBLES, "doubles"),
+        (ROT_FFA, "ffa"),
+        (ROT_GUN_GAME, "gun game"),
+        (ROT_CUP, "cup"),
+        (ROT_BIG_TEAM, "big team"),
+        (ROT_CTF, "ctf"),
+    ] {
+        assert!(ALL.iter().any(|d| d.plays(rot)), "no map plays {name}");
+        for d in ALL.iter().filter(|d| d.practice) {
+            assert!(!d.plays(rot), "{} is out of the rotation", d.name);
+        }
+    }
+}
+
 #[test]
 fn bots_fight_on_every_map() {
     for d in ALL {

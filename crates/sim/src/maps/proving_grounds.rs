@@ -14,6 +14,7 @@ pub const DEF: Def = Def {
     id: 0,
     name: "Proving Grounds",
     practice: false,
+    modes: 0,
     lo: (-24.0, -24.0),
     hi: (24.0, 24.0),
     void: f32::NEG_INFINITY,

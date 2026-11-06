@@ -22,6 +22,10 @@
 //             a fighter whose feet pass it has fallen to its death. Needs a
 //             terrain, dug well under it where the edge is (an island's
 //             `base` far down and an `outline` raising the island)
+//   modes     ["doubles", "ffa", ...]: the rotations it is played in (casual,
+//             duel, doubles, ffa, gun_game, cup, big_team, ctf); none: by its
+//             size (Big Team on a big map, the rest on an arena). `practice`
+//             keeps it out of all of them (a new map: a private match picks it)
 //   mirror    "x": everything marked "mirror" is placed again at -x, red
 //             swapped for blue; "xz": also at -z, and at -x -z
 //   prefabs   { name: [box, ...] } about their own origin
@@ -145,6 +149,8 @@ export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER',
   // Power-ups: taken by walking onto the pad.
   overshield: 'OVERSHIELD', camo: 'CAMO' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
+/** sim::map::ROT_*: the rotations a map may name in `modes`. */
+export const ROTATIONS = { casual: 1, duel: 2, doubles: 4, ffa: 8, gun_game: 16, cup: 32, big_team: 64, ctf: 128 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
@@ -462,6 +468,12 @@ export function compile(spec, where = 'map.json') {
     flags = [p, [p[0] * im[0], p[1], p[2] * im[1]]];
   }
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
+  let modes = 0;
+  if (spec.modes !== undefined) {
+    if (!Array.isArray(spec.modes) || !spec.modes.length) fail(`modes: a list of ${Object.keys(ROTATIONS).join(', ')}`);
+    for (const m of spec.modes) modes |= ROTATIONS[m] ?? fail(`modes: no rotation "${m}" (${Object.keys(ROTATIONS).join(', ')})`);
+    if (modes & ROTATIONS.ctf && spec.flag === undefined) fail('modes: ctf needs a "flag"');
+  }
 
   // The boulders, last: they keep clear of everything above.
   let rocks = 0;
@@ -476,7 +488,7 @@ export function compile(spec, where = 'map.json') {
   // Profile solids are a table of their own, after the others in the sim.
   const profiles = solids.filter(isCurve), dressProfiles = dressSolids.filter(isCurve);
   return {
-    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1],
+    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, modes, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1],
     void: spec.void ?? null, boxes,
     solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, dress,
     dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
@@ -1168,6 +1180,7 @@ export function rust(m, src) {
   L.push(`    id: ${m.id},`);
   L.push(`    name: ${JSON.stringify(m.name)},`);
   L.push(`    practice: ${m.practice},`);
+  L.push(`    modes: ${m.modes},`);
   L.push(`    lo: (${lit(m.lo[0])}, ${lit(m.lo[1])}),`);
   L.push(`    hi: (${lit(m.hi[0])}, ${lit(m.hi[1])}),`);
   L.push(`    void: ${m.void === null ? 'f32::NEG_INFINITY' : lit(m.void)},`);

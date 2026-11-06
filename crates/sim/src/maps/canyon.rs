@@ -14,6 +14,7 @@ pub const DEF: Def = Def {
     id: 3,
     name: "Dry Fork",
     practice: false,
+    modes: 0,
     lo: (-140.0, -78.0),
     hi: (150.0, 78.0),
     void: f32::NEG_INFINITY,
