@@ -1339,7 +1339,7 @@ impl Sim {
             if let (Some(s), false) = (link, bytes.is_empty()) {
                 // Full means the session is behind: this snapshot goes,
                 // the next replaces it.
-                s.tx.datagram(bytes.to_vec());
+                s.tx.datagram(bytes);
             }
         });
         deliver(sessions, r, out.drain(..));
@@ -1747,7 +1747,7 @@ fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
         }
         for fr in &frames {
             if let Some(b) = &fr.snaps[follow as usize] {
-                s.tx.datagram(b.to_vec());
+                s.tx.datagram(b);
             }
         }
     }
