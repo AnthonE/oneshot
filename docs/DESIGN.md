@@ -15,6 +15,7 @@ repos is `RIP.md`.
 | **Cups** (later) | FFA heats of 8, points per placement, swiss rounds, the top seats into a final. Same match server, same reports. |
 | **Casual** | FFA and Gun Game with bots filling empty seats. Unranked. |
 | **Big Team** | 8v8 Team Slayer on terrain maps with vehicles. Casual first; a ladder once it plays well. |
+| **Siege** (to come) | 6v6 ARAM: one lane, heroes dealt at random, troopers, towers and a core; kits grow over the match. Casual (§18). |
 
 Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
@@ -37,7 +38,8 @@ Halo's rules, the ones Fireplace's arena already plays:
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
-Not yet: abilities, hidden-information modes beyond fog of war.
+Abilities live only in Siege and its Mayhem test (§18); Duel, Doubles and cups
+never have them, and Big Team's own playlist keeps none. Not yet: hidden-information modes beyond fog of war.
 Vehicles and terrain come with Big Team (§16, milestones 7 to 11), to rules
 our own: one ground vehicle first, a driver and a gunner. Maps and vehicles
 are original; never another game's layout or art.
@@ -572,6 +574,8 @@ keeps every gate in §17 green and moves a golden only on purpose.
     skins and its `?pose` for the look board. `ci/e2e.mjs` plays it, the
     server serves it, `ci/publish_web.sh` publishes it, and `web/` (three.js)
     is gone.
+13. **Siege:** abilities, troopers, the lane and heroes dealt at random, in
+    the phases of §18, each kept only if it plays.
 
 ## 17 · What CI blocks a merge on
 
@@ -588,3 +592,94 @@ keeps every gate in §17 green and moves a golden only on purpose.
 
 Numbers in this page that come from measurements cite their source. Every
 other number is a starting value, set in code and tuned from matches.
+
+## 18 · Siege: ARAM with guns
+
+Halo's gunplay with a purpose. Every match starts as Halo: the same rifle,
+shields and kill times. Over about 20 minutes each fighter's kit grows,
+troopers push the one lane, and a side wins by breaking the other's core.
+Guns win fights; abilities set them up. Casual; a ladder only if phase 4
+(below) is reached.
+
+**The rules that keep it ours:**
+- **Guns kill, abilities set up the kill.** The sandbox, shields and the
+  range's counts and times are the floor. Abilities move, block, reveal and
+  zone; few finish anyone.
+- **The guns stay on pads.** Every hero shares the sandbox; power weapons sit
+  on pads beside the lane with their timers. Map control still counts.
+- **Every hero is the same body:** one hitbox, one shield, one health. Heroes
+  differ by kit only, never by numbers.
+- **Kits grow, stats don't.** No shop, no items, no percentages. A hero's
+  growth is ability tiers, each a fork of two; the forks taken are the build.
+- **Ultimates take skill:** telegraphed, aimed or timed, each with a counter.
+  None kills at the press of a key.
+- **Skins stay cosmetic**, as everywhere (§15): never a kit, a fork or a stat.
+
+**The match:**
+- **6v6, all random, all mid.** One lane on a new terrain map, two towers a
+  side and a core behind them, side paths and pads off the lane, a boss in a
+  pocket off the middle. No vehicles at first (one a side is an experiment).
+- **Dealt a hero.** Each fighter is dealt one at random, unique on their side;
+  one reroll each, and a rerolled hero goes on the side's bench, which any of
+  that side may swap with until the gates open. Then the hero is locked: the
+  build lives on it. The roster needs at least eight to deal from; until then
+  a side may hold a double.
+- **Troopers** come in waves down the lane and fight what they meet. A tower
+  hits whatever stands in its reach, troopers first; it ignores fighters
+  covered by their own troopers unless they hurt a fighter of its side. The
+  core takes damage only once both its side's towers are down.
+- **The boss** comes at about minute 10. Killing it gives the side a
+  power-weapon drop or a push for the next wave.
+- **Sparks** grow a kit. They come from troopers killed, kills and assists,
+  towers and the boss, and a trickle for being alive in the match; part of
+  each is shared with teammates near it, and a side behind on towers earns
+  faster. Tiers open at set sparks: the kit's first rank at the start, then
+  a fork at each tier (about minutes 4, 9 and 15 in a match that runs even).
+  Everyone gets there; some sooner.
+- **Respawn** starts at Halo's 3 s and lengthens late, so a late fight decides.
+  No healing at the base: shields recharge as ever.
+- **About 20 minutes.** A match that runs long gets a sudden death: the
+  cores lose their shield phase.
+- No motion tracker and no minimap, as in every mode (§1).
+
+**A kit is four slots:** a move, a utility, a signature and an ultimate.
+Ultimates charge from damage, sparks and time. The first heroes, as
+starting points (names and looks ours, never another game's):
+
+| Hero | Move | Utility | Signature | Ultimate |
+|---|---|---|---|---|
+| Runner | grapple | decoy | slide-dash | rewind: back to where you were 5 s ago, with that moment's shields |
+| Warden | short charge | deployable wall | slowing aura | a dome that stops rounds both ways |
+| Seer | hover hop | a pulse that shows bodies in its reach for a moment | recon drone | a mark: aim a beam; who it holds is shown to the side |
+| Breaker | leap | shoulder charge | shockwave | a ground slam where you land, telegraphed in flight |
+| Medic | dash | heal beam | revive a fresh death | a field where no one on the side dies for 3 s |
+| Tempest | ice dash | frost mine | frost bolt | a frost bird the caster steers, slow and loud |
+
+**How it sits in the sim:**
+- A move ability that reads only its fighter and the map goes in
+  `Fighter::step_local` and is predicted like walking; anything that touches
+  another body is `World`'s (§17's prediction gate). Cooldowns and charge are
+  ticks; caps and costs are in `consts.rs`.
+- Troopers, towers, the core and the boss are kinds of `Thing` (milestone 7),
+  troopers walking the lane on the bots' navigation. Fixed pools, no
+  allocation in `World::step`.
+- Fog: a tower and the core are the map's and always sent; a trooper is sent
+  as a fighter is (§8). Every ability's projectile, area and reveal has a rule
+  in `fog.rs` and a line in the leak gate; a reveal tells only its own side.
+- The rewind needs 5 s of each fighter's pose and shields, beside the 250 ms
+  that lag compensation keeps (§7).
+- The deal, the rerolls and the boss's drop are hidden randomness (§9): from
+  the salt, revealed at `Phase::Over`.
+- A lane's troopers outgrow one snapshot (sixteen seats fit today,
+  `room/tests/budget.rs`); Siege waits on the delta wire's split (milestone 11).
+- Bots play Siege: they walk the lane, use their kits and take the forks.
+
+**The phases**, each kept only if it plays:
+
+| Phase | What | The question |
+|---|---|---|
+| 0 · Mayhem | three abilities (grapple, rewind, the frost bird) in casual FFA, a pick of one in three on a timer everyone shares | do abilities feel right in this sim and netcode? |
+| 1 · Kits | the ability system (slots, cooldowns, tiers); two heroes and the plain Spartan; a kits playlist of Big Team on Dry Fork | do heroes and pad guns play together? |
+| 2 · The lane | troopers, towers, the core and the boss on the lane map; Siege with bots | does a purpose keep Big Team's players? |
+| 3 · All random | eight heroes, the deal, rerolls and the bench, the forks, the catch-up | do players come back for the deal and the builds? |
+| 4 · A ladder | a Siege ladder, then cups | only if phase 3 holds players |
