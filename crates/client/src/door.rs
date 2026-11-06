@@ -97,7 +97,7 @@ fn moved_to(m: &Msg) -> Option<(String, String)> {
     }
 }
 
-const MATCHED: &str = "Matched: joining the match's server...";
+pub(crate) const MATCHED: &str = "Matched: joining the match's server...";
 
 /// The menu's session as the game holds it (`party.rs`): the party's
 /// messages and voice in, its acts and our voice out. Never waits.
