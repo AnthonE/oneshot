@@ -1108,3 +1108,117 @@ async fn elo_pros_queue_plays_a_match_put_here_and_moves_one_put_elsewhere() {
     h.drain(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The same against a real Elo Pros (`ELO_PROS_ORIGIN`: its lobbies and
+/// ratings routers, oneshot's key t-1 the test seed's, the list naming
+/// 127.0.0.1): queued there, matched, played here, rated there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a real Elo Pros at ELO_PROS_ORIGIN"]
+async fn against_a_real_elo_pros_queue() {
+    let origin = std::env::var("ELO_PROS_ORIGIN").expect("ELO_PROS_ORIGIN");
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-real-eloq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let h = queue_server(origin.clone(), "127.0.0.1", &dir).await;
+    let http = h.http.unwrap();
+    let (p0, p1) = (
+        pass(Some(WALLETS[0]), &nonce(http).await),
+        pass(Some(WALLETS[1]), &nonce(http).await),
+    );
+    let (a, b) = tokio::join!(play(&h, &p0, MODE_DUEL), play(&h, &p1, MODE_DUEL));
+    for got in [&a, &b] {
+        assert!(matches!(got.first(), Some(Msg::Queued { .. })), "{got:?}");
+        assert!(got.iter().any(|m| matches!(m, Msg::Welcome { .. })), "{got:?}");
+        assert_eq!(got.last(), Some(&Msg::Bye), "{got:?}");
+    }
+    h.drain(Duration::from_secs(10)).await;
+    let log = reqwest::get(format!("{origin}/api/ratings/oneshot/matches"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    eprintln!("Elo Pros' match log: {log}");
+    assert!(
+        log.contains("\"q-"),
+        "the result is in Elo Pros' log under the queue's id: {log}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two boxes on a real Elo Pros (`ELO_PROS_ORIGIN`, its list naming
+/// `localhost:47199` full and `127.0.0.1:47123`): players come to the
+/// first, Elo Pros puts their match on the second, they are moved there
+/// with their tickets (the boxes share a nonce key) and play it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a real Elo Pros at ELO_PROS_ORIGIN listing two boxes"]
+async fn against_a_real_elo_pros_a_match_moves_to_the_box_with_room() {
+    let origin = std::env::var("ELO_PROS_ORIGIN").expect("ELO_PROS_ORIGIN");
+    let dir: PathBuf = std::env::temp_dir().join(format!("oneshot-two-boxes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("server.pem");
+    std::fs::write(&key_path, pem(&SERVER_SEED)).unwrap();
+    let account = Ed25519KeyPair::from_seed_unchecked(&ACCOUNT_SEED).unwrap();
+    let nonce_key = [7u8; 32];
+    let boxed = |bind: &str, public: &str| server::Config {
+        bind: bind.parse().unwrap(),
+        http: Some("127.0.0.1:0".parse().unwrap()),
+        duel: Rules {
+            time_limit_ms: 3000,
+            ..Rules::duel()
+        },
+        domains: vec!["127.0.0.1".into()],
+        elo_pubkey: Some(account.public_key().as_ref().try_into().unwrap()),
+        elo_origin: origin.clone(),
+        elo_key: Some((key_path.clone(), "t-1".into())),
+        elo_queue: true,
+        nonce_key: Some(nonce_key),
+        public_addr: Some(public.into()),
+        linger: Duration::from_millis(300),
+        ..server::Config::default()
+    };
+    let one = server::run(boxed("127.0.0.1:0", "localhost:47199")).await.unwrap();
+    let two = server::run(boxed("127.0.0.1:47123", "127.0.0.1:47123")).await.unwrap();
+    // What a page holds from its lobby session: a ticket, good on any box
+    // with the key.
+    let tickets: Vec<String> = WALLETS
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            server::auth::Nonces::with_key(&nonce_key).ticket(&server::auth::Who {
+                id: w.to_string(),
+                account: Some(format!("acct_{i:020}")),
+                wallet: Some(w.to_string()),
+            })
+        })
+        .collect();
+    let (a, b) = tokio::join!(play(&one, &tickets[0], MODE_DUEL), play(&one, &tickets[1], MODE_DUEL));
+    let mut ids = Vec::new();
+    for got in [&a, &b] {
+        match got.last() {
+            Some(Msg::Moved { addr, queued }) => {
+                assert_eq!(addr.as_str(), "127.0.0.1:47123", "{got:?}");
+                ids.push(queued.as_str().to_string());
+            }
+            m => panic!("moved, not {m:?}: {got:?}"),
+        }
+    }
+    assert_eq!(ids[0], ids[1], "one match");
+    let (a, b) = tokio::join!(
+        play_queued(&two, &tickets[0], MODE_DUEL, &ids[0]),
+        play_queued(&two, &tickets[1], MODE_DUEL, &ids[1])
+    );
+    for got in [&a, &b] {
+        assert!(got.iter().any(|m| matches!(m, Msg::Welcome { .. })), "{got:?}");
+        assert_eq!(got.last(), Some(&Msg::Bye), "{got:?}");
+    }
+    two.drain(Duration::from_secs(10)).await;
+    one.drain(Duration::from_secs(2)).await;
+    let log = reqwest::get(format!("{origin}/api/ratings/oneshot/matches"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(log.contains(&ids[0]), "rated under the queue's id: {log}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
