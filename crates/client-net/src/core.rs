@@ -170,6 +170,9 @@ pub struct Stats {
     pub depth: i8,
     pub rate: f64,
     pub delay_ticks: f64,
+    /// Ticks between the server's snapshots, as they come: the least gap
+    /// seen (a mode may have its own rate); 0 before two have.
+    pub snap_every: u32,
 }
 
 /// One snapshot as interpolation keeps it: everyone else, the vehicles,
@@ -977,6 +980,9 @@ impl NetCore {
             }
             Some(n) => {
                 let fwd = s.tick - n;
+                if self.stats.snap_every == 0 || fwd < self.stats.snap_every {
+                    self.stats.snap_every = fwd;
+                }
                 // Exactly 32 on shifts every old bit out (and `<< 32` on a
                 // u32 is an overflow: a panic in a debug build, which a
                 // half-second hitch at a level's load found).
@@ -1038,7 +1044,13 @@ impl NetCore {
                         .clamp(CLOCK_SLEW, CLOCK_SLEW_FAR);
                     c.aim_at(now_ms, target, rate, rate);
                 }
-                let target = (SEND_EVERY as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
+                // Two snapshots' gap and twice the jitter: a mode whose
+                // snapshots are further apart is drawn as far behind again.
+                let gap = match self.stats.snap_every {
+                    0 => SEND_EVERY,
+                    n => n.min(8),
+                };
+                let target = (gap as f64 * 2.0 + self.jitter * 2.0).clamp(2.0, 12.0);
                 self.delay.aim(now_ms, target);
             }
         }

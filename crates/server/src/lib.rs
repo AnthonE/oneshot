@@ -207,9 +207,15 @@ pub struct Config {
     /// Origins whose pages may read `server.json` and `/nonce` (CORS): the
     /// page on elopros.com asking the game box.
     pub allow_origins: Vec<String>,
-    /// Players the server takes before a hello is answered "full"; QUIC
-    /// Retry past twice this, refusal past four times (docs/DESIGN.md §14).
+    /// Players the server takes before a hello is answered "full" (a
+    /// player's lobby beside its match isn't another); QUIC Retry past
+    /// twice every player's connections, refusal past four times
+    /// (docs/DESIGN.md §14, `net::CONNS_PER_PLAYER`).
     pub capacity: usize,
+    /// Snapshots a second on a big map (Big Team, and Capture the Flag
+    /// there): 64 as every mode by default; 32 halves its packets on a box
+    /// short of them. The arenas and ranked always get 64.
+    pub big_snapshot_hz: u32,
     /// The key nonces are signed with, shared by the two slots so either
     /// takes the other's (`auth::Nonces`). None: a key of this process's own.
     pub nonce_key: Option<[u8; 32]>,
@@ -266,6 +272,7 @@ impl Default for Config {
             public_addr: None,
             allow_origins: Vec::new(),
             capacity: 256,
+            big_snapshot_hz: TICK_HZ / room::SNAP_EVERY,
             nonce_key: None,
             live_file: None,
             roster_dir: None,
@@ -802,11 +809,15 @@ impl Sim {
             rotation_of(mode)
         };
         let map = chosen.unwrap_or_else(|| self.pick_map(seed, rot, avoid));
+        let big = !ranked && sim::maps::ALL.iter().any(|d| d.id == map.id && d.big());
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
             let mut r = Room::new(map, rules, seed, salt);
             r.passive_bots = self.cfg.passive_bots;
+            if big {
+                r.set_snap_every(snap_every(self.cfg.big_snapshot_hz));
+            }
             r
         }
     }
@@ -1751,6 +1762,14 @@ fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
             }
         }
     }
+}
+
+/// Ticks between snapshots for `hz` a second: the nearest rate that
+/// divides the tick (128: 64, 32, 16).
+pub fn snap_every(hz: u32) -> u32 {
+    (TICK_HZ / hz.clamp(16, TICK_HZ / room::SNAP_EVERY))
+        .next_power_of_two()
+        .min(8)
 }
 
 /// Room messages to their seats' sessions, each framed once and its bytes

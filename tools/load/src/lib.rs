@@ -24,7 +24,8 @@ use client_net::session::Session;
 use proto::Msg;
 use sim::input::{Input, CROUCH, FIRE, GRENADE, JUMP, RELOAD};
 
-/// Snapshots a second a seated player is sent.
+/// Snapshots a second a seated player is sent at the arenas' rate (a big
+/// map's may be its own: each player reads its rate off the ticks).
 pub const SNAPSHOT_HZ: f64 = sim::consts::TICK_HZ as f64 / room::SNAP_EVERY as f64;
 
 /// A refusal or a failed connect waits this long before asking again.
@@ -230,6 +231,8 @@ struct Played {
     never: bool,
     /// Its lobby never opened.
     lobby_failed: bool,
+    /// Snapshots a second it was sent, by the ticks between them (0: none).
+    sent_hz: f64,
 }
 
 /// How a session ended.
@@ -333,6 +336,10 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
             }
         };
         let st = c.session.core.stats;
+        if st.snap_every > 0 {
+            let hz = f64::from(sim::consts::TICK_HZ) / f64::from(st.snap_every);
+            p.sent_hz = if p.sent_hz == 0.0 { hz } else { p.sent_hz.min(hz) };
+        }
         p.confirmations += u64::from(st.confirmations);
         p.corrections += u64::from(st.corrections);
         p.resyncs += u64::from(st.resyncs);
@@ -453,6 +460,8 @@ pub struct Report {
     pub never_in: usize,
     /// Players whose lobby never opened.
     pub lobby_failed: usize,
+    /// Snapshots a second players were sent: the least rate seen.
+    pub sent_hz: f64,
     pub failed: usize,
     pub refused: Vec<(String, usize)>,
     pub byes: usize,
@@ -492,10 +501,10 @@ impl Report {
                 self.lobby_failed, self.players
             ));
         }
-        if self.snaps_p10 < 0.9 * SNAPSHOT_HZ {
+        if self.snaps_p10 < 0.9 * self.sent_hz {
             out.push(format!(
-                "a tenth of players took in under {:.1} snapshots a second (sent {SNAPSHOT_HZ})",
-                self.snaps_p10
+                "a tenth of players took in under {:.1} snapshots a second (sent {})",
+                self.snaps_p10, self.sent_hz
             ));
         }
         if self.confirmed < 0.9 {
@@ -545,8 +554,8 @@ impl fmt::Display for Report {
         )?;
         writeln!(
             f,
-            "  snapshots a second (sent {SNAPSHOT_HZ}): median {:.1}, tenth {:.1}, least {:.1}",
-            self.snaps_p50, self.snaps_p10, self.snaps_min
+            "  snapshots a second (sent {}): median {:.1}, tenth {:.1}, least {:.1}",
+            self.sent_hz, self.snaps_p50, self.snaps_p10, self.snaps_min
         )?;
         writeln!(
             f,
@@ -673,6 +682,7 @@ pub async fn run(o: Opts) -> Report {
     let mut rates = Vec::new();
     let mut never_in = 0;
     let mut lobby_failed = 0;
+    let mut sent_hz: f64 = 0.0;
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut cut: BTreeMap<String, usize> = BTreeMap::new();
     for h in players {
@@ -682,6 +692,13 @@ pub async fn run(o: Opts) -> Report {
         };
         never_in += usize::from(p.never);
         lobby_failed += usize::from(p.lobby_failed);
+        if p.sent_hz > 0.0 {
+            sent_hz = if sent_hz == 0.0 {
+                p.sent_hz
+            } else {
+                sent_hz.min(p.sent_hz)
+            };
+        }
         if p.window_secs > 0.5 {
             rates.push(p.window_snaps as f64 / p.window_secs);
         }
@@ -710,6 +727,7 @@ pub async fn run(o: Opts) -> Report {
         joins: all.joins,
         never_in,
         lobby_failed,
+        sent_hz: if sent_hz == 0.0 { SNAPSHOT_HZ } else { sent_hz },
         failed: all.failed,
         refused: refused.into_iter().collect(),
         byes: all.byes,

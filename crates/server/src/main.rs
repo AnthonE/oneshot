@@ -6,7 +6,7 @@
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
-//! [--capacity 256] [--drain-max 900]
+//! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
 //! [--sim-threads 0] [--load-from ip]… [--match-secs N]`
 //!
@@ -16,6 +16,11 @@
 //! `--sim-threads` is how many threads the rooms step on: 0 (the default)
 //! one a core, 1 the sim thread alone. `--load-from` lets a load test's box
 //! (`tools/load`) hold more than an address's share of connections.
+//!
+//! `--capacity` is in players (a player's lobby beside its match isn't
+//! another). `--big-snapshot-hz` is the snapshot rate on a big map (Big
+//! Team, and Capture the Flag there): 64 as everywhere by default, 32 to
+//! halve a box's packets; the arenas and ranked always get 64.
 //!
 //! `--loadout` starts everyone (gun game aside) with those guns, by id or
 //! name (`--loadout sniper,magnum`): for looking at a gun in a match.
@@ -118,6 +123,11 @@ fn main() {
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--big-snapshot-hz" => {
+                cfg.big_snapshot_hz = val()
+                    .parse()
+                    .unwrap_or_else(|_| die("--big-snapshot-hz is 64, 32 or 16"))
+            }
             "--sim-threads" => cfg.sim_threads = val().parse().unwrap_or_else(|_| die("--sim-threads is a count")),
             "--load-from" => cfg
                 .load_sources

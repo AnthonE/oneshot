@@ -66,12 +66,14 @@ struct Gate {
     proj_seen: usize,
     vehicles_seen: usize,
     drops_seen: usize,
+    /// Ticks between the room's snapshots.
+    every: u32,
 }
 
 impl Gate {
     fn check_snapshot(&mut self, s: &Snapshot) {
         let c = self.room.client(self.me as u8).map(|c| (c.rtt_ms, c.playout as u32));
-        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play));
+        let fog_lead = c.map_or(0.0, |(rtt, play)| room::fog::lead_s(rtt, play, self.every));
         let w = &self.room.world;
         let me = &w.fighters[self.me];
         let now = &self.history[0];
@@ -177,8 +179,8 @@ impl Gate {
                         0.1,
                         0.2,
                         0.3,
-                        room::fog::full_lead(fog_lead, 2),
-                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                        room::fog::full_lead(fog_lead, 2, self.every),
+                        room::fog::full_lead(fog_lead, room::fog::FAR_EVERY, self.every),
                     ];
                     for v in s.vehicles() {
                         self.vehicles_seen += 1;
@@ -228,8 +230,8 @@ impl Gate {
                 // the last 16 ticks.
                 let leads = [
                     fog_lead,
-                    room::fog::full_lead(fog_lead, 2),
-                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY),
+                    room::fog::full_lead(fog_lead, 2, self.every),
+                    room::fog::full_lead(fog_lead, room::fog::FAR_EVERY, self.every),
                     0.0,
                     0.05,
                     0.1,
@@ -325,6 +327,23 @@ fn nothing_a_client_should_not_know_reaches_it_in_big_team() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_at_a_slower_snapshot_rate() {
+    // A mode given its own rate (the server's `--big-snapshot-hz`): fog
+    // holds a pair as many snapshots, never longer than it could be seen.
+    for d in sim::maps::ALL.iter().filter(|d| d.big()) {
+        gate_at(
+            d.build(),
+            Rules {
+                score_limit: 60,
+                time_limit_ms: 120_000,
+                ..Rules::big_team()
+            },
+            4,
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
     for d in sim::maps::ALL.iter().filter(|d| d.flags.len() == 2) {
         gate(
@@ -351,7 +370,15 @@ fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
 /// One match of `rules` on `map`, the person in the first seat, checked
 /// from start to end.
 fn gate(map: Map, rules: Rules) {
+    gate_at(map, rules, room::SNAP_EVERY);
+}
+
+/// [`gate`], the room's snapshots `every` ticks apart.
+fn gate_at(map: Map, rules: Rules, every: u32) {
     let mut room = Room::new(map, rules, 77, SALT);
+    room.set_snap_every(every);
+    // What the checks look back over: fog's hold, and two snapshots more.
+    let looks = (room::fog::hold_ticks(every) + 2 * every) as usize;
     let (slot, out) = room
         .join(
             Name::new("gate"),
@@ -385,6 +412,7 @@ fn gate(map: Map, rules: Rules) {
         proj_seen: 0,
         vehicles_seen: 0,
         drops_seen: 0,
+        every,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -413,9 +441,9 @@ fn gate(map: Map, rules: Rules) {
         g.room.on_input(slot, &m, now);
         let (snaps, out) = g.room.step(now);
         g.history.push_front(g.room.world.fighters);
-        g.history.truncate(16);
+        g.history.truncate(looks);
         g.vhistory.push_front(*g.room.world.vehicles);
-        g.vhistory.truncate(16);
+        g.vhistory.truncate(looks);
         for (_, s) in &snaps {
             acked = s.tick;
             g.check_snapshot(s);

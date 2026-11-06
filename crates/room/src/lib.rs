@@ -364,6 +364,9 @@ pub struct Room {
     /// What its watchers are shown, late (`spectate`); None with nobody
     /// watching.
     pub spectate: Option<Box<spectate::Line>>,
+    /// Ticks between snapshots: [`SNAP_EVERY`] unless the server gives a
+    /// mode its own rate ([`Room::set_snap_every`]).
+    snap_every: u32,
 }
 
 impl Room {
@@ -402,7 +405,19 @@ impl Room {
             medals: medals::Medals::default(),
             looks: [proto::Look::default(); MAX_FIGHTERS],
             spectate: None,
+            snap_every: SNAP_EVERY,
         }
+    }
+
+    /// Snapshots every `n` ticks from now on (1 to 8): a mode's own rate.
+    /// What the world does is the same at any rate; only what is sent.
+    pub fn set_snap_every(&mut self, n: u32) {
+        self.snap_every = n.clamp(1, 8);
+    }
+
+    /// Ticks between snapshots.
+    pub fn snap_every(&self) -> u32 {
+        self.snap_every
     }
 
     /// Someone watches: the line starts (if it hasn't), a ranked match
@@ -639,7 +654,8 @@ impl Room {
     /// The newest tick snapshots went out on.
     fn last_snapshot_tick(&self) -> Option<u32> {
         let t = self.world.tick;
-        (t >= SNAP_EVERY).then(|| t - t % SNAP_EVERY)
+        let n = self.snap_every;
+        (t >= n).then(|| t - t % n)
     }
 
     /// One tick. Returns the snapshots to send (on snapshot ticks) and the
@@ -740,13 +756,13 @@ impl Room {
         }
 
         let mut wire = [0u8; MAX_DATAGRAM];
-        if self.world.tick.is_multiple_of(SNAP_EVERY) {
+        if self.world.tick.is_multiple_of(self.snap_every) {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
                 if let Seat::Person(c, _) = &mut self.seats[s] {
-                    let lead = fog::lead_s(c.rtt_ms, c.playout as u32);
+                    let lead = fog::lead_s(c.rtt_ms, c.playout as u32, self.snap_every);
                     let f = &mut self.fogs[s];
-                    f.update_with(&self.world, s, lead, tick, &mut plain);
+                    f.update_with(&self.world, s, lead, tick, &mut plain, self.snap_every);
                     let low = c.take_low();
                     let (snap, n) = build_encoded(
                         &self.world,
