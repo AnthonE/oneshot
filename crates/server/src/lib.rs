@@ -678,8 +678,9 @@ fn steer_off(mut ids: Vec<u8>, avoid: &[u8]) -> Vec<u8> {
 }
 
 /// The maps each player (or a guest's party) played last, newest first, so
-/// the next match they start is on another ([`steer_off`]). Noted as a match
-/// ends, forgotten after [`RECENT_FOR`].
+/// the next match they start is on another ([`steer_off`]). Noted as they
+/// are seated (however that match then ends: played out, left, dropped),
+/// forgotten after [`RECENT_FOR`].
 #[derive(Default)]
 struct Recent {
     by: BTreeMap<String, ([u8; RECENT_N], Instant)>,
@@ -953,6 +954,9 @@ impl Sim {
                         let Some((slot, out)) = live.room.join_team(name, look, team) else {
                             continue;
                         };
+                        if let Some(k) = Recent::key(player.as_ref(), code) {
+                            recent.note(k, live.room.world.map.id, now);
+                        }
                         live.links[slot as usize] = Some(session);
                         self.ctx.health.joins_casual.fetch_add(1, Ordering::Relaxed);
                         live.players[slot as usize] = player.clone();
@@ -1170,6 +1174,7 @@ impl Sim {
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
                             live.players[slot] = Some(p.wallet.clone());
+                            recent.note(p.wallet.clone(), live.room.world.map.id, now);
                         }
                     }
                     let i = place(&mut rooms, live);
@@ -1220,7 +1225,7 @@ impl Sim {
                             }
                         };
                         cups[ci] = Some(c);
-                        self.start_stage(&cups, ci, &mut rooms, &mut sessions, &recent);
+                        self.start_stage(&cups, ci, &mut rooms, &mut sessions, &mut recent, now);
                     }
                 }
                 for e in q.entries.iter().chain(&cup_wait) {
@@ -1291,20 +1296,6 @@ impl Sim {
                 }
                 _ => rooms.iter_mut().filter_map(Option::as_mut).for_each(step),
             }
-            // A match just over: its map is what everyone in it played last
-            // (before its room closes, a linger on: they may start another
-            // first).
-            for r in rooms.iter().flatten().filter(|r| r.over_at == Some(now)) {
-                let map = r.room.world.map.id;
-                for p in r.players.iter().flatten() {
-                    recent.note(p.clone(), map, now);
-                }
-                for &(code, _) in &r.parties {
-                    if let Some(k) = Recent::key(None, code) {
-                        recent.note(k, map, now);
-                    }
-                }
-            }
             for (ci, h, id, scores) in heats_done {
                 let Some(c) = cups[ci].as_mut() else { continue };
                 let members = c.heats.get(h).map(|x| x.0.clone()).unwrap_or_default();
@@ -1318,7 +1309,7 @@ impl Sim {
                     self.finish_cup(c, &mut sessions);
                     cups[ci] = None;
                 } else {
-                    self.start_stage(&cups, ci, &mut rooms, &mut sessions, &recent);
+                    self.start_stage(&cups, ci, &mut rooms, &mut sessions, &mut recent, now);
                 }
             }
 
@@ -1368,7 +1359,8 @@ impl Sim {
         ci: usize,
         rooms: &mut Vec<Option<Live>>,
         sessions: &mut BTreeMap<u64, Sess>,
-        recent: &Recent,
+        recent: &mut Recent,
+        now: Instant,
     ) {
         let Some(c) = cups[ci].as_ref() else { return };
         for i in 0..c.entrants.len() {
@@ -1400,6 +1392,7 @@ impl Sim {
                 live.links[slot] = Some(e.session);
                 live.wallets[slot] = Some(e.wallet.clone());
                 live.players[slot] = Some(e.wallet.clone());
+                recent.note(e.wallet.clone(), live.room.world.map.id, now);
             }
             let at = place_room(rooms, live);
             for (slot, &i) in members.iter().enumerate() {
