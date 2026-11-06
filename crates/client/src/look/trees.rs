@@ -1,5 +1,6 @@
 //! Trees: a palm for the beach and, for the canyon floor, a dead tree and
-//! a live one (the dead tree's limbs under a crown of leaf cards), drawn
+//! a live one (limbs spread to a dome under sprays of leaf cards, both in
+//! a furrowed bark card), drawn
 //! where a map puts a round solid with a tree look (`palm`, `dead_tree`:
 //! which of that look's trees are in leaf is [`in_leaf`]'s, the same for a
 //! tree and its twin across the map). level.rs spawns [`tree`]'s parts at
@@ -10,7 +11,7 @@
 //! After Gates' `render/tree.rs` (`palm`, `palm_crown`, `palm_bark_rgba`)
 //! and `render/plants.rs` (`frond`, `frond_rgba`, `dead_scrub` and its
 //! sticks), MIT, NOTICE: copied and trimmed, the dead tree grown from the
-//! scrub to a tree's height. Both cards are drawn the first time a map
+//! scrub to a tree's height. The cards are drawn the first time a map
 //! grows a tree ([`TreeCards`]), nothing on disk. Every tree is a pure function of its seed (a hash, no
 //! rand), so every client builds the same trees. No wind yet.
 
@@ -94,6 +95,10 @@ pub struct Cards {
     pub leaf: Handle<Image>,
     pub bark: Handle<Image>,
     pub bark_normal: Handle<Image>,
+    /// The canyon trees' furrowed bark (albedo and normal, tiling), worn
+    /// by the dead wood and the live bark under their vertex colours.
+    pub wood: Handle<Image>,
+    pub wood_normal: Handle<Image>,
     /// The materials trees wear, by part and shade ([`Cards::wear`]): made
     /// the first time one is worn and shared from then on, so trees of a
     /// shade batch rather than each drawing on a material of its own.
@@ -145,11 +150,15 @@ impl Cards {
             },
             Wear::DeadWood => StandardMaterial {
                 base_color: tint,
+                base_color_texture: Some(self.wood.clone()),
+                normal_map_texture: Some(self.wood_normal.clone()),
                 perceptual_roughness: 0.95,
                 ..default()
             },
             Wear::LiveBark => StandardMaterial {
                 base_color: Color::linear_rgb(v * LIVE_BARK[0], v * LIVE_BARK[1], v * LIVE_BARK[2]),
+                base_color_texture: Some(self.wood.clone()),
+                normal_map_texture: Some(self.wood_normal.clone()),
                 perceptual_roughness: 0.95,
                 ..default()
             },
@@ -158,6 +167,8 @@ impl Cards {
                 base_color_texture: Some(self.leaf.clone()),
                 perceptual_roughness: 0.85,
                 specular_tint: Color::linear_rgb(0.3, 0.3, 0.3),
+                // The sun through a leaf from behind, as the grass has it.
+                diffuse_transmission: LEAF_TRANSMISSION,
                 alpha_mode: AlphaMode::Mask(0.5),
                 cull_mode: None,
                 double_sided: true,
@@ -179,11 +190,14 @@ impl TreeCards {
     pub fn get(&mut self, images: &mut Assets<Image>) -> &mut Cards {
         self.0.get_or_insert_with(|| {
             let [bark, bark_normal] = palm_bark_images();
+            let [wood, wood_normal] = wood_bark_images();
             Cards {
                 frond: images.add(frond_image()),
                 leaf: images.add(cutout_image(leaf_rgba(LEAF_PX), LEAF_PX)),
                 bark: images.add(bark),
                 bark_normal: images.add(bark_normal),
+                wood: images.add(wood),
+                wood_normal: images.add(wood_normal),
                 worn: Default::default(),
             }
         })
@@ -193,7 +207,7 @@ impl TreeCards {
 /// Ceilings on one tree's triangles (`tests`): a palm, a dead tree.
 pub const PALM_MAX_TRIS: usize = 8_000;
 pub const DEAD_MAX_TRIS: usize = 2_000;
-pub const LIVE_MAX_TRIS: usize = 3_000;
+pub const LIVE_MAX_TRIS: usize = 6_000;
 
 /// A tree's foot sinks this far below the origin, so a slope under it
 /// shows no gap.
@@ -231,16 +245,50 @@ const PALM_BARK_PX: usize = 256;
 /// wood the sun has had for years, silvered toward the tips (lighter than
 /// Gates' scrub: against the canyon's sunlit sand the scrub's read as a
 /// silhouette).
-const DEAD_ROOT: [f32; 3] = [0.075, 0.064, 0.052];
-const DEAD_TIP: [f32; 3] = [0.24, 0.225, 0.2];
-/// The trunk's share of a dead tree's height; the limbs reach the rest.
-const DEAD_TRUNK_SHARE: f32 = 0.62;
+/// (Over the bark card's mean, [`WOOD_MEAN`], which darkens them.)
+const DEAD_ROOT: [f32; 3] = [0.075 / WOOD_MEAN, 0.064 / WOOD_MEAN, 0.052 / WOOD_MEAN];
+const DEAD_TIP: [f32; 3] = [0.24 / WOOD_MEAN, 0.225 / WOOD_MEAN, 0.2 / WOOD_MEAN];
+/// How a tree's limbs grow: the trunk's share of its height (the limbs
+/// reach the rest), how many limbs leave it, where the lowest leaves (a
+/// share of the trunk), how long a limb is (shares of the height) and how
+/// far over the level it rises (radians), least and most.
+struct Habit {
+    trunk_share: f32,
+    limbs: (u32, u32),
+    limb_from: f32,
+    reach: (f32, f32),
+    elev: (f32, f32),
+}
+/// A dead tree: a tall bare trunk, a few limbs reaching up off its top.
+const DEAD: Habit = Habit {
+    trunk_share: 0.62,
+    limbs: (4, 6),
+    limb_from: 0.45,
+    reach: (0.18, 0.26),
+    elev: (0.5, 1.05),
+};
+/// A live tree: the trunk splits lower into more limbs, longer and
+/// spreading, so the crown is a broad dome over a short bole, not three
+/// puffs on a pole (the canyon's first live trees read as bonsai).
+const LIVE: Habit = Habit {
+    trunk_share: 0.5,
+    limbs: (6, 8),
+    limb_from: 0.62,
+    reach: (0.24, 0.33),
+    elev: (0.3, 0.85),
+};
 /// The trunk is straight (inside the solid) this far up, then wanders.
 const DEAD_STRAIGHT_M: f32 = 2.5;
-/// How many limbs leave the trunk, and how many times each forks.
-const DEAD_LIMBS: (u32, u32) = (4, 6);
+/// How many times each limb forks.
 const DEAD_FORKS: u32 = 3;
-const DEAD_TRUNK_SIDES: usize = 8;
+const DEAD_TRUNK_SIDES: usize = 10;
+/// The canyon trees' bark card: its texels a side, the metres of trunk it
+/// covers (up and round), how many furrowed ridges run up it, and its
+/// mean albedo (linear), which the vertex colours are set over.
+const WOOD_PX: usize = 512;
+const WOOD_TILE_M: f32 = 0.9;
+const WOOD_RIDGES: f32 = 7.0;
+const WOOD_MEAN: f32 = 0.62;
 /// The rim's trees ([`rim`]): a cell's side, how far out from the bound
 /// the band runs, how high and how near level the ground must be, the
 /// share of cells that grow one, and a tree's height and trunk.
@@ -256,17 +304,34 @@ const LIVE_SHARE: f32 = 0.66;
 /// A live tree's bark over the dead wood's grey: darker and browner.
 const LIVE_BARK: [f32; 3] = [0.62, 0.5, 0.42];
 /// A leaf card's half-size, metres, least and most, on a tree 8 m tall;
-/// how many stand at each twig's end, and how far the cards' normals are
-/// turned out from the crown's middle, so it is lit as one mass.
-const LEAF_CARD_M: (f32, f32) = (0.62, 1.0);
-const LEAF_CARDS: u32 = 3;
+/// how many cross at each spray (a twig's end, and halfway along the
+/// outer twigs), and how far the cards' normals are turned out from the
+/// crown's middle, so it is lit as one mass.
+const LEAF_CARD_M: (f32, f32) = (0.7, 1.1);
+const LEAF_CARDS: u32 = 4;
 const LEAF_VOLUME: f32 = 0.75;
-/// The leaf card's texels a side and how many leaves it carries.
-const LEAF_PX: u32 = 256;
-const LEAF_COUNT: u32 = 110;
+/// No leaf card reaches lower than this, metres (before the fit): the
+/// crown is over a standing fighter's head.
+const LEAF_MIN_Y: f32 = 2.6;
+/// How dark the crown is at its heart and its underside against its sunlit
+/// rim (a vertex colour; the cards' normals alone light it as a ball).
+const LEAF_HEART: f32 = 0.45;
+/// Each spray's own green: how far it strays toward yellow or blue.
+const LEAF_HUE: f32 = 0.12;
+/// The sun let through a leaf from behind (`diffuse_transmission`).
+const LEAF_TRANSMISSION: f32 = 0.35;
+/// The leaf card's texels a side and how many leaves it carries, and a
+/// leaf's length, least and most, as a share of the card.
+const LEAF_PX: u32 = 512;
+const LEAF_COUNT: u32 = 520;
+const LEAF_LEN: (f32, f32) = (0.026, 0.044);
+/// The twigs drawn on the leaf card under its leaves, and how thick one is
+/// at its foot, a share of the card.
+const LEAF_TWIGS: u32 = 7;
+const LEAF_TWIG_W: f32 = 0.004;
 /// A leaf's colours, sRGB: the blade and where the sun is on it.
-const LEAF_BLADE: [f32; 3] = [44.0, 72.0, 30.0];
-const LEAF_SUN: [f32; 3] = [98.0, 124.0, 52.0];
+const LEAF_BLADE: [f32; 3] = [48.0, 78.0, 32.0];
+const LEAF_SUN: [f32; 3] = [116.0, 138.0, 56.0];
 
 /// The parts of a `kind` of tree grown from `seed`, its trunk `trunk_r`
 /// across at the foot (the solid's radius) and `height` tall, relative to
@@ -499,44 +564,66 @@ fn frond(
 /// A dead tree: a bare trunk, straight through the solid and wandering a
 /// little above it, and four to six limbs off its upper half, each forking
 /// three times into thinner sticks, the topmost carrying the trunk on as
-/// its leader; grey wood in the vertices, no card. Fitted to `height`.
+/// its leader; grey wood in the vertices over the bark card. Fitted to
+/// `height`.
 fn dead(seed: u32, trunk_r: f32, height: f32) -> Mesh {
-    let (s, _) = skeleton(seed, trunk_r, height);
+    let (s, _) = skeleton(seed, trunk_r, height, &DEAD);
     let mut m = s.mesh();
     fit_height(&mut [&mut m], height);
     m
 }
 
-/// A live tree, `(wood, crown)`: the dead tree's limbs, and at every
-/// twig's end a few leaf cards crossed through it, their normals turned
-/// out from the crown's middle. Fitted to `height` together.
+/// A live tree, `(wood, crown)`: limbs grown to [`LIVE`]'s habit, and at
+/// every spray (each twig's end, and halfway along the outer twigs) a few
+/// leaf cards crossed through it at every tilt, their normals turned out
+/// from the crown's middle and their colour darkening toward its heart and
+/// its underside, so the crown reads as one mass with depth in it. Fitted
+/// to `height` together.
 fn live(seed: u32, trunk_r: f32, height: f32) -> (Mesh, Mesh) {
-    let (wood, tips) = skeleton(seed, trunk_r, height);
+    let (wood, sprays) = skeleton(seed, trunk_r, height, &LIVE);
     let seed = hash2(0x1eaf_c4a2, seed);
     let mut crown = Soup::default();
-    let middle = tips.iter().copied().sum::<Vec3>() / tips.len().max(1) as f32;
-    let white = |_: Vec3| [1.0, 1.0, 1.0, 1.0];
+    let middle = sprays.iter().copied().sum::<Vec3>() / sprays.len().max(1) as f32;
+    let (lo, hi) = sprays
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+    let reach = sprays.iter().map(|p| (*p - middle).length()).fold(1e-3, f32::max);
     let k = height / 8.0;
-    for (i, &tip) in tips.iter().enumerate() {
+    for (i, &tip) in sprays.iter().enumerate() {
         let i = i as u32;
-        let half = (LEAF_CARD_M.0 + (LEAF_CARD_M.1 - LEAF_CARD_M.0) * hash01(seed, i * 7 + 1)) * k;
-        let a0 = hash01(seed, i * 7 + 2) * TAU;
+        let half = (LEAF_CARD_M.0 + (LEAF_CARD_M.1 - LEAF_CARD_M.0) * hash01(seed, i * 11 + 1)) * k;
+        // Hung a little under the twig's end, so the twig is in it, and
+        // never down over a head.
+        let o = tip + Vec3::Y * half * 0.2;
+        if o.y - half < LEAF_MIN_Y {
+            continue;
+        }
+        // Darker in at the heart and down under the crown, each spray its
+        // own green.
+        let out = smooth01((tip - middle).length() / reach);
+        let up = smooth01((tip.y - lo) / (hi - lo).max(1e-3));
+        let v = LEAF_HEART + (1.0 - LEAF_HEART) * (0.55 * out + 0.45 * up);
+        let hue = (hash01(seed, i * 11 + 2) - 0.5) * 2.0 * LEAF_HUE;
+        let tint = [v * (1.0 + hue), v, v * (1.0 - hue)];
+        let col = move |_: Vec3| [tint[0], tint[1], tint[2], 1.0];
+        let a0 = hash01(seed, i * 11 + 3) * TAU;
         for c in 0..LEAF_CARDS {
-            let a = a0 + c as f32 * PI / LEAF_CARDS as f32;
-            let lean = (hash01(seed, i * 7 + 3 + c) - 0.5) * 0.9;
+            // Cards at every tilt round the spray, from upright to near
+            // flat, so it has body from the side and from above.
+            let a = a0 + c as f32 * PI / LEAF_CARDS as f32 + (hash01(seed, i * 11 + 4 + c) - 0.5) * 0.4;
+            let tilt = (hash01(seed, i * 11 + 8 + c) - 0.35) * 1.6;
             let across = Vec3::new(a.cos(), 0.0, a.sin());
-            let up = (Vec3::Y + Vec3::new(-a.sin(), 0.0, a.cos()) * lean).normalize_or(Vec3::Y);
+            let face = Vec3::new(-a.sin(), 0.0, a.cos());
+            let up = (Vec3::Y * tilt.cos() + face * tilt.sin()).normalize_or(Vec3::Y);
             let (u, v) = (across * half, up * half);
-            // Hung a little under the twig's end, so the twig is in it.
-            let o = tip + up * half * 0.35;
             let q = [
                 (o - u - v, [0.0, 1.0]),
                 (o + u - v, [1.0, 1.0]),
                 (o + u + v, [1.0, 0.0]),
                 (o - u + v, [0.0, 0.0]),
             ];
-            crown.tri_uv([q[0], q[1], q[2]], white, Some(middle), LEAF_VOLUME);
-            crown.tri_uv([q[0], q[2], q[3]], white, Some(middle), LEAF_VOLUME);
+            crown.tri_uv([q[0], q[1], q[2]], col, Some(middle), LEAF_VOLUME);
+            crown.tri_uv([q[0], q[2], q[3]], col, Some(middle), LEAF_VOLUME);
         }
     }
     let (mut wood, mut crown) = (wood.mesh(), crown.mesh());
@@ -544,9 +631,10 @@ fn live(seed: u32, trunk_r: f32, height: f32) -> (Mesh, Mesh) {
     (wood, crown)
 }
 
-/// The dead tree's wood before it is fitted, and where each of its twigs
-/// ends (a live tree's leaves hang there).
-fn skeleton(seed: u32, trunk_r: f32, height: f32) -> (Soup, Vec<Vec3>) {
+/// A tree's wood before it is fitted, grown to `habit`, and its sprays:
+/// where each of its twigs ends and halfway along the outer twigs (a live
+/// tree's leaves hang there).
+fn skeleton(seed: u32, trunk_r: f32, height: f32, habit: &Habit) -> (Soup, Vec<Vec3>) {
     let seed = hash2(0xdead_7ee5, seed);
     let mut s = Soup::default();
     let mut tips = Vec::new();
@@ -557,7 +645,7 @@ fn skeleton(seed: u32, trunk_r: f32, height: f32) -> (Soup, Vec<Vec3>) {
         let f = 0.9 + 0.2 * hash01(cell, (p.z * 9.0 + 500.0) as u32);
         [c[0] * f, c[1] * f, c[2] * f, 1.0]
     };
-    let top_y = height * DEAD_TRUNK_SHARE;
+    let top_y = height * habit.trunk_share;
     let r0 = trunk_r * 0.95;
     let mut rings = vec![
         Ring {
@@ -591,9 +679,15 @@ fn skeleton(seed: u32, trunk_r: f32, height: f32) -> (Soup, Vec<Vec3>) {
             v: 0.0,
         });
     }
-    tube(&mut s, &rings, DEAD_TRUNK_SIDES, 1.0, col);
-    let n = DEAD_LIMBS.0 + (hash01(seed, 1) * (DEAD_LIMBS.1 - DEAD_LIMBS.0 + 1) as f32) as u32;
-    let n = n.min(DEAD_LIMBS.1);
+    // The bark runs up the trunk at its own size, and round it as many
+    // times as fit.
+    for i in 1..rings.len() {
+        rings[i].v = rings[i - 1].v - (rings[i].c - rings[i - 1].c).length() / WOOD_TILE_M;
+    }
+    let round = (TAU * r0 / WOOD_TILE_M).round().max(1.0);
+    tube(&mut s, &rings, DEAD_TRUNK_SIDES, round, col);
+    let (lo, hi) = habit.limbs;
+    let n = (lo + (hash01(seed, 1) * (hi - lo + 1) as f32) as u32).min(hi);
     let a0 = hash01(seed, 2) * TAU;
     for k in 0..n {
         // 0 the lowest limb, 1 the leader at the top.
@@ -602,12 +696,12 @@ fn skeleton(seed: u32, trunk_r: f32, height: f32) -> (Soup, Vec<Vec3>) {
         let elev = if k == n - 1 {
             1.25
         } else {
-            0.5 + 0.55 * hash01(seed, 20 + k)
+            habit.elev.0 + (habit.elev.1 - habit.elev.0) * hash01(seed, 20 + k)
         };
-        let (base, r) = trunk_at(&rings, top_y * (0.45 + 0.55 * t));
+        let (base, r) = trunk_at(&rings, top_y * (habit.limb_from + (1.0 - habit.limb_from) * t));
         // The leader carries the trunk on; a limb is thinner than the trunk it leaves.
         let r = if k == n - 1 { r * 0.9 } else { r * 0.55 };
-        let len = height * (0.18 + 0.08 * hash01(seed, 30 + k)) * (0.85 + 0.15 * t);
+        let len = height * (habit.reach.0 + (habit.reach.1 - habit.reach.0) * hash01(seed, 30 + k)) * (0.85 + 0.15 * t);
         let dir = Vec3::new(a.sin() * elev.cos(), elev.sin(), a.cos() * elev.cos());
         branch(
             &mut s,
@@ -650,23 +744,28 @@ fn branch(
         1 | 2 => 5,
         _ => 4,
     };
+    let v = len * 0.5 / WOOD_TILE_M;
     let rings = [
         Ring { c: a, r, v: 0.0 },
         Ring {
             c: mid,
             r: r * 0.8,
-            v: 0.5,
+            v: -v,
         },
         Ring {
             c: end,
             r: (r * 0.6).max(0.006),
-            v: 1.0,
+            v: -2.0 * v,
         },
     ];
     tube(s, &rings, sides, 1.0, col);
-    // A twig's end, from the first fork out.
+    // A twig's end, from the first fork out, and halfway along the last
+    // two forks' twigs.
     if depth >= 1 {
         tips.push(end);
+    }
+    if depth + 1 >= DEAD_FORKS {
+        tips.push(mid);
     }
     if depth >= DEAD_FORKS {
         return;
@@ -964,14 +1063,51 @@ fn leaf_rgba(n: u32) -> Vec<u8> {
         p.copy_from_slice(&[blade.x as u8, blade.y as u8, blade.z as u8, 0]);
     }
     const SS: u32 = 2;
+    // The spray's twigs first, out from the middle, for the leaves to
+    // hang on: dark wood where a gap shows it.
+    let twig = Vec3::new(58.0, 46.0, 34.0);
+    // Twig `t`'s angle out of the middle, its reach, and where it is `f`
+    // of the way out (a twig bows a little).
+    let twig_angle = |t: u32| (t as f32 + 0.6 * hash01(0x7e16, t)) / LEAF_TWIGS as f32 * TAU;
+    let reach = |t: u32| 0.28 + 0.1 * hash01(0x7e16, t + 50);
+    let twig_at = |t: u32, f: f32| {
+        let (dx, dy) = (twig_angle(t).cos(), twig_angle(t).sin());
+        let bow = 0.04 * (f.min(1.0) * PI).sin();
+        let r = reach(t);
+        (0.5 + (dx * f - dy * bow) * r, 0.5 + (dy * f + dx * bow) * r)
+    };
+    for t in 0..LEAF_TWIGS {
+        let steps = (reach(t) * nf * 2.0) as u32;
+        for k in 0..steps {
+            let f = k as f32 / steps as f32;
+            let (x, y) = twig_at(t, f);
+            let w = (LEAF_TWIG_W * (1.0 - 0.6 * f) * nf).max(0.6);
+            for oy in -2..=2 {
+                for ox in -2..=2 {
+                    let (px, py) = (x * nf + ox as f32, y * nf + oy as f32);
+                    if (ox * ox + oy * oy) as f32 > w * w || px < 0.0 || py < 0.0 || px >= nf || py >= nf {
+                        continue;
+                    }
+                    let i = ((py as u32 * n + px as u32) * 4) as usize;
+                    out[i..i + 4].copy_from_slice(&[twig.x as u8, twig.y as u8, twig.z as u8, 255]);
+                }
+            }
+        }
+    }
     for l in 0..LEAF_COUNT {
-        // Where it is, which way it points, how long and how wide.
-        let r = 0.42 * hash01(0x1eaf, l * 5).sqrt();
-        let at = hash01(0x1eaf, l * 5 + 1) * TAU;
-        let (cx, cy) = (0.5 + r * at.cos(), 0.5 + r * at.sin());
-        let dir = hash01(0x1eaf, l * 5 + 2) * TAU;
+        // Where it is: along a twig, bunched toward its end and off to
+        // either side of it, so the spray is ragged, with sky between its
+        // twigs. Which way it points: out along the twig, either side.
+        let t = l % LEAF_TWIGS;
+        let f = 0.08 + 1.0 * hash01(0x1eaf, l * 5).sqrt();
+        let (tx, ty) = twig_at(t, f);
+        let side = if (l / LEAF_TWIGS).is_multiple_of(2) { 1.0 } else { -1.0 };
+        let a = twig_angle(t);
+        let off = side * (0.01 + 0.04 * hash01(0x1eaf, l * 5 + 1)) * (0.4 + f);
+        let (cx, cy) = (tx - a.sin() * off, ty + a.cos() * off);
+        let dir = a + side * (0.3 + 0.9 * hash01(0x1eaf, l * 5 + 2));
         let (dx, dy) = (dir.cos(), dir.sin());
-        let len = 0.05 + 0.035 * hash01(0x1eaf, l * 5 + 3);
+        let len = LEAF_LEN.0 + (LEAF_LEN.1 - LEAF_LEN.0) * hash01(0x1eaf, l * 5 + 3);
         let wid = len * 0.36;
         let lit = hash01(0x1eaf, l * 5 + 4);
         let (x0, x1) = (
@@ -1131,6 +1267,63 @@ fn scar_height(u: f32, v: f32) -> (f32, u32) {
     // A plate tilts out toward its lower lip (dy grows down the card).
     let tilt = 0.55 + 0.45 * (dy * 0.5 + 0.5).clamp(0.0, 1.0);
     ((1.0 - d).max(0.0).powf(0.6) * tilt, id)
+}
+
+/// The canyon trees' bark card, `[albedo, normal]`: ridges of bark running
+/// up the trunk between dark furrows, each ridge wandering a little and
+/// broken across every so often into plates, with fibre along it. Its
+/// albedo is a grey near white ([`WOOD_MEAN`]) that the vertex colours
+/// tint, dead wood's silver or live bark's brown. It tiles both ways: a
+/// tile is [`WOOD_TILE_M`] of trunk up and round.
+fn wood_bark_images() -> [Image; 2] {
+    let n = WOOD_PX;
+    let nf = n as f32;
+    let hmap: Vec<(f32, u32)> = (0..n * n)
+        .map(|i| ridge_height(((i % n) as f32 + 0.5) / nf, ((i / n) as f32 + 0.5) / nf))
+        .collect();
+    // Fibre along the ridges: per column, broken every few texels.
+    let fibre =
+        |x: usize, y: usize| hash01((x * 5 + 1) as u32, (y / 7) as u32) * 0.6 + hash01(x as u32, y as u32 ^ 0xb4) * 0.4;
+    let height = |x: usize, y: usize| hmap[y * n + x].0 + 0.1 * fibre(x, y);
+    let texel = |x: usize, y: usize, _: f32| -> Texel {
+        let (h, id) = hmap[y * n + x];
+        // A furrow is dark, a ridge's face lighter, its crown lightest.
+        let v = (0.18 + 0.82 * h.powf(0.7)) * (0.86 + 0.28 * fibre(x, y)) * (0.88 + 0.24 * hash01(id, 0xba4c));
+        let a = (v * 0.92).min(1.0);
+        Texel {
+            albedo: [a, a, a],
+            ao: 0.55 + 0.45 * h,
+            rough: 0.95,
+            metal: 0.0,
+            glow: 0.0,
+        }
+    };
+    let [albedo, normal, _, _] = bake(n, 6.0, &height, &texel);
+    [albedo, normal]
+}
+
+/// How high the bark stands at `(u, v)` of its tile, 0 in a furrow to 1 on
+/// a ridge's crown, and which plate it is on.
+fn ridge_height(u: f32, v: f32) -> (f32, u32) {
+    // The ridges wander across as they run up (whole waves, so it tiles).
+    let wander = 0.35 * (TAU * v * 2.0).sin() + 0.18 * (TAU * (v * 5.0 + 0.3)).sin();
+    let w = u * WOOD_RIDGES + wander;
+    let ridge = w.floor();
+    let across = w - ridge;
+    let id = (ridge as i32).rem_euclid(WOOD_RIDGES as i32) as u32;
+    // Each ridge breaks into three plates up the tile, at its own places.
+    const PLATES: f32 = 3.0;
+    let p = v * PLATES + hash01(id, 0x91a7);
+    let plate = p.floor();
+    let along = p - plate;
+    let pid = id * 16 + (plate as i32).rem_euclid(PLATES as i32) as u32;
+    // A ridge is rounded, a little wider some places than others.
+    let width = 0.72 + 0.2 * hash01(pid, 0x3d);
+    let off = (across - 0.5).abs() * 2.0 / width;
+    let ridge_h = (1.0 - off * off).max(0.0).sqrt();
+    // A crack across where one plate meets the next.
+    let crack = smooth01((along.min(1.0 - along)) / 0.08);
+    (ridge_h * (0.35 + 0.65 * crack), pid)
 }
 
 /// A 32-bit mix (Gates' `props::hash2`), and a number in 0..1 from it.
@@ -1324,5 +1517,12 @@ mod tests {
         let (lip, _) = scar_height(0.125, 0.25 + 0.2);
         let (crevice, _) = scar_height(0.25, 0.25);
         assert!(lip > crevice, "lip {lip}, crevice {crevice}");
+        let [wood, wood_normal] = wood_bark_images();
+        assert_eq!(wood.texture_descriptor.mip_level_count, 10);
+        assert_eq!(wood_normal.texture_descriptor.size.width, WOOD_PX as u32);
+        // A ridge's crown stands out of its furrow.
+        let (crown, _) = ridge_height(0.5 / WOOD_RIDGES, 0.5);
+        let (furrow, _) = ridge_height(0.0, 0.5);
+        assert!(crown > furrow, "crown {crown}, furrow {furrow}");
     }
 }
