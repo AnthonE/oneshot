@@ -35,6 +35,9 @@ pub const UDP_BUF_BYTES: usize = 8 * 1024 * 1024;
 /// Each player holds two (the lobby beside the match), so eight at one
 /// address fit.
 pub const PER_SOURCE: u16 = 16;
+/// Connections a player holds: the lobby beside the match. `--capacity` is
+/// in players; the gate's flood thresholds are in connections.
+pub const CONNS_PER_PLAYER: usize = 2;
 pub const PER_PREFIX: u16 = 4 * PER_SOURCE;
 /// Input datagrams the sim may have waiting, every session's together: a
 /// full server sends about 128 a tick. Past it an input is dropped, not
@@ -198,7 +201,18 @@ pub struct Gate {
     /// Addresses held to no share, as loopback isn't (`Config::load_sources`).
     exempt: Vec<IpAddr>,
     conns: AtomicUsize,
+    /// Sessions in a match, the queue or watching: what costs snapshots.
+    playing: Arc<AtomicUsize>,
     places: Mutex<(BTreeMap<IpAddr, u16>, BTreeMap<IpAddr, u16>)>,
+}
+
+/// One session's place among the players, given back when it drops.
+pub struct Playing(Arc<AtomicUsize>);
+
+impl Drop for Playing {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// One connection's place at the gate, given back when it drops (whatever
@@ -248,6 +262,7 @@ impl Gate {
             capacity: capacity.max(1),
             exempt: Vec::new(),
             conns: AtomicUsize::new(0),
+            playing: Arc::new(AtomicUsize::new(0)),
             places: Mutex::new((BTreeMap::new(), BTreeMap::new())),
         }
     }
@@ -261,6 +276,28 @@ impl Gate {
     /// Connections held now, handshakes included.
     pub fn busy(&self) -> usize {
         self.conns.load(Ordering::Relaxed)
+    }
+
+    /// Players held now: sessions in a match, the queue or watching (the
+    /// lobby beside them isn't another player).
+    pub fn players(&self) -> usize {
+        self.playing.load(Ordering::Relaxed)
+    }
+
+    /// Whether a session in `mode` is answered "full": a match past
+    /// capacity in players, the lobby past every player's connections.
+    pub fn full(&self, lobby: bool) -> bool {
+        if lobby {
+            self.busy() > CONNS_PER_PLAYER * self.capacity
+        } else {
+            self.players() >= self.capacity
+        }
+    }
+
+    /// A player's place, held by the session that plays.
+    pub fn play(&self) -> Playing {
+        self.playing.fetch_add(1, Ordering::Relaxed);
+        Playing(self.playing.clone())
     }
 
     /// A place for a connection from `ip`, or None if its address or prefix
@@ -291,7 +328,11 @@ impl Gate {
 pub async fn accept_loop(ep: Arc<Endpoint<Server>>, to_sim: mpsc::Sender<ToSim>, inputs: Inputs, ctx: Arc<Ctx>) {
     loop {
         let incoming = ep.accept().await;
-        match admit(ctx.gate.busy(), incoming.remote_address_validated(), ctx.gate.capacity) {
+        match admit(
+            ctx.gate.busy(),
+            incoming.remote_address_validated(),
+            CONNS_PER_PLAYER * ctx.gate.capacity,
+        ) {
             Admit::Refuse => {
                 ctx.health.conn_refused.fetch_add(1, Ordering::Relaxed);
                 incoming.refuse();
@@ -373,7 +414,7 @@ async fn session(
         return refuse(&mut send, proto::REFUSE_VERSION, &ctx).await;
     }
     // Past capacity, or on its way down for a restart: come back soon.
-    if ctx.draining.load(Ordering::Relaxed) || ctx.gate.busy() > ctx.gate.capacity {
+    if ctx.draining.load(Ordering::Relaxed) || ctx.gate.full(mode == MODE_LOBBY) {
         return refuse(&mut send, proto::REFUSE_FULL, &ctx).await;
     }
     // Who: a pass from Elo Pros, a ticket of ours a pass earned, or a
@@ -448,6 +489,8 @@ async fn session(
     };
     let look = proto::Look { skin, emblem };
 
+    // A player from here on (the checks below may still refuse it).
+    let _playing = ctx.gate.play();
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
@@ -640,7 +683,7 @@ mod tests {
 
     #[test]
     fn a_crowd_is_retried_then_refused() {
-        // 100 players: anyone up to 200 connections, then an address must
+        // 100 connections' capacity: anyone up to 200, then an address must
         // prove itself, then past 400 nobody.
         assert_eq!(admit(0, false, 100), Admit::Take);
         assert_eq!(admit(199, false, 100), Admit::Take);
@@ -695,5 +738,24 @@ mod tests {
         assert!(gate.take("198.51.100.200".parse().unwrap()).is_none());
         assert!(gate.take("198.51.101.1".parse().unwrap()).is_some());
         drop(held);
+    }
+
+    #[test]
+    fn players_are_counted_not_their_lobbies() {
+        let gate = Arc::new(Gate::new(2));
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        // Two players, each with a lobby and a match: four connections.
+        let conns: Vec<Permit> = (0..4).map(|_| gate.take(lo).unwrap()).collect();
+        let a = gate.play();
+        assert!(!gate.full(false), "one player of two");
+        let b = gate.play();
+        assert!(gate.full(false), "a third player is full");
+        assert!(!gate.full(true), "their lobbies still fit");
+        let more = gate.take(lo).unwrap();
+        assert!(gate.full(true), "past every player's connections");
+        drop((a, more));
+        assert!(!gate.full(false));
+        drop((b, conns));
+        assert_eq!(gate.players(), 0);
     }
 }

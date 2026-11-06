@@ -328,7 +328,7 @@ impl Ctx {
         health::Now {
             ready: !self.draining.load(Ordering::Relaxed),
             proto: proto::PROTO_VER,
-            players: self.gate.busy(),
+            players: self.gate.players(),
             capacity: self.gate.capacity,
             rooms: self.rooms.load(Ordering::Relaxed),
             uptime_s: self.started.elapsed().as_secs(),

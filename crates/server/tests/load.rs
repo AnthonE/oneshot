@@ -39,6 +39,7 @@ async fn rooms_step_side_by_side_and_every_replay_holds() {
         hold: Duration::from_secs(9),
         fps: 60,
         every: None,
+        lobby: true,
     })
     .await;
     eprintln!("{report}");
@@ -47,6 +48,7 @@ async fn rooms_step_side_by_side_and_every_replay_holds() {
     let w = report.server.as_ref().expect("its health read");
     assert_eq!(w.sim_threads, 3);
     assert_eq!(report.never_in, 0, "{report}");
+    assert_eq!(report.lobby_failed, 0, "{report}");
     assert!(report.byes >= 9, "every match ended: {report}");
     assert!(report.joins > 12, "and its players went again: {report}");
     assert!(report.snaps_p50 > 0.75 * load::SNAPSHOT_HZ, "{report}");

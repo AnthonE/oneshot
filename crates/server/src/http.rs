@@ -182,7 +182,7 @@ async fn handle(
              \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{}}}",
             !draining,
             proto::PROTO_VER,
-            ctx.gate.busy(),
+            ctx.gate.players(),
             ctx.gate.capacity,
             ctx.rooms.load(Relaxed),
             n.datagrams_dropped.load(Relaxed),

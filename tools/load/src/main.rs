@@ -1,6 +1,6 @@
 //! `oneshot-load [--page http://127.0.0.1:8080 | --addr host:port [--pin hex]
 //! [--health url]] [--players 64] [--mode big[,ffa,gun,ctf,bot]]
-//! [--ramp 10] [--hold 60] [--fps 60] [--every 5]`
+//! [--ramp 10] [--hold 60] [--fps 60] [--every 5] [--no-lobby]`
 //!
 //! Many headless players against a server (`load`'s docs): they join
 //! over `--ramp` seconds, play `--hold` more, and the report says whether
@@ -34,6 +34,7 @@ fn main() {
             }
             "--ramp" => o.ramp = secs(val()),
             "--hold" => o.hold = secs(val()),
+            "--no-lobby" => o.lobby = false,
             "--fps" => o.fps = val().parse().unwrap_or_else(|_| die("--fps is a count")),
             "--every" => {
                 let s = secs(val());

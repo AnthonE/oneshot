@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use client_net::native::NativeClient;
+use client_net::native::{NativeClient, NativeLobby};
 use client_net::session::Session;
 use proto::Msg;
 use sim::input::{Input, CROUCH, FIRE, GRENADE, JUMP, RELOAD};
@@ -51,6 +51,9 @@ pub struct Opts {
     pub fps: u32,
     /// A progress line this often, if any.
     pub every: Option<Duration>,
+    /// Each player holds a lobby session beside its matches, as the page
+    /// does from the title on (`--no-lobby`: matches alone).
+    pub lobby: bool,
 }
 
 impl Default for Opts {
@@ -65,6 +68,7 @@ impl Default for Opts {
             hold: Duration::from_secs(60),
             fps: 60,
             every: Some(Duration::from_secs(5)),
+            lobby: true,
         }
     }
 }
@@ -224,6 +228,8 @@ struct Played {
     resyncs: u64,
     /// Never welcomed once.
     never: bool,
+    /// Its lobby never opened.
+    lobby_failed: bool,
 }
 
 /// How a session ended.
@@ -247,6 +253,23 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
     let mut wander = Wander::new(i as u64 + 1);
     let frame = Duration::from_secs_f64(1.0 / f64::from(o.fps.max(1)));
     tokio::time::sleep_until((start + o.ramp.mul_f64(i as f64 / o.players.max(1) as f64)).into()).await;
+    // The title's lobby, held the whole run; a refused or lost one isn't
+    // asked for again (the match is what's measured).
+    let lobby = if o.lobby {
+        let hello = Session::hello(
+            &format!("load{i}"),
+            proto::Pass::NONE,
+            proto::MODE_LOBBY,
+            proto::Look::default(),
+            0,
+        );
+        NativeLobby::connect(&o.addr, o.pin, hello).await.ok()
+    } else {
+        None
+    };
+    if o.lobby && lobby.is_none() {
+        p.lobby_failed = true;
+    }
     while Instant::now() < end {
         let name = format!("load{i}");
         let hello = Session::hello(&name, proto::Pass::NONE, mode, proto::Look::default(), 0);
@@ -271,6 +294,9 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
                 break End::Done;
             }
             c.update(wander.at(c.now_ms()));
+            if let Some(l) = &lobby {
+                l.take();
+            }
             let mut said = None;
             for m in c.messages() {
                 match m {
@@ -323,6 +349,9 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
             }
             End::Cut(why) => *p.cut.entry(why).or_default() += 1,
         }
+    }
+    if let Some(l) = lobby {
+        l.close();
     }
     p
 }
@@ -422,6 +451,8 @@ pub struct Report {
     pub joins: usize,
     /// Players never welcomed.
     pub never_in: usize,
+    /// Players whose lobby never opened.
+    pub lobby_failed: usize,
     pub failed: usize,
     pub refused: Vec<(String, usize)>,
     pub byes: usize,
@@ -454,6 +485,12 @@ impl Report {
         let mut out = Vec::new();
         if self.never_in > 0 {
             out.push(format!("{} of {} players never got in", self.never_in, self.players));
+        }
+        if self.lobby_failed > 0 {
+            out.push(format!(
+                "{} of {} lobbies never opened",
+                self.lobby_failed, self.players
+            ));
         }
         if self.snaps_p10 < 0.9 * SNAPSHOT_HZ {
             out.push(format!(
@@ -492,8 +529,8 @@ impl fmt::Display for Report {
         };
         writeln!(
             f,
-            "players {}: {} joins, {} never in, {} connects failed, {} matches over",
-            self.players, self.joins, self.never_in, self.failed, self.byes
+            "players {}: {} joins, {} never in, {} connects failed, {} matches over, {} lobbies failed",
+            self.players, self.joins, self.never_in, self.failed, self.byes, self.lobby_failed
         )?;
         if !self.refused.is_empty() {
             writeln!(f, "  refused: {}", list(&self.refused))?;
@@ -635,6 +672,7 @@ pub async fn run(o: Opts) -> Report {
     let mut all = Played::default();
     let mut rates = Vec::new();
     let mut never_in = 0;
+    let mut lobby_failed = 0;
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut cut: BTreeMap<String, usize> = BTreeMap::new();
     for h in players {
@@ -643,6 +681,7 @@ pub async fn run(o: Opts) -> Report {
             continue;
         };
         never_in += usize::from(p.never);
+        lobby_failed += usize::from(p.lobby_failed);
         if p.window_secs > 0.5 {
             rates.push(p.window_snaps as f64 / p.window_secs);
         }
@@ -670,6 +709,7 @@ pub async fn run(o: Opts) -> Report {
         players: o.players,
         joins: all.joins,
         never_in,
+        lobby_failed,
         failed: all.failed,
         refused: refused.into_iter().collect(),
         byes: all.byes,
