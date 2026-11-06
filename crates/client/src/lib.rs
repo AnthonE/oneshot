@@ -632,9 +632,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
-            (items::draw, flags::draw),
+            items::draw,
             fly,
-            view,
+            // After the camera: ours is held across our view as it is now.
+            (view, flags::draw).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             (draw_view, look::counter::draw).chain(),
@@ -1539,7 +1540,8 @@ fn draw_view(
         yaw: look.yaw,
         pitch: look.pitch,
         riding: seat.is_some(),
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !film.is_some_and(|f| f.third()),
+        // Carrying the flag, both hands are on it (`flags.rs` draws it).
+        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !f.flag && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,

@@ -20,7 +20,9 @@
 //! wheel, `seat=1` in its passenger's place (the sim's mounts; on a floor,
 //! standing still). `truckhurt=` wears it as a hull with that share of its
 //! health gone would be (0 to 1), `truckmarks=1` marks it as rounds and
-//! blasts would.
+//! blasts would. `flag=x,y,z` plants red's flag on its stand there
+//! (`flags.rs`, its cloth blowing on the map's wind); `flagheld=1` puts it
+//! over the fighter's shoulder instead, as a carrier holds it.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -57,6 +59,8 @@ pub struct View {
     pub truck_marks: bool,
     /// The fighter rides it, in this seat.
     pub seat: Option<usize>,
+    /// A flag's stand for the picture, and whether the fighter carries it.
+    pub flag: Option<(Vec3, bool)>,
 }
 
 /// The radius of the circle a posed truck drives, metres.
@@ -117,6 +121,7 @@ impl Pose {
             seat: Some(get("seat", -1.0))
                 .filter(|s| *s >= 0.0)
                 .map(|s| (s as usize).min(1)),
+            flag: vec("flag").map(|at| (at, get("flagheld", 0.0) != 0.0)),
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
