@@ -238,6 +238,9 @@ pub struct Config {
     /// pages one of them in turn.
     pub endpoints: usize,
     pub endpoint_step: u16,
+    /// How far below the sim's the network threads' priority is (Linux's
+    /// nice; `lower_this_thread`), so a tick isn't held up by sends.
+    pub net_nice: i32,
     /// Addresses whose connections aren't held to a source's share (a load
     /// test's box; `net::Gate`). Loopback never is.
     pub load_sources: Vec<std::net::IpAddr>,
@@ -288,6 +291,7 @@ impl Default for Config {
             sim_threads: 0,
             endpoints: 1,
             endpoint_step: 10,
+            net_nice: 5,
             load_sources: Vec::new(),
         }
     }
@@ -1800,6 +1804,21 @@ fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
             }
         }
     }
+}
+
+/// Lowers the calling thread's priority by `nice` (Linux keeps nice a
+/// thread; raising it needs no privilege). Elsewhere, nothing.
+pub fn lower_this_thread(nice: i32) {
+    #[cfg(target_os = "linux")]
+    if nice > 0 {
+        // SAFETY: gettid and setpriority on the calling thread touch no memory.
+        unsafe {
+            let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+            libc::setpriority(libc::PRIO_PROCESS, tid, nice.min(19));
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = nice;
 }
 
 /// Ticks between snapshots for `hz` a second: the nearest rate that
