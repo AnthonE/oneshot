@@ -1,6 +1,5 @@
 """The shades: wraparound shield sunglasses, smoked lens, camo arms, an
-orange nose pad. An accessory (`proto::ACCESSORIES`), worn on Triple T's
-face. The operator's own model on Meshy (task 01a1af22-a5dd-76ba-a94c-
+orange nose pad. Headwear (`proto::HEADWEAR`), worn on Triple T's face. The operator's own model on Meshy (task 01a1af22-a5dd-76ba-a94c-
 ed9aa0d8aba3, fetched by the API into sources/meshy/shades_raw.glb).
 
 The lettering Meshy painted on the lens's corners is a sunglasses maker's
@@ -8,21 +7,19 @@ mark: it is painted out here (`scrub`), so what ships carries no brand.
 
 Exported with the middle of the lens's front at the origin, +Y up, +Z
 forward, in metres. `look/bodies.rs` hangs it on Triple T's Head bone;
-the numbers for that (`SHADES_AT`, `SHADES_TURN`, `SHADES_SCALE`) are
-printed here as FIT, from `EYES`. Look at them in the game, where the
-clips pose the head (an import of triple-t.glb in Blender does not):
+the numbers for that (`SHADES` there) are printed here as FIT, from
+`EYES`. Look at them in the game (a render of an import of
+triple-t.glb in Blender put the face 0.1 m off):
 
   ci/desktop_shot.sh traces/shades.png 2 0 0 0 \
-    'pose=yaw=3.14&accessory=1&fighter=1&eye=0.2,1.45,8&look=1.5,1.35,8'"""
+    'pose=yaw=3.14&headwear=1&fighter=1&eye=0.2,1.45,8&look=1.5,1.35,8'"""
 import json
 import math
 import os
-import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import *
-from mathutils import Quaternion
 
 NAME = 'shades'
 # Across the lens, metres: Triple T's head is 0.35 wide at the eyes.
@@ -74,31 +71,6 @@ def scrub(im):
     im.pixels.foreach_set(a[::-1].ravel())
     im.pack()
     print(f'SCRUB {logo.mean() * 100:.2f}% of the colour map painted out')
-
-
-def head_bone():
-    """The Head bone's rest transform in triple-t.glb's scene (4×4, metres)."""
-    with open(os.path.join(MODELS, 'triple-t.glb'), 'rb') as f:
-        b = f.read()
-    n = struct.unpack('<I', b[12:16])[0]
-    nodes = json.loads(b[20:20 + n])['nodes']
-    up = {c: i for i, x in enumerate(nodes) for c in x.get('children', [])}
-
-    def trs(x):
-        if 'matrix' in x:
-            return Matrix(np.array(x['matrix']).reshape(4, 4).T.tolist())
-        q = x.get('rotation', [0, 0, 0, 1])
-        t = Matrix.Translation(x.get('translation', [0, 0, 0]))
-        r = Quaternion((q[3], q[0], q[1], q[2])).to_matrix().to_4x4()
-        s = x.get('scale', [1, 1, 1])
-        return t @ r @ Matrix.Diagonal((*s, 1.0))
-
-    i = next(i for i, x in enumerate(nodes) if x.get('name') == 'Head')
-    m = trs(nodes[i])
-    while i in up:
-        i = up[i]
-        m = trs(nodes[i]) @ m
-    return m
 
 
 def raw():
@@ -183,15 +155,9 @@ def maps(o):
 
 
 def fit():
-    """Where the shades hang on the Head bone: the bone's frame from the
-    lens's (EYES, tipped TIP), as the client's numbers."""
-    place = Matrix.Translation(EYES) @ Matrix.Rotation(math.radians(TIP), 4, 'X')
-    local = head_bone().inverted() @ place
-    at, turn, scale = local.decompose()
-    s = sum(scale) / 3
-    print(f'FIT SHADES_AT = Vec3::new({at.x:.3f}, {at.y:.3f}, {at.z:.3f}); '
-          f'SHADES_TURN = Quat::from_xyzw({turn.x:.5f}, {turn.y:.5f}, {turn.z:.5f}, {turn.w:.5f}); '
-          f'SHADES_SCALE = {s:.3f}')
+    """Where the shades hang on the Head bone: the lens's place (EYES,
+    tipped TIP), as the client's numbers."""
+    fit_line('SHADES', 'Head', Matrix.Translation(EYES) @ Matrix.Rotation(math.radians(TIP), 4, 'X'))
 
 
 

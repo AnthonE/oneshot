@@ -123,14 +123,15 @@ impl Default for Settings {
 }
 
 /// Who plays: the name others see, the skin asked for (worn only if the
-/// wallet owns it; the server checks), the emblem on its back and what it
-/// wears on its head. Set on the title screen, kept with the settings.
+/// wallet owns it; the server checks), the emblem on its back and its gear
+/// (the same). Set on the title screen, kept with the settings.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Player {
     pub name: String,
     pub skin: u8,
     pub emblem: proto::Emblem,
-    pub accessory: u8,
+    pub headwear: u8,
+    pub footwear: u8,
 }
 
 /// How long a name may be (proto's `Name`).
@@ -142,7 +143,21 @@ impl Player {
         proto::Look {
             skin: self.skin,
             emblem: self.emblem,
-            accessory: self.accessory,
+            headwear: self.headwear,
+            footwear: self.footwear,
+        }
+    }
+
+    /// Gear slot `k` (the title's rows): the headwear, then the footwear.
+    pub fn gear(&self, k: usize) -> u8 {
+        [self.headwear, self.footwear][k]
+    }
+
+    pub fn gear_mut(&mut self, k: usize) -> &mut u8 {
+        if k == 0 {
+            &mut self.headwear
+        } else {
+            &mut self.footwear
         }
     }
 
@@ -160,7 +175,8 @@ impl Player {
         vec![
             ("name".into(), format!("{:?}", self.name)),
             ("skin".into(), self.skin.to_string()),
-            ("accessory".into(), self.accessory.to_string()),
+            ("headwear".into(), self.headwear.to_string()),
+            ("footwear".into(), self.footwear.to_string()),
             ("emblem".into(), self.emblem.to_string()),
         ]
     }
@@ -642,8 +658,18 @@ pub fn read(text: Option<&str>) -> (Settings, Binds, Player, u32, Lines, Lines) 
             p.emblem = v.parse().map(proto::emblem_valid).unwrap_or(proto::EMBLEM_NONE);
             false
         }
-        "accessory" => {
-            p.accessory = v.parse().map(proto::accessory_valid).unwrap_or(proto::ACCESSORY_NONE);
+        "headwear" => {
+            p.headwear = v
+                .parse()
+                .map(|g| proto::gear_valid(&proto::HEADWEAR, g))
+                .unwrap_or(proto::GEAR_NONE);
+            false
+        }
+        "footwear" => {
+            p.footwear = v
+                .parse()
+                .map(|g| proto::gear_valid(&proto::FOOTWEAR, g))
+                .unwrap_or(proto::GEAR_NONE);
             false
         }
         _ => true,
@@ -779,7 +805,8 @@ mod tests {
         p.name = Player::clean("Master \"Chief\" of the long name");
         p.skin = 3;
         p.emblem = proto::emblem(14, 4, 6, 12);
-        p.accessory = 1;
+        p.headwear = 1;
+        p.footwear = 1;
         let t = text(&s, &b, &p, v, &other, &other_binds);
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
         let (s2, b2, p2, ..) = read(Some(&t));

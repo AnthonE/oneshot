@@ -362,7 +362,8 @@ async fn session(
         emblem,
         party,
         stamp,
-        accessory,
+        headwear,
+        footwear,
     } = hello
     else {
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
@@ -447,25 +448,35 @@ async fn session(
         Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
         _ => proto::EMBLEM_NONE,
     };
-    // An accessory is worn if it's free, else only if the wallet owns it,
-    // as a skin.
-    let accessory = proto::accessory_valid(accessory);
-    let accessory = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
-        _ if proto::ACCESSORY_FREE[accessory as usize] => accessory,
-        Some(w) => {
-            let want = proto::ACCESSORIES[accessory as usize];
-            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
-                accessory
-            } else {
-                proto::ACCESSORY_NONE
+    // Gear is worn only if the wallet owns it, as a skin, but with no rank
+    // lock; a guest wears none.
+    let wallet = who.as_ref().and_then(|p| p.wallet.as_deref());
+    let mut gear = [
+        (
+            proto::HEADWEAR.as_slice(),
+            proto::gear_valid(&proto::HEADWEAR, headwear),
+        ),
+        (
+            proto::FOOTWEAR.as_slice(),
+            proto::gear_valid(&proto::FOOTWEAR, footwear),
+        ),
+    ];
+    if gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
+        let owned = match wallet {
+            Some(w) => ctx.elo.skins(w).await,
+            None => Vec::new(),
+        };
+        for (slot, g) in &mut gear {
+            if !owned.iter().any(|s| s == slot[*g as usize]) {
+                *g = proto::GEAR_NONE;
             }
         }
-        None => proto::ACCESSORY_NONE,
-    };
+    }
     let look = proto::Look {
         skin,
         emblem,
-        accessory,
+        headwear: gear[0].1,
+        footwear: gear[1].1,
     };
 
     // Who to count casual play for: the wallet, else the account itself.

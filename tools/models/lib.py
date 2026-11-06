@@ -35,7 +35,8 @@ import sys
 import bmesh
 import bpy
 import numpy as np
-from mathutils import Matrix, Vector
+import struct
+from mathutils import Matrix, Quaternion, Vector
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 MODELS = os.path.join(ROOT, 'crates', 'client', 'assets', 'models')
@@ -785,3 +786,40 @@ if __name__ == '__main__':
     argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
     if argv[:1] == ['sheet']:
         sheet_glb(argv[1], argv[2])
+
+
+def rest_bone(name):
+    """Bone `name`'s rest transform in triple-t.glb's scene (4×4, metres;
+    its own units are centimetres): what gear worn on it (`shades.py`,
+    `boots.py`) is placed from, read from the file's nodes as the client
+    reads them, not from an import, whose armature Blender rebuilds."""
+    with open(os.path.join(MODELS, 'triple-t.glb'), 'rb') as f:
+        b = f.read()
+    n = struct.unpack('<I', b[12:16])[0]
+    nodes = json.loads(b[20:20 + n])['nodes']
+    up = {c: i for i, x in enumerate(nodes) for c in x.get('children', [])}
+
+    def trs(x):
+        if 'matrix' in x:
+            return Matrix(np.array(x['matrix']).reshape(4, 4).T.tolist())
+        q = x.get('rotation', [0, 0, 0, 1])
+        t = Matrix.Translation(x.get('translation', [0, 0, 0]))
+        r = Quaternion((q[3], q[0], q[1], q[2])).to_matrix().to_4x4()
+        s = x.get('scale', [1, 1, 1])
+        return t @ r @ Matrix.Diagonal((*s, 1.0))
+
+    i = next(i for i, x in enumerate(nodes) if x.get('name') == name)
+    m = trs(nodes[i])
+    while i in up:
+        i = up[i]
+        m = trs(nodes[i]) @ m
+    return m
+
+
+def fit_line(const, bone, place):
+    """The client's numbers for gear placed at `place` (4×4, triple-t.glb's
+    scene at rest) on `bone`: a `look/bodies.rs` Fit, printed as FIT."""
+    at, turn, scale = (rest_bone(bone).inverted() @ place).decompose()
+    s = sum(scale) / 3
+    print(f'FIT {const}: Fit {{ bone: "{bone}", at: Vec3::new({at.x:.3f}, {at.y:.3f}, {at.z:.3f}), '
+          f'turn: Quat::from_xyzw({turn.x:.5f}, {turn.y:.5f}, {turn.z:.5f}, {turn.w:.5f}), scale: {s:.3f} }}')

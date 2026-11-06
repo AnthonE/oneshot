@@ -64,7 +64,8 @@ async fn join_stamped(port: u16, hash: [u8; 32], name: &str, stamp: u32) -> Resu
             emblem: 0,
             party: 0,
             stamp,
-            accessory: 0,
+            headwear: 0,
+            footwear: 0,
         },
         &mut f,
     )
