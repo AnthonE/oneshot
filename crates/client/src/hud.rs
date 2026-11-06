@@ -1107,6 +1107,7 @@ pub fn on_events(
                 name,
                 skin,
                 emblem,
+                accessory,
                 team,
                 ..
             } => {
@@ -1116,6 +1117,7 @@ pub fn on_events(
                     proto::Look {
                         skin: *skin,
                         emblem: *emblem,
+                        accessory: *accessory,
                     },
                 );
                 st.teams.insert(*slot, *team);

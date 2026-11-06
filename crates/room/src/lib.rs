@@ -555,6 +555,7 @@ impl Room {
                 proto::SKIN_STANDARD
             },
             emblem: proto::emblem_valid(look.emblem),
+            accessory: proto::accessory_valid(look.accessory),
         };
         self.fogs[s] = fog::Fog::default();
         let team = self.team_of(s);
@@ -618,6 +619,7 @@ impl Room {
             name,
             skin: self.looks[s].skin,
             emblem: self.looks[s].emblem,
+            accessory: self.looks[s].accessory,
         }
     }
 
