@@ -8,8 +8,9 @@
 //! its own colour; the side, the emblem and a skin's trim are sprayed on it
 //! (`paint.rs`): a headband in the side's colour, glowing a little so a
 //! fighter reads in shade, the emblem on the back, the trim a stripe round
-//! the waist. No hitbox or visibility changes (DESIGN.md §15). Drawing
-//! only.
+//! the waist. An accessory (`proto::ACCESSORIES`) hangs on the head's
+//! bone, the gun's way. No hitbox or visibility changes (DESIGN.md §15).
+//! Drawing only.
 //!
 //! The same body is your own shadow (`own_shadow.rs`, [`spawn_shadow`]) and
 //! the title's Triple T (`portrait.rs`).
@@ -40,6 +41,14 @@ const HAND_BONE: &str = "RightHand";
 const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
 const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
 const HELD_SCALE: f32 = 100.0;
+
+/// The shades on the Head bone: the lens's middle over the eyes, tipped a
+/// little onto the nose. `tools/models/shades.py` prints them (FIT) from
+/// where it puts them on triple-t.glb's face; the bone's units are
+/// centimetres, as the hand's.
+const SHADES_AT: Vec3 = Vec3::new(0.545, 36.774, 14.136);
+const SHADES_TURN: Quat = Quat::from_xyzw(-0.12787, 0.00560, -0.00601, 0.99176);
+const SHADES_SCALE: f32 = 100.0;
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -117,6 +126,9 @@ pub struct Body {
     /// The model's animation player, once its scene is in.
     player: Option<Entity>,
     hand: Entity,
+    /// What it wears on its head (`proto::ACCESSORIES`), on the Head bone
+    /// once dressed; none for none.
+    worn: Option<Entity>,
     held: u8,
     /// Its materials (its own: `dress` copies them per body) and the
     /// shield's flare last put on them.
@@ -235,6 +247,22 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
     let hand = commands
         .spawn((Transform::default(), Visibility::default(), BodyPart, ChildOf(root)))
         .id();
+    // Hidden till `dress` puts it on the head.
+    let worn = match proto::accessory_valid(look.accessory) {
+        _ if shadow => None,
+        proto::ACCESSORY_NONE => None,
+        _ => Some(
+            commands
+                .spawn((
+                    SceneRoot(models.shades.clone()),
+                    Transform::default(),
+                    Visibility::Hidden,
+                    BodyPart,
+                    ChildOf(root),
+                ))
+                .id(),
+        ),
+    };
     commands
         .spawn((
             SceneRoot(models.body_scene.clone()),
@@ -250,6 +278,7 @@ fn spawn_as(commands: &mut Commands, models: &Models, team: u8, look: proto::Loo
         dressed: false,
         player: None,
         hand,
+        worn,
         held: 0,
         mats: Vec::new(),
         limp: false,
@@ -383,6 +412,26 @@ fn dress(
             ));
         }
         None => error!("bodies: no {HAND_BONE} in models/triple-t.glb: its gun lies at its feet"),
+    }
+    // What it wears goes on the head: it goes where the head goes.
+    if let Some(worn) = body.worn {
+        let head = children
+            .iter_descendants(model)
+            .find(|&e| names.get(e).is_ok_and(|n| n.as_str() == anim::HEAD_BONE));
+        match head {
+            Some(head) => {
+                commands.entity(worn).insert((
+                    ChildOf(head),
+                    Transform {
+                        translation: SHADES_AT,
+                        rotation: SHADES_TURN.normalize(),
+                        scale: Vec3::splat(SHADES_SCALE),
+                    },
+                    Visibility::Inherited,
+                ));
+            }
+            None => error!("bodies: no {} in models/triple-t.glb: no shades", anim::HEAD_BONE),
+        }
     }
     body.dressed = true;
     if body.shadow {
@@ -575,7 +624,7 @@ pub fn flare(
         }
     }
     if hidden != body.hidden {
-        for &e in body.parts.iter().chain(core::iter::once(&body.hand)) {
+        for &e in body.parts.iter().chain(core::iter::once(&body.hand)).chain(&body.worn) {
             if let Ok(mut v) = parts.get_mut(e) {
                 *v = show(!hidden);
             }

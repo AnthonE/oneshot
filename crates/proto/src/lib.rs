@@ -24,7 +24,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 25;
+pub const PROTO_VER: u16 = 26;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -996,11 +996,30 @@ pub const EMBLEM_COLOURS: u16 = 16;
 /// wallet whose floor is under the line wears no emblem. 0 is no lock.
 pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1500, 1650, 1800];
 
-/// What a fighter wears, as the server checked it: its skin and its emblem.
+/// Accessories, by the id the wire carries: worn on the head with any skin.
+/// Cosmetic only, as a skin (docs/DESIGN.md §15). One that isn't free is
+/// worn only if the wallet owns it on Elo Pros, under its name here.
+pub const ACCESSORIES: [&str; 2] = ["none", "shades"];
+pub const ACCESSORY_NONE: u8 = 0;
+/// Whether anyone may wear it, a guest too, without owning it.
+pub const ACCESSORY_FREE: [bool; 2] = [true, true];
+
+/// `a` if it names an accessory, else none.
+pub const fn accessory_valid(a: u8) -> u8 {
+    if (a as usize) < ACCESSORIES.len() {
+        a
+    } else {
+        ACCESSORY_NONE
+    }
+}
+
+/// What a fighter wears, as the server checked it: its skin, its emblem and
+/// its accessory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Look {
     pub skin: u8,
     pub emblem: Emblem,
+    pub accessory: u8,
 }
 
 /// An emblem's parts: (glyph, field, glyph colour, field colour).
@@ -1097,9 +1116,12 @@ pub enum Msg {
         party: u32,
         /// The client's sim's stamp (`sim::STAMP`): a server whose own
         /// differs refuses it ([`REFUSE_VERSION`]), as it does an old
-        /// `proto`. Last on the wire, and 0 when a client from before it
-        /// sent none, so that client still reads its refusal.
+        /// `proto`. 0 when a client from before it sent none, so that
+        /// client still reads its refusal.
         stamp: u32,
+        /// The accessory it would wear ([`ACCESSORIES`]). Last on the wire,
+        /// none when an older client sent none, so it reads its refusal.
+        accessory: u8,
     },
     /// Server → client: in the ranked queue, `waiting_s` so far.
     Queued {
@@ -1132,6 +1154,8 @@ pub enum Msg {
         skin: u8,
         /// The emblem the server checked; [`EMBLEM_NONE`] otherwise.
         emblem: Emblem,
+        /// The accessory the server checked; [`ACCESSORY_NONE`] otherwise.
+        accessory: u8,
     },
     Kill {
         killer: u8,
@@ -1327,6 +1351,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             emblem,
             party,
             stamp,
+            accessory,
         } => {
             w.write(1, 8)?;
             w.write(*proto as u32, 16)?;
@@ -1337,6 +1362,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*emblem as u32, 16)?;
             w.write(*party, party::CODE_BITS)?;
             w.write(*stamp, 32)?;
+            w.write(*accessory as u32, 8)?;
         }
         Msg::Queued { mode, waiting_s } => {
             w.write(9, 8)?;
@@ -1382,6 +1408,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             name,
             skin,
             emblem,
+            accessory,
         } => {
             w.write(4, 8)?;
             w.write(*slot as u32, SLOT_BITS)?;
@@ -1390,6 +1417,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_name(&mut w, name)?;
             w.write(*skin as u32, 8)?;
             w.write(*emblem as u32, 16)?;
+            w.write(*accessory as u32, 8)?;
         }
         Msg::Kill {
             killer,
@@ -1582,6 +1610,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             emblem: r.read(16)? as u16,
             party: r.read(party::CODE_BITS)?,
             stamp: if r.remaining_bits() >= 32 { r.read(32)? } else { 0 },
+            accessory: if r.remaining_bits() >= 8 { r.read(8)? as u8 } else { 0 },
         },
         9 => Msg::Queued {
             mode: r.read(MODE_BITS)? as u8,
@@ -1624,6 +1653,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             name: r_name(&mut r)?,
             skin: r.read(8)? as u8,
             emblem: r.read(16)? as u16,
+            accessory: r.read(8)? as u8,
         },
         5 => Msg::Kill {
             killer: r.read(SLOT_BITS)? as u8,

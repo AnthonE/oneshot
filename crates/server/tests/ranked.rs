@@ -200,6 +200,7 @@ async fn play_as(h: &server::Handle, pass: &str, mode: u8, look: proto::Look) ->
         emblem: look.emblem,
         party: 0,
         stamp: sim::STAMP,
+        accessory: look.accessory,
     };
     let n = frame_msg(&hello, &mut f).unwrap();
     send.write_all(&f[..n]).await.unwrap();
@@ -305,8 +306,26 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     // 1350 doesn't reach; the second for a free star.
     let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
     let (a, b) = tokio::join!(
-        play_as(&h, &p0, MODE_DUEL, proto::Look { skin: 2, emblem: crown }),
-        play_as(&h, &p1, MODE_DUEL, proto::Look { skin: 5, emblem: star })
+        play_as(
+            &h,
+            &p0,
+            MODE_DUEL,
+            proto::Look {
+                skin: 2,
+                emblem: crown,
+                ..Default::default()
+            }
+        ),
+        play_as(
+            &h,
+            &p1,
+            MODE_DUEL,
+            proto::Look {
+                skin: 5,
+                emblem: star,
+                ..Default::default()
+            }
+        )
     );
     let (online, status) = watcher.await.unwrap().expect("online.json listed both players");
     let mut listed: Vec<&str> = online["online"]

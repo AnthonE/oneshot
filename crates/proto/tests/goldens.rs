@@ -225,6 +225,7 @@ fn msgs() -> Vec<Msg> {
             emblem: EMBLEM_NONE,
             party: 0,
             stamp: 0x1234_5678,
+            accessory: ACCESSORY_NONE,
         },
         Msg::Hello {
             proto: PROTO_VER,
@@ -235,6 +236,7 @@ fn msgs() -> Vec<Msg> {
             emblem: emblem(16, 5, 3, 12),
             party: 0,
             stamp: 0,
+            accessory: 1,
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -267,6 +269,7 @@ fn msgs() -> Vec<Msg> {
             emblem: emblem(1, 0, 15, 0),
             party: party::code_parse("K7Q2XD").unwrap(),
             stamp: u32::MAX,
+            accessory: 0,
         },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
@@ -276,6 +279,7 @@ fn msgs() -> Vec<Msg> {
             name: Name::new("BOT"),
             skin: SKIN_STANDARD,
             emblem: EMBLEM_NONE,
+            accessory: ACCESSORY_NONE,
         },
         Msg::Seat {
             slot: 6,
@@ -284,6 +288,7 @@ fn msgs() -> Vec<Msg> {
             name: Name::new("ember"),
             skin: 2,
             emblem: emblem(3, 1, 9, 2),
+            accessory: 1,
         },
         Msg::Kill {
             killer: 0,
@@ -516,15 +521,15 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0x6e38_c4b5_9200_3873,
-        0x761f_5ed6_6def_0b4f,
-        0xd43f_696a_d4ed_3d2c,
+        0x16b2_dad5_3230_6910,
+        0x64de_6a55_df9c_a38b,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0xa74e_f66a_654f_e864,
+        0x6e38_d605_7dfd_30df,
         0x0835_ec07_b4ee_4fb0,
-        0x3f28_24ea_ec0c_5c91,
-        0xd5ca_75af_c4fa_c9d7,
+        0x5d93_4c2f_1901_4a63,
+        0x41b4_a0ab_b60d_df0d,
         0xc3c6_2389_966a_c2c5,
         0xc800_e818_6244_f8b3,
         0x522b_412f_5f51_3ede,

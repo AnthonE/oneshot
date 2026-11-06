@@ -362,6 +362,7 @@ async fn session(
         emblem,
         party,
         stamp,
+        accessory,
     } = hello
     else {
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
@@ -446,7 +447,26 @@ async fn session(
         Some(w) if ctx.elo.floor(w).await.is_some_and(|f| f >= f64::from(line)) => emblem,
         _ => proto::EMBLEM_NONE,
     };
-    let look = proto::Look { skin, emblem };
+    // An accessory is worn if it's free, else only if the wallet owns it,
+    // as a skin.
+    let accessory = proto::accessory_valid(accessory);
+    let accessory = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if proto::ACCESSORY_FREE[accessory as usize] => accessory,
+        Some(w) => {
+            let want = proto::ACCESSORIES[accessory as usize];
+            if ctx.elo.skins(w).await.iter().any(|s| s == want) {
+                accessory
+            } else {
+                proto::ACCESSORY_NONE
+            }
+        }
+        None => proto::ACCESSORY_NONE,
+    };
+    let look = proto::Look {
+        skin,
+        emblem,
+        accessory,
+    };
 
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());

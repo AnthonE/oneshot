@@ -353,6 +353,8 @@ pub struct Models {
     pub frag: Handle<Scene>,
     /// A vehicle's hull (`look/truck.rs`).
     pub truck: Handle<Scene>,
+    /// The accessory on a body's head (`bodies.rs`).
+    pub shades: Handle<Scene>,
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -370,6 +372,7 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         rocket: scene("rocket"),
         frag: scene("frag"),
         truck: scene("truck"),
+        shades: scene("shades"),
     });
 }
 
