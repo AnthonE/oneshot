@@ -2438,7 +2438,14 @@ fn ended(
 fn hud_shown(
     in_match: Res<InMatch>,
     screen: Res<State<Screen>>,
-    mut q: Query<&mut Visibility, Or<(With<hud::HudRoot>, With<crate::visor::TagRoot>)>>,
+    mut q: Query<
+        &mut Visibility,
+        Or<(
+            With<hud::HudRoot>,
+            With<crate::visor::TagRoot>,
+            With<crate::scores::ScoresRoot>,
+        )>,
+    >,
 ) {
     let on = in_match.0 && *screen.get() == Screen::Playing;
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };

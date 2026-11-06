@@ -1,5 +1,7 @@
 //! Medals on screen, and the carnage report. Our latest medals sit in a row
-//! low on the left, each popping in and fading out, coloured by its kind:
+//! low on the left, small: each a name on a faint ground with a bar of its
+//! colour at its left, popping in a little and fading out, coloured by its
+//! kind:
 //! the multi-kill rungs amber growing to red, sprees violet, the rare kills
 //! gold, the rest ice, assists grey. Once the match is over, everyone's
 //! report: kills, deaths, assists, KDA (kills + assists / 3 − deaths),
@@ -14,13 +16,16 @@ use crate::hud::{HudState, MEDAL_S};
 use crate::ui;
 
 /// A new medal comes in this much bigger and settles in this long.
-const POP_SCALE: f32 = 1.45;
-const POP_S: f32 = 0.18;
+const POP_SCALE: f32 = 1.15;
+const POP_S: f32 = 0.14;
 /// The last this-long of a medal's time on screen, it fades.
 const FADE_S: f32 = 0.6;
 /// Just over the shield; over the net graph too while it is up.
 const ROW_BOTTOM: f32 = 74.0;
 const ROW_BOTTOM_NET: f32 = 160.0;
+
+/// A badge's ground, at its most.
+const GROUND: Color = Color::srgba(0.02, 0.04, 0.07, 0.42);
 
 #[derive(Component)]
 pub struct MedalRow;
@@ -61,7 +66,7 @@ pub fn setup(mut commands: Commands) {
             bottom: Val::Px(ROW_BOTTOM),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
-            column_gap: Val::Px(8.0),
+            column_gap: Val::Px(6.0),
             ..default()
         },
     ));
@@ -72,19 +77,24 @@ fn badge(id: u8, at: f32) -> impl Bundle {
     (
         Badge { at, colour: c },
         Node {
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-            border: UiRect::all(Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(3.0)),
+            padding: UiRect {
+                left: Val::Px(7.0),
+                right: Val::Px(9.0),
+                top: Val::Px(3.0),
+                bottom: Val::Px(3.0),
+            },
+            border: UiRect::left(Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.04, 0.06, 0.08, 0.78)),
+        BackgroundColor(GROUND),
         BorderColor::all(c),
         UiTransform::default(),
         children![(
             Text::new(md::info(id).name.to_uppercase()),
-            ui::display(17.0),
+            ui::display(14.0),
             TextColor(c),
-            TextShadow::default(),
+            crate::hud::SHADOW,
         )],
     )
 }
@@ -136,7 +146,7 @@ pub fn row(
             xf.scale = Vec2::splat(scale);
         }
         let a = ((MEDAL_S - age) / FADE_S).clamp(0.0, 1.0);
-        bg.set_if_neq(BackgroundColor(Color::srgba(0.04, 0.06, 0.08, 0.78 * a)));
+        bg.set_if_neq(BackgroundColor(GROUND.with_alpha(GROUND.alpha() * a)));
         border.set_if_neq(BorderColor::all(b.colour.with_alpha(a)));
         for k in kids {
             if let Ok(mut t) = texts.get_mut(*k) {
