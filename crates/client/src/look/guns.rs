@@ -350,6 +350,8 @@ pub struct Models {
     /// The hands in view (`hands.rs`).
     pub hand: Handle<Scene>,
     pub hand_left: Handle<Scene>,
+    /// The right again, for a sword's hilt.
+    pub hand_sword: Handle<Scene>,
     /// By arm id; index 0 (no gun) is unused.
     pub guns: Vec<Option<Handle<Scene>>>,
     pub rocket: Handle<Scene>,
@@ -368,6 +370,7 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         body: assets.load("models/triple-t.glb"),
         hand: scene("hand"),
         hand_left: scene("hand-left"),
+        hand_sword: scene("hand-sword"),
         guns,
         rocket: scene("rocket"),
         frag: scene("frag"),

@@ -48,6 +48,12 @@ const GHOST_MAX: u32 = 9;
 const GHOST_S: f32 = 0.12;
 /// Its tip, up the model.
 const TIP_M: f32 = 1.07;
+/// In view, where it stands up and would run far off the frame: how much of its
+/// length it keeps, how much of that its width keeps, and how far it is turned
+/// about its length, radians, its face to the eye where its edge would be.
+const IN_VIEW_LONG: f32 = 0.62;
+const IN_VIEW_WIDE: f32 = 0.62;
+const IN_VIEW_TURN: f32 = 1.2;
 
 /// Field for field `Blade` in the shader.
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
@@ -112,6 +118,23 @@ pub fn setup(mut commands: Commands, mut materials: ResMut<Assets<BladeMaterial>
         strip: None,
     };
     commands.insert_resource(kit);
+}
+
+/// The middle of the blade's root, where it leaves the hilt.
+fn root_of(blade: &Mesh) -> Option<Vec3> {
+    let VertexAttributeValues::Float32x3(at) = blade.attribute(Mesh::ATTRIBUTE_POSITION)? else {
+        return None;
+    };
+    let VertexAttributeValues::Float32x2(uv) = blade.attribute(Mesh::ATTRIBUTE_UV_0)? else {
+        return None;
+    };
+    let ring: Vec<Vec3> = at
+        .iter()
+        .zip(uv)
+        .filter(|(_, t)| t[1] < 1e-3)
+        .map(|(p, _)| Vec3::from(*p))
+        .collect();
+    (!ring.is_empty()).then(|| ring.iter().sum::<Vec3>() / ring.len() as f32)
 }
 
 /// A strip down the blade's middle line, each ring's two corners on it with its
@@ -195,6 +218,7 @@ fn lit(
     blades: Query<(&Mesh3d, &GltfMaterialName)>,
     parents: Query<&ChildOf>,
     holders: Query<(), Or<(With<super::viewmodel::InView>, With<super::bodies::Body>)>>,
+    in_view: Query<(), With<super::viewmodel::InView>>,
     kit: Option<ResMut<Kit>>,
     mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
@@ -220,6 +244,17 @@ fn lit(
         ));
         if let Some(frame) = parents.iter_ancestors(ev.entity).find(|a| holders.contains(*a)) {
             commands.entity(e).insert(Held { frame, last: None });
+            if in_view.contains(frame) {
+                if let Some(root) = meshes.get(&mesh.0).and_then(root_of) {
+                    let turn = Quat::from_rotation_y(IN_VIEW_TURN);
+                    let size = Vec3::new(IN_VIEW_LONG * IN_VIEW_WIDE, IN_VIEW_LONG, IN_VIEW_LONG * IN_VIEW_WIDE);
+                    commands.entity(e).insert(Transform {
+                        translation: root - turn * (root * size),
+                        rotation: turn,
+                        scale: size,
+                    });
+                }
+            }
         }
         if kit.strip.is_none() {
             let made = meshes.get(&mesh.0).and_then(strip);

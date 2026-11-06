@@ -31,7 +31,7 @@ pub const GRIP_IN_GUN: Vec3 = Vec3::new(0.0, -0.01, -0.04);
 pub const FIST_TILT: f32 = 0.42;
 /// The right hand round a sword's hilt, in the sword's frame: which way its
 /// knuckles lie from its wrist.
-pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.95, 0.0, 0.3);
+pub const SWORD_KNUCKLES: Vec3 = Vec3::new(-0.58, 0.0, -0.81);
 /// Where the off hand's hole sits on a long gun's fore-end, metres as it looks:
 /// this far up into its belly (`Gun::under`) and to its right, so the fingers go
 /// round the far side and the heel of the palm and the thumb show on ours.
@@ -85,14 +85,20 @@ pub struct Grips {
 #[derive(Component)]
 pub struct ViewHand {
     left: bool,
+    /// The one that holds a sword's hilt, in place of the right.
+    sword: bool,
 }
 
 /// The hands, hidden until they have something to hold.
 pub fn spawn(commands: &mut Commands, models: &Models, in_view: Entity) {
-    for (left, scene) in [(false, &models.hand), (true, &models.hand_left)] {
+    for (left, sword, scene) in [
+        (false, false, &models.hand),
+        (true, false, &models.hand_left),
+        (false, true, &models.hand_sword),
+    ] {
         commands
             .spawn((
-                ViewHand { left },
+                ViewHand { left, sword },
                 SceneRoot(scene.clone()),
                 Transform::from_scale(Vec3::splat(SHRINK)),
                 Visibility::Hidden,
@@ -127,8 +133,8 @@ pub fn off_hand(g: &Grips, fore: Vec3, mag: Vec3) -> Option<(Vec3, bool)> {
 /// against the thumb, y along the knuckles, z out of its back: thumb up, the
 /// back of the hand to the gun's right. A sword's hilt goes through the fist
 /// from the little finger to the thumb, its blade out of the thumb's side, the
-/// palm to the eye and the forearm in from the frame's lower right
-/// ([`SWORD_KNUCKLES`]).
+/// palm on edge ([`SWORD_KNUCKLES`]); its own hand's wrist is bent, so the forearm
+/// runs out at the frame's lower right (`tools/models/hand.py`).
 fn fist(arm: u8) -> Quat {
     if arm == sim::arms::SWORD {
         let y = SWORD_KNUCKLES.normalize();
@@ -195,7 +201,10 @@ pub fn pose(grips: Res<Grips>, mut hands: Query<(&ViewHand, &mut Transform, &mut
         } else if h.left {
             left_hand(&grips)
         } else {
-            grips.right.map(right_hand)
+            grips
+                .right
+                .filter(|g| (g.arm == sim::arms::SWORD) == h.sword)
+                .map(right_hand)
         };
         let Some((at, rot)) = place else {
             vis.set_if_neq(Visibility::Hidden);
