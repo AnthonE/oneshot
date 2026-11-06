@@ -923,7 +923,10 @@ fn card(p: &mut ChildSpawnerCommands, item: Item, picked: bool, face: Face, ward
 #[derive(Component)]
 struct GearPic(usize, u8, f32);
 
-fn gear_pics(mut cards: Query<(&GearPic, &mut ImageNode), Added<GearPic>>, pics: Option<Res<crate::look::thumbs::GearPics>>) {
+fn gear_pics(
+    mut cards: Query<(&GearPic, &mut ImageNode), Added<GearPic>>,
+    pics: Option<Res<crate::look::thumbs::GearPics>>,
+) {
     let Some(pics) = pics else { return };
     for (&GearPic(slot, g, lit), mut node) in &mut cards {
         if let Some(h) = pics.get(slot, g) {
@@ -971,7 +974,10 @@ impl Item {
     fn worn(player: &Player, page: usize) -> Option<Item> {
         match page {
             0 => Some(Item::Skin(player.skin)),
-            k if k <= GEAR_ROWS.len() => Some(Item::Gear(k - 1, proto::gear_valid(GEAR_ROWS[k - 1].1, player.gear(k - 1)))),
+            k if k <= GEAR_ROWS.len() => Some(Item::Gear(
+                k - 1,
+                proto::gear_valid(GEAR_ROWS[k - 1].1, player.gear(k - 1)),
+            )),
             _ => None,
         }
     }
@@ -1051,11 +1057,19 @@ impl Item {
             );
         }
         match (self.owned(w), w.floor) {
-            (false, _) => stand(at_line("LOCKED"), format!("{worn_from} Not in yours yet."), ui::FAINT, true),
+            (false, _) => stand(
+                at_line("LOCKED"),
+                format!("{worn_from} Not in yours yet."),
+                ui::FAINT,
+                true,
+            ),
             (true, _) if line == 0 => stand("OWNED".into(), "In your wallet: yours to wear.".into(), ui::GOOD, false),
-            (true, Some(f)) if f >= line => {
-                stand("OWNED".into(), format!("In your wallet, and your {f} rating is over its line."), ui::GOOD, false)
-            }
+            (true, Some(f)) if f >= line => stand(
+                "OWNED".into(),
+                format!("In your wallet, and your {f} rating is over its line."),
+                ui::GOOD,
+                false,
+            ),
             (true, Some(f)) => stand(
                 at_line("OWNED"),
                 format!("In your wallet, worn from a {line} rating: yours is {f}. Till then, the standard look."),
@@ -1064,7 +1078,9 @@ impl Item {
             ),
             (true, None) => stand(
                 at_line("OWNED"),
-                format!("In your wallet, worn from a {line} rating: you aren't rated yet. Till then, the standard look."),
+                format!(
+                    "In your wallet, worn from a {line} rating: you aren't rated yet. Till then, the standard look."
+                ),
                 ui::MARK,
                 true,
             ),
@@ -1091,15 +1107,15 @@ const FEET_BLURBS: [&str; 2] = [
     "Heavy treaded boots. Your steps sound no louder in them.",
 ];
 
-/// The box under the cards: the item under the pointer, else the one worn.
-#[derive(Component)]
-struct PeekName;
-#[derive(Component)]
-struct PeekWord;
-#[derive(Component)]
-struct PeekBlurb;
-#[derive(Component)]
-struct PeekLine;
+/// A line of the box under the cards: the item under the pointer, else
+/// the one worn.
+#[derive(Component, Clone, Copy)]
+enum Peek {
+    Name,
+    Word,
+    Blurb,
+    Line,
+}
 
 fn peek_box(p: &mut ChildSpawnerCommands) {
     p.spawn((
@@ -1125,28 +1141,24 @@ fn peek_box(p: &mut ChildSpawnerCommands) {
             ..default()
         })
         .with_children(|r| {
-            r.spawn((ui::strong("", 16.0, ui::TITLE), PeekName));
-            r.spawn((ui::strong("", 10.5, ui::FAINT), PeekWord));
+            r.spawn((ui::strong("", 16.0, ui::TITLE), Peek::Name));
+            r.spawn((ui::strong("", 10.5, ui::FAINT), Peek::Word));
         });
-        b.spawn((ui::label("", 12.0, ui::TEXT_COLOR), PeekBlurb));
-        b.spawn((ui::label("", 11.0, ui::FAINT), PeekLine));
+        b.spawn((ui::label("", 12.0, ui::TEXT_COLOR), Peek::Blurb));
+        b.spawn((ui::label("", 11.0, ui::FAINT), Peek::Line));
     });
 }
 
 /// The box under the cards says the item under the pointer, else the one
 /// worn.
-#[allow(clippy::type_complexity)]
 fn peek(
     cards: Query<(&Interaction, &Hit)>,
     front: Res<Front>,
     player: Res<Player>,
     party: Res<PartyView>,
-    mut name: Query<(&mut Text, &mut TextColor), (With<PeekName>, Without<PeekWord>, Without<PeekBlurb>, Without<PeekLine>)>,
-    mut word: Query<(&mut Text, &mut TextColor), (With<PeekWord>, Without<PeekBlurb>, Without<PeekLine>)>,
-    mut blurb: Query<&mut Text, (With<PeekBlurb>, Without<PeekLine>)>,
-    mut line: Query<(&mut Text, &mut TextColor), With<PeekLine>>,
+    mut lines: Query<(&Peek, &mut Text, &mut TextColor)>,
 ) {
-    if name.is_empty() {
+    if lines.is_empty() {
         return;
     }
     let over = cards
@@ -1157,25 +1169,18 @@ fn peek(
         return;
     };
     let stand = item.stand(party.wardrobe.as_ref());
-    let set = |t: &mut Text, s: &str| {
-        if t.0 != s {
-            t.0 = s.to_string();
+    for (part, mut t, mut c) in &mut lines {
+        let (text, colour) = match part {
+            Peek::Name => (item.name(), if stand.dim { ui::DIM } else { ui::TITLE }),
+            Peek::Word => (stand.word.clone(), stand.colour),
+            Peek::Blurb => (item.blurb().to_string(), ui::TEXT_COLOR),
+            Peek::Line if stand.colour == ui::GOOD => (stand.line.clone(), ui::FAINT),
+            Peek::Line => (stand.line.clone(), stand.colour),
+        };
+        if t.0 != text {
+            t.0 = text;
         }
-    };
-    for (mut t, mut c) in &mut name {
-        set(&mut t, &item.name());
-        c.set_if_neq(TextColor(if stand.dim { ui::DIM } else { ui::TITLE }));
-    }
-    for (mut t, mut c) in &mut word {
-        set(&mut t, &stand.word);
-        c.set_if_neq(TextColor(stand.colour));
-    }
-    for mut t in &mut blurb {
-        set(&mut t, item.blurb());
-    }
-    for (mut t, mut c) in &mut line {
-        set(&mut t, &stand.line);
-        c.set_if_neq(TextColor(if stand.colour == ui::GOOD { ui::FAINT } else { stand.colour }));
+        c.set_if_neq(TextColor(colour));
     }
 }
 

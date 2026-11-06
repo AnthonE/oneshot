@@ -186,7 +186,9 @@ fn run() -> Result<(), String> {
         if let Some(w) = arg("--wardrobe") {
             let v: Vec<u32> = w.split(',').filter_map(|n| n.trim().parse().ok()).collect();
             let at = |i: usize| v.get(i).copied().unwrap_or(0) | 1;
-            app.world_mut().resource_mut::<oneshot_client::party::PartyView>().wardrobe = Some(proto::Wardrobe {
+            app.world_mut()
+                .resource_mut::<oneshot_client::party::PartyView>()
+                .wardrobe = Some(proto::Wardrobe {
                 wallet: true,
                 known: true,
                 skins: at(0),

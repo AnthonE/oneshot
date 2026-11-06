@@ -71,7 +71,7 @@ const SHOTS: [Shot; 2] = [
         parts: &[(Part::Shades, Vec3::ZERO, 0.0)],
         aim: Vec3::new(0.0, 0.0, -0.17),
         from: Vec3::new(-0.62, 0.38, 1.0),
-        dist: 1.45,
+        dist: 1.1,
     },
     Shot {
         slot: FEET,
@@ -82,7 +82,7 @@ const SHOTS: [Shot; 2] = [
         ],
         aim: Vec3::new(0.0, 0.17, 0.0),
         from: Vec3::new(-0.62, 0.42, 1.0),
-        dist: 2.1,
+        dist: 1.35,
     },
 ];
 
@@ -95,7 +95,10 @@ pub struct GearPics {
 
 impl GearPics {
     pub fn get(&self, slot: usize, g: u8) -> Option<Handle<Image>> {
-        self.pics.iter().find(|(s, i, _)| *s == slot && *i == g).map(|(.., h)| h.clone())
+        self.pics
+            .iter()
+            .find(|(s, i, _)| *s == slot && *i == g)
+            .map(|(.., h)| h.clone())
     }
 }
 
