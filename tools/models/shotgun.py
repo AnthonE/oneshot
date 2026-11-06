@@ -23,4 +23,5 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('shotgun', 0.95, hold=0.27, flip=True, glow=['#49b8ff'])
+temper(gun)
 finish('shotgun', [gun], grip=0.28, rise=rise, long=True, note='pump: tube mag, ribbed fore-end, side-saddle of four shells')

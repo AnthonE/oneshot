@@ -9,6 +9,8 @@
 //! a splat of four sets in separate textures beside the PBR's own would
 //! pass it.
 
+use std::sync::OnceLock;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -408,12 +410,24 @@ pub fn panel_images(n: usize) -> (Image, Image, Image) {
     )
 }
 
+/// Steps of [`linear_to_srgb`]'s table: fine enough to bring every byte back.
+const LINEAR_STEPS: usize = 4096;
+
+// sRGB's curve as tables: a gun's colour map is millions of texels, on the
+// page's one thread.
 fn srgb_to_linear(v: u8) -> f32 {
-    super::fill::srgb_to_linear(v as f32 / 255.0)
+    static TABLE: OnceLock<[f32; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| std::array::from_fn(|i| super::fill::srgb_to_linear(i as f32 / 255.0)))[v as usize]
 }
 
 fn linear_to_srgb(v: f32) -> u8 {
-    (super::fill::linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8
+    static TABLE: OnceLock<[u8; LINEAR_STEPS]> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        std::array::from_fn(|i| {
+            (super::fill::linear_to_srgb(i as f32 / (LINEAR_STEPS - 1) as f32) * 255.0).round() as u8
+        })
+    });
+    table[(v.clamp(0.0, 1.0) * (LINEAR_STEPS - 1) as f32).round() as usize]
 }
 
 /// One level down, box-filtered: in linear light for colour, renormalised
@@ -540,18 +554,29 @@ pub fn mip_models(
     mut events: MessageReader<AssetEvent<Image>>,
     mut images: ResMut<Assets<Image>>,
     assets: Res<AssetServer>,
+    tier: Res<super::quality::Tier>,
 ) {
+    use super::quality::Quality;
+    // The low rungs start from half a gun's maps: a quarter of its memory.
+    let half = matches!(tier.preset, Some(Quality::Potato | Quality::Low));
     for ev in events.read() {
         let AssetEvent::LoadedWithDependencies { id } = ev else {
             continue;
         };
-        if !assets.get_path(*id).is_some_and(|p| p.path().starts_with("models")) {
+        let Some(path) = assets.get_path(*id).filter(|p| p.path().starts_with("models")) else {
             continue;
-        }
+        };
         let Some(img) = images.get_mut(*id) else {
             continue;
         };
+        let stem = path.path().file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if half && super::guns::GUNS.iter().any(|(_, g)| g.file == stem) {
+            halve_in_place(img);
+        }
         mip_in_place(img, false);
+        // The GPU's from here: a gun's maps are tens of MB, and nothing reads
+        // them back.
+        img.asset_usage = RenderAssetUsages::RENDER_WORLD;
         let mut d = match &img.sampler {
             ImageSampler::Descriptor(d) => d.clone(),
             ImageSampler::Default => ImageSamplerDescriptor::linear(),
@@ -561,6 +586,19 @@ pub fn mip_models(
         d.mag_filter = ImageFilterMode::Linear;
         img.sampler = ImageSampler::Descriptor(d);
     }
+}
+
+/// A loaded RGBA8 image, before its chain, at half its size.
+fn halve_in_place(img: &mut Image) {
+    if img.texture_descriptor.mip_level_count > 1 {
+        return;
+    }
+    let Some((data, w, h, srgb)) = rgba8(img) else {
+        return;
+    };
+    img.data = Some(halve(&data, w, h, srgb, false));
+    img.texture_descriptor.size.width = (w as u32 / 2).max(1);
+    img.texture_descriptor.size.height = (h as u32 / 2).max(1);
 }
 
 /// Gives a loaded RGBA8 image its whole mip chain.
@@ -676,6 +714,33 @@ fn mipped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_curves_tables_bring_every_byte_back() {
+        for v in 0..=255u8 {
+            assert_eq!(linear_to_srgb(srgb_to_linear(v)), v);
+        }
+    }
+
+    #[test]
+    fn half_a_map_is_half_its_size_and_still_gets_its_chain() {
+        let mut img = Image::new(
+            Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            vec![90; 8 * 8 * 4],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        halve_in_place(&mut img);
+        mip_in_place(&mut img, false);
+        assert_eq!(img.texture_descriptor.size.width, 4);
+        assert_eq!(img.texture_descriptor.mip_level_count, 3);
+        assert_eq!(img.data.as_ref().map(Vec::len), Some((16 + 4 + 1) * 4));
+    }
 
     #[test]
     fn the_ships_surfaces_tile_and_glow_only_in_their_lights() {

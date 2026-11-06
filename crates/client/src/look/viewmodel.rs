@@ -306,6 +306,8 @@ pub struct ViewGun {
     left: bool,
     /// The gun whose model is spawned: what is drawn, which a change lags.
     drawn: u8,
+    /// The skin it was spawned in.
+    skin: u8,
     /// How far down for a change, 0..=1.
     drop: f32,
     kick: Spring,
@@ -497,6 +499,8 @@ pub struct Own<'a> {
     /// In a seat: the stride and the footing are the vehicle's, not ours.
     pub riding: bool,
     pub shown: bool,
+    /// What the server says we wear (`gun_skin.rs`).
+    pub skin: u8,
 }
 
 /// An exactly integrated spring about a moving rest.
@@ -1120,10 +1124,13 @@ fn hand(
     }
     let (drop, change) = drop_step(v.drop, v.drawn, want, dt, own.shown);
     v.drop = drop;
-    if change {
+    // The roster can say what we wear after the first gun is up.
+    if change || v.skin != own.skin {
+        v.skin = own.skin;
         commands.entity(e).despawn_related::<Children>();
         if let Some((_, scene)) = spawn_posed(commands, models, want, view_basis(), e) {
             commands.entity(scene).observe(no_shadows);
+            super::gun_skin::wear(commands, scene, own.skin, want);
             // A gun that runs hot wears its heat (`fx/vent.rs`).
             if arm(want).hot() {
                 let left = v.left;
@@ -1303,6 +1310,7 @@ mod tests {
                     pitch: 0.0,
                     riding: false,
                     shown: true,
+                    skin: 0,
                 };
                 m.body(&own, dt);
             }

@@ -43,10 +43,15 @@ TRACES = os.path.join(ROOT, 'traces', 'guns')
 # Meshy's raw meshes (meshy_gen.py), not in the repo.
 SOURCES = os.environ.get('MESHY_SRC', os.path.join(ROOT, 'sources', 'meshy'))
 # The longest side a generated gun's colour map keeps, and its other maps
-# (the normals, the roughness and metal, the glow): every one of them is in
-# memory from the title on, on a phone's page too.
-TEX_PX = 1024
-MAP_PX = 512
+# (the normals, the roughness and metal, the glow); a small prop, a rocket or
+# a frag, keeps less of each (`generated`'s `tex_px`, `map_px`).
+TEX_PX = 2048
+MAP_PX = 1024
+SMALL_TEX_PX = 1024
+SMALL_MAP_PX = 512
+# Another paint on a gun's mesh (meshy_gen.py --paint): built beside it as
+# `<name>~<tag>` from `<name>~<tag>_raw.glb`.
+PAINT = os.environ.get('MODEL_PAINT', '')
 # The middle of the fist under the axis a gun is held by
 # (look/viewmodel.rs's FIST); where a long gun's other hand goes unless its
 # script says, as a share of the barrel past the grip; and how far under
@@ -61,6 +66,21 @@ FORE_CUP = 0.02
 ROUGH = 0.5
 METAL = 0.4
 NORMAL = 0.5
+# `temper`: where a paint's pale lines start, how much of them over that is
+# kept, and how rough its paint and its steel come out at least.
+TEMPER_KNEE = 0.38
+TEMPER_SQUEEZE = 0.3
+TEMPER_PAINT = 0.8
+TEMPER_STEEL = 0.62
+# How much of the light baked into a paint `temper` takes back out, and how
+# wide that light is, as a share of the map's side.
+TEMPER_FLATTEN = 0.8
+TEMPER_LIGHT_SIZE = 0.02
+# And its contrast: how much of the swing round each material's middle is kept,
+# and how dark that middle may be for steel (near-black beside a pale line is
+# what reads wet).
+TEMPER_CONTRAST = 0.55
+TEMPER_STEEL_MID = 0.26
 
 # name: (sRGB hex, metallic, roughness, emissive (hex, strength) or None, coat weight)
 PALETTE = {
@@ -368,7 +388,7 @@ def _ramp(x, lo, hi):
     return np.clip((x - lo) / (hi - lo), 0.0, 1.0)
 
 
-def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0):
+def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0, map_px=MAP_PX):
     """Lights what the paint made bright: an emissive map that is the base
     colour where its hue is within `window` degrees of one of `hues` (all
     of it within half that), it is saturated, and its value is over
@@ -397,7 +417,7 @@ def _glow(material, hues, strength, floor=0.45, pale=False, window=24.0):
     out[..., :3] = (np.array(srgb(hues[0]), dtype=np.float32) if pale else rgb) * mask[..., None]
     lit = bpy.data.images.new(material.name + '_glow', w, h, alpha=False)
     lit.pixels.foreach_set(out.ravel())
-    k = MAP_PX / max(w, h)
+    k = map_px / max(w, h)
     if k < 1.0:
         lit.scale(max(1, round(w * k)), max(1, round(h * k)))
     lit.pack()
@@ -431,8 +451,12 @@ def _surface(material, rough, metal):
     im.pack()
 
 
+def _painted(name):
+    return f'{name}~{PAINT}' if PAINT else name
+
+
 def generated(name, length, hold=None, flip=None, over=False, width=None, bore=None, glow=(), glow_strength=4.0,
-              glow_floor=0.45, pale=False, tris=None, rough=ROUGH, metal=METAL):
+              glow_floor=0.45, pale=False, tris=None, rough=ROUGH, metal=METAL, tex_px=TEX_PX, map_px=MAP_PX):
     """Meshy's raw mesh of `name` (sources/meshy/<name>_raw.glb, from
     meshy_gen.py) in gun space, `length` metres from its rear at x = 0 to
     its muzzle, scaled evenly: `(object, rise)`, the rise for `finish`.
@@ -450,7 +474,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
     kind of share), and `rise` is how far over the axis that is. With no
     `hold` (a rocket) the axis is the muzzle's own.
 
-    The colour map comes down to TEX_PX, the others to MAP_PX. The glow map
+    The colour map comes down to `tex_px`, the others to `map_px`. The glow map
     Meshy ships is dropped (a stick's peaked at 0.53); `glow` names the
     colours of light the paint carries (hex) and those texels are lit at
     `glow_strength` (`glow_floor`: how bright a texel must be painted to
@@ -458,7 +482,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
     light that is nearly white counts too). `rough` and `metal` are ROUGH
     and METAL for this gun; its normal map is drawn at NORMAL. `tris` thins
     the mesh to about that many."""
-    path = os.path.join(SOURCES, name + '_raw.glb')
+    path = os.path.join(SOURCES, _painted(name) + '_raw.glb')
     if not os.path.exists(path):
         print(f'Error: no {path}; tools/models/meshy_gen.py {name} commissions it (credits)')
         sys.exit(1)
@@ -526,7 +550,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
         colour.add(node.image)
     for im in bpy.data.images:
         w, h = im.size
-        px = TEX_PX if im in colour else MAP_PX
+        px = tex_px if im in colour else map_px
         if max(w, h) > px:
             s = px / max(w, h)
             im.scale(max(1, round(w * s)), max(1, round(h * s)))
@@ -541,7 +565,7 @@ def generated(name, length, hold=None, flip=None, over=False, width=None, bore=N
             if n.type == 'NORMAL_MAP':
                 n.inputs['Strength'].default_value = NORMAL
         if glow:
-            lit = _glow(material, glow, glow_strength, glow_floor, pale)
+            lit = _glow(material, glow, glow_strength, glow_floor, pale, map_px=map_px)
             print(f'GLOW {name}: {lit * 100:.2f}% of the map is lit')
     return o, muzzle - axis
 
@@ -607,6 +631,83 @@ def darken(o, k):
         im.update()
 
 
+def _image_of(socket):
+    node = socket.links[0].from_node
+    while node.type != 'TEX_IMAGE':
+        node = next(i.links[0].from_node for i in node.inputs if i.links)
+    return node.image
+
+
+def _pixels(im):
+    w, h = im.size
+    px = np.empty(w * h * 4, np.float32)
+    im.pixels.foreach_get(px)
+    return px.reshape(h, w, 4)
+
+
+def _blur(a, r):
+    """A box of `r` texels each way, twice."""
+    for _ in range(2):
+        for axis in (0, 1):
+            pad = [(r + 1, r) if i == axis else (0, 0) for i in range(2)]
+            c = np.cumsum(np.pad(a, pad, mode='edge'), axis=axis, dtype=np.float64)
+            hi = np.take(c, range(2 * r + 1, c.shape[axis]), axis=axis)
+            lo = np.take(c, range(0, c.shape[axis] - 2 * r - 1), axis=axis)
+            a = ((hi - lo) / (2 * r + 1)).astype(np.float32)
+    return a
+
+
+def temper(o, knee=TEMPER_KNEE, squeeze=TEMPER_SQUEEZE, paint_rough=TEMPER_PAINT, steel_rough=TEMPER_STEEL,
+           flatten=TEMPER_FLATTEN):
+    """What a generated paint gets wrong, in its own maps. It bakes its light
+    in: the wide swings of brightness within paint and within steel are taken
+    back out by `flatten`, and the scratches stay. It draws a pale line along
+    every edge: pale, unsaturated texels over `knee` come down by `squeeze`.
+    And it has one surface for paint and steel, so all of it reads as wet
+    plastic: what is saturated goes matte and non-metal (`paint_rough`), the
+    rest at least `steel_rough`."""
+    for material in o.data.materials:
+        bsdf = next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        im = _image_of(bsdf.inputs['Base Color'])
+        rgba = _pixels(im)
+        _, sat, val = _hsv(rgba[..., :3])
+        paint = _ramp(sat, 0.12, 0.3)
+        r = max(1, round(im.size[0] * TEMPER_LIGHT_SIZE))
+        for share in (paint, 1.0 - paint):
+            # Its light, measured over this material alone.
+            weight = _blur(share, r) + 1e-3
+            light = _blur(val * share, r) / weight
+            mean = float((val * share).sum() / max(share.sum(), 1.0))
+            gain = (mean / np.maximum(light, 0.02)) ** flatten
+            rgba[..., :3] *= (1.0 + share * (np.clip(gain, 0.4, 2.5) - 1.0))[..., None]
+        _, _, val = _hsv(rgba[..., :3])
+        for share, floor in ((paint, 0.0), (1.0 - paint, TEMPER_STEEL_MID)):
+            mid = float((val * share).sum() / max(share.sum(), 1.0))
+            calm = max(mid, floor) + (val - mid) * TEMPER_CONTRAST
+            gain = np.maximum(calm, 0.02) / np.maximum(val, 0.02)
+            rgba[..., :3] *= (1.0 + share * (gain - 1.0))[..., None]
+        np.clip(rgba[..., :3], 0.0, 1.0, out=rgba[..., :3])
+        _, sat, val = _hsv(rgba[..., :3])
+        pale = _ramp(val, knee, knee + 0.2) * (1.0 - _ramp(sat, 0.15, 0.35))
+        over = knee + np.maximum(val - knee, 0.0) * squeeze
+        k = np.where(val > knee, over / np.maximum(val, 1e-4), 1.0)
+        rgba[..., :3] *= (1.0 + pale * (k - 1.0))[..., None]
+        im.pixels.foreach_set(rgba.ravel())
+        im.update()
+        if not bsdf.inputs['Roughness'].links:
+            continue
+        mr = _image_of(bsdf.inputs['Roughness'])
+        maps = _pixels(mr)
+        h, w = maps.shape[:2]
+        rows = np.arange(h) * sat.shape[0] // h
+        cols = np.arange(w) * sat.shape[1] // w
+        paint = _ramp(sat[np.ix_(rows, cols)], 0.12, 0.3)
+        maps[..., 1] = np.maximum(maps[..., 1], steel_rough + paint * (paint_rough - steel_rough))
+        maps[..., 2] *= 1.0 - paint
+        mr.pixels.foreach_set(maps.ravel())
+        mr.pack()
+
+
 # Gun space (fwd X, up Z, left Y) to the client's export frame (fwd Z, top −Y)
 # in Blender; Blender's glTF export then makes fwd +Y, top +Z.
 TO_EXPORT = Matrix(((0, -1, 0, 0), (0, 0, -1, 0), (1, 0, 0, 0), (0, 0, 0, 1)))
@@ -644,7 +745,7 @@ def finish(name, parts, grip, long=True, note='', rise=0.0, fore=None, under=Non
         under = -min(belly) if belly else FIST_DROP
     os.makedirs(MODELS, exist_ok=True)
     os.makedirs(TRACES, exist_ok=True)
-    sheet(o, os.path.join(TRACES, name + '.png'), title=name, fist=(grip_x, -FIST_DROP), muzzle=(height, rise),
+    sheet(o, os.path.join(TRACES, _painted(name) + '.png'), title=_painted(name), fist=(grip_x, -FIST_DROP), muzzle=(height, rise),
           other=(fore_x, -under - FORE_CUP) if long else None)
     lo2, hi2 = bounds(o)
     o.data.transform(TO_EXPORT)
@@ -652,7 +753,7 @@ def finish(name, parts, grip, long=True, note='', rise=0.0, fore=None, under=Non
     bpy.ops.object.select_all(action='DESELECT')
     o.select_set(True)
     bpy.context.view_layer.objects.active = o
-    path = os.path.join(MODELS, name + '.glb')
+    path = os.path.join(MODELS, _painted(name) + '.glb')
     # A generated gun's maps go out as JPEG; the kit's guns have none.
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_apply=True, export_yup=True, use_selection=True,
                               export_image_format='JPEG', export_jpeg_quality=88)

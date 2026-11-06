@@ -342,8 +342,11 @@ pub fn view_basis() -> Quat {
 /// Every model, asked for at startup.
 #[derive(Resource)]
 pub struct Models {
+    /// Triple T's file, whole: its clips and, once it is in, its scene
+    /// (`bodies::stand_up`). Never asked for by the scene's label as well:
+    /// that reads the file twice, and the second read respawns every body
+    /// already standing, and the gun in its hand with it.
     pub body: Handle<bevy::gltf::Gltf>,
-    pub body_scene: Handle<Scene>,
     /// The hands in view (`hands.rs`).
     pub hand: Handle<Scene>,
     pub hand_left: Handle<Scene>,
@@ -363,7 +366,6 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
     }
     commands.insert_resource(Models {
         body: assets.load("models/triple-t.glb"),
-        body_scene: scene("triple-t"),
         hand: scene("hand"),
         hand_left: scene("hand-left"),
         guns,
