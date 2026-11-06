@@ -635,7 +635,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::grass::cull,
             look::anim::build,
             // What presses the grass is what is drawn (`look/foliage.rs`).
-            (draw_fighters, draw_vehicles, look::truck::drive, look::foliage::update).chain(),
+            (
+                draw_fighters,
+                draw_vehicles,
+                look::truck::drive,
+                look::truck::husks,
+                look::foliage::update,
+            )
+                .chain(),
             (items::draw, flags::draw),
             fly,
             view,
@@ -708,7 +715,12 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     if let Some(p) = opts.pose {
         app.insert_resource(p).add_systems(
             Update,
-            (pose::aim.after(view), pose::fall.before(draw_fighters), pose::stand_orb),
+            (
+                pose::aim.after(view),
+                pose::fall.before(draw_fighters),
+                pose::throw.after(happened).before(draw_vehicles),
+                pose::stand_orb,
+            ),
         );
     } else {
         app.add_systems(
@@ -1408,7 +1420,15 @@ fn draw_vehicles(
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
-        let health = seen.iter().find(|v| v.slot == slot).map_or(255, |v| v.health);
+        let sent = seen.iter().find(|v| v.slot == slot);
+        let health = sent.map_or(255, |v| v.health);
+        let own = core
+            .own_vehicle()
+            .filter(|_| core.own().0.riding().is_some_and(|(i, _)| i as u8 == slot));
+        let driven = match own {
+            Some((veh, ..)) => veh.seats[sim::vehicle::DRIVER] != 0,
+            None => sent.is_some_and(|v| v.seats[sim::vehicle::DRIVER] != 0),
+        };
         // Only a live hull on its wheels presses the grass: not one in the
         // air over a crest, nor a wreck.
         if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
@@ -1424,13 +1444,14 @@ fn draw_vehicles(
                     tr.set_if_neq(t);
                 }
                 if let Ok(mut hull) = hulls.get_mut(e) {
-                    if hull.health != health {
+                    if hull.health != health || hull.driven != driven {
                         hull.health = health;
+                        hull.driven = driven;
                     }
                 }
             }
             None => {
-                let hull = look::truck::Hull { slot, health };
+                let hull = look::truck::Hull { slot, health, driven };
                 let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
                 look::truck::spawn(&mut commands, &models, e);
                 drawn.vehicles.insert(slot, e);

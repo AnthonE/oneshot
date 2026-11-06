@@ -48,6 +48,10 @@ shield's alarm, recharge, hits and pop; the alien guns, the vent and the
 charge; the engine, a rocket in flight, the wind; a grenade's bounce, the
 spawn, the countdown.
 
+Ours, made by tools/sfx_synth.py from noise, tones and the Kenney metal
+impacts above: the truck's landing (truck_land), its crash, its tyres'
+skid and a fire.
+
 The announcer (crates/client/assets/sound/voice) is ours. The kill ladders'
 lines and the lines about the match were made with ElevenLabs' text to
 speech (eleven_v4, the library voice Kallixis) on a paid plan (Starter,
