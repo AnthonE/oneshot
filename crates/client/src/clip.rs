@@ -268,7 +268,9 @@ fn record(
     let now = link.0.now_ms();
     let secs = rec.secs;
     let began = *rec.began.get_or_insert_with(|| {
-        info!("oneshot: recording {secs:.0} s");
+        // The clock too: what else is logged on it (the drill's stand)
+        // is then a time on the tape, counted back from its end.
+        info!("oneshot: recording {secs:.0} s from {now:.0} ms");
         now
     });
     link.0.session_mut().clip_keep_s(secs + client_net::clip::LEAD_S);

@@ -1,5 +1,5 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
-//! [--autoplay [--scope]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
 //! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
 //! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
@@ -45,6 +45,11 @@ fn run() -> Result<(), String> {
         ),
         None => None,
     };
+    // `--knobs 'Sparks.speed=4,12;…'`: effects retuned for this run, as the fx
+    // stage's (`tools/reel.sh`, REEL_KNOBS).
+    if let Some(k) = arg("--knobs") {
+        oneshot_client::look::fx::table::set_knobs(&k)?;
+    }
     // `--shot x.png [--shot-at s]`: one frame once the screen is there, then out.
     let shot = match arg("--shot") {
         Some(p) if p.to_ascii_lowercase().ends_with(".png") => Some(std::path::PathBuf::from(p)),
@@ -160,6 +165,8 @@ fn run() -> Result<(), String> {
         oneshot_client::crash::hook(server);
         // The autopilot holds the scope (a picture of one; `--autoplay`).
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
+        // Or works its gun at a wall (`tools/reel.sh`).
+        app.world_mut().resource_mut::<oneshot_client::Autoplay>().drill = flag("--drill");
         if let Some(n) = arg("--name") {
             app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
                 oneshot_client::settings::Player::clean(&n);

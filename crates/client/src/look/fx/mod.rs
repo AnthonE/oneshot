@@ -129,9 +129,9 @@ pub const MUZZLE_FLASH: FlashDef = FlashDef {
 };
 /// A blast: a hard orange light over everything near.
 pub const BLAST_FLASH: FlashDef = FlashDef {
-    lumens: 3_000_000.0,
-    range: 18.0,
-    life: 0.45,
+    lumens: 7_000_000.0,
+    range: 22.0,
+    life: 0.28,
     color: [1.0, 0.62, 0.3],
 };
 /// A shield cracking: a cold blue blink.
@@ -635,7 +635,7 @@ pub fn draw(
     // transform is this frame's, its global one last frame's) and the gun
     // as this frame poses it (`draw_view` runs first).
     match cams.single() {
-        Ok((_, placed)) => shots::muzzle(fx, placed, muzzles.0),
+        Ok((_, placed)) => shots::muzzle(fx, placed, muzzles.0, dt),
         Err(_) => fx.own_flash = [None; 2],
     }
     blast::burn(fx, dt);

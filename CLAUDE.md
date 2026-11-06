@@ -129,6 +129,7 @@ ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (
                                                      #   GPU is otherwise POTATO in a browser: look/potato.rs), graphics opens
                                                      #   SETTINGS > GRAPHICS (`?graphics=1` / `--graphics`)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/
+tools/reel.sh <gun>…                                 # a gun in the real game, first person, every frame, on this box's GPU → traces/reel/<gun>/ (REEL_KNOBS, REEL_REFILM, REEL_QUALITY)
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 tools/hd.sh [view… | list]                           # a map's fixed views on this box's GPU in seconds → traces/hd/ (the hd skill)
 tools/ground.sh [sand|grass|gravel|rock|steel|tread] # the ground's photographs from Poly Haven, the bases' metal from ambientCG → crates/client/assets/textures

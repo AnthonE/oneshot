@@ -84,7 +84,7 @@ struct Chip {
 /// by 60. How long it lies glinting before it is gone, seconds.
 pub const CASING_S: f32 = 1.6;
 const BRASS: Vec3 = Vec3::new(0.009, 0.009, 0.025);
-const SHELL: Vec3 = Vec3::new(0.018, 0.018, 0.06);
+const SHELL: Vec3 = Vec3::new(0.014, 0.014, 0.05);
 
 pub struct Chips {
     slots: Vec<Chip>,
@@ -218,9 +218,9 @@ impl Chips {
             self.signed() * core::f32::consts::PI,
         );
         let c = if shell {
-            Color::srgb(0.75, 0.12, 0.1)
+            Color::srgb(0.42, 0.09, 0.07)
         } else {
-            Color::srgb(0.9, 0.7, 0.32)
+            Color::srgb(0.66, 0.52, 0.28)
         }
         .to_linear();
         let life = CASING_S * (0.85 + 0.3 * self.roll());

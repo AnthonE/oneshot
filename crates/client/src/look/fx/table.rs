@@ -83,6 +83,8 @@ pub enum Layer {
     Sparks,
     /// A star flash where it struck.
     Flash,
+    /// The soft hot glow on what a round struck, which holds a moment.
+    Hot,
     /// A puff in the struck matter's colour.
     Dust,
     /// Specks of the struck matter thrown out and falling.
@@ -149,9 +151,10 @@ pub enum Which {
 
 impl Layer {
     /// Every layer, in the order the knobs name them.
-    pub const ALL: [Layer; 27] = [
+    pub const ALL: [Layer; 28] = [
         Layer::Sparks,
         Layer::Flash,
+        Layer::Hot,
         Layer::Dust,
         Layer::Grit,
         Layer::Smoke,
@@ -184,6 +187,7 @@ impl Layer {
         match self {
             Layer::Sparks => "Sparks",
             Layer::Flash => "Flash",
+            Layer::Hot => "Hot",
             Layer::Dust => "Dust",
             Layer::Grit => "Grit",
             Layer::Smoke => "Smoke",
@@ -228,6 +232,7 @@ impl Layer {
         match self {
             Layer::Sparks
             | Layer::Flash
+            | Layer::Hot
             | Layer::Fireball
             | Layer::Arcs
             | Layer::Zap
@@ -313,15 +318,18 @@ pub fn effect(weapon: Weapon, matter: Matter) -> EffectDef {
         (Weapon::Blade, Metal | Hull) => of(&[(Sparks, 18), (Flash, 1), (Dust, 1)], 2),
         (Weapon::Blade, Concrete) => of(&[(Sparks, 6), (Flash, 1), (Dust, 3), (Grit, 4)], 6),
         (Weapon::Blade, Dirt) => of(&[(Dust, 4), (Grit, 6)], 3),
-        (Weapon::Bullet, Metal | Hull) => of(&[(Sparks, 12), (Flash, 1), (Dust, 1)], 2),
-        (Weapon::Bullet, Concrete) => of(&[(Sparks, 4), (Flash, 1), (Dust, 2), (Grit, 6)], 4),
-        (Weapon::Bullet, Dirt) => of(&[(Dust, 1), (Grit, 8), (DustCloud, 2)], 0),
-        (Weapon::Pellet, Metal | Hull) => of(&[(Sparks, 4), (Flash, 1)], 1),
-        (Weapon::Pellet, Concrete) => of(&[(Sparks, 1), (Dust, 1), (Grit, 2)], 2),
-        (Weapon::Pellet, Dirt) => of(&[(Dust, 1), (Grit, 3)], 0),
-        (Weapon::Sniper, Metal | Hull) => of(&[(Sparks, 24), (Flash, 2), (Dust, 2)], 4),
-        (Weapon::Sniper, Concrete) => of(&[(Sparks, 9), (Flash, 1), (Dust, 4), (Grit, 12), (DustCloud, 2)], 8),
-        (Weapon::Sniper, Dirt) => of(&[(Dust, 3), (Grit, 14), (DustCloud, 3)], 2),
+        // Metal rings: a hot dot in a glow and a burst of hair-thin sparks.
+        // Concrete reads by its dust, darker than the wall, with a few
+        // sparks at most. Dirt is dust and grit: no light at all.
+        (Weapon::Bullet, Metal | Hull) => of(&[(Hot, 1), (Sparks, 24), (Flash, 1), (DustCloud, 1)], 2),
+        (Weapon::Bullet, Concrete) => of(&[(Hot, 1), (Sparks, 6), (Grit, 8), (DustCloud, 2)], 4),
+        (Weapon::Bullet, Dirt) => of(&[(Grit, 10), (DustCloud, 3)], 0),
+        (Weapon::Pellet, Metal | Hull) => of(&[(Hot, 1), (Sparks, 7)], 1),
+        (Weapon::Pellet, Concrete) => of(&[(Sparks, 1), (Grit, 3), (DustCloud, 1)], 2),
+        (Weapon::Pellet, Dirt) => of(&[(Grit, 3), (DustCloud, 1)], 0),
+        (Weapon::Sniper, Metal | Hull) => of(&[(Hot, 2), (Sparks, 44), (Flash, 2), (DustCloud, 2)], 4),
+        (Weapon::Sniper, Concrete) => of(&[(Hot, 2), (Sparks, 12), (Grit, 16), (DustCloud, 4)], 8),
+        (Weapon::Sniper, Dirt) => of(&[(Dust, 3), (Grit, 18), (DustCloud, 5)], 2),
         // Energy: a crack of light, a few sparks, a breath of dust, and
         // the burst in the weapon's own tone (`Fx::impact`).
         (Weapon::Carbine, Metal | Hull | Concrete) => of(&[(Zap, 1), (Sparks, 5), (Dust, 1)], 1),
@@ -368,9 +376,9 @@ pub fn scaled(count: u8, lod: f32) -> usize {
 /// A dust cloud's colour per matter, sRGB.
 pub fn dust_tint(m: Matter) -> Color {
     match m {
-        Matter::Concrete => Color::srgb(0.66, 0.64, 0.60),
-        Matter::Metal | Matter::Hull => Color::srgb(0.52, 0.49, 0.44),
-        Matter::Dirt => Color::srgb(0.66, 0.52, 0.38),
+        Matter::Concrete => Color::srgb(0.44, 0.42, 0.39),
+        Matter::Metal | Matter::Hull => Color::srgb(0.34, 0.32, 0.29),
+        Matter::Dirt => Color::srgb(0.56, 0.44, 0.32),
         Matter::Shield => Color::srgb(1.0, 0.85, 0.4),
         Matter::Flesh => Color::srgb(0.40, 0.05, 0.05),
     }
@@ -402,21 +410,35 @@ pub fn built(layer: Layer) -> Recipe {
         bounce: false,
     };
     match layer {
+        // Hair-thin and quick: a burst that peaks in two frames, each spark
+        // cooling to red as it dies. A blast's are this, longer (`blast.rs`).
         Layer::Sparks => Recipe {
             orient: Orient::Stretch,
             cell: STREAK,
-            speed: (3.0, 9.0),
-            spray: 0.65,
-            up: 0.8,
+            speed: (3.0, 11.0),
+            spray: 0.5,
+            up: 0.4,
             gravity: 9.81,
-            drag: 2.4,
-            life: (0.16, 0.42),
-            size: (0.006, 0.008),
+            drag: 6.0,
+            life: (0.07, 0.26),
+            size: (0.005, 0.007),
             grow: 0.5,
-            c0: [22.0, 13.0, 5.0, 1.0],
-            c1: [2.2, 0.35, 0.05, 0.0],
-            stretch: 0.016,
+            c0: [24.0, 14.0, 5.0, 1.0],
+            c1: [2.6, 0.35, 0.05, 0.0],
+            stretch: 0.022,
             bounce: true,
+            ..base
+        },
+        // A soft disc on the face a round struck, as wide as a hand, that
+        // burns down over a few frames around the hole.
+        Layer::Hot => Recipe {
+            cell: GLOW,
+            spray: 1.0,
+            life: (0.11, 0.17),
+            size: (0.13, 0.18),
+            grow: 0.7,
+            c0: [6.0, 3.6, 1.5, 0.9],
+            c1: [1.6, 0.35, 0.05, 0.0],
             ..base
         },
         Layer::Flash => Recipe {
@@ -592,11 +614,11 @@ pub fn built(layer: Layer) -> Recipe {
         Layer::Shock => Recipe {
             orient: Orient::Flat,
             cell: RING,
-            life: (0.28, 0.32),
+            life: (0.14, 0.18),
             size: (0.4, 0.5),
-            grow: 13.0,
-            c0: [3.0, 3.0, 3.0, 0.6],
-            c1: [0.6, 0.6, 0.6, 0.0],
+            grow: 11.0,
+            c0: [2.2, 2.2, 2.2, 0.35],
+            c1: [0.4, 0.4, 0.4, 0.0],
             tinted: true,
             ..base
         },
@@ -617,14 +639,14 @@ pub fn built(layer: Layer) -> Recipe {
         // The baked sheets: each plays its strip once over its life. The
         // sheet does the rolling and the thinning, so a puff hardly grows.
         Layer::Cloud => Recipe {
-            speed: (0.3, 1.2),
+            speed: (0.5, 1.8),
             spray: 0.6,
             up: 0.3,
-            gravity: -0.5,
-            drag: 1.6,
+            gravity: -0.4,
+            drag: 1.4,
             life: (1.8, 3.0),
             size: (0.45, 0.7),
-            grow: 1.6,
+            grow: 2.2,
             c0: [0.55, 0.55, 0.55, 1.0],
             c1: [0.65, 0.65, 0.65, 0.0],
             tinted: true,
@@ -632,14 +654,14 @@ pub fn built(layer: Layer) -> Recipe {
             ..strip(base, sheets::SMOKE)
         },
         Layer::DustCloud => Recipe {
-            speed: (0.3, 1.0),
-            spray: 0.4,
+            speed: (0.5, 1.6),
+            spray: 0.55,
             up: 0.15,
-            gravity: 0.2,
-            drag: 2.4,
-            life: (1.0, 1.8),
-            size: (0.12, 0.18),
-            grow: 1.8,
+            gravity: 0.1,
+            drag: 3.0,
+            life: (0.7, 1.3),
+            size: (0.16, 0.24),
+            grow: 1.9,
             c0: [0.95, 0.95, 0.95, 0.85],
             c1: [1.0, 1.0, 1.0, 0.0],
             tinted: true,
@@ -681,9 +703,9 @@ pub fn built(layer: Layer) -> Recipe {
         },
         Layer::Bloom => Recipe {
             tone: sheets::TONE_PLASMA,
-            glow: 0.7,
+            glow: 2.0,
             life: (0.06, 0.09),
-            size: (0.09, 0.13),
+            size: (0.16, 0.22),
             grow: 1.5,
             c0: [1.0, 1.0, 1.0, 1.0],
             c1: [1.0, 1.0, 1.0, 1.0],
@@ -706,12 +728,12 @@ pub fn built(layer: Layer) -> Recipe {
         // reads as smoke, not cloud; the fire's glow is kept under what
         // clips without bloom, so its body stays orange.
         Layer::Boom => Recipe {
-            glow: 1.4,
+            glow: 3.0,
             speed: (0.0, 0.5),
             spray: 0.4,
             gravity: -0.6,
             drag: 1.5,
-            life: (1.3, 1.7),
+            life: (1.05, 1.35),
             size: (1.8, 2.4),
             grow: 1.5,
             c0: [0.1, 0.09, 0.085, 1.0],
@@ -721,7 +743,7 @@ pub fn built(layer: Layer) -> Recipe {
         },
         // Flung off the main one sideways, faster, not up into it.
         Layer::Fireballs => Recipe {
-            glow: 1.2,
+            glow: 2.6,
             speed: (3.5, 7.0),
             spray: 0.15,
             up: 0.3,
@@ -890,8 +912,7 @@ pub struct GunLook {
     pub width: f32,
     /// A smoke wake along the line that hangs this long (s); 0: none.
     pub wake_s: f32,
-    /// The muzzle: flash stars, their colour and size, the light (lumens).
-    pub stars: u8,
+    /// The muzzle: its core's colour, the flash's size, the light (lumens).
     pub flash_c: [f32; 4],
     pub flash_scale: f32,
     pub light_lm: f32,
@@ -907,8 +928,7 @@ const RIFLE: GunLook = GunLook {
     len_m: 5.0,
     width: 0.014,
     wake_s: 0.0,
-    stars: 2,
-    flash_c: [7.0, 5.5, 3.0, 1.0],
+    flash_c: [7.0, 4.6, 2.0, 1.0],
     flash_scale: 1.0,
     light_lm: 120_000.0,
 };
@@ -935,7 +955,6 @@ pub fn gun(arm: u8) -> GunLook {
         MAGNUM => GunLook {
             width: 0.016,
             flash_scale: 1.2,
-            stars: 3,
             ..RIFLE
         },
         SNIPER => GunLook {
@@ -945,7 +964,6 @@ pub fn gun(arm: u8) -> GunLook {
             len_m: 14.0,
             width: 0.022,
             wake_s: 1.6,
-            stars: 3,
             flash_scale: 2.0,
             light_lm: 260_000.0,
             ..RIFLE
@@ -956,7 +974,6 @@ pub fn gun(arm: u8) -> GunLook {
             mps: 220.0,
             len_m: 2.5,
             width: 0.010,
-            stars: 3,
             flash_scale: 1.9,
             light_lm: 220_000.0,
             ..RIFLE
@@ -981,7 +998,6 @@ pub fn gun(arm: u8) -> GunLook {
             mps: 3000.0,
             len_m: 60.0,
             width: 0.03,
-            stars: 3,
             flash_scale: 1.5,
             light_lm: 200_000.0,
             ..RIFLE
@@ -1007,14 +1023,12 @@ pub fn gun(arm: u8) -> GunLook {
             flash: Flash::Energy(sheets::TONE_GREEN),
             casing: Casing::None,
             flash_c: [3.0, 12.0, 4.0, 1.0],
-            stars: 3,
             flash_scale: 2.2,
             light_lm: 300_000.0,
             ..RIFLE
         },
         LAUNCHER => GunLook {
             casing: Casing::None,
-            stars: 3,
             flash_scale: 1.8,
             light_lm: 200_000.0,
             ..RIFLE
@@ -1030,44 +1044,29 @@ pub fn gun(arm: u8) -> GunLook {
 /// The SHARD GUN's crystals: a hot pink, linear HDR.
 pub const PINK: [f32; 4] = [9.0, 2.2, 6.0, 1.0];
 
-/// A muzzle's flash: `n` stars in colour `c`, `scale` times an impact's.
-pub fn stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
-    stars_for(pool, at, n, scale, c, STAR_LIFE_S);
+/// A muzzle's hot core: a round white-hot glow at the bore for a frame or
+/// two, `scale` times a rifle's, in the flash's colour `c`. It is what
+/// bloom takes hold of, and what says "a shot" from across the map; the
+/// gas about it is the baked flash (`Layer::MuzzleFlash`).
+pub fn core(pool: &mut Pool, at: Vec3, scale: f32, c: [f32; 4]) {
+    let life = CORE_LIFE_S.0 + (CORE_LIFE_S.1 - CORE_LIFE_S.0) * pool.roll();
+    let size = CORE_M * scale;
+    pool.spawn(Particle {
+        left: life,
+        life,
+        pos: at.into(),
+        size0: size,
+        size1: size * 1.8,
+        c0: c,
+        c1: [c[0] * 0.15, c[1] * 0.08, c[2] * 0.03, 0.0],
+        cell: GLOW,
+        ..Particle::default()
+    });
 }
 
-/// How long a muzzle's star burns, seconds: shortest and longest.
-const STAR_LIFE_S: (f32, f32) = (0.05, 0.08);
-/// Our own gun's: a frame or two. A star is a mark in the world, and the
-/// gun in view turns with the camera, so a longer one is left behind as
-/// the view swings or kicks.
-pub const OWN_STAR_LIFE_S: (f32, f32) = (0.025, 0.04);
-
-/// Our own gun's flash, at the muzzle in view: [`stars`] that burn for
-/// [`OWN_STAR_LIFE_S`].
-pub fn own_stars(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4]) {
-    stars_for(pool, at, n, scale, c, OWN_STAR_LIFE_S);
-}
-
-fn stars_for(pool: &mut Pool, at: Vec3, n: usize, scale: f32, c: [f32; 4], (short, long): (f32, f32)) {
-    for _ in 0..n {
-        let life = short + (long - short) * pool.roll();
-        let size = (0.06 + 0.04 * pool.roll()) * scale;
-        let cell = STAR + ((pool.roll() * 3.0) as u8).min(2);
-        let roll = pool.roll() * core::f32::consts::TAU;
-        pool.spawn(Particle {
-            left: life,
-            life,
-            pos: at.into(),
-            size0: size,
-            size1: size * 1.4,
-            c0: c,
-            c1: [c[0] * 0.2, c[1] * 0.15, c[2] * 0.1, 0.0],
-            roll,
-            cell,
-            ..Particle::default()
-        });
-    }
-}
+/// How long a muzzle's core burns, seconds, and its half-width, metres.
+const CORE_LIFE_S: (f32, f32) = (0.035, 0.05);
+const CORE_M: f32 = 0.07;
 
 /// A crystal shattering (on a wall, a hull, or in the burst): pink shards
 /// flung out, a pink blink, `n` of them.
@@ -1107,16 +1106,24 @@ pub fn shatter(glow: &mut Pool, at: Vec3, n: usize, speed: f32) {
     });
 }
 
+/// Seconds of a tracer's flight its streak is drawn over.
+const TRACER_STRETCH_S: f32 = 0.02;
+
 /// A tracer from `start` along `dir`, `dist` metres, in `look`'s colours.
+/// A streak trails its whole length behind its head (`fx::pool`), so the
+/// head is born that far along: born at `start`, the first frame's tail ran
+/// back through the gun, the shooter and whatever stood behind them.
 pub fn tracer(pool: &mut Pool, look: &GunLook, start: Vec3, dir: Vec3, dist: f32) {
     if dist <= 1.0 {
         return;
     }
-    let life = (dist / look.mps).clamp(0.02, 1.0);
+    let len_max = look.len_m.min(dist);
+    let len = (look.mps * TRACER_STRETCH_S).min(len_max);
+    let life = ((dist - len) / look.mps).clamp(0.02, 1.0);
     pool.spawn(Particle {
         left: life,
         life,
-        pos: start.into(),
+        pos: (start + dir * len).into(),
         vel: (dir * look.mps).into(),
         size0: look.width,
         size1: look.width * 0.7,
@@ -1124,8 +1131,8 @@ pub fn tracer(pool: &mut Pool, look: &GunLook, start: Vec3, dir: Vec3, dist: f32
         c1: look.c1,
         cell: STREAK,
         orient: Orient::Stretch,
-        stretch: 0.02,
-        len_max: look.len_m,
+        stretch: TRACER_STRETCH_S,
+        len_max,
         ..Particle::default()
     });
 }

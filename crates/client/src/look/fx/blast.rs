@@ -42,7 +42,12 @@ pub struct Trailer {
 }
 
 /// A trailer puffs every this many metres.
-const TRAIL_EVERY_M: f32 = 0.15;
+const TRAIL_EVERY_M: f32 = 0.09;
+
+/// A blast's sparks, against a round's quick ones (`table.rs`): how fast
+/// (m/s) and how long (s).
+const BLAST_SPARK_MPS: (f32, f32) = (5.0, 16.0);
+const BLAST_SPARK_S: (f32, f32) = (0.25, 0.7);
 
 /// The soot a charge's smoke is tinted, sRGB.
 const SOOT: Color = Color::srgb(0.2, 0.19, 0.18);
@@ -287,8 +292,16 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
     // Smoke that outlasts the fire, rising off it, soot and the ground's
     // dust in it.
     let smoke = SOOT.mix(&tint, 0.35);
-    fx.emit_tint(Layer::Cloud, n(5), at + Vec3::Y * 0.7 * big, Vec3::Y, smoke, 1.5 * big);
-    fx.emit_tint(Layer::Sparks, n(36), at, Vec3::Y, Color::WHITE, 1.7 * big);
+    fx.emit_tint(Layer::Cloud, n(8), at + Vec3::Y * 0.7 * big, Vec3::Y, smoke, 2.1 * big);
+    let sparks = ::fx::recipe::Recipe {
+        speed: BLAST_SPARK_MPS,
+        spray: 0.3,
+        drag: 2.2,
+        life: BLAST_SPARK_S,
+        ..super::table::recipe(Layer::Sparks)
+    };
+    let pool = fx.pool(Layer::Sparks.pool());
+    super::table::emit_recipe(pool, &sparks, n(36), at, Vec3::Y, Color::WHITE, 1.7 * big);
     fx.emit_tint(Layer::Embers, n(22), at, Vec3::Y, EMBER, big);
     // On or near the ground: a ring, dust rolled out along it, debris off
     // it trailing smoke, a scorch.
@@ -344,7 +357,7 @@ fn launch(fx: &mut Fx, at: Vec3, vel: Vec3, floor: f32) {
     fx.trailers[i] = Trailer {
         at,
         vel,
-        left: fx.range(0.7, 1.3),
+        left: fx.range(0.35, 0.75),
         floor,
         gone: 0.0,
     };
@@ -375,8 +388,8 @@ pub fn trail(fx: &mut Fx, dt: f32) {
                 1,
                 t.at - step * (t.gone / TRAIL_EVERY_M.max(1e-3)).min(1.0),
                 -t.vel,
-                Color::srgb(0.55, 0.55, 0.55),
-                1.6 + 1.0 * fade,
+                Color::srgb(0.42, 0.42, 0.42),
+                0.6 + 0.6 * fade,
             );
         }
         fx.glow.spawn(super::pool::Particle {

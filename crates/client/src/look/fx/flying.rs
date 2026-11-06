@@ -269,8 +269,19 @@ fn dot(at: Vec3, size: f32, c: [f32; 4]) -> Particle {
     }
 }
 
-/// A streak along `v` that lives one frame.
+/// How much of a streak along `v` at `at` the eye sees: all of it from the
+/// side, none head on. The pool draws a streak square to the view whatever
+/// way it flies, so one going straight away from us would otherwise be its
+/// whole length sideways, pointing nowhere it has been.
+fn side_on(eye: Vec3, at: Vec3, v: Vec3) -> f32 {
+    (at - eye).normalize_or(Vec3::Z).cross(v.normalize_or(Vec3::Z)).length()
+}
+
+/// A streak along `v` that lives one frame, `len` long, or as short as the
+/// pool draws one (head on, `len` is nothing, and the pool's clamp needs its
+/// longest to be no shorter than its shortest).
 fn streak(at: Vec3, v: Vec3, cell: u8, width: f32, len: f32, c: [f32; 4]) -> Particle {
+    let len = len.max(::fx::pool::STREAK_MIN_M);
     Particle {
         left: 0.001,
         life: 0.001,
@@ -296,13 +307,15 @@ pub fn light(fx: &mut Fx, p: &ProjState) {
         NEEDLE => crystal(fx, p),
         BOLT => {
             fx.glow.spawn(dot(at, 0.3, ION_HALO));
-            fx.glow.spawn(streak(at, v, STREAK, 0.05, 0.6, ION));
+            let len = 0.6 * side_on(fx.eye, at, v);
+            fx.glow.spawn(streak(at, v, STREAK, 0.05, len, ION));
             fx.glow.spawn(dot(at, 0.08, [8.0, 10.0, 14.0, 1.0]));
             trail(fx, at, v, ION);
         }
         CHARGE => {
             fx.glow.spawn(dot(at, 0.7, ION_HALO));
-            fx.glow.spawn(streak(at, v, STREAK, 0.12, 1.0, ION));
+            let len = side_on(fx.eye, at, v);
+            fx.glow.spawn(streak(at, v, STREAK, 0.12, len, ION));
             fx.glow.spawn(dot(at, 0.18, [8.0, 10.0, 14.0, 1.0]));
             trail(fx, at, v, ION);
             fx.flash(
@@ -357,7 +370,8 @@ fn trail(fx: &mut Fx, at: Vec3, v: Vec3, c: [f32; 4]) {
 pub fn crystal(fx: &mut Fx, p: &ProjState) {
     let at = Vec3::new(p.pos.x, p.pos.y, p.pos.z);
     let v = Vec3::new(p.vel.x, p.vel.y, p.vel.z);
-    fx.glow.spawn(streak(at, v, SHARD, 0.045, 0.36, PINK));
+    let len = 0.36 * side_on(fx.eye, at, v);
+    fx.glow.spawn(streak(at, v, SHARD, 0.045, len, PINK));
     fx.glow.spawn(dot(at, 0.2, [3.0, 0.6, 2.0, 0.8]));
     trail(fx, at, v, [5.0, 1.2, 3.4, 0.9]);
 }
@@ -483,4 +497,25 @@ fn place(p: &ProjState) -> Transform {
         Quat::IDENTITY
     };
     Transform::from_translation(at).with_rotation(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::fx::pool::{Cam, Pool};
+
+    /// A bolt going straight away from the eye is a streak with no length:
+    /// drawn all the same, not a panic in the pool's clamp.
+    #[test]
+    fn a_bolt_flying_straight_away_is_drawn() {
+        let (at, v) = (Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, -40.0));
+        let len = 0.6 * side_on(Vec3::ZERO, at, v);
+        assert!(len < 1e-3);
+        let cam = Cam {
+            pos: [0.0; 3],
+            right: [1.0, 0.0, 0.0],
+            up: [0.0, 1.0, 0.0],
+        };
+        assert!(Pool::quad(&streak(at, v, STREAK, 0.05, len, ION), &cam, [0.0; 3]).is_some());
+    }
 }
