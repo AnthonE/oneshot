@@ -1,10 +1,13 @@
-//! A truck's turret (`sim::vehicle::turret`): a minigun on a post on its
-//! bed, where the sim fires it from (`TURRET_X`, `TURRET_Y`, its barrels'
-//! ends `TURRET_REACH` out along the aim). The gun is Meshy's, cut in two
-//! by `tools/models/turret.py`: the cradle (`models/turret.glb`), which
-//! pitches, and the barrels (`models/turret-barrels.glb`), which spin; the
-//! post and its yoke are plain shapes. A child of the truck's body, so it
-//! leans and turns over with it. Its head turns and its barrels rise to
+//! A truck's turret (`sim::vehicle::turret`): a minigun on a ring its
+//! gunner stands in, on the bed, where the sim fires it from
+//! (`Vehicle::pivot`: `TURRET_RING` out from the gunner the way it aims,
+//! `TURRET_Y` up; its barrels' ends `TURRET_REACH` out along the aim), so
+//! its grips are in the gunner's hands whichever way it turns. The gun is
+//! Meshy's, cut in two by `tools/models/turret.py`: the cradle
+//! (`models/turret.glb`), which pitches, and the barrels
+//! (`models/turret-barrels.glb`), which spin; the ring, its struts, the
+//! carriage on it and the yoke are plain shapes. A child of the truck's
+//! body, so it leans and turns over with it. It turns and its barrels rise to
 //! where its gunner aims (ours as we look, anyone else's as they are drawn;
 //! with nobody on it, level where it was left), and its barrels spin up as
 //! the trigger is held and wind down after.
@@ -19,7 +22,7 @@
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use sim::arms::{Arm, HEAT_FULL, MINIGUN as GUN};
-use sim::consts::{ticks, TURRET_X, TURRET_Y};
+use sim::consts::{ticks, TURRET_GUNNER_X, TURRET_REACH, TURRET_RING, TURRET_Y};
 use sim::events::{Cause, Kind};
 use sim::vehicle::{MINIGUN, PASSENGER};
 
@@ -28,10 +31,16 @@ use super::fx::Fx;
 use super::guns::Models;
 use crate::LinkRes;
 
-/// The bed's floor under the post, metres off the ground (the sim stands
-/// its gunner there: `Vehicle::mount`).
+/// The bed's floor, metres off the ground (the sim stands its gunner
+/// there: `Vehicle::mount`).
 const BED_Y: f32 = 0.9;
-const POST_R: f32 = 0.07;
+/// The ring about the gunner: its radius, its height (the gunner's hips),
+/// its tube; on `STRUTS` struts down to the bed.
+const RING_R: f32 = 0.52;
+const RING_Y: f32 = 1.6;
+const RING_TUBE: f32 = 0.035;
+const STRUTS: usize = 4;
+const STRUT_R: f32 = 0.025;
 /// The gun's own numbers, what `turret.py` prints (`traces/guns/turret.json`):
 /// where its barrels' rear sits ahead of the pivot, and how far under and
 /// either side of its axis the cradle reaches, metres.
@@ -39,7 +48,7 @@ const BARRELS_AT: f32 = 0.2268;
 const CRADLE_UNDER: f32 = 0.28;
 const CRADLE_HALF_W: f32 = 0.22;
 /// The yoke: arms either side of the cradle up to its trunnions, on a bar
-/// under it, on the post.
+/// under it, on a carriage that rides the ring.
 const YOKE_ARM: f32 = 0.05;
 const YOKE_GAP: f32 = 0.04;
 /// Turns a second at full spin, and how fast the spin comes and goes
@@ -69,11 +78,12 @@ const VENT_PUFFS: usize = 3;
 /// A breath of heat shimmer rises this fast, m/s.
 const SMOKE_RISE: f32 = 1.2;
 
-/// The meshes and paint every turret's post shares.
+/// The meshes and paint every turret's mount shares.
 #[derive(Resource)]
 pub struct Kit {
-    post: Handle<Mesh>,
-    plate: Handle<Mesh>,
+    ring: Handle<Mesh>,
+    strut: Handle<Mesh>,
+    carriage: Handle<Mesh>,
     bar: Handle<Mesh>,
     arm: Handle<Mesh>,
     boss: Handle<Mesh>,
@@ -111,11 +121,12 @@ pub fn plugin(app: &mut App) {
 }
 
 fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
-    let post_h = TURRET_Y - CRADLE_UNDER - YOKE_GAP - BED_Y;
     let reach = CRADLE_UNDER + YOKE_GAP;
+    let (from, to) = carriage();
     commands.insert_resource(Kit {
-        post: meshes.add(Cylinder::new(POST_R, post_h)),
-        plate: meshes.add(Cylinder::new(0.24, 0.04)),
+        ring: meshes.add(Torus::new(RING_R - RING_TUBE, RING_R + RING_TUBE)),
+        strut: meshes.add(Cylinder::new(STRUT_R, RING_Y - BED_Y)),
+        carriage: meshes.add(Cuboid::new(to.x - from.x, to.y - from.y, 0.14)),
         bar: meshes.add(Cuboid::new(0.16, YOKE_ARM, 2.0 * (CRADLE_HALF_W + YOKE_GAP) + YOKE_ARM)),
         arm: meshes.add(Cuboid::new(0.12, reach + YOKE_ARM, YOKE_ARM)),
         boss: meshes.add(Cylinder::new(0.055, YOKE_ARM + 0.02)),
@@ -134,6 +145,16 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
     });
 }
 
+/// The carriage's corners in the turret's turning frame: from the ring's
+/// rim to under the yoke's bar.
+fn carriage() -> (Vec3, Vec3) {
+    let bar = TURRET_Y - CRADLE_UNDER - YOKE_GAP - YOKE_ARM * 0.5;
+    (
+        Vec3::new(RING_R - 0.06, RING_Y - 0.04, 0.0),
+        Vec3::new(TURRET_RING + 0.08, bar, 0.0),
+    )
+}
+
 /// A turret of `kind` on `truck` (a truck's body: `truck::spawn`), vehicle
 /// `slot`'s. Only the minigun so far; nothing for no turret.
 pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, truck: Entity, slot: u8, kind: u8) {
@@ -146,31 +167,46 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, truck: Entity,
         };
     let root = commands
         .spawn((
-            Transform::from_xyz(TURRET_X, 0.0, 0.0),
+            Transform::from_xyz(TURRET_GUNNER_X, 0.0, 0.0),
             Visibility::default(),
             ChildOf(truck),
         ))
         .id();
-    let post_h = TURRET_Y - CRADLE_UNDER - YOKE_GAP - BED_Y;
+    // The ring, standing on its struts about the gunner.
     part(
         commands,
-        &kit.plate,
+        &kit.ring,
         &kit.steel,
-        Transform::from_xyz(0.0, BED_Y + 0.02, 0.0),
+        Transform::from_xyz(0.0, RING_Y, 0.0),
         root,
     );
-    part(
-        commands,
-        &kit.post,
-        &kit.steel,
-        Transform::from_xyz(0.0, BED_Y + post_h * 0.5, 0.0),
-        root,
-    );
+    for k in 0..STRUTS {
+        let a = (k as f32 + 0.5) * core::f32::consts::TAU / STRUTS as f32;
+        part(
+            commands,
+            &kit.strut,
+            &kit.steel,
+            Transform::from_xyz(a.cos() * RING_R, (BED_Y + RING_Y) * 0.5, a.sin() * RING_R),
+            root,
+        );
+    }
+    // What turns: the carriage riding the ring, out to the yoke.
     let head = commands
+        .spawn((Transform::default(), Visibility::default(), ChildOf(root)))
+        .id();
+    let (from, to) = carriage();
+    part(
+        commands,
+        &kit.carriage,
+        &kit.dark,
+        Transform::from_translation((from + to) * 0.5),
+        head,
+    );
+    let trunnion = commands
         .spawn((
-            Transform::from_xyz(0.0, TURRET_Y, 0.0),
+            Transform::from_xyz(TURRET_RING, TURRET_Y, 0.0),
             Visibility::default(),
-            ChildOf(root),
+            ChildOf(head),
         ))
         .id();
     // The yoke: a bar under the cradle and an arm up either side to the
@@ -181,7 +217,7 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, truck: Entity,
         &kit.bar,
         &kit.dark,
         Transform::from_xyz(0.0, below, 0.0),
-        head,
+        trunnion,
     );
     let across = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
     for side in [-1.0, 1.0] {
@@ -191,14 +227,14 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, truck: Entity,
             &kit.arm,
             &kit.dark,
             Transform::from_xyz(0.0, below * 0.5, z),
-            head,
+            trunnion,
         );
         part(
             commands,
             &kit.boss,
             &kit.steel,
             Transform::from_xyz(0.0, 0.0, z).with_rotation(across),
-            head,
+            trunnion,
         );
     }
     let cradle = commands
@@ -206,7 +242,7 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, truck: Entity,
             SceneRoot(models.turret.clone()),
             Transform::default(),
             Visibility::default(),
-            ChildOf(head),
+            ChildOf(trunnion),
         ))
         .id();
     let barrels = commands
@@ -312,13 +348,19 @@ pub fn aim(
         } else {
             match seen.vehicles.iter().find(|v| v.slot == slot) {
                 Some(v) => (v.yaw, v.seats[PASSENGER].checked_sub(1)),
-                // The pose's truck: its own heading, nobody on its gun.
-                None if posed.is_some() => (0.0, None),
+                // The pose's truck: its own heading, the posed fighter on
+                // its gun if it was put in the bed (`seat=1`).
+                None if posed.is_some() => (
+                    posed.as_ref().and_then(|p| p.2.truck).map_or(0.0, |t| t.1),
+                    posed.as_ref().filter(|p| p.2.seat == Some(PASSENGER)).map(|p| p.0.slot),
+                ),
                 None => continue,
             }
         };
         let aim = if ours {
             Some((look.yaw, look.pitch))
+        } else if let Some(p) = posed.as_ref().filter(|p| gunner == Some(p.0.slot)) {
+            Some((p.0.yaw, p.0.pitch))
         } else {
             gunner.and_then(|g| {
                 seen.others
@@ -398,7 +440,7 @@ pub fn aim(
 
         // Smoke: off the muzzle while it is hot and quiet, thick while it
         // vents; the vent's first breath out of the receiver's sides.
-        let muzzle = from + axis * (sim::consts::TURRET_REACH - BARRELS_AT);
+        let muzzle = from + axis * (TURRET_REACH - BARRELS_AT);
         if t.vent && !was_venting {
             let side = axis.cross(Vec3::Y).normalize_or(Vec3::Z);
             for s in [-1.0, 1.0] {
@@ -424,7 +466,7 @@ pub fn aim(
             };
             t.puff = every * fx.range(0.7, 1.3);
             let along = fx.range(0.25, 1.0);
-            let at = from + axis * (sim::consts::TURRET_REACH - BARRELS_AT) * along;
+            let at = from + axis * (TURRET_REACH - BARRELS_AT) * along;
             let size = if t.vent { 1.6 } else { 0.8 + 0.6 * hot };
             fx.emit_tint(Layer::GunSmoke, 1, at, Vec3::Y * SMOKE_RISE, Color::WHITE, size);
         } else if !smokes {

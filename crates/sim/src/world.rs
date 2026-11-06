@@ -1812,27 +1812,18 @@ impl World {
         // A flag carrier rides, never drives (Halo 3's): only a free
         // passenger seat will do.
         let carrier = self.fighters[s].flag;
-        let mut best: Option<usize> = None;
+        let mut best: Option<(usize, usize)> = None;
         let mut near = ENTER_R;
         for (i, v) in self.vehicles.iter().enumerate() {
             let d = (v.pos - at).flat().len();
-            let room = if carrier {
-                v.seats[crate::vehicle::PASSENGER] == 0
-            } else {
-                v.seats.contains(&0)
-            };
-            if v.active && room && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0 {
+            let seat = crate::vehicle::boards(v.turret, v.seats, (at - v.pos).dot(v.axes().0), carrier);
+            if let (true, Some(seat)) = (v.active && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0, seat) {
                 near = d;
-                best = Some(i);
+                best = Some((i, seat));
             }
         }
-        let Some(i) = best else {
+        let Some((i, seat)) = best else {
             return false;
-        };
-        let seat = if self.vehicles[i].seats[DRIVER] == 0 && !carrier {
-            DRIVER
-        } else {
-            crate::vehicle::PASSENGER
         };
         self.vehicles[i].seats[seat] = s as u8 + 1;
         let f = &mut self.fighters[s];

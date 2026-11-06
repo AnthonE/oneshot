@@ -35,6 +35,26 @@ pub const MINIGUN: u8 = 1;
 /// Turret kinds, nothing among them.
 pub const TURRETS: u8 = 2;
 
+/// The seat USE takes on a hull carrying `turret` with `seats` taken (a
+/// slot + 1, or 0), from `ahead` metres ahead of its middle (along its
+/// heading; negative, behind): a turret's gun from beside its bed, else the
+/// wheel first. A flag carrier only ever rides. None: no room for it.
+pub fn boards(turret: u8, seats: [u8; 2], ahead: f32, carrier: bool) -> Option<usize> {
+    let free = |k: usize| seats[k] == 0;
+    let gun = turret != NO_TURRET && ahead < TURRET_BOARD_X;
+    if free(PASSENGER) && (carrier || gun) {
+        Some(PASSENGER)
+    } else if carrier {
+        None
+    } else if free(DRIVER) {
+        Some(DRIVER)
+    } else if free(PASSENGER) {
+        Some(PASSENGER)
+    } else {
+        None
+    }
+}
+
 /// A turret's gun, and the cause its shots and kills carry.
 pub fn turret(kind: u8) -> Option<(&'static Arm, u16)> {
     match kind {
@@ -103,15 +123,19 @@ impl Vehicle {
         }
     }
 
-    /// Where its turret's barrels pivot, in the world.
-    pub fn pivot(&self) -> V3 {
+    /// Where its turret's barrels pivot, in the world, aimed along unit
+    /// `dir`: out on its ring from the gunner, the way it aims (straight
+    /// up or down, ahead of the hull).
+    pub fn pivot(&self, dir: V3) -> V3 {
         let (f, _) = self.axes();
-        self.pos + f * TURRET_X + V3::new(0.0, TURRET_Y, 0.0)
+        let flat = dir.flat();
+        let out = if flat.len() > 1e-3 { flat.norm() } else { f };
+        self.pos + f * TURRET_GUNNER_X + out * TURRET_RING + V3::new(0.0, TURRET_Y, 0.0)
     }
 
     /// Where a turret aimed along unit `dir` fires from.
     pub fn muzzle(&self, dir: V3) -> V3 {
-        self.pivot() + dir * TURRET_REACH
+        self.pivot(dir) + dir * TURRET_REACH
     }
 
     /// Forward and right, flat.

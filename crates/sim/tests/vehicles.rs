@@ -437,6 +437,27 @@ fn bots_drive_on_dry_fork() {
     assert!(kills >= 20, "and still fought: {kills} kills");
 }
 
+/// From beside its cab, USE on a minigun truck takes the wheel; from beside
+/// its bed, the gun; and with the gun taken, the wheel from anywhere.
+#[test]
+fn use_takes_the_seat_its_nearest_on_a_turret_truck() {
+    let mut w = world(false);
+    let i = turret_truck(&w);
+    let v = w.vehicles[i];
+    let (f, r) = v.axes();
+    w.fighters[0].body.pos = v.pos + f * 0.5 + r * -2.0;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((i, DRIVER)), "at the wheel from its cab");
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), None);
+    w.fighters[0].body.pos = v.pos + f * -2.0 + r * 2.0;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((i, PASSENGER)), "on the gun from its bed");
+    w.fighters[1].body.pos = v.pos + f * -2.0 + r * -2.0;
+    tap_use(&mut w, 1);
+    assert_eq!(w.fighters[1].riding(), Some((i, DRIVER)), "the wheel, the gun taken");
+}
+
 /// Dry Fork's minigun trucks: its second vehicle and its mirror.
 fn turret_truck(w: &World) -> usize {
     (0..w.vehicles.len())
@@ -453,13 +474,11 @@ fn a_gunner_spins_up_the_minigun_kills_and_it_runs_hot() {
     let mut w = world(false);
     let i = turret_truck(&w);
     let v = w.vehicles[i];
-    // Seat 0 gets in at the bed: the wheel's taken by nobody, so put it
-    // in the gunner's seat the way USE would with a driver in.
-    w.vehicles[i].seats[DRIVER] = 2;
+    // Seat 0 walks up to its bed and gets on the gun, though the wheel is
+    // free: USE takes the seat it is nearest.
     w.fighters[0].body.pos = v.pos + v.axes().0 * -3.0;
     tap_use(&mut w, 0);
-    w.vehicles[i].seats[DRIVER] = 0;
-    assert_eq!(w.fighters[0].riding(), Some((i, PASSENGER)));
+    assert_eq!(w.fighters[0].riding(), Some((i, PASSENGER)), "on the gun from its bed");
     assert_eq!(w.fighters[0].gunning(&w.map), sim::vehicle::MINIGUN);
     assert_eq!(w.fighters[0].body.pos, w.vehicles[i].mount(PASSENGER));
     // Blue 18 m off its hood.

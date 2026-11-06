@@ -337,12 +337,17 @@ pub const VEH_PUSH_K: f32 = 0.7;
 pub const VEH_BLAST_LIFT: f32 = 8.5;
 pub const VEH_LIFT_DMG: i32 = 230;
 pub const VEH_LIFT_MAX: f32 = 12.0;
-/// A turret on the bed (`vehicle::turret`): its post's pivot, this far aft
-/// of the middle and this high off the ground; its gunner standing behind
-/// it, this far aft; its muzzle this far out along the aim from the pivot.
-pub const TURRET_X: f32 = -1.45;
-pub const TURRET_Y: f32 = 2.05;
+/// A turret on the bed (`vehicle::turret`), on a ring its gunner stands in,
+/// this far aft of the middle: the gun's pivot rides the ring this far out
+/// from the gunner the way it aims, this high off the ground, so its grips
+/// are in the gunner's hands whichever way it turns; its muzzle this far
+/// out along the aim from the pivot.
 pub const TURRET_GUNNER_X: f32 = -2.2;
+pub const TURRET_RING: f32 = 0.75;
+pub const TURRET_Y: f32 = 2.05;
+/// USE from behind this (metres ahead of the hull's middle: the bed's
+/// front) takes a turret's gun, not the wheel.
+pub const TURRET_BOARD_X: f32 = -0.9;
 pub const TURRET_REACH: f32 = 1.05;
 
 // Capture the Flag.
