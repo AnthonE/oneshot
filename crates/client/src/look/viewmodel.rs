@@ -90,7 +90,7 @@ pub const GUN_FOV: f32 = 2.5;
 
 /// Gates' `VIEWMODEL_HOLD`: where the right hand's grip sits in view space,
 /// as it looks (metres, before [`SHRINK`]).
-const HOLD: Vec3 = Vec3::new(0.2, -0.12, -0.55);
+const HOLD: Vec3 = Vec3::new(0.2, -0.09, -0.55);
 /// The most of a gun that may lie behind the hand, metres as it looks: one
 /// with more (a cannon, a launcher) is held that much further off, or its
 /// back end fills the corner of the frame, a blur right against the eye.

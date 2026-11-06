@@ -1,8 +1,8 @@
-//! Our own hands in view: one armoured hand and forearm made for first person
-//! (`tools/models/hand.py`, the left its mirror), closed on a grip and held
-//! rigid to the gun, as the guns in view of every shooter are held. No rig: a
-//! character's arms, dragged from where they were skinned to reach a gun,
-//! tear and twist up close, and these are the nearest thing on the screen.
+//! Our own hands in view: Triple T's wooden hand and forearm, cut from its model
+//! with the fingers closed (`tools/models/hand.py`, the left its mirror), and
+//! held rigid to the gun, as the guns in view of every shooter are held. No rig:
+//! arms dragged from where they were skinned to reach a gun tear and twist up
+//! close, and these are the nearest thing on the screen.
 //!
 //! **The right hand** is on the gun's grip, the wrist dropping under the stock
 //! ([`FIST_TILT`]). **The left** cups a long gun's fore-end, or holds its own

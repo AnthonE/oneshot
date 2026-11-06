@@ -419,13 +419,6 @@ pub struct RagBones {
     hips_up: Entity,
 }
 
-impl RagBones {
-    /// The right hand's bone, which a gun is held in.
-    pub fn right_hand(&self) -> Entity {
-        self.bones[13]
-    }
-}
-
 pub fn bind(
     model: Entity,
     names: &Query<&Name>,

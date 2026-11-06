@@ -16,7 +16,8 @@
 //! taking the most of it ([`turn_spine`]); a crouch lifts the head by what
 //! its clip bows it ([`CROUCH_HEAD_LIFT`]). A long gun or a pistol is held
 //! on the arms and spine over whatever the legs do (a clip masked off the
-//! hips and legs). Every change cross-fades over [`BLEND_S`].
+//! hips and legs), and the arms keep the gun on the aim whatever the chest
+//! does ([`ARMS_STEADY`]). Every change cross-fades over [`BLEND_S`].
 //!
 //! **Drawing only.** Nothing here is read back and no gameplay fact lives
 //! in an `AnimationPlayer`: the hit volumes are the sim's own
@@ -221,6 +222,16 @@ const LOOK_SPINE_W: f32 = 1.0;
 const LOOK_NECK_W: f32 = 1.5;
 const LOOK_HEAD_W: f32 = 3.0;
 
+/// The chest's turn in the model's frame where a held gun points straight ahead
+/// and level: `Rifle_Hold_Loop` over `Idle_Loop` (`bodies::HELD_TURN` is the
+/// gun's place in the hand in that pose).
+const CHEST_HELD: Quat = Quat::from_xyzw(0.05667, -0.18002, 0.06189, 0.98008);
+/// How much of the way from where the clips have the chest to [`CHEST_HELD`] on
+/// the aim the shoulders turn the arms: the rest of the look the spine doesn't
+/// take, and the lean of a sprint or a crouch (35° at the chest), so a gun stays
+/// on what its holder looks at. Short of 1, so a stride still rocks it.
+const ARMS_STEADY: f32 = 0.9;
+
 /// The most of the arms and spine a hold is given, short of 1 so its
 /// weight below stays finite.
 const HOLD_MAX: f32 = 0.995;
@@ -233,6 +244,8 @@ const BODY_RIGHT: Vec3 = Vec3::NEG_X;
 /// The bones the look and the twist turn, by name.
 pub const HIPS_BONE: &str = "Hips";
 pub const HEAD_BONE: &str = "Head";
+/// The bones the arms hang from, under the chest (the last of the spine).
+const SHOULDER_BONES: [&str; 2] = ["RightShoulder", "LeftShoulder"];
 
 /// The mask group the hips and legs belong to, and the mask that keeps a
 /// hold off them.
@@ -615,13 +628,6 @@ pub struct Playing {
 }
 
 impl Playing {
-    /// How much of the arms the reload owns, 0..1.
-    pub fn reload_share(&self) -> f32 {
-        self.reload_u
-    }
-}
-
-impl Playing {
     /// How much of the head and spine the holds own between them, 0..1:
     /// their clips key the head as a standing body holds it, so that much
     /// of a crouch clip's bow is already gone.
@@ -836,6 +842,9 @@ pub struct SpineBones {
     /// armature is in centimetres).
     unit_m: f32,
     bones: Vec<SpineBone>,
+    /// Which of them is the chest, and the shoulders under it.
+    chest: usize,
+    shoulders: Vec<SpineBone>,
 }
 
 /// Finds a model's spine, under `model` (a spawned Triple T scene), and how
@@ -925,7 +934,28 @@ pub fn bind_spine(
         };
         bones.push(SpineBone::new(e, yaw, weight(i) / total, i + 1 == n));
     }
-    SpineBones { root, unit_m, bones }
+    let chest = (usize::from(hips.is_some()) + spine).saturating_sub(1);
+    let shoulders = children
+        .iter_descendants(model)
+        .take(512)
+        .filter(|&e| names.get(e).is_ok_and(|n| SHOULDER_BONES.contains(&n.as_str())))
+        .filter(|&e| {
+            parents
+                .get(e)
+                .is_ok_and(|p| bones.get(chest).is_some_and(|c| c.entity == p.0))
+        })
+        .map(|e| SpineBone::new(e, 0.0, 0.0, false))
+        .collect::<Vec<_>>();
+    if shoulders.len() != SHOULDER_BONES.len() {
+        error!("anim: the shoulders aren't under the chest: guns will not follow the aim");
+    }
+    SpineBones {
+        root,
+        unit_m,
+        bones,
+        chest,
+        shoulders,
+    }
 }
 
 /// What [`turn_spine`] reads of a body this frame.
@@ -970,7 +1000,8 @@ pub fn turn_spine(pose: SpinePose, spine: &mut SpineBones, bones: &mut Query<&mu
     let yaw = if dead { 0.0 } else { pose.hip_yaw };
     let unit = spine.unit_m.max(1e-6);
     let mut w = spine.root;
-    for bone in spine.bones.iter_mut() {
+    let mut chest = None;
+    for (i, bone) in spine.bones.iter_mut().enumerate() {
         let Ok(mut t) = bones.get_mut(bone.entity) else {
             break;
         };
@@ -1000,6 +1031,30 @@ pub fn turn_spine(pose: SpinePose, spine: &mut SpineBones, bones: &mut Query<&mu
             bone.placed = t.translation;
         }
         w = (w * t.rotation).normalize();
+        if i == spine.chest {
+            chest = Some(w);
+        }
+    }
+    // The arms, from where the chest is to where a held gun is on the aim.
+    let Some(w) = chest else {
+        return;
+    };
+    let steady = if dead { 0.0 } else { ARMS_STEADY * pose.held };
+    let aim = Quat::from_axis_angle(BODY_RIGHT, pitch) * CHEST_HELD;
+    let turn = Quat::IDENTITY.slerp((aim * w.inverse()).normalize(), steady);
+    let local = (w.inverse() * turn * w).normalize();
+    for bone in spine.shoulders.iter_mut() {
+        let Ok(mut t) = bones.get_mut(bone.entity) else {
+            continue;
+        };
+        let base = if t.rotation == bone.written {
+            bone.applied.inverse() * t.rotation
+        } else {
+            t.rotation
+        };
+        t.rotation = (local * base).normalize();
+        bone.applied = local;
+        bone.written = t.rotation;
     }
 }
 
