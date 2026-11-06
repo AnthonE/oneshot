@@ -682,6 +682,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             look::own_shadow::stream.after(draw_fighters),
+            look::portrait::drag.before(look::portrait::stand),
             look::portrait::stand,
             look::portrait::activate,
             look::portrait::fit,

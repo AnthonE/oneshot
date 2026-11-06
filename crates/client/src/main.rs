@@ -171,6 +171,21 @@ fn run() -> Result<(), String> {
             app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
                 oneshot_client::settings::Player::clean(&n);
         }
+        // What Triple T wears, for a picture: `--look skin,head,feet,emblem`.
+        if let Some(l) = arg("--look") {
+            let v: Vec<u16> = l.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            let mut p = app.world_mut().resource_mut::<oneshot_client::settings::Player>();
+            let at = |i: usize| v.get(i).copied().unwrap_or(0);
+            p.skin = (at(0) as u8).min(proto::SKINS.len() as u8 - 1);
+            p.headwear = proto::gear_valid(&proto::HEADWEAR, at(1) as u8);
+            p.footwear = proto::gear_valid(&proto::FOOTWEAR, at(2) as u8);
+            p.emblem = proto::emblem_valid(at(3));
+        }
+        if let Some(t) = arg("--tab") {
+            if !oneshot_client::front::open_tab(app.world_mut(), &t) {
+                return Err(format!("--tab {t}: play, armory, party, friends or challenges"));
+            }
+        }
         (app, want, joins)
     };
     if let Some(path) = shot {
@@ -296,6 +311,9 @@ const HELP: &str = "oneshot: the desktop client
   oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
   --name NAME                      the name others see (the title's field)
+  --look SKIN,HEAD,FEET,EMBLEM     what you wear, by id (the armory's picks)
+  --tab NAME                       the title opens on ARMORY (armory:emblem for a page of it),
+                                   PARTY, FRIENDS or CHALLENGES
   --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
                                    duel and doubles are ranked, which needs an Elo Pros

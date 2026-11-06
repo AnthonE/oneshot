@@ -132,7 +132,8 @@ const SKIN_TRIM: [Option<u32>; 6] = [
 /// The trim's sheen, against the side's glow.
 const TRIM_GLOW: f32 = 0.35;
 
-fn trim(skin: u8) -> Option<Color> {
+/// A skin's trim colour, none for the standard look (the armory's tiles too).
+pub fn trim(skin: u8) -> Option<Color> {
     SKIN_TRIM.get(skin as usize).copied().flatten().map(|c| {
         let [_, r, g, b] = c.to_be_bytes();
         Color::srgb_u8(r, g, b)
