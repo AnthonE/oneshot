@@ -224,6 +224,7 @@ fn msgs() -> Vec<Msg> {
             skin: SKIN_STANDARD,
             emblem: EMBLEM_NONE,
             party: 0,
+            stamp: 0x1234_5678,
         },
         Msg::Hello {
             proto: PROTO_VER,
@@ -233,6 +234,7 @@ fn msgs() -> Vec<Msg> {
             skin: 2,
             emblem: emblem(16, 5, 3, 12),
             party: 0,
+            stamp: 0,
         },
         Msg::Queued {
             mode: MODE_DOUBLES,
@@ -264,6 +266,7 @@ fn msgs() -> Vec<Msg> {
             skin: 5,
             emblem: emblem(1, 0, 15, 0),
             party: party::code_parse("K7Q2XD").unwrap(),
+            stamp: u32::MAX,
         },
         Msg::Refuse { reason: REFUSE_FULL },
         Msg::Seat {
@@ -513,12 +516,12 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0x6e38_c4b5_9200_3873,
-        0xf33d_5fda_6793_721d,
-        0x40b9_4795_1fe8_2ff2,
+        0xd26d_3b53_15f0_c9a6,
+        0x516c_1045_1924_48ff,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0xd9f4_72ff_4fb5_34de,
+        0xe070_b896_3cf0_a6cb,
         0x0835_ec07_b4ee_4fb0,
         0x3f28_24ea_ec0c_5c91,
         0xd5ca_75af_c4fa_c9d7,

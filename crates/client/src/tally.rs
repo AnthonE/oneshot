@@ -58,6 +58,7 @@ pub fn verb(cause: u16) -> &'static str {
         (Cause::Grenade, "blown up"),
         (Cause::Melee, "beaten down"),
         (Cause::Behind, "assassinated"),
+        (Cause::Fall, "knocked off"),
         (Cause::Splatter, "splattered"),
         (Cause::Wreck, "blown up"),
         (Cause::Sticky, "stuck"),

@@ -472,6 +472,7 @@ impl World {
             }
         }
         self.seat_riders();
+        self.falls();
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw {
@@ -906,6 +907,9 @@ impl World {
                 b.vel = dir * CLASH_PUSH + V3::new(0.0, 3.0, 0.0);
                 b.grounded = false;
             }
+            // Thrown off an edge by it: the other's doing.
+            self.mark_hurt(s, q);
+            self.mark_hurt(q, s);
             self.events.push(Event {
                 kind: Ev::Melee,
                 a: s as u8,
@@ -1405,6 +1409,11 @@ impl World {
                     }
                 }
             }
+            // Into the void: gone, never going off where nobody stands.
+            if p.pos.y < self.map.void {
+                self.proj[i].active = false;
+                continue;
+            }
             p.pos = V3::new(
                 crate::movement::quant(p.pos.x),
                 crate::movement::quant(p.pos.y),
@@ -1545,7 +1554,7 @@ impl World {
                     crate::movement::quant(d.pos.z),
                 );
             }
-            if d.pos.y < DROP_LOST_Y {
+            if d.pos.y < DROP_LOST_Y.max(self.map.void) {
                 d.active = false;
             }
             self.drops[i] = d;
@@ -1716,6 +1725,71 @@ impl World {
         }
     }
 
+    /// On a map with a void: `att` hurt (or threw) `vic`, so a fall soon
+    /// after is `att`'s kill ([`FALL_CREDIT_MS`]).
+    fn mark_hurt(&mut self, att: usize, vic: usize) {
+        if self.map.void > f32::NEG_INFINITY && att != vic && att < MAX_FIGHTERS {
+            let v = &mut self.fighters[vic];
+            v.hurt_by = att as u8 + 1;
+            v.hurt_t = ticks(FALL_CREDIT_MS) as u16;
+        }
+    }
+
+    /// The void: a fighter whose feet are under it has fallen to its death,
+    /// the kill of whoever last hurt it if that was within
+    /// [`FALL_CREDIT_MS`] on its feet (and they're still here), else its
+    /// own; a vehicle under it is lost (its riders fell first), back at its
+    /// spawn after the map says. The credit's clock runs here too, on the
+    /// ground only.
+    fn falls(&mut self) {
+        let void = self.map.void;
+        if void == f32::NEG_INFINITY {
+            return;
+        }
+        for s in 0..MAX_FIGHTERS {
+            let f = &mut self.fighters[s];
+            if !f.active() {
+                continue;
+            }
+            if f.body.pos.y >= void {
+                if f.body.grounded && f.hurt_by != 0 {
+                    f.hurt_t = f.hurt_t.saturating_sub(1);
+                    if f.hurt_t == 0 {
+                        f.hurt_by = 0;
+                    }
+                }
+                continue;
+            }
+            let by = f.hurt_by as usize;
+            let att = if by != 0 && self.fighters[by - 1].seated {
+                by - 1
+            } else {
+                s
+            };
+            self.kill(att, s, Cause::Fall as u16, false);
+        }
+        for i in 0..MAX_VEHICLES {
+            let v = self.vehicles[i];
+            if !v.active || v.pos.y >= void {
+                continue;
+            }
+            for &x in &v.seats {
+                if x != 0 {
+                    self.fighters[x as usize - 1].ride = 0;
+                }
+            }
+            let back = self.map.vehicles.get(v.home as usize).map_or(30_000, |d| d.respawn_ms);
+            self.vehicles[i] = Vehicle {
+                active: false,
+                respawn: ticks(back).max(1),
+                home: v.home,
+                pos: v.pos,
+                yaw: v.yaw,
+                ..Vehicle::default()
+            };
+        }
+    }
+
     /// A vehicle moving fast runs down whoever is on foot in its way: at
     /// [`SPLAT_KILL`] dead, slower knocked aside. Its driver did it (or
     /// nobody drove: then the fighter's own death).
@@ -1761,10 +1835,11 @@ impl World {
     /// past them reaches health as itself.
     #[allow(clippy::too_many_arguments)]
     fn damage_k(&mut self, att: usize, vic: usize, pts: i32, head: bool, rule: Head, cause: u16, shield_k: f32) {
-        let v = &mut self.fighters[vic];
-        if !v.alive || pts <= 0 {
+        if !self.fighters[vic].alive || pts <= 0 {
             return;
         }
+        self.mark_hurt(att, vic);
+        let v = &mut self.fighters[vic];
         v.since_hit = 0;
         if v.camo > 0 {
             v.flare = ticks(CAMO_FLARE_MS) as u16;
@@ -1836,7 +1911,8 @@ impl World {
         // What they held falls where they fell (Gun Game's ladder guns
         // aren't for the taking).
         let (hand, left, frags, stickies) = (*v.gun(), v.left, v.grenades, v.stickies);
-        if !self.rules.gun_game {
+        // Fallen into the void, what they held went with them.
+        if !self.rules.gun_game && pos.y >= self.map.void {
             self.spill(hand, 0, 0, pos, toss);
             self.spill(left, 0, 0, pos + V3::new(DROP_APART, 0.0, 0.0), toss);
             self.spill(
@@ -2449,9 +2525,11 @@ mod tests {
         crate::map::Def {
             id: 250,
             practice: true,
+            modes: 0,
             name: "dome",
             lo: (-10.0, -10.0),
             hi: (10.0, 10.0),
+            void: f32::NEG_INFINITY,
             boxes: &[],
             looks: &[],
             spawns: &[([-8.0, 0.0, 0.0], 0, 0), ([8.0, 0.0, 0.0], 0, 1)],

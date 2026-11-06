@@ -361,12 +361,15 @@ async fn session(
         skin,
         emblem,
         party,
+        stamp,
     } = hello
     else {
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
-    if proto != PROTO_VER {
+    // An old page, or one whose sim isn't ours (a map or a rule changed
+    // since it loaded): it would predict against walls we don't have.
+    if proto != PROTO_VER || stamp != sim::STAMP {
         return refuse(&mut send, proto::REFUSE_VERSION, &ctx).await;
     }
     // Past capacity, or on its way down for a restart: come back soon.

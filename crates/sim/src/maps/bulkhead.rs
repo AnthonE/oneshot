@@ -14,8 +14,10 @@ pub const DEF: Def = Def {
     id: 5,
     name: "Bulkhead",
     practice: false,
+    modes: 0,
     lo: (-24.0, -16.0),
     hi: (24.0, 16.0),
+    void: f32::NEG_INFINITY,
     boxes: &[
         [-25.0, 0.0, -17.0, 25.0, 7.0, -16.0],
         [-25.0, 0.0, 16.0, 25.0, 7.0, 17.0],

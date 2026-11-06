@@ -18,6 +18,14 @@
 //   about     a sentence
 //   bounds    [x0, x1, z0, z1]: where fighters can be (the walls stand
 //             outside it, as boxes like any other, or as the terrain)
+//   void      y: below it there is nothing to stand on (sim::map::Map::void):
+//             a fighter whose feet pass it has fallen to its death. Needs a
+//             terrain, dug well under it where the edge is (an island's
+//             `base` far down and an `outline` raising the island)
+//   modes     ["doubles", "ffa", ...]: the rotations it is played in (casual,
+//             duel, doubles, ffa, gun_game, cup, big_team, ctf); none: by its
+//             size (Big Team on a big map, the rest on an arena). `practice`
+//             keeps it out of all of them (a new map: a private match picks it)
 //   mirror    "x": everything marked "mirror" is placed again at -x, red
 //             swapped for blue; "xz": also at -z, and at -x -z
 //   prefabs   { name: [box, ...] } about their own origin
@@ -38,6 +46,10 @@
 //               { hill: [x, z], r, h }         a round rise (h < 0: a dip)
 //               { ridge: [[x, z], [x, z]], w, h }  along a line, w to either side
 //               { plateau: [x0, z0, x1, z1], h, edge }  flat inside, falling over `edge`
+//               { outline: [[x, z], ...], h, edge }  a coast: flat inside the
+//                                              polygon, falling over `edge`
+//                                              outside it (a cliff when
+//                                              `edge` is a cell or two)
 //               { pad: [x, z], r, h, blend }   flat at h out to r, then back
 //                                              to the ground over `blend`: a
 //                                              post-pass that replaces,
@@ -127,7 +139,9 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // A turned box drawn as a buttress pylon inside it (the client's look/boulders.rs).
   'pylon',
   // A base's metal: gunmetal plate, the same painted in a side's colour, and tread plate for a deck or a ramp.
-  'steel', 'steel_red', 'steel_blue', 'tread'];
+  'steel', 'steel_red', 'steel_blue', 'tread',
+  // Stone: dressed grey stone in the concrete set, and the same darker (Cloudbreak's spire, struts and gates).
+  'stone', 'stone_dark'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
@@ -135,6 +149,8 @@ export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER',
   // Power-ups: taken by walking onto the pad.
   overshield: 'OVERSHIELD', camo: 'CAMO' };
 const TEAMS = { red: 0, blue: 1, any: 255 };
+/** sim::map::ROT_*: the rotations a map may name in `modes`. */
+export const ROTATIONS = { casual: 1, duel: 2, doubles: 4, ffa: 8, gun_game: 16, cup: 32, big_team: 64, ctf: 128 };
 // Caps the sim holds (crates/sim/src/consts.rs MAX_PADS) and sanity.
 const MAX_PADS = 24;
 /** sim::consts::MAX_MAP_BOXES: boxes and solids together. */
@@ -266,6 +282,10 @@ export function compile(spec, where = 'map.json') {
   const [bx0, bx1, bz0, bz1] = spec.bounds || fail('no bounds: [x0, x1, z0, z1]');
   if (!(bx0 < bx1 && bz0 < bz1)) fail('bounds: [x0, x1, z0, z1]');
   const inside = (x, z, what) => { if (!(x >= bx0 && x <= bx1 && z >= bz0 && z <= bz1)) fail(`${what} at ${x}, ${z} is out of bounds`); };
+  if (spec.void !== undefined) {
+    if (typeof spec.void !== 'number' || !Number.isFinite(spec.void)) fail('void: a height, m');
+    if (!spec.terrain) fail('void: needs a terrain, dug under it where the edge is');
+  }
   const mirrors = images(spec.mirror);
   const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
     steel_red: 'steel_blue', steel_blue: 'steel_red' };
@@ -448,6 +468,12 @@ export function compile(spec, where = 'map.json') {
     flags = [p, [p[0] * im[0], p[1], p[2] * im[1]]];
   }
   if (spec.nav !== undefined && typeof spec.nav !== 'boolean') fail('nav: true or false');
+  let modes = 0;
+  if (spec.modes !== undefined) {
+    if (!Array.isArray(spec.modes) || !spec.modes.length) fail(`modes: a list of ${Object.keys(ROTATIONS).join(', ')}`);
+    for (const m of spec.modes) modes |= ROTATIONS[m] ?? fail(`modes: no rotation "${m}" (${Object.keys(ROTATIONS).join(', ')})`);
+    if (modes & ROTATIONS.ctf && spec.flag === undefined) fail('modes: ctf needs a "flag"');
+  }
 
   // The boulders, last: they keep clear of everything above.
   let rocks = 0;
@@ -462,7 +488,8 @@ export function compile(spec, where = 'map.json') {
   // Profile solids are a table of their own, after the others in the sim.
   const profiles = solids.filter(isCurve), dressProfiles = dressSolids.filter(isCurve);
   return {
-    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1], boxes,
+    id: spec.id, name: spec.name, about: spec.about || '', practice: !!spec.practice, modes, nav: !!spec.nav, light, lo: [bx0, bz0], hi: [bx1, bz1],
+    void: spec.void ?? null, boxes,
     solids: solids.filter((s) => !isCurve(s)), profiles, spawns, pads, roam, terrain, launchers, vehicles, flags, dress,
     dressSolids: dressSolids.filter((s) => !isCurve(s)), dressProfiles, rocks,
   };
@@ -491,6 +518,23 @@ const LAUNCH_LAND_M = 0.5;
 const dist = (dx, dz) => Math.sqrt(dx * dx + dz * dz);
 /** 1 in the middle, 0 from r: a shape's falloff. */
 const fall = (d, r) => (d >= r ? 0 : 1 - fade(d / r));
+/** Whether (x, z) is inside the polygon (even-odd; an edge's own points
+ * count as inside, so a vertex on the coast is the island's). */
+function inPolygon(poly, x, z) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [ax, az] = poly[i], [bx, bz] = poly[j];
+    if (segDist(ax, az, bx, bz, x, z) === 0) return true;
+    if ((az > z) !== (bz > z) && x < ax + ((z - az) * (bx - ax)) / (bz - az)) inside = !inside;
+  }
+  return inside;
+}
+/** How far (x, z) is from the polygon's nearest edge. */
+function polyDist(poly, x, z) {
+  let d = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) d = Math.min(d, segDist(poly[j][0], poly[j][1], poly[i][0], poly[i][1], x, z));
+  return d;
+}
 /** How far (x, z) is from the segment a–b. */
 function segDist(ax, az, bx, bz, x, z) {
   const vx = bx - ax, vz = bz - az, L = vx * vx + vz * vz;
@@ -745,6 +789,13 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
         if (typeof h !== 'number' || !(e > 0)) fail(`terrain shape ${k}: a plateau needs h and edge > 0`);
         const [xa, xb] = [p0 * sx, p1 * sx].sort((a, b) => a - b), [za, zb] = [q0 * sz, q1 * sz].sort((a, b) => a - b);
         shapes.push((x, z) => h * fall(dist(Math.max(xa - x, 0, x - xb), Math.max(za - z, 0, z - zb)), e));
+      } else if (s.outline) {
+        const pts = s.outline, h = s.h, e = s.edge ?? 4;
+        if (!Array.isArray(pts) || pts.length < 3 || pts.some((p) => !Array.isArray(p) || p.length !== 2 || p.some((v) => typeof v !== 'number')))
+          fail(`terrain shape ${k}: an outline is three or more [x, z]`);
+        if (typeof h !== 'number' || !(e > 0)) fail(`terrain shape ${k}: an outline needs h and edge > 0`);
+        const poly = pts.map(([x, z]) => [x * sx, z * sz]);
+        shapes.push((x, z) => (inPolygon(poly, x, z) ? h : h * fall(polyDist(poly, x, z), e)));
       } else if (s.pad) {
         const [cx, cz] = s.pad, r = s.r, h = s.h, blend = s.blend;
         if (!(r > 0) || typeof h !== 'number' || !(blend > 0)) fail(`terrain shape ${k}: a pad needs r > 0, h and blend > 0`);
@@ -755,7 +806,7 @@ function heightfield(t, [bx0, bx1, bz0, bz1], mirrors, sea, fail) {
           return raw + (h - raw) * (1 - fade(clamp01((d - r) / blend)));
         });
         padDiscs.push([px, pz, r + blend]);
-      } else fail(`terrain shape ${k}: a hill, a ridge, a plateau or a pad`);
+      } else fail(`terrain shape ${k}: a hill, a ridge, a plateau, an outline or a pad`);
     }
   }
   let gen = null;
@@ -1129,8 +1180,10 @@ export function rust(m, src) {
   L.push(`    id: ${m.id},`);
   L.push(`    name: ${JSON.stringify(m.name)},`);
   L.push(`    practice: ${m.practice},`);
+  L.push(`    modes: ${m.modes},`);
   L.push(`    lo: (${lit(m.lo[0])}, ${lit(m.lo[1])}),`);
   L.push(`    hi: (${lit(m.hi[0])}, ${lit(m.hi[1])}),`);
+  L.push(`    void: ${m.void === null ? 'f32::NEG_INFINITY' : lit(m.void)},`);
   L.push('    boxes: &[');
   for (const b of m.boxes) L.push(`        [${b.box.map(lit).join(', ')}],`);
   L.push('    ],');

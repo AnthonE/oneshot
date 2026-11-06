@@ -1,0 +1,153 @@
+{
+  "id": 7,
+  "name": "Cloudbreak",
+  "about": "A sandstone island over a void, mirrored between red (-x) and blue (+x): a stone spire on its north edge with the sniper on its balcony and the shotgun in its hall, a round plaza in the middle with the rocket under two leaning struts that never meet, a gate and a raised deck each side, the overshield out on the south point. Off the edge is death. Grey boxes: out of the rotation until it has been played.",
+  "practice": true,
+  "modes": ["doubles", "ffa"],
+  "bounds": [-30, 30, -26, 27],
+  "void": -10,
+  "mirror": "x",
+  "nav": true,
+  "terrain": {
+    "cell": 1,
+    "base": -40,
+    "margin": 4,
+    "shapes": [
+      {
+        "outline": [
+          [-5, 24.5], [5, 24.5], [8.5, 22.5], [11, 18.5], [14.5, 19.5], [19, 17], [23, 13], [26.5, 8], [27, 0],
+          [26.5, -7], [24, -12], [20, -16], [15, -18.5], [10.5, -16.5], [6, -19], [3, -23],
+          [-3, -23], [-6, -19], [-10.5, -16.5], [-15, -18.5], [-20, -16], [-24, -12], [-26.5, -7],
+          [-27, 0], [-26.5, 8], [-23, 13], [-19, 17], [-14.5, 19.5], [-11, 18.5], [-8.5, 22.5]
+        ],
+        "h": 40,
+        "edge": 1
+      },
+      { "hill": [-9, 9], "r": 5.5, "h": 2.6, "mirror": true },
+      { "hill": [-9, -9], "r": 5.5, "h": 2.2, "mirror": true },
+      { "hill": [-15, 12], "r": 4, "h": 1.8, "mirror": true },
+      { "hill": [-16, -12], "r": 4.5, "h": 2.0, "mirror": true },
+      { "hill": [0, -14], "r": 6, "h": 1.6 },
+      { "pad": [0, 0], "r": 8.5, "h": 0, "blend": 5 }
+    ]
+  },
+  "structures": [
+    {
+      "name": "the ring: the plaza's round floor",
+      "boxes": [
+        { "round": [0, 0], "r": 7.5, "y": [-1, 0.4], "look": "stone" }
+      ]
+    },
+    {
+      "name": "red's strut, leaning in over the ring from its west rim; blue's leans to meet it and never does",
+      "mirror": true,
+      "boxes": [
+        [-9.2, -0.5, -0.7, -7.6, 2.6, 0.7, "stone"],
+        [-7.8, 2.2, -0.7, -6.2, 4.0, 0.7, "stone"],
+        [-6.4, 3.6, -0.7, -4.8, 5.4, 0.7, "stone"],
+        [-5.0, 5.0, -0.7, -3.4, 6.8, 0.7, "stone"],
+        [-3.6, 6.4, -0.7, -2.0, 8.2, 0.7, "stone"],
+        [-2.2, 7.8, -0.7, -1.4, 9.0, 0.7, "stone"]
+      ]
+    },
+    {
+      "name": "the spire: a hall on the north edge, its balcony over the north lane, the tower over all",
+      "boxes": [
+        [-4, -0.5, 23.2, 4, 4, 24, "stone"],
+        [-1.5, 2.8, 17, 1.5, 4, 17.8, "stone"],
+        [-4, 4, 17, 4, 4.5, 24, "stone"],
+        [-3, 4, 14.5, 3, 4.5, 17, "stone_dark"],
+        [-3, 4.5, 14.5, 3, 5.3, 14.8, "stone_dark"],
+        [-4, 4.5, 17.8, 4, 12, 24, "stone"],
+        [-3.5, 12, 18.2, 3.5, 22, 23.8, "stone"],
+        [-2.5, 22, 19, 2.5, 27, 23, "stone"],
+        [-1, 27, 20.2, 1, 31, 21.8, "stone_dark"]
+      ]
+    },
+    {
+      "name": "the spire's west side: the hall's door to the ledge, and the ramp up to the balcony",
+      "mirror": true,
+      "boxes": [
+        [-4, -0.5, 17.8, -3.2, 4, 19.5, "stone"],
+        [-4, -0.5, 21.5, -3.2, 4, 23.2, "stone"],
+        [-4, 2.6, 19.5, -3.2, 4, 21.5, "stone"],
+        [-4, -0.5, 17, -1.5, 4, 17.8, "stone"],
+        { "ramp": [-10, 14.5, -3, 16.5], "up": "+x", "from": 0, "to": 4.5, "base": -0.5, "look": "stone" }
+      ]
+    },
+    {
+      "name": "red's gate, between the dunes into the ring",
+      "mirror": true,
+      "boxes": [
+        [-11.6, -0.5, -3.2, -10.6, 3.6, -2.2, "stone"],
+        [-11.6, -0.5, 2.2, -10.6, 3.6, 3.2, "stone"],
+        [-11.6, 3.6, -3.2, -10.6, 4.4, 3.2, "red"]
+      ]
+    },
+    {
+      "name": "red's deck on the west cliff, walled toward the ring but for the ramp up from the gate",
+      "mirror": true,
+      "boxes": [
+        [-25.5, -0.5, -6, -19, 2.5, 6, "stone"],
+        [-25.5, 2.5, -6, -25, 3.5, 6, "red"],
+        [-23, 2.5, -1, -22, 3.7, 1, "stone"],
+        [-19.5, 2.5, -6, -19, 4.3, -2, "red"],
+        [-19.5, 2.5, 2, -19, 4.3, 6, "red"],
+        { "ramp": [-19, -2, -14.5, 2], "up": "-x", "from": 0, "to": 2.5, "base": -0.5, "look": "stone" }
+      ]
+    },
+    {
+      "name": "sandstone: cover at the ring's rim and boulders toward the edges",
+      "mirror": true,
+      "boxes": [
+        [-8.6, -0.5, 5.2, -6.9, 1.4, 6.8, "rock"],
+        [-8.0, -0.5, -7.2, -6.5, 1.1, -5.6, "rock"],
+        [-20, -0.5, 9.5, -18.5, 1.6, 11, "rock"],
+        [-13, -0.5, -15.5, -11.5, 1.2, -14, "rock"],
+        [-6.5, -0.5, 11, -5, 1.0, 12.5, "rock"]
+      ]
+    }
+  ],
+  "spawns": [
+    { "at": [-22.5, -3.5, 2.5], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-22.5, 3.5, 2.5], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-16, 15], "team": "red", "yaw": -40, "mirror": true },
+    { "at": [-17, -13], "team": "red", "yaw": 40, "mirror": true }
+  ],
+  "pads": [
+    { "weapon": "rocket", "at": [0, 0, 0.4], "respawn": 120 },
+    { "weapon": "sniper", "at": [0, 16, 4.5], "respawn": 90 },
+    { "weapon": "shotgun", "at": [0, 21], "respawn": 60 },
+    { "weapon": "overshield", "at": [0, -20.5], "respawn": 90 },
+    { "weapon": "carbine", "at": [-21, -9], "respawn": 30, "mirror": true },
+    { "weapon": "shards", "at": [-10, -10], "respawn": 45, "mirror": true }
+  ],
+  "roam": [
+    [0, 0], [0, 11], [0, -16], [-13.5, 0], [13.5, 0], [-15, 14], [15, 14],
+    [-17, -11], [17, -11], [0, 20], [-6, -15], [6, -15]
+  ],
+  "callouts": [
+    { "name": "the ring", "at": [0, 0, 0.4] },
+    { "name": "red strut", "at": [-5.6, 0, 5.4] },
+    { "name": "blue strut", "at": [5.6, 0, 5.4] },
+    { "name": "the spire", "at": [0, 21] },
+    { "name": "balcony", "at": [0, 16, 4.5] },
+    { "name": "red ramp", "at": [-7, 15.5, 1.9] },
+    { "name": "blue ramp", "at": [7, 15.5, 1.9] },
+    { "name": "north lane", "at": [0, 11] },
+    { "name": "red ledge", "at": [-6.5, 20.5] },
+    { "name": "blue ledge", "at": [6.5, 20.5] },
+    { "name": "red gate", "at": [-11, 0] },
+    { "name": "blue gate", "at": [11, 0] },
+    { "name": "red deck", "at": [-22, 0, 2.5] },
+    { "name": "blue deck", "at": [22, 0, 2.5] },
+    { "name": "red dune", "at": [-9, -9, 2.2] },
+    { "name": "blue dune", "at": [9, -9, 2.2] },
+    { "name": "the point", "at": [0, -20.5] }
+  ],
+  "light": {
+    "sun": 0.75,
+    "fill": 1.15,
+    "sea": -60
+  }
+}

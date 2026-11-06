@@ -52,6 +52,10 @@ jobs:
           npx playwright install --with-deps chromium
           E2E_WEBGPU=1 node ci/e2e.mjs 150
           node ci/e2e.mjs 150 4 2
+          # Between rounds: three short matches back to back on a rotation
+          # of two maps, each ridden to its end and PLAY pressed again, each
+          # next one on the other map.
+          E2E_AGAIN=2 node ci/e2e.mjs 60 0 0,7
           node ci/party.mjs
       # The desktop client too, under Xvfb on lavapipe: its title, and Gun
       # Game on Cistern with the autopilot playing, as the second e2e match

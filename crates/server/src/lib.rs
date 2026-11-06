@@ -632,6 +632,102 @@ struct Live {
     out: room::Outbox,
 }
 
+/// The rotation a mode is played in (`sim::map::ROT_*`).
+fn rotation_of(mode: u8) -> u16 {
+    use sim::map::*;
+    match mode {
+        MODE_DUEL => ROT_DUEL,
+        MODE_DOUBLES => ROT_DOUBLES,
+        MODE_FFA => ROT_FFA,
+        MODE_GUN_GAME => ROT_GUN_GAME,
+        MODE_CUP => ROT_CUP,
+        MODE_BIG_TEAM => ROT_BIG_TEAM,
+        MODE_CTF => ROT_CTF,
+        _ => ROT_CASUAL,
+    }
+}
+
+/// The maps a pick is made from: the `given` ones (a server's `--map`), else
+/// those in rotation `rot`, else any in the rotation that can play it
+/// (flags for Capture the Flag), in id order.
+fn pool(given: Vec<u8>, rot: u16) -> Vec<u8> {
+    if !given.is_empty() {
+        return given;
+    }
+    let fits: Vec<u8> = sim::maps::ALL.iter().filter(|d| d.plays(rot)).map(|d| d.id).collect();
+    if !fits.is_empty() {
+        return fits;
+    }
+    let ctf = rot & sim::map::ROT_CTF != 0;
+    sim::maps::ALL
+        .iter()
+        .filter(|d| !d.practice && (!ctf || d.flags.len() == 2))
+        .map(|d| d.id)
+        .collect()
+}
+
+/// `ids` without the maps in `avoid`, the newest first, each only while
+/// another map is left.
+fn steer_off(mut ids: Vec<u8>, avoid: &[u8]) -> Vec<u8> {
+    for a in avoid {
+        if ids.len() > 1 {
+            ids.retain(|id| id != a);
+        }
+    }
+    ids
+}
+
+/// The maps each player (or a guest's party) played last, newest first, so
+/// the next match they start is on another ([`steer_off`]). Noted as they
+/// are seated (however that match then ends: played out, left, dropped),
+/// forgotten after [`RECENT_FOR`].
+#[derive(Default)]
+struct Recent {
+    by: BTreeMap<String, ([u8; RECENT_N], Instant)>,
+}
+
+/// Maps remembered for each, and for how long.
+const RECENT_N: usize = 2;
+const RECENT_FOR: Duration = Duration::from_secs(2 * 60 * 60);
+/// An empty place in a [`Recent`] row: no map has this id (`sim::map::TEST_MAP`).
+const NO_MAP: u8 = sim::map::TEST_MAP;
+
+impl Recent {
+    /// Who a seat is to it: the player, or a guest's party.
+    fn key(player: Option<&String>, party: u32) -> Option<String> {
+        player
+            .cloned()
+            .or_else(|| (party != 0).then(|| format!("party:{party:08x}")))
+    }
+
+    fn note(&mut self, key: String, map: u8, now: Instant) {
+        let row = self.by.entry(key).or_insert(([NO_MAP; RECENT_N], now));
+        if row.0[0] != map {
+            row.0.rotate_right(1);
+            row.0[0] = map;
+        }
+        row.1 = now;
+    }
+
+    /// What `keys` played last, newest first, each map once.
+    fn of<'a>(&self, keys: impl IntoIterator<Item = &'a str>) -> Vec<u8> {
+        let mut out = Vec::new();
+        let rows: Vec<&[u8; RECENT_N]> = keys.into_iter().filter_map(|k| self.by.get(k).map(|r| &r.0)).collect();
+        for i in 0..RECENT_N {
+            for r in &rows {
+                if r[i] != NO_MAP && !out.contains(&r[i]) {
+                    out.push(r[i]);
+                }
+            }
+        }
+        out
+    }
+
+    fn prune(&mut self, now: Instant) {
+        self.by.retain(|_, r| now.duration_since(r.1) < RECENT_FOR);
+    }
+}
+
 /// Puts a room in the first free place; returns where.
 fn place_room(rooms: &mut Vec<Option<Live>>, live: Live) -> usize {
     if let Some(i) = rooms.iter().position(|r| r.is_none()) {
@@ -668,14 +764,16 @@ pub(crate) fn send_msg(tx: &outlet::Outlet, m: &Msg) {
 impl Sim {
     /// A new room: fresh salt (never seen until the end) and a seed drawn
     /// apart from it (what clients watch: spawn picks, bots).
-    fn new_room(&self, mode: u8, ranked: bool) -> Room {
-        self.new_room_custom(mode, ranked, proto::party::Custom::default())
+    fn new_room(&self, mode: u8, ranked: bool, avoid: &[u8]) -> Room {
+        self.new_room_custom(mode, ranked, proto::party::Custom::default(), avoid)
     }
 
     /// [`Sim::new_room`], with a private match's own map, score and clock
     /// over the mode's. A map that doesn't exist, or one with no flags for
-    /// Capture the Flag, is the server's pick.
-    fn new_room_custom(&self, mode: u8, ranked: bool, custom: proto::party::Custom) -> Room {
+    /// Capture the Flag, is the server's pick, off the maps in `avoid` (what
+    /// those it seats played last, newest first) where the rotation has
+    /// others.
+    fn new_room_custom(&self, mode: u8, ranked: bool, custom: proto::party::Custom, avoid: &[u8]) -> Room {
         self.ctx.health.matches.fetch_add(1, Ordering::Relaxed);
         let salt = (random_u64(), random_u64());
         let seed = random_u64();
@@ -698,7 +796,12 @@ impl Sim {
             .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
             .filter(|d| !rules.ctf || d.flags.len() == 2)
             .map(|d| d.build());
-        let map = chosen.unwrap_or_else(|| self.pick_map(seed, mode == MODE_BIG_TEAM, rules.ctf));
+        let rot = if rules.ctf {
+            sim::map::ROT_CTF
+        } else {
+            rotation_of(mode)
+        };
+        let map = chosen.unwrap_or_else(|| self.pick_map(seed, rot, avoid));
         if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
@@ -708,35 +811,30 @@ impl Sim {
         }
     }
 
-    /// The map a room plays, from its seed (what clients may know anyway):
-    /// the `--map` ones if any are given, else Big Team on the big maps and
-    /// everything else on the arenas; Capture the Flag only where there are
-    /// flags.
-    fn pick_map(&self, seed: u64, big: bool, ctf: bool) -> Map {
-        let flags = |id: &u8| !ctf || sim::maps::ALL.iter().any(|d| d.id == *id && d.flags.len() == 2);
+    /// The map a room plays in rotation `rot` (`sim::map::ROT_*`), from its
+    /// seed (what clients may know anyway): the `--map` ones if any are
+    /// given, else the maps in that rotation (`Def::plays`: by a map's own
+    /// `modes`, or its size), else any in the rotation that can play it;
+    /// Capture the Flag only where there are flags. Off the maps in `avoid`
+    /// while that leaves one, so a group doesn't play the same map twice
+    /// running (a playlist's rule since Halo 2's).
+    fn pick_map(&self, seed: u64, rot: u16, avoid: &[u8]) -> Map {
+        let ctf = rot & sim::map::ROT_CTF != 0;
+        let has_flags = |id: u8| sim::maps::ALL.iter().any(|d| d.id == id && d.flags.len() == 2);
         let given: Vec<u8> = self
             .cfg
             .maps
             .iter()
             .copied()
-            .filter(|id| sim::maps::ALL.iter().any(|d| d.id == *id))
-            .filter(flags)
+            .filter(|&id| sim::maps::ALL.iter().any(|d| d.id == id))
+            .filter(|&id| !ctf || has_flags(id))
             .collect();
-        let rotation = || {
-            sim::maps::ALL
-                .iter()
-                .filter(|d| !d.practice)
-                .filter(move |d| !ctf || d.flags.len() == 2)
+        let ids = pool(given, rot);
+        let ids = steer_off(ids, avoid);
+        let Some(&id) = ids.get((seed % ids.len().max(1) as u64) as usize) else {
+            return Map::proving_grounds();
         };
-        let sized: Vec<u8> = rotation().filter(|d| d.big() == big).map(|d| d.id).collect();
-        let ids = if !given.is_empty() {
-            given
-        } else if !sized.is_empty() {
-            sized
-        } else {
-            rotation().map(|d| d.id).collect()
-        };
-        sim::map::by_id(ids[(seed % ids.len() as u64) as usize]).unwrap_or_else(Map::proving_grounds)
+        sim::map::by_id(id).unwrap_or_else(Map::proving_grounds)
     }
 
     /// The sim thread: what sessions say (`rx`), their inputs (bounded, and
@@ -748,6 +846,7 @@ impl Sim {
         let mut sessions: BTreeMap<u64, Sess> = BTreeMap::new();
         let mut rooms: Vec<Option<Live>> = Vec::new();
         let mut q = queue::Queue::default();
+        let mut recent = Recent::default();
         let mut last_second = Instant::now();
         let mut seconds: u64 = 0;
 
@@ -822,6 +921,7 @@ impl Sim {
                                             mode,
                                             false,
                                             party.filter(|p| p.private).map_or_else(Default::default, |p| p.custom),
+                                            &recent.of(Recent::key(player.as_ref(), code).as_deref()),
                                         ),
                                         id: format!("os-c{:016x}", random_u64()),
                                         mode,
@@ -854,6 +954,9 @@ impl Sim {
                         let Some((slot, out)) = live.room.join_team(name, look, team) else {
                             continue;
                         };
+                        if let Some(k) = Recent::key(player.as_ref(), code) {
+                            recent.note(k, live.room.world.map.id, now);
+                        }
                         live.links[slot as usize] = Some(session);
                         self.ctx.health.joins_casual.fetch_add(1, Ordering::Relaxed);
                         live.players[slot as usize] = player.clone();
@@ -1040,13 +1143,15 @@ impl Sim {
             if now.duration_since(last_second) >= Duration::from_secs(1) {
                 last_second = now;
                 seconds += 1;
+                recent.prune(now);
                 if seconds % ROSTER_EVERY_S == 1 {
                     let _ = self.jobs.send(Job::Roster(roster(&sessions, &rooms)));
                 }
                 while let Some(sides) = q.form(now) {
                     let mode = sides[0][0].mode;
+                    let avoid = recent.of(sides.iter().flatten().map(|p| p.wallet.as_str()));
                     let mut live = Live {
-                        room: self.new_room(mode, true),
+                        room: self.new_room(mode, true, &avoid),
                         id: format!("os-{:016x}", random_u64()),
                         mode,
                         links: [None; MAX_FIGHTERS],
@@ -1069,6 +1174,7 @@ impl Sim {
                             live.links[slot] = Some(p.session);
                             live.wallets[slot] = Some(p.wallet.clone());
                             live.players[slot] = Some(p.wallet.clone());
+                            recent.note(p.wallet.clone(), live.room.world.map.id, now);
                         }
                     }
                     let i = place(&mut rooms, live);
@@ -1119,7 +1225,7 @@ impl Sim {
                             }
                         };
                         cups[ci] = Some(c);
-                        self.start_stage(&cups, ci, &mut rooms, &mut sessions);
+                        self.start_stage(&cups, ci, &mut rooms, &mut sessions, &mut recent, now);
                     }
                 }
                 for e in q.entries.iter().chain(&cup_wait) {
@@ -1203,7 +1309,7 @@ impl Sim {
                     self.finish_cup(c, &mut sessions);
                     cups[ci] = None;
                 } else {
-                    self.start_stage(&cups, ci, &mut rooms, &mut sessions);
+                    self.start_stage(&cups, ci, &mut rooms, &mut sessions, &mut recent, now);
                 }
             }
 
@@ -1253,14 +1359,19 @@ impl Sim {
         ci: usize,
         rooms: &mut Vec<Option<Live>>,
         sessions: &mut BTreeMap<u64, Sess>,
+        recent: &mut Recent,
+        now: Instant,
     ) {
         let Some(c) = cups[ci].as_ref() else { return };
         for i in 0..c.entrants.len() {
             tell_cup(c, i, sessions);
         }
         for (h, (members, _)) in c.heats.iter().enumerate() {
+            // A heat is on a map its entrants didn't just play: each round
+            // of a cup on another.
+            let avoid = recent.of(members.iter().map(|&i| c.entrants[i].wallet.as_str()));
             let mut live = Live {
-                room: self.new_room(MODE_CUP, true),
+                room: self.new_room(MODE_CUP, true, &avoid),
                 id: format!("{}-{}-{}", c.id, c.round_no(), h + 1),
                 mode: MODE_CUP,
                 links: [None; MAX_FIGHTERS],
@@ -1281,6 +1392,7 @@ impl Sim {
                 live.links[slot] = Some(e.session);
                 live.wallets[slot] = Some(e.wallet.clone());
                 live.players[slot] = Some(e.wallet.clone());
+                recent.note(e.wallet.clone(), live.room.world.map.id, now);
             }
             let at = place_room(rooms, live);
             for (slot, &i) in members.iter().enumerate() {
@@ -1663,4 +1775,79 @@ fn deliver(sessions: &BTreeMap<u64, Sess>, r: &Live, out: impl IntoIterator<Item
 /// Bytes as lower-case hex.
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim::map::{ROT_BIG_TEAM, ROT_CTF, ROT_DOUBLES, ROT_FFA};
+
+    /// Each rotation is the maps that name it or fit it by size, never one
+    /// out of the rotation; Capture the Flag only where there are flags.
+    #[test]
+    fn a_rotation_is_its_maps() {
+        let doubles = pool(Vec::new(), ROT_DOUBLES);
+        assert!(!doubles.is_empty());
+        for id in &doubles {
+            let d = sim::maps::ALL.iter().find(|d| d.id == *id).unwrap();
+            assert!(!d.practice && !d.big(), "{}", d.name);
+        }
+        let big = pool(Vec::new(), ROT_BIG_TEAM);
+        assert!(big
+            .iter()
+            .all(|id| sim::maps::ALL.iter().any(|d| d.id == *id && d.big())));
+        let ctf = pool(Vec::new(), ROT_CTF);
+        assert!(!ctf.is_empty());
+        assert!(ctf
+            .iter()
+            .all(|id| sim::maps::ALL.iter().any(|d| d.id == *id && d.flags.len() == 2)));
+        // A server's own list is played as given.
+        assert_eq!(pool(vec![7, 0], ROT_FFA), vec![7, 0]);
+    }
+
+    /// The maps just played are left out, the newest first, never all.
+    #[test]
+    fn a_pick_steers_off_what_was_just_played() {
+        assert_eq!(steer_off(vec![0, 1, 2], &[1, 2]), vec![0]);
+        assert_eq!(steer_off(vec![0, 1], &[1, 0]), vec![0]);
+        assert_eq!(steer_off(vec![5], &[5]), vec![5]);
+        assert_eq!(steer_off(vec![0, 1, 2], &[]), vec![0, 1, 2]);
+    }
+
+    /// What each played, newest first, two deep, forgotten in time; a group
+    /// is everyone's, the newest first.
+    #[test]
+    fn the_recent_maps_are_each_players_newest_first() {
+        let mut r = Recent::default();
+        let t0 = Instant::now();
+        r.note("a".into(), 1, t0);
+        r.note("a".into(), 2, t0);
+        r.note("a".into(), 3, t0);
+        r.note("b".into(), 4, t0);
+        assert_eq!(r.of(["a"]), vec![3, 2]);
+        assert_eq!(r.of(["a", "b"]), vec![3, 4, 2]);
+        assert_eq!(r.of(["nobody"]), Vec::<u8>::new());
+        // The same map again is still one.
+        r.note("b".into(), 4, t0);
+        assert_eq!(r.of(["b"]), vec![4]);
+        assert_eq!(Recent::key(None, 0), None);
+        assert_eq!(Recent::key(None, 0x2a).as_deref(), Some("party:0000002a"));
+        r.prune(t0 + RECENT_FOR);
+        assert!(r.by.is_empty());
+    }
+
+    /// The server's pick for a group is never what it just played while
+    /// the rotation has another.
+    #[test]
+    fn a_group_is_not_handed_the_map_it_just_played() {
+        let rot = ROT_DOUBLES;
+        let all = pool(Vec::new(), rot);
+        assert!(all.len() >= 2, "{all:?}");
+        for seed in 0..64u64 {
+            let first = all[(seed % all.len() as u64) as usize];
+            let left = steer_off(all.clone(), &[first]);
+            assert!(!left.contains(&first));
+            assert!(!left.is_empty());
+        }
+    }
 }

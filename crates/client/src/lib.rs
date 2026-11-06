@@ -504,6 +504,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::weathering::plugin)
     // A truck's wear (`look/truck.rs`).
     .add_plugins(look::truck::plugin)
+    .add_plugins(look::cloud_sea::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     // Triple T's spray paint: the side's headband, the emblem, the trim
@@ -1097,7 +1098,7 @@ fn drill(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore,
 }
 
 /// A new welcome: the map it names. (Bevy hands a system its world in
-/// pieces; this one needs eight.)
+/// pieces; this one needs fifteen.)
 #[allow(clippy::too_many_arguments)]
 fn rebuild(
     link: NonSend<LinkRes>,
@@ -1108,6 +1109,7 @@ fn rebuild(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut water_mats: ResMut<Assets<look::water::WaterMaterial>>,
+    mut cloud_mats: ResMut<Assets<look::cloud_sea::CloudSeaMaterial>>,
     mut cards: ResMut<look::trees::TreeCards>,
     old: Query<Entity, With<level::LevelPart>>,
     mut eye: Query<(&mut bevy::camera::Exposure, &mut bevy::light::EnvironmentMapLight), With<Eye>>,
@@ -1134,6 +1136,7 @@ fn rebuild(
         &mut meshes,
         &mut mats,
         &mut water_mats,
+        &mut cloud_mats,
         &mut images,
         &mut cards,
         &old,

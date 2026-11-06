@@ -119,7 +119,8 @@ ci/client.sh                                         # the client: clippy, nativ
 ci/client.sh dev                                     # just the page, quickly (release, no fat LTO); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
-node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too)
+node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too;
+                                                     #   E2E_AGAIN=2 … 60 0 0,7: matches back to back, each on another map)
 target/release/oneshot-load --page http://127.0.0.1:8080 --players 160 --mode big   # the load test: kept up or not (exit 1)
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo;
                                                      #   GFX=webgpu for the WebGPU module, ?gfx=webgpu|webgl2 on the page)
