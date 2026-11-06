@@ -9,6 +9,7 @@
 //! [`PROTO_VER`] and moves the goldens in `tests/goldens.rs`.
 
 pub mod bits;
+pub mod delta;
 pub mod frame;
 pub mod medal;
 pub mod party;
@@ -24,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 25;
+pub const PROTO_VER: u16 = 26;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -198,6 +199,8 @@ pub fn datagram_kind(buf: &[u8]) -> Option<u8> {
 }
 pub const DG_INPUT: u8 = KIND_INPUT as u8;
 pub const DG_SNAPSHOT: u8 = KIND_SNAPSHOT as u8;
+/// A snapshot as what changed since one the client acked ([`delta`]).
+pub const DG_DELTA: u8 = delta::KIND_DELTA as u8;
 /// Party voice, both ways, on a lobby session ([`voice`]).
 pub const DG_VOICE: u8 = voice::KIND_VOICE as u8;
 

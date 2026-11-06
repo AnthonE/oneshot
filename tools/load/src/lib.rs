@@ -386,6 +386,7 @@ pub struct Window {
     pub inputs_dropped: u64,
     pub packets_sent: u64,
     pub packets_lost: u64,
+    pub bytes_sent: u64,
     /// Since the server started.
     pub rtt_p99_ms: u64,
 }
@@ -446,6 +447,7 @@ impl Window {
             inputs_dropped: d("inputs_dropped"),
             packets_sent: d("packets_sent"),
             packets_lost: d("packets_lost"),
+            bytes_sent: d("bytes_sent"),
             rtt_p99_ms: num(b, "rtt_p99_ms"),
         }
     }
@@ -591,9 +593,14 @@ impl fmt::Display for Report {
                     "  snapshots dropped {}, oversize {}; cut behind {}; send errors {}; inputs dropped {}",
                     w.snapshots_dropped, w.snapshots_oversize, w.cut_behind, w.send_errors, w.inputs_dropped
                 )?;
+                let kbps = if w.secs > 0.0 && w.players > 0 {
+                    w.bytes_sent as f64 * 8.0 / 1000.0 / w.secs / w.players as f64
+                } else {
+                    0.0
+                };
                 write!(
                     f,
-                    "  packets {} sent, {loss:.2}% lost; rtt p99 <{} ms",
+                    "  packets {} sent, {loss:.2}% lost; {kbps:.0} kbps down a player; rtt p99 <{} ms",
                     w.packets_sent, w.rtt_p99_ms
                 )
             }

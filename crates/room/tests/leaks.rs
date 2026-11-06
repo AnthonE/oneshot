@@ -426,6 +426,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     let (mut medals, mut carnage) = (0, 0);
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
+    let mut rx = proto::delta::Receiver::default();
     for t in 0..TICK_HZ * 125 {
         let now = t as f64 * 1000.0 / TICK_HZ as f64;
         // The person seat plays through the client's path: a frame a tick,
@@ -439,17 +440,24 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         };
         m.frames[0] = driver.think(&g.room.world, me);
         g.room.on_input(slot, &m, now);
-        let (snaps, out) = g.room.step(now);
+        // What goes on the wire, deltas and all, made whole as the client
+        // does: exactly the snapshot checked.
+        let mut snaps: Vec<(u8, Snapshot, Vec<u8>)> = Vec::new();
+        let mut out = Vec::new();
+        g.room
+            .step_into(now, &mut out, |q, s, b| snaps.push((q, *s, b.to_vec())));
         g.history.push_front(g.room.world.fighters);
         g.history.truncate(looks);
         g.vhistory.push_front(*g.room.world.vehicles);
         g.vhistory.truncate(looks);
-        for (_, s) in &snaps {
+        for (_, s, wire) in &snaps {
             acked = s.tick;
             g.check_snapshot(s);
             let n = encode_snapshot(s, &mut buf).unwrap();
+            let made = rx.take(wire).expect("the client makes every snapshot whole");
+            assert_eq!(made, proto::decode_snapshot(&buf[..n]).unwrap(), "tick {}", s.tick);
             if !g.over {
-                g.sent.push(buf[..n].to_vec());
+                g.sent.push(wire.clone());
             }
         }
         for (to, m) in &out {

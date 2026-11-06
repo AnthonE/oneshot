@@ -501,6 +501,48 @@ fn decoders_refuse_garbage() {
     }
 }
 
+/// The golden snapshot as a delta against itself two ticks before: our
+/// fighter a little along, the clock on, one remote gone.
+fn encode_delta_golden(buf: &mut [u8]) -> usize {
+    use proto::delta::{encode_delta, Keyed};
+    let cur = snapshot();
+    let mut base = cur;
+    base.tick -= 2;
+    base.clock -= 1;
+    base.own.body.pos.x -= 0.25;
+    base.n_remote = 1;
+    let (mut k, mut b) = (Keyed::default(), Keyed::default());
+    k.fill(&cur).unwrap();
+    b.fill(&base).unwrap();
+    encode_delta(&k, &b, buf).unwrap()
+}
+
+#[test]
+fn a_delta_round_trips_and_is_smaller() {
+    use proto::delta::{decode_delta, Keyed};
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_delta_golden(&mut buf);
+    let cur = snapshot();
+    let mut base = cur;
+    base.tick -= 2;
+    base.clock -= 1;
+    base.own.body.pos.x -= 0.25;
+    base.n_remote = 1;
+    let mut b = Keyed::default();
+    b.fill(&base).unwrap();
+    let mut out = Keyed::default();
+    decode_delta(&buf[..n], &b, &mut out).unwrap();
+    let mut full = [0u8; MAX_DATAGRAM];
+    let f = encode_snapshot(&cur, &mut full).unwrap();
+    assert_eq!(out.snapshot().unwrap(), decode_snapshot(&full[..f]).unwrap());
+    assert!(n * 2 < f, "{n} B as a delta, {f} B whole");
+    // Against the wrong base, or cut short, it is refused.
+    let mut wrong = b.clone();
+    wrong.tick += 1;
+    assert!(decode_delta(&buf[..n], &wrong, &mut out).is_err());
+    assert!(decode_delta(&buf[..n - 1], &b, &mut out).is_err());
+}
+
 #[test]
 fn the_bytes_match_their_goldens() {
     let mut buf = [0u8; MAX_DATAGRAM];
@@ -513,15 +555,17 @@ fn the_bytes_match_their_goldens() {
         let n = encode_msg(&m, &mut buf).unwrap();
         got.push(fnv(&buf[..n]));
     }
+    let n = encode_delta_golden(&mut buf);
+    got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
         0x6e38_c4b5_9200_3873,
-        0x761f_5ed6_6def_0b4f,
-        0xd43f_696a_d4ed_3d2c,
+        0xa623_416c_2fc8_cab0,
+        0x6beb_12f6_c804_8861,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0xa74e_f66a_654f_e864,
+        0x7942_7876_4d62_4625,
         0x0835_ec07_b4ee_4fb0,
         0x3f28_24ea_ec0c_5c91,
         0xd5ca_75af_c4fa_c9d7,
@@ -542,6 +586,7 @@ fn the_bytes_match_their_goldens() {
         0x6c87_7218_bf71_5473,
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
+        0x547f_b8fe_3513_fdb0,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

@@ -4,7 +4,7 @@
 //! out. The browser's WebTransport (`web.rs`) and the native wtransport
 //! (`native.rs`) only move bytes for it; neither decides anything here.
 
-use proto::{decode_snapshot, encode_input, Msg, Name, Pass, MAX_DATAGRAM, PROTO_VER};
+use proto::{encode_input, Msg, Name, Pass, MAX_DATAGRAM, PROTO_VER};
 use sim::input::Input;
 use sim::map::Map;
 
@@ -77,6 +77,9 @@ pub struct Session {
     clip: Option<Box<Clipper>>,
     /// Stream messages for the server, until the transport takes them.
     outgoing: Vec<Msg>,
+    /// The snapshots taken in, cut into records: deltas are made whole
+    /// against them (`proto::delta`).
+    rx: proto::delta::Receiver,
 }
 
 impl Default for Session {
@@ -98,6 +101,7 @@ impl Session {
             watch: false,
             clip: Some(Box::default()),
             outgoing: Vec::new(),
+            rx: Default::default(),
         }
     }
 
@@ -209,6 +213,8 @@ impl Session {
                 self.map_id = map;
                 self.welcomes += 1;
                 self.core = NetCore::new(slot, team, tick, rules, m);
+                // Another room's snapshots are no base for this one's.
+                self.rx.clear();
                 self.core.watch = self.watch;
                 self.core.salt_commit = salt_commit;
                 self.ready = true;
@@ -230,17 +236,28 @@ impl Session {
 
     /// A datagram that arrived at `at_ms` (the app's clock).
     pub fn on_datagram(&mut self, at_ms: f64, d: &[u8]) {
-        if !self.ready || proto::datagram_kind(d) != Some(proto::DG_SNAPSHOT) {
+        let kind = proto::datagram_kind(d);
+        if !self.ready || (kind != Some(proto::DG_SNAPSHOT) && kind != Some(proto::DG_DELTA)) {
             return;
         }
-        if let Ok(s) = decode_snapshot(d) {
+        // A delta whose base we never had is dropped, and so never acked:
+        // the server's next is against one we have, or whole.
+        if let Ok(s) = self.rx.take(d) {
             let had = self.core.stats.snapshots;
             self.core.on_snapshot(at_ms, &s);
             // Only what was drawn goes on the clip: an old one (late, or a
-            // last heat's) is nothing a replay would show either.
+            // last heat's) is nothing a replay would show either. Whole,
+            // so a tape reads on its own.
             if self.core.stats.snapshots != had {
                 if let Some(c) = self.clip.as_mut() {
-                    c.on_snapshot(at_ms, s.tick, d);
+                    if kind == Some(proto::DG_SNAPSHOT) {
+                        c.on_snapshot(at_ms, s.tick, d);
+                    } else {
+                        let mut full = [0u8; MAX_DATAGRAM];
+                        if let Ok(n) = proto::encode_snapshot(&s, &mut full) {
+                            c.on_snapshot(at_ms, s.tick, &full[..n]);
+                        }
+                    }
                 }
             }
         }

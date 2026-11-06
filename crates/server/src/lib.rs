@@ -216,6 +216,9 @@ pub struct Config {
     /// there): 64 as every mode by default; 32 halves its packets on a box
     /// short of them. The arenas and ranked always get 64.
     pub big_snapshot_hz: u32,
+    /// Snapshots go as deltas against what each client acked when that is
+    /// smaller (`proto::delta`); off (`--no-delta`), every one goes whole.
+    pub deltas: bool,
     /// The key nonces are signed with, shared by the two slots so either
     /// takes the other's (`auth::Nonces`). None: a key of this process's own.
     pub nonce_key: Option<[u8; 32]>,
@@ -273,6 +276,7 @@ impl Default for Config {
             allow_origins: Vec::new(),
             capacity: 256,
             big_snapshot_hz: TICK_HZ / room::SNAP_EVERY,
+            deltas: true,
             nonce_key: None,
             live_file: None,
             roster_dir: None,
@@ -810,7 +814,7 @@ impl Sim {
         };
         let map = chosen.unwrap_or_else(|| self.pick_map(seed, rot, avoid));
         let big = !ranked && sim::maps::ALL.iter().any(|d| d.id == map.id && d.big());
-        if ranked {
+        let mut room = if ranked {
             Room::ranked(map, rules, seed, salt)
         } else {
             let mut r = Room::new(map, rules, seed, salt);
@@ -819,7 +823,9 @@ impl Sim {
                 r.set_snap_every(snap_every(self.cfg.big_snapshot_hz));
             }
             r
-        }
+        };
+        room.deltas = self.cfg.deltas;
+        room
     }
 
     /// The map a room plays in rotation `rot` (`sim::map::ROT_*`), from its

@@ -117,6 +117,8 @@ pub struct ClientNet {
     /// What this client was told of them, until it acks a snapshot that
     /// carried it.
     pub queue: EventQueue,
+    /// What it was sent, cut into records: the bases of its deltas.
+    bases: Box<proto::delta::Ring>,
 }
 
 /// A client's events as it may be told them (filtered by `room::build`),
@@ -189,6 +191,7 @@ impl Default for ClientNet {
             low: None,
             pending: Vec::new(),
             queue: EventQueue::default(),
+            bases: Box::default(),
         }
     }
 }
@@ -367,6 +370,12 @@ pub struct Room {
     /// Ticks between snapshots: [`SNAP_EVERY`] unless the server gives a
     /// mode its own rate ([`Room::set_snap_every`]).
     snap_every: u32,
+    /// Snapshots go as deltas against what each client acked, when that
+    /// is smaller (`proto::delta`); off, every one goes whole.
+    pub deltas: bool,
+    /// The snapshot being cut into records, before it joins its client's
+    /// bases.
+    keyed: Box<proto::delta::Keyed>,
 }
 
 impl Room {
@@ -406,13 +415,16 @@ impl Room {
             looks: [proto::Look::default(); MAX_FIGHTERS],
             spectate: None,
             snap_every: SNAP_EVERY,
+            deltas: true,
+            keyed: Box::default(),
         }
     }
 
-    /// Snapshots every `n` ticks from now on (1 to 8): a mode's own rate.
-    /// What the world does is the same at any rate; only what is sent.
+    /// Snapshots every `n` ticks from now on (2 to 8): a mode's own rate.
+    /// What the world does is the same at any rate; only what is sent. On
+    /// even ticks, as a delta's bases are kept (`proto::delta::Ring`).
     pub fn set_snap_every(&mut self, n: u32) {
-        self.snap_every = n.clamp(1, 8);
+        self.snap_every = n.clamp(2, 8);
     }
 
     /// Ticks between snapshots.
@@ -756,6 +768,7 @@ impl Room {
         }
 
         let mut wire = [0u8; MAX_DATAGRAM];
+        let mut dwire = [0u8; MAX_DATAGRAM];
         if self.world.tick.is_multiple_of(self.snap_every) {
             for s in 0..MAX_FIGHTERS {
                 let tick = self.world.tick;
@@ -776,7 +789,23 @@ impl Room {
                     );
                     c.pending.clear();
                     c.sent_snapshot(tick, now_ms);
-                    send(s as u8, &snap, &wire[..n]);
+                    // Against the newest it acked, if both ends still keep
+                    // it and that is smaller; it then joins the bases.
+                    let k = &mut self.keyed;
+                    let mut bytes = &wire[..n];
+                    if n > 0 && self.deltas && k.fill(&snap).is_ok() {
+                        let base = c
+                            .acked
+                            .filter(|&a| tick.wrapping_sub(a) < proto::delta::DELTA_WINDOW)
+                            .and_then(|a| c.bases.get(a));
+                        if let Some(m) = base.and_then(|b| proto::delta::encode_delta(k, b, &mut dwire).ok()) {
+                            if m < n {
+                                bytes = &dwire[..m];
+                            }
+                        }
+                        core::mem::swap(c.bases.slot(tick), k);
+                    }
+                    send(s as u8, &snap, bytes);
                 }
             }
         }

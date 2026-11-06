@@ -572,14 +572,19 @@ async fn session(
     });
     // The connection's round trip and loss, each journal window and at
     // the end (`health.rs`).
-    let seen = Arc::new(Mutex::new((0u64, 0u64)));
+    let seen = Arc::new(Mutex::new((0u64, 0u64, 0u64)));
     let sample = {
         let (conn, ctx, seen) = (conn.clone(), ctx.clone(), seen.clone());
         move || {
             let q = conn.quic_connection().stats();
             if let Ok(mut last) = seen.lock() {
-                ctx.health
-                    .sample(conn.rtt(), q.path.sent_packets, q.path.lost_packets, &mut last);
+                ctx.health.sample(
+                    conn.rtt(),
+                    q.path.sent_packets,
+                    q.path.lost_packets,
+                    q.udp_tx.bytes,
+                    &mut last,
+                );
             }
         }
     };
