@@ -424,6 +424,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .build()
     });
     let mut app = App::new();
+    // A command on something already gone is logged as an error, which fails
+    // e2e, and doesn't crash a player's match.
+    app.set_error_handler(bevy::ecs::error::error);
     // Before `AssetPlugin`, which keeps a source already registered: Bevy's
     // wasm reader panics on a download that breaks mid-body, this one
     // retries it (`asset_fetch.rs`).
