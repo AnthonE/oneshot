@@ -124,7 +124,10 @@ fn run() -> Result<(), String> {
         let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
         (oneshot_client::app(link, opts), Screen::Playing, false)
     } else {
-        let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
+        // The launcher fills its placeholders with "" when it has nothing to say.
+        let server = arg("--server")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| PUBLIC.into());
         let mode = match arg("--mode") {
             Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
             None => None,
@@ -351,7 +354,7 @@ const HELP: &str = "oneshot: the desktop client
   --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam,
                                    ctf; duel, doubles and cup are ranked, which needs an
-                                   Elo Pros sign-in (the web page); watch follows a public
+                                   Elo Pros sign-in (the launcher's); watch follows a public
                                    match (--party CODE: that party's). Or 0 to 6, 8, 9
   --autoplay [--scope|--drill]     a bot plays you, straight into a match (casual
                                    unless --mode); --scope holds the scope, --drill

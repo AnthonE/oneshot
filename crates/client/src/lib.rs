@@ -23,6 +23,7 @@ pub mod config;
 pub mod crash;
 pub mod display;
 pub mod door;
+pub mod elo;
 pub mod film;
 pub mod flags;
 pub mod front;
