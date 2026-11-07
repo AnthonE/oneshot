@@ -190,12 +190,17 @@ pub async fn reload(eps: &[Arc<Endpoint<Server>>], cfg: &Config) -> Result<[u8; 
     }
     let identity = identity(cfg).await?;
     let hash = cert_hash(&identity)?;
-    for ep in eps {
+    // Every endpoint's config made before any is changed: one that can't be
+    // made leaves them all on the old certificate, never half on each.
+    let mut configs = Vec::with_capacity(eps.len());
+    for _ in eps {
         // The bind address is ignored without a rebind: the socket stays.
-        let config = server_config(
+        configs.push(server_config(
             ServerConfig::builder().with_bind_address(cfg.bind),
             identity.clone_identity(),
-        )?;
+        )?);
+    }
+    for (ep, config) in eps.iter().zip(configs) {
         ep.reload_config(config, false).map_err(|e| e.to_string())?;
     }
     Ok(hash)
