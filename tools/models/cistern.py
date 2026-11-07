@@ -38,14 +38,17 @@ WATER = 0.07  # the water line
 GRID = (-17.5, -10.5, -3.5, 3.5, 10.5, 17.5)
 BAYS = (-21.0, -14.0, -7.0, 0.0, 7.0, 14.0, 21.0)
 SPAN = 3.5
+# A column's drums, m apart.
+DRUM_M = 1.55
 # The columns' cutting: how many hollows, how deep, m.
 FLUTES = 18
 FLUTE_DEPTH = 0.038
 # What a reflection keeps of what it reflects: the sheet's depth and the dark it
 # hangs in are in this, not in a light.
-DIM = {'stone': 0.13, 'stone_dark': 0.06, 'brick': 0.1, 'marble': 0.2, 'bronze': 0.04}
+DIM = {'stone': 0.085, 'stone_dark': 0.04, 'brick': 0.06, 'marble': 0.12, 'bronze': 0.03}
+DIM_DOWN = 0.35
 # The marble's colour over its photograph: the photograph is cream, this is cold.
-MARBLE_TONE = (0.66, 0.74, 0.92)
+MARBLE_TONE = (0.56, 0.68, 1.0)
 OCULI = ((0.0, 0.0, 1.55, 2.7, 1.0),) + tuple((sx * 7.0, sz * 7.0, 0.72, 1.35, 0.5) for sx in (-1, 1) for sz in (-1, 1))
 
 
@@ -188,6 +191,18 @@ def fluted(x, z, shaft):
             rows.append((shaft[j][0] + (shaft[j + 1][0] - shaft[j][0]) * t, shaft[j][1] + (shaft[j + 1][1] - shaft[j][1]) * t))
     rows.append(shaft[-1])
     y0, y1 = shaft[0][1], shaft[-1][1]
+    # A drum's joint every DRUM_M: three rows close together, the middle one cut in.
+    joints = []
+    y = y0 + DRUM_M
+    while y < y1 - 0.5:
+        joints.append(y)
+        y += DRUM_M
+    def r_at(yy):
+        for (ra, ya), (rb, yb) in zip(shaft, shaft[1:]):
+            if ya <= yy <= yb:
+                return ra + (rb - ra) * (yy - ya) / (yb - ya)
+        return shaft[-1][0]
+    rows = sorted(rows + [(r_at(y) * f, y + dy) for y in joints for f, dy in ((1.0, -0.025), (0.985, 0.0), (1.0, 0.025))], key=lambda q: q[1])
     base = len(pa.verts)
     for r, y in rows:
         run = min(1.0, min(y - y0, y1 - y) / 0.34)
@@ -200,7 +215,8 @@ def fluted(x, z, shaft):
             i1 = (i + 1) % sides
             p, q = base + j * sides + i, base + j * sides + i1
             s, t = base + (j + 1) * sides + i1, base + (j + 1) * sides + i
-            u0, u1 = i * 0.11 / tile * 1.0, (i + 1) * 0.11 / tile
+            step = math.tau * rows[j][0] / sides
+            u0, u1 = i * step / tile, (i + 1) * step / tile
             v0, v1 = rows[j][1] / tile, rows[j + 1][1] / tile
             pa.faces.append(((p, t, s, q), [(u0, v0), (u0, v1), (u1, v1), (u1, v0)], True))
 
@@ -266,8 +282,37 @@ def lantern(x, z, wall_k, mat):
     rod((x, y + 0.7, z), (x + dx * 1.1, y + 0.7, z + dz * 1.1), 0.035, 'bronze', sides=6)
     rod((x + dx * 0.55, y + 0.7, z + dz * 0.55), (x + dx * 1.1, y + 0.2, z + dz * 1.1), 0.025, 'bronze', sides=6)
     rod((x, y + 0.7, z), (x, y + 0.2, z), 0.02, 'bronze', sides=6)
-    spin(x, z, [(0.02, y - 0.22), (0.2, y - 0.1), (0.24, y), (0.2, y + 0.12), (0.12, y + 0.2)], 'bronze', sides=12, smooth=True)
-    spin(x, z, [(0.17, y - 0.08), (0.2, y + 0.0), (0.16, y + 0.1), (0.001, y + 0.14)], mat, sides=12, smooth=True)
+    spin(x, z, [(0.02, y - 0.34), (0.3, y - 0.16), (0.36, y), (0.3, y + 0.18), (0.18, y + 0.3)], 'bronze', sides=14, smooth=True)
+    spin(x, z, [(0.26, y - 0.12), (0.31, y + 0.0), (0.25, y + 0.15), (0.001, y + 0.22)], mat, sides=14, smooth=True)
+    halo(x, y, z, 1.6, (0.16, 0.09, 0.03))
+
+
+def halo(x, y, z, r, col):
+    """A lamp's glow in the damp air: crossed discs added over the frame, bright at
+    the middle, gone at their rim."""
+    pa = part('shaft')
+    n, rings = 16, 4
+    for ux, uz in ((1.0, 0.0), (0.0, 1.0), (0.7071, 0.7071), (0.7071, -0.7071)):
+        pts = [(x, y, z)]
+        for k in range(1, rings + 1):
+            for i in range(n):
+                a = math.tau * i / n
+                rr = r * k / rings
+                pts.append((x + ux * math.cos(a) * rr, y + math.sin(a) * rr, z + uz * math.cos(a) * rr))
+        base = pa.add(pts)
+        pa.colors[base] = col
+        for k in range(1, rings + 1):
+            f = (1.0 - k / rings) ** 2
+            for i in range(n):
+                pa.colors[base + 1 + (k - 1) * n + i] = (col[0] * f, col[1] * f, col[2] * f)
+        for i in range(n):
+            pa.faces.append(((base, base + 1 + i, base + 1 + (i + 1) % n), [(0, 0)] * 3, True))
+        for k in range(rings - 1):
+            for i in range(n):
+                i1 = (i + 1) % n
+                a0, a1 = base + 1 + k * n + i, base + 1 + k * n + i1
+                b0, b1 = base + 1 + (k + 1) * n + i, base + 1 + (k + 1) * n + i1
+                pa.faces.append(((a0, b0, b1, a1), [(0, 0)] * 4, True))
 
 
 # ------------------------------------------------------- the quay and the stairs
@@ -457,8 +502,10 @@ def shafts():
             for j in range(rows + 1):
                 for i in range(cols + 1):
                     edge = 1.0 - abs(-1 + 2 * i / cols)
-                    fall = (1.0 - j / rows * 0.82)
-                    v = k * 0.075 * edge * edge * fall
+                    t = j / rows
+                    # Out of the oculus soft, strongest a third of the way down, gone at the water.
+                    fall = min(1.0, t * 3.0) * (1.0 - t * 0.85)
+                    v = k * 0.07 * edge ** 3 * fall
                     pa.colors[base + j * (cols + 1) + i] = (v, v, v)
             for j in range(rows):
                 for i in range(cols):
@@ -472,14 +519,43 @@ def water():
     surface(rows, 'water', (0, 1, 0), lambda p: (p[0], p[2]), smooth=True)
 
 
+BAKED = []  # (at, colour, strength, reach): set by main from the map's lamps
+
+
+def baked(p, n):
+    """The lamps' and the oculi's light at a point, what stands in their way
+    shading it: the lit side of a column and its dark core, a pool on the dais."""
+    out = [BAKE_FLOOR] * 3
+    for at, col, k, reach in BAKED:
+        dx, dy, dz = at[0] - p[0], at[1] - p[1], at[2] - p[2]
+        d2 = dx * dx + dy * dy + dz * dz
+        d = math.sqrt(d2)
+        lam = (n.x * dx + n.y * dy + n.z * dz) / max(d, 1e-4)
+        if lam <= 0.0:
+            continue
+        fall = k * lam / (1.0 + d2 / (reach * reach))
+        if fall < 0.02:
+            continue
+        q = (p[0] + n.x * 0.04, p[1] + n.y * 0.04, p[2] + n.z * 0.04)
+        if not arch.seen(q, at):
+            continue
+        for c in range(3):
+            out[c] += col[c] * fall
+    return [min(BAKE_TOP, v) for v in out]
+
+
 def tone(p, n, name):
-    """Over the occlusion: wet and stained low in the tank, damp under the vault's
-    feet, a slow mottle over everything so no wall is one value."""
+    """Over the occlusion: the light baked in, wet and stained low in the tank, damp
+    under the vault's feet, a slow mottle over everything so no wall is one value."""
     x, y, z = p
+    if name.startswith('light') or name == 'bronze':
+        lit = (1.0, 1.0, 1.0)
+    else:
+        lit = baked(p, n)
     mottle = 0.9 + 0.1 * math.sin(x * 0.61 + z * 0.37) * math.sin(z * 0.53 - y * 0.91 + x * 0.17)
     r, g, b = mottle, mottle, mottle
     if max(abs(x), abs(z)) <= Q + 0.6:
-        wet = max(0.0, min(1.0, 1.0 - (y - WATER) / 1.1))
+        wet = max(0.0, min(1.0, 1.0 - (y - WATER) / 1.5))
         k = 1.0 - 0.62 * wet
         r, g, b = r * k * (1 - 0.1 * wet), g * k, b * k * (1 - 0.14 * wet)
     # Streaks from the vault's feet down the walls.
@@ -488,7 +564,10 @@ def tone(p, n, name):
         r, g, b = r * (1 - 0.1 * streak), g * (1 - 0.1 * streak), b * (1 - 0.1 * streak)
     if name == 'marble':
         r, g, b = r * MARBLE_TONE[0], g * MARBLE_TONE[1], b * MARBLE_TONE[2]
-    return (r, g, b)
+        # A drum's joint, dark.
+        if (y - 0.42) % DRUM_M < 0.03 or (y - 0.42) % DRUM_M > DRUM_M - 0.03:
+            r, g, b = r * 0.45, g * 0.45, b * 0.45
+    return (r * lit[0], g * lit[1], b * lit[2])
 
 
 def build_all(lamps):
@@ -540,8 +619,29 @@ def seen_in_water(p):
     return out <= Q + 1.5 or y > Y2 - 0.6
 
 
+# What the bake adds to: the light every face gets, and the most a face gets.
+BAKE_FLOOR = 0.42
+BAKE_TOP = 1.7
+
+
+def bake_lamps():
+    """The map's lamps as the bake sees them: the oculi from their discs, down."""
+    with open(MAP) as f:
+        spec = json.load(f)
+    for l in spec['light']['lamps']:
+        x, z, y = l['at']
+        pts = [(x * sx, z * sz) for sx in (-1, 1) for sz in (-1, 1)] if l.get('mirror') else [(x, z)]
+        for px, pz in pts:
+            if y >= 13:
+                # A sky lamp over the vault: it lights from the oculus under it.
+                BAKED.append(((px, CROWN - 0.3, pz), l['color'], 0.95 if px == 0 else 0.55, 7.5 if px == 0 else 5.0))
+            else:
+                BAKED.append(((px, y, pz), l['color'], 0.45, 5.0))
+
+
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    bake_lamps()
     build_all(lamps_of())
     objs = make_objects()
     def ground(verts, polys):
@@ -556,7 +656,7 @@ def main():
         'reflect_brick': ['brick'],
         'reflect_marble': ['marble'],
         'reflect_light': ['light_white', 'light_amber', 'light_red', 'light_blue', 'bronze'],
-    }, WATER, keep=seen_in_water, dim=DIM)
+    }, WATER, keep=seen_in_water, dim=DIM, down=DIM_DOWN)
     objs.update(refl)
     export(objs, OUT, 'cistern', bare=set(refl) | {'shaft'})
 

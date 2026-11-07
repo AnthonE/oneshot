@@ -33,7 +33,7 @@ pub const BRICK_TILE_M: f32 = 1.7;
 pub const MARBLE_TILE_M: f32 = 3.0;
 pub const ROAD_TILE_M: f32 = 5.0;
 pub const BLAST_TILE_M: f32 = 3.6;
-pub const SNOW_TILE_M: f32 = 6.0;
+pub const SNOW_TILE_M: f32 = 2.6;
 pub const RUST_TILE_M: f32 = 2.4;
 /// The bronze: brushed and old, not polished (a mirror under the open sky is
 /// white).
@@ -71,6 +71,8 @@ pub enum Paint {
     Dim(Color, f32),
     /// Lying on a floor: this colour, how much of it in COLOR_0's alpha.
     Decal(Color),
+    /// Standing water on a road, its rim fading out in COLOR_0's alpha.
+    Puddle,
     /// Far outside: its COLOR_0 alone, never fogged or lit.
     Far,
     /// Far outside: this picture, never fogged or lit.
@@ -176,7 +178,7 @@ const CISTERN: Set = Set {
     lift: Some(Lift {
         pad: Color::srgb(0.5, 0.62, 0.72),
         glow: LinearRgba::rgb(0.5, 0.68, 0.9),
-        beam: Color::srgba(0.5, 0.68, 0.95, 0.075),
+        beam: Color::srgba(0.5, 0.68, 0.95, 0.04),
     }),
 };
 
@@ -191,7 +193,7 @@ const OVERPASS: Set = Set {
         part("paint", Paint::Metal(Color::srgb(0.7, 0.7, 0.64), 0.55, 0.0)),
         part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.55, 0.0)),
         part("steel", Paint::Metal(Color::srgb(0.36, 0.37, 0.39), 0.5, 0.6)),
-        part("puddle", Paint::Metal(Color::srgb(0.02, 0.022, 0.026), 0.05, 0.0)),
+        part("puddle", Paint::Puddle),
         part("shaft", Paint::Shaft(Color::WHITE)),
         part("light_sodium", Paint::Light(LIGHT_SODIUM)),
         part("light_red", Paint::Light(LIGHT_RED)),
@@ -200,7 +202,8 @@ const OVERPASS: Set = Set {
         part("light_cyan", Paint::Light(LIGHT_CYAN)),
         part("light_warm", Paint::Dim(LIGHT_WARM, WINDOW_GLOW)),
         part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
-        part("city", Paint::Metal(Color::srgb(0.035, 0.04, 0.05), 0.8, 0.0)),
+        part("city", Paint::Far),
+        part("city_lights", Paint::Far),
         part("flood", Paint::Water),
         part("reflect_light", Paint::Reflected(None)),
         part("reflect_city", Paint::Reflected(None)),
@@ -235,7 +238,9 @@ const DOCK: Set = Set {
         part("light_red", Paint::Light(LIGHT_RED)),
         part("light_blue", Paint::Light(LIGHT_BLUE)),
         part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
-        part("glass", Paint::Glass),
+        part("paint_w", Paint::Metal(Color::srgb(0.66, 0.66, 0.62), 0.6, 0.0)),
+        part("ship", Paint::Far),
+        part("ship_dark", Paint::Far),
         part("space", Paint::Far),
         part("stars", Paint::Far),
         part("ring", Paint::Far),
@@ -371,6 +376,18 @@ pub fn dress(
                             base_color: colour,
                             alpha_mode: AlphaMode::Blend,
                             perceptual_roughness: 0.9,
+                            ..default()
+                        })),
+                        NotShadowCaster,
+                    ));
+                }
+                Paint::Puddle => {
+                    c.insert((
+                        MeshMaterial3d(mats.add(StandardMaterial {
+                            base_color: Color::srgb(0.012, 0.014, 0.017),
+                            alpha_mode: AlphaMode::Blend,
+                            perceptual_roughness: 0.08,
+                            reflectance: fresnel::DIELECTRIC,
                             ..default()
                         })),
                         NotShadowCaster,

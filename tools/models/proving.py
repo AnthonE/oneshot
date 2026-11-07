@@ -18,13 +18,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import arch  # noqa: E402
-from arch import BACK, cbox, export, make_objects, paint, panel, part, quad, rod, spin, strip_light, surface, to_blender, torus, tri  # noqa: E402,F401
+from arch import BACK, cbox, digits, export, make_objects, paint, panel, part, quad, rod, spin, strip_light, surface, to_blender, torus, tri  # noqa: E402,F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'proving')
 
-arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'snow': 6.0, 'rust': 2.4})
+arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'snow': 2.6, 'rust': 2.4})
 arch.UNTRACED.update({'decal', 'track', 'peaks', 'shaft'})
 
 W = 24.0
@@ -63,14 +63,18 @@ def wall_side(k):
     for i, x in enumerate(range(-24, 24, 8)):
         x0, x1 = float(x), float(x + 8)
         # The lower wall, set back from the plane between its buttresses.
-        qbox(k, x0, 0.0, W + 0.18, x1, 3.0, W + 1.0, 'blast', c=0.02, cell=1.4)
-        qbox(k, x0, 3.0, W + 0.42, x1, 8.0, W + 1.0, 'blast', c=0.02, cell=1.4)
-        snow_cap(x0, 3.0, W + 0.2, x1, W + 0.42, k)
-        qbox(k, x0, 8.0, W + 0.42, x1, 8.14, W + 1.0, 'blast_dark', c=0.03, cell=2.0)
-        snow_cap(x0, 8.14, W + 0.44, x1, W + 1.0, k)
+        qbox(k, x0, 0.0, W + 0.42, x1, 3.0, W + 1.0, 'blast', c=0.02, cell=1.2)
+        qbox(k, x0, 3.0, W + 0.78, x1, 8.0, W + 1.0, 'blast', c=0.02, cell=1.2)
+        snow_cap(x0, 3.0, W + 0.44, x1, W + 0.78, k)
+        qbox(k, x0, 8.0, W + 0.78, x1, 8.14, W + 1.0, 'blast_dark', c=0.03, cell=2.0)
+        snow_cap(x0, 8.14, W + 0.8, x1, W + 1.0, k)
+        if i % 2 == 1:
+            # A blast deflector over the bay, raked in toward the range.
+            qbox(k, x0 + 1.4, 8.14, W + 0.5, x1 - 1.4, 9.9, W + 1.0, 'blast', c=0.06, cell=1.6)
+            snow_cap(x0 + 1.45, 9.9, W + 0.52, x1 - 1.45, W + 0.98, k)
         # Its buttress, out to the plane.
-        qbox(k, x0 - 0.45, 0.0, W, x0 + 0.45, 3.3, W + 0.42, 'blast', c=0.05)
-        qbox(k, x0 - 0.45, 3.3, W + 0.1, x0 + 0.45, 6.0, W + 0.42, 'blast', c=0.05)
+        qbox(k, x0 - 0.45, 0.0, W, x0 + 0.45, 3.3, W + 0.6, 'blast', c=0.05)
+        qbox(k, x0 - 0.45, 3.3, W + 0.1, x0 + 0.45, 6.0, W + 0.78, 'blast', c=0.05)
         snow_cap(x0 - 0.4, 3.3, W + 0.02, x0 + 0.4, W + 0.1, k)
         snow_cap(x0 - 0.4, 6.0, W + 0.12, x0 + 0.4, W + 0.42, k)
         # A hazard band along it, chevrons.
@@ -78,10 +82,10 @@ def wall_side(k):
         n = 0
         while u < x1 - 0.5:
             mat = 'paint_y' if n % 2 == 0 else 'paint_k'
-            a = (u, 1.2, W + 0.172)
-            b = (u + 0.5, 1.2, W + 0.172)
-            c = (u + 0.82, 1.62, W + 0.172)
-            d = (u + 0.32, 1.62, W + 0.172)
+            a = (u, 1.2, W + 0.412)
+            b = (u + 0.5, 1.2, W + 0.412)
+            c = (u + 0.82, 1.62, W + 0.412)
+            d = (u + 0.32, 1.62, W + 0.412)
             def t(p):
                 px, pz = turn(k, p[0], p[2])
                 return (px, p[1], pz)
@@ -89,16 +93,13 @@ def wall_side(k):
             quad(t(a), t(b), t(c), t(d), mat, (ox, 0, oz), cell=9.0)
             u += 0.5
             n += 1
-        # A stencilled range mark high on it: plates in no language anyone reads.
-        rng = random.Random(100 * k + i)
+        # The bay's number, big, to call out.
         mx = (x0 + x1) / 2
-        for j in range(3):
-            w = rng.uniform(0.14, 0.34)
-            h = rng.uniform(0.5, 0.86)
-            ux = mx - 0.8 + j * 0.8
-            p0, p1 = turn(k, ux - w, W + 0.41), turn(k, ux + w, W + 0.41)
-            ox, oz = turn(k, 0.0, -1.0)
-            quad((p0[0], 4.6, p0[1]), (p1[0], 4.6, p1[1]), (p1[0], 4.6 + h, p1[1]), (p0[0], 4.6 + h, p0[1]), 'paint_w', (ox, 0, oz), cell=9.0)
+        # Read from the range: its right is the wall's -x, turned.
+        at = turn(k, mx + 1.0, W + 0.77)
+        right = turn(k, -1.0, 0.0)
+        ox, oz = turn(k, 0.0, -1.0)
+        digits(f'{k * 6 + i + 1:02d}', (at[0], 4.2, at[1]), right, (ox, oz), 2.0, 'paint_w')
         if i % 2 == 0:
             # A caged lamp on the buttress.
             lx, lz = turn(k, x0 + 4.0, W + 0.38)
@@ -262,8 +263,9 @@ def floor():
             for i in range(n + 1):
                 u = -W + 2 * W * i / n
                 d = j / m
+                reach = 2.6 + 1.4 * math.sin(u * 0.29 + k * 1.7) * math.sin(u * 0.13 + k * 0.6)
                 h = 0.2 * (1.0 - d) ** 1.6 * (0.7 + 0.3 * math.sin(u * 0.73 + k * 2.1) * math.sin(u * 0.31 + k))
-                px, pz = turn(k, u, W + 0.2 - 2.6 * d)
+                px, pz = turn(k, u, W + 0.42 - reach * d)
                 row.append((px, 0.002 + h, pz))
             rows.append(row)
         surface(rows, 'snow', (0, 1, 0), lambda p: (p[0], p[2]))
@@ -347,13 +349,17 @@ def peaks():
     da = np.abs(np.roll(y, -1, axis=1) - np.roll(y, 1, axis=1)) / np.maximum(2.0 * rr * math.tau / segs, 1e-3)
     dr = np.abs(np.gradient(y, axis=0)) / np.maximum(np.gradient(rr, axis=0), 1e-3)
     slope = np.maximum(da, dr)
-    rock = np.clip((slope - 0.8) / 0.5, 0.0, 1.0)
+    rock = np.clip((slope - 0.42) / 0.4, 0.0, 1.0)
     # Bare rock shows in streaks down the steep, more of it low down.
     streak = ridged(x * 4.0, z * 4.0, 7)
     rock = np.clip(rock * (0.7 + 1.2 * streak), 0.0, 1.0)
-    snow = np.array([0.86, 0.9, 1.0])
+    snow = np.array([0.74, 0.79, 0.88])
     stone = np.array([0.09, 0.1, 0.13])
     col = snow[None, None, :] * (1 - rock[..., None]) + stone[None, None, :] * rock[..., None]
+    # Into the air: the far range a step paler and bluer than the near.
+    air = np.array([0.42, 0.5, 0.64])
+    far = np.clip((rr - 260.0) / 300.0, 0.0, 1.0)[..., None] * 0.55
+    col = col * (1 - far) + air[None, None, :] * far
     base = pa.add([(float(x[j, i]), float(y[j, i]), float(z[j, i])) for j in range(rings + 1) for i in range(segs)])
     for j in range(rings + 1):
         for i in range(segs):
@@ -372,8 +378,8 @@ def install():
     hulks, seen over the walls."""
     # The dish.
     x, z = 52.0, 66.0
-    cbox(x - 2.5, 0.0, z - 2.5, x + 2.5, 5.0, z + 2.5, 'blast', c=0.1, cell=2.0)
-    rod((x, 5.0, z), (x, 12.0, z), 0.7, 'steel', sides=10)
+    cbox(x - 3.0, 0.0, z - 3.0, x + 3.0, 12.0, z + 3.0, 'blast', c=0.1, cell=2.0)
+    rod((x, 12.0, z), (x, 17.0, z), 0.7, 'steel', sides=10)
     tilt = math.radians(52.0)
     n, m = 32, 6
     r = 9.0
@@ -389,7 +395,7 @@ def install():
             py2 = py * math.cos(tilt) - pz * math.sin(tilt)
             pz2 = py * math.sin(tilt) + pz * math.cos(tilt)
             ca, sa = math.cos(2.5), math.sin(2.5)
-            row.append((x + px * ca - pz2 * sa, 14.0 + py2, z + px * sa + pz2 * ca))
+            row.append((x + px * ca - pz2 * sa, 19.0 + py2, z + px * sa + pz2 * ca))
         rows.append(row)
     surface(rows, 'steel', (-0.5, 0.6, -0.5), lambda p: (p[0], p[2]))
     surface([row[::-1] for row in rows], 'steel', (0.5, -0.6, 0.5), lambda p: (p[0], p[2]))
@@ -419,6 +425,8 @@ def install():
 def tone(p, n, name):
     x, y, z = p
     k = 0.88 + 0.12 * math.sin(x * 0.53 + z * 0.37 + y * 0.21) * math.sin(z * 0.47 - x * 0.27 + y * 0.67)
+    if abs(n.y) < 0.5 and name == 'blast' and y % 1.2 < 0.08:
+        k *= 0.72
     if abs(n.y) < 0.5:
         streak = 0.5 + 0.5 * math.sin((x + z) * 2.9 + math.sin((x - z) * 1.2) * 1.9)
         k *= 1.0 - 0.16 * streak

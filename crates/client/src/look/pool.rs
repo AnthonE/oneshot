@@ -23,12 +23,13 @@ const REFLECT_SHADER: &str = "shaders/pool_reflect.wgsl";
 
 /// The sheet's colour, linear: nearly black, a little green.
 const WATER_RGB: [f32; 3] = [0.006, 0.012, 0.012];
-const WATER_ROUGH: f32 = 0.12;
+const WATER_ROUGH: f32 = 0.06;
+const WATER_REFLECTANCE: f32 = 0.08;
 /// How much of the reflection the sheet lets through, looking straight down and
 /// at a glancing look (`pool_water.wgsl`), how big its ripples are, m, and how
 /// hard they bend it.
-const SHEET_DOWN: f32 = 0.92;
-const SHEET_GLANCE: f32 = 0.6;
+const SHEET_DOWN: f32 = 0.35;
+const SHEET_GLANCE: f32 = 0.95;
 const RIPPLE_M: f32 = 1.4;
 const RIPPLE_BEND: f32 = 0.09;
 /// The lights' reflection, over their painted colour; the rest's dimming is in
@@ -127,7 +128,9 @@ pub fn dress(
             base: StandardMaterial {
                 base_color: Color::linear_rgba(WATER_RGB[0], WATER_RGB[1], WATER_RGB[2], 1.0),
                 perceptual_roughness: WATER_ROUGH,
-                reflectance: fresnel::DIELECTRIC,
+                // The room it reflects is the one under it: the hall's cube would
+                // lay a sheen over that.
+                reflectance: WATER_REFLECTANCE,
                 alpha_mode: AlphaMode::Blend,
                 ..default()
             },

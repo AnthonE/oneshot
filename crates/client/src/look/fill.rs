@@ -221,9 +221,9 @@ pub mod hall {
     /// Cistern's dark water and old brick: cold day from its oculi, amber low
     /// from its lamps.
     pub const CISTERN: Palette = Palette {
-        wall: [0.1, 0.075, 0.06],
-        deck: [0.012, 0.018, 0.02],
-        vault: [0.05, 0.04, 0.036],
+        wall: [0.065, 0.05, 0.042],
+        deck: [0.01, 0.014, 0.016],
+        vault: [0.036, 0.03, 0.028],
         pane: [0.72, 0.88, 1.0],
         strip: [0.42, 0.33, 0.22],
         strip_at: 0.16,
@@ -234,8 +234,8 @@ pub mod hall {
         spec_vault: [0.02, 0.022, 0.026],
         sheen: [0.56, 0.47, 0.36],
         sheen_share: 0.4,
-        haze: [0.014, 0.02, 0.024],
-        haze_density: 0.012,
+        haze: [0.012, 0.017, 0.021],
+        haze_density: 0.022,
     };
 
     /// Bulkhead's steel: cold panels overhead, amber at the lanes, a planet's pale

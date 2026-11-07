@@ -14,6 +14,7 @@ import random
 import sys
 
 import bpy
+from mathutils import Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import arch  # noqa: E402
@@ -24,7 +25,7 @@ ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'overpass')
 
 arch.TILES.update({'road': 5.0, 'blast': 3.6, 'blast_dark': 3.6, 'rust': 2.4})
-arch.UNTRACED.update({'city', 'flood', 'shaft', 'puddle', 'wet_road'})
+arch.UNTRACED.update({'city', 'city_lights', 'flood', 'shaft', 'puddle', 'wet_road'})
 
 DECK = 5.0
 ROOF = 3.5
@@ -35,7 +36,7 @@ WET_DIM = {'blast': 0.2, 'blast_dark': 0.08, 'road': 0.14, 'rust': 0.16, 'light_
            'light_red': 0.7, 'light_blue': 0.7, 'light_warm': 0.5, 'light_cold': 0.5}
 WET_STRETCH_LIGHT = 1.8
 # What a reflection of the city keeps: it's rain-beaten and far.
-DIM = {'city': 0.02, 'light_warm': 0.55, 'light_cold': 0.55, 'light_pink': 0.8, 'light_cyan': 0.8, 'light_sodium': 0.7}
+DIM = {'city': 0.6, 'city_lights': 0.5, 'light_warm': 0.55, 'light_cold': 0.55, 'light_pink': 0.8, 'light_cyan': 0.8, 'light_sodium': 0.7}
 # Jersey barrier's section, s across its width, inside its box.
 def jersey_section(half):
     return [(-half, 0.0), (half, 0.0), (half, 0.08), (half * 0.45, 0.3), (half * 0.38, 0.95), (-half * 0.38, 0.95), (-half * 0.45, 0.3), (-half, 0.08)]
@@ -57,7 +58,7 @@ def turned_jersey(x, z, length, angle_deg, s=1):
 # ----------------------------------------------------------------- the flyover
 def flyover():
     # Its road, its body narrowing under, out past the bounds to where it fell.
-    far = 37.0
+    far = 24.5
     for z0, z1 in ((-far, 0.0), (0.0, far)):
         cbox(-4.5, 4.86, z0, 4.5, DECK, z1, 'road', c=0.0, cell=1.6)
     girder = [(-3.2, 4.1), (3.2, 4.1), (4.5, 4.62), (4.5, 4.86), (-4.5, 4.86), (-4.5, 4.62)]
@@ -85,6 +86,18 @@ def flyover():
         for x in (-3.2, -1.1, 1.0, 3.1):
             cbox(x - 0.95, DECK, s * 21.7 - 0.3, x + 0.95, DECK + 0.72, s * 21.7 + 0.3, 'blast', c=0.05)
             cbox(x - 0.8, DECK + 0.72, s * 21.7 - 0.3, x + 0.8, DECK + 1.44, s * 21.7 + 0.3, 'blast_dark', c=0.05)
+    # Past the gap, the deck's next span fallen at one end, tilted up at us, a
+    # lamp bent over on it.
+    for sgn in (-1, 1):
+        a0, a1 = (0.0, sgn * 26.4), (0.0, sgn * 38.0)
+        extrude(a0, a1, [(-4.4, -0.9), (4.4, -0.9), (4.4, 0.0), (-4.4, 0.0)], 'blast', caps=True, cell=1.6, ya=DECK + 1.8, yb=DECK - 6.0)
+        extrude(a0, a1, [(-4.4, 0.0), (4.4, 0.0), (4.4, 0.04), (-4.4, 0.04)], 'road', caps=False, cell=1.6, ya=DECK + 1.8, yb=DECK - 6.0)
+        rod((3.9, DECK + 1.6, sgn * 29.0), (3.9, DECK + 4.6, sgn * 30.4), 0.11, 'steel', sides=8)
+        rod((3.9, DECK + 4.6, sgn * 30.4), (2.2, DECK + 3.4, sgn * 33.2), 0.09, 'steel', sides=6)
+        rng2 = random.Random(31 if sgn > 0 else 32)
+        for i in range(9):
+            x = -4.0 + i * 1.0
+            rod((x, DECK + 1.2, sgn * 26.4), (x + rng2.uniform(-0.4, 0.4), DECK + rng2.uniform(0.2, 1.6), sgn * (25.0 + rng2.uniform(0.0, 0.9))), 0.03, 'rust', sides=5)
     # The lorry the containers came off: its cab, burnt, on the flyover.
     cbox(1.5, DECK, 3.4, 3.9, DECK + 0.5, 5.6, 'rust', c=0.08)
     cbox(1.62, DECK + 0.5, 3.5, 3.78, DECK + 2.2, 5.5, 'rust', c=0.14)
@@ -98,6 +111,19 @@ def flyover():
 def container(x0, y0, z0, x1, z1, _):
     """A shipping box along z, its long sides ribbed, inside its box."""
     cbox(x0 + 0.06, y0, z0 + 0.06, x1 - 0.06, y0 + 2.5, z1 - 0.06, 'rust', c=0.02, cell=1.2)
+    for x, z in ((x0, z0), (x1 - 0.12, z0), (x0, z1 - 0.12), (x1 - 0.12, z1 - 0.12)):
+        cbox(x, y0, z, x + 0.12, y0 + 2.6, z + 0.12, 'blast_dark', c=0.01, cell=3.0)
+    # Its doors at the north end: four locking bars.
+    for i in range(4):
+        x = x0 + 0.35 + i * (x1 - x0 - 0.7) / 3
+        rod((x, y0 + 0.25, z1 - 0.03), (x, y0 + 2.35, z1 - 0.03), 0.03, 'steel', sides=6)
+    # Its owner's marks, in no language anyone reads.
+    rng = random.Random(int(x0 * 13 + z0 * 7))
+    for k in range(5):
+        h = rng.uniform(0.3, 0.6)
+        w = rng.uniform(0.08, 0.32)
+        zz = z0 + 0.8 + k * 0.62
+        quad((x0 + 0.055, y0 + 1.5, zz), (x0 + 0.055, y0 + 1.5, zz + w), (x0 + 0.055, y0 + 1.5 + h, zz + w), (x0 + 0.055, y0 + 1.5 + h, zz), 'paint', (-1, 0, 0), cell=9.0)
     cbox(x0, y0, z0, x1, y0 + 0.14, z1, 'blast_dark', c=0.02, cell=3.0)
     cbox(x0, y0 + 2.46, z0, x1, y0 + 2.6, z1, 'blast_dark', c=0.02, cell=3.0)
     z = z0 + 0.3
@@ -328,7 +354,10 @@ def puddles():
         if 11 < abs(z) < 17 and 11 < abs(x) < 19:
             continue
         spots.append((x, z, rng.uniform(0.6, 2.2), rng.uniform(0.4, 1.2), rng.uniform(0, math.pi)))
-    for x, z, a, b, turn in spots:
+    for _ in range(18):
+        spots.append((rng.uniform(-3.6, 3.6), rng.uniform(-21, 21), rng.uniform(0.5, 1.4), rng.uniform(0.3, 0.8), rng.uniform(0, math.pi), DECK))
+    for x, z, a, b, turn, *lift in spots:
+        y0 = (lift[0] if lift else 0.0) + 0.008
         n = 14
         c, s = math.cos(turn), math.sin(turn)
         ring = []
@@ -336,10 +365,17 @@ def puddles():
             t = math.tau * i / n
             r = 1.0 + 0.22 * math.sin(t * 3 + a * 4) + 0.12 * math.sin(t * 5 + b * 7)
             px, pz = math.cos(t) * a * r, math.sin(t) * b * r
-            ring.append((x + px * c - pz * s, 0.008, z + px * s + pz * c))
-        base = pa.add([(x, 0.008, z)] + ring)
+            ring.append((x + px * c - pz * s, y0, z + px * s + pz * c))
+        inner = [(x + (q[0] - x) * 0.55, y0, z + (q[2] - z) * 0.55) for q in ring]
+        base = pa.add([(x, y0, z)] + inner + ring)
+        pa.colors[base] = (1, 1, 1, 1)
         for i in range(n):
-            pa.faces.append(((base, base + 1 + (i + 1) % n, base + 1 + i), [(0, 0)] * 3, True))
+            pa.colors[base + 1 + i] = (1, 1, 1, 0.9)
+            pa.colors[base + 1 + n + i] = (1, 1, 1, 0.0)
+        for i in range(n):
+            i1 = (i + 1) % n
+            pa.faces.append(((base, base + 1 + i1, base + 1 + i), [(0, 0)] * 3, True))
+            pa.faces.append(((base + 1 + i, base + 1 + i1, base + 1 + n + i1, base + 1 + n + i), [(0, 0)] * 4, True))
 
 
 def pools():
@@ -361,10 +397,13 @@ def pools():
                 a0, a1 = base + 1 + r * n + i, base + 1 + r * n + i1
                 b0, b1 = base + 1 + (r + 1) * n + i, base + 1 + (r + 1) * n + i1
                 pa.faces.append(((a0, a1, b1, b0), [(0, 0)] * 4, True))
-    sodium = (0.35, 0.2, 0.08)
+    sodium = (0.8, 0.46, 0.17)
     for sx in (-1, 1):
         for z in (-20.0, -6.0, 6.0, 20.0):
-            pool(sx * 3.3, DECK + 0.012, z, 3.4, 6.0, sodium)
+            pool(sx * 3.0, DECK + 0.012, z, 2.4, 6.5, sodium)
+        # Neon's spill on the deck's ends.
+        pool(sx * 2.0, DECK + 0.012, 15.0, 2.0, 4.0, (0.3, 0.04, 0.16))
+        pool(sx * 2.0, DECK + 0.012, -15.0, 2.0, 4.0, (0.03, 0.18, 0.26))
     pool(0.0, 0.012, 0.0, 6.0, 8.0, (0.2, 0.13, 0.07))
     for sx in (-1, 1):
         pool(sx * 16.0, 0.012, 19.4, 8.5, 3.2, (0.3, 0.05, 0.18))
@@ -383,6 +422,22 @@ def signs():
 
 
 # --------------------------------------------------------------------- the city
+def window(at, along, out, warm, rng):
+    """A lit window on a tower's face, its colour and how bright in its paint."""
+    pa = part('city_lights')
+    x, y, z = at
+    ax, az = along[0] * WIN_W, along[2] * WIN_W
+    base = pa.add([(x - ax, y, z - az), (x + ax, y, z + az), (x + ax, y + WIN_H, z + az), (x - ax, y + WIN_H, z - az)])
+    r = math.hypot(x, z)
+    b = 1.9 - min(1.0, max(0.0, (r - 90.0) / 240.0)) * 1.0
+    b *= rng.uniform(0.6, 1.1)
+    c = (1.0, 0.6, 0.28) if (rng.random() < 0.8) == warm else (0.55, 0.74, 1.0)
+    for k in range(4):
+        pa.colors[base + k] = (c[0] * b, c[1] * b, c[2] * b)
+    o = Vector(out)
+    pa.faces.append(((base, base + 1, base + 2, base + 3) if (Vector((along[0], 0, along[2])).cross(Vector((0, 1, 0)))).dot(o) < 0 else (base + 1, base, base + 3, base + 2), [(0, 0)] * 4, True))
+
+
 WIN_PITCH = 1.9
 WIN_FLOOR = 3.3
 WIN_LIT = 0.13
@@ -410,17 +465,20 @@ def tower(rng, x, z, w, d, h):
             continue
         y = FLOOD + fl * WIN_FLOOR
         for c in range(cols):
-            if rng.random() > WIN_LIT:
+            run = rng.random() < (0.62 if c and lit_last else WIN_LIT)
+            lit_last = run
+            if not run:
                 continue
-            mat = ('light_warm' if rng.random() < 0.8 else 'light_cold') if warm else ('light_cold' if rng.random() < 0.8 else 'light_warm')
             u = -w + (c + 0.5) * w * 2 / cols
-            quad((x + u - WIN_W, y, z + fz * d + fz * 0.05), (x + u + WIN_W, y, z + fz * d + fz * 0.05), (x + u + WIN_W, y + WIN_H, z + fz * d + fz * 0.05), (x + u - WIN_W, y + WIN_H, z + fz * d + fz * 0.05), mat, (0, 0, fz), cell=30.0)
+            window((x + u, y, z + fz * d + fz * 0.05), (1, 0, 0), (0, 0, fz), warm, rng)
+        lit_last = False
         for c in range(int(d * 2 / WIN_PITCH)):
-            if rng.random() > WIN_LIT:
+            run = rng.random() < (0.62 if c and lit_last else WIN_LIT)
+            lit_last = run
+            if not run:
                 continue
-            mat = 'light_warm' if rng.random() < 0.7 else 'light_cold'
             v = -d + (c + 0.5) * WIN_PITCH
-            quad((x + fx * w + fx * 0.05, y, z + v - WIN_W), (x + fx * w + fx * 0.05, y, z + v + WIN_W), (x + fx * w + fx * 0.05, y + WIN_H, z + v + WIN_W), (x + fx * w + fx * 0.05, y + WIN_H, z + v - WIN_W), mat, (fx, 0, 0), cell=30.0)
+            window((x + fx * w + fx * 0.05, y, z + v), (0, 0, 1), (fx, 0, 0), warm, rng)
 
 
 def city():
@@ -437,6 +495,8 @@ def city():
     for x, z, h, mat in ((-58.0, 62.0, 34.0, 'light_pink'), (64.0, 58.0, 28.0, 'light_cyan'), (-66.0, -58.0, 30.0, 'light_cyan'), (56.0, -64.0, 36.0, 'light_pink')):
         s = -1 if z > 0 else 1
         cbox(x - 7.5, h - 0.4, z - 0.4, x + 7.5, h + 8.4, z + 0.4, 'city', c=0.0, cell=400.0)
+        for px in (x - 5.0, x + 5.0):
+            cbox(px - 0.5, FLOOD - 2.0, z - 0.5, px + 0.5, h - 0.4, z + 0.5, 'city', c=0.0, cell=400.0)
         neon_far(x, h, z + s * 0.5, s, mat, rng)
     # Another deck of the old road, standing out in the flood, on its piers.
     for (ax, az, bx_, bz, y) in ((-140.0, 30.0, -44.0, 44.0, 9.0), (46.0, -40.0, 160.0, -60.0, 12.0), (44.0, 52.0, 140.0, 78.0, 7.0)):
@@ -463,6 +523,22 @@ def neon_far(x, y, z, s, mat, rng):
             f(xx, yy, xx + rng.uniform(0.8, 1.9), yy + w)
 
 
+def paint_city():
+    """The towers' colour, unlit: each ring a step paler and bluer into the rain,
+    misted at the water."""
+    pa = part('city')
+    for i, (x, y, z) in enumerate(pa.verts):
+        r = math.hypot(x, z)
+        t = min(1.0, max(0.0, (r - 70.0) / 280.0))
+        near, far = (0.014, 0.017, 0.022), (0.042, 0.052, 0.062)
+        c = [near[k] + (far[k] - near[k]) * t for k in range(3)]
+        # A face to the west catches what's left of the day, a little.
+        c = [v * (1.0 + 0.25 * max(0.0, -x / max(r, 1.0))) for v in c]
+        mist = max(0.0, 1.0 - (y - FLOOD) / 22.0)
+        c = [c[k] + (far[k] * 1.1 - c[k]) * mist * 0.45 for k in range(3)]
+        pa.colors[i] = tuple(c)
+
+
 def flood():
     s = 460.0
     rows = [[(-s + 2 * s * i / 8, FLOOD, -s + 2 * s * j / 8) for i in range(9)] for j in range(9)]
@@ -473,6 +549,14 @@ def tone(p, n, name):
     """Over the occlusion: rain's streaks down every face, dark under drips and
     at a wall's foot; the concrete mottled."""
     x, y, z = p
+    if name == 'rust':
+        # The containers' and the cab's paint, under the rust in the photograph.
+        if -3.6 <= x <= -1.0 and 6.5 <= z <= 12.7:
+            return (0.34, 0.62, 0.58)
+        if -1.0 <= x <= 5.0 and -14.0 <= z <= -5.5:
+            return (1.0, 0.46, 0.22)
+        if 1.4 <= x <= 4.0 and 3.3 <= z <= 5.7:
+            return (0.7, 0.2, 0.15)
     mottle = 0.86 + 0.14 * math.sin(x * 0.53 + z * 0.31 + y * 0.17) * math.sin(z * 0.47 - x * 0.23 + y * 0.61)
     k = mottle
     if abs(n.y) < 0.5:
@@ -496,6 +580,7 @@ def main():
     pools()
     signs()
     city()
+    paint_city()
     flood()
     objs = make_objects()
     def ground(verts, polys):
@@ -505,7 +590,7 @@ def main():
         polys.append((base, base + 1, base + 2, base + 3))
     paint(objs, ground, tone)
     refl = mirror_parts(objs, {
-        'reflect_light': ['light_warm', 'light_cold', 'light_pink', 'light_cyan', 'light_sodium'],
+        'reflect_light': ['light_warm', 'light_cold', 'light_pink', 'light_cyan', 'light_sodium', 'city_lights'],
         'reflect_city': ['city'],
     }, FLOOD, keep=lambda p: max(abs(p[0]), abs(p[2])) > 22.0, dim=DIM)
     # The road's reflection: the near things upside down under it, its lights
@@ -515,7 +600,7 @@ def main():
     wet.update(mirror_parts(objs, {'wet_light': ['light_sodium', 'light_pink', 'light_cyan', 'light_red', 'light_blue', 'light_warm', 'light_cold']}, 0.0, keep=inside, dim=WET_DIM, stretch=WET_STRETCH_LIGHT))
     objs.update(refl)
     objs.update(wet)
-    export(objs, OUT, 'overpass', bare=set(refl) | set(wet) | {'shaft'})
+    export(objs, OUT, 'overpass', bare=set(refl) | set(wet) | {'shaft', 'city', 'city_lights'})
 
 
 main()

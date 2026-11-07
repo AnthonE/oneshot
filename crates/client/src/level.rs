@@ -133,7 +133,7 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         SNOW => (
             "snow",
             crate::look::built::tile(SNOW),
-            Color::linear_rgb(1.85, 1.9, 2.0),
+            Color::linear_rgb(3.3, 3.42, 3.7),
         ),
         RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
         _ => return None,
@@ -555,8 +555,8 @@ pub fn dress_level(
             ..base
         };
         let mut ec = commands.entity(e);
-        // Snow takes no grime or seams.
-        match block.filter(|_| look.0 != SNOW) {
+        // Snow takes no grime or seams, nor a soaked road dust.
+        match block.filter(|_| look.0 != SNOW && !(look.0 == ROAD && wet > 0.0)) {
             Some(b) => {
                 let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
                 ec.remove::<MeshMaterial3d<StandardMaterial>>()

@@ -31,6 +31,19 @@ DUST_RGB = (1.12, 0.98, 0.78)
 PARTS = {}
 # Parts given no occlusion, as a light isn't: their COLOR_0 is theirs.
 UNTRACED = {'shaft', 'water'}
+# The tree `paint` traces against, Blender's axes, for a tone that bakes light.
+TREE = None
+
+
+def seen(p, q):
+    """Whether nothing in `paint`'s tree stands between two game points."""
+    a, b = Vector(to_blender(p)), Vector(to_blender(q))
+    d = b - a
+    ln = d.length
+    if ln < 1e-4:
+        return True
+    hit = TREE.ray_cast(a, d / ln, ln - 0.05)
+    return hit[0] is None
 
 
 class Part:
@@ -413,6 +426,8 @@ def paint(objs, ground=None, tone=None):
     if ground:
         ground(verts, polys)
     tree = BVHTree.FromPolygons(verts, polys, all_triangles=False)
+    global TREE
+    TREE = tree
     dirs = fibonacci_hemisphere(AO_RAYS)
     rng = random.Random(7)
     for name, o in objs.items():
@@ -529,12 +544,13 @@ def surface(grid, mat, out, uv, smooth=True):
             pa.faces.append((idx, [tuple(x / t for x in uv(pa.verts[q])) for q in idx], smooth))
 
 
-def mirror_parts(objs, parts, plane, keep=None, dim=None, stretch=1.0):
+def mirror_parts(objs, parts, plane, keep=None, dim=None, stretch=1.0, down=1.0):
     """The architecture over a water line again under it, its faces turned to
     match, for a reflection: {made: [source, ...]}. A face looking up is never
     seen upside down, so it's left out, as is what `keep((x, y, z))` refuses at a
-    face's middle; `dim[source]` scales a source's COLOR_0, and `stretch` draws it
-    longer than it stands, as a wet road draws a lamp."""
+    face's middle; `dim[source]` scales a source's COLOR_0, `down` again an
+    underside's, and `stretch` draws it longer than it stands, as a wet road
+    draws a lamp."""
     made = {}
     for name, sources in parts.items():
         verts, polys, uvs, cols = [], [], [], []
@@ -545,10 +561,12 @@ def mirror_parts(objs, parts, plane, keep=None, dim=None, stretch=1.0):
             me = o.data
             attr = me.color_attributes[0]
             uv = me.uv_layers[0]
-            k = (dim or {}).get(src, 1.0)
+            k0 = (dim or {}).get(src, 1.0)
             for poly in me.polygons:
                 if poly.normal.z > 0.5:
                     continue
+                # An underside is in its own shadow: its mirror darker again.
+                k = k0 * (down if poly.normal.z < -0.5 else 1.0)
                 c = poly.center
                 if c.z < plane or (keep and not keep((c.x, c.z, -c.y))):
                     continue
@@ -601,4 +619,29 @@ def extrude(a, b, section, mat, caps=True, cell=1.2, ya=0.0, yb=0.0):
             c = at(end, (cx, cy))
             for i in range(n):
                 tri(at(end, section[i]), at(end, section[(i + 1) % n]), c, mat, (dx * s, 0, dz * s))
+
+
+# Seven segments a digit: which are lit (a top, b top right, c bottom right, d bottom,
+# e bottom left, f top left, g middle).
+SEGMENTS = {'0': 'abcdef', '1': 'bc', '2': 'abdeg', '3': 'abcdg', '4': 'bcfg', '5': 'acdfg', '6': 'acdefg', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg'}
+
+
+def digits(text, at, right, out, h, mat, stroke=0.16):
+    """A number stencilled on a face: seven-segment strokes a hair proud of it,
+    `at` its bottom left, `right` along the face, `out` the way the face looks."""
+    w = h * 0.55
+    t = h * stroke
+    rx, rz = right
+    ox, oz = out
+    for k, ch in enumerate(text):
+        x0 = k * (w + h * 0.3)
+        seg = {
+            'a': (x0, h - t, x0 + w, h), 'd': (x0, 0.0, x0 + w, t), 'g': (x0, h / 2 - t / 2, x0 + w, h / 2 + t / 2),
+            'f': (x0, h / 2, x0 + t, h), 'b': (x0 + w - t, h / 2, x0 + w, h),
+            'e': (x0, 0.0, x0 + t, h / 2), 'c': (x0 + w - t, 0.0, x0 + w, h / 2),
+        }
+        for name in SEGMENTS.get(ch, ''):
+            u0, v0, u1, v1 = seg[name]
+            p = lambda u, v: (at[0] + rx * u + ox * 0.006, at[1] + v, at[2] + rz * u + oz * 0.006)
+            quad(p(u0, v0), p(u1, v0), p(u1, v1), p(u0, v1), mat, (ox, 0, oz), cell=30.0)
 

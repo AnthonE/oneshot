@@ -232,6 +232,21 @@ fn overpass_climbs() {
     }
 }
 
+/// Bulkhead's spawns don't look down each other's throats across the dock.
+#[test]
+fn bulkheads_spawns_are_mostly_out_of_each_others_sight() {
+    let m = by_id(5).unwrap();
+    let head = |p: sim::geom::V3| sim::geom::V3::new(p.x, p.y + EYE, p.z);
+    let (mut seen, mut pairs) = (0, 0);
+    for a in m.spawns.iter().filter(|s| s.team == 0) {
+        for b in m.spawns.iter().filter(|s| s.team == 1) {
+            pairs += 1;
+            seen += usize::from(m.clear(head(a.pos), head(b.pos)));
+        }
+    }
+    assert!(seen * 3 <= pairs, "{seen} of {pairs} pairs of spawns see each other");
+}
+
 /// Every rotation the server plays has a map in it (else it falls back to
 /// any map that can play the mode), and a map out of the rotation is in
 /// none of them.

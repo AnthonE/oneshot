@@ -19,22 +19,23 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import arch  # noqa: E402
-from arch import BACK, cbox, extrude, export, make_objects, paint, panel, part, quad, rod, spin, strip_light, surface, to_blender, torus, tri  # noqa: E402,F401
+from arch import PARTS as PARTS_  # noqa: E402
+from arch import BACK, cbox, digits, extrude, export, make_objects, paint, panel, part, quad, rod, spin, strip_light, surface, to_blender, torus, tri  # noqa: E402,F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'bulkhead')
 TEX = os.path.join(ROOT, 'crates', 'client', 'assets', 'textures', 'planet.jpg')
 
-arch.TILES.update({'hull': 5.0, 'plate': 4.0, 'dark': 4.0, 'tread': 2.0, 'red': 4.0, 'blue': 4.0, 'rust': 2.4})
-arch.UNTRACED.update({'space', 'stars', 'planet', 'ring', 'glass', 'shaft'})
+arch.TILES.update({'hull': 2.3, 'plate': 2.2, 'dark': 2.2, 'tread': 2.0, 'red': 2.3, 'blue': 2.3, 'rust': 2.4})
+arch.UNTRACED.update({'space', 'stars', 'planet', 'ring', 'shaft', 'ship', 'ship_dark'})
 
 LANE = 1.5
 DECK = 3.0
 LID = 11.0
 WIN_LO = 3.4
 WIN_HI = 9.2
-PLANET = (-110.0, 118.0, 480.0, 158.0)  # x, y, z, r: all of it inside the camera's far plane
+PLANET = (-75.0, 80.0, 326.0, 107.0)  # x, y, z, r: all of it inside the camera's far plane
 SUN_DIR = np.array([-0.72, 0.25, -0.65])
 
 
@@ -77,12 +78,15 @@ def hull():
         strip_light(x - 0.3, WIN_LO + 0.2, 16.05, x - 0.28, WIN_HI - 0.2, 16.1, 'light_white')
     cbox(-20.5, WIN_LO - 0.12, 16.0, 20.5, WIN_LO, 17.2, 'dark', c=0.03, cell=2.0)
     cbox(-20.5, WIN_HI, 16.0, 20.5, WIN_HI + 0.12, 17.2, 'dark', c=0.03, cell=2.0)
-    quad((-20.5, WIN_LO, 16.7), (20.5, WIN_LO, 16.7), (20.5, WIN_HI, 16.7), (-20.5, WIN_HI, 16.7), 'glass', (0, 0, -1), cell=60.0)
     # South wall: panels, big pipes along them, valves, a recessed tank each side.
     for x in range(-24, 24, 6):
         panel(x, LANE, -17.0, x + 6, 6.3, -16.0, '+z', pier=0.36, band=0.24, mat='hull', plinth='dark')
         panel(x, 6.3, -17.0, x + 6, LID, -16.0, '+z', pier=0.36, band=0.24, mat='hull', plinth='dark')
+    for i, x in enumerate(range(-24, 24, 6)):
+        digits(f'{i + 1:02d}', (x + 1.4, 6.9, -15.86), (1, 0), (0, 1), 1.5, 'paint_y_box' if False else 'paint_w')
+        cbox(x + 0.6, 6.55, -15.87, x + 5.4, 6.68, -15.85, 'paint_y', c=0.0, cell=9.0)
     for y, r in ((4.7, 0.22), (5.3, 0.14), (9.0, 0.3)):
+
         rod((-24.0, y, -15.72), (24.0, y, -15.72), r, 'pipe', sides=10)
     for x in (-18.0, -6.0, 6.0, 18.0):
         for y, r in ((4.7, 0.3), (9.0, 0.38)):
@@ -228,8 +232,18 @@ def bases():
         for z0, z1 in ((-7.5, -6.9), (6.9, 7.5)):
             bx(18.6, 0.0, z0, 18.0, 2.2, z1, 'hull', c=0.05)
         for z0, z1 in ((-7.5, -3.0), (3.0, 7.5)):
-            bx(18.4, DECK, z0, 18.0, 3.78, z1, paint_mat, c=0.03)
-            bx(18.4, 3.78, z0, 18.0, 3.9, z1, 'dark', c=0.03)
+            bx(18.4, DECK, z0, 18.0, 5.18, z1, paint_mat, c=0.03)
+            bx(18.4, 5.18, z0, 18.0, 5.3, z1, 'dark', c=0.03)
+            lo2, hi2 = sorted((s * 18.0, s * 17.98))
+            strip_light(lo2, 4.6, z0 + 0.2, hi2, 4.66, z1 - 0.2, light)
+        # The shutters either side of the hangar's door, ribbed.
+        for z0, z1 in ((-6.9, -3.0), (3.0, 6.9)):
+            bx(18.6, 0.0, z0, 18.0, 2.2, z1, 'hull', c=0.03)
+            for y in (0.5, 0.9, 1.3, 1.7):
+                lo2, hi2 = sorted((s * 18.0, s * 17.99))
+                cbox(lo2, y, z0 + 0.08, hi2, y + 0.1, z1 - 0.08, 'dark', c=0.0, cell=3.0)
+        for z0, z1 in ((-3.3, -3.0), (3.0, 3.3)):
+            bx(18.7, 0.0, z0, 18.0, 2.2, z1, 'dark', c=0.04)
         # The hangar under: its low wall, the door's control, cargo.
         bx(24.0, 0.0, -2.0, 23.2, 1.0, 2.0, 'dark', c=0.05)
         for z0, z1 in ((-6.0, -3.5), (3.5, 6.0)):
@@ -244,6 +258,36 @@ def bases():
         lo, hi = sorted((s * 23.0, s * 19.0))
         hazard(lo, 0.012, -5.2, hi, -4.9)
         hazard(lo, 0.012, 4.9, hi, 5.2)
+
+
+def bulkheads():
+    """A bulkhead across each lane each side of the middle: a steel frame, its door
+    in the middle of the lane, hazard round the door, a lit head over it."""
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            a, b = sorted((sx * 6.4, sx * 5.6))
+            def bx(y0, z0, y1, z1, mat='hull', c=0.03):
+                lo, hi = sorted((sz * z0, sz * z1))
+                cbox(a, y0, lo, b, y1, hi, mat, c=c)
+            bx(LANE, 12.0, 6.4, 13.1)
+            bx(LANE, 14.9, 6.4, 16.0)
+            bx(4.1, 13.1, 6.4, 14.9)
+            # Its jambs and head in dark steel, hazard on the jambs' faces.
+            bx(LANE, 12.94, 4.1, 13.1, 'dark', c=0.02)
+            bx(LANE, 14.9, 4.1, 15.06, 'dark', c=0.02)
+            bx(3.94, 13.1, 4.1, 14.9, 'dark', c=0.02)
+            lo, hi = sorted((sz * 13.14, sz * 14.86))
+            la, lb = sorted((sx * 6.42, sx * 6.4))
+            strip_light(la, 4.16, lo, lb, 4.22, hi, 'light_amber')
+            la, lb = sorted((sx * 5.6, sx * 5.58))
+            strip_light(la, 4.16, lo, lb, 4.22, hi, 'light_amber')
+            for x0, x1 in (sorted((sx * 6.42, sx * 6.4)), sorted((sx * 5.6, sx * 5.58))):
+                for z0, z1 in ((12.5, 12.9), (15.1, 15.5)):
+                    n = 6
+                    for i in range(n):
+                        y0 = LANE + 0.1 + i * 0.4
+                        lo, hi = sorted((sz * z0, sz * z1))
+                        cbox(x0, y0, lo, x1, y0 + 0.4, hi, 'paint_y' if i % 2 == 0 else 'paint_k', c=0.0, cell=3.0)
 
 
 def pit():
@@ -313,8 +357,9 @@ def space():
     for j in range(rows):
         for i in range(cols):
             q = base + j * (cols + 1) + i
-            uv = [(i / cols, 1 - j / rows), (i / cols, 1 - (j + 1) / rows), ((i + 1) / cols, 1 - (j + 1) / rows), ((i + 1) / cols, 1 - j / rows)]
-            pl.faces.append(((q, q + cols + 1, q + cols + 2, q + 1), uv, True))
+            # Wound to face out of the sphere: seen from the dock, its near side.
+            uv = [(i / cols, 1 - j / rows), ((i + 1) / cols, 1 - j / rows), ((i + 1) / cols, 1 - (j + 1) / rows), (i / cols, 1 - (j + 1) / rows)]
+            pl.faces.append(((q, q + 1, q + cols + 2, q + cols + 1), uv, True))
     # Its air: a soft bright rim round the disc, added.
     sh = part('shaft')
     cx, cy, cz = px, py, pz - pr * 0.1
@@ -362,19 +407,33 @@ def space():
     for x0, x1, y0, y1, z0, z1 in ((-120.0, 120.0, -14.0, -2.0, 17.0, 62.0),):
         cbox(x0, y0, z0, x1, y1, z1, 'hull', c=0.0, cell=30.0)
     ship(48.0, 9.0, 150.0)
+    light_ship()
+
+
+def light_ship():
+    """The freighter has no light of its own here: the planet's day on its side,
+    painted, from up and to its left."""
+    for name in ('ship', 'ship_dark'):
+        pa = PARTS_[name] if name in PARTS_ else None
+        if pa is None:
+            continue
+        for i, (x, y, z) in enumerate(pa.verts):
+            t = 0.5 + 0.5 * max(-1.0, min(1.0, (y - 9.0) / 12.0))
+            k = (0.05 + 0.2 * t) * (1.0 if name == 'ship' else 0.5)
+            pa.colors[i] = (k * 0.85, k * 0.92, k * 1.05)
 
 
 def ship(cx, cy, cz):
     """A blunt freighter in profile: a long hull, a bridge block, tanks, its running
     lights, far enough that its shape is what reads."""
-    cbox(cx - 62, cy - 7, cz - 11, cx + 62, cy + 7, cz + 11, 'hull', c=2.0, cell=30.0)
-    cbox(cx - 74, cy - 4, cz - 8, cx - 62, cy + 4, cz + 8, 'dark', c=2.0, cell=30.0)
-    cbox(cx + 44, cy + 7, cz - 7, cx + 60, cy + 18, cz + 7, 'hull', c=1.0, cell=30.0)
-    cbox(cx + 48, cy + 18, cz - 3, cx + 57, cy + 22, cz + 3, 'dark', c=0.5, cell=30.0)
+    cbox(cx - 62, cy - 7, cz - 11, cx + 62, cy + 7, cz + 11, 'ship', c=2.0, cell=8.0)
+    cbox(cx - 74, cy - 4, cz - 8, cx - 62, cy + 4, cz + 8, 'ship_dark', c=2.0, cell=8.0)
+    cbox(cx + 44, cy + 7, cz - 7, cx + 60, cy + 18, cz + 7, 'ship', c=1.0, cell=8.0)
+    cbox(cx + 48, cy + 18, cz - 3, cx + 57, cy + 22, cz + 3, 'ship_dark', c=0.5, cell=8.0)
     for x in range(-52, 40, 16):
-        cbox(cx + x, cy + 7, cz - 8, cx + x + 13, cy + 12, cz + 8, 'dark', c=0.6, cell=30.0)
+        cbox(cx + x, cy + 7, cz - 8, cx + x + 13, cy + 12, cz + 8, 'ship_dark', c=0.6, cell=8.0)
     for x in (cx - 40, cx - 10, cx + 20):
-        cbox(x - 0.7, cy - 7.6, cz - 11.4, x + 0.7, cy + 6.6, cz - 11.0, 'dark', c=0.0, cell=30.0)
+        cbox(x - 0.7, cy - 7.6, cz - 11.4, x + 0.7, cy + 6.6, cz - 11.0, 'ship_dark', c=0.0, cell=8.0)
     rng = random.Random(11)
     for _ in range(40):
         x = cx + rng.uniform(-60, 60)
@@ -451,6 +510,7 @@ def main():
     lanes()
     bridge()
     bases()
+    bulkheads()
     pit()
     space()
     objs = make_objects()
@@ -460,7 +520,7 @@ def main():
         verts.extend([to_blender((-s, 0.0, -s)), to_blender((s, 0.0, -s)), to_blender((s, 0.0, s)), to_blender((-s, 0.0, s))])
         polys.append((base, base + 1, base + 2, base + 3))
     paint(objs, ground, tone)
-    export(objs, OUT, 'dock', bare={'space', 'stars', 'planet', 'ring', 'shaft'})
+    export(objs, OUT, 'dock', bare={'space', 'stars', 'planet', 'ring', 'shaft', 'ship', 'ship_dark'})
 
 
 main()
