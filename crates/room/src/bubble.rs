@@ -15,7 +15,7 @@
 //! by the same share of the shooter's depth, from the snapshot the shot's
 //! frame was made after ([`Bubble::seen`]): what is drawn is what is met.
 
-use sim::consts::{MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TICK_HZ, VEH_HALF_L};
+use sim::consts::{BODY_R, MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TICK_HZ, VEH_H, VEH_HALF_L};
 use sim::geom::V3;
 use sim::world::{Seen, World};
 
@@ -44,6 +44,14 @@ pub const BLEND_MAX_MS: f32 = 1000.0;
 pub const LEAVE_MS: f32 = 1000.0;
 /// Snapshots whose shares are kept, for the shot whose frame came after one.
 pub const ROWS: usize = 64;
+/// Someone on foot comes in within reach of a hull in that moves or is
+/// driven (or of ours): its half length, a body's radius, this much more,
+/// and as far as [`FOOT_LEAD_S`] of their closing speed; once in, this
+/// much more to stay. Only so many, the nearest: a crowd stays in the past.
+pub const FOOT_PAD_M: f32 = 1.0;
+pub const FOOT_LEAD_S: f32 = 0.6;
+pub const FOOT_HYST_M: f32 = 2.0;
+pub const MAX_NEAR_FOOT: usize = 6;
 
 const FULL_Q8: u16 = (SHARE_FULL as u16) << 8;
 
@@ -59,11 +67,18 @@ struct Member {
 #[derive(Clone, Debug)]
 pub struct Bubble {
     hull: [Member; MAX_VEHICLES],
+    /// Those on foot in, by seat.
+    foot: [Member; MAX_FIGHTERS],
+    /// The last update's: who was sent at all, and the hull each rode.
+    sent_last: u16,
+    rode_last: [Option<u8>; MAX_FIGHTERS],
     /// The last update's: which hulls were sent at all, and the one ridden.
     shown_last: u8,
     mine_last: Option<u8>,
     /// Off: every share sent and kept is whole (`Room::bubble_live`).
     live: bool,
+    /// How many on foot may be in at once (`Room::bubble_foot`).
+    pub foot_max: usize,
     snap_every: u32,
     /// What each snapshot was sent, by its tick.
     rows: [(u32, Seen); ROWS],
@@ -73,9 +88,13 @@ impl Default for Bubble {
     fn default() -> Bubble {
         Bubble {
             hull: [Member::default(); MAX_VEHICLES],
+            foot: [Member::default(); MAX_FIGHTERS],
+            sent_last: 0,
+            rode_last: [None; MAX_FIGHTERS],
             shown_last: 0,
             mine_last: None,
             live: true,
+            foot_max: MAX_NEAR_FOOT,
             snap_every: 2,
             rows: [(u32::MAX, Seen::PAST); ROWS],
         }
@@ -99,7 +118,21 @@ impl Bubble {
     /// Hull `i`'s share as it goes on the wire (rounded up: never drawn
     /// nearer the present than the server will meet it).
     pub fn share(&self, i: usize) -> u8 {
-        match self.hull.get(i) {
+        self.wire(self.hull.get(i))
+    }
+
+    /// Seat `q`, on foot, is in.
+    pub fn has_foot(&self, q: usize) -> bool {
+        self.foot.get(q).is_some_and(|m| m.on)
+    }
+
+    /// Seat `q`'s share on foot, as it goes on the wire.
+    pub fn foot_share(&self, q: usize) -> u8 {
+        self.wire(self.foot.get(q))
+    }
+
+    fn wire(&self, m: Option<&Member>) -> u8 {
+        match m {
             Some(m) if m.on && self.live => (m.share_q8.div_ceil(256) as u8).min(SHARE_FULL),
             _ => SHARE_FULL,
         }
@@ -123,12 +156,18 @@ impl Bubble {
         let me = &w.fighters[s];
         let mine = me.riding().map(|(i, _)| i);
         let (shown_last, mine_last) = (self.shown_last, self.mine_last);
+        let (sent_last, rode_last) = (self.sent_last, self.rode_last);
+        self.sent_last = (0..MAX_FIGHTERS).fold(0, |m, q| m | ((known(q) as u16) << q));
+        for (r, f) in self.rode_last.iter_mut().zip(&w.fighters) {
+            *r = f.riding().map(|(i, _)| i as u8);
+        }
         self.live = live;
         self.snap_every = snap_every.max(1);
         self.shown_last = (0..MAX_VEHICLES).fold(0, |m, i| m | ((shown(i) as u8) << i));
         self.mine_last = mine.map(|i| i as u8);
         if !me.active() || w.map.vehicles.is_empty() {
             self.hull = [Member::default(); MAX_VEHICLES];
+            self.foot = [Member::default(); MAX_FIGHTERS];
             return;
         }
         let (at, at_v) = match mine {
@@ -225,12 +264,95 @@ impl Bubble {
             }
         }
         self.hull = next;
+        // Who is on foot within reach of a hull that moves or is driven: in
+        // with it, the nearest few. Getting out of one in our bubble (or of
+        // ours), at its share; unsent till now, on the present.
+        let anchors: [Option<(V3, V3, u16)>; MAX_VEHICLES] = core::array::from_fn(|i| {
+            let v = &w.vehicles[i];
+            let moving = v.vel.flat().len() >= STILL_MS || v.driver().is_some();
+            let share = if mine == Some(i) {
+                Some(0)
+            } else {
+                next[i].on.then_some(next[i].share_q8)
+            };
+            (v.active && moving)
+                .then_some(())
+                .and(share)
+                .map(|sh| (v.pos, v.vel, sh))
+        });
+        let mut near: [(f32, usize); MAX_FIGHTERS] = [(f32::MAX, 0); MAX_FIGHTERS];
+        let mut n = 0;
+        for (q, f) in w.fighters.iter().enumerate() {
+            if q == s || !f.active() || f.ride != 0 || !known(q) || !proto::exact_fits(f.body.pos, f.body.vel) {
+                continue;
+            }
+            let was = self.foot[q];
+            let best = anchors
+                .iter()
+                .flatten()
+                .filter(|(p, ..)| sim::fmath::fabs(f.body.pos.y - p.y) < VEH_H + 2.0)
+                .map(|&(p, pv, _)| {
+                    let d = (f.body.pos - p).flat().len();
+                    let reach = VEH_HALF_L + BODY_R + FOOT_PAD_M + (f.body.vel - pv).flat().len() * FOOT_LEAD_S;
+                    d - reach - if was.on { FOOT_HYST_M } else { 0.0 }
+                })
+                .fold(f32::MAX, f32::min);
+            if best <= 0.0 || (was.on && was.since < dwell) {
+                near[n] = (best, q);
+                n += 1;
+            }
+        }
+        near[..n].sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let mut foot = [Member::default(); MAX_FIGHTERS];
+        for &(_, q) in near[..n].iter().take(self.foot_max) {
+            let was = self.foot[q];
+            let start = match rode_last[q] {
+                Some(i) if mine_last == Some(i) => 0,
+                Some(i) if self.hull[i as usize].on => self.hull[i as usize].share_q8,
+                _ if sent_last & (1 << q) == 0 => 0,
+                _ => FULL_Q8,
+            };
+            foot[q] = Member {
+                on: true,
+                since: if was.on {
+                    was.since.saturating_add(snap_every)
+                } else {
+                    0
+                },
+                share_q8: if was.on {
+                    was.share_q8.saturating_sub(FULL_Q8 / snaps(BLEND_MIN_MS))
+                } else {
+                    start
+                },
+            };
+        }
+        // Out of reach: back onto the render tick, then out.
+        for (q, (m, (was, f))) in foot.iter_mut().zip(self.foot.iter().zip(&w.fighters)).enumerate() {
+            let can = f.active() && f.ride == 0 && known(q) && proto::exact_fits(f.body.pos, f.body.vel);
+            if m.on || !was.on || !can {
+                continue;
+            }
+            let share = was.share_q8.saturating_add(FULL_Q8 / snaps(LEAVE_MS)).min(FULL_Q8);
+            if share < FULL_Q8 {
+                *m = Member {
+                    on: true,
+                    since: was.since.saturating_add(snap_every),
+                    share_q8: share,
+                };
+            }
+        }
+        self.foot = foot;
     }
 
     /// The snapshot of `tick` went out: keep what it said of each target
     /// (each member hull's share, and its riders' with it; the rest whole).
     pub fn sent(&mut self, w: &World, tick: u32) {
         let mut row = Seen::PAST;
+        for q in 0..MAX_FIGHTERS {
+            if self.has_foot(q) {
+                row.share[q] = self.foot_share(q);
+            }
+        }
         for i in 0..MAX_VEHICLES {
             if !self.has(i) {
                 continue;

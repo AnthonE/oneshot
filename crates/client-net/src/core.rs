@@ -26,7 +26,7 @@ use proto::{
     EventState, InputMsg, ProjState, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_PROJ,
     MAX_SNAP_VEHICLES,
 };
-use sim::consts::{ticks, MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TICK_HZ};
+use sim::consts::{ticks, MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TARGETS, TICK_HZ};
 use sim::contact::{Man, Present, Scene, Sticks};
 use sim::fighter::Fighter;
 use sim::geom::{aim_dir, V3};
@@ -80,7 +80,32 @@ pub struct Near {
     pub mask: u8,
     pub hulls: [Vehicle; MAX_VEHICLES],
     pub sticks: Sticks,
-    pub riders: [Man; MAX_FIGHTERS],
+    /// Who we know rides them, seated; and who is on foot by them (in
+    /// `walkers`, a bit a seat), each walking on the input it last ran.
+    pub men: [Man; MAX_FIGHTERS],
+    pub walkers: u16,
+    pub inputs: [Input; MAX_FIGHTERS],
+}
+
+/// What of the hulls in our bubble, and those on foot by them, a seq left:
+/// what they are drawn from between our past and our present.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct NearAt {
+    mask: u8,
+    hulls: [Vehicle; MAX_VEHICLES],
+    walkers: u16,
+    feet: [V3; MAX_FIGHTERS],
+}
+
+impl NearAt {
+    fn of(n: &Near) -> NearAt {
+        NearAt {
+            mask: n.mask,
+            hulls: n.hulls,
+            walkers: n.walkers,
+            feet: n.men.map(|m| m.body.pos),
+        }
+    }
 }
 
 /// [`step_near`] for all this client predicts: our fighter (seat `own`),
@@ -100,7 +125,7 @@ pub fn step_bubble(
     map: &Map,
 ) -> sim::fighter::Local {
     let mut sc = Scene {
-        men: near.riders,
+        men: near.men,
         spare_mates,
         ..Scene::default()
     };
@@ -122,10 +147,10 @@ pub fn step_bubble(
         }
         _ => None,
     };
-    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let mut inputs = near.inputs;
     inputs[own] = *inp;
     let body = f.body;
-    let l = step_near(f, own, &mut sc, phase, &inputs, &sticks, 0, map);
+    let l = step_near(f, own, &mut sc, phase, &inputs, &sticks, near.walkers, map);
     if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
         *h = sc.hulls[i];
     } else if f.riding().is_some() {
@@ -137,8 +162,8 @@ pub fn step_bubble(
             near.hulls[i] = sc.hulls[i];
         }
     }
-    for (r, m) in near.riders.iter_mut().zip(&sc.men) {
-        if r.ride != 0 {
+    for (q, (r, m)) in near.men.iter_mut().zip(&sc.men).enumerate() {
+        if r.ride != 0 || near.walkers & (1 << q) != 0 {
             r.body = m.body;
         }
     }
@@ -432,9 +457,10 @@ struct Held {
     tick: u32,
     at_ms: f64,
     e: EventState,
-    /// A hull in our bubble the event is of (it was hit, wrecked, or one
-    /// riding it fired), and where the snapshot had it: the event plays
-    /// when that hull's drawn tick gets there, moved with it.
+    /// What in our bubble the event is of, as a target (a hull it hit or
+    /// wrecked, the one its maker rides, or its maker on foot), and where
+    /// the snapshot had it: the event plays when its drawn tick gets
+    /// there, moved with it.
     member: Option<(u8, V3)>,
 }
 
@@ -545,16 +571,18 @@ pub struct NetCore {
     /// each seq, which were in and where (drawn from, between our past and
     /// our present, by their shares).
     near: Near,
-    near_after: Box<[(u8, [Vehicle; MAX_VEHICLES]); RING]>,
+    near_after: Box<[NearAt; RING]>,
     /// Each hull's share of our rewind as the two newest snapshots said (15
     /// for one not in our bubble), and when the newest came: drawn sliding
     /// from the one to the other over a snapshot's time.
-    share: [(u8, u8); MAX_VEHICLES],
+    share: [(u8, u8); TARGETS],
     share_at: f64,
     /// A hull in our bubble's correction still easing out: its middle, and
     /// its heading in radians.
     moff: [V3; MAX_VEHICLES],
     mturn: [f32; MAX_VEHICLES],
+    /// One on foot in it: its correction still easing out.
+    boff: [V3; MAX_FIGHTERS],
     /// Teammates never run each other down (sides, friendly fire off).
     spare_mates: bool,
     /// Before the newest predicted tick, for drawing between ticks (the
@@ -653,11 +681,12 @@ impl NetCore {
             pred_v: None,
             stick: None,
             near: Near::default(),
-            near_after: Box::new([(0, [Vehicle::default(); MAX_VEHICLES]); RING]),
-            share: [(SHARE_FULL, SHARE_FULL); MAX_VEHICLES],
+            near_after: Box::new([NearAt::default(); RING]),
+            share: [(SHARE_FULL, SHARE_FULL); TARGETS],
             share_at: 0.0,
             moff: [V3::ZERO; MAX_VEHICLES],
             mturn: [0.0; MAX_VEHICLES],
+            boff: [V3::ZERO; MAX_FIGHTERS],
             spare_mates: rules.teams && !rules.friendly_fire,
             prev_pos: V3::ZERO,
             prev_v: V3::ZERO,
@@ -796,7 +825,7 @@ impl NetCore {
             }
             self.after[s as usize % RING] = self.pred;
             self.after_v[s as usize % RING] = self.pred_v;
-            self.near_after[s as usize % RING] = (self.near.mask, self.near.hulls);
+            self.near_after[s as usize % RING] = NearAt::of(&self.near);
             if local.fired {
                 self.own_shot();
             }
@@ -826,6 +855,9 @@ impl NetCore {
         for (o, t) in self.moff.iter_mut().zip(self.mturn.iter_mut()) {
             *o = ease_by(*o, dt, MEMBER_EASE_NEAR_MS);
             *t = ease_by(V3::new(*t * 5.0, 0.0, 0.0), dt, MEMBER_EASE_NEAR_MS).x * 0.2;
+        }
+        for o in self.boff.iter_mut() {
+            *o = ease_by(*o, dt, MEMBER_EASE_NEAR_MS);
         }
         // A heading's correction: a fifth of a radian as a metre is.
         let turn = ease(V3::new(self.vyaw_off * 5.0, 0.0, 0.0), dt).x * 0.2;
@@ -1359,19 +1391,31 @@ impl NetCore {
         for (i, b) in before.iter_mut().enumerate() {
             *b = self.member_drawn(i as u8, now_ms);
         }
+        let mut before_feet = [None; MAX_FIGHTERS];
+        for (q, b) in before_feet.iter_mut().enumerate() {
+            *b = self.body_drawn(q as u8, now_ms);
+        }
         if !self.watch {
             self.reconcile(s);
         }
         // Each hull's share slides on from where it is drawn now.
-        for (i, sh) in self.share.iter_mut().enumerate() {
+        for (t, sh) in self.share.iter_mut().enumerate() {
             let drawn = share_between(*sh, self.share_at, now_ms, self.stats.snap_every);
-            let to = s
-                .vehicles()
-                .iter()
-                .find(|v| v.slot as usize == i)
-                .and_then(|v| v.near)
-                .map_or(SHARE_FULL, |n| n.share);
-            *sh = ((drawn.round() as u8).min(SHARE_FULL), to);
+            let to = if t < MAX_FIGHTERS {
+                s.remotes()
+                    .iter()
+                    .find(|r| r.slot as usize == t)
+                    .and_then(|r| r.near)
+                    .map(|n| n.share)
+            } else {
+                let i = t - MAX_FIGHTERS;
+                s.vehicles()
+                    .iter()
+                    .find(|v| v.slot as usize == i)
+                    .and_then(|v| v.near)
+                    .map(|n| n.share)
+            };
+            *sh = ((drawn.round() as u8).min(SHARE_FULL), to.unwrap_or(SHARE_FULL));
         }
         self.share_at = now_ms;
 
@@ -1429,6 +1473,13 @@ impl NetCore {
                 self.moff[i] = self.moff[i] + jump;
                 self.mturn[i] += turn;
             }
+        }
+        for (q, b) in before_feet.iter().enumerate() {
+            let (Some(b), Some(n)) = (b, self.body_drawn(q as u8, now_ms)) else {
+                continue;
+            };
+            let off = self.boff[q] + (*b - n);
+            self.boff[q] = if off.len() > MEMBER_SNAP_M { V3::ZERO } else { off };
         }
         // The hull we ride is drawn in the present; any other on the render
         // tick, its wreck with it.
@@ -1581,7 +1632,7 @@ impl NetCore {
                         .iter()
                         .find(|r| r.slot as usize == q - 1)
                         .map_or(self.team, |r| r.team);
-                    near.riders[q - 1] = Man {
+                    near.men[q - 1] = Man {
                         body: near.hulls[i].seat_body(seat),
                         ride: Fighter::ride_of(i, seat),
                         live: true,
@@ -1591,15 +1642,48 @@ impl NetCore {
                 }
             }
         }
-        if near.mask != 0 {
+        // Those on foot by them, each on the input it last ran.
+        if ahead <= MAX_RERUN {
+            for r in s.remotes() {
+                let (Some(n), q) = (r.near, r.slot as usize) else {
+                    continue;
+                };
+                if !r.alive || q >= MAX_FIGHTERS || q == self.slot as usize {
+                    continue;
+                }
+                near.walkers |= 1 << q;
+                near.men[q] = Man {
+                    body: sim::movement::Body {
+                        pos: r.pos,
+                        vel: r.vel,
+                        grounded: r.grounded,
+                        crouched: r.crouched,
+                        duck: n.duck,
+                    },
+                    ride: 0,
+                    live: true,
+                    flag: r.flag,
+                    team: r.team,
+                };
+                let held = |b: bool, k: u16| if b { k } else { 0 };
+                near.inputs[q] = Input {
+                    buttons: held(n.jump, sim::input::JUMP) | held(n.crouch, sim::input::CROUCH),
+                    yaw: r.yaw,
+                    pitch: r.pitch,
+                    mx: n.mx,
+                    mz: n.mz,
+                };
+            }
+        }
+        if near.mask != 0 || near.walkers != 0 {
             self.stats.near_snaps += 1;
         } else {
             self.near = Near::default();
         }
-        if near.mask != 0 {
-            self.near_after[at] = (near.mask, near.hulls);
+        if near.mask != 0 || near.walkers != 0 {
+            self.near_after[at] = NearAt::of(&near);
         }
-        if !confirmed || passenger || near.mask != 0 {
+        if !confirmed || passenger || near.mask != 0 || near.walkers != 0 {
             self.stats.rerun_ticks += ahead.min(RING as u32) as u64;
             let before = self.pred.body.pos;
             let before_v = self.pred_v;
@@ -1632,7 +1716,7 @@ impl NetCore {
                     }
                     self.after[q as usize % RING] = f;
                     self.after_v[q as usize % RING] = v;
-                    self.near_after[q as usize % RING] = (near.mask, near.hulls);
+                    self.near_after[q as usize % RING] = NearAt::of(&near);
                     q = q.wrapping_add(1);
                 }
             }
@@ -1854,7 +1938,7 @@ impl NetCore {
     /// ticks: the render tick, or for one in our bubble its share of the way
     /// from there to our present.
     pub fn vehicle_tick(&self, slot: u8, now_ms: f64) -> f64 {
-        self.member_tick(slot as usize, now_ms)
+        self.member_tick(MAX_FIGHTERS + slot as usize, now_ms)
             .unwrap_or_else(|| self.render_tick(now_ms))
     }
 
@@ -1868,8 +1952,8 @@ impl NetCore {
     /// The tick hull `i` is drawn on: its share of the way from our present
     /// back to the render tick (DESIGN §6; `room::bubble`). None for one
     /// drawn on the render tick, as everything outside our bubble is.
-    fn member_tick(&self, i: usize, now_ms: f64) -> Option<f64> {
-        let sh = *self.share.get(i)?;
+    fn member_tick(&self, t: usize, now_ms: f64) -> Option<f64> {
+        let sh = *self.share.get(t)?;
         if sh == (SHARE_FULL, SHARE_FULL) || self.watch || self.n_frames == 0 {
             return None;
         }
@@ -1884,7 +1968,7 @@ impl NetCore {
     /// one not in our bubble.
     fn member_drawn(&self, slot: u8, now_ms: f64) -> Option<DrawnVehicle> {
         let i = slot as usize;
-        let t = self.member_tick(i, now_ms)?;
+        let t = self.member_tick(MAX_FIGHTERS + i, now_ms)?;
         let newest = self.frames[self.n_frames - 1];
         let mut d = if t <= newest.tick as f64 {
             let (ai, bi) = self.around(t);
@@ -1901,12 +1985,11 @@ impl NetCore {
             } else {
                 q0
             };
-            let (m0, h0) = self.near_after[q0 as usize % RING];
-            let (m1, h1) = self.near_after[q1 as usize % RING];
-            if m0 & (1 << i) == 0 || m1 & (1 << i) == 0 {
+            let (n0, n1) = (self.near_after[q0 as usize % RING], self.near_after[q1 as usize % RING]);
+            if n0.mask & (1 << i) == 0 || n1.mask & (1 << i) == 0 {
                 return None;
             }
-            let (a, b) = (h0[i], h1[i]);
+            let (a, b) = (n0.hulls[i], n1.hulls[i]);
             let vn = newest.vehicles[..newest.nv as usize].iter().find(|v| v.slot == slot)?;
             DrawnVehicle {
                 slot,
@@ -1921,6 +2004,35 @@ impl NetCore {
         Some(d)
     }
 
+    /// Seat `slot` on foot in our bubble, its feet as drawn at `now_ms` at
+    /// its tick (as [`Self::member_drawn`] draws a hull). None for one
+    /// drawn on the render tick.
+    fn body_drawn(&self, slot: u8, now_ms: f64) -> Option<V3> {
+        let q = slot as usize;
+        let t = self.member_tick(q, now_ms)?;
+        let newest = self.frames[self.n_frames - 1];
+        let p = if t <= newest.tick as f64 {
+            let (ai, _) = self.around(t);
+            self.remote_at(slot, ai, t)?.pos
+        } else {
+            let k = self.latest.tick.wrapping_sub(self.latest.last_seq) as i32 as f64;
+            let newest_seq = self.seq.wrapping_sub(1) as f64;
+            let at = (t - k).min(newest_seq).max(self.latest.last_seq as f64);
+            let (q0, u) = (at.floor() as u32, (at - at.floor()) as f32);
+            let q1 = if (q0 as f64) < newest_seq {
+                q0.wrapping_add(1)
+            } else {
+                q0
+            };
+            let (n0, n1) = (self.near_after[q0 as usize % RING], self.near_after[q1 as usize % RING]);
+            if n0.walkers & (1 << q) == 0 || n1.walkers & (1 << q) == 0 {
+                return None;
+            }
+            n0.feet[q] + (n1.feet[q] - n0.feet[q]) * u
+        };
+        Some(p + self.boff[q])
+    }
+
     /// The hull in our bubble `slot` rides, and its seat, as the newest
     /// snapshot has it.
     fn member_rider(&self, slot: u8) -> Option<(u8, usize)> {
@@ -1929,7 +2041,7 @@ impl NetCore {
             let seat = v.seats.iter().position(|&x| x == slot + 1)?;
             let drawn_on = self
                 .share
-                .get(v.slot as usize)
+                .get(MAX_FIGHTERS + v.slot as usize)
                 .is_some_and(|&sh| sh != (SHARE_FULL, SHARE_FULL));
             (v.near.is_some() && drawn_on).then_some((v.slot, seat))
         })
@@ -1980,9 +2092,16 @@ impl NetCore {
         let mut k = 0;
         while k < self.held.len() {
             let h = self.held[k];
-            let drawn = h.member.and_then(|(i, at)| {
-                let t = self.member_tick(i as usize, now_ms)?;
-                (h.tick as f64 <= t).then(|| self.member_drawn(i, now_ms).map(|d| d.pos - at))
+            let drawn = h.member.and_then(|(t, at)| {
+                let tick = self.member_tick(t as usize, now_ms)?;
+                (h.tick as f64 <= tick).then(|| {
+                    let now = if (t as usize) < MAX_FIGHTERS {
+                        self.body_drawn(t, now_ms)
+                    } else {
+                        self.member_drawn(t - MAX_FIGHTERS as u8, now_ms).map(|d| d.pos)
+                    };
+                    now.map(|p| p - at)
+                })
             });
             match drawn {
                 Some(shift) => {
@@ -2109,6 +2228,13 @@ impl NetCore {
                 .rev()
                 .find_map(|f| f.remotes[..f.n as usize].iter().find(|r| r.slot == slot))
         };
+        // On foot in our bubble: at its share of the way to our present.
+        if let Some(p) = self.body_drawn(slot, now_ms) {
+            return Some(Drawn {
+                pos: p,
+                ..drawn(newest()?)
+            });
+        }
         // Riding a hull in our bubble: in its seat on the hull as drawn.
         if let Some((i, seat)) = self.member_rider(slot) {
             if let Some(h) = self.member_drawn(i, now_ms) {
@@ -2138,6 +2264,14 @@ impl NetCore {
         if seated_then && !self.watch && frames[ai].own.riding().is_some() {
             return newest().map(drawn);
         }
+        self.remote_at(slot, ai, rt)
+    }
+
+    /// Fighter `slot` between the snapshots around tick `rt` (frame `ai`
+    /// the one at or before it, where it is in view): from its newest
+    /// update up to that frame toward its next one after, or run on.
+    fn remote_at(&self, slot: u8, ai: usize, rt: f64) -> Option<Drawn> {
+        let frames = &self.frames[..self.n_frames];
         // Its updates: a held one repeats an update, never is one.
         let find = |f: &Frame| {
             let r = f.remotes[..f.n as usize].iter().find(|r| r.slot == slot).copied();
@@ -2378,19 +2512,20 @@ fn share_between((from, to): (u8, u8), at_ms: f64, now_ms: f64, snap_every: u32)
 fn member_of(s: &Snapshot, e: &EventState) -> Option<(u8, V3)> {
     use sim::events::Kind;
     let hull = |i: u8| {
-        s.vehicles()
-            .iter()
-            .find(|v| v.slot == i && v.near.is_some())
-            .map(|v| (i, v.pos))
+        let v = s.vehicles().iter().find(|v| v.slot == i && v.near.is_some())?;
+        Some((MAX_FIGHTERS as u8 + i, v.pos))
     };
     if e.kind == Kind::VehicleHit as u8 || e.kind == Kind::Wreck as u8 {
         return hull(e.part);
+    }
+    if let Some(r) = s.remotes().iter().find(|r| r.slot == e.a && r.near.is_some()) {
+        return Some((r.slot, r.pos));
     }
     let v = s
         .vehicles()
         .iter()
         .find(|v| v.near.is_some() && v.seats.contains(&(e.a.wrapping_add(1))))?;
-    Some((v.slot, v.pos))
+    Some((MAX_FIGHTERS as u8 + v.slot, v.pos))
 }
 
 fn yaw_rad(y: u16) -> f32 {

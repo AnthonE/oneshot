@@ -4,8 +4,8 @@
 //! the round trip a re-run can guess across.
 
 use room::bubble::{Bubble, BLEND_MIN_MS, BUBBLE_M, CONTACT_M, DWELL_MS, HYST_M, LEAVE_MS, LOOK_S, RTT_MAX_MS};
-use sim::consts::SHARE_FULL;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{SHARE_FULL, VEH_HALF_W};
 use sim::geom::V3;
 use sim::input::Input;
 use sim::world::{Phase, Rules, World};
@@ -255,4 +255,62 @@ fn a_truck_circling_at_the_edge_never_flaps() {
         was = b.has(0);
     }
     assert_eq!(flips, 1, "{flips} flips in two minutes");
+}
+
+/// Who on foot comes in: one by a hull in that moves (or is driven), the
+/// nearest six at most; never by a parked hull, never for standing by
+/// someone else on foot.
+#[test]
+fn those_on_foot_come_in_by_a_moving_hull_only() {
+    use room::bubble::MAX_NEAR_FOOT;
+    let mut w = world();
+    // Hull 0 rolling by us; seats 1..9 on foot around it, a metre off its side.
+    put(&mut w, 6.0, V3::new(3.0, 0.0, 0.0));
+    for q in 1..9 {
+        w.fighters[q].body.pos = V3::new(6.0 + (q as f32 - 4.5) * 0.6, 0.0, VEH_HALF_W + 1.0);
+        w.fighters[q].body.vel = V3::ZERO;
+    }
+    // Seat 9 by us, far from any hull.
+    w.fighters[9].body.pos = V3::new(-1.0, 0.0, -1.0);
+    let mut b = Bubble::default();
+    update(&mut b, &w, 60.0);
+    assert!(b.has(0));
+    let on: Vec<usize> = (0..MAX_FIGHTERS).filter(|&q| b.has_foot(q)).collect();
+    assert_eq!(on.len(), MAX_NEAR_FOOT, "{on:?}");
+    assert!(!b.has_foot(9), "by us on foot, not by a hull");
+    assert!(!b.has_foot(0), "never ourselves");
+    // Parked: nobody comes in for it.
+    put(&mut w, 6.0, V3::ZERO);
+    let mut b = Bubble::default();
+    update(&mut b, &w, 60.0);
+    assert!(b.has(0) && (0..MAX_FIGHTERS).all(|q| !b.has_foot(q)));
+}
+
+/// Getting out of a hull in our bubble, on foot by it: at its share, never
+/// a jump to the render tick.
+#[test]
+fn one_getting_out_comes_in_at_its_hulls_share() {
+    let mut w = world();
+    put(&mut w, 6.0, V3::new(-4.0, 0.0, 0.0));
+    w.vehicles[0].seats = [3, 0];
+    w.fighters[2].ride = sim::fighter::Fighter::ride_of(0, sim::vehicle::DRIVER);
+    let mut b = Bubble::default();
+    for _ in 0..20 {
+        update(&mut b, &w, 60.0);
+    }
+    let hull = b.share(0);
+    assert!(hull < SHARE_FULL, "the hull slid on: {hull}");
+    // Out, beside it.
+    w.vehicles[0].seats = [0, 0];
+    w.fighters[2].ride = 0;
+    w.fighters[2].body.pos = w.vehicles[0].pos + V3::new(0.0, 0.0, VEH_HALF_W + 1.0);
+    w.vehicles[0].seats = [0, 0];
+    w.vehicles[0].vel = V3::new(-4.0, 0.0, 0.0);
+    update(&mut b, &w, 60.0);
+    assert!(b.has_foot(2), "out by a moving hull: in");
+    assert!(
+        b.foot_share(2) <= hull + 1,
+        "at {} against the hull's {hull}",
+        b.foot_share(2)
+    );
 }

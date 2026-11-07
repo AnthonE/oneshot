@@ -411,3 +411,142 @@ fn a_truck_is_solid_to_our_own_prediction() {
         }
     }
 }
+
+/// Whether a body's feet at `p` are inside drawn hull `v`'s footprint.
+fn in_drawn_hull(v: &client_net::core::DrawnVehicle, p: V3) -> bool {
+    use sim::consts::{BODY_R, VEH_HALF_L, VEH_HALF_W};
+    let (s, c) = (v.yaw.sin(), v.yaw.cos());
+    let d = p - v.pos;
+    let (lx, lz) = (d.x * c + d.z * s, d.z * c - d.x * s);
+    lx.abs() < VEH_HALF_L + BODY_R - 0.1 && lz.abs() < VEH_HALF_W + BODY_R - 0.1
+}
+
+#[derive(Debug)]
+struct Ghosts {
+    /// Frames the watcher drew the body inside the drawn hull, of those it
+    /// drew both; and its hits on the body, of its shots.
+    inside: (u32, u32),
+    hits: (u32, u32),
+}
+
+/// A truck creeping into someone on foot who strafes as it pushes them; a
+/// watcher off to the side drawing both, firing at the body.
+fn push_watched(delay_ms: f64, jitter_ms: f64, foot: bool) -> Ghosts {
+    use sim::events::Kind;
+    use sim::input::FIRE;
+    let mut lan = Lan::dry_fork_live(&[0, 0, 1], delay_ms, jitter_ms, 0.0, true, true);
+    lan.room.bubble_foot = foot;
+    let v = lan.room.world.vehicles[0];
+    let (f, r) = v.axes();
+    let back = v.pos - f * 2.0;
+    let body = v.pos + f * 5.0;
+    let watch = v.pos + f * 8.0 + r * 12.0;
+    lan.place(0, back.x, back.z);
+    lan.place(1, body.x, body.z);
+    lan.place(2, watch.x, watch.z);
+    let press = Input {
+        buttons: USE,
+        ..Input::default()
+    };
+    lan.run(
+        5000.0,
+        |k, now| {
+            if k == 0 && (4000.0..4040.0).contains(&now) {
+                press
+            } else {
+                Input::default()
+            }
+        },
+        |_, _, _, _| {},
+    );
+    let (b, me) = (lan.cs[1].slot, lan.cs[2].slot);
+    let speed = std::cell::Cell::new(0.0f32);
+    let aim = std::cell::Cell::new((0u16, 0i16));
+    let next = std::cell::Cell::new(5200.0f64);
+    let ahead = sim::geom::rad_to_yaw(sim::fmath::atan2(f.z, f.x));
+    let (mut inside, mut both, mut shots, mut hits) = (0, 0, 0, 0);
+    lan.run(
+        20_000.0,
+        |k, now| match k {
+            0 => Input {
+                mz: if speed.get() < 2.0 { 127 } else { 0 },
+                ..Input::default()
+            },
+            // Facing along the truck's way, strafing across it.
+            1 => Input {
+                yaw: ahead,
+                mx: [127, -127][((now / 450.0) as usize) % 2],
+                ..Input::default()
+            },
+            _ => {
+                let (yaw, pitch) = aim.get();
+                let fire = now >= next.get();
+                if fire {
+                    next.set(next.get() + 200.0);
+                }
+                Input {
+                    buttons: if fire { FIRE } else { 0 },
+                    yaw,
+                    pitch,
+                    ..Input::default()
+                }
+            }
+        },
+        |k, c, now, room| {
+            speed.set(room.world.vehicles[0].vel.flat().len());
+            if k != 2 {
+                return;
+            }
+            for e in c.drain_events(now) {
+                hits += (e.kind == Kind::Hit as u8 && e.a == me && e.b == b) as u32;
+                shots += (e.kind == Kind::Shot as u8 && e.a == me) as u32;
+            }
+            let (Some(h), Some(d)) = (
+                c.vehicles(now).into_iter().find(|d| d.slot == 0),
+                c.others(now).into_iter().find(|d| d.slot == b),
+            ) else {
+                return;
+            };
+            both += 1;
+            inside += in_drawn_hull(&h, d.pos) as u32;
+            let (fm, at) = c.own();
+            let eye = at + (fm.eye() - fm.body.pos);
+            let to = d.pos + V3::new(0.0, 1.1, 0.0) - eye;
+            let yaw = sim::geom::rad_to_yaw(sim::fmath::atan2(to.z, to.x));
+            let flat = (to.x * to.x + to.z * to.z).sqrt();
+            let pitch = sim::fmath::round(sim::fmath::atan2(to.y, flat) * (65536.0 / core::f32::consts::TAU)) as i16;
+            aim.set((yaw, pitch));
+        },
+    );
+    Ghosts {
+        inside: (inside, both),
+        hits: (hits, shots),
+    }
+}
+
+/// The gate for those on foot in the bubble: drawn inside a hull at least
+/// half as rarely as without them, and shot at no worse (within five
+/// points of the hit rate).
+#[test]
+fn those_on_foot_by_a_truck_are_drawn_with_it() {
+    let (mut off_all, mut on_all) = ((0, 0, 0, 0), (0, 0, 0, 0));
+    for (delay, jitter) in [(20.0, 0.0), (60.0, 10.0), (100.0, 10.0)] {
+        let off = push_watched(delay, jitter, false);
+        let on = push_watched(delay, jitter, true);
+        println!("{delay} ms ±{jitter}:\n  hulls only {off:?}\n  with foot {on:?}");
+        for (all, g) in [(&mut off_all, &off), (&mut on_all, &on)] {
+            *all = (
+                all.0 + g.inside.0,
+                all.1 + g.inside.1,
+                all.2 + g.hits.0,
+                all.3 + g.hits.1,
+            );
+        }
+    }
+    println!("all: hulls only {off_all:?}, with foot {on_all:?} (inside, drawn, hits, shots)");
+    assert!(off_all.0 > 20, "no ghosting to cut: {off_all:?}");
+    assert!(on_all.0 * 2 <= off_all.0, "{on_all:?} against {off_all:?}");
+    let rate = |(_, _, h, s): (u32, u32, u32, u32)| h as f64 / s.max(1) as f64;
+    assert!(off_all.3 > 100 && on_all.3 > 100, "too few shots");
+    assert!(rate(on_all) >= rate(off_all) - 0.05, "{on_all:?} against {off_all:?}");
+}

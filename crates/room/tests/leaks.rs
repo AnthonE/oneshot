@@ -83,6 +83,7 @@ struct Gate {
     /// the past.
     near_seen: usize,
     share_seen: usize,
+    foot_seen: usize,
     /// The last snapshot's: each hull's share if near, which were sent,
     /// the one we rode.
     near_last: [Option<u8>; sim::consts::MAX_VEHICLES],
@@ -129,8 +130,30 @@ impl Gate {
                             w.tick,
                             r.slot
                         );
-                        // 21. Nobody on foot is in our bubble (yet).
-                        assert!(r.near.is_none(), "tick {}: seat {} near", w.tick, r.slot);
+                        // 21. One on foot in our bubble only while we live,
+                        // on foot itself, exact as the server has it; 18.
+                        // with the input it last ran.
+                        if let Some(n) = r.near {
+                            let f = &w.fighters[r.slot as usize];
+                            self.foot_seen += 1;
+                            assert!(me.active() && f.active() && f.ride == 0, "tick {}: near {r:?}", w.tick);
+                            assert_eq!(
+                                (r.pos, r.vel, n.duck),
+                                (f.body.pos, f.body.vel, f.body.duck),
+                                "tick {}: seat {} not exact",
+                                w.tick,
+                                r.slot
+                            );
+                            let ran = w.ran(r.slot as usize);
+                            assert_eq!(
+                                (n.mx, n.mz, n.jump, n.crouch),
+                                (ran.mx, ran.mz, ran.held(sim::input::JUMP), ran.held(sim::input::CROUCH)),
+                                "tick {}: seat {}'s input",
+                                w.tick,
+                                r.slot
+                            );
+                            assert!(s.held & (1 << r.slot) == 0, "tick {}: a held one near", w.tick);
+                        }
                     }
                 }
                 // 8. A projectile is sent only if its owner is known to
@@ -589,6 +612,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         stuck_seen: 0,
         near_seen: 0,
         share_seen: 0,
+        foot_seen: 0,
         near_last: [None; sim::consts::MAX_VEHICLES],
         shown_last: 0,
         mine_last: None,

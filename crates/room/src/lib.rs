@@ -445,6 +445,8 @@ pub struct Room {
     /// by their share (`bubble`); off, every share is whole: they are
     /// predicted, but drawn and met in the past as everything else is.
     pub bubble_live: bool,
+    /// Those on foot by a hull in a bubble are in it too; off, only hulls.
+    pub bubble_foot: bool,
     /// What each seat's snapshot work made this tick, before it is sent in
     /// seat order (`SeatOut`).
     outs: Box<[SeatOut; MAX_FIGHTERS]>,
@@ -542,6 +544,7 @@ impl Room {
             deltas: true,
             bubbles: true,
             bubble_live: true,
+            bubble_foot: true,
             outs: Box::new(core::array::from_fn(|_| SeatOut::default())),
             parallel_from: PARALLEL_FROM,
             far_rates: true,
@@ -986,6 +989,7 @@ impl Room {
                 deltas,
                 bubbles,
                 bubble_live,
+                bubble_foot,
                 parallel_from,
                 far_rates,
                 big,
@@ -994,7 +998,7 @@ impl Room {
             let rated = *far_rates && *big;
             let near = match (*bubbles, *bubble_live) {
                 (false, _) => None,
-                (true, live) => Some(live),
+                (true, live) => Some((live, *bubble_foot)),
             };
             let (world, plain, snap_every, deltas) = (&*world, &plain, *snap_every, (*deltas, near));
             let work = |(s, ((seat, f), o)): (usize, ((&mut Seat, &mut fog::Fog), &mut SeatOut))| {
@@ -1051,7 +1055,7 @@ fn seat_snapshot(
     o: &mut SeatOut,
     plain: &fog::Plain,
     (snap_every, rated): (u32, bool),
-    (deltas, bubble): (bool, Option<bool>),
+    (deltas, bubble): (bool, Option<(bool, bool)>),
     now_ms: f64,
 ) {
     let tick = world.tick;
@@ -1067,7 +1071,10 @@ fn seat_snapshot(
         |q| f.shows(q, tick),
         |i| f.shows_vehicle(i, tick),
         rated.then_some((&mut c.since, &mut c.updates)),
-        bubble.map(|live| (&mut c.bubble, c.rtt_ms, snap_every, live)),
+        bubble.map(|(live, foot)| {
+            c.bubble.foot_max = if foot { bubble::MAX_NEAR_FOOT } else { 0 };
+            (&mut c.bubble, c.rtt_ms, snap_every, live)
+        }),
         &mut o.wire,
     );
     c.pending.clear();
@@ -1154,18 +1161,24 @@ fn build_encoded(
     // The hulls it is sent exactly to predict, at their shares: none to a
     // watcher.
     let mut members = [None; MAX_VEHICLES];
+    let mut foot = [None; MAX_FIGHTERS];
     if let Some((b, rtt_ms, every, live)) = near.as_mut() {
         let shown = |i| vehicle_shown(w, s, i, &known, &vehicle_visible);
-        b.update(w, s, &known, &shown, *rtt_ms, *every, *live);
+        // Who is on foot near a hull in: only one this snapshot sends.
+        let sent = |q: usize| q != s && w.fighters[q].seated && visible(q);
+        b.update(w, s, &sent, &shown, *rtt_ms, *every, *live);
         for (i, m) in members.iter_mut().enumerate() {
             *m = b.has(i).then(|| b.share(i));
+        }
+        for (q, m) in foot.iter_mut().enumerate() {
+            *m = b.has_foot(q).then(|| b.foot_share(q));
         }
     }
     // Every kind, each by its own rule; no wildcard, so a new kind must
     // say what this client may see of it.
     for k in sim::thing::Kind::ALL {
         match k {
-            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible, rates.as_mut()),
+            sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible, rates.as_mut(), foot),
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, s, eye, &known, &vehicle_visible),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible, members),
@@ -1232,6 +1245,7 @@ fn add_fighters(
     s: usize,
     visible: &impl Fn(usize) -> bool,
     mut rates: Option<&mut Rates>,
+    foot: [Option<u8>; MAX_FIGHTERS],
 ) {
     let me = &w.fighters[s];
     for (q, f) in w.fighters.iter().enumerate() {
@@ -1243,7 +1257,25 @@ fn add_fighters(
             continue;
         }
         let mut r = Remote::of(q as u8, f);
-        if let Some((since, last)) = rates.as_deref_mut() {
+        // In our bubble on foot: exact, with the input it last ran (what a
+        // client predicts it on), and never held.
+        if let Some(share) = foot[q] {
+            let ran = w.ran(q);
+            r.near = Some(proto::NearBody {
+                duck: f.body.duck,
+                mx: ran.mx,
+                mz: ran.mz,
+                jump: ran.held(sim::input::JUMP),
+                crouch: ran.held(sim::input::CROUCH),
+                share,
+            });
+        }
+        if let (Some((since, last)), true) = (rates.as_deref_mut(), r.near.is_some()) {
+            // Updated every snapshot it is in: what holding repeats after
+            // it leaves is this, never an older one.
+            since[q] = 0;
+            last[q] = Remote { near: None, ..r };
+        } else if let Some((since, last)) = rates.as_deref_mut() {
             // Only where it is and faces is ever held: a death, a cloak, a
             // shield, a gun, a crouch or a flag goes out the moment it is.
             let moved_only = Remote {
