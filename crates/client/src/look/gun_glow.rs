@@ -42,7 +42,13 @@ const ROWS: [(u8, Row); 6] = [
         arms::SHARDS,
         // The crest along its spine: the front crystals go first.
         Row {
-            run: Some((v(-0.03, 0.055, 0.06), v(0.03, 0.325, 0.3), v(0.0, 0.065, 0.1), v(0.0, 0.32, 0.2), 0.08)),
+            run: Some((
+                v(-0.03, 0.055, 0.06),
+                v(0.03, 0.325, 0.3),
+                v(0.0, 0.065, 0.1),
+                v(0.0, 0.32, 0.2),
+                0.08,
+            )),
             cells: &[],
         },
     ),
@@ -50,7 +56,13 @@ const ROWS: [(u8, Row); 6] = [
         arms::CANNON,
         // The strip along the barrel's top, shortening toward the breech.
         Row {
-            run: Some((v(-0.03, 0.69, 0.17), v(0.03, 0.97, 0.22), v(0.0, 0.70, 0.19), v(0.0, 0.96, 0.19), 0.06)),
+            run: Some((
+                v(-0.03, 0.69, 0.17),
+                v(0.03, 0.97, 0.22),
+                v(0.0, 0.70, 0.19),
+                v(0.0, 0.96, 0.19),
+                0.06,
+            )),
             cells: &[],
         },
     ),
@@ -72,7 +84,13 @@ const ROWS: [(u8, Row); 6] = [
         // The slot at its back, facing the eye, empties from the top; the
         // three slashes a side go front first.
         Row {
-            run: Some((v(-0.02, 0.005, -0.04), v(0.02, 0.05, 0.035), v(0.0, 0.03, -0.031), v(0.0, 0.03, 0.025), 0.1)),
+            run: Some((
+                v(-0.02, 0.005, -0.04),
+                v(0.02, 0.05, 0.035),
+                v(0.0, 0.03, -0.031),
+                v(0.0, 0.03, 0.025),
+                0.1,
+            )),
             cells: &[
                 (v(-0.07, 0.41, -0.03), v(0.07, 0.453, 0.02)),
                 (v(-0.07, 0.453, -0.03), v(0.07, 0.491, 0.02)),
@@ -84,7 +102,13 @@ const ROWS: [(u8, Row); 6] = [
         arms::BR,
         // A slot a side under the receiver, running back.
         Row {
-            run: Some((v(-0.03, 0.298, -0.005), v(0.03, 0.35, 0.03), v(0.0, 0.303, 0.01), v(0.0, 0.345, 0.01), 0.08)),
+            run: Some((
+                v(-0.03, 0.298, -0.005),
+                v(0.03, 0.35, 0.03),
+                v(0.0, 0.303, 0.01),
+                v(0.0, 0.345, 0.01),
+                0.08,
+            )),
             cells: &[],
         },
     ),
@@ -92,7 +116,13 @@ const ROWS: [(u8, Row); 6] = [
         arms::BEAM_RIFLE,
         // Its lines along the whole gun, drawing back to the stock.
         Row {
-            run: Some((v(-0.2, 0.0, -0.2), v(0.2, 1.1, 0.2), v(0.0, 0.05, 0.0), v(0.0, 1.08, 0.0), 0.12)),
+            run: Some((
+                v(-0.2, 0.0, -0.2),
+                v(0.2, 1.1, 0.2),
+                v(0.0, 0.05, 0.0),
+                v(0.0, 1.08, 0.0),
+                0.12,
+            )),
             cells: &[],
         },
     ),
@@ -210,7 +240,11 @@ pub fn live(
             _ => {}
         }
         a.mag = Some(g.mag);
-        a.shown = if a.shown < share { (a.shown + REFILL_PER_S * dt).min(share) } else { share };
+        a.shown = if a.shown < share {
+            (a.shown + REFILL_PER_S * dt).min(share)
+        } else {
+            share
+        };
         a.flare = (a.flare - FLARE_FALL_PER_S * dt).max(0.0);
 
         let kind = arm(a.arm);

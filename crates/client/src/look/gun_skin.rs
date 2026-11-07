@@ -162,7 +162,10 @@ pub struct Coats(HashMap<(AssetId<StandardMaterial>, u8), Handle<GunMaterial>>);
 /// look is the gun as it came.
 pub fn wear(commands: &mut Commands, scene: Entity, skin: u8, arm: u8) {
     if COLOURS.get(skin as usize).is_some_and(Option::is_some) {
-        commands.entity(scene).insert(Worn { skin, arm, view: None }).observe(coat);
+        commands
+            .entity(scene)
+            .insert(Worn { skin, arm, view: None })
+            .observe(coat);
     }
 }
 
@@ -226,7 +229,11 @@ fn coat(
                 }
             }
         } else {
-            coats.0.entry((m.0.id(), skin)).or_insert_with(|| make(&mut mats)).clone()
+            coats
+                .0
+                .entry((m.0.id(), skin))
+                .or_insert_with(|| make(&mut mats))
+                .clone()
         };
         commands
             .entity(e)

@@ -278,7 +278,7 @@ fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMa
 
 /// Every frame after `draw_view`: a readout for each hand's gun as it is
 /// drawn, showing that hand's magazine.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn draw(
     link: NonSend<crate::LinkRes>,
     time: Res<Time>,
