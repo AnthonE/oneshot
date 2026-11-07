@@ -6,7 +6,8 @@
 //! when they leave one: `POST /api/gamestats/oneshot/report`, signed with the
 //! server key the way ratings are. Elo Pros adds the counts up and unlocks an
 //! achievement when its stat reaches its target, so the server never keeps a
-//! record of its own. Boards keep each player's best ranked number.
+//! record of its own. Boards keep each player's best number: most are
+//! ranked; `kills_any` is any mode, bots and all, so anyone can climb one.
 //!
 //! A player is their wallet, or their Elo Pros account's `acct_` id when they
 //! signed in without one. A guest is nobody and is never reported.
@@ -481,6 +482,12 @@ pub struct Board {
 /// One score per player: their best.
 pub const BOARDS: &[Board] = &[
     Board {
+        id: "kills_any",
+        name: "Most kills in a match",
+        asc: false,
+        time_ms: false,
+    },
+    Board {
         id: "ranked_kills",
         name: "Most kills in a ranked match",
         asc: false,
@@ -612,6 +619,9 @@ fn match_report(p: &Played) -> Value {
         put(&medal_stat(id as u8), n as u64);
     }
     let mut scores = serde_json::Map::new();
+    if t.kills > 0 {
+        scores.insert("kills_any".into(), (t.kills as u64).into());
+    }
     if p.ranked && p.mode != MODE_CUP {
         if t.kills > 0 {
             scores.insert("ranked_kills".into(), (t.kills as u64).into());
@@ -872,6 +882,29 @@ mod tests {
         });
         assert!(left["stats"].get("matches").is_none() && left["stats"].get("ranked_matches").is_none());
         assert_eq!(left["stats"]["seconds_played"], 61);
+    }
+
+    #[test]
+    fn any_match_climbs_the_open_board_and_only_ranked_the_ranked_ones() {
+        let casual = Played {
+            player: "0x00000000000000000000000000000000000000aa".into(),
+            mode: MODE_CASUAL,
+            ranked: false,
+            finished: true,
+            won: true,
+            ms: 300_000,
+            tally: full_tally(),
+        };
+        let r = match_report(&casual);
+        assert_eq!(r["scores"]["kills_any"], 15);
+        assert!(r["scores"].get("ranked_kills").is_none() && r["scores"].get("ranked_spree").is_none());
+        let ranked = match_report(&Played {
+            mode: MODE_DUEL,
+            ranked: true,
+            ..casual
+        });
+        assert_eq!(ranked["scores"]["kills_any"], 15);
+        assert_eq!(ranked["scores"]["ranked_kills"], 15);
     }
 
     #[test]
