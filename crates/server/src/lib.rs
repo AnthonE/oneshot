@@ -111,21 +111,18 @@ pub const MAX_WATCHERS: usize = 16;
 
 /// What the sim thread hands off: slow work, off the tick.
 pub enum Job {
-    Report(elo::Report),
     /// What players did, for the game's stats on Elo Pros.
     Stats(Vec<stats::Line>),
     /// Who this slot holds now, for `online.json`.
     Roster(online::Slot),
     /// A file to write: a replay, its watch, a review.
-    Write {
-        path: PathBuf,
-        bytes: Vec<u8>,
-    },
+    Write { path: PathBuf, bytes: Vec<u8> },
     /// A match that ended: its replay, hashed here and not on the sim
     /// thread, then (with a replay directory) written beside its aim
     /// review, and a ranked one's result reported with the hash.
     Finished(Box<Finished>),
-    /// Answered once every job before it is done (reports included).
+    /// Answered once every job before it is done (reports included, or
+    /// saved: `elo::Elo::post_signed`).
     Flush(tokio::sync::oneshot::Sender<()>),
 }
 
@@ -157,6 +154,11 @@ async fn write_whole(path: &std::path::Path, bytes: Vec<u8>) {
 
 /// A finished match stays up this long, for the end screen (`Config::linger`).
 pub const LINGER: Duration = Duration::from_secs(10);
+
+/// How long a drain waits for the reports to go out once its rooms are
+/// done: past a report's whole retry budget. What is still unanswered then
+/// is saved for `oneshot-review resend`.
+pub const FLUSH_MAX: Duration = Duration::from_secs(elo::RETRY_BUDGET.as_secs() + 25);
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -427,7 +429,7 @@ impl Handle {
     /// players (a hello is answered "full", the queue is let go), every room
     /// plays to its end and its replay and report go out, then the sim
     /// stops. A room still up after `max` is cut. Returns once the files
-    /// are written and the reports sent, or given up on.
+    /// are written and the reports sent, or (past [`FLUSH_MAX`]) saved.
     pub async fn drain(&self, max: Duration) {
         self.ctx.draining.store(true, Ordering::Relaxed);
         let until = Instant::now() + max;
@@ -443,7 +445,21 @@ impl Handle {
         self.stop.store(true, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::oneshot::channel();
         if self.jobs.send(Job::Flush(tx)).is_ok() {
-            let _ = tokio::time::timeout(Duration::from_secs(60), rx).await;
+            let _ = tokio::time::timeout(FLUSH_MAX, rx).await;
+        }
+        self.save_unsent();
+    }
+
+    /// Saves the reports and stats still being sent (a drain past its
+    /// wait, or an exit at once) for `oneshot-review resend`, and says so.
+    pub fn save_unsent(&self) {
+        let (saved, lost, dir) = self.ctx.elo.save_pending();
+        if saved + lost > 0 {
+            let at = dir.map_or_else(|| "nowhere (no --replays)".into(), |d| d.display().to_string());
+            eprintln!(
+                "oneshot: drain: {} report(s) unanswered: {saved} saved to {at} (oneshot-review resend), {lost} abandoned",
+                saved + lost
+            );
         }
     }
 
@@ -458,6 +474,9 @@ impl Handle {
 /// Starts the server on the current tokio runtime. Returns once it is
 /// listening.
 pub async fn run(cfg: Config) -> Result<Handle, String> {
+    // Salts, seeds, nonces and party codes are drawn from the OS: without
+    // it there is no server (and `random_u64` would panic mid-match).
+    getrandom::fill(&mut [0u8; 8]).map_err(|e| format!("the OS gives no randomness: {e}"))?;
     let bound = net::endpoints(&cfg).await?;
     let cert_hash = bound[0].cert_hash;
     let udp_buffers = (bound[0].udp_recv, bound[0].udp_send);
@@ -498,7 +517,8 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         nonces: cfg
             .nonce_key
             .map_or_else(auth::Nonces::default, |k| auth::Nonces::with_key(&k)),
-        elo: elo::Elo::new(&cfg.elo_origin, &cfg.slug, key),
+        elo: elo::Elo::new(&cfg.elo_origin, &cfg.slug, key)
+            .saving_unsent_to(cfg.replays.as_ref().map(|d| d.join(elo::UNREPORTED))),
         sessions: AtomicU64::new(1),
         gate: Arc::new(net::Gate::new(cfg.capacity).exempting(&cfg.load_sources)),
         draining: AtomicBool::new(false),
@@ -614,19 +634,21 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                 }
             }
             Job::Stats(lines) => {
-                let ctx = ctx.clone();
-                reports.spawn(async move {
-                    for part in lines.chunks(stats::MAX_REPORTS) {
-                        match ctx.elo.stats(stats::report_body(part)).await {
+                // Each part on its own, so a drain that stops waiting
+                // finds every one of them pending and saves it.
+                for part in lines.chunks(stats::MAX_REPORTS) {
+                    let (ctx, body, n) = (ctx.clone(), stats::report_body(part), part.len());
+                    reports.spawn(async move {
+                        match ctx.elo.stats(body).await {
                             Ok(answer) => {
                                 let v: serde_json::Value = serde_json::from_str(&answer).unwrap_or_default();
                                 let unlocked = v["unlocked"].as_array().map_or(0, Vec::len);
-                                eprintln!("oneshot: stats for {} player(s), {unlocked} unlock(s)", part.len());
+                                eprintln!("oneshot: stats for {n} player(s), {unlocked} unlock(s)");
                             }
                             Err(e) => eprintln!("oneshot: stats: {e}"),
                         }
-                    }
-                });
+                    });
+                }
             }
             Job::Roster(slot) => {
                 let file = ctx
@@ -649,25 +671,15 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                     }
                 }
             }
-            Job::Report(r) => {
-                let ctx = ctx.clone();
-                reports.spawn(async move {
-                    match ctx.elo.report(&r).await {
-                        Ok(()) => eprintln!(
-                            "oneshot: reported {} ({}) replay sha256 {} salt commit {}",
-                            r.id, r.ladder, r.replay_sha256, r.salt_commit
-                        ),
-                        Err(e) => eprintln!("oneshot: report {}: {e}", r.id),
-                    }
-                });
-            }
         }
     }
 }
 
+/// A salt, a seed or an id: never zeros because the OS failed (`run`
+/// checks it once at start).
 fn random_u64() -> u64 {
     let mut b = [0u8; 8];
-    let _ = getrandom::fill(&mut b);
+    getrandom::fill(&mut b).expect("the OS gave no randomness");
     u64::from_le_bytes(b)
 }
 
@@ -708,6 +720,8 @@ struct Live {
     /// The stream messages of its tick, kept between ticks: each room its
     /// own, whichever thread steps it.
     out: room::Outbox,
+    /// Its events lost so far, as counted into `/health.json`.
+    events_seen: u64,
 }
 
 /// The rotation a mode is played in (`sim::map::ROT_*`).
@@ -1021,6 +1035,7 @@ impl Sim {
                                         private,
                                         parties: Vec::new(),
                                         out: Vec::new(),
+                                        events_seen: 0,
                                     },
                                 );
                                 let team = side_for(rooms[i].as_ref().unwrap(), need).flatten();
@@ -1170,6 +1185,7 @@ impl Sim {
                                     reason: proto::REFUSE_NOTHING_TO_WATCH,
                                 },
                             );
+                            self.ctx.health.refuse(proto::REFUSE_NOTHING_TO_WATCH);
                             tx.close();
                             continue;
                         };
@@ -1415,7 +1431,17 @@ impl Sim {
                     for i in members {
                         tell_cup(c, i, &sessions);
                     }
-                } else if c.stage == cup::Stage::Done {
+                } else if c.stage == cup::Stage::Done || self.ctx.draining.load(Ordering::Relaxed) {
+                    // Going down: no new stage (its rooms would hold the
+                    // drain up); the cup ends at the standings it has.
+                    if c.stage != cup::Stage::Done {
+                        eprintln!(
+                            "oneshot: drain: {} ends after {} heat(s), at its standings",
+                            c.id,
+                            c.played.len()
+                        );
+                        c.end_now();
+                    }
                     self.finish_cup(c, &mut sessions);
                     cups[ci] = None;
                 } else {
@@ -1469,6 +1495,7 @@ impl Sim {
             private: false,
             parties: Vec::new(),
             out: Vec::new(),
+            events_seen: 0,
         };
         let mut outs = Vec::new();
         for (side, players) in sides.iter().enumerate() {
@@ -1517,6 +1544,14 @@ impl Sim {
         });
         deliver(sessions, r, out.drain(..));
         r.out = out;
+        let lost = r.room.events_dropped();
+        if lost > r.events_seen {
+            self.ctx
+                .health
+                .events_dropped
+                .fetch_add(lost - r.events_seen, Ordering::Relaxed);
+        }
+        r.events_seen = lost;
         spectate(sessions, r);
         if r.room.world.phase == Phase::Over && r.over_at.is_none() {
             r.over_at = Some(now);
@@ -1557,6 +1592,7 @@ impl Sim {
                 private: false,
                 parties: Vec::new(),
                 out: Vec::new(),
+                events_seen: 0,
             };
             let mut outs = Vec::new();
             for (slot, &i) in members.iter().enumerate() {
@@ -1760,6 +1796,10 @@ fn roster(sessions: &BTreeMap<u64, Sess>, rooms: &[Option<Live>]) -> online::Slo
             let player = s.player.clone()?;
             let status = match s.at.and_then(|(i, slot)| Some((rooms.get(i)?.as_ref()?, slot))) {
                 Some((r, slot)) => presence(r, slot as usize),
+                None if s.mode == proto::MODE_WATCH => match s.watching.and_then(|(i, _)| rooms.get(i)?.as_ref()) {
+                    Some(r) => online::clip(format!("Watching {} on {}", mode_name(r.mode), r.room.world.map.name)),
+                    None => "Watching a match".into(),
+                },
                 None if s.mode == MODE_CUP => "Waiting for a cup".into(),
                 None => format!("In the {} queue", mode_name(s.mode)),
             };

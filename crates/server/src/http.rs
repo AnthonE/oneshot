@@ -156,7 +156,7 @@ async fn handle(
         // Who plays, for Elo Pros (`online`): this slot and the others.
         let slot = merged(ctx).await;
         let body = if path == "/online.json" {
-            crate::online::online_json(&slot)
+            crate::online::online_json(&slot, &ctx.slug)
         } else {
             crate::online::status_json(&slot, ctx.gate.capacity, proto::PROTO_VER)
         };

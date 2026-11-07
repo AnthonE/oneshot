@@ -99,14 +99,15 @@ pub fn merge(own: &Slot, others: &[Slot], now: u64) -> Slot {
     out
 }
 
-/// `online.json`, as Elo Pros' `playtime.clean_roster` reads it.
-pub fn online_json(s: &Slot) -> String {
+/// `online.json` for game `slug`, as Elo Pros' `playtime.clean_roster`
+/// reads it.
+pub fn online_json(s: &Slot, slug: &str) -> String {
     let rows: Vec<Value> = s
         .online
         .iter()
         .map(|r| json!({"wallet": r.player, "since": r.since, "status": r.status}))
         .collect();
-    json!({"game": "oneshot", "at": s.at, "online": rows}).to_string()
+    json!({"game": slug, "at": s.at, "online": rows}).to_string()
 }
 
 /// `status.json`, as Elo Pros' `launcher._live_row` reads it. Bots are
@@ -164,7 +165,8 @@ mod tests {
         assert_eq!(who, vec![("0xc", 700), ("0xa", 800), ("acct_b", 950)]);
         // What a slot writes, it reads back.
         assert_eq!(Slot::from_json(&other.to_json()), Some(other));
-        let v: Value = serde_json::from_str(&online_json(&m)).unwrap();
+        let v: Value = serde_json::from_str(&online_json(&m, "oneshot")).unwrap();
+        assert_eq!(v["game"], "oneshot");
         assert_eq!(v["at"], 1000);
         assert_eq!(v["online"][0]["wallet"], "0xc");
         let st: Value = serde_json::from_str(&status_json(&m, 256, 7)).unwrap();

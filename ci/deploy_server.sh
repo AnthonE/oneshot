@@ -5,7 +5,7 @@
 #
 #   ci/deploy_server.sh          # a dry run: what it would do
 #   ci/deploy_server.sh --go     # build, stage, start the idle slot, switch, drain the old
-#   ci/deploy_server.sh --go --cut   # the idle slot is still draining: cut its matches
+#   ci/deploy_server.sh --go --cut   # the idle slot is still draining: cut its matches (SIGINT, step 4)
 #
 # Two slots, oneshot@a (UDP 61250) and oneshot@b (UDP 61251). The live one is
 # named in /home/master/oneshot-data/live. A deploy starts the new build in
@@ -63,7 +63,7 @@ fi
 state=$(systemctl is-active "oneshot@$NEW.service" 2>/dev/null)
 if [ "$state" = active ] || [ "$state" = deactivating ]; then
   if [ "$CUT" = 1 ]; then
-    echo "  !! oneshot@$NEW is $state (draining from the last deploy): cutting its matches (--cut)"
+    echo "  !! oneshot@$NEW is $state (draining from the last deploy): its matches are cut at step 4 (--cut)"
   else
     echo "  !! oneshot@$NEW is $state: it is still draining the last deploy's matches."
     echo "     Wait for it (journalctl -u oneshot@$NEW -f), or pass --cut to end them now."
@@ -140,6 +140,18 @@ if [ ! -f /home/master/oneshot-certs/fullchain.pem ]; then
 fi
 
 echo "== 4. start oneshot@$NEW (nobody on it yet)"
+# A draining server ignores another SIGTERM (a restart's stop): SIGINT ends
+# it at once, its matches cut (the reports still going out are saved for
+# `oneshot-review resend`).
+if [ "$CUT" = 1 ] && { [ "$state" = active ] || [ "$state" = deactivating ]; }; then
+  run sudo systemctl kill -s SIGINT "oneshot@$NEW.service"
+  if [ "$GO" = 1 ]; then
+    for _ in $(seq 1 15); do
+      [ "$(systemctl is-active "oneshot@$NEW.service" 2>/dev/null)" = deactivating ] || break
+      sleep 1
+    done
+  fi
+fi
 run sudo systemctl restart "oneshot@$NEW.service"
 if [ "$GO" = 1 ]; then
   ok=0

@@ -104,6 +104,9 @@ pub struct Health {
     /// Sessions' round trips as sampled (every journal window and at the
     /// end), in ms.
     pub rtt_ms: Hist,
+    /// Match events lost, summed over rooms (`room::Room::events_dropped`:
+    /// past the sim's cap in a tick, or a person's queue full).
+    pub events_dropped: AtomicU64,
 }
 
 impl Health {
@@ -156,6 +159,7 @@ impl Health {
             bytes_sent: g(&self.bytes_sent),
             rtt_ms: self.rtt_ms.read(),
             rtt_max_ms: g(&self.rtt_ms.max),
+            events_dropped: g(&self.events_dropped),
             snapshots_dropped: g(&counts.datagrams_dropped),
             snapshots_oversize: g(&counts.datagrams_oversize),
             cut_behind: g(&counts.stream_overflows),
@@ -186,6 +190,7 @@ pub struct Read {
     pub bytes_sent: u64,
     pub rtt_ms: [u64; BUCKETS],
     pub rtt_max_ms: u64,
+    pub events_dropped: u64,
     pub snapshots_dropped: u64,
     pub snapshots_oversize: u64,
     pub cut_behind: u64,
@@ -220,6 +225,7 @@ pub fn json(now: Now, r: &Read) -> String {
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
          \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\"tick_us\":{},\
          \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
+         \"events_dropped\":{},\
          \"packets_sent\":{},\"packets_lost\":{},\"bytes_sent\":{},\
          \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
         now.ready,
@@ -249,6 +255,7 @@ pub fn json(now: Now, r: &Read) -> String {
         r.cut_behind,
         r.send_errors,
         r.inputs_dropped,
+        r.events_dropped,
         r.packets_sent,
         r.packets_lost,
         r.bytes_sent,

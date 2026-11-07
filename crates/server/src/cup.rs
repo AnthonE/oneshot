@@ -42,6 +42,8 @@ pub struct Cup {
     pub heats: Vec<(Vec<usize>, bool)>,
     /// Every heat played: (stage, match id, entrants, their places).
     pub played: Vec<(Stage, String, Vec<usize>, Vec<u32>)>,
+    /// Ended before its rounds were played (the server went down).
+    pub ended_early: bool,
 }
 
 /// Places from scores: 1 the best, a tie shares the better place.
@@ -61,6 +63,7 @@ impl Cup {
             stage: Stage::Swiss(1),
             heats: Vec::new(),
             played: Vec::new(),
+            ended_early: false,
         };
         c.draw();
         c
@@ -149,6 +152,16 @@ impl Cup {
         true
     }
 
+    /// Ends the cup now, at the standings its heats so far give (a drain
+    /// starts no new stage).
+    pub fn end_now(&mut self) {
+        if self.stage != Stage::Done {
+            self.ended_early = true;
+            self.stage = Stage::Done;
+            self.heats.clear();
+        }
+    }
+
     /// An entrant left: no more heats for them. A heat they are in plays on
     /// without them (their fighter stands where it was).
     pub fn leave(&mut self, session: u64) {
@@ -208,6 +221,7 @@ impl Cup {
             "points": POINTS,
             "standings": standings,
             "heats": heats,
+            "ended_early": self.ended_early,
         })
     }
 }

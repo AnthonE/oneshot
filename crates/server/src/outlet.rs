@@ -150,7 +150,8 @@ impl Outlet {
     }
 
     /// Whether the session was cut for falling behind.
-    pub fn is_cut(&self) -> bool {
+    #[cfg(test)]
+    fn is_cut(&self) -> bool {
         self.cut.flag.load(Ordering::Relaxed)
     }
 

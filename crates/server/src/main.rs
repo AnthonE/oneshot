@@ -52,7 +52,8 @@
 //!
 //! Signals: SIGTERM drains (no new players, every match plays out, at most
 //! `--drain-max` seconds) and exits; SIGHUP reads the certificate again (an
-//! ACME renewal); SIGINT exits at once.
+//! ACME renewal); SIGINT exits at once, a drain too (its matches cut; the
+//! reports still being sent are saved for `oneshot-review resend`).
 
 use std::net::SocketAddr;
 
@@ -235,16 +236,40 @@ async fn signals(h: &server::Handle, drain_max: std::time::Duration) {
         tokio::select! {
             _ = term.recv() => {
                 eprintln!("oneshot: draining (at most {drain_max:?})");
-                h.drain(drain_max).await;
-                eprintln!("oneshot: drained");
+                // SIGINT still ends it at once (`ci/deploy_server.sh --cut`);
+                // another SIGTERM changes nothing. A reload still reloads.
+                let drain = h.drain(drain_max);
+                tokio::pin!(drain);
+                loop {
+                    tokio::select! {
+                        _ = &mut drain => {
+                            eprintln!("oneshot: drained");
+                            return;
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            eprintln!("oneshot: SIGINT while draining: the matches still up are cut");
+                            h.save_unsent();
+                            return;
+                        }
+                        _ = term.recv() => {}
+                        _ = hup.recv() => reload(h).await,
+                    }
+                }
+            }
+            _ = hup.recv() => reload(h).await,
+            _ = tokio::signal::ctrl_c() => {
+                h.save_unsent();
                 return;
             }
-            _ = hup.recv() => match h.reload().await {
-                Ok(hash) => eprintln!("oneshot: certificate reloaded, sha-256 {}", server::hex(&hash)),
-                Err(e) => eprintln!("oneshot: certificate reload: {e}"),
-            },
-            _ = tokio::signal::ctrl_c() => return,
         }
+    }
+}
+
+#[cfg(unix)]
+async fn reload(h: &server::Handle) {
+    match h.reload().await {
+        Ok(hash) => eprintln!("oneshot: certificate reloaded, sha-256 {}", server::hex(&hash)),
+        Err(e) => eprintln!("oneshot: certificate reload: {e}"),
     }
 }
 

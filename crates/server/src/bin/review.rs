@@ -6,6 +6,11 @@
 //! bans or lifts a wallet on the game's Elo Pros list. Nothing is banned
 //! without a person running `ban` after watching the replay.
 //!
+//! `resend` posts again, signed now, each rating report and stats report
+//! Elo Pros didn't take (`<replays>/unreported/`, written by the server
+//! when its tries ran out or a drain stopped waiting), and removes each one
+//! it takes. One refused for good (a 4xx) stays, with why.
+//!
 //! ```text
 //! oneshot-review [--replays dir] list
 //! oneshot-review [--replays dir] show <match id>
@@ -13,6 +18,7 @@
 //! oneshot-review --elo-key server.pem --elo-key-id eu-1 [--slug oneshot]
 //!     [--elo-origin https://elopros.com] ban <wallet> --reason "…" [--match <id>]
 //! oneshot-review --elo-key … --elo-key-id … lift <wallet> [--reason "…"]
+//! oneshot-review --replays dir --elo-key … --elo-key-id … resend
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -46,26 +52,89 @@ fn main() {
             std::fs::remove_file(&p).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
             println!("{id}: off the review list (its numbers stay in {id}.watch.json)");
         }
+        ["resend"] => {
+            let elo = signer(&slug, &origin, key, key_id, "a report");
+            resend(&replays.join(server::elo::UNREPORTED), &elo);
+        }
         [verb @ ("ban" | "lift"), wallet] => {
             let banned = *verb == "ban";
             let reason = match (banned, reason) {
                 (true, None) => die("a ban says why: --reason \"…\""),
                 (_, r) => r.unwrap_or_default(),
             };
-            let (Some(k), Some(id)) = (key, key_id) else {
-                die("a ban is signed with the server's key: --elo-key server.pem --elo-key-id <id>")
-            };
-            let pem = std::fs::read_to_string(&k).unwrap_or_else(|e| die(&format!("{k}: {e}")));
-            let sk = server::elo::ServerKey::from_pem(&slug, &id, &pem).unwrap_or_else(|e| die(&e));
-            let elo = server::elo::Elo::new(&origin, &slug, Some(sk));
+            let elo = signer(&slug, &origin, key, key_id, "a ban");
             let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| die(&e.to_string()));
             match rt.block_on(elo.ban(wallet, banned, &reason, match_id.as_deref())) {
                 Ok(text) => println!("{text}"),
                 Err(e) => die(&e),
             }
         }
-        _ => die("list | show <id> | done <id> | ban <wallet> --reason … | lift <wallet> (see the source's header)"),
+        _ => die(
+            "list | show <id> | done <id> | ban <wallet> --reason … | lift <wallet> | resend (see the source's header)",
+        ),
     }
+}
+
+/// Elo Pros, signed with the server's key (`what` is what needs it).
+fn signer(slug: &str, origin: &str, key: Option<String>, key_id: Option<String>, what: &str) -> server::elo::Elo {
+    let (Some(k), Some(id)) = (key, key_id) else {
+        die(&format!(
+            "{what} is signed with the server's key: --elo-key server.pem --elo-key-id <id>"
+        ))
+    };
+    let pem = std::fs::read_to_string(&k).unwrap_or_else(|e| die(&format!("{k}: {e}")));
+    let sk = server::elo::ServerKey::from_pem(slug, &id, &pem).unwrap_or_else(|e| die(&e));
+    server::elo::Elo::new(origin, slug, Some(sk))
+}
+
+/// Every saved report in `dir` posted again; each one taken is removed.
+fn resend(dir: &Path, elo: &server::elo::Elo) {
+    use server::elo::{Posted, Unsent};
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "json"))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    if files.is_empty() {
+        println!("nothing unreported in {}", dir.display());
+        return;
+    }
+    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| die(&e.to_string()));
+    let (mut sent, mut kept) = (0, 0);
+    for p in files {
+        let name = p
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let Some(u) = std::fs::read(&p).ok().and_then(|b| Unsent::from_json(&b)) else {
+            println!("{name}: not a saved report, left");
+            kept += 1;
+            continue;
+        };
+        match rt.block_on(elo.resend(&u)).unwrap_or_else(|e| die(&e)) {
+            Posted::Taken(_) => match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    println!("{name}: taken ({}), removed", u.path);
+                    sent += 1;
+                }
+                Err(e) => die(&format!(
+                    "{name}: taken, but couldn't remove it ({e}): remove it by hand"
+                )),
+            },
+            Posted::Refused(e) => {
+                println!("{name}: refused, kept (remove it if Elo Pros already has it): {e}");
+                kept += 1;
+            }
+            Posted::Passing(e) => {
+                println!("{name}: not taken yet, kept: {e}");
+                kept += 1;
+            }
+        }
+    }
+    println!("{sent} sent, {kept} left in {}", dir.display());
 }
 
 fn read(p: &Path) -> Option<serde_json::Value> {

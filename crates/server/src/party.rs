@@ -29,9 +29,9 @@ use crate::auth::Who;
 pub const GRACE: Duration = Duration::from_secs(90);
 /// Tags a party hands out (the wire's `TAG_BITS`).
 const TAGS: u8 = 16;
-/// Invites one member sends a minute, and lobby sessions one server keeps.
+/// Invites one member sends a minute. (Lobby sessions are held to the
+/// gate's share of connections, `net::Gate::full`.)
 pub const INVITES_PER_MIN: usize = 10;
-pub const MAX_LOBBIES: usize = 4096;
 
 /// What each call hands back: stream messages for sessions.
 pub type Outbox = Vec<(u64, Msg)>;
@@ -44,7 +44,10 @@ struct Seat {
     /// None while away; since when.
     session: Option<u64>,
     away_since: Option<Instant>,
+    /// The mode their match session plays (`PLAYING_NONE`: in the menu),
+    /// and that session.
     playing: u8,
+    playing_by: Option<u64>,
     /// Shown to the party: an Elo Pros id, or none for a guest.
     player: PlayerId,
 }
@@ -119,7 +122,7 @@ pub fn fits(mode: u8, n: usize, wallets: usize) -> bool {
 
 fn random_code() -> u32 {
     let mut b = [0u8; 4];
-    let _ = getrandom::fill(&mut b);
+    getrandom::fill(&mut b).expect("the OS gave no randomness for a party code");
     u32::from_le_bytes(b) & ((1 << pp::CODE_BITS) - 1)
 }
 
@@ -195,8 +198,7 @@ impl Parties {
                 seat.away_since = None;
                 seat.name = name;
                 seat.player = player_of(&who);
-                // Back from a match: in the menu until it says otherwise.
-                seat.playing = PLAYING_NONE;
+                // In a match or not, its match session says (`set_playing`).
             }
             self.sessions.get_mut(&session).unwrap().party = code;
             out.extend(self.tell(code));
@@ -348,6 +350,7 @@ impl Parties {
                 session: Some(session),
                 away_since: None,
                 playing: PLAYING_NONE,
+                playing_by: None,
                 player: player_of(&who),
             });
         }
@@ -521,24 +524,36 @@ impl Parties {
                 self.parties.get_mut(&code).unwrap().leader = to;
                 Ok(self.tell(code))
             }
-            pp::ACT_PLAYING => {
-                let code = self.sessions.get(&session).map_or(0, |l| l.party);
-                let playing = if arg < PLAYING_NONE as u32 {
-                    arg as u8
-                } else {
-                    PLAYING_NONE
-                };
-                let p = self.parties.get_mut(&code).ok_or(proto::REFUSE_NO_PARTY)?;
-                if let Some(s) = p.seats.iter_mut().find(|s| s.session == Some(session)) {
-                    if s.playing == playing {
-                        return Ok(Outbox::new());
-                    }
-                    s.playing = playing;
-                }
-                Ok(self.tell(code))
-            }
             _ => Err(proto::REFUSE_PARTY_MODE),
         }
+    }
+
+    /// `player`'s match session `by` opened, playing `mode`, or ended
+    /// ([`PLAYING_NONE`]): what their party sees now and their friends at
+    /// their next look. An end clears only what that session set, never a
+    /// newer match's.
+    pub fn set_playing(&mut self, player: &str, mode: u8, by: u64) -> Outbox {
+        let playing = mode.min(PLAYING_NONE);
+        let mut changed = Vec::new();
+        for (&code, p) in self.parties.iter_mut() {
+            for s in p.seats.iter_mut().filter(|s| s.id == player) {
+                let set = if playing == PLAYING_NONE {
+                    if s.playing_by != Some(by) {
+                        continue;
+                    }
+                    None
+                } else {
+                    Some(by)
+                };
+                s.playing_by = set;
+                if s.playing != playing {
+                    s.playing = playing;
+                    changed.push(code);
+                }
+            }
+        }
+        changed.dedup();
+        changed.into_iter().flat_map(|c| self.tell(c)).collect()
     }
 
     /// `session` asks `player` into its party: a friend of theirs (Elo
@@ -658,11 +673,6 @@ impl Parties {
         self.parties
             .get(&code)
             .map_or_else(Vec::new, |p| p.seats.iter().map(|s| s.id.clone()).collect())
-    }
-
-    /// Who `session` is.
-    pub fn who(&self, session: u64) -> Option<&Who> {
-        self.sessions.get(&session).map(|l| &l.who)
     }
 }
 
@@ -847,5 +857,38 @@ mod tests {
         let (out, replaced) = ps.connect(5, who(1), Name::new("lead"), 0, vec![], t);
         assert_eq!(replaced, vec![1]);
         assert_eq!(party_of(&out, 5).unwrap().code, code);
+    }
+
+    #[test]
+    fn a_match_session_shows_its_player_in_a_match_until_it_ends() {
+        let t = Instant::now();
+        let mut ps = Parties::default();
+        let (out, _) = ps.connect(1, who(1), Name::new("lead"), 0, vec![], t);
+        let code = party_of(&out, 1).unwrap().code;
+        ps.connect(2, who(2), Name::new("friend"), 0, vec![who(1).id], t);
+        let row = |ps: &Parties| match ps.friend_rows(
+            2,
+            &[crate::elo::FriendRow {
+                id: who(1).id,
+                name: "lead".into(),
+                online: true,
+            }],
+        )[..]
+        {
+            [Msg::Friend { at, playing, .. }] => (at, playing),
+            _ => panic!("one row"),
+        };
+        assert_eq!(row(&ps), (pp::AT_HERE, PLAYING_NONE));
+        // Their match session opens: the party is told, a friend sees it.
+        let out = ps.set_playing(&who(1).id, proto::MODE_FFA, 100);
+        assert_eq!(party_of(&out, 1).unwrap().members[0].playing, proto::MODE_FFA);
+        assert_eq!(row(&ps), (pp::AT_MATCH, proto::MODE_FFA));
+        assert_eq!(party_of(&ps.tell(code), 1).unwrap().members[0].playing, proto::MODE_FFA);
+        // A newer one (a reload) takes over; the older one ending leaves it.
+        ps.set_playing(&who(1).id, proto::MODE_CTF, 101);
+        assert!(ps.set_playing(&who(1).id, PLAYING_NONE, 100).is_empty());
+        assert_eq!(row(&ps), (pp::AT_MATCH, proto::MODE_CTF));
+        ps.set_playing(&who(1).id, PLAYING_NONE, 101);
+        assert_eq!(row(&ps), (pp::AT_HERE, PLAYING_NONE));
     }
 }

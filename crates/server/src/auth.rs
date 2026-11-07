@@ -131,7 +131,7 @@ impl Default for Nonces {
     /// A key of its own: nonces only this process takes.
     fn default() -> Self {
         let mut k = [0u8; 32];
-        let _ = getrandom::fill(&mut k);
+        getrandom::fill(&mut k).expect("the OS gave no randomness for the nonce key");
         Nonces::with_key(&k)
     }
 }
@@ -156,7 +156,7 @@ impl Nonces {
 
     pub fn issue_at(&self, now: u64) -> String {
         let mut r = [0u8; 8];
-        let _ = getrandom::fill(&mut r);
+        getrandom::fill(&mut r).expect("the OS gave no randomness for a nonce");
         let head = format!("{}{}", crate::hex(&now.to_be_bytes()), crate::hex(&r));
         let mac = self.mac(&head);
         head + &mac
@@ -194,7 +194,8 @@ impl Nonces {
     }
 }
 
-/// How long a ticket is good for: a day's play without signing in again.
+/// How long a ticket is good for: twelve hours' play without signing in
+/// again.
 pub const TICKET_TTL: Duration = Duration::from_secs(12 * 3600);
 /// What a ticket starts with: a pass never does (a pass is base64url).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -213,7 +214,7 @@ pub struct Who {
 impl Who {
     pub fn guest() -> Who {
         let mut b = [0u8; 8];
-        let _ = getrandom::fill(&mut b);
+        getrandom::fill(&mut b).expect("the OS gave no randomness for a guest id");
         Who {
             id: format!("guest_{}", crate::hex(&b)),
             account: None,
