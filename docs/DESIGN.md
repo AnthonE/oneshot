@@ -451,6 +451,12 @@ crossed) and the bots (none).
   with fog off before anything is paid. Wallets are free, so a ban alone
   doesn't stop a cheater coming back; a record and a review do.
 
+**What comes next** is `ANTICHEAT.md` (operator, 2026-11-07): a profile per
+wallet before any payout, read three ways (against the player's own past,
+against the rest of their game, against everyone); our own aimbots, bred and
+laid over real replays, as the detector's training data; and the detector
+opened with the neuron tools. Its sources are `ANTICHEAT-SOURCES.md`.
+
 ## 14 · Hosting
 
 - One server process, many rooms (a room is a sim plus its clients; a 2v2 tick
