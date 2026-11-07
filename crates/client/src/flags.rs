@@ -60,10 +60,11 @@ struct One {
     nor: Vec<[f32; 3]>,
 }
 
-/// The welcome the flags were made for, and each flag's parts.
+/// The link (`front::LinkGen`) and welcome the flags were made for, and
+/// each flag's parts.
 #[derive(Resource, Default)]
 pub struct Flags {
-    built: u32,
+    built: Option<(u32, u32)>,
     ones: [Option<One>; 2],
 }
 
@@ -179,7 +180,7 @@ fn v(p: V3) -> Vec3 {
 
 /// What the flags are drawn from: the match's welcome (its bases), or the
 /// pose mode's one flag.
-const POSED: u32 = u32::MAX;
+const POSED: (u32, u32) = (u32::MAX, u32::MAX);
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
@@ -195,6 +196,7 @@ pub fn draw(
     mood: Res<crate::look::mood::MoodNow>,
     time: Res<Time>,
     (film, posed): (Option<Res<crate::film::Film>>, Option<Res<crate::pose::Pose>>),
+    gen: Option<Res<crate::front::LinkGen>>,
 ) {
     // The wind the banners feel.
     let m = &mood.mood;
@@ -236,7 +238,7 @@ pub fn draw(
             floor,
         }
     };
-    let (key, bases): (u32, [Option<V3>; 2]) =
+    let (key, bases): ((u32, u32), [Option<V3>; 2]) =
         if let Some((p, (at, held))) = posed.as_ref().and_then(|p| p.2.flag.map(|f| (p, f))) {
             // The pose mode: red's flag, planted on its stand, over the posed
             // fighter's shoulder, or across the camera's view.
@@ -281,11 +283,13 @@ pub fn draw(
                     Some(planted(f.pos, f.state == FLAG_DOWN))
                 };
             }
-            (s.welcomes, bases.map(Some))
+            // Keyed as the level is (`Built`): two CTF matches running
+            // are both on welcome 1.
+            ((gen.map_or(0, |g| g.0), s.welcomes), bases.map(Some))
         };
-    if key != flags.built {
+    if Some(key) != flags.built {
         // The level's parts go with the level (`level::build`).
-        flags.built = key;
+        flags.built = Some(key);
         let steel = mats.add(StandardMaterial {
             base_color: Color::srgb(0.72, 0.73, 0.76),
             metallic: 0.85,

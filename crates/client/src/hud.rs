@@ -1040,7 +1040,7 @@ fn flag_line(st: &HudState, part: u8, who: u8, flag: u8) -> String {
     match part {
         0 => format!("{} took the {f} flag", st.name(who)),
         1 => format!("{f} flag dropped"),
-        2 if who == 255 => format!("{f} flag returned"),
+        2 if who == proto::NOBODY => format!("{f} flag returned"),
         2 => format!("{} returned the {f} flag", st.name(who)),
         _ => format!("{} captured the {f} flag", st.name(who)),
     }
@@ -1084,6 +1084,10 @@ pub fn on_events(
         st.spree_ended.clear();
         st.carnage.clear();
         st.assists = 0;
+        // The last heat's scoreboard, death card and shooters too.
+        st.tally = crate::tally::Tally::default();
+        st.death = None;
+        st.shot_from.clear();
         st.medals_gen = st.medals_gen.wrapping_add(1);
     }
     for e in events {

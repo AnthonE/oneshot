@@ -159,13 +159,6 @@ impl Bind {
         }
     }
 
-    pub fn just_released(self, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> bool {
-        match self {
-            Bind::Key(k) => keys.just_released(k) || twin(k).is_some_and(|t| keys.just_released(t)),
-            Bind::Mouse(b) => mouse.just_released(b),
-        }
-    }
-
     /// The settings file's word for this bind, if it is one a bind may use.
     pub fn token(self) -> Option<&'static str> {
         match self {
@@ -186,16 +179,6 @@ impl Bind {
         match self {
             Bind::Key(k) => KEYS.iter().find(|e| e.0 == k).map_or("?", |e| e.2),
             Bind::Mouse(b) => MOUSE.iter().find(|e| e.0 == b).map_or("?", |e| e.2),
-        }
-    }
-
-    /// Does this key type a character into a text field? Letters, digits,
-    /// punctuation and Space do; Tab, Enter and the rest do not.
-    pub fn types(self) -> bool {
-        match self {
-            Bind::Key(KeyCode::Space) => true,
-            Bind::Key(_) => self.label().chars().count() == 1,
-            Bind::Mouse(_) => false,
         }
     }
 
@@ -226,9 +209,12 @@ pub enum Action {
     Use,
     NetGraph,
     Scores,
+    /// The party's push-to-talk: the page reads it (`party.rs`,
+    /// `web/voice.js`), the game sends nothing for it.
+    Talk,
 }
 
-pub const COUNT: usize = 14;
+pub const COUNT: usize = 15;
 
 pub struct Spec {
     pub action: Action,
@@ -330,6 +316,12 @@ pub static SPECS: [Spec; COUNT] = [
         name: "Scoreboard (hold)",
         default: [k(KeyCode::Tab), None],
     },
+    Spec {
+        action: Action::Talk,
+        token: "talk",
+        name: "Talk to your party (hold)",
+        default: [k(KeyCode::KeyB), None],
+    },
 ];
 
 impl Action {
@@ -394,6 +386,14 @@ impl Binds {
         }
         self.slots[a as usize][slot] = bind;
         lost
+    }
+
+    /// `a`'s binds by their settings-file words (`KeyB Mouse4`), which are
+    /// a browser's `KeyboardEvent.code`s: what the page's voice listens
+    /// for.
+    pub fn tokens(&self, a: Action) -> String {
+        let words: Vec<&str> = self.each(a).filter_map(Bind::token).collect();
+        words.join(" ")
     }
 
     /// What a prompt calls `a`'s key: its primary, else its alternate.
