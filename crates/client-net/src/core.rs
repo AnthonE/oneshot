@@ -1717,6 +1717,15 @@ impl NetCore {
         );
     }
 
+    /// The seat `slot` has in the hull we ride (as the server sent it,
+    /// seats and all), if it rides with us.
+    fn co_rider(&self, slot: u8) -> Option<usize> {
+        self.pred.riding()?;
+        let v = self.pred_v?;
+        (slot != self.slot).then_some(())?;
+        v.seats.iter().position(|&x| x == slot + 1)
+    }
+
     /// One fighter of [`NetCore::others`], by its slot.
     fn other_at(&self, slot: u8, now_ms: f64) -> Option<Drawn> {
         if self.n_frames == 0 {
@@ -1736,6 +1745,19 @@ impl NetCore {
     /// its updates, not the frames, are what it is drawn between.
     fn other_between(&self, slot: u8, ai: usize, rt: f64) -> Option<Drawn> {
         let frames = &self.frames[..self.n_frames];
+        // Riding with us: in its seat on the hull as we draw it, never a
+        // round trip behind it; its aim the newest we were sent.
+        if let (Some(seat), Some(hull)) = (self.co_rider(slot), self.drawn_hull()) {
+            let newest = frames
+                .iter()
+                .rev()
+                .find_map(|f| f.remotes[..f.n as usize].iter().find(|r| r.slot == slot))?;
+            return Some(Drawn {
+                pos: hull.mount(seat),
+                vel: hull.vel,
+                ..drawn(newest)
+            });
+        }
         // Its updates: a held one repeats an update, never is one.
         let find = |f: &Frame| {
             let r = f.remotes[..f.n as usize].iter().find(|r| r.slot == slot).copied();

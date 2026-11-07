@@ -111,6 +111,21 @@ struct Measured {
     shots: u32,
     ids: usize,
     worst_jump: f32,
+    /// Each rider's drawing of the other in its seat (the driver's of its
+    /// passenger, the passenger's of its driver) against the server's seat
+    /// at the drawn tick.
+    co_seen: [Err; 2],
+    /// The passenger's own seat, drawn, against the server's.
+    own_seat: Err,
+}
+
+/// Where the server's truck 0 seats `seat` at fractional tick `t`.
+fn seat_truth(h: &[(u32, Vehicle)], t: f64, seat: usize) -> Option<V3> {
+    let lo = t.floor() as u32;
+    let first = h.first()?.0;
+    let a = h.get(lo.checked_sub(first)? as usize)?.1.mount(seat);
+    let b = h.get((lo + 1 - first) as usize)?.1.mount(seat);
+    Some(a + (b - a) * (t - lo as f64) as f32)
 }
 
 /// The server's truck 0 at fractional tick `t`, between whole ticks.
@@ -184,6 +199,9 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
     // watcher, and the render tick the watcher drew it at.
     let mut seen: [Vec<(f64, V3)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
     let mut seen_rt: Vec<(f64, V3)> = Vec::new();
+    let mut co: [Vec<(f64, V3)>; 2] = [Vec::new(), Vec::new()];
+    let mut own_seat: Vec<(f64, V3)> = Vec::new();
+    let slots: Vec<u8> = cs.iter().map(|c| c.slot).collect();
     let mut at_from = (0, 0, 0);
     let mut ids: Vec<u16> = Vec::new();
     let mut last_drawn: Vec<(u16, V3)> = Vec::new();
@@ -273,6 +291,12 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
                 if let Some((_, p, _)) = core.own_vehicle() {
                     seen[k].push((drawn_tick(core), p));
                 }
+                if let Some(d) = core.others(now).into_iter().find(|d| d.slot == slots[1 - k]) {
+                    co[k].push((drawn_tick(core), d.pos));
+                }
+                if k == 1 && core.own().0.riding().is_some() {
+                    own_seat.push((drawn_tick(core), core.own().1));
+                }
             } else if let Some(d) = core.vehicles(now).into_iter().find(|d| d.slot == 0) {
                 seen[2].push((drawn_tick(core), d.pos));
                 seen_rt.push((core.render_tick(now), d.pos));
@@ -296,6 +320,15 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
         shots: cs[1].core.own().0.shots - at_from.2,
         ids: ids.len(),
         worst_jump,
+        co_seen: [PASSENGER, DRIVER].map(|seat| {
+            let k = if seat == PASSENGER { 0 } else { 1 };
+            err(co[k]
+                .iter()
+                .filter_map(|&(t, p)| seat_truth(&history, t, seat).map(|q| (p - q).len())))
+        }),
+        own_seat: err(own_seat
+            .iter()
+            .filter_map(|&(t, p)| seat_truth(&history, t, PASSENGER).map(|q| (p - q).len()))),
     }
 }
 
@@ -436,4 +469,28 @@ fn a_passenger_predicts_a_parked_hull_rolling_to_a_stop() {
     assert!(n > 1000, "{n}");
     assert_eq!(c.stats.hull_corrections, 0, "{:?}", c.stats);
     assert!(worst < 1e-3, "drawn {worst} m off");
+}
+
+/// Riding together, each draws the other in its seat on the hull it draws:
+/// never a round trip behind it (2 to 7 m at speed).
+#[test]
+fn a_rider_draws_its_co_rider_in_its_seat() {
+    for (delay, jitter) in [(20.0, 0.0), (60.0, 10.0), (150.0, 10.0)] {
+        let m = ride(delay, jitter, 0.0, Steer::Keys, false);
+        let [of_passenger, of_driver] = m.co_seen;
+        println!(
+            "{delay} ms: the driver draws its passenger {of_passenger:?}, the passenger its driver {of_driver:?}, its own seat {:?}",
+            m.own_seat
+        );
+        assert!(of_passenger.n > 500 && of_driver.n > 500, "{m:?}");
+        // The driver's hull is the server's: so is its passenger's seat.
+        assert!(of_passenger.max < 0.01, "{delay} ms: {of_passenger:?}");
+        // The passenger's hull is a guess: its driver's seat on it is as
+        // good as its own (at the cab, a turn's error weighs a little more).
+        assert!(
+            of_driver.mean < 2.0 * m.own_seat.mean + 0.01 && of_driver.max < 2.0 * m.own_seat.max + 0.01,
+            "{delay} ms: {of_driver:?} on its own seat's {:?}",
+            m.own_seat
+        );
+    }
 }
