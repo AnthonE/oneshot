@@ -182,8 +182,8 @@ fn snapshot() -> Snapshot {
         ..EventState::default()
     };
     s.pads[1].empty_s = 45;
-    // Riding: in the passenger's seat of vehicle 2, sent exactly; and
-    // vehicle 5 driven by seat 1.
+    // Riding: in the passenger's seat of vehicle 2, sent exactly, seat 2
+    // at its wheel with its stick; and vehicle 5 driven by seat 1.
     s.own.ride = 6;
     s.own_vehicle = Some(sim::vehicle::Vehicle {
         active: true,
@@ -192,11 +192,12 @@ fn snapshot() -> Snapshot {
         yaw: 1000,
         grounded: true,
         health: 200_000,
-        seats: [0, 1],
+        seats: [3, 1],
         respawn: 0,
         home: 2,
         turret: sim::vehicle::MINIGUN,
     });
+    s.drive = Some((-40, 127));
     // Gunning its minigun.
     s.own.mount = sim::fighter::Mount {
         spin: 45,
@@ -490,13 +491,14 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.score, s.score);
     assert_eq!(d.own.ride, s.own.ride);
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
+    assert_eq!(d.drive, s.drive, "and its driver's stick");
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
     assert_eq!(d.flags(), s.flags());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
-    // Sixteen seats, every projectile and pad: fits with room for events.
-    // (room::build drops events past the datagram, so a full snapshot of
-    // everything is never sent.)
+    // Sixteen seats, every projectile and pad, riding behind a driver:
+    // fits with room for about ten events. (room::build drops events past
+    // the datagram, so a full snapshot of everything is never sent.)
     let full = Snapshot {
         n_remote: MAX_REMOTES as u8,
         n_proj: MAX_SNAP_PROJ as u8,
@@ -509,7 +511,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
-    assert!(n + 200 <= MAX_DATAGRAM, "{n} bytes before events");
+    assert!(n + 192 <= MAX_DATAGRAM, "{n} bytes before events");
 }
 
 #[test]
@@ -552,6 +554,8 @@ fn delta_base() -> Snapshot {
     base.tick -= 2;
     base.clock -= 1;
     base.own.body.pos.x -= 0.25;
+    // Its driver steered the other way then.
+    base.drive = Some((40, 127));
     base.n_remote = 2;
     base.remotes[1] = Remote {
         slot: 3,
@@ -609,13 +613,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0x799b_1350_5f9e_729b,
-        0x9a57_d4ed_c7b3_5dad,
-        0x510e_a852_1eec_b2b3,
+        0x8043_aa3b_c61f_8f7d,
+        0x2904_d4c3_c9d2_1f2e,
+        0x0de8_7fb0_90c4_6faa,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x25e1_854f_3f00_2018,
+        0x04a1_bde9_6776_bee9,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -639,7 +643,7 @@ fn the_bytes_match_their_goldens() {
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
-        0xbc84_0a83_768d_a922,
+        0x480a_d644_905d_938a,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

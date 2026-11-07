@@ -7,12 +7,14 @@
 //!   needs them. It steers on the input depth each snapshot reports, within
 //!   ±5% (Gates' `client-core/src/clock.rs`).
 //! - **prediction:** its own fighter, stepped with `sim`'s `step_local` the
-//!   moment an input is made, and when it drives, its vehicle
-//!   ([`step_own`]). Each snapshot carries the server's exact own fighter
-//!   (and vehicle) after the last input it ran: equal to the prediction
-//!   there is a confirmation; different, the client adopts it and replays
-//!   the rest (Gates' `client-core/src/predict.rs`). A passenger's vehicle
-//!   is the server's: its seat follows it.
+//!   moment an input is made, and the vehicle it rides ([`step_own`]): at
+//!   the wheel on its own input, behind someone on its driver's stick as
+//!   last sent (`Snapshot::drive`), kept on. Each snapshot carries the
+//!   server's exact own fighter (and vehicle) after the last input it ran:
+//!   equal to the prediction there is a confirmation; different, the client
+//!   adopts it and replays the rest (Gates' `client-core/src/predict.rs`).
+//!   A passenger's hull is re-run from the server's on every snapshot, on
+//!   the stick that came with it; the jump eases out as a correction does.
 //! - **interpolation:** everyone else, drawn between two snapshots a little
 //!   behind the newest (Gates' `client-core/src/interp.rs`).
 //! - **rounds in flight:** on the same render tick as everyone else, ours
@@ -35,12 +37,37 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 
 /// One tick of what this client predicts, in the server's order: its
-/// fighter (`step_in`), then the vehicle it drives, then its seat.
-pub fn step_own(f: &mut Fighter, v: &mut Option<Vehicle>, phase: Phase, inp: &Input, map: &Map) -> sim::fighter::Local {
+/// fighter (`step_in`), then the vehicle it rides, then its seat. At the
+/// wheel the hull drives on our own input; behind someone, on its driver's
+/// `stick` (`mx`, `mz`, all of an input a hull reads), and with none it is
+/// parked, as the server steps a hull nobody drives.
+pub fn step_own(
+    f: &mut Fighter,
+    v: &mut Option<Vehicle>,
+    phase: Phase,
+    inp: &Input,
+    stick: Option<(i8, i8)>,
+    map: &Map,
+) -> sim::fighter::Local {
     let l = f.step_in(phase, inp, map);
     if let (Some((_, seat)), Some(v)) = (f.riding(), v.as_mut()) {
-        if seat == DRIVER && phase == Phase::Playing && f.active() {
-            v.step_local(inp, map);
+        if phase == Phase::Playing {
+            if seat == DRIVER {
+                if f.active() {
+                    v.step_local(inp, map);
+                }
+            } else if let Some((mx, mz)) = stick {
+                v.step_local(
+                    &Input {
+                        mx,
+                        mz,
+                        ..Input::default()
+                    },
+                    map,
+                );
+            } else {
+                v.step_parked(map);
+            }
         }
         f.body = v.seat_body(seat);
     }
@@ -165,6 +192,10 @@ pub struct Stats {
     pub snapshots: u32,
     pub confirmations: u32,
     pub corrections: u32,
+    /// Riding behind someone, snapshots whose hull wasn't the one predicted
+    /// on its driver's stick kept on (the driver moved it): re-run, the
+    /// jump eased. Not a correction: nothing of ours was wrong.
+    pub hull_corrections: u32,
     pub resyncs: u32,
     /// The server's input buffer for us, as last reported.
     pub depth: i8,
@@ -382,6 +413,9 @@ pub struct NetCore {
 
     pred: Fighter,
     pred_v: Option<Vehicle>,
+    /// Riding behind someone, its driver's stick as the newest snapshot
+    /// said: what the hull is predicted on until the next says otherwise.
+    stick: Option<(i8, i8)>,
     /// Before the newest predicted tick, for drawing between ticks (the
     /// body, and the vehicle's middle and heading).
     prev_pos: V3,
@@ -476,6 +510,7 @@ impl NetCore {
             welcome_tick: tick,
             pred: Fighter::default(),
             pred_v: None,
+            stick: None,
             prev_pos: V3::ZERO,
             prev_v: V3::ZERO,
             prev_vyaw: 0,
@@ -595,7 +630,7 @@ impl NetCore {
             self.prev_pos = self.pred.body.pos;
             let was = self.pred_v;
             let phase = self.phase();
-            let local = step_own(&mut self.pred, &mut self.pred_v, phase, &input, &self.map);
+            let local = step_own(&mut self.pred, &mut self.pred_v, phase, &input, self.stick, &self.map);
             // A vehicle just got into starts where it is, not at the origin.
             if let Some(v) = was.or(self.pred_v) {
                 self.prev_v = v.pos;
@@ -656,12 +691,6 @@ impl NetCore {
         if self.newest.is_none() || self.watch {
             return;
         }
-        // A passenger's hull is the server's newest, not predicted: what
-        // it fires from where the hull will be is drawn when sent, as the
-        // hull is, never from a muzzle a round trip behind it.
-        if self.pred.riding().is_some_and(|(_, seat)| seat != DRIVER) {
-            return;
-        }
         let f = &self.pred;
         let seeds = [
             l.fired.then(|| proj::seed_fire(f, false, l.charged)).flatten(),
@@ -669,10 +698,17 @@ impl NetCore {
             l.throw.then(|| proj::seed_throw(f, l.sticky)),
         ];
         // The drawn body's correction: the round leaves the drawn muzzle.
-        let off = if self.pred.riding().is_some() {
-            self.voffset
-        } else {
-            self.offset
+        // Riding, the hull's, turn and all, where our seat is on it.
+        let off = match (self.pred.riding(), self.pred_v) {
+            (Some((_, seat)), Some(v)) => {
+                let eased = Vehicle {
+                    pos: v.pos + self.voffset,
+                    yaw: v.yaw.wrapping_add(turn_of(self.vyaw_off)),
+                    ..v
+                };
+                eased.mount(seat) - v.mount(seat)
+            }
+            _ => self.offset,
         };
         let k = self.latest.tick.wrapping_sub(self.latest.last_seq) as i32 as f64;
         for seed in seeds.into_iter().flatten() {
@@ -1005,13 +1041,16 @@ impl NetCore {
     }
 
     /// A round of the turret we gun, as predicted: from its muzzle on the
-    /// hull we were last sent, to where our aim meets the map.
+    /// hull as drawn (where its barrels are on screen), to where our aim
+    /// meets the map.
     fn own_turret_shot(&mut self) {
-        let f = &self.pred;
-        let (Some(v), Some((a, cause))) = (self.pred_v, self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)))
-        else {
+        let (Some(v), Some((a, cause))) = (
+            self.drawn_hull(),
+            self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)),
+        ) else {
             return;
         };
+        let f = &self.pred;
         let eye = f.eye();
         let dir = aim_dir(f.yaw, f.pitch);
         let t = self.map.ray(eye, dir, a.range);
@@ -1270,9 +1309,12 @@ impl NetCore {
         let auth_v = s.own_vehicle;
         let phase = phase_of(s.phase);
         let alive_changed = auth.alive != self.pred.alive;
-        // A passenger can't predict the vehicle it sits in (someone else
-        // drives): its seat is the server's, and only the rest is checked.
+        // Behind someone, the hull is predicted on its driver's stick, which
+        // the driver may have moved since: our fighter is checked on its
+        // own (in the server's seat), and the hull is re-run from the
+        // server's every time, on the stick that came with it.
         let passenger = auth.riding().is_some_and(|(_, seat)| seat != DRIVER);
+        self.stick = if passenger { s.drive } else { None };
         let same = |f: &Fighter, v: &Option<Vehicle>| {
             if passenger {
                 same_local(&Fighter { body: auth.body, ..*f }, &auth)
@@ -1284,20 +1326,17 @@ impl NetCore {
         // one it has run but we never made (the clock jumped) is a reset.
         let ahead = self.seq.wrapping_sub(l.wrapping_add(1));
         let known = ahead < RING as u32 && l.wrapping_sub(self.acked_seq) < 0x8000_0000;
-        if known && !alive_changed && same(&self.after[l as usize % RING], &self.after_v[l as usize % RING]) {
+        let at = l as usize % RING;
+        let confirmed = known && !alive_changed && same(&self.after[at], &self.after_v[at]);
+        if confirmed {
             self.stats.confirmations += 1;
-            if passenger {
-                self.pred_v = auth_v;
-                if let Some((_, seat)) = self.pred.riding() {
-                    if let Some(v) = &self.pred_v {
-                        self.pred.body = v.seat_body(seat);
-                    }
-                }
-            }
-        } else {
-            if !alive_changed {
-                self.stats.corrections += 1;
-            }
+        } else if !alive_changed {
+            self.stats.corrections += 1;
+        }
+        if passenger && known && matches!(self.after_v[at], Some(p) if Some(p) != auth_v) {
+            self.stats.hull_corrections += 1;
+        }
+        if !confirmed || passenger {
             let before = self.pred.body.pos;
             let before_v = self.pred_v;
             let mut f = auth;
@@ -1305,7 +1344,25 @@ impl NetCore {
             if ahead < RING as u32 {
                 let mut q = l.wrapping_add(1);
                 while q != self.seq {
-                    step_own(&mut f, &mut v, phase, &self.inputs[q as usize % RING], &self.map);
+                    step_own(
+                        &mut f,
+                        &mut v,
+                        phase,
+                        &self.inputs[q as usize % RING],
+                        self.stick,
+                        &self.map,
+                    );
+                    // Our rounds the server hasn't yet leave from where the
+                    // re-run has us on their seq, not the guess that launched
+                    // them (a hull predicted on a stick its driver has since
+                    // moved): seeded a metre off, one would never be bound
+                    // to the server's. The move eases out (`on_snapshot`).
+                    let moved = f.eye() - self.after[q as usize % RING].eye();
+                    if moved != V3::ZERO {
+                        for l in self.launches.iter_mut().filter(|l| !l.bound && l.q == q) {
+                            l.seed.pos = l.seed.pos + moved;
+                        }
+                    }
                     self.after[q as usize % RING] = f;
                     self.after_v[q as usize % RING] = v;
                     q = q.wrapping_add(1);
@@ -1390,13 +1447,7 @@ impl NetCore {
     /// Riding, it is drawn in its seat on the drawn hull, so the two never
     /// part (one correction, one decision to snap or ease).
     pub fn own(&self) -> (&Fighter, V3) {
-        if let (Some((_, seat)), Some((v, p, yaw))) = (self.pred.riding(), self.own_vehicle()) {
-            let turn = (yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
-            let drawn = Vehicle {
-                pos: p,
-                yaw: turn.rem_euclid(65536.0) as u16,
-                ..v
-            };
+        if let (Some((_, seat)), Some(drawn)) = (self.pred.riding(), self.drawn_hull()) {
             return (&self.pred, drawn.mount(seat));
         }
         let a = self.alpha();
@@ -1404,9 +1455,9 @@ impl NetCore {
         (&self.pred, p)
     }
 
-    /// The vehicle we ride in, as predicted (a driver's) or as the server
-    /// last said (a passenger's), drawn at `alpha` through the tick: its
-    /// middle and its heading in radians.
+    /// The vehicle we ride in, as predicted (at the wheel on our input,
+    /// behind someone on its driver's stick), drawn at `alpha` through the
+    /// tick: its middle and its heading in radians.
     pub fn own_vehicle(&self) -> Option<(Vehicle, V3, f32)> {
         let v = self.pred_v?;
         self.pred.riding()?;
@@ -1416,6 +1467,17 @@ impl NetCore {
         let turn = v.yaw.wrapping_sub(self.prev_vyaw) as i16 as f32;
         let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0) + self.vyaw_off;
         Some((v, p, yaw))
+    }
+
+    /// The hull we ride as [`Self::own_vehicle`] draws it, as a vehicle.
+    fn drawn_hull(&self) -> Option<Vehicle> {
+        let (v, p, yaw) = self.own_vehicle()?;
+        let turn = (yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+        Some(Vehicle {
+            pos: p,
+            yaw: turn.rem_euclid(65536.0) as u16,
+            ..v
+        })
     }
 
     /// Our own fighter as a body anyone would draw: where [`Self::own`]
@@ -1861,6 +1923,11 @@ fn phase_of(p: u8) -> Phase {
         1 => Phase::Playing,
         _ => Phase::Over,
     }
+}
+
+/// Radians as a turn in 1/65536, the short way.
+fn turn_of(rad: f32) -> u16 {
+    (rad * (65536.0 / core::f32::consts::TAU)).round() as i32 as u16
 }
 
 fn yaw_rad(y: u16) -> f32 {

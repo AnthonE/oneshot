@@ -376,6 +376,10 @@ pub struct World {
     /// The match's secret: keys every spread draw. Never leaves the server
     /// while the match runs (docs/DESIGN.md §9).
     salt: (u64, u64),
+    /// Each seat's input as the last tick ran it, sanitized: what a hull's
+    /// driver drove it by ([`Self::drive_stick`]). Not hashed: it is the
+    /// inputs', which a replay has.
+    ran: [Input; MAX_FIGHTERS],
 }
 
 impl World {
@@ -412,7 +416,19 @@ impl World {
             vrewind: Box::default(),
             rng: Pcg32::new(seed, 1),
             salt,
+            ran: [Input::default(); MAX_FIGHTERS],
         }
+    }
+
+    /// The stick (`mx`, `mz`) vehicle `i`'s driver drove it by on the last
+    /// tick: what its passenger predicts it on, as kept on (the only part
+    /// of an input [`Vehicle::step_local`] reads). None if nobody drives
+    /// it (it is parked: [`Vehicle::step_parked`]), as [`Self::step`]
+    /// will next tick.
+    pub fn drive_stick(&self, i: usize) -> Option<(i8, i8)> {
+        let v = self.vehicles.get(i).filter(|v| v.active)?;
+        let d = v.driver().filter(|&d| self.fighters[d].active())?;
+        Some((self.ran[d].mx, self.ran[d].mz))
     }
 
     /// Seats a fighter and puts it at a spawn point. Whoever sat there
@@ -481,6 +497,9 @@ impl World {
         // ticks: a flag let go, a seat left) are this tick's.
         self.events.drop_first(self.events_read);
         self.tick = self.tick.wrapping_add(1);
+        for (r, inp) in self.ran.iter_mut().zip(inputs) {
+            *r = inp.sanitized();
+        }
         match self.phase {
             Phase::Countdown => {
                 for (f, inp) in self.fighters.iter_mut().zip(inputs) {

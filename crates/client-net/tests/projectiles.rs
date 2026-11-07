@@ -830,7 +830,7 @@ fn running_us() -> impl Fn(u32) -> Fighter {
     let mut after = vec![fighter(MAGNUM); 1024];
     for q in 8..after.len() {
         let mut f = after[q - 1];
-        step_own(&mut f, &mut None, Phase::Playing, &running(), &map);
+        step_own(&mut f, &mut None, Phase::Playing, &running(), None, &map);
         after[q] = f;
     }
     move |q| after[q as usize]
@@ -925,71 +925,101 @@ fn a_sticky_that_sticks_to_us_lands_on_us_as_drawn() {
     assert!(lead > 0.3, "drawn only {lead} m ahead");
 }
 
-/// A passenger fires from a hull it doesn't predict: its round is drawn
-/// when the server sends it, as the hull is, never from a muzzle a round
-/// trip behind where the server fires it (a stand-in, then a pop).
-#[test]
-fn a_passengers_round_is_drawn_as_sent() {
-    let hull_at = |t: u32| Vehicle {
-        vel: V3::new(20.0, 0.0, 0.0),
+/// A server that drives a truck along +x at full throttle from rest (seat 1
+/// at the wheel), us in its bed with a rocket, firing on our seq `fire`;
+/// it runs our seq `t + 2` on tick `t`: the snapshot it sends after tick
+/// `t`, the stick sent with it.
+fn riding_server(fire: u32) -> impl Fn(u32) -> Option<Snapshot> {
+    use sim::vehicle::{DRIVER, NO_TURRET};
+    let mut w = world(ROCKET);
+    let hull = Vehicle {
         seats: [2, 1],
-        ..Vehicle::new(
-            V3::new((20.0 * t as f64 / TICK_HZ as f64) as f32 - 30.0, 0.0, 0.0),
-            0,
-            0,
-            0,
-        )
+        ..Vehicle::new(V3::new(-45.0, 0.0, 0.0), 0, 0, NO_TURRET)
     };
-    let me = Fighter {
-        ride: Fighter::ride_of(0, PASSENGER),
-        ..fighter(ROCKET)
-    };
-    let snap = move |t: u32| {
+    w.vehicles[0] = hull;
+    for (s, seat) in [(0, PASSENGER), (1, DRIVER)] {
+        w.fighters[s].ride = Fighter::ride_of(0, seat);
+        w.fighters[s].body = hull.seat_body(seat);
+    }
+    let mut snaps = Vec::new();
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1].mz = 127;
+    for t in 0..600u32 {
+        inputs[0].buttons = if t + 2 == fire { FIRE } else { 0 };
+        w.step(&inputs, &[0; MAX_FIGHTERS]);
         let mut s = base(t);
         s.last_seq = t + 2;
         s.depth = 1;
-        let hull = hull_at(t);
-        s.own = Fighter {
-            body: hull.seat_body(PASSENGER),
-            ..me
-        };
-        s.own_vehicle = Some(hull);
-        if (200..=400).contains(&t) {
-            let x = hull_at(200).pos.x + (40.0 * (t - 200) as f64 / TICK_HZ as f64) as f32;
-            add(&mut s, rocket_of(0, V3::new(x, 1.5, 0.0), V3::new(40.0, 0.0, 0.0)));
+        s.own = w.fighters[0];
+        s.own_vehicle = Some(w.vehicles[0]);
+        s.drive = w.drive_stick(0);
+        for (_, p) in w.proj.live() {
+            add(&mut s, rocket_of(p.owner, p.pos, p.vel));
         }
-        Some(s)
-    };
+        snaps.push(s);
+    }
+    move |t| snaps.get(t as usize).copied()
+}
+
+/// A passenger predicts the hull it rides on its driver's stick, so what it
+/// fires leaves the muzzle it draws, at once, as on foot; and the server's
+/// round takes it over without a pop.
+#[test]
+fn a_passengers_round_leaves_the_hull_it_predicts() {
+    const FIRE_SEQ: u32 = 200;
+    let snap = riding_server(FIRE_SEQ);
+    let fastest = (0..600)
+        .filter_map(&snap)
+        .flat_map(|s| s.proj().to_vec())
+        .map(|p| p.vel.len());
+    let fastest = fastest.fold(0.0f32, f32::max);
+    assert!(fastest > 20.0, "the server never fired: {fastest}");
     let mut c = NetCore::new(0, 0, 0, rules(ROCKET), Map::open());
-    let shots = c.own().0.shots;
     let mut fired = false;
     let mut ids: Vec<u16> = Vec::new();
     let mut last: Option<V3> = None;
+    let mut drawn = 0;
     drive(&mut c, 3000.0, snap, |c, now| {
         if c.latest().tick == 0 {
             return;
         }
-        let fire = (1000.0..1002.0).contains(&now);
+        let made = c.tick();
+        let press = made == FIRE_SEQ;
         c.update(
             now,
             Input {
-                buttons: if fire { FIRE } else { 0 },
+                buttons: if press { FIRE } else { 0 },
                 ..Input::default()
             },
         );
-        fired |= c.own().0.shots != shots;
-        assert_eq!(c.launches(), 0, "a passenger's round launched from the muzzle");
-        for p in c.projectiles(now).into_iter().filter(|p| p.owner == 0) {
+        let mine: Vec<DrawnProj> = c.projectiles(now).into_iter().filter(|p| p.owner == 0).collect();
+        if press && c.tick() != made {
+            fired = true;
+            assert_eq!(c.launches(), 1, "not launched from our muzzle");
+            assert_eq!(mine.len(), 1, "not drawn the frame it fired");
+            let seat = c.own().1;
+            let off = (mine[0].pos - seat).len();
+            assert!(off < 2.5, "drawn {off} m from the drawn seat");
+        }
+        for p in &mine {
             if !ids.contains(&p.id) {
                 ids.push(p.id);
             }
             if let Some(p0) = last {
                 let step = (p.pos - p0).len();
-                assert!(step <= 40.0 * 0.0015 + 0.005, "jumped {step}");
+                assert!(step <= fastest * 0.0015 + 0.01, "jumped {step} at {now}");
             }
             last = Some(p.pos);
+            drawn += 1;
+        }
+        if mine.is_empty() {
+            last = None;
         }
     });
     assert!(fired, "never fired");
+    assert!(drawn > 50, "drawn on only {drawn} frames");
     assert_eq!(ids.len(), 1, "{ids:?}");
+    // The hull was the one predicted on its driver's stick every time.
+    assert_eq!(c.stats.hull_corrections, 0, "{:?}", c.stats);
+    assert!(c.stats.confirmations > 100, "{:?}", c.stats);
 }

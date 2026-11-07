@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 31;
+pub const PROTO_VER: u16 = 32;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -555,6 +555,28 @@ const TURRET_BITS: u32 = 2;
 const _: () = assert!((sim::vehicle::TURRETS as u32) <= 1 << TURRET_BITS);
 const _: () = assert!(sim::consts::MAX_VEHICLES <= 1 << (8 - TURRET_BITS));
 
+/// A passenger's driver's stick ([`Snapshot::drive`]), after its hull.
+fn w_drive(w: &mut BitWriter, d: Option<(i8, i8)>) -> R<()> {
+    w.write_bit(d.is_some())?;
+    if let Some((mx, mz)) = d {
+        w.write(mx as u8 as u32, 8)?;
+        w.write(mz as u8 as u32, 8)?;
+    }
+    Ok(())
+}
+
+/// The server runs a stick sanitized (`Input::sanitized`): never -128.
+fn r_drive(r: &mut BitReader) -> R<Option<(i8, i8)>> {
+    if !r.read_bit()? {
+        return Ok(None);
+    }
+    let (mx, mz) = (r.read(8)? as u8 as i8, r.read(8)? as u8 as i8);
+    if mx == i8::MIN || mz == i8::MIN {
+        return Err(WireError::Malformed);
+    }
+    Ok(Some((mx, mz)))
+}
+
 fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     let active = r.read_bit()?;
     let pos = V3::new(r_grid(r)?, r_grid(r)?, r_grid(r)?);
@@ -632,6 +654,12 @@ pub struct Snapshot {
     pub own: Fighter,
     /// The vehicle it rides in, exactly, if it rides.
     pub own_vehicle: Option<Vehicle>,
+    /// Riding behind someone (not at the wheel), the stick (`mx`, `mz`) its
+    /// driver drove the hull by on this tick: the passenger predicts the
+    /// hull on it, as kept on (`sim::world::World::drive_stick`). None at the
+    /// wheel, on foot, or in a hull nobody drives (parked). Only ever
+    /// with `own_vehicle`.
+    pub drive: Option<(i8, i8)>,
     pub n_remote: u8,
     pub remotes: [Remote; MAX_REMOTES],
     pub n_proj: u8,
@@ -671,6 +699,7 @@ impl Default for Snapshot {
             depth: 0,
             own: Fighter::default(),
             own_vehicle: None,
+            drive: None,
             n_remote: 0,
             remotes: [Remote::default(); MAX_REMOTES],
             n_proj: 0,
@@ -936,6 +965,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w.write_bit(s.own_vehicle.is_some())?;
     if let Some(v) = &s.own_vehicle {
         w_vehicle(&mut w, v)?;
+        w_drive(&mut w, s.drive)?;
     }
     w_list(&mut w, s.remotes(), 4)?;
     w_list(&mut w, s.proj(), 5)?;
@@ -969,6 +999,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     };
     if r.read_bit()? {
         s.own_vehicle = Some(r_vehicle(&mut r)?);
+        s.drive = r_drive(&mut r)?;
     }
     s.n_remote = r_list(&mut r, &mut s.remotes, 4)?;
     s.n_proj = r_list(&mut r, &mut s.proj, 5)?;
