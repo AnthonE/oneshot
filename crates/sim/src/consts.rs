@@ -329,15 +329,26 @@ pub const VEH_SIDE_SLIP: f32 = 0.15;
 /// this deep.
 pub const VEH_STEP: f32 = 0.6;
 pub const VEH_SNAP: f32 = 0.4;
+/// Its nose and tail ride the floor under them where it rises (a ramp, a
+/// slope), up to this rise per metre over its middle's height: the hull's
+/// end circles stand `VEH_HULL_OFF` from the middle.
+pub const VEH_CLIMB: f32 = 0.5;
+/// The footprint the floor under its nose and tail is read over.
+pub const VEH_WHEEL_R: f32 = 0.3;
 /// Hit points (in `PT`s, like a fighter's).
 pub const VEH_HEALTH: i32 = 900 * PT;
 /// How near its middle a fighter must stand to get in: at its nose or its
 /// tail it still can.
 pub const ENTER_R: f32 = 3.6;
-/// Faster than this, it runs a fighter down; past `SPLAT_KILL` the hit is
-/// lethal, below it scaled.
+/// Closing faster than this, it runs a fighter down; past `SPLAT_KILL` the
+/// hit is lethal, below it scaled. A fighter it meets is carried off at its
+/// speed and `SPLAT_SHOVE` more, so one hit is one hit.
 pub const SPLAT_SPEED: f32 = 5.0;
-pub const SPLAT_KILL: f32 = 11.0;
+pub const SPLAT_KILL: f32 = 10.0;
+pub const SPLAT_SHOVE: f32 = 4.0;
+/// Two hulls that meet push apart, equal in weight, keeping this much of
+/// their closing speed as a bounce.
+pub const VEH_BOUNCE: f32 = 0.3;
 /// How much of a blast's push a vehicle takes along the ground, and the
 /// speed up off its wheels it is thrown at (m/s), each at full strength
 /// from a charge of `VEH_LIFT_DMG` or more (a rocket's: a hit beside it

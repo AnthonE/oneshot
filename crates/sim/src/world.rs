@@ -524,9 +524,10 @@ impl World {
                 _ => self.vehicles[i].step_parked(&self.map),
             }
         }
+        self.crashes();
         self.seat_riders();
         self.falls();
-        self.splatter();
+        self.splatter(rewind_q8);
         for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
                 self.unveil(s);
@@ -1994,39 +1995,111 @@ impl World {
         }
     }
 
-    /// A vehicle moving fast runs down whoever is on foot in its way: at
-    /// [`SPLAT_KILL`] dead, slower knocked aside. Its driver did it (or
-    /// nobody drove: then the fighter's own death).
-    fn splatter(&mut self) {
+    /// Hulls that meet push apart along where their circles touch, half
+    /// each (all of it the other's if one is against a wall), and trade
+    /// their closing speed, a little of it kept as a bounce.
+    fn crashes(&mut self) {
+        let reach = 2.0 * VEH_HULL_R;
+        for i in 0..MAX_VEHICLES {
+            for j in i + 1..MAX_VEHICLES {
+                let (a, b) = (self.vehicles[i], self.vehicles[j]);
+                if !a.active || !b.active || crate::fmath::fabs(a.pos.y - b.pos.y) >= VEH_H {
+                    continue;
+                }
+                // The deepest of the circles' overlaps, and its way from a
+                // to b.
+                let mut deep: Option<(f32, V3)> = None;
+                for ca in a.circles() {
+                    for cb in b.circles() {
+                        let d = (cb - ca).flat();
+                        let l2 = d.dot(d);
+                        if l2 >= reach * reach {
+                            continue;
+                        }
+                        let l = l2.sqrt();
+                        let n = if l > 1e-4 {
+                            d * (1.0 / l)
+                        } else {
+                            let m = (b.pos - a.pos).flat();
+                            if m.dot(m) > 1e-8 {
+                                m.norm()
+                            } else {
+                                V3::new(1.0, 0.0, 0.0)
+                            }
+                        };
+                        if deep.is_none_or(|(p, _)| reach - l > p) {
+                            deep = Some((reach - l, n));
+                        }
+                    }
+                }
+                let Some((pen, n)) = deep else {
+                    continue;
+                };
+                let closing = (a.vel - b.vel).flat().dot(n);
+                if closing > 0.0 {
+                    let k = closing * (1.0 + VEH_BOUNCE) * 0.5;
+                    for (q, s) in [(i, -k), (j, k)] {
+                        let v = &mut self.vehicles[q];
+                        let to = v.vel + n * s;
+                        v.vel = V3::new(crate::movement::quant(to.x), v.vel.y, crate::movement::quant(to.z));
+                    }
+                }
+                let half = n * (pen * 0.5);
+                let a_went = self.vehicles[i].nudge(-half, &self.map);
+                let b_went = self.vehicles[j].nudge(half, &self.map);
+                if !a_went {
+                    self.vehicles[j].nudge(half * 2.0, &self.map);
+                } else if !b_went {
+                    self.vehicles[i].nudge(-half * 2.0, &self.map);
+                }
+            }
+        }
+    }
+
+    /// A vehicle runs down whoever on foot it meets closing faster than
+    /// [`SPLAT_SPEED`]: at [`SPLAT_KILL`] dead, slower hurt by the share
+    /// of the way there (of a whole fighter's shields and health), and
+    /// carried off ahead of it. Met where its driver saw them (rewound
+    /// by the driver's depth, as a shot is) or where they are. Its driver
+    /// did it (or nobody drove: then the fighter's own death).
+    fn splatter(&mut self, rewind_q8: &[u32; MAX_FIGHTERS]) {
         for i in 0..MAX_VEHICLES {
             let v = self.vehicles[i];
-            let speed = v.vel.flat().len();
-            if !v.active || speed < SPLAT_SPEED {
+            if !v.active || v.vel.flat().len() < SPLAT_SPEED {
                 continue;
             }
             let driver = v.driver();
+            let depth = driver.map_or(0, |d| rewind_q8[d]);
             for q in 0..MAX_FIGHTERS {
                 let f = self.fighters[q];
-                if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
+                if !f.active() || f.ride != 0 || driver.is_some_and(|d| self.spared(d, q)) {
                     continue;
                 }
-                if driver.is_some_and(|d| self.spared(d, q)) {
+                let h = f.body.height();
+                let then = self.rewind.pose_at(self.tick, q, depth, &pose(&f));
+                let met = if v.touches(f.body.pos, BODY_R, h) {
+                    f.body.pos
+                } else if then.alive && v.touches(then.pos, BODY_R, h) {
+                    then.pos
+                } else {
+                    continue;
+                };
+                let off = (met - v.pos).flat();
+                let away = if off.dot(off) > 1e-6 { off.norm() } else { v.axes().0 };
+                let closing = (v.vel - f.body.vel).flat().dot(away);
+                if closing < SPLAT_SPEED {
                     continue;
                 }
-                let away = (f.body.pos - v.pos).flat().norm();
                 let b = &mut self.fighters[q].body;
-                b.vel = b.vel + away * 6.0 + V3::new(0.0, 3.0, 0.0);
+                b.vel = b.vel + away * (closing + SPLAT_SHOVE) + V3::new(0.0, 3.0, 0.0);
                 b.grounded = false;
-                if speed >= SPLAT_KILL {
-                    self.damage(
-                        driver.unwrap_or(q),
-                        q,
-                        KILL_PTS,
-                        false,
-                        Head::None,
-                        Cause::Splatter as u16,
-                    );
-                }
+                let share = ((closing - SPLAT_SPEED) / (SPLAT_KILL - SPLAT_SPEED)).min(1.0);
+                let pts = if closing >= SPLAT_KILL {
+                    KILL_PTS
+                } else {
+                    ((HEALTH_MAX + SHIELD_MAX) as f32 * share) as i32
+                };
+                self.damage(driver.unwrap_or(q), q, pts, false, Head::None, Cause::Splatter as u16);
             }
         }
     }

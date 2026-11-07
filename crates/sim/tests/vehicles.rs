@@ -546,3 +546,128 @@ fn a_gunner_spins_up_the_minigun_kills_and_it_runs_hot() {
     }
     assert!(w.fighters[0].mount.vent, "vented: {:?}", w.fighters[0].mount);
 }
+
+/// A driver drives a vehicle at a waypoint: steering toward it, the
+/// throttle held to `top` m/s.
+fn toward(v: &sim::vehicle::Vehicle, gx: f32, gz: f32, top: f32) -> Input {
+    let to = V3::new(gx - v.pos.x, 0.0, gz - v.pos.z);
+    let mut diff = fmath::atan2(to.z, to.x) / core::f32::consts::TAU - v.yaw as f32 / 65536.0;
+    diff -= fmath::round(diff);
+    Input {
+        mx: ((diff * 8.0).clamp(-1.0, 1.0) * 127.0) as i8,
+        mz: if v.vel.flat().len() < top { 127 } else { 0 },
+        ..Input::default()
+    }
+}
+
+/// Up red's ramp and onto its base's roof, at speed or slowly: the nose
+/// rides the slope ahead of the middle, never shoved off its foot.
+#[test]
+fn a_truck_drives_up_the_ramp_onto_the_base() {
+    for top in [8.0, VEH_TOP] {
+        let mut w = world(false);
+        tap_use(&mut w, 0);
+        let start = (-135.0, 0.0);
+        let path = [(-124.0, 0.0), (-115.0, 0.0), (-104.0, 0.0)];
+        w.vehicles[0].pos = V3::new(start.0, w.map.ground(start.0, start.1), start.1);
+        w.vehicles[0].yaw = 0;
+        let mut k = 0;
+        for _ in 0..TICK_HZ * 6 {
+            let v = w.vehicles[0];
+            let (gx, gz) = path[k];
+            if (V3::new(gx, 0.0, gz) - v.pos).flat().len() < 2.0 {
+                k += 1;
+                if k == path.len() {
+                    break;
+                }
+                continue;
+            }
+            press(&mut w, 0, toward(&v, gx, gz, top));
+        }
+        let v = w.vehicles[0];
+        assert_eq!(k, path.len(), "at {top} m/s it stopped at {:?}", v.pos);
+        assert!(v.pos.y > 4.4 && v.grounded, "on the roof: {:?}", v.pos);
+    }
+}
+
+/// Two trucks driven into each other don't pass through: their hulls stay
+/// apart, the one hit is shoved on, and the one that hit slows.
+#[test]
+fn trucks_crash_into_each_other() {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let v = w.vehicles[0];
+    let (f, _) = v.axes();
+    let at = v.pos + f * 14.0;
+    w.vehicles[1].pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.vehicles[1].yaw = v.yaw.wrapping_add(16384);
+    w.vehicles[1].vel = V3::ZERO;
+    let parked = w.vehicles[1].pos;
+    let (mut top, mut hit) = (0.0f32, false);
+    for _ in 0..TICK_HZ * 3 {
+        press(
+            &mut w,
+            0,
+            Input {
+                mz: 127,
+                ..Input::default()
+            },
+        );
+        let (a, b) = (w.vehicles[0], w.vehicles[1]);
+        let mut near = f32::MAX;
+        for ca in a.circles() {
+            for cb in b.circles() {
+                near = near.min((cb - ca).flat().len());
+            }
+        }
+        assert!(near > 2.0 * VEH_HULL_R - 0.05, "hulls through each other: {near}");
+        let speed = a.vel.flat().len();
+        top = top.max(speed);
+        hit |= (b.pos - parked).flat().len() > 0.5;
+    }
+    assert!(hit, "the parked truck was shoved");
+    assert!(top > 10.0, "it got going: {top}");
+}
+
+/// A slow truck hurts, not kills; the one it meets is carried off ahead,
+/// hit once, not dragged.
+#[test]
+fn a_slow_truck_hurts_and_carries_off() {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let v = w.vehicles[0];
+    let (f, _) = v.axes();
+    let at = v.pos + f * 8.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let mut hits = 0;
+    for _ in 0..TICK_HZ * 2 {
+        let fast = w.vehicles[0].vel.flat().len() > 7.5;
+        press(
+            &mut w,
+            0,
+            Input {
+                // Held near 7.5 m/s till it hits, then braked.
+                mz: if hits > 0 {
+                    -127
+                } else if fast {
+                    0
+                } else {
+                    127
+                },
+                ..Input::default()
+            },
+        );
+        hits += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.b == 1)
+            .count();
+    }
+    assert!(w.fighters[1].alive, "a slow hit is not a kill");
+    assert!(
+        w.fighters[1].health + w.fighters[1].shield < HEALTH_MAX + SHIELD_MAX,
+        "but it hurts"
+    );
+    assert_eq!(hits, 1, "hit once");
+}
