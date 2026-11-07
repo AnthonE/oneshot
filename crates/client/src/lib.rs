@@ -1827,12 +1827,13 @@ pub(crate) fn happened(
             t: time.elapsed_secs(),
         };
         look::fx::on_events(&mut fx, &scene, events);
-        let me = s.core.own().1;
+        let (mf, me) = s.core.own();
+        let mv = mf.body.vel;
         look::rag::on_events(
             &mut blows,
             events,
             others,
-            (s.core.slot, Vec3::new(me.x, me.y, me.z)),
+            (s.core.slot, Vec3::new(me.x, me.y, me.z), Vec3::new(mv.x, mv.y, mv.z)),
             time.elapsed_secs(),
         );
         // Our own gun, drawn the frame it fires, down where we look.
