@@ -39,6 +39,7 @@ pub mod pipelines;
 pub mod pool;
 pub mod portrait;
 pub mod potato;
+pub mod powerup;
 pub mod prewarm;
 pub mod quality;
 pub mod rag;

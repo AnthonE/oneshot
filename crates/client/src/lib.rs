@@ -534,6 +534,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::plasma::PlasmaMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::powerup::PowerupMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -586,6 +587,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (
                 look::fx::setup,
                 look::fx::plasma::setup,
+                look::powerup::setup,
                 look::blade::setup,
                 look::cels::setup,
             ),

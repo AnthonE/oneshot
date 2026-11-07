@@ -164,6 +164,7 @@ pub fn warm_models(
     assets: Res<AssetServer>,
     eye: Query<Entity, With<Eye>>,
     plasma: Option<Res<super::fx::plasma::Kit>>,
+    powerup: Option<Res<super::powerup::Kit>>,
 ) {
     if *done {
         return;
@@ -200,6 +201,19 @@ pub fn warm_models(
                 Warming(WARM_FRAMES),
                 SceneDone,
                 Mesh3d(kit.mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                bevy::mesh::MeshTag(0),
+                at(),
+            ));
+        }
+    }
+    // A power-up's orb, rings and halo: a pad can be empty when we come in.
+    if let Some(kit) = powerup {
+        for (mesh, material) in kit.all() {
+            commands.entity(eye).with_child((
+                Warming(WARM_FRAMES),
+                SceneDone,
+                Mesh3d(mesh.clone()),
                 MeshMaterial3d(material.clone()),
                 bevy::mesh::MeshTag(0),
                 at(),
