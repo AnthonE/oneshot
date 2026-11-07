@@ -76,6 +76,8 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # ring wtransport already builds, and the system's roots.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+# The window's icon (window_icon.rs): the winit Bevy already builds.
+winit = { version = "0.30", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Sound always in a browser, not through Bevy's audio: the mixer runs on
