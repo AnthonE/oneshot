@@ -635,7 +635,10 @@ pub fn board(
 ) {
     let s = link.0.session();
     let over = s.ready && s.core.phase() == sim::world::Phase::Over;
-    let held = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
+    let held = binds.pressed(
+        crate::binds::Action::Scores,
+        &crate::binds::Controls::new(&keys, &mouse, 0.0),
+    );
     if st.board != held {
         st.board = held;
     }

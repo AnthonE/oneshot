@@ -117,7 +117,16 @@
 //   { arch: axis, width, spring, crown, top, jamb }    an arched opening
 //   { arch: axis, width, spring, crown, frame, off? }  a band round one
 //   { pipe: axis, r, y }  { walk: axis, width, y, thick, rim? }
-//   { spiral: [x, z], r, width, from, to, y: [ya, yb], base? }  a curved ramp
+//   { spiral: [x, z], r, width, from, to, y: [ya, yb], base?, joint? }  a curved ramp
+// A walkway is written as its path and becomes turned boxes and sweeps:
+//   { walkway: [[x, z, y], ...], width, thick, out: 1|-1, kerb?: [w, h],
+//     wall?: [w, y], look }                            a slab along the path, a
+//                                                    level run or a slope on each
+//                                                    leg, mitred at its bends; a
+//                                                    kerb on its outer side (out 1:
+//                                                    along (-dz, dx) of its way),
+//                                                    a wall on its inner side up
+//                                                    to y (a revetment, walked on)
 // Metres, y up, the floor at y = 0. On a terrain a box stands at the
 // y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
 // roam point at height 0 is put on the ground by the sim.
@@ -143,7 +152,13 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // A base's metal: gunmetal plate, the same painted in a side's colour, and tread plate for a deck or a ramp.
   'steel', 'steel_red', 'steel_blue', 'tread',
   // Stone: dressed grey stone in the concrete set, and the same darker (Cloudbreak's spire, struts and gates).
-  'stone', 'stone_dark'];
+  'stone', 'stone_dark',
+  // The ship's props: a round solid drawn as a model inside it (the client's look/boulders.rs): a seed husk, in its hull's colour or a side's, and a font with a flame in its cup.
+  'husk', 'husk_red', 'husk_blue', 'font',
+  // The arenas' built things and their floors (the client's look/built.rs): old brick, cut marble, asphalt, cast concrete and its dark, snow, flaking steel.
+  'brick', 'marble', 'road', 'blast', 'blast_dark', 'snow', 'rust',
+  // A turned box drawn as a wreck inside it (the client's look/boulders.rs): a car, a van.
+  'wreck_car', 'wreck_van'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
@@ -225,8 +240,48 @@ function mirrorSolid(sol, sx, sz) {
 /** A profile solid (sim::profile), not one of the flat-topped kinds. */
 const isCurve = (s) => s.kind === 'lathe' || s.kind === 'sweep';
 
+/** A walkway's pieces (see the header), as items of map.json. */
+function walkwayItems(it, name, fail) {
+  const pts = it.walkway, w = it.width, thick = it.thick ?? 0.5, out = it.out ?? 1, look = it.look;
+  if (!Array.isArray(pts) || pts.length < 2 || pts.some((p) => !Array.isArray(p) || p.length !== 3)) fail(`${name}: a walkway is two or more [x, z, y]`);
+  if (!(w > 0) || !(thick > 0) || (out !== 1 && out !== -1)) fail(`${name}: a walkway needs a width, a thick and an out of 1 or -1`);
+  const legs = pts.slice(1).map((b, i) => {
+    const a = pts[i], len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!(len > 0.05)) fail(`${name}: a walkway's leg runs from one point to another`);
+    return { a, b, len, dx: (b[0] - a[0]) / len, dz: (b[1] - a[1]) / len };
+  });
+  // How far past a bend each side's edge runs to meet the next leg's.
+  const past = (p, q) => (w / 2) * Math.abs(Math.tan(Math.atan2(p.dx * q.dz - p.dz * q.dx, p.dx * q.dx + p.dz * q.dz) / 2));
+  const items = [];
+  legs.forEach((l, i) => {
+    const before = i > 0 ? past(legs[i - 1], l) : 0, after = i + 1 < legs.length ? past(l, legs[i + 1]) : 0;
+    const sloped = l.a[2] !== l.b[2];
+    if (sloped && (before > 0.03 || after > 0.03)) fail(`${name}: a walkway bends only between level legs`);
+    const [nx, nz] = [-l.dz * out, l.dx * out];
+    const mid = (l.len + after - before) / 2, long = l.len + before + after;
+    const at = (off) => [l.a[0] + l.dx * mid + nx * off, l.a[1] + l.dz * mid + nz * off];
+    const angle = (Math.atan2(l.dz, l.dx) * 180) / Math.PI;
+    const lo = Math.min(l.a[2], l.b[2]), ya = l.a[2], yb = l.b[2];
+    if (sloped) {
+      // The sweep's axis is across the way, so its s runs along it from `a`.
+      const sweep = (off, half, profile) => ({
+        sweep: [[l.a[0] + nx * off - l.dz * half, l.a[1] + nz * off + l.dx * half], [l.a[0] + nx * off + l.dz * half, l.a[1] + nz * off - l.dx * half]],
+        y: 0, profile, look,
+      });
+      items.push(sweep(0, w / 2, [[0, ya - thick, ya], [l.len, yb - thick, yb]]));
+      if (it.kerb) items.push(sweep(w / 2 - it.kerb[0] / 2, it.kerb[0] / 2, [[0, ya, ya + it.kerb[1]], [l.len, yb, yb + it.kerb[1]]]));
+    } else {
+      items.push({ turned: at(0), size: [long, w], angle, y: [ya - thick, ya], look });
+      if (it.kerb) items.push({ turned: at(w / 2 - it.kerb[0] / 2), size: [long, it.kerb[0]], angle, y: [ya, ya + it.kerb[1]], look });
+    }
+    if (it.wall) items.push({ turned: at(-w / 2 - it.wall[0] / 2), size: [long, it.wall[0]], angle, y: [lo - thick, it.wall[1]], look });
+  });
+  return items;
+}
+
 /** A solid item of map.json as the compiler holds it (some become several). */
 function readSolid(it, name, fail, terrain) {
+  if (it.walkway) return walkwayItems(it, name, fail).flatMap((x) => readSolid(x, name, fail, terrain));
   const look = it.look || 'block';
   const curve = readCurve(it, name, look, fail);
   if (curve) return curve;
@@ -289,7 +344,7 @@ export function compile(spec, where = 'map.json') {
     if (!spec.terrain) fail('void: needs a terrain, dug under it where the edge is');
   }
   const mirrors = images(spec.mirror);
-  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
+  const SWAP = { husk_red: 'husk_blue', husk_blue: 'husk_red', red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
     steel_red: 'steel_blue', steel_blue: 'steel_red' };
   const swapLook = (l) => SWAP[l] || l;
 

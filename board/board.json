@@ -152,15 +152,15 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=6&eye=-19,5.1,-1.5&look=0,4,0",
-        "map=6&eye=-4.5,1.6,-5.5&look=0,4.5,1",
-        "map=6&eye=-2,5.1,-4.6&look=14,4,0",
-        "map=6&eye=-15,1.6,-11&look=0,2,-8"
+        "map=6&eye=-18,8.6,-2.5&look=4,8.5,1",
+        "map=6&eye=-7,1.6,-6.2&look=0,9,2",
+        "map=6&eye=-2.5,8.6,-5&look=14,8,0",
+        "map=6&eye=-20,5.1,-13&look=2,7,-9"
       ],
       "png": "traces/chrysalis-0.png",
       "refs": [
         {
-          "file": "h2_map_002.jpg",
+          "file": "midship1.jpg",
           "take": "a ship's hall: pearl-purple curved hull plates, dark floor grating, round ceiling lamps, light strips along plate edges, gold hex windows overhead",
           "ignore": "the vehicle, the logo",
           "private": true
@@ -176,15 +176,15 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=6&eye=-19,5.1,-1.5&look=0,4,0",
-        "map=6&eye=-4.5,1.6,-5.5&look=0,4.5,1",
-        "map=6&eye=-2,5.1,-4.6&look=14,4,0",
-        "map=6&eye=-15,1.6,-11&look=0,2,-8"
+        "map=6&eye=-18,8.6,-2.5&look=4,8.5,1",
+        "map=6&eye=-7,1.6,-6.2&look=0,9,2",
+        "map=6&eye=-2.5,8.6,-5&look=14,8,0",
+        "map=6&eye=-20,5.1,-13&look=2,7,-9"
       ],
       "png": "traces/chrysalis-1.png",
       "refs": [
         {
-          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "file": "midship2.webp",
           "take": "a ship interior lit from within: purple walls with magenta slits, blue-white lift beams, a column through the middle; lit enough to read a fighter",
           "private": true
         }
@@ -199,15 +199,15 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=6&eye=-19,5.1,-1.5&look=0,4,0",
-        "map=6&eye=-4.5,1.6,-5.5&look=0,4.5,1",
-        "map=6&eye=-2,5.1,-4.6&look=14,4,0",
-        "map=6&eye=-15,1.6,-11&look=0,2,-8"
+        "map=6&eye=-18,8.6,-2.5&look=4,8.5,1",
+        "map=6&eye=-7,1.6,-6.2&look=0,9,2",
+        "map=6&eye=-2.5,8.6,-5&look=14,8,0",
+        "map=6&eye=-20,5.1,-13&look=2,7,-9"
       ],
       "png": "traces/chrysalis-2.png",
       "refs": [
         {
-          "file": "h2_map_002.jpg",
+          "file": "midship1.jpg",
           "take": "curved ribbed ceiling with lamps, the hall reads long and tall",
           "ignore": "the vehicle, the logo",
           "private": true
@@ -223,15 +223,15 @@
         "node",
         "ci/look.mjs",
         "--prefix=chrysalis",
-        "map=6&eye=-19,5.1,-1.5&look=0,4,0",
-        "map=6&eye=-4.5,1.6,-5.5&look=0,4.5,1",
-        "map=6&eye=-2,5.1,-4.6&look=14,4,0",
-        "map=6&eye=-15,1.6,-11&look=0,2,-8"
+        "map=6&eye=-18,8.6,-2.5&look=4,8.5,1",
+        "map=6&eye=-7,1.6,-6.2&look=0,9,2",
+        "map=6&eye=-2.5,8.6,-5&look=14,8,0",
+        "map=6&eye=-20,5.1,-13&look=2,7,-9"
       ],
       "png": "traces/chrysalis-3.png",
       "refs": [
         {
-          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "file": "midship2.webp",
           "take": "the walls' plates read as sculpted hull, not boxes; cyan and magenta accents, nothing grey",
           "private": true
         }
@@ -512,7 +512,7 @@
       "png": "traces/hd/ring.png",
       "refs": [
         {
-          "file": "isle2.webp",
+          "file": "ddd2.webp",
           "take": "a round plaza cut with a pattern, two leaning struts that never meet, sand mounded round it with rounded boulders, a grey stone tower to one side, an overcast sky, a flat sea of mist and pale stacks of rock far off",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
@@ -530,7 +530,7 @@
       "png": "traces/hd/coast.png",
       "refs": [
         {
-          "file": "isle1.jpg",
+          "file": "ddd.jpg",
           "take": "sandstone undercut into arches and fingers under the island's edge; rounded boulders along the rim; grey architecture on the cliff; mist below, stacks of rock behind",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
@@ -548,18 +548,377 @@
       "png": "traces/hd/void.png",
       "refs": [
         {
-          "file": "isle2.webp",
+          "file": "ddd2.webp",
           "take": "the sea of mist, flat to the horizon; stacks of rock standing out of it, paler with distance; the cloud deck grey with a lighter break",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
         },
         {
-          "file": "isle1.jpg",
+          "file": "ddd.jpg",
           "take": "rocks far off on the mist, pale; the light coming through the cloud",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-spire",
+      "name": "Cloudbreak: the spire",
+      "what": "from the north lane, up the spire over the hall",
+      "take": "one landmark tall enough to orient by: cut stone with weight, cast shadows and a skyline of its own, grey against warm sand",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/spire.png",
+      "refs": [
+        {
+          "file": "ddd2.webp",
+          "private": true,
+          "take": "the weight and finish of cool grey stone against the warm sand and the grey sky; how much shadow its forms throw",
+          "ignore": "the tower's shape, its panels and its details: ours is our own design; the gun in view, the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-gate",
+      "name": "Cloudbreak: the red gate",
+      "what": "from the ring, west through the gate to red's deck",
+      "take": "built things with thickness and trim that sit in the sand, sand drifted against their feet",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/gate.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "grey architecture grounded in warm sand and rounded stones, sand mounded against it",
+          "ignore": "its structures' shapes and panels: ours are our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-deck",
+      "name": "Cloudbreak: over the ring from a deck",
+      "what": "from red's deck, east over the gate and the ring to the far deck",
+      "take": "the whole island in one look: warm dunes, cool stone, light and shade in big masses, the edge and the cloud beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/deck.png",
+      "refs": [
+        {
+          "file": "ddd2.webp",
+          "private": true,
+          "take": "big soft masses of sun and shade across the sand, sand mounded round the plaza, the sea of mist flat to the horizon",
+          "ignore": "the layout and the structures' shapes: ours are our own design; the gun in view, the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-rim",
+      "name": "Cloudbreak: along the rim",
+      "what": "from the south point, west along the coast with the drop beside it",
+      "take": "an edge you feel: rounded boulders along the lip, the sand giving way to rock, the drop and the cloud far under",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/rim.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "rounded boulders along the rim, sand over undercut rock, the drop into mist",
+          "ignore": "its structures: ours are our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-climb",
+      "name": "Cloudbreak: the stair",
+      "what": "from the ledge up the stair round the tower's flank",
+      "take": "a route you can read at a glance: where it starts, where it goes, who is on it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/climb.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "how built stone carries a walkway: weight, shadow under it",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-well",
+      "name": "Cloudbreak: the well",
+      "what": "from the hall up the well through its floors",
+      "take": "height you feel from below: floors stacked, light falling through",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/well.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "the depth of shadow in a built interior",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-room",
+      "name": "Cloudbreak: the sighting room",
+      "what": "in the room over the hall, across the well to the balcony door",
+      "take": "a room with weight and readable exits, dark stone, the bright world through its openings",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/room.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "cool grey stone in shade against the warm outside",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-gallery",
+      "name": "Cloudbreak: the gallery",
+      "what": "in the top room, south through its windows over the island",
+      "take": "a place that commands the island and is still a room: sills, heads, a ceiling",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/gallery.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "finish of built stone close up",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-backwalk",
+      "name": "Cloudbreak: the back walk",
+      "what": "up the back walk over the void to the gallery's door",
+      "take": "a walkway with nothing beyond it: void close at the elbow",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/backwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "the exposure of a walkway at the edge",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-behind",
+      "name": "Cloudbreak: the tower's back",
+      "what": "from off the north coast: the back walk over the north walk",
+      "take": "built walks hung on the rock, stacked, read from outside",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/behind.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "built stone against raw rock and cloud",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-northwalk",
+      "name": "Cloudbreak: the north walk",
+      "what": "along the north walk behind the tower",
+      "take": "a walkway in the rock's lee: the lip at the shoulder, void past the kerb",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/northwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "a built walk against the cliff's edge; how far you can see over it",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-southwalk",
+      "name": "Cloudbreak: the south walk",
+      "what": "along the south walk toward the point",
+      "take": "the same walk rising to the point, its side's light along its foot",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/southwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "a built walk against the cliff's edge",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-tank",
+      "name": "Cistern: the tank",
+      "what": "from the water toward the dais",
+      "take": "dark still water with the architecture hanging in it; columns with weight",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/tank.png",
+      "refs": []
+    },
+    {
+      "id": "hd-quay",
+      "name": "Cistern: over the quay",
+      "what": "across the quay into the forest of columns",
+      "take": "depth: bay after bay under the vault, each a step darker",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/quay.png",
+      "refs": []
+    },
+    {
+      "id": "hd-bridge",
+      "name": "Cistern: on a bridge",
+      "what": "along an arm to the ring",
+      "take": "height over the water, shafts of day ahead",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/bridge.png",
+      "refs": []
+    },
+    {
+      "id": "hd-flyover",
+      "name": "Overpass: on the flyover",
+      "what": "north along the deck",
+      "take": "rain, sodium lamps, a skyline; cover that belongs there",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/flyover.png",
+      "refs": []
+    },
+    {
+      "id": "hd-underpass",
+      "name": "Overpass: under it",
+      "what": "through the piers across the wet road",
+      "take": "the road a wet mirror of what stands on it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/underpass.png",
+      "refs": []
+    },
+    {
+      "id": "hd-alley",
+      "name": "Overpass: the north alley",
+      "what": "along the alley under the signs",
+      "take": "neon on rain-streaked concrete",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/alley.png",
+      "refs": []
+    },
+    {
+      "id": "hd-skyline",
+      "name": "Overpass: the skyline",
+      "what": "off the flyover over the flood",
+      "take": "a city going away in steps, lights in its dark",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/skyline.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_top",
+      "name": "Bulkhead: top mid",
+      "what": "from the bridge along the dock",
+      "take": "a working steel space, cold light, amber at the lanes",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_top.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_pit",
+      "name": "Bulkhead: the pit",
+      "what": "up from the pit floor",
+      "take": "the bridge overhead on its piers, cargo as cover",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_pit.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_view",
+      "name": "Bulkhead: the viewport",
+      "what": "up through the viewport",
+      "take": "a ringed planet and stars behind deep steel frames",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_view.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_lane",
+      "name": "Proving Grounds: the lane",
+      "what": "across the range from a corner",
+      "take": "snow, cold air, a low sun warming concrete; mountains beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_lane.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_mid",
+      "name": "Proving Grounds: the target",
+      "what": "toward the scorched middle",
+      "take": "a test range: scorch, ruts, gauges, bunkers",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_mid.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_wall",
+      "name": "Proving Grounds: the wall",
+      "what": "along the revetment",
+      "take": "cast concrete at scale with hazard paint and snow on its ledges",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_wall.png",
+      "refs": []
     },
     {
       "id": "hd-hold",
@@ -572,7 +931,7 @@
       "png": "traces/hd/hold.png",
       "refs": [
         {
-          "file": "h2_map_002.jpg",
+          "file": "midship1.jpg",
           "take": "a ship's hall: pearl-purple curved hull plates, dark floor grating, round ceiling lamps, light strips along plate edges, gold hex windows overhead",
           "ignore": "the vehicle, the logo",
           "private": true
@@ -582,7 +941,7 @@
     {
       "id": "hd-pit",
       "name": "Chrysalis: bottom mid",
-      "what": "in the pit under the ring, its legs, the spine and the chrysalis overhead",
+      "what": "on the keel, in the pit under the ring: its belly, the spine and the chrysalis overhead, the main deck's rim and the arcade round it",
       "take": "under the ring is darker than the hall; the ring's light rings and the lift's beam carry it",
       "shoot": [
         "tools/hd.sh"
@@ -590,7 +949,7 @@
       "png": "traces/hd/pit.png",
       "refs": [
         {
-          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "file": "midship2.webp",
           "take": "a ship interior lit from within: purple walls with magenta slits, blue-white lift beams, a column through the middle; lit enough to read a fighter",
           "private": true
         }
@@ -607,7 +966,7 @@
       "png": "traces/hd/topmid.png",
       "refs": [
         {
-          "file": "h2_map_002.jpg",
+          "file": "midship1.jpg",
           "take": "curved ribbed ceiling with lamps, the hall reads long and tall",
           "ignore": "the vehicle, the logo",
           "private": true
@@ -625,7 +984,7 @@
       "png": "traces/hd/lane.png",
       "refs": [
         {
-          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "file": "midship2.webp",
           "take": "the walls' plates read as sculpted hull, not boxes; cyan and magenta accents, nothing grey",
           "private": true
         }
@@ -634,7 +993,7 @@
     {
       "id": "hd-door",
       "name": "Chrysalis: red's door",
-      "what": "out of red's door to the ring over the pit",
+      "what": "from red's door past its screen to the ring over the pit",
       "take": "the hall framed by the arch; the pods under the ring banded in cyan; the floor dark and purple, nothing grey",
       "shoot": [
         "tools/hd.sh"
@@ -642,8 +1001,76 @@
       "png": "traces/hd/door.png",
       "refs": [
         {
-          "file": "1200px-H3ODST_Heretic_env-01.webp",
+          "file": "midship2.webp",
           "take": "the walls' plates read as sculpted hull, not boxes; cyan and magenta accents, nothing grey",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-arcade",
+      "name": "Chrysalis: the arcade",
+      "what": "down the north lane beside the pierced wall, the pit through its arches",
+      "take": "a wall with holes that shows the depth behind it: three decks at once through the arches",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/arcade.png",
+      "refs": [
+        {
+          "file": "midship1.jpg",
+          "take": "big forms carrying thin light, a dark floor, the eye led on by repeating shapes",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pulpit",
+      "name": "Chrysalis: the pulpit",
+      "what": "from the south pulpit up the bridge to the chrysalis, the whole hall either side",
+      "take": "grand and symmetrical, blue left and red right (this eye looks north), a hanging thing in the middle and gold overhead",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pulpit.png",
+      "refs": [
+        {
+          "file": "midship1.jpg",
+          "take": "a hanging saucer on arms under a dark ceiling with lit panes, round lamps, lit hull lobes either side",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-keel",
+      "name": "Chrysalis: the keel",
+      "what": "in the room under red's pod, down the run to the pit",
+      "take": "low and dark after the hall: the run framed, the pit beyond it lit",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/keel.png",
+      "refs": [
+        {
+          "file": "midship1.jpg",
+          "take": "deep darks with a few sharp lights",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-over",
+      "name": "Chrysalis: over the hall",
+      "what": "from high over red's wing across the hold",
+      "take": "the three decks read at a glance: pit, main deck, ring and bridges, tanks and domes over them",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/over.png",
+      "refs": [
+        {
+          "file": "midship1.jpg",
+          "take": "a hall built of very large rounded forms, not of boxes",
           "private": true
         }
       ]

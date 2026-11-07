@@ -164,7 +164,7 @@ const GRAVEL: Grows = Grows {
 /// twig (nothing grows there to shed one).
 const ISLE_SAND: Grows = Grows {
     pebble: 0.16,
-    stone: 0.025,
+    stone: 0.005,
     twig: 0.006,
     plant: 0.025,
 };

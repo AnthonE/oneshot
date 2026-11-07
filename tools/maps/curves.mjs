@@ -443,8 +443,10 @@ export function readCurve(it, name, look, fail) {
     if (Math.abs(m) > 1) fail(`${what}: steeper than 45°`);
     const ro = r + w / 2;
     const byEdge = 2 * Math.acos(Math.max(-1, 1 - ERR / ro));
-    // The joints' mismatch across the width: 2·m·(w/2)·tan(θ/2).
-    const byRise = Math.abs(m) > 0 ? 2 * Math.atan(0.03 / (Math.abs(m) * w)) : byEdge;
+    // The joints' mismatch across the width: 2·m·(w/2)·tan(θ/2), at most
+    // `joint` (fewer pieces cost fog less; a fighter steps over far more).
+    const joint = it.joint ?? 0.03;
+    const byRise = Math.abs(m) > 0 ? 2 * Math.atan(joint / (Math.abs(m) * w)) : byEdge;
     const n = Math.max(1, Math.ceil(Math.abs(span) / Math.min(byEdge, byRise)));
     const th = span / n;
     const out = [];

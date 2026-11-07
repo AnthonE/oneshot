@@ -1,16 +1,44 @@
 //! The keys, rebindable, after Gates' `client/src/render/binds.rs` (MIT):
-//! two binds per action, a primary and an alternate. The mouse's left and
-//! right buttons are not bindable (fire, and scope or the left gun), nor is
-//! the wheel (swap): a bind may use the middle and side buttons. Left and
-//! right modifiers are one key, so CTRL is either Ctrl.
+//! two binds per action, a primary and an alternate. Every control is a
+//! bind, the mouse's buttons and its wheel too (either way it turns is one
+//! bind, WHEEL). Left and right modifiers are one key, so CTRL is either
+//! Ctrl.
+//!
+//! The defaults are Halo 2's on a PC (the Master Chief Collection's: Q
+//! melees, F throws, 1 and 2 change the gun and the grenade, E is the
+//! action, Tab the board), and Mouse 2 is the scope or, with a gun in each
+//! hand, the left one's trigger, as in Halo 2: ZOOM and FIRE LEFT are the
+//! one pair of actions that may share a bind, since only one of them can
+//! act at a time.
 
 use bevy::prelude::*;
 
-/// One key or one mouse button.
+/// One key, one mouse button, or the wheel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Bind {
     Key(KeyCode),
     Mouse(MouseButton),
+    /// The wheel turned, either way: a press for the frame it moves.
+    Wheel,
+}
+
+/// What a bind is read from this frame.
+#[derive(Clone, Copy)]
+pub struct Controls<'a> {
+    pub keys: &'a ButtonInput<KeyCode>,
+    pub mouse: &'a ButtonInput<MouseButton>,
+    /// The wheel moved this frame.
+    pub wheel: bool,
+}
+
+impl<'a> Controls<'a> {
+    pub fn new(keys: &'a ButtonInput<KeyCode>, mouse: &'a ButtonInput<MouseButton>, wheel: f32) -> Self {
+        Self {
+            keys,
+            mouse,
+            wheel: wheel != 0.0,
+        }
+    }
 }
 
 /// The right-hand twin a left modifier also answers to.
@@ -37,9 +65,14 @@ pub fn normalize(k: KeyCode) -> KeyCode {
 /// and F11 and F12 (fullscreen and the screenshot).
 pub const RESERVED: [KeyCode; 4] = [KeyCode::Escape, KeyCode::F9, KeyCode::F11, KeyCode::F12];
 
-/// The mouse buttons a bind may use. Left and right are not among them (see
-/// the module header).
-pub const MOUSE: [(MouseButton, &str, &str); 3] = [
+/// The wheel's token and label.
+const WHEEL: (&str, &str) = ("Wheel", "WHEEL");
+
+/// The mouse buttons a bind may use. The tokens are `Mouse1` to `Mouse5`,
+/// as Halo's own menus number them (and `web/voice.js` reads them).
+pub const MOUSE: [(MouseButton, &str, &str); 5] = [
+    (MouseButton::Left, "Mouse1", "MOUSE 1"),
+    (MouseButton::Right, "Mouse2", "MOUSE 2"),
     (MouseButton::Middle, "Mouse3", "MOUSE 3"),
     (MouseButton::Back, "Mouse4", "MOUSE 4"),
     (MouseButton::Forward, "Mouse5", "MOUSE 5"),
@@ -145,17 +178,20 @@ pub const KEYS: [(KeyCode, &str, &str); 93] = [
 ];
 
 impl Bind {
-    pub fn pressed(self, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> bool {
+    /// Held this frame. The wheel is held for the frame it moves.
+    pub fn pressed(self, c: &Controls) -> bool {
         match self {
-            Bind::Key(k) => keys.pressed(k) || twin(k).is_some_and(|t| keys.pressed(t)),
-            Bind::Mouse(b) => mouse.pressed(b),
+            Bind::Key(k) => c.keys.pressed(k) || twin(k).is_some_and(|t| c.keys.pressed(t)),
+            Bind::Mouse(b) => c.mouse.pressed(b),
+            Bind::Wheel => c.wheel,
         }
     }
 
-    pub fn just_pressed(self, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> bool {
+    pub fn just_pressed(self, c: &Controls) -> bool {
         match self {
-            Bind::Key(k) => keys.just_pressed(k) || twin(k).is_some_and(|t| keys.just_pressed(t)),
-            Bind::Mouse(b) => mouse.just_pressed(b),
+            Bind::Key(k) => c.keys.just_pressed(k) || twin(k).is_some_and(|t| c.keys.just_pressed(t)),
+            Bind::Mouse(b) => c.mouse.just_pressed(b),
+            Bind::Wheel => c.wheel,
         }
     }
 
@@ -164,10 +200,14 @@ impl Bind {
         match self {
             Bind::Key(k) => KEYS.iter().find(|e| e.0 == k).map(|e| e.1),
             Bind::Mouse(b) => MOUSE.iter().find(|e| e.0 == b).map(|e| e.1),
+            Bind::Wheel => Some(WHEEL.0),
         }
     }
 
     pub fn from_token(t: &str) -> Option<Bind> {
+        if t == WHEEL.0 {
+            return Some(Bind::Wheel);
+        }
         KEYS.iter()
             .find(|e| e.1 == t)
             .map(|e| Bind::Key(e.0))
@@ -179,6 +219,7 @@ impl Bind {
         match self {
             Bind::Key(k) => KEYS.iter().find(|e| e.0 == k).map_or("?", |e| e.2),
             Bind::Mouse(b) => MOUSE.iter().find(|e| e.0 == b).map_or("?", |e| e.2),
+            Bind::Wheel => WHEEL.1,
         }
     }
 
@@ -186,7 +227,7 @@ impl Bind {
     pub fn bindable(self) -> bool {
         match self {
             Bind::Key(k) => !RESERVED.contains(&k) && self.token().is_some(),
-            Bind::Mouse(_) => self.token().is_some(),
+            Bind::Mouse(_) | Bind::Wheel => self.token().is_some(),
         }
     }
 }
@@ -195,6 +236,11 @@ impl Bind {
 /// index is its row in [`SPECS`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Action {
+    Fire,
+    /// The scope: a press steps it, a hold lets it go on release.
+    Zoom,
+    /// The left gun's trigger, with one in each hand.
+    FireLeft,
     Forward,
     Back,
     Left,
@@ -214,7 +260,7 @@ pub enum Action {
     Talk,
 }
 
-pub const COUNT: usize = 15;
+pub const COUNT: usize = 18;
 
 pub struct Spec {
     pub action: Action,
@@ -229,9 +275,31 @@ const fn k(k: KeyCode) -> Option<Bind> {
     Some(Bind::Key(k))
 }
 
-/// Every action, its file word, its name and its defaults (the page's
-/// keys, after the three.js page's `input.ts`).
+const fn m(b: MouseButton) -> Option<Bind> {
+    Some(Bind::Mouse(b))
+}
+
+/// Every action, its file word, its name and its defaults: Halo 2's on a
+/// PC (the module header), the arrows and a few old keys as alternates.
 pub static SPECS: [Spec; COUNT] = [
+    Spec {
+        action: Action::Fire,
+        token: "fire",
+        name: "Fire",
+        default: [m(MouseButton::Left), None],
+    },
+    Spec {
+        action: Action::Zoom,
+        token: "zoom",
+        name: "Zoom (tap steps, hold lets go)",
+        default: [m(MouseButton::Right), k(KeyCode::KeyZ)],
+    },
+    Spec {
+        action: Action::FireLeft,
+        token: "fire_left",
+        name: "Fire left gun (two guns)",
+        default: [m(MouseButton::Right), None],
+    },
     Spec {
         action: Action::Forward,
         token: "forward",
@@ -278,13 +346,13 @@ pub static SPECS: [Spec; COUNT] = [
         action: Action::Grenade,
         token: "grenade",
         name: "Throw grenade",
-        default: [k(KeyCode::KeyG), None],
+        default: [k(KeyCode::KeyF), k(KeyCode::KeyG)],
     },
     Spec {
         action: Action::GrenSwitch,
         token: "grenade_switch",
-        name: "Frag or sticky",
-        default: [k(KeyCode::KeyT), None],
+        name: "Switch grenades",
+        default: [k(KeyCode::Digit2), k(KeyCode::KeyT)],
     },
     Spec {
         action: Action::Reload,
@@ -295,13 +363,13 @@ pub static SPECS: [Spec; COUNT] = [
     Spec {
         action: Action::Swap,
         token: "swap",
-        name: "Swap weapon, drop flag",
-        default: [k(KeyCode::KeyX), k(KeyCode::Digit1)],
+        name: "Change weapon, drop flag",
+        default: [k(KeyCode::Digit1), Some(Bind::Wheel)],
     },
     Spec {
         action: Action::Use,
         token: "use",
-        name: "Pick up, take flag, get in",
+        name: "Action: pick up, take flag, get in",
         default: [k(KeyCode::KeyE), None],
     },
     Spec {
@@ -332,6 +400,16 @@ impl Action {
     pub fn from_token(t: &str) -> Option<Action> {
         SPECS.iter().find(|s| s.token == t).map(|s| s.action)
     }
+
+    /// May `self` and `other` hold the same bind? Only the scope and the
+    /// left gun's trigger: with a gun in each hand there is no scope, and
+    /// with one gun no left trigger, so a shared button does one thing.
+    pub fn shares_with(self, other: Action) -> bool {
+        matches!(
+            (self, other),
+            (Action::Zoom, Action::FireLeft) | (Action::FireLeft, Action::Zoom)
+        )
+    }
 }
 
 /// The player's binds: two slots per action, primary and alternate.
@@ -359,21 +437,25 @@ impl Binds {
         self.slots[a as usize].into_iter().flatten()
     }
 
-    pub fn pressed(&self, a: Action, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> bool {
-        self.each(a).any(|b| b.pressed(keys, mouse))
+    pub fn pressed(&self, a: Action, c: &Controls) -> bool {
+        self.each(a).any(|b| b.pressed(c))
     }
 
-    pub fn just_pressed(&self, a: Action, keys: &ButtonInput<KeyCode>, mouse: &ButtonInput<MouseButton>) -> bool {
-        self.each(a).any(|b| b.just_pressed(keys, mouse))
+    pub fn just_pressed(&self, a: Action, c: &Controls) -> bool {
+        self.each(a).any(|b| b.just_pressed(c))
     }
 
     /// Put `bind` in `a`'s `slot`. A bind does one thing: if another action
     /// (or `a`'s other slot) had it, it is taken from there, and the action
-    /// that lost it is returned so the screen can say so.
+    /// that lost it is returned so the screen can say so. The scope and the
+    /// left trigger may share one ([`Action::shares_with`]).
     pub fn set(&mut self, a: Action, slot: usize, bind: Option<Bind>) -> Option<Action> {
         let mut lost = None;
         if let Some(b) = bind {
             for (i, slots) in self.slots.iter_mut().enumerate() {
+                if a.shares_with(SPECS[i].action) {
+                    continue;
+                }
                 for (j, s) in slots.iter_mut().enumerate() {
                     if *s == Some(b) && !(i == a as usize && j == slot) {
                         *s = None;
@@ -469,14 +551,62 @@ mod tests {
 
     #[test]
     fn no_key_does_two_things_by_default() {
-        let mut seen = Vec::new();
+        let mut seen: Vec<(Bind, Action)> = Vec::new();
         for s in &SPECS {
             for b in s.default.into_iter().flatten() {
                 assert!(b.bindable(), "{} {:?}", s.token, b);
-                assert!(!seen.contains(&b), "{:?} twice", b);
-                seen.push(b);
+                let clash = seen.iter().any(|(o, a)| *o == b && !s.action.shares_with(*a));
+                assert!(!clash, "{:?} twice", b);
+                seen.push((b, s.action));
             }
         }
+    }
+
+    /// Halo 2's PC layout (the Master Chief Collection's keyboard defaults).
+    #[test]
+    fn the_defaults_are_halo_2s() {
+        let b = Binds::default();
+        let first = |a: Action| b.slots(a)[0];
+        assert_eq!(first(Action::Fire), Some(Bind::Mouse(MouseButton::Left)));
+        assert_eq!(first(Action::Zoom), Some(Bind::Mouse(MouseButton::Right)));
+        assert_eq!(first(Action::FireLeft), Some(Bind::Mouse(MouseButton::Right)));
+        assert_eq!(b.key(Action::Melee), "Q");
+        assert_eq!(b.key(Action::Grenade), "F");
+        assert_eq!(b.key(Action::GrenSwitch), "2");
+        assert_eq!(b.key(Action::Reload), "R");
+        assert_eq!(b.key(Action::Use), "E");
+        assert_eq!(b.key(Action::Swap), "1");
+        assert_eq!(b.key(Action::Crouch), "CTRL");
+        assert_eq!(b.key(Action::Jump), "SPACE");
+        assert_eq!(b.key(Action::Scores), "TAB");
+    }
+
+    /// The scope and the left trigger share Mouse 2; anything else that
+    /// takes it takes it from both.
+    #[test]
+    fn the_scope_and_the_left_trigger_share_a_button() {
+        let mut b = Binds::default();
+        let m2 = Some(Bind::Mouse(MouseButton::Right));
+        assert_eq!(b.set(Action::Zoom, 0, m2), None);
+        assert_eq!(b.slots(Action::FireLeft)[0], m2, "kept");
+        b.set(Action::Grenade, 0, m2);
+        assert_eq!(b.slots(Action::Zoom)[0], None);
+        assert_eq!(b.slots(Action::FireLeft)[0], None);
+    }
+
+    #[test]
+    fn the_mouse_and_the_wheel_bind_and_round_trip() {
+        for (button, token, _) in MOUSE {
+            assert_eq!(Bind::from_token(token), Some(Bind::Mouse(button)));
+            assert!(Bind::Mouse(button).bindable());
+        }
+        assert_eq!(Bind::from_token("Wheel"), Some(Bind::Wheel));
+        let mut b = Binds::default();
+        b.set(Action::GrenSwitch, 1, Some(Bind::Wheel));
+        assert_eq!(b.slots(Action::Swap)[1], None, "the wheel moved");
+        let (back, other) = Binds::from_lines(&b.to_lines());
+        assert_eq!(back, b);
+        assert!(other.is_empty());
     }
 
     #[test]

@@ -1190,8 +1190,23 @@ pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15
 /// slot is open to everyone, with no rank lock; what goes in it is worn
 /// only if the wallet owns it on Elo Pros, under its name here. Nobody
 /// owns any by default: none is the only gear everyone has.
-pub const HEADWEAR: [&str; 2] = ["none", "shades"];
-pub const FOOTWEAR: [&str; 2] = ["none", "boots"];
+pub const HEADWEAR: [&str; 14] = [
+    "none",
+    "shades",
+    "aviators",
+    "rounds",
+    "visor",
+    "goggles",
+    "respirator",
+    "demon",
+    "welder",
+    "skull",
+    "hardhat",
+    "helmet",
+    "ten-gallon",
+    "beanie",
+];
+pub const FOOTWEAR: [&str; 6] = ["none", "loggers", "hightops", "spurs", "magboots", "wellies"];
 pub const GEAR_NONE: u8 = 0;
 
 /// `g` if it names gear in `slot` ([`HEADWEAR`], [`FOOTWEAR`]), else none.

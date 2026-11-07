@@ -75,6 +75,8 @@ struct GroundParams {
     tint: array<vec4<f32>, 4>,
     cliff: vec4<f32>,
     wall: vec4<f32>,
+    // x the array layer the rock reads: 3, an island's 4.
+    layers: vec4<f32>,
     wall_planes: vec4<f32>,
     rock_a: vec4<f32>,
     rock_b: vec4<f32>,

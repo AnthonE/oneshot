@@ -30,6 +30,49 @@ fn deck_haze(y: f32, air: vec4<f32>, dust: vec4<f32>) -> f32 {
     return 1.0 - (1.0 - deck_fog(y, air)) * exp(-min(dust.x / s, dust.y));
 }
 
+// A veil of the fog over the whole sky (`Mood::veil`), on `band`: `veil` of it
+// all the way up, and whole by the horizon so the far things are lost in it.
+const VEIL_HORIZON_Y: f32 = 0.16;
+// The veil thins around the sun, so its break shows through: how far off it
+// (a power of the cosine) and by how much.
+const VEIL_BREAK_POW: f32 = 5.0;
+const VEIL_BREAK: f32 = 0.75;
+// The veil's masses: their wavelengths on a plane `VEIL_ALT` over the eye (in
+// units of that height, so they crowd together toward the horizon as a ceiling
+// does) and how far they darken it at the thickest and lift it at the thinnest.
+const VEIL_ALT: f32 = 1.0;
+const VEIL_WAVES: vec4<f32> = vec4(1.5, 0.62, 0.27, 0.11);
+const VEIL_DARK: f32 = 0.26;
+const VEIL_LIFT: f32 = 0.92;
+// How fast they drift, plane units a second, so slowly it is only seen by
+// looking away and back.
+const VEIL_DRIFT: vec2<f32> = vec2(0.0024, 0.0011);
+
+fn deck_veil(band: f32, d: vec3<f32>, to_sun: vec3<f32>, veil: f32) -> f32 {
+    if veil <= 0.0 {
+        return band;
+    }
+    let toward = pow(max(dot(d, to_sun), 0.0), VEIL_BREAK_POW);
+    let thin = veil * (1.0 - VEIL_BREAK * toward);
+    return max(band, mix(1.0, thin, smoothstep(0.0, VEIL_HORIZON_Y, d.y)));
+}
+
+// What the veil's colour is multiplied by along `d`: broad soft masses of
+// cloud with smaller ones in them, dark bellies and paler thin places, fading
+// to one value as they crowd toward the horizon.
+fn deck_veil_mass(d: vec3<f32>, time: f32) -> f32 {
+    let q = deck_point(d, VEIL_ALT, 0.03) + VEIL_DRIFT * time;
+    let w = vec2(deck_value(q * 1.3 + vec2(3.1, 7.7)), deck_value(q * 1.3 + vec2(11.9, 1.3))) - 0.5;
+    let p = q + w * 0.55;
+    // Billowed, its fold rounded so it leaves bellies and no contour lines.
+    let x = 2.0 * deck_value(p / VEIL_WAVES.y + vec2(5.2, 2.9)) - 1.0;
+    let fold = 1.1 - sqrt(x * x + 0.16);
+    let n = deck_value(p / VEIL_WAVES.x) * 0.5 + fold * 0.32
+        + deck_value(p / VEIL_WAVES.z + vec2(8.4, 6.1)) * 0.13 + deck_value(p / VEIL_WAVES.w + vec2(1.7, 9.3)) * 0.05;
+    let m = mix(VEIL_DARK, VEIL_LIFT, smoothstep(0.3, 0.74, n));
+    return mix(1.0, m, smoothstep(0.015, 0.14, d.y));
+}
+
 // The raymarched slab's shape (`cloud.wgsl`), shared with the stars and
 // the moon so a cloud hides them where it is drawn rather than where its
 // base's outline is. A cumulus seen from the side rises far above that
