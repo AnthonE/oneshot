@@ -5,7 +5,7 @@
 // the party and nobody else; it never decodes one.
 //
 // Talking is the game's TALK bind held (`setTalk`: keys by their `code`,
-// Mouse3 to Mouse5), or open mic, past a level gate. A member can be muted
+// Mouse1 to Mouse5), or open mic, past a level gate. A member can be muted
 // here, for this browser only. Nothing is recorded.
 
 const RATE = 48000;
@@ -17,7 +17,7 @@ const GATE_DB = -45;
 const GATE_HOLD_MS = 400;
 const MUTES = 'oneshot.mutes';
 // The mouse buttons a bind may use (binds.rs MOUSE), by MouseEvent.button.
-const MOUSE = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' };
+const MOUSE = { 0: 'Mouse1', 1: 'Mouse3', 2: 'Mouse2', 3: 'Mouse4', 4: 'Mouse5' };
 // A right modifier is its left one, as a bind is (binds.rs `normalize`).
 const fold = (code) => code.replace(/^(Shift|Control|Alt)Right$/, '$1Left');
 

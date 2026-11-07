@@ -277,8 +277,8 @@ pub struct Early(pub Vec<proto::Msg>);
 /// world moves under the crosshair at one speed (Gates' `input.rs`).
 const SENS: f32 = settings::SENS_DEG * core::f32::consts::PI / 180.0;
 
-/// The bound actions that are buttons (the player's keys, `binds.rs`).
-/// The wheel swaps too.
+/// The bound actions that are plain buttons (the player's keys,
+/// `binds.rs`); fire, the scope and the left trigger are `pump`'s own.
 const BUTTONS: [(binds::Action, u16); 8] = [
     (binds::Action::Jump, JUMP),
     (binds::Action::Crouch, CROUCH),
@@ -325,6 +325,9 @@ pub struct Opts {
     pub front: front::Start,
     /// A party a link asked for (`party=CODE`, `--party CODE`): joined.
     pub party: u32,
+    /// The desktop's window stays a window this run, whatever FULLSCREEN
+    /// says (`--windowed`; a picture, a film): `display::RunWindowed`.
+    pub windowed: bool,
 }
 
 impl Opts {
@@ -352,6 +355,7 @@ impl Opts {
                 .unwrap_or(0),
             front: front::Start::Off,
             graphics: has("graphics"),
+            windowed: has("windowed"),
             open: if has("settings") || has("graphics") {
                 Screen::Settings
             } else if has("menu") {
@@ -497,6 +501,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::potato::plugin)
     .add_plugins(look::render_scale::plugin)
     .add_plugins(visor::plugin)
+    .insert_resource(display::RunWindowed(opts.windowed))
     .add_plugins(display::plugin)
     .insert_state(first)
     .add_plugins(pause::plugin)
@@ -877,10 +882,10 @@ fn pump(
         link.0.update(Input::default());
         return;
     }
-    let held = |a: binds::Action| grabbed && (binds.pressed(a, &keys, &mouse) || binds.just_pressed(a, &keys, &mouse));
-    let button = |b: MouseButton| grabbed && (mouse.pressed(b) || mouse.just_pressed(b));
-    // A gun in each hand: the right button is the left hand's trigger,
-    // not the scope.
+    let c = binds::Controls::new(&keys, &mouse, scroll.delta.y);
+    let held = |a: binds::Action| grabbed && (binds.pressed(a, &c) || binds.just_pressed(a, &c));
+    // A gun in each hand: ZOOM's button (Mouse 2, by default the left
+    // hand's trigger too) is no scope.
     let now = link.0.now_ms();
     let (dual, arm, driving, was) = {
         let f = link.0.session().core.own().0;
@@ -922,17 +927,17 @@ fn pump(
             0
         };
     } else if levels > 0 && !dual && !driving && was.is_some() {
-        if grabbed && mouse.just_pressed(MouseButton::Right) {
+        if grabbed && binds.just_pressed(binds::Action::Zoom, &c) {
             look.level = (look.level + 1) % (levels + 1);
             look.scope_down = now;
-        } else if !mouse.pressed(MouseButton::Right) && look.scope_down > 0.0 {
+        } else if !binds.pressed(binds::Action::Zoom, &c) && look.scope_down > 0.0 {
             if now - look.scope_down > SCOPE_HOLD_MS {
                 look.level = 0;
             }
             look.scope_down = 0.0;
         }
     }
-    if !mouse.pressed(MouseButton::Right) && !mouse.just_pressed(MouseButton::Right) {
+    if !binds.pressed(binds::Action::Zoom, &c) && !binds.just_pressed(binds::Action::Zoom, &c) {
         look.scope_down = 0.0;
     }
     look.zoom = look.level > 0;
@@ -948,26 +953,24 @@ fn pump(
         let max = PITCH_MAX as f32 / 65536.0 * core::f32::consts::TAU;
         look.pitch = (look.pitch - motion.delta.y * sens * up).clamp(-max, max);
     }
-    if grabbed && binds.just_pressed(binds::Action::NetGraph, &keys, &mouse) {
+    if grabbed && binds.just_pressed(binds::Action::NetGraph, &c) {
         st.net = !st.net;
     }
-    let on = |a: binds::Action| (grabbed && binds.pressed(a, &keys, &mouse)) as i32;
+    let on = |a: binds::Action| (grabbed && binds.pressed(a, &c)) as i32;
     let axis = |plus: binds::Action, minus: binds::Action| (on(plus) - on(minus)) * 127;
     let mut buttons = BUTTONS.iter().filter(|(a, _)| held(*a)).fold(0, |b, (_, v)| b | v);
+    // The click that took the mouse (`grab`) fires nothing until it's let go.
     if !mouse.pressed(MouseButton::Left) && !mouse.just_pressed(MouseButton::Left) {
         look.armed = true;
     }
-    if look.armed && button(MouseButton::Left) {
+    if look.armed && held(binds::Action::Fire) {
         buttons |= FIRE;
     }
     if look.zoom {
         buttons |= ZOOM;
     }
-    if dual && look.armed && button(MouseButton::Right) {
+    if dual && look.armed && held(binds::Action::FireLeft) {
         buttons |= FIRE_LEFT;
-    }
-    if grabbed && scroll.delta.y != 0.0 {
-        buttons |= SWAP;
     }
     let turn = core::f32::consts::TAU;
     let (mut mx, mut mz) = (
