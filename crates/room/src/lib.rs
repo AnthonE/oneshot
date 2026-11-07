@@ -696,7 +696,12 @@ impl Room {
     }
 
     fn seat_bot(&mut self, s: usize) {
-        self.seats[s] = Seat::Bot(Bot::new(self.seed, s, 0.5));
+        let skill = if self.world.rules.siege {
+            sim::consts::SIEGE_BOT_SKILL
+        } else {
+            0.5
+        };
+        self.seats[s] = Seat::Bot(Bot::new(self.seed, s, skill));
         self.looks[s] = proto::Look::default();
         let t = self.team_of(s);
         self.world_seat(s, t);
@@ -1184,6 +1189,8 @@ fn build_encoded(
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible, members),
             sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
             sim::thing::Kind::Flag => add_flags(&mut snap, w),
+            sim::thing::Kind::Node => add_nodes(&mut snap, w),
+            sim::thing::Kind::Minion => add_minions(&mut snap, w, s, eye),
         }
     }
     // What this client may be told of the new events joins its queue; the
@@ -1535,6 +1542,67 @@ fn add_flags(snap: &mut Snapshot, w: &World) {
     snap.n_flags = 2;
 }
 
+/// Siege's nodes are public, as Halo's territories are: how far each is
+/// overloaded, and whether its ring is being overloaded, held or wound back
+/// (the HUD's "under attack"), never by whom or how many.
+fn add_nodes(snap: &mut Snapshot, w: &World) {
+    if !w.rules.siege || w.map.siege.is_none() {
+        return;
+    }
+    for (n, node) in w.nodes.iter().enumerate() {
+        let full = World::node_full(n) as u64;
+        let max = proto::NODE_LOAD_MAX as u64;
+        snap.nodes[n] = proto::NodeState {
+            load: (node.load as u64 * max / full).min(max) as u8,
+            broken: node.broken,
+            held: node.held,
+        };
+    }
+    snap.n_nodes = sim::consts::SIEGE_NODES as u8;
+}
+
+/// Whether seat `s` (its eye at `eye`) may see minion `i`: its own side's,
+/// or one in clear line of its eye (its head or its chest).
+pub fn sees_minion(w: &World, s: usize, eye: V3, i: usize) -> bool {
+    let m = &w.minions[i];
+    if !m.alive {
+        return false;
+    }
+    if w.rules.teams && m.team == w.fighters[s].team & 1 {
+        return true;
+    }
+    let p = m.body.pos;
+    w.map.clear(eye, p + V3::new(0.0, sim::consts::MINION_EYE, 0.0)) || w.map.clear(eye, p + V3::new(0.0, 0.9, 0.0))
+}
+
+/// Siege's minions this client may see ([`sees_minion`]), the nearest
+/// [`proto::MAX_SNAP_MINIONS`].
+fn add_minions(snap: &mut Snapshot, w: &World, s: usize, eye: V3) {
+    if !w.rules.siege {
+        return;
+    }
+    let mut seen = [(f32::INFINITY, 0usize); sim::consts::MAX_MINIONS];
+    let mut n = 0;
+    for i in 0..sim::consts::MAX_MINIONS {
+        if sees_minion(w, s, eye, i) {
+            seen[n] = ((w.minions[i].body.pos - eye).len(), i);
+            n += 1;
+        }
+    }
+    let seen = &mut seen[..n];
+    seen.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    for &(_, i) in seen.iter().take(proto::MAX_SNAP_MINIONS) {
+        let m = &w.minions[i];
+        snap.minions[snap.n_minions as usize] = proto::MinionState {
+            slot: i as u8,
+            team: m.team,
+            pos: m.body.pos,
+            yaw: (m.yaw >> 10) as u8,
+        };
+        snap.n_minions += 1;
+    }
+}
+
 /// Pad timers are public: they say when a gun is back, not who is near.
 fn add_pads(snap: &mut Snapshot, w: &World) {
     let n = w.map.pads.len().min(MAX_PADS).min(MAX_SNAP_PADS);
@@ -1544,6 +1612,17 @@ fn add_pads(snap: &mut Snapshot, w: &World) {
         };
     }
     snap.n_pads = n as u8;
+}
+
+/// A minion's death this client may be told of: one of its side's, or one
+/// that fell in clear line of its eye (it is gone, so `sees_minion` can't
+/// say).
+fn dead_seen(w: &World, s: usize, eye: V3, e: &Event) -> bool {
+    let i = e.b as usize;
+    e.part == 0
+        && i < sim::consts::MAX_MINIONS
+        && ((w.rules.teams && w.minions[i].team == w.fighters[s].team & 1)
+            || w.map.clear(eye, e.pos + V3::new(0.0, 0.9, 0.0)))
 }
 
 /// A shot heard is placed only to this grid, with no direction.
@@ -1580,6 +1659,15 @@ fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
             true
         }
         k if k == Ev::Spawn as u8 || k == Ev::Pickup as u8 || k == Ev::Melee as u8 || k == Ev::Ride as u8 => known(a),
+        // Siege: a tower's needle at someone gone from sight is dropped; a
+        // minion's shot at them loses its end.
+        k if k == Ev::Tower as u8 && e.part == 0 => known(a),
+        k if k == Ev::Minion as u8 && e.part == 3 => {
+            if !known(a) {
+                e.end = e.pos;
+            }
+            true
+        }
         _ => true,
     }
 }
@@ -1643,6 +1731,40 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
         // A flag taken, dropped, returned or scored is announced to
         // everyone; where is a base or the flag's own public place.
         Ev::Flag => Some(full),
+        // A node broken, a core's shield down, sudden death: everyone's;
+        // who broke it is named (a kill feed's line) but never placed.
+        Ev::Node => Some(full),
+        // A tower's needle: only if this client may know whom it was at
+        // (where it ends is where they are).
+        Ev::Tower => {
+            // Alive: one it just killed is in no snapshot's bodies.
+            let seen = if e.part == 0 {
+                a < MAX_FIGHTERS && known(a) && w.fighters[a].alive
+            } else {
+                sees_minion(w, s, eye, a)
+            };
+            seen.then_some(full)
+        }
+        // A minion: come out, hit, killed, or firing, as this client may
+        // see it (a hit by them, always); a shot's end only if they may
+        // know whom it was at.
+        Ev::Minion => {
+            let i = e.b as usize;
+            let mine = e.part == 1 && a == s;
+            if !mine && !(i < sim::consts::MAX_MINIONS && (sees_minion(w, s, eye, i) || dead_seen(w, s, eye, e))) {
+                return None;
+            }
+            let end_ok = match e.part {
+                3 => a < MAX_FIGHTERS && known(a) && w.fighters[a].alive,
+                4 => a < sim::consts::MAX_MINIONS && sees_minion(w, s, eye, a),
+                _ => true,
+            };
+            Some(if end_ok {
+                full
+            } else {
+                EventState { end: e.pos, ..full }
+            })
+        }
         Ev::None => None,
     }
 }

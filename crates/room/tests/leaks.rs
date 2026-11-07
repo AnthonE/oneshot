@@ -18,7 +18,7 @@ use proto::{encode_msg, encode_snapshot, salt_commit, InputMsg, Msg, Name, Snaps
 use room::fog::{plainly_sees, sees};
 use room::{Room, HEARD, HEARD_GRID_M};
 use sim::bot::Bot;
-use sim::consts::{MAX_FIGHTERS, SHARE_FULL, TICK_HZ};
+use sim::consts::{MAX_FIGHTERS, SHARE_FULL, SIEGE_NODES, TICK_HZ};
 use sim::events::Kind as Ev;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -209,6 +209,45 @@ impl Gate {
                                 w.tick
                             );
                         }
+                    }
+                }
+                // 12. Siege: a node's overload, whether it is broken and
+                // what its ring holds are public, as Halo's territories
+                // are; never who or how many stand in it.
+                sim::thing::Kind::Node => {
+                    let siege = w.rules.siege && w.map.siege.is_some();
+                    assert_eq!(s.nodes().len(), if siege { SIEGE_NODES } else { 0 });
+                    for (n, x) in s.nodes().iter().enumerate() {
+                        let truth = &w.nodes[n];
+                        assert_eq!(x.broken, truth.broken, "tick {}: node {n}", w.tick);
+                        if !x.broken {
+                            assert_eq!(x.held, truth.held, "tick {}: node {n}", w.tick);
+                        }
+                    }
+                }
+                // 13. Siege's minions: a true one, where it is; one of this
+                // client's side, or one in clear line of its eye.
+                sim::thing::Kind::Minion => {
+                    if !w.rules.siege {
+                        assert_eq!(s.minions().len(), 0);
+                    }
+                    let eye = me.eye();
+                    for x in s.minions() {
+                        let m = &w.minions[x.slot as usize];
+                        assert!(m.alive && m.team == x.team, "tick {}: {x:?} is no minion", w.tick);
+                        assert!(
+                            (m.body.pos - x.pos).len() < 0.05,
+                            "tick {}: {x:?} not where it is",
+                            w.tick
+                        );
+                        let ours = w.rules.teams && m.team == me.team & 1;
+                        let head = m.body.pos + V3::new(0.0, sim::consts::MINION_EYE, 0.0);
+                        let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                        assert!(
+                            ours || w.map.clear(eye, head) || w.map.clear(eye, chest),
+                            "tick {}: an enemy minion out of sight was sent: {x:?}",
+                            w.tick
+                        );
                     }
                 }
                 // 10. A gun on the floor only if it is a true one, in clear
@@ -419,6 +458,17 @@ impl Gate {
             self.events_seen += 1;
             let (a, b) = (e.a as usize, e.b as usize);
             let kind = |k: Ev| e.kind == k as u8;
+            // 20. A tower's needle at someone hidden: never (its end is
+            // where they are); a minion's shot at them: no end.
+            if kind(Ev::Tower) && e.part == 0 {
+                assert!(known(a), "tick {}: a tower's needle at a hidden fighter: {e:?}", w.tick);
+            }
+            if kind(Ev::Minion) && e.part == 3 && !known(a) {
+                assert_eq!(e.end, e.pos, "tick {}: a minion's shot placed a hidden fighter", w.tick);
+            }
+            if kind(Ev::Tower) || kind(Ev::Minion) {
+                continue;
+            }
             // 3. An unseen fighter's shot or throw: heard, rounded, no aim.
             if (kind(Ev::Shot) || kind(Ev::Throw)) && !known(a) {
                 assert_eq!(e.part, HEARD, "tick {}: an unseen fighter's shot sent whole", w.tick);
@@ -546,6 +596,19 @@ fn nothing_a_client_should_not_know_reaches_it_in_ctf() {
 }
 
 #[test]
+fn nothing_a_client_should_not_know_reaches_it_in_siege() {
+    for d in sim::maps::ALL.iter().filter(|d| d.siege.len() == SIEGE_NODES) {
+        gate(
+            d.build(),
+            Rules {
+                time_limit_ms: 120_000,
+                ..Rules::siege()
+            },
+        );
+    }
+}
+
+#[test]
 fn nothing_a_client_should_not_know_reaches_it_in_gun_game() {
     gate(
         Map::proving_grounds(),
@@ -630,9 +693,11 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     let mut acked = 0u32;
     let mut buf = [0u8; MAX_DATAGRAM];
     let mut rx = proto::delta::Receiver::default();
-    // Past the clock: Capture the Flag's sudden death too.
+    // Past the clock: Capture the Flag's sudden death too, and Siege's.
     let overtime = if rules.ctf {
         sim::consts::SUDDEN_DEATH_MS / 1000
+    } else if rules.siege {
+        sim::consts::SIEGE_SUDDEN_DEATH_MS / 1000
     } else {
         0
     };

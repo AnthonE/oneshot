@@ -42,6 +42,19 @@ pub enum Kind {
     /// 1 dropped by `a`, 2 returned (by `a`, or 255 on its own), 3
     /// captured by `a`.
     Flag,
+    /// Siege: node `b` (`world::World::nodes`); `part` 0 broken (`a` the
+    /// first of the side that broke it in its ring, or 255), 1 a core's
+    /// shield down (every generator of its side broken), 2 sudden death
+    /// (every core's shield down).
+    Node,
+    /// Siege: minion `b` (`world::World::minions`); `part` 0 killed by seat
+    /// `a` (255: by a tower or a minion), 1 hit by seat `a`, 2 came out of
+    /// its base, at `pos`; 3 fired from `pos` to `end` at seat `a`, 4 at
+    /// minion `a` (`c` 1 if it hit).
+    Minion,
+    /// Siege: node `b` fired a needle from `pos` to `end`, at seat `a`
+    /// (`part` 0) or at minion `a` (`part` 1).
+    Tower,
 }
 
 impl Kind {
@@ -70,6 +83,9 @@ pub enum Cause {
     /// A truck's minigun (`arms::MINIGUN`): its shots carry it as their
     /// gun.
     Minigun = 107,
+    /// Siege: a tower's needles, a minion's shots.
+    Tower = 108,
+    Minion = 109,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

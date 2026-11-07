@@ -171,6 +171,32 @@ fn snapshot() -> Snapshot {
         pos: V3::new(18.5, 0.0, -2.0),
         down_s: 27,
     };
+    // Siege: red's first generator broken, its second half overloaded and
+    // contested, blue's core being wound back.
+    s.n_nodes = sim::consts::SIEGE_NODES as u8;
+    s.nodes[0] = NodeState {
+        broken: true,
+        load: NODE_LOAD_MAX,
+        held: 0,
+    };
+    s.nodes[1] = NodeState {
+        load: 32,
+        held: 2,
+        broken: false,
+    };
+    s.nodes[7] = NodeState {
+        load: 10,
+        held: 3,
+        broken: false,
+    };
+    // A minion of blue's in sight.
+    s.n_minions = 1;
+    s.minions[0] = MinionState {
+        slot: 9,
+        team: 1,
+        pos: V3::new(-12.25, 0.5, 3.75),
+        yaw: 40,
+    };
     s.proj[0] = ProjState {
         kind: 0,
         owner: 1,
@@ -552,6 +578,8 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
     assert_eq!(d.flags(), s.flags());
+    assert_eq!(d.nodes(), s.nodes());
+    assert_eq!(d.minions(), s.minions());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad, riding behind a driver,
     // hulls and a body in our bubble: fits with room for about eight
@@ -565,11 +593,25 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_vehicles: MAX_SNAP_VEHICLES as u8,
         n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
+        // Capture the Flag's flags; never beside Siege's nodes and minions.
+        n_nodes: 0,
+        n_minions: 0,
         ..s
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
     assert!(n + 160 <= MAX_DATAGRAM, "{n} bytes before events");
+    // Siege's nodes and minions in their place, on its map: Dry Fork's
+    // four vehicles.
+    let siege = Snapshot {
+        n_flags: 0,
+        n_vehicles: 4,
+        n_nodes: sim::consts::SIEGE_NODES as u8,
+        n_minions: MAX_SNAP_MINIONS as u8,
+        ..full
+    };
+    let n = encode_snapshot(&siege, &mut big).unwrap();
+    assert!(n + 160 <= MAX_DATAGRAM, "{n} bytes before events in Siege");
 }
 
 #[test]
@@ -685,13 +727,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0x8e87_a159_d44c_7450,
-        0xeb3f_f214_3368_9e1f,
-        0x3bb6_874d_51c8_0869,
+        0x843d_1a99_5659_d154,
+        0x286d_234c_d061_81e8,
+        0xa692_0770_c16d_b8f0,
         0x7ebe_34b8_2c10_f2d0,
-        0x7ab6_78d6_f6ba_aa53,
-        0x9571_1811_717b_689e,
-        0x56f6_415a_e240_2f4e,
+        0xec88_5efc_d9ac_e183,
+        0x0f4a_a0e7_f967_a718,
+        0x8dc0_4898_e28b_49b7,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -715,7 +757,7 @@ fn the_bytes_match_their_goldens() {
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
-        0x3a44_1838_3809_2ff7,
+        0xd244_70cc_c921_c3fd,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

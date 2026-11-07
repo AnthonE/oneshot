@@ -102,7 +102,7 @@ struct Mode {
     tag: &'static str,
 }
 
-const MODES: [Mode; 9] = [
+const MODES: [Mode; 10] = [
     Mode {
         id: proto::MODE_CASUAL,
         name: "VS THE BOT",
@@ -143,6 +143,14 @@ const MODES: [Mode; 9] = [
             "Take their flag and bring it to yours while yours is home. First to 3 captures. Bots fill the empty seats.",
         ranked: false,
         tag: "mode8",
+    },
+    Mode {
+        id: proto::MODE_SIEGE,
+        name: "SIEGE",
+        short: "8V8 · GENERATORS",
+        about: "Stand in their generators' rings to overload them; with all three down their core's shield falls. Break the core to win. Bots fill the empty seats.",
+        ranked: false,
+        tag: "mode10",
     },
     Mode {
         id: proto::MODE_WATCH,

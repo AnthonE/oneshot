@@ -38,6 +38,8 @@ pub fn how(cause: u16) -> &'static str {
         (Cause::Wreck, "WRECK"),
         (Cause::Sticky, "STICKY"),
         (Cause::Minigun, "MINIGUN"),
+        (Cause::Tower, "TOWER"),
+        (Cause::Minion, "MINION"),
     ];
     causes.iter().find(|(c, _)| *c as u16 == cause).map_or("", |&(_, n)| n)
 }
@@ -64,6 +66,8 @@ pub fn verb(cause: u16) -> &'static str {
         (Cause::Wreck, "blown up"),
         (Cause::Sticky, "stuck"),
         (Cause::Minigun, "gunned down"),
+        (Cause::Tower, "needled by a tower"),
+        (Cause::Minion, "shot down by a minion"),
     ];
     causes
         .iter()

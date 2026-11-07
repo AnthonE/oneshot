@@ -15,6 +15,7 @@ repos is `RIP.md`.
 | **Cups** | FFA heats of 8, points per placement, Swiss rounds, the top eight into a final (`server/src/cup.rs`). Same match server; ladder `cup`. |
 | **Casual** | FFA, Gun Game and Capture the Flag (4v4, first to 3 captures or 15 minutes) with bots filling empty seats. A party may take a room of its own, with its own map, score and clock. Unranked. |
 | **Big Team** | 8v8 Team Slayer on terrain maps with vehicles. Casual first; a ladder once it plays well. |
+| **Siege** (to come) | Team ARAM: everyone the same Spartan, two ability cards at most picked up in the match, generators to break, then the base. Casual (§18). |
 
 Halo's rules, the ones Fireplace's arena already plays:
 - Shields over health. Shields recharge 5 s after the last hit; health follows.
@@ -39,7 +40,8 @@ Halo's rules, the ones Fireplace's arena already plays:
 Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
-Not yet: abilities, hidden-information modes beyond fog of war.
+Abilities live only in Siege and its Mayhem test (§18); Duel, Doubles and cups
+never have them, and Big Team's own playlist keeps none. Not yet: hidden-information modes beyond fog of war.
 Vehicles and terrain play in Big Team (§16, milestones 9 and 10), to rules
 our own: one ground vehicle, the truck, a driver and a passenger; two of Dry
 Fork's four carry a minigun their passenger guns. Maps and vehicles
@@ -610,6 +612,8 @@ keeps every gate in §17 green and moves a golden only on purpose.
     (PLAY, ARMORY, PARTY, FRIENDS, CHALLENGES), the Esc menu and settings, a pad on
     them; our own mixer (`mix`, on the audio thread in the browser); the
     kill cam, medals and the carnage report.
+13. **Siege:** ability cards, the generators and the base, the caches, in
+    the phases of §18, each kept only if it plays.
 
 ## 17 · What CI blocks a merge on
 
@@ -627,3 +631,95 @@ keeps every gate in §17 green and moves a golden only on purpose.
 
 Numbers in this page that come from measurements cite their source. Every
 other number is a starting value, set in code and tuned from matches.
+
+## 18 · Siege: team ARAM with guns
+
+A longer Big Team match with a purpose. Everyone starts as the same Spartan
+with the same rifle, sidearm and grenades: no heroes, no kits, nothing chosen
+before the match. What a fighter becomes is what they pick up inside it. The
+fight is in the middle; a side wins by breaking the other's generators, then
+its base. Casual.
+
+**Cards.** An ability is a card, as ARAM Mayhem's augments:
+- **Two at most.** A fighter holds none, one or two. A third means dropping
+  one of the two, and a dropped card lies where it fell for anyone to take.
+- **Offered, never owed.** A fighter is offered cards as they play (kills,
+  assists, damage to generators), a pick of one from a few, and may take
+  none. Some never get an offer they want. Not every card is useful
+  everywhere; that is the game.
+- **Caches.** Air drops come down deep in each side's half on a timer, each
+  an ability cache anyone may loot, either side: a reason to push deep and a
+  reason to guard home.
+- **Ultimates are rare cards**, mostly from caches: aimed, timed or
+  telegraphed, each with a counter, never a kill at the press of a key.
+- **Cards are verbs, not percentages:** a grapple, a hover, a rewind to five
+  seconds ago, a wall, a frost bird the holder steers. No card changes a
+  gun's counts or times, a shield or health.
+- **Balance is not equal, it is fair over time.** Who gets what is luck;
+  skill wins across a long match. A card that wins the match by itself is
+  cut, not tuned.
+- Skins stay cosmetic (§15): never a card, an offer or a cache.
+
+**The match:**
+- **The middle is a town:** the fight is there. Power weapons on pads, and
+  the healing gun among them (restores a teammate's shields; anyone may carry
+  it). There is no healer and no role; shields recharge as everywhere.
+- **Generators.** Each side has three, out from the middle; each powers the
+  side's core shield. A generator is broken by standing in its ring, as a
+  territory is taken, not by shooting it: an enemy alone in the ring
+  overloads it in 15 s, more of them faster (three at most); a defender in
+  it holds it; defenders alone wind it back; an empty ring keeps what it
+  had. A broken one stays broken and scores. With all three down the core's
+  shield falls; the core is overloaded the same way (30 s) and breaking it
+  wins. The ring's state is public, as Halo's territories are: how far, and
+  whether it is under attack, never who or how many.
+- **Towers.** Every generator standing, and every core, fires a needle at
+  the nearest enemy in 30 m and clear line, minions first, about 13 a second
+  (half that on a minion): a lone player in a ring dies about as fast as
+  they overload it, so a push wants a teammate or a wave. A tower's kill is
+  nobody's.
+- **Minions.** Three a side come out of each base every 30 s (eight alive at
+  most) and walk to the enemy's first generator standing, then the core
+  once it is open, shooting what they see on the way: a weak gun that hits
+  half the time. In a ring they count as one more attacker, however many.
+  45 health, no shield: a burst or two of the rifle. Even waves trade in the
+  middle; a player breaking that is the push. Killing one is no kill.
+- **Bots** in Siege's seats aim worse than elsewhere, so people decide it.
+- **Longer than Halo's:** 25 minutes, then two minutes of sudden death with
+  every core open, then the side that broke more wins. Respawn is Halo's 3 s
+  (lengthening late is still to come).
+- No motion tracker and no minimap, as every mode (§1).
+
+**How it sits in the sim:**
+- A fighter's cards are a fixed array of two; offers, cooldowns and charge are
+  ticks; caps are in `consts.rs`. No allocation in `World::step`.
+- A card that reads only its fighter and the map (grapple, hover, rewind) is
+  in `Fighter::step_local` and predicted like walking; one that touches
+  another body is `World`'s (§17's prediction gate).
+- Generators and cores are a kind of `Thing` (`World::nodes`), placed by a
+  map's `"siege"` (Dry Fork's), always sent; caches will be one too.
+- Fog: an enemy's cards are never sent; a card is known when it is used
+  where it can be seen or heard, as a shot is (§8). An offer is told only to
+  its fighter. Every card's projectile, area and reveal has a rule in
+  `fog.rs` and a line in the leak gate.
+- The rewind needs 5 s of each fighter's pose and shields, beside the 250 ms
+  that lag compensation keeps (§7).
+- Offers, a cache's contents and where a drop lands are keyed by the salt
+  (§9): nothing a client could know before it happens.
+- Bots play Siege: they take cards, use them, loot caches and go for the
+  generators.
+
+**The phases**, each kept only if it plays:
+
+| Phase | What | The question |
+|---|---|---|
+| 0 · The base | generators and cores on Dry Fork, Siege's playlist with bots, no cards (done) | does a purpose keep Big Team's players? |
+| 1 · Cards | a few cards (grapple, rewind, the frost bird), offered in Siege | do cards feel right in this sim and netcode, and on maps built for walking? |
+| 2 · Caches | air drops, rare ultimates, a deck worth dealing from | do players come back for the luck? |
+| 3 · A ladder | a Siege ladder, then cups | only if phase 2 holds players |
+
+The same objectives can carry other modes (Capture the Flag is already
+one); Siege is the first built for it.
+
+Open: team size (Big Team's 8v8, or fewer to fill matches sooner); how many
+cards are offered and how often.

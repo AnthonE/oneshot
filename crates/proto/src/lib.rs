@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 33;
+pub const PROTO_VER: u16 = 34;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -420,6 +420,87 @@ impl Pack for FlagState {
     }
 }
 
+/// A Siege node (a generator or a core), as every client may know it:
+/// how far its overload has gone, whether it is broken, and what its ring
+/// holds (the HUD's "under attack", as Halo's territories show it). A
+/// core's shield is down once its side's generators are all broken, or in
+/// sudden death (the clock at 0 while playing): the client works it out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NodeState {
+    /// The overload as a fraction of full, 0..[`NODE_LOAD_MAX`].
+    pub load: u8,
+    pub broken: bool,
+    /// `sim::world::NODE_QUIET` and the rest.
+    pub held: u8,
+}
+
+/// A node's overload goes in 6 bits: full is this.
+pub const NODE_LOAD_MAX: u8 = 63;
+
+impl Pack for NodeState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write_bit(self.broken)?;
+        if self.broken {
+            return Ok(());
+        }
+        w.write(self.load.min(NODE_LOAD_MAX) as u32, 6)?;
+        w.write(self.held as u32, 2)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        if r.read_bit()? {
+            return Ok(NodeState {
+                broken: true,
+                load: NODE_LOAD_MAX,
+                held: 0,
+            });
+        }
+        Ok(NodeState {
+            load: r.read(6)? as u8,
+            held: r.read(2)? as u8,
+            broken: false,
+        })
+    }
+}
+
+/// A Siege minion, as this client may see it (its own side's, or one in
+/// clear sight; the nearest [`MAX_SNAP_MINIONS`]): its slot (so a drawn one
+/// is kept), its side, where it stands (coarse) and which way it faces.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MinionState {
+    pub slot: u8,
+    pub team: u8,
+    pub pos: V3,
+    /// Its yaw's top 6 bits.
+    pub yaw: u8,
+}
+
+/// Minions a snapshot carries at most, and the bits of their count.
+pub const MAX_SNAP_MINIONS: usize = 8;
+pub(crate) const MINION_BITS: u32 = 4;
+const _: () = assert!(MAX_SNAP_MINIONS < 1 << MINION_BITS);
+const _: () = assert!(sim::consts::MAX_MINIONS <= 16, "a minion's slot is 4 bits");
+
+impl Pack for MinionState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, 4)?;
+        w.write(self.team as u32 & 1, 1)?;
+        w_v3c(w, self.pos)?;
+        w.write(self.yaw as u32, 6)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(MinionState {
+            slot: r.read(4)? as u8,
+            team: r.read(1)? as u8,
+            pos: r_v3c(r)?,
+            yaw: r.read(6)? as u8,
+        })
+    }
+}
+
+/// Siege's nodes in a list's count.
+pub(crate) const NODE_BITS: u32 = 4;
+const _: () = assert!(sim::consts::SIEGE_NODES < 1 << NODE_BITS);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PadState {
     /// Whole seconds until the gun (or power-up) is back, to
@@ -810,6 +891,12 @@ pub struct Snapshot {
     /// Capture the Flag's two flags, red's then blue's; none in other modes.
     pub n_flags: u8,
     pub flags: [FlagState; 2],
+    /// Siege's nodes (`sim::world::World::nodes`); none in other modes.
+    pub n_nodes: u8,
+    pub nodes: [NodeState; sim::consts::SIEGE_NODES],
+    /// Siege's minions this client may see; none in other modes.
+    pub n_minions: u8,
+    pub minions: [MinionState; MAX_SNAP_MINIONS],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -849,6 +936,10 @@ impl Default for Snapshot {
             drops: [DropState::default(); MAX_SNAP_DROPS],
             n_flags: 0,
             flags: [FlagState::default(); 2],
+            n_nodes: 0,
+            nodes: [NodeState::default(); sim::consts::SIEGE_NODES],
+            n_minions: 0,
+            minions: [MinionState::default(); MAX_SNAP_MINIONS],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -880,6 +971,12 @@ impl Snapshot {
     }
     pub fn flags(&self) -> &[FlagState] {
         &self.flags[..self.n_flags as usize]
+    }
+    pub fn nodes(&self) -> &[NodeState] {
+        &self.nodes[..self.n_nodes as usize]
+    }
+    pub fn minions(&self) -> &[MinionState] {
+        &self.minions[..self.n_minions as usize]
     }
 }
 
@@ -1087,6 +1184,8 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_vehicles as usize, MAX_SNAP_VEHICLES),
         (s.n_drops as usize, MAX_SNAP_DROPS),
         (s.n_flags as usize, 2),
+        (s.n_nodes as usize, sim::consts::SIEGE_NODES),
+        (s.n_minions as usize, MAX_SNAP_MINIONS),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -1109,6 +1208,8 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.vehicles(), 4)?;
     w_list(&mut w, s.drops(), 4)?;
     w_list(&mut w, s.flags(), 2)?;
+    w_list(&mut w, s.nodes(), NODE_BITS)?;
+    w_list(&mut w, s.minions(), MINION_BITS)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, score_on_wire(sc), 16)?;
@@ -1143,6 +1244,8 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_vehicles = r_list(&mut r, &mut s.vehicles, 4)?;
     s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
     s.n_flags = r_list(&mut r, &mut s.flags, 2)?;
+    s.n_nodes = r_list(&mut r, &mut s.nodes, NODE_BITS)?;
+    s.n_minions = r_list(&mut r, &mut s.minions, MINION_BITS)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);
@@ -1445,6 +1548,9 @@ pub const MODE_CTF: u8 = 8;
 /// (`room::spectate`). The hello's `party` names whose: a party's code
 /// (a friend's), or 0 for any public match.
 pub const MODE_WATCH: u8 = 9;
+/// Siege: Big Team's sixteen seats, generators to overload, then the core
+/// (docs/DESIGN.md §18); casual, bots in the empty seats.
+pub const MODE_SIEGE: u8 = 10;
 /// Modes fit this many bits.
 const MODE_BITS: u32 = 4;
 
@@ -1460,6 +1566,7 @@ pub fn mode_name(mode: u8) -> &'static str {
         MODE_BIG_TEAM => "Big Team",
         MODE_CTF => "Capture the Flag",
         MODE_WATCH => "watching",
+        MODE_SIEGE => "Siege",
         _ => "oneshot",
     }
 }
@@ -1853,6 +1960,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write_bit(rules.gun_game)?;
             w.write_bit(rules.friendly_fire)?;
             w.write_bit(rules.ctf)?;
+            w.write_bit(rules.siege)?;
             for &b in salt_commit {
                 w.write(b as u32, 8)?;
             }
@@ -2143,6 +2251,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
                 gun_game: r.read_bit()?,
                 friendly_fire: r.read_bit()?,
                 ctf: r.read_bit()?,
+                siege: r.read_bit()?,
             },
             salt_commit: {
                 let mut c = [0u8; 32];

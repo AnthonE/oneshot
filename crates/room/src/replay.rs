@@ -7,7 +7,7 @@
 //!
 //! Format, little-endian: `OSR5`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
-//! gun game, friendly fire, capture the flag), u8 map; then records: `S`
+//! gun game, friendly fire, capture the flag, siege), u8 map; then records: `S`
 //! slot team (a seat), `H` (the countdown held for the next tick: someone
 //! still loading), `T` u16 changed-input mask, inputs, u16 changed-rewind
 //! mask, rewinds, u16 changed-seen mask, each changed seat's shares as
@@ -70,6 +70,7 @@ impl Recorder {
         buf.push(rules.gun_game as u8);
         buf.push(rules.friendly_fire as u8);
         buf.push(rules.ctf as u8);
+        buf.push(rules.siege as u8);
         buf.push(map);
         Recorder {
             buf,
@@ -256,6 +257,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
         gun_game: r.u8()? != 0,
         friendly_fire: r.u8()? != 0,
         ctf: r.u8()? != 0,
+        siege: r.u8()? != 0,
     };
     if rules.seats == 0 || rules.seats as usize > MAX_FIGHTERS {
         return Err("a seat count past the last".into());
@@ -446,7 +448,7 @@ mod tests {
         let mut bytes = recorded();
         // Walk the records; past the middle of the match, turn every changed
         // input's forward stick around.
-        let mut at = 4 + 2 + 8 + 24 + 1 + 4 + 4 + 2 + 1 + 1 + 1 + 1 + 1;
+        let mut at = 4 + 2 + 8 + 24 + 1 + 4 + 4 + 2 + 1 + 1 + 1 + 1 + 1 + 1;
         let mut ticks = 0;
         let mut edited = 0;
         while bytes[at] != b'E' {

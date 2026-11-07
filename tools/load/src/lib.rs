@@ -83,6 +83,7 @@ pub fn mode(name: &str) -> Option<u8> {
         "gun" | "gun-game" => proto::MODE_GUN_GAME,
         "big" | "big-team" => proto::MODE_BIG_TEAM,
         "ctf" => proto::MODE_CTF,
+        "siege" => proto::MODE_SIEGE,
         _ => return None,
     })
 }
