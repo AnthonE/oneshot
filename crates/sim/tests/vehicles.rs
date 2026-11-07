@@ -708,3 +708,142 @@ fn a_slow_truck_hurts_and_carries_off() {
     );
     assert_eq!(hits, 1, "hit once");
 }
+
+/// Every tick's hash through five scripted contacts, folded: a fast truck
+/// through a still enemy; the same at a driver's depth through one
+/// strafing across (met where the driver saw them); a slow carry-off; a
+/// teammate spared; two trucks head-on into a wreck. Pinned so a change
+/// to how contacts are stepped that should change nothing changes nothing
+/// (Dry Fork's golden has bots that seldom meet).
+const CONTACTS: u64 = 0x4834_e71e_0e9d_4d68;
+
+#[test]
+fn run_downs_and_crashes_hash_as_before() {
+    let mut fold = 0u64;
+    // Each scenario's splatters (kills or hits of seat 1) and wrecks.
+    let mut run =
+        |w: &mut World, ticks: u32, inputs: &dyn Fn(u32, &World) -> [Input; MAX_FIGHTERS], lag: [u32; MAX_FIGHTERS]| {
+            let (mut splats, mut wrecks) = (0, 0);
+            for t in 0..ticks {
+                let i = inputs(t, w);
+                w.step(&i, &lag);
+                fold = sim::rng::splitmix64(fold ^ w.hash());
+                for e in w.events.as_slice() {
+                    // A hit's `c` is its damage; a kill's, its cause.
+                    let splat = e.kind == Ev::Hit || (e.kind == Ev::Kill && e.c == Cause::Splatter as u16);
+                    splats += (splat && e.b == 1) as u32;
+                    wrecks += (e.kind == Ev::Wreck) as u32;
+                }
+            }
+            (splats, wrecks)
+        };
+    let go = |mz: i8| Input { mz, ..Input::default() };
+    // 1. Fast, through a still enemy 25 m ahead.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let (f, r) = w.vehicles[0].axes();
+    let at = w.vehicles[0].pos + f * 25.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let one = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert!(one.0 >= 1 && !w.fighters[1].alive, "1: {one:?}");
+    // 2. At 8 ticks' depth, through one strafing across its path.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 20.0 - r * 0.6;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.fighters[1].yaw = w.vehicles[0].yaw;
+    let mut lag = NO_LAG;
+    lag[0] = 8 << 8;
+    let two = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|t, w| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i[1] = Input {
+                yaw: w.vehicles[0].yaw,
+                mx: if (t / 20) % 2 == 0 { 127 } else { -127 },
+                ..Input::default()
+            };
+            i
+        },
+        lag,
+    );
+    assert!(two.0 >= 1, "2: {two:?}");
+    // 3. Slow, near 3.6 m/s, into one 8 m ahead, braked once it hurt them.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 8.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let three = run(
+        &mut w,
+        TICK_HZ * 2,
+        &|_, w| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            let fast = w.vehicles[0].vel.flat().len() > 3.6;
+            let hurt = w.fighters[1].health + w.fighters[1].shield < HEALTH_MAX + SHIELD_MAX;
+            i[0] = go(if hurt {
+                -127
+            } else if fast {
+                0
+            } else {
+                127
+            });
+            i
+        },
+        NO_LAG,
+    );
+    assert!(three.0 >= 1 && w.fighters[1].alive, "3: {three:?}");
+    // 4. Sides on, friendly fire off: a teammate 20 m ahead is spared.
+    let mut w = world(true);
+    w.rules.friendly_fire = false;
+    w.fighters[1].team = 0;
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 20.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let four = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert!(four.0 == 0 && w.fighters[1].health == HEALTH_MAX, "4: {four:?}");
+    // 5. Head-on at full speed, both driven.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let v = w.vehicles[0];
+    let at = v.pos + f * 30.0;
+    w.vehicles[1].pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.vehicles[1].yaw = v.yaw.wrapping_add(32768);
+    let b = w.vehicles[1].pos - f * 2.0;
+    w.fighters[1].body.pos = V3::new(b.x, w.map.ground(b.x, b.z), b.z);
+    tap_use(&mut w, 1);
+    w.vehicles[0].vel = f * VEH_TOP;
+    w.vehicles[1].vel = f * -VEH_TOP;
+    let five = run(
+        &mut w,
+        TICK_HZ * 2,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i[1] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert_eq!(five.1, 2, "5: {five:?}");
+    assert_eq!(fold, CONTACTS, "contacts fold to {fold:#018x}");
+}
