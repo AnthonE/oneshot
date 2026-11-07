@@ -400,7 +400,7 @@ A slow machine (a software rasterizer) starts on POTATO by itself until you
 pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
-const MODES: &str = "casual, duel, doubles, ffa, gungame, cup, bigteam, ctf, watch (or 0 to 6, 8, 9)";
+const MODES: &str = "casual, duel, doubles, ffa, gungame, cup, bigteam, ctf, watch, siege (or 0 to 6, 8 to 10)";
 
 /// A mode by name or number (proto's `MODE_*`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -415,11 +415,12 @@ fn mode(m: &str) -> Option<u8> {
         "bigteam" | "big-team" => proto::MODE_BIG_TEAM,
         "ctf" => proto::MODE_CTF,
         "watch" => proto::MODE_WATCH,
+        "siege" => proto::MODE_SIEGE,
         n => {
             return n
                 .parse()
                 .ok()
-                .filter(|&n| n <= proto::MODE_BIG_TEAM || n == proto::MODE_CTF || n == proto::MODE_WATCH)
+                .filter(|&n| n <= proto::MODE_BIG_TEAM || (proto::MODE_CTF..=proto::MODE_SIEGE).contains(&n))
         }
     })
 }
@@ -434,6 +435,7 @@ mod tests {
         assert_eq!(super::mode("ctf"), Some(proto::MODE_CTF));
         assert_eq!(super::mode("watch"), Some(proto::MODE_WATCH));
         assert_eq!(super::mode("9"), Some(proto::MODE_WATCH));
+        assert_eq!(super::mode("siege"), Some(proto::MODE_SIEGE));
     }
 }
 

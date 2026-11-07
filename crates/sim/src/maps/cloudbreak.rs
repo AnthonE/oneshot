@@ -350,6 +350,7 @@ pub const DEF: Def = Def {
     ],
     nav: true,
     flags: &[],
+    siege: &[],
     light: crate::map::LightDef {
         ev100: 0.0,
         sun: 0.75,

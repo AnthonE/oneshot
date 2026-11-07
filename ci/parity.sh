@@ -44,4 +44,16 @@ for f in $(grep -l '^    flags: &\[\[' crates/sim/src/maps/*.rs); do
     fail=1
   fi
 done
+# Siege on every map with its nodes.
+for f in $(grep -l '^    siege: &\[\[' crates/sim/src/maps/*.rs); do
+  map=$(sed -n 's/^    id: \([0-9]*\),$/\1/p' "$f")
+  n=$(target/release/examples/bot_match 7 6000 "$map" 4)
+  w=$(node ci/parity.mjs "$wasm" 7 6000 "$map" 4)
+  if [ "$n" = "$w" ] && [ "$n" != "0000000000000000" ]; then
+    echo "map $map, Siege: $n"
+  else
+    echo "MISMATCH map $map, Siege: native $n, wasm $w"
+    fail=1
+  fi
+done
 exit $fail

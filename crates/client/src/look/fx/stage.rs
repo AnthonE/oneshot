@@ -305,6 +305,7 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
     let tick = stage.tick;
     if tick.clear || (tick.fire && tick.step == 1) {
         fx.glow.clear();
+        fx.tracers.clear();
         fx.soft.clear();
         fx.cloud.clear();
         fx.boom.clear();

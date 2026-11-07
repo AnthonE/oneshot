@@ -24,4 +24,4 @@ ASPECT = '16:9'
 
 scene()
 gun, rise = generated('shards', 0.577, hold=0.14, glow=['#e04fff'], glow_floor=0.6)
-finish('shards', [gun], grip=0.335, rise=rise, long=True, note='Veil shards: bone keel, a crest of magenta crystals')
+finish('shards', [gun], grip=0.335, rise=rise, long=False, note='Veil shards: bone keel, a crest of magenta crystals')

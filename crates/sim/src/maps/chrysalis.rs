@@ -848,6 +848,7 @@ pub const DEF: Def = Def {
     ],
     nav: true,
     flags: &[],
+    siege: &[],
     light: crate::map::LightDef {
         ev100: 9.8,
         sun: 0.0,

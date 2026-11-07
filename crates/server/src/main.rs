@@ -108,6 +108,7 @@ fn main() {
                     &mut cfg.ffa,
                     &mut cfg.big_team,
                     &mut cfg.ctf,
+                    &mut cfg.siege,
                     &mut cfg.duel,
                     &mut cfg.cup,
                 ] {
@@ -178,6 +179,7 @@ fn main() {
             &mut cfg.gun_game,
             &mut cfg.big_team,
             &mut cfg.ctf,
+            &mut cfg.siege,
         ] {
             r.time_limit_ms = ms;
         }

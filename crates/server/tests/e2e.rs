@@ -70,6 +70,8 @@ async fn a_native_client_plays_the_bot() {
             mz: 127,
             ..Input::default()
         });
+        // Headless: nothing to load, so the countdown needn't wait for us.
+        c.session.loaded();
         for m in c.messages() {
             if let Msg::Seat {
                 skin,

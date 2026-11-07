@@ -433,3 +433,60 @@ pub const FLAG_TOSS_UP: f32 = 3.0;
 /// Overtime: the clock run out with a flag away from home, the match
 /// goes on until it is home or captured, or for this long at most.
 pub const SUDDEN_DEATH_MS: u32 = 90_000;
+
+// Siege (docs/DESIGN.md §18).
+/// Generators a side has; each powers its base's shield. A side's nodes
+/// are its generators, then its core: [`SIEGE_NODES`] in all, red's first.
+pub const SIEGE_GENS: usize = 3;
+pub const SIEGE_NODES: usize = 2 * (SIEGE_GENS + 1);
+/// How near (flat) a fighter on foot must stand to a node to overload or
+/// hold it, and how far above or below.
+pub const NODE_REACH: f32 = 4.0;
+pub const NODE_RISE: f32 = 2.5;
+/// One enemy alone in a generator's ring breaks it in this long; each more
+/// of them, up to `NODE_PUSHERS`, adds their own pace. A defender in the
+/// ring holds it; defenders alone wind it back at the same pace. Nobody
+/// there, it stays where it was.
+pub const GEN_OVERLOAD_MS: u32 = 15_000;
+/// The core, once its shield is down: every generator of its side broken,
+/// or sudden death.
+pub const CORE_OVERLOAD_MS: u32 = 30_000;
+pub const NODE_PUSHERS: u32 = 3;
+/// Siege's clock run out: every core's shield falls and the match goes on
+/// this long at most, then the side that broke more wins.
+pub const SIEGE_SUDDEN_DEATH_MS: u32 = 120_000;
+/// A tower: each generator still standing, and each core, fires a needle
+/// this often at the nearest enemy in clear line and in reach, minions
+/// first (they tank for the push), from this high over its node. Needles
+/// hit as they leave (no flight), `TOWER_DMG` each.
+pub const TOWER_EVERY_MS: u32 = 300;
+pub const TOWER_RANGE: f32 = 30.0;
+pub const TOWER_EYE: f32 = 3.2;
+pub const TOWER_DMG: i32 = 4;
+/// A needle on a minion: less, so a wave holds a tower's fire a while
+/// (about 7 s each) and a push escorted by its wave works.
+pub const TOWER_MINION_DMG: i32 = 2;
+/// Minions: each side's wave comes out of its base this often (the first
+/// after `MINION_FIRST_MS`), `MINION_WAVE` of them, while it has fewer
+/// than `MINION_SIDE` alive. They walk to the enemy's first generator
+/// standing (then the core once it is open) and stand in its ring, which
+/// counts as one attacker more however many there are; on the way they stop to shoot whatever enemy
+/// they see near: a weak gun that hits half the time. No shields; a burst
+/// or two of the rifle kills one.
+pub const MAX_MINIONS: usize = 16;
+pub const MINION_SIDE: usize = MAX_MINIONS / 2;
+pub const MINION_WAVE: usize = 3;
+pub const MINION_FIRST_MS: u32 = 10_000;
+pub const MINION_WAVE_MS: u32 = 30_000;
+pub const MINION_HP: i32 = 45 * PT;
+/// How fast one walks, of a fighter's run (127 is the stick's full tilt).
+pub const MINION_WALK: i8 = 80;
+pub const MINION_RANGE: f32 = 22.0;
+pub const MINION_FIRE_MS: u32 = 700;
+pub const MINION_DMG: i32 = 6;
+pub const MINION_HIT_PCT: u32 = 50;
+/// Where a minion's eye and chest are, over its feet.
+pub const MINION_EYE: f32 = 1.4;
+/// How well a bot holding a Siege seat aims (0..1; the other modes' 0.5):
+/// weaker, so the people in a match are the ones who decide it.
+pub const SIEGE_BOT_SKILL: f32 = 0.25;

@@ -471,6 +471,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }
@@ -758,6 +759,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }
@@ -847,6 +849,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }
@@ -1020,6 +1023,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }

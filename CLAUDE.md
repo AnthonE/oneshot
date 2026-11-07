@@ -52,13 +52,17 @@ Fireplace, engine-shim and Elo Pros.
      (the `hd` skill).
 3. Commit with a short message. Push your branch.
 
-CI (`.github/workflows/ci.yml`) runs all of it on every PR: quick's checks,
-the crates' tests, parity, `ci/client.sh`, e2e in Chromium (a match with
-the WebGPU module's smoke, Gun Game, three matches back to back, a party)
-and the desktop's title and a match (shown, not gated).
+CI (`.github/workflows/ci.yml`) runs only when asked, once before a
+release (`gh workflow run ci`, about an hour): quick's checks, the crates'
+tests, parity, `ci/client.sh`, e2e in Chromium (a match with the WebGPU
+module's smoke, Gun Game, three matches back to back, a party) and the
+desktop's title and a match (shown, not gated). A push or a PR runs
+nothing: the loop above is the gate. The desktop builds
+(`desktop.yml`) run on a `desktop-v*` tag or when asked.
 
 **Merging main into a branch:** resolve the conflicts (keep both sides' intent),
-commit, push. Don't build or test; CI does. A minute, not twenty.
+commit, push. Don't build or test; the release's CI run does. A minute,
+not twenty.
 
 ## Don't
 

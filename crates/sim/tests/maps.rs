@@ -54,6 +54,19 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
             assert!(!m.over_void(p.x, p.z, p.y), "{} spawn {i}: over the void", m.name);
         }
         assert!(m.pads.len() <= MAX_PADS, "{}", m.name);
+        for (i, p) in m.siege.iter().flatten().enumerate() {
+            assert_eq!(
+                m.floor(p.x, p.z, BODY_R, p.y + STEP),
+                p.y,
+                "{} siege node {i}: not on a floor",
+                m.name
+            );
+            assert!(
+                !blocked(&m, p.x, p.z, p.y, BODY_R),
+                "{} siege node {i}: in a box",
+                m.name
+            );
+        }
         for (i, pad) in m.pads.iter().enumerate() {
             let p = pad.pos;
             assert_eq!(
@@ -141,6 +154,9 @@ fn everything_can_be_walked_to() {
                 "{}: pad {i} can't be walked to",
                 m.name
             );
+        }
+        for (i, p) in m.siege.iter().flatten().enumerate() {
+            assert!(near(p.x, p.z, p.y), "{}: siege node {i} can't be walked to", m.name);
         }
         for (i, r) in m.roam.iter().enumerate() {
             assert!(
@@ -262,6 +278,7 @@ fn every_rotation_has_a_map() {
         (ROT_CUP, "cup"),
         (ROT_BIG_TEAM, "big team"),
         (ROT_CTF, "ctf"),
+        (ROT_SIEGE, "siege"),
     ] {
         assert!(ALL.iter().any(|d| d.plays(rot)), "no map plays {name}");
         for d in ALL.iter().filter(|d| d.practice) {

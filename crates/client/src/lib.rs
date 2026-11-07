@@ -33,6 +33,7 @@ pub mod link;
 pub mod loading;
 pub mod look;
 pub mod medals;
+pub mod nodes;
 pub mod options;
 pub mod pad;
 pub mod party;
@@ -481,6 +482,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
     .init_resource::<flags::Flags>()
+    .init_resource::<nodes::Nodes>()
+    .init_resource::<nodes::Minions>()
     .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
     .init_resource::<look::rag::OwnRag>()
@@ -533,7 +536,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::tracers::TracerMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::plasma::PlasmaMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::powerup::PowerupMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
     // (`look/own_shadow.rs`).
     .add_plugins(MaterialPlugin::<look::own_shadow::ShadowOnly>::default())
@@ -585,7 +590,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::portrait::setup,
             (
                 look::fx::setup,
+                look::fx::tracers::setup,
                 look::fx::plasma::setup,
+                look::powerup::setup,
                 look::blade::setup,
                 look::cels::setup,
             ),
@@ -677,7 +684,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             items::draw,
             fly,
             // After the camera: ours is held across our view as it is now.
-            (look::cels::own, view, flags::draw).chain(),
+            (look::cels::own, view, flags::draw, nodes::draw, nodes::draw_minions).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             (
@@ -688,7 +695,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             )
                 .chain(),
             look::viewmodel::shimmer,
-            (look::fx::ambient::drive, look::fx::draw).chain(),
+            (look::fx::ambient::drive, look::fx::draw, look::fx::tracers::draw).chain(),
             // The HUD is hidden off a match (`front::hud_shown`): nothing
             // to draw into it there.
             hud::draw.run_if(in_match),
@@ -706,6 +713,13 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app.add_systems(
         PostUpdate,
         look::blade::redrawn.after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
+    // The gun in view's own light, where it is drawn this frame.
+    app.add_systems(
+        PostUpdate,
+        look::gun_glow::live
+            .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+            .after(bevy::transform::TransformSystems::Propagate),
     );
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
@@ -730,7 +744,12 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        (look::bodies::pose_spines, look::rag::step)
+        (
+            look::bodies::unpose_limbs,
+            look::bodies::pose_spines,
+            look::bodies::pose_limbs,
+            look::rag::step,
+        )
             .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),

@@ -9,7 +9,7 @@
 //! particles are two draws on WebGL2 and on the desktop alike.
 //!
 //! - **glow**: unlit, additive, HDR vertex colour. Sparks, flashes, fire,
-//!   tracers, arcs. A sprite carries its own halo and a streak is never
+//!   arcs. A sprite carries its own halo and a streak is never
 //!   drawn under ~1.5 px wide, so it reads as light with bloom off
 //!   (WebGL2, a device without room for it, or a rung without it:
 //!   `look/quality.rs`). How many may fly is the EFFECTS row (`Caps`).
@@ -30,6 +30,7 @@
 //! - `marks`: holes, chips, dents, gashes, scuffs, blood and scorches laid
 //!   on the drawn surface, one mesh. `chips`: lit debris, one mesh.
 //! - `shots`: gunfire, ours drawn the frame it breaks; impacts by matter.
+//!   `tracers`: the rounds' lines of light, their own mesh and shader.
 //! - `blast`: explosions and a wreck's fire. `flying`: rockets and frags.
 //! - `bodies`: shields flaring and breaking, landings, spawns, pickups.
 //! - `hulls`: vehicles' dust, and smoke and fire when hurt.
@@ -53,6 +54,7 @@ pub mod shots;
 pub mod stage;
 pub mod surface;
 pub mod table;
+pub mod tracers;
 pub mod vent;
 
 use bevy::camera::visibility::NoFrustumCulling;
@@ -96,8 +98,8 @@ pub const CLOUD: usize = 384;
 pub const BOOM: usize = 48;
 
 impl Caps {
-    /// The EFFECTS row (`quality::Effects`): how many sparks and tracers
-    /// may fly and how many flash lights burn. Those only show, never hide.
+    /// The EFFECTS row (`quality::Effects`): how many sparks may fly and
+    /// how many flash lights burn. Those only show, never hide.
     pub fn for_effects(e: Effects) -> Caps {
         let (glow, lights) = match e {
             Effects::High => (2048, 8),
@@ -231,6 +233,8 @@ pub struct Fx {
     swing: (u16, Option<Vec3>),
     /// The trail clock ([`TRAIL_HZ`]).
     trail: TrailClock,
+    /// Rounds' lines of light, their own mesh (`tracers.rs`).
+    pub tracers: tracers::Tracers,
 }
 
 /// Ticks at [`TRAIL_HZ`] on a frame clock: its carry, and the ticks it
@@ -588,6 +592,7 @@ pub fn setup(
         fly: Default::default(),
         swing: (0, None),
         trail: TrailClock::default(),
+        tracers: tracers::Tracers::default(),
     });
 }
 
@@ -643,6 +648,12 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
                 bodies::swung(fx, scene, e, from)
             }
             k if k == Kind::Kill as u8 && e.c == sim::arms::SWORD as u16 => fx.sword_kills.push(e.b),
+            // Siege: a tower's needle, a minion's round (its end only if we
+            // may know whom at: the room's fog).
+            k if k == Kind::Tower as u8 => shots::siege_shot(fx, scene, sim::arms::SHARDS, from, to, true),
+            k if k == Kind::Minion as u8 && (e.part == 3 || e.part == 4) && e.end != e.pos => {
+                shots::siege_shot(fx, scene, sim::arms::ION_PISTOL, from, to, e.c == 1)
+            }
             k if k == Kind::Hit as u8 => {
                 // A hit on us: the frame flinches, by how much it took.
                 if e.b == scene.me && e.a != scene.me {
@@ -746,6 +757,9 @@ pub fn draw(
     if fx.chips.needs_write() {
         if let Some(mesh) = meshes.get_mut(fx.chips.mesh()) {
             fx.chips.write(mesh);
+        }
+        if let Some(mesh) = meshes.get_mut(fx.chips.casing_mesh()) {
+            fx.chips.write_casings(mesh);
         }
     }
     fx.chips.step(dt);

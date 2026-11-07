@@ -1,6 +1,6 @@
 //! What lies about the map for the taking: each pad's gun lying on the
-//! ground where it spawns (or its power-up: a glowing orb resting there,
-//! green the overshield, pale the camouflage), gone while the pad waits
+//! ground where it spawns (or its power-up: an orb in its rings hovering
+//! over it, `look/powerup.rs`), gone while the pad waits
 //! (the snapshot's `empty_s`); the guns and grenades on the floor that the
 //! snapshot names, each glowing faintly to be seen (`look/lying.rs`); and the
 //! line that says what USE would take here. All read from the session; what
@@ -17,23 +17,10 @@ use sim::world::Phase;
 
 use crate::look::guns::{self, Models};
 
-/// A power-up's orb, resting on the ground: its radius, and its glow in
-/// its colour; and how far it swells and shrinks, how fast.
-const ORB_R: f32 = 0.26;
-const ORB_GLOW: f32 = 6.0;
+/// How far a power-up's orb swells and shrinks, how fast.
 const ORB_PULSE: f32 = 0.08;
 const ORB_HZ: f32 = 1.3;
 
-/// A power-up's colour, linear: the overshield's green, camouflage's pale
-/// blue (as their shells are drawn: `look/bodies.rs`).
-fn orb_color(id: u8) -> LinearRgba {
-    match id {
-        sim::arms::OVERSHIELD => LinearRgba::rgb(0.25, 1.0, 0.45),
-        sim::arms::FRAGS => LinearRgba::rgb(0.95, 0.5, 0.12),
-        sim::arms::STICKIES => LinearRgba::rgb(0.2, 0.5, 1.0),
-        _ => LinearRgba::rgb(0.6, 0.78, 1.0),
-    }
-}
 /// Frags on a pad: how far apart they lie.
 const PAD_FRAG_APART_M: f32 = 0.14;
 /// A gun on the floor lies on its side this high (its half thickness).
@@ -120,9 +107,8 @@ pub fn draw(
     time: Res<Time>,
     mut held: Query<(&PadGun, &mut Transform, &mut Visibility)>,
     mut placed: Query<&mut Transform, Without<PadGun>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     plasma: Option<Res<crate::look::fx::plasma::Kit>>,
+    powerup: Option<Res<crate::look::powerup::Kit>>,
     gen: Option<Res<crate::front::LinkGen>>,
 ) {
     let s = link.0.session();
@@ -140,10 +126,10 @@ pub fn draw(
         items.spare.clear();
         for (i, p) in core.map.pads.iter().enumerate() {
             // On the floor under where it spawns, each pad turned its own
-            // way; an orb resting on it.
+            // way; an orb hovering clear of it, its halo and all.
             let orb = sim::arms::power(p.arm);
             let lift = match p.arm {
-                _ if orb => ORB_R,
+                _ if orb => crate::look::powerup::REACH_M * (1.0 + ORB_PULSE),
                 sim::arms::STICKIES => crate::look::fx::plasma::RADIUS_M,
                 sim::arms::FRAGS => LIE_Y,
                 _ => GUN_LIE_Y,
@@ -169,20 +155,12 @@ pub fn draw(
                         .entity(root)
                         .with_children(|c| crate::look::fx::plasma::spawn_lying(c, kit));
                 }
-            } else if orb {
-                let c = orb_color(p.arm);
-                commands.spawn((
-                    Mesh3d(meshes.add(Sphere::new(ORB_R))),
-                    MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(c * 0.2),
-                        emissive: c * ORB_GLOW,
-                        perceptual_roughness: 0.2,
-                        ..default()
-                    })),
-                    Transform::default(),
-                    bevy::light::NotShadowCaster,
-                    ChildOf(root),
-                ));
+            } else if let Some(kind) = crate::look::powerup::Kind::of(p.arm) {
+                if let Some(kit) = &powerup {
+                    commands
+                        .entity(root)
+                        .with_children(|c| crate::look::powerup::spawn(c, kit, kind));
+                }
             } else {
                 let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
                 posed(&mut commands, &models, p.arm, side * guns::body_basis(), root);

@@ -54,6 +54,9 @@ pub struct Rules {
     /// Capture the Flag (with sides, on a map with flag bases): the score
     /// is captures, not kills.
     pub ctf: bool,
+    /// Siege (with sides, on a map with nodes; docs/DESIGN.md §18): the
+    /// score is the enemy's generators broken; breaking their core wins.
+    pub siege: bool,
 }
 
 impl Rules {
@@ -68,6 +71,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -83,6 +87,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: true,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -98,6 +103,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -113,6 +119,7 @@ impl Rules {
             gun_game: false,
             friendly_fire: false,
             ctf: false,
+            siege: false,
         }
     }
 
@@ -137,6 +144,24 @@ impl Rules {
             ctf: true,
             ..Rules::big_team()
         }
+    }
+
+    /// Siege, Big Team's sixteen seats: overload the enemy's generators by
+    /// standing in their rings, then their core; or, at 25 minutes, sudden
+    /// death with every core open. Casual, bots in the empty seats.
+    pub fn siege() -> Rules {
+        Rules {
+            score_limit: SIEGE_GENS as i32 + 1,
+            time_limit_ms: 1_500_000,
+            siege: true,
+            ..Rules::big_team()
+        }
+    }
+
+    /// Whether the score is an objective's, not kills: a kill counts only
+    /// for the fighter.
+    pub fn objective(&self) -> bool {
+        self.ctf || self.siege
     }
 
     /// The gun on rung `score` of Gun Game's ladder.
@@ -344,6 +369,77 @@ impl Thing for Flag {
     }
 }
 
+/// A Siege node: a generator or a core (`World::nodes`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Node {
+    /// Overload so far, in one enemy's ticks, of [`World::node_full`].
+    pub load: u32,
+    pub broken: bool,
+    /// What its ring holds this tick: [`NODE_QUIET`] and the rest.
+    pub held: u8,
+    /// Ticks till its tower fires again.
+    pub cool: u16,
+}
+
+/// Nobody in a node's ring (or a core with its shield up).
+pub const NODE_QUIET: u8 = 0;
+/// Enemies alone in it: the overload climbs.
+pub const NODE_RISING: u8 = 1;
+/// Both sides in it: it holds.
+pub const NODE_CONTESTED: u8 = 2;
+/// Its defenders alone in it, the overload not yet gone: it winds back.
+pub const NODE_FALLING: u8 = 3;
+
+impl Thing for Node {
+    /// A node is part of its map: always there, broken or not.
+    fn live(&self) -> bool {
+        true
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.u32(self.load);
+        h.bool(self.broken);
+        h.u8(self.held);
+        h.u16(self.cool);
+    }
+}
+
+/// A Siege minion: a weak walker of side `team` (`World::minions`; slots
+/// red's first). See `MINION_*` in consts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Minion {
+    pub alive: bool,
+    pub team: u8,
+    pub body: crate::movement::Body,
+    pub yaw: u16,
+    pub hp: i32,
+    /// Ticks till it may fire again.
+    pub cool: u16,
+    /// Ticks it has pushed at something going nowhere, and ticks left going
+    /// round by the roam points instead of straight.
+    pub stuck: u16,
+    pub round: u16,
+}
+
+impl Thing for Minion {
+    fn live(&self) -> bool {
+        self.alive
+    }
+
+    fn hash(&self, h: &mut Fnv) {
+        h.bool(self.alive);
+        h.u8(self.team);
+        h.v3(self.body.pos);
+        h.v3(self.body.vel);
+        h.bool(self.body.grounded);
+        h.u16(self.yaw);
+        h.i32(self.hp);
+        h.u16(self.cool);
+        h.u16(self.stuck);
+        h.u16(self.round);
+    }
+}
+
 pub struct World {
     pub tick: u32,
     pub map: Map,
@@ -356,6 +452,13 @@ pub struct World {
     pub drops: Pool<Dropped, MAX_DROPS>,
     /// Capture the Flag's, red's then blue's; at home and still otherwise.
     pub flags: [Flag; 2],
+    /// Siege's nodes, as the map's (`Map::siege`): red's generators, red's
+    /// core, then blue's; untouched outside that mode.
+    pub nodes: [Node; SIEGE_NODES],
+    /// Siege's minions, red's slots then blue's ([`MINION_SIDE`] each), and
+    /// ticks till the next wave.
+    pub minions: [Minion; MAX_MINIONS],
+    pub wave_in: u32,
     pub phase: Phase,
     /// Ticks left of the countdown, or of the match's clock.
     pub clock: u32,
@@ -440,6 +543,9 @@ impl World {
         }
         World {
             flags,
+            nodes: [Node::default(); SIEGE_NODES],
+            minions: [Minion::default(); MAX_MINIONS],
+            wave_in: ticks(MINION_FIRST_MS),
             tick: 0,
             map,
             rules,
@@ -684,6 +790,11 @@ impl World {
         }
         self.fly_drops();
         self.flags_tick();
+        self.nodes_tick();
+        if self.siege_on() && self.phase == Phase::Playing {
+            self.towers();
+            self.minions_tick();
+        }
         for d in self.drops.iter_mut().filter(|d| d.active) {
             d.ttl = d.ttl.saturating_sub(1);
             if d.ttl == 0 {
@@ -699,8 +810,14 @@ impl World {
             self.clock = self.clock.saturating_sub(1);
             if self.clock == 0 {
                 // Sudden death (Capture the Flag): a flag away from home
-                // when time runs out plays on till it is settled.
-                if self.flag_out() && self.overtime < ticks(SUDDEN_DEATH_MS) {
+                // when time runs out plays on till it is settled. Siege's:
+                // every core open, till one falls or it runs out.
+                if self.siege_on() && self.overtime < ticks(SIEGE_SUDDEN_DEATH_MS) {
+                    if self.overtime == 0 {
+                        self.node_event(2, NO_WINNER, 0);
+                    }
+                    self.overtime += 1;
+                } else if self.flag_out() && self.overtime < ticks(SUDDEN_DEATH_MS) {
                     self.overtime += 1;
                 } else {
                     self.end();
@@ -852,6 +969,30 @@ impl World {
                 }
             }
         }
+        // Minions, where they are (they walk; none is rewound). Homing and
+        // lunges never take one.
+        if !lock {
+            if let Some((i, t)) = self.minion_ray(self.fighters[s].team, eye, dir, near, pad) {
+                best = Some((Target::Minion(i), t));
+            }
+        }
+        best
+    }
+
+    /// The nearest minion not of side `team` (with sides) a ray from `eye`
+    /// along `dir` meets nearer than `reach`, its body grown by `pad`.
+    fn minion_ray(&self, team: u8, eye: V3, dir: V3, reach: f32, pad: f32) -> Option<(usize, f32)> {
+        let mut best = None;
+        let mut near = reach;
+        for (i, m) in self.minions.iter().enumerate() {
+            if !m.alive || (self.rules.teams && m.team == team & 1) {
+                continue;
+            }
+            if let Some(t) = ray_cylinder(eye, dir, m.body.pos, HIT_R + pad, m.body.height(), near) {
+                near = t;
+                best = Some((i, t));
+            }
+        }
         best
     }
 
@@ -964,6 +1105,7 @@ impl World {
             match target {
                 Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id),
                 Target::Vehicle(i) => self.damage_vehicle(s, i, (pts * a.hull_k) as i32),
+                Target::Minion(i) => self.hurt_minion(s as u8, i, pts as i32),
             }
         }
     }
@@ -988,6 +1130,9 @@ impl World {
         let hit = self.trace(s, eye, dir, wall, depth, 0.25, false);
         if let Some((Target::Vehicle(i), _)) = hit {
             self.damage_vehicle(s, i, MELEE_DMG * PT);
+        }
+        if let Some((Target::Minion(i), _)) = hit {
+            self.hurt_minion(s as u8, i, MELEE_DMG * PT);
         }
         if let Some((Target::Fighter(q, _), _)) = hit {
             self.blow(s, q);
@@ -1046,6 +1191,7 @@ impl World {
                 self.damage_vehicle(s, i, pts);
             }
             Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
+            Some((Target::Minion(i), t)) if t <= SWORD_REACH => self.hurt_minion(s as u8, i, KILL_PTS),
             Some((Target::Fighter(q, _), _)) if lunge && !self.mate(s, q) => {
                 let me = &mut self.fighters[s];
                 me.lunge = q as u8 + 1;
@@ -1223,10 +1369,11 @@ impl World {
             let speed = p.vel.len();
             let d = if speed > 0.0 { p.vel * (1.0 / speed) } else { V3::ZERO };
             match self.flight_hit(p, d, speed * DT, false) {
-                (t, true, Some(who)) => {
+                (t, true, Some(who @ (Target::Fighter(..) | Target::Vehicle(_)))) => {
                     let (target, base) = match who {
                         Target::Fighter(q, _) => (q as u8, self.fighters[q].body.pos),
                         Target::Vehicle(i) => ((MAX_FIGHTERS + i) as u8, self.vehicles[i].pos),
+                        Target::Minion(_) => unreachable!(),
                     };
                     p.target = target;
                     p.pos = p.pos + d * t;
@@ -1234,7 +1381,8 @@ impl World {
                     p.landed = true;
                     p.ttl = p.ttl.min(fuse(p.age, STICKY_FUSE_MS, STICKY_ARM_MS));
                 }
-                (t, true, None) => {
+                // On a minion it sticks where it met it, as on the floor.
+                (t, true, None | Some(Target::Minion(_))) => {
                     p.pos = p.pos + d * (t - STICKY_OFF_M).max(0.0);
                     p.vel = V3::ZERO;
                     p.landed = true;
@@ -1347,6 +1495,19 @@ impl World {
                 }
             }
         }
+        // Minions: one that spares sides flies through its own side's.
+        for (i, m) in self.minions.iter().enumerate() {
+            if !m.alive || (spares && self.rules.teams && m.team == self.fighters[owner].team & 1) {
+                continue;
+            }
+            if let Some(h) = ray_cylinder(p.pos, d, m.body.pos, HIT_R + 0.1, m.body.height(), t) {
+                if h < t || !met {
+                    t = h;
+                    met = true;
+                    who = Some(Target::Minion(i));
+                }
+            }
+        }
         (t, met, who)
     }
 
@@ -1427,6 +1588,9 @@ impl World {
             }
             (ProjKind::Charge, Some(Target::Vehicle(i))) => {
                 self.damage_vehicle(owner, i, CHARGE_VEH_DMG * PT);
+            }
+            (ProjKind::Bolt | ProjKind::Needle | ProjKind::Charge, Some(Target::Minion(i))) => {
+                self.hurt_minion(owner as u8, i, a.dmg.max(CHARGE_VEH_DMG) * PT);
             }
             _ => {}
         }
@@ -1649,7 +1813,7 @@ impl World {
                     let speed = p.vel.len();
                     if speed > 0.0 {
                         let d = p.vel * (1.0 / speed);
-                        if let (t, true, Some(Target::Fighter(..) | Target::Vehicle(_))) =
+                        if let (t, true, Some(Target::Fighter(..) | Target::Vehicle(_) | Target::Minion(_))) =
                             self.flight_hit(&p, d, speed * DT, true)
                         {
                             self.proj[i].active = false;
@@ -1813,6 +1977,19 @@ impl World {
             veh.vel.y = up;
             veh.grounded = false;
             self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32);
+        }
+        // Minions in it (never its owner's side's, with sides).
+        for i in 0..MAX_MINIONS {
+            let m = self.minions[i];
+            if !m.alive || (self.rules.teams && m.team == self.fighters[owner].team & 1) {
+                continue;
+            }
+            let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+            let dist = (chest - at).len();
+            if dist >= radius || !self.map.clear(at, chest) {
+                continue;
+            }
+            self.hurt_minion(owner as u8, i, ((dmg * PT) as f32 * falloff(dist)) as i32);
         }
         // Guns and grenades on the floor (the blast's own dead's among
         // them) go flying.
@@ -2258,8 +2435,9 @@ impl World {
         let own = att == vic || (self.rules.teams && k.team == vteam);
         let side = if self.rules.teams { k.team as usize & 1 } else { att };
         let gun_game = self.rules.gun_game;
-        if self.rules.ctf {
-            // Captures score; a kill only counts for the fighter.
+        if self.rules.objective() {
+            // Captures (or generators) score; a kill only counts for the
+            // fighter.
             if !own {
                 k.kills += 1;
                 k.grenades = (k.grenades + 1).min(GREN_MAX);
@@ -2499,6 +2677,389 @@ impl World {
             ..Flag::default()
         };
         self.flag_event(2, by, t, at);
+    }
+
+    /// Siege is played here: the mode, sides and a map with nodes.
+    fn siege_on(&self) -> bool {
+        self.rules.siege && self.rules.teams && self.map.siege.is_some()
+    }
+
+    /// Ticks of one enemy's overload that break node `n`.
+    pub fn node_full(n: usize) -> u32 {
+        if Self::is_core(n) {
+            ticks(CORE_OVERLOAD_MS)
+        } else {
+            ticks(GEN_OVERLOAD_MS)
+        }
+    }
+
+    /// Whether node `n` is a core (else a generator).
+    pub fn is_core(n: usize) -> bool {
+        n % (SIEGE_GENS + 1) == SIEGE_GENS
+    }
+
+    /// The side node `n` belongs to: 0 red, 1 blue.
+    pub fn node_side(n: usize) -> usize {
+        n / (SIEGE_GENS + 1)
+    }
+
+    /// Whether side `side`'s core can be overloaded: its shield is down,
+    /// every generator of its side broken, or it is sudden death.
+    pub fn core_open(&self, side: usize) -> bool {
+        let first = side * (SIEGE_GENS + 1);
+        self.overtime > 0 || self.nodes[first..first + SIEGE_GENS].iter().all(|n| n.broken)
+    }
+
+    /// Siege's tick: each node's ring, on foot and alive, counted by side;
+    /// enemies alone climb its overload, defenders alone wind it back, both
+    /// hold it. A generator overloaded breaks for good and scores; the core,
+    /// once open, breaks and wins.
+    fn nodes_tick(&mut self) {
+        let Some(at) = self.map.siege.filter(|_| self.siege_on()) else {
+            return;
+        };
+        for (n, &ring) in at.iter().enumerate() {
+            if self.nodes[n].broken {
+                continue;
+            }
+            let side = Self::node_side(n);
+            if Self::is_core(n) && !self.core_open(side) {
+                self.nodes[n].held = NODE_QUIET;
+                continue;
+            }
+            let (mut ours, mut theirs, mut first) = (0u32, 0u32, NO_WINNER);
+            for (s, f) in self.fighters.iter().enumerate() {
+                if !f.active() || f.riding().is_some() || !in_ring(f.body.pos, ring) {
+                    continue;
+                }
+                if f.team as usize & 1 == side {
+                    ours += 1;
+                } else {
+                    theirs += 1;
+                    if first == NO_WINNER {
+                        first = s as u8;
+                    }
+                }
+            }
+            // Minions in it count as one more of their side, however many.
+            let (mut our_m, mut their_m) = (false, false);
+            for m in self.minions.iter().filter(|m| m.alive && in_ring(m.body.pos, ring)) {
+                if m.team as usize == side {
+                    our_m = true;
+                } else {
+                    their_m = true;
+                }
+            }
+            ours += our_m as u32;
+            theirs += their_m as u32;
+            let node = &mut self.nodes[n];
+            let (load, held) = match (ours, theirs) {
+                (0, 0) => (node.load, NODE_QUIET),
+                (0, t) => (node.load + t.min(NODE_PUSHERS), NODE_RISING),
+                (_, 0) if node.load > 0 => (node.load.saturating_sub(ours.min(NODE_PUSHERS)), NODE_FALLING),
+                (_, 0) => (0, NODE_QUIET),
+                _ => (node.load, NODE_CONTESTED),
+            };
+            let full = Self::node_full(n);
+            node.load = load.min(full);
+            node.held = held;
+            if load < full {
+                continue;
+            }
+            node.broken = true;
+            node.held = NODE_QUIET;
+            let by = side ^ 1;
+            self.node_event(0, first, n);
+            self.score[by] += 1;
+            if Self::is_core(n) {
+                if self.phase == Phase::Playing {
+                    self.phase = Phase::Over;
+                    self.winner = by as u8;
+                }
+                return;
+            }
+            if self.core_open(side) && self.overtime == 0 {
+                self.node_event(1, NO_WINNER, side * (SIEGE_GENS + 1) + SIEGE_GENS);
+            }
+        }
+    }
+
+    /// Minion `i` takes `pts` from seat `att` (255: a tower or a minion);
+    /// at none left, it is gone.
+    fn hurt_minion(&mut self, att: u8, i: usize, pts: i32) {
+        let m = &mut self.minions[i];
+        if !m.alive || pts <= 0 {
+            return;
+        }
+        m.hp -= pts;
+        let (pos, dead) = (m.body.pos, m.hp <= 0);
+        if dead {
+            m.alive = false;
+        }
+        self.events.push(Event {
+            kind: Ev::Minion,
+            a: att,
+            b: i as u8,
+            part: if dead { 0 } else { 1 },
+            c: (pts / PT).min(u16::MAX as i32) as u16,
+            pos,
+            ..Event::default()
+        });
+    }
+
+    /// Every tower (a generator standing, a core) fires at the nearest
+    /// enemy in reach and clear line, minions first: a needle that hits as
+    /// it leaves. A fighter it kills is nobody's kill.
+    fn towers(&mut self) {
+        let Some(at) = self.map.siege else {
+            return;
+        };
+        for (n, &node) in at.iter().enumerate() {
+            if self.nodes[n].broken {
+                continue;
+            }
+            if self.nodes[n].cool > 0 {
+                self.nodes[n].cool -= 1;
+                continue;
+            }
+            let side = Self::node_side(n);
+            let eye = node + V3::new(0.0, TOWER_EYE, 0.0);
+            let near = |p: V3| {
+                let d = (p - eye).len();
+                (d < TOWER_RANGE).then_some(d)
+            };
+            let mut minion: Option<(usize, f32, V3)> = None;
+            for (i, m) in self.minions.iter().enumerate() {
+                let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                if !m.alive || m.team as usize == side {
+                    continue;
+                }
+                if let Some(d) = near(chest).filter(|&d| minion.is_none_or(|b| d < b.1)) {
+                    if self.map.clear(eye, chest) {
+                        minion = Some((i, d, chest));
+                    }
+                }
+            }
+            let mut fighter: Option<(usize, f32, V3)> = None;
+            if minion.is_none() {
+                for (q, f) in self.fighters.iter().enumerate() {
+                    let chest = f.body.pos + V3::new(0.0, 0.9, 0.0);
+                    if !f.active() || f.team as usize & 1 == side {
+                        continue;
+                    }
+                    if let Some(d) = near(chest).filter(|&d| fighter.is_none_or(|b| d < b.1)) {
+                        if self.map.clear(eye, chest) {
+                            fighter = Some((q, d, chest));
+                        }
+                    }
+                }
+            }
+            let (who, part, end) = match (minion, fighter) {
+                (Some((i, _, c)), _) => (i, 1, c),
+                (None, Some((q, _, c))) => (q, 0, c),
+                (None, None) => continue,
+            };
+            self.nodes[n].cool = ticks(TOWER_EVERY_MS) as u16;
+            self.events.push(Event {
+                kind: Ev::Tower,
+                a: who as u8,
+                b: n as u8,
+                part,
+                pos: eye,
+                end,
+                ..Event::default()
+            });
+            if part == 1 {
+                self.hurt_minion(NO_WINNER, who, TOWER_MINION_DMG * PT);
+            } else {
+                self.damage(who, who, TOWER_DMG * PT, false, Head::None, Cause::Tower as u16);
+            }
+        }
+    }
+
+    /// Siege's minions: a wave from each base on its clock, then each one's
+    /// tick: shoot an enemy in sight and reach, else walk on to its node.
+    fn minions_tick(&mut self) {
+        let Some(at) = self.map.siege else {
+            return;
+        };
+        self.wave_in = self.wave_in.saturating_sub(1);
+        if self.wave_in == 0 {
+            self.wave_in = ticks(MINION_WAVE_MS);
+            for side in 0..2 {
+                self.wave(side, &at);
+            }
+        }
+        for i in 0..MAX_MINIONS {
+            if self.minions[i].alive {
+                self.minion_step(i, &at);
+            }
+        }
+    }
+
+    /// Side `side`'s wave: up to [`MINION_WAVE`] into its free slots, in a
+    /// row out in front of its core, facing the enemy's.
+    fn wave(&mut self, side: usize, at: &[V3; SIEGE_NODES]) {
+        let per = SIEGE_GENS + 1;
+        let core = at[side * per + SIEGE_GENS];
+        let dir = (at[(side ^ 1) * per + SIEGE_GENS] - core).flat().norm();
+        let across = V3::new(-dir.z, 0.0, dir.x);
+        let mut k = 0;
+        for i in side * MINION_SIDE..(side + 1) * MINION_SIDE {
+            if k == MINION_WAVE {
+                break;
+            }
+            if self.minions[i].alive {
+                continue;
+            }
+            let p = core + dir * 12.0 + across * ((k as f32 - 1.0) * 1.6);
+            let y = self.map.floor(p.x, p.z, BODY_R, core.y + 6.0);
+            self.minions[i] = Minion {
+                alive: true,
+                team: side as u8,
+                body: crate::movement::Body {
+                    pos: V3::new(p.x, y, p.z),
+                    grounded: true,
+                    ..Default::default()
+                },
+                yaw: crate::geom::rad_to_yaw(crate::fmath::atan2(dir.z, dir.x)),
+                hp: MINION_HP,
+                ..Minion::default()
+            };
+            self.events.push(Event {
+                kind: Ev::Minion,
+                a: NO_WINNER,
+                b: i as u8,
+                part: 2,
+                pos: self.minions[i].body.pos,
+                ..Event::default()
+            });
+            k += 1;
+        }
+    }
+
+    /// One tick of minion `i`.
+    fn minion_step(&mut self, i: usize, at: &[V3; SIEGE_NODES]) {
+        let m = self.minions[i];
+        let side = m.team as usize;
+        let eye = m.body.pos + V3::new(0.0, MINION_EYE, 0.0);
+        // The nearest enemy in sight and reach: a fighter or a minion.
+        let mut best: Option<(f32, V3, Target)> = None;
+        for (q, f) in self.fighters.iter().enumerate() {
+            let chest = f.body.pos + V3::new(0.0, 0.9, 0.0);
+            let d = (chest - eye).len();
+            if !f.active() || f.team as usize & 1 == side || d >= MINION_RANGE || best.is_some_and(|b| d >= b.0) {
+                continue;
+            }
+            if self.map.clear(eye, chest) {
+                best = Some((d, chest, Target::Fighter(q, false)));
+            }
+        }
+        for (j, o) in self.minions.iter().enumerate() {
+            let chest = o.body.pos + V3::new(0.0, 0.9, 0.0);
+            let d = (chest - eye).len();
+            if !o.alive || o.team as usize == side || d >= MINION_RANGE || best.is_some_and(|b| d >= b.0) {
+                continue;
+            }
+            if self.map.clear(eye, chest) {
+                best = Some((d, chest, Target::Minion(j)));
+            }
+        }
+        // Where it is going: the enemy's core once it is open, else their
+        // first generator standing; each a little apart in the ring.
+        let per = SIEGE_GENS + 1;
+        let theirs = side ^ 1;
+        let n = if self.core_open(theirs) {
+            theirs * per + SIEGE_GENS
+        } else {
+            (theirs * per..theirs * per + SIEGE_GENS)
+                .find(|&n| !self.nodes[n].broken)
+                .unwrap_or(theirs * per + SIEGE_GENS)
+        };
+        let a = i as f32 * 1.3;
+        let goal = at[n] + V3::new(crate::fmath::cos(a) * 1.8, 0.0, crate::fmath::sin(a) * 1.8);
+        // It walks on whatever it sees (a wave pushes; it is for the
+        // other side to stop it), and shoots on the way.
+        let mut inp = Input::default();
+        if (goal - m.body.pos).flat().len() > 0.8 {
+            let way = crate::bot::Bot::toward_by(self, m.body.pos, goal, m.round > 0) - m.body.pos;
+            inp.yaw = crate::geom::rad_to_yaw(crate::fmath::atan2(way.z, way.x));
+            inp.mz = MINION_WALK;
+        }
+        let mut body = m.body;
+        crate::movement::step(&mut body, &inp, &self.map);
+        let walking = inp.mz != 0;
+        // It faces what it shoots at, else the way it walks.
+        let (face, fire) = match best {
+            Some((_, chest, who)) => {
+                let to = chest - eye;
+                let face = crate::geom::rad_to_yaw(crate::fmath::atan2(to.z, to.x));
+                (face, (m.cool == 0).then_some((chest, who)))
+            }
+            None if walking => (inp.yaw, None),
+            None => (m.yaw, None),
+        };
+        let mm = &mut self.minions[i];
+        mm.body = body;
+        mm.yaw = face;
+        mm.cool = mm.cool.saturating_sub(1);
+        mm.round = mm.round.saturating_sub(1);
+        // Pushing at a wall going nowhere: round by the roam points a while.
+        if walking && body.grounded && body.vel.flat().len() < 0.5 {
+            mm.stuck += 1;
+            if mm.stuck as u32 > TICK_HZ / 2 {
+                mm.stuck = 0;
+                mm.round = (3 * TICK_HZ) as u16;
+            }
+        } else {
+            mm.stuck = 0;
+        }
+        if body.pos.y < self.map.void {
+            mm.alive = false;
+            return;
+        }
+        let Some((chest, who)) = fire else {
+            return;
+        };
+        mm.cool = ticks(MINION_FIRE_MS) as u16;
+        let hit = self.rng.next_bounded(100) < MINION_HIT_PCT;
+        let (a, part) = match who {
+            Target::Fighter(q, _) => (q as u8, 3),
+            Target::Minion(j) => (j as u8, 4),
+            Target::Vehicle(_) => return,
+        };
+        // `part` 3 fired at seat `a`, 4 at minion `a`; `c` 1 if it hit.
+        self.events.push(Event {
+            kind: Ev::Minion,
+            a,
+            b: i as u8,
+            part,
+            c: hit as u16,
+            pos: eye,
+            end: chest,
+        });
+        if !hit {
+            return;
+        }
+        match who {
+            Target::Fighter(q, _) => self.damage(q, q, MINION_DMG * PT, false, Head::None, Cause::Minion as u16),
+            Target::Minion(j) => self.hurt_minion(NO_WINNER, j, MINION_DMG * PT),
+            Target::Vehicle(_) => {}
+        }
+    }
+
+    /// `part`: 0 node `n` broken (`a` the first enemy in its ring), 1 a
+    /// core's shield down, 2 sudden death.
+    fn node_event(&mut self, part: u8, a: u8, n: usize) {
+        let pos = self.map.siege.map_or(V3::ZERO, |at| at[n]);
+        self.events.push(Event {
+            kind: Ev::Node,
+            a,
+            b: n as u8,
+            part,
+            pos,
+            ..Event::default()
+        });
     }
 
     /// `part`: 0 taken, 1 dropped, 2 returned, 3 captured; `a` who, `b` the
@@ -2921,6 +3482,17 @@ impl World {
                         hash_all(&self.flags, &mut h)
                     }
                 }
+                thing::Kind::Node => {
+                    if self.rules.siege {
+                        hash_all(&self.nodes, &mut h)
+                    }
+                }
+                thing::Kind::Minion => {
+                    if self.rules.siege {
+                        hash_all(&self.minions, &mut h);
+                        h.u32(self.wave_in);
+                    }
+                }
             }
         }
         let (a, b) = self.rng.state();
@@ -2945,6 +3517,14 @@ impl World {
 enum Target {
     Fighter(usize, bool),
     Vehicle(usize),
+    /// A Siege minion.
+    Minion(usize),
+}
+
+/// A body at `at` stands in the ring of a node at `node`.
+fn in_ring(at: V3, node: V3) -> bool {
+    let d = at - node;
+    d.flat().len() < NODE_REACH && crate::fmath::fabs(d.y) < NODE_RISE
 }
 
 /// A body at `at` touches a flag at `flag`.
@@ -3147,6 +3727,7 @@ mod tests {
             nav: false,
             light: crate::map::LightDef::DAY,
             flags: &[],
+            siege: &[],
         }
         .build()
     }
