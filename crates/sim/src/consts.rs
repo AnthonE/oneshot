@@ -15,13 +15,23 @@ pub const fn ticks(ms: u32) -> u32 {
 /// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,
 /// Big Team 16.
 pub const MAX_FIGHTERS: usize = 16;
-/// Rockets and frags in flight at once.
-pub const MAX_PROJ: usize = 32;
+/// Projectiles in flight at once: rockets, lobs, cannon balls, grenades
+/// (flying or stuck), bolts and shards. A full pool gives the oldest shard
+/// or bolt's slot to a new round (`World::launch`); with none to give, the
+/// new one is never made.
+pub const MAX_PROJ: usize = 64;
 /// Weapon and power-up pads on a map (the Range has one of every gun
 /// and power-up).
 pub const MAX_PADS: usize = 24;
+/// Launchers on a map, the pads that throw a body (`tools/maps/compile.mjs`
+/// holds maps to it).
+pub const MAX_LAUNCHERS: usize = 8;
 /// Events one tick may raise; past it they are dropped and counted.
 pub const MAX_EVENTS: usize = 128;
+/// Of [`MAX_EVENTS`], the room kept for the events that must arrive
+/// (`events::Kind::must`: kills, flags, wrecks, spawns, rides): a crowded
+/// tick drops shots and hits first.
+pub const EVENTS_KEPT: usize = 32;
 /// Boxes and solids in a map, together (`tools/maps/compile.mjs` holds
 /// maps to it).
 pub const MAX_MAP_BOXES: usize = 512;

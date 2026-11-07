@@ -364,6 +364,9 @@ pub struct World {
     /// Ticks of sudden death played, the clock run out (`SUDDEN_DEATH_MS`).
     pub overtime: u32,
     pub events: Events,
+    /// The projectile slot [`Self::projectiles`] is at (`MAX_PROJ`
+    /// outside it): a full pool never gives that slot to a new round.
+    flying: usize,
     rewind: Box<Rewind<Pose, MAX_FIGHTERS>>,
     vrewind: Box<Rewind<VPose, MAX_VEHICLES>>,
     rng: Pcg32,
@@ -400,6 +403,7 @@ impl World {
             winner: NO_WINNER,
             overtime: 0,
             events: Events::default(),
+            flying: MAX_PROJ,
             rewind: Box::default(),
             vrewind: Box::default(),
             rng: Pcg32::new(seed, 1),
@@ -407,10 +411,11 @@ impl World {
         }
     }
 
-    /// Seats a fighter and puts it at a spawn point.
+    /// Seats a fighter and puts it at a spawn point. Whoever sat there
+    /// before is gone first ([`Self::vacate`]).
     pub fn seat(&mut self, slot: usize, team: u8) {
-        let f = &mut self.fighters[slot];
-        *f = Fighter {
+        self.vacate(slot);
+        self.fighters[slot] = Fighter {
             seated: true,
             team,
             ..Fighter::default()
@@ -423,9 +428,35 @@ impl World {
     }
 
     pub fn unseat(&mut self, slot: usize) {
+        self.vacate(slot);
+        self.fighters[slot] = Fighter::default();
+    }
+
+    /// Seat `slot`'s fighter leaves the match: out of its vehicle, the
+    /// flag let go where it stands, and nothing still names the seat (a
+    /// round homing on it, a sticky stuck to it, a lunge at it, the credit
+    /// for its fall, its poses), so whoever sits there next inherits none
+    /// of it.
+    fn vacate(&mut self, slot: usize) {
         self.leave_vehicle(slot);
         self.drop_flag(slot, false, false);
-        self.fighters[slot] = Fighter::default();
+        for p in self.proj.iter_mut().filter(|p| p.active && p.target as usize == slot) {
+            p.target = NO_TARGET;
+            // Stuck to them: it falls, its fuse running, as off the dead.
+            if p.landed && p.kind == ProjKind::Sticky {
+                p.vel = V3::ZERO;
+                p.landed = false;
+            }
+        }
+        for s in 0..MAX_FIGHTERS {
+            if self.fighters[s].lunge as usize == slot + 1 {
+                self.end_lunge(s);
+            }
+            if self.fighters[s].hurt_by as usize == slot + 1 {
+                self.fighters[s].hurt_by = 0;
+                self.fighters[s].hurt_t = 0;
+            }
+        }
         self.rewind.forget(slot);
     }
 
@@ -611,7 +642,7 @@ impl World {
                     ProjKind::Rocket | ProjKind::Lob | ProjKind::Cannon => ticks(5000),
                     _ => ticks((a.range / speed * 1000.0) as u32).max(1),
                 };
-                self.launch(
+                let made = self.launch(
                     Projectile {
                         kind,
                         arm: id,
@@ -623,14 +654,16 @@ impl World {
                     },
                     s,
                 );
-                self.events.push(Event {
-                    kind: Ev::Shot,
-                    a: s as u8,
-                    c: id as u16,
-                    pos: eye,
-                    end: eye + dir,
-                    ..Event::default()
-                });
+                if made {
+                    self.events.push(Event {
+                        kind: Ev::Shot,
+                        a: s as u8,
+                        c: id as u16,
+                        pos: eye,
+                        end: eye + dir,
+                        ..Event::default()
+                    });
+                }
             }
         }
     }
@@ -794,15 +827,16 @@ impl World {
             let pts = (a.dmg * PT) as f32 * k;
             match target {
                 Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id),
-                Target::Vehicle(i) => self.damage_vehicle(s, i, (pts * a.hull_k) as i32, id),
+                Target::Vehicle(i) => self.damage_vehicle(s, i, (pts * a.hull_k) as i32),
             }
         }
     }
 
     fn melee(&mut self, s: usize, depth: u32) {
         let f = self.fighters[s];
-        // With a sword in hand the melee is the sword's swing, no lunge.
-        if arm(f.gun().arm).kind == Kind::Sword {
+        // With a sword in hand the melee is the sword's swing, no lunge (a
+        // carrier's hands are on the flag: the flag's swing).
+        if !f.flag && arm(f.gun().arm).kind == Kind::Sword {
             self.swing(s, depth, false);
             return;
         }
@@ -817,7 +851,7 @@ impl World {
         });
         let hit = self.trace(s, eye, dir, wall, depth, 0.25, false);
         if let Some((Target::Vehicle(i), _)) = hit {
-            self.damage_vehicle(s, i, MELEE_DMG * PT, Cause::Melee as u16);
+            self.damage_vehicle(s, i, MELEE_DMG * PT);
         }
         if let Some((Target::Fighter(q, _), _)) = hit {
             self.blow(s, q);
@@ -873,7 +907,7 @@ impl World {
         match self.trace(s, eye, dir, wall, depth, LUNGE_PAD, false) {
             Some((Target::Vehicle(i), t)) if t <= SWORD_REACH => {
                 let pts = arm(crate::arms::SWORD).dmg * PT;
-                self.damage_vehicle(s, i, pts, crate::arms::SWORD as u16);
+                self.damage_vehicle(s, i, pts);
             }
             Some((Target::Fighter(q, _), t)) if t <= SWORD_REACH => self.strike(s, q),
             Some((Target::Fighter(q, _), _)) if lunge && !self.mate(s, q) => {
@@ -1001,7 +1035,7 @@ impl World {
         // Never from the far side of a wall it was thrown up against.
         let reach = self.map.ray(f.eye(), dir, 0.4);
         let out = if reach < 0.4 { (reach - 0.05).max(0.0) } else { 0.4 };
-        self.launch(
+        let made = self.launch(
             Projectile {
                 kind,
                 pos: f.eye() + dir * out,
@@ -1012,13 +1046,15 @@ impl World {
             },
             s,
         );
-        self.events.push(Event {
-            kind: Ev::Throw,
-            a: s as u8,
-            c: sticky as u16,
-            pos: f.eye(),
-            ..Event::default()
-        });
+        if made {
+            self.events.push(Event {
+                kind: Ev::Throw,
+                a: s as u8,
+                c: sticky as u16,
+                pos: f.eye(),
+                ..Event::default()
+            });
+        }
     }
 
     /// A sticky's tick: riding what it is stuck to, or still where it stuck
@@ -1097,15 +1133,38 @@ impl World {
         false
     }
 
-    fn launch(&mut self, p: Projectile, s: usize) {
-        // A full pool drops the throw, as it always has.
-        let _ = self.proj.alloc(Projectile {
+    /// `p` into flight, `s`'s. Whether it was made: a full pool gives it
+    /// the slot of the oldest shard or bolt in flight (never a rocket's, a
+    /// grenade's or a charged bolt's, nor the one being flown); with none,
+    /// it isn't.
+    fn launch(&mut self, p: Projectile, s: usize) -> bool {
+        self.fill(Projectile {
             active: true,
             owner: s as u8,
             age: 0,
             landed: false,
             ..p
-        });
+        })
+    }
+
+    /// `p` into the first free projectile slot, or into the oldest shard's
+    /// or bolt's as [`Self::launch`] says. Whether it went in.
+    fn fill(&mut self, p: Projectile) -> bool {
+        if self.proj.alloc(p).is_some() {
+            return true;
+        }
+        let mut old: Option<usize> = None;
+        for (i, q) in self.proj.iter().enumerate() {
+            let small = matches!(q.kind, ProjKind::Needle | ProjKind::Bolt);
+            if q.active && small && i != self.flying && old.is_none_or(|o| q.age > self.proj[o].age) {
+                old = Some(i);
+            }
+        }
+        let Some(i) = old else {
+            return false;
+        };
+        self.proj[i] = p;
+        true
     }
 
     /// What a ray from `pos` along `d` (unit) meets first within `reach`:
@@ -1221,10 +1280,10 @@ impl World {
                 self.stick(owner, q, p.arm);
             }
             (ProjKind::Bolt | ProjKind::Needle, Some(Target::Vehicle(i))) => {
-                self.damage_vehicle(owner, i, a.dmg * PT, cause);
+                self.damage_vehicle(owner, i, a.dmg * PT);
             }
             (ProjKind::Charge, Some(Target::Vehicle(i))) => {
-                self.damage_vehicle(owner, i, CHARGE_VEH_DMG * PT, cause);
+                self.damage_vehicle(owner, i, CHARGE_VEH_DMG * PT);
             }
             _ => {}
         }
@@ -1277,8 +1336,6 @@ impl World {
         self.damage(att, vic, KILL_PTS, false, Head::None, id as u16);
     }
 
-    /// A frag's or a lob's tick under gravity off the map's floors and
-    /// walls: where it goes, and whether it touched anything.
     /// One tick of a thrown thing under `g`, off what it meets: whether it
     /// touched anything, and whether that was a floor (the map's, a box's
     /// top, a solid's), not a wall.
@@ -1408,6 +1465,7 @@ impl World {
             if !p.active {
                 continue;
             }
+            self.flying = i;
             p.age = p.age.saturating_add(1);
             p.ttl = p.ttl.saturating_sub(1);
             match p.kind {
@@ -1489,6 +1547,7 @@ impl World {
             );
             self.proj[i] = p;
         }
+        self.flying = MAX_PROJ;
     }
 
     /// A blast of `dmg` at `at`: whole to `full`, then down to `edge` at
@@ -1583,7 +1642,7 @@ impl World {
             veh.vel = veh.vel + flat * (BLAST_PUSH * VEH_PUSH_K * heft);
             veh.vel.y = up;
             veh.grounded = false;
-            self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32, cause);
+            self.damage_vehicle(owner, i, ((dmg * PT) as f32 * k) as i32);
         }
         // Guns and grenades on the floor (the blast's own dead's among
         // them) go flying.
@@ -1647,8 +1706,8 @@ impl World {
 
     /// A grenade going off where it lies, `owner`'s doing.
     fn cook_off(&mut self, kind: ProjKind, pos: V3, owner: usize) {
-        // A full pool leaves it unlit, as a full pool drops a throw.
-        let _ = self.proj.alloc(Projectile {
+        // A full pool with no shard or bolt to give leaves it unlit.
+        self.fill(Projectile {
             active: true,
             kind,
             owner: owner as u8,
@@ -1698,7 +1757,7 @@ impl World {
     }
 
     /// `att` hurts vehicle `i` for `pts`; at nothing left it blows up.
-    fn damage_vehicle(&mut self, att: usize, i: usize, pts: i32, cause: u16) {
+    fn damage_vehicle(&mut self, att: usize, i: usize, pts: i32) {
         let v = &mut self.vehicles[i];
         if !v.active || pts <= 0 {
             return;
@@ -1715,34 +1774,17 @@ impl World {
             ..Event::default()
         });
         if dead {
-            self.wreck(i, att, cause);
+            self.wreck(i, att);
         }
     }
 
     /// Vehicle `i` blows up, `att`'s doing: whoever rides in it dies, a
     /// blast around it, back at its spawn after the map says.
-    fn wreck(&mut self, i: usize, att: usize, _cause: u16) {
-        let v = self.vehicles[i];
-        let back = self.map.vehicles.get(v.home as usize).map_or(30_000, |d| d.respawn_ms);
-        self.vehicles[i] = Vehicle {
-            active: false,
-            respawn: ticks(back).max(1),
-            home: v.home,
-            pos: v.pos,
-            yaw: v.yaw,
-            ..Vehicle::default()
-        };
-        self.events.push(Event {
-            kind: Ev::Wreck,
-            a: att as u8,
-            part: i as u8,
-            pos: v.pos,
-            ..Event::default()
-        });
+    fn wreck(&mut self, i: usize, att: usize) {
+        let v = self.lose_vehicle(i, att as u8);
         for &x in &v.seats {
             if x != 0 {
                 let q = x as usize - 1;
-                self.fighters[q].ride = 0;
                 if self.fighters[q].alive {
                     self.kill(att, q, Cause::Wreck as u16, false);
                 }
@@ -1758,6 +1800,36 @@ impl World {
             1.0,
             Cause::Wreck as u16,
         );
+    }
+
+    /// Vehicle `i` is gone (`by`'s doing, or [`NO_WINNER`]'s: nobody's):
+    /// everyone out of it, the Wreck, and its countdown to coming back at
+    /// its spawn after the map says. What it was, riders and all.
+    fn lose_vehicle(&mut self, i: usize, by: u8) -> Vehicle {
+        let v = self.vehicles[i];
+        for &x in &v.seats {
+            let q = (x as usize).wrapping_sub(1);
+            if x != 0 && self.fighters[q].riding().is_some_and(|(r, _)| r == i) {
+                self.leave_vehicle(q);
+            }
+        }
+        let back = self.map.vehicles.get(v.home as usize).map_or(30_000, |d| d.respawn_ms);
+        self.vehicles[i] = Vehicle {
+            active: false,
+            respawn: ticks(back).max(1),
+            home: v.home,
+            pos: v.pos,
+            yaw: v.yaw,
+            ..Vehicle::default()
+        };
+        self.events.push(Event {
+            kind: Ev::Wreck,
+            a: by,
+            part: i as u8,
+            pos: v.pos,
+            ..Event::default()
+        });
+        v
     }
 
     /// A destroyed vehicle counts down to coming back at its spawn.
@@ -1873,9 +1945,9 @@ impl World {
     /// The void: a fighter whose feet are under it has fallen to its death,
     /// the kill of whoever last hurt it if that was within
     /// [`FALL_CREDIT_MS`] on its feet (and they're still here), else its
-    /// own; a vehicle under it is lost (its riders fell first), back at its
-    /// spawn after the map says. The credit's clock runs here too, on the
-    /// ground only.
+    /// own; a vehicle under it is lost (its riders fell first), a Wreck by
+    /// nobody, back at its spawn after the map says. The credit's clock
+    /// runs here too, on the ground only.
     fn falls(&mut self) {
         let void = self.map.void;
         if void == f32::NEG_INFINITY {
@@ -1905,23 +1977,9 @@ impl World {
         }
         for i in 0..MAX_VEHICLES {
             let v = self.vehicles[i];
-            if !v.active || v.pos.y >= void {
-                continue;
+            if v.active && v.pos.y < void {
+                self.lose_vehicle(i, NO_WINNER);
             }
-            for &x in &v.seats {
-                if x != 0 {
-                    self.fighters[x as usize - 1].ride = 0;
-                }
-            }
-            let back = self.map.vehicles.get(v.home as usize).map_or(30_000, |d| d.respawn_ms);
-            self.vehicles[i] = Vehicle {
-                active: false,
-                respawn: ticks(back).max(1),
-                home: v.home,
-                pos: v.pos,
-                yaw: v.yaw,
-                ..Vehicle::default()
-            };
         }
     }
 
@@ -2490,7 +2548,6 @@ impl World {
                 continue;
             }
             let f = &mut self.fighters[s];
-            let mut took = false;
             let frags = d.frags.min(GREN_MAX.saturating_sub(f.grenades));
             let stickies = d.stickies.min(GREN_MAX.saturating_sub(f.stickies));
             if frags + stickies > 0 {
@@ -2498,8 +2555,11 @@ impl World {
                 f.stickies += stickies;
                 d.frags -= frags;
                 d.stickies -= stickies;
-                took = true;
             }
+            // What the event names: the gun whose rounds were taken, else
+            // the grenades (`events::Kind::Pickup`).
+            let gun = d.gun.arm;
+            let mut rounds = false;
             let a = arm(d.gun.arm);
             if d.gun.arm != NONE && !a.hot() {
                 for h in f.guns.iter_mut().chain(core::iter::once(&mut f.left)) {
@@ -2512,10 +2572,10 @@ impl World {
                     h.reserve += from_reserve + from_mag;
                     d.gun.reserve -= from_reserve;
                     d.gun.mag -= from_mag;
-                    took |= from_reserve + from_mag > 0;
+                    rounds |= from_reserve + from_mag > 0;
                 }
             }
-            if !took {
+            if !rounds && frags + stickies == 0 {
                 continue;
             }
             if d.gun.arm != NONE && d.gun.spent() {
@@ -2523,10 +2583,17 @@ impl World {
             }
             d.active = !d.spent();
             self.drops[i] = d;
+            let c = if rounds {
+                gun
+            } else if frags > 0 {
+                crate::arms::FRAGS
+            } else {
+                crate::arms::STICKIES
+            };
             self.events.push(Event {
                 kind: Ev::Pickup,
                 a: s as u8,
-                c: d.gun.arm as u16,
+                c: c as u16,
                 pos: d.pos,
                 ..Event::default()
             });
@@ -2782,6 +2849,43 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_pool_gives_the_oldest_shard_s_slot_and_never_a_rocket_s() {
+        let mut w = World::new(Map::open(), Rules::ffa(), 1, (0, 0));
+        for (i, p) in w.proj.iter_mut().enumerate() {
+            let kind = if i % 2 == 0 { ProjKind::Rocket } else { ProjKind::Needle };
+            *p = Projectile {
+                active: true,
+                kind,
+                age: (i as u16 * 7) % 50,
+                ..Projectile::default()
+            };
+        }
+        let oldest = (0..MAX_PROJ)
+            .filter(|&i| i % 2 == 1)
+            .max_by_key(|&i| (w.proj[i].age, MAX_PROJ - i))
+            .unwrap();
+        let frag = Projectile {
+            kind: ProjKind::Frag,
+            ..Projectile::default()
+        };
+        assert!(w.launch(frag, 3));
+        assert_eq!((w.proj[oldest].kind, w.proj[oldest].owner), (ProjKind::Frag, 3));
+        // Being flown, a shard keeps its slot.
+        let next = (0..MAX_PROJ)
+            .filter(|&i| w.proj[i].kind == ProjKind::Needle)
+            .max_by_key(|&i| (w.proj[i].age, MAX_PROJ - i))
+            .unwrap();
+        w.flying = next;
+        assert!(w.launch(frag, 4));
+        assert_eq!(w.proj[next].kind, ProjKind::Needle);
+        w.flying = MAX_PROJ;
+        for p in w.proj.iter_mut() {
+            p.kind = ProjKind::Rocket;
+        }
+        assert!(!w.launch(frag, 5), "no shard or bolt to give: not made");
+    }
 
     /// A hemisphere 2 m round at the origin, a flat floor round it.
     fn dome() -> Map {
