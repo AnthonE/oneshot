@@ -741,7 +741,12 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     )
     .add_systems(
         PostUpdate,
-        (look::bodies::pose_spines, look::rag::step)
+        (
+            look::bodies::unpose_limbs,
+            look::bodies::pose_spines,
+            look::bodies::pose_limbs,
+            look::rag::step,
+        )
             .chain()
             .after(bevy::app::AnimationSystems)
             .before(bevy::transform::TransformSystems::Propagate),

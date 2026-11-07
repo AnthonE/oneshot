@@ -82,14 +82,15 @@ impl Clip {
     }
 
     /// The ground speed a locomotion loop's feet were authored for, m/s:
-    /// Gates measured them off the same rig (the planted foot against the
-    /// hips over the stance). `None` for what is not a locomotion loop.
+    /// how fast its planted toes go back under it, measured on every run by
+    /// `tests/anim.rs` (`every_stride_is_what_its_clip_does`). `None` for
+    /// what is not a locomotion loop.
     pub fn stride_mps(self) -> Option<f32> {
         match self {
-            Clip::Walk => Some(1.05),
-            Clip::Jog => Some(3.97),
-            Clip::Sprint => Some(5.66),
-            Clip::CrouchWalk => Some(0.5),
+            Clip::Walk => Some(1.15),
+            Clip::Jog => Some(3.87),
+            Clip::Sprint => Some(5.63),
+            Clip::CrouchWalk => Some(0.55),
             _ => None,
         }
     }
@@ -638,6 +639,12 @@ impl Playing {
     /// How much of the arms the reload owns, 0..1.
     pub fn reload_share(&self) -> f32 {
         self.reload_u
+    }
+
+    /// How much of the arms the long hold owns under no reload, 0..1: what
+    /// the left hand on a long gun's fore-end is weighed by (`ik.rs`).
+    pub fn long_hold(&self) -> f32 {
+        self.hold_u[Hold::Long.slot()] * (1.0 - self.reload_u)
     }
 
     /// How much of the head and spine the holds own between them, 0..1:

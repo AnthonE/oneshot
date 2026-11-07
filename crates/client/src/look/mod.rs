@@ -29,6 +29,7 @@ pub mod gun_skin;
 pub mod guns;
 pub mod hands;
 pub mod icons;
+pub mod ik;
 pub mod isle_stone;
 pub mod keel;
 pub mod lying;
