@@ -45,8 +45,9 @@
 //!   is drawn, and a fighter in the shade there would stand in sunlight.
 //!   Cascades and the map size only sharpen the shade.
 //! - **Smoke and marks** are pooled the same on every rung (`fx::Caps`);
-//!   EFFECTS moves only sparks, tracers and flash lights, which show and
-//!   never hide.
+//!   EFFECTS moves only sparks and flash lights, which show and never
+//!   hide. Tracers say where a shot came from, so they are the same on
+//!   every rung too (`fx::tracers::CAP`).
 //! - **Grass and ground clutter** are drawn the same on every rung, every
 //!   tuft and piece to `grass::DRAW_M`: there is no GRASS row. They stand
 //!   under a crouching fighter's hit box on his own ground, but over a

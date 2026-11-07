@@ -16,6 +16,7 @@ use sim::arms::{
 use super::atlas::{ARC, FLAME, GLOW, PUFF, RING, SMOKE, SPECK, STAR, STREAK};
 use super::pool::{Orient, Particle, Pool};
 use super::sheets::{self, Strip, TONE_FIRE};
+use super::tracers::{Kind as TracerKind, Tracer, Tracers};
 use ::fx::recipe::Recipe;
 use std::sync::OnceLock;
 
@@ -950,16 +951,30 @@ pub enum Casing {
 pub struct GunLook {
     pub flash: Flash,
     pub casing: Casing,
-    /// The tracer's colour, linear HDR, at its head and as it goes.
-    pub c0: [f32; 4],
-    pub c1: [f32; 4],
+    /// The tracer (`tracers.rs`): its core's colour, white-hot, and its
+    /// glow's, linear HDR.
+    pub core: [f32; 3],
+    pub edge: [f32; 3],
     /// Every how many rounds a tracer is drawn (1: each).
     pub every: u16,
-    /// The tracer's drawn speed (m/s), longest streak (m), width (m).
+    /// The tracer's drawn speed (m/s), its streak (m), how fast its tail
+    /// chases from the muzzle (m/s, 0: none), how long it lives (s), fading
+    /// in place.
     pub mps: f32,
     pub len_m: f32,
+    pub drain: f32,
+    pub life_s: f32,
+    /// Its half-width at the head (m), and the most that is drawn (pixels
+    /// at 1080p): a round passing the eye is a needle, not a beam.
     pub width: f32,
-    /// A smoke wake along the line that hangs this long (s); 0: none.
+    pub px: f32,
+    /// A beam stands whole this long (s); 0: a round that flies.
+    pub hold_s: f32,
+    /// Ours is a short dash out of the flash, not its line: the
+    /// references' own rifles draw a dash or nothing (Halo: nothing, the
+    /// flash and the hit carry it), never a line from the gun to the wall.
+    pub dash: bool,
+    /// A vapour wake along the line that hangs this long (s); 0: none.
     pub wake_s: f32,
     /// The muzzle: its core's colour, the flash's size, the light (lumens).
     pub flash_c: [f32; 4],
@@ -970,12 +985,17 @@ pub struct GunLook {
 const RIFLE: GunLook = GunLook {
     flash: Flash::Powder,
     casing: Casing::Brass,
-    c0: [6.0, 3.6, 1.1, 0.9],
-    c1: [3.5, 1.8, 0.5, 0.5],
+    core: [10.0, 8.6, 6.4],
+    edge: [3.4, 1.1, 0.42],
     every: 1,
-    mps: 300.0,
-    len_m: 5.0,
-    width: 0.014,
+    mps: 1500.0,
+    len_m: 14.0,
+    drain: 120.0,
+    life_s: 0.1,
+    width: 0.02,
+    px: 5.0,
+    hold_s: 0.0,
+    dash: true,
     wake_s: 0.0,
     flash_c: [7.0, 4.6, 2.0, 1.0],
     flash_scale: 1.0,
@@ -987,12 +1007,15 @@ const RIFLE: GunLook = GunLook {
 /// of its side (two a frame: `shots.rs`). Its barrels' heat and smoke are
 /// `look/turret.rs`'s.
 pub const MINIGUN: GunLook = GunLook {
-    c0: [9.0, 4.2, 1.0, 1.0],
-    c1: [5.0, 1.8, 0.35, 0.6],
+    core: [10.0, 7.5, 4.2],
+    edge: [4.0, 1.3, 0.3],
     every: 2,
-    mps: 380.0,
+    mps: 1500.0,
+    len_m: 16.0,
+    drain: 150.0,
+    life_s: 0.08,
     width: 0.024,
-    len_m: 9.0,
+    px: 6.0,
     flash_c: [8.0, 4.8, 1.8, 1.0],
     flash_scale: 1.7,
     light_lm: 220_000.0,
@@ -1001,35 +1024,46 @@ pub const MINIGUN: GunLook = GunLook {
 
 pub fn gun(arm: u8) -> GunLook {
     // Blue-white, the precision rifles' and the SMG's; the sniper's a hot red.
-    let blue = ([4.0, 7.0, 12.0, 0.9], [1.5, 3.0, 6.0, 0.5]);
+    let blue = ([7.5, 9.0, 11.0], [0.9, 1.8, 4.2]);
     match arm {
         AR => GunLook { every: 2, ..RIFLE },
         SMG => GunLook {
-            c0: blue.0,
-            c1: blue.1,
+            core: blue.0,
+            edge: blue.1,
             every: 2,
-            width: 0.012,
+            width: 0.016,
             flash_scale: 0.8,
             ..RIFLE
         },
         BR => GunLook {
-            c0: blue.0,
-            c1: blue.1,
-            mps: 340.0,
+            core: blue.0,
+            edge: blue.1,
+            mps: 1800.0,
+            len_m: 18.0,
+            drain: 150.0,
             ..RIFLE
         },
         MAGNUM => GunLook {
-            width: 0.016,
+            width: 0.022,
+            len_m: 12.0,
+            life_s: 0.09,
             flash_scale: 1.2,
             ..RIFLE
         },
+        // Halo's: the whole line in a frame, gone from the shooter's end
+        // first (half of it in about 70 ms), a hot dot where it landed,
+        // then a wisp of vapour for a second.
         SNIPER => GunLook {
-            c0: [16.0, 3.0, 1.6, 1.0],
-            c1: [6.0, 0.8, 0.3, 0.6],
-            mps: 600.0,
-            len_m: 14.0,
+            core: [12.0, 8.0, 5.5],
+            edge: [4.5, 0.9, 0.3],
+            mps: 6000.0,
+            len_m: 400.0,
+            drain: 380.0,
+            life_s: 0.3,
             width: 0.022,
-            wake_s: 1.6,
+            px: 4.0,
+            dash: false,
+            wake_s: 1.0,
             flash_scale: 2.0,
             light_lm: 260_000.0,
             ..RIFLE
@@ -1037,9 +1071,12 @@ pub fn gun(arm: u8) -> GunLook {
         SHOTGUN => GunLook {
             casing: Casing::Shell,
             every: 3,
-            mps: 220.0,
-            len_m: 2.5,
-            width: 0.010,
+            mps: 800.0,
+            len_m: 3.0,
+            drain: 0.0,
+            life_s: 0.07,
+            width: 0.012,
+            px: 2.5,
             flash_scale: 1.9,
             light_lm: 220_000.0,
             ..RIFLE
@@ -1048,22 +1085,27 @@ pub fn gun(arm: u8) -> GunLook {
         CARBINE => GunLook {
             flash: Flash::Energy(sheets::TONE_GREEN),
             casing: Casing::None,
-            c0: [2.0, 9.0, 3.0, 0.9],
-            c1: [0.6, 3.5, 1.0, 0.5],
+            core: [6.0, 11.0, 7.0],
+            edge: [0.4, 3.0, 0.8],
             flash_c: [3.0, 9.0, 3.5, 1.0],
-            mps: 340.0,
+            mps: 500.0,
+            len_m: 3.0,
+            drain: 0.0,
+            life_s: 0.12,
+            dash: false,
             ..RIFLE
         },
-        // A beam: pink-violet, all of its line in a frame.
+        // A beam: pink-violet, the whole line at once, held a moment.
         BEAM_RIFLE => GunLook {
             flash: Flash::Energy(sheets::TONE_PINK),
             casing: Casing::None,
-            c0: [9.0, 3.0, 14.0, 1.0],
-            c1: [3.0, 0.8, 5.0, 0.6],
+            core: [10.0, 5.0, 14.0],
+            edge: [3.0, 0.6, 5.0],
             flash_c: [8.0, 3.0, 12.0, 1.0],
-            mps: 3000.0,
-            len_m: 60.0,
-            width: 0.03,
+            hold_s: 0.14,
+            width: 0.02,
+            px: 6.0,
+            dash: false,
             flash_scale: 1.5,
             light_lm: 200_000.0,
             ..RIFLE
@@ -1172,62 +1214,85 @@ pub fn shatter(glow: &mut Pool, at: Vec3, n: usize, speed: f32) {
     });
 }
 
-/// Seconds of a tracer's flight its streak is drawn over.
-const TRACER_STRETCH_S: f32 = 0.02;
+/// A tracer's head: its hot dot, times its core.
+const TRACER_HEAD: f32 = 1.2;
 
-/// A tracer from `start` along `dir`, `dist` metres, in `look`'s colours.
-/// A streak trails its whole length behind its head (`fx::pool`), so the
-/// head is born that far along: born at `start`, the first frame's tail ran
-/// back through the gun, the shooter and whatever stood behind them.
-pub fn tracer(pool: &mut Pool, look: &GunLook, start: Vec3, dir: Vec3, dist: f32) {
-    if dist <= 1.0 {
-        return;
-    }
-    let len_max = look.len_m.min(dist);
-    let len = (look.mps * TRACER_STRETCH_S).min(len_max);
-    let life = ((dist - len) / look.mps).clamp(0.02, 1.0);
-    pool.spawn(Particle {
-        left: life,
-        life,
-        pos: (start + dir * len).into(),
-        vel: (dir * look.mps).into(),
-        size0: look.width,
-        size1: look.width * 0.7,
-        c0: look.c0,
-        c1: look.c1,
-        cell: STREAK,
-        orient: Orient::Stretch,
-        stretch: TRACER_STRETCH_S,
-        len_max,
-        ..Particle::default()
+/// A round's line from `from` to what it met at `to`, in `look`'s colours
+/// (`tracers.rs`): one that flies, or a beam that stands. It comes up to
+/// full over `fade_in` metres, out of the flash.
+pub fn tracer(lines: &mut Tracers, look: &GunLook, from: Vec3, to: Vec3, fade_in: f32) {
+    let beam = look.hold_s > 0.0;
+    lines.fire(Tracer {
+        kind: if beam { TracerKind::Beam } else { TracerKind::Round },
+        from,
+        to,
+        mps: look.mps,
+        len: look.len_m,
+        drain: look.drain,
+        width: look.width,
+        px: look.px,
+        core: look.core,
+        edge: look.edge,
+        head: TRACER_HEAD,
+        fade_in,
+        life: if beam { look.hold_s } else { look.life_s },
+        ..Default::default()
     });
 }
 
-/// A smoke wake hanging along a line (a sniper round's), as puffs.
-pub fn wake(pool: &mut Pool, from: Vec3, to: Vec3, life: f32) {
-    let len = from.distance(to);
-    let n = ((len / 1.2) as usize).clamp(1, 40);
-    for k in 0..n {
-        let t = (k as f32 + pool.roll()) / n as f32;
-        let at = from.lerp(to, t);
-        let l = life * (0.8 + 0.4 * pool.roll());
-        let roll = pool.roll() * core::f32::consts::TAU;
-        let vel = Vec3::new(pool.signed(), pool.signed() + 0.6, pool.signed()) * 0.15;
-        let spin = pool.signed() * 0.3;
-        pool.spawn(Particle {
-            left: l,
-            life: l,
-            pos: at.into(),
-            vel: vel.into(),
-            size0: 0.05,
-            size1: 0.32,
-            c0: [0.8, 0.8, 0.82, 0.3],
-            c1: [0.85, 0.85, 0.85, 0.0],
-            drag: 0.8,
-            roll,
-            spin,
-            cell: SMOKE + (k % 2) as u8,
-            ..Particle::default()
-        });
+/// Our own dash (`GunLook::dash`): this long (m), this fast (m/s), this
+/// long in view (s), this bright and this wide at most (pixels), its head
+/// this hot. A dash a hand's span out of the flash, toward the crosshair,
+/// for two or three frames: the flash and the hit carry the shot.
+const DASH_M: f32 = 2.6;
+const DASH_MPS: f32 = 160.0;
+const DASH_S: f32 = 0.05;
+const DASH_GAIN: f32 = 0.9;
+const DASH_PX: f32 = 2.0;
+const DASH_HEAD: f32 = 0.5;
+
+/// Our own round from the muzzle as drawn toward what it met: a dash out
+/// of the flash ([`GunLook::dash`]), or its line, as anyone's.
+pub fn own_tracer(lines: &mut Tracers, look: &GunLook, from: Vec3, to: Vec3, fade_in: f32) {
+    if !look.dash {
+        tracer(lines, look, from, to, fade_in);
+        return;
     }
+    lines.fire(Tracer {
+        kind: TracerKind::Round,
+        from,
+        to,
+        mps: DASH_MPS,
+        len: DASH_M,
+        width: look.width,
+        px: DASH_PX,
+        core: look.core.map(|c| c * DASH_GAIN),
+        edge: look.edge.map(|c| c * DASH_GAIN),
+        head: DASH_HEAD,
+        fade_in,
+        life: DASH_S,
+        ..Default::default()
+    });
+}
+
+/// A wake's half-width at first (m), its colour (premultiplied by how much
+/// it covers: pale vapour) and how much it covers at most.
+const WAKE_W: f32 = 0.02;
+const WAKE_C: [f32; 3] = [0.62, 0.64, 0.68];
+
+/// The vapour a heavy round leaves along its line, hanging `life` seconds:
+/// widening, thinning and tearing (`tracers.rs`), out of view for its first
+/// `fade_in` metres.
+pub fn wake(lines: &mut Tracers, from: Vec3, to: Vec3, life: f32, fade_in: f32) {
+    lines.fire(Tracer {
+        kind: TracerKind::Wake,
+        from,
+        to,
+        width: WAKE_W,
+        core: WAKE_C,
+        edge: [0.0; 3],
+        fade_in,
+        life,
+        ..Default::default()
+    });
 }

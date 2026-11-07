@@ -533,6 +533,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
+    .add_plugins(MaterialPlugin::<look::fx::tracers::TracerMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::plasma::PlasmaMaterial>::default())
     .add_plugins(MaterialPlugin::<look::powerup::PowerupMaterial>::default())
     // Your own body, cast in the sun's shadow and drawn by no camera
@@ -586,6 +587,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::portrait::setup,
             (
                 look::fx::setup,
+                look::fx::tracers::setup,
                 look::fx::plasma::setup,
                 look::powerup::setup,
                 look::blade::setup,
@@ -690,7 +692,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             )
                 .chain(),
             look::viewmodel::shimmer,
-            (look::fx::ambient::drive, look::fx::draw).chain(),
+            (look::fx::ambient::drive, look::fx::draw, look::fx::tracers::draw).chain(),
             // The HUD is hidden off a match (`front::hud_shown`): nothing
             // to draw into it there.
             hud::draw.run_if(in_match),
