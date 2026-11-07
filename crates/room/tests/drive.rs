@@ -86,7 +86,9 @@ fn a_passenger_is_sent_the_stick_its_driver_drives_by() {
     assert_eq!(r.room.world.fighters[a as usize].riding(), Some((0, DRIVER)));
     assert_eq!(r.room.world.fighters[b as usize].riding(), Some((0, PASSENGER)));
 
-    // Each stick held a while; -128 is run (and sent) as -127.
+    // Each stick held an odd number of ticks, so some change on a snapshot's
+    // tick and some between: every snapshot carries the one run on its own
+    // tick, never an older. -128 is run (and sent) as -127.
     let mut sent = 0;
     for (mx, mz) in [(0i8, 127i8), (-128, 127), (90, -60), (0, 0)] {
         let drive = Input {
@@ -95,13 +97,11 @@ fn a_passenger_is_sent_the_stick_its_driver_drives_by() {
             ..Input::default()
         };
         let ran = drive.sanitized();
-        for t in 0..64 {
+        for _ in 0..63 {
             for (seat, s) in r.tick([drive, idle, idle]) {
                 if seat == b {
-                    if t > 4 {
-                        assert_eq!(s.drive, Some((ran.mx, ran.mz)), "the stick run");
-                        sent += 1;
-                    }
+                    assert_eq!(s.drive, Some((ran.mx, ran.mz)), "the stick run on tick {}", s.tick);
+                    sent += 1;
                     assert!(s.own_vehicle.is_some());
                 } else {
                     assert_eq!(s.drive, None, "seat {seat} told a stick it doesn't ride behind");

@@ -698,10 +698,17 @@ impl NetCore {
             l.throw.then(|| proj::seed_throw(f, l.sticky)),
         ];
         // The drawn body's correction: the round leaves the drawn muzzle.
-        let off = if self.pred.riding().is_some() {
-            self.voffset
-        } else {
-            self.offset
+        // Riding, the hull's, turn and all, where our seat is on it.
+        let off = match (self.pred.riding(), self.pred_v) {
+            (Some((_, seat)), Some(v)) => {
+                let eased = Vehicle {
+                    pos: v.pos + self.voffset,
+                    yaw: v.yaw.wrapping_add(turn_of(self.vyaw_off)),
+                    ..v
+                };
+                eased.mount(seat) - v.mount(seat)
+            }
+            _ => self.offset,
         };
         let k = self.latest.tick.wrapping_sub(self.latest.last_seq) as i32 as f64;
         for seed in seeds.into_iter().flatten() {
@@ -1034,13 +1041,16 @@ impl NetCore {
     }
 
     /// A round of the turret we gun, as predicted: from its muzzle on the
-    /// hull as we predict it, to where our aim meets the map.
+    /// hull as drawn (where its barrels are on screen), to where our aim
+    /// meets the map.
     fn own_turret_shot(&mut self) {
-        let f = &self.pred;
-        let (Some(v), Some((a, cause))) = (self.pred_v, self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)))
-        else {
+        let (Some(v), Some((a, cause))) = (
+            self.drawn_hull(),
+            self.pred_v.and_then(|v| sim::vehicle::turret(v.turret)),
+        ) else {
             return;
         };
+        let f = &self.pred;
         let eye = f.eye();
         let dir = aim_dir(f.yaw, f.pitch);
         let t = self.map.ray(eye, dir, a.range);
@@ -1342,6 +1352,17 @@ impl NetCore {
                         self.stick,
                         &self.map,
                     );
+                    // Our rounds the server hasn't yet leave from where the
+                    // re-run has us on their seq, not the guess that launched
+                    // them (a hull predicted on a stick its driver has since
+                    // moved): seeded a metre off, one would never be bound
+                    // to the server's. The move eases out (`on_snapshot`).
+                    let moved = f.eye() - self.after[q as usize % RING].eye();
+                    if moved != V3::ZERO {
+                        for l in self.launches.iter_mut().filter(|l| !l.bound && l.q == q) {
+                            l.seed.pos = l.seed.pos + moved;
+                        }
+                    }
                     self.after[q as usize % RING] = f;
                     self.after_v[q as usize % RING] = v;
                     q = q.wrapping_add(1);
@@ -1426,13 +1447,7 @@ impl NetCore {
     /// Riding, it is drawn in its seat on the drawn hull, so the two never
     /// part (one correction, one decision to snap or ease).
     pub fn own(&self) -> (&Fighter, V3) {
-        if let (Some((_, seat)), Some((v, p, yaw))) = (self.pred.riding(), self.own_vehicle()) {
-            let turn = (yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
-            let drawn = Vehicle {
-                pos: p,
-                yaw: turn.rem_euclid(65536.0) as u16,
-                ..v
-            };
+        if let (Some((_, seat)), Some(drawn)) = (self.pred.riding(), self.drawn_hull()) {
             return (&self.pred, drawn.mount(seat));
         }
         let a = self.alpha();
@@ -1452,6 +1467,17 @@ impl NetCore {
         let turn = v.yaw.wrapping_sub(self.prev_vyaw) as i16 as f32;
         let yaw = yaw_rad(self.prev_vyaw) + turn * a * (core::f32::consts::TAU / 65536.0) + self.vyaw_off;
         Some((v, p, yaw))
+    }
+
+    /// The hull we ride as [`Self::own_vehicle`] draws it, as a vehicle.
+    fn drawn_hull(&self) -> Option<Vehicle> {
+        let (v, p, yaw) = self.own_vehicle()?;
+        let turn = (yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+        Some(Vehicle {
+            pos: p,
+            yaw: turn.rem_euclid(65536.0) as u16,
+            ..v
+        })
     }
 
     /// Our own fighter as a body anyone would draw: where [`Self::own`]
@@ -1897,6 +1923,11 @@ fn phase_of(p: u8) -> Phase {
         1 => Phase::Playing,
         _ => Phase::Over,
     }
+}
+
+/// Radians as a turn in 1/65536, the short way.
+fn turn_of(rad: f32) -> u16 {
+    (rad * (65536.0 / core::f32::consts::TAU)).round() as i32 as u16
 }
 
 fn yaw_rad(y: u16) -> f32 {
