@@ -364,6 +364,9 @@ pub struct World {
     /// Ticks of sudden death played, the clock run out (`SUDDEN_DEATH_MS`).
     pub overtime: u32,
     pub events: Events,
+    /// How many of `events` the last tick made (read by now): the rest
+    /// came between ticks and go with the next.
+    events_read: usize,
     /// The projectile slot [`Self::projectiles`] is at (`MAX_PROJ`
     /// outside it): a full pool never gives that slot to a new round.
     flying: usize,
@@ -403,6 +406,7 @@ impl World {
             winner: NO_WINNER,
             overtime: 0,
             events: Events::default(),
+            events_read: 0,
             flying: MAX_PROJ,
             rewind: Box::default(),
             vrewind: Box::default(),
@@ -464,7 +468,9 @@ impl World {
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
     /// what it saw of that client's acks (docs/DESIGN.md §7).
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
-        self.events.clear();
+        // Last tick's events were read; any since (a seat taken between
+        // ticks: a flag let go, a seat left) are this tick's.
+        self.events.drop_first(self.events_read);
         self.tick = self.tick.wrapping_add(1);
         match self.phase {
             Phase::Countdown => {
@@ -494,6 +500,7 @@ impl World {
             *p = VPose::of(v);
         }
         self.vrewind.write(self.tick, &vposes);
+        self.events_read = self.events.as_slice().len();
     }
 
     fn play(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
@@ -1318,7 +1325,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part: 0,
-            c: (took / PT) as u16,
+            c: hp(took),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -1780,7 +1787,7 @@ impl World {
             kind: Ev::VehicleHit,
             a: att as u8,
             part: i as u8,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos,
             ..Event::default()
         });
@@ -2083,7 +2090,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -2856,6 +2863,15 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
     let (sr, cr) = crate::fmath::sin_cos(r);
     let (st, ct) = crate::fmath::sin_cos(th);
     (base * cr + (right * ct + up2 * st) * sr).norm()
+}
+
+/// Damage in points as the whole hit points an event carries: rounded, and
+/// never 0 for a hit that did some (a glancing blow still hurt, and counts).
+fn hp(pts: i32) -> u16 {
+    if pts <= 0 {
+        return 0;
+    }
+    ((pts + PT / 2) / PT).clamp(1, u16::MAX as i32) as u16
 }
 
 #[cfg(test)]

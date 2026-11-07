@@ -70,6 +70,12 @@ fn w_i32(w: &mut BitWriter, v: i32, bits: u32) -> R<()> {
     w.write(v as u32 & mask, bits)
 }
 
+/// A score as its 16 bits carry it: pinned at their ends (a match with no
+/// limit left running all night), never a snapshot that fails to encode.
+pub fn score_on_wire(sc: i32) -> i32 {
+    sc.clamp(i16::MIN as i32, i16::MAX as i32)
+}
+
 fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
     let v = r.read(bits)?;
     let shift = 32 - bits;
@@ -937,7 +943,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.flags(), 2)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
-        w_i32(&mut w, sc, 16)?;
+        w_i32(&mut w, score_on_wire(sc), 16)?;
     }
     w.write(s.phase as u32, 2)?;
     w.write(s.clock, 32)?;

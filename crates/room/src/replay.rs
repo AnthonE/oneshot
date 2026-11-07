@@ -30,8 +30,15 @@ pub fn map_by_id(id: u8) -> Option<Map> {
     sim::map::by_id(id)
 }
 
+/// The most a replay holds: past it (a match with no limit and no clock
+/// left running for hours) the recording stops and its memory goes; such a
+/// match has no replay.
+pub const MAX_BYTES: usize = 64 << 20;
+
 pub struct Recorder {
     buf: Vec<u8>,
+    /// Past [`MAX_BYTES`]: no longer recording.
+    full: bool,
     inputs: [Input; MAX_FIGHTERS],
     rewind: [u32; MAX_FIGHTERS],
     ticks: u32,
@@ -64,6 +71,7 @@ impl Recorder {
         buf.push(map);
         Recorder {
             buf,
+            full: false,
             inputs: [Input::default(); MAX_FIGHTERS],
             rewind: [0; MAX_FIGHTERS],
             ticks: 0,
@@ -71,11 +79,27 @@ impl Recorder {
     }
 
     pub fn seat(&mut self, slot: usize, team: u8) {
+        if self.full {
+            return;
+        }
         self.buf.extend_from_slice(&[b'S', slot as u8, team]);
+    }
+
+    /// Whether the recording stopped at [`MAX_BYTES`].
+    pub fn full(&self) -> bool {
+        self.full
     }
 
     /// One `World::step`'s arguments.
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind: &[u32; MAX_FIGHTERS]) {
+        if self.full {
+            return;
+        }
+        if self.buf.len() >= MAX_BYTES {
+            self.full = true;
+            self.buf = Vec::new();
+            return;
+        }
         self.buf.push(b'T');
         let mut mask = 0u16;
         for (s, i) in inputs.iter().enumerate() {
@@ -110,8 +134,12 @@ impl Recorder {
         self.ticks += 1;
     }
 
-    /// The file: everything so far, and the end as `world` now stands.
+    /// The file: everything so far, and the end as `world` now stands;
+    /// empty if the recording stopped at [`MAX_BYTES`].
     pub fn finish(&self, world: &World) -> Vec<u8> {
+        if self.full {
+            return Vec::new();
+        }
         let mut out = self.buf.clone();
         out.push(b'E');
         out.extend_from_slice(&self.ticks.to_le_bytes());

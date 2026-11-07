@@ -613,7 +613,12 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                 if let Some((dir, id, mut doc, flagged)) = files {
                     doc["replay_sha256"] = sha.clone().into();
                     let text = serde_json::to_vec_pretty(&doc).unwrap_or_default();
-                    write_whole(&dir.join(format!("{id}.osr")), replay).await;
+                    // None past the recorder's cap (a match with no limit run for hours).
+                    if replay.is_empty() {
+                        eprintln!("oneshot: {id}: too long to keep a replay of");
+                    } else {
+                        write_whole(&dir.join(format!("{id}.osr")), replay).await;
+                    }
                     if flagged {
                         write_whole(&dir.join("review").join(format!("{id}.json")), text.clone()).await;
                     }
@@ -1905,6 +1910,27 @@ fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
             }))
         })
         .collect();
+    // Those who left before the end: their numbers as they left.
+    let mut seats = seats;
+    for (s, name, st) in &r.room.departed {
+        let flags = st.flags();
+        flagged |= !flags.is_empty();
+        seats.push(serde_json::json!({
+            "seat": s,
+            "name": name.as_str(),
+            "left": true,
+            "shots": st.shots,
+            "hits": st.hits,
+            "head_hits": st.head_hits,
+            "head_rate": (st.head_rate() * 1000.0).round() / 1000.0,
+            "kills": st.kills,
+            "sightings_hit": st.reactions_ms.len(),
+            "median_reaction_ms": st.median_reaction_ms(),
+            "snaps": st.snaps,
+            "preaim_ms": st.preaim_ms,
+            "flags": flags,
+        }));
+    }
     let doc = serde_json::json!({
         "id": r.id,
         "ranked": r.room.ranked,

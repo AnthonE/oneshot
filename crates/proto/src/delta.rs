@@ -122,7 +122,7 @@ impl Keyed {
             }
             w.write(s.n_score as u32, SLOT_BITS + 1)?;
             for &sc in &s.score[..s.n_score as usize] {
-                w_i32(w, sc, 16)?;
+                w_i32(w, score_on_wire(sc), 16)?;
             }
             w.write(s.phase as u32, 2)?;
             w.write(s.clock, 32)?;
