@@ -15,6 +15,10 @@
 //! - **At the wheel** only teammates: the chase camera is behind the hull,
 //!   not where the aim leaves from, and sees round what the seat can't.
 //!
+//! Small and quiet: a name in the text face over a diamond that points at
+//! the head, fading with distance; a teammate further than [`NAME_M`] is
+//! the diamond alone, so a big team's field is not a wall of names.
+//!
 //! The tests are the sim map's own raycasts, the same on every target and
 //! every rung, so what a tag tells one player it tells every player looking
 //! the same way. None while you are dead (the death cam watches your own
@@ -36,10 +40,17 @@ const ABOVE_M: f32 = 0.3;
 /// The furthest an enemy's name is read off the crosshair, metres: past a
 /// rifle's reach a name is a label on a speck.
 pub const REACH_M: f32 = 80.0;
-const FONT_PX: f32 = 15.0;
+const FONT_PX: f32 = 13.0;
 /// A teammate's ink, and an enemy's.
-const MATE_INK: Color = Color::srgba(0.62, 0.84, 1.0, 0.95);
-const FOE_INK: Color = Color::srgba(1.0, 0.55, 0.48, 0.95);
+const MATE_INK: Color = Color::srgba(0.62, 0.84, 1.0, 0.92);
+const FOE_INK: Color = Color::srgba(1.0, 0.55, 0.48, 0.92);
+/// Past this a teammate's tag is its diamond alone, metres.
+pub const NAME_M: f32 = 35.0;
+/// A tag is whole out to `NEAR_M` and fades to `FAR_ALPHA` at [`REACH_M`].
+const NEAR_M: f32 = 12.0;
+const FAR_ALPHA: f32 = 0.5;
+/// The diamond under the name, px a side.
+const PIP_PX: f32 = 5.0;
 /// Off the screen's edge by this much in NDC, a tag is not drawn.
 const EDGE: f32 = 1.05;
 /// A tag moves when it has moved this much, percent of the screen.
@@ -50,6 +61,11 @@ const MOVE_PCT: f32 = 0.02;
 pub struct Tag {
     slot: Option<u8>,
 }
+/// A tag's name, and its diamond.
+#[derive(Component)]
+pub struct TagName;
+#[derive(Component)]
+pub struct TagPip;
 
 /// Who gets a tag this frame, and where, from the session: the pure half.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,6 +74,8 @@ pub struct Wanted {
     /// The point over the head, world.
     pub at: Vec3,
     pub mate: bool,
+    /// From the eye, metres.
+    pub dist: f32,
 }
 
 /// The aim ray from `eye` along unit `dir`: the nearest enemy it enters
@@ -101,7 +119,9 @@ pub fn draw(
     (mut want, mut foes): (Local<Vec<Wanted>>, Local<Vec<client_net::core::Drawn>>),
     root: Query<Entity, With<crate::visor::TagRoot>>,
     eye: Query<(&Transform, &Projection), With<Eye>>,
-    mut tags: Query<(&mut Tag, &mut Node, &mut Text, &mut TextColor, &mut Visibility)>,
+    mut tags: Query<(&mut Tag, &mut Node, &mut Visibility, &Children)>,
+    mut names: Query<(&mut Text, &mut TextColor, &mut Node), (With<TagName>, Without<Tag>)>,
+    mut pips: Query<&mut BackgroundColor, With<TagPip>>,
 ) {
     if !*built {
         let Ok(root) = root.single() else {
@@ -112,17 +132,36 @@ pub fn draw(
             commands.spawn((
                 ChildOf(root),
                 Tag { slot: None },
-                Text::new(""),
-                ui::bold(FONT_PX),
-                TextColor(MATE_INK),
-                ui::TEXT_SHADOW,
                 Node {
                     position_type: PositionType::Absolute,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(3.0),
                     ..default()
                 },
-                // Centred over the point, standing on it.
+                // Centred over the point, the diamond's tip on it.
                 UiTransform::from_translation(Val2::percent(-50.0, -100.0)),
                 Visibility::Hidden,
+                children![
+                    (
+                        TagName,
+                        Text::new(""),
+                        ui::semibold(FONT_PX),
+                        TextColor(MATE_INK),
+                        hud::SHADOW,
+                    ),
+                    (
+                        TagPip,
+                        Node {
+                            width: Val::Px(PIP_PX),
+                            height: Val::Px(PIP_PX),
+                            margin: UiRect::bottom(Val::Px(PIP_PX * 0.3)),
+                            ..default()
+                        },
+                        UiTransform::from_rotation(Rot2::degrees(45.0)),
+                        BackgroundColor(MATE_INK),
+                    ),
+                ],
             ));
         }
         return;
@@ -143,15 +182,18 @@ pub fn draw(
             let head = if d.crouched { HEAD_Y_CROUCH } else { HEAD_Y };
             Vec3::new(d.pos.x, d.pos.y + head + HEAD_R + ABOVE_M, d.pos.z)
         };
-        for d in others.iter().filter(|d| d.alive && d.slot != core.slot && mate(d)) {
-            want.push(Wanted {
-                slot: d.slot,
-                at: over(d),
-                mate: true,
-            });
-        }
         let h = f.body.eye_h();
         let from = V3::new(p.x, p.y + h, p.z);
+        let dist = |at: Vec3| at.distance(Vec3::new(from.x, from.y, from.z));
+        for d in others.iter().filter(|d| d.alive && d.slot != core.slot && mate(d)) {
+            let at = over(d);
+            want.push(Wanted {
+                slot: d.slot,
+                at,
+                mate: true,
+                dist: dist(at),
+            });
+        }
         let (sy, cy) = look.yaw.sin_cos();
         let (sp, cp) = look.pitch.sin_cos();
         let dir = V3::new(cp * cy, sp, cp * sy);
@@ -161,10 +203,12 @@ pub fn draw(
         }
         if let Some(slot) = aimed_at(&core.map, from, dir, &foes) {
             if let Some(d) = foes.iter().find(|d| d.slot == slot) {
+                let at = over(d);
                 want.push(Wanted {
                     slot,
-                    at: over(d),
+                    at,
                     mate: false,
+                    dist: dist(at),
                 });
             }
         }
@@ -175,7 +219,7 @@ pub fn draw(
         let ndc = to_ndc(view_from_world, proj, w.at)?;
         Some((w, ndc))
     });
-    for (mut tag, mut node, mut text, mut ink, mut vis) in &mut tags {
+    for (mut tag, mut node, mut vis, kids) in &mut tags {
         let Some((w, ndc)) = next.next() else {
             if tag.slot.is_some() {
                 tag.slot = None;
@@ -188,16 +232,27 @@ pub fn draw(
         if tag.slot != Some(w.slot) {
             tag.slot = Some(w.slot);
         }
-        // The name can land after the body does (the seat's message).
-        {
-            use std::fmt::Write as _;
-            name.clear();
-            let _ = write!(name, "{}", st.shown(w.slot));
-            if text.0 != *name {
-                text.0.clone_from(&name);
+        let ink = if w.mate { MATE_INK } else { FOE_INK };
+        let ink = ink.with_alpha(ink.alpha() * fade(w.dist));
+        let named = !w.mate || w.dist < NAME_M;
+        for &k in kids {
+            if let Ok((mut text, mut tc, mut n)) = names.get_mut(k) {
+                let shown = if named { Display::Flex } else { Display::None };
+                if n.display != shown {
+                    n.display = shown;
+                }
+                // The name can land after the body does (the seat's message).
+                use std::fmt::Write as _;
+                name.clear();
+                let _ = write!(name, "{}", st.shown(w.slot));
+                if text.0 != *name {
+                    text.0.clone_from(&name);
+                }
+                tc.set_if_neq(TextColor(ink));
+            } else if let Ok(mut bg) = pips.get_mut(k) {
+                bg.set_if_neq(BackgroundColor(ink));
             }
         }
-        ink.set_if_neq(TextColor(if w.mate { MATE_INK } else { FOE_INK }));
         let (left, top) = ((ndc.x + 1.0) * 50.0, (1.0 - ndc.y) * 50.0);
         let moved = |v: Val, to: f32| !matches!(v, Val::Percent(at) if (at - to).abs() < MOVE_PCT);
         if moved(node.left, left) || moved(node.top, top) {
@@ -208,6 +263,14 @@ pub fn draw(
             *vis = Visibility::Inherited;
         }
     }
+}
+
+/// A tag's alpha at `dist` metres: whole near, [`FAR_ALPHA`] at the reach,
+/// in twentieths (a colour written only when it moves a step).
+fn fade(dist: f32) -> f32 {
+    let u = ((dist - NEAR_M) / (REACH_M - NEAR_M)).clamp(0.0, 1.0);
+    let a = 1.0 - (1.0 - FAR_ALPHA) * u;
+    (a * 20.0).round() / 20.0
 }
 
 /// A world point into the camera's NDC (x right, y up, ±1 at the edges),

@@ -2,7 +2,11 @@
 and held rigid to the gun (look/hands.rs). Only the fingers are posed, as its hold
 clip has them: the right closed on a grip, the left cupped for a fore-end. The arm
 stays as it was skinned, so nothing is dragged or twisted. The hole each hand
-holds by is at the origin."""
+holds by is at the origin.
+
+`hand-sword` is the right again for a sword's hilt: its wrist flexed, the palm
+turned in toward the inner arm, fingers and thumb closed on the hilt, its arm cut
+longer so more of it shows. `-- <name>…` builds only those."""
 import os
 import sys
 
@@ -12,10 +16,10 @@ import math
 
 import bmesh
 from lib import *
-from mathutils import Matrix
+from mathutils import Matrix, Quaternion
 
 # What it builds, each from that side's arm; build.sh finds a model's script by this.
-HANDS = {'Right': 'hand', 'Left': 'hand-left'}
+HANDS = {'hand': 'Right', 'hand-left': 'Left', 'hand-sword': 'Right'}
 CLIP = 'Rifle_Hold_Loop'
 # Triple T's hands are a big man's: how big it is drawn against the guns.
 SCALE = 0.85
@@ -24,10 +28,18 @@ SCALE = 0.85
 LIFT = 1.54
 # Where each arm is cut, as a share of the way from the wrist to the elbow: the
 # right runs straight out of the frame, the left across it, past the elbow.
-CUT = {'Right': 1.12, 'Left': 1.9}
+CUT = {'hand': 1.12, 'hand-left': 1.9, 'hand-sword': 2.7}
 # The hole against the middle finger's joints: along the hand from the knuckle,
 # and from the back of the hand toward the palm, metres at its own size.
 HOLE = {'Right': (-0.018, 0.036), 'Left': (-0.018, 0.036)}
+# The sword's: which way the forearm comes to the hand, in the hand's frame (along
+# the knuckles, toward the thumb's side, toward the back of the hand): the wrist
+# flexed 35 degrees and nothing else, as the operator chose it. To move the arm,
+# move the whole arm in viewmodel.rs; this changes the wrist. How much further each
+# finger joint closes and each thumb joint comes in over the hilt, degrees.
+SWORD_FOREARM = (0.819, 0.0, 0.574)
+SWORD_CURL = 14.0
+SWORD_THUMB = (24.0, 22.0)
 
 
 def bone(rig, name):
@@ -51,6 +63,43 @@ def fingers_closed(rig, side):
     bpy.context.view_layer.update()
 
 
+def axes(rig, side):
+    """The hand's frame in the rig's own space: along the knuckles, toward the
+    thumb, out of its back."""
+    wrist = rig.pose.bones[side + 'Hand'].head
+    along = (rig.pose.bones[side + 'HandMiddle1'].head - wrist).normalized()
+    thumb = rig.pose.bones[side + 'HandIndex1'].head - rig.pose.bones[side + 'HandPinky1'].head
+    thumb = (thumb - along * thumb.dot(along)).normalized()
+    return along, thumb, along.cross(thumb)
+
+
+def turned(rig, name, axis, degrees):
+    """Bone `name` and all it carries turned about `axis` through its head."""
+    b = rig.pose.bones[name]
+    turn = Quaternion(axis, math.radians(degrees)).to_matrix().to_4x4()
+    b.matrix = Matrix.Translation(b.head) @ turn @ Matrix.Translation(-b.head) @ b.matrix
+    bpy.context.view_layer.update()
+
+
+def sword_grip(rig, side):
+    """The wrist bent and the fingers closed on a hilt."""
+    along, thumb, back = axes(rig, side)
+    forearm = (rig.pose.bones[side + 'Hand'].head - rig.pose.bones[side + 'ForeArm'].head).normalized()
+    want = (along * SWORD_FOREARM[0] + thumb * SWORD_FOREARM[1] + back * SWORD_FOREARM[2]).normalized()
+    b = rig.pose.bones[side + 'Hand']
+    turn = want.rotation_difference(forearm).to_matrix().to_4x4()
+    b.matrix = Matrix.Translation(b.head) @ turn @ Matrix.Translation(-b.head) @ b.matrix
+    bpy.context.view_layer.update()
+    along, thumb, back = axes(rig, side)
+    for finger in ('Index', 'Middle', 'Ring', 'Pinky'):
+        for joint in '123':
+            turned(rig, f'{side}Hand{finger}{joint}', thumb, SWORD_CURL)
+    turned(rig, side + 'HandThumb1', along, -SWORD_THUMB[0])
+    turned(rig, side + 'HandThumb1', back, -SWORD_THUMB[1])
+    for joint in '23':
+        turned(rig, f'{side}HandThumb{joint}', along, -SWORD_THUMB[0] * 0.7)
+
+
 def hand_frame(rig, side):
     """World to gun space with the hand laid in it: its hole at the origin, the
     knuckles toward +X, the back of the hand +Z; the thumb's side +Y on the right
@@ -69,11 +118,11 @@ def hand_frame(rig, side):
     return Matrix.Scale(SCALE, 4) @ turn @ Matrix.Translation(-hole)
 
 
-def cut_arm(me, rig, side):
+def cut_arm(me, rig, side, name):
     """Only this arm, wrist to just past the elbow, its end capped."""
     wrist = bone(rig, side + 'Hand')
     elbow = bone(rig, side + 'ForeArm')
-    at = wrist + (elbow - wrist) * CUT[side]
+    at = wrist + (elbow - wrist) * CUT[name]
     bm = bmesh.new()
     bm.from_mesh(me)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
@@ -97,16 +146,18 @@ def cut_arm(me, rig, side):
     bm.free()
 
 
-def baked(side):
+def baked(side, name):
     """This arm as one still mesh in gun space."""
     bpy.ops.import_scene.gltf(filepath=os.path.join(MODELS, 'triple-t.glb'))
     arms = bpy.data.objects['char1_arms']
     rig = arms.parent
     fingers_closed(rig, side)
+    if name == 'hand-sword':
+        sword_grip(rig, side)
     dg = bpy.context.evaluated_depsgraph_get()
     me = bpy.data.meshes.new_from_object(arms.evaluated_get(dg), depsgraph=dg)
     me.transform(arms.matrix_world)
-    cut_arm(me, rig, side)
+    cut_arm(me, rig, side, name)
     me.transform(hand_frame(rig, side))
     # Its seams were split for the file: smooth across them again.
     me.polygons.foreach_set('use_smooth', [True] * len(me.polygons))
@@ -133,9 +184,11 @@ def export(o, name):
 
 
 if __name__ == '__main__':
-    for side, name in HANDS.items():
+    only = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else list(HANDS)
+    for name in only:
+        side = HANDS[name]
         scene()
-        o = baked(side)
+        o = baked(side, name)
         darken(o, LIFT)
         os.makedirs(TRACES, exist_ok=True)
         sheet(o, os.path.join(TRACES, name + '.png'), title=name, fist=(0.0, 0.0))

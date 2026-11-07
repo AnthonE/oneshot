@@ -70,6 +70,9 @@ use pool::{pool_mesh, MeshWrite, Pool};
 use sheets::SheetMaterial;
 use table::{Layer, Matter, Weapon, Which};
 
+/// How bright a font's flame burns, over the fire recipe's.
+const BLUE_FLAME_GLOW: f32 = 1.3;
+
 /// `EventState::part` on a shot fog lets us only hear (room's `HEARD`):
 /// no tracer, no spark, its place rounded.
 pub const HEARD: u8 = 1;
@@ -156,6 +159,10 @@ pub struct Flash {
 
 #[derive(Resource)]
 pub struct Fx {
+    /// Who the sword just killed, for their last pose (`cels.rs`).
+    pub sword_kills: Vec<u8>,
+    /// Whose sword just swung, for their body's cut (`cels.rs`).
+    pub sword_cuts: Vec<u8>,
     pub glow: Pool,
     pub soft: Pool,
     pub cloud: Pool,
@@ -345,6 +352,27 @@ impl Fx {
             }
         }
         lod
+    }
+
+    /// A lick of blue flame at `at`, `scale` times its size: a soft burst
+    /// of the plasma sheet, rising and thinning (a font's, `ambient`).
+    pub fn blue_flame(&mut self, at: Vec3, scale: f32) {
+        let r = ::fx::recipe::Recipe {
+            glow: BLUE_FLAME_GLOW,
+            speed: (1.3, 2.6),
+            spray: 0.22,
+            gravity: -2.2,
+            drag: 1.2,
+            life: (0.32, 0.55),
+            size: (0.16, 0.26),
+            grow: 1.5,
+            c0: [0.75, 0.75, 0.75, 0.9],
+            c1: [0.6, 0.6, 0.6, 0.0],
+            spin: 0.6,
+            ..table::recipe(Layer::Plasma)
+        };
+        let pool = self.pool(Layer::Plasma.pool());
+        table::emit_recipe(pool, &r, 1, at, Vec3::Y, Color::WHITE, scale);
     }
 
     /// `n` baked bursts of energy at `at` in `tone`, `scale` times the
@@ -544,6 +572,8 @@ pub fn setup(
         own_rounds: Default::default(),
         own_vent: Default::default(),
         own_flash: [None; 2],
+        sword_kills: Vec::new(),
+        sword_cuts: Vec::new(),
         last_light: Vec::new(),
         fly: Default::default(),
         swing: (0, None),
@@ -596,7 +626,13 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
             k if k == Kind::Wreck as u8 => blast::wreck(fx, scene, from),
             k if k == Kind::Spawn as u8 => bodies::spawned(fx, from),
             k if k == Kind::Pickup as u8 => bodies::picked_up(fx, from),
-            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e, from),
+            k if k == Kind::Melee as u8 => {
+                if e.c == sim::arms::SWORD as u16 {
+                    fx.sword_cuts.push(e.a);
+                }
+                bodies::swung(fx, scene, e, from)
+            }
+            k if k == Kind::Kill as u8 && e.c == sim::arms::SWORD as u16 => fx.sword_kills.push(e.b),
             k if k == Kind::Hit as u8 => {
                 // A hit on us: the frame flinches, by how much it took.
                 if e.b == scene.me && e.a != scene.me {

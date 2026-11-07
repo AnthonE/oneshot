@@ -32,9 +32,10 @@ use super::fresnel;
 use super::rock::Bare;
 use crate::level::{Dressed, LevelPart};
 
-/// The models: three blocks, the sea stack, a base's pylon, and an island's:
-/// three wind-carved blocks, two stacks and a hanging island.
-pub const GLB: [&str; 11] = [
+/// The models: three blocks, the sea stack, a base's pylon, an island's three
+/// wind-carved blocks, two stacks and a hanging island, and the ship's props: a
+/// seed husk in three paints and a font.
+pub const GLB: [&str; 15] = [
     "models/rock/boulder_a.glb",
     "models/rock/boulder_b.glb",
     "models/rock/boulder_c.glb",
@@ -46,6 +47,10 @@ pub const GLB: [&str; 11] = [
     "models/rock/isle_stack_a.glb",
     "models/rock/isle_stack_b.glb",
     "models/rock/isle_float.glb",
+    "models/ship/husk.glb",
+    "models/ship/husk.glb",
+    "models/ship/husk.glb",
+    "models/ship/font.glb",
 ];
 /// Where an island's blocks start among them, and its stacks and hanging
 /// island (each 1 m tall on its base at the origin, as the sea stack; the
@@ -63,6 +68,23 @@ pub const STACK: usize = 3;
 /// box's side inside it on average and [`PYLON_INSET_MAX`] at its chamfered
 /// top corners (`rocks.py`'s numbers for it).
 pub const PYLON_MODEL: usize = 4;
+/// The husk, in the hull's dark, red's and blue's; the font. Each a pale
+/// cast (the paint is in its tint, [`PROP_TINT`]), enamel over metal.
+pub const HUSK_MODEL: usize = 11;
+pub const FONT_MODEL: usize = 14;
+/// Linear: the husk dark, red's, blue's, and the font.
+pub const PROP_TINT: [[f32; 3]; 4] = [
+    [0.16, 0.1, 0.32],
+    [0.5, 0.03, 0.09],
+    [0.05, 0.09, 0.55],
+    [0.4, 0.28, 0.7],
+];
+/// A prop's width in its round solid, as a share of the cube round it: what
+/// keeps its farthest point inside the circle (`rocks.py`'s `radial`, the
+/// husk's fins and the font's crest).
+pub const PROP_FIT: [f32; 2] = [0.77, 0.965];
+pub const PROP_ROUGH: f32 = 0.26;
+pub const PROP_METAL: f32 = 0.8;
 pub const PYLON_INSET_MEAN: f32 = 0.093;
 pub const PYLON_INSET_MAX: f32 = 0.201;
 /// The size each block came at before it was squared up (x, up, z;
@@ -117,6 +139,8 @@ pub struct Boulder {
 /// clear of marks.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Pylon {
+    /// Which of [`GLB`].
+    pub model: usize,
     pub at: Transform,
     pub min: Vec3,
     pub max: Vec3,
@@ -131,6 +155,28 @@ pub fn pylon_transform(at: Transform, hx: f32, h: f32, hz: f32) -> Transform {
         translation: at.translation,
         rotation: at.rotation * Quat::from_rotation_y(core::f32::consts::FRAC_PI_2),
         scale: Vec3::new(2.0 * hz, h, 2.0 * hx),
+    }
+}
+
+/// A look's model among [`GLB`] (a `level::HUSK..=FONT`).
+pub fn prop_model(look: u8) -> usize {
+    match look {
+        crate::level::HUSK => HUSK_MODEL,
+        crate::level::HUSK_RED => HUSK_MODEL + 1,
+        crate::level::HUSK_BLUE => HUSK_MODEL + 2,
+        _ => FONT_MODEL,
+    }
+}
+
+/// Where a prop is drawn in its round solid at (`x`, `z`), `r` across, from
+/// `y0` to `y1`: stretched to its height and to [`PROP_FIT`] of the cube
+/// round it, its face (+z) to the map's middle.
+pub fn round_prop_transform(look: u8, x: f32, y0: f32, y1: f32, z: f32, r: f32) -> Transform {
+    let fit = PROP_FIT[usize::from(look == crate::level::FONT)];
+    Transform {
+        translation: Vec3::new(x, (y0 + y1) * 0.5, z),
+        rotation: Quat::from_rotation_y((-x).atan2(-z)),
+        scale: Vec3::new(2.0 * r * fit, y1 - y0, 2.0 * r * fit),
     }
 }
 
@@ -481,23 +527,40 @@ impl Stones {
         // The stack keeps Meshy's paint whole: its top is green.
         for (i, h) in self.paints.clone().iter().enumerate() {
             let base = mats.get(h)?.clone();
+            let prop = i >= HUSK_MODEL;
             let tinted = |t: [f32; 3], rough: f32| StandardMaterial {
                 // The stack keeps its own paint (its top is green), and
-                // the pylon is metal, as its own material says.
+                // the pylon is metal, as its own material says; a prop is
+                // enamel in its own colour, wet or dry.
                 base_color: if i == STACK {
                     Color::WHITE
                 } else if i == PYLON_MODEL {
                     Color::linear_rgb(PYLON_TINT, PYLON_TINT, PYLON_TINT)
+                } else if prop {
+                    let c = PROP_TINT[i - HUSK_MODEL];
+                    Color::linear_rgb(c[0], c[1], c[2])
                 } else {
                     Color::linear_rgb(t[0], t[1], t[2])
                 },
-                perceptual_roughness: if i == PYLON_MODEL { PYLON_ROUGH } else { rough },
-                metallic: if i == PYLON_MODEL { PYLON_METAL } else { 0.0 },
+                perceptual_roughness: if i == PYLON_MODEL {
+                    PYLON_ROUGH
+                } else if prop {
+                    PROP_ROUGH
+                } else {
+                    rough
+                },
+                metallic: if i == PYLON_MODEL {
+                    PYLON_METAL
+                } else if prop {
+                    PROP_METAL
+                } else {
+                    0.0
+                },
                 reflectance: fresnel::DIELECTRIC,
                 ..base.clone()
             };
             let (dry, wet) = (tinted(TINT, DRY_ROUGH), tinted(WET_TINT, WET_ROUGH));
-            let pale = if i == PYLON_MODEL {
+            let pale = if i == PYLON_MODEL || prop {
                 dry.clone()
             } else {
                 tinted(ISLE_TINT, DRY_ROUGH)
@@ -578,8 +641,8 @@ pub fn dress(
             MeshMaterial3d<super::weathering::LevelMaterial>,
         )>()
         .insert((
-            Mesh3d(stones.meshes[PYLON_MODEL].clone()),
-            MeshMaterial3d(stones.dry[PYLON_MODEL].clone()),
+            Mesh3d(stones.meshes[p.model].clone()),
+            MeshMaterial3d(stones.dry[p.model].clone()),
             p.at,
             Bare(p.min, p.max),
             Dressed,

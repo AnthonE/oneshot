@@ -367,6 +367,31 @@ impl Map {
         t
     }
 
+    /// [`Self::ray`] asking every box and solid: a NaN direction crosses no
+    /// grid cell past its first, so its walk would answer by what stands there.
+    fn ray_all(&self, o: V3, d: V3, tmax: f32) -> f32 {
+        let mut t = tmax;
+        match &self.terrain {
+            None => {
+                if d.y < 0.0 && o.y >= 0.0 {
+                    t = t.min(-o.y / d.y);
+                }
+            }
+            Some(g) => t = g.ray(o, d, t),
+        }
+        for b in &self.boxes {
+            if let Some(h) = ray_aabb(o, d, b, t) {
+                t = h;
+            }
+        }
+        for s in &self.solids {
+            if let Some(h) = s.ray(o, d, t) {
+                t = h;
+            }
+        }
+        t
+    }
+
     /// Whether the straight line from `a` to `b` is clear: what
     /// `self.ray(a, (b − a)/l, l) >= l` says, but the first thing in the way
     /// ends the walk, where [`Self::ray`] goes on for the nearest. Fog asks
@@ -380,7 +405,7 @@ impl Map {
         // A NaN or endless line answers as the nearest hit says (blocked,
         // for NaN): fog never shows what it couldn't measure.
         if !l.is_finite() {
-            return self.ray(a, v * (1.0 / l), l) >= l;
+            return self.ray_all(a, v * (1.0 / l), l) >= l;
         }
         let d = v * (1.0 / l);
         // Clear of both the boxes and solids and the ground: the boxes'

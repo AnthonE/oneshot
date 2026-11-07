@@ -39,36 +39,13 @@ bed and a deck put in it, its textures made smaller and re-encoded as JPEG.
 Its steel panels and its tyres wear photographed materials from ambientCG
 (ambientcg.com, CC0): Metal009 (brushed steel) and Rubber004.
 
-Sounds (crates/client/assets/sound), all CC0 or public domain, cut by Gates
-(assets/sound/MANIFEST.md has every source page):
-  - The Free Firearm Sound Library (OpenGameArt), CC0: shots near and far
-  - USC Sunset Editorial / Red Library sound effects (archive.org), public
-    domain: reloads, dry fire, headshots, footsteps on stone and metal,
-    rounds flying past, metal struck
-  - Kenney (kenney.nl) Interface and UI audio, CC0: hit marker, equip
-  - Freesound uploaders, CC0: klangfabrik (revolver), felix.blume,
-    alienistcog, julujanus (blasts), tortillathrilla, unfa, leonelmail
-    (flesh, hurt, death), Nox_Sound (landing; footsteps on grass and rock),
-    cedarstudios (ricochets), and others listed in Gates' manifest
-  - Kenney RPG and Impact audio, CC0: cloth (equip_1, equip_2), light metal
-    impacts
+The sound effects (crates/client/assets/sound) are ours: made with
+ElevenLabs' sound-effects model (eleven_text_to_sound_v3) on a paid plan
+(Starter, 2026-11-04 and 2026-11-06) from the prompts in tools/sfx.mjs.
 
-Ours, made with ElevenLabs' sound-effects model (eleven_text_to_sound_v3)
-on a paid plan (Starter, 2026-11-04) from the prompts in tools/sfx.mjs: the
-shield's alarm, recharge, hits and pop; the alien guns, the vent and the
-charge; the engine, a rocket in flight, the wind; a grenade's bounce, the
-spawn, the countdown.
-
-Ours, made by tools/sfx_synth.py from noise, tones and the Kenney metal
-impacts above: the truck's landing (truck_land), its crash, its tyres'
-skid and a fire.
-
-The announcer (crates/client/assets/sound/voice) is ours. The kill ladders'
-lines and the lines about the match were made with ElevenLabs' text to
-speech (eleven_v4, the library voice Kallixis) on a paid plan (Starter,
-2026-11-04) and cut by tools/voice.sh. The rest are placeholders
-synthesized by tools/voice.sh with Flite (Carnegie Mellon University's
-speech synthesizer, BSD-style licence) through ffmpeg.
+The announcer (crates/client/assets/sound/voice) is ours: made with
+ElevenLabs' text to speech (eleven_v4, the library voice Kallixis) on a paid
+plan (Starter, 2026-11-04 and 2026-11-06) and cut by tools/voice.sh.
 
 The theme (crates/client/assets/sound/music) is ours: made with ElevenLabs'
 music model on a paid plan (Starter, 2026-11-04).

@@ -29,7 +29,7 @@ Fireplace, engine-shim and Elo Pros.
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
 | `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE); `rocks.py` the boulders, the sea stack and the bases' pylon (`look/boulders.rs`); `observatory.py` Cloudbreak's built things (`look/observatory.rs`); `hand.py` the hands in view, cut from Triple T's own arm (`look/hands.rs`); `triple-t.py` puts Triple T's clips right in its GLB (the lean, the left hand on the gun), after `tools/assets.mjs` |
 | `tools/ground.sh`, `tools/hd.sh` | the ground's and the rock's photographs, cut from Poly Haven's CC0 sets (`sources/polyhaven`), and the bases' steel and tread plate from ambientCG's (`sources/ambientcg`); a map's fixed views shot on the GPU for the look loop (the `hd` skill, the board's `hd-*` views) |
-| `tools/assets.mjs`, `tools/glb` | Triple T, sounds and textures from a Gates checkout into `crates/client/assets` |
+| `tools/assets.mjs`, `tools/glb` | Triple T and textures from a Gates checkout into `crates/client/assets` |
 | `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
 
 ## The loop
@@ -139,8 +139,9 @@ tools/models/meshy_gen.py <name> [--image-only | --roll]   # a gun's mesh from M
 tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless); `rocks`: the boulders
 node tools/maps/compile.mjs                          # maps' JSON → crates/sim/src/maps/
 cargo run -p flow --release -- <map>                 # a map's flow (traces/flow/; node tools/flow/png.mjs)
-node tools/assets.mjs [GATES_DIR]                    # art and sound from a Gates checkout
-node tools/sfx.mjs [all | reel | name…]              # our own sounds, made by ElevenLabs (the key: .env.local); bare, it lists them
+node tools/assets.mjs [GATES_DIR]                    # art from a Gates checkout
+node tools/sfx.mjs [all | reel | check | cut | name…] # every sound effect, made by ElevenLabs (the key: .env.local); bare, it lists them; `check` measures, `cut` re-cuts for free
+node tools/voice.mjs [all | line… | line take]        # the announcer's lines, the voice Kallixis; `line take` keeps a take and cuts it
 tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip from a Gates checkout
 ```
 
@@ -177,7 +178,7 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
   (`tools/models/meshy_gen.py`). The raw meshes it makes are in
   `sources/meshy`, not in the repo: a gun can't be rebuilt without its own,
   and the GLBs in `crates/client/assets/models` are what ships.
-- A Gates checkout beside this one (`../Gates`) for `tools/assets.mjs` and
+- A Gates checkout beside this one (`../Gates`) for `tools/assets.mjs` (the art) and
   `tools/fx-sync.sh`.
 
 ## Rules that stay

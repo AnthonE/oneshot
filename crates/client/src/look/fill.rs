@@ -183,6 +183,19 @@ pub mod hall {
     /// bearing along it, and the share of each band that is glass.
     pub const PANE_FREQ: f32 = 3.0;
     pub const PANE_SHARE: f32 = 0.35;
+    /// What metal reflects: its walls and vault darker than what they fill
+    /// a fighter with (`diffuse_at` keeps those), and a long soft highlight
+    /// low in the hall, where a round form catches a lit wall.
+    pub const SPEC_WALL: [f32; 3] = [0.08, 0.045, 0.15];
+    pub const SPEC_VAULT: [f32; 3] = [0.04, 0.025, 0.08];
+    pub const SHEEN: [f32; 3] = [0.9, 0.55, 0.95];
+    pub const SHEEN_SHARE: f32 = 0.55;
+    /// The specular cube's mips: how far a texel's look spreads in each,
+    /// as the tangent of the angle. The renderer picks a mip by roughness,
+    /// so without them a rough deck mirrors the strips as sharply as chrome.
+    pub const SPREAD: [f32; 7] = [0.0, 0.05, 0.1, 0.2, 0.35, 0.6, 1.0];
+    /// Looks averaged per texel in a blurred mip.
+    const SPREAD_LOOKS: usize = 16;
 
     fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         [0, 1, 2].map(|c| a[c] + (b[c] - a[c]) * t)
@@ -197,14 +210,15 @@ pub mod hall {
     pub fn specular_at(d: Vec3) -> [f32; 3] {
         let y = d.y;
         // The deck under the horizon, the wall to the vault's spring.
-        let mut c = mix(DECK, WALL, smooth(-0.25, 0.05, y));
+        let mut c = mix(DECK, SPEC_WALL, smooth(-0.25, 0.05, y));
+        c = mix(c, SHEEN, SHEEN_SHARE * smooth(0.02, 0.1, y) * smooth(0.3, 0.18, y));
         // The vault, darker than the wall, and its panes: bands across the
         // hall by the bearing along it.
         let over = smooth(0.5, 0.7, y);
         let along = d.x.atan2(y.max(1e-3));
         let band = (along * PANE_FREQ / core::f32::consts::TAU).rem_euclid(1.0);
         let pane = smooth(PANE_SHARE + 0.05, PANE_SHARE, band) * smooth(0.6, 0.8, y);
-        c = mix(c, mix(VAULT, PANE, pane), over);
+        c = mix(c, mix(SPEC_VAULT, PANE, pane), over);
         // The strips round the hall.
         let strip = smooth(STRIP_HALF, 0.0, (y - STRIP_AT).abs());
         mix(c, STRIP, strip)
@@ -239,9 +253,51 @@ pub mod hall {
         cube_image(n, data)
     }
 
+    /// `specular_at` with its mips, each a wider blur of the hall, a cube's
+    /// six faces each with its whole chain.
+    fn specular_cube() -> Image {
+        let mut data = Vec::new();
+        for face in 0..6usize {
+            for (m, &spread) in SPREAD.iter().enumerate() {
+                let n = (FACE >> m).max(1);
+                for y in 0..n {
+                    for x in 0..n {
+                        let d = cube_dir(face, x, y, n);
+                        let f = if spread == 0.0 {
+                            specular_at(d)
+                        } else {
+                            // A fixed spiral of looks round `d`, enough to
+                            // smear the bands and strips evenly.
+                            let t = d.any_orthonormal_vector();
+                            let b = d.cross(t);
+                            let mut sum = [0.0f32; 3];
+                            for k in 0..SPREAD_LOOKS {
+                                let a = k as f32 * 2.399_963;
+                                let r = spread * ((k as f32 + 0.5) / SPREAD_LOOKS as f32).sqrt();
+                                let s = specular_at((d + (t * a.cos() + b * a.sin()) * r).normalize());
+                                for c in 0..3 {
+                                    sum[c] += s[c] / SPREAD_LOOKS as f32;
+                                }
+                            }
+                            sum
+                        };
+                        for v in f {
+                            data.push((linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
+                        }
+                        data.push(255);
+                    }
+                }
+            }
+        }
+        let mut image = cube_image(FACE, vec![0; (FACE * FACE * 6 * 4) as usize]);
+        image.texture_descriptor.mip_level_count = SPREAD.len() as u32;
+        image.data = Some(data);
+        image
+    }
+
     /// The hall's two cubes: diffuse, specular.
     pub fn cubemaps() -> (Image, Image) {
-        (cube(16, diffuse_at), cube(FACE, specular_at))
+        (cube(16, diffuse_at), specular_cube())
     }
 }
 

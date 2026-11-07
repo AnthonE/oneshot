@@ -41,9 +41,9 @@ pub enum Start {
 /// The map behind the title: Chrysalis, its hall under the lamps.
 pub const BACKDROP: u8 = 6;
 /// Where the title's camera stands on it, and what it looks at; it drifts
-/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 26 m across).
-const SHOT_EYE: Vec3 = Vec3::new(-10.0, 6.5, -10.0);
-const SHOT_LOOK: Vec3 = Vec3::new(8.0, 2.0, 5.0);
+/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 58 m across).
+const SHOT_EYE: Vec3 = Vec3::new(-12.0, 10.0, -16.0);
+const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there
@@ -366,7 +366,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
         .add_systems(OnExit(Screen::Title), exit)
         .add_systems(
             Update,
-            (click, typing, scroll, rebuild, curtain)
+            (click, typing, scroll, rebuild, (gear_pics, peek), curtain)
                 .chain()
                 .run_if(in_state(Screen::Title)),
         )
@@ -801,9 +801,11 @@ fn swatch_bar(c: Color, w: f32, h: f32) -> impl Bundle {
 /// The armory's inner width: the panel's, less its padding.
 const ARMORY_W: f32 = 380.0 - 36.0;
 const TILE_GAP: f32 = 6.0;
-/// A card's width, three a row, and the skin cards' colour block.
+/// A card's width, three a row, the skin cards' colour block and the gear
+/// cards' picture (`look/thumbs.rs`' at half its pixels).
 const CARD_W: f32 = 110.0;
 const CARD_BLOCK_H: f32 = 40.0;
+const CARD_PIC_H: f32 = 56.0;
 /// The emblem's own picture, px; a glyph's tile and its picture; a shape's.
 const EMBLEM_BOX: f32 = 96.0;
 const GLYPH_TILE: f32 = 45.0;
@@ -862,32 +864,338 @@ fn tiles() -> Node {
     }
 }
 
-/// An item card: a block of colour over its name, and a note under it (a
-/// rank lock), `h` tall.
-fn card(p: &mut ChildSpawnerCommands, hit: Hit, picked: bool, h: f32, block: Option<Color>, name: &str, note: &str) {
-    p.spawn((tile(CARD_W, h, picked), hit)).with_children(|c| {
-        if let Some(colour) = block {
-            c.spawn((
-                Node {
-                    width: Val::Px(CARD_W - 2.0),
-                    height: Val::Px(CARD_BLOCK_H),
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(0.0),
-                    left: Val::Px(0.0),
-                    ..default()
-                },
-                BackgroundColor(colour.with_alpha(0.85)),
-            ));
-            c.spawn(Node {
-                height: Val::Px(CARD_BLOCK_H - 6.0),
-                ..default()
-            });
+/// What an item card shows over its name: a skin's colour, or a piece of
+/// gear's picture (`look/thumbs.rs`; none for no gear).
+enum Face {
+    Colour(Color),
+    Gear(usize, u8),
+}
+
+/// An item card: its face over its name, and under it where it stands for
+/// this wallet (owned, locked, its rank line). One it can't wear is dimmed.
+fn card(p: &mut ChildSpawnerCommands, item: Item, picked: bool, face: Face, wardrobe: Option<&proto::Wardrobe>) {
+    let stand = item.stand(wardrobe);
+    let (face_h, h) = match face {
+        Face::Colour(_) => (CARD_BLOCK_H, CARD_BLOCK_H + 36.0),
+        Face::Gear(..) => (CARD_PIC_H, CARD_PIC_H + 36.0),
+    };
+    let lit = if stand.dim { 0.4 } else { 1.0 };
+    p.spawn((tile(CARD_W, h, picked), item.hit())).with_children(|c| {
+        let at = Node {
+            width: Val::Px(CARD_W - 2.0),
+            height: Val::Px(face_h),
+            position_type: PositionType::Absolute,
+            top: Val::Px(0.0),
+            left: Val::Px(0.0),
+            ..default()
+        };
+        match face {
+            Face::Colour(colour) => {
+                c.spawn((at, BackgroundColor(colour.with_alpha(0.85 * lit))));
+            }
+            Face::Gear(_, proto::GEAR_NONE) => {
+                c.spawn((at, BackgroundColor(ui::WELL)));
+            }
+            Face::Gear(slot, g) => {
+                c.spawn((
+                    at,
+                    BackgroundColor(ui::WELL),
+                    GearPic(slot, g, lit),
+                    // Clear till its picture is put in (`gear_pics`).
+                    ImageNode::default().with_color(Color::NONE),
+                ));
+            }
         }
-        c.spawn(ui::strong(name.to_uppercase(), 13.0, ui::TITLE));
-        if !note.is_empty() {
-            c.spawn(ui::strong(note.to_string(), 9.5, ui::MARK));
+        c.spawn(Node {
+            height: Val::Px(face_h - 6.0),
+            ..default()
+        });
+        let ink = if stand.dim { ui::DIM } else { ui::TITLE };
+        c.spawn(ui::strong(item.name(), 13.0, ink));
+        if !stand.word.is_empty() {
+            c.spawn(ui::strong(stand.word, 9.5, stand.colour));
         }
     });
+}
+
+/// A gear card's picture, filled in from the studio's (`look/thumbs.rs`)
+/// once the card is up.
+#[derive(Component)]
+struct GearPic(usize, u8, f32);
+
+fn gear_pics(
+    mut cards: Query<(&GearPic, &mut ImageNode), Added<GearPic>>,
+    pics: Option<Res<crate::look::thumbs::GearPics>>,
+) {
+    let Some(pics) = pics else { return };
+    for (&GearPic(slot, g, lit), mut node) in &mut cards {
+        if let Some(h) = pics.get(slot, g) {
+            node.image = h;
+            node.color = Color::WHITE.with_alpha(lit);
+        }
+    }
+}
+
+/// Something the armory sells or gives: a skin, or a piece of gear in a
+/// slot (`GEAR_ROWS`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Item {
+    Skin(u8),
+    Gear(usize, u8),
+}
+
+/// Where an item stands for this wallet: a word for its card, a line for
+/// the box under the cards, their colour, and whether its card is dimmed.
+struct Stand {
+    word: String,
+    line: String,
+    colour: Color,
+    dim: bool,
+}
+
+impl Item {
+    /// The item a card is.
+    fn of(hit: Hit) -> Option<Item> {
+        match hit {
+            Hit::Skin(i) => Some(Item::Skin(i)),
+            Hit::Gear(k, g) => Some(Item::Gear(k, g)),
+            _ => None,
+        }
+    }
+
+    fn hit(self) -> Hit {
+        match self {
+            Item::Skin(i) => Hit::Skin(i),
+            Item::Gear(k, g) => Hit::Gear(k, g),
+        }
+    }
+
+    /// What is worn on armory page `page` (none on the emblem's).
+    fn worn(player: &Player, page: usize) -> Option<Item> {
+        match page {
+            0 => Some(Item::Skin(player.skin)),
+            k if k <= GEAR_ROWS.len() => Some(Item::Gear(
+                k - 1,
+                proto::gear_valid(GEAR_ROWS[k - 1].1, player.gear(k - 1)),
+            )),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> String {
+        match self {
+            Item::Skin(i) => skin_word(i),
+            Item::Gear(k, g) => GEAR_ROWS[k].1.get(g as usize).copied().unwrap_or("none").to_uppercase(),
+        }
+    }
+
+    fn blurb(self) -> &'static str {
+        let (list, i): (&[&str], u8) = match self {
+            Item::Skin(i) => (&SKIN_BLURBS, i),
+            Item::Gear(0, g) => (&HEAD_BLURBS, g),
+            Item::Gear(_, g) => (&FEET_BLURBS, g),
+        };
+        list.get(i as usize).copied().unwrap_or("")
+    }
+
+    /// Its rank lock (`proto::SKIN_FLOOR`); gear has none.
+    fn line(self) -> u16 {
+        match self {
+            Item::Skin(i) => proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0),
+            Item::Gear(..) => 0,
+        }
+    }
+
+    fn owned(self, w: &proto::Wardrobe) -> bool {
+        match self {
+            Item::Skin(i) => proto::Wardrobe::has(w.skins, i),
+            Item::Gear(0, g) => proto::Wardrobe::has(w.headwear, g),
+            Item::Gear(_, g) => proto::Wardrobe::has(w.footwear, g),
+        }
+    }
+
+    /// Where it stands for `w`, the server's word on our wallet (none till
+    /// it has said). The server checks again on every hello; this only
+    /// says what it will find.
+    fn stand(self, w: Option<&proto::Wardrobe>) -> Stand {
+        let line = self.line();
+        let at_line = |word: &str| match line {
+            0 => word.to_string(),
+            l if word.is_empty() => format!("{l}+"),
+            l => format!("{word} · {l}+"),
+        };
+        let stand = |word: String, line: String, colour: Color, dim: bool| Stand {
+            word,
+            line,
+            colour,
+            dim,
+        };
+        let worn_from = match line {
+            0 => "Worn if your wallet owns it.".to_string(),
+            l => format!("Worn if your wallet owns it, from a {l} rating."),
+        };
+        if matches!(self, Item::Skin(0) | Item::Gear(_, 0)) {
+            return stand(String::new(), "Everyone has it.".into(), ui::FAINT, false);
+        }
+        let Some(w) = w else {
+            return stand(at_line(""), worn_from, ui::MARK, false);
+        };
+        if !w.wallet {
+            return stand(
+                at_line("WALLET"),
+                format!("{worn_from} Sign in with one to wear it."),
+                ui::FAINT,
+                true,
+            );
+        }
+        if !w.known {
+            return stand(
+                at_line(""),
+                format!("{worn_from} Your wallet couldn't be read just now; it is when you play."),
+                ui::MARK,
+                false,
+            );
+        }
+        match (self.owned(w), w.floor) {
+            (false, _) => stand(
+                at_line("LOCKED"),
+                format!("{worn_from} Not in yours yet."),
+                ui::FAINT,
+                true,
+            ),
+            (true, _) if line == 0 => stand("OWNED".into(), "In your wallet: yours to wear.".into(), ui::GOOD, false),
+            (true, Some(f)) if f >= line => stand(
+                "OWNED".into(),
+                format!("In your wallet, and your {f} rating is over its line."),
+                ui::GOOD,
+                false,
+            ),
+            (true, Some(f)) => stand(
+                at_line("OWNED"),
+                format!("In your wallet, worn from a {line} rating: yours is {f}. Till then, the standard look."),
+                ui::MARK,
+                true,
+            ),
+            (true, None) => stand(
+                at_line("OWNED"),
+                format!(
+                    "In your wallet, worn from a {line} rating: you aren't rated yet. Till then, the standard look."
+                ),
+                ui::MARK,
+                true,
+            ),
+        }
+    }
+}
+
+/// What each item is, said on the box under the cards (`proto::SKINS`,
+/// `proto::HEADWEAR`, `proto::FOOTWEAR` order).
+const SKIN_BLURBS: [&str; 6] = [
+    "The issue plate in your side's colour, nothing on it.",
+    "A clean white stripe round the waist.",
+    "Trim the orange of a fuse burning down.",
+    "Ice-blue trim, for the ones who stay cold under fire.",
+    "Green trim, grown on a long climb up the ladder.",
+    "Gold trim. Only the top of the ladder wears it.",
+];
+const HEAD_BLURBS: [&str; 2] = [
+    "Nothing on your head.",
+    "Dark lenses on the bridge of the nose. They dim nothing you see.",
+];
+const FEET_BLURBS: [&str; 2] = [
+    "Triple T's own feet.",
+    "Heavy treaded boots. Your steps sound no louder in them.",
+];
+
+/// A line of the box under the cards: the item under the pointer, else
+/// the one worn.
+#[derive(Component, Clone, Copy)]
+enum Peek {
+    Name,
+    Word,
+    Blurb,
+    Line,
+}
+
+fn peek_box(p: &mut ChildSpawnerCommands) {
+    p.spawn((
+        Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(5.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            margin: UiRect::top(Val::Px(4.0)),
+            min_height: Val::Px(96.0),
+            flex_shrink: 0.0,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(ui::WELL),
+        BorderColor::all(ui::RULE),
+    ))
+    .with_children(|b| {
+        b.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Baseline,
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn((ui::strong("", 16.0, ui::TITLE), Peek::Name));
+            r.spawn((ui::strong("", 10.5, ui::FAINT), Peek::Word));
+        });
+        b.spawn((ui::label("", 12.0, ui::TEXT_COLOR), Peek::Blurb));
+        b.spawn((ui::label("", 11.0, ui::FAINT), Peek::Line));
+    });
+}
+
+/// The box under the cards says the item under the pointer, else the one
+/// worn.
+fn peek(
+    cards: Query<(&Interaction, &Hit)>,
+    front: Res<Front>,
+    player: Res<Player>,
+    party: Res<PartyView>,
+    mut lines: Query<(&Peek, &mut Text, &mut TextColor)>,
+) {
+    if lines.is_empty() {
+        return;
+    }
+    let over = cards
+        .iter()
+        .filter(|(i, _)| **i != Interaction::None)
+        .find_map(|(_, h)| Item::of(*h));
+    let Some(item) = over.or_else(|| Item::worn(&player, front.armory)) else {
+        return;
+    };
+    let stand = item.stand(party.wardrobe.as_ref());
+    for (part, mut t, mut c) in &mut lines {
+        let (text, colour) = match part {
+            Peek::Name => (item.name(), if stand.dim { ui::DIM } else { ui::TITLE }),
+            Peek::Word => (stand.word.clone(), stand.colour),
+            Peek::Blurb => (item.blurb().to_string(), ui::TEXT_COLOR),
+            Peek::Line if stand.colour == ui::GOOD => (stand.line.clone(), ui::FAINT),
+            Peek::Line => (stand.line.clone(), stand.colour),
+        };
+        if t.0 != text {
+            t.0 = text;
+        }
+        c.set_if_neq(TextColor(colour));
+    }
+}
+
+/// A page's heading: how many there are to wear, and of those how many
+/// the wallet owns, once the server has said.
+fn armory_count(label: &str, items: impl Iterator<Item = Item>, w: Option<&proto::Wardrobe>) -> String {
+    let (mut n, mut owned) = (0, 0);
+    for item in items.filter(|i| !matches!(i, Item::Skin(0) | Item::Gear(_, 0))) {
+        n += 1;
+        owned += usize::from(w.is_some_and(|w| item.owned(w)));
+    }
+    match w {
+        Some(w) if w.wallet && w.known => format!("{label} · {owned} OF {n} OWNED"),
+        _ => format!("{label} · {n}"),
+    }
 }
 
 /// The armory's pages across its top: the picked one blocked out in the blue.
@@ -941,43 +1249,32 @@ fn armory_panel(
     party: &PartyView,
     (pics, images): (&mut EmblemPics, &mut Assets<Image>),
 ) {
+    let wardrobe = party.wardrobe.as_ref();
     body.spawn(ui::panel(380.0)).with_children(|panel| {
         armory_tabs(panel, front.armory);
         panel.spawn(rows(front.scroll)).with_children(|p| match front.armory {
             0 => {
-                p.spawn(ui::group(&format!("ARMOUR · {}", proto::SKINS.len())));
+                let items = (0..proto::SKINS.len() as u8).map(Item::Skin);
+                p.spawn(ui::group(&armory_count("ARMOUR", items.clone(), wardrobe)));
                 p.spawn(tiles()).with_children(|t| {
-                    for i in 0..proto::SKINS.len() as u8 {
-                        card(
-                            t,
-                            Hit::Skin(i),
-                            player.skin == i,
-                            CARD_BLOCK_H + 36.0,
-                            Some(skin_colour(i)),
-                            &skin_word(i),
-                            &skin_note(i),
-                        );
+                    for item in items {
+                        let Item::Skin(i) = item else { continue };
+                        card(t, item, player.skin == i, Face::Colour(skin_colour(i)), wardrobe);
                     }
                 });
-                p.spawn(ui::spacer());
-                p.spawn(ui::label(
-                    "Worn if your wallet owns it. A rating is the floor to wear one.",
-                    11.0,
-                    ui::FAINT,
-                ));
+                peek_box(p);
             }
             k if k <= GEAR_ROWS.len() => {
                 let (label, slot) = GEAR_ROWS[k - 1];
                 let on = proto::gear_valid(slot, player.gear(k - 1));
-                p.spawn(ui::group(&format!("{label} · {}", slot.len() - 1)));
+                let items = (0..slot.len() as u8).map(|g| Item::Gear(k - 1, g));
+                p.spawn(ui::group(&armory_count(label, items.clone(), wardrobe)));
                 p.spawn(tiles()).with_children(|t| {
-                    for (g, name) in slot.iter().enumerate() {
-                        let g = g as u8;
-                        card(t, Hit::Gear(k - 1, g), on == g, 40.0, None, name, "");
+                    for g in 0..slot.len() as u8 {
+                        card(t, Item::Gear(k - 1, g), on == g, Face::Gear(k - 1, g), wardrobe);
                     }
                 });
-                p.spawn(ui::spacer());
-                p.spawn(ui::label("Worn if your wallet owns it.", 11.0, ui::FAINT));
+                peek_box(p);
             }
             _ => emblem_page(p, player, pics, images),
         });
@@ -1835,15 +2132,6 @@ fn skin_word(i: u8) -> String {
         .to_uppercase()
 }
 
-/// Under a skin's name in the armory: its rank lock (`proto::SKIN_FLOOR`)
-/// when it has one.
-fn skin_note(i: u8) -> String {
-    match proto::SKIN_FLOOR.get(i as usize).copied().unwrap_or(0) {
-        0 => String::new(),
-        line => format!("{line}+"),
-    }
-}
-
 /// The gear's rows in the armory: its label and its slot.
 const GEAR_ROWS: [(&str, &[&str]); 2] = [("HEAD", &proto::HEADWEAR), ("FEET", &proto::FOOTWEAR)];
 
@@ -2328,6 +2616,7 @@ fn poll(
     mut next: ResMut<NextState<Screen>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut look: ResMut<crate::Look>,
+    mut ear: ResMut<crate::sound::Ear>,
 ) {
     let Some(k) = knocking.0.as_mut() else {
         return;
@@ -2336,6 +2625,9 @@ fn poll(
         front.dirty = true;
         match news {
             News::Line(l) => {
+                if l == crate::door::MATCHED {
+                    ear.ping("match_found_0");
+                }
                 front.status = l;
                 front.bad = false;
             }
@@ -2434,7 +2726,14 @@ fn ended(
 fn hud_shown(
     in_match: Res<InMatch>,
     screen: Res<State<Screen>>,
-    mut q: Query<&mut Visibility, Or<(With<hud::HudRoot>, With<crate::visor::TagRoot>)>>,
+    mut q: Query<
+        &mut Visibility,
+        Or<(
+            With<hud::HudRoot>,
+            With<crate::visor::TagRoot>,
+            With<crate::scores::ScoresRoot>,
+        )>,
+    >,
 ) {
     let on = in_match.0 && *screen.get() == Screen::Playing;
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };

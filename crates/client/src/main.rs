@@ -181,6 +181,22 @@ fn run() -> Result<(), String> {
             p.footwear = proto::gear_valid(&proto::FOOTWEAR, at(2) as u8);
             p.emblem = proto::emblem_valid(at(3));
         }
+        // What the wallet owns, for a picture of the armory with no server:
+        // `--wardrobe skins,head,feet[,floor]`, each list a mask by id.
+        if let Some(w) = arg("--wardrobe") {
+            let v: Vec<u32> = w.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+            let at = |i: usize| v.get(i).copied().unwrap_or(0) | 1;
+            app.world_mut()
+                .resource_mut::<oneshot_client::party::PartyView>()
+                .wardrobe = Some(proto::Wardrobe {
+                wallet: true,
+                known: true,
+                skins: at(0),
+                headwear: at(1),
+                footwear: at(2),
+                floor: v.get(3).map(|f| *f as u16),
+            });
+        }
         if let Some(t) = arg("--tab") {
             if !oneshot_client::front::open_tab(app.world_mut(), &t) {
                 return Err(format!("--tab {t}: play, armory, party, friends or challenges"));

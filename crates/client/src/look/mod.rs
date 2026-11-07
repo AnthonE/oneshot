@@ -2,8 +2,10 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod anim;
+pub mod blade;
 pub mod bodies;
 pub mod boulders;
+pub mod cels;
 pub mod cliffs;
 pub mod cloth;
 pub mod cloud_sea;
@@ -52,6 +54,7 @@ pub mod shot;
 pub mod sky;
 pub mod stars;
 pub mod textures;
+pub mod thumbs;
 pub mod trees;
 pub mod truck;
 pub mod turret;

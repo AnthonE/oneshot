@@ -93,10 +93,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             -0.0096,
             1.0,
             true,
-            "shot_heli",
+            "shot_br",
             3,
-            "shot_heli_far",
-            "reload_rifle_0",
+            "shot_br_far",
+            "reload_br_0",
         ),
     ),
     (
@@ -110,10 +110,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             -0.0044,
             1.0,
             false,
-            "shot_gun",
-            2,
-            "shot_gun_far",
-            "reload_pistol_0",
+            "shot_magnum",
+            3,
+            "shot_magnum_far",
+            "reload_magnum_0",
         ),
     ),
     (
@@ -127,10 +127,10 @@ pub const GUNS: [(u8, Gun); 15] = [
             0.0127,
             0.72,
             true,
-            "shot_bolt",
+            "shot_sniper",
             3,
-            "shot_bolt_far",
-            "reload_bolt_0",
+            "shot_sniper_far",
+            "reload_sniper_0",
         ),
     ),
     (
@@ -163,8 +163,8 @@ pub const GUNS: [(u8, Gun); 15] = [
             true,
             "shot_rocket",
             3,
-            "shot_launcher_far",
-            "reload_rifle_0",
+            "shot_rocket_far",
+            "reload_rocket_0",
         ),
     ),
     (
@@ -181,20 +181,20 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_smg",
             3,
             "shot_smg_far",
-            "reload_rifle_0",
+            "reload_smg_0",
         ),
     ),
     // The ship's line (`tools/models`: the Veil guns), each with its own
-    // model; their sounds are ours (tools/sfx.mjs).
+    // model.
     (
         arms::SWORD,
         g(
             "sword",
-            1.01,
-            0.2475,
-            -0.0529,
+            1.068,
+            0.0861,
+            0.0349,
             0.6,
-            0.1617,
+            0.0727,
             1.0,
             false,
             "sword_swing",
@@ -217,7 +217,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_carbine",
             3,
             "shot_carbine_far",
-            "reload_rifle_0",
+            "reload_carbine_0",
         ),
     ),
     (
@@ -285,7 +285,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_shards",
             3,
             "shot_shards_far",
-            "reload_rifle_0",
+            "reload_shards_0",
         ),
     ),
     (
@@ -302,7 +302,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_launcher",
             3,
             "shot_launcher_far",
-            "reload_shotgun_0",
+            "reload_launcher_0",
         ),
     ),
     (
@@ -319,7 +319,7 @@ pub const GUNS: [(u8, Gun); 15] = [
             "shot_cannon",
             3,
             "shot_cannon_far",
-            "reload_rifle_0",
+            "reload_cannon_0",
         ),
     ),
 ];
@@ -329,8 +329,8 @@ pub fn gun(arm: u8) -> Option<&'static Gun> {
 }
 
 /// The gun whose sound a shot carrying `c` (an arm id, or a turret's
-/// cause: `sim::arms::fired`) is heard with: a truck's minigun sounds as
-/// the rifle does, till it has its own.
+/// cause: `sim::arms::fired`) is heard with: a truck's minigun has the rifle's
+/// row, and its own shot (`sound::events`).
 pub fn heard_as(c: u16) -> Option<&'static Gun> {
     if c == sim::events::Cause::Minigun as u16 {
         return gun(arms::AR);
@@ -360,12 +360,17 @@ pub struct Models {
     /// The hands in view (`hands.rs`).
     pub hand: Handle<Scene>,
     pub hand_left: Handle<Scene>,
+    /// The right again, for a sword's hilt.
+    pub hand_sword: Handle<Scene>,
     /// By arm id; index 0 (no gun) is unused.
     pub guns: Vec<Option<Handle<Scene>>>,
     pub rocket: Handle<Scene>,
     pub frag: Handle<Scene>,
     /// A vehicle's hull (`look/truck.rs`).
     pub truck: Handle<Scene>,
+    /// A truck's minigun (`look/turret.rs`): its cradle and its barrels.
+    pub turret: Handle<Scene>,
+    pub turret_barrels: Handle<Scene>,
     /// Gear on a body (`bodies.rs`): the shades, and a boot for each foot.
     pub shades: Handle<Scene>,
     pub boot_left: Handle<Scene>,
@@ -382,10 +387,13 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         body: assets.load("models/triple-t.glb"),
         hand: scene("hand"),
         hand_left: scene("hand-left"),
+        hand_sword: scene("hand-sword"),
         guns,
         rocket: scene("rocket"),
         frag: scene("frag"),
         truck: scene("truck"),
+        turret: scene("turret"),
+        turret_barrels: scene("turret-barrels"),
         shades: scene("shades"),
         boot_left: scene("boot-left"),
         boot_right: scene("boot-right"),

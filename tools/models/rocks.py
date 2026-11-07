@@ -47,7 +47,7 @@ ISLE_BOULDER_TRIS = 5000
 # Built things cut the same way, to fill the box the sim collides: name:
 # (its raw's slug, how far it is pushed out to its cube, its folder under
 # models). The pylon is a base's buttress (a `pylon` look's turned box).
-BLOCKS = {'pylon': ('pylon', 0.2, 'base')}
+BLOCKS = {'pylon': ('pylon', 0.2, 'base'), 'husk': ('husk', 0.04, 'ship'), 'font': ('font', 0.04, 'ship')}
 # A built thing's faces are flat and its edges hard: thinned as far as a
 # boulder, its panels buckle.
 BLOCK_TRIS = 9000
@@ -59,6 +59,11 @@ STACKS = {
     'isle_stack_b': ('isle-stack-b', 12000, 1536),
     'isle_float': ('isle-float', 22000, 2048),
 }
+# A ship's prop's creases: its occlusion, baked over this reach on its unit
+# cube, at this many samples, raised to this power over its colour.
+AO_REACH = 0.22
+AO_SAMPLES = 48
+AO_POWER = 1.5
 # How far a boulder's surface is pushed out toward its cube, 0..1.
 FILL = 0.35
 BOULDER_TRIS = 2600
@@ -96,9 +101,10 @@ def load(slug):
     return o
 
 
-def low(hi, tris, name, hard=False, px=PX):
+def low(hi, tris, name, hard=False, ao=False, px=PX):
     """A thinned copy of `hi` with one map of its own, Meshy's mesh and paint
-    baked onto it: (the copy, its colour's mean, linear)."""
+    baked onto it: (the copy, its colour's mean, linear). With `ao`, its own
+    occlusion is multiplied into the colour, so a crease reads dark."""
     bpy.ops.object.select_all(action='DESELECT')
     o = hi.copy()
     o.data = hi.data.copy()
@@ -192,6 +198,27 @@ def low(hi, tris, name, hard=False, px=PX):
         # settings and not the scene's.
         bpy.ops.object.bake(type=kind, use_selected_to_active=True, cage_extrusion=BAKE_CAGE,
                             max_ray_distance=BAKE_REACH, margin=12, **extra)
+    if ao:
+        occl = bpy.data.images.new(name + '_ao', px, px, alpha=False)
+        occl.colorspace_settings.name = 'Non-Color'
+        at = nt.nodes.new('ShaderNodeTexImage')
+        at.image = occl
+        for n in nt.nodes:
+            n.select = False
+        at.select = True
+        nt.nodes.active = at
+        hi.hide_render = True
+        hi.select_set(False)
+        s.cycles.samples = AO_SAMPLES
+        if s.world is None:
+            s.world = bpy.data.worlds.new('w')
+        s.world.light_settings.distance = AO_REACH
+        bpy.ops.object.bake(type='AO', use_selected_to_active=False, margin=12)
+        c = np.array(colour.pixels[:]).reshape(-1, 4)
+        a = np.array(occl.pixels[:]).reshape(-1, 4)[:, :1]
+        c[:, :3] *= a ** AO_POWER
+        colour.pixels[:] = c.ravel()
+        nt.nodes.remove(at)
     nt.links.new(ct.outputs['Color'], bsdf.inputs['Base Color'])
     bump = nt.nodes.new('ShaderNodeNormalMap')
     nt.links.new(nm.outputs['Color'], bump.inputs['Color'])
@@ -230,7 +257,7 @@ def volume(o):
     return v
 
 
-def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=False):
+def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=False, ao=False):
     fill = FILL if fill is None else fill
     scene()
     o = load(slug)
@@ -250,7 +277,7 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
     o.data.vertices.foreach_set('co', co.ravel())
     o.data.update()
     os.makedirs(SHEETS, exist_ok=True)
-    o, mean = low(o, tris, name, hard)
+    o, mean = low(o, tris, name, hard, ao)
     if rough is not None:
         for material in o.data.materials:
             next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED').inputs['Roughness'].default_value = rough
@@ -265,6 +292,9 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
         'fill': round(volume(o), 3),
         'inset_mean': round(float(inset.mean()), 4),
         'inset_max': round(float(inset.max()), 4),
+        # How far it reaches from its upright axis: over 0.5, it leaves a
+        # round solid of the cube's width.
+        'radial': round(float(np.hypot(co[:, 0], co[:, 1]).max()), 4),
         'colour_mean': mean,
         'tris': sum(len(p.vertices) - 2 for p in o.data.polygons),
         'bytes': os.path.getsize(path),
@@ -305,7 +335,7 @@ if __name__ == '__main__':
             boulder(name, slug)
     for name, (slug, fill, folder) in BLOCKS.items():
         if not want or name in want:
-            boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True)
+            boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True, ao=folder == 'ship')
     for name, (slug, fill) in ISLE_BOULDERS.items():
         if not want or name in want:
             boulder(name, slug, fill, tris=ISLE_BOULDER_TRIS)

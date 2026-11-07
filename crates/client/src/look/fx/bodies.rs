@@ -350,8 +350,8 @@ pub fn picked_up(fx: &mut Fx, at: Vec3) {
 /// sword's arm id for its swing, `part` 2 a clash of swords): when the
 /// swing's line meets the map within its reach and nobody we draw stands
 /// on it first, what the blow throws off that face and the chip, dent or
-/// gash it leaves (`marks.rs`). Someone else's: a blue slash of light
-/// across a sword's swing, and a flash and sparks where a blow lands.
+/// gash it leaves (`marks.rs`). Someone else's blow: a flash and sparks where
+/// it lands.
 pub fn swung(fx: &mut Fx, scene: &Scene, e: &EventState, eye: Vec3) {
     let slot = e.a;
     let own = slot == scene.me;
@@ -369,27 +369,8 @@ pub fn swung(fx: &mut Fx, scene: &Scene, e: &EventState, eye: Vec3) {
         return;
     };
     let fwd = Vec3::new(d.yaw.cos(), 0.0, d.yaw.sin());
+    // A sword's swing shows in its own ghosts (`look/blade.rs`).
     if sword {
-        let side = Vec3::new(-fwd.z, 0.0, fwd.x);
-        let mid = eye - Vec3::Y * 0.3 + fwd * 0.8;
-        for k in 0..5 {
-            let u = k as f32 / 4.0 - 0.5;
-            fx.glow.spawn(Particle {
-                left: 0.12,
-                life: 0.12,
-                pos: (mid + side * u * 1.1 + Vec3::Y * u * 0.4).into(),
-                vel: (side * 6.0).into(),
-                size0: 0.05,
-                size1: 0.02,
-                c0: [2.0, 5.0, 14.0, 1.0],
-                c1: [0.4, 1.0, 3.0, 0.0],
-                cell: super::atlas::STREAK,
-                orient: Orient::Stretch,
-                stretch: 0.06,
-                len_max: 0.5,
-                ..Particle::default()
-            });
-        }
         return;
     }
     if walled {

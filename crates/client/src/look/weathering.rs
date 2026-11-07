@@ -205,7 +205,7 @@ fn recipe(s: Surface) -> Recipe {
         Surface::Paint => r(0.08, 0.5, GRIME, 0.3, (0.8, 0.05, 1.45, 0.0), 0.3),
         Surface::Rock => r(0.2, 0.75, VARNISH, 0.25, (0.5, 0.09, 1.22, 0.05), 0.6),
         Surface::Floor => r(0.1, 0.0, GRIME, 0.0, (0.0, 0.05, 1.0, 0.0), 0.4),
-        Surface::Hull => r(0.06, 0.0, GRIME, 0.15, (0.0, 0.05, 1.0, 0.0), 0.0),
+        Surface::Hull => r(0.12, 0.0, GRIME, 0.35, (0.0, 0.05, 1.0, 0.0), 0.0),
         Surface::Plate => r(0.13, 0.1, GRIME, 0.45, (0.55, 0.05, 1.4, -0.1), 0.3),
         Surface::Stone => r(0.14, 0.6, GRIME, 0.4, (0.5, 0.05, 1.22, 0.1), 0.45),
     }
