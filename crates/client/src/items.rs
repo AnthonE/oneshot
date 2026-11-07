@@ -2,14 +2,11 @@
 //! ground where it spawns (or its power-up: a glowing orb resting there,
 //! green the overshield, pale the camouflage), gone while the pad waits
 //! (the snapshot's `empty_s`); the guns and grenades on the floor that the
-//! snapshot names, each glowing faintly to be seen; and the line that says what USE would take here. All
-//! read from the session; what USE takes is the sim's (`World::pickup`).
+//! snapshot names, each glowing faintly to be seen (`look/lying.rs`); and the
+//! line that says what USE would take here. All read from the session; what
+//! USE takes is the sim's (`World::pickup`).
 
-use std::collections::HashMap;
-
-use bevy::gltf::GltfMaterialName;
 use bevy::prelude::*;
-use bevy::scene::SceneInstanceReady;
 use client_net::core::NetCore;
 use sim::arms::{arm, NONE};
 use sim::consts::{DROP_REACH, ENTER_R, MAX_DROPS, PAD_REACH};
@@ -37,10 +34,6 @@ fn orb_color(id: u8) -> LinearRgba {
         _ => LinearRgba::rgb(0.6, 0.78, 1.0),
     }
 }
-/// A gun or grenades lying for the taking glow faintly this, the pads' old
-/// gold, so they read off a grey floor; linear.
-const LYING_GLOW: LinearRgba = LinearRgba::rgb(0.79 * 0.6, 0.64 * 0.6, 0.15 * 0.6);
-
 /// Frags on a pad: how far apart they lie.
 const PAD_FRAG_APART_M: f32 = 0.14;
 /// A gun on the floor lies on its side this high (its half thickness).
@@ -92,49 +85,10 @@ fn loaded(core: &NetCore, i: usize) -> bool {
     core.latest().pads().get(i).is_none_or(|p| p.empty_s == 0)
 }
 
-/// Each gun's material with the glow of one lying for the taking, by the
-/// gun's own: one copy however many lie about.
-#[derive(Resource, Default)]
-pub struct Glows(HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>);
-
-/// A lying gun's (or grenade's) scene has spawned: its materials take the
-/// glow. A sword's blade is light already.
-fn glow(
-    ev: On<SceneInstanceReady>,
-    children: Query<&Children>,
-    plain: Query<(&MeshMaterial3d<StandardMaterial>, Option<&GltfMaterialName>)>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
-    mut glows: ResMut<Glows>,
-    mut commands: Commands,
-) {
-    for e in children.iter_descendants(ev.entity) {
-        let Ok((m, name)) = plain.get(e) else {
-            continue;
-        };
-        if crate::look::blade::is_blade(name) {
-            continue;
-        }
-        let handle = match glows.0.get(&m.0.id()) {
-            Some(h) => h.clone(),
-            None => {
-                let Some(mut lit) = mats.get(&m.0).cloned() else {
-                    continue;
-                };
-                lit.emissive = LYING_GLOW;
-                let h = mats.add(lit);
-                glows.0.insert(m.0.id(), h.clone());
-                h
-            }
-        };
-        commands.entity(e).insert(MeshMaterial3d(handle));
-    }
-}
-
 /// Grenades lying under `root`, at `at`, glowing.
 fn frag(commands: &mut Commands, models: &Models, at: Transform, root: Entity) {
-    commands
-        .spawn((SceneRoot(models.frag.clone()), at, ChildOf(root)))
-        .observe(glow);
+    let scene = commands.spawn((SceneRoot(models.frag.clone()), at, ChildOf(root))).id();
+    crate::look::lying::glow(commands, scene);
 }
 
 /// `arm`'s gun under `root`, turned about its middle rather than its grip,
@@ -142,7 +96,7 @@ fn frag(commands: &mut Commands, models: &Models, at: Transform, root: Entity) {
 fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
     if let (Some(g), Some((pivot, scene))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
         crate::look::blade::light(commands, scene, arm);
-        commands.entity(scene).observe(glow);
+        crate::look::lying::glow(commands, scene);
         let half = g.height * g.scale * (0.5 - g.grip);
         commands.entity(pivot).insert(Transform {
             translation: basis * Vec3::new(0.0, -half, 0.0),
