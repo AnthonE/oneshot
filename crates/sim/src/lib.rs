@@ -8,6 +8,7 @@
 pub mod arms;
 pub mod bot;
 pub mod consts;
+pub mod contact;
 pub mod events;
 pub mod fighter;
 pub mod fmath;

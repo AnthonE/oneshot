@@ -26,7 +26,8 @@ use proto::{
     EventState, InputMsg, ProjState, Remote, Snapshot, VehState, MAX_INPUT_FRAMES, MAX_REMOTES, MAX_SNAP_PROJ,
     MAX_SNAP_VEHICLES,
 };
-use sim::consts::{ticks, MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{ticks, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::contact::{Man, Present, Scene, Sticks};
 use sim::fighter::Fighter;
 use sim::geom::{aim_dir, V3};
 use sim::input::Input;
@@ -36,9 +37,38 @@ use sim::world::{Phase, Rules};
 use std::cell::Cell;
 use std::collections::VecDeque;
 
-/// One tick of what this client predicts, in the server's order: its
-/// fighter (`step_in`), then the vehicle it rides, then its seat. At the
-/// wheel the hull drives on our own input; behind someone, on its driver's
+/// One tick of what this client predicts, in the server's order
+/// (`World::play`): our fighter's own tick (`step_in`), then the contact
+/// step over `sc` (`sim::contact`): the others in `walkers` walk on their
+/// inputs, each hull drives on its stick (none: parked), hulls crash,
+/// everyone riding sits, hulls run down whoever they meet. Nothing the
+/// server would deal is dealt here. `own` is our seat in the scene.
+#[allow(clippy::too_many_arguments)]
+pub fn step_near(
+    f: &mut Fighter,
+    own: usize,
+    sc: &mut Scene,
+    phase: Phase,
+    inputs: &[Input; MAX_FIGHTERS],
+    sticks: &Sticks,
+    walkers: u16,
+    map: &Map,
+) -> sim::fighter::Local {
+    let l = f.step_in(phase, &inputs[own], map);
+    sc.men[own] = Man::of(f);
+    if phase == Phase::Playing {
+        sc.walk(inputs, walkers & !(1 << own), map);
+        sc.drive(sticks, map);
+        let _ = sc.crash(map);
+        sc.seat();
+        sc.run_down(&mut Present);
+    }
+    f.body = sc.men[own].body;
+    l
+}
+
+/// [`step_near`] for our fighter and the hull it rides alone: at the wheel
+/// the hull drives on our own input; behind someone, on its driver's
 /// `stick` (`mx`, `mz`, all of an input a hull reads), and with none it is
 /// parked, as the server steps a hull nobody drives.
 pub fn step_own(
@@ -49,27 +79,25 @@ pub fn step_own(
     stick: Option<(i8, i8)>,
     map: &Map,
 ) -> sim::fighter::Local {
-    let l = f.step_in(phase, inp, map);
-    if let (Some((_, seat)), Some(v)) = (f.riding(), v.as_mut()) {
-        if phase == Phase::Playing {
-            if seat == DRIVER {
-                if f.active() {
-                    v.step_local(inp, map);
-                }
-            } else if let Some((mx, mz)) = stick {
-                v.step_local(
-                    &Input {
-                        mx,
-                        mz,
-                        ..Input::default()
-                    },
-                    map,
-                );
+    let mut sc = Scene::default();
+    let mut sticks: Sticks = [None; MAX_VEHICLES];
+    let ridden = match (f.riding(), *v) {
+        (Some((i, seat)), Some(h)) => {
+            sc.hulls[i] = h;
+            sticks[i] = if seat == DRIVER {
+                f.active().then_some((inp.mx, inp.mz))
             } else {
-                v.step_parked(map);
-            }
+                stick
+            };
+            Some(i)
         }
-        f.body = v.seat_body(seat);
+        _ => None,
+    };
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = *inp;
+    let l = step_near(f, 0, &mut sc, phase, &inputs, &sticks, 0, map);
+    if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
+        *h = sc.hulls[i];
     }
     l
 }
