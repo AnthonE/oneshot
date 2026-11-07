@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 31;
+pub const PROTO_VER: u16 = 32;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -1526,6 +1526,10 @@ pub enum Msg {
     /// The server still checks every hello (`server::net`); this only
     /// shows it.
     Wardrobe(Wardrobe),
+    /// Client → server on a match: its level is all there (`loading.rs`).
+    /// The countdown waits for every person seated in it to say so, or for
+    /// the room's guard (`room::LOAD_WAIT_MS`).
+    Loaded,
 }
 
 /// What a lobby's wallet owns ([`Msg::Wardrobe`]): a bit an item, by the id
@@ -1760,6 +1764,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Loaded => w.write(25, 8)?,
         Msg::Moved { addr, queued } => {
             w.write(23, 8)?;
             w.write(addr.len as u32, 7)?;
@@ -2036,6 +2041,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        25 => Msg::Loaded,
         23 => {
             let len = r.read(7)? as usize;
             if len > MAX_SERVER_ADDR {

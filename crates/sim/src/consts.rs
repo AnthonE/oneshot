@@ -100,10 +100,18 @@ pub const HIT_TOP_CROUCH: f32 = 0.95;
 pub const HEAD_R: f32 = 0.22;
 pub const HEAD_Y: f32 = 1.62;
 pub const HEAD_Y_CROUCH: f32 = 1.12;
-/// Where a near miss is bent to (bullet magnetism, `World::magnet`): the
-/// chest, never the head.
+/// Bullet magnetism, every gun's at once (`World::magnet`, each gun's
+/// `Arm::magnet`) and the red reticle's widening with it. Off: a round
+/// goes where the cone sends it, and the reticle is red only on a body.
+/// Flipping it moves the goldens (`tests/determinism.rs`).
+pub const MAGNETISM: bool = false;
+/// Where on a body a near miss is bent to (bullet magnetism,
+/// `World::magnet`): the height it passed at, no higher than the chest
+/// (never the head) and no lower than the hips.
 pub const CHEST_Y: f32 = 1.0;
 pub const CHEST_Y_CROUCH: f32 = 0.65;
+pub const HIP_Y: f32 = 0.45;
+pub const HIP_Y_CROUCH: f32 = 0.3;
 /// Pitch limit in 1/65536 turn: 89°.
 pub const PITCH_MAX: i16 = 16_202;
 

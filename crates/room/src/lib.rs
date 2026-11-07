@@ -109,6 +109,9 @@ pub struct ClientNet {
     /// before, so an ack of one (a first `ack_tick: 0`) is refused rather
     /// than taken as a view that old.
     pub joined: u32,
+    /// Its level is all there (`Msg::Loaded`): the countdown no longer
+    /// waits for it ([`Room::wait_loads`]).
+    pub loaded: bool,
     pub playout: u8,
     /// The view of the frame last run (a repeat's: the newest).
     ran: View,
@@ -211,6 +214,7 @@ impl Default for ClientNet {
             last_seq: 0,
             acked: None,
             joined: 0,
+            loaded: false,
             playout: PLAYOUT_MIN as u8,
             ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
@@ -372,6 +376,11 @@ pub enum Seat {
     Person(Box<ClientNet>, Name),
 }
 
+/// The longest the countdown waits for someone seated in it to load
+/// ([`Room::wait_loads`]): a page that never says so (a shader that never
+/// compiles) doesn't hold everyone else for ever.
+pub const LOAD_WAIT_MS: u32 = 30_000;
+
 /// Stream messages to send: to one seat, or to everyone.
 pub type Outbox = Vec<(Option<u8>, Msg)>;
 
@@ -383,6 +392,10 @@ pub struct Room {
     pub size: usize,
     /// Bots stand still and never fire: for tests that need a target.
     pub passive_bots: bool,
+    /// The countdown waits for each person seated in it to say its level is
+    /// there ([`Room::loaded`]), each at most [`LOAD_WAIT_MS`] from its seat:
+    /// the server's rooms. Off, people are taken as loaded (tests).
+    pub wait_loads: bool,
     seed: u64,
     phase: Phase,
     /// The tick play began (the countdown over), once it has.
@@ -495,6 +508,7 @@ impl Room {
             seats: core::array::from_fn(|_| Seat::Empty),
             size,
             passive_bots: false,
+            wait_loads: false,
             seed,
             phase: Phase::Countdown,
             began: None,
@@ -794,6 +808,25 @@ impl Room {
         }
     }
 
+    /// Seat `s` has its level there: the countdown stops waiting for it.
+    pub fn loaded(&mut self, s: u8) {
+        if let Some(c) = self.client(s) {
+            c.loaded = true;
+        }
+    }
+
+    /// Someone seated in the countdown is still loading, and within
+    /// [`LOAD_WAIT_MS`] of their seat.
+    fn loading(&self) -> bool {
+        let tick = self.world.tick;
+        self.wait_loads
+            && self.world.phase == Phase::Countdown
+            && self.seats.iter().any(|x| match x {
+                Seat::Person(c, _) => !c.loaded && tick.wrapping_sub(c.joined) < ticks(LOAD_WAIT_MS),
+                _ => false,
+            })
+    }
+
     /// An input datagram from seat `s`.
     pub fn on_input(&mut self, s: u8, m: &InputMsg, now_ms: f64) {
         let last_sent = self.last_snapshot_tick();
@@ -839,6 +872,10 @@ impl Room {
                 }
                 Seat::Empty => {}
             }
+        }
+        if self.loading() {
+            self.rec.hold();
+            self.world.hold_countdown();
         }
         self.rec.step(&inputs, &rewind);
         self.world.step(&inputs, &rewind);

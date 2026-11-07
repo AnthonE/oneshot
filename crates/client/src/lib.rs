@@ -1875,6 +1875,7 @@ fn expose(
     )>,
     windows: Query<&Window, With<PrimaryWindow>>,
     settle: Res<loading::Settle>,
+    cover: Res<loading::Cover>,
     tier: Res<look::quality::Tier>,
     mood: Res<look::mood::MoodNow>,
     party: Option<Res<party::PartyView>>,
@@ -1982,6 +1983,10 @@ fn expose(
     // what `ci/client_shot.mjs` waits for before its seconds.
     set(&o, "ready", settle.shown().into());
     set(&o, "stage", settle.now.stage().into());
+    // No loading overlay up: the page's splash goes (`web/boot.js`), the
+    // title takes clicks.
+    set(&o, "loaded", (!cover.up).into());
+    set(&o, "progress", settle.now.fraction().into());
     // What the stream last said, and whether it's over.
     set(&o, "status", st.status.as_str().into());
     set(&o, "cup", st.cup.as_str().into());
@@ -2014,7 +2019,8 @@ fn expose(
     let ui = js_sys::Object::new();
     let k = windows.single().map_or(1.0, |w| w.scale_factor());
     for (t, node, at, vis) in &tags {
-        if !vis.get() {
+        // Under the loading overlay nothing is there to click.
+        if !vis.get() || cover.up {
             continue;
         }
         let (c, size) = (at.translation / k, node.size() / k);

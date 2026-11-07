@@ -316,6 +316,8 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
                     _ => {}
                 }
             }
+            // Headless: nothing to load.
+            c.session.loaded();
             if c.session.ready && !seated {
                 seated = true;
                 p.never = false;

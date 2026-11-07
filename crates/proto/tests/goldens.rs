@@ -406,6 +406,7 @@ fn msgs() -> Vec<Msg> {
             footwear: 1,
             floor: Some(1612),
         }),
+        Msg::Loaded,
     ]
 }
 
@@ -613,12 +614,12 @@ fn the_bytes_match_their_goldens() {
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
         0x8043_aa3b_c61f_8f7d,
-        0x9a57_d4ed_c7b3_5dad,
-        0x510e_a852_1eec_b2b3,
+        0x2904_d4c3_c9d2_1f2e,
+        0x0de8_7fb0_90c4_6faa,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x25e1_854f_3f00_2018,
+        0x04a1_bde9_6776_bee9,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -641,6 +642,7 @@ fn the_bytes_match_their_goldens() {
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
+        0xaf63_d44c_8601_def4,
         0x480a_d644_905d_938a,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");

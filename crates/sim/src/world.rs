@@ -479,6 +479,15 @@ impl World {
         self.rewind.forget(slot);
     }
 
+    /// The countdown held at its start, for the tick about to be stepped:
+    /// someone seated is still loading the level (`room`). A no-op once
+    /// play has begun.
+    pub fn hold_countdown(&mut self) {
+        if self.phase == Phase::Countdown {
+            self.clock = ticks(COUNTDOWN_MS) + 1;
+        }
+    }
+
     /// One tick. `inputs` is each seat's frame for this tick (repeated by
     /// the server when one never came); `rewind_q8` is how far back each
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
@@ -791,14 +800,18 @@ impl World {
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
-    /// misses, the one whose rewound chest it passes nearest in angle,
-    /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
-    /// and its `aim_range`, nearer than `limit` and in clear line: the way
-    /// to that chest. Only + − × ÷ and sqrt; never the head.
+    /// misses, those whose rewound body, widened by `a`'s magnetism at its
+    /// distance ([`Arm::magnet_zone`], the red reticle's too), it passes
+    /// through within `aim_range` and nearer than `limit`; of them the one
+    /// nearest in angle, in clear line: the way to the body's middle at the
+    /// height the ray passed, between the hips and the chest, so a miss
+    /// wide of the legs, the hips or the shoulder is bent alike. Only
+    /// + − × ÷ and sqrt; never the head.
     #[allow(clippy::too_many_arguments)]
     fn magnet(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32, limit: f32) -> Option<V3> {
         let me = &self.fighters[s];
         let reach = a.aim_range.min(limit);
+        let flat = dir.x * dir.x + dir.z * dir.z;
         let mut best: Option<(f32, V3)> = None;
         for (q, v) in self.fighters.iter().enumerate() {
             if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
@@ -808,18 +821,31 @@ impl World {
             if !p.alive {
                 continue;
             }
-            let c = p.pos + V3::new(0.0, crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH), 0.0);
-            let to = c - eye;
-            let t = to.dot(dir);
-            if t <= 0.0 || t > reach {
+            let top = crate::movement::ducked(p.duck, HIT_TOP, HIT_TOP_CROUCH);
+            if a.magnet_zone(eye, dir, p.pos, top, reach).is_none() {
                 continue;
             }
-            let off = (to - dir * t).len();
-            if off > HIT_R + t * a.magnet || best.is_some_and(|b| b.0 * t <= off) {
+            // How high the ray is where it passes nearest the body's axis.
+            let chest = crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH);
+            let hip = crate::movement::ducked(p.duck, HIP_Y, HIP_Y_CROUCH);
+            let y = if flat > 0.0 {
+                let th = (((p.pos.x - eye.x) * dir.x + (p.pos.z - eye.z) * dir.z) / flat).max(0.0);
+                eye.y + dir.y * th - p.pos.y
+            } else {
+                chest
+            };
+            let c = p.pos + V3::new(0.0, y.max(hip).min(chest), 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if best.is_some_and(|b| b.0 <= off) {
                 continue;
             }
             if self.map.clear(eye, c) {
-                best = Some((off / t, c));
+                best = Some((off, c));
             }
         }
         best.map(|(_, c)| (c - eye).norm())
@@ -832,7 +858,7 @@ impl World {
         let mut wall = self.map.ray(eye, dir, a.range);
         let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
-        if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
+        if MAGNETISM && a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
             if let Some(bent) = self.magnet(s, eye, dir, a, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
