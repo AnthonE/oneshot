@@ -47,7 +47,8 @@ ISLE_BOULDER_TRIS = 5000
 # Built things cut the same way, to fill the box the sim collides: name:
 # (its raw's slug, how far it is pushed out to its cube, its folder under
 # models). The pylon is a base's buttress (a `pylon` look's turned box).
-BLOCKS = {'pylon': ('pylon', 0.2, 'base'), 'husk': ('husk', 0.04, 'ship'), 'font': ('font', 0.04, 'ship')}
+BLOCKS = {'pylon': ('pylon', 0.2, 'base'), 'husk': ('husk', 0.04, 'ship'), 'font': ('font', 0.04, 'ship'),
+          'wreck_car': ('wreck-sedan', 0.02, 'wreck'), 'wreck_van': ('wreck-van', 0.02, 'wreck')}
 # A built thing's faces are flat and its edges hard: thinned as far as a
 # boulder, its panels buckle.
 BLOCK_TRIS = 9000

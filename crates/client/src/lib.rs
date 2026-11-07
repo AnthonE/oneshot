@@ -643,6 +643,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (
                 look::rock::dress_masses,
                 look::boulders::dress,
+                look::rig::grade_for,
                 look::built::dress,
                 look::built::turn,
                 look::pool::dress,

@@ -34,8 +34,8 @@ use crate::level::{Dressed, LevelPart};
 
 /// The models: three blocks, the sea stack, a base's pylon, an island's three
 /// wind-carved blocks, two stacks and a hanging island, and the ship's props: a
-/// seed husk in three paints and a font.
-pub const GLB: [&str; 15] = [
+/// seed husk in three paints and a font; and the road's wrecks.
+pub const GLB: [&str; 17] = [
     "models/rock/boulder_a.glb",
     "models/rock/boulder_b.glb",
     "models/rock/boulder_c.glb",
@@ -51,6 +51,8 @@ pub const GLB: [&str; 15] = [
     "models/ship/husk.glb",
     "models/ship/husk.glb",
     "models/ship/font.glb",
+    "models/wreck/wreck_car.glb",
+    "models/wreck/wreck_van.glb",
 ];
 /// Where an island's blocks start among them, and its stacks and hanging
 /// island (each 1 m tall on its base at the origin, as the sea stack; the
@@ -72,6 +74,10 @@ pub const PYLON_MODEL: usize = 4;
 /// cast (the paint is in its tint, [`PROP_TINT`]), enamel over metal.
 pub const HUSK_MODEL: usize = 11;
 pub const FONT_MODEL: usize = 14;
+/// The road's wrecks, a unit cube with their length along x, in their own paint.
+pub const WRECK_MODEL: usize = 15;
+/// Their paint under the rain: Meshy's is clean and pale.
+const WRECK_TINT: f32 = 0.6;
 /// Linear: the husk dark, red's, blue's, and the font.
 pub const PROP_TINT: [[f32; 3]; 4] = [
     [0.16, 0.1, 0.32],
@@ -155,6 +161,21 @@ pub fn pylon_transform(at: Transform, hx: f32, h: f32, hz: f32) -> Transform {
         translation: at.translation,
         rotation: at.rotation * Quat::from_rotation_y(core::f32::consts::FRAC_PI_2),
         scale: Vec3::new(2.0 * hz, h, 2.0 * hx),
+    }
+}
+
+/// A wreck's model among [`GLB`], by its look.
+pub fn wreck_model(look: u8) -> usize {
+    WRECK_MODEL + usize::from(look == crate::level::WRECK_VAN)
+}
+
+/// Where a wreck is drawn in a turned box standing at `at`: filling it, its
+/// length along the box's own x.
+pub fn wreck_transform(at: Transform, hx: f32, h: f32, hz: f32) -> Transform {
+    Transform {
+        translation: at.translation,
+        rotation: at.rotation,
+        scale: Vec3::new(2.0 * hx, h, 2.0 * hz),
     }
 }
 
@@ -527,12 +548,15 @@ impl Stones {
         // The stack keeps Meshy's paint whole: its top is green.
         for (i, h) in self.paints.clone().iter().enumerate() {
             let base = mats.get(h)?.clone();
-            let prop = i >= HUSK_MODEL;
+            let prop = (HUSK_MODEL..=FONT_MODEL).contains(&i);
+            let wreck = i >= WRECK_MODEL;
             let tinted = |t: [f32; 3], rough: f32| StandardMaterial {
                 // The stack keeps its own paint (its top is green), and
                 // the pylon is metal, as its own material says; a prop is
                 // enamel in its own colour, wet or dry.
-                base_color: if i == STACK {
+                base_color: if wreck {
+                    Color::linear_rgb(WRECK_TINT, WRECK_TINT, WRECK_TINT)
+                } else if i == STACK {
                     Color::WHITE
                 } else if i == PYLON_MODEL {
                     Color::linear_rgb(PYLON_TINT, PYLON_TINT, PYLON_TINT)
@@ -560,7 +584,7 @@ impl Stones {
                 ..base.clone()
             };
             let (dry, wet) = (tinted(TINT, DRY_ROUGH), tinted(WET_TINT, WET_ROUGH));
-            let pale = if i == PYLON_MODEL || prop {
+            let pale = if i == PYLON_MODEL || prop || wreck {
                 dry.clone()
             } else {
                 tinted(ISLE_TINT, DRY_ROUGH)

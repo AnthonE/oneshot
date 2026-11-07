@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use super::fresnel;
 use super::weathering::{Block, Shape};
 use crate::level::{
-    strip_material, BoxLook, LevelPart, BLAST, BRICK, MARBLE, ROAD, RUST, SNOW, STONE, STONE_DARK,
+    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, MARBLE, ROAD, RUST, SNOW, STONE, STONE_DARK,
 };
 
 /// The `stone` set's tile, m: the UVs the Blender kit writes (`arch.py`'s `TILE_M`).
@@ -44,7 +44,14 @@ const LIGHT_WHITE: Color = Color::srgb(0.68, 0.86, 1.0);
 const LIGHT_AMBER: Color = Color::srgb(1.0, 0.62, 0.28);
 const LIGHT_RED: Color = Color::srgb(1.0, 0.28, 0.3);
 const LIGHT_BLUE: Color = Color::srgb(0.3, 0.55, 1.0);
+const LIGHT_SODIUM: Color = Color::srgb(1.0, 0.58, 0.22);
+const LIGHT_PINK: Color = Color::srgb(1.0, 0.16, 0.56);
+const LIGHT_CYAN: Color = Color::srgb(0.16, 0.86, 1.0);
+const LIGHT_WARM: Color = Color::srgb(1.0, 0.72, 0.42);
+const LIGHT_COLD: Color = Color::srgb(0.7, 0.84, 1.0);
 const LIGHT_ROUGH: f32 = 0.4;
+/// A window across a city, over a strip's glow.
+const WINDOW_GLOW: f32 = 0.34;
 /// A shaft of light down through the air: over the frame, never a wall.
 const SHAFT: Color = Color::linear_rgba(0.5, 0.68, 0.95, 1.0);
 
@@ -59,8 +66,12 @@ pub enum Paint {
     Light(Color),
     /// Added over the frame, its brightness in COLOR_0.
     Shaft(Color),
+    /// Glowing, dimmed by this: far windows.
+    Dim(Color, f32),
     /// The still water's sheet (`pool.rs`).
     Water,
+    /// A wet road in a look's photograph, over its reflection (`pool.rs`).
+    Wet(u8),
     /// The architecture over the water, upside down under it, in a look's
     /// photograph (`pool.rs`); none: its COLOR_0 alone (the lights).
     Reflected(Option<u8>),
@@ -160,9 +171,44 @@ const CISTERN: Set = Set {
     }),
 };
 
+const OVERPASS: Set = Set {
+    dir: "overpass",
+    prefix: "overpass",
+    parts: &[
+        part("road", Paint::Look(ROAD)),
+        part("blast", Paint::Look(BLAST)),
+        part("blast_dark", Paint::Look(BLAST_DARK)),
+        part("rust", Paint::Look(RUST)),
+        part("paint", Paint::Metal(Color::srgb(0.7, 0.7, 0.64), 0.55, 0.0)),
+        part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.55, 0.0)),
+        part("steel", Paint::Metal(Color::srgb(0.36, 0.37, 0.39), 0.5, 0.6)),
+        part("puddle", Paint::Metal(Color::srgb(0.02, 0.022, 0.026), 0.05, 0.0)),
+        part("shaft", Paint::Shaft(Color::WHITE)),
+        part("light_sodium", Paint::Light(LIGHT_SODIUM)),
+        part("light_red", Paint::Light(LIGHT_RED)),
+        part("light_blue", Paint::Light(LIGHT_BLUE)),
+        part("light_pink", Paint::Light(LIGHT_PINK)),
+        part("light_cyan", Paint::Light(LIGHT_CYAN)),
+        part("light_warm", Paint::Dim(LIGHT_WARM, WINDOW_GLOW)),
+        part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
+        part("city", Paint::Metal(Color::srgb(0.035, 0.04, 0.05), 0.8, 0.0)),
+        part("flood", Paint::Water),
+        part("reflect_light", Paint::Reflected(None)),
+        part("reflect_city", Paint::Reflected(None)),
+        part("wet_road", Paint::Wet(ROAD)),
+        part("wet_blast", Paint::Reflected(Some(BLAST))),
+        part("wet_rust", Paint::Reflected(Some(RUST))),
+        part("wet_light", Paint::Reflected(None)),
+    ],
+    block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(40.0, 8.0, 40.0)),
+    turns: (Vec3::ZERO, 0.0),
+    lift: None,
+};
+
 /// The built set of map `id`, if it has one.
 pub fn of(id: u8) -> Option<&'static Set> {
     match id {
+        1 => Some(&OVERPASS),
         2 => Some(&CISTERN),
         7 => Some(&OBSERVATORY),
         _ => None,
@@ -245,8 +291,16 @@ pub fn dress(
                         bevy::light::NotShadowReceiver,
                     ));
                 }
+                Paint::Dim(colour, k) => {
+                    let mut m = strip_material(colour, LIGHT_ROUGH);
+                    m.emissive = m.emissive * k;
+                    c.insert((MeshMaterial3d(mats.add(m)), NotShadowCaster));
+                }
                 Paint::Water => {
                     c.insert((super::pool::WaterWanted, NotShadowCaster));
+                }
+                Paint::Wet(look) => {
+                    c.insert((super::pool::WetWanted(look), NotShadowCaster));
                 }
                 Paint::Reflected(look) => {
                     c.insert((super::pool::ReflectWanted(look), NotShadowCaster, bevy::light::NotShadowReceiver));

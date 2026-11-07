@@ -245,7 +245,8 @@ pub struct RainbowHandle(pub Handle<RainbowMaterial>);
 pub fn params_for(now: &MoodNow) -> RainbowParams {
     let m = &now.mood;
     let sun = m.to_sun();
-    let k = if now.roofed {
+    // Under a roof, or a veil (`Mood::veil`) with no sun on the rain to turn back.
+    let k = if now.roofed || m.veil > 0.0 {
         0.0
     } else {
         strength(sun.y, m.light, m.rain, 0.0)
@@ -319,8 +320,10 @@ mod tests {
         assert!((41.0..43.5).contains(&p), "{p}");
         assert!((49.5..52.5).contains(&s), "{s}");
         assert!(descartes(WATER_N_VIOLET, 1) < descartes(WATER_N_RED, 1));
-        let shower = MoodNow::of(1);
-        assert_eq!(shower.mood, super::super::mood::SUN_SHOWER);
+        let shower = MoodNow {
+            mood: super::super::mood::SUN_SHOWER,
+            ..MoodNow::of(0)
+        };
         assert!(params_for(&shower).anti.w > 0.3);
         assert_eq!(params_for(&MoodNow::of(0)).anti.w, 0.0);
     }

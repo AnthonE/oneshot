@@ -206,6 +206,28 @@ fn cisterns_levels_join() {
     }
 }
 
+/// Overpass' slip roads and its blocks' stairs all climb, both sides.
+#[test]
+fn overpass_climbs() {
+    let m = by_id(1).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25 && fabs(iz as f32 * 0.25 - z) <= 0.25 && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the road", 0.0, 0.0, 0.0),
+        ("the flyover", 0.0, 0.0, 5.0),
+        ("red's roof", -27.0, 0.0, 3.5),
+        ("blue's roof", 27.0, 0.0, 3.5),
+        ("the north alley", 0.0, 19.5, 0.0),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
 /// Every rotation the server plays has a map in it (else it falls back to
 /// any map that can play the mode), and a map out of the rotation is in
 /// none of them.

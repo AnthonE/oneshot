@@ -30,11 +30,15 @@ fn slope(p: vec2<f32>, t: f32) -> vec2<f32> {
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
-    let p = in.world_position.xz / pool.sheet.z;
-    let s = slope(p, globals.time) * pool.sheet.w;
-    let n = normalize(vec3<f32>(-s.x, 1.0, -s.y));
-    pbr_input.N = n;
-    pbr_input.world_normal = n;
+    // A ripple of its own, or (a wet road) the photograph's.
+    var n = pbr_input.N;
+    if pool.sheet.w > 0.0 {
+        let p = in.world_position.xz / pool.sheet.z;
+        let s = slope(p, globals.time) * pool.sheet.w;
+        n = normalize(vec3<f32>(-s.x, 1.0, -s.y));
+        pbr_input.N = n;
+        pbr_input.world_normal = n;
+    }
 
     var out: FragmentOutput;
     let lit = apply_pbr_lighting(pbr_input);

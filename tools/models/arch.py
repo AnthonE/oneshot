@@ -272,7 +272,7 @@ def tbox(cx, cz, ux, uz, hu, hv, y0, y1, mat='stone', cell=1.2):
     quad((c[0][0], y0, c[0][1]), (c[1][0], y0, c[1][1]), (c[2][0], y0, c[2][1]), (c[3][0], y0, c[3][1]), mat, (0, -1, 0), cell)
 
 
-def panel(x0, y0, z0, x1, y1, z1, face, pier=0.3, band=0.22, mat='stone'):
+def panel(x0, y0, z0, x1, y1, z1, face, pier=0.3, band=0.22, mat='stone', plinth='stone_dark'):
     """A span of wall: the box the sim collides, its body set back BACK from
     `face` ('-x', '+x', '-z', '+z'), piers at its ends and a plinth and a course
     between them out to the plane."""
@@ -283,7 +283,7 @@ def panel(x0, y0, z0, x1, y1, z1, face, pier=0.3, band=0.22, mat='stone'):
         cbox(bx0, y0, z0, bx1, y1, z1, mat, c=0.02)
         cbox(a, y0, z0, b, y1, z0 + pier, mat, c=0.03)
         cbox(a, y0, z1 - pier, b, y1, z1, mat, c=0.03)
-        cbox(a, y0, z0 + pier, b, y0 + band, z1 - pier, 'stone_dark', c=0.02)
+        cbox(a, y0, z0 + pier, b, y0 + band, z1 - pier, plinth, c=0.02)
         cbox(a, y1 - band, z0 + pier, b, y1, z1 - pier, mat, c=0.02)
     else:
         bz0, bz1 = (z0, z1 - BACK) if up else (z0 + BACK, z1)
@@ -291,7 +291,7 @@ def panel(x0, y0, z0, x1, y1, z1, face, pier=0.3, band=0.22, mat='stone'):
         cbox(x0, y0, bz0, x1, y1, bz1, mat, c=0.02)
         cbox(x0, y0, a, x0 + pier, y1, b, mat, c=0.03)
         cbox(x1 - pier, y0, a, x1, y1, b, mat, c=0.03)
-        cbox(x0 + pier, y0, a, x1 - pier, y0 + band, b, 'stone_dark', c=0.02)
+        cbox(x0 + pier, y0, a, x1 - pier, y0 + band, b, plinth, c=0.02)
         cbox(x0 + pier, y1 - band, a, x1 - pier, y1, b, mat, c=0.02)
 
 
@@ -529,11 +529,12 @@ def surface(grid, mat, out, uv, smooth=True):
             pa.faces.append((idx, [tuple(x / t for x in uv(pa.verts[q])) for q in idx], smooth))
 
 
-def mirror_parts(objs, parts, plane, keep=None, dim=None):
+def mirror_parts(objs, parts, plane, keep=None, dim=None, stretch=1.0):
     """The architecture over a water line again under it, its faces turned to
     match, for a reflection: {made: [source, ...]}. A face looking up is never
     seen upside down, so it's left out, as is what `keep((x, y, z))` refuses at a
-    face's middle; `dim[source]` scales a source's COLOR_0."""
+    face's middle; `dim[source]` scales a source's COLOR_0, and `stretch` draws it
+    longer than it stands, as a wet road draws a lamp."""
     made = {}
     for name, sources in parts.items():
         verts, polys, uvs, cols = [], [], [], []
@@ -556,7 +557,7 @@ def mirror_parts(objs, parts, plane, keep=None, dim=None):
                 for li in loops:
                     v = me.loops[li].vertex_index
                     p = me.vertices[v].co
-                    verts.append((p.x, p.y, 2 * plane - p.z))
+                    verts.append((p.x, p.y, plane - (p.z - plane) * stretch))
                     uvs.append(tuple(uv.data[li].uv))
                     col = attr.data[v].color
                     cols.append((col[0] * k, col[1] * k, col[2] * k, 1.0))
@@ -576,3 +577,28 @@ def mirror_parts(objs, parts, plane, keep=None, dim=None):
         bpy.context.scene.collection.objects.link(o)
         made[name] = o
     return made
+
+
+def extrude(a, b, section, mat, caps=True, cell=1.2, ya=0.0, yb=0.0):
+    """A closed section (s across the way, y) carried straight from a to b (x, z),
+    its y lifted by ya at a and yb at b. Its points go round counter-clockwise
+    looking along the way, the faces out; `s` is along (-dz, dx)."""
+    dx, dz = b[0] - a[0], b[1] - a[1]
+    ln = math.hypot(dx, dz)
+    nx, nz = -dz / ln, dx / ln
+    def at(end, p):
+        e, lift = (a, ya) if end == 0 else (b, yb)
+        return (e[0] + nx * p[0], p[1] + lift, e[1] + nz * p[0])
+    cx = sum(p[0] for p in section) / len(section)
+    cy = sum(p[1] for p in section) / len(section)
+    n = len(section)
+    for i in range(n):
+        p, q = section[i], section[(i + 1) % n]
+        mid = ((p[0] + q[0]) / 2 - cx, (p[1] + q[1]) / 2 - cy)
+        quad(at(0, p), at(0, q), at(1, q), at(1, p), mat, (nx * mid[0], mid[1], nz * mid[0]), cell)
+    if caps:
+        for end, s in ((0, -1), (1, 1)):
+            c = at(end, (cx, cy))
+            for i in range(n):
+                tri(at(end, section[i]), at(end, section[(i + 1) % n]), c, mat, (dx * s, 0, dz * s))
+

@@ -150,6 +150,9 @@ pub const BLAST: u8 = 39;
 pub const BLAST_DARK: u8 = 40;
 pub const SNOW: u8 = 41;
 pub const RUST: u8 = 42;
+/// A turned box drawn as a wreck inside it (`look/boulders.rs`).
+pub const WRECK_CAR: u8 = 43;
+pub const WRECK_VAN: u8 = 44;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -1303,6 +1306,15 @@ pub fn build(
             e.insert(crate::look::boulders::Pylon {
                 model: crate::look::boulders::PYLON_MODEL,
                 at: crate::look::boulders::pylon_transform(at, hx, sol.y1 - sol.y0, hz),
+                min: v3(bounds.min),
+                max: v3(bounds.max),
+            });
+        }
+        // A wreck: its model inside its turned box.
+        if let (WRECK_CAR | WRECK_VAN, sim::solid::Shape::Turned { hx, hz, .. }) = (l, sol.shape) {
+            e.insert(crate::look::boulders::Pylon {
+                model: crate::look::boulders::wreck_model(l),
+                at: crate::look::boulders::wreck_transform(at, hx, sol.y1 - sol.y0, hz),
                 min: v3(bounds.min),
                 max: v3(bounds.max),
             });

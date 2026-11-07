@@ -306,6 +306,23 @@ pub fn hall_haze(mood: &super::mood::Mood) -> DistanceFog {
     }
 }
 
+/// A mood's grade on the eye's camera (`mood::Grade`). The film's own shots grade
+/// their own camera over it.
+pub fn grade_for(mood: Res<super::mood::MoodNow>, mut cams: Query<&mut ColorGrading, With<EyeCam>>) {
+    if !mood.is_changed() {
+        return;
+    }
+    let g = mood.mood.grade;
+    for mut c in &mut cams {
+        c.global.temperature = g.temperature;
+        c.global.tint = g.tint;
+        c.global.post_saturation = g.saturation;
+        c.shadows.contrast = g.contrast;
+        c.midtones.contrast = g.contrast;
+        c.shadows.lift = g.lift;
+    }
+}
+
 /// The sun's light at the ground where nothing else reddens it: the mood's
 /// colour, and where no atmosphere draws (it reddens and dims the sun on
 /// its way down itself, `pbr_lighting.wgsl`), the same air's transmittance
