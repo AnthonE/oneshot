@@ -133,6 +133,10 @@ fn run() -> Result<(), String> {
         // `--fxstage N`: the demo's stage N alone (`look/fx/demo.rs`).
         let fxstage = arg("--fxstage").and_then(|n| n.parse::<u32>().ok());
         let fxdemo = flag("--fxdemo") || fxstage.is_some();
+        let code = arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0);
+        // `--mode watch [--party CODE]`: that party's match is watched, not
+        // joined.
+        let watch = (mode == Some(proto::MODE_WATCH)).then_some(code);
         let front = match mode {
             Some(m) => Start::Join(m),
             None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
@@ -151,7 +155,9 @@ fn run() -> Result<(), String> {
             fxstage,
             open,
             front,
-            party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
+            party: if watch.is_some() { 0 } else { code },
+            watch,
+            streamer: flag("--streamer"),
             // A picture is the window's size, not the monitor's; a tool's
             // run (a tape, the autopilot) doesn't take the screen.
             windowed: flag("--windowed") || shot.is_some() || record.is_some() || autoplay,
@@ -361,6 +367,8 @@ const HELP: &str = "oneshot: the desktop client
                                    (--settings alone: over the title)
   --graphics                       the settings, on GRAPHICS
   --windowed                       a window this run, not fullscreen (the setting is kept)
+  --streamer                       streamer mode this run: the party code and your wallet
+                                   stay off the screen (SETTINGS > STREAM keeps it)
   --fxdemo                         the effects staged in front of the camera, in a
                                    match (look/fx/demo.rs); --fxstage N: its stage N
   --knobs 'Layer.key=v;...'        effects retuned for this run (tools/fx.sh, REEL_KNOBS)

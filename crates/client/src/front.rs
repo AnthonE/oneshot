@@ -234,6 +234,9 @@ pub(crate) struct Front {
     scroll: f32,
     /// The armory's page (`ARMORY_TABS`).
     armory: usize,
+    /// Streamer mode's SHOW: the party code drawn plainly till the tab
+    /// changes.
+    peek_code: bool,
 }
 
 /// The title opens on a panel other than PLAY (`--tab`, for a picture of
@@ -328,6 +331,8 @@ enum Hit {
     /// Who may join, a step either way.
     Privacy(i8),
     CopyLink,
+    CopyWatch,
+    PeekCode,
     Leave,
     Alone,
     /// The party's own room: map (0), score to win (1) or clock (2), a
@@ -370,6 +375,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
             started_at: None,
             scroll: 0.0,
             armory: 0,
+            peek_code: false,
             tab: Tab::Play,
             drawn_party: u32::MAX,
             drawn_challenges: u32::MAX,
@@ -453,6 +459,7 @@ fn build(
     party: &PartyView,
     challenges: &crate::challenges::Challenges,
     pics: (&mut EmblemPics, &mut Assets<Image>),
+    streamer: bool,
 ) {
     let signin = door.signin();
     commands
@@ -480,7 +487,7 @@ fn build(
             })
             .with_children(|top| {
                 top.spawn(ui::wordmark("ARENA SLAYER"));
-                account(top, &signin);
+                account(top, &signin, streamer);
             });
             // The body: the nav, the panel, the stage.
             root.spawn(Node {
@@ -495,7 +502,9 @@ fn build(
                 match front.tab {
                     Tab::Play => panel(body, front, player, &signin, knocking, party),
                     Tab::Armory => armory_panel(body, front, player, knocking, party, pics),
-                    Tab::Party => with_play(body, front, party, knocking, |p| party_panel(p, party)),
+                    Tab::Party => with_play(body, front, party, knocking, |p| {
+                        party_panel(p, party, streamer, front.peek_code)
+                    }),
                     Tab::Friends => with_play(body, front, party, knocking, |p| friends_panel(p, party, &signin)),
                     Tab::Challenges => with_play(body, front, party, knocking, |p| {
                         challenges_panel(p, challenges, &signin)
@@ -537,7 +546,7 @@ fn build(
 }
 
 /// The account corner: sign in, or who is signed in.
-fn account(top: &mut ChildSpawnerCommands, signin: &SignIn) {
+fn account(top: &mut ChildSpawnerCommands, signin: &SignIn, streamer: bool) {
     top.spawn(Node {
         flex_direction: FlexDirection::Column,
         align_items: AlignItems::FlexEnd,
@@ -559,6 +568,8 @@ fn account(top: &mut ChildSpawnerCommands, signin: &SignIn) {
         SignIn::In(p) => {
             a.spawn(ui::strong("SIGNED IN", 15.0, ui::TITLE));
             match &p.wallet {
+                // Streamer mode: linked, and no more said.
+                Some(_) if streamer => a.spawn(ui::label("Wallet linked", 12.5, ui::DIM)),
                 Some(w) => a.spawn(ui::strong(door::short_wallet(w), 12.5, ui::ELO)),
                 None => a.spawn(ui::label("Link a wallet to play ranked", 12.5, ui::DIM)),
             };
@@ -1656,14 +1667,37 @@ fn playing_words(p: u8) -> String {
 }
 
 /// PARTY: who is in it, who leads, who may join, the link, and voice.
-fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
+/// `streamer`: streamer mode, which keeps the code off the screen (dots)
+/// until SHOW (`peek`); the links still copy.
+fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView, streamer: bool, peek: bool) {
     body.spawn(rows(0.0)).with_children(|p| {
         let Some(info) = party.party.as_ref() else {
             p.spawn(ui::group("PARTY"));
             p.spawn(ui::label("Getting your party ready...", 13.0, ui::DIM));
             return;
         };
-        p.spawn(ui::group(&format!("PARTY · {}", pp::code_text(info.code))));
+        let hidden = streamer && !peek;
+        let code = if hidden {
+            "••••••".to_string()
+        } else {
+            pp::code_text(info.code)
+        };
+        if streamer {
+            p.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(|r| {
+                r.spawn(ui::group(&format!("PARTY · {code}")));
+                r.spawn((chip(52.0), Hit::PeekCode, Tag("party-peek")))
+                    .with_child(chip_label(if hidden { "SHOW" } else { "HIDE" }));
+            });
+        } else {
+            p.spawn(ui::group(&format!("PARTY · {code}")));
+        }
         let lead = party.leads();
         for m in info.members() {
             let mine = m.tag == info.me;
@@ -1762,6 +1796,24 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
                 r.spawn((ui::button(168.0, false), Hit::Leave, Tag("party-leave")))
                     .with_child(ui::button_label("LEAVE PARTY"));
             }
+        });
+        // The watch link: the game opens watching this party's match
+        // (`?watch=CODE`), through a player's eyes, a little behind.
+        p.spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn((ui::button(168.0, false), Hit::CopyWatch, Tag("party-watch")))
+                .with_child(ui::button_label("COPY WATCH LINK"));
+            r.spawn(ui::label(
+                "anyone with it watches your match, a little behind",
+                10.5,
+                ui::FAINT,
+            ));
         });
         let alone = if party.alone { "ON" } else { "OFF" };
         p.spawn(line_row()).with_children(|r| {
@@ -2230,6 +2282,7 @@ fn click(
     mut party: ResMut<PartyView>,
     mut asks: ResMut<PartyAsks>,
     in_match: Res<InMatch>,
+    (settings, opts): (Res<crate::settings::Settings>, Res<crate::Opts>),
 ) {
     let hit = hits.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| *h);
     // A click anywhere but the field puts the keys back.
@@ -2318,6 +2371,7 @@ fn click(
         Hit::Tab(t) => {
             if front.tab != t {
                 front.scroll = 0.0;
+                front.peek_code = false;
             }
             front.tab = t;
             if t == Tab::Friends {
@@ -2339,12 +2393,32 @@ fn click(
                 asks.0.push(Do::Act(pp::ACT_PRIVACY, next));
             }
         }
-        Hit::CopyLink => {
+        Hit::CopyLink | Hit::CopyWatch => {
+            let watch = hit == Hit::CopyWatch;
             let code = party.code_text();
-            party.notice = Some(match party::copy_link(&code) {
-                Some(link) => format!("Copied: {link}"),
-                None => format!("Your party's code is {code}: oneshot --party {code}"),
+            let copied = if watch {
+                party::copy_watch_link(&code)
+            } else {
+                party::copy_link(&code)
+            };
+            // Streamer mode says what was copied, never the code itself.
+            let streamer = settings.streaming(&opts);
+            party.notice = Some(match (copied, streamer) {
+                (Some(_), true) if watch => {
+                    "Copied the watch link: anyone with it watches your match, a little behind.".into()
+                }
+                (Some(_), true) => "Copied the party link.".into(),
+                (Some(link), false) => format!("Copied: {link}"),
+                (None, true) => {
+                    "The code is hidden: press SHOW, or turn streamer mode off in SETTINGS > STREAM.".into()
+                }
+                (None, false) if watch => format!("Anyone can watch your match: oneshot --mode watch --party {code}"),
+                (None, false) => format!("Your party's code is {code}: oneshot --party {code}"),
             });
+            front.dirty = true;
+        }
+        Hit::PeekCode => {
+            front.peek_code = !front.peek_code;
             front.dirty = true;
         }
         Hit::Leave => asks.0.push(Do::Act(pp::ACT_LEAVE, 0)),
@@ -2537,6 +2611,7 @@ fn rebuild(
     party: Res<PartyView>,
     (mut challenges, time, mut looked): (ResMut<crate::challenges::Challenges>, Res<Time>, Local<f64>),
     (mut pics, mut images): (ResMut<EmblemPics>, ResMut<Assets<Image>>),
+    (settings, opts): (Res<crate::settings::Settings>, Res<crate::Opts>),
 ) {
     // The sign-in looked at a few times a second, or on a change here: each
     // look clones it (a string made, on the desktop).
@@ -2590,6 +2665,7 @@ fn rebuild(
         &party,
         &challenges,
         (&mut pics, &mut images),
+        settings.streaming(&opts),
     );
     pics.end(&mut images);
 }
@@ -2665,6 +2741,7 @@ fn page_cmds(
 fn join(
     mut front: ResMut<Front>,
     player: Res<Player>,
+    opts: Res<crate::Opts>,
     mut door: NonSendMut<Door>,
     mut knocking: NonSendMut<Knocking>,
     time: Res<Time>,
@@ -2678,7 +2755,12 @@ fn join(
         pass: String::new(),
         mode: m,
         look: player.look(),
-        party: 0,
+        // Watching: the party whose match to follow (0: any public one).
+        party: if m == proto::MODE_WATCH {
+            opts.watch.unwrap_or(0)
+        } else {
+            0
+        },
     }));
     front.dirty = true;
 }
