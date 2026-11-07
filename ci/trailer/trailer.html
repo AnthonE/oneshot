@@ -363,6 +363,9 @@ const SCENES = [
       const k = Math.exp(-(L.t - kill) * 6);
       fg.save(); fg.globalAlpha = k * .5; fg.fillStyle = '#fff'; fg.fillRect(0, 0, W, H); fg.restore();
     }
+    // the picture goes to black under the words before the first claim
+    const dark = ramp(L.t, kill + 2.7, kill + 3.4);
+    if (dark > 0) { fg.save(); fg.globalAlpha = dark; fg.fillStyle = '#000'; fg.fillRect(0, 0, W, H); fg.restore(); }
     const r = rv({ t: L.t - kill, d: L.d - kill }, .25, .4, .25);
     if (L.t > kill) text(fg, 'ONE SHOT.', W / 2, 800 + r.dy, { size: 150, track: 14, alpha: r.a, shadow: 40 });
   } },
