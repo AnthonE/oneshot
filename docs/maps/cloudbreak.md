@@ -8,11 +8,7 @@ middle under two leaning struts that never meet. Falling off kills. It is
 our first outdoor arena, our first arena on terrain, and our first map where
 the edge is a weapon.
 
-## 1 · What we take from the references, and what we don't
-
-The two pictures are mood, kept in `moodboard/` like the other references:
-never traced, copied, named or shipped (`.claude/skills/hd`). The layout below
-is ours and the map is mirrored, which the references' map is not.
+## 1 · What we take from the references
 
 **Take:**
 - A small island high over nothing: the edge always in view, the void a third
@@ -23,10 +19,6 @@ is ours and the map is mirrored, which the references' map is not.
 - An overcast sky with a break in it, a flat sea of mist below, stacks of rock
   far off getting paler.
 - The island's underside seen from its edge: undercut rock and arches.
-
-**Don't take:** the layout, the tower's shape, the struts' shape, the
-panelling motifs, any texture, the name. Our grey is our own panel language
-(§8), our struts are our own shape, our tower sits on the mirror line.
 
 ## 2 · Numbers
 
