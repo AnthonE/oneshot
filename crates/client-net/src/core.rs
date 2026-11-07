@@ -67,6 +67,77 @@ pub fn step_near(
     l
 }
 
+/// The hulls in our bubble (`VehState::near`), as predicted to the newest
+/// seq, each on the stick it was last sent with (None: parked); and who we
+/// know rides them, seated, for their sides (a teammate's hull never runs
+/// us down).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Near {
+    /// Which slots are in, a bit each.
+    pub mask: u8,
+    pub hulls: [Vehicle; MAX_VEHICLES],
+    pub sticks: Sticks,
+    pub riders: [Man; MAX_FIGHTERS],
+}
+
+/// [`step_near`] for all this client predicts: our fighter (seat `own`),
+/// the hull it rides (at the wheel on our input, behind someone on
+/// `stick`), and the hulls in our bubble on theirs: so a crash into one, or
+/// being shoved by one on foot, is predicted rather than corrected.
+#[allow(clippy::too_many_arguments)]
+pub fn step_bubble(
+    f: &mut Fighter,
+    own: usize,
+    v: &mut Option<Vehicle>,
+    near: &mut Near,
+    phase: Phase,
+    inp: &Input,
+    stick: Option<(i8, i8)>,
+    spare_mates: bool,
+    map: &Map,
+) -> sim::fighter::Local {
+    let mut sc = Scene {
+        men: near.riders,
+        spare_mates,
+        ..Scene::default()
+    };
+    for (i, h) in sc.hulls.iter_mut().enumerate() {
+        if near.mask & (1 << i) != 0 {
+            *h = near.hulls[i];
+        }
+    }
+    let mut sticks = near.sticks;
+    let ridden = match (f.riding(), *v) {
+        (Some((i, seat)), Some(h)) => {
+            sc.hulls[i] = h;
+            sticks[i] = if seat == DRIVER {
+                f.active().then_some((inp.mx, inp.mz))
+            } else {
+                stick
+            };
+            Some(i)
+        }
+        _ => None,
+    };
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[own] = *inp;
+    let l = step_near(f, own, &mut sc, phase, &inputs, &sticks, 0, map);
+    if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
+        *h = sc.hulls[i];
+    }
+    for i in 0..MAX_VEHICLES {
+        if near.mask & (1 << i) != 0 && ridden != Some(i) {
+            near.hulls[i] = sc.hulls[i];
+        }
+    }
+    for (r, m) in near.riders.iter_mut().zip(&sc.men) {
+        if r.ride != 0 {
+            r.body = m.body;
+        }
+    }
+    l
+}
+
 /// [`step_near`] for our fighter and the hull it rides alone: at the wheel
 /// the hull drives on our own input; behind someone, on its driver's
 /// `stick` (`mx`, `mz`, all of an input a hull reads), and with none it is
@@ -104,6 +175,9 @@ pub fn step_own(
 
 /// Inputs and predictions kept, by seq.
 pub const RING: usize = 64;
+/// Past this many ticks to re-run, the hulls in our bubble are dropped from
+/// the guess (a stick held that long is no guess): ours alone is re-run.
+pub const MAX_RERUN: u32 = 40;
 /// Snapshots kept for interpolation.
 pub const INTERP_FRAMES: usize = 8;
 /// Input frames the clock aims to have waiting at the server at its low
@@ -224,6 +298,9 @@ pub struct Stats {
     /// on its driver's stick kept on (the driver moved it): re-run, the
     /// jump eased. Not a correction: nothing of ours was wrong.
     pub hull_corrections: u32,
+    /// Snapshots with hulls in our bubble, and the ticks re-run in all.
+    pub near_snaps: u32,
+    pub rerun_ticks: u64,
     pub resyncs: u32,
     /// The server's input buffer for us, as last reported.
     pub depth: i8,
@@ -444,6 +521,10 @@ pub struct NetCore {
     /// Riding behind someone, its driver's stick as the newest snapshot
     /// said: what the hull is predicted on until the next says otherwise.
     stick: Option<(i8, i8)>,
+    /// The hulls in our bubble, as predicted to the newest seq.
+    near: Near,
+    /// Teammates never run each other down (sides, friendly fire off).
+    spare_mates: bool,
     /// Before the newest predicted tick, for drawing between ticks (the
     /// body, and the vehicle's middle and heading).
     prev_pos: V3,
@@ -539,6 +620,8 @@ impl NetCore {
             pred: Fighter::default(),
             pred_v: None,
             stick: None,
+            near: Near::default(),
+            spare_mates: rules.teams && !rules.friendly_fire,
             prev_pos: V3::ZERO,
             prev_v: V3::ZERO,
             prev_vyaw: 0,
@@ -658,7 +741,17 @@ impl NetCore {
             self.prev_pos = self.pred.body.pos;
             let was = self.pred_v;
             let phase = self.phase();
-            let local = step_own(&mut self.pred, &mut self.pred_v, phase, &input, self.stick, &self.map);
+            let local = step_bubble(
+                &mut self.pred,
+                self.slot as usize,
+                &mut self.pred_v,
+                &mut self.near,
+                phase,
+                &input,
+                self.stick,
+                self.spare_mates,
+                &self.map,
+            );
             // A vehicle just got into starts where it is, not at the origin.
             if let Some(v) = was.or(self.pred_v) {
                 self.prev_v = v.pos;
@@ -1364,7 +1457,59 @@ impl NetCore {
         if passenger && known && matches!(self.after_v[at], Some(p) if Some(p) != auth_v) {
             self.stats.hull_corrections += 1;
         }
-        if !confirmed || passenger {
+        // The hulls in our bubble as the server had them, to re-run with
+        // ours: none past what a re-run guesses well across.
+        let mut near = Near::default();
+        if ahead <= MAX_RERUN {
+            for v in s.vehicles() {
+                let (Some(n), i) = (v.near, v.slot as usize) else {
+                    continue;
+                };
+                let Some(def) = self.map.vehicles.get(i) else {
+                    continue;
+                };
+                near.mask |= 1 << i;
+                near.hulls[i] = Vehicle {
+                    active: true,
+                    pos: v.pos,
+                    vel: v.vel,
+                    yaw: v.yaw,
+                    grounded: n.grounded,
+                    health: sim::consts::VEH_HEALTH,
+                    seats: v.seats,
+                    respawn: 0,
+                    home: v.slot,
+                    turret: def.turret,
+                };
+                near.sticks[i] = n.stick;
+                for (seat, &x) in v.seats.iter().enumerate() {
+                    let q = x as usize;
+                    if q == 0 || q > MAX_FIGHTERS || q - 1 == self.slot as usize {
+                        continue;
+                    }
+                    // A rider we know: one sent, or one of ours.
+                    let team = s
+                        .remotes()
+                        .iter()
+                        .find(|r| r.slot as usize == q - 1)
+                        .map_or(self.team, |r| r.team);
+                    near.riders[q - 1] = Man {
+                        body: near.hulls[i].seat_body(seat),
+                        ride: Fighter::ride_of(i, seat),
+                        live: true,
+                        flag: false,
+                        team,
+                    };
+                }
+            }
+        }
+        if near.mask != 0 {
+            self.stats.near_snaps += 1;
+        } else {
+            self.near = Near::default();
+        }
+        if !confirmed || passenger || near.mask != 0 {
+            self.stats.rerun_ticks += ahead.min(RING as u32) as u64;
             let before = self.pred.body.pos;
             let before_v = self.pred_v;
             let mut f = auth;
@@ -1372,12 +1517,15 @@ impl NetCore {
             if ahead < RING as u32 {
                 let mut q = l.wrapping_add(1);
                 while q != self.seq {
-                    step_own(
+                    step_bubble(
                         &mut f,
+                        self.slot as usize,
                         &mut v,
+                        &mut near,
                         phase,
                         &self.inputs[q as usize % RING],
                         self.stick,
+                        self.spare_mates,
                         &self.map,
                     );
                     // Our rounds the server hasn't yet leave from where the
@@ -1397,6 +1545,7 @@ impl NetCore {
                 }
             }
             self.pred_v = v;
+            self.near = near;
             // The tick being drawn through moves with the correction, so
             // the step between ticks stays the one already on screen.
             // The vehicle's correction eases out with the body's, so the hull

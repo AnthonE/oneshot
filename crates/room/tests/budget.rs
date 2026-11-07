@@ -121,3 +121,59 @@ fn a_full_sky_sends_the_rounds_that_matter_to_you() {
         assert!(sent.iter().any(|p| p.pos.x == w.proj[i].pos.x), "near round {i} goes");
     }
 }
+
+/// Dry Fork at its fullest with a bubble: every seat in sight and six of
+/// them in it, every hull it has in it and driven, as many rounds and
+/// drops as a snapshot holds, riding behind a driver. Room for eight of the
+/// widest events (145 bits each) besides.
+#[test]
+fn a_full_bubble_fits_with_room_for_events() {
+    use proto::{NearBody, NearHull, MAX_SNAP_DROPS};
+    let mut w = World::new(sim::map::by_id(3).unwrap(), Rules::big_team(), 1, (2, 3));
+    for s in 0..MAX_FIGHTERS {
+        w.seat(s, (s & 1) as u8);
+    }
+    let mut queue = room::EventQueue::default();
+    let mut snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    snap.n_remote = MAX_REMOTES as u8;
+    for (k, r) in snap.remotes.iter_mut().enumerate() {
+        r.slot = 1 + k as u8;
+        r.pos = V3::new(-100.0 + k as f32, 3.0, 50.0);
+        r.vel = V3::new(6.5, -9.0, 3.25);
+        r.near = (k < 6).then_some(NearBody {
+            duck: 16,
+            mx: -127,
+            mz: 127,
+            jump: true,
+            crouch: true,
+            share: 7,
+        });
+    }
+    let hulls = w.map.vehicles.len();
+    assert_eq!(hulls, 4);
+    snap.n_vehicles = hulls as u8;
+    for (i, v) in snap.vehicles.iter_mut().enumerate().take(hulls) {
+        *v = proto::VehState {
+            slot: i as u8,
+            pos: V3::new(-90.0 + 10.0 * i as f32, 1.5, -32.0),
+            vel: V3::new(21.0, -3.0, 4.0),
+            yaw: 1234,
+            health: 200,
+            seats: [9, 10],
+            near: Some(NearHull {
+                grounded: true,
+                stick: Some((-127, 127)),
+                share: 3,
+            }),
+        };
+    }
+    snap.n_proj = MAX_SNAP_PROJ as u8;
+    snap.n_drops = MAX_SNAP_DROPS as u8;
+    snap.own_vehicle = Some(w.vehicles[0]);
+    snap.drive = Some((-127, 127));
+    snap.n_events = 0;
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_snapshot(&snap, &mut buf).expect("fits a datagram");
+    let event = 145usize.div_ceil(8);
+    assert!(n + 8 * event <= MAX_DATAGRAM, "{n} bytes before events");
+}

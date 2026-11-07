@@ -18,7 +18,7 @@ use proto::{encode_msg, encode_snapshot, salt_commit, InputMsg, Msg, Name, Snaps
 use room::fog::{plainly_sees, sees};
 use room::{Room, HEARD, HEARD_GRID_M};
 use sim::bot::Bot;
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{MAX_FIGHTERS, SHARE_FULL, TICK_HZ};
 use sim::events::Kind as Ev;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -79,6 +79,8 @@ struct Gate {
     next_event: u16,
     events_seen: usize,
     stuck_seen: usize,
+    /// Hulls sent in our bubble, checked.
+    near_seen: usize,
 }
 
 impl Gate {
@@ -120,6 +122,8 @@ impl Gate {
                             w.tick,
                             r.slot
                         );
+                        // 21. Nobody on foot is in our bubble (yet).
+                        assert!(r.near.is_none(), "tick {}: seat {} near", w.tick, r.slot);
                     }
                 }
                 // 8. A projectile is sent only if its owner is known to
@@ -230,6 +234,30 @@ impl Gate {
                         self.vehicles_seen += 1;
                         let i = v.slot as usize;
                         let t = &w.vehicles[i];
+                        // 17. A hull in our bubble only while we live,
+                        // never our own, and only with nobody at its wheel
+                        // or someone we know (its stick is theirs).
+                        // 18. Its stick the one it is driven by.
+                        // 19. Exact, as the server has it.
+                        // 20. Its share of our rewind whole (drawn in the
+                        // past, as every hull is) for now.
+                        if let Some(n) = v.near {
+                            self.near_seen += 1;
+                            assert!(me.active() && mine != Some(i), "tick {}: a bubble hull {v:?}", w.tick);
+                            assert!(
+                                t.driver().is_none_or(&known),
+                                "tick {}: an unknown driver's stick: {v:?}",
+                                w.tick
+                            );
+                            assert_eq!(n.stick, w.drive_stick(i), "tick {}: hull {i}'s stick", w.tick);
+                            assert_eq!(
+                                (v.pos, v.vel, n.grounded),
+                                (t.pos, t.vel, t.grounded),
+                                "tick {}: hull {i} not exact",
+                                w.tick
+                            );
+                            assert_eq!(n.share, SHARE_FULL, "tick {}: hull {i}'s share", w.tick);
+                        }
                         for &x in &v.seats {
                             assert!(
                                 x == 0 || known(x as usize - 1),
@@ -523,6 +551,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         next_event: 0,
         events_seen: 0,
         stuck_seen: 0,
+        near_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -626,6 +655,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     }
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
+        assert!(g.near_seen > 300, "only {} bubble hulls sent to check", g.near_seen);
     }
     assert!(medals > 0, "no medal to check");
     assert_eq!(

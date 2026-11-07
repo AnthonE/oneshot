@@ -4,6 +4,7 @@
 //! (docs/DESIGN.md §4, §7, §10). `crates/server` puts this behind
 //! WebTransport; the netcode tests drive it directly.
 
+pub mod bubble;
 pub mod fog;
 pub mod medals;
 pub mod replay;
@@ -17,7 +18,7 @@ use proto::{
     encode_snapshot, DropState, VehState, MAX_DATAGRAM, MAX_REMOTES, MAX_SNAP_DROPS, MAX_SNAP_EVENTS, MAX_SNAP_PADS,
     MAX_SNAP_PROJ,
 };
-use proto::{EventState, InputMsg, Msg, Name, PadState, ProjState, Remote, Snapshot};
+use proto::{EventState, InputMsg, Msg, Name, NearHull, PadState, ProjState, Remote, Snapshot};
 use sim::bot::Bot;
 use sim::consts::{ticks, MAX_FIGHTERS, MAX_PADS, TICK_HZ};
 use sim::events::{Event, Kind as Ev};
@@ -138,6 +139,9 @@ pub struct ClientNet {
     /// that update said, repeated while it is held.
     since: [u8; MAX_FIGHTERS],
     updates: [Remote; MAX_FIGHTERS],
+    /// The hulls this client is sent exactly, to predict on its timeline
+    /// (`bubble`).
+    pub bubble: bubble::Bubble,
 }
 
 /// A seat not in this client's last snapshot: updated the moment it is.
@@ -227,6 +231,7 @@ impl Default for ClientNet {
             bases: Box::default(),
             since: [UNSEEN; MAX_FIGHTERS],
             updates: [Remote::default(); MAX_FIGHTERS],
+            bubble: bubble::Bubble::default(),
         }
     }
 }
@@ -427,6 +432,9 @@ pub struct Room {
     /// Snapshots go as deltas against what each client acked, when that
     /// is smaller (`proto::delta`); off, every one goes whole.
     pub deltas: bool,
+    /// Each client is sent the hulls near it exactly, with their sticks,
+    /// to predict (`bubble`); off, every hull goes coarse.
+    pub bubbles: bool,
     /// What each seat's snapshot work made this tick, before it is sent in
     /// seat order (`SeatOut`).
     outs: Box<[SeatOut; MAX_FIGHTERS]>,
@@ -522,6 +530,7 @@ impl Room {
             spectate: None,
             snap_every: SNAP_EVERY,
             deltas: true,
+            bubbles: true,
             outs: Box::new(core::array::from_fn(|_| SeatOut::default())),
             parallel_from: PARALLEL_FROM,
             far_rates: true,
@@ -961,13 +970,14 @@ impl Room {
                 outs,
                 snap_every,
                 deltas,
+                bubbles,
                 parallel_from,
                 far_rates,
                 big,
                 ..
             } = self;
             let rated = *far_rates && *big;
-            let (world, plain, snap_every, deltas) = (&*world, &plain, *snap_every, *deltas);
+            let (world, plain, snap_every, deltas) = (&*world, &plain, *snap_every, (*deltas, *bubbles));
             let work = |(s, ((seat, f), o)): (usize, ((&mut Seat, &mut fog::Fog), &mut SeatOut))| {
                 o.sent = None;
                 if let Seat::Person(c, _) = seat {
@@ -1022,7 +1032,7 @@ fn seat_snapshot(
     o: &mut SeatOut,
     plain: &fog::Plain,
     (snap_every, rated): (u32, bool),
-    deltas: bool,
+    (deltas, bubbles): (bool, bool),
     now_ms: f64,
 ) {
     let tick = world.tick;
@@ -1038,6 +1048,7 @@ fn seat_snapshot(
         |q| f.shows(q, tick),
         |i| f.shows_vehicle(i, tick),
         rated.then_some((&mut c.since, &mut c.updates)),
+        bubbles.then_some((&mut c.bubble, c.rtt_ms, snap_every)),
         &mut o.wire,
     );
     c.pending.clear();
@@ -1082,6 +1093,7 @@ pub fn build(
         visible,
         vehicle_visible,
         None,
+        None,
         &mut wire,
     )
     .0
@@ -1099,6 +1111,7 @@ fn build_encoded(
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
     mut rates: Option<Rates>,
+    near: Option<(&mut bubble::Bubble, f64, u32)>,
     wire: &mut [u8; MAX_DATAGRAM],
 ) -> (Snapshot, usize) {
     let mut snap = Snapshot {
@@ -1119,6 +1132,18 @@ fn build_encoded(
     // Nobody (an event's `a` past the seats: `proto::NOBODY`) is never known.
     let known =
         |q: usize| q < MAX_FIGHTERS && (q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q));
+    // The hulls it is sent exactly to predict: none to a watcher.
+    let members = near.map_or(0, |(b, rtt_ms, ticks)| {
+        b.update(
+            w,
+            s,
+            &known,
+            &|i| vehicle_shown(w, s, i, &known, &vehicle_visible),
+            rtt_ms,
+            ticks,
+        );
+        b.hulls()
+    });
     // Every kind, each by its own rule; no wildcard, so a new kind must
     // say what this client may see of it.
     for k in sim::thing::Kind::ALL {
@@ -1126,7 +1151,7 @@ fn build_encoded(
             sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible, rates.as_mut()),
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, s, eye, &known, &vehicle_visible),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
-            sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
+            sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible, members),
             sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
             sim::thing::Kind::Flag => add_flags(&mut snap, w),
         }
@@ -1400,6 +1425,7 @@ fn add_vehicles(
     s: usize,
     known: &impl Fn(usize) -> bool,
     visible: &impl Fn(usize) -> bool,
+    members: u8,
 ) {
     let me = &w.fighters[s];
     if let Some((i, seat)) = me.riding() {
@@ -1426,6 +1452,13 @@ fn add_vehicles(
             yaw: v.yaw,
             health: (v.health.max(0) as i64 * 255 / sim::consts::VEH_HEALTH as i64) as u8,
             seats: [seat(v.seats[0]), seat(v.seats[1])],
+            // In its bubble: exact, with the stick it is driven by (its
+            // driver known, or nobody at the wheel: `bubble`).
+            near: (members & (1 << i) != 0).then(|| NearHull {
+                grounded: v.grounded,
+                stick: w.drive_stick(i),
+                share: sim::consts::SHARE_FULL,
+            }),
         };
         snap.n_vehicles += 1;
     }

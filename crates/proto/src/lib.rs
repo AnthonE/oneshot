@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 32;
+pub const PROTO_VER: u16 = 33;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -100,6 +100,54 @@ fn w_grid(w: &mut BitWriter, v: f32) -> R<()> {
 
 fn r_grid(r: &mut BitReader) -> R<f32> {
     Ok(r_i32(r, 32)? as f32 * (1.0 / sim::consts::QUANT))
+}
+
+/// A bubble member's place and speed, exactly (the sim's grid) in fewer
+/// bits than `w_grid`: ±8192 m, ±512 m/s.
+const EXACT_POS_BITS: u32 = 24;
+const EXACT_VEL_BITS: u32 = 20;
+
+/// Whether a body or hull at `pos`, moving at `vel`, can go out exactly
+/// (`VehState::near`, `Remote::near`).
+pub fn exact_fits(pos: V3, vel: V3) -> bool {
+    let fits = |v: f32, bits: u32| {
+        let q = sim::fmath::round(v * sim::consts::QUANT);
+        q.is_finite() && q.abs() < (1u32 << (bits - 1)) as f32
+    };
+    [pos.x, pos.y, pos.z].iter().all(|&v| fits(v, EXACT_POS_BITS))
+        && [vel.x, vel.y, vel.z].iter().all(|&v| fits(v, EXACT_VEL_BITS))
+}
+
+fn w_exact(w: &mut BitWriter, pos: V3, vel: V3) -> R<()> {
+    for c in [pos.x, pos.y, pos.z] {
+        w_i32(w, sim::fmath::round(c * sim::consts::QUANT) as i32, EXACT_POS_BITS)?;
+    }
+    for c in [vel.x, vel.y, vel.z] {
+        w_i32(w, sim::fmath::round(c * sim::consts::QUANT) as i32, EXACT_VEL_BITS)?;
+    }
+    Ok(())
+}
+
+fn r_exact(r: &mut BitReader) -> R<(V3, V3)> {
+    let mut c = [0.0f32; 6];
+    for (k, v) in c.iter_mut().enumerate() {
+        let bits = if k < 3 { EXACT_POS_BITS } else { EXACT_VEL_BITS };
+        *v = r_i32(r, bits)? as f32 * (1.0 / sim::consts::QUANT);
+    }
+    Ok((V3::new(c[0], c[1], c[2]), V3::new(c[3], c[4], c[5])))
+}
+
+/// A share of a shooter's rewind (`sim::world::Seen`), 0..=15.
+fn w_share(w: &mut BitWriter, share: u8) -> R<()> {
+    w.write(share.min(sim::consts::SHARE_FULL) as u32, 4)
+}
+
+fn r_share(r: &mut BitReader) -> R<u8> {
+    let s = r.read(4)? as u8;
+    if s > sim::consts::SHARE_FULL {
+        return Err(WireError::Malformed);
+    }
+    Ok(s)
 }
 
 fn w_coarse(w: &mut BitWriter, v: f32) -> R<()> {
@@ -268,6 +316,32 @@ pub struct Remote {
     pub cloak: u8,
     /// Carrying a flag (Capture the Flag).
     pub flag: bool,
+    /// In this client's bubble (`room::bubble`): `pos` and `vel` exact,
+    /// and what it predicts the body on.
+    pub near: Option<NearBody>,
+}
+
+/// What a client predicts a body in its bubble on: its crouch as far as it
+/// has gone, the input it last ran (the stick, a jump, a crouch held), and
+/// its share of this client's rewind (`sim::world::Seen`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NearBody {
+    pub duck: u8,
+    pub mx: i8,
+    pub mz: i8,
+    pub jump: bool,
+    pub crouch: bool,
+    pub share: u8,
+}
+
+/// What a client predicts a hull in its bubble on: its footing, the stick
+/// its driver drives it by (None: parked), and its share of this client's
+/// rewind.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NearHull {
+    pub grounded: bool,
+    pub stick: Option<(i8, i8)>,
+    pub share: u8,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -383,6 +457,7 @@ impl Remote {
             over: f.overshield(),
             cloak: (f.cloak() * CLOAK_STEPS + 0.5) as u8,
             flag: f.flag,
+            near: None,
         }
     }
 }
@@ -395,26 +470,44 @@ impl Pack for Remote {
         w.write_bit(self.crouched)?;
         w.write_bit(self.grounded)?;
         w.write_bit(self.reloading)?;
-        w_v3c(w, self.pos)?;
-        w_v3c(w, self.vel)?;
+        w.write_bit(self.near.is_some())?;
+        if self.near.is_some() {
+            w_exact(w, self.pos, self.vel)?;
+        } else {
+            w_v3c(w, self.pos)?;
+            w_v3c(w, self.vel)?;
+        }
         w.write(self.yaw as u32, 16)?;
         w.write(self.pitch as u16 as u32, 16)?;
         w.write(self.arm as u32, 4)?;
         w.write(self.shield as u32, 8)?;
         w.write_bit(self.over)?;
         w.write(self.cloak as u32, 3)?;
-        w.write_bit(self.flag)
+        w.write_bit(self.flag)?;
+        if let Some(n) = self.near {
+            w.write(n.duck as u32, 5)?;
+            w.write(n.mx as u8 as u32, 8)?;
+            w.write(n.mz as u8 as u32, 8)?;
+            w.write_bit(n.jump)?;
+            w.write_bit(n.crouch)?;
+            w_share(w, n.share)?;
+        }
+        Ok(())
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
-        Ok(Remote {
-            slot: r.read(SLOT_BITS)? as u8,
-            team: r.read(1)? as u8,
-            alive: r.read_bit()?,
-            crouched: r.read_bit()?,
-            grounded: r.read_bit()?,
-            reloading: r.read_bit()?,
-            pos: r_v3c(r)?,
-            vel: r_v3c(r)?,
+        let (slot, team) = (r.read(SLOT_BITS)? as u8, r.read(1)? as u8);
+        let (alive, crouched, grounded, reloading) = (r.read_bit()?, r.read_bit()?, r.read_bit()?, r.read_bit()?);
+        let near = r.read_bit()?;
+        let (pos, vel) = if near { r_exact(r)? } else { (r_v3c(r)?, r_v3c(r)?) };
+        let mut x = Remote {
+            slot,
+            team,
+            alive,
+            crouched,
+            grounded,
+            reloading,
+            pos,
+            vel,
             yaw: r.read(16)? as u16,
             pitch: r.read(16)? as u16 as i16,
             arm: r.read(4)? as u8,
@@ -422,7 +515,25 @@ impl Pack for Remote {
             over: r.read_bit()?,
             cloak: r.read(3)? as u8,
             flag: r.read_bit()?,
-        })
+            near: None,
+        };
+        if near {
+            let n = NearBody {
+                duck: r.read(5)? as u8,
+                mx: r.read(8)? as u8 as i8,
+                mz: r.read(8)? as u8 as i8,
+                jump: r.read_bit()?,
+                crouch: r.read_bit()?,
+                share: r_share(r)?,
+            };
+            // As the server runs it: a crouch never past its full, a stick
+            // never -128 (`Input::sanitized`).
+            if n.duck > sim::consts::CROUCH_TICKS || n.mx == i8::MIN || n.mz == i8::MIN {
+                return Err(WireError::Malformed);
+            }
+            x.near = Some(n);
+        }
+        Ok(x)
     }
 }
 
@@ -498,34 +609,58 @@ pub struct VehState {
     pub health: u8,
     /// Each seat's rider's slot + 1, or 0 (nobody, or nobody it may know).
     pub seats: [u8; 2],
+    /// In this client's bubble (`room::bubble`): `pos` and `vel` exact,
+    /// and what it predicts the hull on.
+    pub near: Option<NearHull>,
 }
 
 impl Pack for VehState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
         w.write(self.slot as u32, 3)?;
-        w_v3c(w, self.pos)?;
-        w_v3c(w, self.vel)?;
+        w.write_bit(self.near.is_some())?;
+        if self.near.is_some() {
+            w_exact(w, self.pos, self.vel)?;
+        } else {
+            w_v3c(w, self.pos)?;
+            w_v3c(w, self.vel)?;
+        }
         w.write(self.yaw as u32, 16)?;
         w.write(self.health as u32, 8)?;
         for &s in &self.seats {
             w.write(s as u32, SLOT_BITS + 1)?;
         }
+        if let Some(n) = self.near {
+            w.write_bit(n.grounded)?;
+            w_drive(w, n.stick)?;
+            w_share(w, n.share)?;
+        }
         Ok(())
     }
     fn unpack(r: &mut BitReader) -> R<Self> {
+        let slot = r.read(3)? as u8;
+        let near = r.read_bit()?;
+        let (pos, vel) = if near { r_exact(r)? } else { (r_v3c(r)?, r_v3c(r)?) };
         let mut v = VehState {
-            slot: r.read(3)? as u8,
-            pos: r_v3c(r)?,
-            vel: r_v3c(r)?,
+            slot,
+            pos,
+            vel,
             yaw: r.read(16)? as u16,
             health: r.read(8)? as u8,
             seats: [0; 2],
+            near: None,
         };
         for s in v.seats.iter_mut() {
             *s = r.read(SLOT_BITS + 1)? as u8;
             if *s as usize > MAX_FIGHTERS {
                 return Err(WireError::Malformed);
             }
+        }
+        if near {
+            v.near = Some(NearHull {
+                grounded: r.read_bit()?,
+                stick: r_drive(r)?,
+                share: r_share(r)?,
+            });
         }
         Ok(v)
     }
