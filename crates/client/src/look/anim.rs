@@ -82,14 +82,15 @@ impl Clip {
     }
 
     /// The ground speed a locomotion loop's feet were authored for, m/s:
-    /// Gates measured them off the same rig (the planted foot against the
-    /// hips over the stance). `None` for what is not a locomotion loop.
+    /// how fast its planted toes go back under it, measured on every run by
+    /// `tests/anim.rs` (`every_stride_is_what_its_clip_does`). `None` for
+    /// what is not a locomotion loop.
     pub fn stride_mps(self) -> Option<f32> {
         match self {
-            Clip::Walk => Some(1.05),
-            Clip::Jog => Some(3.97),
-            Clip::Sprint => Some(5.66),
-            Clip::CrouchWalk => Some(0.5),
+            Clip::Walk => Some(1.15),
+            Clip::Jog => Some(3.87),
+            Clip::Sprint => Some(5.63),
+            Clip::CrouchWalk => Some(0.55),
             _ => None,
         }
     }

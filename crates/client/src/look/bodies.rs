@@ -1018,7 +1018,7 @@ pub fn pose_limbs(
     parents: Query<&ChildOf>,
     mut bones: Query<&mut Transform>,
 ) {
-    use super::ik::{foot_rise, frame_in, Legs, Limb};
+    use super::ik::{foot_rise, frame_in, furthest_in_reach, Legs, Limb};
     let dt = time.delta_secs();
     let map = link.as_ref().map(|l| &l.0.session().core.map);
     for (root, b, mut limbs) in &mut q {
@@ -1046,8 +1046,11 @@ pub fn pose_limbs(
                 ))
             })();
             if let Some((limb, held)) = limb {
-                let end = limb.joints().end;
-                let target = end.lerp(held.transform_point(super::guns::left_wrist(g)), w);
+                let j = limb.joints();
+                let on_gun = furthest_in_reach(j.root, limb.span(), |k| {
+                    held.transform_point(super::guns::left_wrist(g, k))
+                });
+                let target = j.end.lerp(on_gun, w);
                 if let Some(qs) = limb.reach(target, None) {
                     for (bone, (t, q)) in [u, l, e]
                         .into_iter()

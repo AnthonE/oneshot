@@ -44,6 +44,12 @@ impl Limb {
         }
     }
 
+    /// Its upper and lower bones' lengths together, in the root's frame.
+    pub fn span(&self) -> f32 {
+        let j = self.joints();
+        (j.mid - j.root).length() + (j.end - j.mid).length()
+    }
+
     /// The three bones' new local turns that put its end at `target` (the
     /// root's frame), the end keeping the turn it had there unless `end_turn`
     /// names one. None for a limb laid straight by its clip, which has no
@@ -65,6 +71,35 @@ impl Limb {
         ])
     }
 }
+
+/// How far along a path from 0 to 1 a limb reaches: the furthest point on it
+/// within [`REACH_SHARE`] of the limb's span from its root, found by halving
+/// (the path is taken to run away from the root). The start if even that is
+/// out of reach: the clip's own, as near as it gets.
+pub fn furthest_in_reach(root: Vec3, span: f32, path: impl Fn(f32) -> Vec3) -> Vec3 {
+    let reach = REACH_SHARE * span;
+    let ok = |k: f32| (path(k) - root).length() <= reach;
+    if ok(1.0) {
+        return path(1.0);
+    }
+    if !ok(0.0) {
+        return path(0.0);
+    }
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..12 {
+        let mid = 0.5 * (lo + hi);
+        if ok(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    path(lo)
+}
+
+/// The most of a limb's length a reach may take: an arm out dead straight
+/// reads as broken.
+pub const REACH_SHARE: f32 = 0.98;
 
 /// Lengths kept off a joint's fully open and fully shut, as a share of the
 /// limb: a knee or an elbow never snaps straight or folds through itself.
@@ -397,6 +432,16 @@ mod tests {
         let a = l.ankles();
         assert!((k[0] - a[0]).length() < 1e-4 && (k[1] - a[1]).length() < 1e-4);
         assert_eq!(p.hips, l.hips.translation);
+    }
+
+    #[test]
+    fn a_path_is_followed_as_far_as_the_limb_reaches() {
+        let root = Vec3::ZERO;
+        let path = |k: f32| Vec3::new(0.0, -0.2, 0.3 + 0.5 * k);
+        let p = furthest_in_reach(root, 0.6, path);
+        assert!(((p - root).length() - REACH_SHARE * 0.6).abs() < 1e-3, "{p}");
+        assert_eq!(furthest_in_reach(root, 2.0, path), path(1.0));
+        assert_eq!(furthest_in_reach(root, 0.1, path), path(0.0));
     }
 
     #[test]
