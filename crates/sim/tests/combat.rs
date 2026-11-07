@@ -9,7 +9,7 @@ use sim::fmath;
 use sim::geom::{rad_to_yaw, V3};
 use sim::input::*;
 use sim::world::Dropped;
-use sim::world::{Phase, Rules, World};
+use sim::world::{Lag, Phase, Rules, World};
 use sim::Map;
 
 const NO_LAG: [u32; MAX_FIGHTERS] = [0; MAX_FIGHTERS];
@@ -166,6 +166,55 @@ fn lag_compensation_lands_only_as_far_back_as_the_server_says() {
     assert!(lagged_shot(12 << 8), "rewound 12 ticks, the shot lands");
     assert!(!lagged_shot(0), "not rewound, it misses");
     assert!(!lagged_shot(4 << 8), "rewound too little, it misses");
+}
+
+/// [`lagged_shot`]'s runner, the shooter's depth 12 ticks, seen with
+/// `share` of it: aiming where the runner stood then (`then`) or is now.
+fn shared_shot(share: u8, then: bool) -> bool {
+    let mut w = duel([SNIPER, MAGNUM], 30.0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1] = Input {
+        mz: 127,
+        yaw: 16384,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ {
+        w.step(&inputs, &NO_LAG);
+    }
+    let was = chest(&w, 1);
+    for _ in 0..11 {
+        w.step(&inputs, &NO_LAG);
+    }
+    // Where it stands as the shot is resolved (it runs on a tick first).
+    let now = {
+        let mut f = w.fighters[1];
+        f.step_local(&inputs[1], &w.map);
+        f.body.pos + (chest(&w, 1) - w.fighters[1].body.pos)
+    };
+    let (yaw, pitch) = aim(&w, 0, if then { was } else { now });
+    inputs[0] = Input {
+        buttons: FIRE,
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    let mut lag = Lag::past(NO_LAG);
+    lag.depth_q8[0] = 12 << 8;
+    lag.seen[0].share[1] = share;
+    w.step_with(&inputs, &lag);
+    w.events.as_slice().iter().any(|e| e.kind == Ev::Hit && e.b == 1)
+}
+
+#[test]
+fn a_shot_meets_a_target_where_its_share_of_the_rewind_puts_it() {
+    // All of the depth: where it stood 12 ticks ago, as it was drawn.
+    assert!(shared_shot(SHARE_FULL, true), "the whole depth: met where it was");
+    assert!(!shared_shot(SHARE_FULL, false), "the whole depth: not where it is");
+    // None: where it is, as a target drawn on the shooter's present.
+    assert!(shared_shot(0, false), "none of it: met where it is");
+    assert!(!shared_shot(0, true), "none of it: not where it was");
+    // A third of it: 4 ticks back, too little to meet it where it was.
+    assert!(!shared_shot(5, true), "a third: not where it was");
 }
 
 #[test]

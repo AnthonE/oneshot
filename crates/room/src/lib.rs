@@ -24,7 +24,7 @@ use sim::events::{Event, Kind as Ev};
 use sim::geom::V3;
 use sim::input::{Input, FIRE, FIRE_LEFT, JUMP, ZOOM};
 use sim::map::Map;
-use sim::world::{Phase, Rules, World};
+use sim::world::{Lag, Phase, Rules, World};
 
 /// Input frames a client may have waiting; past this the oldest go, so a
 /// client can never bank inputs. (It can never step faster: one runs a tick.)
@@ -877,8 +877,11 @@ impl Room {
             self.rec.hold();
             self.world.hold_countdown();
         }
-        self.rec.step(&inputs, &rewind);
-        self.world.step(&inputs, &rewind);
+        // Everyone sees everything on the render tick, as far back as
+        // their depth.
+        let lag = Lag::past(rewind);
+        self.rec.step(&inputs, &lag);
+        self.world.step_with(&inputs, &lag);
         let (fogs, tick) = (&self.fogs, self.world.tick);
         let mut plain = fog::Plain::default();
         self.watch

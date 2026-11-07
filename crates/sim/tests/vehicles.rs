@@ -847,3 +847,51 @@ fn run_downs_and_crashes_hash_as_before() {
     assert_eq!(five.1, 2, "5: {five:?}");
     assert_eq!(fold, CONTACTS, "contacts fold to {fold:#018x}");
 }
+
+/// A run-down seen at share 0 (the victim drawn on the driver's present,
+/// predicted) meets the body where it is, never where it stood the
+/// driver's depth ago; at the whole share, where the driver saw it.
+fn run_down_seen(share: u8) -> u32 {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let (f, r) = w.vehicles[0].axes();
+    let at = w.vehicles[0].pos + f * 14.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let mut lag = sim::world::Lag::past(NO_LAG);
+    lag.depth_q8[0] = 10 << 8;
+    lag.seen[0].share[1] = share;
+    let (mut moved, mut splats) = (false, 0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        mz: 127,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ * 2 {
+        // Just before the hood reaches it, it is somewhere else (as if it
+        // dived clear in the driver's last few ticks).
+        let ahead = (w.fighters[1].body.pos - w.vehicles[0].pos).dot(f);
+        if !moved && ahead < VEH_HALF_L + BODY_R + 0.8 {
+            let p = w.fighters[1].body.pos + r * 4.0;
+            w.fighters[1].body.pos = V3::new(p.x, w.map.ground(p.x, p.z), p.z);
+            moved = true;
+        }
+        w.step_with(&inputs, &lag);
+        splats += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.b == 1)
+            .count() as u32;
+    }
+    assert!(moved);
+    splats
+}
+
+#[test]
+fn a_run_down_at_share_zero_meets_the_body_where_it_is() {
+    assert!(
+        run_down_seen(SHARE_FULL) > 0,
+        "the whole share: met where the driver saw it"
+    );
+    assert_eq!(run_down_seen(0), 0, "none of it: it is clear");
+}

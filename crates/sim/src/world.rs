@@ -381,6 +381,49 @@ pub struct World {
     /// driver drove it by ([`Self::drive_stick`]). Not hashed: it is the
     /// inputs', which a replay has.
     ran: [Input; MAX_FIGHTERS],
+    /// How far back each seat's shots are checked this tick, and against
+    /// what it saw of each target ([`Self::step_with`]). Not hashed: it is
+    /// the step's argument, which a replay has.
+    lag: Lag,
+}
+
+/// What one shooter saw of each target (by [`TARGETS`] index): its share of
+/// the shooter's rewind, in fifteenths. [`Self::PAST`] for all of it, as
+/// for a target drawn between snapshots on the render tick; 0 for one drawn
+/// on the shooter's own present (predicted), met where it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seen {
+    pub share: [u8; TARGETS],
+}
+
+impl Seen {
+    pub const PAST: Seen = Seen {
+        share: [SHARE_FULL; TARGETS],
+    };
+
+    /// Target `t`'s rewind, of a shooter's `depth` (any unit, any size:
+    /// the whole share is the whole depth, exactly).
+    pub fn depth(&self, depth: u32, t: usize) -> u32 {
+        (depth as u64 * self.share[t].min(SHARE_FULL) as u64 / SHARE_FULL as u64) as u32
+    }
+}
+
+/// A tick's lag compensation, chosen by the server (docs/DESIGN.md §7):
+/// each seat's rewind depth in 1/256 tick, and what it saw of each target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lag {
+    pub depth_q8: [u32; MAX_FIGHTERS],
+    pub seen: [Seen; MAX_FIGHTERS],
+}
+
+impl Lag {
+    /// Everyone sees everything in the past, rewound by its whole depth.
+    pub fn past(depth_q8: [u32; MAX_FIGHTERS]) -> Lag {
+        Lag {
+            depth_q8,
+            seen: [Seen::PAST; MAX_FIGHTERS],
+        }
+    }
 }
 
 impl World {
@@ -418,7 +461,18 @@ impl World {
             rng: Pcg32::new(seed, 1),
             salt,
             ran: [Input::default(); MAX_FIGHTERS],
+            lag: Lag::past([0; MAX_FIGHTERS]),
         }
+    }
+
+    /// The lag compensation the last tick ran with.
+    pub fn lag(&self) -> &Lag {
+        &self.lag
+    }
+
+    /// Seat `q`'s input as the last tick ran it, sanitized.
+    pub fn ran(&self, q: usize) -> Input {
+        self.ran[q]
     }
 
     /// The stick (`mx`, `mz`) vehicle `i`'s driver drove it by on the last
@@ -494,6 +548,14 @@ impl World {
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
     /// what it saw of that client's acks (docs/DESIGN.md §7).
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
+        self.step_with(inputs, &Lag::past(*rewind_q8));
+    }
+
+    /// [`Self::step`], each seat's shots checked against what it saw of
+    /// each target: a target's share of the seat's depth ([`Seen`]).
+    pub fn step_with(&mut self, inputs: &[Input; MAX_FIGHTERS], lag: &Lag) {
+        self.lag = *lag;
+        let rewind_q8 = &lag.depth_q8;
         // Last tick's events were read; any since (a seat taken between
         // ticks: a flag let go, a seat left) are this tick's.
         self.events.drop_first(self.events_read);
@@ -745,7 +807,9 @@ impl World {
             if ride.is_some() && v.riding().map(|(i, _)| i) == ride {
                 continue;
             }
-            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
             if !p.alive {
                 continue;
             }
@@ -769,7 +833,12 @@ impl World {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
             }
-            let p = self.vrewind.pose_at(self.tick, i, depth, &VPose::of(v));
+            let p = self.vrewind.pose_at(
+                self.tick,
+                i,
+                self.lag.seen[s].depth(depth, MAX_FIGHTERS + i),
+                &VPose::of(v),
+            );
             if !p.alive {
                 continue;
             }
@@ -822,7 +891,9 @@ impl World {
             if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
                 continue;
             }
-            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
             if !p.alive {
                 continue;
             }
@@ -2933,7 +3004,10 @@ struct Rewound<'a> {
 impl Witness for Rewound<'_> {
     fn then(&self, i: usize, q: usize) -> Option<V3> {
         let w = &*self.w;
-        let depth = w.vehicles[i].driver().map_or(0, |d| self.depth[d]);
+        // The driver's depth, of this one's share as the driver saw it.
+        let depth = w.vehicles[i]
+            .driver()
+            .map_or(0, |d| w.lag.seen[d].depth(self.depth[d], q));
         let p = w.rewind.pose_at(w.tick, q, depth, &pose(&w.fighters[q]));
         p.alive.then_some(p.pos)
     }
