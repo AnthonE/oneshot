@@ -102,3 +102,20 @@ fn a_client_cannot_step_faster_than_the_server() {
     let d = room.client(slot).unwrap().depth();
     assert!(d <= room::MAX_DEPTH as i8, "{d}");
 }
+
+#[test]
+fn a_joiner_acking_nothing_yet_gets_no_rewind() {
+    // Seated mid-match: its first datagrams say `ack_tick: 0` (it has no
+    // snapshot yet), which must not read as a view from the first tick.
+    let mut room = Room::new(Map::proving_grounds(), Rules::duel(), 1, (1, 2));
+    for t in 0..300 {
+        room.step(t as f64);
+    }
+    let joined = room.world.tick;
+    let (slot, _) = room.join(Name::new("late"), proto::Look::default()).unwrap();
+    room.on_input(slot, &msg(0, 4, 0), 300.0);
+    room.on_input(slot, &msg(joined, 4, 1), 300.0);
+    let c = room.client(slot).unwrap();
+    assert_eq!(c.acked, None, "an ack from before it sat is refused");
+    assert_eq!(run(c, joined + 1), 0);
+}

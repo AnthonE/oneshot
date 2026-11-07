@@ -22,7 +22,6 @@ fn fnv(b: &[u8]) -> u64 {
 fn input() -> InputMsg {
     let mut m = InputMsg {
         ack_tick: 1234,
-        ack_bits: 0xF0F0_0F0F,
         playout: 4,
         first_seq: 99_000,
         n: 3,
@@ -111,7 +110,7 @@ fn snapshot() -> Snapshot {
         own: own(),
         n_remote: 1,
         n_proj: 1,
-        n_events: 2,
+        n_events: 3,
         n_pads: 2,
         phase: 1,
         clock: 70_000,
@@ -170,6 +169,16 @@ fn snapshot() -> Snapshot {
         b: 0,
         part: 1,
         c: 9,
+        ..EventState::default()
+    };
+    // A flag gone home on its own: nobody returned it.
+    s.events[2] = EventState {
+        id: 43,
+        kind: sim::events::Kind::Flag as u8,
+        a: NOBODY,
+        b: 1,
+        part: 2,
+        pos: V3::new(30.0, 0.0, 4.0),
         ..EventState::default()
     };
     s.pads[1].empty_s = 45;
@@ -475,6 +484,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own.guns, s.own.guns);
     assert_eq!(d.own.shots, s.own.shots);
     assert_eq!(d.events(), s.events());
+    assert_eq!(d.events()[2].a, NOBODY, "nobody comes back as nobody");
     assert_eq!(d.remotes()[0].pos, s.remotes[0].pos);
     assert_eq!(d.score, s.score);
     assert_eq!(d.own.ride, s.own.ride);
@@ -534,19 +544,30 @@ fn decoders_refuse_garbage() {
     }
 }
 
-/// The golden snapshot as a delta against itself two ticks before: our
-/// fighter a little along, the clock on, one remote gone.
-fn encode_delta_golden(buf: &mut [u8]) -> usize {
-    use proto::delta::{encode_delta, Keyed};
-    let cur = snapshot();
-    let mut base = cur;
+/// The golden snapshot two ticks before: our fighter a little back, the
+/// clock back, and a second remote, gone since.
+fn delta_base() -> Snapshot {
+    let mut base = snapshot();
     base.tick -= 2;
     base.clock -= 1;
     base.own.body.pos.x -= 0.25;
-    base.n_remote = 1;
+    base.n_remote = 2;
+    base.remotes[1] = Remote {
+        slot: 3,
+        pos: V3::new(-30.0, 2.0, 8.0),
+        alive: true,
+        ..base.remotes[0]
+    };
+    base
+}
+
+/// The golden snapshot as a delta against [`delta_base`]: our fighter a
+/// little along, the clock on, one remote gone.
+fn encode_delta_golden(buf: &mut [u8]) -> usize {
+    use proto::delta::{encode_delta, Keyed};
     let (mut k, mut b) = (Keyed::default(), Keyed::default());
-    k.fill(&cur).unwrap();
-    b.fill(&base).unwrap();
+    k.fill(&snapshot()).unwrap();
+    b.fill(&delta_base()).unwrap();
     encode_delta(&k, &b, buf).unwrap()
 }
 
@@ -556,13 +577,8 @@ fn a_delta_round_trips_and_is_smaller() {
     let mut buf = [0u8; MAX_DATAGRAM];
     let n = encode_delta_golden(&mut buf);
     let cur = snapshot();
-    let mut base = cur;
-    base.tick -= 2;
-    base.clock -= 1;
-    base.own.body.pos.x -= 0.25;
-    base.n_remote = 1;
     let mut b = Keyed::default();
-    b.fill(&base).unwrap();
+    b.fill(&delta_base()).unwrap();
     let mut out = Keyed::default();
     decode_delta(&buf[..n], &b, &mut out).unwrap();
     let mut full = [0u8; MAX_DATAGRAM];
@@ -591,14 +607,14 @@ fn the_bytes_match_their_goldens() {
     let n = encode_delta_golden(&mut buf);
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
-        0x945f_3074_619f_0fc7,
-        0xde06_a479_afb3_a3f2,
-        0x5ce9_6b87_c1a0_92e3,
-        0x973c_a470_aea6_5075,
+        0x58ae_4fe0_5062_683d,
+        0x799b_1350_5f9e_729b,
+        0xa530_6e1a_b32d_94ec,
+        0x21ad_3fcb_bb71_cf7c,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x2be4_5209_424b_07ba,
+        0x14df_bf54_0616_7613,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -621,7 +637,7 @@ fn the_bytes_match_their_goldens() {
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
-        0x547f_b8fe_3513_fdb0,
+        0xbc84_0a83_768d_a922,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }
@@ -634,4 +650,15 @@ fn an_emblem_packs_its_parts_and_no_glyph_is_none() {
     assert_eq!(emblem(0, 5, 3, 12), EMBLEM_NONE, "no glyph, no emblem");
     assert_eq!(emblem_valid(31 | 5 << 5), EMBLEM_NONE, "a glyph past the list is none");
     assert_eq!(GLYPH_FLOOR.len(), EMBLEM_GLYPHS.len());
+}
+
+#[test]
+fn an_event_past_the_seats_names_nobody() {
+    let mut s = snapshot();
+    s.events[1].a = MAX_FIGHTERS as u8;
+    s.events[1].b = NOBODY;
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_snapshot(&s, &mut buf).unwrap();
+    let d = decode_snapshot(&buf[..n]).unwrap();
+    assert_eq!((d.events[1].a, d.events[1].b), (NOBODY, NOBODY));
 }
