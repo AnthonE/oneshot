@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
@@ -30,8 +30,9 @@ pub fn norm(w: &str) -> String {
     }
 }
 
-/// One wait's place: which wait of its wallet it is.
-type Place = (u64, watch::Sender<Option<QueueState>>);
+/// One wait's place: which wait of its wallet it is, when it began (a poll
+/// asked before then says nothing of it), and where it hears.
+type Place = (u64, Instant, watch::Sender<Option<QueueState>>);
 
 /// The players waiting on Elo Pros' queue, each with where it last stood.
 #[derive(Default)]
@@ -58,7 +59,7 @@ impl Waiters {
     pub fn wait(&self, wallet: &str) -> Wait {
         let (tx, rx) = watch::channel(None);
         let id = self.next.fetch_add(1, Ordering::Relaxed);
-        self.by().insert(norm(wallet), (id, tx));
+        self.by().insert(norm(wallet), (id, Instant::now(), tx));
         Wait { rx, id }
     }
 
@@ -67,7 +68,7 @@ impl Waiters {
     pub fn done(&self, wallet: &str, id: u64) -> bool {
         let mut by = self.by();
         let key = norm(wallet);
-        let ours = by.get(&key).is_some_and(|(w, _)| *w == id);
+        let ours = by.get(&key).is_some_and(|(w, _, _)| *w == id);
         if ours {
             by.remove(&key);
         }
@@ -83,9 +84,14 @@ impl Waiters {
         self.by().keys().cloned().collect()
     }
 
-    fn tell(&self, s: QueueState) {
-        if let Some((_, tx)) = self.by().get(&norm(&s.player)) {
-            tx.send_replace(Some(s));
+    /// What a poll `asked` at says of a wallet: to its wait, if that wait
+    /// began before the poll was asked (an answer about a queue the player
+    /// left, crossing a requeue, is the old one's).
+    fn tell(&self, s: QueueState, asked: Instant) {
+        if let Some((_, since, tx)) = self.by().get(&norm(&s.player)) {
+            if *since <= asked {
+                tx.send_replace(Some(s));
+            }
         }
     }
 }
@@ -99,6 +105,7 @@ pub async fn poller(ctx: Arc<Ctx>) {
         every.tick().await;
         let wallets = ctx.waiters.wallets();
         for chunk in wallets.chunks(POLL_MAX) {
+            let asked = Instant::now();
             match ctx
                 .elo
                 .serve(&serde_json::json!({"op": "poll", "players": chunk}))
@@ -107,7 +114,7 @@ pub async fn poller(ctx: Arc<Ctx>) {
                 Ok(states) => {
                     failing = false;
                     for s in states {
-                        ctx.waiters.tell(s);
+                        ctx.waiters.tell(s, asked);
                     }
                 }
                 Err(e) => {
@@ -134,17 +141,30 @@ pub enum Waited {
 /// How long a party member waits for whoever queues the party, before it is
 /// in the queue at all.
 pub const QUEUED_WITHIN: Duration = Duration::from_secs(60);
+/// Waits of [`QUEUED_WITHIN`] in a row with no poll answering, once queued:
+/// Elo Pros' queue has stopped answering, and the wait ends (the player is
+/// told, not left at a frozen count).
+pub const SILENT_WAITS: u32 = 3;
 
 /// Waits on what the polls say of one player, calling `waiting(seconds)`
 /// on each that says it still waits, until it is matched or out.
 pub async fn wait(rx: &mut watch::Receiver<Option<QueueState>>, mut waiting: impl FnMut(u64)) -> Waited {
     let start = tokio::time::Instant::now();
     let mut seen_queued = false;
+    let mut silent = 0;
     loop {
         let changed = tokio::time::timeout(QUEUED_WITHIN, rx.changed()).await;
         if changed.is_err() && !seen_queued {
             return Waited::Out(Some("the party never reached the queue".into()));
         }
+        if changed.is_err() {
+            silent += 1;
+            if silent >= SILENT_WAITS {
+                return Waited::Out(Some("the queue stopped answering".into()));
+            }
+            continue;
+        }
+        silent = 0;
         if matches!(changed, Ok(Err(_))) {
             return Waited::Out(None);
         }
@@ -188,14 +208,14 @@ mod tests {
     async fn a_wait_ends_matched_or_out() {
         let w = Waiters::default();
         let Wait { mut rx, .. } = w.wait("0xAB");
-        w.tell(st(Some("queued"), None));
+        w.tell(st(Some("queued"), None), Instant::now());
         let mut ticks = Vec::new();
         let waiting = tokio::spawn(async move {
             let got = wait(&mut rx, |s| ticks.push(s)).await;
             (got, ticks)
         });
         tokio::task::yield_now().await;
-        w.tell(st(Some("launched"), Some("q-1")));
+        w.tell(st(Some("launched"), Some("q-1")), Instant::now());
         let (got, _) = waiting.await.unwrap();
         assert_eq!(
             got,
@@ -206,8 +226,8 @@ mod tests {
         );
         // Taken out after queueing: out.
         let Wait { mut rx, id } = w.wait("0xab");
-        w.tell(st(Some("queued"), None));
-        w.tell(st(Some("closed"), None));
+        w.tell(st(Some("queued"), None), Instant::now());
+        w.tell(st(Some("closed"), None), Instant::now());
         assert_eq!(wait(&mut rx, |_| {}).await, Waited::Out(None));
         // A second wait (a reload) takes the wallet's place: the first one
         // ending leaves it be, and its receiver ends.

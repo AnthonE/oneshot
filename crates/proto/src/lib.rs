@@ -26,6 +26,9 @@ use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
 pub const PROTO_VER: u16 = 30;
+/// What every lobby ticket starts with (the server makes them, `auth.rs`;
+/// the client reads one's own fields back to know whose it is).
+pub const TICKET_PREFIX: &str = "os1.";
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.

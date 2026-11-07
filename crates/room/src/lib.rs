@@ -385,6 +385,8 @@ pub struct Room {
     pub passive_bots: bool,
     seed: u64,
     phase: Phase,
+    /// The tick play began (the countdown over), once it has.
+    pub began: Option<u32>,
     /// The match's secret, kept here only to publish its commitment at the
     /// start and the salt itself at the end (docs/DESIGN.md §9).
     salt: (u64, u64),
@@ -495,6 +497,7 @@ impl Room {
             passive_bots: false,
             seed,
             phase: Phase::Countdown,
+            began: None,
             salt,
             fogs: Default::default(),
             ranked: false,
@@ -872,6 +875,9 @@ impl Room {
         }
         if self.world.phase != self.phase {
             self.phase = self.world.phase;
+            if self.phase == Phase::Playing {
+                self.began = Some(self.world.tick);
+            }
             out.push((
                 None,
                 Msg::Phase {
