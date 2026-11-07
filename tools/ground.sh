@@ -6,7 +6,7 @@
 # the colour at q82, the normal (OpenGL's green) at q90, and for the rock,
 # which the boxes wear too, its roughness and occlusion.
 #
-#   tools/ground.sh            fetch what is missing, cut all four
+#   tools/ground.sh            fetch what is missing, cut them all
 #   tools/ground.sh rock       just that one
 #
 # The size each photograph was taken at is `GROUND_TILE_M` in
@@ -15,10 +15,10 @@
 #
 # And the bases' metal, the same way from ambientCG (ambientcg.com, CC0):
 # `steel` (plates with seams and bolts) and `tread` (tread
-# plate, for a deck or a ramp), and Cloudbreak's grey `stone`, each with its
+# plate, for a deck or a ramp), each with its
 # roughness and occlusion as the boxes' sets have them (`textures::BOXES`).
 #
-#   tools/ground.sh steel tread stone
+#   tools/ground.sh steel tread
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,15 +28,16 @@ SETS=(
   "grass|grass_ground|short turf worn to soil in places, 2.51 m"
   "gravel|rocky_trail|stones and pebbles in dirt, 2.0 m"
   "rock|cliff_side|bedded sandstone, its strata level, 1.83 m"
+  "isle_rock|old_sandstone_02|an island's wind-cut sandstone, rounded beds and ledges"
+  "stone|large_sandstone_blocks_01|Cloudbreak's masonry, aged blocks with chiselled faces, greyed"
 )
 # our name | ambientCG's id | what it is
 METAL=(
   "steel|MetalPlates001|steel plates a quarter of the tile across, staggered, bolted at their corners"
   "tread|DiamondPlate008C|worn tread plate"
-  "stone|Concrete034|smooth light grey concrete, dressed stone's"
 )
-src=sources/polyhaven
-acg=sources/ambientcg
+src=${POLYHAVEN_SRC:-sources/polyhaven}
+acg=${AMBIENTCG_SRC:-sources/ambientcg}
 out=crates/client/assets/textures
 px=1024
 
@@ -59,9 +60,12 @@ for row in "${SETS[@]}"; do
   if [ $# -gt 0 ] && [[ ! " $* " =~ " $name " ]]; then continue; fi
   fetch "$id"
   d=$src/$id
-  convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 82 "$out/${name}_albedo.jpg"
+  # The masonry is cut grey: warm sand against cool stone is the island's contrast.
+  grade=()
+  [ "$name" = stone ] && grade=(-modulate 118,22,100)
+  convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} "${grade[@]}" -strip -quality 82 "$out/${name}_albedo.jpg"
   convert "$d/${id}_nor_gl_2k.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 90 "$out/${name}_normal.jpg"
-  if [ "$name" = rock ]; then
+  if [ "$name" = rock ] || [ "$name" = stone ]; then
     convert "$d/${id}_rough_2k.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 82 "$out/${name}_rough.jpg"
     convert "$d/${id}_ao_2k.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 82 "$out/${name}_ao.jpg"
   fi

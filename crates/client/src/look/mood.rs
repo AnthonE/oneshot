@@ -81,6 +81,15 @@ pub struct Mood {
     /// shadows' depth on the ground, and the sun's dimming under them.
     /// Zero holds the sun still, whatever drifts over it.
     pub shade: f32,
+    /// How dark the deck's underside goes where it is thickest, `0..=1`:
+    /// a heavy overcast seen from under it is mottled, dark where the cloud
+    /// over it is thick and pale where it thins, where a cumulus's flat
+    /// base wants none.
+    pub deep: f32,
+    /// How much of the sky a grey veil of the mood's fog lies over, `0..=1`,
+    /// all the way up and whole at the horizon: under a heavy overcast the air's
+    /// own blue doesn't reach the eye, however bright the sun in its breaks.
+    pub veil: f32,
     /// Where in the cloud field this map's sky starts, noise units: each
     /// map its own clouds from the one field.
     pub field_at: [f32; 2],
@@ -111,6 +120,8 @@ pub const NOON: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [0.0, 0.0],
 };
 
@@ -141,6 +152,8 @@ pub const SUN_SHOWER: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [7.3, 3.1],
 };
 
@@ -171,6 +184,8 @@ pub const MIST: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [19.0, 11.5],
 };
 
@@ -200,6 +215,8 @@ pub const DESERT: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.5,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [3.0, 22.0],
 };
 
@@ -230,30 +247,31 @@ pub const DUSK: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 0.9,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [25.0, 5.0],
 };
 
-/// Cloudbreak: an island over a sea of cloud under a heavy grey deck with
-/// breaks in it. The sun (41°) in the south, across the line between the
-/// bases, comes through a break whole, so what it lights and what it
-/// shades stand far apart, as under a broken deck; the deck's shadows
-/// sweep the island. The cover is held under where the deck closes into
-/// one flat sheet (0.78), so the sky is masses with lit tops and blue in
-/// the breaks; a thin mist grades the stacks paler with their distance
-/// (a tenth of the light across the island) and hazes the horizon the
-/// sea of cloud goes into.
+/// Cloudbreak: an island over a sea of cloud under a heavy grey deck. The
+/// sun (35 degrees up, in the south-south-east, across the line between the
+/// bases) comes through a break whole and warm, so what it lights and what it
+/// shades stand far apart, as under a broken deck. The deck is mottled dark
+/// where it is thick (`deep`), and a veil of the fog over the whole sky
+/// (`veil`, with masses of its own) keeps the air's blue from the eye however
+/// bright that sun, and thins toward it. A mist grades the stacks paler with
+/// their distance and hazes the horizon the sea of cloud goes into.
 pub const OVERCAST: Mood = Mood {
     name: "overcast",
-    sun_elev: 0.72,
-    sun_azim: core::f32::consts::PI,
-    sun_rgb: [1.0, 0.97, 0.92],
-    sun: 1.0,
-    light: 0.75,
-    fill: 0.8,
+    sun_elev: 0.62,
+    sun_azim: 2.7,
+    sun_rgb: [1.0, 0.93, 0.8],
+    sun: 1.9,
+    light: 0.9,
+    fill: 0.7,
     ev100: 13.9,
-    cover: 0.74,
-    dark: 0.5,
-    mist: 0.0012,
+    cover: 0.92,
+    dark: 0.62,
+    mist: 0.0034,
     rain: 0.0,
     dust: 0.0,
     wet: 0.0,
@@ -264,7 +282,9 @@ pub const OVERCAST: Mood = Mood {
     moon_elev: -0.5,
     moon_azim: 0.0,
     moon_lit: 1.0,
-    shade: 0.45,
+    shade: 0.15,
+    deep: 0.8,
+    veil: 0.72,
     field_at: [33.0, 7.0],
 };
 
@@ -366,6 +386,8 @@ impl Mood {
             moon_lit: self.moon_lit,
             moonlight: self.moon,
             moon_sun: self.to_sun(),
+            deep: self.deep,
+            veil: self.veil,
         }
     }
 

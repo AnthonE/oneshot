@@ -1,4 +1,5 @@
-"""The rocks: Dry Fork's boulders and its sea stack, from Meshy
+"""The rocks: Dry Fork's boulders and its sea stack, Cloudbreak's wind-carved
+boulders, stacks and hanging island, from Meshy
 (tools/models/meshy_gen.py boulder-a --multiview --tris 12000 …; the prompts
 are in each raw's sidecar, sources/meshy/<slug>.json).
 
@@ -34,6 +35,15 @@ import bmesh
 
 # name: its raw's slug
 BOULDERS = {'boulder_a': 'boulder-a', 'boulder_b': 'boulder-b', 'boulder_c': 'boulder-c'}
+# An island's boulders: name: (its raw's slug, how far it is pushed to its
+# cube). Wind-carved round, so hardly: what they lose at the box's corners they
+# keep in their shape.
+ISLE_BOULDERS = {
+    'isle_boulder_a': ('isle-boulder-a', 0.15),
+    'isle_boulder_b': ('isle-boulder-b', 0.15),
+    'isle_boulder_c': ('isle-boulder-c', 0.12),
+}
+ISLE_BOULDER_TRIS = 5000
 # Built things cut the same way, to fill the box the sim collides: name:
 # (its raw's slug, how far it is pushed out to its cube, its folder under
 # models). The pylon is a base's buttress (a `pylon` look's turned box).
@@ -41,11 +51,17 @@ BLOCKS = {'pylon': ('pylon', 0.2, 'base')}
 # A built thing's faces are flat and its edges hard: thinned as far as a
 # boulder, its panels buckle.
 BLOCK_TRIS = 9000
-STACKS = {'sea_stack': 'sea-stack'}
+# name: (its raw's slug, triangles, map's side). The hanging island is seen up
+# close from the rim.
+STACKS = {
+    'sea_stack': ('sea-stack', 7000, 1024),
+    'isle_stack_a': ('isle-stack-a', 12000, 1536),
+    'isle_stack_b': ('isle-stack-b', 12000, 1536),
+    'isle_float': ('isle-float', 22000, 2048),
+}
 # How far a boulder's surface is pushed out toward its cube, 0..1.
 FILL = 0.35
 BOULDER_TRIS = 2600
-STACK_TRIS = 7000
 STACK_M = 1.0
 PX = 1024
 ROUGH = 0.92
@@ -80,7 +96,7 @@ def load(slug):
     return o
 
 
-def low(hi, tris, name, hard=False):
+def low(hi, tris, name, hard=False, px=PX):
     """A thinned copy of `hi` with one map of its own, Meshy's mesh and paint
     baked onto it: (the copy, its colour's mean, linear)."""
     bpy.ops.object.select_all(action='DESELECT')
@@ -135,8 +151,8 @@ def low(hi, tris, name, hard=False):
     bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
     bsdf.inputs['Metallic'].default_value = 0.0
     bsdf.inputs['Roughness'].default_value = ROUGH
-    colour = bpy.data.images.new(name + '_colour', PX, PX, alpha=False)
-    normal = bpy.data.images.new(name + '_normal', PX, PX, alpha=False)
+    colour = bpy.data.images.new(name + '_colour', px, px, alpha=False)
+    normal = bpy.data.images.new(name + '_normal', px, px, alpha=False)
     normal.colorspace_settings.name = 'Non-Color'
     ct = nt.nodes.new('ShaderNodeTexImage')
     ct.image = colour
@@ -258,7 +274,7 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
     print('MODEL', json.dumps(info))
 
 
-def stack(name, slug):
+def stack(name, slug, tris, px):
     scene()
     o = load(slug)
     lo, hi = bounds(o)
@@ -267,7 +283,7 @@ def stack(name, slug):
     o.data.transform(Matrix.Scale(k, 4) @ Matrix.Translation(Vector((-mid.x, -mid.y, -lo.z))))
     o.data.update()
     os.makedirs(SHEETS, exist_ok=True)
-    o, mean = low(o, STACK_TRIS, name)
+    o, mean = low(o, tris, name, px=px)
     lo, hi = bounds(o)
     path = export(o, name)
     info = {
@@ -290,6 +306,9 @@ if __name__ == '__main__':
     for name, (slug, fill, folder) in BLOCKS.items():
         if not want or name in want:
             boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True)
-    for name, slug in STACKS.items():
+    for name, (slug, fill) in ISLE_BOULDERS.items():
         if not want or name in want:
-            stack(name, slug)
+            boulder(name, slug, fill, tris=ISLE_BOULDER_TRIS)
+    for name, (slug, tris, px) in STACKS.items():
+        if not want or name in want:
+            stack(name, slug, tris, px)

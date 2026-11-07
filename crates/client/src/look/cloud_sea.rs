@@ -5,7 +5,8 @@
 //!
 //! Drawing only, like the sea: the sim's void is far above where this is
 //! drawn, so whoever falls is dead before they reach it, and nothing in it
-//! hides or shows a fighter. One sheet of rings round the map's middle,
+//! hides or shows a fighter. One sheet of rings round the map's middle (and
+//! two thin ones of mist over it, [`MIST_OVER_M`]),
 //! flat out to [`FLAT_M`], then curling up into a bank of cloud that stands
 //! over the horizon inside the far plane (`rig::FAR_M`): a flat sheet cut
 //! off by the far plane leaves a band under the horizon where the
@@ -52,6 +53,9 @@ pub const BILLOW_M: f32 = 100.0;
 pub const RELIEF: f32 = 6.0;
 /// How fast it drifts, m/s, along x and z: slower than the sky's deck.
 pub const DRIFT: [f32; 2] = [0.9, 0.35];
+/// Thin sheets of mist over the sea, m above it: drifting past the stacks'
+/// feet, so what stands in the cloud stands in it, not on a floor.
+pub const MIST_OVER_M: [f32; 2] = [5.0, 11.0];
 /// The drift wraps at this, metres (a whole number of the biggest
 /// billows, so the wrap is never seen; small, so f32 keeps its bits).
 const WRAP_M: f32 = BILLOW_M * 64.0;
@@ -93,6 +97,8 @@ impl MaterialExtension for Sea {
 #[derive(Component, Default)]
 pub struct CloudSea {
     mid: Vec2,
+    /// 0 the sea itself, opaque; above that a thin sheet of mist over it.
+    layer: u8,
 }
 
 pub fn plugin(app: &mut App) {
@@ -100,11 +106,11 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, drift);
 }
 
-fn params(mid: Vec2, far: Vec3) -> SeaParams {
+fn params(mid: Vec2, far: Vec3, layer: u8) -> SeaParams {
     SeaParams {
         top: Vec3::from_array(TOP).extend(1.0),
         hollow: Vec3::from_array(HOLLOW).extend(1.0),
-        shape: Vec4::new(BILLOW_M, RELIEF, 0.0, 0.0),
+        shape: Vec4::new(BILLOW_M, RELIEF, f32::from(layer), 0.0),
         fade: Vec4::new(mid.x, mid.y, FADE_M, REACH_M),
         far: far.extend(FAR_SHARE),
     }
@@ -157,28 +163,35 @@ pub fn spawn(
     mid: Vec2,
     y: f32,
 ) {
-    commands.spawn((
-        crate::level::LevelPart,
-        CloudSea { mid },
-        Mesh3d(meshes.add(mesh(mid, y))),
-        MeshMaterial3d(materials.add(CloudSeaMaterial {
-            base: StandardMaterial {
-                base_color: Color::WHITE,
-                perceptual_roughness: 1.0,
-                reflectance: 0.0,
-                ..default()
-            },
-            extension: Sea {
-                params: params(mid, Vec3::splat(0.5)),
-                motion: super::sea_motion::MOTION,
-            },
-        })),
-        Transform::IDENTITY,
-        // Its billows are the shader's: the sheet itself shades nothing,
-        // and an island's shadow on it would make it a floor close under.
-        NotShadowCaster,
-        NotShadowReceiver,
-    ));
+    for (layer, over) in [(0u8, 0.0), (1, MIST_OVER_M[0]), (2, MIST_OVER_M[1])] {
+        commands.spawn((
+            crate::level::LevelPart,
+            CloudSea { mid, layer },
+            Mesh3d(meshes.add(mesh(mid, y + over))),
+            MeshMaterial3d(materials.add(CloudSeaMaterial {
+                base: StandardMaterial {
+                    base_color: Color::WHITE,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.0,
+                    alpha_mode: if layer == 0 {
+                        AlphaMode::Opaque
+                    } else {
+                        AlphaMode::Blend
+                    },
+                    ..default()
+                },
+                extension: Sea {
+                    params: params(mid, Vec3::splat(0.5), layer),
+                    motion: super::sea_motion::MOTION,
+                },
+            })),
+            Transform::IDENTITY,
+            // Its billows are the shader's: the sheet itself shades nothing,
+            // and an island's shadow on it would make it a floor close under.
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
 }
 
 /// Once a frame: the drift on by [`DRIFT`], wrapped, and the colour the
@@ -204,7 +217,7 @@ fn drift(
     let far = super::rig::fog_for(&mood.mood, tier.atmosphere, 0.0).color.to_linear();
     let far = Vec3::new(far.red, far.green, far.blue);
     for (sea, handle) in &seas {
-        let want = params(sea.mid, far);
+        let want = params(sea.mid, far, sea.layer);
         if materials.get(&handle.0).is_some_and(|m| m.extension.params != want) {
             if let Some(m) = materials.get_mut(&handle.0) {
                 m.extension.params = want;

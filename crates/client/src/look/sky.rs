@@ -805,6 +805,11 @@ pub struct ComposeParams {
     pub moonlight: f32,
     /// Toward the sun the moon is lit by, unit (`moon::lighting_sun`).
     pub moon_sun: Vec3,
+    /// How dark the deck's underside goes where it is thickest, `0..=1`
+    /// (`Mood::deep`).
+    pub deep: f32,
+    /// How much of the sky the mood's fog veils, `0..=1` (`Mood::veil`).
+    pub veil: f32,
 }
 
 impl ComposeParams {
@@ -825,6 +830,8 @@ impl ComposeParams {
             moon_lit: 1.0,
             moonlight: 1.0,
             moon_sun: super::rig::to_sun(),
+            deep: 0.0,
+            veil: 0.0,
         }
     }
 }

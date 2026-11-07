@@ -1,7 +1,7 @@
 {
   "id": 7,
   "name": "Cloudbreak",
-  "about": "A sandstone island over a void, mirrored between red (-x) and blue (+x): a stone spire on its north edge with the sniper on its balcony and the shotgun in its hall, a round plaza in the middle with the rocket under two leaning struts that never meet, a gate and a raised deck each side, the overshield out on the south point. Off the edge is death. Grey boxes: out of the rotation until it has been played.",
+  "about": "An observatory on a sandstone island over a void, mirrored between red (-x) and blue (+x): a tower on its north edge with the sniper on its balcony and the shotgun in its hall, a round sundial in the middle with the rocket under a great arch broken at its crown, a trilithon gate and a bastion each side, the overshield out on the south point. Off the edge is death. Out of the rotation until it has been played.",
   "practice": true,
   "modes": ["doubles", "ffa"],
   "bounds": [-30, 30, -26, 27],
@@ -15,85 +15,94 @@
     "shapes": [
       {
         "outline": [
-          [-5, 24.5], [5, 24.5], [8.5, 22.5], [11, 18.5], [14.5, 19.5], [19, 17], [23, 13], [26.5, 8], [27, 0],
-          [26.5, -7], [24, -12], [20, -16], [15, -18.5], [10.5, -16.5], [6, -19], [3, -23],
-          [-3, -23], [-6, -19], [-10.5, -16.5], [-15, -18.5], [-20, -16], [-24, -12], [-26.5, -7],
-          [-27, 0], [-26.5, 8], [-23, 13], [-19, 17], [-14.5, 19.5], [-11, 18.5], [-8.5, 22.5]
+          [-1.24, 24.31], [1.24, 24.31], [3.32, 24.22], [5.0, 23.96], [6.3, 23.7], [7.2, 23.27], [8.01, 22.66], [8.74, 21.86],
+          [9.41, 20.94], [10.07, 20.02], [10.87, 19.53], [11.76, 19.36], [12.67, 19.42], [13.58, 19.7], [14.51, 19.68], [15.4, 19.32],
+          [16.28, 18.67], [17.22, 17.84], [18.2, 17.03], [19.18, 16.16], [20.09, 15.19], [21.02, 14.18], [22.12, 13.23], [23.37, 12.29],
+          [24.52, 11.22], [25.37, 9.95], [25.87, 8.43], [26.34, 6.8], [26.89, 5.04], [27.17, 3.04], [27.18, 1.07], [27.2, -0.82],
+          [27.09, -2.65], [26.58, -4.36], [25.86, -5.87], [25.34, -7.29], [25.04, -8.69], [24.71, -10.03], [24.18, -11.29], [23.44, -12.46],
+          [22.61, -13.57], [21.74, -14.66], [20.74, -15.64], [19.53, -16.4], [18.18, -16.99], [16.87, -17.56], [15.74, -18.0], [14.66, -18.21],
+          [13.56, -18.08], [12.42, -17.59], [11.21, -17.26], [9.93, -17.07], [8.67, -17.15], [7.52, -17.67], [6.49, -18.31], [5.56, -19.05],
+          [4.77, -20.04], [4.09, -21.3], [3.22, -22.44], [2.11, -23.27], [0.77, -23.53], [-0.77, -23.53], [-2.11, -23.27], [-3.22, -22.44],
+          [-4.09, -21.3], [-4.77, -20.04], [-5.56, -19.05], [-6.49, -18.31], [-7.52, -17.67], [-8.67, -17.15], [-9.93, -17.07], [-11.21, -17.26],
+          [-12.42, -17.59], [-13.56, -18.08], [-14.66, -18.21], [-15.74, -18.0], [-16.87, -17.56], [-18.18, -16.99], [-19.53, -16.4], [-20.74, -15.64],
+          [-21.74, -14.66], [-22.61, -13.57], [-23.44, -12.46], [-24.18, -11.29], [-24.71, -10.03], [-25.04, -8.69], [-25.34, -7.29], [-25.86, -5.87],
+          [-26.58, -4.36], [-27.09, -2.65], [-27.2, -0.82], [-27.18, 1.07], [-27.17, 3.04], [-26.89, 5.04], [-26.34, 6.8], [-25.87, 8.43],
+          [-25.37, 9.95], [-24.52, 11.22], [-23.37, 12.29], [-22.12, 13.23], [-21.02, 14.18], [-20.09, 15.19], [-19.18, 16.16], [-18.2, 17.03],
+          [-17.22, 17.84], [-16.28, 18.67], [-15.4, 19.32], [-14.51, 19.68], [-13.58, 19.7], [-12.67, 19.42], [-11.76, 19.36], [-10.87, 19.53],
+          [-10.07, 20.02], [-9.41, 20.94], [-8.74, 21.86], [-8.01, 22.66], [-7.2, 23.27], [-6.3, 23.7], [-5.0, 23.96], [-3.32, 24.22]
         ],
         "h": 40,
-        "edge": 1
+        "edge": 2.2
       },
       { "hill": [-9, 9], "r": 5.5, "h": 2.6, "mirror": true },
       { "hill": [-9, -9], "r": 5.5, "h": 2.2, "mirror": true },
       { "hill": [-15, 12], "r": 4, "h": 1.8, "mirror": true },
       { "hill": [-16, -12], "r": 4.5, "h": 2.0, "mirror": true },
       { "hill": [0, -14], "r": 6, "h": 1.6 },
-      { "pad": [0, 0], "r": 8.5, "h": 0, "blend": 5 }
+      { "pad": [0, 0], "r": 8.2, "h": 0.2, "blend": 5 }
     ]
   },
   "structures": [
     {
-      "name": "the ring: the plaza's round floor",
+      "name": "the ring: the plaza's round floor, a great sundial",
       "boxes": [
-        { "round": [0, 0], "r": 7.5, "y": [-1, 0.4], "look": "stone" }
+        {"round": [0, 0], "r": 7.5, "y": [-1, 0.4], "look": "stone"}
       ]
     },
     {
-      "name": "red's strut, leaning in over the ring from its west rim; blue's leans to meet it and never does",
+      "name": "red's half of the broken arch over the dial, on a circle about the middle; blue's rises to meet it and never does",
       "mirror": true,
       "boxes": [
-        [-9.2, -0.5, -0.7, -7.6, 2.6, 0.7, "stone"],
-        [-7.8, 2.2, -0.7, -6.2, 4.0, 0.7, "stone"],
-        [-6.4, 3.6, -0.7, -4.8, 5.4, 0.7, "stone"],
-        [-5.0, 5.0, -0.7, -3.4, 6.8, 0.7, "stone"],
-        [-3.6, 6.4, -0.7, -2.0, 8.2, 0.7, "stone"],
-        [-2.2, 7.8, -0.7, -1.4, 9.0, 0.7, "stone"]
+        {"sweep": [[0, -0.68], [0, 0.68]], "y": 0, "profile": [[1.424, 8.238, 8.988], [1.861, 8.121, 8.908], [2.29, 7.98, 8.807], [2.71, 7.817, 8.687], [3.121, 7.631, 8.548], [3.522, 7.423, 8.391], [3.915, 7.191, 8.215], [4.297, 6.934, 8.022], [4.67, 6.653, 7.811], [5.032, 6.346, 7.582], [5.384, 6.01, 7.336], [5.725, 5.643, 7.074], [6.055, 5.24, 6.793], [6.373, 4.796, 6.496], [6.679, 4.301, 6.18], [6.973, 3.737, 5.847], [7.254, 3.072, 5.495], [7.521, 2.224, 5.123], [7.773, 0.719, 4.731], [8.01, -0.5, 4.318], [8.231, -0.5, 3.88], [8.434, -0.5, 3.416], [8.618, -0.5, 2.922], [8.78, -0.5, 2.392], [8.917, -0.5, 1.818], [9.022, -0.5, 1.187], [9.08, -0.5, 0.603]], "look": "hidden"},
+        [-9.75, -0.5, -1.1, -7.05, 0.82, 1.1, "hidden"],
+        [-9.5, 0.82, -0.86, -7.2, 1.14, 0.86, "hidden"]
       ]
     },
     {
-      "name": "the spire: a hall on the north edge, its balcony over the north lane, the tower over all",
+      "name": "the tower: a hall on the north edge, its balcony over the north lane, the shaft leaning in over all (above reach its boxes follow its taper; drawn by look/observatory.rs)",
       "boxes": [
-        [-4, -0.5, 23.2, 4, 4, 24, "stone"],
-        [-1.5, 2.8, 17, 1.5, 4, 17.8, "stone"],
-        [-4, 4, 17, 4, 4.5, 24, "stone"],
-        [-3, 4, 14.5, 3, 4.5, 17, "stone_dark"],
-        [-3, 4.5, 14.5, 3, 5.3, 14.8, "stone_dark"],
-        [-4, 4.5, 17.8, 4, 12, 24, "stone"],
-        [-3.5, 12, 18.2, 3.5, 22, 23.8, "stone"],
-        [-2.5, 22, 19, 2.5, 27, 23, "stone"],
-        [-1, 27, 20.2, 1, 31, 21.8, "stone_dark"]
+        [-4, -0.5, 23.2, 4, 4, 24, "hidden"],
+        [-1.5, 2.8, 17, 1.5, 4, 17.8, "hidden"],
+        [-4, 4, 17, 4, 4.5, 24, "hidden"],
+        [-3, 4, 14.5, 3, 4.5, 17, "hidden"],
+        [-3, 4.5, 14.5, 3, 5.3, 14.8, "hidden"],
+        [-4, 4.5, 17.8, 4, 12, 24, "hidden"],
+        [-3.4, 12, 18.2, 3.4, 17, 23.6, "hidden"],
+        [-3.0, 17, 18.5, 3.0, 22, 23.3, "hidden"],
+        [-2.4, 22, 18.9, 2.4, 27.3, 22.9, "hidden"],
+        [-0.7, 27.3, 20.2, 0.7, 31, 21.6, "hidden"]
       ]
     },
     {
-      "name": "the spire's west side: the hall's door to the ledge, and the ramp up to the balcony",
+      "name": "the tower's west side: the hall's door to the ledge, and the ramp up to the balcony",
       "mirror": true,
       "boxes": [
-        [-4, -0.5, 17.8, -3.2, 4, 19.5, "stone"],
-        [-4, -0.5, 21.5, -3.2, 4, 23.2, "stone"],
-        [-4, 2.6, 19.5, -3.2, 4, 21.5, "stone"],
-        [-4, -0.5, 17, -1.5, 4, 17.8, "stone"],
-        { "ramp": [-10, 14.5, -3, 16.5], "up": "+x", "from": 0, "to": 4.5, "base": -0.5, "look": "stone" }
+        [-4, -0.5, 17.8, -3.2, 4, 19.5, "hidden"],
+        [-4, -0.5, 21.5, -3.2, 4, 23.2, "hidden"],
+        [-4, 2.6, 19.5, -3.2, 4, 21.5, "hidden"],
+        [-4, -0.5, 17, -1.5, 4, 17.8, "hidden"],
+        {"ramp": [-10, 14.5, -3, 16.5], "up": "+x", "from": 0, "to": 4.5, "base": -0.5, "look": "hidden"}
       ]
     },
     {
-      "name": "red's gate, between the dunes into the ring",
+      "name": "red's gate, a trilithon between the dunes into the ring",
       "mirror": true,
       "boxes": [
-        [-11.6, -0.5, -3.2, -10.6, 3.6, -2.2, "stone"],
-        [-11.6, -0.5, 2.2, -10.6, 3.6, 3.2, "stone"],
-        [-11.6, 3.6, -3.2, -10.6, 4.4, 3.2, "red"]
+        [-11.6, -0.5, -3.2, -10.6, 3.6, -2.2, "hidden"],
+        [-11.6, -0.5, 2.2, -10.6, 3.6, 3.2, "hidden"],
+        [-11.6, 3.6, -3.2, -10.6, 4.4, 3.2, "hidden"]
       ]
     },
     {
-      "name": "red's deck on the west cliff, walled toward the ring but for the ramp up from the gate",
+      "name": "red's bastion on the west cliff, walled toward the ring but for the ramp up from the gate",
       "mirror": true,
       "boxes": [
-        [-25.5, -0.5, -6, -19, 2.5, 6, "stone"],
-        [-25.5, 2.5, -6, -25, 3.5, 6, "red"],
-        [-23, 2.5, -1, -22, 3.7, 1, "stone"],
-        [-19.5, 2.5, -6, -19, 4.3, -2, "red"],
-        [-19.5, 2.5, 2, -19, 4.3, 6, "red"],
-        { "ramp": [-19, -2, -14.5, 2], "up": "-x", "from": 0, "to": 2.5, "base": -0.5, "look": "stone" }
+        [-25.5, -0.5, -6, -19, 2.5, 6, "hidden"],
+        [-25.5, 2.5, -6, -25, 3.5, 6, "hidden"],
+        [-23, 2.5, -1, -22, 3.7, 1, "hidden"],
+        [-19.5, 2.5, -6, -19, 4.3, -2, "hidden"],
+        [-19.5, 2.5, 2, -19, 4.3, 6, "hidden"],
+        {"ramp": [-19, -2, -14.5, 2], "up": "-x", "from": 0, "to": 2.5, "base": -0.5, "look": "hidden"}
       ]
     },
     {
@@ -105,34 +114,6 @@
         [-20, -0.5, 9.5, -18.5, 1.6, 11, "rock"],
         [-13, -0.5, -15.5, -11.5, 1.2, -14, "rock"],
         [-6.5, -0.5, 11, -5, 1.0, 12.5, "rock"]
-      ]
-    },
-    {
-      "name": "the spire's trim, drawn and never collided: a cornice where each tier steps in and a cap on the finial, a plinth along the hall's back, the door's frame, slit windows up the south face and a cap on the balcony's parapet",
-      "dress": true,
-      "boxes": [
-        [-4.25, 11.55, 17.55, 4.25, 12.0, 24.25, "stone_dark"],
-        [-3.75, 21.55, 17.95, 3.75, 22.0, 24.05, "stone_dark"],
-        [-2.75, 26.55, 18.75, 2.75, 27.0, 23.25, "stone_dark"],
-        [-1.25, 30.6, 19.95, 1.25, 31.0, 22.05, "stone_dark"],
-        [-4.1, -0.5, 24.0, 4.1, 0.4, 24.1, "stone_dark"],
-        [-1.9, 2.8, 16.9, 1.9, 3.3, 17.0, "stone_dark"],
-        [-1.9, -0.5, 16.9, -1.5, 2.8, 17.0, "stone_dark"],
-        [1.5, -0.5, 16.9, 1.9, 2.8, 17.0, "stone_dark"],
-        [-3.1, 5.3, 14.4, 3.1, 5.45, 14.9, "stone"],
-        [-2.3, 6.5, 17.75, -1.5, 10.5, 17.8, "stone_dark"],
-        [1.5, 6.5, 17.75, 2.3, 10.5, 17.8, "stone_dark"],
-        [-0.4, 13.5, 18.15, 0.4, 19.5, 18.2, "stone_dark"],
-        [-0.3, 23.0, 18.95, 0.3, 26.0, 19.0, "stone_dark"]
-      ]
-    },
-    {
-      "name": "the spire's plinth along its side, either side of the door there (drawn, never collided)",
-      "mirror": true,
-      "dress": true,
-      "boxes": [
-        [-4.1, -0.5, 17.0, -4.0, 0.4, 19.5, "stone_dark"],
-        [-4.1, -0.5, 21.5, -4.0, 0.4, 24.1, "stone_dark"]
       ]
     }
   ],
@@ -176,9 +157,9 @@
   ],
   "callouts": [
     { "name": "the ring", "at": [0, 0, 0.4] },
-    { "name": "red strut", "at": [-5.6, 0, 5.4] },
-    { "name": "blue strut", "at": [5.6, 0, 5.4] },
-    { "name": "the spire", "at": [0, 21] },
+    { "name": "red arch", "at": [-5.6, 0, 5.4] },
+    { "name": "blue arch", "at": [5.6, 0, 5.4] },
+    { "name": "the tower", "at": [0, 21] },
     { "name": "balcony", "at": [0, 16, 4.5] },
     { "name": "red ramp", "at": [-7, 15.5, 1.9] },
     { "name": "blue ramp", "at": [7, 15.5, 1.9] },
@@ -187,8 +168,8 @@
     { "name": "blue ledge", "at": [6.5, 20.5] },
     { "name": "red gate", "at": [-11, 0] },
     { "name": "blue gate", "at": [11, 0] },
-    { "name": "red deck", "at": [-22, 0, 2.5] },
-    { "name": "blue deck", "at": [22, 0, 2.5] },
+    { "name": "red bastion", "at": [-22, 0, 2.5] },
+    { "name": "blue bastion", "at": [22, 0, 2.5] },
     { "name": "red dune", "at": [-9, -9, 2.2] },
     { "name": "blue dune", "at": [9, -9, 2.2] },
     { "name": "the point", "at": [0, -20.5] }

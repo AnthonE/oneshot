@@ -25,7 +25,11 @@ use bevy::render::render_resource::{
 /// (a centimetre a texel, still finer than anyone stands to a cliff);
 /// at its own 1.8 m a 45 m wall was one flat value, and at 4 m a striped
 /// cloth.
-pub const GROUND: [&str; 4] = ["sand", "grass", "gravel", "rock"];
+pub const GROUND: [&str; 5] = ["sand", "grass", "gravel", "rock", "isle_rock"];
+/// An island's rock (`level::Land::Isle`): the layer it reads in place of a
+/// canyon's, and the size it is drawn at, m: a bed about a metre thick.
+pub const ISLE_ROCK_LAYER: f32 = 4.0;
+pub const ISLE_ROCK_TILE_M: f32 = 13.0;
 pub const GROUND_TILE_M: [f32; 4] = [2.48, 2.51, 2.0, 9.6];
 /// The boxes' sets: a base's metal and dressed stone the last three
 /// (`tools/ground.sh`).

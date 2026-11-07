@@ -140,9 +140,8 @@ pub enum Surface {
     /// and dust on its tops, its seams its own photograph's; no rust
     /// running down it (`Steel`'s streaks on a curved wall read as grain).
     Plate,
-    /// Cut stone (Cloudbreak's spire, struts and gates): concrete's wear
-    /// and grime, and courses of blocks with joints between them cut in its
-    /// shading (`weathering.wgsl`'s courses), each block its own value.
+    /// Cut stone (Cloudbreak's observatory): concrete's wear and grime over
+    /// the masonry's own photograph.
     Stone,
 }
 
@@ -271,12 +270,7 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
         half: b.half.extend(f32::from(b.hidden)),
-        turn: Vec4::new(
-            b.turn.0,
-            b.turn.1,
-            if seal(b) { 1.0 } else { 0.0 },
-            if surface == Surface::Stone { 1.0 } else { 0.0 },
-        ),
+        turn: Vec4::new(b.turn.0, b.turn.1, if seal(b) { 1.0 } else { 0.0 }, 0.0),
         ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
             [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
         }),

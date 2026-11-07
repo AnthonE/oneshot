@@ -64,6 +64,8 @@ pub struct GroundParams {
     /// planes, no rock face: a software GPU), w = the floor under a normal
     /// map's z before it becomes a gradient.
     pub wall: Vec4,
+    /// x the array layer the rock reads: 3, an island's 4; yzw unused.
+    pub layers: Vec4,
     /// x = the share of each 45° step between two wall planes over which
     /// both are read, y/z = the cosine between the triangle's plane and the
     /// normal below which the projection follows the triangle / above which
@@ -101,13 +103,13 @@ pub struct GroundParams {
 /// bedded sandstone lifted to a sunlit red (its photograph is in shade).
 /// An island's (`level::Land::Isle`): the sand lifted to a pale cream (the
 /// photograph is a warm orange, linear mean 0.29 0.16 0.08) and its rock
-/// to a tan sandstone (0.21 0.09 0.03, a canyon's red); the other two
-/// lanes are never weighted there.
+/// to the same family a shade darker (`isle_rock`, 0.25 0.14 0.05); the
+/// other two lanes are never weighted there.
 pub const ISLE_TINT: [Vec4; 4] = [
-    Vec4::new(1.9, 2.6, 3.5, 1.0),
+    Vec4::new(1.75, 2.35, 3.0, 1.0),
     Vec4::new(0.66, 1.2, 0.62, 1.0),
     Vec4::new(0.95, 0.92, 0.88, 1.0),
-    Vec4::new(2.3, 3.2, 4.4, 1.0),
+    Vec4::new(1.35, 1.8, 3.1, 1.0),
 ];
 
 /// An island's rock face: sandstone the wind has rounded, not a canyon's
@@ -273,6 +275,7 @@ impl Default for GroundParams {
             tint: TINT,
             cliff: Vec4::new(CLIFF_TAN_LO, CLIFF_TAN_HI, CLIFF_NOISE, CLIFF_NOISE_M),
             wall: Vec4::new(WALL_ON, WALL_SHARPNESS, 0.0, NORMAL_Z_FLOOR),
+            layers: Vec4::new(3.0, 0.0, 0.0, 0.0),
             wall_planes: Vec4::new(WALL_PLANE_BLEND, PROJECT_TRI_COS, PROJECT_NORMAL_COS, 0.0),
             rock_a: Vec4::new(ROCK_CELL_M, ROCK_FINE_M, ROCK_TILT, ROCK_FINE_TILT),
             rock_b: Vec4::new(ROCK_SHADE, ROCK_WEATHER_M, ROCK_WEATHER, ROCK_WARP_M),
@@ -307,6 +310,8 @@ pub fn material(
     let mut params = GroundParams::default();
     if isle {
         params.tint = ISLE_TINT;
+        params.layers.x = super::textures::ISLE_ROCK_LAYER;
+        params.tile_m.w = super::textures::ISLE_ROCK_TILE_M;
         params.rock_a = ISLE_ROCK_A;
         params.rock_b = ISLE_ROCK_B;
         params.rock_c = ISLE_ROCK_C;

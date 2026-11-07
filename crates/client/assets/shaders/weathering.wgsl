@@ -57,15 +57,20 @@ struct Weather {
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> weather: Weather;
 
-// A plaza's seal: its rings as shares of its radius, how many spokes, a
-// groove's half-width m, and how much darker a groove and the rim's band
-// are and how much paler the hub.
-const SEAL_RINGS: vec4<f32> = vec4<f32>(0.14, 0.36, 0.6, 0.86);
-const SEAL_SPOKES: f32 = 12.0;
-const SEAL_GROOVE_M: f32 = 0.05;
-const SEAL_GROOVE_DARK: f32 = 0.5;
-const SEAL_RIM_DARK: f32 = 0.84;
-const SEAL_HUB_PALE: f32 = 1.12;
+// A plaza's dial: its rings as shares of its radius, its hours and their
+// quarter marks round the rim, a groove's half width (m) and how dark, the
+// bronze let into its scale, the figure of the sun's year on its south
+// meridian (half width, half length, how far south of the middle, m) and the
+// band outside the last ring.
+const SEAL_RINGS: vec4<f32> = vec4<f32>(0.11, 0.42, 0.8, 0.93);
+const SEAL_HOURS: f32 = 24.0;
+const SEAL_TICKS: f32 = 96.0;
+const SEAL_GROOVE_M: f32 = 0.028;
+const SEAL_GROOVE_DARK: f32 = 0.42;
+const SEAL_BRONZE: vec3<f32> = vec3<f32>(0.26, 0.17, 0.085);
+const SEAL_YEAR: vec3<f32> = vec3<f32>(0.5, 1.15, 2.05);
+const SEAL_RIM_DARK: f32 = 0.8;
+const SEAL_HUB_PALE: f32 = 1.1;
 
 // Cut stone's courses: a course's height and a block's length, m, the
 // blocks of each course staggered half a block on the last; a joint's
@@ -264,27 +269,45 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         rough = mix(rough, 1.0, cs.x * 0.5);
     }
 
-    // 1b · A plaza's seal: on its top, grooves cut in rings and in spokes
-    // between the hub's ring and the third, the band outside the last ring
-    // darker, the hub paler. Value and roughness only: the floor stays the
-    // flat top the sim walks on.
+    // 1b · A plaza's dial: on its top, an hour line each 15 degrees from
+    // the hub's ring out to the scale, a scale of quarter marks between the
+    // last two rings with bronze let into it, the meridian north and south in
+    // bronze and the sun's year in a figure of eight on it. Value and
+    // roughness only: the floor stays the flat top the sim walks on.
     if weather.turn.z > 0.5 && ng.y > 0.9 {
         let d = p.xz - weather.centre.xz;
         let rm = length(d);
         let big_r = weather.half.x;
         let aa = max(px, 0.004);
-        var groove = max(
-            max(seal_line(rm, SEAL_RINGS.x * big_r, aa), seal_line(rm, SEAL_RINGS.y * big_r, aa)),
-            max(seal_line(rm, SEAL_RINGS.z * big_r, aa), seal_line(rm, SEAL_RINGS.w * big_r, aa)),
-        );
-        let sector = atan2(d.y, d.x) * SEAL_SPOKES / 6.2831853;
-        let off = abs(fract(sector + 0.5) - 0.5) * 6.2831853 / SEAL_SPOKES * rm;
-        let spans = step(SEAL_RINGS.x * big_r, rm) * step(rm, SEAL_RINGS.z * big_r);
-        groove = max(groove, seal_line(off, 0.0, aa) * spans);
+        let r0 = SEAL_RINGS.x * big_r;
+        let r1 = SEAL_RINGS.y * big_r;
+        let r2 = SEAL_RINGS.z * big_r;
+        let r3 = SEAL_RINGS.w * big_r;
+        var groove = max(max(seal_line(rm, r0, aa), seal_line(rm, r1, aa)), seal_line(rm, r2, aa));
+        // How far off the nearest of `n` lines round the dial, m.
+        let turn = atan2(d.y, d.x) / 6.2831853;
+        let hour = abs(fract(turn * SEAL_HOURS + 0.5) - 0.5) / SEAL_HOURS * 6.2831853 * rm;
+        groove = max(groove, seal_line(hour, 0.0, aa) * step(r0, rm) * step(rm, r2));
+        // Bronze: the scale's rings, its marks and the meridian.
+        var inlay = max(seal_line(rm, r3, aa * 1.5), seal_line(rm, r2 + 0.035, aa));
+        let tick = abs(fract(turn * SEAL_TICKS + 0.5) - 0.5) / SEAL_TICKS * 6.2831853 * rm;
+        let reach = mix(r2 + (r3 - r2) * 0.45, r3, step(abs(fract(turn * SEAL_HOURS + 0.5) - 0.5), 0.5 / (SEAL_TICKS / SEAL_HOURS)));
+        inlay = max(inlay, seal_line(tick, 0.0, aa) * step(r2, rm) * step(rm, reach));
+        inlay = max(inlay, seal_line(d.x, 0.0, aa) * step(r0, rm) * step(rm, r3));
+        // The year: a lemniscate about the south meridian (x/a)^2 = (u^2)(1-u^2).
+        let u = (d.y + SEAL_YEAR.z) / SEAL_YEAR.y;
+        if abs(u) < 1.05 {
+            let xa = d.x / SEAL_YEAR.x;
+            let f = xa * xa - u * u * (1.0 - u * u);
+            let g = length(vec2<f32>(2.0 * xa / SEAL_YEAR.x, (-2.0 * u + 4.0 * u * u * u) / SEAL_YEAR.y));
+            inlay = max(inlay, 1.0 - smoothstep(SEAL_GROOVE_M, SEAL_GROOVE_M + aa, abs(f) / max(g, 0.05)));
+        }
         c *= mix(1.0, SEAL_GROOVE_DARK, groove);
         rough = mix(rough, 1.0, groove);
-        c *= mix(1.0, SEAL_RIM_DARK, smoothstep(SEAL_RINGS.w * big_r, SEAL_RINGS.w * big_r + aa, rm));
-        c *= mix(1.0, SEAL_HUB_PALE, 1.0 - smoothstep(SEAL_RINGS.x * big_r - aa, SEAL_RINGS.x * big_r, rm));
+        c = mix(c, SEAL_BRONZE, inlay);
+        rough = mix(rough, 0.45, inlay);
+        c *= mix(1.0, SEAL_RIM_DARK, smoothstep(r3, r3 + aa, rm));
+        c *= mix(1.0, SEAL_HUB_PALE, 1.0 - smoothstep(r0 - aa, r0, rm));
     }
 
     // 2 · Grime toward the ground, in a ragged band: splash and soil.

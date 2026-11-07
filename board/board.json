@@ -512,7 +512,7 @@
       "png": "traces/hd/ring.png",
       "refs": [
         {
-          "file": "isle2.webp",
+          "file": "ddd2.webp",
           "take": "a round plaza cut with a pattern, two leaning struts that never meet, sand mounded round it with rounded boulders, a grey stone tower to one side, an overcast sky, a flat sea of mist and pale stacks of rock far off",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
@@ -530,7 +530,7 @@
       "png": "traces/hd/coast.png",
       "refs": [
         {
-          "file": "isle1.jpg",
+          "file": "ddd.jpg",
           "take": "sandstone undercut into arches and fingers under the island's edge; rounded boulders along the rim; grey architecture on the cliff; mist below, stacks of rock behind",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
@@ -548,16 +548,88 @@
       "png": "traces/hd/void.png",
       "refs": [
         {
-          "file": "isle2.webp",
+          "file": "ddd2.webp",
           "take": "the sea of mist, flat to the horizon; stacks of rock standing out of it, paler with distance; the cloud deck grey with a lighter break",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
         },
         {
-          "file": "isle1.jpg",
+          "file": "ddd.jpg",
           "take": "rocks far off on the mist, pale; the light coming through the cloud",
           "ignore": "the gun in view, the HUD, the figures",
           "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-spire",
+      "name": "Cloudbreak: the spire",
+      "what": "from the north lane, up the spire over the hall",
+      "take": "one landmark tall enough to orient by: cut stone with weight, cast shadows and a skyline of its own, grey against warm sand",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/spire.png",
+      "refs": [
+        {
+          "file": "ddd2.webp",
+          "private": true,
+          "take": "the weight and finish of cool grey stone against the warm sand and the grey sky; how much shadow its forms throw",
+          "ignore": "the tower's shape, its panels and its details: ours is our own design; the gun in view, the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-gate",
+      "name": "Cloudbreak: the red gate",
+      "what": "from the ring, west through the gate to red's deck",
+      "take": "built things with thickness and trim that sit in the sand, sand drifted against their feet",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/gate.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "grey architecture grounded in warm sand and rounded stones, sand mounded against it",
+          "ignore": "its structures' shapes and panels: ours are our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-deck",
+      "name": "Cloudbreak: over the ring from a deck",
+      "what": "from red's deck, east over the gate and the ring to the far deck",
+      "take": "the whole island in one look: warm dunes, cool stone, light and shade in big masses, the edge and the cloud beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/deck.png",
+      "refs": [
+        {
+          "file": "ddd2.webp",
+          "private": true,
+          "take": "big soft masses of sun and shade across the sand, sand mounded round the plaza, the sea of mist flat to the horizon",
+          "ignore": "the layout and the structures' shapes: ours are our own design; the gun in view, the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-rim",
+      "name": "Cloudbreak: along the rim",
+      "what": "from the south point, west along the coast with the drop beside it",
+      "take": "an edge you feel: rounded boulders along the lip, the sand giving way to rock, the drop and the cloud far under",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/rim.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "rounded boulders along the rim, sand over undercut rock, the drop into mist",
+          "ignore": "its structures: ours are our own design; the HUD, the figures"
         }
       ]
     },

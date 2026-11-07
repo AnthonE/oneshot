@@ -106,10 +106,17 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         STEEL_RED => ("steel", 5.0, Color::linear_rgb(1.5, 0.3, 0.24)),
         STEEL_BLUE => ("steel", 5.0, Color::linear_rgb(0.26, 0.44, 1.35)),
         TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
-        // Stone: smooth grey (the set's mean is 0.48), a little cool, and
-        // the same in shade, its mottle a couple of metres across.
-        STONE => ("stone", 3.0, Color::linear_rgb(0.9, 0.91, 0.95)),
-        STONE_DARK => ("stone", 3.0, Color::linear_rgb(0.5, 0.51, 0.54)),
+        // The masonry: cool, against the warm sand and the warm sun on it.
+        STONE => (
+            "stone",
+            crate::look::observatory::TILE_M,
+            Color::linear_rgb(1.0, 1.0, 1.02),
+        ),
+        STONE_DARK => (
+            "stone",
+            crate::look::observatory::TILE_M,
+            Color::linear_rgb(0.46, 0.46, 0.48),
+        ),
         _ => return None,
     })
 }
@@ -122,8 +129,8 @@ const STEEL_RED: u8 = 27;
 const STEEL_BLUE: u8 = 28;
 const TREAD: u8 = 29;
 /// Dressed grey stone, pale and dark, in the concrete set.
-const STONE: u8 = 30;
-const STONE_DARK: u8 = 31;
+pub(crate) const STONE: u8 = 30;
+pub(crate) const STONE_DARK: u8 = 31;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -549,7 +556,7 @@ fn strip(i: u8) -> Option<Color> {
 }
 
 /// A strip's material.
-fn strip_material(c: Color, roughness: f32) -> StandardMaterial {
+pub(crate) fn strip_material(c: Color, roughness: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: c,
         emissive: LinearRgba::from(c) * STRIP_GLOW,
@@ -627,6 +634,14 @@ impl Land {
     }
 }
 
+/// Where an island's drawn ground stops and its keel hangs from, m: under the
+/// lip, so the rim overhangs what is under it, all of that drawn inside the
+/// column the sim collides.
+const ISLE_CUT_Y: f32 = -3.0;
+
+/// Over this height an island's ground is dune, m (its floor is 0).
+const ISLE_DUNE_Y: f32 = 0.05;
+
 pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f32, [f32; 4]) {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
@@ -639,7 +654,13 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
     let along_z = h(i, (j + s).min(nz - 1)).min(h(i, j.saturating_sub(s))) - y;
     let trough = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
     if land == Land::Isle {
-        // Sandstone: sand where it lies, rock where it stands.
+        // Sandstone: sand where it lies, rock where it stands. A dune over
+        // the island's floor is sand however steep.
+        let slope = if y > ISLE_DUNE_Y {
+            slope.min(ROCK_SLOPE.0)
+        } else {
+            slope
+        };
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
@@ -802,6 +823,10 @@ pub fn build(
         let size = b.max - b.min;
         let tile = dress(l).map_or(2.0, |d| d.1);
         if l == HIDDEN {
+            // Drawn by the observatory, set back from these planes.
+            if land == Land::Isle {
+                commands.spawn((LevelPart, rock::Bare(v3(b.min), v3(b.max))));
+            }
             continue;
         }
         if let Some(c) = strip(l) {
@@ -913,7 +938,10 @@ pub fn build(
         }
     }
     // Rock out of reach: the sea's stacks and stones.
-    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle, map.light.sea);
+    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
+    if land == Land::Isle {
+        crate::look::observatory::spawn(commands);
+    }
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.
@@ -1060,6 +1088,10 @@ pub fn build(
     {
         let sol = &sol;
         if l == HIDDEN {
+            if land == Land::Isle {
+                let b = sol.bounds();
+                commands.spawn((LevelPart, rock::Bare(v3(b.min), v3(b.max))));
+            }
             continue;
         }
         let kind = match l {
@@ -1282,7 +1314,7 @@ pub fn build(
             // instead (`look/keel.rs`).
             let cut = |m: Mesh| {
                 if isle {
-                    crate::look::keel::clip_below(&m, def.void)
+                    crate::look::keel::clip_below(&m, ISLE_CUT_Y)
                 } else {
                     m
                 }
@@ -1291,7 +1323,7 @@ pub fn build(
                 commands.spawn((
                     LevelPart,
                     GroundMesh { sea: wet_from, isle },
-                    Mesh3d(meshes.add(crate::look::keel::mesh(t, def.void, rock_key(id)))),
+                    Mesh3d(meshes.add(crate::look::keel::mesh(t, ISLE_CUT_Y, rock_key(id)))),
                     MeshMaterial3d(soil.clone()),
                     Transform::default(),
                 ));
@@ -1309,7 +1341,9 @@ pub fn build(
             // The rock skin over its rock faces (`look/cliffs.rs`): no
             // shadow of its own, the ground under it casts it.
             let (skin, lift) = crate::look::cliffs::skin(t, lo, hi, rock_key(id), land);
-            if let Some(skin) = skin {
+            // An island's cliffs are hidden by the rock that hugs them
+            // (`boulders::scenery`), and its coast is too tight for the skin's facets.
+            if let Some(skin) = skin.filter(|_| land != Land::Isle) {
                 commands.spawn((
                     LevelPart,
                     GroundMesh {

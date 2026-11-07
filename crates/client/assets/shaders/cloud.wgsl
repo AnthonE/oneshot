@@ -25,7 +25,7 @@
 // frame.
 #import bevy_pbr::mesh_view_bindings::{view, globals}
 #import bevy_pbr::utils::coords_to_viewport_uv
-#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, slab_warp, slab_shape, slab_wide_lod}
+#import "shaders/deck.wgsl"::{deck_point, deck_fade, deck_detail, deck_haze, deck_drift, deck_value, deck_veil, deck_veil_mass, slab_warp, slab_shape, slab_wide_lod}
 #ifdef BACKDROP
 #import "shaders/shaft_march.wgsl"::{shaft_lost}
 #endif
@@ -72,7 +72,8 @@ struct Cloud {
     // x the field's texel, m; y the detail's texel, m; zw unused.
     texel: vec4<f32>,
     // x how fast a cumulus boils, m/s (the detail rising through the
-    // slab, `deck::BOIL_MS`); yzw unused. The detail rides the deck's drift.
+    // slab, `deck::BOIL_MS`); y how dark the underside goes where it is
+    // thickest (`Mood::deep`); zw unused. The detail rides the deck's drift.
     wind: vec4<f32>,
     // xyz the daylight added to the clear sky behind the deck
     // (`rig::SKY_LIFT`), on both skies; w unused.
@@ -90,7 +91,7 @@ struct Cloud {
     // xyz a low sun's glow at its strongest; w the cosine of the sun
     // disk's radius.
     glow: vec4<f32>,
-    // xyz the weather fog's colour; w unused.
+    // xyz the weather fog's colour; w the veil (`Mood::veil`).
     fog: vec4<f32>,
     // The weather's air over the sky (`sky::SkyFog::lanes`).
     air: vec4<f32>,
@@ -193,6 +194,19 @@ fn drift() -> vec2<f32> {
 fn field_at(xz: vec2<f32>, lod: f32) -> f32 {
     let q = xz / cl.slab.z + drift();
     return textureSampleLevel(field_tex, field_samp, q * cl.drift.z + cl.drift.w, lod).r;
+}
+
+// How thick the deck stands over `xz`, 0 thin to 1 thick: a heavy overcast's
+// underside is mottled in broad soft masses with smaller ones in them. Its
+// own smooth noise riding the deck's drift: the field's eight bits, stretched
+// this far, come out in terraces.
+fn deep_at(xz: vec2<f32>) -> f32 {
+    let q = xz + drift() * cl.slab.z;
+    let w = vec2(deck_value(q / 2300.0 + vec2(3.1, 7.7)), deck_value(q / 2300.0 + vec2(11.9, 1.3))) - 0.5;
+    let p = q + w * 1500.0;
+    let n = deck_value(p / 1900.0) * 0.5 + deck_value(p / 830.0 + vec2(5.2, 2.9)) * 0.3
+        + deck_value(p / 340.0 + vec2(8.4, 6.1)) * 0.14 + deck_value(p / 140.0 + vec2(1.7, 9.3)) * 0.06;
+    return smoothstep(0.26, 0.74, n);
 }
 
 // Cloud density at `p` (world, m), `0..1`. The deck's own field decides
@@ -317,7 +331,10 @@ fn march(d: vec3<f32>, px: vec2<f32>) -> vec4<f32> {
             let sun = cl.light.w * (ph * exp(-tau) + 0.35 * ph2 * exp(-0.25 * tau));
             // Sky light from above: a base sees less of the sky than a top.
             let hgt = clamp((p.y - cl.slab.x) / (cl.slab.y - cl.slab.x), 0.0, 1.0);
-            let amb = mix(0.5, 1.0, hgt);
+            var amb = mix(0.5, 1.0, hgt);
+            if cl.wind.y > 0.0 {
+                amb *= 1.0 - cl.wind.y * deep_at(p.xz);
+            }
             let lit = cl.top.rgb * sun + cl.base.rgb * amb;
             let a = 1.0 - exp(-rho * sigma * dtf);
             lum += trans * a * lit;
@@ -400,7 +417,7 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
             let lit = clamp((f - f_sun) * 6.0 + 0.5, 0.0, 1.0);
             let thick = clamp((f - thresh) / (3.0 * edge), 0.0, 1.0);
             let side = clamp((cl.shade.z - d.y) / (cl.shade.z - cl.shape.y), 0.0, 1.0);
-            let under = cl.base.rgb * (1.0 - cl.shade.x * thick)
+            let under = cl.base.rgb * (1.0 - cl.shade.x * thick) * (1.0 - cl.wind.y * thick)
                 + (cl.top.rgb - cl.base.rgb) * cl.shade.y * (1.0 - c0);
             let w = max(lit * (1.0 - 0.5 * thick), side * side * (3.0 - 2.0 * side));
             let cloud = mix(under, cl.top.rgb, w) + cl.scatter.rgb * s * s * (1.0 - 0.6 * thick);
@@ -420,7 +437,11 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     // Fog lies between the eye and everything: as much of the sky as the
     // weather's air takes along this ray. Where the atmosphere draws it is
     // `sky_fog.wgsl`'s, over the atmosphere too.
-    rgb = mix(rgb, cl.fog.rgb, deck_haze(d.y, cl.air, cl.dust));
+    var fogged = cl.fog.rgb;
+    if cl.fog.w > 0.0 {
+        fogged *= deck_veil_mass(d, globals.time);
+    }
+    rgb = mix(rgb, fogged, deck_veil(deck_haze(d.y, cl.air, cl.dust), d, cl.disk.xyz, cl.fog.w));
     // The light shafts: the sun's share of the mist taken back where the
     // ray crossed the map's shade on its way out of the box, in the frame's
     // own units, as the boxes take it (`weathering.wgsl`).
