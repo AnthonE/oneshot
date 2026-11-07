@@ -95,9 +95,17 @@ for mp4 in sorted(glob.glob(os.path.join(src, "*.mp4"))) if os.path.isdir(src) e
         os.makedirs(out, exist_ok=True)
         for f in glob.glob(os.path.join(out, "*.jpg")):
             os.remove(f)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp4, "-vf",
-                        "scale=1920:1080:flags=lanczos", "-q:v", "2",
-                        os.path.join(out, "%03d.jpg")], check=True)
+        # A shot still being written (its ffmpeg is up) does not read yet:
+        # it is skipped this run, and its stamp is not written, so the next
+        # run takes it.
+        ok = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp4, "-vf",
+                             "scale=1920:1080:flags=lanczos", "-q:v", "2",
+                             os.path.join(out, "%03d.jpg")], check=False).returncode == 0
+        if not ok:
+            print(f"trailer: {os.path.basename(mp4)} is not whole yet: skipped")
+            for f in glob.glob(os.path.join(out, "*.jpg")):
+                os.remove(f)
+            continue
         open(stamp, "w").write(str(os.path.getmtime(mp4)))
     index[name] = len(glob.glob(os.path.join(out, "*.jpg")))
 # a still (NN-name.png, a shot with `still: true`) is a one-frame clip

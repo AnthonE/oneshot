@@ -354,11 +354,11 @@ const SCENES = [
   { id: 'c1-scope', at: 0, box: false, draw(L) {
     const kill = hit(45.44);                 // the first big kick: the shot
     const pre = L.t < kill;
-    if (pre) foot(bg, 'scope', L.t, L.d, { full: true, z: 1.75, px: -.15, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.3, z1: 1.36, x0: -.3, x1: .2 } });
+    if (pre) foot(bg, 'scope', L.t, L.d, { full: true, z: 1.75, px: -.45, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.3, z1: 1.36, x0: -.3, x1: .2 } });
     // the shot, and the fighter dropping, in slow motion: snipe-kill's clip holds the kill 1.2 s in
     else foot(bg, 'snipe-kill', L.t - kill, L.d - kill, { full: true, from: 1.05, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.36, z1: 1.3, x0: .2, x1: .25 } });
     const breath = ramp(L.t, 0, .9);
-    scope(L, breath, pre ? 1 : 0);
+    scope(L, pre ? breath : 1 - ramp(L.t, kill + .5, kill + 1.1), pre ? 1 : 0);
     if (!pre) {
       // the shot: the frame kicks, the scope comes off, the body drops
       const k = Math.exp(-(L.t - kill) * 6);
@@ -641,7 +641,7 @@ const ART = {
     wordmark(fg, W / 2, 840, 1.45, { glow: 'rgba(232,185,49,.3)', line: 'ARENA SLAYER' });
   },
   scope(ctx) {    // the store's frame through the scope: the sweep's still, pushed in, under the reticle
-    foot(bg, ART_SRC.scope[0], 0, 1, { full: true, z: 1.75, px: -.15, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.92) brightness(.92)', still: { full: true, z0: 1.3, z1: 1.3 } });
+    foot(bg, ART_SRC.scope[0], 0, 1, { full: true, z: 1.75, px: -.45, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.92) brightness(.92)', still: { full: true, z0: 1.3, z1: 1.3 } });
     scope({ t: 0, d: 1 }, 1, 0);
   },
   square(ctx) {   // the 1:1 tile: the mark alone on the hero gun
