@@ -418,7 +418,7 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
         "GRASS",
         "the same on every rung: it can cover a crouching fighter",
     );
-    number(pane, s, Knob::Fx, "EFFECTS", "sparks, tracers, flash lights");
+    number(pane, s, Knob::Fx, "EFFECTS", "sparks, flash lights");
     pane.spawn(ui::group("ON THIS MACHINE"));
     note(pane, &target_note(s, tier));
     pane.spawn(ui::group("WINDOW"));

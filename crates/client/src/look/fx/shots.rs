@@ -27,7 +27,7 @@ use crate::look::shake;
 const MUZZLE_FWD_M: f32 = 0.75;
 const MUZZLE_DOWN_M: f32 = 0.28;
 /// Our own muzzle, in view space: ahead, right, down (where the gun in
-/// view holds it), and how far ahead of it our tracer starts.
+/// view holds it).
 const OWN_MUZZLE: Vec3 = Vec3::new(0.12, -0.1, 0.7);
 /// Our own flash, times a third person's and the gun's `flash_scale`:
 /// [`OWN_MUZZLE`] is a hand's length from the eye, where a third person's
@@ -49,11 +49,24 @@ const ONE_FRAME_S: f32 = 0.001;
 const OWN_CORE_M: f32 = 0.05;
 /// An energy gun's core against that: it is the flash, where powder has fire.
 const ENERGY_CORE: f32 = 1.8;
+/// Our own casings: out of a port this far right and up of the muzzle as
+/// drawn (radians off it, as it looks), this far ahead of the eye (metres),
+/// at this share of a casing's speed, so they cross the view in four to six
+/// frames (`moodboard/tracers`).
+const OWN_PORT_TURN: Vec2 = Vec2::new(0.17, 0.14);
+const OWN_PORT_M: f32 = 0.38;
+const OWN_CASING_PACE: f32 = 0.75;
 /// The world's share of our flash, times the gun's `light_lm`. The gun in
 /// view has a light of its own (`viewmodel.rs`), a hand's length off, that
 /// lights nothing further.
 const OWN_WORLD_LIGHT: f32 = 3.0;
-const OWN_TRACER_SKIP_M: f32 = 1.0;
+/// The metres a tracer takes to come up to full off its muzzle, out of
+/// the flash: ours, a hand's length off the eye, and anyone else's.
+const OWN_TRACER_IN_M: f32 = 0.6;
+const TRACER_IN_M: f32 = 0.4;
+/// Our own wake, out of view for its first metres: from the eye it would
+/// be a fog over the scope.
+const OWN_WAKE_IN_M: f32 = 3.0;
 /// Our shotgun's pellets drawn in a cone this wide (radians): the real
 /// scatter is the server's secret, and its marks are where they went.
 const PELLET_DRAW_RAD: f32 = 0.09;
@@ -115,10 +128,10 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
             (muzzle - dir * 0.3, from.y - EYE_OVER_FLOOR_M)
         };
         let out = dir.cross(Vec3::Y).normalize_or(Vec3::X);
-        eject(fx, &look, port, out, floor);
+        eject(fx, &look, port, out, floor, 1.0);
         if turret {
             // Two a frame: it fires faster than frames come.
-            eject(fx, &look, port - dir * 0.05, out, floor);
+            eject(fx, &look, port - dir * 0.05, out, floor, 1.0);
         }
     }
     if !kind.ray() {
@@ -130,12 +143,10 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     let n = &mut fx.rounds[e.a as usize % 64];
     *n = n.wrapping_add(1);
     if (*n).is_multiple_of(look.every) {
-        let start = muzzle + dir * 0.6;
-        let d = (to - start).normalize_or(dir);
-        table::tracer(&mut fx.glow, &look, start, d, start.distance(to));
+        table::tracer(&mut fx.tracers, &look, muzzle, to, TRACER_IN_M);
     }
     if look.wake_s > 0.0 {
-        table::wake(&mut fx.soft, muzzle, to, look.wake_s);
+        table::wake(&mut fx.tracers, muzzle, to, look.wake_s, 0.0);
     }
     land(fx, scene, arm, from, dir, len, to);
 }
@@ -228,6 +239,9 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
     if !a.kind.ray() {
         return;
     }
+    // The muzzle as it is drawn (`own_muzzle`), in the world: each line
+    // leaves the gun we see and meets the crosshair at what it hit.
+    let muzzle = eye + cam * at;
     let pellets = if id == SHOTGUN { 6 } else { rounds as usize };
     for k in 0..pellets {
         let dir = if id == SHOTGUN {
@@ -236,15 +250,14 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
         } else {
             fwd
         };
-        // Down the view to the first wall, or as far as the gun reaches,
-        // from half way between the muzzle's line and the view's.
+        // Down the view to the first wall, or as far as the gun reaches.
         let reach = scene.map.ray(v3(eye), v3(dir), a.range.max(30.0));
-        let start = eye + dir * OWN_TRACER_SKIP_M + (right * at.x + up * at.y) * 0.5;
+        let hit = eye + dir * reach;
         if k == 0 || id == SHOTGUN {
-            table::tracer(&mut fx.glow, &look, start, dir, (reach - OWN_TRACER_SKIP_M).max(0.0));
+            table::own_tracer(&mut fx.tracers, &look, muzzle, hit, OWN_TRACER_IN_M);
         }
-        if look.wake_s > 0.0 {
-            table::wake(&mut fx.soft, start, eye + dir * reach, look.wake_s);
+        if look.wake_s > 0.0 && k == 0 {
+            table::wake(&mut fx.tracers, muzzle, hit, look.wake_s, OWN_WAKE_IN_M);
         }
     }
 }
@@ -293,7 +306,6 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2], dt: f32) {
         let muzzle = eye.translation + eye.rotation * at;
         let fwd = eye.rotation * Vec3::NEG_Z;
         let right = eye.rotation * Vec3::X;
-        let up = eye.rotation * Vec3::Y;
         let scale = OWN_FLASH_SCALE * o.look.flash_scale;
         if o.fresh {
             o.fresh = false;
@@ -315,15 +327,23 @@ pub fn muzzle(fx: &mut Fx, eye: &Transform, drawn: [Option<Vec3>; 2], dt: f32) {
                     ..MUZZLE_FLASH
                 },
             );
-            // Out of the port to the right and a little back, quick enough
-            // to be out of the view in a few frames.
+            // Out of the port up and to the right and a little back, as
+            // the references' brass goes, slow enough to be in view four to
+            // six frames. The port is where it looks to be: up and right of
+            // the muzzle as drawn, the receiver's top, and nearer the eye
+            // than the gun, which is drawn in the same depth with a wider
+            // lens (`viewmodel::GUN_FOV`) and hid every casing thrown from
+            // inside its outline.
+            let on = Vec2::new(at.x, at.y) / -at.z.min(-0.05) + OWN_PORT_TURN;
+            let port = eye.translation + eye.rotation * (on.extend(-1.0) * OWN_PORT_M);
             for _ in 0..o.rounds.min(3) {
                 eject(
                     fx,
                     &o.look,
-                    muzzle - fwd * 0.3 + right * 0.04,
-                    (right - fwd * 0.3 - up * 0.15).normalize_or(right),
+                    port,
+                    (right - fwd * 0.25).normalize_or(right),
                     eye.translation.y - EYE_OVER_FLOOR_M,
+                    OWN_CASING_PACE,
                 );
             }
             if o.rocket {
@@ -582,12 +602,13 @@ fn bloom(fx: &mut Fx, at: Vec3, dir: Vec3, tone: f32, scale: f32, life: f32) {
     table::emit_recipe(pool, &after, 1, at, dir, Color::WHITE, scale);
 }
 
-/// A gun's casing out of its port at `at` along `out`, onto `floor`.
-fn eject(fx: &mut Fx, look: &GunLook, at: Vec3, out: Vec3, floor: f32) {
+/// A gun's casing out of its port at `at` along `out`, onto `floor`, at
+/// `pace` times its speed.
+fn eject(fx: &mut Fx, look: &GunLook, at: Vec3, out: Vec3, floor: f32, pace: f32) {
     match look.casing {
         Casing::None => {}
-        Casing::Brass => fx.chips.casing(at, out, floor, false),
-        Casing::Shell => fx.chips.casing(at, out, floor, true),
+        Casing::Brass => fx.chips.casing(at, out, floor, false, pace),
+        Casing::Shell => fx.chips.casing(at, out, floor, true, pace),
     }
 }
 
