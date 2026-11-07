@@ -72,6 +72,10 @@ struct Gate {
     held_seen: usize,
     /// Ticks between the room's snapshots.
     every: u32,
+    /// Event ids seen: an event rides every snapshot till acked, and is
+    /// judged on the one that first carries it (the room fogs it again
+    /// until then: `refog`).
+    events_seen: std::collections::BTreeSet<u16>,
 }
 
 impl Gate {
@@ -168,6 +172,31 @@ impl Gate {
                         if !x.broken {
                             assert_eq!(x.held, truth.held, "tick {}: node {n}", w.tick);
                         }
+                    }
+                }
+                // 13. Siege's minions: a true one, where it is; one of this
+                // client's side, or one in clear line of its eye.
+                sim::thing::Kind::Minion => {
+                    if !w.rules.siege {
+                        assert_eq!(s.minions().len(), 0);
+                    }
+                    let eye = me.eye();
+                    for x in s.minions() {
+                        let m = &w.minions[x.slot as usize];
+                        assert!(m.alive && m.team == x.team, "tick {}: {x:?} is no minion", w.tick);
+                        assert!(
+                            (m.body.pos - x.pos).len() < 0.05,
+                            "tick {}: {x:?} not where it is",
+                            w.tick
+                        );
+                        let ours = w.rules.teams && m.team == me.team & 1;
+                        let head = m.body.pos + V3::new(0.0, sim::consts::MINION_EYE, 0.0);
+                        let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                        assert!(
+                            ours || w.map.clear(eye, head) || w.map.clear(eye, chest),
+                            "tick {}: an enemy minion out of sight was sent: {x:?}",
+                            w.tick
+                        );
                     }
                 }
                 // 10. A gun on the floor only if it is a true one, in clear
@@ -292,7 +321,17 @@ impl Gate {
         }
         for e in s.events() {
             let a = e.a as usize;
-            if known(a) {
+            let first = self.events_seen.insert(e.id);
+            // 14. A tower's needle at someone hidden: never (its end is
+            // where they are); a minion's shot at them: no end. Judged
+            // where it is first carried.
+            if first && e.kind == Ev::Tower as u8 && e.part == 0 {
+                assert!(known(a), "tick {}: a tower's needle at a hidden fighter: {e:?}", w.tick);
+            }
+            if first && e.kind == Ev::Minion as u8 && e.part == 3 && !known(a) {
+                assert_eq!(e.end, e.pos, "tick {}: a minion's shot placed a hidden fighter", w.tick);
+            }
+            if a >= MAX_FIGHTERS || known(a) || e.kind == Ev::Tower as u8 || e.kind == Ev::Minion as u8 {
                 continue;
             }
             // 3. An unseen fighter's shot or throw: heard, rounded, no aim.
@@ -457,6 +496,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         drops_seen: 0,
         held_seen: 0,
         every,
+        events_seen: Default::default(),
     };
     for (_, m) in &out {
         check_seat(m, slot);

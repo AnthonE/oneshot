@@ -378,6 +378,41 @@ impl Pack for NodeState {
     }
 }
 
+/// A Siege minion, as this client may see it (its own side's, or one in
+/// clear sight; the nearest [`MAX_SNAP_MINIONS`]): its slot (so a drawn one
+/// is kept), its side, where it stands (coarse) and which way it faces.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MinionState {
+    pub slot: u8,
+    pub team: u8,
+    pub pos: V3,
+    /// Its yaw's top 6 bits.
+    pub yaw: u8,
+}
+
+/// Minions a snapshot carries at most, and the bits of their count.
+pub const MAX_SNAP_MINIONS: usize = 8;
+pub(crate) const MINION_BITS: u32 = 4;
+const _: () = assert!(MAX_SNAP_MINIONS < 1 << MINION_BITS);
+const _: () = assert!(sim::consts::MAX_MINIONS <= 16, "a minion's slot is 4 bits");
+
+impl Pack for MinionState {
+    fn pack(&self, w: &mut BitWriter) -> R<()> {
+        w.write(self.slot as u32, 4)?;
+        w.write(self.team as u32 & 1, 1)?;
+        w_v3c(w, self.pos)?;
+        w.write(self.yaw as u32, 6)
+    }
+    fn unpack(r: &mut BitReader) -> R<Self> {
+        Ok(MinionState {
+            slot: r.read(4)? as u8,
+            team: r.read(1)? as u8,
+            pos: r_v3c(r)?,
+            yaw: r.read(6)? as u8,
+        })
+    }
+}
+
 /// Siege's nodes in a list's count.
 pub(crate) const NODE_BITS: u32 = 4;
 const _: () = assert!(sim::consts::SIEGE_NODES < 1 << NODE_BITS);
@@ -666,6 +701,9 @@ pub struct Snapshot {
     /// Siege's nodes (`sim::world::World::nodes`); none in other modes.
     pub n_nodes: u8,
     pub nodes: [NodeState; sim::consts::SIEGE_NODES],
+    /// Siege's minions this client may see; none in other modes.
+    pub n_minions: u8,
+    pub minions: [MinionState; MAX_SNAP_MINIONS],
     /// Scores in use: each side's (2) with teams, else each seat's. The
     /// rest are 0 and not sent.
     pub n_score: u8,
@@ -706,6 +744,8 @@ impl Default for Snapshot {
             flags: [FlagState::default(); 2],
             n_nodes: 0,
             nodes: [NodeState::default(); sim::consts::SIEGE_NODES],
+            n_minions: 0,
+            minions: [MinionState::default(); MAX_SNAP_MINIONS],
             n_score: 0,
             score: [0; MAX_FIGHTERS],
             phase: 0,
@@ -740,6 +780,9 @@ impl Snapshot {
     }
     pub fn nodes(&self) -> &[NodeState] {
         &self.nodes[..self.n_nodes as usize]
+    }
+    pub fn minions(&self) -> &[MinionState] {
+        &self.minions[..self.n_minions as usize]
     }
 }
 
@@ -948,6 +991,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
         (s.n_drops as usize, MAX_SNAP_DROPS),
         (s.n_flags as usize, 2),
         (s.n_nodes as usize, sim::consts::SIEGE_NODES),
+        (s.n_minions as usize, MAX_SNAP_MINIONS),
     ];
     if caps.iter().any(|&(n, cap)| n > cap) {
         return Err(WireError::Cap);
@@ -970,6 +1014,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.drops(), 4)?;
     w_list(&mut w, s.flags(), 2)?;
     w_list(&mut w, s.nodes(), NODE_BITS)?;
+    w_list(&mut w, s.minions(), MINION_BITS)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
         w_i32(&mut w, sc, 16)?;
@@ -1004,6 +1049,7 @@ pub fn decode_snapshot(buf: &[u8]) -> R<Snapshot> {
     s.n_drops = r_list(&mut r, &mut s.drops, 4)?;
     s.n_flags = r_list(&mut r, &mut s.flags, 2)?;
     s.n_nodes = r_list(&mut r, &mut s.nodes, NODE_BITS)?;
+    s.n_minions = r_list(&mut r, &mut s.minions, MINION_BITS)?;
     s.n_score = r.read(SLOT_BITS + 1)? as u8;
     if s.n_score as usize > MAX_FIGHTERS {
         return Err(WireError::Cap);

@@ -244,7 +244,7 @@ impl Bot {
 
     /// [`Self::toward`], by the roam points even when the way looks clear
     /// with `round`.
-    fn toward_by(w: &World, at: V3, goal: V3, round: bool) -> V3 {
+    pub(crate) fn toward_by(w: &World, at: V3, goal: V3, round: bool) -> V3 {
         let waist = V3::new(0.0, WAIST, 0.0);
         if !round && w.map.clear(at + waist, goal + waist) {
             return goal;
@@ -361,6 +361,18 @@ impl Bot {
                 best = q as u8;
             }
         }
+        // Siege: with no fighter in sight, the nearest enemy minion in sight.
+        let mut minion_at = None;
+        if best == 255 && w.rules.siege {
+            for m in w.minions.iter().filter(|m| m.alive && m.team != me.team & 1) {
+                let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
+                let d = (chest - eye).len();
+                if d < near && d < MINION_RANGE * 1.5 && w.map.clear(eye, chest) {
+                    near = d;
+                    minion_at = Some(chest);
+                }
+            }
+        }
         if best != self.target {
             self.target = best;
             self.seen = 0;
@@ -434,7 +446,7 @@ impl Bot {
             inp.buttons |= JUMP;
         }
 
-        if best == 255 {
+        if best == 255 && minion_at.is_none() {
             // Pushing at a wall and going nowhere (a corner between it and
             // its goal, on a map it walks straight on): a second along the
             // wall, then another goal.
@@ -514,8 +526,10 @@ impl Bot {
             return inp;
         }
 
-        let v = &w.fighters[best as usize];
-        let aim_at = v.body.pos + V3::new(0.0, if self.skill > 0.7 { 1.55 } else { 1.2 }, 0.0);
+        let aim_at = match minion_at {
+            Some(chest) => chest,
+            None => w.fighters[best as usize].body.pos + V3::new(0.0, if self.skill > 0.7 { 1.55 } else { 1.2 }, 0.0),
+        };
         let to = aim_at - eye;
         let want_yaw = fmath::atan2(to.z, to.x) * (1.0 / core::f32::consts::TAU) + self.wob.0;
         let flat = (to.x * to.x + to.z * to.z).sqrt();

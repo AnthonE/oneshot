@@ -166,6 +166,14 @@ fn snapshot() -> Snapshot {
         held: 3,
         broken: false,
     };
+    // A minion of blue's in sight.
+    s.n_minions = 1;
+    s.minions[0] = MinionState {
+        slot: 9,
+        team: 1,
+        pos: V3::new(-12.25, 0.5, 3.75),
+        yaw: 40,
+    };
     s.proj[0] = ProjState {
         kind: 0,
         owner: 1,
@@ -501,6 +509,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.drops(), s.drops());
     assert_eq!(d.flags(), s.flags());
     assert_eq!(d.nodes(), s.nodes());
+    assert_eq!(d.minions(), s.minions());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad: fits with room for events.
     // (room::build drops events past the datagram, so a full snapshot of
@@ -513,17 +522,21 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
         n_vehicles: MAX_SNAP_VEHICLES as u8,
         n_drops: MAX_SNAP_DROPS as u8,
         n_score: MAX_FIGHTERS as u8,
-        // Capture the Flag's flags; never beside Siege's nodes.
+        // Capture the Flag's flags; never beside Siege's nodes and minions.
         n_nodes: 0,
+        n_minions: 0,
         ..s
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
     assert!(n + 200 <= MAX_DATAGRAM, "{n} bytes before events");
-    // Siege's nodes in their place.
+    // Siege's nodes and minions in their place, on its map: Dry Fork's
+    // four vehicles.
     let siege = Snapshot {
         n_flags: 0,
+        n_vehicles: 4,
         n_nodes: sim::consts::SIEGE_NODES as u8,
+        n_minions: MAX_SNAP_MINIONS as u8,
         ..full
     };
     let n = encode_snapshot(&siege, &mut big).unwrap();
@@ -621,7 +634,7 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xe1c5_faa0_18c6_3669,
+        0x8799_084c_0def_ee37,
         0xa530_6e1a_b32d_94ec,
         0x21ad_3fcb_bb71_cf7c,
         0x7ebe_34b8_2c10_f2d0,
@@ -650,7 +663,7 @@ fn the_bytes_match_their_goldens() {
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
-        0xb9d4_d8b1_7ed4_ec09,
+        0x1c35_e508_c3e3_d1f2,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

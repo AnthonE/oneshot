@@ -609,6 +609,12 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
                 bodies::swung(fx, scene, e, from)
             }
             k if k == Kind::Kill as u8 && e.c == sim::arms::SWORD as u16 => fx.sword_kills.push(e.b),
+            // Siege: a tower's needle, a minion's round (its end only if we
+            // may know whom at: the room's fog).
+            k if k == Kind::Tower as u8 => shots::siege_shot(fx, scene, sim::arms::SHARDS, from, to, true),
+            k if k == Kind::Minion as u8 && (e.part == 3 || e.part == 4) && e.end != e.pos => {
+                shots::siege_shot(fx, scene, sim::arms::ION_PISTOL, from, to, e.c == 1)
+            }
             k if k == Kind::Hit as u8 => {
                 // A hit on us: the frame flinches, by how much it took.
                 if e.b == scene.me && e.a != scene.me {

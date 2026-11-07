@@ -193,3 +193,103 @@ pub fn draw(
         }
     }
 }
+
+/// A minion: a squat capsule in its side's colour with a lit visor.
+const MINION_R: f32 = 0.32;
+const MINION_LEN: f32 = 0.75;
+/// How fast a drawn minion closes on where the snapshot puts it (1/s), and
+/// past how far it is put there at once.
+const MINION_EASE: f32 = 14.0;
+const MINION_SNAP_M: f32 = 4.0;
+
+/// The minions' bodies, one a slot, made with the level.
+#[derive(Resource, Default)]
+pub struct Minions {
+    built: u32,
+    bodies: Vec<Entity>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_minions(
+    link: NonSend<crate::LinkRes>,
+    mut minions: ResMut<Minions>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut placed: Query<(&mut Transform, &mut Visibility)>,
+    time: Res<Time>,
+) {
+    let s = link.0.session();
+    if !s.ready || !s.core.rules.siege {
+        return;
+    }
+    if minions.built != s.welcomes {
+        minions.built = s.welcomes;
+        minions.bodies.clear();
+        let body = meshes.add(Capsule3d::new(MINION_R, MINION_LEN));
+        let visor = meshes.add(Cuboid::new(0.12, 0.1, 0.4));
+        let looks: [(Handle<StandardMaterial>, Handle<StandardMaterial>); 2] = core::array::from_fn(|t| {
+            let c = side(t);
+            (
+                mats.add(StandardMaterial {
+                    base_color: c,
+                    metallic: 0.3,
+                    perceptual_roughness: 0.55,
+                    ..default()
+                }),
+                mats.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    emissive: LinearRgba::from(c) * 4.0 + LinearRgba::rgb(1.0, 1.0, 1.0),
+                    ..default()
+                }),
+            )
+        });
+        for i in 0..sim::consts::MAX_MINIONS {
+            let (skin, glow) = looks[i / sim::consts::MINION_SIDE].clone();
+            let e = commands
+                .spawn((
+                    crate::level::LevelPart,
+                    Transform::default(),
+                    Visibility::Hidden,
+                    Mesh3d(body.clone()),
+                    MeshMaterial3d(skin),
+                ))
+                .with_child((
+                    Mesh3d(visor.clone()),
+                    MeshMaterial3d(glow),
+                    Transform::from_xyz(MINION_R * 0.85, MINION_LEN * 0.3, 0.0),
+                    bevy::light::NotShadowCaster,
+                ))
+                .id();
+            minions.bodies.push(e);
+        }
+    }
+    let snap = s.core.latest();
+    let mut shown = [None; sim::consts::MAX_MINIONS];
+    for m in snap.minions() {
+        if let Some(x) = shown.get_mut(m.slot as usize) {
+            *x = Some(*m);
+        }
+    }
+    let k = 1.0 - (-MINION_EASE * time.delta_secs()).exp();
+    for (i, &e) in minions.bodies.iter().enumerate() {
+        let Ok((mut tr, mut vis)) = placed.get_mut(e) else {
+            continue;
+        };
+        let Some(m) = shown[i] else {
+            vis.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        // The capsule's middle over its feet; its visor the way it faces.
+        let to = Vec3::new(m.pos.x, m.pos.y + MINION_R + MINION_LEN / 2.0, m.pos.z);
+        let yaw = m.yaw as f32 * (std::f32::consts::TAU / 64.0);
+        let rot = Quat::from_rotation_y(-yaw);
+        if *vis == Visibility::Hidden || tr.translation.distance(to) > MINION_SNAP_M {
+            tr.translation = to;
+        } else {
+            tr.translation = tr.translation.lerp(to, k);
+        }
+        tr.rotation = tr.rotation.slerp(rot, k);
+        vis.set_if_neq(Visibility::Inherited);
+    }
+}

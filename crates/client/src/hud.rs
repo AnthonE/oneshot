@@ -1166,6 +1166,10 @@ pub fn on_events(
             st.feed.push((flag_line(st, e.part, e.a, e.b), now));
         } else if e.kind == Kind::Node as u8 {
             st.feed.push((node_line(st, e.part, e.a, e.b), now));
+        } else if e.kind == Kind::Minion as u8 && e.a == me && e.part <= 1 {
+            // Our round in a minion: the hit marker; the last one, red.
+            st.hit_at = now;
+            st.hit_kill = e.part == 0;
         }
     }
     // Our shield breaking.

@@ -634,6 +634,18 @@ its base. Casual.
   shield falls; the core is overloaded the same way (30 s) and breaking it
   wins. The ring's state is public, as Halo's territories are: how far, and
   whether it is under attack, never who or how many.
+- **Towers.** Every generator standing, and every core, fires a needle at
+  the nearest enemy in 30 m and clear line, minions first, about 13 a second
+  (half that on a minion): a lone player in a ring dies about as fast as
+  they overload it, so a push wants a teammate or a wave. A tower's kill is
+  nobody's.
+- **Minions.** Three a side come out of each base every 30 s (eight alive at
+  most) and walk to the enemy's first generator standing, then the core
+  once it is open, shooting what they see on the way: a weak gun that hits
+  half the time. In a ring they count as one more attacker, however many.
+  45 health, no shield: a burst or two of the rifle. Even waves trade in the
+  middle; a player breaking that is the push. Killing one is no kill.
+- **Bots** in Siege's seats aim worse than elsewhere, so people decide it.
 - **Longer than Halo's:** 25 minutes, then two minutes of sudden death with
   every core open, then the side that broke more wins. Respawn is Halo's 3 s
   (lengthening late is still to come).
@@ -670,5 +682,5 @@ its base. Casual.
 The same objectives can carry other modes (Capture the Flag is already
 one); Siege is the first built for it.
 
-Open: team size (Big Team's 8v8, or fewer to fill matches sooner); troopers
-in the middle or none; how many cards are offered and how often.
+Open: team size (Big Team's 8v8, or fewer to fill matches sooner); how many
+cards are offered and how often.

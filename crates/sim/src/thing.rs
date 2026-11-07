@@ -35,10 +35,12 @@ pub enum Kind {
     Flag,
     /// Siege's generators and cores; untouched outside that mode.
     Node,
+    /// Siege's minions; none outside that mode.
+    Minion,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Fighter,
         Kind::Projectile,
         Kind::Pad,
@@ -46,6 +48,7 @@ impl Kind {
         Kind::Drop,
         Kind::Flag,
         Kind::Node,
+        Kind::Minion,
     ];
 }
 

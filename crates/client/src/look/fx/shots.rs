@@ -140,6 +140,23 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     land(fx, scene, arm, from, dir, len, to);
 }
 
+/// Siege: a tower's needle (the shard gun's pink, `to` where it met them),
+/// or a minion's round (`arm`'s look); `hit`: it met them, else it flies on
+/// past and lands where it lands.
+pub fn siege_shot(fx: &mut Fx, scene: &Scene, arm: u8, from: Vec3, to: Vec3, hit: bool) {
+    let v = to - from;
+    let len = v.length();
+    if len < 0.5 {
+        return;
+    }
+    let dir = v / len;
+    let look = table::gun(arm);
+    table::tracer(&mut fx.glow, &look, from + dir * 0.4, dir, len - 0.4);
+    if hit {
+        land(fx, scene, arm, from, dir, len, to);
+    }
+}
+
 /// `at` (in view space, on the line to a muzzle) moved `by` metres toward the
 /// view's middle: the gun in view is nearer than what is drawn on its muzzle, so
 /// a thing centred there is half behind it, a crescent.
