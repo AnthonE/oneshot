@@ -2590,6 +2590,7 @@ fn page_cmds(
     mut door: NonSendMut<Door>,
     mut knocking: NonSendMut<Knocking>,
     in_match: Res<InMatch>,
+    time: Res<Time>,
 ) {
     let cmds: Vec<PageCmd> = PAGE.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for c in cmds {
@@ -2599,6 +2600,8 @@ fn page_cmds(
                 front.status.clear();
                 front.bad = false;
                 front.dirty = true;
+                // The knock it replaces is this one's, cancel guard and all.
+                front.knocked_at = time.elapsed_secs();
                 knocking.0 = Some(door.knock(ask));
             }
             PageCmd::Knock(_) => {}
@@ -2607,10 +2610,17 @@ fn page_cmds(
 }
 
 /// `Start::Join`: knock at once.
-fn join(mut front: ResMut<Front>, player: Res<Player>, mut door: NonSendMut<Door>, mut knocking: NonSendMut<Knocking>) {
+fn join(
+    mut front: ResMut<Front>,
+    player: Res<Player>,
+    mut door: NonSendMut<Door>,
+    mut knocking: NonSendMut<Knocking>,
+    time: Res<Time>,
+) {
     let Some(m) = front.join.take() else {
         return;
     };
+    front.knocked_at = time.elapsed_secs();
     knocking.0 = Some(door.knock(Ask {
         name: player.sent_name(),
         pass: String::new(),
@@ -2651,13 +2661,12 @@ fn poll(
                 front.bad = false;
             }
             News::Failed(e) => {
-                if !e.is_empty() || front.status.is_empty() {
-                    front.status = if e.is_empty() {
-                        "The server closed the connection".into()
-                    } else {
-                        e
-                    };
-                }
+                // Never a progress line in red: the refusal, or that it closed.
+                front.status = if e.is_empty() {
+                    "The server closed the connection".into()
+                } else {
+                    e
+                };
                 front.bad = true;
                 knocking.0 = None;
                 return;

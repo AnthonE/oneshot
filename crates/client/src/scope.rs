@@ -239,6 +239,7 @@ pub fn draw(
     mut rounds: Query<(&mut Node, &ScopeRound)>,
     mut zoom: Query<&mut Text, With<ScopeZoom>>,
     mut line: Local<String>,
+    mut last: Local<u8>,
 ) {
     let s = link.0.session();
     let f = s.core.own().0;
@@ -277,7 +278,11 @@ pub fn draw(
         use std::fmt::Write as _;
         line.clear();
         // Still up while it eases out: the level it was at.
-        let _ = write!(line, "{}x", arm.zoom_at(look.level.max(1)));
+        if look.level > 0 {
+            *last = look.level;
+        }
+        let shown = if look.level > 0 { look.level } else { (*last).max(1) };
+        let _ = write!(line, "{}x", arm.zoom_at(shown));
         if t.0 != *line {
             t.0.clone_from(&line);
         }

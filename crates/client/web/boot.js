@@ -179,7 +179,8 @@ async function load(gfx) {
   const v = sha ? `?v=${sha.slice(0, 12)}` : '';
   // The module's fetch goes out before the glue's import: it is the
   // long one.
-  downloading = true;
+  const mine = ++downloads;
+  downloading = mine;
   const res = fetch(new URL(m.wasm + v, location.href)).then((r) => counted(r, mods?.[gfx]?.wasm_bytes));
   res.catch(() => { /* awaited by the glue */ });
   let glue;
@@ -187,7 +188,7 @@ async function load(gfx) {
     glue = await import(m.js + v);
     await glue.default({ module_or_path: res });
   } finally {
-    downloading = false;
+    if (downloading === mine) downloading = 0;
     bar(null);
   }
   window.__oneshotGfx = gfx;
@@ -204,8 +205,12 @@ async function load(gfx) {
    browser's code cache still keys to its URL. The whole is the build's
    (build.json): a gzipped page's Content-Length isn't the module's size
    (Gates' app.js `counted`). */
-let downloading = false;
+// Which download the splash is on (0: none): each load's own number, so a
+// fallen-back one's late chunks never pass for the next's.
+let downloading = 0;
+let downloads = 0;
 function counted(res, whole) {
+  const mine = downloading;
   if (!res.ok) throw new Error(`The game didn't download (HTTP ${res.status}). Reload to try again`);
   let want = Number(whole) || 0;
   if (!want && !res.headers.get('content-encoding')) want = Number(res.headers.get('content-length')) || 0;
@@ -215,7 +220,7 @@ function counted(res, whole) {
   // Only while it's the download the splash is on (a late chunk's count
   // never paints over what came after).
   const paint = (got) => {
-    if (!downloading) return;
+    if (downloading !== mine) return;
     say(`Downloading the game · ${mb(got)}${want ? ` / ${mb(want)}` : ''} MB`);
     bar(want ? got / want : null);
   };
@@ -230,7 +235,7 @@ function counted(res, whole) {
       const now = performance.now();
       if (now - last > 100) { last = now; paint(got); }
     }
-    if (!downloading) return;
+    if (downloading !== mine) return;
     bar(null);
     say('Starting the game');
   })().catch(() => { /* the original's failure is the glue's to say */ });
@@ -670,7 +675,7 @@ function voiceBridge(glue) {
     hear: (tag, seq, flags, bytes, key) => voice.hear(tag, seq, flags, bytes, key),
     toggle: async () => {
       try {
-        if (voice.mic) voice.micOff();
+        if (voice.mic || voice.opening) voice.micOff();
         else await voice.micOn();
       } catch (e) {
         console.warn('oneshot: the microphone did not open', e);
@@ -696,17 +701,23 @@ function voiceBridge(glue) {
     navigator.clipboard?.writeText(u.toString()).catch(() => {});
     return u.toString();
   };
-  // A browser starts sound only after a gesture: try now, and on the first
-  // one, with the mic back on if it was last time.
+  // A browser starts sound only after a gesture: try now, and on every
+  // one while it sleeps (suspended again later too: a device change, a
+  // phone's call), with the mic back on the first time if it was last time.
   voice.wake();
+  let restored = false;
   const wake = async () => {
+    if (voice.ctx?.state === 'running' && restored) return;
     await voice.wake();
+    if (restored) return;
+    restored = true;
     try {
       if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) await voice.micOn();
     } catch { /* asked again on MIC */ }
   };
-  addEventListener('pointerdown', wake, { once: true, capture: true });
-  addEventListener('keydown', wake, { once: true, capture: true });
+  addEventListener('pointerdown', wake, { capture: true });
+  addEventListener('keydown', wake, { capture: true });
+  addEventListener('visibilitychange', () => { if (!document.hidden && voice.ctx) voice.wake(); });
   // The browser test's fake microphone (?mic=open): on at once.
   if (params.get('mic') === 'open') {
     voice.setMode('open');

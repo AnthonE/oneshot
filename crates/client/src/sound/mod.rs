@@ -219,6 +219,10 @@ pub struct Ear {
     /// the menus ([`Ear::ping`]) are under it and not this.
     world: f32,
     in_match: bool,
+    /// The link (`front::LinkGen`) and welcome the match's sound is of: a
+    /// new one (the title's backdrop after a match, a cup's next heat)
+    /// starts from silence, as a link closing does.
+    heard_of: (u32, u32),
     // Our own body.
     last_reload: bool,
     /// The turret we gun was venting.
@@ -770,6 +774,7 @@ pub fn decide(
     seen: Res<crate::Seen>,
     look: Res<crate::Look>,
     mut trucks: ResMut<crate::look::truck::HullSound>,
+    gen: Option<Res<crate::front::LinkGen>>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -782,7 +787,8 @@ pub fn decide(
         ear.cmds.push(Cmd::Master(volume));
     }
     let s = link.0.session();
-    if !s.ready {
+    let of = (gen.map_or(0, |g| g.0), s.welcomes);
+    if !s.ready || of != ear.heard_of {
         if ear.in_match {
             for slot in 0..mix::LOOPS as u8 {
                 ear.cmds.push(Cmd::Stop { slot });
@@ -803,8 +809,11 @@ pub fn decide(
             ear.rounds.clear();
             ear.bodies = [Body::default(); MAX_FIGHTERS];
         }
-        flush(ear);
-        return;
+        ear.heard_of = of;
+        if !s.ready {
+            flush(ear);
+            return;
+        }
     }
     ear.in_match = true;
     let me = s.core.slot;

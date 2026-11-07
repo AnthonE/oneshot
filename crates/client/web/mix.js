@@ -37,6 +37,7 @@ export function startMix(v, mv = v) {
   const clips = [];
   const st = { installed: 0, failed: 0, sent: 0, errors: 0, mixer: null };
   const post = (m, transfer) => {
+    if (failed) return;
     if (node) node.port.postMessage(m, transfer);
     else {
       waiting.push([m, transfer]);
@@ -59,6 +60,9 @@ export function startMix(v, mv = v) {
     why = `${what}${e ? `: ${String(e?.message ?? e)}` : ''}`;
     console.warn(`oneshot: no sound: ${why}`);
     bar(`NO SOUND: ${why.toUpperCase()}`);
+    // Nothing more goes to a mixer that isn't there.
+    clips.length = 0;
+    waiting.length = 0;
   };
   // The theme (assets/sound/music/intro.ogg): too long for the worklet's
   // bank, so the browser streams it itself, looping, at the level the game
@@ -97,7 +101,8 @@ export function startMix(v, mv = v) {
         if (m.kind === 'stats') st.mixer = m.s;
         else if (m.kind === 'error') {
           st.errors++;
-          console.warn('oneshot: sound:', m.why);
+          if (m.fatal) fail('the mixer did not start', m.why);
+          else console.warn('oneshot: sound:', m.why);
         }
       };
       node.onprocessorerror = (e) => fail('the mixer stopped', e?.message ?? 'its processor threw');
@@ -133,6 +138,7 @@ export function startMix(v, mv = v) {
           for (let i = 0; i < pcm.length; i++) pcm[i] += ch[i] / buf.numberOfChannels;
         }
         const m = { kind: 'install', id, rate: buf.sampleRate, pcm };
+        if (failed) return;
         if (node) node.port.postMessage(m, [pcm.buffer]);
         else clips.push([m, [pcm.buffer]]);
         st.installed++;

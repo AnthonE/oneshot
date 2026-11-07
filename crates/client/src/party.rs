@@ -24,6 +24,9 @@ pub const TALKING_S: f32 = 0.35;
 const RETRY_S: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 15.0];
 /// An attempt that hasn't answered in this long is let go and made again.
 const KNOCK_GIVE_UP_S: f32 = 20.0;
+/// A name being typed says hello again only once it has stood this long
+/// (the title's field changes it a key at a time).
+const NAME_SETTLE_S: f32 = 1.5;
 /// The lobby opens once the title's level is in (a page loading it can
 /// stall long enough for the server to give up on a hello), or after this.
 const FIRST_AFTER_S: f32 = 30.0;
@@ -190,6 +193,9 @@ struct LobbyRes {
     want: u32,
     /// The name the session said hello with.
     name: String,
+    /// The name last seen, and since when it has been that.
+    seen_name: String,
+    seen_at: f32,
     /// The pass already handed over (`Msg::SignIn`).
     sent_pass: String,
     /// The last microphone state read, and mode.
@@ -269,7 +275,9 @@ fn pump(
         warn!("oneshot: the party's line didn't answer; asking again");
         lobby.knock = None;
         lobby.tries += 1;
-        lobby.retry_at = now;
+        if lobby.retry_at.is_finite() {
+            lobby.retry_at = now;
+        }
     }
     // Open it, or again after it closed, waiting longer each time.
     if lobby.link.as_ref().is_some_and(|l| l.closed()) {
@@ -304,18 +312,29 @@ fn pump(
         lobby.knocked_at = now;
         lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
     }
-    // A new name says hello again (the party sees it then).
-    if lobby.link.is_some() && lobby.name != name && !name.is_empty() {
+    // A new name says hello again (the party sees it then), once typed.
+    if lobby.seen_name != name {
+        lobby.seen_name = name.to_string();
+        lobby.seen_at = now;
+    }
+    if lobby.link.is_some() && lobby.name != name && !name.is_empty() && now - lobby.seen_at >= NAME_SETTLE_S {
         if let Some(l) = lobby.link.as_mut() {
             l.close();
         }
         lobby.link = None;
-        lobby.retry_at = now;
+        view.connected = false;
+        view.touch();
+        // Not a tab that another took the line from.
+        if lobby.retry_at.is_finite() {
+            lobby.retry_at = now;
+        }
     }
     // Its fields apart, so the link and what it was told borrow side by side.
     let lobby = &mut *lobby;
     let Some(link) = lobby.link.as_mut() else {
-        if !asks.0.is_empty() {
+        // Asked of a line on its way back, they wait for it; of one that
+        // stopped (another tab has it), they go.
+        if !asks.0.is_empty() && !lobby.retry_at.is_finite() {
             asks.0.clear();
         }
         return;

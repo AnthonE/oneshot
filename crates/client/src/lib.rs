@@ -873,7 +873,9 @@ fn pump(
         let turn = core::f32::consts::TAU / 65536.0;
         look.yaw = f.yaw as f32 * turn;
         look.pitch = f.pitch as f32 * turn;
+        // The wire says scoped, not how far: the first level (as a film).
         look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        look.level = look.zoom as u8;
         link.0.update(Input::default());
         return;
     }
@@ -1594,7 +1596,8 @@ pub(crate) fn view(
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
     let mut fov = look::rig::fov_tall(settings.fov);
     let at = Vec3::new(p.x, p.y, p.z);
-    let dead = !f.alive && link.0.session().ready;
+    // Dead in a seat: the title's backdrop has none (no death cam there).
+    let dead = f.seated && !f.alive && link.0.session().ready;
     if !dead {
         death.from = None;
     }

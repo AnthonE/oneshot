@@ -57,7 +57,9 @@ export class Voice {
     this.seq = 0;
     this.sentAt = 0;
     this.gateUntil = 0;
-    this.ends = [];
+    // Each frame's end flag, by its timestamp: an encoder that loses a
+    // frame never shifts the flag onto another.
+    this.ends = new Map();
     this.heard = 0; // frames played, for the gate test
     this.sent = 0;
     const down = (e) => { if (this.talk.has(fold(e.code)) && !e.repeat && !typing(e)) { this.held = true; } };
@@ -128,9 +130,15 @@ export class Voice {
   /** The microphone on: asks the browser the first time. */
   async micOn() {
     if (this.mic) return true;
+    this.closeOpened = false;
     if (!this.opening) {
       this.opening = this.open().then(
-        (ok) => { this.why = null; return ok; },
+        (ok) => {
+          this.why = null;
+          // Turned off while it was opening: off it goes, once open.
+          if (this.closeOpened) { this.micOff(); return false; }
+          return ok;
+        },
         (e) => { this.why = whyNot(e); throw e; },
       ).finally(() => { this.opening = null; });
     }
@@ -143,6 +151,16 @@ export class Voice {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
+    try {
+      return await this.openWith(stream);
+    } catch (e) {
+      // The browser's mic light goes out with what failed.
+      for (const tr of stream.getTracks()) tr.stop();
+      throw e;
+    }
+  }
+
+  async openWith(stream) {
     await this.ctx.audioWorklet.addModule(`voice-worklet.js${this.v}`);
     const src = this.ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(this.ctx, 'oneshot-mic', { processorOptions: { frame: Math.round(this.ctx.sampleRate / 50) } });
@@ -153,7 +171,13 @@ export class Voice {
       output: (chunk) => {
         const bytes = new Uint8Array(chunk.byteLength);
         chunk.copyTo(bytes);
-        const end = this.ends.shift() || false;
+        // Its own flag, and any of frames the encoder lost before it.
+        let end = false;
+        for (const [ts, e] of this.ends) {
+          if (ts > chunk.timestamp) break;
+          end ||= e;
+          this.ends.delete(ts);
+        }
         if (this.send(this.seq, end, bytes)) this.sent++;
         this.seq = (this.seq + 1) & 0xffff;
       },
@@ -189,7 +213,7 @@ export class Voice {
       const end = was && !want;
       const data = end ? new Float32Array(pcm.length) : pcm;
       if (enc.state === 'configured') {
-        this.ends.push(end);
+        this.ends.set(t, end);
         enc.encode(new AudioData({ format: 'f32-planar', sampleRate: this.ctx.sampleRate, numberOfFrames: data.length,
           numberOfChannels: 1, timestamp: t, data }));
         t += Math.round((data.length / this.ctx.sampleRate) * 1e6);
@@ -205,12 +229,13 @@ export class Voice {
   }
 
   micOff() {
+    if (this.opening) this.closeOpened = true;
     if (!this.mic) return;
     const { stream, node, enc, src } = this.mic;
     for (const tr of stream.getTracks()) tr.stop();
     try { src.disconnect(); node.disconnect(); enc.close(); } catch { /* gone already */ }
     this.mic = null;
-    this.ends = [];
+    this.ends.clear();
     store('oneshot.mic', 'off');
     this.changed();
   }
@@ -227,7 +252,11 @@ export class Voice {
       l = { next: 0, heard: 0, gain, dec: null, t: 0 };
       l.dec = new AudioDecoder({
         output: (ad) => this.play(l, ad),
-        error: () => { this.listeners.delete(tag); },
+        error: () => {
+          // Made again by their next frame.
+          try { l.gain.disconnect(); } catch { /* gone already */ }
+          this.listeners.delete(tag);
+        },
       });
       l.dec.configure({ codec: 'opus', sampleRate: RATE, numberOfChannels: 1 });
       this.listeners.set(tag, l);
