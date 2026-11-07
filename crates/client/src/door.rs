@@ -97,7 +97,7 @@ fn moved_to(m: &Msg) -> Option<(String, String)> {
     }
 }
 
-const MATCHED: &str = "Matched: joining the match's server...";
+pub(crate) const MATCHED: &str = "Matched: joining the match's server...";
 
 /// The menu's session as the game holds it (`party.rs`): the party's
 /// messages and voice in, its acts and our voice out. Never waits.
@@ -154,7 +154,7 @@ mod desktop {
         pub fn sign_in(&mut self) {}
 
         pub fn signin(&self) -> SignIn {
-            SignIn::Off("Ranked needs an Elo Pros sign-in: play it in the browser".into())
+            SignIn::Off("Ranked plays in the browser".into())
         }
 
         pub fn quits(&self) -> bool {

@@ -14,19 +14,22 @@
 //!   loops that follow them, pitched by speed and by Doppler.
 //! - **Our own body:** the shield's hit, its break, Halo 2's alarm while
 //!   it's down and the whine as it comes back; reloads (a hot gun's vent),
-//!   the swap, a dry trigger, a charge's hum; steps by what we stand on
-//!   (grass, rock, metal, concrete), the jump, the landing; the spawn.
+//!   the swap, the scope, a dry trigger, a charge's hum; steps by what we
+//!   stand on (sand, grass, gravel, rock, metal, concrete, water), the jump, a
+//!   launcher's throw, the landing; the spawn.
 //! - **Everyone else's**, as far as we were sent them: shots, steps,
-//!   landings, reloads, a shield breaking or coming back, rounds passing
-//!   our head, ricochets, pickups, getting in and out of a vehicle, hits on
-//!   a hull, grenades bouncing.
-//! - **The match:** the countdown's ticks and its start; wind on a big map.
+//!   landings, reloads, a shield breaking or coming back, a death, a spawn,
+//!   rounds passing our head or striking near us, ricochets, pickups, a blow
+//!   landing, a body run down, getting in and out of a vehicle, hits on a hull,
+//!   grenades bouncing.
+//! - **The match:** the countdown's ticks and its start; wind on a big map,
+//!   the sea as we near it, a hum in an arena.
+//! - **The menus:** a button come onto or pressed, a match found, an invite.
 //!
-//! Recordings are Gates' CC0 cuts (`tools/assets.mjs`, NOTICE); the rest
-//! is ours (`tools/sfx.mjs`). The announcer is apart: our voiced medals and
-//! its lines about the match (the mode, the lead, the clock's last calls, a
-//! betrayal, the end), one at a time (`assets/sound/voice`,
-//! `tools/voice.sh`), a newer rung of a ladder taking the place of one still
+//! All of it is ours (`tools/sfx.mjs`). The announcer is apart: our voiced
+//! medals and its lines about the match (the mode, a flag, the lead, the clock's
+//! last calls, a betrayal, the end), one at a time (`assets/sound/voice`,
+//! `tools/voice.mjs`), a newer rung of a ladder taking the place of one still
 //! waiting. So is the theme, under the title (`assets/sound/music`): too
 //! long for the mixer's bank, it is streamed (Bevy's audio on the desktop,
 //! the browser's own player on the page: `web/mix.js`).
@@ -52,7 +55,7 @@ impl Plugin for SoundPlugin {
             .add_systems(
                 Update,
                 // After the trucks: their sounds this frame (`look/truck.rs`).
-                decide.after(crate::happened).after(crate::look::truck::husks),
+                (menus, decide.after(crate::happened).after(crate::look::truck::husks)).chain(),
             );
         #[cfg(any(target_arch = "wasm32", feature = "sound"))]
         on::build(app);
@@ -84,6 +87,8 @@ use sim::consts::{MAX_FIGHTERS, MAX_VEHICLES, SHIELD_MAX, TICK_HZ};
 use sim::events::Kind;
 use sim::geom::V3;
 
+use crate::look::fx::surface::{self, Near, On};
+use crate::look::fx::table::Matter;
 use crate::look::fx::HEARD;
 use crate::look::guns::GUNS;
 use crate::LinkRes;
@@ -151,7 +156,10 @@ const SLOT_ENGINE: u8 = 3;
 /// one each.
 const SLOT_SKID: u8 = SLOT_ENGINE + MAX_VEHICLES as u8;
 const SLOT_FIRE: u8 = SLOT_SKID + 1;
-const SLOT_PROJ: u8 = SLOT_FIRE + 1;
+/// The sea, and an arena's hum.
+const SLOT_SURF: u8 = SLOT_FIRE + 1;
+const SLOT_ROOM: u8 = SLOT_SURF + 1;
+const SLOT_PROJ: u8 = SLOT_ROOM + 1;
 const PROJ_LOOPS: usize = mix::LOOPS - SLOT_PROJ as usize;
 
 /// A remote fighter, as last heard.
@@ -209,6 +217,8 @@ pub struct Ear {
     in_match: bool,
     // Our own body.
     last_reload: bool,
+    /// The turret we gun was venting.
+    last_vent: bool,
     last_arm: u8,
     last_grounded: bool,
     last_mag: u16,
@@ -220,6 +230,10 @@ pub struct Ear {
     step: f32,
     dry: f32,
     charging: bool,
+    last_gren: u8,
+    last_scope: u8,
+    /// What a step or a round's end looks through (`surface::cast`), kept.
+    near: Near,
     // Everyone else, the hulls, the rounds in flight.
     bodies: [Body; MAX_FIGHTERS],
     hulls: [Hull; MAX_VEHICLES],
@@ -238,6 +252,12 @@ pub struct Ear {
     /// How our score stood against the best of the rest.
     standing: Option<Ordering>,
     wind: bool,
+    room: bool,
+    surf: bool,
+    /// How loud the sea is, how loud it should be, and when we next look.
+    surf_gain: f32,
+    surf_want: f32,
+    surf_look: f32,
     /// The announcer's lines about the match waiting, said before a medal,
     /// and how many it has said, all told.
     lines: Vec<&'static str>,
@@ -463,6 +483,11 @@ impl Ear {
         name
     }
 
+    /// A sound from outside the match (`front.rs`), in our head.
+    pub fn ping(&mut self, name: &str) {
+        self.mine(name, 0.6);
+    }
+
     /// A sound of our own, in our head.
     fn mine(&mut self, name: &str, gain: f32) {
         let speed = self.pitch();
@@ -574,18 +599,16 @@ pub fn names() -> Vec<String> {
         "headshot_0",
         "headshot_1",
         "hit_0",
-        "equip_0",
-        "equip_1",
-        "equip_2",
-        "blast_0",
-        "blast_1",
-        "flesh_0",
-        "flesh_1",
-        "land_0",
-        "swing_0",
-        "fuse_0",
-        "hurt_0",
-        "death_0",
+        "gren_switch_0",
+        "scope_in_0",
+        "scope_out_0",
+        "launch_0",
+        "over_on_0",
+        "camo_on_0",
+        "ui_hover_0",
+        "ui_click_0",
+        "match_found_0",
+        "invite_0",
         "shield_beep_0",
         "shield_charge_0",
         "shield_pop_0",
@@ -604,6 +627,8 @@ pub fn names() -> Vec<String> {
         "sticky_stick_0",
         "sticky_whine_0",
         "wind_0",
+        "surf_0",
+        "room_hum_0",
         "spawn_0",
         "tick_0",
         "go_0",
@@ -612,13 +637,36 @@ pub fn names() -> Vec<String> {
     .map(|s| s.to_string())
     .collect();
     for (base, n) in [
+        ("shot_minigun", 3),
+        ("shot_minigun_far", 1),
         ("step_concrete", 8),
         ("step_metal", 8),
         ("step_grass", 8),
         ("step_rock", 8),
+        ("step_sand", 8),
+        ("step_gravel", 8),
+        ("step_water", 8),
         ("flyby", 4),
         ("ricochet", 4),
         ("impact_metal", 5),
+        ("bullet_concrete", 3),
+        ("bullet_metal", 3),
+        ("bullet_dirt", 3),
+        ("bolt_hit", 2),
+        ("blast", 3),
+        ("flesh", 3),
+        ("hurt", 2),
+        ("death", 3),
+        ("land", 2),
+        ("jump", 2),
+        ("splat", 2),
+        ("swap", 3),
+        ("pickup", 2),
+        ("grenades", 2),
+        ("ride", 2),
+        ("swing", 3),
+        ("melee_hit", 3),
+        ("throw", 3),
         ("shield_hit", 3),
         ("tink", 3),
         ("sword_swing", 2),
@@ -626,9 +674,6 @@ pub fn names() -> Vec<String> {
         for k in 0..n {
             names.push(format!("{base}_{k}"));
         }
-    }
-    for k in 0..3 {
-        names.push(format!("impactMetal_light_00{k}"));
     }
     for (_, g) in &GUNS {
         for k in 0..g.takes {
@@ -642,39 +687,39 @@ pub fn names() -> Vec<String> {
     names
 }
 
-/// What a body stands on, for its steps: the box under it by its look
-/// (`level.rs`), a terrain's grass, or the arena floor's plates.
-fn ground(map: &sim::map::Map, p: V3) -> &'static str {
-    const PAD: f32 = 0.05;
-    for (b, look) in map.boxes.iter().zip(map.looks.iter()) {
-        if p.x >= b.min.x - PAD
-            && p.x <= b.max.x + PAD
-            && p.z >= b.min.z - PAD
-            && p.z <= b.max.z + PAD
-            && (p.y - b.max.y).abs() < 0.2
-        {
-            return match look {
-                0 => "step_concrete",
-                6 => "step_rock",
-                _ => "step_metal",
-            };
+/// What a body stands on, for its steps: water over its feet, or the face
+/// under them as a round's mark reads it (`look/fx/surface.rs`): a box or a
+/// solid by its look, a terrain by what it is drawn as there (`level.rs`), or
+/// the arena floor's plates.
+fn ground(near: &mut Near, map: &sim::map::Map, p: V3) -> &'static str {
+    if p.y < map.light.sea {
+        return "step_water";
+    }
+    let look = match surface::cast(map, near, v(p) + Vec3::Y * 0.3, Vec3::NEG_Y, 0.8).map(|h| h.on) {
+        Some(On::Box(i)) => map.looks.get(i as usize),
+        Some(On::Solid(i)) => map.solid_looks.get(i as usize),
+        _ if map.terrain.is_none() => return "step_metal",
+        _ => {
+            let w = crate::level::splat_at(map, p.x, p.z);
+            let most = (0..w.len()).max_by(|a, b| w[*a].total_cmp(&w[*b])).unwrap_or(0);
+            return ["step_sand", "step_grass", "step_gravel", "step_rock"][most];
         }
+    };
+    // tools/maps/compile.mjs LOOKS: wall, stone, stone_dark; rock.
+    match look {
+        Some(0 | 30 | 31) => "step_concrete",
+        Some(6) => "step_rock",
+        _ => "step_metal",
     }
-    if map.terrain.is_some() {
-        if (p.y - map.ground(p.x, p.z)).abs() < 0.3 {
-            return if map.ground_normal(p.x, p.z).y < 0.85 {
-                "step_rock"
-            } else {
-                "step_grass"
-            };
-        }
-        return "step_concrete";
-    }
-    if p.y.abs() < 0.2 {
-        "step_metal"
-    } else {
-        "step_concrete"
-    }
+}
+
+/// How near a launcher's throw (`Map::launchers`) a body just off the ground
+/// must be going to have been thrown by it, m/s.
+const LAUNCHED_NEAR: f32 = 2.0;
+
+/// Whether a body just off the ground, going at `vel`, was thrown.
+fn launched(map: &sim::map::Map, vel: V3) -> bool {
+    map.launchers.iter().any(|l| (vel - l.vel).len() < LAUNCHED_NEAR)
 }
 
 fn gun_takes(arm: u8) -> Option<&'static crate::look::guns::Gun> {
@@ -704,6 +749,7 @@ pub fn decide(
     settings: Res<crate::settings::Settings>,
     film: Option<Res<crate::film::Film>>,
     seen: Res<crate::Seen>,
+    look: Res<crate::Look>,
     mut trucks: ResMut<crate::look::truck::HullSound>,
 ) {
     let ear = &mut *ear;
@@ -727,6 +773,11 @@ pub fn decide(
             ear.fire = false;
             ear.charging = false;
             ear.wind = false;
+            ear.room = false;
+            ear.surf = false;
+            ear.surf_gain = 0.0;
+            ear.surf_want = 0.0;
+            ear.surf_look = 0.0;
             ear.held_proj = [false; PROJ_LOOPS];
             ear.hulls = [Hull::default(); MAX_VEHICLES];
             ear.rounds.clear();
@@ -757,7 +808,7 @@ pub fn decide(
     };
 
     events(ear, &ears, &heard.0, me);
-    own_body(ear, &ears, &f, feet, dt);
+    own_body(ear, &ears, &f, feet, dt, look.level);
     everyone(ear, &ears, &seen.others, dt);
 
     // Engines: ours (predicted), and every other hull with a driver.
@@ -812,6 +863,7 @@ pub fn decide(
     hull_sounds(ear, &ears, &mut trucks);
     rounds(ear, &ears, s.core.latest());
     the_match(ear, &s.core, s.core.map.terrain.is_some());
+    surf(ear, &ears, dt);
     cues.0.append(&mut ear.cues);
     flush(ear);
 }
@@ -923,9 +975,16 @@ fn drop_still_moves(ear: &mut Ear) {
 const VOICE_WAIT: usize = 4;
 /// What the announcer says about the match, past the medals (recorded:
 /// `tools/voice.sh cut`).
-const LINES: [&str; 12] = [
+const LINES: [&str; 19] = [
+    "slayer",
     "free_for_all",
     "team_slayer",
+    "gun_game",
+    "capture_the_flag",
+    "flag_taken",
+    "flag_dropped",
+    "flag_returned",
+    "flag_captured",
     "one_minute",
     "thirty_seconds",
     "taken_lead",
@@ -947,6 +1006,31 @@ fn voices() -> impl Iterator<Item = String> {
         .map(proto::medal::slug)
         .chain(LINES.iter().map(|l| l.to_string()))
         .map(|n| format!("voice/{n}"))
+}
+
+/// What the announcer calls a match as its countdown starts.
+fn mode_line(r: &sim::world::Rules) -> &'static str {
+    if r.ctf {
+        "capture_the_flag"
+    } else if r.gun_game {
+        "gun_game"
+    } else if r.teams {
+        "team_slayer"
+    } else if r.seats > 2 {
+        "free_for_all"
+    } else {
+        "slayer"
+    }
+}
+
+/// What the announcer says of a flag event (`Kind::Flag`'s `part`).
+fn flag_line(part: u8) -> &'static str {
+    match part {
+        0 => "flag_taken",
+        1 => "flag_dropped",
+        2 => "flag_returned",
+        _ => "flag_captured",
+    }
 }
 
 /// What the announcer says when our score's standing against the best of
@@ -973,35 +1057,65 @@ fn ogg_secs(b: &[u8]) -> Option<f32> {
     (rate > 0).then(|| gran as f32 / rate as f32)
 }
 
+/// How near us a round's end is heard striking, metres, and how many a frame.
+const STRUCK_M: f32 = 30.0;
+const STRUCK_MAX: u8 = 3;
+
+/// A round ending on a face of the map near us, by what the face is made of. A
+/// round that ended in a body met no face (the hit is the body's sound).
+fn struck(ear: &mut Ear, ears: &Ears, from: Vec3, to: Vec3) {
+    let dir = (to - from).normalize_or_zero();
+    let Some(hit) = surface::struck(ears.map, &mut ear.near, to, dir) else {
+        return;
+    };
+    let base = match surface::matter(ears.map, hit.on) {
+        Matter::Metal | Matter::Hull => "bullet_metal",
+        Matter::Dirt => "bullet_dirt",
+        _ => "bullet_concrete",
+    };
+    let n = ear.take(base, 3);
+    ear.at(ears, &n, to, 0.6, SMALL);
+}
+
 fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
     let mut hull_hit = [false; MAX_VEHICLES];
+    // Who swung a fist this frame: a hit of theirs is a blow landing.
+    let mut swung = [false; MAX_FIGHTERS];
+    let mut struck_left = STRUCK_MAX;
     for e in list {
         let at = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
         match e.kind {
             k if k == Kind::Shot as u8 => {
-                let Some(g) = gun_takes(e.c as u8) else { continue };
-                let ours = e.a == me && e.part != HEARD;
-                if ours {
-                    let n = ear.take(g.sound, g.takes);
-                    ear.mine(&n, 0.75);
+                let Some(g) = crate::look::guns::heard_as(e.c) else {
                     continue;
-                }
-                let n = if at.distance(ears.at) > FAR_M || ears.walled(at) {
-                    ClipName::of(g.far, None).with(b"_0")
-                } else {
-                    ear.take(g.sound, g.takes)
                 };
-                ear.at(ears, &n, at, 1.0, GUN);
+                let ours = e.a == me && e.part != HEARD;
+                let (sound, takes, far) = if e.c == sim::events::Cause::Minigun as u16 {
+                    ("shot_minigun", 3, "shot_minigun_far")
+                } else {
+                    (g.sound, g.takes, g.far)
+                };
+                if ours {
+                    let n = ear.take(sound, takes);
+                    ear.mine(&n, 0.75);
+                } else {
+                    let n = if at.distance(ears.at) > FAR_M || ears.walled(at) {
+                        ClipName::of(far, None).with(b"_0")
+                    } else {
+                        ear.take(sound, takes)
+                    };
+                    ear.at(ears, &n, at, 1.0, GUN);
+                }
                 if e.part == HEARD {
                     continue;
                 }
-                // A round past our head, and one off a wall near us.
+                // A round past our head, one striking near us, one off a wall.
                 let end = Vec3::new(e.end.x, e.end.y, e.end.z);
-                let hitscan = arms::arm(e.c as u8).speed == 0.0;
+                let hitscan = arms::fired(e.c).is_some_and(|a| a.speed == 0.0);
                 if hitscan {
                     let seg = end - at;
                     let len2 = seg.length_squared();
-                    if len2 > 1.0 {
+                    if !ours && len2 > 1.0 {
                         let u = ((ears.at - at).dot(seg) / len2).clamp(0.0, 1.0);
                         let near = at + seg * u;
                         let miss = near.distance(ears.at);
@@ -1010,13 +1124,24 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                             ear.at(ears, &n, near, 0.9, PASS);
                         }
                     }
-                    if end.distance(ears.at) < 30.0 && ear.chance(12) {
-                        let n = ear.take("ricochet", 4);
-                        ear.at(ears, &n, end, 0.5, SMALL);
+                    if end.distance(ears.at) < STRUCK_M {
+                        if struck_left > 0 {
+                            struck_left -= 1;
+                            struck(ear, ears, at, end);
+                        }
+                        if ear.chance(12) {
+                            let n = ear.take("ricochet", 4);
+                            ear.at(ears, &n, end, 0.5, SMALL);
+                        }
                     }
                 }
             }
             k if k == Kind::Hit as u8 => {
+                // Only the two it is between are told of a hit.
+                if swung.get(e.a as usize).copied().unwrap_or(false) {
+                    let n = ear.take("melee_hit", 3);
+                    ear.mine(&n, 0.7);
+                }
                 let shield = e.part == 0 || e.part == 3;
                 if e.a == me && e.b != me {
                     let n = match e.part {
@@ -1031,7 +1156,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                         let n = ear.take("shield_hit", 3);
                         ear.mine(&n, 0.55);
                     } else {
-                        let n = ear.take("flesh", 2);
+                        let n = ear.take("flesh", 3);
                         ear.mine(&n, 0.6);
                     }
                 } else if e.a != me && shield {
@@ -1039,12 +1164,25 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                     ear.at(ears, &n, at, 0.5, SHIELD);
                 }
             }
+            k if k == Kind::Kill as u8 => {
+                // Run down, if we may know where.
+                if e.c == sim::events::Cause::Splatter as u16 && at != Vec3::ZERO {
+                    let n = ear.take("splat", 2);
+                    ear.at(ears, &n, at, 1.0, SMALL);
+                }
+            }
+            k if k == Kind::Spawn as u8 => {
+                if e.a != me {
+                    ear.at(ears, "spawn_0", at, 0.6, BODY);
+                }
+            }
+            k if k == Kind::Flag as u8 => ear.say(flag_line(e.part)),
             k if k == Kind::Blast as u8 => {
-                let n = ear.take("blast", 2);
+                let n = ear.take("blast", 3);
                 ear.at(ears, &n, at, 1.3, BLAST);
             }
             k if k == Kind::Wreck as u8 => {
-                let n = ear.take("blast", 2);
+                let n = ear.take("blast", 3);
                 ear.at(ears, &n, at, 1.4, BLAST);
                 let n = ear.take("impact_metal", 5);
                 ear.at(ears, &n, at, 1.0, SMALL);
@@ -1060,10 +1198,13 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
             }
             k if k == Kind::Melee as u8 => {
                 let sword = e.c == arms::SWORD as u16;
+                if let Some(s) = swung.get_mut(e.a as usize) {
+                    *s = !sword;
+                }
                 let n = match (sword, e.part) {
                     (true, 2) => ear.take("impact_metal", 5),
                     (true, _) => ear.take("sword_swing", 2),
-                    _ => "swing_0".into(),
+                    _ => ear.take("swing", 3),
                 };
                 if e.a == me {
                     ear.mine(&n, 0.7);
@@ -1072,23 +1213,28 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Throw as u8 => {
+                let n = ear.take("throw", 3);
                 if e.a == me && e.part != HEARD {
-                    ear.mine("fuse_0", 0.6);
+                    ear.mine(&n, 0.6);
                 } else {
-                    ear.at(ears, "fuse_0", at, 0.7, BODY);
+                    ear.at(ears, &n, at, 0.7, BODY);
                 }
             }
             k if k == Kind::Pickup as u8 => {
-                let n = ClipName::of("impactMetal_light_00", Some(ear.roll(3)));
+                let n = match e.c as u8 {
+                    arms::OVERSHIELD => "over_on_0".into(),
+                    arms::CAMO => "camo_on_0".into(),
+                    arms::FRAGS | arms::STICKIES => ear.take("grenades", 2),
+                    _ => ear.take("pickup", 2),
+                };
                 if e.a == me {
-                    ear.mine("equip_1", 0.6);
-                    ear.mine(&n, 0.35);
+                    ear.mine(&n, 0.6);
                 } else {
-                    ear.at(ears, "equip_1", at, 0.6, BODY);
+                    ear.at(ears, &n, at, 0.6, BODY);
                 }
             }
             k if k == Kind::Ride as u8 => {
-                let n = ClipName::of("impactMetal_light_00", Some(ear.roll(3)));
+                let n = ear.take("ride", 2);
                 if e.a == me {
                     ear.mine(&n, 0.55);
                 } else {
@@ -1108,13 +1254,14 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
     }
 }
 
-fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, dt: f32) {
+fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, dt: f32, scope: u8) {
     // The shield: the hit is the event's; here, the break, the alarm
     // while it's down, and the whine as it comes back.
     if f.alive {
         if f.shield <= 0 && ear.last_shield > 0 {
             ear.mine("shield_pop_0", 0.7);
-            ear.mine("hurt_0", 0.35);
+            let n = ear.take("hurt", 2);
+            ear.mine(&n, 0.35);
             ear.beep = 0.15;
         }
         if f.shield > ear.last_shield && ear.last_alive {
@@ -1134,7 +1281,8 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
         }
     }
     if !f.alive && ear.last_alive {
-        ear.mine("death_0", 0.7);
+        let n = ear.take("death", 3);
+        ear.mine(&n, 0.7);
     }
     if f.alive && !ear.last_alive {
         ear.mine("spawn_0", 0.45);
@@ -1148,13 +1296,36 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
         ear.mine(reload_of(g.arm), 0.7);
     }
     ear.last_reload = reloading;
+    // The turret we gun running hot to its vent: the gun's own vent, louder.
+    if f.mount.vent && !ear.last_vent {
+        ear.mine("vent_0", 0.95);
+    }
+    ear.last_vent = f.mount.vent;
     if g.arm != ear.last_arm {
         if g.arm == arms::SWORD {
             ear.mine("sword_on_0", 0.5);
         } else {
-            ear.mine("equip_0", 0.5);
+            let n = ear.take("swap", 3);
+            ear.mine(&n, 0.5);
         }
         ear.last_arm = g.arm;
+    }
+    if scope != ear.last_scope {
+        ear.mine(
+            if scope > ear.last_scope {
+                "scope_in_0"
+            } else {
+                "scope_out_0"
+            },
+            0.5,
+        );
+        ear.last_scope = scope;
+    }
+    if f.gren_kind != ear.last_gren {
+        if f.alive {
+            ear.mine("gren_switch_0", 0.5);
+        }
+        ear.last_gren = f.gren_kind;
     }
     ear.dry -= dt;
     let firing = f.last_buttons & sim::input::FIRE != 0;
@@ -1186,18 +1357,26 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
     if f.alive && grounded && speed > STEP_SPEED {
         ear.step -= dt * speed;
         if ear.step <= 0.0 {
-            let n = ear.take(ground(ears.map, sim_v(feet)), 8);
+            let under = ground(&mut ear.near, ears.map, sim_v(feet));
+            let n = ear.take(under, 8);
             ear.mine(&n, if f.body.crouched { 0.12 } else { 0.3 });
             ear.step = STRIDE_M;
         }
     }
-    if f.alive && !grounded && ear.last_grounded && vel.y > 2.0 && f.riding().is_none() {
-        ear.mine("equip_2", 0.25);
+    if f.alive && !grounded && ear.last_grounded && f.riding().is_none() {
+        if launched(ears.map, vel) {
+            ear.mine("launch_0", 0.7);
+        } else if vel.y > 2.0 {
+            let n = ear.take("jump", 2);
+            ear.mine(&n, 0.25);
+        }
     }
     if f.alive && grounded && !ear.last_grounded {
         let hard = (-ear.last_vy / 12.0).clamp(0.3, 1.0);
-        ear.mine("land_0", 0.45 * hard);
-        let n = ear.take(ground(ears.map, sim_v(feet)), 8);
+        let n = ear.take("land", 2);
+        ear.mine(&n, 0.45 * hard);
+        let under = ground(&mut ear.near, ears.map, sim_v(feet));
+        let n = ear.take(under, 8);
         ear.mine(&n, 0.3 * hard);
         ear.step = STRIDE_M * 0.5;
     }
@@ -1205,7 +1384,8 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
     ear.last_vy = vel.y;
 }
 
-/// Everyone else we were sent: steps, landings, reloads, their shields.
+/// Everyone else we were sent: steps, landings, reloads, their shields, a
+/// launcher's throw, a death.
 fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
     let mut seen = [false; MAX_FIGHTERS];
     for o in others {
@@ -1243,16 +1423,24 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
             if o.grounded && speed > STEP_SPEED {
                 nb.step -= dt * speed;
                 if nb.step <= 0.0 {
-                    let n = ear.take(ground(ears.map, o.pos), 8);
+                    let under = ground(&mut ear.near, ears.map, o.pos);
+                    let n = ear.take(under, 8);
                     ear.at(ears, &n, p, if o.crouched { 0.15 } else { 0.6 }, STEP);
                     nb.step = STRIDE_M;
                 }
             }
             if o.grounded && !b.grounded {
                 let hard = (-b.fall / 12.0).clamp(0.3, 1.0);
-                ear.at(ears, "land_0", p, 0.7 * hard, STEP);
+                let n = ear.take("land", 2);
+                ear.at(ears, &n, p, 0.7 * hard, STEP);
                 nb.step = STRIDE_M * 0.5;
             }
+            if !o.grounded && b.grounded && launched(ears.map, o.vel) {
+                ear.at(ears, "launch_0", p, 0.9, SMALL);
+            }
+        } else if b.seen && b.alive && !o.alive {
+            let n = ear.take("death", 3);
+            ear.at(ears, &n, p + Vec3::Y, 0.9, SHIELD);
         }
         ear.bodies[i] = nb;
     }
@@ -1277,7 +1465,9 @@ const STICKY_FUSE_S: f32 = sim::consts::STICKY_FUSE_MS as f32 / 1000.0;
 fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     const ROCKET: u8 = 0;
     const FRAG: u8 = 1;
+    const BOLT: u8 = 2;
     const CHARGED: u8 = 3;
+    const NEEDLE: u8 = 4;
     const LOB: u8 = 5;
     const CANNON: u8 = 6;
     const STICKY: u8 = 7;
@@ -1336,13 +1526,19 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
             }
             next.push(r);
         }
-        // Gone: free its slot.
-        for (i, r) in ear.rounds.iter().enumerate() {
-            if i < taken.len() && !taken[i] {
-                if let Some(s) = r.slot {
-                    ear.cmds.push(Cmd::Stop { slot: s });
-                    ear.held_proj[(s - SLOT_PROJ) as usize] = false;
-                }
+        // Gone: free its slot, and a bolt or a shard ends on what it met.
+        for (i, kept) in taken.iter().enumerate().take(ear.rounds.len()) {
+            if *kept {
+                continue;
+            }
+            let r = ear.rounds[i];
+            if let Some(s) = r.slot {
+                ear.cmds.push(Cmd::Stop { slot: s });
+                ear.held_proj[(s - SLOT_PROJ) as usize] = false;
+            }
+            if r.kind == BOLT || r.kind == NEEDLE {
+                let n = ear.take("bolt_hit", 2);
+                ear.at(ears, &n, r.pos, 0.7, SMALL);
             }
         }
         ear.rounds_next = core::mem::replace(&mut ear.rounds, next);
@@ -1384,22 +1580,18 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
     }
 }
 
-/// The countdown's ticks and its start, and the wind on a big map; and
+/// The countdown's ticks and its start, the wind on a big map and the hum in
+/// an arena; and
 /// what the announcer says of the match: its mode as the countdown starts,
 /// who leads, the clock's last calls, the end.
 fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
     let snap = net.latest();
     if snap.phase == 0 {
         let secs = snap.clock.div_ceil(TICK_HZ);
-        // A countdown begun (the title's backdrop has no clock): the mode,
-        // if it is one of the two the announcer knows.
+        // A countdown begun (the title's backdrop has no clock): the mode.
         if secs > ear.last_count {
             ear.lines.clear();
-            if net.rules.teams {
-                ear.say("team_slayer");
-            } else if net.rules.seats > 2 {
-                ear.say("free_for_all");
-            }
+            ear.say(mode_line(&net.rules));
         }
         if secs != ear.last_count && (1..=3).contains(&secs) {
             ear.mine("tick_0", 0.5);
@@ -1458,6 +1650,89 @@ fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
     let mut on = ear.wind;
     ear.hold_mine(SLOT_WIND, &mut on, "wind_0", big.then_some((0.12, 1.0)));
     ear.wind = on;
+    let mut on = ear.room;
+    ear.hold_mine(SLOT_ROOM, &mut on, "room_hum_0", (!big).then_some((ROOM_GAIN, 1.0)));
+    ear.room = on;
+}
+
+/// An arena's hum, under everything.
+const ROOM_GAIN: f32 = 0.1;
+/// The sea, heard from the land: how far out we look for water, ring by ring
+/// round the ear, and how loud it is from each; how often we look, and how
+/// long the level takes to follow.
+const SURF_RINGS: [(f32, f32); 4] = [(12.0, 0.5), (25.0, 0.35), (50.0, 0.2), (90.0, 0.1)];
+const SURF_EVERY_S: f32 = 0.5;
+const SURF_FOLLOW_S: f32 = 2.0;
+/// Quieter than this, it is off.
+const SURF_MIN: f32 = 0.01;
+
+/// The sea, louder the nearer the water. A void's sea is cloud far under it.
+fn surf(ear: &mut Ear, ears: &Ears, dt: f32) {
+    let map = ears.map;
+    let sea = map.light.sea;
+    if !sea.is_finite() || map.void > f32::NEG_INFINITY {
+        return;
+    }
+    ear.surf_look -= dt;
+    if ear.surf_look <= 0.0 {
+        ear.surf_look = SURF_EVERY_S;
+        let wet = |r: f32| {
+            (0..8).any(|k| {
+                let a = k as f32 * core::f32::consts::FRAC_PI_4;
+                map.ground(ears.at.x + r * a.cos(), ears.at.z + r * a.sin()) < sea
+            })
+        };
+        ear.surf_want = SURF_RINGS.iter().find(|(r, _)| wet(*r)).map_or(0.0, |(_, g)| *g);
+    }
+    ear.surf_gain += (ear.surf_want - ear.surf_gain) * (dt / SURF_FOLLOW_S).min(1.0);
+    let want = (ear.surf_gain > SURF_MIN).then_some((ear.surf_gain, 1.0));
+    let mut on = ear.surf;
+    ear.hold_mine(SLOT_SURF, &mut on, "surf_0", want);
+    ear.surf = on;
+}
+
+/// The buttons whose state changed this frame, and where each is.
+type ButtonsChanged<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static Interaction, &'static bevy::ui::UiGlobalTransform),
+    (Changed<Interaction>, With<Button>),
+>;
+
+/// A button this near where the last one stood, px, is that one: a menu rebuilt
+/// under a still pointer hands it a new entity.
+const SAME_BUTTON_PX: f32 = 2.0;
+
+/// The menus: a tick as a button is come onto (by the pointer or a pad's
+/// focus), a click as one is pressed; a chime for an invite.
+fn menus(
+    mut ear: ResMut<Ear>,
+    buttons: ButtonsChanged,
+    party: Option<Res<crate::party::PartyView>>,
+    mut over: Local<Option<(Entity, Vec2)>>,
+    mut invite: Local<Option<u32>>,
+) {
+    for (e, i, at) in &buttons {
+        let at = at.translation;
+        match i {
+            Interaction::Pressed => ear.mine("ui_click_0", 0.5),
+            Interaction::Hovered => {
+                if !over.is_some_and(|(_, was)| was.distance(at) < SAME_BUTTON_PX) {
+                    ear.mine("ui_hover_0", 0.4);
+                }
+                *over = Some((e, at));
+            }
+            Interaction::None if over.is_some_and(|(was, _)| was == e) => *over = None,
+            _ => {}
+        }
+    }
+    let code = party.and_then(|p| p.invite.as_ref().map(|(_, code)| *code));
+    if code != *invite {
+        if code.is_some() {
+            ear.ping("invite_0");
+        }
+        *invite = code;
+    }
 }
 
 /// The live half: the clips handed to the mixer, the mixer's output, and
@@ -1883,7 +2158,19 @@ pub mod on {
 mod tests {
     use core::cmp::Ordering;
 
-    use super::lead_line;
+    use super::{flag_line, lead_line, mode_line};
+    use sim::world::Rules;
+
+    #[test]
+    fn a_match_is_called_what_it_is() {
+        let ctf = Rules::ctf();
+        assert!(
+            ctf.teams,
+            "Capture the Flag has sides, and must not be called Team Slayer"
+        );
+        assert_eq!(mode_line(&ctf), "capture_the_flag");
+        assert_eq!(flag_line(3), "flag_captured");
+    }
 
     #[test]
     fn the_lead_is_taken_tied_for_and_lost() {

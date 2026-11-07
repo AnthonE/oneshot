@@ -6,12 +6,12 @@
 //! and the two scores
 //! that matter bottom right. A crosshair, a hit marker on our hits (red on
 //! a kill), an arc toward whoever hurt us, and a line in the middle for the
-//! countdown, the result and who killed us (then the respawn's count, low
-//! in the middle until the scoreboard comes up); the screen's rim (red as
+//! countdown and the result; the screen's rim (red as
 //! health goes, gold as the shield takes a round, a crackle of blue as it
 //! breaks); before the welcome, the queue's line. `N` shows the net graph.
 //! The scope is `scope.rs`'s.
-//! Medals and the carnage report are `medals.rs`'s to draw; their lines in
+//! Who killed us and the scoreboard are `scores.rs`'s to draw (the death
+//! card); medals and the carnage report `medals.rs`'s; their lines in
 //! the feed are here. Everything here is read from the session; nothing is
 //! decided.
 
@@ -30,6 +30,17 @@ use crate::plate;
 
 const FEED_S: f32 = 5.0;
 const FEED_LINES: usize = 5;
+/// A feed line's last this-long, it fades out, as a medal does.
+const FEED_FADE_S: f32 = 0.8;
+/// The feed's lines (the watch line, the flags, the feed's own) and the
+/// parts of one: a line is up to three, the middle (how) dim between two
+/// names. A part ends at a tab (`feed_parts`).
+const FEED_ROWS: usize = FEED_LINES + 2;
+const FEED_PARTS: usize = 3;
+/// The USE prompt: how far down the screen, a share, and its key's cap.
+const PROMPT_TOP_PCT: f32 = 58.0;
+const KEY_BG: Color = Color::srgba(0.02, 0.05, 0.1, 0.45);
+const KEY_EDGE: Color = Color::srgba(0.74, 0.88, 1.0, 0.55);
 const HIT_S: f32 = 0.22;
 const DAMAGE_S: f32 = 0.6;
 /// The red rim when we're hit (after Gates' `hurt_flash.rs`): its alpha at
@@ -118,8 +129,8 @@ pub struct HudState {
     last_shield: i32,
     arc_at: f32,
     hurt_angle: f32,
-    /// How we last died, as a line ("You were sniped by ...").
-    pub death_line: String,
+    /// How we last died (`scores.rs`'s death card).
+    pub death: Option<Death>,
     /// The scoreboard is held up.
     pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
@@ -158,6 +169,15 @@ pub struct HudState {
     pub net: bool,
 }
 
+/// How we died, as the stream told it: by whom, with what (a gun's arm, or
+/// a `sim::events::Cause`), and whether it was the head.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Death {
+    pub killer: u8,
+    pub cause: u16,
+    pub head: bool,
+}
+
 /// Medals on screen at once, and how long each stays.
 pub const MEDALS_SHOWN: usize = 6;
 pub const MEDAL_S: f32 = 4.0;
@@ -171,6 +191,16 @@ impl HudState {
             net: self.net,
             ..default()
         }
+    }
+
+    #[cfg(test)]
+    pub fn set_seat_side(&mut self, slot: u8, team: u8) {
+        self.teams.insert(slot, team);
+    }
+
+    /// A seat's side (0 red, 1 blue), as its seat message said.
+    pub fn side(&self, slot: u8) -> Option<u8> {
+        self.teams.get(&slot).map(|t| t & 1)
     }
 
     pub fn look(&self, slot: u8) -> proto::Look {
@@ -286,19 +316,21 @@ pub struct ScoreFill(pub u8);
 pub struct ScoreMine(pub u8);
 #[derive(Component)]
 pub struct FeedText;
+/// One part of one of the feed's lines (`FEED_ROWS` × `FEED_PARTS`).
+#[derive(Component)]
+pub struct FeedPart(pub usize);
 #[derive(Component)]
 pub struct CenterText;
-/// "Respawn in N", low in the middle while we are dead.
-#[derive(Component)]
-pub struct RespawnText;
 #[derive(Component)]
 pub struct NetText;
-/// The scoreboard's panel, and its columns: names, kills, deaths, score.
+/// What USE would take here (`items::offer`): the row, the key on its
+/// cap, the verb, and the gun.
 #[derive(Component)]
-pub struct Board;
+pub struct PromptRow;
 #[derive(Component)]
-pub struct BoardColumn(pub u8);
-/// What USE would take here (`items::offer`).
+pub struct PromptKey;
+#[derive(Component)]
+pub struct PromptVerb;
 #[derive(Component)]
 pub struct PromptText;
 #[derive(Component)]
@@ -598,7 +630,19 @@ pub fn setup(mut commands: Commands) {
                 }
             });
             gun_panel(c, 1, false);
-            c.spawn((FeedText, tinted(crate::ui::semibold(17.0), INK)));
+            // The feed: a pool of parts, each line a name, how (small and
+            // dim) and a name, written and faded by `feed`.
+            c.spawn((FeedText, tinted(crate::ui::semibold(15.0), INK)))
+                .with_children(|t| {
+                    for i in 0..FEED_ROWS * FEED_PARTS {
+                        let font = if i % FEED_PARTS == 1 {
+                            crate::ui::semibold(12.0)
+                        } else {
+                            crate::ui::semibold(15.0)
+                        };
+                        t.spawn((FeedPart(i), TextSpan::new(""), font, TextColor(INK)));
+                    }
+                });
         });
     // Top right: the gun in hand, the one on our back beside it; under it,
     // how to get out of a ride.
@@ -759,62 +803,45 @@ pub fn setup(mut commands: Commands) {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        children![(CenterText, text(crate::ui::display(32.0)))],
+        children![(CenterText, text(crate::ui::display(26.0)))],
     ));
+    // Under the crosshair: what USE would take, small: the key on a cap,
+    // then the verb, dim, and the gun.
     commands.spawn((
         ChildOf(root),
         Node {
             position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
-            bottom: Val::Percent(16.0),
+            top: Val::Percent(PROMPT_TOP_PCT),
             justify_content: JustifyContent::Center,
             ..default()
         },
-        children![(RespawnText, text(crate::ui::display(28.0)))],
-    ));
-    // The scoreboard: a panel in the middle, four columns.
-    commands
-        .spawn((
-            Board,
+        children![(
+            PromptRow,
             Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Percent(37.0),
-                width: Val::Px(520.0),
-                margin: UiRect::left(Val::Px(-260.0)),
-                padding: UiRect::all(Val::Px(16.0)),
-                column_gap: Val::Px(24.0),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(7.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.78)),
             Visibility::Hidden,
-        ))
-        .with_children(|c| {
-            for (i, grow) in [(0u8, 1.0), (1, 0.0), (2, 0.0), (3, 0.0)] {
-                c.spawn((
+            children![
+                (
                     Node {
-                        flex_grow: grow,
-                        min_width: Val::Px(56.0),
+                        min_width: Val::Px(20.0),
+                        padding: UiRect::axes(Val::Px(6.0), Val::Px(1.0)),
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
-                    children![(
-                        BoardColumn(i),
-                        text(crate::ui::semibold(18.0)),
-                        TextLayout::new_with_justify(if i == 0 { Justify::Left } else { Justify::Right }),
-                    )],
-                ));
-            }
-        });
-    // Under the crosshair: what USE would take.
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            top: Val::Percent(60.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        children![(PromptText, text(crate::ui::semibold(20.0)))],
+                    BackgroundColor(KEY_BG),
+                    BorderColor::all(KEY_EDGE),
+                    children![(PromptKey, tinted(crate::ui::bold(12.0), INK))],
+                ),
+                (PromptVerb, tinted(crate::ui::semibold(13.0), INK_DIM)),
+                (PromptText, tinted(crate::ui::bold(13.0), INK)),
+            ],
+        )],
     ));
     // The crosshair, the hit marker and the damage arc, all centred on the
     // screen's middle.
@@ -1056,41 +1083,33 @@ fn node_line(st: &HudState, part: u8, who: u8, n: u8) -> String {
     }
 }
 
-/// Siege: each side's generators and core, ours first, one line each, over
-/// the feed, onto `out`.
-fn nodes_line(out: &mut String, s: &proto::Snapshot, team: u8) {
+/// Siege: side `t`'s generators and core, one line of the feed, onto `out`
+/// (`ours`: the reader's side).
+fn nodes_line(out: &mut String, s: &proto::Snapshot, t: usize, ours: bool) {
     let per = sim::consts::SIEGE_GENS + 1;
-    for (i, t) in [team as usize & 1, (team as usize & 1) ^ 1].into_iter().enumerate() {
-        let _ = write!(
-            out,
-            "{} {}  ",
-            if i == 0 { "OURS" } else { "THEIRS" },
-            side_name(t as u8)
-        );
-        for k in 0..per {
-            let n = t * per + k;
-            let x = s.nodes()[n];
-            let name = if k == sim::consts::SIEGE_GENS {
-                "CORE".to_string()
-            } else {
-                ((b'A' + k as u8) as char).to_string()
-            };
-            let pct = x.load as u32 * 100 / proto::NODE_LOAD_MAX as u32;
-            let what = if x.broken {
-                "BROKEN".to_string()
-            } else if crate::nodes::shielded(s, n) {
-                "SHIELDED".to_string()
-            } else {
-                match x.held {
-                    sim::world::NODE_RISING => format!("{pct}% UNDER ATTACK"),
-                    sim::world::NODE_CONTESTED => format!("{pct}% CONTESTED"),
-                    _ if pct > 0 => format!("{pct}%"),
-                    _ => "OK".to_string(),
-                }
-            };
-            let _ = write!(out, "{}{name} {what}", if k > 0 { "  ·  " } else { "" });
-        }
-        out.push('\n');
+    let _ = write!(out, "{} {}  ", if ours { "OURS" } else { "THEIRS" }, side_name(t as u8));
+    for k in 0..per {
+        let n = t * per + k;
+        let x = s.nodes()[n];
+        let name = if k == sim::consts::SIEGE_GENS {
+            "CORE".to_string()
+        } else {
+            ((b'A' + k as u8) as char).to_string()
+        };
+        let pct = x.load as u32 * 100 / proto::NODE_LOAD_MAX as u32;
+        let what = if x.broken {
+            "BROKEN".to_string()
+        } else if crate::nodes::shielded(s, n) {
+            "SHIELDED".to_string()
+        } else {
+            match x.held {
+                sim::world::NODE_RISING => format!("{pct}% UNDER ATTACK"),
+                sim::world::NODE_CONTESTED => format!("{pct}% CONTESTED"),
+                _ if pct > 0 => format!("{pct}%"),
+                _ => "OK".to_string(),
+            }
+        };
+        let _ = write!(out, "{}{name} {what}", if k > 0 { "  ·  " } else { "" });
     }
 }
 
@@ -1192,11 +1211,12 @@ pub fn on_events(
                 head,
             } => {
                 let how = crate::tally::how(*cause);
-                let how = if *head { format!("{how}, HEAD") } else { how.to_string() };
+                let at_head = if *head { " \u{b7} HEAD" } else { "" };
+                // Name, how, name: the parts `feed` draws (a tab ends one).
                 let line = if killer == victim {
-                    format!("{} died  [{how}]", st.name(*victim))
+                    format!("{} died\t{how}{at_head}", st.name(*victim))
                 } else {
-                    format!("{}  [{how}]  {}", st.name(*killer), st.name(*victim))
+                    format!("{}\t{how}{at_head}\t{}", st.name(*killer), st.name(*victim))
                 };
                 st.feed.push((line, now));
                 let side = |q: &u8| st.teams.get(q).map(|t| t & 1);
@@ -1215,7 +1235,11 @@ pub fn on_events(
                 }
                 if *victim == me {
                     st.deaths += 1;
-                    st.death_line = death_line(st, s.core.rules.teams, me, *killer, *cause);
+                    st.death = Some(Death {
+                        killer: *killer,
+                        cause: *cause,
+                        head: *head,
+                    });
                 }
                 if let Some(r) = st.rung.remove(victim) {
                     st.spree_ended.insert(*victim, r);
@@ -1238,25 +1262,9 @@ pub fn on_events(
 
 /// Dead long enough for the scoreboard ([`DEAD_BOARD_S`]), on the
 /// respawn's own clock.
-fn boarded(f: &sim::fighter::Fighter) -> bool {
+pub(crate) fn boarded(f: &sim::fighter::Fighter) -> bool {
     let gone = sim::consts::ticks(sim::consts::RESPAWN_MS).saturating_sub(u32::from(f.respawn));
     !f.alive && gone as f32 >= DEAD_BOARD_S * TICK_HZ as f32
-}
-
-/// What the screen says when we die, after Halo 2's.
-fn death_line(st: &HudState, teams: bool, me: u8, killer: u8, cause: u16) -> String {
-    if killer == me {
-        return if cause == sim::events::Cause::Fall as u16 {
-            "You fell to your death".into()
-        } else {
-            "You killed yourself".into()
-        };
-    }
-    let side = |q: u8| st.teams.get(&q).map(|t| t & 1);
-    if teams && side(killer) == side(me) {
-        return format!("You were betrayed by {}", st.name(killer));
-    }
-    format!("You were {} by {}", crate::tally::verb(cause), st.name(killer))
 }
 
 fn mmss(s: f32) -> String {
@@ -1268,9 +1276,7 @@ fn mmss(s: f32) -> String {
 #[derive(Default)]
 pub struct DrawLines {
     center: String,
-    feed: String,
     net: String,
-    respawn: String,
     gone: String,
 }
 
@@ -1299,13 +1305,7 @@ pub fn draw(
     time: Res<Time>,
     st: Res<HudState>,
     mut arc: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<HurtArc>>,
-    mut texts: Query<(
-        &mut Text,
-        Option<&FeedText>,
-        Option<&CenterText>,
-        Option<&NetText>,
-        Option<&RespawnText>,
-    )>,
+    mut texts: Query<(&mut Text, Option<&CenterText>, Option<&NetText>)>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
     mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
@@ -1315,13 +1315,7 @@ pub fn draw(
     let now = time.elapsed_secs();
     let core = &s.core;
     let (f, _) = core.own();
-    let DrawLines {
-        center,
-        feed,
-        net,
-        respawn,
-        gone,
-    } = &mut *lines;
+    let DrawLines { center, net, gone } = &mut *lines;
     gone_line(gone, st.ended, &*link.0);
     let gone = (!gone.is_empty()).then_some(gone.as_str());
     if !s.ready {
@@ -1333,7 +1327,7 @@ pub fn draw(
             None if st.status.is_empty() => center.push_str("connecting..."),
             None => center.push_str(&st.status),
         }
-        for (mut t, _, ce, _, _) in texts.iter_mut() {
+        for (mut t, ce, _) in texts.iter_mut() {
             if ce.is_some() && t.0 != *center {
                 t.0.clone_from(center);
             }
@@ -1341,8 +1335,6 @@ pub fn draw(
         return;
     }
     // Dead: who did it, then (with the scoreboard up) the count.
-    let boarded = boarded(f);
-    let back = (f.respawn as f32 / TICK_HZ as f32).ceil() as u32;
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
     center.clear();
@@ -1380,30 +1372,8 @@ pub fn draw(
             }
         }
         _ if gone.is_some() => center.push_str(gone.unwrap_or_default()),
-        _ if !f.alive && boarded => {
-            let _ = write!(center, "Respawn in {back}");
-        }
-        _ if !f.alive => center.push_str(&st.death_line),
+        // Dead: the death card says it (`scores.rs`).
         _ => {}
-    }
-    feed.clear();
-    if s.watch && core.slot < sim::consts::MAX_FIGHTERS as u8 {
-        let _ = writeln!(
-            feed,
-            "WATCHING {}, a little behind  ·  CLICK for the next player",
-            st.shown(core.slot)
-        );
-    }
-    if snap.n_flags > 0 {
-        flags_line(feed, &st, snap);
-        feed.push('\n');
-    }
-    if snap.n_nodes as usize == sim::consts::SIEGE_NODES {
-        nodes_line(feed, snap, core.team);
-    }
-    for (l, _) in &st.feed {
-        feed.push_str(l);
-        feed.push('\n');
     }
     net.clear();
     if st.net {
@@ -1414,16 +1384,8 @@ pub fn draw(
             n.snapshots, n.confirmations, n.corrections, n.depth, n.rate, n.delay_ticks, s.dropped
         );
     }
-    respawn.clear();
-    if snap.phase == 1 && gone.is_none() && !f.alive && !boarded {
-        let _ = write!(respawn, "Respawn in {back}");
-    }
-    for (mut t, fe, ce, ne, re) in texts.iter_mut() {
-        let v = if re.is_some() {
-            &*respawn
-        } else if fe.is_some() {
-            &*feed
-        } else if ce.is_some() {
+    for (mut t, ce, ne) in texts.iter_mut() {
+        let v = if ce.is_some() {
             &*center
         } else if ne.is_some() {
             &*net
@@ -1478,6 +1440,79 @@ pub fn draw(
         }
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.set_if_neq(BackgroundColor(Color::srgba(1.0, 0.2, 0.15, alpha)));
+    }
+}
+
+/// The feed, top left: the watch line, the flags, then the feed's lines,
+/// each faded out over its last [`FEED_FADE_S`]. A kill is the killer,
+/// how (small and dim) and the victim, no brackets.
+pub fn feed(
+    link: NonSend<crate::LinkRes>,
+    time: Res<Time>,
+    st: Res<HudState>,
+    mut parts: Query<(&mut TextSpan, &mut TextColor, &FeedPart)>,
+    (mut rows, mut v): (Local<Vec<(String, f32)>>, Local<String>),
+) {
+    let s = link.0.session();
+    if !s.ready {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let core = &s.core;
+    let snap = core.latest();
+    rows.resize_with(FEED_ROWS, Default::default);
+    let mut n = 0;
+    let mut put = |line: &mut dyn FnMut(&mut String), a: f32| {
+        if n < FEED_ROWS {
+            rows[n].0.clear();
+            line(&mut rows[n].0);
+            rows[n].1 = a;
+            n += 1;
+        }
+    };
+    if s.watch && core.slot < sim::consts::MAX_FIGHTERS as u8 {
+        put(
+            &mut |o| {
+                let _ = write!(o, "WATCHING {}\tCLICK for the next player", st.shown(core.slot));
+            },
+            1.0,
+        );
+    }
+    if snap.n_flags > 0 {
+        put(&mut |o| flags_line(o, &st, snap), 1.0);
+    }
+    if snap.n_nodes as usize == sim::consts::SIEGE_NODES {
+        let ours = core.team as usize & 1;
+        put(&mut |o| nodes_line(o, snap, ours, true), 1.0);
+        put(&mut |o| nodes_line(o, snap, ours ^ 1, false), 1.0);
+    }
+    for (l, at) in &st.feed {
+        let a = ((FEED_S - (now - at)) / FEED_FADE_S).clamp(0.0, 1.0);
+        put(&mut |o| o.push_str(l), a);
+    }
+    for r in rows.iter_mut().skip(n) {
+        r.0.clear();
+    }
+    for (mut span, mut ink, p) in &mut parts {
+        let (row, part) = (p.0 / FEED_PARTS, p.0 % FEED_PARTS);
+        let (line, a) = (&rows[row].0, rows[row].1);
+        let pieces = line.split('\t').count();
+        v.clear();
+        if let Some(piece) = line.split('\t').nth(part) {
+            if part > 0 {
+                v.push_str("  ");
+            }
+            v.push_str(piece);
+        }
+        // The line's last part ends it.
+        if !line.is_empty() && part + 1 == pieces.min(FEED_PARTS) {
+            v.push('\n');
+        }
+        if span.0 != *v {
+            span.0.clone_from(&v);
+        }
+        let c = if part == 1 { INK_DIM } else { INK };
+        ink.set_if_neq(TextColor(c.with_alpha(c.alpha() * a)));
     }
 }
 
@@ -1558,6 +1593,19 @@ fn gun_look(g: &sim::fighter::Gun, reloading: bool) -> GunLook {
     }
 }
 
+/// A turret's box: its name and its heat (its share as the count), no
+/// rounds to run out of.
+fn turret_look(a: &sim::arms::Arm, m: sim::fighter::Mount) -> GunLook {
+    let heat = (m.heat as f32 / sim::arms::HEAT_FULL as f32).clamp(0.0, 1.0);
+    GunLook {
+        count: (heat * 100.0).round() as u32,
+        name: a.name,
+        pips: None,
+        heat: Some((heat, m.vent)),
+        note: if m.vent { "VENTING" } else { "" },
+    }
+}
+
 /// Each hand's gun as its picture, once it is drawn; its name until then.
 #[allow(clippy::type_complexity)]
 pub fn gun_icons(
@@ -1572,9 +1620,11 @@ pub fn gun_icons(
     };
     let f = s.core.own().0;
     let arm = |h: u8| if h == 0 { f.gun().arm } else { f.left.arm };
+    // A turret has no picture yet: its name.
+    let gunning = f.gunning(&s.core.map) != sim::vehicle::NO_TURRET;
     let mut shown = [false; 2];
     for (h, mut n, mut img) in &mut pics {
-        let pic = icons.get(arm(h.0));
+        let pic = icons.get(arm(h.0)).filter(|_| !gunning);
         shown[h.0 as usize & 1] = pic.is_some();
         if let Some(pic) = pic {
             if img.image != *pic {
@@ -1636,10 +1686,15 @@ pub fn gear(
     }
     let f = s.core.own().0;
     let reloading = f.reload > 0;
-    let hands = [
-        Some(gun_look(f.gun(), reloading)),
-        f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
-    ];
+    // Gunning a turret, its box is the turret's; the guns wait.
+    let turret = sim::vehicle::turret(f.gunning(&s.core.map));
+    let hands = match turret {
+        Some((a, _)) => [Some(turret_look(a, f.mount)), None],
+        None => [
+            Some(gun_look(f.gun(), reloading)),
+            f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
+        ],
+    };
     for (b, mut img) in boxes.iter_mut() {
         tint(&mut img, if f.gren_kind == b.0 { PLATE } else { PLATE_DIM });
     }
@@ -1647,7 +1702,7 @@ pub fn gear(
         set_display(&mut n, hands[p.0 as usize & 1].is_some());
     }
     let back = f.guns[1 - f.cur as usize];
-    let carried = back.arm != 0 && !f.dual();
+    let carried = back.arm != 0 && !f.dual() && turret.is_none();
     for mut n in back_plate.iter_mut() {
         set_display(&mut n, carried);
     }
@@ -1967,10 +2022,21 @@ pub fn corner(
 /// `aim_range`, its magnetism widening the bodies with distance (as
 /// `World::magnet` bends a near miss); the sword's, its lunge's.
 pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
+    aim_on(core, others).is_some()
+}
+
+/// A sword's press now would lunge: the enemy the aim is on is past its reach.
+pub fn lunge_ahead(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
+    sim::arms::arm(core.own().0.gun().arm).kind == sim::arms::Kind::Sword
+        && aim_on(core, others).is_some_and(|t| t > sim::consts::SWORD_REACH)
+}
+
+/// How far along the aim the nearest enemy in reach is.
+fn aim_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> Option<f32> {
     use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH, LUNGE_PAD, LUNGE_RANGE};
     let f = core.own().0;
     if !f.alive || f.riding().is_some() {
-        return false;
+        return None;
     }
     let a = sim::arms::arm(f.gun().arm);
     let sword = a.kind == sim::arms::Kind::Sword;
@@ -1979,20 +2045,25 @@ pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::D
     let dir = sim::geom::aim_dir(f.yaw, f.pitch);
     let wall = core.map.ray(eye, dir, reach);
     let mate = core.rules.teams.then_some(core.team & 1);
-    others.iter().filter(|d| d.alive && Some(d.team & 1) != mate).any(|d| {
-        let pad = if sword {
-            LUNGE_PAD
-        } else {
-            (d.pos - eye).len() * a.magnet
-        };
-        let (hy, top) = if d.crouched {
-            (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
-        } else {
-            (HEAD_Y, HIT_TOP)
-        };
-        sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).is_some()
-            || sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall).is_some()
-    })
+    others
+        .iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate)
+        .filter_map(|d| {
+            let pad = if sword {
+                LUNGE_PAD
+            } else {
+                (d.pos - eye).len() * a.magnet
+            };
+            let (hy, top) = if d.crouched {
+                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+            } else {
+                (HEAD_Y, HIT_TOP)
+            };
+            sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).or_else(|| {
+                sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall)
+            })
+        })
+        .min_by(f32::total_cmp)
 }
 
 /// The crosshair red while it is on an enemy in reach ([`on_target`]).
@@ -2010,99 +2081,18 @@ pub fn reticle_tint(seen: Res<crate::Seen>, mut q: Query<&mut BackgroundColor, W
     }
 }
 
-/// The scoreboard: held up (its key), while we are dead (after
-/// [`DEAD_BOARD_S`]), and once the match is over until the carnage report
-/// comes.
-/// Every seat by side (teams first, each side's score) then by score:
-/// name, kills, deaths, score.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub fn board(
-    link: NonSend<crate::LinkRes>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    binds: Res<crate::binds::Binds>,
-    mut st: ResMut<HudState>,
-    mut panel: Query<&mut Visibility, With<Board>>,
-    mut cols: Query<(&mut Text, &BoardColumn)>,
-    (mut out, mut seats): (Local<[String; 4]>, Local<Vec<u8>>),
-) {
-    let s = link.0.session();
-    let over = s.ready && s.core.latest().phase == 2;
-    let held = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
-    if st.board != held {
-        st.board = held;
-    }
-    // Once the match is over the carnage report (`medals.rs`) is the
-    // board, as soon as its rows come.
-    // Dead a moment, it comes up on its own until the respawn (Halo 2's).
-    let dead = s.ready && !over && boarded(s.core.own().0);
-    let up = s.ready && (st.board || dead || (over && st.carnage.is_empty()));
-    if let Ok(mut v) = panel.single_mut() {
-        let want = if up { Visibility::Inherited } else { Visibility::Hidden };
-        if *v != want {
-            *v = want;
-        }
-    }
-    if !up {
-        return;
-    }
-    let core = &s.core;
-    let snap = core.latest();
-    let score = |i: usize| snap.score.get(i).copied().unwrap_or(0);
-    let side = |q: u8| st.teams.get(&q).copied().unwrap_or(0) & 1;
-    let kd = |q: u8| st.tally.kd.get(&q).copied().unwrap_or((0, 0));
-    // Each column written row by row into the same Strings every frame.
-    let heads = ["", "K", "D", "SCORE"];
-    for (o, h) in out.iter_mut().zip(heads) {
-        o.clear();
-        o.push_str(h);
-        o.push('\n');
-    }
-    let [name, kills, deaths, total] = &mut *out;
-    seats.clear();
-    if core.rules.teams {
-        for t in [core.team & 1, 1 - (core.team & 1)] {
-            name.push_str(if t == 0 { "RED\n" } else { "BLUE\n" });
-            kills.push('\n');
-            deaths.push('\n');
-            let _ = writeln!(total, "{}", score(t as usize));
-            seats.clear();
-            seats.extend(st.names.keys().copied().filter(|&q| side(q) == t));
-            seats.sort_by_key(|&q| (std::cmp::Reverse(kd(q).0), kd(q).1, q));
-            for &q in seats.iter() {
-                let (k, d) = kd(q);
-                let _ = writeln!(name, "  {}", st.shown(q));
-                let _ = writeln!(kills, "{k}");
-                let _ = writeln!(deaths, "{d}");
-                total.push('\n');
-            }
-        }
-    } else {
-        seats.extend(st.names.keys().copied());
-        seats.sort_by_key(|&q| (std::cmp::Reverse(score(q as usize)), q));
-        for &q in seats.iter() {
-            let (k, d) = kd(q);
-            let me = if q == core.slot { " <" } else { "" };
-            let _ = writeln!(name, "{}{me}", st.shown(q));
-            let _ = writeln!(kills, "{k}");
-            let _ = writeln!(deaths, "{d}");
-            let _ = writeln!(total, "{}", score(q as usize));
-        }
-    }
-    for (mut t, c) in cols.iter_mut() {
-        let v = &out[c.0 as usize];
-        if t.0 != *v {
-            t.0.clone_from(v);
-        }
-    }
-}
-
-/// The prompt under the crosshair: the USE key and what it would take.
+/// The prompt under the crosshair: the USE key on its cap and what it
+/// would take, the verb dim and the gun lit. Hidden with nothing to take.
+#[allow(clippy::type_complexity)]
 pub fn prompt(
     link: NonSend<crate::LinkRes>,
     binds: Res<crate::binds::Binds>,
     seen: Res<crate::Seen>,
-    mut q: Query<&mut Text, With<PromptText>>,
+    mut row: Query<&mut Visibility, With<PromptRow>>,
+    mut q: Query<
+        (&mut Text, &mut Node, Option<&PromptKey>, Option<&PromptVerb>),
+        Or<(With<PromptKey>, With<PromptVerb>, With<PromptText>)>,
+    >,
     mut said: Local<Option<(&'static str, crate::items::Offer)>>,
 ) {
     let s = link.0.session();
@@ -2117,14 +2107,27 @@ pub fn prompt(
         return;
     }
     *said = offer;
-    let mut line = String::new();
-    if let Some((key, what)) = offer {
-        let _ = write!(line, "{key}  {what}");
+    if let Ok(mut v) = row.single_mut() {
+        v.set_if_neq(if offer.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
-    for mut t in q.iter_mut() {
-        if t.0 != line {
-            t.0.clone_from(&line);
-        }
+    let Some((key, what)) = offer else {
+        return;
+    };
+    for (mut t, mut n, k, verb) in q.iter_mut() {
+        let v = if k.is_some() {
+            key.to_string()
+        } else if verb.is_some() {
+            what.verb.to_uppercase()
+        } else {
+            what.gun.to_string()
+        };
+        // A ride has no gun: no gap after its verb.
+        set_display(&mut n, !v.is_empty());
+        set_text(&mut t, v);
     }
 }
 

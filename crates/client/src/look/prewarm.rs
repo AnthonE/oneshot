@@ -151,8 +151,8 @@ pub fn warm_level(
     }
 }
 
-/// Once, when every model is in: a fighter, every gun, the rocket and the
-/// frag, drawn warm.
+/// Once, when every model is in: a fighter, every gun, the rocket, the
+/// frag and the truck's minigun, drawn warm.
 #[allow(clippy::too_many_arguments)]
 pub fn warm_models(
     mut commands: Commands,
@@ -169,7 +169,12 @@ pub fn warm_models(
         return;
     };
     let mut scenes: Vec<Handle<Scene>> = models.guns.iter().flatten().cloned().collect();
-    scenes.extend([models.rocket.clone(), models.frag.clone()]);
+    scenes.extend([
+        models.rocket.clone(),
+        models.frag.clone(),
+        models.turret.clone(),
+        models.turret_barrels.clone(),
+    ]);
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
     let body = matches!(
         assets.load_state(&models.body),
@@ -215,6 +220,14 @@ pub fn warm_models(
             .observe(done)
             .id();
         super::gun_skin::wear(&mut commands, coated, WARM_SKIN, sim::arms::AR);
+    }
+    // A sword's blade lit: the shader is its own.
+    if let Some(scene) = models.guns.get(sim::arms::SWORD as usize).cloned().flatten() {
+        let lit = commands
+            .spawn((Warming(WARM_FRAMES), SceneRoot(scene), at(), ChildOf(eye)))
+            .observe(done)
+            .id();
+        super::blade::light(&mut commands, lit, sim::arms::SWORD);
     }
     // Far under the map at full size: a body's meshes and shells are never
     // culled (`bodies::dress`), so it is queued, shadow and all, where

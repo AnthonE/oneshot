@@ -101,7 +101,8 @@ fn loaded(core: &NetCore, i: usize) -> bool {
 
 /// `arm`'s gun under `root`, turned about its middle rather than its grip.
 fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
-    if let (Some(g), Some((pivot, _))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
+    if let (Some(g), Some((pivot, scene))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
+        crate::look::blade::light(commands, scene, arm);
         let half = g.height * g.scale * (0.5 - g.grip);
         commands.entity(pivot).insert(Transform {
             translation: basis * Vec3::new(0.0, -half, 0.0),
@@ -329,10 +330,17 @@ pub fn offer(core: &NetCore, vehicles: &[client_net::core::DrawnVehicle]) -> Opt
         .filter(|v| v.seats.contains(&0) && (v.pos - at).flat().len() < ENTER_R && (v.pos.y - at.y).abs() < 2.0)
         .min_by(|a, b| (a.pos - at).flat().len().total_cmp(&(b.pos - at).flat().len()));
     if let Some(v) = car {
-        return Some(Offer {
-            verb: if v.seats[DRIVER] == 0 { "drive" } else { "ride" },
-            gun: "",
-        });
+        // The seat the sim would give us from here (`vehicle::boards`).
+        let turret = core.map.vehicles.get(v.slot as usize).map_or(0, |d| d.turret);
+        let ahead = (at.x - v.pos.x) * v.yaw.cos() + (at.z - v.pos.z) * v.yaw.sin();
+        if let Some(seat) = sim::vehicle::boards(turret, v.seats, ahead, f.flag) {
+            let verb = match seat {
+                DRIVER => "drive",
+                _ if turret != sim::vehicle::NO_TURRET => "gun",
+                _ => "ride",
+            };
+            return Some(Offer { verb, gun: "" });
+        }
     }
     if core.rules.gun_game {
         return None;
@@ -375,7 +383,7 @@ fn take(f: &Fighter, id: u8, pad: bool) -> Option<Offer> {
     Some(Offer { verb, gun: a.name })
 }
 
-/// What USE would do ([`offer`]): "drive", or "pick up" and the gun's
+/// What USE would do ([`offer`]): "drive", "gun", "ride", or "pick up" and the gun's
 /// name. Nothing made to hold it: the prompt writes it when it changes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Offer {

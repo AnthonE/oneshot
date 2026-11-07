@@ -1,13 +1,13 @@
-// node tools/assets.mjs [GATES_DIR]: what the Bevy client draws and plays,
-// from a Gates checkout into crates/client/assets (docs/RIP.md §3–5, §9):
-// the model (Triple T) with its KTX2 textures re-embedded as JPEG by
-// tools/glb, so no build needs a transcoder; the sounds; and the
-// ground's and the boxes' textures. All CC0 or public domain (Gates'
-// MANIFEST.md files); credited in NOTICE.
+// node tools/assets.mjs [GATES_DIR]: what the Bevy client draws, from a Gates
+// checkout into crates/client/assets (docs/RIP.md §3–5, §9): the model
+// (Triple T) with its KTX2 textures re-embedded as JPEG by tools/glb, so no
+// build needs a transcoder; and the ground's and the boxes' textures. All CC0
+// or public domain (Gates' MANIFEST.md files); credited in NOTICE. The sounds
+// are ours: tools/sfx.mjs, tools/voice.mjs.
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 
 const gates = process.argv[2] || process.env.GATES_DIR || '../Gates';
 const out = 'crates/client/assets';
@@ -21,27 +21,6 @@ const MODELS = {
   'triple-t.glb': 'models/stumpy.glb',
 };
 
-// All CC0 or public domain; credits in NOTICE.
-const SOUNDS = [
-  ...['shot_rifle', 'shot_smg', 'shot_pistol', 'shot_shotgun', 'shot_bolt', 'shot_heli', 'shot_rocket'].flatMap((n) =>
-    [0, 1, 2].map((i) => `pd/${n}_${i}.ogg`)),
-  ...['shot_rifle_far', 'shot_smg_far', 'shot_pistol_far', 'shot_shotgun_far', 'shot_bolt_far', 'shot_heli_far'].flatMap((n) =>
-    [0, 1].map((i) => `pd/${n}_${i}.ogg`)),
-  'freesound/shot_gun_0.ogg', 'freesound/shot_gun_1.ogg', 'freesound/shot_gun_far_0.ogg',
-  'pd/reload_rifle_0.ogg', 'pd/reload_pistol_0.ogg', 'pd/reload_shotgun_0.ogg', 'pd/reload_bolt_0.ogg',
-  'pd/dry_fire_0.ogg', 'pd/headshot_0.ogg', 'pd/headshot_1.ogg',
-  'kenney/hit_0.ogg', 'kenney/equip_0.ogg',
-  'freesound/blast_0.ogg', 'freesound/blast_1.ogg', 'freesound/fuse_0.ogg',
-  'freesound/flesh_0.ogg', 'freesound/flesh_1.ogg', 'freesound/hurt_0.ogg', 'freesound/death_0.ogg', 'freesound/swing_0.ogg',
-  ...[0, 1, 2, 3, 4, 5, 6, 7].flatMap((i) =>
-    [`pd/step_concrete_${i}.ogg`, `pd/step_metal_${i}.ogg`, `freesound/step_grass_${i}.ogg`, `freesound/step_rock_${i}.ogg`]),
-  'freesound/land_0.ogg',
-  'kenney/equip_1.ogg', 'kenney/equip_2.ogg',
-  ...[0, 1, 2, 3].flatMap((i) => [`pd/flyby_${i}.ogg`, `freesound/ricochet_${i}.ogg`]),
-  ...[0, 1, 2, 3, 4].map((i) => `pd/impact_metal_${i}.ogg`),
-  ...[0, 1, 2].map((i) => `kenney/impactMetal_light_00${i}.ogg`),
-];
-// The rest of assets/sound is ours: tools/sfx.mjs makes it.
 
 // The rock pieces a mass out of bounds is drawn with (look/rock.rs): Gates'
 // formation pieces remeshed low, geometry only (no texture to re-embed),
@@ -77,16 +56,6 @@ for (const r of ROCKS) {
   console.log(`models/rock/${r} <- models/prop/rock/${r}`);
 }
 
-mkdirSync(join(out, 'sound'), { recursive: true });
-for (const s of SOUNDS) {
-  const from = join(gates, 'assets/sound', s);
-  if (!existsSync(from)) {
-    console.warn(`missing sound ${s}`);
-    continue;
-  }
-  copyFileSync(from, join(out, 'sound', basename(s)));
-}
-
 const tex = join(gates, 'assets/textures');
 mkdirSync(join(out, 'textures'), { recursive: true });
 // The grass card atlas (Poly Haven grass_medium_01, baked by Gates).
@@ -96,4 +65,4 @@ for (const set of SETS) {
   // The boxes' roughness and occlusion (look/textures.rs packs them).
   if (BOX_SETS.includes(set)) for (const m of ['rough', 'ao']) copyFileSync(join(tex, `${set}_${m}.jpg`), join(out, `textures/${set}_${m}.jpg`));
 }
-console.log(`${Object.keys(MODELS).length} models, ${ROCKS.length} rock pieces, ${SOUNDS.length} sounds, ${SETS.length * 2 + 1} textures into ${out}`);
+console.log(`${Object.keys(MODELS).length} models, ${ROCKS.length} rock pieces, ${SETS.length * 2 + 1} textures into ${out}`);

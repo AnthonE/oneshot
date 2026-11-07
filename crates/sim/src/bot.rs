@@ -532,8 +532,9 @@ impl Bot {
         inp.pitch = fmath::round((cur_pitch + tp) * 65536.0).clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
 
         // Keep a fighting distance and strafe; with a sword, close in. An
-        // attacker in Capture the Flag fights on the move to the flag.
-        let a = arm(g.arm);
+        // attacker in Capture the Flag fights on the move to the flag. A
+        // gunner fights with its turret's gun.
+        let a = crate::vehicle::turret(me.gunning(&w.map)).map_or(arm(g.arm), |t| t.0);
         let push = if attacker(slot) { Self::objective(w, slot) } else { None };
         match push
             .map(|at| (Self::toward(w, me.body.pos, at) - me.body.pos).flat())

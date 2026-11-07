@@ -6,7 +6,8 @@
 //! multi-kill's kills each within four seconds of the last (Halo 2, 3 and
 //! Reach), a spree rung every five kills in a life, a Perfect in the gun's
 //! fewest shots (the battle rifle's 4, the magnum's 5). The announcer says
-//! the rare ones; the common ones (a headshot, an assist) are only drawn.
+//! the ladders and two feats, as Halo 2's said little past its ladders; every
+//! other medal (a headshot, a Revenge, a First Strike) is only drawn.
 //! Names are generic shooter words or ours, never another game's coinages:
 //! the multi-kill rungs past Overkill are our own.
 
@@ -27,8 +28,8 @@ pub enum Family {
 pub struct Info {
     pub name: &'static str,
     pub family: Family,
-    /// The announcer says it. Frequent, quiet medals (a headshot, an
-    /// assist) are drawn, never said.
+    /// The announcer says it. Style medals (a headshot, a Revenge) are
+    /// drawn, never said.
     pub voiced: bool,
     /// Sent to everyone, not just its earner: only what the kill feed
     /// already tells (who killed whom, with what, and when), so it gives
@@ -155,8 +156,8 @@ pub const PERFECTION_KILLS: u16 = 15;
 
 use Family::*;
 
-// Voiced or silent after the classic games' announcer: every rung, and the
-// rare kills; never the frequent ones.
+// Voiced or silent after Halo 2's announcer: every rung, and the two feats a
+// player may never see; no style kill.
 pub static MEDALS: [Info; COUNT] = [
     m("", Style, false, false),
     m("Double Kill", Multi, true, true),
@@ -178,28 +179,28 @@ pub static MEDALS: [Info; COUNT] = [
     m("Unstoppable", Spree, true, true),
     m("Headshot", Style, false, false),
     m("Sniper Kill", Style, false, false),
-    m("No Scope", Style, true, false),
+    m("No Scope", Style, false, false),
     m("Beat Down", Style, false, true),
-    m("Assassination", Style, true, true),
+    m("Assassination", Style, false, true),
     m("Splatter", Style, false, true),
     m("Stick", Style, false, false),
     m("Grenade Kill", Style, false, true),
-    m("Kill from the Grave", Style, true, true),
-    m("Killjoy", Style, true, true),
-    m("Revenge", Style, true, true),
-    m("Avenger", Style, true, true),
-    m("First Strike", Style, true, true),
-    m("Last Shot", Style, true, false),
-    m("Perfect", Style, true, false),
-    m("Reversal", Style, true, false),
+    m("Kill from the Grave", Style, false, true),
+    m("Killjoy", Style, false, true),
+    m("Revenge", Style, false, true),
+    m("Avenger", Style, false, true),
+    m("First Strike", Style, false, true),
+    m("Last Shot", Style, false, false),
+    m("Perfect", Style, false, false),
+    m("Reversal", Style, false, false),
     m("Protector", Style, false, false),
     m("Wheelman", Style, false, false),
     m("Assist", Assist, false, false),
     m("Extermination", Style, true, true),
-    m("Distraction", Style, true, false),
-    m("Hail Mary", Style, true, false),
+    m("Distraction", Style, false, false),
+    m("Hail Mary", Style, false, false),
     m("Nade Shot", Style, false, false),
-    m("Game Winner", Style, true, true),
+    m("Game Winner", Style, false, true),
     m("Perfection", Style, true, true),
     m("360 No Scope", Style, false, false),
 ];
@@ -207,6 +208,28 @@ pub static MEDALS: [Info; COUNT] = [
 /// Medal `id`'s entry; `NONE`'s for an id past the table.
 pub fn info(id: u8) -> &'static Info {
     MEDALS.get(id as usize).unwrap_or(&MEDALS[0])
+}
+
+/// A medal a report lists first: what the announcer says, and the style kills
+/// that most matches never see, said or not.
+pub fn rare(id: u8) -> bool {
+    info(id).voiced
+        || matches!(
+            id,
+            NO_SCOPE
+                | ASSASSINATION
+                | FROM_THE_GRAVE
+                | KILLJOY
+                | REVENGE
+                | AVENGER
+                | FIRST_STRIKE
+                | LAST_SHOT
+                | PERFECT
+                | REVERSAL
+                | DISTRACTION
+                | HAIL_MARY
+                | GAME_WINNER
+        )
 }
 
 /// The multi-kill rung for a chain of `n` kills (none under two).

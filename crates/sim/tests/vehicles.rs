@@ -436,3 +436,113 @@ fn bots_drive_on_dry_fork() {
     assert!(driven > TICK_HZ * 20, "bots drove for {} s", driven / TICK_HZ);
     assert!(kills >= 20, "and still fought: {kills} kills");
 }
+
+/// From beside its cab, USE on a minigun truck takes the wheel; from beside
+/// its bed, the gun; and with the gun taken, the wheel from anywhere.
+#[test]
+fn use_takes_the_seat_its_nearest_on_a_turret_truck() {
+    let mut w = world(false);
+    let i = turret_truck(&w);
+    let v = w.vehicles[i];
+    let (f, r) = v.axes();
+    w.fighters[0].body.pos = v.pos + f * 0.5 + r * -2.0;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((i, DRIVER)), "at the wheel from its cab");
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), None);
+    w.fighters[0].body.pos = v.pos + f * -2.0 + r * 2.0;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((i, PASSENGER)), "on the gun from its bed");
+    w.fighters[1].body.pos = v.pos + f * -2.0 + r * -2.0;
+    tap_use(&mut w, 1);
+    assert_eq!(w.fighters[1].riding(), Some((i, DRIVER)), "the wheel, the gun taken");
+}
+
+/// Dry Fork's minigun trucks: its second vehicle and its mirror.
+fn turret_truck(w: &World) -> usize {
+    (0..w.vehicles.len())
+        .find(|&i| w.vehicles[i].active && w.vehicles[i].turret == sim::vehicle::MINIGUN)
+        .expect("a minigun truck on Dry Fork")
+}
+
+/// A gunner holds the minigun's trigger at an enemy off its hood: the
+/// barrels spin up first, then it pours rounds (never its own gun's)
+/// from the turret's muzzle and kills; held on, it runs hot and vents.
+/// What its client predicts of the turret is the server's to the bit.
+#[test]
+fn a_gunner_spins_up_the_minigun_kills_and_it_runs_hot() {
+    let mut w = world(false);
+    let i = turret_truck(&w);
+    let v = w.vehicles[i];
+    // Seat 0 walks up to its bed and gets on the gun, though the wheel is
+    // free: USE takes the seat it is nearest.
+    w.fighters[0].body.pos = v.pos + v.axes().0 * -3.0;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((i, PASSENGER)), "on the gun from its bed");
+    assert_eq!(w.fighters[0].gunning(&w.map), sim::vehicle::MINIGUN);
+    assert_eq!(w.fighters[0].body.pos, w.vehicles[i].mount(PASSENGER));
+    // Blue 18 m off its hood.
+    let (f, _) = v.axes();
+    let at = v.pos + f * 18.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let map = w.map.clone();
+    let mut mine = w.fighters[0];
+    let mag = w.fighters[0].gun().mag;
+    let (mut first, mut killed, mut rounds) = (None, None, 0);
+    for t in 0..ticks(4000) {
+        let d = w.fighters[1].body.pos + V3::new(0.0, CHEST_Y, 0.0) - w.fighters[0].eye();
+        let inp = Input {
+            buttons: FIRE,
+            yaw: rad_to_yaw(fmath::atan2(d.z, d.x)),
+            pitch: fmath::round(fmath::atan2(d.y, d.flat().len()) * (65536.0 / core::f32::consts::TAU)) as i16,
+            ..Input::default()
+        };
+        press(&mut w, 0, inp);
+        mine.step_local(&inp, &map);
+        mine.body = w.fighters[0].body;
+        assert_eq!(mine.mount, w.fighters[0].mount, "tick {t}");
+        for e in w.events.as_slice() {
+            if e.kind == Ev::Shot && e.a == 0 {
+                assert_eq!(e.c, Cause::Minigun as u16);
+                let muzzle = w.vehicles[i].muzzle((e.end - e.pos).norm());
+                assert!((e.pos - muzzle).len() < 0.2, "from the muzzle");
+                first.get_or_insert(t);
+                rounds += 1;
+            }
+            if e.kind == Ev::Kill && e.b == 1 {
+                assert_eq!(e.c, Cause::Minigun as u16);
+                killed.get_or_insert(t);
+            }
+        }
+        if killed.is_some() {
+            break;
+        }
+    }
+    let spin = ticks(sim::arms::MINIGUN.spin_ms);
+    let first = first.expect("it fired");
+    assert!(first + 1 >= spin, "spun up first: {first} of {spin}");
+    let killed = killed.expect("it killed") - first;
+    assert!(killed < ticks(2500), "{killed} ticks, {rounds} rounds");
+    assert_eq!(w.fighters[0].gun().mag, mag, "its own gun never fired");
+    // Held on at nothing, it runs hot and vents: a pause in its rounds.
+    let mut quiet = 0;
+    for _ in 0..ticks(8000) {
+        press(
+            &mut w,
+            0,
+            Input {
+                buttons: FIRE,
+                ..Input::default()
+            },
+        );
+        quiet = if w.events.as_slice().iter().any(|e| e.kind == Ev::Shot && e.a == 0) {
+            0
+        } else {
+            quiet + 1
+        };
+        if quiet > ticks(1000) {
+            break;
+        }
+    }
+    assert!(w.fighters[0].mount.vent, "vented: {:?}", w.fighters[0].mount);
+}

@@ -42,6 +42,7 @@ pub mod plate;
 pub mod pointer;
 pub mod pose;
 pub mod scope;
+pub mod scores;
 pub mod settings;
 pub mod shot;
 pub mod sound;
@@ -509,6 +510,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::weathering::plugin)
     // A truck's wear (`look/truck.rs`).
     .add_plugins(look::truck::plugin)
+    .add_plugins(look::turret::plugin)
     .add_plugins(look::cloud_sea::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
@@ -517,6 +519,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
     .add_plugins(look::gun_skin::plugin)
+    .add_plugins(MaterialPlugin::<look::blade::BladeMaterial>::default())
+    .add_plugins(look::cels::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::sheets::SheetMaterial>::default())
     .add_plugins(MaterialPlugin::<look::fx::shell::ShockMaterial>::default())
@@ -563,13 +567,19 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             look::viewmodel::kit,
             look::counter::setup,
             look::icons::setup.after(look::guns::load),
+            look::thumbs::setup.after(look::guns::load),
             arms_setup
                 .after(setup)
                 .after(look::guns::load)
                 .after(look::viewmodel::kit),
             look::own_shadow::setup,
             look::portrait::setup,
-            (look::fx::setup, look::fx::plasma::setup),
+            (
+                look::fx::setup,
+                look::fx::plasma::setup,
+                look::blade::setup,
+                look::cels::setup,
+            ),
             look::prewarm::setup,
             (look::deck::setup, (look::stars::setup, look::moon::setup)).chain(),
             look::rain::setup,
@@ -640,8 +650,10 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             // What presses the grass is what is drawn (`look/foliage.rs`).
             (
                 draw_fighters,
+                look::cels::bodies,
                 draw_vehicles,
                 look::truck::drive,
+                look::turret::aim,
                 look::truck::husks,
                 look::foliage::update,
             )
@@ -649,7 +661,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             items::draw,
             fly,
             // After the camera: ours is held across our view as it is now.
-            (view, flags::draw, nodes::draw).chain(),
+            (look::cels::own, view, flags::draw, nodes::draw).chain(),
             // The gun in view before the effects: our own flash sits on
             // its muzzle as posed this frame (`fx/shots.rs`).
             (
@@ -674,6 +686,11 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     app.add_systems(Update, look::fx::vent::spawn_orbs);
     app.add_systems(Update, look::bodies::stand_up);
+    app.add_systems(Update, (look::blade::trail, look::cels::sweep, look::cels::warm));
+    app.add_systems(
+        PostUpdate,
+        look::blade::redrawn.after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
@@ -682,6 +699,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         Update,
         (
             look::own_shadow::stream.after(draw_fighters),
+            look::portrait::drag.before(look::portrait::stand),
             look::portrait::stand,
             look::portrait::activate,
             look::portrait::fit,
@@ -702,7 +720,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             .before(bevy::transform::TransformSystems::Propagate),
     )
     // Our own hands in view, onto the guns as `draw_view` posed them.
-    .add_systems(Update, look::icons::develop)
+    .add_systems(Update, (look::icons::develop, look::thumbs::develop))
     .add_systems(
         PostUpdate,
         look::hands::pose.before(bevy::transform::TransformSystems::Propagate),
@@ -732,13 +750,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (
                 hud::setup,
                 medals::setup,
+                scores::setup,
                 scope::setup.after(hud::setup),
                 visor::setup.after(hud::setup),
             ),
         )
         .add_systems(
             Update,
-            (hud::prompt, hud::reticle_tint, hud::board)
+            (hud::prompt, hud::feed, hud::reticle_tint, scores::board, scores::card)
                 .after(hud::draw)
                 .run_if(in_match),
         );
@@ -965,6 +984,9 @@ fn pump(
     link.0.update(input);
 }
 
+/// How far inside a lunge's range the autopilot pulls a sword, metres.
+const AUTO_SWORD_MARGIN_M: f32 = 1.0;
+
 /// One frame of the autopilot: buttons and the two axes, and where to look.
 fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetCore, now: f64) -> (u16, i32, i32) {
     auto.frames += 1;
@@ -1018,6 +1040,15 @@ fn autopilot(auto: &mut Autoplay, look: &mut Look, core: &client_net::core::NetC
     // outnumbering ticks would otherwise hold it down for good.
     let fire = if f.last_buttons & FIRE == 0 { FIRE } else { 0 };
     let strafe = if (auto.frames >> 6) & 1 == 1 { 60 } else { -60 };
+    // A sword closes to its lunge and pulls only there.
+    if sim::arms::arm(f.gun().arm).kind == sim::arms::Kind::Sword {
+        let lunge = sim::consts::LUNGE_RANGE - AUTO_SWORD_MARGIN_M;
+        return (
+            if dist < lunge { fire } else { 0 },
+            0,
+            if dist > lunge { 127 } else { 0 },
+        );
+    }
     (fire, strafe, if dist > 8.0 { 127 } else { 0 })
 }
 
@@ -1347,11 +1378,22 @@ fn draw_fighters(
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
         }
+        let seat = seats.get(d.slot as usize).copied().flatten();
+        // On a turret: the bed of a hull that carries one (the pose's truck
+        // carries what the pose says).
+        let gunning = seat.is_some_and(|(v, k)| {
+            let turret = match posed.as_ref() {
+                Some(p) => p.2.truck_turret,
+                None => core.map.vehicles.get(v.slot as usize).map_or(0, |d| d.turret),
+            };
+            k == sim::vehicle::PASSENGER && turret != sim::vehicle::NO_TURRET
+        });
         look::bodies::pose(
             &mut commands,
             &models,
             d,
-            seats.get(d.slot as usize).copied().flatten().map(|(v, k)| (v.yaw, k)),
+            seat.map(|(v, k)| (v.yaw, k)),
+            gunning,
             e,
             &mut bodies,
             &mut at,
@@ -1395,7 +1437,7 @@ fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    models: Res<look::guns::Models>,
+    (models, turrets): (Res<look::guns::Models>, Res<look::turret::Kit>),
     posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
     mut hulls: Query<&mut look::truck::Hull>,
@@ -1416,7 +1458,7 @@ fn draw_vehicles(
     if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
         list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
     }
-    if let Some((p, yaw)) = posed.and_then(|p| p.2.truck_at(time.elapsed_secs())) {
+    if let Some((p, yaw)) = posed.as_ref().and_then(|p| p.2.truck_at(time.elapsed_secs())) {
         list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
     }
     for &(slot, p, yaw) in list.iter() {
@@ -1456,7 +1498,12 @@ fn draw_vehicles(
             None => {
                 let hull = look::truck::Hull { slot, health, driven };
                 let e = commands.spawn((t, Visibility::default(), Kept, hull)).id();
-                look::truck::spawn(&mut commands, &models, e);
+                let body = look::truck::spawn(&mut commands, &models, e);
+                let kind = match posed.as_ref().map(|p| p.2.truck_turret) {
+                    Some(k) => k,
+                    None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
+                };
+                look::turret::spawn(&mut commands, &turrets, &models, body, slot, kind);
                 drawn.vehicles.insert(slot, e);
             }
         }
@@ -1500,7 +1547,7 @@ pub(crate) fn view(
     settings: Res<settings::Settings>,
     mut cam: Query<(&mut Transform, &mut Projection), With<Eye>>,
     mut demo_at: Local<Option<(u8, Transform)>>,
-    (rag, mut death): (Res<look::rag::OwnRag>, Local<DeathCam>),
+    (rag, mut death, lunge): (Res<look::rag::OwnRag>, Local<DeathCam>, Res<look::cels::Own>),
 ) {
     let Ok((mut t, mut proj)) = cam.single_mut() else {
         return;
@@ -1546,9 +1593,10 @@ pub(crate) fn view(
     } else {
         // The sim's eye: a crouch already goes down over a moment there
         // (`sim::movement::Body::duck`), and a tuck in the air keeps it.
-        let eye = at + Vec3::Y * f.body.eye_h();
+        // A lunge is drawn in steps (`look/cels.rs`), the aim as it is.
+        let eye = lunge.held.unwrap_or(at) + Vec3::Y * f.body.eye_h();
         *t = Transform::from_translation(eye).looking_at(eye + dir(look.yaw, look.pitch), Vec3::Y);
-        fov /= look.drawn_mag();
+        fov = lunge.widen(fov / look.drawn_mag());
     }
     // The effects demo stands its camera in one place (drawing only).
     // Worked out once a map, not every frame.
@@ -1575,6 +1623,7 @@ pub(crate) fn view(
 fn draw_view(
     link: NonSend<LinkRes>,
     look: Res<Look>,
+    (lunge, seen): (Res<look::cels::Own>, Res<Seen>),
     st: Res<hud::HudState>,
     time: Res<Time>,
     models: Res<look::guns::Models>,
@@ -1598,9 +1647,17 @@ fn draw_view(
         at: Vec3::new(p.x, p.y, p.z),
         yaw: look.yaw,
         pitch: look.pitch,
-        riding: seat.is_some(),
+        riding: seat.is_some() || lunge.on,
+        lunging: lunge.on,
+        lunge_ahead: seen.lunge_ahead,
         // Carrying the flag, both hands are on it (`flags.rs` draws it).
-        shown: f.alive && seat != Some(sim::vehicle::DRIVER) && !scoped && !f.flag && !film.is_some_and(|f| f.third()),
+        // Gunning a turret, the hands are on its grips (`look/turret.rs`).
+        shown: f.alive
+            && seat != Some(sim::vehicle::DRIVER)
+            && f.gunning(&link.0.session().core.map) == sim::vehicle::NO_TURRET
+            && !scoped
+            && !f.flag
+            && !film.is_some_and(|f| f.third()),
     };
     look::viewmodel::update(
         &mut commands,
@@ -1641,6 +1698,8 @@ pub struct Seen {
     /// Our aim is on an enemy in reach (`hud::on_target`): the red reticle,
     /// the scope's ring.
     pub on_target: bool,
+    /// A sword's press now would lunge (`hud::lunge_ahead`).
+    pub lunge_ahead: bool,
 }
 
 fn see(link: NonSend<LinkRes>, now: Res<Now>, mut seen: ResMut<Seen>) {
@@ -1650,6 +1709,7 @@ fn see(link: NonSend<LinkRes>, now: Res<Now>, mut seen: ResMut<Seen>) {
     s.core.vehicles_into(now.0, &mut seen.vehicles);
     s.core.projectiles_into(now.0, &mut seen.projectiles);
     seen.on_target = s.ready && hud::on_target(&s.core, &seen.others);
+    seen.lunge_ahead = s.ready && hud::lunge_ahead(&s.core, &seen.others);
 }
 
 #[allow(clippy::too_many_arguments)]

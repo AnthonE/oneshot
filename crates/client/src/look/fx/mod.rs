@@ -156,6 +156,10 @@ pub struct Flash {
 
 #[derive(Resource)]
 pub struct Fx {
+    /// Who the sword just killed, for their last pose (`cels.rs`).
+    pub sword_kills: Vec<u8>,
+    /// Whose sword just swung, for their body's cut (`cels.rs`).
+    pub sword_cuts: Vec<u8>,
     pub glow: Pool,
     pub soft: Pool,
     pub cloud: Pool,
@@ -544,6 +548,8 @@ pub fn setup(
         own_rounds: Default::default(),
         own_vent: Default::default(),
         own_flash: [None; 2],
+        sword_kills: Vec::new(),
+        sword_cuts: Vec::new(),
         last_light: Vec::new(),
         fly: Default::default(),
         swing: (0, None),
@@ -596,7 +602,13 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
             k if k == Kind::Wreck as u8 => blast::wreck(fx, scene, from),
             k if k == Kind::Spawn as u8 => bodies::spawned(fx, from),
             k if k == Kind::Pickup as u8 => bodies::picked_up(fx, from),
-            k if k == Kind::Melee as u8 => bodies::swung(fx, scene, e, from),
+            k if k == Kind::Melee as u8 => {
+                if e.c == sim::arms::SWORD as u16 {
+                    fx.sword_cuts.push(e.a);
+                }
+                bodies::swung(fx, scene, e, from)
+            }
+            k if k == Kind::Kill as u8 && e.c == sim::arms::SWORD as u16 => fx.sword_kills.push(e.b),
             k if k == Kind::Hit as u8 => {
                 // A hit on us: the frame flinches, by how much it took.
                 if e.b == scene.me && e.a != scene.me {

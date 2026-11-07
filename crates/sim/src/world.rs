@@ -3,7 +3,7 @@
 //! [`World::step`] is the server's tick. The browser never runs it for
 //! anyone but itself (docs/DESIGN.md §4–5).
 
-use crate::arms::{arm, Head, Kind, NONE};
+use crate::arms::{arm, Arm, Head, Kind, NONE};
 use crate::consts::*;
 use crate::events::{Cause, Event, Events, Kind as Ev};
 use crate::fighter::{Fighter, Gun, Local};
@@ -436,7 +436,7 @@ impl World {
     pub fn new(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> World {
         let mut vehicles = Pool::default();
         for (i, v) in map.vehicles.iter().enumerate().take(MAX_VEHICLES) {
-            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8);
+            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8, v.turret);
         }
         let mut flags = [Flag::default(); 2];
         if let Some(bases) = map.flags {
@@ -559,8 +559,11 @@ impl World {
         self.falls();
         self.splatter();
         for (s, l) in locals.iter().enumerate() {
-            if l.fired || l.fired_left || l.melee || l.throw {
+            if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
                 self.unveil(s);
+            }
+            if l.mounted {
+                self.fire_turret(s, rewind_q8[s]);
             }
             if l.fired {
                 self.fire(s, rewind_q8[s], l.charged, false);
@@ -648,7 +651,7 @@ impl World {
             Kind::Hitscan => {
                 for k in 0..a.pellets {
                     let dir = spread(base, cone, self.salt, s, f.shots, pk + k);
-                    self.hitscan(s, eye, dir, id, depth);
+                    self.hitscan(s, eye, dir, a, id as u16, depth, eye);
                 }
             }
             Kind::Sword => self.swing(s, depth, true),
@@ -700,6 +703,21 @@ impl World {
         }
     }
 
+    /// `s` fires the turret it guns: from its eye along its aim (its cone
+    /// the turret gun's), the round drawn from the turret's muzzle.
+    fn fire_turret(&mut self, s: usize, depth: u32) {
+        let f = self.fighters[s];
+        let Some((i, _)) = f.riding() else { return };
+        let v = self.vehicles[i];
+        let Some((a, cause)) = crate::vehicle::turret(v.turret) else {
+            return;
+        };
+        let eye = f.eye();
+        let base = aim_dir(f.yaw, f.pitch);
+        let dir = spread(base, a.cone(f.mount.heat), self.salt, s, f.shots, 0);
+        self.hitscan(s, eye, dir, a, cause, depth, v.muzzle(base));
+    }
+
     /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
     /// hurt, where the server says the shooter saw them, and how far. With
     /// `lock` (homing, a lunge) a teammate is never the one, friendly fire
@@ -708,8 +726,13 @@ impl World {
     fn trace(&self, s: usize, eye: V3, dir: V3, reach: f32, depth: u32, pad: f32, lock: bool) -> Option<(Target, f32)> {
         let mut best: Option<(Target, f32)> = None;
         let mut near = reach;
+        // Whoever rides with `s` is never in its way.
+        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (q, v) in self.fighters.iter().enumerate() {
             if q == s || !v.active() || (if lock { self.mate(s, q) } else { self.spared(s, q) }) {
+                continue;
+            }
+            if ride.is_some() && v.riding().map(|(i, _)| i) == ride {
                 continue;
             }
             let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
@@ -732,7 +755,6 @@ impl World {
             }
         }
         // Hulls, rewound like bodies. A rider hit before its hull is hit.
-        let ride = self.fighters[s].riding().map(|(i, _)| i);
         for (i, v) in self.vehicles.iter().enumerate() {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
@@ -777,8 +799,8 @@ impl World {
     /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
     /// and its `aim_range`, nearer than `limit` and in clear line: the way
     /// to that chest. Only + − × ÷ and sqrt; never the head.
-    fn magnet(&self, s: usize, eye: V3, dir: V3, id: u8, depth: u32, limit: f32) -> Option<V3> {
-        let a = arm(id);
+    #[allow(clippy::too_many_arguments)]
+    fn magnet(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32, limit: f32) -> Option<V3> {
         let me = &self.fighters[s];
         let reach = a.aim_range.min(limit);
         let mut best: Option<(f32, V3)> = None;
@@ -807,13 +829,15 @@ impl World {
         best.map(|(_, c)| (c - eye).norm())
     }
 
-    fn hitscan(&mut self, s: usize, eye: V3, dir: V3, id: u8, depth: u32) {
-        let a = arm(id);
+    /// A round of gun `a` from `eye` along `dir`, its shot and its hurt
+    /// carrying `id` (an arm id, or a turret's cause), drawn from `from`.
+    #[allow(clippy::too_many_arguments)]
+    fn hitscan(&mut self, s: usize, eye: V3, dir: V3, a: &Arm, id: u16, depth: u32, from: V3) {
         let mut wall = self.map.ray(eye, dir, a.range);
         let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
         if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
-            if let Some(bent) = self.magnet(s, eye, dir, id, depth, hit.map_or(wall, |h| h.1)) {
+            if let Some(bent) = self.magnet(s, eye, dir, a, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
                 hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
@@ -823,8 +847,8 @@ impl World {
         self.events.push(Event {
             kind: Ev::Shot,
             a: s as u8,
-            c: id as u16,
-            pos: eye,
+            c: id,
+            pos: from,
             end: eye + dir * t,
             ..Event::default()
         });
@@ -837,8 +861,8 @@ impl World {
             };
             let pts = (a.dmg * PT) as f32 * k;
             match target {
-                Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id as u16),
-                Target::Vehicle(i) => self.damage_vehicle(s, i, pts as i32, id as u16),
+                Target::Fighter(q, head) => self.damage(s, q, pts as i32, head, a.head, id),
+                Target::Vehicle(i) => self.damage_vehicle(s, i, (pts * a.hull_k) as i32, id),
             }
         }
     }
@@ -1813,7 +1837,7 @@ impl World {
         v.respawn -= 1;
         if v.respawn == 0 {
             if let Some(d) = self.map.vehicles.get(v.home as usize) {
-                *v = Vehicle::new(d.pos, d.yaw, v.home);
+                *v = Vehicle::new(d.pos, d.yaw, v.home, d.turret);
             }
         }
     }
@@ -1856,27 +1880,18 @@ impl World {
         // A flag carrier rides, never drives (Halo 3's): only a free
         // passenger seat will do.
         let carrier = self.fighters[s].flag;
-        let mut best: Option<usize> = None;
+        let mut best: Option<(usize, usize)> = None;
         let mut near = ENTER_R;
         for (i, v) in self.vehicles.iter().enumerate() {
             let d = (v.pos - at).flat().len();
-            let room = if carrier {
-                v.seats[crate::vehicle::PASSENGER] == 0
-            } else {
-                v.seats.contains(&0)
-            };
-            if v.active && room && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0 {
+            let seat = crate::vehicle::boards(v.turret, v.seats, (at - v.pos).dot(v.axes().0), carrier);
+            if let (true, Some(seat)) = (v.active && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0, seat) {
                 near = d;
-                best = Some(i);
+                best = Some((i, seat));
             }
         }
-        let Some(i) = best else {
+        let Some((i, seat)) = best else {
             return false;
-        };
-        let seat = if self.vehicles[i].seats[DRIVER] == 0 && !carrier {
-            DRIVER
-        } else {
-            crate::vehicle::PASSENGER
         };
         self.vehicles[i].seats[seat] = s as u8 + 1;
         let f = &mut self.fighters[s];

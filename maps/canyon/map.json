@@ -192,7 +192,7 @@
   ],
   "vehicles": [
     { "at": [-88, -32], "yaw": 0, "respawn": 30, "mirror": true },
-    { "at": [-88, 32], "yaw": 0, "respawn": 30, "mirror": true }
+    { "at": [-88, 32], "yaw": 0, "respawn": 30, "turret": "minigun", "mirror": true }
   ],
   "launchers": [
     { "at": [-90, 0], "to": [-20, 0], "time": 2.5, "size": [2, 2], "mirror": true }

@@ -646,6 +646,22 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
     (slope, splat_in(slope, y, trough, cover))
 }
 
+/// What the ground of the map in play is drawn as at (x, z), for what a step
+/// on it sounds like: [`ground_point`]'s rule from the sim's heights.
+pub(crate) fn splat_at(map: &sim::map::Map, x: f32, z: f32) -> [f32; 4] {
+    let y = map.ground(x, z);
+    let n = map.ground_normal(x, z);
+    let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+    if map.void > f32::NEG_INFINITY {
+        return splat_in(slope, y, 0.0, 0.0);
+    }
+    let s = CREEK_STENCIL_M;
+    let along_x = map.ground(x + s, z).min(map.ground(x - s, z)) - y;
+    let along_z = map.ground(x, z + s).min(map.ground(x, z - s)) - y;
+    let trough = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
+    splat_in(slope, y, trough, crate::look::grass::cover(x, z, y))
+}
+
 /// The splat weights (sand, grass, gravel, rock) of ground at height `y`
 /// with slope `slope`, anywhere, which the ground clutter scatters by
 /// (`look/clutter.rs`): [`ground_point`]'s rule, taking every low spot for

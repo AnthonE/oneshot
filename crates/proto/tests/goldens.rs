@@ -204,7 +204,15 @@ fn snapshot() -> Snapshot {
         seats: [0, 1],
         respawn: 0,
         home: 2,
+        turret: sim::vehicle::MINIGUN,
     });
+    // Gunning its minigun.
+    s.own.mount = sim::fighter::Mount {
+        spin: 45,
+        heat: 3000,
+        refire: 4,
+        vent: false,
+    };
     s.n_vehicles = 1;
     s.vehicles[0] = VehState {
         slot: 5,
@@ -398,6 +406,14 @@ fn msgs() -> Vec<Msg> {
             from: Name::new("arbiter"),
             code: 0x2aaa_aaaa,
         },
+        Msg::Wardrobe(Wardrobe {
+            wallet: true,
+            known: true,
+            skins: 0b10_0101,
+            headwear: 0b11,
+            footwear: 1,
+            floor: Some(1612),
+        }),
     ]
 }
 
@@ -519,7 +535,7 @@ fn stream_messages_round_trip() {
     for m in msgs() {
         let mut buf = [0u8; MAX_STREAM_MSG];
         let n = encode_msg(&m, &mut buf).unwrap();
-        assert_eq!(decode_msg(&buf[..n]).unwrap(), m);
+        assert_eq!(decode_msg(&buf[..n]).unwrap_or_else(|e| panic!("{m:?}: {e:?}")), m);
     }
 }
 
@@ -605,13 +621,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x945f_3074_619f_0fc7,
-        0xcfa9_2145_80ab_470b,
-        0x48df_89db_e731_9992,
-        0xc9e7_7867_65d8_6bf6,
+        0xe1c5_faa0_18c6_3669,
+        0xa530_6e1a_b32d_94ec,
+        0x21ad_3fcb_bb71_cf7c,
         0x7ebe_34b8_2c10_f2d0,
         0xec88_5efc_d9ac_e183,
         0x0f4a_a0e7_f967_a718,
-        0x96f2_91d2_4185_ba95,
+        0x14df_bf54_0616_7613,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -633,6 +649,7 @@ fn the_bytes_match_their_goldens() {
         0x6c87_7218_bf71_5473,
         0x88d8_ddf9_f436_7356,
         0x8461_28ae_94ef_0f4c,
+        0x451f_c0f0_80a6_2b96,
         0xb9d4_d8b1_7ed4_ec09,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
