@@ -384,7 +384,7 @@ const SCENES = [
     const cuts = RAMP;
     let k = 0; while (k < cuts.length - 1 && L.t >= cuts[k + 1][0]) k++;
     const [t0, name, fb, from] = cuts[k], lt = L.t - t0, d = (cuts[k + 1] ? cuts[k + 1][0] : L.d) - t0;
-    foot(bg, name, lt, d, { fallback: fb, from: from || 0, grade: 'contrast(1.08) saturate(1.05)', still: { z0: 1.08 + k * .03, z1: 1.14 + k * .03, x0: (k % 2 ? .3 : -.3) } });
+    foot(bg, name, lt, d, { fallback: fb, from: from || 0, grade: (name === 'kill-5' || name === 'kill-2' ? 'brightness(1.2) ' : '') + 'contrast(1.08) saturate(1.05)', still: { z0: 1.08 + k * .03, z1: 1.14 + k * .03, x0: (k % 2 ? .3 : -.3) } });
     // a white tick on each cut
     const kick = Math.exp(-lt * 14);
     if (kick > .04) { fg.save(); fg.globalAlpha = kick * .35; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
@@ -423,7 +423,7 @@ const SCENES = [
     modeCard(L, 'FREE FOR ALL', 'Eight in, one out. Bots fill the empty seats.');
   } },
   { id: 'm4-gungame', at: grid(13), box: true, draw(L) {
-    foot(bg, 'gungame', L.t, L.d, { fallback: 'cistern', still: { z0: 1.1, z1: 1.02, y0: .2, y1: -.2 } });
+    foot(bg, 'gungame', L.t, L.d, { fallback: 'cistern', grade: 'brightness(1.22) contrast(1.04)', still: { z0: 1.1, z1: 1.02, y0: .2, y1: -.2 } });
     modeCard(L, 'GUN GAME', 'A kill a rung up a ladder of seven guns.');
   } },
   { id: 'm5-ctf', at: hit(79.69), box: true, draw(L) {
