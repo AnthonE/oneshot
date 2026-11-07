@@ -276,7 +276,7 @@ fn snapshot() -> Snapshot {
         near: Some(NearHull {
             grounded: true,
             stick: Some((-127, 64)),
-            share: 15,
+            share: 255,
         }),
     };
     s.vehicles[2] = VehState {
@@ -727,13 +727,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0x843d_1a99_5659_d154,
-        0x286d_234c_d061_81e8,
-        0xa692_0770_c16d_b8f0,
+        0x7cff_3afa_f9af_f8b0,
+        0xb221_edfb_d56d_f6a9,
+        0xa09d_fdc3_f005_1947,
         0x7ebe_34b8_2c10_f2d0,
         0xec88_5efc_d9ac_e183,
         0x0f4a_a0e7_f967_a718,
-        0x8dc0_4898_e28b_49b7,
+        0x189e_bfe1_dd40_4d5c,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -757,7 +757,7 @@ fn the_bytes_match_their_goldens() {
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
-        0xd244_70cc_c921_c3fd,
+        0x413c_2cd0_6e51_b95c,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }

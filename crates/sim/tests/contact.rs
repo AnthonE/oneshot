@@ -92,6 +92,6 @@ fn the_contact_step_alone_matches_the_world() {
     }
     // The gate only means something if bots drove and walked a lot.
     assert!(bodies > 500_000, "{bodies} bodies");
-    assert!(hulls > 140_000 && driven > 5_000, "{hulls} hulls, {driven} driven");
-    assert!(met > 5_000, "{met} hull-ticks fast enough to run someone down");
+    assert!(hulls > 140_000 && driven > 6_000, "{hulls} hulls, {driven} driven");
+    assert!(met > 6_000, "{met} hull-ticks fast enough to run someone down");
 }

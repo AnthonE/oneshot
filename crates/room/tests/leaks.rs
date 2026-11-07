@@ -304,8 +304,7 @@ impl Gate {
                         let i = v.slot as usize;
                         let t = &w.vehicles[i];
                         // 17. A hull in our bubble only while we live,
-                        // never our own, and only with nobody at its wheel
-                        // or someone we know (its stick is theirs).
+                        // never our own.
                         // 18. Its stick the one it is driven by.
                         // 19. Exact, as the server has it.
                         // 20. Its share of our rewind moves a step a
@@ -315,12 +314,11 @@ impl Gate {
                         if let Some(n) = v.near {
                             self.near_seen += 1;
                             assert!(me.active() && mine != Some(i), "tick {}: a bubble hull {v:?}", w.tick);
-                            assert!(
-                                t.driver().is_none_or(&known),
-                                "tick {}: an unknown driver's stick: {v:?}",
-                                w.tick
-                            );
-                            assert_eq!(n.stick, w.drive_stick(i), "tick {}: hull {i}'s stick", w.tick);
+                            // A driver we may not know is as nobody at the
+                            // wheel: no stick, and in or out as an empty seat
+                            // would be (room/tests/bubble.rs).
+                            let stick = w.drive_stick(i).filter(|_| t.driver().is_none_or(&known));
+                            assert_eq!(n.stick, stick, "tick {}: hull {i}'s stick", w.tick);
                             assert_eq!(
                                 (v.pos, v.vel, n.grounded),
                                 (t.pos, t.vel, t.grounded),
@@ -330,7 +328,7 @@ impl Gate {
                             // The most a share moves in a snapshot: the
                             // shortest blend's step at this rate, rounded up.
                             let blend = (room::bubble::BLEND_MIN_MS as u32 * TICK_HZ / 1000 / self.every).max(1);
-                            let step = SHARE_FULL.div_ceil(blend as u8) + 1;
+                            let step = SHARE_FULL.div_ceil(blend as u8);
                             match self.near_last[i] {
                                 Some(was) => assert!(
                                     n.share.abs_diff(was) <= step,
@@ -346,6 +344,12 @@ impl Gate {
                                 None => {}
                             }
                             self.share_seen += (n.share < SHARE_FULL) as usize;
+                        } else if let (Some(was), true) = (
+                            self.near_last[i],
+                            me.active() && mine.is_none() && self.mine_last.is_none(),
+                        ) {
+                            // Going out while still sent: whole when it went.
+                            assert_eq!(was, SHARE_FULL, "tick {}: hull {i} left off the render tick", w.tick);
                         }
                         for &x in &v.seats {
                             assert!(

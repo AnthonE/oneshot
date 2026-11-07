@@ -98,10 +98,11 @@ struct Measured {
     driver: Err,
     passenger: Err,
     /// The one on foot: the truck as drawn against the server's at the
-    /// tick it is drawn on (the render tick, or nearer its present while
-    /// the truck is in its bubble), and at the tick it draws itself on (how
-    /// far behind the present the truck is).
+    /// tick it is drawn on, plainly (the render tick) and while the truck
+    /// is in its bubble (nearer its present); and at the tick it draws
+    /// itself on (how far behind the present the truck is).
     watcher: Err,
+    watcher_member: Err,
     watcher_now: Err,
     /// The passenger's stats from boarding on.
     hull_corrections: u32,
@@ -199,7 +200,7 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
     // (drawn tick, drawn middle) for the driver, the passenger and the
     // watcher, and the render tick the watcher drew it at.
     let mut seen: [Vec<(f64, V3)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-    let mut seen_rt: Vec<(f64, V3)> = Vec::new();
+    let mut seen_rt: [Vec<(f64, V3)>; 2] = [Vec::new(), Vec::new()];
     let mut co: [Vec<(f64, V3)>; 2] = [Vec::new(), Vec::new()];
     let mut own_seat: Vec<(f64, V3)> = Vec::new();
     let slots: Vec<u8> = cs.iter().map(|c| c.slot).collect();
@@ -302,7 +303,8 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
                 seen[2].push((drawn_tick(core), d.pos));
                 // The tick it is drawn on: the render tick, or in the
                 // watcher's bubble its share of the way to its present.
-                seen_rt.push((core.vehicle_tick(0, now), d.pos));
+                let t = core.vehicle_tick(0, now);
+                seen_rt[(t != core.render_tick(now)) as usize].push((t, d.pos));
             }
         }
         now += 0.5;
@@ -316,7 +318,8 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
     Measured {
         driver: off(&seen[0]),
         passenger: off(&seen[1]),
-        watcher: off(&seen_rt),
+        watcher: off(&seen_rt[0]),
+        watcher_member: off(&seen_rt[1]),
         watcher_now: off(&seen[2]),
         hull_corrections: p.hull_corrections - at_from.0,
         corrections: p.corrections - at_from.1,
@@ -354,11 +357,17 @@ fn a_passenger_draws_its_hull_where_the_server_has_it() {
         for (who, e) in [
             ("driver", m.driver),
             ("passenger", m.passenger),
-            ("watcher", m.watcher),
             ("watcher now", m.watcher_now),
         ] {
             assert!(e.n > 500, "{case}, {who}: only {} frames drawn", e.n);
         }
+        // Some of it plainly, some with the truck in its bubble.
+        assert!(
+            m.watcher.n > 300 && m.watcher_member.n > 100,
+            "{case}: {:?}, {:?}",
+            m.watcher,
+            m.watcher_member
+        );
         // At the wheel the hull is the server's, exactly, but for loss.
         assert!(m.driver.max < 0.15, "{case}: driver {:?}", m.driver);
         // Behind it, off only while the driver's stick moves unseen.
@@ -370,10 +379,11 @@ fn a_passenger_draws_its_hull_where_the_server_has_it() {
         // On foot, what is drawn is what was at the tick it is drawn on:
         // between snapshots outside its bubble, predicted on the stick as
         // the passenger predicts it while the truck is in it.
+        assert!(m.watcher.max < 0.15, "{case}: watcher {:?}", m.watcher);
         assert!(
-            m.watcher.max < 0.15 + m.passenger.max,
-            "{case}: watcher {:?}",
-            m.watcher
+            m.watcher_member.max < 0.15 + m.passenger.max,
+            "{case}: watcher, in its bubble {:?}",
+            m.watcher_member
         );
         // The stick was guessed wrong at times; our own fighter never.
         assert!(m.hull_corrections > 10, "{case}: {m:?}");

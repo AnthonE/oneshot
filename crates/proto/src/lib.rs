@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 34;
+pub const PROTO_VER: u16 = 35;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -137,17 +137,13 @@ fn r_exact(r: &mut BitReader) -> R<(V3, V3)> {
     Ok((V3::new(c[0], c[1], c[2]), V3::new(c[3], c[4], c[5])))
 }
 
-/// A share of a shooter's rewind (`sim::world::Seen`), 0..=15.
+/// A share of a shooter's rewind (`sim::world::Seen`), of `SHARE_FULL`.
 fn w_share(w: &mut BitWriter, share: u8) -> R<()> {
-    w.write(share.min(sim::consts::SHARE_FULL) as u32, 4)
+    w.write(share as u32, 8)
 }
 
 fn r_share(r: &mut BitReader) -> R<u8> {
-    let s = r.read(4)? as u8;
-    if s > sim::consts::SHARE_FULL {
-        return Err(WireError::Malformed);
-    }
-    Ok(s)
+    Ok(r.read(8)? as u8)
 }
 
 fn w_coarse(w: &mut BitWriter, v: f32) -> R<()> {
