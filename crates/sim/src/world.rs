@@ -427,11 +427,6 @@ impl World {
         self.respawn(slot);
     }
 
-    pub fn unseat(&mut self, slot: usize) {
-        self.vacate(slot);
-        self.fighters[slot] = Fighter::default();
-    }
-
     /// Seat `slot`'s fighter leaves the match: out of its vehicle, the
     /// flag let go where it stands, and nothing still names the seat (a
     /// round homing on it, a sticky stuck to it, a lunge at it, the credit

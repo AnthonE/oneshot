@@ -482,6 +482,25 @@ impl Elo {
         (saved, lost, self.unreported.clone())
     }
 
+    /// Takes back the file [`Elo::save_pending`] wrote for a POST that has
+    /// since got through.
+    fn forget_saved(&self, path: &str, body: &str) {
+        let Some(dir) = self.unreported.as_deref() else {
+            return;
+        };
+        let u = Unsent {
+            path: path.to_string(),
+            body: body.to_string(),
+        };
+        let at = dir.join(u.file_name());
+        if std::fs::remove_file(&at).is_ok() {
+            eprintln!(
+                "oneshot: {path} got through after the drain saved it: {} removed",
+                at.display()
+            );
+        }
+    }
+
     /// `wallet`'s best floor on Elo Pros ([`best_floor`]): None if it was
     /// never rated or Elo Pros can't be asked, which wears the standard look.
     /// Answers are kept [`BAN_CACHE`].
@@ -754,7 +773,12 @@ impl Elo {
         for attempt in 0..TRIES {
             match self.post_once(key, path, &body).await {
                 Posted::Taken(text) => {
-                    self.pending().remove(&held);
+                    // A drain that stopped waiting saved it meanwhile: it
+                    // got through after all, so `resend` mustn't post it
+                    // twice.
+                    if self.pending().remove(&held).is_none() {
+                        self.forget_saved(path, &body);
+                    }
                     return Ok(text);
                 }
                 Posted::Refused(e) => {

@@ -1194,16 +1194,27 @@ fn add_projectiles(
     known: &impl Fn(usize) -> bool,
     vehicle_visible: &impl Fn(usize) -> bool,
 ) {
-    for (_, p) in w.proj.live() {
-        if snap.n_proj as usize >= MAX_SNAP_PROJ {
-            break;
-        }
+    // Everything this client may see, then the most relevant to it first
+    // when there are more than a snapshot holds (as Halo: Reach ranked by
+    // relevance a client at a time): on the stack, ties by slot.
+    let mut seen = [(0.0f32, 0usize); sim::consts::MAX_PROJ];
+    let mut n = 0;
+    for (i, p) in w.proj.live() {
         if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
             continue;
         }
         if !stuck_shown(w, s, p, known, vehicle_visible) {
             continue;
         }
+        seen[n] = (proj_rank(p, s, eye), i);
+        n += 1;
+    }
+    let seen = &mut seen[..n];
+    if n > MAX_SNAP_PROJ {
+        seen.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    }
+    for &(_, i) in seen.iter().take(MAX_SNAP_PROJ) {
+        let p = &w.proj[i];
         snap.proj[snap.n_proj as usize] = ProjState {
             kind: p.kind as u8,
             owner: p.owner,
@@ -1211,6 +1222,28 @@ fn add_projectiles(
             vel: p.vel,
         };
         snap.n_proj += 1;
+    }
+}
+
+/// How far a round closing on the eye counts, against its distance: one
+/// coming at you is worth seeing before one as near going away.
+pub const PROJ_CLOSING: f32 = 0.5;
+
+/// A round's place in client `s`'s queue, lowest first: its own rounds and
+/// any about it (homing on it, stuck to it) before anything, then the rest
+/// by distance from its eye, a round closing on it as [`PROJ_CLOSING`] as
+/// far.
+fn proj_rank(p: &sim::world::Projectile, s: usize, eye: V3) -> f32 {
+    if p.owner as usize == s || p.target as usize == s {
+        return -1.0;
+    }
+    let to_eye = eye - p.pos;
+    let far = to_eye.len();
+    // A landed round's `vel` is where it sits on what it struck.
+    if !p.landed && p.vel.dot(to_eye) > 0.0 {
+        far * PROJ_CLOSING
+    } else {
+        far
     }
 }
 

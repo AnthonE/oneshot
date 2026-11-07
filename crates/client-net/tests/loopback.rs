@@ -5,7 +5,7 @@
 use client_net::core::NetCore;
 use proto::{decode_input, decode_snapshot, encode_input, encode_snapshot, Msg, Name, MAX_DATAGRAM};
 use room::{Room, Seat};
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::TICK_HZ;
 use sim::input::{Input, FIRE};
 use sim::map::Map;
 use sim::rng::Pcg32;
@@ -121,15 +121,9 @@ fn start_with(map: Map, rules: Rules, delay_ms: f64, jitter_ms: f64, loss: f64, 
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
     };
-    if harmless {
-        // No bot: nothing but our own inputs may move our fighter.
-        for s in 0..MAX_FIGHTERS {
-            if matches!(room.seats[s], Seat::Bot(_)) {
-                room.seats[s] = Seat::Empty;
-                room.world.unseat(s);
-            }
-        }
-    }
+    // Bots that stand still and never fire: nothing but our own inputs
+    // may move our fighter.
+    room.passive_bots = harmless;
     let client = NetCore::new(slot, team, tick, rules, map);
     Run {
         room,
