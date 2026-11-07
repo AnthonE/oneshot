@@ -1,5 +1,5 @@
-//! What lies about the map for the taking: each pad's gun (or power-up: a
-//! glowing orb, green the overshield, pale the camouflage), turning over its
+//! What lies about the map for the taking: each pad's gun (or power-up: an
+//! orb in its rings, `look/powerup.rs`), turning over its
 //! disc and gone while the pad waits (the snapshot's `empty_s`), the disc
 //! lit while it holds one; the guns and grenades on the floor that the
 //! snapshot names; and the line that says what USE would take here. All
@@ -24,16 +24,14 @@ const BOB_HZ: f32 = 0.45;
 const SPIN: f32 = 1.1;
 /// A loaded pad's disc glows this, a waiting one's not at all.
 const DISC_GLOW: f32 = 1.6;
-/// A power-up's orb: its radius, and its glow in its colour; and how far
-/// it swells and shrinks, how fast.
-const ORB_R: f32 = 0.26;
-const ORB_GLOW: f32 = 6.0;
+/// How far a power-up's orb swells and shrinks, how fast.
 const ORB_PULSE: f32 = 0.08;
 const ORB_HZ: f32 = 1.3;
 
-/// A power-up's colour, linear: the overshield's green, camouflage's pale
-/// blue (as their shells are drawn: `look/bodies.rs`).
-fn orb_color(id: u8) -> LinearRgba {
+/// The colour a pad's disc glows holding a power-up, linear: the
+/// overshield's green, camouflage's pale blue (as their shells are drawn:
+/// `look/bodies.rs`), the grenades' own.
+fn disc_color(id: u8) -> LinearRgba {
     match id {
         sim::arms::OVERSHIELD => LinearRgba::rgb(0.25, 1.0, 0.45),
         sim::arms::FRAGS => LinearRgba::rgb(0.95, 0.5, 0.12),
@@ -124,8 +122,8 @@ pub fn draw(
     mut placed: Query<&mut Transform, Without<PadGun>>,
     discs: Query<(&PadDisc, &MeshMaterial3d<StandardMaterial>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     plasma: Option<Res<crate::look::fx::plasma::Kit>>,
+    powerup: Option<Res<crate::look::powerup::Kit>>,
     gen: Option<Res<crate::front::LinkGen>>,
 ) {
     let s = link.0.session();
@@ -165,20 +163,12 @@ pub fn draw(
                         .entity(root)
                         .with_children(|c| crate::look::fx::plasma::spawn_lying(c, kit));
                 }
-            } else if sim::arms::power(p.arm) {
-                let c = orb_color(p.arm);
-                commands.spawn((
-                    Mesh3d(meshes.add(Sphere::new(ORB_R))),
-                    MeshMaterial3d(mats.add(StandardMaterial {
-                        base_color: Color::LinearRgba(c * 0.2),
-                        emissive: c * ORB_GLOW,
-                        perceptual_roughness: 0.2,
-                        ..default()
-                    })),
-                    Transform::default(),
-                    bevy::light::NotShadowCaster,
-                    ChildOf(root),
-                ));
+            } else if let Some(kind) = crate::look::powerup::Kind::of(p.arm) {
+                if let Some(kit) = &powerup {
+                    commands
+                        .entity(root)
+                        .with_children(|c| crate::look::powerup::spawn(c, kit, kind));
+                }
             } else {
                 posed(&mut commands, &models, p.arm, guns::body_basis(), root);
             }
@@ -227,7 +217,7 @@ pub fn draw(
             .filter(|&a| sim::arms::power(a));
         if let Some(m) = mats.get_mut(&mat.0) {
             m.emissive = if on {
-                power.map_or(LinearRgba::rgb(0.79, 0.6, 0.12), orb_color) * DISC_GLOW
+                power.map_or(LinearRgba::rgb(0.79, 0.6, 0.12), disc_color) * DISC_GLOW
             } else {
                 LinearRgba::BLACK
             };
