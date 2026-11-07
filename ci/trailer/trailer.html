@@ -108,6 +108,7 @@ function foot(ctx, name, lt, d, o = {}) {
     ctx.restore();
   } else still(ctx, fallback, clamp(lt / d), { ...so, full });
 }
+const clip = (...names) => names.find(n => CLIPS[n] && CLIPS[n].length) || names[0];
 const FONT = { unit: s => `400 ${s}px Unit`, ail: (s, w) => `${w || 400} ${s}px Ail` };
 function text(ctx, s, x, y, o = {}) {
   const { kind = 'unit', size = 96, weight, color = C.ink, align = 'center', base = 'alphabetic', track = 0, alpha = 1, shadow = 0, glow = null, scale = 1, glowR = 48 } = o;
@@ -443,7 +444,7 @@ const SCENES = [
   { id: 'p4-bulkhead', at: MAPS0 + 3 * MAPSEG, box: true, draw(L) { foot(bg, 'map-bulkhead', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.08, z1: 1.0, x0: -.2 } }); mapCard(L, 4, 'BULKHEAD', 'Doubles · Capture the Flag'); } },
   { id: 'p5-chrysalis', at: MAPS0 + 4 * MAPSEG, box: true, draw(L) { foot(bg, 'map-chrysalis', L.t, L.d, { fallback: 'chrysalis', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 5, 'CHRYSALIS', 'Free for all · Gun Game'); } },
   { id: 'p6-cloudbreak', at: MAPS0 + 5 * MAPSEG, box: true, draw(L) { foot(bg, 'map-cloudbreak', L.t, L.d, { fallback: 'dryfork', still: { z0: 1.1, z1: 1.02, y0: -.2 } }); mapCard(L, 6, 'CLOUDBREAK', 'Doubles · Free for all'); } },
-  { id: 'p7-dryfork', at: MAPS0 + 6 * MAPSEG, box: true, draw(L) { foot(bg, 'map-dryfork', L.t, L.d, { fallback: 'dryfork', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } }); mapCard(L, 7, 'DRY FORK', 'Big Team · Capture the Flag'); } },
+  { id: 'p7-dryfork', at: MAPS0 + 6 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { from: .3, fallback: 'dryfork', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } }); mapCard(L, 7, 'DRY FORK', 'Big Team · Capture the Flag'); } },
   // the arsenal: one gun a kick (the track's 1.07 s grid from 97.9 s)
   { id: 'a1-arsenal', at: hit(97.9), draw(L) {
     const seg = L.d / GUNS.length, k = Math.min(GUNS.length - 1, Math.floor(L.t / seg)), lt = L.t - k * seg, g = GUNS[k];
@@ -508,7 +509,7 @@ const SCENES = [
   } },
   // the end card
   { id: 'e1-end', at: hit(122.54), draw(L) {
-    foot(bg, 'map-dryfork', L.t, L.d, { full: true, fallback: 'dryfork', grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)', still: { full: true, z0: 1.08, z1: 1.02, grade: 'brightness(.28) contrast(1.05) saturate(.7) blur(5px)' } });
+    foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { full: true, fallback: 'dryfork', grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)', still: { full: true, z0: 1.08, z1: 1.02, grade: 'brightness(.28) contrast(1.05) saturate(.7) blur(5px)' } });
     const r0 = rv(L, .25, .45, .01);
     wordmark(fg, W / 2, 430 + r0.dy, 1.15, { alpha: r0.a, glow: 'rgba(232,185,49,.35)', line: 'ARENA SLAYER' });
     const r2 = rv(L, 1.2, .45, .01);
@@ -621,21 +622,21 @@ function frame(g) {
 // the timeline. Each is a plate from a footage frame (or its stand-in) with
 // the lockup over it; the capsule is cut to 616x353 by the store's own
 // cutter from the 16:9 plate, so its subject stays in the centre.
-const ART_SRC = { poster: 'still-bigteam', keyart: 'still-dryfork', capsule: 'still-fighter', square: '' };
+const ART_SRC = { poster: ['trucks', .9], keyart: ['still-vista', 0], capsule: ['still-fighter', 0] };
 const ART = {
   poster(ctx) {   // the frame the store's player shows until play: 16:9
-    foot(bg, ART_SRC.poster, 0, 1, { full: true, fallback: 'bigteam', grade: 'brightness(.75) contrast(1.08) saturate(.95)', still: { full: true, z0: 1.05, z1: 1.05 } });
+    foot(bg, ART_SRC.poster[0], 0, 1, { from: ART_SRC.poster[1], full: true, fallback: 'bigteam', grade: 'brightness(.75) contrast(1.08) saturate(.95)', still: { full: true, z0: 1.05, z1: 1.05 } });
     shade(bg, H * .45, H, 0, .7);
     wordmark(fg, W / 2, 700, 1.3, { glow: 'rgba(232,185,49,.35)', line: 'ARENA SLAYER' });
     text(fg, 'PLAY FREE  ·  ELOPROS.COM/GAMES/ONESHOT', W / 2, 900, { kind: 'ail', size: 34, weight: 700, color: C.muted, track: 6 });
   },
   keyart(ctx) {   // the key art: the title low, the frame tall and clear
-    foot(bg, ART_SRC.keyart, 0, 1, { full: true, fallback: 'dryfork', grade: 'brightness(.9) contrast(1.06) saturate(1.02)', still: { full: true, z0: 1.02, z1: 1.02 } });
+    foot(bg, ART_SRC.keyart[0], 0, 1, { from: ART_SRC.keyart[1], full: true, fallback: 'dryfork', grade: 'brightness(.9) contrast(1.06) saturate(1.02)', still: { full: true, z0: 1.02, z1: 1.02 } });
     shade(bg, H * .6, H, 0, .78);
     wordmark(fg, W / 2, 880, 1.2, { glow: 'rgba(232,185,49,.3)', line: 'ARENA SLAYER  ·  FREE TO PLAY' });
   },
   capsule(ctx) {  // the shelf card's plate: the lockup at the foot, as Gates' is
-    foot(bg, ART_SRC.capsule, 0, 1, { full: true, fallback: 'chrysalis', grade: 'brightness(.85) contrast(1.06) saturate(1.0)', still: { full: true, z0: 1.04, z1: 1.04 } });
+    foot(bg, ART_SRC.capsule[0], 0, 1, { from: ART_SRC.capsule[1], full: true, fallback: 'chrysalis', grade: 'brightness(.85) contrast(1.06) saturate(1.0)', still: { full: true, z0: 1.04, z1: 1.04 } });
     shade(bg, H * .5, H, 0, .8);
     wordmark(fg, W / 2, 840, 1.45, { glow: 'rgba(232,185,49,.3)', line: 'ARENA SLAYER' });
   },
