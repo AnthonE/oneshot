@@ -59,8 +59,8 @@ pub const CASCADE_OVERLAP: f32 = 0.2;
 /// A hall's air (a roofed map, lit by its lamps): a faint haze in the
 /// hull's colour, this much a metre squared, so the near wall is clear
 /// and the far end of the hall softens. Post-exposure, before the tonemap.
-pub const HALL_HAZE: [f32; 3] = [0.07, 0.04, 0.12];
-pub const HALL_HAZE_DENSITY: f32 = 0.03;
+pub const HALL_HAZE: [f32; 3] = [0.035, 0.02, 0.06];
+pub const HALL_HAZE_DENSITY: f32 = 0.014;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;

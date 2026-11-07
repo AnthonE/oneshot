@@ -117,7 +117,7 @@
 //   { arch: axis, width, spring, crown, top, jamb }    an arched opening
 //   { arch: axis, width, spring, crown, frame, off? }  a band round one
 //   { pipe: axis, r, y }  { walk: axis, width, y, thick, rim? }
-//   { spiral: [x, z], r, width, from, to, y: [ya, yb], base? }  a curved ramp
+//   { spiral: [x, z], r, width, from, to, y: [ya, yb], base?, joint? }  a curved ramp
 // Metres, y up, the floor at y = 0. On a terrain a box stands at the
 // y0 it says (below 0 to sink it into a dip), and a spawn, a pad or a
 // roam point at height 0 is put on the ground by the sim.
@@ -143,7 +143,9 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // A base's metal: gunmetal plate, the same painted in a side's colour, and tread plate for a deck or a ramp.
   'steel', 'steel_red', 'steel_blue', 'tread',
   // Stone: dressed grey stone in the concrete set, and the same darker (Cloudbreak's spire, struts and gates).
-  'stone', 'stone_dark'];
+  'stone', 'stone_dark',
+  // The ship's props: a round solid drawn as a model inside it (the client's look/boulders.rs): a seed husk, in its hull's colour or a side's, and a font with a flame in its cup.
+  'husk', 'husk_red', 'husk_blue', 'font'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',
@@ -289,7 +291,7 @@ export function compile(spec, where = 'map.json') {
     if (!spec.terrain) fail('void: needs a terrain, dug under it where the edge is');
   }
   const mirrors = images(spec.mirror);
-  const SWAP = { red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
+  const SWAP = { husk_red: 'husk_blue', husk_blue: 'husk_red', red: 'blue', blue: 'red', red_glow: 'blue_glow', blue_glow: 'red_glow', alien_red: 'alien_blue', alien_blue: 'alien_red',
     steel_red: 'steel_blue', steel_blue: 'steel_red' };
   const swapLook = (l) => SWAP[l] || l;
 

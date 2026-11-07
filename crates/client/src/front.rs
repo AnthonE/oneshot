@@ -41,9 +41,9 @@ pub enum Start {
 /// The map behind the title: Chrysalis, its hall under the lamps.
 pub const BACKDROP: u8 = 6;
 /// Where the title's camera stands on it, and what it looks at; it drifts
-/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 26 m across).
-const SHOT_EYE: Vec3 = Vec3::new(-10.0, 6.5, -10.0);
-const SHOT_LOOK: Vec3 = Vec3::new(8.0, 2.0, 5.0);
+/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 58 m across).
+const SHOT_EYE: Vec3 = Vec3::new(-12.0, 10.0, -16.0);
+const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there

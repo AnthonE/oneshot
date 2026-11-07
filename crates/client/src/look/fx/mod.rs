@@ -70,6 +70,9 @@ use pool::{pool_mesh, MeshWrite, Pool};
 use sheets::SheetMaterial;
 use table::{Layer, Matter, Weapon, Which};
 
+/// How bright a font's flame burns, over the fire recipe's.
+const BLUE_FLAME_GLOW: f32 = 1.3;
+
 /// `EventState::part` on a shot fog lets us only hear (room's `HEARD`):
 /// no tracer, no spark, its place rounded.
 pub const HEARD: u8 = 1;
@@ -349,6 +352,27 @@ impl Fx {
             }
         }
         lod
+    }
+
+    /// A lick of blue flame at `at`, `scale` times its size: a soft burst
+    /// of the plasma sheet, rising and thinning (a font's, `ambient`).
+    pub fn blue_flame(&mut self, at: Vec3, scale: f32) {
+        let r = ::fx::recipe::Recipe {
+            glow: BLUE_FLAME_GLOW,
+            speed: (1.3, 2.6),
+            spray: 0.22,
+            gravity: -2.2,
+            drag: 1.2,
+            life: (0.32, 0.55),
+            size: (0.16, 0.26),
+            grow: 1.5,
+            c0: [0.75, 0.75, 0.75, 0.9],
+            c1: [0.6, 0.6, 0.6, 0.0],
+            spin: 0.6,
+            ..table::recipe(Layer::Plasma)
+        };
+        let pool = self.pool(Layer::Plasma.pool());
+        table::emit_recipe(pool, &r, 1, at, Vec3::Y, Color::WHITE, scale);
     }
 
     /// `n` baked bursts of energy at `at` in `tone`, `scale` times the
