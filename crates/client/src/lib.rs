@@ -709,6 +709,13 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
         PostUpdate,
         look::blade::redrawn.after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
     );
+    // The gun in view's own light, where it is drawn this frame.
+    app.add_systems(
+        PostUpdate,
+        look::gun_glow::live
+            .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+            .after(bevy::transform::TransformSystems::Propagate),
+    );
     // Your shadow and the title's Triple T are bodies too, posed beside
     // everyone else's; then every body's player is driven; then, between
     // the animation and the transforms, every spine is turned
