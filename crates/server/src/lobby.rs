@@ -33,6 +33,8 @@ const FRIENDS_ASK_EVERY: Duration = Duration::from_secs(5);
 /// A signed-in page is handed a fresh ticket this often, well inside a
 /// ticket's life: a tab left open overnight still plays as itself.
 const TICKET_EVERY: Duration = Duration::from_secs(3600);
+/// A line closed this soon after it opened was let go by its page unread.
+const ABANDONED_WITHIN: Duration = Duration::from_secs(2);
 const SWEEP_EVERY: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -178,6 +180,7 @@ pub async fn session(
     ctx: Arc<Ctx>,
 ) {
     let session = ctx.sessions.fetch_add(1, Ordering::Relaxed);
+    let opened = Instant::now();
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let writer = tokio::spawn(async move {
         let mut streams = inlet.streams;
@@ -341,7 +344,13 @@ pub async fn session(
     voices.abort();
     writer.abort();
     ctx.lobby.outs().remove(&session);
-    let out = ctx.lobby.parties().disconnect(session, Instant::now());
+    // Gone within moments of saying hello: an attempt the page had given up
+    // on (it opened another), not a page reloading; its seat goes now.
+    let out = if opened.elapsed() < ABANDONED_WITHIN {
+        ctx.lobby.parties().abandoned(session)
+    } else {
+        ctx.lobby.parties().disconnect(session, Instant::now())
+    };
     ctx.lobby.send(out);
     conn.close(0u32.into(), b"");
 }

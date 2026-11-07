@@ -23,7 +23,10 @@ pub const TALKING_S: f32 = 0.35;
 /// The wait before opening the lobby again, doubling to the last.
 const RETRY_S: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 15.0];
 /// An attempt that hasn't answered in this long is let go and made again.
-const KNOCK_GIVE_UP_S: f32 = 20.0;
+/// Long: a page busy loading its level answers late, and an attempt let go
+/// that then lands still holds a seat in the party until its grace is up
+/// (the transport's own handshake gives up on a dead server well before).
+const KNOCK_GIVE_UP_S: f32 = 60.0;
 /// A name being typed says hello again only once it has stood this long
 /// (the title's field changes it a key at a time).
 const NAME_SETTLE_S: f32 = 1.5;

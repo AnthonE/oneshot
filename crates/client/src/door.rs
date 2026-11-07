@@ -523,6 +523,9 @@ mod web {
         follow: js_sys::Function,
         signin_fn: Option<js_sys::Function>,
         signin: Rc<RefCell<SignIn>>,
+        /// A party line was opened already: the next is asked of the live
+        /// server first (the first goes where the page just read it is).
+        lobbied: std::cell::Cell<bool>,
     }
 
     impl Door {
@@ -542,6 +545,7 @@ mod web {
                 follow,
                 signin_fn,
                 signin: Rc::new(RefCell::new(state)),
+                lobbied: std::cell::Cell::new(false),
             }
         }
 
@@ -625,11 +629,14 @@ mod web {
         pub fn lobby(&self, hello: proto::Msg) -> LobbyKnock {
             let slot: Rc<RefCell<Option<Result<super::LobbyBox, String>>>> = Rc::default();
             let (at, follow) = (self.at.clone(), self.follow.clone());
+            let again = self.lobbied.replace(true);
             let s = slot.clone();
             spawn_local(async move {
                 let cur = at.borrow().clone();
-                if let Some(next) = live(&follow, &cur).await {
-                    *at.borrow_mut() = next;
+                if again {
+                    if let Some(next) = live(&follow, &cur).await {
+                        *at.borrow_mut() = next;
+                    }
                 }
                 let (addr, hash) = at.borrow().clone();
                 let got = client_net::web_lobby::WebLobby::open(addr, hash, hello).await;

@@ -313,6 +313,14 @@ impl Parties {
         (out, replaced)
     }
 
+    /// A page that let go of its line at once (an attempt it had given up
+    /// on, landing late): its seat goes now, kept for nobody.
+    pub fn abandoned(&mut self, session: u64) -> Outbox {
+        let out = self.unseat(session);
+        self.sessions.remove(&session);
+        out
+    }
+
     /// The page went away: its place is kept for [`GRACE`].
     pub fn disconnect(&mut self, session: u64, now: Instant) -> Outbox {
         let Some(l) = self.sessions.remove(&session) else {
