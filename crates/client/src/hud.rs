@@ -23,6 +23,7 @@ use proto::medal as md;
 use proto::{EventState, Msg};
 use sim::consts::{HEALTH_MAX, SHIELD_MAX, TICK_HZ};
 use sim::events::Kind;
+use sim::world::Phase;
 
 use client_net::session::{refuse_why, Session};
 
@@ -42,6 +43,18 @@ const PROMPT_TOP_PCT: f32 = 58.0;
 const KEY_BG: Color = Color::srgba(0.02, 0.05, 0.1, 0.45);
 const KEY_EDGE: Color = Color::srgba(0.74, 0.88, 1.0, 0.55);
 const HIT_S: f32 = 0.22;
+/// A kill holds the marker red this long, popped in this much bigger and
+/// settling to this over the first share of it: a kill is not a hit.
+const KILL_HIT_S: f32 = 0.5;
+const KILL_POP: f32 = 1.9;
+const KILL_REST: f32 = 1.3;
+const KILL_POP_U: f32 = 0.3;
+/// The line under the crosshair naming whom we killed: how long, the last
+/// of it fading, and how far down the screen (a share: over the USE prompt).
+const KILLED_S: f32 = 1.8;
+const KILLED_FADE_S: f32 = 0.5;
+const KILLED_TOP_PCT: f32 = 53.5;
+const KILLED_RED: Color = Color::srgb(1.0, 0.32, 0.26);
 const DAMAGE_S: f32 = 0.6;
 /// The red rim when we're hit (after Gates' `hurt_flash.rs`): its alpha at
 /// the blow, how long it fades, and where the red starts (a share of the
@@ -121,6 +134,9 @@ pub struct HudState {
     shot_from: BTreeMap<u8, sim::geom::V3>,
     hit_at: f32,
     hit_kill: bool,
+    /// Whom we last killed, how (`· HEAD`), and when: the line under the
+    /// crosshair.
+    killed: Option<(String, f32)>,
     hurt_at: f32,
     /// The last hit on us landed on the shield (gold), not health (red).
     hurt_shield: bool,
@@ -129,8 +145,10 @@ pub struct HudState {
     last_shield: i32,
     arc_at: f32,
     hurt_angle: f32,
-    /// How we last died (`scores.rs`'s death card).
+    /// How we last died (`scores.rs`'s death card), and the killer's name
+    /// then (their seat may be someone else's by the time it is drawn).
     pub death: Option<Death>,
+    pub death_by: String,
     /// The scoreboard is held up.
     pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
@@ -344,6 +362,9 @@ pub struct HitMark;
 pub struct HurtArc;
 #[derive(Component)]
 pub struct HitStroke;
+/// The line under the crosshair: whom we just killed.
+#[derive(Component)]
+pub struct KilledText;
 
 /// A HUD line in `font`: the display face for numbers and banners, the
 /// text face for the feed and the net graph (`ui.rs`).
@@ -917,6 +938,17 @@ pub fn setup(mut commands: Commands) {
     ));
     commands.spawn((
         ChildOf(root),
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            top: Val::Percent(KILLED_TOP_PCT),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(KilledText, tinted(crate::ui::display(17.0), KILLED_RED))],
+    ));
+    commands.spawn((
+        ChildOf(root),
         HurtArc,
         centred(56.0, 6.0),
         BackgroundColor(Color::srgba(1.0, 0.2, 0.15, 0.0)),
@@ -1095,7 +1127,9 @@ pub fn on_events(
             st.shot_from.insert(e.a, e.pos);
         }
         if e.kind == Kind::Hit as u8 {
-            if e.a == me && e.b != me {
+            // A hit just after a kill (the pellets after the one that
+            // killed) leaves the kill's red up.
+            if e.a == me && e.b != me && !(st.hit_kill && now - st.hit_at < KILL_HIT_S) {
                 st.hit_at = now;
                 st.hit_kill = false;
             }
@@ -1143,6 +1177,12 @@ pub fn on_events(
                 team,
                 ..
             } => {
+                // Someone else in a seat already told: their K/D starts at
+                // nothing, not the last one's (the server's medals and
+                // carnage start again too).
+                if st.names.contains_key(slot) {
+                    st.tally.kd.remove(slot);
+                }
                 st.names.insert(*slot, name.as_str().to_string());
                 st.looks.insert(
                     *slot,
@@ -1183,9 +1223,16 @@ pub fn on_events(
                 }
                 if *killer == me && *victim != me {
                     st.kills += 1;
+                    let line = format!(
+                        "KILLED  {}{}",
+                        st.name(*victim).to_uppercase(),
+                        if *head { "  \u{b7}  HEAD" } else { "" }
+                    );
+                    st.killed = Some((line, now));
                 }
                 if *victim == me {
                     st.deaths += 1;
+                    st.death_by = st.name(*killer);
                     st.death = Some(Death {
                         killer: *killer,
                         cause: *cause,
@@ -1258,7 +1305,7 @@ pub fn draw(
     mut arc: Query<(&mut Node, &mut UiTransform, &mut BackgroundColor), With<HurtArc>>,
     mut texts: Query<(&mut Text, Option<&CenterText>, Option<&NetText>)>,
     mut reticle: Query<&mut Visibility, With<Reticle>>,
-    mut hitmark: Query<&mut Visibility, (With<HitMark>, Without<Reticle>)>,
+    mut hitmark: Query<(&mut Visibility, &mut UiTransform), (With<HitMark>, Without<Reticle>, Without<HurtArc>)>,
     mut strokes: Query<&mut BackgroundColor, (With<HitStroke>, Without<HurtArc>)>,
     mut lines: Local<DrawLines>,
 ) {
@@ -1289,13 +1336,13 @@ pub fn draw(
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
     center.clear();
-    match snap.phase {
-        0 => {
+    match core.phase() {
+        Phase::Countdown => {
             let _ = write!(center, "Starting in {}", clock.ceil() as u32);
         }
-        2 => {
+        Phase::Over => {
             let w = snap.winner;
-            let _ = if w == 255 {
+            let _ = if w == sim::world::NO_WINNER {
                 write!(center, "Draw")
             } else if core.rules.teams {
                 if w & 1 == core.team & 1 {
@@ -1356,13 +1403,22 @@ pub fn draw(
             Visibility::Inherited
         });
     }
-    let hit_u = (now - st.hit_at) / HIT_S;
-    if let Ok(mut v) = hitmark.single_mut() {
+    let hit_u = (now - st.hit_at) / if st.hit_kill { KILL_HIT_S } else { HIT_S };
+    if let Ok((mut v, mut tr)) = hitmark.single_mut() {
         v.set_if_neq(if (0.0..1.0).contains(&hit_u) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         });
+        let k = if st.hit_kill {
+            KILL_REST + (KILL_POP - KILL_REST) * (1.0 - (hit_u / KILL_POP_U).clamp(0.0, 1.0)).powi(2)
+        } else {
+            1.0
+        };
+        let scale = Vec2::splat(k);
+        if tr.scale != scale {
+            tr.scale = scale;
+        }
     }
     let c = if st.hit_kill {
         Color::srgb(1.0, 0.25, 0.2)
@@ -1391,6 +1447,35 @@ pub fn draw(
         }
         let alpha = if (0.0..1.0).contains(&u) { 0.85 * (1.0 - u) } else { 0.0 };
         bg.set_if_neq(BackgroundColor(Color::srgba(1.0, 0.2, 0.15, alpha)));
+    }
+}
+
+/// The line under the crosshair: whom we just killed, fading out.
+pub fn killed_line(
+    time: Res<Time>,
+    st: Res<HudState>,
+    mut q: Query<(&mut Text, &mut TextColor, &mut TextShadow), With<KilledText>>,
+) {
+    let Ok((mut t, mut c, mut sh)) = q.single_mut() else {
+        return;
+    };
+    let now = time.elapsed_secs();
+    let (line, alpha) = match &st.killed {
+        Some((line, at)) if (0.0..KILLED_S).contains(&(now - at)) => {
+            (line.as_str(), ((KILLED_S - (now - at)) / KILLED_FADE_S).min(1.0))
+        }
+        _ => ("", 0.0),
+    };
+    if t.0 != line {
+        t.0 = line.to_string();
+    }
+    c.set_if_neq(TextColor(KILLED_RED.with_alpha(alpha)));
+    let shadow = TextShadow {
+        color: SHADOW.color.with_alpha(SHADOW.color.alpha() * alpha),
+        ..SHADOW
+    };
+    if *sh != shadow {
+        *sh = shadow;
     }
 }
 
@@ -1861,6 +1946,10 @@ pub fn corner(
     let scores = &snap.score[..snap.n_score as usize];
     let score = |i: u8| scores.get(i as usize).copied().unwrap_or(0);
     let clock = snap.clock as f32 / TICK_HZ as f32;
+    let playing = core.phase() == Phase::Playing;
+    // NO CLOCK (a private match's): the sim's clock is its "never"
+    // (`u32::MAX` ticks), not a time to show.
+    let timed = core.rules.time_limit_ms > 0;
     // (score, colour, ours) a row: at most two.
     let mut rows_at = [(0, Color::NONE, false); 2];
     let mut n_shown = 0;
@@ -1896,7 +1985,7 @@ pub fn corner(
     shown.sort_by_key(|&(v, _, me)| (-v, !me));
     let shown = &*shown;
     let text = CornerText {
-        clock: (snap.phase == 1).then(|| clock.max(0.0) as u32),
+        clock: (playing && timed).then(|| clock.max(0.0) as u32),
         map: s.map_id,
         rung: core.rules.gun_game.then(|| (score(core.slot), limit)),
         rows: [0, 1].map(|k| shown.get(k).map(|r| r.0)),
@@ -1916,9 +2005,9 @@ pub fn corner(
         }
         for (mut t, ck, md, num) in texts.iter_mut() {
             let v = if ck.is_some() {
-                if snap.phase == 1 && snap.clock == 0 && snap.n_flags > 0 {
+                if playing && snap.clock == 0 && snap.n_flags > 0 {
                     "SUDDEN DEATH".to_string()
-                } else if snap.phase == 1 {
+                } else if playing && timed {
                     mmss(clock)
                 } else {
                     String::new()

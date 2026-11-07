@@ -122,11 +122,16 @@ async function videoConfig(w, h, fps) {
   throw new Error("this browser can't encode H.264 video: try Chrome, Edge or Safari");
 }
 
+/* The film's mix: its rate is the module's (film::script::FILM_RATE, set
+   once it loads), stereo (film/mix.rs). */
+let filmRate = 48000;
+const FILM_CHANNELS = 2;
+
 async function audioConfig() {
   if (!("AudioEncoder" in window)) return null;
   for (const c of [
-    { codec: "mp4a.40.2", sampleRate: 48000, numberOfChannels: 2, bitrate: 160000 },
-    { codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 },
+    { codec: "mp4a.40.2", sampleRate: filmRate, numberOfChannels: FILM_CHANNELS, bitrate: 160000 },
+    { codec: "opus", sampleRate: filmRate, numberOfChannels: FILM_CHANNELS, bitrate: 128000 },
   ]) {
     try {
       const r = await AudioEncoder.isConfigSupported(c);
@@ -274,7 +279,7 @@ function sink(opts) {
 async function encodeAudio(chunks, len, seconds) {
   const config = await audioConfig();
   if (!config) return null;
-  const rate = 48000, ch = 2;
+  const rate = filmRate, ch = FILM_CHANNELS;
   const total = Math.round(seconds * rate) * ch;
   const all = new Float32Array(total);
   let at = 0;
@@ -330,6 +335,7 @@ window.addEventListener("message", async (ev) => {
   const { tape, style, line, link, tag: withTag, quality } = ev.data;
   try {
     const mod = await load(q.get("gfx") || "webgl2");
+    if (mod.film_rate) filmRate = mod.film_rate();
     await fonts;
     const s = sink({ line: String(line || "").slice(0, 60), link: link || "elopros.com/games/oneshot/play", tag: withTag !== false });
     /* Bevy's loop owns the page from here (`film`, crates/client/src/lib.rs). */

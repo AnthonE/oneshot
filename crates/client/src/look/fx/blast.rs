@@ -17,6 +17,7 @@ use super::sheets::{TONE_GREEN, TONE_PINK, TONE_PLASMA};
 use super::table::{Layer, Matter, Weapon};
 use super::{FlashDef, Fx, Scene, BLAST_FLASH};
 use crate::look::shake;
+use ::fx::recipe::Recipe;
 
 /// A wreck burns this long (its husk smoulders after: `look/truck.rs`).
 const BURN_S: f32 = 7.0;
@@ -151,27 +152,47 @@ const GREEN_FLASH: FlashDef = FlashDef {
 
 // ── Shards going off together (`burst`) ──────────────────────────────────
 
-/// The pink the zap, the vapour and the light are tinted.
-const PINK_TINT: Color = Color::LinearRgba(LinearRgba::rgb(2.4, 0.5, 1.6));
-/// Its stars, one of each star cell from `atlas::STAR`.
+/// Its stars, one of each star cell from `atlas::STAR`: pink, the green
+/// kept under 1 so that with no bloom they clip to pink, not to white.
 const PINK_STAR: Glow = Glow {
     life: 0.12,
-    size: [0.6, 1.3],
-    c0: super::table::PINK,
-    c1: [1.5, 0.3, 1.0, 0.0],
+    size: [0.5, 1.1],
+    c0: [4.0, 0.55, 3.0, 1.0],
+    c1: [1.2, 0.12, 0.9, 0.0],
 };
 const PINK_STARS: u8 = 3;
-/// How many of each and how big: the zap, the baked burst, the shards
-/// (their speed, m/s) and the vapour.
-const PINK_ZAPS: (usize, f32) = (2, 6.0);
-const PINK_ENERGY: (usize, f32) = (2, 1.2);
-const PINK_SHARDS: (usize, f32) = (40, 7.0);
-const PINK_VAPOUR: (usize, f32) = (6, 5.0);
+/// Its white heart, small, under the stars.
+const PINK_HEART: Glow = Glow {
+    life: 0.07,
+    size: [0.25, 0.5],
+    c0: [6.0, 3.0, 5.0, 1.0],
+    c1: [2.0, 0.3, 1.5, 0.0],
+};
+/// The zap and the vapour are the layers' own (`Layer::Zap`,
+/// `Layer::GunSmoke`), which take no tint, in these colours.
+const PINK_ZAP_C: ([f32; 4], [f32; 4]) = ([5.0, 0.7, 3.6, 1.0], [0.9, 0.08, 0.7, 0.0]);
+const PINK_VAPOUR_C: ([f32; 4], [f32; 4]) = ([0.8, 0.3, 0.7, 0.3], [0.55, 0.35, 0.55, 0.0]);
+/// How many of each and how big: the zap, the baked burst, the vapour.
+const PINK_ZAPS: (usize, f32) = (2, 5.0);
+const PINK_ENERGY: (usize, f32) = (2, 1.3);
+const PINK_VAPOUR: (usize, f32) = (6, 4.5);
+/// The crystals flung out of the body: how many, their speed (m/s) and
+/// life (s), their width and the longest they streak (m), their fall and
+/// drag, and their colour from hot to gone.
+const PINK_CRYSTALS: usize = 30;
+const PINK_CRYSTAL_MPS: (f32, f32) = (5.0, 13.0);
+const PINK_CRYSTAL_S: (f32, f32) = (0.3, 0.6);
+const PINK_CRYSTAL_W: [f32; 2] = [0.045, 0.02];
+const PINK_CRYSTAL_LEN_M: f32 = 0.4;
+const PINK_CRYSTAL_STRETCH_S: f32 = 0.035;
+const PINK_CRYSTAL_FALL: f32 = 5.0;
+const PINK_CRYSTAL_DRAG: f32 = 1.6;
+const PINK_CRYSTAL_C: ([f32; 4], [f32; 4]) = ([5.0, 1.0, 3.8, 1.0], [1.4, 0.15, 1.1, 0.0]);
 const PINK_FLASH: FlashDef = FlashDef {
-    lumens: 900_000.0,
-    range: 9.0,
+    lumens: 1_100_000.0,
+    range: 10.0,
     life: 0.3,
-    color: [1.0, 0.35, 0.8],
+    color: [1.0, 0.3, 0.8],
 };
 
 // ── A sticky going off (`sticky`) ────────────────────────────────────────
@@ -343,8 +364,9 @@ pub fn burst_green(fx: &mut Fx, at: Vec3, k: f32, ring: bool) {
     );
 }
 
-/// Shards in one body going off together: a pink star, a pink burst,
-/// shards everywhere, a pink light. Glass, not fire.
+/// Shards in one body going off together: a pink star with a white heart,
+/// a pink shell out to the splash's reach, a baked pink burst, crystals
+/// flung everywhere, a pink mist, a pink light. Glass, not fire.
 fn burst(fx: &mut Fx, at: Vec3) {
     for k in 0..PINK_STARS {
         let roll = fx.range(0.0, core::f32::consts::TAU);
@@ -353,10 +375,45 @@ fn burst(fx: &mut Fx, at: Vec3) {
             ..PINK_STAR.at(at, 1.0, STAR + k)
         });
     }
-    fx.emit_tint(Layer::Zap, PINK_ZAPS.0, at, Vec3::Y, PINK_TINT, PINK_ZAPS.1);
+    fx.glow.spawn(PINK_HEART.at(at, 1.0, GLOW));
+    *super::shell::claim(&mut fx.shocks) = super::shell::pink(at);
+    let zap = Recipe {
+        c0: PINK_ZAP_C.0,
+        c1: PINK_ZAP_C.1,
+        ..super::table::recipe(Layer::Zap)
+    };
+    let pool = fx.pool(Layer::Zap.pool());
+    super::table::emit_recipe(pool, &zap, PINK_ZAPS.0, at, Vec3::Y, Color::WHITE, PINK_ZAPS.1);
     fx.energy(at, TONE_PINK, PINK_ENERGY.1, PINK_ENERGY.0);
-    super::table::shatter(&mut fx.glow, at, PINK_SHARDS.0, PINK_SHARDS.1);
-    fx.emit_tint(Layer::GunSmoke, PINK_VAPOUR.0, at, Vec3::Y, PINK_TINT, PINK_VAPOUR.1);
+    for _ in 0..PINK_CRYSTALS {
+        let d = fx.unit();
+        let life = fx.range(PINK_CRYSTAL_S.0, PINK_CRYSTAL_S.1);
+        let speed = fx.range(PINK_CRYSTAL_MPS.0, PINK_CRYSTAL_MPS.1);
+        fx.glow.spawn(Particle {
+            left: life,
+            life,
+            pos: at.into(),
+            vel: (d * speed).into(),
+            gravity: PINK_CRYSTAL_FALL,
+            drag: PINK_CRYSTAL_DRAG,
+            size0: PINK_CRYSTAL_W[0],
+            size1: PINK_CRYSTAL_W[1],
+            c0: PINK_CRYSTAL_C.0,
+            c1: PINK_CRYSTAL_C.1,
+            cell: super::atlas::SHARD,
+            orient: Orient::Stretch,
+            stretch: PINK_CRYSTAL_STRETCH_S,
+            len_max: PINK_CRYSTAL_LEN_M,
+            ..Particle::default()
+        });
+    }
+    let vapour = Recipe {
+        c0: PINK_VAPOUR_C.0,
+        c1: PINK_VAPOUR_C.1,
+        ..super::table::recipe(Layer::GunSmoke)
+    };
+    let pool = fx.pool(Layer::GunSmoke.pool());
+    super::table::emit_recipe(pool, &vapour, PINK_VAPOUR.0, at, Vec3::Y, Color::WHITE, PINK_VAPOUR.1);
     fx.flash(at, PINK_FLASH);
 }
 

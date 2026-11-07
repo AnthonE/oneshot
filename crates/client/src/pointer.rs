@@ -90,6 +90,7 @@ pub fn follow(
     mut lock: Local<BrowserLock>,
     screen: Res<State<crate::Screen>>,
     mut next: ResMut<NextState<crate::Screen>>,
+    in_match: Option<Res<crate::front::InMatch>>,
 ) {
     let Some(has) = pointer_locked() else {
         return;
@@ -111,7 +112,8 @@ pub fn follow(
         LockFix::Taken => {
             c.grab_mode = CursorGrabMode::None;
             c.visible = true;
-            if *screen.get() == crate::Screen::Playing {
+            // Not over a match ended this frame: the title it is.
+            if *screen.get() == crate::Screen::Playing && !crate::front::InMatch::just_left(&in_match) {
                 next.set(crate::Screen::Paused);
             }
         }

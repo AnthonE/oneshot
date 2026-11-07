@@ -371,10 +371,37 @@ pub struct Models {
     /// A truck's minigun (`look/turret.rs`): its cradle and its barrels.
     pub turret: Handle<Scene>,
     pub turret_barrels: Handle<Scene>,
-    /// Gear on a body (`bodies.rs`): the shades, and a boot for each foot.
-    pub shades: Handle<Scene>,
-    pub boot_left: Handle<Scene>,
-    pub boot_right: Handle<Scene>,
+    /// Gear on a body (`bodies.rs`), by its id; index 0 (no gear) is unused:
+    /// a piece of headwear (`proto::HEADWEAR`), a left and a right boot
+    /// (`proto::FOOTWEAR`).
+    pub headwear: Vec<Option<Handle<Scene>>>,
+    pub boots: Vec<Option<[Handle<Scene>; 2]>>,
+}
+
+/// A left boot, a right boot: `Models::boots`' order.
+pub const LEFT: usize = 0;
+pub const RIGHT: usize = 1;
+
+impl Models {
+    /// Headwear `g`, none for no gear.
+    pub fn head_scene(&self, g: u8) -> Option<Handle<Scene>> {
+        self.headwear.get(g as usize).cloned().flatten()
+    }
+
+    /// Footwear `g`'s boot for `side`, none for no gear.
+    pub fn boot_scene(&self, g: u8, side: usize) -> Option<Handle<Scene>> {
+        self.boots.get(g as usize)?.as_ref().map(|b| b[side].clone())
+    }
+}
+
+/// A model's file is a piece of gear's (`models/<name>.glb`, or its boots',
+/// `<name>-left.glb` and `<name>-right.glb`).
+pub fn is_gear_file(stem: &str) -> bool {
+    let name = stem
+        .strip_suffix("-left")
+        .or_else(|| stem.strip_suffix("-right"))
+        .unwrap_or(stem);
+    proto::HEADWEAR[1..].contains(&name) || proto::FOOTWEAR[1..].contains(&name)
 }
 
 pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
@@ -394,9 +421,16 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         truck: scene("truck"),
         turret: scene("turret"),
         turret_barrels: scene("turret-barrels"),
-        shades: scene("shades"),
-        boot_left: scene("boot-left"),
-        boot_right: scene("boot-right"),
+        headwear: core::iter::once(None)
+            .chain(proto::HEADWEAR[1..].iter().map(|name| Some(scene(name))))
+            .collect(),
+        boots: core::iter::once(None)
+            .chain(
+                proto::FOOTWEAR[1..]
+                    .iter()
+                    .map(|name| Some([scene(&format!("{name}-left")), scene(&format!("{name}-right"))])),
+            )
+            .collect(),
     });
 }
 

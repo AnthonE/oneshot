@@ -7,8 +7,8 @@ mark: it is painted out here (`scrub`), so what ships carries no brand.
 
 Exported with the middle of the lens's front at the origin, +Y up, +Z
 forward, in metres. `look/bodies.rs` hangs it on Triple T's Head bone;
-the numbers for that (`SHADES` there) are printed here as FIT, from
-`EYES`. Look at them in the game (a render of an import of
+the numbers for that (`HEADWEAR` there, which every piece of headwear
+shares: `gear.py`) are printed here as FIT, from `EYES`. Look at them in the game (a render of an import of
 triple-t.glb in Blender put the face 0.1 m off):
 
   ci/desktop_shot.sh traces/shades.png 2 0 0 0 \
@@ -157,7 +157,7 @@ def maps(o):
 def fit():
     """Where the shades hang on the Head bone: the lens's place (EYES,
     tipped TIP), as the client's numbers."""
-    fit_line('SHADES', 'Head', Matrix.Translation(EYES) @ Matrix.Rotation(math.radians(TIP), 4, 'X'))
+    fit_line('HEADWEAR', 'Head', Matrix.Translation(EYES) @ Matrix.Rotation(math.radians(TIP), 4, 'X'))
 
 
 

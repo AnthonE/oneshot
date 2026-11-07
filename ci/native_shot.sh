@@ -21,7 +21,7 @@ if [ "${1:-}" = match ]; then
   url=
   for _ in $(seq 1 100); do url=$(sed -n 's/.*play: \(http:\/\/[^ ]*\).*/\1/p' traces/native-server.log | head -1); [ -n "$url" ] && break; sleep 0.1; done
   host=${url#http://}; host=${host%%/*}
-  crates/client/target/debug/oneshot --server "$host" --mode "$mode" $auto --name shot > traces/native-client.log 2>&1 &
+  crates/client/target/debug/oneshot --windowed --server "$host" --mode "$mode" $auto --name shot > traces/native-client.log 2>&1 &
 else
   q=$1; wait=${2:-8}
   crates/client/target/debug/oneshot --pose "$q" > traces/native-client.log 2>&1 &

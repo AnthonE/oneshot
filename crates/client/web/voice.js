@@ -5,7 +5,7 @@
 // the party and nobody else; it never decodes one.
 //
 // Talking is the game's TALK bind held (`setTalk`: keys by their `code`,
-// Mouse3 to Mouse5), or open mic, past a level gate. A member can be muted
+// Mouse1 to Mouse5), or open mic, past a level gate. A member can be muted
 // here, for this browser only. Nothing is recorded.
 
 const RATE = 48000;
@@ -17,7 +17,7 @@ const GATE_DB = -45;
 const GATE_HOLD_MS = 400;
 const MUTES = 'oneshot.mutes';
 // The mouse buttons a bind may use (binds.rs MOUSE), by MouseEvent.button.
-const MOUSE = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' };
+const MOUSE = { 0: 'Mouse1', 1: 'Mouse3', 2: 'Mouse2', 3: 'Mouse4', 4: 'Mouse5' };
 // A right modifier is its left one, as a bind is (binds.rs `normalize`).
 const fold = (code) => code.replace(/^(Shift|Control|Alt)Right$/, '$1Left');
 
@@ -167,28 +167,32 @@ export class Voice {
     const sink = this.ctx.createGain();
     sink.gain.value = 0;
     src.connect(node).connect(sink).connect(this.ctx.destination);
-    const enc = new AudioEncoder({
-      output: (chunk) => {
-        const bytes = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(bytes);
-        // Its own flag, and any of frames the encoder lost before it.
-        let end = false;
-        for (const [ts, e] of this.ends) {
-          if (ts > chunk.timestamp) break;
-          end ||= e;
-          this.ends.delete(ts);
-        }
-        if (this.send(this.seq, end, bytes)) this.sent++;
-        this.seq = (this.seq + 1) & 0xffff;
-      },
-      error: () => { /* a frame lost */ },
-    });
+    // An encoder error closes it (WebCodecs): a new one takes over at the
+    // next frame, so the mic never goes on showing "talking" over nothing.
+    const output = (chunk) => {
+      const bytes = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(bytes);
+      // Its own flag, and any of frames the encoder lost before it.
+      let end = false;
+      for (const [ts, e] of this.ends) {
+        if (ts > chunk.timestamp) break;
+        end ||= e;
+        this.ends.delete(ts);
+      }
+      if (this.send(this.seq, end, bytes)) this.sent++;
+      this.seq = (this.seq + 1) & 0xffff;
+    };
     const config = { codec: 'opus', sampleRate: this.ctx.sampleRate, numberOfChannels: 1, bitrate: 24000 };
-    try {
-      enc.configure({ ...config, opus: { frameDuration: 20000, application: 'voip', signal: 'voice' } });
-    } catch {
-      enc.configure({ ...config, opus: { frameDuration: 20000 } });
-    }
+    const encoder = () => {
+      const e = new AudioEncoder({ output, error: () => { /* closed: made again below */ } });
+      try {
+        e.configure({ ...config, opus: { frameDuration: 20000, application: 'voip', signal: 'voice' } });
+      } catch {
+        e.configure({ ...config, opus: { frameDuration: 20000 } });
+      }
+      return e;
+    };
+    let enc = encoder();
     let t = 0;
     let was = false;
     // Each frame goes back to the tap once it is copied (AudioData copies
@@ -212,6 +216,11 @@ export class Voice {
       // The last frame of a go at talking: silence, flagged so the light goes out.
       const end = was && !want;
       const data = end ? new Float32Array(pcm.length) : pcm;
+      if (enc.state === 'closed' && this.mic) {
+        // The frames it lost had their flags: none carries over.
+        this.ends.clear();
+        try { enc = encoder(); this.mic.enc = enc; } catch { /* the next frame tries again */ }
+      }
       if (enc.state === 'configured') {
         this.ends.set(t, end);
         enc.encode(new AudioData({ format: 'f32-planar', sampleRate: this.ctx.sampleRate, numberOfFrames: data.length,

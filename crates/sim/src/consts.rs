@@ -7,9 +7,10 @@ pub const TICK_HZ: u32 = 128;
 /// One tick in seconds. 1/128 is a power of two, so it is exact.
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 
-/// A duration in ms as whole ticks, rounded to nearest.
+/// A duration in ms as whole ticks, rounded to nearest (in 64 bits: a
+/// duration past 9.3 h would overflow 32).
 pub const fn ticks(ms: u32) -> u32 {
-    (ms * TICK_HZ + 500) / 1000
+    ((ms as u64 * TICK_HZ as u64 + 500) / 1000) as u32
 }
 
 /// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,
@@ -195,6 +196,19 @@ pub const CLASH_PUSH: f32 = 8.0;
 pub const HOMING_PAD: f32 = 1.0;
 /// Shards fall out of a fighter this long after the last went in.
 pub const NEEDLE_KEEP_MS: u32 = 1500;
+/// Shards going off together (Halo 2's needler supercombine, Halopedia's H2
+/// weapon data at 3.048 m a world unit): 400 to the one they are in, half
+/// that on shields (an overshield outlasts it, as Halo 2's did), and a
+/// splash of 50 out to 0.2 wu, down to 30 at 0.5 wu, half that on shields.
+pub const SUPER_DMG: i32 = 400;
+pub const SUPER_SHIELD_K: f32 = 0.5;
+pub const SUPER_SPLASH: i32 = 50;
+pub const SUPER_FULL: f32 = 0.61;
+pub const SUPER_RADIUS: f32 = 1.52;
+pub const SUPER_EDGE: i32 = 30;
+/// How hard its splash throws who stands by, m/s at its middle: a stagger,
+/// not a grenade's [`BLAST_PUSH`]. Ours.
+pub const SUPER_PUSH: f32 = 3.0;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
 

@@ -48,6 +48,14 @@ const BED_DIP_WAVE_M: f32 = 27.0;
 // far either side of the photograph's mean, `SOIL_PATCH_M` across.
 const SOIL_PATCH: f32 = 0.14;
 const SOIL_PATCH_M: f32 = 19.0;
+// An island's sand under the wind (`layers.x` over 3.5): broad pale crests and
+// dark lees, this far under and over the photograph's mean, and fine ripple
+// across the wind, `ISLE_RIPPLE_M` crest to crest, fading before a pixel can't
+// hold it.
+const ISLE_LEE: f32 = 0.66;
+const ISLE_CREST: f32 = 1.14;
+const ISLE_RIPPLE: f32 = 0.05;
+const ISLE_RIPPLE_M: f32 = 0.5;
 // How much of the skin's baked value the rock keeps: at full strength its
 // recesses read as stains across the beds.
 const SKIN_VALUE: f32 = 0.25;
@@ -363,11 +371,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var a0 = textureSample(albedo_tex, albedo_smp, uv0, 0);
     var a1 = textureSample(albedo_tex, albedo_smp, uv1, 1);
     var a2 = textureSample(albedo_tex, albedo_smp, uv2, 2);
-    var a3 = textureSample(albedo_tex, albedo_smp, uv3, 3);
+    let rock_layer = i32(ground.layers.x);
+    var a3 = textureSample(albedo_tex, albedo_smp, uv3, rock_layer);
     let g0 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv0, 0)));
     let g1 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv1, 1)));
     let g2 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv2, 2)));
-    let g3 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv3, 3)));
+    let g3 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv3, rock_layer)));
 
     // --- The wall planes ----------------------------------------------------------
     //
@@ -419,7 +428,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             wm.z = wall_mix;
         }
         if w.w > 0.0 {
-            t3 = wall_tap(wall, 3, 1.0 / ground.tile_m.w);
+            t3 = wall_tap(wall, rock_layer, 1.0 / ground.tile_m.w);
             wm.w = wall_mix;
         }
     }
@@ -511,7 +520,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // shade.
     let soil = 1.0 + SOIL_PATCH * (2.0 * (0.65 * value3(vec3<f32>(wp.x, 0.0, wp.z) / SOIL_PATCH_M)
         + 0.35 * value3(vec3<f32>(wp.x, 0.0, wp.z) / (SOIL_PATCH_M * 0.31) + vec3<f32>(9.1, 0.0, 4.7))) - 1.0);
-    var c = (a0.rgb * ground.tint[0].rgb * w.x
+    let ripple_px = length(dp_dx.xz) + length(dp_dy.xz);
+    var sand_wind = 1.0;
+    if ground.layers.x > 3.5 {
+        let q = vec3<f32>(wp.x, 0.0, wp.z);
+        let mass = 0.62 * value3(q / 15.0 + vec3<f32>(3.3, 0.0, 8.1)) + 0.38 * value3(q / 6.0 + vec3<f32>(1.7, 0.0, 5.3));
+        sand_wind = mix(ISLE_LEE, ISLE_CREST, smoothstep(0.34, 0.66, mass));
+        let wander = 1.5 * value3(q / 2.4 + vec3<f32>(7.0, 0.0, 2.0));
+        let keep = clamp(1.5 - ripple_px / ISLE_RIPPLE_M * 3.0, 0.0, 1.0);
+        sand_wind *= 1.0 + ISLE_RIPPLE * keep * sin((wp.x * 0.8 + wp.z * 0.6 + wander) * 6.2831853 / ISLE_RIPPLE_M);
+    }
+    var c = (a0.rgb * ground.tint[0].rgb * sand_wind * w.x
         + a1.rgb * ground.tint[1].rgb * w.y
         + a2.rgb * ground.tint[2].rgb * w.z) * soil
         + a3.rgb * ground.tint[3].rgb * rock_hue * (w.w * rock_shade);

@@ -285,6 +285,13 @@ const SPLATTER_LIFT_K: f32 = 0.3;
 const BLAST_MPS: f32 = 9.0;
 const BLAST_LIFT: f32 = 5.0;
 const BLAST_REACH_M: f32 = 8.0;
+/// Shards going off together in the body (the SHARD GUN's): thrown off
+/// its feet away from whoever shot, the chest hardest, the head snapped
+/// back. A shard kill is one only with their burst heard this near.
+const SUPER_MPS: f32 = 7.5;
+const SUPER_LIFT: f32 = 4.0;
+const SUPER_HEAD_MPS: f32 = 2.0;
+const SUPER_NEAR_M: f32 = 1.2;
 /// How much of a push the hips take against the chest's 1, and the legs
 /// (a body shot topples over its feet rather than sliding off them).
 const HIPS_SHARE: f32 = 0.5;
@@ -391,7 +398,15 @@ impl Blows {
             || cause == Cause::Sticky as u16
             || cause == Cause::Wreck as u16
             || ((cause as usize) < sim::arms::COUNT && sim::arms::arm(cause as u8).radius > 0.0);
-        let (push, lift, extra) = if blasted {
+        let supercombined = cause == sim::arms::SHARDS as u16
+            && self
+                .blasts
+                .iter()
+                .any(|(p, bt)| *bt > 0.0 && t - bt <= BLAST_KEEP_S && p.distance(chest) < SUPER_NEAR_M);
+        let (push, lift, extra) = if supercombined {
+            let dir = from.map_or(Vec3::ZERO, |o| away(o).0);
+            (dir * SUPER_MPS, SUPER_LIFT, SUPER_HEAD_MPS)
+        } else if blasted {
             let near = self
                 .blasts
                 .iter()

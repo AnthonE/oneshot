@@ -1,9 +1,9 @@
 //! An island's keel (`level::Land::Isle`): the rock it hangs from, drawn
 //! under it in place of the heightfield's column. The sim's terrain drops
 //! straight down from the coast to its floor far under the void, which
-//! from off the edge reads as a pillar standing in the cloud. Under the
-//! void (`sim::map::Map::void`), where nobody is alive, the ground and its
-//! rock skin are cut off ([`clip_below`]) and the keel hangs there instead:
+//! from off the edge reads as a pillar standing in the cloud. Just under the
+//! rim (`level::ISLE_CUT_Y`), where nobody stands, the ground is cut off
+//! ([`clip_below`]) and the keel hangs there instead:
 //! rings under the island's own outline: a lip at the cut, a recess under
 //! it (the rim overhangs), the shoulder back out, then each ring further
 //! down drawn in further and lobed, to a point, and fingers of rock

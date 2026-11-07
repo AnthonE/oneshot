@@ -41,9 +41,9 @@ pub enum Start {
 /// The map behind the title: Chrysalis, its hall under the lamps.
 pub const BACKDROP: u8 = 6;
 /// Where the title's camera stands on it, and what it looks at; it drifts
-/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 26 m across).
-const SHOT_EYE: Vec3 = Vec3::new(-10.0, 6.5, -10.0);
-const SHOT_LOOK: Vec3 = Vec3::new(8.0, 2.0, 5.0);
+/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 58 m across).
+const SHOT_EYE: Vec3 = Vec3::new(-12.0, 10.0, -16.0);
+const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there
@@ -55,6 +55,9 @@ const CURTAIN_FADE_S: f64 = 0.9;
 const CURTAIN_GUARD_S: f64 = 10.0;
 /// PLAY, pressed again this soon after it knocked, isn't a cancel.
 const CANCEL_AFTER_S: f32 = 0.6;
+/// A party leader's PLAY, again this soon after it asked the party to
+/// start, asks nothing (a double click starts one match, not two).
+const START_AGAIN_S: f32 = 5.0;
 /// The match over: this long on the HUD's banner, then the title.
 const END_HOLD_S: f32 = 3.5;
 
@@ -76,6 +79,15 @@ pub struct Leaving(pub Option<String>);
 /// when it has had as many welcomes as the last.
 #[derive(Resource, Default)]
 pub struct LinkGen(pub u32);
+
+impl InMatch {
+    /// The match ended (or was left) this frame, as a system running after
+    /// [`ended`] sees it: what it would set the screen to, the title has
+    /// already taken. No title at all (a picture): never.
+    pub fn just_left(m: &Option<Res<InMatch>>) -> bool {
+        m.as_ref().is_some_and(|m| m.is_changed() && !m.0)
+    }
+}
 
 /// A control the browser gate finds by name (`expose`, `ci/e2e.mjs`).
 #[derive(Component)]
@@ -215,6 +227,9 @@ pub(crate) struct Front {
     join: Option<u8>,
     /// When PLAY last knocked (s).
     knocked_at: f32,
+    /// When a leader's PLAY last asked the party to start (s), till the
+    /// server's Go comes.
+    started_at: Option<f32>,
     /// How far the PLAY panel's rows are scrolled (px), kept over rebuilds.
     scroll: f32,
     /// The armory's page (`ARMORY_TABS`).
@@ -352,6 +367,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
                 _ => None,
             },
             knocked_at: 0.0,
+            started_at: None,
             scroll: 0.0,
             armory: 0,
             tab: Tab::Play,
@@ -1106,13 +1122,29 @@ const SKIN_BLURBS: [&str; 6] = [
     "Green trim, grown on a long climb up the ladder.",
     "Gold trim. Only the top of the ladder wears it.",
 ];
-const HEAD_BLURBS: [&str; 2] = [
+const HEAD_BLURBS: [&str; proto::HEADWEAR.len()] = [
     "Nothing on your head.",
     "Dark lenses on the bridge of the nose. They dim nothing you see.",
+    "Gold wire and mirrored glass. Whoever looks at you sees themselves first.",
+    "Two small round lenses on a thin wire. Seen it all, said nothing.",
+    "A bar of hard light across the eyes. It tells you nothing you didn't know.",
+    "Brass and old leather, from when the flying was the dangerous part.",
+    "Two filters and a valve. The air's fine; it's the company.",
+    "Jade lacquer and gilded eyes, and your own grin somewhere behind them.",
+    "A dark window in a burnt hood. It's all sparks out there anyway.",
+    "An old ram's skull. The ram has no further use for it.",
+    "Yellow, scuffed, rated for falling objects. Not rated for rockets.",
+    "Night vision, folded up. It stays folded: it shows you nothing more.",
+    "Holds no water. The brim is wide; your head is the size it always was.",
+    "Thick wool on a sawn-off top. A stump feels the cold.",
 ];
-const FEET_BLURBS: [&str; 2] = [
+const FEET_BLURBS: [&str; proto::FOOTWEAR.len()] = [
     "Triple T's own feet.",
-    "Heavy treaded boots. Your steps sound no louder in them.",
+    "Oiled leather and lugged soles. A log in logger's boots knows what it's doing.",
+    "Teal suede and a cupsole. Your steps sound no quieter in them.",
+    "Tooled leather and steel. They don't jingle: your steps sound no louder in them.",
+    "Armour plate and a lit seam. The magnets hold you to nothing.",
+    "Yellow rubber, mud to the ankle. Dry where it matters.",
 ];
 
 /// A line of the box under the cards: the item under the pointer, else
@@ -1270,7 +1302,6 @@ fn armory_panel(
                         card(t, item, player.skin == i, Face::Colour(skin_colour(i)), wardrobe);
                     }
                 });
-                peek_box(p);
             }
             k if k <= GEAR_ROWS.len() => {
                 let (label, slot) = GEAR_ROWS[k - 1];
@@ -1282,10 +1313,14 @@ fn armory_panel(
                         card(t, Item::Gear(k - 1, g), on == g, Face::Gear(k - 1, g), wardrobe);
                     }
                 });
-                peek_box(p);
             }
             _ => emblem_page(p, player, pics, images),
         });
+        // Under the rows, not in them: a long page's cards scroll, and what the
+        // one under the pointer is stays in sight.
+        if front.armory <= GEAR_ROWS.len() {
+            peek_box(panel);
+        }
         play_foot(panel, front, party, knocking);
     });
 }
@@ -1658,7 +1693,7 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
                     ui::FAINT,
                 ));
                 if !mine && party.mic != Mic::None {
-                    let muted = party::muted(&party::voice_key(m));
+                    let muted = party::muted(&party::voice_key(party.party.as_ref().map_or(0, |p| p.code), m));
                     r.spawn((chip(52.0), Hit::Mute(m.tag))).with_child(chip_label(if muted {
                         "UNMUTE"
                     } else {
@@ -2188,6 +2223,7 @@ fn click(
     time: Res<Time>,
     mut party: ResMut<PartyView>,
     mut asks: ResMut<PartyAsks>,
+    in_match: Res<InMatch>,
 ) {
     let hit = hits.iter().find(|(i, _)| **i == Interaction::Pressed).map(|(_, h)| *h);
     // A click anywhere but the field puts the keys back.
@@ -2287,7 +2323,7 @@ fn click(
         Hit::Kick(tag) => asks.0.push(Do::Act(pp::ACT_KICK, tag as u32)),
         Hit::Mute(tag) => {
             if let Some(m) = party.members().iter().find(|m| m.tag == tag) {
-                party::toggle_mute(&party::voice_key(m));
+                party::toggle_mute(&party::voice_key(party.party.as_ref().map_or(0, |p| p.code), m));
                 front.dirty = true;
             }
         }
@@ -2372,6 +2408,10 @@ fn click(
         }
         Hit::Go => {
             let now = time.elapsed_secs();
+            // A match came in this frame (`poll`): no second knock over it.
+            if in_match.0 {
+                return;
+            }
             if knocking.0.is_some() {
                 // A double click on PLAY isn't a change of mind.
                 if now - front.knocked_at < CANCEL_AFTER_S {
@@ -2390,6 +2430,10 @@ fn click(
                     // A party's game: its leader starts it, and the server
                     // tells each of us to go (`party.rs`).
                     if party.leads() {
+                        if front.started_at.is_some_and(|t| now - t < START_AGAIN_S) {
+                            return;
+                        }
+                        front.started_at = Some(now);
                         let alone = if party.alone {
                             pp::START_PRIVATE | party.custom.to_arg()
                         } else {
@@ -2600,8 +2644,10 @@ fn page_cmds(
                 front.status.clear();
                 front.bad = false;
                 front.dirty = true;
-                // The knock it replaces is this one's, cancel guard and all.
+                // The knock it replaces is this one's, cancel guard and all;
+                // the party's start asked for has come.
                 front.knocked_at = time.elapsed_secs();
+                front.started_at = None;
                 knocking.0 = Some(door.knock(ask));
             }
             PageCmd::Knock(_) => {}
@@ -2668,6 +2714,13 @@ fn poll(
                     e
                 };
                 front.bad = true;
+                knocking.0 = None;
+                return;
+            }
+            // Already in a match (two knocks crossed): the extra one goes,
+            // left properly, never put over the one playing.
+            News::In(mut l, _) if in_match.0 => {
+                l.leave();
                 knocking.0 = None;
                 return;
             }

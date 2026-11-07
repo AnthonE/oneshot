@@ -107,9 +107,16 @@ fn choose(
     mut next: ResMut<NextState<Screen>>,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut look: ResMut<crate::Look>,
-    leaving: Option<ResMut<crate::front::Leaving>>,
+    (leaving, in_match): (
+        Option<ResMut<crate::front::Leaving>>,
+        Option<Res<crate::front::InMatch>>,
+    ),
     mut exit: MessageWriter<AppExit>,
 ) {
+    // The match ended this frame (`front::ended`): the title it is.
+    if crate::front::InMatch::just_left(&in_match) {
+        return;
+    }
     let clicked = buttons
         .iter()
         .find(|(i, _)| **i == Interaction::Pressed)

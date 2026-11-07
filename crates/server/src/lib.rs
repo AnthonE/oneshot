@@ -613,7 +613,12 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                 if let Some((dir, id, mut doc, flagged)) = files {
                     doc["replay_sha256"] = sha.clone().into();
                     let text = serde_json::to_vec_pretty(&doc).unwrap_or_default();
-                    write_whole(&dir.join(format!("{id}.osr")), replay).await;
+                    // None past the recorder's cap (a match with no limit run for hours).
+                    if replay.is_empty() {
+                        eprintln!("oneshot: {id}: too long to keep a replay of");
+                    } else {
+                        write_whole(&dir.join(format!("{id}.osr")), replay).await;
+                    }
                     if flagged {
                         write_whole(&dir.join("review").join(format!("{id}.json")), text.clone()).await;
                     }
@@ -697,14 +702,30 @@ struct Sess {
     watching: Option<(usize, u8)>,
 }
 
+/// Seats kept in a room for a party whose first member sat down: `left`
+/// more on `team`, until `until`. Nobody else is seated in them.
+struct Hold {
+    code: u32,
+    team: Option<u8>,
+    left: u8,
+    until: Instant,
+}
+
+/// How long a party's seats are kept for its members' hellos.
+const PARTY_HOLD: Duration = Duration::from_secs(20);
+
 struct Live {
     room: Room,
     id: String,
     mode: u8,
     /// Made for a party alone: no stranger is seated in it.
     private: bool,
-    /// The parties seated here, and the side each took (Big Team).
-    parties: Vec<(u32, Option<u8>)>,
+    /// The party code each seat's session carried, and whether it was
+    /// seated as that party (else alone, watchable by the code): who sits
+    /// here now, never a list of who once did.
+    codes: [(u32, bool); MAX_FIGHTERS],
+    /// Seats kept for a party's members still on their way.
+    holds: Vec<Hold>,
     links: [Option<u64>; MAX_FIGHTERS],
     wallets: [Option<String>; MAX_FIGHTERS],
     /// Who sits in each seat, for stats: the wallet, else the account's
@@ -970,30 +991,66 @@ impl Sim {
                         player,
                         tx,
                     } => {
+                        // Going down since its hello was checked: to the live
+                        // slot (a room opened now would only hold the drain up).
+                        if self.ctx.draining.load(Ordering::Relaxed) {
+                            send_msg(
+                                &tx,
+                                &Msg::Refuse {
+                                    reason: proto::REFUSE_FULL,
+                                },
+                            );
+                            self.ctx.health.refuse(proto::REFUSE_FULL);
+                            tx.close();
+                            continue;
+                        }
                         let mode = match mode {
                             MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF => mode,
                             _ => MODE_CASUAL,
                         };
                         let live_room =
                             |r: &Live| r.mode == mode && r.over_at.is_none() && r.room.world.phase != Phase::Over;
-                        // A party's room: where its first member went, on
-                        // the side it took, while that side has a seat.
+                        // Seats kept for parties on their way go when their
+                        // time is up.
+                        for r in rooms.iter_mut().flatten() {
+                            r.holds.retain(|h| h.left > 0 && h.until > now);
+                        }
+                        // Seats open on `team` to a hello of party `code`
+                        // (0: none): less those kept for other parties.
+                        let free = |r: &Live, team: Option<u8>, code: u32| {
+                            let kept: usize = r
+                                .holds
+                                .iter()
+                                .filter(|h| h.code != code && (team.is_none() || h.team == team))
+                                .map(|h| h.left as usize)
+                                .sum();
+                            r.room.open_seats(team).saturating_sub(kept)
+                        };
+                        // A party's room: where a member sits now, seated as
+                        // the party, on that member's side, while it has a
+                        // seat; as private as the start says.
                         let with_party = party.and_then(|p| {
                             rooms.iter().enumerate().find_map(|(i, r)| {
                                 let r = r.as_ref()?;
-                                let &(_, team) = r.parties.iter().find(|(c, _)| *c == p.code)?;
-                                (live_room(r) && r.room.open_seats(team) > 0).then_some((i, team))
+                                if !live_room(r) || r.private != p.private {
+                                    return None;
+                                }
+                                let s = (0..MAX_FIGHTERS)
+                                    .find(|&s| r.links[s].is_some() && r.codes[s] == (p.code, true))?;
+                                let team = r.room.world.rules.teams.then(|| r.room.world.fighters[s].team);
+                                (free(r, team, p.code) > 0).then_some((i, team))
                             })
                         });
+                        // A start long gone (a later PLAY alone with the
+                        // party's code) seats them only back with the party.
+                        let party = party.filter(|p| p.fresh || with_party.is_some());
+                        let pcode = party.map_or(0, |p| p.code);
                         // Big Team's side with room for the whole party.
                         let side_for = |r: &Live, n: usize| -> Option<Option<u8>> {
                             if !r.room.world.rules.teams {
-                                return (r.room.open_seats(None) >= n).then_some(None);
+                                return (free(r, None, pcode) >= n).then_some(None);
                             }
-                            [0u8, 1]
-                                .into_iter()
-                                .find(|&t| r.room.open_seats(Some(t)) >= n)
-                                .map(Some)
+                            [0u8, 1].into_iter().find(|&t| free(r, Some(t), pcode) >= n).map(Some)
                         };
                         let need = party.map_or(1, |p| p.size as usize);
                         let private = party.is_some_and(|p| p.private);
@@ -1033,7 +1090,8 @@ impl Sim {
                                         cup: None,
                                         watchers: Vec::new(),
                                         private,
-                                        parties: Vec::new(),
+                                        codes: [(0, false); MAX_FIGHTERS],
+                                        holds: Vec::new(),
                                         out: Vec::new(),
                                         events_seen: 0,
                                     },
@@ -1043,15 +1101,6 @@ impl Sim {
                             }
                         };
                         let live = rooms[i].as_mut().unwrap();
-                        if let Some(p) = party {
-                            if !live.parties.iter().any(|(c, _)| *c == p.code) {
-                                live.parties.push((p.code, team));
-                            }
-                        } else if code != 0 && !live.parties.iter().any(|(c, _)| *c == code) {
-                            // Alone, but watchable by its party's code; no
-                            // side, so no one is seated with it by this.
-                            live.parties.push((code, None));
-                        }
                         let Some((slot, out)) = live.room.join_team(name, look, team) else {
                             // No seat after all: told so, and a room made for
                             // it alone goes with it.
@@ -1073,6 +1122,28 @@ impl Sim {
                             recent.note(k, live.room.world.map.id, now);
                         }
                         live.links[slot as usize] = Some(session);
+                        // Alone, a party's code only makes them watchable by
+                        // it; with the party, its first member keeps the
+                        // rest of its seats and each who comes takes one.
+                        live.codes[slot as usize] = match party {
+                            Some(p) => (p.code, true),
+                            None => (code, false),
+                        };
+                        if let Some(p) = party {
+                            let others = (0..MAX_FIGHTERS).any(|s| {
+                                s != slot as usize && live.links[s].is_some() && live.codes[s] == (p.code, true)
+                            });
+                            if let Some(h) = live.holds.iter_mut().find(|h| h.code == p.code) {
+                                h.left = h.left.saturating_sub(1);
+                            } else if !others && need > 1 {
+                                live.holds.push(Hold {
+                                    code: p.code,
+                                    team,
+                                    left: (need - 1) as u8,
+                                    until: now + PARTY_HOLD,
+                                });
+                            }
+                        }
                         self.ctx.health.joins_casual.fetch_add(1, Ordering::Relaxed);
                         live.players[slot as usize] = player.clone();
                         live.joined[slot as usize] = live.room.world.tick;
@@ -1090,16 +1161,7 @@ impl Sim {
                         deliver(&sessions, rooms[i].as_ref().unwrap(), out);
                     }
                     ToSim::Queue { session, entry, tx } => {
-                        let playing = rooms
-                            .iter()
-                            .flatten()
-                            .any(|r| r.over_at.is_none() && r.wallets.iter().flatten().any(|w| *w == entry.wallet));
-                        let in_cup = cup_wait.iter().any(|e| e.wallet == entry.wallet)
-                            || cups.iter().flatten().any(|c| {
-                                c.stage != cup::Stage::Done
-                                    && c.entrants.iter().any(|e| e.here && e.wallet == entry.wallet)
-                            });
-                        if playing || in_cup || q.has_wallet(&entry.wallet) || gathers.has_wallet(&entry.wallet) {
+                        if busy(&rooms, &cups, &cup_wait, &q, &entry.wallet) || gathers.has_wallet(&entry.wallet) {
                             send_msg(
                                 &tx,
                                 &Msg::Refuse {
@@ -1144,12 +1206,10 @@ impl Sim {
                         side,
                         tx,
                     } => {
-                        let playing = rooms.iter().flatten().any(|r| {
-                            (r.over_at.is_none() && r.wallets.iter().flatten().any(|w| *w == entry.wallet))
-                                || r.id == id
-                        });
-                        let elsewhere =
-                            q.has_wallet(&entry.wallet) || cup_wait.iter().any(|e| e.wallet == entry.wallet);
+                        // Busy as at a queue (a match, a cup between its
+                        // heats, the queue), or this match already began.
+                        let playing = rooms.iter().flatten().any(|r| r.id == id);
+                        let elsewhere = busy(&rooms, &cups, &cup_wait, &q, &entry.wallet);
                         let refuse = if gathers.done(&id) {
                             // Started without it, or called off: never twice.
                             Some(proto::REFUSE_MATCH)
@@ -1245,7 +1305,7 @@ impl Sim {
                                 r.watchers.retain(|&w| w != session);
                                 if r.watchers.is_empty() {
                                     r.room.spectate = None;
-                                    if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() {
+                                    if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() && !r.room.ranked {
                                         rooms[i] = None;
                                     }
                                 }
@@ -1255,6 +1315,7 @@ impl Sim {
                         let Some((i, slot)) = s.at else { continue };
                         let Some(r) = rooms[i].as_mut() else { continue };
                         r.links[slot as usize] = None;
+                        r.codes[slot as usize] = (0, false);
                         // What they did before they left counts; the match
                         // doesn't (a match over was reported at its end).
                         if r.over_at.is_none() {
@@ -1264,8 +1325,14 @@ impl Sim {
                         }
                         r.players[slot as usize] = None;
                         // A cup's heat plays out even with nobody left: the
-                        // cup waits on its result.
-                        if r.links.iter().all(|l| l.is_none()) && r.cup.is_none() && r.watchers.is_empty() {
+                        // cup waits on its result. So does a ranked match:
+                        // its result is reported (a match left at 2–10 is
+                        // still lost), never dropped.
+                        if r.links.iter().all(|l| l.is_none())
+                            && r.cup.is_none()
+                            && !r.room.ranked
+                            && r.watchers.is_empty()
+                        {
                             // Nobody left to play or watch.
                             rooms[i] = None;
                         } else {
@@ -1507,7 +1574,8 @@ impl Sim {
             cup: None,
             watchers: Vec::new(),
             private: false,
-            parties: Vec::new(),
+            codes: [(0, false); MAX_FIGHTERS],
+            holds: Vec::new(),
             out: Vec::new(),
             events_seen: 0,
         };
@@ -1604,7 +1672,8 @@ impl Sim {
                 cup: Some((ci, h)),
                 watchers: Vec::new(),
                 private: false,
-                parties: Vec::new(),
+                codes: [(0, false); MAX_FIGHTERS],
+                holds: Vec::new(),
                 out: Vec::new(),
                 events_seen: 0,
             };
@@ -1842,7 +1911,10 @@ fn played(r: &Live, s: usize, finished: bool) -> Option<stats::Played> {
     let w = &r.room.world;
     let side = if w.rules.teams { (s & 1) as u8 } else { s as u8 };
     let won = finished && w.winner != sim::world::NO_WINNER && w.winner == side;
-    let ticks = w.tick.saturating_sub(r.joined[s]) as u64;
+    // From when they sat down or play began, whichever was later: the
+    // countdown is no one's time (a fastest Gun Game win is comparable).
+    let from = r.joined[s].max(r.room.began.unwrap_or(w.tick));
+    let ticks = w.tick.saturating_sub(from) as u64;
     Some(stats::Played {
         player,
         mode: r.mode,
@@ -1905,6 +1977,27 @@ fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
             }))
         })
         .collect();
+    // Those who left before the end: their numbers as they left.
+    let mut seats = seats;
+    for (s, name, st) in &r.room.departed {
+        let flags = st.flags();
+        flagged |= !flags.is_empty();
+        seats.push(serde_json::json!({
+            "seat": s,
+            "name": name.as_str(),
+            "left": true,
+            "shots": st.shots,
+            "hits": st.hits,
+            "head_hits": st.head_hits,
+            "head_rate": (st.head_rate() * 1000.0).round() / 1000.0,
+            "kills": st.kills,
+            "sightings_hit": st.reactions_ms.len(),
+            "median_reaction_ms": st.median_reaction_ms(),
+            "snaps": st.snaps,
+            "preaim_ms": st.preaim_ms,
+            "flags": flags,
+        }));
+    }
     let doc = serde_json::json!({
         "id": r.id,
         "ranked": r.room.ranked,
@@ -1935,6 +2028,29 @@ fn tell_cup(c: &cup::Cup, i: usize, sessions: &BTreeMap<u64, Sess>) {
     );
 }
 
+/// Whether `wallet` is already somewhere ranked: in a match still playing,
+/// waiting for a cup or in one between its heats, or in the queue. One
+/// test for every way in (a queue, an Elo Pros match), so they never differ.
+fn busy(
+    rooms: &[Option<Live>],
+    cups: &[Option<cup::Cup>],
+    cup_wait: &[queue::Entry],
+    q: &queue::Queue,
+    wallet: &str,
+) -> bool {
+    let is = |w: &str| w.eq_ignore_ascii_case(wallet);
+    rooms
+        .iter()
+        .flatten()
+        .any(|r| r.over_at.is_none() && r.wallets.iter().flatten().any(|w| is(w)))
+        || cup_wait.iter().any(|e| is(&e.wallet))
+        || cups
+            .iter()
+            .flatten()
+            .any(|c| c.stage != cup::Stage::Done && c.entrants.iter().any(|e| e.here && is(&e.wallet)))
+        || q.has_wallet(wallet)
+}
+
 /// The room for a watcher: party `target`'s, or with 0 the public match
 /// with the most people in it; never one `player` sits in, nor a full one.
 fn watch_room(rooms: &[Option<Live>], target: u32, player: Option<&str>) -> Option<usize> {
@@ -1946,7 +2062,7 @@ fn watch_room(rooms: &[Option<Live>], target: u32, player: Option<&str>) -> Opti
         .filter(|(_, r)| r.over_at.is_none() && r.watchers.len() < MAX_WATCHERS && !sits(r))
         .filter(|(_, r)| match target {
             0 => !r.private,
-            code => r.parties.iter().any(|(c, _)| *c == code),
+            code => r.links.iter().zip(&r.codes).any(|(l, c)| l.is_some() && c.0 == code),
         })
         .max_by_key(|(i, r)| (r.links.iter().flatten().count(), usize::MAX - i))
         .map(|(i, _)| i)

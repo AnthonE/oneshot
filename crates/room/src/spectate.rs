@@ -43,12 +43,20 @@ pub struct Line {
     /// Stream messages, to everyone (None) or one seat's watchers, each
     /// with the tick it may go out.
     msgs: VecDeque<(u32, Option<u8>, Msg)>,
+    /// The tick the line began: nothing older is on it.
+    from: u32,
+    /// Each seat's `Msg::Seat` as the line has shown it so far (who sits
+    /// there at the shown tick, not now): what a new watcher is told.
+    names: [Option<Msg>; MAX_FIGHTERS],
 }
 
 impl Line {
-    pub fn new(delay: u32) -> Line {
+    /// A line from `from` (the room's tick now) on.
+    pub fn new(delay: u32, from: u32) -> Line {
         Line {
             delay,
+            from,
+            names: [None; MAX_FIGHTERS],
             fogs: Default::default(),
             queues: Default::default(),
             pending: Vec::new(),
@@ -122,14 +130,34 @@ impl Line {
         let mut msgs = Vec::new();
         while self.msgs.front().is_some_and(|m| m.0 <= tick) {
             if let Some((_, to, m)) = self.msgs.pop_front() {
+                if let (None, Msg::Seat { slot, .. }) = (to, m) {
+                    if let Some(n) = self.names.get_mut(slot as usize) {
+                        *n = Some(m);
+                    }
+                }
                 msgs.push((to, m));
             }
         }
         (frames, msgs)
     }
 
-    /// The tick a watcher arriving now is shown first.
+    /// Seat `q`'s name as shown now, or `now` (what it is in the room) if
+    /// the line hasn't shown one yet; a line's first watcher sets them all.
+    pub fn shown_name(&mut self, q: usize, now: Msg) -> Msg {
+        *self.names[q].get_or_insert(now)
+    }
+
+    /// Seat `q` has someone new in it: no seat's fog holds where it was.
+    pub fn forget(&mut self, q: usize) {
+        for f in &mut self.fogs {
+            f.forget(q);
+        }
+    }
+
+    /// The tick a watcher arriving now is shown first: `delay` behind, or
+    /// the line's first frame if it is younger than that (a match watched
+    /// for the first time well after it began).
     pub fn shown_tick(&self, tick: u32) -> u32 {
-        tick.saturating_sub(self.delay)
+        tick.saturating_sub(self.delay).max(self.from)
     }
 }

@@ -18,7 +18,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::Msaa;
 use bevy::scene::SceneInstanceReady;
 
-use super::guns::Models;
+use super::guns::{Models, LEFT, RIGHT};
 
 /// The layer the gear's studio draws on, which no other camera sees.
 pub const LAYER: usize = 28;
@@ -41,49 +41,64 @@ const STALL_FRAMES: u16 = 900;
 pub const HEAD: usize = 0;
 pub const FEET: usize = 1;
 
-/// A model in a piece's picture.
-#[derive(Clone, Copy)]
-enum Part {
-    Shades,
-    BootLeft,
-    BootRight,
-}
-
 /// One piece's picture: its slot and id (`proto::HEADWEAR`,
-/// `proto::FOOTWEAR`), its models where they stand (metres, the models'
-/// own frame, turned about +Y, radians), the point the lens looks at,
-/// the way it looks from and how far.
+/// `proto::FOOTWEAR`), the point the lens looks at (metres, the model's own
+/// frame, for headwear the middle of the eyes), the way it looks from and
+/// how far.
 struct Shot {
     slot: usize,
     g: u8,
-    parts: &'static [(Part, Vec3, f32)],
     aim: Vec3,
     from: Vec3,
     dist: f32,
 }
 
-/// The shades: three-quarter on from above, the lenses toward the lens
-/// (the model's +Z). The boots: the pair side by side, toes out a little.
-const SHOTS: [Shot; 2] = [
+/// Headwear, three-quarter on from above, its front toward the lens (the
+/// model's +Z).
+const fn head(g: u8, aim: Vec3, dist: f32) -> Shot {
     Shot {
         slot: HEAD,
-        g: 1,
-        parts: &[(Part::Shades, Vec3::ZERO, 0.0)],
-        aim: Vec3::new(0.0, 0.0, -0.17),
+        g,
+        aim,
         from: Vec3::new(-0.62, 0.38, 1.0),
-        dist: 1.1,
-    },
+        dist,
+    }
+}
+
+/// The boots: the pair side by side (`PAIR`), toes out a little.
+const fn pair(g: u8) -> Shot {
     Shot {
         slot: FEET,
-        g: 1,
-        parts: &[
-            (Part::BootLeft, Vec3::new(0.17, 0.0, 0.0), -0.2),
-            (Part::BootRight, Vec3::new(-0.17, 0.0, 0.0), 0.2),
-        ],
+        g,
         aim: Vec3::new(0.0, 0.17, 0.0),
         from: Vec3::new(-0.62, 0.42, 1.0),
-        dist: 1.35,
-    },
+        dist: 1.45,
+    }
+}
+
+/// A pair's boots in a picture: how far out each stands and how far it turns,
+/// radians.
+const PAIR: [(f32, f32); 2] = [(0.17, -0.2), (-0.17, 0.2)];
+
+const SHOTS: [Shot; 18] = [
+    head(1, Vec3::new(0.0, 0.0, -0.17), 1.1),
+    head(2, Vec3::new(0.0, 0.0, -0.1), 1.1),
+    head(3, Vec3::new(0.0, 0.0, -0.1), 1.1),
+    head(4, Vec3::new(0.0, 0.0, -0.1), 1.1),
+    head(5, Vec3::new(0.0, 0.0, -0.1), 1.2),
+    head(6, Vec3::new(0.0, -0.15, -0.05), 1.3),
+    head(7, Vec3::new(0.0, -0.1, -0.1), 1.5),
+    head(8, Vec3::new(0.0, -0.1, -0.1), 1.5),
+    head(9, Vec3::new(0.0, -0.1, -0.1), 1.8),
+    head(10, Vec3::new(0.0, 0.3, -0.25), 1.5),
+    head(11, Vec3::new(0.0, 0.3, -0.25), 1.6),
+    head(12, Vec3::new(0.0, 0.3, -0.25), 2.0),
+    head(13, Vec3::new(0.0, 0.3, -0.25), 1.4),
+    pair(1),
+    pair(2),
+    pair(3),
+    pair(4),
+    pair(5),
 ];
 
 /// Each piece's picture, by slot and id (none for no gear, or one with no
@@ -175,23 +190,31 @@ pub fn setup(mut commands: Commands, models: Res<Models>, mut images: ResMut<Ass
                 Propagate(layer.clone()),
             ))
             .id();
+        // Its models where they stand (metres, the models' own frame, turned
+        // about +Y, radians).
+        let parts: Vec<(Option<Handle<Scene>>, Vec3, f32)> = match shot.slot {
+            HEAD => vec![(models.head_scene(shot.g), Vec3::ZERO, 0.0)],
+            _ => [LEFT, RIGHT]
+                .into_iter()
+                .map(|side| {
+                    let (x, yaw) = PAIR[side];
+                    (models.boot_scene(shot.g, side), Vec3::new(x, 0.0, 0.0), yaw)
+                })
+                .collect(),
+        };
         commands.entity(root).insert(Sitter {
             cam,
-            parts: shot.parts.len() as u8,
+            parts: parts.len() as u8,
             ready: 0,
             loading: 0,
             frames: 0,
             waited: 0,
         });
-        for &(part, off, yaw) in shot.parts {
-            let scene = match part {
-                Part::Shades => &models.shades,
-                Part::BootLeft => &models.boot_left,
-                Part::BootRight => &models.boot_right,
-            };
+        for (scene, off, yaw) in parts {
+            let Some(scene) = scene else { continue };
             commands
                 .spawn((
-                    SceneRoot(scene.clone()),
+                    SceneRoot(scene),
                     Transform::from_translation(off).with_rotation(Quat::from_rotation_y(yaw)),
                     PartOf(root),
                     ChildOf(root),
@@ -288,6 +311,20 @@ mod tests {
         }
         for s in &SHOTS {
             assert!(s.dist < SPACING_M * 0.5);
+        }
+    }
+
+    /// Every piece of gear there is has its file (`guns::load`, by its name).
+    #[test]
+    fn every_piece_of_gear_has_a_model() {
+        let at = |stem: String| {
+            let path = format!("{}/assets/models/{stem}.glb", env!("CARGO_MANIFEST_DIR"));
+            assert!(std::path::Path::new(&path).exists(), "{path}");
+        };
+        proto::HEADWEAR[1..].iter().for_each(|name| at(name.to_string()));
+        for name in &proto::FOOTWEAR[1..] {
+            at(format!("{name}-left"));
+            at(format!("{name}-right"));
         }
     }
 }

@@ -2,8 +2,8 @@
 //! Spray where the swell meets the rock that stands in the sea, motes in
 //! the sun riding the wind past the eye, and over an island (`level::Land::Isle`)
 //! wisps of the sea of cloud rolling up over its rim and sand blown off
-//! its dunes. Drawn only, from the map and its mood: nothing here knows
-//! where anyone is but the camera.
+//! its dunes; in a ship's hold, the flames in its fonts. Drawn only, from
+//! the map and its mood: nothing here knows where anyone is but the camera.
 //!
 //! **Nothing here hides anyone.** The spray is thrown off rock that stands
 //! out of bounds (`boulders::scenery`, the stones and the stacks' feet),
@@ -60,6 +60,15 @@ const SAND_REACH_M: f32 = 22.0;
 const SAND_DUNE_M: f32 = 0.6;
 const SAND_TINT: [f32; 3] = [0.8, 0.66, 0.46];
 
+/// A font's flame (`level::FONT`, in its cup, over a standing head): tongues
+/// a second, how far from the eye it burns, how big, and how far under the
+/// solid's top it starts, metres. Its colour is the ion's ramp
+/// (`Fx::blue_flame`).
+pub const FLAME_HZ: f32 = 16.0;
+const FLAME_DRAW_M: f32 = 55.0;
+const FLAME_SCALE: f32 = 1.9;
+const FLAME_UNDER_M: f32 = 0.5;
+
 /// What the ambient step carries from frame to frame.
 #[derive(Resource, Default)]
 pub struct Ambient {
@@ -76,7 +85,11 @@ pub fn drive(time: Res<Time>, mood: Res<MoodNow>, mut state: ResMut<Ambient>, fx
     };
     let fx = &mut *fx;
     let dt = time.delta_secs().min(0.1);
-    if mood.roofed || dt <= 0.0 {
+    if dt <= 0.0 {
+        return;
+    }
+    flames(fx, dt, mood.map);
+    if mood.roofed {
         return;
     }
     let eye = fx.eye;
@@ -142,6 +155,28 @@ pub fn drive(time: Res<Time>, mood: Res<MoodNow>, mut state: ResMut<Ambient>, fx
             let scale = (0.6 + 0.22 * r).min(2.4) * fx.range(0.8, 1.25);
             fx.emit_tint(Layer::Spray, 1, edge, out, tint, scale);
         }
+    }
+}
+
+/// The flames in map `id`'s fonts: a tongue now and then in each near the
+/// eye, licking up out of its cup.
+fn flames(fx: &mut Fx, dt: f32, id: u8) {
+    let Some(def) = sim::maps::ALL.iter().find(|d| d.id == id) else {
+        return;
+    };
+    let eye = fx.eye;
+    for (&(_, n), &l) in def.solids.iter().zip(def.solid_looks) {
+        if l != crate::level::FONT {
+            continue;
+        }
+        // A round solid's numbers: x, z, r, and y0, y1 last (`Solid::from_def`).
+        let at = Vec3::new(n[0], n[7] - FLAME_UNDER_M, n[1]);
+        if at.distance_squared(eye) > FLAME_DRAW_M * FLAME_DRAW_M || fx.rand() >= dt * FLAME_HZ {
+            continue;
+        }
+        let at = at + Vec3::new(fx.range(-0.14, 0.14), 0.0, fx.range(-0.14, 0.14));
+        let scale = FLAME_SCALE * fx.range(0.75, 1.2);
+        fx.blue_flame(at, scale);
     }
 }
 

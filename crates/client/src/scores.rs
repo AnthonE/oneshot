@@ -486,7 +486,12 @@ pub fn card_words(st: &HudState, teams: bool, me: u8, d: hud::Death) -> (String,
     } else {
         format!("{} BY", crate::tally::verb(d.cause).to_uppercase())
     };
-    (verb, st.name(d.killer), side.filter(|_| teams), what)
+    let name = if st.death_by.is_empty() {
+        st.name(d.killer)
+    } else {
+        st.death_by.clone()
+    };
+    (verb, name, side.filter(|_| teams), what)
 }
 
 /// The shade and the card while we are dead.
@@ -514,7 +519,7 @@ pub fn card(
     let s = link.0.session();
     let core = &s.core;
     let f = core.own().0;
-    let dead = s.ready && core.latest().phase == 1 && !f.alive && !st.ended && !link.0.closed();
+    let dead = s.ready && core.phase() == sim::world::Phase::Playing && !f.alive && !st.ended && !link.0.closed();
     let now = time.elapsed_secs();
     let death = st.death.filter(|_| dead);
     match (dead, *since) {
@@ -629,8 +634,11 @@ pub fn board(
     mut marks: Query<(&RowEmblem, &mut ImageNode, &mut Node), Without<Row>>,
 ) {
     let s = link.0.session();
-    let over = s.ready && s.core.latest().phase == 2;
-    let held = binds.pressed(crate::binds::Action::Scores, &keys, &mouse);
+    let over = s.ready && s.core.phase() == sim::world::Phase::Over;
+    let held = binds.pressed(
+        crate::binds::Action::Scores,
+        &crate::binds::Controls::new(&keys, &mouse, 0.0),
+    );
     if st.board != held {
         st.board = held;
     }

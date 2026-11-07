@@ -26,6 +26,9 @@ use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
 pub const PROTO_VER: u16 = 30;
+/// What every lobby ticket starts with (the server makes them, `auth.rs`;
+/// the client reads one's own fields back to know whose it is).
+pub const TICKET_PREFIX: &str = "os1.";
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -68,6 +71,12 @@ fn w_i32(w: &mut BitWriter, v: i32, bits: u32) -> R<()> {
     }
     let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
     w.write(v as u32 & mask, bits)
+}
+
+/// A score as its 16 bits carry it: pinned at their ends (a match with no
+/// limit left running all night), never a snapshot that fails to encode.
+pub fn score_on_wire(sc: i32) -> i32 {
+    sc.clamp(i16::MIN as i32, i16::MAX as i32)
 }
 
 fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
@@ -937,7 +946,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.flags(), 2)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
-        w_i32(&mut w, sc, 16)?;
+        w_i32(&mut w, score_on_wire(sc), 16)?;
     }
     w.write(s.phase as u32, 2)?;
     w.write(s.clock, 32)?;
@@ -1181,8 +1190,23 @@ pub const GLYPH_FLOOR: [u16; 17] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15
 /// slot is open to everyone, with no rank lock; what goes in it is worn
 /// only if the wallet owns it on Elo Pros, under its name here. Nobody
 /// owns any by default: none is the only gear everyone has.
-pub const HEADWEAR: [&str; 2] = ["none", "shades"];
-pub const FOOTWEAR: [&str; 2] = ["none", "boots"];
+pub const HEADWEAR: [&str; 14] = [
+    "none",
+    "shades",
+    "aviators",
+    "rounds",
+    "visor",
+    "goggles",
+    "respirator",
+    "demon",
+    "welder",
+    "skull",
+    "hardhat",
+    "helmet",
+    "ten-gallon",
+    "beanie",
+];
+pub const FOOTWEAR: [&str; 6] = ["none", "loggers", "hightops", "spurs", "magboots", "wellies"];
 pub const GEAR_NONE: u8 = 0;
 
 /// `g` if it names gear in `slot` ([`HEADWEAR`], [`FOOTWEAR`]), else none.

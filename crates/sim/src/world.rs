@@ -364,6 +364,9 @@ pub struct World {
     /// Ticks of sudden death played, the clock run out (`SUDDEN_DEATH_MS`).
     pub overtime: u32,
     pub events: Events,
+    /// How many of `events` the last tick made (read by now): the rest
+    /// came between ticks and go with the next.
+    events_read: usize,
     /// The projectile slot [`Self::projectiles`] is at (`MAX_PROJ`
     /// outside it): a full pool never gives that slot to a new round.
     flying: usize,
@@ -403,6 +406,7 @@ impl World {
             winner: NO_WINNER,
             overtime: 0,
             events: Events::default(),
+            events_read: 0,
             flying: MAX_PROJ,
             rewind: Box::default(),
             vrewind: Box::default(),
@@ -464,7 +468,9 @@ impl World {
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
     /// what it saw of that client's acks (docs/DESIGN.md §7).
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
-        self.events.clear();
+        // Last tick's events were read; any since (a seat taken between
+        // ticks: a flag let go, a seat left) are this tick's.
+        self.events.drop_first(self.events_read);
         self.tick = self.tick.wrapping_add(1);
         match self.phase {
             Phase::Countdown => {
@@ -494,6 +500,7 @@ impl World {
             *p = VPose::of(v);
         }
         self.vrewind.write(self.tick, &vposes);
+        self.events_read = self.events.as_slice().len();
     }
 
     fn play(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
@@ -1319,7 +1326,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part: 0,
-            c: (took / PT) as u16,
+            c: hp(took),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -1338,14 +1345,22 @@ impl World {
         }
         v.needles = 0;
         let at = v.body.pos + V3::new(0.0, 1.0, 0.0);
-        self.events.push(Event {
-            kind: Ev::Blast,
-            a: att as u8,
-            c: id as u16,
-            pos: at,
-            ..Event::default()
-        });
-        self.damage(att, vic, KILL_PTS, false, Head::None, id as u16);
+        // The splash first (its Blast event comes before the kill, which
+        // the client's rag doll reads), then the one they were in.
+        let cause = id as u16;
+        self.blast_push(
+            at,
+            att,
+            SUPER_SPLASH,
+            SUPER_RADIUS,
+            SUPER_FULL,
+            SUPER_EDGE,
+            1.0,
+            cause,
+            SUPER_SHIELD_K,
+            SUPER_PUSH,
+        );
+        self.damage_k(att, vic, SUPER_DMG * PT, false, Head::None, cause, SUPER_SHIELD_K);
     }
 
     /// One tick of a thrown thing under `g`, off what it meets: whether it
@@ -1584,6 +1599,25 @@ impl World {
         cause: u16,
         shield_k: f32,
     ) {
+        self.blast_push(at, owner, dmg, radius, full, edge, self_k, cause, shield_k, BLAST_PUSH);
+    }
+
+    /// [`Self::blast_k`] throwing bodies `push` m/s at its middle (a
+    /// grenade's or a rocket's [`BLAST_PUSH`]).
+    #[allow(clippy::too_many_arguments)]
+    fn blast_push(
+        &mut self,
+        at: V3,
+        owner: usize,
+        dmg: i32,
+        radius: f32,
+        full: f32,
+        edge: i32,
+        self_k: f32,
+        cause: u16,
+        shield_k: f32,
+        push: f32,
+    ) {
         let rim = edge as f32 / dmg.max(1) as f32;
         let falloff = |dist: f32| {
             if dist <= full {
@@ -1621,7 +1655,7 @@ impl World {
                 V3::new(0.0, 1.0, 0.0)
             };
             let b = &mut self.fighters[q].body;
-            b.vel = b.vel + away * (BLAST_PUSH * k);
+            b.vel = b.vel + away * (push * k);
             if away.y > 0.0 {
                 b.grounded = false;
             }
@@ -1781,7 +1815,7 @@ impl World {
             kind: Ev::VehicleHit,
             a: att as u8,
             part: i as u8,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos,
             ..Event::default()
         });
@@ -2176,7 +2210,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -2951,9 +2985,55 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
     (base * cr + (right * ct + up2 * st) * sr).norm()
 }
 
+/// Damage in points as the whole hit points an event carries: rounded, and
+/// never 0 for a hit that did some (a glancing blow still hurt, and counts).
+fn hp(pts: i32) -> u16 {
+    if pts <= 0 {
+        return 0;
+    }
+    ((pts + PT / 2) / PT).clamp(1, u16::MAX as i32) as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three in an open map, the countdown run out: 0 shoots, 1 is at the
+    /// origin, 2 stands a metre from it.
+    fn three() -> World {
+        let mut w = World::new(Map::open(), Rules::ffa(), 1, (0, 0));
+        for s in 0..3 {
+            w.seat(s, s as u8);
+        }
+        let idle = [Input::default(); MAX_FIGHTERS];
+        while w.phase == Phase::Countdown {
+            w.step(&idle, &[0; MAX_FIGHTERS]);
+        }
+        w.fighters[0].body.pos = V3::new(-10.0, 0.0, 0.0);
+        w.fighters[1].body.pos = V3::ZERO;
+        w.fighters[2].body.pos = V3::new(0.0, 0.0, 1.0);
+        w
+    }
+
+    #[test]
+    fn the_eighth_shard_kills_and_splashes_who_stands_by() {
+        let id = crate::arms::SHARDS;
+        let mut w = three();
+        for _ in 0..arm(id).stick {
+            w.stick(0, 1, id);
+        }
+        assert!(!w.fighters[1].alive);
+        let by = w.fighters[2];
+        assert!(by.alive && by.shield < SHIELD_MAX && by.health == HEALTH_MAX);
+        // An overshield outlasts it, as Halo 2's did.
+        let mut w = three();
+        w.fighters[1].shield = OVERSHIELD_MAX;
+        for _ in 0..arm(id).stick {
+            w.stick(0, 1, id);
+        }
+        let v = w.fighters[1];
+        assert!(v.alive && v.needles == 0 && v.shield > 0, "{}", v.shield);
+    }
 
     #[test]
     fn a_full_pool_gives_the_oldest_shard_s_slot_and_never_a_rocket_s() {
