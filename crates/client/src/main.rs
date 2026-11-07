@@ -209,6 +209,7 @@ fn run() -> Result<(), String> {
         (app, want, joins)
     };
     if let Some(path) = shot {
+        oneshot_client::look::shot::keep_out_of_the_way(&mut app);
         app.insert_resource(oneshot_client::look::shot::Capture::new(
             path, shot_at, want, want_match,
         ));

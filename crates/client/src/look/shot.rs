@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::window::{PrimaryWindow, WindowLevel};
 
 use crate::front::{Front, InMatch};
 use crate::loading::Settle;
@@ -133,6 +134,18 @@ struct ShotLine;
 struct ShotWord;
 #[derive(Component)]
 struct ShotSays;
+
+/// A picture's window stays out of the way of whoever is at the desk: under
+/// their windows and never focused, a dozen shots in a row taking the screen
+/// look like the machine glitching. What it draws is the same.
+pub fn keep_out_of_the_way(app: &mut App) {
+    let world = app.world_mut();
+    let mut windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+    for mut w in windows.iter_mut(world) {
+        w.window_level = WindowLevel::AlwaysOnBottom;
+        w.focused = false;
+    }
+}
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Shots>()

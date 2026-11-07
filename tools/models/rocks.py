@@ -1,4 +1,5 @@
-"""The rocks: Dry Fork's boulders and its sea stack, from Meshy
+"""The rocks: Dry Fork's boulders and its sea stack, Cloudbreak's wind-carved
+boulders, stacks and hanging island, from Meshy
 (tools/models/meshy_gen.py boulder-a --multiview --tris 12000 …; the prompts
 are in each raw's sidecar, sources/meshy/<slug>.json).
 
@@ -34,18 +35,39 @@ import bmesh
 
 # name: its raw's slug
 BOULDERS = {'boulder_a': 'boulder-a', 'boulder_b': 'boulder-b', 'boulder_c': 'boulder-c'}
+# An island's boulders: name: (its raw's slug, how far it is pushed to its
+# cube). Wind-carved round, so hardly: what they lose at the box's corners they
+# keep in their shape.
+ISLE_BOULDERS = {
+    'isle_boulder_a': ('isle-boulder-a', 0.15),
+    'isle_boulder_b': ('isle-boulder-b', 0.15),
+    'isle_boulder_c': ('isle-boulder-c', 0.12),
+}
+ISLE_BOULDER_TRIS = 5000
 # Built things cut the same way, to fill the box the sim collides: name:
 # (its raw's slug, how far it is pushed out to its cube, its folder under
 # models). The pylon is a base's buttress (a `pylon` look's turned box).
-BLOCKS = {'pylon': ('pylon', 0.2, 'base')}
+BLOCKS = {'pylon': ('pylon', 0.2, 'base'), 'husk': ('husk', 0.04, 'ship'), 'font': ('font', 0.04, 'ship'),
+          'wreck_car': ('wreck-sedan', 0.02, 'wreck'), 'wreck_van': ('wreck-van', 0.02, 'wreck')}
 # A built thing's faces are flat and its edges hard: thinned as far as a
 # boulder, its panels buckle.
 BLOCK_TRIS = 9000
-STACKS = {'sea_stack': 'sea-stack'}
+# name: (its raw's slug, triangles, map's side). The hanging island is seen up
+# close from the rim.
+STACKS = {
+    'sea_stack': ('sea-stack', 7000, 1024),
+    'isle_stack_a': ('isle-stack-a', 12000, 1536),
+    'isle_stack_b': ('isle-stack-b', 12000, 1536),
+    'isle_float': ('isle-float', 22000, 2048),
+}
+# A ship's prop's creases: its occlusion, baked over this reach on its unit
+# cube, at this many samples, raised to this power over its colour.
+AO_REACH = 0.22
+AO_SAMPLES = 48
+AO_POWER = 1.5
 # How far a boulder's surface is pushed out toward its cube, 0..1.
 FILL = 0.35
 BOULDER_TRIS = 2600
-STACK_TRIS = 7000
 STACK_M = 1.0
 PX = 1024
 ROUGH = 0.92
@@ -80,9 +102,10 @@ def load(slug):
     return o
 
 
-def low(hi, tris, name, hard=False):
+def low(hi, tris, name, hard=False, ao=False, px=PX):
     """A thinned copy of `hi` with one map of its own, Meshy's mesh and paint
-    baked onto it: (the copy, its colour's mean, linear)."""
+    baked onto it: (the copy, its colour's mean, linear). With `ao`, its own
+    occlusion is multiplied into the colour, so a crease reads dark."""
     bpy.ops.object.select_all(action='DESELECT')
     o = hi.copy()
     o.data = hi.data.copy()
@@ -135,8 +158,8 @@ def low(hi, tris, name, hard=False):
     bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
     bsdf.inputs['Metallic'].default_value = 0.0
     bsdf.inputs['Roughness'].default_value = ROUGH
-    colour = bpy.data.images.new(name + '_colour', PX, PX, alpha=False)
-    normal = bpy.data.images.new(name + '_normal', PX, PX, alpha=False)
+    colour = bpy.data.images.new(name + '_colour', px, px, alpha=False)
+    normal = bpy.data.images.new(name + '_normal', px, px, alpha=False)
     normal.colorspace_settings.name = 'Non-Color'
     ct = nt.nodes.new('ShaderNodeTexImage')
     ct.image = colour
@@ -176,6 +199,27 @@ def low(hi, tris, name, hard=False):
         # settings and not the scene's.
         bpy.ops.object.bake(type=kind, use_selected_to_active=True, cage_extrusion=BAKE_CAGE,
                             max_ray_distance=BAKE_REACH, margin=12, **extra)
+    if ao:
+        occl = bpy.data.images.new(name + '_ao', px, px, alpha=False)
+        occl.colorspace_settings.name = 'Non-Color'
+        at = nt.nodes.new('ShaderNodeTexImage')
+        at.image = occl
+        for n in nt.nodes:
+            n.select = False
+        at.select = True
+        nt.nodes.active = at
+        hi.hide_render = True
+        hi.select_set(False)
+        s.cycles.samples = AO_SAMPLES
+        if s.world is None:
+            s.world = bpy.data.worlds.new('w')
+        s.world.light_settings.distance = AO_REACH
+        bpy.ops.object.bake(type='AO', use_selected_to_active=False, margin=12)
+        c = np.array(colour.pixels[:]).reshape(-1, 4)
+        a = np.array(occl.pixels[:]).reshape(-1, 4)[:, :1]
+        c[:, :3] *= a ** AO_POWER
+        colour.pixels[:] = c.ravel()
+        nt.nodes.remove(at)
     nt.links.new(ct.outputs['Color'], bsdf.inputs['Base Color'])
     bump = nt.nodes.new('ShaderNodeNormalMap')
     nt.links.new(nm.outputs['Color'], bump.inputs['Color'])
@@ -214,7 +258,7 @@ def volume(o):
     return v
 
 
-def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=False):
+def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=False, ao=False):
     fill = FILL if fill is None else fill
     scene()
     o = load(slug)
@@ -234,7 +278,7 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
     o.data.vertices.foreach_set('co', co.ravel())
     o.data.update()
     os.makedirs(SHEETS, exist_ok=True)
-    o, mean = low(o, tris, name, hard)
+    o, mean = low(o, tris, name, hard, ao)
     if rough is not None:
         for material in o.data.materials:
             next(n for n in material.node_tree.nodes if n.type == 'BSDF_PRINCIPLED').inputs['Roughness'].default_value = rough
@@ -249,6 +293,9 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
         'fill': round(volume(o), 3),
         'inset_mean': round(float(inset.mean()), 4),
         'inset_max': round(float(inset.max()), 4),
+        # How far it reaches from its upright axis: over 0.5, it leaves a
+        # round solid of the cube's width.
+        'radial': round(float(np.hypot(co[:, 0], co[:, 1]).max()), 4),
         'colour_mean': mean,
         'tris': sum(len(p.vertices) - 2 for p in o.data.polygons),
         'bytes': os.path.getsize(path),
@@ -258,7 +305,7 @@ def boulder(name, slug, fill=None, out=OUT, rough=None, tris=BOULDER_TRIS, hard=
     print('MODEL', json.dumps(info))
 
 
-def stack(name, slug):
+def stack(name, slug, tris, px):
     scene()
     o = load(slug)
     lo, hi = bounds(o)
@@ -267,7 +314,7 @@ def stack(name, slug):
     o.data.transform(Matrix.Scale(k, 4) @ Matrix.Translation(Vector((-mid.x, -mid.y, -lo.z))))
     o.data.update()
     os.makedirs(SHEETS, exist_ok=True)
-    o, mean = low(o, STACK_TRIS, name)
+    o, mean = low(o, tris, name, px=px)
     lo, hi = bounds(o)
     path = export(o, name)
     info = {
@@ -289,7 +336,10 @@ if __name__ == '__main__':
             boulder(name, slug)
     for name, (slug, fill, folder) in BLOCKS.items():
         if not want or name in want:
-            boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True)
-    for name, slug in STACKS.items():
+            boulder(name, slug, fill, os.path.join(MODELS, folder), rough=0.5, tris=BLOCK_TRIS, hard=True, ao=folder == 'ship')
+    for name, (slug, fill) in ISLE_BOULDERS.items():
         if not want or name in want:
-            stack(name, slug)
+            boulder(name, slug, fill, tris=ISLE_BOULDER_TRIS)
+    for name, (slug, tris, px) in STACKS.items():
+        if not want or name in want:
+            stack(name, slug, tris, px)

@@ -26,6 +26,10 @@ boot-right.glb) are ours on the same terms: the operator's own model on
 Meshy, cut by tools/models/boots.py (thinned, its colour and detail baked
 onto maps of its own, the left made as the right's mirror image).
 
+Cloudbreak's rock (models/rock/isle_*) is commissioned from Meshy on the same
+terms, from our own prompts, and cut by tools/models/rocks.py. Its observatory (models/isle/observatory_*) is ours,
+modelled by tools/models/observatory.py.
+
 The truck (models/truck.glb) is "Tesla Cybertruck" (https://skfb.ly/6QSBr)
 by hashikemu, licensed under Creative Commons Attribution 4.0
 (http://creativecommons.org/licenses/by/4.0/). Changed by
@@ -98,14 +102,18 @@ under the MIT licence:
     SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Textures in the Bevy client (crates/client/assets/textures: sand, grass,
-gravel, rock, concrete, metal, steel, tread, stone; colour and normal maps, and
+gravel, rock, isle_rock, concrete, metal, steel, tread, stone; colour and normal maps, and
 for the rock and the boxes' sets roughness and occlusion) are CC0. The
 ground's four are cut from Poly Haven (polyhaven.com) by tools/ground.sh:
 gravelly_sand (Dario Barresi), grass_ground (Charlotte Baglioni),
 rocky_trail (Amal Kumar) and cliff_side (photography James Ray Cock and
-Dario Barresi, processing Jenelle van Heerden). The bases' two are cut
-from ambientCG (ambientcg.com) by the same tool: MetalPlates001 (steel) and
-DiamondPlate008C (tread), and Concrete034 (stone). The boxes' other two are copied from Gates by
+Dario Barresi, processing Jenelle van Heerden). Cloudbreak's two are cut
+the same way: old_sandstone_02 (Dimitrios Savva, its rock) and
+large_sandstone_blocks_01 (Rob Tuytel, its masonry, greyed). The arenas' are
+cut the same way: brick_wall_001, marble_01, asphalt_02, brushed_concrete_2,
+snow_floor and rusty_metal_02. The bases' two
+are cut from ambientCG (ambientcg.com) by the same tool: MetalPlates001 (steel)
+and DiamondPlate008C (tread). The boxes' other two are copied from Gates by
 tools/assets.mjs: Poly Haven's concrete_wall_003 and ambientCG's
 (ambientcg.com) CorrugatedSteel009; and the grass card atlas is from Poly
 Haven's grass_medium_01 (baked by Gates). No attribution is required;

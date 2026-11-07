@@ -81,9 +81,49 @@ pub struct Mood {
     /// shadows' depth on the ground, and the sun's dimming under them.
     /// Zero holds the sun still, whatever drifts over it.
     pub shade: f32,
+    /// How dark the deck's underside goes where it is thickest, `0..=1`:
+    /// a heavy overcast seen from under it is mottled, dark where the cloud
+    /// over it is thick and pale where it thins, where a cumulus's flat
+    /// base wants none.
+    pub deep: f32,
+    /// How much of the sky a grey veil of the mood's fog lies over, `0..=1`,
+    /// all the way up and whole at the horizon: under a heavy overcast the air's
+    /// own blue doesn't reach the eye, however bright the sun in its breaks.
+    pub veil: f32,
     /// Where in the cloud field this map's sky starts, noise units: each
     /// map its own clouds from the one field.
     pub field_at: [f32; 2],
+    /// Under a roof, whose light fills it (`fill::hall::PALETTES`).
+    pub hall: usize,
+    /// The frame's grade: one for everyone on the map.
+    pub grade: Grade,
+    /// Whether what falls (`rain`, how much of it) is snow.
+    pub snow: bool,
+}
+
+/// A mood's film grade (`rig::grade_for`), `Grade::NONE` the frame as lit. It only
+/// colours what's already seen; a mood stays readable by its light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grade {
+    /// White balance: cooler under 0, warmer over; green to magenta.
+    pub temperature: f32,
+    pub tint: f32,
+    /// Over everything, after the tone curve.
+    pub saturation: f32,
+    /// Over the shadows and the midtones, about their middle.
+    pub contrast: f32,
+    /// Added to the shadows.
+    pub lift: f32,
+}
+
+impl Grade {
+    pub const NONE: Grade = Grade {
+        temperature: 0.0,
+        tint: 0.0,
+        saturation: 1.0,
+        contrast: 1.0,
+        lift: 0.0,
+    };
 }
 
 /// Proving Grounds and The Range: the reference. Noon on a clear day with
@@ -111,7 +151,12 @@ pub const NOON: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [0.0, 0.0],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
 /// Overpass: a sun shower late in the day. Broken cloud with the sun under
@@ -141,7 +186,12 @@ pub const SUN_SHOWER: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [7.3, 3.1],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
 /// Cistern: a misty morning. A low sun (21°) over the wall between the two
@@ -171,7 +221,12 @@ pub const MIST: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [19.0, 11.5],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
 /// Dry Fork: a desert afternoon. A high sun (50°), cumulus racing over the
@@ -200,7 +255,12 @@ pub const DESERT: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 1.0,
     shade: 0.5,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [3.0, 22.0],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
 /// Bulkhead: dusk. The sun low (11°) over one long side, across the line
@@ -230,30 +290,114 @@ pub const DUSK: Mood = Mood {
     moon_azim: 0.0,
     moon_lit: 0.9,
     shade: 0.0,
+    deep: 0.0,
+    veil: 0.0,
     field_at: [25.0, 5.0],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
-/// Cloudbreak: an island over a sea of cloud under a heavy grey deck with
-/// breaks in it. The sun (41°) in the south, across the line between the
-/// bases, comes through a break whole, so what it lights and what it
-/// shades stand far apart, as under a broken deck; the deck's shadows
-/// sweep the island. The cover is held under where the deck closes into
-/// one flat sheet (0.78), so the sky is masses with lit tops and blue in
-/// the breaks; a thin mist grades the stacks paler with their distance
-/// (a tenth of the light across the island) and hazes the horizon the
-/// sea of cloud goes into.
+/// Overpass: a rainy dusk, the sun low and red through a break in a heavy deck,
+/// across the line between the bases. Its exposure stays open: a fighter is as
+/// easy to see as at the dusk it's the wet cousin of; the dark is in the sky, and
+/// the lamps and the signs are what's warm in it.
+pub const RAIN_DUSK: Mood = Mood {
+    name: "rain dusk",
+    sun_elev: 0.2,
+    sun_azim: 0.0,
+    sun_rgb: [1.0, 0.7, 0.48],
+    sun: 0.5,
+    light: 0.4,
+    fill: 0.8,
+    ev100: 13.3,
+    cover: 0.93,
+    dark: 0.93,
+    mist: 0.0015,
+    rain: 0.4,
+    dust: 0.0,
+    wet: 1.0,
+    wind_azim: 0.6,
+    wind_ms: 5.0,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.0,
+    moon_lit: 1.0,
+    shade: 0.3,
+    deep: 0.85,
+    veil: 0.46,
+    field_at: [41.0, 13.0],
+    hall: 0,
+    grade: Grade {
+        temperature: -0.045,
+        tint: 0.003,
+        saturation: 1.08,
+        contrast: 1.06,
+        lift: 0.0,
+    },
+    snow: false,
+};
+
+/// Proving Grounds: blue hour over a test range under snow, the sun down low and
+/// rose across the line between the bases, the cloud broken, snow coming down.
+pub const SNOW_DUSK: Mood = Mood {
+    name: "snow dusk",
+    sun_elev: 0.2,
+    sun_azim: core::f32::consts::PI,
+    sun_rgb: [1.0, 0.82, 0.72],
+    sun: 0.62,
+    light: 0.32,
+    fill: 0.8,
+    ev100: 13.5,
+    cover: 0.84,
+    dark: 0.66,
+    mist: 0.0016,
+    rain: 0.3,
+    dust: 0.0,
+    wet: 0.0,
+    wind_azim: 2.2,
+    wind_ms: 2.5,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.4,
+    moon_lit: 0.75,
+    shade: 0.2,
+    deep: 0.55,
+    veil: 0.34,
+    field_at: [9.0, 21.0],
+    hall: 0,
+    grade: Grade {
+        temperature: -0.06,
+        tint: 0.004,
+        saturation: 1.08,
+        contrast: 1.07,
+        lift: 0.0,
+    },
+    snow: true,
+};
+
+/// Cloudbreak: an island over a sea of cloud under a heavy grey deck. The
+/// sun (35 degrees up, in the south-south-east, across the line between the
+/// bases) comes through a break whole and warm, so what it lights and what it
+/// shades stand far apart, as under a broken deck. The deck is mottled dark
+/// where it is thick (`deep`), and a veil of the fog over the whole sky
+/// (`veil`, with masses of its own) keeps the air's blue from the eye however
+/// bright that sun, and thins toward it. A mist grades the stacks paler with
+/// their distance and hazes the horizon the sea of cloud goes into.
 pub const OVERCAST: Mood = Mood {
     name: "overcast",
-    sun_elev: 0.72,
-    sun_azim: core::f32::consts::PI,
-    sun_rgb: [1.0, 0.97, 0.92],
-    sun: 1.0,
-    light: 0.75,
-    fill: 0.8,
+    sun_elev: 0.62,
+    sun_azim: 2.7,
+    sun_rgb: [1.0, 0.93, 0.8],
+    sun: 1.9,
+    light: 0.9,
+    fill: 0.7,
     ev100: 13.9,
-    cover: 0.74,
-    dark: 0.5,
-    mist: 0.0012,
+    cover: 0.92,
+    dark: 0.62,
+    mist: 0.0034,
     rain: 0.0,
     dust: 0.0,
     wet: 0.0,
@@ -264,8 +408,13 @@ pub const OVERCAST: Mood = Mood {
     moon_elev: -0.5,
     moon_azim: 0.0,
     moon_lit: 1.0,
-    shade: 0.45,
+    shade: 0.15,
+    deep: 0.8,
+    veil: 0.72,
     field_at: [33.0, 7.0],
+    hall: 0,
+    grade: Grade::NONE,
+    snow: false,
 };
 
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
@@ -282,15 +431,40 @@ pub const INTERIOR: Mood = Mood {
 /// The mood of map `id` (`sim::maps::ALL`'s ids).
 pub fn of(id: u8) -> Mood {
     match id {
-        1 => SUN_SHOWER,
-        2 => MIST,
+        0 => SNOW_DUSK,
+        1 => RAIN_DUSK,
+        2 => Mood {
+            name: "cistern",
+            field_at: [31.0, 4.0],
+            hall: 1,
+            grade: Grade {
+                temperature: -0.012,
+                tint: 0.0,
+                saturation: 1.03,
+                contrast: 1.0,
+                lift: 0.0,
+            },
+            ..INTERIOR
+        },
         3 => DESERT,
         4 => Mood {
             name: "noon (range)",
             field_at: [14.0, 9.0],
             ..NOON
         },
-        5 => DUSK,
+        5 => Mood {
+            name: "dock",
+            field_at: [25.0, 5.0],
+            hall: 2,
+            grade: Grade {
+                temperature: -0.015,
+                tint: 0.0,
+                saturation: 1.05,
+                contrast: 1.06,
+                lift: 0.0,
+            },
+            ..INTERIOR
+        },
         6 => INTERIOR,
         7 => OVERCAST,
         _ => NOON,
@@ -366,6 +540,8 @@ impl Mood {
             moon_lit: self.moon_lit,
             moonlight: self.moon,
             moon_sun: self.to_sun(),
+            deep: self.deep,
+            veil: self.veil,
         }
     }
 

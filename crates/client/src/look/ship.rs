@@ -204,7 +204,7 @@ pub fn hull_images(n: usize) -> [Image; 4] {
         // A plate's face a little lighter toward its top, as a curved
         // plate catches more of the vault.
         let sheen = 0.94 + 0.08 * (pv / ROW_H);
-        let mut col = edge.lerp(face, b) * shade * sheen * (0.93 + 0.1 * smudge);
+        let mut col = edge.lerp(face, b) * shade * sheen * (0.72 + 0.45 * smudge);
         col *= 1.0 - 0.25 * sunk - 0.1 * cells - 0.5 * g - 0.45 * inl;
         col = seam.lerp(col, smooth(0.0, 0.6, b));
         if glow > 0.5 {
@@ -213,7 +213,7 @@ pub fn hull_images(n: usize) -> [Image; 4] {
         Texel {
             albedo: col.to_array(),
             ao: (0.45 + 0.55 * b) * (1.0 - 0.3 * sunk - 0.4 * g - 0.35 * inl),
-            rough: 0.3 + 0.12 * smudge + 0.24 * (1.0 - b) + 0.1 * sunk + 0.1 * cells + 0.2 * inl,
+            rough: 0.3 + 0.3 * smudge + 0.24 * (1.0 - b) + 0.1 * sunk + 0.1 * cells + 0.2 * inl,
             metal: 1.0,
             glow,
         }
@@ -287,7 +287,7 @@ pub fn deck_images(n: usize) -> [Image; 4] {
         }
         let fv = (lv / (pw / 20.0)).rem_euclid(1.0);
         let fu = (lu / (pw / 4.0)).rem_euclid(1.0);
-        if (0.3..0.7).contains(&fv) && (0.08..0.92).contains(&fu) {
+        if (0.36..0.64).contains(&fv) && (0.08..0.92).contains(&fu) {
             1.0
         } else {
             0.0
@@ -301,7 +301,7 @@ pub fn deck_images(n: usize) -> [Image; 4] {
         let k = kind(i, j);
         let o = octagon(lu, lv);
         let sunk = panel(o);
-        top - 0.25 * sunk + 0.15 * rib(k, lu, lv) * sunk - 0.6 * slot(k, lu, lv, o)
+        top - 0.12 * sunk + 0.15 * rib(k, lu, lv) * sunk - 0.6 * slot(k, lu, lv, o) + 0.015 * noise(u, v, 128, 53)
     };
     let border = Vec3::new(0.05, 0.036, 0.08);
     let inner = Vec3::new(0.07, 0.045, 0.11);
@@ -330,12 +330,12 @@ pub fn deck_images(n: usize) -> [Image; 4] {
             ao: if s > 0.5 {
                 0.25
             } else {
-                (0.55 + 0.45 * edge) * (1.0 - 0.15 * sunk)
+                (0.75 + 0.25 * edge) * (1.0 - 0.15 * sunk)
             },
             rough: if s > 0.5 {
                 0.9
             } else {
-                0.3 + 0.14 * smudge + 0.1 * sunk - 0.08 * r
+                0.5 + 0.14 * smudge + 0.1 * sunk - 0.08 * r
             },
             metal: if k == 3 { 1.0 } else { 0.9 - 0.2 * sunk },
             // Light from under the deck through a grate's slots.
@@ -345,12 +345,16 @@ pub fn deck_images(n: usize) -> [Image; 4] {
     bake(n, 6.0, &height, &texel)
 }
 
-/// The windows: a honeycomb of gold glass in dark frames, each cell a
+/// The windows: a fine honeycomb of amber glass in dark frames, lit from
+/// far behind, so it swells and dims across a pane rather than glowing
+/// flat, each cell a
 /// little domed and lit from behind, brightest at its middle.
 pub fn gold_images(n: usize) -> [Image; 4] {
-    const COLS: usize = 7;
-    const ROWS: usize = 8;
-    const FRAME: f32 = 0.8;
+    const COLS: usize = 13;
+    const ROWS: usize = 16;
+    const FRAME: f32 = 0.84;
+    // The light behind the glass: this share is steady, the rest wanders.
+    const STEADY: f32 = 0.55;
     let nf = n as f32;
     let height = |x: usize, y: usize| -> f32 {
         let (u, v) = (x as f32 / nf, y as f32 / nf);
@@ -361,24 +365,32 @@ pub fn gold_images(n: usize) -> [Image; 4] {
             0.55
         }
     };
-    let glass = Vec3::new(0.95, 0.62, 0.18);
-    let frame = Vec3::new(0.06, 0.045, 0.03);
+    let glass = Vec3::new(0.9, 0.5, 0.12);
+    let deep = Vec3::new(0.42, 0.16, 0.05);
+    let frame = Vec3::new(0.03, 0.022, 0.018);
     let texel = |x: usize, y: usize, _h: f32| -> Texel {
         let (u, v) = (x as f32 / nf, y as f32 / nf);
         let (d, cell) = hex(u, v, COLS, ROWS);
         let pane = d < FRAME;
-        let flicker = 0.85 + 0.15 * hash2(cell.0 as usize, cell.1 as usize, 17);
+        let flicker = 0.7 + 0.3 * hash2(cell.0 as usize, cell.1 as usize, 17);
         let t = (d / FRAME).min(1.0);
+        // How much light is behind this cell: broad drifts over the tile.
+        let drift = smooth(0.25, 0.75, noise(u, v, 2, 29) * 0.75 + noise(u, v, 5, 31) * 0.25);
+        let lit = STEADY + (1.0 - STEADY) * drift;
         Texel {
             albedo: if pane {
-                (glass * (1.0 - 0.3 * t)).to_array()
+                (deep.lerp(glass, lit) * (1.0 - 0.3 * t)).to_array()
             } else {
                 frame.to_array()
             },
             ao: if pane { 1.0 } else { 0.7 },
             rough: if pane { 0.15 } else { 0.5 },
             metal: if pane { 0.0 } else { 1.0 },
-            glow: if pane { (1.0 - 0.7 * t * t) * flicker } else { 0.0 },
+            glow: if pane {
+                (1.0 - 0.75 * t * t) * flicker * lit * lit
+            } else {
+                0.0
+            },
         }
     };
     bake(n, 6.0, &height, &texel)
