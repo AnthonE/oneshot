@@ -38,6 +38,11 @@ fn orb_color(id: u8) -> LinearRgba {
 const PAD_FRAG_APART_M: f32 = 0.14;
 /// A gun on the floor lies on its side this high (its half thickness).
 const LIE_Y: f32 = 0.05;
+/// A gun lying for the taking is drawn this much bigger than in a hand, to
+/// be seen on the floor from head height (reach is the sim's: unchanged);
+/// and lies as much higher.
+const LYING_SCALE: f32 = 1.4;
+const GUN_LIE_Y: f32 = LIE_Y * LYING_SCALE;
 /// A drop thrown by a blast: how fast the drawn one follows where the
 /// snapshot says it is (1/s), how fast it tumbles for its speed (radians a
 /// metre), and how fast it settles flat on landing (1/s). Further than
@@ -92,16 +97,16 @@ fn frag(commands: &mut Commands, models: &Models, at: Transform, root: Entity) {
 }
 
 /// `arm`'s gun under `root`, turned about its middle rather than its grip,
-/// glowing.
+/// drawn [`LYING_SCALE`] big, glowing.
 fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
     if let (Some(g), Some((pivot, scene))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
         crate::look::blade::light(commands, scene, arm);
         crate::look::lying::glow(commands, scene);
-        let half = g.height * g.scale * (0.5 - g.grip);
+        let half = g.height * g.scale * (0.5 - g.grip) * LYING_SCALE;
         commands.entity(pivot).insert(Transform {
             translation: basis * Vec3::new(0.0, -half, 0.0),
             rotation: basis,
-            ..default()
+            scale: Vec3::splat(LYING_SCALE),
         });
     }
 }
@@ -140,7 +145,8 @@ pub fn draw(
             let lift = match p.arm {
                 _ if orb => ORB_R,
                 sim::arms::STICKIES => crate::look::fx::plasma::RADIUS_M,
-                _ => LIE_Y,
+                sim::arms::FRAGS => LIE_Y,
+                _ => GUN_LIE_Y,
             };
             let y = core.map.floor(p.pos.x, p.pos.z, 0.0, p.pos.y + 0.5);
             let root = commands
@@ -208,7 +214,9 @@ pub fn draw(
     let mut want = [None; MAX_DROPS];
     for d in core.latest().drops() {
         if let Some(w) = want.get_mut(d.slot as usize) {
-            *w = Some((d.arm, Vec3::new(d.pos.x, d.pos.y + LIE_Y, d.pos.z)));
+            // Grenades (no arm) as they are, a gun as big as it is drawn.
+            let lie = if d.arm == NONE { LIE_Y } else { GUN_LIE_Y };
+            *w = Some((d.arm, Vec3::new(d.pos.x, d.pos.y + lie, d.pos.z)));
         }
     }
     let Items { drops, spare, .. } = &mut *items;
