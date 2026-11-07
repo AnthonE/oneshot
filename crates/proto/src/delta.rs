@@ -112,7 +112,10 @@ impl Keyed {
         };
         rec(&mut w, K_OWN, &mut |w| w_own(w, &s.own))?;
         if let Some(v) = &s.own_vehicle {
-            rec(&mut w, K_OWN_VEHICLE, &mut |w| w_vehicle(w, v))?;
+            rec(&mut w, K_OWN_VEHICLE, &mut |w| {
+                w_vehicle(w, v)?;
+                w_drive(w, s.drive)
+            })?;
         }
         rec(&mut w, K_PADS, &mut |w| w_list(w, s.pads(), 5))?;
         rec(&mut w, K_FLAGS, &mut |w| w_list(w, s.flags(), 2))?;
@@ -175,7 +178,10 @@ impl Keyed {
                     s.own = r_own(&mut r)?;
                     own = true;
                 }
-                K_OWN_VEHICLE => s.own_vehicle = Some(r_vehicle(&mut r)?),
+                K_OWN_VEHICLE => {
+                    s.own_vehicle = Some(r_vehicle(&mut r)?);
+                    s.drive = r_drive(&mut r)?;
+                }
                 K_PADS => s.n_pads = r_list(&mut r, &mut s.pads, 5)?,
                 K_FLAGS => s.n_flags = r_list(&mut r, &mut s.flags, 2)?,
                 K_TAIL => {

@@ -1362,9 +1362,14 @@ fn add_vehicles(
     visible: &impl Fn(usize) -> bool,
 ) {
     let me = &w.fighters[s];
-    let mine = me.riding().map(|(i, _)| i);
-    if let Some(i) = mine {
+    if let Some((i, seat)) = me.riding() {
         snap.own_vehicle = Some(w.vehicles[i]);
+        // Behind someone, the stick it drives by: what the hull is
+        // predicted on. A rider sees its driver at the wheel anyway, friend
+        // or foe; the stick is only what the hull does a tick on.
+        if seat != sim::vehicle::DRIVER {
+            snap.drive = w.drive_stick(i);
+        }
     }
     for (i, v) in w.vehicles.live() {
         if snap.n_vehicles as usize >= MAX_SNAP_VEHICLES {

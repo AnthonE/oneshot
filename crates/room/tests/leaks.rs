@@ -209,6 +209,19 @@ impl Gate {
                         "tick {}: our own vehicle",
                         w.tick
                     );
+                    // 16. A driver's stick only to a rider behind it, and
+                    // only the stick it drove the hull by: never at the
+                    // wheel, on foot, or of a hull nobody drives.
+                    let behind = me
+                        .riding()
+                        .filter(|&(_, seat)| seat != sim::vehicle::DRIVER)
+                        .map(|(i, _)| i);
+                    assert_eq!(
+                        s.drive,
+                        behind.and_then(|i| w.drive_stick(i)),
+                        "tick {}: a driver's stick",
+                        w.tick
+                    );
                     let leads = [
                         0.0,
                         0.1,
