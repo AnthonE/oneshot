@@ -14,7 +14,7 @@
 const RATE = 48000;
 // Frames' commands kept while the worklet starts: what lasts (a volume, a
 // loop held or stopped; the desktop's inbox keeps those too: crates/mix
-// Shared::send). One-shots are not among them (`lasting`, below). A worklet
+// Shared::send). One-shots are not among them (`sieve`, below). A worklet
 // not up after this many frames (minutes) never will be: no sound, said,
 // rather than a queue that only grows. Clips are kept apart.
 const WAITING = 7200;
