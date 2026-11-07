@@ -42,6 +42,13 @@ pub const STICKY: u8 = 7;
 
 /// A rocket's trail: a puff every this many metres.
 const PUFF_EVERY_M: f32 = 0.5;
+/// Its exhaust's light (where the rung has lights to spare,
+/// `Caps::lights_in_flight`): lumens, range (m), sRGB, and how far behind
+/// the rocket's middle it burns (m).
+const ROCKET_LIGHT_LUMENS: f32 = 200_000.0;
+const ROCKET_LIGHT_M: f32 = 7.0;
+const ROCKET_LIGHT_RGB: [f32; 3] = [1.0, 0.6, 0.3];
+const ROCKET_LIGHT_BACK_M: f32 = 0.5;
 /// A fuse: blinks per second.
 const BLINK_HZ: f32 = 5.0;
 /// An ion bolt's blue, a charged bolt's, the cannon's green: linear HDR.
@@ -147,13 +154,14 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, kit: Option<&plasma:
                 SceneRoot(models.rocket.clone()),
                 Transform::from_xyz(0.0, -ROCKET_MID_M, 0.0),
             ));
-            if fx.caps.lights > 2 {
+            if fx.caps.lights_in_flight() {
+                let [r, g, b] = ROCKET_LIGHT_RGB;
                 e.with_child((
-                    Transform::from_xyz(0.0, -0.5, 0.0),
+                    Transform::from_xyz(0.0, -ROCKET_LIGHT_BACK_M, 0.0),
                     PointLight {
-                        intensity: 200_000.0,
-                        range: 7.0,
-                        color: Color::srgb(1.0, 0.6, 0.3),
+                        intensity: ROCKET_LIGHT_LUMENS,
+                        range: ROCKET_LIGHT_M,
+                        color: Color::srgb(r, g, b),
                         shadows_enabled: false,
                         ..default()
                     },
@@ -172,7 +180,7 @@ fn spawn(commands: &mut Commands, fx: &Fx, models: &Models, kit: Option<&plasma:
                     ));
                 });
             }
-            if fx.caps.lights > 2 {
+            if fx.caps.lights_in_flight() {
                 let [r, g, b] = plasma::LIGHT_RGB;
                 e.with_children(|c| {
                     glow = Some(

@@ -7,12 +7,11 @@
 //! `target_arch = "wasm32"`.
 //!
 //! Ported from Gates' `crates/client/src/render/sky.rs` (MIT, © 2026
-//! MoreRight DAO; NOTICE). Its composer (the cube re-baked as the weather
-//! moves), its underwater fog and the Verdigris are left out; the composed
-//! cube itself is kept only as Gates' reference arithmetic (nothing here
-//! reflects the sky). What remains is Gates' code as it was, so the rest
-//! of its sky lands on the same numbers.
-#![allow(dead_code, clippy::all)]
+//! MoreRight DAO; NOTICE). Its composer and the cube it composed (nothing
+//! here reflects the sky), its underwater fog and the Verdigris are left
+//! out: the per-pixel deck's shaders (`cloud.wgsl`, `deck.wgsl`) are that
+//! composer's arithmetic, a pixel at a time. What remains is Gates' code
+//! as it was, so the rest of its sky lands on the same numbers.
 
 /// Gates' share of night light a new moon leaves (rig.rs).
 const NEW_MOON_SHARE: f32 = 0.35;
@@ -68,32 +67,22 @@ fn night_light(moonlight: f32) -> f32 {
 // **What the eye sees of it is drawn per pixel since 2026-10-15**
 // (`deck.rs`): wherever the atmosphere draws, a fullscreen triangle at depth
 // 0 in the opaque pass takes the `Skybox`'s place — the same compositing,
-// by the same owner, so everything below still holds — and the cube is what
-// the sea reflects. Under WebGL2 the `Skybox` stays, under a per-pixel deck.
+// by the same owner, so everything above still holds. There is no `Skybox`
+// and no cube any more, on any target.
 //
-// The cubemap is generated from the world seed. No asset, no shader, no
-// download. **Since weather v0 it is composed, not baked once**: a tileable
-// noise field is built at boot, and [`compose`] re-projects the deck from it
-// every half second or so (whole, on a worker; a few rows a frame in a
-// browser, every second and a half) — the wind drifting it, the
-// weather thickening and darkening it, its lit side facing the sun it is
-// actually lit by, and the night's moon behind it. The stars are not in it:
-// a texel is too big to be a star (`stars.rs`).
+// The deck is made from the world seed. No asset, no download: a tileable
+// noise field ([`CloudField`]) is built at boot, and the deck's shader reads
+// it wherever a ray meets the drifting deck — the wind drifting it, the
+// weather thickening and darkening it ([`ComposeParams`], [`DeckLight`]),
+// its lit side facing the sun it is actually lit by, and the night's moon
+// behind it. The stars are their own draw (`stars.rs`).
 
-use super::fill::linear_to_srgb;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::math::curve::Curve;
-use bevy::pbr::{DistanceFog, Falloff, FogFalloff, ScatteringMedium};
+use bevy::pbr::{Falloff, ScatteringMedium};
 use bevy::prelude::*;
-use bevy::render::render_resource::{
-    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
-};
-
-/// Cube face size in texels. 6 × 256² = 393k texels, 1.5 MB of RGBA8 on the
-/// desktop and under WebGPU; a quarter of that under WebGL2, where every
-/// re-upload is a WebGL texture rebuilt.
-pub const SKY_FACE: u32 = if cfg!(webgl2) { 128 } else { 256 };
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 /// Cloud-deck altitude, metres. Cumulus bases sit near a kilometre; the exact
 /// value only sets how fast the deck compresses toward the horizon.
@@ -122,24 +111,25 @@ const CLOUD_BASE: [f32; 3] = [0.42, 0.45, 0.52];
 
 // ── The WebGL2 sky (browser sky v0 — DECISIONS.md §open) ───────────────────
 //
-// **Natively the atmosphere paints the sky and every clear texel of this
-// cubemap must stay ZERO** — the skybox pipeline has `blend: None`, so a
-// non-zero clear texel is a second sky added to `AtmosphereNode`'s own. The
+// **Natively the atmosphere paints the sky and every clear pixel of the
+// deck must stay ZERO** — the deck draws where a `Skybox` would, with no
+// blend, so a non-zero clear pixel is a second sky added to
+// `AtmosphereNode`'s own. The
 // browser's WebGPU module has the atmosphere and is "natively" here. Under
 // WebGL2 there is no atmosphere at all (`rig.rs`: `mesh_view_layout_
 // atmosphere` wants a storage buffer and WebGL2 allows none), so the same
-// zero texel is the CLEAR COLOUR, and the first island a browser drew had
+// zero pixel is the CLEAR COLOUR, and the first island a browser drew had
 // white cumulus floating on black (`findings/web-build-20260909.md` §15.7).
 // A page therefore bakes its sky INTO the deck: clouds composited over a
-// clear-sky radiance rather than over nothing. Same texels, same composer.
+// clear-sky radiance rather than over nothing. Same clouds, same shader.
 //
 // What the browser still does not get, said out loud: the atmosphere's own
-// aerial perspective (a browser gets [`browser_haze`] instead — the same air
+// aerial perspective (a browser gets `rig::fog_for`'s instead — the same air
 // as a `DistanceFog`, and the only haze on that target) and a sun disk. Its
-// dusk now colours rather than only dims: the composer greys the backdrop
+// dusk now colours rather than only dims: the deck greys the backdrop
 // under a heavy sky and warms it toward a low sun (weather v0).
 
-/// Whether the deck carries a clear sky behind the clouds. Zero texels
+/// Whether the deck carries a clear sky behind the clouds. Zero
 /// wherever the atmosphere draws (the desktop, and the browser's WebGPU
 /// module), for the reason above; a sky under WebGL2, which has none.
 pub const BAKE_BACKDROP: bool = cfg!(webgl2);
@@ -219,8 +209,8 @@ pub fn backdrop_at(d: Vec3) -> [f32; 3] {
 ///
 /// **Earthlike at the ground is Rayleigh and Mie, and not ozone**: its tent
 /// peaks at `0.75` and is `0.3` wide, so it is zero at `1`. The browser's haze
-/// and its sky colour both read this off `rig::island_medium`, the medium the
-/// desktop's atmosphere renders — a browser frame is thinner than a desktop
+/// (`rig::fog_for`) and its sky colour both read this off `rig::medium`, the
+/// medium the desktop's atmosphere renders — a browser frame is thinner than a desktop
 /// one, but it is made of the same air.
 pub fn ground_air(medium: &ScatteringMedium) -> (Vec3, Vec3) {
     let (mut extinction, mut inscattering) = (Vec3::ZERO, Vec3::ZERO);
@@ -238,8 +228,7 @@ pub fn ground_air(medium: &ScatteringMedium) -> (Vec3, Vec3) {
 
 /// The colour the air scatters, linear, at luminance 1: [`ground_air`]'s
 /// inscattering normalised. Density scales how much air there is and not what
-/// colour it is, so this does not move with `rig::AIR_DENSITY`. Computed once,
-/// because the browser's bake asks for it once per texel.
+/// colour it is, so this does not move with `rig::AIR_DENSITY`. Computed once.
 pub fn air_chroma() -> [f32; 3] {
     static CHROMA: std::sync::OnceLock<[f32; 3]> = std::sync::OnceLock::new();
     *CHROMA.get_or_init(|| {
@@ -247,36 +236,6 @@ pub fn air_chroma() -> [f32; 3] {
         let l = super::fill::luminance(s.to_array());
         [s.x / l, s.y / l, s.z / l]
     })
-}
-
-/// The browser haze's colour at `light` (0 night .. 1 day): the sky's own
-/// horizon, so a distant hill fades INTO the sky behind it and not into a
-/// second colour, and dimmed with the day exactly as the deck is.
-pub fn haze_color(light: f32) -> Color {
-    let h = backdrop_at(Vec3::X);
-    Color::linear_rgb(h[0] * light, h[1] * light, h[2] * light)
-}
-
-/// The browser's aerial perspective: a `DistanceFog` made of the desktop's air.
-///
-/// **On the desktop this would be a second owner of haze, and this file's
-/// header refuses one** — the atmosphere hazes the terrain and the deck
-/// itself. A browser has no atmosphere (`rig.rs`), so it has no first owner,
-/// and until 2026-09-13 its distant hills arrived with no air on them at all.
-/// The falloff is `Atmospheric`, with [`ground_air`]'s two coefficients off
-/// `rig::island_medium`, lengthened by the desktop's sightline scale
-/// (`rig::HAZE_SCALE`), so a far hill takes the same air on both targets.
-pub fn browser_haze(light: f32) -> DistanceFog {
-    let (extinction, inscattering) = ground_air(&super::rig::medium());
-    let k = super::rig::HAZE_SCALE;
-    DistanceFog {
-        color: haze_color(light),
-        falloff: FogFalloff::Atmospheric {
-            extinction: extinction * k,
-            inscattering: inscattering * k,
-        },
-        ..default()
-    }
 }
 
 fn hash3(seed: u64, x: i32, y: i32, z: i32) -> f32 {
@@ -348,57 +307,7 @@ fn billow_tiled(seed: u64, x: f32, y: f32) -> f32 {
     f
 }
 
-/// World direction for a cube texel.
-///
-/// **Cube space is world space with z flipped**: `skybox.wgsl` samples with
-/// `ray_direction * vec3(1.0, 1.0, -1.0)`. Author in world space and flip
-/// here, or every cloud sits on the wrong side of the sky.
-/// **The one cubemap face convention in this crate**, and it is `pub` for the
-/// same reason [`super::rig::to_sun`] is: two bakers need it and they must not
-/// each re-derive it. `sky.rs` composes the cloud deck through this and
-/// `fill.rs` bakes the hemisphere sky fill through it, and a face order that
-/// disagreed between them would put the sky on the underside of every prop
-/// while both files read as correct alone.
-///
-/// The trailing `-d.z` is the left-handed cubemap convention, and it is
-/// carried HERE rather than at each call site: `bevy_pbr`'s
-/// `environment_map.wgsl` negates z on the sample direction
-/// (`irradiance_sample_dir.z = -irradiance_sample_dir.z`), so a texel written
-/// at `cube_dir(f, x, y, n)` is the one a shader sampling that WORLD direction
-/// reads back. Callers work in world space and never see the flip.
-pub fn cube_dir(face: usize, x: u32, y: u32, n: u32) -> Vec3 {
-    let uc = 2.0 * (x as f32 + 0.5) / n as f32 - 1.0;
-    let vc = 2.0 * (y as f32 + 0.5) / n as f32 - 1.0;
-    let d = match face {
-        0 => Vec3::new(1.0, -vc, -uc),
-        1 => Vec3::new(-1.0, -vc, uc),
-        2 => Vec3::new(uc, 1.0, vc),
-        3 => Vec3::new(uc, -1.0, -vc),
-        4 => Vec3::new(uc, -vc, 1.0),
-        _ => Vec3::new(-uc, -vc, -1.0),
-    };
-    Vec3::new(d.x, d.y, -d.z).normalize()
-}
-
-/// The horizontal direction the deck's light march steps toward at hour
-/// `frac`, i.e. toward the sun — the rig's own `to_sun`, never a re-derived
-/// one (`crates/client/tests/sun.rs` holds the two together).
-///
-/// **The deck is lit by the sun it is actually lit by since weather v0.** It
-/// used to be baked once with its lit faces at the noon sun and then turned
-/// about Y as the bearing swept (`deck_rotation`), which kept the light
-/// right but spun the cloud pattern once a cycle — the opposite signature
-/// to wind (`NOW.md` §0sun). The composer re-marches toward the current
-/// sun on every compose, and the pattern moves only with the wind.
-pub fn deck_march_dir(frac: f32) -> Vec2 {
-    let s = {
-        let _ = frac;
-        super::rig::to_sun()
-    };
-    Vec2::new(s.x, s.z).normalize_or_zero()
-}
-
-// ── The composer (weather v0) ────────────────────────────────────────────
+// ── The deck's field and light (weather v0) ─────────────────────────────
 
 /// Lattice period of the deck's noise, in noise units: the field tiles every
 /// `FIELD_PERIOD × CLOUD_SCALE_M` ≈ 29 km, about the distance to the deck's
@@ -415,7 +324,7 @@ pub const FIELD_N: usize = if cfg!(target_arch = "wasm32") || cfg!(debug_asserti
 /// How soft the deck's edge is where its shadow falls, metres: the sun's
 /// own disk blurs a shadow cast from 1.4 km up by 13–40 m, and a cumulus
 /// edge is a few tens of metres more. The field the rig dims the sun by
-/// ([`SkyComposer::cover_at`]) and the ground's cloud shadows read
+/// (`deck::SkyField::cover_at`) and the ground's cloud shadows read
 /// (`cloud_shadow.rs`) has a texel about this size ([`SOFT_FIELD_N`]), so
 /// the two agree at the eye.
 pub const SOFT_M: f32 = 60.0;
@@ -450,12 +359,8 @@ pub const SIDE_VIEW_Y: f32 = 0.34;
 /// The moon's disk, radians (~1.7°) — drawn big, the way a person
 /// remembers it. The sky's moon is `moon.rs`'s, a quad sharp at any
 /// resolution: as texels it was five across in a browser and read as a
-/// smudge with a stepped rim. The cube keeps a smaller soft one only for
-/// the sea to reflect, wholly inside the quad's so it never shows round it.
+/// smudge with a stepped rim.
 pub const MOON_R: f32 = 0.03;
-/// The cube's disk, as cosines of its radius (~0.7°) and soft edge (~1.1°).
-pub const MOON_COS_IN: f32 = 0.999_93;
-pub const MOON_COS_OUT: f32 = 0.999_8;
 /// The halo (~8.6°).
 pub const HALO_COS: f32 = 0.988_77;
 pub const MOON_RGB: [f32; 3] = [0.78, 0.8, 0.84];
@@ -473,20 +378,13 @@ pub const MOON_SCATTER_COS: f32 = 0.94;
 const NIGHT_CLOUD_LIGHT: f32 = 0.012;
 /// Moonlight's colour on the deck, over the sun's: a little cool.
 const MOONLIT: [f32; 3] = [0.8, 0.88, 1.0];
-/// The most [`deck_hue`] lifts a channel. Where the air takes more blue
-/// than this can give back (under ~20°), the correction lowers red and
-/// green to meet it instead, so the far deck goes a darker grey and never
-/// yellow.
-const HUE_MAX: f32 = 3.0;
-/// Steps in [`deck_hue`]'s table, zenith to horizon.
-const HUE_STEPS: usize = 512;
-/// How much brighter the desktop draws its cube than its texels say, and so
-/// the headroom they keep: [`deck_hue`] lifts a cloud top's blue by 1.5 at
-/// the zenith and more below, and a top that clipped would come out warm
-/// again. A browser has no atmosphere to undo and needs none.
+/// How much brighter the desktop draws its deck than its colours say, and so
+/// the headroom they keep: `cloud.wgsl`'s `deck_hue` lifts a cloud top's
+/// blue by 1.5 at the zenith and more below, and a top that clipped would
+/// come out warm again. A browser has no atmosphere to undo and needs none.
 pub const DECK_GAIN: f32 = deck_gain(BAKE_BACKDROP);
 
-/// [`DECK_GAIN`] for a cube with (`backdrop`) or without a sky baked in.
+/// [`DECK_GAIN`] for a deck with (`backdrop`) or without a sky behind it.
 pub const fn deck_gain(backdrop: bool) -> f32 {
     if backdrop {
         1.0
@@ -502,17 +400,8 @@ pub const DUSK_GLOW: [f32; 3] = [0.10, 0.045, 0.02];
 /// wall rather than a hole.
 const NIGHT_FOG: [f32; 3] = [0.0025, 0.003, 0.0045];
 
-/// Texels composed per frame in a browser; natively the cube is one task off
-/// the frame ([`SkyComposer`]). A debug build takes an eighth, because its
-/// client crate is not optimized and a frame there is already slow.
-#[cfg(target_arch = "wasm32")]
-const COMPOSE_BUDGET: usize = if cfg!(debug_assertions) { 16_384 / 8 } else { 16_384 };
-/// The least time between two composes, seconds: often enough that the
-/// drift reads as motion, rare enough that the re-upload is noise.
-const COMPOSE_INTERVAL_S: f32 = if cfg!(target_arch = "wasm32") { 1.5 } else { 0.5 };
-
-/// The deck's noise, built once per world: a tileable fBm field the composer
-/// samples wherever each texel's ray meets the drifting deck.
+/// The deck's noise, built once per world: a tileable fBm field the deck's
+/// shader samples wherever a ray meets the drifting deck ([`Self::image`]).
 pub struct CloudField {
     n: usize,
     data: Box<[f32]>,
@@ -534,36 +423,15 @@ impl CloudField {
         }
     }
 
-    /// Bilinear sample at noise-unit coordinates, wrapping.
-    #[inline]
-    pub fn sample(&self, x: f32, y: f32) -> f32 {
-        let k = self.n as f32 / FIELD_PERIOD as f32;
-        let (u, v) = (x * k, y * k);
-        let (fu, fv) = (u.floor(), v.floor());
-        let (tu, tv) = (u - fu, v - fv);
-        let n = self.n as i64;
-        let i0 = (fu as i64).rem_euclid(n) as usize;
-        let j0 = (fv as i64).rem_euclid(n) as usize;
-        let i1 = if i0 + 1 == self.n { 0 } else { i0 + 1 };
-        let j1 = if j0 + 1 == self.n { 0 } else { j0 + 1 };
-        let row0 = j0 * self.n;
-        let row1 = j1 * self.n;
-        let (a, b) = (self.data[row0 + i0], self.data[row0 + i1]);
-        let (c, d) = (self.data[row1 + i0], self.data[row1 + i1]);
-        let top = a + (b - a) * tu;
-        let bot = c + (d - c) * tu;
-        top + (bot - top) * tv
-    }
-
     /// Texels per side.
     pub fn n(&self) -> usize {
         self.n
     }
 
     /// The field as a repeating single-channel texture — what the stars,
-    /// the moon and a browser's per-pixel sky sample the deck from. Texel
-    /// `i` is noise coordinate `i`, as in [`Self::sample`], so a sampler's
-    /// centre is half a texel over (the shaders add it).
+    /// the moon and the per-pixel deck sample it from. Texel `i` is at
+    /// `i · FIELD_PERIOD / n` noise units, so a sampler's centre is half a
+    /// texel over (the shaders add it).
     ///
     /// **Mipped**, box-filtered and wrapping: toward the horizon a pixel
     /// spans hundreds of texels, and a sky drawn per pixel from level 0
@@ -697,86 +565,11 @@ impl SoftField {
     }
 }
 
-/// What every texel of the cube looks at, worked out once: its direction,
-/// where its ray meets the deck (noise units), how far into the horizon
-/// fade it sits, and — in a browser — its clear sky.
-pub struct TexelGeo {
-    dir: Box<[Vec3]>,
-    plane: Box<[Vec2]>,
-    fade: Box<[f32]>,
-    backdrop: Box<[[f32; 3]]>,
-}
-
-impl TexelGeo {
-    pub fn new(n: u32, with_backdrop: bool) -> Self {
-        let count = (6 * n * n) as usize;
-        let mut dir = Vec::with_capacity(count);
-        let mut plane = Vec::with_capacity(count);
-        let mut fade = Vec::with_capacity(count);
-        let mut backdrop = Vec::with_capacity(if with_backdrop { count } else { 0 });
-        for face in 0..6usize {
-            for y in 0..n {
-                for x in 0..n {
-                    let d = cube_dir(face, x, y, n);
-                    dir.push(d);
-                    if d.y > DECK_CUTOFF {
-                        // Project onto a flat deck at `CLOUD_ALT_M`. The `1/d.y`
-                        // is what compresses the deck toward the horizon — the
-                        // reason a real cloudscape has big shapes overhead and a
-                        // crowded band at the skyline.
-                        let t = CLOUD_ALT_M / d.y;
-                        plane.push(Vec2::new(d.x * t, d.z * t) / CLOUD_SCALE_M);
-                        fade.push(((d.y - DECK_CUTOFF) / HORIZON_FADE).clamp(0.0, 1.0));
-                    } else {
-                        plane.push(Vec2::ZERO);
-                        fade.push(0.0);
-                    }
-                    if with_backdrop {
-                        backdrop.push(backdrop_at(d));
-                    }
-                }
-            }
-        }
-        Self {
-            dir: dir.into_boxed_slice(),
-            plane: plane.into_boxed_slice(),
-            fade: fade.into_boxed_slice(),
-            backdrop: backdrop.into_boxed_slice(),
-        }
-    }
-
-    /// Texels in the cube.
-    pub fn len(&self) -> usize {
-        self.dir.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.dir.is_empty()
-    }
-}
-
-/// The sRGB encode, as a table: the composer writes ~65k texels a frame and
-/// a `powf` per channel is most of that frame.
-fn srgb_lut() -> &'static [u8; 4096] {
-    static LUT: std::sync::OnceLock<[u8; 4096]> = std::sync::OnceLock::new();
-    LUT.get_or_init(|| {
-        let mut t = [0u8; 4096];
-        for (i, v) in t.iter_mut().enumerate() {
-            *v = (linear_to_srgb(i as f32 / 4095.0) * 255.0).round() as u8;
-        }
-        t
-    })
-}
-
-#[inline]
-fn enc(lut: &[u8; 4096], x: f32) -> u8 {
-    lut[(x.clamp(0.0, 1.0) * 4095.0 + 0.5) as usize]
-}
-
-/// Everything one compose depends on. Two equal params compose equal decks.
+/// Everything one deck depends on: what the deck's uniform is made from
+/// (`deck.rs`). Two equal params draw equal decks.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ComposeParams {
-    /// How much of the sky carries cloud, `0..=1` ([`deck_cover`]).
+    /// How much of the sky carries cloud, `0..=1`.
     pub cover: f32,
     /// How heavy the cloud is: greyer bases, dimmer tops.
     pub dark: f32,
@@ -795,9 +588,9 @@ pub struct ComposeParams {
     /// The weather's air over the sky ([`SkyFog`]).
     pub fog: SkyFog,
     /// How deep in the Verdigris the eye is, in sixteenths (`WeatherNow::fel`)
-    /// — so walking in recomposes the deck at most sixteen times.
+    /// — so walking in rewrites the deck at most sixteen times.
     pub fel: f32,
-    /// Compose a clear sky behind the cloud (a browser).
+    /// Draw a clear sky behind the cloud (no atmosphere).
     pub backdrop: bool,
     /// How much of the moon's disk is lit, `0..=1` (`moon::lit_fraction`).
     pub moon_lit: f32,
@@ -807,36 +600,6 @@ pub struct ComposeParams {
     pub moon_sun: Vec3,
 }
 
-impl ComposeParams {
-    /// The deck every judged frame was shot under: the noon sun, clear
-    /// weather, no drift, no night.
-    pub fn noon(backdrop: bool) -> Self {
-        Self {
-            cover: CLOUD_COVER,
-            dark: 0.0,
-            drift: Vec2::ZERO,
-            sun: super::rig::to_sun(),
-            light: 1.0,
-            night: 0.0,
-            moon: Vec3::Y,
-            fog: SkyFog::CLEAR,
-            fel: 0.0,
-            backdrop,
-            moon_lit: 1.0,
-            moonlight: 1.0,
-            moon_sun: super::rig::to_sun(),
-        }
-    }
-}
-
-/// How much of the sky the Verdigris' own deck covers at its heart: a storm
-/// that does not clear, so the blue above it is mostly gone. **(knob)**
-pub const FEL_DECK_COVER: f32 = 0.88;
-/// How heavy that deck is at its heart (`ComposeParams::dark`). **(knob)**
-pub const FEL_DECK_DARK: f32 = 0.55;
-/// What the Verdigris adds to the fog's extinction at its heart, per metre:
-/// a green haze that takes half the light in ~170 m. **(knob)**
-pub const FEL_FOG_SIGMA: f32 = 0.004;
 /// The Verdigris' cloud tops and bases, as multipliers on the deck's own:
 /// lit from below by green fire, dark green in their bellies. **(knob)**
 pub const FEL_CLOUD_TOP: [f32; 3] = [0.40, 0.80, 0.32];
@@ -846,13 +609,6 @@ pub const FEL_CLOUD_BASE: [f32; 3] = [0.16, 0.32, 0.12];
 pub const FEL_FOG: [f32; 3] = [0.10, 0.22, 0.08];
 pub const FEL_FOG_NIGHT: [f32; 3] = [0.004, 0.014, 0.004];
 
-/// The deck's coverage for the weather's cloud over ground `fel` deep in the
-/// Verdigris: the weather's own ([`deck_cover`]), or the Verdigris' storm,
-/// whichever is heavier.
-pub fn cover_for(cloud: f32, fel: f32) -> f32 {
-    deck_cover(cloud).max(FEL_DECK_COVER * fel)
-}
-
 /// The Verdigris' fog colour under `light` (`rig::sun_lux`), linear: green by
 /// day at the horizon's own brightness, a faint green floor by night.
 pub fn fel_fog_rgb(light: f32) -> [f32; 3] {
@@ -861,7 +617,7 @@ pub fn fel_fog_rgb(light: f32) -> [f32; 3] {
 }
 
 /// [`fog_rgb_dust`] greened by the Verdigris `fel` deep ([`fel_fog_rgb`]):
-/// the ground's flat fog (`rig::day_night`), the deck's fog band, the sky's
+/// the ground's flat fog (`rig::fog_for`), the deck's fog band, the sky's
 /// fog layer and the shafts all take this one, so the horizon seam holds
 /// in the green too.
 pub fn fog_rgb_fel(light: f32, dark: f32, sigma: f32, dust: f32, fel: f32) -> [f32; 3] {
@@ -885,7 +641,9 @@ pub const DUST_LAYER_M: f32 = 300.0;
 /// (`rig::FAR_M`). A sky ray `y` above the horizon crosses `up / y` of a
 /// layer, never more than the level reach — so the sky at the horizon is
 /// fogged exactly as much as the island's far edge below it, and the seam
-/// the old hand-set band left there is closed by construction.
+/// the old hand-set band left there is closed by construction. How much of
+/// a sky ray it takes is `deck.wgsl`'s `deck_haze`, off [`Self::lanes`] and
+/// [`Self::dust_lanes`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SkyFog {
     /// `σ × depth` of the ground fog and of the rain haze.
@@ -943,19 +701,9 @@ impl SkyFog {
         Vec4::new(self.up_dust, self.far_dust, 0.0, 0.0)
     }
 
-    /// How much of a sky ray `y` above the horizon the fog takes, `0..=1`.
-    /// `deck.wgsl`'s `deck_haze` is this, line for line.
-    pub fn band(&self, y: f32) -> f32 {
-        let s = (y + 0.02).max(1e-3);
-        let tau = (self.up_fog / s).min(self.far_fog)
-            + (self.up_rain / s).min(self.far_rain)
-            + (self.up_dust / s).min(self.far_dust);
-        1.0 - (-tau).exp()
-    }
-
     /// The whole extinction per metre — what the ground's fog is greyed and
-    /// tinted by ([`fog_rgb_dust`], `rig::day_night`'s [`fog_color_dust`]),
-    /// so the sky's band is the same colour.
+    /// tinted by ([`fog_rgb_dust`], `rig::fog_for`), so the sky's band is
+    /// the same colour.
     pub fn sigma(&self) -> f32 {
         (self.far_fog + self.far_rain + self.far_dust) / super::rig::FAR_M
     }
@@ -964,62 +712,6 @@ impl SkyFog {
     /// fog is tinted by ([`fog_rgb_dust`]).
     pub fn dust(&self) -> f32 {
         self.far_dust / super::rig::FAR_M
-    }
-}
-
-/// The atmosphere's hue on the cube, undone, at `y` above the horizon.
-///
-/// `render_sky` composites the cube as `inscattering + T·cube`, with `T`
-/// the whole column of air to space — warm even at the zenith, since this
-/// air is 1.6× Earth's over a 100 km shell, and deep red at the deck's
-/// horizon. So a grey overcast arrived tan and a storm at noon sepia. The
-/// deck is 1.4 km up, under little of that column. This takes the hue of
-/// `T` out of a cloud and leaves its dimming: distant cloud still goes dark
-/// toward the horizon, which is the aerial perspective the cube is there to
-/// get, and not orange. Wherever the atmosphere draws — not under WebGL2,
-/// which has none.
-///
-/// **Per channel only where the device blends per channel.** `render_sky`
-/// multiplies by `T` channel by channel through dual-source blending, and
-/// by `T`'s MEAN on a device without it (Bevy's own fallback, and the case
-/// for some browsers' WebGPU). Lifted against a grey multiply, a deck keeps
-/// the blue it was given to cancel the red and every cloud comes out
-/// periwinkle — measured 26 levels bluer than the desktop's in a SwiftShader
-/// browser. There this only evens the brightness: `grey / mean(T)`, the same
-/// in all three channels, so a cloud lands as bright as on the desktop and
-/// as grey. [`super::gpu::GpuCaps::dual_source_blending`] says which.
-pub fn deck_hue(y: f32) -> [f32; 3] {
-    deck_hue_for(y, super::gpu::caps().dual_source_blending)
-}
-
-/// [`deck_hue`] for a composite through `T` per channel (`per_channel`) or
-/// through its mean.
-pub fn deck_hue_for(y: f32, per_channel: bool) -> [f32; 3] {
-    type Lift = ([f32; 3], f32);
-    static LUT: std::sync::OnceLock<Box<[Lift]>> = std::sync::OnceLock::new();
-    let lut = LUT.get_or_init(|| {
-        let tau = zenith_depth(&super::rig::medium());
-        (0..HUE_STEPS)
-            .map(|i| {
-                let m = airmass(i as f32 / (HUE_STEPS - 1) as f32);
-                let t: [f32; 3] = core::array::from_fn(|c| (-tau[c] * m).exp().max(1e-6));
-                // The grey `T` would be at its own luminance, or as bright
-                // a grey as the weakest channel can be lifted to.
-                let least = t[0].min(t[1]).min(t[2]);
-                let grey = super::fill::luminance(t).min(HUE_MAX * least);
-                let mean = (t[0] + t[1] + t[2]) / 3.0;
-                (core::array::from_fn(|c| grey / t[c]), grey / mean)
-            })
-            .collect()
-    });
-    let x = y.clamp(0.0, 1.0) * (HUE_STEPS - 1) as f32;
-    let i = (x as usize).min(HUE_STEPS - 2);
-    let f = x - i as f32;
-    let (a, b) = (lut[i], lut[i + 1]);
-    if per_channel {
-        core::array::from_fn(|c| a.0[c] + (b.0[c] - a.0[c]) * f)
-    } else {
-        [a.1 + (b.1 - a.1) * f; 3]
     }
 }
 
@@ -1034,7 +726,7 @@ fn airmass(y: f32) -> f32 {
 /// What reaches the ground of a sun `y` above the horizon through the
 /// island's air, per channel: the transmittance `render_sky`'s LUT hands
 /// every sunlit surface and Bevy's volumetric fog (`shafts.rs`), on the same
-/// air mass [`deck_hue_for`] undoes.
+/// air mass `cloud.wgsl`'s `deck_hue` undoes.
 pub fn sun_transmittance(y: f32) -> [f32; 3] {
     let tau = column_depth();
     let m = airmass(y);
@@ -1042,18 +734,30 @@ pub fn sun_transmittance(y: f32) -> [f32; 3] {
 }
 
 /// [`zenith_depth`] of the island's air, worked out once: what the per-pixel
-/// deck (`cloud.wgsl`) undoes the atmosphere's hue with, as [`deck_hue`]'s
-/// table does here.
+/// deck (`cloud.wgsl`'s `deck_hue`) undoes the atmosphere's hue with.
+///
+/// `render_sky` composites the deck as `inscattering + T·deck`, with `T`
+/// the whole column of air to space — warm even at the zenith, since this
+/// air is 1.6× Earth's over a 100 km shell, and deep red at the deck's
+/// horizon. So a grey overcast arrived tan and a storm at noon sepia. The
+/// deck is 1.4 km up, under little of that column. The shader takes the
+/// hue of `T` out of a cloud and leaves its dimming: distant cloud still
+/// goes dark toward the horizon, which is the aerial perspective it is
+/// there to get, and not orange. Wherever the atmosphere draws — not under
+/// WebGL2, which has none.
+///
+/// **Per channel only where the device blends per channel.** `render_sky`
+/// multiplies by `T` channel by channel through dual-source blending, and
+/// by `T`'s MEAN on a device without it (Bevy's own fallback, and the case
+/// for some browsers' WebGPU). Lifted against a grey multiply, a deck keeps
+/// the blue it was given to cancel the red and every cloud comes out
+/// periwinkle — measured 26 levels bluer than the desktop's in a SwiftShader
+/// browser. There it only evens the brightness: `grey / mean(T)`, the same
+/// in all three channels, so a cloud lands as bright as on the desktop and
+/// as grey. [`super::gpu::GpuCaps::dual_source_blending`] says which.
 pub fn column_depth() -> [f32; 3] {
     static TAU: std::sync::OnceLock<[f32; 3]> = std::sync::OnceLock::new();
     *TAU.get_or_init(|| zenith_depth(&super::rig::medium()))
-}
-
-/// What one deck unit is drawn at, cd/m²: [`CLOUD_NITS`], and four times
-/// that at a lightning flash's peak. The rig's `Skybox` brightness is this
-/// times [`DECK_GAIN`]; the per-pixel decks draw at this.
-pub fn deck_nits(flash: f32) -> f32 {
-    CLOUD_NITS * (1.0 + 3.0 * flash)
 }
 
 /// The medium's optical depth from the ground straight up, per channel —
@@ -1081,19 +785,9 @@ fn zenith_depth(medium: &ScatteringMedium) -> [f32; 3] {
     tau.to_array()
 }
 
-/// The deck's coverage for the weather's cloud: clear weather (350‰) is the
-/// cover every judged frame was shot at, a storm (1000‰) is all of it.
-pub fn deck_cover(cloud: f32) -> f32 {
-    if cloud <= 0.35 {
-        CLOUD_COVER * cloud / 0.35
-    } else {
-        CLOUD_COVER + (1.0 - CLOUD_COVER) * ((cloud - 0.35) / 0.65).min(1.0)
-    }
-}
-
-/// What a compose lights the deck with, worked out once from its params.
-/// Shared with the browser's per-pixel sky (`deck.rs`), so the two cannot
-/// light one deck two ways.
+/// What a deck is lit with, worked out once from its params: the deck's
+/// uniform (`deck.rs`) is made from it, so the targets cannot light one
+/// deck two ways.
 pub struct DeckLight {
     /// Toward the sun, horizontal, unit.
     pub sun_h: Vec2,
@@ -1106,7 +800,7 @@ pub struct DeckLight {
     pub base: [f32; 3],
     /// Moonlit forward scatter at the moon, deck units.
     pub scatter: [f32; 3],
-    /// What a texel is scaled by before it is stored.
+    /// What the deck's colours are scaled by ([`DECK_GAIN`]).
     pub gain: f32,
     /// The fog band's colour.
     pub fog_rgb: [f32; 3],
@@ -1144,141 +838,6 @@ impl DeckLight {
     }
 }
 
-/// Compose texels `range` (flat, face-major indices) of the cube into `out`,
-/// the whole cube's RGBA8.
-pub fn compose_range(
-    field: &CloudField,
-    geo: &TexelGeo,
-    p: &ComposeParams,
-    range: std::ops::Range<usize>,
-    out: &mut [u8],
-) {
-    let lut = srgb_lut();
-    let DeckLight {
-        sun_h,
-        toward,
-        glow,
-        top,
-        base,
-        scatter,
-        gain,
-        fog_rgb,
-        thresh,
-    } = DeckLight::new(p);
-    for i in range {
-        let d = geo.dir[i];
-        // The sky behind the cloud: nothing natively (the atmosphere paints
-        // it), a graded sky in a browser — and a moon on both, which the
-        // atmosphere does not draw.
-        let mut sky = [0.0f32; 3];
-        if p.backdrop {
-            let b = geo.backdrop[i];
-            let lum = super::fill::luminance(b);
-            for c in 0..3 {
-                sky[c] = (b[c] + (lum - b[c]) * 0.7 * p.dark) * (1.0 - 0.4 * p.dark) * p.light + NIGHT_SKY[c] * p.night;
-            }
-            if glow > 0.0 && d.y > -0.1 {
-                let facing = Vec2::new(d.x, d.z).normalize_or_zero().dot(sun_h).max(0.0);
-                let low = (1.0 - d.y.max(0.0) / 0.4).max(0.0);
-                let g = glow * facing * facing * facing * low * low * (1.0 - 0.7 * p.dark);
-                for c in 0..3 {
-                    sky[c] += DUSK_GLOW[c] * g;
-                }
-            }
-        }
-        if p.night > 0.0 && d.y > 0.0 {
-            let cm = d.dot(p.moon);
-            if cm > HALO_COS {
-                let h = (cm - HALO_COS) / (1.0 - HALO_COS);
-                let disk = ((cm - MOON_COS_OUT) / (MOON_COS_IN - MOON_COS_OUT)).clamp(0.0, 1.0);
-                // The sea reflects a crescent as a dimmer blob, not as a
-                // crescent: a reflection through waves wants nothing sharper.
-                // Its light while it is up, so a set moon leaves none.
-                for c in 0..3 {
-                    sky[c] += (MOON_RGB[c] * disk + HALO_RGB[c] * h * h) * p.moonlight * p.night;
-                }
-            }
-        }
-
-        // The cloud over it.
-        let fade = geo.fade[i];
-        let mut cov = 0.0;
-        let mut cloud = [0.0f32; 3];
-        if fade > 0.0 {
-            let q = geo.plane[i] + p.drift;
-            let f = field.sample(q.x, q.y);
-            let c0 = ((f - thresh) / EDGE).clamp(0.0, 1.0);
-            if c0 > 0.0 {
-                cov = c0 * fade;
-                // Lit top vs grey base: a texel whose sunward neighbour is
-                // thinner is on a lit face — a light march in one sample.
-                let f_sun = field.sample(q.x + toward.x, q.y + toward.y);
-                let lit = ((f - f_sun) * 6.0 + 0.5).clamp(0.0, 1.0);
-                // Overhead the eye sees a base: grey, darker where the cloud
-                // is thick, brighter at a thin rim. Toward the horizon it
-                // sees the cloud's side, lit like a top.
-                let thick = ((f - thresh) / (3.0 * EDGE)).clamp(0.0, 1.0);
-                let side = ((SIDE_VIEW_Y - d.y) / (SIDE_VIEW_Y - DECK_CUTOFF)).clamp(0.0, 1.0);
-                let under: [f32; 3] = core::array::from_fn(|c| {
-                    base[c] * (1.0 - CORE_SHADE * thick) + (top[c] - base[c]) * RIM_GLOW * (1.0 - c0)
-                });
-                let w = (lit * (1.0 - 0.5 * thick)).max(side * side * (3.0 - 2.0 * side));
-                cloud = core::array::from_fn(|c| under[c] + (top[c] - under[c]) * w);
-                // Moonlight through it, strongest at a thin edge.
-                let s = (d.dot(p.moon) - MOON_SCATTER_COS) / (1.0 - MOON_SCATTER_COS);
-                if s > 0.0 {
-                    let k = s * s * (1.0 - 0.6 * thick);
-                    for c in 0..3 {
-                        cloud[c] += scatter[c] * k;
-                    }
-                }
-                if !p.backdrop {
-                    let hue = deck_hue(d.y);
-                    for c in 0..3 {
-                        cloud[c] *= hue[c];
-                    }
-                }
-            }
-        }
-        let mut rgb: [f32; 3] = core::array::from_fn(|c| (cloud[c] * cov + sky[c] * (1.0 - cov)) * gain);
-
-        // Fog lies between the eye and everything: as much of the sky as
-        // the weather's air takes along this ray, the colour the ground's
-        // fog fades to, so the seam is one colour.
-        let band = p.fog.band(d.y);
-        if band > 0.0 {
-            for c in 0..3 {
-                rgb[c] += (fog_rgb[c] * gain - rgb[c]) * band;
-            }
-        }
-        // A desktop texel over range keeps its hue and gives up brightness:
-        // clipped a channel at a time, a lifted blue would clip first and
-        // the cloud would come out yellow — the tint `deck_hue` took out.
-        if !p.backdrop {
-            let most = rgb[0].max(rgb[1]).max(rgb[2]);
-            if most > 1.0 {
-                for v in rgb.iter_mut() {
-                    *v /= most;
-                }
-            }
-        }
-
-        let o = i * 4;
-        if p.backdrop || cov > 0.0 || rgb[0] + rgb[1] + rgb[2] > 0.0 {
-            out[o] = enc(lut, rgb[0]);
-            out[o + 1] = enc(lut, rgb[1]);
-            out[o + 2] = enc(lut, rgb[2]);
-            out[o + 3] = 255;
-        } else {
-            // **Zero, and that is a hard requirement natively**: the skybox
-            // pipeline has `blend: None`, so it REPLACES the background, and
-            // any non-zero clear texel becomes a second sky added to the
-            // atmosphere's own.
-            out[o..o + 4].fill(0);
-        }
-    }
-}
-
 /// The colour weather fog fades to, linear, in deck units (and, as the
 /// browser's haze always was, as a `DistanceFog` colour): the sky's own
 /// horizon, greyed as the fog thickens, dimmed by a heavy sky and the hour,
@@ -1296,12 +855,6 @@ pub fn fog_grey(sigma: f32) -> f32 {
     (sigma * 400.0).clamp(0.0, 1.0)
 }
 
-/// [`fog_rgb`] for a fog of extinction `sigma`.
-pub fn fog_color(light: f32, dark: f32, sigma: f32) -> Color {
-    let c = fog_rgb(light, dark, fog_grey(sigma));
-    Color::linear_rgb(c[0], c[1], c[2])
-}
-
 /// The colour sand in the air scatters, linear, at luminance 1: a pale
 /// ochre, the reference's beige. Dust takes blue out of what it sends on
 /// and leaves the brightness, so the haze tints the fog it is part of and
@@ -1312,7 +865,7 @@ pub const DUST_RGB: [f32; 3] = [1.28, 0.957, 0.6];
 /// is sand (`WeatherNow::dust_part`): pulled toward [`DUST_RGB`] at its own
 /// luminance by dust's share of the air. The share is of everything that
 /// fogs the frame — under WebGL2 that includes the island's own air, which
-/// is the haze's floor there ([`fog_falloff`]), so the first grain of sand
+/// is the haze's floor there (`rig::fog_for`), so the first grain of sand
 /// tints a grain's worth and not the whole sky.
 pub fn fog_rgb_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> [f32; 3] {
     let rgb = fog_rgb(light, dark, fog_grey(sigma));
@@ -1330,13 +883,6 @@ pub fn fog_rgb_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> [f32; 3] {
     core::array::from_fn(|c| rgb[c] + (DUST_RGB[c] * lum - rgb[c]) * share)
 }
 
-/// [`fog_rgb_dust`] as the `DistanceFog` takes it — what `rig::day_night`
-/// colours the ground's fog with, so the sky's band (`deck.rs`) meets it.
-pub fn fog_color_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> Color {
-    let c = fog_rgb_dust(light, dark, sigma, dust);
-    Color::linear_rgb(c[0], c[1], c[2])
-}
-
 /// How much of the sun a fog throws forward toward the eye, as Bevy's
 /// `DistanceFog::directional_light_color` alpha: droplets scatter mostly
 /// forward, so a fog bank with the sun behind it glows. Bevy weighs it by
@@ -1346,82 +892,3 @@ pub fn fog_color_dust(light: f32, dark: f32, sigma: f32, dust: f32) -> Color {
 pub const FOG_SUN_GLOW: f32 = 0.05;
 /// How tight the glow is round the sun (`directional_light_exponent`).
 pub const FOG_SUN_EXPONENT: f32 = 10.0;
-
-/// The warm white of sunlight through droplets — wherever the weather's fog
-/// is its own `DistanceFog`. Not under WebGL2, where that component is the
-/// island's clear air all day (`browser_haze`) and a glow would brighten
-/// every hill toward the sun in fine weather.
-pub fn fog_glow() -> Color {
-    if baked() {
-        Color::NONE
-    } else {
-        Color::linear_rgba(1.0, 0.95, 0.85, FOG_SUN_GLOW)
-    }
-}
-
-/// The weather fog's falloff at extinction `sigma` per metre. On the
-/// desktop that is all of it — the atmosphere owns clear-weather haze, and
-/// `sigma` is zero then. A browser has no atmosphere, so its island air
-/// ([`browser_haze`]'s) is the floor the weather adds to.
-pub fn fog_falloff(sigma: f32) -> FogFalloff {
-    if baked() {
-        let (extinction, inscattering) = ground_air(&super::rig::medium());
-        FogFalloff::Atmospheric {
-            extinction: extinction + Vec3::splat(sigma),
-            inscattering: inscattering + Vec3::splat(sigma),
-        }
-    } else {
-        FogFalloff::Exponential { density: sigma }
-    }
-}
-
-/// The weather's `DistanceFog` — what the rig inserts once on the desktop
-/// (at zero density) and `day_night` rewrites every frame.
-pub fn weather_fog(light: f32, dark: f32, sigma: f32) -> DistanceFog {
-    DistanceFog {
-        color: fog_color(light, dark, sigma),
-        falloff: fog_falloff(sigma),
-        directional_light_color: fog_glow(),
-        directional_light_exponent: FOG_SUN_EXPONENT,
-    }
-}
-
-fn cube_image(data: Vec<u8>) -> Image {
-    let n = (data.len() / (6 * 4)) as f32;
-    let n = n.sqrt() as u32;
-    let mut image = Image::new(
-        Extent3d {
-            width: n,
-            height: n,
-            depth_or_array_layers: 6,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    image.texture_view_descriptor = Some(TextureViewDescriptor {
-        dimension: Some(TextureViewDimension::Cube),
-        ..default()
-    });
-    image
-}
-
-/// Build the cloud cubemap for a seed, for this target, at noon in clear
-/// weather: clear texels are zero on the desktop and a sky in a browser
-/// ([`BAKE_BACKDROP`]).
-pub fn cloud_cubemap(seed: u64) -> Image {
-    cloud_cubemap_with(seed, BAKE_BACKDROP)
-}
-
-/// Build the noon, clear-weather deck for a seed, with or without a sky
-/// behind the clouds. Both are reachable natively so `tests/sky.rs` can hold
-/// the browser's to the desktop's: identical wherever a cloud is opaque,
-/// the backdrop exactly wherever the desktop's texel is zero.
-pub fn cloud_cubemap_with(seed: u64, backdrop: bool) -> Image {
-    let field = CloudField::new(seed, FIELD_N);
-    let geo = TexelGeo::new(SKY_FACE, backdrop);
-    let mut data = vec![0u8; geo.len() * 4];
-    compose_range(&field, &geo, &ComposeParams::noon(backdrop), 0..geo.len(), &mut data);
-    cube_image(data)
-}

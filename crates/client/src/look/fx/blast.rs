@@ -11,9 +11,11 @@
 use bevy::prelude::*;
 use sim::events::Cause;
 
+use super::atlas::{GLOW, RING, STAR, STREAK};
+use super::pool::{Orient, Particle};
 use super::sheets::{TONE_GREEN, TONE_PINK, TONE_PLASMA};
 use super::table::{Layer, Matter, Weapon};
-use super::{Fx, Scene, BLAST_FLASH};
+use super::{FlashDef, Fx, Scene, BLAST_FLASH};
 use crate::look::shake;
 
 /// A wreck burns this long (its husk smoulders after: `look/truck.rs`).
@@ -62,6 +64,194 @@ const GREEN_ARC: Color = Color::srgb(0.45, 1.0, 0.5);
 /// An ember's orange: what the Embers layer's white is tinted.
 const EMBER: Color = Color::srgb(1.0, 0.45, 0.1);
 
+/// A glow drawn by hand where it is (not a layer's recipe, `table.rs`):
+/// its life (s), its half-size at birth and at death (m, before the
+/// blast's scale) and its colour at birth and at death (linear HDR).
+#[derive(Clone, Copy)]
+struct Glow {
+    life: f32,
+    size: [f32; 2],
+    c0: [f32; 4],
+    c1: [f32; 4],
+}
+
+impl Glow {
+    /// The particle, `k` times its size, at `at`.
+    fn at(self, at: Vec3, k: f32, cell: u8) -> Particle {
+        Particle {
+            left: self.life,
+            life: self.life,
+            pos: at.into(),
+            size0: self.size[0] * k,
+            size1: self.size[1] * k,
+            c0: self.c0,
+            c1: self.c1,
+            cell,
+            ..Default::default()
+        }
+    }
+}
+
+/// How many of a thing a burst `k` times the cannon's throws, of a count
+/// `(per k, at least)`.
+fn scaled((per, least): (f32, usize), k: f32) -> usize {
+    ((per * k).ceil() as usize).max(least)
+}
+
+// ── Green plasma bursting (`burst_green`), at the cannon's size ──────────
+
+/// The mint glow, and the ring across the floor under it (dropped this far).
+const GREEN_GLOW: Glow = Glow {
+    life: 0.25,
+    size: [1.0, 4.0],
+    c0: [3.0, 12.0, 4.0, 1.0],
+    c1: [0.3, 1.5, 0.4, 0.0],
+};
+const GREEN_RING: Glow = Glow {
+    life: 0.35,
+    size: [0.5, 9.0],
+    c0: [1.5, 6.0, 2.0, 0.8],
+    c1: [0.2, 0.8, 0.3, 0.0],
+};
+const GREEN_RING_DROP_M: f32 = 0.4;
+/// Its first frame, white inside.
+const GREEN_CORE: Glow = Glow {
+    life: 0.05,
+    size: [1.5, 0.9],
+    c0: [14.0, 22.0, 15.0, 1.0],
+    c1: [2.0, 8.0, 3.0, 0.0],
+};
+/// Its baked plasma: size, and how many.
+const GREEN_ENERGY: f32 = 2.0;
+const GREEN_ENERGIES: (f32, usize) = (3.0, 2);
+/// The lightning crawling out of it: how many, how far out they start (m),
+/// their size.
+const GREEN_ARCS: (f32, usize) = (9.0, 4);
+const GREEN_ARC_OUT_M: f32 = 0.4;
+const GREEN_ARC_SIZE: f32 = 2.2;
+/// Its sparks: how many, their life (s) and speed (m/s), fall (m/s²),
+/// drag (1/s), half-width at birth and death (m), the seconds of velocity
+/// a streak is drawn over; in the glow's colours.
+const GREEN_SPARKS: (f32, usize) = (24.0, 8);
+const GREEN_SPARK_S: (f32, f32) = (0.3, 0.6);
+const GREEN_SPARK_MPS: (f32, f32) = (4.0, 11.0);
+const GREEN_SPARK_FALL: f32 = 6.0;
+const GREEN_SPARK_DRAG: f32 = 1.5;
+const GREEN_SPARK_W: [f32; 2] = [0.012, 0.006];
+const GREEN_SPARK_STRETCH_S: f32 = 0.02;
+/// How hard it shakes the camera, a blast's share.
+const GREEN_SHAKE: f32 = 0.8;
+/// Its light: lumens `k` times this, range `√k` times.
+const GREEN_FLASH: FlashDef = FlashDef {
+    lumens: 1_500_000.0,
+    range: 14.0,
+    life: 0.35,
+    color: [0.4, 1.0, 0.45],
+};
+
+// ── Shards going off together (`burst`) ──────────────────────────────────
+
+/// The pink the zap, the vapour and the light are tinted.
+const PINK_TINT: Color = Color::LinearRgba(LinearRgba::rgb(2.4, 0.5, 1.6));
+/// Its stars, one of each star cell from `atlas::STAR`.
+const PINK_STAR: Glow = Glow {
+    life: 0.12,
+    size: [0.6, 1.3],
+    c0: super::table::PINK,
+    c1: [1.5, 0.3, 1.0, 0.0],
+};
+const PINK_STARS: u8 = 3;
+/// How many of each and how big: the zap, the baked burst, the shards
+/// (their speed, m/s) and the vapour.
+const PINK_ZAPS: (usize, f32) = (2, 6.0);
+const PINK_ENERGY: (usize, f32) = (2, 1.2);
+const PINK_SHARDS: (usize, f32) = (40, 7.0);
+const PINK_VAPOUR: (usize, f32) = (6, 5.0);
+const PINK_FLASH: FlashDef = FlashDef {
+    lumens: 900_000.0,
+    range: 9.0,
+    life: 0.3,
+    color: [1.0, 0.35, 0.8],
+};
+
+// ── A sticky going off (`sticky`) ────────────────────────────────────────
+
+/// Its crack of light, this far over where it went off.
+const STICKY_FLASH: FlashDef = FlashDef {
+    lumens: 2_600_000.0,
+    range: 17.0,
+    life: 0.4,
+    color: [0.4, 0.62, 1.0],
+};
+const STICKY_FLASH_UP_M: f32 = 0.4;
+/// How many of each (before the distance's thinning) and how big: the
+/// zap, the baked plasma, the arcs (starting this far out), the splash,
+/// the blue embers, the vapour (this far up).
+const STICKY_ZAPS: (usize, f32) = (2, 4.0);
+const STICKY_ENERGY: (usize, f32) = (2, 1.7);
+const STICKY_ARCS: (usize, f32) = (12, 2.8);
+const STICKY_ARC_OUT_M: f32 = 0.6;
+const STICKY_SPLASH: f32 = 4.0;
+const STICKY_EMBERS: (usize, f32) = (16, 1.0);
+const STICKY_EMBER: Color = Color::srgb(0.5, 0.7, 1.0);
+const STICKY_VAPOUR: (usize, f32) = (3, 2.5);
+const STICKY_VAPOUR_UP_M: f32 = 0.4;
+const STICKY_VAPOUR_TINT: Color = Color::srgb(0.6, 0.68, 0.85);
+/// Its ring's size, and its scorch's share of a blast's.
+const STICKY_RING: f32 = 1.1;
+const STICKY_SCORCH: f32 = 0.8;
+
+// ── A charge going off (`boom`), at a rocket's size ──────────────────────
+
+/// A frag's, a rocket's and a wreck's, and how much harder and further a
+/// wreck shakes the camera than a blast.
+const GRENADE_BIG: f32 = 0.85;
+const WRECK_BIG: f32 = 1.5;
+const WRECK_SHAKE_FULL: f32 = 1.5;
+const WRECK_SHAKE_ZERO: f32 = 1.3;
+/// A wreck's blast is this far over its hull's origin.
+const WRECK_UP_M: f32 = 0.8;
+/// Within this of the floor a blast is on the ground (a ring, dust, a
+/// scorch), drawn this far over it.
+const GROUND_NEAR_M: f32 = 2.5;
+const GROUND_LIFT_M: f32 = 0.06;
+/// Its light, this far over where it went off.
+const BOOM_FLASH_UP_M: f32 = 0.5;
+/// Its first frames' stars: how many, and their size (`a + b·big`).
+const BOOM_STARS: usize = 3;
+const BOOM_STAR_SIZE: (f32, f32) = (10.0, 4.0);
+/// The fireball, lifted this far (`× big`) off the ground it sits on, and
+/// how many smaller ones are flung off it.
+const BOOM_LIFT_M: f32 = 0.6;
+const BOOM_FIREBALLS: usize = 3;
+/// The smoke: how many puffs, lifted this far (`× big`), their size
+/// (`× big`), and how much of the ground's dust is in the soot.
+const BOOM_SMOKES: usize = 8;
+const BOOM_SMOKE_LIFT_M: f32 = 0.7;
+const BOOM_SMOKE_SIZE: f32 = 2.1;
+const BOOM_SMOKE_DUST: f32 = 0.35;
+/// Its sparks: how wide they spray, their drag, how many, their size
+/// (`× big`; their speed and life are [`BLAST_SPARK_MPS`], [`BLAST_SPARK_S`]).
+const BOOM_SPARK_SPRAY: f32 = 0.3;
+const BOOM_SPARK_DRAG: f32 = 2.2;
+const BOOM_SPARKS: usize = 36;
+const BOOM_SPARK_SIZE: f32 = 1.7;
+const BOOM_EMBERS: usize = 22;
+/// The dust rolled out along the ground: how many, how much they rise as
+/// they go, how far out (`× big`) and up they start, their size (`× big`).
+const BOOM_DUSTS: usize = 7;
+const BOOM_DUST_RISE: f32 = 0.12;
+const BOOM_DUST_OUT_M: f32 = 0.5;
+const BOOM_DUST_UP_M: f32 = 0.25;
+const BOOM_DUST_SIZE: f32 = 6.0;
+/// Debris trailing smoke: off the ground (how many, how much it leans up,
+/// how fast, m/s `× √big`), and in the air.
+const BOOM_DEBRIS: usize = 5;
+const BOOM_DEBRIS_UP: f32 = 1.2;
+const BOOM_DEBRIS_MPS: (f32, f32) = (6.0, 12.0);
+const BOOM_DEBRIS_AIR: usize = 4;
+const BOOM_DEBRIS_AIR_MPS: (f32, f32) = (5.0, 10.0);
+
 pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
     let eye = fx.eye;
     fx.shake.add_at(1.0, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
@@ -83,7 +273,7 @@ pub fn blast(fx: &mut Fx, scene: &Scene, at: Vec3, c: u16, heard: bool) {
         sticky(fx, scene, at);
         return;
     }
-    let big = if c == Cause::Grenade as u16 { 0.85 } else { 1.0 };
+    let big = if c == Cause::Grenade as u16 { GRENADE_BIG } else { 1.0 };
     boom(fx, scene, at, big);
 }
 
@@ -98,81 +288,57 @@ fn plasma(fx: &mut Fx, at: Vec3) {
 /// across the floor under it too, for what goes off on the ground; on a wall or
 /// a body, a flat ring is a line in the air.
 pub fn burst_green(fx: &mut Fx, at: Vec3, k: f32, ring: bool) {
-    let green = super::pool::Particle {
-        left: 0.25,
-        life: 0.25,
-        pos: at.into(),
-        size0: 1.0 * k,
-        size1: 4.0 * k,
-        c0: [3.0, 12.0, 4.0, 1.0],
-        c1: [0.3, 1.5, 0.4, 0.0],
-        cell: super::atlas::GLOW,
-        ..Default::default()
-    };
-    fx.glow.spawn(green);
+    fx.glow.spawn(GREEN_GLOW.at(at, k, GLOW));
     if ring {
-        fx.glow.spawn(super::pool::Particle {
-            size0: 0.5 * k,
-            size1: 9.0 * k,
-            left: 0.35,
-            life: 0.35,
-            cell: super::atlas::RING,
-            orient: super::pool::Orient::Flat,
-            pos: (at - Vec3::Y * 0.4 * k).into(),
-            c0: [1.5, 6.0, 2.0, 0.8],
-            c1: [0.2, 0.8, 0.3, 0.0],
-            ..green
+        fx.glow.spawn(Particle {
+            orient: Orient::Flat,
+            ..GREEN_RING.at(at - Vec3::Y * GREEN_RING_DROP_M * k, k, RING)
         });
     }
-    // Its first frame, white inside.
-    fx.glow.spawn(super::pool::Particle {
-        left: 0.05,
-        life: 0.05,
-        pos: at.into(),
-        size0: 1.5 * k,
-        size1: 0.9 * k,
-        c0: [14.0, 22.0, 15.0, 1.0],
-        c1: [2.0, 8.0, 3.0, 0.0],
-        cell: super::atlas::GLOW,
-        ..Default::default()
-    });
+    fx.glow.spawn(GREEN_CORE.at(at, k, GLOW));
     *super::shell::claim(&mut fx.shocks) = super::shell::mint(at, k);
-    fx.energy(at, TONE_GREEN, 2.0 * k, ((3.0 * k).ceil() as usize).max(2));
-    for _ in 0..((9.0 * k).ceil() as usize).max(4) {
+    fx.energy(at, TONE_GREEN, GREEN_ENERGY * k, scaled(GREEN_ENERGIES, k));
+    for _ in 0..scaled(GREEN_ARCS, k) {
         let d = fx.unit();
-        fx.emit_tint(Layer::Arcs, 1, at + d * 0.4 * k, d, GREEN_ARC, 2.2 * k);
+        fx.emit_tint(
+            Layer::Arcs,
+            1,
+            at + d * GREEN_ARC_OUT_M * k,
+            d,
+            GREEN_ARC,
+            GREEN_ARC_SIZE * k,
+        );
     }
-    for _ in 0..((24.0 * k).ceil() as usize).max(8) {
+    for _ in 0..scaled(GREEN_SPARKS, k) {
         let d = fx.unit();
-        let life = fx.range(0.3, 0.6);
-        let speed = fx.range(4.0, 11.0);
-        fx.glow.spawn(super::pool::Particle {
+        let life = fx.range(GREEN_SPARK_S.0, GREEN_SPARK_S.1);
+        let speed = fx.range(GREEN_SPARK_MPS.0, GREEN_SPARK_MPS.1);
+        fx.glow.spawn(Particle {
             left: life,
             life,
             pos: at.into(),
             vel: (d * speed).into(),
-            gravity: 6.0,
-            drag: 1.5,
-            size0: 0.012,
-            size1: 0.006,
-            c0: [3.0, 12.0, 4.0, 1.0],
-            c1: [0.3, 1.5, 0.4, 0.0],
-            cell: super::atlas::STREAK,
-            orient: super::pool::Orient::Stretch,
-            stretch: 0.02,
+            gravity: GREEN_SPARK_FALL,
+            drag: GREEN_SPARK_DRAG,
+            size0: GREEN_SPARK_W[0],
+            size1: GREEN_SPARK_W[1],
+            c0: GREEN_GLOW.c0,
+            c1: GREEN_GLOW.c1,
+            cell: STREAK,
+            orient: Orient::Stretch,
+            stretch: GREEN_SPARK_STRETCH_S,
             ..Default::default()
         });
     }
     let eye = fx.eye;
     fx.shake
-        .add_at(0.8 * k, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
+        .add_at(GREEN_SHAKE * k, at, eye, shake::BLAST_FULL_M, shake::BLAST_ZERO_M);
     fx.flash(
         at,
-        super::FlashDef {
-            lumens: 1_500_000.0 * k,
-            range: 14.0 * k.sqrt(),
-            life: 0.35,
-            color: [0.4, 1.0, 0.45],
+        FlashDef {
+            lumens: GREEN_FLASH.lumens * k,
+            range: GREEN_FLASH.range * k.sqrt(),
+            ..GREEN_FLASH
         },
     );
 }
@@ -180,35 +346,18 @@ pub fn burst_green(fx: &mut Fx, at: Vec3, k: f32, ring: bool) {
 /// Shards in one body going off together: a pink star, a pink burst,
 /// shards everywhere, a pink light. Glass, not fire.
 fn burst(fx: &mut Fx, at: Vec3) {
-    let pink = Color::LinearRgba(LinearRgba::rgb(2.4, 0.5, 1.6));
-    for k in 0..3u8 {
+    for k in 0..PINK_STARS {
         let roll = fx.range(0.0, core::f32::consts::TAU);
-        fx.glow.spawn(super::pool::Particle {
-            left: 0.12,
-            life: 0.12,
-            pos: at.into(),
-            size0: 0.6,
-            size1: 1.3,
-            c0: super::table::PINK,
-            c1: [1.5, 0.3, 1.0, 0.0],
+        fx.glow.spawn(Particle {
             roll,
-            cell: super::atlas::STAR + k,
-            ..Default::default()
+            ..PINK_STAR.at(at, 1.0, STAR + k)
         });
     }
-    fx.emit_tint(Layer::Zap, 2, at, Vec3::Y, pink, 6.0);
-    fx.energy(at, TONE_PINK, 1.2, 2);
-    super::table::shatter(&mut fx.glow, at, 40, 7.0);
-    fx.emit_tint(Layer::GunSmoke, 6, at, Vec3::Y, pink, 5.0);
-    fx.flash(
-        at,
-        super::FlashDef {
-            lumens: 900_000.0,
-            range: 9.0,
-            life: 0.3,
-            color: [1.0, 0.35, 0.8],
-        },
-    );
+    fx.emit_tint(Layer::Zap, PINK_ZAPS.0, at, Vec3::Y, PINK_TINT, PINK_ZAPS.1);
+    fx.energy(at, TONE_PINK, PINK_ENERGY.1, PINK_ENERGY.0);
+    super::table::shatter(&mut fx.glow, at, PINK_SHARDS.0, PINK_SHARDS.1);
+    fx.emit_tint(Layer::GunSmoke, PINK_VAPOUR.0, at, Vec3::Y, PINK_TINT, PINK_VAPOUR.1);
+    fx.flash(at, PINK_FLASH);
 }
 
 /// A sticky going off: a blue-white crack of light, a baked burst of
@@ -216,46 +365,52 @@ fn burst(fx: &mut Fx, at: Vec3) {
 /// ground and a little vapour. No fire: energy.
 fn sticky(fx: &mut Fx, scene: &Scene, at: Vec3) {
     fx.shock = Some(at);
-    fx.flash(
-        at + Vec3::Y * 0.4,
-        super::FlashDef {
-            lumens: 2_600_000.0,
-            range: 17.0,
-            life: 0.4,
-            color: [0.4, 0.62, 1.0],
-        },
-    );
+    fx.flash(at + Vec3::Y * STICKY_FLASH_UP_M, STICKY_FLASH);
     let dist = at.distance(fx.eye);
     let lod = super::table::lod_far(dist);
     let n = |k: usize| ((k as f32 * lod).ceil() as usize).max(1);
-    fx.emit_tint(Layer::Zap, n(2), at, Vec3::Y, Color::WHITE, 4.0);
+    fx.emit_tint(Layer::Zap, n(STICKY_ZAPS.0), at, Vec3::Y, Color::WHITE, STICKY_ZAPS.1);
     *super::shell::claim(&mut fx.shocks) = super::shell::ion(at);
-    fx.energy(at, TONE_PLASMA, 1.7, n(2));
-    for _ in 0..n(12) {
+    fx.energy(at, TONE_PLASMA, STICKY_ENERGY.1, n(STICKY_ENERGY.0));
+    for _ in 0..n(STICKY_ARCS.0) {
         let d = fx.unit();
-        fx.emit_tint(Layer::Arcs, 1, at + d * 0.6, d, Color::WHITE, 2.8);
+        fx.emit_tint(
+            Layer::Arcs,
+            1,
+            at + d * STICKY_ARC_OUT_M,
+            d,
+            Color::WHITE,
+            STICKY_ARCS.1,
+        );
     }
-    super::flying::splash(fx, at, Vec3::Y, 4.0);
-    fx.emit_tint(Layer::Embers, n(16), at, Vec3::Y, Color::srgb(0.5, 0.7, 1.0), 1.0);
+    super::flying::splash(fx, at, Vec3::Y, STICKY_SPLASH);
+    fx.emit_tint(
+        Layer::Embers,
+        n(STICKY_EMBERS.0),
+        at,
+        Vec3::Y,
+        STICKY_EMBER,
+        STICKY_EMBERS.1,
+    );
     // The vapour the heat leaves: thin, pale, quick.
     fx.emit_tint(
         Layer::Wisp,
-        n(3),
-        at + Vec3::Y * 0.4,
+        n(STICKY_VAPOUR.0),
+        at + Vec3::Y * STICKY_VAPOUR_UP_M,
         Vec3::Y,
-        Color::srgb(0.6, 0.68, 0.85),
-        2.5,
+        STICKY_VAPOUR_TINT,
+        STICKY_VAPOUR.1,
     );
     let floor = scene.map.floor(at.x, at.z, 0.2, at.y + 0.5);
-    if at.y - floor < 2.5 {
-        let base = Vec3::new(at.x, floor + 0.06, at.z);
-        fx.emit_tint(Layer::Shock, 1, base, Vec3::Y, ION_RING, 1.1);
+    if at.y - floor < GROUND_NEAR_M {
+        let base = Vec3::new(at.x, floor + GROUND_LIFT_M, at.z);
+        fx.emit_tint(Layer::Shock, 1, base, Vec3::Y, ION_RING, STICKY_RING);
         let up = ground_up(scene, at, floor);
         if let Some((k, size)) = super::marks::kind(Weapon::Blast, Matter::Concrete) {
             fx.marks.lay(
                 scene.map,
                 k,
-                size * 0.8,
+                size * STICKY_SCORCH,
                 Vec3::new(at.x, floor, at.z),
                 up,
                 Matter::Concrete,
@@ -266,11 +421,16 @@ fn sticky(fx: &mut Fx, scene: &Scene, at: Vec3) {
 
 /// A vehicle blowing up: a bigger blast, then its hull burns.
 pub fn wreck(fx: &mut Fx, scene: &Scene, at: Vec3) {
-    let at = at + Vec3::Y * 0.8;
+    let at = at + Vec3::Y * WRECK_UP_M;
     let eye = fx.eye;
-    fx.shake
-        .add_at(1.0, at, eye, shake::BLAST_FULL_M * 1.5, shake::BLAST_ZERO_M * 1.3);
-    boom(fx, scene, at, 1.5);
+    fx.shake.add_at(
+        1.0,
+        at,
+        eye,
+        shake::BLAST_FULL_M * WRECK_SHAKE_FULL,
+        shake::BLAST_ZERO_M * WRECK_SHAKE_ZERO,
+    );
+    boom(fx, scene, at, WRECK_BIG);
     let i = (0..fx.burning.len())
         .min_by(|&a, &b| fx.burning[a].left.total_cmp(&fx.burning[b].left))
         .unwrap_or(0);
@@ -302,8 +462,8 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
         Matter::Concrete
     };
     fx.flash(
-        at + Vec3::Y * 0.5,
-        super::FlashDef {
+        at + Vec3::Y * BOOM_FLASH_UP_M,
+        FlashDef {
             lumens: BLAST_FLASH.lumens * big,
             range: BLAST_FLASH.range * big,
             ..BLAST_FLASH
@@ -315,51 +475,80 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
     let tint = super::table::dust_tint(dust);
     // The first frames: a hard star and a hot glow over everything, and
     // the shock blown out through the air.
-    fx.emit_tint(Layer::Flash, n(3), at, Vec3::Y, Color::WHITE, 10.0 + 4.0 * big);
+    fx.emit_tint(
+        Layer::Flash,
+        n(BOOM_STARS),
+        at,
+        Vec3::Y,
+        Color::WHITE,
+        BOOM_STAR_SIZE.0 + BOOM_STAR_SIZE.1 * big,
+    );
     *super::shell::claim(&mut fx.shocks) = super::shell::fire(at, big);
     // The fireball, lifted off the ground it sits on (a billboard its size
     // would cut into it), and smaller ones flung off it.
-    fx.emit_tint(Layer::Boom, 1, at + Vec3::Y * 0.6 * big, Vec3::Y, Color::WHITE, big);
-    fx.emit_tint(Layer::Fireballs, n(3), at, Vec3::Y, Color::WHITE, big);
+    fx.emit_tint(
+        Layer::Boom,
+        1,
+        at + Vec3::Y * BOOM_LIFT_M * big,
+        Vec3::Y,
+        Color::WHITE,
+        big,
+    );
+    fx.emit_tint(Layer::Fireballs, n(BOOM_FIREBALLS), at, Vec3::Y, Color::WHITE, big);
     // Smoke that outlasts the fire, rising off it, soot and the ground's
     // dust in it.
-    let smoke = SOOT.mix(&tint, 0.35);
-    fx.emit_tint(Layer::Cloud, n(8), at + Vec3::Y * 0.7 * big, Vec3::Y, smoke, 2.1 * big);
+    let smoke = SOOT.mix(&tint, BOOM_SMOKE_DUST);
+    fx.emit_tint(
+        Layer::Cloud,
+        n(BOOM_SMOKES),
+        at + Vec3::Y * BOOM_SMOKE_LIFT_M * big,
+        Vec3::Y,
+        smoke,
+        BOOM_SMOKE_SIZE * big,
+    );
     let sparks = ::fx::recipe::Recipe {
         speed: BLAST_SPARK_MPS,
-        spray: 0.3,
-        drag: 2.2,
+        spray: BOOM_SPARK_SPRAY,
+        drag: BOOM_SPARK_DRAG,
         life: BLAST_SPARK_S,
         ..super::table::recipe(Layer::Sparks)
     };
     let pool = fx.pool(Layer::Sparks.pool());
-    super::table::emit_recipe(pool, &sparks, n(36), at, Vec3::Y, Color::WHITE, 1.7 * big);
-    fx.emit_tint(Layer::Embers, n(22), at, Vec3::Y, EMBER, big);
+    super::table::emit_recipe(
+        pool,
+        &sparks,
+        n(BOOM_SPARKS),
+        at,
+        Vec3::Y,
+        Color::WHITE,
+        BOOM_SPARK_SIZE * big,
+    );
+    fx.emit_tint(Layer::Embers, n(BOOM_EMBERS), at, Vec3::Y, EMBER, big);
     // On or near the ground: a ring, dust rolled out along it, debris off
     // it trailing smoke, a scorch.
     let floor = scene.map.floor(at.x, at.z, 0.2, at.y + 0.5);
-    if at.y - floor < 2.5 {
-        let base = Vec3::new(at.x, floor + 0.06, at.z);
+    if at.y - floor < GROUND_NEAR_M {
+        let base = Vec3::new(at.x, floor + GROUND_LIFT_M, at.z);
         fx.emit_tint(Layer::Shock, 1, base, Vec3::Y, FIRE_RING, big);
-        for _ in 0..n(7) {
+        for _ in 0..n(BOOM_DUSTS) {
             let a = fx.range(0.0, core::f32::consts::TAU);
-            let out = Vec3::new(a.cos(), 0.12, a.sin());
+            let out = Vec3::new(a.cos(), BOOM_DUST_RISE, a.sin());
             fx.emit_tint(
                 Layer::DustCloud,
                 1,
-                base + out * 0.5 * big + Vec3::Y * 0.25,
+                base + out * BOOM_DUST_OUT_M * big + Vec3::Y * BOOM_DUST_UP_M,
                 out,
                 tint,
-                6.0 * big,
+                BOOM_DUST_SIZE * big,
             );
         }
         let up = ground_up(scene, at, floor);
         // Lit debris off the ground it tore up (the table's Blast row).
         let chips = n(usize::from(super::table::effect(Weapon::Blast, dust).chips));
         fx.chips.throw(base, up, dust, chips, floor);
-        for _ in 0..n(5) {
-            let d = (Vec3::Y * 1.2 + fx.unit()).normalize_or(Vec3::Y);
-            let speed = fx.range(6.0, 12.0) * big.sqrt();
+        for _ in 0..n(BOOM_DEBRIS) {
+            let d = (Vec3::Y * BOOM_DEBRIS_UP + fx.unit()).normalize_or(Vec3::Y);
+            let speed = fx.range(BOOM_DEBRIS_MPS.0, BOOM_DEBRIS_MPS.1) * big.sqrt();
             launch(fx, at, d * speed, floor);
         }
         // Laid on the floor as drawn: over a ramp's slope, the terrain's
@@ -369,9 +558,9 @@ fn boom(fx: &mut Fx, scene: &Scene, at: Vec3, big: f32) {
                 .lay(scene.map, k, size * big, Vec3::new(at.x, floor, at.z), up, dust);
         }
     } else {
-        for _ in 0..n(4) {
+        for _ in 0..n(BOOM_DEBRIS_AIR) {
             let d = fx.unit();
-            let speed = fx.range(5.0, 10.0) * big.sqrt();
+            let speed = fx.range(BOOM_DEBRIS_AIR_MPS.0, BOOM_DEBRIS_AIR_MPS.1) * big.sqrt();
             launch(fx, at, d * speed, f32::NEG_INFINITY);
         }
     }

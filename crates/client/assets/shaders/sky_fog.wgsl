@@ -9,7 +9,7 @@
 //
 // The colour and the amount are the ground's: `DistanceFog` mixes geometry
 // toward its colour in exposed units, and so does this, by
-// `sky::SkyFog::band`, which at the horizon is the far land's own fog.
+// `deck_haze`, which at the horizon is the far land's own fog.
 #import bevy_pbr::mesh_view_bindings::{view, lights}
 #import bevy_pbr::utils::coords_to_viewport_uv
 #import "shaders/deck.wgsl"::deck_haze

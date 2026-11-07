@@ -11,8 +11,9 @@
 //!   the module, though the log says it is merely off), no SSAO or TAA
 //!   (their prepasses want the same), no bloom (Bevy: "not compatible with
 //!   WebGL2"), and Bevy gives a light one cascade there
-//!   (`quality::for_target_on`). The sky is then baked into the cloud cube
-//!   and the air is a fog of the same air (`sky::browser_haze`). Nothing in
+//!   (`quality::for_target_on`). The sky is then drawn behind the clouds by
+//!   the deck itself (`deck.rs`, `BACKDROP`) and the air is a fog of the
+//!   same air (`rig::fog_for`). Nothing in
 //!   it is a removal: the WebGL2 frame is the best WebGL2 can do.
 //! - **The device, read once at startup** ([`GpuPlugin`]). A WebGPU adapter
 //!   guarantees 16 sampled textures per fragment stage and 4 storage
@@ -26,7 +27,7 @@
 //!   where TAA can't go.
 //!
 //! **Fairness:** what a GPU can't do costs it finish, never what hides a
-//! player: the haze is the same air both ways (`sky::browser_haze` is the
+//! player: the haze is the same air both ways (`rig::fog_for` takes the
 //! atmosphere's own coefficients), and `quality.rs`' header says the rest.
 
 use std::sync::OnceLock;
@@ -63,8 +64,8 @@ pub struct GpuCaps {
     pub rg11b10_renderable: bool,
     /// `DUAL_SOURCE_BLENDING`: without it Bevy's atmosphere lays the sky
     /// over the cloud deck through the MEAN of its transmittance, not per
-    /// channel, so `sky::deck_hue` must not tint the deck against it (a
-    /// SwiftShader browser's clouds came out periwinkle).
+    /// channel, so `cloud.wgsl`'s `deck_hue` must not tint the deck against
+    /// it (a SwiftShader browser's clouds came out periwinkle).
     pub dual_source_blending: bool,
 }
 
@@ -114,9 +115,9 @@ pub fn caps() -> GpuCaps {
 /// Whether Bevy's atmosphere draws the sky and the air: never under
 /// WebGL2 (its layout wants a storage buffer in the fragment stage, which
 /// kills the module), and only where 32-bit floats filter (it binds its
-/// `Rgba32Float` tables as filterable without asking). Elsewhere the sky
-/// is baked into the cloud cube and the air is a fog of the same air
-/// (`sky::browser_haze`).
+/// `Rgba32Float` tables as filterable without asking). Elsewhere the deck
+/// draws the sky behind its clouds (`deck.rs`) and the air is a fog of the
+/// same air (`rig::fog_for`).
 pub fn atmosphere_on(webgl2: bool, caps: GpuCaps) -> bool {
     !webgl2 && caps.float32_filterable
 }

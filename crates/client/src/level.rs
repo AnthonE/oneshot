@@ -424,8 +424,25 @@ pub fn dress_level(
     mut level_mats: ResMut<Assets<weathering::LevelMaterial>>,
     ground: Query<(Entity, &GroundMesh), Without<Dressed>>,
     boxes: Query<(Entity, &BoxLook, Option<&Block>), Undressed>,
+    dressed: Query<&MeshMaterial3d<crate::look::ground::GroundMaterial>, (With<GroundMesh>, With<Dressed>)>,
     mood: Res<crate::look::mood::MoodNow>,
 ) {
+    // On the lite frame (`quality::Tier::lite`: a world drawn under the
+    // window's resolution) the ground draws no wall planes or rock face;
+    // a rung moved after it was dressed reaches it here.
+    let lite = tier.lite();
+    if tier.is_changed() {
+        for m in &dressed {
+            if ground_mats
+                .get(&m.0)
+                .is_some_and(|g| crate::look::ground::is_lite(g) != lite)
+            {
+                if let Some(g) = ground_mats.get_mut(&m.0) {
+                    crate::look::ground::set_lite(g, lite);
+                }
+            }
+        }
+    }
     // The rain's wet on everything it falls on (`look/rain.rs`); none
     // under a roof.
     let wet = if mood.roofed { 0.0 } else { mood.mood.wet };
@@ -435,8 +452,7 @@ pub fn dress_level(
     };
     // The ground and the rock skin over it in the splat material: the sea's
     // height for its wet band, the deck's shadows and the rain's wet, and
-    // on the lowest rung (a software GPU) no wall planes or rock face.
-    let lite = matches!(tier.preset, Some(crate::look::quality::Quality::Potato));
+    // on the lite frame no wall planes or rock face.
     for (e, g) in ground.iter() {
         let m = ground_mats.add(crate::look::ground::material(
             albedo.clone(),
@@ -1465,8 +1481,14 @@ pub fn build(
     } else {
         mood.ev100
     };
-    commands.spawn((
-        LevelPart,
-        crate::look::rig::sun(map.light.sun, &mood, crate::look::gpu::atmosphere(), ev),
-    ));
+    // With the graphics tier's cascades from its first frame: spawned where
+    // the tier can be read.
+    let k = map.light.sun;
+    commands.queue(move |world: &mut World| {
+        let tier = world
+            .get_resource::<crate::look::quality::Tier>()
+            .copied()
+            .unwrap_or_default();
+        world.spawn((LevelPart, crate::look::rig::sun(k, &mood, &tier, ev)));
+    });
 }

@@ -14,7 +14,7 @@
 #import bevy_pbr::shadows::{get_cascade_index, world_to_directional_light_local}
 #import bevy_pbr::shadow_sampling::sample_shadow_map_hardware
 
-// `shafts::WEB_STEPS`.
+// Steps along a ray: a map's box is crossed in a few metres a step.
 const SHAFT_STEPS: u32 = 12u;
 
 // The light the march takes back along a ray from `eye` toward `dir` (unit),
