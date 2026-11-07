@@ -8,8 +8,9 @@
 use std::path::{Path, PathBuf};
 
 /// Bumped only when a key is renamed or changes meaning; a newer file's
-/// number is kept on save.
-pub const SETTINGS_VERSION: u32 = 2;
+/// number is kept on save. 3: the desktop's `fullscreen` became a choice
+/// (before, every file said `false` whether anyone chose it or not).
+pub const SETTINGS_VERSION: u32 = 3;
 
 /// A file, read.
 #[derive(Clone, Debug, Default, PartialEq)]

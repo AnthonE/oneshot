@@ -1,5 +1,5 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|cup|bigteam|ctf|watch|0..6|8|9]
-//! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
+//! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics] [--windowed]
 //! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
 //! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
@@ -118,6 +118,7 @@ fn run() -> Result<(), String> {
             potato,
             quality,
             pose: Some(pose),
+            windowed: true,
             ..Default::default()
         };
         let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
@@ -151,6 +152,9 @@ fn run() -> Result<(), String> {
             open,
             front,
             party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
+            // A picture is the window's size, not the monitor's; a tool's
+            // run (a tape, the autopilot) doesn't take the screen.
+            windowed: flag("--windowed") || shot.is_some() || record.is_some() || autoplay,
         };
         let joins = matches!(front, Start::Join(_));
         // On the title only the settings open over it; in a match, the
@@ -356,6 +360,7 @@ const HELP: &str = "oneshot: the desktop client
   --menu, --settings               open the match on the Esc menu or the settings
                                    (--settings alone: over the title)
   --graphics                       the settings, on GRAPHICS
+  --windowed                       a window this run, not fullscreen (the setting is kept)
   --fxdemo                         the effects staged in front of the camera, in a
                                    match (look/fx/demo.rs); --fxstage N: its stage N
   --knobs 'Layer.key=v;...'        effects retuned for this run (tools/fx.sh, REEL_KNOBS)
@@ -379,11 +384,17 @@ F12 saves a screenshot on any screen, into your pictures folder under
 oneshot/ (ONESHOT_SHOTS_DIR names another). F9 in a match saves the last
 half minute there as a tape and, with ffmpeg installed, makes it a video.
 
-Keys (by default; rebind them, with the mouse's speed, the field of view,
-the volume and the graphics, in SETTINGS, saved in your config folder under
-oneshot/settings.toml): WASD and the mouse, space jumps, Ctrl or C crouches,
-R reloads, E uses, G throws a frag, T picks frag or sticky, Q or V melees,
-X, 1 or the wheel swaps, N the net graph, F11 fullscreen, Esc the menu.
+Keys (Halo 2's on a PC by default; rebind any of them, the mouse's buttons
+and wheel too, with the mouse's speed, the field of view, the volume and
+the graphics, in SETTINGS, saved in your config folder under
+oneshot/settings.toml): WASD and the mouse, Mouse 1 fires, Mouse 2 zooms
+(or, with a gun in each hand, fires the left one), Space jumps, Ctrl
+crouches, Q melees, F throws a grenade, 2 switches grenades, R reloads,
+E is the action (pick up, get in), 1 or the wheel changes weapon, Tab the
+scoreboard, N the net graph, F11 fullscreen, Esc the menu.
+
+The game opens fullscreen (borderless); F11 or SETTINGS > GRAPHICS >
+FULLSCREEN, or --windowed for this run.
 
 A slow machine (a software rasterizer) starts on POTATO by itself until you
 pick a graphics row.";

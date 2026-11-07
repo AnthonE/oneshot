@@ -285,6 +285,8 @@ pub fn app(script: Script, tape: client_net::tape::Tape, canvas: Option<String>)
     }
     let opts = crate::Opts {
         quality: Some(script.quality()),
+        // The film's window is its list's size (`install`).
+        windowed: true,
         ..Default::default()
     };
     let mut app = crate::app(Box::new(crate::link::Tape::new(tape)), opts);

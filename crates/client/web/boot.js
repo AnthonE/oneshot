@@ -56,6 +56,19 @@ document.addEventListener('fullscreenchange', () => {
   if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
   else kb.unlock();
 });
+/* F11 is the page's fullscreen, never the browser's (which the page can't
+   see, and which takes no Keyboard Lock): asked for here, inside the key's
+   own event, which is all Safari honours; the game's row follows the page
+   (display.rs, `PageFull`). Captured first, so it works on the title's
+   HTML as well as on the canvas. */
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'F11') return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const el = document.documentElement;
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  else el.requestFullscreen?.().catch(() => {});
+}, true);
 const boot = document.getElementById('boot');
 const say = (line, bad) => { document.getElementById('say').textContent = line; boot.classList.toggle('failed', !!bad); };
 /* The splash's bar: `share` 0..1 of the download, or null for the

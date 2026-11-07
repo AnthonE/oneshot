@@ -3,8 +3,9 @@
 //! blue, a pane of rows on the right, each a label and its control, and a
 //! foot with BACK, RESET TAB and where it's all kept. A number is a `-`
 //! value `+` stepper, a toggle a button that says ON or OFF; a key cell
-//! captures the next key pressed (Esc cancels, a right click clears it), and
-//! a key taken from another action says where from. Everything saves as it
+//! captures the next key, mouse button or wheel turn (Esc cancels, a right
+//! click on a cell not waiting clears it), and a key taken from another
+//! action says where from. Everything saves as it
 //! changes (`settings.rs`) and applies at once: over a match the match shows
 //! through, so a wider view or a lower rung is seen as it's chosen. BACK or
 //! Esc: the Esc menu, or the title.
@@ -248,7 +249,10 @@ fn spawn(
                         {
                             key_row(pane, binds, st, s.action, s.name);
                         }
-                        note(pane, "Fire, scope and the wheel's swap stay on the mouse.");
+                        note(
+                            pane,
+                            "Halo 2's keys by default. Every control binds, the mouse's buttons and its wheel too. Zoom and the left gun's trigger may share a button: with a gun in each hand there is no scope.",
+                        );
                     }
                 });
             });
@@ -272,7 +276,7 @@ fn spawn(
                 })
                 .with_children(|col| {
                     let hint = if st.capturing.is_some() {
-                        "Press the key or mouse button to use · Esc cancels".to_string()
+                        "Press the key or mouse button, or turn the wheel · Esc cancels".to_string()
                     } else if !st.note.is_empty() {
                         st.note.clone()
                     } else if st.cat == KEYS {
@@ -577,7 +581,8 @@ fn key_row(p: &mut ChildSpawnerCommands, binds: &Binds, st: &Page, action: Actio
 fn capture(
     mut st: ResMut<Page>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    wheel: Res<bevy::input::mouse::AccumulatedMouseScroll>,
     mut binds: ResMut<Binds>,
 ) {
     let Some((action, slot)) = st.capturing else {
@@ -599,12 +604,21 @@ fn capture(
                 .iter()
                 .find(|(b, ..)| mouse.just_pressed(*b))
                 .map(|(b, ..)| Bind::Mouse(*b))
-        });
+        })
+        .or_else(|| (wheel.delta.y != 0.0).then_some(Bind::Wheel));
     let Some(bind) = pressed else {
         return;
     };
-    if let Bind::Key(k) = bind {
-        keys.clear_just_pressed(k);
+    // Taken, so `click` doesn't read the same press as a click on a cell
+    // (a left click there would wait again, a right click would clear it).
+    match bind {
+        Bind::Key(k) => {
+            keys.clear_just_pressed(k);
+        }
+        Bind::Mouse(b) => {
+            mouse.clear_just_pressed(b);
+        }
+        Bind::Wheel => {}
     }
     st.capturing = None;
     st.dirty = true;
