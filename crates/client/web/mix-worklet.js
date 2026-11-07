@@ -46,6 +46,8 @@ class OneshotMix extends AudioWorkletProcessor {
         this.x = inst.exports;
         this.mem = this.x.memory;
         this.block = this.x.mix_block();
+        // The context's own rate (a browser may not have given 48 kHz).
+        if (this.x.mix_rate) this.x.mix_rate(sampleRate);
         return;
       }
       if (!this.x) return;

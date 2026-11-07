@@ -246,8 +246,8 @@ struct TicketSays {
     until: u64,
 }
 
-/// What every ticket starts with (`server/src/auth.rs` `TICKET_PREFIX`).
-const TICKET_PREFIX: &str = "os1.";
+/// What every ticket starts with (the wire's, as the server makes them).
+use proto::TICKET_PREFIX;
 
 fn ticket_says(t: &str) -> Option<TicketSays> {
     let body = t.strip_prefix(TICKET_PREFIX)?.split_once('.')?.0;
