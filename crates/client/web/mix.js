@@ -22,9 +22,11 @@ const WAITING = 7200;
 // the browser is holding it (a muted site, an autoplay block).
 const HELD_MS = 1500;
 // A one-shot sent after a gesture waits this long for the context to run
-// (it starts on that gesture, a moment later): the click that wakes the
-// sound is heard, a touch late. Older than this, it is stale, and dropped.
-const HOLD_MS = 500;
+// (it starts on that gesture, within a tenth of a second as a rule; a slow
+// machine's frame may itself be late to send the click): the click that
+// wakes the sound is heard, a touch late. Older than this, it is stale, and
+// dropped.
+const HOLD_MS = 1000;
 // What a browser counts as a person's gesture: any one may start a context.
 const GESTURES = ['pointerdown', 'pointerup', 'mousedown', 'touchend', 'keydown', 'click'];
 
