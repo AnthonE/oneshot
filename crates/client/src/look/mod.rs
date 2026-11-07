@@ -30,6 +30,7 @@ pub mod hands;
 pub mod icons;
 pub mod isle_stone;
 pub mod keel;
+pub mod lying;
 pub mod mood;
 pub mod moon;
 pub mod own_shadow;
