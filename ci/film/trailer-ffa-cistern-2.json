@@ -1,0 +1,81 @@
+{
+ "tape": "traces/film/ffa-cistern.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "map-cistern-2",
+   "at": 66.0,
+   "len": 2.6,
+   "ease": true,
+   "fov": 56,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -13,
+      1.6,
+      -1
+     ],
+     "look": [
+      3,
+      2.6,
+      1
+     ]
+    },
+    {
+     "t": 2.6,
+     "pos": [
+      -10.5,
+      1.7,
+      -0.6
+     ],
+     "look": [
+      3,
+      2.6,
+      1
+     ]
+    }
+   ],
+   "look": {
+    "exposure": 0.6
+   }
+  },
+  {
+   "name": "still-cistern-2",
+   "at": 66.4,
+   "still": true,
+   "fov": 54,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -13,
+      1.6,
+      -1
+     ],
+     "look": [
+      3,
+      2.6,
+      1
+     ]
+    }
+   ],
+   "look": {
+    "exposure": 0.6,
+    "focus": "look",
+    "fstop": 4
+   }
+  }
+ ]
+}

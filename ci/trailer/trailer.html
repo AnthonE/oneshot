@@ -440,8 +440,8 @@ const SCENES = [
   // the maps, seven in a row up to the kick grid
   { id: 'p1-proving', at: MAPS0, box: true, draw(L) { foot(bg, 'map-proving', L.t, L.d, { fallback: 'fighter', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 1, 'PROVING GROUNDS', 'Duel · Doubles'); } },
   { id: 'p2-overpass', at: MAPS0 + MAPSEG, box: true, draw(L) { foot(bg, 'map-overpass', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.06, z1: 1.0, x0: .2 } }); mapCard(L, 2, 'OVERPASS', 'Duel · Doubles'); } },
-  { id: 'p3-cistern', at: MAPS0 + 2 * MAPSEG, box: true, draw(L) { foot(bg, 'map-cistern', L.t, L.d, { fallback: 'cistern', still: { z0: 1.0, z1: 1.1 } }); mapCard(L, 3, 'CISTERN', 'Duel · Doubles'); } },
-  { id: 'p4-bulkhead', at: MAPS0 + 3 * MAPSEG, box: true, draw(L) { foot(bg, 'map-bulkhead', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.08, z1: 1.0, x0: -.2 } }); mapCard(L, 4, 'BULKHEAD', 'Doubles · Capture the Flag'); } },
+  { id: 'p3-cistern', at: MAPS0 + 2 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-cistern-2', 'map-cistern'), L.t, L.d, { fallback: 'cistern', grade: 'brightness(1.15) contrast(1.04)', still: { z0: 1.0, z1: 1.1 } }); mapCard(L, 3, 'CISTERN', 'Duel · Doubles'); } },
+  { id: 'p4-bulkhead', at: MAPS0 + 3 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-bulkhead-2', 'map-bulkhead'), L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.08, z1: 1.0, x0: -.2 } }); mapCard(L, 4, 'BULKHEAD', 'Doubles · Capture the Flag'); } },
   { id: 'p5-chrysalis', at: MAPS0 + 4 * MAPSEG, box: true, draw(L) { foot(bg, 'map-chrysalis', L.t, L.d, { fallback: 'chrysalis', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 5, 'CHRYSALIS', 'Free for all · Gun Game'); } },
   { id: 'p6-cloudbreak', at: MAPS0 + 5 * MAPSEG, box: true, draw(L) { foot(bg, 'map-cloudbreak', L.t, L.d, { fallback: 'dryfork', still: { z0: 1.1, z1: 1.02, y0: -.2 } }); mapCard(L, 6, 'CLOUDBREAK', 'Doubles · Free for all'); } },
   { id: 'p7-dryfork', at: MAPS0 + 6 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { from: .3, fallback: 'dryfork', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } }); mapCard(L, 7, 'DRY FORK', 'Big Team · Capture the Flag'); } },
