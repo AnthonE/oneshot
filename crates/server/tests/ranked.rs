@@ -88,11 +88,11 @@ async fn stand_in(old: bool) -> (String, Seen) {
                     (200, r#"{"ok":true}"#.to_string())
                 } else if first.starts_with("GET /api/items/of/") && first.contains("game=oneshot") {
                     // The first wallet owns the ember skin and the shades, the
-                    // second the gilded one and the boots; nobody else owns any.
+                    // second the gilded one and the loggers; nobody else owns any.
                     let items = if first.contains(WALLETS[0]) {
                         r#"[{"token_id":1,"catalog_id":101,"catalog_name":"Ember"},{"token_id":3,"catalog_id":201,"catalog_name":"Shades"}]"#
                     } else if first.contains(WALLETS[1]) {
-                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"},{"token_id":4,"catalog_id":202,"catalog_name":"Boots"}]"#
+                        r#"[{"token_id":2,"catalog_id":105,"catalog_name":"Gilded"},{"token_id":4,"catalog_id":202,"catalog_name":"Loggers"}]"#
                     } else {
                         "[]"
                     };
@@ -334,7 +334,7 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
     // second's is under gilded's (rank-locked), so it plays in the standard look.
     // And an emblem: the first asks for the crown, locked at 1800, which its
     // 1350 doesn't reach; the second for a free star. Both ask for the
-    // shades and the boots, and each wears only the gear it owns.
+    // shades and the loggers, and each wears only the gear it owns.
     let (crown, star) = (proto::emblem(16, 1, 2, 3), proto::emblem(1, 0, 4, 0));
     let (a, b) = tokio::join!(
         play_as(
@@ -417,7 +417,7 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         assert_eq!(
             gear_of(got, sb),
             Some((proto::GEAR_NONE, 1)),
-            "the second the boots only"
+            "the second the loggers only"
         );
         assert_eq!(
             skin_of(got, sb),

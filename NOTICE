@@ -21,10 +21,15 @@ onto a map of their own). The shades (models/shades.glb) are ours on the
 same terms: the operator's own model on Meshy, cut by
 tools/models/shades.py (sized, fitted to Triple T's face, thinned, the
 maker's lettering Meshy painted on the lens painted out, its maps made
-smaller and re-encoded as JPEG). The boots (models/boot-left.glb,
-boot-right.glb) are ours on the same terms: the operator's own model on
-Meshy, cut by tools/models/boots.py (thinned, its colour and detail baked
-onto maps of its own, the left made as the right's mirror image).
+smaller and re-encoded as JPEG). The rest of the gear is ours on the same
+terms: commissioned from Meshy from our own prompts and cut by the script of
+its name on tools/models/gear.py's kit (fitted to Triple T, what his trunk
+hides taken off, its maps made smaller and re-encoded as JPEG; each boot's
+left made as its right's mirror image): models/goggles.glb, respirator.glb,
+demon.glb (its red paint turned jade), welder.glb, skull.glb, hardhat.glb,
+helmet.glb, ten-gallon.glb, beanie.glb and models/loggers-*.glb,
+hightops-*.glb, spurs-*.glb, magboots-*.glb, wellies-*.glb. models/aviators.glb,
+rounds.glb and visor.glb are ours, made in Blender by the scripts of their names.
 
 The truck (models/truck.glb) is "Tesla Cybertruck" (https://skfb.ly/6QSBr)
 by hashikemu, licensed under Creative Commons Attribution 4.0

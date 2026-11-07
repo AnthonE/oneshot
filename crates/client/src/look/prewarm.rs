@@ -33,6 +33,9 @@ const WARM_SIZE_M: f32 = 0.000_02;
 
 /// The skin the warm gun wears: any but the standard look.
 const WARM_SKIN: u8 = 1;
+/// Gear painted by no maps, whose pipelines the warm body's don't build: wire
+/// glasses' tinted lenses, and a lit visor.
+const WARM_GEAR: [&str; 2] = ["aviators", "visor"];
 /// Where the warm fighter stands: far under every map.
 const UNDER_M: f32 = -500.0;
 
@@ -175,6 +178,12 @@ pub fn warm_models(
         models.turret.clone(),
         models.turret_barrels.clone(),
     ]);
+    scenes.extend(
+        WARM_GEAR
+            .iter()
+            .filter_map(|n| proto::HEADWEAR.iter().position(|g| g == n))
+            .filter_map(|g| models.head_scene(g as u8)),
+    );
     let settled = |h: &Handle<Scene>| matches!(assets.load_state(h), LoadState::Loaded | LoadState::Failed(_));
     let body = matches!(
         assets.load_state(&models.body),
