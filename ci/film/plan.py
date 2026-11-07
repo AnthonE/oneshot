@@ -126,6 +126,8 @@ def alive_window(rows, deaths, start, length, avoid=()):
 # shoulder that holds the player's own kill at 65.4 s and the rung it climbs.
 HAND = {
     "gungame": {"gungame": 62.4, "kill-5": 64.0},
+    # the sniper's second kill looks out of the red base across the grass; the first was indoors
+    "snipe2": {"snipe-kill": 80.5},
 }
 
 
