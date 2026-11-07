@@ -26,9 +26,11 @@ pub const SUN_AZIMUTH: f32 = 2.35;
 /// measured it against its reference frames).
 pub const DAY_EV100: f32 = 14.2;
 /// The field of view by default, as the settings name it: degrees across
-/// a 16:9 screen, as PC shooters label it (Overwatch's 103). The camera
-/// holds its height on any other shape (Hor+): Bevy's `fov` is the height.
-pub const FOV_DEG: f32 = 103.0;
+/// a 16:9 screen, as PC shooters label it. Nearer Halo's 78 than a twitch
+/// shooter's 103: a body across a room reads big enough to hit, and a run
+/// doesn't blur past. The camera holds its height on any other shape
+/// (Hor+): Bevy's `fov` is the height.
+pub const FOV_DEG: f32 = 90.0;
 
 /// The height, degrees, of a view `across` degrees wide on a 16:9 screen.
 pub fn fov_tall(across: f32) -> f32 {

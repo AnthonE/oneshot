@@ -70,7 +70,7 @@ use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use core::f32::consts::{FRAC_PI_2, PI, TAU};
-use sim::arms::{arm, Arm, Kind, NONE, ROCKET, SWAP_MS};
+use sim::arms::{arm, Arm, Kind, NONE, ROCKET, SHOTGUN, SWAP_MS};
 use sim::consts::{ticks, GREN_COOL_MS, MELEE_COOL_MS, RUN, TICK_HZ};
 use sim::fighter::{Fighter, Gun};
 
@@ -231,6 +231,17 @@ pub const KICK_AUTO: f32 = 0.4;
 pub const KICK_BURST: f32 = 0.55;
 pub const KICK_HEAVY: f32 = 1.3;
 pub const KICK_MAX: f32 = 1.8;
+/// The shotgun racked after a round, with its pump's sound
+/// (`sound::PUMP_AT_S`): from a moment before the sound, this long, the
+/// gun rolled in, dipped and drawn back, the most of it at `PUMP_PEAK` of
+/// the way.
+pub const PUMP_LEAD_S: f32 = 0.03;
+pub const PUMP_S: f32 = 0.3;
+pub const PUMP_PEAK: f32 = 0.4;
+pub const PUMP_ROLL: f32 = 0.16;
+pub const PUMP_DIP: f32 = -0.05;
+pub const PUMP_BACK_M: f32 = 0.03;
+pub const PUMP_DOWN_M: f32 = -0.012;
 /// Rounds counted in one frame at most (as `fx/shots.rs` draws).
 const MAX_ROUNDS: u32 = 3;
 /// A charge weapon held: drawn back to this at full (metres) and trembling
@@ -387,6 +398,8 @@ pub struct ViewGun {
     /// Rounds in the burst under way, and seconds since its last one.
     burst: u32,
     since_round: f32,
+    /// The last round was a shotgun's: it is racked.
+    pump: bool,
 }
 
 impl ViewGun {
@@ -1325,6 +1338,7 @@ fn hand(
         v.drawn = want;
         v.kick = Spring::default();
         v.flash = 0.0;
+        v.pump = false;
     }
     let up = v.drawn == want;
     let a = arm(v.drawn);
@@ -1341,6 +1355,7 @@ fn hand(
         }
         v.burst += k.rounds;
         v.since_round = 0.0;
+        v.pump = v.drawn == SHOTGUN;
         v.cant = burst_cant(a.auto, v.burst, v.left, cant_of(f.shots));
     }
     v.kick.toward(0.0, KICK_HZ, KICK_DAMP, dt);
@@ -1378,6 +1393,19 @@ fn hand(
         Vec3::new(KICK_CLIMB * kick, 0.0, KICK_ROLL * v.cant * kick),
         Vec3::new(0.0, KICK_UP_M * kick, KICK_BACK_M * kick),
     );
+    let pump_u = (v.since_round - (crate::sound::PUMP_AT_S - PUMP_LEAD_S)) / PUMP_S;
+    if pump_u >= 1.0 {
+        v.pump = false;
+    }
+    let pump = if v.pump && up {
+        let b = bump(pump_u, PUMP_PEAK);
+        Lay::hand(
+            Vec3::new(PUMP_DIP * b, 0.0, PUMP_ROLL * b),
+            Vec3::new(0.0, PUMP_DOWN_M * b, PUMP_BACK_M * b),
+        )
+    } else {
+        Lay::ZERO
+    };
     let charge = {
         let c = if v.left { f.left_charge } else { f.charge };
         let full = ticks(a.charge_ms).max(1) as f32;
@@ -1388,7 +1416,7 @@ fn hand(
     let d = smooth(v.drop);
     let change = Lay::arm(DROP_ANG * d, DROP_OFF * d);
     let stand = gun(v.drawn).map_or(Lay::ZERO, stand_off);
-    let lay = k.hand + reload + kick + charge + change + stand;
+    let lay = k.hand + reload + kick + pump + charge + change + stand;
     let (at, rot) = place(lay, k.body, v.left);
     let steady = Lay {
         wrist: lay.wrist - k.cut_wrist * (1.0 - CUT_ARM_SHARE),

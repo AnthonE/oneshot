@@ -24,6 +24,9 @@ pub struct Bot {
     target: u8,
     /// A wobble that drifts, in turns.
     wob: (f32, f32),
+    /// The target's velocity as its aim has caught up with it: a turn of
+    /// the target's throws the aim off until it has (`AIM_TRAIL_S`).
+    caught: V3,
     /// The map's roam point it walks to with nobody in sight, and ticks
     /// left before it gives up on it (stuck on a wall).
     goal: u8,
@@ -57,6 +60,17 @@ const LOOT_RISE: f32 = 0.6;
 /// Capture the Flag: an attacker on its way ignores enemies farther than
 /// this.
 const OBJECTIVE_IGNORE_M: f32 = 30.0;
+/// Its aim: how many turns a second it may turn (and more with skill), the
+/// wobble's step in turns, and how far behind a target's change of going
+/// it is thrown (seconds of it, all of it at no skill) and how long it
+/// takes to catch up.
+const AIM_TURN: f32 = 0.6;
+const AIM_TURN_SKILL: f32 = 1.4;
+const AIM_WOB: f32 = 0.004;
+const AIM_TRAIL_S: f32 = 0.3;
+const AIM_CATCH_S: f32 = 0.25;
+/// A gun of pellets is fired to this many times its full-damage reach.
+const SPREAD_REACH: f32 = 1.5;
 /// A bot's waist, for a straight walk's line.
 const WAIST: f32 = 0.9;
 /// On a map with a void: how far ahead a bot looks for the edge the way
@@ -83,6 +97,7 @@ impl Bot {
             seen: 0,
             target: 255,
             wob: (0.0, 0.0),
+            caught: V3::ZERO,
             goal: 0,
             goal_for: 0,
             ride_for: 0,
@@ -317,6 +332,8 @@ impl Bot {
         if best != self.target {
             self.target = best;
             self.seen = 0;
+            // A new target: its aim has caught none of its going yet.
+            self.caught = V3::ZERO;
         } else {
             self.seen = self.seen.saturating_add(1);
         }
@@ -368,8 +385,8 @@ impl Bot {
         }
         self.strafe_for -= 1;
         let rough = 1.0 - self.skill;
-        self.wob.0 = self.wob.0 * 0.98 + (self.unit() - 0.5) * 0.002 * rough;
-        self.wob.1 = self.wob.1 * 0.98 + (self.unit() - 0.5) * 0.001 * rough;
+        self.wob.0 = self.wob.0 * 0.98 + (self.unit() - 0.5) * AIM_WOB * rough;
+        self.wob.1 = self.wob.1 * 0.98 + (self.unit() - 0.5) * AIM_WOB * 0.5 * rough;
 
         let g = me.gun();
         let other = &me.guns[(me.cur as usize & 1) ^ 1];
@@ -466,7 +483,13 @@ impl Bot {
         }
 
         let v = &w.fighters[best as usize];
-        let aim_at = v.body.pos + V3::new(0.0, if self.skill > 0.7 { 1.55 } else { 1.2 }, 0.0);
+        // A person's aim follows a target's going, and a change in it (a
+        // strafe turned) throws the aim off until it has caught up: it is
+        // aimed where the target would be, had it gone on as it was.
+        self.caught = self.caught + (v.body.vel - self.caught) * (DT / AIM_CATCH_S);
+        let trail = AIM_TRAIL_S * (1.0 - self.skill);
+        let off = (v.body.vel - self.caught) * trail;
+        let aim_at = v.body.pos - off + V3::new(0.0, if self.skill > 0.7 { 1.55 } else { 1.2 }, 0.0);
         let to = aim_at - eye;
         let want_yaw = fmath::atan2(to.z, to.x) * (1.0 / core::f32::consts::TAU) + self.wob.0;
         let flat = (to.x * to.x + to.z * to.z).sqrt();
@@ -475,7 +498,7 @@ impl Bot {
         let cur_yaw = me.yaw as f32 * (1.0 / 65536.0);
         let mut dy = want_yaw - cur_yaw;
         dy -= fmath::round(dy);
-        let max_turn = (1.5 + 2.0 * self.skill) * DT;
+        let max_turn = (AIM_TURN + AIM_TURN_SKILL * self.skill) * DT;
         let ty = dy.clamp(-max_turn, max_turn);
         inp.yaw = rad_to_yaw((cur_yaw + ty) * core::f32::consts::TAU);
         let cur_pitch = me.pitch as f32 * (1.0 / 65536.0);
@@ -511,7 +534,13 @@ impl Bot {
 
         let react = (TICK_HZ as f32 * (0.6 - 0.35 * self.skill)) as u16;
         let on = fmath::fabs(dy) < 0.006 + 0.01 * rough && self.seen > react;
-        if on && near < a.range {
+        // A spread of pellets is fired where it kills, not to tickle.
+        let reach = if a.pellets > 1 {
+            a.falloff * SPREAD_REACH
+        } else {
+            a.range
+        };
+        if on && near < reach {
             // A semi-automatic needs the trigger let go between pulls.
             if a.auto || me.last_buttons & FIRE == 0 {
                 inp.buttons |= FIRE;
