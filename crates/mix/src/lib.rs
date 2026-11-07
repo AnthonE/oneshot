@@ -222,8 +222,10 @@ impl Reader<'_> {
 /// frame's.
 pub struct Shared {
     tx: SyncSender<Cmd>,
-    /// The audio thread's end, till the one stream takes it.
-    rx: Mutex<Option<Receiver<Cmd>>>,
+    /// The audio thread's end and the engine it feeds, till a stream takes
+    /// them; a stream dropped gives them back for the next (a rebuilt
+    /// output keeps its clips and loops).
+    audio: Mutex<Option<Audio>>,
     /// Held back from a full inbox, in order: the game thread's alone.
     later: Mutex<Vec<Cmd>>,
     /// Commands dropped at a full inbox.
@@ -235,7 +237,10 @@ impl Default for Shared {
         let (tx, rx) = sync_channel(INBOX);
         Shared {
             tx,
-            rx: Mutex::new(Some(rx)),
+            audio: Mutex::new(Some(Audio {
+                inbox: Inbox(rx),
+                engine: Box::default(),
+            })),
             later: Mutex::new(Vec::new()),
             dropped: AtomicU32::new(0),
         }
@@ -297,15 +302,21 @@ impl Shared {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    /// The audio thread's end of the inbox: the first stream's (one plays
-    /// the engine), taken once when it is made.
-    fn inbox(&self) -> Option<Inbox> {
-        self.rx.lock().ok()?.take().map(Inbox)
+    /// The inbox's end and the engine, if no stream holds them (never
+    /// waits: the audio thread asks).
+    fn audio(&self) -> Option<Audio> {
+        self.audio.try_lock().ok()?.take()
     }
 }
 
 /// The audio thread's end of [`Shared`]'s inbox.
 pub struct Inbox(Receiver<Cmd>);
+
+/// What one stream plays at a time: the inbox and the engine it feeds.
+struct Audio {
+    inbox: Inbox,
+    engine: Box<Engine>,
+}
 
 #[derive(Clone, Default)]
 struct Voice {
@@ -430,11 +441,13 @@ impl Engine {
                 let slot = match self.voices.iter().position(|v| v.pcm.is_none()) {
                     Some(i) => i,
                     None => {
+                        // The quietest playing gives way; one still in its
+                        // delay hasn't been heard yet and is never taken.
                         let (i, q) = self
                             .voices
                             .iter()
                             .enumerate()
-                            .map(|(i, v)| (i, v.l + v.r))
+                            .map(|(i, v)| (i, if v.wait > 0 { f32::MAX } else { v.l + v.r }))
                             .fold((0, f32::MAX), |a, b| if b.1 < a.1 { b } else { a });
                         if q >= loud {
                             self.stats.refused += 1;
@@ -459,15 +472,25 @@ impl Engine {
             Cmd::Hold { slot, clip: id, at } => {
                 let Some(clip) = self.clip(id) else {
                     if let Some(h) = self.held.get_mut(slot as usize) {
-                        *h = Held {
-                            waiting: Some((id, at)),
-                            ..Held::default()
-                        };
+                        // What plays there fades out (as a stop) while the
+                        // clip is awaited.
+                        h.to[0] = 0.0;
+                        h.to[1] = 0.0;
+                        h.stopping = h.pcm.is_some();
+                        h.waiting = Some((id, at));
                     }
                     return;
                 };
                 if let Some(h) = self.held.get_mut(slot as usize) {
                     let to = [at.l, at.r, step_of(clip.rate as f32, at.rate), at.lp];
+                    // The loop already there plays on, eased to where it is
+                    // wanted (back up, if it was stopping): never a cut.
+                    if h.pcm.as_ref().is_some_and(|p| Arc::ptr_eq(p, &clip.pcm)) {
+                        h.to = to;
+                        h.stopping = false;
+                        h.waiting = None;
+                        return;
+                    }
                     *h = Held {
                         src_rate: clip.rate as f32,
                         pcm: Some(clip.pcm),
@@ -598,10 +621,12 @@ impl Engine {
     }
 }
 
-/// The desktop's stream: the engine, a block at a time, as samples.
+/// The desktop's stream: the engine, a block at a time, as samples. Made
+/// while another still plays, it is silent till that one is dropped and
+/// hands the engine over.
 pub struct Stream {
-    inbox: Option<Inbox>,
-    engine: Engine,
+    shared: Arc<Shared>,
+    audio: Option<Audio>,
     buf: [f32; BLOCK * 2],
     at: usize,
 }
@@ -609,10 +634,19 @@ pub struct Stream {
 impl Stream {
     pub fn new(shared: Arc<Shared>) -> Stream {
         Stream {
-            inbox: shared.inbox(),
-            engine: Engine::default(),
+            audio: shared.audio(),
+            shared,
             buf: [0.0; BLOCK * 2],
             at: BLOCK * 2,
+        }
+    }
+}
+
+impl Drop for Stream {
+    fn drop(&mut self) {
+        if let Some(a) = self.audio.take() {
+            let mut g = self.shared.audio.lock().unwrap_or_else(|e| e.into_inner());
+            *g = Some(a);
         }
     }
 }
@@ -622,10 +656,16 @@ impl Iterator for Stream {
 
     fn next(&mut self) -> Option<f32> {
         if self.at >= BLOCK * 2 {
-            if let Some(inbox) = &self.inbox {
-                self.engine.take(inbox);
+            if self.audio.is_none() {
+                self.audio = self.shared.audio();
             }
-            self.engine.render(&mut self.buf);
+            match self.audio.as_mut() {
+                Some(a) => {
+                    a.engine.take(&a.inbox);
+                    a.engine.render(&mut self.buf);
+                }
+                None => self.buf = [0.0; BLOCK * 2],
+            }
             self.at = 0;
         }
         let s = self.buf[self.at];
@@ -815,12 +855,31 @@ mod tests {
         assert!(e > 1.0);
     }
 
+    /// An output rebuilt: the new stream plays on what the old one had.
+    #[test]
+    fn a_new_stream_takes_over_the_engine() {
+        let shared = Arc::new(Shared::default());
+        let mut old = Stream::new(shared.clone());
+        let mut cmds = vec![Cmd::Install {
+            id: TONE,
+            clip: tone(64 * BLOCK),
+        }];
+        shared.send(&mut cmds);
+        let _ = (&mut old).take(BLOCK * 2).count();
+        let mut new = Stream::new(shared.clone());
+        assert!((&mut new).take(BLOCK * 2).all(|x| x == 0.0));
+        drop(old);
+        shared.send(&mut vec![play(Place::centre(1.0), 0)]);
+        let e: f32 = (&mut new).take(BLOCK * 4).map(|x| x * x).sum();
+        assert!(e > 1.0);
+    }
+
     /// A stalled audio thread loses the frame's one-shots, counted, but
     /// never a clip: an install is sent once.
     #[test]
     fn a_full_inbox_holds_installs_back() {
         let shared = Shared::default();
-        let inbox = shared.inbox().unwrap();
+        let inbox = shared.audio().unwrap().inbox;
         let mut cmds: Vec<Cmd> = (0..INBOX + 10).map(|_| play(Place::centre(1.0), 0)).collect();
         cmds.push(Cmd::Install {
             id: TONE,

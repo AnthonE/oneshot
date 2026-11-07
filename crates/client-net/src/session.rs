@@ -215,8 +215,10 @@ impl Session {
                 map,
                 ..
             } => {
-                // A map this build doesn't know: it is out of date.
+                // A map this build doesn't know: it is out of date, and
+                // plays nothing more (not the last room's match either).
                 let Some(m) = sim::map::by_id(map) else {
+                    self.ready = false;
                     self.out.push(Msg::Refuse {
                         reason: proto::REFUSE_VERSION,
                     });

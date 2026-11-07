@@ -299,7 +299,10 @@ impl Medals {
                 k
             }
         };
-        let won = |k: usize| w.phase == Phase::Over && w.score[side(k)] >= w.rules.score_limit;
+        // Won at the limit, this tick (a draw at it is nobody's).
+        let won = |k: usize| {
+            w.phase == Phase::Over && w.winner as usize == side(k) && w.score[side(k)] >= w.rules.score_limit
+        };
         let mut winning: Option<(usize, usize)> = None;
         // This tick's turn, before its kills: a dead or empty seat turns
         // nothing.
