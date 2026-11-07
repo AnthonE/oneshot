@@ -1288,7 +1288,7 @@ fn hand(
             }
             v.rack.push((want, own.skin, pivot));
             commands.entity(scene).observe(no_shadows);
-            super::gun_skin::wear(commands, scene, own.skin, want);
+            super::gun_skin::wear_in_view(commands, scene, own.skin, want, v.left);
             super::blade::light(commands, scene, want);
             // A gun that runs hot wears its heat (`fx/vent.rs`).
             if arm(want).hot() {

@@ -1,8 +1,10 @@
 //! The rounds left, on the gun in our own view: a readout in the gun's
-//! light lying on the display its model paints, as the HUD
-//! says it (the magazine of the gun in that hand), and red when the
-//! magazine runs low. The ship's guns carry none: their batteries are the
-//! HUD's.
+//! light lying on the display its model paints, as the HUD says it (the
+//! magazine of the gun in that hand). It flashes as each round goes, counts
+//! up as a reload fills the magazine, goes red when the magazine runs low
+//! and blinks when it is empty. Only the guns that paint a display the eye
+//! can see carry one; the ship's guns show theirs in their own light
+//! (`gun_glow.rs`).
 //!
 //! Its digits are a seven-segment face drawn here at startup into one
 //! small image (no files, as `plate.rs`'s plates are), each digit a quad
@@ -25,21 +27,19 @@ use super::viewmodel::ViewGun;
 /// stock along the barrel, z up over the axis it is held by): the middle of
 /// the display its model paints glowing (measured off each GLB's glow map),
 /// the way that display faces, and how tall a digit is on it. The AR's
-/// looks back at the eye from its sight; the rocket's is on its right
-/// flank, the BR's a thin strip in a slot. The sniper paints none: its
-/// readout lies on the receiver's left flank.
-pub const PLACES: [(u8, Vec3, Vec3, f32); 7] = [
+/// looks back at the eye from its sight. The sniper paints none, the
+/// rocket's is on its right flank, away from the eye, and the BR's is a
+/// slot too thin for a digit, which its own light shows as a bar
+/// (`gun_glow.rs`).
+pub const PLACES: [(u8, Vec3, Vec3, f32); 4] = [
     (
         arms::AR,
         Vec3::new(0.0, 0.3434, 0.1114),
         Vec3::new(-0.065, -0.945, 0.319),
         0.022,
     ),
-    (arms::BR, Vec3::new(-0.0122, 0.3163, 0.0088), Vec3::NEG_X, 0.0068),
     (arms::MAGNUM, Vec3::new(-0.0214, 0.0963, 0.0348), Vec3::NEG_X, 0.0095),
-    (arms::SNIPER, Vec3::new(-0.0266, 0.36, 0.05), Vec3::NEG_X, 0.02),
     (arms::SHOTGUN, Vec3::new(-0.0209, 0.3348, 0.0543), Vec3::NEG_X, 0.016),
-    (arms::ROCKET, Vec3::new(0.1103, 0.6555, 0.1005), Vec3::X, 0.024),
     (arms::SMG, Vec3::new(-0.009, 0.2765, 0.086), Vec3::NEG_X, 0.0085),
 ];
 /// How far the readout stands off its display, in the model's units, so
@@ -53,6 +53,15 @@ const GAP: f32 = 0.18;
 const LIGHT: [f32; 3] = [0.35, 1.05, 2.6];
 const LOW: [f32; 3] = [2.6, 0.45, 0.3];
 const LOW_SHARE: f32 = 0.25;
+/// Its light the frame a round goes, over 1, and how fast that falls (a
+/// share a second).
+const FLASH: f32 = 1.4;
+const FLASH_FALL_PER_S: f32 = 8.0;
+/// A reload's count up from what was left, seconds.
+const COUNT_S: f32 = 0.35;
+/// An empty magazine's blink, times a second, and its light while off.
+const BLINK_HZ: f32 = 2.5;
+const BLINK_OFF: f32 = 0.12;
 /// The face's cells, px: ten digits side by side.
 const CELL_W: u32 = 48;
 const CELL_H: u32 = 80;
@@ -66,12 +75,16 @@ pub struct CounterKit {
     quad: Handle<Mesh>,
 }
 
-/// A readout under one hand's gun: the gun it was made for, and what it
-/// last showed.
+/// A readout under one hand's gun: the gun it was made for, what it last
+/// showed (the number and its light), the magazine last seen, the flash
+/// left, and a count up under way (from, seconds into it).
 #[derive(Component)]
 pub struct Counter {
     arm: u8,
-    shown: Option<(u16, bool)>,
+    shown: Option<(u16, [u16; 3])>,
+    mag: Option<u16>,
+    flash: f32,
+    count: Option<(u16, f32)>,
 }
 
 /// One digit of a readout: its place from the right.
@@ -159,9 +172,29 @@ fn cell(d: u8) -> Affine2 {
     Affine2::from_scale_angle_translation(Vec2::new(0.1, 1.0), 0.0, Vec2::new(f32::from(d) * 0.1, 0.0))
 }
 
-fn light(low: bool) -> Color {
+/// The readout's light: low or not, times `k`.
+fn light(low: bool, k: f32) -> [f32; 3] {
     let c = if low { LOW } else { LIGHT };
+    [c[0] * k, c[1] * k, c[2] * k]
+}
+
+fn colour(c: [f32; 3]) -> Color {
     Color::LinearRgba(LinearRgba::rgb(c[0], c[1], c[2]))
+}
+
+/// What a readout shows this frame for a magazine of `mag` of `full`
+/// (`spent`: nothing in reserve either): the number and its light.
+fn reading(c: &Counter, mag: u16, full: u16, spent: bool, now: f32) -> (u16, [f32; 3]) {
+    let n = match c.count {
+        Some((from, t)) => from + ((f32::from(mag - from.min(mag)) * (t / COUNT_S).min(1.0)) as u16),
+        None => mag,
+    };
+    let low = f32::from(n) <= f32::from(full) * LOW_SHARE;
+    let mut k = 1.0 + FLASH * c.flash * c.flash;
+    if mag == 0 && !spent && (now * BLINK_HZ).fract() >= 0.5 {
+        k = BLINK_OFF;
+    }
+    (n, light(low, k))
 }
 
 /// The digits of `n` from the right, as many as it needs (one at least).
@@ -203,7 +236,13 @@ fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMa
     let p = view_basis() * (Vec3::new(at.x, at.y - g.height * g.grip, at.z) * g.scale);
     let root = commands
         .spawn((
-            Counter { arm, shown: None },
+            Counter {
+                arm,
+                shown: None,
+                mag: None,
+                flash: 0.0,
+                count: None,
+            },
             Transform::from_translation(p)
                 .with_rotation(view_basis() * lay(out))
                 .with_scale(Vec3::splat(size * g.scale)),
@@ -213,7 +252,7 @@ fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMa
         .id();
     for k in 0..PLACES_MAX as u8 {
         let m = mats.add(StandardMaterial {
-            base_color: light(false),
+            base_color: colour(light(false, 1.0)),
             base_color_texture: Some(kit.face.clone()),
             uv_transform: cell(0),
             unlit: true,
@@ -242,6 +281,7 @@ fn spawn(commands: &mut Commands, kit: &CounterKit, mats: &mut Assets<StandardMa
 #[allow(clippy::type_complexity)]
 pub fn draw(
     link: NonSend<crate::LinkRes>,
+    time: Res<Time>,
     kit: Option<Res<CounterKit>>,
     hands: Query<(Entity, &ViewGun, Option<&Children>)>,
     mut counters: Query<(&mut Counter, &mut Visibility, &Children), Without<Digit>>,
@@ -261,6 +301,7 @@ pub fn draw(
         return;
     };
     let f = link.0.session().core.own().0;
+    let (dt, now) = (time.delta_secs().min(0.1), time.elapsed_secs());
     for (e, v, children) in &hands {
         let (left, drawn) = (v.is_left(), v.drawn());
         let mine = children.and_then(|c| c.iter().find(|c| counters.contains(*c)));
@@ -280,16 +321,33 @@ pub fn draw(
         let g = if left { &f.left } else { f.gun() };
         if g.arm != drawn {
             vis.set_if_neq(Visibility::Hidden);
+            counter.mag = None;
             continue;
         }
         vis.set_if_neq(Visibility::Inherited);
         let full = sim::fighter::Gun::full(drawn).mag.max(1);
-        let low = f32::from(g.mag) <= f32::from(full) * LOW_SHARE;
-        if counter.shown == Some((g.mag, low)) {
+        match counter.mag {
+            Some(m) if g.mag < m => {
+                counter.flash = 1.0;
+                counter.count = None;
+            }
+            Some(m) if g.mag > m => counter.count = Some((m, 0.0)),
+            _ => {}
+        }
+        counter.mag = Some(g.mag);
+        counter.flash = (counter.flash - FLASH_FALL_PER_S * dt).max(0.0);
+        if let Some((from, t)) = counter.count {
+            counter.count = (t < COUNT_S).then_some((from, t + dt));
+        }
+        let (n, lit) = reading(&counter, g.mag, full, g.spent(), now);
+        // What is shown, its light to a hundredth, so a fade doesn't touch
+        // the materials every frame once it is still.
+        let key = (n, lit.map(|c| (c * 100.0) as u16));
+        if counter.shown == Some(key) {
             continue;
         }
-        counter.shown = Some((g.mag, low));
-        let ds = digits(g.mag);
+        counter.shown = Some(key);
+        let ds = digits(n);
         // Two places at least, so a 7 reads as 07 and the readout keeps its
         // width as the magazine empties.
         let places = ds.len().max(2.min(digits(full).len()));
@@ -306,7 +364,7 @@ pub fn draw(
             t.translation.x = place_x(k, places);
             if let Some(mat) = mats.get_mut(&m.0) {
                 mat.uv_transform = cell(ds.get(k).copied().unwrap_or(0));
-                mat.base_color = light(low);
+                mat.base_color = colour(lit);
             }
         }
     }
@@ -335,6 +393,29 @@ mod tests {
             assert!((out.length() - 1.0).abs() < 0.01, "{}", g.file);
             assert!(size > 0.004 && size < 0.05, "{}", g.file);
         }
+    }
+
+    /// A reload counts up from what was left to the full magazine; an
+    /// empty one blinks half the time, a spent one never.
+    #[test]
+    fn a_readout_counts_up_and_blinks() {
+        let mut c = Counter {
+            arm: arms::AR,
+            shown: None,
+            mag: Some(32),
+            flash: 0.0,
+            count: Some((4, 0.0)),
+        };
+        assert_eq!(reading(&c, 32, 32, false, 0.0).0, 4);
+        c.count = Some((4, COUNT_S * 0.5));
+        assert_eq!(reading(&c, 32, 32, false, 0.0).0, 18);
+        c.count = Some((4, COUNT_S));
+        assert_eq!(reading(&c, 32, 32, false, 0.0).0, 32);
+        c.count = None;
+        let on = reading(&c, 0, 32, false, 0.1).1;
+        let off = reading(&c, 0, 32, false, 0.5 / BLINK_HZ + 0.01).1;
+        assert!(off[0] < on[0] * 0.5);
+        assert_eq!(reading(&c, 0, 32, true, 0.5 / BLINK_HZ + 0.01).1, on);
     }
 
     /// Laid on a display, a digit faces out of it, stands up and reads
