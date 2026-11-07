@@ -640,8 +640,13 @@ try {
   // A software adapter the WebGPU module was forced onto: the game
   // can't tell from wgpu (look/potato.rs), so the page says.
   const soft = window.__oneshotGfx === 'webgpu' && (await gpuProbe).soft ? ['softgpu'] : [];
-  const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics'].filter(flag)
-    .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts, soft).concat(party).join(',');
+  // `?watch=1` watches any public match in the game itself, `?watch=CODE` a
+  // party's (the PARTY tab's COPY WATCH LINK), a little behind: straight in,
+  // no click. `?streamer=1` is streamer mode for this run (SETTINGS > STREAM).
+  const watchQ = params.get('watch');
+  const watch = watchQ === null ? [] : /^[0-9a-zA-Z]{6}$/.test(watchQ) ? [`watch=${watchQ.toUpperCase()}`] : ['watch'];
+  const opts = ['autoplay', 'lite', 'capsules', 'fxdemo', 'menu', 'settings', 'graphics', 'streamer'].filter(flag)
+    .concat(params.get('fxstage') ? ['fxstage' + Number(params.get('fxstage'))] : []).concat(gfxOpts, soft).concat(party, watch).join(',');
   voiceBridge(glue);
   say('Starting');
   requestAnimationFrame(shown);
@@ -749,10 +754,12 @@ function voiceBridge(glue) {
     sent: () => voice.sent,
   };
   // The party's link, for COPY PARTY LINK.
-  window.__oneshotCopy = (code) => {
+  // The party's link, or with `watch` the watch link (party.rs
+  // copy_watch_link): the page opens watching that party's match.
+  window.__oneshotCopy = (code, watch) => {
     const u = new URL(location.href);
     u.search = '';
-    u.searchParams.set('party', code);
+    u.searchParams.set(watch ? 'watch' : 'party', code);
     navigator.clipboard?.writeText(u.toString()).catch(() => {});
     return u.toString();
   };
