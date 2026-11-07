@@ -93,6 +93,8 @@ pub struct Mood {
     /// Where in the cloud field this map's sky starts, noise units: each
     /// map its own clouds from the one field.
     pub field_at: [f32; 2],
+    /// Under a roof, whose light fills it (`fill::hall::PALETTES`).
+    pub hall: usize,
 }
 
 /// Proving Grounds and The Range: the reference. Noon on a clear day with
@@ -123,6 +125,7 @@ pub const NOON: Mood = Mood {
     deep: 0.0,
     veil: 0.0,
     field_at: [0.0, 0.0],
+    hall: 0,
 };
 
 /// Overpass: a sun shower late in the day. Broken cloud with the sun under
@@ -155,6 +158,7 @@ pub const SUN_SHOWER: Mood = Mood {
     deep: 0.0,
     veil: 0.0,
     field_at: [7.3, 3.1],
+    hall: 0,
 };
 
 /// Cistern: a misty morning. A low sun (21°) over the wall between the two
@@ -187,6 +191,7 @@ pub const MIST: Mood = Mood {
     deep: 0.0,
     veil: 0.0,
     field_at: [19.0, 11.5],
+    hall: 0,
 };
 
 /// Dry Fork: a desert afternoon. A high sun (50°), cumulus racing over the
@@ -218,6 +223,7 @@ pub const DESERT: Mood = Mood {
     deep: 0.0,
     veil: 0.0,
     field_at: [3.0, 22.0],
+    hall: 0,
 };
 
 /// Bulkhead: dusk. The sun low (11°) over one long side, across the line
@@ -250,6 +256,7 @@ pub const DUSK: Mood = Mood {
     deep: 0.0,
     veil: 0.0,
     field_at: [25.0, 5.0],
+    hall: 0,
 };
 
 /// Cloudbreak: an island over a sea of cloud under a heavy grey deck. The
@@ -286,6 +293,7 @@ pub const OVERCAST: Mood = Mood {
     deep: 0.8,
     veil: 0.72,
     field_at: [33.0, 7.0],
+    hall: 0,
 };
 
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
@@ -303,7 +311,12 @@ pub const INTERIOR: Mood = Mood {
 pub fn of(id: u8) -> Mood {
     match id {
         1 => SUN_SHOWER,
-        2 => MIST,
+        2 => Mood {
+            name: "cistern",
+            field_at: [31.0, 4.0],
+            hall: 1,
+            ..INTERIOR
+        },
         3 => DESERT,
         4 => Mood {
             name: "noon (range)",

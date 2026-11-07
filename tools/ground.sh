@@ -30,6 +30,12 @@ SETS=(
   "rock|cliff_side|bedded sandstone, its strata level, 1.83 m"
   "isle_rock|old_sandstone_02|an island's wind-cut sandstone, rounded beds and ledges"
   "stone|large_sandstone_blocks_01|Cloudbreak's masonry, aged blocks with chiselled faces, greyed"
+  "brick|brick_wall_001|Cistern's vaults, old brick, red and black"
+  "marble|marble_01|Cistern's columns, pale cut marble"
+  "road|asphalt_02|Overpass' carriageway, cracked asphalt"
+  "blast|brushed_concrete_2|cast concrete, board-marked and stained: Overpass' and Proving Grounds' structures"
+  "snow|snow_02|Proving Grounds' floor, wind-packed snow"
+  "rust|rusty_metal_02|flaking paint over rust: signs, shutters, old steel"
 )
 # our name | ambientCG's id | what it is
 METAL=(
@@ -46,12 +52,13 @@ fetch() { # id
   [ -s "$d/${id}_diff_2k.jpg" ] && [ -s "$d/${id}_nor_gl_2k.jpg" ] && [ -s "$d/${id}_rough_2k.jpg" ] && [ -s "$d/${id}_ao_2k.jpg" ] && return 0
   mkdir -p "$d"
   curl -fsS -m 60 -A oneshot-ground/1 "https://api.polyhaven.com/files/$id" -o "$d/files.json"
-  python3 - "$d/files.json" <<'E' | while read -r name url; do curl -fsS -m 300 -A oneshot-ground/1 "$url" -o "$d/$name"; done
+  python3 - "$d/files.json" "$id" <<'E' | while read -r name url; do curl -fsS -m 300 -A oneshot-ground/1 "$url" -o "$d/$name"; done
 import json, sys
 f = json.load(open(sys.argv[1]))
 for m, n in [('Diffuse', 'diff'), ('nor_gl', 'nor_gl'), ('Rough', 'rough'), ('AO', 'ao')]:
     u = f[m]['2k']['jpg']['url']
-    print(u.rsplit('/', 1)[1], u)
+    # Saved by what it is: some sets name their diffuse `_diffuse_`, not `_diff_`.
+    print(f'{sys.argv[2]}_{n}_2k.jpg', u)
 E
 }
 
@@ -65,7 +72,7 @@ for row in "${SETS[@]}"; do
   [ "$name" = stone ] && grade=(-modulate 118,22,100)
   convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} "${grade[@]}" -strip -quality 82 "$out/${name}_albedo.jpg"
   convert "$d/${id}_nor_gl_2k.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 90 "$out/${name}_normal.jpg"
-  if [ "$name" = rock ] || [ "$name" = stone ]; then
+  if [[ " rock stone brick marble road blast snow rust " =~ " $name " ]]; then
     convert "$d/${id}_rough_2k.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 82 "$out/${name}_rough.jpg"
     convert "$d/${id}_ao_2k.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 82 "$out/${name}_ao.jpg"
   fi

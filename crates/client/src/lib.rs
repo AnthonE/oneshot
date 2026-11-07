@@ -514,6 +514,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::turret::plugin)
     .add_plugins(look::cloud_sea::plugin)
     .add_plugins(look::isle_stone::plugin)
+    .add_plugins(look::pool::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     .add_plugins(look::sea_motion::plugin)
@@ -642,8 +643,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             (
                 look::rock::dress_masses,
                 look::boulders::dress,
-                look::observatory::dress,
-                look::observatory::turn,
+                look::built::dress,
+                look::built::turn,
+                look::pool::dress,
             ),
             (
                 level::dress_level,

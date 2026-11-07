@@ -56,11 +56,6 @@ pub const HAZE_SCALE: f32 = 10.0;
 pub const CASCADE_MIN_M: f32 = 0.2;
 pub const CASCADE_FIRST_M: f32 = 12.0;
 pub const CASCADE_OVERLAP: f32 = 0.2;
-/// A hall's air (a roofed map, lit by its lamps): a faint haze in the
-/// hull's colour, this much a metre squared, so the near wall is clear
-/// and the far end of the hall softens. Post-exposure, before the tonemap.
-pub const HALL_HAZE: [f32; 3] = [0.035, 0.02, 0.06];
-pub const HALL_HAZE_DENSITY: f32 = 0.014;
 /// The sun disk's brightness, held under what the tone curve can roll off.
 pub const SUN_DISK_INTENSITY: f32 = 1.6;
 pub const SUN_DISK_PEAK: f32 = 2000.0;
@@ -81,7 +76,8 @@ pub const SKY_LIFT_SATURATION: f32 = 1.9;
 #[derive(Component, Clone)]
 pub struct Fills {
     pub sky: Handle<Image>,
-    pub hall: (Handle<Image>, Handle<Image>),
+    /// By `Mood::hall`.
+    pub hall: Vec<(Handle<Image>, Handle<Image>)>,
 }
 
 /// The world's camera, whatever else marks it: what the graphics tier
@@ -161,10 +157,15 @@ pub fn camera<M: Component>(
     marker: M,
 ) -> Entity {
     let fill = images.add(super::fill::cubemap(super::fill::FILL_FACE));
-    let (hall_d, hall_s) = super::fill::hall::cubemaps();
     let fills = Fills {
         sky: fill.clone(),
-        hall: (images.add(hall_d), images.add(hall_s)),
+        hall: super::fill::hall::PALETTES
+            .iter()
+            .map(|p| {
+                let (d, s) = super::fill::hall::cubemaps(p);
+                (images.add(d), images.add(s))
+            })
+            .collect(),
     };
     let eye = commands
         .spawn((
@@ -234,7 +235,7 @@ pub fn expose_for(
 ) {
     let roofed = light.sun <= 0.0;
     let (d, s) = if roofed {
-        fills.hall.clone()
+        fills.hall[mood.hall].clone()
     } else {
         (fills.sky.clone(), fills.sky.clone())
     };
@@ -291,14 +292,15 @@ pub fn fog_for(mood: &super::mood::Mood, atmosphere: bool, carried: f32) -> Dist
     }
 }
 
-/// A hall's air (a roofed map, lit by its lamps): a faint haze in the
-/// hull's colour ([`HALL_HAZE`]), where the sky's fog would paint the hall
-/// in the horizon's blue.
-pub fn hall_haze() -> DistanceFog {
+/// A hall's air (a roofed map, lit by its lamps): a faint haze in its palette's
+/// colour, where the sky's fog would paint the hall in the horizon's blue.
+/// Post-exposure, before the tonemap.
+pub fn hall_haze(mood: &super::mood::Mood) -> DistanceFog {
+    let p = super::fill::hall::PALETTES[mood.hall];
     DistanceFog {
-        color: Color::linear_rgb(HALL_HAZE[0], HALL_HAZE[1], HALL_HAZE[2]),
+        color: Color::linear_rgb(p.haze[0], p.haze[1], p.haze[2]),
         falloff: FogFalloff::ExponentialSquared {
-            density: HALL_HAZE_DENSITY,
+            density: p.haze_density,
         },
         ..default()
     }
@@ -364,7 +366,7 @@ pub fn fog(
         return;
     }
     let want = if mood.roofed {
-        hall_haze()
+        hall_haze(&mood.mood)
     } else {
         fog_for(&mood.mood, tier.atmosphere, shafts.volume)
     };

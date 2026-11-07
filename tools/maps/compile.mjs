@@ -154,7 +154,9 @@ export const LOOKS = ['wall', 'block', 'trim', 'red', 'blue', 'dark', 'rock', 'h
   // Stone: dressed grey stone in the concrete set, and the same darker (Cloudbreak's spire, struts and gates).
   'stone', 'stone_dark',
   // The ship's props: a round solid drawn as a model inside it (the client's look/boulders.rs): a seed husk, in its hull's colour or a side's, and a font with a flame in its cup.
-  'husk', 'husk_red', 'husk_blue', 'font'];
+  'husk', 'husk_red', 'husk_blue', 'font',
+  // The arenas' built things and their floors (the client's look/built.rs): old brick, cut marble, asphalt, cast concrete and its dark, snow, flaking steel.
+  'brick', 'marble', 'road', 'blast', 'blast_dark', 'snow', 'rust'];
 /** sim::arms, by the names map.json uses. */
 export const WEAPONS = { ar: 'AR', br: 'BR', magnum: 'MAGNUM', sniper: 'SNIPER', shotgun: 'SHOTGUN', rocket: 'ROCKET', smg: 'SMG', sword: 'SWORD',
   carbine: 'CARBINE', beam_rifle: 'BEAM_RIFLE', ion_rifle: 'ION_RIFLE', ion_pistol: 'ION_PISTOL', shards: 'SHARDS',

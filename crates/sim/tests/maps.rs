@@ -183,6 +183,29 @@ fn cloudbreak_climbs_and_its_walks_join() {
     }
 }
 
+/// Cistern's levels all join, up and back, and its lifts land on its bridges.
+#[test]
+fn cisterns_levels_join() {
+    let m = by_id(2).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25 && fabs(iz as f32 * 0.25 - z) <= 0.25 && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the far quay", 19.0, 0.0, 1.8),
+        ("the dais", 0.0, 0.0, 1.0),
+        ("a stair's foot", -11.5, 22.0, 1.8),
+        ("a landing", 0.0, 21.0, 5.2),
+        ("the red arm", -11.0, 0.0, 5.2),
+        ("the ring", 4.3, 0.0, 5.2),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
 /// Every rotation the server plays has a map in it (else it falls back to
 /// any map that can play the mode), and a map out of the rotation is in
 /// none of them.

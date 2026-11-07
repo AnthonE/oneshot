@@ -33,7 +33,9 @@ pub const ISLE_ROCK_TILE_M: f32 = 13.0;
 pub const GROUND_TILE_M: [f32; 4] = [2.48, 2.51, 2.0, 9.6];
 /// The boxes' sets: a base's metal and dressed stone the last three
 /// (`tools/ground.sh`).
-pub const BOXES: [&str; 6] = ["concrete", "metal", "rock", "steel", "tread", "stone"];
+pub const BOXES: [&str; 12] = [
+    "concrete", "metal", "rock", "steel", "tread", "stone", "brick", "marble", "road", "blast", "snow", "rust",
+];
 
 #[derive(Resource, Default)]
 pub struct Textures {
