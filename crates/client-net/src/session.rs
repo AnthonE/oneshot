@@ -78,6 +78,8 @@ pub struct Session {
     clip: Option<Box<Clipper>>,
     /// Stream messages for the server, until the transport takes them.
     outgoing: Vec<Msg>,
+    /// The welcome we last said `Msg::Loaded` for.
+    loaded_for: u32,
     /// The snapshots taken in, cut into records: deltas are made whole
     /// against them (`proto::delta`).
     rx: proto::delta::Receiver,
@@ -102,6 +104,7 @@ impl Session {
             watch: false,
             clip: Some(Box::default()),
             outgoing: Vec::new(),
+            loaded_for: 0,
             rx: Default::default(),
         }
     }
@@ -127,6 +130,15 @@ impl Session {
     pub fn follow_next(&mut self) {
         if self.watch && self.ready {
             self.outgoing.push(Msg::Follow { slot: 0, team: 0 });
+        }
+    }
+
+    /// The level for this welcome is all there: the server's countdown
+    /// stops waiting for us (`Msg::Loaded`). Once a welcome.
+    pub fn loaded(&mut self) {
+        if self.ready && !self.watch && self.loaded_for != self.welcomes {
+            self.loaded_for = self.welcomes;
+            self.outgoing.push(Msg::Loaded);
         }
     }
 

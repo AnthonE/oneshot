@@ -930,6 +930,7 @@ async fn session(
     let fsim = to_sim.clone();
     let reader = async {
         let mut followed: Option<std::time::Instant> = None;
+        let mut loaded: Option<std::time::Instant> = None;
         while let Some(f) = read_frame(&mut recv).await {
             match decode_msg(&f) {
                 Ok(Msg::Follow { .. }) if mode == MODE_WATCH => {
@@ -941,6 +942,16 @@ async fn session(
                     }
                     followed = Some(now);
                     let _ = fsim.send(ToSim::Follow { session: session_id });
+                }
+                // One a match (a cup's heats come on the same session), so
+                // not faster than a level loads.
+                Ok(Msg::Loaded) if mode != MODE_WATCH => {
+                    let now = std::time::Instant::now();
+                    if loaded.is_some_and(|t| now.duration_since(t).as_millis() < FOLLOWS_MIN_MS as u128) {
+                        continue;
+                    }
+                    loaded = Some(now);
+                    let _ = fsim.send(ToSim::Loaded { session: session_id });
                 }
                 Ok(Msg::Bye) | Err(_) => break,
                 _ => {}

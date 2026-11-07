@@ -463,6 +463,15 @@ impl World {
         self.rewind.forget(slot);
     }
 
+    /// The countdown held at its start, for the tick about to be stepped:
+    /// someone seated is still loading the level (`room`). A no-op once
+    /// play has begun.
+    pub fn hold_countdown(&mut self) {
+        if self.phase == Phase::Countdown {
+            self.clock = ticks(COUNTDOWN_MS) + 1;
+        }
+    }
+
     /// One tick. `inputs` is each seat's frame for this tick (repeated by
     /// the server when one never came); `rewind_q8` is how far back each
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from

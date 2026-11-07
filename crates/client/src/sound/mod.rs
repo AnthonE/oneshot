@@ -795,6 +795,7 @@ pub fn decide(
     look: Res<crate::Look>,
     mut trucks: ResMut<crate::look::truck::HullSound>,
     gen: Option<Res<crate::front::LinkGen>>,
+    cover: Res<crate::loading::Cover>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -911,7 +912,11 @@ pub fn decide(
 
     hull_sounds(ear, &ears, &mut trucks);
     rounds(ear, &ears, s.core.latest());
-    the_match(ear, &s.core, s.core.map.terrain.is_some());
+    // Under the loading overlay the countdown isn't heard yet (nor the
+    // room): the announcer calls the match as it lifts.
+    if !cover.up {
+        the_match(ear, &s.core, s.core.map.terrain.is_some());
+    }
     surf(ear, &ears, dt);
     cues.0.append(&mut ear.cues);
     flush(ear);
@@ -1963,6 +1968,7 @@ pub mod on {
         mut waiting: ResMut<Announcer>,
         mut ear: ResMut<Ear>,
         time: Res<Time>,
+        cover: Res<crate::loading::Cover>,
     ) {
         use proto::medal as md;
         let Announcer(voice, until) = &mut *waiting;
@@ -1981,8 +1987,9 @@ pub mod on {
         for line in core::mem::take(&mut st.say) {
             ear.say(line);
         }
+        // Nothing said under the loading overlay: it waits for the match.
         let now = time.elapsed_secs();
-        if now < *until {
+        if now < *until || cover.up {
             return;
         }
         // A line about the match goes before a medal.
