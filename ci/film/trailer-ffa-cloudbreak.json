@@ -1,0 +1,100 @@
+{
+ "tape": "traces/film/ffa-cloudbreak.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "map-cloudbreak",
+   "len": 2.6,
+   "ease": true,
+   "fov": 54,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -21,
+      4.2,
+      -1
+     ],
+     "look": [
+      6,
+      2.5,
+      2
+     ]
+    },
+    {
+     "t": 2.6,
+     "pos": [
+      -17.5,
+      4.4,
+      -0.5
+     ],
+     "look": [
+      6,
+      2.5,
+      2
+     ]
+    }
+   ],
+   "at": 66.0
+  },
+  {
+   "name": "still-cloudbreak",
+   "still": true,
+   "fov": 52,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      0,
+      1.7,
+      -21
+     ],
+     "look": [
+      -25,
+      -6,
+      -60
+     ]
+    }
+   ],
+   "at": 66.4
+  },
+  {
+   "name": "still-cloudbreak-spire",
+   "still": true,
+   "fov": 52,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      0,
+      1.7,
+      7
+     ],
+     "look": [
+      0,
+      11,
+      20
+     ]
+    }
+   ],
+   "at": 66.8
+  },
+  {
+   "name": "kill-7",
+   "at": 111.55,
+   "len": 1.6,
+   "pov": true
+  }
+ ]
+}

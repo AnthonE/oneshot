@@ -1,0 +1,72 @@
+{
+ "tape": "traces/film/ffa-proving.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "map-proving",
+   "len": 2.6,
+   "ease": true,
+   "fov": 52,
+   "orbit": {
+    "center": [
+     0,
+     1.5,
+     0
+    ],
+    "radius": [
+     30,
+     26
+    ],
+    "height": [
+     13,
+     11
+    ],
+    "from": -62,
+    "to": -38
+   },
+   "at": 63.0
+  },
+  {
+   "name": "still-proving",
+   "still": true,
+   "fov": 50,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -19,
+      2.2,
+      -14
+     ],
+     "look": [
+      6,
+      2.5,
+      8
+     ]
+    }
+   ],
+   "look": {
+    "focus": "look",
+    "fstop": 4
+   },
+   "at": 63.4
+  },
+  {
+   "name": "kill-6",
+   "at": 104.75,
+   "len": 1.6,
+   "pov": true
+  }
+ ]
+}

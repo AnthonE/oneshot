@@ -1,0 +1,32 @@
+{
+ "tape": "traces/film/snipe.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "scope",
+   "at": 150.0,
+   "len": 8.6,
+   "pov": true,
+   "look": {
+    "shake": 0.04
+   }
+  },
+  {
+   "name": "still-scope",
+   "at": 152.0,
+   "still": true,
+   "pov": true
+  }
+ ]
+}

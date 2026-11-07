@@ -1,0 +1,37 @@
+{
+ "tape": "traces/film/snipe2.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "snipe-kill",
+   "at": 80.5,
+   "len": 4.0,
+   "pov": true,
+   "speed": [
+    [
+     0,
+     1
+    ],
+    [
+     1.5,
+     1
+    ],
+    [
+     1.9,
+     0.35
+    ]
+   ]
+  }
+ ]
+}

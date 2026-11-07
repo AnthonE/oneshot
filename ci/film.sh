@@ -18,6 +18,13 @@
 # crates/client/src/film/script.rs; the house one is ci/film/trailer.json
 # (`ci/film.sh record traces/film/match.tape 90`, then `ci/film.sh shoot
 # ci/film/trailer.json`: traces/film/trailer/NN-name.mp4 beside its .wav).
+# The trailer's lists are ci/film/trailer-<tape>.json: one tape each,
+# written by ci/film/plan.py from the tapes' scans (Big Team's by hand),
+# and ci/trailer/make.sh cuts the trailer from what they shoot.
+#
+# A tape runs from the join, and the level takes a minute to build on
+# lavapipe: ask for the load plus the play you want (170 s for a minute
+# and a half of it). One recorder at a time: a client is about 5 GB.
 # `clip` is what F9 makes of a tape on the desktop: STYLE is wide (the
 # default), pov, chase, mix or long; the video lands beside the tape.
 #
