@@ -94,6 +94,11 @@ impl Lan {
     /// Clients on `teams` (red 0, blue 1), each on a link of `delay_ms`
     /// ± `jitter_ms` with `loss`; `bubbles` as `Room::bubbles`.
     pub fn dry_fork(teams: &[u8], delay_ms: f64, jitter_ms: f64, loss: f64, bubbles: bool) -> Lan {
+        Lan::dry_fork_live(teams, delay_ms, jitter_ms, loss, bubbles, false)
+    }
+
+    /// [`Lan::dry_fork`], `live` as `Room::bubble_live`.
+    pub fn dry_fork_live(teams: &[u8], delay_ms: f64, jitter_ms: f64, loss: f64, bubbles: bool, live: bool) -> Lan {
         let map = sim::map::by_id(3).expect("Dry Fork");
         let rules = Rules {
             score_limit: 1000,
@@ -103,6 +108,7 @@ impl Lan {
         let mut room = Room::new(map.clone(), rules, 11, (5, 6));
         room.passive_bots = true;
         room.bubbles = bubbles;
+        room.bubble_live = live;
         let mut cs = Vec::new();
         for (k, &t) in teams.iter().enumerate() {
             let (slot, out) = room.join_team(Name::new("t"), Look::default(), Some(t)).unwrap();

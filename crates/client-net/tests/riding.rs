@@ -98,8 +98,9 @@ struct Measured {
     driver: Err,
     passenger: Err,
     /// The one on foot: the truck as drawn against the server's at the
-    /// render tick (what interpolation means to show), and at the tick it
-    /// draws itself on (how far behind the present the truck is).
+    /// tick it is drawn on (the render tick, or nearer its present while
+    /// the truck is in its bubble), and at the tick it draws itself on (how
+    /// far behind the present the truck is).
     watcher: Err,
     watcher_now: Err,
     /// The passenger's stats from boarding on.
@@ -299,7 +300,9 @@ fn ride(delay_ms: f64, jitter_ms: f64, loss: f64, steer: Steer, fire: bool) -> M
                 }
             } else if let Some(d) = core.vehicles(now).into_iter().find(|d| d.slot == 0) {
                 seen[2].push((drawn_tick(core), d.pos));
-                seen_rt.push((core.render_tick(now), d.pos));
+                // The tick it is drawn on: the render tick, or in the
+                // watcher's bubble its share of the way to its present.
+                seen_rt.push((core.vehicle_tick(0, now), d.pos));
             }
         }
         now += 0.5;
@@ -364,8 +367,14 @@ fn a_passenger_draws_its_hull_where_the_server_has_it() {
             "{case}: passenger {:?}",
             m.passenger
         );
-        // On foot, what interpolation draws is what was.
-        assert!(m.watcher.max < 0.15, "{case}: watcher {:?}", m.watcher);
+        // On foot, what is drawn is what was at the tick it is drawn on:
+        // between snapshots outside its bubble, predicted on the stick as
+        // the passenger predicts it while the truck is in it.
+        assert!(
+            m.watcher.max < 0.15 + m.passenger.max,
+            "{case}: watcher {:?}",
+            m.watcher
+        );
         // The stick was guessed wrong at times; our own fighter never.
         assert!(m.hull_corrections > 10, "{case}: {m:?}");
         assert_eq!(m.corrections, 0, "{case}: {m:?}");

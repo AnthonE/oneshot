@@ -541,8 +541,7 @@ impl Room {
             snap_every: SNAP_EVERY,
             deltas: true,
             bubbles: true,
-            // Until the client draws the bubble on its present.
-            bubble_live: false,
+            bubble_live: true,
             outs: Box::new(core::array::from_fn(|_| SeatOut::default())),
             parallel_from: PARALLEL_FROM,
             far_rates: true,
