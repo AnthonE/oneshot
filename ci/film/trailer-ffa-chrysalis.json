@@ -1,0 +1,106 @@
+{
+ "tape": "traces/film/ffa-chrysalis.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "map-chrysalis",
+   "len": 2.6,
+   "ease": true,
+   "fov": 56,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -21,
+      12,
+      -13
+     ],
+     "look": [
+      8,
+      4,
+      6
+     ]
+    },
+    {
+     "t": 2.6,
+     "pos": [
+      -16.5,
+      10.5,
+      -10.5
+     ],
+     "look": [
+      8,
+      4,
+      6
+     ]
+    }
+   ],
+   "at": 64.0
+  },
+  {
+   "name": "still-chrysalis",
+   "still": true,
+   "fov": 54,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -18,
+      8.6,
+      -2.5
+     ],
+     "look": [
+      4,
+      8.5,
+      1
+     ]
+    }
+   ],
+   "look": {
+    "focus": "look",
+    "fstop": 4
+   },
+   "at": 64.4
+  },
+  {
+   "name": "ffa",
+   "at": 54.0,
+   "len": 3.6,
+   "fov": 62,
+   "follow": {
+    "back": 3.4,
+    "up": 1.6,
+    "side": 0.6,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "corner-b",
+   "at": 96.0,
+   "len": 4.8,
+   "pov": true
+  },
+  {
+   "name": "kill-1",
+   "at": 103.45,
+   "len": 1.6,
+   "pov": true
+  }
+ ]
+}
