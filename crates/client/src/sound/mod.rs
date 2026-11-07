@@ -254,7 +254,7 @@ pub struct Ear {
     snap_tick: u32,
     held_proj: [bool; PROJ_LOOPS],
     // The match.
-    last_phase: u8,
+    last_phase: Option<sim::world::Phase>,
     last_count: u32,
     last_clock: u32,
     /// How our score stood against the best of the rest.
@@ -1614,8 +1614,10 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
 /// what the announcer says of the match: its mode as the countdown starts,
 /// who leads, the clock's last calls, the end.
 fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
+    use sim::world::Phase;
     let snap = net.latest();
-    if snap.phase == 0 {
+    let phase = net.phase();
+    if phase == Phase::Countdown {
         let secs = snap.clock.div_ceil(TICK_HZ);
         // A countdown begun (the title's backdrop has no clock): the mode.
         if secs > ear.last_count {
@@ -1626,10 +1628,10 @@ fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
             ear.mine("tick_0", 0.5);
         }
         ear.last_count = secs;
-    } else if snap.phase == 1 && ear.last_phase == 0 {
+    } else if phase == Phase::Playing && ear.last_phase == Some(Phase::Countdown) {
         ear.mine("go_0", 0.55);
         ear.last_count = 0;
-    } else if snap.phase == 2 && ear.last_phase == 1 {
+    } else if phase == Phase::Over && ear.last_phase == Some(Phase::Playing) {
         let won = if net.rules.teams {
             snap.winner & 1 == net.team & 1
         } else {
@@ -1642,8 +1644,8 @@ fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
             _ => "game_over_you_lose",
         });
     }
-    ear.last_phase = snap.phase;
-    if snap.phase == 1 {
+    ear.last_phase = Some(phase);
+    if phase == Phase::Playing {
         // The lead: our score (our side's) against the best of the rest.
         let me = if net.rules.teams {
             net.team as usize & 1

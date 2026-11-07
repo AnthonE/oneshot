@@ -23,6 +23,7 @@ use proto::medal as md;
 use proto::{EventState, Msg};
 use sim::consts::{HEALTH_MAX, SHIELD_MAX, TICK_HZ};
 use sim::events::Kind;
+use sim::world::Phase;
 
 use client_net::session::{refuse_why, Session};
 
@@ -129,8 +130,10 @@ pub struct HudState {
     last_shield: i32,
     arc_at: f32,
     hurt_angle: f32,
-    /// How we last died (`scores.rs`'s death card).
+    /// How we last died (`scores.rs`'s death card), and the killer's name
+    /// then (their seat may be someone else's by the time it is drawn).
     pub death: Option<Death>,
+    pub death_by: String,
     /// The scoreboard is held up.
     pub board: bool,
     /// Our kills, deaths and assists as the stream told them (the page's
@@ -1143,6 +1146,12 @@ pub fn on_events(
                 team,
                 ..
             } => {
+                // Someone else in a seat already told: their K/D starts at
+                // nothing, not the last one's (the server's medals and
+                // carnage start again too).
+                if st.names.contains_key(slot) {
+                    st.tally.kd.remove(slot);
+                }
                 st.names.insert(*slot, name.as_str().to_string());
                 st.looks.insert(
                     *slot,
@@ -1186,6 +1195,7 @@ pub fn on_events(
                 }
                 if *victim == me {
                     st.deaths += 1;
+                    st.death_by = st.name(*killer);
                     st.death = Some(Death {
                         killer: *killer,
                         cause: *cause,
@@ -1289,13 +1299,13 @@ pub fn draw(
     let snap = core.latest();
     let clock = snap.clock as f32 / TICK_HZ as f32;
     center.clear();
-    match snap.phase {
-        0 => {
+    match core.phase() {
+        Phase::Countdown => {
             let _ = write!(center, "Starting in {}", clock.ceil() as u32);
         }
-        2 => {
+        Phase::Over => {
             let w = snap.winner;
-            let _ = if w == 255 {
+            let _ = if w == sim::world::NO_WINNER {
                 write!(center, "Draw")
             } else if core.rules.teams {
                 if w & 1 == core.team & 1 {
@@ -1861,6 +1871,10 @@ pub fn corner(
     let scores = &snap.score[..snap.n_score as usize];
     let score = |i: u8| scores.get(i as usize).copied().unwrap_or(0);
     let clock = snap.clock as f32 / TICK_HZ as f32;
+    let playing = core.phase() == Phase::Playing;
+    // NO CLOCK (a private match's): the sim's clock is its "never"
+    // (`u32::MAX` ticks), not a time to show.
+    let timed = core.rules.time_limit_ms > 0;
     // (score, colour, ours) a row: at most two.
     let mut rows_at = [(0, Color::NONE, false); 2];
     let mut n_shown = 0;
@@ -1896,7 +1910,7 @@ pub fn corner(
     shown.sort_by_key(|&(v, _, me)| (-v, !me));
     let shown = &*shown;
     let text = CornerText {
-        clock: (snap.phase == 1).then(|| clock.max(0.0) as u32),
+        clock: (playing && timed).then(|| clock.max(0.0) as u32),
         map: s.map_id,
         rung: core.rules.gun_game.then(|| (score(core.slot), limit)),
         rows: [0, 1].map(|k| shown.get(k).map(|r| r.0)),
@@ -1916,9 +1930,9 @@ pub fn corner(
         }
         for (mut t, ck, md, num) in texts.iter_mut() {
             let v = if ck.is_some() {
-                if snap.phase == 1 && snap.clock == 0 && snap.n_flags > 0 {
+                if playing && snap.clock == 0 && snap.n_flags > 0 {
                     "SUDDEN DEATH".to_string()
-                } else if snap.phase == 1 {
+                } else if playing && timed {
                     mmss(clock)
                 } else {
                     String::new()

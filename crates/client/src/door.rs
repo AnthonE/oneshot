@@ -69,6 +69,14 @@ impl SignIn {
             _ => String::new(),
         }
     }
+
+    /// The signed-in wallet, if there is one.
+    pub fn wallet(&self) -> Option<&str> {
+        match self {
+            SignIn::In(p) => p.wallet.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// The wallet as the title shows it: `0x1234…abcd`.
@@ -156,6 +164,9 @@ mod desktop {
         pub fn signin(&self) -> SignIn {
             SignIn::Off("Ranked plays in the browser".into())
         }
+
+        /// The server didn't take the sign-in (no sign-in here).
+        pub fn signed_out(&mut self, _why: String) {}
 
         pub fn quits(&self) -> bool {
             true
@@ -311,7 +322,10 @@ mod desktop {
                             continue 'connect;
                         }
                     }
-                    if moving(&m) && !moved {
+                    // Full: the live server, if home moved. Not from the
+                    // match's server (home's server.json doesn't name it):
+                    // its refusal is the knock's answer.
+                    if moving(&m) && !moved && queued.is_none() {
                         moved = true;
                         if let Ok((a, h)) = where_is(server) {
                             if a != addr {
@@ -545,6 +559,15 @@ mod web {
             self.signin.borrow().clone()
         }
 
+        /// The server didn't take the sign-in's pass (it ran out): signed
+        /// out, and why, so the title asks again rather than show a wallet
+        /// the server doesn't know.
+        pub fn signed_out(&mut self, why: String) {
+            if matches!(*self.signin.borrow(), SignIn::In(_)) {
+                *self.signin.borrow_mut() = SignIn::Failed(why);
+            }
+        }
+
         /// Opens Elo Pros' popup (the page's function: it has the nonce
         /// ready, so the popup opens on this click).
         pub fn sign_in(&mut self) {
@@ -596,11 +619,19 @@ mod web {
 
     impl Door {
         /// Opens the menu's session (`hello` asks for `MODE_LOBBY`).
+        /// Asked of the live server first (as the desktop's re-reads
+        /// `server.json`): a tab outlives deploys, and a drained slot's line
+        /// would be refused for good.
         pub fn lobby(&self, hello: proto::Msg) -> LobbyKnock {
             let slot: Rc<RefCell<Option<Result<super::LobbyBox, String>>>> = Rc::default();
-            let (addr, hash) = self.at.borrow().clone();
+            let (at, follow) = (self.at.clone(), self.follow.clone());
             let s = slot.clone();
             spawn_local(async move {
+                let cur = at.borrow().clone();
+                if let Some(next) = live(&follow, &cur).await {
+                    *at.borrow_mut() = next;
+                }
+                let (addr, hash) = at.borrow().clone();
                 let got = client_net::web_lobby::WebLobby::open(addr, hash, hello).await;
                 // Given up on already (it took too long): close it, unheld.
                 if Rc::strong_count(&s) == 1 {
@@ -667,6 +698,18 @@ mod web {
         fn drop(&mut self) {
             self.cancel();
         }
+    }
+
+    /// The page's `follow(addr, hash)`: the live server, if it is another
+    /// than the one in use (or its certificate changed).
+    async fn live(follow: &js_sys::Function, cur: &(String, String)) -> Option<(String, String)> {
+        let p = follow
+            .call2(&JsValue::NULL, &JsValue::from_str(&cur.0), &JsValue::from_str(&cur.1))
+            .ok()?
+            .dyn_into::<js_sys::Promise>()
+            .ok()?;
+        let a = JsFuture::from(p).await.ok()?.dyn_into::<js_sys::Array>().ok()?;
+        Some((a.get(0).as_string()?, a.get(1).as_string().unwrap_or_default()))
     }
 
     fn js_text(e: &JsValue) -> String {
@@ -740,16 +783,15 @@ mod web {
                         continue 'wait;
                     }
                 }
-                if moving(&m) && !moved {
+                // Full: the live server, if home moved. Not from the
+                // match's server (home's server.json doesn't name it): its
+                // refusal is the knock's answer, as on the desktop.
+                if moving(&m) && !moved && !matched {
                     moved = true;
-                    let to = follow.call0(&JsValue::NULL)?.dyn_into::<js_sys::Promise>()?;
-                    if let Some(a) = JsFuture::from(to).await?.dyn_ref::<js_sys::Array>() {
+                    let cur = at.borrow().clone();
+                    if let Some(next) = live(&follow, &cur).await {
                         push(News::Line(MOVING.into()));
                         c.close();
-                        let next = (
-                            a.get(0).as_string().unwrap_or_default(),
-                            a.get(1).as_string().unwrap_or_default(),
-                        );
                         *at.borrow_mut() = next.clone();
                         c = connect(next).await?;
                         early.clear();

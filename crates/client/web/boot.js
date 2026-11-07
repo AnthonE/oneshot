@@ -123,6 +123,9 @@ const MODULES = {
 };
 const GPU_FAILED = 'oneshot.webgpu.failed';
 const SWITCHED = 'oneshot.webgpu.switched';
+// A sign-in nonce older than this is fetched again (the server takes one
+// for ten minutes).
+const NONCE_FRESH_MS = 4 * 60 * 1000;
 const built = fetch('build.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 // Started at load, beside build.json, rather than after it.
 const gpuProbe = (async () => {
@@ -457,9 +460,10 @@ function clipReset() {
   clipSay('');
 }
 /* While the match is still on only the player's own eye is offered
-   (clip.rs LIVE_STYLES): a camera behind them would show where the
-   enemies the fog sent went, not only the ones they saw. */
-const CLIP_LIVE = ['wide', 'pov', 'long'];
+   (clip.rs LIVE_STYLES, from the module: `clipButtons`): a camera behind
+   them would show where the enemies the fog sent went, not only the ones
+   they saw. None until the module says. */
+let CLIP_LIVE = [];
 function clipMake(style) {
   if (!clipUi.tape) return;
   if (clipUi.live && !CLIP_LIVE.includes(style)) style = 'wide';
@@ -581,6 +585,7 @@ try {
     glue = await load(gfx);
   }
   const { launch, pose } = glue;
+  CLIP_LIVE = glue.clip_live_styles();
   clipButtons(glue.clip_styles());
   if (params.has('pose')) {
     // No server: one fighter for a picture (ci/look.mjs). Gone, as
@@ -595,11 +600,14 @@ try {
   base = await origin;
   say('Finding the server');
   const info = await getJson(`${base}server.json`, 'The server');
-  // A server on its way down: the live one, if it is now another.
-  const follow = async () => {
+  // A server on its way down: the live one, if it is now another than the
+  // one in use (`cur`, `curHash`: a tab outlives deploys, the slots
+  // alternate), or its certificate changed.
+  const follow = async (cur = info.addr, curHash = info.hash ?? '') => {
     try {
       const now = await getJson(`${base}server.json`, 'The server');
-      return now.addr && now.addr !== info.addr ? [now.addr, now.hash ?? ''] : null;
+      const hash = now.hash ?? '';
+      return now.addr && (now.addr !== cur || hash !== curHash) ? [now.addr, hash] : null;
     } catch { return null; }
   };
   const signin = await setupSignIn(info);
@@ -649,6 +657,18 @@ async function setupSignIn(info) {
     }
   };
   await fresh();
+  // The server takes a nonce for ten minutes (auth.rs NONCE_TTL): one is
+  // kept fresher than that, so a click long after the page loaded still
+  // opens a popup whose pass checks out. A hidden tab's timers slow; it
+  // asks again as it comes back.
+  let nonceAt = performance.now();
+  const keep = () => {
+    if (performance.now() - nonceAt < NONCE_FRESH_MS) return;
+    nonceAt = performance.now();
+    fresh();
+  };
+  setInterval(keep, NONCE_FRESH_MS / 4);
+  addEventListener('visibilitychange', () => { if (!document.hidden) keep(); });
   const fn = async () => {
     try {
       if (nonceErr) throw nonceErr;
@@ -657,6 +677,7 @@ async function setupSignIn(info) {
       const wallet = /wallet: (0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/.exec(text)?.[1] ?? null;
       return { pass: res.pass, wallet };
     } finally {
+      nonceAt = performance.now();
       await fresh();
     }
   };
@@ -670,10 +691,20 @@ async function setupSignIn(info) {
  * `setTalk` (held, it talks; or open mic, past a level gate) and its volume
  * with `setVolume`. */
 function voiceBridge(glue) {
+  // The player pressed MIC; the page is putting the mic back as it was.
+  let toggled = false;
+  let restoring = false;
   const voice = new Voice((seq, end, bytes) => glue.voice_up(seq, end, bytes), () => {}, pageV);
   window.__oneshotVoice = {
     hear: (tag, seq, flags, bytes, key) => voice.hear(tag, seq, flags, bytes, key),
     toggle: async () => {
+      toggled = true;
+      // The mic on its way back as the page wakes: the UI showed it off,
+      // so this click means on. It stays on.
+      if (restoring) {
+        restoring = false;
+        return;
+      }
       try {
         if (voice.mic || voice.opening) voice.micOff();
         else await voice.micOn();
@@ -711,9 +742,14 @@ function voiceBridge(glue) {
     await voice.wake();
     if (restored) return;
     restored = true;
+    // A MIC click already made the choice.
+    if (toggled) return;
     try {
-      if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) await voice.micOn();
-    } catch { /* asked again on MIC */ }
+      if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) {
+        restoring = true;
+        await voice.micOn();
+      }
+    } catch { /* asked again on MIC */ } finally { restoring = false; }
   };
   addEventListener('pointerdown', wake, { capture: true });
   addEventListener('keydown', wake, { capture: true });
