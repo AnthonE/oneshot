@@ -231,3 +231,28 @@ fn a_shot_after_a_snapshot_is_met_by_its_shares() {
     assert_eq!(b.seen(Some(w.tick + 1)), sim::world::Seen::PAST);
     assert_eq!(b.seen(None), sim::world::Seen::PAST);
 }
+
+/// A truck circling us slowly right at the edge (its distance wobbling a
+/// metre and a half either side of where it comes in, a few times a
+/// minute and faster) comes in once and stays: the hysteresis and the
+/// dwell hold it, it never flaps.
+#[test]
+fn a_truck_circling_at_the_edge_never_flaps() {
+    let mut w = world();
+    let mut b = Bubble::default();
+    let (mut flips, mut was) = (0, false);
+    let speed = 5.0;
+    let edge = BUBBLE_M + speed * LOOK_S;
+    for k in 0..60 * TICK_HZ {
+        let t = k as f32 * 2.0 / TICK_HZ as f32;
+        let r = edge + 1.5 * sim::fmath::sin(t * 5.0);
+        let a = t * speed / edge;
+        let (s, c) = (sim::fmath::sin(a), sim::fmath::cos(a));
+        w.vehicles[0].pos = V3::new(r * c, 0.0, r * s);
+        w.vehicles[0].vel = V3::new(-s, 0.0, c) * speed;
+        update(&mut b, &w, 60.0);
+        flips += (b.has(0) != was) as u32;
+        was = b.has(0);
+    }
+    assert_eq!(flips, 1, "{flips} flips in two minutes");
+}
