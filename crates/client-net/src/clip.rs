@@ -10,12 +10,13 @@
 //!     and takes as its first snapshot only one near the welcome's tick
 //!     (`core::FIRST_WITHIN`). A clip cut ten minutes into a match opens on
 //!     the welcome with its tick moved to the segment's first snapshot, so
-//!     the replay takes it. Snapshots themselves are whole (nothing on the
-//!     wire is a delta against an earlier one), so a segment needs no
-//!     keyframes the way Gates' does: its first snapshot is one.
+//!     the replay takes it. Snapshots on a clip are whole: the session hands
+//!     it each delta made whole and encoded again (`Session::on_datagram`),
+//!     so a segment needs no keyframes the way Gates' does: its first
+//!     snapshot is one.
 //!   · **What the stream built is state.** Who sits where (their names,
-//!     sides and skins), the phase and a cup's standing come once, as they
-//!     change. They are folded as segments age out and played in a burst at
+//!     sides and skins), the phase, a cup's standing and, for a watcher,
+//!     the seat it follows come once, as they change. They are folded as segments age out and played in a burst at
 //!     the clip's first instant, ahead of the snapshots, so the replay knows
 //!     every seat its first frame shows.
 //!
@@ -23,9 +24,10 @@
 //! oldest dropped as a new one opens. A new welcome (a cup's next heat) is
 //! another room: the memory starts again.
 //!
-//! The tape replays as a watcher of the player (`tape`'s header): their own
-//! fighter is drawn off the snapshots like anyone else, since a replay has
-//! no input to predict it from.
+//! The tape is played by a watching session (`Session::replay`; `tape`'s
+//! module docs): the seat the welcome names, or the last `Follow` a
+//! watcher was sent, is drawn off the snapshots like anyone else, since a
+//! replay has no input to predict it from.
 
 use std::collections::VecDeque;
 
@@ -61,12 +63,13 @@ struct Seg {
 }
 
 /// What the stream built before the window: the last word on each seat,
-/// the phase and the cup.
+/// the phase, the cup and the seat a watcher follows.
 #[derive(Clone, Copy)]
 struct State {
     seats: [Option<Msg>; MAX_FIGHTERS],
     phase: Option<Msg>,
     cup: Option<Msg>,
+    follow: Option<Msg>,
 }
 
 impl State {
@@ -74,6 +77,7 @@ impl State {
         seats: [None; MAX_FIGHTERS],
         phase: None,
         cup: None,
+        follow: None,
     };
 
     fn fold(&mut self, m: &Msg) {
@@ -85,6 +89,7 @@ impl State {
             }
             Msg::Phase { .. } => self.phase = Some(*m),
             Msg::Cup { .. } => self.cup = Some(*m),
+            Msg::Follow { .. } => self.follow = Some(*m),
             _ => {}
         }
     }
@@ -95,6 +100,7 @@ impl State {
             .flatten()
             .chain(self.phase.iter())
             .chain(self.cup.iter())
+            .chain(self.follow.iter())
     }
 }
 
@@ -151,7 +157,10 @@ impl Clipper {
         }
         if self.msgs.len() >= MSG_CAP {
             // The state still counts; the feed past the cap doesn't.
-            if matches!(m, Msg::Seat { .. } | Msg::Phase { .. } | Msg::Cup { .. }) {
+            if matches!(
+                m,
+                Msg::Seat { .. } | Msg::Phase { .. } | Msg::Cup { .. } | Msg::Follow { .. }
+            ) {
                 self.state.fold(m);
             }
             return;

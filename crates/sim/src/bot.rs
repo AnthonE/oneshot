@@ -166,7 +166,6 @@ impl Bot {
         best
     }
 
-    /// USE pressed this tick, as a tap: let go first if it was held.
     /// Capture the Flag: where this bot wants to be with nobody in sight.
     /// Half of each side attacks ([`attacker`]: the enemy's flag, or with
     /// the teammate carrying it), the other half defends (their own flag while it is away, else their base); a
@@ -225,6 +224,7 @@ impl Bot {
         f.state != FLAG_HELD && !f.flying && d.flat().len() < FLAG_REACH && fmath::fabs(d.y) < FLAG_RISE
     }
 
+    /// USE pressed this tick, as a tap: let go first if it was held.
     fn tap_use(inp: &mut Input, last: u16) {
         if last & USE == 0 {
             inp.buttons |= USE;
@@ -290,6 +290,9 @@ impl Bot {
         };
         if !me.active() || w.phase != Phase::Playing {
             self.ride_for = 0;
+            // Back from the dead, whoever it sees it sees anew.
+            self.target = 255;
+            self.seen = 0;
             return inp;
         }
         self.ride_cool = self.ride_cool.saturating_sub(1);

@@ -403,8 +403,9 @@ impl Fighter {
         }
 
         let release = ticks(GREN_COOL_MS - GREN_RELEASE_MS) as u16;
-        // Once the arm is moving, the kind is settled.
-        if pressed & GREN_SWITCH != 0 && self.gren_cool <= release {
+        // Once the arm is moving, the kind is settled (on the tick it leaves
+        // the hand too: it goes as the kind spent).
+        if pressed & GREN_SWITCH != 0 && self.gren_cool < release {
             self.gren_kind ^= 1;
         }
         if on_foot && pressed & MELEE != 0 && self.melee_cool == 0 {
@@ -416,10 +417,18 @@ impl Fighter {
             self.burst_left = 0;
             self.refire = self.refire.max(ticks(MELEE_COOL_MS / 2) as u16);
         }
-        // It leaves the hand as the arm flings it.
-        if on_foot && self.gren_cool == release {
-            out.throw = true;
-            out.sticky = self.gren_kind == 1;
+        // It leaves the hand as the arm flings it: on foot and hands free
+        // of the flag and a second gun, or it is back on the belt (taken
+        // up, got in, or a gun taken in the left since the press).
+        if self.gren_cool == release {
+            if on_foot && !self.flag && !self.dual() {
+                out.throw = true;
+                out.sticky = self.gren_kind == 1;
+            } else if self.gren_kind == 1 {
+                self.stickies = (self.stickies + 1).min(GREN_MAX);
+            } else {
+                self.grenades = (self.grenades + 1).min(GREN_MAX);
+            }
         }
         // A throw takes the kind chosen, or goes over to the other if none of
         // it is left; never with a gun in each hand.
@@ -448,7 +457,9 @@ fn dec(t: &mut u16) {
 /// A hot gun's tick of cooling, unless it is venting.
 fn cool(g: &mut Gun, venting: bool) {
     let a = arm(g.arm);
-    if a.hot() && !venting {
+    // A gun at full only vents: one whose vent a swap cut short waits on the
+    // back, full, and vents again in the hand.
+    if a.hot() && !venting && g.heat < HEAT_FULL {
         g.heat = g.heat.saturating_sub(a.heat_cool);
     }
 }

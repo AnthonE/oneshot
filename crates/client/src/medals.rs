@@ -162,10 +162,14 @@ struct Line {
     kills: u16,
     deaths: u16,
     assists: u16,
+    betrayals: u16,
     shots: u16,
     hits: u16,
+    heads: u16,
     damage: u16,
+    taken: u16,
     best_spree: u16,
+    best_multi: u8,
     medals: Vec<(u8, u8)>,
 }
 
@@ -175,12 +179,15 @@ fn line(m: &Msg) -> Option<Line> {
         kills,
         deaths,
         assists,
+        betrayals,
         shots,
         hits,
+        heads,
         damage,
+        taken,
         best_spree,
+        best_multi,
         medals,
-        ..
     } = m
     else {
         return None;
@@ -196,10 +203,14 @@ fn line(m: &Msg) -> Option<Line> {
         kills,
         deaths,
         assists,
+        betrayals,
         shots,
         hits,
+        heads,
         damage,
+        taken,
         best_spree,
+        best_multi,
         medals: ms,
     })
 }
@@ -226,16 +237,22 @@ fn listed(ms: &[(u8, u8)], n: usize) -> String {
 }
 
 /// Widths of the report's columns, px: the name, the numbers, the medals.
-const COLS: [(&str, f32); 9] = [
-    ("PLAYER", 170.0),
-    ("K", 40.0),
-    ("D", 40.0),
-    ("A", 40.0),
-    ("KDA", 56.0),
-    ("ACC", 56.0),
-    ("DMG", 60.0),
-    ("SPREE", 60.0),
-    ("MEDALS", 250.0),
+/// B is betrayals (our own side killed), HEADS the rounds that hit a
+/// head, TAKEN the damage taken, MULTI the best multikill.
+const COLS: [(&str, f32); 13] = [
+    ("PLAYER", 160.0),
+    ("K", 36.0),
+    ("D", 36.0),
+    ("A", 36.0),
+    ("B", 36.0),
+    ("KDA", 52.0),
+    ("ACC", 52.0),
+    ("HEADS", 56.0),
+    ("DMG", 56.0),
+    ("TAKEN", 60.0),
+    ("SPREE", 56.0),
+    ("MULTI", 52.0),
+    ("MEDALS", 230.0),
 ];
 
 fn cell(s: String, w: f32, font: TextFont, c: Color) -> impl Bundle {
@@ -335,10 +352,14 @@ pub fn carnage(
                         l.kills.to_string(),
                         l.deaths.to_string(),
                         l.assists.to_string(),
+                        l.betrayals.to_string(),
                         format!("{kda:.1}"),
                         acc,
+                        l.heads.to_string(),
                         l.damage.to_string(),
+                        l.taken.to_string(),
                         l.best_spree.to_string(),
+                        l.best_multi.to_string(),
                         medals,
                     ];
                     p.spawn(Node::default()).with_children(|r| {

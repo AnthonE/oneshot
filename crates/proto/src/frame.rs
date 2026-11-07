@@ -20,8 +20,9 @@ pub enum FrameError {
     /// trusting the length that was just refused.
     TooLong { declared: usize, ceiling: usize },
     /// A zero-length frame. The native reader refuses it identically
-    /// (`lib.rs::read_frame`), and it must stay refused rather than becoming
-    /// an empty delivery: every message this lane carries has a kind byte.
+    /// (`server/src/net.rs::read_frame`), and it must stay refused rather
+    /// than becoming an empty delivery: every message this lane carries has
+    /// a kind byte.
     Empty,
 }
 
@@ -126,9 +127,9 @@ impl<const N: usize> FrameBuf<N> {
             }
             let declared = u16::from_le_bytes(self.hdr) as usize;
             // Refused here, at the header, rather than after N bytes have
-            // been copied somewhere: the same order `lib.rs::read_frame`
-            // checks in, and the only order in which the refusal costs
-            // nothing.
+            // been copied somewhere: the same order
+            // `server/src/net.rs::read_frame` checks in, and the only order
+            // in which the refusal costs nothing.
             if declared == 0 {
                 return Err(FrameError::Empty);
             }
@@ -158,7 +159,7 @@ impl<const N: usize> FrameBuf<N> {
 /// rather than of two that happen to agree.
 ///
 /// `None` when the payload does not fit, which is a caller bug rather than a
-/// wire condition: every encoder in `protocol` bounds its own output.
+/// wire condition: every encoder in `proto` bounds its own output.
 pub fn encode_into(out: &mut [u8], payload: &[u8]) -> Option<usize> {
     let total = LEN_PREFIX_BYTES + payload.len();
     if payload.is_empty() || payload.len() > u16::MAX as usize || out.len() < total {

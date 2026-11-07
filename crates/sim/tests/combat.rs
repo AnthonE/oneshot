@@ -293,6 +293,31 @@ fn a_frag_goes_off_half_a_second_after_it_comes_down_never_before_its_arming() {
 }
 
 #[test]
+fn a_switch_on_the_tick_it_leaves_the_hand_throws_what_was_spent() {
+    // No stickies: a frag spent, the kind switched just as it goes.
+    let mut w = duel([AR, MAGNUM], 8.0);
+    w.fighters[0].stickies = 0;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].buttons = GRENADE;
+    w.step(&inputs, &NO_LAG);
+    let release = (ticks(GREN_COOL_MS) - ticks(GREN_RELEASE_MS)) as u16;
+    for _ in 0..TICK_HZ {
+        // The fighter's tick counts its cooldown down first.
+        inputs[0].buttons = if w.fighters[0].gren_cool == release + 1 {
+            GREN_SWITCH
+        } else {
+            0
+        };
+        w.step(&inputs, &NO_LAG);
+        if let Some((_, p)) = w.proj.live().next() {
+            assert_eq!(p.kind, sim::world::ProjKind::Frag);
+            return;
+        }
+    }
+    panic!("nothing thrown");
+}
+
+#[test]
 fn a_frag_still_hurts_at_its_rim() {
     // 5 m off a frag at the feet: near the rim, where Halo 2's still does
     // most of `GREN_EDGE` (a blast falling to nothing would barely scratch).

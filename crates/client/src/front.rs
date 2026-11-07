@@ -379,7 +379,9 @@ fn enter(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut front: 
     front.dirty = true;
 }
 
-/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane).
+/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane); where
+/// they are scrolled to (by the wheel, or the pad bringing its focus into
+/// view: `pad.rs`) is kept for a rebuild.
 fn scroll(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     mut rows: Query<&mut ScrollPosition, With<Rows>>,
@@ -393,12 +395,18 @@ fn scroll(
             MouseScrollUnit::Pixel => w.y,
         })
         .sum();
-    if dy == 0.0 {
+    // Rows about to be built again (another tab) start from the scroll
+    // that click set, not the old rows'.
+    if front.dirty {
         return;
     }
     for mut r in &mut rows {
-        r.y = (r.y - dy).max(0.0);
-        front.scroll = r.y;
+        if dy != 0.0 {
+            r.y = (r.y - dy).max(0.0);
+        }
+        if r.y != front.scroll {
+            front.scroll = r.y;
+        }
     }
 }
 
@@ -1781,13 +1789,24 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
                 r.spawn((chip(96.0), Hit::Mic, Tag("party-mic")))
                     .with_child(chip_label(mic));
                 r.spawn(grow()).with_child(ui::label(
-                    if party.open_mic { "Open mic" } else { "Hold V to talk" },
+                    if party.open_mic {
+                        "Open mic".to_string()
+                    } else {
+                        format!("Hold {} to talk", party.talk_key)
+                    },
                     12.0,
                     ui::DIM,
                 ));
                 r.spawn((chip(96.0), Hit::TalkMode))
-                    .with_child(chip_label(if party.open_mic { "HOLD V" } else { "OPEN MIC" }));
+                    .with_child(chip_label(&if party.open_mic {
+                        format!("HOLD {}", party.talk_key)
+                    } else {
+                        "OPEN MIC".to_string()
+                    }));
             });
+            if let Some(why) = party.mic_why {
+                p.spawn(ui::label(why, 12.0, ui::BAD));
+            }
             p.spawn(ui::label(
                 "Your party hears you, here and in a match. Nobody else does.",
                 11.5,
@@ -2571,6 +2590,7 @@ fn page_cmds(
     mut door: NonSendMut<Door>,
     mut knocking: NonSendMut<Knocking>,
     in_match: Res<InMatch>,
+    time: Res<Time>,
 ) {
     let cmds: Vec<PageCmd> = PAGE.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for c in cmds {
@@ -2580,6 +2600,8 @@ fn page_cmds(
                 front.status.clear();
                 front.bad = false;
                 front.dirty = true;
+                // The knock it replaces is this one's, cancel guard and all.
+                front.knocked_at = time.elapsed_secs();
                 knocking.0 = Some(door.knock(ask));
             }
             PageCmd::Knock(_) => {}
@@ -2588,10 +2610,17 @@ fn page_cmds(
 }
 
 /// `Start::Join`: knock at once.
-fn join(mut front: ResMut<Front>, player: Res<Player>, mut door: NonSendMut<Door>, mut knocking: NonSendMut<Knocking>) {
+fn join(
+    mut front: ResMut<Front>,
+    player: Res<Player>,
+    mut door: NonSendMut<Door>,
+    mut knocking: NonSendMut<Knocking>,
+    time: Res<Time>,
+) {
     let Some(m) = front.join.take() else {
         return;
     };
+    front.knocked_at = time.elapsed_secs();
     knocking.0 = Some(door.knock(Ask {
         name: player.sent_name(),
         pass: String::new(),
@@ -2632,13 +2661,12 @@ fn poll(
                 front.bad = false;
             }
             News::Failed(e) => {
-                if !e.is_empty() || front.status.is_empty() {
-                    front.status = if e.is_empty() {
-                        "The server closed the connection".into()
-                    } else {
-                        e
-                    };
-                }
+                // Never a progress line in red: the refusal, or that it closed.
+                front.status = if e.is_empty() {
+                    "The server closed the connection".into()
+                } else {
+                    e
+                };
                 front.bad = true;
                 knocking.0 = None;
                 return;

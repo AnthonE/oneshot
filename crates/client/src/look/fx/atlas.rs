@@ -29,7 +29,6 @@ pub const RING: u8 = 11;
 pub const SPECK: u8 = 12;
 /// A crystal sliver with a bright spine.
 pub const SHARD: u8 = 13;
-pub const SPLINTER: u8 = 14;
 /// A flame tongue, tip up: drawn unrolled, or the fire leans.
 pub const FLAME: u8 = 15;
 
@@ -50,6 +49,8 @@ pub const CELLS: [Shape; ::fx::atlas::CELLS] = [
     Shape::Ring,
     Shape::Speck,
     Shape::Shard,
+    // Cell 14 is free: the sheet is a fixed 4 × 4 (`fx::atlas::CELLS`), and
+    // no recipe draws Gates' splinter that stays in it.
     Shape::Splinter,
     Shape::Flame,
 ];

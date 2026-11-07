@@ -31,8 +31,8 @@
 //! own, but a material's fragment knows how far its own ray runs and can
 //! read the sun's shadow map. So the boxes (`weathering.wgsl`) and the sky
 //! behind them (the deck's BACKDROP) each march their ray through the map's
-//! box, twelve steps, and take the sun's share of the flat fog back where it
-//! crossed shade. Bodies and effects don't march: the beams are in front of
+//! box, twelve steps (`shaft_march.wgsl`'s `SHAFT_STEPS`), and take the
+//! sun's share of the flat fog back where it crossed shade. Bodies and effects don't march: the beams are in front of
 //! the walls and the sky, not of a fighter. Either way the mist's
 //! extinction is the same on every rung, and shafts only take light away
 //! where a wall shades the air, so no rung sees a fighter another doesn't.
@@ -81,10 +81,6 @@ pub struct Shafts {
 /// The volume's entity.
 #[derive(Component)]
 pub struct ShaftVolume;
-
-/// Steps WebGL2's march takes along a ray (`shaft_march.wgsl`'s
-/// `SHAFT_STEPS`): a map's box is crossed in a few metres a step.
-pub const WEB_STEPS: u32 = 12;
 
 /// The WebGL2 march's lanes (`shaft_march.wgsl`), the same in every
 /// material that marches: the map's box (`lo` w: the mist's extinction per
@@ -252,7 +248,7 @@ pub fn drive(
     let lit = !mood.roofed && m.mist > 0.0 && lux > 0.0 && cut.volume > 0.0;
     // Our own march where the volumetric pass can't run (WebGL2, or a GPU
     // without the atmosphere), at the rung the volume would be drawn at.
-    let web = if !tier.atmosphere && tier.gfx.clouds == super::quality::Clouds::High && lit {
+    let web = if tier.web_shafts() && lit {
         WebShafts::new(m, mood.map, cut.volume / m.mist)
     } else {
         WebShafts::default()

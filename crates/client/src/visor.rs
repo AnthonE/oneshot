@@ -30,7 +30,7 @@ use bevy::ui::FocusPolicy;
 use bevy::window::PrimaryWindow;
 
 use crate::hud::HudRoot;
-use crate::look::quality::{Quality, Tier};
+use crate::look::quality::Tier;
 
 /// How far the middle swells against the corners (a share of its size).
 pub const BEND: f32 = 0.035;
@@ -212,11 +212,8 @@ pub fn fit(
             });
         }
     }
-    let glow = if tier.preset == Some(Quality::Potato) {
-        0.0
-    } else {
-        GLOW
-    };
+    // No glow on the lite frame (`quality::Tier::lite`).
+    let glow = if tier.lite() { 0.0 } else { GLOW };
     let px = Vec2::ONE / size.as_vec2();
     let lag = lag.px() * scale * px;
     let params = VisorParams {

@@ -13,7 +13,7 @@
 
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::{light_consts::lux, CascadeShadowConfigBuilder, EnvironmentMapLight, SunDisk};
+use bevy::light::{light_consts::lux, EnvironmentMapLight, SunDisk};
 use bevy::pbr::{Atmosphere, AtmosphereSettings, DistanceFog, FogFalloff, ScatteringMedium};
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, Msaa};
@@ -258,9 +258,9 @@ pub fn expose_for(
 /// The air over a mood: the weather's fog (the mist less the `carried`
 /// share the shafts' volume draws, `shafts.rs`; the rain's haze; the dust), the
 /// colour it fades to, and its glow toward the sun. On a device with no
-/// atmosphere the atmosphere's own air is the floor under it
-/// (`sky::fog_falloff`), so every tier sees the same air; there the glow
-/// is the mist's share of it, the sunward light the shafts would carry
+/// atmosphere the atmosphere's own air is the floor under it (the
+/// `Atmospheric` falloff below), so every tier sees the same air; there the
+/// glow is the mist's share of it, the sunward light the shafts would carry
 /// where they are drawn.
 pub fn fog_for(mood: &super::mood::Mood, atmosphere: bool, carried: f32) -> DistanceFog {
     use super::sky;
@@ -328,11 +328,11 @@ pub struct SunBase {
 }
 
 /// The map's sun, `k` of its mood's strength (`LightDef::sun`), seen at
-/// `ev100`. Its cascades here are a placeholder: `quality::apply` gives a
-/// new [`Sun`] the tier's the frame it appears.
-pub fn sun(k: f32, mood: &super::mood::Mood, atmosphere: bool, ev100: f32) -> impl Bundle {
+/// `ev100`, with `tier`'s cascades from its first frame (`quality::apply`
+/// keeps them the tier's after).
+pub fn sun(k: f32, mood: &super::mood::Mood, tier: &super::quality::Tier, ev100: f32) -> impl Bundle {
     let lux = lux::DIRECT_SUNLIGHT * k * mood.sun;
-    let rgb = sun_light(mood, atmosphere);
+    let rgb = sun_light(mood, tier.atmosphere);
     let disk = sun_disk_intensity(lux, ev100);
     (
         Sun,
@@ -343,14 +343,7 @@ pub fn sun(k: f32, mood: &super::mood::Mood, atmosphere: bool, ev100: f32) -> im
             shadows_enabled: true,
             ..default()
         },
-        CascadeShadowConfigBuilder {
-            num_cascades: 1,
-            minimum_distance: CASCADE_MIN_M,
-            maximum_distance: super::quality::SHADOW_M_LADDER[0],
-            first_cascade_far_bound: CASCADE_FIRST_M,
-            overlap_proportion: CASCADE_OVERLAP,
-        }
-        .build(),
+        tier.cascades(),
         SunDisk {
             intensity: disk,
             ..SunDisk::EARTH

@@ -503,11 +503,19 @@ fn main() {
         let _ = writeln!(md, "- {:.0} m: {} to {}{flag}", l.len, name_near(l.a), name_near(l.b));
     }
     let _ = writeln!(md, "\nRed's spawns see blue's in {cross} of {pairs} pairs.");
-    let unreached: Vec<&str> = places
+    // A place either side can't walk to, naming the side when the other can.
+    let unreached: Vec<String> = places
         .iter()
         .zip(&node_of)
-        .filter(|(_, n)| n.is_none_or(|n| side_times[0][n] == u32::MAX))
-        .map(|(p, _)| p.name.as_str())
+        .filter_map(|(p, n)| {
+            let cant = |s: usize| n.is_none_or(|n| side_times[s][n] == u32::MAX);
+            match (cant(0), cant(1)) {
+                (true, true) => Some(p.name.clone()),
+                (true, false) => Some(format!("{} (red)", p.name)),
+                (false, true) => Some(format!("{} (blue)", p.name)),
+                (false, false) => None,
+            }
+        })
         .collect();
     if !unreached.is_empty() {
         let _ = writeln!(md, "\nCan't be walked to: {}.", unreached.join(", "));

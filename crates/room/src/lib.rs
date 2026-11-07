@@ -99,12 +99,17 @@ pub struct ClientNet {
     pub last_seq: u32,
     /// The newest snapshot tick this client has acked, as the server saw.
     pub acked: Option<u32>,
+    /// The tick it was seated at: it was sent no snapshot of that tick or
+    /// before, so an ack of one (a first `ack_tick: 0`) is refused rather
+    /// than taken as a view that old.
+    pub joined: u32,
     pub playout: u8,
     /// The view of the frame last run (a repeat's: the newest).
     ran: View,
     sent: [(u32, f64); SENT],
     pub rtt_ms: f64,
-    /// Frames that came too late or too early, and repeats used.
+    /// Frames that came after their tick had run, and ticks run on a
+    /// repeat ([`lost_frame`]) because a frame hadn't come.
     pub late: u32,
     pub repeats: u32,
     /// The fewest frames waiting behind the one run, over the ticks since
@@ -131,15 +136,19 @@ pub const UNSEEN: u8 = u8::MAX;
 
 /// A client's events as it may be told them (filtered by `room::build`),
 /// each sent in every snapshot from the first that carries it until the
-/// client acks one of those (docs/DESIGN.md §10). Oldest first, never one
-/// skipped: so the client keeps an event by its id and drops repeats.
+/// client acks one of those (docs/DESIGN.md §10). Oldest first; one is
+/// skipped only when it is dropped (counted in `dropped`) or fog no longer
+/// lets it be told before it was first sent. The client keeps an event by
+/// its id and drops repeats.
 #[derive(Clone, Debug, Default)]
 pub struct EventQueue {
     /// Each with the tick of the first snapshot that carried it: those are
     /// given oldest first, so the acked ones are always at the front.
     list: VecDeque<(Option<u32>, EventState)>,
     next_id: u16,
-    /// Events dropped because a client stopped acking.
+    /// Events dropped: past [`MAX_QUEUED_EVENTS`] (a client stopped
+    /// acking), or one the wire can't carry (which would otherwise wait at
+    /// the front of every snapshot, never sent).
     pub dropped: u32,
 }
 
@@ -148,6 +157,11 @@ pub const MAX_QUEUED_EVENTS: usize = 256;
 
 impl EventQueue {
     fn push(&mut self, mut e: EventState) {
+        let mut b = [0u8; 32];
+        if proto::Pack::pack(&e, &mut proto::bits::BitWriter::new(&mut b)).is_err() {
+            self.dropped += 1;
+            return;
+        }
         e.id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         if self.list.len() >= MAX_QUEUED_EVENTS {
@@ -190,6 +204,7 @@ impl Default for ClientNet {
             dry: 0,
             last_seq: 0,
             acked: None,
+            joined: 0,
             playout: PLAYOUT_MIN as u8,
             ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
@@ -210,11 +225,12 @@ impl ClientNet {
     /// An input datagram arrived at `now_ms`; `last_sent` is the newest
     /// snapshot tick this client has been sent.
     pub fn on_input(&mut self, m: &InputMsg, now_ms: f64, last_sent: Option<u32>) {
-        // Acks: only ever forward, and never past what was sent. A client
-        // that claims an older ack changes nothing.
+        // Acks: only ever forward, never past what was sent, and never of a
+        // tick from before it was seated. A client that claims an older ack
+        // changes nothing.
         if let Some(sent) = last_sent {
             let ack = m.ack_tick;
-            if ack <= sent && self.acked.is_none_or(|a| ack > a) {
+            if ack <= sent && ack > self.joined && self.acked.is_none_or(|a| ack > a) {
                 self.acked = Some(ack);
                 self.queue.ack(ack);
                 let (t, at) = self.sent[ack as usize % SENT];
@@ -353,7 +369,7 @@ pub struct Room {
     pub world: World,
     pub seats: [Seat; MAX_FIGHTERS],
     /// Seats the rules use: 2 for a duel, 4 for doubles, 8 for a free for
-    /// all.
+    /// all, 16 for Big Team.
     pub size: usize,
     /// Bots stand still and never fire: for tests that need a target.
     pub passive_bots: bool,
@@ -395,6 +411,8 @@ pub struct Room {
     /// ([`PARALLEL_FROM`]); fewer, one after another. The bytes are the
     /// same either way.
     pub parallel_from: usize,
+    /// Events dropped from the queues of people who have since left.
+    dropped_gone: u64,
 }
 
 /// One seat's snapshot as its own thread made it: the snapshot, its bytes
@@ -477,12 +495,29 @@ impl Room {
             parallel_from: PARALLEL_FROM,
             far_rates: true,
             big: sim::maps::ALL.iter().any(|d| d.id == map_id && d.big()),
+            dropped_gone: 0,
         }
     }
 
-    /// Snapshots every `n` ticks from now on (2 to 8): a mode's own rate.
-    /// What the world does is the same at any rate; only what is sent. On
-    /// even ticks, as a delta's bases are kept (`proto::delta::Ring`).
+    /// Events lost since the match began: past the sim's cap in a tick
+    /// (`sim::events::Events::dropped`), and from people's queues
+    /// ([`EventQueue::dropped`]), those who left included.
+    pub fn events_dropped(&self) -> u64 {
+        let queues: u64 = self
+            .seats
+            .iter()
+            .map(|x| match x {
+                Seat::Person(c, _) => c.queue.dropped as u64,
+                _ => 0,
+            })
+            .sum();
+        self.world.events.dropped as u64 + queues + self.dropped_gone
+    }
+
+    /// Snapshots every `n` ticks from now on (2 to 8), on the ticks that are
+    /// multiples of it: a mode's own rate. What the world does is the same
+    /// at any rate; only what is sent. A delta's bases are kept at any of
+    /// them (`proto::delta::Ring` has a slot for every two ticks).
     pub fn set_snap_every(&mut self, n: u32) {
         self.snap_every = n.clamp(2, 8);
     }
@@ -634,7 +669,13 @@ impl Room {
 
     /// A person in seat `s`: the welcome for them, the seats for everyone.
     pub fn seat_person(&mut self, s: usize, name: Name, look: proto::Look) -> Outbox {
-        self.seats[s] = Seat::Person(Box::default(), name);
+        self.seats[s] = Seat::Person(
+            Box::new(ClientNet {
+                joined: self.world.tick,
+                ..ClientNet::default()
+            }),
+            name,
+        );
         self.looks[s] = proto::Look {
             skin: if (look.skin as usize) < proto::SKINS.len() {
                 look.skin
@@ -684,6 +725,9 @@ impl Room {
     /// A person left: a bot takes the seat, or in a ranked room nobody does
     /// and the fighter stands where it was.
     pub fn leave(&mut self, s: u8) -> Outbox {
+        if let Seat::Person(c, _) = &self.seats[s as usize] {
+            self.dropped_gone += c.queue.dropped as u64;
+        }
         if self.ranked {
             self.seats[s as usize] = Seat::Empty;
             self.looks[s as usize] = proto::Look::default();
@@ -880,7 +924,13 @@ impl Room {
             }
         }
         if let Some(l) = self.spectate.as_mut() {
-            l.observe(&self.world, out, &mut plain);
+            // Each seat's fog for its watchers looks as far ahead as the
+            // seat's own would at the line's rate.
+            let leads = core::array::from_fn(|s| match &self.seats[s] {
+                Seat::Person(c, _) => fog::lead_s(c.rtt_ms, c.playout as u32, spectate::WATCH_EVERY),
+                _ => fog::lead_s(0.0, PLAYOUT_MIN, spectate::WATCH_EVERY),
+            });
+            l.observe(&self.world, out, &mut plain, &leads);
         }
     }
 }
@@ -935,9 +985,10 @@ fn seat_snapshot(
 }
 
 /// The snapshot seat `s` is sent: its own fighter exactly, the others it
-/// may see coarsely. `clock` is the client's last input seq run and its
-/// input depth; `visible(q)` and `vehicle_visible(i)` are fog of war's to
-/// answer; everything else here is what any client may know.
+/// may see coarsely. `(last_seq, depth)` are the client's last input seq
+/// run and the low point of its input buffer (`ClientNet::take_low`);
+/// `visible(q)` and `vehicle_visible(i)` are fog of war's to answer;
+/// everything else here is what any client may know.
 pub fn build(
     w: &World,
     s: usize,
@@ -991,13 +1042,15 @@ fn build_encoded(
     // What this client may know: itself, its side, and whom fog shows it.
     let me = &w.fighters[s];
     let eye = me.eye();
-    let known = |q: usize| q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q);
+    // Nobody (an event's `a` past the seats: `proto::NOBODY`) is never known.
+    let known =
+        |q: usize| q < MAX_FIGHTERS && (q == s || (w.rules.teams && w.fighters[q].team == me.team) || visible(q));
     // Every kind, each by its own rule; no wildcard, so a new kind must
     // say what this client may see of it.
     for k in sim::thing::Kind::ALL {
         match k {
             sim::thing::Kind::Fighter => add_fighters(&mut snap, w, s, &visible, rates.as_mut()),
-            sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, eye, &known),
+            sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, s, eye, &known, &vehicle_visible),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible),
             sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
@@ -1130,15 +1183,38 @@ pub fn update_every(me: &sim::fighter::Fighter, them: &sim::fighter::Fighter) ->
 }
 
 /// A projectile flies in the open: sent if its owner is known to this
-/// client, or it is in clear line of sight.
-fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usize) -> bool) {
-    for (_, p) in w.proj.live() {
-        if snap.n_proj as usize >= MAX_SNAP_PROJ {
-            break;
-        }
+/// client, or it is in clear line of sight. A sticky stuck to someone, or
+/// to a vehicle, goes where they go: sent only while they would be
+/// ([`stuck_shown`]), so it never tells where a hidden enemy is.
+fn add_projectiles(
+    snap: &mut Snapshot,
+    w: &World,
+    s: usize,
+    eye: V3,
+    known: &impl Fn(usize) -> bool,
+    vehicle_visible: &impl Fn(usize) -> bool,
+) {
+    // Everything this client may see, then the most relevant to it first
+    // when there are more than a snapshot holds (as Halo: Reach ranked by
+    // relevance a client at a time): on the stack, ties by slot.
+    let mut seen = [(0.0f32, 0usize); sim::consts::MAX_PROJ];
+    let mut n = 0;
+    for (i, p) in w.proj.live() {
         if !known(p.owner as usize) && !w.map.clear(eye, p.pos) {
             continue;
         }
+        if !stuck_shown(w, s, p, known, vehicle_visible) {
+            continue;
+        }
+        seen[n] = (proj_rank(p, s, eye), i);
+        n += 1;
+    }
+    let seen = &mut seen[..n];
+    if n > MAX_SNAP_PROJ {
+        seen.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    }
+    for &(_, i) in seen.iter().take(MAX_SNAP_PROJ) {
+        let p = &w.proj[i];
         snap.proj[snap.n_proj as usize] = ProjState {
             kind: p.kind as u8,
             owner: p.owner,
@@ -1147,6 +1223,66 @@ fn add_projectiles(snap: &mut Snapshot, w: &World, eye: V3, known: &impl Fn(usiz
         };
         snap.n_proj += 1;
     }
+}
+
+/// How far a round closing on the eye counts, against its distance: one
+/// coming at you is worth seeing before one as near going away.
+pub const PROJ_CLOSING: f32 = 0.5;
+
+/// A round's place in client `s`'s queue, lowest first: its own rounds and
+/// any about it (homing on it, stuck to it) before anything, then the rest
+/// by distance from its eye, a round closing on it as [`PROJ_CLOSING`] as
+/// far.
+fn proj_rank(p: &sim::world::Projectile, s: usize, eye: V3) -> f32 {
+    if p.owner as usize == s || p.target as usize == s {
+        return -1.0;
+    }
+    let to_eye = eye - p.pos;
+    let far = to_eye.len();
+    // A landed round's `vel` is where it sits on what it struck.
+    if !p.landed && p.vel.dot(to_eye) > 0.0 {
+        far * PROJ_CLOSING
+    } else {
+        far
+    }
+}
+
+/// Whether what a projectile is stuck to may be shown to client `s`:
+/// always for one not stuck to anything; for a sticky on a fighter, only
+/// if it is known; on a vehicle, only if that vehicle is sent
+/// ([`vehicle_shown`]).
+fn stuck_shown(
+    w: &World,
+    s: usize,
+    p: &sim::world::Projectile,
+    known: &impl Fn(usize) -> bool,
+    vehicle_visible: &impl Fn(usize) -> bool,
+) -> bool {
+    if !(p.kind == sim::world::ProjKind::Sticky && p.landed && p.target != sim::world::NO_TARGET) {
+        return true;
+    }
+    let t = p.target as usize;
+    if t < MAX_FIGHTERS {
+        known(t)
+    } else {
+        vehicle_shown(w, s, t - MAX_FIGHTERS, known, vehicle_visible)
+    }
+}
+
+/// Whether vehicle `i` goes to client `s`: the one it rides, one someone
+/// it knows rides, or one fog shows it.
+fn vehicle_shown(
+    w: &World,
+    s: usize,
+    i: usize,
+    known: &impl Fn(usize) -> bool,
+    visible: &impl Fn(usize) -> bool,
+) -> bool {
+    let Some(v) = w.vehicles.get(i).filter(|v| v.active) else {
+        return false;
+    };
+    let mine = w.fighters[s].riding().is_some_and(|(r, _)| r == i);
+    mine || v.seats.iter().any(|&x| x != 0 && known(x as usize - 1)) || visible(i)
 }
 
 /// How far a gun on the floor is named to a client that sees it.
@@ -1200,8 +1336,7 @@ fn add_vehicles(
         if snap.n_vehicles as usize >= MAX_SNAP_VEHICLES {
             break;
         }
-        let ridden_by_known = v.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
-        if mine != Some(i) && !ridden_by_known && !visible(i) {
+        if !vehicle_shown(w, s, i, known, visible) {
             continue;
         }
         let seat = |x: u8| if x != 0 && known(x as usize - 1) { x } else { 0 };

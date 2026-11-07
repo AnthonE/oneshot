@@ -809,6 +809,10 @@ fn roll(
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
     film.drawn += 1;
+    // Wrapped (written, or failed): nothing more rolls or retries.
+    if film.wrapped {
+        return;
+    }
     let ready = link.0.session().ready && settle.shown() && backlog.pending() == 0;
     match film.phase {
         Phase::Boot => {

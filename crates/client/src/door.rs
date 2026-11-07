@@ -224,7 +224,7 @@ mod desktop {
             self.lobby.send_now(m);
         }
         fn talk(&mut self, f: &proto::voice::VoiceFrame) -> bool {
-            self.lobby.send_voice(f)
+            self.lobby.talk(f)
         }
         fn closed(&self) -> bool {
             self.lobby.closed()
@@ -290,6 +290,7 @@ mod desktop {
                 .block_on(NativeClient::connect(&addr, hash, hello))
                 .map_err(|e| format!("{addr}: {e}"))?;
             let mut early = Vec::new();
+            let mut refused = String::new();
             loop {
                 if cancel.load(Ordering::Relaxed) {
                     c.close();
@@ -322,6 +323,9 @@ mod desktop {
                         }
                     }
                     if let Some(line) = crate::hud::status_line(&m) {
+                        if matches!(m, proto::Msg::Refuse { .. }) {
+                            refused.clone_from(&line);
+                        }
                         say(line);
                     }
                     early.push(m);
@@ -330,8 +334,9 @@ mod desktop {
                     let _ = tx.send(Heard::In(Box::new(Native { client: c, _rt: rt }), early));
                     return Ok(());
                 }
+                // Closed after a refusal: that is why; else it just closed.
                 if c.closed() {
-                    return Err(String::new());
+                    return Err(refused);
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -712,6 +717,7 @@ mod web {
         let mut moved = false;
         let mut matched = false;
         let mut early = Vec::new();
+        let mut refused = String::new();
         'wait: loop {
             if cancel.get() {
                 c.close();
@@ -725,9 +731,10 @@ mod web {
                         push(News::Line(MATCHED.into()));
                         c.close();
                         // A server of the game's own list: its certificate is
-                        // a CA's, never pinned.
+                        // a CA's, never pinned. This match's, not ours from
+                        // now on: the next knock and the party's line still go
+                        // home (as the desktop's do).
                         let next = (to, String::new());
-                        *at.borrow_mut() = next.clone();
                         c = connect_for(next, id).await?;
                         early.clear();
                         continue 'wait;
@@ -750,6 +757,9 @@ mod web {
                     }
                 }
                 if let Some(line) = crate::hud::status_line(&m) {
+                    if matches!(m, proto::Msg::Refuse { .. }) {
+                        refused.clone_from(&line);
+                    }
                     push(News::Line(line));
                 }
                 early.push(m);
@@ -758,8 +768,9 @@ mod web {
                 push(News::In(Box::new(crate::link::Web::new(c)), early));
                 return Ok(());
             }
+            // Closed after a refusal: that is why; else it just closed.
             if c.closed() {
-                push(News::Failed(String::new()));
+                push(News::Failed(refused));
                 return Ok(());
             }
             sleep(100).await;

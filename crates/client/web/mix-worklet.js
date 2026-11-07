@@ -57,8 +57,9 @@ class OneshotMix extends AudioWorkletProcessor {
         this.x.mix_install(m.id, m.rate, m.pcm.length);
       }
     } catch (e) {
-      // Thrown in here, it would read on the page as plain silence.
-      this.port.postMessage({ kind: 'error', why: String((e && e.message) || e) });
+      // Thrown in here, it would read on the page as plain silence. No
+      // mixer made is the end of the sound (the page says so).
+      this.port.postMessage({ kind: 'error', fatal: m.kind === 'init', why: String((e && e.message) || e) });
     }
   }
 

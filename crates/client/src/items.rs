@@ -78,11 +78,12 @@ pub struct PadGun(pub usize);
 #[derive(Component)]
 pub struct PadDisc(pub usize);
 
-/// The welcome the pads' guns were made for, which discs are lit, and the
-/// drop drawn in each drop slot: its entity, gun and where it lies.
+/// The link (`front::LinkGen`) and welcome the pads' guns were made for,
+/// which discs are lit, and the drop drawn in each drop slot: its entity,
+/// gun and where it lies.
 #[derive(Resource, Default)]
 pub struct Items {
-    built: u32,
+    built: Option<(u32, u32)>,
     lit: Vec<Option<bool>>,
     drops: [Option<Lying>; MAX_DROPS],
     /// Drops picked up, hidden, by arm: a gun of that arm put down again
@@ -125,15 +126,19 @@ pub fn draw(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     plasma: Option<Res<crate::look::fx::plasma::Kit>>,
+    gen: Option<Res<crate::front::LinkGen>>,
 ) {
     let s = link.0.session();
     if !s.ready {
         return;
     }
     let core = &s.core;
-    if s.welcomes != items.built {
+    // Keyed as the level is (`Built`): the title's stand-in and a match's
+    // first welcome are both welcome 1.
+    let key = Some((gen.map_or(0, |g| g.0), s.welcomes));
+    if key != items.built {
         // The level's parts go with the level (`level::build`).
-        items.built = s.welcomes;
+        items.built = key;
         items.lit = vec![None; core.map.pads.len()];
         items.drops = [None; MAX_DROPS];
         items.spare.clear();

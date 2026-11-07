@@ -1,12 +1,14 @@
 # oneshot
 
-A free-to-play, Halo-style arena shooter for the browser: 1v1 and 2v2 ranked,
-with an authoritative server and fog of war, so it can be ranked without
+A free-to-play, Halo-style shooter for the desktop and the browser: 1v1 and
+2v2 ranked, and an 8v8 Big Team mode with terrain and vehicles, with an
+authoritative server and fog of war, so it can be ranked without
 trusting anyone's machine.
 
 - [`docs/DESIGN.md`](docs/DESIGN.md): the design, netcode first.
 - [`docs/RIP.md`](docs/RIP.md): what we take from Gates, Fireplace,
   engine-shim and Elo Pros, file by file.
+- [`docs/SCALING.md`](docs/SCALING.md): how it grows past one box.
 
 ## Milestone 1: the rules
 
@@ -43,10 +45,13 @@ for a `desktop-v*` tag.
 | crate / dir | what |
 |---|---|
 | `crates/proto` | the wire: inputs, snapshots, stream messages, bit-packed, goldens |
-| `crates/room` | a match as the server runs it: seats, input buffers, rewind depth, snapshots |
-| `crates/server` | WebTransport (wtransport), the 128 Hz sim thread, the page server |
+| `crates/room` | a match as the server runs it: seats, input buffers, rewind depth, fog, snapshots and deltas, replays |
+| `crates/server` | WebTransport (wtransport), the 128 Hz rooms (seated on the sim thread, stepped on its pool, `--sim-threads`), the ranked queue, Elo Pros, the page server |
 | `crates/client-net` | the client's netcode: clock, prediction, interpolation, WebTransport (wasm), wtransport (native) |
 | `crates/client` | the Bevy client, desktop and browser: the level, Triple T, the guns in view, HUD, sound, the menu |
+| `crates/mix`, `crates/mix-worklet` | the sound mixer; in the browser, on its audio thread (an AudioWorklet) |
+| `crates/fx` | effects with no engine, vendored from Gates |
+| `tools/load` | `oneshot-load`, the load test (`ops/README.md`) |
 
 ```sh
 ci/quick.sh sim proto room client-net server   # fmt, clippy, tests
@@ -72,16 +77,19 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 
 ## Milestone 6: modes, maps, skins, cups
 
-- **Casual:** against the bot, a free for all, or Gun Game (a kill a rung
-  up a ladder of seven guns), bots in the empty seats; the free-for-all
-  rooms are shared.
+- **Casual:** against the bot, a free for all, Gun Game (a kill a rung up a
+  ladder of seven guns), Big Team (8v8 on terrain, with vehicles) or Capture
+  the Flag, bots in the empty seats; the shared rooms take a party together,
+  or give it a room of its own. Or watch a live match, a little late.
 - **Kill cam:** the run-up to your death from the killer's eye, made only
   of what fog already sent you.
 - **Maps** are data: `maps/<name>/map.json`, compiled to the sim's tables.
   Proving Grounds, Overpass, Cistern, Bulkhead and Chrysalis (inside an
   alien hull: pods ringing bottom mid, top mid over it, curved bases with
-  windows, rotations that wrap: the old arena flow, our own layout); a room
-  draws one from its seed. Maps have round, turned and sloped solids beside
+  windows, rotations that wrap: the old arena flow, our own layout); Dry
+  Fork is Big Team's (terrain, vehicles); The Range and Cloudbreak are out
+  of the rotation (`--map range`). A room draws from its mode's rotation by
+  its seed. Maps have round, turned and sloped solids beside
   their boxes, waypoints for bots, and their own light.
 - **Skins:** worn only if your wallet owns them (Elo Pros' items), drawn as
   trim over the side's colour.
@@ -93,7 +101,7 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 node tools/maps/compile.mjs           # after editing a map.json (ci checks it with --check)
 cargo run -p flow --release -- chrysalis   # its plan, walk times and sight lines (traces/flow/)
 cargo test -p sim --test maps         # every map: spawns, pads, walkable, bots fight
-ci/parity.sh                          # every map native vs wasm, Doubles and Gun Game
+ci/parity.sh                          # every map native vs wasm: Doubles, Gun Game, Big Team, CTF where it has flags
 node ci/e2e.mjs 150 4 2               # the page in Gun Game on Cistern against seven bots
 oneshot-server --map cistern --cup-min 8 --cup-rounds 3
 ```
@@ -112,12 +120,13 @@ the runbook.
   hash and the browser checks the certificate itself; `--public-addr` names
   where to connect, `--allow-origin` lets the page on elopros.com read it.
 - **Admission:** past `--capacity` a hello is answered "full"; past twice it,
-  an unproven address gets a QUIC Retry; past four times, a refusal; eight
-  connections per address, 32 per prefix.
+  an unproven address gets a QUIC Retry; past four times, a refusal; 16
+  connections (eight players) per address, 64 per prefix.
 - **SIGTERM drains:** no new players, every match plays out (at most
   `--drain-max`), its replay and report go out, then it exits.
 - **SIGHUP reloads** the certificate: an ACME renewal drops nobody.
-- `/health`, `/ready` (503 while draining, and the wire it speaks).
+- `/health`, `/ready` (503 while draining; the wire, players, capacity),
+  `/health.json` (everything counted since start).
 
 ```sh
 ci/deploy_server.sh            # on the box: a dry run; --go starts the idle slot, switches, drains the old

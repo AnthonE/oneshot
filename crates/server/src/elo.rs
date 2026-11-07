@@ -10,7 +10,9 @@
 //! Bans are the game's own list on Elo Pros (`meter/gamebans.py`): written
 //! with the same signature by `oneshot-review`, read by anyone.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -88,8 +90,82 @@ pub fn server_text(method: &str, path: &str, who: &str, at: u64, body: &[u8], no
 
 fn new_nonce() -> String {
     let mut b = [0u8; 16];
-    let _ = getrandom::fill(&mut b);
+    getrandom::fill(&mut b).expect("the OS gave no randomness for a nonce");
     crate::hex(&b)
+}
+
+/// Tries a signed POST gets ([`Elo::post_signed`]), and how long one may
+/// take.
+pub const TRIES: u32 = 5;
+pub const POST_TIMEOUT: Duration = Duration::from_secs(10);
+/// The longest a signed POST takes before it gives up: every try timing
+/// out, and the waits between them (1, 2, 4, 8 s).
+pub const RETRY_BUDGET: Duration = Duration::from_secs(TRIES as u64 * POST_TIMEOUT.as_secs() + (1 << (TRIES - 1)) - 1);
+/// Where, under the replays, a report Elo Pros didn't take is kept until
+/// `oneshot-review resend` sends it again.
+pub const UNREPORTED: &str = "unreported";
+
+/// A signed POST Elo Pros didn't take: where it went (without `/api`) and
+/// its body. It is signed afresh when it is sent again: a signature is
+/// only good for a few minutes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unsent {
+    pub path: String,
+    pub body: String,
+}
+
+impl Unsent {
+    pub fn to_json(&self) -> Vec<u8> {
+        serde_json::to_vec_pretty(&serde_json::json!({"path": self.path, "body": self.body})).unwrap_or_default()
+    }
+
+    pub fn from_json(b: &[u8]) -> Option<Unsent> {
+        let v: serde_json::Value = serde_json::from_slice(b).ok()?;
+        Some(Unsent {
+            path: v["path"].as_str()?.to_string(),
+            body: v["body"].as_str()?.to_string(),
+        })
+    }
+
+    /// Its file's name: what it is (`ratings`, `gamestats`) and the match
+    /// it reports, else its body's hash, so the same one saved twice is
+    /// one file.
+    pub fn file_name(&self) -> String {
+        let kind = self.path.split('/').find(|p| !p.is_empty()).unwrap_or("post");
+        let id = serde_json::from_str::<serde_json::Value>(&self.body)
+            .ok()
+            .and_then(|v| v["matches"][0]["id"].as_str().map(str::to_string))
+            .filter(|_| kind == "ratings")
+            .unwrap_or_else(|| sha256_hex(self.body.as_bytes())[..16].to_string());
+        let clean = |s: &str| -> String {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .take(80)
+                .collect()
+        };
+        format!("{}-{}.json", clean(kind), clean(&id))
+    }
+
+    /// Writes it whole into `dir`; returns where.
+    pub fn save(&self, dir: &Path) -> std::io::Result<PathBuf> {
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join(self.file_name());
+        let tmp = path.with_extension("part");
+        std::fs::write(&tmp, self.to_json())?;
+        std::fs::rename(&tmp, &path)?;
+        Ok(path)
+    }
+}
+
+/// How one signed POST went.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Posted {
+    /// Taken: the answer.
+    Taken(String),
+    /// Refused for good (a 4xx but 429): `"<code>: <text>"`.
+    Refused(String),
+    /// Not answered, or an error that may pass (5xx, 429).
+    Passing(String),
 }
 
 /// A match from Elo Pros' queue, as the server seats it.
@@ -348,6 +424,12 @@ pub struct Elo {
     skins: Mutex<HashMap<String, (Instant, Vec<String>)>>,
     floors: Mutex<HashMap<String, (Instant, Option<f64>)>>,
     friends: Mutex<HashMap<String, (Instant, Vec<FriendRow>)>>,
+    /// Where a signed POST that never got through is saved ([`UNREPORTED`]).
+    unreported: Option<PathBuf>,
+    /// The signed POSTs still being tried, so a drain that can't wait for
+    /// them saves them ([`Elo::save_pending`]).
+    pending: Mutex<BTreeMap<u64, Unsent>>,
+    next_pending: AtomicU64,
 }
 
 impl Elo {
@@ -357,13 +439,65 @@ impl Elo {
             slug: slug.into(),
             key,
             http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(10))
+                .timeout(POST_TIMEOUT)
                 .build()
                 .unwrap_or_default(),
             bans: Mutex::new(HashMap::new()),
             skins: Mutex::new(HashMap::new()),
             floors: Mutex::new(HashMap::new()),
             friends: Mutex::new(HashMap::new()),
+            unreported: None,
+            pending: Mutex::new(BTreeMap::new()),
+            next_pending: AtomicU64::new(0),
+        }
+    }
+
+    /// The same, saving a report or stats it couldn't send into `dir`
+    /// (`<replays>/unreported`), for `oneshot-review resend`.
+    pub fn saving_unsent_to(mut self, dir: Option<PathBuf>) -> Elo {
+        self.unreported = dir;
+        self
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Unsent>> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Saves every signed POST still being tried (a drain that can't wait
+    /// any longer) and forgets them: what was saved, where, and how many
+    /// were lost (no directory, or it couldn't be written).
+    pub fn save_pending(&self) -> (usize, usize, Option<PathBuf>) {
+        let mut p = self.pending();
+        let (mut saved, mut lost) = (0, 0);
+        for u in std::mem::take(&mut *p).into_values() {
+            match self.unreported.as_deref().map(|d| u.save(d)) {
+                Some(Ok(_)) => saved += 1,
+                Some(Err(e)) => {
+                    eprintln!("oneshot: {path} unsaved: {e}", path = u.path);
+                    lost += 1;
+                }
+                None => lost += 1,
+            }
+        }
+        (saved, lost, self.unreported.clone())
+    }
+
+    /// Takes back the file [`Elo::save_pending`] wrote for a POST that has
+    /// since got through.
+    fn forget_saved(&self, path: &str, body: &str) {
+        let Some(dir) = self.unreported.as_deref() else {
+            return;
+        };
+        let u = Unsent {
+            path: path.to_string(),
+            body: body.to_string(),
+        };
+        let at = dir.join(u.file_name());
+        if std::fs::remove_file(&at).is_ok() {
+            eprintln!(
+                "oneshot: {path} got through after the drain saved it: {} removed",
+                at.display()
+            );
         }
     }
 
@@ -620,34 +754,89 @@ impl Elo {
     }
 
     /// A POST signed with the server key, retrying what may be passing
-    /// (5xx, 429, no answer) five times, a second then doubling. `path` is
-    /// without `/api`. Another refusal comes back as `"<code>: <text>"`.
+    /// (5xx, 429, no answer) [`TRIES`] times, a second then doubling. `path`
+    /// is without `/api`. Another refusal comes back as `"<code>: <text>"`.
+    /// One that never got through is saved for `oneshot-review resend`
+    /// (with `saving_unsent_to`), and so is one a drain stops waiting for.
     async fn post_signed(&self, path: &str, body: String) -> Result<String, String> {
         let key = self.key.as_ref().ok_or("no server key: nothing is reported")?;
+        let held = self.next_pending.fetch_add(1, Ordering::Relaxed);
+        self.pending().insert(
+            held,
+            Unsent {
+                path: path.to_string(),
+                body: body.clone(),
+            },
+        );
         let mut wait = Duration::from_secs(1);
-        for _ in 0..5 {
-            let mut req = self
-                .http
-                .post(format!("{}/api{}", self.origin, path))
-                .header("Content-Type", "application/json")
-                .body(body.clone());
-            for (k, v) in key.headers("POST", path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
-                req = req.header(k, v);
-            }
-            match req.send().await {
-                Ok(res) if res.status().is_success() => return Ok(res.text().await.unwrap_or_default()),
-                Ok(res) if res.status().is_server_error() || res.status().as_u16() == 429 => {}
-                Ok(res) => {
-                    let code = res.status();
-                    let text = res.text().await.unwrap_or_default();
-                    return Err(format!("{code}: {text}"));
+        let mut last = String::new();
+        for attempt in 0..TRIES {
+            match self.post_once(key, path, &body).await {
+                Posted::Taken(text) => {
+                    // A drain that stopped waiting saved it meanwhile: it
+                    // got through after all, so `resend` mustn't post it
+                    // twice.
+                    if self.pending().remove(&held).is_none() {
+                        self.forget_saved(path, &body);
+                    }
+                    return Ok(text);
                 }
-                Err(_) => {}
+                Posted::Refused(e) => {
+                    self.pending().remove(&held);
+                    return Err(e);
+                }
+                Posted::Passing(e) => last = e,
             }
-            tokio::time::sleep(wait).await;
-            wait *= 2;
+            if attempt + 1 < TRIES {
+                tokio::time::sleep(wait).await;
+                wait *= 2;
+            }
         }
-        Err(format!("Elo Pros didn't take {path} after five tries"))
+        // Saved under the lock a drain saves under: never lost between.
+        let mut p = self.pending();
+        let saved = match (p.remove(&held), self.unreported.as_deref()) {
+            (None, _) => "saved by the drain".to_string(),
+            (Some(u), Some(dir)) => match u.save(dir) {
+                Ok(at) => format!("saved to {} (oneshot-review resend)", at.display()),
+                Err(e) => format!("not saved: {e}"),
+            },
+            (Some(_), None) => "not saved (no --replays)".to_string(),
+        };
+        drop(p);
+        Err(format!(
+            "Elo Pros didn't take {path} after {TRIES} tries ({last}); {saved}"
+        ))
+    }
+
+    /// One signed POST, no retry.
+    async fn post_once(&self, key: &ServerKey, path: &str, body: &str) -> Posted {
+        let mut req = self
+            .http
+            .post(format!("{}/api{}", self.origin, path))
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+        for (k, v) in key.headers("POST", path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
+            req = req.header(k, v);
+        }
+        match req.send().await {
+            Ok(res) if res.status().is_success() => Posted::Taken(res.text().await.unwrap_or_default()),
+            Ok(res) => {
+                let code = res.status();
+                let text = res.text().await.unwrap_or_default();
+                if code.is_server_error() || code.as_u16() == 429 {
+                    Posted::Passing(format!("{code}: {text}"))
+                } else {
+                    Posted::Refused(format!("{code}: {text}"))
+                }
+            }
+            Err(e) => Posted::Passing(format!("no answer: {e}")),
+        }
+    }
+
+    /// Sends a saved report or stats again, signed now, once.
+    pub async fn resend(&self, u: &Unsent) -> Result<Posted, String> {
+        let key = self.key.as_ref().ok_or("no server key: a report is signed with it")?;
+        Ok(self.post_once(key, &u.path, &u.body).await)
     }
 }
 
@@ -733,6 +922,33 @@ mod tests {
             items_urls(o, "oneshot", "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"),
             vec!["https://elopros.com/api/items/sol/of/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU".to_string()]
         );
+    }
+
+    #[test]
+    fn an_unsent_report_is_one_file_a_match_and_reads_back() {
+        let r = Report {
+            id: "os-00ab".into(),
+            ladder: "duel".into(),
+            sides: vec![(vec!["0xa".into()], 1), (vec!["0xb".into()], 2)],
+            replay_sha256: "00".into(),
+            salt_commit: "11".into(),
+        };
+        let u = Unsent {
+            path: "/ratings/oneshot/report".into(),
+            body: report_body(&r, true),
+        };
+        assert_eq!(u.file_name(), "ratings-os-00ab.json");
+        assert_eq!(Unsent::from_json(&u.to_json()), Some(u.clone()));
+        let s = Unsent {
+            path: "/gamestats/oneshot/report".into(),
+            body: "{\"reports\":[]}".into(),
+        };
+        assert!(s.file_name().starts_with("gamestats-") && s.file_name().len() == "gamestats-".len() + 16 + 5);
+        let dir = std::env::temp_dir().join(format!("oneshot-unsent-{}", std::process::id()));
+        let at = u.save(&dir).unwrap();
+        assert_eq!(Unsent::from_json(&std::fs::read(&at).unwrap()), Some(u));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(RETRY_BUDGET, Duration::from_secs(65));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|bigteam|0..6]
+//! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|cup|bigteam|ctf|watch|0..6|8|9]
 //! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics]
 //! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
@@ -167,19 +167,23 @@ fn run() -> Result<(), String> {
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().scope = flag("--scope");
         // Or works its gun at a wall (`tools/reel.sh`).
         app.world_mut().resource_mut::<oneshot_client::Autoplay>().drill = flag("--drill");
+        // For this run: the settings file keeps the player's own
+        // (`settings::run_as`).
         if let Some(n) = arg("--name") {
-            app.world_mut().resource_mut::<oneshot_client::settings::Player>().name =
-                oneshot_client::settings::Player::clean(&n);
+            oneshot_client::settings::run_as(app.world_mut(), |p| {
+                p.name = oneshot_client::settings::Player::clean(&n);
+            });
         }
         // What Triple T wears, for a picture: `--look skin,head,feet,emblem`.
         if let Some(l) = arg("--look") {
             let v: Vec<u16> = l.split(',').filter_map(|n| n.trim().parse().ok()).collect();
-            let mut p = app.world_mut().resource_mut::<oneshot_client::settings::Player>();
             let at = |i: usize| v.get(i).copied().unwrap_or(0);
-            p.skin = (at(0) as u8).min(proto::SKINS.len() as u8 - 1);
-            p.headwear = proto::gear_valid(&proto::HEADWEAR, at(1) as u8);
-            p.footwear = proto::gear_valid(&proto::FOOTWEAR, at(2) as u8);
-            p.emblem = proto::emblem_valid(at(3));
+            oneshot_client::settings::run_as(app.world_mut(), |p| {
+                p.skin = (at(0) as u8).min(proto::SKINS.len() as u8 - 1);
+                p.headwear = proto::gear_valid(&proto::HEADWEAR, at(1) as u8);
+                p.footwear = proto::gear_valid(&proto::FOOTWEAR, at(2) as u8);
+                p.emblem = proto::emblem_valid(at(3));
+            });
         }
         // What the wallet owns, for a picture of the armory with no server:
         // `--wardrobe skins,head,feet[,floor]`, each list a mask by id.
@@ -327,14 +331,23 @@ const HELP: &str = "oneshot: the desktop client
 
   oneshot                          the title screen; play on the public server ({PUBLIC})
   oneshot --server 127.0.0.1:8080  play on a local oneshot-server
-  --name NAME                      the name others see (the title's field)
-  --look SKIN,HEAD,FEET,EMBLEM     what you wear, by id (the armory's picks)
+  --name NAME                      the name others see, this run (the title's field;
+                                   the settings file keeps yours)
+  --look SKIN,HEAD,FEET,EMBLEM     what you wear this run, by id (the armory's picks)
+  --wardrobe SKINS,HEAD,FEET[,FLOOR]  what the wallet owns, each a mask by id, with
+                                   no server: for a picture of the armory
   --tab NAME                       the title opens on ARMORY (armory:emblem for a page of it),
                                    PARTY, FRIENDS or CHALLENGES
   --party CODE                     join the party with that code (its leader picks the game)
-  --mode MODE                      straight into a match: casual, ffa, gungame, bigteam;
-                                   duel and doubles are ranked, which needs an Elo Pros
-                                   sign-in (the web page)
+  --mode MODE                      straight into a match: casual, ffa, gungame, bigteam,
+                                   ctf; duel, doubles and cup are ranked, which needs an
+                                   Elo Pros sign-in (the web page); watch follows a public
+                                   match (--party CODE: that party's). Or 0 to 6, 8, 9
+  --autoplay [--scope|--drill]     a bot plays you, straight into a match (casual
+                                   unless --mode); --scope holds the scope, --drill
+                                   works its gun at a wall (tools/reel.sh)
+  --capsules                       everyone else as a capsule in their side's colour
+                                   (a software GPU can't skin a room of Triple Ts)
   --lite                           POTATO for this run (your own graphics are kept)
   --potato                         POTATO from now on (SETTINGS > GRAPHICS to change it)
   --quality NAME                   potato, low, medium or high, for this run only
@@ -343,6 +356,9 @@ const HELP: &str = "oneshot: the desktop client
   --menu, --settings               open the match on the Esc menu or the settings
                                    (--settings alone: over the title)
   --graphics                       the settings, on GRAPHICS
+  --fxdemo                         the effects staged in front of the camera, in a
+                                   match (look/fx/demo.rs); --fxstage N: its stage N
+  --knobs 'Layer.key=v;...'        effects retuned for this run (tools/fx.sh, REEL_KNOBS)
   --shot out.png [--shot-at S]     save one frame once the screen is there (its
                                    level built, its shaders compiled, nothing over
                                    it) and S seconds have passed (1), then exit 0;
@@ -355,7 +371,8 @@ const HELP: &str = "oneshot: the desktop client
                                    into ffmpeg (ci/film.sh shoot; crates/client/
                                    src/film/script.rs has the fields)
   --clip x.tape [--style S]        make an F9 tape's video beside it (S: wide,
-                                   pov, chase, mix, long); needs ffmpeg
+                                   pov, chase, mix, long); needs ffmpeg;
+                                   --max-height PX draws it no taller
   --scan x.tape [--every S]        what a tape holds, every S seconds (5)
 
 F12 saves a screenshot on any screen, into your pictures folder under
@@ -372,7 +389,7 @@ A slow machine (a software rasterizer) starts on POTATO by itself until you
 pick a graphics row.";
 
 #[cfg(not(target_arch = "wasm32"))]
-const MODES: &str = "casual, duel, doubles, ffa, gungame, bigteam, ctf, watch (or 0 to 6, 8, 9)";
+const MODES: &str = "casual, duel, doubles, ffa, gungame, cup, bigteam, ctf, watch (or 0 to 6, 8, 9)";
 
 /// A mode by name or number (proto's `MODE_*`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -386,11 +403,12 @@ fn mode(m: &str) -> Option<u8> {
         "cup" => proto::MODE_CUP,
         "bigteam" | "big-team" => proto::MODE_BIG_TEAM,
         "ctf" => proto::MODE_CTF,
+        "watch" => proto::MODE_WATCH,
         n => {
             return n
                 .parse()
                 .ok()
-                .filter(|&n| n <= proto::MODE_BIG_TEAM || n == proto::MODE_CTF)
+                .filter(|&n| n <= proto::MODE_BIG_TEAM || n == proto::MODE_CTF || n == proto::MODE_WATCH)
         }
     })
 }
@@ -403,6 +421,8 @@ mod tests {
         assert_eq!(super::mode("6"), Some(proto::MODE_BIG_TEAM));
         assert_eq!(super::mode("7"), None);
         assert_eq!(super::mode("ctf"), Some(proto::MODE_CTF));
+        assert_eq!(super::mode("watch"), Some(proto::MODE_WATCH));
+        assert_eq!(super::mode("9"), Some(proto::MODE_WATCH));
     }
 }
 

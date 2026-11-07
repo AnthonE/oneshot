@@ -22,8 +22,8 @@ Fireplace, engine-shim and Elo Pros.
 | `room` | a match with no transport: seats, input buffers, rewind, fog, snapshots, replays, the aim review (`watch.rs`) |
 | `server` | sessions, rooms (seated on the sim thread, stepped side by side on its pool, `--sim-threads`), the ranked queue, Elo Pros sign-in (`auth.rs`) and reports (`elo.rs`), the page; `oneshot-server`, `-replay`, `-review` |
 | `client-net` | the client's netcode: clock, prediction, interpolation (`core`), the session, the web and native transports |
-| `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/boot.js` finds the server, signs in and does the party's voice, `web/voice.js`). Its screens are Gates' style, on both: the title (`front.rs`: PLAY, PARTY, FRIENDS; connecting is its state, `door.rs`), the Esc menu, the settings; a pad moves on them (`pad.rs`). The party's lobby is held from the title on (`party.rs`). Its own workspace (`ci/client.sh`). Draws, never decides |
-| `mix`, `mix-worklet` | the game's sound mixer, no engine in it: the desktop plays it as a Bevy audio source, the browser runs it on its audio thread (`mix-worklet`, an AudioWorklet: `web/mix.js`, `web/mix-worklet.js`); `crates/client/src/sound` decides what it plays |
+| `client` | the Bevy client, desktop and the page (`crates/client/dist`; `web/boot.js` finds the server, signs in and does the party's voice, `web/voice.js`, both in `crates/client`). Its screens are Gates' style, on both: the title (`front.rs`: PLAY, ARMORY, PARTY, FRIENDS, CHALLENGES; connecting is its state, `door.rs`), the Esc menu, the settings; a pad moves on them (`pad.rs`). The party's lobby is held from the title on (`party.rs`). Its own workspace (`ci/client.sh`). Draws, never decides |
+| `mix`, `mix-worklet` | the game's sound mixer, no engine in it: the desktop plays it as a Bevy audio source, the browser runs it on its audio thread (`mix-worklet`, an AudioWorklet: `crates/client/web/mix.js`, `mix-worklet.js`); `crates/client/src/sound` decides what it plays |
 | `fx` | effects with no engine: the particle pool, sprite sheet, recipes and knobs, the fx stage's contract. **Vendored from Gates** (`tools/fx-sync.sh`) |
 | `tools/load` | `oneshot-load`: the load test, headless players on `client-net`'s native transport against a server, and its `/health.json` over the hold (`ops/README.md`) |
 | `maps/`, `tools/maps`, `tools/flow` | maps as `map.json`, compiled into `crates/sim/src/maps/`; `oneshot-flow` reads a map's flow |
@@ -53,7 +53,9 @@ Fireplace, engine-shim and Elo Pros.
 3. Commit with a short message. Push your branch.
 
 CI (`.github/workflows/ci.yml`) runs all of it on every PR: quick's checks,
-the crates' tests, parity, `ci/client.sh` and two e2e matches.
+the crates' tests, parity, `ci/client.sh`, e2e in Chromium (a match with
+the WebGPU module's smoke, Gun Game, three matches back to back, a party)
+and the desktop's title and a match (shown, not gated).
 
 **Merging main into a branch:** resolve the conflicts (keep both sides' intent),
 commit, push. Don't build or test; CI does. A minute, not twenty.
@@ -119,7 +121,7 @@ ci/client.sh                                         # the client: clippy, nativ
 ci/client.sh dev                                     # just the page, quickly (release, no fat LTO); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation
-node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions confirmed, a kill (E2E_WEBGPU=1: the WebGPU module too;
+node ci/e2e.mjs [150 4 2 | 150 6 3]                  # the title, a match: predictions noted, a kill (E2E_WEBGPU=1: the WebGPU module too;
                                                      #   E2E_AGAIN=2 … 60 0 0,7: matches back to back, each on another map)
 target/release/oneshot-load --page http://127.0.0.1:8080 --players 160 --mode big   # the load test: kept up or not (exit 1)
 node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a browser (… 30 0 0 0 fxdemo=1 for the demo;
@@ -133,7 +135,7 @@ tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one eff
 tools/reel.sh <gun>…                                 # a gun in the real game, first person, every frame, on this box's GPU → traces/reel/<gun>/ (REEL_KNOBS, REEL_REFILM, REEL_QUALITY)
 node tools/board.mjs look [--views a,b]              # the reference board: views beside refs and marks
 tools/hd.sh [view… | list]                           # a map's fixed views on this box's GPU in seconds → traces/hd/ (the hd skill)
-tools/ground.sh [sand|grass|gravel|rock|steel|tread] # the ground's photographs from Poly Haven, the bases' metal from ambientCG → crates/client/assets/textures
+tools/ground.sh [sand|grass|gravel|rock|steel|tread|stone] # the ground's photographs from Poly Haven, the bases' metal and stone from ambientCG → crates/client/assets/textures
 ci/native_shot.sh traces/x.png 'map=6&eye=…' | match 6 3   # a GPU shot of the desktop client in seconds (a pose, a match)
 tools/models/meshy_gen.py <name> [--image-only | --roll]   # a gun's mesh from Meshy, by its script's prompt → sources/meshy (credits)
 tools/models/build.sh [name…]                        # the guns' GLBs from tools/models/*.py (Blender 4.0, headless); `rocks`: the boulders

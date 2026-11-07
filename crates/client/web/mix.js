@@ -21,7 +21,9 @@ const HELD_MS = 1500;
 // What a browser counts as a person's gesture: any one may start a context.
 const GESTURES = ['pointerdown', 'pointerup', 'mousedown', 'touchend', 'keydown', 'click'];
 
-export function startMix(v) {
+// `v` versions what comes with the game (the theme), `mv` the mixer's own
+// pair, worklet and wasm (build.json's `mix`: it changes on its own).
+export function startMix(v, mv = v) {
   let ctx = null;
   let why = 'starting';
   let failed = false;
@@ -35,6 +37,7 @@ export function startMix(v) {
   const clips = [];
   const st = { installed: 0, failed: 0, sent: 0, errors: 0, mixer: null };
   const post = (m, transfer) => {
+    if (failed) return;
     if (node) node.port.postMessage(m, transfer);
     else {
       waiting.push([m, transfer]);
@@ -57,6 +60,9 @@ export function startMix(v) {
     why = `${what}${e ? `: ${String(e?.message ?? e)}` : ''}`;
     console.warn(`oneshot: no sound: ${why}`);
     bar(`NO SOUND: ${why.toUpperCase()}`);
+    // Nothing more goes to a mixer that isn't there.
+    clips.length = 0;
+    waiting.length = 0;
   };
   // The theme (assets/sound/music/intro.ogg): too long for the worklet's
   // bank, so the browser streams it itself, looping, at the level the game
@@ -85,8 +91,8 @@ export function startMix(v) {
   else if (!ctx.audioWorklet) fail('no AudioWorklet here (the page must be on https or localhost)');
   else {
     (async () => {
-      await ctx.audioWorklet.addModule(`mix-worklet.js${v}`);
-      const res = await fetch(`mix_worklet.wasm${v}`);
+      await ctx.audioWorklet.addModule(`mix-worklet.js${mv}`);
+      const res = await fetch(`mix_worklet.wasm${mv}`);
       if (!res.ok) throw new Error(`mix_worklet.wasm: HTTP ${res.status}`);
       const bytes = await res.arrayBuffer();
       node = new AudioWorkletNode(ctx, 'oneshot-mix', { numberOfInputs: 0, outputChannelCount: [2] });
@@ -95,7 +101,8 @@ export function startMix(v) {
         if (m.kind === 'stats') st.mixer = m.s;
         else if (m.kind === 'error') {
           st.errors++;
-          console.warn('oneshot: sound:', m.why);
+          if (m.fatal) fail('the mixer did not start', m.why);
+          else console.warn('oneshot: sound:', m.why);
         }
       };
       node.onprocessorerror = (e) => fail('the mixer stopped', e?.message ?? 'its processor threw');
@@ -131,6 +138,7 @@ export function startMix(v) {
           for (let i = 0; i < pcm.length; i++) pcm[i] += ch[i] / buf.numberOfChannels;
         }
         const m = { kind: 'install', id, rate: buf.sampleRate, pcm };
+        if (failed) return;
         if (node) node.port.postMessage(m, [pcm.buffer]);
         else clips.push([m, [pcm.buffer]]);
         st.installed++;

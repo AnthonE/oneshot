@@ -262,7 +262,17 @@ fn record(
     st: Res<crate::hud::HudState>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if rec.done || !link.0.live() || !link.0.session().ready {
+    if rec.done {
+        return;
+    }
+    if !link.0.live() || !link.0.session().ready {
+        // The match was left before its tape was written (the backdrop has
+        // taken its place): out, not waiting for one that will never come.
+        if rec.began.is_some() {
+            rec.done = true;
+            eprintln!("oneshot: --record: the match was left before it was recorded");
+            exit.write(AppExit::from_code(2));
+        }
         return;
     }
     let now = link.0.now_ms();

@@ -186,6 +186,7 @@ function sink(opts) {
      they are held here and fed in order as it drains. */
   const queue = [];
   let pumping = false;
+  let broke = null;
   async function pump() {
     if (pumping) return;
     pumping = true;
@@ -197,6 +198,9 @@ function sink(opts) {
         emit(queue.shift());
       }
     } catch (e) {
+      // What is left would never be fed: done() stops waiting on it.
+      broke = e;
+      queue.length = 0;
       fail(e.message || String(e));
     } finally {
       pumping = false;
@@ -215,10 +219,12 @@ function sink(opts) {
     },
     frame(i, n, rgba, dw, dh) {
       const img = new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength), dw, dh);
+      // Scaled as its own shot is (a later shot may come before it is fed).
+      const sc = scratch, scg = sg;
       queue.push((g, t) => {
-        if (scratch) {
-          sg.putImageData(img, 0, 0);
-          g.drawImage(scratch, 0, 0, w, h);
+        if (sc) {
+          scg.putImageData(img, 0, 0);
+          g.drawImage(sc, 0, 0, w, h);
         } else {
           g.putImageData(img, 0, 0);
         }
@@ -247,6 +253,7 @@ function sink(opts) {
         }
         await pump();
         while (queue.length || pumping) await new Promise((r) => setTimeout(r, 10));
+        if (broke) return;
         if (!encoder) throw new Error("no frames reached the encoder");
         await encoder.flush();
         if (encErr) throw encErr;

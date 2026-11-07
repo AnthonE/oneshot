@@ -190,23 +190,29 @@ pub async fn reload(eps: &[Arc<Endpoint<Server>>], cfg: &Config) -> Result<[u8; 
     }
     let identity = identity(cfg).await?;
     let hash = cert_hash(&identity)?;
-    for ep in eps {
+    // Every endpoint's config made before any is changed: one that can't be
+    // made leaves them all on the old certificate, never half on each.
+    let mut configs = Vec::with_capacity(eps.len());
+    for _ in eps {
         // The bind address is ignored without a rebind: the socket stays.
-        let config = server_config(
+        configs.push(server_config(
             ServerConfig::builder().with_bind_address(cfg.bind),
             identity.clone_identity(),
-        )?;
+        )?);
+    }
+    for (ep, config) in eps.iter().zip(configs) {
         ep.reload_config(config, false).map_err(|e| e.to_string())?;
     }
     Ok(hash)
 }
 
 /// What to do with a connection attempt, given how many connections the
-/// server holds (`busy`, handshakes included) and its `capacity` in players
-/// (docs/DESIGN.md §14, after Gates' accept loop): past four times capacity
-/// refuse outright; past twice, make an address that hasn't proved itself
-/// do so with a QUIC Retry first; otherwise take it (and past capacity the
-/// hello is answered "full").
+/// server holds (`busy`, handshakes included) and its `capacity` in
+/// connections (the accept loop passes [`CONNS_PER_PLAYER`] times the
+/// players it takes; docs/DESIGN.md §14, after Gates' accept loop): past
+/// four times capacity refuse outright; past twice, make an address that
+/// hasn't proved itself do so with a QUIC Retry first; otherwise take it
+/// (and past the players it takes the hello is answered "full").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Admit {
     Take,
@@ -396,10 +402,22 @@ pub(crate) async fn read_frame(r: &mut RecvStream) -> Option<Vec<u8>> {
     Some(body)
 }
 
+/// How a wait in Elo Pros' queue ended.
+enum Queued {
+    /// Matched: Elo Pros' match id and the server it was put on.
+    Matched(String, String),
+    /// Out of the queue without a match.
+    Out,
+    /// The client went (taken out of the queue).
+    Gone,
+    /// This server is going down (taken out): the page is told "full", and
+    /// queues again at the live slot.
+    Draining,
+}
+
 /// Waits in Elo Pros' queue with `players` (a party whole; its first
-/// wallet queues it) as `me`, telling the client how long, until matched
-/// (`Ok((match id, server))`), out (`Err`), or the client goes (`None`; it
-/// is taken out).
+/// wallet queues it) as `me`, telling the client how long, until matched,
+/// out, the client goes or the server drains.
 async fn wait_in_elo_queue(
     ctx: &Ctx,
     players: &[String],
@@ -408,31 +426,40 @@ async fn wait_in_elo_queue(
     ladder: &str,
     send: &mut wtransport::SendStream,
     recv: &mut RecvStream,
-) -> Option<Result<(String, String), ()>> {
+) -> Queued {
     use crate::eloqueue::{self, Waited};
-    let mut rx = ctx.waiters.wait(me);
+    enum End {
+        Waited(Waited),
+        Gone,
+        Draining,
+    }
+    let eloqueue::Wait { mut rx, id: mine } = ctx.waiters.wait(me);
     let queues = players.iter().map(|p| eloqueue::norm(p)).min() == Some(eloqueue::norm(me));
     if queues {
         let body = serde_json::json!({"op": "queue", "players": players, "ladder": ladder,
                                       "teams": 2, "size": queue::size(mode) / 2});
         if let Err(e) = ctx.elo.serve(&body).await {
             eprintln!("oneshot: Elo Pros' queue refused {me}: {e}");
-            ctx.waiters.done(me);
-            return Some(Err(()));
+            ctx.waiters.done(me, mine);
+            return Queued::Out;
         }
     }
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     // The newest wait to tell the client, plus one (0: nothing new).
     let told = std::sync::atomic::AtomicU64::new(0);
-    let waited = {
+    let end = {
         let wait = eloqueue::wait(&mut rx, |s| told.store(s + 1, Ordering::Relaxed));
         tokio::pin!(wait);
         loop {
+            // Going down: no match will be played here; the page moves.
+            if ctx.draining.load(Ordering::Relaxed) {
+                break End::Draining;
+            }
             tokio::select! {
-                w = &mut wait => break Some(w),
+                w = &mut wait => break End::Waited(w),
                 m = read_frame(recv) => {
                     if m.is_none() || matches!(m.and_then(|b| decode_msg(&b).ok()), Some(Msg::Bye)) {
-                        break None;
+                        break End::Gone;
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -448,28 +475,35 @@ async fn wait_in_elo_queue(
             }
         }
     };
-    ctx.waiters.done(me);
-    match waited {
-        Some(Waited::Matched { id, server }) => Some(Ok((id, server))),
-        Some(Waited::Out(why)) => {
+    // A newer wait of this wallet (a reload) holds its place now: what
+    // this one does next leaves that alone.
+    let ours = ctx.waiters.done(me, mine);
+    match end {
+        End::Waited(Waited::Matched { id, server }) => Queued::Matched(id, server),
+        End::Waited(Waited::Out(why)) => {
             if let Some(w) = why {
                 eprintln!("oneshot: {me} left Elo Pros' queue: {w}");
             }
-            Some(Err(()))
+            Queued::Out
         }
-        None => {
-            let _ = ctx
-                .elo
-                .serve(&serde_json::json!({"op": "unqueue", "players": [me]}))
-                .await;
-            None
+        End::Gone | End::Draining => {
+            if ours {
+                let _ = ctx
+                    .elo
+                    .serve(&serde_json::json!({"op": "unqueue", "players": [me]}))
+                    .await;
+            }
+            match end {
+                End::Gone => Queued::Gone,
+                _ => Queued::Draining,
+            }
         }
     }
 }
 
 /// Elo Pros put this player's match on another server: where, and the
 /// match, then goodbye.
-async fn moved(send: &mut wtransport::SendStream, addr: proto::ServerAddr, queued: proto::QueueMatch, _ctx: &Ctx) {
+async fn moved(send: &mut wtransport::SendStream, addr: proto::ServerAddr, queued: proto::QueueMatch) {
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     if let Ok(n) = proto::frame_msg(&Msg::Moved { addr, queued }, &mut f) {
         let _ = send.write_all(&f[..n]).await;
@@ -477,8 +511,13 @@ async fn moved(send: &mut wtransport::SendStream, addr: proto::ServerAddr, queue
     }
 }
 
+/// Turns the hello away, counted by its reason (`health.rs`).
 async fn refuse(send: &mut wtransport::SendStream, reason: u8, ctx: &Ctx) {
     ctx.health.refuse(reason);
+    say_refuse(send, reason).await;
+}
+
+async fn say_refuse(send: &mut wtransport::SendStream, reason: u8) {
     let mut f = [0u8; MAX_STREAM_MSG + LEN_PREFIX_BYTES];
     if let Ok(n) = proto::frame_msg(&Msg::Refuse { reason }, &mut f) {
         let _ = send.write_all(&f[..n]).await;
@@ -659,6 +698,9 @@ async fn session(
     let _playing = ctx.gate.play();
     // Who to count casual play for: the wallet, else the account itself.
     let player = who.as_ref().filter(|w| w.signed()).map(|w| w.id.clone());
+    // Who their party and friends see in a match while this session plays
+    // (`party::Parties::set_playing`); a watcher plays nothing.
+    let shown = player.clone().filter(|_| mode != MODE_WATCH);
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
@@ -697,7 +739,7 @@ async fn session(
                 }
                 let players = if party.len() > 1 { party } else { vec![wallet.clone()] };
                 match wait_in_elo_queue(&ctx, &players, &wallet, mode, ladder, &mut send, &mut recv).await {
-                    Some(Ok((id, server))) => {
+                    Queued::Matched(id, server) => {
                         let ours = |a: &str| {
                             let host = |a: &str| a.rsplit_once(':').map_or(a, |(h, _)| h).to_ascii_lowercase();
                             ctx.public_addr.as_deref().is_none_or(|p| host(p) == host(a))
@@ -707,13 +749,19 @@ async fn session(
                             return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
                         };
                         if !ours(&server) {
-                            return moved(&mut send, addr, q, &ctx).await;
+                            return moved(&mut send, addr, q).await;
                         }
                         queued = q;
                     }
-                    Some(Err(())) => return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await,
+                    Queued::Out => return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await,
+                    // Waited, then let go (as the sim lets its own queue
+                    // go): "full", and the page queues at the live slot.
+                    Queued::Draining => {
+                        ctx.health.let_go.fetch_add(1, Ordering::Relaxed);
+                        return say_refuse(&mut send, proto::REFUSE_FULL).await;
+                    }
                     // The player left while it waited.
-                    None => return,
+                    Queued::Gone => return,
                 }
             }
             // For a match Elo Pros' queue formed: seated with its sides, on
@@ -779,6 +827,10 @@ async fn session(
     // Counted as a join by the sim once it seats or queues it (`health.rs`).
     if to_sim.send(join).is_err() {
         return;
+    }
+    if let Some(id) = &shown {
+        let out = ctx.lobby.parties().set_playing(id, mode, session_id);
+        ctx.lobby.send(out);
     }
 
     // The writers: snapshots on their own, the newest waiting, if they fit,
@@ -895,6 +947,13 @@ async fn session(
     sample();
     let _ = to_sim.send(ToSim::Leave { session: session_id });
     writer.abort();
+    if let Some(id) = &shown {
+        let out = ctx
+            .lobby
+            .parties()
+            .set_playing(id, proto::party::PLAYING_NONE, session_id);
+        ctx.lobby.send(out);
+    }
     if behind {
         eprintln!(
             "oneshot: session {session_id} ({}) cut: too far behind on the stream",

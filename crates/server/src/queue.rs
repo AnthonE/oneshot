@@ -63,47 +63,31 @@ impl Queue {
     }
 
     fn form_duel(&mut self, now: Instant) -> Option<Vec<Vec<Entry>>> {
-        for mode in [MODE_DUEL] {
-            let need = size(mode);
-            let mut waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == mode).collect();
-            if waiting.len() < need {
-                continue;
-            }
-            waiting.sort_by_key(|e| e.since);
-            let anchor = waiting[0];
-            let waited = now.duration_since(anchor.since).as_secs_f64();
-            let window = WINDOW_BASE + WINDOW_GROW * waited;
-            let mut near: Vec<&Entry> = waiting[1..]
-                .iter()
-                .copied()
-                .filter(|e| (e.rating - anchor.rating).abs() <= window)
-                .collect();
-            if near.len() < need - 1 {
-                continue;
-            }
-            near.sort_by(|a, b| {
-                let da = (a.rating - anchor.rating).abs();
-                let db = (b.rating - anchor.rating).abs();
-                da.total_cmp(&db).then(a.since.cmp(&b.since))
-            });
-            let mut picked: Vec<u64> = vec![anchor.session];
-            picked.extend(near.iter().take(need - 1).map(|e| e.session));
-            let mut players: Vec<Entry> = picked.iter().filter_map(|&s| self.remove(s)).collect();
-            let sides = if mode == MODE_DOUBLES {
-                players.sort_by(|a, b| b.rating.total_cmp(&a.rating));
-                let (a, b, c, d) = (
-                    players[0].clone(),
-                    players[1].clone(),
-                    players[2].clone(),
-                    players[3].clone(),
-                );
-                vec![vec![a, d], vec![b, c]]
-            } else {
-                players.into_iter().map(|p| vec![p]).collect()
-            };
-            return Some(sides);
+        let need = size(MODE_DUEL);
+        let mut waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == MODE_DUEL).collect();
+        if waiting.len() < need {
+            return None;
         }
-        None
+        waiting.sort_by_key(|e| e.since);
+        let anchor = waiting[0];
+        let waited = now.duration_since(anchor.since).as_secs_f64();
+        let window = WINDOW_BASE + WINDOW_GROW * waited;
+        let mut near: Vec<&Entry> = waiting[1..]
+            .iter()
+            .copied()
+            .filter(|e| (e.rating - anchor.rating).abs() <= window)
+            .collect();
+        if near.len() < need - 1 {
+            return None;
+        }
+        near.sort_by(|a, b| {
+            let da = (a.rating - anchor.rating).abs();
+            let db = (b.rating - anchor.rating).abs();
+            da.total_cmp(&db).then(a.since.cmp(&b.since))
+        });
+        let mut picked: Vec<u64> = vec![anchor.session];
+        picked.extend(near.iter().take(need - 1).map(|e| e.session));
+        Some(picked.iter().filter_map(|&s| self.remove(s)).map(|p| vec![p]).collect())
     }
 
     /// Doubles by units: a player alone, or a party of two once both are
@@ -310,7 +294,9 @@ impl Gathers {
     }
 
     pub fn has_wallet(&self, w: &str) -> bool {
-        self.list.iter().any(|g| g.here.iter().any(|(_, e)| e.wallet == w))
+        self.list
+            .iter()
+            .any(|g| g.here.iter().any(|(_, e)| e.wallet.eq_ignore_ascii_case(w)))
     }
 
     /// `e` comes for match `id` (`sides` its wallets), on side `side`. A
@@ -333,18 +319,19 @@ impl Gathers {
         let old = g
             .here
             .iter()
-            .position(|(_, x)| x.wallet == e.wallet)
+            .position(|(_, x)| x.wallet.eq_ignore_ascii_case(&e.wallet))
             .map(|i| g.here.remove(i).1.session);
         g.here.push((side, e));
         old
     }
 
-    /// A session gone: out of whatever it waited for.
+    /// A session gone: out of whatever it waited for. A match left empty
+    /// still waits out its time from the first arrival (a player coming
+    /// and going never restarts it), then is called off.
     pub fn leave(&mut self, session: u64) {
         for g in &mut self.list {
             g.here.retain(|(_, e)| e.session != session);
         }
-        self.list.retain(|g| !g.here.is_empty());
     }
 
     /// Everyone in every gathered match, let go (a drain).
@@ -440,15 +427,22 @@ mod gather_tests {
         let due = g.due(t0 + Duration::from_secs(GATHER_S));
         assert_eq!(due.called_off.len(), 1);
         assert!(g.done("q-2"));
-        // Someone leaving takes them out.
+        // Someone leaving takes them out, but the match keeps its clock:
+        // back again, it is still called off when it would have been.
+        let sides = vec![vec!["0xaa".to_string()], vec!["0xbb".to_string()]];
+        g.arrive("q-3", sides.clone(), 0, entry(5, "0xaa"), t0);
+        g.leave(5);
+        assert!(!g.has_wallet("0xaa"));
         g.arrive(
             "q-3",
-            vec![vec!["0xaa".into()], vec!["0xbb".into()]],
+            sides,
             0,
-            entry(5, "0xaa"),
-            t0,
+            entry(6, "0xAA"),
+            t0 + Duration::from_secs(GATHER_S - 1),
         );
-        g.leave(5);
+        assert!(g.has_wallet("0xaa"));
+        let due = g.due(t0 + Duration::from_secs(GATHER_S));
+        assert_eq!(due.called_off.len(), 1);
         assert!(g.list.is_empty());
     }
 }

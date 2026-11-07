@@ -101,7 +101,7 @@ impl Caps {
     pub fn for_effects(e: Effects) -> Caps {
         let (glow, lights) = match e {
             Effects::High => (2048, 8),
-            Effects::Low => (512, 2),
+            Effects::Low => (512, LOW_LIGHTS),
         };
         Caps {
             glow,
@@ -110,7 +110,17 @@ impl Caps {
             lights,
         }
     }
+
+    /// Whether what flies (a rocket, a sticky) carries a light of its own:
+    /// only with more flash lights than EFFECTS LOW's, which keeps its few
+    /// for the blasts.
+    pub fn lights_in_flight(&self) -> bool {
+        self.lights > LOW_LIGHTS
+    }
 }
+
+/// EFFECTS LOW's flash lights.
+pub const LOW_LIGHTS: usize = 2;
 
 /// Flash lights spawned (the tier uses the first `Caps::lights`).
 const MAX_LIGHTS: usize = 8;

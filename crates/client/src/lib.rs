@@ -86,6 +86,9 @@ pub struct Look {
     /// [`Look::magnification`] at [`ZOOM_RATE`] (`view`). The view narrows
     /// by it and the mouse slows by it; 0 until the first frame (read as 1).
     mag: f32,
+    /// The link (`front::LinkGen`) and welcome, and whether our fighter was
+    /// alive last frame: a spawn turns us the way it faces (`face_spawn`).
+    lived: Option<((u32, u32), bool)>,
 }
 
 /// How fast a scope comes up and goes down: `1 − exp(−k·dt)` a frame
@@ -856,7 +859,9 @@ fn pump(
     scroll: Res<AccumulatedMouseScroll>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     (binds, settings): (Res<binds::Binds>, Res<settings::Settings>),
+    gen: Option<Res<front::LinkGen>>,
 ) {
+    face_spawn(&mut look, link.0.session(), gen.map_or(0, |g| g.0));
     // The mouse is ours only while held: on the web, the page's lock is the
     // truth (a lock asked for and not yet granted, or let go behind our
     // back, turns nothing and fires nothing).
@@ -874,7 +879,9 @@ fn pump(
         let turn = core::f32::consts::TAU / 65536.0;
         look.yaw = f.yaw as f32 * turn;
         look.pitch = f.pitch as f32 * turn;
+        // The wire says scoped, not how far: the first level (as a film).
         look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        look.level = look.zoom as u8;
         link.0.update(Input::default());
         return;
     }
@@ -986,6 +993,40 @@ fn pump(
         mz: mz as i8,
     };
     link.0.update(input);
+}
+
+/// How near a spawn point we must be, just alive, to be turned the way it
+/// faces, metres: a welcome to a match already under way finds us anywhere.
+const SPAWN_NEAR_M: f32 = 2.0;
+
+/// Our fighter just come alive (a respawn, or a new welcome): the mouse
+/// starts from the way the spawn faces. The sim takes our aim from our
+/// input every tick, so what we sent while dead would turn us straight
+/// back; the spawn's own heading is the map's (`World::respawn`), and our
+/// prediction re-ran those inputs, so `own()` alone only says where it is.
+fn face_spawn(look: &mut Look, s: &client_net::session::Session, gen: u32) {
+    if s.watch || !s.ready {
+        return;
+    }
+    let key = (gen, s.welcomes);
+    let (f, at) = s.core.own();
+    let was = look.lived.filter(|(k, _)| *k == key).is_some_and(|(_, a)| a);
+    look.lived = Some((key, f.alive));
+    if was || !f.alive {
+        return;
+    }
+    let turn = core::f32::consts::TAU / 65536.0;
+    let near = s
+        .core
+        .map
+        .spawns
+        .iter()
+        .map(|sp| ((sp.pos.x - at.x).hypot(sp.pos.z - at.z), sp))
+        .filter(|(d, _)| *d < SPAWN_NEAR_M)
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let (yaw, pitch) = near.map_or((f.yaw, f.pitch), |(_, sp)| (sp.yaw, 0));
+    look.yaw = yaw as f32 * turn;
+    look.pitch = pitch as f32 * turn;
 }
 
 /// How far inside a lunge's range the autopilot pulls a sword, metres.
@@ -1561,7 +1602,8 @@ pub(crate) fn view(
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
     let mut fov = look::rig::fov_tall(settings.fov);
     let at = Vec3::new(p.x, p.y, p.z);
-    let dead = !f.alive && link.0.session().ready;
+    // Dead in a seat: the title's backdrop has none (no death cam there).
+    let dead = f.seated && !f.alive && link.0.session().ready;
     if !dead {
         death.from = None;
     }
@@ -2028,8 +2070,9 @@ mod web_start {
         let door = super::door::Door::new(addr, hash, follow, signin, off);
         let mut app = super::game(door, o);
         super::look::gpu::hook_panics();
+        // `?name=`: this run's, the stored settings keeping the player's own.
         if !name.is_empty() {
-            app.world_mut().resource_mut::<super::settings::Player>().name = super::settings::Player::clean(&name);
+            super::settings::run_as(app.world_mut(), |p| p.name = super::settings::Player::clean(&name));
         }
         app.run();
     }

@@ -78,14 +78,25 @@ const bar = (share) => {
   window.__oneshotAsleep = () =>
     document.hidden || (performance.now() - shownAt < 5000 && shownAt - hiddenAt > 2000);
 }
+/* A JSON endpoint, or a line a player can read: a 404 or a 502 says so
+   rather than surfacing as a JSON SyntaxError. */
+async function getJson(url, what) {
+  let res;
+  try { res = await fetch(url); } catch (e) { throw new Error(`${what} didn't answer (${e?.message ?? e})`); }
+  if (!res.ok) throw new Error(`${what} didn't answer (HTTP ${res.status})`);
+  try { return await res.json(); } catch { throw new Error(`${what} answered with something that isn't JSON`); }
+}
 // Where the game's own endpoints are: beside the page in dev, the game
 // box when the page is published to elopros.com (ci/publish_web.sh
-// writes origin.json). Asked at once, so a report can go while the game
-// downloads, or after it failed to.
-const origin = fetch('origin.json')
-  .then((o) => (o.ok ? o.json() : {}))
+// writes origin.json). oneshot-server answers origin.json itself (`{}`)
+// when its page has none (server/src/http.rs), so one that doesn't
+// answer is a published page missing it: an error, never a quiet guess
+// at the page's own origin. Asked at once, so a report can go while the
+// game downloads, or after it failed to.
+const origin = getJson('origin.json', "the page's origin.json")
   .then((o) => o.server ?? '')
-  .catch(() => '');
+  .catch((e) => { throw new Error(`The page can't find the game: ${e.message}`); });
+origin.catch(() => { /* said where it's awaited */ });
 // The splash goes once the game has drawn a few frames.
 const shown = () => {
   if ((window.__oneshot?.frames ?? 0) > 3) { boot.classList.add('gone'); return; }
@@ -134,6 +145,10 @@ const gpuProbe = (async () => {
 })();
 let mods = null;
 let buildInfo = null;
+// The loaded module's `?v=` (`load`): what comes with the game is asked
+// for by it (mix.js's theme, voice.js's worklet), so a cache can't keep an
+// old one past a publish.
+let pageV = '';
 const key = () => String(mods?.webgpu?.sha256 ?? mods?.webgpu?.wasm_bytes ?? '');
 async function pickModule() {
   const has = (k) => (mods ? !!mods[k] : k === 'webgl2');
@@ -164,7 +179,8 @@ async function load(gfx) {
   const v = sha ? `?v=${sha.slice(0, 12)}` : '';
   // The module's fetch goes out before the glue's import: it is the
   // long one.
-  downloading = true;
+  const mine = ++downloads;
+  downloading = mine;
   const res = fetch(new URL(m.wasm + v, location.href)).then((r) => counted(r, mods?.[gfx]?.wasm_bytes));
   res.catch(() => { /* awaited by the glue */ });
   let glue;
@@ -172,12 +188,15 @@ async function load(gfx) {
     glue = await import(m.js + v);
     await glue.default({ module_or_path: res });
   } finally {
-    downloading = false;
+    if (downloading === mine) downloading = 0;
     bar(null);
   }
   window.__oneshotGfx = gfx;
-  // The game's sound (mix.js), once, before the game starts asking for it.
-  if (!window.__oneshotMix) startMix(v);
+  pageV = v;
+  // The game's sound (mix.js), once, before the game starts asking for it;
+  // the mixer by its own hash (build.json's `mix`, ci/client.sh).
+  const mixSha = buildInfo?.mix?.sha256;
+  if (!window.__oneshotMix) startMix(v, mixSha ? `?v=${mixSha.slice(0, 12)}` : '');
   return glue;
 }
 /* The download, on the splash: "Downloading the game · 13 / 30 MB".
@@ -186,8 +205,12 @@ async function load(gfx) {
    browser's code cache still keys to its URL. The whole is the build's
    (build.json): a gzipped page's Content-Length isn't the module's size
    (Gates' app.js `counted`). */
-let downloading = false;
+// Which download the splash is on (0: none): each load's own number, so a
+// fallen-back one's late chunks never pass for the next's.
+let downloading = 0;
+let downloads = 0;
 function counted(res, whole) {
+  const mine = downloading;
   if (!res.ok) throw new Error(`The game didn't download (HTTP ${res.status}). Reload to try again`);
   let want = Number(whole) || 0;
   if (!want && !res.headers.get('content-encoding')) want = Number(res.headers.get('content-length')) || 0;
@@ -197,7 +220,7 @@ function counted(res, whole) {
   // Only while it's the download the splash is on (a late chunk's count
   // never paints over what came after).
   const paint = (got) => {
-    if (!downloading) return;
+    if (downloading !== mine) return;
     say(`Downloading the game · ${mb(got)}${want ? ` / ${mb(want)}` : ''} MB`);
     bar(want ? got / want : null);
   };
@@ -212,7 +235,7 @@ function counted(res, whole) {
       const now = performance.now();
       if (now - last > 100) { last = now; paint(got); }
     }
-    if (!downloading) return;
+    if (downloading !== mine) return;
     bar(null);
     say('Starting the game');
   })().catch(() => { /* the original's failure is the glue's to say */ });
@@ -334,7 +357,9 @@ async function reportDoc(kind, text) {
 /* A crash goes as a beacon (it survives the page going); a player's
    report as a request, so the page can say it went. The status, or 0. */
 async function sendReport(doc, beacon) {
-  const url = `${await origin}bugs`;
+  let at;
+  try { at = await origin; } catch { return 0; }
+  const url = `${at}bugs`;
   const body = JSON.stringify(doc);
   if (beacon && navigator.sendBeacon) return navigator.sendBeacon(url, body) ? 204 : 0;
   try {
@@ -510,7 +535,22 @@ window.addEventListener('message', (ev) => {
     clipSay(`The video could not be made: ${m.why}`, true);
   }
 });
-for (const b of $c('clip-styles').querySelectorAll('button')) b.addEventListener('click', () => clipMake(b.dataset.style));
+/* The style buttons, from the game's own list (clip.rs STYLES, the
+   `clip_styles` export), so the card can't offer one the game hasn't or
+   miss one it has. */
+const CLIP_WORDS = { wide: 'WIDE', pov: 'VERTICAL', chase: 'CHASE', mix: 'MIX', long: 'LONG' };
+function clipButtons(styles) {
+  const row = $c('clip-styles');
+  row.replaceChildren(...styles.map((s) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.style = s;
+    b.textContent = CLIP_WORDS[s] ?? s.toUpperCase();
+    b.classList.toggle('on', s === clipUi.style);
+    b.addEventListener('click', () => clipMake(s));
+    return b;
+  }));
+}
 $c('clip-close').addEventListener('click', () => { clipReset(); clipUi.tape = null; $c('clip').hidden = true; });
 
 let base = '';
@@ -532,12 +572,16 @@ try {
     // leaves the WebGL2 one.
     if (gfx !== 'webgpu' || !(mods?.webgl2)) throw err;
     console.warn('oneshot: the WebGPU module failed to load, loading WebGL2', err);
+    // Remembered against this build, as gpuFallBack does: the next
+    // visit goes straight to WebGL2.
+    try { localStorage.setItem(GPU_FAILED, key()); } catch { /* private window */ }
     gfx = 'webgl2';
     why = 'the WebGPU module did not load';
     showGfx(gfx, why, why);
     glue = await load(gfx);
   }
   const { launch, pose } = glue;
+  clipButtons(glue.clip_styles());
   if (params.has('pose')) {
     // No server: one fighter for a picture (ci/look.mjs). Gone, as
     // the splash is once a game is drawing, so a refused frame later
@@ -550,11 +594,11 @@ try {
   }
   base = await origin;
   say('Finding the server');
-  const info = await (await fetch(`${base}server.json`)).json();
+  const info = await getJson(`${base}server.json`, 'The server');
   // A server on its way down: the live one, if it is now another.
   const follow = async () => {
     try {
-      const now = await (await fetch(`${base}server.json`)).json();
+      const now = await getJson(`${base}server.json`, 'The server');
       return now.addr && now.addr !== info.addr ? [now.addr, now.hash ?? ''] : null;
     } catch { return null; }
   };
@@ -589,13 +633,25 @@ async function setupSignIn(info) {
   if (!info.signin || !sdk()) {
     return { fn: null, off: info.signin ? 'Sign-in is unavailable right now' : 'Ranked is off on this server' };
   }
+  // The last /nonce's failure is kept, so a click says why (the game
+  // shows "Sign-in failed: …", door.rs) rather than a popup with no nonce.
   let nonce = '';
+  let nonceErr = null;
   const fresh = async () => {
-    try { nonce = (await (await fetch(`${base}nonce`)).json()).nonce; } catch { nonce = ''; }
+    try {
+      const n = (await getJson(`${base}nonce`, 'The server')).nonce;
+      if (!n) throw new Error('The server sent no nonce');
+      nonce = n;
+      nonceErr = null;
+    } catch (e) {
+      nonce = '';
+      nonceErr = e;
+    }
   };
   await fresh();
   const fn = async () => {
     try {
+      if (nonceErr) throw nonceErr;
       const res = await sdk().popup({ game: info.game, nonce });
       const text = atob(res.pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
       const wallet = /wallet: (0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/.exec(text)?.[1] ?? null;
@@ -610,27 +666,30 @@ async function setupSignIn(info) {
 /** The party's voice, for the game (party.rs): it holds the party's session
  * and hands each member's frame here to be played; the microphone's frames
  * go back to it through `voice_up`. The game asks for the mic with
- * `toggle()`; V held talks (or open mic, past a level gate). */
+ * `toggle()` (`why()` says what stopped it), names its TALK bind with
+ * `setTalk` (held, it talks; or open mic, past a level gate) and its volume
+ * with `setVolume`. */
 function voiceBridge(glue) {
-  const voice = new Voice((seq, end, bytes) => glue.voice_up(seq, end, bytes), () => {});
+  const voice = new Voice((seq, end, bytes) => glue.voice_up(seq, end, bytes), () => {}, pageV);
   window.__oneshotVoice = {
-    works: voiceWorks(),
     hear: (tag, seq, flags, bytes, key) => voice.hear(tag, seq, flags, bytes, key),
     toggle: async () => {
       try {
-        if (voice.mic) voice.micOff();
+        if (voice.mic || voice.opening) voice.micOff();
         else await voice.micOn();
       } catch (e) {
         console.warn('oneshot: the microphone did not open', e);
       }
     },
     state: () => (!voiceWorks() ? 'none' : !voice.mic ? 'off' : voice.onAir ? 'talking' : 'on'),
+    why: () => voice.why ?? '',
     mode: () => voice.mode,
     setMode: (m) => voice.setMode(m),
+    setTalk: (binds) => voice.setTalk(String(binds).split(' ').filter(Boolean)),
+    setVolume: (v) => voice.setVolume(Number(v)),
     muted: (k) => voice.muted(k),
     toggleMute: (k) => voice.toggleMute(k),
     forget: (tags) => voice.forget(Array.from(tags)),
-    asleep: () => voice.asleep,
     heard: () => voice.heard,
     sent: () => voice.sent,
   };
@@ -642,17 +701,23 @@ function voiceBridge(glue) {
     navigator.clipboard?.writeText(u.toString()).catch(() => {});
     return u.toString();
   };
-  // A browser starts sound only after a gesture: try now, and on the first
-  // one, with the mic back on if it was last time.
+  // A browser starts sound only after a gesture: try now, and on every
+  // one while it sleeps (suspended again later too: a device change, a
+  // phone's call), with the mic back on the first time if it was last time.
   voice.wake();
+  let restored = false;
   const wake = async () => {
+    if (voice.ctx?.state === 'running' && restored) return;
     await voice.wake();
+    if (restored) return;
+    restored = true;
     try {
       if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) await voice.micOn();
     } catch { /* asked again on MIC */ }
   };
-  addEventListener('pointerdown', wake, { once: true, capture: true });
-  addEventListener('keydown', wake, { once: true, capture: true });
+  addEventListener('pointerdown', wake, { capture: true });
+  addEventListener('keydown', wake, { capture: true });
+  addEventListener('visibilitychange', () => { if (!document.hidden && voice.ctx) voice.wake(); });
   // The browser test's fake microphone (?mic=open): on at once.
   if (params.get('mic') === 'open') {
     voice.setMode('open');

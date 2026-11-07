@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 29;
+pub const PROTO_VER: u16 = 30;
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -41,6 +41,11 @@ pub const MAX_SNAP_DROPS: usize = 8;
 /// Bits for a seat number on the wire: a remote's slot, a projectile's
 /// owner, an event's two fighters.
 pub const SLOT_BITS: u32 = 4;
+/// An event's `a` or `b` that is no fighter (`sim::world::NO_WINNER`): a
+/// flag gone home on its own, a vehicle lost to nobody. On the wire, one
+/// bit says whether a seat follows; any value past the seats goes as
+/// this.
+pub const NOBODY: u8 = 255;
 /// A stream message's ceiling: a hello with an Elo Pros pass is the
 /// largest.
 pub const MAX_STREAM_MSG: usize = 1024;
@@ -111,10 +116,8 @@ fn r_v3c(r: &mut BitReader) -> R<V3> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputMsg {
-    /// The newest snapshot tick this client has, and which of the 32 before
-    /// it it also has.
+    /// The newest snapshot tick this client has.
     pub ack_tick: u32,
-    pub ack_bits: u32,
     /// How far behind its newest snapshot it draws others, in ticks. The
     /// server clamps it; it never decides a rewind on its own.
     pub playout: u8,
@@ -128,7 +131,6 @@ impl Default for InputMsg {
     fn default() -> Self {
         InputMsg {
             ack_tick: 0,
-            ack_bits: 0,
             playout: 0,
             first_seq: 0,
             n: 0,
@@ -150,7 +152,6 @@ pub fn encode_input(m: &InputMsg, out: &mut [u8]) -> R<usize> {
     let mut w = BitWriter::new(out);
     w.write(KIND_INPUT, 4)?;
     w.write(m.ack_tick, 32)?;
-    w.write(m.ack_bits, 32)?;
     w.write(m.playout as u32, 8)?;
     w.write(m.first_seq, 32)?;
     w.write(m.n as u32, 5)?;
@@ -171,7 +172,6 @@ pub fn decode_input(buf: &[u8]) -> R<InputMsg> {
     }
     let mut m = InputMsg {
         ack_tick: r.read(32)?,
-        ack_bits: r.read(32)?,
         playout: r.read(8)? as u8,
         first_seq: r.read(32)?,
         n: r.read(5)? as u8,
@@ -281,6 +281,7 @@ pub struct EventState {
     /// one that carried it is acked, and the client keeps the first.
     pub id: u16,
     pub kind: u8,
+    /// Its two fighters' seats (`sim::events::Kind`), or [`NOBODY`].
     pub a: u8,
     pub b: u8,
     pub part: u8,
@@ -433,12 +434,30 @@ impl Pack for ProjState {
     }
 }
 
+/// An event's fighter: a seat, or [`NOBODY`].
+fn w_who(w: &mut BitWriter, q: u8) -> R<()> {
+    let seat = (q as usize) < MAX_FIGHTERS;
+    w.write_bit(seat)?;
+    if seat {
+        w.write(q as u32, SLOT_BITS)?;
+    }
+    Ok(())
+}
+
+fn r_who(r: &mut BitReader) -> R<u8> {
+    Ok(if r.read_bit()? {
+        r.read(SLOT_BITS)? as u8
+    } else {
+        NOBODY
+    })
+}
+
 impl Pack for EventState {
     fn pack(&self, w: &mut BitWriter) -> R<()> {
         w.write(self.id as u32, 16)?;
         w.write(self.kind as u32, 4)?;
-        w.write(self.a as u32, SLOT_BITS)?;
-        w.write(self.b as u32, SLOT_BITS)?;
+        w_who(w, self.a)?;
+        w_who(w, self.b)?;
         w.write(self.part as u32, 3)?;
         w.write(self.c as u32, 16)?;
         w_v3c(w, self.pos)?;
@@ -448,8 +467,8 @@ impl Pack for EventState {
         Ok(EventState {
             id: r.read(16)? as u16,
             kind: r.read(4)? as u8,
-            a: r.read(SLOT_BITS)? as u8,
-            b: r.read(SLOT_BITS)? as u8,
+            a: r_who(r)?,
+            b: r_who(r)?,
             part: r.read(3)? as u8,
             c: r.read(16)? as u16,
             pos: r_v3c(r)?,
@@ -596,7 +615,9 @@ pub struct Snapshot {
     pub tick: u32,
     /// This client's last input seq the server ran.
     pub last_seq: u32,
-    /// Frames of this client's waiting in the server's buffer.
+    /// The fewest frames of this client's waiting in the server's buffer
+    /// over the ticks since the last snapshot (−1: a tick ran dry), what
+    /// its clock steers on (`room::ClientNet::take_low`).
     pub depth: i8,
     /// This client's own fighter, exactly: what reconciliation adopts.
     pub own: Fighter,
@@ -1835,7 +1856,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
     Ok(w.finish())
 }
 
-/// A pass or a ticket: printable ASCII, counted.
+/// A queue's match id: [`QueueMatch`]'s characters, counted.
 fn r_queue_match(r: &mut BitReader) -> R<QueueMatch> {
     let len = r.read(QUEUE_MATCH_LEN_BITS)? as usize;
     if len > MAX_QUEUE_MATCH {
@@ -1852,6 +1873,7 @@ fn r_queue_match(r: &mut BitReader) -> R<QueueMatch> {
     Ok(q)
 }
 
+/// A pass or a ticket: printable ASCII, counted.
 fn w_pass(w: &mut BitWriter, p: &Pass) -> R<()> {
     w.write(p.len as u32, 10)?;
     for &b in &p.bytes[..p.len as usize] {

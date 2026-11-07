@@ -7,8 +7,8 @@
 //!
 //! Format, little-endian: `OSR4`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
-//! gun game, friendly fire, capture the flag), u8 map; then records: `S` slot team (a seat),
-//! `U` slot (an unseat), `T` u16 changed-input mask, inputs, u16
+//! gun game, friendly fire, capture the flag), u8 map; then records: `S`
+//! slot team (a seat), `T` u16 changed-input mask, inputs, u16
 //! changed-rewind mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16
 //! scores (the end).
 
@@ -72,10 +72,6 @@ impl Recorder {
 
     pub fn seat(&mut self, slot: usize, team: u8) {
         self.buf.extend_from_slice(&[b'S', slot as u8, team]);
-    }
-
-    pub fn unseat(&mut self, slot: usize) {
-        self.buf.extend_from_slice(&[b'U', slot as u8]);
     }
 
     /// One `World::step`'s arguments.
@@ -208,13 +204,6 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
                 }
                 w.seat(s, t);
             }
-            b'U' => {
-                let s = r.u8()? as usize;
-                if s >= MAX_FIGHTERS {
-                    return Err("a seat past the last".into());
-                }
-                w.unseat(s);
-            }
             b'T' => {
                 let mask = r.u16()?;
                 for (s, i) in inputs.iter_mut().enumerate() {
@@ -311,7 +300,6 @@ mod tests {
         while bytes[at] != b'E' {
             match bytes[at] {
                 b'S' => at += 3,
-                b'U' => at += 2,
                 b'T' => {
                     let mask = u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]);
                     at += 3;

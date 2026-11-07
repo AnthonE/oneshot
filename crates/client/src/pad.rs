@@ -6,15 +6,17 @@
 //! frame, right after the UI's own focus pass (`UiSystems::Focus`).
 //!
 //! A screen built again under the focus (they rebuild when anything on them
-//! moves) keeps it on the button nearest where it was. The mouse takes over
-//! the moment it moves.
+//! moves) keeps it on the button nearest where it was. A focus clipped out
+//! of a scrolling pane (the settings', the title's rows) scrolls it into
+//! view; the screen keeps its own scroll from the pane's (`options.rs`,
+//! `front.rs`). The mouse takes over the moment it moves.
 //!
 //! Gamepads come from gilrs: always in a browser (its Gamepad API), on the
 //! desktop with the `pad` feature (libudev on Linux).
 
 use bevy::input::gamepad::{Gamepad, GamepadButton};
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform, UiSystems};
+use bevy::ui::{ComputedNode, OverflowAxis, UiGlobalTransform, UiSystems};
 use bevy::window::CursorMoved;
 
 use crate::Screen;
@@ -40,8 +42,54 @@ struct Pad {
     esc: bool,
 }
 
+/// The button the pad pressed this frame: a press with no mouse button
+/// down, for a screen that asks which button did it (a key cell, which
+/// starts on a left click and nothing else of the mouse's).
+#[derive(Resource, Default)]
+pub struct PadPressed(pub Option<Entity>);
+
+/// A scrolling pane, its scroll as set and as laid out.
+type Panes<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut ScrollPosition,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static Node,
+    ),
+>;
+
+/// The nearest pane over `e` that scrolls up and down, scrolled so the
+/// `top`..`bottom` (physical px, on screen) is in it.
+fn into_view(e: Entity, top: f32, bottom: f32, parents: &Query<&ChildOf>, panes: &mut Panes) {
+    let mut at = e;
+    while let Ok(c) = parents.get(at) {
+        at = c.parent();
+        let Ok((mut sp, n, t, node)) = panes.get_mut(at) else {
+            continue;
+        };
+        if node.overflow.y != OverflowAxis::Scroll {
+            continue;
+        }
+        let shown = n.content_box();
+        let (lo, hi) = (t.translation.y + shown.min.y, t.translation.y + shown.max.y);
+        let by = if top < lo {
+            top - lo
+        } else if bottom > hi {
+            bottom - hi
+        } else {
+            return;
+        };
+        let most = (n.content_size.y - n.size.y + n.scrollbar_size.y).max(0.0);
+        sp.y = (n.scroll_position.y + by).clamp(0.0, most) * n.inverse_scale_factor;
+        return;
+    }
+}
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<Pad>()
+        .init_resource::<PadPressed>()
         .add_systems(PreUpdate, nav.after(UiSystems::Focus));
 }
 
@@ -97,6 +145,9 @@ fn nav(
     screen: Res<State<Screen>>,
     time: Res<Time<Real>>,
     mut pad: ResMut<Pad>,
+    mut pad_pressed: ResMut<PadPressed>,
+    parents: Query<&ChildOf>,
+    mut panes: Panes,
     mut buttons: Query<
         (
             Entity,
@@ -114,6 +165,9 @@ fn nav(
         if let Ok((_, mut i, ..)) = buttons.get_mut(e) {
             i.set_if_neq(Interaction::Hovered);
         }
+    }
+    if pad_pressed.0.is_some() {
+        pad_pressed.0 = None;
     }
     if moved.read().count() > 0 || mouse.get_just_pressed().next().is_some() {
         pad.on = false;
@@ -182,12 +236,23 @@ fn nav(
                 i.set_if_neq(Interaction::None);
             }
         }
+        if let Ok((_, _, n, t, _)) = buttons.get(focus) {
+            let half = n.size().y / 2.0;
+            into_view(
+                focus,
+                t.translation.y - half,
+                t.translation.y + half,
+                &parents,
+                &mut panes,
+            );
+        }
     }
     pad.focus = Some(focus);
     if let Ok((_, mut i, ..)) = buttons.get_mut(focus) {
         if press {
             *i = Interaction::Pressed;
             pad.pressed = Some(focus);
+            pad_pressed.0 = Some(focus);
         } else {
             i.set_if_neq(Interaction::Hovered);
         }

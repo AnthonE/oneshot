@@ -22,7 +22,7 @@ differences a ranked game needs:
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
 | `online.json`, `status.json` | `https://game.elopros.com/oneshot/…` | either slot, for both: each writes its roster to `oneshot-data/online/` (`--roster-dir`) |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`, `unreported/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -39,11 +39,15 @@ the checkout, and never the other slot's.
    the same sign-in (both slots take each other's nonces: one `nonce.key`).
    Players already in a match on `a` finish it; ranked players waiting in
    `a`'s queue are let go and the page moves them to `b`'s.
-5. `a` exits once its last match is over (at most `--drain-max`, 15 minutes).
+5. `a` exits once its last match is over (at most `--drain-max`, 15 minutes)
+   and its reports have gone out (at most 90 s more; any still unanswered
+   are saved for `oneshot-review resend`). A cup there starts no new round:
+   it ends at its standings once its heats in play are done.
 
 If `b` doesn't come up, nothing is switched: players stay on `a`. Deploying
 again within 15 minutes would land on the slot still draining; the script
-stops and says so (`--cut` ends those matches).
+stops and says so (`--cut` ends those matches: it sends that slot SIGINT,
+which exits at once, before starting the new build there).
 
 ## The first time, on the box
 
@@ -116,9 +120,20 @@ renamed or removed; dropping it archives it on their profile.
 - **Renewal:** certbot runs the hook; it copies and `systemctl reload`s every
   running slot (SIGHUP). Nobody is dropped. `journalctl -u 'oneshot@*' | grep certificate`.
 - **Logs:** `journalctl -u 'oneshot@*' -f`: reports and stats sent, drains, reloads.
-- **The service file** changed (a new flag)? `sudo cp 'ops/oneshot@.service' /etc/systemd/system/ && sudo systemctl daemon-reload`
-  before the deploy; the nginx file is staged by the deploy, then
+- **Unreported results:** a rating or stats report Elo Pros didn't take
+  after five tries (or that a drain stopped waiting for) is saved in
+  `replays/unreported/` and the journal says so (`saved to …`, `drain: N
+  report(s) unanswered`). Once Elo Pros answers again:
+  `oneshot-review --replays /home/master/oneshot-data/replays --elo-key
+  /home/master/oneshot-data/server.pem --elo-key-id eu-1 resend` signs each
+  afresh, posts it and removes the ones taken; one refused (a 4xx) is kept
+  with why: remove it once Elo Pros has it.
+- **The service file** changed (a new flag)? The deploy installs it (step 3,
+  with `daemon-reload`); the nginx file is staged by the deploy, then
   `sudo nginx -t && sudo systemctl reload nginx`.
+- **Cut a drain now:** `sudo systemctl kill -s SIGINT oneshot@<slot>`; its
+  matches end and the reports still unsent are saved for `oneshot-review
+  resend`.
 - **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD-<port>.jsonl`
   (one file per slot per day), one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
   carries the panic's line; any report the build, browser, GPU, the match
@@ -147,7 +162,10 @@ renamed or removed; dropping it archives it on their profile.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo
-  Pros, signed with the server key.
+  Pros, signed with the server key. Before a ban,
+  `/home/master/oneshot-deploy/<slot>/oneshot-replay replays/<id>.osr`
+  re-runs the match and checks its ticks, hash and score (exit 1 if it
+  doesn't replay).
 
 ## More than one box
 
@@ -171,7 +189,9 @@ need none of this: any box with a seat will do.
 Other knobs on `ExecStart`: `--endpoints N` (N UDP ports, `--bind`'s and
 every `--endpoint-step` after, each open in both firewalls), `--net-nice`
 (the network threads under the sim's, 5 by default), `--big-snapshot-hz`
-`--no-delta` and `--no-far-rates` (snapshots: leave them at their defaults unless a load test says otherwise).
+`--no-delta` and `--no-far-rates` (snapshots: leave them at their defaults unless a load test says otherwise),
+`--sim-threads N` (the threads rooms step on: 0, the default, one a core; 1
+the sim thread alone).
 
 ## Backups
 

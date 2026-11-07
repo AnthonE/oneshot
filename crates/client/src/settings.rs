@@ -64,9 +64,12 @@ pub struct Settings {
     /// The field of view, degrees across a 16:9 screen, unscoped (a scope
     /// divides it); drawn at its height on any screen (`rig::fov_tall`).
     pub fov: f32,
-    /// Every sound, and the game's own (shots, steps, hits), 0 to 1.
+    /// Every sound, and the game's own (shots, steps, hits), 0 to 1. The
+    /// announcer and the menus are under the master alone.
     pub master: f32,
     pub effects: f32,
+    /// The party's voice (the page's, `web/voice.js`), under the master.
+    pub voice: f32,
     /// The preset last picked: what the QUALITY row steps from while the
     /// rows are CUSTOM, and the column a file's missing rows come from.
     /// What's drawn is [`Self::gfx`].
@@ -107,6 +110,7 @@ impl Default for Settings {
             fov: crate::look::rig::FOV_DEG,
             master: 1.0,
             effects: 1.0,
+            voice: 0.8,
             quality: quality::default_quality(),
             quality_auto: true,
             gfx: quality::default_gfx(),
@@ -199,6 +203,8 @@ pub enum Knob {
     Fov,
     Master,
     Effects,
+    /// The party's voice (a browser's).
+    Voice,
     /// The preset: writes every graphics row below it.
     Quality,
     ShadowDistance,
@@ -319,9 +325,9 @@ fn on_off(b: bool) -> String {
 }
 
 impl Settings {
-    /// What a sound plays at, times its own gain.
-    pub fn volume(&self) -> f32 {
-        self.master * self.effects
+    /// What the party's voice plays at.
+    pub fn voice_volume(&self) -> f32 {
+        self.master * self.voice
     }
 
     /// The defaults with one preset's rows.
@@ -379,6 +385,7 @@ impl Settings {
             fov: step(fin(self.fov, d.fov), FOV_STEP).clamp(FOV_MIN, FOV_MAX),
             master: step(fin(self.master, d.master), VOL_STEP).clamp(0.0, 1.0),
             effects: step(fin(self.effects, d.effects), VOL_STEP).clamp(0.0, 1.0),
+            voice: step(fin(self.voice, d.voice), VOL_STEP).clamp(0.0, 1.0),
             ..self
         }
     }
@@ -404,6 +411,7 @@ impl Settings {
             Knob::Fov => self.fov += d * FOV_STEP,
             Knob::Master => self.master += d * VOL_STEP,
             Knob::Effects => self.effects += d * VOL_STEP,
+            Knob::Voice => self.voice += d * VOL_STEP,
             // From the preset the rows spell if they spell one, so a moved
             // row and then + lands on the rung above the one being changed.
             Knob::Quality => {
@@ -448,6 +456,7 @@ impl Settings {
             Knob::Fov => format!("{:.0}°", self.fov),
             Knob::Master => format!("{:.0}%", self.master * 100.0),
             Knob::Effects => format!("{:.0}%", self.effects * 100.0),
+            Knob::Voice => format!("{:.0}%", self.voice * 100.0),
             Knob::Quality => self.preset_name().map_or("CUSTOM", Quality::name).to_uppercase(),
             Knob::ShadowDistance => format!("{:.0} m", g.shadow_m),
             Knob::Cascades => g.cascades.to_string(),
@@ -477,6 +486,7 @@ impl Settings {
             ("fov", format!("{:.0}", self.fov)),
             ("master", format!("{:.1}", self.master)),
             ("effects", format!("{:.1}", self.effects)),
+            ("voice", format!("{:.1}", self.voice)),
             ("quality_auto", auto.to_string()),
         ];
         // While the game still picks, its own default isn't the player's
@@ -511,9 +521,9 @@ impl Settings {
     }
 
     /// From a file's pairs over the defaults, and the pairs it didn't know.
-    /// A known key with a value that doesn't read keeps its default.
-    /// From a file's pairs; one of `version` 1 named the sensitivity on
-    /// the old base and the field of view by its height.
+    /// A known key with a value that doesn't read keeps its default; a file
+    /// of `version` 1 named the sensitivity on the old base and the field
+    /// of view by its height.
     fn from_pairs(pairs: &[(String, String)], version: u32) -> (Self, Vec<(String, String)>) {
         let v1 = version < 2;
         let mut s = Self::default();
@@ -534,6 +544,7 @@ impl Settings {
                 "fov" => s.fov = num.map_or(s.fov, |n| if v1 { crate::look::rig::fov_across(n) } else { n }),
                 "master" => s.master = num.unwrap_or(s.master),
                 "effects" => s.effects = num.unwrap_or(s.effects),
+                "voice" => s.voice = num.unwrap_or(s.voice),
                 "invert" => s.invert = v == "true",
                 "quality" => s.quality = Quality::from_name(v).unwrap_or(s.quality),
                 "quality_auto" => s.quality_auto = flag.unwrap_or(s.quality_auto),
@@ -704,7 +715,10 @@ pub fn plugin(app: &mut App) {
     // What's held, as this build would write it: nothing is written until
     // something changes.
     let written = text(&s, &b, &p, version, &other, &other_binds);
-    app.insert_resource(s).insert_resource(b).insert_resource(p);
+    app.insert_resource(s)
+        .insert_resource(b)
+        .insert_resource(p)
+        .init_resource::<HeldPlayer>();
     if let Some(store) = store {
         app.insert_resource(Disk {
             store,
@@ -717,16 +731,48 @@ pub fn plugin(app: &mut App) {
     app.add_systems(Last, save_on_change);
 }
 
+/// The player's own [`Player`] while this run plays as another (`--name`,
+/// `--look`, `?name=`), and the one it plays as: the file keeps theirs
+/// until they change it here (as [`Settings::held`] keeps their graphics).
+#[derive(Resource, Default)]
+pub struct HeldPlayer(Option<(Player, Player)>);
+
+/// This run plays as `f` makes the player, and the file keeps who they
+/// were.
+pub fn run_as(world: &mut World, f: impl FnOnce(&mut Player)) {
+    let own = world
+        .get_resource::<HeldPlayer>()
+        .and_then(|h| h.0.as_ref().map(|(own, _)| own.clone()))
+        .unwrap_or_else(|| world.resource::<Player>().clone());
+    let mut p = world.resource_mut::<Player>();
+    f(&mut p);
+    let run = p.clone();
+    if run != own {
+        world.insert_resource(HeldPlayer(Some((own, run))));
+    }
+}
+
 /// Writes the settings when they changed (and what's written would
 /// differ); a failed write is said once and tried again on the next change.
-fn save_on_change(settings: Res<Settings>, binds: Res<Binds>, player: Res<Player>, disk: Option<ResMut<Disk>>) {
+fn save_on_change(
+    settings: Res<Settings>,
+    binds: Res<Binds>,
+    player: Res<Player>,
+    mut held: ResMut<HeldPlayer>,
+    disk: Option<ResMut<Disk>>,
+) {
     let Some(mut disk) = disk else {
         return;
     };
     if !settings.is_changed() && !binds.is_changed() && !player.is_changed() {
         return;
     }
-    let t = text(&settings, &binds, &player, disk.version, &disk.other, &disk.other_binds);
+    // The run's player, changed here since: the player's own now.
+    if held.0.as_ref().is_some_and(|(_, run)| *run != *player) {
+        held.0 = None;
+    }
+    let p = held.0.as_ref().map_or(&*player, |(own, _)| own);
+    let t = text(&settings, &binds, p, disk.version, &disk.other, &disk.other_binds);
     if t == disk.written {
         return;
     }

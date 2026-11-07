@@ -3,7 +3,7 @@
 #
 #   ci/client.sh       the check: fmt, clippy (native and both browser
 #                      modules), its tests, a native build, then the page
-#                      into crates/client/dist, each module under the gate
+#                      into crates/client/dist, each module's size printed
 #   ci/client.sh dev   just the page, quickly: release (thin LTO, where the
 #                      web profile is fat); both modules,
 #                      bound and proved, into dist all the same, or one
@@ -108,18 +108,22 @@ for m in $modules; do
   sha=$(cat "dist/$stem.js" "dist/${stem}_bg.wasm" | sha256sum | cut -c1-64)
   mods="$mods${mods:+,}\"$m\":{\"js\":\"$stem.js\",\"wasm\":\"${stem}_bg.wasm\",\"wasm_bytes\":$raw,\"wasm_gz_bytes\":$gz,\"sha256\":\"$sha\"}"
 done
-commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
-# What the page reads before it downloads (index.html, pickModule), and what
-# ci/publish_web.sh checks it is publishing (both modules, the web profile).
-wasm_opt=$([ -n "$opt" ] && echo true || echo false)
-printf '{"commit":"%s","profile":"%s","wasm_opt":%s,"modules":{%s}}\n' "$commit" "$profile" "$wasm_opt" "$mods" > dist/build.json
-# The page, the clip page F9 opens in a frame of its own (web/clip.js), the
-# dashboard's scripts, and the credits.
+# The page, the clip page F9 opens in a frame of its own (web/clip.js), its
+# scripts, and the credits.
 cp web/*.html web/*.js dist/
 # The mixer the browser's audio thread runs (web/mix-worklet.js): crates/mix
 # behind plain exports, built in the root workspace, tens of kilobytes.
 (cd ../.. && cargo build -q --release -p mix-worklet --target wasm32-unknown-unknown)
 cp ../../target/wasm32-unknown-unknown/release/mix_worklet.wasm dist/
+# Its pair's own hash (web/mix.js asks for both by it): the mixer changes
+# without the game's modules, and they without it.
+mixsha=$(cat dist/mix-worklet.js dist/mix_worklet.wasm | sha256sum | cut -c1-64)
+commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+# What the page reads before it downloads (index.html, pickModule), and what
+# ci/publish_web.sh checks it is publishing (both modules, the web profile).
+wasm_opt=$([ -n "$opt" ] && echo true || echo false)
+printf '{"commit":"%s","profile":"%s","wasm_opt":%s,"modules":{%s},"mix":{"sha256":"%s"}}\n' \
+  "$commit" "$profile" "$wasm_opt" "$mods" "$mixsha" > dist/build.json
 cp ../../NOTICE dist/
 cp -r assets dist/assets
 du -sh dist

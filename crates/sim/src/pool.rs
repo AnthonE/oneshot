@@ -1,7 +1,7 @@
-//! A fixed number of slots for things that come and go (projectiles, later
-//! vehicles): no allocation after setup, and the slot a new thing takes is
-//! always the first free one, so the same inputs fill the same slots native
-//! and wasm.
+//! A fixed number of slots for things that come and go (projectiles,
+//! vehicles, drops): no allocation after setup, and the slot a new thing
+//! takes is always the first free one, so the same inputs fill the same
+//! slots native and wasm.
 
 use crate::thing::Thing;
 use core::ops::{Deref, DerefMut};
@@ -21,7 +21,7 @@ impl<T: Thing, const N: usize> Default for Pool<T, N> {
 
 impl<T: Thing, const N: usize> Pool<T, N> {
     /// Puts `t` in the first free slot and returns it; `None` when all are
-    /// in play (the thing is never made, as when a gun is fired dry).
+    /// in play (the caller says what gives: `World::launch`, `World::spill`).
     pub fn alloc(&mut self, t: T) -> Option<usize> {
         let i = self.items.iter().position(|x| !x.live())?;
         self.items[i] = t;

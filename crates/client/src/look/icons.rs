@@ -32,6 +32,10 @@ const SPACING_M: f32 = 4.0;
 /// before its camera stops; and the most it waits for them.
 const FRAMES: u8 = 3;
 const STALL_FRAMES: u16 = 900;
+/// The most a gun's camera waits for its scene, frames (two minutes at
+/// 60): a model that never comes in (a failed load) gives up, its icon
+/// blank, rather than keep a camera drawing for the run.
+pub(super) const LOAD_STALL_FRAMES: u16 = 7200;
 
 /// Each gun's icon, by arm id (none until it is drawn).
 #[derive(Resource, Default)]
@@ -45,14 +49,16 @@ impl GunIcons {
     }
 }
 
-/// One gun in the studio: its camera and its model, and how many frames
-/// its camera has drawn since the model came in.
+/// One gun in the studio: its camera and its model, how many frames it
+/// has waited for the model, and how many its camera has drawn since the
+/// model came in.
 #[derive(Component)]
 pub struct Sitter {
     arm: u8,
     cam: Entity,
     image: Handle<Image>,
     ready: bool,
+    loading: u16,
     frames: u8,
     waited: u16,
 }
@@ -117,6 +123,7 @@ pub fn setup(
                     cam,
                     image,
                     ready: false,
+                    loading: 0,
                     frames: 0,
                     waited: 0,
                 },
@@ -171,6 +178,11 @@ pub fn develop(
     let built = backlog.pending() == 0;
     for (e, mut s) in &mut sitters {
         if !s.ready {
+            s.loading = s.loading.saturating_add(1);
+            if s.loading > LOAD_STALL_FRAMES {
+                commands.entity(s.cam).despawn();
+                commands.entity(e).despawn();
+            }
             continue;
         }
         s.waited = s.waited.saturating_add(1);

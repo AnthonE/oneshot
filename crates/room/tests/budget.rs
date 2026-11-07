@@ -81,3 +81,43 @@ fn the_worst_case_snapshot_fits_a_datagram() {
         "acked: the next ones"
     );
 }
+
+/// More rounds in sight than a snapshot holds: what goes is what matters
+/// to this client, its own and the nearest, never just the first slots.
+#[test]
+fn a_full_sky_sends_the_rounds_that_matter_to_you() {
+    let mut w = World::new(Map::proving_grounds(), Rules::big_team(), 1, (2, 3));
+    w.seat(0, 0);
+    w.seat(1, 1);
+    w.fighters[0].body.pos = V3::new(0.0, 0.0, 10.0);
+    // Far ones in the low slots, going away; near ones in the high slots.
+    for i in 0..MAX_PROJ {
+        let x = if i < MAX_PROJ - 8 {
+            30.0 + i as f32 * 0.1
+        } else {
+            2.0 + (MAX_PROJ - i) as f32
+        };
+        w.proj[i] = Projectile {
+            active: true,
+            kind: ProjKind::Needle,
+            target: sim::world::NO_TARGET,
+            owner: 1,
+            pos: V3::new(x, 1.5, 10.0),
+            vel: V3::new(30.0, 0.0, 0.0),
+            ttl: 100,
+            age: 20,
+            ..Projectile::default()
+        };
+    }
+    // Ours, the farthest of all.
+    w.proj[0].owner = 0;
+    w.proj[0].pos.x = 39.0;
+    let mut queue = room::EventQueue::default();
+    let snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
+    let sent = &snap.proj[..MAX_SNAP_PROJ];
+    assert!(sent.iter().any(|p| p.owner == 0), "our own round goes");
+    for i in MAX_PROJ - 8..MAX_PROJ {
+        assert!(sent.iter().any(|p| p.pos.x == w.proj[i].pos.x), "near round {i} goes");
+    }
+}

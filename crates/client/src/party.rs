@@ -24,6 +24,9 @@ pub const TALKING_S: f32 = 0.35;
 const RETRY_S: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 15.0];
 /// An attempt that hasn't answered in this long is let go and made again.
 const KNOCK_GIVE_UP_S: f32 = 20.0;
+/// A name being typed says hello again only once it has stood this long
+/// (the title's field changes it a key at a time).
+const NAME_SETTLE_S: f32 = 1.5;
 /// The lobby opens once the title's level is in (a page loading it can
 /// stall long enough for the server to give up on a hello), or after this.
 const FIRST_AFTER_S: f32 = 30.0;
@@ -74,8 +77,13 @@ pub struct PartyView {
     /// The last thing the party said no to.
     pub notice: Option<String>,
     pub mic: Mic,
-    /// Hold V to talk, or open mic.
+    /// Why the mic last didn't open (the page's word: `web/voice.js`
+    /// `whyNot`), as the PARTY tab says it; None once it does.
+    pub mic_why: Option<&'static str>,
+    /// Hold [`PartyView::talk_key`] to talk, or open mic.
     pub open_mic: bool,
+    /// What the TALK bind is called (`binds::Action::Talk`).
+    pub talk_key: &'static str,
     /// PLAY puts the party alone in a room of its own, bots in the rest.
     pub alone: bool,
     /// That room's own map, score and clock (the leader's to pick).
@@ -185,6 +193,9 @@ struct LobbyRes {
     want: u32,
     /// The name the session said hello with.
     name: String,
+    /// The name last seen, and since when it has been that.
+    seen_name: String,
+    seen_at: f32,
     /// The pass already handed over (`Msg::SignIn`).
     sent_pass: String,
     /// The last microphone state read, and mode.
@@ -198,7 +209,7 @@ pub fn install(app: &mut App, want: u32) {
     app.insert_non_send_resource(LobbyRes { want, ..default() })
         .insert_resource(view)
         .init_resource::<PartyAsks>()
-        .add_systems(Update, (pump, lights, talk_hud).chain());
+        .add_systems(Update, (voice_prefs, pump, lights, talk_hud).chain());
 }
 
 /// The session's ticket on the hello if we have one, else a fresh pass,
@@ -264,7 +275,9 @@ fn pump(
         warn!("oneshot: the party's line didn't answer; asking again");
         lobby.knock = None;
         lobby.tries += 1;
-        lobby.retry_at = now;
+        if lobby.retry_at.is_finite() {
+            lobby.retry_at = now;
+        }
     }
     // Open it, or again after it closed, waiting longer each time.
     if lobby.link.as_ref().is_some_and(|l| l.closed()) {
@@ -299,18 +312,29 @@ fn pump(
         lobby.knocked_at = now;
         lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
     }
-    // A new name says hello again (the party sees it then).
-    if lobby.link.is_some() && lobby.name != name && !name.is_empty() {
+    // A new name says hello again (the party sees it then), once typed.
+    if lobby.seen_name != name {
+        lobby.seen_name = name.to_string();
+        lobby.seen_at = now;
+    }
+    if lobby.link.is_some() && lobby.name != name && !name.is_empty() && now - lobby.seen_at >= NAME_SETTLE_S {
         if let Some(l) = lobby.link.as_mut() {
             l.close();
         }
         lobby.link = None;
-        lobby.retry_at = now;
+        view.connected = false;
+        view.touch();
+        // Not a tab that another took the line from.
+        if lobby.retry_at.is_finite() {
+            lobby.retry_at = now;
+        }
     }
     // Its fields apart, so the link and what it was told borrow side by side.
     let lobby = &mut *lobby;
     let Some(link) = lobby.link.as_mut() else {
-        if !asks.0.is_empty() {
+        // Asked of a line on its way back, they wait for it; of one that
+        // stopped (another tab has it), they go.
+        if !asks.0.is_empty() && !lobby.retry_at.is_finite() {
             asks.0.clear();
         }
         return;
@@ -447,12 +471,46 @@ fn pump(
     }
     let mic = mic_state();
     let open = open_mic();
-    if mic != lobby.mic || open != view.open_mic {
+    let why = why_words(&mic_why());
+    if mic != lobby.mic || open != view.open_mic || why != view.mic_why {
         lobby.mic = mic;
         view.mic = mic;
         view.open_mic = open;
+        view.mic_why = why;
         view.touch();
     }
+}
+
+/// What the page's voice is told of the settings: the TALK bind's keys
+/// and the voice's volume (VOLUME times VOICE). Again when either moves,
+/// and until the page has heard it.
+fn voice_prefs(
+    binds: Res<crate::binds::Binds>,
+    settings: Res<crate::settings::Settings>,
+    mut view: ResMut<PartyView>,
+    mut told: Local<bool>,
+) {
+    let talk = crate::binds::Action::Talk;
+    if view.talk_key != binds.key(talk) {
+        view.talk_key = binds.key(talk);
+        view.touch();
+    }
+    if *told && !binds.is_changed() && !settings.is_changed() {
+        return;
+    }
+    *told = set_talk(&binds.tokens(talk)) && set_voice_volume(settings.voice_volume());
+}
+
+/// The page's word for why the mic didn't open, as the PARTY tab says it.
+fn why_words(why: &str) -> Option<&'static str> {
+    Some(match why {
+        "" => return None,
+        "denied" => "The browser was refused the microphone: allow it for this site, then MIC again.",
+        "none" => "No microphone was found.",
+        "busy" => "The microphone is in use by something else, or wouldn't start.",
+        "unsupported" => "This browser can't do voice.",
+        _ => "The microphone didn't open.",
+    })
 }
 
 /// The talk lights on the title's roster: lit while that member talks.
@@ -676,6 +734,21 @@ mod page {
         let _ = call("setMode", &[JsValue::from_str(if open { "open" } else { "ptt" })]);
     }
 
+    /// Why the mic last didn't open (`web/voice.js` `whyNot`), or empty.
+    pub fn mic_why() -> String {
+        call("why", &[]).and_then(|v| v.as_string()).unwrap_or_default()
+    }
+
+    /// The TALK bind's keys, by their `KeyboardEvent.code`s; whether the
+    /// page was there to hear it.
+    pub fn set_talk(tokens: &str) -> bool {
+        call("setTalk", &[JsValue::from_str(tokens)]).is_some()
+    }
+
+    pub fn set_voice_volume(v: f32) -> bool {
+        call("setVolume", &[v.into()]).is_some()
+    }
+
     pub fn muted(key: &str) -> bool {
         call("muted", &[JsValue::from_str(key)])
             .and_then(|v| v.as_bool())
@@ -741,6 +814,15 @@ mod page {
     }
     pub fn mic_toggle() {}
     pub fn set_open_mic(_: bool) {}
+    pub fn mic_why() -> String {
+        String::new()
+    }
+    pub fn set_talk(_: &str) -> bool {
+        true
+    }
+    pub fn set_voice_volume(_: f32) -> bool {
+        true
+    }
     pub fn muted(_: &str) -> bool {
         false
     }

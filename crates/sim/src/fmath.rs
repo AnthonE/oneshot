@@ -124,11 +124,6 @@ pub fn hypot(x: f32, y: f32) -> f32 {
 }
 
 #[inline]
-pub fn cbrt(x: f32) -> f32 {
-    libm::cbrtf(x)
-}
-
-#[inline]
 pub fn floor(x: f32) -> f32 {
     libm::floorf(x)
 }
@@ -142,9 +137,4 @@ pub fn ceil(x: f32) -> f32 {
 #[inline]
 pub fn round(x: f32) -> f32 {
     libm::roundf(x)
-}
-
-#[inline]
-pub fn trunc(x: f32) -> f32 {
-    libm::truncf(x)
 }

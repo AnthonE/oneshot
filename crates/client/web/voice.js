@@ -4,7 +4,8 @@
 // of preroll, never more than 300 ms behind). The server relays a frame to
 // the party and nobody else; it never decodes one.
 //
-// Talking is held V (or open mic, past a level gate). A member can be muted
+// Talking is the game's TALK bind held (`setTalk`: keys by their `code`,
+// Mouse3 to Mouse5), or open mic, past a level gate. A member can be muted
 // here, for this browser only. Nothing is recorded.
 
 const RATE = 48000;
@@ -15,6 +16,10 @@ const TALKING_MS = 350;
 const GATE_DB = -45;
 const GATE_HOLD_MS = 400;
 const MUTES = 'oneshot.mutes';
+// The mouse buttons a bind may use (binds.rs MOUSE), by MouseEvent.button.
+const MOUSE = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' };
+// A right modifier is its left one, as a bind is (binds.rs `normalize`).
+const fold = (code) => code.replace(/^(Shift|Control|Alt)Right$/, '$1Left');
 
 const store = (k, v) => {
   try {
@@ -29,29 +34,43 @@ export const voiceWorks = () => typeof AudioEncoder === 'function' && typeof Aud
 
 export class Voice {
   /** `send(seq, end, bytes)` puts a frame on the lobby; `changed()` is
-   * called when who is talking changes. */
-  constructor(send, changed) {
+   * called when who is talking changes; `v` is the page's `?v=` (or ''),
+   * which the worklet is asked for by. */
+  constructor(send, changed, v = '') {
     this.send = send;
+    this.v = v;
     this.changed = changed || (() => {});
     this.ctx = null;
     this.out = null;
     this.listeners = new Map(); // tag -> {dec, next, heard, gain}
     this.mutes = new Set(JSON.parse(store(MUTES) || '[]'));
     this.mode = store('oneshot.talk') || 'ptt';
-    this.volume = Number(store('oneshot.voiceVol') ?? 80) / 100;
+    // The game's SOUND tab sets it (master × voice, `setVolume`).
+    this.volume = 0.8;
     this.mic = null; // {stream, node, enc}
+    // Why the mic last failed to open ('denied', 'none', 'busy',
+    // 'unsupported', 'failed'), or null.
+    this.why = null;
     this.held = false;
+    // The game's TALK bind until it says (binds.rs).
+    this.talk = new Set(['KeyB']);
     this.seq = 0;
     this.sentAt = 0;
     this.gateUntil = 0;
-    this.ends = [];
+    // Each frame's end flag, by its timestamp: an encoder that loses a
+    // frame never shifts the flag onto another.
+    this.ends = new Map();
     this.heard = 0; // frames played, for the gate test
     this.sent = 0;
-    const down = (e) => { if (e.code === 'KeyV' && !e.repeat && !typing(e)) { this.held = true; } };
-    const up = (e) => { if (e.code === 'KeyV') this.held = false; };
+    const down = (e) => { if (this.talk.has(fold(e.code)) && !e.repeat && !typing(e)) { this.held = true; } };
+    const up = (e) => { if (this.talk.has(fold(e.code))) this.held = false; };
+    const press = (e) => { if (this.talk.has(MOUSE[e.button])) this.held = true; };
+    const lift = (e) => { if (this.talk.has(MOUSE[e.button])) this.held = false; };
     // Capture: the game's canvas may stop a key from bubbling.
     addEventListener('keydown', down, true);
     addEventListener('keyup', up, true);
+    addEventListener('mousedown', press, true);
+    addEventListener('mouseup', lift, true);
     addEventListener('blur', () => { this.held = false; });
   }
 
@@ -74,14 +93,16 @@ export class Voice {
     return this.ctx.state === 'running';
   }
 
-  get asleep() {
-    return !this.ctx || this.ctx.state !== 'running';
-  }
-
   setVolume(v) {
     this.volume = v;
-    store('oneshot.voiceVol', String(Math.round(v * 100)));
     if (this.out) this.out.gain.value = v;
+  }
+
+  /** The binds that talk, as the settings file names them (`KeyB`,
+   * `Mouse4`, …). */
+  setTalk(binds) {
+    this.talk = new Set(binds);
+    this.held = false;
   }
 
   setMode(m) {
@@ -101,14 +122,6 @@ export class Voice {
     this.changed();
   }
 
-  /** Who is talking now: tags. */
-  talking() {
-    const now = performance.now();
-    const t = [];
-    for (const [tag, l] of this.listeners) if (now - l.heard < TALKING_MS) t.push(tag);
-    return t;
-  }
-
   /** Whether we are on the air now. */
   get onAir() {
     return performance.now() - this.sentAt < TALKING_MS;
@@ -117,17 +130,38 @@ export class Voice {
   /** The microphone on: asks the browser the first time. */
   async micOn() {
     if (this.mic) return true;
-    if (!this.opening) this.opening = this.open().finally(() => { this.opening = null; });
+    this.closeOpened = false;
+    if (!this.opening) {
+      this.opening = this.open().then(
+        (ok) => {
+          this.why = null;
+          // Turned off while it was opening: off it goes, once open.
+          if (this.closeOpened) { this.micOff(); return false; }
+          return ok;
+        },
+        (e) => { this.why = whyNot(e); throw e; },
+      ).finally(() => { this.opening = null; });
+    }
     return this.opening;
   }
 
   async open() {
-    if (!voiceWorks()) throw new Error("this browser can't do voice");
+    if (!voiceWorks()) throw Object.assign(new Error("this browser can't do voice"), { name: 'NotSupportedError' });
     await this.wake();
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
     });
-    await this.ctx.audioWorklet.addModule('voice-worklet.js');
+    try {
+      return await this.openWith(stream);
+    } catch (e) {
+      // The browser's mic light goes out with what failed.
+      for (const tr of stream.getTracks()) tr.stop();
+      throw e;
+    }
+  }
+
+  async openWith(stream) {
+    await this.ctx.audioWorklet.addModule(`voice-worklet.js${this.v}`);
     const src = this.ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(this.ctx, 'oneshot-mic', { processorOptions: { frame: Math.round(this.ctx.sampleRate / 50) } });
     const sink = this.ctx.createGain();
@@ -137,7 +171,13 @@ export class Voice {
       output: (chunk) => {
         const bytes = new Uint8Array(chunk.byteLength);
         chunk.copyTo(bytes);
-        const end = this.ends.shift() || false;
+        // Its own flag, and any of frames the encoder lost before it.
+        let end = false;
+        for (const [ts, e] of this.ends) {
+          if (ts > chunk.timestamp) break;
+          end ||= e;
+          this.ends.delete(ts);
+        }
         if (this.send(this.seq, end, bytes)) this.sent++;
         this.seq = (this.seq + 1) & 0xffff;
       },
@@ -173,7 +213,7 @@ export class Voice {
       const end = was && !want;
       const data = end ? new Float32Array(pcm.length) : pcm;
       if (enc.state === 'configured') {
-        this.ends.push(end);
+        this.ends.set(t, end);
         enc.encode(new AudioData({ format: 'f32-planar', sampleRate: this.ctx.sampleRate, numberOfFrames: data.length,
           numberOfChannels: 1, timestamp: t, data }));
         t += Math.round((data.length / this.ctx.sampleRate) * 1e6);
@@ -189,12 +229,13 @@ export class Voice {
   }
 
   micOff() {
+    if (this.opening) this.closeOpened = true;
     if (!this.mic) return;
     const { stream, node, enc, src } = this.mic;
     for (const tr of stream.getTracks()) tr.stop();
     try { src.disconnect(); node.disconnect(); enc.close(); } catch { /* gone already */ }
     this.mic = null;
-    this.ends = [];
+    this.ends.clear();
     store('oneshot.mic', 'off');
     this.changed();
   }
@@ -203,7 +244,7 @@ export class Voice {
    * their last one. `player` is who they are (for mutes). */
   hear(tag, seq, flags, bytes, player) {
     // Asleep (no gesture yet): dropped, not piled up to play at once later.
-    if (this.asleep || this.muted(player)) return;
+    if (!this.ctx || this.ctx.state !== 'running' || this.muted(player)) return;
     let l = this.listeners.get(tag);
     if (!l) {
       const gain = this.ctx.createGain();
@@ -211,7 +252,11 @@ export class Voice {
       l = { next: 0, heard: 0, gain, dec: null, t: 0 };
       l.dec = new AudioDecoder({
         output: (ad) => this.play(l, ad),
-        error: () => { this.listeners.delete(tag); },
+        error: () => {
+          // Made again by their next frame.
+          try { l.gain.disconnect(); } catch { /* gone already */ }
+          this.listeners.delete(tag);
+        },
       });
       l.dec.configure({ codec: 'opus', sampleRate: RATE, numberOfChannels: 1 });
       this.listeners.set(tag, l);
@@ -257,6 +302,25 @@ export class Voice {
       try { l.dec.close(); l.gain.disconnect(); } catch { /* gone already */ }
       this.listeners.delete(tag);
     }
+  }
+}
+
+/** What a failed getUserMedia (or the rest of opening) comes to. */
+function whyNot(e) {
+  switch (e?.name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'denied';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'none';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'busy';
+    case 'NotSupportedError':
+      return 'unsupported';
+    default:
+      return 'failed';
   }
 }
 
