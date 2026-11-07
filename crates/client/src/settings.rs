@@ -153,6 +153,12 @@ impl Player {
         }
     }
 
+    /// What the server will let it wear of that, by what it said our wallet
+    /// owns (`Msg::Wardrobe`): the pick itself till it has said.
+    pub fn worn(&self, wardrobe: Option<&proto::Wardrobe>) -> proto::Look {
+        wardrobe.map_or_else(|| self.look(), |w| w.wear(self.look()))
+    }
+
     /// Gear slot `k` (the title's rows): the headwear, then the footwear.
     pub fn gear(&self, k: usize) -> u8 {
         [self.headwear, self.footwear][k]
