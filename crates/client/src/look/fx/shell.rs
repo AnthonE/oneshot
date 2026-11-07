@@ -54,6 +54,19 @@ pub fn ion(at: Vec3) -> Shock {
     }
 }
 
+/// Shards going off together: pink, out to a little past the splash's
+/// reach (`sim::consts::SUPER_RADIUS`), quick.
+pub fn pink(at: Vec3) -> Shock {
+    Shock {
+        at,
+        left: 0.22,
+        life: 0.22,
+        r0: 0.2,
+        r1: 2.0,
+        color: Vec3::new(1.0, 0.3, 0.8),
+    }
+}
+
 /// Green plasma bursting: mint, `k` times the cannon's.
 pub fn mint(at: Vec3, k: f32) -> Shock {
     Shock {

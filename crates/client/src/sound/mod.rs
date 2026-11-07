@@ -890,6 +890,11 @@ pub fn decide(
 
 /// Pieces of a wreck heard coming down after it.
 const DEBRIS: u8 = 5;
+/// Shards going off together: the blast's take this loud, this much
+/// higher, and the shards' pings after it.
+const SUPER_GAIN: f32 = 1.0;
+const SUPER_RATE: f32 = 1.3;
+const SUPER_PINGS: u8 = 4;
 /// How a truck's tyres and its fire carry.
 const SKID: Carry = Carry { near: 6.0, reach: 70.0 };
 const FIRE: Carry = Carry { near: 4.0, reach: 45.0 };
@@ -1197,6 +1202,19 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Flag as u8 => ear.say(flag_line(e.part)),
+            k if k == Kind::Blast as u8 && e.c == sim::arms::SHARDS as u16 => {
+                // Shards going off together: a sharp, high crack with a
+                // shield's burst in it, and glass pinging away. Not fire.
+                let n = ear.take("blast", 3);
+                ear.at_rate(ears, &n, at, SUPER_GAIN, BLAST, 0.0, SUPER_RATE);
+                ear.at(ears, "shield_pop_0", at, 1.0, SMALL);
+                for k in 0..SUPER_PINGS {
+                    let n = ear.take("shot_shards", 3);
+                    let rate = 1.2 + ear.roll(50) as f32 * 0.01;
+                    let secs = 0.04 + k as f32 * 0.07 + ear.roll(4) as f32 * 0.01;
+                    ear.at_rate(ears, &n, at, 0.5, SMALL, secs, rate);
+                }
+            }
             k if k == Kind::Blast as u8 => {
                 let n = ear.take("blast", 3);
                 ear.at(ears, &n, at, 1.3, BLAST);

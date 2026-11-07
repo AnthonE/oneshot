@@ -195,6 +195,19 @@ pub const CLASH_PUSH: f32 = 8.0;
 pub const HOMING_PAD: f32 = 1.0;
 /// Shards fall out of a fighter this long after the last went in.
 pub const NEEDLE_KEEP_MS: u32 = 1500;
+/// Shards going off together (Halo 2's needler supercombine, Halopedia's H2
+/// weapon data at 3.048 m a world unit): 400 to the one they are in, half
+/// that on shields (an overshield outlasts it, as Halo 2's did), and a
+/// splash of 50 out to 0.2 wu, down to 30 at 0.5 wu, half that on shields.
+pub const SUPER_DMG: i32 = 400;
+pub const SUPER_SHIELD_K: f32 = 0.5;
+pub const SUPER_SPLASH: i32 = 50;
+pub const SUPER_FULL: f32 = 0.61;
+pub const SUPER_RADIUS: f32 = 1.52;
+pub const SUPER_EDGE: i32 = 30;
+/// How hard its splash throws who stands by, m/s at its middle: a stagger,
+/// not a grenade's [`BLAST_PUSH`]. Ours.
+pub const SUPER_PUSH: f32 = 3.0;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
 
