@@ -1,0 +1,83 @@
+{
+ "tape": "traces/film/ffa-overpass.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "map-overpass",
+   "len": 2.6,
+   "ease": true,
+   "fov": 54,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -2,
+      6.6,
+      -17
+     ],
+     "look": [
+      0,
+      6,
+      10
+     ]
+    },
+    {
+     "t": 2.6,
+     "pos": [
+      -2,
+      6.2,
+      -12.5
+     ],
+     "look": [
+      0,
+      6,
+      10
+     ]
+    }
+   ],
+   "at": 62.0
+  },
+  {
+   "name": "still-overpass",
+   "still": true,
+   "fov": 52,
+   "keys": [
+    {
+     "t": 0,
+     "pos": [
+      -19,
+      1.7,
+      19.5
+     ],
+     "look": [
+      4,
+      2.5,
+      19
+     ]
+    }
+   ],
+   "look": {
+    "focus": "look",
+    "fstop": 4
+   },
+   "at": 62.4
+  },
+  {
+   "name": "kill-4",
+   "at": 97.95,
+   "len": 1.6,
+   "pov": true
+  }
+ ]
+}
