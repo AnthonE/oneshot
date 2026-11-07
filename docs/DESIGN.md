@@ -12,8 +12,8 @@ repos is `RIP.md`.
 |---|---|
 | **Duel** | 1v1 Slayer, first to 15 kills or 10 minutes. Ladder `duel`. |
 | **Doubles** | 2v2 Team Slayer, first to 30 or 12 minutes. Ladder `doubles`. |
-| **Cups** (later) | FFA heats of 8, points per placement, swiss rounds, the top seats into a final. Same match server, same reports. |
-| **Casual** | FFA and Gun Game with bots filling empty seats. Unranked. |
+| **Cups** | FFA heats of 8, points per placement, Swiss rounds, the top eight into a final (`server/src/cup.rs`). Same match server; ladder `cup`. |
+| **Casual** | FFA, Gun Game and Capture the Flag (4v4, first to 3 captures or 15 minutes) with bots filling empty seats. A party may take a room of its own, with its own map, score and clock. Unranked. |
 | **Big Team** | 8v8 Team Slayer on terrain maps with vehicles. Casual first; a ladder once it plays well. |
 
 Halo's rules, the ones Fireplace's arena already plays:
@@ -23,6 +23,8 @@ Halo's rules, the ones Fireplace's arena already plays:
 - Halo 2's arsenal as archetypes, ours by name and look: a carbine, a beam rifle that runs hot, ion guns that strip shields (a charge shot that homes), homing shards that go off together, a skipping grenade launcher, a heavy ion cannon. Its counts and times are the baseline (`sim/tests/range.rs`); tuning makes them our own.
 - Dual wielding, as Halo 2's: a one-handed gun (magnum, SMG, the ion guns, the shard gun) taken beside another goes in the left hand, on its own trigger; no grenades while dual, a melee or a swap drops the left, both reload together and slower.
 - Two grenades, as Halo's: frags, and stickies that stick to whatever they touch (a body, a hull, the map) and kill whoever wears one; a switch picks the next throw, and a kind run out goes over to the other. Everyone starts with two frags and no stickies; both lie on pads about the map and fall from the dead, four of each at most. A blast sets off the grenades in its reach, those lying on the floor too.
+- Power-ups on pads, taken by walking over them: an overshield and active camo.
+- Medals as Halo's (multi-kills, sprees, assists and the rest), read from the world's events after each tick so a replay gives the same ones (`room/src/medals.rs`); the announcer calls them, and a carnage report ends the match.
 - The Range: a practice map with every gun on a pad, out of the rotation.
 - Melee, a head-shot rule per gun, respawn after 3 s at the spawn farthest from enemies.
 - No motion tracker in ranked, as Halo's ranked playlists have it. That also removes a radar leak (§8).
@@ -38,8 +40,9 @@ Free to play. Skins are cosmetic only: money never changes a measured result,
 whether a kill, a rating or a placement (Elo Pros' invariant 1).
 
 Not yet: abilities, hidden-information modes beyond fog of war.
-Vehicles and terrain come with Big Team (§16, milestones 7 to 11), to rules
-our own: one ground vehicle first, a driver and a gunner. Maps and vehicles
+Vehicles and terrain play in Big Team (§16, milestones 9 and 10), to rules
+our own: one ground vehicle, the truck, a driver and a passenger; two of Dry
+Fork's four carry a minigun their passenger guns. Maps and vehicles
 are original; never another game's layout or art.
 
 ## 2 · Architecture
@@ -59,18 +62,23 @@ are original; never another game's layout or art.
 |---|---|---|
 | `sim` | The game's rules: movement, guns, shields, pads, modes, rewind | Deterministic. Built native for the server and wasm for the browser's prediction. No I/O, clock, threads, `HashMap` iteration or allocation in the tick. Floats are `+ − × ÷ sqrt min max`; trig, exp, pow and rounding go through `sim::fmath` (pure-Rust libm, same bits native and wasm). |
 | `proto` | Wire format: bit packing, inputs, snapshots, events, handshake | `PROTO_VER`, byte-exact goldens. Depends on nothing game-specific beyond small state structs. |
-| `server` | Rooms, transport, sign-in, fog of war, lag-comp depth, snapshots, telemetry, reports | Native, wtransport over quinn. |
+| `room` | A match with no transport: seats, input buffers, rewind, fog of war, snapshots and deltas, watching, replays, the aim review | What every byte to a client goes through. |
+| `server` | Sessions, transport, sign-in, the queue, cups, parties, telemetry, reports | Native, wtransport over quinn; rooms step side by side on a pool. |
 | `client-net` | Session (handshake), clock, prediction, reconciliation, interpolation | `core` and `session` build everywhere; the transport is wtransport natively and WebTransport in wasm, behind one `Wire` trait. |
-| `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, audio, menus | Milestone 12. Native, and the same crate built for wasm (WebGL2) is the page. Draws; never decides. |
-| `tools/maps` | Map compiler and editor | JS, from Fireplace (`RIP.md`). |
+| `client` | Bevy renderer: terrain, sky, lighting, viewmodel, HUD, menus | Milestone 12. Native, and the same crate built for wasm is the page: two modules, WebGL2 and WebGPU, one picked before either downloads. Draws; never decides. |
+| `mix`, `mix-worklet` | The game's sound mixer, no engine in it | A Bevy audio source on the desktop, an AudioWorklet in the browser. |
+| `fx` | Effects with no engine: particle pool, recipes, knobs | Vendored from Gates. |
+| `tools/maps` | Map compiler | JS, from Fireplace (`RIP.md`). |
+| `tools/load` | `oneshot-load`, the load test | Headless players on `client-net`'s native transport. |
 
 Why Bevy now: the look we want (sky, clouds, terrain, grass, real lighting)
 is what Gates' Bevy renderer already draws, and a desktop build comes free.
 Gates' renderer is a donor, not a dependency: we port modules (`RIP.md` §9).
 The cost is the browser download: Gates' wasm is 8.57 MB gzipped with a heap
-around 700 MB (`Gates/docs/NOW.md` §0web). Ours is 7.7 MB gzipped (its own
-`web` profile, no name section); `ci/client.sh` fails it past 9 MB, and
-WebGL2 drops the atmosphere, SSAO, bloom and TAA.
+around 700 MB (`Gates/docs/NOW.md` §0web). Ours is two modules (its own
+`web` profile, no name section): WebGPU draws the desktop's frame, WebGL2
+drops the atmosphere, SSAO, bloom and TAA. `ci/client.sh` prints their
+gzipped sizes; no size gates a build.
 
 **The rule that keeps it honest: the client draws, the server decides.**
 Gameplay state lives in `sim`. The client reads from `client-net` and never
@@ -100,8 +108,8 @@ reloads, pads, score, the clock. A client sends only what its player pressed,
 one frame per tick:
 
 ```
-input frame:  seq u16 · buttons u16 · yaw u16 · pitch u16 · move_x i8 · move_z i8 · slot u3
-input datagram: ack of newest snapshot u16 · ack bits u32 · playout ticks u4 · first seq · frames…
+input frame:  buttons u11 · yaw u16 · pitch i16 · move_x i8 · move_z i8
+input datagram: newest snapshot tick u32 · playout ticks u8 · first seq u32 · count u5 · frames…
 ```
 
 - **The server steps on its own clock.** One frame is consumed per tick per
@@ -110,7 +118,8 @@ input datagram: ack of newest snapshot u16 · ack bits u32 · playout ticks u4 �
   faster gains nothing: the buffer is capped (16) and a second frame in a tick
   costs catch-up credit, so a speedhack or a lag switch buys at most about 3%
   (Gates' `INPUT_CATCHUP_CREDIT_CAP`, `server/src/client.rs` `consume_input`).
-- **Inputs are sanitized.** Unknown button bits drop the datagram. Pitch is
+- **Inputs are sanitized.** Only known buttons fit the wire, and the server
+  clears any other (`Input::sanitized`). Pitch is
   clamped to ±89°. The stick is clamped to unit length. Yaw is free (an
   aimbot's turn rate is evidence, §13, not a refusal).
 - **Fire rate, ammo, reloads, swaps, melee and grenades** are gated by sim
@@ -243,7 +252,8 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
      nobody in plain sight is ever held back.
 
    Terrain made it dear again: on Dry Fork, 140 m long and hilly, 42% of
-   pairs are hidden and the mean line is 74 m (0.7 ms a snapshot). Three
+   pairs are hidden and the mean line is 74 m (0.7 ms a snapshot; measured
+   when Dry Fork was 140 m long, it is now 290). Three
    more brought it to 0.3 ms:
    - **Far pairs** (past 40 m) get the full look every fourth snapshot,
      without the leans and the chest's edges: 18 lines, not 70. At 40 m
@@ -254,9 +264,8 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
    - **Terrain in 16 m blocks** with their highest point, so a line clear
      above a block skips its cells.
 
-   A pair found hidden still gets the plain test. `ci/quick.sh` fails if
-   fog at sixteen seats on any map goes past twice the budget (0.3 ms mean,
-   1.5 ms at the 99.9th percentile).
+   A pair found hidden still gets the plain test. `fog_cost` measures fog
+   at sixteen seats on every map; nothing gates on it.
 2. **The rays:** for each enemy, cast rays from
    the viewer's eye against the map, through the sim's own ray query:
    - the viewer's eye pushed ahead along its velocity by its one-way latency +
@@ -268,13 +277,14 @@ Wallhacks and ESP then have nothing to read. Valorant does the same.
    Any clear ray makes the target visible.
 3. **Hysteresis:** a target stays visible for 12 ticks (94 ms) after the last
    clear ray, so a peek never flickers or pops.
-4. **Always sent:** teammates; the viewer's own killer for the kill cam; every
-   fighter's name, kills and deaths for the scoreboard (never their position).
+4. **Always sent:** teammates; every fighter's name, kills and deaths for
+   the scoreboard (never their position). The kill cam replays only what
+   this client was already sent.
 5. **Sound is a deliberate leak**, bounded:
    - a gunshot is sent with a position quantized to 2 m within 60 m (unheard
      past it);
-   - footsteps within 12 m, only when the walker is moving fast (Halo footsteps
-     are quiet);
+   - footsteps never cross the wire: only a fighter fog sends is heard
+     walking;
    - a thrown grenade if the thrower is visible or within 30 m; its explosion
      everywhere it can hurt you.
 6. **Damage direction** comes with each hit on you, as an arrow, not a
@@ -307,14 +317,14 @@ runs. A no-spread cheat has nothing to cancel.
 |---|---|
 | Datagrams, client → server | inputs (§4) |
 | Datagrams, server → client | snapshots, at most 1,100 B each, newest wins |
-| One bidirectional stream | handshake, sign-in, match start and end, chat, kill feed, the salt reveal |
+| One bidirectional stream | handshake, sign-in, seats and their looks, match start and end, the kill feed, medals, cups, the salt reveal |
 
 - **WebTransport only** (Chrome, Edge, Firefox; check Safari at launch). A
   WebSocket fallback is not planned for v1.
 - **Bit packing:** Gates' `protocol/src/bits.rs` (LSB-first, fixed caller
   buffers, no allocation, no panics, typed errors).
-- **Acks:** Gaffer-style, a 16-bit snapshot ack plus 32 ack bits on every input
-  datagram, so the server knows what each client has.
+- **Acks:** every input datagram names the newest snapshot tick the client
+  has (u32): enough for deltas and events.
 - **Drop-oldest:** a snapshot replaces the one queued before it; a datagram
   over the live MTU is dropped and counted, never fragmented (Gates' `send_snap`,
   browser `WebWire::send_datagram`).
@@ -324,15 +334,22 @@ runs. A no-spread cheat has nothing to cancel.
     timers): what reconciliation needs;
   - each visible fighter, about 16 B: position (1/64 m), velocity, yaw and
     pitch, state flags (moving, airborne, crouched, firing, reloading, dead,
-    shield flare), held gun, skin id;
+    shield flare), held gun (looks go once, in `Seat`);
   - visible projectiles, events since the last acked snapshot (shots heard,
     hits on you, kills, pickups), pad timers, score.
 
-  About 200 B at 2v2, about 13 KB/s down. Full snapshots until milestone 10,
-  which encodes each snapshot as a delta against the client's acked baseline
-  (Gates' 64-entry sent ring, zero baseline when the ack is stale), so 16
-  fighters and vehicles fit in a datagram. Events are cleared when a snapshot
-  carrying them is acked, not when it is sent.
+  About 200 B at 2v2, about 13 KB/s down, sent whole. Each snapshot goes as
+  a delta when that is smaller (`proto::delta`; `--no-delta` turns it off):
+  record by record (own fighter, each fighter and vehicle by slot, pads,
+  flags, score, rounds, events), XOR'd against the newest snapshot the
+  client acked within 64 ticks; both ends keep that window, and a base
+  either lacks means a whole one. Big Team went from 195 to 91 kbps a
+  player. A snapshot carries at most 16 rounds, the client's own and the
+  nearest closing ones first. Events are cleared when a snapshot carrying
+  them is acked, not when it is sent.
+- **Big maps send less:** a fighter past 60 m is updated every other
+  snapshot, past 120 m every fourth (`room::update_every`;
+  `--no-far-rates`), and `--big-snapshot-hz 32` halves a big map's rate.
 - **Goldens:** every message has a seeded fixture encoded byte-exact in CI.
   A wire change bumps `PROTO_VER` and regenerates them.
 
@@ -342,8 +359,7 @@ runs. A no-spread cheat has nothing to cancel.
   10-minute pass bound to game, server and nonce from
   `POST /api/account/play`; the server verifies it offline against
   `/api/account/pubkey` (Gates' `server/src/auth.rs` `verify_pass`). It covers
-  EVM and Solana wallets and Elo logins. Raw SIWE (engine-shim's `siwe.rs`) is
-  the fallback.
+  EVM and Solana wallets and Elo logins.
 - **Ranked needs a wallet.** `ratings.py` refuses login-only `acct_` ids. A
   login plays casual.
 - **One seat per wallet per match.**
@@ -359,16 +375,20 @@ runs. A no-spread cheat has nothing to cancel.
   Opus over the lobby's datagrams (Gates' layout), relayed to the party and
   nobody else, never decoded by the server. A page back from a match comes
   in on its ticket (`auth.rs`) and takes its place.
-- **Queue:** Elo Pros' `lobbies.py` op `queue`. It matches parties inside a
-  rating window that grows while they wait and balances sides, then writes a
-  match id and a server onto each party's lobby. The server reads
-  `GET /lobbies/match/{id}` for who goes where, opens a room, and seats only
-  those wallets.
+- **Queue:** the server's own (`server/src/queue.rs`), by Elo Pros' rule: a
+  window of 100 that grows 5 a second, sides balanced. With `--elo-queue`,
+  Elo Pros' `lobbies.py` queue, shared by every server in the game's list
+  (`server/src/eloqueue.rs`): it puts each match on a server with room, the
+  server reads `GET /lobbies/match/{id}` for who goes where and seats only
+  those wallets, and a player matched elsewhere is moved there
+  (`Msg::Moved`).
 - **Server rows:** the shard-list row and `status.json` the store reads, from
   engine-shim's `elo.rs`.
 - **Ratings:** at match end the server posts `POST /ratings/<slug>/report`,
   signed with its server key (`serverkeys.py`: Ed25519, nonce, 300 s skew), on
-  ladders `duel` and `doubles`. The math is Weng-Lin Plackett-Luce shown on the
+  ladders `duel`, `doubles` and `cup`. A report that can't get through is
+  saved and resent (`oneshot-review resend`); a drain waits out the
+  retries. The math is Weng-Lin Plackett-Luce shown on the
   Elo scale; a new player is 1500 ± 246 and appears on the board after 5
   matches. The player sees the exact rating ± rd after every match: no hidden
   number beside it, no update held back for five wins.
@@ -388,7 +408,8 @@ runs. A no-spread cheat has nothing to cancel.
 The sim is deterministic, so a match is its seed, its salt, its map and its
 input log. The server writes that for every match. It gives us:
 
-- kill cams and spectating from the same data;
+- watching a match: a watcher follows any seat and sees exactly what that
+  seat was sent, 10 s late (30 s ranked; `room/src/spectate.rs`);
 - review of any match with fog off (§13);
 - **evidence on the rating:** the report carries
   `evidence: {replay_sha256, salt_commit}`, which Elo Pros keeps in its
@@ -485,8 +506,11 @@ passes that never expire are what players kept.
   buys the item, never the right to show it, so a bought skin still says what
   its wearer measured.
 - The server checks a player's skins against their wallet, and a locked one
-  against their floor, at sign-in, and only then puts a skin id in snapshots.
-  A client can't claim one it doesn't own or hasn't earned.
+  against their floor, at sign-in, and only then names it in the seat's
+  `Seat` message. A client can't claim one it doesn't own or hasn't earned.
+- **Gear**, a hat and boots, is checked the way a skin is. The title's ARMORY
+  shows what the wallet owns, what is locked and its floor
+  (`Msg::Wardrobe`).
 - **Emblems**, Halo's way: a glyph on a shape, each in one of 16 colours,
   painted on Triple T's back (`proto::Emblem`, drawn by `look/emblem.rs`, the
   menu's preview the same pixels). Ours, drawn from geometry: no uploads.
@@ -516,22 +540,23 @@ passes that never expire are what players kept.
 4. **Ranked:** sign-in, queue, ratings with evidence, replays and kill cam.
 5. **Review:** telemetry, the review queue, bans.
 6. **Doubles, three maps, skins,** then cups. Also: casual free for all and
-   Gun Game, the kill cam, the impaired-network gate.
+   Gun Game, the kill cam, the impaired-network gate. Done; cups too
+   (`server/src/cup.rs`), and Capture the Flag.
 7. **Hosting:** the game box and elopros.com, an unpinned CA certificate
    reloaded on renewal, admission, a drain that lets matches finish, two
    slots so a deploy never leaves nobody taking players, the deploy and
-   publish scripts (`ops/`).
+   publish scripts (`ops/`). Done (`ops/README.md`).
 
 From here the game grows into a full shooter. The sim comes first; each step
 keeps every gate in §17 green and moves a golden only on purpose.
 
 7. **Entity pools:** fighters, projectiles and pads behind one `Thing` shape,
    so a new kind is a short list the compiler checks. No behaviour change;
-   the golden does not move.
-8. **16 seats and Big Team:** 8v8 Team Slayer, casual.
+   the golden does not move. Done (`sim/src/thing.rs`, `pool.rs`).
+8. **16 seats and Big Team:** 8v8 Team Slayer, casual. Done.
 9. **Terrain:** a deterministic heightfield beside the boxes, slopes and
    sliding, a box grid for rays; an original canyon map with its own golden.
-   Done: Dry Fork (`maps/canyon/`), 140 × 60 m, Big Team's map (a map of
+   Done: Dry Fork (`maps/canyon/`), 290 × 156 m, a gulch to the sea, Big Team's map (a map of
    4,000 m² or more is a Big Team map; the rest are arenas).
    **Launchers** too: a pad in the map that throws a fighter along a set
    velocity. It reads only the fighter and the map, so it predicts exactly
@@ -546,16 +571,20 @@ keeps every gate in §17 green and moves a golden only on purpose.
     side on Dry Fork. Bots drive, back up when stuck, and get out to fight.
     Fog shows a vehicle as it shows a fighter (held, the full look every
     other snapshot, the plain test between) and names a rider only to a
-    client that may know them.
+    client that may know them. A minigun turret on two of Dry Fork's four
+    trucks, gunned by the passenger standing in its ring, predicted by the
+    gunner.
 11. **The delta wire:** snapshots as deltas against the acked baseline, a
     byte budget, events cleared on ack. Events first (done): each event a
     client may be told gets an id and rides every snapshot until one that
     carried it is acked; what doesn't fit waits; the client keeps the first
     and drops repeats (`room::EventQueue`). Every kill gets through 10% loss
-    once (`client-net/tests/loopback.rs`). Deltas and snapshots split
-    across datagrams wait until a snapshot stops fitting: sixteen seats,
-    every projectile, pad and vehicle fit one today with room for events
-    (`room/tests/budget.rs`).
+    once (`client-net/tests/loopback.rs`). Deltas done (`proto::delta`,
+    `room/tests/delta.rs`): each record XOR'd against the newest acked
+    snapshot within 64 ticks, sent only when smaller; Big Team 195 → 91
+    kbps a player. A snapshot still always fits one datagram (at most 16
+    rounds, ranked for its client: `room/tests/budget.rs`), so none is split
+    across datagrams.
 12. **The Bevy client:** a session layer in `client-net` and a native
     transport (done: `client_net::session::Session` over a `Wire`, the
     browser's WebTransport in `web.rs`, wtransport in `native.rs`; the
@@ -571,7 +600,10 @@ keeps every gate in §17 green and moves a golden only on purpose.
     same keys, taps that land inside a frame, the wheel, `N`'s net graph),
     skins and its `?pose` for the look board. `ci/e2e.mjs` plays it, the
     server serves it, `ci/publish_web.sh` publishes it, and `web/` (three.js)
-    is gone.
+    is gone. Since: the page as two modules (WebGL2 and WebGPU); the title
+    (PLAY, ARMORY, PARTY, FRIENDS, CHALLENGES), the Esc menu and settings, a pad on
+    them; our own mixer (`mix`, on the audio thread in the browser); the
+    kill cam, medals and the carnage report.
 
 ## 17 · What CI blocks a merge on
 
@@ -581,9 +613,10 @@ keeps every gate in §17 green and moves a golden only on purpose.
 | Zero allocation | the sim tick allocates after warmup |
 | Goldens | any wire message's bytes change without a `PROTO_VER` bump |
 | Prediction | the predicted own body (or driven vehicle) differs from the server's through runs, jumps, bursts, swaps, reloads, frags and driving |
-| **Leak gate** | headless Chrome plus bots: any enemy reaches a client while not visible within the lead window, or any byte of the salt crosses the wire before match end |
+| **Leak gate** | whole matches (Doubles, Gun Game, Big Team, Capture the Flag), one seat played through the client's input path: any enemy, round, event or medal reaches it that fog shouldn't allow, or any bit of the salt crosses the wire before match end (`room/tests/leaks.rs`) |
 | Lag-comp bounds | a shot lands with more than 160 ms of favour, or a client's claimed ack beats the server's view |
 | Impaired network | at 60 ms delay, 10 ms jitter, 5% loss: correction rate, bandwidth and interpolation stalls over their budgets (`client-net/tests/loopback.rs`) |
+| End to end | the page in headless Chromium fails a match (WebGL2 and WebGPU), Gun Game, three matches back to back or a party (`ci/e2e.mjs`, `ci/party.mjs`); the desktop client's shots run but don't gate |
 | Maps | a map's compiled tables aren't what its `map.json` compiles to; a spawn or pad off its floor or unreachable on foot; bots that don't fight on it |
 
 Numbers in this page that come from measurements cite their source. Every

@@ -26,16 +26,16 @@ files and trim**; we never depend on Gates' crates.
 | `client/src/net/mod.rs` | 589 | `client-net` | Copy, trim | The `Wire` trait (`send_datagram`, `rtt_ms`) |
 | `client/src/net/native.rs` | 71 | `client-net` | Copy | Native wire for bots and tests |
 | `client/src/net/handshake.rs` | 1,238 | `client-net` | Port | Hello → challenge → auth → welcome, on our messages |
-| `client-web/src/lib.rs` | 566 | `client-net` | Copy, trim | wasm-bindgen entry (`join`, `join_pass`, `watch`) |
+| `client-web/src/lib.rs` | 566 | `client-net` | Copy, trim | The browser transport the Bevy page drives (`client-net/src/web.rs`); no JS entry |
 | `protocol/src/bits.rs` | 246 | `proto` | Copy as is | `BitWriter`/`BitReader`, no allocation, no panics |
 | `protocol/src/auth.rs` | 1,339 | `proto` | Copy, trim | SIWE text, the Elo pass format, challenge and auth messages |
-| `protocol/src/lib.rs` | 7,290 | `proto` | Port about 1,200 | `encode_input` and `SnapshotEncoder` as templates: ack plus ack bits, redundant input frames, the entity record, quantization, MTU shedding. Survival fields stay behind. |
+| `protocol/src/lib.rs` | 7,290 | `proto` | Port about 1,200 | `encode_input` and `SnapshotEncoder` as templates: the ack (no ack bits since PROTO_VER 30), redundant input frames, the entity record, quantization, MTU shedding. Survival fields stay behind. |
 | `protocol/src/goldens.rs` + `examples/gen_goldens.rs` | 3,350 | `proto` | Pattern | Seeded fixtures checked byte-exact |
 | `server/src/net.rs` | 7,105 | `server` | Copy about 1,500 | `spawn_shard` (wtransport config, BBR/CUBIC, keep-alive), `bind_udp` (8 MiB buffers), Retry admission, `handshake_task`, `accept_input`, `writer_task` (newest snapshot wins), `send_snap` (MTU check). Leave saves, skins, admin and spectator plumbing. |
 | `server/src/client.rs` | 1,864 | `server` | Copy, trim | `ClientNetState`: acks, `newest_acked`, the input buffer (`INPUT_BUFFER_CAP`), catch-up credit, decayed repeats |
 | `server/src/stats.rs` (around 100–330) | 1,345 | `server` | Port | `favour_for` and its caps: the server-chosen lag-comp depth |
 | `server/src/auth.rs` | 870 | `server` | Copy | `verify` (SIWE secp256k1), `verify_solana_any`, `verify_pass` (Elo pass, offline) |
-| `server/src/handoff.rs` | 587 | `server` | Copy (later) | Signed hand-off between servers: lobby → match server |
+| `server/src/handoff.rs` | 587 | `server` | Reference | Done our way: `Msg::Moved`, and `Hello.queued` carrying Elo Pros' match id, checked with Elo Pros |
 | `server/src/pace.rs` | 244 | `server` | Copy | Minimum gap per action kind |
 | `server/src/cheat.rs` | 856 | `server` | Port | Snap-hit, head-shot rate, tracking-through-walls checks; evidence, never a kick |
 | `server/src/anomaly.rs` | 524 | `server` | Copy, trim | The evidence log `cheat.rs` writes to |
@@ -73,15 +73,15 @@ keep its JS map tools nearly as they are.
 | `src/arena.wat` | 2,148 | `sim` | Port | `$a_shoot`, `$a_round`, `$a_hitscan`, `$a_ray` (hitbox shapes: body cylinder, head sphere 0.22 m at 1.62 m), `$a_hurt`, `$a_kill`, `$a_melee`, pads, spawns (farthest of four from enemies), respawn |
 | `src/weapons.wat` | 326 | `sim` | Port | Rockets, frags, splash, rocket jumps |
 | `src/am/slayer.*`, `src/am/*` | | `sim` | Port Slayer; reference the rest | The team-mode kit's shape: `start`, `tick`, `kill`, `bar` hooks |
-| `client/arena-bot.mjs` | 646 | `server` (Rust) | Port | The AI fighter: target choice by sight, settling aim with human wobble (1.4–2.8° rms), 0.25–0.6 s reaction, blind past 60°, gun by range, strafing, frags, pads. It runs server-side against the true world. |
-| `tools/map-compile.mjs` | 366 | `tools/maps` | Port (done: `tools/maps/compile.mjs`) | Boxes, prefabs, quarter turns; our flat floor (no heightfield, no movers), team mirroring, output as Rust tables the sim builds a `Map` from. The visibility bake (`DESIGN.md` §8) is still to come. |
-| `tools/png-codec.mjs` | 125 | `tools/maps` | Copy | PNG encode/decode in typed arrays |
-| `tools/scene-map.mjs` | 607 | `tools/maps` | Copy | Convex solids to boxes, ramps to stairs |
-| `tools/map.mjs` | 56 | `tools/maps` | Copy | CLI; documents `map.json` |
-| `tools/roblox.mjs`, `rbx-map.mjs`, `rbx-file.mjs` | 91, 386, 284 | `tools/maps` | Copy | A Roblox place as a map |
-| `tools/vox.mjs`, `vox-map.mjs`, `vox-file.mjs` | 60, 192, 189 | `tools/maps` | Copy | A MagicaVoxel model as a map |
-| `client/map-editor.html`, `map-editor.mjs` | 86, 1,356 | `tools/maps` | Copy | Draw a map in the page; it runs the compiler live |
-| `maps/canyon/`, `maps/lifts/` | | `maps/` | Copy | Box Canyon (bases, cave, teleporters, pads) and Lifts as the first test maps |
+| `client/arena-bot.mjs` | 646 | `sim` (`bot.rs`) | Port (a simple bot now; the full port is next) | The AI fighter: target choice by sight, settling aim with human wobble (1.4–2.8° rms), 0.25–0.6 s reaction, blind past 60°, gun by range, strafing, frags, pads. It runs server-side against the true world. |
+| `tools/map-compile.mjs` | 366 | `tools/maps` | Port (done: `tools/maps/compile.mjs`) | Boxes, prefabs, quarter turns; a flat floor or a terrain (Dry Fork, after Gates' `terrain.rs`), no movers, team mirroring, output as Rust tables the sim builds a `Map` from. The visibility bake (`DESIGN.md` §8) is still to come. |
+| `tools/png-codec.mjs` | 125 | `tools/maps` | Not taken yet | PNG encode/decode in typed arrays |
+| `tools/scene-map.mjs` | 607 | `tools/maps` | Not taken yet | Convex solids to boxes, ramps to stairs |
+| `tools/map.mjs` | 56 | `tools/maps` | Not taken yet | CLI; documents `map.json` |
+| `tools/roblox.mjs`, `rbx-map.mjs`, `rbx-file.mjs` | 91, 386, 284 | `tools/maps` | Not taken yet | A Roblox place as a map |
+| `tools/vox.mjs`, `vox-map.mjs`, `vox-file.mjs` | 60, 192, 189 | `tools/maps` | Not taken yet | A MagicaVoxel model as a map |
+| `client/map-editor.html`, `map-editor.mjs` | 86, 1,356 | `tools/maps` | Not taken yet | Draw a map in the page; it runs the compiler live |
+| `maps/canyon/`, `maps/lifts/` | | `maps/` | Reference | `maps/canyon/` is Dry Fork, our own terrain map; Lifts not taken |
 | `maps/crossroads/` | | `maps/` | Optional | Roblox's open-source level; **keep its `LICENSE` (MIT © 2020 Roblox)** |
 | `net/rooms.mjs` | 174 | | Reference | Room pool: keep N free, grow to a cap, recycle idle |
 | `net/replay.mjs` | 87 | | Reference | Replay file shape (wasm hash, seed, hashes) |
@@ -115,11 +115,14 @@ The clips we use, from its 55:
 - Hits and death: `Hit_Chest`, `Hit_Head`, `Death01`.
 - Melee: `Punch_*`. Fun: `Dance_Loop`, and "Greet" (the UUID-named clip).
 
-The store pack `gates-triple-t` is already exported for three.js.
+Triple T comes in through `tools/assets.mjs` → `tools/glb` (KTX2 → JPEG).
 
 For a full room, decimate the body to about 8–12k tris for third person.
 
 ### Guns: Halo roles to Gates models
+
+**Not taken:** our guns are commissioned from Meshy by `tools/models/<gun>.py`
+and cut in Blender (`CLAUDE.md`, NOTICE). The table below is the old plan.
 
 Each gun is about 1 MB. They're stored **barrel-up (+Z top)** with a measured
 grip; re-orient for the viewmodel (`ci/stand_grip.py` has the grip numbers).
@@ -139,6 +142,9 @@ grip; re-orient for the viewmodel (`ci/stand_grip.py` has the grip numbers).
 No scope or attachment models exist (icons only).
 
 ### Weapon skins (the first NFTs)
+
+**Not taken:** a skin is a coat on our own guns, recoloured in a shader
+(`look/gun_skin.rs`), and trim on Triple T. The files below stay Gates'.
 
 `assets/models/held/skins/`, 1.9–3.9 MB each, repainted on the original UVs by
 `ci/meshy_retexture.py`:
@@ -160,7 +166,7 @@ Founder skins are Gates' alpha gift; leave them there.
 |---|---|---|
 | `store_pack.py` | 182 | GLB with KTX2 → GLB with PNG, plus `elo-asset.json` |
 | `unbake_ktx.py` | 255 | KTX2 → PNG for one file, undoing the linear bug |
-| `store_preview.mjs` | 191 | Load every GLB in three.js in headless Chromium and render a preview: our asset gate |
+| `store_preview.mjs` | 191 | Reference; our gate is `tools/glb` |
 | `ktx_pack.py` | 314 | Back to KTX2 later if VRAM matters (then use `KTX2Loader`) |
 | `stand_grip.py` | 201 | Stand a gun on its grip axis |
 | `split_arms.py` | 228 | Split a skinned character into first-person arms and body |
@@ -176,7 +182,8 @@ source rig for retargeting. It ships with nothing.
 
 ## 4 · Sound, from Gates (CC0 / public domain, mono ogg)
 
-All from `Gates/assets/sound/`, credits in its `MANIFEST.md`.
+**Not taken:** every sound is ours, made with ElevenLabs (`tools/sfx.mjs`;
+the announcer `tools/voice.mjs`; NOTICE). The table below is the old plan.
 
 | Need | Files (`_0`… takes) |
 |---|---|
@@ -209,8 +216,8 @@ its terms before using).
   the credits from `assets/icons/CREDITS.md` (it and Gates' `NOTICE` disagree on
   the authors; check the files we take). Gates' own item renders in there are
   ours.
-- Fireplace `client/hudfont.mjs` (125) and `client/font.mjs` (34): a HUD
-  font atlas drawn at startup from the system font, no font file.
+- Fonts: not Fireplace's system-font atlas but CC0 Unitblock and Aileron,
+  embedded (`client/src/ui.rs`, `assets/fonts/FONTS.md`).
 
 ## 6 · From engine-shim (Rust → Rust, MIT)
 
@@ -232,29 +239,26 @@ Nothing copied. These are the services the server and page talk to.
 |---|---|
 | `POST /api/account/play`, `GET /api/account/pubkey` (`meter/accounts.py`), `/sdk/elo-signin-1.js` | The sign-in pass the page gets and the server verifies offline |
 | `POST /api/signin/check` (`meter/signin_check.py`) | Raw SIWE / Solana sign-in fallback |
-| `lobbies.py`: `POST /lobbies/prepare`, `/lobbies/act` op `queue`, `GET /lobbies/{id}`, `GET /lobbies/match/{id}` | The rated queue and who is seated in a match |
-| `ratings.py`: `POST /ratings/{slug}/report` (signed per `serverkeys.py`), `GET /ratings/{slug}/matches` | Ratings on ladders `duel` and `doubles`; the public match log |
+| `lobbies.py`: `POST /lobbies/serve/{slug}` (signed), `GET /lobbies/match/{id}` | The shared rated queue (`--elo-queue`) and who is seated in a match |
+| `ratings.py`: `POST /ratings/{slug}/report` (signed per `serverkeys.py`), `GET /ratings/{slug}/matches` | Ratings on ladders `duel`, `doubles` and `cup`; the public match log |
 | `gamestats.py`: `POST /gamestats/{slug}/report` | Achievements and stats |
 | `solana_items.py`, `deploy/solana-items/`, `docs/items/SOLANA-ITEMS.md` | Skins as Metaplex Core NFTs; ownership at sign-in |
 | `skin_rotation.py`, `itemstore.py`, `EloGacha` | Store rotations and cases (odds shown above the pull: `docs/start/DO-NOT-STRIKE.md` §3–4) |
 
-**Owed on the Elo Pros side:**
-1. An optional `evidence` key in `ratings.py` `MATCH_KEYS` and the match log
-   (`replay_sha256`, `salt_commit`).
-2. `meter/bans.py`: a per-game, per-wallet ban list the server reads at
-   sign-in.
-3. A `server_keys` block and listing row for the new game.
-4. Later: a ping signal in `lobbies.py` for regions.
+**Owed on the Elo Pros side:** a ping signal in `lobbies.py` for regions.
+The rest is in: `evidence` on a report (the server still resends without it
+to an Elo Pros that refuses the key), the game's ban list
+(`meter/gamebans.py`), and its server key.
 
 ## 8 · This repo's NOTICE
 
 - **Required:** game-icons.net authors (CC BY 3.0), if any icon is taken.
 - **Required:** Roblox's MIT notice, if `maps/crossroads/` is taken.
-- **Credited by choice:** CC0 sound sources (Kenney, Freesound uploaders, USC
-  archive, OpenGameArt's Free Firearm Sound Library), CC0 textures (Poly Haven,
-  ambientCG, TextureCan), Quaternius (CC0) if the mannequin is used.
-- **Ours:** Meshy-commissioned models (Triple T, guns, skins): no credit owed;
-  don't post them to Meshy's community feed.
+- **Credited by choice:** CC0 textures (Poly Haven, ambientCG, TextureCan),
+  CC0 fonts, Quaternius (CC0) if the mannequin is used.
+- **Ours:** Meshy-commissioned models (Triple T, guns), and every sound,
+  made with ElevenLabs: no credit owed; don't post the models to Meshy's
+  community feed.
 - Never another game's art. The guns were designed after Rust's (Facepunch's);
   name and present them as our own (as Gates' store packs do), and never ship
   Facepunch's own assets.
@@ -299,13 +303,15 @@ The types Gates' modules read become ours: `Eye` → `OwnView` (from
 `NetCore`), `WorldId` → `MapRes`, `WeatherNow` and the day fraction → the
 map's `"sky"` block, which the sim never reads.
 
-**Not taken:** `hud.rs`, `viewmodel.rs`, `anim.rs`, `bodies.rs` (survival
-game state throughout), `water.rs`, `far_trees.rs`, `weather.rs` and the
-streaming machinery (built for a 4 km island). Gates' netcode also stays
-there: it is as game-specific as ours, has no vehicles, and its useful parts
-(delta snapshots against the acked baseline, `docs/NETCODE.md`; one client
-for desktop and wasm split at `send_datagram`, `client/src/net/mod.rs`) are
-patterns we write ourselves.
+**Since ported** (NOTICE): `viewmodel.rs`, `anim.rs`'s locomotion,
+`water.rs`, and `weather.rs` as `look/mood.rs`.
+
+**Not taken:** `hud.rs`, `bodies.rs` (survival game state throughout),
+`far_trees.rs` and the streaming machinery (built for a 4 km island). Gates'
+netcode also stays there: it is as game-specific as ours, has no vehicles,
+and its useful parts are patterns we wrote ourselves (delta snapshots
+against the acked baseline, as `proto::delta`; one client for desktop and
+wasm split at `send_datagram`).
 
 **Assets:** textures are CC0 (`assets/textures/MANIFEST.md`), roughness and
 AO maps included. Models are Meshy commissions (ours, §3). Check each file's
