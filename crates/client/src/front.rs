@@ -1146,7 +1146,7 @@ const HEAD_BLURBS: [&str; proto::HEADWEAR.len()] = [
 const FEET_BLURBS: [&str; proto::FOOTWEAR.len()] = [
     "Triple T's own feet.",
     "Oiled leather and lugged soles. A log in logger's boots knows what it's doing.",
-    "Teal suede and a cupsole. Your steps sound no quieter in them.",
+    "White leather, a teal heel and a cupsole. Your steps sound no quieter in them.",
     "Tooled leather and steel. They don't jingle: your steps sound no louder in them.",
     "Armour plate and a lit seam. The magnets hold you to nothing.",
     "Yellow rubber, mud to the ankle. Dry where it matters.",
