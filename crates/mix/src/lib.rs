@@ -19,7 +19,8 @@
 //!
 //! Pure: no clock, no I/O, no allocation in [`Engine::render`].
 
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
 /// The mixer's rate: the browser's context is made at it, and the desktop's
@@ -33,7 +34,8 @@ pub const VOICES: usize = 40;
 pub const LOOPS: usize = 32;
 /// Clips the bank holds, by id.
 pub const CLIPS: usize = 512;
-/// Commands waiting past this are dropped (the audio thread stalled).
+/// Commands waiting past this are dropped or held back (the audio thread
+/// stalled: [`Shared::send`]).
 const INBOX: usize = 512;
 /// The limiter's ceiling, and how much of the way back to unity its gain
 /// comes each block once the peak has passed (~0.25 s).
@@ -213,12 +215,19 @@ impl Reader<'_> {
 
 /// What the game thread and the desktop's audio thread share: the inbox, a
 /// bounded channel (std's array channel: no lock and no allocation a
-/// command, either side, while neither waits on it). Full, the rest of a
-/// frame's commands are dropped: the audio thread stalled.
+/// command, either side, while neither waits on it). Full (the audio thread
+/// stalled), a frame's momentary commands (a one-shot, a move) are dropped
+/// and counted; what lasts (a clip installed, a loop started or stopped, the
+/// volume) is held back, the latest for each, and goes ahead of the next
+/// frame's.
 pub struct Shared {
     tx: SyncSender<Cmd>,
     /// The audio thread's end, till the one stream takes it.
     rx: Mutex<Option<Receiver<Cmd>>>,
+    /// Held back from a full inbox, in order: the game thread's alone.
+    later: Mutex<Vec<Cmd>>,
+    /// Commands dropped at a full inbox.
+    dropped: AtomicU32,
 }
 
 impl Default for Shared {
@@ -227,18 +236,65 @@ impl Default for Shared {
         Shared {
             tx,
             rx: Mutex::new(Some(rx)),
+            later: Mutex::new(Vec::new()),
+            dropped: AtomicU32::new(0),
         }
     }
 }
 
+/// Whether `a` says what `b` says about the same thing, so only the later
+/// need be held: one clip id, one slot, the volume.
+fn same_target(a: &Cmd, b: &Cmd) -> bool {
+    let slot = |c: &Cmd| match *c {
+        Cmd::Hold { slot, .. } | Cmd::Stop { slot } => Some(slot),
+        _ => None,
+    };
+    match (a, b) {
+        (Cmd::Install { id: x, .. }, Cmd::Install { id: y, .. }) => x == y,
+        (Cmd::Master(_), Cmd::Master(_)) => true,
+        _ => slot(a).is_some() && slot(a) == slot(b),
+    }
+}
+
 impl Shared {
-    /// Hand over a frame's commands (emptying `cmds`).
+    /// Hand over a frame's commands (emptying `cmds`), after whatever a
+    /// full inbox held back before.
     pub fn send(&self, cmds: &mut Vec<Cmd>) {
-        for c in cmds.drain(..) {
-            if self.tx.try_send(c).is_err() {
-                break;
+        let mut later = self.later.lock().unwrap_or_else(|e| e.into_inner());
+        let mut full = false;
+        for c in later.drain(..).collect::<Vec<_>>().into_iter().chain(cmds.drain(..)) {
+            let c = if full {
+                c
+            } else {
+                match self.tx.try_send(c) {
+                    Ok(()) => continue,
+                    Err(TrySendError::Full(c)) => {
+                        full = true;
+                        c
+                    }
+                    // No audio thread any more: nothing will play.
+                    Err(TrySendError::Disconnected(_)) => {
+                        self.dropped.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
+            };
+            match c {
+                Cmd::Play { .. } | Cmd::Move { .. } => {
+                    self.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                c => {
+                    later.retain(|o| !same_target(o, &c));
+                    later.push(c);
+                }
             }
         }
+    }
+
+    /// Commands dropped at a full inbox so far (one-shots and moves; what
+    /// lasts is held back, never dropped).
+    pub fn dropped(&self) -> u32 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     /// The audio thread's end of the inbox: the first stream's (one plays
@@ -757,6 +813,28 @@ mod tests {
         assert!(cmds.is_empty());
         let e: f32 = (&mut s).take(BLOCK * 2).map(|x| x * x).sum();
         assert!(e > 1.0);
+    }
+
+    /// A stalled audio thread loses the frame's one-shots, counted, but
+    /// never a clip: an install is sent once.
+    #[test]
+    fn a_full_inbox_holds_installs_back() {
+        let shared = Shared::default();
+        let inbox = shared.inbox().unwrap();
+        let mut cmds: Vec<Cmd> = (0..INBOX + 10).map(|_| play(Place::centre(1.0), 0)).collect();
+        cmds.push(Cmd::Install {
+            id: TONE,
+            clip: tone(BLOCK),
+        });
+        shared.send(&mut cmds);
+        assert!(cmds.is_empty());
+        assert_eq!(shared.dropped(), 10);
+        let mut e = Engine::default();
+        e.take(&inbox);
+        assert_eq!(e.stats().installed, 0);
+        shared.send(&mut cmds);
+        e.take(&inbox);
+        assert_eq!(e.stats().installed, 1);
     }
 
     /// The bytes a page posts are the commands the desktop sends, played

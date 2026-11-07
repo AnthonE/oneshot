@@ -394,7 +394,6 @@ pub struct NetCore {
     vyaw_off: f32,
 
     newest: Option<u32>,
-    ack_bits: u32,
     latest: Snapshot,
     frames: [Frame; INTERP_FRAMES],
     n_frames: usize,
@@ -423,6 +422,16 @@ pub struct NetCore {
     /// Ticks a forward clock resync added that the next `update` makes on
     /// top of the time passed: our rounds already flying don't take them.
     resync_ahead: f64,
+    /// After a forward resync, the seq the server must have from us before
+    /// its depth says anything new: until then each snapshot still reports
+    /// the shortfall the jump already made up, and taking it again would
+    /// jump again (a stalled page's queue of them ran the clock minutes
+    /// ahead).
+    steer_from: Option<u32>,
+    /// Forward resync since the last `update`, in ticks (all of it, and the
+    /// part `resync_ahead` took): a stall's shortfall was our own silence,
+    /// which the update's real time already makes up.
+    jumped: (f64, f64),
     /// The last few seconds as this client was sent them, for the kill cam.
     /// Nothing in it is more than the snapshots already said: fog shaped
     /// it on the server.
@@ -474,7 +483,6 @@ impl NetCore {
             voffset: V3::ZERO,
             vyaw_off: 0.0,
             newest: None,
-            ack_bits: 0,
             latest: Snapshot::default(),
             frames: [Frame::empty(); INTERP_FRAMES],
             n_frames: 0,
@@ -493,6 +501,8 @@ impl NetCore {
             coasts: Default::default(),
             run_ons: Default::default(),
             resync_ahead: 0.0,
+            steer_from: None,
+            jumped: (0.0, 0.0),
             cam: Vec::with_capacity(KILLCAM_FRAMES),
             cam_at: 0,
             death: None,
@@ -547,6 +557,15 @@ impl NetCore {
         // made it (sent in the loop on even seqs, a frame's last often
         // waited for the next, two ticks on at 60 Hz); faster, one may wait
         // a page frame, a tick at most.
+        let (jumped, jumped_unseen) = core::mem::take(&mut self.jumped);
+        if dt / TICK_MS > SKIP_AFTER as f64 {
+            // A stall: what the snapshots said meanwhile was the server
+            // running dry on our silence, not our clock. Real time makes
+            // that up; a resync's jump on top would put us ahead.
+            self.t = (self.t - jumped).max(self.seq as f64);
+            self.resync_ahead = (self.resync_ahead - jumped_unseen).max(0.0);
+            self.steer_from = Some(self.t.floor() as u32);
+        }
         let owed = self.t.floor() - self.seq as f64;
         if owed > SKIP_AFTER as f64 {
             let to = (self.t.floor() as u32).wrapping_sub(SEND_EVERY);
@@ -955,7 +974,6 @@ impl NetCore {
         let first = last.wrapping_sub(unacked.max(1) - 1);
         let mut m = InputMsg {
             ack_tick: self.newest.unwrap_or(0),
-            ack_bits: self.ack_bits,
             playout: self.playout(now_ms),
             first_seq: first,
             n: 0,
@@ -1009,28 +1027,14 @@ impl NetCore {
 
     /// A snapshot arrived at `now_ms`.
     pub fn on_snapshot(&mut self, now_ms: f64, s: &Snapshot) {
-        // Acks: the newest tick, and which of the 32 before it we have.
         match self.newest {
-            Some(n) if s.tick <= n => {
-                let back = n - s.tick;
-                if (1..=32).contains(&back) {
-                    self.ack_bits |= 1 << (back - 1);
-                }
-                return; // Older than what we have: nothing new to draw.
-            }
+            // Older than what we have: nothing new to draw.
+            Some(n) if s.tick <= n => return,
             Some(n) => {
                 let fwd = s.tick - n;
                 if self.stats.snap_every == 0 || fwd < self.stats.snap_every {
                     self.stats.snap_every = fwd;
                 }
-                // Exactly 32 on shifts every old bit out (and `<< 32` on a
-                // u32 is an overflow: a panic in a debug build, which a
-                // half-second hitch at a level's load found).
-                self.ack_bits = if fwd > 32 {
-                    0
-                } else {
-                    self.ack_bits.checked_shl(fwd).unwrap_or(0) | (1 << (fwd - 1))
-                };
             }
             None => {
                 // Half a second before the welcome (sent with it) to two
@@ -1100,7 +1104,17 @@ impl NetCore {
         // TARGET_DEPTH: below it the server guesses, above it we add delay.
         // A watcher sends no inputs: the depth was the player's, not ours.
         let d = s.depth as f64;
+        // The newest seq of ours the server had (its last run and the depth
+        // past it): short of `steer_from`, this snapshot is from before our
+        // last jump reached it.
+        let seen = s.last_seq.wrapping_add(s.depth as i32 as u32);
+        if self.steer_from.is_some_and(|f| seen.wrapping_sub(f) < 0x8000_0000) {
+            self.steer_from = None;
+        }
         if self.watch {
+            self.rate = 1.0;
+        } else if d < -8.0 && self.steer_from.is_some() {
+            // Made up already: wait for the server to see it.
             self.rate = 1.0;
         } else if !(-8.0..=16.0).contains(&d) {
             let drawn = self.own().1;
@@ -1116,6 +1130,11 @@ impl NetCore {
             let unseen = (self.t - t0) - (self.alpha() - a0) as f64;
             if unseen > 0.0 {
                 self.resync_ahead += unseen;
+            }
+            if self.t > t0 {
+                self.steer_from = Some(self.t.floor() as u32);
+                self.jumped.0 += self.t - t0;
+                self.jumped.1 += unseen.max(0.0);
             }
             // The clock went back through the tick being drawn: what was on
             // screen eases on from where it was, as a correction does,
@@ -1878,9 +1897,4 @@ fn drawn(r: &Remote) -> Drawn {
         over: r.over,
         cloak: (r.cloak as f32 / proto::CLOAK_STEPS).min(1.0),
     }
-}
-
-/// Scores by seat, for the HUD.
-pub fn scores(s: &Snapshot) -> [i32; MAX_FIGHTERS] {
-    s.score
 }

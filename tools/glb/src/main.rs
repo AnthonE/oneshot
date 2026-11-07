@@ -186,10 +186,11 @@ pub fn rewrite(
 
 /// Decode one level of a KTX2/UASTC container to RGBA8: `(w, h, rgba)`.
 ///
-/// The same route `tests/packed_maps.rs` takes and Bevy takes — container →
-/// zstd → UASTC transcode — with the row pitch in PIXELS for the
+/// The same route Gates' `tests/packed_maps.rs` takes and Bevy takes —
+/// container → zstd → UASTC transcode — with the row pitch in PIXELS for the
 /// uncompressed target, because `basis-universal 0.3.1`'s safe wrapper
-/// computes it in blocks and segfaults (`CLAUDE.md`'s packer entry).
+/// computes it in blocks and segfaults (the packer entry in Gates'
+/// `CLAUDE.md`; neither is in this repo).
 pub fn decode_level(ktx: &[u8], level: u32) -> Result<(u32, u32, Vec<u8>), Error> {
     use basis_universal::{sys, DecodeFlags, TranscoderBlockFormat};
     let reader = ktx2::Reader::new(ktx).map_err(|e| Error::Decode(format!("{e:?}")))?;

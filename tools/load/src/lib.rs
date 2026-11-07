@@ -232,6 +232,8 @@ struct Played {
     never: bool,
     /// Its lobby never opened.
     lobby_failed: bool,
+    /// Its lobby opened, and the server cut it before the run was over.
+    lobby_cut: bool,
     /// Snapshots a second it was sent, by the ticks between them (0: none).
     sent_hz: f64,
 }
@@ -302,6 +304,7 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
             c.update(wander.at(c.now_ms()));
             if let Some(l) = &lobby {
                 l.take();
+                p.lobby_cut |= l.closed();
             }
             let mut said = None;
             for m in c.messages() {
@@ -361,6 +364,7 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
         }
     }
     if let Some(l) = lobby {
+        p.lobby_cut |= l.closed();
         l.close();
     }
     p
@@ -465,6 +469,8 @@ pub struct Report {
     pub never_in: usize,
     /// Players whose lobby never opened.
     pub lobby_failed: usize,
+    /// Players whose lobby the server cut mid-run.
+    pub lobby_cut: usize,
     /// Snapshots a second players were sent: the least rate seen.
     pub sent_hz: f64,
     pub failed: usize,
@@ -493,7 +499,7 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
 
 impl Report {
     /// What says the server didn't keep up, if anything: a player never
-    /// in, snapshots short, a tick skipped or more than 1% late, a session
+    /// in, a lobby that never opened or was cut, snapshots short, a tick skipped or more than 1% late, a session
     /// cut behind, the prediction often wrong.
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -505,6 +511,9 @@ impl Report {
                 "{} of {} lobbies never opened",
                 self.lobby_failed, self.players
             ));
+        }
+        if self.lobby_cut > 0 {
+            out.push(format!("{} of {} lobbies cut mid-run", self.lobby_cut, self.players));
         }
         if self.snaps_p10 < 0.9 * self.sent_hz {
             out.push(format!(
@@ -543,8 +552,8 @@ impl fmt::Display for Report {
         };
         writeln!(
             f,
-            "players {}: {} joins, {} never in, {} connects failed, {} matches over, {} lobbies failed",
-            self.players, self.joins, self.never_in, self.failed, self.byes, self.lobby_failed
+            "players {}: {} joins, {} never in, {} connects failed, {} matches over, {} lobbies failed, {} cut",
+            self.players, self.joins, self.never_in, self.failed, self.byes, self.lobby_failed, self.lobby_cut
         )?;
         if !self.refused.is_empty() {
             writeln!(f, "  refused: {}", list(&self.refused))?;
@@ -692,6 +701,7 @@ pub async fn run(o: Opts) -> Report {
     let mut rates = Vec::new();
     let mut never_in = 0;
     let mut lobby_failed = 0;
+    let mut lobby_cut = 0;
     let mut sent_hz: f64 = 0.0;
     let mut refused: BTreeMap<String, usize> = BTreeMap::new();
     let mut cut: BTreeMap<String, usize> = BTreeMap::new();
@@ -702,6 +712,7 @@ pub async fn run(o: Opts) -> Report {
         };
         never_in += usize::from(p.never);
         lobby_failed += usize::from(p.lobby_failed);
+        lobby_cut += usize::from(p.lobby_cut);
         if p.sent_hz > 0.0 {
             sent_hz = if sent_hz == 0.0 {
                 p.sent_hz
@@ -737,6 +748,7 @@ pub async fn run(o: Opts) -> Report {
         joins: all.joins,
         never_in,
         lobby_failed,
+        lobby_cut,
         sent_hz: if sent_hz == 0.0 { SNAPSHOT_HZ } else { sent_hz },
         failed: all.failed,
         refused: refused.into_iter().collect(),
