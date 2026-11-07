@@ -62,6 +62,9 @@ pub fn step_near(
         let _ = sc.crash(map);
         sc.seat();
         sc.run_down(&mut Present);
+        if sim::consts::SOLID_HULLS {
+            sc.push_out(map);
+        }
     }
     f.body = sc.men[own].body;
     l

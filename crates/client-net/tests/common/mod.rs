@@ -88,6 +88,8 @@ pub struct Lan {
     next_tick: f64,
     /// Truck `i` at every server tick so far: (tick, the hull).
     pub hulls: Vec<(u32, [Vehicle; sim::consts::MAX_VEHICLES])>,
+    /// Every seat's feet at every server tick so far.
+    pub bodies: Vec<[V3; sim::consts::MAX_FIGHTERS]>,
 }
 
 impl Lan {
@@ -128,6 +130,7 @@ impl Lan {
             now: 0.0,
             next_tick: 0.0,
             hulls: Vec::new(),
+            bodies: Vec::new(),
         }
     }
 
@@ -166,6 +169,7 @@ impl Lan {
                     }
                 }
                 self.hulls.push((self.room.world.tick, *self.room.world.vehicles));
+                self.bodies.push(self.room.world.fighters.map(|f| f.body.pos));
                 self.next_tick += TICK_MS;
             }
             for (k, c) in self.cs.iter_mut().enumerate() {
@@ -181,6 +185,15 @@ impl Lan {
             }
             self.now += 0.5;
         }
+    }
+
+    /// Seat `s`'s feet where the server had them at fractional tick `t`.
+    pub fn body_at(&self, s: usize, t: f64) -> Option<V3> {
+        let lo = t.floor() as u32;
+        let first = self.hulls.first()?.0;
+        let a = self.bodies.get(lo.checked_sub(first)? as usize)?[s];
+        let b = self.bodies.get((lo + 1 - first) as usize)?[s];
+        Some(a + (b - a) * (t - lo as f64) as f32)
     }
 
     /// Truck `i` where the server had it at fractional tick `t`.

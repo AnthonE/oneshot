@@ -25,7 +25,7 @@ pub const MAGIC: &[u8; 4] = b"OSR5";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
-pub const RULES_TAG: u64 = 0xd9f4_2121_99eb_e3d0;
+pub const RULES_TAG: u64 = 0xc946_f56b_4921_bc03;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {

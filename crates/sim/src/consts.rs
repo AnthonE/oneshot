@@ -325,6 +325,9 @@ pub const SHARE_FULL: u8 = 15;
 /// Half the hull's length and width, and its height above the ground.
 pub const VEH_HALF_L: f32 = 2.86;
 pub const VEH_HALF_W: f32 = 1.1;
+/// Hulls are solid to fighters on foot: put out the nearest way, never
+/// through (`contact::Scene::push_out`). A hull never gives way to a body.
+pub const SOLID_HULLS: bool = true;
 pub const VEH_H: f32 = 1.84;
 /// What of it stops a shot (`Vehicle::ray`): its steel, never its glass.
 /// The body to the windows' sill, its whole length; and behind the cab

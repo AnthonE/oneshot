@@ -629,6 +629,9 @@ impl World {
             w: self,
             depth: rewind_q8,
         });
+        if SOLID_HULLS {
+            sc.push_out(&self.map);
+        }
         sc.put(&mut self.fighters, &mut self.vehicles);
         for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw || l.mounted {

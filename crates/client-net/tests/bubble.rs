@@ -321,3 +321,93 @@ fn shots_at_a_truck_in_the_bubble_meet_it_where_it_is_drawn() {
         assert!(live.1 * 100 >= past.1 * 95, "{delay} ms: {live:?} against {past:?}");
     }
 }
+
+#[derive(Debug)]
+struct Shove {
+    /// The one on foot's own corrections, and its drawn body against where
+    /// the server had it at the tick drawn, through the contact.
+    corrections: u32,
+    drawn: Err,
+}
+
+/// On foot against a truck: `creep` false, running into a parked one's
+/// side; true, stood in front of one its driver creeps forward under the
+/// speed that runs anyone down.
+fn against_a_truck(delay_ms: f64, jitter_ms: f64, bubbles: bool, creep: bool) -> Shove {
+    let mut lan = Lan::dry_fork(&[0, 0], delay_ms, jitter_ms, 0.0, bubbles);
+    let v = lan.room.world.vehicles[0];
+    let (f, r) = v.axes();
+    let back = v.pos - f * 2.0;
+    let me = if creep { v.pos + f * 6.0 } else { v.pos + r * 6.0 };
+    lan.place(0, back.x, back.z);
+    lan.place(1, me.x, me.z);
+    let press = Input {
+        buttons: USE,
+        ..Input::default()
+    };
+    let toward = sim::geom::rad_to_yaw(sim::fmath::atan2(-r.z, -r.x));
+    lan.run(
+        5000.0,
+        |k, now| {
+            if creep && k == 0 && (4000.0..4040.0).contains(&now) {
+                press
+            } else {
+                Input::default()
+            }
+        },
+        |_, _, _, _| {},
+    );
+    let before = lan.cs[1].core.stats.corrections;
+    let slot = lan.cs[1].slot as usize;
+    let speed = std::cell::Cell::new(0.0f32);
+    let mut seen = Vec::new();
+    lan.run(
+        10_000.0,
+        |k, _| match (k, creep) {
+            (0, true) => Input {
+                mz: if speed.get() < 2.0 { 127 } else { 0 },
+                ..Input::default()
+            },
+            (1, false) => Input {
+                yaw: toward,
+                mz: 127,
+                ..Input::default()
+            },
+            _ => Input::default(),
+        },
+        |k, c, _, room| {
+            speed.set(room.world.vehicles[0].vel.flat().len());
+            if k == 1 {
+                seen.push((drawn_tick(c), c.own().1));
+            }
+        },
+    );
+    Shove {
+        corrections: lan.cs[1].core.stats.corrections - before,
+        drawn: err(seen
+            .iter()
+            .filter_map(|&(t, p)| lan.body_at(slot, t).map(|q| (p - q).len()))),
+    }
+}
+
+#[test]
+fn a_truck_is_solid_to_our_own_prediction() {
+    for creep in [false, true] {
+        for (delay, jitter) in [(20.0, 0.0), (60.0, 10.0)] {
+            let off = against_a_truck(delay, jitter, false, creep);
+            let on = against_a_truck(delay, jitter, true, creep);
+            let what = if creep {
+                "pushed by a creeping truck"
+            } else {
+                "into a parked one"
+            };
+            println!("{what}, {delay} ms ±{jitter}:\n  coarse {off:?}\n  bubble {on:?}");
+            assert!(off.corrections > 20, "{what}: never touched it? {off:?}");
+            assert!(
+                on.corrections * 10 <= off.corrections,
+                "{what}, {delay} ms: {on:?} against {off:?}"
+            );
+            assert!(on.drawn.mean < 0.05 && on.drawn.max < 0.5, "{what}, {delay} ms: {on:?}");
+        }
+    }
+}

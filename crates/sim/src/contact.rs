@@ -7,10 +7,11 @@
 
 use crate::consts::*;
 use crate::fighter::Fighter;
-use crate::geom::V3;
+use crate::geom::{yaw_sincos, V3};
 use crate::input::Input;
 use crate::map::Map;
 use crate::movement::{quant, Body};
+use crate::solid::{Shape, Solid};
 use crate::vehicle::Vehicle;
 
 /// What of a fighter the contact step reads and moves.
@@ -272,9 +273,64 @@ impl Scene {
                     continue;
                 }
                 let b = &mut self.men[q].body;
-                b.vel = b.vel + away * (closing + SPLAT_SHOVE) + V3::new(0.0, 3.0, 0.0);
+                // On the sim's grid, as every body's speed is.
+                let to = b.vel + away * (closing + SPLAT_SHOVE) + V3::new(0.0, 3.0, 0.0);
+                b.vel = V3::new(quant(to.x), quant(to.y), quant(to.z));
                 b.grounded = false;
                 w.run_down(i, q, closing, &mut self.men[q]);
+            }
+        }
+    }
+
+    /// Solid hulls ([`SOLID_HULLS`]): everyone live on foot out of each
+    /// hull's footprint the nearest way, its speed into the face taken off,
+    /// as a wall's. One the push would put into the map (pinned between a
+    /// hull and a wall) is left where it is, unhurt; a hull never gives way
+    /// to a body, so its motion is its driver's alone.
+    pub fn push_out(&mut self, map: &Map) {
+        let reach = VEH_HALF_L + VEH_HALF_W + BODY_R;
+        for i in 0..MAX_VEHICLES {
+            let v = self.hulls[i];
+            if !v.active {
+                continue;
+            }
+            let (s, c) = yaw_sincos(v.yaw);
+            let hull = Solid {
+                shape: Shape::Turned {
+                    x: v.pos.x,
+                    z: v.pos.z,
+                    hx: VEH_HALF_L,
+                    hz: VEH_HALF_W,
+                    c,
+                    s,
+                },
+                y0: v.pos.y,
+                y1: v.pos.y + VEH_H,
+            };
+            for m in self.men.iter_mut() {
+                if !m.live || m.ride != 0 {
+                    continue;
+                }
+                let (feet, h) = (m.body.pos.y, m.body.height());
+                let off = (m.body.pos - v.pos).flat();
+                if feet >= hull.y1 || feet + h <= hull.y0 || off.dot(off) >= reach * reach {
+                    continue;
+                }
+                let Some((nx, nz, ux, uz)) = hull.push(m.body.pos.x, m.body.pos.z, BODY_R) else {
+                    continue;
+                };
+                let x = quant(nx.clamp(map.lo.0, map.hi.0));
+                let z = quant(nz.clamp(map.lo.1, map.hi.1));
+                if map.occupied(x, z, BODY_R, feet + STEP, feet + h) {
+                    continue;
+                }
+                let b = &mut m.body;
+                b.pos.x = x;
+                b.pos.z = z;
+                let into = b.vel.x * ux + b.vel.z * uz;
+                if into < 0.0 {
+                    b.vel = V3::new(quant(b.vel.x - ux * into), b.vel.y, quant(b.vel.z - uz * into));
+                }
             }
         }
     }
