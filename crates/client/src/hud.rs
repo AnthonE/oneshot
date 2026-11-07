@@ -2054,8 +2054,10 @@ pub fn corner(
 /// Whether our aim is on an enemy the gun in hand reaches, as drawn: the
 /// red reticle. From our eye along our aim, against the others' bodies
 /// where they are drawn, the map in between; a gun's reach is its
-/// `aim_range`, its magnetism widening the bodies with distance (as
-/// `World::magnet` bends a near miss); the sword's, its lunge's.
+/// `aim_range`, its magnetism widening the bodies with distance as far as
+/// `World::magnet` bends a near miss (`Arm::magnet_zone`, the same zone;
+/// the head is never widened, a near miss is never bent onto it, and with
+/// `MAGNETISM` off nothing is); the sword's, its lunge's.
 pub fn on_target(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> bool {
     aim_on(core, others).is_some()
 }
@@ -2084,19 +2086,19 @@ fn aim_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) 
         .iter()
         .filter(|d| d.alive && Some(d.team & 1) != mate)
         .filter_map(|d| {
-            let pad = if sword {
-                LUNGE_PAD
-            } else {
-                (d.pos - eye).len() * a.magnet
-            };
             let (hy, top) = if d.crouched {
                 (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
             } else {
                 (HEAD_Y, HIT_TOP)
             };
-            sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad, top, wall).or_else(|| {
-                sim::geom::ray_sphere(eye, dir, d.pos + sim::geom::V3::new(0.0, hy, 0.0), HEAD_R + pad, wall)
-            })
+            let head = d.pos + sim::geom::V3::new(0.0, hy, 0.0);
+            if sword {
+                sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + LUNGE_PAD, top, wall)
+                    .or_else(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R + LUNGE_PAD, wall))
+            } else {
+                a.magnet_zone(eye, dir, d.pos, top, wall)
+                    .or_else(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R, wall))
+            }
         })
         .min_by(f32::total_cmp)
 }
