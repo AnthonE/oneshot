@@ -1,9 +1,8 @@
 name: ci
+# Only when asked, before a release (about an hour): gh workflow run ci
+# (--ref <branch> for a branch). A push or a PR runs nothing; the local
+# checks in CLAUDE.md's loop are the day-to-day gate.
 on:
-  push:
-    branches: [main]
-  pull_request:
-  # A branch gated before its PR: gh workflow run ci --ref <branch>.
   workflow_dispatch:
 
 jobs:

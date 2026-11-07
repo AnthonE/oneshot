@@ -3,30 +3,11 @@ name: desktop
 # its assets beside it (Bevy reads `assets/` next to the executable). Each
 # run uploads the three builds as artifacts; a `desktop-v*` tag also puts
 # them on a GitHub release (tagging is the operator's).
+# Only on a release tag or when asked (gh workflow run desktop), not on
+# every push.
 on:
   push:
-    branches: [main]
     tags: ['desktop-v*']
-    # What the client builds from (crates/client/Cargo.toml, and client-net's room).
-    paths:
-      - 'crates/client/**'
-      - 'crates/client-net/**'
-      - 'crates/sim/**'
-      - 'crates/proto/**'
-      - 'crates/room/**'
-      - 'crates/mix/**'
-      - 'crates/fx/**'
-      - '.github/workflows/desktop.yml'
-  pull_request:
-    paths:
-      - 'crates/client/**'
-      - 'crates/client-net/**'
-      - 'crates/sim/**'
-      - 'crates/proto/**'
-      - 'crates/room/**'
-      - 'crates/mix/**'
-      - 'crates/fx/**'
-      - '.github/workflows/desktop.yml'
   workflow_dispatch:
 
 jobs:
