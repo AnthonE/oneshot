@@ -1,0 +1,40 @@
+{
+ "tape": "traces/film/ctf.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "ctf",
+   "at": 36.0,
+   "len": 3.6,
+   "fov": 62,
+   "follow": {
+    "back": 3.4,
+    "up": 1.6,
+    "side": 0.6,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "kill-8",
+   "at": 100.95,
+   "len": 1.6,
+   "pov": true
+  }
+ ]
+}
