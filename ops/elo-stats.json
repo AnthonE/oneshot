@@ -466,6 +466,13 @@
   "boards": [
     {
       "format": "number",
+      "id": "kills_any",
+      "keep": "best",
+      "name": "Most kills in a match",
+      "sort": "desc"
+    },
+    {
+      "format": "number",
       "id": "ranked_kills",
       "keep": "best",
       "name": "Most kills in a ranked match",
