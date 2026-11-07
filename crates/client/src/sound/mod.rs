@@ -439,6 +439,9 @@ impl Ear {
             secs: vec![0.0; ids.len()],
             ids,
             cmds: Vec::with_capacity(256),
+            // Not a level: the first frame's goes to the mixer whatever it
+            // is (it starts at full; a 0 would never have been sent).
+            volume: -1.0,
             ..Ear::default()
         }
     }
@@ -1815,8 +1818,9 @@ type ButtonsChanged<'w, 's> = Query<
 >;
 
 /// A button this near where the last one stood, px, is that one: a menu rebuilt
-/// under a still pointer hands it a new entity.
-const SAME_BUTTON_PX: f32 = 2.0;
+/// under a still pointer hands it a new entity, and one relabelled (a sign-in
+/// going through) a centre a little off. Two buttons sit no nearer.
+const SAME_BUTTON_PX: f32 = 12.0;
 
 /// The menus: a tick as a button is come onto (by the pointer or a pad's
 /// focus), a click as one is pressed; a chime for an invite.
@@ -1837,7 +1841,10 @@ fn menus(
                 }
                 *over = Some((e, at));
             }
-            Interaction::None if over.is_some_and(|(was, _)| was == e) => *over = None,
+            // Left: the one we were on, or its stand-in after a rebuild.
+            Interaction::None if over.is_some_and(|(was, p)| was == e || p.distance(at) < SAME_BUTTON_PX) => {
+                *over = None;
+            }
             _ => {}
         }
     }

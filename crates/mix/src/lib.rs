@@ -452,6 +452,11 @@ impl Engine {
             Cmd::Play { clip, at, delay } => {
                 let Some(clip) = self.clip(clip) else { return };
                 let loud = at.l + at.r;
+                // Nothing to hear (the game's sounds turned down to 0): no
+                // voice spent on it.
+                if loud <= 0.0 {
+                    return;
+                }
                 let slot = match self.voices.iter().position(|v| v.pcm.is_none()) {
                     Some(i) => i,
                     None => {
