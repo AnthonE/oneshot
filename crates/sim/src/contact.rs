@@ -14,6 +14,10 @@ use crate::movement::{quant, Body};
 use crate::solid::{Shape, Solid};
 use crate::vehicle::Vehicle;
 
+/// How far into a hull's top a body coming down may be and still land on
+/// it (past this tick's fall), as a floor's step would take it.
+pub const TOP_EPS: f32 = 0.05;
+
 /// What of a fighter the contact step reads and moves.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Man {
@@ -319,6 +323,15 @@ impl Scene {
                 let Some((nx, nz, ux, uz)) = hull.push(m.body.pos.x, m.body.pos.z, BODY_R) else {
                     continue;
                 };
+                // Come down onto it from above (no deeper than this tick's
+                // fall): on its top, never through it and out a side.
+                if m.body.vel.y <= 0.0 && hull.y1 - feet <= -m.body.vel.y * DT + TOP_EPS {
+                    let b = &mut m.body;
+                    b.pos.y = quant(hull.y1);
+                    b.vel = V3::new(b.vel.x, 0.0, b.vel.z);
+                    b.grounded = true;
+                    continue;
+                }
                 let x = quant(nx.clamp(map.lo.0, map.hi.0));
                 let z = quant(nz.clamp(map.lo.1, map.hi.1));
                 if map.occupied(x, z, BODY_R, feet + STEP, feet + h) {

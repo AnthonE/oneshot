@@ -134,8 +134,12 @@ struct Pass {
     true_to_tick: Err,
     near_now: Err,
     /// How much faster than the truth the drawn truck went, frame to
-    /// frame, in m/s: its 99th centile and its worst.
+    /// frame, in m/s (against the truck's own speed, so a jump in the tick
+    /// it is drawn on shows): its 99th centile and its worst.
     surge: (f32, f32),
+    /// While in the bubble, the most its driver was drawn off its seat on
+    /// the hull as drawn.
+    driver_off: f32,
 }
 
 /// A truck at full throttle past someone standing 8 m off its path:
@@ -164,6 +168,8 @@ fn drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> Pass {
         |_, _, _, _| {},
     );
     let mut seen: Vec<(f64, f64, V3, f64)> = Vec::new();
+    let driver = lan.cs[0].slot;
+    let mut driver_off = 0.0f32;
     lan.run(
         10_000.0,
         |k, now| {
@@ -182,6 +188,16 @@ fn drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> Pass {
             }
             if let Some(d) = c.vehicles(now).into_iter().find(|d| d.slot == 0) {
                 seen.push((c.vehicle_tick(0, now), c.present_tick(), d.pos, now));
+                let member = c.vehicle_tick(0, now) != c.render_tick(now);
+                if let (true, Some(r)) = (member, c.others(now).into_iter().find(|r| r.slot == driver)) {
+                    let turn = (d.yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+                    let hull = sim::vehicle::Vehicle {
+                        pos: d.pos,
+                        yaw: turn.rem_euclid(65536.0) as u16,
+                        ..sim::vehicle::Vehicle::default()
+                    };
+                    driver_off = driver_off.max((r.pos - hull.mount(sim::vehicle::DRIVER)).len());
+                }
             }
         },
     );
@@ -196,9 +212,9 @@ fn drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> Pass {
     let mut surges: Vec<f32> = seen
         .windows(2)
         .filter_map(|w| {
-            let ((t0, _, p0, n0), (t1, _, p1, n1)) = (w[0], w[1]);
-            let (q0, q1) = (lan.hull_at(0, t0)?, lan.hull_at(0, t1)?);
-            Some(((p1 - p0).len() - (q1 - q0).len()) / ((n1 - n0) / 1000.0) as f32)
+            let ((_, _, p0, n0), (t1, _, p1, n1)) = (w[0], w[1]);
+            let speed = (lan.hull_at(0, t1)? - lan.hull_at(0, t1 - 1.0)?).len() * sim::consts::TICK_HZ as f32;
+            Some((p1 - p0).len() / ((n1 - n0) / 1000.0) as f32 - speed)
         })
         .collect();
     surges.sort_by(f32::total_cmp);
@@ -207,6 +223,7 @@ fn drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> Pass {
         true_to_tick,
         near_now,
         surge,
+        driver_off,
     }
 }
 
@@ -218,8 +235,10 @@ fn a_truck_in_the_bubble_is_drawn_on_the_present() {
         println!("{delay} ms ±{jitter}:\n  past {past:?}\n  live {live:?}");
         // Close by, where the server has it now, not a round trip back.
         assert!(past.near_now.mean > 1.0, "{delay} ms: {past:?}");
+        // (A truck that sped up toward it since it came in slides on
+        // quicker, and can be a little short of the present still.)
         assert!(
-            live.near_now.mean < 0.1 && live.near_now.max < 0.5,
+            live.near_now.mean < 0.15 && live.near_now.max < 1.0,
             "{delay} ms: {live:?}"
         );
         // Drawn where it was at the tick it is drawn on.
@@ -227,11 +246,14 @@ fn a_truck_in_the_bubble_is_drawn_on_the_present() {
             live.true_to_tick.mean < 0.05 && live.true_to_tick.max < 0.5,
             "{delay} ms: {live:?}"
         );
-        // Sliding onto the present, never a lunge.
+        // Sliding onto the present, never a lunge: the gap it makes up (how
+        // far behind the past drawing is) spread over most of a second.
         assert!(
-            live.surge.0 < 3.0 && live.surge.1 < 0.5 * sim::consts::VEH_TOP,
-            "{delay} ms: {live:?}"
+            live.surge.0 < 1.0 + 1.5 * past.near_now.mean && live.surge.1 < 0.5 * sim::consts::VEH_TOP,
+            "{delay} ms: {live:?} against {past:?}"
         );
+        // Its driver on it, in its seat.
+        assert!(live.driver_off < 0.05, "{delay} ms: {live:?}");
     }
 }
 
@@ -301,7 +323,10 @@ fn fire_at_drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> (u32, u32) {
             };
             let (f, at) = c.own();
             let eye = at + (f.eye() - f.body.pos);
-            let to = d.pos + V3::new(0.0, 0.8, 0.0) - eye;
+            // At its nose, not its middle: met a metre or two back along
+            // its way (rewound as if drawn in the past), it misses ahead.
+            let nose = V3::new(d.yaw.cos(), 0.0, d.yaw.sin()) * (sim::consts::VEH_HALF_L - 0.5);
+            let to = d.pos + nose + V3::new(0.0, 0.8, 0.0) - eye;
             let yaw = sim::geom::rad_to_yaw(sim::fmath::atan2(to.z, to.x));
             let flat = (to.x * to.x + to.z * to.z).sqrt();
             let pitch = sim::fmath::round(sim::fmath::atan2(to.y, flat) * (65536.0 / core::f32::consts::TAU)) as i16;

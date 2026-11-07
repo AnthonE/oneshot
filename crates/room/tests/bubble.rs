@@ -3,7 +3,9 @@
 //! might crash into; never its own, never an unknown driver's, never past
 //! the round trip a re-run can guess across.
 
-use room::bubble::{Bubble, BLEND_MIN_MS, BUBBLE_M, CONTACT_M, DWELL_MS, HYST_M, LEAVE_MS, LOOK_S, RTT_MAX_MS};
+use room::bubble::{
+    Bubble, BLEND_MAX_MS, BLEND_MIN_MS, BUBBLE_M, CONTACT_M, DWELL_MS, HYST_M, LEAVE_MS, LOOK_S, RTT_MAX_MS,
+};
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::consts::{SHARE_FULL, VEH_HALF_W};
 use sim::geom::V3;
@@ -42,7 +44,7 @@ fn put(w: &mut World, x: f32, vel: V3) {
 }
 
 fn update(b: &mut Bubble, w: &World, rtt_ms: f64) {
-    b.update(w, 0, &|_| true, &|_| true, rtt_ms, 2, true);
+    b.update(w, 0, &|_| true, &|_| true, &|_| true, rtt_ms, 2, true);
 }
 
 /// Whether hull 0 comes in at `x` m moving at `vel`, from out.
@@ -59,20 +61,20 @@ fn a_hull_comes_in_by_how_far_and_how_fast_it_closes() {
     // Parked: 16 m.
     assert!(joins(BUBBLE_M - 0.1, V3::ZERO));
     assert!(!joins(BUBBLE_M + 0.1, V3::ZERO));
-    // At full speed, toward or away (closing speed is relative): 28.6 m.
+    // At full speed, toward or away (closing speed is relative): 41.2 m.
     let fast = V3::new(-21.0, 0.0, 0.0);
     let r = BUBBLE_M + 21.0 * LOOK_S;
-    assert!((r - 28.6).abs() < 1e-3);
+    assert!((r - 41.2).abs() < 1e-3);
     assert!(joins(r - 0.1, fast));
     assert!(!joins(r + 0.1, fast));
-    // Head-on with us in another at full speed: 41.2 m.
+    // Head-on with us in another at full speed: 66.4 m.
     let mut w = world();
     w.vehicles[1].pos = V3::new(0.0, 0.0, 0.0);
     w.vehicles[1].vel = V3::new(21.0, 0.0, 0.0);
     w.vehicles[1].seats[0] = 1;
     w.fighters[0].ride = sim::fighter::Fighter::ride_of(1, sim::vehicle::DRIVER);
     let r = BUBBLE_M + 42.0 * LOOK_S;
-    assert!((r - 41.2).abs() < 1e-3);
+    assert!((r - 66.4).abs() < 1e-3);
     for (x, want) in [(r - 0.1, true), (r + 0.1, false)] {
         put(&mut w, x, fast);
         let mut b = Bubble::default();
@@ -116,22 +118,77 @@ fn a_hull_in_stays_a_while_and_until_well_past() {
     // Its share only ever climbs once it is leaving.
     let leaving = &shares[snaps(DWELL_MS).min(k)..];
     assert!(leaving.windows(2).all(|p| p[1] >= p[0]), "{shares:?}");
+    // One on the present when it goes climbs to whole over the leave, and
+    // is whole when it is out.
+    let mut w = world();
+    put(&mut w, 30.0, V3::ZERO);
+    let mut b = Bubble::default();
+    update(&mut b, &w, 60.0);
+    put(&mut w, BUBBLE_M - 1.0, V3::ZERO);
+    for _ in 0..snaps(DWELL_MS.max(BLEND_MAX_MS as u32)) + 4 {
+        update(&mut b, &w, 60.0);
+    }
+    assert_eq!(b.share(0), 0, "settled on the present");
+    put(&mut w, BUBBLE_M + HYST_M + 5.0, V3::ZERO);
+    let mut shares = Vec::new();
+    for _ in 0..snaps(LEAVE_MS as u32) + 8 {
+        update(&mut b, &w, 60.0);
+        if !b.has(0) {
+            break;
+        }
+        shares.push(b.share(0));
+    }
+    assert!(!b.has(0), "never left: {shares:?}");
+    assert_eq!(shares.last().copied(), Some(SHARE_FULL), "{shares:?}");
+    assert!(shares.windows(2).all(|p| p[1] >= p[0]), "{shares:?}");
+    let climb = shares.iter().filter(|&&x| x < SHARE_FULL).count();
+    assert!(
+        climb.abs_diff(snaps(LEAVE_MS as u32)) <= 2,
+        "{climb} snapshots climbing: {shares:?}"
+    );
+}
+
+/// Who is in tells nothing fog hides: a hull with a driver the viewer may
+/// not know comes and goes exactly as one nobody drives (its stick then
+/// goes as none: `room::build`), at any round trip, parked or rolling.
+#[test]
+fn a_hidden_driver_is_as_nobody_at_the_wheel() {
+    for (rtt, vel) in [
+        (60.0, V3::ZERO),
+        (60.0, V3::new(10.0, 0.0, 0.0)),
+        (RTT_MAX_MS + 50.0, V3::ZERO),
+    ] {
+        for x in [5.0, 20.0, 40.0] {
+            let mut w = world();
+            put(&mut w, x, vel);
+            let mut hidden = Bubble::default();
+            let mut empty = Bubble::default();
+            for _ in 0..4 {
+                w.vehicles[0].seats[0] = 6;
+                hidden.update(&w, 0, &|q| q != 5, &|q| q != 5, &|_| true, rtt, 2, true);
+                w.vehicles[0].seats[0] = 0;
+                empty.update(&w, 0, &|q| q != 5, &|q| q != 5, &|_| true, rtt, 2, true);
+                assert_eq!(
+                    (hidden.has(0), hidden.share(0)),
+                    (empty.has(0), empty.share(0)),
+                    "{x} m at {vel:?}, rtt {rtt}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
-fn never_an_unknown_drivers_and_never_past_the_round_trip() {
+fn never_a_hidden_hull_and_never_past_the_round_trip() {
     let mut w = world();
     put(&mut w, 5.0, V3::new(10.0, 0.0, 0.0));
     w.vehicles[0].seats[0] = 6;
     let mut b = Bubble::default();
-    // A driver it may not know: its stick would tell where they are going.
-    b.update(&w, 0, &|q| q != 5, &|_| true, 60.0, 2, true);
-    assert!(!b.has(0), "an unknown driver's hull");
-    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
+    b.update(&w, 0, &|_| true, &|_| true, &|_| true, 60.0, 2, true);
     assert!(b.has(0));
     // Not sent at all: never in.
     let mut b = Bubble::default();
-    b.update(&w, 0, &|_| true, &|_| false, 60.0, 2, true);
+    b.update(&w, 0, &|_| true, &|_| true, &|_| false, 60.0, 2, true);
     assert!(!b.has(0), "a hull fog hides");
     // Too far a round trip to guess across, moving; parked, still in.
     let mut b = Bubble::default();
@@ -170,7 +227,7 @@ fn an_arena_has_no_bubble() {
     let mut w = World::new(sim::map::Map::proving_grounds(), Rules::doubles(), 1, (2, 3));
     w.seat(0, 0);
     let mut b = Bubble::default();
-    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
+    b.update(&w, 0, &|_| true, &|_| true, &|_| true, 60.0, 2, true);
     assert_eq!(b.hulls(), 0);
 }
 
@@ -189,24 +246,41 @@ fn a_hull_slides_onto_the_present_and_back() {
     update(&mut b, &w, 60.0);
     assert_eq!(b.share(0), SHARE_FULL, "comes in where it was drawn");
     let mut shares = vec![b.share(0)];
-    for _ in 0..80 {
+    let snaps = |ms: f32| (ms as u32 * TICK_HZ / 1000 / 2) as usize;
+    for _ in 0..snaps(BLEND_MAX_MS) + 8 {
         update(&mut b, &w, 60.0);
         shares.push(b.share(0));
     }
     assert!(shares.windows(2).all(|p| p[1] <= p[0]), "only down: {shares:?}");
     assert_eq!(*shares.last().unwrap(), 0, "on the present: {shares:?}");
-    // Quickly, but never in less than the shortest blend.
+    // Never in less than the shortest blend, nor more than the longest.
     let to_zero = shares.iter().position(|&x| x == 0).unwrap();
-    let min = (BLEND_MIN_MS as u32 * TICK_HZ / 1000 / 2) as usize;
-    assert!(to_zero + 1 >= min, "{to_zero} snapshots: {shares:?}");
+    assert!(to_zero + 1 >= snaps(BLEND_MIN_MS), "{to_zero} snapshots: {shares:?}");
+    assert!(to_zero <= snaps(BLEND_MAX_MS) + 2, "{to_zero} snapshots: {shares:?}");
+    // Coming in fast and close (first seen in it a few metres off, at
+    // 20 m/s), over the shortest blend, never quicker.
+    let mut w = world();
+    put(&mut w, 60.0, V3::ZERO);
+    let mut b = Bubble::default();
+    update(&mut b, &w, 60.0);
+    put(&mut w, 17.0, V3::new(-20.0, 0.0, 0.0));
+    let mut fast = vec![];
+    for _ in 0..snaps(BLEND_MAX_MS) + 8 {
+        update(&mut b, &w, 60.0);
+        fast.push(b.share(0));
+    }
+    let fast_zero = fast.iter().position(|&x| x == 0).unwrap();
+    assert!(fast_zero + 1 >= snaps(BLEND_MIN_MS), "{fast_zero} snapshots: {fast:?}");
+    assert!(fast_zero <= snaps(BLEND_MIN_MS) + 1, "{fast_zero} snapshots: {fast:?}");
+    assert!(fast_zero < to_zero, "{fast_zero} against {to_zero} parked");
     // Never sent before: on the present at once.
     let mut b = Bubble::default();
-    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
+    b.update(&w, 0, &|_| true, &|_| true, &|_| true, 60.0, 2, true);
     assert_eq!(b.share(0), 0, "unseen till now");
     // Not live: whole, always.
     let mut b = Bubble::default();
-    for _ in 0..80 {
-        b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, false);
+    for _ in 0..snaps(BLEND_MAX_MS) + 8 {
+        b.update(&w, 0, &|_| true, &|_| true, &|_| true, 60.0, 2, false);
     }
     assert!(b.has(0) && b.share(0) == SHARE_FULL);
 }
@@ -312,5 +386,69 @@ fn one_getting_out_comes_in_at_its_hulls_share() {
         b.foot_share(2) <= hull + 1,
         "at {} against the hull's {hull}",
         b.foot_share(2)
+    );
+}
+
+/// A truck wandering in and out across both edges (where it comes in and
+/// where it stays to), slowly or quickly, or dipping in for a moment and
+/// away, is in for the dwell and the leave at least each time it comes:
+/// never a flap shorter than that.
+#[test]
+fn a_truck_crossing_the_stay_edge_is_held_each_time() {
+    let speed = 5.0;
+    let edge = BUBBLE_M + speed * LOOK_S;
+    let snaps = |ms: f32| (ms * TICK_HZ as f32 / 1000.0 / 2.0) as usize;
+    let least = snaps(DWELL_MS as f32 + LEAVE_MS) - 2;
+    let wander = |period: f32| {
+        move |t: f32| edge + HYST_M / 2.0 + (HYST_M / 2.0 + 2.0) * sim::fmath::sin(t * core::f32::consts::TAU / period)
+    };
+    // In 3 m for 0.3 s every 6 s, else well out.
+    let dip = |t: f32| {
+        let p = t % 6.0 - 3.0;
+        if sim::fmath::fabs(p) < 0.15 {
+            edge - 3.0
+        } else {
+            edge + HYST_M + 10.0
+        }
+    };
+    let runs = |at: &dyn Fn(f32) -> f32| {
+        let mut w = world();
+        let mut b = Bubble::default();
+        let (mut stretches, mut run) = (Vec::new(), 0usize);
+        for k in 0..30 * TICK_HZ {
+            let t = k as f32 * 2.0 / TICK_HZ as f32;
+            let r = at(t);
+            let a = t * speed / edge;
+            let (s, c) = (sim::fmath::sin(a), sim::fmath::cos(a));
+            w.vehicles[0].pos = V3::new(r * c, 0.0, r * s);
+            w.vehicles[0].vel = V3::new(-s, 0.0, c) * speed;
+            update(&mut b, &w, 60.0);
+            if b.has(0) {
+                run += 1;
+            } else if run > 0 {
+                stretches.push(run);
+                run = 0;
+            }
+        }
+        stretches
+    };
+    for period in [1.0f32, 3.0, 9.0] {
+        let stretches = runs(&wander(period));
+        assert!(
+            stretches.iter().all(|&n| n >= least),
+            "{period} s: {stretches:?}, at least {least}"
+        );
+        // Slowly, out past where it stays to for longer than the leave: it
+        // goes, each time.
+        if period == 9.0 {
+            assert!(stretches.len() >= 5, "{period} s: never left: {stretches:?}");
+        }
+    }
+    // In for a moment: held by the dwell, then the leave, then out.
+    let stretches = runs(&dip);
+    assert!(stretches.len() >= 9, "{stretches:?}");
+    assert!(
+        stretches.iter().all(|&n| (least..least + 6).contains(&n)),
+        "{stretches:?}, at least {least}"
     );
 }

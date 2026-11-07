@@ -10,22 +10,22 @@
 //! gun game, friendly fire, capture the flag), u8 map; then records: `S`
 //! slot team (a seat), `H` (the countdown held for the next tick: someone
 //! still loading), `T` u16 changed-input mask, inputs, u16 changed-rewind
-//! mask, rewinds, u16 changed-seen mask, each changed seat's shares as
-//! `TARGETS` nibbles, two a byte (a tick: `World::step_with`'s arguments);
+//! mask, rewinds, u16 changed-seen mask, each changed seat's shares, a byte
+//! each of `TARGETS` (a tick: `World::step_with`'s arguments);
 //! `E` u32 ticks, u64 hash, i32 × 16 scores (the end).
 
 use proto::PROTO_VER;
-use sim::consts::{MAX_FIGHTERS, SHARE_FULL, TARGETS};
+use sim::consts::{MAX_FIGHTERS, TARGETS};
 use sim::events::Kind as Ev;
 use sim::input::Input;
 use sim::map::Map;
 use sim::world::{Lag, Rules, Seen, World};
 
-pub const MAGIC: &[u8; 4] = b"OSR5";
+pub const MAGIC: &[u8; 4] = b"OSR6";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
-pub const RULES_TAG: u64 = 0xc946_f56b_4921_bc03;
+pub const RULES_TAG: u64 = 0x7d18_bcc0_cf7e_7d01;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {
@@ -149,10 +149,7 @@ impl Recorder {
         self.buf.extend_from_slice(&smask.to_le_bytes());
         for (s, seen) in lag.seen.iter().enumerate() {
             if smask & (1 << s) != 0 {
-                for pair in seen.share.chunks(2) {
-                    self.buf
-                        .push(pair[0].min(SHARE_FULL) | pair.get(1).map_or(0, |b| b.min(&SHARE_FULL) << 4));
-                }
+                self.buf.extend_from_slice(&seen.share);
             }
         }
         self.inputs = *inputs;
@@ -214,20 +211,10 @@ impl Reader<'_> {
     }
 }
 
-/// A seat's shares: `TARGETS` nibbles, two a byte, low first.
+/// A seat's shares: a byte each of `TARGETS`.
 fn read_seen(r: &mut Reader) -> Result<Seen, String> {
     let mut seen = Seen::PAST;
-    for k in 0..TARGETS.div_ceil(2) {
-        let b = r.u8()?;
-        for (j, v) in [b & 15, b >> 4].into_iter().enumerate() {
-            if v > SHARE_FULL {
-                return Err("a share past the whole".into());
-            }
-            if let Some(s) = seen.share.get_mut(2 * k + j) {
-                *s = v;
-            }
-        }
-    }
+    seen.share.copy_from_slice(r.take(TARGETS)?);
     Ok(seen)
 }
 
@@ -343,6 +330,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
 mod tests {
     use super::*;
     use crate::Room;
+    use sim::consts::SHARE_FULL;
 
     fn recorded() -> Vec<u8> {
         let rules = Rules {
@@ -466,7 +454,7 @@ mod tests {
                     let rmask = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
                     at += 2 + 4 * rmask.count_ones() as usize;
                     let smask = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
-                    at += 2 + TARGETS.div_ceil(2) * smask.count_ones() as usize;
+                    at += 2 + TARGETS * smask.count_ones() as usize;
                     ticks += 1;
                 }
                 k => panic!("record {k:#x}"),

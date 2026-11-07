@@ -478,7 +478,15 @@ impl Bot {
             inp.mz = 127;
             inp.mx = self.strafe * 40;
             match free {
-                Some((_, d)) if d < ENTER_R - 0.5 => Self::tap_use(&mut inp, me.last_buttons),
+                // Close to it, straight at it (no strafe to slide along a
+                // solid hull), and in once within reach: a bumper's is
+                // farther from the middle than a door's.
+                Some((_, d)) if d < ENTER_R + 1.5 => {
+                    inp.mx = 0;
+                    if d < ENTER_R - 0.3 {
+                        Self::tap_use(&mut inp, me.last_buttons);
+                    }
+                }
                 Some(_) => {}
                 None => inp.buttons |= USE,
             }

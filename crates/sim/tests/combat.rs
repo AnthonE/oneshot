@@ -214,7 +214,7 @@ fn a_shot_meets_a_target_where_its_share_of_the_rewind_puts_it() {
     assert!(shared_shot(0, false), "none of it: met where it is");
     assert!(!shared_shot(0, true), "none of it: not where it was");
     // A third of it: 4 ticks back, too little to meet it where it was.
-    assert!(!shared_shot(5, true), "a third: not where it was");
+    assert!(!shared_shot(SHARE_FULL / 3, true), "a third: not where it was");
 }
 
 #[test]

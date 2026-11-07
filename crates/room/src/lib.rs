@@ -1166,7 +1166,7 @@ fn build_encoded(
         let shown = |i| vehicle_shown(w, s, i, &known, &vehicle_visible);
         // Who is on foot near a hull in: only one this snapshot sends.
         let sent = |q: usize| q != s && w.fighters[q].seated && visible(q);
-        b.update(w, s, &sent, &shown, *rtt_ms, *every, *live);
+        b.update(w, s, &known, &sent, &shown, *rtt_ms, *every, *live);
         for (i, m) in members.iter_mut().enumerate() {
             *m = b.has(i).then(|| b.share(i));
         }
@@ -1508,7 +1508,8 @@ fn add_vehicles(
             // driver known, or nobody at the wheel: `bubble`).
             near: members[i].map(|share| NearHull {
                 grounded: v.grounded,
-                stick: w.drive_stick(i),
+                // Its driver's, if it may know them; else as if parked.
+                stick: w.drive_stick(i).filter(|_| v.driver().is_none_or(known)),
                 share,
             }),
         };

@@ -5,6 +5,7 @@
 
 use sim::bot::Bot;
 use sim::consts::*;
+use sim::contact::TOP_EPS;
 use sim::events::{Cause, Kind as Ev};
 use sim::fmath;
 use sim::geom::{rad_to_yaw, V3};
@@ -1037,14 +1038,68 @@ fn getting_in_from_every_side_and_out_clear_of_the_hull() {
         );
         tap_use(&mut w, 0);
         assert!(w.fighters[0].riding().is_some(), "side {side}: couldn't get in");
-        tap_use(&mut w, 0);
-        assert!(w.fighters[0].riding().is_none(), "side {side}: couldn't get out");
-        for _ in 0..TICK_HZ / 2 {
-            press(&mut w, 0, Input::default());
-        }
-        assert!(
-            !in_hull(&w.vehicles[0], w.fighters[0].body.pos),
-            "side {side}: out into the hull"
-        );
+        out_clear(&mut w, 0, ["side 0", "side 1", "side 2", "side 3"][side]);
     }
+    // From the passenger's seat, with someone at the wheel.
+    let mut w = world(false);
+    w.vehicles[0].seats[DRIVER] = 2;
+    w.fighters[1].ride = sim::fighter::Fighter::ride_of(0, DRIVER);
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((0, PASSENGER)));
+    out_clear(&mut w, 0, "the passenger");
+}
+
+/// Seat `s` gets out: on the tick it does, where getting out puts it
+/// (beside the wheel, or behind the bed), clear of the hull with nothing
+/// pushing it out; and clear still a moment on.
+fn out_clear(w: &mut World, s: usize, what: &str) {
+    let (_, seat) = w.fighters[s].riding().unwrap();
+    press(
+        w,
+        s,
+        Input {
+            buttons: USE,
+            ..Input::default()
+        },
+    );
+    assert!(w.fighters[s].riding().is_none(), "{what}: couldn't get out");
+    let v = w.vehicles[0];
+    let (f, r) = v.axes();
+    let spot = if seat == DRIVER {
+        v.pos - r * (VEH_HALF_W + 0.9)
+    } else {
+        v.pos - f * (VEH_HALF_L + 0.9)
+    };
+    let at = w.fighters[s].body.pos;
+    assert!((at - spot).flat().len() < 0.01, "{what}: out at {at:?}, not {spot:?}");
+    assert!(!in_hull(&v, at), "{what}: out into the hull");
+    for _ in 0..TICK_HZ / 2 {
+        press(w, s, Input::default());
+    }
+    assert!(
+        !in_hull(&w.vehicles[0], w.fighters[s].body.pos),
+        "{what}: into the hull"
+    );
+}
+
+/// Dropped onto a parked truck: on its top, never through it and pushed
+/// out a side.
+#[test]
+fn a_body_dropped_onto_a_truck_lands_on_it() {
+    let mut w = world(false);
+    let v = w.vehicles[0];
+    w.fighters[1].body.pos = v.pos + V3::new(0.3, VEH_H + 1.5, 0.2);
+    w.fighters[1].body.grounded = false;
+    let start = w.fighters[1].body.pos;
+    let idle = [Input::default(); MAX_FIGHTERS];
+    let mut landed = false;
+    for _ in 0..TICK_HZ {
+        w.step(&idle, &NO_LAG);
+        let b = w.fighters[1].body;
+        let flat = (b.pos - start).flat().len();
+        assert!(flat < 0.1, "pushed {flat} m flat");
+        assert!(b.pos.y >= v.pos.y + VEH_H - TOP_EPS - 0.01, "through the top: {b:?}");
+        landed |= b.grounded && fmath::fabs(b.pos.y - (v.pos.y + VEH_H)) < 0.01;
+    }
+    assert!(landed, "never stood on it: {:?}", w.fighters[1].body);
 }

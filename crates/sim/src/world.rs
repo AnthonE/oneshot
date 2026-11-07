@@ -388,7 +388,7 @@ pub struct World {
 }
 
 /// What one shooter saw of each target (by [`TARGETS`] index): its share of
-/// the shooter's rewind, in fifteenths. [`Self::PAST`] for all of it, as
+/// the shooter's rewind, of [`SHARE_FULL`]. [`Self::PAST`] for all of it, as
 /// for a target drawn between snapshots on the render tick; 0 for one drawn
 /// on the shooter's own present (predicted), met where it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -404,7 +404,7 @@ impl Seen {
     /// Target `t`'s rewind, of a shooter's `depth` (any unit, any size:
     /// the whole share is the whole depth, exactly).
     pub fn depth(&self, depth: u32, t: usize) -> u32 {
-        (depth as u64 * self.share[t].min(SHARE_FULL) as u64 / SHARE_FULL as u64) as u32
+        (depth as u64 * self.share[t] as u64 / SHARE_FULL as u64) as u32
     }
 }
 
