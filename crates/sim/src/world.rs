@@ -435,6 +435,10 @@ impl World {
     fn vacate(&mut self, slot: usize) {
         self.leave_vehicle(slot);
         self.drop_flag(slot, false, false);
+        // Its own rounds still in the air go out with it: nobody else's kill.
+        for p in self.proj.iter_mut().filter(|p| p.active && p.owner as usize == slot) {
+            p.active = false;
+        }
         for p in self.proj.iter_mut().filter(|p| p.active && p.target as usize == slot) {
             p.target = NO_TARGET;
             // Stuck to them: it falls, its fuse running, as off the dead.
@@ -579,6 +583,11 @@ impl World {
             if d.ttl == 0 {
                 d.active = false;
             }
+        }
+        // The limit is judged once the tick is settled: a trade on the
+        // winning tick counts both ways, and nothing scores after the end.
+        if self.at_limit() {
+            self.end();
         }
         if self.phase == Phase::Playing {
             self.clock = self.clock.saturating_sub(1);
@@ -1178,7 +1187,14 @@ impl World {
             if spares && self.spared(owner, q) {
                 continue;
             }
-            if let Some(h) = ray_cylinder(p.pos, d, v.body.pos, HIT_R + 0.1, v.body.height(), t) {
+            if let Some(h) = ray_cylinder(
+                p.pos,
+                d,
+                v.body.pos,
+                HIT_R + 0.1,
+                crate::movement::ducked(v.body.duck, BODY_H, CROUCH_H),
+                t,
+            ) {
                 if h < t || !met {
                     t = h;
                     met = true;
@@ -2150,9 +2166,6 @@ impl World {
             pos,
             ..Event::default()
         });
-        if !self.rules.ctf && self.score[side] >= self.rules.score_limit {
-            self.end();
-        }
     }
 
     /// Capture the Flag's tick: carried flags follow their carriers (in a
@@ -2184,9 +2197,6 @@ impl World {
                         };
                         self.flag_event(3, c as u8, t, bases[own]);
                         self.score[own] += 1;
-                        if self.score[own] >= self.rules.score_limit && self.phase == Phase::Playing {
-                            self.end();
-                        }
                     }
                 }
                 FLAG_DOWN => {
@@ -2375,6 +2385,13 @@ impl World {
             pos,
             ..Event::default()
         });
+    }
+
+    /// A side (a team, or a seated fighter for themselves) has the score
+    /// limit.
+    fn at_limit(&self) -> bool {
+        let n = if self.rules.teams { 2 } else { MAX_FIGHTERS };
+        (0..n).any(|i| (self.rules.teams || self.fighters[i].seated) && self.score[i] >= self.rules.score_limit)
     }
 
     fn end(&mut self) {
