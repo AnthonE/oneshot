@@ -204,6 +204,20 @@ impl Parties {
             out.extend(self.tell(code));
             return (out, replaced);
         }
+        // Another party asked for: a place kept for them elsewhere goes now,
+        // not at the end of its grace (it would count them in its size).
+        let kept: Vec<u32> = self
+            .parties
+            .iter()
+            .filter(|(_, p)| p.seats.iter().any(|s| s.id == who.id && s.session.is_none()))
+            .map(|(&c, _)| c)
+            .collect();
+        for c in kept {
+            if let Some(p) = self.parties.get_mut(&c) {
+                p.seats.retain(|s| !(s.id == who.id && s.session.is_none()));
+            }
+            out.extend(self.settle(c));
+        }
         if want != 0 && want >> pp::CODE_BITS == 0 && !self.parties.contains_key(&want) {
             out.extend(self.found(session, want));
             return (out, replaced);

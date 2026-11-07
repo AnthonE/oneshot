@@ -305,6 +305,9 @@ impl Bot {
         };
         if !me.active() || w.phase != Phase::Playing {
             self.ride_for = 0;
+            // Back from the dead, whoever it sees it sees anew.
+            self.target = 255;
+            self.seen = 0;
             return inp;
         }
         self.ride_cool = self.ride_cool.saturating_sub(1);

@@ -46,6 +46,12 @@ pub const SHELTER_CLEAR_M: f32 = 5.0;
 /// How far up something over the eye counts as a roof, metres.
 pub const SHELTER_UP_M: f32 = 12.0;
 
+/// Snow (`Mood::snow`): how fast it comes down, m/s, how far the wind takes it, a
+/// flake's length, m, and how bright it's lit.
+pub const SNOW_FALL_MS: f32 = 1.6;
+pub const SNOW_DRIFT: f32 = 1.4;
+pub const SNOW_STROKE_M: f32 = 0.05;
+pub const SNOW_LIT: f32 = 0.72;
 /// The uniform, laid out to match `Rain` in the shader. 48 bytes: WebGL2
 /// wants uniforms of at least 16.
 #[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
@@ -151,6 +157,14 @@ const _: () = assert!(DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u1
 /// What a mood's rain looks like. None under a roof (an interior's mood
 /// never rains).
 pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
+    if m.snow {
+        // The same mesh, slow, each flake a short bright stroke.
+        return RainParams {
+            fall: (m.wind().extend(0.0).xzy() * SNOW_DRIFT - Vec3::Y * SNOW_FALL_MS).extend(SNOW_STROKE_M),
+            box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
+            look: Vec4::new(SNOW_LIT, SNOW_LIT, SNOW_LIT * 1.04, 0.0),
+        };
+    }
     let wind = m.wind() * (1.0 + 0.6 * m.wind_ms);
     let fall = Vec3::new(wind.x, -(FALL_MS + 2.0 * m.rain), wind.y);
     // Lit by the sky it falls from: bright grey by day, under a heavy one

@@ -226,6 +226,10 @@ pub struct Ear {
     /// the menus ([`Ear::ping`]) are under it and not this.
     world: f32,
     in_match: bool,
+    /// The link (`front::LinkGen`) and welcome the match's sound is of: a
+    /// new one (the title's backdrop after a match, a cup's next heat)
+    /// starts from silence, as a link closing does.
+    heard_of: (u32, u32),
     // Our own body.
     last_reload: bool,
     /// The turret we gun was venting.
@@ -790,6 +794,7 @@ pub fn decide(
     seen: Res<crate::Seen>,
     look: Res<crate::Look>,
     mut trucks: ResMut<crate::look::truck::HullSound>,
+    gen: Option<Res<crate::front::LinkGen>>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -802,7 +807,8 @@ pub fn decide(
         ear.cmds.push(Cmd::Master(volume));
     }
     let s = link.0.session();
-    if !s.ready {
+    let of = (gen.map_or(0, |g| g.0), s.welcomes);
+    if !s.ready || of != ear.heard_of {
         if ear.in_match {
             for slot in 0..mix::LOOPS as u8 {
                 ear.cmds.push(Cmd::Stop { slot });
@@ -823,8 +829,11 @@ pub fn decide(
             ear.rounds.clear();
             ear.bodies = [Body::default(); MAX_FIGHTERS];
         }
-        flush(ear);
-        return;
+        ear.heard_of = of;
+        if !s.ready {
+            flush(ear);
+            return;
+        }
     }
     ear.in_match = true;
     let me = s.core.slot;
@@ -910,6 +919,11 @@ pub fn decide(
 
 /// Pieces of a wreck heard coming down after it.
 const DEBRIS: u8 = 5;
+/// Shards going off together: the blast's take this loud, this much
+/// higher, and the shards' pings after it.
+const SUPER_GAIN: f32 = 1.0;
+const SUPER_RATE: f32 = 1.3;
+const SUPER_PINGS: u8 = 4;
 /// How a truck's tyres and its fire carry.
 const SKID: Carry = Carry { near: 6.0, reach: 70.0 };
 const FIRE: Carry = Carry { near: 4.0, reach: 45.0 };
@@ -1231,6 +1245,19 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Flag as u8 => ear.say(flag_line(e.part)),
+            k if k == Kind::Blast as u8 && e.c == sim::arms::SHARDS as u16 => {
+                // Shards going off together: a sharp, high crack with a
+                // shield's burst in it, and glass pinging away. Not fire.
+                let n = ear.take("blast", 3);
+                ear.at_rate(ears, &n, at, SUPER_GAIN, BLAST, 0.0, SUPER_RATE);
+                ear.at(ears, "shield_pop_0", at, 1.0, SMALL);
+                for k in 0..SUPER_PINGS {
+                    let n = ear.take("shot_shards", 3);
+                    let rate = 1.2 + ear.roll(50) as f32 * 0.01;
+                    let secs = 0.04 + k as f32 * 0.07 + ear.roll(4) as f32 * 0.01;
+                    ear.at_rate(ears, &n, at, 0.5, SMALL, secs, rate);
+                }
+            }
             k if k == Kind::Blast as u8 => {
                 let n = ear.take("blast", 3);
                 ear.at(ears, &n, at, 1.3, BLAST);

@@ -41,9 +41,9 @@ pub enum Start {
 /// The map behind the title: Chrysalis, its hall under the lamps.
 pub const BACKDROP: u8 = 6;
 /// Where the title's camera stands on it, and what it looks at; it drifts
-/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 26 m across).
-const SHOT_EYE: Vec3 = Vec3::new(-10.0, 6.5, -10.0);
-const SHOT_LOOK: Vec3 = Vec3::new(8.0, 2.0, 5.0);
+/// [`SWAY`] metres either side over [`DRIFT_S`] (the hall is 58 m across).
+const SHOT_EYE: Vec3 = Vec3::new(-12.0, 10.0, -16.0);
+const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there
@@ -1106,13 +1106,29 @@ const SKIN_BLURBS: [&str; 6] = [
     "Green trim, grown on a long climb up the ladder.",
     "Gold trim. Only the top of the ladder wears it.",
 ];
-const HEAD_BLURBS: [&str; 2] = [
+const HEAD_BLURBS: [&str; proto::HEADWEAR.len()] = [
     "Nothing on your head.",
     "Dark lenses on the bridge of the nose. They dim nothing you see.",
+    "Gold wire and mirrored glass. Whoever looks at you sees themselves first.",
+    "Two small round lenses on a thin wire. Seen it all, said nothing.",
+    "A bar of hard light across the eyes. It tells you nothing you didn't know.",
+    "Brass and old leather, from when the flying was the dangerous part.",
+    "Two filters and a valve. The air's fine; it's the company.",
+    "Jade lacquer and gilded eyes, and your own grin somewhere behind them.",
+    "A dark window in a burnt hood. It's all sparks out there anyway.",
+    "An old ram's skull. The ram has no further use for it.",
+    "Yellow, scuffed, rated for falling objects. Not rated for rockets.",
+    "Night vision, folded up. It stays folded: it shows you nothing more.",
+    "Holds no water. The brim is wide; your head is the size it always was.",
+    "Thick wool on a sawn-off top. A stump feels the cold.",
 ];
-const FEET_BLURBS: [&str; 2] = [
+const FEET_BLURBS: [&str; proto::FOOTWEAR.len()] = [
     "Triple T's own feet.",
-    "Heavy treaded boots. Your steps sound no louder in them.",
+    "Oiled leather and lugged soles. A log in logger's boots knows what it's doing.",
+    "Teal suede and a cupsole. Your steps sound no quieter in them.",
+    "Tooled leather and steel. They don't jingle: your steps sound no louder in them.",
+    "Armour plate and a lit seam. The magnets hold you to nothing.",
+    "Yellow rubber, mud to the ankle. Dry where it matters.",
 ];
 
 /// A line of the box under the cards: the item under the pointer, else
@@ -1270,7 +1286,6 @@ fn armory_panel(
                         card(t, item, player.skin == i, Face::Colour(skin_colour(i)), wardrobe);
                     }
                 });
-                peek_box(p);
             }
             k if k <= GEAR_ROWS.len() => {
                 let (label, slot) = GEAR_ROWS[k - 1];
@@ -1282,10 +1297,14 @@ fn armory_panel(
                         card(t, Item::Gear(k - 1, g), on == g, Face::Gear(k - 1, g), wardrobe);
                     }
                 });
-                peek_box(p);
             }
             _ => emblem_page(p, player, pics, images),
         });
+        // Under the rows, not in them: a long page's cards scroll, and what the
+        // one under the pointer is stays in sight.
+        if front.armory <= GEAR_ROWS.len() {
+            peek_box(panel);
+        }
         play_foot(panel, front, party, knocking);
     });
 }
@@ -2590,6 +2609,7 @@ fn page_cmds(
     mut door: NonSendMut<Door>,
     mut knocking: NonSendMut<Knocking>,
     in_match: Res<InMatch>,
+    time: Res<Time>,
 ) {
     let cmds: Vec<PageCmd> = PAGE.with(|p| std::mem::take(&mut *p.borrow_mut()));
     for c in cmds {
@@ -2599,6 +2619,8 @@ fn page_cmds(
                 front.status.clear();
                 front.bad = false;
                 front.dirty = true;
+                // The knock it replaces is this one's, cancel guard and all.
+                front.knocked_at = time.elapsed_secs();
                 knocking.0 = Some(door.knock(ask));
             }
             PageCmd::Knock(_) => {}
@@ -2607,10 +2629,17 @@ fn page_cmds(
 }
 
 /// `Start::Join`: knock at once.
-fn join(mut front: ResMut<Front>, player: Res<Player>, mut door: NonSendMut<Door>, mut knocking: NonSendMut<Knocking>) {
+fn join(
+    mut front: ResMut<Front>,
+    player: Res<Player>,
+    mut door: NonSendMut<Door>,
+    mut knocking: NonSendMut<Knocking>,
+    time: Res<Time>,
+) {
     let Some(m) = front.join.take() else {
         return;
     };
+    front.knocked_at = time.elapsed_secs();
     knocking.0 = Some(door.knock(Ask {
         name: player.sent_name(),
         pass: String::new(),
@@ -2651,13 +2680,12 @@ fn poll(
                 front.bad = false;
             }
             News::Failed(e) => {
-                if !e.is_empty() || front.status.is_empty() {
-                    front.status = if e.is_empty() {
-                        "The server closed the connection".into()
-                    } else {
-                        e
-                    };
-                }
+                // Never a progress line in red: the refusal, or that it closed.
+                front.status = if e.is_empty() {
+                    "The server closed the connection".into()
+                } else {
+                    e
+                };
                 front.bad = true;
                 knocking.0 = None;
                 return;

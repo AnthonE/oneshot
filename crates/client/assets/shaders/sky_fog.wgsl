@@ -10,12 +10,13 @@
 // The colour and the amount are the ground's: `DistanceFog` mixes geometry
 // toward its colour in exposed units, and so does this, by
 // `deck_haze`, which at the horizon is the far land's own fog.
-#import bevy_pbr::mesh_view_bindings::{view, lights}
+#import bevy_pbr::mesh_view_bindings::{view, lights, globals}
 #import bevy_pbr::utils::coords_to_viewport_uv
-#import "shaders/deck.wgsl"::deck_haze
+#import "shaders/deck.wgsl"::{deck_haze, deck_veil, deck_veil_mass}
 
 struct SkyFog {
-    // xyz the ground fog's colour (`DistanceFog::color`); w unused.
+    // xyz the ground fog's colour (`DistanceFog::color`); w the veil
+    // (`Mood::veil`).
     color: vec4<f32>,
     // `sky::SkyFog::lanes`.
     air: vec4<f32>,
@@ -48,7 +49,7 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let ndc = coords_to_viewport_uv(in.clip.xy, view.viewport) * vec2(2.0, -2.0) + vec2(-1.0, 1.0);
     let v = view.view_from_clip * vec4(ndc, 1.0, 1.0);
     let d = normalize((view.world_from_view * vec4(v.xyz / v.w, 0.0)).xyz);
-    let band = deck_haze(d.y, fog.air, fog.dust);
+    var band = deck_haze(d.y, fog.air, fog.dust);
     // The glow toward each directional light, as Bevy's `apply_fog` lays it
     // on the ground's fog (no shadow: nothing shades the sky), so the two
     // still meet toward the sun and toward a lightning bolt.
@@ -57,6 +58,12 @@ fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
         let l = lights.directional_lights[i];
         scattering += pow(max(dot(d, l.direction_to_light), 0.0), fog.glow.w) * l.color.rgb * view.exposure;
     }
-    let c = fog.color.rgb + scattering * fog.glow.rgb;
+    var c = fog.color.rgb;
+    if fog.color.w > 0.0 {
+        let to_sun = select(vec3(0.0, 1.0, 0.0), lights.directional_lights[0].direction_to_light, lights.n_directional_lights > 0u);
+        band = deck_veil(band, d, to_sun, fog.color.w);
+        c *= deck_veil_mass(d, globals.time);
+    }
+    c += scattering * fog.glow.rgb;
     return vec4(c * band, band);
 }

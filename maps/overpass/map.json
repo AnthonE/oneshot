@@ -1,103 +1,1153 @@
 {
-  "id": 1,
-  "name": "Overpass",
-  "about": "60 by 40 m, mirrored between red (-x) and blue (+x): a bridge across the middle with the sniper on it and the rocket under it, a raised base at each end, lane walls and crates between.",
-  "bounds": [-30, 30, -20, 20],
-  "mirror": "x",
-  "prefabs": {
-    "steps down to the north": [
-      [-2, 0, 12, 2, 2.5, 13, "block"],
-      [-2, 0, 13, 2, 2, 14, "block"],
-      [-2, 0, 14, 2, 1.5, 15, "block"],
-      [-2, 0, 15, 2, 1, 16, "block"],
-      [-2, 0, 16, 2, 0.5, 17, "block"]
+ "id": 1,
+ "name": "Overpass",
+ "about": "A broken flyover in a drowned city at dusk in the rain, 64 by 44 m, mirrored between red (-x) and blue (+x). The flyover (y 5) runs north to south over the middle, the sniper on it among a jackknifed lorry's containers, its ends fallen away; the rocket under it among its piers. A slip road comes down from it each way on each side, on a bank at its foot and on legs at its head, so you can pass under it to the alleys behind: the overshield in the north one, the camo in the south. A parking block at each end, spawns on its roof, a ramp down its front and stairs inside. Wrecks and barriers on the road.",
+ "bounds": [
+  -32,
+  32,
+  -22,
+  22
+ ],
+ "mirror": "x",
+ "nav": true,
+ "structures": [
+  {
+   "name": "the walls: retaining walls north and south, the blocks' backs east and west, the city over them",
+   "boxes": [
+    [
+     -33,
+     0,
+     -23,
+     33,
+     5.6,
+     -22,
+     "hidden"
+    ],
+    [
+     -33,
+     0,
+     22,
+     33,
+     5.6,
+     23,
+     "hidden"
     ]
+   ]
   },
-  "structures": [
+  {
+   "name": "the flyover, its ends fallen away out of bounds",
+   "boxes": [
+    [
+     -4.5,
+     4.1,
+     -22,
+     4.5,
+     5.0,
+     22,
+     "hidden"
+    ],
+    [
+     -4.15,
+     5.0,
+     -22,
+     4.15,
+     6.5,
+     -21.4,
+     "hidden"
+    ],
+    [
+     -4.15,
+     5.0,
+     21.4,
+     4.15,
+     6.5,
+     22,
+     "hidden"
+    ]
+   ]
+  },
+  {
+   "name": "a container off the lorry on the flyover, another across its lane, the lorry's cab",
+   "boxes": [
+    [
+     -3.5,
+     5.0,
+     6.6,
+     -1.1,
+     7.6,
+     12.6,
+     "hidden"
+    ],
     {
-      "name": "walls",
-      "boxes": [
-        [-31, 0, -21, 31, 8, -20, "wall"],
-        [-31, 0, 20, 31, 8, 21, "wall"],
-        [-31, 0, -20, -30, 8, 20, "wall"],
-        [30, 0, -20, 31, 8, 20, "wall"]
-      ]
+     "turned": [
+      1.9,
+      -9.8
+     ],
+     "size": [
+      2.4,
+      6.0
+     ],
+     "angle": 14,
+     "y": [
+      5.0,
+      7.6
+     ],
+     "look": "hidden"
+    },
+    [
+     1.5,
+     5.0,
+     3.4,
+     3.9,
+     7.2,
+     5.6,
+     "hidden"
+    ]
+   ]
+  },
+  {
+   "name": "the flyover's barriers and lamps, red's half; its piers, its slip roads, each on a bank then on legs",
+   "mirror": true,
+   "boxes": [
+    [
+     -4.5,
+     5.0,
+     -22,
+     -4.15,
+     5.95,
+     -17,
+     "hidden"
+    ],
+    [
+     -4.5,
+     5.0,
+     -11,
+     -4.15,
+     5.95,
+     11,
+     "hidden"
+    ],
+    [
+     -4.5,
+     5.0,
+     17,
+     -4.15,
+     5.95,
+     22,
+     "hidden"
+    ],
+    {
+     "round": [
+      -4.32,
+      -20
+     ],
+     "r": 0.14,
+     "y": [
+      5.0,
+      11.5
+     ],
+     "look": "hidden"
     },
     {
-      "name": "the bridge",
-      "boxes": [
-        [-2, 2.5, -12, 2, 3, 12, "dark"],
-        [-0.5, 0, -6.5, 0.5, 2.5, -5.5, "trim"],
-        [-0.5, 0, 5.5, 0.5, 2.5, 6.5, "trim"]
-      ]
-    },
-    { "name": "the bridge's north steps", "prefab": "steps down to the north" },
-    { "name": "the bridge's south steps", "prefab": "steps down to the north", "turn": 180 },
-    {
-      "name": "red's base",
-      "mirror": true,
-      "boxes": [
-        [-28, 0, -6, -22, 2, 6, "red"],
-        [-22, 0, -1.5, -21, 1.5, 1.5, "block"],
-        [-21, 0, -1.5, -20, 1, 1.5, "block"],
-        [-20, 0, -1.5, -19, 0.5, 1.5, "block"],
-        [-22.5, 2, -6, -22, 3.2, -1.5, "red"],
-        [-22.5, 2, 1.5, -22, 3.2, 6, "red"]
-      ]
+     "round": [
+      -4.32,
+      -6
+     ],
+     "r": 0.14,
+     "y": [
+      5.0,
+      11.5
+     ],
+     "look": "hidden"
     },
     {
-      "name": "red's lanes",
-      "mirror": true,
-      "boxes": [
-        [-12, 0, -10.25, -6, 3, -9.75, "block"],
-        [-12, 0, 9.75, -6, 3, 10.25, "block"],
-        [-13, 0, -1.5, -12.5, 1.2, 1.5, "block"],
-        [-17, 0, -15, -15.5, 1.5, -13.5, "block"],
-        [-17, 0, 13.5, -15.5, 1.5, 15, "block"],
-        [-8, 0, -4, -6.5, 1.5, -2.5, "block"],
-        [-8, 0, 2.5, -6.5, 1.5, 4, "block"],
-        [-5, 0, -15.75, -3.5, 4, -14.25, "block"],
-        [-5, 0, 14.25, -3.5, 4, 15.75, "block"]
+     "round": [
+      -4.32,
+      6
+     ],
+     "r": 0.14,
+     "y": [
+      5.0,
+      11.5
+     ],
+     "look": "hidden"
+    },
+    {
+     "round": [
+      -4.32,
+      20
+     ],
+     "r": 0.14,
+     "y": [
+      5.0,
+      11.5
+     ],
+     "look": "hidden"
+    },
+    [
+     -3.6,
+     0,
+     -6.7,
+     -2.2,
+     4.1,
+     -5.3,
+     "hidden"
+    ],
+    [
+     -3.6,
+     0,
+     5.3,
+     -2.2,
+     4.1,
+     6.7,
+     "hidden"
+    ],
+    [
+     -3.6,
+     0,
+     -17.7,
+     -2.2,
+     4.1,
+     -16.3,
+     "hidden"
+    ],
+    [
+     -3.6,
+     0,
+     16.3,
+     -2.2,
+     4.1,
+     17.7,
+     "hidden"
+    ],
+    {
+     "ramp": [
+      -19,
+      11,
+      -11,
+      17
+     ],
+     "up": "+x",
+     "from": 0,
+     "to": 2.76,
+     "look": "hidden"
+    },
+    {
+     "sweep": [
+      [
+       -11,
+       17
+      ],
+      [
+       -11,
+       11
       ]
+     ],
+     "y": 0,
+     "profile": [
+      [
+       0,
+       2.26,
+       2.76
+      ],
+      [
+       6.5,
+       4.5,
+       5.0
+      ]
+     ],
+     "look": "hidden"
+    },
+    {
+     "ramp": [
+      -19,
+      -17,
+      -11,
+      -11
+     ],
+     "up": "+x",
+     "from": 0,
+     "to": 2.76,
+     "look": "hidden"
+    },
+    {
+     "sweep": [
+      [
+       -11,
+       -11
+      ],
+      [
+       -11,
+       -17
+      ]
+     ],
+     "y": 0,
+     "profile": [
+      [
+       0,
+       2.26,
+       2.76
+      ],
+      [
+       6.5,
+       4.5,
+       5.0
+      ]
+     ],
+     "look": "hidden"
+    },
+    [
+     -9.2,
+     0,
+     11.3,
+     -8.2,
+     3.1,
+     12.3,
+     "hidden"
+    ],
+    [
+     -9.2,
+     0,
+     15.7,
+     -8.2,
+     3.1,
+     16.7,
+     "hidden"
+    ],
+    [
+     -9.2,
+     0,
+     -12.3,
+     -8.2,
+     3.1,
+     -11.3,
+     "hidden"
+    ],
+    [
+     -9.2,
+     0,
+     -16.7,
+     -8.2,
+     3.1,
+     -15.7,
+     "hidden"
+    ]
+   ]
+  },
+  {
+   "name": "red's parking block: the floor between its columns, its roof with the stairs' holes, its parapet, its ramp down the front, the stairs inside",
+   "mirror": true,
+   "boxes": [
+    [
+     -33,
+     0,
+     -23,
+     -32,
+     8,
+     23,
+     "hidden"
+    ],
+    [
+     -32,
+     0,
+     -10,
+     -31.6,
+     3.5,
+     10,
+     "hidden"
+    ],
+    [
+     -32,
+     0,
+     9.6,
+     -23,
+     3.5,
+     10,
+     "hidden"
+    ],
+    [
+     -32,
+     0,
+     -10,
+     -23,
+     3.5,
+     -9.6,
+     "hidden"
+    ],
+    [
+     -32,
+     3.1,
+     -3,
+     -23,
+     3.5,
+     3,
+     "hidden"
+    ],
+    [
+     -29,
+     3.1,
+     -10,
+     -23,
+     3.5,
+     -3,
+     "hidden"
+    ],
+    [
+     -29,
+     3.1,
+     3,
+     -23,
+     3.5,
+     10,
+     "hidden"
+    ],
+    [
+     -32,
+     3.1,
+     -10,
+     -29,
+     3.5,
+     -9,
+     "hidden"
+    ],
+    [
+     -32,
+     3.1,
+     9,
+     -29,
+     3.5,
+     10,
+     "hidden"
+    ],
+    {
+     "ramp": [
+      -31,
+      -9,
+      -29,
+      -3
+     ],
+     "up": "+z",
+     "from": 0,
+     "to": 3.5,
+     "look": "hidden"
+    },
+    {
+     "ramp": [
+      -31,
+      3,
+      -29,
+      9
+     ],
+     "up": "-z",
+     "from": 0,
+     "to": 3.5,
+     "look": "hidden"
+    },
+    [
+     -23.6,
+     0,
+     -5.6,
+     -22.9,
+     3.5,
+     -4.9,
+     "hidden"
+    ],
+    [
+     -23.6,
+     0,
+     4.9,
+     -22.9,
+     3.5,
+     5.6,
+     "hidden"
+    ],
+    [
+     -23.6,
+     0,
+     -9.6,
+     -22.9,
+     3.5,
+     -8.9,
+     "hidden"
+    ],
+    [
+     -23.6,
+     0,
+     8.9,
+     -22.9,
+     3.5,
+     9.6,
+     "hidden"
+    ],
+    [
+     -23.3,
+     3.5,
+     -10,
+     -23,
+     4.6,
+     -3,
+     "hidden"
+    ],
+    [
+     -23.3,
+     3.5,
+     3,
+     -23,
+     4.6,
+     10,
+     "hidden"
+    ],
+    [
+     -32,
+     3.5,
+     -10,
+     -31.6,
+     4.6,
+     10,
+     "hidden"
+    ],
+    [
+     -31.6,
+     3.5,
+     9.7,
+     -23.3,
+     4.6,
+     10,
+     "hidden"
+    ],
+    [
+     -31.6,
+     3.5,
+     -10,
+     -23.3,
+     4.6,
+     -9.7,
+     "hidden"
+    ],
+    {
+     "ramp": [
+      -23,
+      -3,
+      -15,
+      3
+     ],
+     "up": "-x",
+     "from": 0,
+     "to": 3.5,
+     "look": "hidden"
     }
+   ]
+  },
+  {
+   "name": "on the road: red's half's barriers and low walls",
+   "mirror": true,
+   "boxes": [
+    {
+     "turned": [
+      -13.2,
+      0.0
+     ],
+     "size": [
+      0.6,
+      4.0
+     ],
+     "angle": 8,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    },
+    {
+     "turned": [
+      -7.2,
+      -3.2
+     ],
+     "size": [
+      3.6,
+      0.6
+     ],
+     "angle": 35,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    },
+    {
+     "turned": [
+      -7.4,
+      3.6
+     ],
+     "size": [
+      3.6,
+      0.6
+     ],
+     "angle": -30,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    },
+    {
+     "turned": [
+      -19.8,
+      -8.5
+     ],
+     "size": [
+      3.6,
+      0.6
+     ],
+     "angle": 70,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    },
+    {
+     "turned": [
+      -21,
+      19.2
+     ],
+     "size": [
+      3.2,
+      0.6
+     ],
+     "angle": 10,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    },
+    {
+     "turned": [
+      -14,
+      -19.6
+     ],
+     "size": [
+      3.2,
+      0.6
+     ],
+     "angle": -14,
+     "y": [
+      0,
+      0.95
+     ],
+     "look": "hidden"
+    }
+   ]
+  },
+  {
+   "name": "the wrecks on the road, each a turned box with its model inside",
+   "mirror": true,
+   "boxes": [
+    {
+     "turned": [
+      -17.2,
+      -3.6
+     ],
+     "size": [
+      4.5,
+      2.0
+     ],
+     "angle": 18,
+     "y": [
+      0,
+      1.5
+     ],
+     "look": "wreck_car"
+    },
+    {
+     "turned": [
+      -10.8,
+      8.2
+     ],
+     "size": [
+      4.5,
+      2.0
+     ],
+     "angle": -52,
+     "y": [
+      0,
+      1.5
+     ],
+     "look": "wreck_car"
+    },
+    {
+     "turned": [
+      -11.4,
+      -7.6
+     ],
+     "size": [
+      4.2,
+      2.3
+     ],
+     "angle": 100,
+     "y": [
+      0,
+      2.3
+     ],
+     "look": "wreck_van"
+    },
+    {
+     "turned": [
+      -16.2,
+      19.4
+     ],
+     "size": [
+      4.2,
+      2.3
+     ],
+     "angle": 6,
+     "y": [
+      0,
+      2.3
+     ],
+     "look": "wreck_van"
+    },
+    {
+     "turned": [
+      -5.9,
+      -19.8
+     ],
+     "size": [
+      4.5,
+      2.0
+     ],
+     "angle": 160,
+     "y": [
+      0,
+      1.5
+     ],
+     "look": "wreck_car"
+    }
+   ]
+  }
+ ],
+ "spawns": [
+  {
+   "at": [
+    -27,
+    -5.6,
+    3.5
+   ],
+   "team": "red",
+   "yaw": 0,
+   "mirror": true
+  },
+  {
+   "at": [
+    -27,
+    5.6,
+    3.5
+   ],
+   "team": "red",
+   "yaw": 0,
+   "mirror": true
+  },
+  {
+   "at": [
+    -26,
+    -16
+   ],
+   "team": "red",
+   "yaw": 0,
+   "mirror": true
+  },
+  {
+   "at": [
+    -26,
+    16
+   ],
+   "team": "red",
+   "yaw": 0,
+   "mirror": true
+  }
+ ],
+ "pads": [
+  {
+   "weapon": "stickies",
+   "at": [
+    -15.5,
+    -8
+   ],
+   "respawn": 30
+  },
+  {
+   "weapon": "stickies",
+   "at": [
+    15.5,
+    8
+   ],
+   "respawn": 30
+  },
+  {
+   "weapon": "frags",
+   "at": [
+    -20.5,
+    14.5
+   ],
+   "respawn": 30
+  },
+  {
+   "weapon": "frags",
+   "at": [
+    20.5,
+    -14.5
+   ],
+   "respawn": 30
+  },
+  {
+   "weapon": "sniper",
+   "at": [
+    0,
+    0,
+    5.0
+   ],
+   "respawn": 90
+  },
+  {
+   "weapon": "rocket",
+   "at": [
+    0,
+    0
+   ],
+   "respawn": 120
+  },
+  {
+   "weapon": "shotgun",
+   "at": [
+    -7,
+    14
+   ],
+   "respawn": 60,
+   "mirror": true
+  },
+  {
+   "weapon": "shards",
+   "at": [
+    -25,
+    0,
+    3.5
+   ],
+   "respawn": 45,
+   "mirror": true
+  },
+  {
+   "weapon": "overshield",
+   "at": [
+    0,
+    19.5
+   ],
+   "respawn": 120
+  },
+  {
+   "weapon": "camo",
+   "at": [
+    0,
+    -19.5
+   ],
+   "respawn": 120
+  }
+ ],
+ "roam": [
+  [
+   0,
+   0
   ],
-  "spawns": [
-    { "at": [-26, -4, 2], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-26, 4, 2], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-24, -15], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-24, 15], "team": "red", "yaw": 0, "mirror": true }
+  [
+   -10,
+   0
   ],
-  "flag": {"at": [-18.5, 0]},
-  "pads": [
-    {
-      "weapon": "stickies",
-      "at": [-14, -5],
-      "respawn": 30
-    },
-    {
-      "weapon": "stickies",
-      "at": [14, 5],
-      "respawn": 30
-    },
-    {
-      "weapon": "frags",
-      "at": [-20, 15],
-      "respawn": 30
-    },
-    {
-      "weapon": "frags",
-      "at": [20, -15],
-      "respawn": 30
-    },
-    { "weapon": "sniper", "at": [0, 0, 3], "respawn": 90 },
-    { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
-    { "weapon": "shotgun", "at": [-10, -15], "respawn": 60, "mirror": true },
-    { "weapon": "shards", "at": [-25, 0, 2], "respawn": 45, "mirror": true },
-    { "weapon": "overshield", "at": [0, 18.5], "respawn": 120 },
-    { "weapon": "camo", "at": [0, -18.5], "respawn": 120 }
+  [
+   10,
+   0
   ],
-  "roam": [
-    [0, 0], [-10, 0], [10, 0], [-20, -15], [-20, 15], [20, -15], [20, 15],
-    [-4, -18], [4, 18], [-14, -5], [14, 5], [0, -12], [0, 12]
+  [
+   -20,
+   -14
+  ],
+  [
+   -20,
+   14
+  ],
+  [
+   20,
+   -14
+  ],
+  [
+   20,
+   14
+  ],
+  [
+   -7,
+   14
+  ],
+  [
+   7,
+   -14
+  ],
+  [
+   0,
+   19.5
+  ],
+  [
+   0,
+   -19.5
+  ],
+  [
+   -15.5,
+   -8
+  ],
+  [
+   15.5,
+   8
+  ],
+  [
+   -25,
+   6
+  ],
+  [
+   25,
+   -6
   ]
+ ],
+ "callouts": [
+  {
+   "name": "the flyover",
+   "at": [
+    0,
+    0,
+    5.0
+   ]
+  },
+  {
+   "name": "under the flyover",
+   "at": [
+    0,
+    0
+   ]
+  },
+  {
+   "name": "north alley",
+   "at": [
+    0,
+    19.5
+   ]
+  },
+  {
+   "name": "south alley",
+   "at": [
+    0,
+    -19.5
+   ]
+  },
+  {
+   "name": "red's roof",
+   "at": [
+    -27,
+    0,
+    3.5
+   ]
+  },
+  {
+   "name": "blue's roof",
+   "at": [
+    27,
+    0,
+    3.5
+   ]
+  },
+  {
+   "name": "red's floor",
+   "at": [
+    -27,
+    6
+   ]
+  },
+  {
+   "name": "blue's floor",
+   "at": [
+    27,
+    6
+   ]
+  },
+  {
+   "name": "red north ramp",
+   "at": [
+    -12,
+    14,
+    2.3
+   ]
+  },
+  {
+   "name": "blue north ramp",
+   "at": [
+    12,
+    14,
+    2.3
+   ]
+  },
+  {
+   "name": "red south ramp",
+   "at": [
+    -12,
+    -14,
+    2.3
+   ]
+  },
+  {
+   "name": "blue south ramp",
+   "at": [
+    12,
+    -14,
+    2.3
+   ]
+  },
+  {
+   "name": "the road, red",
+   "at": [
+    -14,
+    0
+   ]
+  },
+  {
+   "name": "the road, blue",
+   "at": [
+    14,
+    0
+   ]
+  }
+ ],
+ "light": {
+  "floor": "hidden",
+  "lamps": [
+   {
+    "at": [
+     -3.3,
+     -20,
+     11.3
+    ],
+    "color": [
+     1.0,
+     0.62,
+     0.3
+    ],
+    "lm": 1960000,
+    "mirror": true
+   },
+   {
+    "at": [
+     -3.3,
+     -6,
+     11.3
+    ],
+    "color": [
+     1.0,
+     0.62,
+     0.3
+    ],
+    "lm": 1960000,
+    "mirror": true
+   },
+   {
+    "at": [
+     -3.3,
+     6,
+     11.3
+    ],
+    "color": [
+     1.0,
+     0.62,
+     0.3
+    ],
+    "lm": 1960000,
+    "mirror": true
+   },
+   {
+    "at": [
+     -3.3,
+     20,
+     11.3
+    ],
+    "color": [
+     1.0,
+     0.62,
+     0.3
+    ],
+    "lm": 1960000,
+    "mirror": true
+   },
+   {
+    "at": [
+     0,
+     0,
+     3.3
+    ],
+    "color": [
+     1.0,
+     0.68,
+     0.42
+    ],
+    "lm": 700000
+   },
+   {
+    "at": [
+     -27,
+     0,
+     2.9
+    ],
+    "color": [
+     1.0,
+     0.3,
+     0.26
+    ],
+    "lm": 504000
+   },
+   {
+    "at": [
+     27,
+     0,
+     2.9
+    ],
+    "color": [
+     0.3,
+     0.5,
+     1.0
+    ],
+    "lm": 504000
+   },
+   {
+    "at": [
+     -16,
+     21.2,
+     4.8
+    ],
+    "color": [
+     1.0,
+     0.2,
+     0.6
+    ],
+    "lm": 644000,
+    "mirror": true
+   },
+   {
+    "at": [
+     -16,
+     -21.2,
+     4.8
+    ],
+    "color": [
+     0.1,
+     0.8,
+     1.0
+    ],
+    "lm": 644000,
+    "mirror": true
+   }
+  ]
+ }
 }

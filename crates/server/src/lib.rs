@@ -1053,6 +1053,20 @@ impl Sim {
                             live.parties.push((code, None));
                         }
                         let Some((slot, out)) = live.room.join_team(name, look, team) else {
+                            // No seat after all: told so, and a room made for
+                            // it alone goes with it.
+                            send_msg(
+                                &tx,
+                                &Msg::Refuse {
+                                    reason: proto::REFUSE_FULL,
+                                },
+                            );
+                            self.ctx.health.refuse(proto::REFUSE_FULL);
+                            tx.close();
+                            if live.links.iter().all(|l| l.is_none()) && live.watchers.is_empty() && live.cup.is_none()
+                            {
+                                rooms[i] = None;
+                            }
                             continue;
                         };
                         if let Some(k) = Recent::key(player.as_ref(), code) {

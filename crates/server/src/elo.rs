@@ -882,10 +882,10 @@ mod tests {
 
     #[test]
     fn skins_are_read_from_names_or_objects_and_unknown_ones_dropped() {
-        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, "Shades", "Boots", "none", 7]});
+        let v = serde_json::json!({"items": ["Ember", {"skin": "gilded"}, {"name": "pill"}, {"name": "a hat"}, "Shades", "Loggers", "none", 7]});
         assert_eq!(
             owned_skins(&v, "oneshot"),
-            vec!["boots", "ember", "gilded", "pill", "shades"]
+            vec!["ember", "gilded", "loggers", "pill", "shades"]
         );
         assert!(owned_skins(&serde_json::json!({}), "oneshot").is_empty());
     }

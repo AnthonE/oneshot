@@ -233,7 +233,7 @@ impl CloudParams {
                 grade(sky::backdrop_at(Vec3::X)).extend((r * DISK_SOFT).cos()),
                 (v3(sky::NIGHT_SKY) * p.night).extend(0.0),
                 (v3(sky::DUSK_GLOW) * l.glow * (1.0 - 0.7 * p.dark)).extend(r.cos()),
-                (v3(l.fog_rgb) * l.gain).extend(0.0),
+                (v3(l.fog_rgb) * l.gain).extend(p.veil),
                 disk.dir,
                 disk.rgb,
             )
@@ -287,7 +287,7 @@ impl CloudParams {
                 if temporal { 1.0 } else { 0.0 },
             ),
             texel: Vec4::new(field_m / sky::FIELD_N as f32, DETAIL_TILE_M / DETAIL_N as f32, 0.0, 0.0),
-            wind: Vec4::new(BOIL_MS, 0.0, 0.0, 0.0),
+            wind: Vec4::new(BOIL_MS, p.deep, 0.0, 0.0),
             lift: lift.extend(0.0),
             flow: at.flow(),
             zenith,
@@ -518,7 +518,7 @@ impl SkyFogParams {
         let c = LinearRgba::from(f.color);
         let g = LinearRgba::from(f.directional_light_color);
         Self {
-            color: Vec4::new(c.red, c.green, c.blue, 0.0),
+            color: Vec4::new(c.red, c.green, c.blue, mood.veil),
             air: sky::SkyFog::new(flat_mist, mood.rain_sigma()).lanes(),
             glow: (Vec3::new(g.red, g.green, g.blue) * g.alpha).extend(sky::FOG_SUN_EXPONENT),
             dust: mood.sky_fog().dust_lanes(),

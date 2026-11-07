@@ -27,7 +27,7 @@ use bevy::scene::SceneInstanceReady;
 use client_net::core::{Drawn, DrawnVehicle};
 
 use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
-use super::guns::{body_basis, gun, spawn_posed, Models};
+use super::guns::{body_basis, gun, spawn_posed, Models, LEFT, RIGHT};
 use super::paint::{BodyMaterial, Paint, Paints};
 use super::shield::{Flare, ShellPart, ShieldMaterial, Tone};
 
@@ -52,22 +52,26 @@ const SWORD_HELD_TURN: Quat = Quat::from_xyzw(0.87036, 0.04145, -0.49012, -0.023
 pub const CUT_S: f32 = 0.3;
 
 /// A piece of gear's place on a bone of triple-t.glb, in the bone's own
-/// units (centimetres, as the hand's). Each model's script prints its own
-/// (FIT): `tools/models/shades.py`, `tools/models/boots.py`.
+/// units (centimetres, as the hand's). One for all the headwear and one for
+/// each foot's boots: what differs between pieces is in their files, cut in
+/// the body's frame by `tools/models/gear.py`, which prints these (FIT).
 pub struct Fit {
     bone: &'static str,
     at: Vec3,
     turn: Quat,
     scale: f32,
+    /// What its bone is scaled by while it is worn ([`FOOT_TUCK`]): the piece
+    /// is given back the difference, so only the body under it shrinks.
+    tuck: f32,
 }
 
-/// The shades: the lens's middle over the eyes, tipped a little onto the
-/// nose.
-const SHADES: Fit = Fit {
+/// Headwear: over the eyes, tipped a little onto the nose.
+const HEADWEAR: Fit = Fit {
     bone: "Head",
     at: Vec3::new(0.545, 36.774, 14.136),
     turn: Quat::from_xyzw(-0.12787, 0.00560, -0.00601, 0.99176),
     scale: 100.0,
+    tuck: 1.0,
 };
 /// The boots, a left and a right: each sole under its root foot, turned
 /// out with the toes.
@@ -76,13 +80,28 @@ const BOOT_LEFT: Fit = Fit {
     at: Vec3::new(1.531, 16.321, 5.974),
     turn: Quat::from_xyzw(-0.90881, -0.01571, -0.03615, 0.41535),
     scale: 100.0,
+    tuck: FOOT_TUCK,
 };
 const BOOT_RIGHT: Fit = Fit {
     bone: "RightFoot",
     at: Vec3::new(-0.412, 16.452, 6.000),
     turn: Quat::from_xyzw(-0.90600, 0.04448, 0.00651, 0.42088),
     scale: 100.0,
+    tuck: FOOT_TUCK,
 };
+
+/// What is left of a foot in a boot, and of its toes against that: Triple T's
+/// are roots with a heel like a burl, splayed as wide as the sole, and would
+/// poke out through it, so they are drawn tucked in under whatever the clip does
+/// with them (`pose_spines`). `tools/models/gear.py`'s room draws them the same.
+const FOOT_TUCK: f32 = 0.62;
+const TOE_TUCK: f32 = 0.5;
+const TUCKED: [(&str, f32); 4] = [
+    ("LeftFoot", FOOT_TUCK),
+    ("RightFoot", FOOT_TUCK),
+    ("LeftToeBase", TOE_TUCK),
+    ("RightToeBase", TOE_TUCK),
+];
 
 /// Where a body can be drawn, metres in its root's frame (at its feet,
 /// +Y up): standing, crouched, its legs tucked in a jump, or lying as
@@ -163,6 +182,9 @@ pub struct Body {
     hand: Entity,
     /// Its gear, each piece on its bone once dressed.
     worn: Vec<(Entity, &'static Fit)>,
+    /// It wears boots, and once dressed, the bones they tuck in ([`TUCKED`]).
+    booted: bool,
+    tucked: Vec<(Entity, f32)>,
     held: u8,
     /// Drawn in stop-motion, lunging (`cels.rs`).
     pub step: super::cels::Step,
@@ -287,9 +309,10 @@ pub struct WantsScene;
 /// A piece of gear's model, till the models are in (as [`WantsScene`]).
 #[derive(Component, Clone, Copy)]
 pub enum WantsGear {
-    Shades,
-    BootLeft,
-    BootRight,
+    /// Headwear, by its id.
+    Head(u8),
+    /// A boot of footwear, by its id, and its side (`guns::LEFT`, `RIGHT`).
+    Boot(u8, usize),
 }
 
 /// Every body waiting for its model gets it, the file once in, and every
@@ -303,15 +326,15 @@ pub fn stand_up(
 ) {
     let Some(models) = models else { return };
     for (e, piece) in &gear {
-        let scene = match piece {
-            WantsGear::Shades => &models.shades,
-            WantsGear::BootLeft => &models.boot_left,
-            WantsGear::BootRight => &models.boot_right,
+        let scene = match *piece {
+            WantsGear::Head(g) => models.head_scene(g),
+            WantsGear::Boot(g, side) => models.boot_scene(g, side),
         };
-        commands
-            .entity(e)
-            .remove::<WantsGear>()
-            .insert(SceneRoot(scene.clone()));
+        let mut gear = commands.entity(e);
+        gear.remove::<WantsGear>();
+        if let Some(scene) = scene {
+            gear.insert(SceneRoot(scene));
+        }
     }
     let Some(scene) = gltfs.get(&models.body).and_then(|g| g.scenes.first().cloned()) else {
         return;
@@ -332,12 +355,14 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
     // Its gear, each piece hidden till `dress` puts it on its bone.
     // Their models come once the models are in (`stand_up`).
     let mut pieces: Vec<(WantsGear, &'static Fit)> = Vec::new();
-    if proto::gear_valid(&proto::HEADWEAR, look.headwear) == 1 {
-        pieces.push((WantsGear::Shades, &SHADES));
+    let head = proto::gear_valid(&proto::HEADWEAR, look.headwear);
+    if head != proto::GEAR_NONE {
+        pieces.push((WantsGear::Head(head), &HEADWEAR));
     }
-    if proto::gear_valid(&proto::FOOTWEAR, look.footwear) == 1 {
-        pieces.push((WantsGear::BootLeft, &BOOT_LEFT));
-        pieces.push((WantsGear::BootRight, &BOOT_RIGHT));
+    let feet = proto::gear_valid(&proto::FOOTWEAR, look.footwear);
+    if feet != proto::GEAR_NONE {
+        pieces.push((WantsGear::Boot(feet, LEFT), &BOOT_LEFT));
+        pieces.push((WantsGear::Boot(feet, RIGHT), &BOOT_RIGHT));
     }
     let worn = if shadow { Vec::new() } else { pieces }
         .into_iter()
@@ -365,6 +390,8 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         player: None,
         hand,
         worn,
+        booted: feet != proto::GEAR_NONE && !shadow,
+        tucked: Vec::new(),
         held: 0,
         step: super::cels::Step::default(),
         cutting: 0.0,
@@ -511,15 +538,25 @@ fn dress(
                 commands.entity(worn).insert((
                     ChildOf(bone),
                     Transform {
-                        translation: fit.at,
+                        translation: fit.at / fit.tuck,
                         rotation: fit.turn.normalize(),
-                        scale: Vec3::splat(fit.scale),
+                        scale: Vec3::splat(fit.scale / fit.tuck),
                     },
                     Visibility::Inherited,
                 ));
             }
             None => error!("bodies: no {} in models/triple-t.glb: gear left off", fit.bone),
         }
+    }
+    if body.booted {
+        body.tucked = children
+            .iter_descendants(model)
+            .filter_map(|e| {
+                let name = names.get(e).ok()?;
+                let (_, k) = TUCKED.iter().find(|(bone, _)| *bone == name.as_str())?;
+                Some((e, *k))
+            })
+            .collect();
     }
     body.dressed = true;
     if body.shadow {
@@ -938,6 +975,11 @@ pub fn pose_spines(
             head_push: b.head_push,
         };
         anim::turn_spine(pose, &mut spine, &mut bones);
+        for &(bone, k) in &b.tucked {
+            if let Ok(mut t) = bones.get_mut(bone) {
+                t.scale = Vec3::splat(k);
+            }
+        }
     }
 }
 

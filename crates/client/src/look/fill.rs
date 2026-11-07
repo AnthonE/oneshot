@@ -168,21 +168,105 @@ pub mod hall {
     pub const GAIN: f32 = 2.0;
     /// The face size: the bands want more than the sky's 32.
     pub const FACE: u32 = 64;
-    /// Linear, as a share of the fill's peak: the walls, the deck, the
-    /// vault between its panes, the panes, the strips. **(knobs)**
-    pub const WALL: [f32; 3] = [0.16, 0.09, 0.3];
-    pub const DECK: [f32; 3] = [0.035, 0.025, 0.055];
-    pub const VAULT: [f32; 3] = [0.1, 0.06, 0.2];
-    pub const PANE: [f32; 3] = [1.0, 0.55, 0.16];
-    pub const STRIP: [f32; 3] = [0.18, 0.5, 0.55];
-    /// Where the strips run: the sine of their elevation from the floor's
-    /// middle (7.3 m up the wall, 14 m away), and half their width.
-    pub const STRIP_AT: f32 = 0.42;
-    pub const STRIP_HALF: f32 = 0.03;
-    /// The panes: bands across the hall's axis (x), this many a radian of
-    /// bearing along it, and the share of each band that is glass.
-    pub const PANE_FREQ: f32 = 3.0;
-    pub const PANE_SHARE: f32 = 0.35;
+    /// A roofed map's light as a cube: linear, as a share of the fill's peak.
+    /// **(knobs)**
+    pub struct Palette {
+        /// The walls, the deck, the vault between its panes, the panes, the
+        /// strips.
+        pub wall: [f32; 3],
+        pub deck: [f32; 3],
+        pub vault: [f32; 3],
+        pub pane: [f32; 3],
+        pub strip: [f32; 3],
+        /// Where the strips run: the sine of their elevation from the floor's
+        /// middle, and half their width.
+        pub strip_at: f32,
+        pub strip_half: f32,
+        /// The panes: bands across the hall's axis (x), this many a radian of
+        /// bearing along it, and the share of each band that is glass.
+        pub pane_freq: f32,
+        pub pane_share: f32,
+        /// What metal reflects: its walls and vault darker than what they fill
+        /// a fighter with (`diffuse_at` keeps those), and a long soft highlight
+        /// low in the hall, where a round form catches a lit wall.
+        pub spec_wall: [f32; 3],
+        pub spec_vault: [f32; 3],
+        pub sheen: [f32; 3],
+        pub sheen_share: f32,
+        /// Its air (`rig::hall_haze`): a faint haze this colour, this much a
+        /// metre squared, so the near wall is clear and the far end softens.
+        pub haze: [f32; 3],
+        pub haze_density: f32,
+    }
+
+    /// The ship's purple hold.
+    pub const SHIP: Palette = Palette {
+        wall: [0.16, 0.09, 0.3],
+        deck: [0.035, 0.025, 0.055],
+        vault: [0.1, 0.06, 0.2],
+        pane: [1.0, 0.55, 0.16],
+        strip: [0.18, 0.5, 0.55],
+        strip_at: 0.42,
+        strip_half: 0.03,
+        pane_freq: 3.0,
+        pane_share: 0.35,
+        spec_wall: [0.08, 0.045, 0.15],
+        spec_vault: [0.04, 0.025, 0.08],
+        sheen: [0.9, 0.55, 0.95],
+        sheen_share: 0.55,
+        haze: [0.035, 0.02, 0.06],
+        haze_density: 0.014,
+    };
+
+    /// Cistern's dark water and old brick: cold day from its oculi, amber low
+    /// from its lamps.
+    pub const CISTERN: Palette = Palette {
+        wall: [0.065, 0.05, 0.042],
+        deck: [0.01, 0.014, 0.016],
+        vault: [0.036, 0.03, 0.028],
+        pane: [0.72, 0.88, 1.0],
+        strip: [0.42, 0.33, 0.22],
+        strip_at: 0.16,
+        strip_half: 0.05,
+        pane_freq: 2.0,
+        pane_share: 0.1,
+        spec_wall: [0.045, 0.035, 0.03],
+        spec_vault: [0.02, 0.022, 0.026],
+        sheen: [0.56, 0.47, 0.36],
+        sheen_share: 0.4,
+        haze: [0.012, 0.017, 0.021],
+        haze_density: 0.022,
+    };
+
+    /// Bulkhead's steel: cold panels overhead, amber at the lanes, a planet's pale
+    /// day through the viewport.
+    pub const DOCK: Palette = Palette {
+        wall: [0.11, 0.12, 0.14],
+        deck: [0.03, 0.034, 0.04],
+        vault: [0.07, 0.08, 0.095],
+        pane: [0.72, 0.84, 1.0],
+        strip: [0.6, 0.42, 0.22],
+        strip_at: 0.2,
+        strip_half: 0.04,
+        pane_freq: 4.0,
+        pane_share: 0.16,
+        spec_wall: [0.05, 0.056, 0.066],
+        spec_vault: [0.03, 0.036, 0.044],
+        sheen: [0.55, 0.62, 0.72],
+        sheen_share: 0.4,
+        haze: [0.012, 0.016, 0.022],
+        haze_density: 0.007,
+    };
+
+    /// By `Mood::hall`.
+    pub const PALETTES: [&Palette; 3] = [&SHIP, &CISTERN, &DOCK];
+
+    /// The specular cube's mips: how far a texel's look spreads in each,
+    /// as the tangent of the angle. The renderer picks a mip by roughness,
+    /// so without them a rough deck mirrors the strips as sharply as chrome.
+    pub const SPREAD: [f32; 7] = [0.0, 0.05, 0.1, 0.2, 0.35, 0.6, 1.0];
+    /// Looks averaged per texel in a blurred mip.
+    const SPREAD_LOOKS: usize = 16;
 
     fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
         [0, 1, 2].map(|c| a[c] + (b[c] - a[c]) * t)
@@ -194,35 +278,36 @@ pub mod hall {
     }
 
     /// What the hall shows toward `d`.
-    pub fn specular_at(d: Vec3) -> [f32; 3] {
+    pub fn specular_at(p: &Palette, d: Vec3) -> [f32; 3] {
         let y = d.y;
         // The deck under the horizon, the wall to the vault's spring.
-        let mut c = mix(DECK, WALL, smooth(-0.25, 0.05, y));
+        let mut c = mix(p.deck, p.spec_wall, smooth(-0.25, 0.05, y));
+        c = mix(c, p.sheen, p.sheen_share * smooth(0.02, 0.1, y) * smooth(0.3, 0.18, y));
         // The vault, darker than the wall, and its panes: bands across the
         // hall by the bearing along it.
         let over = smooth(0.5, 0.7, y);
         let along = d.x.atan2(y.max(1e-3));
-        let band = (along * PANE_FREQ / core::f32::consts::TAU).rem_euclid(1.0);
-        let pane = smooth(PANE_SHARE + 0.05, PANE_SHARE, band) * smooth(0.6, 0.8, y);
-        c = mix(c, mix(VAULT, PANE, pane), over);
+        let band = (along * p.pane_freq / core::f32::consts::TAU).rem_euclid(1.0);
+        let pane = smooth(p.pane_share + 0.05, p.pane_share, band) * smooth(0.6, 0.8, y);
+        c = mix(c, mix(p.spec_vault, p.pane, pane), over);
         // The strips round the hall.
-        let strip = smooth(STRIP_HALF, 0.0, (y - STRIP_AT).abs());
-        mix(c, STRIP, strip)
+        let strip = smooth(p.strip_half, 0.0, (y - p.strip_at).abs());
+        mix(c, p.strip, strip)
     }
 
     /// The hall blurred to its hemisphere: the bands as their average.
-    pub fn diffuse_at(d: Vec3) -> [f32; 3] {
-        let up = mix(VAULT, PANE, PANE_SHARE * 0.5);
-        let side = mix(WALL, STRIP, 0.15);
+    pub fn diffuse_at(p: &Palette, d: Vec3) -> [f32; 3] {
+        let up = mix(p.vault, p.pane, p.pane_share * 0.5);
+        let side = mix(p.wall, p.strip, 0.15);
         let y = d.y.clamp(-1.0, 1.0);
         if y >= 0.0 {
             mix(side, up, y)
         } else {
-            mix(side, DECK, -y)
+            mix(side, p.deck, -y)
         }
     }
 
-    fn cube(n: u32, at: fn(Vec3) -> [f32; 3]) -> Image {
+    fn cube(n: u32, at: impl Fn(Vec3) -> [f32; 3]) -> Image {
         let mut data = vec![0u8; (n * n * 6 * 4) as usize];
         for face in 0..6usize {
             for y in 0..n {
@@ -239,9 +324,51 @@ pub mod hall {
         cube_image(n, data)
     }
 
+    /// `specular_at` with its mips, each a wider blur of the hall, a cube's
+    /// six faces each with its whole chain.
+    fn specular_cube(p: &Palette) -> Image {
+        let mut data = Vec::new();
+        for face in 0..6usize {
+            for (m, &spread) in SPREAD.iter().enumerate() {
+                let n = (FACE >> m).max(1);
+                for y in 0..n {
+                    for x in 0..n {
+                        let d = cube_dir(face, x, y, n);
+                        let f = if spread == 0.0 {
+                            specular_at(p, d)
+                        } else {
+                            // A fixed spiral of looks round `d`, enough to
+                            // smear the bands and strips evenly.
+                            let t = d.any_orthonormal_vector();
+                            let b = d.cross(t);
+                            let mut sum = [0.0f32; 3];
+                            for k in 0..SPREAD_LOOKS {
+                                let a = k as f32 * 2.399_963;
+                                let r = spread * ((k as f32 + 0.5) / SPREAD_LOOKS as f32).sqrt();
+                                let s = specular_at(p, (d + (t * a.cos() + b * a.sin()) * r).normalize());
+                                for c in 0..3 {
+                                    sum[c] += s[c] / SPREAD_LOOKS as f32;
+                                }
+                            }
+                            sum
+                        };
+                        for v in f {
+                            data.push((linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
+                        }
+                        data.push(255);
+                    }
+                }
+            }
+        }
+        let mut image = cube_image(FACE, vec![0; (FACE * FACE * 6 * 4) as usize]);
+        image.texture_descriptor.mip_level_count = SPREAD.len() as u32;
+        image.data = Some(data);
+        image
+    }
+
     /// The hall's two cubes: diffuse, specular.
-    pub fn cubemaps() -> (Image, Image) {
-        (cube(16, diffuse_at), cube(FACE, specular_at))
+    pub fn cubemaps(p: &Palette) -> (Image, Image) {
+        (cube(16, |d| diffuse_at(p, d)), specular_cube(p))
     }
 }
 

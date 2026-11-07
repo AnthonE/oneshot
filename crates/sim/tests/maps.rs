@@ -154,6 +154,99 @@ fn everything_can_be_walked_to() {
     }
 }
 
+/// Cloudbreak's tower climbs on foot, floor by floor, and its walks join on.
+#[test]
+fn cloudbreak_climbs_and_its_walks_join() {
+    let m = by_id(7).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the sighting room", 0.0, 18.9, 4.5),
+        ("the shoulder", -4.8, 18.5, 4.5),
+        ("the corner", -4.8, 24.8, 6.9),
+        ("the back walk", 0.0, 24.8, 8.5),
+        ("the gallery", 0.0, 19.0, 8.5),
+        ("the north walk", 0.0, 26.2, -1.3),
+        ("red's north walk", -9.9, 23.3, -1.3),
+        ("blue's north walk", 9.9, 23.3, -1.3),
+        ("red's south walk", -12.0, -19.7, -1.3),
+        ("blue's south walk", 12.0, -19.7, -1.3),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
+/// Cistern's levels all join, up and back, and its lifts land on its bridges.
+#[test]
+fn cisterns_levels_join() {
+    let m = by_id(2).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the far quay", 19.0, 0.0, 1.8),
+        ("the dais", 0.0, 0.0, 1.0),
+        ("a stair's foot", -11.5, 22.0, 1.8),
+        ("a landing", 0.0, 21.0, 5.2),
+        ("the red arm", -11.0, 0.0, 5.2),
+        ("the ring", 4.3, 0.0, 5.2),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
+/// Overpass' slip roads and its blocks' stairs all climb, both sides.
+#[test]
+fn overpass_climbs() {
+    let m = by_id(1).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the road", 0.0, 0.0, 0.0),
+        ("the flyover", 0.0, 0.0, 5.0),
+        ("red's roof", -27.0, 0.0, 3.5),
+        ("blue's roof", 27.0, 0.0, 3.5),
+        ("the north alley", 0.0, 19.5, 0.0),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
+/// Bulkhead's spawns don't look down each other's throats across the dock.
+#[test]
+fn bulkheads_spawns_are_mostly_out_of_each_others_sight() {
+    let m = by_id(5).unwrap();
+    let head = |p: sim::geom::V3| sim::geom::V3::new(p.x, p.y + EYE, p.z);
+    let (mut seen, mut pairs) = (0, 0);
+    for a in m.spawns.iter().filter(|s| s.team == 0) {
+        for b in m.spawns.iter().filter(|s| s.team == 1) {
+            pairs += 1;
+            seen += usize::from(m.clear(head(a.pos), head(b.pos)));
+        }
+    }
+    assert!(seen * 3 <= pairs, "{seen} of {pairs} pairs of spawns see each other");
+}
+
 /// Every rotation the server plays has a map in it (else it falls back to
 /// any map that can play the mode), and a map out of the rotation is in
 /// none of them.

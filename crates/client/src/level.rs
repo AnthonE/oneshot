@@ -72,7 +72,7 @@ const RIB: u8 = 22;
 const PALM: u8 = 23;
 const DEAD_TREE: u8 = 24;
 /// The hull's plates repeat over this many metres.
-const HULL_TILE_M: f32 = 8.0;
+const HULL_TILE_M: f32 = 5.5;
 
 /// A box's texture set, the metres it repeats over, and its tint (the
 /// photograph's colour times this).
@@ -94,11 +94,11 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // The ship: its hull's plates are near white, the look is their
         // colour (pearl purple, its dark hull, red's and blue's).
         12 => ("alien", HULL_TILE_M, Color::srgb(0.47, 0.33, 0.68)),
-        13 => ("alien", HULL_TILE_M, Color::srgb(0.3, 0.22, 0.45)),
-        14 => ("alien", HULL_TILE_M, Color::srgb(0.66, 0.19, 0.32)),
-        15 => ("alien", HULL_TILE_M, Color::srgb(0.25, 0.37, 0.68)),
-        DECK => ("deck", 8.0, Color::WHITE),
-        GOLD => ("gold", 2.4, Color::WHITE),
+        13 | HUSK | FONT => ("alien", HULL_TILE_M, Color::srgb(0.3, 0.22, 0.45)),
+        14 | HUSK_RED => ("alien", HULL_TILE_M, Color::srgb(0.66, 0.19, 0.32)),
+        15 | HUSK_BLUE => ("alien", HULL_TILE_M, Color::srgb(0.25, 0.37, 0.68)),
+        DECK => ("deck", 8.0, Color::linear_rgb(0.55, 0.55, 0.55)),
+        GOLD => ("gold", 3.0, Color::WHITE),
         // A base's metal: plates over a metre across (the set is four to
         // its tile) in a mid steel, the same under a side's paint, and
         // tread plate.
@@ -106,24 +106,77 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         STEEL_RED => ("steel", 5.0, Color::linear_rgb(1.5, 0.3, 0.24)),
         STEEL_BLUE => ("steel", 5.0, Color::linear_rgb(0.26, 0.44, 1.35)),
         TREAD => ("tread", 2.0, Color::linear_rgb(1.25, 1.25, 1.3)),
-        // Stone: smooth grey (the set's mean is 0.48), a little cool, and
-        // the same in shade, its mottle a couple of metres across.
-        STONE => ("stone", 3.0, Color::linear_rgb(0.9, 0.91, 0.95)),
-        STONE_DARK => ("stone", 3.0, Color::linear_rgb(0.5, 0.51, 0.54)),
+        // The masonry: cool, against the warm sand and the warm sun on it.
+        STONE => ("stone", crate::look::built::TILE_M, Color::linear_rgb(1.0, 1.0, 1.02)),
+        STONE_DARK => ("stone", crate::look::built::TILE_M, Color::linear_rgb(0.46, 0.46, 0.48)),
+        BRICK => (
+            "brick",
+            crate::look::built::tile(BRICK),
+            Color::linear_rgb(0.9, 0.86, 0.82),
+        ),
+        MARBLE => ("marble", crate::look::built::tile(MARBLE), Color::WHITE),
+        ROAD => (
+            "road",
+            crate::look::built::tile(ROAD),
+            Color::linear_rgb(0.8, 0.8, 0.82),
+        ),
+        BLAST => (
+            "blast",
+            crate::look::built::tile(BLAST),
+            Color::linear_rgb(0.95, 0.95, 0.97),
+        ),
+        BLAST_DARK => (
+            "blast",
+            crate::look::built::tile(BLAST),
+            Color::linear_rgb(0.45, 0.45, 0.47),
+        ),
+        SNOW => (
+            "snow",
+            crate::look::built::tile(SNOW),
+            Color::linear_rgb(3.3, 3.42, 3.7),
+        ),
+        RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
         _ => return None,
     })
+}
+
+/// A look's texture set, by name (the water's reflection wears it).
+pub fn set_of(look: u8) -> Option<&'static str> {
+    dress(look).map(|d| d.0)
 }
 
 /// A base's metal (tools/maps/compile.mjs LOOKS): its plate, its plate in
 /// each side's paint, its tread plate; and a turned box drawn as a pylon.
 pub const PYLON: u8 = 25;
 const STEEL: u8 = 26;
-const STEEL_RED: u8 = 27;
-const STEEL_BLUE: u8 = 28;
-const TREAD: u8 = 29;
+pub const STEEL_RED: u8 = 27;
+pub const STEEL_BLUE: u8 = 28;
+pub const TREAD: u8 = 29;
+/// The arenas' old steel: mid, dark, plate.
+pub const HULL: u8 = 7;
+pub const DARK: u8 = 5;
+pub const PLATE: u8 = 11;
 /// Dressed grey stone, pale and dark, in the concrete set.
-const STONE: u8 = 30;
-const STONE_DARK: u8 = 31;
+pub const STONE: u8 = 30;
+pub const STONE_DARK: u8 = 31;
+/// The ship's props (tools/maps/compile.mjs LOOKS): a round solid drawn as a
+/// model inside it (`look/boulders.rs`), its faceted self until that's in.
+pub const HUSK: u8 = 32;
+pub const HUSK_RED: u8 = 33;
+pub const HUSK_BLUE: u8 = 34;
+pub const FONT: u8 = 35;
+/// The arenas' built things (`look/built.rs`): old brick, cut marble, asphalt,
+/// cast concrete and its dark, snow, flaking steel.
+pub const BRICK: u8 = 36;
+pub const MARBLE: u8 = 37;
+pub const ROAD: u8 = 38;
+pub const BLAST: u8 = 39;
+pub const BLAST_DARK: u8 = 40;
+pub const SNOW: u8 = 41;
+pub const RUST: u8 = 42;
+/// A turned box drawn as a wreck inside it (`look/boulders.rs`).
+pub const WRECK_CAR: u8 = 43;
+pub const WRECK_VAN: u8 = 44;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -152,8 +205,8 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
         (0 | 1 | 5 | 7 | 11, _) => (0.62, 0.85),
         (FLOOR, _) => (0.75, 0.55),
         // The ship's sets carry their own roughness and metal.
-        (12..=15 | RIB, _) => (1.0, 0.7),
-        (DECK, _) => (1.0, 0.55),
+        (12..=15 | RIB | HUSK..=FONT, _) => (1.0, 0.7),
+        (DECK, _) => (1.0, 0.3),
         (GOLD, _) => (1.0, 0.9),
         // Bare plate is metal through and through; paint over it mostly
         // is not; tread plate is worn dull.
@@ -179,8 +232,9 @@ fn surface(look: u8) -> Surface {
         0 | 1 | 3 | 4 | 5 | 7 | 11 | PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
-        12..=15 | DECK | GOLD | RIB => Surface::Hull,
-        STONE | STONE_DARK => Surface::Stone,
+        12..=15 | DECK | GOLD | RIB | HUSK..=FONT => Surface::Hull,
+        STONE | STONE_DARK | BRICK | MARBLE | BLAST | BLAST_DARK | ROAD => Surface::Stone,
+        SNOW => Surface::Floor,
         _ => Surface::Concrete,
     }
 }
@@ -501,7 +555,8 @@ pub fn dress_level(
             ..base
         };
         let mut ec = commands.entity(e);
-        match block {
+        // Snow takes no grime or seams, nor a soaked road dust.
+        match block.filter(|_| look.0 != SNOW && !(look.0 == ROAD && wet > 0.0)) {
             Some(b) => {
                 let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
                 ec.remove::<MeshMaterial3d<StandardMaterial>>()
@@ -521,9 +576,9 @@ const STRIP_GLOW: f32 = 4.0;
 /// How bright the hull's light seams glow, over the display's white.
 const VEIN_GLOW: f32 = 3.0;
 /// And the windows' honeycomb.
-const GLASS_GLOW: f32 = 1.6;
+const GLASS_GLOW: f32 = 0.95;
 /// And the light under the deck, through its grates.
-const GRATE_GLOW: f32 = 1.0;
+const GRATE_GLOW: f32 = 0.6;
 
 /// A glowing set's light by look: the hull's seams magenta, faint on the
 /// dark hull, red's and blue's on a side's, the windows gold, the deck's
@@ -539,10 +594,25 @@ fn vein(look: u8) -> (Color, f32) {
     }
 }
 
+/// What a font's flame throws on what stands round it: its colour, lumens
+/// and reach, m.
+const FONT_LIGHT: [f32; 3] = [0.25, 0.55, 1.0];
+const FONT_LUMENS: f32 = 90000.0;
+const FONT_RANGE: f32 = 11.0;
+
 /// How far a map's lamp reaches, m; its fixture's radius and glow.
-const LAMP_RANGE: f32 = 30.0;
+const LAMP_RANGE: f32 = 22.0;
 const LAMP_R: f32 = 0.7;
-const LAMP_FIXTURE_GLOW: f32 = 3.0;
+const LAMP_FIXTURE_GLOW: f32 = 8.0;
+/// A lamp this high hangs just under a vault: it throws its light down as a
+/// cone (half angles, radians) and leaves the dark overhead dark. No shadow:
+/// every rung lights a fighter the same.
+const LAMP_DOWN_FROM: f32 = 13.0;
+const LAMP_CONE: (f32, f32) = (0.6, 1.05);
+/// Any lower lamp lights a room with a low ceiling, a metre or two over a
+/// head: its fixture is this small and this bright.
+const LAMP_ROOM_R: f32 = 0.34;
+const LAMP_ROOM_GLOW: f32 = 3.0;
 const LAUNCHER_GLOW: f32 = 2.5;
 /// A lift's beam: how much of its colour it adds to what is behind it.
 const LIFT_BEAM_ALPHA: f32 = 0.08;
@@ -565,7 +635,7 @@ fn strip(i: u8) -> Option<Color> {
 }
 
 /// A strip's material.
-fn strip_material(c: Color, roughness: f32) -> StandardMaterial {
+pub(crate) fn strip_material(c: Color, roughness: f32) -> StandardMaterial {
     StandardMaterial {
         base_color: c,
         emissive: LinearRgba::from(c) * STRIP_GLOW,
@@ -643,6 +713,14 @@ impl Land {
     }
 }
 
+/// Where an island's drawn ground stops and its keel hangs from, m: under the
+/// lip, so the rim overhangs what is under it, all of that drawn inside the
+/// column the sim collides.
+const ISLE_CUT_Y: f32 = -3.0;
+
+/// Over this height an island's ground is dune, m (its floor is 0).
+const ISLE_DUNE_Y: f32 = 0.05;
+
 pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f32, [f32; 4]) {
     let (nx, nz) = (t.nx as usize, t.nz as usize);
     let h = |i: usize, j: usize| t.heights[j * nx + i] as f32 / HEIGHT_Q;
@@ -655,7 +733,13 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
     let along_z = h(i, (j + s).min(nz - 1)).min(h(i, j.saturating_sub(s))) - y;
     let trough = ((along_x.max(along_z) - CREEK_BASIN.0) / (CREEK_BASIN.1 - CREEK_BASIN.0)).clamp(0.0, 1.0);
     if land == Land::Isle {
-        // Sandstone: sand where it lies, rock where it stands.
+        // Sandstone: sand where it lies, rock where it stands. A dune over
+        // the island's floor is sand however steep.
+        let slope = if y > ISLE_DUNE_Y {
+            slope.min(ROCK_SLOPE.0)
+        } else {
+            slope
+        };
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
@@ -834,6 +918,10 @@ pub fn build(
         let size = b.max - b.min;
         let tile = dress(l).map_or(2.0, |d| d.1);
         if l == HIDDEN {
+            // Drawn by the built set, set back from these planes.
+            if crate::look::built::of(id).is_some() {
+                commands.spawn((LevelPart, rock::Bare(v3(b.min), v3(b.max))));
+            }
             continue;
         }
         if let Some(c) = strip(l) {
@@ -945,7 +1033,8 @@ pub fn build(
         }
     }
     // Rock out of reach: the sea's stacks and stones.
-    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle, map.light.sea);
+    crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
+    crate::look::built::spawn(commands, id);
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.
@@ -1078,6 +1167,7 @@ pub fn build(
         .dress_solids
         .iter()
         .map(|&(k, n, l)| (sim::solid::Solid::from_def(k, n), l));
+    let mut trim: Vec<(u8, Mesh)> = Vec::new();
     let dress_profiles = def
         .dress_profiles
         .iter()
@@ -1092,6 +1182,10 @@ pub fn build(
     {
         let sol = &sol;
         if l == HIDDEN {
+            if crate::look::built::of(id).is_some() {
+                let b = sol.bounds();
+                commands.spawn((LevelPart, rock::Bare(v3(b.min), v3(b.max))));
+            }
             continue;
         }
         let kind = match l {
@@ -1125,6 +1219,27 @@ pub fn build(
         let (color, roughness, metallic) = look(l);
         let tile = dress(l).map_or(2.0, |d| d.1);
         let glow = strip(l);
+        // Plain trim on a curve, a strip of light or a dark rib, has no
+        // photograph or wear of its own: one mesh a look, one draw, however
+        // much a hall hangs of it.
+        if (glow.is_some() || l == RIB)
+            && matches!(
+                sol.shape,
+                sim::solid::Shape::Revolve { .. } | sim::solid::Shape::Sweep { .. }
+            )
+        {
+            if let Some(m) = crate::look::curve::profile_mesh(sol, tile, false) {
+                match trim.iter_mut().find(|t| t.0 == l) {
+                    Some(t) => {
+                        if t.1.merge(&m).is_err() {
+                            warn!("a trim's mesh would not merge");
+                        }
+                    }
+                    None => trim.push((l, m)),
+                }
+            }
+            continue;
+        }
         let mat = mats.add(match glow {
             Some(c) => strip_material(c, roughness),
             None => StandardMaterial {
@@ -1213,33 +1328,114 @@ pub fn build(
         // models are in (`look/boulders.rs`).
         if let (PYLON, sim::solid::Shape::Turned { hx, hz, .. }) = (l, sol.shape) {
             e.insert(crate::look::boulders::Pylon {
+                model: crate::look::boulders::PYLON_MODEL,
                 at: crate::look::boulders::pylon_transform(at, hx, sol.y1 - sol.y0, hz),
                 min: v3(bounds.min),
                 max: v3(bounds.max),
             });
         }
+        // A wreck: its model inside its turned box.
+        if let (WRECK_CAR | WRECK_VAN, sim::solid::Shape::Turned { hx, hz, .. }) = (l, sol.shape) {
+            e.insert(crate::look::boulders::Pylon {
+                model: crate::look::boulders::wreck_model(l),
+                at: crate::look::boulders::wreck_transform(at, hx, sol.y1 - sol.y0, hz),
+                min: v3(bounds.min),
+                max: v3(bounds.max),
+            });
+        }
+        // A ship's prop: its model inside its round solid, its face to the
+        // map's middle.
+        if let (HUSK..=FONT, sim::solid::Shape::Round { x, z, r }) = (l, sol.shape) {
+            e.insert(crate::look::boulders::Pylon {
+                model: crate::look::boulders::prop_model(l),
+                at: crate::look::boulders::round_prop_transform(l, x, sol.y0, sol.y1, z, r),
+                min: v3(bounds.min),
+                max: v3(bounds.max),
+            });
+            if l == FONT {
+                commands.spawn((
+                    LevelPart,
+                    PointLight {
+                        color: Color::linear_rgb(FONT_LIGHT[0], FONT_LIGHT[1], FONT_LIGHT[2]),
+                        intensity: FONT_LUMENS,
+                        range: FONT_RANGE,
+                        radius: 0.2,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                    Transform::from_xyz(x, sol.y1 + 0.2, z),
+                ));
+            }
+        }
+    }
+    for (l, mesh) in trim {
+        let (color, roughness, metallic) = look(l);
+        let glow = strip(l);
+        let mut e = commands.spawn((
+            LevelPart,
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(mats.add(match glow {
+                Some(c) => strip_material(c, roughness),
+                None => StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: roughness,
+                    metallic,
+                    reflectance: fresnel::DIELECTRIC,
+                    ..default()
+                },
+            })),
+        ));
+        if glow.is_some() {
+            e.insert(bevy::light::NotShadowCaster);
+        }
     }
     for &(p, c, lm) in map.light.lamps {
         let colour = Color::srgb(c[0], c[1], c[2]);
-        commands.spawn((
-            LevelPart,
-            PointLight {
-                color: colour,
-                intensity: lm,
-                range: LAMP_RANGE,
-                radius: 0.15,
-                shadows_enabled: false,
-                ..default()
-            },
-            Transform::from_xyz(p[0], p[1], p[2]),
-        ));
+        if p[1] >= LAMP_DOWN_FROM {
+            commands.spawn((
+                LevelPart,
+                SpotLight {
+                    color: colour,
+                    intensity: lm,
+                    range: LAMP_RANGE,
+                    radius: 0.15,
+                    inner_angle: LAMP_CONE.0,
+                    outer_angle: LAMP_CONE.1,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(p[0], p[1], p[2]).looking_to(Dir3::NEG_Y, Vec3::Z),
+            ));
+        } else {
+            commands.spawn((
+                LevelPart,
+                PointLight {
+                    color: colour,
+                    intensity: lm,
+                    range: LAMP_RANGE,
+                    radius: 0.15,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(p[0], p[1], p[2]),
+            ));
+        }
+        // A built set draws its own.
+        if crate::look::built::of(id).is_some() {
+            continue;
+        }
         // Its fixture: a lit disc in a dark ring.
+        let (fixture_r, fixture_glow) = if p[1] >= LAMP_DOWN_FROM {
+            (LAMP_R, LAMP_FIXTURE_GLOW)
+        } else {
+            (LAMP_ROOM_R, LAMP_ROOM_GLOW)
+        };
         commands.spawn((
             LevelPart,
-            Mesh3d(meshes.add(Cylinder::new(LAMP_R, 0.1))),
+            Mesh3d(meshes.add(Cylinder::new(fixture_r, 0.1))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: colour,
-                emissive: LinearRgba::from(colour) * LAMP_FIXTURE_GLOW,
+                emissive: LinearRgba::from(colour) * fixture_glow,
                 ..default()
             })),
             Transform::from_xyz(p[0], p[1], p[2]),
@@ -1247,7 +1443,7 @@ pub fn build(
         ));
         commands.spawn((
             LevelPart,
-            Mesh3d(meshes.add(Torus::new(LAMP_R, LAMP_R + 0.12))),
+            Mesh3d(meshes.add(Torus::new(fixture_r, fixture_r + 0.12))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: Color::srgb(0.12, 0.09, 0.18),
                 perceptual_roughness: 0.4,
@@ -1314,7 +1510,7 @@ pub fn build(
             // instead (`look/keel.rs`).
             let cut = |m: Mesh| {
                 if isle {
-                    crate::look::keel::clip_below(&m, def.void)
+                    crate::look::keel::clip_below(&m, ISLE_CUT_Y)
                 } else {
                     m
                 }
@@ -1323,7 +1519,7 @@ pub fn build(
                 commands.spawn((
                     LevelPart,
                     GroundMesh { sea: wet_from, isle },
-                    Mesh3d(meshes.add(crate::look::keel::mesh(t, def.void, rock_key(id)))),
+                    Mesh3d(meshes.add(crate::look::keel::mesh(t, ISLE_CUT_Y, rock_key(id)))),
                     MeshMaterial3d(soil.clone()),
                     Transform::default(),
                 ));
@@ -1341,7 +1537,9 @@ pub fn build(
             // The rock skin over its rock faces (`look/cliffs.rs`): no
             // shadow of its own, the ground under it casts it.
             let (skin, lift) = crate::look::cliffs::skin(t, lo, hi, rock_key(id), land);
-            if let Some(skin) = skin {
+            // An island's cliffs are hidden by the rock that hugs them
+            // (`boulders::scenery`), and its coast is too tight for the skin's facets.
+            if let Some(skin) = skin.filter(|_| land != Land::Isle) {
                 commands.spawn((
                     LevelPart,
                     GroundMesh {
@@ -1376,41 +1574,45 @@ pub fn build(
             // metres like the boxes on it.
             let size = floor_size;
             let floor = if map.light.floor == 255 { FLOOR } else { map.light.floor };
-            commands.spawn((
-                LevelPart,
-                BoxLook(floor),
-                // A floor: no edges anyone sees, and no grime (its ground
-                // is far under it), only its mottle and its dust.
-                Block {
-                    mid: Vec3::new(cx, -0.1, cz),
-                    half: Vec3::new(size * 0.5, 0.1, size * 0.5),
-                    turn: (1.0, 0.0),
-                    shape: Shape::Other,
-                    ground: -1.0e3,
-                    run: None,
-                    hidden: 0,
-                    own_value: false,
-                },
-                Mesh3d(meshes.add({
-                    // Cut where the boxes stand on it.
-                    let me = all.len() - 1;
-                    let (min, max) = (all[me].min, all[me].max);
-                    let mut soup = rock::Soup::default();
-                    let cover = rock::covers(min, max, me, &all);
-                    rock::faceted_box(&mut soup, min, max, Vec3::new(cx, -0.1, cz), 0, [false; 6], &cover);
-                    soup.mesh(dress(floor).map_or(4.0, |d| d.1))
-                })),
-                MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.42, 0.43, 0.45),
-                    perceptual_roughness: 0.95,
-                    reflectance: fresnel::DIELECTRIC,
-                    ..default()
-                })),
-                Transform::from_xyz(cx, -0.1, cz),
-            ));
+            // A built set's own floor is its own to draw.
+            if floor != HIDDEN {
+                commands.spawn((
+                    LevelPart,
+                    BoxLook(floor),
+                    // A floor: no edges anyone sees, and no grime (its ground
+                    // is far under it), only its mottle and its dust.
+                    Block {
+                        mid: Vec3::new(cx, -0.1, cz),
+                        half: Vec3::new(size * 0.5, 0.1, size * 0.5),
+                        turn: (1.0, 0.0),
+                        shape: Shape::Other,
+                        ground: -1.0e3,
+                        run: None,
+                        hidden: 0,
+                        own_value: false,
+                    },
+                    Mesh3d(meshes.add({
+                        // Cut where the boxes stand on it.
+                        let me = all.len() - 1;
+                        let (min, max) = (all[me].min, all[me].max);
+                        let mut soup = rock::Soup::default();
+                        let cover = rock::covers(min, max, me, &all);
+                        rock::faceted_box(&mut soup, min, max, Vec3::new(cx, -0.1, cz), 0, [false; 6], &cover);
+                        soup.mesh(dress(floor).map_or(4.0, |d| d.1))
+                    })),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.42, 0.43, 0.45),
+                        perceptual_roughness: 0.95,
+                        reflectance: fresnel::DIELECTRIC,
+                        ..default()
+                    })),
+                    Transform::from_xyz(cx, -0.1, cz),
+                ));
+            }
             commands.insert_resource(crate::look::cliffs::SkinLift(None));
         }
     }
+    let lift = crate::look::built::of(id).and_then(|s| s.lift);
     for l in &map.launchers {
         let (a, b) = (l.area.min, l.area.max);
         let (cx, cz) = ((a.x + b.x) * 0.5, (a.z + b.z) * 0.5);
@@ -1418,8 +1620,8 @@ pub fn build(
             LevelPart,
             Mesh3d(meshes.add(Cuboid::new(b.x - a.x, 0.08, b.z - a.z))),
             MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: Color::srgb(0.27, 0.82, 1.0),
-                emissive: LinearRgba::rgb(0.1, 0.56, 0.75) * LAUNCHER_GLOW,
+                base_color: lift.map_or(Color::srgb(0.27, 0.82, 1.0), |s| s.pad),
+                emissive: lift.map_or(LinearRgba::rgb(0.1, 0.56, 0.75), |s| s.glow) * LAUNCHER_GLOW,
                 reflectance: fresnel::DIELECTRIC,
                 ..default()
             })),
@@ -1433,7 +1635,7 @@ pub fn build(
             LevelPart,
             Mesh3d(meshes.add(Cylinder::new(r, apex))),
             MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: Color::srgba(0.35, 0.8, 1.0, LIFT_BEAM_ALPHA),
+                base_color: lift.map_or(Color::srgba(0.35, 0.8, 1.0, LIFT_BEAM_ALPHA), |s| s.beam),
                 alpha_mode: AlphaMode::Add,
                 unlit: true,
                 cull_mode: None,

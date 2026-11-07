@@ -513,6 +513,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::truck::plugin)
     .add_plugins(look::turret::plugin)
     .add_plugins(look::cloud_sea::plugin)
+    .add_plugins(look::isle_stone::plugin)
+    .add_plugins(look::pool::plugin)
     // The grass's and the clutter's wind, trails and fade (`look/foliage.rs`).
     .add_plugins(look::foliage::plugin)
     .add_plugins(look::sea_motion::plugin)
@@ -638,7 +640,14 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
             rebuild,
             look::textures::prepare,
             (look::textures::mip_models, look::fx::sheets::mip_sheets),
-            (look::rock::dress_masses, look::boulders::dress),
+            (
+                look::rock::dress_masses,
+                look::boulders::dress,
+                look::rig::grade_for,
+                look::built::dress,
+                look::built::turn,
+                look::pool::dress,
+            ),
             (
                 level::dress_level,
                 look::grass::dress,
@@ -880,7 +889,9 @@ fn pump(
         let turn = core::f32::consts::TAU / 65536.0;
         look.yaw = f.yaw as f32 * turn;
         look.pitch = f.pitch as f32 * turn;
+        // The wire says scoped, not how far: the first level (as a film).
         look.zoom = f.alive && f.last_buttons & ZOOM != 0 && sim::arms::arm(f.gun().arm).zoom > 1;
+        look.level = look.zoom as u8;
         link.0.update(Input::default());
         return;
     }
@@ -1601,7 +1612,8 @@ pub(crate) fn view(
     let dir = |yaw: f32, pitch: f32| Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
     let mut fov = look::rig::fov_tall(settings.fov);
     let at = Vec3::new(p.x, p.y, p.z);
-    let dead = !f.alive && link.0.session().ready;
+    // Dead in a seat: the title's backdrop has none (no death cam there).
+    let dead = f.seated && !f.alive && link.0.session().ready;
     if !dead {
         death.from = None;
     }

@@ -140,9 +140,8 @@ pub enum Surface {
     /// and dust on its tops, its seams its own photograph's; no rust
     /// running down it (`Steel`'s streaks on a curved wall read as grain).
     Plate,
-    /// Cut stone (Cloudbreak's spire, struts and gates): concrete's wear
-    /// and grime, and courses of blocks with joints between them cut in its
-    /// shading (`weathering.wgsl`'s courses), each block its own value.
+    /// Cut stone (Cloudbreak's observatory): concrete's wear and grime over
+    /// the masonry's own photograph.
     Stone,
 }
 
@@ -206,7 +205,7 @@ fn recipe(s: Surface) -> Recipe {
         Surface::Paint => r(0.08, 0.5, GRIME, 0.3, (0.8, 0.05, 1.45, 0.0), 0.3),
         Surface::Rock => r(0.2, 0.75, VARNISH, 0.25, (0.5, 0.09, 1.22, 0.05), 0.6),
         Surface::Floor => r(0.1, 0.0, GRIME, 0.0, (0.0, 0.05, 1.0, 0.0), 0.4),
-        Surface::Hull => r(0.06, 0.0, GRIME, 0.15, (0.0, 0.05, 1.0, 0.0), 0.0),
+        Surface::Hull => r(0.12, 0.0, GRIME, 0.35, (0.0, 0.05, 1.0, 0.0), 0.0),
         Surface::Plate => r(0.13, 0.1, GRIME, 0.45, (0.55, 0.05, 1.4, -0.1), 0.3),
         Surface::Stone => r(0.14, 0.6, GRIME, 0.4, (0.5, 0.05, 1.22, 0.1), 0.45),
     }
@@ -271,12 +270,7 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool) -> Weather
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
         half: b.half.extend(f32::from(b.hidden)),
-        turn: Vec4::new(
-            b.turn.0,
-            b.turn.1,
-            if seal(b) { 1.0 } else { 0.0 },
-            if surface == Surface::Stone { 1.0 } else { 0.0 },
-        ),
+        turn: Vec4::new(b.turn.0, b.turn.1, if seal(b) { 1.0 } else { 0.0 }, 0.0),
         ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
             [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
         }),
