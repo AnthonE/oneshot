@@ -476,6 +476,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .init_resource::<look::textures::Textures>()
     .init_resource::<hud::HudState>()
     .init_resource::<items::Items>()
+    .init_resource::<items::Glows>()
     .init_resource::<flags::Flags>()
     .init_resource::<challenges::Challenges>()
     .init_resource::<look::rag::Blows>()
