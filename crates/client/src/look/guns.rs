@@ -434,6 +434,36 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
     });
 }
 
+/// The left wrist on a body's long gun, in the gun's holder's frame
+/// (`bodies::HELD_AT`; metres, along the barrel, up, right). `Rifle_Hold_Loop`
+/// is baked with it at [`WRIST_ON_AR`] for every gun (`tools/models/triple-t.py`);
+/// this moves it along the barrel and down to `g`'s own fore-end, so a body's
+/// hand cups a sniper's and an SMG's as it does the rifle's (`ik.rs`).
+pub fn left_wrist(g: &Gun) -> Vec3 {
+    let ar: &Gun = match gun(arms::AR) {
+        Some(ar) => ar,
+        None => g,
+    };
+    let (along, down) = (
+        fore_along(g) - fore_along(ar),
+        (g.under * g.scale) - (ar.under * ar.scale),
+    );
+    WRIST_ON_AR + Vec3::new(along, -down, 0.0)
+}
+
+/// `tools/models/triple-t.py`'s `WRIST` (right, along, up) in the holder's
+/// axes: where the clip puts the left wrist, which is on the rifle's fore-end.
+pub const WRIST_ON_AR: Vec3 = Vec3::new(0.07, -0.09, -0.045);
+
+/// How far up the barrel a body's other hand goes, most, metres: past it the
+/// arm would be out straight.
+pub const BODY_FORE_MAX_M: f32 = 0.3;
+
+/// Where a long gun's fore-end is, metres up the barrel from the grip.
+fn fore_along(g: &Gun) -> f32 {
+    (g.height * (1.0 - g.grip) * g.scale * g.fore).min(BODY_FORE_MAX_M)
+}
+
 /// Where a posed gun's muzzle is, in its pivot's frame (for the flash and
 /// the tracer's start).
 #[derive(Component)]

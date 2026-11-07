@@ -123,3 +123,12 @@ tools/assets.mjs: Poly Haven's concrete_wall_003 and ambientCG's
 (ambientcg.com) CorrugatedSteel009; and the grass card atlas is from Poly
 Haven's grass_medium_01 (baked by Gates). No attribution is required;
 credited by choice.
+
+The reach (crates/client/src/look/ik.rs: two-bone IK for the left hand on a
+gun's fore-end and the feet on the ground, with a hip drop) and the
+animation gate (crates/client/tests/anim.rs: foot slide, reload pacing,
+hand to grip, measured on the posed skeleton) are after Kong Royale's
+client/src/actors/kong-rig.ts and tools/actors/anim-test.mts
+(github.com/MaximilianHansen/kongroyale), MIT, Copyright (c) 2026 Max Blade
+and the Kong Royale contributors. Ideas and structure only; no code or
+assets copied.

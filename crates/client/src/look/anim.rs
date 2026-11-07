@@ -640,6 +640,12 @@ impl Playing {
         self.reload_u
     }
 
+    /// How much of the arms the long hold owns under no reload, 0..1: what
+    /// the left hand on a long gun's fore-end is weighed by (`ik.rs`).
+    pub fn long_hold(&self) -> f32 {
+        self.hold_u[Hold::Long.slot()] * (1.0 - self.reload_u)
+    }
+
     /// How much of the head and spine the holds own between them, 0..1:
     /// their clips key the head as a standing body holds it, so that much
     /// of a crouch clip's bow is already gone.

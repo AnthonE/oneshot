@@ -26,7 +26,7 @@ use bevy::prelude::*;
 use bevy::scene::SceneInstanceReady;
 use client_net::core::{Drawn, DrawnVehicle};
 
-use super::anim::{self, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
+use super::anim::{self, Clip, Gait, Hold, Playing, Seen, SpineBones, SpinePose};
 use super::guns::{body_basis, gun, spawn_posed, Models, LEFT, RIGHT};
 use super::paint::{BodyMaterial, Paint, Paints};
 use super::shield::{Flare, ShellPart, ShieldMaterial, Tone};
@@ -39,9 +39,9 @@ const FACE: f32 = core::f32::consts::FRAC_PI_2;
 /// `Idle_Loop` has the hand, with the aim level (`anim::CHEST_HELD`). In the
 /// bone's own units, which are centimetres (its scale takes that back out).
 const HAND_BONE: &str = "RightHand";
-const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
-const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
-const HELD_SCALE: f32 = 100.0;
+pub const HELD_AT: Vec3 = Vec3::new(4.447, 13.763, -1.861);
+pub const HELD_TURN: Quat = Quat::from_xyzw(0.65416, 0.57784, -0.45073, -0.18712);
+pub const HELD_SCALE: f32 = 100.0;
 /// The sword's holder in the right hand's frame, for `Sword_Idle`: its hilt
 /// through the fist's hole, from the little finger to the index, its blade out
 /// of the thumb's side and its edge toward the knuckles.
@@ -504,6 +504,13 @@ fn dress(
     commands
         .entity(root)
         .insert(anim::bind_spine(model, &names, &parents, &children, &transforms));
+    match super::ik::bind(model, &names, &children) {
+        Some(limbs) => {
+            commands.entity(root).insert(limbs);
+        }
+        None if !body.shadow => error!("ik: an arm or leg bone is missing in models/triple-t.glb: no reach"),
+        None => {}
+    }
     match super::rag::bind(model, &names, &parents, &children) {
         Some(r) => {
             commands.entity(root).insert(r);
@@ -978,6 +985,119 @@ pub fn pose_spines(
         for &(bone, k) in &b.tucked {
             if let Ok(mut t) = bones.get_mut(bone) {
                 t.scale = Vec3::splat(k);
+            }
+        }
+    }
+}
+
+/// Last frame's reach taken back off every bone the animation left alone
+/// (`ik::LimbBones::take_back`): before the spine is turned, which composes
+/// onto what it finds.
+pub fn unpose_limbs(mut q: Query<&mut super::ik::LimbBones>, mut bones: Query<&mut Transform>) {
+    for mut limbs in &mut q {
+        limbs.take_back(&mut bones);
+    }
+}
+
+/// How fast the feet start and stop following the ground, 1/s: a landing
+/// or a step off a box is eased, never a snap.
+const FEET_EASE: f32 = 8.0;
+/// A body this close over the terrain under it stands on the terrain, metres:
+/// higher (a box, a truck's bed), its feet are the floor's, and left alone.
+const ON_TERRAIN_M: f32 = 0.15;
+
+/// Every body's limbs reached (`ik.rs`), after its spine is turned: the left
+/// hand onto a long gun's own fore-end, by as much as the long hold owns the
+/// arms; and on a terrain, each foot onto the ground under it, the hips
+/// brought down for the lower. Not a rag doll's nor a hidden body's.
+#[allow(clippy::type_complexity)]
+pub fn pose_limbs(
+    time: Res<Time>,
+    link: Option<NonSend<crate::LinkRes>>,
+    mut q: Query<(Entity, &Body, &mut super::ik::LimbBones), Without<super::rag::Ragdoll>>,
+    parents: Query<&ChildOf>,
+    mut bones: Query<&mut Transform>,
+) {
+    use super::ik::{foot_rise, frame_in, Legs, Limb};
+    let dt = time.delta_secs();
+    let map = link.as_ref().map(|l| &l.0.session().core.map);
+    for (root, b, mut limbs) in &mut q {
+        if !b.drawn || b.limp {
+            continue;
+        }
+        let frame = |e: Entity, bones: &Query<&mut Transform>| {
+            let up = parents.get(e).ok()?.0;
+            frame_in(up, root, &parents, bones)
+        };
+        let local = |e: Entity, bones: &Query<&mut Transform>| bones.get(e).ok().copied();
+        // The left hand on the fore-end.
+        let w = if b.alive { b.playing.long_hold() } else { 0.0 };
+        if let Some(g) = gun(b.held).filter(|g| g.long && w > 1e-3) {
+            let [u, l, e] = limbs.arm;
+            let limb = (|| {
+                Some((
+                    Limb {
+                        parent: frame(u, &bones)?,
+                        upper: local(u, &bones)?,
+                        lower: local(l, &bones)?,
+                        end: local(e, &bones)?,
+                    },
+                    frame_in(b.hand, root, &parents, &bones)?,
+                ))
+            })();
+            if let Some((limb, held)) = limb {
+                let end = limb.joints().end;
+                let target = end.lerp(held.transform_point(super::guns::left_wrist(g)), w);
+                if let Some(qs) = limb.reach(target, None) {
+                    for (bone, (t, q)) in [u, l, e]
+                        .into_iter()
+                        .zip([limb.upper, limb.lower, limb.end].into_iter().zip(qs))
+                    {
+                        limbs.write(bone, t.with_rotation(q), &mut bones);
+                    }
+                }
+            }
+        }
+        // The feet on the ground.
+        let Some(map) = map.filter(|m| m.terrain.is_some()) else {
+            limbs.feet_w = 0.0;
+            continue;
+        };
+        let Some(at) = local(root, &bones) else {
+            continue;
+        };
+        let base = map.ground(at.translation.x, at.translation.z);
+        let standing = b.alive
+            && !matches!(b.gait.clip, Some(Clip::Air | Clip::Death | Clip::Drive) | None)
+            && (at.translation.y - base).abs() < ON_TERRAIN_M;
+        let k = 1.0 - (-FEET_EASE * dt).exp();
+        limbs.feet_w += (if standing { 1.0 } else { 0.0 } - limbs.feet_w) * k;
+        if limbs.feet_w < 1e-3 {
+            continue;
+        }
+        let [lf, rt] = limbs.legs;
+        let legs = (|| {
+            Some(Legs {
+                hips_parent: frame(limbs.hips, &bones)?,
+                hips: local(limbs.hips, &bones)?,
+                left: [local(lf[0], &bones)?, local(lf[1], &bones)?, local(lf[2], &bones)?],
+                right: [local(rt[0], &bones)?, local(rt[1], &bones)?, local(rt[2], &bones)?],
+            })
+        })();
+        let Some(legs) = legs else {
+            continue;
+        };
+        let rises = legs.ankles().map(|a| {
+            let p = at.transform_point(a);
+            foot_rise(map.ground(p.x, p.z), base)
+        });
+        let planted = legs.plant(rises, limbs.feet_w);
+        let hips = limbs.hips;
+        limbs.write(hips, legs.hips.with_translation(planted.hips), &mut bones);
+        for (ents, ts, qs) in [(lf, legs.left, planted.left), (rt, legs.right, planted.right)] {
+            let Some(qs) = qs else { continue };
+            for ((bone, t), q) in ents.into_iter().zip(ts).zip(qs) {
+                limbs.write(bone, t.with_rotation(q), &mut bones);
             }
         }
     }
