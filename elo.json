@@ -1009,6 +1009,132 @@
         "price": 1000000,
         "nft": "gilded",
         "note": "Wear it at a rating floor of 1800. Below that, keep it or sell it."
+      },
+      {
+        "id": "shades",
+        "name": "Shades",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "shades"
+      },
+      {
+        "id": "aviators",
+        "name": "Aviators",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "aviators"
+      },
+      {
+        "id": "rounds",
+        "name": "Rounds",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "rounds"
+      },
+      {
+        "id": "visor",
+        "name": "Visor",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "visor"
+      },
+      {
+        "id": "goggles",
+        "name": "Goggles",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "goggles"
+      },
+      {
+        "id": "respirator",
+        "name": "Respirator",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "respirator"
+      },
+      {
+        "id": "demon",
+        "name": "Demon",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "demon"
+      },
+      {
+        "id": "welder",
+        "name": "Welder",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "welder"
+      },
+      {
+        "id": "skull",
+        "name": "Skull",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "skull"
+      },
+      {
+        "id": "hardhat",
+        "name": "Hardhat",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "hardhat"
+      },
+      {
+        "id": "helmet",
+        "name": "Helmet",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "helmet"
+      },
+      {
+        "id": "ten-gallon",
+        "name": "Ten-Gallon",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "ten-gallon"
+      },
+      {
+        "id": "beanie",
+        "name": "Beanie",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "beanie"
+      },
+      {
+        "id": "loggers",
+        "name": "Loggers",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "loggers"
+      },
+      {
+        "id": "hightops",
+        "name": "Hightops",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "hightops"
+      },
+      {
+        "id": "spurs",
+        "name": "Spurs",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "spurs"
+      },
+      {
+        "id": "magboots",
+        "name": "Magboots",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "magboots"
+      },
+      {
+        "id": "wellies",
+        "name": "Wellies",
+        "kind": "pass",
+        "price": 50000,
+        "nft": "wellies"
       }
     ]
   },
