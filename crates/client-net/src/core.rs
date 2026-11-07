@@ -572,7 +572,7 @@ pub struct NetCore {
     /// our present, by their shares).
     near: Near,
     near_after: Box<[NearAt; RING]>,
-    /// Each hull's share of our rewind as the two newest snapshots said (15
+    /// Each hull's share of our rewind as the two newest snapshots said (SHARE_FULL
     /// for one not in our bubble), and when the newest came: drawn sliding
     /// from the one to the other over a snapshot's time.
     share: [(u8, u8); TARGETS],
@@ -2077,6 +2077,22 @@ impl NetCore {
         })
     }
 
+    /// Seat `seat` on hull `h` as drawn (its turret the map's).
+    fn seat_on(&self, h: &DrawnVehicle, seat: usize) -> V3 {
+        let turn = (h.yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+        let hull = Vehicle {
+            pos: h.pos,
+            yaw: turn.rem_euclid(65536.0) as u16,
+            turret: self
+                .map
+                .vehicles
+                .get(h.slot as usize)
+                .map_or(sim::vehicle::NO_TURRET, |d| d.turret),
+            ..Vehicle::default()
+        };
+        hull.mount(seat)
+    }
+
     /// One vehicle of [`NetCore::vehicles`], by its slot.
     fn vehicle_at(&self, slot: u8, now_ms: f64) -> Option<DrawnVehicle> {
         if self.n_frames == 0 || self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
@@ -2283,19 +2299,31 @@ impl NetCore {
         // Riding a hull in our bubble: in its seat on the hull as drawn.
         if let Some((i, seat)) = self.member_rider(slot) {
             if let Some(h) = self.member_drawn(i, now_ms) {
-                let turn = (h.yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
-                let hull = Vehicle {
-                    pos: h.pos,
-                    yaw: turn.rem_euclid(65536.0) as u16,
-                    turret: self
-                        .map
-                        .vehicles
-                        .get(i as usize)
-                        .map_or(sim::vehicle::NO_TURRET, |d| d.turret),
-                    ..Vehicle::default()
-                };
                 return Some(Drawn {
-                    pos: hull.mount(seat),
+                    pos: self.seat_on(&h, seat),
+                    ..drawn(newest()?)
+                });
+            }
+        }
+        // Riding one drawn off the render tick still (sliding out of our
+        // bubble, or out of it at once and easing back): in its seat on it
+        // as drawn, never a step off it.
+        let newest_f = &frames[self.n_frames - 1];
+        let seated_now = |h: u8| {
+            newest_f.vehicles[..newest_f.nv as usize]
+                .iter()
+                .find(|v| v.slot == h)
+                .and_then(|v| v.seats.iter().position(|&x| x == slot + 1))
+        };
+        if let Some((i, seat)) = newest_f.vehicles[..newest_f.nv as usize]
+            .iter()
+            .find_map(|v| seated_now(v.slot).map(|seat| (v.slot, seat)))
+        {
+            let k = i as usize;
+            let off = self.moff[k] != V3::ZERO || self.mturn[k] != 0.0 || self.member_drawn(i, now_ms).is_some();
+            if let (true, Some(h)) = (off, self.vehicle_at(i, now_ms)) {
+                return Some(Drawn {
+                    pos: self.seat_on(&h, seat),
                     ..drawn(newest()?)
                 });
             }
@@ -2304,9 +2332,11 @@ impl NetCore {
         // or died since: where the newest snapshot has it (dead where it
         // fell), not alive in a seat a round trip back.
         let full = (SHARE_FULL, SHARE_FULL);
-        let rode_then = frames[ai].vehicles[..frames[ai].nv as usize]
-            .iter()
-            .any(|v| v.seats.contains(&(slot + 1)) && self.share[MAX_FIGHTERS + v.slot as usize] != full);
+        let rode_then = frames[ai].vehicles[..frames[ai].nv as usize].iter().any(|v| {
+            v.seats.contains(&(slot + 1))
+                && self.share[MAX_FIGHTERS + v.slot as usize] != full
+                && seated_now(v.slot).is_none()
+        });
         if rode_then && !self.watch {
             return newest().map(drawn);
         }

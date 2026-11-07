@@ -1102,4 +1102,28 @@ fn a_body_dropped_onto_a_truck_lands_on_it() {
         landed |= b.grounded && fmath::fabs(b.pos.y - (v.pos.y + VEH_H)) < 0.01;
     }
     assert!(landed, "never stood on it: {:?}", w.fighters[1].body);
+    // Stood on it every tick, on it and never a hair inside.
+    for _ in 0..TICK_HZ / 2 {
+        w.step(&idle, &NO_LAG);
+        let b = w.fighters[1].body;
+        assert!(b.grounded && b.pos.y >= v.pos.y + VEH_H, "sinking: {b:?}");
+    }
+    // Its enemy drives it off flat out from under them: left standing where
+    // they were, then down off its tail, never run down, shoved or hurt.
+    let at = w.fighters[1].body.pos;
+    tap_use(&mut w, 0);
+    assert_eq!(w.fighters[0].riding(), Some((0, DRIVER)));
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0].mz = 127;
+    let mut off = false;
+    for _ in 0..TICK_HZ * 2 {
+        w.step(&inputs, &NO_LAG);
+        let f = w.fighters[1];
+        assert!(f.alive && f.health == HEALTH_MAX, "hurt on the roof: {f:?}");
+        let flat = (f.body.pos - at).flat().len();
+        assert!(flat < 0.05, "shoved {flat} m: {:?}", f.body);
+        off |= f.body.grounded && f.body.pos.y < at.y - 1.0;
+    }
+    assert!(w.vehicles[0].vel.flat().len() > SPLAT_SPEED, "never got going");
+    assert!(off, "never came down: {:?}", w.fighters[1].body);
 }

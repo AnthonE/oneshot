@@ -5,7 +5,7 @@
 //! the server wrote. Bots' inputs are recorded like anyone's, so a replay
 //! never depends on the bot's code.
 //!
-//! Format, little-endian: `OSR5`, u16 PROTO_VER, u64 golden tag, u64 seed,
+//! Format, little-endian: `OSR6`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
 //! gun game, friendly fire, capture the flag, siege), u8 map; then records: `S`
 //! slot team (a seat), `H` (the countdown held for the next tick: someone
@@ -25,7 +25,7 @@ pub const MAGIC: &[u8; 4] = b"OSR6";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
-pub const RULES_TAG: u64 = 0x7d18_bcc0_cf7e_7d01;
+pub const RULES_TAG: u64 = 0x73d5_a89d_5209_dd4b;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {

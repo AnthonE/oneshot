@@ -7,13 +7,14 @@
 //! (it is `own_vehicle`), never while the viewer is dead.
 //!
 //! Each member has a share of the viewer's rewind (`sim::world::Seen`):
-//! 15 drawn on the render tick, as everything outside the bubble is, 0 on
-//! the viewer's own present. A hull coming in slides from one to the other
-//! over a blend sized by how soon it could reach the viewer; one leaving
-//! slides back over [`LEAVE_MS`]. The client draws each at its share
-//! between its past and its present, and the server rewinds shots at it
-//! by the same share of the shooter's depth, from the snapshot the shot's
-//! frame was made after ([`Bubble::seen`]): what is drawn is what is met.
+//! [`SHARE_FULL`] (255) drawn on the render tick, as everything outside the
+//! bubble is, 0 on the viewer's own present. A hull coming in slides from
+//! one to the other over a blend sized by how soon it could reach the
+//! viewer; one leaving slides back over [`LEAVE_MS`]. The client draws
+//! each at its share between its past and its present, and the server
+//! rewinds shots at it by the same share of the shooter's depth, from the
+//! snapshot the shot's frame was made after ([`Bubble::seen`]): what is
+//! drawn is what is met.
 
 use sim::consts::{BODY_R, MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TICK_HZ, VEH_H, VEH_HALF_L};
 use sim::geom::V3;
@@ -295,7 +296,8 @@ impl Bubble {
         // ours), at its share; unsent till now, on the present.
         let anchors: [Option<(V3, V3, u16)>; MAX_VEHICLES] = core::array::from_fn(|i| {
             let v = &w.vehicles[i];
-            let moving = v.vel.flat().len() >= STILL_MS || v.driver().is_some();
+            // Driven by one we may not know: as nobody at the wheel.
+            let moving = v.vel.flat().len() >= STILL_MS || v.driver().filter(|&d| known(d)).is_some();
             let share = if mine == Some(i) {
                 Some(0)
             } else {

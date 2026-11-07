@@ -161,6 +161,9 @@ fn a_hidden_driver_is_as_nobody_at_the_wheel() {
         for x in [5.0, 20.0, 40.0] {
             let mut w = world();
             put(&mut w, x, vel);
+            // Someone we see on foot just off its side.
+            w.fighters[2].body.pos = V3::new(x, 0.0, VEH_HALF_W + 1.0);
+            w.fighters[2].body.vel = V3::ZERO;
             let mut hidden = Bubble::default();
             let mut empty = Bubble::default();
             for _ in 0..4 {
@@ -169,8 +172,8 @@ fn a_hidden_driver_is_as_nobody_at_the_wheel() {
                 w.vehicles[0].seats[0] = 0;
                 empty.update(&w, 0, &|q| q != 5, &|q| q != 5, &|_| true, rtt, 2, true);
                 assert_eq!(
-                    (hidden.has(0), hidden.share(0)),
-                    (empty.has(0), empty.share(0)),
+                    (hidden.has(0), hidden.share(0), hidden.has_foot(2), hidden.foot_share(2)),
+                    (empty.has(0), empty.share(0), empty.has_foot(2), empty.foot_share(2)),
                     "{x} m at {vel:?}, rtt {rtt}"
                 );
             }
