@@ -273,8 +273,15 @@ const BLOW_KEEP_S: f32 = 2.0;
 const SHOT_MPS: f32 = 3.2;
 const HEAD_MPS: f32 = 2.5;
 const MELEE_MPS: f32 = 3.5;
+/// A run-down is thrown along how its killer's vehicle went: that speed
+/// times `SPLATTER_CARRY`, `SPLATTER_MPS` more away from it, and lifted
+/// `SPLATTER_LIFT` plus `SPLATTER_LIFT_K` of the speed (a truck at full
+/// speed sends a body tens of metres); a killer not seen moving, the push
+/// alone.
 const SPLATTER_MPS: f32 = 8.0;
-const SPLATTER_LIFT: f32 = 3.0;
+const SPLATTER_CARRY: f32 = 1.4;
+const SPLATTER_LIFT: f32 = 6.0;
+const SPLATTER_LIFT_K: f32 = 0.3;
 const BLAST_MPS: f32 = 9.0;
 const BLAST_LIFT: f32 = 5.0;
 const BLAST_REACH_M: f32 = 8.0;
@@ -315,8 +322,14 @@ pub struct Blow {
 }
 
 /// The kills and blasts of a frame's events into [`Blows`]. `me` is where
-/// our own body stands, `others` everyone else as drawn.
-pub fn on_events(blows: &mut Blows, events: &[EventState], others: &[client_net::core::Drawn], me: (u8, Vec3), t: f32) {
+/// our own body stands and how it moves, `others` everyone else as drawn.
+pub fn on_events(
+    blows: &mut Blows,
+    events: &[EventState],
+    others: &[client_net::core::Drawn],
+    me: (u8, Vec3, Vec3),
+    t: f32,
+) {
     let v = |p: V3| Vec3::new(p.x, p.y, p.z);
     let at = |slot: u8| {
         if slot == me.0 {
@@ -325,14 +338,22 @@ pub fn on_events(blows: &mut Blows, events: &[EventState], others: &[client_net:
             others.iter().find(|d| d.slot == slot).map(|d| v(d.pos))
         }
     };
+    let moving = |slot: u8| {
+        if slot == me.0 {
+            me.2
+        } else {
+            others.iter().find(|d| d.slot == slot).map_or(Vec3::ZERO, |d| v(d.vel))
+        }
+    };
     for e in events {
         if e.kind == Kind::Blast as u8 {
             blows.blast(v(e.pos), t);
         } else if e.kind == Kind::Kill as u8 {
             let victim = if e.pos != V3::ZERO { Some(v(e.pos)) } else { at(e.b) };
             let from = if e.a != e.b { at(e.a) } else { None };
+            let went = if e.a != e.b { moving(e.a) } else { Vec3::ZERO };
             match victim {
-                Some(victim) => blows.kill(e.b, victim, from, e.c, e.part == 2, t),
+                Some(victim) => blows.kill(e.b, victim, from, went, e.c, e.part == 2, t),
                 None => {
                     if let Some(b) = blows.by_slot.get_mut(e.b as usize) {
                         *b = None;
@@ -352,8 +373,9 @@ impl Blows {
     }
 
     /// `victim`, standing at `at`, killed by `cause` from `from` (where the
-    /// killer stood, if seen); `head`: a head shot.
-    pub fn kill(&mut self, victim: u8, at: Vec3, from: Option<Vec3>, cause: u16, head: bool, t: f32) {
+    /// killer stood, if seen) moving at `went`; `head`: a head shot.
+    #[allow(clippy::too_many_arguments)]
+    pub fn kill(&mut self, victim: u8, at: Vec3, from: Option<Vec3>, went: Vec3, cause: u16, head: bool, t: f32) {
         let chest = at + Vec3::Y;
         let away = |o: Vec3| {
             let d = chest - o;
@@ -388,7 +410,18 @@ impl Blows {
         } else {
             let dir = from.map_or(Vec3::ZERO, |o| away(o).0);
             if cause == Cause::Splatter as u16 {
-                (dir * SPLATTER_MPS, SPLATTER_LIFT, 0.0)
+                let went = Vec3::new(went.x, 0.0, went.z);
+                let speed = went.length();
+                let dir = if dir == Vec3::ZERO {
+                    went.normalize_or_zero()
+                } else {
+                    dir
+                };
+                (
+                    went * SPLATTER_CARRY + dir * SPLATTER_MPS,
+                    SPLATTER_LIFT + speed * SPLATTER_LIFT_K,
+                    0.0,
+                )
             } else if cause == Cause::Melee as u16 || cause == Cause::Behind as u16 {
                 (dir * MELEE_MPS, 0.0, 0.0)
             } else {
@@ -402,7 +435,12 @@ impl Blows {
         *slot = Some(Blow {
             chest: push + Vec3::Y * lift,
             head: push + Vec3::Y * lift + flat.normalize_or_zero() * extra,
-            legs: flat * LEGS_SHARE + Vec3::Y * lift * LEGS_SHARE,
+            // A bumper takes the legs out from under it: all of it goes.
+            legs: if cause == Cause::Splatter as u16 {
+                push + Vec3::Y * lift
+            } else {
+                flat * LEGS_SHARE + Vec3::Y * lift * LEGS_SHARE
+            },
             t,
         });
     }

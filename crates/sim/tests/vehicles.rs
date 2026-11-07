@@ -627,6 +627,43 @@ fn trucks_crash_into_each_other() {
     }
     assert!(hit, "the parked truck was shoved");
     assert!(top > 10.0, "it got going: {top}");
+    assert!(w.vehicles[0].health < VEH_HEALTH, "the one that hit is hurt");
+    assert!(w.vehicles[1].health < VEH_HEALTH, "and the one it hit");
+    assert!(w.vehicles[0].active && w.vehicles[1].active, "not wrecked by one ram");
+}
+
+/// Head on at full speed, both go up and their riders with them.
+#[test]
+fn a_head_on_crash_at_speed_wrecks_both() {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let v = w.vehicles[0];
+    let (f, _) = v.axes();
+    let at = v.pos + f * 30.0;
+    w.vehicles[1].pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.vehicles[1].yaw = v.yaw.wrapping_add(32768);
+    // Blue at the other's wheel.
+    let b = w.vehicles[1].pos - f * 2.0;
+    w.fighters[1].body.pos = V3::new(b.x, w.map.ground(b.x, b.z), b.z);
+    tap_use(&mut w, 1);
+    assert_eq!(w.fighters[1].riding(), Some((1, DRIVER)));
+    // Both already at full speed, at each other.
+    w.vehicles[0].vel = f * VEH_TOP;
+    w.vehicles[1].vel = f * -VEH_TOP;
+    let mut wrecks = 0;
+    let go = Input {
+        mz: 127,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ * 2 {
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        inputs[0] = go;
+        inputs[1] = go;
+        w.step(&inputs, &NO_LAG);
+        wrecks += w.events.as_slice().iter().filter(|e| e.kind == Ev::Wreck).count();
+    }
+    assert_eq!(wrecks, 2, "both wrecked");
+    assert!(!w.fighters[0].alive && !w.fighters[1].alive, "their drivers with them");
 }
 
 /// A slow truck hurts, not kills; the one it meets is carried off ahead,
@@ -641,12 +678,12 @@ fn a_slow_truck_hurts_and_carries_off() {
     w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
     let mut hits = 0;
     for _ in 0..TICK_HZ * 2 {
-        let fast = w.vehicles[0].vel.flat().len() > 7.5;
+        let fast = w.vehicles[0].vel.flat().len() > 3.6;
         press(
             &mut w,
             0,
             Input {
-                // Held near 7.5 m/s till it hits, then braked.
+                // Held near 3.6 m/s till it hits, then braked.
                 mz: if hits > 0 {
                     -127
                 } else if fast {

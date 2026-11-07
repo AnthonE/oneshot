@@ -1997,9 +1997,14 @@ impl World {
 
     /// Hulls that meet push apart along where their circles touch, half
     /// each (all of it the other's if one is against a wall), and trade
-    /// their closing speed, a little of it kept as a bounce.
+    /// their closing speed, a little of it kept as a bounce; a hard crash
+    /// hurts both ([`VEH_CRASH_SPEED`]).
     fn crashes(&mut self) {
         let reach = 2.0 * VEH_HULL_R;
+        // Each hull's worst hit this tick, and whose doing: the other's
+        // driver, else its own (nobody's if neither is driven), dealt once
+        // every hull has moved.
+        let mut crash: [(i32, Option<usize>); MAX_VEHICLES] = [(0, None); MAX_VEHICLES];
         for i in 0..MAX_VEHICLES {
             for j in i + 1..MAX_VEHICLES {
                 let (a, b) = (self.vehicles[i], self.vehicles[j]);
@@ -2036,6 +2041,11 @@ impl World {
                     continue;
                 };
                 let closing = (a.vel - b.vel).flat().dot(n);
+                if closing > VEH_CRASH_SPEED {
+                    let pts = ((closing - VEH_CRASH_SPEED) * VEH_CRASH_DMG) as i32 * PT;
+                    crash[i] = crash[i].max((pts, b.driver().or(a.driver())));
+                    crash[j] = crash[j].max((pts, a.driver().or(b.driver())));
+                }
                 if closing > 0.0 {
                     let k = closing * (1.0 + VEH_BOUNCE) * 0.5;
                     for (q, s) in [(i, -k), (j, k)] {
@@ -2052,6 +2062,14 @@ impl World {
                 } else if !b_went {
                     self.vehicles[i].nudge(-half * 2.0, &self.map);
                 }
+            }
+        }
+        for (i, &(pts, by)) in crash.iter().enumerate() {
+            let Some(att) = by else {
+                continue;
+            };
+            if pts > 0 && !self.spares(att, &self.vehicles[i]) {
+                self.damage_vehicle(att, i, pts);
             }
         }
     }
@@ -2086,7 +2104,9 @@ impl World {
                 };
                 let off = (met - v.pos).flat();
                 let away = if off.dot(off) > 1e-6 { off.norm() } else { v.axes().0 };
-                let closing = (v.vel - f.body.vel).flat().dot(away);
+                // Its own speed at them, less theirs away from it: one who
+                // runs into its flank isn't run down.
+                let closing = v.vel.flat().dot(away) - f.body.vel.flat().dot(away).max(0.0);
                 if closing < SPLAT_SPEED {
                     continue;
                 }

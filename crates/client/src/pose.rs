@@ -273,7 +273,7 @@ pub fn fall(
     } else {
         sim::arms::BR as u16
     };
-    blows.kill(pose.0.slot, at, Some(pose.2.eye), cause, pose.3.head, t);
+    blows.kill(pose.0.slot, at, Some(pose.2.eye), Vec3::ZERO, cause, pose.3.head, t);
     pose.0.alive = false;
 }
 
