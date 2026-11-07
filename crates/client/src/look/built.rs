@@ -22,7 +22,8 @@ use bevy::prelude::*;
 use super::fresnel;
 use super::weathering::{Block, Shape};
 use crate::level::{
-    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, MARBLE, ROAD, RUST, SNOW, STONE, STONE_DARK,
+    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, DARK, HULL, MARBLE, PLATE, ROAD, RUST, SNOW,
+    STEEL_BLUE, STEEL_RED, STONE, STONE_DARK, TREAD,
 };
 
 /// The `stone` set's tile, m: the UVs the Blender kit writes (`arch.py`'s `TILE_M`).
@@ -68,6 +69,14 @@ pub enum Paint {
     Shaft(Color),
     /// Glowing, dimmed by this: far windows.
     Dim(Color, f32),
+    /// Lying on a floor: this colour, how much of it in COLOR_0's alpha.
+    Decal(Color),
+    /// Far outside: its COLOR_0 alone, never fogged or lit.
+    Far,
+    /// Far outside: this picture, never fogged or lit.
+    Picture(&'static str),
+    /// A pane between here and out there.
+    Glass,
     /// The still water's sheet (`pool.rs`).
     Water,
     /// A wet road in a look's photograph, over its reflection (`pool.rs`).
@@ -205,11 +214,72 @@ const OVERPASS: Set = Set {
     lift: None,
 };
 
+const DOCK: Set = Set {
+    dir: "bulkhead",
+    prefix: "dock",
+    parts: &[
+        part("hull", Paint::Look(HULL)),
+        part("rust", Paint::Look(RUST)),
+        part("dark", Paint::Look(DARK)),
+        part("plate", Paint::Look(PLATE)),
+        part("tread", Paint::Look(TREAD)),
+        part("red", Paint::Look(STEEL_RED)),
+        part("blue", Paint::Look(STEEL_BLUE)),
+        part("pipe", Paint::Metal(Color::srgb(0.3, 0.31, 0.33), 0.45, 0.7)),
+        part("crane", Paint::Metal(Color::srgb(0.68, 0.5, 0.1), 0.55, 0.2)),
+        part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.6, 0.0)),
+        part("paint_k", Paint::Metal(Color::srgb(0.03, 0.03, 0.03), 0.6, 0.0)),
+        part("light_white", Paint::Light(LIGHT_WHITE)),
+        part("light_amber", Paint::Light(LIGHT_AMBER)),
+        part("light_cyan", Paint::Light(LIGHT_CYAN)),
+        part("light_red", Paint::Light(LIGHT_RED)),
+        part("light_blue", Paint::Light(LIGHT_BLUE)),
+        part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
+        part("glass", Paint::Glass),
+        part("space", Paint::Far),
+        part("stars", Paint::Far),
+        part("ring", Paint::Far),
+        part("planet", Paint::Picture("textures/planet.jpg")),
+        part("shaft", Paint::Shaft(Color::WHITE)),
+    ],
+    block: (Vec3::new(0.0, 5.0, 0.0), Vec3::new(25.0, 6.0, 17.0)),
+    turns: (Vec3::ZERO, 0.0),
+    lift: None,
+};
+
+const RANGE: Set = Set {
+    dir: "proving",
+    prefix: "range",
+    parts: &[
+        part("blast", Paint::Look(BLAST)),
+        part("blast_dark", Paint::Look(BLAST_DARK)),
+        part("snow", Paint::Look(SNOW)),
+        part("rust", Paint::Look(RUST)),
+        part("steel", Paint::Metal(Color::srgb(0.34, 0.35, 0.37), 0.5, 0.6)),
+        part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.6, 0.0)),
+        part("paint_k", Paint::Metal(Color::srgb(0.03, 0.03, 0.03), 0.6, 0.0)),
+        part("paint_w", Paint::Metal(Color::srgb(0.66, 0.66, 0.62), 0.6, 0.0)),
+        part("decal", Paint::Decal(Color::srgb(0.02, 0.02, 0.025))),
+        part("track", Paint::Decal(Color::srgb(0.2, 0.22, 0.28))),
+        part("peaks", Paint::Metal(Color::WHITE, 0.85, 0.0)),
+        part("shaft", Paint::Shaft(Color::WHITE)),
+        part("light_amber", Paint::Light(LIGHT_AMBER)),
+        part("light_white", Paint::Light(LIGHT_WHITE)),
+        part("light_red", Paint::Light(LIGHT_RED)),
+        part("light_blue", Paint::Light(LIGHT_BLUE)),
+    ],
+    block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(25.0, 6.0, 25.0)),
+    turns: (Vec3::ZERO, 0.0),
+    lift: None,
+};
+
 /// The built set of map `id`, if it has one.
 pub fn of(id: u8) -> Option<&'static Set> {
     match id {
+        0 => Some(&RANGE),
         1 => Some(&OVERPASS),
         2 => Some(&CISTERN),
+        5 => Some(&DOCK),
         7 => Some(&OBSERVATORY),
         _ => None,
     }
@@ -275,7 +345,10 @@ pub fn dress(
                     })));
                 }
                 Paint::Light(colour) => {
-                    c.insert((MeshMaterial3d(mats.add(strip_material(colour, LIGHT_ROUGH))), NotShadowCaster));
+                    c.insert((
+                        MeshMaterial3d(mats.add(strip_material(colour, LIGHT_ROUGH))),
+                        NotShadowCaster,
+                    ));
                 }
                 Paint::Shaft(colour) => {
                     c.insert((
@@ -283,6 +356,7 @@ pub fn dress(
                             base_color: colour,
                             alpha_mode: AlphaMode::Add,
                             unlit: true,
+                            fog_enabled: false,
                             double_sided: true,
                             cull_mode: None,
                             ..default()
@@ -291,9 +365,57 @@ pub fn dress(
                         bevy::light::NotShadowReceiver,
                     ));
                 }
+                Paint::Decal(colour) => {
+                    c.insert((
+                        MeshMaterial3d(mats.add(StandardMaterial {
+                            base_color: colour,
+                            alpha_mode: AlphaMode::Blend,
+                            perceptual_roughness: 0.9,
+                            ..default()
+                        })),
+                        NotShadowCaster,
+                    ));
+                }
+                Paint::Far => {
+                    c.insert((
+                        MeshMaterial3d(mats.add(StandardMaterial {
+                            base_color: Color::WHITE,
+                            unlit: true,
+                            fog_enabled: false,
+                            ..default()
+                        })),
+                        NotShadowCaster,
+                        bevy::light::NotShadowReceiver,
+                    ));
+                }
+                Paint::Picture(file) => {
+                    c.insert((
+                        MeshMaterial3d(mats.add(StandardMaterial {
+                            base_color_texture: Some(server.load(file)),
+                            unlit: true,
+                            fog_enabled: false,
+                            ..default()
+                        })),
+                        NotShadowCaster,
+                        bevy::light::NotShadowReceiver,
+                    ));
+                }
+                Paint::Glass => {
+                    c.insert((
+                        MeshMaterial3d(mats.add(StandardMaterial {
+                            base_color: Color::srgba(0.55, 0.72, 0.85, 0.05),
+                            alpha_mode: AlphaMode::Blend,
+                            perceptual_roughness: 0.06,
+                            fog_enabled: false,
+                            ..default()
+                        })),
+                        NotShadowCaster,
+                        bevy::light::NotShadowReceiver,
+                    ));
+                }
                 Paint::Dim(colour, k) => {
                     let mut m = strip_material(colour, LIGHT_ROUGH);
-                    m.emissive = m.emissive * k;
+                    m.emissive *= k;
                     c.insert((MeshMaterial3d(mats.add(m)), NotShadowCaster));
                 }
                 Paint::Water => {
@@ -303,7 +425,11 @@ pub fn dress(
                     c.insert((super::pool::WetWanted(look), NotShadowCaster));
                 }
                 Paint::Reflected(look) => {
-                    c.insert((super::pool::ReflectWanted(look), NotShadowCaster, bevy::light::NotShadowReceiver));
+                    c.insert((
+                        super::pool::ReflectWanted(look),
+                        NotShadowCaster,
+                        bevy::light::NotShadowReceiver,
+                    ));
                 }
             }
             if p.turns {

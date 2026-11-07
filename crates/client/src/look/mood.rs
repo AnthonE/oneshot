@@ -97,6 +97,8 @@ pub struct Mood {
     pub hall: usize,
     /// The frame's grade: one for everyone on the map.
     pub grade: Grade,
+    /// Whether what falls (`rain`, how much of it) is snow.
+    pub snow: bool,
 }
 
 /// A mood's film grade (`rig::grade_for`), `Grade::NONE` the frame as lit. It only
@@ -154,6 +156,7 @@ pub const NOON: Mood = Mood {
     field_at: [0.0, 0.0],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Overpass: a sun shower late in the day. Broken cloud with the sun under
@@ -188,6 +191,7 @@ pub const SUN_SHOWER: Mood = Mood {
     field_at: [7.3, 3.1],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Cistern: a misty morning. A low sun (21°) over the wall between the two
@@ -222,6 +226,7 @@ pub const MIST: Mood = Mood {
     field_at: [19.0, 11.5],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Dry Fork: a desert afternoon. A high sun (50°), cumulus racing over the
@@ -255,6 +260,7 @@ pub const DESERT: Mood = Mood {
     field_at: [3.0, 22.0],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Bulkhead: dusk. The sun low (11°) over one long side, across the line
@@ -289,6 +295,7 @@ pub const DUSK: Mood = Mood {
     field_at: [25.0, 5.0],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Overpass: a rainy dusk, the sun low and red through a break in a heavy deck,
@@ -329,6 +336,46 @@ pub const RAIN_DUSK: Mood = Mood {
         contrast: 1.06,
         lift: 0.0,
     },
+    snow: false,
+};
+
+/// Proving Grounds: blue hour over a test range under snow, the sun down low and
+/// rose across the line between the bases, the cloud broken, snow coming down.
+pub const SNOW_DUSK: Mood = Mood {
+    name: "snow dusk",
+    sun_elev: 0.2,
+    sun_azim: core::f32::consts::PI,
+    sun_rgb: [1.0, 0.74, 0.62],
+    sun: 0.62,
+    light: 0.46,
+    fill: 0.8,
+    ev100: 13.5,
+    cover: 0.84,
+    dark: 0.62,
+    mist: 0.0016,
+    rain: 0.3,
+    dust: 0.0,
+    wet: 0.0,
+    wind_azim: 2.2,
+    wind_ms: 2.5,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.4,
+    moon_lit: 0.75,
+    shade: 0.2,
+    deep: 0.55,
+    veil: 0.34,
+    field_at: [9.0, 21.0],
+    hall: 0,
+    grade: Grade {
+        temperature: -0.03,
+        tint: 0.004,
+        saturation: 1.08,
+        contrast: 1.05,
+        lift: 0.0,
+    },
+    snow: true,
 };
 
 /// Cloudbreak: an island over a sea of cloud under a heavy grey deck. The
@@ -367,6 +414,7 @@ pub const OVERCAST: Mood = Mood {
     field_at: [33.0, 7.0],
     hall: 0,
     grade: Grade::NONE,
+    snow: false,
 };
 
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
@@ -380,52 +428,10 @@ pub const INTERIOR: Mood = Mood {
     ..NOON
 };
 
-/// TEMPORARY, the look loop's: `ONESHOT_MOOD="sun=0.8,dark=0.9,…"` over a map's mood.
-#[cfg(not(target_arch = "wasm32"))]
-fn knob(mut m: Mood) -> Mood {
-    let Ok(v) = std::env::var("ONESHOT_MOOD") else {
-        return m;
-    };
-    for kv in v.split(',') {
-        let Some((k, x)) = kv.split_once('=') else { continue };
-        let Ok(x) = x.parse::<f32>() else { continue };
-        match k {
-            "elev" => m.sun_elev = x,
-            "azim" => m.sun_azim = x,
-            "sun" => m.sun = x,
-            "light" => m.light = x,
-            "fill" => m.fill = x,
-            "ev" => m.ev100 = x,
-            "cover" => m.cover = x,
-            "dark" => m.dark = x,
-            "mist" => m.mist = x,
-            "rain" => m.rain = x,
-            "deep" => m.deep = x,
-            "veil" => m.veil = x,
-            "temp" => m.grade.temperature = x,
-            "tint" => m.grade.tint = x,
-            "sat" => m.grade.saturation = x,
-            "con" => m.grade.contrast = x,
-            "lift" => m.grade.lift = x,
-            "r" => m.sun_rgb[0] = x,
-            "g" => m.sun_rgb[1] = x,
-            "b" => m.sun_rgb[2] = x,
-            _ => {}
-        }
-    }
-    m
-}
-
 /// The mood of map `id` (`sim::maps::ALL`'s ids).
 pub fn of(id: u8) -> Mood {
-    #[cfg(not(target_arch = "wasm32"))]
-    return knob(of_map(id));
-    #[cfg(target_arch = "wasm32")]
-    return of_map(id);
-}
-
-fn of_map(id: u8) -> Mood {
     match id {
+        0 => SNOW_DUSK,
         1 => RAIN_DUSK,
         2 => Mood {
             name: "cistern",
@@ -435,7 +441,7 @@ fn of_map(id: u8) -> Mood {
                 temperature: -0.012,
                 tint: 0.0,
                 saturation: 1.03,
-                contrast: 1.05,
+                contrast: 1.0,
                 lift: 0.0,
             },
             ..INTERIOR
@@ -446,7 +452,19 @@ fn of_map(id: u8) -> Mood {
             field_at: [14.0, 9.0],
             ..NOON
         },
-        5 => DUSK,
+        5 => Mood {
+            name: "dock",
+            field_at: [25.0, 5.0],
+            hall: 2,
+            grade: Grade {
+                temperature: -0.015,
+                tint: 0.0,
+                saturation: 1.05,
+                contrast: 1.06,
+                lift: 0.0,
+            },
+            ..INTERIOR
+        },
         6 => INTERIOR,
         7 => OVERCAST,
         _ => NOON,

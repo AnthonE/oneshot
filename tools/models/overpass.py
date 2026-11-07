@@ -515,7 +515,7 @@ def main():
     wet.update(mirror_parts(objs, {'wet_light': ['light_sodium', 'light_pink', 'light_cyan', 'light_red', 'light_blue', 'light_warm', 'light_cold']}, 0.0, keep=inside, dim=WET_DIM, stretch=WET_STRETCH_LIGHT))
     objs.update(refl)
     objs.update(wet)
-    export(objs, OUT, 'overpass', bare=set(refl) | set(wet) | {'city', 'flood'})
+    export(objs, OUT, 'overpass', bare=set(refl) | set(wet) | {'shaft'})
 
 
 main()

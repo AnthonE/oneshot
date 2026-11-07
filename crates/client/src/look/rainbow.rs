@@ -246,7 +246,7 @@ pub fn params_for(now: &MoodNow) -> RainbowParams {
     let m = &now.mood;
     let sun = m.to_sun();
     // Under a roof, or a veil (`Mood::veil`) with no sun on the rain to turn back.
-    let k = if now.roofed || m.veil > 0.0 {
+    let k = if now.roofed || m.veil > 0.0 || m.snow {
         0.0
     } else {
         strength(sun.y, m.light, m.rain, 0.0)

@@ -109,12 +109,32 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // The masonry: cool, against the warm sand and the warm sun on it.
         STONE => ("stone", crate::look::built::TILE_M, Color::linear_rgb(1.0, 1.0, 1.02)),
         STONE_DARK => ("stone", crate::look::built::TILE_M, Color::linear_rgb(0.46, 0.46, 0.48)),
-        BRICK => ("brick", crate::look::built::tile(BRICK), Color::linear_rgb(0.9, 0.86, 0.82)),
+        BRICK => (
+            "brick",
+            crate::look::built::tile(BRICK),
+            Color::linear_rgb(0.9, 0.86, 0.82),
+        ),
         MARBLE => ("marble", crate::look::built::tile(MARBLE), Color::WHITE),
-        ROAD => ("road", crate::look::built::tile(ROAD), Color::linear_rgb(0.8, 0.8, 0.82)),
-        BLAST => ("blast", crate::look::built::tile(BLAST), Color::linear_rgb(0.95, 0.95, 0.97)),
-        BLAST_DARK => ("blast", crate::look::built::tile(BLAST), Color::linear_rgb(0.45, 0.45, 0.47)),
-        SNOW => ("snow", crate::look::built::tile(SNOW), Color::linear_rgb(1.0, 1.02, 1.08)),
+        ROAD => (
+            "road",
+            crate::look::built::tile(ROAD),
+            Color::linear_rgb(0.8, 0.8, 0.82),
+        ),
+        BLAST => (
+            "blast",
+            crate::look::built::tile(BLAST),
+            Color::linear_rgb(0.95, 0.95, 0.97),
+        ),
+        BLAST_DARK => (
+            "blast",
+            crate::look::built::tile(BLAST),
+            Color::linear_rgb(0.45, 0.45, 0.47),
+        ),
+        SNOW => (
+            "snow",
+            crate::look::built::tile(SNOW),
+            Color::linear_rgb(1.85, 1.9, 2.0),
+        ),
         RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
         _ => return None,
     })
@@ -129,9 +149,13 @@ pub fn set_of(look: u8) -> Option<&'static str> {
 /// each side's paint, its tread plate; and a turned box drawn as a pylon.
 pub const PYLON: u8 = 25;
 const STEEL: u8 = 26;
-const STEEL_RED: u8 = 27;
-const STEEL_BLUE: u8 = 28;
-const TREAD: u8 = 29;
+pub const STEEL_RED: u8 = 27;
+pub const STEEL_BLUE: u8 = 28;
+pub const TREAD: u8 = 29;
+/// The arenas' old steel: mid, dark, plate.
+pub const HULL: u8 = 7;
+pub const DARK: u8 = 5;
+pub const PLATE: u8 = 11;
 /// Dressed grey stone, pale and dark, in the concrete set.
 pub const STONE: u8 = 30;
 pub const STONE_DARK: u8 = 31;
@@ -210,6 +234,7 @@ fn surface(look: u8) -> Surface {
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB | HUSK..=FONT => Surface::Hull,
         STONE | STONE_DARK | BRICK | MARBLE | BLAST | BLAST_DARK | ROAD => Surface::Stone,
+        SNOW => Surface::Floor,
         _ => Surface::Concrete,
     }
 }
@@ -530,7 +555,8 @@ pub fn dress_level(
             ..base
         };
         let mut ec = commands.entity(e);
-        match block {
+        // Snow takes no grime or seams.
+        match block.filter(|_| look.0 != SNOW) {
             Some(b) => {
                 let w = weathering::material(m, surface(look.0), b, dusty, mood.roofed);
                 ec.remove::<MeshMaterial3d<StandardMaterial>>()
@@ -1009,8 +1035,6 @@ pub fn build(
     // Rock out of reach: the sea's stacks and stones.
     crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
     crate::look::built::spawn(commands, id);
-    if land == Land::Isle {
-    }
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.
@@ -1552,38 +1576,38 @@ pub fn build(
             let floor = if map.light.floor == 255 { FLOOR } else { map.light.floor };
             // A built set's own floor is its own to draw.
             if floor != HIDDEN {
-            commands.spawn((
-                LevelPart,
-                BoxLook(floor),
-                // A floor: no edges anyone sees, and no grime (its ground
-                // is far under it), only its mottle and its dust.
-                Block {
-                    mid: Vec3::new(cx, -0.1, cz),
-                    half: Vec3::new(size * 0.5, 0.1, size * 0.5),
-                    turn: (1.0, 0.0),
-                    shape: Shape::Other,
-                    ground: -1.0e3,
-                    run: None,
-                    hidden: 0,
-                    own_value: false,
-                },
-                Mesh3d(meshes.add({
-                    // Cut where the boxes stand on it.
-                    let me = all.len() - 1;
-                    let (min, max) = (all[me].min, all[me].max);
-                    let mut soup = rock::Soup::default();
-                    let cover = rock::covers(min, max, me, &all);
-                    rock::faceted_box(&mut soup, min, max, Vec3::new(cx, -0.1, cz), 0, [false; 6], &cover);
-                    soup.mesh(dress(floor).map_or(4.0, |d| d.1))
-                })),
-                MeshMaterial3d(mats.add(StandardMaterial {
-                    base_color: Color::srgb(0.42, 0.43, 0.45),
-                    perceptual_roughness: 0.95,
-                    reflectance: fresnel::DIELECTRIC,
-                    ..default()
-                })),
-                Transform::from_xyz(cx, -0.1, cz),
-            ));
+                commands.spawn((
+                    LevelPart,
+                    BoxLook(floor),
+                    // A floor: no edges anyone sees, and no grime (its ground
+                    // is far under it), only its mottle and its dust.
+                    Block {
+                        mid: Vec3::new(cx, -0.1, cz),
+                        half: Vec3::new(size * 0.5, 0.1, size * 0.5),
+                        turn: (1.0, 0.0),
+                        shape: Shape::Other,
+                        ground: -1.0e3,
+                        run: None,
+                        hidden: 0,
+                        own_value: false,
+                    },
+                    Mesh3d(meshes.add({
+                        // Cut where the boxes stand on it.
+                        let me = all.len() - 1;
+                        let (min, max) = (all[me].min, all[me].max);
+                        let mut soup = rock::Soup::default();
+                        let cover = rock::covers(min, max, me, &all);
+                        rock::faceted_box(&mut soup, min, max, Vec3::new(cx, -0.1, cz), 0, [false; 6], &cover);
+                        soup.mesh(dress(floor).map_or(4.0, |d| d.1))
+                    })),
+                    MeshMaterial3d(mats.add(StandardMaterial {
+                        base_color: Color::srgb(0.42, 0.43, 0.45),
+                        perceptual_roughness: 0.95,
+                        reflectance: fresnel::DIELECTRIC,
+                        ..default()
+                    })),
+                    Transform::from_xyz(cx, -0.1, cz),
+                ));
             }
             commands.insert_resource(crate::look::cliffs::SkinLift(None));
         }

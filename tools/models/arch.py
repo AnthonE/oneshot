@@ -429,7 +429,7 @@ def paint(objs, ground=None, tone=None):
             n = normals[i].normalized() if normals[i].length > 1e-6 else Vector((0, 0, 1))
             if lit:
                 c = own.get(i, (1, 1, 1))
-                attr.data[i].color = (c[0], c[1], c[2], 1)
+                attr.data[i].color = (c[0], c[1], c[2], c[3] if len(c) > 3 else 1)
                 continue
             t = n.orthogonal().normalized()
             b = n.cross(t)

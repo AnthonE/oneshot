@@ -1,4 +1,4 @@
-//! Proving Grounds: the test arena, 48 m square, mirrored between red (-x) and blue (+x): a raised centre with the rocket, a platform on each side reached by steps, pillars and waist-high walls for cover, the sniper and the shotgun at the ends of the middle lane.
+//! Proving Grounds: A blast-test range under snow at blue hour, 48 m square, mirrored between red (-x) and blue (+x): a scorched target in the middle with the rocket, an observation bunker on each side reached by steps, gauges and low walls for cover, the sniper and the shotgun at the ends of the middle lane. The test arena: its boxes are what the golden's bots fight on.
 //!
 //! Generated from `maps/proving_grounds/map.json` by `tools/maps/compile.mjs`: edit the JSON,
 //! then run it. CI fails if this file is not what the JSON compiles to.
@@ -42,7 +42,7 @@ pub const DEF: Def = Def {
         [7.25, 0.0, 11.25, 8.75, 3.0, 12.75],
         [-6.0, 0.0, 15.75, 6.0, 1.2, 16.25],
     ],
-    looks: &[0, 0, 0, 0, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 4, 1, 1, 1, 1, 1, 1, 1],
+    looks: &[19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19],
     spawns: &[
         ([-22.0, 0.0, 20.0], 0, 0),
         ([-22.0, 0.0, -20.0], 0, 0),
@@ -85,5 +85,19 @@ pub const DEF: Def = Def {
     ],
     nav: false,
     flags: &[],
-    light: crate::map::LightDef::DAY,
+    light: crate::map::LightDef {
+        ev100: 0.0,
+        sun: 1.0,
+        fill: 1.0,
+        lamps: &[
+            ([-22.0, 9.6, -22.0], [1.0, 0.82, 0.6], 520000.0),
+            ([22.0, 9.6, -22.0], [1.0, 0.82, 0.6], 520000.0),
+            ([-22.0, 9.6, 22.0], [1.0, 0.82, 0.6], 520000.0),
+            ([22.0, 9.6, 22.0], [1.0, 0.82, 0.6], 520000.0),
+            ([-16.0, 4.4, 0.0], [1.0, 0.42, 0.3], 200000.0),
+            ([16.0, 4.4, 0.0], [0.34, 0.56, 1.0], 200000.0),
+        ],
+        floor: 41,
+        sea: f32::NEG_INFINITY,
+    },
 };

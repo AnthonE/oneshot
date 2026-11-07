@@ -191,7 +191,9 @@ fn cisterns_levels_join() {
     let reach = walk(&m, (s0.x, s0.y, s0.z));
     let stands = |x: f32, z: f32, y: f32| {
         reach.iter().any(|&(ix, iz, iy)| {
-            fabs(ix as f32 * 0.25 - x) <= 0.25 && fabs(iz as f32 * 0.25 - z) <= 0.25 && fabs(iy as f32 / 64.0 - y) < 0.03
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
         })
     };
     for (what, x, z, y) in [
@@ -214,7 +216,9 @@ fn overpass_climbs() {
     let reach = walk(&m, (s0.x, s0.y, s0.z));
     let stands = |x: f32, z: f32, y: f32| {
         reach.iter().any(|&(ix, iz, iy)| {
-            fabs(ix as f32 * 0.25 - x) <= 0.25 && fabs(iz as f32 * 0.25 - z) <= 0.25 && fabs(iy as f32 / 64.0 - y) < 0.03
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
         })
     };
     for (what, x, z, y) in [

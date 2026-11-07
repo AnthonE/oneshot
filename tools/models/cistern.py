@@ -45,7 +45,7 @@ FLUTE_DEPTH = 0.038
 # hangs in are in this, not in a light.
 DIM = {'stone': 0.13, 'stone_dark': 0.06, 'brick': 0.1, 'marble': 0.2, 'bronze': 0.04}
 # The marble's colour over its photograph: the photograph is cream, this is cold.
-MARBLE_TONE = (0.52, 0.6, 0.8)
+MARBLE_TONE = (0.66, 0.74, 0.92)
 OCULI = ((0.0, 0.0, 1.55, 2.7, 1.0),) + tuple((sx * 7.0, sz * 7.0, 0.72, 1.35, 0.5) for sx in (-1, 1) for sz in (-1, 1))
 
 
@@ -558,7 +558,7 @@ def main():
         'reflect_light': ['light_white', 'light_amber', 'light_red', 'light_blue', 'bronze'],
     }, WATER, keep=seen_in_water, dim=DIM)
     objs.update(refl)
-    export(objs, OUT, 'cistern', bare=set(refl))
+    export(objs, OUT, 'cistern', bare=set(refl) | {'shaft'})
 
 
 main()

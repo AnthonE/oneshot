@@ -238,8 +238,28 @@ pub mod hall {
         haze_density: 0.012,
     };
 
+    /// Bulkhead's steel: cold panels overhead, amber at the lanes, a planet's pale
+    /// day through the viewport.
+    pub const DOCK: Palette = Palette {
+        wall: [0.11, 0.12, 0.14],
+        deck: [0.03, 0.034, 0.04],
+        vault: [0.07, 0.08, 0.095],
+        pane: [0.72, 0.84, 1.0],
+        strip: [0.6, 0.42, 0.22],
+        strip_at: 0.2,
+        strip_half: 0.04,
+        pane_freq: 4.0,
+        pane_share: 0.16,
+        spec_wall: [0.05, 0.056, 0.066],
+        spec_vault: [0.03, 0.036, 0.044],
+        sheen: [0.55, 0.62, 0.72],
+        sheen_share: 0.4,
+        haze: [0.012, 0.016, 0.022],
+        haze_density: 0.007,
+    };
+
     /// By `Mood::hall`.
-    pub const PALETTES: [&Palette; 2] = [&SHIP, &CISTERN];
+    pub const PALETTES: [&Palette; 3] = [&SHIP, &CISTERN, &DOCK];
 
     /// The specular cube's mips: how far a texel's look spreads in each,
     /// as the tangent of the angle. The renderer picks a mip by roughness,

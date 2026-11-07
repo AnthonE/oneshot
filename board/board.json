@@ -778,6 +778,149 @@
       ]
     },
     {
+      "id": "hd-tank",
+      "name": "Cistern: the tank",
+      "what": "from the water toward the dais",
+      "take": "dark still water with the architecture hanging in it; columns with weight",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/tank.png",
+      "refs": []
+    },
+    {
+      "id": "hd-quay",
+      "name": "Cistern: over the quay",
+      "what": "across the quay into the forest of columns",
+      "take": "depth: bay after bay under the vault, each a step darker",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/quay.png",
+      "refs": []
+    },
+    {
+      "id": "hd-bridge",
+      "name": "Cistern: on a bridge",
+      "what": "along an arm to the ring",
+      "take": "height over the water, shafts of day ahead",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/bridge.png",
+      "refs": []
+    },
+    {
+      "id": "hd-flyover",
+      "name": "Overpass: on the flyover",
+      "what": "north along the deck",
+      "take": "rain, sodium lamps, a skyline; cover that belongs there",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/flyover.png",
+      "refs": []
+    },
+    {
+      "id": "hd-underpass",
+      "name": "Overpass: under it",
+      "what": "through the piers across the wet road",
+      "take": "the road a wet mirror of what stands on it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/underpass.png",
+      "refs": []
+    },
+    {
+      "id": "hd-alley",
+      "name": "Overpass: the north alley",
+      "what": "along the alley under the signs",
+      "take": "neon on rain-streaked concrete",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/alley.png",
+      "refs": []
+    },
+    {
+      "id": "hd-skyline",
+      "name": "Overpass: the skyline",
+      "what": "off the flyover over the flood",
+      "take": "a city going away in steps, lights in its dark",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/skyline.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_top",
+      "name": "Bulkhead: top mid",
+      "what": "from the bridge along the dock",
+      "take": "a working steel space, cold light, amber at the lanes",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_top.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_pit",
+      "name": "Bulkhead: the pit",
+      "what": "up from the pit floor",
+      "take": "the bridge overhead on its piers, cargo as cover",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_pit.png",
+      "refs": []
+    },
+    {
+      "id": "hd-dock_view",
+      "name": "Bulkhead: the viewport",
+      "what": "up through the viewport",
+      "take": "a ringed planet and stars behind deep steel frames",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/dock_view.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_lane",
+      "name": "Proving Grounds: the lane",
+      "what": "across the range from a corner",
+      "take": "snow, cold air, a low sun warming concrete; mountains beyond",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_lane.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_mid",
+      "name": "Proving Grounds: the target",
+      "what": "toward the scorched middle",
+      "take": "a test range: scorch, ruts, gauges, bunkers",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_mid.png",
+      "refs": []
+    },
+    {
+      "id": "hd-range_wall",
+      "name": "Proving Grounds: the wall",
+      "what": "along the revetment",
+      "take": "cast concrete at scale with hazard paint and snow on its ledges",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/range_wall.png",
+      "refs": []
+    },
+    {
       "id": "hd-hold",
       "name": "Chrysalis: red's top",
       "what": "from red's pod roof down the hold to the chrysalis, the vault and its panes over it",

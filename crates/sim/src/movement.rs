@@ -968,7 +968,12 @@ mod tests {
         let map = crate::maps::cistern::DEF.build();
         for (n, l) in map.launchers.iter().enumerate() {
             let a = l.area;
-            for (x, z) in [(a.min.x, a.min.z), (a.max.x, a.min.z), (a.min.x, a.max.z), (a.max.x, a.max.z)] {
+            for (x, z) in [
+                (a.min.x, a.min.z),
+                (a.max.x, a.min.z),
+                (a.min.x, a.max.z),
+                (a.max.x, a.max.z),
+            ] {
                 let mut b = standing(&map, x, z);
                 step(&mut b, &Input::default(), &map);
                 assert!(!b.grounded, "lift {n} didn't throw from {x}, {z}: {b:?}");
@@ -977,7 +982,11 @@ mod tests {
                     step(&mut b, &Input::default(), &map);
                     ticks += 1;
                 }
-                assert!(fabs(b.pos.y - 5.2) < 0.01, "lift {n} from {x}, {z} lands at {:?}", b.pos);
+                assert!(
+                    fabs(b.pos.y - 5.2) < 0.01,
+                    "lift {n} from {x}, {z} lands at {:?}",
+                    b.pos
+                );
             }
         }
     }

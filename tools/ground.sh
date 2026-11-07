@@ -34,7 +34,7 @@ SETS=(
   "marble|marble_01|Cistern's columns, pale cut marble"
   "road|asphalt_02|Overpass' carriageway, cracked asphalt"
   "blast|brushed_concrete_2|cast concrete, board-marked and stained: Overpass' and Proving Grounds' structures"
-  "snow|snow_02|Proving Grounds' floor, wind-packed snow"
+  "snow|snow_01|Proving Grounds' floor, wind-packed snow"
   "rust|rusty_metal_02|flaking paint over rust: signs, shutters, old steel"
 )
 # our name | ambientCG's id | what it is
