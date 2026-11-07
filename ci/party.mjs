@@ -73,7 +73,7 @@ try {
       const c = document.getElementById('game');
       const k = c.getBoundingClientRect().width / c.clientWidth;
       return r ? r.map((v) => v * k) : null;
-    }, tag));
+    }, tag), 300000);
     await p.mouse.move(r[0], r[1]);
     await p.waitForTimeout(400);
     await p.mouse.down();

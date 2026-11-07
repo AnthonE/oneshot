@@ -25,7 +25,10 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 30;
+pub const PROTO_VER: u16 = 31;
+/// What every lobby ticket starts with (the server makes them, `auth.rs`;
+/// the client reads one's own fields back to know whose it is).
+pub const TICKET_PREFIX: &str = "os1.";
 /// Under QUIC's 1,200-byte floor with room for its headers.
 pub const MAX_DATAGRAM: usize = 1100;
 /// Input frames one datagram resends: everything the server hasn't run.
@@ -68,6 +71,12 @@ fn w_i32(w: &mut BitWriter, v: i32, bits: u32) -> R<()> {
     }
     let mask = if bits == 32 { u32::MAX } else { (1u32 << bits) - 1 };
     w.write(v as u32 & mask, bits)
+}
+
+/// A score as its 16 bits carry it: pinned at their ends (a match with no
+/// limit left running all night), never a snapshot that fails to encode.
+pub fn score_on_wire(sc: i32) -> i32 {
+    sc.clamp(i16::MIN as i32, i16::MAX as i32)
 }
 
 fn r_i32(r: &mut BitReader, bits: u32) -> R<i32> {
@@ -937,7 +946,7 @@ pub fn encode_snapshot(s: &Snapshot, out: &mut [u8]) -> R<usize> {
     w_list(&mut w, s.flags(), 2)?;
     w.write(s.n_score as u32, SLOT_BITS + 1)?;
     for &sc in &s.score[..s.n_score as usize] {
-        w_i32(&mut w, sc, 16)?;
+        w_i32(&mut w, score_on_wire(sc), 16)?;
     }
     w.write(s.phase as u32, 2)?;
     w.write(s.clock, 32)?;
@@ -1486,6 +1495,10 @@ pub enum Msg {
     /// The server still checks every hello (`server::net`); this only
     /// shows it.
     Wardrobe(Wardrobe),
+    /// Client → server on a match: its level is all there (`loading.rs`).
+    /// The countdown waits for every person seated in it to say so, or for
+    /// the room's guard (`room::LOAD_WAIT_MS`).
+    Loaded,
 }
 
 /// What a lobby's wallet owns ([`Msg::Wardrobe`]): a bit an item, by the id
@@ -1720,6 +1733,7 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w.write(*winner as u32, 8)?;
         }
         Msg::Bye => w.write(7, 8)?,
+        Msg::Loaded => w.write(25, 8)?,
         Msg::Moved { addr, queued } => {
             w.write(23, 8)?;
             w.write(addr.len as u32, 7)?;
@@ -1996,6 +2010,7 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
             winner: r.read(8)? as u8,
         },
         7 => Msg::Bye,
+        25 => Msg::Loaded,
         23 => {
             let len = r.read(7)? as usize;
             if len > MAX_SERVER_ADDR {

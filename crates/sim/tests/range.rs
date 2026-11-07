@@ -508,9 +508,9 @@ fn a_charge_then_a_head_shot_kills() {
 #[test]
 fn eight_shards_go_off_together() {
     // Halo 2's needler: eight stuck, a kill.
-    // (Nine hits: the eighth shard's own, then all eight going off.)
+    // (Ten hits: the eighth shard's own, the splash, then all eight going off.)
     let k = kill(SHARDS, 10.0, Spot::Chest, SALT).unwrap();
-    assert_eq!(k.hits, 9, "{k:?}");
+    assert_eq!(k.hits, 10, "{k:?}");
     // They turn after a target crossing the aim: fired where it is, not
     // led, at 15 m they still find it, slowly, within a magazine.
     let mut w = range([SHARDS, arms::NONE], 15.0, SALT);

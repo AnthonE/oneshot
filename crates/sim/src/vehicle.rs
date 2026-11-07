@@ -217,6 +217,34 @@ impl Vehicle {
         fabs(p.x) < VEH_HALF_L + r && fabs(p.z) < VEH_HALF_W + r && p.y < VEH_H && p.y + h > 0.0
     }
 
+    /// Its hull circles' middles: the nose's, the middle's, the tail's.
+    pub fn circles(&self) -> [V3; 3] {
+        let fore = self.axes().0 * VEH_HULL_OFF;
+        [self.pos + fore, self.pos, self.pos - fore]
+    }
+
+    /// Moved flat by `d` if every hull circle is clear of the map there
+    /// (another hull pushing it); false, and left where it is, if not.
+    pub fn nudge(&mut self, d: V3, map: &Map) -> bool {
+        let at = self.pos + d.flat();
+        let at = V3::new(
+            quant(at.x.clamp(map.lo.0, map.hi.0)),
+            at.y,
+            quant(at.z.clamp(map.lo.1, map.hi.1)),
+        );
+        let moved = Vehicle { pos: at, ..*self };
+        let (lo, hi) = (at.y + VEH_STEP, at.y + VEH_H);
+        if moved
+            .circles()
+            .iter()
+            .any(|c| map.occupied(c.x, c.z, VEH_HULL_R, lo, hi))
+        {
+            return false;
+        }
+        self.pos = at;
+        true
+    }
+
     /// One tick with nobody at the wheel: on the ground it brakes to a
     /// stop and stays there (no rolling off down a slope); off it, it
     /// falls as a driven one does.
@@ -276,11 +304,21 @@ impl Vehicle {
             v.y -= GRAVITY * DT;
         }
 
-        let lo = self.pos.y + VEH_STEP;
-        let hi = self.pos.y + VEH_H;
         let mut p = self.pos;
-        // Each axis as far as every hull circle may go.
         let fore = f * VEH_HULL_OFF;
+        // Each hull circle's own feet: the middle's are the hull's; the
+        // nose's and tail's the floor under them where it is higher, so up
+        // a ramp the nose is over its slope before the middle is (and over
+        // the wall the ramp passes above). Never lower: over a hole or a
+        // drop, an end is as high as the middle.
+        let tilt = VEH_HULL_OFF * VEH_CLIMB;
+        let mut feet = [p.y; 3];
+        for (i, k) in [(0, 1.0), (2, -1.0)] {
+            let c = p + fore * k;
+            let up = p.y + VEH_STEP + tilt;
+            feet[i] = map.floor_with(c.x, c.z, VEH_WHEEL_R, up, up).clamp(p.y, p.y + tilt);
+        }
+        // Each axis as far as every hull circle may go.
         for axis in 0..2 {
             let d = if axis == 0 { v.x * DT } else { v.z * DT };
             if d == 0.0 {
@@ -288,7 +326,8 @@ impl Vehicle {
             }
             let mut go = d;
             let mut blocked = false;
-            for c in [p + fore, p, p - fore] {
+            for (c, ft) in [(p + fore, feet[0]), (p, feet[1]), (p - fore, feet[2])] {
+                let (lo, hi) = (ft + VEH_STEP, ft + VEH_H);
                 let (from, other) = if axis == 0 { (c.x, c.z) } else { (c.z, c.x) };
                 let rr = VEH_HULL_R;
                 let area = if axis == 0 {
@@ -350,8 +389,9 @@ impl Vehicle {
         }
 
         if !map.solids.is_empty() {
-            // Each hull circle out of the solids; the vehicle moves with it.
-            for k in [1.0, 0.0, -1.0] {
+            // Each hull circle out of the solids, in its own band; the
+            // vehicle moves with it.
+            for (k, ft) in [(1.0, feet[0]), (0.0, feet[1]), (-1.0, feet[2])] {
                 let c = p + fore * k;
                 let was = self.pos + fore * k;
                 let (mut cx, mut cz) = (c.x, c.z);
@@ -360,10 +400,10 @@ impl Vehicle {
                     &mut cz,
                     &mut v,
                     VEH_HULL_R,
-                    p.y,
-                    lo,
-                    hi,
-                    p.y + VEH_STEP,
+                    ft,
+                    ft + VEH_STEP,
+                    ft + VEH_H,
+                    ft + VEH_STEP,
                     (was.x, was.z),
                 );
                 p.x = (p.x + (cx - c.x)).clamp(map.lo.0, map.hi.0);

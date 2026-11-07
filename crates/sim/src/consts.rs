@@ -7,9 +7,10 @@ pub const TICK_HZ: u32 = 128;
 /// One tick in seconds. 1/128 is a power of two, so it is exact.
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 
-/// A duration in ms as whole ticks, rounded to nearest.
+/// A duration in ms as whole ticks, rounded to nearest (in 64 bits: a
+/// duration past 9.3 h would overflow 32).
 pub const fn ticks(ms: u32) -> u32 {
-    (ms * TICK_HZ + 500) / 1000
+    ((ms as u64 * TICK_HZ as u64 + 500) / 1000) as u32
 }
 
 /// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,
@@ -99,10 +100,18 @@ pub const HIT_TOP_CROUCH: f32 = 0.95;
 pub const HEAD_R: f32 = 0.22;
 pub const HEAD_Y: f32 = 1.62;
 pub const HEAD_Y_CROUCH: f32 = 1.12;
-/// Where a near miss is bent to (bullet magnetism, `World::magnet`): the
-/// chest, never the head.
+/// Bullet magnetism, every gun's at once (`World::magnet`, each gun's
+/// `Arm::magnet`) and the red reticle's widening with it. Off: a round
+/// goes where the cone sends it, and the reticle is red only on a body.
+/// Flipping it moves the goldens (`tests/determinism.rs`).
+pub const MAGNETISM: bool = false;
+/// Where on a body a near miss is bent to (bullet magnetism,
+/// `World::magnet`): the height it passed at, no higher than the chest
+/// (never the head) and no lower than the hips.
 pub const CHEST_Y: f32 = 1.0;
 pub const CHEST_Y_CROUCH: f32 = 0.65;
+pub const HIP_Y: f32 = 0.45;
+pub const HIP_Y_CROUCH: f32 = 0.3;
 /// Pitch limit in 1/65536 turn: 89°.
 pub const PITCH_MAX: i16 = 16_202;
 
@@ -195,6 +204,19 @@ pub const CLASH_PUSH: f32 = 8.0;
 pub const HOMING_PAD: f32 = 1.0;
 /// Shards fall out of a fighter this long after the last went in.
 pub const NEEDLE_KEEP_MS: u32 = 1500;
+/// Shards going off together (Halo 2's needler supercombine, Halopedia's H2
+/// weapon data at 3.048 m a world unit): 400 to the one they are in, half
+/// that on shields (an overshield outlasts it, as Halo 2's did), and a
+/// splash of 50 out to 0.2 wu, down to 30 at 0.5 wu, half that on shields.
+pub const SUPER_DMG: i32 = 400;
+pub const SUPER_SHIELD_K: f32 = 0.5;
+pub const SUPER_SPLASH: i32 = 50;
+pub const SUPER_FULL: f32 = 0.61;
+pub const SUPER_RADIUS: f32 = 1.52;
+pub const SUPER_EDGE: i32 = 30;
+/// How hard its splash throws who stands by, m/s at its middle: a stagger,
+/// not a grenade's [`BLAST_PUSH`]. Ours.
+pub const SUPER_PUSH: f32 = 3.0;
 /// What a charged bolt does to a hull.
 pub const CHARGE_VEH_DMG: i32 = 60;
 
@@ -329,15 +351,31 @@ pub const VEH_SIDE_SLIP: f32 = 0.15;
 /// this deep.
 pub const VEH_STEP: f32 = 0.6;
 pub const VEH_SNAP: f32 = 0.4;
+/// Its nose and tail ride the floor under them where it rises (a ramp, a
+/// slope), up to this rise per metre over its middle's height: the hull's
+/// end circles stand `VEH_HULL_OFF` from the middle.
+pub const VEH_CLIMB: f32 = 0.5;
+/// The footprint the floor under its nose and tail is read over.
+pub const VEH_WHEEL_R: f32 = 0.3;
 /// Hit points (in `PT`s, like a fighter's).
 pub const VEH_HEALTH: i32 = 900 * PT;
 /// How near its middle a fighter must stand to get in: at its nose or its
 /// tail it still can.
 pub const ENTER_R: f32 = 3.6;
-/// Faster than this, it runs a fighter down; past `SPLAT_KILL` the hit is
-/// lethal, below it scaled.
-pub const SPLAT_SPEED: f32 = 5.0;
-pub const SPLAT_KILL: f32 = 11.0;
+/// Closing faster than this, it runs a fighter down; from `SPLAT_KILL` on
+/// (barely past a run) the hit is lethal, below it scaled. A fighter it
+/// meets is carried off at its speed and `SPLAT_SHOVE` more, so one hit is
+/// one hit.
+pub const SPLAT_SPEED: f32 = 2.5;
+pub const SPLAT_KILL: f32 = 5.0;
+pub const SPLAT_SHOVE: f32 = 4.0;
+/// Two hulls that meet push apart, equal in weight, keeping this much of
+/// their closing speed as a bounce; closing faster than `VEH_CRASH_SPEED`
+/// each takes `VEH_CRASH_DMG` per m/s past it (whole points): head on at
+/// full speed both go up, a ram into a parked one takes nearly half.
+pub const VEH_BOUNCE: f32 = 0.3;
+pub const VEH_CRASH_SPEED: f32 = 6.0;
+pub const VEH_CRASH_DMG: f32 = 26.0;
 /// How much of a blast's push a vehicle takes along the ground, and the
 /// speed up off its wheels it is thrown at (m/s), each at full strength
 /// from a charge of `VEH_LIFT_DMG` or more (a rocket's: a hit beside it

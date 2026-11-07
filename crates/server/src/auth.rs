@@ -198,7 +198,7 @@ impl Nonces {
 /// again.
 pub const TICKET_TTL: Duration = Duration::from_secs(12 * 3600);
 /// What a ticket starts with: a pass never does (a pass is base64url).
-pub const TICKET_PREFIX: &str = "os1.";
+pub use proto::TICKET_PREFIX;
 
 /// Who a session is: an Elo Pros player (a pass, or a ticket a pass
 /// earned), or a guest of ours with an id we made.

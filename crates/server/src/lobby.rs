@@ -27,6 +27,14 @@ use crate::Ctx;
 /// How often a session's friends are shown again (their presence moves),
 /// and the sweep for those away too long.
 const FRIENDS_EVERY: Duration = Duration::from_secs(15);
+/// A page's own FRIENDS ask goes to Elo Pros at most this often (the cache
+/// answers between).
+const FRIENDS_ASK_EVERY: Duration = Duration::from_secs(5);
+/// A signed-in page is handed a fresh ticket this often, well inside a
+/// ticket's life: a tab left open overnight still plays as itself.
+const TICKET_EVERY: Duration = Duration::from_secs(3600);
+/// A line closed this soon after it opened was let go by its page unread.
+const ABANDONED_WITHIN: Duration = Duration::from_secs(2);
 const SWEEP_EVERY: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -110,8 +118,9 @@ fn reader(mut recv: RecvStream) -> tokio::sync::mpsc::Receiver<Msg> {
 }
 
 /// Tells `session` its friends and where they are, asking Elo Pros if the
-/// list it has is older than its cache (or `fresh`).
-async fn friends(ctx: &Ctx, session: u64, who: &Who, fresh: bool) {
+/// list it has is older than its cache (or `fresh`); not again if nothing
+/// changed since `last` (what it was last told), unless `fresh`.
+async fn friends(ctx: &Ctx, session: u64, who: &Who, fresh: bool, last: &mut Vec<Msg>) {
     if !who.signed() {
         return;
     }
@@ -129,6 +138,10 @@ async fn friends(ctx: &Ctx, session: u64, who: &Who, fresh: bool) {
         msgs.extend(ps.friend_rows(session, list));
         msgs
     };
+    if !fresh && msgs == *last {
+        return;
+    }
+    last.clone_from(&msgs);
     ctx.lobby.send(msgs.into_iter().map(|m| (session, m)).collect());
 }
 
@@ -167,6 +180,7 @@ pub async fn session(
     ctx: Arc<Ctx>,
 ) {
     let session = ctx.sessions.fetch_add(1, Ordering::Relaxed);
+    let opened = Instant::now();
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let writer = tokio::spawn(async move {
         let mut streams = inlet.streams;
@@ -188,6 +202,22 @@ pub async fn session(
     } else {
         None
     };
+    // A newer page of the same player connected while this one waited on
+    // Elo Pros: this one is the stale tab, and never evicts that one.
+    let newer = ctx.lobby.parties().newer(session, &who.id);
+    if newer {
+        if let Some((tx, _)) = ctx.lobby.outs().remove(&session) {
+            crate::send_msg(
+                &tx,
+                &Msg::Refuse {
+                    reason: proto::REFUSE_BUSY,
+                },
+            );
+            tx.close();
+        }
+        conn.close(0u32.into(), b"");
+        return;
+    }
     let (out, replaced) = {
         let mut ps = ctx.lobby.parties();
         let ids = rows.iter().flatten().map(|f| f.id.clone());
@@ -206,7 +236,8 @@ pub async fn session(
         }
     }
     ctx.lobby.send(out);
-    friends(&ctx, session, &who, false).await;
+    let mut told = Vec::new();
+    friends(&ctx, session, &who, false, &mut told).await;
     wardrobe(&ctx, session, &who).await;
 
     // Voice, straight from this reader to the party.
@@ -233,13 +264,23 @@ pub async fn session(
     let mut every = tokio::time::interval(FRIENDS_EVERY);
     every.tick().await;
     let mut drain_check = tokio::time::interval(Duration::from_secs(1));
+    let mut asked: Option<Instant> = None;
+    let mut ticketed = Instant::now();
     loop {
         tokio::select! {
             m = msgs.recv() => {
                 let Some(m) = m else { break };
                 match m {
                     Msg::Bye => break,
-                    Msg::PartyAct { act: pp::ACT_FRIENDS, .. } => friends(&ctx, session, &who, true).await,
+                    Msg::PartyAct { act: pp::ACT_FRIENDS, .. } => {
+                        // Elo Pros at most every few seconds, however often asked.
+                        let now = Instant::now();
+                        let fresh = asked.is_none_or(|t| now.duration_since(t) >= FRIENDS_ASK_EVERY);
+                        if fresh {
+                            asked = Some(now);
+                        }
+                        friends(&ctx, session, &who, fresh, &mut told).await;
+                    }
                     Msg::PartyAct { act, arg } => {
                         let out = ctx.lobby.parties().act(session, act, arg);
                         ctx.lobby.send(out);
@@ -263,16 +304,30 @@ pub async fn session(
                             continue;
                         };
                         who = Who::from(p);
-                        let out = ctx.lobby.parties().sign_in(session, who.clone());
+                        let (out, replaced) = ctx.lobby.parties().sign_in(session, who.clone(), Instant::now());
+                        for s in replaced {
+                            // Their other tab: told so and let go, as at a connect.
+                            if let Some((tx, _)) = ctx.lobby.outs().remove(&s) {
+                                crate::send_msg(&tx, &Msg::Refuse { reason: proto::REFUSE_BUSY });
+                                tx.close();
+                            }
+                        }
                         ctx.lobby.send(vec![(session, ticket(&who))]);
+                        ticketed = Instant::now();
                         ctx.lobby.send(out);
-                        friends(&ctx, session, &who, true).await;
+                        friends(&ctx, session, &who, true, &mut told).await;
                         wardrobe(&ctx, session, &who).await;
                     }
                     _ => {}
                 }
             }
-            _ = every.tick() => friends(&ctx, session, &who, false).await,
+            _ = every.tick() => {
+                friends(&ctx, session, &who, false, &mut told).await;
+                if who.signed() && ticketed.elapsed() >= TICKET_EVERY {
+                    ticketed = Instant::now();
+                    ctx.lobby.send(vec![(session, ticket(&who))]);
+                }
+            }
             _ = drain_check.tick() => {
                 // Going down: the page moves to the live slot, and takes
                 // the party's code there.
@@ -289,7 +344,13 @@ pub async fn session(
     voices.abort();
     writer.abort();
     ctx.lobby.outs().remove(&session);
-    let out = ctx.lobby.parties().disconnect(session, Instant::now());
+    // Gone within moments of saying hello: an attempt the page had given up
+    // on (it opened another), not a page reloading; its seat goes now.
+    let out = if opened.elapsed() < ABANDONED_WITHIN {
+        ctx.lobby.parties().abandoned(session)
+    } else {
+        ctx.lobby.parties().disconnect(session, Instant::now())
+    };
     ctx.lobby.send(out);
     conn.close(0u32.into(), b"");
 }

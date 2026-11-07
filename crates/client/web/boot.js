@@ -56,6 +56,19 @@ document.addEventListener('fullscreenchange', () => {
   if (document.fullscreenElement) kb.lock(['Escape']).catch(() => {});
   else kb.unlock();
 });
+/* F11 is the page's fullscreen, never the browser's (which the page can't
+   see, and which takes no Keyboard Lock): asked for here, inside the key's
+   own event, which is all Safari honours; the game's row follows the page
+   (display.rs, `PageFull`). Captured first, so it works on the title's
+   HTML as well as on the canvas. */
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'F11') return;
+  e.preventDefault();
+  if (e.repeat) return;
+  const el = document.documentElement;
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  else el.requestFullscreen?.().catch(() => {});
+}, true);
 const boot = document.getElementById('boot');
 const say = (line, bad) => { document.getElementById('say').textContent = line; boot.classList.toggle('failed', !!bad); };
 /* The splash's bar: `share` 0..1 of the download, or null for the
@@ -97,9 +110,20 @@ const origin = getJson('origin.json', "the page's origin.json")
   .then((o) => o.server ?? '')
   .catch((e) => { throw new Error(`The page can't find the game: ${e.message}`); });
 origin.catch(() => { /* said where it's awaited */ });
-// The splash goes once the game has drawn a few frames.
+// The splash stays over the game until it says the title is all there
+// (`loaded`: loading.rs, the title's level, models and shaders in), saying
+// what it is on and how far; then it goes. After SPLASH_MAX_MS of the game
+// drawing it goes anyway (a game that never says so is a bug, not a wall).
+const SPLASH_MAX_MS = 150000;
+let drawing = 0;
 const shown = () => {
-  if ((window.__oneshot?.frames ?? 0) > 3) { boot.classList.add('gone'); return; }
+  const o = window.__oneshot;
+  if ((o?.frames ?? 0) > 3) {
+    drawing ||= performance.now();
+    if (o.loaded !== false || performance.now() - drawing > SPLASH_MAX_MS) { boot.classList.add('gone'); return; }
+    if (o.stage) say(o.stage);
+    if (typeof o.progress === 'number') bar(o.progress);
+  }
   requestAnimationFrame(shown);
 };
 
@@ -123,6 +147,9 @@ const MODULES = {
 };
 const GPU_FAILED = 'oneshot.webgpu.failed';
 const SWITCHED = 'oneshot.webgpu.switched';
+// A sign-in nonce older than this is fetched again (the server takes one
+// for ten minutes).
+const NONCE_FRESH_MS = 4 * 60 * 1000;
 const built = fetch('build.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 // Started at load, beside build.json, rather than after it.
 const gpuProbe = (async () => {
@@ -457,9 +484,10 @@ function clipReset() {
   clipSay('');
 }
 /* While the match is still on only the player's own eye is offered
-   (clip.rs LIVE_STYLES): a camera behind them would show where the
-   enemies the fog sent went, not only the ones they saw. */
-const CLIP_LIVE = ['wide', 'pov', 'long'];
+   (clip.rs LIVE_STYLES, from the module: `clipButtons`): a camera behind
+   them would show where the enemies the fog sent went, not only the ones
+   they saw. None until the module says. */
+let CLIP_LIVE = [];
 function clipMake(style) {
   if (!clipUi.tape) return;
   if (clipUi.live && !CLIP_LIVE.includes(style)) style = 'wide';
@@ -581,6 +609,7 @@ try {
     glue = await load(gfx);
   }
   const { launch, pose } = glue;
+  CLIP_LIVE = glue.clip_live_styles();
   clipButtons(glue.clip_styles());
   if (params.has('pose')) {
     // No server: one fighter for a picture (ci/look.mjs). Gone, as
@@ -595,11 +624,14 @@ try {
   base = await origin;
   say('Finding the server');
   const info = await getJson(`${base}server.json`, 'The server');
-  // A server on its way down: the live one, if it is now another.
-  const follow = async () => {
+  // A server on its way down: the live one, if it is now another than the
+  // one in use (`cur`, `curHash`: a tab outlives deploys, the slots
+  // alternate), or its certificate changed.
+  const follow = async (cur = info.addr, curHash = info.hash ?? '') => {
     try {
       const now = await getJson(`${base}server.json`, 'The server');
-      return now.addr && now.addr !== info.addr ? [now.addr, now.hash ?? ''] : null;
+      const hash = now.hash ?? '';
+      return now.addr && (now.addr !== cur || hash !== curHash) ? [now.addr, hash] : null;
     } catch { return null; }
   };
   const signin = await setupSignIn(info);
@@ -649,6 +681,18 @@ async function setupSignIn(info) {
     }
   };
   await fresh();
+  // The server takes a nonce for ten minutes (auth.rs NONCE_TTL): one is
+  // kept fresher than that, so a click long after the page loaded still
+  // opens a popup whose pass checks out. A hidden tab's timers slow; it
+  // asks again as it comes back.
+  let nonceAt = performance.now();
+  const keep = () => {
+    if (performance.now() - nonceAt < NONCE_FRESH_MS) return;
+    nonceAt = performance.now();
+    fresh();
+  };
+  setInterval(keep, NONCE_FRESH_MS / 4);
+  addEventListener('visibilitychange', () => { if (!document.hidden) keep(); });
   const fn = async () => {
     try {
       if (nonceErr) throw nonceErr;
@@ -657,6 +701,7 @@ async function setupSignIn(info) {
       const wallet = /wallet: (0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/.exec(text)?.[1] ?? null;
       return { pass: res.pass, wallet };
     } finally {
+      nonceAt = performance.now();
       await fresh();
     }
   };
@@ -670,10 +715,20 @@ async function setupSignIn(info) {
  * `setTalk` (held, it talks; or open mic, past a level gate) and its volume
  * with `setVolume`. */
 function voiceBridge(glue) {
+  // The player pressed MIC; the page is putting the mic back as it was.
+  let toggled = false;
+  let restoring = false;
   const voice = new Voice((seq, end, bytes) => glue.voice_up(seq, end, bytes), () => {}, pageV);
   window.__oneshotVoice = {
     hear: (tag, seq, flags, bytes, key) => voice.hear(tag, seq, flags, bytes, key),
     toggle: async () => {
+      toggled = true;
+      // The mic on its way back as the page wakes: the UI showed it off,
+      // so this click means on. It stays on.
+      if (restoring) {
+        restoring = false;
+        return;
+      }
       try {
         if (voice.mic || voice.opening) voice.micOff();
         else await voice.micOn();
@@ -711,9 +766,14 @@ function voiceBridge(glue) {
     await voice.wake();
     if (restored) return;
     restored = true;
+    // A MIC click already made the choice.
+    if (toggled) return;
     try {
-      if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) await voice.micOn();
-    } catch { /* asked again on MIC */ }
+      if (localStorage.getItem('oneshot.mic') === 'on' && !voice.mic && voiceWorks()) {
+        restoring = true;
+        await voice.micOn();
+      }
+    } catch { /* asked again on MIC */ } finally { restoring = false; }
   };
   addEventListener('pointerdown', wake, { capture: true });
   addEventListener('keydown', wake, { capture: true });

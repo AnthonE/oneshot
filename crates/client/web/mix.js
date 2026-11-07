@@ -12,9 +12,12 @@
 
 // The mixer's rate (crates/mix's RATE): the context is made at it.
 const RATE = 48000;
-// Frames' commands kept while the worklet starts; past this the oldest go.
-// Clips are kept apart and never dropped: one lost is silent all session.
-const WAITING = 512;
+// Frames' commands kept while the worklet starts, all of them: a volume, a
+// loop held or stopped lasts (the desktop's inbox keeps those too:
+// crates/mix Shared::send), and the bytes can't be told apart here. A
+// worklet not up after this many frames (minutes) never will be: no sound,
+// said, rather than a queue that only grows. Clips are kept apart.
+const WAITING = 7200;
 // After a gesture, how long the context has to start before the bar says
 // the browser is holding it (a muted site, an autoplay block).
 const HELD_MS = 1500;
@@ -41,7 +44,7 @@ export function startMix(v, mv = v) {
     if (node) node.port.postMessage(m, transfer);
     else {
       waiting.push([m, transfer]);
-      if (waiting.length > WAITING) waiting.shift();
+      if (waiting.length > WAITING) fail('the mixer did not start');
     }
   };
   const bar = (text) => {

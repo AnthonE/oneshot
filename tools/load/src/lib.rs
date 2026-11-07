@@ -316,6 +316,8 @@ async fn player(i: usize, o: Arc<Opts>, start: Instant, window: (Instant, Instan
                     _ => {}
                 }
             }
+            // Headless: nothing to load.
+            c.session.loaded();
             if c.session.ready && !seated {
                 seated = true;
                 p.never = false;
@@ -537,6 +539,10 @@ impl Report {
             if w.cut_behind > 0 {
                 out.push(format!("{} sessions cut behind", w.cut_behind));
             }
+        } else {
+            // A run that couldn't read the server's own numbers never says
+            // it kept up.
+            out.push("the server's /health.json couldn't be read: its ticks unchecked".into());
         }
         out
     }

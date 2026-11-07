@@ -101,6 +101,12 @@ pub const POST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The longest a signed POST takes before it gives up: every try timing
 /// out, and the waits between them (1, 2, 4, 8 s).
 pub const RETRY_BUDGET: Duration = Duration::from_secs(TRIES as u64 * POST_TIMEOUT.as_secs() + (1 << (TRIES - 1)) - 1);
+/// A lookup (a ban, a floor, a skin list, friends, a rating) waits this
+/// long, and Elo Pros failing one (no answer, a 5xx) is taken as down for
+/// [`DOWN_FOR`]: lookups then answer "couldn't ask" at once, so a hello
+/// that asks several never sits at "Connecting..." for a minute.
+pub const GET_TIMEOUT: Duration = Duration::from_secs(3);
+pub const DOWN_FOR: Duration = Duration::from_secs(30);
 /// Where, under the replays, a report Elo Pros didn't take is kept until
 /// `oneshot-review resend` sends it again.
 pub const UNREPORTED: &str = "unreported";
@@ -430,6 +436,8 @@ pub struct Elo {
     /// them saves them ([`Elo::save_pending`]).
     pending: Mutex<BTreeMap<u64, Unsent>>,
     next_pending: AtomicU64,
+    /// Until when lookups take Elo Pros as down ([`DOWN_FOR`]).
+    down_until: Mutex<Option<Instant>>,
 }
 
 impl Elo {
@@ -449,7 +457,39 @@ impl Elo {
             unreported: None,
             pending: Mutex::new(BTreeMap::new()),
             next_pending: AtomicU64::new(0),
+            down_until: Mutex::new(None),
         }
+    }
+
+    /// A lookup's GET: None at once while Elo Pros is taken as down, or if
+    /// it fails (which takes it as down for [`DOWN_FOR`], said once).
+    async fn get(&self, url: &str) -> Option<reqwest::Response> {
+        let down = self
+            .down_until
+            .lock()
+            .ok()
+            .is_some_and(|g| g.is_some_and(|t| Instant::now() < t));
+        if down {
+            return None;
+        }
+        let res = self.http.get(url).timeout(GET_TIMEOUT).send().await;
+        let failed = match &res {
+            Ok(r) => r.status().is_server_error(),
+            Err(_) => true,
+        };
+        if failed {
+            if let Ok(mut g) = self.down_until.lock() {
+                if g.is_none_or(|t| Instant::now() >= t) {
+                    eprintln!(
+                        "oneshot: Elo Pros didn't answer a lookup; taking it as down for {} s",
+                        DOWN_FOR.as_secs()
+                    );
+                }
+                *g = Some(Instant::now() + DOWN_FOR);
+            }
+            return None;
+        }
+        res.ok()
     }
 
     /// The same, saving a report or stats it couldn't send into `dir`
@@ -515,7 +555,7 @@ impl Elo {
         }
         let url = format!("{}/api/ratings/{}/of/{}", self.origin, self.slug, wallet);
         let got = async {
-            let res = self.http.get(&url).send().await.ok()?;
+            let res = self.get(&url).await?;
             if !res.status().is_success() {
                 return None;
             }
@@ -547,7 +587,7 @@ impl Elo {
             }
         }
         let url = format!("{}/api/friends/{}", self.origin, key);
-        let res = self.http.get(&url).send().await.ok()?;
+        let res = self.get(&url).await?;
         if !res.status().is_success() {
             return None;
         }
@@ -583,7 +623,7 @@ impl Elo {
             }
         }
         let one = |url: String| async move {
-            let res = self.http.get(&url).send().await.ok()?;
+            let res = self.get(&url).await?;
             if !res.status().is_success() {
                 return None;
             }
@@ -623,7 +663,7 @@ impl Elo {
         }
         let url = format!("{}/api/bans/{}/of/{}", self.origin, self.slug, wallet);
         let got = async {
-            let res = self.http.get(&url).send().await.ok()?;
+            let res = self.get(&url).await?;
             if !res.status().is_success() {
                 return None;
             }
@@ -721,16 +761,30 @@ impl Elo {
         parse_queue_match(&text)
     }
 
-    /// A wallet's rating on a ladder; 1500 (a new player's) if it has none
-    /// or Elo Pros can't be reached.
+    /// A wallet's rating on a ladder; 1500 (a new player's) if it has none,
+    /// and also if Elo Pros can't be asked (said, so a queue pairing a
+    /// stranger by it is no mystery).
     pub async fn rating(&self, wallet: &str, ladder: &str) -> f64 {
         let url = format!("{}/api/ratings/{}/of/{}", self.origin, self.slug, wallet);
-        let got = async {
-            let text = self.http.get(&url).send().await.ok()?.text().await.ok()?;
-            let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-            v["ladders"][ladder]["rating"].as_f64()
+        let res = self.get(&url).await;
+        if res
+            .as_ref()
+            .is_some_and(|r| r.status() == reqwest::StatusCode::NOT_FOUND)
+        {
+            return 1500.0;
+        }
+        let Some(res) = res.filter(|r| r.status().is_success()) else {
+            eprintln!("oneshot: {wallet}'s {ladder} rating couldn't be read; queued as 1500");
+            return 1500.0;
         };
-        got.await.unwrap_or(1500.0)
+        let v: Option<serde_json::Value> = async { serde_json::from_str(&res.text().await.ok()?).ok() }.await;
+        match v {
+            Some(v) => v["ladders"][ladder]["rating"].as_f64().unwrap_or(1500.0),
+            None => {
+                eprintln!("oneshot: {wallet}'s {ladder} rating came back unreadable; queued as 1500");
+                1500.0
+            }
+        }
     }
 
     /// Posts a result, retrying what may be passing (5xx, 429).

@@ -23,7 +23,10 @@ pub const TALKING_S: f32 = 0.35;
 /// The wait before opening the lobby again, doubling to the last.
 const RETRY_S: [f32; 5] = [1.0, 2.0, 4.0, 8.0, 15.0];
 /// An attempt that hasn't answered in this long is let go and made again.
-const KNOCK_GIVE_UP_S: f32 = 20.0;
+/// Long: a page busy loading its level answers late, and an attempt let go
+/// that then lands still holds a seat in the party until its grace is up
+/// (the transport's own handshake gives up on a dead server well before).
+const KNOCK_GIVE_UP_S: f32 = 60.0;
 /// A name being typed says hello again only once it has stood this long
 /// (the title's field changes it a key at a time).
 const NAME_SETTLE_S: f32 = 1.5;
@@ -137,10 +140,12 @@ impl PartyView {
     }
 }
 
-/// A member's key for mutes: their Elo Pros id, or a guest's name.
-pub fn voice_key(m: &Member) -> String {
+/// A member's key for mutes: their Elo Pros id, or for a guest (the wire
+/// names no id of theirs) this party's code, their place and their name:
+/// never every guest of that name, in every party.
+pub fn voice_key(code: u32, m: &Member) -> String {
     if m.player.is_empty() {
-        format!("guest:{}", m.name.as_str())
+        format!("guest:{code:x}:{}:{}", m.tag, m.name.as_str())
     } else {
         m.player.as_str().to_string()
     }
@@ -158,12 +163,13 @@ impl VoiceKeys {
     fn of(&mut self, view: &PartyView, tag: u8) -> &str {
         if self.gen != Some(view.gen) {
             self.gen = Some(view.gen);
+            let code = view.party.as_ref().map_or(0, |p| p.code);
             for (t, k) in self.keys.iter_mut().enumerate() {
                 *k = view
                     .members()
                     .iter()
                     .find(|m| m.tag as usize == t)
-                    .map_or_else(|| format!("tag:{t}"), voice_key);
+                    .map_or_else(|| format!("tag:{t}"), |m| voice_key(code, m));
             }
         }
         &self.keys[(tag & 15) as usize]
@@ -196,8 +202,12 @@ struct LobbyRes {
     /// The name last seen, and since when it has been that.
     seen_name: String,
     seen_at: f32,
-    /// The pass already handed over (`Msg::SignIn`).
+    /// The sign-in's pass already handed over (on a hello or as
+    /// `Msg::SignIn`): a pass is good once.
     sent_pass: String,
+    /// The sign-in's pass the knock out carries, if it carries one (not the
+    /// ticket): handed over once the line opens.
+    hello_pass: String,
     /// The last microphone state read, and mode.
     mic: Mic,
 }
@@ -212,14 +222,9 @@ pub fn install(app: &mut App, want: u32) {
         .add_systems(Update, (voice_prefs, pump, lights, talk_hud).chain());
 }
 
-/// The session's ticket on the hello if we have one, else a fresh pass,
-/// else nothing (a guest).
+/// The lobby's hello, with [`match_pass`]'s pass.
 fn hello(view: &PartyView, door: &Door, name: &str, want: u32) -> Msg {
-    let pass = if !view.ticket.is_empty() {
-        view.ticket.clone()
-    } else {
-        door.signin().pass()
-    };
+    let pass = match_pass(view, door);
     client_net::session::Session::hello(
         name,
         Pass::new(&pass).unwrap_or(Pass::NONE),
@@ -229,13 +234,108 @@ fn hello(view: &PartyView, door: &Door, name: &str, want: u32) -> Msg {
     )
 }
 
-/// The pass a match's hello carries: the ticket (who the party knows us
-/// as), else the sign-in's pass.
+/// A ticket this close to running out is not sent (the server's clock and
+/// ours, and a hello on its way), seconds.
+const TICKET_MARGIN_S: u64 = 600;
+
+/// What a ticket of the server's says of us (`server/src/auth.rs`
+/// `ticket_at`: its prefix, base64url of "id, account, wallet, expiry" a
+/// line each, then its mac): signed in or a guest, the wallet, and when it
+/// runs out. The server checks it; this only says whether it is still ours
+/// to send.
+struct TicketSays {
+    signed: bool,
+    wallet: Option<String>,
+    until: u64,
+}
+
+/// What every ticket starts with (the wire's, as the server makes them).
+use proto::TICKET_PREFIX;
+
+fn ticket_says(t: &str) -> Option<TicketSays> {
+    let body = t.strip_prefix(TICKET_PREFIX)?.split_once('.')?.0;
+    let text = String::from_utf8(b64url(body)?).ok()?;
+    let mut f = text.split('\n');
+    let (_id, account, wallet, until) = (f.next()?, f.next()?, f.next()?, f.next()?);
+    Some(TicketSays {
+        signed: account != "none",
+        wallet: (wallet != "none").then(|| wallet.to_string()),
+        until: until.parse().ok()?,
+    })
+}
+
+/// Unpadded base64url, as the server writes a ticket's body.
+fn b64url(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'-' => 62,
+            b'_' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Seconds since 1970 on this machine's clock.
+fn now_unix() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        (js_sys::Date::now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+}
+
+/// The pass a hello carries, the lobby's or a match's: the ticket while it
+/// still names who we are (not run out, and signed in as the sign-in is),
+/// else the sign-in's own pass, else the ticket (a guest stays the same
+/// guest), else nothing. Never a guest's ticket while signed in.
 pub fn match_pass(view: &PartyView, door: &Door) -> String {
-    if view.ticket.is_empty() {
-        door.signin().pass()
-    } else {
+    let signin = door.signin();
+    let fresh = signin.pass();
+    let (live, ours) = ticket_is(view, &signin);
+    if live && ours {
         view.ticket.clone()
+    } else if !fresh.is_empty() {
+        fresh
+    } else if live {
+        view.ticket.clone()
+    } else {
+        String::new()
+    }
+}
+
+/// Whether the ticket is still good (not about to run out), and whether it
+/// is the sign-in's player (or there is no sign-in to be).
+fn ticket_is(view: &PartyView, signin: &crate::door::SignIn) -> (bool, bool) {
+    let fresh = signin.pass();
+    match ticket_says(&view.ticket) {
+        Some(t) => (
+            t.until > now_unix() + TICKET_MARGIN_S,
+            fresh.is_empty()
+                || (t.signed
+                    && match (t.wallet.as_deref(), signin.wallet()) {
+                        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                        (a, b) => a.is_none() && b.is_none(),
+                    }),
+        ),
+        // Not one this build reads: the server still may.
+        None => (!view.ticket.is_empty(), fresh.is_empty()),
     }
 }
 
@@ -253,10 +353,35 @@ fn sent_name(player: &Player) -> &str {
     }
 }
 
+/// The lobby said no: another tab took the line (this one waits to be
+/// looked at again), or the sign-in's pass didn't check out (signed out:
+/// the title says so, not "signed in" over a guest).
+fn refused(reason: u8, retry_at: &mut f32, view: &mut PartyView, door: &mut Door) {
+    if reason == proto::REFUSE_BUSY {
+        *retry_at = f32::INFINITY;
+    }
+    if reason == proto::REFUSE_PASS {
+        door.signed_out("Your sign-in ran out: sign in again".into());
+    }
+    view.notice = Some(client_net::session::refuse_why(reason).to_string());
+    view.touch();
+}
+
+/// Who the server says we are now. A guest's while the sign-in's pass was
+/// handed over: that pass didn't check out (older than its ten minutes).
+fn got_ticket(ticket: &str, sent_pass: &str, view: &mut PartyView, door: &mut Door) {
+    let fresh = door.signin().pass();
+    if !fresh.is_empty() && fresh == sent_pass && ticket_says(ticket).is_some_and(|t| !t.signed) {
+        door.signed_out("Your sign-in ran out: sign in again".into());
+    }
+    view.ticket = ticket.to_string();
+    keep_ticket(&view.ticket);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn pump(
     mut lobby: NonSendMut<LobbyRes>,
-    door: NonSend<Door>,
+    mut door: NonSendMut<Door>,
     player: Res<Player>,
     mut view: ResMut<PartyView>,
     mut asks: ResMut<PartyAsks>,
@@ -264,6 +389,7 @@ fn pump(
     settle: Res<crate::loading::Settle>,
     time: Res<Time<Real>>,
     (mut polled, mut mic_frames, mut keys): (Local<f32>, Local<Vec<proto::voice::VoiceFrame>>, Local<VoiceKeys>),
+    mut focus: MessageReader<bevy::window::WindowFocused>,
 ) {
     let now = time.elapsed_secs();
     let name = sent_name(&player);
@@ -279,11 +405,26 @@ fn pump(
             lobby.retry_at = now;
         }
     }
-    // Open it, or again after it closed, waiting longer each time.
+    // Open it, or again after it closed, waiting longer each time. Its
+    // last words first: a refusal says why it closed (another tab took the
+    // line, a sign-in that didn't check out).
     if lobby.link.as_ref().is_some_and(|l| l.closed()) {
-        lobby.link = None;
+        if let Some(mut l) = lobby.link.take() {
+            for m in l.take() {
+                match m {
+                    Msg::Refuse { reason } => refused(reason, &mut lobby.retry_at, &mut view, &mut door),
+                    Msg::Ticket { ticket } => got_ticket(ticket.as_str(), &lobby.sent_pass, &mut view, &mut door),
+                    _ => {}
+                }
+            }
+        }
         view.connected = false;
         view.touch();
+    }
+    // Back on this tab after another took the line: it asks again.
+    if focus.read().any(|f| f.focused) && !lobby.retry_at.is_finite() {
+        lobby.retry_at = now;
+        lobby.tries = 0;
     }
     if let Some(k) = lobby.knock.as_mut() {
         if let Some(got) = k.poll() {
@@ -294,7 +435,11 @@ fn pump(
                     lobby.link = Some(l);
                     lobby.tries = 0;
                     lobby.name = name.to_string();
-                    lobby.sent_pass = door.signin().pass();
+                    // What the hello carried is handed over; a ticket says
+                    // nothing of a sign-in since (that goes as SignIn).
+                    if !lobby.hello_pass.is_empty() {
+                        lobby.sent_pass = std::mem::take(&mut lobby.hello_pass);
+                    }
                     view.connected = true;
                     view.touch();
                 }
@@ -308,6 +453,12 @@ fn pump(
     }
     if lobby.link.is_none() && lobby.knock.is_none() && now >= lobby.retry_at {
         let want = view.party.as_ref().map_or(lobby.want, |p| p.code);
+        let fresh = door.signin().pass();
+        lobby.hello_pass = if !fresh.is_empty() && match_pass(&view, &door) == fresh {
+            fresh
+        } else {
+            String::new()
+        };
         lobby.knock = Some(door.lobby(hello(&view, &door, name, want)));
         lobby.knocked_at = now;
         lobby.retry_at = now + RETRY_S[lobby.tries.min(RETRY_S.len() - 1)];
@@ -345,10 +496,15 @@ fn pump(
     }
     // Signed in since: the session is that player now.
     if poll {
-        let pass = door.signin().pass();
+        let signin = door.signin();
+        let pass = signin.pass();
         if !pass.is_empty() && pass != lobby.sent_pass {
-            if let Some(p) = Pass::new(&pass) {
-                link.send(Msg::SignIn { pass: p });
+            // The ticket is already that player: nothing to sign in.
+            let (live, ours) = ticket_is(&view, &signin);
+            if !(live && ours) {
+                if let Some(p) = Pass::new(&pass) {
+                    link.send(Msg::SignIn { pass: p });
+                }
             }
             lobby.sent_pass = pass;
         }
@@ -365,10 +521,7 @@ fn pump(
     }
     for m in link.take() {
         match m {
-            Msg::Ticket { ticket } => {
-                view.ticket = ticket.as_str().to_string();
-                keep_ticket(&view.ticket);
-            }
+            Msg::Ticket { ticket } => got_ticket(ticket.as_str(), &lobby.sent_pass, &mut view, &mut door),
             Msg::Party(p) => {
                 if view.party.as_ref().is_some_and(|o| o.code != p.code) {
                     view.notice = None;
@@ -440,14 +593,7 @@ fn pump(
                     view.touch();
                 }
             }
-            Msg::Refuse { reason } => {
-                if reason == proto::REFUSE_BUSY {
-                    // Another tab took over: this one stops asking.
-                    lobby.retry_at = f32::INFINITY;
-                }
-                view.notice = Some(client_net::session::refuse_why(reason).to_string());
-                view.touch();
-            }
+            Msg::Refuse { reason } => refused(reason, &mut lobby.retry_at, &mut view, &mut door),
             _ => {}
         }
     }
@@ -845,4 +991,21 @@ pub use page::*;
 /// The ticket this tab kept, for the first hello.
 pub fn seed(view: &mut PartyView) {
     view.ticket = kept_ticket();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ticket_says;
+
+    #[test]
+    fn a_ticket_says_who_and_till_when() {
+        // As server/src/auth.rs writes them: base64url, unpadded.
+        let t = ticket_says("os1.MHhhYmMKYWNjdF8xCjB4YWJjCjE5OTk5OTk5OTk.mac").unwrap();
+        assert!(t.signed);
+        assert_eq!(t.wallet.as_deref(), Some("0xabc"));
+        assert_eq!(t.until, 1_999_999_999);
+        let g = ticket_says("os1.Z3Vlc3RfMDBmZgpub25lCm5vbmUKMTI.mac").unwrap();
+        assert!(!g.signed && g.wallet.is_none() && g.until == 12);
+        assert!(ticket_says("not a ticket").is_none());
+    }
 }

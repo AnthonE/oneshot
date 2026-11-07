@@ -7,6 +7,8 @@
 //! 45). `tests/range.rs` measures every gun in a match and pins it; its
 //! ignored `the_range_table` prints the lot.
 
+use crate::geom::V3;
+
 /// No gun in this hand.
 pub const NONE: u8 = 0;
 pub const AR: u8 = 1;
@@ -170,9 +172,10 @@ pub struct Arm {
     /// weapons high.
     pub rank: u8,
     /// Bullet magnetism (a hitscan gun's): a round that misses everyone
-    /// but passes within this angle (radians) of an enemy's chest, as well
-    /// as its body's width, within `aim_range`, is bent onto the body
-    /// (`World::magnet`). Never onto the head.
+    /// but passes through an enemy's body widened by this angle (radians)
+    /// at its distance ([`Arm::magnet_pad`]), within `aim_range`, is bent
+    /// onto the body (`World::magnet`). Never onto the head. Nothing while
+    /// [`crate::consts::MAGNETISM`] is off.
     pub magnet: f32,
     /// The red reticle's reach (the client's, over an enemy), and
     /// magnetism's.
@@ -188,6 +191,24 @@ pub struct Arm {
 }
 
 impl Arm {
+    /// How much magnetism widens a body `dist` away: its angle at that
+    /// distance, nothing with [`crate::consts::MAGNETISM`] off.
+    pub fn magnet_pad(&self, dist: f32) -> f32 {
+        if crate::consts::MAGNETISM {
+            dist * self.magnet
+        } else {
+            0.0
+        }
+    }
+
+    /// Where a ray from `eye` along `dir` meets a body standing on `base`,
+    /// `top` tall, widened by [`Arm::magnet_pad`], within `reach`: the zone
+    /// a near miss is bent from (`World::magnet`) and the red reticle's.
+    pub fn magnet_zone(&self, eye: V3, dir: V3, base: V3, top: f32, reach: f32) -> Option<f32> {
+        let pad = self.magnet_pad((base - eye).len());
+        crate::geom::ray_cylinder(eye, dir, base, crate::consts::HIT_R + pad, top, reach)
+    }
+
     /// The magnification at scope level `level` (0 unscoped, 1, 2), 1 for
     /// none.
     pub fn zoom_at(&self, level: u8) -> u8 {

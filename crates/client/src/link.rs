@@ -118,11 +118,13 @@ impl Link for Web {
             return Some(w.clone());
         }
         let (code, reason) = self.client.ended()?;
-        let said = code != 0 || !(reason.is_empty() || reason == "bye");
+        let why = client_net::session::close_why(code, &reason);
+        // Said nothing: `close_why`'s own words for a close with none.
+        let said = why != client_net::session::close_why(0, "");
         let why = if !said && page_says("__oneshotAsleep") {
             ASLEEP.to_string()
         } else {
-            client_net::session::close_why(code, &reason)
+            why
         };
         *self.why.borrow_mut() = Some(why.clone());
         Some(why)

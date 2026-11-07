@@ -121,12 +121,18 @@ pub struct NativeClient {
     _endpoint: ClientEndpoint,
 }
 
-/// The next frame off the stream: None at its end, `Some(None)` for one
+/// The next frame off the stream: None at its end, or at a frame no
+/// stream may carry (none long, or past `proto::MAX_STREAM_MSG`: the end,
+/// as the browser's reader and the server's take it); `Some(None)` for one
 /// that didn't decode (skipped, as a browser's reader skips it).
 async fn read_frame(r: &mut RecvStream) -> Option<Option<Msg>> {
     let mut len = [0u8; LEN_PREFIX_BYTES];
     r.read_exact(&mut len).await.ok()?;
-    let mut body = vec![0u8; u16::from_le_bytes(len) as usize];
+    let n = u16::from_le_bytes(len) as usize;
+    if n == 0 || n > proto::MAX_STREAM_MSG {
+        return None;
+    }
+    let mut body = vec![0u8; n];
     r.read_exact(&mut body).await.ok()?;
     Some(decode_msg(&body).ok())
 }

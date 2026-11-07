@@ -118,9 +118,10 @@ impl Default for Settings {
             // Uncapped (Gates, operator: "client can go faster than 60 we
             // cant stop that"): the cap is a tool, not a policy.
             max_fps: 0,
-            // Windowed, as the desktop always opened: a default that moved
-            // would be a change nobody chose. F11 or the row.
-            fullscreen: false,
+            // The desktop opens fullscreen (borderless), as a game does
+            // (operator); a page can't open in it (`display.rs`). F11, the
+            // row, or `--windowed` for one run.
+            fullscreen: !cfg!(target_arch = "wasm32"),
             held: None,
         }
     }
@@ -523,9 +524,11 @@ impl Settings {
     /// From a file's pairs over the defaults, and the pairs it didn't know.
     /// A known key with a value that doesn't read keeps its default; a file
     /// of `version` 1 named the sensitivity on the old base and the field
-    /// of view by its height.
+    /// of view by its height; one before 3 wrote `fullscreen = false`
+    /// unasked, so it opens on the default (fullscreen).
     fn from_pairs(pairs: &[(String, String)], version: u32) -> (Self, Vec<(String, String)>) {
         let v1 = version < 2;
+        let v2 = version < 3;
         let mut s = Self::default();
         let mut f = GfxFile::default();
         let mut other = Vec::new();
@@ -570,6 +573,7 @@ impl Settings {
                         None => s.max_fps,
                     }
                 }
+                "fullscreen" if v2 => {}
                 "fullscreen" => s.fullscreen = flag.unwrap_or(s.fullscreen) && !cfg!(target_arch = "wasm32"),
                 _ => other.push((k.clone(), v.clone())),
             }
@@ -837,7 +841,34 @@ mod tests {
         let (s, ..) = read(Some("version = 2\nsensitivity = 0.5\nfov = 75\n"));
         assert_eq!((s.sensitivity, s.fov), (0.5, 75.0));
         let t = text(&s, &Binds::default(), &Player::default(), 1, &[], &[]);
-        assert!(t.contains("version = 2"), "written, it says what it means");
+        assert!(t.contains("version = 3"), "written, it says what it means");
+    }
+
+    /// The desktop opens fullscreen: a file from before it was a choice
+    /// (every one said `false`) opens on the default; one since keeps what
+    /// was chosen. A page is never kept fullscreen.
+    #[test]
+    fn fullscreen_is_the_desktops_default() {
+        let desktop = !cfg!(target_arch = "wasm32");
+        assert_eq!(Settings::default().fullscreen, desktop);
+        let (s, ..) = read(Some(
+            "version = 2
+fullscreen = false
+",
+        ));
+        assert_eq!(s.fullscreen, desktop, "written unasked");
+        let (s, ..) = read(Some(
+            "version = 3
+fullscreen = false
+",
+        ));
+        assert!(!s.fullscreen, "chosen");
+        let (s, ..) = read(Some(
+            "version = 3
+fullscreen = true
+",
+        ));
+        assert_eq!(s.fullscreen, desktop);
     }
 
     #[test]

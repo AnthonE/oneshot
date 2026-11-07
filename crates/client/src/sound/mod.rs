@@ -145,6 +145,13 @@ const FLIGHT: Carry = Carry {
     reach: 120.0,
 };
 const SMALL: Carry = Carry { near: 5.0, reach: 35.0 };
+/// The shotgun's pump comes this long after its shot (the viewmodel racks
+/// it with it: `look::viewmodel::PUMP_AT_S`).
+pub const PUMP_AT_S: f32 = 0.3;
+/// The hits of one frame on one body are one sound (a shotgun's pellets
+/// are ten), each hit past the first this much louder, to at most this.
+const HITS_LOUDER: f32 = 0.12;
+const HITS_LOUDEST: f32 = 1.5;
 const PASS: Carry = Carry { near: 1.5, reach: 6.0 };
 
 /// The held slots.
@@ -254,7 +261,7 @@ pub struct Ear {
     snap_tick: u32,
     held_proj: [bool; PROJ_LOOPS],
     // The match.
-    last_phase: u8,
+    last_phase: Option<sim::world::Phase>,
     last_count: u32,
     last_clock: u32,
     /// How our score stood against the best of the rest.
@@ -502,6 +509,17 @@ impl Ear {
         self.head(name, gain, self.world);
     }
 
+    /// [`Ear::mine`], `secs` from now.
+    fn mine_later(&mut self, name: &str, gain: f32, secs: f32) {
+        let speed = self.pitch();
+        self.cue(name, None, gain, speed);
+        let Some(clip) = self.clip(name) else { return };
+        let mut at = Place::centre(gain * self.world);
+        at.rate = speed;
+        let delay = (secs.max(0.0) * mix::RATE as f32) as u32;
+        self.cmds.push(Cmd::Play { clip, at, delay });
+    }
+
     fn head(&mut self, name: &str, gain: f32, level: f32) {
         let speed = self.pitch();
         self.cue(name, None, gain, speed);
@@ -622,6 +640,8 @@ pub fn names() -> Vec<String> {
         "headshot_0",
         "headshot_1",
         "hit_0",
+        "kill_0",
+        "pump_shotgun_0",
         "gren_switch_0",
         "scope_in_0",
         "scope_out_0",
@@ -775,6 +795,7 @@ pub fn decide(
     look: Res<crate::Look>,
     mut trucks: ResMut<crate::look::truck::HullSound>,
     gen: Option<Res<crate::front::LinkGen>>,
+    cover: Res<crate::loading::Cover>,
 ) {
     let ear = &mut *ear;
     ear.cues.clear();
@@ -891,7 +912,11 @@ pub fn decide(
 
     hull_sounds(ear, &ears, &mut trucks);
     rounds(ear, &ears, s.core.latest());
-    the_match(ear, &s.core, s.core.map.terrain.is_some());
+    // Under the loading overlay the countdown isn't heard yet (nor the
+    // room): the announcer calls the match as it lifts.
+    if !cover.up {
+        the_match(ear, &s.core, s.core.map.terrain.is_some());
+    }
     surf(ear, &ears, dt);
     cues.0.append(&mut ear.cues);
     flush(ear);
@@ -899,6 +924,11 @@ pub fn decide(
 
 /// Pieces of a wreck heard coming down after it.
 const DEBRIS: u8 = 5;
+/// Shards going off together: the blast's take this loud, this much
+/// higher, and the shards' pings after it.
+const SUPER_GAIN: f32 = 1.0;
+const SUPER_RATE: f32 = 1.3;
+const SUPER_PINGS: u8 = 4;
 /// How a truck's tyres and its fire carry.
 const SKID: Carry = Carry { near: 6.0, reach: 70.0 };
 const FIRE: Carry = Carry { near: 4.0, reach: 45.0 };
@@ -1111,6 +1141,12 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
     // Who swung a fist this frame: a hit of theirs is a blow landing.
     let mut swung = [false; MAX_FIGHTERS];
     let mut struck_left = STRUCK_MAX;
+    // This frame's hits, by body: ours on each (its worst: 1 shield, 2
+    // health, 3 the head), on us (1 shield, 2 health), and others' on a
+    // shield, each with how many and where.
+    let mut ours_on = [(0u8, 0u8); MAX_FIGHTERS];
+    let mut on_us = (0u8, 0u8);
+    let mut shield_on = [(0u8, Vec3::ZERO); MAX_FIGHTERS];
     for e in list {
         let at = Vec3::new(e.pos.x, e.pos.y, e.pos.z);
         match e.kind {
@@ -1124,16 +1160,24 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 } else {
                     (g.sound, g.takes, g.far)
                 };
+                let pump = e.c == arms::SHOTGUN as u16;
                 if ours {
                     let n = ear.take(sound, takes);
                     ear.mine(&n, 0.75);
+                    if pump {
+                        ear.mine_later("pump_shotgun_0", 0.6, PUMP_AT_S);
+                    }
                 } else {
-                    let n = if at.distance(ears.at) > FAR_M || ears.walled(at) {
+                    let far_off = at.distance(ears.at) > FAR_M || ears.walled(at);
+                    let n = if far_off {
                         ClipName::of(far, None).with(b"_0")
                     } else {
                         ear.take(sound, takes)
                     };
                     ear.at(ears, &n, at, 1.0, GUN);
+                    if pump && !far_off {
+                        ear.at_rate(ears, "pump_shotgun_0", at, 0.5, BODY, PUMP_AT_S, 1.0);
+                    }
                 }
                 if e.part == HEARD {
                     continue;
@@ -1172,28 +1216,28 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                     ear.mine(&n, 0.7);
                 }
                 let shield = e.part == 0 || e.part == 3;
-                if e.a == me && e.b != me {
-                    let n = match e.part {
-                        2 => ear.take("headshot", 2),
-                        _ if shield => ear.take("shield_hit", 3),
-                        _ => "hit_0".into(),
+                let b = e.b as usize;
+                if e.a == me && e.b != me && b < MAX_FIGHTERS {
+                    let worst = match e.part {
+                        2 => 3,
+                        _ if shield => 1,
+                        _ => 2,
                     };
-                    ear.mine(&n, if shield { 0.35 } else { 0.5 });
+                    let o = &mut ours_on[b];
+                    *o = (o.0.max(worst), o.1.saturating_add(1));
                 }
                 if e.b == me {
-                    if shield {
-                        let n = ear.take("shield_hit", 3);
-                        ear.mine(&n, 0.55);
-                    } else {
-                        let n = ear.take("flesh", 3);
-                        ear.mine(&n, 0.6);
-                    }
-                } else if e.a != me && shield {
-                    let n = ear.take("shield_hit", 3);
-                    ear.at(ears, &n, at, 0.5, SHIELD);
+                    on_us = (on_us.0.max(if shield { 1 } else { 2 }), on_us.1.saturating_add(1));
+                } else if e.a != me && shield && b < MAX_FIGHTERS {
+                    let o = &mut shield_on[b];
+                    *o = (o.0.saturating_add(1), at);
                 }
             }
             k if k == Kind::Kill as u8 => {
+                // Ours: told apart from a hit.
+                if e.a == me && e.b != me {
+                    ear.mine("kill_0", 0.7);
+                }
                 // Run down, if we may know where.
                 if e.c == sim::events::Cause::Splatter as u16 && at != Vec3::ZERO {
                     let n = ear.take("splat", 2);
@@ -1206,6 +1250,19 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             k if k == Kind::Flag as u8 => ear.say(flag_line(e.part)),
+            k if k == Kind::Blast as u8 && e.c == sim::arms::SHARDS as u16 => {
+                // Shards going off together: a sharp, high crack with a
+                // shield's burst in it, and glass pinging away. Not fire.
+                let n = ear.take("blast", 3);
+                ear.at_rate(ears, &n, at, SUPER_GAIN, BLAST, 0.0, SUPER_RATE);
+                ear.at(ears, "shield_pop_0", at, 1.0, SMALL);
+                for k in 0..SUPER_PINGS {
+                    let n = ear.take("shot_shards", 3);
+                    let rate = 1.2 + ear.roll(50) as f32 * 0.01;
+                    let secs = 0.04 + k as f32 * 0.07 + ear.roll(4) as f32 * 0.01;
+                    ear.at_rate(ears, &n, at, 0.5, SMALL, secs, rate);
+                }
+            }
             k if k == Kind::Blast as u8 => {
                 let n = ear.take("blast", 3);
                 ear.at(ears, &n, at, 1.3, BLAST);
@@ -1279,6 +1336,33 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 }
             }
             _ => {}
+        }
+    }
+    let louder = |n: u8| (1.0 + HITS_LOUDER * f32::from(n.saturating_sub(1))).min(HITS_LOUDEST);
+    for &(worst, n) in &ours_on {
+        let (clip, gain) = match worst {
+            0 => continue,
+            1 => (ear.take("shield_hit", 3), 0.35),
+            2 => ("hit_0".into(), 0.5),
+            _ => (ear.take("headshot", 2), 0.5),
+        };
+        ear.mine(&clip, gain * louder(n));
+    }
+    match on_us {
+        (0, _) => {}
+        (1, n) => {
+            let clip = ear.take("shield_hit", 3);
+            ear.mine(&clip, 0.55 * louder(n));
+        }
+        (_, n) => {
+            let clip = ear.take("flesh", 3);
+            ear.mine(&clip, 0.6 * louder(n));
+        }
+    }
+    for &(n, at) in &shield_on {
+        if n > 0 {
+            let clip = ear.take("shield_hit", 3);
+            ear.at(ears, &clip, at, 0.5 * louder(n), SHIELD);
         }
     }
 }
@@ -1614,8 +1698,10 @@ fn rounds(ear: &mut Ear, ears: &Ears, snap: &proto::Snapshot) {
 /// what the announcer says of the match: its mode as the countdown starts,
 /// who leads, the clock's last calls, the end.
 fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
+    use sim::world::Phase;
     let snap = net.latest();
-    if snap.phase == 0 {
+    let phase = net.phase();
+    if phase == Phase::Countdown {
         let secs = snap.clock.div_ceil(TICK_HZ);
         // A countdown begun (the title's backdrop has no clock): the mode.
         if secs > ear.last_count {
@@ -1626,10 +1712,10 @@ fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
             ear.mine("tick_0", 0.5);
         }
         ear.last_count = secs;
-    } else if snap.phase == 1 && ear.last_phase == 0 {
+    } else if phase == Phase::Playing && ear.last_phase == Some(Phase::Countdown) {
         ear.mine("go_0", 0.55);
         ear.last_count = 0;
-    } else if snap.phase == 2 && ear.last_phase == 1 {
+    } else if phase == Phase::Over && ear.last_phase == Some(Phase::Playing) {
         let won = if net.rules.teams {
             snap.winner & 1 == net.team & 1
         } else {
@@ -1642,8 +1728,8 @@ fn the_match(ear: &mut Ear, net: &NetCore, big: bool) {
             _ => "game_over_you_lose",
         });
     }
-    ear.last_phase = snap.phase;
-    if snap.phase == 1 {
+    ear.last_phase = Some(phase);
+    if phase == Phase::Playing {
         // The lead: our score (our side's) against the best of the rest.
         let me = if net.rules.teams {
             net.team as usize & 1
@@ -1882,6 +1968,7 @@ pub mod on {
         mut waiting: ResMut<Announcer>,
         mut ear: ResMut<Ear>,
         time: Res<Time>,
+        cover: Res<crate::loading::Cover>,
     ) {
         use proto::medal as md;
         let Announcer(voice, until) = &mut *waiting;
@@ -1900,8 +1987,9 @@ pub mod on {
         for line in core::mem::take(&mut st.say) {
             ear.say(line);
         }
+        // Nothing said under the loading overlay: it waits for the match.
         let now = time.elapsed_secs();
-        if now < *until {
+        if now < *until || cover.up {
             return;
         }
         // A line about the match goes before a medal.

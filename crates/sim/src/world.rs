@@ -364,6 +364,9 @@ pub struct World {
     /// Ticks of sudden death played, the clock run out (`SUDDEN_DEATH_MS`).
     pub overtime: u32,
     pub events: Events,
+    /// How many of `events` the last tick made (read by now): the rest
+    /// came between ticks and go with the next.
+    events_read: usize,
     /// The projectile slot [`Self::projectiles`] is at (`MAX_PROJ`
     /// outside it): a full pool never gives that slot to a new round.
     flying: usize,
@@ -403,6 +406,7 @@ impl World {
             winner: NO_WINNER,
             overtime: 0,
             events: Events::default(),
+            events_read: 0,
             flying: MAX_PROJ,
             rewind: Box::default(),
             vrewind: Box::default(),
@@ -459,12 +463,23 @@ impl World {
         self.rewind.forget(slot);
     }
 
+    /// The countdown held at its start, for the tick about to be stepped:
+    /// someone seated is still loading the level (`room`). A no-op once
+    /// play has begun.
+    pub fn hold_countdown(&mut self) {
+        if self.phase == Phase::Countdown {
+            self.clock = ticks(COUNTDOWN_MS) + 1;
+        }
+    }
+
     /// One tick. `inputs` is each seat's frame for this tick (repeated by
     /// the server when one never came); `rewind_q8` is how far back each
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
     /// what it saw of that client's acks (docs/DESIGN.md §7).
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
-        self.events.clear();
+        // Last tick's events were read; any since (a seat taken between
+        // ticks: a flag let go, a seat left) are this tick's.
+        self.events.drop_first(self.events_read);
         self.tick = self.tick.wrapping_add(1);
         match self.phase {
             Phase::Countdown => {
@@ -494,6 +509,7 @@ impl World {
             *p = VPose::of(v);
         }
         self.vrewind.write(self.tick, &vposes);
+        self.events_read = self.events.as_slice().len();
     }
 
     fn play(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
@@ -524,9 +540,10 @@ impl World {
                 _ => self.vehicles[i].step_parked(&self.map),
             }
         }
+        self.crashes();
         self.seat_riders();
         self.falls();
-        self.splatter();
+        self.splatter(rewind_q8);
         for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
                 self.unveil(s);
@@ -764,14 +781,18 @@ impl World {
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
-    /// misses, the one whose rewound chest it passes nearest in angle,
-    /// within `id`'s [`crate::arms::Arm::magnet`] (plus a body's width)
-    /// and its `aim_range`, nearer than `limit` and in clear line: the way
-    /// to that chest. Only + − × ÷ and sqrt; never the head.
+    /// misses, those whose rewound body, widened by `a`'s magnetism at its
+    /// distance ([`Arm::magnet_zone`], the red reticle's too), it passes
+    /// through within `aim_range` and nearer than `limit`; of them the one
+    /// nearest in angle, in clear line: the way to the body's middle at the
+    /// height the ray passed, between the hips and the chest, so a miss
+    /// wide of the legs, the hips or the shoulder is bent alike. Only
+    /// + − × ÷ and sqrt; never the head.
     #[allow(clippy::too_many_arguments)]
     fn magnet(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32, limit: f32) -> Option<V3> {
         let me = &self.fighters[s];
         let reach = a.aim_range.min(limit);
+        let flat = dir.x * dir.x + dir.z * dir.z;
         let mut best: Option<(f32, V3)> = None;
         for (q, v) in self.fighters.iter().enumerate() {
             if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
@@ -781,18 +802,31 @@ impl World {
             if !p.alive {
                 continue;
             }
-            let c = p.pos + V3::new(0.0, crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH), 0.0);
-            let to = c - eye;
-            let t = to.dot(dir);
-            if t <= 0.0 || t > reach {
+            let top = crate::movement::ducked(p.duck, HIT_TOP, HIT_TOP_CROUCH);
+            if a.magnet_zone(eye, dir, p.pos, top, reach).is_none() {
                 continue;
             }
-            let off = (to - dir * t).len();
-            if off > HIT_R + t * a.magnet || best.is_some_and(|b| b.0 * t <= off) {
+            // How high the ray is where it passes nearest the body's axis.
+            let chest = crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH);
+            let hip = crate::movement::ducked(p.duck, HIP_Y, HIP_Y_CROUCH);
+            let y = if flat > 0.0 {
+                let th = (((p.pos.x - eye.x) * dir.x + (p.pos.z - eye.z) * dir.z) / flat).max(0.0);
+                eye.y + dir.y * th - p.pos.y
+            } else {
+                chest
+            };
+            let c = p.pos + V3::new(0.0, y.max(hip).min(chest), 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if best.is_some_and(|b| b.0 <= off) {
                 continue;
             }
             if self.map.clear(eye, c) {
-                best = Some((off / t, c));
+                best = Some((off, c));
             }
         }
         best.map(|(_, c)| (c - eye).norm())
@@ -805,7 +839,7 @@ impl World {
         let mut wall = self.map.ray(eye, dir, a.range);
         let mut hit = self.trace(s, eye, dir, wall, depth, 0.0, false);
         let mut dir = dir;
-        if a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
+        if MAGNETISM && a.magnet > 0.0 && !matches!(hit, Some((Target::Fighter(..), _))) {
             if let Some(bent) = self.magnet(s, eye, dir, a, depth, hit.map_or(wall, |h| h.1)) {
                 dir = bent;
                 wall = self.map.ray(eye, dir, a.range);
@@ -1318,7 +1352,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part: 0,
-            c: (took / PT) as u16,
+            c: hp(took),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -1337,14 +1371,22 @@ impl World {
         }
         v.needles = 0;
         let at = v.body.pos + V3::new(0.0, 1.0, 0.0);
-        self.events.push(Event {
-            kind: Ev::Blast,
-            a: att as u8,
-            c: id as u16,
-            pos: at,
-            ..Event::default()
-        });
-        self.damage(att, vic, KILL_PTS, false, Head::None, id as u16);
+        // The splash first (its Blast event comes before the kill, which
+        // the client's rag doll reads), then the one they were in.
+        let cause = id as u16;
+        self.blast_push(
+            at,
+            att,
+            SUPER_SPLASH,
+            SUPER_RADIUS,
+            SUPER_FULL,
+            SUPER_EDGE,
+            1.0,
+            cause,
+            SUPER_SHIELD_K,
+            SUPER_PUSH,
+        );
+        self.damage_k(att, vic, SUPER_DMG * PT, false, Head::None, cause, SUPER_SHIELD_K);
     }
 
     /// One tick of a thrown thing under `g`, off what it meets: whether it
@@ -1583,6 +1625,25 @@ impl World {
         cause: u16,
         shield_k: f32,
     ) {
+        self.blast_push(at, owner, dmg, radius, full, edge, self_k, cause, shield_k, BLAST_PUSH);
+    }
+
+    /// [`Self::blast_k`] throwing bodies `push` m/s at its middle (a
+    /// grenade's or a rocket's [`BLAST_PUSH`]).
+    #[allow(clippy::too_many_arguments)]
+    fn blast_push(
+        &mut self,
+        at: V3,
+        owner: usize,
+        dmg: i32,
+        radius: f32,
+        full: f32,
+        edge: i32,
+        self_k: f32,
+        cause: u16,
+        shield_k: f32,
+        push: f32,
+    ) {
         let rim = edge as f32 / dmg.max(1) as f32;
         let falloff = |dist: f32| {
             if dist <= full {
@@ -1620,7 +1681,7 @@ impl World {
                 V3::new(0.0, 1.0, 0.0)
             };
             let b = &mut self.fighters[q].body;
-            b.vel = b.vel + away * (BLAST_PUSH * k);
+            b.vel = b.vel + away * (push * k);
             if away.y > 0.0 {
                 b.grounded = false;
             }
@@ -1780,7 +1841,7 @@ impl World {
             kind: Ev::VehicleHit,
             a: att as u8,
             part: i as u8,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos,
             ..Event::default()
         });
@@ -1994,39 +2055,131 @@ impl World {
         }
     }
 
-    /// A vehicle moving fast runs down whoever is on foot in its way: at
-    /// [`SPLAT_KILL`] dead, slower knocked aside. Its driver did it (or
-    /// nobody drove: then the fighter's own death).
-    fn splatter(&mut self) {
+    /// Hulls that meet push apart along where their circles touch, half
+    /// each (all of it the other's if one is against a wall), and trade
+    /// their closing speed, a little of it kept as a bounce; a hard crash
+    /// hurts both ([`VEH_CRASH_SPEED`]).
+    fn crashes(&mut self) {
+        let reach = 2.0 * VEH_HULL_R;
+        // Each hull's worst hit this tick, and whose doing: the other's
+        // driver, else its own (nobody's if neither is driven), dealt once
+        // every hull has moved.
+        let mut crash: [(i32, Option<usize>); MAX_VEHICLES] = [(0, None); MAX_VEHICLES];
+        for i in 0..MAX_VEHICLES {
+            for j in i + 1..MAX_VEHICLES {
+                let (a, b) = (self.vehicles[i], self.vehicles[j]);
+                if !a.active || !b.active || crate::fmath::fabs(a.pos.y - b.pos.y) >= VEH_H {
+                    continue;
+                }
+                // The deepest of the circles' overlaps, and its way from a
+                // to b.
+                let mut deep: Option<(f32, V3)> = None;
+                for ca in a.circles() {
+                    for cb in b.circles() {
+                        let d = (cb - ca).flat();
+                        let l2 = d.dot(d);
+                        if l2 >= reach * reach {
+                            continue;
+                        }
+                        let l = l2.sqrt();
+                        let n = if l > 1e-4 {
+                            d * (1.0 / l)
+                        } else {
+                            let m = (b.pos - a.pos).flat();
+                            if m.dot(m) > 1e-8 {
+                                m.norm()
+                            } else {
+                                V3::new(1.0, 0.0, 0.0)
+                            }
+                        };
+                        if deep.is_none_or(|(p, _)| reach - l > p) {
+                            deep = Some((reach - l, n));
+                        }
+                    }
+                }
+                let Some((pen, n)) = deep else {
+                    continue;
+                };
+                let closing = (a.vel - b.vel).flat().dot(n);
+                if closing > VEH_CRASH_SPEED {
+                    let pts = ((closing - VEH_CRASH_SPEED) * VEH_CRASH_DMG) as i32 * PT;
+                    crash[i] = crash[i].max((pts, b.driver().or(a.driver())));
+                    crash[j] = crash[j].max((pts, a.driver().or(b.driver())));
+                }
+                if closing > 0.0 {
+                    let k = closing * (1.0 + VEH_BOUNCE) * 0.5;
+                    for (q, s) in [(i, -k), (j, k)] {
+                        let v = &mut self.vehicles[q];
+                        let to = v.vel + n * s;
+                        v.vel = V3::new(crate::movement::quant(to.x), v.vel.y, crate::movement::quant(to.z));
+                    }
+                }
+                let half = n * (pen * 0.5);
+                let a_went = self.vehicles[i].nudge(-half, &self.map);
+                let b_went = self.vehicles[j].nudge(half, &self.map);
+                if !a_went {
+                    self.vehicles[j].nudge(half * 2.0, &self.map);
+                } else if !b_went {
+                    self.vehicles[i].nudge(-half * 2.0, &self.map);
+                }
+            }
+        }
+        for (i, &(pts, by)) in crash.iter().enumerate() {
+            let Some(att) = by else {
+                continue;
+            };
+            if pts > 0 && !self.spares(att, &self.vehicles[i]) {
+                self.damage_vehicle(att, i, pts);
+            }
+        }
+    }
+
+    /// A vehicle runs down whoever on foot it meets closing faster than
+    /// [`SPLAT_SPEED`]: at [`SPLAT_KILL`] dead, slower hurt by the share
+    /// of the way there (of a whole fighter's shields and health), and
+    /// carried off ahead of it. Met where its driver saw them (rewound
+    /// by the driver's depth, as a shot is) or where they are. Its driver
+    /// did it (or nobody drove: then the fighter's own death).
+    fn splatter(&mut self, rewind_q8: &[u32; MAX_FIGHTERS]) {
         for i in 0..MAX_VEHICLES {
             let v = self.vehicles[i];
-            let speed = v.vel.flat().len();
-            if !v.active || speed < SPLAT_SPEED {
+            if !v.active || v.vel.flat().len() < SPLAT_SPEED {
                 continue;
             }
             let driver = v.driver();
+            let depth = driver.map_or(0, |d| rewind_q8[d]);
             for q in 0..MAX_FIGHTERS {
                 let f = self.fighters[q];
-                if !f.active() || f.ride != 0 || !v.touches(f.body.pos, BODY_R, f.body.height()) {
+                if !f.active() || f.ride != 0 || driver.is_some_and(|d| self.spared(d, q)) {
                     continue;
                 }
-                if driver.is_some_and(|d| self.spared(d, q)) {
+                let h = f.body.height();
+                let then = self.rewind.pose_at(self.tick, q, depth, &pose(&f));
+                let met = if v.touches(f.body.pos, BODY_R, h) {
+                    f.body.pos
+                } else if then.alive && v.touches(then.pos, BODY_R, h) {
+                    then.pos
+                } else {
+                    continue;
+                };
+                let off = (met - v.pos).flat();
+                let away = if off.dot(off) > 1e-6 { off.norm() } else { v.axes().0 };
+                // Its own speed at them, less theirs away from it: one who
+                // runs into its flank isn't run down.
+                let closing = v.vel.flat().dot(away) - f.body.vel.flat().dot(away).max(0.0);
+                if closing < SPLAT_SPEED {
                     continue;
                 }
-                let away = (f.body.pos - v.pos).flat().norm();
                 let b = &mut self.fighters[q].body;
-                b.vel = b.vel + away * 6.0 + V3::new(0.0, 3.0, 0.0);
+                b.vel = b.vel + away * (closing + SPLAT_SHOVE) + V3::new(0.0, 3.0, 0.0);
                 b.grounded = false;
-                if speed >= SPLAT_KILL {
-                    self.damage(
-                        driver.unwrap_or(q),
-                        q,
-                        KILL_PTS,
-                        false,
-                        Head::None,
-                        Cause::Splatter as u16,
-                    );
-                }
+                let share = ((closing - SPLAT_SPEED) / (SPLAT_KILL - SPLAT_SPEED)).min(1.0);
+                let pts = if closing >= SPLAT_KILL {
+                    KILL_PTS
+                } else {
+                    ((HEALTH_MAX + SHIELD_MAX) as f32 * share) as i32
+                };
+                self.damage(driver.unwrap_or(q), q, pts, false, Head::None, Cause::Splatter as u16);
             }
         }
     }
@@ -2083,7 +2236,7 @@ impl World {
             a: att as u8,
             b: vic as u8,
             part,
-            c: (pts / PT).min(u16::MAX as i32) as u16,
+            c: hp(pts),
             pos: v.body.pos,
             ..Event::default()
         });
@@ -2858,9 +3011,55 @@ pub fn spread(base: V3, cone: f32, salt: (u64, u64), slot: usize, shot: u32, pel
     (base * cr + (right * ct + up2 * st) * sr).norm()
 }
 
+/// Damage in points as the whole hit points an event carries: rounded, and
+/// never 0 for a hit that did some (a glancing blow still hurt, and counts).
+fn hp(pts: i32) -> u16 {
+    if pts <= 0 {
+        return 0;
+    }
+    ((pts + PT / 2) / PT).clamp(1, u16::MAX as i32) as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three in an open map, the countdown run out: 0 shoots, 1 is at the
+    /// origin, 2 stands a metre from it.
+    fn three() -> World {
+        let mut w = World::new(Map::open(), Rules::ffa(), 1, (0, 0));
+        for s in 0..3 {
+            w.seat(s, s as u8);
+        }
+        let idle = [Input::default(); MAX_FIGHTERS];
+        while w.phase == Phase::Countdown {
+            w.step(&idle, &[0; MAX_FIGHTERS]);
+        }
+        w.fighters[0].body.pos = V3::new(-10.0, 0.0, 0.0);
+        w.fighters[1].body.pos = V3::ZERO;
+        w.fighters[2].body.pos = V3::new(0.0, 0.0, 1.0);
+        w
+    }
+
+    #[test]
+    fn the_eighth_shard_kills_and_splashes_who_stands_by() {
+        let id = crate::arms::SHARDS;
+        let mut w = three();
+        for _ in 0..arm(id).stick {
+            w.stick(0, 1, id);
+        }
+        assert!(!w.fighters[1].alive);
+        let by = w.fighters[2];
+        assert!(by.alive && by.shield < SHIELD_MAX && by.health == HEALTH_MAX);
+        // An overshield outlasts it, as Halo 2's did.
+        let mut w = three();
+        w.fighters[1].shield = OVERSHIELD_MAX;
+        for _ in 0..arm(id).stick {
+            w.stick(0, 1, id);
+        }
+        let v = w.fighters[1];
+        assert!(v.alive && v.needles == 0 && v.shield > 0, "{}", v.shield);
+    }
 
     #[test]
     fn a_full_pool_gives_the_oldest_shard_s_slot_and_never_a_rocket_s() {

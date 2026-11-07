@@ -632,16 +632,27 @@ fn a_melee_lunges_at_someone_just_past_reach() {
 
 #[test]
 fn a_near_miss_bends_onto_the_body_never_the_head() {
-    // Half a metre wide of the chest at 20 m: the battle rifle's rounds
-    // find the body; the sniper's (no magnetism) miss.
-    for (gun, lands) in [(BR, true), (SNIPER, false)] {
-        let mut w = duel([gun, MAGNUM], 20.0);
-        let at = chest(&w, 1) + V3::new(0.0, 0.0, 0.45);
-        shoot(&mut w, at, FIRE, NO_LAG);
-        for _ in 0..ticks(300) {
-            shoot(&mut w, at, 0, NO_LAG);
+    // Nearly half a metre wide of the chest, or of the hips, at 20 m: the
+    // battle rifle's rounds find the body alike, while magnetism is on;
+    // the sniper's (no magnetism) miss.
+    for low in [0.0, CHEST_Y - HIP_Y] {
+        for (gun, lands) in [(BR, MAGNETISM), (SNIPER, false)] {
+            let mut w = duel([gun, MAGNUM], 20.0);
+            let at = chest(&w, 1) + V3::new(0.0, -low, 0.45);
+            shoot(&mut w, at, FIRE, NO_LAG);
+            for _ in 0..ticks(300) {
+                shoot(&mut w, at, 0, NO_LAG);
+            }
+            let name = sim::arms::arm(gun).name;
+            assert_eq!(
+                w.fighters[1].shield < SHIELD_MAX,
+                lands,
+                "{name}, {low} m below the chest"
+            );
         }
-        assert_eq!(w.fighters[1].shield < SHIELD_MAX, lands, "{}", sim::arms::arm(gun).name);
+    }
+    if !MAGNETISM {
+        return;
     }
     // Wide of the shoulder, up by the head, shields down: bent to the
     // chest, so body hits, never the head shot that would kill.

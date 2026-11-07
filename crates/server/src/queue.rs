@@ -49,7 +49,7 @@ impl Queue {
     }
 
     pub fn has_wallet(&self, w: &str) -> bool {
-        self.entries.iter().any(|e| e.wallet == w)
+        self.entries.iter().any(|e| e.wallet.eq_ignore_ascii_case(w))
     }
 
     /// The next match that can form, as its sides: for a duel two sides of
@@ -206,6 +206,7 @@ mod tests {
             code: 9,
             size: 2,
             private: false,
+            fresh: true,
             custom: Default::default(),
         });
         let mut q = Queue::default();

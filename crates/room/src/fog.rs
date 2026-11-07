@@ -279,6 +279,9 @@ pub fn plainly_sees_vehicle(map: &Map, eye: V3, v: &Vehicle) -> bool {
 pub struct Fog {
     until: [u32; MAX_FIGHTERS],
     vuntil: [u32; MAX_VEHICLES],
+    /// Each fighter alive at the last look: one back from the dead is
+    /// somewhere new, and the hold on where it was is no hold on that.
+    alive: [bool; MAX_FIGHTERS],
 }
 
 /// Past this, a pair's full look comes every [`FAR_EVERY`] snapshots, not
@@ -330,6 +333,12 @@ impl Fog {
         let hold = hold_ticks(snap_every);
         let turn = (tick / snap_every) as usize + viewer;
         for (q, f) in w.fighters.iter().enumerate() {
+            // A respawn: seen only if seen where it now is (never an unseen
+            // spawn, however recently the body was in view).
+            if f.alive && !self.alive[q] {
+                self.until[q] = 0;
+            }
+            self.alive[q] = f.alive;
             if q == viewer || !f.seated {
                 self.until[q] = 0;
             } else if w.rules.teams && f.team == me.team {
@@ -382,6 +391,11 @@ impl Fog {
     /// Whether seat `q` may be sent at `tick`.
     pub fn shows(&self, q: usize, tick: u32) -> bool {
         self.until[q] != 0 && self.until[q] >= tick
+    }
+
+    /// Seat `q` has someone new in it, somewhere new: nothing held of it.
+    pub fn forget(&mut self, q: usize) {
+        self.until[q] = 0;
     }
 }
 

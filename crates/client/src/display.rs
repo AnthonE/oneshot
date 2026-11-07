@@ -5,7 +5,12 @@
 //!
 //! On the desktop these are the window's present mode and mode (borderless,
 //! so an alt-tab never changes a video mode) and a sleep at the end of the
-//! frame. In a browser the page paces every frame to the display
+//! frame. The desktop opens fullscreen by default, the window made in that
+//! mode from the start (no flash of a window first); `--windowed`, a
+//! picture or a film keeps it a window for the run ([`RunWindowed`]) until
+//! F11 or the row asks for fullscreen.
+//!
+//! In a browser the page paces every frame to the display
 //! (`requestAnimationFrame`), so VSYNC and FRAME CAP say so on the screen
 //! rather than doing nothing, and FULLSCREEN is the page's own (the
 //! Fullscreen API): a page may enter it only within a click's few seconds,
@@ -14,8 +19,10 @@
 //! runs. While the page is fullscreen it asks the browser for Esc
 //! (`index.html`, Keyboard Lock), so Esc is still the game's menu.
 //!
-//! F11 flips FULLSCREEN anywhere: the game's on both, never the browser's
-//! (the canvas keeps its keys).
+//! F11 flips FULLSCREEN anywhere: the game's on both, never the browser's.
+//! On the desktop it moves the row; in a browser the page asks inside the
+//! key's own event (`web/boot.js`: Safari honours nothing later) and the
+//! row follows the page.
 
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,7 +37,15 @@ pub const FULLSCREEN_KEY: KeyCode = KeyCode::F11;
 /// gives up on it and follows the page (a refused request never says so).
 pub const PAGE_GRACE_FRAMES: u32 = 60;
 
+/// This run's window stays a window whatever FULLSCREEN says
+/// (`Opts::windowed`), until the player moves the row or presses F11.
+#[derive(Resource, Clone, Copy, Default)]
+pub struct RunWindowed(pub bool);
+
 pub fn plugin(app: &mut App) {
+    app.init_resource::<RunWindowed>();
+    #[cfg(not(target_arch = "wasm32"))]
+    first_window(app.world_mut());
     // A film's window is its list's size on its own frame clock
     // (`film.rs`): the player's fullscreen and frame cap are not its.
     let playing = not(resource_exists::<crate::film::Film>);
@@ -41,33 +56,83 @@ pub fn plugin(app: &mut App) {
 }
 
 /// F11 flips the row, from any screen; through `adjust`, so an open
-/// settings pane redraws it.
-pub fn fullscreen_key(keys: Res<ButtonInput<KeyCode>>, mut settings: ResMut<Settings>) {
+/// settings pane redraws it. A run held to a window with the row ON goes
+/// fullscreen on it, rather than turning the row OFF to no effect.
+pub fn fullscreen_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<Settings>,
+    mut windowed: ResMut<RunWindowed>,
+) {
+    // The page's own (`web/boot.js`): the row follows it.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     if keys.just_pressed(FULLSCREEN_KEY) {
-        settings.adjust(Knob::Fullscreen, 0);
+        if windowed.0 && settings.fullscreen {
+            windowed.0 = false;
+        } else {
+            settings.adjust(Knob::Fullscreen, 0);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn present(settings: &Settings) -> PresentMode {
+    if settings.vsync {
+        PresentMode::AutoVsync
+    } else {
+        PresentMode::AutoNoVsync
+    }
+}
+
+/// The window's mode: the row's, unless this run is held to a window.
+#[cfg(not(target_arch = "wasm32"))]
+fn mode(settings: &Settings, windowed: RunWindowed) -> WindowMode {
+    if settings.fullscreen && !windowed.0 {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+    } else {
+        WindowMode::Windowed
+    }
+}
+
+/// The primary window as the settings have it before it is made, so the
+/// OS window opens fullscreen rather than switching a frame later. Needs
+/// `settings::plugin` and `WindowPlugin` first (`app_on`).
+#[cfg(not(target_arch = "wasm32"))]
+fn first_window(world: &mut World) {
+    let Some(settings) = world.get_resource::<Settings>().copied() else {
+        return;
+    };
+    let windowed = *world.resource::<RunWindowed>();
+    let mut q = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+    if let Ok(mut w) = q.single_mut(world) {
+        w.mode = mode(&settings, windowed);
+        w.present_mode = present(&settings);
     }
 }
 
 /// The desktop's window from the settings, written only on a change
-/// (a `Window` written every frame is work for the window backend).
+/// (a `Window` written every frame is work for the window backend). The
+/// row moving lets go of a run held to a window.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn apply_window(settings: Res<Settings>, mut window: Query<&mut Window, With<PrimaryWindow>>) {
+pub fn apply_window(
+    settings: Res<Settings>,
+    mut windowed: ResMut<RunWindowed>,
+    mut was: Local<Option<bool>>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if was.is_some_and(|w| w != settings.fullscreen) {
+        windowed.0 = false;
+    }
+    *was = Some(settings.fullscreen);
     let Ok(mut w) = window.single_mut() else {
         return;
     };
-    let present = if settings.vsync {
-        PresentMode::AutoVsync
-    } else {
-        PresentMode::AutoNoVsync
-    };
+    let present = present(&settings);
     if w.present_mode != present {
         w.present_mode = present;
     }
-    let mode = if settings.fullscreen {
-        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-    } else {
-        WindowMode::Windowed
-    };
+    let mode = mode(&settings, *windowed);
     if w.mode != mode {
         w.mode = mode;
     }

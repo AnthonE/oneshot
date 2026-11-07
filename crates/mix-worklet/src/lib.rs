@@ -93,6 +93,13 @@ pub extern "C" fn mix_render() -> *const f32 {
     })
 }
 
+/// The audio context runs at `hz` (`sampleRate` in the worklet's scope):
+/// the engine renders at it, so nothing plays slow on a 44.1 kHz device.
+#[no_mangle]
+pub extern "C" fn mix_rate(hz: u32) {
+    W.with(|w| w.borrow_mut().engine.set_rate(hz));
+}
+
 /// Frames a block holds.
 #[no_mangle]
 pub extern "C" fn mix_block() -> usize {
