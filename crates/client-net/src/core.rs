@@ -121,9 +121,13 @@ pub fn step_bubble(
     };
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     inputs[own] = *inp;
+    let body = f.body;
     let l = step_near(f, own, &mut sc, phase, &inputs, &sticks, 0, map);
     if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
         *h = sc.hulls[i];
+    } else if f.riding().is_some() {
+        // Riding with no hull given: where it was, never a blank's seat.
+        f.body = body;
     }
     for i in 0..MAX_VEHICLES {
         if near.mask & (1 << i) != 0 && ridden != Some(i) {
@@ -166,9 +170,13 @@ pub fn step_own(
     };
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     inputs[0] = *inp;
+    let body = f.body;
     let l = step_near(f, 0, &mut sc, phase, &inputs, &sticks, 0, map);
     if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
         *h = sc.hulls[i];
+    } else if f.riding().is_some() {
+        // Riding with no hull given: where it was, never a blank's seat.
+        f.body = body;
     }
     l
 }
@@ -1383,8 +1391,21 @@ impl NetCore {
                 || e.kind == Kind::VehicleHit as u8
                 || (wreck && rode.contains(&Some(e.part)))
                 || (e.a == self.slot && e.kind != Kind::Blast as u8 && !wreck);
+            // One riding with us is drawn on the hull we draw, ahead of the
+            // render tick: its shots play at once, from where it is drawn
+            // (where the round met stays the server's).
+            let co_shot = (e.kind == Kind::Shot as u8 && !self.watch)
+                .then(|| self.co_rider(e.a))
+                .flatten()
+                .zip(self.drawn_hull())
+                .zip(s.remotes().iter().find(|r| r.slot == e.a));
             if own_shot {
                 // Played the tick it was predicted.
+            } else if let Some(((seat, hull), r)) = co_shot {
+                self.events.push(EventState {
+                    pos: e.pos + (hull.mount(seat) - r.pos),
+                    ..*e
+                });
             } else if at_once {
                 self.events.push(*e);
             } else {
@@ -1895,17 +1916,27 @@ impl NetCore {
     fn other_between(&self, slot: u8, ai: usize, rt: f64) -> Option<Drawn> {
         let frames = &self.frames[..self.n_frames];
         // Riding with us: in its seat on the hull as we draw it, never a
-        // round trip behind it; its aim the newest we were sent.
-        if let (Some(seat), Some(hull)) = (self.co_rider(slot), self.drawn_hull()) {
-            let newest = frames
+        // round trip behind it; its aim the newest we were sent. A watcher
+        // draws the hull and its riders alike on the render tick.
+        let newest = || {
+            frames
                 .iter()
                 .rev()
-                .find_map(|f| f.remotes[..f.n as usize].iter().find(|r| r.slot == slot))?;
+                .find_map(|f| f.remotes[..f.n as usize].iter().find(|r| r.slot == slot))
+        };
+        if let (Some(seat), Some(hull), false) = (self.co_rider(slot), self.drawn_hull(), self.watch) {
             return Some(Drawn {
                 pos: hull.mount(seat),
                 vel: hull.vel,
-                ..drawn(newest)
+                ..drawn(newest()?)
             });
+        }
+        // Out of our hull (or dead in it) since the render tick, which still
+        // has it seated a round trip back: where it got out (or fell), as
+        // the newest snapshot has it, till the render tick gets there.
+        let seated_then = frames[ai].own_v.is_some_and(|v| v.seats.iter().any(|&x| x == slot + 1));
+        if seated_then && !self.watch && frames[ai].own.riding().is_some() {
+            return newest().map(drawn);
         }
         // Its updates: a held one repeats an update, never is one.
         let find = |f: &Frame| {

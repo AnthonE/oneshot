@@ -485,8 +485,10 @@ fn a_rider_draws_its_co_rider_in_its_seat() {
         assert!(of_passenger.n > 500 && of_driver.n > 500, "{m:?}");
         // The driver's hull is the server's: so is its passenger's seat.
         assert!(of_passenger.max < 0.01, "{delay} ms: {of_passenger:?}");
-        // The passenger's hull is a guess: its driver's seat on it is as
-        // good as its own (at the cab, a turn's error weighs a little more).
+        // The passenger's hull is a guess: its driver's seat on it is within
+        // twice its own seat's error (the cab is further from where the hull
+        // turns, so a heading's error weighs more there; no better than the
+        // hull's middle can it be).
         assert!(
             of_driver.mean < 2.0 * m.own_seat.mean + 0.01 && of_driver.max < 2.0 * m.own_seat.max + 0.01,
             "{delay} ms: {of_driver:?} on its own seat's {:?}",

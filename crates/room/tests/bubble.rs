@@ -3,7 +3,8 @@
 //! might crash into; never its own, never an unknown driver's, never past
 //! the round trip a re-run can guess across.
 
-use room::bubble::{Bubble, BUBBLE_M, CONTACT_M, DWELL_MS, HYST_M, LOOK_S, RTT_MAX_MS};
+use room::bubble::{Bubble, BLEND_MIN_MS, BUBBLE_M, CONTACT_M, DWELL_MS, HYST_M, LEAVE_MS, LOOK_S, RTT_MAX_MS};
+use sim::consts::SHARE_FULL;
 use sim::consts::{MAX_FIGHTERS, TICK_HZ};
 use sim::geom::V3;
 use sim::input::Input;
@@ -41,7 +42,7 @@ fn put(w: &mut World, x: f32, vel: V3) {
 }
 
 fn update(b: &mut Bubble, w: &World, rtt_ms: f64) {
-    b.update(w, 0, &|_| true, &|_| true, rtt_ms, 2);
+    b.update(w, 0, &|_| true, &|_| true, rtt_ms, 2, true);
 }
 
 /// Whether hull 0 comes in at `x` m moving at `vel`, from out.
@@ -92,22 +93,29 @@ fn a_hull_in_stays_a_while_and_until_well_past() {
     put(&mut w, BUBBLE_M + HYST_M - 0.5, V3::ZERO);
     update(&mut b, &w, 60.0);
     assert!(b.has(0), "inside the hysteresis");
-    // Well past, at once: held for the dwell, then out.
+    // Well past, at once: held for the dwell, then back onto the render
+    // tick over a second, then out.
     put(&mut w, BUBBLE_M + HYST_M + 5.0, V3::ZERO);
-    let dwell_snaps = DWELL_MS * TICK_HZ / 1000 / 2;
-    let mut out_after = None;
-    for k in 0..dwell_snaps + 4 {
+    let snaps = |ms: u32| (ms * TICK_HZ / 1000 / 2) as usize;
+    let mut shares = Vec::new();
+    for _ in 0..snaps(DWELL_MS + LEAVE_MS as u32) + 8 {
         update(&mut b, &w, 60.0);
         if !b.has(0) {
-            out_after = Some(k);
             break;
         }
+        shares.push(b.share(0));
     }
-    let k = out_after.expect("never left");
+    assert!(!b.has(0), "never left");
+    let k = shares.len();
     assert!(
-        k + 2 >= dwell_snaps,
-        "left after {k} snapshots, the dwell is {dwell_snaps}"
+        k + 2 >= snaps(DWELL_MS),
+        "left after {k} snapshots, the dwell is {}",
+        snaps(DWELL_MS)
     );
+    assert!(k <= snaps(DWELL_MS + LEAVE_MS as u32) + 4, "{k} snapshots to leave");
+    // Its share only ever climbs once it is leaving.
+    let leaving = &shares[snaps(DWELL_MS).min(k)..];
+    assert!(leaving.windows(2).all(|p| p[1] >= p[0]), "{shares:?}");
 }
 
 #[test]
@@ -117,13 +125,13 @@ fn never_an_unknown_drivers_and_never_past_the_round_trip() {
     w.vehicles[0].seats[0] = 6;
     let mut b = Bubble::default();
     // A driver it may not know: its stick would tell where they are going.
-    b.update(&w, 0, &|q| q != 5, &|_| true, 60.0, 2);
+    b.update(&w, 0, &|q| q != 5, &|_| true, 60.0, 2, true);
     assert!(!b.has(0), "an unknown driver's hull");
-    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2);
+    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
     assert!(b.has(0));
     // Not sent at all: never in.
     let mut b = Bubble::default();
-    b.update(&w, 0, &|_| true, &|_| false, 60.0, 2);
+    b.update(&w, 0, &|_| true, &|_| false, 60.0, 2, true);
     assert!(!b.has(0), "a hull fog hides");
     // Too far a round trip to guess across, moving; parked, still in.
     let mut b = Bubble::default();
@@ -162,6 +170,64 @@ fn an_arena_has_no_bubble() {
     let mut w = World::new(sim::map::Map::proving_grounds(), Rules::doubles(), 1, (2, 3));
     w.seat(0, 0);
     let mut b = Bubble::default();
-    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2);
+    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
     assert_eq!(b.hulls(), 0);
+}
+
+/// A hull coming in that was drawn in the past slides onto the present
+/// from its whole share; one never drawn (unseen until now) is on the
+/// present at once; one leaving climbs back to whole, then goes.
+#[test]
+fn a_hull_slides_onto_the_present_and_back() {
+    let mut w = world();
+    put(&mut w, 30.0, V3::ZERO);
+    let mut b = Bubble::default();
+    // Seen out of it first: drawn in the past.
+    update(&mut b, &w, 60.0);
+    assert!(!b.has(0));
+    put(&mut w, BUBBLE_M - 1.0, V3::ZERO);
+    update(&mut b, &w, 60.0);
+    assert_eq!(b.share(0), SHARE_FULL, "comes in where it was drawn");
+    let mut shares = vec![b.share(0)];
+    for _ in 0..80 {
+        update(&mut b, &w, 60.0);
+        shares.push(b.share(0));
+    }
+    assert!(shares.windows(2).all(|p| p[1] <= p[0]), "only down: {shares:?}");
+    assert_eq!(*shares.last().unwrap(), 0, "on the present: {shares:?}");
+    // Quickly, but never in less than the shortest blend.
+    let to_zero = shares.iter().position(|&x| x == 0).unwrap();
+    let min = (BLEND_MIN_MS as u32 * TICK_HZ / 1000 / 2) as usize;
+    assert!(to_zero + 1 >= min, "{to_zero} snapshots: {shares:?}");
+    // Never sent before: on the present at once.
+    let mut b = Bubble::default();
+    b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, true);
+    assert_eq!(b.share(0), 0, "unseen till now");
+    // Not live: whole, always.
+    let mut b = Bubble::default();
+    for _ in 0..80 {
+        b.update(&w, 0, &|_| true, &|_| true, 60.0, 2, false);
+    }
+    assert!(b.has(0) && b.share(0) == SHARE_FULL);
+}
+
+/// What a snapshot said is what its acks' shots are met by.
+#[test]
+fn a_shot_after_a_snapshot_is_met_by_its_shares() {
+    let mut w = world();
+    put(&mut w, 5.0, V3::ZERO);
+    w.vehicles[0].seats = [3, 0];
+    let mut b = Bubble::default();
+    for t in 0..40u32 {
+        w.tick = 100 + 2 * t;
+        update(&mut b, &w, 60.0);
+        b.sent(&w, w.tick);
+    }
+    let seen = b.seen(Some(w.tick));
+    assert_eq!(seen.share[MAX_FIGHTERS], b.share(0), "the hull");
+    assert_eq!(seen.share[2], b.share(0), "its driver, with it");
+    assert_eq!(seen.share[1], SHARE_FULL, "anyone else, whole");
+    // An ack of a snapshot never sent, or long gone: whole.
+    assert_eq!(b.seen(Some(w.tick + 1)), sim::world::Seen::PAST);
+    assert_eq!(b.seen(None), sim::world::Seen::PAST);
 }

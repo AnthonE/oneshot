@@ -138,7 +138,7 @@ impl Lan {
         &mut self,
         until_ms: f64,
         mut input: impl FnMut(usize, f64) -> Input,
-        mut frame: impl FnMut(usize, &NetCore, f64, &Room),
+        mut frame: impl FnMut(usize, &mut NetCore, f64, &Room),
     ) {
         let mut buf = [0u8; MAX_DATAGRAM];
         while self.now < until_ms {
@@ -171,7 +171,7 @@ impl Lan {
                     let n = encode_input(&m, &mut buf).unwrap();
                     c.net.send(now, buf[..n].to_vec(), true);
                 }
-                frame(k, &c.core, now, &self.room);
+                frame(k, &mut c.core, now, &self.room);
             }
             self.now += 0.5;
         }
