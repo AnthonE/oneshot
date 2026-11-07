@@ -48,8 +48,8 @@ const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there
 /// (`loading::Settle`), then how long it holds and how fast it lifts; its
-/// guard is the title's loading overlay's (`loading::TITLE_GUARD_S`), which
-/// lifts with it.
+/// guard is the title's loading overlay's (`Settle::given_up`), which lifts
+/// with it.
 const CURTAIN_HOLD_S: f64 = 0.15;
 const CURTAIN_FADE_S: f64 = 0.9;
 /// PLAY, pressed again this soon after it knocked, isn't a cancel.
@@ -2605,7 +2605,7 @@ fn curtain(
 ) {
     let now = time.elapsed_secs_f64();
     let ours = settle.gen() == Some(gen.0);
-    let guard = settle.now.built && settle.age(now) >= crate::loading::TITLE_GUARD_S;
+    let guard = settle.given_up(now, true);
     if !ours || !(settle.ready() || guard) {
         *since = None;
         return;

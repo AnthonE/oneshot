@@ -114,7 +114,7 @@ origin.catch(() => { /* said where it's awaited */ });
 // (`loaded`: loading.rs, the title's level, models and shaders in), saying
 // what it is on and how far; then it goes. After SPLASH_MAX_MS of the game
 // drawing it goes anyway (a game that never says so is a bug, not a wall).
-const SPLASH_MAX_MS = 45000;
+const SPLASH_MAX_MS = 150000;
 let drawing = 0;
 const shown = () => {
   const o = window.__oneshot;

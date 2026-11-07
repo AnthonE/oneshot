@@ -379,7 +379,7 @@ pub enum Seat {
 /// The longest the countdown waits for someone seated in it to load
 /// ([`Room::wait_loads`]): a page that never says so (a shader that never
 /// compiles) doesn't hold everyone else for ever.
-pub const LOAD_WAIT_MS: u32 = 15_000;
+pub const LOAD_WAIT_MS: u32 = 30_000;
 
 /// Stream messages to send: to one seat, or to everyone.
 pub type Outbox = Vec<(Option<u8>, Msg)>;

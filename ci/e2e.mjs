@@ -99,7 +99,9 @@ try {
     const press = async (tag) => {
       const t = Date.now();
       let r = null;
-      while (!r && Date.now() - t < 60000) {
+      // The title takes clicks once it is all there (loading.rs: under its
+      // loading screen it takes none), minutes on SwiftShader.
+      while (!r && Date.now() - t < 300000) {
         r = await rect(tag);
         if (!r) await p.waitForTimeout(500);
       }

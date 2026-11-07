@@ -19,10 +19,12 @@
 //! opens the menu over it. The overlay covers the frames a level spends
 //! arriving (pieces in grey, models popping in, on the desktop a skipped
 //! draw while its pipeline compiles) and the announcer waits under it
-//! ([`Cover`]); it lifts after [`LOADING_GUARD_S`] whatever is still
-//! missing, so a machine that never finishes sees a level dressing in
-//! rather than a wall; over a match already being played (a casual join
-//! mid-match) after [`LIVE_GUARD_S`].
+//! ([`Cover`]). It waits as long as the load is moving, however slow the
+//! machine: it lifts whatever is still missing only once nothing has moved
+//! for [`STUCK_S`] (and [`STUCK_FRAMES`]), or after [`GIVE_UP_S`], so a load
+//! that never finishes shows a level dressing in rather than a wall; over a
+//! match already being played (a casual join mid-match) after
+//! [`LIVE_GUARD_S`].
 //!
 //! **The title waits too.** The same overlay is over the whole title, its
 //! menus with it, until the backdrop is there; the title takes no clicks,
@@ -49,16 +51,18 @@ pub const DONE_FRAMES: u32 = 3;
 /// it counts anyway: a shader that never loads is a bug, but it mustn't
 /// keep a screen up.
 pub const PIPELINE_STALL_FRAMES: u32 = 300;
-/// The overlay over a new match lifts after this many seconds whatever is
-/// still arriving.
-pub const LOADING_GUARD_S: f64 = 20.0;
-/// …and after this many over a match already being played (a casual join
-/// takes a seat mid-match and spawns at once): whoever is there can shoot,
-/// so a level still dressing in beats a wall the player can't see past.
+/// The overlay lifts whatever is still arriving once no count has moved for
+/// this many seconds and this many frames (a load that is stuck, not slow:
+/// a software GPU takes seconds a frame and a minute a level)…
+pub const STUCK_S: f64 = 20.0;
+pub const STUCK_FRAMES: u32 = 60;
+/// …or after this many seconds, moving or not.
+pub const GIVE_UP_S: f64 = 120.0;
+/// Over a match already being played (a casual join takes a seat
+/// mid-match and spawns at once), after this many: whoever is there can
+/// shoot, so a level still dressing in beats a wall the player can't see
+/// past.
 pub const LIVE_GUARD_S: f64 = 1.5;
-/// …and over the title, this long after its level is built (the curtain
-/// over its backdrop lifts with it: `front::curtain`).
-pub const TITLE_GUARD_S: f64 = 10.0;
 /// How long the overlay takes to fade into the match.
 const FADE_S: f32 = 0.35;
 /// The bar, in pixels at 1280 by 720 (the title's panel is 380 wide).
@@ -163,6 +167,8 @@ pub struct Settle {
     welcomes: u32,
     /// When that link came (real seconds).
     since: f64,
+    /// When a count last moved, and frames since.
+    moved: (f64, u32),
     held: u32,
     /// The pipeline count last frame, and frames it hasn't moved.
     stall: (u32, u32),
@@ -192,6 +198,17 @@ impl Settle {
     /// Seconds since this link came.
     pub fn age(&self, now: f64) -> f64 {
         now - self.since
+    }
+
+    /// Past waiting for: stuck ([`STUCK_S`], [`STUCK_FRAMES`]) or past
+    /// [`GIVE_UP_S`]. The title's (`title`) counts only once its level is
+    /// built.
+    pub fn given_up(&self, now: f64, title: bool) -> bool {
+        if title && !self.now.built {
+            return false;
+        }
+        let (at, frames) = self.moved;
+        (now - at >= STUCK_S && frames >= STUCK_FRAMES) || self.age(now) >= GIVE_UP_S
     }
 }
 
@@ -253,6 +270,7 @@ fn settle(
             gen: Some(g),
             welcomes,
             since: now,
+            moved: (now, 0),
             ..default()
         };
     }
@@ -269,6 +287,11 @@ fn settle(
         models: models_in(models.as_deref(), &assets),
         warming: warming.iter().count(),
         pipelines: backlog.pending(),
+    };
+    s.moved = if p != s.now {
+        (now, 0)
+    } else {
+        (s.moved.0, s.moved.1 + 1)
     };
     s.now = p;
     if p.built && clear.0 != SKY_CLEAR {
@@ -309,6 +332,8 @@ pub struct LoadingRoot {
     gen: u32,
     /// Over the title (else a match).
     title: bool,
+    /// Over a match already being played as it came (a casual join).
+    live: bool,
 }
 
 #[derive(Component)]
@@ -364,6 +389,7 @@ fn start(
                     LoadingRoot {
                         gen: gen.0,
                         title: true,
+                        live: false,
                     },
                     ui::screen(ui::BG),
                 ))
@@ -384,7 +410,8 @@ fn start(
     }
     let map_id = link.0.session().map_id;
     // A casual join mid-match is into a match already being played.
-    let foot = if link.0.session().core.phase() == sim::world::Phase::Countdown {
+    let live = link.0.session().core.phase() == sim::world::Phase::Playing;
+    let foot = if !live {
         "The match starts once everyone has loaded · Esc opens the menu"
     } else {
         "The match has started · Esc opens the menu"
@@ -399,6 +426,7 @@ fn start(
             LoadingRoot {
                 gen: gen.0,
                 title: false,
+                live,
             },
             ui::screen(ui::BG),
         ))
@@ -462,7 +490,6 @@ fn update(
     mut commands: Commands,
     settle: Res<Settle>,
     mut cover: ResMut<Cover>,
-    link: NonSend<LinkRes>,
     time: Res<Time<Real>>,
     roots: Query<(Entity, &LoadingRoot), Without<Fading>>,
     mut bar: Query<&mut Node, (With<Bar>, Without<Sweep>)>,
@@ -471,15 +498,13 @@ fn update(
 ) {
     let now = time.elapsed_secs_f64();
     let p = settle.now;
-    let live = link.0.session().core.phase() == sim::world::Phase::Playing;
-    let guard_s = if live { LIVE_GUARD_S } else { LOADING_GUARD_S };
     let mut up = false;
     for (e, root) in &roots {
         let ours = settle.gen() == Some(root.gen);
-        let guard = if root.title {
-            p.built && settle.age(now) >= TITLE_GUARD_S
+        let guard = if root.live {
+            settle.age(now) >= LIVE_GUARD_S
         } else {
-            settle.age(now) >= guard_s
+            settle.given_up(now, root.title)
         };
         if ours && (settle.ready() || guard) {
             if !settle.ready() {
