@@ -22,7 +22,7 @@ differences a ranked game needs:
 | Certificate | `/home/master/oneshot-certs/{fullchain,privkey}.pem` | Let's Encrypt for `game.elopros.com`, copied by `certbot-deploy-hook.sh` |
 | Binaries | `/home/master/oneshot-deploy/{a,b}/` with each slot's `slot.env` | `ci/deploy_server.sh` |
 | `online.json`, `status.json` | `https://game.elopros.com/oneshot/…` | either slot, for both: each writes its roster to `oneshot-data/online/` (`--roster-dir`) |
-| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
+| Data, shared | `/home/master/oneshot-data/` | `replays/` (with `review/`, `cups/`, `unreported/`), `bugs/`, `server.pem`, `nonce.key`, `live`, `online/` |
 
 No Docker; no `cargo` at run time. A slot runs its own staged binary, never
 the checkout, and never the other slot's.
@@ -128,9 +128,12 @@ renamed or removed; dropping it archives it on their profile.
   /home/master/oneshot-data/server.pem --elo-key-id eu-1 resend` signs each
   afresh, posts it and removes the ones taken; one refused (a 4xx) is kept
   with why: remove it once Elo Pros has it.
-- **The service file** changed (a new flag)? `sudo cp 'ops/oneshot@.service' /etc/systemd/system/ && sudo systemctl daemon-reload`
-  before the deploy; the nginx file is staged by the deploy, then
+- **The service file** changed (a new flag)? The deploy installs it (step 3,
+  with `daemon-reload`); the nginx file is staged by the deploy, then
   `sudo nginx -t && sudo systemctl reload nginx`.
+- **Cut a drain now:** `sudo systemctl kill -s SIGINT oneshot@<slot>`; its
+  matches end and the reports still unsent are saved for `oneshot-review
+  resend`.
 - **Bug and crash reports:** `/home/master/oneshot-data/bugs/bugs-YYYY-MM-DD-<port>.jsonl`
   (one file per slot per day), one JSON object a line (`jq -c '.report | {kind, text, game}'`). A crash
   carries the panic's line; any report the build, browser, GPU, the match
@@ -159,7 +162,10 @@ renamed or removed; dropping it archives it on their profile.
 - **Bans and reviews:** `oneshot-review --replays /home/master/oneshot-data/replays list`
   (then `show`, `done`); `ban` and `lift` take `--elo-key
   /home/master/oneshot-data/server.pem --elo-key-id eu-1`. Bans live on Elo
-  Pros, signed with the server key.
+  Pros, signed with the server key. Before a ban,
+  `/home/master/oneshot-deploy/<slot>/oneshot-replay replays/<id>.osr`
+  re-runs the match and checks its ticks, hash and score (exit 1 if it
+  doesn't replay).
 
 ## More than one box
 
@@ -183,7 +189,9 @@ need none of this: any box with a seat will do.
 Other knobs on `ExecStart`: `--endpoints N` (N UDP ports, `--bind`'s and
 every `--endpoint-step` after, each open in both firewalls), `--net-nice`
 (the network threads under the sim's, 5 by default), `--big-snapshot-hz`
-`--no-delta` and `--no-far-rates` (snapshots: leave them at their defaults unless a load test says otherwise).
+`--no-delta` and `--no-far-rates` (snapshots: leave them at their defaults unless a load test says otherwise),
+`--sim-threads N` (the threads rooms step on: 0, the default, one a core; 1
+the sim thread alone).
 
 ## Backups
 
