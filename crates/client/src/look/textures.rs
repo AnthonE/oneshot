@@ -576,7 +576,7 @@ pub fn mip_models(
             continue;
         };
         let stem = path.path().file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if half && super::guns::GUNS.iter().any(|(_, g)| g.file == stem) {
+        if half && (super::guns::GUNS.iter().any(|(_, g)| g.file == stem) || super::guns::is_gear_file(stem)) {
             halve_in_place(img);
         }
         mip_in_place(img, false);

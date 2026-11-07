@@ -21,8 +21,10 @@ without --roll, which sets the old roll aside in `rolls/`.
 
 A gun's picture is its side, the muzzle to the right, on white; the script's
 IMAGE says what it is and SIDE (below) is added to it, with the script's
-FRONT for "the muzzle" where it has none (a rocket's nose). No proper noun
-in a prompt, ever: these are ours by name and look.
+FRONT for "the muzzle" where it has none (a rocket's nose). A thing that reads
+better from another side says so in its script's VIEW (gear: `gear.py`'s
+headwear, three-quarter on), added in SIDE's place. No proper noun in a prompt,
+ever: these are ours by name and look.
 
 Costs credits: about 9 for the picture and 15 for the mesh (the balance is
 printed before and after; `credits` in the sidecar is the difference, so
@@ -61,6 +63,7 @@ API = 'https://api.meshy.ai'
 POLL_S = 10
 # Meshy's own estimate is two or three minutes; past twenty it has hung.
 TIMEOUT_S = 1200
+RETRIES = 8
 
 # The mesh stage's model, and how big it paints.
 MESH = 'meshy-t2.5'
@@ -93,11 +96,15 @@ def call(method, path, body=None):
     req.add_header('Authorization', 'Bearer ' + key())
     if data:
         req.add_header('Content-Type', 'application/json')
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        sys.exit(f'{method} {path} -> {e.code}: {e.read().decode()[:400]}')
+    # A few at once are rate limited (429); a task already paid for is not lost to it.
+    for attempt in range(RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == RETRIES - 1:
+                sys.exit(f'{method} {path} -> {e.code}: {e.read().decode()[:400]}')
+            time.sleep(POLL_S * (attempt + 1))
 
 
 def wait(path, task, label):
@@ -132,15 +139,15 @@ def data_uri(path):
 
 
 def script_prompts(slug):
-    """A gun's script's IMAGE, TEXTURE, ASPECT and FRONT, read without running
-    it (it is Blender's)."""
+    """A gun's script's IMAGE, TEXTURE, ASPECT, FRONT and VIEW, read without
+    running it (it is Blender's)."""
     path = os.path.join(HERE, slug + '.py')
     if not os.path.exists(path):
         return {}
     found = {}
     for node in ast.parse(open(path).read()).body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in ('IMAGE', 'TEXTURE', 'ASPECT', 'FRONT'):
+            if node.targets[0].id in ('IMAGE', 'TEXTURE', 'ASPECT', 'FRONT', 'VIEW'):
                 found[node.targets[0].id] = ast.literal_eval(node.value)
     return found
 
@@ -229,7 +236,7 @@ def main():
     own = script_prompts(a.slug)
     if a.paint:
         return paint(a, own)
-    side = SIDE.format(front=own.get('FRONT', 'the muzzle'))
+    side = own.get('VIEW') or SIDE.format(front=own.get('FRONT', 'the muzzle'))
     image_prompt = a.image_prompt or (own['IMAGE'].strip() + side if 'IMAGE' in own else None)
     mesh_prompt = a.mesh_prompt or (own['TEXTURE'].strip() + PAINT if 'TEXTURE' in own else None)
     aspect = a.aspect or own.get('ASPECT', '1:1')
