@@ -1376,11 +1376,22 @@ fn draw_fighters(
             look::bodies::pose_capsule(d, e, &mut at);
             continue;
         }
+        let seat = seats.get(d.slot as usize).copied().flatten();
+        // On a turret: the bed of a hull that carries one (the pose's truck
+        // carries what the pose says).
+        let gunning = seat.is_some_and(|(v, k)| {
+            let turret = match posed.as_ref() {
+                Some(p) => p.2.truck_turret,
+                None => core.map.vehicles.get(v.slot as usize).map_or(0, |d| d.turret),
+            };
+            k == sim::vehicle::PASSENGER && turret != sim::vehicle::NO_TURRET
+        });
         look::bodies::pose(
             &mut commands,
             &models,
             d,
-            seats.get(d.slot as usize).copied().flatten().map(|(v, k)| (v.yaw, k)),
+            seat.map(|(v, k)| (v.yaw, k)),
+            gunning,
             e,
             &mut bodies,
             &mut at,
@@ -1490,7 +1501,7 @@ fn draw_vehicles(
                     Some(k) => k,
                     None => core.map.vehicles.get(slot as usize).map_or(0, |d| d.turret),
                 };
-                look::turret::spawn(&mut commands, &turrets, body, slot, kind);
+                look::turret::spawn(&mut commands, &turrets, &models, body, slot, kind);
                 drawn.vehicles.insert(slot, e);
             }
         }

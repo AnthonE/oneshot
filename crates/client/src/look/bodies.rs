@@ -732,13 +732,16 @@ pub fn flare(root: Entity, glow: Glow, bodies: &mut Query<&mut Body>, tags: &mut
 
 /// One fighter's body this frame: where it stands, how it moves (its gait,
 /// read off the snapshot: `anim.rs`), which gun it holds. `seat` is its
-/// hull's yaw and its seat, riding. `dt` is the frame's.
+/// hull's yaw and its seat, riding; `gunning`, it is on that hull's turret,
+/// its hands on the turret's grips and its own gun put away. `dt` is the
+/// frame's.
 #[allow(clippy::too_many_arguments)]
 pub fn pose(
     commands: &mut Commands,
     models: &Models,
     d: &Drawn,
     seat: Option<(f32, usize)>,
+    gunning: bool,
     root: Entity,
     bodies: &mut Query<&mut Body>,
     at: &mut Query<&mut Transform>,
@@ -770,9 +773,14 @@ pub fn pose(
     // Every gun is held in the long hold. The pistol clip is Gates'
     // first-person arms (hands up at the face): over a body it held nothing.
     // A pistol's reload is still its own clip.
-    let gun_of = gun(d.arm);
-    let sword = d.arm == sim::arms::SWORD;
-    let hold = gun_of.map(|_| if sword { Hold::Sword } else { Hold::Long });
+    // On a turret, the hands are on its grips, its own gun put away.
+    let gun_of = gun(d.arm).filter(|_| !gunning);
+    let sword = d.arm == sim::arms::SWORD && !gunning;
+    let hold = if gunning {
+        Some(Hold::Long)
+    } else {
+        gun_of.map(|_| if sword { Hold::Sword } else { Hold::Long })
+    };
     let reload_clip = gun_of.map(|g| if g.long { Hold::Long } else { Hold::Pistol });
     body.cutting = (body.cutting - dt).max(0.0);
     let cut = (sword && body.cutting > 0.0).then_some((Hold::Sword, CUT_S));
@@ -795,7 +803,7 @@ pub fn pose(
     );
     // The gun: swapped when the arm changes, hidden on the dead and at the
     // wheel. It waits for the hand it goes in.
-    let arm = if d.alive && !driving { d.arm } else { 0 };
+    let arm = if d.alive && !driving && !gunning { d.arm } else { 0 };
     if arm != body.held && body.dressed {
         // A sword sits in the hand its own way (`Sword_Idle`), a gun as it did.
         // The title's body can go the same frame, its hand with it.

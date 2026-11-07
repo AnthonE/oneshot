@@ -60,6 +60,10 @@ const PELLET_DRAW_RAD: f32 = 0.09;
 /// A standing shooter's eye over the floor, roughly: where their casings
 /// land.
 const EYE_OVER_FLOOR_M: f32 = 1.6;
+/// A turret's port, this far behind its muzzle, and its bed this far
+/// under its muzzle (`look/turret.rs`, `sim::consts::TURRET_Y`).
+const TURRET_PORT_M: f32 = 0.95;
+const TURRET_BED_M: f32 = 1.15;
 
 fn v3(v: Vec3) -> V3 {
     V3::new(v.x, v.y, v.z)
@@ -103,14 +107,19 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
         flash(fx, muzzle, dir, &look);
         // The round's casing, from the port at the shooter's right (a
         // shotgun's pellets are one round). A standing shooter's floor is
-        // about their eye's height below them.
-        eject(
-            fx,
-            &look,
-            muzzle - dir * 0.3,
-            dir.cross(Vec3::Y).normalize_or(Vec3::X),
-            from.y - EYE_OVER_FLOOR_M,
-        );
+        // about their eye's height below them; a turret's brass comes out
+        // of its receiver, behind the barrels, and falls to the bed.
+        let (port, floor) = if turret {
+            (muzzle - dir * TURRET_PORT_M, muzzle.y - TURRET_BED_M)
+        } else {
+            (muzzle - dir * 0.3, from.y - EYE_OVER_FLOOR_M)
+        };
+        let out = dir.cross(Vec3::Y).normalize_or(Vec3::X);
+        eject(fx, &look, port, out, floor);
+        if turret {
+            // Two a frame: it fires faster than frames come.
+            eject(fx, &look, port - dir * 0.05, out, floor);
+        }
     }
     if !kind.ray() {
         if first && arm == ROCKET {

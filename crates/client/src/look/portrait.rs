@@ -274,6 +274,7 @@ pub fn stand(
         &models,
         &d,
         None,
+        false,
         root,
         &mut bodies,
         &mut at,

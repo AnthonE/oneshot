@@ -221,6 +221,7 @@ pub fn stream(
         &models,
         &d,
         seat,
+        f.gunning(&core.map) != sim::vehicle::NO_TURRET,
         root,
         &mut bodies,
         &mut at,
