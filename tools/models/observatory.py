@@ -1,7 +1,9 @@
 """Cloudbreak's observatory: every built thing on the island, in the map's own
 coordinates (GLBs at the origin, `look/observatory.rs` draws them). An ancient
-sky-watchers' station on a floating rock: a tapering tower with a crown of
-rings, a sundial plaza under a broken meridian arch, trilithon gates, bastions.
+sky-watchers' station on a floating rock: a tower of three floors round a sight
+well, stairs climbing round it to a walk over the void, a tapering shaft with a
+crown of rings, a sundial plaza under a broken meridian arch, trilithon gates,
+bastions, and walks below the lip of the coast.
 
     blender -b --python tools/models/observatory.py
 
@@ -10,7 +12,8 @@ the sim collides (`maps/cloudbreak/map.json`, look `hidden`), its body set back
 BACK m from that plane and its frames, pilasters and string courses standing
 out to it, so the panels are real and nothing proud of a face is outside it.
 Above where anyone reaches the tower is free to taper inside its boxes, and its
-cornices and rings may stand out.
+cornices and rings may stand out. The rim walks are read from the map's own
+`walkway` items, so a node moved there moves here too.
 
 One GLB a material: `stone`, `stone_dark`, `bronze`, `crown` (the rings, turned
 slowly by the client round CROWN_AT), `light_white`, `light_red`, `light_blue`.
@@ -20,6 +23,7 @@ occlusion traced against the whole island and sand dust up from the ground.
 
 Numbers for the game go in `look/observatory.rs` and `maps/cloudbreak/map.json`.
 """
+import json
 import math
 import os
 import random
@@ -33,6 +37,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'isle')
 SHEETS = os.path.join(ROOT, 'traces', 'rocks')
+MAP = os.path.join(ROOT, 'maps', 'cloudbreak', 'map.json')
 
 # The `stone` set's tile, m (`level::dress`'s STONE).
 TILE_M = 4.0
@@ -50,6 +55,11 @@ DUST_M = 1.6
 DUST_RGB = (1.12, 0.98, 0.78)
 # Where the crown's rings turn about (x, y, z), `look/observatory.rs`.
 CROWN_AT = (0.0, 33.0, 21.0)
+# The well through the tower's floors, x0, z0, x1, z1 (the holes in map.json).
+WELL = (-1.05, 19.6, 1.05, 22.7)
+# How far apart a rim walk's corbels and its wall's pilasters stand, m.
+CORBEL_M = 1.9
+PILASTER_M = 2.85
 
 
 class Part:
@@ -260,6 +270,102 @@ def wedge(x0, z0, x1, z1, up, y_lo, y_hi, base, mat='stone'):
         quad(bots[p], bots[q], tops[q], tops[p], mat, o)
 
 
+def plank(a, b, ya, yb, off0, off1, thick, mat='stone', ends=(True, True), cell=CELL):
+    """A slab from a to b (x, z), its top at ya rising to yb, from off0 to off1
+    across its way (along (-dz, dx)): a slope the sim's sweep walks, to the bit."""
+    dx, dz = b[0] - a[0], b[1] - a[1]
+    ln = math.hypot(dx, dz)
+    nx, nz = -dz / ln, dx / ln
+    def p(end, off, y):
+        e = a if end == 0 else b
+        return (e[0] + nx * off, y, e[1] + nz * off)
+    quad(p(0, off0, ya), p(0, off1, ya), p(1, off1, yb), p(1, off0, yb), mat, (0, 1, 0), cell)
+    quad(p(0, off0, ya - thick), p(0, off1, ya - thick), p(1, off1, yb - thick), p(1, off0, yb - thick), mat, (0, -1, 0), cell)
+    quad(p(0, off0, ya - thick), p(1, off0, yb - thick), p(1, off0, yb), p(0, off0, ya), mat, (-nx, 0, -nz), cell)
+    quad(p(0, off1, ya - thick), p(1, off1, yb - thick), p(1, off1, yb), p(0, off1, ya), mat, (nx, 0, nz), cell)
+    if ends[0]:
+        quad(p(0, off0, ya - thick), p(0, off1, ya - thick), p(0, off1, ya), p(0, off0, ya), mat, (-dx, 0, -dz), cell)
+    if ends[1]:
+        quad(p(1, off0, yb - thick), p(1, off1, yb - thick), p(1, off1, yb), p(1, off0, yb), mat, (dx, 0, dz), cell)
+
+
+def tbox(cx, cz, ux, uz, hu, hv, y0, y1, mat='stone', cell=1.2):
+    """A box turned to run along (ux, uz), hu to either side of (cx, cz) and hv
+    across it, closed all round."""
+    vx, vz = -uz, ux
+    c = [(cx + s * ux * hu + t * vx * hv, cz + s * uz * hu + t * vz * hv) for s, t in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    for i in range(4):
+        p, q = c[i], c[(i + 1) % 4]
+        o = ((p[0] + q[0]) / 2 - cx, 0.0, (p[1] + q[1]) / 2 - cz)
+        quad((p[0], y0, p[1]), (q[0], y0, q[1]), (q[0], y1, q[1]), (p[0], y1, p[1]), mat, o, cell)
+    quad((c[0][0], y1, c[0][1]), (c[1][0], y1, c[1][1]), (c[2][0], y1, c[2][1]), (c[3][0], y1, c[3][1]), mat, (0, 1, 0), cell)
+    quad((c[0][0], y0, c[0][1]), (c[1][0], y0, c[1][1]), (c[2][0], y0, c[2][1]), (c[3][0], y0, c[3][1]), mat, (0, -1, 0), cell)
+
+
+def panel(x0, y0, z0, x1, y1, z1, face, pier=0.3, band=0.22, mat='stone'):
+    """A span of wall: the box the sim collides, its body set back BACK from
+    `face` ('-x', '+x', '-z', '+z'), piers at its ends and a plinth and a course
+    between them out to the plane."""
+    up = face[0] == '+'
+    if face[1] == 'x':
+        bx0, bx1 = (x0, x1 - BACK) if up else (x0 + BACK, x1)
+        a, b = (bx1, x1) if up else (x0, bx0)
+        cbox(bx0, y0, z0, bx1, y1, z1, mat, c=0.02)
+        cbox(a, y0, z0, b, y1, z0 + pier, mat, c=0.03)
+        cbox(a, y0, z1 - pier, b, y1, z1, mat, c=0.03)
+        cbox(a, y0, z0 + pier, b, y0 + band, z1 - pier, 'stone_dark', c=0.02)
+        cbox(a, y1 - band, z0 + pier, b, y1, z1 - pier, mat, c=0.02)
+    else:
+        bz0, bz1 = (z0, z1 - BACK) if up else (z0 + BACK, z1)
+        a, b = (bz1, z1) if up else (z0, bz0)
+        cbox(x0, y0, bz0, x1, y1, bz1, mat, c=0.02)
+        cbox(x0, y0, a, x0 + pier, y1, b, mat, c=0.03)
+        cbox(x1 - pier, y0, a, x1, y1, b, mat, c=0.03)
+        cbox(x0 + pier, y0, a, x1 - pier, y0 + band, b, 'stone_dark', c=0.02)
+        cbox(x0 + pier, y1 - band, a, x1 - pier, y1, b, mat, c=0.02)
+
+
+def floor_with_well(y0, y1, z0, z1, hx):
+    """A floor, the well through it, a bronze lip round the hole and a line of
+    light in it. Its top is the sim's to the bit."""
+    wx0, wz0, wx1, wz1 = WELL
+    cbox(-hx, y0, z0, hx, y1, wz0, 'stone', c=0.03)
+    cbox(-hx, y0, wz1, hx, y1, z1, 'stone', c=0.03)
+    for s in (-1, 1):
+        a, b = sorted((s * wx1, s * hx))
+        cbox(a, y0, wz0, b, y1, wz1, 'stone', c=0.03)
+    t = y1 + 0.01
+    lip = 0.09
+    cbox(wx0 - lip, y1, wz0 - lip, wx1 + lip, t, wz0 - 0.001, 'bronze', c=0.0, cell=3.0)
+    cbox(wx0 - lip, y1, wz1 + 0.001, wx1 + lip, t, wz1 + lip, 'bronze', c=0.0, cell=3.0)
+    for s in (-1, 1):
+        a, b = sorted((s * (wx1 + 0.001), s * (wx1 + lip)))
+        cbox(a, y1, wz0 - 0.001, b, t, wz1 + 0.001, 'bronze', c=0.0, cell=3.0)
+    ly = (y0 + y1) / 2
+    strip_light(wx0, ly - 0.03, wz0, wx1, ly + 0.03, wz0 + 0.012, 'light_white')
+    strip_light(wx0, ly - 0.03, wz1 - 0.012, wx1, ly + 0.03, wz1, 'light_white')
+    strip_light(wx0, ly - 0.03, wz0, wx0 + 0.012, ly + 0.03, wz1, 'light_white')
+    strip_light(wx1 - 0.012, ly - 0.03, wz0, wx1, ly + 0.03, wz1, 'light_white')
+
+
+def dial(cx, cy, z, r, face, a0=180.0, a1=360.0):
+    """A sighting scale inlaid on a wall facing along z: bronze ticks round an
+    arc and its rule, a long one each fifth, a hair proud."""
+    z0, z1 = sorted((z, z + face * 0.006))
+    n = int((a1 - a0) / 3.0)
+    for k in range(n + 1):
+        a = math.radians(a0 + (a1 - a0) * k / n)
+        ln = 0.22 if k % 5 == 0 else 0.11
+        ca, sa = math.cos(a), math.sin(a)
+        w = 0.012 if k % 5 == 0 else 0.008
+        p0 = (cx + ca * r - sa * w, cy + sa * r + ca * w)
+        p1 = (cx + ca * r + sa * w, cy + sa * r - ca * w)
+        p2 = (cx + ca * (r - ln) + sa * w, cy + sa * (r - ln) - ca * w)
+        p3 = (cx + ca * (r - ln) - sa * w, cy + sa * (r - ln) + ca * w)
+        quad((p0[0], p0[1], z1 if face > 0 else z0), (p1[0], p1[1], z1 if face > 0 else z0), (p2[0], p2[1], z1 if face > 0 else z0), (p3[0], p3[1], z1 if face > 0 else z0), 'bronze', (0, 0, face), cell=4.0)
+    cbox(cx - r, cy - 0.012, z0, cx + r, cy + 0.012, z1, 'bronze', c=0.0, cell=6.0)
+
+
 def strip_light(x0, y0, z0, x1, y1, z1, mat):
     """A thin bar of light (never collided; a hand proud at most)."""
     cbox(x0, y0, z0, x1, y1, z1, mat, c=0.0, top=True, cell=20.0)
@@ -309,7 +415,7 @@ def hall():
         cbox(x - 0.018, 3.62 - h, 16.985, x + 0.018, 3.62, 17.0, 'bronze', c=0.0, cell=2.0)
     cbox(-1.42, 3.62, 16.985, 1.42, 3.67, 17.0, 'bronze', c=0.0, cell=4.0)
     # Light in the door's head.
-    strip_light(-1.3, 2.74, 17.15, 1.3, 2.8, 17.45, 'light_white')
+    strip_light(-1.3, 2.77, 17.27, 1.3, 2.8, 17.33, 'light_white')
 
     # Side walls with a door each.
     for s in (-1, 1):
@@ -330,18 +436,24 @@ def hall():
         bx(4.0, y0, 22.0, 3.86, 0.55, 23.3, 'stone_dark', c=0.03)
         bx(4.0, 3.45, 17.85, 3.86, 4.0, 19.0, c=0.03)
         bx(4.0, 3.45, 22.0, 3.86, 4.0, 23.3, c=0.03)
-        lo, hi = sorted((s * 3.35, s * 3.85))
-        strip_light(lo, 2.54, 19.6, hi, 2.6, 21.4, 'light_white')
+        lo, hi = sorted((s * 3.57, s * 3.63))
+        strip_light(lo, 2.57, 19.6, hi, 2.6, 21.4, 'light_white')
     # North wall.
     cbox(-3.2, y0, 23.2, 3.2, y1, 24.0 - BACK, 'stone', c=0.03)
     for x in (-1.2, 1.2):
         cbox(x - 0.28, y0, 23.2, x + 0.28, y1, 24.0, 'stone', c=0.05)
     cbox(-3.3, y0, 23.86, 3.3, 0.55, 24.0, 'stone_dark', c=0.03)
     cbox(-3.3, 3.45, 23.86, 3.3, y1, 24.0, 'stone', c=0.03)
-    # Roof slab, with a cornice under its edge that stays inside the slab's
-    # plan: the balcony is walked on, so its top is the sim's to the bit.
-    cbox(-4, 4.0, 17.0, 4, 4.5, 24.0, 'stone', c=0.04)
-    cbox(-3.86, 3.86, 17.14, 3.86, 4.0, 23.86, 'stone_dark', c=0.0, cell=3.0)
+    # Its floor's flags, and its roof with the well through it: a cornice under
+    # the edge stays inside the slab's plan, since the balcony is walked on.
+    cbox(-3.2, -0.2, 17.8, 3.2, 0.02, 23.2, 'stone_dark', c=0.0, cell=1.0)
+    floor_with_well(4.0, 4.5, 17.0, 24.0, 4.0)
+    wx0, wz0, wx1, wz1 = WELL
+    cbox(-3.86, 3.86, 17.14, 3.86, 4.0, wz0, 'stone_dark', c=0.0, cell=3.0)
+    cbox(-3.86, 3.86, wz1, 3.86, 4.0, 23.86, 'stone_dark', c=0.0, cell=3.0)
+    for s in (-1, 1):
+        a, b = sorted((s * wx1, s * 3.86))
+        cbox(a, 3.86, wz0, b, 4.0, wz1, 'stone_dark', c=0.0, cell=3.0)
 
     # The balcony: a slab on two corbels, its parapet cut into merlons that
     # stay inside the parapet's box.
@@ -370,23 +482,264 @@ def ramps():
         cbox(a, -0.5, 14.5, b, 2.6, 16.5, 'stone_dark', c=0.04)
 
 
+# ------------------------------------------------------- the rooms over the hall
+def sighting_room():
+    """The floor over the hall, y 4.5..8: a door and two windows on the balcony,
+    a door each side out to the stairs, a window each side on the stairs."""
+    y0, y1 = 4.5, 8.0
+    for s in (-1, 1):
+        def bx(a, ya, za, b, yb, zb, mat='stone', c=0.05):
+            lo, hi = sorted((s * a, s * b))
+            cbox(lo, ya, za, hi, yb, zb, mat, c=c)
+        # South wall: door jamb, sill and head of the window, corner.
+        bx(1.0, y0, 17.8, 1.9, y1, 18.4)
+        bx(1.9, y0, 17.8, 2.9, 5.55, 18.4, 'stone_dark', c=0.04)
+        bx(1.9, 7.0, 17.8, 2.9, y1, 18.4)
+        bx(2.9, y0, 17.8, 4.0, y1, 18.6, c=0.07)
+        lo, hi = sorted((s * 2.0, s * 2.8))
+        strip_light(lo, 6.97, 18.07, hi, 7.0, 18.13, 'light_white')
+        # Side wall: the door to the stair, its window on the stair.
+        bx(3.3, 6.9, 18.6, 4.0, y1, 20.0, c=0.05)
+        lo, hi = sorted((s * 3.3, s * 4.0))
+        panel(lo, y0, 20.0, hi, y1, 21.2, '+x' if s > 0 else '-x')
+        bx(3.3, y0, 21.2, 4.0, 5.55, 22.2, 'stone_dark', c=0.04)
+        bx(3.3, 6.9, 21.2, 4.0, y1, 22.2)
+        panel(lo, y0, 22.2, hi, y1, 23.4, '+x' if s > 0 else '-x')
+        a, b = sorted((s * 3.45, s * 3.85))
+        strip_light(a, 6.87, 18.75, b, 6.9, 18.81, 'light_white')
+        strip_light(a, 6.87, 21.3, b, 6.9, 21.36, 'light_white')
+    cbox(-1.0, 7.0, 17.8, 1.0, y1, 18.4, c=0.05)
+    strip_light(-0.9, 6.97, 18.07, 0.9, 7.0, 18.13, 'light_white')
+    # The lintel's face carries a scale, as the hall's does.
+    for i in range(-3, 4):
+        x = i * 0.26
+        h = 0.26 if i % 3 == 0 else 0.14
+        cbox(x - 0.016, 7.72 - h, 17.788, x + 0.016, 7.72, 17.8, 'bronze', c=0.0, cell=2.0)
+    panel(-4.0, y0, 23.4, 4.0, y1, 24.0, '+z')
+    dial(0.0, 6.5, 23.4, 1.5, -1)
+    # A line of light under the roof, inside, each long side.
+    for s in (-1, 1):
+        lo, hi = sorted((s * 3.28, s * 3.3))
+        strip_light(lo, 7.72, 20.1, hi, 7.76, 21.1, 'light_white')
+    floor_with_well(8.0, 8.5, 17.8, 24.0, 4.0)
+
+
+def gallery():
+    """The top floor, y 8.5..11.4: three windows looking south over the island
+    and two narrow ones each side, a door north onto the back walk. The sills
+    stand to a fighter's ribs, the heads above its eye."""
+    y0, sill, head, y1 = 8.5, 9.55, 10.9, 11.4
+    x, zs, zn = 3.85, 17.95, 23.85
+    cbox(-x, y0, zs, x, sill, 18.45, 'stone_dark', c=0.05)
+    cbox(-x, head, zs, x, y1, 18.45, c=0.05)
+    for s in (-1, 1):
+        def bx(a, ya, za, b, yb, zb, mat='stone', c=0.05):
+            lo, hi = sorted((s * a, s * b))
+            cbox(lo, ya, za, hi, yb, zb, mat, c=c)
+        bx(0.75, sill, zs, 1.75, head, 18.45)
+        bx(3.0, sill, zs, x, head, 18.45, c=0.07)
+        bx(3.35, y0, 18.45, x, sill, 23.4, 'stone_dark', c=0.05)
+        bx(3.35, head, 18.45, x, y1, 23.4)
+        bx(3.35, sill, 18.45, x, head, 20.4)
+        bx(3.35, sill, 20.8, x, head, 21.8)
+        bx(3.35, sill, 22.2, x, head, 23.4)
+        bx(1.0, y0, 23.4, x, y1, zn, c=0.05)
+        dial(s * 2.3, 10.1, 23.4, 0.72, -1)
+        # A line of light in each window's head.
+        lo, hi = sorted((s * 1.85, s * 2.9))
+        strip_light(lo, 10.87, 18.17, hi, 10.9, 18.23, 'light_white')
+        lo, hi = sorted((s * 3.45, s * 3.75))
+        strip_light(lo, 10.87, 20.45, hi, 10.9, 20.75, 'light_white')
+        strip_light(lo, 10.87, 21.85, hi, 10.9, 22.15, 'light_white')
+    cbox(-1.0, head, 23.4, 1.0, y1, zn, c=0.05)
+    strip_light(-0.65, 10.87, 18.17, 0.65, 10.9, 18.23, 'light_white')
+    strip_light(-0.9, 10.87, 23.6, 0.9, 10.9, 23.66, 'light_white')
+    # Its ceiling, and a bronze ring over the well.
+    cbox(-x, 11.4, zs, x, 11.5, zn, 'stone_dark', c=0.0, cell=2.0)
+    torus((0.0, 11.36, (WELL[1] + WELL[3]) / 2), 1.32, 0.035, (0, 1, 0), 'bronze', segs=48, sides=6)
+
+
+def stairs():
+    """Out of the room's side doors and up round the tower: a shoulder, a stair
+    along each flank, a corner over the coast, a walk over the void along its
+    back rising to the gallery's door. Each side's light runs under its stair."""
+    for s, light in ((-1, 'light_red'), (1, 'light_blue')):
+        x0, x1 = 4.0 * s, 5.7 * s
+        lo, hi = sorted((x0, x1))
+        # The shoulder, on corbels against the wall.
+        cbox(lo, 4.0, 17.0, hi, 4.5, 20.0, c=0.04)
+        for z in (17.6, 19.4):
+            for reach, y in ((1.3, 3.5), (0.75, 3.0)):
+                a, b = sorted((s * 4.0, s * (4.0 + reach)))
+                cbox(a, y, z - 0.26, b, 4.0 if y == 3.5 else 3.5, z + 0.26, 'stone_dark', c=0.04)
+        # The flank's stair: the sim's sweep, plain on top, and its soffit
+        # carried on corbels that follow it up.
+        mx = (x0 + x1) / 2
+        half = abs(x1 - x0) / 2
+        plank((mx, 20.0), (mx, 24.0), 4.5, 6.9, -half, half, 0.5)
+        for z in (21.1, 22.2, 23.3):
+            top = 4.0 + 0.6 * (z - 20.0)
+            for reach, drop, h in ((1.3, 0.28, 0.5), (0.75, 0.74, 0.46)):
+                a, b = sorted((s * 4.0, s * (4.0 + reach)))
+                cbox(a, top - drop, z - 0.24, b, top - drop + h, z + 0.24, 'stone_dark', c=0.03)
+        # A line of its side's light under the outer edge.
+        out = s * 5.71
+        def lit(z):
+            return 4.5 + 0.6 * (z - 20.0) - 0.28
+        quad((out, lit(20.1) - 0.03, 20.1), (out, lit(23.9) - 0.03, 23.9), (out, lit(23.9) + 0.03, 23.9), (out, lit(20.1) + 0.03, 20.1), light, (s, 0, 0), cell=30.0)
+        # The corner over the coast, and its kerb.
+        cbox(lo, 6.4, 24.0, hi, 6.9, 25.8, c=0.04)
+        cbox(lo, 6.9, 25.6, hi, 7.5, 25.8, 'stone_dark', c=0.03)
+        a, b = sorted((s * 5.5, s * 5.7))
+        cbox(a, 6.9, 24.0, b, 7.5, 25.6, 'stone_dark', c=0.03)
+        for cx in (s * 4.5, s * 5.3):
+            for reach, drop, h in ((1.3, 0.5, 0.5), (0.65, 1.0, 0.55)):
+                c0 = cx - 0.22
+                c1 = cx + 0.22
+                cbox(c0, 6.4 - drop, 24.0, c1, 6.4 - drop + h, 24.0 + reach, 'stone_dark', c=0.03)
+        # The walk along the back, rising to the door: the sim's sweep.
+        a0, a1 = (s * 4.0, 24.9), (s * 1.2, 24.9)
+        plank(a0, a1, 6.9, 8.5, -0.9, 0.9, 0.5, ends=(False, False))
+        # Its kerb on the outer side (+z), rising with it.
+        kerb_off = (-0.9, -0.7) if s > 0 else (0.7, 0.9)
+        plank(a0, a1, 7.5, 9.1, kerb_off[0], kerb_off[1], 0.6, 'stone_dark', ends=(False, False))
+        for x in (2.0, 3.2):
+            top = 6.9 + (4.0 - x) * 1.6 / 2.8 - 0.5
+            for reach, drop in ((1.3, 0.5), (0.65, 1.0)):
+                cbox(s * x - 0.2, top - drop, 24.0, s * x + 0.2, top - drop + 0.5, 24.0 + reach, 'stone_dark', c=0.03)
+        quad((s * 3.9, 6.9 + 0.1 * 1.6 / 2.8 - 0.28, 25.805), (s * 1.3, 6.9 + 2.7 * 1.6 / 2.8 - 0.28, 25.805),
+             (s * 1.3, 6.9 + 2.7 * 1.6 / 2.8 - 0.22, 25.805), (s * 3.9, 6.9 + 0.1 * 1.6 / 2.8 - 0.22, 25.805), light, (0, 0, 1), cell=30.0)
+    # The landing at the door, and its kerb.
+    cbox(-1.2, 8.0, 23.85, 1.2, 8.5, 25.8, c=0.04)
+    cbox(-1.2, 8.5, 25.6, 1.2, 9.1, 25.8, 'stone_dark', c=0.03)
+    for x in (-0.7, 0.7):
+        for reach, drop in ((1.5, 0.5), (0.8, 1.0)):
+            cbox(x - 0.22, 8.0 - drop, 23.85, x + 0.22, 8.0 - drop + 0.5, 23.85 + reach, 'stone_dark', c=0.03)
+
+
+# --------------------------------------------------------------- the rim walks
+def offset_chain(nodes, off, out):
+    """Where a chain's edge runs, `off` across its way (toward `out`), mitred."""
+    pts = []
+    n = len(nodes)
+    for i in range(n):
+        p = nodes[max(i - 1, 0)]
+        q = nodes[i]
+        r = nodes[min(i + 1, n - 1)]
+        d0 = Vector((q[0] - p[0], q[1] - p[1])) if i > 0 else Vector((r[0] - q[0], r[1] - q[1]))
+        d1 = Vector((r[0] - q[0], r[1] - q[1])) if i < n - 1 else d0
+        d0.normalize()
+        d1.normalize()
+        n0 = Vector((-d0.y, d0.x)) * out
+        n1 = Vector((-d1.y, d1.x)) * out
+        m = (n0 + n1).normalized()
+        k = off / max(0.5, m.dot(n1))
+        pts.append((q[0] + m.x * k, q[1] + m.y * k, q[2]))
+    return pts
+
+
+def ribbon(nodes, off0, off1, top, bottom, out, mat, sides=True, under=True, cell=1.0):
+    """A strip along a chain between two offsets: its top `top(y)`, its underside
+    `bottom(y)`, mitred at each bend. y is the chain's at that node."""
+    a = offset_chain(nodes, off0, out)
+    b = offset_chain(nodes, off1, out)
+    for i in range(len(nodes) - 1):
+        def v(p, f):
+            return (p[0], f(p[2]), p[1])
+        quad(v(a[i], top), v(b[i], top), v(b[i + 1], top), v(a[i + 1], top), mat, (0, 1, 0), cell)
+        if under:
+            quad(v(a[i], bottom), v(b[i], bottom), v(b[i + 1], bottom), v(a[i + 1], bottom), mat, (0, -1, 0), cell)
+        if sides:
+            mx, mz = (a[i][0] + a[i + 1][0]) / 2, (a[i][1] + a[i + 1][1]) / 2
+            nx, nz = (b[i][0] + b[i + 1][0]) / 2, (b[i][1] + b[i + 1][1]) / 2
+            quad(v(a[i], bottom), v(a[i + 1], bottom), v(a[i + 1], top), v(a[i], top), mat, (mx - nx, 0, mz - nz), cell)
+            quad(v(b[i], bottom), v(b[i + 1], bottom), v(b[i + 1], top), v(b[i], top), mat, (nx - mx, 0, nz - mz), cell)
+    # Its ends, cut square.
+    for i, j in ((0, 1), (len(nodes) - 1, len(nodes) - 2)):
+        def v(p, f):
+            return (p[0], f(p[2]), p[1])
+        o = (nodes[i][0] - nodes[j][0], 0, nodes[i][1] - nodes[j][1])
+        quad(v(a[i], bottom), v(b[i], bottom), v(b[i], top), v(a[i], top), mat, o, cell)
+
+
+def rim_walk(it, sx):
+    """One `walkway` of map.json (the mirror image for sx = -1): its deck on
+    corbels, a kerb of two courses, a line of its side's light along the kerb's
+    foot, and a pilastered revetment under a coping laid over the lip's sand."""
+    nodes = [(x * sx, z, y) for x, z, y in it['walkway']]
+    out = it['out'] * sx
+    w = it['width'] / 2
+    thick = it['thick']
+    kw, kh = it['kerb']
+    cw, cy = it['wall']
+    light = 'light_red' if sx > 0 else 'light_blue'
+    foot = min(y for _, _, y in nodes) - thick
+
+    # The deck runs back under the wall's set-back body, or cloud shows between.
+    ribbon(nodes, -w - BACK - 0.03, w, lambda y: y, lambda y: y - thick, out, 'stone')
+    # The kerb: a course, then a dark cap.
+    ribbon(nodes, w - kw, w, lambda y: y + kh - 0.14, lambda y: y, out, 'stone', under=False)
+    ribbon(nodes, w - kw, w, lambda y: y + kh, lambda y: y + kh - 0.14, out, 'stone_dark', under=False)
+    # The light along its foot, on its inner face, where the walk is level.
+    inner = offset_chain(nodes, w - kw - 0.006, out)
+    for i in range(len(nodes) - 1):
+        p, q = inner[i], inner[i + 1]
+        if p[2] != q[2] or math.hypot(q[0] - p[0], q[1] - p[1]) < 1.2:
+            continue
+        quad((p[0], p[2] + 0.07, p[1]), (q[0], q[2] + 0.07, q[1]), (q[0], q[2] + 0.11, q[1]), (p[0], p[2] + 0.11, p[1]), light, (0, 1, 0), cell=30.0)
+    # The revetment's body, set back; the coping over it, walked on, its top the
+    # sim's and a hand over the sand.
+    ribbon(nodes, -w - cw, -w - BACK, lambda y: cy - 0.2, lambda y: foot, out, 'stone', under=False)
+    ribbon(nodes, -w - cw, -w, lambda y: cy, lambda y: cy - 0.2, out, 'stone_dark')
+    # Along each leg: pilasters out to the wall's plane, corbels under the deck.
+    for i in range(len(nodes) - 1):
+        p, q = nodes[i], nodes[i + 1]
+        dx, dz = q[0] - p[0], q[1] - p[1]
+        ln = math.hypot(dx, dz)
+        if ln < 0.6:
+            continue
+        ux, uz = dx / ln, dz / ln
+        nx, nz = -uz * out, ux * out
+        for k in range(int(ln / PILASTER_M) + 1):
+            t = PILASTER_M * (k + 0.5)
+            if t > ln:
+                break
+            y = p[2] + (q[2] - p[2]) * t / ln
+            cx, cz = p[0] + ux * t + nx * (-w - BACK / 2), p[1] + uz * t + nz * (-w - BACK / 2)
+            if cy - 0.2 - y > 0.15:
+                tbox(cx, cz, ux, uz, 0.24, BACK / 2, y - 0.02, cy - 0.2, 'stone')
+        for k in range(int(ln / CORBEL_M) + 1):
+            t = CORBEL_M * (k + 0.5)
+            if t > ln:
+                break
+            y = p[2] + (q[2] - p[2]) * t / ln - thick
+            bx, bz = p[0] + ux * t, p[1] + uz * t
+            # Steps of stone from the rock out to the deck's edge.
+            for reach, drop, h in ((w * 2 - 0.1, 0.0, 0.42), (w * 1.35, 0.42, 0.5), (w * 0.8, 0.92, 0.62)):
+                c = -w + reach / 2
+                tbox(bx + nx * c, bz + nz * c, nx, nz, reach / 2, 0.26, y - drop - h, y - drop, 'stone_dark')
+
+
+def rim_walks():
+    with open(MAP) as f:
+        spec = json.load(f)
+    for st in spec['structures']:
+        for it in st.get('boxes', []):
+            if isinstance(it, dict) and 'walkway' in it:
+                rim_walk(it, 1)
+                if st.get('mirror'):
+                    rim_walk(it, -1)
+
+
 # ----------------------------------------------------------------- the tower
 def tower():
     cz = 20.9
-    # Tier one, y 4.5..12: from the slab, inside its box, leaning in.
-    tiers = [
-        # y, half x, half z, corner cut
-        (4.5, 3.86, 3.0, 0.2),
-        (6.6, 3.8, 2.96, 0.3),
-        (11.4, 3.46, 2.72, 0.6),
-    ]
-    loft([ring8(hx, hz, ch, cz, y) for y, hx, hz, ch in tiers], cap=False)
-    # Its cornice, up and out: free above reach.
+    # The gallery's cornice, up and out: free above reach.
     loft([
-        ring8(3.46, 2.72, 0.6, cz, 11.4),
-        ring8(3.62, 2.88, 0.62, cz, 11.55),
-        ring8(3.86, 3.1, 0.68, cz, 11.95),
-        ring8(3.86, 3.1, 0.68, cz, 12.2),
+        ring8(3.85, 2.95, 0.14, cz, 11.4),
+        ring8(3.9, 3.0, 0.2, cz, 11.55),
+        ring8(4.0, 3.12, 0.3, cz, 11.95),
+        ring8(4.0, 3.12, 0.3, cz, 12.2),
         ring8(3.5, 2.8, 0.66, cz, 12.32),
     ], 'stone_dark', cap=False)
     # Tier two, y 12.3..22: the long shaft, more octagon as it rises.
@@ -424,11 +777,9 @@ def tower():
                 return a0 + (a1 - a0) * t
         return table[-1][1]
 
-    hx1 = [(4.5, 3.86), (6.6, 3.8), (11.4, 3.46)]
-    hz1 = [(4.5, 3.0), (6.6, 2.96), (11.4, 2.72)]
     hx2 = [(12.32, 3.42), (15.0, 3.3), (21.4, 2.86)]
     hz2 = [(12.32, 2.74), (15.0, 2.68), (21.4, 2.38)]
-    for tier, (yy, hx, hz) in enumerate(((((6.8, 11.3)), hx1, hz1), ((12.5, 21.3), hx2, hz2))):
+    for tier, (yy, hx, hz) in ((1, ((12.5, 21.3), hx2, hz2)),):
         y0, y1 = yy
         # The south and north faces' slits, the east and west faces'.
         for f in (-1, 1):
@@ -470,10 +821,6 @@ def tower():
         up = (0, 1, f) if face_z else (f, 1, 0)
         quad(at(y1, -1, proud), at(y1, 1, proud), at(y1 + 0.16, 1, 0.0), at(y1 + 0.16, -1, 0.0), 'stone', up, cell=2.0)
     for f in (-1, 1):
-        for off in (-3.02, -2.34, -0.72, 0.72, 2.34, 3.02):
-            rib(True, f, off, 6.6, 11.05, hx1, hz1, 0.13, 0.1)
-        for off in (-2.28, -1.72, -0.42, 0.42, 1.72, 2.28):
-            rib(False, f, off, 6.6, 11.05, hx1, hz1, 0.13, 0.1)
         for off in (-1.5, -0.86, 0.86, 1.5):
             rib(True, f, off, 12.6, 20.3, hx2, hz2, 0.11, 0.08)
             rib(False, f, off * 0.82, 12.6, 20.3, hx2, hz2, 0.11, 0.08)
@@ -483,9 +830,6 @@ def tower():
         ch = 0.9 + (y - 15.0) / 6.4 * 0.18
         loft([ring8(hxs, hzs, ch, cz, y), ring8(hxs + 0.13, hzs + 0.13, ch, cz, y + 0.08),
               ring8(hxs + 0.13, hzs + 0.13, ch, cz, y + 0.26), ring8(hxs, hzs, ch, cz, y + 0.34)], 'stone_dark', cap=False, cell=3.0)
-    # And one where the first tier leaves the roof.
-    loft([ring8(3.86, 3.0, 0.2, cz, 6.3), ring8(3.92, 3.06, 0.22, cz, 6.36), ring8(3.92, 3.06, 0.22, cz, 6.58), ring8(3.8, 2.96, 0.3, cz, 6.66)],
-         'stone_dark', cap=False, cell=3.0)
     # Bronze scale bands round the shaft, under the second cornice.
     for y, hx, hz in ((20.55, 2.93, 2.43), (13.2, 3.4, 2.73)):
         loft([ring8(hx + 0.03, hz + 0.03, 1.0, cz, y), ring8(hx + 0.03, hz + 0.03, 1.0, cz, y + 0.22)], 'bronze', cap=False, cell=3.0)
@@ -735,8 +1079,12 @@ def decks():
 
 def build_all():
     hall()
+    sighting_room()
+    gallery()
+    stairs()
     ramps()
     tower()
+    rim_walks()
     arch()
     gates()
     decks()
@@ -782,7 +1130,8 @@ def fibonacci_hemisphere(n):
 
 def paint(objs):
     """COLOR_0: traced occlusion and the sand's dust, per vertex."""
-    # All the geometry, and the ground at about y 0, as one tree.
+    # All the geometry, and the island's top and its rim, as one tree: what
+    # hangs below the lip sees the sky past it.
     verts = []
     polys = []
     for o in objs.values():
@@ -790,9 +1139,17 @@ def paint(objs):
         verts.extend(tuple(v.co) for v in o.data.vertices)
         polys.extend([tuple(i + base for i in p.vertices) for p in o.data.polygons])
     base = len(verts)
-    s = 80.0
-    verts.extend([(-s, -s, 0.0), (s, -s, 0.0), (s, s, 0.0), (-s, s, 0.0)])
-    polys.append((base, base + 1, base + 2, base + 3))
+    with open(MAP) as f:
+        coast = next(sh['outline'] for sh in json.load(f)['terrain']['shapes'] if 'outline' in sh)
+    verts.append(to_blender((0.0, 0.0, 0.0)))
+    n = len(coast)
+    for x, z in coast:
+        verts.append(to_blender((x, 0.0, z)))
+        verts.append(to_blender((x, -6.0, z)))
+    for i in range(n):
+        a, b = base + 1 + 2 * i, base + 1 + 2 * ((i + 1) % n)
+        polys.append((base, a, b))
+        polys.append((a, b, b + 1, a + 1))
     tree = BVHTree.FromPolygons(verts, polys, all_triangles=False)
     dirs = fibonacci_hemisphere(AO_RAYS)
     rng = random.Random(7)
@@ -823,6 +1180,8 @@ def paint(objs):
             ao = AO_FLOOR + (1.0 - AO_FLOOR) * min(1.0, ao * 1.15)
             y = v.co.z
             dust = max(0.0, min(1.0, 1.0 - y / DUST_M)) ** 1.5
+            # Off the sand, under the lip, less of it reaches.
+            dust *= max(0.4, min(1.0, 1.0 + y / 2.0))
             d = (1 + (DUST_RGB[0] - 1) * dust, 1 + (DUST_RGB[1] - 1) * dust, 1 + (DUST_RGB[2] - 1) * dust)
             # A little of each block's own, so no course is one value.
             cell = (int(v.co.x // 1.3), int(v.co.y // 1.3), int(v.co.z // 0.7))

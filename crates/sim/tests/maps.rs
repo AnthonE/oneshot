@@ -154,6 +154,35 @@ fn everything_can_be_walked_to() {
     }
 }
 
+/// Cloudbreak's tower climbs on foot, floor by floor, and its walks join on.
+#[test]
+fn cloudbreak_climbs_and_its_walks_join() {
+    let m = by_id(7).unwrap();
+    let s0 = m.spawns[0].pos;
+    let reach = walk(&m, (s0.x, s0.y, s0.z));
+    let stands = |x: f32, z: f32, y: f32| {
+        reach.iter().any(|&(ix, iz, iy)| {
+            fabs(ix as f32 * 0.25 - x) <= 0.25
+                && fabs(iz as f32 * 0.25 - z) <= 0.25
+                && fabs(iy as f32 / 64.0 - y) < 0.03
+        })
+    };
+    for (what, x, z, y) in [
+        ("the sighting room", 0.0, 18.9, 4.5),
+        ("the shoulder", -4.8, 18.5, 4.5),
+        ("the corner", -4.8, 24.8, 6.9),
+        ("the back walk", 0.0, 24.8, 8.5),
+        ("the gallery", 0.0, 19.0, 8.5),
+        ("the north walk", 0.0, 26.2, -1.3),
+        ("red's north walk", -9.9, 23.3, -1.3),
+        ("blue's north walk", 9.9, 23.3, -1.3),
+        ("red's south walk", -12.0, -19.7, -1.3),
+        ("blue's south walk", 12.0, -19.7, -1.3),
+    ] {
+        assert!(stands(x, z, y), "{what} can't be walked to");
+    }
+}
+
 /// Every rotation the server plays has a map in it (else it falls back to
 /// any map that can play the mode), and a map out of the rotation is in
 /// none of them.

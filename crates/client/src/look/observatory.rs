@@ -1,6 +1,7 @@
-//! Cloudbreak's observatory: every built thing on the island, made in
-//! Blender in the map's own coordinates (`tools/models/observatory.py`),
-//! one GLB a material at the origin.
+//! Cloudbreak's observatory: every built thing on the island, its tower's
+//! three floors, its stairs and its rim walks among them, made in Blender in
+//! the map's own coordinates (`tools/models/observatory.py`), one GLB a
+//! material at the origin.
 //!
 //! **Drawn inside what collides.** The sim's boxes under it are `hidden` in
 //! `maps/cloudbreak/map.json`; a body stands a little behind the plane they
@@ -74,8 +75,8 @@ pub fn dress(
         // As far as the weathering is concerned, one block over the island
         // with no box's edges: the wear is cut in the mesh.
         let block = Block {
-            mid: Vec3::new(0.0, 10.0, 5.0),
-            half: Vec3::new(30.0, 21.0, 25.0),
+            mid: Vec3::new(0.0, 10.0, 1.0),
+            half: Vec3::new(31.0, 21.0, 28.0),
             turn: (1.0, 0.0),
             shape: Shape::Other,
             ground: 0.0,

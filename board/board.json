@@ -634,6 +634,150 @@
       ]
     },
     {
+      "id": "hd-climb",
+      "name": "Cloudbreak: the stair",
+      "what": "from the ledge up the stair round the tower's flank",
+      "take": "a route you can read at a glance: where it starts, where it goes, who is on it",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/climb.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "how built stone carries a walkway: weight, shadow under it",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-well",
+      "name": "Cloudbreak: the well",
+      "what": "from the hall up the well through its floors",
+      "take": "height you feel from below: floors stacked, light falling through",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/well.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "the depth of shadow in a built interior",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-room",
+      "name": "Cloudbreak: the sighting room",
+      "what": "in the room over the hall, across the well to the balcony door",
+      "take": "a room with weight and readable exits, dark stone, the bright world through its openings",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/room.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "cool grey stone in shade against the warm outside",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-gallery",
+      "name": "Cloudbreak: the gallery",
+      "what": "in the top room, south through its windows over the island",
+      "take": "a place that commands the island and is still a room: sills, heads, a ceiling",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/gallery.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "finish of built stone close up",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-backwalk",
+      "name": "Cloudbreak: the back walk",
+      "what": "up the back walk over the void to the gallery's door",
+      "take": "a walkway with nothing beyond it: void close at the elbow",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/backwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "the exposure of a walkway at the edge",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-behind",
+      "name": "Cloudbreak: the tower's back",
+      "what": "from off the north coast: the back walk over the north walk",
+      "take": "built walks hung on the rock, stacked, read from outside",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/behind.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "built stone against raw rock and cloud",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-northwalk",
+      "name": "Cloudbreak: the north walk",
+      "what": "along the north walk behind the tower",
+      "take": "a walkway in the rock's lee: the lip at the shoulder, void past the kerb",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/northwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "a built walk against the cliff's edge; how far you can see over it",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
+      "id": "hd-southwalk",
+      "name": "Cloudbreak: the south walk",
+      "what": "along the south walk toward the point",
+      "take": "the same walk rising to the point, its side's light along its foot",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/southwalk.png",
+      "refs": [
+        {
+          "file": "ddd.jpg",
+          "private": true,
+          "take": "a built walk against the cliff's edge",
+          "ignore": "its layout, its structures' shapes and panels: ours is our own design; the HUD, the figures"
+        }
+      ]
+    },
+    {
       "id": "hd-hold",
       "name": "Chrysalis: red's top",
       "what": "from red's pod roof down the hold to the chrysalis, the vault and its panes over it",
