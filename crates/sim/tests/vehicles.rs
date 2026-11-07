@@ -708,3 +708,343 @@ fn a_slow_truck_hurts_and_carries_off() {
     );
     assert_eq!(hits, 1, "hit once");
 }
+
+/// Every tick's hash through five scripted contacts, folded: a fast truck
+/// through a still enemy; the same at a driver's depth through one
+/// strafing across (met where the driver saw them); a slow carry-off; a
+/// teammate spared; two trucks head-on into a wreck. Pinned so a change
+/// to how contacts are stepped that should change nothing changes nothing
+/// (Dry Fork's golden has bots that seldom meet).
+const CONTACTS: u64 = 0x6d8d_5d73_ca29_1b97;
+
+#[test]
+fn run_downs_and_crashes_hash_as_before() {
+    let mut fold = 0u64;
+    // Each scenario's splatters (kills or hits of seat 1) and wrecks.
+    let mut run =
+        |w: &mut World, ticks: u32, inputs: &dyn Fn(u32, &World) -> [Input; MAX_FIGHTERS], lag: [u32; MAX_FIGHTERS]| {
+            let (mut splats, mut wrecks) = (0, 0);
+            for t in 0..ticks {
+                let i = inputs(t, w);
+                w.step(&i, &lag);
+                fold = sim::rng::splitmix64(fold ^ w.hash());
+                for e in w.events.as_slice() {
+                    // A hit's `c` is its damage; a kill's, its cause.
+                    let splat = e.kind == Ev::Hit || (e.kind == Ev::Kill && e.c == Cause::Splatter as u16);
+                    splats += (splat && e.b == 1) as u32;
+                    wrecks += (e.kind == Ev::Wreck) as u32;
+                }
+            }
+            (splats, wrecks)
+        };
+    let go = |mz: i8| Input { mz, ..Input::default() };
+    // 1. Fast, through a still enemy 25 m ahead.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let (f, r) = w.vehicles[0].axes();
+    let at = w.vehicles[0].pos + f * 25.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let one = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert!(one.0 >= 1 && !w.fighters[1].alive, "1: {one:?}");
+    // 2. At 8 ticks' depth, through one strafing across its path.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 20.0 - r * 0.6;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.fighters[1].yaw = w.vehicles[0].yaw;
+    let mut lag = NO_LAG;
+    lag[0] = 8 << 8;
+    let two = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|t, w| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i[1] = Input {
+                yaw: w.vehicles[0].yaw,
+                mx: if (t / 20) % 2 == 0 { 127 } else { -127 },
+                ..Input::default()
+            };
+            i
+        },
+        lag,
+    );
+    assert!(two.0 >= 1, "2: {two:?}");
+    // 3. Slow, near 3.6 m/s, into one 8 m ahead, braked once it hurt them.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 8.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let three = run(
+        &mut w,
+        TICK_HZ * 2,
+        &|_, w| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            let fast = w.vehicles[0].vel.flat().len() > 3.6;
+            let hurt = w.fighters[1].health + w.fighters[1].shield < HEALTH_MAX + SHIELD_MAX;
+            i[0] = go(if hurt {
+                -127
+            } else if fast {
+                0
+            } else {
+                127
+            });
+            i
+        },
+        NO_LAG,
+    );
+    assert!(three.0 >= 1 && w.fighters[1].alive, "3: {three:?}");
+    // 4. Sides on, friendly fire off: a teammate 20 m ahead is spared.
+    let mut w = world(true);
+    w.rules.friendly_fire = false;
+    w.fighters[1].team = 0;
+    tap_use(&mut w, 0);
+    let at = w.vehicles[0].pos + f * 20.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let four = run(
+        &mut w,
+        TICK_HZ * 3,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert!(four.0 == 0 && w.fighters[1].health == HEALTH_MAX, "4: {four:?}");
+    // 5. Head-on at full speed, both driven.
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let v = w.vehicles[0];
+    let at = v.pos + f * 30.0;
+    w.vehicles[1].pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.vehicles[1].yaw = v.yaw.wrapping_add(32768);
+    let b = w.vehicles[1].pos - f * 2.0;
+    w.fighters[1].body.pos = V3::new(b.x, w.map.ground(b.x, b.z), b.z);
+    tap_use(&mut w, 1);
+    w.vehicles[0].vel = f * VEH_TOP;
+    w.vehicles[1].vel = f * -VEH_TOP;
+    let five = run(
+        &mut w,
+        TICK_HZ * 2,
+        &|_, _| {
+            let mut i = [Input::default(); MAX_FIGHTERS];
+            i[0] = go(127);
+            i[1] = go(127);
+            i
+        },
+        NO_LAG,
+    );
+    assert_eq!(five.1, 2, "5: {five:?}");
+    assert_eq!(fold, CONTACTS, "contacts fold to {fold:#018x}");
+}
+
+/// A run-down seen at share 0 (the victim drawn on the driver's present,
+/// predicted) meets the body where it is, never where it stood the
+/// driver's depth ago; at the whole share, where the driver saw it.
+fn run_down_seen(share: u8) -> u32 {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let (f, r) = w.vehicles[0].axes();
+    let at = w.vehicles[0].pos + f * 14.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let mut lag = sim::world::Lag::past(NO_LAG);
+    lag.depth_q8[0] = 10 << 8;
+    lag.seen[0].share[1] = share;
+    let (mut moved, mut splats) = (false, 0);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[0] = Input {
+        mz: 127,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ * 2 {
+        // Just before the hood reaches it, it is somewhere else (as if it
+        // dived clear in the driver's last few ticks).
+        let ahead = (w.fighters[1].body.pos - w.vehicles[0].pos).dot(f);
+        if !moved && ahead < VEH_HALF_L + BODY_R + 0.8 {
+            let p = w.fighters[1].body.pos + r * 4.0;
+            w.fighters[1].body.pos = V3::new(p.x, w.map.ground(p.x, p.z), p.z);
+            moved = true;
+        }
+        w.step_with(&inputs, &lag);
+        splats += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.b == 1)
+            .count() as u32;
+    }
+    assert!(moved);
+    splats
+}
+
+#[test]
+fn a_run_down_at_share_zero_meets_the_body_where_it_is() {
+    assert!(
+        run_down_seen(SHARE_FULL) > 0,
+        "the whole share: met where the driver saw it"
+    );
+    assert_eq!(run_down_seen(0), 0, "none of it: it is clear");
+}
+
+/// Whether a body at `p` overlaps hull `v`'s footprint (as solid hulls
+/// put bodies out of it).
+fn in_hull(v: &sim::vehicle::Vehicle, p: V3) -> bool {
+    let (s, c) = sim::geom::yaw_sincos(v.yaw);
+    let hull = sim::solid::Solid {
+        shape: sim::solid::Shape::Turned {
+            x: v.pos.x,
+            z: v.pos.z,
+            hx: VEH_HALF_L,
+            hz: VEH_HALF_W,
+            c,
+            s,
+        },
+        y0: v.pos.y,
+        y1: v.pos.y + VEH_H,
+    };
+    hull.push(p.x, p.z, BODY_R - 0.01).is_some()
+}
+
+/// Running at a parked truck's side: stopped at it, never through it, and
+/// the truck never moves for it.
+#[test]
+fn a_parked_truck_stops_a_runner_at_its_side() {
+    let mut w = world(false);
+    let v = w.vehicles[0];
+    let (_, r) = v.axes();
+    let at = v.pos + r * 6.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let toward = rad_to_yaw(fmath::atan2(-r.z, -r.x));
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    inputs[1] = Input {
+        yaw: toward,
+        mz: 127,
+        ..Input::default()
+    };
+    for _ in 0..TICK_HZ * 3 {
+        w.step(&inputs, &NO_LAG);
+        assert!(!in_hull(&w.vehicles[0], w.fighters[1].body.pos), "ran into the hull");
+    }
+    let side = (w.fighters[1].body.pos - v.pos).flat().dot(r);
+    assert!(fmath::fabs(side - (VEH_HALF_W + BODY_R)) < 0.05, "stopped {side} m out");
+    assert_eq!(w.vehicles[0].pos, v.pos, "the hull gave way");
+}
+
+/// A truck too slow to run anyone down pushes them ahead of it, unhurt.
+#[test]
+fn a_creeping_truck_pushes_without_hurting() {
+    let mut w = world(false);
+    tap_use(&mut w, 0);
+    let (f, _) = w.vehicles[0].axes();
+    let at = w.vehicles[0].pos + f * 6.0;
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    let start = w.fighters[1].body.pos;
+    for _ in 0..TICK_HZ * 5 {
+        let slow = w.vehicles[0].vel.flat().len() < 2.0;
+        press(
+            &mut w,
+            0,
+            Input {
+                mz: if slow { 127 } else { 0 },
+                ..Input::default()
+            },
+        );
+        assert!(!in_hull(&w.vehicles[0], w.fighters[1].body.pos), "inside the hull");
+    }
+    let pushed = (w.fighters[1].body.pos - start).flat().dot(f);
+    assert!(pushed > 4.0, "pushed only {pushed} m");
+    let f1 = &w.fighters[1];
+    assert!(
+        f1.alive && f1.health == HEALTH_MAX && f1.shield == SHIELD_MAX,
+        "hurt: {f1:?}"
+    );
+}
+
+/// Pinned between a truck and a wall: left where the wall holds it,
+/// unhurt; the truck drives as if it weren't there.
+#[test]
+fn a_body_against_a_wall_is_left_where_the_wall_holds_it() {
+    let run = |body: bool| {
+        let rules = Rules {
+            score_limit: 100,
+            time_limit_ms: 0,
+            ..Rules::doubles()
+        };
+        let mut w = World::new(Map::open(), rules, 1, (5, 6));
+        w.seat(0, 0);
+        w.seat(1, 1);
+        let idle = [Input::default(); MAX_FIGHTERS];
+        while w.phase == Phase::Countdown {
+            w.step(&idle, &NO_LAG);
+        }
+        // Truck 0 near the east wall (x = 50), creeping at it under
+        // SPLAT_SPEED; seat 1 between, its back to the wall.
+        let hull = sim::vehicle::Vehicle {
+            seats: [1, 0],
+            vel: V3::new(2.0, 0.0, 0.0),
+            ..sim::vehicle::Vehicle::new(V3::new(44.0, 0.0, 0.0), 0, 0, sim::vehicle::NO_TURRET)
+        };
+        w.vehicles[0] = hull;
+        w.fighters[0].ride = sim::fighter::Fighter::ride_of(0, DRIVER);
+        w.fighters[0].body = hull.seat_body(DRIVER);
+        w.fighters[1].body.pos = if body {
+            V3::new(49.5, 0.0, 0.0)
+        } else {
+            V3::new(0.0, 0.0, 40.0)
+        };
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        let mut track = Vec::new();
+        for _ in 0..TICK_HZ * 3 {
+            // Creeping: never fast enough to run anyone down.
+            inputs[0].mz = if w.vehicles[0].vel.flat().len() < 2.0 { 30 } else { 0 };
+            w.step(&inputs, &NO_LAG);
+            track.push(w.vehicles[0].pos);
+            assert!(w.fighters[1].body.pos.x <= 50.0 - BODY_R + 0.01, "into the wall");
+        }
+        (track, w.fighters[1])
+    };
+    let (with, f1) = run(true);
+    let (without, _) = run(false);
+    assert_eq!(with, without, "the truck gave way to a body");
+    assert!(f1.alive && f1.health == HEALTH_MAX, "hurt: {f1:?}");
+}
+
+/// Getting out lands clear of the hull, from either seat; getting in works
+/// from every side, the solid hull notwithstanding.
+#[test]
+fn getting_in_from_every_side_and_out_clear_of_the_hull() {
+    for side in 0..4 {
+        let mut w = world(false);
+        let v = w.vehicles[0];
+        let (f, r) = v.axes();
+        let off = [f * (VEH_HALF_L + 0.5), f * -(VEH_HALF_L + 0.5), r * 1.8, r * -1.8][side];
+        let at = v.pos + off;
+        w.fighters[0].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+        press(&mut w, 0, Input::default());
+        assert!(
+            !in_hull(&w.vehicles[0], w.fighters[0].body.pos),
+            "side {side}: in the hull to start"
+        );
+        tap_use(&mut w, 0);
+        assert!(w.fighters[0].riding().is_some(), "side {side}: couldn't get in");
+        tap_use(&mut w, 0);
+        assert!(w.fighters[0].riding().is_none(), "side {side}: couldn't get out");
+        for _ in 0..TICK_HZ / 2 {
+            press(&mut w, 0, Input::default());
+        }
+        assert!(
+            !in_hull(&w.vehicles[0], w.fighters[0].body.pos),
+            "side {side}: out into the hull"
+        );
+    }
+}

@@ -45,12 +45,18 @@ fn far_is_every_few_and_firing_at_you_is_every_one() {
 /// A match for 16 people on `map`, `far_rates` as given: the bytes sent,
 /// and every snapshot.
 fn play(def: &sim::map::Def, far_rates: bool) -> (usize, Vec<(u8, proto::Snapshot, Vec<Fighter>)>) {
+    play_with(def, far_rates, true)
+}
+
+/// [`play`], `bubbles` as `Room::bubbles`.
+fn play_with(def: &sim::map::Def, far_rates: bool, bubbles: bool) -> (usize, Vec<(u8, proto::Snapshot, Vec<Fighter>)>) {
     let rules = Rules {
         time_limit_ms: 60_000,
         ..if def.big() { Rules::big_team() } else { Rules::ffa() }
     };
     let mut room = Room::new(def.build(), rules, 3, (8, 9));
     room.far_rates = far_rates;
+    room.bubbles = bubbles;
     let seats: Vec<u8> = (0..MAX_FIGHTERS)
         .filter_map(|i| {
             room.join(Name::new(&format!("p{i}")), proto::Look::default())
@@ -127,4 +133,26 @@ fn a_big_map_holds_far_ones_briefly_and_an_arena_never() {
         assert!(held > 1000, "{}: only {held} held", d.name);
         assert!(bytes < every, "{}: holding saved nothing", d.name);
     }
+}
+
+/// Hulls in a bubble go exactly, with their sticks: on Dry Fork, with
+/// everyone a bot that drives, it costs little more than coarse.
+#[test]
+fn a_bubble_costs_little() {
+    let def = sim::maps::ALL.iter().find(|d| d.id == 3).expect("Dry Fork");
+    let (on, snaps) = play_with(def, true, true);
+    let (off, _) = play_with(def, true, false);
+    let near: usize = snaps
+        .iter()
+        .map(|(_, s, _)| s.vehicles().iter().filter(|v| v.near.is_some()).count())
+        .sum();
+    eprintln!(
+        "{}: {near} hulls sent near; {} KB with bubbles, {} KB without ({:+.1}%)",
+        def.name,
+        on / 1024,
+        off / 1024,
+        100.0 * (on as f64 / off as f64 - 1.0)
+    );
+    assert!(near > 1000, "only {near} hulls sent near");
+    assert!((on as f64) < off as f64 * 1.15, "{on} bytes against {off}");
 }

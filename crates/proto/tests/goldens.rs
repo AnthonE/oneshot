@@ -102,13 +102,16 @@ fn own() -> Fighter {
     }
 }
 
+/// One step of the sim's grid (`sim::consts::QUANT`): what goes exactly.
+const G: f32 = 1.0 / 1024.0;
+
 fn snapshot() -> Snapshot {
     let mut s = Snapshot {
         tick: 50_000,
         last_seq: 99_001,
         depth: 2,
         own: own(),
-        n_remote: 1,
+        n_remote: 2,
         n_proj: 1,
         n_events: 3,
         n_pads: 2,
@@ -133,6 +136,27 @@ fn snapshot() -> Snapshot {
         over: true,
         cloak: 5,
         flag: true,
+        near: None,
+    };
+    // One in our bubble by a hull: exact, with what it last ran.
+    s.remotes[1] = Remote {
+        slot: 4,
+        team: 1,
+        alive: true,
+        grounded: false,
+        pos: V3::new(19.0 + G, 1.25, 13.5),
+        vel: V3::new(-6.0, 4.5 + G, 0.25),
+        yaw: 12_000,
+        arm: BR,
+        near: Some(NearBody {
+            duck: 7,
+            mx: -127,
+            mz: 90,
+            jump: true,
+            crouch: true,
+            share: 6,
+        }),
+        ..Remote::default()
     };
     // Capture the Flag: red's flag held by seat 1, blue's on the floor.
     s.n_flags = 2;
@@ -205,7 +229,7 @@ fn snapshot() -> Snapshot {
         refire: 4,
         vent: false,
     };
-    s.n_vehicles = 1;
+    s.n_vehicles = 3;
     s.vehicles[0] = VehState {
         slot: 5,
         pos: V3::new(20.0, 0.5, 12.0),
@@ -213,6 +237,34 @@ fn snapshot() -> Snapshot {
         yaw: 40_000,
         health: 128,
         seats: [2, 0],
+        near: None,
+    };
+    // In our bubble: one driven (exact, its stick), one parked on a slope.
+    s.vehicles[1] = VehState {
+        slot: 6,
+        pos: V3::new(-1000.0 - G, 3.5, 7000.25),
+        vel: V3::new(21.0 - G, -0.5, -500.0),
+        yaw: 9_000,
+        health: 255,
+        seats: [5, 0],
+        near: Some(NearHull {
+            grounded: true,
+            stick: Some((-127, 64)),
+            share: 15,
+        }),
+    };
+    s.vehicles[2] = VehState {
+        slot: 7,
+        pos: V3::new(3.0, -2.0, 1.0),
+        vel: V3::new(0.0, 0.0, 0.25),
+        yaw: 1,
+        health: 3,
+        seats: [0, 0],
+        near: Some(NearHull {
+            grounded: false,
+            stick: None,
+            share: 0,
+        }),
     };
     // A rocket launcher on the floor, and someone's grenades.
     s.n_drops = 2;
@@ -492,13 +544,19 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.own.ride, s.own.ride);
     assert_eq!(d.own_vehicle, s.own_vehicle, "the ridden vehicle comes back exactly");
     assert_eq!(d.drive, s.drive, "and its driver's stick");
+    // Our bubble's members come back exactly, with what they are
+    // predicted on; the rest as coarse as ever.
+    assert_eq!(d.remotes()[1], s.remotes[1], "a body in our bubble");
+    assert_eq!(&d.vehicles()[1..], &s.vehicles[1..3], "hulls in our bubble");
+    assert!(d.vehicles()[0].near.is_none());
     assert_eq!(d.vehicles()[0].seats, s.vehicles[0].seats);
     assert_eq!(d.drops(), s.drops());
     assert_eq!(d.flags(), s.flags());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
-    // Sixteen seats, every projectile and pad, riding behind a driver:
-    // fits with room for about ten events. (room::build drops events past
-    // the datagram, so a full snapshot of everything is never sent.)
+    // Sixteen seats, every projectile and pad, riding behind a driver,
+    // hulls and a body in our bubble: fits with room for about eight
+    // events. (room::build drops events past the datagram, so a full
+    // snapshot of everything is never sent.)
     let full = Snapshot {
         n_remote: MAX_REMOTES as u8,
         n_proj: MAX_SNAP_PROJ as u8,
@@ -511,7 +569,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
-    assert!(n + 192 <= MAX_DATAGRAM, "{n} bytes before events");
+    assert!(n + 160 <= MAX_DATAGRAM, "{n} bytes before events");
 }
 
 #[test]
@@ -548,7 +606,7 @@ fn decoders_refuse_garbage() {
 }
 
 /// The golden snapshot two ticks before: our fighter a little back, the
-/// clock back, and a second remote, gone since.
+/// clock back, a third remote, gone since, and our bubble as it was.
 fn delta_base() -> Snapshot {
     let mut base = snapshot();
     base.tick -= 2;
@@ -556,13 +614,27 @@ fn delta_base() -> Snapshot {
     base.own.body.pos.x -= 0.25;
     // Its driver steered the other way then.
     base.drive = Some((40, 127));
-    base.n_remote = 2;
+    // A third remote, gone since; the one in our bubble then a little back
+    // and further in; the driven hull on another stick.
+    base.n_remote = 3;
+    base.remotes[2] = Remote {
+        pos: V3::new(19.5, 1.0, 13.5),
+        near: Some(NearBody {
+            share: 7,
+            ..base.remotes[1].near.unwrap()
+        }),
+        ..base.remotes[1]
+    };
     base.remotes[1] = Remote {
         slot: 3,
         pos: V3::new(-30.0, 2.0, 8.0),
         alive: true,
         ..base.remotes[0]
     };
+    base.vehicles[1].near = Some(NearHull {
+        stick: Some((0, 127)),
+        ..base.vehicles[1].near.unwrap()
+    });
     base
 }
 
@@ -613,13 +685,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0x8043_aa3b_c61f_8f7d,
-        0x2904_d4c3_c9d2_1f2e,
-        0x0de8_7fb0_90c4_6faa,
+        0x8e87_a159_d44c_7450,
+        0xeb3f_f214_3368_9e1f,
+        0x3bb6_874d_51c8_0869,
         0x7ebe_34b8_2c10_f2d0,
         0x7ab6_78d6_f6ba_aa53,
         0x9571_1811_717b_689e,
-        0x04a1_bde9_6776_bee9,
+        0x56f6_415a_e240_2f4e,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -643,7 +715,7 @@ fn the_bytes_match_their_goldens() {
         0x8461_28ae_94ef_0f4c,
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
-        0x480a_d644_905d_938a,
+        0x3a44_1838_3809_2ff7,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }
@@ -667,4 +739,25 @@ fn an_event_past_the_seats_names_nobody() {
     let n = encode_snapshot(&s, &mut buf).unwrap();
     let d = decode_snapshot(&buf[..n]).unwrap();
     assert_eq!((d.events[1].a, d.events[1].b), (NOBODY, NOBODY));
+}
+
+/// A bubble member the server could never send (a crouch past its full, a
+/// stick at -128: `Input::sanitized` never runs one) is refused.
+#[test]
+fn an_impossible_bubble_member_is_refused() {
+    let mut buf = [0u8; 4 * MAX_DATAGRAM];
+    let base = snapshot();
+    for bad in [
+        |s: &mut Snapshot| s.remotes[1].near.as_mut().unwrap().duck = sim::consts::CROUCH_TICKS + 1,
+        |s: &mut Snapshot| s.remotes[1].near.as_mut().unwrap().mx = i8::MIN,
+        |s: &mut Snapshot| s.vehicles[1].near.as_mut().unwrap().stick = Some((0, i8::MIN)),
+    ] {
+        let mut s = base;
+        bad(&mut s);
+        let n = encode_snapshot(&s, &mut buf).unwrap();
+        assert!(decode_snapshot(&buf[..n]).is_err(), "{:?}", s.remotes[1]);
+    }
+    assert!(exact_fits(V3::new(8191.0, 0.0, -8191.0), V3::new(511.0, 0.0, 0.0)));
+    assert!(!exact_fits(V3::new(8192.0, 0.0, 0.0), V3::ZERO));
+    assert!(!exact_fits(V3::ZERO, V3::new(0.0, -512.0, 0.0)));
 }

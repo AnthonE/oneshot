@@ -18,7 +18,7 @@ use proto::{encode_msg, encode_snapshot, salt_commit, InputMsg, Msg, Name, Snaps
 use room::fog::{plainly_sees, sees};
 use room::{Room, HEARD, HEARD_GRID_M};
 use sim::bot::Bot;
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::{MAX_FIGHTERS, SHARE_FULL, TICK_HZ};
 use sim::events::Kind as Ev;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -79,6 +79,16 @@ struct Gate {
     next_event: u16,
     events_seen: usize,
     stuck_seen: usize,
+    /// Hulls sent in our bubble, checked, and those not drawn wholly in
+    /// the past.
+    near_seen: usize,
+    share_seen: usize,
+    foot_seen: usize,
+    /// The last snapshot's: each hull's share if near, which were sent,
+    /// the one we rode.
+    near_last: [Option<u8>; sim::consts::MAX_VEHICLES],
+    shown_last: u8,
+    mine_last: Option<usize>,
 }
 
 impl Gate {
@@ -120,6 +130,30 @@ impl Gate {
                             w.tick,
                             r.slot
                         );
+                        // 21. One on foot in our bubble only while we live,
+                        // on foot itself, exact as the server has it; 18.
+                        // with the input it last ran.
+                        if let Some(n) = r.near {
+                            let f = &w.fighters[r.slot as usize];
+                            self.foot_seen += 1;
+                            assert!(me.active() && f.active() && f.ride == 0, "tick {}: near {r:?}", w.tick);
+                            assert_eq!(
+                                (r.pos, r.vel, n.duck),
+                                (f.body.pos, f.body.vel, f.body.duck),
+                                "tick {}: seat {} not exact",
+                                w.tick,
+                                r.slot
+                            );
+                            let ran = w.ran(r.slot as usize);
+                            assert_eq!(
+                                (n.mx, n.mz, n.jump, n.crouch),
+                                (ran.mx, ran.mz, ran.held(sim::input::JUMP), ran.held(sim::input::CROUCH)),
+                                "tick {}: seat {}'s input",
+                                w.tick,
+                                r.slot
+                            );
+                            assert!(s.held & (1 << r.slot) == 0, "tick {}: a held one near", w.tick);
+                        }
                     }
                 }
                 // 8. A projectile is sent only if its owner is known to
@@ -230,6 +264,50 @@ impl Gate {
                         self.vehicles_seen += 1;
                         let i = v.slot as usize;
                         let t = &w.vehicles[i];
+                        // 17. A hull in our bubble only while we live,
+                        // never our own, and only with nobody at its wheel
+                        // or someone we know (its stick is theirs).
+                        // 18. Its stick the one it is driven by.
+                        // 19. Exact, as the server has it.
+                        // 20. Its share of our rewind moves a step a
+                        // snapshot at most (it slides between our past and
+                        // our present); coming in, whole if we drew it in
+                        // the past last snapshot (sent, not ridden).
+                        if let Some(n) = v.near {
+                            self.near_seen += 1;
+                            assert!(me.active() && mine != Some(i), "tick {}: a bubble hull {v:?}", w.tick);
+                            assert!(
+                                t.driver().is_none_or(&known),
+                                "tick {}: an unknown driver's stick: {v:?}",
+                                w.tick
+                            );
+                            assert_eq!(n.stick, w.drive_stick(i), "tick {}: hull {i}'s stick", w.tick);
+                            assert_eq!(
+                                (v.pos, v.vel, n.grounded),
+                                (t.pos, t.vel, t.grounded),
+                                "tick {}: hull {i} not exact",
+                                w.tick
+                            );
+                            // The most a share moves in a snapshot: the
+                            // shortest blend's step at this rate, rounded up.
+                            let blend = (room::bubble::BLEND_MIN_MS as u32 * TICK_HZ / 1000 / self.every).max(1);
+                            let step = SHARE_FULL.div_ceil(blend as u8) + 1;
+                            match self.near_last[i] {
+                                Some(was) => assert!(
+                                    n.share.abs_diff(was) <= step,
+                                    "tick {}: hull {i}'s share {was} -> {}",
+                                    w.tick,
+                                    n.share
+                                ),
+                                None if self.shown_last & (1 << i) != 0 && self.mine_last != Some(i) => assert_eq!(
+                                    n.share, SHARE_FULL,
+                                    "tick {}: hull {i} came in off the render tick",
+                                    w.tick
+                                ),
+                                None => {}
+                            }
+                            self.share_seen += (n.share < SHARE_FULL) as usize;
+                        }
                         for &x in &v.seats {
                             assert!(
                                 x == 0 || known(x as usize - 1),
@@ -258,6 +336,13 @@ impl Gate {
                             w.tick
                         );
                     }
+                    self.near_last = [None; sim::consts::MAX_VEHICLES];
+                    self.shown_last = 0;
+                    for v in s.vehicles() {
+                        self.near_last[v.slot as usize] = v.near.map(|n| n.share);
+                        self.shown_last |= 1 << v.slot;
+                    }
+                    self.mine_last = mine;
                 }
             }
         }
@@ -481,6 +566,8 @@ fn gate(map: Map, rules: Rules) {
 fn gate_at(map: Map, rules: Rules, every: u32) {
     let mut room = Room::new(map, rules, 77, SALT);
     room.set_snap_every(every);
+    // Shares on the wire as they will be: sliding between past and present.
+    room.bubble_live = true;
     // What the checks look back over: fog's hold, and two snapshots more.
     let looks = (room::fog::hold_ticks(every) + 2 * every) as usize;
     let (slot, out) = room
@@ -523,6 +610,12 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         next_event: 0,
         events_seen: 0,
         stuck_seen: 0,
+        near_seen: 0,
+        share_seen: 0,
+        foot_seen: 0,
+        near_last: [None; sim::consts::MAX_VEHICLES],
+        shown_last: 0,
+        mine_last: None,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -626,6 +719,8 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     }
     if !g.room.world.map.vehicles.is_empty() {
         assert!(g.vehicles_seen > 100, "only {} vehicles sent to check", g.vehicles_seen);
+        assert!(g.near_seen > 300, "only {} bubble hulls sent to check", g.near_seen);
+        assert!(g.share_seen > 100, "only {} drawn off the render tick", g.share_seen);
     }
     assert!(medals > 0, "no medal to check");
     assert_eq!(

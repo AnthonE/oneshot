@@ -8,7 +8,7 @@ use crate::consts::*;
 use crate::geom::V3;
 use crate::input::*;
 use crate::map::Map;
-use crate::movement::{self, Body};
+use crate::movement::Body;
 use crate::thing::Thing;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -327,8 +327,7 @@ impl Fighter {
         self.pitch = inp.pitch;
         let seat = self.riding().map(|(_, s)| s);
         if seat.is_none() {
-            let pace = if self.flag { FLAG_PACE } else { 1.0 };
-            movement::step_paced(&mut self.body, inp, map, pace);
+            crate::contact::walk(&mut self.body, self.flag, inp, map);
         }
         let gunning = self.gunning(map);
         let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag && gunning == crate::vehicle::NO_TURRET;

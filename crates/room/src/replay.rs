@@ -5,26 +5,27 @@
 //! the server wrote. Bots' inputs are recorded like anyone's, so a replay
 //! never depends on the bot's code.
 //!
-//! Format, little-endian: `OSR4`, u16 PROTO_VER, u64 golden tag, u64 seed,
+//! Format, little-endian: `OSR5`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
 //! gun game, friendly fire, capture the flag), u8 map; then records: `S`
 //! slot team (a seat), `H` (the countdown held for the next tick: someone
 //! still loading), `T` u16 changed-input mask, inputs, u16 changed-rewind
-//! mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16 scores (the
-//! end).
+//! mask, rewinds, u16 changed-seen mask, each changed seat's shares as
+//! `TARGETS` nibbles, two a byte (a tick: `World::step_with`'s arguments);
+//! `E` u32 ticks, u64 hash, i32 × 16 scores (the end).
 
 use proto::PROTO_VER;
-use sim::consts::MAX_FIGHTERS;
+use sim::consts::{MAX_FIGHTERS, SHARE_FULL, TARGETS};
 use sim::events::Kind as Ev;
 use sim::input::Input;
 use sim::map::Map;
-use sim::world::{Rules, World};
+use sim::world::{Lag, Rules, Seen, World};
 
-pub const MAGIC: &[u8; 4] = b"OSR4";
+pub const MAGIC: &[u8; 4] = b"OSR5";
 /// Which build of the rules a replay needs: the sim's determinism golden
 /// (`crates/sim/tests/determinism.rs`). A replay from other rules is refused
 /// rather than run wrong.
-pub const RULES_TAG: u64 = 0xd9f4_2121_99eb_e3d0;
+pub const RULES_TAG: u64 = 0xc946_f56b_4921_bc03;
 
 /// The map a replay names.
 pub fn map_by_id(id: u8) -> Option<Map> {
@@ -41,7 +42,7 @@ pub struct Recorder {
     /// Past [`MAX_BYTES`]: no longer recording.
     full: bool,
     inputs: [Input; MAX_FIGHTERS],
-    rewind: [u32; MAX_FIGHTERS],
+    lag: Lag,
     ticks: u32,
 }
 
@@ -74,7 +75,7 @@ impl Recorder {
             buf,
             full: false,
             inputs: [Input::default(); MAX_FIGHTERS],
-            rewind: [0; MAX_FIGHTERS],
+            lag: Lag::past([0; MAX_FIGHTERS]),
             ticks: 0,
         }
     }
@@ -99,8 +100,9 @@ impl Recorder {
         self.full
     }
 
-    /// One `World::step`'s arguments.
-    pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind: &[u32; MAX_FIGHTERS]) {
+    /// One `World::step_with`'s arguments.
+    pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], lag: &Lag) {
+        let rewind = &lag.depth_q8;
         if self.full {
             return;
         }
@@ -128,7 +130,7 @@ impl Recorder {
         }
         let mut rmask = 0u16;
         for (s, &r) in rewind.iter().enumerate() {
-            if r != self.rewind[s] {
+            if r != self.lag.depth_q8[s] {
                 rmask |= 1 << s;
             }
         }
@@ -138,8 +140,23 @@ impl Recorder {
                 self.buf.extend_from_slice(&r.to_le_bytes());
             }
         }
+        let mut smask = 0u16;
+        for (s, seen) in lag.seen.iter().enumerate() {
+            if *seen != self.lag.seen[s] {
+                smask |= 1 << s;
+            }
+        }
+        self.buf.extend_from_slice(&smask.to_le_bytes());
+        for (s, seen) in lag.seen.iter().enumerate() {
+            if smask & (1 << s) != 0 {
+                for pair in seen.share.chunks(2) {
+                    self.buf
+                        .push(pair[0].min(SHARE_FULL) | pair.get(1).map_or(0, |b| b.min(&SHARE_FULL) << 4));
+                }
+            }
+        }
         self.inputs = *inputs;
-        self.rewind = *rewind;
+        self.lag = *lag;
         self.ticks += 1;
     }
 
@@ -197,6 +214,23 @@ impl Reader<'_> {
     }
 }
 
+/// A seat's shares: `TARGETS` nibbles, two a byte, low first.
+fn read_seen(r: &mut Reader) -> Result<Seen, String> {
+    let mut seen = Seen::PAST;
+    for k in 0..TARGETS.div_ceil(2) {
+        let b = r.u8()?;
+        for (j, v) in [b & 15, b >> 4].into_iter().enumerate() {
+            if v > SHARE_FULL {
+                return Err("a share past the whole".into());
+            }
+            if let Some(s) = seen.share.get_mut(2 * k + j) {
+                *s = v;
+            }
+        }
+    }
+    Ok(seen)
+}
+
 /// Plays a replay through a fresh `World` and checks it ends where the
 /// server said it did.
 pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
@@ -229,7 +263,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
     let map = map_by_id(r.u8()?).ok_or("an unknown map")?;
     let mut w = World::new(map, rules, seed, salt);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
-    let mut rewind = [0u32; MAX_FIGHTERS];
+    let mut lag = Lag::past([0; MAX_FIGHTERS]);
     let mut kills = Vec::new();
     let mut ticks = 0u32;
     loop {
@@ -256,12 +290,18 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
                     }
                 }
                 let rmask = r.u16()?;
-                for (s, d) in rewind.iter_mut().enumerate() {
+                for (s, d) in lag.depth_q8.iter_mut().enumerate() {
                     if rmask & (1 << s) != 0 {
                         *d = r.u32()?;
                     }
                 }
-                w.step(&inputs, &rewind);
+                let smask = r.u16()?;
+                for (s, seen) in lag.seen.iter_mut().enumerate() {
+                    if smask & (1 << s) != 0 {
+                        *seen = read_seen(&mut r)?;
+                    }
+                }
+                w.step_with(&inputs, &lag);
                 ticks += 1;
                 for e in w.events.as_slice() {
                     if e.kind == Ev::Kill {
@@ -327,6 +367,80 @@ mod tests {
         assert!(bytes.len() < 6000 * 40, "{} bytes", bytes.len());
     }
 
+    /// Each seat's view of each target changing as a bubble's would (a
+    /// share a seat, a target and a moment): recorded, it replays to the
+    /// server's hash; a share edited in the file doesn't.
+    #[test]
+    fn shares_replay_to_the_same_hash() {
+        let rules = Rules {
+            score_limit: 1000,
+            time_limit_ms: 0,
+            ..Rules::doubles()
+        };
+        let mut w = World::new(Map::proving_grounds(), rules, 9, (4, 5));
+        let mut rec = Recorder::new(9, (4, 5), &rules, w.map.id);
+        let mut bots = [sim::bot::Bot::new(9, 0, 0.5); 4];
+        for (s, b) in bots.iter_mut().enumerate() {
+            w.seat(s, (s & 1) as u8);
+            rec.seat(s, (s & 1) as u8);
+            *b = sim::bot::Bot::new(9, s, 0.7);
+        }
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        for t in 0..6000u32 {
+            for (s, b) in bots.iter_mut().enumerate() {
+                inputs[s] = b.think(&w, s);
+            }
+            let mut lag = Lag::past([6 << 8; MAX_FIGHTERS]);
+            for (s, seen) in lag.seen.iter_mut().enumerate().take(4) {
+                for (q, share) in seen.share.iter_mut().enumerate() {
+                    *share = ((t / 64 + s as u32 * 3 + q as u32) % (SHARE_FULL as u32 + 1)) as u8;
+                }
+            }
+            rec.step(&inputs, &lag);
+            w.step_with(&inputs, &lag);
+        }
+        let bytes = rec.finish(&w);
+        let s = verify(&bytes).unwrap();
+        assert_eq!(s.hash, w.hash());
+        assert!(!s.kills.is_empty(), "the bots fought");
+    }
+
+    /// The same match with everyone seen in the past ends elsewhere: the
+    /// shares above decided shots, so a replay that kept them is the proof.
+    #[test]
+    fn shares_decide_shots() {
+        let run = |shared: bool| {
+            let rules = Rules {
+                score_limit: 1000,
+                time_limit_ms: 0,
+                ..Rules::doubles()
+            };
+            let mut w = World::new(Map::proving_grounds(), rules, 9, (4, 5));
+            let mut bots = [sim::bot::Bot::new(9, 0, 0.5); 4];
+            for (s, b) in bots.iter_mut().enumerate() {
+                w.seat(s, (s & 1) as u8);
+                *b = sim::bot::Bot::new(9, s, 0.7);
+            }
+            let mut inputs = [Input::default(); MAX_FIGHTERS];
+            for t in 0..6000u32 {
+                for (s, b) in bots.iter_mut().enumerate() {
+                    inputs[s] = b.think(&w, s);
+                }
+                let mut lag = Lag::past([6 << 8; MAX_FIGHTERS]);
+                if shared {
+                    for (s, seen) in lag.seen.iter_mut().enumerate().take(4) {
+                        for (q, share) in seen.share.iter_mut().enumerate() {
+                            *share = ((t / 64 + s as u32 * 3 + q as u32) % (SHARE_FULL as u32 + 1)) as u8;
+                        }
+                    }
+                }
+                w.step_with(&inputs, &lag);
+            }
+            w.hash()
+        };
+        assert_ne!(run(true), run(false));
+    }
+
     #[test]
     fn edited_inputs_are_caught() {
         let mut bytes = recorded();
@@ -351,6 +465,8 @@ mod tests {
                     }
                     let rmask = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
                     at += 2 + 4 * rmask.count_ones() as usize;
+                    let smask = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+                    at += 2 + TARGETS.div_ceil(2) * smask.count_ones() as usize;
                     ticks += 1;
                 }
                 k => panic!("record {k:#x}"),

@@ -5,6 +5,7 @@
 
 use crate::arms::{arm, Arm, Head, Kind, NONE};
 use crate::consts::*;
+use crate::contact::{Crashes, Man, Scene, Sticks, Witness};
 use crate::events::{Cause, Event, Events, Kind as Ev};
 use crate::fighter::{Fighter, Gun, Local};
 use crate::geom::{aim_dir, ray_cylinder, ray_sphere, V3};
@@ -380,6 +381,49 @@ pub struct World {
     /// driver drove it by ([`Self::drive_stick`]). Not hashed: it is the
     /// inputs', which a replay has.
     ran: [Input; MAX_FIGHTERS],
+    /// How far back each seat's shots are checked this tick, and against
+    /// what it saw of each target ([`Self::step_with`]). Not hashed: it is
+    /// the step's argument, which a replay has.
+    lag: Lag,
+}
+
+/// What one shooter saw of each target (by [`TARGETS`] index): its share of
+/// the shooter's rewind, in fifteenths. [`Self::PAST`] for all of it, as
+/// for a target drawn between snapshots on the render tick; 0 for one drawn
+/// on the shooter's own present (predicted), met where it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Seen {
+    pub share: [u8; TARGETS],
+}
+
+impl Seen {
+    pub const PAST: Seen = Seen {
+        share: [SHARE_FULL; TARGETS],
+    };
+
+    /// Target `t`'s rewind, of a shooter's `depth` (any unit, any size:
+    /// the whole share is the whole depth, exactly).
+    pub fn depth(&self, depth: u32, t: usize) -> u32 {
+        (depth as u64 * self.share[t].min(SHARE_FULL) as u64 / SHARE_FULL as u64) as u32
+    }
+}
+
+/// A tick's lag compensation, chosen by the server (docs/DESIGN.md §7):
+/// each seat's rewind depth in 1/256 tick, and what it saw of each target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lag {
+    pub depth_q8: [u32; MAX_FIGHTERS],
+    pub seen: [Seen; MAX_FIGHTERS],
+}
+
+impl Lag {
+    /// Everyone sees everything in the past, rewound by its whole depth.
+    pub fn past(depth_q8: [u32; MAX_FIGHTERS]) -> Lag {
+        Lag {
+            depth_q8,
+            seen: [Seen::PAST; MAX_FIGHTERS],
+        }
+    }
 }
 
 impl World {
@@ -417,7 +461,18 @@ impl World {
             rng: Pcg32::new(seed, 1),
             salt,
             ran: [Input::default(); MAX_FIGHTERS],
+            lag: Lag::past([0; MAX_FIGHTERS]),
         }
+    }
+
+    /// The lag compensation the last tick ran with.
+    pub fn lag(&self) -> &Lag {
+        &self.lag
+    }
+
+    /// Seat `q`'s input as the last tick ran it, sanitized.
+    pub fn ran(&self, q: usize) -> Input {
+        self.ran[q]
     }
 
     /// The stick (`mx`, `mz`) vehicle `i`'s driver drove it by on the last
@@ -493,6 +548,14 @@ impl World {
     /// seat's hitscan is checked, in 1/256 tick, chosen by the server from
     /// what it saw of that client's acks (docs/DESIGN.md §7).
     pub fn step(&mut self, inputs: &[Input; MAX_FIGHTERS], rewind_q8: &[u32; MAX_FIGHTERS]) {
+        self.step_with(inputs, &Lag::past(*rewind_q8));
+    }
+
+    /// [`Self::step`], each seat's shots checked against what it saw of
+    /// each target: a target's share of the seat's depth ([`Seen`]).
+    pub fn step_with(&mut self, inputs: &[Input; MAX_FIGHTERS], lag: &Lag) {
+        self.lag = *lag;
+        let rewind_q8 = &lag.depth_q8;
         // Last tick's events were read; any since (a seat taken between
         // ticks: a flag let go, a seat left) are this tick's.
         self.events.drop_first(self.events_read);
@@ -545,24 +608,31 @@ impl World {
                 self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
             }
         }
-        // Vehicles drive under their drivers' inputs (what a driver
-        // predicts: Vehicle::step_local), then everyone riding sits.
-        for i in 0..MAX_VEHICLES {
-            if !self.vehicles[i].active {
-                continue;
-            }
-            match self.vehicles[i].driver() {
-                Some(d) if self.fighters[d].active() => {
-                    let inp = inputs[d].sanitized();
-                    self.vehicles[i].step_local(&inp, &self.map);
-                }
-                _ => self.vehicles[i].step_parked(&self.map),
-            }
-        }
-        self.crashes();
-        self.seat_riders();
+        // The contact step (`sim::contact`: what a client predicts by),
+        // the world's own decisions between its stages: hulls driven under
+        // their drivers' sticks and crashed (the damage here), everyone
+        // riding seated, the void, then run down (met where the driver saw
+        // them; the damage here).
+        let spare = self.rules.teams && !self.rules.friendly_fire;
+        let sticks: Sticks = core::array::from_fn(|i| self.drive_stick(i));
+        let mut sc = Scene::take(&self.fighters, &self.vehicles, spare);
+        sc.drive(&sticks, &self.map);
+        let crashed = sc.crash(&self.map);
+        sc.put(&mut self.fighters, &mut self.vehicles);
+        self.crash_damage(&crashed);
+        let mut sc = Scene::take(&self.fighters, &self.vehicles, spare);
+        sc.seat();
+        sc.put(&mut self.fighters, &mut self.vehicles);
         self.falls();
-        self.splatter(rewind_q8);
+        let mut sc = Scene::take(&self.fighters, &self.vehicles, spare);
+        sc.run_down(&mut Rewound {
+            w: self,
+            depth: rewind_q8,
+        });
+        if SOLID_HULLS {
+            sc.push_out(&self.map);
+        }
+        sc.put(&mut self.fighters, &mut self.vehicles);
         for (s, l) in locals.iter().enumerate() {
             if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
                 self.unveil(s);
@@ -740,7 +810,9 @@ impl World {
             if ride.is_some() && v.riding().map(|(i, _)| i) == ride {
                 continue;
             }
-            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
             if !p.alive {
                 continue;
             }
@@ -764,7 +836,12 @@ impl World {
             if !v.active || ride == Some(i) || self.spares(s, v) {
                 continue;
             }
-            let p = self.vrewind.pose_at(self.tick, i, depth, &VPose::of(v));
+            let p = self.vrewind.pose_at(
+                self.tick,
+                i,
+                self.lag.seen[s].depth(depth, MAX_FIGHTERS + i),
+                &VPose::of(v),
+            );
             if !p.alive {
                 continue;
             }
@@ -817,7 +894,9 @@ impl World {
             if q == s || !v.active() || (self.rules.teams && v.team == me.team) {
                 continue;
             }
-            let p = self.rewind.pose_at(self.tick, q, depth, &pose(v));
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
             if !p.alive {
                 continue;
             }
@@ -1937,15 +2016,6 @@ impl World {
         }
     }
 
-    /// Everyone riding is put at their seat.
-    fn seat_riders(&mut self) {
-        for s in 0..MAX_FIGHTERS {
-            if let Some((i, seat)) = self.fighters[s].riding() {
-                self.fighters[s].body = self.vehicles[i].seat_body(seat);
-            }
-        }
-    }
-
     /// USE: out of the vehicle `s` rides, or into the nearest in reach
     /// with a seat free (the driver's first). Whether it did either.
     fn use_vehicle(&mut self, s: usize) -> bool {
@@ -2074,131 +2144,16 @@ impl World {
         }
     }
 
-    /// Hulls that meet push apart along where their circles touch, half
-    /// each (all of it the other's if one is against a wall), and trade
-    /// their closing speed, a little of it kept as a bounce; a hard crash
-    /// hurts both ([`VEH_CRASH_SPEED`]).
-    fn crashes(&mut self) {
-        let reach = 2.0 * VEH_HULL_R;
-        // Each hull's worst hit this tick, and whose doing: the other's
-        // driver, else its own (nobody's if neither is driven), dealt once
-        // every hull has moved.
-        let mut crash: [(i32, Option<usize>); MAX_VEHICLES] = [(0, None); MAX_VEHICLES];
-        for i in 0..MAX_VEHICLES {
-            for j in i + 1..MAX_VEHICLES {
-                let (a, b) = (self.vehicles[i], self.vehicles[j]);
-                if !a.active || !b.active || crate::fmath::fabs(a.pos.y - b.pos.y) >= VEH_H {
-                    continue;
-                }
-                // The deepest of the circles' overlaps, and its way from a
-                // to b.
-                let mut deep: Option<(f32, V3)> = None;
-                for ca in a.circles() {
-                    for cb in b.circles() {
-                        let d = (cb - ca).flat();
-                        let l2 = d.dot(d);
-                        if l2 >= reach * reach {
-                            continue;
-                        }
-                        let l = l2.sqrt();
-                        let n = if l > 1e-4 {
-                            d * (1.0 / l)
-                        } else {
-                            let m = (b.pos - a.pos).flat();
-                            if m.dot(m) > 1e-8 {
-                                m.norm()
-                            } else {
-                                V3::new(1.0, 0.0, 0.0)
-                            }
-                        };
-                        if deep.is_none_or(|(p, _)| reach - l > p) {
-                            deep = Some((reach - l, n));
-                        }
-                    }
-                }
-                let Some((pen, n)) = deep else {
-                    continue;
-                };
-                let closing = (a.vel - b.vel).flat().dot(n);
-                if closing > VEH_CRASH_SPEED {
-                    let pts = ((closing - VEH_CRASH_SPEED) * VEH_CRASH_DMG) as i32 * PT;
-                    crash[i] = crash[i].max((pts, b.driver().or(a.driver())));
-                    crash[j] = crash[j].max((pts, a.driver().or(b.driver())));
-                }
-                if closing > 0.0 {
-                    let k = closing * (1.0 + VEH_BOUNCE) * 0.5;
-                    for (q, s) in [(i, -k), (j, k)] {
-                        let v = &mut self.vehicles[q];
-                        let to = v.vel + n * s;
-                        v.vel = V3::new(crate::movement::quant(to.x), v.vel.y, crate::movement::quant(to.z));
-                    }
-                }
-                let half = n * (pen * 0.5);
-                let a_went = self.vehicles[i].nudge(-half, &self.map);
-                let b_went = self.vehicles[j].nudge(half, &self.map);
-                if !a_went {
-                    self.vehicles[j].nudge(half * 2.0, &self.map);
-                } else if !b_went {
-                    self.vehicles[i].nudge(-half * 2.0, &self.map);
-                }
-            }
-        }
+    /// What the contact step's crashes deal (`Scene::crash`): each hull's
+    /// worst, by the other's driver (else its own), unless a teammate of
+    /// theirs rides it.
+    fn crash_damage(&mut self, crash: &Crashes) {
         for (i, &(pts, by)) in crash.iter().enumerate() {
             let Some(att) = by else {
                 continue;
             };
             if pts > 0 && !self.spares(att, &self.vehicles[i]) {
                 self.damage_vehicle(att, i, pts);
-            }
-        }
-    }
-
-    /// A vehicle runs down whoever on foot it meets closing faster than
-    /// [`SPLAT_SPEED`]: at [`SPLAT_KILL`] dead, slower hurt by the share
-    /// of the way there (of a whole fighter's shields and health), and
-    /// carried off ahead of it. Met where its driver saw them (rewound
-    /// by the driver's depth, as a shot is) or where they are. Its driver
-    /// did it (or nobody drove: then the fighter's own death).
-    fn splatter(&mut self, rewind_q8: &[u32; MAX_FIGHTERS]) {
-        for i in 0..MAX_VEHICLES {
-            let v = self.vehicles[i];
-            if !v.active || v.vel.flat().len() < SPLAT_SPEED {
-                continue;
-            }
-            let driver = v.driver();
-            let depth = driver.map_or(0, |d| rewind_q8[d]);
-            for q in 0..MAX_FIGHTERS {
-                let f = self.fighters[q];
-                if !f.active() || f.ride != 0 || driver.is_some_and(|d| self.spared(d, q)) {
-                    continue;
-                }
-                let h = f.body.height();
-                let then = self.rewind.pose_at(self.tick, q, depth, &pose(&f));
-                let met = if v.touches(f.body.pos, BODY_R, h) {
-                    f.body.pos
-                } else if then.alive && v.touches(then.pos, BODY_R, h) {
-                    then.pos
-                } else {
-                    continue;
-                };
-                let off = (met - v.pos).flat();
-                let away = if off.dot(off) > 1e-6 { off.norm() } else { v.axes().0 };
-                // Its own speed at them, less theirs away from it: one who
-                // runs into its flank isn't run down.
-                let closing = v.vel.flat().dot(away) - f.body.vel.flat().dot(away).max(0.0);
-                if closing < SPLAT_SPEED {
-                    continue;
-                }
-                let b = &mut self.fighters[q].body;
-                b.vel = b.vel + away * (closing + SPLAT_SHOVE) + V3::new(0.0, 3.0, 0.0);
-                b.grounded = false;
-                let share = ((closing - SPLAT_SPEED) / (SPLAT_KILL - SPLAT_SPEED)).min(1.0);
-                let pts = if closing >= SPLAT_KILL {
-                    KILL_PTS
-                } else {
-                    ((HEALTH_MAX + SHIELD_MAX) as f32 * share) as i32
-                };
-                self.damage(driver.unwrap_or(q), q, pts, false, Head::None, Cause::Splatter as u16);
             }
         }
     }
@@ -3037,6 +2992,42 @@ fn hp(pts: i32) -> u16 {
         return 0;
     }
     ((pts + PT / 2) / PT).clamp(1, u16::MAX as i32) as u16
+}
+
+/// The server's witness to a run-down (`Scene::run_down`): where the driver
+/// saw them, rewound by its depth as a shot is, and the damage: at
+/// [`SPLAT_KILL`] dead, slower hurt by the share of the way there (of a
+/// whole fighter's shields and health); its driver's doing (or nobody
+/// drove: then the fighter's own death).
+struct Rewound<'a> {
+    w: &'a mut World,
+    depth: &'a [u32; MAX_FIGHTERS],
+}
+
+impl Witness for Rewound<'_> {
+    fn then(&self, i: usize, q: usize) -> Option<V3> {
+        let w = &*self.w;
+        // The driver's depth, of this one's share as the driver saw it.
+        let depth = w.vehicles[i]
+            .driver()
+            .map_or(0, |d| w.lag.seen[d].depth(self.depth[d], q));
+        let p = w.rewind.pose_at(w.tick, q, depth, &pose(&w.fighters[q]));
+        p.alive.then_some(p.pos)
+    }
+
+    fn run_down(&mut self, i: usize, q: usize, closing: f32, m: &mut Man) {
+        let w = &mut *self.w;
+        w.fighters[q].body = m.body;
+        let driver = w.vehicles[i].driver();
+        let share = ((closing - SPLAT_SPEED) / (SPLAT_KILL - SPLAT_SPEED)).min(1.0);
+        let pts = if closing >= SPLAT_KILL {
+            KILL_PTS
+        } else {
+            ((HEALTH_MAX + SHIELD_MAX) as f32 * share) as i32
+        };
+        w.damage(driver.unwrap_or(q), q, pts, false, Head::None, Cause::Splatter as u16);
+        *m = Man::of(&w.fighters[q]);
+    }
 }
 
 #[cfg(test)]
