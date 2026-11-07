@@ -1,7 +1,7 @@
-//! What lies about the map for the taking: each pad's gun (or power-up: a
-//! glowing orb, green the overshield, pale the camouflage), turning over its
-//! disc and gone while the pad waits (the snapshot's `empty_s`), the disc
-//! lit while it holds one; the guns and grenades on the floor that the
+//! What lies about the map for the taking: each pad's gun lying on the
+//! ground where it spawns (or its power-up: a glowing orb resting there,
+//! green the overshield, pale the camouflage), gone while the pad waits
+//! (the snapshot's `empty_s`); the guns and grenades on the floor that the
 //! snapshot names; and the line that says what USE would take here. All
 //! read from the session; what USE takes is the sim's (`World::pickup`).
 
@@ -16,16 +16,8 @@ use sim::world::Phase;
 
 use crate::look::guns::{self, Models};
 
-/// How high a pad's gun floats over its disc, how far and how fast it
-/// bobs, and how fast it turns (radians a second).
-const FLOAT_Y: f32 = 0.9;
-const BOB_M: f32 = 0.06;
-const BOB_HZ: f32 = 0.45;
-const SPIN: f32 = 1.1;
-/// A loaded pad's disc glows this, a waiting one's not at all.
-const DISC_GLOW: f32 = 1.6;
-/// A power-up's orb: its radius, and its glow in its colour; and how far
-/// it swells and shrinks, how fast.
+/// A power-up's orb, resting on the ground: its radius, and its glow in
+/// its colour; and how far it swells and shrinks, how fast.
 const ORB_R: f32 = 0.26;
 const ORB_GLOW: f32 = 6.0;
 const ORB_PULSE: f32 = 0.08;
@@ -41,10 +33,8 @@ fn orb_color(id: u8) -> LinearRgba {
         _ => LinearRgba::rgb(0.6, 0.78, 1.0),
     }
 }
-/// Frags on a pad: how far apart, and how far their middles are off the
-/// model's base.
-const PAD_FRAG_APART_M: f32 = 0.07;
-const PAD_FRAG_MID_M: f32 = 0.08;
+/// Frags on a pad: how far apart they lie.
+const PAD_FRAG_APART_M: f32 = 0.14;
 /// A gun on the floor lies on its side this high (its half thickness).
 const LIE_Y: f32 = 0.05;
 /// A drop thrown by a blast: how fast the drawn one follows where the
@@ -74,17 +64,11 @@ struct Lying {
 #[derive(Component)]
 pub struct PadGun(pub usize);
 
-/// Pad `i`'s disc (`level::build`), its material its own.
-#[derive(Component)]
-pub struct PadDisc(pub usize);
-
 /// The link (`front::LinkGen`) and welcome the pads' guns were made for,
-/// which discs are lit, and the drop drawn in each drop slot: its entity,
-/// gun and where it lies.
+/// and the drop drawn in each drop slot: its entity, gun and where it lies.
 #[derive(Resource, Default)]
 pub struct Items {
     built: Option<(u32, u32)>,
-    lit: Vec<Option<bool>>,
     drops: [Option<Lying>; MAX_DROPS],
     /// Drops picked up, hidden, by arm: a gun of that arm put down again
     /// shows one rather than load its scene anew (the oldest go past
@@ -122,7 +106,6 @@ pub fn draw(
     time: Res<Time>,
     mut held: Query<(&PadGun, &mut Transform, &mut Visibility)>,
     mut placed: Query<&mut Transform, Without<PadGun>>,
-    discs: Query<(&PadDisc, &MeshMaterial3d<StandardMaterial>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     plasma: Option<Res<crate::look::fx::plasma::Kit>>,
@@ -139,15 +122,24 @@ pub fn draw(
     if key != items.built {
         // The level's parts go with the level (`level::build`).
         items.built = key;
-        items.lit = vec![None; core.map.pads.len()];
         items.drops = [None; MAX_DROPS];
         items.spare.clear();
         for (i, p) in core.map.pads.iter().enumerate() {
+            // On the floor under where it spawns, each pad turned its own
+            // way; an orb resting on it.
+            let orb = sim::arms::power(p.arm);
+            let lift = match p.arm {
+                _ if orb => ORB_R,
+                sim::arms::STICKIES => crate::look::fx::plasma::RADIUS_M,
+                _ => LIE_Y,
+            };
+            let y = core.map.floor(p.pos.x, p.pos.z, 0.0, p.pos.y + 0.5);
             let root = commands
                 .spawn((
                     crate::level::LevelPart,
                     PadGun(i),
-                    Transform::from_xyz(p.pos.x, p.pos.y + FLOAT_Y, p.pos.z),
+                    Transform::from_xyz(p.pos.x, y + lift, p.pos.z)
+                        .with_rotation(Quat::from_rotation_y(i as f32 * 2.4 + 0.7)),
                     Visibility::Hidden,
                 ))
                 .id();
@@ -155,7 +147,7 @@ pub fn draw(
                 for side in [-1.0, 1.0] {
                     commands.spawn((
                         SceneRoot(models.frag.clone()),
-                        Transform::from_xyz(side * PAD_FRAG_APART_M, -PAD_FRAG_MID_M, 0.0),
+                        Transform::from_xyz(side * PAD_FRAG_APART_M * 0.5, 0.0, 0.0),
                         ChildOf(root),
                     ));
                 }
@@ -165,7 +157,7 @@ pub fn draw(
                         .entity(root)
                         .with_children(|c| crate::look::fx::plasma::spawn_lying(c, kit));
                 }
-            } else if sim::arms::power(p.arm) {
+            } else if orb {
                 let c = orb_color(p.arm);
                 commands.spawn((
                     Mesh3d(meshes.add(Sphere::new(ORB_R))),
@@ -180,7 +172,8 @@ pub fn draw(
                     ChildOf(root),
                 ));
             } else {
-                posed(&mut commands, &models, p.arm, guns::body_basis(), root);
+                let side = Quat::from_rotation_x(core::f32::consts::FRAC_PI_2);
+                posed(&mut commands, &models, p.arm, side * guns::body_basis(), root);
             }
         }
         return;
@@ -195,42 +188,11 @@ pub fn draw(
         if *vis != want {
             *vis = want;
         }
-        // Nothing to bob while it's away: each write turns the gun's whole
-        // scene over again.
-        if !on {
-            continue;
-        }
-        // Each pad a little out of step with the next.
-        let phase = pad.0 as f32 * 1.7;
-        tr.translation.y = def.pos.y + FLOAT_Y + BOB_M * (t * BOB_HZ * core::f32::consts::TAU + phase).sin();
-        tr.rotation = Quat::from_rotation_y(t * SPIN + phase);
-        tr.scale = if sim::arms::power(def.arm) {
-            Vec3::splat(1.0 + ORB_PULSE * (t * ORB_HZ * core::f32::consts::TAU + phase).sin())
-        } else {
-            Vec3::ONE
-        };
-    }
-    for (disc, mat) in discs.iter() {
-        let on = loaded(core, disc.0);
-        let Some(was) = items.lit.get_mut(disc.0) else {
-            continue;
-        };
-        if *was == Some(on) {
-            continue;
-        }
-        *was = Some(on);
-        let power = core
-            .map
-            .pads
-            .get(disc.0)
-            .map(|p| p.arm)
-            .filter(|&a| sim::arms::power(a));
-        if let Some(m) = mats.get_mut(&mat.0) {
-            m.emissive = if on {
-                power.map_or(LinearRgba::rgb(0.79, 0.6, 0.12), orb_color) * DISC_GLOW
-            } else {
-                LinearRgba::BLACK
-            };
+        // A gun lies still: no write to turn its scene over. An orb
+        // breathes, each a little out of step with the next.
+        if on && sim::arms::power(def.arm) {
+            let phase = pad.0 as f32 * 1.7;
+            tr.scale = Vec3::splat(1.0 + ORB_PULSE * (t * ORB_HZ * core::f32::consts::TAU + phase).sin());
         }
     }
     // The floor as the last snapshot names it: a slot gone or holding

@@ -1451,28 +1451,6 @@ pub fn build(
             bevy::light::NotShadowCaster,
         ));
     }
-    for (i, p) in map.pads.iter().enumerate() {
-        commands.spawn((
-            LevelPart,
-            crate::items::PadDisc(i),
-            Mesh3d(meshes.add(Cylinder::new(0.8, 0.06))),
-            MeshMaterial3d(mats.add(StandardMaterial {
-                base_color: Color::srgb(0.12, 0.1, 0.16),
-                perceptual_roughness: 0.45,
-                metallic: 0.6,
-                reflectance: fresnel::DIELECTRIC,
-                ..default()
-            })),
-            Transform::from_xyz(p.pos.x, p.pos.y + 0.03, p.pos.z),
-        ));
-        commands.spawn((
-            LevelPart,
-            Mesh3d(meshes.add(Torus::new(0.7, 0.82))),
-            MeshMaterial3d(mats.add(strip_material(Color::srgb(0.79, 0.64, 0.15), 0.3))),
-            Transform::from_xyz(p.pos.x, p.pos.y + 0.06, p.pos.z),
-            bevy::light::NotShadowCaster,
-        ));
-    }
     // The map's sun (look::rig: its shadows, its disk), where its mood puts
     // it, as strong as the map says.
     let mood = crate::look::mood::of(id);
