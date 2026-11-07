@@ -436,3 +436,11 @@ impl Client {
         self.transport.close();
     }
 }
+
+impl Drop for Client {
+    /// A session let go of (a link replaced) leaves its seat, as the
+    /// native one does: never a still fighter until the tab closes.
+    fn drop(&mut self) {
+        self.transport.close();
+    }
+}

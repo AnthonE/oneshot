@@ -245,8 +245,7 @@ impl Session {
             // A watcher follows another seat: its snapshots' own fighter is
             // that seat's from here.
             Msg::Follow { slot, team } if self.watch => {
-                self.core.slot = slot;
-                self.core.team = team;
+                self.core.follow(slot, team);
                 self.out.push(m);
             }
             m => self.out.push(m),

@@ -35,6 +35,27 @@ pub struct WebLobby {
     closed: Rc<Cell<bool>>,
 }
 
+/// A message kept for the game: full, what goes first is the oldest friends
+/// line (sent again every few seconds anyway), never a party's change, an
+/// invite or a Go, unless there is nothing else.
+fn keep_msg(q: &RefCell<VecDeque<Msg>>, m: Msg) {
+    let mut q = q.borrow_mut();
+    if q.len() >= KEEP {
+        let friendly = q
+            .iter()
+            .position(|o| matches!(o, Msg::Friends { .. } | Msg::Friend { .. }));
+        match friendly {
+            Some(i) => {
+                q.remove(i);
+            }
+            None => {
+                q.pop_front();
+            }
+        }
+    }
+    q.push_back(m);
+}
+
 fn keep<T>(q: &RefCell<VecDeque<T>>, t: T) {
     let mut q = q.borrow_mut();
     if q.len() >= KEEP {
@@ -78,7 +99,7 @@ impl WebLobby {
             spawn_local(async move {
                 while let Some(f) = reader.next().await {
                     if let Ok(m) = decode_msg(&f) {
-                        keep(&msgs, m);
+                        keep_msg(&msgs, m);
                     }
                 }
                 closed.set(true);
@@ -165,6 +186,13 @@ impl WebLobby {
     }
 
     pub fn close(&self) {
+        self.transport.close();
+    }
+}
+
+impl Drop for WebLobby {
+    /// Let go, it lets go of the connection too (closing twice is nothing).
+    fn drop(&mut self) {
         self.transport.close();
     }
 }

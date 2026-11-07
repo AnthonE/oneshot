@@ -48,8 +48,14 @@ pub const PLAYOUT_MIN: u32 = 2;
 pub const PLAYOUT_MAX: u32 = 12;
 /// Snapshots go out every this many ticks.
 pub const SNAP_EVERY: u32 = 2;
-/// Snapshot send times kept, for RTT.
-const SENT: usize = 64;
+/// Snapshot send times kept, for RTT: 4 s of ticks, so a high ping's acks
+/// still find theirs.
+const SENT: usize = 512;
+/// A seat's first input frame is taken only this soon after the tick it
+/// was seated at (its client counts from the welcome's tick, a level's load
+/// and all): frames from a match it was in before (a cup's last heat, still
+/// on their way) are another clock's.
+pub const FIRST_INPUT_WITHIN: u32 = ticks(30_000);
 
 /// The frame run for the `n`th tick in a row (from 1) whose frame hasn't
 /// come, `last` being the last that did (docs/DESIGN.md §4): held as it
@@ -251,6 +257,10 @@ impl ClientNet {
         };
         for (i, f) in m.frames().iter().enumerate() {
             let seq = m.first_seq.wrapping_add(i as u32);
+            if self.cursor.is_none() && seq.wrapping_sub(self.joined) > FIRST_INPUT_WITHIN {
+                self.late += 1;
+                continue;
+            }
             let cursor = *self.cursor.get_or_insert(seq);
             let ahead = seq.wrapping_sub(cursor);
             if ahead >= 0x8000_0000 {
@@ -375,6 +385,8 @@ pub struct Room {
     pub passive_bots: bool,
     seed: u64,
     phase: Phase,
+    /// The tick play began (the countdown over), once it has.
+    pub began: Option<u32>,
     /// The match's secret, kept here only to publish its commitment at the
     /// start and the salt itself at the end (docs/DESIGN.md §9).
     salt: (u64, u64),
@@ -385,6 +397,9 @@ pub struct Room {
     pub ranked: bool,
     /// The aim review's numbers, for every seat.
     watch: watch::Watch,
+    /// People who left before the end: their seat, name and aim's numbers
+    /// as they left (the seat's own start again for whoever is next).
+    pub departed: Vec<(u8, Name, watch::Stats)>,
     /// Medals and the carnage report, for every seat.
     medals: medals::Medals,
     /// The skin and emblem each person wears, checked by the server against
@@ -482,10 +497,12 @@ impl Room {
             passive_bots: false,
             seed,
             phase: Phase::Countdown,
+            began: None,
             salt,
             fogs: Default::default(),
             ranked: false,
             watch: watch::Watch::default(),
+            departed: Vec::new(),
             medals: medals::Medals::default(),
             looks: [proto::Look::default(); MAX_FIGHTERS],
             spectate: None,
@@ -539,7 +556,7 @@ impl Room {
         };
         let line = self
             .spectate
-            .get_or_insert_with(|| Box::new(spectate::Line::new(ticks(ms))));
+            .get_or_insert_with(|| Box::new(spectate::Line::new(ticks(ms), self.world.tick)));
         let tick = line.shown_tick(self.world.tick);
         let mut out = vec![Msg::Welcome {
             slot: follow,
@@ -550,8 +567,12 @@ impl Room {
             rules: self.world.rules,
             salt_commit: self.salt_commit(),
         }];
+        // Who sat where at the shown tick (a seat taken since is told when
+        // the line gets to it).
         for q in 0..self.size {
-            out.push(self.seat_msg(q));
+            let now = self.seat_msg(q);
+            let shown = self.spectate.as_mut().map_or(now, |l| l.shown_name(q, now));
+            out.push(shown);
         }
         out
     }
@@ -623,6 +644,14 @@ impl Room {
         self.rec.seat(s, team);
         self.world.seat(s, team);
         self.medals.reset(s);
+        self.watch.reset(s);
+        // Someone new, at a spawn: nobody's fog holds the last one's place.
+        for f in &mut self.fogs {
+            f.forget(s);
+        }
+        if let Some(l) = self.spectate.as_mut() {
+            l.forget(s);
+        }
     }
 
     fn team_of(&self, s: usize) -> u8 {
@@ -725,8 +754,10 @@ impl Room {
     /// A person left: a bot takes the seat, or in a ranked room nobody does
     /// and the fighter stands where it was.
     pub fn leave(&mut self, s: u8) -> Outbox {
-        if let Seat::Person(c, _) = &self.seats[s as usize] {
+        if let Seat::Person(c, name) = &self.seats[s as usize] {
             self.dropped_gone += c.queue.dropped as u64;
+            // Their aim's numbers stay for the review, under their name.
+            self.departed.push((s, *name, self.watch.stats[s as usize].clone()));
         }
         if self.ranked {
             self.seats[s as usize] = Seat::Empty;
@@ -844,6 +875,9 @@ impl Room {
         }
         if self.world.phase != self.phase {
             self.phase = self.world.phase;
+            if self.phase == Phase::Playing {
+                self.began = Some(self.world.tick);
+            }
             out.push((
                 None,
                 Msg::Phase {

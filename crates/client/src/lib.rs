@@ -843,6 +843,7 @@ fn grab(
     keys: Res<ButtonInput<KeyCode>>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
+    in_match: Option<Res<front::InMatch>>,
 ) {
     if *screen.get() != Screen::Playing {
         return;
@@ -855,7 +856,9 @@ fn grab(
         c.visible = false;
         look.armed = false;
     }
-    if keys.just_pressed(KeyCode::Escape) {
+    // Not over a match ended this frame (`front::ended` sends us to the
+    // title, and the title it is).
+    if keys.just_pressed(KeyCode::Escape) && !front::InMatch::just_left(&in_match) {
         next.set(Screen::Paused);
     }
 }
@@ -2135,6 +2138,20 @@ mod web_start {
     #[wasm_bindgen]
     pub fn clip_styles() -> Vec<String> {
         super::clip::STYLES.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The styles a clip may take while its match is still on
+    /// (`clip::LIVE_STYLES`): the page offers only these then.
+    #[wasm_bindgen]
+    pub fn clip_live_styles() -> Vec<String> {
+        super::clip::LIVE_STYLES.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The film's mix rate (`film::script::FILM_RATE`), which the clip
+    /// page encodes its audio at.
+    #[wasm_bindgen]
+    pub fn film_rate() -> u32 {
+        super::film::script::FILM_RATE
     }
 
     /// The page's `?pose`: no server, one fighter for a picture (`pose.rs`;

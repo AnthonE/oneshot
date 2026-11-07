@@ -52,6 +52,11 @@ pub const INPUT_LANE: usize = 4096;
 pub const INPUTS_PER_S: f64 = 128.0;
 pub const INPUT_BURST: f64 = 64.0;
 
+/// A watcher's FOLLOW presses: one moves to the next player, so a few a
+/// second is more than a hand does. Past it they are dropped before the sim
+/// thread hears of them.
+pub const FOLLOWS_MIN_MS: u64 = 150;
+
 /// A session's input allowance (as `proto::voice::Bucket`).
 #[derive(Clone, Copy, Debug)]
 pub struct InputBucket {
@@ -924,9 +929,17 @@ async fn session(
     // The stream says goodbye, or (a watcher) asks for the next player.
     let fsim = to_sim.clone();
     let reader = async {
+        let mut followed: Option<std::time::Instant> = None;
         while let Some(f) = read_frame(&mut recv).await {
             match decode_msg(&f) {
                 Ok(Msg::Follow { .. }) if mode == MODE_WATCH => {
+                    // Not faster than a hand: a flood of them would hold up
+                    // the sim thread, every room's.
+                    let now = std::time::Instant::now();
+                    if followed.is_some_and(|t| now.duration_since(t).as_millis() < FOLLOWS_MIN_MS as u128) {
+                        continue;
+                    }
+                    followed = Some(now);
                     let _ = fsim.send(ToSim::Follow { session: session_id });
                 }
                 Ok(Msg::Bye) | Err(_) => break,

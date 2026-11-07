@@ -275,7 +275,7 @@ pub fn carnage(
     mut shown: Local<usize>,
 ) {
     let s = link.0.session();
-    let over = s.ready && s.core.latest().phase == 2;
+    let over = s.ready && s.core.phase() == sim::world::Phase::Over;
     let n = if over { st.carnage.len() } else { 0 };
     if n == *shown {
         return;

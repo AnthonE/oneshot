@@ -60,9 +60,11 @@ struct PartyState {
     seats: Vec<Seat>,
     invited: BTreeSet<String>,
     kicked: BTreeSet<String>,
-    /// What the leader last started, whether the party plays alone, and
-    /// (alone) its own settings.
-    started: Option<(u8, bool, pp::Custom)>,
+    /// What the leader last started, whether the party plays alone, (alone)
+    /// its own settings, and when.
+    started: Option<(u8, bool, pp::Custom, Instant)>,
+    /// Where the next seat's tag is looked for from.
+    next_tag: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -84,7 +86,18 @@ pub struct Seating {
     pub private: bool,
     /// A private match's own map, score and clock (`pp::Custom`).
     pub custom: pp::Custom,
+    /// The start is this hello's (within [`START_FRESH`]): a new room may be
+    /// made for it. Past that only the room the party already plays in
+    /// takes them (a page reloading back into it); a later PLAY alone is
+    /// alone.
+    pub fresh: bool,
 }
+
+/// How long after the leader's start its members' hellos are its.
+pub const START_FRESH: Duration = Duration::from_secs(120);
+/// A second start of the same match this soon is the same click (a double
+/// click, a key held): not a second Go.
+pub const START_AGAIN: Duration = Duration::from_secs(3);
 
 /// The sessions a talker's voice goes to: the rest of its party, held
 /// without an allocation (a frame comes fifty times a second).
@@ -235,6 +248,12 @@ impl Parties {
         (out, replaced)
     }
 
+    /// Whether a page of player `id` newer than `session` (sessions are
+    /// numbered as their hellos came) is already in.
+    pub fn newer(&self, session: u64, id: &str) -> bool {
+        self.sessions.iter().any(|(&s, l)| s > session && l.who.id == id)
+    }
+
     /// Their friends' ids, as Elo Pros has them now.
     pub fn set_friends(&mut self, session: u64, ids: impl IntoIterator<Item = String>) {
         if let Some(l) = self.sessions.get_mut(&session) {
@@ -242,13 +261,40 @@ impl Parties {
         }
     }
 
-    /// The session signed in: it is this player now, in the same seat.
-    pub fn sign_in(&mut self, session: u64, who: Who) -> Outbox {
+    /// The session signed in: it is this player now, in the same seat. A
+    /// page of theirs already in (another tab) is replaced, as at
+    /// [`Self::connect`], and returned to be let go; no party holds them
+    /// twice.
+    pub fn sign_in(&mut self, session: u64, who: Who, now: Instant) -> (Outbox, Vec<u64>) {
+        if !self.sessions.contains_key(&session) {
+            return (Outbox::new(), Vec::new());
+        }
+        let replaced: Vec<u64> = self
+            .sessions
+            .iter()
+            .filter(|(&s, l)| s != session && l.who.id == who.id)
+            .map(|(&s, _)| s)
+            .collect();
+        let mut out = Outbox::new();
+        for &s in &replaced {
+            out.extend(self.disconnect(s, now));
+        }
         let Some(l) = self.sessions.get_mut(&session) else {
-            return Outbox::new();
+            return (out, replaced);
         };
         let old = std::mem::replace(&mut l.who, who.clone());
         let code = l.party;
+        // Their seat elsewhere (kept for the tab just replaced) goes: this
+        // one is theirs now.
+        let mut emptied = Vec::new();
+        for (&c, p) in self.parties.iter_mut() {
+            let before = p.seats.len();
+            p.seats
+                .retain(|st| !(st.id == who.id && st.session != Some(session) && st.id != old.id));
+            if p.seats.len() != before {
+                emptied.push(c);
+            }
+        }
         if let Some(p) = self.parties.get_mut(&code) {
             if p.leader == old.id {
                 p.leader = who.id.clone();
@@ -258,7 +304,21 @@ impl Parties {
                 seat.player = player_of(&who);
             }
         }
-        self.tell(code)
+        for c in emptied {
+            if c != code {
+                out.extend(self.settle(c));
+            }
+        }
+        out.extend(self.tell(code));
+        (out, replaced)
+    }
+
+    /// A page that let go of its line at once (an attempt it had given up
+    /// on, landing late): its seat goes now, kept for nobody.
+    pub fn abandoned(&mut self, session: u64) -> Outbox {
+        let out = self.unseat(session);
+        self.sessions.remove(&session);
+        out
     }
 
     /// The page went away: its place is kept for [`GRACE`].
@@ -356,7 +416,14 @@ impl Parties {
             return out;
         };
         if !p.seats.iter().any(|s| s.id == who.id) {
-            let tag = (0..TAGS).find(|t| p.seats.iter().all(|s| s.tag != *t)).unwrap_or(0);
+            // The next tag after the last given, not the lowest free: a tag
+            // just let go names nobody new while a leader's view still
+            // shows its old seat (a KICK on it, a voice keyed by it).
+            let tag = (1..=TAGS)
+                .map(|k| p.next_tag.wrapping_add(k - 1) % TAGS)
+                .find(|t| p.seats.iter().all(|s| s.tag != *t))
+                .unwrap_or(0);
+            p.next_tag = (tag + 1) % TAGS;
             p.seats.push(Seat {
                 id: who.id.clone(),
                 name,
@@ -395,6 +462,7 @@ impl Parties {
                 invited: BTreeSet::new(),
                 kicked: BTreeSet::new(),
                 started: None,
+                next_tag: 0,
             },
         );
         self.seat(session, code)
@@ -489,7 +557,14 @@ impl Parties {
                 } else {
                     pp::Custom::default()
                 };
-                self.parties.get_mut(&code).unwrap().started = Some((mode, private, custom));
+                let now = Instant::now();
+                let p = self.parties.get_mut(&code).unwrap();
+                if p.started.is_some_and(|(m, pr, c, at)| {
+                    (m, pr, c) == (mode, private, custom) && now.duration_since(at) < START_AGAIN
+                }) {
+                    return Ok(Outbox::new());
+                }
+                p.started = Some((mode, private, custom, now));
                 Ok(out)
             }
             pp::ACT_KICK => {
@@ -671,13 +746,14 @@ impl Parties {
         if !p.seats.iter().any(|s| s.id == id) {
             return None;
         }
-        let (m, private, custom) = p.started?;
+        let (m, private, custom, at) = p.started?;
         (m == mode).then_some(Seating {
             code,
             // Those away are on their way (a page reloading into the match).
             size: p.seats.len().max(1) as u8,
             private,
             custom,
+            fresh: at.elapsed() < START_FRESH,
         })
     }
 
@@ -841,6 +917,7 @@ mod tests {
                 size: 2,
                 private: true,
                 custom: pp::Custom::default(),
+                fresh: true,
             })
         );
         assert_eq!(

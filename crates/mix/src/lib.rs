@@ -369,6 +369,9 @@ pub struct Engine {
     master: f32,
     limit: f32,
     stats: Stats,
+    /// The rate it renders at: [`RATE`], unless the output runs at another
+    /// (a browser that wouldn't give an audio context 48 kHz).
+    out_rate: f32,
 }
 
 impl Default for Engine {
@@ -380,15 +383,26 @@ impl Default for Engine {
             master: 1.0,
             limit: 1.0,
             stats: Stats::default(),
+            out_rate: RATE as f32,
         }
     }
 }
 
-fn step_of(src_rate: f32, rate: f32) -> f32 {
-    (src_rate / RATE as f32 * rate).clamp(0.05, 8.0)
+/// How far a clip at `src_rate` moves a sample of output at `out_rate`,
+/// played at `rate` (1: as recorded).
+fn step_of(src_rate: f32, rate: f32, out_rate: f32) -> f32 {
+    (src_rate / out_rate * rate).clamp(0.05, 8.0)
 }
 
 impl Engine {
+    /// The output runs at `hz`, not [`RATE`]: a clip's pitch and a delay's
+    /// length stay what they are. Before anything plays.
+    pub fn set_rate(&mut self, hz: u32) {
+        if hz > 0 {
+            self.out_rate = hz as f32;
+        }
+    }
+
     /// Take what the game has sent, never waiting for it.
     pub fn take(&mut self, inbox: &Inbox) {
         for _ in 0..INBOX {
@@ -458,7 +472,7 @@ impl Engine {
                 };
                 self.stats.started += 1;
                 self.voices[slot] = Voice {
-                    step: step_of(clip.rate as f32, at.rate),
+                    step: step_of(clip.rate as f32, at.rate, self.out_rate),
                     pcm: Some(clip.pcm),
                     pos: 0,
                     frac: 0.0,
@@ -466,7 +480,8 @@ impl Engine {
                     r: at.r,
                     lp: at.lp,
                     y: 0.0,
-                    wait: delay,
+                    // Frames at RATE, as the game counts them.
+                    wait: (delay as f64 * self.out_rate as f64 / RATE as f64) as u32,
                 };
             }
             Cmd::Hold { slot, clip: id, at } => {
@@ -482,7 +497,7 @@ impl Engine {
                     return;
                 };
                 if let Some(h) = self.held.get_mut(slot as usize) {
-                    let to = [at.l, at.r, step_of(clip.rate as f32, at.rate), at.lp];
+                    let to = [at.l, at.r, step_of(clip.rate as f32, at.rate, self.out_rate), at.lp];
                     // The loop already there plays on, eased to where it is
                     // wanted (back up, if it was stopping): never a cut.
                     if h.pcm.as_ref().is_some_and(|p| Arc::ptr_eq(p, &clip.pcm)) {
@@ -509,7 +524,7 @@ impl Engine {
                     if let Some((_, want)) = &mut h.waiting {
                         *want = at;
                     } else if h.pcm.is_some() && !h.stopping {
-                        h.to = [at.l, at.r, step_of(h.src_rate, at.rate), at.lp];
+                        h.to = [at.l, at.r, step_of(h.src_rate, at.rate, self.out_rate), at.lp];
                     }
                 }
             }

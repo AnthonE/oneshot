@@ -83,3 +83,35 @@ fn followers_move_through_the_seated_seats() {
     room.spectate_welcome(a);
     assert!(ranked.spectate.as_ref().unwrap().delay > room.spectate.as_ref().unwrap().delay);
 }
+
+/// The first watcher of a match well under way: the welcome is to the
+/// line's first frame (what the client takes as its first snapshot), not
+/// the delay before now, where there is nothing.
+#[test]
+fn a_match_watched_late_is_welcomed_to_its_first_frame() {
+    let mut room = Room::new(Map::proving_grounds(), Rules::ffa(), 9, (1, 2));
+    let delay = ticks(DELAY_CASUAL_MS);
+    for _ in 0..delay * 2 {
+        room.step(0.0);
+    }
+    let first = room.spectate_first();
+    let hello = room.spectate_welcome(first);
+    let Msg::Welcome { tick: welcome, .. } = hello[0] else {
+        panic!("{:?}", hello[0]);
+    };
+    let mut seen = None;
+    for _ in 0..delay + WATCH_EVERY * 2 {
+        room.step(0.0);
+        let now = room.world.tick;
+        let (frames, _) = room.spectate.as_mut().unwrap().due(now);
+        if let Some(f) = frames.first() {
+            seen = Some(f.tick);
+            break;
+        }
+    }
+    let first_frame = seen.expect("a frame came");
+    assert!(
+        first_frame.abs_diff(welcome) <= WATCH_EVERY,
+        "welcome {welcome}, first frame {first_frame}"
+    );
+}

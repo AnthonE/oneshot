@@ -1255,6 +1255,15 @@ impl NetCore {
         }
     }
 
+    /// A watcher follows seat `slot` from here: its snapshots' own fighter
+    /// is that seat's, and so are their events, numbered by that seat's own
+    /// count (the last seat's are no measure of what is new).
+    pub fn follow(&mut self, slot: u8, team: u8) {
+        self.slot = slot;
+        self.team = team;
+        self.event_id = None;
+    }
+
     fn reconcile(&mut self, s: &Snapshot) {
         let l = s.last_seq;
         let auth = s.own;

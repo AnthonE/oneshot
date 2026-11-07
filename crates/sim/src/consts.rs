@@ -7,9 +7,10 @@ pub const TICK_HZ: u32 = 128;
 /// One tick in seconds. 1/128 is a power of two, so it is exact.
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 
-/// A duration in ms as whole ticks, rounded to nearest.
+/// A duration in ms as whole ticks, rounded to nearest (in 64 bits: a
+/// duration past 9.3 h would overflow 32).
 pub const fn ticks(ms: u32) -> u32 {
-    (ms * TICK_HZ + 500) / 1000
+    ((ms as u64 * TICK_HZ as u64 + 500) / 1000) as u32
 }
 
 /// Seats in a room: Duel 2, Doubles 4, a free for all or a cup heat 8,

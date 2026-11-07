@@ -107,6 +107,13 @@ impl Events {
         self.len = 0;
     }
 
+    /// The first `n` gone, the rest moved up (no allocation).
+    pub fn drop_first(&mut self, n: usize) {
+        let n = n.min(self.len);
+        self.list.copy_within(n..self.len, 0);
+        self.len -= n;
+    }
+
     /// Adds `e`, or counts it dropped: past the cap, or for an event that
     /// need not arrive, past the cap less the room kept for those that must
     /// ([`Kind::must`]).

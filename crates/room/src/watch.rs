@@ -147,6 +147,17 @@ fn turn_deg(a: u16, b: u16) -> f32 {
 }
 
 impl Watch {
+    /// Seat `s` has someone new in it: their numbers start from nothing.
+    pub fn reset(&mut self, s: usize) {
+        self.stats[s] = Stats::default();
+        self.preaim_ticks[s] = 0;
+        self.yaws[s] = [0; YAWS];
+        self.sight[s] = [Sight::default(); MAX_FIGHTERS];
+        for row in &mut self.sight {
+            row[s] = Sight::default();
+        }
+    }
+
     /// Reads the tick the world just stepped. `shown(v, t)`: whether fog
     /// sent seat `t` to seat `v` this tick.
     pub fn observe(&mut self, w: &World, shown: impl Fn(usize, usize) -> bool) {
