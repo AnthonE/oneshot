@@ -671,7 +671,7 @@ fn panel(
                 ),
             ));
             // What you wear, at a glance: a click opens the armory.
-            look_row(p, player);
+            look_row(p, player, party.wardrobe.as_ref());
 
             p.spawn(ui::group("CASUAL"));
             for m in MODES.iter().filter(|m| !m.ranked) {
@@ -762,8 +762,12 @@ fn play_foot(p: &mut ChildSpawnerCommands, front: &Front, party: &PartyView, kno
 }
 
 /// The PLAY panel's line for what you wear: the skin's colour, what is worn,
-/// and the way into the armory.
-fn look_row(p: &mut ChildSpawnerCommands, player: &Player) {
+/// and the way into the armory. What is worn is what the server will let
+/// this wallet wear of the pick (`Player::worn`), as everyone in the match
+/// sees it; a pick it won't is named as locked.
+fn look_row(p: &mut ChildSpawnerCommands, player: &Player, wardrobe: Option<&proto::Wardrobe>) {
+    let worn = player.worn(wardrobe);
+    let locked = locked_words(&player.look(), &worn);
     let idle = ui::ROW_IDLE;
     p.spawn((
         Button,
@@ -773,9 +777,9 @@ fn look_row(p: &mut ChildSpawnerCommands, player: &Player) {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             column_gap: Val::Px(10.0),
-            height: Val::Px(34.0),
+            min_height: Val::Px(34.0),
             flex_shrink: 0.0,
-            padding: UiRect::horizontal(Val::Px(10.0)),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
@@ -785,27 +789,67 @@ fn look_row(p: &mut ChildSpawnerCommands, player: &Player) {
         ui::Hover::new(idle, ui::ROW_HOVER),
     ))
     .with_children(|r| {
-        r.spawn(swatch_bar(skin_colour(player.skin), 4.0, 18.0));
-        r.spawn(grow())
-            .with_child(ui::strong(look_words(player), 12.5, ui::TEXT_COLOR));
-        r.spawn(ui::strong("ARMORY  >", 11.0, ui::ACCENT_HOVER));
+        r.spawn(swatch_bar(skin_colour(worn.skin), 4.0, 18.0));
+        // What is worn; under it, on a line of its own, what was picked but
+        // is locked.
+        r.spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(1.0),
+            ..grow()
+        })
+        .with_children(|c| {
+            c.spawn(ui::strong(look_words(&worn), 12.5, ui::TEXT_COLOR));
+            if !locked.is_empty() {
+                c.spawn(ui::strong(locked, 10.0, ui::MARK));
+            }
+        });
+        r.spawn(Node {
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_child(ui::strong("ARMORY  >", 11.0, ui::ACCENT_HOVER));
     });
 }
 
 /// What is worn, in a few words: the skin, the gear, the emblem's glyph.
-fn look_words(player: &Player) -> String {
-    let mut w = vec![skin_word(player.skin)];
+fn look_words(look: &proto::Look) -> String {
+    let mut w = vec![skin_word(look.skin)];
     for (k, (_, slot)) in GEAR_ROWS.iter().enumerate() {
-        let g = proto::gear_valid(slot, player.gear(k));
+        let g = proto::gear_valid(slot, [look.headwear, look.footwear][k]);
         if g != proto::GEAR_NONE {
             w.push(slot[g as usize].to_uppercase());
         }
     }
-    let (g, ..) = proto::emblem_parts(proto::emblem_valid(player.emblem));
+    let (g, ..) = proto::emblem_parts(proto::emblem_valid(look.emblem));
     if g != 0 {
         w.push(proto::EMBLEM_GLYPHS[g as usize].to_uppercase());
     }
     w.join(" · ")
+}
+
+/// What was picked but won't be worn (`asked` against `worn`), named as
+/// locked; nothing when it all will be.
+fn locked_words(asked: &proto::Look, worn: &proto::Look) -> String {
+    let mut w = Vec::new();
+    if asked.skin != worn.skin {
+        w.push(skin_word(asked.skin));
+    }
+    for (k, (_, slot)) in GEAR_ROWS.iter().enumerate() {
+        let a = proto::gear_valid(slot, [asked.headwear, asked.footwear][k]);
+        if a != proto::GEAR_NONE && a != [worn.headwear, worn.footwear][k] {
+            w.push(slot[a as usize].to_uppercase());
+        }
+    }
+    let (a, ..) = proto::emblem_parts(proto::emblem_valid(asked.emblem));
+    let (b, ..) = proto::emblem_parts(worn.emblem);
+    if a != 0 && a != b {
+        w.push(proto::EMBLEM_GLYPHS[a as usize].to_uppercase());
+    }
+    if w.is_empty() {
+        String::new()
+    } else {
+        format!("{} LOCKED", w.join(" · "))
+    }
 }
 
 /// A skin's colour as the armory shows it: its trim, or the side's blue for
@@ -2568,10 +2612,17 @@ fn rebuild(
         return;
     }
     front.dirty = false;
-    // Triple T shows his back while the emblem is being picked.
+    // Triple T shows his back while the emblem is being picked, and wears
+    // the armory's pick there; on the other panels, what the server will
+    // let this wallet wear of it, as the match shows us to everyone.
     if let Some(p) = portrait.as_deref_mut() {
         let (g, ..) = proto::emblem_parts(player.emblem);
         p.show_back(front.tab == Tab::Armory && front.armory == ARMORY_EMBLEM && g != 0);
+        p.wear(if front.tab == Tab::Armory {
+            player.look()
+        } else {
+            player.worn(party.wardrobe.as_ref())
+        });
     }
     front.drawn = Some(signin);
     front.drawn_party = party.gen;

@@ -1820,6 +1820,52 @@ impl Wardrobe {
         let line = SKIN_FLOOR.get(i as usize).copied().unwrap_or(u16::MAX);
         Self::has(self.skins, i) && (line == 0 || self.floor.is_some_and(|f| f >= line))
     }
+
+    /// What the server will let this wardrobe's wallet wear of `asked`, by
+    /// `server::net`'s rules told ahead: a skin it owns and is at the line
+    /// of, gear it owns, an emblem whose glyph it is at the line of; the
+    /// standard look, no gear and no rank-locked glyph without a wallet.
+    /// While the wallet couldn't be read (`known` false), `asked` as it is:
+    /// the server reads again on every hello.
+    pub fn wear(&self, asked: Look) -> Look {
+        let skin = if (asked.skin as usize) < SKINS.len() {
+            asked.skin
+        } else {
+            SKIN_STANDARD
+        };
+        let emblem = emblem_valid(asked.emblem);
+        let headwear = gear_valid(&HEADWEAR, asked.headwear);
+        let footwear = gear_valid(&FOOTWEAR, asked.footwear);
+        if self.wallet && !self.known {
+            return Look {
+                skin,
+                emblem,
+                headwear,
+                footwear,
+            };
+        }
+        let glyph_line = GLYPH_FLOOR[emblem_parts(emblem).0 as usize];
+        let at = |line: u16| line == 0 || (self.wallet && self.floor.is_some_and(|f| f >= line));
+        let owns = |mask: u32, g: u8| self.wallet && Self::has(mask, g);
+        Look {
+            skin: if self.wallet && self.may_wear_skin(skin) {
+                skin
+            } else {
+                SKIN_STANDARD
+            },
+            emblem: if at(glyph_line) { emblem } else { EMBLEM_NONE },
+            headwear: if owns(self.headwear, headwear) {
+                headwear
+            } else {
+                GEAR_NONE
+            },
+            footwear: if owns(self.footwear, footwear) {
+                footwear
+            } else {
+                GEAR_NONE
+            },
+        }
+    }
 }
 
 // Every list's items fit a wardrobe's masks.
@@ -2420,6 +2466,69 @@ pub fn frame_msg(m: &Msg, out: &mut [u8; MAX_STREAM_MSG + frame::LEN_PREFIX_BYTE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wardrobe_says_what_the_server_will_let_it_wear() {
+        // Ember (from a 1300 rating), shades, loggers and a crown (from 1800)
+        // asked for.
+        let asked = Look {
+            skin: 2,
+            emblem: emblem(16, 1, 3, 4),
+            headwear: 1,
+            footwear: 1,
+        };
+        let bare = Look {
+            skin: SKIN_STANDARD,
+            emblem: EMBLEM_NONE,
+            headwear: GEAR_NONE,
+            footwear: GEAR_NONE,
+        };
+        // A guest: the standard look, and no rank-locked glyph; an unlocked
+        // glyph is anyone's.
+        assert_eq!(Wardrobe::BARE.wear(asked), bare);
+        let star = emblem(1, 1, 3, 4);
+        assert_eq!(
+            Wardrobe::BARE.wear(Look { emblem: star, ..asked }),
+            Look { emblem: star, ..bare }
+        );
+        // A wallet owning them all, at ember's line but under the crown's.
+        let (skins, headwear, footwear) = Wardrobe::from_names(["ember", "shades", "loggers"]);
+        let w = Wardrobe {
+            wallet: true,
+            known: true,
+            skins,
+            headwear,
+            footwear,
+            floor: Some(1300),
+        };
+        assert_eq!(
+            w.wear(asked),
+            Look {
+                emblem: EMBLEM_NONE,
+                ..asked
+            }
+        );
+        // Over the crown's line it wears it all; under ember's, the standard
+        // skin; unrated, the same.
+        assert_eq!(Wardrobe { floor: Some(1800), ..w }.wear(asked), asked);
+        let under = Look {
+            skin: SKIN_STANDARD,
+            emblem: EMBLEM_NONE,
+            ..asked
+        };
+        assert_eq!(Wardrobe { floor: Some(1200), ..w }.wear(asked), under);
+        assert_eq!(Wardrobe { floor: None, ..w }.wear(asked), under);
+        // Owning nothing, the gear comes off too; the wallet unread, nothing
+        // is taken off yet.
+        let owns_nothing = Wardrobe {
+            skins: 1,
+            headwear: 1,
+            footwear: 1,
+            ..w
+        };
+        assert_eq!(owns_nothing.wear(asked), bare);
+        assert_eq!(Wardrobe { known: false, ..w }.wear(asked), asked);
+    }
 
     /// A hello from a page from before the stamp (no stamp on the wire)
     /// still reads, its stamp 0, so the server can tell it to reload.
