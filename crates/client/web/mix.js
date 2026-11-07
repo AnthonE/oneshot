@@ -21,7 +21,9 @@ const HELD_MS = 1500;
 // What a browser counts as a person's gesture: any one may start a context.
 const GESTURES = ['pointerdown', 'pointerup', 'mousedown', 'touchend', 'keydown', 'click'];
 
-export function startMix(v) {
+// `v` versions what comes with the game (the theme), `mv` the mixer's own
+// pair, worklet and wasm (build.json's `mix`: it changes on its own).
+export function startMix(v, mv = v) {
   let ctx = null;
   let why = 'starting';
   let failed = false;
@@ -85,8 +87,8 @@ export function startMix(v) {
   else if (!ctx.audioWorklet) fail('no AudioWorklet here (the page must be on https or localhost)');
   else {
     (async () => {
-      await ctx.audioWorklet.addModule(`mix-worklet.js${v}`);
-      const res = await fetch(`mix_worklet.wasm${v}`);
+      await ctx.audioWorklet.addModule(`mix-worklet.js${mv}`);
+      const res = await fetch(`mix_worklet.wasm${mv}`);
       if (!res.ok) throw new Error(`mix_worklet.wasm: HTTP ${res.status}`);
       const bytes = await res.arrayBuffer();
       node = new AudioWorkletNode(ctx, 'oneshot-mix', { numberOfInputs: 0, outputChannelCount: [2] });

@@ -13,7 +13,7 @@
 //     weather's fog band composed together (Gates' `sky_deck.wgsl`).
 //
 // Two decks, one uniform, on both:
-//   · `march.x == 0` — the flat deck: `sky::compose_range`'s arithmetic per
+//   · `march.x == 0` — the flat deck: Gates' composed cube's arithmetic per
 //     pixel, with `deck.wgsl`'s fine detail. Cheap; the CLOUDS row's LOW.
 //   · `march.x > 0` — a slab of cloud from `slab.x` to `slab.y` metres,
 //     raymarched: the deck's coverage field gives each column its cloud and
@@ -137,7 +137,9 @@ fn ray(position: vec2<f32>) -> vec3<f32> {
 }
 
 const LUM: vec3<f32> = vec3(0.2126, 0.7152, 0.0722);
-// `sky::HUE_MAX`.
+// The most `deck_hue` lifts a channel. Where the air takes more blue than
+// this can give back (under ~20°), the correction lowers red and green to
+// meet it instead, so the far deck goes a darker grey and never yellow.
 const HUE_MAX: f32 = 3.0;
 // The longest run a ray makes through the slab, m: the far deck is a
 // band a few pixels tall, and past this it is the horizon fade's anyway.
@@ -145,8 +147,9 @@ const MAX_RUN_M: f32 = 14000.0;
 // The light march's first step, m; each after it twice the last.
 const LIGHT_FIRST_M: f32 = 40.0;
 
-// `sky::deck_hue_for`: the hue of the atmosphere's transmittance at `y`,
-// undone, so a cloud composited through it comes out grey and not tan.
+// The hue of the atmosphere's transmittance at `y`, undone, so a cloud
+// composited through it comes out grey and not tan (`sky::column_depth`
+// says why, and why only the brightness without dual-source blending).
 fn deck_hue(y: f32) -> vec3<f32> {
     let yc = clamp(y, 0.0, 1.0);
     let deg = degrees(asin(yc));

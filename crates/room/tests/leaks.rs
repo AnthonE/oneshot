@@ -5,9 +5,12 @@
 //! server's true world. Fails if the client is told where an enemy is when
 //! it could not see them, if fog hides an enemy in plain sight, if an
 //! unseen fighter's shot carries a place or a direction, if a hidden
-//! fighter's projectile is sent out of sight, if any bit of the salt
-//! crosses the wire before the match is over, or if a medal tells more
-//! than the kill feed did.
+//! fighter's projectile (or a sticky stuck to someone unseen) is sent out
+//! of sight, if an event tells more than fog allows (a hit or a hull hit
+//! to anyone but its own, where an unseen victim stood, an unseen
+//! fighter's spawn, pickup, swing or ride, a blast neither seen nor heard,
+//! a wreck out of sight), if any bit of the salt crosses the wire before
+//! the match is over, or if a medal tells more than the kill feed did.
 
 use std::collections::VecDeque;
 
@@ -72,6 +75,10 @@ struct Gate {
     held_seen: usize,
     /// Ticks between the room's snapshots.
     every: u32,
+    /// The id of the next event not yet checked, and how many were.
+    next_event: u16,
+    events_seen: usize,
+    stuck_seen: usize,
 }
 
 impl Gate {
@@ -93,7 +100,9 @@ impl Gate {
         );
         self.held_seen += s.held.count_ones() as usize;
         let mate = |q: usize| q != self.me && w.rules.teams && w.fighters[q].team == me.team;
-        let known = |q: usize| q == self.me || mate(q) || sent.contains(&q);
+        // Nobody (`proto::NOBODY`, an event's fighter past the seats) is
+        // never known.
+        let known = |q: usize| q < MAX_FIGHTERS && (q == self.me || mate(q) || sent.contains(&q));
         // Every kind on the wire has its check; no wildcard, so a new kind
         // doesn't compile until it has one.
         for k in sim::thing::Kind::ALL {
@@ -130,6 +139,18 @@ impl Gate {
                             "tick {}: a hidden fighter's projectile out of sight was sent: {p:?}",
                             w.tick
                         );
+                        // 15. A sticky stuck to someone, or to a vehicle,
+                        // only while they are sent: it goes where they go.
+                        if t.kind == sim::world::ProjKind::Sticky && t.landed && t.target != sim::world::NO_TARGET {
+                            self.stuck_seen += 1;
+                            let on = t.target as usize;
+                            let shown = if on < MAX_FIGHTERS {
+                                known(on)
+                            } else {
+                                s.vehicles().iter().any(|v| v.slot as usize == on - MAX_FIGHTERS)
+                            };
+                            assert!(shown, "tick {}: a sticky on someone unseen: {p:?} on {on}", w.tick);
+                        }
                     }
                 }
                 // Pad timers are public (room::build).
@@ -276,23 +297,83 @@ impl Gate {
                 self.hidden_seen += 1;
             }
         }
+        // Each event as it was first told (its id new): a resend carries
+        // what fog allowed then, so it is checked once, against the fog of
+        // the snapshot that first carried it (`room::build`'s filter and
+        // its refog before a first send).
+        let eyes: Vec<V3> = self.history.iter().map(|h| h[self.me].eye()).collect();
+        let rode = |i: usize| {
+            self.history
+                .iter()
+                .any(|h| h[self.me].riding().is_some_and(|(r, _)| r == i))
+        };
+        let heard_ok = |e: &proto::EventState, range: f32| {
+            let slack = HEARD_GRID_M * 0.87;
+            e.part == HEARD
+                && on_grid(e.pos.x)
+                && on_grid(e.pos.y)
+                && on_grid(e.pos.z)
+                && e.pos == e.end
+                && eyes.iter().any(|&eye| (e.pos - eye).len() <= range + slack)
+        };
+        let seen_at = |p: V3| eyes.iter().any(|&eye| w.map.clear(eye, p));
         for e in s.events() {
-            let a = e.a as usize;
-            if known(a) {
+            if e.id.wrapping_sub(self.next_event) >= 0x8000 {
                 continue;
             }
+            self.next_event = e.id.wrapping_add(1);
+            self.events_seen += 1;
+            let (a, b) = (e.a as usize, e.b as usize);
+            let kind = |k: Ev| e.kind == k as u8;
             // 3. An unseen fighter's shot or throw: heard, rounded, no aim.
-            if e.kind == Ev::Shot as u8 || e.kind == Ev::Throw as u8 {
+            if (kind(Ev::Shot) || kind(Ev::Throw)) && !known(a) {
                 assert_eq!(e.part, HEARD, "tick {}: an unseen fighter's shot sent whole", w.tick);
                 assert!(on_grid(e.pos.x) && on_grid(e.pos.y) && on_grid(e.pos.z), "{e:?}");
                 assert_eq!(e.pos, e.end, "a heard shot names no direction");
             }
-            // 6. Where an unseen enemy spawned, picked up or swung: never.
+            // 6. Where an unseen fighter spawned, picked up, swung, or got
+            // in or out of a vehicle: never.
             assert!(
-                e.kind != Ev::Spawn as u8 && e.kind != Ev::Pickup as u8 && e.kind != Ev::Melee as u8,
+                !(kind(Ev::Spawn) || kind(Ev::Pickup) || kind(Ev::Melee) || kind(Ev::Ride)) || known(a),
                 "tick {}: {e:?} about an unseen fighter",
                 w.tick
             );
+            // 12. A hit only to its two fighters; a hit or a kill names
+            // where its victim stood only if this client knows the victim.
+            if kind(Ev::Hit) {
+                assert!(
+                    a == self.me || b == self.me,
+                    "tick {}: someone else's hit: {e:?}",
+                    w.tick
+                );
+            }
+            if (kind(Ev::Hit) || kind(Ev::Kill)) && !known(b) {
+                assert_eq!(e.pos, V3::ZERO, "tick {}: where an unseen victim stood: {e:?}", w.tick);
+            }
+            // 13. A hull hit only to its hitter and the vehicle's riders.
+            if kind(Ev::VehicleHit) {
+                assert!(
+                    a == self.me || rode(e.part as usize),
+                    "tick {}: someone else's hull hit: {e:?}",
+                    w.tick
+                );
+            }
+            // 14. A blast seen (its maker known, or in clear line) or heard
+            // (rounded, within earshot); a wreck only seen.
+            if kind(Ev::Blast) && !(known(a) || seen_at(e.pos)) {
+                assert!(
+                    heard_ok(e, room::HEAR_SHOT_M),
+                    "tick {}: an unseen blast: {e:?}",
+                    w.tick
+                );
+            }
+            if kind(Ev::Wreck) {
+                assert!(
+                    known(a) || seen_at(e.pos),
+                    "tick {}: a wreck out of sight: {e:?}",
+                    w.tick
+                );
+            }
         }
         self.checked += 1;
     }
@@ -430,6 +511,9 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
         drops_seen: 0,
         held_seen: 0,
         every,
+        next_event: 0,
+        events_seen: 0,
+        stuck_seen: 0,
     };
     for (_, m) in &out {
         check_seat(m, slot);
@@ -523,6 +607,7 @@ fn gate_at(map: Map, rules: Rules, every: u32) {
     assert!(g.checked > 1000, "{} snapshots checked", g.checked);
     assert!(g.hidden_seen > 100, "fog hid an enemy only {} times", g.hidden_seen);
     assert!(g.proj_seen > 100, "only {} projectiles sent to check", g.proj_seen);
+    assert!(g.events_seen > 100, "only {} events sent to check", g.events_seen);
     if !g.room.world.rules.gun_game {
         assert!(g.drops_seen > 100, "only {} drops sent to check", g.drops_seen);
     }

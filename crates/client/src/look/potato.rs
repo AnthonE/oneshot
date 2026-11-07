@@ -14,7 +14,8 @@
 //!   frame slower than [`SLOW_FPS`] over [`WINDOW_S`] steps the preset down
 //!   a rung, or straight to POTATO under [`CRAWL_FPS`]. The median, so a
 //!   shader compiling or a level landing isn't a slow machine. It stands
-//!   down for the run after [`SETTLED_WINDOWS`] good windows in a row. A
+//!   down for the level after [`SETTLED_WINDOWS`] good windows in a row,
+//!   and watches again on the next one. A
 //!   desktop player has the settings and a frame cap; a browser player
 //!   often never opens them.
 //!

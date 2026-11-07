@@ -6,6 +6,7 @@
 //! every [`POLL`] ([`poller`]); each session watches its own answer.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,36 +30,53 @@ pub fn norm(w: &str) -> String {
     }
 }
 
+/// One wait's place: which wait of its wallet it is.
+type Place = (u64, watch::Sender<Option<QueueState>>);
+
 /// The players waiting on Elo Pros' queue, each with where it last stood.
 #[derive(Default)]
 pub struct Waiters {
-    by: Mutex<BTreeMap<String, watch::Sender<Option<QueueState>>>>,
+    by: Mutex<BTreeMap<String, Place>>,
+    next: AtomicU64,
+}
+
+/// One session's wait: what the polls say of its wallet, and which wait it
+/// is, so it ends its own and never a newer one's.
+pub struct Wait {
+    pub rx: watch::Receiver<Option<QueueState>>,
+    pub id: u64,
 }
 
 impl Waiters {
-    fn by(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, watch::Sender<Option<QueueState>>>> {
+    fn by(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Place>> {
         self.by.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `wallet` waits: what each poll says of it, from the next one on. A
-    /// second wait for the same wallet replaces the first.
-    pub fn wait(&self, wallet: &str) -> watch::Receiver<Option<QueueState>> {
+    /// second wait for the same wallet (a reload) replaces the first, whose
+    /// receiver then ends.
+    pub fn wait(&self, wallet: &str) -> Wait {
         let (tx, rx) = watch::channel(None);
-        self.by().insert(norm(wallet), tx);
-        rx
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        self.by().insert(norm(wallet), (id, tx));
+        Wait { rx, id }
     }
 
-    /// `wallet` waits no more.
-    pub fn done(&self, wallet: &str) {
-        self.by().remove(&norm(wallet));
+    /// `wallet`'s wait `id` is over. False if a newer wait took its place
+    /// (and is left alone: so is the wallet's place in Elo Pros' queue).
+    pub fn done(&self, wallet: &str, id: u64) -> bool {
+        let mut by = self.by();
+        let key = norm(wallet);
+        let ours = by.get(&key).is_some_and(|(w, _)| *w == id);
+        if ours {
+            by.remove(&key);
+        }
+        ours
     }
 
-    pub fn len(&self) -> usize {
-        self.by().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.by().is_empty()
     }
 
     fn wallets(&self) -> Vec<String> {
@@ -66,7 +84,7 @@ impl Waiters {
     }
 
     fn tell(&self, s: QueueState) {
-        if let Some(tx) = self.by().get(&norm(&s.player)) {
+        if let Some((_, tx)) = self.by().get(&norm(&s.player)) {
             tx.send_replace(Some(s));
         }
     }
@@ -169,7 +187,7 @@ mod tests {
     #[tokio::test]
     async fn a_wait_ends_matched_or_out() {
         let w = Waiters::default();
-        let mut rx = w.wait("0xAB");
+        let Wait { mut rx, .. } = w.wait("0xAB");
         w.tell(st(Some("queued"), None));
         let mut ticks = Vec::new();
         let waiting = tokio::spawn(async move {
@@ -187,11 +205,22 @@ mod tests {
             }
         );
         // Taken out after queueing: out.
-        let mut rx = w.wait("0xab");
+        let Wait { mut rx, id } = w.wait("0xab");
         w.tell(st(Some("queued"), None));
         w.tell(st(Some("closed"), None));
         assert_eq!(wait(&mut rx, |_| {}).await, Waited::Out(None));
-        w.done("0xAB");
+        // A second wait (a reload) takes the wallet's place: the first one
+        // ending leaves it be, and its receiver ends.
+        let Wait {
+            rx: mut again,
+            id: newer,
+        } = w.wait("0xAB");
+        assert!(!w.done("0xAB", id), "an older wait ends only itself");
+        assert!(!w.is_empty());
+        let Wait { id: third, .. } = w.wait("0xab");
+        assert_eq!(wait(&mut again, |_| {}).await, Waited::Out(None), "replaced");
+        assert!(!w.done("0xab", newer));
+        assert!(w.done("0xab", third));
         assert!(w.is_empty());
     }
 }

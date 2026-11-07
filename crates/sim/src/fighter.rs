@@ -416,10 +416,18 @@ impl Fighter {
             self.burst_left = 0;
             self.refire = self.refire.max(ticks(MELEE_COOL_MS / 2) as u16);
         }
-        // It leaves the hand as the arm flings it.
-        if on_foot && self.gren_cool == release {
-            out.throw = true;
-            out.sticky = self.gren_kind == 1;
+        // It leaves the hand as the arm flings it: on foot and hands free
+        // of the flag, or it is back on the belt (taken up, or got in,
+        // since the press).
+        if self.gren_cool == release {
+            if on_foot && !self.flag {
+                out.throw = true;
+                out.sticky = self.gren_kind == 1;
+            } else if self.gren_kind == 1 {
+                self.stickies = (self.stickies + 1).min(GREN_MAX);
+            } else {
+                self.grenades = (self.grenades + 1).min(GREN_MAX);
+            }
         }
         // A throw takes the kind chosen, or goes over to the other if none of
         // it is left; never with a gun in each hand.

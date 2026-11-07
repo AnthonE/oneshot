@@ -21,8 +21,11 @@
 //!   file, and the screen's "on this machine" line says what the GPU
 //!   refused.
 //! - [`Tier`]: the resource the renderer reads. [`apply`] puts it on the
-//!   camera and the sun; `grass::cull`, `fx::retier` and `render_scale`
-//!   read it, and so will the sky, the foliage and the surfaces.
+//!   camera and the sun; `fx::retier` and `render_scale` read it, and so do
+//!   the sky (`deck`, `stars`, `moon`, `cloud_sea`, `shafts`, `rig`'s fog),
+//!   the guns' maps (`textures::mip_models`), the ground (`level`) and the
+//!   visor, the last three through what the rows say ([`Tier::half_maps`],
+//!   [`Tier::lite`]), never through the preset's name.
 //!
 //! **The top rung is the frame that shipped.** HIGH is what the desktop
 //! and the WebGPU module drew before this ladder (SSAO medium, TAA, bloom,
@@ -49,7 +52,8 @@
 //!   under a crouching fighter's hit box on his own ground, but over a
 //!   crest or at a grazing look they still cover his lower half, so no
 //!   rung may thin them or draw them nearer.
-//! - **The air** is the same haze both ways (`sky::browser_haze`).
+//! - **The air** is the same haze both ways (`rig::fog_for`: the
+//!   atmosphere's, or a fog of its own coefficients where it doesn't draw).
 //!
 //! What a lower rung gives up is finish: contact shading, edges, glow,
 //! resolution, the shade's sharpness, sparks. Two of those are judgement
@@ -114,11 +118,11 @@ macro_rules! named {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Quality {
     /// For a machine that can't hold LOW: the world at 70% and stretched,
-    /// one short cascade, no grass. What `potato.rs` drops a struggling
-    /// machine to.
+    /// one short cascade, no post, and so the lite frame ([`Tier::lite`]).
+    /// What `potato.rs` drops a struggling machine to.
     Potato,
-    /// No ambient occlusion, no bloom, SMAA, two cascades to 90 m, thinner
-    /// grass nearer, fewer sparks.
+    /// No ambient occlusion, no bloom, SMAA, two cascades to 90 m at 1024
+    /// (and so half the guns' maps, [`Tier::half_maps`]), fewer sparks.
     Low,
     /// Cheap ambient occlusion, the post chain whole, three cascades to
     /// 120 m. Through WebGL2's clamps, the frame that module shipped.
@@ -181,9 +185,12 @@ named!(Effects { Low = "low", High = "high" });
 
 /// How the cloud deck is drawn (`deck.rs`): flat, per pixel, or a slab of
 /// cloud a kilometre thick, raymarched in more or fewer steps. Only the
-/// sky moves with it (and, at its top rung where the atmosphere draws, the
-/// sun's shafts through a misty map's air, `shafts.rs`): a cloud is never
-/// in front of a fighter, so no rung sees anyone another hides.
+/// sky moves with it, and at its top rung the sun's shafts through a misty
+/// map's air (`shafts.rs`: Bevy's volumetric pass where the atmosphere
+/// draws, [`Tier::shafts`], and a short march of our own where it doesn't,
+/// [`Tier::web_shafts`]): a cloud is never in front of a fighter, and a
+/// shaft only takes light away where a wall shades the air, so no rung
+/// sees anyone another hides.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Clouds {
     #[default]
@@ -234,6 +241,10 @@ pub const SHADOW_PX_LADDER: [usize; 4] = [512, 1024, 2048, 4096];
 
 /// POTATO's render scale, percent of each dimension (half the pixels).
 pub const POTATO_RENDER_SCALE: u8 = 70;
+
+/// The shadow map size, texels a side, from which a rung's guns keep their
+/// maps whole ([`Tier::half_maps`]): Bevy's own, the size HIGH shipped at.
+pub const FULL_MAPS_PX: usize = 2048;
 
 /// Room past the map's own diagonal for the shade's reach ([`MapShade`]):
 /// the ground's rise and fall, and a fighter's height.
@@ -392,11 +403,6 @@ pub fn effective_on(g: Gfx, webgl2: bool, caps: GpuCaps) -> Gfx {
     }
 }
 
-/// [`effective_on`] this build on this device.
-pub fn effective(g: Gfx) -> Gfx {
-    effective_on(g, gpu::WEBGL2, gpu::caps())
-}
-
 /// The rung a fresh install opens on: the one its target drew before the
 /// ladder. The desktop and the WebGPU module drew HIGH; the WebGL2 module
 /// drew MEDIUM's frame. The machine may still take it lower (`potato.rs`).
@@ -456,7 +462,8 @@ pub struct Tier {
     /// The preset the player's rows spell, if they spell one.
     pub preset: Option<Quality>,
     /// Bevy's atmosphere draws the sky and the air (`gpu::atmosphere_on`);
-    /// without it the sky is baked and the air is a fog.
+    /// without it the deck draws the sky behind its clouds (`deck.rs`) and
+    /// the air is a fog of the same air (`rig::fog_for`).
     pub atmosphere: bool,
     /// How far the sun's last cascade reaches: the row, or the map's
     /// [`MapShade`] if that is further.
@@ -517,19 +524,46 @@ impl Tier {
         super::deck::steps(self.gfx.clouds)
     }
 
-    /// Whether the sun's shafts through a misty map's air are drawn: Bevy's
-    /// volumetric pass, which wants what the atmosphere wants (never
+    /// Whether the sun's shafts through a misty map's air are drawn by
+    /// Bevy's volumetric pass, which wants what the atmosphere wants (never
     /// WebGL2), at the CLOUDS row's top rung, the same family of
     /// raymarched air (`shafts.rs`).
     pub fn shafts(&self) -> bool {
         self.atmosphere && self.gfx.clouds == Clouds::High
     }
 
+    /// Whether they are drawn by our own march instead (`shafts::WebShafts`,
+    /// `shaft_march.wgsl`): at the same rung, wherever the atmosphere
+    /// doesn't draw (WebGL2, or a GPU without it).
+    pub fn web_shafts(&self) -> bool {
+        !self.atmosphere && self.gfx.clouds == Clouds::High
+    }
+
+    /// Whether the guns' maps load at half their size, a quarter of their
+    /// memory (`textures::mip_models`). Read off the shadow map row, the
+    /// one row that is a texture budget: under [`FULL_MAPS_PX`] (POTATO,
+    /// and LOW where it cuts two cascades, so not WebGL2's LOW, which
+    /// spends that budget on its one cascade at 2048). Decided as a gun's
+    /// maps load, so a rung moved later reaches the guns at the next load.
+    pub fn half_maps(&self) -> bool {
+        self.gfx.shadow_map_px < FULL_MAPS_PX
+    }
+
+    /// The lite frame: the world drawn under the window's resolution says
+    /// fill rate is what this machine is short of (POTATO, or a RENDER
+    /// SCALE row moved down), so fragment work that is finish alone goes
+    /// too: the ground's wall planes and rock face (`ground::material`,
+    /// followed when the row moves) and the visor's glow (`visor::fit`).
+    /// Nothing that shades or hides a fighter.
+    pub fn lite(&self) -> bool {
+        self.gfx.render_scale < RENDER_SCALE_MAX
+    }
+
     /// What it draws, for the log and the page (`window.__oneshot.tier`).
     pub fn describe(&self) -> String {
         let g = &self.gfx;
         format!(
-            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, effects {}, clouds {}{}, {}%",
+            "{} ({}): {}, ao {}, aa {}, bloom {}, {} cascade(s) to {:.0} m at {}px, effects {}, clouds {}{}, {}%{}{}",
             self.preset.map_or("custom", Quality::name),
             gpu::api(),
             if self.atmosphere { "atmosphere" } else { "haze" },
@@ -541,8 +575,16 @@ impl Tier {
             g.shadow_map_px,
             g.effects.name(),
             g.clouds.name(),
-            if self.shafts() { " with shafts" } else { "" },
+            if self.shafts() {
+                " with shafts"
+            } else if self.web_shafts() {
+                " with marched shafts"
+            } else {
+                ""
+            },
             g.render_scale,
+            if self.lite() { ", lite" } else { "" },
+            if self.half_maps() { ", half maps" } else { "" },
         )
     }
 }
@@ -825,6 +867,36 @@ mod tests {
                 assert!(l.cascades >= 1 && l.shadow_map_px > 0, "{at}: the shade is never off");
             }
         }
+    }
+
+    /// The lite frame and the half maps follow the rows, and on the presets
+    /// land where the preset names used to put them: lite on POTATO, half
+    /// maps on POTATO and the desktop's LOW, neither at MEDIUM or HIGH.
+    #[test]
+    fn lite_and_half_maps_follow_the_rows() {
+        for webgl2 in [false, true] {
+            for &q in Quality::LADDER {
+                let t = Tier::resolve(
+                    preset_on(q, webgl2),
+                    Some(q),
+                    webgl2,
+                    GpuCaps::UNBOUNDED,
+                    MapShade::default(),
+                );
+                assert_eq!(t.lite(), q == Quality::Potato, "{q:?} (webgl2 {webgl2})");
+                let half = q == Quality::Potato || (q == Quality::Low && !webgl2);
+                assert_eq!(t.half_maps(), half, "{q:?} (webgl2 {webgl2})");
+            }
+        }
+        let custom = Gfx {
+            render_scale: RENDER_SCALE_MAX - RENDER_SCALE_STEP,
+            ..preset_on(Quality::High, false)
+        };
+        let t = Tier::resolve(custom, None, false, GpuCaps::UNBOUNDED, MapShade::default());
+        assert!(
+            t.lite() && !t.half_maps(),
+            "a moved row, read without the preset's name"
+        );
     }
 
     /// Every cascade a rung asks for is one the engine draws, and the last

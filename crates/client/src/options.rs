@@ -234,10 +234,18 @@ fn spawn(
                     1 => {
                         number(pane, settings, Knob::Master, "VOLUME", "everything");
                         number(pane, settings, Knob::Effects, "GAME SOUNDS", "shots, steps, hits");
+                        // The party's voice is the page's (`web/voice.js`).
+                        if cfg!(target_arch = "wasm32") {
+                            number(pane, settings, Knob::Voice, "VOICE", "your party");
+                        }
                     }
                     GRAPHICS => graphics(pane, settings, tier),
                     _ => {
-                        for s in &SPECS {
+                        // TALK is the page's voice's (`web/voice.js`).
+                        for s in SPECS
+                            .iter()
+                            .filter(|s| s.action != Action::Talk || cfg!(target_arch = "wasm32"))
+                        {
                             key_row(pane, binds, st, s.action, s.name);
                         }
                         note(pane, "Fire, scope and the wheel's swap stay on the mouse.");
@@ -270,8 +278,12 @@ fn spawn(
                     } else if st.cat == KEYS {
                         "Click a key to change it · right click clears it".to_string()
                     } else if st.cat == GRAPHICS && settings.held.is_some() {
-                        "This run draws another rung (--lite, ?quality=): yours is kept until you change a row"
-                            .to_string()
+                        let by = if cfg!(target_arch = "wasm32") {
+                            "?lite=1, ?quality="
+                        } else {
+                            "--lite, --quality"
+                        };
+                        format!("This run draws another rung ({by}): yours is kept until you change a row")
                     } else {
                         String::new()
                     };
@@ -620,7 +632,8 @@ fn capture(
 fn click(
     cats: Query<(&Interaction, &Category), Changed<Interaction>>,
     adjust: Query<(&Interaction, &Adjust), Changed<Interaction>>,
-    cells: Query<(&Interaction, &BindCell)>,
+    cells: Query<(Entity, &Interaction, &BindCell)>,
+    pad: Res<crate::pad::PadPressed>,
     backs: Query<&Interaction, (Changed<Interaction>, With<Back>)>,
     resets: Query<&Interaction, (Changed<Interaction>, With<ResetTab>)>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -650,6 +663,7 @@ fn click(
                 1 => {
                     settings.master = d.master;
                     settings.effects = d.effects;
+                    settings.voice = d.voice;
                 }
                 GRAPHICS => settings.reset_graphics(),
                 _ => *binds = Binds::default(),
@@ -665,8 +679,11 @@ fn click(
             st.dirty = true;
         }
     }
-    for (i, c) in &cells {
-        if *i == Interaction::Pressed && mouse.just_pressed(MouseButton::Left) && st.capturing.is_none() {
+    for (e, i, c) in &cells {
+        // A left click or the pad's A: the right button clears, and a held
+        // button is no new press.
+        let pressed = mouse.just_pressed(MouseButton::Left) || pad.0 == Some(e);
+        if *i == Interaction::Pressed && pressed && st.capturing.is_none() {
             st.capturing = Some((c.action, c.slot));
             st.note.clear();
             st.dirty = true;
@@ -693,7 +710,8 @@ fn keys(
     }
 }
 
-/// The wheel scrolls the list.
+/// The wheel scrolls the list; where it is scrolled to (by the wheel, or
+/// the pad bringing its focus into view: `pad.rs`) is kept for a rebuild.
 fn scroll(
     mut wheel: MessageReader<MouseWheel>,
     mut pane: Query<&mut ScrollPosition, With<Pane>>,
@@ -706,12 +724,18 @@ fn scroll(
             MouseScrollUnit::Pixel => w.y,
         })
         .sum();
-    if dy == 0.0 {
+    // A pane about to be built again (another category) starts from the
+    // scroll that click set, not the old pane's.
+    if st.dirty {
         return;
     }
     for mut p in &mut pane {
-        p.y = (p.y - dy).max(0.0);
-        st.scroll = p.y;
+        if dy != 0.0 {
+            p.y = (p.y - dy).max(0.0);
+        }
+        if p.y != st.scroll {
+            st.scroll = p.y;
+        }
     }
 }
 

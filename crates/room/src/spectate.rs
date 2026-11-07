@@ -59,8 +59,10 @@ impl Line {
 
     /// After the world's tick: its events and the room's messages join the
     /// line, and on a frame tick every seated seat's view is built,
-    /// sharing the room's plain sight tests of this tick (`plain`, of `w`).
-    pub fn observe(&mut self, w: &World, out: &[(Option<u8>, Msg)], plain: &mut Plain) {
+    /// sharing the room's plain sight tests of this tick (`plain`, of `w`),
+    /// each seat's fog looking `leads[s]` seconds ahead (`fog::lead_s` at
+    /// [`WATCH_EVERY`]).
+    pub fn observe(&mut self, w: &World, out: &[(Option<u8>, Msg)], plain: &mut Plain, leads: &[f32; MAX_FIGHTERS]) {
         let tick = w.tick;
         self.pending.extend_from_slice(w.events.as_slice());
         self.observe_msgs(tick, out);
@@ -72,12 +74,14 @@ impl Line {
             snaps: Default::default(),
         };
         let mut buf = [0u8; 2 * MAX_DATAGRAM];
-        for s in 0..MAX_FIGHTERS {
+        for (s, &lead) in leads.iter().enumerate() {
             if !w.fighters[s].seated {
                 continue;
             }
             let f = &mut self.fogs[s];
-            f.update_with(w, s, 0.0, tick, plain, crate::SNAP_EVERY);
+            // Frames every WATCH_EVERY ticks: fog takes its turns (each pair's
+            // full look) and its hold at that rate, not the players'.
+            f.update_with(w, s, lead, tick, plain, WATCH_EVERY);
             let q = &mut self.queues[s];
             let snap = build(
                 w,

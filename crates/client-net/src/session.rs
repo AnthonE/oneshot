@@ -201,13 +201,12 @@ impl Session {
     /// against the welcome's commitment, the rest wait for the app.
     pub fn on_msg(&mut self, m: Msg) {
         if let Some(c) = self.clip.as_mut() {
-            match m {
-                Msg::Welcome { .. } => c.on_welcome(m),
-                _ => c.on_msg(&m),
+            if !matches!(m, Msg::Welcome { .. }) {
+                c.on_msg(&m);
             }
         }
         match m {
-            Msg::Welcome {
+            welcome @ Msg::Welcome {
                 slot,
                 team,
                 tick,
@@ -223,6 +222,11 @@ impl Session {
                     });
                     return;
                 };
+                // A room of its own: the clip starts again, once it's a
+                // room this build can draw.
+                if let Some(c) = self.clip.as_mut() {
+                    c.on_welcome(welcome);
+                }
                 self.map_id = map;
                 self.welcomes += 1;
                 self.core = NetCore::new(slot, team, tick, rules, m);

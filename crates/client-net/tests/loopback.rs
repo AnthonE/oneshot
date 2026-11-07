@@ -5,7 +5,7 @@
 use client_net::core::NetCore;
 use proto::{decode_input, decode_snapshot, encode_input, encode_snapshot, Msg, Name, MAX_DATAGRAM};
 use room::{Room, Seat};
-use sim::consts::{MAX_FIGHTERS, TICK_HZ};
+use sim::consts::TICK_HZ;
 use sim::input::{Input, FIRE};
 use sim::map::Map;
 use sim::rng::Pcg32;
@@ -121,15 +121,9 @@ fn start_with(map: Map, rules: Rules, delay_ms: f64, jitter_ms: f64, loss: f64, 
     let Some((_, Msg::Welcome { tick, team, rules, .. })) = out.first().copied() else {
         panic!("no welcome")
     };
-    if harmless {
-        // No bot: nothing but our own inputs may move our fighter.
-        for s in 0..MAX_FIGHTERS {
-            if matches!(room.seats[s], Seat::Bot(_)) {
-                room.seats[s] = Seat::Empty;
-                room.world.unseat(s);
-            }
-        }
-    }
+    // Bots that stand still and never fire: nothing but our own inputs
+    // may move our fighter.
+    room.passive_bots = harmless;
     let client = NetCore::new(slot, team, tick, rules, map);
     Run {
         room,
@@ -313,12 +307,24 @@ fn others_are_drawn_between_where_the_server_had_them() {
 fn a_stalled_page_catches_up_within_a_second() {
     let mut r = start(20.0, 0.0, 0.0, true);
     r.run(5000.0, player);
+    // How far the prediction runs ahead of the server's world, in ticks.
+    let lead = |r: &Run| i64::from(r.client.tick()) - i64::from(r.room.world.tick);
+    let steady = lead(&r);
     // Two seconds with no frames drawn: the page did nothing at all.
-    let saved = r.next_frame;
     r.next_frame = r.now + 2000.0;
     r.run(2000.0, player);
-    assert!(r.next_frame >= saved);
+    let stalled = lead(&r);
+    assert!(
+        stalled < steady - i64::from(TICK_HZ),
+        "the stall left the clock where it was: {stalled} vs {steady}"
+    );
     r.run(1000.0, player);
+    let caught = lead(&r);
+    eprintln!("lead: steady {steady}, stalled {stalled}, a second on {caught}");
+    assert!(
+        (caught - steady).abs() <= 2,
+        "a second after the stall the clock leads by {caught} ticks, not {steady}"
+    );
     let settled = r.client.stats;
     r.run(4000.0, player);
     let s = r.client.stats;

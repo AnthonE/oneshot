@@ -315,7 +315,7 @@ pub fn material(
     if isle && sea_y.is_finite() {
         params.sea = Vec4::new(sea_y, LAP_M, LAP_FADE_M, -1.0);
     }
-    params.wall.z = if lite { 1.0 } else { 0.0 };
+    params.wall.z = lite_lane(lite);
     params.cloud = cloud;
     ExtendedMaterial {
         base: StandardMaterial {
@@ -325,6 +325,26 @@ pub fn material(
         },
         extension: Ground { albedo, normal, params },
     }
+}
+
+/// `GroundParams::wall`'s z for a lite ground (`quality::Tier::lite`).
+fn lite_lane(lite: bool) -> f32 {
+    if lite {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Whether a dressed ground draws lite.
+pub fn is_lite(m: &GroundMaterial) -> bool {
+    m.extension.params.wall.z == lite_lane(true)
+}
+
+/// A dressed ground made lite or not: the rung moved under it
+/// (`level::dress_level`). A uniform, so no pipeline is rebuilt.
+pub fn set_lite(m: &mut GroundMaterial, lite: bool) {
+    m.extension.params.wall.z = lite_lane(lite);
 }
 
 /// Two failures that compile, bind and draw, and show only as a garbled

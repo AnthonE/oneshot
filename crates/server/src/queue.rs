@@ -63,47 +63,31 @@ impl Queue {
     }
 
     fn form_duel(&mut self, now: Instant) -> Option<Vec<Vec<Entry>>> {
-        for mode in [MODE_DUEL] {
-            let need = size(mode);
-            let mut waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == mode).collect();
-            if waiting.len() < need {
-                continue;
-            }
-            waiting.sort_by_key(|e| e.since);
-            let anchor = waiting[0];
-            let waited = now.duration_since(anchor.since).as_secs_f64();
-            let window = WINDOW_BASE + WINDOW_GROW * waited;
-            let mut near: Vec<&Entry> = waiting[1..]
-                .iter()
-                .copied()
-                .filter(|e| (e.rating - anchor.rating).abs() <= window)
-                .collect();
-            if near.len() < need - 1 {
-                continue;
-            }
-            near.sort_by(|a, b| {
-                let da = (a.rating - anchor.rating).abs();
-                let db = (b.rating - anchor.rating).abs();
-                da.total_cmp(&db).then(a.since.cmp(&b.since))
-            });
-            let mut picked: Vec<u64> = vec![anchor.session];
-            picked.extend(near.iter().take(need - 1).map(|e| e.session));
-            let mut players: Vec<Entry> = picked.iter().filter_map(|&s| self.remove(s)).collect();
-            let sides = if mode == MODE_DOUBLES {
-                players.sort_by(|a, b| b.rating.total_cmp(&a.rating));
-                let (a, b, c, d) = (
-                    players[0].clone(),
-                    players[1].clone(),
-                    players[2].clone(),
-                    players[3].clone(),
-                );
-                vec![vec![a, d], vec![b, c]]
-            } else {
-                players.into_iter().map(|p| vec![p]).collect()
-            };
-            return Some(sides);
+        let need = size(MODE_DUEL);
+        let mut waiting: Vec<&Entry> = self.entries.iter().filter(|e| e.mode == MODE_DUEL).collect();
+        if waiting.len() < need {
+            return None;
         }
-        None
+        waiting.sort_by_key(|e| e.since);
+        let anchor = waiting[0];
+        let waited = now.duration_since(anchor.since).as_secs_f64();
+        let window = WINDOW_BASE + WINDOW_GROW * waited;
+        let mut near: Vec<&Entry> = waiting[1..]
+            .iter()
+            .copied()
+            .filter(|e| (e.rating - anchor.rating).abs() <= window)
+            .collect();
+        if near.len() < need - 1 {
+            return None;
+        }
+        near.sort_by(|a, b| {
+            let da = (a.rating - anchor.rating).abs();
+            let db = (b.rating - anchor.rating).abs();
+            da.total_cmp(&db).then(a.since.cmp(&b.since))
+        });
+        let mut picked: Vec<u64> = vec![anchor.session];
+        picked.extend(near.iter().take(need - 1).map(|e| e.session));
+        Some(picked.iter().filter_map(|&s| self.remove(s)).map(|p| vec![p]).collect())
     }
 
     /// Doubles by units: a player alone, or a party of two once both are

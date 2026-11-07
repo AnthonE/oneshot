@@ -379,7 +379,9 @@ fn enter(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut front: 
     front.dirty = true;
 }
 
-/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane).
+/// The wheel scrolls the PLAY panel's rows (as `options.rs`' pane); where
+/// they are scrolled to (by the wheel, or the pad bringing its focus into
+/// view: `pad.rs`) is kept for a rebuild.
 fn scroll(
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     mut rows: Query<&mut ScrollPosition, With<Rows>>,
@@ -393,12 +395,18 @@ fn scroll(
             MouseScrollUnit::Pixel => w.y,
         })
         .sum();
-    if dy == 0.0 {
+    // Rows about to be built again (another tab) start from the scroll
+    // that click set, not the old rows'.
+    if front.dirty {
         return;
     }
     for mut r in &mut rows {
-        r.y = (r.y - dy).max(0.0);
-        front.scroll = r.y;
+        if dy != 0.0 {
+            r.y = (r.y - dy).max(0.0);
+        }
+        if r.y != front.scroll {
+            front.scroll = r.y;
+        }
     }
 }
 
@@ -1781,13 +1789,24 @@ fn party_panel(body: &mut ChildSpawnerCommands, party: &PartyView) {
                 r.spawn((chip(96.0), Hit::Mic, Tag("party-mic")))
                     .with_child(chip_label(mic));
                 r.spawn(grow()).with_child(ui::label(
-                    if party.open_mic { "Open mic" } else { "Hold V to talk" },
+                    if party.open_mic {
+                        "Open mic".to_string()
+                    } else {
+                        format!("Hold {} to talk", party.talk_key)
+                    },
                     12.0,
                     ui::DIM,
                 ));
                 r.spawn((chip(96.0), Hit::TalkMode))
-                    .with_child(chip_label(if party.open_mic { "HOLD V" } else { "OPEN MIC" }));
+                    .with_child(chip_label(&if party.open_mic {
+                        format!("HOLD {}", party.talk_key)
+                    } else {
+                        "OPEN MIC".to_string()
+                    }));
             });
+            if let Some(why) = party.mic_why {
+                p.spawn(ui::label(why, 12.0, ui::BAD));
+            }
             p.spawn(ui::label(
                 "Your party hears you, here and in a match. Nobody else does.",
                 11.5,

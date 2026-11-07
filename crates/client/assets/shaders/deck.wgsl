@@ -4,15 +4,15 @@
 // moon exactly where the sky draws that cloud. Texture reads stay in each
 // shader: a WebGL2 build cannot pass a texture into a function.
 
-// Where a ray meets the deck, noise units: `sky::TexelGeo::new`'s
-// projection. `alt` is the deck's altitude over its noise scale; the ray's
+// Where a ray meets the deck, noise units: a flat deck at the cloud
+// altitude, the `1/d.y` crowding it toward the horizon. `alt` is the deck's altitude over its noise scale; the ray's
 // height is held at the horizon cutoff so the point stays finite under it.
 fn deck_point(d: vec3<f32>, alt: f32, cutoff: f32) -> vec2<f32> {
     return d.xz * (alt / max(d.y, cutoff));
 }
 
 // How much of the sky a ray `y` above the horizon loses to the weather's
-// fog, `0..=1`: `sky::SkyFog::band` short of its dust (`deck_haze` adds it).
+// fog, `0..=1`, short of its dust (`deck_haze` adds it).
 // `air` is `SkyFog::lanes` — the ground fog and the rain haze, each straight
 // up and level across the island.
 fn deck_fog(y: f32, air: vec4<f32>) -> f32 {
@@ -21,8 +21,8 @@ fn deck_fog(y: f32, air: vec4<f32>) -> f32 {
     return 1.0 - exp(-tau);
 }
 
-// `deck_fog` with the dust over arid ground in it: `sky::SkyFog::band`
-// whole. `dust` is `SkyFog::dust_lanes` — x straight up through its layer,
+// `deck_fog` with the dust over arid ground in it: the whole of
+// `sky::SkyFog`'s air. `dust` is `SkyFog::dust_lanes` — x straight up through its layer,
 // y level across the island. The layers' depths add, so their clear
 // shares multiply.
 fn deck_haze(y: f32, air: vec4<f32>, dust: vec4<f32>) -> f32 {

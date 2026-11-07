@@ -224,7 +224,7 @@ mod desktop {
             self.lobby.send_now(m);
         }
         fn talk(&mut self, f: &proto::voice::VoiceFrame) -> bool {
-            self.lobby.send_voice(f)
+            self.lobby.talk(f)
         }
         fn closed(&self) -> bool {
             self.lobby.closed()

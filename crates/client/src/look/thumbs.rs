@@ -102,16 +102,23 @@ impl GearPics {
     }
 }
 
-/// One piece in the studio: its camera, its image, and how many of its
-/// models are in and how many frames its camera has drawn since.
+/// One piece in the studio: its camera, its image, how many of its models
+/// are in, how many frames it has waited for them (at most
+/// `icons::LOAD_STALL_FRAMES`: a failed load gives up) and how many its
+/// camera has drawn since.
 #[derive(Component)]
 pub struct Sitter {
     cam: Entity,
     parts: u8,
     ready: u8,
+    loading: u16,
     frames: u8,
     waited: u16,
 }
+
+/// One of the studio's lights, gone with its last sitter.
+#[derive(Component)]
+pub struct StudioLight;
 
 /// A model of a sitter's (its root).
 #[derive(Component)]
@@ -172,6 +179,7 @@ pub fn setup(mut commands: Commands, models: Res<Models>, mut images: ResMut<Ass
             cam,
             parts: shot.parts.len() as u8,
             ready: 0,
+            loading: 0,
             frames: 0,
             waited: 0,
         });
@@ -204,6 +212,7 @@ pub fn setup(mut commands: Commands, models: Res<Models>, mut images: ResMut<Ass
             },
             Transform::from_translation(STUDIO + from).looking_at(STUDIO, Vec3::Y),
             layer.clone(),
+            StudioLight,
         ));
     }
     commands.insert_resource(pics);
@@ -232,22 +241,34 @@ fn dress(
 
 /// Every frame until the studio is empty: a piece drawn a few frames with
 /// every model in and no pipeline left compiling is done, its camera and
-/// models gone, its picture kept.
+/// models gone, its picture kept. The lights go with the last of them.
 pub fn develop(
     mut sitters: Query<(Entity, &mut Sitter)>,
+    lights: Query<Entity, With<StudioLight>>,
     backlog: Res<super::pipelines::PipelineBacklog>,
     mut commands: Commands,
 ) {
     let built = backlog.pending() == 0;
+    let mut left = 0;
     for (e, mut s) in &mut sitters {
-        if s.ready < s.parts {
-            continue;
-        }
-        s.waited = s.waited.saturating_add(1);
-        s.frames = if built { s.frames + 1 } else { 0 };
-        if s.frames > FRAMES || s.waited > STALL_FRAMES {
+        let done = if s.ready < s.parts {
+            s.loading = s.loading.saturating_add(1);
+            s.loading > super::icons::LOAD_STALL_FRAMES
+        } else {
+            s.waited = s.waited.saturating_add(1);
+            s.frames = if built { s.frames + 1 } else { 0 };
+            s.frames > FRAMES || s.waited > STALL_FRAMES
+        };
+        if done {
             commands.entity(s.cam).despawn();
             commands.entity(e).despawn();
+        } else {
+            left += 1;
+        }
+    }
+    if left == 0 {
+        for l in &lights {
+            commands.entity(l).despawn();
         }
     }
 }

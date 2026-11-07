@@ -168,14 +168,3 @@ impl WebLobby {
         self.transport.close();
     }
 }
-
-/// A party code as people read it, and back (0: not a code).
-#[wasm_bindgen]
-pub fn party_text(code: u32) -> String {
-    proto::party::code_text(code)
-}
-
-#[wasm_bindgen]
-pub fn party_code(text: String) -> u32 {
-    proto::party::code_parse(&text).unwrap_or(0)
-}

@@ -1,7 +1,7 @@
 //! What happened this tick, for the server to filter and send (shots heard,
 //! hits, kills) and for tests to read. A fixed array: no allocation.
 
-use crate::consts::MAX_EVENTS;
+use crate::consts::{EVENTS_KEPT, MAX_EVENTS};
 use crate::geom::V3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -20,7 +20,9 @@ pub enum Kind {
     Kill,
     Spawn,
     /// `a` took arm `c` from a pad, or the power-up `c`
-    /// (`arms::OVERSHIELD`, `arms::CAMO`, `arms::FRAGS`, `arms::STICKIES`).
+    /// (`arms::OVERSHIELD`, `arms::CAMO`, `arms::FRAGS`, `arms::STICKIES`);
+    /// walking over a drop, rounds for arm `c`, or only grenades:
+    /// `arms::FRAGS` (frags, or both kinds) or `arms::STICKIES`.
     Pickup,
     /// A blast at `pos`; `c` is the arm id (rocket) or [`Cause::Grenade`]
     /// or [`Cause::Sticky`].
@@ -30,8 +32,8 @@ pub enum Kind {
     Throw,
     /// `a` hurt vehicle `part` (its slot) for `c` points.
     VehicleHit,
-    /// Vehicle `part` blew up at `pos`, `a` the one who did it (or a
-    /// slot past the seats: nobody).
+    /// Vehicle `part` blew up at `pos`, `a` the one who did it, or
+    /// `world::NO_WINNER` (255): nobody (it fell into the void).
     Wreck,
     /// `a` got into vehicle `part`'s seat `b` (0 driver, 1 passenger), or
     /// out of it when `c` is 1.
@@ -40,6 +42,15 @@ pub enum Kind {
     /// 1 dropped by `a`, 2 returned (by `a`, or 255 on its own), 3
     /// captured by `a`.
     Flag,
+}
+
+impl Kind {
+    /// An event that must arrive: it changes what a player knows of the
+    /// match (the feed, the score, the flags, a hull, a seat), so a crowded
+    /// tick never drops it for a shot or a hit ([`EVENTS_KEPT`]).
+    pub fn must(self) -> bool {
+        matches!(self, Kind::Kill | Kind::Flag | Kind::Wreck | Kind::Spawn | Kind::Ride)
+    }
 }
 
 /// Kill causes past the arm ids.
@@ -76,7 +87,8 @@ pub struct Event {
 pub struct Events {
     list: [Event; MAX_EVENTS],
     len: usize,
-    /// Events past the cap since the match began.
+    /// Events past the cap since the match began (never reset by
+    /// [`Events::clear`]): the room reads it to say a tick was crowded.
     pub dropped: u32,
 }
 
@@ -95,8 +107,16 @@ impl Events {
         self.len = 0;
     }
 
+    /// Adds `e`, or counts it dropped: past the cap, or for an event that
+    /// need not arrive, past the cap less the room kept for those that must
+    /// ([`Kind::must`]).
     pub fn push(&mut self, e: Event) {
-        if self.len < MAX_EVENTS {
+        let cap = if e.kind.must() {
+            MAX_EVENTS
+        } else {
+            MAX_EVENTS - EVENTS_KEPT
+        };
+        if self.len < cap {
             self.list[self.len] = e;
             self.len += 1;
         } else {
@@ -106,5 +126,35 @@ impl Events {
 
     pub fn as_slice(&self) -> &[Event] {
         &self.list[..self.len]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_crowded_tick_keeps_room_for_the_kills() {
+        let mut ev = Events::default();
+        let shot = Event {
+            kind: Kind::Shot,
+            ..Event::default()
+        };
+        for _ in 0..MAX_EVENTS {
+            ev.push(shot);
+        }
+        assert_eq!(ev.as_slice().len(), MAX_EVENTS - EVENTS_KEPT);
+        assert_eq!(ev.dropped as usize, EVENTS_KEPT);
+        for _ in 0..EVENTS_KEPT + 1 {
+            ev.push(Event {
+                kind: Kind::Kill,
+                ..Event::default()
+            });
+        }
+        assert_eq!(ev.as_slice().len(), MAX_EVENTS);
+        assert_eq!(ev.dropped as usize, EVENTS_KEPT + 1);
+        ev.clear();
+        assert!(ev.as_slice().is_empty());
+        assert_eq!(ev.dropped as usize, EVENTS_KEPT + 1, "counted over the match");
     }
 }

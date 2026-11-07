@@ -655,7 +655,8 @@ impl Map {
     }
 
     /// An open floor 100 m square with walls, a spawn at each end and the
-    /// shotgun on a pad in the middle: for tests that place fighters by hand.
+    /// shotgun on a pad 30 m off the middle (at z -30): for tests that
+    /// place fighters by hand.
     pub fn open() -> Map {
         let b = |x0: f32, z0: f32, x1: f32, z1: f32| Aabb::new(V3::new(x0, 0.0, z0), V3::new(x1, 8.0, z1));
         Map {

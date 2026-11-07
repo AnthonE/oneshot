@@ -45,9 +45,8 @@ pub const ACT_KICK: u8 = 4;
 pub const ACT_PRIVACY: u8 = 5;
 /// The leader hands the lead to the member tagged `arg`.
 pub const ACT_LEAD: u8 = 6;
-/// What I am playing now (a mode, or [`PLAYING_NONE`]): what my party and
-/// my friends see.
-pub const ACT_PLAYING: u8 = 7;
+// 7 was "what I am playing": the server sets that itself now, from the
+// member's match session. Not to be reused while old pages may send it.
 /// Read my friends from Elo Pros again now.
 pub const ACT_FRIENDS: u8 = 8;
 pub const START_PRIVATE: u32 = 0x100;

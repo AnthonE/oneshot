@@ -30,6 +30,9 @@
 #     is on time.
 #   - reload sends SIGHUP: the certificate is read again and handed to new
 #     handshakes; nobody is disconnected (the certbot hook uses this).
+#   - SIGINT exits at once, a drain too (`systemctl kill -s SIGINT`, what
+#     `ci/deploy_server.sh --cut` sends): its matches are cut. Another
+#     SIGTERM (a restart) doesn't end a drain.
 
 [Unit]
 Description=oneshot server, slot %i — game.elopros.com
@@ -77,11 +80,12 @@ Restart=always
 RestartSec=2
 
 # SIGTERM is the drain. A ranked match is at most 12 minutes (Doubles) plus
-# its end screen; 900 s covers it, and 60 s more lets the reports go out.
+# its end screen; 900 s covers it, and 90 s more lets the reports go out
+# (what's still unanswered then is saved, `oneshot-review resend`).
 # Players never wait on it: the other slot is live by then.
 KillSignal=SIGTERM
 KillMode=mixed
-TimeoutStopSec=1000
+TimeoutStopSec=1020
 
 LimitNOFILE=65536
 

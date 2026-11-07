@@ -94,7 +94,7 @@ impl Nav {
         while let Some(i) = q.pop_front() {
             let k = fine[i as usize];
             let p = at(k);
-            let mut to: [Option<Key>; 4 + crate::consts::MAX_PADS] = [None; 4 + crate::consts::MAX_PADS];
+            let mut to: [Option<Key>; 4 + crate::consts::MAX_LAUNCHERS] = [None; 4 + crate::consts::MAX_LAUNCHERS];
             for (n, (dx, dz)) in [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().enumerate() {
                 let (x, z) = ((k.0 + dx) as f32 * G, (k.1 + dz) as f32 * G);
                 if x - r < m.lo.0 || x + r > m.hi.0 || z - r < m.lo.1 || z + r > m.hi.1 {
@@ -109,7 +109,7 @@ impl Nav {
                     to[n] = Some(key(x, z, ny));
                 }
             }
-            for (n, (a, land)) in throws.iter().enumerate().take(crate::consts::MAX_PADS) {
+            for (n, (a, land)) in throws.iter().enumerate().take(crate::consts::MAX_LAUNCHERS) {
                 if p.x >= a.min.x
                     && p.x <= a.max.x
                     && p.z >= a.min.z

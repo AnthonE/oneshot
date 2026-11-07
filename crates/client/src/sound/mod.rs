@@ -214,6 +214,10 @@ pub struct Ear {
     filming: bool,
     rng: u32,
     volume: f32,
+    /// GAME SOUNDS (`Settings::effects`): the match's own, out in the world
+    /// and ours; the mixer's master is VOLUME alone, so the announcer and
+    /// the menus ([`Ear::ping`]) are under it and not this.
+    world: f32,
     in_match: bool,
     // Our own body.
     last_reload: bool,
@@ -483,19 +487,31 @@ impl Ear {
         name
     }
 
-    /// A sound from outside the match (`front.rs`), in our head.
+    /// A sound from outside the match (`front.rs`), in our head: under
+    /// VOLUME, not GAME SOUNDS.
     pub fn ping(&mut self, name: &str) {
-        self.mine(name, 0.6);
+        self.head(name, 0.6, 1.0);
     }
 
     /// A sound of our own, in our head.
     fn mine(&mut self, name: &str, gain: f32) {
+        self.head(name, gain, self.world);
+    }
+
+    fn head(&mut self, name: &str, gain: f32, level: f32) {
         let speed = self.pitch();
         self.cue(name, None, gain, speed);
         let Some(clip) = self.clip(name) else { return };
-        let mut at = Place::centre(gain);
+        let mut at = Place::centre(gain * level);
         at.rate = speed;
         self.cmds.push(Cmd::Play { clip, at, delay: 0 });
+    }
+
+    /// A place in the match at GAME SOUNDS' level.
+    fn game(&self, mut at: Place) -> Place {
+        at.l *= self.world;
+        at.r *= self.world;
+        at
     }
 
     fn cue(&mut self, name: &str, at: Option<Vec3>, gain: f32, speed: f32) {
@@ -519,6 +535,7 @@ impl Ear {
         self.cue(name, Some(p), gain, speed);
         let Some(clip) = self.clip(name) else { return };
         at.rate = speed;
+        let at = self.game(at);
         self.cmds.push(Cmd::Play { clip, at, delay });
     }
 
@@ -531,6 +548,7 @@ impl Ear {
         self.cue(name, Some(p), gain, rate);
         let Some(clip) = self.clip(name) else { return };
         at.rate = rate;
+        let at = self.game(at);
         let delay = delay + (secs.max(0.0) * mix::RATE as f32) as u32;
         self.cmds.push(Cmd::Play { clip, at, delay });
     }
@@ -547,7 +565,7 @@ impl Ear {
         let place = match (ears, src) {
             (Some(e), Some((p, vel, gain, rate, c))) => e.place(p, gain, c).map(|(mut at, _)| {
                 at.rate = rate * e.doppler(p, vel);
-                at
+                self.game(at)
             }),
             _ => None,
         };
@@ -569,6 +587,7 @@ impl Ear {
 
     /// A sound we hold in our head (the charge, the wind).
     fn hold_mine(&mut self, slot: u8, on: &mut bool, name: &str, want: Option<(f32, f32)>) {
+        let want = want.map(|(gain, rate)| (gain * self.world, rate));
         match (want, *on) {
             (Some((gain, rate)), true) => {
                 let mut at = Place::centre(gain);
@@ -756,7 +775,8 @@ pub fn decide(
     ear.cues.clear();
     cues.0.clear();
     ear.filming = film.is_some();
-    let volume = if film.is_some() { 0.0 } else { settings.volume() * LIVE };
+    ear.world = settings.effects;
+    let volume = if film.is_some() { 0.0 } else { settings.master * LIVE };
     if volume != ear.volume {
         ear.volume = volume;
         ear.cmds.push(Cmd::Master(volume));
@@ -1715,10 +1735,10 @@ fn menus(
     for (e, i, at) in &buttons {
         let at = at.translation;
         match i {
-            Interaction::Pressed => ear.mine("ui_click_0", 0.5),
+            Interaction::Pressed => ear.head("ui_click_0", 0.5, 1.0),
             Interaction::Hovered => {
                 if !over.is_some_and(|(_, was)| was.distance(at) < SAME_BUTTON_PX) {
-                    ear.mine("ui_hover_0", 0.4);
+                    ear.head("ui_hover_0", 0.4, 1.0);
                 }
                 *over = Some((e, at));
             }

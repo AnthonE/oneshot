@@ -556,9 +556,9 @@ pub fn mip_models(
     assets: Res<AssetServer>,
     tier: Res<super::quality::Tier>,
 ) {
-    use super::quality::Quality;
-    // The low rungs start from half a gun's maps: a quarter of its memory.
-    let half = matches!(tier.preset, Some(Quality::Potato | Quality::Low));
+    // A rung on a small shadow map starts from half a gun's maps: a quarter
+    // of its memory (`quality::Tier::half_maps`).
+    let half = tier.half_maps();
     for ev in events.read() {
         let AssetEvent::LoadedWithDependencies { id } = ev else {
             continue;
