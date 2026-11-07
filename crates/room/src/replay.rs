@@ -8,9 +8,10 @@
 //! Format, little-endian: `OSR4`, u16 PROTO_VER, u64 golden tag, u64 seed,
 //! u64 salt × 2, the rules (teams, score limit, time limit, loadout, seats,
 //! gun game, friendly fire, capture the flag), u8 map; then records: `S`
-//! slot team (a seat), `T` u16 changed-input mask, inputs, u16
-//! changed-rewind mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16
-//! scores (the end).
+//! slot team (a seat), `H` (the countdown held for the next tick: someone
+//! still loading), `T` u16 changed-input mask, inputs, u16 changed-rewind
+//! mask, rewinds (a tick); `E` u32 ticks, u64 hash, i32 × 16 scores (the
+//! end).
 
 use proto::PROTO_VER;
 use sim::consts::MAX_FIGHTERS;
@@ -83,6 +84,14 @@ impl Recorder {
             return;
         }
         self.buf.extend_from_slice(&[b'S', slot as u8, team]);
+    }
+
+    /// `World::hold_countdown`.
+    pub fn hold(&mut self) {
+        if self.full {
+            return;
+        }
+        self.buf.push(b'H');
     }
 
     /// Whether the recording stopped at [`MAX_BYTES`].
@@ -232,6 +241,7 @@ pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
                 }
                 w.seat(s, t);
             }
+            b'H' => w.hold_countdown(),
             b'T' => {
                 let mask = r.u16()?;
                 for (s, i) in inputs.iter_mut().enumerate() {
@@ -328,6 +338,7 @@ mod tests {
         while bytes[at] != b'E' {
             match bytes[at] {
                 b'S' => at += 3,
+                b'H' => at += 1,
                 b'T' => {
                     let mask = u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]);
                     at += 3;

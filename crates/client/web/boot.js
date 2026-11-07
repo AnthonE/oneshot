@@ -110,9 +110,20 @@ const origin = getJson('origin.json', "the page's origin.json")
   .then((o) => o.server ?? '')
   .catch((e) => { throw new Error(`The page can't find the game: ${e.message}`); });
 origin.catch(() => { /* said where it's awaited */ });
-// The splash goes once the game has drawn a few frames.
+// The splash stays over the game until it says the title is all there
+// (`loaded`: loading.rs, the title's level, models and shaders in), saying
+// what it is on and how far; then it goes. After SPLASH_MAX_MS of the game
+// drawing it goes anyway (a game that never says so is a bug, not a wall).
+const SPLASH_MAX_MS = 45000;
+let drawing = 0;
 const shown = () => {
-  if ((window.__oneshot?.frames ?? 0) > 3) { boot.classList.add('gone'); return; }
+  const o = window.__oneshot;
+  if ((o?.frames ?? 0) > 3) {
+    drawing ||= performance.now();
+    if (o.loaded !== false || performance.now() - drawing > SPLASH_MAX_MS) { boot.classList.add('gone'); return; }
+    if (o.stage) say(o.stage);
+    if (typeof o.progress === 'number') bar(o.progress);
+  }
   requestAnimationFrame(shown);
 };
 

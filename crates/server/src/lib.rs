@@ -104,6 +104,11 @@ pub enum ToSim {
     Follow {
         session: u64,
     },
+    /// A player's level is all there (`Msg::Loaded`): its countdown stops
+    /// waiting for it.
+    Loaded {
+        session: u64,
+    },
 }
 
 /// Watchers one room takes.
@@ -928,6 +933,7 @@ impl Sim {
         };
         room.deltas = self.cfg.deltas;
         room.far_rates = self.cfg.far_rates;
+        room.wait_loads = true;
         room
     }
 
@@ -1291,6 +1297,14 @@ impl Sim {
                         s.watching = Some((i, next));
                         let team = r.room.world.fighters[next as usize].team;
                         send_msg(&s.tx, &Msg::Follow { slot: next, team });
+                    }
+                    ToSim::Loaded { session } => {
+                        let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) else {
+                            continue;
+                        };
+                        if let Some(r) = rooms[i].as_mut() {
+                            r.room.loaded(slot);
+                        }
                     }
                     ToSim::Leave { session } => {
                         q.remove(session);

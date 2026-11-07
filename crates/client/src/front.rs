@@ -47,12 +47,11 @@ const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
 /// The curtain over the backdrop until its level is there
-/// (`loading::Settle`), then how long it holds and how fast it lifts; and
-/// the guard: lifted this long after the level is built whatever is still
-/// arriving (the title over it works throughout).
+/// (`loading::Settle`), then how long it holds and how fast it lifts; its
+/// guard is the title's loading overlay's (`loading::TITLE_GUARD_S`), which
+/// lifts with it.
 const CURTAIN_HOLD_S: f64 = 0.15;
 const CURTAIN_FADE_S: f64 = 0.9;
-const CURTAIN_GUARD_S: f64 = 10.0;
 /// PLAY, pressed again this soon after it knocked, isn't a cancel.
 const CANCEL_AFTER_S: f32 = 0.6;
 /// A party leader's PLAY, again this soon after it asked the party to
@@ -382,7 +381,13 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
         .add_systems(OnExit(Screen::Title), exit)
         .add_systems(
             Update,
-            (click, typing, scroll, rebuild, (gear_pics, peek), curtain)
+            // Under the loading overlay the title takes nothing.
+            (
+                (click, typing, scroll).run_if(crate::loading::uncovered),
+                rebuild,
+                (gear_pics, peek),
+                curtain,
+            )
                 .chain()
                 .run_if(in_state(Screen::Title)),
         )
@@ -2600,7 +2605,7 @@ fn curtain(
 ) {
     let now = time.elapsed_secs_f64();
     let ours = settle.gen() == Some(gen.0);
-    let guard = settle.now.built && settle.age(now) >= CURTAIN_GUARD_S;
+    let guard = settle.now.built && settle.age(now) >= crate::loading::TITLE_GUARD_S;
     if !ours || !(settle.ready() || guard) {
         *since = None;
         return;

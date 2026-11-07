@@ -1337,6 +1337,10 @@ pub fn draw(
     let clock = snap.clock as f32 / TICK_HZ as f32;
     center.clear();
     match core.phase() {
+        // Held at its start: someone is still loading (`room::LOAD_WAIT_MS`).
+        Phase::Countdown if snap.clock >= sim::consts::ticks(sim::consts::COUNTDOWN_MS) => {
+            center.push_str("Waiting for everyone to load");
+        }
         Phase::Countdown => {
             let _ = write!(center, "Starting in {}", clock.ceil() as u32);
         }

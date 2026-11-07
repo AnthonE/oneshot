@@ -11,14 +11,23 @@
 //! (`front.rs`), this overlay, the `--shot` capture (`look/shot.rs`) and the
 //! browser's `__oneshot.ready` all read it.
 //!
-//! **The overlay never holds the match.** The match is live the moment the
+//! **The server waits for it.** Once the level is there the session says so
+//! (`Msg::Loaded`), and the room holds its countdown at its start until
+//! everyone seated has (at most `room::LOAD_WAIT_MS`), so nobody's countdown
+//! is spent under this screen. The match is still live the moment the
 //! welcome lands (`front::poll`): the session runs, the controls send, Esc
-//! opens the menu over it. The overlay only covers the frames a level spends
+//! opens the menu over it. The overlay covers the frames a level spends
 //! arriving (pieces in grey, models popping in, on the desktop a skipped
-//! draw while its pipeline compiles), and it lifts after [`LOADING_GUARD_S`]
-//! whatever is still missing, so a slow machine sees a level dressing in
+//! draw while its pipeline compiles) and the announcer waits under it
+//! ([`Cover`]); it lifts after [`LOADING_GUARD_S`] whatever is still
+//! missing, so a machine that never finishes sees a level dressing in
 //! rather than a wall; over a match already being played (a casual join
 //! mid-match) after [`LIVE_GUARD_S`].
+//!
+//! **The title waits too.** The same overlay is over the whole title, its
+//! menus with it, until the backdrop is there; the title takes no clicks,
+//! keys or pad under it, and the page's splash stays up over it until it
+//! lifts (`window.__oneshot.loaded`, `web/boot.js`).
 //!
 //! The same on the desktop and in a browser: one camera, so the overlay is
 //! drawn with the UI pipeline every screen before it already built (Gates
@@ -42,11 +51,14 @@ pub const DONE_FRAMES: u32 = 3;
 pub const PIPELINE_STALL_FRAMES: u32 = 300;
 /// The overlay over a new match lifts after this many seconds whatever is
 /// still arriving.
-pub const LOADING_GUARD_S: f64 = 5.0;
+pub const LOADING_GUARD_S: f64 = 20.0;
 /// …and after this many over a match already being played (a casual join
 /// takes a seat mid-match and spawns at once): whoever is there can shoot,
 /// so a level still dressing in beats a wall the player can't see past.
 pub const LIVE_GUARD_S: f64 = 1.5;
+/// …and over the title, this long after its level is built (the curtain
+/// over its backdrop lifts with it: `front::curtain`).
+pub const TITLE_GUARD_S: f64 = 10.0;
 /// How long the overlay takes to fade into the match.
 const FADE_S: f32 = 0.35;
 /// The bar, in pixels at 1280 by 720 (the title's panel is 380 wide).
@@ -122,6 +134,25 @@ impl Progress {
     }
 }
 
+/// A loading overlay is up (not fading): the title takes no input and the
+/// announcer waits. Up from the first frame, until there is nothing to
+/// cover or it lifts.
+#[derive(Resource)]
+pub struct Cover {
+    pub up: bool,
+}
+
+impl Default for Cover {
+    fn default() -> Self {
+        Cover { up: true }
+    }
+}
+
+/// Not under a loading overlay (a run condition).
+pub fn uncovered(cover: Res<Cover>) -> bool {
+    !cover.up
+}
+
 /// Whether the current link's level is all there.
 #[derive(Resource, Default)]
 pub struct Settle {
@@ -166,6 +197,7 @@ impl Settle {
 
 pub fn plugin(app: &mut App) {
     app.init_resource::<Settle>()
+        .init_resource::<Cover>()
         .add_plugins(crate::look::pipelines::plugin)
         .add_systems(
             Update,
@@ -211,7 +243,7 @@ fn settle(
     warming: Query<(), With<Warming>>,
     time: Res<Time<Real>>,
     mut clear: ResMut<ClearColor>,
-    link: NonSend<LinkRes>,
+    mut link: NonSendMut<LinkRes>,
 ) {
     let now = time.elapsed_secs_f64();
     let g = gen.map_or(0, |g| g.0);
@@ -261,6 +293,8 @@ fn settle(
     }
     if s.held >= DONE_FRAMES || stalled {
         s.ready = true;
+        // The server's countdown stops waiting for us (a match's link).
+        link.0.session_mut().loaded();
         info!(
             "oneshot: the level is there after {:.1} s ({} parts, link {g})",
             s.age(now),
@@ -273,6 +307,8 @@ fn settle(
 #[derive(Component)]
 pub struct LoadingRoot {
     gen: u32,
+    /// Over the title (else a match).
+    title: bool,
 }
 
 #[derive(Component)]
@@ -292,29 +328,26 @@ struct Fading {
     k: f32,
 }
 
-/// A new match (a link swapped in by the welcome): the overlay over it,
-/// until its level is there. Off a match, none.
+/// A new match (a link swapped in by the welcome), or the title on a new
+/// backdrop: the overlay over it, until its level is there. No title (a
+/// picture, the pose mode), none.
+#[allow(clippy::too_many_arguments)]
 fn start(
     mut commands: Commands,
     in_match: Option<Res<InMatch>>,
     gen: Option<Res<LinkGen>>,
     front: Option<Res<Front>>,
     link: NonSend<LinkRes>,
+    settle: Res<Settle>,
     roots: Query<(Entity, &LoadingRoot)>,
-    mut shown_for: Local<Option<(u32, u32)>>,
+    mut shown_for: Local<Option<(u32, u32, bool)>>,
 ) {
     let (Some(in_match), Some(gen)) = (in_match, gen) else {
         return;
     };
-    if !in_match.0 {
-        *shown_for = None;
-        for (e, _) in &roots {
-            commands.entity(e).despawn();
-        }
-        return;
-    }
-    // A new link, or a new welcome on it (a cup's next heat).
-    let key = (gen.0, link.0.session().welcomes);
+    // A new link, or a new welcome on it (a cup's next heat), or the
+    // title after a match.
+    let key = (gen.0, link.0.session().welcomes, in_match.0);
     if *shown_for == Some(key) {
         return;
     }
@@ -322,14 +355,53 @@ fn start(
     for (e, _) in &roots {
         commands.entity(e).despawn();
     }
+    if !in_match.0 {
+        // Already there (the title's backdrop built again as it was): no
+        // flash of a loading screen.
+        if !(settle.ready() && settle.gen() == Some(gen.0)) {
+            commands
+                .spawn((
+                    LoadingRoot {
+                        gen: gen.0,
+                        title: true,
+                    },
+                    ui::screen(ui::BG),
+                ))
+                .insert(GlobalZIndex(Z))
+                .with_children(|p| {
+                    p.spawn(ui::wordmark_at("ARENA SLAYER", AlignItems::Center));
+                    p.spawn((
+                        ui::strong("LOADING", 18.0, ui::TEXT_COLOR),
+                        Node {
+                            margin: UiRect::top(Val::Px(22.0)),
+                            ..default()
+                        },
+                    ));
+                    loading_bar(p);
+                });
+        }
+        return;
+    }
     let map_id = link.0.session().map_id;
+    // A casual join mid-match is into a match already being played.
+    let foot = if link.0.session().core.phase() == sim::world::Phase::Countdown {
+        "The match starts once everyone has loaded · Esc opens the menu"
+    } else {
+        "The match has started · Esc opens the menu"
+    };
     let map = sim::maps::ALL
         .iter()
         .find(|d| d.id == map_id)
         .map_or("THE MAP", |d| d.name);
     let mode = front.map_or("", |f| crate::front::mode_name(f.mode));
     commands
-        .spawn((LoadingRoot { gen: gen.0 }, ui::screen(ui::BG)))
+        .spawn((
+            LoadingRoot {
+                gen: gen.0,
+                title: false,
+            },
+            ui::screen(ui::BG),
+        ))
         .insert(GlobalZIndex(Z))
         .with_children(|p| {
             p.spawn(ui::wordmark_at(&mode.to_uppercase(), AlignItems::Center));
@@ -340,43 +412,48 @@ fn start(
                     ..default()
                 },
             ));
-            p.spawn((Stage, ui::strong(Progress::default().stage(), 12.0, ui::FAINT)));
-            p.spawn((
-                Node {
-                    width: Val::Px(BAR_W),
-                    height: Val::Px(BAR_H),
-                    margin: UiRect::vertical(Val::Px(6.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BackgroundColor(ui::ROW_IDLE),
-                BorderColor::all(ui::RULE),
-            ))
-            .with_children(|track| {
-                track.spawn((
-                    Bar,
-                    Node {
-                        width: Val::Percent(0.0),
-                        height: Val::Percent(100.0),
-                        ..default()
-                    },
-                    BackgroundColor(ui::MARK),
-                ));
-                track.spawn((
-                    Sweep,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        width: Val::Percent(SWEEP_W),
-                        height: Val::Percent(100.0),
-                        left: Val::Percent(-SWEEP_W),
-                        ..default()
-                    },
-                    BackgroundColor(ui::MARK.with_alpha(0.55)),
-                ));
-            });
-            p.spawn(ui::label("The match has started · Esc opens the menu", 12.0, ui::FAINT));
+            loading_bar(p);
+            p.spawn(ui::label(foot, 12.0, ui::FAINT));
         });
+}
+
+/// The line naming what is left, and the bar under it.
+fn loading_bar(p: &mut ChildSpawnerCommands) {
+    p.spawn((Stage, ui::strong(Progress::default().stage(), 12.0, ui::FAINT)));
+    p.spawn((
+        Node {
+            width: Val::Px(BAR_W),
+            height: Val::Px(BAR_H),
+            margin: UiRect::vertical(Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        BackgroundColor(ui::ROW_IDLE),
+        BorderColor::all(ui::RULE),
+    ))
+    .with_children(|track| {
+        track.spawn((
+            Bar,
+            Node {
+                width: Val::Percent(0.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(ui::MARK),
+        ));
+        track.spawn((
+            Sweep,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(SWEEP_W),
+                height: Val::Percent(100.0),
+                left: Val::Percent(-SWEEP_W),
+                ..default()
+            },
+            BackgroundColor(ui::MARK.with_alpha(0.55)),
+        ));
+    });
 }
 
 /// The bar and its line; lifted once the level is there, or the guard is up.
@@ -384,6 +461,7 @@ fn start(
 fn update(
     mut commands: Commands,
     settle: Res<Settle>,
+    mut cover: ResMut<Cover>,
     link: NonSend<LinkRes>,
     time: Res<Time<Real>>,
     roots: Query<(Entity, &LoadingRoot), Without<Fading>>,
@@ -395,15 +473,25 @@ fn update(
     let p = settle.now;
     let live = link.0.session().core.phase() == sim::world::Phase::Playing;
     let guard_s = if live { LIVE_GUARD_S } else { LOADING_GUARD_S };
+    let mut up = false;
     for (e, root) in &roots {
         let ours = settle.gen() == Some(root.gen);
-        let guard = settle.age(now) >= guard_s;
+        let guard = if root.title {
+            p.built && settle.age(now) >= TITLE_GUARD_S
+        } else {
+            settle.age(now) >= guard_s
+        };
         if ours && (settle.ready() || guard) {
             if !settle.ready() {
                 warn!("oneshot: the loading overlay lifted at its guard, at {}", p.stage());
             }
             commands.entity(e).insert(Fading { t: 0.0, k: 1.0 });
+        } else {
+            up = true;
         }
+    }
+    if cover.up != up {
+        cover.up = up;
     }
     for mut n in &mut bar {
         let w = Val::Percent(p.fraction() * 100.0);
