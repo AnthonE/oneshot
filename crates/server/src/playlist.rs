@@ -12,14 +12,9 @@ use proto::{MODE_BIG_TEAM, MODE_CASUAL, MODE_CTF, MODE_FFA, MODE_GUN_GAME, MODE_
 pub const HUB: u8 = MODE_FFA;
 
 /// Each gated mode and the players online it opens at (the title's and
-/// the matches' together). Roughly: enough that its room and the hub's
-/// can each hold people, not bots.
-pub const OPENS_AT: [(u8, usize); 4] = [
-    (MODE_GUN_GAME, 12),
-    (MODE_CTF, 20),
-    (MODE_BIG_TEAM, 32),
-    (MODE_SIEGE, 32),
-];
+/// the matches' together): low while the game is young, so a mode opens
+/// once a few could meet in it.
+pub const OPENS_AT: [(u8, usize); 4] = [(MODE_GUN_GAME, 4), (MODE_CTF, 6), (MODE_BIG_TEAM, 8), (MODE_SIEGE, 8)];
 
 /// What `--all-modes` opens: every mode, whatever the count.
 pub const ALL: u16 = u16::MAX;
@@ -67,11 +62,11 @@ mod tests {
 
     #[test]
     fn modes_open_as_players_come_and_a_live_room_stays_open() {
-        assert_ne!(open(12, 0) & bit(MODE_GUN_GAME), 0);
-        assert_eq!(open(12, 0) & bit(MODE_CTF), 0);
-        assert_ne!(open(20, 0) & bit(MODE_CTF), 0);
-        assert_eq!(open(31, 0) & bit(MODE_BIG_TEAM), 0);
-        assert_ne!(open(32, 0) & bit(MODE_BIG_TEAM), 0);
+        assert_ne!(open(4, 0) & bit(MODE_GUN_GAME), 0);
+        assert_eq!(open(4, 0) & bit(MODE_CTF), 0);
+        assert_ne!(open(6, 0) & bit(MODE_CTF), 0);
+        assert_eq!(open(7, 0) & bit(MODE_BIG_TEAM), 0);
+        assert_ne!(open(8, 0) & bit(MODE_BIG_TEAM), 0);
         // Big Team running with people in it: still open with two online.
         let m = open(2, bit(MODE_BIG_TEAM));
         assert_eq!(route(MODE_BIG_TEAM, m, false), MODE_BIG_TEAM);
