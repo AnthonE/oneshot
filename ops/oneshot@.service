@@ -94,6 +94,27 @@ ProtectHome=read-only
 ReadWritePaths=/home/master/oneshot-data
 PrivateTmp=true
 NoNewPrivileges=true
+# And the rest of the sandbox: the server needs its sockets, its files and
+# nothing of the kernel, devices, namespaces or realtime.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+UMask=0027
 
 StandardOutput=journal
 StandardError=journal

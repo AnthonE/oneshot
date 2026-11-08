@@ -1,4 +1,4 @@
-//! Cloudbreak: An observatory on a sandstone island over a void, mirrored between red (-x) and blue (+x): a tower on its north edge, three floors round a well with a lift up it, the shotgun in its hall, the sniper on its balcony, a gallery at the top reached by the lift or by stairs that climb round it to a walk over the void, a round sundial in the middle with the rocket under a great arch broken at its crown, a trilithon gate and a bastion each side, the overshield out on the south point, walks below the lip along the north and south coasts. Off the edge is death. Out of the rotation until it has been played.
+//! Cloudbreak: An observatory on a sandstone island over a void, mirrored between red (-x) and blue (+x): a tower on its north edge, three floors round a well with a lift up it, the shotgun in its hall, the sniper on its balcony, a gallery at the top reached by the lift or by stairs that climb round it to a walk over the void, a round sundial in the middle with the rocket under a great arch broken at its crown, a trilithon gate and a bastion each side, the overshield out on the south point, walks below the lip along the north and south coasts. Off the edge is death. In free for all; ranked Doubles once it has been played.
 //!
 //! Generated from `maps/cloudbreak/map.json` by `tools/maps/compile.mjs`: edit the JSON,
 //! then run it. CI fails if this file is not what the JSON compiles to.
@@ -13,8 +13,8 @@ use crate::terrain::TerrainDef;
 pub const DEF: Def = Def {
     id: 7,
     name: "Cloudbreak",
-    practice: true,
-    modes: 12,
+    practice: false,
+    modes: 8,
     lo: (-31.0, -27.0),
     hi: (31.0, 28.0),
     void: -10.0,

@@ -15,7 +15,8 @@
 #   quality=potato|low|medium|high (that rung; unset, the default HIGH),
 #   capsules, name=NAME, tab=armory|party|friends|challenges (the title on
 #   that panel), look=SKIN,HEAD,FEET,EMBLEM
-#   (what Triple T wears: `proto::Look`'s ids, the emblem as its u16),
+#   (what Triple T wears: `proto::Look`'s ids, the emblem as its u16; in a
+#   match the local server dresses anyone, `--dress-all`),
 #   wardrobe=SKINS,HEAD,FEET[,FLOOR] (what the wallet owns, masks by id,
 #   and its rating), pose=QUERY (no server: a picture,
 #   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`), loadout=GUNS (the
@@ -62,6 +63,7 @@ args=(--shot "$out" --shot-at "$secs")
 match=0
 loadout=
 passive=
+dress=
 [ "$auto" = 1 ] && { match=1; args+=(--autoplay); }
 for w in "${more[@]}"; do
   case $w in
@@ -76,7 +78,7 @@ for w in "${more[@]}"; do
     capsules | capsules=1) args+=(--capsules) ;;
     name=*) args+=(--name "${w#name=}") ;;
     tab=*) args+=(--tab "${w#tab=}") ;;
-    look=*) args+=(--look "${w#look=}") ;;
+    look=*) args+=(--look "${w#look=}"); dress=1 ;;
     wardrobe=*) args+=(--wardrobe "${w#wardrobe=}") ;;
     pose=*) args+=(--pose "${w#pose=}") ;;
     scope | scope=1) args+=(--scope) ;;
@@ -104,7 +106,7 @@ for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
 
 if [ "$match" = 1 ]; then
   [ -x target/release/oneshot-server ] || { echo "desktop_shot: no target/release/oneshot-server (cargo build --release -p server)" >&2; exit 1; }
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" ${loadout:+--loadout "$loadout"} ${passive:+--passive-bots} >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map "$map" ${loadout:+--loadout "$loadout"} ${passive:+--passive-bots} ${dress:+--dress-all} >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do

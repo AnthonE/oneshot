@@ -685,8 +685,21 @@ fn panel(
             look_row(p, player, party.wardrobe.as_ref());
 
             p.spawn(ui::group("CASUAL"));
+            // With few online, the server keeps players in fewer modes.
+            let shut = MODES.iter().any(|m| !m.ranked && !party.mode_open(m.id));
+            if let (true, Some((_, online))) = (shut, party.modes) {
+                let line = format!("{online} online: more modes open as players come.");
+                p.spawn(ui::label(line, 12.0, ui::FAINT));
+            }
             for m in MODES.iter().filter(|m| !m.ranked) {
-                mode_row(p, m, front.mode == m.id, true);
+                let open = party.mode_open(m.id);
+                mode_row(
+                    p,
+                    m,
+                    front.mode == m.id,
+                    open,
+                    if open { m.short } else { "MORE PLAYERS" },
+                );
             }
             p.spawn(ui::group("RANKED"));
             let open = signin.ranked();
@@ -699,7 +712,7 @@ fn panel(
                 p.spawn(ui::label(why, 12.0, ui::FAINT));
             }
             for m in MODES.iter().filter(|m| m.ranked) {
-                mode_row(p, m, front.mode == m.id, open);
+                mode_row(p, m, front.mode == m.id, open, m.short);
             }
         });
         play_foot(panel, front, party, knocking);
@@ -2162,7 +2175,7 @@ fn invite_card(root: &mut ChildSpawnerCommands, from: &str) {
     });
 }
 
-fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool) {
+fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool, short: &'static str) {
     let (idle, over) = if picked {
         (ui::PICKED, Color::srgba(0.290, 0.580, 0.800, 0.42))
     } else {
@@ -2192,7 +2205,7 @@ fn mode_row(p: &mut ChildSpawnerCommands, m: &Mode, picked: bool, open: bool) {
         (true, true) => (ui::TITLE, ui::TEXT_COLOR),
         (true, false) => (ui::TEXT_COLOR, ui::FAINT),
     };
-    let kids = (ui::strong(m.name, 15.0, name_c), ui::strong(m.short, 11.0, short_c));
+    let kids = (ui::strong(m.name, 15.0, name_c), ui::strong(short, 11.0, short_c));
     if open {
         p.spawn((
             Button,
@@ -2693,6 +2706,11 @@ fn rebuild(
         return;
     }
     front.dirty = false;
+    // A mode the server shut since it was picked: free for all, where it
+    // would be played anyway.
+    if !party.mode_open(front.mode) {
+        front.mode = proto::MODE_FFA;
+    }
     // Triple T shows his back while the emblem is being picked, and wears
     // the armory's pick there; on the other panels, what the server will
     // let this wallet wear of it, as the match shows us to everyone.

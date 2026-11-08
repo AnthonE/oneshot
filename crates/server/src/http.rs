@@ -154,6 +154,15 @@ async fn handle(
     }
     if path == "/online.json" || path == "/status.json" {
         // Who plays, for Elo Pros (`online`): this slot and the others.
+        // The roster names every wallet playing; with `--roster-key` only
+        // a reader that gives it (Elo Pros' poller) is told.
+        if path == "/online.json" {
+            if let Some(k) = &ctx.roster_key {
+                if header("x-roster-key").as_deref() != Some(k.as_str()) {
+                    return reply_cors(&mut sock, 403, "text/plain", b"a roster key", cors).await;
+                }
+            }
+        }
         let slot = merged(ctx).await;
         let body = if path == "/online.json" {
             crate::online::online_json(&slot, &ctx.slug)
@@ -310,6 +319,7 @@ async fn reply_cors(
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         413 => "Payload Too Large",
         429 => "Too Many Requests",

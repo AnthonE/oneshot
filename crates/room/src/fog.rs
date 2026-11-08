@@ -11,7 +11,9 @@
 //! person and every enemy. At 2v2 that is a few thousand box tests a
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
-use sim::consts::{HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_DROPS, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::consts::{
+    CAMO_BOT_HIDDEN, CAMO_BOT_M, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_DROPS, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ,
+};
 use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -300,6 +302,14 @@ pub const DROP_LOOK_Y: f32 = 0.3;
 pub const FAR_M: f32 = 40.0;
 pub const FAR_EVERY: usize = 4;
 
+/// Whether `target`'s active camouflage hides it from `viewer`: cloaked
+/// past [`CAMO_BOT_HIDDEN`] and farther than [`CAMO_BOT_M`], the rule the
+/// bots make out a fighter by (`sim::bot`). Firing, swinging or taking a
+/// hit flares it and it shows again.
+pub fn camouflaged(viewer: &Fighter, target: &Fighter) -> bool {
+    target.cloak() > CAMO_BOT_HIDDEN && (target.body.pos - viewer.body.pos).len() > CAMO_BOT_M
+}
+
 /// How many snapshots apart a pair's full looks are: 2, or [`FAR_EVERY`]
 /// past [`FAR_M`].
 pub fn every(viewer: &Fighter, target: &Fighter) -> usize {
@@ -353,6 +363,10 @@ impl Fog {
                 self.until[q] = 0;
             } else if w.rules.teams && f.team == me.team {
                 self.until[q] = u32::MAX;
+            } else if camouflaged(me, f) {
+                // Active camouflage past its range hides from a client as
+                // it does from a bot: not sent, rather than sent faint and
+                // left to the client to draw so. The hold fades it out.
             } else {
                 let k = every(me, f);
                 let seen = if (turn + q).is_multiple_of(k) {

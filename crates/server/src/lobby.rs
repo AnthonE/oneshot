@@ -27,6 +27,39 @@ use crate::Ctx;
 /// How often a session's friends are shown again (their presence moves),
 /// and the sweep for those away too long.
 const FRIENDS_EVERY: Duration = Duration::from_secs(15);
+/// Stream messages a lobby session may send: a few a second (a hand's
+/// clicks), a burst over. A sign-in costs a signature check and two
+/// lookups on Elo Pros, a party act a message to every member; past the
+/// meter they are dropped before either.
+pub const LOBBY_MSGS_PER_S: f64 = 8.0;
+pub const LOBBY_BURST: f64 = 24.0;
+
+/// A session's allowance of stream messages (as `net::InputBucket`).
+struct Meter {
+    tokens: f64,
+    at: Instant,
+}
+
+impl Meter {
+    fn new(now: Instant) -> Meter {
+        Meter {
+            tokens: LOBBY_BURST,
+            at: now,
+        }
+    }
+
+    fn allow(&mut self, now: Instant) -> bool {
+        let dt = now.saturating_duration_since(self.at).as_secs_f64();
+        self.at = now;
+        self.tokens = (self.tokens + dt * LOBBY_MSGS_PER_S).min(LOBBY_BURST);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 /// A page's own FRIENDS ask goes to Elo Pros at most this often (the cache
 /// answers between).
 const FRIENDS_ASK_EVERY: Duration = Duration::from_secs(5);
@@ -47,6 +80,11 @@ pub struct Lobby {
 impl Lobby {
     pub fn parties(&self) -> MutexGuard<'_, Parties> {
         self.parties.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Pages holding a lobby: everyone on the title, and most in a match.
+    pub fn online(&self) -> usize {
+        self.outs().len()
     }
 
     fn outs(&self) -> MutexGuard<'_, BTreeMap<u64, (Outlet, Connection)>> {
@@ -167,6 +205,19 @@ async fn wardrobe(ctx: &Ctx, session: u64, who: &Who) {
     ctx.lobby.send(vec![(session, Msg::Wardrobe(d))]);
 }
 
+/// Tells `session` the modes open now (`playlist`), unless that is what
+/// it was last told.
+fn modes(ctx: &Ctx, session: u64, last: &mut Option<Msg>) {
+    let m = Msg::Modes {
+        open: ctx.open_modes.load(Ordering::Relaxed),
+        online: ctx.online.load(Ordering::Relaxed).min(u16::MAX as usize) as u16,
+    };
+    if *last != Some(m) {
+        *last = Some(m);
+        ctx.lobby.send(vec![(session, m)]);
+    }
+}
+
 /// One page's lobby: it is `who` (checked by the caller), named `name`,
 /// asking for the party `want` (0: none). Returns when the page goes.
 #[allow(clippy::too_many_arguments)]
@@ -239,6 +290,8 @@ pub async fn session(
     let mut told = Vec::new();
     friends(&ctx, session, &who, false, &mut told).await;
     wardrobe(&ctx, session, &who).await;
+    let mut modes_told = None;
+    modes(&ctx, session, &mut modes_told);
 
     // Voice, straight from this reader to the party.
     let vctx = ctx.clone();
@@ -266,10 +319,18 @@ pub async fn session(
     let mut drain_check = tokio::time::interval(Duration::from_secs(1));
     let mut asked: Option<Instant> = None;
     let mut ticketed = Instant::now();
+    let mut meter = Meter::new(Instant::now());
     loop {
         tokio::select! {
             m = msgs.recv() => {
                 let Some(m) = m else { break };
+                if matches!(m, Msg::Bye) {
+                    break;
+                }
+                if !meter.allow(Instant::now()) {
+                    ctx.health.lobby_dropped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
                 match m {
                     Msg::Bye => break,
                     Msg::PartyAct { act: pp::ACT_FRIENDS, .. } => {
@@ -328,6 +389,7 @@ pub async fn session(
                 }
             }
             _ = drain_check.tick() => {
+                modes(&ctx, session, &mut modes_told);
                 // Going down: the page moves to the live slot, and takes
                 // the party's code there.
                 if ctx.draining.load(Ordering::Relaxed) {

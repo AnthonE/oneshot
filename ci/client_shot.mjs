@@ -22,7 +22,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(new URL('../package.json', import.meta.url));
 const { chromium } = require('playwright');
 const [out = 'traces/client.png', secs = '25', mode = '6', map = '3', auto = '0', more = ''] = process.argv.slice(2);
-const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--map', map], { stdio: ['ignore', 'pipe', 'inherit'] });
+const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--all-modes', '--map', map], { stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((ok) => { let o = ''; server.stdout.on('data', (d) => { o += d; const m = o.match(/play: (http:\/\/\S+)/); if (m) ok(m[1]); }); });
 const exe = process.env.CHROMIUM_PATH || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
 mkdirSync(dirname(out), { recursive: true });

@@ -75,6 +75,9 @@ pub struct PartyView {
     /// What our wallet owns and its floor, as the server read them (none
     /// till it has said): the armory's cards (`front.rs`).
     pub wardrobe: Option<proto::Wardrobe>,
+    /// The casual modes the server has open, a bit a mode, and how many
+    /// are online (`Msg::Modes`; none till it has said).
+    pub modes: Option<(u16, u16)>,
     /// The last invite: who, and their party's code.
     pub invite: Option<(String, u32)>,
     /// The last thing the party said no to.
@@ -105,6 +108,15 @@ impl PartyView {
 
     pub fn size(&self) -> usize {
         self.members().len().max(1)
+    }
+
+    /// Whether PLAY may pick mode `id`: the server has it open, or the
+    /// party plays a room of its own. Shut ones are played as free for all.
+    pub fn mode_open(&self, id: u8) -> bool {
+        self.alone
+            || self
+                .modes
+                .is_none_or(|(open, _)| open & 1u16.checked_shl(id as u32).unwrap_or(0) != 0)
     }
 
     /// We lead (or are alone).
@@ -586,6 +598,12 @@ fn pump(
             Msg::Invited { from, code } => {
                 view.invite = Some((from.as_str().to_string(), code));
                 view.touch();
+            }
+            Msg::Modes { open, online } => {
+                if view.modes != Some((open, online)) {
+                    view.modes = Some((open, online));
+                    view.touch();
+                }
             }
             Msg::Wardrobe(d) => {
                 if view.wardrobe != Some(d) {

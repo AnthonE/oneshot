@@ -121,7 +121,9 @@ are cut from ambientCG (ambientcg.com) by the same tool: MetalPlates001 (steel)
 and DiamondPlate008C (tread). The boxes' other two are copied from Gates by
 tools/assets.mjs: Poly Haven's concrete_wall_003 and ambientCG's
 (ambientcg.com) CorrugatedSteel009; and the grass card atlas is from Poly
-Haven's grass_medium_01 (baked by Gates). No attribution is required;
+Haven's grass_medium_01 (baked by Gates). What the guns reflect
+(gun_env.rgb9e5) is cut from Poly Haven's kloofendal_48d_partly_cloudy
+(Greg Zaal) by tools/gun_env.py. No attribution is required;
 credited by choice.
 
 The reach (crates/client/src/look/ik.rs: two-bone IK for the left hand on a

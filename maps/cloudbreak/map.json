@@ -1,9 +1,8 @@
 {
   "id": 7,
   "name": "Cloudbreak",
-  "about": "An observatory on a sandstone island over a void, mirrored between red (-x) and blue (+x): a tower on its north edge, three floors round a well with a lift up it, the shotgun in its hall, the sniper on its balcony, a gallery at the top reached by the lift or by stairs that climb round it to a walk over the void, a round sundial in the middle with the rocket under a great arch broken at its crown, a trilithon gate and a bastion each side, the overshield out on the south point, walks below the lip along the north and south coasts. Off the edge is death. Out of the rotation until it has been played.",
-  "practice": true,
-  "modes": ["doubles", "ffa"],
+  "about": "An observatory on a sandstone island over a void, mirrored between red (-x) and blue (+x): a tower on its north edge, three floors round a well with a lift up it, the shotgun in its hall, the sniper on its balcony, a gallery at the top reached by the lift or by stairs that climb round it to a walk over the void, a round sundial in the middle with the rocket under a great arch broken at its crown, a trilithon gate and a bastion each side, the overshield out on the south point, walks below the lip along the north and south coasts. Off the edge is death. In free for all; ranked Doubles once it has been played.",
+  "modes": ["ffa"],
   "bounds": [-31, 31, -27, 28],
   "void": -10,
   "mirror": "x",

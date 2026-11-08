@@ -51,7 +51,7 @@ const { chromium } = (() => {
 })();
 
 const server = spawn('target/release/oneshot-server', [
-  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots',
+  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots', '--all-modes',
   ...maps.flatMap((m) => ['--map', m]),
   ...(again ? ['--match-secs', String(matchSecs)] : []),
 ], { stdio: ['ignore', 'pipe', 'inherit'] });
