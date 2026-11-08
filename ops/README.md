@@ -159,7 +159,7 @@ renamed or removed; dropping it archives it on their profile.
 - **Load test** (`tools/load`; never against a live slot, and at a quiet
   hour: it takes cores from Gates too): build `-p server -p load` in release
   and copy both over, start a third server on loopback
-  (`oneshot-server --bind 127.0.0.1:4500 --http 127.0.0.1:8500`, self-signed),
+  (`oneshot-server --bind 127.0.0.1:4500 --http 127.0.0.1:8500 --all-modes`, self-signed),
   then `oneshot-load --page http://127.0.0.1:8500 --players 256 --mode big --hold 120`.
   It prints the players' side and the server's over the hold, and exits 1 if
   the server didn't keep up. Players on the box take cores from the server:

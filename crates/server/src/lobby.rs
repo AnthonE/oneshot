@@ -49,6 +49,11 @@ impl Lobby {
         self.parties.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Pages holding a lobby: everyone on the title, and most in a match.
+    pub fn online(&self) -> usize {
+        self.outs().len()
+    }
+
     fn outs(&self) -> MutexGuard<'_, BTreeMap<u64, (Outlet, Connection)>> {
         self.outs.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -167,6 +172,19 @@ async fn wardrobe(ctx: &Ctx, session: u64, who: &Who) {
     ctx.lobby.send(vec![(session, Msg::Wardrobe(d))]);
 }
 
+/// Tells `session` the modes open now (`playlist`), unless that is what
+/// it was last told.
+fn modes(ctx: &Ctx, session: u64, last: &mut Option<Msg>) {
+    let m = Msg::Modes {
+        open: ctx.open_modes.load(Ordering::Relaxed),
+        online: ctx.online.load(Ordering::Relaxed).min(u16::MAX as usize) as u16,
+    };
+    if *last != Some(m) {
+        *last = Some(m);
+        ctx.lobby.send(vec![(session, m)]);
+    }
+}
+
 /// One page's lobby: it is `who` (checked by the caller), named `name`,
 /// asking for the party `want` (0: none). Returns when the page goes.
 #[allow(clippy::too_many_arguments)]
@@ -239,6 +257,8 @@ pub async fn session(
     let mut told = Vec::new();
     friends(&ctx, session, &who, false, &mut told).await;
     wardrobe(&ctx, session, &who).await;
+    let mut modes_told = None;
+    modes(&ctx, session, &mut modes_told);
 
     // Voice, straight from this reader to the party.
     let vctx = ctx.clone();
@@ -328,6 +348,7 @@ pub async fn session(
                 }
             }
             _ = drain_check.tick() => {
+                modes(&ctx, session, &mut modes_told);
                 // Going down: the page moves to the live slot, and takes
                 // the party's code there.
                 if ctx.draining.load(Ordering::Relaxed) {

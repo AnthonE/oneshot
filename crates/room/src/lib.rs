@@ -699,7 +699,7 @@ impl Room {
         let skill = if self.world.rules.siege {
             sim::consts::SIEGE_BOT_SKILL
         } else {
-            0.5
+            sim::consts::BOT_SKILL
         };
         self.seats[s] = Seat::Bot(Bot::new(self.seed, s, skill));
         self.looks[s] = proto::Look::default();

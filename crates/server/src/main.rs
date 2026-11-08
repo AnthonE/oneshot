@@ -1,6 +1,6 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
 //! [--web crates/client/dist] [--cert cert.pem --key key.pem] [--doubles]
-//! [--passive-bots] [--map <id|name>]… [--loadout <gun>[,<gun>]]
+//! [--passive-bots] [--all-modes] [--map <id|name>]… [--loadout <gun>[,<gun>]]
 //! [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
@@ -9,6 +9,10 @@
 //! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta] [--no-far-rates]
 //! [--nonce-key file] [--live-file file] [--roster-dir dir]
 //! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--elo-queue] [--load-from ip]… [--match-secs N]`
+//!
+//! `--all-modes` opens every casual mode however few are online
+//! (`playlist.rs`; otherwise Gun Game, Capture the Flag and Big Team open
+//! as players come, and are played as free for all till then).
 //!
 //! `--match-secs` puts every mode's match on an N-second clock: for tests
 //! that play one match after another (`ci/e2e.mjs`'s `E2E_AGAIN`).
@@ -83,6 +87,7 @@ fn main() {
             "--key" => key = Some(val()),
             "--doubles" => cfg.rules = Rules::doubles(),
             "--passive-bots" => cfg.passive_bots = true,
+            "--all-modes" => cfg.all_modes = true,
             "--map" => {
                 let v = val();
                 let id = sim::maps::ALL
