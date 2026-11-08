@@ -340,7 +340,10 @@ impl Bot {
         let me = &w.fighters[slot];
         let v = &w.vehicles[vi];
         self.ride_for = self.ride_for.saturating_add(1);
-        if self.ride_for as u32 > ticks(RIDE_MS) || (best != 255 && near < 18.0) {
+        // Bots drive trucks only: in a one-seater (got into by a USE meant
+        // for a pad), straight out.
+        let truck = v.kind == crate::vehicle::TRUCK;
+        if !truck || self.ride_for as u32 > ticks(RIDE_MS) || (best != 255 && near < 18.0) {
             Self::tap_use(&mut inp, me.last_buttons);
             return inp;
         }
@@ -479,7 +482,7 @@ impl Bot {
             .then(|| {
                 w.vehicles
                     .iter()
-                    .filter(|v| v.active && v.seats[crate::vehicle::DRIVER] == 0)
+                    .filter(|v| v.active && v.kind == crate::vehicle::TRUCK && v.seats[crate::vehicle::DRIVER] == 0)
                     .map(|v| (v.pos, (v.pos - me.body.pos).flat().len()))
                     .filter(|&(_, d)| d < VEHICLE_WALK)
                     .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -852,13 +855,17 @@ pub fn bot_match(seed: u64, ticks_n: u32) -> u64 {
 
 /// [`bot_match`] on map `map` in `mode`: 0 Doubles, 1 an eight-seat Gun
 /// Game, 2 a sixteen-seat Big Team, 3 Capture the Flag (on a map with
-/// flags), 4 Siege (on a map with nodes). What `ci/parity.sh` runs on
-/// every map.
+/// flags), 4 Siege (on a map with nodes), 5 Big Team with red's one-seaters
+/// flown ([`pilots_match`], on a map with a skimmer and a flier). What
+/// `ci/parity.sh` runs on every map.
 /// 0 if there is no such map or mode.
 pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
     let Some(m) = crate::map::by_id(map) else {
         return 0;
     };
+    if mode == 5 {
+        return pilots_match(m, seed, ticks_n);
+    }
     let base = match mode {
         0 => Rules::doubles(),
         1 => Rules::gun_game(),
@@ -893,6 +900,85 @@ pub fn bot_match_on(map: u8, mode: u8, seed: u64, ticks_n: u32) -> u64 {
             inputs[s] = bots[s].think(&w, s);
         }
         w.step(&inputs, &depth);
+        fold = crate::rng::splitmix64(fold ^ w.hash());
+    }
+    fold
+}
+
+/// Seats flying red's skimmer and flier in [`pilots_match`].
+const PILOTS: [(usize, u8); 2] = [(0, crate::vehicle::SKIMMER), (2, crate::vehicle::FLIER)];
+
+/// Sixteen seats of Big Team on `m`, two of red's at the controls of its
+/// skimmer and its flier on a shaky scripted stick (the aim wandering,
+/// throttle and strafe, boosts, rolls, both triggers), the rest bots: the
+/// one-seaters' flight in the parity gate, which bots never fly. Folded as
+/// [`bot_match`]'s. 0 on a map without both.
+fn pilots_match(m: crate::map::Map, seed: u64, ticks_n: u32) -> u64 {
+    let rules = Rules {
+        score_limit: 100_000,
+        time_limit_ms: 0,
+        ..Rules::big_team()
+    };
+    let n = rules.seats as usize;
+    let salt = (crate::rng::splitmix64(seed), crate::rng::splitmix64(seed ^ 0x5a17));
+    let mut w = World::new(m, rules, seed, salt);
+    let mut bots = [Bot::new(seed, 0, 0.5); MAX_FIGHTERS];
+    for (s, b) in bots.iter_mut().enumerate().take(n) {
+        w.seat(s, (s & 1) as u8);
+        *b = Bot::new(seed, s, 0.3 + 0.2 * (s % 4) as f32);
+    }
+    let mut craft = [0usize; 2];
+    for (k, &(_, kind)) in PILOTS.iter().enumerate() {
+        let Some(i) = (0..MAX_VEHICLES).find(|&i| {
+            let v = &w.vehicles[i];
+            v.active && v.kind == kind && w.map.vehicles.get(i).is_some_and(|d| d.pos.x < 0.0)
+        }) else {
+            return 0;
+        };
+        craft[k] = i;
+    }
+    let mut sticks = [Pcg32::new(seed, 11), Pcg32::new(seed, 12)];
+    let mut aims = [(0u16, 0i16); 2];
+    let mut fold = 0u64;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    for _ in 0..ticks_n {
+        for s in 0..n {
+            inputs[s] = bots[s].think(&w, s);
+        }
+        for (k, &(s, _)) in PILOTS.iter().enumerate() {
+            let f = w.fighters[s];
+            let v = w.vehicles[craft[k]];
+            if f.riding().is_none() {
+                // Once the countdown is over, alive and its craft free and
+                // whole: stood beside it, and in.
+                if w.phase == Phase::Playing && f.active() && v.active && v.seats[crate::vehicle::DRIVER] == 0 {
+                    let (_, r) = v.axes();
+                    let at = v.pos + r * (v.spec().half_w + 0.5);
+                    let b = &mut w.fighters[s].body;
+                    b.pos = V3::new(at.x, w.map.floor(at.x, at.z, BODY_R, v.pos.y + 1.0), at.z);
+                    b.vel = V3::ZERO;
+                    aims[k] = (v.yaw, 0);
+                    inputs[s] = Input {
+                        buttons: if f.last_buttons & USE == 0 { USE } else { 0 },
+                        yaw: v.yaw,
+                        ..Input::default()
+                    };
+                }
+                continue;
+            }
+            let r = sticks[k].next_u32();
+            let (yaw, pitch) = &mut aims[k];
+            *yaw = yaw.wrapping_add(((r & 0x1ff) as i32 - 0xff) as u16);
+            *pitch = (*pitch as i32 + ((r >> 9) & 0x7f) as i32 - 0x3f).clamp(-3_000, 6_000) as i16;
+            inputs[s] = Input {
+                buttons: ((r >> 18) as u16) & (CROUCH | JUMP | FIRE | FIRE_LEFT),
+                yaw: *yaw,
+                pitch: *pitch,
+                mx: ((r >> 24) as u8 as i8).max(-127),
+                mz: if (r >> 16).is_multiple_of(7) { -127 } else { 127 },
+            };
+        }
+        w.step(&inputs, &[0; MAX_FIGHTERS]);
         fold = crate::rng::splitmix64(fold ^ w.hash());
     }
     fold

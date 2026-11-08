@@ -21,7 +21,7 @@ pub const TOP_EPS: f32 = 0.05;
 /// Hull `v`'s top on the sim's grid, at or above it: where a body on it
 /// stands, never a hair inside it (where the hull would meet it).
 pub fn top(v: &Vehicle) -> f32 {
-    crate::fmath::ceil((v.pos.y + VEH_H) * QUANT) * (1.0 / QUANT)
+    crate::fmath::ceil((v.pos.y + v.spec().h) * QUANT) * (1.0 / QUANT)
 }
 
 /// What of a fighter the contact step reads and moves.
@@ -63,8 +63,9 @@ pub fn walk(body: &mut Body, flag: bool, inp: &Input, map: &Map) {
 /// Each hull's worst crash this tick, and whose doing.
 pub type Crashes = [(i32, Option<usize>); MAX_VEHICLES];
 
-/// Each hull's stick (`World::drive_stick`), or None: parked.
-pub type Sticks = [Option<(i8, i8)>; MAX_VEHICLES];
+/// Each hull's stick (`World::drive_stick`: `vehicle::stick`), or None:
+/// parked.
+pub type Sticks = [Option<Input>; MAX_VEHICLES];
 
 /// What the stages can't know: where a driver saw someone, and what a
 /// run-down does to them (the server's damage). A client's is [`Present`].
@@ -121,7 +122,7 @@ impl Scene {
     }
 
     /// What the stages move, back: every body, and each live hull's place,
-    /// speed, heading and footing.
+    /// speed, heading and footing, and a one-seater's nose, tank and roll.
     pub fn put(&self, f: &mut [Fighter; MAX_FIGHTERS], v: &mut [Vehicle; MAX_VEHICLES]) {
         for (f, m) in f.iter_mut().zip(&self.men) {
             f.body = m.body;
@@ -132,6 +133,13 @@ impl Scene {
                 v.vel = h.vel;
                 v.yaw = h.yaw;
                 v.grounded = h.grounded;
+                v.pitch = h.pitch;
+                v.boost = h.boost;
+                v.rest = h.rest;
+                v.boosting = h.boosting;
+                v.trick = h.trick;
+                v.trick_cool = h.trick_cool;
+                v.jump = h.jump;
             }
         }
     }
@@ -150,22 +158,15 @@ impl Scene {
         }
     }
 
-    /// Each hull under the stick it is driven by (its live driver's `mx`,
-    /// `mz`, all of an input a hull reads); with none, parked.
+    /// Each hull under the stick it is driven by (its live driver's,
+    /// `vehicle::stick`: all of an input a hull reads); with none, parked.
     pub fn drive(&mut self, sticks: &Sticks, map: &Map) {
         for (h, st) in self.hulls.iter_mut().zip(sticks) {
             if !h.active {
                 continue;
             }
-            match *st {
-                Some((mx, mz)) => h.step_local(
-                    &Input {
-                        mx,
-                        mz,
-                        ..Input::default()
-                    },
-                    map,
-                ),
+            match st {
+                Some(st) => h.step_local(&crate::vehicle::stick(h.kind, st), map),
                 None => h.step_parked(map),
             }
         }
@@ -177,14 +178,19 @@ impl Scene {
     /// crash would deal ([`VEH_CRASH_SPEED`]) is returned: the damage is
     /// the caller's.
     pub fn crash(&mut self, map: &Map) -> Crashes {
-        let reach = 2.0 * VEH_HULL_R;
         let mut crash: Crashes = [(0, None); MAX_VEHICLES];
         for i in 0..MAX_VEHICLES {
             for j in i + 1..MAX_VEHICLES {
                 let (a, b) = (self.hulls[i], self.hulls[j]);
-                if !a.active || !b.active || crate::fmath::fabs(a.pos.y - b.pos.y) >= VEH_H {
+                if !a.active || !b.active {
                     continue;
                 }
+                let (sa, sb) = (a.spec(), b.spec());
+                // Clear over or under the other.
+                if a.pos.y - b.pos.y >= sb.h || b.pos.y - a.pos.y >= sa.h {
+                    continue;
+                }
+                let reach = sa.hull_r + sb.hull_r;
                 // The deepest of the circles' overlaps, and its way from a
                 // to b.
                 let mut deep: Option<(f32, V3)> = None;
@@ -301,24 +307,25 @@ impl Scene {
     /// hull and a wall) is left where it is, unhurt; a hull never gives way
     /// to a body, so its motion is its driver's alone.
     pub fn push_out(&mut self, map: &Map) {
-        let reach = VEH_HALF_L + VEH_HALF_W + BODY_R;
         for i in 0..MAX_VEHICLES {
             let v = self.hulls[i];
             if !v.active {
                 continue;
             }
+            let sp = v.spec();
+            let reach = sp.half_l + sp.half_w + BODY_R;
             let (s, c) = yaw_sincos(v.yaw);
             let hull = Solid {
                 shape: Shape::Turned {
                     x: v.pos.x,
                     z: v.pos.z,
-                    hx: VEH_HALF_L,
-                    hz: VEH_HALF_W,
+                    hx: sp.half_l,
+                    hz: sp.half_w,
                     c,
                     s,
                 },
                 y0: v.pos.y,
-                y1: v.pos.y + VEH_H,
+                y1: v.pos.y + sp.h,
             };
             let top = top(&v);
             for m in self.men.iter_mut() {

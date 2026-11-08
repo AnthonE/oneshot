@@ -335,6 +335,10 @@ pub fn heard_as(c: u16) -> Option<&'static Gun> {
     if c == sim::events::Cause::Minigun as u16 {
         return gun(arms::AR);
     }
+    // A one-seater's bolts sound as the ion pistol's plasma.
+    if c == sim::events::Cause::Bolts as u16 || c == sim::events::Cause::WingBolts as u16 {
+        return gun(arms::ION_PISTOL);
+    }
     (c < arms::COUNT as u16).then(|| gun(c as u8)).flatten()
 }
 

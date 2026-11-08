@@ -329,6 +329,17 @@ impl Gate {
                                 "tick {}: hull {i} not exact",
                                 w.tick
                             );
+                            // A one-seater's tank and roll's wait, its own.
+                            assert_eq!(
+                                (n.boost, n.rest, n.trick_cool, n.jump),
+                                if t.kind == sim::vehicle::TRUCK {
+                                    (0, 0, 0, false)
+                                } else {
+                                    (t.boost, t.rest, t.trick_cool, t.jump)
+                                },
+                                "tick {}: hull {i}'s tank",
+                                w.tick
+                            );
                             // The most a share moves in a snapshot: the
                             // shortest blend's step at this rate, rounded up.
                             let blend = (room::bubble::BLEND_MIN_MS as u32 * TICK_HZ / 1000 / self.every).max(1);
@@ -362,6 +373,26 @@ impl Gate {
                                 w.tick
                             );
                         }
+                        // 21. How it looks is the hull's own (a flier's
+                        // nose and roll, a one-seater's boost), and only a
+                        // one-seater's.
+                        let look = if t.kind == sim::vehicle::TRUCK {
+                            (sim::vehicle::TRUCK, 0, 0, false)
+                        } else {
+                            let flier = t.kind == sim::vehicle::FLIER;
+                            (
+                                t.kind,
+                                if flier { t.pitch } else { 0 },
+                                if flier { t.trick } else { 0 },
+                                t.boosting,
+                            )
+                        };
+                        assert_eq!(
+                            (v.kind, v.pitch, v.trick, v.boosting),
+                            look,
+                            "tick {}: hull {i}'s look",
+                            w.tick
+                        );
                         let ridden = t.seats.iter().any(|&x| x != 0 && known(x as usize - 1));
                         let seen = self.history.iter().zip(&self.vhistory).any(|(h, hv)| {
                             hv[i].active

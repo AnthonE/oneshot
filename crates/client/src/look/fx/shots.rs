@@ -86,9 +86,18 @@ fn v3(v: Vec3) -> V3 {
 pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     // A turret's round leaves its muzzle (the event's start), ours too: no
     // gun in view fires it. It lands as a rifle's.
-    let turret = e.c == sim::events::Cause::Minigun as u16;
+    // A pilot's guns are drawn as a turret's are, from the event's start
+    // (the gun's muzzle on the craft), in plasma's colours.
+    let pilot = e.c == sim::events::Cause::Bolts as u16 || e.c == sim::events::Cause::WingBolts as u16;
+    let turret = e.c == sim::events::Cause::Minigun as u16 || pilot;
     let arm = if turret { sim::arms::AR } else { e.c as u8 };
-    let look = if turret { table::MINIGUN } else { table::gun(arm) };
+    let look = if pilot {
+        table::BOLTS
+    } else if turret {
+        table::MINIGUN
+    } else {
+        table::gun(arm)
+    };
     let v = to - from;
     let len = v.length();
     if len < 0.05 {
@@ -128,8 +137,10 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
             (muzzle - dir * 0.3, from.y - EYE_OVER_FLOOR_M)
         };
         let out = dir.cross(Vec3::Y).normalize_or(Vec3::X);
-        eject(fx, &look, port, out, floor, 1.0);
-        if turret {
+        if !pilot {
+            eject(fx, &look, port, out, floor, 1.0);
+        }
+        if turret && !pilot {
             // Two a frame: it fires faster than frames come.
             eject(fx, &look, port - dir * 0.05, out, floor, 1.0);
         }

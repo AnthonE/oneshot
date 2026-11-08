@@ -60,7 +60,7 @@ use std::collections::BTreeMap;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
-use sim::consts::{PITCH_MAX, VEH_H};
+use sim::consts::PITCH_MAX;
 use sim::input::*;
 
 use crate::link::Link;
@@ -538,6 +538,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // A truck's wear (`look/truck.rs`).
     .add_plugins(look::truck::plugin)
     .add_plugins(look::turret::plugin)
+    .add_plugins(look::craft::plugin)
     .add_plugins(look::cloud_sea::plugin)
     .add_plugins(look::isle_stone::plugin)
     .add_plugins(look::pool::plugin)
@@ -948,9 +949,14 @@ fn pump(
     // A gun in each hand: ZOOM's button (Mouse 2, by default the left
     // hand's trigger too) is no scope.
     let now = link.0.now_ms();
-    let (dual, arm, driving, was) = {
-        let f = link.0.session().core.own().0;
+    let (dual, arm, driving, was, bomber) = {
+        let core = &link.0.session().core;
+        let f = core.own().0;
         let driving = f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER);
+        // A flier's pilot drops its bomb on the left hand's trigger.
+        let bomber = f.riding().is_some_and(|(i, s)| {
+            s == sim::vehicle::DRIVER && core.map.vehicles.get(i).is_some_and(|d| d.kind == sim::vehicle::FLIER)
+        });
         let was = ScopeWas {
             arm: f.gun().arm,
             cur: f.cur,
@@ -959,7 +965,13 @@ fn pump(
             meleeing: f.melee_cool > 0,
             throwing: f.gren_cool > 0,
         };
-        (f.dual(), sim::arms::arm(f.gun().arm), driving, f.alive.then_some(was))
+        (
+            f.dual(),
+            sim::arms::arm(f.gun().arm),
+            driving,
+            f.alive.then_some(was),
+            bomber,
+        )
     };
     // What takes the scope off (Halo 2's): any damage, a reload (a hot
     // gun's vent), a melee, a throw, another gun, dying; and there's none
@@ -1030,7 +1042,7 @@ fn pump(
     if look.zoom {
         buttons |= ZOOM;
     }
-    if dual && look.armed && held(binds::Action::FireLeft) {
+    if (dual || bomber) && look.armed && held(binds::Action::FireLeft) {
         buttons |= FIRE_LEFT;
     }
     let turn = core::f32::consts::TAU;
@@ -1387,7 +1399,7 @@ fn draw_fighters(
     hulls.clear();
     hulls.extend_from_slice(&seen.vehicles);
     // Our own seat, when a film draws us in it.
-    if let (true, Some((_, at, yaw)), Some((i, seat))) = (third, core.own_vehicle(), core.own().0.riding()) {
+    if let (true, Some((veh, at, yaw)), Some((i, seat))) = (third, core.own_vehicle(), core.own().0.riding()) {
         let mut seats = [0; 2];
         seats[seat.min(1)] = core.slot + 1;
         hulls.push(client_net::core::DrawnVehicle {
@@ -1395,6 +1407,7 @@ fn draw_fighters(
             pos: at,
             yaw,
             seats,
+            kind: veh.kind,
             ..client_net::core::DrawnVehicle::default()
         });
     }
@@ -1480,6 +1493,11 @@ fn draw_fighters(
             continue;
         }
         let seat = seats.get(d.slot as usize).copied().flatten();
+        // A flier's pilot is down under its canopy, unseen.
+        if seat.is_some_and(|(v, _)| v.kind == sim::vehicle::FLIER) {
+            let _ = show(&mut vis, e, false);
+            continue;
+        }
         // On a turret: the bed of a hull that carries one (the pose's truck
         // carries what the pose says).
         let gunning = seat.is_some_and(|(v, k)| {
@@ -1531,38 +1549,67 @@ struct FighterScratch {
 /// wheels on it (the sim's suspension is a few centimetres).
 const WHEELS_DOWN_M: f32 = 0.3;
 
+/// A one-seater's look as `draw_vehicles` stands it: its kind, a flier's
+/// nose and roll (radians), whether it boosts.
+type CraftLook = (u8, f32, f32, bool);
+
 /// The vehicles: ours as predicted, the rest interpolated; each a truck
-/// (`look/truck.rs`). The pose mode's stands where it was asked to.
+/// (`look/truck.rs`) or a one-seater (`look/craft.rs`). The pose mode's
+/// stands where it was asked to.
 #[allow(clippy::too_many_arguments)]
 fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    (models, turrets): (Res<look::guns::Models>, Res<look::turret::Kit>),
+    (models, turrets, kit): (Res<look::guns::Models>, Res<look::turret::Kit>, Res<look::craft::Kit>),
     posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
-    mut hulls: Query<&mut look::truck::Hull>,
+    (mut hulls, mut crafts): (Query<&mut look::truck::Hull>, Query<&mut look::craft::Craft>),
     mut vis: KeptVis,
     mut fx: ResMut<look::fx::Fx>,
     time: Res<Time>,
     mut walkers: ResMut<look::foliage::Walkers>,
     seen: Res<Seen>,
-    mut list: Local<Vec<(u8, Vec3, f32)>>,
+    mut list: Local<Vec<(u8, Vec3, f32, CraftLook)>>,
 ) {
     let core = &link.0.session().core;
     let seen = &seen.vehicles;
     list.clear();
-    list.extend(
-        seen.iter()
-            .map(|v| (v.slot, Vec3::new(v.pos.x, v.pos.y, v.pos.z), v.yaw)),
-    );
-    if let (Some((_, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
-        list.push((i as u8, Vec3::new(p.x, p.y, p.z), yaw));
+    list.extend(seen.iter().map(|v| {
+        (
+            v.slot,
+            Vec3::new(v.pos.x, v.pos.y, v.pos.z),
+            v.yaw,
+            (v.kind, v.pitch, v.roll, v.boosting),
+        )
+    }));
+    if let (Some((veh, p, yaw)), Some((i, _))) = (core.own_vehicle(), core.own().0.riding()) {
+        let (pitch, roll) = client_net::core::craft_look(&veh);
+        list.push((
+            i as u8,
+            Vec3::new(p.x, p.y, p.z),
+            yaw,
+            (veh.kind, pitch, roll, veh.boosting),
+        ));
     }
     if let Some((p, yaw)) = posed.as_ref().and_then(|p| p.2.truck_at(time.elapsed_secs())) {
-        list.push((0, p + Vec3::Y * core.map.ground(p.x, p.z), yaw));
+        list.push((
+            0,
+            p + Vec3::Y * core.map.ground(p.x, p.z),
+            yaw,
+            (sim::vehicle::TRUCK, 0.0, 0.0, false),
+        ));
     }
-    for &(slot, p, yaw) in list.iter() {
+    // The pose mode's one-seater, in the next slot.
+    if let Some((p, yaw, kind, pitch, roll, boost)) = posed.as_ref().and_then(|p| p.2.craft) {
+        list.push((
+            1,
+            p + Vec3::Y * core.map.ground(p.x, p.z),
+            yaw,
+            (kind, pitch, roll, boost),
+        ));
+    }
+    for &(slot, p, yaw, (kind, pitch, roll, boosting)) in list.iter() {
         if let Some(&e) = drawn.vehicles.get(&slot) {
             let _ = show(&mut vis, e, true);
         }
@@ -1575,13 +1622,33 @@ fn draw_vehicles(
             Some((veh, ..)) => veh.seats[sim::vehicle::DRIVER] != 0,
             None => sent.is_some_and(|v| v.seats[sim::vehicle::DRIVER] != 0),
         };
+        let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
+        if kind != sim::vehicle::TRUCK {
+            // A one-seater: no wheels on the grass, its nose and roll its
+            // own (`look/craft.rs`).
+            match drawn.vehicles.get(&slot) {
+                Some(&e) => {
+                    if let Ok(mut tr) = at.get_mut(e) {
+                        tr.set_if_neq(t);
+                    }
+                    if let Ok(mut c) = crafts.get_mut(e) {
+                        (c.yaw, c.pitch, c.roll, c.boosting) = (yaw, pitch, roll, boosting);
+                    }
+                }
+                None => {
+                    let e = commands.spawn((t, Visibility::default(), Kept)).id();
+                    look::craft::spawn(&mut commands, &kit, e, kind);
+                    drawn.vehicles.insert(slot, e);
+                }
+            }
+            continue;
+        }
         // Only a live hull on its wheels presses the grass: not one in the
         // air over a crest, nor a wreck.
         if health > 0 && p.y - core.map.ground(p.x, p.z) < WHEELS_DOWN_M {
             walkers.hull(p, yaw, &look::truck::WHEELS);
         }
         look::fx::hulls::roll(&mut fx, slot, p, yaw, health, time.delta_secs());
-        let t = Transform::from_translation(p).with_rotation(Quat::from_rotation_y(-yaw));
         match drawn.vehicles.get(&slot) {
             Some(&e) => {
                 // A parked hull stays put: its wheels and body don't go
@@ -1624,6 +1691,15 @@ const DEATH_CAM_M: f32 = 3.4;
 const DEATH_CAM_DOWN: f32 = 0.42;
 const DEATH_CAM_POP_S: f32 = 0.55;
 const DEATH_CAM_PAD_M: f32 = 0.35;
+/// The chase camera at a one-seater's controls: how far back from its
+/// pilot's eye and how far over, metres (a flier's farther, for its
+/// span), and how far down the line of fire it looks, so the crosshair is
+/// where the bolts go there.
+const FLY_CAM_BACK_M: f32 = 9.0;
+const FLY_CAM_UP_M: f32 = 2.4;
+const SKIM_CAM_BACK_M: f32 = 5.5;
+const SKIM_CAM_UP_M: f32 = 1.6;
+const CRAFT_CAM_MEET_M: f32 = 45.0;
 /// The death cam follows the body this fast, 1/s.
 const DEATH_CAM_FOLLOW: f32 = 14.0;
 
@@ -1689,9 +1765,29 @@ pub(crate) fn view(
             rotation: from.rotation.slerp(out.rotation, u),
             ..*t
         };
+    } else if let Some((v, ..)) = core
+        .own_vehicle()
+        .filter(|(v, ..)| v.kind != sim::vehicle::TRUCK && f.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER))
+    {
+        // At a one-seater's controls: behind and over its pilot's eye, out
+        // of the ground and the walls, looking down the pilot's line of
+        // fire to where the crosshair meets it.
+        let (back, up) = if v.kind == sim::vehicle::FLIER {
+            (FLY_CAM_BACK_M, FLY_CAM_UP_M)
+        } else {
+            (SKIM_CAM_BACK_M, SKIM_CAM_UP_M)
+        };
+        let eye = at + Vec3::Y * f.body.eye_h();
+        let aim = dir(look.yaw, look.pitch);
+        let off = Vec3::Y * up - aim * back;
+        let (len, way) = (off.length(), off.normalize_or(Vec3::Y));
+        let v3 = |a: Vec3| sim::geom::V3::new(a.x, a.y, a.z);
+        let room = core.map.ray(v3(eye), v3(way), len);
+        let cam = eye + way * (room - DEATH_CAM_PAD_M).max(0.5);
+        *t = Transform::from_translation(cam).looking_at(eye + aim * CRAFT_CAM_MEET_M, Vec3::Y);
     } else if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
-        let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (VEH_H + 2.2);
-        *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * VEH_H, Vec3::Y);
+        let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (sim::consts::VEH_H + 2.2);
+        *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * sim::consts::VEH_H, Vec3::Y);
     } else {
         // The sim's eye: a crouch already goes down over a moment there
         // (`sim::movement::Body::duck`), and a tuck in the air keeps it.

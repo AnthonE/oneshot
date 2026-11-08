@@ -1022,6 +1022,29 @@ pub const MINIGUN: GunLook = GunLook {
     ..RIFLE
 };
 
+/// A one-seater's guns (`sim::arms::BOLTS`, `WING_BOLTS`): plasma bolts,
+/// each its own short fat streak, slower than a rifle's tracer so it reads
+/// as a bolt that flies, cyan-white in a blue glow; an energy flash at the
+/// gun and no casing.
+pub const BOLTS: GunLook = GunLook {
+    flash: Flash::Energy(sheets::TONE_PLASMA),
+    casing: Casing::None,
+    core: [6.0, 11.0, 14.0],
+    edge: [0.6, 2.4, 6.0],
+    every: 1,
+    mps: 260.0,
+    len_m: 2.2,
+    drain: 0.0,
+    life_s: 0.5,
+    width: 0.05,
+    px: 9.0,
+    dash: false,
+    flash_c: [2.0, 5.0, 14.0, 1.0],
+    flash_scale: 0.9,
+    light_lm: 110_000.0,
+    ..RIFLE
+};
+
 pub fn gun(arm: u8) -> GunLook {
     // Blue-white, the precision rifles' and the SMG's; the sniper's a hot red.
     let blue = ([7.5, 9.0, 11.0], [0.9, 1.8, 4.2]);

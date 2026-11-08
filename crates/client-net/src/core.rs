@@ -154,7 +154,7 @@ pub fn step_bubble(
     near: &mut Near,
     phase: Phase,
     inp: &Input,
-    stick: Option<(i8, i8)>,
+    stick: Option<Input>,
     spare_mates: bool,
     map: &Map,
 ) -> sim::fighter::Local {
@@ -174,7 +174,7 @@ fn step_bubble_by(
     near: &mut Near,
     phase: Phase,
     inp: &Input,
-    stick: Option<(i8, i8)>,
+    stick: Option<Input>,
     spare_mates: bool,
     map: &Map,
     own_step: impl FnOnce(&mut Fighter) -> sim::fighter::Local,
@@ -194,7 +194,7 @@ fn step_bubble_by(
         (Some((i, seat)), Some(h)) => {
             sc.hulls[i] = h;
             sticks[i] = if seat == DRIVER {
-                f.active().then_some((inp.mx, inp.mz))
+                f.active().then_some(sim::vehicle::stick(h.kind, inp))
             } else {
                 stick
             };
@@ -234,7 +234,7 @@ pub fn step_own(
     v: &mut Option<Vehicle>,
     phase: Phase,
     inp: &Input,
-    stick: Option<(i8, i8)>,
+    stick: Option<Input>,
     map: &Map,
 ) -> sim::fighter::Local {
     let mut sc = Scene::default();
@@ -243,7 +243,7 @@ pub fn step_own(
         (Some((i, seat)), Some(h)) => {
             sc.hulls[i] = h;
             sticks[i] = if seat == DRIVER {
-                f.active().then_some((inp.mx, inp.mz))
+                f.active().then_some(sim::vehicle::stick(h.kind, inp))
             } else {
                 stick
             };
@@ -563,6 +563,31 @@ pub struct DrawnVehicle {
     pub yaw: f32,
     pub health: u8,
     pub seats: [u8; 2],
+    /// What it is (`sim::vehicle::KINDS`); a flier's nose up and how far
+    /// round its roll has gone (radians, signed the way it goes); whether a
+    /// one-seater boosts.
+    pub kind: u8,
+    pub pitch: f32,
+    pub roll: f32,
+    pub boosting: bool,
+}
+
+/// A flier's roll as drawn, radians: `trick` (`Vehicle::trick`, ticks left,
+/// signed) as how far round it has gone.
+pub fn roll_of(trick: f32) -> f32 {
+    let n = sim::consts::ticks(sim::consts::FLY_ROLL_MS) as f32;
+    if trick == 0.0 {
+        return 0.0;
+    }
+    let done = 1.0 - (trick.abs() / n).min(1.0);
+    // Eased in and out: it snaps over and settles.
+    let u = done * done * (3.0 - 2.0 * done);
+    u * core::f32::consts::TAU * trick.signum()
+}
+
+/// A one-seater's drawn look from its sim state.
+pub fn craft_look(v: &Vehicle) -> (f32, f32) {
+    (pitch_rad(v.pitch), roll_of(v.trick as f32))
 }
 
 /// A remote fighter as drawn this frame.
@@ -624,7 +649,7 @@ pub struct NetCore {
     pred_v: Option<Vehicle>,
     /// Riding behind someone, its driver's stick as the newest snapshot
     /// said: what the hull is predicted on until the next says otherwise.
-    stick: Option<(i8, i8)>,
+    stick: Option<Input>,
     /// The hulls in our bubble, as predicted to the newest seq; and after
     /// each seq, which were in and where (drawn from, between our past and
     /// our present, by their shares).
@@ -1709,11 +1734,19 @@ impl NetCore {
                     vel: v.vel,
                     yaw: v.yaw,
                     grounded: n.grounded,
-                    health: sim::consts::VEH_HEALTH,
+                    health: sim::vehicle::spec(def.kind).health,
                     seats: v.seats,
                     respawn: 0,
                     home: v.slot,
                     turret: def.turret,
+                    kind: def.kind,
+                    pitch: v.pitch,
+                    boost: n.boost,
+                    rest: n.rest,
+                    boosting: v.boosting,
+                    trick: v.trick,
+                    trick_cool: n.trick_cool,
+                    jump: n.jump,
                 };
                 near.sticks[i] = n.stick;
                 for (seat, &x) in v.seats.iter().enumerate() {
@@ -2131,6 +2164,10 @@ impl NetCore {
                 yaw: lerp_angle(yaw_rad(a.yaw), yaw_rad(b.yaw), u),
                 health: vn.health,
                 seats: vn.seats,
+                kind: vn.kind,
+                pitch: pitch_rad(a.pitch) + (pitch_rad(b.pitch) - pitch_rad(a.pitch)) * u,
+                roll: roll_of(a.trick as f32 + (b.trick - a.trick) as f32 * u),
+                boosting: b.boosting,
             }
         };
         d.pos = d.pos + self.moff[i];
@@ -2528,6 +2565,10 @@ fn vehicle_between(va: &VehState, a_tick: u32, b: Option<&Frame>, rt: f64) -> Dr
         yaw: yaw_rad(va.yaw),
         health: va.health,
         seats: va.seats,
+        kind: va.kind,
+        pitch: pitch_rad(va.pitch),
+        roll: roll_of(va.trick as f32),
+        boosting: va.boosting,
     };
     let vb = b.and_then(|b| b.vehicles[..b.nv as usize].iter().find(|v| v.slot == va.slot));
     match (b, vb) {
@@ -2535,6 +2576,11 @@ fn vehicle_between(va: &VehState, a_tick: u32, b: Option<&Frame>, rt: f64) -> Dr
             let u = ((rt - a_tick as f64) / (b.tick - a_tick) as f64).clamp(0.0, 1.0) as f32;
             d.pos = va.pos + (vb.pos - va.pos) * u;
             d.yaw = lerp_angle(d.yaw, yaw_rad(vb.yaw), u);
+            d.pitch += (pitch_rad(vb.pitch) - d.pitch) * u;
+            // A roll's ticks between, while it is the same roll.
+            if va.trick.signum() == vb.trick.signum() {
+                d.roll = roll_of(va.trick as f32 + (vb.trick - va.trick) as f32 * u);
+            }
         }
         _ => d.pos = va.pos + va.vel * (ahead(rt, a_tick) / TICK_HZ as f32),
     }

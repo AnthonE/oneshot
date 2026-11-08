@@ -650,12 +650,52 @@ pub static MINIGUN: Arm = Arm {
     ..BASE
 };
 
+/// The skimmer's twin bolt guns, its pilot's (`vehicle::BOLTS`): Halo 2's
+/// light craft's plasma, fired left and right by turns as long as the
+/// trigger is held, cold while it boosts. About two seconds on target kill
+/// a fighter; they barely mark armour.
+pub static BOLTS: Arm = Arm {
+    name: "BOLT GUNS",
+    magnet: deg(0.4),
+    aim_range: 40.0,
+    auto: true,
+    refire_ms: 95,
+    mag: 1,
+    dmg: 10,
+    spread: q14(30.0),
+    range: 110.0,
+    falloff: 40.0,
+    falloff_min: 0.5,
+    hull_k: 0.6,
+    ..BASE
+};
+
+/// The flier's wing guns, its pilot's (`vehicle::WING_BOLTS`): the
+/// skimmer's, a little harder and a little slower.
+pub static WING_BOLTS: Arm = Arm {
+    name: "WING GUNS",
+    magnet: deg(0.4),
+    aim_range: 45.0,
+    auto: true,
+    refire_ms: 105,
+    mag: 1,
+    dmg: 12,
+    spread: q14(35.0),
+    range: 120.0,
+    falloff: 45.0,
+    falloff_min: 0.5,
+    hull_k: 0.6,
+    ..BASE
+};
+
 /// What fired a round, by the id its shot carries (`Event::c`): a gun's arm
 /// id, or a turret's cause.
 pub fn fired(c: u16) -> Option<&'static Arm> {
     match c {
         c if (1..COUNT as u16).contains(&c) => Some(&ARMS[c as usize]),
         c if c == crate::events::Cause::Minigun as u16 => Some(&MINIGUN),
+        c if c == crate::events::Cause::Bolts as u16 => Some(&BOLTS),
+        c if c == crate::events::Cause::WingBolts as u16 => Some(&WING_BOLTS),
         _ => None,
     }
 }

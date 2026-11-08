@@ -246,14 +246,20 @@ fn snapshot() -> Snapshot {
         respawn: 0,
         home: 2,
         turret: sim::vehicle::MINIGUN,
+        ..sim::vehicle::Vehicle::default()
     });
-    s.drive = Some((-40, 127));
+    s.drive = Some(sim::input::Input {
+        mx: -40,
+        mz: 127,
+        ..sim::input::Input::default()
+    });
     // Gunning its minigun.
     s.own.mount = sim::fighter::Mount {
         spin: 45,
         heat: 3000,
         refire: 4,
         vent: false,
+        bomb: 0,
     };
     s.n_vehicles = 3;
     s.vehicles[0] = VehState {
@@ -264,6 +270,7 @@ fn snapshot() -> Snapshot {
         health: 128,
         seats: [2, 0],
         near: None,
+        ..VehState::default()
     };
     // In our bubble: one driven (exact, its stick), one parked on a slope.
     s.vehicles[1] = VehState {
@@ -275,10 +282,18 @@ fn snapshot() -> Snapshot {
         seats: [5, 0],
         near: Some(NearHull {
             grounded: true,
-            stick: Some((-127, 64)),
+            stick: Some(sim::input::Input {
+                mx: -127,
+                mz: 64,
+                ..sim::input::Input::default()
+            }),
             share: 255,
+            ..NearHull::default()
         }),
+        ..VehState::default()
     };
+    // A flier in the air, rolling left on its boost, its pilot's aim and
+    // buttons its stick.
     s.vehicles[2] = VehState {
         slot: 7,
         pos: V3::new(3.0, -2.0, 1.0),
@@ -288,9 +303,23 @@ fn snapshot() -> Snapshot {
         seats: [0, 0],
         near: Some(NearHull {
             grounded: false,
-            stick: None,
+            stick: Some(sim::input::Input {
+                mx: -127,
+                mz: 127,
+                yaw: 51_000,
+                pitch: -9_000,
+                buttons: sim::input::CROUCH | sim::input::JUMP,
+            }),
             share: 0,
+            boost: 300,
+            rest: 0,
+            trick_cool: 310,
+            jump: true,
         }),
+        kind: sim::vehicle::FLIER,
+        pitch: -9_000,
+        trick: -80,
+        boosting: true,
     };
     // A rocket launcher on the floor, and someone's grenades.
     s.n_drops = 2;
@@ -586,9 +615,10 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     assert_eq!(d.minions(), s.minions());
     assert_eq!(datagram_kind(&buf[..n]), Some(DG_SNAPSHOT));
     // Sixteen seats, every projectile and pad, riding behind a driver,
-    // hulls and a body in our bubble: fits with room for about eight
-    // events. (room::build drops events past the datagram, so a full
-    // snapshot of everything is never sent.)
+    // hulls (a flier among them, its pilot's aim its stick) and a body in
+    // our bubble: fits with room for about seven events. (room::build
+    // drops events past the datagram, so a full snapshot of everything is
+    // never sent.)
     let full = Snapshot {
         n_remote: MAX_REMOTES as u8,
         n_proj: MAX_SNAP_PROJ as u8,
@@ -604,7 +634,7 @@ fn snapshots_round_trip_and_the_own_fighter_is_exact() {
     };
     let mut big = [0u8; 4 * MAX_DATAGRAM];
     let n = encode_snapshot(&full, &mut big).unwrap();
-    assert!(n + 160 <= MAX_DATAGRAM, "{n} bytes before events");
+    assert!(n + 140 <= MAX_DATAGRAM, "{n} bytes before events");
     // Siege's nodes and minions in their place, on its map: Dry Fork's
     // four vehicles.
     let siege = Snapshot {
@@ -659,7 +689,11 @@ fn delta_base() -> Snapshot {
     base.clock -= 1;
     base.own.body.pos.x -= 0.25;
     // Its driver steered the other way then.
-    base.drive = Some((40, 127));
+    base.drive = Some(sim::input::Input {
+        mx: 40,
+        mz: 127,
+        ..sim::input::Input::default()
+    });
     // A third remote, gone since; the one in our bubble then a little back
     // and further in; the driven hull on another stick.
     base.n_remote = 3;
@@ -678,7 +712,11 @@ fn delta_base() -> Snapshot {
         ..base.remotes[0]
     };
     base.vehicles[1].near = Some(NearHull {
-        stick: Some((0, 127)),
+        stick: Some(sim::input::Input {
+            mx: 0,
+            mz: 127,
+            ..sim::input::Input::default()
+        }),
         ..base.vehicles[1].near.unwrap()
     });
     base
@@ -731,13 +769,13 @@ fn the_bytes_match_their_goldens() {
     got.push(fnv(&buf[..n]));
     let want: &[u64] = &[
         0x58ae_4fe0_5062_683d,
-        0x7cff_3afa_f9af_f8b0,
-        0x40ff_d7e1_2d3f_92ca,
-        0xa090_4a41_6853_317e,
+        0xde93_6c5e_2cfd_4552,
+        0xc467_aea5_eb4e_211b,
+        0xdf84_084e_5c3a_cdbd,
         0x7ebe_34b8_2c10_f2d0,
         0xec88_5efc_d9ac_e183,
         0x0f4a_a0e7_f967_a718,
-        0x00b5_5d3b_fb1c_738d,
+        0x1e8c_b203_73aa_0ed2,
         0x0835_ec07_b4ee_4fb0,
         0x27e4_471c_ac0a_7864,
         0x0294_d707_7d31_6639,
@@ -762,7 +800,7 @@ fn the_bytes_match_their_goldens() {
         0x451f_c0f0_80a6_2b96,
         0xaf63_d44c_8601_def4,
         0x8ec0_53de_d767_8611,
-        0x413c_2cd0_6e51_b95c,
+        0x84df_dffe_8042_6f39,
     ];
     assert_eq!(got, want, "PROTO_VER {PROTO_VER}: got {got:#018x?}");
 }
@@ -797,7 +835,13 @@ fn an_impossible_bubble_member_is_refused() {
     for bad in [
         |s: &mut Snapshot| s.remotes[1].near.as_mut().unwrap().duck = sim::consts::CROUCH_TICKS + 1,
         |s: &mut Snapshot| s.remotes[1].near.as_mut().unwrap().mx = i8::MIN,
-        |s: &mut Snapshot| s.vehicles[1].near.as_mut().unwrap().stick = Some((0, i8::MIN)),
+        |s: &mut Snapshot| {
+            s.vehicles[1].near.as_mut().unwrap().stick = Some(sim::input::Input {
+                mx: 0,
+                mz: i8::MIN,
+                ..sim::input::Input::default()
+            })
+        },
     ] {
         let mut s = base;
         bad(&mut s);
@@ -807,4 +851,36 @@ fn an_impossible_bubble_member_is_refused() {
     assert!(exact_fits(V3::new(8191.0, 0.0, -8191.0), V3::new(511.0, 0.0, 0.0)));
     assert!(!exact_fits(V3::new(8192.0, 0.0, 0.0), V3::ZERO));
     assert!(!exact_fits(V3::ZERO, V3::new(0.0, -512.0, 0.0)));
+}
+
+#[test]
+fn a_flown_one_seater_and_its_pilots_bomb_come_back_exactly() {
+    let mut s = snapshot();
+    s.own.ride = 1;
+    s.own.mount.bomb = 200;
+    s.own_vehicle = Some(sim::vehicle::Vehicle {
+        active: true,
+        pos: V3::new(12.0, 31.5, -7.25),
+        vel: V3::new(18.0, 4.5, -0.75),
+        yaw: 60_000,
+        health: 90_000,
+        seats: [1, 0],
+        home: 6,
+        kind: sim::vehicle::FLIER,
+        pitch: -7_000,
+        boost: 120,
+        rest: 64,
+        boosting: false,
+        trick: -31,
+        trick_cool: 250,
+        jump: true,
+        ..sim::vehicle::Vehicle::default()
+    });
+    s.drive = None;
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let n = encode_snapshot(&s, &mut buf).unwrap();
+    let d = decode_snapshot(&buf[..n]).unwrap();
+    assert_eq!(d.own_vehicle, s.own_vehicle);
+    assert_eq!(d.own.mount, s.own.mount);
+    assert_eq!(d.vehicles(), s.vehicles(), "and the flier seen in the bubble");
 }

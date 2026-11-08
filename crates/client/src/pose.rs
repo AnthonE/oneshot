@@ -28,7 +28,10 @@
 //! red's flag on its stand there (`flags.rs`, its cloth blowing on the
 //! map's wind); `flagheld=1` puts it over the fighter's shoulder instead,
 //! as a carrier holds it, and `flagheld=2` across the camera's view, as a
-//! carrier sees it.
+//! carrier sees it. `craft=x,y,z` stands a one-seater there (`look/craft.rs`),
+//! `y` over the ground, `craftkind=1` a skimmer or `2` a flier, turned by
+//! `craftyaw=`, its nose up `craftpitch=` and rolled `craftroll=` (radians),
+//! `craftboost=1` boosting.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -81,6 +84,9 @@ pub struct View {
     pub wrecked: bool,
     /// A ball of plasma at `look`: its tone, heat and radius.
     pub orb: Option<(u8, f32, f32)>,
+    /// A one-seater for the picture: where it stands (over the ground), its
+    /// yaw, its kind, its nose and roll (radians), whether it boosts.
+    pub craft: Option<(Vec3, f32, u8, f32, f32, bool)>,
 }
 
 /// A ball of plasma for the picture (`look/fx/plasma.rs`), standing at `look`:
@@ -188,6 +194,16 @@ impl Pose {
             orb: Some(get("orb", 0.0))
                 .filter(|o| *o >= 1.0)
                 .map(|o| (o as u8 - 1, get("heat", 0.3), get("orbr", 0.15))),
+            craft: vec("craft").map(|at| {
+                (
+                    at,
+                    get("craftyaw", 0.0),
+                    (get("craftkind", 1.0) as u8).clamp(sim::vehicle::SKIMMER, sim::vehicle::FLIER),
+                    get("craftpitch", 0.0),
+                    get("craftroll", 0.0),
+                    get("craftboost", 0.0) != 0.0,
+                )
+            }),
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {

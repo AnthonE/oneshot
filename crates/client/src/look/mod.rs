@@ -13,6 +13,7 @@ pub mod cloud_sea;
 pub mod cloud_shadow;
 pub mod clutter;
 pub mod counter;
+pub mod craft;
 pub mod curve;
 pub mod deck;
 pub mod emblem;

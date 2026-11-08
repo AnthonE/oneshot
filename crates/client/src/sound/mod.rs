@@ -136,6 +136,11 @@ const BLAST: Carry = Carry {
 const STEP: Carry = Carry { near: 4.0, reach: 28.0 };
 const BODY: Carry = Carry { near: 4.0, reach: 22.0 };
 const SHIELD: Carry = Carry { near: 6.0, reach: 40.0 };
+/// The one-seaters' engines over a truck's (`whine`): the skimmer's, the
+/// flier's, and either boosting.
+const SKIM_WHINE: f32 = 1.7;
+const FLY_WHINE: f32 = 1.35;
+const BOOST_WHINE: f32 = 1.25;
 const ENGINE: Carry = Carry {
     near: 10.0,
     reach: 90.0,
@@ -869,12 +874,16 @@ pub fn decide(
     let own_src = own_vehicle
         .filter(|(veh, _, _)| veh.seats[sim::vehicle::DRIVER] != 0)
         .map(|(veh, p, _)| {
-            let speed = (veh.vel.x * veh.vel.x + veh.vel.z * veh.vel.z).sqrt();
+            let speed = if veh.kind == sim::vehicle::FLIER {
+                v(veh.vel).length()
+            } else {
+                (veh.vel.x * veh.vel.x + veh.vel.z * veh.vel.z).sqrt()
+            };
             (
                 v(p) + Vec3::Y * 0.6,
                 Vec3::ZERO,
                 0.5 + speed / 40.0,
-                0.75 + speed / 22.0,
+                (0.75 + speed / 22.0) * whine(veh.kind, veh.boosting),
                 ENGINE,
             )
         });
@@ -899,8 +908,13 @@ pub fn decide(
         h.pos = p;
         let vel = h.vel;
         let driven = hv.seats[sim::vehicle::DRIVER] != 0 && hv.health > 0;
-        let speed = Vec3::new(vel.x, 0.0, vel.z).length();
-        let src = driven.then_some((p + Vec3::Y * 0.6, vel, 0.5 + speed / 40.0, 0.75 + speed / 22.0, ENGINE));
+        let speed = if hv.kind == sim::vehicle::FLIER {
+            vel.length()
+        } else {
+            Vec3::new(vel.x, 0.0, vel.z).length()
+        };
+        let rate = (0.75 + speed / 22.0) * whine(hv.kind, hv.boosting);
+        let src = driven.then_some((p + Vec3::Y * 0.6, vel, 0.5 + speed / 40.0, rate, ENGINE));
         let mut on = ear.hulls[i].on;
         ear.hold(Some(&ears), SLOT_ENGINE + i as u8, &mut on, "engine_0", src);
         ear.hulls[i].on = on;
@@ -938,6 +952,21 @@ const FIRE: Carry = Carry { near: 4.0, reach: 45.0 };
 
 /// The trucks' own (`look/truck.rs`): a landing's slam, a crash, a husk
 /// striking the ground; the nearest tyres skidding and fire burning, held.
+/// How much higher a hull's engine runs than a truck's: the one-seaters'
+/// turbines whine (the skimmer's highest), higher still boosting.
+fn whine(kind: u8, boosting: bool) -> f32 {
+    let k = match kind {
+        sim::vehicle::SKIMMER => SKIM_WHINE,
+        sim::vehicle::FLIER => FLY_WHINE,
+        _ => 1.0,
+    };
+    if boosting {
+        k * BOOST_WHINE
+    } else {
+        k
+    }
+}
+
 fn hull_sounds(ear: &mut Ear, ears: &Ears, trucks: &mut crate::look::truck::HullSound) {
     use crate::look::truck::Clunk;
     for (what, at, k) in trucks.hits.drain(..) {
