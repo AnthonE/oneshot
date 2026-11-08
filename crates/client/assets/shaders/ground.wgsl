@@ -539,6 +539,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     c *= mix(1.0, in.uv_b.x, SKIN_VALUE);
 #endif
 
+    // An island under snow (`layers.y` over 4.5): snow lying on its rock's
+    // ledges, where a facet turns up, in patches.
+    if ground.layers.y > 4.5 {
+        let up = wn.y + rock_tilt.y;
+        let lie = smoothstep(0.12, 0.32, up) * smoothstep(0.3, 0.7, value3(wp / 3.0));
+        c = mix(c, a0.rgb * ground.tint[0].rgb, w.w * lie * 0.85);
+    }
+
     // The swash: from under the water to `sea.y` above it the ground is
     // wet, darker and glossy, dry again `sea.z` higher, the line wandering
     // a little so it is not a contour. Only the band pays for its noise.
