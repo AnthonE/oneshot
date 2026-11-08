@@ -47,8 +47,16 @@ pub const MAX_FAVOUR_MS: u32 = 160;
 /// The playout a client may claim, in ticks.
 pub const PLAYOUT_MIN: u32 = 2;
 pub const PLAYOUT_MAX: u32 = 12;
+/// What an honest client's favour may add over its link's round trip: its
+/// send interval, a tick's processing, a little jitter. The ack and the
+/// playout a client sends are its own words; the link's round trip is
+/// measured by the transport, so the favour they ask for is held to what
+/// the link could justify ([`ClientNet::set_link`]).
+pub const FAVOUR_SLACK_MS: u32 = 40;
 /// Snapshots go out every this many ticks.
 pub const SNAP_EVERY: u32 = 2;
+/// Departed players' aim numbers kept for the review ([`Room::departed`]).
+pub const MAX_DEPARTED: usize = 64;
 /// Snapshot send times kept, for RTT: 4 s of ticks, so a high ping's acks
 /// still find theirs.
 const SENT: usize = 512;
@@ -118,6 +126,9 @@ pub struct ClientNet {
     ran: View,
     sent: [(u32, f64); SENT],
     pub rtt_ms: f64,
+    /// The most favour (ticks) the link justifies, from its measured round
+    /// trip ([`ClientNet::set_link`]); None until the transport says.
+    favour_cap: Option<u32>,
     /// Frames that came after their tick had run, and ticks run on a
     /// repeat ([`lost_frame`]) because a frame hadn't come.
     pub late: u32,
@@ -223,6 +234,7 @@ impl Default for ClientNet {
             ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
             rtt_ms: 0.0,
+            favour_cap: None,
             late: 0,
             repeats: 0,
             low: None,
@@ -306,7 +318,7 @@ impl ClientNet {
         if let Some(n) = self.newest_seq {
             let depth = n.wrapping_sub(cursor);
             if depth < 0x8000_0000 && depth > MAX_DEPTH {
-                cursor = n - MAX_DEPTH;
+                cursor = n.wrapping_sub(MAX_DEPTH);
             }
         }
         let slot = &mut self.frames[cursor as usize % BUF];
@@ -375,7 +387,19 @@ impl ClientNet {
         };
         let age = tick.saturating_sub(acked);
         let play = (self.ran.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
-        (age + play).min(ticks(MAX_FAVOUR_MS)) << 8
+        let favour = (age + play).min(ticks(MAX_FAVOUR_MS));
+        // A client that acks late or names a long playout asks for more
+        // than its link could need: it gets what the link justifies.
+        self.favour_cap.map_or(favour, |cap| favour.min(cap)) << 8
+    }
+
+    /// The transport's measured round trip to this client, with snapshots
+    /// `snap_every` ticks apart: bounds the favour its acks and playout
+    /// may ask for to that trip, [`FAVOUR_SLACK_MS`], and two snapshots'
+    /// interpolation.
+    pub fn set_link(&mut self, rtt_ms: f32, snap_every: u32) {
+        let rtt = rtt_ms.clamp(0.0, MAX_FAVOUR_MS as f32) as u32;
+        self.favour_cap = Some(ticks(rtt + FAVOUR_SLACK_MS) + 2 * snap_every.max(1));
     }
 }
 
@@ -699,7 +723,7 @@ impl Room {
         let skill = if self.world.rules.siege {
             sim::consts::SIEGE_BOT_SKILL
         } else {
-            0.5
+            sim::consts::BOT_SKILL
         };
         self.seats[s] = Seat::Bot(Bot::new(self.seed, s, skill));
         self.looks[s] = proto::Look::default();
@@ -798,7 +822,12 @@ impl Room {
     pub fn leave(&mut self, s: u8) -> Outbox {
         if let Seat::Person(c, name) = &self.seats[s as usize] {
             self.dropped_gone += c.queue.dropped as u64;
-            // Their aim's numbers stay for the review, under their name.
+            // Their aim's numbers stay for the review, under their name;
+            // a long casual room keeps the newest [`MAX_DEPARTED`], so a
+            // join-and-leave loop can't grow it.
+            if self.departed.len() >= MAX_DEPARTED {
+                self.departed.remove(0);
+            }
             self.departed.push((s, *name, self.watch.stats[s as usize].clone()));
         }
         if self.ranked {
@@ -853,6 +882,14 @@ impl Room {
                 Seat::Person(c, _) => !c.loaded && tick.wrapping_sub(c.joined) < ticks(LOAD_WAIT_MS),
                 _ => false,
             })
+    }
+
+    /// The transport's round trip to seat `s` ([`ClientNet::set_link`]).
+    pub fn set_link(&mut self, s: u8, rtt_ms: f32) {
+        let every = self.snap_every;
+        if let Some(c) = self.client(s) {
+            c.set_link(rtt_ms, every);
+        }
     }
 
     /// An input datagram from seat `s`.
@@ -1075,6 +1112,7 @@ fn seat_snapshot(
         &mut c.queue,
         |q| f.shows(q, tick),
         |i| f.shows_vehicle(i, tick),
+        |i| f.shows_drop(i, tick),
         rated.then_some((&mut c.since, &mut c.updates)),
         bubble.map(|(live, foot)| {
             c.bubble.foot_max = if foot { bubble::MAX_NEAR_FOOT } else { 0 };
@@ -1103,8 +1141,9 @@ fn seat_snapshot(
 /// The snapshot seat `s` is sent: its own fighter exactly, the others it
 /// may see coarsely. `(last_seq, depth)` are the client's last input seq
 /// run and the low point of its input buffer (`ClientNet::take_low`);
-/// `visible(q)` and `vehicle_visible(i)` are fog of war's to answer;
-/// everything else here is what any client may know.
+/// `visible(q)`, `vehicle_visible(i)` and `drop_visible(i)` are fog of
+/// war's to answer; everything else here is what any client may know.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     w: &World,
     s: usize,
@@ -1113,6 +1152,7 @@ pub fn build(
     queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
+    drop_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
     let mut wire = [0u8; MAX_DATAGRAM];
     build_encoded(
@@ -1123,6 +1163,7 @@ pub fn build(
         queue,
         visible,
         vehicle_visible,
+        drop_visible,
         None,
         None,
         &mut wire,
@@ -1141,6 +1182,7 @@ fn build_encoded(
     queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
+    drop_visible: impl Fn(usize) -> bool,
     mut rates: Option<Rates>,
     mut near: Option<(&mut bubble::Bubble, f64, u32, bool)>,
     wire: &mut [u8; MAX_DATAGRAM],
@@ -1187,7 +1229,7 @@ fn build_encoded(
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, s, eye, &known, &vehicle_visible),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible, members),
-            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
+            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye, &drop_visible),
             sim::thing::Kind::Flag => add_flags(&mut snap, w),
             sim::thing::Kind::Node => add_nodes(&mut snap, w),
             sim::thing::Kind::Minion => add_minions(&mut snap, w, s, eye),
@@ -1443,22 +1485,18 @@ fn vehicle_shown(
     mine || v.seats.iter().any(|&x| x != 0 && known(x as usize - 1)) || visible(i)
 }
 
-/// How far a gun on the floor is named to a client that sees it.
-pub const SEE_DROP_M: f32 = 50.0;
-/// A drop is seen if a line from the eye clears the map to this far over
-/// where it lies.
-pub const DROP_LOOK_Y: f32 = 0.3;
+pub use fog::{DROP_LOOK_Y, SEE_DROP_M};
 
-/// The guns on the floor this client sees, nearest first: in clear line of
-/// its eye and within [`SEE_DROP_M`]. Never by who left it, so a fresh one
-/// (where someone fell) never tells where a hidden enemy died.
-fn add_drops(snap: &mut Snapshot, w: &World, eye: V3) {
+/// The guns on the floor this client sees, nearest first: those fog shows
+/// it (`drop_visible`: [`fog::Fog::shows_drop`], a clear line from its eye
+/// within [`SEE_DROP_M`]). Never by who left it, so a fresh one (where
+/// someone fell) never tells where a hidden enemy died.
+fn add_drops(snap: &mut Snapshot, w: &World, eye: V3, drop_visible: &impl Fn(usize) -> bool) {
     let mut seen = [(f32::INFINITY, 0usize); sim::consts::MAX_DROPS];
     let mut n = 0;
     for (i, d) in w.drops.live() {
-        let far = (d.pos - eye).len();
-        if far <= SEE_DROP_M && w.map.clear(eye, d.pos + V3::new(0.0, DROP_LOOK_Y, 0.0)) {
-            seen[n] = (far, i);
+        if drop_visible(i) {
+            seen[n] = ((d.pos - eye).len(), i);
             n += 1;
         }
     }
@@ -1649,6 +1687,17 @@ fn coarse(p: V3) -> V3 {
     V3::new((p.x / g).round() * g, (p.y / g).round() * g, (p.z / g).round() * g)
 }
 
+/// A hit on a fighter this client may not know of: that something was
+/// hit, and no more. Who ([`proto::NOBODY`]), where they stood, what it
+/// struck (shield, body, head) and how hard would each place or track an
+/// enemy behind a wall by the splash of a grenade or a rocket.
+fn hide_victim(e: &mut EventState) {
+    e.b = proto::NOBODY;
+    e.part = 0;
+    e.c = 0;
+    e.pos = V3::ZERO;
+}
+
 /// An event filtered when it happened, again for a snapshot later: `false`
 /// if it may no longer be told at all. Only ever tells less.
 fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
@@ -1662,7 +1711,13 @@ fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
             e.end = at;
             true
         }
-        k if k == Ev::Hit as u8 || k == Ev::Kill as u8 => {
+        k if k == Ev::Hit as u8 => {
+            if !known(e.b as usize) {
+                hide_victim(e);
+            }
+            true
+        }
+        k if k == Ev::Kill as u8 => {
             if !known(e.b as usize) {
                 e.pos = V3::ZERO;
             }
@@ -1715,8 +1770,11 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
             if a != s && e.b as usize != s {
                 return None;
             }
-            let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
-            Some(EventState { pos, ..full })
+            let mut hit = full;
+            if !known(e.b as usize) {
+                hide_victim(&mut hit);
+            }
+            Some(hit)
         }
         Ev::Shot if known(a) => Some(EventState { part: 0, ..full }),
         Ev::Shot => heard(HEAR_SHOT_M),

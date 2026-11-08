@@ -15,7 +15,7 @@ const { chromium } = (() => {
   }
   throw new Error('playwright not found');
 })();
-const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist'],
+const server = spawn('target/release/oneshot-server', ['--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--all-modes'],
   { stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((ok) => {
   let out = '';

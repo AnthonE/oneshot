@@ -146,7 +146,7 @@ def main() -> int:
     print(f"   before {r['before']}\n   after  {r['after']}")
 
     print("== confirm · the live manifest")
-    rows = json.loads(run(["curl", "-s", "--max-time", "30", f"{a.api}/launcher/manifest/{SLUG}"]).stdout).get("builds", [])
+    rows = json.loads(run(["curl", "-sf", "--max-time", "30", f"{a.api}/launcher/manifest/{SLUG}"]).stdout).get("builds", [])
     row = next((b for b in rows if b.get("platform") == a.platform), None)
     if row is None:
         sys.exit(f"publish: the manifest has no {a.platform} slot: add one to the Elo Pros repo's "
@@ -154,6 +154,10 @@ def main() -> int:
     if row.get("version") != build or row.get("depot_state") != "published":
         sys.exit(f"publish: the origin serves {row.get('version')} ({row.get('depot_state')}), not {build}")
     digest = row.get("depot_digest")
+    # The one string from the network that reaches a shell line below: a
+    # bytes32, or nothing.
+    if digest is not None and not re.fullmatch(r"0x[0-9a-fA-F]{64}", str(digest)):
+        sys.exit(f"publish: the manifest's depot_digest isn't a bytes32: {digest!r}")
     print(f"   ok: {a.platform} → {build}, digest {digest}")
 
     if a.notarize:
@@ -168,7 +172,7 @@ def main() -> int:
             '  [ "$(~/.foundry/bin/cast chain-id --rpc-url "$u" 2>/dev/null)" = 4663 ] && { RPC=$u; break; }; '
             "done; "
             '[ -n "$RPC" ] || { echo "no reachable 4663 endpoint in ELO_RH_RPC_POOL" >&2; exit 1; }; '
-            f"~/.foundry/bin/cast send {NOTARY} 'notarize(bytes32,string,string)' {digest} "
+            f"~/.foundry/bin/cast send {NOTARY} 'notarize(bytes32,string,string)' {shlex.quote(digest)} "
             f"{shlex.quote(label)} {shlex.quote(memo)} --rpc-url \"$RPC\" --private-key \"$PRIVATE_KEY\" --json"
         )
         out = ssh(host, send)

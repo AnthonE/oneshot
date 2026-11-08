@@ -579,6 +579,17 @@ pub const MINION_DMG: i32 = 6;
 pub const MINION_HIT_PCT: u32 = 50;
 /// Where a minion's eye and chest are, over its feet.
 pub const MINION_EYE: f32 = 1.4;
-/// How well a bot holding a Siege seat aims (0..1; the other modes' 0.5):
-/// weaker, so the people in a match are the ones who decide it.
+/// How well a bot filling an empty seat aims (0..1): beatable, so a
+/// person new to the game wins some fights against them.
+pub const BOT_SKILL: f32 = 0.35;
+/// How well a bot holding a Siege seat aims (0..1; the other modes'
+/// [`BOT_SKILL`]): weaker, so the people in a match are the ones who
+/// decide it.
 pub const SIEGE_BOT_SKILL: f32 = 0.25;
+/// What a bot notices: an enemy in front of it (the cosine of half its
+/// view, flat), one this near (it hears them), or anyone in sight for a
+/// while after it was hurt (it turns to find who). No eyes in the back of
+/// its head.
+pub const BOT_VIEW_COS: f32 = 0.5;
+pub const BOT_HEAR_M: f32 = 4.0;
+pub const BOT_HURT_MS: u32 = 2000;

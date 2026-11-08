@@ -54,7 +54,27 @@ pub fn step_near(
     walkers: u16,
     map: &Map,
 ) -> sim::fighter::Local {
-    let l = f.step_in(phase, &inputs[own], map);
+    step_near_by(f, own, sc, phase, inputs, sticks, walkers, map, |f| {
+        f.step_in(phase, &inputs[own], map)
+    })
+}
+
+/// [`step_near`] with our fighter's own tick done by `own_step` in
+/// `step_in`'s place: a replay that already knows what that tick made
+/// hands it back instead ([`NetCore::reconcile`]).
+#[allow(clippy::too_many_arguments)]
+fn step_near_by(
+    f: &mut Fighter,
+    own: usize,
+    sc: &mut Scene,
+    phase: Phase,
+    inputs: &[Input; MAX_FIGHTERS],
+    sticks: &Sticks,
+    walkers: u16,
+    map: &Map,
+    own_step: impl FnOnce(&mut Fighter) -> sim::fighter::Local,
+) -> sim::fighter::Local {
+    let l = own_step(f);
     sc.men[own] = Man::of(f);
     if phase == Phase::Playing {
         sc.walk(inputs, walkers & !(1 << own), map);
@@ -108,6 +128,20 @@ impl NearAt {
     }
 }
 
+/// Our fighter's own tick (`Fighter::step_in`) on one seq, as last made:
+/// what it stepped from, what it made, and the phase it ran in. A replay
+/// through that seq from a fighter the same in everything `step_in` reads
+/// ([`same_stepped`]) takes `post` instead of stepping again: `step_in` is
+/// a function of (fighter, phase, input, map), the seq's input is kept
+/// beside it, and the map never changes. The bubble's contact step is
+/// never memoized: the hulls are the server's anew each snapshot.
+#[derive(Clone, Copy, Debug)]
+struct Stepped {
+    pre: Fighter,
+    post: Fighter,
+    phase: Phase,
+}
+
 /// [`step_near`] for all this client predicts: our fighter (seat `own`),
 /// the hull it rides (at the wheel on our input, behind someone on
 /// `stick`), and the hulls in our bubble on theirs: so a crash into one, or
@@ -123,6 +157,27 @@ pub fn step_bubble(
     stick: Option<Input>,
     spare_mates: bool,
     map: &Map,
+) -> sim::fighter::Local {
+    step_bubble_by(f, own, v, near, phase, inp, stick, spare_mates, map, |f| {
+        f.step_in(phase, inp, map)
+    })
+}
+
+/// [`step_bubble`] with our fighter's own tick done by `own_step`
+/// ([`step_near_by`]); the rest, the contact step over the bubble, is the
+/// same.
+#[allow(clippy::too_many_arguments)]
+fn step_bubble_by(
+    f: &mut Fighter,
+    own: usize,
+    v: &mut Option<Vehicle>,
+    near: &mut Near,
+    phase: Phase,
+    inp: &Input,
+    stick: Option<Input>,
+    spare_mates: bool,
+    map: &Map,
+    own_step: impl FnOnce(&mut Fighter) -> sim::fighter::Local,
 ) -> sim::fighter::Local {
     let mut sc = Scene {
         men: near.men,
@@ -150,7 +205,7 @@ pub fn step_bubble(
     let mut inputs = near.inputs;
     inputs[own] = *inp;
     let body = f.body;
-    let l = step_near(f, own, &mut sc, phase, &inputs, &sticks, near.walkers, map);
+    let l = step_near_by(f, own, &mut sc, phase, &inputs, &sticks, near.walkers, map, own_step);
     if let (Some(i), Some(h)) = (ridden, v.as_mut()) {
         *h = sc.hulls[i];
     } else if f.riding().is_some() {
@@ -339,9 +394,12 @@ pub struct Stats {
     /// on its driver's stick kept on (the driver moved it): re-run, the
     /// jump eased. Not a correction: nothing of ours was wrong.
     pub hull_corrections: u32,
-    /// Snapshots with hulls in our bubble, and the ticks re-run in all.
+    /// Snapshots with hulls in our bubble, and the ticks re-run in all; of
+    /// those, the ticks whose own step had to be made again (the rest took
+    /// the one already made: `Stepped`).
     pub near_snaps: u32,
     pub rerun_ticks: u64,
+    pub rerun_own_ticks: u64,
     pub resyncs: u32,
     /// The server's input buffer for us, as last reported.
     pub depth: i8,
@@ -597,6 +655,9 @@ pub struct NetCore {
     /// our present, by their shares).
     near: Near,
     near_after: Box<[NearAt; RING]>,
+    /// Our own tick on each seq, as last made (None: not made, a resync's
+    /// repeat), for a replay through it to take rather than make again.
+    stepped: Box<[Option<Stepped>; RING]>,
     /// Each hull's share of our rewind as the two newest snapshots said (SHARE_FULL
     /// for one not in our bubble), and when the newest came: drawn sliding
     /// from the one to the other over a snapshot's time.
@@ -707,6 +768,7 @@ impl NetCore {
             stick: None,
             near: Near::default(),
             near_after: Box::new([NearAt::default(); RING]),
+            stepped: Box::new([None; RING]),
             share: [(SHARE_FULL, SHARE_FULL); TARGETS],
             share_at: 0.0,
             moff: [V3::ZERO; MAX_VEHICLES],
@@ -810,6 +872,7 @@ impl NetCore {
                 self.inputs[self.seq as usize % RING] = input.repeated();
                 self.after[self.seq as usize % RING] = self.pred;
                 self.after_v[self.seq as usize % RING] = self.pred_v;
+                self.stepped[self.seq as usize % RING] = None;
                 self.seq = self.seq.wrapping_add(1);
             }
             self.stats.resyncs += 1;
@@ -832,7 +895,9 @@ impl NetCore {
             self.prev_pos = self.pred.body.pos;
             let was = self.pred_v;
             let phase = self.phase();
-            let local = step_bubble(
+            let stepped = &mut self.stepped[s as usize % RING];
+            let map = &self.map;
+            let local = step_bubble_by(
                 &mut self.pred,
                 self.slot as usize,
                 &mut self.pred_v,
@@ -841,7 +906,13 @@ impl NetCore {
                 &input,
                 self.stick,
                 self.spare_mates,
-                &self.map,
+                map,
+                |f| {
+                    let pre = *f;
+                    let l = f.step_in(phase, &input, map);
+                    *stepped = Some(Stepped { pre, post: *f, phase });
+                    l
+                },
             );
             // A vehicle just got into starts where it is, not at the origin.
             if let Some(v) = was.or(self.pred_v) {
@@ -1749,16 +1820,46 @@ impl NetCore {
             if ahead < RING as u32 {
                 let mut q = l.wrapping_add(1);
                 while q != self.seq {
-                    step_bubble(
+                    // Our own tick on this seq is made again only from a
+                    // fighter it hasn't been made from: the bubble's hulls
+                    // may have shoved us somewhere new on the seq before
+                    // (`step_near`'s contact step), and then they may on
+                    // this one too, so the contact step always runs.
+                    let inp = &self.inputs[q as usize % RING];
+                    let stepped = &mut self.stepped[q as usize % RING];
+                    let map = &self.map;
+                    let own_ran = &mut self.stats.rerun_own_ticks;
+                    step_bubble_by(
                         &mut f,
                         self.slot as usize,
                         &mut v,
                         &mut near,
                         phase,
-                        &self.inputs[q as usize % RING],
+                        inp,
                         self.stick,
                         self.spare_mates,
-                        &self.map,
+                        map,
+                        |f| match stepped {
+                            Some(m) if m.phase == phase && same_stepped(f, &m.pre) => {
+                                #[cfg(debug_assertions)]
+                                let check = {
+                                    let mut g = *f;
+                                    g.step_in(phase, inp, map);
+                                    g
+                                };
+                                copy_local(f, &m.post);
+                                #[cfg(debug_assertions)]
+                                debug_assert!(*f == check, "a memoized own tick differs from the step");
+                                sim::fighter::Local::default()
+                            }
+                            _ => {
+                                *own_ran += 1;
+                                let pre = *f;
+                                let l = f.step_in(phase, inp, map);
+                                *stepped = Some(Stepped { pre, post: *f, phase });
+                                l
+                            }
+                        },
                     );
                     // Our rounds the server hasn't yet leave from where the
                     // re-run has us on their seq, not the guess that launched
@@ -2032,7 +2133,7 @@ impl NetCore {
     fn member_drawn(&self, slot: u8, now_ms: f64) -> Option<DrawnVehicle> {
         let i = slot as usize;
         let t = self.member_tick(MAX_FIGHTERS + i, now_ms)?;
-        let newest = self.frames[self.n_frames - 1];
+        let newest = &self.frames[self.n_frames - 1];
         let mut d = if t <= newest.tick as f64 {
             let (ai, bi) = self.around(t);
             let (a, b) = (&self.frames[ai], bi.map(|k| &self.frames[k]));
@@ -2048,7 +2149,10 @@ impl NetCore {
             } else {
                 q0
             };
-            let (n0, n1) = (self.near_after[q0 as usize % RING], self.near_after[q1 as usize % RING]);
+            let (n0, n1) = (
+                &self.near_after[q0 as usize % RING],
+                &self.near_after[q1 as usize % RING],
+            );
             if n0.mask & (1 << i) == 0 || n1.mask & (1 << i) == 0 {
                 return None;
             }
@@ -2077,7 +2181,7 @@ impl NetCore {
     fn body_drawn(&self, slot: u8, now_ms: f64) -> Option<V3> {
         let q = slot as usize;
         let t = self.member_tick(q, now_ms)?;
-        let newest = self.frames[self.n_frames - 1];
+        let newest = &self.frames[self.n_frames - 1];
         let p = if t <= newest.tick as f64 {
             let (ai, _) = self.around(t);
             self.remote_at(slot, ai, t)?.pos
@@ -2091,7 +2195,10 @@ impl NetCore {
             } else {
                 q0
             };
-            let (n0, n1) = (self.near_after[q0 as usize % RING], self.near_after[q1 as usize % RING]);
+            let (n0, n1) = (
+                &self.near_after[q0 as usize % RING],
+                &self.near_after[q1 as usize % RING],
+            );
             if n0.walkers & (1 << q) == 0 || n1.walkers & (1 << q) == 0 {
                 return None;
             }
@@ -2580,6 +2687,44 @@ pub fn same_local(a: &Fighter, b: &Fighter) -> bool {
         && a.last_buttons == b.last_buttons
         && a.ride == b.ride
         && a.mount == b.mount
+}
+
+/// Everything `Fighter::step_in` reads: what it owns ([`same_local`]) and
+/// what it only looks at (seated and alive, for `active`; the flag, for
+/// the pace and the hands). Two fighters the same in these step to the
+/// same, in those (`Stepped`). Nothing else of a fighter is read by its
+/// own tick: the shields, the health, the hit and lunge timers, the camo,
+/// the score are the world's, written on the server and copied over.
+pub fn same_stepped(a: &Fighter, b: &Fighter) -> bool {
+    same_local(a, b) && a.seated == b.seated && a.alive == b.alive && a.flag == b.flag
+}
+
+/// The fields of [`same_local`], from `src` into `dst`: what one own tick
+/// made, put on a fighter the same in everything the tick read.
+pub fn copy_local(dst: &mut Fighter, src: &Fighter) {
+    dst.body = src.body;
+    dst.yaw = src.yaw;
+    dst.pitch = src.pitch;
+    dst.guns = src.guns;
+    dst.cur = src.cur;
+    dst.refire = src.refire;
+    dst.reload = src.reload;
+    dst.burst_left = src.burst_left;
+    dst.burst_gap = src.burst_gap;
+    dst.melee_cool = src.melee_cool;
+    dst.charge = src.charge;
+    dst.left = src.left;
+    dst.left_refire = src.left_refire;
+    dst.left_reload = src.left_reload;
+    dst.left_charge = src.left_charge;
+    dst.stickies = src.stickies;
+    dst.gren_kind = src.gren_kind;
+    dst.gren_cool = src.gren_cool;
+    dst.grenades = src.grenades;
+    dst.shots = src.shots;
+    dst.last_buttons = src.last_buttons;
+    dst.ride = src.ride;
+    dst.mount = src.mount;
 }
 
 /// What is left of a correction `dt` ms on: eased out over

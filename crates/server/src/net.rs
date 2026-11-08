@@ -85,8 +85,10 @@ impl InputBucket {
     }
 }
 
-/// The sim's end of a session's inputs: its id and what it sent.
-pub type Inputs = mpsc::SyncSender<(u64, InputMsg)>;
+/// The sim's end of a session's inputs: its id, what it sent, and the
+/// transport's round trip to it in ms (what bounds its rewind,
+/// `room::ClientNet::set_link`).
+pub type Inputs = mpsc::SyncSender<(u64, InputMsg, f32)>;
 
 /// The certificate the server presents: its PEM files, or a fresh
 /// self-signed one (14 days, which the page pins by hash).
@@ -642,8 +644,10 @@ async fn session(
 
     // A skin is worn only if the pass's wallet owns it and, for a rank-locked
     // one, its floor is at the line (docs/DESIGN.md §15); a guest, or a list
-    // or rating that can't be read, wears the standard look.
+    // or rating that can't be read, wears the standard look. A local server
+    // started `--dress-all` dresses anyone.
     let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if ctx.dress_all => proto::SKINS.get(skin as usize).map_or(proto::SKIN_STANDARD, |_| skin),
         Some(w) if skin != proto::SKIN_STANDARD => {
             let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
             let line = proto::SKIN_FLOOR.get(skin as usize).copied().unwrap_or(u16::MAX);
@@ -678,7 +682,7 @@ async fn session(
             proto::gear_valid(&proto::FOOTWEAR, footwear),
         ),
     ];
-    if gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
+    if !ctx.dress_all && gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
         let owned = match wallet {
             Some(w) => ctx.elo.skins(w).await,
             None => Vec::new(),
@@ -703,6 +707,9 @@ async fn session(
     // Who their party and friends see in a match while this session plays
     // (`party::Parties::set_playing`); a watcher plays nothing.
     let shown = player.clone().filter(|_| mode != MODE_WATCH);
+    // Where it connects from, for the watch rule; the box itself (tests,
+    // local bots) is nowhere.
+    let ip = Some(conn.remote_address().ip().to_canonical()).filter(|ip| !ip.is_loopback());
     let session_id = ctx.sessions.fetch_add(1, Ordering::Relaxed);
     let (tx, inlet) = outlet::outlet(ctx.counts.clone());
     let join = match mode {
@@ -711,6 +718,7 @@ async fn session(
             session: session_id,
             target: party,
             player,
+            ip,
             tx,
         },
         MODE_DUEL | MODE_DOUBLES | MODE_CUP => {
@@ -733,7 +741,7 @@ async fn session(
             // another is moved there.
             if ctx.elo_queue && queued.is_none() && mode != MODE_CUP {
                 let party = match &seating {
-                    Some(sit) if mode == MODE_DOUBLES => ctx.lobby.parties().members(sit.code),
+                    Some(sit) if mode == MODE_DOUBLES => ctx.lobby.parties().present_members(sit.code),
                     _ => Vec::new(),
                 };
                 if party.iter().any(|m| !m.starts_with("0x") && m.len() < 32) {
@@ -779,6 +787,15 @@ async fn session(
                 let Some(side) = queue_match_side(&m, queued.as_str(), &ctx, mode, ladder, &wallet) else {
                     return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
                 };
+                // Played here already (its replay or its review is on disk):
+                // never twice, however long ago, whatever the sim's ring
+                // of recent matches still remembers.
+                if let Some(dir) = &ctx.replays {
+                    let played = |name: String| async move { tokio::fs::metadata(dir.join(name)).await.is_ok() };
+                    if played(format!("{}.watch.json", m.id)).await || played(format!("{}.osr", m.id)).await {
+                        return refuse(&mut send, proto::REFUSE_MATCH, &ctx).await;
+                    }
+                }
                 let tx_entry = queue::Entry {
                     session: session_id,
                     wallet,
@@ -795,6 +812,7 @@ async fn session(
                     id: m.id,
                     sides: m.sides,
                     side,
+                    ip,
                     tx,
                 }
             } else {
@@ -811,6 +829,7 @@ async fn session(
                         look,
                         party: seating.filter(|_| mode == MODE_DOUBLES),
                     }),
+                    ip,
                     tx,
                 }
             }
@@ -823,6 +842,7 @@ async fn session(
             party: seating,
             code: party,
             player,
+            ip,
             tx,
         },
     };
@@ -913,7 +933,8 @@ async fn session(
                 continue;
             }
             if let Ok(m) = decode_input(&d) {
-                match inputs.try_send((session_id, m)) {
+                let rtt_ms = dconn.rtt().as_secs_f32() * 1000.0;
+                match inputs.try_send((session_id, m, rtt_ms)) {
                     Ok(()) => {}
                     Err(mpsc::TrySendError::Full(_)) => {
                         dctx.health.inputs_dropped.fetch_add(1, Ordering::Relaxed);

@@ -251,8 +251,10 @@ impl Gate {
                     }
                 }
                 // 10. A gun on the floor only if it is a true one, in clear
-                // line of this client's eye: never by who dropped it, so
-                // never where a hidden enemy fell.
+                // line of this client's eye: one lying still from the eye
+                // at some tick of the hold (where it lies was seen, and
+                // stays known), one flying from the eye now; never by who
+                // dropped it, so never where a hidden enemy fell.
                 sim::thing::Kind::Drop => {
                     let eye = me.eye();
                     for d in s.drops() {
@@ -263,11 +265,13 @@ impl Gate {
                             "tick {}: {d:?} is no true drop",
                             w.tick
                         );
-                        assert!(
-                            w.map.clear(eye, t.pos + V3::new(0.0, room::DROP_LOOK_Y, 0.0)),
-                            "tick {}: a drop out of sight was sent: {d:?}",
-                            w.tick
-                        );
+                        let look = t.pos + V3::new(0.0, room::DROP_LOOK_Y, 0.0);
+                        let seen = if t.vel == V3::ZERO {
+                            self.history.iter().any(|h| w.map.clear(h[self.me].eye(), look))
+                        } else {
+                            w.map.clear(eye, look)
+                        };
+                        assert!(seen, "tick {}: a drop out of sight was sent: {d:?}", w.tick);
                     }
                 }
                 // 9. A vehicle only if it is ours, someone we know rides
@@ -456,9 +460,12 @@ impl Gate {
                     w.map.name, w.tick, me.body.pos, f.body.pos, f.alive, w.rules.teams
                 );
             } else {
-                // 2. Never hidden while plainly visible.
+                // 2. Never hidden while plainly visible, unless camouflaged
+                // past its range (`room::fog::camouflaged`), which the
+                // hold lets fade.
+                let cloaked = self.history.iter().any(|h| room::fog::camouflaged(&h[self.me], &h[q]));
                 assert!(
-                    !plainly_sees(&w.map, me, &now[q]),
+                    cloaked || !plainly_sees(&w.map, me, &now[q]),
                     "tick {}: seat {q} in plain sight but not sent",
                     w.tick
                 );
@@ -528,6 +535,16 @@ impl Gate {
             }
             if (kind(Ev::Hit) || kind(Ev::Kill)) && !known(b) {
                 assert_eq!(e.pos, V3::ZERO, "tick {}: where an unseen victim stood: {e:?}", w.tick);
+            }
+            // A hit on someone unseen says no more than that: not who, not
+            // what it struck, not how hard.
+            if kind(Ev::Hit) && !known(b) {
+                assert_eq!(
+                    (e.b, e.part, e.c),
+                    (proto::NOBODY, 0, 0),
+                    "tick {}: an unseen victim named by a hit: {e:?}",
+                    w.tick
+                );
             }
             // 13. A hull hit only to its hitter and the vehicle's riders.
             if kind(Ev::VehicleHit) {

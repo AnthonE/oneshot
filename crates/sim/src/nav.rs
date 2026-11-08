@@ -24,6 +24,9 @@ const EVERY: i32 = 4;
 const LINK_STEPS: u16 = 10;
 /// Not reachable.
 pub const FAR: u16 = u16::MAX;
+/// How near the last waypoint (or one it links to) must still be to count
+/// as the nearest without looking at them all: a waypoint's spacing.
+const NEAR_WAY: f32 = G * EVERY as f32;
 
 type Key = (i32, i32, i32);
 
@@ -238,12 +241,41 @@ impl Nav {
         nearest(&self.nodes, p, 3.0)
     }
 
+    /// [`Self::nearest`] for a body that was nearest waypoint `hint` a
+    /// moment ago: that one or one it links to, if one is within a
+    /// waypoint's spacing; else every waypoint. `u16::MAX`: no hint.
+    fn nearest_from(&self, p: V3, hint: u16) -> Option<usize> {
+        let h = hint as usize;
+        if h < self.nodes.len() {
+            let d2 = |i: usize| {
+                let q = self.nodes[i];
+                let (dx, dy, dz) = (q.x - p.x, (q.y - p.y) * 3.0, q.z - p.z);
+                dx * dx + dy * dy + dz * dz
+            };
+            let mut best = h;
+            let mut bd = d2(h);
+            for &j in self.out(h) {
+                let d = d2(j as usize);
+                if d < bd {
+                    bd = d;
+                    best = j as usize;
+                }
+            }
+            if bd < NEAR_WAY * NEAR_WAY {
+                return Some(best);
+            }
+        }
+        self.nearest(p)
+    }
+
     /// Where a body at `p` heading for roam point `goal` should steer: down
     /// the field a few waypoints, the farthest it can see from its waist.
-    /// None: no field, or nowhere to go from here (head straight).
-    pub fn toward(&self, map: &Map, goal: usize, p: V3) -> Option<V3> {
+    /// None: no field, or nowhere to go from here (head straight). `way`:
+    /// the waypoint it was nearest last time, updated (`u16::MAX`: none).
+    pub fn toward(&self, map: &Map, goal: usize, p: V3, way: &mut u16) -> Option<V3> {
         let f = self.fields.get(goal)?;
-        let mut cur = self.nearest(p)?;
+        let mut cur = self.nearest_from(p, *way)?;
+        *way = cur as u16;
         if f[cur] == FAR {
             return None;
         }

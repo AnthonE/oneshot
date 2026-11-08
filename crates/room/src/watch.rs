@@ -50,6 +50,12 @@ pub const PREAIM_MS: u32 = 3000;
 /// Yaws kept per fighter: enough for [`SNAP_MS`].
 const YAWS: usize = 32;
 
+/// Ticks between looks at who is in plain sight of whom: the lines above
+/// are 100 ms and more, so every other tick (16 ms) tells them apart as
+/// well as every tick, for half the rays. Even ticks, which every
+/// snapshot rate sends on, so fog shares the answers (`Plain`).
+pub const SIGHT_EVERY: u32 = 2;
+
 /// One fighter's numbers over a match.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
@@ -159,7 +165,9 @@ impl Watch {
     }
 
     /// Reads the tick the world just stepped. `shown(v, t)`: whether fog
-    /// sent seat `t` to seat `v` this tick.
+    /// sent seat `t` to seat `v` this tick. Who is in plain sight of whom
+    /// is looked at every [`SIGHT_EVERY`] ticks; the shots and hits every
+    /// tick.
     pub fn observe(&mut self, w: &World, shown: impl Fn(usize, usize) -> bool) {
         self.observe_with(w, &mut Plain::default(), shown);
     }
@@ -170,8 +178,12 @@ impl Watch {
         let gap = ms_to_ticks(SIGHT_GAP_MS);
         let hidden_for = ms_to_ticks(PREAIM_HIDDEN_MS);
         let cos_pre = (PREAIM_DEG.to_radians()).cos();
+        let look = tick.is_multiple_of(SIGHT_EVERY);
         for (v, me) in w.fighters.iter().enumerate() {
             self.yaws[v][tick as usize % YAWS] = me.yaw;
+            if !look {
+                continue;
+            }
             let aim = aim_dir(me.yaw, me.pitch);
             let on = |them: &sim::fighter::Fighter| {
                 let to = them.body.pos + V3::new(0.0, 1.1, 0.0) - me.eye();
@@ -209,7 +221,8 @@ impl Watch {
                         })
                     });
                     if !honest {
-                        self.preaim_ticks[v] += 1;
+                        // The ticks since the last look: all aimed so.
+                        self.preaim_ticks[v] += SIGHT_EVERY;
                     }
                 }
             }

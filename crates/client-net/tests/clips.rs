@@ -5,7 +5,11 @@
 use client_net::clip::{KEEP_SEGS, LEAD_S, SEG_MS};
 use client_net::session::{Session, Wire};
 use client_net::tape::{self, Lane, Replay};
-use proto::{encode_snapshot, Msg, Name, Snapshot, EMBLEM_NONE, GEAR_NONE, MAX_DATAGRAM, SKIN_STANDARD};
+use proto::delta::{encode_delta, Keyed};
+use proto::{
+    datagram_kind, encode_snapshot, Msg, Name, Snapshot, DG_DELTA, DG_SNAPSHOT, EMBLEM_NONE, GEAR_NONE, MAX_DATAGRAM,
+    SKIN_STANDARD,
+};
 use sim::consts::TICK_HZ;
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -49,8 +53,8 @@ fn seat(slot: u8, name: &str) -> Msg {
 }
 
 /// Tick `tick`'s snapshot: we walk along x at a metre a second.
-fn wire(tick: u32) -> Vec<u8> {
-    let s = Snapshot {
+fn snap(tick: u32) -> Snapshot {
+    Snapshot {
         tick,
         phase: 1,
         own: Fighter {
@@ -66,10 +70,43 @@ fn wire(tick: u32) -> Vec<u8> {
             ..Fighter::default()
         },
         ..Snapshot::default()
-    };
+    }
+}
+
+/// [`snap`], whole on the wire.
+fn wire(tick: u32) -> Vec<u8> {
     let mut buf = [0u8; MAX_DATAGRAM];
-    let n = encode_snapshot(&s, &mut buf).unwrap();
+    let n = encode_snapshot(&snap(tick), &mut buf).unwrap();
     buf[..n].to_vec()
+}
+
+/// A live session as [`live`], its snapshots deltas as the server sends
+/// them: every other one against the snapshot before, the rest against the
+/// one before that (so a segment's second snapshot has a base from before
+/// it).
+fn live_deltas(t0: u32, secs: f64) -> (Session, u32) {
+    let mut s = Session::new();
+    s.on_msg(welcome(t0));
+    s.on_msg(seat(0, "you"));
+    let n = (secs * 1000.0 / (2.0 * TICK_MS)) as u32;
+    let mut tick = t0;
+    let mut buf = [0u8; MAX_DATAGRAM];
+    let mut bases: Vec<Keyed> = Vec::new();
+    for k in 1..=n {
+        tick = t0 + 2 * k;
+        let at = k as f64 * 2.0 * TICK_MS;
+        let mut cur = Keyed::default();
+        cur.fill(&snap(tick)).unwrap();
+        let back = if k % 2 == 0 { 1 } else { 2 };
+        let n = match bases.len().checked_sub(back) {
+            Some(i) => encode_delta(&cur, &bases[i], &mut buf).unwrap(),
+            None => encode_snapshot(&snap(tick), &mut buf).unwrap(),
+        };
+        s.on_datagram(at, &buf[..n]);
+        s.update(at, Input::default(), &mut Drop);
+        bases.push(cur);
+    }
+    (s, tick)
 }
 
 /// A live session `secs` into a match that began at tick `t0`, snapshots
@@ -143,6 +180,48 @@ fn a_clip_cut_mid_stream_replays_every_snapshot_into_a_watcher() {
     let newest_x = last as f32 / TICK_HZ as f32;
     assert!(p.x <= newest_x + 0.2 && p.x > newest_x - 0.5, "{} vs {newest_x}", p.x);
     assert_eq!(w.core.stats.corrections, 0);
+}
+
+#[test]
+fn a_clip_of_deltas_keeps_them_and_opens_each_segment_whole() {
+    let t0 = 128 * 600;
+    let (s, last) = live_deltas(t0, SEG_MS * 2.5 / 1000.0);
+    let bytes = s.clip_tape(5.0).expect("a clip");
+    let t = tape::read(&bytes).unwrap();
+    let kinds: Vec<Option<u8>> = t
+        .entries
+        .iter()
+        .filter(|e| e.lane == Lane::Datagram)
+        .map(|e| datagram_kind(&e.bytes))
+        .collect();
+    let whole = kinds.iter().filter(|k| **k == Some(DG_SNAPSHOT)).count();
+    let deltas = kinds.iter().filter(|k| **k == Some(DG_DELTA)).count();
+    // The segment's first, and the one after it whose base is from before
+    // the segment, are whole; the rest went on as they came.
+    assert_eq!(whole + deltas, kinds.len());
+    assert!(whole == 2, "{whole} whole of {}", kinds.len());
+    assert_eq!(kinds[0], Some(DG_SNAPSHOT));
+    assert!(deltas > 100, "{deltas} deltas of {}", kinds.len());
+    // A watcher makes every one whole again: none is against a base the
+    // tape hasn't.
+    let mut w = Session::replay();
+    let mut r = Replay::new(t);
+    let end = r.end_ms();
+    while r.clock_ms < end {
+        r.clock_ms = (r.clock_ms + 1000.0 / 60.0).min(end);
+        r.frame(&mut w);
+    }
+    assert!(r.done());
+    assert_eq!(
+        w.core.stats.snapshots,
+        kinds.len() as u32,
+        "every snapshot on the tape is drawn"
+    );
+    assert_eq!(w.core.latest().tick, last);
+    let (f, p) = w.core.own();
+    assert!(f.alive);
+    let newest_x = last as f32 / TICK_HZ as f32;
+    assert!(p.x <= newest_x + 0.2 && p.x > newest_x - 0.5, "{} vs {newest_x}", p.x);
 }
 
 #[test]

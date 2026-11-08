@@ -104,7 +104,7 @@ record)
   case $tape in /*) ;; *) tape=$root/$tape ;; esac
   mkdir -p "$(dirname "$tape")"
   display
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map "$map" >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do

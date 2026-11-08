@@ -154,10 +154,37 @@ async fn hello(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn few_online_play_free_for_all_whatever_they_ask() {
+    let h = server::run(server::Config {
+        bind: "127.0.0.1:0".parse().unwrap(),
+        http: None,
+        ..server::Config::default()
+    })
+    .await
+    .unwrap();
+    let (a, _sa, _ra, _ca) = hello(&h, proto::MODE_GUN_GAME, "one").await;
+    let (b, _sb, _rb, _cb) = hello(&h, proto::MODE_FFA, "two").await;
+    let (
+        Msg::Welcome {
+            rules: r0,
+            salt_commit: c0,
+            ..
+        },
+        Msg::Welcome { salt_commit: c1, .. },
+    ) = (a, b)
+    else {
+        panic!("not welcomed")
+    };
+    assert!(!r0.gun_game && !r0.teams, "Gun Game shut, free for all: {r0:?}");
+    assert_eq!(c0, c1, "in one room");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gun_game_is_shared_and_bots_fill_the_rest() {
     let h = server::run(server::Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         http: None,
+        all_modes: true,
         ..server::Config::default()
     })
     .await

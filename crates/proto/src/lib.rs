@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 36;
+pub const PROTO_VER: u16 = 37;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -1937,6 +1937,14 @@ pub enum Msg {
     /// The countdown waits for every person seated in it to say so, or for
     /// the room's guard (`room::LOAD_WAIT_MS`).
     Loaded,
+    /// Server → a lobby, on joining and when it changes: the casual modes
+    /// open now (a bit a mode id), by how many are online (`online`), so
+    /// players aren't spread thin over rooms of bots. A closed mode asked
+    /// for anyway is played as free for all (`server::playlist`).
+    Modes {
+        open: u16,
+        online: u16,
+    },
 }
 
 /// What a lobby's wallet owns ([`Msg::Wardrobe`]): a bit an item, by the id
@@ -2354,6 +2362,11 @@ pub fn encode_msg(m: &Msg, out: &mut [u8]) -> R<usize> {
             w_name(&mut w, from)?;
             w.write(*code, party::CODE_BITS)?;
         }
+        Msg::Modes { open, online } => {
+            w.write(26, 8)?;
+            w.write(*open as u32, 16)?;
+            w.write(*online as u32, 16)?;
+        }
         Msg::Wardrobe(d) => {
             w.write(24, 8)?;
             w.write_bit(d.wallet)?;
@@ -2610,6 +2623,10 @@ pub fn decode_msg(buf: &[u8]) -> R<Msg> {
         21 => Msg::Invited {
             from: r_name(&mut r)?,
             code: r.read(party::CODE_BITS)?,
+        },
+        26 => Msg::Modes {
+            open: r.read(16)? as u16,
+            online: r.read(16)? as u16,
         },
         24 => Msg::Wardrobe(Wardrobe {
             wallet: r.read_bit()?,

@@ -20,7 +20,7 @@ const { chromium } = (() => {
 })();
 
 const server = spawn('target/release/oneshot-server', [
-  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots',
+  '--bind', '127.0.0.1:0', '--http', '127.0.0.1:0', '--web', 'crates/client/dist', '--passive-bots', '--all-modes',
 ], { stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((ok, fail) => {
   let out = '';

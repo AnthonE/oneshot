@@ -110,6 +110,21 @@ pub const DOWN_FOR: Duration = Duration::from_secs(30);
 /// Where, under the replays, a report Elo Pros didn't take is kept until
 /// `oneshot-review resend` sends it again.
 pub const UNREPORTED: &str = "unreported";
+/// Answers a lookup cache holds at most: past it, what has aged out goes,
+/// and a still-full cache takes no more (a flood of fresh wallets, each
+/// its own sign-in, fills no memory).
+pub const CACHE_CAP: usize = 10_000;
+
+/// Keeps `v` under `key` in a lookup cache, within [`CACHE_CAP`].
+fn keep<V>(m: &mut HashMap<String, (Instant, V)>, key: String, v: V, ttl: Duration) {
+    if m.len() >= CACHE_CAP && !m.contains_key(&key) {
+        m.retain(|_, (at, _)| at.elapsed() < ttl);
+        if m.len() >= CACHE_CAP {
+            return;
+        }
+    }
+    m.insert(key, (Instant::now(), v));
+}
 
 /// A signed POST Elo Pros didn't take: where it went (without `/api`) and
 /// its body. It is signed afresh when it is sent again: a signature is
@@ -598,10 +613,7 @@ impl Elo {
         }
         .await?;
         if let Ok(mut m) = self.floors.lock() {
-            if m.len() > 10_000 {
-                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
-            }
-            m.insert(key, (Instant::now(), got));
+            keep(&mut m, key, got, BAN_CACHE);
         }
         got
     }
@@ -628,10 +640,7 @@ impl Elo {
         let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
         let got = friend_rows(&v);
         if let Ok(mut m) = self.friends.lock() {
-            if m.len() > 10_000 {
-                m.retain(|_, (at, _)| at.elapsed() < FRIENDS_CACHE);
-            }
-            m.insert(key, (Instant::now(), got.clone()));
+            keep(&mut m, key, got.clone(), FRIENDS_CACHE);
         }
         Some(got)
     }
@@ -676,23 +685,22 @@ impl Elo {
         got.sort();
         got.dedup();
         if let Ok(mut m) = self.skins.lock() {
-            if m.len() > 10_000 {
-                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
-            }
-            m.insert(key, (Instant::now(), got.clone()));
+            keep(&mut m, key, got.clone(), BAN_CACHE);
         }
         Some(got)
     }
 
     /// Whether the game has banned `wallet`: None if Elo Pros couldn't be
-    /// asked, which never refuses anyone. Answers are kept [`BAN_CACHE`].
+    /// asked and never answered for this wallet, which refuses nobody.
+    /// Answers are kept [`BAN_CACHE`]; when Elo Pros can't be asked, the
+    /// last answer stands however old, so a ban already seen holds
+    /// through a hiccup rather than lapsing for whoever retries into it.
     pub async fn banned(&self, wallet: &str) -> Option<bool> {
         let key = proto::party::spell(wallet);
-        if let Ok(m) = self.bans.lock() {
-            if let Some(&(at, b)) = m.get(&key) {
-                if at.elapsed() < BAN_CACHE {
-                    return Some(b);
-                }
+        let kept = self.bans.lock().ok().and_then(|m| m.get(&key).copied());
+        if let Some((at, b)) = kept {
+            if at.elapsed() < BAN_CACHE {
+                return Some(b);
             }
         }
         let url = format!("{}/api/bans/{}/of/{}", self.origin, self.slug, wallet);
@@ -704,12 +712,12 @@ impl Elo {
             let v: serde_json::Value = serde_json::from_str(&res.text().await.ok()?).ok()?;
             v["banned"].as_bool()
         }
-        .await?;
+        .await;
+        let Some(got) = got else {
+            return kept.map(|(_, b)| b);
+        };
         if let Ok(mut m) = self.bans.lock() {
-            if m.len() > 10_000 {
-                m.retain(|_, (at, _)| at.elapsed() < BAN_CACHE);
-            }
-            m.insert(key, (Instant::now(), got));
+            keep(&mut m, key, got, BAN_CACHE);
         }
         Some(got)
     }
@@ -875,7 +883,18 @@ impl Elo {
                 }
                 Posted::Refused(e) => {
                     self.refused.fetch_add(1, Ordering::Relaxed);
-                    self.pending().remove(&held);
+                    let u = self.pending().remove(&held);
+                    // Refused for who we are (a key rotated, a clock off),
+                    // not for what was sent: kept for `resend` once that
+                    // is put right, rather than a result lost to stderr.
+                    let ours = e.starts_with("401") || e.starts_with("403");
+                    if let (true, Some(u), Some(dir)) = (ours, u, self.unreported.as_deref()) {
+                        let saved = match u.save(dir) {
+                            Ok(at) => format!("saved to {} (oneshot-review resend)", at.display()),
+                            Err(e) => format!("not saved: {e}"),
+                        };
+                        return Err(format!("{e}; {saved}"));
+                    }
                     return Err(e);
                 }
                 Posted::Passing(e) => last = e,
@@ -904,10 +923,13 @@ impl Elo {
 
     /// One signed POST, no retry.
     async fn post_once(&self, key: &ServerKey, path: &str, body: &str) -> Posted {
+        // One key for one body, whatever the try (and a `resend`): a
+        // report that got through but whose answer didn't is taken once.
         let mut req = self
             .http
             .post(format!("{}/api{}", self.origin, path))
             .header("Content-Type", "application/json")
+            .header("Idempotency-Key", sha256_hex(body.as_bytes()))
             .body(body.to_string());
         for (k, v) in key.headers("POST", path, body.as_bytes(), crate::auth::now_unix(), &new_nonce()) {
             req = req.header(k, v);
