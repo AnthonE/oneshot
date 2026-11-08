@@ -994,9 +994,10 @@ mod tests {
         }
     }
 
-    /// Pithead's skips throw up the headframe's face, over its crown's edge.
+    /// Pithead's lifts throw up the headframe's face over its crown's edge,
+    /// and up the shaft past the gantry onto the sheave deck.
     #[test]
-    fn pitheads_skips_land_on_their_crowns_from_all_of_their_pads() {
+    fn pitheads_lifts_land_up_top_from_all_of_their_pads() {
         let map = crate::maps::pithead::DEF.build();
         for (n, l) in map.launchers.iter().enumerate() {
             let a = l.area;
@@ -1006,17 +1007,22 @@ mod tests {
                 (a.min.x, a.max.z),
                 (a.max.x, a.max.z),
             ] {
-                let mut b = standing(&map, x, z);
+                // On the pad, which may be a deck over the void rather than the ground.
+                let mut b = Body {
+                    pos: V3::new(x, map.floor(x, z, 0.0, a.max.y), z),
+                    grounded: true,
+                    ..Body::default()
+                };
                 step(&mut b, &Input::default(), &map);
-                assert!(!b.grounded, "skip {n} didn't throw from {x}, {z}: {b:?}");
+                assert!(!b.grounded, "lift {n} didn't throw from {x}, {z}: {b:?}");
                 let mut ticks = 0;
                 while !b.grounded && ticks < TICK_HZ * 4 {
                     step(&mut b, &Input::default(), &map);
                     ticks += 1;
                 }
                 assert!(
-                    fabs(b.pos.y - 7.0) < 0.01,
-                    "skip {n} from {x}, {z} lands at {:?}",
+                    fabs(b.pos.y - 7.0) < 0.01 || fabs(b.pos.y - 10.5) < 0.01,
+                    "lift {n} from {x}, {z} lands at {:?}",
                     b.pos
                 );
             }

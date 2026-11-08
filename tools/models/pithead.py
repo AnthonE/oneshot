@@ -2,11 +2,13 @@
 origin, `look/built.rs` draws them). A coal mine's pithead high in the mountains
 in a blizzard: at each end a shaft house clad in its side's painted corrugated
 steel, a steel headframe on its roof turning its sheave wheels, cables off to a
-winding house on a crag below the lip; a truss gantry between the headframes,
-the skip hung over the shaft's collar; loading decks on steel columns along the
-long sides; rime on everything the wind meets, icicles under every edge it
-drips from. Out in the snow, crags standing out of the cloud, a cableway's
-trestles walking off toward the peaks.
+winding house on a crag below the lip; between them the open shaft, and hung in it a truss
+gantry from crown to crown through the winding cab, the sheave deck on the
+cab's roof, the cage across under it and the collar under that, all on legs
+going down into the cloud; plate-girder decks along the long sides from crag
+to crag; rime on everything the wind meets, icicles under every edge it drips
+from. Out in the snow, crags standing out of the cloud, a cableway's trestles
+walking off toward the peaks.
 
     blender -b --python tools/models/pithead.py
 
@@ -46,6 +48,8 @@ BLUE = (0.018, 0.065, 0.25)
 GREYGREEN = (0.1, 0.12, 0.115)
 STEEL = (0.04, 0.042, 0.046)
 RUSTY = (0.13, 0.06, 0.035)
+# The shaft's old steel: rust-brown gone dull, never a side's red.
+HUB_STEEL = (0.085, 0.055, 0.045)
 GALV = (0.16, 0.17, 0.18)
 RIME = (0.74, 0.79, 0.86)
 # Rime feathered on an upright face: a grey crust over the paint, never the
@@ -55,11 +59,12 @@ SNOWY = (0.8, 0.85, 0.92)
 ROCK = (0.045, 0.05, 0.062)
 # The lamps (map.json's, x z y as it writes them, both sides): warm light
 # painted on what they see.
-LAMPS = [(-17.0, 5.8, 3.0), (-17.0, 2.7, 10.0), (-3.0, 2.7, 11.0)]
-# The lamps over the doors to the yard and the spur, painted only: each shines
-# down its wall and onto the snow before it (`pool`), no light of its own.
-DOOR_LAMPS = [(-12.62, 3.3, 2.5, '+x'), (-12.62, 3.3, 12.3, '+x'), (-16.75, 3.3, -2.78, '-z')]
-LAMPS = LAMPS + [(x, y, z) for x, y, z, _ in DOOR_LAMPS]
+LAMPS = [(-17.0, 5.8, 3.0), (-17.0, 2.7, 10.0), (0.0, 9.6, 1.8), (-7.5, 6.2, 11.0), (0.0, 2.8, 2.6)]
+# The lamps over the doors to the bridge and the spur, painted only: each
+# shines down its wall and onto what is before it (`pool`, at its floor's
+# height), no light of its own.
+DOOR_LAMPS = [(-12.62, 3.3, 2.5, '+x', 0.1), (-16.75, 3.3, -2.78, '-z', 0.0)]
+LAMPS = LAMPS + [(x, y, z) for x, y, z, _, _ in DOOR_LAMPS]
 LAMPS = LAMPS + [(-x, y, -z) for x, y, z in LAMPS]
 LAMP_RGB = (1.0, 0.66, 0.36)
 # The sheave wheels: where they turn about (x, y), their z, their radius
@@ -357,29 +362,26 @@ def shaft_house(S):
     clad_wall(S, -21.0, 0.0, -2.4, -18.0, 8.1, -2.0, '-z', plinth=0.9)
     clad_wall(S, -15.5, 0.0, -2.4, -13.0, 8.1, -2.0, '-z', plinth=0.9)
     clad_wall(S, -18.0, 2.6, -2.4, -15.5, 8.1, -2.0, '-z', plinth=0.9)
-    # The yard's side: concrete on the ground floor, its two doors.
-    for z0, z1 in ((-2.0, 1.0), (4.0, 11.0), (13.6, 14.0)):
+    # The shaft's side: concrete on the ground floor, its door to the bridge.
+    for z0, z1 in ((-2.0, 1.0), (4.0, 14.0)):
         clad_wall(S, -13.4, 0.0, z0, -13.0, 3.0, z1, '+x', plinth=3.0)
-    for z0, z1 in ((1.0, 4.0), (11.0, 13.6)):
-        clad_wall(S, -13.4, 2.6, z0, -13.0, 3.0, z1, '+x', plinth=3.0)
+    clad_wall(S, -13.4, 2.6, 1.0, -13.0, 3.0, 4.0, '+x', plinth=3.0)
     # Over them: cladding to the crown, the mezzanine's rail, the jamb.
     clad_wall(S, -13.4, 3.0, -2.0, -13.0, 6.5, 5.0, '+x', plinth=3.0)
     clad_wall(S, -13.4, 3.5, 8.0, -13.0, 6.5, 10.0, '+x', plinth=3.5)
-    # The rail where the mezzanine looks over the yard: a steel parapet in the
+    # The rail where the mezzanine looks over the shaft: a steel parapet in the
     # side's paint, a lamp strip under its top.
     S.box(-13.36, 3.0, 5.0, -13.04, 4.38, 8.0, 'team_' + S.team, c=0.02)
     S.box(-13.4, 4.38, 5.0, -13.0, 4.5, 8.0, 'galv', c=0.02)
     S.box(-13.0, 4.2, 5.1, -12.985, 4.28, 7.9, 'light_' + S.team, c=0.0, cell=20.0)
     snow_cap(S, 'z', -13.4, -13.0, 5.0, 8.0, 4.5, h=0.03)
-    # A strip of the side's light over each door to the yard and to the spur.
-    for z0, z1 in ((1.15, 3.85), (11.15, 13.45)):
-        S.box(-13.0, 2.68, z0, -12.98, 2.78, z1, 'light_' + S.team, c=0.0, cell=20.0)
+    # A strip of the side's light over the doors to the bridge and the spur.
+    S.box(-13.0, 2.68, 1.15, -12.98, 2.78, 3.85, 'light_' + S.team, c=0.0, cell=20.0)
     S.box(-17.85, 2.68, -2.42, -15.65, 2.78, -2.4, 'light_' + S.team, c=0.0, cell=20.0)
     # Door frames: steel round each opening, inside its jambs.
-    for z0, z1 in ((1.0, 4.0), (11.0, 13.6)):
-        for z in (z0, z1 - 0.1):
-            S.box(-13.4, 0.0, z, -13.0, 2.6, z + 0.1, 'steel', c=0.01)
-        S.box(-13.4, 2.5, z0, -13.0, 2.6, z1, 'steel', c=0.01)
+    for z in (1.0, 3.9):
+        S.box(-13.4, 0.0, z, -13.0, 2.6, z + 0.1, 'steel', c=0.01)
+    S.box(-13.4, 2.5, 1.0, -13.0, 2.6, 4.0, 'steel', c=0.01)
     for x in (-18.0, -15.6):
         S.box(x, 0.0, -2.4, x + 0.1, 2.6, -2.0, 'steel', c=0.01)
     # The mezzanine: tread plate on joists, a channel along its open edge.
@@ -399,7 +401,7 @@ def shaft_house(S):
     for x in np.arange(-20.7, -13.1, 1.6):
         S.box(x, 6.5, -2.0, x + 0.18, 6.86, 14.0, 'steel', c=0.01, cell=3.0)
     S.box(-19.0, 6.5, 5.6, -18.82, 6.86, 12.0, 'steel', c=0.01, cell=3.0)
-    # Its edge to the yard, a deep channel, icicles off it.
+    # Its edge to the shaft, a deep channel, icicles off it.
     S.box(-13.2, 6.5, -2.0, -13.0, 7.0, 14.0, 'steel', c=0.01, cell=3.0)
     # Short: they hang in the mezzanine's window and the way out to the deck.
     icicles(S, (-13.02, -1.8), (-13.02, 13.8), 6.5, rng, longest=0.3, fill=0.6)
@@ -409,7 +411,6 @@ def shaft_house(S):
     # Its floor: concrete over the rock, the snow blown in at its doors.
     S.quad((-21.0, 0.02, -2.0), (-13.4, 0.02, -2.0), (-13.4, 0.02, 14.0), (-21.0, 0.02, 14.0), 'floor', (0, 1, 0), cell=1.0)
     drift(S, -15.6, 0.3, -13.4, 4.7, 0.02, ['+x'], reach=1.3, seed=91 + S.s)
-    drift(S, -15.6, 10.3, -13.4, 14.0, 0.02, ['+x'], reach=1.3, seed=92 + S.s)
     drift(S, -18.6, -2.0, -14.9, 0.4, 0.02, ['-z'], reach=1.2, seed=93 + S.s)
     # The lamps.
     lamp(S, -17.0, 5.8, 3.0, 6.5)
@@ -528,7 +529,7 @@ def sheave(S, cx, cy, z):
     S.rod((cx, cy, z - 0.3), (cx, cy, z + 0.3), 0.28, mat, sides=10)
 
 
-# ----------------------------------------------------------------- the gantry, skip
+# ------------------------------------------------------------ the gantry, the hub
 def gantry():
     rng = random.Random(31)
     # The deck: tread plate on cross beams between two plate girders.
@@ -568,167 +569,302 @@ def gantry():
     icicles(S1, (-13.0, 1.52), (13.0, 1.52), 6.5, rng, longest=0.4, spacing=0.16, fill=0.6)
     drift(S1, -13.0, -1.36, 13.0, 1.36, 7.0, ['-z', '+z'], reach=0.35, seed=41)
     drift(S1, -3.0, -3.0, 3.0, 3.0, 7.0, ['-z', '+z', '-x', '+x'], reach=0.5, seed=43)
-    # The landing's two walls, plate with ribs and snow on them.
+    cab()
     for S in SIDES:
-        S.box(-3.0, 7.0, 2.64, 0.0, 8.1, 2.96, 'steel', c=0.02)
-        for x in (-2.9, -2.0, -1.0, -0.12):
-            S.box(x, 7.0, 2.6, x + 0.1, 8.1, 3.0, 'steel', c=0.01)
-        S.box(-3.0, 8.0, 2.6, 0.0, 8.1, 3.0, 'galv', c=0.01)
-        snow_cap(S, 'x', 2.6, 3.0, -3.0, 0.0, 8.1)
-    # The skip, hung under the landing over the shaft.
-    skip()
+        sheave_stairs(S)
+        crate(S, -4.4, 7.0, 0.3, -3.2, 8.2, 1.5)
+        # Snow banked along the stairs' foot and against the crate.
+        drift(S, -9.5, -1.36, -2.9, 1.36, 7.0, ['+z'], reach=0.8, seed=44 + S.s)
 
 
 S1 = SIDES[0]
 
 
-def skip():
-    rng = random.Random(51)
-    # A bin narrowing to its foot, a lip at its top, its bail up to the landing.
-    rows = [(4.3, 0.9), (4.5, 1.0), (6.05, 1.16), (6.15, 1.2), (6.25, 1.2)]
-    for (ya, ha), (yb, hb) in zip(rows, rows[1:]):
-        for sx, sz, o in ((1, 0, (1, 0, 0)), (-1, 0, (-1, 0, 0)), (0, 1, (0, 0, 1)), (0, -1, (0, 0, -1))):
-            if sx:
-                quad((sx * ha, ya, -ha), (sx * ha, ya, ha), (sx * hb, yb, hb), (sx * hb, yb, -hb), 'rust', o)
-            else:
-                quad((-ha, ya, sz * ha), (ha, ya, sz * ha), (hb, yb, sz * hb), (-hb, yb, sz * hb), 'rust', o)
-    quad((-0.9, 4.3, -0.9), (0.9, 4.3, -0.9), (0.9, 4.3, 0.9), (-0.9, 4.3, 0.9), 'rust', (0, -1, 0))
-    quad((-1.1, 6.25, -1.1), (1.1, 6.25, -1.1), (1.1, 6.25, 1.1), (-1.1, 6.25, 1.1), 'coal', (0, 1, 0))
-    for s in (-1, 1):
-        rod((s * 1.15, 5.6, 0.0), (s * 0.3, 6.5, 0.0), 0.06, 'steel', sides=6)
-        cbox(s * 1.2 - 0.08 if s > 0 else -1.2, 5.3, -0.15, s * 1.2 if s > 0 else -1.12, 5.9, 0.15, 'steel', c=0.01)
-    for x in (-0.7, 0.0, 0.7):
-        cbox(x - 0.06, 4.25, -1.0, x + 0.06, 6.25, -0.94, 'steel', c=0.005)
-        cbox(x - 0.06, 4.25, 0.94, x + 0.06, 6.25, 1.0, 'steel', c=0.005)
-    icicles(S1, (-0.9, -0.92), (0.9, -0.92), 4.3, rng, longest=0.22, spacing=0.12)
-    icicles(S1, (-0.9, 0.92), (0.9, 0.92), 4.3, rng, longest=0.22, spacing=0.12)
-
-
-def columns():
-    """The gantry's two posts in the yard: a footing, a tube, a cap."""
+def cab():
+    """The winding cab on the gantry's landing: grey-green sheds' walls all round,
+    a door at each end off to one side of the gantry, the winding drum in the
+    middle, lit windows; its roof the sheave deck, posts at its corners."""
+    rng = random.Random(53)
     for S in SIDES:
-        x, z = _xz(S, -7.0, 0.0)
-        spin(x, z, [(0.001, 0.0), (0.55, 0.0), (0.55, 0.45), (0.5, 0.5), (0.001, 0.5)], 'blast', sides=20)
-        spin(x, z, [(0.001, 0.5), (0.4, 0.5), (0.4, 6.05), (0.001, 6.05)], 'steel', sides=16)
-        spin(x, z, [(0.001, 6.05), (0.55, 6.05), (0.55, 6.5), (0.001, 6.5)], 'steel', sides=16, smooth=False)
-        for y in (0.5, 2.6):
-            spin(x, z, [(0.38, y), (0.52, y), (0.52, y + 0.08), (0.38, y + 0.08)], 'steel', sides=16, smooth=False)
+        shed_wall(S, -2.9, 7.0, 2.6, 2.9, 10.0, 3.0, '+z', windows=(-2.4, 2.4, 8.4, 9.3))
+        shed_wall(S, -2.9, 7.0, 0.3, -2.5, 10.0, 2.6, '-x')
+        shed_wall(S, -2.9, 7.0, -2.6, -2.5, 10.0, -1.5, '-x')
+        # The door's frame and the light over it, in neither side's colour.
+        for z in (-1.5, 0.2):
+            S.box(-2.95, 7.0, z, -2.45, 9.0, z + 0.1, 'steel', c=0.01)
+        S.box(-2.95, 8.9, -1.5, -2.45, 9.0, 0.3, 'steel', c=0.01)
+        S.box(-2.96, 9.1, -1.3, -2.92, 9.18, 0.1, 'light_sodium', c=0.0, cell=20.0)
+        # The posts on the deck over it: built-up columns, a lamp on each.
+        for x0 in (-2.9, 2.5):
+            S.box(x0, 10.5, 2.8, x0 + 0.4, 12.2, 3.2, 'rusty', c=0.02)
+            for cx in (x0, x0 + 0.3):
+                S.box(cx, 10.5, 2.8, cx + 0.1, 12.2, 2.9, 'steel', c=0.005)
+            px, pz = _xz(S, x0 + 0.2, 3.0)
+            spin(px, pz, [(0.001, 12.2), (0.14, 12.2), (0.14, 12.3), (0.001, 12.3)], 'steel', sides=10, smooth=False)
+            spin(px, pz, [(0.001, 12.3), (0.09, 12.32), (0.1, 12.45), (0.001, 12.5)], 'light_sodium', sides=10)
+        icicles(S, (-2.9, 3.22), (2.9, 3.22), 10.0, rng, longest=0.6, spacing=0.14)
+    # The drum on its bed, wound with rope, its bearings at its ends.
+    cbox(-0.9, 7.0, -0.6, 0.9, 7.3, 0.6, 'steel', c=0.02)
+    rod((0.0, 8.25, -0.6), (0.0, 8.25, 0.6), 0.9, 'rusty', sides=28)
+    for z in np.linspace(-0.5, 0.5, 9):
+        torus((0.0, 8.25, z), 0.88, 0.045, (0, 0, 1), 'cable', segs=40, sides=5)
+    for z0 in (-0.6, 0.48):
+        cbox(-0.35, 7.3, z0, 0.35, 8.45, z0 + 0.12, 'steel', c=0.01)
+    cbox(-0.9, 9.15, -0.6, 0.9, 9.4, 0.6, 'steel', c=0.02)
+    # The roof: tread plate on joists, the cab's ceiling under them, snow on it.
+    cbox(-2.9, 10.36, -3.2, 2.9, 10.5, 3.2, 'tread', c=0.0, cell=2.0)
+    cbox(-2.9, 10.0, -3.2, 2.9, 10.36, -3.0, 'steel', c=0.01)
+    cbox(-2.9, 10.0, 3.0, 2.9, 10.36, 3.2, 'steel', c=0.01)
+    for x in np.arange(-2.7, 2.8, 1.1):
+        cbox(x, 10.04, -3.0, x + 0.14, 10.36, 3.0, 'steel', c=0.01, cell=3.0)
+    quad((-2.9, 10.04, -3.0), (2.9, 10.04, -3.0), (2.9, 10.04, 3.0), (-2.9, 10.04, 3.0), 'lining', (0, -1, 0), cell=0.35)
+    drift(S1, -2.9, -3.2, 2.9, 3.2, 10.5, ['+z', '-z'], reach=0.5, seed=55)
+
+
+def sheave_stairs(S):
+    """A flight up beside the gantry to the sheave deck, rising +x: its treads on
+    the slope, plate sides down to its floor at the gantry's height, a string of
+    lights along its outer side so the way up reads."""
+    x0, z0, x1, z1, y0, y1 = -9.0, 1.5, -2.9, 3.2, 7.0, 10.5
+    n = int(round((y1 - y0) / 0.25))
+    run = (x1 - x0) / n
+    for k in range(1, n):
+        y = y0 + (y1 - y0) * k / n
+        xa = x0 + run * k
+        S.box(xa, y - 0.06, z0 + 0.1, xa + run, y, z1 - 0.1, 'tread', c=0.005, cell=3.0)
+        S.box(xa, y0, z0 + 0.1, xa + 0.03, y - 0.06, z1 - 0.1, 'steel', c=0.0, cell=3.0)
+    for z, o in ((z0, -1.0), (z1, 1.0)):
+        S.tri((x0, y0, z), (x1, y0, z), (x1, y1 - 0.03, z), 'steel', (0, 0, o))
+    S.quad((x1, y0, z0), (x1, y0, z1), (x1, y1 - 0.03, z1), (x1, y1 - 0.03, z0), 'steel', (1, 0, 0))
+    S.quad((x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1), 'steel', (0, -1, 0))
+    S.rod((x0 + 0.3, y0 + 0.1, z1 + 0.01), (x1, y1 - 0.25, z1 + 0.01), 0.025, 'light_sodium', sides=4)
+
+
+def cage():
+    """The cage: the catwalk across the shaft from deck to deck under the
+    gantry, tread plate on joists between two plate girders, a lamp hung under
+    it either side of the plinth, each throwing its pool on the collar."""
+    rng = random.Random(56)
+    cbox(-1.5, 3.36, -8.0, 1.5, 3.5, 8.0, 'tread', c=0.0, cell=2.0)
+    for x0, x1 in ((-1.5, -1.2), (1.2, 1.5)):
+        cbox(x0, 3.0, -8.0, x1, 3.36, 8.0, 'steel', c=0.01, cell=3.0)
+        cbox(x0, 1.4, -8.0, x1, 1.52, 8.0, 'steel', c=0.01, cell=3.0)
+        cbox(x0 + 0.1, 1.52, -8.0, x1 - 0.1, 3.0, 8.0, 'steel', c=0.01, cell=1.6)
+        for z in np.arange(-7.4, 7.5, 1.5):
+            cbox(x0 + 0.02, 1.52, z, x1 - 0.02, 3.0, z + 0.08, 'steel', c=0.005)
+        icicles(S1, (x0 - 0.01, -8.0), (x0 - 0.01, 8.0), 1.4, rng, longest=0.45, fill=0.6)
+        icicles(S1, (x1 + 0.01, -8.0), (x1 + 0.01, 8.0), 1.4, rng, longest=0.45, fill=0.6)
+    for z in np.arange(-7.6, 7.7, 1.4):
+        cbox(-1.2, 3.04, z, 1.2, 3.36, z + 0.14, 'steel', c=0.01, cell=3.0)
+    quad((-1.2, 3.36, -8.0), (1.2, 3.36, -8.0), (1.2, 3.36, 8.0), (-1.2, 3.36, 8.0), 'steel', (0, -1, 0), cell=3.0)
+    drift(S1, -1.5, -8.0, 1.5, 8.0, 3.5, ['-x', '+x'], reach=0.4, seed=54)
+    for S in SIDES:
+        lamp(S, 0.0, 2.8, 2.6, 3.0)
+        pool(S, 0.0, 2.6, 3.0, -1.0)
 
 
 def collar():
-    """The sword's dais: the shaft's collar, concrete rings stepping up to its
-    steel cap, the cap's hazard band, a hatch."""
-    steps = [(3.0, 0.0, 0.5, 'blast'), (2.4, 0.5, 1.0, 'blast'), (1.8, 1.0, 1.5, 'blast')]
-    for r, y0, y1, mat in steps:
-        spin(0.0, 0.0, [(r - 0.6, y0), (r, y0), (r, y1 - 0.05), (r - 0.05, y1), (r - 0.6, y1)], mat, sides=48, smooth=False)
-    spin(0.0, 0.0, [(1.12, 1.5), (1.2, 1.5), (1.2, 1.97), (1.17, 2.0), (0.001, 2.0)], 'steel', sides=40, smooth=False)
-    # The band round the cap's side, yellow and black.
+    """The shaft's collar a metre down: a steel landing over the drop on legs
+    into the cloud, the sword's plinth in its middle with its hazard band, the
+    skips' pits off two corners, a crate; and each side's bridge from its
+    hall's door."""
+    rng = random.Random(57)
+    cbox(-4.5, -1.14, -4.0, 4.5, -1.0, 4.0, 'tread', c=0.0, cell=2.0)
+    for z0 in (-4.0, 3.82):
+        cbox(-4.5, -1.5, z0, 4.5, -1.0, z0 + 0.18, 'steel', c=0.01, cell=3.0)
+    for x in np.arange(-4.3, 4.4, 1.2):
+        cbox(x, -1.46, -3.82, x + 0.14, -1.14, 3.82, 'steel', c=0.01, cell=3.0)
+    quad((-4.5, -1.46, -4.0), (4.5, -1.46, -4.0), (4.5, -1.46, 4.0), (-4.5, -1.46, 4.0), 'steel', (0, -1, 0), cell=3.0)
+    # The plinth: a steel cap, its band yellow and black, a hatch's ribs.
+    spin(0.0, 0.0, [(0.001, -1.0), (1.6, -1.0), (1.6, -0.63), (1.57, -0.6), (0.001, -0.6)], 'steel', sides=40, smooth=False)
     for k in range(24):
         a0, a1 = math.tau * k / 24, math.tau * (k + 1) / 24
-        spin(0.0, 0.0, [(1.205, 1.58), (1.205, 1.86)], 'paint_y' if k % 2 else 'paint_k', sides=4, smooth=False, arc=(a0, a1))
-    # The hatch's ribs, radial, a hair proud of the cap.
+        spin(0.0, 0.0, [(1.605, -0.95), (1.605, -0.7)], 'paint_y' if k % 2 else 'paint_k', sides=4, smooth=False, arc=(a0, a1))
     for k in range(8):
         a = math.tau * k / 8 + 0.2
         ca, sa = math.cos(a), math.sin(a)
-        rod((ca * 0.25, 2.0, sa * 0.25), (ca * 1.1, 2.0, sa * 1.1), 0.03, 'steel', sides=4)
-    for r, y in ((3.0, 0.5), (2.4, 1.0), (1.8, 1.5)):
-        pa = part('drift')
-        n = 64
-        base = len(pa.verts)
-        for i in range(n + 1):
-            a = math.tau * i / n
-            for rr, al in ((r - 0.58, 0.0), (r - 0.3, 0.55 + 0.25 * math.sin(a * 5.0 + r)), (r - 0.04, 0.85)):
-                pa.verts.append((math.cos(a) * rr, y + 0.01, math.sin(a) * rr))
-                pa.colors[len(pa.verts) - 1] = (1.0, 1.0, 1.0, al)
-        for i in range(n):
-            for j in range(2):
-                k = base + i * 3 + j
-                face(pa, (k, k + 3, k + 4, k + 1), (0, 1, 0), True)
+        rod((ca * 0.3, -0.6, sa * 0.3), (ca * 1.45, -0.6, sa * 1.45), 0.03, 'steel', sides=4)
+    for S in SIDES:
+        # The skip's pit: its plate, a hazard edge round it.
+        S.box(4.5, -1.14, 2.0, 6.6, -1.0, 4.0, 'tread', c=0.0, cell=2.0)
+        S.box(4.5, -1.5, 2.0, 6.6, -1.14, 4.0, 'steel', c=0.01)
+        for k, x in enumerate(np.arange(4.6, 6.5, 0.3)):
+            S.box(x, -1.0, 3.88, x + 0.3, -0.98, 4.0, 'paint_y' if k % 2 else 'paint_k', c=0.0)
+            S.box(x, -1.0, 2.0, x + 0.3, -0.98, 2.12, 'paint_y' if k % 2 else 'paint_k', c=0.0)
+        icicles(S, (4.5, 4.02), (6.6, 4.02), -1.5, rng, longest=0.4)
+        crate(S, -4.2, -1.0, 1.8, -3.0, 0.2, 3.0)
+        bridge(S, rng)
+    icicles(S1, (-4.5, -4.02), (4.5, -4.02), -1.5, rng, longest=0.5)
+    icicles(S1, (-4.5, 4.02), (4.5, 4.02), -1.5, rng, longest=0.5)
+    drift(S1, -4.5, -4.0, 4.5, 4.0, -1.0, ['-z', '+z'], reach=0.6, seed=59)
 
 
-# ----------------------------------------------------------- the decks, the arcades
+def bridge(S, rng):
+    """The side's way down from its hall's door to the collar: a plate over the
+    crag's lip, a ramp, a run, tread on a steel frame."""
+    S.box(-13.0, -0.04, 1.0, -11.0, 0.1, 4.0, 'tread', c=0.0, cell=2.0)
+    S.box(-13.0, -0.5, 1.0, -11.0, -0.04, 4.0, 'steel', c=0.01)
+    S.quad((-11.0, 0.1, 1.0), (-8.0, -1.0, 1.0), (-8.0, -1.0, 4.0), (-11.0, 0.1, 4.0), 'tread', (0.34, 0.94, 0.0), cell=2.0)
+    for z, o in ((1.0, -1.0), (4.0, 1.0)):
+        S.quad((-11.0, -1.5, z), (-8.0, -1.5, z), (-8.0, -1.0, z), (-11.0, 0.1, z), 'steel', (0, 0, o))
+    S.quad((-11.0, -1.5, 1.0), (-8.0, -1.5, 1.0), (-8.0, -1.5, 4.0), (-11.0, -1.5, 4.0), 'steel', (0, -1, 0))
+    S.box(-8.0, -1.14, 1.0, -4.5, -1.0, 4.0, 'tread', c=0.0, cell=2.0)
+    for z0 in (1.0, 3.82):
+        S.box(-8.0, -1.5, z0, -4.5, -1.0, z0 + 0.18, 'steel', c=0.01, cell=3.0)
+    S.quad((-8.0, -1.46, 1.18), (-4.5, -1.46, 1.18), (-4.5, -1.46, 3.82), (-8.0, -1.46, 3.82), 'steel', (0, -1, 0), cell=3.0)
+    for z in (0.98, 4.02):
+        icicles(S, (-8.0, z), (-4.5, z), -1.5, rng, longest=0.35)
+    drift(S, -13.0, 1.0, -11.0, 4.0, 0.1, ['-z', '+z'], reach=0.5, seed=58 + S.s)
+
+
+def legs():
+    """What holds the hub up and what the decks' middles stand on: steel legs
+    from under their floors down into the cloud, braced, under the floors'
+    own plans so nobody falls through one."""
+    def leg(x, z, top, sides=8):
+        rod((x, top, z), (x, -72.0, z), 0.22, 'rusty', sides=sides)
+    feet = [(-4.2, -3.7), (4.2, -3.7), (-4.2, 3.7), (4.2, 3.7)]
+    for x, z in feet:
+        leg(x, z, -1.5)
+    for y in (-6.0, -16.0, -30.0, -48.0):
+        for (ax, az), (bx, bz) in ((feet[0], feet[1]), (feet[2], feet[3]), (feet[0], feet[2]), (feet[1], feet[3])):
+            rod((ax, y, az), (bx, y, bz), 0.1, 'steel', sides=6)
+            rod((ax, y, az), (bx, y - 8.0, bz), 0.06, 'steel', sides=5)
+    for S in SIDES:
+        for x, z in ((-7.7, 1.3), (-7.7, 3.7), (-10.6, 1.3), (-10.6, 3.7)):
+            a = S.p(x, 0.0, z)
+            leg(a[0], a[2], -1.5)
+        # The deck's mid bent: a leg under each girder, braced across.
+        for z in (8.2, 13.8):
+            a = S.p(-2.5, 0.0, z)
+            leg(a[0], a[2], 1.2, sides=10)
+        for y in (-4.0, -14.0, -28.0):
+            S.rod((-2.5, y, 8.2), (-2.5, y, 13.8), 0.1, 'steel', sides=6)
+            S.rod((-2.5, y, 8.2), (-2.5, y - 9.0, 13.8), 0.06, 'steel', sides=5)
+
+
+# ------------------------------------------------------------------- the decks
+def girder(S, x0, x1, z0, z1, y0, y1, rng):
+    """A plate girder along x inside its box: a web between flanges at its top
+    and foot, a stiffener every metre and a half, icicles off its foot."""
+    S.box(x0, y0, z0 + 0.14, x1, y1, z1 - 0.14, 'steel', c=0.01, cell=1.6)
+    S.box(x0, y0, z0, x1, y0 + 0.12, z1, 'steel', c=0.01, cell=3.0)
+    S.box(x0, y1 - 0.1, z0, x1, y1, z1, 'steel', c=0.01, cell=3.0)
+    for x in np.arange(x0 + 0.6, x1 - 0.3, 1.5):
+        S.box(x, y0 + 0.12, z0 + 0.02, x + 0.08, y1 - 0.1, z1 - 0.02, 'steel', c=0.005)
+    icicles(S, (x0, z0 - 0.01), (x1, z0 - 0.01), y0, rng, longest=0.5, fill=0.7)
+    icicles(S, (x0, z1 + 0.01), (x1, z1 + 0.01), y0, rng, longest=0.5, fill=0.7)
+
+
+def shed_wall(S, x0, y0, z0, x1, y1, z1, face, windows=None):
+    """A wall of the mine's sheds (the gallery on the deck, the winding cab):
+    grey-green sheet outside, lining inside, a steel coping, its ends closed;
+    `windows` (a0, a1, y0, y1) lit panes painted on its sheet."""
+    out, along = face_axes(face)
+    if along == 'z':
+        (po, pi) = (x0, x1) if out[0] < 0 else (x1, x0)
+        a0, a1 = z0, z1
+    else:
+        (po, pi) = (z0, z1) if out[2] < 0 else (z1, z0)
+        a0, a1 = x0, x1
+    n = out[0] + out[2]
+    top = y1 - 0.12
+    corrugated(S, po, a0, a1, y0, top, face, 'clad_grey', back=0.0, fine=4)
+    face_in = ('+' if face[0] == '-' else '-') + face[1]
+    flat(S, pi, a0, a1, y0, top, face_in, 'lining', back=0.0, cell=0.35)
+    lo, hi = sorted((po, pi))
+    if along == 'z':
+        S.box(lo, top, a0, hi, y1, a1, 'steel', c=0.02, cell=2.0)
+    else:
+        S.box(a0, top, lo, a1, y1, hi, 'steel', c=0.02, cell=2.0)
+    snow_cap(S, along, lo, hi, a0, a1, y1, h=0.04)
+    for a, sgn in ((a0, -1.0), (a1, 1.0)):
+        o = (0.0, 0.0, sgn) if along == 'z' else (sgn, 0.0, 0.0)
+        if along == 'z':
+            S.quad((lo, y0, a), (hi, y0, a), (hi, top, a), (lo, top, a), 'steel', o)
+        else:
+            S.quad((a, y0, lo), (a, y0, hi), (a, top, hi), (a, top, lo), 'steel', o)
+    if windows:
+        wa0, wa1, wy0, wy1 = windows
+        q = po + n * 0.012
+        for a in np.arange(wa0, wa1 - 0.5, 1.1):
+            if along == 'z':
+                S.box(min(q, po), wy0, a, max(q, po), wy1, a + 0.8, 'window', c=0.0, cell=20.0)
+            else:
+                S.box(a, wy0, min(q, po), a + 0.8, wy1, max(q, po), 'window', c=0.0, cell=20.0)
+
+
 def deck(S):
+    """The deck from the side's mezzanine across the shaft to the far crag:
+    tread plate on joists between two plate girders, its abutment on the
+    side's crag, a ramp down at the far end; the gallery over its first stretch."""
     rng = random.Random(61 if S.s > 0 else 62)
     S.box(-13.0, 3.36, 8.0, 8.0, 3.5, 14.0, 'tread', c=0.0, cell=2.0)
-    S.box(-13.0, 3.0, 8.0, 8.0, 3.36, 8.2, 'steel', c=0.01, cell=3.0)
-    for x in np.arange(-12.7, 7.9, 1.5):
-        S.box(x, 3.04, 8.2, x + 0.14, 3.36, 13.6, 'steel', c=0.01, cell=3.0)
-    S.quad((-13.0, 3.36, 8.2), (8.0, 3.36, 8.2), (8.0, 3.36, 13.6), (-13.0, 3.36, 13.6), 'steel', (0, -1, 0), cell=3.0)
-    icicles(S, (-13.0, 7.98), (8.0, 7.98), 3.0, rng, longest=0.42)
-    # Its rails on the drop: a steel parapet, a rail over it; none where the
-    # overshield stands at the open edge.
-    for x0, x1 in ((-11.0, -7.0), (5.5, 7.8)):
-        S.box(x0, 3.5, 13.72, x1, 4.3, 13.98, 'steel', c=0.01)
-        S.box(x0, 4.3, 13.7, x1, 4.4, 14.0, 'galv', c=0.01)
-        for x in np.arange(x0, x1 - 0.05, 1.0):
-            S.box(x, 3.5, 13.7, x + 0.08, 4.3, 14.0, 'steel', c=0.005)
-        snow_cap(S, 'x', 13.7, 14.0, x0, x1, 4.4, h=0.03)
-    S.box(-13.0, 3.5, 13.96, 8.0, 3.56, 14.0, 'steel', c=0.0, cell=3.0)
-    drift(S, -13.0, 8.0, 8.0, 14.0, 3.5, ['+z'], reach=1.3, seed=63 + S.s)
+    for x in np.arange(-11.7, 7.9, 1.5):
+        S.box(x, 3.04, 8.4, x + 0.14, 3.36, 13.6, 'steel', c=0.01, cell=3.0)
+    S.quad((-12.0, 3.36, 8.4), (8.0, 3.36, 8.4), (8.0, 3.36, 13.6), (-12.0, 3.36, 13.6), 'steel', (0, -1, 0), cell=3.0)
+    for z0, z1 in ((8.0, 8.4), (13.6, 14.0)):
+        girder(S, -12.0, 8.0, z0, z1, 1.2, 3.0, rng)
+        S.box(-13.0, 3.0, z0, 8.0, 3.36, z1, 'steel', c=0.01, cell=3.0)
+    # The abutment: board-marked concrete off the crag, under the deck's end.
+    S.box(-13.0, -3.0, 8.0, -12.0, 3.0, 14.0, 'blast_dark', c=0.03, cell=1.2)
+    # Its rail on the drop by the ramp.
+    x0, x1 = 5.5, 7.8
+    S.box(x0, 3.5, 13.72, x1, 4.3, 13.98, 'steel', c=0.01)
+    S.box(x0, 4.3, 13.7, x1, 4.4, 14.0, 'galv', c=0.01)
+    for x in np.arange(x0, x1 - 0.05, 1.0):
+        S.box(x, 3.5, 13.7, x + 0.08, 4.3, 14.0, 'steel', c=0.005)
+    snow_cap(S, 'x', 13.7, 14.0, x0, x1, 4.4, h=0.03)
+    drift(S, -5.0, 8.0, 8.0, 14.0, 3.5, ['+z'], reach=1.3, seed=63 + S.s)
+    drift(S, -13.0, 8.0, -10.0, 14.0, 3.5, ['+z'], reach=0.9, seed=64 + S.s)
     crate(S, -12.4, 3.5, 9.0, -11.2, 4.7, 10.2)
+    gallery(S)
     # The ramp down to the far spur: tread on a concrete wedge.
     for z, o in ((11.0, -1.0), (14.0, 1.0)):
-        S.quad((13.0, 0.0, z), (8.0, 0.0, z), (8.0, 3.5, z), (13.0, 0.0, z), 'blast', (0, 0, o))
         S.tri((13.0, 0.0, z), (8.0, 0.0, z), (8.0, 3.5, z), 'blast', (0, 0, o))
     S.quad((13.0, 0.0, 11.0), (8.0, 3.5, 11.0), (8.0, 3.5, 14.0), (13.0, 0.0, 14.0), 'tread', (0.57, 0.82, 0.0), cell=2.0)
+    S.quad((8.0, 0.0, 11.0), (8.0, 0.0, 14.0), (8.0, 3.0, 14.0), (8.0, 3.0, 11.0), 'blast', (-1, 0, 0))
     for t in np.arange(0.05, 1.0, 0.1):
         x = 13.0 - 5.0 * t
         y = 3.5 * t
         S.rod((x, y + 0.012, 11.05), (x, y + 0.012, 13.95), 0.012, 'galv', sides=4)
-    # The arcade's wall on the drop: board-marked concrete, pilasters to the plane.
-    S.box(-13.0, -3.0, 13.72, 8.0, 3.0, 14.0, 'blast_dark', c=0.02, cell=1.2)
-    for x in (-12.0, -6.0, 0.0, 6.0):
-        S.box(x - 0.3, -3.0, 13.6, x + 0.3, 3.0, 13.72, 'blast_dark', c=0.02)
-    # Its columns: H sections in their boxes, a plate at the foot and the head.
-    for x in (-9.3, -3.3, 2.7, 7.4):
-        S.box(x, 0.0, 8.0, x + 0.6, 0.06, 8.6, 'steel', c=0.005)
-        S.box(x, 2.92, 8.0, x + 0.6, 3.0, 8.6, 'steel', c=0.005)
-        S.box(x, 0.06, 8.0, x + 0.6, 2.92, 8.06, 'steel_paint', c=0.004)
-        S.box(x, 0.06, 8.54, x + 0.6, 2.92, 8.6, 'steel_paint', c=0.004)
-        S.box(x + 0.27, 0.06, 8.06, x + 0.33, 2.92, 8.54, 'steel_paint', c=0.004)
-    lamp(S, -3.0, 2.7, 11.0, 3.0)
 
 
-# --------------------------------------------------------------- the yard's things
-def yard(S):
-    rng = random.Random(71 if S.s > 0 else 72)
-    # The ore tub on its rails, the rails on to the shaft house's door.
-    x0, z0, x1, z1 = -8.2, 3.4, -5.8, 4.6
-    S.box(x0 + 0.1, 0.2, z0 + 0.04, x1 - 0.1, 0.42, z1 - 0.04, 'steel', c=0.01)
-    for wx in (x0 + 0.42, x1 - 0.42):
-        for wz in (z0 + 0.02, z1 - 0.1):
-            S.box(wx - 0.2, 0.0, wz, wx + 0.2, 0.4, wz + 0.08, 'steel', c=0.08)
-    rows = [(0.42, 0.95, 0.42), (1.3, 1.2, 0.6)]
-    cx, cz = (x0 + x1) / 2, (z0 + z1) / 2
-    (ya, ha, da), (yb, hb, db) = rows
-    for sx, sz, o in ((1, 0, (1, 0, 0)), (-1, 0, (-1, 0, 0)), (0, 1, (0, 0, 1)), (0, -1, (0, 0, -1))):
-        if sx:
-            S.quad((cx + sx * ha, ya, cz - da), (cx + sx * ha, ya, cz + da), (cx + sx * hb, yb, cz + db), (cx + sx * hb, yb, cz - db), 'rust', o)
-        else:
-            S.quad((cx - ha, ya, cz + sz * da), (cx + ha, ya, cz + sz * da), (cx + hb, yb, cz + sz * db), (cx - hb, yb, cz + sz * db), 'rust', o)
-    S.quad((cx - 1.15, 1.2, cz - 0.55), (cx + 1.15, 1.2, cz - 0.55), (cx + 1.15, 1.2, cz + 0.55), (cx - 1.15, 1.2, cz + 0.55), 'coal', (0, 1, 0))
-    snow_top(S, cx - 1.1, 1.2, cz - 0.5, cx + 1.1, cz + 0.5, h=0.09)
-    for rz in (3.6, 4.4):
-        S.box(-13.4, 0.0, rz - 0.035, -0.5, 0.06, rz + 0.035, 'galv', c=0.0, cell=3.0)
-    for x in np.arange(-13.2, -0.6, 0.7):
-        S.box(x, -0.04, 3.3, x + 0.18, 0.025, 4.7, 'rusty', c=0.0, cell=3.0)
-    # The crate to jump the deck from, the low wall.
-    crate(S, -6.6, 0.0, 6.4, -5.4, 1.2, 7.6)
-    S.box(-4.0, 0.0, -5.3, -1.0, 1.1, -4.8, 'blast', c=0.06)
-    snow_top(S, -3.97, 1.1, -5.27, -1.03, -4.83, h=0.05)
-    # The spur's.
+def gallery(S):
+    """The roofed stretch of the deck past the mezzanine: a shed over the way,
+    open at its ends, its windows lit, snow on its roof, a lamp inside."""
+    shed_wall(S, -10.0, 3.5, 8.0, -5.0, 6.5, 8.4, '-z', windows=(-9.6, -5.4, 4.7, 5.5))
+    shed_wall(S, -10.0, 3.5, 13.6, -5.0, 6.5, 14.0, '+z', windows=(-9.6, -5.4, 4.7, 5.5))
+    S.box(-10.0, 6.86, 8.0, -5.0, 7.0, 14.0, 'steel', c=0.03, cell=2.0)
+    S.quad((-10.0, 6.86, 8.4), (-5.0, 6.86, 8.4), (-5.0, 6.86, 13.6), (-10.0, 6.86, 13.6), 'steel', (0, -1, 0), cell=3.0)
+    for x in np.arange(-9.9, -5.0, 1.2):
+        S.box(x, 6.5, 8.4, x + 0.16, 6.86, 13.6, 'steel', c=0.01, cell=3.0)
+    S.box(-10.0, 6.5, 8.0, -5.0, 6.86, 8.4, 'steel', c=0.01, cell=3.0)
+    S.box(-10.0, 6.5, 13.6, -5.0, 6.86, 14.0, 'steel', c=0.01, cell=3.0)
+    # Inside: a column at each end and the middle, a girt under the windows.
+    for z0, z1 in ((8.4, 8.6), (13.4, 13.6)):
+        for x in (-10.0, -7.6, -5.2):
+            S.box(x, 3.5, z0, x + 0.2, 6.5, z1, 'steel', c=0.01)
+        S.box(-10.0, 4.5, z0, -5.0, 4.66, z1, 'steel', c=0.01, cell=3.0)
+    snow_top(S, -9.95, 7.0, 8.05, -5.05, 13.95, h=0.12)
+    rng = random.Random(65 if S.s > 0 else 66)
+    for z in (7.98, 14.02):
+        icicles(S, (-10.0, z), (-5.0, z), 6.5, rng, longest=0.55, spacing=0.14)
+    lamp(S, -7.5, 6.3, 11.0, 6.5)
+
+
+def spur(S):
+    """The spur's cover: crates and a low concrete wall."""
     crate(S, -19.5, 0.0, -9.0, -18.3, 1.2, -7.8)
     S.box(-17.0, 0.0, -12.5, -14.0, 1.1, -12.0, 'blast', c=0.06)
     snow_top(S, -16.97, 1.1, -12.47, -14.03, -12.03, h=0.05)
     crate(S, -15.2, 0.0, -6.2, -14.0, 1.2, -5.0)
-    crate(S, -12.0, 0.0, -6.0, -10.8, 1.1, -4.8)
-    crate(S, -11.95, 1.1, -5.95, -10.85, 2.2, -4.85)
 
 
 def door_lamps(S):
     """A lamp over each door out of the shaft house: a bracket off the wall, a
     shade, its lens under it; and the warm pool it throws on the snow."""
-    for x, y, z, face in DOOR_LAMPS:
+    for x, y, z, face, floor in DOOR_LAMPS:
         out = (1.0, 0.0) if face == '+x' else (0.0, -1.0)
         if face == '+x':
             S.box(x - 0.38, y + 0.16, z - 0.04, x, y + 0.22, z + 0.04, 'steel', c=0.0)
@@ -738,7 +874,7 @@ def door_lamps(S):
         spin(px, pz, [(0.001, y + 0.08), (0.24, y + 0.02), (0.27, y), (0.08, y + 0.2), (0.001, y + 0.2)], 'steel', sides=12)
         # A bulb under the shade that shows from the side.
         spin(px, pz, [(0.001, y - 0.16), (0.08, y - 0.13), (0.12, y - 0.06), (0.13, y + 0.02), (0.001, y + 0.02)], 'light_sodium', sides=12)
-        pool(S, x + out[0] * 1.2, z + out[1] * 1.2, 3.2, 0.0)
+        pool(S, x + out[0] * 1.2, z + out[1] * 1.2, 3.2, floor)
 
 
 def pool(S, x, z, r, y):
@@ -794,10 +930,8 @@ def lane(S, pts, half, seed):
 
 
 def lanes(S):
-    lane(S, [(-12.6, 2.5), (-8.5, 2.2), (-3.4, 0.6)], 1.0, 81)
-    lane(S, [(-12.6, 12.3), (-8.0, 10.5), (-4.0, 6.0), (-2.6, 2.4)], 1.0, 82)
-    lane(S, [(-16.75, -2.8), (-16.0, -6.5), (-12.0, -9.0), (-6.0, -8.0), (-2.4, -2.8)], 1.0, 83)
-    lane(S, [(-13.0, 4.0), (-1.0, 4.0)], 0.9, 84)
+    lane(S, [(-16.75, -2.8), (-16.5, -5.0), (-15.0, -9.0), (-12.8, -12.5)], 1.0, 83)
+    lane(S, [(-16.75, -2.8), (-18.6, -6.2)], 0.8, 84)
 
 
 # ---------------------------------------------------------- out in the blizzard
@@ -864,7 +998,7 @@ def winding_house(S):
     # Its windows toward the mine, lit.
     for z in np.arange(z0 + 1.2, z1 - 1.0, 2.2):
         S.box(x1 + 0.005, -2.6, z, x1 + 0.03, -1.2, z + 1.2, 'window', c=0.0, cell=20.0)
-    # The stack, smoking (the client's vents).
+    # The stack, smoking (the client's vents, `ambient.rs`'s STACKS).
     S.rod((-34.0, ridge - 0.6, 11.5), (-34.0, ridge + 4.5, 11.5), 0.4, 'steel', sides=10)
     icicles(S, (x1 + 0.45, z0), (x1 + 0.45, z1), y1, random.Random(5 + S.s), longest=0.9, spacing=0.2)
 
@@ -1050,15 +1184,28 @@ def tone(p, n, name):
         base = {'steel': STEEL, 'steel_paint': (0.06, 0.07, 0.075), 'steel_box': (0.12, 0.13, 0.12), 'rusty': RUSTY}.get(name, STEEL)
         if name.startswith('team_'):
             base = RED if name.endswith('red') else BLUE
+        # What hangs in the shaft (the gantry, the cab's posts and stairs, the
+        # cage, the collar, the decks' girders, the legs) is old steel gone
+        # rust-brown, the same on both halves and in neither side's colour.
+        hub = abs(x) < 12.5 and not inside and name in ('steel', 'rusty')
+        if hub:
+            base = HUB_STEEL if name == 'steel' else mix(RUSTY, HUB_STEEL, 0.5)
         base = mix(base, (base[0] * 0.6, base[1] * 0.6, base[2] * 0.62), streak * 0.4)
         # Rime feathers on the face the wind meets, in patches, never all of
         # it; snow on what looks up.
         # In patches: at most a third of a windward face, the steel dark under it.
         patch = smooth(0.55, 0.75, vnoise(x * 0.8 + z * 0.3, y * 1.3, 5))
         rime = smooth(0.5, 0.9, windward) * patch * 0.9
+        # Out in the shaft's wind every upright face takes a thin frost.
+        if hub and abs(up) < 0.6:
+            rime = max(rime, 0.22 + 0.1 * w)
         out = mix(base, RIME_SIDE, rime)
-        if up > 0.6 and not inside:
+        # Snow lies on what looks up, but not down the shaft under the collar.
+        if up > 0.6 and not inside and y > -1.6:
             out = mix(out, RIME, 0.8 * (0.6 + 0.4 * w))
+        # The legs go into the cloud: grey-blue with depth, never black.
+        if y < -2.0:
+            out = mix(out, (0.3, 0.33, 0.4), 0.7 * smooth(-2.0, -30.0, y))
     elif name == 'galv':
         patch = smooth(0.55, 0.75, vnoise(x * 0.8 + z * 0.3, y * 1.3, 5))
         rime = smooth(0.5, 0.9, windward) * patch * 0.8
@@ -1086,8 +1233,27 @@ def tone(p, n, name):
         # Old steel's rust, dark and red as it is in the cold, not ochre.
         k = 0.8 + 0.2 * w
         out = (k * 0.36, k * 0.24, k * 0.21)
-    elif name == 'coal':
-        out = (0.02, 0.02, 0.022)
+    elif name in ('blast', 'blast_dark', 'floor'):
+        k = 0.86 + 0.14 * w
+        k *= 1.0 - 0.14 * streak if abs(up) < 0.5 else 1.0
+        # Wet and dark at a wall's foot where the snow lies against it.
+        k *= 1.0 - 0.25 * max(0.0, 1.0 - y / 0.6) if 0.0 <= y < 0.6 and abs(up) < 0.5 else 1.0
+        out = (k * 0.76, k * 0.88, k * 1.1)
+    elif name == 'tread':
+        k = 0.84 + 0.16 * w
+        out = (k * 0.86, k * 0.92, k * 1.0)
+    elif name == 'rust':
+        # Old steel's rust, dark and red as it is in the cold, not ochre.
+        k = 0.8 + 0.2 * w
+        out = (k * 0.36, k * 0.24, k * 0.21)
+    elif name == 'pitwall':
+        k = 0.75 + 0.25 * w
+        out = (0.11 * k, 0.12 * k, 0.135 * k)
+        # Seeps: darker streaks down the pours from the ring beams.
+        out = mix(out, (0.05, 0.05, 0.055), 0.5 * smooth(0.6, 0.85, vnoise(x * 0.9 + z * 0.9, y * 0.08, 17)))
+        if y > -6.0 and up < 0.5:
+            out = mix(out, RIME_SIDE, 0.5 * smooth(-6.0, 0.4, y) * smooth(0.45, 0.7, vnoise(x * 0.6 + z * 0.6, y * 0.9, 3)))
+        out = mix(out, (0.004, 0.005, 0.007), 0.92 * smooth(-3.0, -40.0, y))
     elif name == 'lining':
         k = 0.8 + 0.2 * w
         out = (0.09 * k, 0.1 * k, 0.11 * k)
@@ -1106,14 +1272,15 @@ def main():
         shaft_house(S)
         headframe(S)
         deck(S)
-        yard(S)
+        spur(S)
         winding_house(S)
         cableway(S)
         door_lamps(S)
         lanes(S)
     gantry()
-    columns()
+    cage()
     collar()
+    legs()
     # Needles out of the cloud round the rock, far enough to stand apart.
     for i, (x, z, top, r) in enumerate([(30.0, 40.0, -14.0, 5.0), (-58.0, -30.0, -8.0, 7.0), (70.0, -55.0, 4.0, 9.0),
                                          (-20.0, -62.0, -20.0, 6.0), (95.0, 30.0, 12.0, 11.0), (-90.0, 60.0, 8.0, 10.0),
@@ -1123,14 +1290,14 @@ def main():
     objs = make_objects()
 
     def ground(verts, polys):
-        # The rock's top and sides, for the occlusion.
-        b = len(verts)
-        verts.extend([to_blender(p) for p in ((-21.0, 0.0, -14.0), (21.0, 0.0, -14.0), (21.0, 0.0, 14.0), (-21.0, 0.0, 14.0))])
-        polys.append((b, b + 1, b + 2, b + 3))
-        for (ax, az), (bx, bz) in (((-21, -14), (21, -14)), ((21, -14), (21, 14)), ((21, 14), (-21, 14)), ((-21, 14), (-21, -14))):
+        # The crags' tops and their faces into the shaft, for the occlusion.
+        def quad_(pts):
             b = len(verts)
-            verts.extend([to_blender(p) for p in ((ax, 0.0, az), (bx, 0.0, bz), (bx, -40.0, bz), (ax, -40.0, az))])
+            verts.extend([to_blender(p) for p in pts])
             polys.append((b, b + 1, b + 2, b + 3))
+        for s_ in (1, -1):
+            quad_([(s_ * -21.0, 0.0, -14.0 * s_), (s_ * -12.0, 0.0, -14.0 * s_), (s_ * -12.0, 0.0, 14.0 * s_), (s_ * -21.0, 0.0, 14.0 * s_)])
+            quad_([(s_ * -12.0, 0.0, -14.0 * s_), (s_ * -12.0, 0.0, 14.0 * s_), (s_ * -12.0, -40.0, 14.0 * s_), (s_ * -12.0, -40.0, -14.0 * s_)])
     paint(objs, ground, tone)
     export(objs, OUT, 'pithead')
 

@@ -10,6 +10,11 @@
 //!   side's spawns each side's spawns can see, and what share of the map
 //!   each place sees.
 //!
+//! - **The feel** (in the numbers): how much of the map is one floor, how
+//!   high it goes, how much stands by a fatal edge or under a roof, how far
+//!   its lines run and how many cross levels, and each power pad's ways in
+//!   (`FLOW_DOORS=1` prints where they are).
+//!
 //! The places are the map's pads, each side's spawns, and the `callouts`
 //! its `map.json` names (`[{ "name": "top mid", "at": [x, z, y] }]`; the
 //! map compiler ignores them).
@@ -510,6 +515,23 @@ fn main() {
         let _ = writeln!(md, "- {:.0} m: {} to {}{flag}", l.len, name_near(l.a), name_near(l.b));
     }
     let _ = writeln!(md, "\nRed's spawns see blue's in {cross} of {pairs} pairs.");
+    if !walk.throws.is_empty() {
+        let _ = writeln!(md, "\n## Launchers\n");
+        for (from, land, t) in &walk.throws {
+            let _ = writeln!(
+                md,
+                "- from {} ({:.1}, {:.1}, {:.1}) lands at {} ({:.1}, {:.1}, {:.1}) after {t:.1} s",
+                name_near(*from),
+                from.x,
+                from.z,
+                from.y,
+                name_near(*land),
+                land.x,
+                land.z,
+                land.y
+            );
+        }
+    }
     // A place either side can't walk to, naming the side when the other can.
     let unreached: Vec<String> = places
         .iter()
@@ -527,6 +549,7 @@ fn main() {
     if !unreached.is_empty() {
         let _ = writeln!(md, "\nCan't be walked to: {}.", unreached.join(", "));
     }
+    md.push_str(&feel(&m, &walk, &eyes, &places, &node_of));
     std::fs::write(out.join(format!("{slug}.md")), &md).expect("the report");
 
     // The plan.
@@ -844,4 +867,224 @@ fn main() {
     println!("{}", out.join(format!("{slug}.svg")).display());
     println!("{}", out.join(format!("{slug}.md")).display());
     print!("{md}");
+}
+
+/// How far from a place counts as being at it, for its ways in, ms walked.
+const AT_MS: u32 = 600;
+/// A floor this much above or below another is another level, m.
+const LEVEL_M: f32 = 2.5;
+
+/// What a map is like to play in, as numbers to hold maps side by side: how
+/// much of it is one floor, how high it goes, how much stands by a fall to
+/// the death or under a roof, how far its lines run, how many of them cross
+/// from one level to another, and how many ways lead into each power pad.
+fn feel(m: &Map, walk: &Walk, eyes: &[V3], places: &[Place], node_of: &[Option<usize>]) -> String {
+    let n = walk.nodes.len().max(1) as f32;
+    let ys: Vec<f32> = walk.nodes.iter().map(|&k| at(k).y).collect();
+    // Levels: half-metre bands holding 3% or more of what can be stood on,
+    // runs of them merged (a ramp's foot is its floor's).
+    let mut bands: BTreeMap<i32, usize> = BTreeMap::new();
+    for &y in &ys {
+        *bands.entry((y / 0.5).round() as i32).or_default() += 1;
+    }
+    let mut levels: Vec<(f32, f32)> = Vec::new();
+    for (&b, &c) in &bands {
+        let share = c as f32 / n;
+        if share < 0.03 {
+            continue;
+        }
+        let y = b as f32 * 0.5;
+        match levels.last_mut() {
+            Some(l) if y - l.0 < 1.0 => l.1 += share,
+            _ => levels.push((y, share)),
+        }
+    }
+    let main = levels.iter().map(|l| l.1).fold(0.0f32, f32::max);
+    let span = levels.last().map_or(0.0, |l| l.0) - levels.first().map_or(0.0, |l| l.0);
+    // By the edge: a fall to the death within 1.5 m, any way.
+    let mut edge = 0;
+    let mut roofed = 0;
+    let up = V3::new(0.0, 1.0, 0.0);
+    for &k in &walk.nodes {
+        let p = at(k);
+        let near = m.void > f32::NEG_INFINITY
+            && (0..16).any(|i| {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                let r = if i < 8 { 0.75 } else { 1.5 };
+                m.over_void(p.x + r * a.cos(), p.z + r * a.sin(), p.y)
+            });
+        edge += near as usize;
+        roofed += (m.ray(V3::new(p.x, p.y + BODY_H, p.z), up, 4.0) < 4.0) as usize;
+    }
+    // Sight between every two eyes.
+    let mut seen = vec![0usize; eyes.len()];
+    let mut lens: Vec<f32> = Vec::new();
+    let mut across = 0usize;
+    for i in 0..eyes.len() {
+        for j in i + 1..eyes.len() {
+            if m.clear(eyes[i], eyes[j]) {
+                seen[i] += 1;
+                seen[j] += 1;
+                lens.push((eyes[j] - eyes[i]).len());
+                across += ((eyes[j].y - eyes[i].y).abs() >= LEVEL_M) as usize;
+            }
+        }
+    }
+    lens.sort_by(f32::total_cmp);
+    let pct = |q: f32| {
+        lens.get(((lens.len() as f32 - 1.0) * q) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let open = seen.iter().sum::<usize>() as f32 / (eyes.len().max(2) * (eyes.len().max(2) - 1)) as f32;
+
+    let mut md = String::new();
+    let _ = writeln!(md, "\n## Feel\n");
+    let _ = writeln!(md, "| | |\n|---|---|");
+    let lv: Vec<String> = levels
+        .iter()
+        .map(|l| format!("{:.1} m {:.0}%", l.0, l.1 * 100.0))
+        .collect();
+    let _ = writeln!(
+        md,
+        "| levels (3%+ of the floor) | {}: {} |",
+        levels.len(),
+        lv.join(", ")
+    );
+    let _ = writeln!(md, "| on the biggest level | {:.0}% |", main * 100.0);
+    let _ = writeln!(md, "| lowest to highest level | {span:.1} m |");
+    let _ = writeln!(md, "| by a fatal edge (1.5 m) | {:.0}% |", edge as f32 / n * 100.0);
+    let _ = writeln!(md, "| under a roof (4 m) | {:.0}% |", roofed as f32 / n * 100.0);
+    let _ = writeln!(md, "| seen from a spot, on average | {:.0}% of the map |", open * 100.0);
+    let _ = writeln!(
+        md,
+        "| lines of sight, median / 90th | {:.0} / {:.0} m |",
+        pct(0.5),
+        pct(0.9)
+    );
+    let _ = writeln!(
+        md,
+        "| lines of sight {LEVEL_M} m or more up or down | {:.0}% |",
+        across as f32 / lens.len().max(1) as f32 * 100.0
+    );
+
+    // Ways in to the power pads: where the quickest ways to it from anywhere
+    // farther out cross into the ground within AT_MS of it, in clumps a
+    // metre apart (a dead end beside the pad is no way in; a lift is).
+    let mut back: Vec<Vec<(usize, u32)>> = vec![Vec::new(); walk.nodes.len()];
+    for (i, es) in walk.edges.iter().enumerate() {
+        for &(j, c) in es {
+            back[j].push((i, c));
+        }
+    }
+    let to = |t: usize| -> Vec<u32> {
+        let mut d = vec![u32::MAX; walk.nodes.len()];
+        let mut h = BinaryHeap::new();
+        d[t] = 0;
+        h.push(Reverse((0u32, t)));
+        while let Some(Reverse((c, i))) = h.pop() {
+            if c > d[i] {
+                continue;
+            }
+            for &(j, e) in &back[i] {
+                if c + e < d[j] {
+                    d[j] = c + e;
+                    h.push(Reverse((c + e, j)));
+                }
+            }
+        }
+        d
+    };
+    let power: Vec<usize> = m
+        .pads
+        .iter()
+        .filter(|p| p.respawn_ms >= 90_000)
+        .filter_map(|p| places.iter().position(|pl| pl.pos == p.pos))
+        .collect();
+    if !power.is_empty() {
+        let _ = writeln!(
+            md,
+            "\n| power pad | ways in | from above | from below |\n|---|---|---|---|"
+        );
+    }
+    for pi in power {
+        let Some(t) = node_of[pi] else { continue };
+        let d = to(t);
+        let here = at(walk.nodes[t]).y;
+        // Each door with where the way came from in its last second: from
+        // above (1), below (-1) or the pad's own level (0).
+        let mut doors: Vec<(V3, i8)> = Vec::new();
+        for i in 0..walk.nodes.len() {
+            if d[i] <= AT_MS + 600 || d[i] == u32::MAX {
+                continue;
+            }
+            // Down the quickest way in, to the last step outside.
+            let mut k = i;
+            let mut came: Vec<usize> = vec![i];
+            while d[k] > AT_MS {
+                let Some(&(j, _)) = walk.edges[k]
+                    .iter()
+                    .filter(|&&(j, c)| d[j] != u32::MAX && d[j] + c == d[k])
+                    .min_by_key(|&&(j, _)| d[j])
+                else {
+                    break;
+                };
+                if d[j] <= AT_MS {
+                    break;
+                }
+                k = j;
+                came.push(j);
+            }
+            let ys = came
+                .iter()
+                .filter(|&&c| d[c] <= d[k] + 1000)
+                .map(|&c| at(walk.nodes[c]).y);
+            let (lo, hi) = ys.fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(y), b.max(y)));
+            let from = if hi > here + 1.0 {
+                1
+            } else if lo < here - 1.0 {
+                -1
+            } else {
+                0
+            };
+            let door = (at(walk.nodes[k]), from);
+            if !doors.contains(&door) {
+                doors.push(door);
+            }
+        }
+        // Clumps: each door joins every clump within a metre of it; a clump
+        // is from above (or below) if any way through it is.
+        let mut clumps: Vec<(Vec<V3>, [bool; 2])> = Vec::new();
+        for (p, from) in doors {
+            let hits: Vec<usize> = (0..clumps.len())
+                .filter(|&c| clumps[c].0.iter().any(|q| (*q - p).len() <= 1.0))
+                .collect();
+            let mut merged = (vec![p], [from > 0, from < 0]);
+            for &c in hits.iter().rev() {
+                let (ps, f) = clumps.swap_remove(c);
+                merged.0.extend(ps);
+                merged.1 = [merged.1[0] || f[0], merged.1[1] || f[1]];
+            }
+            clumps.push(merged);
+        }
+        let above = clumps.iter().filter(|c| c.1[0]).count();
+        let below = clumps.iter().filter(|c| c.1[1]).count();
+        let _ = writeln!(md, "| {} | {} | {above} | {below} |", places[pi].name, clumps.len());
+        if std::env::var("FLOW_DOORS").is_ok() {
+            for (c, from) in &clumps {
+                let n = c.len() as f32;
+                let (x, z, y) = (
+                    c.iter().map(|p| p.x).sum::<f32>() / n,
+                    c.iter().map(|p| p.z).sum::<f32>() / n,
+                    c.iter().map(|p| p.y).sum::<f32>() / n,
+                );
+                eprintln!(
+                    "{}: door at ({x:.1}, {z:.1}, {y:.1}) from {from:?} x{}",
+                    places[pi].name,
+                    c.len()
+                );
+            }
+        }
+    }
+    md
 }

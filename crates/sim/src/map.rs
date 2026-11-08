@@ -54,7 +54,7 @@ pub struct Launcher {
 
 /// A map as `tools/maps/compile.mjs` writes it: tables a [`Map`] is built
 /// from. Boxes are (min x y z, max x y z); spawns (x y z, yaw, team); pads
-/// (x y z, arm, respawn ms); roam points (x, z); launchers (min x y z, max
+/// (x y z, arm, respawn ms); roam points (x y z); launchers (min x y z, max
 /// x y z of the pad, velocity). On a terrain, a spawn, a pad or a roam
 /// point at height 0 stands on the ground, and one given a height never
 /// under it: the ground's height is found here, so the compiler never
@@ -77,7 +77,7 @@ pub struct Def {
     pub looks: &'static [u8],
     pub spawns: &'static [([f32; 3], u16, u8)],
     pub pads: &'static [([f32; 3], u8, u32)],
-    pub roam: &'static [[f32; 2]],
+    pub roam: &'static [[f32; 3]],
     pub terrain: Option<TerrainDef>,
     pub launchers: &'static [([f32; 6], [f32; 3])],
     /// (x y z, yaw, respawn ms, turret, kind) each.
@@ -234,11 +234,7 @@ impl Def {
                     respawn_ms,
                 })
                 .collect(),
-            roam: self
-                .roam
-                .iter()
-                .map(|r| V3::new(r[0], ground(r[0], r[1]), r[1]))
-                .collect(),
+            roam: self.roam.iter().map(|&r| v(r)).collect(),
             vehicles: self
                 .vehicles
                 .iter()

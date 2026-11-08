@@ -1077,9 +1077,9 @@
     },
     {
       "id": "hd-pit_yard",
-      "name": "Pithead: the yard from red's hall",
-      "what": "the yard from red's yard door, the shaft collar and its skip, the gantry, the decks either side, blue's headframe beyond",
-      "take": "a cold, readable yard: trodden snow, dark steel against it, rime on what faces the wind, icicles under the decks, warm lamps the only warm thing",
+      "name": "Pithead: the shaft from red's door",
+      "what": "from red's door down its bridge to the collar and the sword's plinth, the cage and the gantry stacked over it, the cab and its stairs, the decks either side, blue's headframe beyond",
+      "take": "a cold, readable shaft: dark steel against snow and cloud, rime on what faces the wind, icicles under every beam, warm lamps the only warm thing, the drop reading as a drop",
       "shoot": [
         "tools/hd.sh"
       ],
@@ -1138,7 +1138,7 @@
     {
       "id": "hd-pit_deck",
       "name": "Pithead: the north deck",
-      "what": "along the north deck from red's mezzanine",
+      "what": "along the north deck from red's mezzanine, through the gallery to the cage's end",
       "take": "grating with snow drifted at the wall, rails furred with frost, the drop to the cloud on the left",
       "shoot": [
         "tools/hd.sh"
@@ -1198,8 +1198,8 @@
     {
       "id": "hd-pit_gantry",
       "name": "Pithead: off the gantry",
-      "what": "from the gantry's landing down into the yard",
-      "take": "the yard below in snow, the decks' undersides and their icicles, the skip under the landing",
+      "what": "from the gantry down across the shaft to the cage, the north deck and the gallery",
+      "take": "the drop under the gantry going down past the cage and the collar into the cloud, the girders' icicles, the cab's frosted sheet, dark rust-brown steel against the snow",
       "shoot": [
         "tools/hd.sh"
       ],
@@ -1246,7 +1246,7 @@
     {
       "id": "hd-pit_over",
       "name": "Pithead: from the air",
-      "what": "the whole rock from over the south-west, out in the void",
+      "what": "the whole mine from over the south-west: the two crags, the hub hung in the shaft between them on its legs into the cloud",
       "take": "the mine as a whole on its rock over the cloud: each side's colour, the headframes, crags, cableway, peaks into the white",
       "shoot": [
         "tools/hd.sh"
