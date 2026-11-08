@@ -201,6 +201,9 @@ pub struct Config {
     pub linger: Duration,
     /// Bots that stand still: a target for the browser test.
     pub passive_bots: bool,
+    /// Anyone may wear any skin or gear, wallet or not: a local server for
+    /// looking at them (`--dress-all`). Never in production.
+    pub dress_all: bool,
     /// The maps rooms are played on (ids, `sim::maps`), one drawn from each
     /// room's seed. Empty: all of them.
     pub maps: Vec<u8>,
@@ -299,6 +302,7 @@ impl Default for Config {
             cup_review_top: 3,
             linger: LINGER,
             passive_bots: false,
+            dress_all: false,
             maps: Vec::new(),
             slug: "oneshot".into(),
             domains: vec!["localhost".into(), "127.0.0.1".into()],
@@ -380,6 +384,8 @@ pub struct Ctx {
     /// Ranked waits in Elo Pros' queue (`Config::elo_queue`), and who waits.
     pub elo_queue: bool,
     pub waiters: eloqueue::Waiters,
+    /// `Config::dress_all`.
+    pub dress_all: bool,
 }
 
 impl Ctx {
@@ -551,6 +557,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         endpoints: (cfg.endpoints.max(1), cfg.endpoint_step),
         next_port: AtomicUsize::new(0),
         elo_queue: cfg.elo_queue && cfg.elo_key.is_some(),
+        dress_all: cfg.dress_all,
         waiters: eloqueue::Waiters::default(),
     });
     if cfg.elo_queue && cfg.elo_key.is_none() {

@@ -1,6 +1,6 @@
 //! `oneshot-server [--bind 0.0.0.0:4433] [--http 0.0.0.0:8080|off]
 //! [--web crates/client/dist] [--cert cert.pem --key key.pem] [--doubles]
-//! [--passive-bots] [--map <id|name>]… [--loadout <gun>[,<gun>]]
+//! [--passive-bots] [--dress-all] [--map <id|name>]… [--loadout <gun>[,<gun>]]
 //! [--cup-min 4] [--cup-rounds 3]
 //! [--slug oneshot] [--domain host]…
 //! [--elo-pubkey <base64>] [--elo-origin https://elopros.com]
@@ -83,6 +83,7 @@ fn main() {
             "--key" => key = Some(val()),
             "--doubles" => cfg.rules = Rules::doubles(),
             "--passive-bots" => cfg.passive_bots = true,
+            "--dress-all" => cfg.dress_all = true,
             "--map" => {
                 let v = val();
                 let id = sim::maps::ALL

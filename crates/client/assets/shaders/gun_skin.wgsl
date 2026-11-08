@@ -171,34 +171,38 @@ fn pattern(kind: i32, p: vec3<f32>, t: f32, luma: f32) -> Look {
         let edge = 1.0 - smoothstep(0.0, 0.07, c.y);
         let shimmer = 0.5 + 0.5 * sin(t * 1.6 + dot(p, vec3<f32>(0.9, 0.35, 0.6)) * 2.0);
         let glint = step(0.993, hash1(floor(p * 5.0) + floor(t * 3.0)));
-        o.base = mix(vec3<f32>(0.45, 0.62, 0.78), vec3<f32>(0.85, 0.95, 1.0), c.z) * tone;
-        o.glow = hot * (edge * (0.25 + 0.75 * shimmer) + glint * 4.0);
+        o.base = mix(vec3<f32>(0.6, 0.78, 0.92), vec3<f32>(0.92, 0.98, 1.0), c.z) * tone;
+        o.glow = hot * (0.06 + edge * (0.25 + 0.75 * shimmer) + glint * 4.0);
         o.metal = 0.2;
         o.rough = 0.12;
     } else if kind == 3 {
-        // Veins: dark moss, living veins through it and pulses running
-        // along them.
-        let n = fbm(p * 0.7 + vec3<f32>(3.0, 0.0, 0.0));
-        let ridge = 1.0 - abs(n * 2.0 - 1.0);
-        let vein = smoothstep(0.86, 0.97, ridge);
-        let fine = smoothstep(0.9, 0.98, 1.0 - abs(fbm(p * 2.1) * 2.0 - 1.0)) * 0.5;
-        let pulse = 0.5 + 0.5 * sin(t * 3.0 - fbm(p * 0.3) * 14.0);
-        o.base = mix(vec3<f32>(0.012, 0.03, 0.015), vec3<f32>(0.04, 0.08, 0.035), n) * tone;
-        o.glow = hot * (vein + fine) * (0.2 + 1.1 * pulse * pulse);
+        // Veins: dark moss, a net of living veins through it, warped as
+        // roots grow, finer ones between, and pulses running along them.
+        let warp = fbm(p * 0.4) * 1.8;
+        let big = cells(p * 0.6 + warp);
+        let fine = cells(p * 1.7 + warp * 1.4 + 9.0);
+        let width = 0.03 + 0.05 * fbm(p * 1.1 + 5.0);
+        let vein = 1.0 - smoothstep(0.0, width, big.y);
+        let thin = (1.0 - smoothstep(0.0, 0.035, fine.y)) * 0.35;
+        let pulse = 0.5 + 0.5 * sin(t * 3.0 - (big.x + warp) * 7.0);
+        o.base = mix(vec3<f32>(0.01, 0.025, 0.012), vec3<f32>(0.035, 0.07, 0.03), fbm(p * 2.0)) * tone;
+        o.glow = hot * (max(vein, thin) * (0.15 + 1.0 * pulse * pulse) + vein * 0.1);
         o.metal = 0.1;
         o.rough = 0.55;
     } else {
-        // Gilded: polished gold, scrolled with engraving, a shine sweeping
-        // down it and sparks where the engraving catches.
-        let n = fbm(p * 0.9);
-        let scroll = smoothstep(0.9, 0.97, 1.0 - abs(n * 2.0 - 1.0));
+        // Gilded: gold, engraved with scrolls (the contours of a noise),
+        // a shine sweeping down it and sparks where the engraving catches.
+        let n = fbm(p * 0.6);
+        let d = abs(fract(n * 12.0) - 0.5);
+        let scroll = 1.0 - smoothstep(0.02, 0.045, d);
         let along = fract(dot(p, vec3<f32>(0.55, 0.2, 0.35)) * 0.12 - t * 0.35);
-        let band = smoothstep(0.0, 0.025, along) * (1.0 - smoothstep(0.025, 0.07, along));
-        let spark = step(0.995, hash1(floor(p * 4.0) + floor(t * 5.0))) * scroll;
-        o.base = mix(vec3<f32>(1.0, 0.71, 0.29), vec3<f32>(0.25, 0.15, 0.04), scroll) * tone;
-        o.glow = hot * (band * 1.5 + spark * 3.0);
-        o.metal = 1.0;
-        o.rough = mix(0.22, 0.6, scroll);
+        let band = smoothstep(0.0, 0.015, along) * (1.0 - smoothstep(0.015, 0.04, along));
+        let spark = step(0.99, hash1(floor(p * 4.0) + floor(t * 5.0))) * scroll;
+        let gold = vec3<f32>(0.9, 0.5, 0.07);
+        o.base = mix(gold, vec3<f32>(0.12, 0.06, 0.015), scroll) * min(tone, 1.0);
+        o.glow = hot * (band * 1.2 + spark * 3.0) + gold * 0.08 * (1.0 - scroll);
+        o.metal = mix(0.75, 0.2, scroll);
+        o.rough = mix(0.25, 0.7, scroll);
     }
     return o;
 }
