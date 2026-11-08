@@ -1362,3 +1362,43 @@ fn a_blast_cooks_off_grenades_lying_on_the_floor() {
     let lit = (0..MAX_PROJ).filter(|&k| w.proj[k].active).count();
     assert_eq!(lit, 2, "a pile of a kind goes off as one");
 }
+
+/// Two snipers face to face. The first takes the second's head at once
+/// (no lag); three ticks on, the second's player, drawing the world
+/// `behind` ticks back, pulls the trigger at the first's head, its death
+/// not yet on its screen. Whether that round went (both dead: a trade),
+/// and who scored.
+fn trade(behind: u32) -> (bool, [u16; 2]) {
+    let mut w = duel([SNIPER, MAGNUM], 30.0);
+    let h = head(&w, 1);
+    shoot(&mut w, h, FIRE, NO_LAG);
+    assert!(!w.fighters[1].alive, "the first shot didn't kill");
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let (yaw, pitch) = aim(&w, 1, head(&w, 0));
+    inputs[1] = Input {
+        yaw,
+        pitch,
+        ..Input::default()
+    };
+    let mut lag = NO_LAG;
+    lag[1] = behind << 8;
+    for _ in 0..2 {
+        w.step(&inputs, &lag);
+    }
+    inputs[1].buttons = FIRE;
+    for _ in 0..TICK_HZ / 4 {
+        w.step(&inputs, &lag);
+    }
+    (!w.fighters[0].alive, [w.fighters[0].kills, w.fighters[1].kills])
+}
+
+#[test]
+fn a_shot_fired_before_its_shooter_could_see_it_die_still_goes() {
+    // Drawing 8 ticks back, its death three ticks old was not yet drawn:
+    // its round goes, and it scores, dead.
+    assert_eq!(trade(8), (true, [1, 1]), "a trade");
+    // Two back, it was: the round never left.
+    assert_eq!(trade(2), (false, [1, 0]), "fired after it saw itself die");
+    // No lag (a bot, or the same tick only): never.
+    assert_eq!(trade(0), (false, [1, 0]), "no lag, no trade");
+}
