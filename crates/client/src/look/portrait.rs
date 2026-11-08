@@ -19,8 +19,11 @@
 //! while the emblem is ([`Portrait::show_back`]), and a drag across him
 //! turns him by hand ([`drag`]).
 //!
-//! **He decides nothing**: what he wears is the panel's pick, and a skin
-//! the wallet doesn't own is still only what the server lets you wear.
+//! **He decides nothing**: in the armory he wears the panel's pick; on the
+//! other panels, what the server said this wallet may wear of it
+//! (`Msg::Wardrobe`, [`Portrait::wear`]), as the match will show you to
+//! everyone. Either way a skin is still only what the server lets you wear
+//! when you play.
 
 use bevy::app::Propagate;
 use bevy::camera::visibility::RenderLayers;
@@ -97,6 +100,9 @@ pub struct Portrait {
     pub image: Handle<Image>,
     /// His body and the look it was made in.
     body: Option<(Entity, proto::Look)>,
+    /// What he wears, as the title asks it ([`Portrait::wear`]); the
+    /// panel's pick till it has.
+    look: Option<proto::Look>,
     /// He turns to show his back (the armory's emblem).
     back: bool,
     /// How far a drag has turned him, and how far he is turned now, past
@@ -112,6 +118,12 @@ impl Portrait {
             self.back = back;
             self.dragged = 0.0;
         }
+    }
+
+    /// Wear `look`: the armory's pick, or on the other panels what the
+    /// server will let the wallet wear of it (`front.rs`).
+    pub fn wear(&mut self, look: proto::Look) {
+        self.look = Some(look);
     }
 }
 
@@ -205,14 +217,15 @@ pub fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(Portrait {
         image,
         body: None,
+        look: None,
         back: false,
         dragged: 0.0,
         turned: 0.0,
     });
 }
 
-/// While the title shows him: his body in the panel's skin (made again
-/// when the skin changes), standing, holding his rifle, looking round.
+/// While the title shows him: his body in the look the title asks (made
+/// again when it changes), standing, holding his rifle, looking round.
 #[allow(clippy::too_many_arguments)]
 pub fn stand(
     mut commands: Commands,
@@ -238,7 +251,7 @@ pub fn stand(
         portrait.turned = 0.0;
         return;
     }
-    let look = player.look();
+    let look = portrait.look.unwrap_or_else(|| player.look());
     let root = match portrait.body {
         Some((e, l)) if l == look => e,
         had => {

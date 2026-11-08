@@ -488,10 +488,15 @@ pub struct World {
     /// what it saw of each target ([`Self::step_with`]). Not hashed: it is
     /// the step's argument, which a replay has.
     lag: Lag,
+    /// Each seat killed on foot lately: the tick, and the fighter as it
+    /// died, run on on the seat's input, for what it fires before its
+    /// death can have reached its player's screen ([`Self::play`]). Not
+    /// hashed: what it fires is.
+    ghosts: [Option<(u32, Fighter)>; MAX_FIGHTERS],
 }
 
 /// What one shooter saw of each target (by [`TARGETS`] index): its share of
-/// the shooter's rewind, in fifteenths. [`Self::PAST`] for all of it, as
+/// the shooter's rewind, of [`SHARE_FULL`]. [`Self::PAST`] for all of it, as
 /// for a target drawn between snapshots on the render tick; 0 for one drawn
 /// on the shooter's own present (predicted), met where it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -507,7 +512,7 @@ impl Seen {
     /// Target `t`'s rewind, of a shooter's `depth` (any unit, any size:
     /// the whole share is the whole depth, exactly).
     pub fn depth(&self, depth: u32, t: usize) -> u32 {
-        (depth as u64 * self.share[t].min(SHARE_FULL) as u64 / SHARE_FULL as u64) as u32
+        (depth as u64 * self.share[t] as u64 / SHARE_FULL as u64) as u32
     }
 }
 
@@ -568,6 +573,7 @@ impl World {
             salt,
             ran: [Input::default(); MAX_FIGHTERS],
             lag: Lag::past([0; MAX_FIGHTERS]),
+            ghosts: [None; MAX_FIGHTERS],
         }
     }
 
@@ -614,6 +620,7 @@ impl World {
     /// for its fall, its poses), so whoever sits there next inherits none
     /// of it.
     fn vacate(&mut self, slot: usize) {
+        self.ghosts[slot] = None;
         self.leave_vehicle(slot);
         self.drop_flag(slot, false, false);
         // Its own rounds still in the air go out with it: nobody else's kill.
@@ -714,6 +721,26 @@ impl World {
                 self.spill(left, 0, 0, f.body.pos + V3::new(DROP_APART, 0.0, 0.0), V3::ZERO);
             }
         }
+        // Killed since the tick its player was drawing: what it fires now
+        // it fired alive, on its own screen, so its rounds go (a trade:
+        // the shooter favoured as far as its rewind, no further). Its guns
+        // only, from itself as it died, run on on its input.
+        let mut ghosted = [Local::default(); MAX_FIGHTERS];
+        for (s, l) in ghosted.iter_mut().enumerate() {
+            let Some((died, mut g)) = self.ghosts[s] else {
+                continue;
+            };
+            let since = self.tick.wrapping_sub(died);
+            if self.fighters[s].alive || since as usize > REWIND_TICKS {
+                self.ghosts[s] = None;
+                continue;
+            }
+            let ran = g.step_in(Phase::Playing, &inputs[s].sanitized(), &self.map);
+            if (since as u64) << 8 < rewind_q8[s] as u64 {
+                *l = ran;
+            }
+            self.ghosts[s] = Some((died, g));
+        }
         // The contact step (`sim::contact`: what a client predicts by),
         // the world's own decisions between its stages: hulls driven under
         // their drivers' sticks and crashed (the damage here), everyone
@@ -751,6 +778,15 @@ impl World {
             }
             if l.fired_left {
                 self.fire(s, rewind_q8[s], l.charged_left, true);
+            }
+            if let Some((_, g)) = self.ghosts[s] {
+                let gl = ghosted[s];
+                for (fired, charged, left) in [(gl.fired, gl.charged, false), (gl.fired_left, gl.charged_left, true)] {
+                    let id = if left { g.left.arm } else { g.gun().arm };
+                    if fired && arm(id).kind != Kind::Sword {
+                        self.fire_as(s, g, rewind_q8[s], charged, left);
+                    }
+                }
             }
             if l.melee {
                 self.melee(s, rewind_q8[s]);
@@ -828,7 +864,11 @@ impl World {
 
     /// `s` fires the gun in its right hand, or its `left`.
     fn fire(&mut self, s: usize, depth: u32, charged: bool, left: bool) {
-        let f = self.fighters[s];
+        self.fire_as(s, self.fighters[s], depth, charged, left);
+    }
+
+    /// [`Self::fire`], seat `s`'s round fired as `f` (itself, or its ghost).
+    fn fire_as(&mut self, s: usize, f: Fighter, depth: u32, charged: bool, left: bool) {
         let id = if left { f.left.arm } else { f.gun().arm };
         let a = arm(id);
         // Dual, each gun's cone is its dual one; the left's draws apart
@@ -2398,6 +2438,14 @@ impl World {
 
     /// `att` killed `vic` with `cause`; `head`: the blow was to the head.
     fn kill(&mut self, att: usize, vic: usize, cause: u16, head: bool) {
+        // On foot and not gone into the void (that, its player saw coming):
+        // what it fires before it can know, it fired alive.
+        if self.fighters[vic].ride == 0 && cause != crate::events::Cause::Fall as u16 {
+            self.ghosts[vic] = Some((self.tick, self.fighters[vic]));
+        }
+        // Run down by a hull nobody drove: nobody's kill, and no suicide
+        // either (Halo's "killed by the Guardians").
+        let nobody = att == vic && cause == crate::events::Cause::Splatter as u16;
         self.leave_vehicle(vic);
         // Off the map, the flag goes home; otherwise it falls with them.
         self.drop_flag(vic, cause == crate::events::Cause::Fall as u16, false);
@@ -2443,10 +2491,12 @@ impl World {
                 k.grenades = (k.grenades + 1).min(GREN_MAX);
             }
         } else if own {
-            // A rung is never lost below the first.
-            self.score[side] -= 1;
-            if gun_game {
-                self.score[side] = self.score[side].max(0);
+            if !nobody {
+                // A rung is never lost below the first.
+                self.score[side] -= 1;
+                if gun_game {
+                    self.score[side] = self.score[side].max(0);
+                }
             }
         } else {
             k.kills += 1;

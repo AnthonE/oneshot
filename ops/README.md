@@ -105,6 +105,13 @@ renamed or removed; dropping it archives it on their profile.
 
 ## Day to day
 
+- **Release everything:** `ci/release.sh` (a dry run), then `--go`, on this
+  box. It builds the server, the page and both launcher depots first, then
+  deploys the server, publishes the page, publishes and notarizes the Linux
+  and Windows depots (`ci/publish_depot.py`, to `morr`'s
+  `/data/apps/scry-data/depots/oneshot/`), checks every surface names HEAD,
+  and pushes the `desktop-v<build>` tag (the GitHub downloads, `desktop.yml`).
+  The steps below are its parts.
 - **Release the server:** `ci/deploy_server.sh` (a dry run), then `--go`. It
   returns once the new slot is live; the old one drains on its own
   (`journalctl -u oneshot@a -f`). `curl -s https://game.elopros.com/oneshot/server.json`

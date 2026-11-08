@@ -23,6 +23,8 @@ pub mod config;
 pub mod crash;
 pub mod display;
 pub mod door;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod elo;
 pub mod film;
 pub mod flags;
 pub mod front;
@@ -50,6 +52,8 @@ pub mod tags;
 pub mod tally;
 pub mod ui;
 pub mod visor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod window_icon;
 
 use std::collections::BTreeMap;
 
@@ -329,6 +333,13 @@ pub struct Opts {
     /// The desktop's window stays a window this run, whatever FULLSCREEN
     /// says (`--windowed`; a picture, a film): `display::RunWindowed`.
     pub windowed: bool,
+    /// `watch` / `watch=CODE` (`?watch=`, `--mode watch [--party CODE]`):
+    /// straight into WATCH, following any public match (0) or that party's,
+    /// a little behind (`room::spectate`).
+    pub watch: Option<u32>,
+    /// `streamer` (`?streamer=1`, `--streamer`): streamer mode this run,
+    /// whatever the setting says (`settings::Settings::streamer`).
+    pub streamer: bool,
 }
 
 impl Opts {
@@ -357,6 +368,13 @@ impl Opts {
             front: front::Start::Off,
             graphics: has("graphics"),
             windowed: has("windowed"),
+            watch: s.split([',', ' ']).find_map(|w| match w {
+                "watch" => Some(0),
+                w => w
+                    .strip_prefix("watch=")
+                    .map(|c| proto::party::code_parse(c).unwrap_or(0)),
+            }),
+            streamer: has("streamer"),
             open: if has("settings") || has("graphics") {
                 Screen::Settings
             } else if has("menu") {
@@ -708,6 +726,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     app.add_systems(Update, look::fx::vent::spawn_orbs);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, window_icon::set);
     app.add_systems(Update, look::bodies::stand_up);
     app.add_systems(Update, (look::blade::trail, look::cels::sweep, look::cels::warm));
     app.add_systems(
@@ -2107,6 +2127,9 @@ mod web_start {
         let mut o = super::Opts::parse(&opts);
         o.front = if o.autoplay || o.fxdemo {
             super::front::Start::Join(mode)
+        } else if o.watch.is_some() {
+            // `?watch=`: watching, with no click.
+            super::front::Start::Join(proto::MODE_WATCH)
         } else {
             super::front::Start::Title
         };
@@ -2198,5 +2221,26 @@ mod web_start {
             super::look::fx::stage::install(&mut app, s);
         }
         app.run();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Opts;
+
+    /// The page's and the command line's words for a stream: `watch` (any
+    /// public match), `watch=CODE` (a party's; a code that doesn't read is
+    /// any), and `streamer`.
+    #[test]
+    fn the_watch_and_streamer_words_parse() {
+        let o = Opts::parse("lite,watch=ABCDEF,streamer");
+        assert_eq!(o.watch, proto::party::code_parse("ABCDEF"));
+        assert!(o.watch.is_some_and(|c| c != 0));
+        assert!(o.streamer && o.lite);
+        assert_eq!(Opts::parse("watch").watch, Some(0));
+        assert_eq!(Opts::parse("watch=0O").watch, Some(0));
+        let plain = Opts::parse("autoplay");
+        assert_eq!(plain.watch, None);
+        assert!(!plain.streamer);
     }
 }

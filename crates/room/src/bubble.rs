@@ -7,13 +7,14 @@
 //! (it is `own_vehicle`), never while the viewer is dead.
 //!
 //! Each member has a share of the viewer's rewind (`sim::world::Seen`):
-//! 15 drawn on the render tick, as everything outside the bubble is, 0 on
-//! the viewer's own present. A hull coming in slides from one to the other
-//! over a blend sized by how soon it could reach the viewer; one leaving
-//! slides back over [`LEAVE_MS`]. The client draws each at its share
-//! between its past and its present, and the server rewinds shots at it
-//! by the same share of the shooter's depth, from the snapshot the shot's
-//! frame was made after ([`Bubble::seen`]): what is drawn is what is met.
+//! [`SHARE_FULL`] (255) drawn on the render tick, as everything outside the
+//! bubble is, 0 on the viewer's own present. A hull coming in slides from
+//! one to the other over a blend sized by how soon it could reach the
+//! viewer; one leaving slides back over [`LEAVE_MS`]. The client draws
+//! each at its share between its past and its present, and the server
+//! rewinds shots at it by the same share of the shooter's depth, from the
+//! snapshot the shot's frame was made after ([`Bubble::seen`]): what is
+//! drawn is what is met.
 
 use sim::consts::{BODY_R, MAX_FIGHTERS, MAX_VEHICLES, SHARE_FULL, TICK_HZ, VEH_H, VEH_HALF_L};
 use sim::geom::V3;
@@ -22,7 +23,7 @@ use sim::world::{Seen, World};
 /// A hull comes in within this far of the viewer (flat), and that much
 /// farther for each second of closing speed ([`LOOK_S`]).
 pub const BUBBLE_M: f32 = 16.0;
-pub const LOOK_S: f32 = 0.6;
+pub const LOOK_S: f32 = 1.2;
 /// It stays in until this much past where it came in.
 pub const HYST_M: f32 = 8.0;
 /// And for at least this long, once in: a hull at the edge never flaps.
@@ -37,9 +38,11 @@ pub const CONTACT_M: f32 = 2.0 * VEH_HALF_L + 1.0;
 /// Under this flat speed a hull nobody drives is still.
 pub const STILL_MS: f32 = 0.5;
 /// A hull coming in slides onto the present over the time it could take
-/// to reach the viewer, less a round trip, within these.
+/// to come within [`ON_PRESENT_M`] of the viewer, less a round trip, within
+/// these: close by, where contact and shots are, it is on the present.
+pub const ON_PRESENT_M: f32 = 12.0;
 pub const BLEND_MIN_MS: f32 = 250.0;
-pub const BLEND_MAX_MS: f32 = 1000.0;
+pub const BLEND_MAX_MS: f32 = 1500.0;
 /// A hull leaving slides back onto the render tick over this.
 pub const LEAVE_MS: f32 = 1000.0;
 /// Snapshots whose shares are kept, for the shot whose frame came after one.
@@ -60,8 +63,13 @@ struct Member {
     on: bool,
     /// Ticks since it came in.
     since: u32,
-    /// Its share of the viewer's rewind, in 1/256 of a fifteenth.
+    /// Its share of the viewer's rewind, in 1/256 of a [`SHARE_FULL`]th.
     share_q8: u16,
+    /// How fast it slides onto the present, a snapshot: set as it comes in
+    /// (by how soon it could reach the viewer then), so the slide is even,
+    /// quickening only for one that has since sped up toward the viewer;
+    /// 0 sliding back.
+    step_q8: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -133,21 +141,23 @@ impl Bubble {
 
     fn wire(&self, m: Option<&Member>) -> u8 {
         match m {
-            Some(m) if m.on && self.live => (m.share_q8.div_ceil(256) as u8).min(SHARE_FULL),
+            Some(m) if m.on && self.live => m.share_q8.min(FULL_Q8).div_ceil(256) as u8,
             _ => SHARE_FULL,
         }
     }
 
     /// Who is in for seat `s` now, and at what share: `known(q)` whether
-    /// it may know fighter `q`, `shown(i)` whether it is sent hull `i` at
-    /// all; `rtt_ms` its round trip; `snap_every` ticks since the last
-    /// update; `live` off, every share whole.
+    /// it may know fighter `q` (a hull's seat is named to it), `sent(q)`
+    /// whether this snapshot sends fighter `q`, `shown(i)` whether it is
+    /// sent hull `i` at all; `rtt_ms` its round trip; `snap_every` ticks
+    /// since the last update; `live` off, every share whole.
     #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         w: &World,
         s: usize,
         known: &impl Fn(usize) -> bool,
+        sent: &impl Fn(usize) -> bool,
         shown: &impl Fn(usize) -> bool,
         rtt_ms: f64,
         snap_every: u32,
@@ -157,7 +167,7 @@ impl Bubble {
         let mine = me.riding().map(|(i, _)| i);
         let (shown_last, mine_last) = (self.shown_last, self.mine_last);
         let (sent_last, rode_last) = (self.sent_last, self.rode_last);
-        self.sent_last = (0..MAX_FIGHTERS).fold(0, |m, q| m | ((known(q) as u16) << q));
+        self.sent_last = (0..MAX_FIGHTERS).fold(0, |m, q| m | ((sent(q) as u16) << q));
         for (r, f) in self.rode_last.iter_mut().zip(&w.fighters) {
             *r = f.riding().map(|(i, _)| i as u8);
         }
@@ -175,13 +185,15 @@ impl Bubble {
             None => (me.body.pos, me.body.vel),
         };
         let dwell = DWELL_MS * TICK_HZ / 1000;
+        // Only by what the viewer is sent of it: a driver it may not know
+        // is as nobody at the wheel (and its stick goes as none), so who is
+        // in never tells a hidden driver from an empty seat.
         let eligible = |i: usize| {
             let v = &w.vehicles[i];
-            let still = v.vel.flat().len() < STILL_MS && v.driver().is_none();
+            let still = v.vel.flat().len() < STILL_MS && v.driver().filter(|&d| known(d)).is_none();
             v.active
                 && mine != Some(i)
                 && shown(i)
-                && v.driver().is_none_or(known)
                 && proto::exact_fits(v.pos, v.vel)
                 && (still || rtt_ms <= RTT_MAX_MS)
         };
@@ -201,8 +213,15 @@ impl Bubble {
             } else {
                 FULL_Q8
             };
-            let blend = (((d - CONTACT_M).max(0.0) / rel.max(1.0)) * 1000.0 - (rtt_ms as f32 + 30.0))
+            let blend = (((d - ON_PRESENT_M).max(0.0) / rel.max(1.0)) * 1000.0 - (rtt_ms as f32 + 30.0))
                 .clamp(BLEND_MIN_MS, BLEND_MAX_MS);
+            // Even, as set coming in; quicker only if it now could reach the
+            // viewer sooner than that would finish (it sped up toward it).
+            let step = if was.on && was.step_q8 > 0 {
+                was.step_q8.max(was.share_q8 / snaps(blend))
+            } else {
+                FULL_Q8 / snaps(blend)
+            };
             Member {
                 on: true,
                 since: if was.on {
@@ -211,13 +230,17 @@ impl Bubble {
                     0
                 },
                 share_q8: if was.on {
-                    was.share_q8.saturating_sub(FULL_Q8 / snaps(blend))
+                    was.share_q8.saturating_sub(step)
                 } else {
                     start
                 },
+                step_q8: step,
             }
         };
         let mut next = [Member::default(); MAX_VEHICLES];
+        // Those out of reach of the viewer, sliding back: the closure may
+        // hold them yet (then they slide on, not back).
+        let mut leaving = [false; MAX_VEHICLES];
         for (i, m) in next.iter_mut().enumerate() {
             if !eligible(i) {
                 continue;
@@ -229,26 +252,29 @@ impl Bubble {
             if d < r || stays {
                 *m = come(was, i, d, rel);
             } else if was.on {
-                // Leaving: back onto the render tick, then out.
+                // Leaving: back onto the render tick, sent there once, then out.
                 let share = was.share_q8.saturating_add(FULL_Q8 / snaps(LEAVE_MS)).min(FULL_Q8);
-                if share < FULL_Q8 {
+                if was.share_q8 < FULL_Q8 {
                     *m = Member {
                         on: true,
                         since: was.since.saturating_add(snap_every),
                         share_q8: share,
+                        step_q8: 0,
                     };
                 }
+                leaving[i] = true;
             }
         }
         // Whatever a hull in might meet, in with it.
         for _ in 0..MAX_VEHICLES {
             let mut grew = false;
             for j in 0..MAX_VEHICLES {
-                if next[j].on || !eligible(j) {
+                if (next[j].on && !leaving[j]) || !eligible(j) {
                     continue;
                 }
                 let vj = &w.vehicles[j];
-                let near = (0..MAX_VEHICLES).filter(|&i| next[i].on || mine == Some(i)).any(|i| {
+                let holds = |i: usize| i != j && ((next[i].on && !leaving[i]) || mine == Some(i));
+                let near = (0..MAX_VEHICLES).filter(|&i| holds(i)).any(|i| {
                     let vi = &w.vehicles[i];
                     let (d, r, _) = reach(vi.pos, vi.vel, vj.pos, vj.vel, CONTACT_M);
                     d < r
@@ -256,6 +282,7 @@ impl Bubble {
                 if near {
                     let (d, _, rel) = reach(at, at_v, vj.pos, vj.vel, BUBBLE_M);
                     next[j] = come(self.hull[j], j, d, rel);
+                    leaving[j] = false;
                     grew = true;
                 }
             }
@@ -269,7 +296,8 @@ impl Bubble {
         // ours), at its share; unsent till now, on the present.
         let anchors: [Option<(V3, V3, u16)>; MAX_VEHICLES] = core::array::from_fn(|i| {
             let v = &w.vehicles[i];
-            let moving = v.vel.flat().len() >= STILL_MS || v.driver().is_some();
+            // Driven by one we may not know: as nobody at the wheel.
+            let moving = v.vel.flat().len() >= STILL_MS || v.driver().filter(|&d| known(d)).is_some();
             let share = if mine == Some(i) {
                 Some(0)
             } else {
@@ -283,7 +311,7 @@ impl Bubble {
         let mut near: [(f32, usize); MAX_FIGHTERS] = [(f32::MAX, 0); MAX_FIGHTERS];
         let mut n = 0;
         for (q, f) in w.fighters.iter().enumerate() {
-            if q == s || !f.active() || f.ride != 0 || !known(q) || !proto::exact_fits(f.body.pos, f.body.vel) {
+            if q == s || !f.active() || f.ride != 0 || !sent(q) || !proto::exact_fits(f.body.pos, f.body.vel) {
                 continue;
             }
             let was = self.foot[q];
@@ -324,20 +352,22 @@ impl Bubble {
                 } else {
                     start
                 },
+                step_q8: FULL_Q8 / snaps(BLEND_MIN_MS),
             };
         }
-        // Out of reach: back onto the render tick, then out.
+        // Out of reach: back onto the render tick, sent there once, then out.
         for (q, (m, (was, f))) in foot.iter_mut().zip(self.foot.iter().zip(&w.fighters)).enumerate() {
-            let can = f.active() && f.ride == 0 && known(q) && proto::exact_fits(f.body.pos, f.body.vel);
+            let can = f.active() && f.ride == 0 && sent(q) && proto::exact_fits(f.body.pos, f.body.vel);
             if m.on || !was.on || !can {
                 continue;
             }
             let share = was.share_q8.saturating_add(FULL_Q8 / snaps(LEAVE_MS)).min(FULL_Q8);
-            if share < FULL_Q8 {
+            if was.share_q8 < FULL_Q8 {
                 *m = Member {
                     on: true,
                     since: was.since.saturating_add(snap_every),
                     share_q8: share,
+                    step_q8: 0,
                 };
             }
         }

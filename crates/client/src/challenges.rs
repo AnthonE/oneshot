@@ -3,8 +3,10 @@
 //! own stats (`server/src/stats.rs`, `CHALLENGES`), picked there each UTC day
 //! and ISO week, counted from the reports the server already sends, and paid
 //! (in our trading cards) by Elo Pros' rules. The title's CHALLENGES tab
-//! reads them, with the signed-in player's progress. Nothing here counts or
-//! pays anything: it only shows what Elo Pros said.
+//! reads them, with the signed-in player's progress. Beside them, the daily
+//! pot (`/api/pot/oneshot`, its `daily_pot.py`): a fixed sum a day split by
+//! the challenges each player finished, shown only while Elo Pros says it is
+//! on. Nothing here counts or pays anything: it only shows what Elo Pros said.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +15,8 @@ use serde::Deserialize;
 
 /// Where Elo Pros answers.
 pub const API: &str = "https://elopros.com/api/challenges/oneshot";
+/// The daily pot's answer.
+pub const POT_API: &str = "https://elopros.com/api/pot/oneshot";
 /// How often the tab asks again while the title is up.
 const AGAIN_S: f64 = 90.0;
 
@@ -49,6 +53,44 @@ pub struct View {
     pub week: Period,
 }
 
+/// A player's part of today's pot.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Mine {
+    #[serde(default)]
+    pub shares: u64,
+    #[serde(default)]
+    pub earns: u64,
+}
+
+/// The daily pot, as Elo Pros says it. Drawn only when `on`.
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Pot {
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default)]
+    pub coin: String,
+    /// The sentence to show, verbatim.
+    #[serde(default)]
+    pub say: String,
+    #[serde(default)]
+    pub mine: Option<Mine>,
+}
+
+impl Pot {
+    /// What the tab draws: the pot's own sentence, and the player's part.
+    /// None unless it is on and has something to say.
+    pub fn lines(&self) -> Option<(String, Option<String>)> {
+        if !self.on || self.say.trim().is_empty() {
+            return None;
+        }
+        let mine = self.mine.as_ref().map(|m| {
+            let s = if m.shares == 1 { "" } else { "S" };
+            format!("YOU: {} SHARE{s} · {} {}", m.shares, m.earns, self.coin)
+        });
+        Some((self.say.clone(), mine))
+    }
+}
+
 type Pending = Arc<Mutex<Option<Result<String, String>>>>;
 
 /// What Elo Pros last said, and the ask in flight.
@@ -61,6 +103,10 @@ pub struct Challenges {
     /// The player last asked for (None: nobody signed in), and when.
     asked: Option<(Option<String>, f64)>,
     pending: Option<Pending>,
+    /// The daily pot, while Elo Pros says it is on; None otherwise, and
+    /// when it couldn't be read (the tab shows nothing then).
+    pub pot: Option<Pot>,
+    pot_pending: Option<Pending>,
 }
 
 impl Challenges {
@@ -75,18 +121,27 @@ impl Challenges {
                 return;
             }
         }
-        let url = match &wallet {
-            Some(w) => format!("{API}/{}", proto::party::spell(w)),
-            None => API.to_string(),
+        let (url, pot_url) = match &wallet {
+            Some(w) => {
+                let w = proto::party::spell(w);
+                (format!("{API}/{w}"), format!("{POT_API}/{w}"))
+            }
+            None => (API.to_string(), POT_API.to_string()),
         };
         self.asked = Some((wallet, now));
         let slot: Pending = Arc::default();
         self.pending = Some(slot.clone());
         get(url, slot);
+        if self.pot_pending.is_none() {
+            let slot: Pending = Arc::default();
+            self.pot_pending = Some(slot.clone());
+            get(pot_url, slot);
+        }
     }
 
-    /// Takes the answer, if it came.
+    /// Takes the answers, if they came.
     pub fn poll(&mut self) {
+        self.poll_pot();
         let Some(p) = &self.pending else { return };
         let got = p.lock().ok().and_then(|mut g| g.take());
         let Some(got) = got else { return };
@@ -104,6 +159,24 @@ impl Challenges {
                 self.gen = self.gen.wrapping_add(1);
             }
             None => {}
+        }
+    }
+}
+
+impl Challenges {
+    fn poll_pot(&mut self) {
+        let Some(p) = &self.pot_pending else { return };
+        let got = p.lock().ok().and_then(|mut g| g.take());
+        let Some(got) = got else { return };
+        self.pot_pending = None;
+        // Off, unreadable or unanswered all read as nothing to show.
+        let pot = got
+            .ok()
+            .and_then(|t| serde_json::from_str::<Pot>(&t).ok())
+            .filter(|p| p.lines().is_some());
+        if pot != self.pot {
+            self.pot = pot;
+            self.gen = self.gen.wrapping_add(1);
         }
     }
 }
@@ -199,5 +272,21 @@ mod tests {
         assert_eq!(progress_words(&plain), "GOAL 3");
         assert_eq!(left_words(1000 + 2 * 86_400 + 3 * 3600, 1000), "2D 3H");
         assert_eq!(left_words(1000 + 5 * 3600 + 59, 1000), "5H");
+    }
+
+    #[test]
+    fn the_pot_shows_only_when_on() {
+        let t = r#"{"game":"oneshot","on":true,"why_not":null,"coin":"ONESHOT","per_day":100000,
+            "cap_wallet":5000,"day":"2026-11-08","ends_at":1762646400,"shares":40,"wallets":15,
+            "per_share":2500,"say":"Finish today's challenges: tomorrow 100,000 ONESHOT is shared out.",
+            "wallet":"0xaa","mine":{"shares":2,"played":true,"earns":5000}}"#;
+        let p: Pot = serde_json::from_str(t).unwrap();
+        let (say, mine) = p.lines().unwrap();
+        assert!(say.starts_with("Finish today's"));
+        assert_eq!(mine.as_deref(), Some("YOU: 2 SHARES · 5000 ONESHOT"));
+        let off: Pot = serde_json::from_str(r#"{"on":false,"why_not":"not yet","say":"x"}"#).unwrap();
+        assert!(off.lines().is_none());
+        let plain: Pot = serde_json::from_str(r#"{"on":true,"coin":"ONESHOT","say":"s"}"#).unwrap();
+        assert_eq!(plain.lines(), Some(("s".to_string(), None)));
     }
 }

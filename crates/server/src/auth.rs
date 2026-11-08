@@ -109,6 +109,141 @@ pub fn verify_pass(
     })
 }
 
+/// What a launcher's sign-in starts with (an Elo Pros pass is base64url,
+/// a ticket `os1.`).
+pub const LAUNCHER_PREFIX: &str = "siwe.";
+
+/// Checks a sign-in from the Elo Pros launcher (the desktop): `siwe.`
+/// b64url(the message) `.` b64url(the 65-byte signature). The launcher
+/// writes the message (`sdk/PROTOCOL.md`, `prove`), EIP-4361's:
+///
+/// ```text
+/// <domain> wants you to sign in with your Ethereum account:
+/// <0x address>
+///
+/// Prove your identity to play <slug>. This signature authorises nothing and moves no funds.
+///
+/// URI: https://<host>
+/// Version: 1
+/// Chain ID: 4663
+/// Nonce: <ours, once>
+/// Issued At: <the launcher's clock>
+/// ```
+///
+/// Parsed, and every field we rely on checked against our own state: the
+/// game, the domain and the URI's host among ours (a launcher paired with a
+/// browser wallet signs `elopros.com` with the server in the URI), the
+/// nonce one we issued; then the signer recovered from the signature must be
+/// the address it names. The account is the wallet: the launcher has no
+/// Elo Pros account to name.
+pub fn verify_launcher(
+    pass: &str,
+    slug: &str,
+    domains: &[String],
+    nonce_ok: impl FnOnce(&str) -> bool,
+) -> Result<Passed, PassError> {
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let (body, sig) = pass
+        .strip_prefix(LAUNCHER_PREFIX)
+        .and_then(|p| p.split_once('.'))
+        .ok_or(PassError::Malformed)?;
+    let body = b64.decode(body).map_err(|_| PassError::Malformed)?;
+    let sig = b64.decode(sig).map_err(|_| PassError::Malformed)?;
+    let text = core::str::from_utf8(&body).map_err(|_| PassError::Malformed)?;
+    let lines: Vec<&str> = text.split('\n').collect();
+    let [head, address, "", statement, "", uri, "Version: 1", "Chain ID: 4663", nonce, issued] = lines[..] else {
+        return Err(PassError::Malformed);
+    };
+    let domain = head
+        .strip_suffix(" wants you to sign in with your Ethereum account:")
+        .ok_or(PassError::Malformed)?;
+    let uri = uri.strip_prefix("URI: https://").ok_or(PassError::Malformed)?;
+    let nonce = nonce.strip_prefix("Nonce: ").ok_or(PassError::Malformed)?;
+    if !issued.starts_with("Issued At: ")
+        || !address
+            .strip_prefix("0x")
+            .is_some_and(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(PassError::Malformed);
+    }
+    let ours = |authority: &str| {
+        let host = authority.rsplit_once(':').map_or(authority, |(h, port)| {
+            if port.bytes().all(|b| b.is_ascii_digit()) {
+                h
+            } else {
+                authority
+            }
+        });
+        domains.iter().any(|d| d.eq_ignore_ascii_case(host))
+    };
+    let game = format!("Prove your identity to play {slug}. ");
+    if !statement.starts_with(&game) || !ours(domain) || !ours(uri) {
+        return Err(PassError::Elsewhere);
+    }
+    let signer = personal_signer(text.as_bytes(), &sig).ok_or(PassError::WrongSigner)?;
+    if !signer.eq_ignore_ascii_case(address) {
+        return Err(PassError::WrongSigner);
+    }
+    if !nonce_ok(nonce) {
+        return Err(PassError::Replayed);
+    }
+    Ok(Passed {
+        account: signer.clone(),
+        wallet: Some(signer),
+    })
+}
+
+/// Who signed `message` with `personal_sign` (EIP-191): lower-case `0x…`.
+fn personal_signer(message: &[u8], sig: &[u8]) -> Option<String> {
+    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use tiny_keccak::{Hasher, Keccak};
+    let keccak = |parts: &[&[u8]]| {
+        let mut k = Keccak::v256();
+        for p in parts {
+            k.update(p);
+        }
+        let mut out = [0u8; 32];
+        k.finalize(&mut out);
+        out
+    };
+    let (rs, v) = (sig.get(..64)?, *sig.get(64)?);
+    if sig.len() != 65 {
+        return None;
+    }
+    // 27/28 from wallets, 0/1 from some libraries.
+    let rec = RecoveryId::from_byte(match v {
+        27 | 0 => 0,
+        28 | 1 => 1,
+        _ => return None,
+    })?;
+    let sig = Signature::from_slice(rs).ok()?;
+    let len = message.len().to_string();
+    let digest = keccak(&[b"\x19Ethereum Signed Message:\n", len.as_bytes(), message]);
+    let key = VerifyingKey::recover_from_prehash(&digest, &sig, rec).ok()?;
+    let point = key.to_encoded_point(false);
+    let hash = keccak(&[&point.as_bytes()[1..]]);
+    Some(format!("0x{}", crate::hex(&hash[12..])))
+}
+
+/// A pass of either kind: the launcher's (`siwe.`), or Elo Pros' account
+/// pass when we hold its key.
+pub fn verify_any(
+    pass: &str,
+    elo_key: Option<&[u8; 32]>,
+    slug: &str,
+    domains: &[String],
+    nonce_ok: impl FnOnce(&str) -> bool,
+    now: u64,
+) -> Result<Passed, PassError> {
+    if pass.starts_with(LAUNCHER_PREFIX) {
+        verify_launcher(pass, slug, domains, nonce_ok)
+    } else if let Some(key) = elo_key {
+        verify_pass(pass, key, slug, domains, nonce_ok, now)
+    } else {
+        Err(PassError::WrongSigner)
+    }
+}
+
 /// The nonces this server hands the page (`GET /nonce`), each good once for
 /// ten minutes.
 ///
@@ -441,5 +576,79 @@ mod tests {
             bad[i] = if bad[i] == b'0' { b'1' } else { b'0' };
             assert!(!b.take_at(std::str::from_utf8(&bad).unwrap(), 1001));
         }
+    }
+
+    /// The launcher's message for `domain`/`uri`, signed by a fixed key:
+    /// the pass, and the key's address.
+    fn launcher_pass(domain: &str, uri: &str, game: &str, nonce: &str) -> (String, String) {
+        use k256::ecdsa::SigningKey;
+        let key = SigningKey::from_bytes(&[7u8; 32].into()).unwrap();
+        let point = key.verifying_key().to_encoded_point(false);
+        let mut k = tiny_keccak::Keccak::v256();
+        tiny_keccak::Hasher::update(&mut k, &point.as_bytes()[1..]);
+        let mut h = [0u8; 32];
+        tiny_keccak::Hasher::finalize(k, &mut h);
+        let addr = format!("0x{}", crate::hex(&h[12..]));
+        let msg = format!(
+            "{domain} wants you to sign in with your Ethereum account:\n{}\n\nProve your identity to play {game}. This signature authorises nothing and moves no funds.\n\nURI: https://{uri}\nVersion: 1\nChain ID: 4663\nNonce: {nonce}\nIssued At: 2026-11-07T12:00:00Z",
+            addr.to_uppercase().replace("0X", "0x")
+        );
+        let mut k = tiny_keccak::Keccak::v256();
+        for p in [
+            b"\x19Ethereum Signed Message:\n" as &[u8],
+            msg.len().to_string().as_bytes(),
+            msg.as_bytes(),
+        ] {
+            tiny_keccak::Hasher::update(&mut k, p);
+        }
+        let mut digest = [0u8; 32];
+        tiny_keccak::Hasher::finalize(k, &mut digest);
+        let (sig, rec) = key.sign_prehash_recoverable(&digest).unwrap();
+        let mut raw = sig.to_bytes().to_vec();
+        raw.push(27 + rec.to_byte());
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        (
+            format!("{LAUNCHER_PREFIX}{}.{}", b64.encode(&msg), b64.encode(&raw)),
+            addr,
+        )
+    }
+
+    #[test]
+    fn the_launchers_sign_in_is_checked_against_our_own_state() {
+        let ours = ["elopros.com".to_string(), "game.elopros.com".to_string()];
+        let check = |p: &str| verify_any(p, None, "oneshot", &ours, |n| n == NONCE, 0);
+        let (pass, addr) = launcher_pass("game.elopros.com", "game.elopros.com", "oneshot", NONCE);
+        assert!(pass.len() <= proto::MAX_PASS, "rides in a hello: {}", pass.len());
+        let got = check(&pass).unwrap();
+        assert_eq!(got.wallet.as_deref(), Some(addr.as_str()));
+        // A browser wallet's form: the site's name, the server in the URI.
+        assert!(check(&launcher_pass("elopros.com", "game.elopros.com:61250", "oneshot", NONCE).0).is_ok());
+        // Another game's, another site's, a nonce not ours.
+        assert_eq!(
+            check(&launcher_pass("game.elopros.com", "game.elopros.com", "gates", NONCE).0),
+            Err(PassError::Elsewhere)
+        );
+        assert_eq!(
+            check(&launcher_pass("evil.example", "game.elopros.com", "oneshot", NONCE).0),
+            Err(PassError::Elsewhere)
+        );
+        assert_eq!(
+            check(&launcher_pass("elopros.com", "evil.example", "oneshot", NONCE).0),
+            Err(PassError::Elsewhere)
+        );
+        let other = NONCE.replace('0', "f");
+        assert_eq!(
+            check(&launcher_pass("elopros.com", "elopros.com", "oneshot", &other).0),
+            Err(PassError::Replayed)
+        );
+        // A message changed after it was signed names someone else.
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let (body, sig) = pass[LAUNCHER_PREFIX.len()..].split_once('.').unwrap();
+        let text = String::from_utf8(b64.decode(body).unwrap())
+            .unwrap()
+            .replace("12:00:00", "12:00:01");
+        let forged = format!("{LAUNCHER_PREFIX}{}.{sig}", b64.encode(text));
+        assert_eq!(check(&forged), Err(PassError::WrongSigner));
+        assert_eq!(check("siwe.nonsense"), Err(PassError::Malformed));
     }
 }

@@ -915,12 +915,24 @@ mod page {
 
     /// The party's link on the clipboard; what was put there.
     pub fn copy_link(code: &str) -> Option<String> {
+        copy(code, false)
+    }
+
+    /// The watch link (`?watch=CODE`: the game opens watching this party's
+    /// match) on the clipboard; what was put there.
+    pub fn copy_watch_link(code: &str) -> Option<String> {
+        copy(code, true)
+    }
+
+    fn copy(code: &str, watch: bool) -> Option<String> {
         let w = web_sys::window()?;
         let f: Function = Reflect::get(&w, &JsValue::from_str("__oneshotCopy"))
             .ok()?
             .dyn_into()
             .ok()?;
-        f.call1(&w, &JsValue::from_str(code)).ok()?.as_string()
+        f.call2(&w, &JsValue::from_str(code), &JsValue::from_bool(watch))
+            .ok()?
+            .as_string()
     }
 
     /// The ticket kept for this tab: a reload is still who it was.
@@ -975,6 +987,9 @@ mod page {
     pub fn toggle_mute(_: &str) {}
     pub fn forget_voices(_: &proto::party::Party) {}
     pub fn copy_link(_: &str) -> Option<String> {
+        None
+    }
+    pub fn copy_watch_link(_: &str) -> Option<String> {
         None
     }
     pub fn keep_ticket(_: &str) {}

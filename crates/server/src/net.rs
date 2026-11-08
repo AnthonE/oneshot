@@ -610,10 +610,11 @@ async fn session(
             None if ranked => return refuse(&mut send, proto::REFUSE_PASS, &ctx).await,
             None => None,
         }
-    } else if let Some(key) = ctx.elo_pubkey {
-        match auth::verify_pass(
+    } else {
+        // An Elo Pros pass, or the launcher's sign-in (the desktop).
+        match auth::verify_any(
             pass.as_str(),
-            &key,
+            ctx.elo_pubkey.as_ref(),
             &ctx.slug,
             &ctx.domains,
             |n| ctx.nonces.take(n),
@@ -625,10 +626,6 @@ async fn session(
             // older than its ten minutes) only costs its skin.
             Err(_) => None,
         }
-    } else if ranked {
-        return refuse(&mut send, proto::REFUSE_PASS, &ctx).await;
-    } else {
-        None
     };
 
     // The menu's own session: its party, friends and voice (`lobby.rs`).

@@ -124,7 +124,10 @@ fn run() -> Result<(), String> {
         let link = Box::new(oneshot_client::link::Still::on(pose.2.map));
         (oneshot_client::app(link, opts), Screen::Playing, false)
     } else {
-        let server = arg("--server").unwrap_or_else(|| PUBLIC.into());
+        // The launcher fills its placeholders with "" when it has nothing to say.
+        let server = arg("--server")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| PUBLIC.into());
         let mode = match arg("--mode") {
             Some(m) => Some(mode(&m).ok_or_else(|| format!("--mode {m}: one of {MODES}"))?),
             None => None,
@@ -133,6 +136,10 @@ fn run() -> Result<(), String> {
         // `--fxstage N`: the demo's stage N alone (`look/fx/demo.rs`).
         let fxstage = arg("--fxstage").and_then(|n| n.parse::<u32>().ok());
         let fxdemo = flag("--fxdemo") || fxstage.is_some();
+        let code = arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0);
+        // `--mode watch [--party CODE]`: that party's match is watched, not
+        // joined.
+        let watch = (mode == Some(proto::MODE_WATCH)).then_some(code);
         let front = match mode {
             Some(m) => Start::Join(m),
             None if autoplay || fxdemo => Start::Join(proto::MODE_CASUAL),
@@ -151,7 +158,9 @@ fn run() -> Result<(), String> {
             fxstage,
             open,
             front,
-            party: arg("--party").and_then(|c| proto::party::code_parse(&c)).unwrap_or(0),
+            party: if watch.is_some() { 0 } else { code },
+            watch,
+            streamer: flag("--streamer"),
             // A picture is the window's size, not the monitor's; a tool's
             // run (a tape, the autopilot) doesn't take the screen.
             windowed: flag("--windowed") || shot.is_some() || record.is_some() || autoplay,
@@ -345,7 +354,7 @@ const HELP: &str = "oneshot: the desktop client
   --party CODE                     join the party with that code (its leader picks the game)
   --mode MODE                      straight into a match: casual, ffa, gungame, bigteam,
                                    ctf; duel, doubles and cup are ranked, which needs an
-                                   Elo Pros sign-in (the web page); watch follows a public
+                                   Elo Pros sign-in (the launcher's); watch follows a public
                                    match (--party CODE: that party's). Or 0 to 6, 8, 9
   --autoplay [--scope|--drill]     a bot plays you, straight into a match (casual
                                    unless --mode); --scope holds the scope, --drill
@@ -361,6 +370,8 @@ const HELP: &str = "oneshot: the desktop client
                                    (--settings alone: over the title)
   --graphics                       the settings, on GRAPHICS
   --windowed                       a window this run, not fullscreen (the setting is kept)
+  --streamer                       streamer mode this run: the party code and your wallet
+                                   stay off the screen (SETTINGS > STREAM keeps it)
   --fxdemo                         the effects staged in front of the camera, in a
                                    match (look/fx/demo.rs); --fxstage N: its stage N
   --knobs 'Layer.key=v;...'        effects retuned for this run (tools/fx.sh, REEL_KNOBS)

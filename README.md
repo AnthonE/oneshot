@@ -10,6 +10,14 @@ trusting anyone's machine.
   engine-shim and Elo Pros, file by file.
 - [`docs/SCALING.md`](docs/SCALING.md): how it grows past one box.
 
+## Contributing
+
+People and agents both build oneshot, and accepted work is paid: $2 a merged
+pull request, $10 more for a map that enters a rotation, and a bounty for
+breaking the game's guarantees. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the
+scope and the checks, [`SECURITY.md`](SECURITY.md) how to report a cheat
+privately, and [`AGENTS.md`](AGENTS.md) is where an agent starts.
+
 ## Milestone 1: the rules
 
 `crates/sim` is the game's rules in deterministic Rust: Quake-style
@@ -80,7 +88,15 @@ public half goes on Elo Pros' dev desk for `oneshot` (`ops/README.md`).
 - **Casual:** against the bot, a free for all, Gun Game (a kill a rung up a
   ladder of seven guns), Big Team (8v8 on terrain, with vehicles) or Capture
   the Flag, bots in the empty seats; the shared rooms take a party together,
-  or give it a room of its own. Or watch a live match, a little late.
+  or give it a room of its own. Or watch a live match, a little late: the
+  page's `?watch=1` opens watching any public match and `?watch=CODE` a
+  party's (the PARTY tab's COPY WATCH LINK); on the desktop, `--mode watch
+  [--party CODE]`.
+- **Streaming:** SETTINGS > STREAM's streamer mode keeps the party code and
+  the wallet off the screen (`?streamer=1`, `--streamer` for one run); F9
+  saves the last half minute as a video, F12 a screenshot. The overlays, an
+  OBS scene collection and chat commands are Elo Pros' stream kit
+  (`elopros.com/stream.html`).
 - **Kill cam:** the run-up to your death from the killer's eye, made only
   of what fog already sent you.
 - **Maps** are data: `maps/<name>/map.json`, compiled to the sim's tables.

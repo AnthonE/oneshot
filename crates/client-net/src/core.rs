@@ -572,7 +572,7 @@ pub struct NetCore {
     /// our present, by their shares).
     near: Near,
     near_after: Box<[NearAt; RING]>,
-    /// Each hull's share of our rewind as the two newest snapshots said (15
+    /// Each hull's share of our rewind as the two newest snapshots said (SHARE_FULL
     /// for one not in our bubble), and when the newest came: drawn sliding
     /// from the one to the other over a snapshot's time.
     share: [(u8, u8); TARGETS],
@@ -1415,7 +1415,7 @@ impl NetCore {
                     .and_then(|v| v.near)
                     .map(|n| n.share)
             };
-            *sh = ((drawn.round() as u8).min(SHARE_FULL), to.unwrap_or(SHARE_FULL));
+            *sh = (drawn.round() as u8, to.unwrap_or(SHARE_FULL));
         }
         self.share_at = now_ms;
 
@@ -1461,7 +1461,25 @@ impl NetCore {
         }
         self.bind(now_ms, s);
         for (i, b) in before.iter().enumerate() {
-            let (Some(b), Some(n)) = (b, self.member_drawn(i as u8, now_ms)) else {
+            let Some(b) = b else {
+                continue;
+            };
+            let Some(n) = self.member_drawn(i as u8, now_ms) else {
+                // Out of our bubble at once (wrecked, out of sight, us dead):
+                // eased back to the render tick, never a snap across.
+                let n = (self.moff[i], self.mturn[i]);
+                self.moff[i] = V3::ZERO;
+                self.mturn[i] = 0.0;
+                if let Some(now) = self.vehicle_at(i as u8, now_ms) {
+                    let jump = b.pos - now.pos;
+                    let turn = (b.yaw - now.yaw + core::f32::consts::PI).rem_euclid(core::f32::consts::TAU)
+                        - core::f32::consts::PI;
+                    if jump.len() <= SNAP_M {
+                        (self.moff[i], self.mturn[i]) = (jump, turn);
+                    }
+                } else {
+                    (self.moff[i], self.mturn[i]) = n;
+                }
                 continue;
             };
             let (jump, turn) = (b.pos - n.pos, b.yaw - n.yaw);
@@ -1599,11 +1617,17 @@ impl NetCore {
         // The hulls in our bubble as the server had them, to re-run with
         // ours: none past what a re-run guesses well across.
         let mut near = Near::default();
-        if ahead <= MAX_RERUN {
+        {
             for v in s.vehicles() {
                 let (Some(n), i) = (v.near, v.slot as usize) else {
                     continue;
                 };
+                // Past what a re-run guesses well across, only one parked
+                // (still, nobody driving): that guess holds however long.
+                let parked = n.stick.is_none() && v.vel.flat().len() < 0.5;
+                if ahead > MAX_RERUN && !parked {
+                    continue;
+                }
                 let Some(def) = self.map.vehicles.get(i) else {
                     continue;
                 };
@@ -1920,8 +1944,14 @@ impl NetCore {
         let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
         for va in &a.vehicles[..a.nv as usize] {
             if Some(va.slot) != mine {
-                let d = self.member_drawn(va.slot, now_ms);
-                out.push(d.unwrap_or_else(|| vehicle_between(va, a.tick, b, rt)));
+                let d = self.member_drawn(va.slot, now_ms).unwrap_or_else(|| {
+                    // Just out of our bubble, sliding back still.
+                    let mut d = vehicle_between(va, a.tick, b, rt);
+                    d.pos = d.pos + self.moff[va.slot as usize];
+                    d.yaw += self.mturn[va.slot as usize];
+                    d
+                });
+                out.push(d);
             }
         }
         // In our bubble since the render tick: drawn already, at its share.
@@ -2047,16 +2077,38 @@ impl NetCore {
         })
     }
 
+    /// Seat `seat` on hull `h` as drawn (its turret the map's).
+    fn seat_on(&self, h: &DrawnVehicle, seat: usize) -> V3 {
+        let turn = (h.yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
+        let hull = Vehicle {
+            pos: h.pos,
+            yaw: turn.rem_euclid(65536.0) as u16,
+            turret: self
+                .map
+                .vehicles
+                .get(h.slot as usize)
+                .map_or(sim::vehicle::NO_TURRET, |d| d.turret),
+            ..Vehicle::default()
+        };
+        hull.mount(seat)
+    }
+
     /// One vehicle of [`NetCore::vehicles`], by its slot.
     fn vehicle_at(&self, slot: u8, now_ms: f64) -> Option<DrawnVehicle> {
         if self.n_frames == 0 || self.pred.riding().map(|(i, _)| i as u8) == Some(slot) {
             return None;
         }
+        if let Some(d) = self.member_drawn(slot, now_ms) {
+            return Some(d);
+        }
         let rt = self.render_tick(now_ms);
         let (ai, bi) = self.around(rt);
         let (a, b) = (&self.frames[ai], bi.map(|i| &self.frames[i]));
         let va = a.vehicles[..a.nv as usize].iter().find(|v| v.slot == slot)?;
-        Some(vehicle_between(va, a.tick, b, rt))
+        let mut d = vehicle_between(va, a.tick, b, rt);
+        d.pos = d.pos + self.moff[slot as usize];
+        d.yaw += self.mturn[slot as usize];
+        Some(d)
     }
 
     /// The match's phase as of the newest snapshot.
@@ -2189,6 +2241,15 @@ impl NetCore {
                 .iter()
                 .filter_map(|r| self.other_between(r.slot, ai, rt, now_ms)),
         );
+        // Riding a hull in our bubble since the render tick (it came in
+        // unseen, on our present): drawn on it already.
+        let newest = &self.frames[self.n_frames - 1];
+        for r in &newest.remotes[..newest.n as usize] {
+            let fresh = !a.remotes[..a.n as usize].iter().any(|x| x.slot == r.slot);
+            if fresh && self.member_rider(r.slot).is_some() {
+                out.extend(self.other_between(r.slot, ai, rt, now_ms));
+            }
+        }
     }
 
     /// The seat `slot` has in the hull we ride (as the server sent it,
@@ -2238,17 +2299,46 @@ impl NetCore {
         // Riding a hull in our bubble: in its seat on the hull as drawn.
         if let Some((i, seat)) = self.member_rider(slot) {
             if let Some(h) = self.member_drawn(i, now_ms) {
-                let turn = (h.yaw as f64 * (65536.0 / core::f64::consts::TAU)).round();
-                let hull = Vehicle {
-                    pos: h.pos,
-                    yaw: turn.rem_euclid(65536.0) as u16,
-                    ..Vehicle::default()
-                };
                 return Some(Drawn {
-                    pos: hull.mount(seat),
+                    pos: self.seat_on(&h, seat),
                     ..drawn(newest()?)
                 });
             }
+        }
+        // Riding one drawn off the render tick still (sliding out of our
+        // bubble, or out of it at once and easing back): in its seat on it
+        // as drawn, never a step off it.
+        let newest_f = &frames[self.n_frames - 1];
+        let seated_now = |h: u8| {
+            newest_f.vehicles[..newest_f.nv as usize]
+                .iter()
+                .find(|v| v.slot == h)
+                .and_then(|v| v.seats.iter().position(|&x| x == slot + 1))
+        };
+        if let Some((i, seat)) = newest_f.vehicles[..newest_f.nv as usize]
+            .iter()
+            .find_map(|v| seated_now(v.slot).map(|seat| (v.slot, seat)))
+        {
+            let k = i as usize;
+            let off = self.moff[k] != V3::ZERO || self.mturn[k] != 0.0 || self.member_drawn(i, now_ms).is_some();
+            if let (true, Some(h)) = (off, self.vehicle_at(i, now_ms)) {
+                return Some(Drawn {
+                    pos: self.seat_on(&h, seat),
+                    ..drawn(newest()?)
+                });
+            }
+        }
+        // It rode a hull in our bubble at the render tick, and has got out
+        // or died since: where the newest snapshot has it (dead where it
+        // fell), not alive in a seat a round trip back.
+        let full = (SHARE_FULL, SHARE_FULL);
+        let rode_then = frames[ai].vehicles[..frames[ai].nv as usize].iter().any(|v| {
+            v.seats.contains(&(slot + 1))
+                && self.share[MAX_FIGHTERS + v.slot as usize] != full
+                && seated_now(v.slot).is_none()
+        });
+        if rode_then && !self.watch {
+            return newest().map(drawn);
         }
         if let (Some(seat), Some(hull), false) = (self.co_rider(slot), self.drawn_hull(), self.watch) {
             return Some(Drawn {
@@ -2260,8 +2350,9 @@ impl NetCore {
         // Out of our hull (or dead in it) since the render tick, which still
         // has it seated a round trip back: where it got out (or fell), as
         // the newest snapshot has it, till the render tick gets there.
-        let seated_then = frames[ai].own_v.is_some_and(|v| v.seats.iter().any(|&x| x == slot + 1));
-        if seated_then && !self.watch && frames[ai].own.riding().is_some() {
+        let seats = |v: Option<Vehicle>| v.is_some_and(|v| v.seats.iter().any(|&x| x == slot + 1));
+        let (seated_then, seated_now) = (seats(frames[ai].own_v), seats(frames[self.n_frames - 1].own_v));
+        if seated_then && !seated_now && !self.watch && frames[ai].own.riding().is_some() {
             return newest().map(drawn);
         }
         self.remote_at(slot, ai, rt)
@@ -2518,13 +2609,19 @@ fn member_of(s: &Snapshot, e: &EventState) -> Option<(u8, V3)> {
     if e.kind == Kind::VehicleHit as u8 || e.kind == Kind::Wreck as u8 {
         return hull(e.part);
     }
+    // Only what happens at its maker (a blast, a flag's goings, stay where
+    // they are in the world), and never nobody's.
+    let at_maker = [Kind::Shot, Kind::Melee, Kind::Throw, Kind::Ride, Kind::Pickup];
+    if !at_maker.iter().any(|&k| e.kind == k as u8) || e.a as usize >= MAX_FIGHTERS {
+        return None;
+    }
     if let Some(r) = s.remotes().iter().find(|r| r.slot == e.a && r.near.is_some()) {
         return Some((r.slot, r.pos));
     }
     let v = s
         .vehicles()
         .iter()
-        .find(|v| v.near.is_some() && v.seats.contains(&(e.a.wrapping_add(1))))?;
+        .find(|v| v.near.is_some() && v.seats.contains(&(e.a + 1)))?;
     Some((MAX_FIGHTERS as u8 + v.slot, v.pos))
 }
 

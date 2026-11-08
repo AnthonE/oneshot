@@ -240,6 +240,11 @@ async fn play_with(h: &server::Handle, pass: &str, mode: u8, look: proto::Look, 
             // A cup's entrant plays several matches on one session: only a
             // bye or a refusal ends it.
             let end = matches!(m, Msg::Bye | Msg::Refuse { .. } | Msg::Moved { .. });
+            // Its level is there at once, as a page says each welcome: the countdown waits on it.
+            if matches!(m, Msg::Welcome { .. }) {
+                let n = frame_msg(&Msg::Loaded, &mut f).unwrap();
+                let _ = send.write_all(&f[..n]).await;
+            }
             got.push(m);
             if end {
                 break;

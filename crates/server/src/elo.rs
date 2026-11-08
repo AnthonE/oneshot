@@ -438,6 +438,23 @@ pub struct Elo {
     next_pending: AtomicU64,
     /// Until when lookups take Elo Pros as down ([`DOWN_FOR`]).
     down_until: Mutex<Option<Instant>>,
+    /// What became of the signed POSTs, for `/health.json` ([`Elo::counts`]).
+    sent: AtomicU64,
+    refused: AtomicU64,
+    failed: AtomicU64,
+    unkeyed: AtomicU64,
+}
+
+/// What became of the signed POSTs (results and stats) since start: taken,
+/// refused (a 4xx Elo Pros meant), never got through after every try, not
+/// sent for want of a server key; and how many are being tried now.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub sent: u64,
+    pub refused: u64,
+    pub failed: u64,
+    pub unkeyed: u64,
+    pub held: u64,
 }
 
 impl Elo {
@@ -458,6 +475,23 @@ impl Elo {
             pending: Mutex::new(BTreeMap::new()),
             next_pending: AtomicU64::new(0),
             down_until: Mutex::new(None),
+            sent: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+            unkeyed: AtomicU64::new(0),
+        }
+    }
+
+    /// [`Counts`], read now. Never waits on the network: `held` is the
+    /// pending map's length, under a lock no POST holds across an await.
+    pub fn counts(&self) -> Counts {
+        let g = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        Counts {
+            sent: g(&self.sent),
+            refused: g(&self.refused),
+            failed: g(&self.failed),
+            unkeyed: g(&self.unkeyed),
+            held: self.pending().len() as u64,
         }
     }
 
@@ -813,7 +847,10 @@ impl Elo {
     /// One that never got through is saved for `oneshot-review resend`
     /// (with `saving_unsent_to`), and so is one a drain stops waiting for.
     async fn post_signed(&self, path: &str, body: String) -> Result<String, String> {
-        let key = self.key.as_ref().ok_or("no server key: nothing is reported")?;
+        let Some(key) = self.key.as_ref() else {
+            self.unkeyed.fetch_add(1, Ordering::Relaxed);
+            return Err("no server key: nothing is reported".into());
+        };
         let held = self.next_pending.fetch_add(1, Ordering::Relaxed);
         self.pending().insert(
             held,
@@ -827,6 +864,7 @@ impl Elo {
         for attempt in 0..TRIES {
             match self.post_once(key, path, &body).await {
                 Posted::Taken(text) => {
+                    self.sent.fetch_add(1, Ordering::Relaxed);
                     // A drain that stopped waiting saved it meanwhile: it
                     // got through after all, so `resend` mustn't post it
                     // twice.
@@ -836,6 +874,7 @@ impl Elo {
                     return Ok(text);
                 }
                 Posted::Refused(e) => {
+                    self.refused.fetch_add(1, Ordering::Relaxed);
                     self.pending().remove(&held);
                     return Err(e);
                 }
@@ -846,6 +885,7 @@ impl Elo {
                 wait *= 2;
             }
         }
+        self.failed.fetch_add(1, Ordering::Relaxed);
         // Saved under the lock a drain saves under: never lost between.
         let mut p = self.pending();
         let saved = match (p.remove(&held), self.unreported.as_deref()) {

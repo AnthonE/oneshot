@@ -76,6 +76,11 @@ async fn join_stamped(port: u16, hash: [u8; 32], name: &str, stamp: u32) -> Resu
         .await
         .ok()
         .flatten();
+    // Its level is there at once, as a page says once it is: the countdown waits on it.
+    if matches!(first, Some(Msg::Welcome { .. })) {
+        let n = frame_msg(&Msg::Loaded, &mut f).unwrap();
+        send.write_all(&f[..n]).await.map_err(|e| e.to_string())?;
+    }
     Ok((
         Player {
             _ep: ep,

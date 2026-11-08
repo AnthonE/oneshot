@@ -12,17 +12,56 @@
 
 // The mixer's rate (crates/mix's RATE): the context is made at it.
 const RATE = 48000;
-// Frames' commands kept while the worklet starts, all of them: a volume, a
-// loop held or stopped lasts (the desktop's inbox keeps those too:
-// crates/mix Shared::send), and the bytes can't be told apart here. A
-// worklet not up after this many frames (minutes) never will be: no sound,
-// said, rather than a queue that only grows. Clips are kept apart.
+// Frames' commands kept while the worklet starts: what lasts (a volume, a
+// loop held or stopped; the desktop's inbox keeps those too: crates/mix
+// Shared::send). One-shots are not among them (`sieve`, below). A worklet
+// not up after this many frames (minutes) never will be: no sound, said,
+// rather than a queue that only grows. Clips are kept apart.
 const WAITING = 7200;
 // After a gesture, how long the context has to start before the bar says
 // the browser is holding it (a muted site, an autoplay block).
 const HELD_MS = 1500;
+// A one-shot sent after a gesture waits this long for the context to run
+// (it starts on that gesture, within a tenth of a second as a rule; a slow
+// machine's frame may itself be late to send the click): the click that
+// wakes the sound is heard, a touch late. Older than this, it is stale, and
+// dropped.
+const HOLD_MS = 1000;
 // What a browser counts as a person's gesture: any one may start a context.
 const GESTURES = ['pointerdown', 'pointerup', 'mousedown', 'touchend', 'keydown', 'click'];
+
+// crates/mix's `encode`: a command is its tag, then its bytes (a place is
+// four f32s: each ear's gain, the rate, the filter). Kept in step with it;
+// the mixer's own test pins the Rust side (`bytes_play_what_the_commands_play`).
+const T_PLAY = 1;
+const PLACE = 16;
+const AFTER_TAG = { 1: 2 + PLACE + 4, 2: 1 + 2 + PLACE, 3: 1 + PLACE, 4: 1, 5: 4 };
+
+// `bytes` sieved: what lasts (a loop held, moved or stopped, the volume),
+// then the one-shots (T_PLAY), and how many of those. A torn tail is
+// dropped, as the mixer drops it.
+function sieve(bytes) {
+  const lasting = new Uint8Array(bytes.byteLength);
+  const shots = new Uint8Array(bytes.byteLength);
+  let l = 0;
+  let s = 0;
+  let n = 0;
+  for (let i = 0; i < bytes.byteLength;) {
+    const len = AFTER_TAG[bytes[i]];
+    if (len === undefined || i + 1 + len > bytes.byteLength) break;
+    const end = i + 1 + len;
+    if (bytes[i] === T_PLAY) {
+      shots.set(bytes.subarray(i, end), s);
+      s += end - i;
+      n++;
+    } else {
+      lasting.set(bytes.subarray(i, end), l);
+      l += end - i;
+    }
+    i = end;
+  }
+  return [lasting.subarray(0, l), shots.subarray(0, s), n];
+}
 
 // `v` versions what comes with the game (the theme), `mv` the mixer's own
 // pair, worklet and wasm (build.json's `mix`: it changes on its own).
@@ -38,7 +77,7 @@ export function startMix(v, mv = v) {
   let node = null;
   const waiting = [];
   const clips = [];
-  const st = { installed: 0, failed: 0, sent: 0, errors: 0, mixer: null };
+  const st = { installed: 0, failed: 0, sent: 0, unheard: 0, errors: 0, mixer: null };
   const post = (m, transfer) => {
     if (failed) return;
     if (node) node.port.postMessage(m, transfer);
@@ -75,10 +114,22 @@ export function startMix(v, mv = v) {
   const tunePlay = () => { if (tune && tuneAt > 0 && tune.paused) tune.play().catch(() => {}); };
   let gestured = 0;
   const running = () => ctx && ctx.state === 'running';
+  // One-shots since the last gesture, each frame's with when it came, till
+  // the mixer is up and the context runs (`heldFlush`: on both).
+  const held = [];
+  const heldFlush = () => {
+    if (!node || !running() || failed) return;
+    const now = performance.now();
+    for (const [at, shots, n] of held.splice(0)) {
+      if (now - at <= HOLD_MS) node.port.postMessage({ kind: 'cmds', bytes: shots }, [shots.buffer]);
+      else st.unheard += n;
+    }
+  };
   // Said once each time it changes, so a console shows what the ear did.
   let said = '';
   const settle = () => {
     if (!ctx || failed) return;
+    heldFlush();
     const now = running() ? (node ? 'on' : 'starting') : gestured ? 'held by the browser' : 'waiting for a click';
     if (now === why) return;
     why = now;
@@ -147,9 +198,24 @@ export function startMix(v, mv = v) {
         st.installed++;
       }, () => { st.failed++; });
     },
-    /** A frame's commands (taken: the game made these bytes for us). */
+    /** A frame's commands (taken: the game made these bytes for us). A
+     * one-shot nobody can hear now is never heard: with no mixer up yet, or
+     * the context not running (a browser holds it till a click), it is
+     * dropped here, not kept to go off with every other when the sound
+     * comes (the first click on the page let out every tick before it, all
+     * at once). Only what came after a gesture waits, briefly, for the
+     * context that gesture starts. What lasts goes on. */
     send(bytes) {
       st.sent++;
+      if (!node || !running()) {
+        const [lasting, shots, n] = sieve(bytes);
+        if (n && gestured && performance.now() - gestured < HOLD_MS) held.push([performance.now(), shots, n]);
+        else st.unheard += n;
+        if (lasting.byteLength === 0) return;
+        bytes = lasting;
+      } else {
+        heldFlush();
+      }
       post({ kind: 'cmds', bytes }, [bytes.buffer]);
     },
     /** The theme at `level` (0: stopped, and from its start the next time). */
@@ -167,8 +233,9 @@ export function startMix(v, mv = v) {
         tune.currentTime = 0;
       }
     },
-    /** For the browser test: decoded, failed, frames sent, the context's
-     * state, why it isn't on, worklet errors, and the worklet's gauges
+    /** For the browser test: decoded, failed, frames sent, one-shots
+     * dropped unheard, the context's state, why it isn't on, worklet
+     * errors, and the worklet's gauges
      * (crates/mix Stats: blocks, started, refused, missing, installed,
      * playing, held). */
     stats: () => ({ ...st, state: ctx ? ctx.state : 'none', why }),

@@ -372,21 +372,23 @@ pub fn nav_color(picked: bool, over: bool) -> Color {
     }
 }
 
-/// A nav entry under the pointer: its label lifts and it steps right, as
-/// the page's `.nav .item:hover`.
+/// A nav entry under the pointer: its label lifts and steps right, as the
+/// page's `.nav .item:hover`. The label, not the entry: an entry stepping
+/// out from under a pointer at its edge flickers, and ticks (`sound::menus`)
+/// every frame it does.
 fn nav_hover(
-    mut items: Query<(&Interaction, &NavItem, &Children, &mut UiTransform), Changed<Interaction>>,
-    mut labels: Query<&mut TextColor, With<NavLabel>>,
+    items: Query<(&Interaction, &NavItem, &Children), Changed<Interaction>>,
+    mut labels: Query<(&mut TextColor, &mut UiTransform), With<NavLabel>>,
 ) {
-    for (i, n, kids, mut xf) in &mut items {
+    for (i, n, kids) in &items {
         let over = *i != Interaction::None;
+        let dx = if over && !n.picked { 4.0 } else { 0.0 };
         for k in kids.iter() {
-            if let Ok(mut c) = labels.get_mut(k) {
+            if let Ok((mut c, mut xf)) = labels.get_mut(k) {
                 c.set_if_neq(TextColor(nav_color(n.picked, over)));
+                xf.translation = Val2::px(dx, 0.0);
             }
         }
-        let dx = if over && !n.picked { 4.0 } else { 0.0 };
-        xf.translation = Val2::px(dx, 0.0);
     }
 }
 

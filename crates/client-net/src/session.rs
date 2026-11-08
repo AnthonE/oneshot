@@ -37,7 +37,11 @@ pub fn close_why(code: u32, reason: &str) -> String {
 /// Why the server said no, as a player reads it (`Msg::Refuse`).
 pub fn refuse_why(reason: u8) -> &'static str {
     match reason {
+        #[cfg(target_arch = "wasm32")]
         proto::REFUSE_VERSION => "this page is out of date: reload it",
+        // The launcher updates it; a download, the release page.
+        #[cfg(not(target_arch = "wasm32"))]
+        proto::REFUSE_VERSION => "this build of oneshot is out of date: update it",
         proto::REFUSE_PASS => "Elo Pros' sign-in didn't check out: sign in again",
         proto::REFUSE_NEEDS_WALLET => "ranked needs a wallet linked to your Elo Pros account",
         proto::REFUSE_BUSY => "that wallet is already queued or playing",

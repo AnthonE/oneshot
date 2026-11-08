@@ -14,6 +14,16 @@ use crate::movement::{quant, Body};
 use crate::solid::{Shape, Solid};
 use crate::vehicle::Vehicle;
 
+/// How far into a hull's top a body coming down may be and still land on
+/// it (past this tick's fall), as a floor's step would take it.
+pub const TOP_EPS: f32 = 0.05;
+
+/// Hull `v`'s top on the sim's grid, at or above it: where a body on it
+/// stands, never a hair inside it (where the hull would meet it).
+pub fn top(v: &Vehicle) -> f32 {
+    crate::fmath::ceil((v.pos.y + VEH_H) * QUANT) * (1.0 / QUANT)
+}
+
 /// What of a fighter the contact step reads and moves.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Man {
@@ -258,9 +268,12 @@ impl Scene {
                     continue;
                 }
                 let h = f.body.height();
-                let met = if v.touches(f.body.pos, BODY_R, h) {
+                // One on its top rides it out, never run down by it.
+                let roof = top(&v) - TOP_EPS;
+                let meets = |p: V3| v.touches(p, BODY_R, h) && p.y < roof;
+                let met = if meets(f.body.pos) {
                     f.body.pos
-                } else if let Some(p) = w.then(i, q).filter(|&p| v.touches(p, BODY_R, h)) {
+                } else if let Some(p) = w.then(i, q).filter(|&p| meets(p)) {
                     p
                 } else {
                     continue;
@@ -307,18 +320,33 @@ impl Scene {
                 y0: v.pos.y,
                 y1: v.pos.y + VEH_H,
             };
+            let top = top(&v);
             for m in self.men.iter_mut() {
                 if !m.live || m.ride != 0 {
                     continue;
                 }
                 let (feet, h) = (m.body.pos.y, m.body.height());
                 let off = (m.body.pos - v.pos).flat();
-                if feet >= hull.y1 || feet + h <= hull.y0 || off.dot(off) >= reach * reach {
+                if feet >= top + TOP_EPS || feet + h <= hull.y0 || off.dot(off) >= reach * reach {
                     continue;
                 }
                 let Some((nx, nz, ux, uz)) = hull.push(m.body.pos.x, m.body.pos.z, BODY_R) else {
                     continue;
                 };
+                // On its top, or come down onto it from above (no deeper than
+                // this tick's fall): stood there, every tick, never through it
+                // and out a side.
+                if m.body.vel.y <= 0.0 && top - feet <= -m.body.vel.y * DT + TOP_EPS {
+                    let b = &mut m.body;
+                    b.pos.y = top;
+                    b.vel = V3::new(b.vel.x, 0.0, b.vel.z);
+                    b.grounded = true;
+                    continue;
+                }
+                // Above it, going up: clear of it.
+                if feet >= hull.y1 {
+                    continue;
+                }
                 let x = quant(nx.clamp(map.lo.0, map.hi.0));
                 let z = quant(nz.clamp(map.lo.1, map.hi.1));
                 if map.occupied(x, z, BODY_R, feet + STEP, feet + h) {
