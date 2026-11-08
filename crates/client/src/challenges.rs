@@ -60,6 +60,12 @@ pub struct Mine {
     pub shares: u64,
     #[serde(default)]
     pub earns: u64,
+    /// Why this player can't be paid yet (an account with no wallet).
+    #[serde(default)]
+    pub why_not: Option<String>,
+    /// What the pot has sent this player, in all.
+    #[serde(default)]
+    pub paid_total: u64,
 }
 
 /// The daily pot, as Elo Pros says it. Drawn only when `on`.
@@ -85,10 +91,32 @@ impl Pot {
         }
         let mine = self.mine.as_ref().map(|m| {
             let s = if m.shares == 1 { "" } else { "S" };
-            format!("YOU: {} SHARE{s} · {} {}", m.shares, m.earns, self.coin)
+            let today = match &m.why_not {
+                Some(why) => why.trim().trim_end_matches('.').to_uppercase(),
+                None => format!("{} {}", thousands(m.earns), self.coin),
+            };
+            let sent = if m.paid_total > 0 {
+                format!(" · SENT SO FAR: {} {}", thousands(m.paid_total), self.coin)
+            } else {
+                String::new()
+            };
+            format!("YOU: {} SHARE{s} · {today}{sent}", m.shares)
         });
         Some((self.say.clone(), mine))
     }
+}
+
+/// 25000 as "25,000".
+fn thousands(n: u64) -> String {
+    let d = n.to_string();
+    let mut out = String::with_capacity(d.len() + d.len() / 3);
+    for (i, c) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 type Pending = Arc<Mutex<Option<Result<String, String>>>>;
@@ -283,7 +311,27 @@ mod tests {
         let p: Pot = serde_json::from_str(t).unwrap();
         let (say, mine) = p.lines().unwrap();
         assert!(say.starts_with("Finish today's"));
-        assert_eq!(mine.as_deref(), Some("YOU: 2 SHARES · 5000 ONESHOT"));
+        assert_eq!(mine.as_deref(), Some("YOU: 2 SHARES · 5,000 ONESHOT"));
+        let paid: Pot = serde_json::from_str(
+            r#"{"on":true,"coin":"ONESHOT","say":"s","mine":{"shares":1,"earns":2500,"paid_total":12500}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            paid.lines().unwrap().1.as_deref(),
+            Some("YOU: 1 SHARE · 2,500 ONESHOT · SENT SO FAR: 12,500 ONESHOT")
+        );
+        let acct: Pot = serde_json::from_str(
+            r#"{"on":true,"coin":"ONESHOT","say":"s","mine":{"shares":3,"earns":0,"why_not":"Link a wallet to be paid your share."}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            acct.lines().unwrap().1.as_deref(),
+            Some("YOU: 3 SHARES · LINK A WALLET TO BE PAID YOUR SHARE")
+        );
+        assert_eq!(
+            (thousands(0), thousands(999), thousands(1000), thousands(100000)),
+            ("0".into(), "999".into(), "1,000".into(), "100,000".into())
+        );
         let off: Pot = serde_json::from_str(r#"{"on":false,"why_not":"not yet","say":"x"}"#).unwrap();
         assert!(off.lines().is_none());
         let plain: Pot = serde_json::from_str(r#"{"on":true,"coin":"ONESHOT","say":"s"}"#).unwrap();
