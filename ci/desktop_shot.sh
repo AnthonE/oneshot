@@ -106,7 +106,7 @@ for _ in $(seq 50); do [ -e "/tmp/.X11-unix/X$n" ] && break; sleep 0.1; done
 
 if [ "$match" = 1 ]; then
   [ -x target/release/oneshot-server ] || { echo "desktop_shot: no target/release/oneshot-server (cargo build --release -p server)" >&2; exit 1; }
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --map "$map" ${loadout:+--loadout "$loadout"} ${passive:+--passive-bots} ${dress:+--dress-all} >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map "$map" ${loadout:+--loadout "$loadout"} ${passive:+--passive-bots} ${dress:+--dress-all} >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do

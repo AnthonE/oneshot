@@ -16,7 +16,7 @@ mkdir -p traces
 spid=
 if [ "${1:-}" = match ]; then
   map=${2:-6}; mode=${3:-3}; wait=${4:-8}; auto=${5:-}
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --web crates/client/dist --map "$map" > traces/native-server.log 2>&1 &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --web crates/client/dist --all-modes --map "$map" > traces/native-server.log 2>&1 &
   spid=$!
   url=
   for _ in $(seq 1 100); do url=$(sed -n 's/.*play: \(http:\/\/[^ ]*\).*/\1/p' traces/native-server.log | head -1); [ -n "$url" ] && break; sleep 0.1; done

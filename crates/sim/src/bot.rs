@@ -359,8 +359,11 @@ impl Bot {
         }
         self.ride_cool = self.ride_cool.saturating_sub(1);
         let eye = me.eye();
-        // The nearest enemy it can see (one well camouflaged only near).
+        // The nearest enemy it can see (one well camouflaged only near):
+        // one it notices ([`BOT_VIEW_COS`]), or the one it already fights.
         let objective = attacker(slot) && Self::objective(w, slot).is_some();
+        let (sn, cs) = crate::geom::yaw_sincos(me.yaw);
+        let hurt = me.since_hit < ticks(BOT_HURT_MS);
         let mut best = 255u8;
         let mut near = f32::INFINITY;
         for (q, v) in w.fighters.iter().enumerate() {
@@ -373,8 +376,11 @@ impl Bot {
             if objective && d > OBJECTIVE_IGNORE_M {
                 continue;
             }
+            let to = (chest - eye).flat();
+            let ahead = to.x * cs + to.z * sn >= BOT_VIEW_COS * to.len();
+            let noticed = q as u8 == self.target || hurt || d < BOT_HEAR_M || ahead;
             let unseen = v.cloak() > CAMO_BOT_HIDDEN && d > CAMO_BOT_M;
-            if d < near && !unseen && w.map.clear(eye, chest) {
+            if d < near && noticed && !unseen && w.map.clear(eye, chest) {
                 near = d;
                 best = q as u8;
             }

@@ -138,6 +138,8 @@ async fn a_party_talks_lands_together_and_survives_a_reload() {
     let h = server::run(server::Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         http: None,
+        // Big Team with three online: open, as this is about parties.
+        all_modes: true,
         ..server::Config::default()
     })
     .await
@@ -150,6 +152,7 @@ async fn a_party_talks_lands_together_and_survives_a_reload() {
     let pa = party(&a, 1).await;
     assert_eq!((pa.leader, pa.me), (pa.members[0].tag, pa.members[0].tag));
     let b = lobby(&h, "bravo", "", pa.code).await;
+    let b_opened = std::time::Instant::now();
     let tb = ticket(&b).await;
     let pb = party(&b, 2).await;
     assert_eq!(pb.code, pa.code);
@@ -246,7 +249,11 @@ async fn a_party_talks_lands_together_and_survives_a_reload() {
     assert_eq!(rules.time_limit_ms, 5 * 60_000);
 
     // The second page reloads (after its match): away, then back in its
-    // place on its ticket, with no code at all.
+    // place on its ticket, with no code at all. Up a while first: a line
+    // closed within moments of opening is let go with its seat
+    // (`lobby::ABANDONED_WITHIN`).
+    let up = Duration::from_millis(2500);
+    tokio::time::sleep(up.saturating_sub(b_opened.elapsed())).await;
     b.close();
     let p = until(&a, |m| match m {
         Msg::Party(p) if p.members().iter().any(|m| m.away) => Some(*p),

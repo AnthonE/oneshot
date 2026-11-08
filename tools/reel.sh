@@ -61,7 +61,7 @@ for name in "$@"; do
   tape=$out/drill.tape
   if [ -z "${REEL_REFILM:-}" ] || [ ! -s "$tape" ]; then
     rm -f "${tape:?}"
-    "$srv" --bind 127.0.0.1:0 --http 127.0.0.1:0 --map range --loadout "$id" --passive-bots >"$tmp/server.out" 2>"$tmp/server.err" &
+    "$srv" --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map range --loadout "$id" --passive-bots >"$tmp/server.out" 2>"$tmp/server.err" &
     spid=$!
     url=
     for _ in $(seq 200); do

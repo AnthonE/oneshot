@@ -30,13 +30,14 @@ pub mod net;
 pub mod online;
 pub mod outlet;
 pub mod party;
+pub mod playlist;
 pub mod queue;
 pub mod stats;
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
@@ -208,6 +209,9 @@ pub struct Config {
     pub linger: Duration,
     /// Bots that stand still: a target for the browser test.
     pub passive_bots: bool,
+    /// Every casual mode open, however few are online (`playlist`): tests,
+    /// and a load test's box.
+    pub all_modes: bool,
     /// Anyone may wear any skin or gear, wallet or not: a local server for
     /// looking at them (`--dress-all`). Never in production.
     pub dress_all: bool,
@@ -312,6 +316,7 @@ impl Default for Config {
             cup_review_top: 3,
             linger: LINGER,
             passive_bots: false,
+            all_modes: false,
             dress_all: false,
             maps: Vec::new(),
             slug: "oneshot".into(),
@@ -365,6 +370,10 @@ pub struct Ctx {
     pub draining: AtomicBool,
     /// Rooms still up (the sim writes it each tick).
     pub rooms: AtomicUsize,
+    /// The casual modes open now and the players online they were opened
+    /// by (`playlist`; the sim writes them every second).
+    pub open_modes: AtomicU16,
+    pub online: AtomicUsize,
     /// What `server.json` says.
     pub public_addr: Option<String>,
     pub live_file: Option<PathBuf>,
@@ -551,6 +560,12 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         gate: Arc::new(net::Gate::new(cfg.capacity).exempting(&cfg.load_sources)),
         draining: AtomicBool::new(false),
         rooms: AtomicUsize::new(0),
+        open_modes: AtomicU16::new(if cfg.all_modes {
+            playlist::ALL
+        } else {
+            playlist::open(0, 0)
+        }),
+        online: AtomicUsize::new(0),
         public_addr: cfg.public_addr.clone(),
         live_file: cfg.live_file.clone(),
         counts: Arc::new(outlet::Counts::default()),
@@ -917,6 +932,24 @@ impl Sim {
         self.new_room_custom(mode, ranked, proto::party::Custom::default(), avoid)
     }
 
+    /// Which casual modes are open (`playlist`), by the players online: a
+    /// page on the title holds a lobby, one in a match a seat too.
+    fn open_modes(&self, rooms: &[Option<Live>]) {
+        let online = self.ctx.lobby.online().max(self.ctx.gate.players());
+        let live = rooms
+            .iter()
+            .flatten()
+            .filter(|r| !r.private && r.over_at.is_none() && r.links.iter().any(Option::is_some))
+            .fold(0u16, |m, r| m | playlist::bit(r.mode));
+        let open = if self.cfg.all_modes {
+            playlist::ALL
+        } else {
+            playlist::open(online, live)
+        };
+        self.ctx.open_modes.store(open, Ordering::Relaxed);
+        self.ctx.online.store(online, Ordering::Relaxed);
+    }
+
     /// [`Sim::new_room`], with a private match's own map, score and clock
     /// over the mode's. A map that doesn't exist, or one with no flags for
     /// Capture the Flag, is the server's pick, off the maps in `avoid` (what
@@ -1057,6 +1090,13 @@ impl Sim {
                             MODE_FFA | MODE_GUN_GAME | MODE_BIG_TEAM | MODE_CTF | MODE_SIEGE => mode,
                             _ => MODE_CASUAL,
                         };
+                        // A mode closed for want of players is played where
+                        // the players are.
+                        let mode = playlist::route(
+                            mode,
+                            self.ctx.open_modes.load(Ordering::Relaxed),
+                            party.is_some_and(|p| p.private),
+                        );
                         let live_room =
                             |r: &Live| r.mode == mode && r.over_at.is_none() && r.room.world.phase != Phase::Over;
                         // Seats kept for parties on their way go when their
@@ -1444,6 +1484,7 @@ impl Sim {
                 if seconds % ROSTER_EVERY_S == 1 {
                     let _ = self.jobs.send(Job::Roster(roster(&sessions, &rooms)));
                 }
+                self.open_modes(&rooms);
                 while let Some(sides) = q.form(now) {
                     let id = format!("os-{:016x}", random_u64());
                     self.seat_ranked(&sides, id, &mut rooms, &mut sessions, &mut recent, now);
