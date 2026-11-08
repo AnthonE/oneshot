@@ -10,14 +10,24 @@
 //! floor wears its own paint.
 //!
 //! The gun in our own view wears this material whatever its skin, each
-//! instance its own, so its glow can live (`gun_glow.rs`).
+//! instance its own, so its glow can live (`gun_glow.rs`); so does every gun
+//! a fighter holds, for what it reflects.
+//!
+//! Guns are metal, and metal is what it reflects. The scene's fill is a
+//! two-tone cube (`fill.rs`), which leaves a gun looking painted, so every
+//! coat reflects a sky photograph too (`ENV`, cut by `tools/gun_env.py`):
+//! sharp on a polished part, a sheen on a rough one, by the gun's own maps.
 
 use std::collections::HashMap;
 
+use bevy::asset::RenderAssetUsages;
 use bevy::gltf::GltfMaterialName;
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, ShaderType};
+use bevy::render::render_resource::{
+    AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
 use bevy::scene::SceneInstanceReady;
 use bevy::shader::ShaderRef;
 use sim::arms;
@@ -39,7 +49,12 @@ pub struct CoatParams {
     pub boxes: [Vec4; 10],
     pub look: Vec4,
     pub hot: Vec4,
+    pub env: Vec4,
 }
+
+/// How bright the sky photograph is in a reflection, on screen (its mean is
+/// 1).
+const ENV_GAIN: f32 = 0.55;
 
 /// No coat, its glow as painted, no gauge.
 pub const BARE: CoatParams = CoatParams {
@@ -65,12 +80,55 @@ pub const BARE: CoatParams = CoatParams {
     ],
     look: Vec4::ZERO,
     hot: Vec4::ZERO,
+    env: Vec4::new(ENV_GAIN, (ENV_LEVELS - 1) as f32, 0.0, 0.0),
 };
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 pub struct Coat {
     #[uniform(100)]
     pub params: CoatParams,
+    #[texture(101, dimension = "cube")]
+    #[sampler(102)]
+    pub env: Handle<Image>,
+}
+
+/// The sky photograph every gun reflects: a cube of `ENV_FACE`² at its
+/// sharpest, `ENV_LEVELS` levels, RGB9E5 (`tools/gun_env.py`).
+const ENV: &[u8] = include_bytes!("../../assets/textures/gun_env.rgb9e5");
+const ENV_FACE: u32 = 128;
+const ENV_LEVELS: u32 = 6;
+
+/// The cube, once.
+#[derive(Resource)]
+pub struct GunEnv(Handle<Image>);
+
+fn env_image() -> Image {
+    let mut img = Image::new_uninit(
+        Extent3d {
+            width: ENV_FACE,
+            height: ENV_FACE,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        TextureFormat::Rgb9e5Ufloat,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.texture_descriptor.mip_level_count = ENV_LEVELS;
+    img.data = Some(ENV.to_vec());
+    img.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..default()
+    });
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        address_mode_w: ImageAddressMode::ClampToEdge,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        mipmap_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    img
 }
 
 impl MaterialExtension for Coat {
@@ -101,7 +159,7 @@ struct Pattern {
     speed: f32,
     /// Its hot colour, sRGB.
     hot: u32,
-    /// How much of the gun it takes beyond the paint (1: the steel too).
+    /// How much of the gun's steel it takes (its paint it takes whole).
     cover: f32,
 }
 
@@ -131,16 +189,22 @@ const fn pattern(kind: u8, glow: f32, cells: f32, speed: f32, hot: u32, cover: f
 const COLOURS: [Option<Colours>; 6] = [
     None,
     colours(0xd9dcdf, 0x4a4e53, 0.1, 0.45, None),
-    colours(0xb3300f, 0x241c1a, 0.15, 0.5, pattern(1, 6.0, 14.0, 1.0, 0xffb040, 1.0)),
     colours(
-        0x9fd2ea,
-        0x39475a,
-        0.25,
-        0.4,
-        pattern(2, 2.5, 16.0, 1.0, 0x6fe8ff, 0.85),
+        0xb3300f,
+        0x241c1a,
+        0.15,
+        0.5,
+        pattern(1, 6.0, 14.0, 1.0, 0xffb040, 0.55),
     ),
-    colours(0x3f9a4e, 0x1e2a20, 0.2, 0.5, pattern(3, 4.0, 9.0, 1.0, 0x5cff7a, 1.0)),
-    colours(0xd9a531, 0x5a4520, 0.9, 0.42, pattern(4, 3.0, 10.0, 1.0, 0xfff0c0, 0.8)),
+    colours(0x9fd2ea, 0x39475a, 0.25, 0.4, pattern(2, 2.5, 16.0, 1.0, 0x6fe8ff, 0.5)),
+    colours(0x3f9a4e, 0x1e2a20, 0.2, 0.5, pattern(3, 4.0, 9.0, 1.0, 0x5cff7a, 0.55)),
+    colours(
+        0xd9a531,
+        0x5a4520,
+        0.9,
+        0.42,
+        pattern(4, 3.0, 10.0, 1.0, 0xfff0c0, 0.65),
+    ),
 ];
 
 /// A gun line's paint, as the shader reads it: its paint's and the rest's
@@ -210,14 +274,12 @@ pub struct Worn {
 pub struct Coats(HashMap<(AssetId<StandardMaterial>, u8), Handle<GunMaterial>>);
 
 /// Puts skin `skin` on `arm`'s gun `scene`, once it has spawned. The standard
-/// look is the gun as it came.
+/// look is the gun's own paint, reflecting as the rest do.
 pub fn wear(commands: &mut Commands, scene: Entity, skin: u8, arm: u8) {
-    if COLOURS.get(skin as usize).is_some_and(Option::is_some) {
-        commands
-            .entity(scene)
-            .insert(Worn { skin, arm, view: None })
-            .observe(coat);
-    }
+    commands
+        .entity(scene)
+        .insert(Worn { skin, arm, view: None })
+        .observe(coat);
 }
 
 /// The same for the gun in our own view, in the left hand or the right:
@@ -242,15 +304,13 @@ fn coat(
     own: Res<Assets<StandardMaterial>>,
     mut coats: ResMut<Coats>,
     mut mats: ResMut<Assets<GunMaterial>>,
+    env: Res<GunEnv>,
     mut commands: Commands,
 ) {
     let Ok(&Worn { skin, arm, view }) = worn.get(ev.entity) else {
         return;
     };
     let c = COLOURS.get(skin as usize).and_then(Option::as_ref);
-    if c.is_none() && view.is_none() {
-        return;
-    }
     let coat = c.map_or(BARE, |c| params(c, line(arm)));
     // In view, each of the gun's own materials once, for it alone.
     let mut alive: Vec<(AssetId<StandardMaterial>, Handle<GunMaterial>)> = Vec::new();
@@ -267,7 +327,10 @@ fn coat(
         let make = |mats: &mut Assets<GunMaterial>| {
             mats.add(ExtendedMaterial {
                 base: base.clone(),
-                extension: Coat { params: coat },
+                extension: Coat {
+                    params: coat,
+                    env: env.0.clone(),
+                },
             })
         };
         let handle = if view.is_some() {
@@ -301,14 +364,25 @@ fn coat(
     }
 }
 
+fn load_env(mut images: ResMut<Assets<Image>>, mut commands: Commands) {
+    commands.insert_resource(GunEnv(images.add(env_image())));
+}
+
 pub fn plugin(app: &mut App) {
     app.init_resource::<Coats>()
+        .add_systems(PreStartup, load_env)
         .add_plugins(MaterialPlugin::<GunMaterial>::default());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sky_photograph_is_its_cube() {
+        let texels: u32 = (0..ENV_LEVELS).map(|l| (ENV_FACE >> l).pow(2)).sum();
+        assert_eq!(ENV.len() as u32, texels * 6 * 4);
+    }
 
     #[test]
     fn every_skin_but_the_standard_look_has_a_coat() {

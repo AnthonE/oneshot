@@ -4,6 +4,10 @@
 // light and dark against that part's middle, so wear, grime and panel lines
 // stay where they were painted. What the gun's glow map lights is left alone.
 //
+// Over Bevy's lighting each gun reflects a sky photograph (`env_tex`, cut by
+// tools/gun_env.py), a level for each roughness: the scene's own fill is two
+// tones, which leaves metal looking painted.
+//
 // The gun in our own view wears it too, coated or not (`look/gun_glow.rs`):
 // its glow is turned up and down as a whole, and a gauge puts the glow out
 // where its rounds are spent, by where a texel is in the model's own frame.
@@ -42,12 +46,29 @@ struct Coat {
     // stays on the gun: x which (0 none, 1 molten, 2 frost, 3 veins,
     // 4 gilded), y its glow's strength, z its cells a metre, w its speed.
     look: vec4<f32>,
-    // rgb: the pattern's hot colour, linear; w how much of the gun it takes
-    // (1: all of it, steel too).
+    // rgb: the pattern's hot colour, linear; w how much of the gun's steel
+    // it takes (its paint it takes whole).
     hot: vec4<f32>,
+    // x: the sky photograph's brightness in a reflection; y its last level.
+    env: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> coat: Coat;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var env_tex: texture_cube<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var env_smp: sampler;
+
+// How much of the sky photograph's own colour a reflection keeps.
+const SKY_CHROMA: f32 = 0.3;
+
+// What a reflection keeps of the light it meets, by roughness and the view's
+// angle: Karis' fit of the split-sum's table (2014), scale and bias on F0.
+fn env_brdf(rough: f32, nv: f32) -> vec2<f32> {
+    let c0 = vec4<f32>(-1.0, -0.0275, -0.572, 0.022);
+    let c1 = vec4<f32>(1.0, 0.0425, 1.04, -0.04);
+    let r = rough * c0 + c1;
+    let a004 = min(r.x * r.x, exp2(-9.28 * nv)) * r.x + r.y;
+    return vec2<f32>(-1.04, 1.04) * a004 + r.zw;
+}
 
 // How far over its middle a texel's tone may go.
 const TONE_MAX: f32 = 2.5;
@@ -144,12 +165,12 @@ struct Look {
 }
 
 // A skin's pattern at `p` (the mesh's frame in cells), `t` its own time,
-// over a texel of brightness `luma`.
-fn pattern(kind: i32, p: vec3<f32>, t: f32, luma: f32) -> Look {
+// over a texel `tone` as light or dark as it was painted against its part's
+// middle (its wear, grime and panel lines, which the pattern keeps).
+fn pattern(kind: i32, p: vec3<f32>, t: f32, tone: f32) -> Look {
     var o: Look;
     o.cover = coat.hot.w;
     let hot = coat.hot.rgb;
-    let tone = clamp(luma * 4.0, 0.35, 1.6);
     if kind == 1 {
         // Molten: charred rock, cracked, the cracks running with lava that
         // breathes and crawls.
@@ -199,7 +220,7 @@ fn pattern(kind: i32, p: vec3<f32>, t: f32, luma: f32) -> Look {
         let band = smoothstep(0.0, 0.015, along) * (1.0 - smoothstep(0.015, 0.04, along));
         let spark = step(0.99, hash1(floor(p * 4.0) + floor(t * 5.0))) * scroll;
         let gold = vec3<f32>(0.9, 0.5, 0.07);
-        o.base = mix(gold, vec3<f32>(0.12, 0.06, 0.015), scroll) * min(tone, 1.0);
+        o.base = mix(gold, vec3<f32>(0.12, 0.06, 0.015), scroll) * min(tone, 1.2);
         o.glow = hot * (band * 1.2 + spark * 3.0) + gold * 0.08 * (1.0 - scroll);
         o.metal = mix(0.75, 0.2, scroll);
         o.rough = mix(0.25, 0.7, scroll);
@@ -237,13 +258,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let kind = i32(coat.look.x + 0.5);
     if kind > 0 {
         let at = (get_local_from_world(in.instance_index) * vec4<f32>(in.world_position.xyz, 1.0)).xyz;
-        let l = pattern(kind, at * coat.look.z, globals.time * coat.look.w, luma);
-        // All of the paint, and of the rest as much as the skin takes.
-        let take = max(paint, l.cover * coat.glow.y) * (1.0 - lit);
+        let tone = clamp(luma / mix(coat.mid.y, coat.mid.x, paint), 0.3, 2.2);
+        let l = pattern(kind, at * coat.look.z, globals.time * coat.look.w, tone);
+        // All of the paint, and of the steel as much as the skin takes: the
+        // rest stays the gun's own metal, under the coat's dark.
+        let take = mix(l.cover * coat.glow.y, 1.0, paint) * (1.0 - lit);
         let col = pbr_input.material.base_color;
+        let own_rough = pbr_input.material.perceptual_roughness;
         pbr_input.material.base_color = vec4<f32>(mix(col.rgb, l.base, take), col.a);
         pbr_input.material.metallic = mix(pbr_input.material.metallic, l.metal, take);
-        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, l.rough, take);
+        // The pattern's roughness, but the gun's own scuffs and polish in it.
+        let rough = clamp(l.rough + (own_rough - 0.5) * 0.6, 0.04, 1.0);
+        pbr_input.material.perceptual_roughness = mix(own_rough, rough, take);
         emissive += l.glow * coat.look.y * take;
     }
     pbr_input.material.emissive = vec4<f32>(emissive, pbr_input.material.emissive.a);
@@ -251,6 +277,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
+        // The sky in it: sharp where the gun is polished, a sheen where it
+        // is rough, coloured by the metal, white off the paint's clear coat.
+        let n = pbr_input.N;
+        let v = pbr_input.V;
+        let nv = max(dot(n, v), 1e-4);
+        let r = reflect(-v, n);
+        let m = pbr_input.material;
+        let photo = textureSampleLevel(env_tex, env_smp, vec3<f32>(r.x, r.y, -r.z), m.perceptual_roughness * coat.env.y).rgb;
+        // Its shapes and light, little of its colour: one photograph's blue
+        // sky would tint a gun under every map's own.
+        let sky = mix(vec3<f32>(dot(photo, vec3<f32>(0.2126, 0.7152, 0.0722))), photo, SKY_CHROMA);
+        let f0 = mix(vec3<f32>(0.04), m.base_color.rgb, m.metallic);
+        let ab = env_brdf(m.perceptual_roughness, nv);
+        let shade = pbr_input.diffuse_occlusion * pbr_input.specular_occlusion;
+        out.color = vec4<f32>(out.color.rgb + sky * (f0 * ab.x + ab.y) * shade * coat.env.x, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }
