@@ -251,8 +251,10 @@ impl Gate {
                     }
                 }
                 // 10. A gun on the floor only if it is a true one, in clear
-                // line of this client's eye: never by who dropped it, so
-                // never where a hidden enemy fell.
+                // line of this client's eye: one lying still from the eye
+                // at some tick of the hold (where it lies was seen, and
+                // stays known), one flying from the eye now; never by who
+                // dropped it, so never where a hidden enemy fell.
                 sim::thing::Kind::Drop => {
                     let eye = me.eye();
                     for d in s.drops() {
@@ -263,11 +265,13 @@ impl Gate {
                             "tick {}: {d:?} is no true drop",
                             w.tick
                         );
-                        assert!(
-                            w.map.clear(eye, t.pos + V3::new(0.0, room::DROP_LOOK_Y, 0.0)),
-                            "tick {}: a drop out of sight was sent: {d:?}",
-                            w.tick
-                        );
+                        let look = t.pos + V3::new(0.0, room::DROP_LOOK_Y, 0.0);
+                        let seen = if t.vel == V3::ZERO {
+                            self.history.iter().any(|h| w.map.clear(h[self.me].eye(), look))
+                        } else {
+                            w.map.clear(eye, look)
+                        };
+                        assert!(seen, "tick {}: a drop out of sight was sent: {d:?}", w.tick);
                     }
                 }
                 // 9. A vehicle only if it is ours, someone we know rides

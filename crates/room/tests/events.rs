@@ -19,7 +19,7 @@ fn world() -> World {
 }
 
 fn send(w: &World, events: &[Event], queue: &mut EventQueue) -> proto::Snapshot {
-    let snap = room::build(w, 0, (1, 0), events, queue, |_| false, |_| false);
+    let snap = room::build(w, 0, (1, 0), events, queue, |_| false, |_| false, |_| false);
     let mut buf = [0u8; proto::MAX_DATAGRAM];
     let n = proto::encode_snapshot(&snap, &mut buf).unwrap();
     proto::decode_snapshot(&buf[..n]).unwrap()

@@ -1075,6 +1075,7 @@ fn seat_snapshot(
         &mut c.queue,
         |q| f.shows(q, tick),
         |i| f.shows_vehicle(i, tick),
+        |i| f.shows_drop(i, tick),
         rated.then_some((&mut c.since, &mut c.updates)),
         bubble.map(|(live, foot)| {
             c.bubble.foot_max = if foot { bubble::MAX_NEAR_FOOT } else { 0 };
@@ -1103,8 +1104,9 @@ fn seat_snapshot(
 /// The snapshot seat `s` is sent: its own fighter exactly, the others it
 /// may see coarsely. `(last_seq, depth)` are the client's last input seq
 /// run and the low point of its input buffer (`ClientNet::take_low`);
-/// `visible(q)` and `vehicle_visible(i)` are fog of war's to answer;
-/// everything else here is what any client may know.
+/// `visible(q)`, `vehicle_visible(i)` and `drop_visible(i)` are fog of
+/// war's to answer; everything else here is what any client may know.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     w: &World,
     s: usize,
@@ -1113,6 +1115,7 @@ pub fn build(
     queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
+    drop_visible: impl Fn(usize) -> bool,
 ) -> Snapshot {
     let mut wire = [0u8; MAX_DATAGRAM];
     build_encoded(
@@ -1123,6 +1126,7 @@ pub fn build(
         queue,
         visible,
         vehicle_visible,
+        drop_visible,
         None,
         None,
         &mut wire,
@@ -1141,6 +1145,7 @@ fn build_encoded(
     queue: &mut EventQueue,
     visible: impl Fn(usize) -> bool,
     vehicle_visible: impl Fn(usize) -> bool,
+    drop_visible: impl Fn(usize) -> bool,
     mut rates: Option<Rates>,
     mut near: Option<(&mut bubble::Bubble, f64, u32, bool)>,
     wire: &mut [u8; MAX_DATAGRAM],
@@ -1187,7 +1192,7 @@ fn build_encoded(
             sim::thing::Kind::Projectile => add_projectiles(&mut snap, w, s, eye, &known, &vehicle_visible),
             sim::thing::Kind::Pad => add_pads(&mut snap, w),
             sim::thing::Kind::Vehicle => add_vehicles(&mut snap, w, s, &known, &vehicle_visible, members),
-            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye),
+            sim::thing::Kind::Drop => add_drops(&mut snap, w, eye, &drop_visible),
             sim::thing::Kind::Flag => add_flags(&mut snap, w),
             sim::thing::Kind::Node => add_nodes(&mut snap, w),
             sim::thing::Kind::Minion => add_minions(&mut snap, w, s, eye),
@@ -1443,22 +1448,18 @@ fn vehicle_shown(
     mine || v.seats.iter().any(|&x| x != 0 && known(x as usize - 1)) || visible(i)
 }
 
-/// How far a gun on the floor is named to a client that sees it.
-pub const SEE_DROP_M: f32 = 50.0;
-/// A drop is seen if a line from the eye clears the map to this far over
-/// where it lies.
-pub const DROP_LOOK_Y: f32 = 0.3;
+pub use fog::{DROP_LOOK_Y, SEE_DROP_M};
 
-/// The guns on the floor this client sees, nearest first: in clear line of
-/// its eye and within [`SEE_DROP_M`]. Never by who left it, so a fresh one
-/// (where someone fell) never tells where a hidden enemy died.
-fn add_drops(snap: &mut Snapshot, w: &World, eye: V3) {
+/// The guns on the floor this client sees, nearest first: those fog shows
+/// it (`drop_visible`: [`fog::Fog::shows_drop`], a clear line from its eye
+/// within [`SEE_DROP_M`]). Never by who left it, so a fresh one (where
+/// someone fell) never tells where a hidden enemy died.
+fn add_drops(snap: &mut Snapshot, w: &World, eye: V3, drop_visible: &impl Fn(usize) -> bool) {
     let mut seen = [(f32::INFINITY, 0usize); sim::consts::MAX_DROPS];
     let mut n = 0;
     for (i, d) in w.drops.live() {
-        let far = (d.pos - eye).len();
-        if far <= SEE_DROP_M && w.map.clear(eye, d.pos + V3::new(0.0, DROP_LOOK_Y, 0.0)) {
-            seen[n] = (far, i);
+        if drop_visible(i) {
+            seen[n] = ((d.pos - eye).len(), i);
             n += 1;
         }
     }
