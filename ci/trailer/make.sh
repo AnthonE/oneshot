@@ -17,7 +17,8 @@
 #
 # Footage: each NN-name.mp4 in SHOTS (default traces/film/trailer, written by
 # `ci/film.sh shoot ci/film/trailer-*.json`) becomes clips/<name>/ as JPEG
-# frames at 1920x1080. A scene whose clip is missing falls back to a store
+# frames at 1920x1080; a NN-name.png there (a still, or the title's Triple T
+# from `ci/film.sh pose`) is a one-frame clip. A scene whose clip is missing falls back to a store
 # still from scry-forge (FORGE=…, art/oneshot/play-*.jpg) with a slow push,
 # so the cut can be looked at before every shot is drawn.
 #
@@ -69,11 +70,11 @@ cp render.mjs "$B/"
 # the game's own type: Unitblock (the wordmark, the HUD) and Aileron (the menus)
 cp "$ONESHOT"/crates/client/assets/fonts/Unitblock.ttf "$ONESHOT"/crates/client/assets/fonts/Aileron-{Regular,SemiBold,Bold}.otf "$B/fonts/"
 
-# the game's models: the guns and the gear, as they ship
+# the game's models: the gear, as it ships (the fighter and the guns are the
+# game's own renders: ci/film.sh pose draws the title's Triple T)
 M="$ONESHOT/crates/client/assets/models"
-for m in ar br magnum sniper shotgun rocket-launcher smg sword carbine beam-rifle ion-rifle ion-pistol shards launcher cannon \
-         frag rocket helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
-         hightops-right spurs-right magboots-right loggers-right wellies-right truck turret turret-barrels; do
+for m in helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
+         hightops-right spurs-right magboots-right loggers-right wellies-right; do
   [ -s "$M/$m.glb" ] && cp "$M/$m.glb" "$B/glb/" || echo "trailer: no model $m (skipped)" >&2
 done
 

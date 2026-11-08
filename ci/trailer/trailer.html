@@ -163,6 +163,10 @@ function ground(ctx, glow = null, gx = W / 2, gy = H / 2, gr = 900) {
   ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   if (glow) { const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr); g.addColorStop(0, glow); g.addColorStop(1, 'rgba(0,0,0,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
 }
+function pool(ctx, x, y, r, a) {   // a soft dark pool behind type over a busy frame
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
 function shade(ctx, y0, y1, a0, a1) {   // a vertical darkening band behind type
   const g = ctx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, `rgba(0,0,0,${a0})`); g.addColorStop(1, `rgba(0,0,0,${a1})`);
   ctx.fillStyle = g; ctx.fillRect(0, y0, W, y1 - y0);
@@ -246,10 +250,6 @@ const GEAR = [['helmet', 'HELMET'], ['ten-gallon', 'TEN GALLON'], ['beanie', 'BE
   ['hightops-right', 'HIGH-TOPS'], ['spurs-right', 'SPURS'], ['magboots-right', 'MAG BOOTS'], ['wellies-right', 'WELLIES']];
 const S3 = {};
 async function build3D() {
-  S3.hero = stage(0xfff4e6, 0xe8b931);
-  try { S3.hero.obj = lay(prep(await loadGLB('glb/br.glb'), .8), 1.8); S3.hero.s.add(S3.hero.obj); } catch (e) {}
-  S3.snipe = stage(0xfff4e6, 0xe8b931);
-  try { S3.snipe.obj = lay(prep(await loadGLB('glb/sniper.glb'), .8), 2.2); S3.snipe.s.add(S3.snipe.obj); } catch (e) {}
   S3.gear = stage(0xfff4e6, 0xffffff); S3.gear.objs = [];
   for (const [i, [f, label]] of GEAR.entries()) {
     try {
@@ -369,20 +369,15 @@ const SCENES = [
   } },
   // the drop
   { id: 't1-title', at: DROP, draw(L) {
-    ground(bg, 'rgba(232,185,49,.16)', W / 2, 500, 980);
-    const h = S3.hero;
-    if (h.obj) {
-      h.key.intensity = 3.0; h.rim.intensity = 2.6; h.hemi.intensity = .4;
-      h.obj.rotation.y = -.5 + L.t * .32; h.obj.rotation.x = .08;
-      const k = Math.exp(-L.t * 7) * .05;
-      shoot(h, [0, 40, W, 600], [Math.sin(L.t * 90) * k, .3 + Math.cos(L.t * 77) * k, lerp(2.0, 1.85, L.t / L.d)], [0, 0, 0], 28);
-    }
+    // Triple T in aviators with the battle rifle, as pose mode draws it (ci/film.sh pose), a slow push on it
+    foot(bg, 'still-tt', L.t, L.d, { full: true, z: lerp(1.3, 1.36, L.t / L.d), px: -1, py: -.6, fallback: 'fighter', grade: 'brightness(.9) contrast(1.08) saturate(.96)', still: { full: true, z0: 1.3, z1: 1.36, x0: -1, x1: -1, y0: -.6, y1: -.6 } });
+    pool(bg, 1330, 640, 980, .72);
     const s = lerp(1.25, 1, E.expo(ramp(L.t, 0, .5))), a = ramp(L.t, 0, .08) * (1 - ramp(L.t, L.d - .2, L.d));
-    fg.save(); fg.translate(W / 2, 780); fg.scale(s, s); fg.translate(-W / 2, -780); wordmark(fg, W / 2, 780, 1.1, { alpha: a, glow: 'rgba(232,185,49,.45)', line: '' }); fg.restore();
+    fg.save(); fg.translate(1330, 600); fg.scale(s, s); fg.translate(-1330, -600); wordmark(fg, 1330, 600, 1.0, { alpha: a, glow: 'rgba(232,185,49,.45)', line: '' }); fg.restore();
     const r1 = rv(L, .8, .4, .2);
-    text(fg, 'ARENA SLAYER  ·  FREE TO PLAY', W / 2, 905 + r1.dy, { kind: 'ail', size: 40, weight: 700, color: C.muted, track: 10, alpha: r1.a });
+    text(fg, 'ARENA SLAYER  ·  FREE TO PLAY', 1330, 712 + r1.dy, { kind: 'ail', size: 38, weight: 700, color: C.muted, track: 9, alpha: r1.a });
     const r2 = rv(L, 1.5, .4, .2);
-    text(fg, 'IN YOUR BROWSER OR ON YOUR DESKTOP', W / 2, 965 + r2.dy, { kind: 'ail', size: 30, weight: 600, color: C.faint, track: 6, alpha: r2.a });
+    text(fg, 'IN YOUR BROWSER OR ON YOUR DESKTOP', 1330, 768 + r2.dy, { kind: 'ail', size: 29, weight: 600, color: C.faint, track: 6, alpha: r2.a });
   } },
   // the modes, one card each on the hits
   { id: 'm1-duel', at: hit(66.84), box: true, draw(L) {
@@ -565,7 +560,7 @@ function frame(g) {
 // the timeline. Each is a plate from a footage frame (or its stand-in) with
 // the lockup over it; the capsule is cut to 616x353 by the store's own
 // cutter from the 16:9 plate, so its subject stays in the centre.
-const ART_SRC = { poster: ['trucks', .9], keyart: ['still-vista', 0], capsule: ['still-fighter', 0], scope: ['still-scope', 0] };
+const ART_SRC = { poster: ['trucks', .9], keyart: ['still-vista', 0], capsule: ['still-tt', 0], scope: ['still-scope', 0] };
 const ART = {
   poster(ctx) {   // the frame the store's player shows until play: 16:9
     foot(bg, ART_SRC.poster[0], 0, 1, { from: ART_SRC.poster[1], full: true, fallback: 'bigteam', grade: 'brightness(.75) contrast(1.08) saturate(.95)', still: { full: true, z0: 1.05, z1: 1.05 } });
@@ -582,20 +577,19 @@ const ART = {
     foot(bg, ART_SRC.keyart[0], 0, 1, { from: ART_SRC.keyart[1], full: true, fallback: 'dryfork', grade: 'brightness(.92) contrast(1.06) saturate(1.02)', still: { full: true, z0: 1.02, z1: 1.02 } });
     shade(bg, H * .55, H, 0, .5);
   },
-  capsule(ctx) {  // the shelf card's plate: the lockup at the foot, as Gates' is
-    foot(bg, ART_SRC.capsule[0], 0, 1, { from: ART_SRC.capsule[1], full: true, fallback: 'chrysalis', grade: 'brightness(.85) contrast(1.06) saturate(1.0)', still: { full: true, z0: 1.04, z1: 1.04 } });
-    shade(bg, H * .5, H, 0, .8);
-    wordmark(fg, W / 2, 840, 1.45, { glow: 'rgba(232,185,49,.3)', line: 'ARENA SLAYER' });
+  capsule(ctx) {  // the shelf card's plate: Triple T on the left, the lockup on the right
+    foot(bg, ART_SRC.capsule[0], 0, 1, { from: ART_SRC.capsule[1], full: true, z: 1.3, px: -1, py: -.6, fallback: 'fighter', grade: 'brightness(.9) contrast(1.08) saturate(.96)', still: { full: true, z0: 1.3, z1: 1.3, x0: -1, x1: -1, y0: -.6, y1: -.6 } });
+    pool(bg, 1330, 620, 1000, .74);
+    wordmark(fg, 1330, 600, 1.1, { glow: 'rgba(232,185,49,.35)', line: 'ARENA SLAYER' });
   },
   scope(ctx) {    // the store's frame through the scope: the sweep's still, pushed in, under the reticle
     foot(bg, ART_SRC.scope[0], 0, 1, { full: true, z: 1.75, px: -.45, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.92) brightness(.92)', still: { full: true, z0: 1.3, z1: 1.3 } });
     scope({ t: 0, d: 1 }, 1, 0);
   },
-  square(ctx) {   // the 1:1 tile: the mark alone on the hero gun
-    ground(bg, 'rgba(232,185,49,.18)', W / 2, 500, 700);
-    const h = S3.hero;
-    if (h.obj) { h.key.intensity = 3.0; h.rim.intensity = 2.6; h.hemi.intensity = .4; h.obj.rotation.set(.1, -.6, 0); shoot(h, [(W - H) / 2, 60, H, 640], [0, .3, 2.0], [0, 0, 0], 28); }
-    wordmark(fg, W / 2, 860, 1.0, { glow: 'rgba(232,185,49,.4)', line: 'ARENA SLAYER' });
+  square(ctx) {   // the 1:1 tile (the store cuts its middle): Triple T under the mark
+    foot(bg, ART_SRC.capsule[0], 0, 1, { full: true, z: 1.2, px: .43, py: -.5, fallback: 'fighter', grade: 'brightness(.88) contrast(1.08) saturate(.96)', still: { full: true, z0: 1.2, z1: 1.2, x0: .43, x1: .43, y0: -.5, y1: -.5 } });
+    shade(bg, H * .62, H, 0, .86);
+    wordmark(fg, W / 2, 1000, .8, { glow: 'rgba(232,185,49,.4)', line: 'ARENA SLAYER' });
   },
 };
 window.art = name => { if (!ART[name]) return false; reset(); ART[name](fg); post(10); return new Promise(res => requestAnimationFrame(() => res(true))); };
