@@ -270,6 +270,18 @@ pub fn encode_delta(cur: &Keyed, base: &Keyed, out: &mut [u8]) -> R<usize> {
         let rec = cur.record(i);
         w.write(key as u32, KEY_BITS)?;
         match base.find(key).filter(|b| b.len() == rec.len()) {
+            // Unchanged (most records, most snapshots): the chunks' flags
+            // are all zero, written a word at a time. The same bits as the
+            // chunk loop below would write.
+            Some(b) if b == rec => {
+                w.write_bit(true)?;
+                let mut flags = rec.len().div_ceil(CHUNK) as u32;
+                while flags > 0 {
+                    let n = flags.min(32);
+                    w.write(0, n)?;
+                    flags -= n;
+                }
+            }
             Some(b) if xor_bits(rec, b) < LEN_BITS as usize + 8 * rec.len() => {
                 w.write_bit(true)?;
                 for (c, bc) in rec.chunks(CHUNK).zip(b.chunks(CHUNK)) {
