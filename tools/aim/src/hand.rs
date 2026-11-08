@@ -14,6 +14,9 @@
 //!   offset closed with a lag (`lag_ms`).
 //! - **Tremor:** a slow drift and a ~10 Hz shake.
 //! - **The mouse:** the view turns in whole counts of `step_deg`.
+//! - **The finger:** the trigger the bot pulls is let through only once the
+//!   aim has sat on the target for `click_ms` (a person sees the crosshair
+//!   on and then clicks), and held while it stays near.
 //!
 //! Each seat draws its own traits from the match's seed: a person, not the
 //! person. With no target the bot's own input goes through, so it still
@@ -24,7 +27,7 @@ use room::genome::Draw;
 use sim::consts::{ticks, DT, PITCH_MAX};
 use sim::fmath;
 use sim::geom::rad_to_yaw;
-use sim::input::Input;
+use sim::input::{Input, FIRE, FIRE_LEFT};
 use sim::world::World;
 
 /// Past this far off, degrees, the hand flicks; nearer, it follows.
@@ -37,6 +40,10 @@ const DWELL_MS: f32 = 90.0;
 const SHAKE_HZ: f32 = 10.0;
 /// How much of a tick's change of the target's bearing the eye takes in.
 const VEL_K: f32 = 0.2;
+/// On target for the finger: within this much of the body's half width at
+/// that distance, metres, or a degree, whichever is wider; it stays on to
+/// twice that.
+const ON_HALF_M: f32 = 0.35;
 
 /// One person's hand.
 #[derive(Clone, Copy, Debug)]
@@ -55,6 +62,8 @@ pub struct Traits {
     pub pursuit: f32,
     pub tremor_deg: f32,
     pub step_deg: f32,
+    /// From the aim settling on the target to the click.
+    pub click_ms: f32,
     /// Where on the body it aims: 0 the chest, 1 the head.
     pub bone: f32,
 }
@@ -65,7 +74,7 @@ impl Traits {
         serde_json::json!({
             "react_ms": r(self.react_ms), "gain": r(self.gain), "gain_sd": r(self.gain_sd),
             "dir_sd_deg": r(self.dir_sd_deg), "fitts_a_ms": r(self.fitts_a_ms), "fitts_b_ms": r(self.fitts_b_ms),
-            "lag_ms": r(self.lag_ms), "pursuit": r(self.pursuit), "tremor_deg": r(self.tremor_deg), "step_deg": r(self.step_deg), "bone": r(self.bone),
+            "lag_ms": r(self.lag_ms), "pursuit": r(self.pursuit), "tremor_deg": r(self.tremor_deg), "step_deg": r(self.step_deg), "click_ms": r(self.click_ms), "bone": r(self.bone),
         })
     }
 }
@@ -96,6 +105,9 @@ pub struct Hand {
     /// view (degrees a tick, smoothed: what the eye has of it).
     bearing: Option<(f32, f32)>,
     vel: (f32, f32),
+    /// Since when the aim has been on the target, and how long this time
+    /// before the finger clicks, ticks.
+    on: Option<(u32, u32)>,
 }
 
 /// Minimum jerk: where a movement is, of its length, at `t` of its time.
@@ -120,6 +132,7 @@ impl Hand {
             pursuit: u(0.75, 0.95),
             tremor_deg: u(0.02, 0.15),
             step_deg: u(0.005, 0.05),
+            click_ms: u(120.0, 260.0),
             bone: u(0.1, 0.6),
         };
         Hand {
@@ -133,6 +146,7 @@ impl Hand {
             carry: (0.0, 0.0),
             bearing: None,
             vel: (0.0, 0.0),
+            on: None,
         }
     }
 
@@ -150,6 +164,7 @@ impl Hand {
             self.target = None;
             self.flick = None;
             self.bearing = None;
+            self.on = None;
             return;
         };
         let tr = self.traits;
@@ -229,6 +244,23 @@ impl Hand {
         inp.yaw = rad_to_yaw((view.0 + turn.0).to_radians());
         let p = fmath::round((view.1 + turn.1) * (65536.0 / 360.0));
         inp.pitch = p.clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
+
+        // The finger: the bot's pull only once the aim has sat on.
+        let range = (aim_point(&w.fighters[t], tr.bone) - me.eye()).len().max(1.0);
+        let cone = fmath::atan2(ON_HALF_M, range).to_degrees().max(1.0);
+        let left = (e.0 - turn.0).hypot(e.1 - turn.1);
+        let near = if self.on.is_some() { 2.0 * cone } else { cone };
+        if left < near {
+            if self.on.is_none() {
+                let wait = ticks((tr.click_ms * (0.7 + 0.6 * self.rng.draw())) as u32);
+                self.on = Some((w.tick, wait));
+            }
+        } else {
+            self.on = None;
+        }
+        if self.on.is_none_or(|(since, wait)| w.tick - since < wait) {
+            inp.buttons &= !(FIRE | FIRE_LEFT);
+        }
     }
 }
 
