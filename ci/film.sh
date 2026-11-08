@@ -5,6 +5,8 @@
 #   ci/film.sh scan TAPE [EVERY_S]                 # who is where, and the kills
 #   ci/film.sh shoot SHOTS.json [MORE.json ...]    # draw shot lists, each shot into ffmpeg
 #   ci/film.sh clip TAPE [STYLE]                   # a tape as the clip key's video
+#   ci/film.sh pose OUT.png 'QUERY' [SECONDS]      # a pose (crates/client/src/pose.rs) drawn at HIGH:
+#                                                  # the trailer's title plate is one
 #
 # How it works: `record` plays a match on a local target/release/oneshot-server
 # (MODE 6, Big Team, on MAP 3 unless named; SECONDS 90) with the desktop
@@ -138,5 +140,22 @@ clip)
   run "$tmp/clip.log" --clip "$tape" --style "${2:-wide}" ${FILM_QUALITY:+--quality "$FILM_QUALITY"} || { tail -n 25 "$tmp/clip.log" >&2; fail "the clip did not finish"; }
   ;;
 
-*) fail "unknown command $cmd (record, scan, shoot, clip)" ;;
+pose)
+  # No tape: one fighter (or a map's view) as pose.rs draws it, the frame
+  # taken SECONDS after the screen is there. The window is the client's
+  # default, 1280x720. The trailer's title plate:
+  #   ci/film.sh pose traces/film/trailer/90-still-tt.png \
+  #     'yaw=3.1416&arm=2&headwear=2&fighter=1&eye=-0.3,1.4,8.0&look=1.5,1.3,8.0' 3
+  # (a moved eye stands the fighter only with fighter=1)
+  out="${1:?pose needs an output png}"
+  query="${2:?pose needs a query (pose.rs)}"
+  case $out in /*) ;; *) out=$root/$out ;; esac
+  mkdir -p "$(dirname "$out")"
+  display
+  run "$tmp/pose.log" --pose "$query" --quality "${FILM_QUALITY:-high}" --shot "$out" --shot-at "${3:-3}" \
+    || { tail -n 25 "$tmp/pose.log" >&2; fail "the pose was not drawn"; }
+  [ -s "$out" ] || fail "no picture at $out"
+  ;;
+
+*) fail "unknown command $cmd (record, scan, shoot, clip, pose)" ;;
 esac

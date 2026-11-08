@@ -17,7 +17,8 @@
 #
 # Footage: each NN-name.mp4 in SHOTS (default traces/film/trailer, written by
 # `ci/film.sh shoot ci/film/trailer-*.json`) becomes clips/<name>/ as JPEG
-# frames at 1920x1080. A scene whose clip is missing falls back to a store
+# frames at 1920x1080; a NN-name.png there (a still, or the title's Triple T
+# from `ci/film.sh pose`) is a one-frame clip. A scene whose clip is missing falls back to a store
 # still from scry-forge (FORGE=…, art/oneshot/play-*.jpg) with a slow push,
 # so the cut can be looked at before every shot is drawn.
 #
@@ -69,11 +70,11 @@ cp render.mjs "$B/"
 # the game's own type: Unitblock (the wordmark, the HUD) and Aileron (the menus)
 cp "$ONESHOT"/crates/client/assets/fonts/Unitblock.ttf "$ONESHOT"/crates/client/assets/fonts/Aileron-{Regular,SemiBold,Bold}.otf "$B/fonts/"
 
-# the game's models: the guns and the gear, as they ship
+# the game's models: the gear, as it ships (the fighter and the guns are the
+# game's own renders: ci/film.sh pose draws the title's Triple T)
 M="$ONESHOT/crates/client/assets/models"
-for m in ar br magnum sniper shotgun rocket-launcher smg sword carbine beam-rifle ion-rifle ion-pistol shards launcher cannon \
-         frag rocket helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
-         hightops-right spurs-right magboots-right loggers-right wellies-right truck turret turret-barrels; do
+for m in helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
+         hightops-right spurs-right magboots-right loggers-right wellies-right; do
   [ -s "$M/$m.glb" ] && cp "$M/$m.glb" "$B/glb/" || echo "trailer: no model $m (skipped)" >&2
 done
 
@@ -159,7 +160,7 @@ cues)
   python3 -c "import json; t = json.load(open('$B/cues.json')); print('trailer: %.1f s' % t['TOTAL']); [print('  %6.2f  %s' % (s['t0'], s['id'])) for s in t['SCENES']]"
   exit 0 ;;
 art)
-  node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope
+  node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
   # the poster as the store's JPEG beside the PNGs
   ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
   ls -la "$HERE"/out/; exit 0 ;;
@@ -202,6 +203,10 @@ ffmpeg -v error -y -i "$B/silent.mkv" -i "$B/mix.wav" -map 0:v -map 1:a -af "$AF
   "$HERE/out/oneshot-trailer.mp4"
 ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 23 -maxrate 3M -bufsize 6M \
   -pix_fmt yuv420p -c:a copy -movflags +faststart "$HERE/out/oneshot-trailer-720p.mp4"
-node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope
+# the store's copy (scry-forge's watchtower/art/store/oneshot-trailer.mp4): 720p under 2 Mbps, so the page's
+# player, which downloads nothing until play, has a film the size of the other titles'
+ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 25 -maxrate 1.6M -bufsize 3.2M \
+  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "$HERE/out/oneshot-trailer-web.mp4"
+node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
 ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
 ls -la "$HERE"/out/
