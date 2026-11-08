@@ -35,7 +35,7 @@ pub mod queue;
 pub mod stats;
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -70,12 +70,16 @@ pub enum ToSim {
         /// Who signed in: their wallet, else their account's `acct_` id.
         /// None for a guest.
         player: Option<String>,
+        /// Where it connects from (None for the box itself): a watcher
+        /// from the same place watches no match it sits in.
+        ip: Option<IpAddr>,
         tx: outlet::Outlet,
     },
     /// Into the ranked queue.
     Queue {
         session: u64,
         entry: Box<queue::Entry>,
+        ip: Option<IpAddr>,
         tx: outlet::Outlet,
     },
     /// Ranked, for a match Elo Pros' queue formed (`queue::Gathers`): its
@@ -87,18 +91,21 @@ pub enum ToSim {
         id: String,
         sides: Vec<Vec<String>>,
         side: usize,
+        ip: Option<IpAddr>,
         tx: outlet::Outlet,
     },
     Leave {
         session: u64,
     },
     /// Watch a match (`MODE_WATCH`): party `target`'s (a friend's), or any
-    /// public one for 0. `player` is who asks, so nobody watches a match
-    /// they sit in.
+    /// public one for 0. `player` is who asks and `ip` where from, so
+    /// nobody watches a match they sit in, as a guest or an alt from the
+    /// same place either.
     Watch {
         session: u64,
         target: u32,
         player: Option<String>,
+        ip: Option<IpAddr>,
         tx: outlet::Outlet,
     },
     /// A watcher follows the next player.
@@ -205,6 +212,9 @@ pub struct Config {
     /// Every casual mode open, however few are online (`playlist`): tests,
     /// and a load test's box.
     pub all_modes: bool,
+    /// Anyone may wear any skin or gear, wallet or not: a local server for
+    /// looking at them (`--dress-all`). Never in production.
+    pub dress_all: bool,
     /// The maps rooms are played on (ids, `sim::maps`), one drawn from each
     /// room's seed. Empty: all of them.
     pub maps: Vec<u8>,
@@ -257,6 +267,9 @@ pub struct Config {
     /// (`online`), so either answers `online.json` for both. None: this
     /// process's own roster only.
     pub roster_dir: Option<PathBuf>,
+    /// What `/online.json` (every signed-in wallet and what it plays) asks
+    /// for in an `X-Roster-Key` header; None: anyone may read it.
+    pub roster_key: Option<String>,
     /// Threads the rooms step on, side by side: 0 is one a core, 1 the sim
     /// thread alone (one room after another).
     pub sim_threads: usize,
@@ -304,6 +317,7 @@ impl Default for Config {
             linger: LINGER,
             passive_bots: false,
             all_modes: false,
+            dress_all: false,
             maps: Vec::new(),
             slug: "oneshot".into(),
             domains: vec!["localhost".into(), "127.0.0.1".into()],
@@ -321,6 +335,7 @@ impl Default for Config {
             nonce_key: None,
             live_file: None,
             roster_dir: None,
+            roster_key: None,
             sim_threads: 0,
             endpoints: 1,
             endpoint_step: 10,
@@ -373,6 +388,9 @@ pub struct Ctx {
     pub roster_dir: Option<PathBuf>,
     /// This slot's file in `roster_dir`.
     pub roster_file: String,
+    pub roster_key: Option<String>,
+    /// Where replays are kept: a match whose replay is there was played.
+    pub replays: Option<PathBuf>,
     /// Everything else counted since start (`health.rs`).
     pub health: health::Health,
     /// Players' reports, if they're taken (`--bugs`).
@@ -389,6 +407,8 @@ pub struct Ctx {
     /// Ranked waits in Elo Pros' queue (`Config::elo_queue`), and who waits.
     pub elo_queue: bool,
     pub waiters: eloqueue::Waiters,
+    /// `Config::dress_all`.
+    pub dress_all: bool,
 }
 
 impl Ctx {
@@ -504,7 +524,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         .collect::<Result<Vec<_>, _>>()?;
     let addr = addrs[0];
     let (to_sim, from_net) = mpsc::channel::<ToSim>();
-    let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg)>(net::INPUT_LANE);
+    let (inputs_tx, inputs) = mpsc::sync_channel::<(u64, InputMsg, f32)>(net::INPUT_LANE);
     let (jobs_tx, jobs_rx) = tmpsc::unbounded_channel::<Job>();
     let stop = Arc::new(AtomicBool::new(false));
     let threads = cfg.step_threads();
@@ -561,11 +581,14 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
         roster: std::sync::Mutex::new(online::Slot::default()),
         roster_dir: cfg.roster_dir.clone(),
         roster_file: online::file_name(addr.port()),
+        roster_key: cfg.roster_key.clone(),
+        replays: cfg.replays.clone(),
         sim_threads: threads,
         ports: addrs.iter().map(|a| a.port()).collect(),
         endpoints: (cfg.endpoints.max(1), cfg.endpoint_step),
         next_port: AtomicUsize::new(0),
         elo_queue: cfg.elo_queue && cfg.elo_key.is_some(),
+        dress_all: cfg.dress_all,
         waiters: eloqueue::Waiters::default(),
     });
     if cfg.elo_queue && cfg.elo_key.is_none() {
@@ -723,6 +746,8 @@ struct Sess {
     mode: u8,
     /// A watcher: the room it watches and the seat it follows.
     watching: Option<(usize, u8)>,
+    /// Where it connects from (None for the box itself).
+    ip: Option<IpAddr>,
 }
 
 /// Seats kept in a room for a party whose first member sat down: `left`
@@ -1015,7 +1040,7 @@ impl Sim {
 
     /// The sim thread: what sessions say (`rx`), their inputs (bounded, and
     /// none of them queued on the heap), then every room's tick.
-    fn run(self, rx: mpsc::Receiver<ToSim>, inputs: mpsc::Receiver<(u64, InputMsg)>) {
+    fn run(self, rx: mpsc::Receiver<ToSim>, inputs: mpsc::Receiver<(u64, InputMsg, f32)>) {
         let start = Instant::now();
         let tick = Duration::from_nanos(1_000_000_000 / TICK_HZ as u64);
         let mut next = Instant::now();
@@ -1045,6 +1070,7 @@ impl Sim {
                         party,
                         code,
                         player,
+                        ip,
                         tx,
                     } => {
                         // Going down since its hello was checked: to the live
@@ -1219,11 +1245,12 @@ impl Sim {
                                 since: auth::now_unix(),
                                 mode,
                                 watching: None,
+                                ip,
                             },
                         );
                         deliver(&sessions, rooms[i].as_ref().unwrap(), out);
                     }
-                    ToSim::Queue { session, entry, tx } => {
+                    ToSim::Queue { session, entry, ip, tx } => {
                         if busy(&rooms, &cups, &cup_wait, &q, &entry.wallet) || gathers.has_wallet(&entry.wallet) {
                             send_msg(
                                 &tx,
@@ -1258,6 +1285,7 @@ impl Sim {
                                 since: auth::now_unix(),
                                 mode,
                                 watching: None,
+                                ip,
                             },
                         );
                     }
@@ -1267,6 +1295,7 @@ impl Sim {
                         id,
                         sides,
                         side,
+                        ip,
                         tx,
                     } => {
                         // Busy as at a queue (a match, a cup between its
@@ -1305,6 +1334,7 @@ impl Sim {
                                 since: auth::now_unix(),
                                 mode,
                                 watching: None,
+                                ip,
                             },
                         );
                     }
@@ -1312,9 +1342,10 @@ impl Sim {
                         session,
                         target,
                         player,
+                        ip,
                         tx,
                     } => {
-                        let pick = watch_room(&rooms, target, player.as_deref());
+                        let pick = watch_room(&rooms, &sessions, target, player.as_deref(), ip);
                         let Some(i) = pick else {
                             send_msg(
                                 &tx,
@@ -1343,6 +1374,7 @@ impl Sim {
                                 since: auth::now_unix(),
                                 mode: proto::MODE_WATCH,
                                 watching: Some((i, follow)),
+                                ip,
                             },
                         );
                     }
@@ -1416,9 +1448,10 @@ impl Sim {
 
             // Then the inputs (one for a session gone or not seated yet is
             // nothing): the lane is bounded, so this is too.
-            while let Ok((session, msg)) = inputs.try_recv() {
+            while let Ok((session, msg, rtt_ms)) = inputs.try_recv() {
                 if let Some((i, slot)) = sessions.get(&session).and_then(|s| s.at) {
                     if let Some(r) = rooms[i].as_mut() {
+                        r.room.set_link(slot, rtt_ms);
                         r.room.on_input(slot, &msg, now_ms);
                     }
                 }
@@ -1888,10 +1921,18 @@ impl Sim {
         if sides.len() < 2 || sides.iter().any(|(ws, _)| ws.is_empty()) {
             return None;
         }
-        let placed = sides
-            .iter()
-            .map(|(ws, sc)| (ws.clone(), 1 + sides.iter().filter(|(_, o)| o > sc).count() as u32))
-            .collect();
+        // A duel's or doubles' draw shares first; a cup heat's tie shares
+        // the worse place, as its points do (`cup::places`).
+        let scores: Vec<i32> = sides.iter().map(|(_, sc)| *sc).collect();
+        let places: Vec<u32> = if r.mode == MODE_CUP {
+            cup::places(&scores)
+        } else {
+            scores
+                .iter()
+                .map(|sc| 1 + scores.iter().filter(|o| *o > sc).count() as u32)
+                .collect()
+        };
+        let placed = sides.iter().zip(places).map(|((ws, _), p)| (ws.clone(), p)).collect();
         Some(elo::Report {
             id: r.id.clone(),
             ladder: match r.mode {
@@ -1983,7 +2024,9 @@ fn played(r: &Live, s: usize, finished: bool) -> Option<stats::Played> {
     }
     let w = &r.room.world;
     let side = if w.rules.teams { (s & 1) as u8 } else { s as u8 };
-    let won = finished && w.winner != sim::world::NO_WINNER && w.winner == side;
+    // A private room is the party's own, bots and all: what they did there
+    // counts, a win over it doesn't.
+    let won = finished && !r.private && w.winner != sim::world::NO_WINNER && w.winner == side;
     // From when they sat down or play began, whichever was later: the
     // countdown is no one's time (a fastest Gun Game win is comparable).
     let from = r.joined[s].max(r.room.began.unwrap_or(w.tick));
@@ -2125,9 +2168,24 @@ fn busy(
 }
 
 /// The room for a watcher: party `target`'s, or with 0 the public match
-/// with the most people in it; never one `player` sits in, nor a full one.
-fn watch_room(rooms: &[Option<Live>], target: u32, player: Option<&str>) -> Option<usize> {
-    let sits = |r: &Live| player.is_some_and(|p| r.players.iter().flatten().any(|q| q == p));
+/// with the most people in it; never one `player` sits in, nor one anyone
+/// connected from `ip` sits in (a second tab, a guest, an alt beside the
+/// player would show them the enemy's own view), nor a full one.
+fn watch_room(
+    rooms: &[Option<Live>],
+    sessions: &BTreeMap<u64, Sess>,
+    target: u32,
+    player: Option<&str>,
+    ip: Option<IpAddr>,
+) -> Option<usize> {
+    let sits = |r: &Live| {
+        player.is_some_and(|p| r.players.iter().flatten().any(|q| q == p))
+            || (ip.is_some()
+                && r.links
+                    .iter()
+                    .flatten()
+                    .any(|id| sessions.get(id).is_some_and(|s| s.ip == ip)))
+    };
     rooms
         .iter()
         .enumerate()

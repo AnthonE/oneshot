@@ -25,6 +25,9 @@ use proto::{Msg, Name};
 
 use crate::auth::Who;
 
+/// Ids a party remembers as kicked; past it the oldest grudges go.
+const MAX_KICKED: usize = 256;
+
 /// How long a member who went away keeps their place.
 pub const GRACE: Duration = Duration::from_secs(90);
 /// Tags a party hands out (the wire's `TAG_BITS`).
@@ -231,7 +234,11 @@ impl Parties {
             }
             out.extend(self.settle(c));
         }
-        if want != 0 && want >> pp::CODE_BITS == 0 && !self.parties.contains_key(&want) {
+        // A code nobody holds (the party's slot went down with it, or it
+        // emptied) is made again by whoever brings it, as its leader: only
+        // someone signed in, so a squatter on a seen link is a name, not a
+        // guest.
+        if want != 0 && want >> pp::CODE_BITS == 0 && !self.parties.contains_key(&want) && who.signed() {
             out.extend(self.found(session, want));
             return (out, replaced);
         }
@@ -576,6 +583,10 @@ impl Parties {
                     .cloned()
                     .ok_or(proto::REFUSE_NO_PARTY)?;
                 let p = self.parties.get_mut(&code).unwrap();
+                // A leader farming guests to kick grows this no further.
+                if p.kicked.len() >= MAX_KICKED {
+                    p.kicked.clear();
+                }
                 p.kicked.insert(seat.id.clone());
                 p.invited.remove(&seat.id);
                 let mut out = Outbox::new();
@@ -763,6 +774,18 @@ impl Parties {
         self.parties
             .get(&code)
             .map_or_else(Vec::new, |p| p.seats.iter().map(|s| s.id.clone()).collect())
+    }
+
+    /// [`Parties::members`], those present only: who a queue may be told
+    /// of (one away isn't coming to a match it would wait on).
+    pub fn present_members(&self, code: u32) -> Vec<String> {
+        self.parties.get(&code).map_or_else(Vec::new, |p| {
+            p.seats
+                .iter()
+                .filter(|s| s.session.is_some())
+                .map(|s| s.id.clone())
+                .collect()
+        })
     }
 }
 

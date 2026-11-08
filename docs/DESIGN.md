@@ -539,8 +539,9 @@ passes that never expire are what players kept.
   and gated (people only, then ranked, then placed) as players come
   (operator, 2026-11-07; Elo Pros' `docs/launch/ONESHOT-COIN.md` §9).
 - Never: a gun, a character or anything that changes play behind a price or
-  an unlock. Skins never change a hitbox, a sound's loudness or a colour's
-  visibility.
+  an unlock. Skins never change a hitbox or a sound's loudness, and never
+  hide a fighter. A skin may glow: that only shows its wearer more (operator,
+  2026-11-08).
 
 ## 16 · Milestones
 

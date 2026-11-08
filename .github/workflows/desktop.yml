@@ -10,8 +10,14 @@ on:
     tags: ['desktop-v*']
   workflow_dispatch:
 
+# The release step uploads to a GitHub release; nothing else writes.
+permissions:
+  contents: read
+
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:

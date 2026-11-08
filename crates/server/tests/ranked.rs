@@ -687,13 +687,14 @@ async fn a_cup_plays_its_heats_and_its_final_and_waits_on_a_review() {
             ),
             "{cups:?}"
         );
-        // Nobody fired: every heat a four-way tie for first.
+        // Nobody fired: every heat a four-way tie, which stands as a tie
+        // but pays nobody (a heat that agrees not to score earns nothing).
         assert!(
             matches!(
                 cups.last(),
                 Some(Msg::Cup {
                     place: 1,
-                    points: 10,
+                    points: 0,
                     done: true,
                     ..
                 })

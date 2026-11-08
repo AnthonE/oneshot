@@ -219,7 +219,8 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
 - **Ranked is a wallet's.** A pass without a wallet plays casual; a rating
   is reported only for wallets. A cup is ranked.
 - **Skins are cosmetic and checked:** worn only if the wallet owns it,
-  never in the sim, a hitbox, a sound or a fighter's visibility.
+  never in the sim, a hitbox or a sound. A skin may glow, never hide: it
+  shows its wearer more, never less.
 - **The seed is not the salt.** What clients watch comes from the seed; the
   salt keys spread, never leaves the server while a match runs, and is
   revealed only at `Phase::Over`.
