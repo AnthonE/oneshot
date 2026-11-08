@@ -137,9 +137,13 @@ def logistic(xtr, ytr, xte, epochs=300):
         return lin(b).squeeze(-1).cpu().numpy()
 
 
-def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0):
+def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0, init=None):
+    """The detector fitted to `idx_tr`, kept at its best validation AUC;
+    from `init`'s weights if given (the zoo's next round)."""
     torch.manual_seed(seed)
     model = Detector(x.shape[2], guns, maps, args.width).to(DEV)
+    if init is not None:
+        model.load_state_dict(init)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-2)
     ytr = y.copy()
     if shuffle:
@@ -193,6 +197,18 @@ def sightings_to_catch(tpr, fpr, odds=ODDS):
     return math.log(odds) / gain
 
 
+def acted_rows(meta, col):
+    """The rows worth learning from: a cheated window whose assist acted, and
+    a clean one with at least one such twin. A twin whose assist never acted
+    is the clean window again."""
+    label, pair = meta[:, col["label"]], meta[:, col["pair"]]
+    cheat = label == 1
+    acted = cheat & (meta[:, col["helped"]] > 0)
+    has = np.zeros(pair.max() + 1, bool)
+    has[pair[acted]] = True
+    return acted | (~cheat & has[pair])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("data")
@@ -217,10 +233,9 @@ def main():
     # A pair whose assist never acted is two identical windows: nothing to
     # learn, and nothing a detector could ever catch.
     cheat_rows = label == 1
-    acted = np.zeros(pair.max() + 1, bool)
-    acted[pair[cheat_rows]] = meta[cheat_rows, col["helped"]] > 0
-    print(f"the assist acted in {acted.mean():.0%} of sightings")
-    keep = np.ones(len(w), bool) if args.keep_idle else acted[pair]
+    acted = meta[cheat_rows, col["helped"]] > 0
+    print(f"the assist acted in {acted.mean():.0%} of its windows")
+    keep = np.ones(len(w), bool) if args.keep_idle else acted_rows(meta, col)
 
     rng = np.random.default_rng(args.seed)
     matches = rng.permutation(match.max() + 1)
@@ -228,9 +243,9 @@ def main():
     te_m, va_m = set(matches[:n_te]), set(matches[n_te : 2 * n_te])
     zoo = info["zoo"]
     unseen = set(rng.permutation(len(zoo))[: max(1, len(zoo) // 4)].tolist())
-    cheat_of_pair = np.full(pair.max() + 1, -1)
-    cheat_of_pair[pair[cheat_rows]] = meta[cheat_rows, col["cheat"]]
-    pair_unseen = np.isin(cheat_of_pair, list(unseen))[pair]
+    # Held out: an unseen assist's cheated windows (the clean ones are honest
+    # play, and train as such).
+    pair_unseen = cheat_rows & np.isin(meta[:, col["cheat"]], list(unseen))
     in_te = np.isin(match, list(te_m))
     in_va = np.isin(match, list(va_m))
     idx_tr = np.where(keep & ~in_te & ~in_va & ~pair_unseen)[0]
@@ -262,11 +277,10 @@ def main():
     report = {"data": args.data, "from": info["from"], "windows": int(len(w)), "acted": float(acted.mean())}
     report["test_auc"] = auc(score, yte)
     te_pairs = pair[idx_te]
-    by_pair = {}
-    for p, s, l in zip(te_pairs, score, yte):
-        by_pair.setdefault(p, [None, None])[int(l)] = s
-    twins = [(c, k) for c, k in by_pair.values() if c is not None and k is not None]
-    report["pair_accuracy"] = float(np.mean([k > c for c, k in twins])) if twins else float("nan")
+    # A sighting's clean window against each of its cheated twins.
+    clean_score = {p: s for p, s, l in zip(te_pairs, score, yte) if not l}
+    twins = [s > clean_score[p] for p, s, l in zip(te_pairs, score, yte) if l and p in clean_score]
+    report["pair_accuracy"] = float(np.mean(twins)) if twins else float("nan")
     unseen_te = pair_unseen[idx_te]
     report["test_auc_seen"] = auc(score[~unseen_te], yte[~unseen_te])
     # Unseen cheats against every clean window (their own twins included).
@@ -311,9 +325,7 @@ def main():
     # §5's numbers per assist, at a threshold flagging FPR of clean windows.
     thr = float(np.quantile(score[clean_te], 1 - FPR))
     report["threshold"] = {"fpr": FPR, "score": thr}
-    twin_hits = {}
-    for i in idx_te:
-        twin_hits.setdefault(pair[i], {})[int(label[i])] = meta[i, col["hits"]]
+    clean_hits = {pair[i]: meta[i, col["hits"]] for i in idx_te if label[i] == 0}
     assists = []
     cheat_te = meta[idx_te, col["cheat"]]
     for k, g in enumerate(zoo):
@@ -321,7 +333,7 @@ def main():
         if m.sum() < 5:
             continue
         caught = float((score[m] > thr).mean())
-        gain = [twin_hits[p].get(1, 0) - twin_hits[p].get(0, 0) for p in pair[idx_te][m] if len(twin_hits[p]) == 2]
+        gain = [h - clean_hits[p] for p, h in zip(pair[idx_te][m], meta[idx_te, col["hits"]][m]) if p in clean_hits]
         assists.append({
             "cheat": k, "genome": g["genome"], "style": g["style"], "unseen": k in unseen,
             "windows": int(m.sum()), "caught": caught, "hits_gained": float(np.mean(gain)) if gain else 0.0,

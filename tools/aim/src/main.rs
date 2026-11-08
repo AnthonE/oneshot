@@ -13,15 +13,21 @@
 //! oneshot-aim bots --out dir [--matches 40] [--seed 1] [--secs 300]
 //!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64] [--threads 2]
 //! oneshot-aim replays --out dir [--zoo file | --zoo-n 64] [--threads 2] <file.osr>…
+//!     either: [--sightings 400] a match at most; [--each] every assist on every
+//!     sighting, not one drawn for each (the zoo's arms race, `zoo.py`)
+//!     bots: [--hands] a person's hand on each bot's aim while it fights (`hand.rs`)
 //! ```
 //!
 //! `dir` gets `windows.npy` (f32: windows × `LEN` × `F`), `meta.npy` (i32:
 //! windows × [`META`]) and `info.json` (the features, meta's columns, the
-//! zoo, the matches). A window and its twin are neighbours with one pair
-//! id. Keep `dir` off the repo (traces/ is ignored): §8.
+//! zoo, the matches). A sighting's windows are neighbours with one pair
+//! id: the clean one first, then its cheated twins. Keep `dir` off the
+//! repo (traces/ is ignored): §8.
 //!
 //! The matches are stepped on `World` directly, as `room::replay::verify`
 //! does; nothing here is a live match or writes a replay.
+
+mod hand;
 
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -29,6 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use hand::Hand;
 use room::assist::{Assist, Knobs, PREFIX};
 use room::fog::{Fog, Plain};
 use room::genome::Genome;
@@ -42,8 +49,8 @@ use sim::world::{Lag, Phase, Rules, World};
 
 /// Fog's look ahead for every seat, seconds: a person on a good line.
 const LEAD: f32 = 0.1;
-/// Windows cut from one match, at most.
-const MAX_WINDOWS: usize = 400;
+/// Sightings cut from one match, at most (`--sightings`).
+const MAX_SIGHTINGS: usize = 400;
 
 /// `meta.npy`'s columns: 1 for the cheated twin; the pair and the match;
 /// the viewer's gun as the window began (an arm id) and the map; the zoo's
@@ -76,6 +83,8 @@ struct Bots {
     skills: [f32; MAX_FIGHTERS],
     n: usize,
     end: u32,
+    /// A person's hand on each seat's aim (`--hands`), or the bots' own.
+    hands: Option<Vec<Hand>>,
 }
 
 impl Feed for Bots {
@@ -86,6 +95,9 @@ impl Feed for Bots {
         let mut inputs = [Input::default(); MAX_FIGHTERS];
         for (s, i) in inputs.iter_mut().enumerate().take(self.n) {
             *i = self.bots[s].think(w, s);
+            if let Some(h) = &mut self.hands {
+                h[s].steer(w, s, self.bots[s].target(), i);
+            }
         }
         Some((inputs, Lag::past([0; MAX_FIGHTERS])))
     }
@@ -255,12 +267,14 @@ fn branch<Fd: Feed>(mut run: Run<Fd>, v: usize, t: usize, mut assist: Option<Ass
     Some(b)
 }
 
-/// A window pair, ready to write.
-struct Pair {
+/// A sighting's windows, ready to write: as played, and with each assist
+/// laid on.
+struct Sighting {
     clean: Branch,
-    cheat: Branch,
-    /// gun, map, cheat, style, viewer, skill, sight
-    at: [i32; 7],
+    /// The zoo's place, the style's, and the window.
+    cheats: Vec<(usize, i32, Branch)>,
+    /// gun, map, viewer, skill, sight
+    at: [i32; 5],
 }
 
 fn mix64(mut z: u64) -> u64 {
@@ -270,19 +284,23 @@ fn mix64(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Every sighting's pair in one match: a second pass forks at each.
-fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64) -> Vec<Pair> {
+/// Up to `cap` sightings of one match, spread over it, each forked: a
+/// second pass forks at each. Each gets one assist from the zoo, or with
+/// `each`, every assist on the same moment (the zoo's arms race compares
+/// them there, `zoo.py`).
+fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64, each: bool, cap: usize) -> Vec<Sighting> {
     let mut sights = sightings(start.clone());
-    if sights.len() > MAX_WINDOWS {
+    if sights.len() > cap {
         // Spread over the match, not its first minutes.
-        let every = sights.len() as f64 / MAX_WINDOWS as f64;
-        sights = (0..MAX_WINDOWS).map(|i| sights[(i as f64 * every) as usize]).collect();
+        let every = sights.len() as f64 / cap as f64;
+        sights = (0..cap).map(|i| sights[(i as f64 * every) as usize]).collect();
     }
+    let style = |k: usize| STYLES.iter().position(|&s| s == zoo[k].style()).unwrap_or(0) as i32;
     let mut run = start;
     let mut out = Vec::new();
     let mut i = 0;
     loop {
-        while let Some(&(st, v, t)) = sights.get(i) {
+        'sight: while let Some(&(st, v, t)) = sights.get(i) {
             let fork = st.saturating_sub(PRE as u32 + 1);
             if fork > run.w.tick {
                 break;
@@ -292,19 +310,28 @@ fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64) -> Vec<Pair> {
                 continue;
             }
             let h = mix64(mseed ^ (i as u64) << 20);
-            let k = (h % zoo.len() as u64) as usize;
-            let assist = Assist::new(zoo[k], v, (h >> 32) as u32);
-            let gun = run.w.fighters[v].gun().arm as i32;
-            let (Some(clean), Some(cheat)) = (branch(run.clone(), v, t, None), branch(run.clone(), v, t, Some(assist)))
-            else {
+            let ks: Vec<usize> = if each {
+                (0..zoo.len()).collect()
+            } else {
+                vec![(h % zoo.len() as u64) as usize]
+            };
+            let Some(clean) = branch(run.clone(), v, t, None) else {
                 continue;
             };
-            let style = STYLES.iter().position(|&s| s == zoo[k].style()).unwrap_or(0) as i32;
+            let mut cheats = Vec::with_capacity(ks.len());
+            for k in ks {
+                let assist = Assist::new(zoo[k], v, (h >> 32) as u32);
+                let Some(b) = branch(run.clone(), v, t, Some(assist)) else {
+                    continue 'sight;
+                };
+                cheats.push((k, style(k), b));
+            }
+            let gun = run.w.fighters[v].gun().arm as i32;
             let skill = (run.feed.skill(v) * 1000.0) as i32;
-            out.push(Pair {
+            out.push(Sighting {
                 clean,
-                cheat,
-                at: [gun, run.w.map.id as i32, k as i32, style, v as i32, skill, st as i32],
+                cheats,
+                at: [gun, run.w.map.id as i32, v as i32, skill, st as i32],
             });
         }
         if i >= sights.len() || !run.step(None, None, &mut false) {
@@ -386,10 +413,14 @@ impl Out {
         }
     }
 
-    fn write(&mut self, m: usize, pairs: Vec<Pair>) {
-        for p in pairs {
-            let [gun, map, cheat, style, viewer, skill, sight] = p.at;
-            for (label, b) in [(0, &p.clean), (1, &p.cheat)] {
+    /// A sighting's windows: the clean one, then each cheated twin, all
+    /// with the sighting's pair id.
+    fn write(&mut self, m: usize, sights: Vec<Sighting>) {
+        for sg in sights {
+            let [gun, map, viewer, skill, sight] = sg.at;
+            let rows = std::iter::once((0, -1, -1, &sg.clean))
+                .chain(sg.cheats.iter().map(|(k, st, b)| (1, *k as i32, *st, b)));
+            for (label, cheat, style, b) in rows {
                 let mut bytes = Vec::with_capacity(LEN * F * 4);
                 for row in &b.rows {
                     for x in row {
@@ -397,7 +428,6 @@ impl Out {
                     }
                 }
                 self.windows.push(&bytes);
-                let (cheat, style) = if label == 1 { (cheat, style) } else { (-1, -1) };
                 let meta = [
                     label, self.pairs, m as i32, gun, map, cheat, style, viewer, skill, sight, b.helped, b.hits,
                     b.kills, b.heads,
@@ -463,7 +493,7 @@ fn run_all<J: Sync>(
     threads: usize,
     zoo: &[Knobs],
     out: &Mutex<Out>,
-    play: impl Fn(&J, usize, &[Knobs]) -> (Vec<Pair>, serde_json::Value) + Sync,
+    play: impl Fn(&J, usize, &[Knobs]) -> (Vec<Sighting>, serde_json::Value) + Sync,
 ) -> Vec<serde_json::Value> {
     let next = AtomicUsize::new(0);
     let done = Mutex::new(vec![serde_json::Value::Null; jobs.len()]);
@@ -472,10 +502,10 @@ fn run_all<J: Sync>(
             sc.spawn(|| loop {
                 let m = next.fetch_add(1, Ordering::Relaxed);
                 let Some(job) = jobs.get(m) else { break };
-                let (pairs, about) = play(job, m, zoo);
-                let n = pairs.len();
-                out.lock().unwrap().write(m, pairs);
-                eprintln!("match {m}: {n} pairs  {about}");
+                let (sights, about) = play(job, m, zoo);
+                let n = sights.len();
+                out.lock().unwrap().write(m, sights);
+                eprintln!("match {m}: {n} sightings  {about}");
                 done.lock().unwrap()[m] = about;
             });
         }
@@ -486,6 +516,7 @@ fn run_all<J: Sync>(
 fn main() {
     let mut out = None;
     let (mut matches, mut seed, mut secs, mut threads, mut zoo_n) = (40usize, 1u64, 300u32, 2usize, 64usize);
+    let (mut each, mut cap, mut hands) = (false, MAX_SIGHTINGS, false);
     let mut zoo_file = None;
     let mut modes = "duel,doubles,ffa".to_string();
     let mut maps = "0,1,2,5,6,7".to_string();
@@ -504,6 +535,9 @@ fn main() {
             "--zoo" => zoo_file = Some(val()),
             "--modes" => modes = val(),
             "--maps" => maps = val(),
+            "--each" => each = true,
+            "--hands" => hands = true,
+            "--sightings" => cap = num(val()) as usize,
             _ => rest.push(a),
         }
     }
@@ -560,21 +594,33 @@ fn main() {
                     skills: [0.5; MAX_FIGHTERS],
                     n,
                     end: (secs + 10) * TICK_HZ,
+                    hands: hands.then(|| {
+                        (0..n)
+                            .map(|s| Hand::new(mix64(mseed ^ (s as u64 + 7) << 44) as u32))
+                            .collect()
+                    }),
                 };
+                let traits: Vec<serde_json::Value> = feed.hands.iter().flatten().map(|h| h.traits.json()).collect();
                 for s in 0..n {
                     w.seat(s, (s & 1) as u8);
                     let skill = 0.2 + 0.75 * (mix64(mseed ^ (s as u64 + 1) << 40) % 1000) as f32 / 1000.0;
                     feed.skills[s] = skill;
                     feed.bots[s] = Bot::new(mseed, s, skill);
                 }
-                let pairs = cut(Run::new(w, feed), zoo, mseed);
+                let sights = cut(Run::new(w, feed), zoo, mseed, each, cap);
                 (
-                    pairs,
-                    serde_json::json!({ "mode": mode, "map": map, "map_name": name, "seed": mseed }),
+                    sights,
+                    serde_json::json!({ "mode": mode, "map": map, "map_name": name, "seed": mseed, "hands": traits }),
                 )
             });
             let sink = sink.into_inner().unwrap();
-            info(&dir, sink, &genomes, about, "bots");
+            info(
+                &dir,
+                sink,
+                &genomes,
+                about,
+                if hands { "bots with hands" } else { "bots" },
+            );
         }
         ["replays", files @ ..] if !files.is_empty() => {
             let dir = out.unwrap_or_else(|| die("replays --out dir <file.osr>…"));
@@ -598,8 +644,8 @@ fn main() {
                             c,
                             prev: [Input::default(); MAX_FIGHTERS],
                         };
-                        let pairs = cut(Run::new(w, feed), zoo, mix64(m as u64));
-                        (pairs, serde_json::json!({ "file": name, "map": map }))
+                        let sights = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap);
+                        (sights, serde_json::json!({ "file": name, "map": map }))
                     }
                     Err(e) => {
                         eprintln!("{name}: {e}");
@@ -617,6 +663,7 @@ fn main() {
 /// Closes the files and writes `info.json`.
 fn info(dir: &Path, out: Out, zoo: &[Genome], matches: Vec<serde_json::Value>, from: &str) {
     let (windows, pairs) = (out.windows.n, out.pairs);
+    let each = windows > 2 * pairs as usize;
     out.windows.finish();
     out.meta.finish();
     let doc = serde_json::json!({
@@ -637,11 +684,12 @@ fn info(dir: &Path, out: Out, zoo: &[Genome], matches: Vec<serde_json::Value>, f
         "matches": matches,
         "windows": windows,
         "pairs": pairs,
+        "each": each,
     });
     let path = dir.join("info.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap())
         .unwrap_or_else(|e| die(&format!("{}: {e}", path.display())));
-    println!("{}: {pairs} pairs, {windows} windows", dir.display());
+    println!("{}: {pairs} sightings, {windows} windows", dir.display());
 }
 
 fn die(msg: &str) -> ! {
