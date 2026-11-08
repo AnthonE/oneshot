@@ -13,10 +13,20 @@
 //! oneshot-aim bots --out dir [--matches 40] [--seed 1] [--secs 300]
 //!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64] [--threads 2]
 //! oneshot-aim replays --out dir [--zoo file | --zoo-n 64] [--threads 2] <file.osr>…
-//!     either: [--sightings 400] a match at most; [--each] every assist on every
-//!     sighting, not one drawn for each (the zoo's arms race, `zoo.py`)
+//! oneshot-aim league --out dir [--players 40] [--cheaters 10] [--matches 200] [--secs 120]
+//!     [--modes duel,doubles] [--zoo file | --zoo-n 64]
+//!     any: [--sightings 400] a match at most; [--len 128] [--pre 32] a window's ticks
+//!     and those before the sighting; [--each] every assist on every sighting, not one
+//!     drawn for each (the zoo's arms race, `zoo.py`)
 //!     bots: [--hands] a person's hand on each bot's aim while it fights (`hand.rs`)
 //! ```
+//!
+//! `league` is the other half: a fixed population of players, each with a
+//! hand of their own and a bot's skill, seated match after match, some of
+//! them cheating with the same assist every match they play. Nothing is
+//! forked; each sighting's window is what was played, labelled by whether
+//! its player cheats, with the player's id, so a player's evidence can be
+//! added up over matches (`players.py`, docs/ANTICHEAT.md §2).
 //!
 //! `dir` gets `windows.npy` (f32: windows × `LEN` × `F`), `meta.npy` (i32:
 //! windows × [`META`]) and `info.json` (the features, meta's columns, the
@@ -35,7 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use hand::Hand;
+use hand::{Hand, Traits};
 use room::assist::{Assist, Knobs, PREFIX};
 use room::fog::{Fog, Plain};
 use room::genome::Genome;
@@ -57,10 +67,11 @@ const MAX_SIGHTINGS: usize = 400;
 /// assist on the cheated twin (−1 on the clean) and its style (a place in
 /// [`STYLES`]); the viewer; a bot's skill × 1000 (−1 for a person); the
 /// tick the enemy came into plain sight (row `PRE`); ticks the assist
-/// helped; and the viewer's hits, kills and head hits in the window.
-const META: [&str; 14] = [
+/// helped; the viewer's hits, kills and head hits in the window; and in a
+/// league, the player (−1 otherwise; there `label` is whether they cheat).
+const META: [&str; 15] = [
     "label", "pair", "match", "gun", "map", "cheat", "style", "viewer", "skill", "sight", "helped", "hits", "kills",
-    "heads",
+    "heads", "player",
 ];
 const STYLES: [&str; 5] = ["blatant", "closet", "smooth", "trigger", "walls"];
 
@@ -139,12 +150,16 @@ impl Feed for Recorded<'_> {
     }
 }
 
-/// A match being played: the world, its inputs and each seat's fog.
+/// A match being played: the world, its inputs, each seat's fog, and the
+/// assists some seats play with all match (a league's cheaters).
 #[derive(Clone)]
 struct Run<Fd: Feed> {
     w: World,
     feed: Fd,
     fogs: Vec<Fog>,
+    cheats: Vec<Option<Assist>>,
+    /// Which of them helped this tick.
+    helped: [bool; MAX_FIGHTERS],
 }
 
 impl<Fd: Feed> Run<Fd> {
@@ -154,6 +169,8 @@ impl<Fd: Feed> Run<Fd> {
             w,
             feed,
             fogs: vec![Fog::default(); n],
+            cheats: vec![None; n],
+            helped: [false; MAX_FIGHTERS],
         }
     }
 
@@ -167,6 +184,20 @@ impl<Fd: Feed> Run<Fd> {
         let Some((mut inputs, lag)) = self.feed.next(&mut self.w) else {
             return false;
         };
+        for (s, c) in self.cheats.iter_mut().enumerate() {
+            self.helped[s] = false;
+            if let Some(a) = c {
+                let from = self.feed.from(&self.w, s);
+                let fog = &self.fogs[s];
+                self.helped[s] = a.bend(
+                    &self.w,
+                    &mut Plain::default(),
+                    |t| fog.shows(t, next),
+                    from,
+                    &mut inputs[s],
+                );
+            }
+        }
         if let Some(a) = assist {
             let v = a.seat();
             let from = self.feed.from(&self.w, v);
@@ -236,9 +267,10 @@ struct Branch {
     heads: i32,
 }
 
-/// Plays `run` on for a window of `v` at `t`, with `assist` if any.
-fn branch<Fd: Feed>(mut run: Run<Fd>, v: usize, t: usize, mut assist: Option<Assist>) -> Option<Branch> {
-    let mut tape = Tape::new(v, t);
+/// Plays `run` on for a window of `len` ticks of `v` at `t`, with `assist`
+/// if any.
+fn branch<Fd: Feed>(mut run: Run<Fd>, v: usize, t: usize, mut assist: Option<Assist>, len: usize) -> Option<Branch> {
+    let mut tape = Tape::new(v, t, len);
     let mut b = Branch {
         rows: Vec::new(),
         helped: 0,
@@ -251,7 +283,7 @@ fn branch<Fd: Feed>(mut run: Run<Fd>, v: usize, t: usize, mut assist: Option<Ass
         if !run.step(assist.as_mut(), Some(&mut tape), &mut helped) {
             return None;
         }
-        b.helped += helped as i32;
+        b.helped += (helped || run.helped[v]) as i32;
         for e in run.w.events.as_slice() {
             match e.kind {
                 Ev::Hit if e.a as usize == v && e.b as usize != v => {
@@ -275,6 +307,16 @@ struct Sighting {
     cheats: Vec<(usize, i32, Branch)>,
     /// gun, map, viewer, skill, sight
     at: [i32; 5],
+    /// The clean window's label and its player (a league's; else 0 and −1).
+    label: i32,
+    player: i32,
+}
+
+/// A window's ticks, and those of them before the sighting.
+#[derive(Clone, Copy)]
+struct Shape {
+    len: usize,
+    pre: usize,
 }
 
 fn mix64(mut z: u64) -> u64 {
@@ -288,7 +330,16 @@ fn mix64(mut z: u64) -> u64 {
 /// second pass forks at each. Each gets one assist from the zoo, or with
 /// `each`, every assist on the same moment (the zoo's arms race compares
 /// them there, `zoo.py`).
-fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64, each: bool, cap: usize) -> Vec<Sighting> {
+/// `who` is each seat's player and whether they cheat, in a league.
+fn cut<Fd: Feed>(
+    start: Run<Fd>,
+    zoo: &[Knobs],
+    mseed: u64,
+    each: bool,
+    cap: usize,
+    shape: Shape,
+    who: &[(i32, i32)],
+) -> Vec<Sighting> {
     let mut sights = sightings(start.clone());
     if sights.len() > cap {
         // Spread over the match, not its first minutes.
@@ -301,7 +352,7 @@ fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64, each: bool, cap: usi
     let mut i = 0;
     loop {
         'sight: while let Some(&(st, v, t)) = sights.get(i) {
-            let fork = st.saturating_sub(PRE as u32 + 1);
+            let fork = st.saturating_sub(shape.pre as u32 + 1);
             if fork > run.w.tick {
                 break;
             }
@@ -310,28 +361,33 @@ fn cut<Fd: Feed>(start: Run<Fd>, zoo: &[Knobs], mseed: u64, each: bool, cap: usi
                 continue;
             }
             let h = mix64(mseed ^ (i as u64) << 20);
-            let ks: Vec<usize> = if each {
+            let ks: Vec<usize> = if zoo.is_empty() {
+                Vec::new()
+            } else if each {
                 (0..zoo.len()).collect()
             } else {
                 vec![(h % zoo.len() as u64) as usize]
             };
-            let Some(clean) = branch(run.clone(), v, t, None) else {
+            let Some(clean) = branch(run.clone(), v, t, None, shape.len) else {
                 continue;
             };
             let mut cheats = Vec::with_capacity(ks.len());
             for k in ks {
                 let assist = Assist::new(zoo[k], v, (h >> 32) as u32);
-                let Some(b) = branch(run.clone(), v, t, Some(assist)) else {
+                let Some(b) = branch(run.clone(), v, t, Some(assist), shape.len) else {
                     continue 'sight;
                 };
                 cheats.push((k, style(k), b));
             }
             let gun = run.w.fighters[v].gun().arm as i32;
             let skill = (run.feed.skill(v) * 1000.0) as i32;
+            let (player, label) = who.get(v).copied().unwrap_or((-1, 0));
             out.push(Sighting {
                 clean,
                 cheats,
                 at: [gun, run.w.map.id as i32, v as i32, skill, st as i32],
+                label,
+                player,
             });
         }
         if i >= sights.len() || !run.step(None, None, &mut false) {
@@ -404,10 +460,10 @@ struct Out {
 }
 
 impl Out {
-    fn new(dir: &Path) -> Out {
+    fn new(dir: &Path, shape: Shape) -> Out {
         std::fs::create_dir_all(dir).unwrap_or_else(|e| die(&format!("{}: {e}", dir.display())));
         Out {
-            windows: Npy::create(&dir.join("windows.npy"), "<f4", vec![LEN, F]),
+            windows: Npy::create(&dir.join("windows.npy"), "<f4", vec![shape.len, F]),
             meta: Npy::create(&dir.join("meta.npy"), "<i4", vec![META.len()]),
             pairs: 0,
         }
@@ -418,10 +474,10 @@ impl Out {
     fn write(&mut self, m: usize, sights: Vec<Sighting>) {
         for sg in sights {
             let [gun, map, viewer, skill, sight] = sg.at;
-            let rows = std::iter::once((0, -1, -1, &sg.clean))
+            let rows = std::iter::once((sg.label, -1, -1, &sg.clean))
                 .chain(sg.cheats.iter().map(|(k, st, b)| (1, *k as i32, *st, b)));
             for (label, cheat, style, b) in rows {
-                let mut bytes = Vec::with_capacity(LEN * F * 4);
+                let mut bytes = Vec::with_capacity(b.rows.len() * F * 4);
                 for row in &b.rows {
                     for x in row {
                         bytes.extend_from_slice(&x.to_le_bytes());
@@ -430,7 +486,7 @@ impl Out {
                 self.windows.push(&bytes);
                 let meta = [
                     label, self.pairs, m as i32, gun, map, cheat, style, viewer, skill, sight, b.helped, b.hits,
-                    b.kills, b.heads,
+                    b.kills, b.heads, sg.player,
                 ];
                 let bytes: Vec<u8> = meta.iter().flat_map(|x| x.to_le_bytes()).collect();
                 self.meta.push(&bytes);
@@ -438,6 +494,37 @@ impl Out {
             self.pairs += 1;
         }
     }
+}
+
+/// A league's player: a hand, a bot's skill, and the assist they cheat
+/// with every match, if they do.
+struct Person {
+    traits: Traits,
+    skill: f32,
+    cheat: Option<usize>,
+}
+
+/// `players` people from `seed`, `cheaters` of them (picked by the seed,
+/// not the first) each with an assist from a zoo of `zoo`.
+fn league(seed: u64, players: usize, cheaters: usize, zoo: usize) -> Vec<Person> {
+    let mut people: Vec<Person> = (0..players)
+        .map(|p| {
+            let h = mix64(seed ^ (p as u64 + 1) << 36);
+            Person {
+                traits: Traits::draw(h as u32),
+                skill: 0.2 + 0.75 * ((h >> 32) % 1000) as f32 / 1000.0,
+                cheat: None,
+            }
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..players).collect();
+    order.sort_by_key(|&p| mix64(seed ^ 0xc4ea_7000 ^ p as u64));
+    for (i, &p) in order.iter().take(cheaters).enumerate() {
+        if zoo > 0 {
+            people[p].cheat = Some((mix64(seed ^ 0x2005 ^ i as u64) % zoo as u64) as usize);
+        }
+    }
+    people
 }
 
 /// The zoo: `n` assists from `seed`.
@@ -517,6 +604,8 @@ fn main() {
     let mut out = None;
     let (mut matches, mut seed, mut secs, mut threads, mut zoo_n) = (40usize, 1u64, 300u32, 2usize, 64usize);
     let (mut each, mut cap, mut hands) = (false, MAX_SIGHTINGS, false);
+    let mut shape = Shape { len: LEN, pre: PRE };
+    let (mut players, mut cheaters, mut modes_set) = (40usize, 10usize, false);
     let mut zoo_file = None;
     let mut modes = "duel,doubles,ffa".to_string();
     let mut maps = "0,1,2,5,6,7".to_string();
@@ -533,7 +622,14 @@ fn main() {
             "--threads" => threads = num(val()) as usize,
             "--zoo-n" => zoo_n = num(val()) as usize,
             "--zoo" => zoo_file = Some(val()),
-            "--modes" => modes = val(),
+            "--modes" => {
+                modes = val();
+                modes_set = true;
+            }
+            "--len" => shape.len = num(val()) as usize,
+            "--pre" => shape.pre = num(val()) as usize,
+            "--players" => players = num(val()) as usize,
+            "--cheaters" => cheaters = num(val()) as usize,
             "--maps" => maps = val(),
             "--each" => each = true,
             "--hands" => hands = true,
@@ -574,7 +670,7 @@ fn main() {
                 .collect();
             let genomes = zoo();
             let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
-            let sink = Mutex::new(Out::new(&dir));
+            let sink = Mutex::new(Out::new(&dir, shape));
             let about = run_all(&jobs, threads, &knobs, &sink, |&(mseed, mode, map), _, zoo| {
                 let mut rules = match mode {
                     "duel" => Rules::duel(),
@@ -607,7 +703,7 @@ fn main() {
                     feed.skills[s] = skill;
                     feed.bots[s] = Bot::new(mseed, s, skill);
                 }
-                let sights = cut(Run::new(w, feed), zoo, mseed, each, cap);
+                let sights = cut(Run::new(w, feed), zoo, mseed, each, cap, shape, &[]);
                 (
                     sights,
                     serde_json::json!({ "mode": mode, "map": map, "map_name": name, "seed": mseed, "hands": traits }),
@@ -620,6 +716,8 @@ fn main() {
                 &genomes,
                 about,
                 if hands { "bots with hands" } else { "bots" },
+                shape,
+                serde_json::Value::Null,
             );
         }
         ["replays", files @ ..] if !files.is_empty() => {
@@ -635,7 +733,7 @@ fn main() {
                 .collect();
             let genomes = zoo();
             let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
-            let sink = Mutex::new(Out::new(&dir));
+            let sink = Mutex::new(Out::new(&dir, shape));
             let about = run_all(&bytes, threads, &knobs, &sink, |(name, b), m, zoo| {
                 match Cursor::open(b) {
                     Ok((c, w)) => {
@@ -644,7 +742,7 @@ fn main() {
                             c,
                             prev: [Input::default(); MAX_FIGHTERS],
                         };
-                        let sights = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap);
+                        let sights = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap, shape, &[]);
                         (sights, serde_json::json!({ "file": name, "map": map }))
                     }
                     Err(e) => {
@@ -654,22 +752,130 @@ fn main() {
                 }
             });
             let sink = sink.into_inner().unwrap();
-            info(&dir, sink, &genomes, about, "replays");
+            info(&dir, sink, &genomes, about, "replays", shape, serde_json::Value::Null);
         }
-        _ => die("zoo [n] | knobs <oa1:…> | bots --out dir | replays --out dir <file.osr>… (see the source's header)"),
+        ["league"] => {
+            let dir = out.unwrap_or_else(|| die("league --out dir"));
+            let modes: Vec<&str> = if modes_set {
+                modes.split(',').collect()
+            } else {
+                vec!["duel", "doubles"]
+            };
+            let maps: Vec<u8> = maps
+                .split(',')
+                .map(|m| m.parse().unwrap_or_else(|_| die("--maps 0,1,…")))
+                .collect();
+            let genomes = zoo();
+            let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
+            let people = league(seed, players, cheaters.min(players), knobs.len());
+            // Seats go to whoever has played least, so every career is
+            // about as long.
+            let mut played = vec![0usize; players];
+            let jobs: Vec<(u64, &str, u8, Vec<usize>)> = (0..matches)
+                .map(|m| {
+                    let mseed = seed.wrapping_mul(1_000_003).wrapping_add(m as u64);
+                    let mode = modes[m % modes.len()];
+                    let n = match mode {
+                        "duel" => 2,
+                        "doubles" => 4,
+                        "ffa" => Rules::ffa().seats as usize,
+                        m => die(&format!("{m}: duel, doubles or ffa")),
+                    };
+                    let mut order: Vec<usize> = (0..players).collect();
+                    order.sort_by_key(|&p| (played[p], mix64(mseed ^ p as u64)));
+                    let seats: Vec<usize> = order[..n.min(players)].to_vec();
+                    for &p in &seats {
+                        played[p] += 1;
+                    }
+                    (mseed, mode, maps[(m / modes.len()) % maps.len()], seats)
+                })
+                .collect();
+            let sink = Mutex::new(Out::new(&dir, shape));
+            let about = run_all(&jobs, threads, &knobs, &sink, |(mseed, mode, map, seats), _, zoo| {
+                let mseed = *mseed;
+                let mut rules = match *mode {
+                    "duel" => Rules::duel(),
+                    "doubles" => Rules::doubles(),
+                    _ => Rules::ffa(),
+                };
+                rules.score_limit = 1000;
+                rules.time_limit_ms = secs * 1000;
+                let m = sim::map::by_id(*map).unwrap_or_else(|| die(&format!("no map {map}")));
+                let mut w = World::new(m, rules, mseed, (mseed, !mseed));
+                let n = seats.len();
+                let mut feed = Bots {
+                    bots: [Bot::new(mseed, 0, 0.5); MAX_FIGHTERS],
+                    skills: [0.5; MAX_FIGHTERS],
+                    n,
+                    end: (secs + 10) * TICK_HZ,
+                    hands: Some(
+                        seats
+                            .iter()
+                            .map(|&p| Hand::of(people[p].traits, mix64(mseed ^ (p as u64) << 24) as u32))
+                            .collect(),
+                    ),
+                };
+                for (s, &p) in seats.iter().enumerate() {
+                    w.seat(s, (s & 1) as u8);
+                    feed.skills[s] = people[p].skill;
+                    feed.bots[s] = Bot::new(mseed, s, people[p].skill);
+                }
+                let mut run = Run::new(w, feed);
+                for (s, &p) in seats.iter().enumerate() {
+                    run.cheats[s] = people[p].cheat.map(|k| Assist::new(zoo[k], s, mix64(mseed ^ s as u64) as u32));
+                }
+                let who: Vec<(i32, i32)> = seats
+                    .iter()
+                    .map(|&p| (p as i32, people[p].cheat.is_some() as i32))
+                    .collect();
+                let sights = cut(run, &[], mseed, false, cap, shape, &who);
+                (sights, serde_json::json!({ "mode": mode, "map": map, "seed": mseed, "players": seats }))
+            });
+            let sink = sink.into_inner().unwrap();
+            let roster = serde_json::Value::Array(
+                people
+                    .iter()
+                    .enumerate()
+                    .map(|(p, x)| {
+                        serde_json::json!({
+                            "player": p,
+                            "skill": x.skill,
+                            "cheat": x.cheat,
+                            "genome": x.cheat.map(|k| genomes[k].text(PREFIX)),
+                            "style": x.cheat.map(|k| knobs[k].style()),
+                            "matches": played[p],
+                            "hand": x.traits.json(),
+                        })
+                    })
+                    .collect(),
+            );
+            info(&dir, sink, &genomes, about, "league", shape, roster);
+        }
+        _ => die(
+            "zoo [n] | knobs <oa1:…> | bots --out dir | replays --out dir <file.osr>… | league --out dir (see the source's header)",
+        ),
     }
 }
 
 /// Closes the files and writes `info.json`.
-fn info(dir: &Path, out: Out, zoo: &[Genome], matches: Vec<serde_json::Value>, from: &str) {
+#[allow(clippy::too_many_arguments)]
+fn info(
+    dir: &Path,
+    out: Out,
+    zoo: &[Genome],
+    matches: Vec<serde_json::Value>,
+    from: &str,
+    shape: Shape,
+    league: serde_json::Value,
+) {
     let (windows, pairs) = (out.windows.n, out.pairs);
     let each = windows > 2 * pairs as usize;
     out.windows.finish();
     out.meta.finish();
     let doc = serde_json::json!({
         "from": from,
-        "len": LEN,
-        "pre": PRE,
+        "len": shape.len,
+        "pre": shape.pre,
         "tick_hz": TICK_HZ,
         "features": FEATURES,
         "meta": META,
@@ -685,6 +891,7 @@ fn info(dir: &Path, out: Out, zoo: &[Genome], matches: Vec<serde_json::Value>, f
         "windows": windows,
         "pairs": pairs,
         "each": each,
+        "league": league,
     });
     let path = dir.join("info.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap())

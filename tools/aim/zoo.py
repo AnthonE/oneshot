@@ -19,8 +19,9 @@ Each round:
 4. **The archive** (MAP-Elites): a cell per style and per aim point (head or
    body); each keeps the fittest candidate of the round, so the zoo stays a
    spread of kinds of cheat, not one leader.
-5. **The detector trains on**, from where it was, on the base set and every
-   round's elites.
+5. **The detector trains on**, from where it was, on the base set and the
+   last `--keep-rounds` rounds' elites (older ones it learned already; the
+   exam says whether it kept them).
 
 Each round prints §5's two numbers: the most a candidate gained while
 flagged in under 5% of its windows, and how many sightings a sequential
@@ -141,14 +142,25 @@ def lessons(base, extra, seed):
         return np.isin(match, rng.permutation(n)[: max(1, n * 15 // 100)])
 
     w, meta, info, col = load(base)
-    keep = det.acted_rows(meta, col)
-    xs, ms, va = [np.asarray(w[np.where(keep)[0]], np.float32)], [meta[keep]], [held(meta[:, col["match"]])[keep]]
+    names = info["meta"]
+    parts = [(w, meta, det.acted_rows(meta, col), col)]
     for d in extra:
-        ew, em, _, _ = load(d)
-        xs.append(np.asarray(ew, np.float32))
-        ms.append(em)
-        va.append(held(em[:, col["match"]]))
-    return np.concatenate(xs), np.concatenate(ms), np.concatenate(va), col
+        ew, em, _, ec = load(d)
+        parts.append((ew, em, np.ones(len(em), bool), ec))
+    # One array, filled in place: no copy of the whole set on the way.
+    n = sum(int(k.sum()) for _, _, k, _ in parts)
+    x = np.empty((n, w.shape[1], w.shape[2]), np.float32)
+    ms, va, at = [], [], 0
+    for pw, pm, k, pc in parts:
+        rows = np.where(k)[0]
+        for i in range(0, len(rows), 4096):
+            chunk = rows[i : i + 4096]
+            x[at : at + len(chunk)] = pw[chunk]
+            at += len(chunk)
+        # Columns by name: a set cut by a later build may have more.
+        ms.append(np.stack([pm[k, pc[c]] for c in names], 1))
+        va.append(held(pm[k, pc["match"]]))
+    return x, np.concatenate(ms), np.concatenate(va), col
 
 
 def fit(base, extra, args, init=None, mu=None, sd=None, epochs=None):
@@ -207,6 +219,7 @@ def main():
     ap.add_argument("--hands", action="store_true", help="a person's hand on the bots' aim, as the base set had")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--retrain-epochs", type=int, default=6)
+    ap.add_argument("--keep-rounds", type=int, default=6, help="the rounds of elites the detector trains on (memory)")
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -275,7 +288,7 @@ def main():
         shutil.rmtree(ev)
         kept.append(keep)
         state = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        model, *_ = fit(args.base, kept, args, init=state, mu=mu, sd=sd, epochs=args.retrain_epochs)
+        model, *_ = fit(args.base, kept[-args.keep_rounds :], args, init=state, mu=mu, sd=sd, epochs=args.retrain_epochs)
 
     # The exam: every elite ever, on matches no round saw, before and after.
     zoo = list(ever)

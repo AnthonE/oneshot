@@ -16,9 +16,10 @@ use sim::world::World;
 
 use crate::assist::{aim_point, angles_to, wrap_deg as wrap};
 
-/// Ticks before the enemy came into plain sight.
+/// Ticks before the enemy came into plain sight, by default.
 pub const PRE: usize = 32;
-/// Ticks in a window: 1 s at 128 Hz.
+/// Ticks in a window by default: 1 s at 128 Hz. A dataset names its own
+/// in its `info.json`.
 pub const LEN: usize = 128;
 /// Angles are kept within this many degrees: past it, only "far off".
 const CLIP_DEG: f32 = 90.0;
@@ -58,22 +59,25 @@ pub struct Tape {
     pub viewer: usize,
     pub target: usize,
     pub rows: Vec<[f32; F]>,
+    len: usize,
     /// Last row's aim and bearing to the enemy, degrees.
     prev: Option<(f32, f32, f32, f32)>,
 }
 
 impl Tape {
-    pub fn new(viewer: usize, target: usize) -> Tape {
+    /// A window of `len` ticks.
+    pub fn new(viewer: usize, target: usize, len: usize) -> Tape {
         Tape {
             viewer,
             target,
-            rows: Vec::with_capacity(LEN),
+            rows: Vec::with_capacity(len),
+            len,
             prev: None,
         }
     }
 
     pub fn full(&self) -> bool {
-        self.rows.len() >= LEN
+        self.rows.len() >= self.len
     }
 
     /// A row for the tick `w` just stepped: `plain` and `shown` are the

@@ -69,6 +69,26 @@ pub struct Traits {
 }
 
 impl Traits {
+    /// A person's traits, drawn from `seed`.
+    pub fn draw(seed: u32) -> Traits {
+        let mut rng = Draw(seed);
+        let mut u = |lo: f32, hi: f32| lo + (hi - lo) * rng.draw();
+        Traits {
+            react_ms: u(160.0, 300.0),
+            gain: u(0.85, 1.0),
+            gain_sd: u(0.04, 0.12),
+            dir_sd_deg: u(1.0, 6.0),
+            fitts_a_ms: u(30.0, 80.0),
+            fitts_b_ms: u(40.0, 90.0),
+            lag_ms: u(60.0, 160.0),
+            pursuit: u(0.75, 0.95),
+            tremor_deg: u(0.02, 0.15),
+            step_deg: u(0.005, 0.05),
+            click_ms: u(120.0, 260.0),
+            bone: u(0.1, 0.6),
+        }
+    }
+
     pub fn json(&self) -> serde_json::Value {
         let r = |x: f32| (x * 1000.0).round() / 1000.0;
         serde_json::json!({
@@ -119,25 +139,15 @@ fn min_jerk(t: f32) -> f32 {
 impl Hand {
     /// A person drawn from `seed`.
     pub fn new(seed: u32) -> Hand {
-        let mut rng = Draw(seed);
-        let mut u = |lo: f32, hi: f32| lo + (hi - lo) * rng.draw();
-        let traits = Traits {
-            react_ms: u(160.0, 300.0),
-            gain: u(0.85, 1.0),
-            gain_sd: u(0.04, 0.12),
-            dir_sd_deg: u(1.0, 6.0),
-            fitts_a_ms: u(30.0, 80.0),
-            fitts_b_ms: u(40.0, 90.0),
-            lag_ms: u(60.0, 160.0),
-            pursuit: u(0.75, 0.95),
-            tremor_deg: u(0.02, 0.15),
-            step_deg: u(0.005, 0.05),
-            click_ms: u(120.0, 260.0),
-            bone: u(0.1, 0.6),
-        };
+        Hand::of(Traits::draw(seed), seed ^ 0x6b43_a9b5)
+    }
+
+    /// A hand with `traits`, its noise from `noise`: the same person in
+    /// another match is the same traits and other noise.
+    pub fn of(traits: Traits, noise: u32) -> Hand {
         Hand {
             traits,
-            rng: Draw(seed ^ 0x6b43_a9b5),
+            rng: Draw(noise),
             target: None,
             flick: None,
             dwell: 0,
