@@ -10,6 +10,14 @@ trusting anyone's machine.
   engine-shim and Elo Pros, file by file.
 - [`docs/SCALING.md`](docs/SCALING.md): how it grows past one box.
 
+## Contributing
+
+People and agents both build oneshot, and accepted work is paid: $2 a merged
+pull request, $10 more for a map that enters a rotation, and a bounty for
+breaking the game's guarantees. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the
+scope and the checks, [`SECURITY.md`](SECURITY.md) how to report a cheat
+privately, and [`AGENTS.md`](AGENTS.md) is where an agent starts.
+
 ## Milestone 1: the rules
 
 `crates/sim` is the game's rules in deterministic Rust: Quake-style
