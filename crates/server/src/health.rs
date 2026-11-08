@@ -96,6 +96,9 @@ pub struct Health {
     /// lane full (`net::INPUT_LANE`). Each carries the frames before it,
     /// so an honest client loses nothing to one.
     pub inputs_dropped: AtomicU64,
+    /// Lobby stream messages dropped: a session over its rate
+    /// (`lobby::LOBBY_MSGS_PER_S`).
+    pub lobby_dropped: AtomicU64,
     /// QUIC packets sent and lost, summed over sessions as they're sampled.
     pub packets_sent: AtomicU64,
     pub packets_lost: AtomicU64,
@@ -154,6 +157,7 @@ impl Health {
             tick_max_us: g(&self.tick_us.max),
             send_errors: g(&self.send_errors),
             inputs_dropped: g(&self.inputs_dropped),
+            lobby_dropped: g(&self.lobby_dropped),
             packets_sent: g(&self.packets_sent),
             packets_lost: g(&self.packets_lost),
             bytes_sent: g(&self.bytes_sent),
@@ -185,6 +189,7 @@ pub struct Read {
     pub tick_max_us: u64,
     pub send_errors: u64,
     pub inputs_dropped: u64,
+    pub lobby_dropped: u64,
     pub packets_sent: u64,
     pub packets_lost: u64,
     pub bytes_sent: u64,
@@ -227,7 +232,7 @@ pub fn json(now: Now, r: &Read) -> String {
          \"conn_refused\":{},\"conn_retried\":{},\"handshake_failed\":{},\"refused\":{},\
          \"ticks\":{},\"ticks_late\":{},\"ticks_skipped\":{},\
          \"tick_p50_us\":{},\"tick_p99_us\":{},\"tick_max_us\":{},\"tick_us\":{},\
-         \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
+         \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\"lobby_dropped\":{},\
          \"events_dropped\":{},\
          \"packets_sent\":{},\"packets_lost\":{},\"bytes_sent\":{},\
          \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{},\
@@ -259,6 +264,7 @@ pub fn json(now: Now, r: &Read) -> String {
         r.cut_behind,
         r.send_errors,
         r.inputs_dropped,
+        r.lobby_dropped,
         r.events_dropped,
         r.packets_sent,
         r.packets_lost,

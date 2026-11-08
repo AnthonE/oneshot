@@ -27,8 +27,10 @@ use std::time::{Duration, Instant};
 pub const BODY_MAX: usize = 16 * 1024;
 /// Reports one address may send per [`WINDOW`].
 pub const PER_ADDR: u32 = 5;
-/// Reports taken from everyone per [`WINDOW`].
-pub const ALL: u32 = 120;
+/// Reports taken from everyone per [`WINDOW`]: well over [`PER_ADDR`] times
+/// the addresses a flood has to hand, so one doesn't starve the rest;
+/// [`DAY_MAX`] still bounds the disk.
+pub const ALL: u32 = 600;
 pub const WINDOW: Duration = Duration::from_secs(600);
 /// A slot's day is full at this size (a real report is a kilobyte or two).
 pub const DAY_MAX: u64 = 8 << 20;

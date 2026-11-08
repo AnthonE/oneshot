@@ -4,7 +4,7 @@
 //! it.
 
 use proto::{InputMsg, Name};
-use room::{ClientNet, Room, MAX_FAVOUR_MS, PLAYOUT_MAX};
+use room::{ClientNet, Room, FAVOUR_SLACK_MS, MAX_FAVOUR_MS, PLAYOUT_MAX, SNAP_EVERY};
 use sim::consts::ticks;
 use sim::input::Input;
 use sim::map::Map;
@@ -118,4 +118,22 @@ fn a_joiner_acking_nothing_yet_gets_no_rewind() {
     let c = room.client(slot).unwrap();
     assert_eq!(c.acked, None, "an ack from before it sat is refused");
     assert_eq!(run(c, joined + 1), 0);
+}
+
+#[test]
+fn the_link_bounds_what_acks_and_playout_ask_for() {
+    // A client on a 10 ms link that acks late and names the longest
+    // playout asks for the cap; it gets what its link justifies.
+    let mut c = ClientNet::default();
+    c.set_link(10.0, SNAP_EVERY);
+    c.on_input(&msg(100, 255, 0), 0.0, Some(100));
+    c.take_frame();
+    let cap = ticks(10 + FAVOUR_SLACK_MS) + 2 * SNAP_EVERY;
+    assert!(cap < ticks(MAX_FAVOUR_MS));
+    assert_eq!(c.rewind_q8(400), cap << 8);
+    // An honest one is under its cap: unchanged.
+    assert_eq!(c.rewind_q8(101), (1 + PLAYOUT_MAX).min(cap) << 8);
+    // A slow link justifies the whole favour, never more.
+    c.set_link(900.0, SNAP_EVERY);
+    assert_eq!(c.rewind_q8(400), ticks(MAX_FAVOUR_MS) << 8);
 }

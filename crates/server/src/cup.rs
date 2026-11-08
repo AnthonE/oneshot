@@ -47,10 +47,13 @@ pub struct Cup {
 }
 
 /// Places from scores: 1 the best, a tie shares the better place.
+/// Each score's place, 1 the best. A tie shares the *worse* place (two at
+/// the top are both second): a heat that agrees not to score would
+/// otherwise hand everyone in it first place and its points.
 pub fn places(scores: &[i32]) -> Vec<u32> {
     scores
         .iter()
-        .map(|s| 1 + scores.iter().filter(|o| *o > s).count() as u32)
+        .map(|s| scores.iter().filter(|o| *o >= s).count() as u32)
         .collect()
 }
 
@@ -130,10 +133,12 @@ impl Cup {
         *done = true;
         let members = members.clone();
         let placed = places(scores);
-        for (&i, &p) in members.iter().zip(&placed) {
+        for ((&i, &p), &score) in members.iter().zip(&placed).zip(scores) {
             let e = &mut self.entrants[i];
             match self.stage {
                 Stage::Final => e.final_place = Some(p),
+                // No score, no points: a heat sat out pays nobody.
+                _ if score <= 0 => {}
                 _ => e.points += POINTS.get(p as usize - 1).copied().unwrap_or(0),
             }
         }
@@ -266,9 +271,10 @@ mod tests {
     }
 
     #[test]
-    fn places_share_ties() {
-        assert_eq!(places(&[5, 9, 5, 0]), vec![2, 1, 2, 4]);
-        assert_eq!(places(&[0, 0]), vec![1, 1]);
+    fn places_share_the_worse_place_of_a_tie() {
+        assert_eq!(places(&[5, 9, 5, 0]), vec![3, 1, 3, 4]);
+        assert_eq!(places(&[0, 0]), vec![2, 2]);
+        assert_eq!(places(&[9, 5]), vec![1, 2]);
     }
 
     #[test]

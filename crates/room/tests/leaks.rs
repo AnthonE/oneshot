@@ -425,9 +425,12 @@ impl Gate {
                     w.map.name, w.tick, me.body.pos, f.body.pos, f.alive, w.rules.teams
                 );
             } else {
-                // 2. Never hidden while plainly visible.
+                // 2. Never hidden while plainly visible, unless camouflaged
+                // past its range (`room::fog::camouflaged`), which the
+                // hold lets fade.
+                let cloaked = self.history.iter().any(|h| room::fog::camouflaged(&h[self.me], &h[q]));
                 assert!(
-                    !plainly_sees(&w.map, me, &now[q]),
+                    cloaked || !plainly_sees(&w.map, me, &now[q]),
                     "tick {}: seat {q} in plain sight but not sent",
                     w.tick
                 );
@@ -497,6 +500,16 @@ impl Gate {
             }
             if (kind(Ev::Hit) || kind(Ev::Kill)) && !known(b) {
                 assert_eq!(e.pos, V3::ZERO, "tick {}: where an unseen victim stood: {e:?}", w.tick);
+            }
+            // A hit on someone unseen says no more than that: not who, not
+            // what it struck, not how hard.
+            if kind(Ev::Hit) && !known(b) {
+                assert_eq!(
+                    (e.b, e.part, e.c),
+                    (proto::NOBODY, 0, 0),
+                    "tick {}: an unseen victim named by a hit: {e:?}",
+                    w.tick
+                );
             }
             // 13. A hull hit only to its hitter and the vehicle's riders.
             if kind(Ev::VehicleHit) {

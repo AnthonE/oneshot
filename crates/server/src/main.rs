@@ -7,7 +7,7 @@
 //! [--elo-key server.pem --elo-key-id eu-1] [--replays dir] [--bugs dir]
 //! [--public-addr host:port] [--allow-origin https://elopros.com]…
 //! [--capacity 256] [--drain-max 900] [--big-snapshot-hz 64] [--no-delta] [--no-far-rates]
-//! [--nonce-key file] [--live-file file] [--roster-dir dir]
+//! [--nonce-key file] [--live-file file] [--roster-dir dir] [--roster-key file]
 //! [--sim-threads 0] [--endpoints 1] [--endpoint-step 10] [--net-nice 5] [--elo-queue] [--load-from ip]… [--match-secs N]`
 //!
 //! `--match-secs` puts every mode's match on an N-second clock: for tests
@@ -140,6 +140,16 @@ fn main() {
             "--nonce-key" => cfg.nonce_key = Some(nonce_key(&val())),
             "--live-file" => cfg.live_file = Some(val().into()),
             "--roster-dir" => cfg.roster_dir = Some(val().into()),
+            "--roster-key" => {
+                // What `/online.json` asks for in `X-Roster-Key`: a line in a file.
+                let p = val();
+                let k = std::fs::read_to_string(&p).unwrap_or_else(|e| die(&format!("--roster-key {p}: {e}")));
+                let k = k.trim().to_string();
+                if k.is_empty() || !k.bytes().all(|b| b.is_ascii_graphic()) {
+                    die(&format!("--roster-key {p}: one line of printable ASCII"));
+                }
+                cfg.roster_key = Some(k);
+            }
             "--no-delta" => cfg.deltas = false,
             "--no-far-rates" => cfg.far_rates = false,
             "--elo-queue" => cfg.elo_queue = true,

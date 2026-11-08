@@ -321,8 +321,16 @@ impl Nonces {
         }
         let mut used = self.used.lock().unwrap_or_else(|e| e.into_inner());
         used.retain(|_, t| now.saturating_sub(*t) < NONCE_TTL.as_secs());
-        if used.contains_key(n) || used.len() >= NONCE_CAP {
+        if used.contains_key(n) {
             return false;
+        }
+        // Full (a flood of sign-ins, each with a fresh nonce of its own
+        // making): the oldest goes, rather than every sign-in being refused
+        // until it ages out.
+        if used.len() >= NONCE_CAP {
+            if let Some(k) = used.iter().min_by_key(|(_, t)| **t).map(|(k, _)| k.clone()) {
+                used.remove(&k);
+            }
         }
         used.insert(n.to_string(), at);
         true

@@ -47,8 +47,16 @@ pub const MAX_FAVOUR_MS: u32 = 160;
 /// The playout a client may claim, in ticks.
 pub const PLAYOUT_MIN: u32 = 2;
 pub const PLAYOUT_MAX: u32 = 12;
+/// What an honest client's favour may add over its link's round trip: its
+/// send interval, a tick's processing, a little jitter. The ack and the
+/// playout a client sends are its own words; the link's round trip is
+/// measured by the transport, so the favour they ask for is held to what
+/// the link could justify ([`ClientNet::set_link`]).
+pub const FAVOUR_SLACK_MS: u32 = 40;
 /// Snapshots go out every this many ticks.
 pub const SNAP_EVERY: u32 = 2;
+/// Departed players' aim numbers kept for the review ([`Room::departed`]).
+pub const MAX_DEPARTED: usize = 64;
 /// Snapshot send times kept, for RTT: 4 s of ticks, so a high ping's acks
 /// still find theirs.
 const SENT: usize = 512;
@@ -118,6 +126,9 @@ pub struct ClientNet {
     ran: View,
     sent: [(u32, f64); SENT],
     pub rtt_ms: f64,
+    /// The most favour (ticks) the link justifies, from its measured round
+    /// trip ([`ClientNet::set_link`]); None until the transport says.
+    favour_cap: Option<u32>,
     /// Frames that came after their tick had run, and ticks run on a
     /// repeat ([`lost_frame`]) because a frame hadn't come.
     pub late: u32,
@@ -223,6 +234,7 @@ impl Default for ClientNet {
             ran: View::default(),
             sent: [(u32::MAX, 0.0); SENT],
             rtt_ms: 0.0,
+            favour_cap: None,
             late: 0,
             repeats: 0,
             low: None,
@@ -306,7 +318,7 @@ impl ClientNet {
         if let Some(n) = self.newest_seq {
             let depth = n.wrapping_sub(cursor);
             if depth < 0x8000_0000 && depth > MAX_DEPTH {
-                cursor = n - MAX_DEPTH;
+                cursor = n.wrapping_sub(MAX_DEPTH);
             }
         }
         let slot = &mut self.frames[cursor as usize % BUF];
@@ -375,7 +387,19 @@ impl ClientNet {
         };
         let age = tick.saturating_sub(acked);
         let play = (self.ran.playout as u32).clamp(PLAYOUT_MIN, PLAYOUT_MAX);
-        (age + play).min(ticks(MAX_FAVOUR_MS)) << 8
+        let favour = (age + play).min(ticks(MAX_FAVOUR_MS));
+        // A client that acks late or names a long playout asks for more
+        // than its link could need: it gets what the link justifies.
+        self.favour_cap.map_or(favour, |cap| favour.min(cap)) << 8
+    }
+
+    /// The transport's measured round trip to this client, with snapshots
+    /// `snap_every` ticks apart: bounds the favour its acks and playout
+    /// may ask for to that trip, [`FAVOUR_SLACK_MS`], and two snapshots'
+    /// interpolation.
+    pub fn set_link(&mut self, rtt_ms: f32, snap_every: u32) {
+        let rtt = rtt_ms.clamp(0.0, MAX_FAVOUR_MS as f32) as u32;
+        self.favour_cap = Some(ticks(rtt + FAVOUR_SLACK_MS) + 2 * snap_every.max(1));
     }
 }
 
@@ -798,7 +822,12 @@ impl Room {
     pub fn leave(&mut self, s: u8) -> Outbox {
         if let Seat::Person(c, name) = &self.seats[s as usize] {
             self.dropped_gone += c.queue.dropped as u64;
-            // Their aim's numbers stay for the review, under their name.
+            // Their aim's numbers stay for the review, under their name;
+            // a long casual room keeps the newest [`MAX_DEPARTED`], so a
+            // join-and-leave loop can't grow it.
+            if self.departed.len() >= MAX_DEPARTED {
+                self.departed.remove(0);
+            }
             self.departed.push((s, *name, self.watch.stats[s as usize].clone()));
         }
         if self.ranked {
@@ -853,6 +882,14 @@ impl Room {
                 Seat::Person(c, _) => !c.loaded && tick.wrapping_sub(c.joined) < ticks(LOAD_WAIT_MS),
                 _ => false,
             })
+    }
+
+    /// The transport's round trip to seat `s` ([`ClientNet::set_link`]).
+    pub fn set_link(&mut self, s: u8, rtt_ms: f32) {
+        let every = self.snap_every;
+        if let Some(c) = self.client(s) {
+            c.set_link(rtt_ms, every);
+        }
     }
 
     /// An input datagram from seat `s`.
@@ -1640,6 +1677,17 @@ fn coarse(p: V3) -> V3 {
     V3::new((p.x / g).round() * g, (p.y / g).round() * g, (p.z / g).round() * g)
 }
 
+/// A hit on a fighter this client may not know of: that something was
+/// hit, and no more. Who ([`proto::NOBODY`]), where they stood, what it
+/// struck (shield, body, head) and how hard would each place or track an
+/// enemy behind a wall by the splash of a grenade or a rocket.
+fn hide_victim(e: &mut EventState) {
+    e.b = proto::NOBODY;
+    e.part = 0;
+    e.c = 0;
+    e.pos = V3::ZERO;
+}
+
 /// An event filtered when it happened, again for a snapshot later: `false`
 /// if it may no longer be told at all. Only ever tells less.
 fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
@@ -1653,7 +1701,13 @@ fn refog(e: &mut EventState, known: &impl Fn(usize) -> bool) -> bool {
             e.end = at;
             true
         }
-        k if k == Ev::Hit as u8 || k == Ev::Kill as u8 => {
+        k if k == Ev::Hit as u8 => {
+            if !known(e.b as usize) {
+                hide_victim(e);
+            }
+            true
+        }
+        k if k == Ev::Kill as u8 => {
             if !known(e.b as usize) {
                 e.pos = V3::ZERO;
             }
@@ -1706,8 +1760,11 @@ fn filter_event(w: &World, s: usize, eye: V3, e: &Event, known: &impl Fn(usize) 
             if a != s && e.b as usize != s {
                 return None;
             }
-            let pos = if known(e.b as usize) { e.pos } else { V3::ZERO };
-            Some(EventState { pos, ..full })
+            let mut hit = full;
+            if !known(e.b as usize) {
+                hide_victim(&mut hit);
+            }
+            Some(hit)
         }
         Ev::Shot if known(a) => Some(EventState { part: 0, ..full }),
         Ev::Shot => heard(HEAR_SHOT_M),
