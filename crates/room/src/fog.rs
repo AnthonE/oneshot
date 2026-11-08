@@ -391,17 +391,19 @@ impl Fog {
                 }
             }
         }
-        self.update_drops(w, eye, me, tick, turn, hold);
+        self.update_drops(w, eye, me, tick, turn, hold, snap_every);
     }
 
     /// Guns on the floor, from the eye, within [`SEE_DROP_M`]. One lying
     /// still is looked at every other snapshot (every fourth past
     /// [`FAR_M`]) and held like a fighter: a line to where it lies, once
-    /// clear, tells nothing new for a hold. One flying (out of a falling
-    /// hand, or thrown by a blast) is looked at every snapshot and shown
-    /// only while the line is clear. A new gun in a slot starts with no
-    /// hold: never where a hidden enemy fell.
-    fn update_drops(&mut self, w: &World, eye: V3, me: &Fighter, tick: u32, turn: usize, hold: u32) {
+    /// clear, tells nothing new for a hold, so one held is looked at again
+    /// only as its hold runs down to the next look. One flying (out of a
+    /// falling hand, or thrown by a blast) is looked at every snapshot and
+    /// shown only while the line is clear. A new gun in a slot starts with
+    /// no hold: never where a hidden enemy fell.
+    #[allow(clippy::too_many_arguments)]
+    fn update_drops(&mut self, w: &World, eye: V3, me: &Fighter, tick: u32, turn: usize, hold: u32, snap_every: u32) {
         let look_y = V3::new(0.0, DROP_LOOK_Y, 0.0);
         for i in 0..MAX_DROPS {
             let d = &w.drops[i];
@@ -425,7 +427,9 @@ impl Fog {
             }
             let far = (d.pos - me.body.pos).flat().len() > FAR_M;
             let k = if far { FAR_EVERY } else { 2 };
-            if (turn + i).is_multiple_of(k) && w.map.clear(eye, d.pos + look_y) {
+            // Held past the next look: nothing to ask yet.
+            let held = self.duntil[i] != 0 && self.duntil[i] >= tick + k as u32 * snap_every;
+            if !held && (turn + i).is_multiple_of(k) && w.map.clear(eye, d.pos + look_y) {
                 self.duntil[i] = tick + hold;
             }
         }
