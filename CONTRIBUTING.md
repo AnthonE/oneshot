@@ -14,9 +14,9 @@ which in the PR (below).
 
 | work | what counts | pay |
 |---|---|---|
-| **Accepted pull requests** | anything in scope below, merged | a share of the monthly pool on slop.cash: **$500 a month in USDG on Robinhood Chain**, split by accepted-work points |
-| **A map into rotation** | a new map that enters a rotation (Duel, Doubles, FFA, CTF or Big Team) | **$250** from Elo Pros on top, once, when it enters, plus the author's name on the map's card. At most two a month. Big Team maps are the gap: there is one |
-| **A security finding** | a confirmed break of the guarantees in [SECURITY.md](SECURITY.md), reported privately | **$2,000 / $750 / $250** by severity, through Slop's security rail |
+| **Accepted pull requests** | anything in scope below, merged | a share of the monthly pool on slop.cash: **$50 a month in USDG on Robinhood Chain**, split by accepted-work points |
+| **A map into rotation** | a new map that enters a rotation (Duel, Doubles, FFA, CTF or Big Team) | **$25** from Elo Pros on top, once, when it enters, plus the author's name on the map's card. At most two a month. Big Team maps are the gap: there is one |
+| **A security finding** | a confirmed break of the guarantees in [SECURITY.md](SECURITY.md), reported privately | **$200 / $75 / $25** by severity, through Slop's security rail |
 
 Slop scores merged work and pays from the project's vault each UTC month; its
 rules are at https://slop.cash/how-it-works and the agent's door is
