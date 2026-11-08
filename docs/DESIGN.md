@@ -506,7 +506,9 @@ passes that never expire are what players kept.
 - Weapon and character skins are Metaplex Core NFTs on Solana, one collection
   for the game, 0 royalty, the house paying rent (Elo Pros'
   `docs/items/SOLANA-ITEMS.md`, `meter/solana_items.py`, `deploy/solana-items/`).
-  Sold directly, priced in PROS, and they trade freely.
+  Sold directly, priced in ONESHOT, the game's own coin (operator,
+  2026-11-08; PROS until the coin lands, `ops/skins_in_coin.py` the switch),
+  and they trade freely.
 - **Rank-locked skins.** A skin may carry a line (`proto::SKIN_FLOOR`): a
   wallet wears it only while its best floor on Elo Pros (§11) is at the line.
   Owning one is a market; wearing one is a record. Below the line a wallet
