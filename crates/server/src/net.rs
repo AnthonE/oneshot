@@ -644,8 +644,10 @@ async fn session(
 
     // A skin is worn only if the pass's wallet owns it and, for a rank-locked
     // one, its floor is at the line (docs/DESIGN.md §15); a guest, or a list
-    // or rating that can't be read, wears the standard look.
+    // or rating that can't be read, wears the standard look. A local server
+    // started `--dress-all` dresses anyone.
     let skin = match who.as_ref().and_then(|p| p.wallet.as_deref()) {
+        _ if ctx.dress_all => proto::SKINS.get(skin as usize).map_or(proto::SKIN_STANDARD, |_| skin),
         Some(w) if skin != proto::SKIN_STANDARD => {
             let want = proto::SKINS.get(skin as usize).copied().unwrap_or("");
             let line = proto::SKIN_FLOOR.get(skin as usize).copied().unwrap_or(u16::MAX);
@@ -680,7 +682,7 @@ async fn session(
             proto::gear_valid(&proto::FOOTWEAR, footwear),
         ),
     ];
-    if gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
+    if !ctx.dress_all && gear.iter().any(|&(_, g)| g != proto::GEAR_NONE) {
         let owned = match wallet {
             Some(w) => ctx.elo.skins(w).await,
             None => Vec::new(),
