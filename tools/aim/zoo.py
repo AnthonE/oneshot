@@ -81,7 +81,7 @@ def load(path):
 
 
 @torch.no_grad()
-def score(model, w, meta, col, mu, sd, guns, maps, chunk=4096):
+def score(model, w, meta, col, mu, sd, guns, maps, chunk=512):
     """The detector's score for every window, a chunk at a time."""
     model.eval()
     out = []

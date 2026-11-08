@@ -148,11 +148,12 @@ def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0
     ytr = y.copy()
     if shuffle:
         ytr = np.random.default_rng(seed).permutation(ytr)
-    # Straight to the GPU: no second copy of the set in memory on the way.
-    X = torch.from_numpy(np.ascontiguousarray(x)).to(DEV)
-    G = torch.from_numpy(np.ascontiguousarray(gun)).to(DEV)
-    M = torch.from_numpy(np.ascontiguousarray(mp)).to(DEV)
-    Y = torch.tensor(ytr, dtype=torch.float32, device=DEV)
+    # The set stays in memory (no copy) and goes to the GPU a batch at a
+    # time: the card is shared with the game's own renders.
+    X = torch.from_numpy(np.ascontiguousarray(x))
+    G = torch.from_numpy(np.ascontiguousarray(gun))
+    M = torch.from_numpy(np.ascontiguousarray(mp))
+    Y = torch.from_numpy(np.ascontiguousarray(ytr, dtype=np.float32))
     best, best_state = -1.0, None
     steps = args.epochs * math.ceil(len(idx_tr) / args.batch)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=steps)
@@ -160,8 +161,9 @@ def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0
         model.train()
         perm = np.random.default_rng(seed * 1000 + ep).permutation(idx_tr)
         for i in range(0, len(perm), args.batch):
-            b = torch.tensor(perm[i : i + args.batch], device=DEV)
-            loss = F.binary_cross_entropy_with_logits(model(X[b], G[b], M[b]), Y[b])
+            b = torch.from_numpy(perm[i : i + args.batch])
+            xb, gb, mb, yb = (t[b].to(DEV, non_blocking=True) for t in (X, G, M, Y))
+            loss = F.binary_cross_entropy_with_logits(model(xb, gb, mb), yb)
             opt.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -177,12 +179,12 @@ def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0
 
 
 @torch.no_grad()
-def predict(model, X, G, M, idx, batch=2048):
+def predict(model, X, G, M, idx, batch=512):
     model.eval()
     out = []
     for i in range(0, len(idx), batch):
-        b = torch.tensor(idx[i : i + batch], device=DEV)
-        out.append(model(X[b], G[b], M[b]).float().cpu().numpy())
+        b = torch.from_numpy(np.asarray(idx[i : i + batch]))
+        out.append(model(*(t[b].to(DEV) for t in (X, G, M))).float().cpu().numpy())
     return np.concatenate(out) if out else np.zeros(0)
 
 
@@ -366,6 +368,10 @@ def main():
 
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if DEV.type == "cuda":
+    # A share of the card at most: past it this job fails, not the game's
+    # renders beside it.
+    torch.cuda.set_per_process_memory_fraction(float(os.environ.get("AIM_GPU_SHARE", "0.35")))
 
 if __name__ == "__main__":
     main()
