@@ -319,7 +319,7 @@ ALL = {
     "icon-b-one": icon_one,
 }
 
-def banner_html(hero):
+def banner_html(hero, pos="center 60%/cover"):
     """pump.fun's 1500x500 banner: the reticle wordmark over a match."""
     body, W, H = word_reticle(GOLD)
     word = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
@@ -328,7 +328,7 @@ def banner_html(hero):
     line = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -4 {sw} 44" width="{sw}" height="44">'
             f'<path d="{sub}" fill="{BONE}"/></svg>')
     mark = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="44" height="44">{elo_mark(0, 0, 64)}</svg>'
-    shot = f'<div style="position:absolute;inset:0;background:url(hero.jpg) center 60%/cover"></div>' if hero else ""
+    shot = f'<div style="position:absolute;inset:0;background:url(hero.jpg) {pos} no-repeat #000"></div>' if hero else ""
     return f'''<!doctype html><html><head><meta charset="utf-8"><style>
 @font-face{{font-family:A;src:url(../../../crates/client/assets/fonts/Aileron-Bold.otf)}}
 body{{margin:0;width:1500px;height:500px;overflow:hidden;background:{INK}}}</style></head><body>{shot}
@@ -341,13 +341,15 @@ body{{margin:0;width:1500px;height:500px;overflow:hidden;background:{INK}}}</sty
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--hero", help="a screenshot of a match for the banner's ground")
+    ap.add_argument("--hero-pos", default="center 60%/cover",
+                    help="CSS background position/size for it, e.g. 'right 50%/auto 125%' for the trailer's scope plate")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     for name, f in ALL.items():
         (OUT / f"{name}.svg").write_text(f())
     if a.hero:
         shutil.copy(a.hero, OUT / "hero.jpg")
-    (OUT / "banner.html").write_text(banner_html(a.hero))
+    (OUT / "banner.html").write_text(banner_html(a.hero, a.hero_pos))
     subprocess.run(["node", str(HERE / "render.mjs"), str(OUT)], check=True)
     (OUT / "banner.html").unlink()
     (OUT / "hero.jpg").unlink(missing_ok=True)
