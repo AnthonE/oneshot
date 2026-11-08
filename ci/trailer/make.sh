@@ -202,6 +202,10 @@ ffmpeg -v error -y -i "$B/silent.mkv" -i "$B/mix.wav" -map 0:v -map 1:a -af "$AF
   "$HERE/out/oneshot-trailer.mp4"
 ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 23 -maxrate 3M -bufsize 6M \
   -pix_fmt yuv420p -c:a copy -movflags +faststart "$HERE/out/oneshot-trailer-720p.mp4"
+# the store's copy (scry-forge's watchtower/art/store/oneshot-trailer.mp4): 720p under 2 Mbps, so the page's
+# player, which downloads nothing until play, has a film the size of the other titles'
+ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 25 -maxrate 1.6M -bufsize 3.2M \
+  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart "$HERE/out/oneshot-trailer-web.mp4"
 node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
 ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
 ls -la "$HERE"/out/
