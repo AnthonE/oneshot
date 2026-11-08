@@ -2,6 +2,11 @@
 //! seats and for the determinism gate. Deterministic: its choices come from
 //! the world and its own PCG stream. Fireplace's `client/arena-bot.mjs` is
 //! the fuller one to port next (docs/RIP.md §2).
+//!
+//! It looks around (the rays: who it can see, a gun to take, the way) only
+//! every [`DECIDE_EVERY`] ticks, the bots staggered so they never all look
+//! on one tick; between looks it aims, fires and walks on what it decided,
+//! and minds the edge every tick.
 
 use crate::arms::{arm, NONE};
 use crate::consts::*;
@@ -11,6 +16,28 @@ use crate::geom::{rad_to_yaw, V3};
 use crate::input::*;
 use crate::rng::Pcg32;
 use crate::world::{Phase, Rules, World, FLAG_HELD, FLAG_HOME};
+
+/// What a bot decided to walk to at its last look, where `steer` is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Steer {
+    /// Nothing decided yet (just spawned, or just out of a fight): decide
+    /// now.
+    None,
+    /// A gun it wants: taken in reach.
+    Loot,
+    /// Its flag business (Capture the Flag, Siege).
+    Objective,
+    /// A free vehicle: boarded in reach.
+    Vehicle,
+    /// Its roam point, or the next waypoint toward it.
+    Roam,
+    /// A carrier's way home.
+    Carry,
+    /// In a fight: an attacker's way to its objective, fought on the move.
+    Push,
+    /// In a fight: standing its ground.
+    Stand,
+}
 
 #[derive(Clone, Copy)]
 pub struct Bot {
@@ -22,6 +49,8 @@ pub struct Bot {
     /// Ticks since it first saw its current target.
     seen: u16,
     target: u8,
+    /// Siege, with no fighter in sight: the enemy minion it saw (255: none).
+    minion: u8,
     /// A wobble that drifts, in turns.
     wob: (f32, f32),
     /// The target's velocity as its aim has caught up with it: a turn of
@@ -31,6 +60,11 @@ pub struct Bot {
     /// left before it gives up on it (stuck on a wall).
     goal: u8,
     goal_for: u16,
+    /// Where it decided to walk at its last look, and what that is.
+    steer: V3,
+    kind: Steer,
+    /// The waypoint it was nearest at its last look (`u16::MAX`: none).
+    way: u16,
     /// Ticks in the vehicle it rides, and ticks before it may get into one
     /// again after getting out.
     ride_for: u16,
@@ -47,6 +81,9 @@ pub struct Bot {
     round: u16,
 }
 
+/// Every how many ticks a bot looks around afresh. 31 ms: it still reacts
+/// like a person.
+const DECIDE_EVERY: usize = 4;
 /// How long a bot walks at one roam point before it picks another.
 const GOAL_MS: u32 = 8000;
 /// Close enough to a roam point to pick the next.
@@ -99,10 +136,14 @@ impl Bot {
             strafe_for: 0,
             seen: 0,
             target: 255,
+            minion: 255,
             wob: (0.0, 0.0),
             caught: V3::ZERO,
             goal: 0,
             goal_for: 0,
+            steer: V3::ZERO,
+            kind: Steer::None,
+            way: u16::MAX,
             ride_for: 0,
             ride_cool: 0,
             stuck: 0,
@@ -115,8 +156,8 @@ impl Bot {
 
     /// The map's roam point to head for with nobody in sight (picking the
     /// next when it's reached or taking too long), or with none, toward the
-    /// middle, then the first pad.
-    fn roam_goal(&mut self, w: &World, at: V3) -> V3 {
+    /// middle, then the first pad. `elapsed`: ticks since it last asked.
+    fn roam_goal(&mut self, w: &World, at: V3, elapsed: u16) -> V3 {
         let roam = &w.map.roam;
         if !roam.is_empty() {
             let here = roam[self.goal as usize % roam.len()];
@@ -124,7 +165,7 @@ impl Bot {
                 self.goal = self.rng.next_bounded(roam.len() as u32) as u8;
                 self.goal_for = ticks(GOAL_MS) as u16;
             }
-            self.goal_for -= 1;
+            self.goal_for = self.goal_for.saturating_sub(elapsed);
             roam[self.goal as usize % roam.len()]
         } else if at.flat().len() > 6.0 {
             V3::ZERO
@@ -306,7 +347,7 @@ impl Bot {
         let goal = if best != 255 {
             w.fighters[best as usize].body.pos
         } else {
-            self.roam_goal(w, v.pos)
+            self.roam_goal(w, v.pos, 1)
         };
         let to = goal - v.pos;
         let want = fmath::atan2(to.z, to.x) * (1.0 / core::f32::consts::TAU);
@@ -343,24 +384,12 @@ impl Bot {
         inp
     }
 
-    fn decide(&mut self, w: &World, slot: usize) -> Input {
+    /// Looks for the nearest enemy it can see (one well camouflaged only
+    /// near; an attacker with a flag to go for lets the far ones be), and
+    /// in Siege with none, the nearest enemy minion in sight. The target,
+    /// and how long it has had it.
+    fn look(&mut self, w: &World, slot: usize, eye: V3) {
         let me = &w.fighters[slot];
-        let mut inp = Input {
-            yaw: me.yaw,
-            pitch: me.pitch,
-            ..Input::default()
-        };
-        if !me.active() || w.phase != Phase::Playing {
-            self.ride_for = 0;
-            // Back from the dead, whoever it sees it sees anew.
-            self.target = 255;
-            self.seen = 0;
-            return inp;
-        }
-        self.ride_cool = self.ride_cool.saturating_sub(1);
-        let eye = me.eye();
-        // The nearest enemy it can see (one well camouflaged only near):
-        // one it notices ([`BOT_VIEW_COS`]), or the one it already fights.
         let objective = attacker(slot) && Self::objective(w, slot).is_some();
         let (sn, cs) = crate::geom::yaw_sincos(me.yaw);
         let hurt = me.since_hit < ticks(BOT_HURT_MS);
@@ -372,7 +401,6 @@ impl Bot {
             }
             let chest = v.body.pos + V3::new(0.0, 1.2, 0.0);
             let d = (chest - eye).len();
-            // An attacker with a flag to go for lets the far ones be.
             if objective && d > OBJECTIVE_IGNORE_M {
                 continue;
             }
@@ -385,15 +413,17 @@ impl Bot {
                 best = q as u8;
             }
         }
-        // Siege: with no fighter in sight, the nearest enemy minion in sight.
-        let mut minion_at = None;
+        self.minion = 255;
         if best == 255 && w.rules.siege {
-            for m in w.minions.iter().filter(|m| m.alive && m.team != me.team & 1) {
+            for (i, m) in w.minions.iter().enumerate() {
+                if !m.alive || m.team == me.team & 1 {
+                    continue;
+                }
                 let chest = m.body.pos + V3::new(0.0, 0.9, 0.0);
                 let d = (chest - eye).len();
                 if d < near && d < MINION_RANGE * 1.5 && w.map.clear(eye, chest) {
                     near = d;
-                    minion_at = Some(chest);
+                    self.minion = i as u8;
                 }
             }
         }
@@ -405,6 +435,116 @@ impl Bot {
         } else {
             self.seen = self.seen.saturating_add(1);
         }
+    }
+
+    /// Between looks: the target it had, while it stands (and is still an
+    /// enemy); the minion it had, while it lives.
+    fn keep(&mut self, w: &World, slot: usize) {
+        let me = &w.fighters[slot];
+        if self.target != 255 {
+            let v = &w.fighters[self.target as usize];
+            if !v.active() || (w.rules.teams && v.team == me.team) {
+                self.target = 255;
+                self.seen = 0;
+            } else {
+                self.seen = self.seen.saturating_add(1);
+            }
+        }
+        if self.minion != 255 {
+            let m = &w.minions[self.minion as usize];
+            if !m.alive || m.team == me.team & 1 {
+                self.minion = 255;
+            }
+        }
+    }
+
+    /// Decides where to walk with nobody in sight: a gun it wants (not on
+    /// a detour), else its flag business, else a free vehicle near if it
+    /// may, else the roam goal, by the waypoints on a map that has them.
+    fn plan(&mut self, w: &World, slot: usize, detour: f32) {
+        let me = &w.fighters[slot];
+        if detour == 0.0 {
+            if let Some(at) = Self::loot(w, slot) {
+                self.kind = Steer::Loot;
+                self.steer = at;
+                return;
+            }
+        }
+        if let Some(at) = Self::objective(w, slot) {
+            self.kind = Steer::Objective;
+            self.steer = Self::toward_by(w, me.body.pos, at, self.round > 0);
+            return;
+        }
+        let free = (self.ride_cool == 0 && me.riding().is_none())
+            .then(|| {
+                w.vehicles
+                    .iter()
+                    .filter(|v| v.active && v.seats[crate::vehicle::DRIVER] == 0)
+                    .map(|v| (v.pos, (v.pos - me.body.pos).flat().len()))
+                    .filter(|&(_, d)| d < VEHICLE_WALK)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+            })
+            .flatten();
+        match free {
+            Some((at, _)) => {
+                self.kind = Steer::Vehicle;
+                self.steer = at;
+            }
+            None => {
+                let g = self.roam_goal(w, me.body.pos, DECIDE_EVERY as u16);
+                // On a map with waypoints, the way there rather than
+                // straight at it.
+                self.steer = match &w.map.nav {
+                    Some(nav) if !w.map.roam.is_empty() => nav
+                        .toward(
+                            &w.map,
+                            self.goal as usize % w.map.roam.len(),
+                            me.body.pos,
+                            &mut self.way,
+                        )
+                        .unwrap_or(g),
+                    _ => g,
+                };
+                self.kind = Steer::Roam;
+            }
+        }
+    }
+
+    fn decide(&mut self, w: &World, slot: usize) -> Input {
+        let me = &w.fighters[slot];
+        let mut inp = Input {
+            yaw: me.yaw,
+            pitch: me.pitch,
+            ..Input::default()
+        };
+        if !me.active() || w.phase != Phase::Playing {
+            self.ride_for = 0;
+            // Back from the dead, whoever it sees it sees anew, and it
+            // decides anew where to go.
+            self.target = 255;
+            self.minion = 255;
+            self.seen = 0;
+            self.kind = Steer::None;
+            return inp;
+        }
+        self.ride_cool = self.ride_cool.saturating_sub(1);
+        let eye = me.eye();
+        // Its tick to look around, the bots staggered.
+        let look = (w.tick as usize + slot).is_multiple_of(DECIDE_EVERY);
+        if look {
+            self.look(w, slot, eye);
+        } else {
+            self.keep(w, slot);
+        }
+        let best = self.target;
+        let minion_at = (self.minion != 255).then(|| w.minions[self.minion as usize].body.pos + V3::new(0.0, 0.9, 0.0));
+        let near = if best != 255 {
+            (w.fighters[best as usize].body.pos + V3::new(0.0, 1.2, 0.0) - eye).len()
+        } else if let Some(chest) = minion_at {
+            (chest - eye).len()
+        } else {
+            f32::INFINITY
+        };
 
         match me.riding() {
             Some((vi, crate::vehicle::DRIVER)) => return self.drive(w, slot, vi, best, near, inp),
@@ -433,7 +573,11 @@ impl Bot {
         // its way.
         if me.flag && me.riding().is_none() {
             if let Some(home) = Self::objective(w, slot) {
-                let to = Self::toward(w, me.body.pos, home) - me.body.pos;
+                if look || self.kind != Steer::Carry {
+                    self.kind = Steer::Carry;
+                    self.steer = Self::toward(w, me.body.pos, home);
+                }
+                let to = self.steer - me.body.pos;
                 inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
                 inp.pitch = 0;
                 inp.mz = 127;
@@ -495,67 +639,49 @@ impl Bot {
             } else {
                 0.0
             };
-            // Nobody in sight: to a gun it wants, taken in reach.
-            if let Some(at) = Self::loot(w, slot).filter(|_| detour == 0.0) {
-                let to = at - me.body.pos;
-                inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
-                inp.pitch = 0;
-                inp.mz = 127;
-                if to.flat().len() < PAD_REACH * 0.7 {
-                    Self::tap_use(&mut inp, me.last_buttons);
-                }
-                return inp;
+            // Where to, decided at a look, or now if it has nothing in
+            // hand (out of a fight).
+            if look || !matches!(self.kind, Steer::Loot | Steer::Objective | Steer::Vehicle | Steer::Roam) {
+                self.plan(w, slot, detour);
             }
-            // Capture the Flag: to its flag business.
-            if let Some(at) = Self::objective(w, slot) {
-                let to = Self::toward_by(w, me.body.pos, at, self.round > 0) - me.body.pos;
-                inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
-                inp.pitch = 0;
-                inp.mz = 127;
-                return inp;
-            }
-            // Else to a free vehicle near if it may, else the roam goal.
-            let free = (self.ride_cool == 0 && me.riding().is_none())
-                .then(|| {
-                    w.vehicles
-                        .iter()
-                        .filter(|v| v.active && v.seats[crate::vehicle::DRIVER] == 0)
-                        .map(|v| (v.pos, (v.pos - me.body.pos).flat().len()))
-                        .filter(|&(_, d)| d < VEHICLE_WALK)
-                        .min_by(|a, b| a.1.total_cmp(&b.1))
-                })
-                .flatten();
-            let goal = match free {
-                Some((at, _)) => at,
-                None => {
-                    let g = self.roam_goal(w, me.body.pos);
-                    // On a map with waypoints, the way there rather than
-                    // straight at it.
-                    match &w.map.nav {
-                        Some(nav) if !w.map.roam.is_empty() => nav
-                            .toward(&w.map, self.goal as usize % w.map.roam.len(), me.body.pos)
-                            .unwrap_or(g),
-                        _ => g,
-                    }
-                }
-            };
-            let to = goal - me.body.pos;
-            inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
-            inp.pitch = 0;
-            inp.mz = 127;
-            inp.mx = self.strafe * 40;
-            match free {
-                // Close to it, straight at it (no strafe to slide along a
-                // solid hull), and in once within reach: a bumper's is
-                // farther from the middle than a door's.
-                Some((_, d)) if d < ENTER_R + 1.5 => {
-                    inp.mx = 0;
-                    if d < ENTER_R - 0.3 {
+            let to = self.steer - me.body.pos;
+            match self.kind {
+                // Nobody in sight: to a gun it wants, taken in reach.
+                Steer::Loot => {
+                    inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x));
+                    inp.pitch = 0;
+                    inp.mz = 127;
+                    if to.flat().len() < PAD_REACH * 0.7 {
                         Self::tap_use(&mut inp, me.last_buttons);
                     }
                 }
-                Some(_) => {}
-                None => inp.buttons |= USE,
+                // Capture the Flag: to its flag business.
+                Steer::Objective => {
+                    inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
+                    inp.pitch = 0;
+                    inp.mz = 127;
+                }
+                // Else to a free vehicle near if it may, else the roam goal.
+                _ => {
+                    inp.yaw = rad_to_yaw(fmath::atan2(to.z, to.x) + detour);
+                    inp.pitch = 0;
+                    inp.mz = 127;
+                    inp.mx = self.strafe * 40;
+                    if self.kind == Steer::Vehicle {
+                        // Close to it, straight at it (no strafe to slide
+                        // along a solid hull), and in once within reach: a
+                        // bumper's is farther from the middle than a door's.
+                        let d = to.flat().len();
+                        if d < ENTER_R + 1.5 {
+                            inp.mx = 0;
+                            if d < ENTER_R - 0.3 {
+                                Self::tap_use(&mut inp, me.last_buttons);
+                            }
+                        }
+                    } else {
+                        inp.buttons |= USE;
+                    }
+                }
             }
             return inp;
         }
@@ -589,12 +715,23 @@ impl Bot {
         inp.pitch = fmath::round((cur_pitch + tp) * 65536.0).clamp(-PITCH_MAX as f32, PITCH_MAX as f32) as i16;
 
         // Keep a fighting distance and strafe; with a sword, close in. An
-        // attacker in Capture the Flag fights on the move to the flag. A
-        // gunner fights with its turret's gun.
+        // attacker in Capture the Flag fights on the move to the flag (the
+        // way there decided at a look). A gunner fights with its turret's
+        // gun.
         let a = crate::vehicle::turret(me.gunning(&w.map)).map_or(arm(g.arm), |t| t.0);
-        let push = if attacker(slot) { Self::objective(w, slot) } else { None };
-        match push
-            .map(|at| (Self::toward(w, me.body.pos, at) - me.body.pos).flat())
+        if look || !matches!(self.kind, Steer::Push | Steer::Stand) {
+            let push = if attacker(slot) { Self::objective(w, slot) } else { None };
+            match push {
+                Some(at) => {
+                    self.kind = Steer::Push;
+                    self.steer = Self::toward(w, me.body.pos, at);
+                }
+                None => self.kind = Steer::Stand,
+            }
+        }
+        match (self.kind == Steer::Push)
+            .then_some(self.steer)
+            .map(|at| (at - me.body.pos).flat())
             .filter(|to| to.len() > 0.5)
         {
             Some(to) => {

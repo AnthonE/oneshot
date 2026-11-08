@@ -59,7 +59,7 @@ fn the_worst_case_snapshot_fits_a_datagram() {
         })
         .collect();
     let mut queue = room::EventQueue::default();
-    let snap = room::build(&w, 0, (1, 0), &events, &mut queue, |_| true, |_| true);
+    let snap = room::build(&w, 0, (1, 0), &events, &mut queue, |_| true, |_| true, |_| true);
     assert_eq!(snap.n_remote as usize, MAX_REMOTES);
     assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
     assert_eq!(snap.n_drops as usize, proto::MAX_SNAP_DROPS);
@@ -71,10 +71,10 @@ fn the_worst_case_snapshot_fits_a_datagram() {
     // What didn't fit waits, in order, and goes once the client acks.
     assert_eq!(queue.len(), 200);
     let first = snap.events()[0].id;
-    let next = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    let next = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true, |_| true);
     assert_eq!(next.events()[0].id, first, "unacked: sent again");
     queue.ack(w.tick);
-    let after = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    let after = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true, |_| true);
     assert_eq!(
         after.events()[0].id,
         first + snap.n_events as u16,
@@ -113,7 +113,7 @@ fn a_full_sky_sends_the_rounds_that_matter_to_you() {
     w.proj[0].owner = 0;
     w.proj[0].pos.x = 39.0;
     let mut queue = room::EventQueue::default();
-    let snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    let snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true, |_| true);
     assert_eq!(snap.n_proj as usize, MAX_SNAP_PROJ);
     let sent = &snap.proj[..MAX_SNAP_PROJ];
     assert!(sent.iter().any(|p| p.owner == 0), "our own round goes");
@@ -134,7 +134,7 @@ fn a_full_bubble_fits_with_room_for_events() {
         w.seat(s, (s & 1) as u8);
     }
     let mut queue = room::EventQueue::default();
-    let mut snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true);
+    let mut snap = room::build(&w, 0, (1, 0), &[], &mut queue, |_| true, |_| true, |_| true);
     snap.n_remote = MAX_REMOTES as u8;
     for (k, r) in snap.remotes.iter_mut().enumerate() {
         r.slot = 1 + k as u8;

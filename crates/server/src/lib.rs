@@ -2208,15 +2208,18 @@ fn spectate(sessions: &BTreeMap<u64, Sess>, r: &mut Live) {
     let tick = r.room.world.tick;
     let Some(line) = r.room.spectate.as_mut() else { return };
     let (frames, msgs) = line.due(tick);
+    // Each message framed once, shared by the watchers it goes to.
     let mut f = [0u8; proto::MAX_STREAM_MSG + 2];
+    let framed: Vec<(Option<u8>, std::sync::Arc<[u8]>)> = msgs
+        .iter()
+        .filter_map(|(to, m)| frame_msg(m, &mut f).ok().map(|n| (*to, f[..n].into())))
+        .collect();
     for id in &r.watchers {
         let Some(s) = sessions.get(id) else { continue };
         let Some((_, follow)) = s.watching else { continue };
-        for (to, m) in &msgs {
+        for (to, bytes) in &framed {
             if to.is_none_or(|t| t == follow) {
-                if let Ok(n) = frame_msg(m, &mut f) {
-                    s.tx.stream(f[..n].to_vec());
-                }
+                s.tx.stream(bytes.clone());
             }
         }
         for fr in &frames {

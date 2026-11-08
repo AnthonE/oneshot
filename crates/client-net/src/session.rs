@@ -280,18 +280,11 @@ impl Session {
             let had = self.core.stats.snapshots;
             self.core.on_snapshot(at_ms, &s);
             // Only what was drawn goes on the clip: an old one (late, or a
-            // last heat's) is nothing a replay would show either. Whole,
-            // so a tape reads on its own.
+            // last heat's) is nothing a replay would show either. As it
+            // came; the clip encodes it whole only where a tape needs it.
             if self.core.stats.snapshots != had {
                 if let Some(c) = self.clip.as_mut() {
-                    if kind == Some(proto::DG_SNAPSHOT) {
-                        c.on_snapshot(at_ms, s.tick, d);
-                    } else {
-                        let mut full = [0u8; MAX_DATAGRAM];
-                        if let Ok(n) = proto::encode_snapshot(&s, &mut full) {
-                            c.on_snapshot(at_ms, s.tick, &full[..n]);
-                        }
-                    }
+                    c.on_snapshot(at_ms, &s, d);
                 }
             }
         }

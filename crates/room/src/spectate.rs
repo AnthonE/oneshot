@@ -99,6 +99,7 @@ impl Line {
                 q,
                 |x| f.shows(x, tick),
                 |i| f.shows_vehicle(i, tick),
+                |i| f.shows_drop(i, tick),
             );
             // A watcher never acks: what went in this frame is delivered.
             q.list.clear();

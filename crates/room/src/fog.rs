@@ -11,7 +11,9 @@
 //! person and every enemy. At 2v2 that is a few thousand box tests a
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
-use sim::consts::{CAMO_BOT_HIDDEN, CAMO_BOT_M, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
+use sim::consts::{
+    CAMO_BOT_HIDDEN, CAMO_BOT_M, HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_DROPS, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ,
+};
 use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
@@ -273,16 +275,26 @@ pub fn plainly_sees_vehicle(map: &Map, eye: V3, v: &Vehicle) -> bool {
     vehicle_points(v, 0.0)[..2].iter().any(|&p| map.clear(eye, p))
 }
 
-/// One viewer's fog: until when each other seat, and each vehicle, stays
-/// sent.
+/// One viewer's fog: until when each other seat, each vehicle and each
+/// gun on the floor stays sent.
 #[derive(Clone, Debug, Default)]
 pub struct Fog {
     until: [u32; MAX_FIGHTERS],
     vuntil: [u32; MAX_VEHICLES],
+    duntil: [u32; MAX_DROPS],
     /// Each fighter alive at the last look: one back from the dead is
     /// somewhere new, and the hold on where it was is no hold on that.
     alive: [bool; MAX_FIGHTERS],
+    /// Each drop's ticks left at the last look: one with more is a new
+    /// gun in the slot (where someone just fell), with no hold.
+    dttl: [u32; MAX_DROPS],
 }
+
+/// How far a gun on the floor is named to a client that sees it.
+pub const SEE_DROP_M: f32 = 50.0;
+/// A drop is seen if a line from the eye clears the map to this far over
+/// where it lies.
+pub const DROP_LOOK_Y: f32 = 0.3;
 
 /// Past this, a pair's full look comes every [`FAR_EVERY`] snapshots, not
 /// every other: far away, a fighter crosses less of the screen in a
@@ -393,6 +405,53 @@ impl Fog {
                 }
             }
         }
+        self.update_drops(w, eye, me, tick, turn, hold, snap_every);
+    }
+
+    /// Guns on the floor, from the eye, within [`SEE_DROP_M`]. One lying
+    /// still is looked at every other snapshot (every fourth past
+    /// [`FAR_M`]) and held like a fighter: a line to where it lies, once
+    /// clear, tells nothing new for a hold, so one held is looked at again
+    /// only as its hold runs down to the next look. One flying (out of a
+    /// falling hand, or thrown by a blast) is looked at every snapshot and
+    /// shown only while the line is clear. A new gun in a slot starts with
+    /// no hold: never where a hidden enemy fell.
+    #[allow(clippy::too_many_arguments)]
+    fn update_drops(&mut self, w: &World, eye: V3, me: &Fighter, tick: u32, turn: usize, hold: u32, snap_every: u32) {
+        let look_y = V3::new(0.0, DROP_LOOK_Y, 0.0);
+        for i in 0..MAX_DROPS {
+            let d = &w.drops[i];
+            if !d.active {
+                self.duntil[i] = 0;
+                self.dttl[i] = 0;
+                continue;
+            }
+            if d.ttl > self.dttl[i] {
+                self.duntil[i] = 0;
+            }
+            self.dttl[i] = d.ttl;
+            let to = d.pos - eye;
+            if to.len() > SEE_DROP_M {
+                self.duntil[i] = 0;
+                continue;
+            }
+            if d.vel != V3::ZERO {
+                self.duntil[i] = if w.map.clear(eye, d.pos + look_y) { tick } else { 0 };
+                continue;
+            }
+            let far = (d.pos - me.body.pos).flat().len() > FAR_M;
+            let k = if far { FAR_EVERY } else { 2 };
+            // Held past the next look: nothing to ask yet.
+            let held = self.duntil[i] != 0 && self.duntil[i] >= tick + k as u32 * snap_every;
+            if !held && (turn + i).is_multiple_of(k) && w.map.clear(eye, d.pos + look_y) {
+                self.duntil[i] = tick + hold;
+            }
+        }
+    }
+
+    /// Whether drop `i` may be sent at `tick`.
+    pub fn shows_drop(&self, i: usize, tick: u32) -> bool {
+        self.duntil[i] != 0 && self.duntil[i] >= tick
     }
 
     /// Whether vehicle `i` may be sent at `tick`.

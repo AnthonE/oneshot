@@ -3,11 +3,12 @@
 //! `film.rs`). After Gates' `client/src/film.rs` (MIT).
 //!
 //! An entry is a stream message or a snapshot datagram, as bytes off the
-//! wire, with the session clock it was taken in at (ms). A [`Replay`] hands
-//! them back to an ordinary [`Session`] at the same clock, through the same
-//! `on_msg` and `on_datagram` the transports call, so everything downstream
-//! (the netcode's clock, its interpolation, the kill cam) runs exactly as it
-//! did live. Nothing on a tape is more than this client was sent: fog
+//! wire (whole, or a delta against one before it on the tape), with the
+//! session clock it was taken in at (ms). A [`Replay`] hands them back to
+//! an ordinary [`Session`] at the same clock, through the same `on_msg` and
+//! `on_datagram` the transports call, so everything downstream (the deltas
+//! made whole, the netcode's clock, its interpolation, the kill cam) runs
+//! exactly as it did live. Nothing on a tape is more than this client was sent: fog
 //! shaped every snapshot on the server (`room/src/fog.rs`), and a replay
 //! can only draw what it holds.
 //!

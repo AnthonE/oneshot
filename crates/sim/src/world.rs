@@ -1723,9 +1723,18 @@ impl World {
                 *vel = V3::new(vel.x * slide, -vel.y * bounce, vel.z * slide);
             }
         }
-        for b in &self.map.boxes {
+        // Only what is near the way from `pos` to `n`: a bounce moves `n`
+        // back toward `pos` (a box's face, a solid's top or bottom), off a
+        // profile's surface by a centimetre, or out through a solid's
+        // nearest side, at most as far as it went in, so the footprint of
+        // the step, widened by that much and the grid's margin, holds every
+        // box and solid any `n` below can be in.
+        let reach = (n - *pos).flat().len() + 0.01 + crate::grid::MARGIN;
+        let lo = (pos.x.min(n.x) - reach, pos.z.min(n.z) - reach);
+        let hi = (pos.x.max(n.x) + reach, pos.z.max(n.z) + reach);
+        self.map.each_box_in(lo, hi, |b| {
             if !b.contains(n) {
-                continue;
+                return;
             }
             touched = true;
             if pos.x <= b.min.x || pos.x >= b.max.x {
@@ -1746,11 +1755,11 @@ impl World {
                 n.y = b.min.y - 0.01;
                 vel.y = -vel.y * bounce;
             }
-        }
-        for s in &self.map.solids {
+        });
+        self.map.each_solid_in(lo, hi, |s| {
             if s.is_profile() {
                 if !s.contains(n) {
-                    continue;
+                    return;
                 }
                 touched = true;
                 let step = n - *pos;
@@ -1784,11 +1793,11 @@ impl World {
                         vel.y = -vel.y * bounce;
                     }
                 }
-                continue;
+                return;
             }
             let top = s.top_at(n.x, n.z);
             if !(n.y > s.y0 && n.y < top && s.over(n.x, n.z, 0.0)) {
-                continue;
+                return;
             }
             touched = true;
             if pos.y >= s.top_at(pos.x, pos.z) - 0.05 {
@@ -1809,7 +1818,7 @@ impl World {
                     vel.z -= uz * into * (1.0 + bounce);
                 }
             }
-        }
+        });
         *pos = n;
         (touched, ground)
     }
