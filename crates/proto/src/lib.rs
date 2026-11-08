@@ -25,7 +25,7 @@ use sim::movement::Body;
 use sim::vehicle::Vehicle;
 use sim::world::Rules;
 
-pub const PROTO_VER: u16 = 35;
+pub const PROTO_VER: u16 = 36;
 /// What every lobby ticket starts with (the server makes them, `auth.rs`;
 /// the client reads one's own fields back to know whose it is).
 pub const TICKET_PREFIX: &str = "os1.";
@@ -331,13 +331,20 @@ pub struct NearBody {
 }
 
 /// What a client predicts a hull in its bubble on: its footing, the stick
-/// its driver drives it by (None: parked), and its share of this client's
-/// rewind.
+/// its driver drives it by (`sim::vehicle::stick`; None: parked), and its
+/// share of this client's rewind.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NearHull {
     pub grounded: bool,
-    pub stick: Option<(i8, i8)>,
+    pub stick: Option<Input>,
     pub share: u8,
+    /// A one-seater's tank, its rest, its roll's wait and JUMP's edge
+    /// (`Vehicle::boost`, `rest`, `trick_cool`, `jump`): all it steps on
+    /// that [`VehState`] doesn't carry.
+    pub boost: u16,
+    pub rest: u16,
+    pub trick_cool: u16,
+    pub jump: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -689,6 +696,13 @@ pub struct VehState {
     /// In this client's bubble (`room::bubble`): `pos` and `vel` exact,
     /// and what it predicts the hull on.
     pub near: Option<NearHull>,
+    /// What it is (`sim::vehicle::KINDS`), and a one-seater's look: the
+    /// flier's nose and its roll under way (`Vehicle::pitch`, `trick`),
+    /// whether it boosts.
+    pub kind: u8,
+    pub pitch: i16,
+    pub trick: i16,
+    pub boosting: bool,
 }
 
 impl Pack for VehState {
@@ -706,10 +720,28 @@ impl Pack for VehState {
         for &s in &self.seats {
             w.write(s as u32, SLOT_BITS + 1)?;
         }
+        w.write(self.kind as u32, KIND_BITS)?;
+        if self.kind != sim::vehicle::TRUCK {
+            w.write_bit(self.boosting)?;
+        }
+        if self.kind == sim::vehicle::FLIER {
+            w.write(self.pitch as u16 as u32, 16)?;
+            w.write_bit(self.trick != 0)?;
+            if self.trick != 0 {
+                w.write(self.trick as i8 as u8 as u32, 8)?;
+            }
+        }
         if let Some(n) = self.near {
             w.write_bit(n.grounded)?;
             w_drive(w, n.stick)?;
             w_share(w, n.share)?;
+            if self.kind != sim::vehicle::TRUCK {
+                w_tank(w, n.boost, n.rest)?;
+                w.write_bit(n.jump)?;
+            }
+            if self.kind == sim::vehicle::FLIER {
+                w_some_ticks(w, n.trick_cool)?;
+            }
         }
         Ok(())
     }
@@ -725,6 +757,7 @@ impl Pack for VehState {
             health: r.read(8)? as u8,
             seats: [0; 2],
             near: None,
+            ..VehState::default()
         };
         for s in v.seats.iter_mut() {
             *s = r.read(SLOT_BITS + 1)? as u8;
@@ -732,12 +765,34 @@ impl Pack for VehState {
                 return Err(WireError::Malformed);
             }
         }
+        v.kind = r.read(KIND_BITS)? as u8;
+        if v.kind >= sim::vehicle::KINDS {
+            return Err(WireError::Malformed);
+        }
+        if v.kind != sim::vehicle::TRUCK {
+            v.boosting = r.read_bit()?;
+        }
+        if v.kind == sim::vehicle::FLIER {
+            v.pitch = r_pitch(r)?;
+            if r.read_bit()? {
+                v.trick = r.read(8)? as u8 as i8 as i16;
+            }
+        }
         if near {
-            v.near = Some(NearHull {
+            let mut n = NearHull {
                 grounded: r.read_bit()?,
                 stick: r_drive(r)?,
                 share: r_share(r)?,
-            });
+                ..NearHull::default()
+            };
+            if v.kind != sim::vehicle::TRUCK {
+                (n.boost, n.rest) = r_tank(r)?;
+                n.jump = r.read_bit()?;
+            }
+            if v.kind == sim::vehicle::FLIER {
+                n.trick_cool = r_some_ticks(r)?;
+            }
+            v.near = Some(n);
         }
         Ok(v)
     }
@@ -758,7 +813,18 @@ fn w_vehicle(w: &mut BitWriter, v: &Vehicle) -> R<()> {
     }
     w.write(v.respawn, 32)?;
     w.write(v.home as u32, 8 - TURRET_BITS)?;
-    w.write(v.turret as u32, TURRET_BITS)
+    w.write(v.turret as u32, TURRET_BITS)?;
+    w.write(v.kind as u32, KIND_BITS)?;
+    if v.kind != sim::vehicle::TRUCK {
+        w.write(v.pitch as u16 as u32, 16)?;
+        w.write(v.boost as u32, BOOST_BITS)?;
+        w.write(v.rest as u32, BOOST_BITS)?;
+        w.write_bit(v.boosting)?;
+        w.write(v.trick as i8 as u8 as u32, 8)?;
+        w.write(v.trick_cool as u32, BOOST_BITS)?;
+        w.write_bit(v.jump)?;
+    }
+    Ok(())
 }
 
 /// A hull's turret kind (`sim::vehicle::TURRETS`), in the byte its home
@@ -766,19 +832,84 @@ fn w_vehicle(w: &mut BitWriter, v: &Vehicle) -> R<()> {
 const TURRET_BITS: u32 = 2;
 const _: () = assert!((sim::vehicle::TURRETS as u32) <= 1 << TURRET_BITS);
 const _: () = assert!(sim::consts::MAX_VEHICLES <= 1 << (8 - TURRET_BITS));
+/// A hull's kind; a one-seater's tank, its rest and its roll's wait, in
+/// ticks; its roll's ticks, signed, in a byte.
+const KIND_BITS: u32 = 2;
+const _: () = assert!((sim::vehicle::KINDS as u32) <= 1 << KIND_BITS);
+const BOOST_BITS: u32 = 10;
+const _: () = assert!(sim::consts::ticks(sim::consts::BOOST_MS) < 1 << BOOST_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::BOOST_REST_MS) < 1 << BOOST_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::FLY_ROLL_COOL_MS) < 1 << BOOST_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::FLY_ROLL_MS) < 128);
 
-/// A passenger's driver's stick ([`Snapshot::drive`]), after its hull.
-fn w_drive(w: &mut BitWriter, d: Option<(i8, i8)>) -> R<()> {
+/// A one-seater's tank and its rest: a bit for full and rested (as it
+/// mostly is), else both.
+fn w_tank(w: &mut BitWriter, boost: u16, rest: u16) -> R<()> {
+    let full = boost == sim::consts::ticks(sim::consts::BOOST_MS) as u16 && rest == 0;
+    w.write_bit(full)?;
+    if !full {
+        w.write(boost as u32, BOOST_BITS)?;
+        w.write(rest as u32, BOOST_BITS)?;
+    }
+    Ok(())
+}
+
+fn r_tank(r: &mut BitReader) -> R<(u16, u16)> {
+    if r.read_bit()? {
+        return Ok((sim::consts::ticks(sim::consts::BOOST_MS) as u16, 0));
+    }
+    Ok((r.read(BOOST_BITS)? as u16, r.read(BOOST_BITS)? as u16))
+}
+
+/// A wait in ticks that is mostly none: a bit, then the ticks if any.
+fn w_some_ticks(w: &mut BitWriter, t: u16) -> R<()> {
+    w.write_bit(t != 0)?;
+    if t != 0 {
+        w.write(t as u32, BOOST_BITS)?;
+    }
+    Ok(())
+}
+
+fn r_some_ticks(r: &mut BitReader) -> R<u16> {
+    Ok(if r.read_bit()? { r.read(BOOST_BITS)? as u16 } else { 0 })
+}
+
+/// A pitch, within ±`PITCH_MAX` (never trusted as it comes).
+fn r_pitch(r: &mut BitReader) -> R<i16> {
+    let p = r.read(16)? as u16 as i16;
+    if !(-sim::consts::PITCH_MAX..=sim::consts::PITCH_MAX).contains(&p) {
+        return Err(WireError::Malformed);
+    }
+    Ok(p)
+}
+
+/// The buttons a hull reads (`sim::vehicle::DRIVE_BUTTONS`), a bit each.
+const DRIVE_BUTTONS: [u16; 2] = [sim::input::CROUCH, sim::input::JUMP];
+const _: () = assert!(DRIVE_BUTTONS[0] | DRIVE_BUTTONS[1] == sim::vehicle::DRIVE_BUTTONS);
+
+/// A driver's stick ([`Snapshot::drive`], [`NearHull::stick`]): `mx`,
+/// `mz`, then a bit, and a one-seater's aim and buttons only if any of
+/// them is set (a truck's are never).
+fn w_drive(w: &mut BitWriter, d: Option<Input>) -> R<()> {
     w.write_bit(d.is_some())?;
-    if let Some((mx, mz)) = d {
-        w.write(mx as u8 as u32, 8)?;
-        w.write(mz as u8 as u32, 8)?;
+    if let Some(d) = d {
+        w.write(d.mx as u8 as u32, 8)?;
+        w.write(d.mz as u8 as u32, 8)?;
+        let aimed = d.yaw != 0 || d.pitch != 0 || d.buttons != 0;
+        w.write_bit(aimed)?;
+        if aimed {
+            w.write(d.yaw as u32, 16)?;
+            w.write(d.pitch as u16 as u32, 16)?;
+            for b in DRIVE_BUTTONS {
+                w.write_bit(d.buttons & b != 0)?;
+            }
+        }
     }
     Ok(())
 }
 
 /// The server runs a stick sanitized (`Input::sanitized`): never -128.
-fn r_drive(r: &mut BitReader) -> R<Option<(i8, i8)>> {
+fn r_drive(r: &mut BitReader) -> R<Option<Input>> {
     if !r.read_bit()? {
         return Ok(None);
     }
@@ -786,7 +917,21 @@ fn r_drive(r: &mut BitReader) -> R<Option<(i8, i8)>> {
     if mx == i8::MIN || mz == i8::MIN {
         return Err(WireError::Malformed);
     }
-    Ok(Some((mx, mz)))
+    let mut d = Input {
+        mx,
+        mz,
+        ..Input::default()
+    };
+    if r.read_bit()? {
+        d.yaw = r.read(16)? as u16;
+        d.pitch = r_pitch(r)?;
+        for b in DRIVE_BUTTONS {
+            if r.read_bit()? {
+                d.buttons |= b;
+            }
+        }
+    }
+    Ok(Some(d))
 }
 
 fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
@@ -810,6 +955,19 @@ fn r_vehicle(r: &mut BitReader) -> R<Vehicle> {
     v.turret = r.read(TURRET_BITS)? as u8;
     if v.turret >= sim::vehicle::TURRETS {
         return Err(WireError::Malformed);
+    }
+    v.kind = r.read(KIND_BITS)? as u8;
+    if v.kind >= sim::vehicle::KINDS {
+        return Err(WireError::Malformed);
+    }
+    if v.kind != sim::vehicle::TRUCK {
+        v.pitch = r_pitch(r)?;
+        v.boost = r.read(BOOST_BITS)? as u16;
+        v.rest = r.read(BOOST_BITS)? as u16;
+        v.boosting = r.read_bit()?;
+        v.trick = r.read(8)? as u8 as i8 as i16;
+        v.trick_cool = r.read(BOOST_BITS)? as u16;
+        v.jump = r.read_bit()?;
     }
     Ok(v)
 }
@@ -866,12 +1024,12 @@ pub struct Snapshot {
     pub own: Fighter,
     /// The vehicle it rides in, exactly, if it rides.
     pub own_vehicle: Option<Vehicle>,
-    /// Riding behind someone (not at the wheel), the stick (`mx`, `mz`) its
-    /// driver drove the hull by on this tick: the passenger predicts the
-    /// hull on it, as kept on (`sim::world::World::drive_stick`). None at the
-    /// wheel, on foot, or in a hull nobody drives (parked). Only ever
-    /// with `own_vehicle`.
-    pub drive: Option<(i8, i8)>,
+    /// Riding behind someone (not at the wheel), the stick its driver
+    /// drove the hull by on this tick (`sim::vehicle::stick`): the
+    /// passenger predicts the hull on it, as kept on
+    /// (`sim::world::World::drive_stick`). None at the wheel, on foot, or in
+    /// a hull nobody drives (parked). Only ever with `own_vehicle`.
+    pub drive: Option<Input>,
     pub n_remote: u8,
     pub remotes: [Remote; MAX_REMOTES],
     pub n_proj: u8,
@@ -1039,6 +1197,10 @@ fn w_own(w: &mut BitWriter, f: &Fighter) -> R<()> {
         w.write(m.heat as u32, HEAT_BITS)?;
         w.write(m.refire as u32, MOUNT_TICK_BITS)?;
         w.write_bit(m.vent)?;
+        w.write_bit(m.bomb != 0)?;
+        if m.bomb != 0 {
+            w.write(m.bomb as u32, BOOST_BITS)?;
+        }
     }
     Ok(())
 }
@@ -1059,6 +1221,9 @@ const MOUNT_TICK_BITS: u32 = 6;
 const HEAT_BITS: u32 = 14;
 const _: () = assert!(sim::consts::ticks(sim::arms::MINIGUN.spin_ms) < 1 << MOUNT_TICK_BITS);
 const _: () = assert!(sim::consts::ticks(sim::arms::MINIGUN.refire_ms) < 1 << MOUNT_TICK_BITS);
+const _: () = assert!(sim::consts::ticks(sim::arms::BOLTS.refire_ms) < 1 << MOUNT_TICK_BITS);
+const _: () = assert!(sim::consts::ticks(sim::arms::WING_BOLTS.refire_ms) < 1 << MOUNT_TICK_BITS);
+const _: () = assert!(sim::consts::ticks(sim::consts::BOMB_MS) < 1 << BOOST_BITS);
 const _: () = assert!((sim::arms::HEAT_FULL as u32) < 1 << HEAT_BITS);
 
 fn w_gun(w: &mut BitWriter, g: &Gun) -> R<()> {
@@ -1147,7 +1312,11 @@ fn r_own(r: &mut BitReader) -> R<Fighter> {
             heat: r.read(HEAT_BITS)? as u16,
             refire: r.read(MOUNT_TICK_BITS)? as u16,
             vent: r.read_bit()?,
+            bomb: 0,
         };
+        if r.read_bit()? {
+            f.mount.bomb = r.read(BOOST_BITS)? as u16;
+        }
     }
     Ok(f)
 }

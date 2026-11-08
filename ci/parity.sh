@@ -56,4 +56,17 @@ for f in $(grep -l '^    siege: &\[\[' crates/sim/src/maps/*.rs); do
     fail=1
   fi
 done
+# Big Team with red's one-seaters flown, on every map with a skimmer and a
+# flier (bots never fly them).
+for f in $(grep -l '^        (\[.*\], [0-9]*, [0-9]*, 0, 2),$' crates/sim/src/maps/*.rs); do
+  map=$(sed -n 's/^    id: \([0-9]*\),$/\1/p' "$f")
+  n=$(target/release/examples/bot_match 7 6000 "$map" 5)
+  w=$(node ci/parity.mjs "$wasm" 7 6000 "$map" 5)
+  if [ "$n" = "$w" ] && [ "$n" != "0000000000000000" ]; then
+    echo "map $map, pilots: $n"
+  else
+    echo "MISMATCH map $map, pilots: native $n, wasm $w"
+    fail=1
+  fi
+done
 exit $fail

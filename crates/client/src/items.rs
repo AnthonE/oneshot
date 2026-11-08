@@ -284,16 +284,22 @@ pub fn offer(core: &NetCore, vehicles: &[client_net::core::DrawnVehicle]) -> Opt
         return None;
     }
     let at = f.body.pos;
+    // A seat free: a one-seater's only one.
+    let free = |v: &client_net::core::DrawnVehicle| match sim::vehicle::spec(v.kind).seats {
+        1 => v.seats[DRIVER] == 0,
+        _ => v.seats.contains(&0),
+    };
     let car = vehicles
         .iter()
-        .filter(|v| v.seats.contains(&0) && (v.pos - at).flat().len() < ENTER_R && (v.pos.y - at.y).abs() < 2.0)
+        .filter(|v| free(v) && (v.pos - at).flat().len() < ENTER_R && (v.pos.y - at.y).abs() < 2.0)
         .min_by(|a, b| (a.pos - at).flat().len().total_cmp(&(b.pos - at).flat().len()));
     if let Some(v) = car {
         // The seat the sim would give us from here (`vehicle::boards`).
         let turret = core.map.vehicles.get(v.slot as usize).map_or(0, |d| d.turret);
         let ahead = (at.x - v.pos.x) * v.yaw.cos() + (at.z - v.pos.z) * v.yaw.sin();
-        if let Some(seat) = sim::vehicle::boards(turret, v.seats, ahead, f.flag) {
+        if let Some(seat) = sim::vehicle::boards(v.kind, turret, v.seats, ahead, f.flag) {
             let verb = match seat {
+                DRIVER if v.kind == sim::vehicle::FLIER => "fly",
                 DRIVER => "drive",
                 _ if turret != sim::vehicle::NO_TURRET => "gun",
                 _ => "ride",

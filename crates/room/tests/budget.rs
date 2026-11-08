@@ -123,9 +123,10 @@ fn a_full_sky_sends_the_rounds_that_matter_to_you() {
 }
 
 /// Dry Fork at its fullest with a bubble: every seat in sight and six of
-/// them in it, every hull it has in it and driven, as many rounds and
-/// drops as a snapshot holds, riding behind a driver. Room for eight of the
-/// widest events (145 bits each) besides.
+/// them in it, every hull it has (its trucks and its one-seaters) in it and
+/// driven, as many rounds and drops as a snapshot holds, riding behind a
+/// driver. Room for four of the widest events (145 bits each) besides;
+/// those that don't fit wait for the next (`room::EventQueue`).
 #[test]
 fn a_full_bubble_fits_with_room_for_events() {
     use proto::{NearBody, NearHull, MAX_SNAP_DROPS};
@@ -150,9 +151,20 @@ fn a_full_bubble_fits_with_room_for_events() {
         });
     }
     let hulls = w.map.vehicles.len();
-    assert_eq!(hulls, 4);
+    assert_eq!(hulls, 8);
     snap.n_vehicles = hulls as u8;
     for (i, v) in snap.vehicles.iter_mut().enumerate().take(hulls) {
+        // A one-seater at its widest: mid-roll, its tank half spent, its
+        // pilot's aim and buttons in its stick.
+        let kind = w.map.vehicles[i].kind;
+        let one = kind != sim::vehicle::TRUCK;
+        let stick = sim::input::Input {
+            mx: -127,
+            mz: 127,
+            yaw: if one { 40_000 } else { 0 },
+            pitch: if one { -3_000 } else { 0 },
+            buttons: if one { sim::vehicle::DRIVE_BUTTONS } else { 0 },
+        };
         *v = proto::VehState {
             slot: i as u8,
             pos: V3::new(-90.0 + 10.0 * i as f32, 1.5, -32.0),
@@ -162,18 +174,30 @@ fn a_full_bubble_fits_with_room_for_events() {
             seats: [9, 10],
             near: Some(NearHull {
                 grounded: true,
-                stick: Some((-127, 127)),
+                stick: Some(stick),
                 share: 3,
+                boost: 200,
+                rest: 100,
+                trick_cool: 300,
+                jump: true,
             }),
+            kind,
+            pitch: -3_000,
+            trick: 40,
+            boosting: true,
         };
     }
     snap.n_proj = MAX_SNAP_PROJ as u8;
     snap.n_drops = MAX_SNAP_DROPS as u8;
     snap.own_vehicle = Some(w.vehicles[0]);
-    snap.drive = Some((-127, 127));
+    snap.drive = Some(sim::input::Input {
+        mx: -127,
+        mz: 127,
+        ..sim::input::Input::default()
+    });
     snap.n_events = 0;
     let mut buf = [0u8; MAX_DATAGRAM];
     let n = encode_snapshot(&snap, &mut buf).expect("fits a datagram");
     let event = 145usize.div_ceil(8);
-    assert!(n + 8 * event <= MAX_DATAGRAM, "{n} bytes before events");
+    assert!(n + 4 * event <= MAX_DATAGRAM, "{n} bytes before events");
 }

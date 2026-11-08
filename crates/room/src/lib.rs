@@ -1509,7 +1509,7 @@ fn add_vehicles(
             pos: v.pos,
             vel: v.vel,
             yaw: v.yaw,
-            health: (v.health.max(0) as i64 * 255 / sim::consts::VEH_HEALTH as i64) as u8,
+            health: (v.health.max(0) as i64 * 255 / v.spec().health as i64) as u8,
             seats: [seat(v.seats[0]), seat(v.seats[1])],
             // In its bubble: exact, with the stick it is driven by (its
             // driver known, or nobody at the wheel: `bubble`).
@@ -1518,7 +1518,16 @@ fn add_vehicles(
                 // Its driver's, if it may know them; else as if parked.
                 stick: w.drive_stick(i).filter(|_| v.driver().is_none_or(known)),
                 share,
+                boost: v.boost,
+                rest: v.rest,
+                trick_cool: v.trick_cool,
+                jump: v.jump,
             }),
+            // How a one-seater looks, which anyone who sees it sees.
+            kind: v.kind,
+            pitch: v.pitch,
+            trick: v.trick,
+            boosting: v.boosting,
         };
         snap.n_vehicles += 1;
     }

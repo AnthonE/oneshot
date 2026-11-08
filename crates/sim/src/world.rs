@@ -538,7 +538,7 @@ impl World {
     pub fn new(map: Map, rules: Rules, seed: u64, salt: (u64, u64)) -> World {
         let mut vehicles = Pool::default();
         for (i, v) in map.vehicles.iter().enumerate().take(MAX_VEHICLES) {
-            vehicles[i] = Vehicle::new(v.pos, v.yaw, i as u8, v.turret);
+            vehicles[i] = Vehicle::new_kind(v.pos, v.yaw, i as u8, v.turret, v.kind);
         }
         let mut flags = [Flag::default(); 2];
         if let Some(bases) = map.flags {
@@ -587,15 +587,16 @@ impl World {
         self.ran[q]
     }
 
-    /// The stick (`mx`, `mz`) vehicle `i`'s driver drove it by on the last
-    /// tick: what its passenger predicts it on, as kept on (the only part
-    /// of an input [`Vehicle::step_local`] reads). None if nobody drives
-    /// it (it is parked: [`Vehicle::step_parked`]), as [`Self::step`]
-    /// will next tick.
-    pub fn drive_stick(&self, i: usize) -> Option<(i8, i8)> {
+    /// The stick vehicle `i`'s driver drove it by on the last tick
+    /// (`vehicle::stick`: a truck's `mx`, `mz`; a one-seater's aim and
+    /// boost and roll too): what its passenger, or someone by it, predicts
+    /// it on, as kept on (the only part of an input
+    /// [`Vehicle::step_local`] reads). None if nobody drives it (it is
+    /// parked: [`Vehicle::step_parked`]), as [`Self::step`] will next tick.
+    pub fn drive_stick(&self, i: usize) -> Option<Input> {
         let v = self.vehicles.get(i).filter(|v| v.active)?;
         let d = v.driver().filter(|&d| self.fighters[d].active())?;
-        Some((self.ran[d].mx, self.ran[d].mz))
+        Some(crate::vehicle::stick(v.kind, &self.ran[d]))
     }
 
     /// Seats a fighter and puts it at a spawn point. Whoever sat there
@@ -767,11 +768,14 @@ impl World {
         }
         sc.put(&mut self.fighters, &mut self.vehicles);
         for (s, l) in locals.iter().enumerate() {
-            if l.fired || l.fired_left || l.melee || l.throw || l.mounted {
+            if l.fired || l.fired_left || l.melee || l.throw || l.mounted || l.bombed {
                 self.unveil(s);
             }
             if l.mounted {
                 self.fire_turret(s, rewind_q8[s]);
+            }
+            if l.bombed {
+                self.drop_bomb(s);
             }
             if l.fired {
                 self.fire(s, rewind_q8[s], l.charged, false);
@@ -935,19 +939,53 @@ impl World {
         }
     }
 
-    /// `s` fires the turret it guns: from its eye along its aim (its cone
-    /// the turret gun's), the round drawn from the turret's muzzle.
+    /// `s` fires the turret it guns (or its one-seater's guns): from its
+    /// eye along its aim (its cone the gun's), the round drawn from the
+    /// gun's muzzle.
     fn fire_turret(&mut self, s: usize, depth: u32) {
         let f = self.fighters[s];
         let Some((i, _)) = f.riding() else { return };
         let v = self.vehicles[i];
-        let Some((a, cause)) = crate::vehicle::turret(v.turret) else {
+        let Some((a, cause)) = crate::vehicle::turret(f.gunning(&self.map)) else {
             return;
         };
         let eye = f.eye();
         let base = aim_dir(f.yaw, f.pitch);
         let dir = spread(base, a.cone(f.mount.heat), self.salt, s, f.shots, 0);
-        self.hitscan(s, eye, dir, a, cause, depth, v.muzzle(base));
+        self.hitscan(s, eye, dir, a, cause, depth, v.gun_at(base, f.shots));
+    }
+
+    /// `s`, a flier's pilot, drops its bomb: an ion cannon's round from
+    /// under the nose, along its aim.
+    fn drop_bomb(&mut self, s: usize) {
+        let f = self.fighters[s];
+        let Some((i, _)) = f.riding() else { return };
+        let v = self.vehicles[i];
+        let a = arm(crate::arms::CANNON);
+        let dir = aim_dir(f.yaw, f.pitch);
+        let from = v.bomb_at();
+        let made = self.launch(
+            Projectile {
+                kind: ProjKind::Cannon,
+                arm: crate::arms::CANNON,
+                target: NO_TARGET,
+                pos: from,
+                vel: dir * a.speed + v.vel,
+                ttl: ticks(5000) as u16,
+                ..Projectile::default()
+            },
+            s,
+        );
+        if made {
+            self.events.push(Event {
+                kind: Ev::Shot,
+                a: s as u8,
+                c: crate::arms::CANNON as u16,
+                pos: from,
+                end: from + dir,
+                ..Event::default()
+            });
+        }
     }
 
     /// The nearest fighter (or vehicle) a ray from `eye` meets that `s` may
@@ -1994,7 +2032,7 @@ impl World {
             if !v.active || self.spares(owner, &v) {
                 continue;
             }
-            let mid = v.pos + V3::new(0.0, VEH_H * 0.5, 0.0);
+            let mid = v.pos + V3::new(0.0, v.spec().h * 0.5, 0.0);
             let d = mid - at;
             let dist = d.len();
             if dist >= radius || !self.map.clear(at, mid) {
@@ -2207,6 +2245,7 @@ impl World {
             home: v.home,
             pos: v.pos,
             yaw: v.yaw,
+            kind: v.kind,
             ..Vehicle::default()
         };
         self.events.push(Event {
@@ -2228,7 +2267,7 @@ impl World {
         v.respawn -= 1;
         if v.respawn == 0 {
             if let Some(d) = self.map.vehicles.get(v.home as usize) {
-                *v = Vehicle::new(d.pos, d.yaw, v.home, d.turret);
+                *v = Vehicle::new_kind(d.pos, d.yaw, v.home, d.turret, d.kind);
             }
         }
     }
@@ -2240,22 +2279,29 @@ impl World {
             self.leave_vehicle(s);
             let v = self.vehicles[i];
             let (f, r) = v.axes();
+            let sp = v.spec();
             let at = if seat == DRIVER {
-                v.pos - r * (VEH_HALF_W + 0.9)
+                v.pos - r * (sp.half_w + 0.9)
             } else {
-                v.pos - f * (VEH_HALF_L + 0.9)
+                v.pos - f * (sp.half_l + 0.9)
             };
             let x = at.x.clamp(self.map.lo.0, self.map.hi.0);
             let z = at.z.clamp(self.map.lo.1, self.map.hi.1);
-            let y = self.map.floor(x, z, BODY_R, v.pos.y + 1.5);
+            // Out of a flier in the air: beside it, falling as it flew.
+            let aloft = v.kind == crate::vehicle::FLIER && !v.grounded;
+            let y = if aloft {
+                v.pos.y
+            } else {
+                self.map.floor(x, z, BODY_R, v.pos.y + 1.5)
+            };
             let b = &mut self.fighters[s].body;
             b.pos = V3::new(
                 crate::movement::quant(x),
                 crate::movement::quant(y),
                 crate::movement::quant(z),
             );
-            b.vel = V3::ZERO;
-            b.grounded = true;
+            b.vel = if aloft { v.vel } else { V3::ZERO };
+            b.grounded = !aloft;
             return true;
         }
         let at = self.fighters[s].body.pos;
@@ -2266,7 +2312,7 @@ impl World {
         let mut near = ENTER_R;
         for (i, v) in self.vehicles.iter().enumerate() {
             let d = (v.pos - at).flat().len();
-            let seat = crate::vehicle::boards(v.turret, v.seats, (at - v.pos).dot(v.axes().0), carrier);
+            let seat = crate::vehicle::boards(v.kind, v.turret, v.seats, (at - v.pos).dot(v.axes().0), carrier);
             if let (true, Some(seat)) = (v.active && d < near && crate::fmath::fabs(v.pos.y - at.y) < 2.0, seat) {
                 near = d;
                 best = Some((i, seat));

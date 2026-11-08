@@ -409,6 +409,98 @@ pub const TURRET_Y: f32 = 2.05;
 pub const TURRET_BOARD_X: f32 = -0.9;
 pub const TURRET_REACH: f32 = 1.05;
 
+// The skimmer (`vehicle::SKIMMER`): a one-seat hover bike, Halo 2's light
+// attack craft in how it plays. It turns toward where its rider looks,
+// throttles along its heading and strafes across it, slides more than a
+// truck grips, and boosts with its guns cold.
+/// Half its length and width, its height (to the cowl; the rider sits up
+/// out of it, open to shots from the sides and above), what of it stops a
+/// shot (the body to its cowl), and its hull circles: one at its middle,
+/// one this far fore and aft.
+pub const SKIM_HALF_L: f32 = 1.5;
+pub const SKIM_HALF_W: f32 = 0.85;
+pub const SKIM_H: f32 = 1.1;
+pub const SKIM_SILL: f32 = 0.85;
+pub const SKIM_HULL_OFF: f32 = 0.65;
+pub const SKIM_HULL_R: f32 = 0.85;
+/// Per second: thrust along its heading, braking against the way it goes,
+/// top speed forward (boosted, and back), strafe's top speed and how fast
+/// it gets there, the drag that stops it with no hand on the stick, and
+/// sideways slip (a fraction of the speed across its heading a second).
+pub const SKIM_ACCEL: f32 = 15.0;
+pub const SKIM_BRAKE: f32 = 22.0;
+pub const SKIM_TOP: f32 = 17.0;
+pub const SKIM_BOOST_TOP: f32 = 27.0;
+pub const SKIM_BOOST_ACCEL: f32 = 24.0;
+pub const SKIM_REVERSE: f32 = 7.0;
+pub const SKIM_STRAFE: f32 = 8.0;
+pub const SKIM_STRAFE_ACCEL: f32 = 18.0;
+pub const SKIM_DRAG: f32 = 6.0;
+pub const SKIM_SLIP: f32 = 3.0;
+/// How fast it turns toward the rider's aim, radians a second; boosting,
+/// this share of it (a boost trades turning for speed, as Halo 2's).
+pub const SKIM_TURN: f32 = 3.2;
+pub const SKIM_BOOST_TURN_K: f32 = 0.45;
+pub const SKIM_HEALTH: i32 = 450 * PT;
+
+// The flier (`vehicle::FLIER`): a one-seat attack craft, Halo 2's and 3's
+// in how it flies. Its nose follows the pilot's aim, yaw and pitch, at a
+// rate; the stick throttles along the nose and strafes flat across it; let
+// go, it hangs where it is. Unpiloted, it falls and rests on the ground.
+/// Half its length, half its span (the wings), its height, what of it
+/// stops a shot (fuselage and wings: the pilot sits inside), and its hull
+/// circle (one, at its middle).
+pub const FLY_HALF_L: f32 = 2.3;
+pub const FLY_HALF_W: f32 = 2.6;
+pub const FLY_H: f32 = 1.5;
+pub const FLY_BODY_HALF_W: f32 = 0.9;
+pub const FLY_WING_Y: f32 = 0.55;
+pub const FLY_WING_T: f32 = 0.35;
+pub const FLY_HULL_R: f32 = 1.4;
+/// Per second: thrust along the nose and braking against it, top speed
+/// (boosted, and back), strafe's top speed and rate, and the damping of
+/// what goes neither along the nose nor across it (it holds its height).
+pub const FLY_ACCEL: f32 = 14.0;
+pub const FLY_BRAKE: f32 = 18.0;
+pub const FLY_TOP: f32 = 19.0;
+pub const FLY_BOOST_TOP: f32 = 32.0;
+pub const FLY_BOOST_ACCEL: f32 = 22.0;
+pub const FLY_REVERSE: f32 = 5.0;
+pub const FLY_STRAFE: f32 = 7.0;
+pub const FLY_STRAFE_ACCEL: f32 = 12.0;
+pub const FLY_DAMP: f32 = 3.0;
+/// Its nose turns toward the aim this fast (radians a second: yaw, then
+/// pitch), boosting at `FLY_BOOST_TURN_K` of it, and pitches no further
+/// than `FLY_PITCH_MAX` (1/65536 turn: 60°).
+pub const FLY_TURN: f32 = 2.4;
+pub const FLY_PITCH_RATE: f32 = 2.2;
+pub const FLY_BOOST_TURN_K: f32 = 0.5;
+pub const FLY_PITCH_MAX: i16 = 10_923;
+/// It climbs no higher than this over where it spawns; past it, it is
+/// pushed back down at this many m/s.
+pub const FLY_CEIL: f32 = 60.0;
+pub const FLY_CEIL_PUSH: f32 = 4.0;
+/// A hillside or a box edge this much higher than its belly is a wall to
+/// it; less, it slides up over it.
+pub const FLY_STEP: f32 = 0.3;
+/// The roll (JUMP with a strafe, in the air): thrown this fast across its
+/// heading, for `FLY_ROLL_MS` (the renderer turns it over), then
+/// `FLY_ROLL_COOL_MS` before the next. Halo 3's tricks, rationed.
+pub const FLY_ROLL_KICK: f32 = 11.0;
+pub const FLY_ROLL_MS: u32 = 650;
+pub const FLY_ROLL_COOL_MS: u32 = 2500;
+pub const FLY_HEALTH: i32 = 500 * PT;
+
+/// A one-seater's boost (CROUCH held, the stick forward): this long on a
+/// full tank, refilling at `BOOST_REFILL` ticks a tick after `BOOST_REST_MS`
+/// let go of it. Its guns are cold while the button is held.
+pub const BOOST_MS: u32 = 3000;
+pub const BOOST_REST_MS: u32 = 1000;
+pub const BOOST_REFILL: u16 = 1;
+/// The flier's bomb (FIRE_LEFT): an ion cannon's round dropped from under
+/// its nose, at most once in this long.
+pub const BOMB_MS: u32 = 2600;
+
 // Capture the Flag.
 /// How near (flat) a fighter must come to a flag to take, return or score
 /// it, and how far above or below.

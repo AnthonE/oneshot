@@ -86,6 +86,10 @@ pub enum Cause {
     /// Siege: a tower's needles, a minion's shots.
     Tower = 108,
     Minion = 109,
+    /// A skimmer's bolt guns (`arms::BOLTS`), and a flier's wing guns
+    /// (`arms::WING_BOLTS`): their pilots' shots carry them as their gun.
+    Bolts = 110,
+    WingBolts = 111,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

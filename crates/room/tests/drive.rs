@@ -100,7 +100,12 @@ fn a_passenger_is_sent_the_stick_its_driver_drives_by() {
         for _ in 0..63 {
             for (seat, s) in r.tick([drive, idle, idle]) {
                 if seat == b {
-                    assert_eq!(s.drive, Some((ran.mx, ran.mz)), "the stick run on tick {}", s.tick);
+                    assert_eq!(
+                        s.drive,
+                        Some(sim::vehicle::stick(sim::vehicle::TRUCK, &ran)),
+                        "the stick run on tick {}",
+                        s.tick
+                    );
                     sent += 1;
                     assert!(s.own_vehicle.is_some());
                 } else {

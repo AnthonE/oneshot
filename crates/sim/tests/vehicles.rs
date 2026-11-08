@@ -716,7 +716,7 @@ fn a_slow_truck_hurts_and_carries_off() {
 /// teammate spared; two trucks head-on into a wreck. Pinned so a change
 /// to how contacts are stepped that should change nothing changes nothing
 /// (Dry Fork's golden has bots that seldom meet).
-const CONTACTS: u64 = 0x6d8d_5d73_ca29_1b97;
+const CONTACTS: u64 = 0xde8c_6286_a99b_aee8;
 
 #[test]
 fn run_downs_and_crashes_hash_as_before() {

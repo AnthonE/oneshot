@@ -1703,6 +1703,26 @@ fn turret_look(a: &sim::arms::Arm, m: sim::fighter::Mount) -> GunLook {
     }
 }
 
+/// A one-seater's guns' box: its name, its boost tank as the count and the
+/// bar, and, in a flier, whether its bomb is ready.
+fn pilot_look(a: &sim::arms::Arm, m: sim::fighter::Mount, v: &sim::vehicle::Vehicle) -> GunLook {
+    let full = sim::consts::ticks(sim::consts::BOOST_MS).max(1) as f32;
+    let tank = (v.boost as f32 / full).clamp(0.0, 1.0);
+    GunLook {
+        count: (tank * 100.0).round() as u32,
+        name: a.name,
+        pips: None,
+        heat: Some((tank, v.boosting)),
+        note: if v.boosting {
+            "BOOST"
+        } else if v.kind == sim::vehicle::FLIER && m.bomb == 0 {
+            "BOMB READY"
+        } else {
+            ""
+        },
+    }
+}
+
 /// Each hand's gun as its picture, once it is drawn; its name until then.
 #[allow(clippy::type_complexity)]
 pub fn gun_icons(
@@ -1785,9 +1805,15 @@ pub fn gear(
     let reloading = f.reload > 0;
     // Gunning a turret, its box is the turret's; the guns wait.
     let turret = sim::vehicle::turret(f.gunning(&s.core.map));
-    let hands = match turret {
-        Some((a, _)) => [Some(turret_look(a, f.mount)), None],
-        None => [
+    let piloted = s
+        .core
+        .own_vehicle()
+        .map(|(v, ..)| v)
+        .filter(|v| v.kind != sim::vehicle::TRUCK);
+    let hands = match (turret, piloted) {
+        (Some((a, _)), Some(v)) => [Some(pilot_look(a, f.mount, &v)), None],
+        (Some((a, _)), None) => [Some(turret_look(a, f.mount)), None],
+        (None, _) => [
             Some(gun_look(f.gun(), reloading)),
             f.dual().then(|| gun_look(&f.left, f.left_reload > 0)),
         ],

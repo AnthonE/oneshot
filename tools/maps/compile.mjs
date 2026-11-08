@@ -64,8 +64,9 @@
 //   launchers [{ at: [x, z, y?], to: [x, z, y?], time: s, size: [w, d],
 //             mirror: bool }]: a pad that throws a fighter from `at` to land
 //             on `to` after `time` seconds
-//   vehicles  [{ at: [x, z, y?], yaw: degrees, respawn: seconds, turret?: "minigun", mirror: bool }]:
-//             where a vehicle starts and comes back, and what its bed carries
+//   vehicles  [{ at: [x, z, y?], yaw: degrees, respawn: seconds, kind?: "truck" | "skimmer" | "flier",
+//               turret?: "minigun", mirror: bool }]:
+//             where a vehicle starts and comes back, what it is, and what a truck's bed carries
 //             (none: its passenger shoots its own guns)
 //   nav       true: bots find their way by waypoints (crates/sim/src/nav.rs)
 //             rather than walking straight where they're going
@@ -514,13 +515,17 @@ export function compile(spec, where = 'map.json') {
     // sim::vehicle's turret kinds.
     const turret = { undefined: 0, none: 0, minigun: 1 }[v.turret];
     if (turret === undefined) fail(`${what}: turret "${v.turret}" (none or minigun)`);
-    vehicles.push({ pos: p, yaw, respawn, turret });
+    // sim::vehicle's kinds.
+    const kind = { undefined: 0, truck: 0, skimmer: 1, flier: 2 }[v.kind];
+    if (kind === undefined) fail(`${what}: kind "${v.kind}" (truck, skimmer or flier)`);
+    if (kind !== 0 && turret !== 0) fail(`${what}: only a truck carries a turret`);
+    vehicles.push({ pos: p, yaw, respawn, turret, kind });
     if (v.mirror) {
       for (const [sx, sz] of mirrors) {
         let y = yaw;
         if (sx < 0) y = 180 - y;
         if (sz < 0) y = -y;
-        vehicles.push({ pos: [p[0] * sx, p[1], p[2] * sz], yaw: y, respawn, turret });
+        vehicles.push({ pos: [p[0] * sx, p[1], p[2] * sz], yaw: y, respawn, turret, kind });
       }
     }
   }
@@ -1289,7 +1294,7 @@ export function rust(m, src) {
   for (const l of m.launchers) L.push(`        ([${l.area.map(lit).join(', ')}], [${l.vel.map(lit).join(', ')}]),`);
   L.push('    ],');
   L.push('    vehicles: &[');
-  for (const v of m.vehicles) L.push(`        ([${v.pos.map(lit).join(', ')}], ${yawU16(v.yaw)}, ${v.respawn}, ${v.turret}),`);
+  for (const v of m.vehicles) L.push(`        ([${v.pos.map(lit).join(', ')}], ${yawU16(v.yaw)}, ${v.respawn}, ${v.turret}, ${v.kind}),`);
   L.push('    ],');
   L.push('    solids: &[');
   for (const s of m.solids) L.push(`        (${solidRow(s)}),`);

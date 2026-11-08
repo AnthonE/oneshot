@@ -12,7 +12,6 @@
 //! snapshot; a baked visibility table comes when maps and rooms grow.
 
 use sim::consts::{HEAD_Y, HEAD_Y_CROUCH, HIT_R, MAX_FIGHTERS, MAX_VEHICLES, TICK_HZ};
-use sim::consts::{VEH_H, VEH_HALF_L, VEH_HALF_W};
 use sim::fighter::Fighter;
 use sim::geom::V3;
 use sim::map::Map;
@@ -230,16 +229,17 @@ const VPOINTS: usize = 6;
 /// speed over `lead`. The first two now are the plain test's.
 pub fn vehicle_points(v: &Vehicle, lead: f32) -> [V3; 2 * VPOINTS] {
     let (f, r) = v.axes();
+    let s = v.spec();
     let mut out = [V3::ZERO; 2 * VPOINTS];
     for (k, at) in [v.pos, v.pos + v.vel * lead].into_iter().enumerate() {
-        let top = at + V3::new(0.0, VEH_H * 0.8, 0.0);
+        let top = at + V3::new(0.0, s.h * 0.8, 0.0);
         let p = &mut out[k * VPOINTS..(k + 1) * VPOINTS];
-        p[0] = at + V3::new(0.0, VEH_H * 0.5, 0.0);
+        p[0] = at + V3::new(0.0, s.h * 0.5, 0.0);
         p[1] = top;
-        p[2] = top + f * VEH_HALF_L + r * VEH_HALF_W;
-        p[3] = top - f * VEH_HALF_L - r * VEH_HALF_W;
-        p[4] = top + f * VEH_HALF_L - r * VEH_HALF_W;
-        p[5] = top - f * VEH_HALF_L + r * VEH_HALF_W;
+        p[2] = top + f * s.half_l + r * s.half_w;
+        p[3] = top - f * s.half_l - r * s.half_w;
+        p[4] = top + f * s.half_l - r * s.half_w;
+        p[5] = top - f * s.half_l + r * s.half_w;
     }
     out
 }

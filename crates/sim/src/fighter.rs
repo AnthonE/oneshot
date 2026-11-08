@@ -49,6 +49,8 @@ pub struct Mount {
     pub heat: u16,
     pub refire: u16,
     pub vent: bool,
+    /// Ticks till a flier's pilot may drop its next bomb (`BOMB_MS`).
+    pub bomb: u16,
 }
 
 impl Mount {
@@ -183,6 +185,8 @@ pub struct Local {
     pub drop_flag: bool,
     /// A round left the turret it guns (`shots` already counts it).
     pub mounted: bool,
+    /// A flier's pilot let a bomb go (FIRE_LEFT).
+    pub bombed: bool,
 }
 
 impl Fighter {
@@ -236,12 +240,17 @@ impl Fighter {
 
     /// The turret it guns (a passenger's seat on a vehicle that has one,
     /// by the map's spawn: vehicle `i` is the map's `i`), not carrying a
-    /// flag; `vehicle::NO_TURRET` if none.
+    /// flag; a one-seater's pilot, its guns (`vehicle::pilot_gun`);
+    /// `vehicle::NO_TURRET` if none.
     pub fn gunning(&self, map: &Map) -> u8 {
         match self.riding() {
             Some((i, crate::vehicle::PASSENGER)) if !self.flag => {
                 map.vehicles.get(i).map_or(crate::vehicle::NO_TURRET, |d| d.turret)
             }
+            Some((i, crate::vehicle::DRIVER)) => map
+                .vehicles
+                .get(i)
+                .map_or(crate::vehicle::NO_TURRET, |d| crate::vehicle::pilot_gun(d.kind)),
             _ => crate::vehicle::NO_TURRET,
         }
     }
@@ -331,8 +340,15 @@ impl Fighter {
         }
         let gunning = self.gunning(map);
         let shoots = seat != Some(crate::vehicle::DRIVER) && !self.flag && gunning == crate::vehicle::NO_TURRET;
-        out.mounted = self.mount.step(gunning, inp.held(FIRE));
+        // A pilot's guns are cold while it boosts (Halo 2's).
+        let boosting = seat == Some(crate::vehicle::DRIVER) && inp.held(CROUCH);
+        out.mounted = self.mount.step(gunning, inp.held(FIRE) && !boosting);
         self.shots = self.shots.wrapping_add(out.mounted as u32);
+        dec(&mut self.mount.bomb);
+        if gunning == crate::vehicle::WING_BOLTS && pressed & FIRE_LEFT != 0 && !boosting && self.mount.bomb == 0 {
+            out.bombed = true;
+            self.mount.bomb = ticks(BOMB_MS) as u16;
+        }
         let on_foot = seat.is_none();
 
         let mut spare = (0u8, 0u16);
@@ -678,6 +694,9 @@ impl Thing for Fighter {
             h.u16(self.mount.heat);
             h.u16(self.mount.refire);
             h.bool(self.mount.vent);
+            if self.mount.bomb != 0 {
+                h.u16(self.mount.bomb);
+            }
         }
     }
 }

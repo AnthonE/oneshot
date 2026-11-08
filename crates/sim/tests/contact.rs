@@ -41,7 +41,7 @@ fn the_contact_step_alone_matches_the_world() {
         let sticks: Sticks = core::array::from_fn(|i| {
             let v = &w.vehicles[i];
             let d = v.driver().filter(|&d| v.active && w.fighters[d].active())?;
-            Some((ran[d].mx, ran[d].mz))
+            Some(sim::vehicle::stick(v.kind, &ran[d]))
         });
         sc.walk(&ran, u16::MAX, &w.map);
         sc.drive(&sticks, &w.map);
