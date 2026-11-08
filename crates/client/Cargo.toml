@@ -149,3 +149,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+
+[dev-dependencies]
+# The vendored launcher SDK's pin (src/elo.rs).
+sha2 = "0.10"

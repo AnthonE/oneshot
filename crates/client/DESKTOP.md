@@ -25,5 +25,6 @@ elopros.com/stream.html.
 - **Linux:** X11 or Wayland, and a Vulkan driver (`mesa-vulkan-drivers` on
   most distributions).
 
-Ranked needs an Elo Pros sign-in, which is on the web page for now
-(elopros.com/games/oneshot/play); the desktop client plays every casual mode.
+Ranked needs a wallet: open oneshot from the Elo Pros launcher and it signs
+in with the launcher's account (SIGN IN on the title asks again). Without the
+launcher, every casual mode plays as a guest.

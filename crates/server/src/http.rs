@@ -251,10 +251,12 @@ pub fn server_json(
     let addr = spread(ctx, &addr);
     let hash = hash.map_or("null".to_string(), |h| format!("\"{}\"", crate::hex(&h)));
     format!(
-        "{{\"addr\":\"{addr}\",\"hash\":{hash},\"game\":\"{}\",\"signin\":{},\"proto\":{}}}",
+        "{{\"addr\":\"{addr}\",\"hash\":{hash},\"game\":\"{}\",\"signin\":{},\"proto\":{},\"domain\":\"{}\"}}",
         ctx.slug,
         ctx.elo_pubkey.is_some(),
-        proto::PROTO_VER
+        proto::PROTO_VER,
+        // The name a launcher's sign-in is for (`auth::verify_launcher`).
+        ctx.domains.first().map_or("", String::as_str)
     )
 }
 

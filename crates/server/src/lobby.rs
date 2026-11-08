@@ -290,10 +290,9 @@ pub async fn session(
                         ctx.lobby.send(out);
                     }
                     Msg::SignIn { pass } => {
-                        let Some(key) = ctx.elo_pubkey else { continue };
-                        let checked = crate::auth::verify_pass(
+                        let checked = crate::auth::verify_any(
                             pass.as_str(),
-                            &key,
+                            ctx.elo_pubkey.as_ref(),
                             &ctx.slug,
                             &ctx.domains,
                             |n| ctx.nonces.take(n),

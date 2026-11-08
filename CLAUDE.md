@@ -30,7 +30,7 @@ Fireplace, engine-shim and Elo Pros.
 | `tools/models` | the guns, ours: each commissioned from Meshy by the prompt in its script (`meshy_gen.py`, into `sources/meshy`) and cut by that script in Blender on `lib.py`'s kit, exported to `crates/client/assets/models`; `truck.py` makes the truck (`look/truck.rs`) from a download kept in `sources/` (CC-BY, NOTICE); `gear.py` the wardrobe's kit (a script each: headwear and boots cut in Triple T's own frame, their fitting room in `traces/gear`; `look/bodies.rs` hangs them); `rocks.py` the boulders, the sea stack and the bases' pylon (`look/boulders.rs`); `observatory.py`, `cistern.py`, `overpass.py`, `bulkhead.py`, `proving.py` each map's built things on `arch.py`'s kit, inside what collides (`look/built.rs`, the water's `look/pool.rs`); `observatory.py` Cloudbreak's built things (`look/observatory.rs`); `hand.py` the hands in view, cut from Triple T's own arm (`look/hands.rs`); `triple-t.py` puts Triple T's clips right in its GLB (the lean, the left hand on the gun), after `tools/assets.mjs` |
 | `tools/ground.sh`, `tools/hd.sh` | the ground's and the rock's photographs, cut from Poly Haven's CC0 sets (`sources/polyhaven`), and the bases' steel and tread plate from ambientCG's (`sources/ambientcg`); a map's fixed views shot on the GPU for the look loop (the `hd` skill, the board's `hd-*` views) |
 | `tools/assets.mjs`, `tools/glb` | Triple T and textures from a Gates checkout into `crates/client/assets` |
-| `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh` | hosting: two slots beside Gates; the runbook is `ops/README.md` |
+| `ops/`, `ci/deploy_server.sh`, `ci/publish_web.sh`, `ci/publish_depot.py`, `ci/release.sh` | hosting: two slots beside Gates, the page, the launcher's depots; the runbook is `ops/README.md` |
 
 ## The loop
 
@@ -52,8 +52,14 @@ Fireplace, engine-shim and Elo Pros.
      (the `hd` skill).
 3. Commit with a short message. Push your branch.
 
+**A release is `ci/release.sh`** (dry run; `--go` ships), on the game box:
+the server, then the page, then the launcher's depots (Linux and Windows,
+`ci/depot.py` / `ci/publish_depot.py`, notarized), then the `desktop-v*`
+tag that puts the downloads on a GitHub release. One command, so the
+desktop build is never the step left out.
+
 CI (`.github/workflows/ci.yml`) runs only when asked, once before a
-release (`gh workflow run ci`, about an hour): quick's checks, the crates'
+release (`gh workflow run ci`, about an hour; `ci/release.sh` wants it green): quick's checks, the crates'
 tests, parity, `ci/client.sh`, e2e in Chromium (a match with the WebGPU
 module's smoke, Gun Game, three matches back to back, a party) and the
 desktop's title and a match (shown, not gated). A push or a PR runs
@@ -120,6 +126,8 @@ not twenty.
 
 ```
 ci/quick.sh [crate…]                                 # the local check
+ci/release.sh [--go]                                 # ship HEAD: server, page, launcher depots, desktop tag (game box)
+ci/depot.py [--platform win-x86_64] [--self-test]    # the desktop client as a launcher depot → target/depot/<platform>/<build>/
 ci/parity.sh                                         # native vs wasm
 ci/client.sh                                         # the client: clippy, native, the page's two modules into crates/client/dist
 ci/client.sh dev                                     # just the page, quickly (release, no fat LTO); both modules
@@ -168,6 +176,12 @@ tools/fx-sync.sh [GATES_DIR]                         # the fx crate and fxstrip 
   then on the wall clock, so whether a 50 ms flash is in the shot is luck.
   Stage effects with `tools/fx.sh`, which steps the clock.
 - `ci/e2e.mjs` needs the release server built first.
+- The Windows depot cross-compiles (`x86_64-pc-windows-gnu`): mingw must be
+  on POSIX threads for both gcc and g++ (`update-alternatives --set
+  x86_64-w64-mingw32-gcc …-posix`, and g++), as Gates'.
+- The desktop signs in through the Elo Pros launcher (`src/elo.rs`,
+  `elo_overlay.rs` vendored from the Elo Pros repo's `sdk/rust/`, its hash
+  pinned): the server checks it in `auth::verify_launcher`.
 - `wasm-bindgen` must match `crates/client/Cargo.lock` exactly; `ci/client.sh`
   names the version it wants.
 
