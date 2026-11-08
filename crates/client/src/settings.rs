@@ -88,6 +88,10 @@ pub struct Settings {
     /// The desktop's borderless fullscreen; in a browser the page's own,
     /// which can only start on a click, so it isn't kept between runs.
     pub fullscreen: bool,
+    /// Streamer mode: the party code and the wallet stay off the screen
+    /// (the title's PARTY and SIGNED IN). `Opts::streamer` forces it for
+    /// one run (`?streamer=1`, `--streamer`).
+    pub streamer: bool,
     /// This run draws a rung the player didn't pick (`--lite`,
     /// `?quality=`): their own, kept for the file until they touch a
     /// graphics row (`run_on`).
@@ -122,6 +126,7 @@ impl Default for Settings {
             // (operator); a page can't open in it (`display.rs`). F11, the
             // row, or `--windowed` for one run.
             fullscreen: !cfg!(target_arch = "wasm32"),
+            streamer: false,
             held: None,
         }
     }
@@ -212,6 +217,8 @@ pub enum Knob {
     Effects,
     /// The party's voice (a browser's).
     Voice,
+    /// Streamer mode (`Settings::streamer`).
+    Streamer,
     /// The preset: writes every graphics row below it.
     Quality,
     ShadowDistance,
@@ -337,6 +344,11 @@ impl Settings {
         self.master * self.voice
     }
 
+    /// Streamer mode: the setting, or this run's flag.
+    pub fn streaming(&self, opts: &crate::Opts) -> bool {
+        self.streamer || opts.streamer
+    }
+
     /// The defaults with one preset's rows.
     pub fn with_preset(q: Quality) -> Self {
         Self {
@@ -419,6 +431,7 @@ impl Settings {
             Knob::Master => self.master += d * VOL_STEP,
             Knob::Effects => self.effects += d * VOL_STEP,
             Knob::Voice => self.voice += d * VOL_STEP,
+            Knob::Streamer => self.streamer = !self.streamer,
             // From the preset the rows spell if they spell one, so a moved
             // row and then + lands on the rung above the one being changed.
             Knob::Quality => {
@@ -464,6 +477,7 @@ impl Settings {
             Knob::Master => format!("{:.0}%", self.master * 100.0),
             Knob::Effects => format!("{:.0}%", self.effects * 100.0),
             Knob::Voice => format!("{:.0}%", self.voice * 100.0),
+            Knob::Streamer => on_off(self.streamer),
             Knob::Quality => self.preset_name().map_or("CUSTOM", Quality::name).to_uppercase(),
             Knob::ShadowDistance => format!("{:.0} m", g.shadow_m),
             Knob::Cascades => g.cascades.to_string(),
@@ -494,6 +508,7 @@ impl Settings {
             ("master", format!("{:.1}", self.master)),
             ("effects", format!("{:.1}", self.effects)),
             ("voice", format!("{:.1}", self.voice)),
+            ("streamer", self.streamer.to_string()),
             ("quality_auto", auto.to_string()),
         ];
         // While the game still picks, its own default isn't the player's
@@ -555,6 +570,7 @@ impl Settings {
                 "effects" => s.effects = num.unwrap_or(s.effects),
                 "voice" => s.voice = num.unwrap_or(s.voice),
                 "invert" => s.invert = v == "true",
+                "streamer" => s.streamer = flag.unwrap_or(s.streamer),
                 "quality" => s.quality = Quality::from_name(v).unwrap_or(s.quality),
                 "quality_auto" => s.quality_auto = flag.unwrap_or(s.quality_auto),
                 "shadow_m" => f.shadow_m = num,
@@ -884,6 +900,7 @@ fullscreen = true
         assert_eq!(s.fov, 95.0);
         assert_eq!(b.slots(Action::Jump)[0], Some(Bind::Key(KeyCode::KeyB)));
         s.adjust(Knob::Sensitivity, 3);
+        s.adjust(Knob::Streamer, 0);
         b.set(Action::Reload, 1, Some(Bind::Mouse(MouseButton::Back)));
         p.name = Player::clean("Master \"Chief\" of the long name");
         p.skin = 3;
@@ -892,6 +909,7 @@ fullscreen = true
         p.footwear = 1;
         let t = text(&s, &b, &p, v, &other, &other_binds);
         assert!(t.contains("version = 3") && t.contains("future_thing = 4") && t.contains("bind.dance = \"KeyZ\""));
+        assert!(t.contains("streamer = true"));
         let (s2, b2, p2, ..) = read(Some(&t));
         assert_eq!((s2, b2, &p2), (s, b, &p));
         assert_eq!(p2.name, "Master Chief of ");
@@ -1056,5 +1074,9 @@ fullscreen = true
         assert_eq!(s.master, 0.0);
         s.adjust(Knob::Invert, 0);
         assert!(s.invert);
+        s.adjust(Knob::Streamer, 0);
+        assert!(s.streamer);
+        s.adjust(Knob::Streamer, 0);
+        assert!(!s.streamer);
     }
 }

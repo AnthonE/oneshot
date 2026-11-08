@@ -393,6 +393,7 @@ impl Ctx {
             rooms: self.rooms.load(Ordering::Relaxed),
             uptime_s: self.started.elapsed().as_secs(),
             sim_threads: self.sim_threads,
+            elo: self.elo.counts(),
         }
     }
 }

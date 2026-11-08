@@ -54,11 +54,13 @@ struct Back;
 struct ResetTab;
 
 /// The rail.
-pub const CATEGORIES: [&str; 4] = ["MOUSE AND VIEW", "SOUND", "GRAPHICS", "KEYS"];
+pub const CATEGORIES: [&str; 5] = ["MOUSE AND VIEW", "SOUND", "GRAPHICS", "KEYS", "STREAM"];
 /// The rail's GRAPHICS.
 pub const GRAPHICS: usize = 2;
 /// The rail's KEYS (the title's CONTROLS opens on it).
 pub const KEYS: usize = 3;
+/// The rail's STREAM: streamer mode, and what the game has for a stream.
+pub const STREAM: usize = 4;
 
 /// The screen's own state: the picked category, the cell waiting for a
 /// key, the line under the pane, and where the pane was scrolled to (kept
@@ -241,6 +243,7 @@ fn spawn(
                         }
                     }
                     GRAPHICS => graphics(pane, settings, tier),
+                    STREAM => stream(pane, settings),
                     _ => {
                         // TALK is the page's voice's (`web/voice.js`).
                         for s in SPECS
@@ -330,6 +333,24 @@ fn fact(p: &mut ChildSpawnerCommands, name: &str, value: impl Into<String>) {
             children![ui::label(value, 13.0, ui::DIM)],
         ));
     });
+}
+
+/// SETTINGS > STREAM: streamer mode, and what the game has for a stream.
+fn stream(pane: &mut ChildSpawnerCommands, s: &Settings) {
+    toggle(pane, s, Knob::Streamer, "STREAMER MODE");
+    note(
+        pane,
+        "Keeps your party code and your wallet off the screen. On the PARTY tab the code reads as dots until you press SHOW, and COPY PARTY LINK still copies it. A match looks the same either way.",
+    );
+    pane.spawn(ui::group("ON STREAM"));
+    note(
+        pane,
+        "COPY WATCH LINK on the PARTY tab: anyone with it watches your match in the game, through your eyes, a little behind (longer in ranked). Set the party to invite only first: the link carries its code.",
+    );
+    note(
+        pane,
+        "F9 saves the last half minute as a video and F12 a screenshot, both on this machine. Overlays for OBS, a scene collection and chat commands are at elopros.com/stream.html.",
+    );
 }
 
 /// SETTINGS > GRAPHICS: the preset, its rows, what this machine does with

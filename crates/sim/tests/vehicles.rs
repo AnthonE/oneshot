@@ -1127,3 +1127,24 @@ fn a_body_dropped_onto_a_truck_lands_on_it() {
     assert!(w.vehicles[0].vel.flat().len() > SPLAT_SPEED, "never got going");
     assert!(off, "never came down: {:?}", w.fighters[1].body);
 }
+
+/// A truck nobody drives, rolling fast, runs someone down: their death,
+/// nobody's kill, and no suicide off their score.
+#[test]
+fn a_truck_nobody_drives_runs_down_but_scores_for_nobody() {
+    let mut w = world(false);
+    let v = w.vehicles[0];
+    let (f, _) = v.axes();
+    w.fighters[0].body.pos = V3::new(50.0, 0.0, 50.0);
+    let at = v.pos + f * (VEH_HALF_L + 2.0);
+    w.fighters[1].body.pos = V3::new(at.x, w.map.ground(at.x, at.z), at.z);
+    w.vehicles[0].vel = f * 18.0;
+    let idle = [Input::default(); MAX_FIGHTERS];
+    for _ in 0..TICK_HZ / 2 {
+        w.step(&idle, &NO_LAG);
+    }
+    let (a, b) = (w.fighters[0], w.fighters[1]);
+    assert!(!b.alive && b.deaths == 1, "never run down: {b:?}");
+    assert_eq!((a.kills, b.kills), (0, 0), "somebody's kill");
+    assert_eq!(w.score[1], 0, "a suicide off their score");
+}

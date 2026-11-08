@@ -132,7 +132,7 @@ pub use web::*;
 mod desktop {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{channel, Receiver, Sender};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use client_net::native::NativeClient;
@@ -144,14 +144,28 @@ mod desktop {
     /// Where the desktop client plays unless told otherwise (ops/README.md).
     pub const PUBLIC: &str = "https://game.elopros.com/oneshot";
 
-    /// The page server whose `server.json` names the game server.
+    /// The page server whose `server.json` names the game server, and the
+    /// sign-in through the Elo Pros launcher (`elo.rs`), when one is running.
     pub struct Door {
         server: String,
+        signin: Arc<Mutex<SignIn>>,
     }
 
     impl Door {
+        /// Signs in at once when the launcher is there: it asks the player
+        /// nothing for our own server.
         pub fn new(server: String) -> Door {
-            Door { server }
+            let state = if crate::elo::launcher_here() {
+                SignIn::Ready
+            } else {
+                SignIn::Off("Ranked: open oneshot from the Elo Pros launcher".into())
+            };
+            let mut door = Door {
+                server,
+                signin: Arc::new(Mutex::new(state)),
+            };
+            door.sign_in();
+            door
         }
 
         /// Where we play, for the title's foot.
@@ -159,14 +173,37 @@ mod desktop {
             self.server.clone()
         }
 
-        pub fn sign_in(&mut self) {}
-
-        pub fn signin(&self) -> SignIn {
-            SignIn::Off("Ranked plays in the browser".into())
+        /// Asks the launcher on a thread of its own (two GETs and a socket).
+        pub fn sign_in(&mut self) {
+            {
+                let mut s = self.signin.lock().unwrap_or_else(|e| e.into_inner());
+                if matches!(*s, SignIn::Asking | SignIn::Off(_)) {
+                    return;
+                }
+                *s = SignIn::Asking;
+            }
+            let (server, state) = (self.server.clone(), self.signin.clone());
+            std::thread::spawn(move || {
+                let got = match crate::elo::prove(&server) {
+                    Ok(p) => SignIn::In(p),
+                    Err(e) => SignIn::Failed(e),
+                };
+                *state.lock().unwrap_or_else(|e| e.into_inner()) = got;
+            });
         }
 
-        /// The server didn't take the sign-in (no sign-in here).
-        pub fn signed_out(&mut self, _why: String) {}
+        pub fn signin(&self) -> SignIn {
+            self.signin.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+
+        /// The server didn't take the sign-in's pass (it ran out): signed
+        /// out, and why; SIGN IN asks the launcher again.
+        pub fn signed_out(&mut self, why: String) {
+            let mut s = self.signin.lock().unwrap_or_else(|e| e.into_inner());
+            if matches!(*s, SignIn::In(_)) {
+                *s = SignIn::Failed(why);
+            }
+        }
 
         pub fn quits(&self) -> bool {
             true
