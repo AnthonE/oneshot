@@ -227,6 +227,63 @@ fn drive_by(delay_ms: f64, jitter_ms: f64, live: bool) -> Pass {
     }
 }
 
+/// On foot with a truck in the bubble, every snapshot re-runs the bubble
+/// over our predicted ticks (`stats.rerun_ticks`); our own tick on each is
+/// made once and taken again while nothing it reads has changed
+/// (`stats.rerun_own_ticks`: those made anew). In a debug build each take
+/// is checked against the step it stands for, so what this test adds is
+/// that the take happens, for a watcher on foot and for a driver.
+#[test]
+fn a_confirmed_replay_takes_the_own_ticks_already_made() {
+    let mut lan = Lan::dry_fork_live(&[0, 0], 60.0, 10.0, 0.0, true, true);
+    let v = lan.room.world.vehicles[0];
+    let (f, r) = v.axes();
+    let back = v.pos - f * 2.0;
+    let watch = v.pos + f * 40.0 + r * 8.0;
+    lan.place(0, back.x, back.z);
+    lan.place(1, watch.x, watch.z);
+    let press = Input {
+        buttons: USE,
+        ..Input::default()
+    };
+    lan.run(
+        5000.0,
+        |k, now| {
+            if k == 0 && (4000.0..4040.0).contains(&now) {
+                press
+            } else {
+                Input::default()
+            }
+        },
+        |_, _, _, _| {},
+    );
+    lan.run(
+        10_000.0,
+        |k, now| {
+            if k == 0 && now > 5500.0 {
+                Input {
+                    mz: 127,
+                    ..Input::default()
+                }
+            } else {
+                Input::default()
+            }
+        },
+        |_, _, _, _| {},
+    );
+    for (k, c) in lan.cs.iter().enumerate() {
+        let s = c.core.stats;
+        println!(
+            "{k}: {} near snapshots, {} ticks re-run, {} own ticks made again, {} corrections",
+            s.near_snaps, s.rerun_ticks, s.rerun_own_ticks, s.corrections
+        );
+        assert!(s.near_snaps > 50 && s.rerun_ticks > 500, "{s:?}");
+        // Nearly every own tick in a replay is one already made: only a
+        // correction (a new fighter to step from) makes them again.
+        assert!(s.rerun_own_ticks * 4 <= s.rerun_ticks, "{s:?}");
+    }
+}
+
 #[test]
 fn a_truck_in_the_bubble_is_drawn_on_the_present() {
     for (delay, jitter) in [(20.0, 0.0), (60.0, 10.0), (100.0, 10.0)] {
