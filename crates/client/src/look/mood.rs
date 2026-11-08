@@ -417,6 +417,51 @@ pub const OVERCAST: Mood = Mood {
     snow: false,
 };
 
+/// Pithead: a mine high in the mountains in a blizzard's lull, late in the
+/// day. A heavy deck the sun comes through low, pale and white (no warmth in
+/// it, across the line between the bases), the sky a pale veil a step under
+/// the snow's brightness, as in a whiteout, the
+/// air thick enough that the peaks round it go to white, a hard wind along
+/// the rock driving the snow. The only warm light is the lamps'; the cold is
+/// in the grade, never in a darker frame.
+pub const BLIZZARD: Mood = Mood {
+    name: "blizzard",
+    sun_elev: 0.3,
+    // Square across the line between the sides' spawns, which runs 19° off x.
+    sun_azim: 0.34,
+    sun_rgb: [0.9, 0.95, 1.0],
+    sun: 0.75,
+    light: 0.85,
+    fill: 0.95,
+    ev100: 13.4,
+    cover: 0.95,
+    dark: 0.25,
+    mist: 0.005,
+    rain: 0.4,
+    dust: 0.0,
+    wet: 0.0,
+    wind_azim: 1.25,
+    wind_ms: 9.0,
+    stars: 0.0,
+    moon: 0.0,
+    moon_elev: -0.5,
+    moon_azim: 0.0,
+    moon_lit: 1.0,
+    shade: 0.15,
+    deep: 0.1,
+    veil: 0.95,
+    field_at: [17.0, 29.0],
+    hall: 0,
+    grade: Grade {
+        temperature: -0.04,
+        tint: 0.012,
+        saturation: 0.9,
+        contrast: 1.08,
+        lift: 0.0,
+    },
+    snow: true,
+};
+
 /// Chrysalis: inside the hull, under its roof and its lamps. The map's own
 /// light (`LightDef`: its exposure, no sun, the fill all but closed) is
 /// what draws it; the sky above the roof is never seen.
@@ -467,6 +512,7 @@ pub fn of(id: u8) -> Mood {
         },
         6 => INTERIOR,
         7 => OVERCAST,
+        8 => BLIZZARD,
         _ => NOON,
     }
 }

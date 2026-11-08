@@ -64,7 +64,9 @@ pub struct GroundParams {
     /// planes, no rock face: a software GPU), w = the floor under a normal
     /// map's z before it becomes a gradient.
     pub wall: Vec4,
-    /// x the array layer the rock reads: 3, an island's 4; yzw unused.
+    /// x the array layer the rock reads: 3, an island's 4, a snowy
+    /// island's 6; y the layer the first lane (sand) reads: 0, a snowy
+    /// island's drifts 5; zw unused.
     pub layers: Vec4,
     /// x = the share of each 45° step between two wall planes over which
     /// both are read, y/z = the cosine between the triangle's plane and the
@@ -122,6 +124,18 @@ pub const ISLE_TINT: [Vec4; 4] = [
 pub const ISLE_ROCK_A: Vec4 = Vec4::new(14.0, 4.5, 0.28, 0.1);
 pub const ISLE_ROCK_B: Vec4 = Vec4::new(0.05, 20.0, 0.12, 2.5);
 pub const ISLE_ROCK_C: Vec4 = Vec4::new(0.06, 0.03, 0.15, 0.05);
+
+/// An island under snow (`snow` in [`material`]): the trodden snow (linear
+/// mean 0.49 0.47 0.47) lifted to a cold white a step under fresh snow's,
+/// so a fighter on it still stands out against it, and the grey fractured
+/// rock (0.27 0.27 0.26) down to a dark blue-grey, the frost's colour in
+/// shade: under the snow the stone is dark, as the crags out in the cloud.
+pub const ICE_TINT: [Vec4; 4] = [
+    Vec4::new(1.42, 1.52, 1.72, 1.0),
+    Vec4::new(0.66, 1.2, 0.62, 1.0),
+    Vec4::new(0.95, 0.92, 0.88, 1.0),
+    Vec4::new(0.3, 0.34, 0.44, 1.0),
+];
 
 pub const TINT: [Vec4; 4] = [
     Vec4::new(1.0, 1.1, 1.25, 1.0),
@@ -297,18 +311,27 @@ impl MaterialExtension for Ground {
 /// The ground's material over its photographs, wet up from the sea at
 /// `sea_y` (the map's `light.sea`; not finite means no sea); `lite` is the
 /// lowest rung, which draws no wall planes or rock face; `isle` an island's
-/// ground, in its own tints; `cloud` the deck's shadows and the rain's wet
-/// as the map's mood has them.
+/// ground, in its own tints, and `snow` one under snow (its mood snows):
+/// drifts where the sand would lie and cold fractured rock where it stands;
+/// `cloud` the deck's shadows and the rain's wet as the map's mood has them.
 pub fn material(
     albedo: Handle<Image>,
     normal: Handle<Image>,
     sea_y: f32,
     lite: bool,
     isle: bool,
+    snow: bool,
     cloud: super::cloud_shadow::CloudShadowParams,
 ) -> GroundMaterial {
     let mut params = GroundParams::default();
-    if isle {
+    if isle && snow {
+        // A canyon's split blocks and cracks, not the sandstone's rounding.
+        params.tint = ICE_TINT;
+        params.layers.x = super::textures::ICE_ROCK_LAYER;
+        params.layers.y = super::textures::DRIFT_LAYER;
+        params.tile_m.x = super::textures::DRIFT_TILE_M;
+        params.tile_m.w = super::textures::ICE_ROCK_TILE_M;
+    } else if isle {
         params.tint = ISLE_TINT;
         params.layers.x = super::textures::ISLE_ROCK_LAYER;
         params.tile_m.w = super::textures::ISLE_ROCK_TILE_M;

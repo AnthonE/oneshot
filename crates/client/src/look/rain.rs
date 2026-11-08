@@ -27,8 +27,10 @@ use super::mood::{Mood, MoodNow};
 
 pub const SHADER: &str = "shaders/rain.wgsl";
 
-/// Drops in the mesh: the most a shower draws, on every target.
+/// Drops in the mesh: the most a shower draws, on every target; and in the
+/// far snow's, whose box is a hundred times the near one's.
 pub const DROPS: u32 = 4_000;
+pub const FAR_DROPS: u32 = 14_000;
 /// Half the box the drops fall in around the eye, metres.
 pub const BOX_HALF: Vec3 = Vec3::new(14.0, 9.0, 14.0);
 /// How fast a drop falls, m/s: a raindrop's terminal speed.
@@ -47,12 +49,33 @@ pub const SHELTER_CLEAR_M: f32 = 5.0;
 pub const SHELTER_UP_M: f32 = 12.0;
 
 /// Snow (`Mood::snow`): how fast it comes down, m/s, how far the wind takes it, a
-/// flake's length, m, and how bright it's lit.
+/// flake's length and width, m, how opaque at its middle, and how bright it's lit.
 pub const SNOW_FALL_MS: f32 = 1.6;
 pub const SNOW_DRIFT: f32 = 1.4;
-pub const SNOW_STROKE_M: f32 = 0.05;
+pub const SNOW_STROKE_M: f32 = 0.04;
+pub const SNOW_WIDTH_M: f32 = 0.034;
+pub const SNOW_ALPHA: f32 = 0.75;
 pub const SNOW_LIT: f32 = 0.72;
-/// The uniform, laid out to match `Rain` in the shader. 48 bytes: WebGL2
+/// How many flakes a mood's `rain` lights, over a shower's drops: snow
+/// fogs less than rain for what falls (`Mood::rain_sigma` reads `rain`), so
+/// it falls thicker for the same air; and the box it falls in, nearer the
+/// eye, where a flake is big enough to see.
+pub const SNOW_COUNT: f32 = 2.5;
+pub const SNOW_BOX_HALF: Vec3 = Vec3::new(10.0, 7.0, 10.0);
+/// Under a roof, the snow the wind drives in under it stops this near.
+pub const SNOW_SHELTER_CLEAR_M: f32 = 1.5;
+/// The far snow: a second mesh of the same drops in a box out to the far
+/// side of an arena, its flakes big enough to be a few pixels across there
+/// and faint, so the whole frame has snow in it, not only the air round the
+/// eye; under a roof none within this far.
+pub const FAR_SNOW_BOX_HALF: Vec3 = Vec3::new(55.0, 22.0, 55.0);
+pub const FAR_SNOW_WIDTH_M: f32 = 0.15;
+pub const FAR_SNOW_ALPHA: f32 = 0.32;
+pub const FAR_SNOW_CLEAR_M: f32 = 6.0;
+/// A streak of rain: how wide, how opaque at its middle.
+pub const RAIN_WIDTH_M: f32 = 0.012;
+pub const RAIN_ALPHA: f32 = 0.4;
+/// The uniform, laid out to match `Rain` in the shader. 64 bytes: WebGL2
 /// wants uniforms of at least 16.
 #[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
 pub struct RainParams {
@@ -63,6 +86,9 @@ pub struct RainParams {
     /// rgb the streak's lit colour; w the radius round the eye that is
     /// clear under a roof ([`SHELTER_CLEAR_M`]), 0 in the open.
     pub look: Vec4,
+    /// x a streak's width (m), y its opacity at its middle, z 1 for a round
+    /// flake (snow), 0 for a streak; w the shelter's clear radius when under one.
+    pub shape: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
@@ -100,13 +126,27 @@ impl Material for RainMaterial {
     }
 }
 
-/// The rain's entity.
+/// The rain's entity, and the far snow's.
 #[derive(Component)]
 pub struct Rain;
 
-/// The handle `drive` writes.
+/// The handles `drive` writes: the rain (or the near snow), the far snow.
 #[derive(Resource)]
-pub struct RainHandle(pub Handle<RainMaterial>);
+pub struct RainHandle(pub Handle<RainMaterial>, pub Handle<RainMaterial>);
+
+/// The far snow of a mood that snows: the near snow's fall, in its own box.
+pub fn far_for(m: &Mood, roofed: bool) -> RainParams {
+    let near = params_for(m, roofed);
+    if !m.snow {
+        return RainParams::default();
+    }
+    RainParams {
+        fall: near.fall.truncate().extend(FAR_SNOW_WIDTH_M),
+        box_: FAR_SNOW_BOX_HALF.extend(near.box_.w),
+        look: near.look,
+        shape: Vec4::new(FAR_SNOW_WIDTH_M, FAR_SNOW_ALPHA, 1.0, FAR_SNOW_CLEAR_M),
+    }
+}
 
 /// Deterministic per-drop randomness — a look, not a sim draw.
 fn hash01(i: u32, k: u32) -> f32 {
@@ -153,6 +193,7 @@ pub fn drop_mesh(drops: u32) -> Mesh {
 }
 
 const _: () = assert!(DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u16 indices");
+const _: () = assert!(FAR_DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u16 indices");
 
 /// What a mood's rain looks like. None under a roof (an interior's mood
 /// never rains).
@@ -161,8 +202,9 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
         // The same mesh, slow, each flake a short bright stroke.
         return RainParams {
             fall: (m.wind().extend(0.0).xzy() * SNOW_DRIFT - Vec3::Y * SNOW_FALL_MS).extend(SNOW_STROKE_M),
-            box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
+            box_: SNOW_BOX_HALF.extend(if roofed { 0.0 } else { (m.rain * SNOW_COUNT).min(1.0) }),
             look: Vec4::new(SNOW_LIT, SNOW_LIT, SNOW_LIT * 1.04, 0.0),
+            shape: Vec4::new(SNOW_WIDTH_M, SNOW_ALPHA, 1.0, SNOW_SHELTER_CLEAR_M),
         };
     }
     let wind = m.wind() * (1.0 + 0.6 * m.wind_ms);
@@ -174,25 +216,30 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
         fall: fall.extend(0.45 + 0.3 * m.rain),
         box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
         look: Vec4::new(0.55 * lit, 0.58 * lit, 0.62 * lit, 0.0),
+        shape: Vec4::new(RAIN_WIDTH_M, RAIN_ALPHA, 0.0, SHELTER_CLEAR_M),
     }
 }
 
 /// Build the rain, hidden until a mood rains.
 pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<RainMaterial>>) {
-    let material = materials.add(RainMaterial {
-        params: RainParams::default(),
+    let [near, far] = [(); 2].map(|_| {
+        materials.add(RainMaterial {
+            params: RainParams::default(),
+        })
     });
-    commands.spawn((
-        Rain,
-        Mesh3d(meshes.add(drop_mesh(DROPS))),
-        MeshMaterial3d(material.clone()),
-        Transform::default(),
-        Visibility::Hidden,
-        NoFrustumCulling,
-        NotShadowCaster,
-        NotShadowReceiver,
-    ));
-    commands.insert_resource(RainHandle(material));
+    for (m, drops) in [(&near, DROPS), (&far, FAR_DROPS)] {
+        commands.spawn((
+            Rain,
+            Mesh3d(meshes.add(drop_mesh(drops))),
+            MeshMaterial3d(m.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+            NoFrustumCulling,
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
+    commands.insert_resource(RainHandle(near, far));
 }
 
 /// The map's rain, when the map changes, and its shelter when the eye goes
@@ -201,12 +248,13 @@ pub fn drive(
     now: Res<MoodNow>,
     handle: Option<Res<RainHandle>>,
     mut materials: ResMut<Assets<RainMaterial>>,
-    mut rain: Query<&mut Visibility, With<Rain>>,
+    mut rain: Query<(&mut Visibility, &MeshMaterial3d<RainMaterial>), With<Rain>>,
     link: NonSend<crate::LinkRes>,
     eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
     mut sheltered: Local<bool>,
 ) {
     let mut want = params_for(&now.mood, now.roofed);
+    let mut far = far_for(&now.mood, now.roofed);
     let show = want.box_.w > 0.0;
     let under = show
         && eye.single().is_ok_and(|g| {
@@ -223,21 +271,26 @@ pub fn drive(
         return;
     }
     *sheltered = under;
-    want.look.w = if under { SHELTER_CLEAR_M } else { 0.0 };
-    for mut v in rain.iter_mut() {
-        let vis = if show {
-            Visibility::Inherited
+    want.look.w = if under { want.shape.w } else { 0.0 };
+    far.look.w = if under { far.shape.w } else { 0.0 };
+    let Some(handle) = handle else {
+        return;
+    };
+    for (mut v, mat) in rain.iter_mut() {
+        let on = if mat.0 == handle.1 {
+            show && far.box_.w > 0.0
         } else {
-            Visibility::Hidden
+            show
         };
+        let vis = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != vis {
             *v = vis;
         }
     }
-    if let Some(handle) = handle {
-        if materials.get(&handle.0).is_some_and(|m| m.params != want) {
-            if let Some(m) = materials.get_mut(&handle.0) {
-                m.params = want;
+    for (h, p) in [(&handle.0, want), (&handle.1, far)] {
+        if materials.get(h).is_some_and(|m| m.params != p) {
+            if let Some(m) = materials.get_mut(h) {
+                m.params = p;
             }
         }
     }

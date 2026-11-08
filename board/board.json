@@ -1074,6 +1074,204 @@
           "private": true
         }
       ]
+    },
+    {
+      "id": "hd-pit_yard",
+      "name": "Pithead: the yard from red's hall",
+      "what": "the yard from red's yard door, the shaft collar and its skip, the gantry, the decks either side, blue's headframe beyond",
+      "take": "a cold, readable yard: trodden snow, dark steel against it, rime on what faces the wind, icicles under the decks, warm lamps the only warm thing",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_yard.png",
+      "refs": [
+        {
+          "file": "pithead/svalbard-mine7-ridge.jpg",
+          "take": "polar twilight: snow lit blue-lavender, shade deep blue-grey, the sky about as bright as the snow; rust-red steel dark against it",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/icicles-launch-tower.jpg",
+          "take": "short even icicles only under the bottom edges of horizontal beams and rails; frosted grey pipes",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/svalbard-taubane-snowfall.jpg",
+          "take": "corrugated sheds and dark rust-brown steel trestles over a drop in falling snow; the white-grey sky; mountains washed pale behind; snow specks across the whole frame",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_crown",
+      "name": "Pithead: crown to crown",
+      "what": "from red's crown along the gantry to blue's headframe",
+      "take": "the headframes against a grey-blue sky, the gantry's steel, falling snow, the far crown fading a step in the air",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_crown.png",
+      "refs": [
+        {
+          "file": "pithead/svalbard-taubane-snowfall.jpg",
+          "take": "corrugated sheds and dark rust-brown steel trestles over a drop in falling snow; the white-grey sky; mountains washed pale behind; snow specks across the whole frame",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/rime-lattice-mast.jpg",
+          "take": "feathered rime on the windward side of each steel member only, bare dark steel on the lee",
+          "ignore": "the blue sky",
+          "private": true
+        },
+        {
+          "file": "pithead/blizzard-steel-mcmurdo.jpg",
+          "take": "how fast steel fades in driving snow: sharp near, a ghost at a few tens of metres",
+          "ignore": "its colour: the camera made it too blue",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_deck",
+      "name": "Pithead: the north deck",
+      "what": "along the north deck from red's mezzanine",
+      "take": "grating with snow drifted at the wall, rails furred with frost, the drop to the cloud on the left",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_deck.png",
+      "refs": [
+        {
+          "file": "pithead/snow-steel-stair.jpg",
+          "take": "frost furring galvanised rails, snow flat on the treads with the dark holes showing, flat white overcast",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/icicles-launch-tower.jpg",
+          "take": "short even icicles only under the bottom edges of horizontal beams and rails; frosted grey pipes",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/svalbard-mine7-frost-wall.jpg",
+          "take": "rime packed into the ribs of painted corrugated steel, heavy on ledges and drip lines, the paint showing between",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_edge",
+      "name": "Pithead: off the spur",
+      "what": "off red's spur over the edge, down into the cloud and the crags",
+      "take": "dark rock with snow on its ledges going down into cloud, crags and a cableway walking off, peaks paler with distance",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_edge.png",
+      "refs": [
+        {
+          "file": "pithead/spindrift-overcast-peak.jpg",
+          "take": "snow streaming off dark ridges into low grey cloud; each further ridge paler and bluer",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/svalbard-taubane-snowfall.jpg",
+          "take": "corrugated sheds and dark rust-brown steel trestles over a drop in falling snow; the white-grey sky; mountains washed pale behind; snow specks across the whole frame",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/ice-cliff-blue-shade.jpg",
+          "take": "lit snow and ice near white with a faint cyan; deep blue only in cracks, caves and undersides",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_gantry",
+      "name": "Pithead: off the gantry",
+      "what": "from the gantry's landing down into the yard",
+      "take": "the yard below in snow, the decks' undersides and their icicles, the skip under the landing",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_gantry.png",
+      "refs": [
+        {
+          "file": "pithead/svalbard-mine7-ridge.jpg",
+          "take": "polar twilight: snow lit blue-lavender, shade deep blue-grey, the sky about as bright as the snow; rust-red steel dark against it",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/icicles-launch-tower.jpg",
+          "take": "short even icicles only under the bottom edges of horizontal beams and rails; frosted grey pipes",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_hall",
+      "name": "Pithead: red's shaft house",
+      "what": "inside red's hall toward its stairs and mezzanine",
+      "take": "an interior lit warm by its lamps against cold daylight at the doors; steel frames and lining",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_hall.png",
+      "refs": [
+        {
+          "file": "pithead/svalbard-mine7-frost-wall.jpg",
+          "take": "rime packed into the ribs of painted corrugated steel, heavy on ledges and drip lines, the paint showing between",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/snow-steel-stair.jpg",
+          "take": "frost furring galvanised rails, snow flat on the treads with the dark holes showing, flat white overcast",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
+    },
+    {
+      "id": "hd-pit_over",
+      "name": "Pithead: from the air",
+      "what": "the whole rock from over the south-west, out in the void",
+      "take": "the mine as a whole on its rock over the cloud: each side's colour, the headframes, crags, cableway, peaks into the white",
+      "shoot": [
+        "tools/hd.sh"
+      ],
+      "png": "traces/hd/pit_over.png",
+      "refs": [
+        {
+          "file": "pithead/svalbard-mine7-ridge.jpg",
+          "take": "polar twilight: snow lit blue-lavender, shade deep blue-grey, the sky about as bright as the snow; rust-red steel dark against it",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/svalbard-taubane-snowfall.jpg",
+          "take": "corrugated sheds and dark rust-brown steel trestles over a drop in falling snow; the white-grey sky; mountains washed pale behind; snow specks across the whole frame",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        },
+        {
+          "file": "pithead/spindrift-overcast-peak.jpg",
+          "take": "snow streaming off dark ridges into low grey cloud; each further ridge paler and bluer",
+          "ignore": "the place itself: these are real photographs for light, colour, texture and weather, never a plan",
+          "private": true
+        }
+      ]
     }
   ]
 }

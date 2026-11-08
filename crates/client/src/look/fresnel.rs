@@ -104,6 +104,7 @@ mod tests {
             f32::NEG_INFINITY,
             false,
             false,
+            false,
             default(),
         );
         assert!((F0_MIN..=F0_MAX).contains(&f0_of(g.base.reflectance)));

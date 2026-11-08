@@ -368,12 +368,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let uv1 = wp.xz / ground.tile_m.y;
     let uv2 = wp.xz / ground.tile_m.z;
     let uv3 = wp.xz / ground.tile_m.w;
-    var a0 = textureSample(albedo_tex, albedo_smp, uv0, 0);
+    var a0 = textureSample(albedo_tex, albedo_smp, uv0, i32(ground.layers.y));
     var a1 = textureSample(albedo_tex, albedo_smp, uv1, 1);
     var a2 = textureSample(albedo_tex, albedo_smp, uv2, 2);
     let rock_layer = i32(ground.layers.x);
     var a3 = textureSample(albedo_tex, albedo_smp, uv3, rock_layer);
-    let g0 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv0, 0)));
+    let g0 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv0, i32(ground.layers.y))));
     let g1 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv1, 1)));
     let g2 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv2, 2)));
     let g3 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv3, rock_layer)));
@@ -538,6 +538,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // The skin's facets: recessed darker, proud lighter.
     c *= mix(1.0, in.uv_b.x, SKIN_VALUE);
 #endif
+
+    // An island under snow (`layers.y` over 4.5): snow lying on its rock's
+    // ledges, where a facet turns up, in patches.
+    if ground.layers.y > 4.5 {
+        let up = wn.y + rock_tilt.y;
+        let lie = smoothstep(0.12, 0.32, up) * smoothstep(0.3, 0.7, value3(wp / 3.0));
+        c = mix(c, a0.rgb * ground.tint[0].rgb, w.w * lie * 0.85);
+    }
 
     // The swash: from under the water to `sea.y` above it the ground is
     // wet, darker and glossy, dry again `sea.z` higher, the line wandering

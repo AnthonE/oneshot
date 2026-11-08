@@ -514,6 +514,7 @@ pub fn dress_level(
             g.sea,
             lite,
             g.isle,
+            mood.mood.snow,
             crate::look::cloud_shadow::CloudShadowParams::off(wet),
         ));
         commands
@@ -1461,11 +1462,15 @@ pub fn build(
             // vehicles' bays and the walls (`look/grass.rs`,
             // `look/clutter.rs`). Neither casts a shadow (a rung without
             // them would light a fighter's feet they shade). An island's
-            // bare sandstone grows dry tufts and sheds its own chips.
+            // bare sandstone grows dry tufts and sheds its own chips; one
+            // under snow, neither.
             let seed = id as u32 * 7919 + 1;
             let clear = crate::look::grass::Clear::pads(&map);
             let isle = land == Land::Isle;
-            for (mesh, centre, layer) in crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle) {
+            let snowed = isle && crate::look::mood::of(id).snow;
+            let grows = |v: Vec<_>| if snowed { Vec::new() } else { v };
+            for (mesh, centre, layer) in grows(crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle))
+            {
                 commands.spawn((
                     LevelPart,
                     GrassPart,
@@ -1481,7 +1486,14 @@ pub fn build(
                 ));
             }
             let clear = crate::look::clutter::clear(&map, t);
-            for (mesh, centre, layer) in crate::look::clutter::blocks(t, lo, hi, seed ^ 0xc1a7_7e75, &clear, isle) {
+            for (mesh, centre, layer) in grows(crate::look::clutter::blocks(
+                t,
+                lo,
+                hi,
+                seed ^ 0xc1a7_7e75,
+                &clear,
+                isle,
+            )) {
                 commands.spawn((
                     LevelPart,
                     ClutterPart,

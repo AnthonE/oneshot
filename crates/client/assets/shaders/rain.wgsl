@@ -22,6 +22,9 @@ struct Rain {
     // rgb: the streak's colour, already lit and exposed. w: the radius
     // round the eye put out under a roof (`rain::SHELTER_CLEAR_M`), 0 out.
     look: vec4<f32>,
+    // x: a streak's width, m. y: its opacity at its middle. z: 1 a round
+    // flake (snow), 0 a streak. w: the shelter's radius (read on the CPU).
+    shape: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> rain: Rain;
@@ -39,9 +42,10 @@ struct VertexOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) fade: f32,
+    // The drop's own phase: which flakes stand grey against the sky.
+    @location(2) phase: f32,
 }
 
-const WIDTH: f32 = 0.012;
 // `rain::SPEED_STEPS`: a drop's speed is a whole number of these parts of
 // the travel, so the travel's wrap moves it by whole boxes.
 const SPEED_STEPS: f32 = 20.0;
@@ -72,7 +76,8 @@ fn vertex(in: VertexIn) -> VertexOut {
     let to_cam = normalize(cam - along);
     var side = cross(dir, to_cam);
     let sl = length(side);
-    side = select(vec3(WIDTH * 0.5, 0.0, 0.0), side / max(sl, 1e-4) * WIDTH * 0.5, sl > 1e-4);
+    let width = rain.shape.x;
+    side = select(vec3(width * 0.5, 0.0, 0.0), side / max(sl, 1e-4) * width * 0.5, sl > 1e-4);
 
     // Alive: under the intensity, and faded toward the box's walls so the
     // wrap is never seen.
@@ -90,12 +95,23 @@ fn vertex(in: VertexIn) -> VertexOut {
     out.clip = position_world_to_clip(world);
     out.uv = in.uv;
     out.fade = fade;
+    out.phase = in.color.y;
     return out;
 }
 
 @fragment
 fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
     let across = 1.0 - abs(in.uv.x);
-    let a = in.fade * across * (1.0 - in.uv.y * 0.75) * 0.4;
+    var a = in.fade * across * (1.0 - in.uv.y * 0.75) * rain.shape.y;
+    if rain.shape.z > 0.5 {
+        // A flake: soft and round, brightest at its middle.
+        // A flake: soft and round with a firm core. Against an overcast
+        // half of them read grey, darker than the sky, as snow does; the
+        // rest white.
+        let r = length(vec2(in.uv.x, in.uv.y * 2.0 - 1.0));
+        a = in.fade * (1.0 - smoothstep(0.45, 1.0, r)) * rain.shape.y;
+        let v = select(1.12, 0.55, in.phase < 0.5);
+        return vec4(rain.look.rgb * v, a);
+    }
     return vec4(rain.look.rgb, a);
 }

@@ -7,13 +7,14 @@ pub mod chrysalis;
 pub mod cistern;
 pub mod cloudbreak;
 pub mod overpass;
+pub mod pithead;
 pub mod proving_grounds;
 pub mod range;
 
 pub use crate::map::Def;
 
 /// Every map, in id order.
-pub const ALL: [&Def; 8] = [
+pub const ALL: [&Def; 9] = [
     &proving_grounds::DEF,
     &overpass::DEF,
     &cistern::DEF,
@@ -22,4 +23,5 @@ pub const ALL: [&Def; 8] = [
     &bulkhead::DEF,
     &chrysalis::DEF,
     &cloudbreak::DEF,
+    &pithead::DEF,
 ];

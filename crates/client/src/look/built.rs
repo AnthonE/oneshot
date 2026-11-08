@@ -94,6 +94,8 @@ pub struct Part {
     pub paint: Paint,
     /// Whether it turns about the set's [`Set::turns`].
     pub turns: bool,
+    /// Or about a line of its own: a point on it, its way, radians a second.
+    pub spins: Option<(Vec3, Vec3, f32)>,
 }
 
 const fn part(name: &'static str, paint: Paint) -> Part {
@@ -101,6 +103,16 @@ const fn part(name: &'static str, paint: Paint) -> Part {
         name,
         paint,
         turns: false,
+        spins: None,
+    }
+}
+
+const fn spinning(name: &'static str, paint: Paint, at: Vec3, way: Vec3, rate: f32) -> Part {
+    Part {
+        name,
+        paint,
+        turns: false,
+        spins: Some((at, way, rate)),
     }
 }
 
@@ -141,6 +153,7 @@ const OBSERVATORY: Set = Set {
             name: "crown",
             paint: BRONZE_PAINT,
             turns: true,
+            spins: None,
         },
         part("light_white", Paint::Light(LIGHT_WHITE)),
         part("light_red", Paint::Light(LIGHT_RED)),
@@ -278,6 +291,66 @@ const RANGE: Set = Set {
     lift: None,
 };
 
+/// Pithead's paint: what the Blender kit colours per vertex (`pithead.py`'s
+/// `tone`: each side's cladding, the steel and the rime the wind builds on it)
+/// over white, and the ice.
+/// Paint on steel is rough and not metal: a gloss puts the sky on near-black
+/// steel as a teal sheen.
+const TONED: Paint = Paint::Metal(Color::WHITE, 0.72, 0.0);
+const TONED_METAL: Paint = Paint::Metal(Color::WHITE, 0.42, 0.55);
+const ICE: Color = Color::srgb(0.72, 0.85, 0.96);
+const SNOW_DRIFT: Color = Color::srgb(0.84, 0.88, 0.95);
+/// Snow trodden to grey slush, and the lamps' warm light lying on the snow.
+const SLUSH: Color = Color::srgb(0.38, 0.39, 0.41);
+const POOL: Color = Color::srgb(1.0, 0.62, 0.3);
+/// The sheave wheels' axles (`pithead.py`'s `SHEAVE`), one a side, turned
+/// half about the middle; each turns as its winding engine hauls.
+const SHEAVE_RED: Vec3 = Vec3::new(-15.6, 18.6, 0.0);
+const SHEAVE_BLUE: Vec3 = Vec3::new(15.6, 18.6, 0.0);
+const SHEAVE_RATE: f32 = 0.35;
+
+const PITHEAD: Set = Set {
+    dir: "pithead",
+    prefix: "pithead",
+    parts: &[
+        part("blast", Paint::Look(BLAST)),
+        part("blast_dark", Paint::Look(BLAST_DARK)),
+        part("floor", Paint::Look(BLAST)),
+        part("tread", Paint::Look(TREAD)),
+        part("rust", Paint::Look(RUST)),
+        part("snow", Paint::Look(SNOW)),
+        part("clad", TONED),
+        part("clad_grey", TONED),
+        part("lining", TONED),
+        part("steel", TONED),
+        part("steel_paint", TONED),
+        part("steel_box", TONED),
+        part("rusty", TONED),
+        part("team_red", TONED),
+        part("team_blue", TONED),
+        part("galv", TONED_METAL),
+        part("cable", TONED_METAL),
+        part("coal", TONED),
+        part("crag", Paint::Metal(Color::WHITE, 0.85, 0.0)),
+        part("peaks", Paint::Metal(Color::WHITE, 0.85, 0.0)),
+        part("ice", Paint::Metal(ICE, 0.1, 0.0)),
+        part("drift", Paint::Decal(SNOW_DRIFT)),
+        part("track", Paint::Decal(SLUSH)),
+        part("pool", Paint::Shaft(POOL)),
+        part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.6, 0.0)),
+        part("paint_k", Paint::Metal(Color::srgb(0.03, 0.03, 0.03), 0.6, 0.0)),
+        part("window", Paint::Dim(LIGHT_WARM, 0.8)),
+        part("light_sodium", Paint::Light(LIGHT_SODIUM)),
+        part("light_red", Paint::Light(LIGHT_RED)),
+        part("light_blue", Paint::Light(LIGHT_BLUE)),
+        spinning("wheel_red", TONED, SHEAVE_RED, Vec3::Z, SHEAVE_RATE),
+        spinning("wheel_blue", TONED, SHEAVE_BLUE, Vec3::Z, -SHEAVE_RATE),
+    ],
+    block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(22.0, 8.0, 15.0)),
+    turns: (Vec3::ZERO, 0.0),
+    lift: None,
+};
+
 /// The built set of map `id`, if it has one.
 pub fn of(id: u8) -> Option<&'static Set> {
     match id {
@@ -286,6 +359,7 @@ pub fn of(id: u8) -> Option<&'static Set> {
         2 => Some(&CISTERN),
         5 => Some(&DOCK),
         7 => Some(&OBSERVATORY),
+        8 => Some(&PITHEAD),
         _ => None,
     }
 }
@@ -294,9 +368,9 @@ pub fn of(id: u8) -> Option<&'static Set> {
 #[derive(Component)]
 pub struct Wanted(&'static Set);
 
-/// What turns, about where and how fast.
+/// What turns: a point on the line it turns about, the line's way, how fast.
 #[derive(Component)]
-pub struct Turns(Vec3, f32);
+pub struct Turns(Vec3, Vec3, f32);
 
 /// Asks for map `id`'s built things on the level being built.
 pub fn spawn(commands: &mut Commands, id: u8) {
@@ -450,16 +524,19 @@ pub fn dress(
                 }
             }
             if p.turns {
-                c.insert(Turns(set.turns.0, set.turns.1));
+                c.insert(Turns(set.turns.0, Vec3::Y, set.turns.1));
+            }
+            if let Some((at, way, rate)) = p.spins {
+                c.insert(Turns(at, way, rate));
             }
         }
     }
 }
 
-/// Turns what turns about its middle.
+/// Turns what turns about its line.
 pub fn turn(time: Res<Time>, mut parts: Query<(&mut Transform, &Turns)>) {
     for (mut t, turns) in &mut parts {
-        let r = Quat::from_rotation_y(time.elapsed_secs() * turns.1);
+        let r = Quat::from_axis_angle(turns.1, time.elapsed_secs() * turns.2);
         t.rotation = r;
         t.translation = turns.0 - r * turns.0;
     }

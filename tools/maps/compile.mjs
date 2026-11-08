@@ -27,7 +27,8 @@
 //             size (Big Team on a big map, the rest on an arena). `practice`
 //             keeps it out of all of them (a new map: a private match picks it)
 //   mirror    "x": everything marked "mirror" is placed again at -x, red
-//             swapped for blue; "xz": also at -z, and at -x -z
+//             swapped for blue; "xz": also at -z, and at -x -z; "turn":
+//             again at -x -z only, a half turn about the middle (a pinwheel)
 //   prefabs   { name: [box, ...] } about their own origin
 //   structures [{ name, boxes | prefab, at: [x, y, z], turn: 0|90|180|270,
 //             tint: { look: look }, mirror: bool, dress: bool }]: with
@@ -335,7 +336,8 @@ function images(mode) {
   if (!mode) return [];
   if (mode === 'x') return [[-1, 1, true]];
   if (mode === 'xz') return [[-1, 1, true], [1, -1, false], [-1, -1, true]];
-  throw new Error(`mirror "${mode}": "x" or "xz"`);
+  if (mode === 'turn') return [[-1, -1, true]];
+  throw new Error(`mirror "${mode}": "x", "xz" or "turn"`);
 }
 
 export function compile(spec, where = 'map.json') {
