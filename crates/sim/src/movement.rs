@@ -994,6 +994,35 @@ mod tests {
         }
     }
 
+    /// Pithead's skips throw up the headframe's face, over its crown's edge.
+    #[test]
+    fn pitheads_skips_land_on_their_crowns_from_all_of_their_pads() {
+        let map = crate::maps::pithead::DEF.build();
+        for (n, l) in map.launchers.iter().enumerate() {
+            let a = l.area;
+            for (x, z) in [
+                (a.min.x, a.min.z),
+                (a.max.x, a.min.z),
+                (a.min.x, a.max.z),
+                (a.max.x, a.max.z),
+            ] {
+                let mut b = standing(&map, x, z);
+                step(&mut b, &Input::default(), &map);
+                assert!(!b.grounded, "skip {n} didn't throw from {x}, {z}: {b:?}");
+                let mut ticks = 0;
+                while !b.grounded && ticks < TICK_HZ * 4 {
+                    step(&mut b, &Input::default(), &map);
+                    ticks += 1;
+                }
+                assert!(
+                    fabs(b.pos.y - 7.0) < 0.01,
+                    "skip {n} from {x}, {z} lands at {:?}",
+                    b.pos
+                );
+            }
+        }
+    }
+
     static ZEROS: [u8; 16] = [0; 16];
 
     /// Open floor with these profile solids and these other solids on it.

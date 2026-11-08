@@ -242,13 +242,20 @@ fn places(m: &Map, json: Option<&serde_json::Value>) -> Vec<Place> {
             });
         }
     }
+    // A pickup past the guns has no gun's name (`arms::arm` would give the last gun's).
+    let pad_name = |arm: u8| match arm {
+        sim::arms::OVERSHIELD => "overshield".to_string(),
+        sim::arms::CAMO => "camo".to_string(),
+        sim::arms::FRAGS => "frags".to_string(),
+        sim::arms::STICKIES => "stickies".to_string(),
+        a => sim::arms::arm(a).name.to_lowercase(),
+    };
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     for p in &m.pads {
-        let n = sim::arms::arm(p.arm).name.to_lowercase();
-        *seen.entry(n).or_default() += 1;
+        *seen.entry(pad_name(p.arm)).or_default() += 1;
     }
     for p in &m.pads {
-        let n = sim::arms::arm(p.arm).name.to_lowercase();
+        let n = pad_name(p.arm);
         let name = if seen[&n] > 1 {
             let side = if p.pos.x < -0.5 {
                 "red"

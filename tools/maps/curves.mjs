@@ -511,8 +511,8 @@ export function mirrorCurve(sol, sx, sz) {
     return (Math.atan2(Math.sin(r) * sz, Math.cos(r) * sx) * 180) / Math.PI;
   };
   if (sol.kind === 'lathe' && sol.from !== undefined) {
-    // A reflection turns the sector over: its edges swap.
-    let a = reflect(sol.to), b = reflect(sol.from);
+    // A reflection turns the sector over: its edges swap. Two (a half turn) don't.
+    let [a, b] = sx * sz < 0 ? [reflect(sol.to), reflect(sol.from)] : [reflect(sol.from), reflect(sol.to)];
     while (b <= a) b += 360;
     o.from = a;
     o.to = b;
