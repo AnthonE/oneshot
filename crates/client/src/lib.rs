@@ -23,6 +23,7 @@ pub mod config;
 pub mod crash;
 pub mod display;
 pub mod door;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod elo;
 pub mod film;
 pub mod flags;

@@ -83,7 +83,8 @@ fn json_str(body: &str, key: &str) -> Option<String> {
 }
 
 fn unhex(h: &str) -> Option<Vec<u8>> {
-    (h.len() % 2 == 0)
+    h.len()
+        .is_multiple_of(2)
         .then(|| {
             (0..h.len() / 2)
                 .map(|i| u8::from_str_radix(h.get(2 * i..2 * i + 2)?, 16).ok())
