@@ -241,36 +241,11 @@ function shoot(st, rect, pos, look, fov = 30) {
   renderer.render(st.s, cam); renderer.setScissorTest(false);
 }
 
-// The arsenal, in the order the carousel shows it, with crates/sim/src/arms.rs's
-// numbers: damage a round (pellets × each for the shotgun), the magazine or
-// the battery, how it fires, and what a head shot does.
-const GUNS = [
-  { f: 'br', len: 1.9, name: 'BATTLE RIFLE', dmg: '10 ×3', mag: '36', fire: 'BURST', head: 'HEADSHOT', snd: 'shot_br_0', note: 'four bursts to kill, the last in the head' },
-  { f: 'magnum', len: 1.05, name: 'MAGNUM', dmg: '28', mag: '12', fire: 'SEMI', head: 'HEADSHOT', snd: 'shot_magnum_0', note: 'dual wield' },
-  { f: 'ar', len: 1.8, name: 'ASSAULT RIFLE', dmg: '8', mag: '32', fire: 'FULL AUTO', head: '—', snd: 'shot_rifle_0', note: '11 rounds a second' },
-  { f: 'smg', len: 1.3, name: 'SMG', dmg: '8', mag: '60', fire: 'FULL AUTO', head: '—', snd: 'shot_smg_0', note: 'dual wield' },
-  { f: 'carbine', len: 1.7, name: 'CARBINE', dmg: '17', mag: '18', fire: 'SEMI', head: 'HEADSHOT', snd: 'shot_carbine_0', note: '2× scope' },
-  { f: 'shotgun', len: 1.75, name: 'SHOTGUN', dmg: '29 ×10', mag: '12', fire: 'PUMP', head: '—', snd: 'shot_shotgun_0', note: 'one shell up close' },
-  { f: 'sniper', len: 1.95, name: 'SNIPER RIFLE', dmg: '120', mag: '4', fire: 'BOLT', head: 'ONE SHOT', snd: 'shot_sniper_0', note: '5× and 10× scope' },
-  { f: 'beam-rifle', len: 1.9, name: 'BEAM RIFLE', dmg: '120', mag: 'BATTERY', fire: 'RUNS HOT', head: 'ONE SHOT', snd: 'shot_beam_0', note: '65% heat a shot' },
-  { f: 'rocket-launcher', len: 1.8, name: 'ROCKET LAUNCHER', dmg: '230', mag: '2', fire: 'ROCKET', head: '—', snd: 'shot_rocket_0', note: '6 m blast' },
-  { f: 'launcher', len: 1.45, name: 'GRENADE LAUNCHER', dmg: '75', mag: '4', fire: 'LOB', head: '—', snd: 'shot_launcher_0', note: 'skips, then goes off' },
-  { f: 'cannon', len: 1.8, name: 'ION CANNON', dmg: '210', mag: '5', fire: 'HEAVY', head: '—', snd: 'shot_cannon_0', note: '4.5 m blast' },
-  { f: 'ion-rifle', len: 1.55, name: 'ION RIFLE', dmg: '8', mag: 'BATTERY', fire: 'FULL AUTO', head: '—', snd: 'shot_ion_0', note: '2.5× on shields' },
-  { f: 'ion-pistol', len: 1.0, name: 'ION PISTOL', dmg: '5', mag: 'BATTERY', fire: 'CHARGE', head: '—', snd: 'shot_ionp_0', note: 'a charged bolt homes and strips shields' },
-  { f: 'shards', len: 1.2, name: 'SHARD GUN', dmg: '4', mag: '30', fire: 'HOMING', head: '—', snd: 'shot_shards_0', note: 'eight stuck go off together' },
-  { f: 'sword', len: 1.5, name: 'SWORD', dmg: '200', mag: '∞', fire: 'LUNGE', head: '—', snd: 'sword_swing_0', note: '6 m lunge', upright: false },
-];
 // The gear: hats and boots, as the armory shows them.
 const GEAR = [['helmet', 'HELMET'], ['ten-gallon', 'TEN GALLON'], ['beanie', 'BEANIE'], ['aviators', 'AVIATORS'], ['respirator', 'RESPIRATOR'], ['skull', 'SKULL'],
   ['hightops-right', 'HIGH-TOPS'], ['spurs-right', 'SPURS'], ['magboots-right', 'MAG BOOTS'], ['wellies-right', 'WELLIES']];
 const S3 = {};
 async function build3D() {
-  for (const g of GUNS) {
-    const st = stage();
-    try { g.obj = lay(prep(await loadGLB(`glb/${g.f}.glb`), .8), g.len, { flip: !!g.flip, pitch: g.pitch || 0 }); st.s.add(g.obj); } catch (e) { console.log('no model', g.f); }
-    g.st = st;
-  }
   S3.hero = stage(0xfff4e6, 0xe8b931);
   try { S3.hero.obj = lay(prep(await loadGLB('glb/br.glb'), .8), 1.8); S3.hero.s.add(S3.hero.obj); } catch (e) {}
   S3.snipe = stage(0xfff4e6, 0xe8b931);
@@ -356,7 +331,7 @@ const SCENES = [
     const pre = L.t < kill;
     if (pre) foot(bg, 'scope', L.t, L.d, { full: true, z: 1.75, px: -.45, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.3, z1: 1.36, x0: -.3, x1: .2 } });
     // the shot, and the fighter dropping, in slow motion: snipe-kill's clip holds the kill 1.2 s in
-    else foot(bg, 'snipe-kill', L.t - kill, L.d - kill, { full: true, from: 1.05, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.36, z1: 1.3, x0: .2, x1: .25 } });
+    else foot(bg, 'snipe-kill', Math.min(L.t - kill, 2.1), L.d - kill, { full: true, from: 1.05, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.36, z1: 1.3, x0: .2, x1: .25 } });
     const breath = ramp(L.t, 0, .9);
     scope(L, pre ? breath : 1 - ramp(L.t, kill + .5, kill + 1.1), pre ? 1 : 0);
     if (!pre) {
@@ -365,7 +340,7 @@ const SCENES = [
       fg.save(); fg.globalAlpha = k * .5; fg.fillStyle = '#fff'; fg.fillRect(0, 0, W, H); fg.restore();
     }
     // the picture goes to black under the words before the first claim
-    const dark = ramp(L.t, kill + 2.7, kill + 3.4);
+    const dark = ramp(L.t, kill + 2.1, kill + 2.6);
     if (dark > 0) { fg.save(); fg.globalAlpha = dark; fg.fillStyle = '#000'; fg.fillRect(0, 0, W, H); fg.restore(); }
     const r = rv({ t: L.t - kill, d: L.d - kill }, .25, .4, .25);
     if (L.t > kill) text(fg, 'ONE SHOT.', W / 2, 800 + r.dy, { size: 150, track: 14, alpha: r.a, shadow: 40 });
@@ -432,8 +407,8 @@ const SCENES = [
   } },
   { id: 'm6-bigteam', at: grid(19), box: true, draw(L) {
     const two = L.d / 2;
-    if (L.t < two) foot(bg, 'trucks', L.t, two, { fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
-    else foot(bg, 'minigun', L.t - two, L.d - two, { fallback: 'dryfork', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.08, z1: 1.16, x0: .2 } });
+    if (L.t < two) foot(bg, 'truck-pov', L.t, two, { from: .6, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
+    else foot(bg, 'trucks', L.t - two, L.d - two, { from: .3, fallback: 'dryfork', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.08, z1: 1.16, x0: .2 } });
     if (L.t >= two) { const k = Math.exp(-(L.t - two) * 14); if (k > .04) { fg.save(); fg.globalAlpha = k * .35; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); } }
     modeCard(L, 'BIG TEAM', '8v8 on terrain. Trucks, a minigun on the back of two of them.', { tag: '16 PLAYERS', tagColor: C.blueHi });
   } },
@@ -445,36 +420,9 @@ const SCENES = [
   { id: 'p5-chrysalis', at: MAPS0 + 4 * MAPSEG, box: true, draw(L) { foot(bg, 'map-chrysalis', L.t, L.d, { fallback: 'chrysalis', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 5, 'CHRYSALIS', 'Free for all · Gun Game'); } },
   { id: 'p6-cloudbreak', at: MAPS0 + 5 * MAPSEG, box: true, draw(L) { foot(bg, 'map-cloudbreak', L.t, L.d, { fallback: 'dryfork', still: { z0: 1.1, z1: 1.02, y0: -.2 } }); mapCard(L, 6, 'CLOUDBREAK', 'Doubles · Free for all'); } },
   { id: 'p7-dryfork', at: MAPS0 + 6 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { from: .3, fallback: 'dryfork', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } }); mapCard(L, 7, 'DRY FORK', 'Big Team · Capture the Flag'); } },
-  // the arsenal: one gun a kick (the track's 1.07 s grid from 97.9 s)
-  { id: 'a1-arsenal', at: hit(97.9), draw(L) {
-    const seg = L.d / GUNS.length, k = Math.min(GUNS.length - 1, Math.floor(L.t / seg)), lt = L.t - k * seg, g = GUNS[k];
-    ground(bg, 'rgba(57,130,186,.14)', 1240, 520, 820);
-    const kick = Math.exp(-lt * 9);
-    if (g.obj) {
-      g.st.key.intensity = 2.6 + 2.0 * kick; g.st.rim.intensity = 2.4; g.st.hemi.intensity = .45;
-      g.obj.rotation.y = -.42 + lt * .3; g.obj.rotation.z = .04 * kick; g.obj.rotation.x = .08;
-      const z = lerp(2.6, 2.8, E.out(ramp(lt, 0, .3)));
-      shoot(g.st, [640, 100, 1280, 860], [0, .25, z], [0, 0, 0], 30);
-    }
-    const a = E.out(ramp(lt, 0, .1)) * (1 - ramp(lt, seg - .06, seg)), dx = (1 - a) * -50, x = 140 + dx;
-    text(fg, `${String(k + 1).padStart(2, '0')} / ${GUNS.length}`, x, 270, { kind: 'ail', size: 30, weight: 700, color: C.gold, align: 'left', alpha: a, track: 4 });
-    text(fg, g.name, x, 370, { size: 88, track: 6, align: 'left', alpha: a, shadow: 20 });
-    const rows = [['DAMAGE', g.dmg], ['ROUNDS', g.mag], ['FIRE', g.fire], ['HEAD', g.head]];
-    rows.forEach(([kk, v], i) => {
-      const ra = E.out(ramp(lt, .04 + i * .04, .16 + i * .04)) * (1 - ramp(lt, seg - .06, seg)), y = 470 + i * 88;
-      fg.save(); fg.globalAlpha = ra; fg.fillStyle = C.line; fg.fillRect(x, y + 26, 500, 2); fg.restore();
-      text(fg, kk, x, y, { kind: 'ail', size: 26, weight: 700, color: C.muted, align: 'left', track: 3, alpha: ra });
-      text(fg, v, x + 500, y + 6, { size: 44, color: (i === 3 && v !== '—') ? C.goldHi : C.ink, align: 'right', alpha: ra });
-    });
-    text(fg, g.note, x, 870, { kind: 'ail', size: 30, weight: 600, color: C.faint, align: 'left', alpha: a * .9, track: 1 });
-    // muzzle flash on the cut, at the barrel's end
-    if (kick > .05) { fg.save(); fg.globalCompositeOperation = 'lighter'; const gx = 1280 + 300 * g.len * .9, gy = 500, gr = fg.createRadialGradient(gx, gy, 0, gx, gy, 200 * kick + 40); gr.addColorStop(0, `rgba(255,236,190,${.5 * kick})`); gr.addColorStop(1, 'rgba(255,160,60,0)'); fg.fillStyle = gr; fg.fillRect(gx - 300, gy - 300, 600, 600); fg.restore(); }
-    const r = rv(L, .3, .4, .2);
-    text(fg, "FIFTEEN GUNS. HALO 2'S COUNTS, OURS BY NAME.", W / 2, 1010 + r.dy * .4, { kind: 'ail', size: 30, weight: 600, color: C.muted, track: 4, alpha: r.a });
-  } },
-  // ranked from day one: the slam on the track's biggest hit
-  { id: 'r1-ranked', at: hit(113.96), draw(L) {
-    const slam = hit(114.33) - hit(113.96);
+  // ranked from day one: the slam on the first kick of the track's grid
+  { id: 'r1-ranked', at: hit(97.9), draw(L) {
+    const slam = hit(98.97) - hit(97.9);
     foot(bg, 'slow', L.t, L.d, { full: true, fallback: 'bigteam', grade: 'brightness(.55) contrast(1.1) saturate(.8)', still: { full: true, z0: 1.1, z1: 1.16 } });
     if (L.t < slam) return;
     const lt = L.t - slam, LL = { t: lt, d: L.d - slam };
@@ -493,7 +441,7 @@ const SCENES = [
     sub(LL, 'Duel, Doubles and cups, rated on your Elo Pros wallet.', { y: 770, at: 1.4, size: 30, color: C.faint });
   } },
   // skins and gear
-  { id: 's1-gear', at: hit(119.32), draw(L) {
+  { id: 's1-gear', at: hit(104.32), draw(L) {
     ground(bg, 'rgba(232,185,49,.12)', W / 2, 560, 900);
     const st = S3.gear; st.key.intensity = 2.6; st.rim.intensity = 2.8; st.hemi.intensity = .5;
     st.objs.forEach((o, i) => {
@@ -508,7 +456,7 @@ const SCENES = [
     sub(L, 'Yours to keep or sell. Some are rank-locked: owning one is a market, wearing it is a record.', { y: 1000, at: 1.2, color: C.faint, size: 28 });
   } },
   // the end card
-  { id: 'e1-end', at: hit(122.54), draw(L) {
+  { id: 'e1-end', at: hit(107.54), draw(L) {
     foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { full: true, fallback: 'dryfork', grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)', still: { full: true, z0: 1.08, z1: 1.02, grade: 'brightness(.28) contrast(1.05) saturate(.7) blur(5px)' } });
     const r0 = rv(L, .25, .45, .01);
     wordmark(fg, W / 2, 430 + r0.dy, 1.15, { alpha: r0.a, glow: 'rgba(232,185,49,.35)', line: 'ARENA SLAYER' });
@@ -521,7 +469,7 @@ const SCENES = [
     text(fg, 'ELO PROS', W / 2, 960 + r3.dy * .4, { kind: 'ail', size: 28, weight: 700, color: C.faint, track: 8, alpha: r3.a });
   } },
 ];
-const TOTAL = hit(129.2);
+const TOTAL = hit(114.2);
 for (let i = 0; i < SCENES.length; i++) { SCENES[i].t0 = SCENES[i].at; SCENES[i].d = (i + 1 < SCENES.length ? SCENES[i + 1].at : TOTAL) - SCENES[i].at; }
 const at = id => SCENES.find(s => s.id === id).t0;
 // The ramp's cuts: [seconds into the scene, clip, stand-in, seconds into the clip].
@@ -532,13 +480,11 @@ const FLASHES = [
   [hit(45.44), .4, '#fff', .55],
   [DROP, .5, '#fff', .9],
   [at('m6-bigteam') + (at('p1-proving') - at('m6-bigteam')) / 2, .25, '#ffe9c0', .4],
-  [hit(114.33), .5, '#fff', .8],
+  [hit(98.97), .5, '#fff', .8],
   [at('e1-end'), .5, '#fff', .45],
 ];
 
 // ── the audio cue list mix.py lays down, in trailer seconds ───────────────
-const arsenalSeg = (at('r1-ranked') - at('a1-arsenal')) / GUNS.length;
-const gunCues = GUNS.map((g, i) => ({ src: `snd/${g.snd}.ogg`, at: at('a1-arsenal') + i * arsenalSeg, gain: .75 }));
 const ramp0 = at('b4-ramp');
 const CUES = {
   total: TOTAL,
@@ -581,16 +527,13 @@ const CUES = {
     { src: 'snd/pickup_0.ogg', at: at('m5-ctf') + 1.4, gain: .5 },
     { src: 'voice/team_slayer.ogg', at: at('m6-bigteam') + .1, gain: .9 },
     { src: 'snd/engine_0.ogg', at: at('m6-bigteam') + .2, gain: .6 },
-    { src: 'snd/shot_minigun_0.ogg', at: at('m6-bigteam') + (at('p1-proving') - at('m6-bigteam')) / 2, gain: .8 },
-    { src: 'sfx/trailer_whoosh.wav', at: at('a1-arsenal') - .2, gain: .35 },
-    ...gunCues,
+    { src: 'snd/skid_0.ogg', at: at('m6-bigteam') + (at('p1-proving') - at('m6-bigteam')) / 2, gain: .6 },
     { src: 'sfx/trailer_boom.wav', at: at('p1-proving'), gain: .5 },
-    { src: 'sfx/trailer_boom.wav', at: at('a1-arsenal'), gain: .6 },
     ...['p1-proving', 'p2-overpass', 'p3-cistern', 'p4-bulkhead', 'p5-chrysalis', 'p6-cloudbreak', 'p7-dryfork'].slice(1).map(id => ({ src: 'sfx/trailer_whoosh.wav', at: at(id) - .15, gain: .22 })),
-    { src: 'sfx/trailer_riser.wav', at: hit(114.33) - 3.0, gain: .45 },
-    { src: 'sfx/trailer_boom.wav', at: hit(114.33), gain: 1.0 },
-    { src: 'sfx/trailer_braam.wav', at: hit(114.33) + .02, gain: .6 },
-    ...[0, 1, 2, 3, 4].map(i => ({ src: 'snd/ui_click_0.ogg', at: hit(114.33) + .35 + i * .14, gain: .4 })),
+    { src: 'sfx/trailer_riser.wav', at: hit(98.97) - 3.0, gain: .45 },
+    { src: 'sfx/trailer_boom.wav', at: hit(98.97), gain: 1.0 },
+    { src: 'sfx/trailer_braam.wav', at: hit(98.97) + .02, gain: .6 },
+    ...[0, 1, 2, 3, 4].map(i => ({ src: 'snd/ui_click_0.ogg', at: hit(98.97) + .35 + i * .14, gain: .4 })),
     { src: 'sfx/trailer_whoosh.wav', at: at('s1-gear') - .2, gain: .3 },
     ...[0, 1, 2, 3, 4, 5].map(i => ({ src: 'snd/ui_hover_0.ogg', at: at('s1-gear') + .15 + i * .16, gain: .35 })),
     { src: 'sfx/trailer_reverse.wav', at: at('e1-end') - 2.4, gain: .6 },
