@@ -10,6 +10,8 @@
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
+    mesh_functions::get_local_from_world,
+    mesh_view_bindings::globals,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
@@ -36,6 +38,13 @@ struct Coat {
     // Boxes in the model's frame, low and high corners in turn: the run's
     // region (empty for none), then each cell's.
     boxes: array<vec4<f32>, 10>,
+    // The skin's pattern, drawn over the coat in the mesh's own frame so it
+    // stays on the gun: x which (0 none, 1 molten, 2 frost, 3 veins,
+    // 4 gilded), y its glow's strength, z its cells a metre, w its speed.
+    look: vec4<f32>,
+    // rgb: the pattern's hot colour, linear; w how much of the gun it takes
+    // (1: all of it, steel too).
+    hot: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> coat: Coat;
@@ -69,6 +78,131 @@ fn gauge(p: vec3<f32>) -> f32 {
     return 1.0;
 }
 
+fn hash3(p: vec3<f32>) -> vec3<f32> {
+    let q = vec3<f32>(
+        dot(p, vec3<f32>(127.1, 311.7, 74.7)),
+        dot(p, vec3<f32>(269.5, 183.3, 246.1)),
+        dot(p, vec3<f32>(113.5, 271.9, 124.6)),
+    );
+    return fract(sin(q) * 43758.5453);
+}
+
+fn hash1(p: vec3<f32>) -> f32 {
+    return fract(sin(dot(p, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+}
+
+fn noise(p: vec3<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(mix(hash1(i), hash1(i + vec3(1.0, 0.0, 0.0)), u.x),
+                mix(hash1(i + vec3(0.0, 1.0, 0.0)), hash1(i + vec3(1.0, 1.0, 0.0)), u.x), u.y);
+    let b = mix(mix(hash1(i + vec3(0.0, 0.0, 1.0)), hash1(i + vec3(1.0, 0.0, 1.0)), u.x),
+                mix(hash1(i + vec3(0.0, 1.0, 1.0)), hash1(i + vec3(1.0, 1.0, 1.0)), u.x), u.y);
+    return mix(a, b, u.z);
+}
+
+fn fbm(p: vec3<f32>) -> f32 {
+    return 0.5 * noise(p) + 0.3 * noise(p * 2.03 + 17.0) + 0.2 * noise(p * 4.11 + 41.0);
+}
+
+// Cells: x the distance to the nearest point, y to the edge between it and
+// the next (near enough), z the nearest cell's own number, 0..1.
+fn cells(p: vec3<f32>) -> vec3<f32> {
+    let i = floor(p);
+    let f = fract(p);
+    var d1 = 8.0;
+    var d2 = 8.0;
+    var id = 0.0;
+    for (var z = -1; z <= 1; z++) {
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let o = vec3<f32>(f32(x), f32(y), f32(z));
+                let h = hash3(i + o);
+                let r = o + h - f;
+                let d = dot(r, r);
+                if d < d1 {
+                    d2 = d1;
+                    d1 = d;
+                    id = h.x;
+                } else if d < d2 {
+                    d2 = d;
+                }
+            }
+        }
+    }
+    return vec3<f32>(sqrt(d1), sqrt(d2) - sqrt(d1), id);
+}
+
+struct Look {
+    // The surface's colour where the pattern takes it, and how much it does.
+    base: vec3<f32>,
+    cover: f32,
+    glow: vec3<f32>,
+    metal: f32,
+    rough: f32,
+}
+
+// A skin's pattern at `p` (the mesh's frame in cells), `t` its own time,
+// over a texel of brightness `luma`.
+fn pattern(kind: i32, p: vec3<f32>, t: f32, luma: f32) -> Look {
+    var o: Look;
+    o.cover = coat.hot.w;
+    let hot = coat.hot.rgb;
+    let tone = clamp(luma * 4.0, 0.35, 1.6);
+    if kind == 1 {
+        // Molten: charred rock, cracked, the cracks running with lava that
+        // breathes and crawls.
+        let warp = fbm(p * 0.5 + vec3<f32>(0.0, t * 0.15, 0.0));
+        let c = cells(p + warp * 0.9);
+        let crack = 1.0 - smoothstep(0.015, 0.11, c.y);
+        let pulse = 0.55 + 0.45 * sin(t * 2.2 + c.z * 6.283);
+        let flow = 0.5 + fbm(p * 2.0 - vec3<f32>(0.0, t * 0.6, t * 0.3));
+        let heat = crack * pulse * flow;
+        let ember = 0.25 * smoothstep(0.55, 0.9, fbm(p * 1.3 + t * 0.2));
+        o.base = mix(vec3<f32>(0.018, 0.014, 0.012), vec3<f32>(0.05, 0.02, 0.01), c.z) * tone;
+        o.glow = mix(hot * vec3<f32>(1.0, 0.25, 0.08), hot, clamp(heat, 0.0, 1.0)) * (heat + ember);
+        o.metal = 0.0;
+        o.rough = 0.85;
+    } else if kind == 2 {
+        // Frost: ice in facets, each its own shade, their seams lit and a
+        // shimmer passing over them, glints coming and going.
+        let c = cells(p);
+        let edge = 1.0 - smoothstep(0.0, 0.07, c.y);
+        let shimmer = 0.5 + 0.5 * sin(t * 1.6 + dot(p, vec3<f32>(0.9, 0.35, 0.6)) * 2.0);
+        let glint = step(0.993, hash1(floor(p * 5.0) + floor(t * 3.0)));
+        o.base = mix(vec3<f32>(0.45, 0.62, 0.78), vec3<f32>(0.85, 0.95, 1.0), c.z) * tone;
+        o.glow = hot * (edge * (0.25 + 0.75 * shimmer) + glint * 4.0);
+        o.metal = 0.2;
+        o.rough = 0.12;
+    } else if kind == 3 {
+        // Veins: dark moss, living veins through it and pulses running
+        // along them.
+        let n = fbm(p * 0.7 + vec3<f32>(3.0, 0.0, 0.0));
+        let ridge = 1.0 - abs(n * 2.0 - 1.0);
+        let vein = smoothstep(0.86, 0.97, ridge);
+        let fine = smoothstep(0.9, 0.98, 1.0 - abs(fbm(p * 2.1) * 2.0 - 1.0)) * 0.5;
+        let pulse = 0.5 + 0.5 * sin(t * 3.0 - fbm(p * 0.3) * 14.0);
+        o.base = mix(vec3<f32>(0.012, 0.03, 0.015), vec3<f32>(0.04, 0.08, 0.035), n) * tone;
+        o.glow = hot * (vein + fine) * (0.2 + 1.1 * pulse * pulse);
+        o.metal = 0.1;
+        o.rough = 0.55;
+    } else {
+        // Gilded: polished gold, scrolled with engraving, a shine sweeping
+        // down it and sparks where the engraving catches.
+        let n = fbm(p * 0.9);
+        let scroll = smoothstep(0.9, 0.97, 1.0 - abs(n * 2.0 - 1.0));
+        let along = fract(dot(p, vec3<f32>(0.55, 0.2, 0.35)) * 0.12 - t * 0.35);
+        let band = smoothstep(0.0, 0.025, along) * (1.0 - smoothstep(0.025, 0.07, along));
+        let spark = step(0.995, hash1(floor(p * 4.0) + floor(t * 5.0))) * scroll;
+        o.base = mix(vec3<f32>(1.0, 0.71, 0.29), vec3<f32>(0.25, 0.15, 0.04), scroll) * tone;
+        o.glow = hot * (band * 1.5 + spark * 3.0);
+        o.metal = 1.0;
+        o.rough = mix(0.22, 0.6, scroll);
+    }
+    return o;
+}
+
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
@@ -94,7 +228,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     let p = (coat.local * vec4<f32>(in.world_position.xyz, 1.0)).xyz;
     let gain = coat.glow.x * mix(coat.glow.z, 1.0, gauge(p));
-    pbr_input.material.emissive = vec4<f32>(glow * gain, pbr_input.material.emissive.a);
+    var emissive = glow * gain;
+
+    let kind = i32(coat.look.x + 0.5);
+    if kind > 0 {
+        let at = (get_local_from_world(in.instance_index) * vec4<f32>(in.world_position.xyz, 1.0)).xyz;
+        let l = pattern(kind, at * coat.look.z, globals.time * coat.look.w, luma);
+        // All of the paint, and of the rest as much as the skin takes.
+        let take = max(paint, l.cover * coat.glow.y) * (1.0 - lit);
+        let col = pbr_input.material.base_color;
+        pbr_input.material.base_color = vec4<f32>(mix(col.rgb, l.base, take), col.a);
+        pbr_input.material.metallic = mix(pbr_input.material.metallic, l.metal, take);
+        pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, l.rough, take);
+        emissive += l.glow * coat.look.y * take;
+    }
+    pbr_input.material.emissive = vec4<f32>(emissive, pbr_input.material.emissive.a);
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

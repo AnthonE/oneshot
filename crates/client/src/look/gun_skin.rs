@@ -3,8 +3,11 @@
 //! paint recoloured as it is drawn (`gun_skin.wgsl`), its wear, panel lines
 //! and light kept, so one coat fits all fifteen with no maps of its own.
 //!
-//! Cosmetic as the trim is (DESIGN.md §15): nothing here glows, and a gun on
-//! a pad or on the floor wears its own paint.
+//! Over the coat each skin but the free one draws its own pattern, moving
+//! and lit (molten cracks, frost, veins, gold), in the mesh's own frame so
+//! it stays on the gun. Cosmetic as the trim is (DESIGN.md §15): a skin may
+//! glow, which shows its wearer more, never less. A gun on a pad or on the
+//! floor wears its own paint.
 //!
 //! The gun in our own view wears this material whatever its skin, each
 //! instance its own, so its glow can live (`gun_glow.rs`).
@@ -34,6 +37,8 @@ pub struct CoatParams {
     pub stays: Vec4,
     pub goes: Vec4,
     pub boxes: [Vec4; 10],
+    pub look: Vec4,
+    pub hot: Vec4,
 }
 
 /// No coat, its glow as painted, no gauge.
@@ -58,6 +63,8 @@ pub const BARE: CoatParams = CoatParams {
         Vec4::ZERO,
         Vec4::ZERO,
     ],
+    look: Vec4::ZERO,
+    hot: Vec4::ZERO,
 };
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
@@ -73,31 +80,67 @@ impl MaterialExtension for Coat {
 }
 
 /// One skin's colours, sRGB: its paint's and the rest's; the paint's metal
-/// and roughness.
+/// and roughness; its pattern, if it has one.
 struct Colours {
     paint: u32,
     rest: u32,
     metal: f32,
     rough: f32,
+    pattern: Option<Pattern>,
 }
 
-const fn colours(paint: u32, rest: u32, metal: f32, rough: f32) -> Option<Colours> {
+/// A skin's pattern (`gun_skin.wgsl`'s `pattern`).
+struct Pattern {
+    /// Which: 1 molten, 2 frost, 3 veins, 4 gilded.
+    kind: u8,
+    /// Its glow's strength.
+    glow: f32,
+    /// Its cells a metre.
+    cells: f32,
+    /// Its time's speed.
+    speed: f32,
+    /// Its hot colour, sRGB.
+    hot: u32,
+    /// How much of the gun it takes beyond the paint (1: the steel too).
+    cover: f32,
+}
+
+const fn colours(paint: u32, rest: u32, metal: f32, rough: f32, pattern: Option<Pattern>) -> Option<Colours> {
     Some(Colours {
         paint,
         rest,
         metal,
         rough,
+        pattern,
     })
 }
 
-/// By skin (`proto::SKINS` order); none for the standard look.
+const fn pattern(kind: u8, glow: f32, cells: f32, speed: f32, hot: u32, cover: f32) -> Option<Pattern> {
+    Some(Pattern {
+        kind,
+        glow,
+        cells,
+        speed,
+        hot,
+        cover,
+    })
+}
+
+/// By skin (`proto::SKINS` order); none for the standard look. Pill, the
+/// free one, is a plain coat.
 const COLOURS: [Option<Colours>; 6] = [
     None,
-    colours(0xd9dcdf, 0x4a4e53, 0.1, 0.45),
-    colours(0xb3300f, 0x241c1a, 0.15, 0.5),
-    colours(0x9fd2ea, 0x39475a, 0.25, 0.4),
-    colours(0x3f9a4e, 0x1e2a20, 0.2, 0.5),
-    colours(0xd9a531, 0x5a4520, 0.9, 0.42),
+    colours(0xd9dcdf, 0x4a4e53, 0.1, 0.45, None),
+    colours(0xb3300f, 0x241c1a, 0.15, 0.5, pattern(1, 6.0, 14.0, 1.0, 0xffb040, 1.0)),
+    colours(
+        0x9fd2ea,
+        0x39475a,
+        0.25,
+        0.4,
+        pattern(2, 2.5, 16.0, 1.0, 0x6fe8ff, 0.85),
+    ),
+    colours(0x3f9a4e, 0x1e2a20, 0.2, 0.5, pattern(3, 4.0, 9.0, 1.0, 0x5cff7a, 1.0)),
+    colours(0xd9a531, 0x5a4520, 0.9, 0.42, pattern(4, 3.0, 10.0, 1.0, 0xfff0c0, 0.8)),
 ];
 
 /// A gun line's paint, as the shader reads it: its paint's and the rest's
@@ -136,11 +179,19 @@ fn linear(hex: u32, w: f32) -> Vec4 {
 }
 
 fn params(c: &Colours, l: &Line) -> CoatParams {
+    let (look, hot) = c.pattern.as_ref().map_or((Vec4::ZERO, Vec4::ZERO), |p| {
+        (
+            Vec4::new(p.kind as f32, p.glow, p.cells, p.speed),
+            linear(p.hot, p.cover),
+        )
+    });
     CoatParams {
         paint: linear(c.paint, c.metal),
         rest: linear(c.rest, c.rough),
         mid: Vec4::new(l.paint_mid, l.rest_mid, l.chroma[0], l.chroma[1]),
         glow: Vec4::new(1.0, 1.0, 1.0, 1.0),
+        look,
+        hot,
         ..BARE
     }
 }
