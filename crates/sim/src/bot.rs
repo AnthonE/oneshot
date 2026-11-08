@@ -380,6 +380,11 @@ impl Bot {
         self.rng.next_u32() as f32 * (1.0 / 4_294_967_296.0)
     }
 
+    /// The fighter it is fighting, if any (read by `tools/aim`'s hand).
+    pub fn target(&self) -> Option<usize> {
+        ((self.target as usize) < crate::consts::MAX_FIGHTERS).then_some(self.target as usize)
+    }
+
     /// This tick's input for the bot in `slot`.
     pub fn think(&mut self, w: &World, slot: usize) -> Input {
         let mut inp = self.decide(w, slot);

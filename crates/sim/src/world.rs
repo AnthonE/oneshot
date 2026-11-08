@@ -440,6 +440,9 @@ impl Thing for Minion {
     }
 }
 
+/// `Clone`, so a match can be forked and each branch stepped on (the aim
+/// windows' twins, `tools/aim`); the server never clones one.
+#[derive(Clone)]
 pub struct World {
     pub tick: u32,
     pub map: Map,

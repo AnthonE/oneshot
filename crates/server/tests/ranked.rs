@@ -565,6 +565,20 @@ async fn a_ranked_duel_is_matched_played_reported_and_replays() {
         !dir.join("review").exists(),
         "nothing to review in a match nobody fired in"
     );
+    // Each wallet's profile has a line for it: numbers, never a name.
+    for wallet in [WALLETS[0], WALLETS[1]] {
+        let text = std::fs::read_to_string(dir.join(server::PROFILES).join(format!("{wallet}.jsonl"))).unwrap();
+        let line: serde_json::Value = text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .find(|l: &serde_json::Value| l["match"] == watch["id"])
+            .expect("the match in the wallet's profile");
+        assert_eq!(line["replay_sha256"], watch["replay_sha256"]);
+        assert!(
+            line["aim"]["on_target"].is_number() && line.get("name").is_none(),
+            "{line}"
+        );
+    }
     let at = bytes.len() - 20;
     bytes[at] ^= 1;
     assert!(room::replay::verify(&bytes).is_err());

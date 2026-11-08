@@ -1,0 +1,15 @@
+[package]
+name = "aim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Aim windows for the cheat detector: bot matches and replays forked at each sighting into a clean and a cheated twin (docs/ANTICHEAT.md §5)"
+
+[[bin]]
+name = "oneshot-aim"
+path = "src/main.rs"
+
+[dependencies]
+sim = { path = "../../crates/sim" }
+room = { path = "../../crates/room" }
+serde_json = "1"
