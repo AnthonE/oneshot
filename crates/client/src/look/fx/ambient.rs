@@ -2,7 +2,8 @@
 //! Spray where the swell meets the rock that stands in the sea, motes in
 //! the sun riding the wind past the eye, and over an island (`level::Land::Isle`)
 //! wisps of the sea of cloud rolling up over its rim and sand blown off
-//! its dunes; in a ship's hold, the flames in its fonts. Drawn only, from
+//! its dunes, or, under snow, spindrift streaming off all of it and the ice
+//! in the air glinting; in a ship's hold, the flames in its fonts. Drawn only, from
 //! the map and its mood: nothing here knows where anyone is but the camera.
 //!
 //! **Nothing here hides anyone.** The spray is thrown off rock that stands
@@ -59,6 +60,32 @@ pub const SAND_HZ: f32 = 18.0;
 const SAND_REACH_M: f32 = 22.0;
 const SAND_DUNE_M: f32 = 0.6;
 const SAND_TINT: [f32; 3] = [0.8, 0.66, 0.46];
+/// Under snow (the mood's `snow`): grains a second within [`SAND_REACH_M`],
+/// off any of the ground, lifted to this high, over the recipe's warm white
+/// a cold one; the wisps this many times as many and whiter; the motes are
+/// ice in the air, as many as round a canyon's eye, glinting cold.
+pub const SNOW_HZ: f32 = 70.0;
+const SNOW_LIFT_M: (f32, f32) = (0.03, 1.1);
+/// A grain of snow's size over a grain of sand's: a flake, centimetres.
+const SNOW_GRAIN: (f32, f32) = (1.8, 3.0);
+const SNOW_TINT: [f32; 3] = [0.7, 0.86, 1.22];
+const SNOW_WISPS: f32 = 2.5;
+const SNOW_WISP_TINT: [f32; 3] = [0.97, 0.99, 1.04];
+const ICE_TINT: [f32; 3] = [0.72, 0.86, 1.2];
+/// Under snow, plumes off the lee of the rock: born over the void just past
+/// the lip the wind leaves (never over ground anyone stands on), streaming on
+/// out downwind; how many a second within [`WISP_REACH_M`].
+const PLUME_HZ: f32 = 4.0;
+const PLUME_TINT: [f32; 3] = [0.95, 0.97, 1.02];
+
+/// Stacks that smoke, by map: where their tops stand (Pithead's winding
+/// houses, `pithead.py`'s `winding_house`, out over the void, never between
+/// two fighters), puffs a second each, how far from the eye they're drawn,
+/// and the steam's grey-white.
+const STACKS: [(u8, Vec3); 2] = [(8, Vec3::new(-34.0, 8.2, 11.5)), (8, Vec3::new(34.0, 8.2, -11.5))];
+const STACK_HZ: f32 = 3.0;
+const STACK_DRAW_M: f32 = 140.0;
+const STACK_TINT: [f32; 3] = [0.88, 0.89, 0.92];
 
 /// A font's flame (`level::FONT`, in its cup, over a standing head): tongues
 /// a second, how far from the eye it burns, how big, and how far under the
@@ -75,6 +102,7 @@ pub struct Ambient {
     motes: f32,
     wisps: f32,
     sand: f32,
+    plumes: f32,
 }
 
 /// Every frame, before the pools are drawn: the motes topped up round the
@@ -97,10 +125,22 @@ pub fn drive(time: Res<Time>, mood: Res<MoodNow>, mut state: ResMut<Ambient>, fx
     // Toward where the wind blows (`rig::to_sun_at`'s bearing), level.
     let wind = Vec3::new(m.wind_azim.sin(), 0.05, m.wind_azim.cos());
 
+    // Steam off the stacks, up and away down the wind.
+    let tint = Color::linear_rgb(STACK_TINT[0], STACK_TINT[1], STACK_TINT[2]);
+    for &(_, at) in STACKS.iter().filter(|s| s.0 == mood.map) {
+        if at.distance_squared(eye) > STACK_DRAW_M * STACK_DRAW_M || fx.rand() >= dt * STACK_HZ {
+            continue;
+        }
+        let dir = (Vec3::Y * 0.8 + wind * 0.7).normalize();
+        let scale = fx.range(0.5, 0.9);
+        fx.emit_tint(Layer::Mist, 1, at, dir, tint, scale);
+    }
+
     // Motes: only where there is open ground under an open sky, which is
     // a map with a sea or a terrain's light; an arena of boxes has none.
+    // Under snow, ice.
     let props = boulders::scenery(mood.map);
-    if !props.is_empty() {
+    if !props.is_empty() || m.snow {
         state.motes += dt * MOTES / MOTE_LIFE_S;
         while state.motes >= 1.0 {
             state.motes -= 1.0;
@@ -110,7 +150,8 @@ pub fn drive(time: Res<Time>, mood: Res<MoodNow>, mut state: ResMut<Ambient>, fx
                     fx.range(-MOTE_DOWN_M, MOTE_UP_M),
                     fx.range(-MOTE_REACH_M, MOTE_REACH_M),
                 );
-            let tint = Color::linear_rgb(MOTE_TINT[0], MOTE_TINT[1], MOTE_TINT[2]);
+            let c = if m.snow { ICE_TINT } else { MOTE_TINT };
+            let tint = Color::linear_rgb(c[0], c[1], c[2]);
             let scale = fx.range(0.7, 1.4);
             fx.emit_tint(Layer::Mote, 1, at, wind, tint, scale);
         }
@@ -121,7 +162,7 @@ pub fn drive(time: Res<Time>, mood: Res<MoodNow>, mut state: ResMut<Ambient>, fx
     let def = sim::maps::ALL.iter().find(|d| d.id == mood.map);
     if let Some(d) = def.filter(|d| d.void > f32::NEG_INFINITY) {
         if let Some(t) = d.terrain.as_ref() {
-            isle(fx, &mut state, dt, t, d.void, wind);
+            isle(fx, &mut state, dt, t, d.void, wind, m.snow);
         }
         return;
     }
@@ -183,8 +224,8 @@ fn flames(fx: &mut Fx, dt: f32, id: u8) {
 /// An island's own motions, over terrain `t` whose ground ends at `void`:
 /// wisps of the sea of cloud born off its coast under the rim and lifted
 /// over it, drifting inward and downwind; grains of sand lifted off its
-/// dunes and carried down the wind.
-fn isle(fx: &mut Fx, state: &mut Ambient, dt: f32, t: &TerrainDef, void: f32, wind: Vec3) {
+/// dunes and carried down the wind, or under `snow` spindrift off all of it.
+fn isle(fx: &mut Fx, state: &mut Ambient, dt: f32, t: &TerrainDef, void: f32, wind: Vec3, snow: bool) {
     let eye = fx.eye;
     let ground = |x: f32, z: f32| crate::look::grass::ground(t, x, z).filter(|&y| y > void);
     // The island's middle, for which way is in.
@@ -192,8 +233,16 @@ fn isle(fx: &mut Fx, state: &mut Ambient, dt: f32, t: &TerrainDef, void: f32, wi
         t.x0 + (t.nx - 1) as f32 * t.cell * 0.5,
         t.z0 + (t.nz - 1) as f32 * t.cell * 0.5,
     );
-    let tint = Color::linear_rgb(WISP_TINT[0], WISP_TINT[1], WISP_TINT[2]);
-    state.wisps += dt * WISPS_HZ;
+    let (c, k) = if snow {
+        (SNOW_WISP_TINT, SNOW_WISPS)
+    } else {
+        (WISP_TINT, 1.0)
+    };
+    let tint = Color::linear_rgb(c[0], c[1], c[2]);
+    if snow {
+        plumes(fx, state, dt, &ground, wind);
+    }
+    state.wisps += dt * WISPS_HZ * k;
     while state.wisps >= 1.0 {
         state.wisps -= 1.0;
         // A point off the island within reach whose way in meets the
@@ -222,8 +271,13 @@ fn isle(fx: &mut Fx, state: &mut Ambient, dt: f32, t: &TerrainDef, void: f32, wi
             break;
         }
     }
-    let tint = Color::linear_rgb(SAND_TINT[0], SAND_TINT[1], SAND_TINT[2]);
-    state.sand += dt * SAND_HZ;
+    let (c, hz, from, lift, size) = if snow {
+        (SNOW_TINT, SNOW_HZ, f32::NEG_INFINITY, SNOW_LIFT_M, SNOW_GRAIN)
+    } else {
+        (SAND_TINT, SAND_HZ, SAND_DUNE_M, (0.05, 0.4), (0.7, 1.3))
+    };
+    let tint = Color::linear_rgb(c[0], c[1], c[2]);
+    state.sand += dt * hz;
     while state.sand >= 1.0 {
         state.sand -= 1.0;
         for _ in 0..4 {
@@ -231,12 +285,46 @@ fn isle(fx: &mut Fx, state: &mut Ambient, dt: f32, t: &TerrainDef, void: f32, wi
                 eye.x + fx.range(-SAND_REACH_M, SAND_REACH_M),
                 eye.z + fx.range(-SAND_REACH_M, SAND_REACH_M),
             );
-            let Some(y) = ground(x, z).filter(|&y| y > SAND_DUNE_M) else {
+            let Some(y) = ground(x, z).filter(|&y| y > from) else {
                 continue;
             };
-            let lift = fx.range(0.05, 0.4);
-            let scale = fx.range(0.7, 1.3);
+            let lift = fx.range(lift.0, lift.1);
+            let scale = fx.range(size.0, size.1);
             fx.emit_tint(Layer::Sand, 1, Vec3::new(x, y + lift, z), wind, tint, scale);
+            break;
+        }
+    }
+}
+
+/// Spindrift off the lee of a snowy island: a point over the void within
+/// reach of the eye whose way back upwind meets the ground within a few
+/// metres, so it lies just past the lip the wind leaves; a plume born there,
+/// level with the lip, carried on out.
+fn plumes(fx: &mut Fx, state: &mut Ambient, dt: f32, ground: &impl Fn(f32, f32) -> Option<f32>, wind: Vec3) {
+    let eye = fx.eye;
+    let tint = Color::linear_rgb(PLUME_TINT[0], PLUME_TINT[1], PLUME_TINT[2]);
+    let back = Vec2::new(-wind.x, -wind.z).normalize_or_zero();
+    state.plumes += dt * PLUME_HZ;
+    while state.plumes >= 1.0 {
+        state.plumes -= 1.0;
+        for _ in 0..6 {
+            let p = Vec2::new(
+                eye.x + fx.range(-WISP_REACH_M, WISP_REACH_M),
+                eye.z + fx.range(-WISP_REACH_M, WISP_REACH_M),
+            );
+            if ground(p.x, p.y).is_some() {
+                continue;
+            }
+            let Some(lip) = [1.0f32, 2.5, 4.0].into_iter().find_map(|k| {
+                let q = p + back * k;
+                ground(q.x, q.y)
+            }) else {
+                continue;
+            };
+            let at = Vec3::new(p.x, lip + fx.range(-0.3, 0.6), p.y);
+            let dir = (wind + Vec3::Y * 0.12).normalize_or(Vec3::Y);
+            let scale = fx.range(0.6, 1.1);
+            fx.emit_tint(Layer::Mist, 1, at, dir, tint, scale);
             break;
         }
     }

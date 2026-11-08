@@ -47,12 +47,25 @@ pub const SHELTER_CLEAR_M: f32 = 5.0;
 pub const SHELTER_UP_M: f32 = 12.0;
 
 /// Snow (`Mood::snow`): how fast it comes down, m/s, how far the wind takes it, a
-/// flake's length, m, and how bright it's lit.
+/// flake's length and width, m, how opaque at its middle, and how bright it's lit.
 pub const SNOW_FALL_MS: f32 = 1.6;
 pub const SNOW_DRIFT: f32 = 1.4;
-pub const SNOW_STROKE_M: f32 = 0.05;
+pub const SNOW_STROKE_M: f32 = 0.04;
+pub const SNOW_WIDTH_M: f32 = 0.034;
+pub const SNOW_ALPHA: f32 = 0.75;
 pub const SNOW_LIT: f32 = 0.72;
-/// The uniform, laid out to match `Rain` in the shader. 48 bytes: WebGL2
+/// How many flakes a mood's `rain` lights, over a shower's drops: snow
+/// fogs less than rain for what falls (`Mood::rain_sigma` reads `rain`), so
+/// it falls thicker for the same air; and the box it falls in, nearer the
+/// eye, where a flake is big enough to see.
+pub const SNOW_COUNT: f32 = 2.5;
+pub const SNOW_BOX_HALF: Vec3 = Vec3::new(10.0, 7.0, 10.0);
+/// Under a roof, the snow the wind drives in under it stops this near.
+pub const SNOW_SHELTER_CLEAR_M: f32 = 1.5;
+/// A streak of rain: how wide, how opaque at its middle.
+pub const RAIN_WIDTH_M: f32 = 0.012;
+pub const RAIN_ALPHA: f32 = 0.4;
+/// The uniform, laid out to match `Rain` in the shader. 64 bytes: WebGL2
 /// wants uniforms of at least 16.
 #[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
 pub struct RainParams {
@@ -63,6 +76,9 @@ pub struct RainParams {
     /// rgb the streak's lit colour; w the radius round the eye that is
     /// clear under a roof ([`SHELTER_CLEAR_M`]), 0 in the open.
     pub look: Vec4,
+    /// x a streak's width (m), y its opacity at its middle, z 1 for a round
+    /// flake (snow), 0 for a streak; w the shelter's clear radius when under one.
+    pub shape: Vec4,
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
@@ -161,8 +177,9 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
         // The same mesh, slow, each flake a short bright stroke.
         return RainParams {
             fall: (m.wind().extend(0.0).xzy() * SNOW_DRIFT - Vec3::Y * SNOW_FALL_MS).extend(SNOW_STROKE_M),
-            box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
+            box_: SNOW_BOX_HALF.extend(if roofed { 0.0 } else { (m.rain * SNOW_COUNT).min(1.0) }),
             look: Vec4::new(SNOW_LIT, SNOW_LIT, SNOW_LIT * 1.04, 0.0),
+            shape: Vec4::new(SNOW_WIDTH_M, SNOW_ALPHA, 1.0, SNOW_SHELTER_CLEAR_M),
         };
     }
     let wind = m.wind() * (1.0 + 0.6 * m.wind_ms);
@@ -174,6 +191,7 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
         fall: fall.extend(0.45 + 0.3 * m.rain),
         box_: BOX_HALF.extend(if roofed { 0.0 } else { m.rain }),
         look: Vec4::new(0.55 * lit, 0.58 * lit, 0.62 * lit, 0.0),
+        shape: Vec4::new(RAIN_WIDTH_M, RAIN_ALPHA, 0.0, SHELTER_CLEAR_M),
     }
 }
 
@@ -223,7 +241,7 @@ pub fn drive(
         return;
     }
     *sheltered = under;
-    want.look.w = if under { SHELTER_CLEAR_M } else { 0.0 };
+    want.look.w = if under { want.shape.w } else { 0.0 };
     for mut v in rain.iter_mut() {
         let vis = if show {
             Visibility::Inherited

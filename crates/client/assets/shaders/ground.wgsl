@@ -368,12 +368,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let uv1 = wp.xz / ground.tile_m.y;
     let uv2 = wp.xz / ground.tile_m.z;
     let uv3 = wp.xz / ground.tile_m.w;
-    var a0 = textureSample(albedo_tex, albedo_smp, uv0, 0);
+    var a0 = textureSample(albedo_tex, albedo_smp, uv0, i32(ground.layers.y));
     var a1 = textureSample(albedo_tex, albedo_smp, uv1, 1);
     var a2 = textureSample(albedo_tex, albedo_smp, uv2, 2);
     let rock_layer = i32(ground.layers.x);
     var a3 = textureSample(albedo_tex, albedo_smp, uv3, rock_layer);
-    let g0 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv0, 0)));
+    let g0 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv0, i32(ground.layers.y))));
     let g1 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv1, 1)));
     let g2 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv2, 2)));
     let g3 = to_gradient(unpack_normal(textureSample(normal_tex, normal_smp, uv3, rock_layer)));

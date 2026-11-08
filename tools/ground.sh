@@ -36,6 +36,8 @@ SETS=(
   "blast|brushed_concrete_2|cast concrete, board-marked and stained: Overpass' and Proving Grounds' structures"
   "snow|snow_floor|Proving Grounds' floor, wind-crusted snow, fine-grained"
   "rust|rusty_metal_02|flaking paint over rust: signs, shutters, old steel"
+  "drift|snow_01|Pithead's ground, snow trodden over by boots"
+  "ice_rock|marble_cliff_05|Pithead's rock, grey and fractured, cut cold"
 )
 # our name | ambientCG's id | what it is
 METAL=(
@@ -70,6 +72,8 @@ for row in "${SETS[@]}"; do
   # The masonry is cut grey: warm sand against cool stone is the island's contrast.
   grade=()
   [ "$name" = stone ] && grade=(-modulate 118,22,100)
+  # The cold rock is cut grey too: its tint (`ground::ICE_TINT`) gives it the frost's blue.
+  [ "$name" = ice_rock ] && grade=(-modulate 100,12,100)
   convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} "${grade[@]}" -strip -quality 82 "$out/${name}_albedo.jpg"
   convert "$d/${id}_nor_gl_2k.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 90 "$out/${name}_normal.jpg"
   if [[ " rock stone brick marble road blast snow rust " =~ " $name " ]]; then
