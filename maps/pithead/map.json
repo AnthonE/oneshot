@@ -1,7 +1,7 @@
 {
  "id": 8,
  "name": "Pithead",
- "about": "A mine's pithead on a rock over a drop, 42 by 28 m, the same for red (-x) and blue (+x) turned about its middle, on three floors. The yard (y 0) in the middle, open to the sky, the sword on a stepped dais under the gantry; a headframe at each end, its hall at the foot with doors to the yard, the arcade and the spur, its mezzanine (y 3.5) up the west wall, its crown (y 7) up the same wall or by the skip lift from the yard. The gantry (y 7) runs crown to crown over the yard, the sniper in its middle. Along each long side a deck (y 3.5) from one team's mezzanine to a ramp down to the other's spur, an arcade under it on the yard; the overshield out at the north deck's edge, the camo at the south's. The spurs, the decks' edges and the gantry's sides are open: off the rock is death. Out of the rotation until it has been played.",
+ "about": "A mine's pithead built over its open shaft, 42 by 28 m, the same for red (-x) and blue (+x) turned about its middle. Nothing in the middle but the shaft and what hangs in it, four floors stacked over the drop: the collar a metre down with the sword, the cage across it 3.5 m up from deck to deck, the gantry 7 m up from crown to crown through the winding cab, and the sheave deck on the cab's roof with the sniper, up the ramps beside the gantry or by the skip from the collar. Round it, each side's headframe on its rock (the hall, its mezzanine, its crown, a lift up from its spur) and a deck over the drop from each side's mezzanine to the other's spur, the overshield on the north deck and the camo on the south where the cage meets them. Off any edge is death. Out of the rotation until it has been played.",
  "practice": true,
  "modes": ["duel", "doubles", "ffa"],
  "bounds": [-24, 24, -17, 17],
@@ -11,143 +11,149 @@
  "terrain": {
   "cell": 1, "base": -40, "margin": 4,
   "shapes": [
-   {"outline": [[-21, -13.4], [-20.6, -14], [20.6, -14], [21, -13.4], [21, 13.4], [20.6, 14], [-20.6, 14], [-21, 13.4]], "h": 40, "edge": 2.2}
+   {"outline": [[-21, -13.4], [-20.6, -14], [-12.4, -14], [-12, -13.4], [-12, 13.4], [-12.4, 14], [-20.6, 14], [-21, 13.4]], "h": 40, "edge": 2.2, "mirror": true}
   ]
  },
  "structures": [
-  {"name": "the gantry: crown to crown 7 m over the yard, a landing in its middle for the sniper",
-   "boxes": [[-13, 6.5, -1.5, 13, 7, 1.5, "hidden"], [-3, 6.5, -3, 3, 7, 3, "hidden"]]},
-  {"name": "the skip, hung under the gantry's landing over the sword",
-   "boxes": [[-1.2, 4.2, -1.2, 1.2, 6.5, 1.2, "hidden"]]},
-  {"name": "the sword's dais, four steps up in the middle of the yard: over it, the yard's long lines are broken",
+  {"name": "the gantry: crown to crown 7 m up over the shaft, a landing in its middle under the cab",
+   "boxes": [[-13, 6.5, -1.5, 13, 7, 1.5, "tread"], [-3, 6.5, -3, 3, 7, 3, "tread"]]},
+  {"name": "the winding cab on the gantry's landing: walls all round, a door at each end off to one side of the gantry, so nobody sees through it, the sheave deck its roof", "mirror": true,
+   "boxes": [[-2.5, 7, 2.6, 2.5, 10, 3, "steel"], [-2.9, 7, 0.3, -2.5, 10, 2.6, "steel"], [-2.9, 7, -2.6, -2.5, 10, -1.5, "steel"]]},
+  {"name": "the winding drum in the cab, walked round",
+   "boxes": [[-0.9, 7, -0.6, 0.9, 9.4, 0.6, "rust"]]},
+  {"name": "a crate on the gantry by the cab's door: a jump up onto the sheave deck", "mirror": true,
+   "boxes": [[-4.4, 7, -1.5, -3.2, 8.2, -0.3, "rust"]]},
+  {"name": "the sheave deck on the cab, 10.5 m up, the sniper on it; a post at each corner for cover",
+   "boxes": [[-2.5, 10, -3.2, 2.5, 10.5, 3.2, "tread"]]},
+  {"name": "the sheave deck's posts", "mirror": true,
+   "boxes": [[-2.5, 10.5, 2.6, -1.9, 12.2, 3.2, "steel"], [1.9, 10.5, 2.6, 2.5, 12.2, 3.2, "steel"]]},
+  {"name": "a ramp up beside the gantry to the sheave deck, its side a wall on the gantry", "mirror": true,
+   "boxes": [{"ramp": [-9, 1.5, -2.5, 3.2], "up": "+x", "from": 7, "to": 10.5, "base": 7, "look": "tread"}]},
+  {"name": "the cage: a catwalk 3.5 m up across the shaft from the north deck to the south, under the gantry, a plate girder down each side (walked under from the collar)",
+   "boxes": [[-1.5, 3, -8, 1.5, 3.5, 8, "tread"], [-1.5, 1.4, -8, -1.2, 3, 8, "steel"], [1.2, 1.4, -8, 1.5, 3, 8, "steel"]]},
+  {"name": "the collar: a landing a metre down in the shaft under the cage, the sword on its plinth",
    "boxes": [
-    {"round": [0, 0], "r": 3.0, "y": [0, 0.5], "look": "hidden"},
-    {"round": [0, 0], "r": 2.4, "y": [0.5, 1.0], "look": "hidden"},
-    {"round": [0, 0], "r": 1.8, "y": [1.0, 1.5], "look": "hidden"},
-    {"round": [0, 0], "r": 1.2, "y": [1.5, 2.0], "look": "hidden"}
+    [-4.5, -1.5, -4, 4.5, -1, 4, "tread"],
+    {"round": [0, 0], "r": 1.6, "y": [-1, -0.6], "look": "steel"}
    ]},
-  {"name": "red's headframe: the hall's walls up to the crown's parapet, a door to the spur, to the yard and to the arcade, a rail where the mezzanine looks out over the yard, a jamb between it and the deck", "mirror": true,
+  {"name": "red's bridge down to the collar from its hall's door (a plate over the rock's lip, so the lip is never the floor), the skip's pit off the collar's corner, and a crate on the collar", "mirror": true,
    "boxes": [
-    [-21.4, -3, -2.4, -21, 8.1, 14.4, "hidden"],
-    [-21, -3, 14, -13, 8.1, 14.4, "hidden"],
-    [-21, 0, -2.4, -18, 8.1, -2, "hidden"],
-    [-15.5, 0, -2.4, -13, 8.1, -2, "hidden"],
-    [-18, 2.6, -2.4, -15.5, 8.1, -2, "hidden"],
-    [-13.4, 0, -2, -13, 3, 1, "hidden"],
-    [-13.4, 0, 4, -13, 3, 11, "hidden"],
-    [-13.4, 0, 13.6, -13, 3, 14, "hidden"],
-    [-13.4, 2.6, 1, -13, 3, 4, "hidden"],
-    [-13.4, 2.6, 11, -13, 3, 13.6, "hidden"],
-    [-13.4, 3, -2, -13, 6.5, 5, "hidden"],
-    [-13.4, 3, 5, -13, 4.5, 8, "hidden"],
-    [-13.4, 3.5, 8, -13, 6.5, 10, "hidden"]
+    [-13, -0.5, 1, -11, 0.1, 4, "tread"],
+    {"ramp": [-11, 1, -8, 4], "up": "-x", "from": -1, "to": 0.1, "base": -1.5, "look": "tread"},
+    [-8, -1.5, 1, -4.5, -1, 4, "tread"],
+    [4.5, -1.5, 2, 6.6, -1, 4, "tread"],
+    [-4.2, -1, 1.8, -3, 0.2, 3, "rust"]
+   ]},
+  {"name": "red's headframe: the hall's walls up to the crown's parapet, a door to the spur and to the bridge, a rail where the mezzanine looks out over the shaft, a jamb between it and the deck", "mirror": true,
+   "boxes": [
+    [-21.4, -3, -2.4, -21, 8.1, 14.4, "steel_red"],
+    [-21, -3, 14, -13, 8.1, 14.4, "steel_red"],
+    [-21, 0, -2.4, -18, 8.1, -2, "steel_red"],
+    [-15.5, 0, -2.4, -13, 8.1, -2, "steel_red"],
+    [-18, 2.6, -2.4, -15.5, 8.1, -2, "steel_red"],
+    [-13.4, 0, -2, -13, 3, 1, "steel_red"],
+    [-13.4, 0, 4, -13, 3, 14, "steel_red"],
+    [-13.4, 2.6, 1, -13, 3, 4, "steel_red"],
+    [-13.4, 3, -2, -13, 6.5, 5, "steel_red"],
+    [-13.4, 3, 5, -13, 4.5, 8, "steel_red"],
+    [-13.4, 3.5, 8, -13, 6.5, 10, "steel_red"]
    ]},
   {"name": "red's mezzanine, 3.5 m up over the hall's north end, open onto the north deck", "mirror": true,
-   "boxes": [[-21, 3, 5, -13, 3.5, 14, "hidden"]]},
+   "boxes": [[-21, 3, 5, -13, 3.5, 14, "tread"]]},
   {"name": "red's stairs, up the hall's west wall to the mezzanine and on up to the crown", "mirror": true,
    "boxes": [
-    {"ramp": [-21, -1, -19, 5], "up": "+z", "from": 0, "to": 3.5, "base": 0, "look": "hidden"},
-    {"ramp": [-21, 6, -19, 12], "up": "+z", "from": 3.5, "to": 7, "base": 3.5, "look": "hidden"}
+    {"ramp": [-21, -1, -19, 5], "up": "+z", "from": 0, "to": 3.5, "base": 0, "look": "tread"},
+    {"ramp": [-21, 6, -19, 12], "up": "+z", "from": 3.5, "to": 7, "base": 3.5, "look": "tread"}
    ]},
-  {"name": "red's crown: the headframe's roof, 7 m up, the stairwell in its west side, open toward the yard, the headframe's legs and a crate for cover", "mirror": true,
+  {"name": "red's crown: the headframe's roof, 7 m up, the stairwell in its west side, open toward the shaft, the headframe's legs and a crate for cover", "mirror": true,
    "boxes": [
-    [-19, 6.5, -2, -13, 7, 14, "hidden"],
-    [-21, 6.5, -2, -19, 7, 5.6, "hidden"],
-    [-21, 6.5, 12, -19, 7, 14, "hidden"],
-    [-14.2, 7, 2.2, -13.4, 12.4, 3, "hidden"],
-    [-14.2, 7, 12.6, -13.4, 12.4, 13.4, "hidden"],
-    [-21, 7, 2.2, -20.2, 12.4, 3, "hidden"],
-    [-21, 7, 12.6, -20.2, 12.4, 13.4, "hidden"],
-    [-16.6, 7, 8.4, -15.4, 8.2, 9.6, "hidden"]
+    [-19, 6.5, -2, -13, 7, 14, "tread"],
+    [-21, 6.5, -2, -19, 7, 5.6, "tread"],
+    [-21, 6.5, 12, -19, 7, 14, "tread"],
+    [-14.2, 7, 2.2, -13.4, 12.4, 3, "steel"],
+    [-14.2, 7, 12.6, -13.4, 12.4, 13.4, "steel"],
+    [-21, 7, 2.2, -20.2, 12.4, 3, "steel"],
+    [-21, 7, 12.6, -20.2, 12.4, 13.4, "steel"],
+    [-16.6, 7, 8.4, -15.4, 8.2, 9.6, "rust"]
    ]},
   {"name": "red's headframe's beams over the crown", "mirror": true, "dress": true,
    "boxes": [
-    [-21, 12.4, 2.2, -13.4, 13, 3, "hidden"],
-    [-21, 12.4, 12.6, -13.4, 13, 13.4, "hidden"],
-    [-17.6, 12.4, 2.2, -16.8, 13, 13.4, "hidden"]
+    [-21, 12.4, 2.2, -13.4, 13, 3, "steel"],
+    [-21, 12.4, 12.6, -13.4, 13, 13.4, "steel"],
+    [-17.6, 12.4, 2.2, -16.8, 13, 13.4, "steel"]
    ]},
-  {"name": "the north deck, 3.5 m up over the arcade from red's mezzanine to the ramp down to blue's spur: rails on its edge but where the overshield is, a crate to jump red's crown from", "mirror": true,
+  {"name": "the north deck, a truss 3.5 m up over the drop from red's mezzanine to the ramp down to blue's spur: girders under both edges, a roofed stretch past red's end, a rail on its outer edge near the ramp, the cage meeting it in the middle, a crate to jump red's crown from", "mirror": true,
    "boxes": [
-    [-13, 3, 8, 8, 3.5, 14, "hidden"],
-    [-11, 3.5, 13.7, -7, 4.4, 14, "hidden"],
-    [5.5, 3.5, 13.7, 7.8, 4.4, 14, "hidden"],
-    {"ramp": [8, 11, 13, 14], "up": "-x", "from": 0, "to": 3.5, "base": 0, "look": "hidden"},
-    [-12.4, 3.5, 9, -11.2, 4.7, 10.2, "hidden"]
+    [-13, 3, 8, 8, 3.5, 14, "tread"],
+    [-12, 1.2, 8, 8, 3, 8.4, "steel"],
+    [-12, 1.2, 13.6, 8, 3, 14, "steel"],
+    [-10, 3.5, 8, -5, 6.5, 8.4, "steel"],
+    [-10, 3.5, 13.6, -5, 6.5, 14, "steel"],
+    [-10, 6.5, 8, -5, 7, 14, "steel"],
+    [5.5, 3.5, 13.7, 7.8, 4.4, 14, "steel"],
+    {"ramp": [8, 11, 13, 14], "up": "-x", "from": 0, "to": 3.5, "base": 0, "look": "tread"},
+    [-12.4, 3.5, 9, -11.2, 4.7, 10.2, "rust"]
    ]},
-  {"name": "the north arcade under the deck: its wall on the drop, its pillars on the yard", "mirror": true,
+  {"name": "red's spur: crates and a low wall", "mirror": true,
    "boxes": [
-    [-13, -3, 13.6, 8, 3, 14, "hidden"],
-    [-9.3, 0, 8, -8.7, 3, 8.6, "hidden"],
-    [-3.3, 0, 8, -2.7, 3, 8.6, "hidden"],
-    [2.7, 0, 8, 3.3, 3, 8.6, "hidden"],
-    [7.4, 0, 8, 8, 3, 8.6, "hidden"]
-   ]},
-  {"name": "the yard's cover: an ore cart, a crate to jump the deck from, a low wall, a column under the gantry; a wall on the gantry's landing", "mirror": true,
-   "boxes": [
-    [-8.2, 0, 3.4, -5.8, 1.3, 4.6, "hidden"],
-    [-6.6, 0, 6.4, -5.4, 1.2, 7.6, "hidden"],
-    [-4, 0, -5.3, -1, 1.1, -4.8, "hidden"],
-    {"column": [-7, 0], "r": 0.55, "y": [0, 6.5], "look": "hidden"},
-    [-3, 7, 2.6, 0, 8.1, 3, "hidden"]
-   ]},
-  {"name": "red's spur: crates and a low wall, a stack at its mouth on the yard", "mirror": true,
-   "boxes": [
-    [-19.5, 0, -9, -18.3, 1.2, -7.8, "hidden"],
-    [-17, 0, -12.5, -14, 1.1, -12, "hidden"],
-    [-15.2, 0, -6.2, -14, 1.2, -5, "hidden"],
-    [-12, 0, -6, -10.8, 2.2, -4.8, "hidden"]
+    [-19.5, 0, -9, -18.3, 1.2, -7.8, "rust"],
+    [-17, 0, -12.5, -14, 1.1, -12, "steel"],
+    [-15.2, 0, -6.2, -14, 1.2, -5, "rust"]
    ]}
  ],
  "spawns": [
   {"at": [-17.5, -1], "team": "red", "yaw": 0, "mirror": true},
   {"at": [-19.5, 7], "team": "red", "yaw": 0, "mirror": true},
   {"at": [-15.5, 8], "team": "red", "yaw": 45, "mirror": true},
-  {"at": [-17, 10.5, 3.5], "team": "red", "yaw": 0, "mirror": true}
+  {"at": [-17, 10.5, 3.5], "team": "red", "yaw": 0, "mirror": true},
+  {"at": [-19, -11], "team": "red", "yaw": 30, "mirror": true}
  ],
  "pads": [
-  {"weapon": "sniper", "at": [0, 0, 7], "respawn": 120},
-  {"weapon": "sword", "at": [0, 0, 2], "respawn": 120},
-  {"weapon": "overshield", "at": [3.5, 12.8, 3.5], "respawn": 90},
-  {"weapon": "camo", "at": [-3.5, -12.8, 3.5], "respawn": 90},
+  {"weapon": "sniper", "at": [0, 0, 10.5], "respawn": 120},
+  {"weapon": "sword", "at": [0, 0, -0.6], "respawn": 120},
+  {"weapon": "overshield", "at": [0, 9.5, 3.5], "respawn": 90},
+  {"weapon": "camo", "at": [0, -9.5, 3.5], "respawn": 90},
   {"weapon": "br", "at": [-17, 7, 3.5], "respawn": 30, "mirror": true},
   {"weapon": "magnum", "at": [-15, -0.5], "respawn": 30, "mirror": true},
-  {"weapon": "shotgun", "at": [2.3, 12], "respawn": 60, "mirror": true},
-  {"weapon": "carbine", "at": [-18, -5], "respawn": 30, "mirror": true},
-  {"weapon": "frags", "at": [-9.5, -4], "respawn": 30, "mirror": true},
+  {"weapon": "shotgun", "at": [6.5, 12, 3.5], "respawn": 60, "mirror": true},
+  {"weapon": "carbine", "at": [-19, -6.5], "respawn": 30, "mirror": true},
+  {"weapon": "frags", "at": [-7, 2.5, -1], "respawn": 30, "mirror": true},
   {"weapon": "stickies", "at": [-5, 11, 3.5], "respawn": 30, "mirror": true}
  ],
  "launchers": [
-  {"at": [-10, 6.2], "to": [-14.8, 6.2, 7], "time": 2.0, "size": [1.2, 1.2], "mirror": true}
+  {"at": [-16.5, -5], "to": [-16.5, 1, 7], "time": 2.6, "size": [1.2, 1.2], "mirror": true},
+  {"at": [5.5, 3, -1], "to": [1.2, 1.4, 10.5], "time": 2.4, "size": [1.2, 1.2], "mirror": true}
  ],
- "roam": [[0, 0], [-17, 4], [17, -4], [-3, 11], [3, -11], [-17, -8], [17, 8], [-10.5, -9.5], [10.5, 9.5], [-8, 0], [8, 0], [-16, 9], [16, -9], [0, 4], [0, -4]],
+ "roam": [[0, -3, -1], [-17, 4], [17, -4], [-3, 11, 3.5], [3, -11, 3.5], [-17, -8], [17, 8], [0, 0, 10.5], [-8, 0, 7], [8, 0, 7], [-17, 9, 3.5], [17, -9, 3.5], [0, 5, 3.5], [0, -5, 3.5], [-16, 5, 7], [16, -5, 7]],
  "callouts": [
-  {"name": "the gantry", "at": [0, 0, 7]},
-  {"name": "the dais", "at": [0, 0, 2]},
-  {"name": "west yard", "at": [-7, -3]},
-  {"name": "east yard", "at": [7, 3]},
+  {"name": "the sheave", "at": [0, 0, 10.5]},
+  {"name": "the cab", "at": [0, 1.8, 7]},
+  {"name": "the collar", "at": [0, 0, -0.6]},
+  {"name": "north cage", "at": [0, 5, 3.5]},
+  {"name": "south cage", "at": [0, -5, 3.5]},
+  {"name": "west gantry", "at": [-8, 0, 7]},
+  {"name": "east gantry", "at": [8, 0, 7]},
+  {"name": "red bridge", "at": [-7, 2.5, -1]},
+  {"name": "blue bridge", "at": [7, -2.5, -1]},
   {"name": "red crown", "at": [-17, 5, 7]},
   {"name": "blue crown", "at": [17, -5, 7]},
   {"name": "red hall", "at": [-17, 3]},
   {"name": "blue hall", "at": [17, -3]},
   {"name": "red mezz", "at": [-17, 9, 3.5]},
   {"name": "blue mezz", "at": [17, -9, 3.5]},
-  {"name": "north deck", "at": [-3, 11, 3.5]},
-  {"name": "south deck", "at": [3, -11, 3.5]},
-  {"name": "north arcade", "at": [-3, 11]},
-  {"name": "south arcade", "at": [3, -11]},
+  {"name": "north deck", "at": [-6, 11, 3.5]},
+  {"name": "south deck", "at": [6, -11, 3.5]},
   {"name": "red spur", "at": [-17, -8]},
   {"name": "blue spur", "at": [17, 8]},
-  {"name": "red skip", "at": [-10, 6.2]},
-  {"name": "blue skip", "at": [10, -6.2]},
-  {"name": "north yard", "at": [10.5, 9.5]},
-  {"name": "south yard", "at": [-10.5, -9.5]}
+  {"name": "red lift", "at": [-16.5, -5]},
+  {"name": "blue lift", "at": [16.5, 5]}
  ],
  "light": {
   "sun": 0.75, "fill": 1.15, "sea": -60,
   "lamps": [
    {"at": [-17, 3, 5.8], "color": [1.0, 0.82, 0.62], "lm": 30000, "mirror": true},
    {"at": [-17, 10, 2.7], "color": [1.0, 0.82, 0.62], "lm": 40000, "mirror": true},
-   {"at": [-3, 11, 2.7], "color": [1.0, 0.82, 0.62], "lm": 30000, "mirror": true}
+   {"at": [0, 1.8, 9.6], "color": [1.0, 0.82, 0.62], "lm": 20000, "mirror": true}
   ]
  }
 }

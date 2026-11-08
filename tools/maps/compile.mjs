@@ -38,7 +38,7 @@
 //             mirror: bool }]
 //   pads      [{ weapon, at: [x, z, y?], respawn: seconds, mirror: bool }]: a gun,
 //             or what is taken by walking on (overshield, camo, frags, stickies)
-//   roam      [[x, z], ...]: where a bot with nobody in sight walks
+//   roam      [[x, z, y?], ...]: where a bot with nobody in sight walks
 //   terrain   { cell: 0.5|1|2|4, base: m, margin: m | [-x, +x, -z, +z],
 //             gen: "canyon", canyon: {...}, shapes: [...] }: ground that
 //             isn't flat, over the bounds and `margin` past them (one
@@ -475,9 +475,9 @@ export function compile(spec, where = 'map.json') {
   }
   if (pads.length > MAX_PADS) fail(`${pads.length} pads, at most ${MAX_PADS}`);
   const roam = (spec.roam || []).map((r, k) => {
-    if (!Array.isArray(r) || r.length !== 2) fail(`roam ${k}: [x, z]`);
+    if (!Array.isArray(r) || (r.length !== 2 && r.length !== 3) || r.some((v) => typeof v !== 'number')) fail(`roam ${k}: [x, z] or [x, z, y]`);
     inside(r[0], r[1], `roam ${k}`);
-    return r;
+    return [r[0], r[1], r[2] ?? 0];
   });
   const launchers = [];
   // Both ends of every throw, for the rocks to keep clear of.
@@ -1276,7 +1276,7 @@ export function rust(m, src) {
   L.push('    pads: &[');
   for (const p of m.pads) L.push(`        ([${p.pos.map(lit).join(', ')}], ${p.arm}, ${p.respawn}),`);
   L.push('    ],');
-  L.push(`    roam: &[${m.roam.map((r) => `[${r.map(lit).join(', ')}]`).join(', ')}],`);
+  L.push(`    roam: &[${m.roam.map((r) => `[${[r[0], r[2], r[1]].map(lit).join(', ')}]`).join(', ')}],`);
   if (m.terrain) {
     const t = m.terrain;
     L.push('    terrain: Some(TerrainDef {');
