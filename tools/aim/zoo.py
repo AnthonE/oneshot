@@ -3,7 +3,7 @@
 detector, and the detector trained on what survives, round after round.
 
     PY=/data/LLM/.venv/bin/python    # torch and numpy
-    $PY tools/aim/zoo.py --base traces/aim/<set> --out traces/aim/zoo [--rounds 8]
+    $PY tools/aim/zoo.py --base traces/aim/<set> --out traces/aim/zoo [--rounds 8] [--hands]
 
 `--base` is a set `oneshot-aim bots` cut (the detector's first lessons).
 Each round:
@@ -174,7 +174,7 @@ def cut(zoo, out, seed, args, matches=None):
     open(path, "w").write("\n".join(zoo) + "\n")
     cmd = [AIM, "bots", "--each", "--zoo", path, "--modes", args.modes, "--matches", str(matches or args.matches),
            "--secs", str(args.secs), "--sightings", str(args.sightings), "--seed", str(seed),
-           "--threads", str(args.threads), "--out", out]
+           "--threads", str(args.threads), "--out", out] + (["--hands"] if args.hands else [])
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     info = json.load(open(os.path.join(out, "info.json")))
     made = [z["genome"] for z in info["zoo"]]
@@ -204,6 +204,7 @@ def main():
     ap.add_argument("--sightings", type=int, default=40)
     ap.add_argument("--modes", default="duel,doubles")
     ap.add_argument("--threads", type=int, default=2)
+    ap.add_argument("--hands", action="store_true", help="a person's hand on the bots' aim, as the base set had")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--retrain-epochs", type=int, default=6)
     ap.add_argument("--lr", type=float, default=2e-3)
