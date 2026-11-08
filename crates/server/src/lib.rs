@@ -157,6 +157,31 @@ async fn write_whole(path: &std::path::Path, bytes: Vec<u8>) {
     }
 }
 
+/// Appends one line to a file, making its folder if need be.
+async fn append_line(path: &std::path::Path, line: &serde_json::Value) {
+    use tokio::io::AsyncWriteExt;
+    if let Some(dir) = path.parent() {
+        let _ = tokio::fs::create_dir_all(dir).await;
+    }
+    let mut bytes = serde_json::to_vec(line).unwrap_or_default();
+    bytes.push(b'\n');
+    let wrote = async {
+        let mut f = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await?;
+        f.write_all(&bytes).await
+    };
+    if let Err(e) = wrote.await {
+        eprintln!("oneshot: {}: {e}", path.display());
+    }
+}
+
+/// Where each wallet's profile is kept beside the replays: a line per match,
+/// its numbers and nothing else (docs/ANTICHEAT.md §7, §8).
+pub const PROFILES: &str = "profiles";
+
 /// A finished match stays up this long, for the end screen (`Config::linger`).
 pub const LINGER: Duration = Duration::from_secs(10);
 
@@ -631,6 +656,25 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
                         write_whole(&dir.join("review").join(format!("{id}.json")), text.clone()).await;
                     }
                     write_whole(&dir.join(format!("{id}.watch.json")), text).await;
+                    let at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    for seat in doc["seats"].as_array().into_iter().flatten() {
+                        let Some(wallet) = seat["wallet"].as_str().filter(|w| proto::party::is_wallet(w)) else {
+                            continue;
+                        };
+                        let line = serde_json::json!({
+                            "match": id,
+                            "at": at,
+                            "ranked": doc["ranked"],
+                            "mode": doc["mode"],
+                            "replay_sha256": sha,
+                            "flags": seat["flags"],
+                            "aim": seat["profile"],
+                            "carnage": seat["carnage"],
+                        });
+                        append_line(&dir.join(PROFILES).join(format!("{wallet}.jsonl")), &line).await;
+                    }
                 }
                 if let Some(mut r) = report {
                     r.replay_sha256 = sha;
@@ -1958,8 +2002,34 @@ fn played(r: &Live, s: usize, finished: bool) -> Option<stats::Played> {
     })
 }
 
+/// A seat's profile numbers beside the lines (`room::watch`): rates, so
+/// matches of any length compare.
+fn profile_json(st: &room::watch::Stats) -> serde_json::Value {
+    let r3 = |x: f32| (x * 1000.0).round() / 1000.0;
+    let alive_s = st.alive_ticks as f32 / TICK_HZ as f32;
+    let per_s = |x: f32| if alive_s > 0.0 { r3(x / alive_s) } else { 0.0 };
+    serde_json::json!({
+        "alive_s": r3(alive_s),
+        "accuracy": r3(st.hits as f32 / st.shots.max(1) as f32),
+        "head_rate": r3(st.head_rate()),
+        "reactions_ms": st.reactions_ms,
+        "snap_share": r3(st.snaps as f32 / st.reactions_ms.len().max(1) as f32),
+        "preaim_ms": st.preaim_ms,
+        "on_target": r3(st.on_target()),
+        "sight_s": r3(st.sight_ticks as f32 / TICK_HZ as f32),
+        "turn_deg_s": per_s(st.turn_deg),
+        "jerk_per_turn": r3(st.jerk_deg / st.turn_deg.max(1.0)),
+        "speed_m_s": per_s(st.moved_m),
+        "air_share": r3(st.air_ticks as f32 / st.alive_ticks.max(1) as f32),
+        "throws": st.throws,
+        "melees": st.melees,
+        "deaths": st.deaths,
+        "unanswered_share": r3(st.unanswered as f32 / st.deaths.max(1) as f32),
+    })
+}
+
 /// A match's aim review: each person's numbers and the lines they cross
-/// (`room::watch`). Whether any did.
+/// (`room::watch`), and their profile numbers. Whether any did.
 /// Its `replay_sha256` is the jobs task's to fill in.
 fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
     let mut flagged = false;
@@ -1993,6 +2063,7 @@ fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
                 "snaps": st.snaps,
                 "preaim_ms": st.preaim_ms,
                 "flags": flags,
+                "profile": profile_json(st),
                 // The carnage report: what the players saw at the end.
                 "carnage": {
                     "kills": t.kills,
@@ -2028,6 +2099,7 @@ fn watch_doc(r: &Live, salt_commit: &str) -> (serde_json::Value, bool) {
             "snaps": st.snaps,
             "preaim_ms": st.preaim_ms,
             "flags": flags,
+            "profile": profile_json(st),
         }));
     }
     let doc = serde_json::json!({

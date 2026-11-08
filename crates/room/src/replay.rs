@@ -187,6 +187,7 @@ pub struct Summary {
     pub kills: Vec<(u32, u8, u8, u16)>,
 }
 
+#[derive(Clone, Copy)]
 struct Reader<'a> {
     b: &'a [u8],
     at: usize,
@@ -219,111 +220,170 @@ fn read_seen(r: &mut Reader) -> Result<Seen, String> {
     Ok(seen)
 }
 
+/// What a replay holds next ([`Cursor::next`]).
+#[derive(Debug, PartialEq)]
+pub enum Next {
+    /// A tick: step the world with [`Cursor::inputs`] and [`Cursor::lag`].
+    Tick,
+    /// The end, as the server wrote it.
+    End {
+        ticks: u32,
+        hash: u64,
+        score: [i32; MAX_FIGHTERS],
+    },
+}
+
+/// A replay being played, one record at a time. `Copy`, so a match can be
+/// forked at any tick and each branch played on from there (the aim
+/// windows' twins, `tools/aim`).
+#[derive(Clone, Copy)]
+pub struct Cursor<'a> {
+    r: Reader<'a>,
+    pub seed: u64,
+    pub salt: (u64, u64),
+    /// The tick's inputs, as the server stepped them.
+    pub inputs: [Input; MAX_FIGHTERS],
+    pub lag: Lag,
+    /// Ticks read.
+    pub ticks: u32,
+}
+
+impl<'a> Cursor<'a> {
+    /// Reads the header: the cursor at the first record, and the world the
+    /// match began as.
+    pub fn open(bytes: &'a [u8]) -> Result<(Cursor<'a>, World), String> {
+        let mut r = Reader { b: bytes, at: 0 };
+        if r.take(4)? != MAGIC {
+            return Err("not a replay".into());
+        }
+        let ver = r.u16()?;
+        let tag = r.u64()?;
+        if tag != RULES_TAG {
+            return Err(format!(
+                "recorded under other rules ({tag:#x}, wire {ver}); this build is {RULES_TAG:#x}"
+            ));
+        }
+        let seed = r.u64()?;
+        let salt = (r.u64()?, r.u64()?);
+        let rules = Rules {
+            teams: r.u8()? != 0,
+            score_limit: r.u32()? as i32,
+            time_limit_ms: r.u32()?,
+            loadout: [r.u8()?, r.u8()?],
+            seats: r.u8()?,
+            gun_game: r.u8()? != 0,
+            friendly_fire: r.u8()? != 0,
+            ctf: r.u8()? != 0,
+            siege: r.u8()? != 0,
+        };
+        if rules.seats == 0 || rules.seats as usize > MAX_FIGHTERS {
+            return Err("a seat count past the last".into());
+        }
+        let map = map_by_id(r.u8()?).ok_or("an unknown map")?;
+        let cursor = Cursor {
+            r,
+            seed,
+            salt,
+            inputs: [Input::default(); MAX_FIGHTERS],
+            lag: Lag::past([0; MAX_FIGHTERS]),
+            ticks: 0,
+        };
+        Ok((cursor, World::new(map, rules, seed, salt)))
+    }
+
+    /// Reads up to the next tick or the end. Seats and holds on the way are
+    /// applied to `w`; a tick's arguments are left in [`Cursor::inputs`] and
+    /// [`Cursor::lag`] for the caller to step `w` with.
+    pub fn next(&mut self, w: &mut World) -> Result<Next, String> {
+        let r = &mut self.r;
+        loop {
+            match r.u8()? {
+                b'S' => {
+                    let (s, t) = (r.u8()? as usize, r.u8()?);
+                    if s >= MAX_FIGHTERS {
+                        return Err("a seat past the last".into());
+                    }
+                    w.seat(s, t);
+                }
+                b'H' => w.hold_countdown(),
+                b'T' => {
+                    let mask = r.u16()?;
+                    for (s, i) in self.inputs.iter_mut().enumerate() {
+                        if mask & (1 << s) != 0 {
+                            *i = Input {
+                                buttons: r.u16()?,
+                                yaw: r.u16()?,
+                                pitch: r.u16()? as i16,
+                                mx: r.u8()? as i8,
+                                mz: r.u8()? as i8,
+                            };
+                        }
+                    }
+                    let rmask = r.u16()?;
+                    for (s, d) in self.lag.depth_q8.iter_mut().enumerate() {
+                        if rmask & (1 << s) != 0 {
+                            *d = r.u32()?;
+                        }
+                    }
+                    let smask = r.u16()?;
+                    for (s, seen) in self.lag.seen.iter_mut().enumerate() {
+                        if smask & (1 << s) != 0 {
+                            *seen = read_seen(r)?;
+                        }
+                    }
+                    self.ticks += 1;
+                    return Ok(Next::Tick);
+                }
+                b'E' => {
+                    let ticks = r.u32()?;
+                    let hash = r.u64()?;
+                    let mut score = [0i32; MAX_FIGHTERS];
+                    for s in score.iter_mut() {
+                        *s = r.u32()? as i32;
+                    }
+                    if r.at != r.b.len() {
+                        return Err("bytes after the end".into());
+                    }
+                    return Ok(Next::End { ticks, hash, score });
+                }
+                k => return Err(format!("an unknown record {k:#x} at byte {}", r.at - 1)),
+            }
+        }
+    }
+}
+
 /// Plays a replay through a fresh `World` and checks it ends where the
 /// server said it did.
 pub fn verify(bytes: &[u8]) -> Result<Summary, String> {
-    let mut r = Reader { b: bytes, at: 0 };
-    if r.take(4)? != MAGIC {
-        return Err("not a replay".into());
-    }
-    let ver = r.u16()?;
-    let tag = r.u64()?;
-    if tag != RULES_TAG {
-        return Err(format!(
-            "recorded under other rules ({tag:#x}, wire {ver}); this build is {RULES_TAG:#x}"
-        ));
-    }
-    let seed = r.u64()?;
-    let salt = (r.u64()?, r.u64()?);
-    let rules = Rules {
-        teams: r.u8()? != 0,
-        score_limit: r.u32()? as i32,
-        time_limit_ms: r.u32()?,
-        loadout: [r.u8()?, r.u8()?],
-        seats: r.u8()?,
-        gun_game: r.u8()? != 0,
-        friendly_fire: r.u8()? != 0,
-        ctf: r.u8()? != 0,
-        siege: r.u8()? != 0,
-    };
-    if rules.seats == 0 || rules.seats as usize > MAX_FIGHTERS {
-        return Err("a seat count past the last".into());
-    }
-    let map = map_by_id(r.u8()?).ok_or("an unknown map")?;
-    let mut w = World::new(map, rules, seed, salt);
-    let mut inputs = [Input::default(); MAX_FIGHTERS];
-    let mut lag = Lag::past([0; MAX_FIGHTERS]);
+    let (mut c, mut w) = Cursor::open(bytes)?;
     let mut kills = Vec::new();
-    let mut ticks = 0u32;
     loop {
-        match r.u8()? {
-            b'S' => {
-                let (s, t) = (r.u8()? as usize, r.u8()?);
-                if s >= MAX_FIGHTERS {
-                    return Err("a seat past the last".into());
-                }
-                w.seat(s, t);
-            }
-            b'H' => w.hold_countdown(),
-            b'T' => {
-                let mask = r.u16()?;
-                for (s, i) in inputs.iter_mut().enumerate() {
-                    if mask & (1 << s) != 0 {
-                        *i = Input {
-                            buttons: r.u16()?,
-                            yaw: r.u16()?,
-                            pitch: r.u16()? as i16,
-                            mx: r.u8()? as i8,
-                            mz: r.u8()? as i8,
-                        };
-                    }
-                }
-                let rmask = r.u16()?;
-                for (s, d) in lag.depth_q8.iter_mut().enumerate() {
-                    if rmask & (1 << s) != 0 {
-                        *d = r.u32()?;
-                    }
-                }
-                let smask = r.u16()?;
-                for (s, seen) in lag.seen.iter_mut().enumerate() {
-                    if smask & (1 << s) != 0 {
-                        *seen = read_seen(&mut r)?;
-                    }
-                }
-                w.step_with(&inputs, &lag);
-                ticks += 1;
+        match c.next(&mut w)? {
+            Next::Tick => {
+                w.step_with(&c.inputs, &c.lag);
                 for e in w.events.as_slice() {
                     if e.kind == Ev::Kill {
                         kills.push((w.tick, e.a, e.b, e.c));
                     }
                 }
             }
-            b'E' => {
-                let want_ticks = r.u32()?;
-                let want = r.u64()?;
-                let mut score = [0i32; MAX_FIGHTERS];
-                for s in score.iter_mut() {
-                    *s = r.u32()? as i32;
-                }
-                if r.at != bytes.len() {
-                    return Err("bytes after the end".into());
-                }
-                if want_ticks != ticks || want != w.hash() || score != w.score {
+            Next::End { ticks, hash, score } => {
+                if ticks != c.ticks || hash != w.hash() || score != w.score {
                     return Err(format!(
-                        "it doesn't replay: {ticks} ticks to {:#018x}, the server said {want_ticks} to {want:#018x}",
+                        "it doesn't replay: {} ticks to {:#018x}, the server said {ticks} to {hash:#018x}",
+                        c.ticks,
                         w.hash()
                     ));
                 }
                 return Ok(Summary {
                     ticks,
-                    hash: want,
+                    hash,
                     score,
-                    seed,
-                    salt,
+                    seed: c.seed,
+                    salt: c.salt,
                     kills,
                 });
             }
-            k => return Err(format!("an unknown record {k:#x} at byte {}", r.at - 1)),
         }
     }
 }

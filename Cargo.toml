@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/sim", "crates/sim-wasm", "crates/proto", "crates/room", "crates/client-net", "crates/server", "tools/flow",
+    # Aim windows for the cheat detector (docs/ANTICHEAT.md), cut from bot matches and replays.
+    "tools/aim",
     # A load test against a server: headless players on client-net (docs/SCALING.md).
     "tools/load",
     # The game's mixer, and its browser audio thread (crates/client's sound).

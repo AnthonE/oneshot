@@ -19,6 +19,12 @@
 //!   [`PREAIM_HIDDEN_MS`]: following someone through a wall with what the
 //!   client was told early. Not while also aimed at an enemy in plain
 //!   sight: then the wall behind is a coincidence.
+//!
+//! Beside the lines, the rest of a profile (docs/ANTICHEAT.md §3, §7): how
+//! much of the time an enemy is in plain sight the aim is on one, how rough
+//! the aim is (its turn rate's change tick to tick), ground covered, time in
+//! the air, grenades and melee, and deaths to someone never answered. An
+//! aimbot raises the aim and none of the rest; nothing here is a line.
 
 use sim::consts::{ticks, MAX_FIGHTERS, TICK_HZ};
 use sim::events::Kind as Ev;
@@ -37,6 +43,14 @@ pub const SNAP_MS: u32 = 100;
 pub const PREAIM_DEG: f32 = 2.0;
 /// ... once it has been out of plain sight this long.
 pub const PREAIM_HIDDEN_MS: u32 = 250;
+/// On target: within this many degrees of an enemy's chest.
+pub const ON_DEG: f32 = 4.0;
+/// A death is unanswered when the one who died hadn't hit the killer in
+/// this long before.
+pub const UNANSWERED_MS: u32 = 3000;
+/// Moved further than this in a tick is a spawn or a teleport, not ground
+/// covered.
+const STEP_MAX_M: f32 = 1.0;
 
 /// The lines a match is queued for review past.
 pub const HEAD_RATE: f32 = 0.6;
@@ -63,6 +77,23 @@ pub struct Stats {
     /// Sightings whose first hit was a snap.
     pub snaps: u32,
     pub preaim_ms: u32,
+    /// Ticks standing.
+    pub alive_ticks: u32,
+    /// Ticks with an enemy in plain sight, and of those, aimed within
+    /// [`ON_DEG`] of one.
+    pub sight_ticks: u32,
+    pub on_ticks: u32,
+    /// Turn, degrees, and the change of turn rate tick to tick, summed.
+    pub turn_deg: f32,
+    pub jerk_deg: f32,
+    /// Ground covered, metres, and ticks off it.
+    pub moved_m: f32,
+    pub air_ticks: u32,
+    pub throws: u32,
+    pub melees: u32,
+    /// Deaths to an enemy, and those [`UNANSWERED_MS`] after any hit back.
+    pub deaths: u32,
+    pub unanswered: u32,
 }
 
 impl Stats {
@@ -81,6 +112,11 @@ impl Stats {
         let mut r = self.reactions_ms.clone();
         r.sort_unstable();
         Some(r[r.len() / 2])
+    }
+
+    /// The share of time with an enemy in plain sight the aim was on one.
+    pub fn on_target(&self) -> f32 {
+        self.on_ticks as f32 / self.sight_ticks.max(1) as f32
     }
 
     /// Which lines these numbers cross.
@@ -119,6 +155,10 @@ pub struct Watch {
     sight: [[Sight; MAX_FIGHTERS]; MAX_FIGHTERS],
     yaws: [[u16; YAWS]; MAX_FIGHTERS],
     preaim_ticks: [u32; MAX_FIGHTERS],
+    /// Each seat's last tick standing: yaw, pitch, where, its turn.
+    prev: [Option<(u16, i16, V3, f32)>; MAX_FIGHTERS],
+    /// `hit_at[a][b]`: when `a` last hit `b`.
+    hit_at: [[Option<u32>; MAX_FIGHTERS]; MAX_FIGHTERS],
     pub stats: [Stats; MAX_FIGHTERS],
 }
 
@@ -128,6 +168,8 @@ impl Default for Watch {
             sight: [[Sight::default(); MAX_FIGHTERS]; MAX_FIGHTERS],
             yaws: [[0; YAWS]; MAX_FIGHTERS],
             preaim_ticks: [0; MAX_FIGHTERS],
+            prev: [None; MAX_FIGHTERS],
+            hit_at: [[None; MAX_FIGHTERS]; MAX_FIGHTERS],
             stats: Default::default(),
         }
     }
@@ -156,6 +198,11 @@ impl Watch {
         for row in &mut self.sight {
             row[s] = Sight::default();
         }
+        self.prev[s] = None;
+        self.hit_at[s] = [None; MAX_FIGHTERS];
+        for row in &mut self.hit_at {
+            row[s] = None;
+        }
     }
 
     /// Reads the tick the world just stepped. `shown(v, t)`: whether fog
@@ -170,14 +217,36 @@ impl Watch {
         let gap = ms_to_ticks(SIGHT_GAP_MS);
         let hidden_for = ms_to_ticks(PREAIM_HIDDEN_MS);
         let cos_pre = (PREAIM_DEG.to_radians()).cos();
+        let cos_on = (ON_DEG.to_radians()).cos();
         for (v, me) in w.fighters.iter().enumerate() {
             self.yaws[v][tick as usize % YAWS] = me.yaw;
             let aim = aim_dir(me.yaw, me.pitch);
-            let on = |them: &sim::fighter::Fighter| {
+            let within = |them: &sim::fighter::Fighter, cos: f32| {
                 let to = them.body.pos + V3::new(0.0, 1.1, 0.0) - me.eye();
                 let d = to.len();
-                d > 1.0 && aim.dot(to * (1.0 / d)) >= cos_pre
+                d > 1.0 && aim.dot(to * (1.0 / d)) >= cos
             };
+            let on = |them: &sim::fighter::Fighter| within(them, cos_pre);
+            if me.active() {
+                let st = &mut self.stats[v];
+                st.alive_ticks += 1;
+                st.air_ticks += !me.body.grounded as u32;
+                let mut turn = 0.0;
+                if let Some((py, pp, pos, pturn)) = self.prev[v] {
+                    let dp = (me.pitch.wrapping_sub(pp) as i32).unsigned_abs() as f32 * (360.0 / 65536.0);
+                    turn = turn_deg(me.yaw, py) + dp;
+                    st.turn_deg += turn;
+                    st.jerk_deg += (turn - pturn).abs();
+                    let step = (me.body.pos - pos).flat().len();
+                    if step < STEP_MAX_M {
+                        st.moved_m += step;
+                    }
+                }
+                self.prev[v] = Some((me.yaw, me.pitch, me.body.pos, turn));
+            } else {
+                self.prev[v] = None;
+            }
+            let (mut in_sight, mut on_one) = (false, false);
             // Aimed at an enemy in plain sight: one behind a wall on the
             // same line is no evidence (Doubles and free for all have many).
             // Asked only when it matters.
@@ -195,6 +264,8 @@ impl Watch {
                         s.hit = false;
                     }
                     s.last = Some(tick);
+                    in_sight = true;
+                    on_one |= within(them, cos_on);
                     continue;
                 }
                 let long_hidden = s.last.is_none_or(|l| tick.saturating_sub(l) > hidden_for);
@@ -214,10 +285,13 @@ impl Watch {
                 }
             }
             self.stats[v].preaim_ms = ticks_to_ms(self.preaim_ticks[v]);
+            self.stats[v].sight_ticks += in_sight as u32;
+            self.stats[v].on_ticks += (in_sight && on_one) as u32;
         }
 
         // A hitscan round is a Shot followed at once by its Hit, if any.
         let snap_back = ms_to_ticks(SNAP_MS) as usize;
+        let answer = ms_to_ticks(UNANSWERED_MS);
         let mut prev_shot: Option<u8> = None;
         for e in w.events.as_slice() {
             let a = e.a as usize;
@@ -229,7 +303,14 @@ impl Watch {
                     prev_shot = Some(e.a);
                     continue;
                 }
-                Ev::Hit if prev_shot == Some(e.a) && e.a != e.b && a < MAX_FIGHTERS => {
+                Ev::Hit if e.a != e.b && a < MAX_FIGHTERS => {
+                    if let Some(h) = self.hit_at[a].get_mut(e.b as usize) {
+                        *h = Some(tick);
+                    }
+                    if prev_shot != Some(e.a) {
+                        prev_shot = None;
+                        continue;
+                    }
                     let st = &mut self.stats[a];
                     st.hits += 1;
                     if e.part == 2 || e.part == 3 {
@@ -249,7 +330,19 @@ impl Watch {
                         }
                     }
                 }
-                Ev::Kill if e.a != e.b && a < MAX_FIGHTERS => self.stats[a].kills += 1,
+                Ev::Kill if e.a != e.b && a < MAX_FIGHTERS => {
+                    self.stats[a].kills += 1;
+                    let b = e.b as usize;
+                    if b < MAX_FIGHTERS {
+                        let st = &mut self.stats[b];
+                        st.deaths += 1;
+                        if self.hit_at[b][a].is_none_or(|h| tick - h > answer) {
+                            st.unanswered += 1;
+                        }
+                    }
+                }
+                Ev::Throw if a < MAX_FIGHTERS => self.stats[a].throws += 1,
+                Ev::Melee if a < MAX_FIGHTERS => self.stats[a].melees += 1,
                 _ => {}
             }
             prev_shot = None;

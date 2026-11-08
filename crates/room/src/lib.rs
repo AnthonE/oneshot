@@ -4,12 +4,15 @@
 //! (docs/DESIGN.md §4, §7, §10). `crates/server` puts this behind
 //! WebTransport; the netcode tests drive it directly.
 
+pub mod assist;
 pub mod bubble;
 pub mod fog;
+pub mod genome;
 pub mod medals;
 pub mod replay;
 pub mod spectate;
 pub mod watch;
+pub mod window;
 
 use std::collections::VecDeque;
 

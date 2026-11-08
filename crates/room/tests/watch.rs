@@ -134,3 +134,63 @@ fn in_doubles_too() {
         }
     }
 }
+
+/// The zoo's blatant assist laid over a bot's own input (`room::assist`,
+/// what `tools/aim` cuts its cheated twins with) is the scripted aimbot
+/// again: the lines catch it. A bot with no assist in the same match isn't.
+#[test]
+fn an_assist_over_a_bot_is_flagged() {
+    use room::assist::{Assist, Knobs};
+    use room::fog::Plain;
+    let rules = Rules::duel();
+    let mut w = World::new(Map::proving_grounds(), rules, 7, (7, !7));
+    for s in 0..2 {
+        w.seat(s, s as u8);
+    }
+    let mut bots: Vec<Bot> = (0..2).map(|s| Bot::new(7, s, 0.5)).collect();
+    let mut fogs = vec![Fog::default(); 2];
+    let mut assist = Assist::new(Knobs::BLATANT, 0, 1);
+    let mut watch = Watch::default();
+    let rewind = [0u32; MAX_FIGHTERS];
+    for _ in 0..600 * TICK_HZ {
+        if w.phase == Phase::Over {
+            break;
+        }
+        let next = w.tick + 1;
+        for (s, f) in fogs.iter_mut().enumerate() {
+            f.update(&w, s, 0.1, next);
+        }
+        let mut inputs = [Input::default(); MAX_FIGHTERS];
+        for (s, b) in bots.iter_mut().enumerate() {
+            inputs[s] = b.think(&w, s);
+        }
+        inputs[0].buttons &= !USE;
+        let from = (w.fighters[0].yaw, w.fighters[0].pitch);
+        assist.bend(
+            &w,
+            &mut Plain::default(),
+            |t| fogs[0].shows(t, next),
+            from,
+            &mut inputs[0],
+        );
+        w.step(&inputs, &rewind);
+        let tick = w.tick;
+        watch.observe(&w, |v, t| v < 2 && fogs[v].shows(t, tick));
+    }
+    let flags = watch.stats[0].flags();
+    assert!(flags.contains(&"head_rate") && flags.len() >= 2, "{flags:?}");
+    assert!(watch.stats[1].flags().is_empty(), "{:?}", watch.stats[1].flags());
+    // The profile: the aim up, the rest of its game the bot's own.
+    for (s, st) in watch.stats.iter().take(2).enumerate() {
+        eprintln!(
+            "seat {s}: on target {:.0}% of {} ticks in sight, jerk/turn {:.2}, {:.1} m/s, {} of {} deaths unanswered",
+            st.on_target() * 100.0,
+            st.sight_ticks,
+            st.jerk_deg / st.turn_deg.max(1.0),
+            st.moved_m / (st.alive_ticks.max(1) as f32 / TICK_HZ as f32),
+            st.unanswered,
+            st.deaths
+        );
+    }
+    assert!(watch.stats[0].on_target() > watch.stats[1].on_target() + 0.1);
+}

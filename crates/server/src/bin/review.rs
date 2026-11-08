@@ -6,6 +6,10 @@
 //! bans or lifts a wallet on the game's Elo Pros list. Nothing is banned
 //! without a person running `ban` after watching the replay.
 //!
+//! `profile` prints a wallet's profile: a line per match it finished, its
+//! aim and play numbers (docs/ANTICHEAT.md §7), oldest first, then the
+//! median of each.
+//!
 //! `resend` posts again, signed now, each rating report and stats report
 //! Elo Pros didn't take (`<replays>/unreported/`, written by the server
 //! when its tries ran out or a drain stopped waiting), and removes each one
@@ -15,6 +19,7 @@
 //! oneshot-review [--replays dir] list
 //! oneshot-review [--replays dir] show <match id>
 //! oneshot-review [--replays dir] done <match id>
+//! oneshot-review [--replays dir] profile <wallet>
 //! oneshot-review --elo-key server.pem --elo-key-id eu-1 [--slug oneshot]
 //!     [--elo-origin https://elopros.com] ban <wallet> --reason "…" [--match <id>]
 //! oneshot-review --elo-key … --elo-key-id … lift <wallet> [--reason "…"]
@@ -52,6 +57,7 @@ fn main() {
             std::fs::remove_file(&p).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
             println!("{id}: off the review list (its numbers stay in {id}.watch.json)");
         }
+        ["profile", wallet] => profile(&replays, wallet),
         ["resend"] => {
             let elo = signer(&slug, &origin, key, key_id, "a report");
             resend(&replays.join(server::elo::UNREPORTED), &elo);
@@ -70,7 +76,7 @@ fn main() {
             }
         }
         _ => die(
-            "list | show <id> | done <id> | ban <wallet> --reason … | lift <wallet> | resend (see the source's header)",
+            "list | show <id> | done <id> | profile <wallet> | ban <wallet> --reason … | lift <wallet> | resend (see the source's header)",
         ),
     }
 }
@@ -209,6 +215,72 @@ fn show(replays: &Path, id: &str) {
         room::watch::REACTION_MIN,
         room::watch::PREAIM_MS,
     );
+}
+
+/// A wallet's profile, a match a line, then the median of each number.
+fn profile(replays: &Path, wallet: &str) {
+    if !proto::party::is_wallet(wallet) {
+        die(&format!("{wallet}: not a wallet"));
+    }
+    let p = replays.join(server::PROFILES).join(format!("{wallet}.jsonl"));
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
+    let rows: Vec<serde_json::Value> = text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+    const COLS: [(&str, &str); 9] = [
+        ("accuracy", "acc"),
+        ("head_rate", "head"),
+        ("snap_share", "snap"),
+        ("on_target", "on"),
+        ("turn_deg_s", "turn°/s"),
+        ("jerk_per_turn", "jerk"),
+        ("speed_m_s", "m/s"),
+        ("air_share", "air"),
+        ("unanswered_share", "unans"),
+    ];
+    print!("{:<22} {:>6} {:>8}", "match", "ranked", "react");
+    for (_, h) in COLS {
+        print!(" {h:>7}");
+    }
+    println!("  flags");
+    let num = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
+    let mut all: Vec<Vec<f64>> = vec![Vec::new(); COLS.len() + 1];
+    for r in &rows {
+        let a = &r["aim"];
+        let react = median(a["reactions_ms"].as_array().into_iter().flatten().map(num).collect());
+        if let Some(m) = react {
+            all[0].push(m);
+        }
+        print!(
+            "{:<22} {:>6} {:>8}",
+            r["match"].as_str().unwrap_or("?"),
+            if r["ranked"].as_bool() == Some(true) { "yes" } else { "" },
+            react.map_or("-".into(), |m| format!("{m:.0} ms"))
+        );
+        for (i, (k, _)) in COLS.iter().enumerate() {
+            all[i + 1].push(num(&a[*k]));
+            print!(" {:>7.3}", num(&a[*k]));
+        }
+        let flags: Vec<&str> = r["flags"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f.as_str())
+            .collect();
+        println!("  {}", flags.join(", "));
+    }
+    print!(
+        "{:<22} {:>6} {:>8}",
+        format!("median of {}", rows.len()),
+        "",
+        median(all[0].clone()).map_or("-".into(), |m| format!("{m:.0} ms"))
+    );
+    for col in &all[1..] {
+        print!(" {:>7.3}", median(col.clone()).unwrap_or(0.0));
+    }
+    println!();
 }
 
 fn die(msg: &str) -> ! {
