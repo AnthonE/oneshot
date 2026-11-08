@@ -23,9 +23,11 @@ pub const PRE: usize = 32;
 pub const LEN: usize = 128;
 /// Angles are kept within this many degrees: past it, only "far off".
 const CLIP_DEG: f32 = 90.0;
+/// A body's half width, metres, for `on`.
+const HALF_M: f32 = 0.3;
 
 /// What a row holds, in order.
-pub const FEATURES: [&str; 15] = [
+pub const FEATURES: [&str; 16] = [
     // The seat's own turn this tick, degrees.
     "turn_yaw",
     "turn_pitch",
@@ -50,6 +52,10 @@ pub const FEATURES: [&str; 15] = [
     "zoom",
     // Both standing (neither dead nor waiting to spawn).
     "alive",
+    // The aim on the enemy's body: within its half width at that range of
+    // the chest, the middle or the head. When a trigger is pulled against
+    // when this came on is a person's click or a triggerbot's.
+    "on",
 ];
 pub const F: usize = FEATURES.len();
 
@@ -128,6 +134,18 @@ impl Tape {
             (them.body.pos - me.body.pos).len() / 32.0,
             b(inp.buttons & ZOOM != 0),
             b(me.active() && them.active()),
+            b(on_body(me, them, yaw, pitch)),
         ]);
     }
+}
+
+/// Whether `me`'s aim (`yaw`, `pitch`, degrees) is on `them`'s body.
+fn on_body(me: &sim::fighter::Fighter, them: &sim::fighter::Fighter, yaw: f32, pitch: f32) -> bool {
+    let eye = me.eye();
+    let d = (them.body.pos - eye).len().max(1.0);
+    let half = (sim::fmath::atan2(HALF_M, d) * (180.0 / core::f32::consts::PI)).max(0.5);
+    [0.0, 0.5, 1.0].iter().any(|&bone| {
+        let (y, p) = angles_to(eye, aim_point(them, bone));
+        wrap(y - yaw).hypot(p - pitch) < half
+    })
 }
