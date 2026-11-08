@@ -148,9 +148,10 @@ def train(x, gun, mp, y, idx_tr, idx_va, args, guns, maps, shuffle=False, seed=0
     ytr = y.copy()
     if shuffle:
         ytr = np.random.default_rng(seed).permutation(ytr)
-    X = torch.tensor(x, device=DEV)
-    G = torch.tensor(gun, device=DEV)
-    M = torch.tensor(mp, device=DEV)
+    # Straight to the GPU: no second copy of the set in memory on the way.
+    X = torch.from_numpy(np.ascontiguousarray(x)).to(DEV)
+    G = torch.from_numpy(np.ascontiguousarray(gun)).to(DEV)
+    M = torch.from_numpy(np.ascontiguousarray(mp)).to(DEV)
     Y = torch.tensor(ytr, dtype=torch.float32, device=DEV)
     best, best_state = -1.0, None
     steps = args.epochs * math.ceil(len(idx_tr) / args.batch)
