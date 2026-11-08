@@ -52,6 +52,8 @@ pub mod tags;
 pub mod tally;
 pub mod ui;
 pub mod visor;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod window_icon;
 
 use std::collections::BTreeMap;
 
@@ -724,6 +726,8 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // and clear themselves once the match is left.
     app.add_systems(Update, (medals::row, medals::carnage).after(hud::draw));
     app.add_systems(Update, look::fx::vent::spawn_orbs);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_systems(Update, window_icon::set);
     app.add_systems(Update, look::bodies::stand_up);
     app.add_systems(Update, (look::blade::trail, look::cels::sweep, look::cels::warm));
     app.add_systems(

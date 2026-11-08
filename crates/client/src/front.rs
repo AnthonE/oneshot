@@ -2020,6 +2020,12 @@ fn challenges_panel(body: &mut ChildSpawnerCommands, ch: &crate::challenges::Cha
             }
         }
         p.spawn(ui::spacer());
+        if let Some((say, mine)) = ch.pot.as_ref().and_then(|pot| pot.lines()) {
+            p.spawn(ui::label(say, 12.5, ui::MARK));
+            if let Some(mine) = mine {
+                p.spawn(ui::strong(mine, 12.0, ui::MARK));
+            }
+        }
         if !matches!(signin, SignIn::In(_)) {
             p.spawn(ui::label("Sign in to count your progress.", 12.5, ui::DIM));
         }

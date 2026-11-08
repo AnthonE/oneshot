@@ -529,9 +529,13 @@ passes that never expire are what players kept.
 - **No cases at launch.** If they come, cosmetic only, odds above the pull,
   no duplicates.
 - **No coin per match.** Wallets are free and casual seats fill with bots, so
-  a per-match payout is a printer for alts. Money goes out only on placements
+  a per-match payout is a printer for alts. Money goes out on placements
   reviewed by a person: cups and each season's top (§11, §13), with the
-  record §13 asks for.
+  record §13 asks for; and, once the game's coin is out, a **daily pot**: a
+  fixed sum a day split among the players who finished that day's
+  challenges, capped per wallet, its file read by a person before it pays,
+  and gated (people only, then ranked, then placed) as players come
+  (operator, 2026-11-07; Elo Pros' `docs/launch/ONESHOT-COIN.md` §9).
 - Never: a gun, a character or anything that changes play behind a price or
   an unlock. Skins never change a hitbox, a sound's loudness or a colour's
   visibility.

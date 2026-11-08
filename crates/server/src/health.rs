@@ -207,6 +207,9 @@ pub struct Now {
     pub uptime_s: u64,
     /// The threads rooms step on (`Config::sim_threads`).
     pub sim_threads: usize,
+    /// What became of the signed POSTs to Elo Pros (`elo::Elo::counts`):
+    /// a server whose reports don't land says so here.
+    pub elo: crate::elo::Counts,
 }
 
 fn list(v: &[u64]) -> String {
@@ -227,7 +230,8 @@ pub fn json(now: Now, r: &Read) -> String {
          \"snapshots_dropped\":{},\"snapshots_oversize\":{},\"cut_behind\":{},\"send_errors\":{},\"inputs_dropped\":{},\
          \"events_dropped\":{},\
          \"packets_sent\":{},\"packets_lost\":{},\"bytes_sent\":{},\
-         \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{}}}",
+         \"rtt_p50_ms\":{},\"rtt_p99_ms\":{},\"rtt_max_ms\":{},\
+         \"elo_sent\":{},\"elo_refused\":{},\"elo_failed\":{},\"elo_unkeyed\":{},\"elo_held\":{}}}",
         now.ready,
         now.proto,
         now.players,
@@ -262,6 +266,11 @@ pub fn json(now: Now, r: &Read) -> String {
         pct(&r.rtt_ms, 50),
         pct(&r.rtt_ms, 99),
         r.rtt_max_ms,
+        now.elo.sent,
+        now.elo.refused,
+        now.elo.failed,
+        now.elo.unkeyed,
+        now.elo.held,
     )
 }
 
@@ -377,6 +386,11 @@ mod tests {
                 rooms: 1,
                 uptime_s: 5,
                 sim_threads: 4,
+                elo: crate::elo::Counts {
+                    sent: 2,
+                    refused: 1,
+                    ..Default::default()
+                },
             },
             &s.read(&Counts::default()),
         );
@@ -385,6 +399,10 @@ mod tests {
         assert!(doc.contains("\"tick_p50_us\":512"));
         assert!(doc.contains("\"sim_threads\":4,"));
         assert!(doc.contains("\"tick_us\":[0,0,0,0,0,0,0,0,0,1,0,"), "{doc}");
+        assert!(
+            doc.ends_with("\"elo_sent\":2,\"elo_refused\":1,\"elo_failed\":0,\"elo_unkeyed\":0,\"elo_held\":0}"),
+            "{doc}"
+        );
         assert!(!doc.contains('\n'));
     }
 
