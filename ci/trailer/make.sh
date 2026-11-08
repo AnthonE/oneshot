@@ -159,7 +159,7 @@ cues)
   python3 -c "import json; t = json.load(open('$B/cues.json')); print('trailer: %.1f s' % t['TOTAL']); [print('  %6.2f  %s' % (s['t0'], s['id'])) for s in t['SCENES']]"
   exit 0 ;;
 art)
-  node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope
+  node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
   # the poster as the store's JPEG beside the PNGs
   ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
   ls -la "$HERE"/out/; exit 0 ;;
@@ -202,6 +202,6 @@ ffmpeg -v error -y -i "$B/silent.mkv" -i "$B/mix.wav" -map 0:v -map 1:a -af "$AF
   "$HERE/out/oneshot-trailer.mp4"
 ffmpeg -v error -y -i "$HERE/out/oneshot-trailer.mp4" -vf scale=1280:720:flags=lanczos -c:v libx264 -preset slow -crf 23 -maxrate 3M -bufsize 6M \
   -pix_fmt yuv420p -c:a copy -movflags +faststart "$HERE/out/oneshot-trailer-720p.mp4"
-node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope
+node "$B/render.mjs" art "$HERE/out" poster,keyart,capsule,square,scope,banner
 ffmpeg -v error -y -i "$HERE/out/poster.png" -q:v 2 "$HERE/out/oneshot-trailer-poster.jpg"
 ls -la "$HERE"/out/

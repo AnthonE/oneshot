@@ -635,6 +635,10 @@ const ART = {
     shade(bg, H * .6, H, 0, .78);
     wordmark(fg, W / 2, 880, 1.2, { glow: 'rgba(232,185,49,.3)', line: 'ARENA SLAYER  ·  FREE TO PLAY' });
   },
+  banner(ctx) {   // the wide banner and the share card's frame: the vista alone, no words (the card letters its own)
+    foot(bg, ART_SRC.keyart[0], 0, 1, { from: ART_SRC.keyart[1], full: true, fallback: 'dryfork', grade: 'brightness(.92) contrast(1.06) saturate(1.02)', still: { full: true, z0: 1.02, z1: 1.02 } });
+    shade(bg, H * .55, H, 0, .5);
+  },
   capsule(ctx) {  // the shelf card's plate: the lockup at the foot, as Gates' is
     foot(bg, ART_SRC.capsule[0], 0, 1, { from: ART_SRC.capsule[1], full: true, fallback: 'chrysalis', grade: 'brightness(.85) contrast(1.06) saturate(1.0)', still: { full: true, z0: 1.04, z1: 1.04 } });
     shade(bg, H * .5, H, 0, .8);
