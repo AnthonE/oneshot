@@ -16,16 +16,17 @@ are measured over many matches, not prevented (`docs/ANTICHEAT.md`).
 
 ## Paid findings
 
-Paid through Slop's private security rail: the researcher receives 75% and
-slop.cash 25%. One award per underlying finding, to its first valid report.
+One award per underlying finding, to its first valid report. Once oneshot's
+security program is on slop.cash, awards pay through its private rail, where
+the researcher receives 75% and slop.cash 25%.
 
 | severity | what | award |
 |---|---|---|
-| **Critical** | a client learns what fog should hide (an unseen enemy, round, event or medal) through the real client path; the salt before the match ends; a forged match result or rating accepted by the server or reported to Elo Pros; playing ranked as a wallet you don't hold | **$100** |
-| **High** | breaking the server's authority (speed, rate of fire, damage, a pickup out of reach); a shot landing past the 160 ms bound; a replay from legal inputs that does not re-run to the server's hash; wearing a skin the wallet does not own | **$75** |
-| **Medium** | one client's crafted traffic (not volume) crashes or stalls a room or a server for everyone in it | **$25** |
+| **Critical** | a client learns what fog should hide (an unseen enemy, round, event or medal) through the real client path; the salt before the match ends; a forged match result or rating accepted by the server or reported to Elo Pros; playing ranked as a wallet you don't hold | **$20** |
+| **High** | breaking the server's authority (speed, rate of fire, damage, a pickup out of reach); a shot landing past the 160 ms bound; a replay from legal inputs that does not re-run to the server's hash; wearing a skin the wallet does not own | **$15** |
+| **Medium** | one client's crafted traffic (not volume) crashes or stalls a room or a server for everyone in it | **$10** |
 
-The program holds $100. When it is spent it pauses until it is refilled,
+The program holds $50. When it is spent it pauses until it is refilled,
 and the page says so.
 
 ## How to report

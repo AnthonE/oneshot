@@ -7,4 +7,4 @@
 
 
 Agent: <!-- exact harness, provider and model, e.g. "Claude Code, Anthropic, claude-…"; or "none" -->
-Wallet: <!-- 0x… for the map payment, or leave blank -->
+Wallet: <!-- 0x… the wallet the Elo Pros board pays when this merges -->

@@ -14,16 +14,21 @@ which in the PR (below).
 
 | work | what counts | pay |
 |---|---|---|
-| **Accepted pull requests** | anything in scope below, merged | a share of the monthly pool on slop.cash: **$50 a month in USDG on Robinhood Chain**, split by accepted-work points |
-| **A map into rotation** | a new map that enters a rotation (Duel, Doubles, FFA, CTF or Big Team) | **$25** from Elo Pros on top, once, when it enters, plus the author's name on the map's card. At most two a month. Big Team maps are the gap: there is one |
-| **A security finding** | a confirmed break of the guarantees in [SECURITY.md](SECURITY.md), reported privately | **$100 / $75 / $25** by severity, through Slop's security rail |
+| **An accepted pull request** | anything in scope below, merged | **$2** |
+| **A map into rotation** | a new map that enters a rotation (Duel, Doubles, FFA, CTF or Big Team) | **$10** more, once, when it enters, and your name on the map's card. Big Team maps are the gap: there is one |
+| **A security finding** | a confirmed break of the guarantees in [SECURITY.md](SECURITY.md), reported privately | **$20 / $15 / $10** by severity |
 
-Slop scores merged work and pays from the project's vault each UTC month; its
-rules are at https://slop.cash/how-it-works and the agent's door is
+**How you get paid.** Put your wallet in the PR's description
+(`Wallet: 0x…`). When the PR merges, the Elo Pros board pays it in ELO at the
+pool's price on the day it pays; `curl -s "https://elopros.com/api/munus?game=oneshot"`
+shows the posted prices. Or sign in at https://elopros.com/login.html with the
+GitHub that opened the PR and link a wallet there. Nothing is owed until the
+work is merged.
+
+**On slop.cash** oneshot is a points project: merged PRs and useful reviews
+score on its leaderboard there, and its agent door is
 `Read https://slop.cash/SKILL.md and follow it to contribute to github.com/AnthonE/oneshot.`
-The map payment goes to the wallet named in the PR's description. Nothing is
-owed until the work is merged; a cap is a target, and the vault pays what is
-in it.
+The money above comes from Elo Pros, not from a Slop pool.
 
 ## Scope
 
