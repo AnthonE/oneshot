@@ -10,10 +10,12 @@
 //!     and takes as its first snapshot only one near the welcome's tick
 //!     (`core::FIRST_WITHIN`). A clip cut ten minutes into a match opens on
 //!     the welcome with its tick moved to the segment's first snapshot, so
-//!     the replay takes it. Snapshots on a clip are whole: the session hands
-//!     it each delta made whole and encoded again (`Session::on_datagram`),
-//!     so a segment needs no keyframes the way Gates' does: its first
-//!     snapshot is one.
+//!     the replay takes it. Snapshots go on a clip as they came, whole or a
+//!     delta, except where a replay couldn't make the delta whole: a
+//!     segment's first snapshot, and any delta against a base before it or
+//!     not on the tape, is encoded whole instead ([`Clipper::on_snapshot`]).
+//!     So a segment opens on a keyframe and reads on its own, and the
+//!     ordinary delta (sixty a second) costs no encoding.
 //!   · **What the stream built is state.** Who sits where (their names,
 //!     sides and skins), the phase, a cup's standing and, for a watcher,
 //!     the seat it follows come once, as they change. They are folded as segments age out and played in a burst at
@@ -31,7 +33,8 @@
 
 use std::collections::VecDeque;
 
-use proto::Msg;
+use proto::delta::{delta_base, DELTA_WINDOW};
+use proto::{datagram_kind, encode_snapshot, Msg, Snapshot, DG_DELTA, MAX_DATAGRAM};
 use sim::consts::MAX_FIGHTERS;
 
 use crate::tape::{self, Lane};
@@ -51,6 +54,10 @@ pub const CLIP_S: f64 = 30.5;
 /// kill feed, a seat changing); past it the rest are dropped until the
 /// window moves on.
 pub const MSG_CAP: usize = 4096;
+/// Snapshot ticks remembered of the open segment, by `(tick / 2) % HELD`:
+/// every one a delta may be against (`proto::delta::Ring`, the replay's
+/// own memory, keeps the same).
+const HELD: usize = (DELTA_WINDOW / 2) as usize;
 
 /// A run of snapshots, and the tick its first one carries.
 struct Seg {
@@ -116,6 +123,10 @@ pub struct Clipper {
     segs: VecDeque<Seg>,
     /// Segments kept ([`KEEP_SEGS`] unless a recorder asks for more).
     keep: usize,
+    /// The ticks of the open segment's snapshots a delta may be against
+    /// (`u32::MAX`: none there): what a replay from the segment's start
+    /// could make a delta whole with.
+    held: [u32; HELD],
 }
 
 impl Default for Clipper {
@@ -133,6 +144,7 @@ impl Clipper {
             state: State::EMPTY,
             segs: VecDeque::with_capacity(KEEP_SEGS + 1),
             keep: KEEP_SEGS,
+            held: [u32::MAX; HELD],
         }
     }
 
@@ -168,15 +180,38 @@ impl Clipper {
         self.msgs.push((self.clock_ms, *m));
     }
 
-    /// A snapshot the session drew (the newest yet), its tick and its bytes,
-    /// taken in at `at_ms`.
-    pub fn on_snapshot(&mut self, at_ms: f64, tick: u32, bytes: &[u8]) {
-        if self.welcome.is_none() || bytes.len() > u16::MAX as usize {
+    /// A snapshot the session drew (the newest yet), made whole, and the
+    /// datagram `d` that carried it (whole or a delta), taken in at
+    /// `at_ms`. The datagram goes on the tape as it came unless a replay
+    /// from the segment's start couldn't make it whole (it opens a
+    /// segment, or its base is from before one or never went on): then
+    /// the snapshot is encoded whole instead.
+    pub fn on_snapshot(&mut self, at_ms: f64, s: &Snapshot, d: &[u8]) {
+        if self.welcome.is_none() {
             return;
         }
+        let tick = s.tick;
         self.clock_ms = self.clock_ms.max(at_ms);
-        let due = self.segs.back().is_none_or(|s| self.clock_ms - s.start_ms >= SEG_MS);
+        let due = self
+            .segs
+            .back()
+            .is_none_or(|seg| self.clock_ms - seg.start_ms >= SEG_MS);
+        let is_delta = datagram_kind(d) == Some(DG_DELTA);
+        let base_held = !due && is_delta && delta_base(d).is_ok_and(|b| self.held[(b / 2) as usize % HELD] == b);
+        let mut whole = [0u8; MAX_DATAGRAM];
+        let bytes: &[u8] = if !is_delta || base_held {
+            d
+        } else {
+            let Ok(n) = encode_snapshot(s, &mut whole) else {
+                return;
+            };
+            &whole[..n]
+        };
+        if bytes.len() > u16::MAX as usize {
+            return;
+        }
         if due {
+            self.held = [u32::MAX; HELD];
             // The segment falling out of the window lends the new one its
             // buffers: a quarter-minute's bytes, grown once, not every time.
             let mut seg = if self.segs.len() >= self.keep {
@@ -209,6 +244,7 @@ impl Clipper {
             seg.dgrams
                 .push((self.clock_ms, seg.bytes.len() as u32, bytes.len() as u16));
             seg.bytes.extend_from_slice(bytes);
+            self.held[(tick / 2) as usize % HELD] = tick;
         }
     }
 
