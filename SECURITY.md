@@ -25,7 +25,7 @@ slop.cash 25%. One award per underlying finding, to its first valid report.
 | **High** | breaking the server's authority (speed, rate of fire, damage, a pickup out of reach); a shot landing past the 160 ms bound; a replay from legal inputs that does not re-run to the server's hash; wearing a skin the wallet does not own | **$75** |
 | **Medium** | one client's crafted traffic (not volume) crashes or stalls a room or a server for everyone in it | **$25** |
 
-The program holds $500. When it is spent it pauses until it is refilled,
+The program holds $100. When it is spent it pauses until it is refilled,
 and the page says so.
 
 ## How to report
