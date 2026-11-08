@@ -11,94 +11,95 @@
  "terrain": {
   "cell": 1, "base": -40, "margin": 4,
   "shapes": [
-   {"outline": [[-21, -13.4], [-20.6, -14], [-12.4, -14], [-12, -13.4], [-12, 13.4], [-12.4, 14], [-20.6, 14], [-21, 13.4]], "h": 40, "edge": 2.2, "mirror": true}
+   {"outline": [[-21, -13.4], [-20.6, -14], [-12.4, -14], [-12, -13.4], [-12, 4.4], [-13, 4.4], [-13, 13.4], [-13.4, 14], [-20.6, 14], [-21, 13.4]], "h": 40, "edge": 2.2, "mirror": true}
   ]
  },
  "structures": [
   {"name": "the gantry: crown to crown 7 m up over the shaft, a landing in its middle under the cab",
-   "boxes": [[-13, 6.5, -1.5, 13, 7, 1.5, "tread"], [-3, 6.5, -3, 3, 7, 3, "tread"]]},
+   "boxes": [[-13, 6.5, -1.5, 13, 7, 1.5, "hidden"], [-3, 6.5, -3, 3, 7, 3, "hidden"]]},
   {"name": "the winding cab on the gantry's landing: walls all round, a door at each end off to one side of the gantry, so nobody sees through it, the sheave deck its roof", "mirror": true,
-   "boxes": [[-2.5, 7, 2.6, 2.5, 10, 3, "steel"], [-2.9, 7, 0.3, -2.5, 10, 2.6, "steel"], [-2.9, 7, -2.6, -2.5, 10, -1.5, "steel"]]},
+   "boxes": [[-2.9, 7, 2.6, 2.9, 10, 3, "hidden"], [-2.9, 7, 0.3, -2.5, 10, 2.6, "hidden"], [-2.9, 7, -2.6, -2.5, 10, -1.5, "hidden"]]},
   {"name": "the winding drum in the cab, walked round",
-   "boxes": [[-0.9, 7, -0.6, 0.9, 9.4, 0.6, "rust"]]},
+   "boxes": [[-0.9, 7, -0.6, 0.9, 9.4, 0.6, "hidden"]]},
   {"name": "a crate on the gantry by the cab's door: a jump up onto the sheave deck", "mirror": true,
-   "boxes": [[-4.4, 7, -1.5, -3.2, 8.2, -0.3, "rust"]]},
+   "boxes": [[-4.4, 7, 0.3, -3.2, 8.2, 1.5, "hidden"]]},
   {"name": "the sheave deck on the cab, 10.5 m up, the sniper on it; a post at each corner for cover",
-   "boxes": [[-2.5, 10, -3.2, 2.5, 10.5, 3.2, "tread"]]},
+   "boxes": [[-2.9, 10, -3.2, 2.9, 10.5, 3.2, "hidden"]]},
   {"name": "the sheave deck's posts", "mirror": true,
-   "boxes": [[-2.5, 10.5, 2.6, -1.9, 12.2, 3.2, "steel"], [1.9, 10.5, 2.6, 2.5, 12.2, 3.2, "steel"]]},
+   "boxes": [[-2.9, 10.5, 2.8, -2.5, 12.2, 3.2, "hidden"], [2.5, 10.5, 2.8, 2.9, 12.2, 3.2, "hidden"]]},
   {"name": "a ramp up beside the gantry to the sheave deck, its side a wall on the gantry", "mirror": true,
-   "boxes": [{"ramp": [-9, 1.5, -2.5, 3.2], "up": "+x", "from": 7, "to": 10.5, "base": 7, "look": "tread"}]},
+   "boxes": [{"ramp": [-9, 1.5, -2.9, 3.2], "up": "+x", "from": 7, "to": 10.5, "base": 7, "look": "hidden"}]},
   {"name": "the cage: a catwalk 3.5 m up across the shaft from the north deck to the south, under the gantry, a plate girder down each side (walked under from the collar)",
-   "boxes": [[-1.5, 3, -8, 1.5, 3.5, 8, "tread"], [-1.5, 1.4, -8, -1.2, 3, 8, "steel"], [1.2, 1.4, -8, 1.5, 3, 8, "steel"]]},
+   "boxes": [[-1.5, 3, -8, 1.5, 3.5, 8, "hidden"], [-1.5, 1.4, -8, -1.2, 3, 8, "hidden"], [1.2, 1.4, -8, 1.5, 3, 8, "hidden"]]},
   {"name": "the collar: a landing a metre down in the shaft under the cage, the sword on its plinth",
    "boxes": [
-    [-4.5, -1.5, -4, 4.5, -1, 4, "tread"],
-    {"round": [0, 0], "r": 1.6, "y": [-1, -0.6], "look": "steel"}
+    [-4.5, -1.5, -4, 4.5, -1, 4, "hidden"],
+    {"round": [0, 0], "r": 1.6, "y": [-1, -0.6], "look": "hidden"}
    ]},
   {"name": "red's bridge down to the collar from its hall's door (a plate over the rock's lip, so the lip is never the floor), the skip's pit off the collar's corner, and a crate on the collar", "mirror": true,
    "boxes": [
-    [-13, -0.5, 1, -11, 0.1, 4, "tread"],
-    {"ramp": [-11, 1, -8, 4], "up": "-x", "from": -1, "to": 0.1, "base": -1.5, "look": "tread"},
-    [-8, -1.5, 1, -4.5, -1, 4, "tread"],
-    [4.5, -1.5, 2, 6.6, -1, 4, "tread"],
-    [-4.2, -1, 1.8, -3, 0.2, 3, "rust"]
+    [-13, -0.5, 1, -11, 0.1, 4, "hidden"],
+    {"ramp": [-11, 1, -8, 4], "up": "-x", "from": -1, "to": 0.1, "base": -1.5, "look": "hidden"},
+    [-8, -1.5, 1, -4.5, -1, 4, "hidden"],
+    [4.5, -1.5, 2, 6.6, -1, 4, "hidden"],
+    [-4.2, -1, 1.8, -3, 0.2, 3, "hidden"]
    ]},
   {"name": "red's headframe: the hall's walls up to the crown's parapet, a door to the spur and to the bridge, a rail where the mezzanine looks out over the shaft, a jamb between it and the deck", "mirror": true,
    "boxes": [
-    [-21.4, -3, -2.4, -21, 8.1, 14.4, "steel_red"],
-    [-21, -3, 14, -13, 8.1, 14.4, "steel_red"],
-    [-21, 0, -2.4, -18, 8.1, -2, "steel_red"],
-    [-15.5, 0, -2.4, -13, 8.1, -2, "steel_red"],
-    [-18, 2.6, -2.4, -15.5, 8.1, -2, "steel_red"],
-    [-13.4, 0, -2, -13, 3, 1, "steel_red"],
-    [-13.4, 0, 4, -13, 3, 14, "steel_red"],
-    [-13.4, 2.6, 1, -13, 3, 4, "steel_red"],
-    [-13.4, 3, -2, -13, 6.5, 5, "steel_red"],
-    [-13.4, 3, 5, -13, 4.5, 8, "steel_red"],
-    [-13.4, 3.5, 8, -13, 6.5, 10, "steel_red"]
+    [-21.4, -3, -2.4, -21, 8.1, 14.4, "hidden"],
+    [-21, -3, 14, -13, 8.1, 14.4, "hidden"],
+    [-21, 0, -2.4, -18, 8.1, -2, "hidden"],
+    [-15.5, 0, -2.4, -13, 8.1, -2, "hidden"],
+    [-18, 2.6, -2.4, -15.5, 8.1, -2, "hidden"],
+    [-13.4, 0, -2, -13, 3, 1, "hidden"],
+    [-13.4, 0, 4, -13, 3, 14, "hidden"],
+    [-13.4, 2.6, 1, -13, 3, 4, "hidden"],
+    [-13.4, 3, -2, -13, 6.5, 5, "hidden"],
+    [-13.4, 3, 5, -13, 4.5, 8, "hidden"],
+    [-13.4, 3.5, 8, -13, 6.5, 10, "hidden"]
    ]},
   {"name": "red's mezzanine, 3.5 m up over the hall's north end, open onto the north deck", "mirror": true,
-   "boxes": [[-21, 3, 5, -13, 3.5, 14, "tread"]]},
+   "boxes": [[-21, 3, 5, -13, 3.5, 14, "hidden"]]},
   {"name": "red's stairs, up the hall's west wall to the mezzanine and on up to the crown", "mirror": true,
    "boxes": [
-    {"ramp": [-21, -1, -19, 5], "up": "+z", "from": 0, "to": 3.5, "base": 0, "look": "tread"},
-    {"ramp": [-21, 6, -19, 12], "up": "+z", "from": 3.5, "to": 7, "base": 3.5, "look": "tread"}
+    {"ramp": [-21, -1, -19, 5], "up": "+z", "from": 0, "to": 3.5, "base": 0, "look": "hidden"},
+    {"ramp": [-21, 6, -19, 12], "up": "+z", "from": 3.5, "to": 7, "base": 3.5, "look": "hidden"}
    ]},
   {"name": "red's crown: the headframe's roof, 7 m up, the stairwell in its west side, open toward the shaft, the headframe's legs and a crate for cover", "mirror": true,
    "boxes": [
-    [-19, 6.5, -2, -13, 7, 14, "tread"],
-    [-21, 6.5, -2, -19, 7, 5.6, "tread"],
-    [-21, 6.5, 12, -19, 7, 14, "tread"],
-    [-14.2, 7, 2.2, -13.4, 12.4, 3, "steel"],
-    [-14.2, 7, 12.6, -13.4, 12.4, 13.4, "steel"],
-    [-21, 7, 2.2, -20.2, 12.4, 3, "steel"],
-    [-21, 7, 12.6, -20.2, 12.4, 13.4, "steel"],
-    [-16.6, 7, 8.4, -15.4, 8.2, 9.6, "rust"]
+    [-19, 6.5, -2, -13, 7, 14, "hidden"],
+    [-21, 6.5, -2, -19, 7, 5.6, "hidden"],
+    [-21, 6.5, 12, -19, 7, 14, "hidden"],
+    [-14.2, 7, 2.2, -13.4, 12.4, 3, "hidden"],
+    [-14.2, 7, 12.6, -13.4, 12.4, 13.4, "hidden"],
+    [-21, 7, 2.2, -20.2, 12.4, 3, "hidden"],
+    [-21, 7, 12.6, -20.2, 12.4, 13.4, "hidden"],
+    [-16.6, 7, 8.4, -15.4, 8.2, 9.6, "hidden"]
    ]},
   {"name": "red's headframe's beams over the crown", "mirror": true, "dress": true,
    "boxes": [
-    [-21, 12.4, 2.2, -13.4, 13, 3, "steel"],
-    [-21, 12.4, 12.6, -13.4, 13, 13.4, "steel"],
-    [-17.6, 12.4, 2.2, -16.8, 13, 13.4, "steel"]
+    [-21, 12.4, 2.2, -13.4, 13, 3, "hidden"],
+    [-21, 12.4, 12.6, -13.4, 13, 13.4, "hidden"],
+    [-17.6, 12.4, 2.2, -16.8, 13, 13.4, "hidden"]
    ]},
-  {"name": "the north deck, a truss 3.5 m up over the drop from red's mezzanine to the ramp down to blue's spur: girders under both edges, a roofed stretch past red's end, a rail on its outer edge near the ramp, the cage meeting it in the middle, a crate to jump red's crown from", "mirror": true,
+  {"name": "the north deck, a truss 3.5 m up over the drop from red's mezzanine to the ramp down to blue's spur: girders under both edges from its abutment on red's crag, a roofed stretch past red's end, a rail on its outer edge near the ramp, the cage meeting it in the middle, a crate to jump red's crown from", "mirror": true,
    "boxes": [
-    [-13, 3, 8, 8, 3.5, 14, "tread"],
-    [-12, 1.2, 8, 8, 3, 8.4, "steel"],
-    [-12, 1.2, 13.6, 8, 3, 14, "steel"],
-    [-10, 3.5, 8, -5, 6.5, 8.4, "steel"],
-    [-10, 3.5, 13.6, -5, 6.5, 14, "steel"],
-    [-10, 6.5, 8, -5, 7, 14, "steel"],
-    [5.5, 3.5, 13.7, 7.8, 4.4, 14, "steel"],
-    {"ramp": [8, 11, 13, 14], "up": "-x", "from": 0, "to": 3.5, "base": 0, "look": "tread"},
-    [-12.4, 3.5, 9, -11.2, 4.7, 10.2, "rust"]
+    [-13, 3, 8, 8, 3.5, 14, "hidden"],
+    [-13, -3, 8, -12, 3, 14, "hidden"],
+    [-12, 1.2, 8, 8, 3, 8.4, "hidden"],
+    [-12, 1.2, 13.6, 8, 3, 14, "hidden"],
+    [-10, 3.5, 8, -5, 6.5, 8.4, "hidden"],
+    [-10, 3.5, 13.6, -5, 6.5, 14, "hidden"],
+    [-10, 6.5, 8, -5, 7, 14, "hidden"],
+    [5.5, 3.5, 13.7, 7.8, 4.4, 14, "hidden"],
+    {"ramp": [8, 11, 13, 14], "up": "-x", "from": 0, "to": 3.5, "base": 0, "look": "hidden"},
+    [-12.4, 3.5, 9, -11.2, 4.7, 10.2, "hidden"]
    ]},
   {"name": "red's spur: crates and a low wall", "mirror": true,
    "boxes": [
-    [-19.5, 0, -9, -18.3, 1.2, -7.8, "rust"],
-    [-17, 0, -12.5, -14, 1.1, -12, "steel"],
-    [-15.2, 0, -6.2, -14, 1.2, -5, "rust"]
+    [-19.5, 0, -9, -18.3, 1.2, -7.8, "hidden"],
+    [-17, 0, -12.5, -14, 1.1, -12, "hidden"],
+    [-15.2, 0, -6.2, -14, 1.2, -5, "hidden"]
    ]}
  ],
  "spawns": [
@@ -153,7 +154,9 @@
   "lamps": [
    {"at": [-17, 3, 5.8], "color": [1.0, 0.82, 0.62], "lm": 30000, "mirror": true},
    {"at": [-17, 10, 2.7], "color": [1.0, 0.82, 0.62], "lm": 40000, "mirror": true},
-   {"at": [0, 1.8, 9.6], "color": [1.0, 0.82, 0.62], "lm": 20000, "mirror": true}
+   {"at": [0, 1.8, 9.6], "color": [1.0, 0.82, 0.62], "lm": 20000, "mirror": true},
+   {"at": [-7.5, 11, 6.1], "color": [1.0, 0.82, 0.62], "lm": 15000, "mirror": true},
+   {"at": [0, 2.6, 2.6], "color": [1.0, 0.82, 0.62], "lm": 20000, "mirror": true}
   ]
  }
 }

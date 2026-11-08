@@ -10,6 +10,11 @@
 //!   side's spawns each side's spawns can see, and what share of the map
 //!   each place sees.
 //!
+//! - **The feel** (in the numbers): how much of the map is one floor, how
+//!   high it goes, how much stands by a fatal edge or under a roof, how far
+//!   its lines run and how many cross levels, and each power pad's ways in
+//!   (`FLOW_DOORS=1` prints where they are).
+//!
 //! The places are the map's pads, each side's spawns, and the `callouts`
 //! its `map.json` names (`[{ "name": "top mid", "at": [x, z, y] }]`; the
 //! map compiler ignores them).

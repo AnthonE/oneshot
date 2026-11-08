@@ -73,13 +73,16 @@ VIEWS=(
   "pulpit|map=6&eye=0,8.6,-23.5&look=0,7.5,6|2"
   "keel|map=6&eye=-24,1.6,1&look=-8,1.6,0|2"
   "over|map=6&eye=-21,12,-13&look=8,4,6|2"
-  "pit_yard|map=8&eye=-12,1.7,-1&look=6,4,2|2"
+  "pit_yard|map=8&eye=-12.4,1.8,2.5&look=6,4,0|2"
   "pit_crown|map=8&eye=-18.5,8.7,0.6&look=17,7.6,-2|2"
   "pit_deck|map=8&eye=-11.5,5.2,10.5&look=9,4,9|2"
   "pit_edge|map=8&eye=-17,1.7,-11.5&look=-34,-9,-32|2"
-  "pit_gantry|map=8&eye=-2.5,8.7,1&look=9,0,8|2"
+  "pit_gantry|map=8&eye=9,8.7,1&look=-6,1,12|2"
   "pit_hall|map=8&eye=-20,1.7,-1.5&look=-14,2.4,9|2"
   "pit_over|map=8&eye=-34,16,-30&look=0,2,0|2"
+  "pit_collar|map=8&eye=-6.5,0.7,2.5&look=4,5,-2|2"
+  "pit_sheave|map=8&eye=-1,12.1,-2.4&look=-17,5,8|2"
+  "pit_shaft|map=8&eye=-9,0.7,2.5&look=4,-14,-12|2"
 )
 
 if [ "${1:-}" = list ]; then
