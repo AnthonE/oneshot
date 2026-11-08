@@ -62,6 +62,14 @@ pub const SNOW_COUNT: f32 = 2.5;
 pub const SNOW_BOX_HALF: Vec3 = Vec3::new(10.0, 7.0, 10.0);
 /// Under a roof, the snow the wind drives in under it stops this near.
 pub const SNOW_SHELTER_CLEAR_M: f32 = 1.5;
+/// The far snow: a second mesh of the same drops in a box out to the far
+/// side of an arena, its flakes big enough to be a few pixels across there
+/// and faint, so the whole frame has snow in it, not only the air round the
+/// eye; under a roof none within this far.
+pub const FAR_SNOW_BOX_HALF: Vec3 = Vec3::new(55.0, 22.0, 55.0);
+pub const FAR_SNOW_WIDTH_M: f32 = 0.15;
+pub const FAR_SNOW_ALPHA: f32 = 0.32;
+pub const FAR_SNOW_CLEAR_M: f32 = 6.0;
 /// A streak of rain: how wide, how opaque at its middle.
 pub const RAIN_WIDTH_M: f32 = 0.012;
 pub const RAIN_ALPHA: f32 = 0.4;
@@ -116,13 +124,27 @@ impl Material for RainMaterial {
     }
 }
 
-/// The rain's entity.
+/// The rain's entity, and the far snow's.
 #[derive(Component)]
 pub struct Rain;
 
-/// The handle `drive` writes.
+/// The handles `drive` writes: the rain (or the near snow), the far snow.
 #[derive(Resource)]
-pub struct RainHandle(pub Handle<RainMaterial>);
+pub struct RainHandle(pub Handle<RainMaterial>, pub Handle<RainMaterial>);
+
+/// The far snow of a mood that snows: the near snow's fall, in its own box.
+pub fn far_for(m: &Mood, roofed: bool) -> RainParams {
+    let near = params_for(m, roofed);
+    if !m.snow {
+        return RainParams::default();
+    }
+    RainParams {
+        fall: near.fall.truncate().extend(FAR_SNOW_WIDTH_M),
+        box_: FAR_SNOW_BOX_HALF.extend(near.box_.w),
+        look: near.look,
+        shape: Vec4::new(FAR_SNOW_WIDTH_M, FAR_SNOW_ALPHA, 1.0, FAR_SNOW_CLEAR_M),
+    }
+}
 
 /// Deterministic per-drop randomness — a look, not a sim draw.
 fn hash01(i: u32, k: u32) -> f32 {
@@ -197,20 +219,25 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
 
 /// Build the rain, hidden until a mood rains.
 pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<RainMaterial>>) {
-    let material = materials.add(RainMaterial {
-        params: RainParams::default(),
+    let mesh = meshes.add(drop_mesh(DROPS));
+    let [near, far] = [(); 2].map(|_| {
+        materials.add(RainMaterial {
+            params: RainParams::default(),
+        })
     });
-    commands.spawn((
-        Rain,
-        Mesh3d(meshes.add(drop_mesh(DROPS))),
-        MeshMaterial3d(material.clone()),
-        Transform::default(),
-        Visibility::Hidden,
-        NoFrustumCulling,
-        NotShadowCaster,
-        NotShadowReceiver,
-    ));
-    commands.insert_resource(RainHandle(material));
+    for m in [&near, &far] {
+        commands.spawn((
+            Rain,
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(m.clone()),
+            Transform::default(),
+            Visibility::Hidden,
+            NoFrustumCulling,
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
+    commands.insert_resource(RainHandle(near, far));
 }
 
 /// The map's rain, when the map changes, and its shelter when the eye goes
@@ -219,12 +246,13 @@ pub fn drive(
     now: Res<MoodNow>,
     handle: Option<Res<RainHandle>>,
     mut materials: ResMut<Assets<RainMaterial>>,
-    mut rain: Query<&mut Visibility, With<Rain>>,
+    mut rain: Query<(&mut Visibility, &MeshMaterial3d<RainMaterial>), With<Rain>>,
     link: NonSend<crate::LinkRes>,
     eye: Query<&GlobalTransform, With<super::rig::EyeCam>>,
     mut sheltered: Local<bool>,
 ) {
     let mut want = params_for(&now.mood, now.roofed);
+    let mut far = far_for(&now.mood, now.roofed);
     let show = want.box_.w > 0.0;
     let under = show
         && eye.single().is_ok_and(|g| {
@@ -242,20 +270,25 @@ pub fn drive(
     }
     *sheltered = under;
     want.look.w = if under { want.shape.w } else { 0.0 };
-    for mut v in rain.iter_mut() {
-        let vis = if show {
-            Visibility::Inherited
+    far.look.w = if under { far.shape.w } else { 0.0 };
+    let Some(handle) = handle else {
+        return;
+    };
+    for (mut v, mat) in rain.iter_mut() {
+        let on = if mat.0 == handle.1 {
+            show && far.box_.w > 0.0
         } else {
-            Visibility::Hidden
+            show
         };
+        let vis = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != vis {
             *v = vis;
         }
     }
-    if let Some(handle) = handle {
-        if materials.get(&handle.0).is_some_and(|m| m.params != want) {
-            if let Some(m) = materials.get_mut(&handle.0) {
-                m.params = want;
+    for (h, p) in [(&handle.0, want), (&handle.1, far)] {
+        if materials.get(h).is_some_and(|m| m.params != p) {
+            if let Some(m) = materials.get_mut(h) {
+                m.params = p;
             }
         }
     }

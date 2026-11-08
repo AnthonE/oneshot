@@ -401,7 +401,8 @@ def shaft_house(S):
     S.box(-19.0, 6.5, 5.6, -18.82, 6.86, 12.0, 'steel', c=0.01, cell=3.0)
     # Its edge to the yard, a deep channel, icicles off it.
     S.box(-13.2, 6.5, -2.0, -13.0, 7.0, 14.0, 'steel', c=0.01, cell=3.0)
-    icicles(S, (-13.02, -1.8), (-13.02, 13.8), 6.5, rng, longest=0.6)
+    # Short: they hang in the mezzanine's window and the way out to the deck.
+    icicles(S, (-13.02, -1.8), (-13.02, 13.8), 6.5, rng, longest=0.3, fill=0.6)
     drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s)
     # Its crate.
     crate(S, -16.6, 7.0, 8.4, -15.4, 8.2, 9.6)
