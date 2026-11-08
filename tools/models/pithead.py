@@ -30,7 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'pithead')
 
-arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'snow': 2.6, 'rust': 2.4, 'tread': 2.0})
+arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'floor': 3.6, 'snow': 2.6, 'rust': 2.4, 'tread': 2.0})
 arch.UNTRACED.update({'drift', 'peaks', 'window', 'pool', 'track'})
 
 # Toward where the wind blows (x, z): the mood's `wind_azim` 1.25. Rime faces
@@ -46,11 +46,11 @@ BLUE = (0.018, 0.065, 0.25)
 GREYGREEN = (0.1, 0.12, 0.115)
 STEEL = (0.04, 0.042, 0.046)
 RUSTY = (0.13, 0.06, 0.035)
-GALV = (0.28, 0.3, 0.32)
+GALV = (0.16, 0.17, 0.18)
 RIME = (0.74, 0.79, 0.86)
 # Rime feathered on an upright face: a grey crust over the paint, never the
 # white of what lies on a top.
-RIME_SIDE = (0.46, 0.5, 0.57)
+RIME_SIDE = (0.3, 0.33, 0.38)
 SNOWY = (0.8, 0.85, 0.92)
 ROCK = (0.045, 0.05, 0.062)
 # The lamps (map.json's, x z y as it writes them, both sides): warm light
@@ -204,7 +204,7 @@ def clad_wall(S, x0, y0, z0, x1, y1, z1, face, plinth=1.0, inner_from=0.0, clad=
     face_in = ('+' if face[0] == '-' else '-') + face[1]
     yi = max(y0, inner_from)
     if top > yi + 0.05:
-        flat(S, pi, a0, a1, yi, top, face_in, 'lining', back=0.12)
+        flat(S, pi, a0, a1, yi, top, face_in, 'lining', back=0.12, cell=0.35)
         span = a1 - a0
         k = max(1, int(round(span / 3.0)))
         for i in range(k + 1):
@@ -406,6 +406,11 @@ def shaft_house(S):
     drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s)
     # Its crate.
     crate(S, -16.6, 7.0, 8.4, -15.4, 8.2, 9.6)
+    # Its floor: concrete over the rock, the snow blown in at its doors.
+    S.quad((-21.0, 0.02, -2.0), (-13.4, 0.02, -2.0), (-13.4, 0.02, 14.0), (-21.0, 0.02, 14.0), 'floor', (0, 1, 0), cell=1.0)
+    drift(S, -15.6, 0.3, -13.4, 4.7, 0.02, ['+x'], reach=1.3, seed=91 + S.s)
+    drift(S, -15.6, 10.3, -13.4, 14.0, 0.02, ['+x'], reach=1.3, seed=92 + S.s)
+    drift(S, -18.6, -2.0, -14.9, 0.4, 0.02, ['-z'], reach=1.2, seed=93 + S.s)
     # The lamps.
     lamp(S, -17.0, 5.8, 3.0, 6.5)
     lamp(S, -17.0, 2.7, 10.0, 3.0)
@@ -731,7 +736,8 @@ def door_lamps(S):
             S.box(x - 0.04, y + 0.16, z, x + 0.04, y + 0.22, z + 0.38, 'steel', c=0.0)
         px, pz = _xz(S, x, z)
         spin(px, pz, [(0.001, y + 0.08), (0.24, y + 0.02), (0.27, y), (0.08, y + 0.2), (0.001, y + 0.2)], 'steel', sides=12)
-        spin(px, pz, [(0.001, y - 0.005), (0.22, y + 0.012), (0.001, y + 0.02)], 'light_sodium', sides=12, smooth=False)
+        # A bulb under the shade that shows from the side.
+        spin(px, pz, [(0.001, y - 0.16), (0.08, y - 0.13), (0.12, y - 0.06), (0.13, y + 0.02), (0.001, y + 0.02)], 'light_sodium', sides=12)
         pool(S, x + out[0] * 1.2, z + out[1] * 1.2, 3.2, 0.0)
 
 
@@ -778,7 +784,7 @@ def lane(S, pts, half, seed):
                 z = az + (bz - az) * t + nz * s_ * half
                 wob = 0.5 + 0.5 * math.sin(x * 2.1 + ph) * math.sin(z * 1.7 - ph)
                 end = min(1.0, t * ln / 0.8, (1 - t) * ln / 0.8) if (j == 0 or j == rows) else 1.0
-                alpha = (1.0 - abs(s_)) ** 1.3 * (0.25 + 0.3 * wob) * end
+                alpha = min(0.85, (1.0 - abs(s_) ** 2) * (0.45 + 0.4 * wob) * end)
                 pa.verts.append(S.p(x, 0.014, z))
                 pa.colors[len(pa.verts) - 1] = (1.0, 1.0, 1.0, alpha)
         for j in range(rows):
@@ -788,9 +794,9 @@ def lane(S, pts, half, seed):
 
 
 def lanes(S):
-    lane(S, [(-12.6, 2.5), (-8.5, 2.2), (-3.4, 0.6)], 0.7, 81)
-    lane(S, [(-12.6, 12.3), (-8.0, 10.5), (-4.0, 6.0), (-2.6, 2.4)], 0.7, 82)
-    lane(S, [(-16.75, -2.8), (-16.0, -6.5), (-12.0, -9.0), (-6.0, -8.0), (-2.4, -2.8)], 0.7, 83)
+    lane(S, [(-12.6, 2.5), (-8.5, 2.2), (-3.4, 0.6)], 1.0, 81)
+    lane(S, [(-12.6, 12.3), (-8.0, 10.5), (-4.0, 6.0), (-2.6, 2.4)], 1.0, 82)
+    lane(S, [(-16.75, -2.8), (-16.0, -6.5), (-12.0, -9.0), (-6.0, -8.0), (-2.4, -2.8)], 1.0, 83)
     lane(S, [(-13.0, 4.0), (-1.0, 4.0)], 0.9, 84)
 
 
@@ -917,7 +923,7 @@ def peaks():
     x, z = rr * np.cos(aa), rr * np.sin(aa)
     # Massifs, not a fence of teeth: they rise from the cloud well out, broad,
     # each a few summits.
-    t = np.clip((rr - 240.0) / 200.0, 0.0, 1.0)
+    t = np.clip((rr - 185.0) / 200.0, 0.0, 1.0)
     rise = t * t * (3.0 - 2.0 * t)
     y = -95.0 + rise * (55.0 + 150.0 * ridged(x * 0.42, z * 0.42, 17) ** 1.3)
     da = np.abs(np.roll(y, -1, axis=1) - np.roll(y, 1, axis=1)) / np.maximum(2.0 * rr * math.tau / segs, 1e-3)
@@ -928,10 +934,10 @@ def peaks():
     streak = ridged(x * 4.0, z * 4.0, 9)
     rock = np.clip(rock * (0.3 + 2.0 * streak ** 1.5), 0.0, 1.0)
     snow = np.array(SNOWY)
-    stone = np.array([0.07, 0.08, 0.1])
+    stone = np.array([0.03, 0.035, 0.045])
     col = snow[None, None, :] * (1 - rock[..., None]) + stone[None, None, :] * rock[..., None]
     air = np.array([0.5, 0.56, 0.66])
-    far = np.clip((rr - 260.0) / 260.0, 0.0, 1.0)[..., None] * 0.45
+    far = np.clip((rr - 260.0) / 260.0, 0.0, 1.0)[..., None] * 0.1
     col = col * (1 - far) + air[None, None, :] * far
     base = pa.add([(float(x[j, i]), float(y[j, i]), float(z[j, i])) for j in range(rings + 1) for i in range(segs)])
     for j in range(rings + 1):
@@ -986,11 +992,12 @@ def lamp_light(p, n):
         facing = (d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / ln
         if facing <= 0.0:
             continue
+        # How much of the lamp it sees, over a few points of its shade, so the
+        # light fades across an edge instead of stepping at a vertex.
         q = (p[0] + n[0] * 0.05, p[1] + n[1] * 0.05, p[2] + n[2] * 0.05)
-        if not arch.seen(q, (lx, ly - 0.1, lz)):
-            continue
-        k += facing * 2.2 / (1.0 + dd)
-    return min(k, 1.4)
+        seen = sum(arch.seen(q, (lx + dx, ly - 0.1, lz + dz)) for dx, dz in ((0, 0), (0.35, 0), (-0.35, 0), (0, 0.35), (0, -0.35))) / 5.0
+        k += seen * facing * 2.2 / (1.0 + dd)
+    return min(k, 1.0)
 
 
 def mix(a, b, t):
@@ -1002,10 +1009,23 @@ def smooth(e0, e1, x):
     return t * t * (3 - 2 * t)
 
 
+def indoors(x, y, z, gn=(0.0, 0.0, 0.0)):
+    """Whether a face looks into a shaft house, under its roof, where no wind or
+    frost reaches: a step off it along its normal is inside the walls."""
+    x, y, z = x + gn[0] * 0.3, y + gn[1] * 0.3, z + gn[2] * 0.3
+    if x > 0:
+        x, z = -x, -z
+    return -21.25 <= x <= -13.15 and -2.25 <= z <= 14.25 and y < 6.84
+
+
 def tone(p, n, name):
     x, y, z = p
     gn = (n.x, n.z, -n.y)
-    windward = max(0.0, gn[0] * UPWIND[0] + gn[2] * UPWIND[2])
+    inside = indoors(x, y, z, gn)
+    # The frost is turned with the map: each side's own windward faces, so
+    # neither side looks across at a frostier backdrop than the other.
+    s = 1.0 if x < 0 else -1.0
+    windward = 0.0 if inside else max(0.0, s * (gn[0] * UPWIND[0] + gn[2] * UPWIND[2]))
     up = gn[1]
     w = wobble(x, y, z)
     streak = 0.5 + 0.5 * math.sin((x + z) * 3.1 + math.sin((x - z) * 1.3) * 2.0)
@@ -1022,7 +1042,7 @@ def tone(p, n, name):
         # Rime only where the wind meets the sheet square, packed in its
         # troughs, in drifts down it; a line of it under the coping and over
         # the plinth, where the snow catches.
-        rime = smooth(0.6, 0.95, windward) * trough ** 2 * smooth(0.35, 0.8, w) * 0.85
+        rime = smooth(0.6, 0.95, windward) * trough ** 2 * smooth(0.45, 0.75, vnoise(x * 0.5 + z * 0.5, y * 0.7, 9)) * 0.85
         rime = max(rime, 0.6 * smooth(0.25, 0.0, abs(y - 7.75)) * trough)
         rime = max(rime, 0.5 * smooth(0.25, 0.0, y - 0.9) * trough if y > 0.9 else 0.0)
         out = mix(paint_, RIME, min(1.0, rime))
@@ -1033,14 +1053,17 @@ def tone(p, n, name):
         base = mix(base, (base[0] * 0.6, base[1] * 0.6, base[2] * 0.62), streak * 0.4)
         # Rime feathers on the face the wind meets, in patches, never all of
         # it; snow on what looks up.
-        rime = smooth(0.5, 0.9, windward) * (0.55 + 0.45 * w) * 0.85
+        # In patches: at most a third of a windward face, the steel dark under it.
+        patch = smooth(0.55, 0.75, vnoise(x * 0.8 + z * 0.3, y * 1.3, 5))
+        rime = smooth(0.5, 0.9, windward) * patch * 0.9
         out = mix(base, RIME_SIDE, rime)
-        if up > 0.6:
+        if up > 0.6 and not inside:
             out = mix(out, RIME, 0.8 * (0.6 + 0.4 * w))
     elif name == 'galv':
-        rime = smooth(0.5, 0.9, windward) * (0.55 + 0.45 * w) * 0.8
+        patch = smooth(0.55, 0.75, vnoise(x * 0.8 + z * 0.3, y * 1.3, 5))
+        rime = smooth(0.5, 0.9, windward) * patch * 0.8
         out = mix(GALV, RIME_SIDE, rime)
-        if up > 0.6:
+        if up > 0.6 and not inside:
             out = mix(out, RIME, 0.6)
     elif name == 'cable':
         out = (0.03, 0.03, 0.035)
@@ -1050,19 +1073,19 @@ def tone(p, n, name):
         # The cloud the needle stands in: lost into it from its foot up.
         fog = max(0.0, min(1.0, (-40.0 - y) / 40.0))
         out = mix(out, (0.55, 0.6, 0.68), fog)
-    elif name in ('blast', 'blast_dark'):
+    elif name in ('blast', 'blast_dark', 'floor'):
         k = 0.86 + 0.14 * w
         k *= 1.0 - 0.14 * streak if abs(up) < 0.5 else 1.0
         # Wet and dark at a wall's foot where the snow lies against it.
         k *= 1.0 - 0.25 * max(0.0, 1.0 - y / 0.6) if 0.0 <= y < 0.6 and abs(up) < 0.5 else 1.0
-        out = (k * 0.86, k * 0.93, k * 1.04)
+        out = (k * 0.76, k * 0.88, k * 1.1)
     elif name == 'tread':
         k = 0.84 + 0.16 * w
         out = (k * 0.86, k * 0.92, k * 1.0)
     elif name == 'rust':
         # Old steel's rust, dark and red as it is in the cold, not ochre.
         k = 0.8 + 0.2 * w
-        out = (k * 0.5, k * 0.36, k * 0.32)
+        out = (k * 0.36, k * 0.24, k * 0.21)
     elif name == 'coal':
         out = (0.02, 0.02, 0.022)
     elif name == 'lining':
@@ -1071,7 +1094,9 @@ def tone(p, n, name):
     else:
         out = (1.0, 1.0, 1.0)
     if warm > 0.0:
-        out = (out[0] + warm * LAMP_RGB[0] * 0.7, out[1] + warm * LAMP_RGB[1] * 0.7, out[2] + warm * LAMP_RGB[2] * 0.7)
+        # The lamps light the room themselves; this is their warmth on what
+        # the light misses (no shadows under the decks), a touch.
+        out = (out[0] + warm * LAMP_RGB[0] * 0.3, out[1] + warm * LAMP_RGB[1] * 0.3, out[2] + warm * LAMP_RGB[2] * 0.3)
     return out
 
 

@@ -27,8 +27,10 @@ use super::mood::{Mood, MoodNow};
 
 pub const SHADER: &str = "shaders/rain.wgsl";
 
-/// Drops in the mesh: the most a shower draws, on every target.
+/// Drops in the mesh: the most a shower draws, on every target; and in the
+/// far snow's, whose box is a hundred times the near one's.
 pub const DROPS: u32 = 4_000;
+pub const FAR_DROPS: u32 = 14_000;
 /// Half the box the drops fall in around the eye, metres.
 pub const BOX_HALF: Vec3 = Vec3::new(14.0, 9.0, 14.0);
 /// How fast a drop falls, m/s: a raindrop's terminal speed.
@@ -191,6 +193,7 @@ pub fn drop_mesh(drops: u32) -> Mesh {
 }
 
 const _: () = assert!(DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u16 indices");
+const _: () = assert!(FAR_DROPS * 4 <= u16::MAX as u32 + 1, "a drop's corners are u16 indices");
 
 /// What a mood's rain looks like. None under a roof (an interior's mood
 /// never rains).
@@ -219,16 +222,15 @@ pub fn params_for(m: &Mood, roofed: bool) -> RainParams {
 
 /// Build the rain, hidden until a mood rains.
 pub fn setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<RainMaterial>>) {
-    let mesh = meshes.add(drop_mesh(DROPS));
     let [near, far] = [(); 2].map(|_| {
         materials.add(RainMaterial {
             params: RainParams::default(),
         })
     });
-    for m in [&near, &far] {
+    for (m, drops) in [(&near, DROPS), (&far, FAR_DROPS)] {
         commands.spawn((
             Rain,
-            Mesh3d(mesh.clone()),
+            Mesh3d(meshes.add(drop_mesh(drops))),
             MeshMaterial3d(m.clone()),
             Transform::default(),
             Visibility::Hidden,

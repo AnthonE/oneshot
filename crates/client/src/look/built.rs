@@ -315,6 +315,7 @@ const PITHEAD: Set = Set {
     parts: &[
         part("blast", Paint::Look(BLAST)),
         part("blast_dark", Paint::Look(BLAST_DARK)),
+        part("floor", Paint::Look(BLAST)),
         part("tread", Paint::Look(TREAD)),
         part("rust", Paint::Look(RUST)),
         part("snow", Paint::Look(SNOW)),
