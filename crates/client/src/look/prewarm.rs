@@ -178,6 +178,8 @@ pub fn warm_models(
         models.frag.clone(),
         models.turret.clone(),
         models.turret_barrels.clone(),
+        models.skimmer.clone(),
+        models.flier.clone(),
     ]);
     scenes.extend(
         WARM_GEAR

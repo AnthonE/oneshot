@@ -1375,12 +1375,19 @@ fn draw_fighters(
         Option<Res<film::Film>>,
         Res<Seen>,
     ),
+    crafts: Query<&look::craft::Craft>,
     mut scratch: Local<FighterScratch>,
 ) {
     let core = &link.0.session().core;
     // A film's camera off the player's eye sees the player's own body
-    // (`film.rs`).
-    let third = film.is_some_and(|f| f.third());
+    // (`film.rs`); so does the camera behind a skimmer (`view`), whose
+    // rider sits out in the open on it.
+    let astride = core.own().0.alive
+        && core.own().0.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER)
+        && core
+            .own_vehicle()
+            .is_some_and(|(v, ..)| v.kind == sim::vehicle::SKIMMER);
+    let third = film.is_some_and(|f| f.third()) || astride;
     let FighterScratch { others, hulls, shown } = &mut *scratch;
     others.clear();
     let live = match &posed {
@@ -1419,6 +1426,27 @@ fn draw_fighters(
             pos: sim::geom::V3::new(at.x, at.y, at.z),
             yaw,
             seats,
+            ..client_net::core::DrawnVehicle::default()
+        });
+    }
+    // The pose mode's one-seater, its fighter at its controls (where the
+    // sim mounts one, on the ground under the hull).
+    if let Some((slot, (at, yaw, kind, ..))) = posed
+        .as_ref()
+        .filter(|p| p.2.craft_seat)
+        .and_then(|p| Some((p.0.slot, p.2.craft?)))
+    {
+        let pos = sim::geom::V3::new(at.x, at.y + core.map.ground(at.x, at.z), at.z);
+        let hull = sim::vehicle::Vehicle::new_kind(pos, sim::geom::rad_to_yaw(yaw), 0, 0, kind);
+        for d in others.iter_mut().filter(|d| d.slot == slot) {
+            d.pos = hull.mount(sim::vehicle::DRIVER);
+        }
+        hulls.push(client_net::core::DrawnVehicle {
+            slot: 1,
+            pos,
+            yaw,
+            seats: [slot + 1, 0],
+            kind,
             ..client_net::core::DrawnVehicle::default()
         });
     }
@@ -1518,6 +1546,14 @@ fn draw_fighters(
             &mut at,
             time.delta_secs(),
         );
+        // Astride a skimmer, its hands are on its grips, wherever they lean.
+        let grips = seat
+            .filter(|(v, k)| v.kind == sim::vehicle::SKIMMER && *k == sim::vehicle::DRIVER)
+            .and_then(|(v, _)| drawn.vehicles.get(&v.slot))
+            .and_then(|hull| crafts.get(*hull).ok());
+        if let Some(craft) = grips {
+            look::bodies::grip(e, craft.grips(), &mut bodies);
+        }
         let glow = look::bodies::Glow {
             hit: fx.was.flare(d.slot, t),
             over: d.over && d.alive,
@@ -1637,7 +1673,7 @@ fn draw_vehicles(
                 }
                 None => {
                     let e = commands.spawn((t, Visibility::default(), Kept)).id();
-                    look::craft::spawn(&mut commands, &kit, e, kind);
+                    look::craft::spawn(&mut commands, &kit, &models, e, kind);
                     drawn.vehicles.insert(slot, e);
                 }
             }
@@ -1697,9 +1733,21 @@ const DEATH_CAM_PAD_M: f32 = 0.35;
 /// where the bolts go there.
 const FLY_CAM_BACK_M: f32 = 9.0;
 const FLY_CAM_UP_M: f32 = 2.4;
-const SKIM_CAM_BACK_M: f32 = 5.5;
-const SKIM_CAM_UP_M: f32 = 1.6;
+const SKIM_CAM_BACK_M: f32 = 5.8;
+const SKIM_CAM_UP_M: f32 = 1.1;
 const CRAFT_CAM_MEET_M: f32 = 45.0;
+
+/// The chase camera at the controls of a one-seater of `kind`, its pilot's
+/// `eye` looking along unit `aim`: where it wants to sit (before the walls
+/// are asked) and what it looks at.
+pub(crate) fn craft_chase(kind: u8, eye: Vec3, aim: Vec3) -> (Vec3, Vec3) {
+    let (back, up) = if kind == sim::vehicle::FLIER {
+        (FLY_CAM_BACK_M, FLY_CAM_UP_M)
+    } else {
+        (SKIM_CAM_BACK_M, SKIM_CAM_UP_M)
+    };
+    (eye + Vec3::Y * up - aim * back, eye + aim * CRAFT_CAM_MEET_M)
+}
 /// The death cam follows the body this fast, 1/s.
 const DEATH_CAM_FOLLOW: f32 = 14.0;
 
@@ -1772,19 +1820,14 @@ pub(crate) fn view(
         // At a one-seater's controls: behind and over its pilot's eye, out
         // of the ground and the walls, looking down the pilot's line of
         // fire to where the crosshair meets it.
-        let (back, up) = if v.kind == sim::vehicle::FLIER {
-            (FLY_CAM_BACK_M, FLY_CAM_UP_M)
-        } else {
-            (SKIM_CAM_BACK_M, SKIM_CAM_UP_M)
-        };
         let eye = at + Vec3::Y * f.body.eye_h();
-        let aim = dir(look.yaw, look.pitch);
-        let off = Vec3::Y * up - aim * back;
+        let (want, meet) = craft_chase(v.kind, eye, dir(look.yaw, look.pitch));
+        let off = want - eye;
         let (len, way) = (off.length(), off.normalize_or(Vec3::Y));
         let v3 = |a: Vec3| sim::geom::V3::new(a.x, a.y, a.z);
         let room = core.map.ray(v3(eye), v3(way), len);
         let cam = eye + way * (room - DEATH_CAM_PAD_M).max(0.5);
-        *t = Transform::from_translation(cam).looking_at(eye + aim * CRAFT_CAM_MEET_M, Vec3::Y);
+        *t = Transform::from_translation(cam).looking_at(meet, Vec3::Y);
     } else if f.riding().is_some_and(|(_, seat)| seat == sim::vehicle::DRIVER) {
         let eye = at - dir(look.yaw, look.pitch) * 7.5 + Vec3::Y * (sim::consts::VEH_H + 2.2);
         *t = Transform::from_translation(eye).looking_at(at + Vec3::Y * sim::consts::VEH_H, Vec3::Y);

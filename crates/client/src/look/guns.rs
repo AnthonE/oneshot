@@ -375,6 +375,9 @@ pub struct Models {
     /// A truck's minigun (`look/turret.rs`): its cradle and its barrels.
     pub turret: Handle<Scene>,
     pub turret_barrels: Handle<Scene>,
+    /// The one-seaters (`look/craft.rs`).
+    pub skimmer: Handle<Scene>,
+    pub flier: Handle<Scene>,
     /// Gear on a body (`bodies.rs`), by its id; index 0 (no gear) is unused:
     /// a piece of headwear (`proto::HEADWEAR`), a left and a right boot
     /// (`proto::FOOTWEAR`).
@@ -425,6 +428,8 @@ pub fn load(mut commands: Commands, assets: Res<AssetServer>) {
         truck: scene("truck"),
         turret: scene("turret"),
         turret_barrels: scene("turret-barrels"),
+        skimmer: scene("skimmer"),
+        flier: scene("flier"),
         headwear: core::iter::once(None)
             .chain(proto::HEADWEAR[1..].iter().map(|name| Some(scene(name))))
             .collect(),
