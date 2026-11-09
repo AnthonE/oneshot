@@ -2449,6 +2449,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_shield_s_break_holds_the_marker_and_a_kill_tops_it() {
+        let mut st = HudState::default();
+        st.mark(Marked::of(3, broke(3, Some(40))), 1.0);
+        assert_eq!(st.hit_as, Marked::ShieldHead);
+        // The round that reaches health while the body is drawn shielded.
+        st.mark(Marked::of(1, broke(1, Some(40))), 1.1);
+        assert_eq!((st.hit_as, st.hit_at), (Marked::Break, 1.1));
+        // The burst's next rounds: one still finds the shield drawn up,
+        // one doesn't. Neither begins the burst again or takes it down.
+        st.mark(Marked::of(1, broke(1, Some(40))), 1.15);
+        st.mark(Marked::of(1, broke(1, Some(0))), 1.2);
+        assert_eq!((st.hit_as, st.hit_at), (Marked::Break, 1.1));
+        st.mark(Marked::Kill, 1.25);
+        st.mark(Marked::of(1, broke(1, None)), 1.3);
+        assert_eq!((st.hit_as, st.hit_at), (Marked::Kill, 1.25));
+        // Once it has had its time, the next hit is its own.
+        st.mark(Marked::of(2, broke(2, None)), 1.26 + KILL_HIT_S);
+        assert_eq!(st.hit_as, Marked::Head);
+    }
+
+    #[test]
     fn the_feed_tells_of_sprees_and_their_end() {
         let mut st = HudState::default();
         st.names.insert(1, "ana".into());
