@@ -655,15 +655,8 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
                 shots::siege_shot(fx, scene, sim::arms::ION_PISTOL, from, to, e.c == 1)
             }
             k if k == Kind::Hit as u8 => {
-                // A hit on us: the frame flinches, by how much it took.
-                if e.b == scene.me && e.a != scene.me {
-                    let pts = e.c as f32;
-                    let t = (crate::look::shake::HURT_TRAUMA_BASE + pts * crate::look::shake::HURT_TRAUMA_PER_PT)
-                        .min(crate::look::shake::HURT_TRAUMA_MAX);
-                    fx.shake.add(t);
-                    let (p, y) = (fx.shake.rand(), fx.shake.rand());
-                    fx.shake.kick(Vec3::new(p, y, 0.0) * crate::look::shake::FLINCH_RAD);
-                }
+                // A hit on us: the hurt arc and the screen say it, never the
+                // frame (it would throw the crosshair off the aim).
                 hurt(fx, scene, e, from);
             }
             _ => {}

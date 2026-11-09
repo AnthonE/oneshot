@@ -21,7 +21,6 @@ use super::atlas::{FLAME, GLOW};
 use super::pool::{Orient, Particle};
 use super::table::{self, Casing, Flash, GunLook, Layer, Matter, Weapon};
 use super::{Fx, Scene, MUZZLE_FLASH};
-use crate::look::shake;
 
 /// From a shooter's eye to their muzzle: forward, then down.
 const MUZZLE_FWD_M: f32 = 0.75;
@@ -251,19 +250,8 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
         roll,
         seed,
     });
-    // The stock's jolt: light for an automatic's every round, full for a
-    // heavy single shot.
-    let heavy = !a.auto || a.pellets > 1 || id == ROCKET;
-    // Crouched, the stock is braced: half the jolt (Gates' gunfeel).
-    let braced = if f.body.crouched {
-        crate::look::viewmodel::CROUCH_KICK
-    } else {
-        1.0
-    };
-    let k = if heavy { 0.6 } else { 0.3 } * braced;
-    let jolt = fx.shake.rand() * shake::SHOT_SIDE_RAD;
-    fx.shake.kick(Vec3::new(shake::SHOT_KICK_RAD * k, jolt * k, 0.0));
-    fx.shake.add(shake::SHOT_TRAUMA * if heavy { 1.0 } else { 0.35 });
+    // No jolt of the frame: the crosshair stays where the rounds go
+    // (`shake.rs`); the gun in hand kicks (`viewmodel.rs`).
     if !a.kind.ray() {
         return;
     }
