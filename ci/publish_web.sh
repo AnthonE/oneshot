@@ -50,7 +50,7 @@ fi
 
 OUT=crates/client/dist
 if [ "$BUILD" = 1 ]; then
-  ci/client.sh
+  ci/client.sh ship
 fi
 [ -f "$OUT/index.html" ] || { echo "$OUT/index.html is missing: run ci/client.sh" >&2; exit 1; }
 # Both modules, from the real build: the page picks WebGPU or WebGL2 by

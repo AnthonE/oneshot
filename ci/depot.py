@@ -197,10 +197,17 @@ def build_depot_doc(stage: Path, build: str, root: str, *, platform: str,
     return doc
 
 
+def target_dir(platform: str) -> Path:
+    """A cross build has a build folder of its own, so it holds no lock
+    the native one waits on (ci/release.sh builds them side by side)."""
+    spec = TARGETS[platform]
+    return CLIENT / "target" / "cross" if spec["triple"] else CLIENT / "target"
+
+
 def built_binary(platform: str) -> Path:
     spec = TARGETS[platform]
     sub = f"{spec['triple']}/desktop" if spec["triple"] else "desktop"
-    return CLIENT / "target" / sub / spec["exec"]
+    return target_dir(platform) / sub / spec["exec"]
 
 
 def stage_build(out: Path, platform: str, do_build: bool) -> tuple[Path, dict]:
@@ -209,7 +216,7 @@ def stage_build(out: Path, platform: str, do_build: bool) -> tuple[Path, dict]:
         cmd = ["cargo", "build", "--profile", "desktop", "--locked", "--bin", "oneshot",
                "--features", spec["features"]]
         if spec["triple"]:
-            cmd += ["--target", spec["triple"]]
+            cmd += ["--target", spec["triple"], "--target-dir", str(target_dir(platform))]
         print("== " + " ".join(cmd))
         if subprocess.run(cmd, cwd=CLIENT).returncode != 0:
             sys.exit("depot: the build failed: nothing staged")
