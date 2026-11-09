@@ -49,6 +49,19 @@ const KILL_HIT_S: f32 = 0.5;
 const KILL_POP: f32 = 1.9;
 const KILL_REST: f32 = 1.3;
 const KILL_POP_U: f32 = 0.3;
+/// The round that takes a shield down holds the marker too, a burst of
+/// the shield's own light: the moment a fight turns on (the head shot is
+/// a kill from here), so it must not pass for one more hit.
+const BREAK_HIT_S: f32 = 0.35;
+const BREAK_POP: f32 = 1.7;
+const BREAK_REST: f32 = 1.15;
+/// A round on the head is drawn this much bigger, the shield holding or
+/// not: the aim is where the kill will be.
+const HEAD_HIT: f32 = 1.3;
+/// The marker on a shield that holds, and as it breaks.
+const HIT_SHIELD: Color = Color::srgb(0.32, 0.72, 1.0);
+const HIT_BREAK: Color = Color::srgb(0.82, 0.96, 1.0);
+const HIT_KILL: Color = Color::srgb(1.0, 0.25, 0.2);
 /// The line under the crosshair naming whom we killed: how long, the last
 /// of it fading, and how far down the screen (a share: over the USE prompt).
 const KILLED_S: f32 = 1.8;
@@ -117,6 +130,79 @@ const PIPS: usize = 60;
 /// The shield plate's inset to its level: its glow and edge, and a gap.
 const SHIELD_PAD: f32 = 8.0;
 
+/// What our last hit did. The marker's colour and size tell them apart (a
+/// shield's blue while it holds, its burst as it breaks, white on the body,
+/// red for a kill), so the state of a fight reads off the crosshair. In
+/// order: one that holds ([`Marked::holds`]) is not replaced by a lesser
+/// while it does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Marked {
+    #[default]
+    Shield,
+    /// The head, the shield holding.
+    ShieldHead,
+    Health,
+    /// The head, past the shield, and no kill (a gun with no head rule).
+    Head,
+    /// The round that took the shield down.
+    Break,
+    Kill,
+}
+
+impl Marked {
+    /// A hit's `part` (`sim::events::Kind::Hit`); `broke`: it reached the
+    /// health of someone whose shield we still see up ([`broke`]).
+    pub fn of(part: u8, broke: bool) -> Marked {
+        match part {
+            1 | 2 if broke => Marked::Break,
+            0 => Marked::Shield,
+            3 => Marked::ShieldHead,
+            2 => Marked::Head,
+            _ => Marked::Health,
+        }
+    }
+
+    fn secs(self) -> f32 {
+        match self {
+            Marked::Kill => KILL_HIT_S,
+            Marked::Break => BREAK_HIT_S,
+            _ => HIT_S,
+        }
+    }
+
+    fn holds(self) -> bool {
+        matches!(self, Marked::Kill | Marked::Break)
+    }
+
+    fn colour(self) -> Color {
+        match self {
+            Marked::Shield | Marked::ShieldHead => HIT_SHIELD,
+            Marked::Break => HIT_BREAK,
+            Marked::Health | Marked::Head => Color::WHITE,
+            Marked::Kill => HIT_KILL,
+        }
+    }
+
+    /// Its size, `u` of the way through its time.
+    fn scale(self, u: f32) -> f32 {
+        let pop = |big: f32, rest: f32| rest + (big - rest) * (1.0 - (u / KILL_POP_U).clamp(0.0, 1.0)).powi(2);
+        match self {
+            Marked::Kill => pop(KILL_POP, KILL_REST),
+            Marked::Break => pop(BREAK_POP, BREAK_REST),
+            Marked::ShieldHead | Marked::Head => HEAD_HIT,
+            Marked::Shield | Marked::Health => 1.0,
+        }
+    }
+}
+
+/// Whether a hit of ours broke a shield: it reached health (`part` 1 or 2)
+/// on a body still drawn with its shield up (the drawn body is a playout
+/// behind the hit we are told of at once, so it still shows what the round
+/// met).
+pub fn broke(part: u8, shield_as_drawn: Option<u8>) -> bool {
+    (part == 1 || part == 2) && shield_as_drawn.is_some_and(|s| s > 0)
+}
+
 /// Names by slot (from `Msg::Seat`), the feed, and the markers' clocks.
 #[derive(Resource, Default)]
 pub struct HudState {
@@ -133,7 +219,7 @@ pub struct HudState {
     /// heard and rounded): the hurt arc's way to a shooter fog hides.
     shot_from: BTreeMap<u8, sim::geom::V3>,
     hit_at: f32,
-    hit_kill: bool,
+    hit_as: Marked,
     /// Whom we last killed, how (`· HEAD`), and when: the line under the
     /// crosshair.
     killed: Option<(String, f32)>,
@@ -203,6 +289,19 @@ pub const MEDAL_S: f32 = 4.0;
 const ANNOUNCE_MAX: usize = 8;
 
 impl HudState {
+    /// Our hit marker shows `what` from `now`, unless one that holds (a
+    /// kill, a shield's break) is still up and is more than it; a break
+    /// is not begun again by the next round either (the body is drawn a
+    /// playout behind, so that round can still find its shield up).
+    fn mark(&mut self, what: Marked, now: f32) {
+        let up = self.hit_as.holds() && now - self.hit_at < self.hit_as.secs();
+        let held = up && (self.hit_as > what || what == Marked::Break);
+        if !held {
+            self.hit_at = now;
+            self.hit_as = what;
+        }
+    }
+
     /// A new match's: nothing carried over but the net graph.
     pub fn fresh(&self) -> HudState {
         HudState {
@@ -1179,10 +1278,11 @@ pub fn on_events(
         }
         if e.kind == Kind::Hit as u8 {
             // A hit just after a kill (the pellets after the one that
-            // killed) leaves the kill's red up.
-            if e.a == me && e.b != me && !(st.hit_kill && now - st.hit_at < KILL_HIT_S) {
-                st.hit_at = now;
-                st.hit_kill = false;
+            // killed) leaves the kill's red up, and one just after a
+            // shield broke (the burst's next round) its burst.
+            if e.a == me && e.b != me {
+                let drawn = others.iter().find(|d| d.slot == e.b && d.alive).map(|d| d.shield);
+                st.mark(Marked::of(e.part, broke(e.part, drawn)), now);
             }
             if e.b == me && e.a != me {
                 // Where it came from, relative to where we look: where the
@@ -1198,16 +1298,14 @@ pub fn on_events(
                 st.hurt_shield = s.core.own().0.shield > 0;
             }
         } else if e.kind == Kind::Kill as u8 && e.a == me && e.b != me {
-            st.hit_at = now;
-            st.hit_kill = true;
+            st.mark(Marked::Kill, now);
         } else if e.kind == Kind::Flag as u8 {
             st.feed.push((flag_line(st, e.part, e.a, e.b), now));
         } else if e.kind == Kind::Node as u8 {
             st.feed.push((node_line(st, e.part, e.a, e.b), now));
         } else if e.kind == Kind::Minion as u8 && e.a == me && e.part <= 1 {
             // Our round in a minion: the hit marker; the last one, red.
-            st.hit_at = now;
-            st.hit_kill = e.part == 0;
+            st.mark(if e.part == 0 { Marked::Kill } else { Marked::Health }, now);
         }
     }
     // Our shield breaking.
@@ -1464,28 +1562,19 @@ pub fn draw(
             Visibility::Inherited
         });
     }
-    let hit_u = (now - st.hit_at) / if st.hit_kill { KILL_HIT_S } else { HIT_S };
+    let hit_u = (now - st.hit_at) / st.hit_as.secs();
     if let Ok((mut v, mut tr)) = hitmark.single_mut() {
         v.set_if_neq(if (0.0..1.0).contains(&hit_u) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         });
-        let k = if st.hit_kill {
-            KILL_REST + (KILL_POP - KILL_REST) * (1.0 - (hit_u / KILL_POP_U).clamp(0.0, 1.0)).powi(2)
-        } else {
-            1.0
-        };
-        let scale = Vec2::splat(k);
+        let scale = Vec2::splat(st.hit_as.scale(hit_u));
         if tr.scale != scale {
             tr.scale = scale;
         }
     }
-    let c = if st.hit_kill {
-        Color::srgb(1.0, 0.25, 0.2)
-    } else {
-        Color::WHITE
-    };
+    let c = st.hit_as.colour();
     for mut bg in strokes.iter_mut() {
         bg.set_if_neq(BackgroundColor(c));
     }
@@ -2191,6 +2280,42 @@ fn aim_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) 
                 a.magnet_zone(eye, dir, d.pos, top, wall)
                     .or_else(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R, wall))
             }
+        })
+        .min_by(f32::total_cmp)
+}
+
+/// How far along our aim a round of the gun in hand would meet an enemy's
+/// body, as drawn: the body as far as the gun reaches, widened as
+/// magnetism bends a near miss within its `aim_range` (the red reticle's
+/// zone). None: the round is going to the map, or the gun fires no ray.
+/// Where our own round's line ends, before the server says what it met.
+pub fn round_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> Option<f32> {
+    use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH};
+    let f = core.own().0;
+    if !f.alive || f.riding().is_some() {
+        return None;
+    }
+    let a = sim::arms::arm(f.gun().arm);
+    if !a.kind.ray() {
+        return None;
+    }
+    let eye = f.eye();
+    let dir = sim::geom::aim_dir(f.yaw, f.pitch);
+    let wall = core.map.ray(eye, dir, a.range);
+    let mate = core.rules.teams.then_some(core.team & 1);
+    others
+        .iter()
+        .filter(|d| d.alive && Some(d.team & 1) != mate)
+        .filter_map(|d| {
+            let (hy, top) = if d.crouched {
+                (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+            } else {
+                (HEAD_Y, HIT_TOP)
+            };
+            let head = d.pos + sim::geom::V3::new(0.0, hy, 0.0);
+            a.magnet_zone(eye, dir, d.pos, top, wall.min(a.aim_range))
+                .or_else(|| sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R, top, wall))
+                .or_else(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R, wall))
         })
         .min_by(f32::total_cmp)
 }

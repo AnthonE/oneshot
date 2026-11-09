@@ -158,6 +158,8 @@ pub fn run(
         me: core.slot,
         aim: fx.cam * Vec3::NEG_Z,
         t: time.elapsed_secs(),
+        on_body: None,
+        arm: sim::arms::NONE,
     };
     on_events(&mut fx, &scene, &ev);
 }
@@ -394,6 +396,8 @@ fn shards(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
                 me: core.slot,
                 aim: fwd,
                 t: now,
+                on_body: None,
+                arm: sim::arms::NONE,
             };
             super::blast::blast(fx, &scene, chest, sim::arms::SHARDS as u16, false);
         } else {
@@ -449,6 +453,8 @@ fn bolts(link: &LinkRes, fx: &mut Fx, clock: &mut Clock, now: f32) {
                 me: core.slot,
                 aim: fwd,
                 t: now,
+                on_body: None,
+                arm: sim::arms::NONE,
             };
             let ball = to - side * 4.0 + fwd * 2.0 + Vec3::Y * 0.5;
             super::blast::blast(fx, &scene, ball, sim::arms::CANNON as u16, false);
