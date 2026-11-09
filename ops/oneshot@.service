@@ -113,6 +113,9 @@ MemoryDenyWriteExecute=true
 CapabilityBoundingSet=
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# Back in: the network's threads lower their own priority (--net-nice,
+# setpriority); raising it stays out (RestrictRealtime, no CAP_SYS_NICE).
+SystemCallFilter=setpriority
 SystemCallArchitectures=native
 UMask=0027
 
