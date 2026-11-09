@@ -324,7 +324,7 @@ def banner_html(hero, pos="center 60%/cover"):
     body, W, H = word_reticle(GOLD)
     word = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
             f'width="{W * 0.62:.0f}" height="{H * 0.62:.0f}">{body}</svg>')
-    sub, sw = text("FREE ARENA SHOOTER  \u00b7  1V1 AND 2V2 RANKED  \u00b7  IN YOUR BROWSER", 34, 0, 34, track=0.06)
+    sub, sw = text("FREE COMPETITIVE SHOOTER  \u00b7  BROWSER AND DESKTOP", 34, 0, 34, track=0.06)
     line = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -4 {sw} 44" width="{sw}" height="44">'
             f'<path d="{sub}" fill="{BONE}"/></svg>')
     mark = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="44" height="44">{elo_mark(0, 0, 64)}</svg>'
@@ -334,17 +334,18 @@ def banner_html(hero, pos="center 60%/cover"):
 body{{margin:0;width:1500px;height:500px;overflow:hidden;background:{INK}}}</style></head><body>{shot}
 <div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(27,25,22,.96) 0%,rgba(27,25,22,.85) 38%,rgba(27,25,22,.15) 75%,rgba(27,25,22,0) 100%)"></div>
 <div style="position:absolute;left:70px;top:130px">{word}<div style="margin:22px 0 0 34px">{line}</div></div>
-<div style="position:absolute;right:40px;bottom:34px;display:flex;align-items:center;gap:12px;color:#fff;font:30px A">{mark}<span>Elo Pros</span></div>
+<div style="position:absolute;left:104px;bottom:40px;display:flex;align-items:center;gap:12px;color:#fff;font:30px A">{mark}<span>Elo Pros</span></div>
 </body></html>'''
 
 
 def post_html(shot):
-    """The coin's launch post, 1600x900 (X and Telegram): the wordmark and the coin over a map.
+    """The coin's launch post, 1600x900 (X and Telegram): the wordmark and the coin over a match,
+    the match left in view on the right.
     No amounts on it: the pot can change, a picture in a feed can't."""
     body, W, H = word_reticle(GOLD)
     word = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
             f'width="{W * 0.66:.0f}" height="{H * 0.66:.0f}" style="display:block;margin-left:-33px">{body}</svg>')
-    coin = coin_reticle().replace('width="1024" height="1024"', 'width="600" height="600"')
+    coin = coin_reticle().replace('width="1024" height="1024"', 'width="330" height="330"')
     mark = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48">{elo_mark(0, 0, 64)}</svg>'
     ground = f'<div style="position:absolute;inset:0;background:url(post.jpg) center/cover no-repeat #000"></div>' if shot else ""
     return f'''<!doctype html><html><head><meta charset="utf-8"><style>
@@ -352,23 +353,22 @@ def post_html(shot):
 @font-face{{font-family:A;src:url(../../../crates/client/assets/fonts/Aileron-SemiBold.otf)}}
 @font-face{{font-family:AB;src:url(../../../crates/client/assets/fonts/Aileron-Bold.otf)}}
 body{{margin:0;width:1600px;height:900px;overflow:hidden;background:{INK};position:relative}}
-.kick{{font:34px U;letter-spacing:.12em;color:{BONE}}}
+.kick{{font:28px U;letter-spacing:.12em;color:{BONE}}}
 .head{{font:76px U;letter-spacing:.04em;color:{BONE};margin-top:26px;line-height:1}}
-.sub{{font:31px/1.4 A;color:rgba(238,235,229,.86);margin-top:28px;width:690px}}
+.sub{{font:30px/1.4 A;color:rgba(238,235,229,.88);margin-top:28px;width:640px}}
 .url{{display:inline-block;margin-top:40px;padding:16px 26px;border:3px solid {GOLD};border-radius:10px;font:30px U;letter-spacing:.08em;color:{GOLD}}}
 </style></head><body>{ground}
-<div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(27,25,22,.97) 0%,rgba(27,25,22,.93) 42%,rgba(27,25,22,.45) 66%,rgba(27,25,22,.55) 100%)"></div>
-<div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,12,10,.7) 0%,rgba(14,12,10,0) 30%)"></div>
-<div style="position:absolute;left:600px;top:-150px;width:1300px;height:1200px;background:radial-gradient(closest-side,rgba(232,185,49,.30),rgba(232,185,49,0))"></div>
-<div style="position:absolute;left:96px;top:150px">
-  <div class="kick">THE COIN OF THE FREE ARENA SHOOTER</div>
+<div style="position:absolute;inset:0;background:linear-gradient(90deg,rgba(27,25,22,.96) 0%,rgba(27,25,22,.9) 36%,rgba(27,25,22,.3) 56%,rgba(27,25,22,0) 72%)"></div>
+<div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,12,10,.55) 0%,rgba(14,12,10,0) 22%)"></div>
+<div style="position:absolute;left:96px;top:120px">
+  <div class="kick">THE COIN OF THE FREE COMPETITIVE SHOOTER</div>
   <div style="margin-top:14px">{word}</div>
   <div class="head">LIVE ON SOLANA</div>
-  <div class="sub">Paired against PROS on pump.fun. Play in your browser, finish the day&#8217;s challenges, earn a share of the daily pot.</div>
+  <div class="sub">Paired against PROS on pump.fun. Play in your browser or on desktop, finish the day&#8217;s challenges, earn a share of the daily pot.</div>
   <div class="url">ELOPROS.COM/GAMES/ONESHOT</div>
 </div>
-<div style="position:absolute;left:910px;top:150px;width:600px;height:600px;clip-path:circle(48.9%);filter:drop-shadow(0 30px 60px rgba(0,0,0,.6))">{coin}</div>
-<div style="position:absolute;right:48px;bottom:40px;display:flex;align-items:center;gap:14px;color:#fff;font:32px AB">{mark}<span>Elo Pros</span></div>
+<div style="position:absolute;right:56px;top:48px;width:330px;height:330px;clip-path:circle(48.9%)">{coin}</div>
+<div style="position:absolute;left:96px;bottom:44px;display:flex;align-items:center;gap:14px;color:#fff;font:32px AB">{mark}<span>Elo Pros</span></div>
 </body></html>'''
 
 
