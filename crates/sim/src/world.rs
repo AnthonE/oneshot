@@ -1831,7 +1831,7 @@ impl World {
                         // It started inside: up out of the top.
                         ground = true;
                         n.y = s.top_at(n.x, n.z) + 0.01;
-                        vel.y = -vel.y * bounce;
+                        *vel = V3::new(vel.x * slide, -vel.y * bounce, vel.z * slide);
                     }
                 }
                 return;
@@ -1842,10 +1842,11 @@ impl World {
             }
             touched = true;
             if pos.y >= s.top_at(pos.x, pos.z) - 0.05 {
-                // Onto its top (a slope moves up under a projectile).
+                // Onto its top (a slope moves up under a projectile): it
+                // skids there as on any floor.
                 ground = true;
                 n.y = top + 0.01;
-                vel.y = -vel.y * bounce;
+                *vel = V3::new(vel.x * slide, -vel.y * bounce, vel.z * slide);
             } else if pos.y <= s.y0 {
                 n.y = s.y0 - 0.01;
                 vel.y = -vel.y * bounce;
@@ -2166,6 +2167,16 @@ impl World {
                 continue;
             }
             let (_, ground) = self.bounce_at(&mut d.pos, &mut d.vel, GRAVITY, DROP_BOUNCE, DROP_SLIDE);
+            if ground {
+                let flat = d.vel.flat();
+                let speed = flat.len();
+                let k = if speed > DROP_GRIP * DT {
+                    1.0 - DROP_GRIP * DT / speed
+                } else {
+                    0.0
+                };
+                d.vel = V3::new(d.vel.x * k, d.vel.y, d.vel.z * k);
+            }
             let (x, z) = (
                 d.pos.x.clamp(self.map.lo.0, self.map.hi.0),
                 d.pos.z.clamp(self.map.lo.1, self.map.hi.1),

@@ -288,6 +288,10 @@ pub struct Fog {
     /// Each drop's ticks left at the last look: one with more is a new
     /// gun in the slot (where someone just fell), with no hold.
     dttl: [u32; MAX_DROPS],
+    /// Where each drop lay at the last look: a hold is on where it was
+    /// seen, and one nudged between snapshots (a blast's push it stops from
+    /// before a look sees it fly) lies somewhere new, with no hold.
+    dat: [V3; MAX_DROPS],
 }
 
 /// How far a gun on the floor is named to a client that sees it.
@@ -426,10 +430,11 @@ impl Fog {
                 self.dttl[i] = 0;
                 continue;
             }
-            if d.ttl > self.dttl[i] {
+            if d.ttl > self.dttl[i] || d.pos != self.dat[i] {
                 self.duntil[i] = 0;
             }
             self.dttl[i] = d.ttl;
+            self.dat[i] = d.pos;
             let to = d.pos - eye;
             if to.len() > SEE_DROP_M {
                 self.duntil[i] = 0;

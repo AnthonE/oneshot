@@ -35,9 +35,16 @@ done
 
 # A page on another wire is refused at every hello: ask the live server first.
 want=$(grep -oP 'pub const PROTO_VER: u16 = \K[0-9]+' crates/proto/src/lib.rs)
-live=$(curl -s --max-time 15 "${SERVER}ready" | python3 -c 'import json,sys
+# Asked a few times: right after a deploy's switch the new slot can take
+# a moment to answer through the proxy.
+live=""
+for _ in 1 2 3 4 5 6; do
+  live=$(curl -s --max-time 15 "${SERVER}ready" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("proto",""))
 except Exception: print("")')
+  [ -n "$live" ] && break
+  sleep 5
+done
 if [ "$live" = "$want" ]; then
   echo "== wire ok: the server speaks proto $live, and so does this page"
 elif [ "$STRAND" = 1 ]; then
