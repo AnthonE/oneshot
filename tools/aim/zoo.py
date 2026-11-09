@@ -16,8 +16,9 @@ Each round:
    what each gains over the clean window is paired, moment for moment.
 3. **Fitness:** hits gained a sighting, less `--lam` times the share of its
    windows the detector flags at 1% of clean windows flagged.
-4. **The archive** (MAP-Elites): a cell per style and per aim point (head or
-   body); each keeps the fittest candidate of the round, so the zoo stays a
+4. **The archive** (MAP-Elites): a cell per style, per aim point (head or
+   body) and per whether it picks its moments (past a range, or only with
+   its shields down: what its client can see); each keeps the fittest candidate of the round, so the zoo stays a
    spread of kinds of cheat, not one leader.
 5. **The detector trains on**, from where it was, on the base set and the
    last `--keep-rounds` rounds' elites (older ones it learned already; the
@@ -48,7 +49,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import train as det  # noqa: E402
 
-PREFIX = "oa1:"
+PREFIX = "oa2:"
 MAX_MUTATIONS = 101
 FPR = det.FPR
 FREE = 0.05
@@ -70,7 +71,12 @@ def fresh(base):
 
 
 def cell(k):
-    return f"{k['style']}/{'head' if k['bone'] >= 0.5 else 'body'}"
+    """The archive's grid: style, aim point, and whether it picks its
+    moments. Selection seldom finds a condition from scratch (morr's bred
+    golfers settled on never or always), so a picky cheat keeps a cell of
+    its own until it is worth its condition."""
+    when = "/picky" if k.get("selective") else ""
+    return f"{k['style']}/{'head' if k['bone'] >= 0.5 else 'body'}{when}"
 
 
 def load(path):
@@ -112,7 +118,7 @@ def judge(scores, meta, col, zoo):
             "gain": float((hits[m] - clean_hits[pair[m]]).mean()),
             "caught": caught, "acted": float((helped[m] > 0).mean()),
             "to_catch": det.sightings_to_catch(caught, FPR),
-            "knobs": {key: z[key] for key in ("fov_deg", "smooth", "max_deg", "delay_ms", "bone", "miss", "trigger", "walls")},
+            "knobs": {key: z[key] for key in ("fov_deg", "smooth", "max_deg", "delay_ms", "bone", "miss", "trigger", "walls", "range_m", "low")},
         })
     return rows, thr
 
@@ -196,10 +202,10 @@ def cut(zoo, out, seed, args, matches=None):
 
 def show(rows, title):
     print(title)
-    print(f"  {'cell':<14} {'genome':<22} {'gain':>6} {'caught':>7} {'fitness':>8} {'to 1000:1':>10}")
+    print(f"  {'cell':<20} {'genome':<22} {'gain':>6} {'caught':>7} {'fitness':>8} {'to 1000:1':>10}")
     for r in sorted(rows, key=lambda r: r["cell"]):
         tc = "never" if r["to_catch"] == float("inf") else f"{r['to_catch']:.0f}"
-        print(f"  {r['cell']:<14} {r['genome'][:22]:<22} {r['gain']:>+6.2f} {r['caught']:>7.0%} "
+        print(f"  {r['cell']:<20} {r['genome'][:22]:<22} {r['gain']:>+6.2f} {r['caught']:>7.0%} "
               f"{r.get('fitness', 0):>8.2f} {tc:>10}")
 
 
@@ -306,9 +312,9 @@ def main():
     shutil.rmtree(ex)
     print()
     print(f"the exam: {len(zoo)} elites from every round on {info['pairs']} fresh sightings, at {FPR:.0%} of clean flagged")
-    print(f"  {'cell':<14} {'round':>5} {'gain':>6} {'first caught':>13} {'last caught':>12}")
+    print(f"  {'cell':<20} {'round':>5} {'gain':>6} {'first caught':>13} {'last caught':>12}")
     for a, b in sorted(zip(exam["first"], exam["last"]), key=lambda p: (p[0]["bred_in"], p[0]["cell"])):
-        print(f"  {a['cell']:<14} {a['bred_in']:>5} {a['gain']:>+6.2f} {a['caught']:>13.0%} {b['caught']:>12.0%}")
+        print(f"  {a['cell']:<20} {a['bred_in']:>5} {a['gain']:>+6.2f} {a['caught']:>13.0%} {b['caught']:>12.0%}")
     for name in ("first", "last"):
         rows = exam[name]
         free = [x["gain"] for x in rows if x["caught"] < FREE]

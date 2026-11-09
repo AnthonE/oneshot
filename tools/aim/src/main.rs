@@ -8,8 +8,8 @@
 //! people: what is learned from bot matches is plumbing, not a result.
 //!
 //! ```text
-//! oneshot-aim zoo [n] [--seed s]          # n assists, an oa1: line each, and what each does
-//! oneshot-aim knobs <oa1:…>               # what one does
+//! oneshot-aim zoo [n] [--seed s]          # n assists, an oa2: line each, and what each does
+//! oneshot-aim knobs <oa2:…>               # what one does
 //! oneshot-aim bots --out dir [--matches 40] [--seed 1] [--secs 300]
 //!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64] [--threads 2]
 //! oneshot-aim replays --out dir [--zoo file | --zoo-n 64] [--threads 2] <file.osr>…
@@ -548,13 +548,14 @@ fn knobs_json(k: &Knobs) -> serde_json::Value {
         "aim": k.aim, "trigger": k.trigger, "fov_deg": k.fov_deg, "smooth": k.smooth,
         "max_deg": k.max_deg, "delay_ms": k.delay_ms, "fire_ms": k.fire_ms, "bone": k.bone,
         "miss": k.miss, "jitter_deg": k.jitter_deg, "walls": k.walls, "style": k.style(),
+        "range_m": k.range_m, "low": k.low, "selective": k.selective(),
     })
 }
 
 fn describe(g: &Genome) -> String {
     let k = Knobs::from_genome(g);
     format!(
-        "{}  {:<7} fov {:>4.1}° smooth {:.2} max {:>5.2}°/tick delay {:>3} ms bone {:.2} miss {:.2} jitter {:.2}°{}{}",
+        "{}  {:<7} fov {:>4.1}° smooth {:.2} max {:>5.2}°/tick delay {:>3} ms bone {:.2} miss {:.2} jitter {:.2}°{}{}{}{}",
         g.text(PREFIX),
         k.style(),
         k.fov_deg,
@@ -570,6 +571,8 @@ fn describe(g: &Genome) -> String {
             String::new()
         },
         if k.walls { " walls" } else { "" },
+        if k.range_m > 0.0 { format!(" past {:.0} m", k.range_m) } else { String::new() },
+        if k.low { " shields down" } else { "" },
     )
 }
 
@@ -852,7 +855,7 @@ fn main() {
             info(&dir, sink, &genomes, about, "league", shape, roster);
         }
         _ => die(
-            "zoo [n] | knobs <oa1:…> | bots --out dir | replays --out dir <file.osr>… | league --out dir (see the source's header)",
+            "zoo [n] | knobs <oa2:…> | bots --out dir | replays --out dir <file.osr>… | league --out dir (see the source's header)",
         ),
     }
 }
