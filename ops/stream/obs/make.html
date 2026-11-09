@@ -1,0 +1,98 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oneshot — OBS setup</title>
+<!--
+  Open this file in a browser from where you unzipped the kit. It writes the
+  OBS scene collection with links to this folder, and lists every overlay's
+  link for adding one by hand.
+-->
+<link rel="stylesheet" href="../oneshot.css">
+<style>
+  html, body { overflow: auto; background: var(--bg); }
+  body { max-width: 980px; margin: 0 auto; padding: 40px 16px 64px; font: 400 17px/1.5 var(--sg); }
+  header { display: flex; align-items: center; gap: 16px; }
+  header .mark { width: 48px; height: 48px; }
+  h1 { font: 400 40px/1 var(--word); color: var(--gold); }
+  h2 { margin: 36px 0 10px; font: 700 15px/1 var(--sg); letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+  p { color: var(--muted); margin: 10px 0; }
+  b { color: var(--ink); }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 14px 0; }
+  select, button {
+    font: 700 15px/1 var(--sg); letter-spacing: .04em; padding: 12px 16px; border: 1px solid var(--line-2);
+    background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  button.go { background: var(--gold); color: var(--bg); border-color: var(--gold); }
+  button.go:hover { background: var(--gold-hi); }
+  .say { color: var(--good); min-height: 1.5em; }
+  ol { list-style: none; display: grid; gap: 10px; }
+  li { background: var(--panel); border: 1px solid var(--line); padding: 12px 14px; }
+  li .head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+  li .size { font: 500 13px/1.4 var(--mono); color: var(--dim); }
+  li .url { display: flex; gap: 8px; margin-top: 8px; }
+  li input { flex: 1; min-width: 0; font: 500 13px/1 var(--mono); padding: 9px 10px; background: var(--hull); color: var(--ink); border: 1px solid var(--line); }
+  li button { padding: 8px 12px; font-size: 13px; }
+  code { font: 500 14px var(--mono); color: var(--ink); }
+</style>
+<header><span class="mark"></span><h1>ONESHOT</h1></header>
+<p>The stream kit's OBS setup, for this folder: <code id="base"></code></p>
+
+<h2>The scene collection</h2>
+<p>Five scenes: Starting Soon, Game, BRB, Ending, and Watch a match (the game itself watching a live
+  match a little behind). In OBS: <b>Scene Collection → Import</b>, pick the file, then switch to <b>oneshot</b>.
+  In the Game scene, open <b>Game Window</b> and pick the oneshot window.</p>
+<div class="row">
+  <select id="os" aria-label="your computer">
+    <option value="windows">Windows</option>
+    <option value="mac">Mac</option>
+    <option value="linux">Linux</option>
+  </select>
+  <button type="button" class="go" id="dl">download for OBS</button>
+</div>
+<p class="say" id="say" role="status" aria-live="polite"></p>
+
+<h2>Each overlay on its own</h2>
+<p>In OBS: add a <b>Browser</b> source, paste the link into its URL field (not "Local file", which drops the
+  part after <code>?</code>), and set the width and height shown.</p>
+<ol id="list"></ol>
+
+<script src="../config.js"></script>
+<script src="../oneshot.js"></script>
+<script src="collection.js"></script>
+<script>
+  const base = new URL("../", location.href).href;
+  document.getElementById("base").textContent = base;
+  const os = document.getElementById("os");
+  const ua = navigator.userAgent;
+  os.value = /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : "linux";
+
+  document.getElementById("dl").addEventListener("click", () => {
+    const c = oneshotCollection(base, os.value, ONESHOT.watchUrl);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(c, null, 2) + "\n"], { type: "application/json" }));
+    a.download = "oneshot.json";
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    document.getElementById("say").textContent = 'Saved oneshot.json. In OBS: Scene Collection → Import, then switch to "oneshot".';
+  });
+
+  const c = oneshotCollection(base, "linux", ONESHOT.watchUrl);
+  const list = document.getElementById("list");
+  for (const s of c.sources.filter((s) => s.id === "browser_source")) {
+    const li = document.createElement("li");
+    li.innerHTML = '<div class="head"><b></b><span class="size"></span></div><div class="url"><input readonly><button type="button">copy</button></div>';
+    li.querySelector("b").textContent = s.name;
+    li.querySelector(".size").textContent = s.settings.width + " × " + s.settings.height;
+    const box = li.querySelector("input"), btn = li.querySelector("button");
+    box.value = s.settings.url;
+    box.addEventListener("focus", () => box.select());
+    btn.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(box.value); btn.textContent = "copied"; }
+      catch { box.focus(); box.select(); btn.textContent = "press Ctrl+C"; }
+      setTimeout(() => { btn.textContent = "copy"; }, 1600);
+    });
+    list.append(li);
+  }
+</script>
