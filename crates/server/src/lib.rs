@@ -539,6 +539,7 @@ pub async fn run(cfg: Config) -> Result<Handle, String> {
     // Salts, seeds, nonces and party codes are drawn from the OS: without
     // it there is no server (and `random_u64` would panic mid-match).
     getrandom::fill(&mut [0u8; 8]).map_err(|e| format!("the OS gives no randomness: {e}"))?;
+    warm_maps();
     let bound = net::endpoints(&cfg).await?;
     let cert_hash = bound[0].cert_hash;
     let udp_buffers = (bound[0].udp_recv, bound[0].udp_send);
@@ -772,6 +773,31 @@ async fn jobs(ctx: Arc<Ctx>, mut rx: tmpsc::UnboundedReceiver<Job>) {
 
 /// A salt, a seed or an id: never zeros because the OS failed (`run`
 /// checks it once at start).
+/// Each map built once: a build is up to 0.2 s (Chrysalis' terrain, a
+/// big map's waypoints), and on the sim thread it held every room's tick
+/// that long. A clone is microseconds.
+static BUILT: [std::sync::OnceLock<Map>; 256] = [const { std::sync::OnceLock::new() }; 256];
+
+/// Map `id`, built, from [`BUILT`]; None if there is no such map.
+fn built(id: u8) -> Option<Map> {
+    let d = sim::maps::ALL.iter().find(|d| d.id == id)?;
+    Some(BUILT[id as usize].get_or_init(|| d.build()).clone())
+}
+
+/// Builds every map, each on a thread of its own, so the sim thread only
+/// clones (one that asks before a map is ready waits for that map alone).
+fn warm_maps() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for d in sim::maps::ALL.iter() {
+            let id = d.id;
+            let _ = std::thread::Builder::new()
+                .name(format!("map-{id}"))
+                .spawn(move || built(id));
+        }
+    });
+}
+
 fn random_u64() -> u64 {
     let mut b = [0u8; 8];
     getrandom::fill(&mut b).expect("the OS gave no randomness");
@@ -1023,7 +1049,7 @@ impl Sim {
             .and_then(|id| sim::maps::ALL.iter().find(|d| d.id == id))
             .filter(|d| !rules.ctf || d.flags.len() == 2)
             .filter(|d| !rules.siege || d.siege.len() == sim::consts::SIEGE_NODES)
-            .map(|d| d.build());
+            .and_then(|d| built(d.id));
         let rot = if rules.ctf {
             sim::map::ROT_CTF
         } else if rules.siege {
@@ -1079,7 +1105,7 @@ impl Sim {
         let Some(&id) = ids.get((seed % ids.len().max(1) as u64) as usize) else {
             return Map::proving_grounds();
         };
-        sim::map::by_id(id).unwrap_or_else(Map::proving_grounds)
+        built(id).unwrap_or_else(Map::proving_grounds)
     }
 
     /// The sim thread: what sessions say (`rx`), their inputs (bounded, and
