@@ -1,0 +1,93 @@
+/* Shared look for every oneshot overlay. Palette and faces are the game's own
+   (crates/client/src/ui.rs, crates/client/assets/fonts, CC0), so the stream
+   and the title screen read as one thing. */
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&display=swap");
+@font-face { font-family: Unitblock; src: url(fonts/Unitblock.ttf) format("truetype"); }
+@font-face { font-family: Aileron; src: url(fonts/Aileron-Regular.otf) format("opentype"); font-weight: 400; }
+@font-face { font-family: Aileron; src: url(fonts/Aileron-SemiBold.otf) format("opentype"); font-weight: 600; }
+@font-face { font-family: Aileron; src: url(fonts/Aileron-Bold.otf) format("opentype"); font-weight: 700; }
+
+:root {
+  --bg: #1b1916;      /* ui::BG */
+  --hull: #141210;
+  --panel: #2b2723;   /* ui::ROW_IDLE */
+  --line: rgba(191, 184, 158, .20);    /* ui::RULE */
+  --line-2: rgba(191, 184, 158, .34);  /* ui::RULE_HI */
+  --ink: #ebe6d9;     /* ui::TEXT_COLOR */
+  --muted: #bdb8ad;   /* ui::DIM */
+  --dim: #9e998f;     /* ui::FAINT */
+  --gold: #e8b931;    /* ui::MARK, the reticle */
+  --gold-hi: #f5cc54; /* ui::GO_HOVER */
+  --blue: #3982ba;    /* ui::ACCENT */
+  --good: #a6cf6e;    /* ui::GOOD */
+  --bad: #e3896a;     /* ui::BAD */
+  --red: #ff3b30;
+  --word: Unitblock, system-ui, sans-serif;
+  --sg: Aileron, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { overflow: hidden; color: var(--ink); font-family: var(--sg); -webkit-font-smoothing: antialiased; }
+body.transparent { background: transparent; }
+
+/* ---- the reticle mark ---- */
+.mark { display: inline-block; flex: none; }
+.mark svg { display: block; width: 100%; height: 100%; }
+
+/* ---- corner brackets: frame anything without boxing it in ---- */
+.brackets { position: absolute; inset: 0; pointer-events: none; }
+.brackets i { position: absolute; width: 26px; height: 26px; border: 3px solid var(--gold); }
+.brackets i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+.brackets i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+.brackets i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+.brackets i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+.tag {
+  font: 700 13px/1 var(--sg); letter-spacing: .14em; text-transform: uppercase;
+  padding: 6px 9px; background: var(--gold); color: var(--bg);
+}
+
+.live-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--red); flex: none;
+  animation: livepulse 1.6s ease-out infinite;
+}
+@keyframes livepulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, .6); }
+  100% { box-shadow: 0 0 0 12px rgba(255, 59, 48, 0); }
+}
+
+/* ---- ticker strip ---- */
+.ticker {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 52px;
+  display: flex; align-items: stretch;
+  background: rgba(27, 25, 22, .92);
+  border-top: 1px solid var(--line-2);
+  box-shadow: inset 0 1px 0 rgba(232, 185, 49, .08);
+  font: 600 19px/1 var(--sg); letter-spacing: .02em;
+}
+.ticker .prices {
+  display: flex; align-items: center; gap: 22px; padding: 0 22px;
+  background: var(--hull); border-right: 1px solid var(--line-2); flex: none;
+  font-family: var(--mono); font-weight: 500;
+}
+.ticker .px { display: flex; align-items: baseline; gap: 9px; white-space: nowrap; }
+.ticker .px b { font-weight: 700; color: var(--gold); }
+.ticker .px .chg { font-size: 15px; }
+.ticker .px .up { color: var(--good); }
+.ticker .px .down { color: var(--bad); }
+.ticker .px .sub { color: var(--dim); font-size: 15px; }
+.ticker .lane {
+  position: relative; flex: 1; overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+}
+.ticker .belt {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  display: flex; align-items: center; white-space: nowrap; will-change: transform;
+}
+.ticker .belt span { color: var(--ink); padding: 0 8px; }
+.ticker .belt em { font-style: normal; color: var(--blue); padding: 0 22px; }
+.ticker .end {
+  display: flex; align-items: center; gap: 10px; padding: 0 22px; flex: none;
+  background: var(--gold); color: var(--bg); font-weight: 700; letter-spacing: .04em;
+}
