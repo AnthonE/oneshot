@@ -427,8 +427,8 @@ pub const OVERCAST: Mood = Mood {
 pub const BLIZZARD: Mood = Mood {
     name: "blizzard",
     sun_elev: 0.3,
-    // Square across the line between the sides' spawns, which runs 19° off x.
-    sun_azim: 0.34,
+    // Square across the line between the sides' spawns, which runs 9° off x.
+    sun_azim: 0.15,
     sun_rgb: [0.9, 0.95, 1.0],
     sun: 0.75,
     light: 0.85,
