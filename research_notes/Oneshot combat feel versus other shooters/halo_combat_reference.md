@@ -20,7 +20,7 @@ From Halo 2 through Halo 5 the player is the same 70 shield + 45 health (115 tot
 | Game | Health | Shield | Shield delay / full recharge | Health regen (delay / recharge) | Class | Source |
 |---|---|---|---|---|---|---|
 | Halo CE | 75 | 75 | 6 s / 4 s | none listed (health packs) | [TAG] `cyborg_mp.biped` | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
-| Halo 2 | 45 | 70 | 5 s / 2 s | 10 s / 5 s (regenerates, no health bar) | [TAG] `masterchief_mp.biped` | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
+| Halo 2 | 45 | 70 | 5 s / 2 s | 10 s / 5 s (health regenerates) | [TAG] `masterchief_mp.biped` | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
 | Halo 3 | 45 | 70 | 5 s / 2 s | 10 s / 5 s | [TAG] | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
 | Halo: Reach | 45 | 70 | 6 s / 3 s | 4 s / 9 s, only back to the next third (100 / 66.6 / 33.3%) | [TAG] `spartans.biped` | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
 | Halo 4 | 45 | 70 | 6 s / 2 s | 4 s / 6 s | [TAG] | [Halopedia: Spartan (multiplayer)](https://halopedia.org/Spartan_(multiplayer)) |
@@ -61,7 +61,7 @@ From Halo 2 through Halo 5 the player is the same 70 shield + 45 health (115 tot
 
 - Halo CE pistol: tag rate 3.5 rounds/s, about 3.33/s after tick rounding; 12-round magazine; 300 wu/s projectile with instant hit to 10 wu; MP error 0.2 to 2 deg that grows only while the trigger is held; 2x zoom. [TAG] — [Halopedia: CE:Pistol](https://www.halopedia.org/CE:Pistol)
 - Halo 3 BR: 6 per round, 3 rounds at 15/s, 0.28 s recovery that tick rounding makes 0.3 s; 36 rounds; 180 wu/s; instant hit to 12 wu; max 60 wu; error 0.15 to 0.5 deg; 2x zoom. [TAG] — [Halopedia: H3:Battle Rifle](https://www.halopedia.org/H3:Battle_Rifle)
-- Halo 3 sniper: time between shots was raised from 0.5 s to 0.7 s during development. [DEV] — [GDC Vault: Griesemer, Design in Detail](https://gdcvault.com/play/1012211)
+- Halo 3 sniper: time between shots was changed from 0.5 s (the Halo 2 tag value above) to 0.7 s for Halo 3. [DEV] — [GDC Vault: Griesemer, Design in Detail](https://gdcvault.com/play/1012211)
 - Halo Infinite BR75: 36-round magazine, 3-round burst, 2.5x zoom; body round 130, headshot 600 (in Infinite's larger internal scale); 11 rounds break a full shield; perfect kill is 11 body rounds + 1 head round (4 bursts) in 1.55 s; body-only kill is 16 rounds (6 bursts) in 2.40 s; the Ranked variant kills with two body bursts plus a melee. The page's own figures are not fully consistent with each other (it also states 9 unshielded body shots and a 7-burst kill). — [Halopedia: BR75 battle rifle](https://www.halopedia.org/BR75_battle_rifle)
 - Halo Infinite MK50 Sidekick: 12-round magazine; 7 to 10 shots to kill a full-shield Spartan (6 to break shields, then 1 headshot or 4 body shots); bloom grows sharply under rapid fire; no kill time listed. — [Halopedia: Sidekick](https://www.halopedia.org/Sidekick)
 - Halo Infinite Bandit: 5 headshots, 1.2 s TTK in pre-release coverage; a July 2024 sandbox update later slowed its rate of fire in response to time-to-kill feedback. [SNIPPET] — [Xboxygen](https://www.xboxygen.com/?p=163409); [r/halo repost of the Waypoint sandbox update](https://reddit.birdcat.cafe/r/halo/comments/1ec224c/sandbox_update_halo_infinite)
