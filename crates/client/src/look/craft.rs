@@ -10,13 +10,14 @@
 //! entity `draw_vehicles` stands at the sim's hull (turned by its yaw); its
 //! body here takes the flier's nose and roll from the sim, and leans into a
 //! turn and bobs on its lift as looks of its own. Its thrusters throw a
-//! flame while it boosts. Looks only: what flies is the sim's.
+//! flame while it boosts, and it lights the ground under and behind it.
+//! Looks only: what flies is the sim's.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use core::f32::consts::{PI, TAU};
+use core::f32::consts::TAU;
 use sim::vehicle::{FLIER, SKIMMER};
 
 use super::guns::Models;
@@ -37,64 +38,79 @@ const BOB_HZ: f32 = 0.9;
 /// Each thruster's flame while it boosts: where its nozzle ends, in the
 /// hull's frame (x forward, y up from the ground under it, z right),
 /// measured on the model (its sheet's numbers, `traces/craft/<name>.json`),
-/// then how long and how wide it burns, metres. The two outboard, then the
-/// one on the centre line.
+/// then how long and how wide it burns, metres (no wider than the lit
+/// throat it leaves, so the ring round it still shows). The two outboard,
+/// then the one on the centre line.
 const SKIM_FLAMES: [(Vec3, f32, f32); 3] = [
-    (Vec3::new(-1.5, 0.43, -0.485), 1.0, 0.2),
-    (Vec3::new(-1.5, 0.43, 0.485), 1.0, 0.2),
-    (Vec3::new(-1.28, 0.56, 0.0), 0.6, 0.14),
+    (Vec3::new(-1.5, 0.43, -0.5), 1.0, 0.15),
+    (Vec3::new(-1.5, 0.43, 0.5), 1.0, 0.15),
+    (Vec3::new(-1.28, 0.56, 0.0), 0.6, 0.11),
 ];
 const FLY_FLAMES: [(Vec3, f32, f32); 3] = [
-    (Vec3::new(-2.15, 0.635, -0.445), 1.2, 0.34),
-    (Vec3::new(-2.15, 0.635, 0.445), 1.2, 0.34),
-    (Vec3::new(-1.84, 0.655, 0.0), 0.8, 0.28),
+    (Vec3::new(-2.15, 0.635, -0.47), 1.2, 0.27),
+    (Vec3::new(-2.15, 0.635, 0.47), 1.2, 0.27),
+    (Vec3::new(-1.84, 0.7, 0.0), 0.8, 0.24),
 ];
+/// A flame's core inside its sheath: this share of its length and of its
+/// width.
+const CORE: (f32, f32) = (0.55, 0.42);
+/// The light a craft throws on what is under and behind it (on a rung with
+/// lights to spare, `fx::Caps::lights_in_flight`): where it hangs in the
+/// hull's frame, its lumens at rest and boosting, and how far it reaches,
+/// metres. The skimmer's is its lift's, under its bridge; the flier's its
+/// engines', lit by the boost alone.
+const SKIM_LIGHT: (Vec3, f32, f32) = (Vec3::new(-0.5, 0.3, 0.0), 70_000.0, 240_000.0);
+const FLY_LIGHT: (Vec3, f32, f32) = (Vec3::new(-2.5, 0.65, 0.0), 0.0, 320_000.0);
+const LIGHT_M: f32 = 5.0;
 /// The skimmer's grips, left then right, in the hull's frame: where its
 /// rider's hands go (`Craft::grips`), measured on the model (its bars as
-/// `tools/models/skimmer.py` raised them on their column).
+/// `tools/models/skimmer.py` raised them on their stalk).
 const SKIM_GRIPS: [Vec3; 2] = [Vec3::new(-0.18, 1.24, -0.285), Vec3::new(-0.18, 1.24, 0.285)];
 
 pub fn plugin(app: &mut App) {
     app.add_systems(Startup, kit).add_systems(Update, pose);
 }
 
-/// A boost's flame: its shape and its paint.
+/// A boost's flame: its shape, and the paint of its sheath and of its core.
 #[derive(Resource)]
 pub struct Kit {
     flame: Handle<Mesh>,
-    boost: Handle<StandardMaterial>,
+    sheath: Handle<StandardMaterial>,
+    core: Handle<StandardMaterial>,
 }
 
-/// The flame's mesh: rings along its length, sides round it; how much it
-/// swells past its mouth before it pinches, how far along it is still
-/// white, and how fast it fades to its tip (a power of what is left).
-const FLAME_RINGS: usize = 12;
+/// The flame's mesh: rings along its length, sides round it; how narrow it
+/// leaves its mouth (a share of its width) and how far along it is full;
+/// how fast it fades to its tip (a power of what is left), and how far
+/// along it fades in from nothing at its mouth.
+const FLAME_RINGS: usize = 14;
 const FLAME_SIDES: usize = 14;
-const FLAME_SWELL: f32 = 0.3;
-const FLAME_WHITE: f32 = 0.28;
-const FLAME_FADE: f32 = 1.7;
+const FLAME_MOUTH: f32 = 0.55;
+const FLAME_FULL: f32 = 0.16;
+const FLAME_FADE: f32 = 3.0;
+const FLAME_IN: f32 = 0.06;
 /// Its flicker: this share of its length, at these two rates (radians a
 /// second), so it never beats.
 const FLICKER: f32 = 0.09;
 const FLICKER_HZ: [f32; 2] = [61.0, 37.0];
 
 /// A flame one long and one wide, from its mouth at the origin aft along
-/// -x: a spindle, white at the mouth and cyan past it, fading to nothing
+/// -x: a spindle that leaves its mouth narrow, fills, and thins to nothing
 /// at its tip. The fade is its vertices' alpha: its paint adds, and adds
-/// less of what has less.
+/// less of what has less, so it has no edge and no point.
 fn flame() -> Mesh {
     let (mut positions, mut normals, mut colors) = (Vec::new(), Vec::new(), Vec::new());
     let mut indices = Vec::new();
     for i in 0..=FLAME_RINGS {
         let t = i as f32 / FLAME_RINGS as f32;
-        let r = 0.5 * (1.0 - t).powf(0.8) * (1.0 + FLAME_SWELL * (t * PI).sin());
-        let white = (1.0 - t / FLAME_WHITE).max(0.0);
-        let color = [0.2 + 0.8 * white, 0.75 + 0.25 * white, 1.0, (1.0 - t).powf(FLAME_FADE)];
+        let fill = FLAME_MOUTH + (1.0 - FLAME_MOUTH) * (t / FLAME_FULL).min(1.0);
+        let r = 0.5 * fill * (1.0 - t).powf(0.8);
+        let alpha = (1.0 - t).powf(FLAME_FADE) * (t / FLAME_IN).min(1.0);
         for j in 0..FLAME_SIDES {
             let (sin, cos) = (j as f32 / FLAME_SIDES as f32 * TAU).sin_cos();
             positions.push([-t, r * cos, r * sin]);
             normals.push([0.0, cos, sin]);
-            colors.push(color);
+            colors.push([1.0, 1.0, 1.0, alpha]);
         }
         if i < FLAME_RINGS {
             for j in 0..FLAME_SIDES {
@@ -115,17 +131,20 @@ fn flame() -> Mesh {
 }
 
 fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
+    // Seen from inside as from out, both walls adding: a sheath thin enough
+    // to see the nozzle's ring through, a core past white, so it blooms.
+    let paint = |color: LinearRgba| StandardMaterial {
+        base_color: color.into(),
+        alpha_mode: AlphaMode::Add,
+        unlit: true,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    };
     commands.insert_resource(Kit {
         flame: meshes.add(flame()),
-        // Brighter than white, so it blooms; seen from inside as from out.
-        boost: mats.add(StandardMaterial {
-            base_color: LinearRgba::new(3.0, 5.0, 6.0, 0.85).into(),
-            alpha_mode: AlphaMode::Add,
-            unlit: true,
-            double_sided: true,
-            cull_mode: None,
-            ..default()
-        }),
+        sheath: mats.add(paint(LinearRgba::new(0.25, 1.1, 1.6, 0.7))),
+        core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
     });
 }
 
@@ -142,6 +161,8 @@ pub struct Craft {
     exhaust: Entity,
     /// Its flames, and how long each is.
     flames: [(Entity, f32); 3],
+    /// Its light, and its lumens at rest and boosting.
+    light: (Entity, f32, f32),
     lean: f32,
     last_yaw: Option<f32>,
     t: f32,
@@ -173,9 +194,9 @@ impl Craft {
 /// A one-seater of `kind` as a child of `hull`, an entity at the sim's
 /// hull turned by its yaw.
 pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, kind: u8) {
-    let (scene, pivot, burns) = match kind {
-        FLIER => (&models.flier, FLY_PIVOT_Y, &FLY_FLAMES),
-        _ => (&models.skimmer, SKIM_PIVOT_Y, &SKIM_FLAMES),
+    let (scene, pivot, burns, (lamp, rest, boost)) = match kind {
+        FLIER => (&models.flier, FLY_PIVOT_Y, &FLY_FLAMES, FLY_LIGHT),
+        _ => (&models.skimmer, SKIM_PIVOT_Y, &SKIM_FLAMES, SKIM_LIGHT),
     };
     let body = commands
         .spawn((
@@ -199,7 +220,7 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
         let e = commands
             .spawn((
                 Mesh3d(kit.flame.clone()),
-                MeshMaterial3d(kit.boost.clone()),
+                MeshMaterial3d(kit.sheath.clone()),
                 Transform {
                     translation: at - Vec3::Y * pivot,
                     scale: Vec3::new(len, wide, wide),
@@ -210,8 +231,30 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
                 ChildOf(exhaust),
             ))
             .id();
+        // Its core, inside it and flickering with it.
+        commands.spawn((
+            Mesh3d(kit.flame.clone()),
+            MeshMaterial3d(kit.core.clone()),
+            Transform::from_scale(Vec3::new(CORE.0, CORE.1, CORE.1)),
+            NotShadowCaster,
+            NotShadowReceiver,
+            ChildOf(e),
+        ));
         (e, len)
     });
+    let light = commands
+        .spawn((
+            PointLight {
+                color: Color::linear_rgb(0.2, 0.8, 1.0),
+                intensity: 0.0,
+                range: LIGHT_M,
+                shadows_enabled: false,
+                ..default()
+            },
+            Transform::from_translation(lamp - Vec3::Y * pivot),
+            ChildOf(body),
+        ))
+        .id();
     commands.entity(hull).insert(Craft {
         kind,
         pitch: 0.0,
@@ -221,6 +264,7 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
         body,
         exhaust,
         flames,
+        light: (light, rest, boost),
         lean: 0.0,
         last_yaw: None,
         t: 0.0,
@@ -229,14 +273,17 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
 
 /// Each frame: the body turned by the flier's nose and roll, leaning into
 /// its turn, the skimmer bobbing on its lift; the boost's flames on or off,
-/// flickering while they are on.
+/// flickering while they are on; its light at rest or boosting.
 fn pose(
     time: Res<Time>,
+    fx: Option<Res<super::fx::Fx>>,
     mut crafts: Query<&mut Craft>,
     mut at: Query<&mut Transform>,
     mut vis: Query<&mut Visibility>,
+    mut lights: Query<&mut PointLight>,
 ) {
     let dt = time.delta_secs().max(1e-4);
+    let lit = fx.is_some_and(|fx| fx.caps.lights_in_flight());
     for mut c in crafts.iter_mut() {
         c.t += dt;
         let turning = c.last_yaw.map_or(0.0, |was| {
@@ -258,6 +305,17 @@ fn pose(
                 if let Ok(mut t) = at.get_mut(e) {
                     t.scale.x = len * (1.0 + FLICKER * wave);
                 }
+            }
+        }
+        let (lamp, rest, boost) = c.light;
+        let lumens = match (lit, c.boosting) {
+            (false, _) => 0.0,
+            (true, false) => rest,
+            (true, true) => boost,
+        };
+        if let Ok(mut l) = lights.get_mut(lamp) {
+            if l.intensity != lumens {
+                l.intensity = lumens;
             }
         }
         if let Ok(mut v) = vis.get_mut(c.exhaust) {

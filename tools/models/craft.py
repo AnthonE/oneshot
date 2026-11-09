@@ -216,14 +216,42 @@ def shift(o, mask, by):
     o.data.update()
 
 
-def rod(a, b, r, material='iron'):
-    """A round bar from `a` to `b` (hull space), `r` thick, of the kit's own
-    paint (lib.py's PALETTE): a riser, a crossbar, what a mesh needs added
-    to carry a piece that was moved."""
+def drop(o, mask):
+    """Takes the vertices `mask` picks off the mesh, and their faces."""
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    bm.verts.ensure_lookup_table()
+    bmesh.ops.delete(bm, geom=[bm.verts[i] for i in np.nonzero(mask)[0]], context='VERTS')
+    bm.to_mesh(o.data)
+    bm.free()
+    o.data.update()
+
+
+def rod(a, b, r, material='iron', r2=None):
+    """A round bar from `a` to `b` (hull space), `r` thick (`r2` at `b`, for
+    a taper), of the kit's own paint (lib.py's PALETTE): a riser, a
+    crossbar, what a mesh needs added to carry a piece that was moved."""
     a, b = Vector(a), Vector(b)
-    o = cyl(r, (b - a).length, axis='z', material=material, verts=16, bevel=0)
+    o = cyl(r, (b - a).length, axis='z', material=material, verts=16, bevel=0, r2=r2)
     o.matrix_world = Matrix.Translation((a + b) / 2) @ (b - a).to_track_quat('Z', 'Y').to_matrix().to_4x4()
     return o
+
+
+def stalk(foot, bend, top, r, r2, material='shell', steps=6):
+    """A bowed, tapering stalk from `foot` to `top` (hull space), leaning
+    toward `bend` on the way (a curve's control point), `r` thick at its
+    foot and `r2` at its top: rods end to end, a ball in each joint. Its
+    parts, for `join`."""
+    foot, bend, top = Vector(foot), Vector(bend), Vector(top)
+    at = lambda t: (1 - t) ** 2 * foot + 2 * t * (1 - t) * bend + t ** 2 * top
+    wide = lambda t: r + (r2 - r) * t
+    parts = []
+    for i in range(steps):
+        t0, t1 = i / steps, (i + 1) / steps
+        parts.append(rod(at(t0), at(t1), wide(t0), material, r2=wide(t1)))
+        if i:
+            parts.append(sphere(wide(t0), at=at(t0), material=material, segments=16))
+    return parts
 
 
 def texels(o, px=MAP_PX):
@@ -403,16 +431,19 @@ def nozzles(o, behind):
     return [(round(x, 3), round(z, 3), round(-y, 3)) for x, y, z, _ in rings(o, behind)]
 
 
-def thrusters(o, tx, found, iron='#2b2a36', throat=0.8, can=2.1, deep=0.16, long=0.3):
+def thrusters(o, tx, found, iron='#2b2a36', throat=0.8, can=2.1, deep=0.16, long=0.3, least=0.0):
     """Each of `found` (`rings`) with its throat alight and its can dark
     iron: the paint inside `throat` of the ring's radius and within `deep`
     metres of its end is lit; what is within `can` radii of its axis and
     `long` metres of its end, bare steel as Meshy paints an engine, is
-    painted `iron`. `tx` is `texels(o)`."""
+    painted `iron`. A ring found smaller than `least` is taken for that
+    (a small one's light is a poor measure of its can). `tx` is
+    `texels(o)`."""
     pos, _, on = tx
     lit = np.zeros(on.shape, dtype=np.float32)
     dark = np.zeros(on.shape, dtype=np.float32)
     for x, y, z, r in found:
+        r = max(r, least)
         off = np.hypot(pos[..., 1] - y, pos[..., 2] - z)
         lit = np.maximum(lit, band(pos[..., 0], x - 0.05, x + deep, 0.02) * np.clip((r * throat - off) / (r * 0.25), 0.0, 1.0))
         dark = np.maximum(dark, band(pos[..., 0], x - 0.05, x + long, 0.04) * np.clip((r * can - off) / (r * 0.3), 0.0, 1.0))

@@ -61,15 +61,17 @@ SADDLE = (-1.08, -0.75, 1.2, 0.4)
 STERN = -0.5 * sim('SKIM_HALF_L')
 SPINE = 0.52
 # The bars as they came: the box their loose pieces lie in (hull space),
-# and how far they are moved to come to the rider's hands; the column that
-# carries them there, from the cowl's top to their middle, how thick, and
-# how far the crossbar reaches each way. `craft.rs`'s grips are the grips'
-# middles after it.
+# and how far they are moved to come to the rider's hands; the stalk that
+# carries them there, and how far the crossbar reaches each way.
+# `craft.rs`'s grips are the grips' middles after it.
 BARS = ((-0.03, -0.4, 0.78), (0.17, 0.4, 0.89))
 BARS_BY = (-0.235, 0.0, 0.4)
-COLUMN = ((0.14, 0.0, 0.83), (-0.15, 0.0, 1.22))
-COLUMN_R = 0.024
+# Its foot, the point it bows toward, and its top; how thick at each end.
+COLUMN = ((0.17, 0.0, 0.8), (0.05, 0.0, 1.12), (-0.15, 0.0, 1.22))
+COLUMN_R = (0.05, 0.022)
 CROSS = 0.13
+# The brake levers Meshy gave it, a bicycle's: the box they lie in.
+LEVERS = ((0.07, -0.37, 0.822), (0.12, 0.37, 0.848))
 SEAM = 0.011
 SPINE_FROM = -1.0
 PROW = 1.0
@@ -84,6 +86,7 @@ slide(o, *SADDLE)
 # The bars: Meshy's sit on the cowl, a forearm lower and further off than
 # the rider's hands can come (he sits upright in the sim's seat, and his
 # arms are short). They go up and back to his hands, as one piece.
+drop(o, pieces(o, *LEVERS))
 bars = pieces(o, *BARS)
 shift(o, bars, BARS_BY)
 
@@ -97,10 +100,11 @@ thrusters(o, tx, rings(o, STERN), can=1.5, long=0.2)
 # the chase camera sees of it, and what tells its nose from its tail.
 light(o, on * band(across, SPINE - SEAM, SPINE + SEAM, SEAM * 0.5) * band(x, SPINE_FROM, 9.0, 0.05)
       * (up > np.where(x > PROW, -0.5, 0.4)))
-# The bars stand on a raked column from the cowl, a crossbar between them.
+# The bars stand on a stalk grown from the cowl, bowed back to the rider and
+# thinning as it goes, a crossbar between them.
 name = o.name
-o = join([o, rod(COLUMN[0], COLUMN[1], COLUMN_R), rod((COLUMN[1][0], -CROSS, COLUMN[1][2]), (COLUMN[1][0], CROSS, COLUMN[1][2]),
-                                                      COLUMN_R * 0.7)], name)
+o = join([o] + stalk(*COLUMN, *COLUMN_R)
+         + [rod((COLUMN[2][0], -CROSS, COLUMN[2][2]), (COLUMN[2][0], CROSS, COLUMN[2][2]), COLUMN_R[1] * 0.8)], name)
 
 hl, hw, r = sim('SKIM_HALF_L'), sim('SKIM_HALF_W'), sim('BODY_R')
 eye = Vector((SEAT[0], 0, SEAT[1] + sim('CROUCH_EYE')))

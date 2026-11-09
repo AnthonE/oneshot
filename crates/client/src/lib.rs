@@ -1733,8 +1733,8 @@ const DEATH_CAM_PAD_M: f32 = 0.35;
 /// where the bolts go there.
 const FLY_CAM_BACK_M: f32 = 9.0;
 const FLY_CAM_UP_M: f32 = 2.4;
-const SKIM_CAM_BACK_M: f32 = 7.0;
-const SKIM_CAM_UP_M: f32 = 1.4;
+const SKIM_CAM_BACK_M: f32 = 5.8;
+const SKIM_CAM_UP_M: f32 = 1.1;
 const CRAFT_CAM_MEET_M: f32 = 45.0;
 
 /// The chase camera at the controls of a one-seater of `kind`, its pilot's

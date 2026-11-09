@@ -58,16 +58,21 @@ SEAT = (0.4, 0.15)
 GUNS = (1.1, 1.9, sim('FLY_WING_Y') + 0.15)
 # Aft of this is its tail (the engines' rings); the wings begin this far out
 # from the centre line; the belly's paint; the keel's line of light, half
-# its width, and from where to where; and the size of the cells the top's
-# lights are found under by.
+# its width, and from where to where.
 STERN = -0.5 * sim('FLY_HALF_L')
 WING_FROM = 0.95
 BELLY_PAINT = '#4b2a8f'
 KEEL = 0.02
 KEEL_FROM = -1.5
 KEEL_TO = 0.9
-CELL = 0.03
-hull_l, hull_w = sim('FLY_HALF_L'), sim('FLY_HALF_W')
+# The line of light under each wing, half its width.
+EDGE = 0.022
+# The canopy: from where to where along the hull and how far out from the
+# centre line; its paint as it came is this grey (how little its channels
+# differ) and this dark.
+GLASS = (0.45, 1.75, 0.45)
+GLASS_GREY = 0.12
+GLASS_DARK = 0.5
 
 scene()
 o = hull('flier', LENGTH, turn=TURN, width=2 * sim('FLY_HALF_W'), height=HEIGHT, belly=BELLY, mirror=MIRROR, pale=True,
@@ -80,9 +85,17 @@ x, y, across, up = pos[..., 0], pos[..., 1], np.abs(pos[..., 1]), nor[..., 2]
 under = on * np.clip((-up - 0.2) / 0.3, 0.0, 1.0)
 # The picture never saw its belly, and it came back a muddy plum: the
 # top's violet, so it is one craft from the ground.
-paint(o, under, BELLY_PAINT, mix=0.6)
+paint(o, under, BELLY_PAINT, mix=0.75, rough=0.5, metal=0.3)
+# Its canopy came a matte grey lid: dark glass.
+base = _image(o, 'Base Color')
+rgb = np.empty(base.size[0] * base.size[1] * 4, dtype=np.float32)
+base.pixels.foreach_get(rgb)
+rgb = rgb.reshape(base.size[1], base.size[0], 4)[::2, ::2, :3]
+grey = (rgb.max(axis=-1) - rgb.min(axis=-1) < GLASS_GREY) & (rgb.max(axis=-1) < GLASS_DARK)
+paint(o, on & grey & (up > 0.1) & (across < GLASS[2]) & (x > GLASS[0]) & (x < GLASS[1]), '#0b0a16', mix=0.85, rough=0.14,
+      metal=0.5)
 # Its three engines as Meshy painted them are steel cans, cold inside.
-thrusters(o, tx, rings(o, STERN))
+thrusters(o, tx, rings(o, STERN), throat=0.95, deep=0.5, least=0.13)
 # The light along each wing's trailing edge is on its top alone; the same
 # line under it, where it is seen from the ground, and a keel line aft.
 glow = _image(o, 'Emission Color')
@@ -90,12 +103,11 @@ lit = np.empty(glow.size[0] * glow.size[1] * 4, dtype=np.float32)
 glow.pixels.foreach_get(lit)
 lit = lit.reshape(glow.size[1], glow.size[0], 4)[..., :3].max(axis=-1)
 top = on & (lit > 0.3) & (up > 0.2) & (across > WING_FROM)
-cells = np.zeros((int(2 * hull_l / CELL) + 2, int(2 * hull_w / CELL) + 2), dtype=bool)
-at = lambda a, half: np.clip(((a + half) / CELL).astype(int), 0, None)
-cells[at(x[top], hull_l), at(y[top], hull_w)] = True
-# A cell either way: the under side's edge is not quite over the top's.
-cells |= np.roll(cells, 1, 0) | np.roll(cells, -1, 0) | np.roll(cells, 1, 1) | np.roll(cells, -1, 1)
-light(o, under * (across > WING_FROM) * cells[np.minimum(at(x, hull_l), cells.shape[0] - 1), np.minimum(at(y, hull_w), cells.shape[1] - 1)])
+# The line the top's light runs along, as how far back it is at each span.
+edge = np.polyfit(across[top], x[top], 2)
+span = (float(across[top].min()), float(across[top].max()))
+light(o, under * band(x, np.polyval(edge, across) - EDGE, np.polyval(edge, across) + EDGE, EDGE * 0.5)
+      * band(across, span[0], span[1], 0.03))
 light(o, under * band(across, 0.0, KEEL, KEEL * 0.5) * band(x, KEEL_FROM, KEEL_TO, 0.05))
 
 hl, hw, bw, r = sim('FLY_HALF_L'), sim('FLY_HALF_W'), sim('FLY_BODY_HALF_W'), sim('BODY_R')
