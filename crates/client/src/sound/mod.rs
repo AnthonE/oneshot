@@ -158,6 +158,22 @@ pub const PUMP_AT_S: f32 = 0.3;
 const HITS_LOUDER: f32 = 0.12;
 const HITS_LOUDEST: f32 = 1.5;
 const PASS: Carry = Carry { near: 1.5, reach: 6.0 };
+/// A shot of ours, and one out in the world before its distance: the
+/// loudest things heard but a blast, a gun's hardest round just under the
+/// mixer's ceiling. The clips say how loud each gun is beside the others
+/// (`tools/sfx.mjs`, `loud`).
+const SHOT_OURS: f32 = 1.45;
+const SHOT_THEIRS: f32 = 1.55;
+/// A grenade or a rocket going off, and a hull.
+const BLAST_GAIN: f32 = 1.9;
+const WRECK_GAIN: f32 = 2.0;
+/// What tells us a round of ours landed (a shield, a body, a head), and one
+/// landing on us (our shield, our body): heard through the guns.
+const HIT_SHIELD: f32 = 0.5;
+const HIT_BODY: f32 = 0.8;
+const HIT_HEAD: f32 = 0.75;
+const HURT_SHIELD: f32 = 0.75;
+const HURT_BODY: f32 = 0.8;
 
 /// The held slots.
 const SLOT_WIND: u8 = 0;
@@ -943,7 +959,7 @@ pub fn decide(
 const DEBRIS: u8 = 5;
 /// Shards going off together: the blast's take this loud, this much
 /// higher, and the shards' pings after it.
-const SUPER_GAIN: f32 = 1.0;
+const SUPER_GAIN: f32 = 1.55;
 const SUPER_RATE: f32 = 1.3;
 const SUPER_PINGS: u8 = 4;
 /// How a truck's tyres and its fire carry.
@@ -1165,7 +1181,7 @@ fn struck(ear: &mut Ear, ears: &Ears, from: Vec3, to: Vec3) {
         _ => "bullet_concrete",
     };
     let n = ear.take(base, 3);
-    ear.at(ears, &n, to, 0.6, SMALL);
+    ear.at(ears, &n, to, 0.8, SMALL);
 }
 
 fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
@@ -1195,9 +1211,9 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 let pump = e.c == arms::SHOTGUN as u16;
                 if ours {
                     let n = ear.take(sound, takes);
-                    ear.mine(&n, 0.75);
+                    ear.mine(&n, SHOT_OURS);
                     if pump {
-                        ear.mine_later("pump_shotgun_0", 0.6, PUMP_AT_S);
+                        ear.mine_later("pump_shotgun_0", 0.8, PUMP_AT_S);
                     }
                 } else {
                     let far_off = at.distance(ears.at) > FAR_M || ears.walled(at);
@@ -1206,9 +1222,9 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                     } else {
                         ear.take(sound, takes)
                     };
-                    ear.at(ears, &n, at, 1.0, GUN);
+                    ear.at(ears, &n, at, SHOT_THEIRS, GUN);
                     if pump && !far_off {
-                        ear.at_rate(ears, "pump_shotgun_0", at, 0.5, BODY, PUMP_AT_S, 1.0);
+                        ear.at_rate(ears, "pump_shotgun_0", at, 0.65, BODY, PUMP_AT_S, 1.0);
                     }
                 }
                 if e.part == HEARD {
@@ -1226,7 +1242,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                         let miss = near.distance(ears.at);
                         if u > 0.05 && u < 0.98 && miss < PASS.reach && near.distance(at) > 3.0 {
                             let n = ear.take("flyby", 4);
-                            ear.at(ears, &n, near, 0.9, PASS);
+                            ear.at(ears, &n, near, 1.0, PASS);
                         }
                     }
                     if end.distance(ears.at) < STRUCK_M {
@@ -1245,7 +1261,7 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 // Only the two it is between are told of a hit.
                 if swung.get(e.a as usize).copied().unwrap_or(false) {
                     let n = ear.take("melee_hit", 3);
-                    ear.mine(&n, 0.7);
+                    ear.mine(&n, 1.1);
                 }
                 let shield = e.part == 0 || e.part == 3;
                 let b = e.b as usize;
@@ -1297,11 +1313,11 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
             }
             k if k == Kind::Blast as u8 => {
                 let n = ear.take("blast", 3);
-                ear.at(ears, &n, at, 1.3, BLAST);
+                ear.at(ears, &n, at, BLAST_GAIN, BLAST);
             }
             k if k == Kind::Wreck as u8 => {
                 let n = ear.take("blast", 3);
-                ear.at(ears, &n, at, 1.4, BLAST);
+                ear.at(ears, &n, at, WRECK_GAIN, BLAST);
                 let n = ear.take("impact_metal", 5);
                 ear.at(ears, &n, at, 1.0, SMALL);
                 ear.at_rate(ears, "crash_0", at, 0.9, BLAST, 0.0, 0.8);
@@ -1374,9 +1390,9 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
     for &(worst, n) in &ours_on {
         let (clip, gain) = match worst {
             0 => continue,
-            1 => (ear.take("shield_hit", 3), 0.35),
-            2 => ("hit_0".into(), 0.5),
-            _ => (ear.take("headshot", 2), 0.5),
+            1 => (ear.take("shield_hit", 3), HIT_SHIELD),
+            2 => ("hit_0".into(), HIT_BODY),
+            _ => (ear.take("headshot", 2), HIT_HEAD),
         };
         ear.mine(&clip, gain * louder(n));
     }
@@ -1384,11 +1400,11 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
         (0, _) => {}
         (1, n) => {
             let clip = ear.take("shield_hit", 3);
-            ear.mine(&clip, 0.55 * louder(n));
+            ear.mine(&clip, HURT_SHIELD * louder(n));
         }
         (_, n) => {
             let clip = ear.take("flesh", 3);
-            ear.mine(&clip, 0.6 * louder(n));
+            ear.mine(&clip, HURT_BODY * louder(n));
         }
     }
     for &(n, at) in &shield_on {
@@ -1404,7 +1420,7 @@ fn own_body(ear: &mut Ear, ears: &Ears, f: &sim::fighter::Fighter, feet: Vec3, d
     // while it's down, and the whine as it comes back.
     if f.alive {
         if f.shield <= 0 && ear.last_shield > 0 {
-            ear.mine("shield_pop_0", 0.7);
+            ear.mine("shield_pop_0", 0.85);
             let n = ear.take("hurt", 2);
             ear.mine(&n, 0.35);
             ear.beep = 0.15;
@@ -1553,7 +1569,7 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
         };
         if b.seen && o.alive && b.alive {
             if o.shield == 0 && b.shield > 0 {
-                ear.at(ears, "shield_pop_0", p + Vec3::Y, 0.8, SHIELD);
+                ear.at(ears, "shield_pop_0", p + Vec3::Y, 1.0, SHIELD);
             }
             if o.shield > b.shield && !b.charging {
                 ear.at(ears, "shield_charge_0", p + Vec3::Y, 0.4, BODY);
@@ -1908,7 +1924,7 @@ pub mod on {
     /// Milliseconds a frame spends handing clips over (decoding them, on the
     /// desktop), past the first.
     const HAND_MS: f32 = 3.0;
-    const VOICE_GAIN: f32 = 1.1;
+    const VOICE_GAIN: f32 = 1.3;
     /// A breath between two of the announcer's lines.
     const VOICE_GAP_S: f32 = 0.15;
     /// The theme (`assets/sound/music/intro.ogg`: the track as it came, its
