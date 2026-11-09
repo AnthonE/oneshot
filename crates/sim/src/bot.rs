@@ -793,8 +793,8 @@ impl Bot {
 /// the stick points is looked along [`EDGE_LOOK`]; over the void it turns
 /// to the nearest way that holds ([`EDGE_TURNS`]), or lets go. No jump
 /// with the edge within [`EDGE_JUMP`] the way the stick points or the way
-/// the body is going; in the air headed over it ([`EDGE_AIR`]), the stick
-/// pulls back.
+/// the body is going; on foot or in the air headed over it ([`EDGE_LOOK`],
+/// [`EDGE_AIR`]), the stick pulls back.
 fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
     let me = &w.fighters[slot];
     if w.map.void == f32::NEG_INFINITY || !me.active() || me.riding().is_some() {
@@ -819,6 +819,13 @@ fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
         if going_over(&EDGE_AIR) {
             set(inp, -v.x / speed, -v.z / speed, 1.0);
         }
+        return;
+    }
+    // Carried over it (a landing, a blast's push) whatever the stick says:
+    // the stick pulls back against the way it is going.
+    if going_over(&EDGE_LOOK) {
+        inp.buttons &= !JUMP;
+        set(inp, -v.x / speed, -v.z / speed, 1.0);
         return;
     }
     if len < 0.01 {

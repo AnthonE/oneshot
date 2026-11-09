@@ -139,6 +139,9 @@ impl LightDef {
 /// How far down a slope too steep to stand on [`Map::lost_floor`] looks
 /// for the void: a cliff's foot, past the cell or two it falls over.
 pub const CLIFF_LOOK: f32 = 2.0;
+/// How many of those steps it takes down a fall line, at most: a face of
+/// 16 m.
+pub const CLIFF_STEPS: usize = 8;
 
 /// The rotations a map can be in (`Def::modes`, `map.json`'s `modes`): the
 /// server's modes, by bit.
@@ -511,9 +514,23 @@ impl Map {
         if n.y >= crate::consts::WALK_NY {
             return false;
         }
-        // Too steep: downhill is the normal's lean.
-        let k = CLIFF_LOOK / (n.x * n.x + n.z * n.z).sqrt();
-        self.ground(x + n.x * k, z + n.z * k) < self.void
+        // Too steep: down its fall line (the normal's lean, looked again
+        // at each step), to ground a body stands on or into the void. A
+        // tall rock face is lost at its top, not only at its foot.
+        let (mut px, mut pz, mut n) = (x, z, n);
+        for _ in 0..CLIFF_STEPS {
+            let k = CLIFF_LOOK / (n.x * n.x + n.z * n.z).sqrt();
+            px += n.x * k;
+            pz += n.z * k;
+            if self.ground(px, pz) < self.void {
+                return true;
+            }
+            n = self.ground_normal(px, pz);
+            if n.y >= crate::consts::WALK_NY {
+                return false;
+            }
+        }
+        false
     }
 
     /// The highest floor under a footprint of half-width `r` at (x, z) whose

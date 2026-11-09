@@ -303,6 +303,10 @@ pub const DROP_MID: f32 = 0.15;
 pub const DROP_BOUNCE: f32 = 0.25;
 pub const DROP_SLIDE: f32 = 0.92;
 pub const DROP_SETTLE: f32 = 0.4;
+/// A drop's grip on a floor, m/s²: its speed along it falls by this much
+/// each second besides the skid, so it stops on any slope gentler than
+/// about 37° (g sin θ < this) rather than sliding down it for good.
+pub const DROP_GRIP: f32 = 6.0;
 /// What the dead's guns leave their hands with: this share of the body's
 /// velocity, and this fast up.
 pub const DROP_CARRY: f32 = 0.6;
