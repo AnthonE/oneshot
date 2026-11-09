@@ -5,8 +5,12 @@
 //! Cameras With Math"): events add trauma in `0..=1`, it decays linearly,
 //! and trauma² drives smooth noise on pitch and yaw plus a little translation,
 //! reached over [`ATTACK_S`] and slow enough to read as a rumble: all at once
-//! or quick, at a steady 60 fps it reads as the game stuttering. **Kicks** are directional and ride a damped spring on
-//! top: our own shot's recoil, a flinch from a hit, the dip of a landing.
+//! or quick, at a steady 60 fps it reads as the game stuttering. A landing's
+//! dip rides a damped spring on top. **Nothing we fire and no hit on us
+//! moves the frame**, as Halo's: the crosshair is drawn at its middle and
+//! aim never moves with it, so a kick there put the crosshair off where
+//! the rounds went (an automatic's climbed and stayed). The gun in hand
+//! kicks instead (`viewmodel.rs`).
 //! No roll and no field-of-view pulse (Gates' note: those are what make
 //! players sick).
 //!
@@ -27,22 +31,10 @@ const DECAY_PER_S: f32 = 1.4;
 /// How long the shake takes to come up to its trauma, seconds (a time
 /// constant), so an event never pops the frame in one step.
 const ATTACK_S: f32 = 0.035;
-/// The kick spring: ~5 Hz, a little under critically damped.
-const KICK_HZ: f32 = 5.0;
-const KICK_DAMP: f32 = 0.72;
 /// The landing spring: slower and bouncier.
 const DIP_HZ: f32 = 3.2;
 const DIP_DAMP: f32 = 0.55;
 
-/// Our own shot: recoil up, a little sideways, and a touch of trauma.
-pub const SHOT_KICK_RAD: f32 = 0.016;
-pub const SHOT_SIDE_RAD: f32 = 0.005;
-pub const SHOT_TRAUMA: f32 = 0.10;
-/// A hit on us: trauma by the damage, a flinch.
-pub const HURT_TRAUMA_BASE: f32 = 0.10;
-pub const HURT_TRAUMA_PER_PT: f32 = 0.004;
-pub const HURT_TRAUMA_MAX: f32 = 0.5;
-pub const FLINCH_RAD: f32 = 0.02;
 /// A blast: full trauma inside `BLAST_FULL_M`, none past `BLAST_ZERO_M`.
 pub const BLAST_FULL_M: f32 = 4.0;
 pub const BLAST_ZERO_M: f32 = 28.0;
@@ -62,8 +54,6 @@ pub struct Shake {
     /// The trauma² the camera has come up to ([`ATTACK_S`]).
     level: f32,
     t: f32,
-    kick: Vec3,
-    kick_vel: Vec3,
     dip: f32,
     dip_vel: f32,
     was_grounded: bool,
@@ -77,8 +67,6 @@ impl Default for Shake {
             trauma: 0.0,
             level: 0.0,
             t: 0.0,
-            kick: Vec3::ZERO,
-            kick_vel: Vec3::ZERO,
             dip: 0.0,
             dip_vel: 0.0,
             was_grounded: true,
@@ -109,12 +97,6 @@ impl Shake {
     /// `full_m`, none past `zero_m`, squared between.
     pub fn add_at(&mut self, trauma: f32, at: Vec3, eye: Vec3, full_m: f32, zero_m: f32) {
         self.add(trauma * near(at.distance(eye), full_m, zero_m));
-    }
-
-    /// Kick the view: pitch (up +), yaw (left +), roll, radians at the
-    /// spring's peak.
-    pub fn kick(&mut self, peak: Vec3) {
-        self.kick_vel += peak * peak_to_speed(KICK_HZ, KICK_DAMP);
     }
 
     /// Dip the camera down by about `metres` at the spring's peak.
@@ -157,14 +139,11 @@ impl Shake {
         let dt = dt.clamp(0.0, 0.1);
         self.trauma = (self.trauma - DECAY_PER_S * dt).max(0.0);
         self.t += dt * NOISE_HZ;
-        for i in 0..3 {
-            spring(&mut self.kick[i], &mut self.kick_vel[i], KICK_HZ, KICK_DAMP, dt);
-        }
         spring(&mut self.dip, &mut self.dip_vel, DIP_HZ, DIP_DAMP, dt);
         self.level += (self.trauma * self.trauma - self.level) * (1.0 - (-dt / ATTACK_S).exp());
         let s = self.level;
         let t = self.t;
-        let rot = MAX_ROT * s * Vec3::new(fbm(t, 11), fbm(t, 23), fbm(t, 37)) + self.kick;
+        let rot = MAX_ROT * s * Vec3::new(fbm(t, 11), fbm(t, 23), fbm(t, 37));
         let local = Vec3::new(fbm(t, 41), fbm(t, 53), fbm(t, 67)) * MAX_OFF_M * s;
         Offsets {
             rot,
