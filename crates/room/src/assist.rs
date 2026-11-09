@@ -10,7 +10,7 @@
 //! the cheat (`tools/aim`). Nothing here runs in a live match.
 //!
 //! An assist is its [`Knobs`], and its knobs are a [`Genome`] in Gates'
-//! encoding: each cheat in the zoo is one `oa1:` line that rebuilds
+//! encoding: each cheat in the zoo is one `oa2:` line that rebuilds
 //! exactly.
 
 use sim::arms::arm;
@@ -26,9 +26,10 @@ use crate::genome::{soft, Draw, Genome};
 
 /// The text form's prefix: an assist's knobs, as [`Knobs::from_genome`]
 /// reads them. A change to that list is a new prefix.
-pub const PREFIX: &[u8; 4] = b"oa1:";
-/// How many values an `oa1:` genome describes.
-pub const GENES: usize = 11;
+pub const PREFIX: &[u8; 4] = b"oa2:";
+/// How many values an `oa2:` genome describes (`oa1:` was the first
+/// eleven, before an assist could pick its moments).
+pub const GENES: usize = 13;
 /// Their spread before squashing: wide, so a fresh genome lands anywhere
 /// in each knob's range.
 const GENE_SCALE: f32 = 1.5;
@@ -66,6 +67,11 @@ pub struct Knobs {
     /// Locks on an enemy fog sent even when it isn't in plain sight (a
     /// wallhack using what fog lets through).
     pub walls: bool,
+    /// Acts only on an enemy at least this far away, metres (0: any): the
+    /// long shots a person misses most.
+    pub range_m: f32,
+    /// Acts only while its own shields are down.
+    pub low: bool,
 }
 
 /// What a value from the genome is squashed to: (0, 1).
@@ -93,9 +99,11 @@ impl Knobs {
         miss: 0.0,
         jitter_deg: 0.0,
         walls: false,
+        range_m: 0.0,
+        low: false,
     };
 
-    /// The knobs an `oa1:` genome describes.
+    /// The knobs an `oa2:` genome describes.
     pub fn from_genome(g: &Genome) -> Knobs {
         let mut v = [0.0f32; GENES];
         g.build(&mut v, GENE_SCALE);
@@ -114,7 +122,16 @@ impl Knobs {
             miss: u[4] * 0.6,
             jitter_deg: u[6] * 1.5,
             walls: u[9] > 0.7,
+            range_m: if u[11] < 0.6 { 0.0 } else { 10.0 + (u[11] - 0.6) * 75.0 },
+            low: u[12] > 0.75,
         }
+    }
+
+    /// It acts only in some moments, picked by what its client can see.
+    /// Selection seldom finds such a condition from scratch (it settles on
+    /// never or always), so the zoo's grid keeps these in cells of their own.
+    pub fn selective(&self) -> bool {
+        self.range_m > 0.0 || self.low
     }
 
     /// Its style, for reporting a detector by kind of cheat and for the
@@ -278,6 +295,9 @@ impl Assist {
         let mut helped = false;
         let held = w.tick.saturating_sub(since);
         let them = &w.fighters[t];
+        if (k.low && me.shield > 0) || (k.range_m > 0.0 && (them.body.pos - me.body.pos).len() < k.range_m) {
+            return false;
+        }
 
         if k.aim && held >= ticks(k.delay_ms) {
             let (ty, tp) = angles_to(eye, aim_point(them, k.bone));
@@ -331,6 +351,17 @@ mod tests {
             seen.insert(k.style());
         }
         assert_eq!(seen.len(), 5, "{seen:?}");
+    }
+
+    #[test]
+    fn some_assists_pick_their_moments() {
+        let ks: Vec<Knobs> = (0..400).map(|b| Knobs::from_genome(&Genome::new(b))).collect();
+        let picky = ks.iter().filter(|k| k.selective()).count();
+        assert!((40..360).contains(&picky), "{picky} of 400 selective");
+        assert!(ks.iter().any(|k| k.low) && ks.iter().any(|k| k.range_m > 0.0));
+        assert!(ks
+            .iter()
+            .all(|k| k.range_m == 0.0 || (10.0..=40.0).contains(&k.range_m)));
     }
 
     #[test]
