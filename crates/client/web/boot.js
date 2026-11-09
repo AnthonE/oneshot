@@ -658,11 +658,33 @@ try {
   throw e;
 }
 
-/** Sign in with Elo Pros: a pass for this game, from Elo Pros' popup.
- * The server hands out the nonce the pass must carry; one is fetched
- * ahead so the popup opens on the click itself. Resolves to
- * `{pass, wallet}`; ranked needs the wallet. `fn` is null (and `off`
- * says why) when there is no sign-in here. */
+/** Signed in on Elo Pros is signed in here, as Gates' page (app.js
+ * §eloAccount): the page is on elopros.com, so a player signed in there has
+ * the platform's account token in this origin's localStorage, and a pass is
+ * asked of it (`POST /api/account/play`) with no popup. Null when there is
+ * none, or it has run out. */
+function eloAccount() {
+  // The platform's keys (its js/account.js). Inside: the page's top level
+  // calls this before a const below it would be declared.
+  try {
+    const token = localStorage.getItem('elo.account.token');
+    const v = JSON.parse(localStorage.getItem('elo.account.view') || 'null');
+    if (!token || !v || !/^acct_[0-9a-f]{20}$/.test(String(v.id || ''))) return null;
+    if (Number(v.exp) && Number(v.exp) * 1000 < Date.now()) return null;
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+/** Sign in with Elo Pros: a pass for this game, from the Elo Pros account
+ * this browser is signed in to (no popup), else from Elo Pros' popup. The
+ * server hands out the nonce the pass must carry; one is fetched ahead so
+ * the popup opens on the click itself. Resolves to `{pass, wallet}`, or
+ * `{}` (not signed in: the title's SIGN IN asks) when it was not a click
+ * and there is no account; ranked needs the wallet. `fn` is null (and
+ * `off` says why) when there is no sign-in here. `fn.auto`: there is an
+ * account, so the game signs in as it starts (door.rs). */
 async function setupSignIn(info) {
   const sdk = () => window.EloSignIn;
   // The SDK script is async: give it a moment.
@@ -698,10 +720,37 @@ async function setupSignIn(info) {
   };
   setInterval(keep, NONCE_FRESH_MS / 4);
   addEventListener('visibilitychange', () => { if (!document.hidden) keep(); });
+  const fromAccount = async (token) => {
+    const r = await fetch('/api/account/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Elo-Account ' + token },
+      // solana: the server reads a base58 wallet too (auth.rs verify_pass).
+      body: JSON.stringify({ game: info.game, shard: location.hostname, nonce, solana: true }),
+    });
+    if (!r.ok) throw new Error(`Elo Pros answered ${r.status}`);
+    const pass = (await r.json()).token;
+    if (!pass) throw new Error('Elo Pros sent no pass');
+    return pass;
+  };
   const fn = async () => {
+    // Read before the first await: a click's activation is what lets the
+    // popup open, and the game's own call as it starts has none.
+    const click = navigator.userActivation?.isActive ?? true;
     try {
       if (nonceErr) throw nonceErr;
-      const res = await sdk().popup({ game: info.game, nonce });
+      let pass = null;
+      const token = eloAccount();
+      if (token) {
+        try {
+          pass = await fromAccount(token);
+        } catch (e) {
+          // Run out, or the platform is away: the popup, on a click.
+          console.warn('oneshot: the Elo Pros account gave no pass', e);
+        }
+      }
+      if (!pass && !click) return {};
+      pass ??= (await sdk().popup({ game: info.game, nonce })).pass;
+      const res = { pass };
       const text = atob(res.pass.split('.')[0].replace(/-/g, '+').replace(/_/g, '/'));
       const wallet = /wallet: (0x[0-9a-f]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})/.exec(text)?.[1] ?? null;
       return { pass: res.pass, wallet };
@@ -710,6 +759,7 @@ async function setupSignIn(info) {
       await fresh();
     }
   };
+  fn.auto = !!eloAccount();
   return { fn, off: '' };
 }
 

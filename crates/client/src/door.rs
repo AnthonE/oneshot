@@ -567,6 +567,12 @@ mod web {
 
     impl Door {
         pub fn new(addr: String, hash: String, follow: js_sys::Function, signin: JsValue, off: String) -> Door {
+            // Signed in to Elo Pros in this browser (boot.js `fn.auto`): in
+            // as it starts, no click and no popup, as the desktop is.
+            let auto = js_sys::Reflect::get(&signin, &JsValue::from_str("auto"))
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let signin_fn = signin.dyn_into::<js_sys::Function>().ok();
             let state = if signin_fn.is_some() {
                 SignIn::Ready
@@ -577,13 +583,17 @@ mod web {
                     off
                 })
             };
-            Door {
+            let mut door = Door {
                 at: Rc::new(RefCell::new((addr, hash))),
                 follow,
                 signin_fn,
                 signin: Rc::new(RefCell::new(state)),
                 lobbied: std::cell::Cell::new(false),
+            };
+            if auto {
+                door.sign_in();
             }
+            door
         }
 
         pub fn place(&self) -> String {
@@ -609,8 +619,9 @@ mod web {
             }
         }
 
-        /// Opens Elo Pros' popup (the page's function: it has the nonce
-        /// ready, so the popup opens on this click).
+        /// Asks the page for a pass: from the Elo Pros account this browser
+        /// is signed in to, else Elo Pros' popup (the page has the nonce
+        /// ready, so it opens on this click).
         pub fn sign_in(&mut self) {
             let Some(f) = self.signin_fn.clone() else {
                 return;
