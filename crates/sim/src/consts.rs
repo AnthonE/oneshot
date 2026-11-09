@@ -101,10 +101,12 @@ pub const HEAD_R: f32 = 0.22;
 pub const HEAD_Y: f32 = 1.62;
 pub const HEAD_Y_CROUCH: f32 = 1.12;
 /// Bullet magnetism, every gun's at once (`World::magnet`, each gun's
-/// `Arm::magnet`) and the red reticle's widening with it. Off: a round
-/// goes where the cone sends it, and the reticle is red only on a body.
-/// Flipping it moves the goldens (`tests/determinism.rs`).
-pub const MAGNETISM: bool = false;
+/// `Arm::magnet`) and the red reticle's widening with it. On, as Halo's
+/// is for a mouse too: its counts and its strafe without it ask more of
+/// an aim than any Halo did. Off, a round goes where the cone sends it,
+/// and the reticle is red only on a body. Flipping it moves the goldens
+/// (`tests/determinism.rs`).
+pub const MAGNETISM: bool = true;
 /// Where on a body a near miss is bent to (bullet magnetism,
 /// `World::magnet`): the height it passed at, no higher than the chest
 /// (never the head) and no lower than the hips.
@@ -170,7 +172,11 @@ pub const SPAWN_MATE_R: f32 = 15.0;
 pub const SPAWN_MATE_M: f32 = 10.0;
 pub const SPAWN_JITTER_M: f32 = 3.0;
 
-pub const MELEE_DMG: i32 = 70;
+/// A blow, in Halo's proportion to our body (Halo 3's 70 is its whole
+/// shield, Halo 2's 75 at a run more than it): the shields and a little
+/// more, so two kill, one finishes whoever has none, and three bursts of
+/// the rifle and a blow kill, as there.
+pub const MELEE_DMG: i32 = 110;
 pub const MELEE_RANGE: f32 = 2.0;
 pub const MELEE_COOL_MS: u32 = 800;
 /// Halo 2's melee lunge: a melee with the aim (the body grown by
@@ -221,8 +227,8 @@ pub const SUPER_PUSH: f32 = 3.0;
 pub const CHARGE_VEH_DMG: i32 = 60;
 
 /// A frag, as Halo 2's multiplayer throws it (Halopedia's H2 weapon data,
-/// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu, half
-/// that on shields; thrown at 10 wu/s; off `GREN_FUSE_MS` after it first comes
+/// at 3.048 m a world unit): 160 out to 0.5 wu, down to 50 at 1.75 wu, less
+/// on shields (`GREN_SHIELD_K`); thrown at 10 wu/s; off `GREN_FUSE_MS` after it first comes
 /// down on a floor (not a wall), never sooner than `GREN_ARM_MS` from the
 /// throw, and at `GREN_LIFE_MS` if it never does.
 pub const GREN_DMG: i32 = 160;
@@ -233,8 +239,11 @@ pub const GREN_FUSE_MS: u32 = 500;
 pub const GREN_ARM_MS: u32 = 1300;
 pub const GREN_LIFE_MS: u32 = 5000;
 pub const GREN_SPEED: f32 = 30.5;
-/// What shields take of a grenade's blast (Halo 2's and Halo 3's, both kinds).
-pub const GREN_SHIELD_K: f32 = 0.5;
+/// What shields take of a frag's blast. Halo 2's and Halo 3's take half,
+/// of a shield of 70: a frag in full reach breaks it, and the head shot
+/// after kills. Ours is 100, so three quarters: the same frag breaks it,
+/// from about as far (2.4 m), and never kills someone whole.
+pub const GREN_SHIELD_K: f32 = 0.75;
 /// How long after the press a grenade leaves the hand, as the arm flings it
 /// (`viewmodel::throw_lay`, `hands::off_hand`). Ours: the sources give no number.
 pub const GREN_RELEASE_MS: u32 = 170;
@@ -251,7 +260,8 @@ pub const GREN_PAD_GIVES: u8 = 2;
 /// sticks to the first thing it touches, a body, a hull or the map (Halo 2's
 /// bounces off the map; here it never does), and goes off `STICKY_FUSE_MS`
 /// after it sticks, never before `STICKY_ARM_MS` from the throw. Its blast
-/// kills to `STICKY_FULL`; the one it is stuck to dies whatever.
+/// kills to `STICKY_FULL` (plasma: shields take it whole, as Halo 2's 200
+/// went through its 70 and 45); the one it is stuck to dies whatever.
 pub const STICKY_FUSE_MS: u32 = 900;
 pub const STICKY_ARM_MS: u32 = 1300;
 pub const STICKY_DMG: i32 = 200;

@@ -1484,7 +1484,7 @@ impl World {
                 self.damage(owner, q, KILL_PTS, false, Head::None, Cause::Sticky as u16);
             }
         }
-        self.blast_k(
+        self.blast(
             p.pos + V3::new(0.0, 0.05, 0.0),
             owner,
             STICKY_DMG,
@@ -1493,7 +1493,6 @@ impl World {
             STICKY_EDGE,
             1.0,
             Cause::Sticky as u16,
-            GREN_SHIELD_K,
         );
         false
     }

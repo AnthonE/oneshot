@@ -175,7 +175,10 @@ pub struct Arm {
     /// but passes through an enemy's body widened by this angle (radians)
     /// at its distance ([`Arm::magnet_pad`]), within `aim_range`, is bent
     /// onto the body (`World::magnet`). Never onto the head. Nothing while
-    /// [`crate::consts::MAGNETISM`] is off.
+    /// [`crate::consts::MAGNETISM`] is off. A third of Halo 2's (3° on its
+    /// rifle and pistol, 6° on its SMG): a mouse needs less than a stick,
+    /// and an automatic's is no smaller than its own cone, so a round the
+    /// cone threw off a body it was aimed at still lands.
     pub magnet: f32,
     /// The red reticle's reach (the client's, over an enemy), and
     /// magnetism's.
@@ -314,7 +317,7 @@ pub static ARMS: [Arm; COUNT] = [
     BASE,
     Arm {
         name: "ASSAULT RIFLE",
-        magnet: deg(0.3),
+        magnet: deg(1.2),
         aim_range: 25.0,
         rank: 2,
         auto: true,
@@ -329,7 +332,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "BATTLE RIFLE",
-        magnet: deg(0.4),
+        magnet: deg(1.0),
         aim_range: 45.0,
         rank: 3,
         burst: 3,
@@ -350,17 +353,23 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "MAGNUM",
-        magnet: deg(0.35),
+        magnet: deg(1.0),
         aim_range: 30.0,
         rank: 1,
-        refire_ms: 176,
+        // A sidearm: the rifle's count of five (four strip the shields, the
+        // fifth in the head kills) at a pistol's pace, Halo 3's and the
+        // first Halo's three a second, so its kill is never quicker than
+        // the rifle's four bursts; and it is a room's gun, fading past one.
+        refire_ms: 330,
         // Halo 2's: 12 a magazine, 48 more, and no scope.
         mag: 12,
         reserve: 48,
-        dmg: 28,
+        dmg: 25,
         head: Head::Unshielded,
         spread: q14(4.0),
-        range: 110.0,
+        range: 80.0,
+        falloff: 25.0,
+        falloff_min: 0.5,
         reload_ms: 1280,
         dual: true,
         dual_spread: q14(14.0),
@@ -422,7 +431,7 @@ pub static ARMS: [Arm; COUNT] = [
     },
     Arm {
         name: "SMG",
-        magnet: deg(0.3),
+        magnet: deg(2.0),
         aim_range: 18.0,
         rank: 2,
         auto: true,
@@ -461,7 +470,7 @@ pub static ARMS: [Arm; COUNT] = [
     // carried onto ours the way the rest are: counts and times kept.
     Arm {
         name: "CARBINE",
-        magnet: deg(0.4),
+        magnet: deg(1.0),
         aim_range: 40.0,
         rank: 3,
         // Halo 2's: 0.14 s a shot, rounded to 6 a second by its tick.

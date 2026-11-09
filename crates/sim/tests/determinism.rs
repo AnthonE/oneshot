@@ -11,7 +11,7 @@ use sim::Map;
 /// `bot_match(1, 20_000)`. If this moves, a rule changed (update it with
 /// the commit that changed the rule) or the compiler changed a float
 /// (stop: that is a finding).
-const GOLDEN: u64 = 0x00a9_3ab4_6b40_3b26;
+const GOLDEN: u64 = 0xea03_cb22_a7bb_e09b;
 
 #[test]
 fn a_bot_match_hashes_the_same_twice() {
@@ -28,7 +28,7 @@ fn the_bot_match_matches_its_golden() {
 /// `bot_match_on(3, 2, 1, 20_000)`: sixteen bots in Big Team on Dry Fork,
 /// the terrain's golden (slopes, launchers, rays over the ground). Moves
 /// with a terrain or Big Team rule, like [`GOLDEN`] with the rest.
-const GOLDEN_DRY_FORK: u64 = 0x5c74_8d04_f3ba_4a08;
+const GOLDEN_DRY_FORK: u64 = 0xed57_1c63_1593_21a0;
 
 #[test]
 fn big_team_on_dry_fork_matches_its_golden() {
