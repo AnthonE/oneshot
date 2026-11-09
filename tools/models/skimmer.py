@@ -55,6 +55,24 @@ GUNS = (sim('SKIM_HALF_L') - 0.1, 0.42, 0.55)
 # `slide`: from the fin's root, the saddle's middle as it came, to the
 # prows' necks, and how far forward.
 SADDLE = (-1.08, -0.75, 1.2, 0.4)
+# Aft of this is its sterns (the thrusters' rings); a hull's spine, this far
+# out from the centre line; the seam of light along it, half its width,
+# from this far aft; ahead of here it runs on down the prow's face.
+STERN = -0.5 * sim('SKIM_HALF_L')
+SPINE = 0.52
+# The bars as they came: the box their loose pieces lie in (hull space),
+# and how far they are moved to come to the rider's hands; the column that
+# carries them there, from the cowl's top to their middle, how thick, and
+# how far the crossbar reaches each way. `craft.rs`'s grips are the grips'
+# middles after it.
+BARS = ((-0.03, -0.4, 0.78), (0.17, 0.4, 0.89))
+BARS_BY = (-0.235, 0.0, 0.4)
+COLUMN = ((0.14, 0.0, 0.83), (-0.15, 0.0, 1.22))
+COLUMN_R = 0.024
+CROSS = 0.13
+SEAM = 0.011
+SPINE_FROM = -1.0
+PROW = 1.0
 
 scene()
 o = hull('skimmer', LENGTH, turn=TURN, width=2 * sim('SKIM_HALF_W'), belly=BELLY, mirror=MIRROR, pale=True,
@@ -62,6 +80,28 @@ o = hull('skimmer', LENGTH, turn=TURN, width=2 * sim('SKIM_HALF_W'), belly=BELLY
 # The saddle came 0.4 m behind where the sim seats its rider: it and the
 # cowl go forward to it, the thrusters and the prows staying where they are.
 slide(o, *SADDLE)
+
+# The bars: Meshy's sit on the cowl, a forearm lower and further off than
+# the rider's hands can come (he sits upright in the sim's seat, and his
+# arms are short). They go up and back to his hands, as one piece.
+bars = pieces(o, *BARS)
+shift(o, bars, BARS_BY)
+
+# Its lights and its iron, by where each texel lies (hull space, metres).
+tx = texels(o)
+pos, nor, on = tx
+x, across, up = pos[..., 0], np.abs(pos[..., 1]), nor[..., 2]
+# Its three thrusters as Meshy painted them are steel cans, cold inside.
+thrusters(o, tx, rings(o, STERN), can=1.5, long=0.2)
+# A seam of light down each hull's spine and over its prow to the gun: what
+# the chase camera sees of it, and what tells its nose from its tail.
+light(o, on * band(across, SPINE - SEAM, SPINE + SEAM, SEAM * 0.5) * band(x, SPINE_FROM, 9.0, 0.05)
+      * (up > np.where(x > PROW, -0.5, 0.4)))
+# The bars stand on a raked column from the cowl, a crossbar between them.
+name = o.name
+o = join([o, rod(COLUMN[0], COLUMN[1], COLUMN_R), rod((COLUMN[1][0], -CROSS, COLUMN[1][2]), (COLUMN[1][0], CROSS, COLUMN[1][2]),
+                                                      COLUMN_R * 0.7)], name)
+
 hl, hw, r = sim('SKIM_HALF_L'), sim('SKIM_HALF_W'), sim('BODY_R')
 eye = Vector((SEAT[0], 0, SEAT[1] + sim('CROUCH_EYE')))
 deliver(
@@ -70,5 +110,5 @@ deliver(
     rider=[((SEAT[0] - r, -r, SEAT[1]), (SEAT[0] + r, r, SEAT[1] + sim('CROUCH_H')))],
     marks=[(GUNS[0], side * GUNS[1], GUNS[2]) for side in (1, -1)],
     chase=(eye + Vector((-cam('SKIM_CAM_BACK_M'), 0, cam('SKIM_CAM_UP_M'))), eye + Vector((cam('CRAFT_CAM_MEET_M'), 0, 0))),
-    behind=-0.5 * hl,
+    behind=STERN,
     note='Veil skimmer: a catamaran of a hover bike, a gun in each prow, a thruster in each stern')

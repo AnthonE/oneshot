@@ -3,7 +3,8 @@ script in this folder that holds its prompt and its cut, as a gun's does
 (lib.py). `meshy_gen.py <name>` commissions the raw mesh from the script's
 IMAGE, VIEW and TEXTURE; `hull` brings it into the sim's hull frame, sized
 to the sim's hull, its paint cut down and what it painted cyan set glowing;
-`deliver` exports `crates/client/assets/models/<name>.glb`, writes the
+`light` and `paint` then light and repaint it by rule, where each texel lies
+on the craft (`texels`); `deliver` exports `crates/client/assets/models/<name>.glb`, writes the
 numbers to `traces/craft/<name>.json` and renders the sheet it is judged by,
 `traces/craft/<name>.png`: six views, the sim's hull drawn over three.
 
@@ -169,6 +170,185 @@ def slide(o, back, at, ahead, by):
     o.data.update()
 
 
+def pieces(o, lo, hi, least=20):
+    """Which of its vertices belong to loose pieces lying wholly inside the
+    box `lo`..`hi` (hull space): a part Meshy modelled apart from the hull
+    (a handlebar, a lever), found by what joins what once the seams its map
+    cut are closed. A mask over its vertices."""
+    me = o.data
+    n = len(me.vertices)
+    co = np.empty(n * 3, dtype=np.float64)
+    me.vertices.foreach_get('co', co)
+    co = co.reshape(n, 3)
+    _, at = np.unique(np.round(co / 0.0005).astype(np.int64), axis=0, return_inverse=True)
+    at = at.ravel()
+    edges = np.empty(len(me.edges) * 2, dtype=np.int32)
+    me.edges.foreach_get('vertices', edges)
+    root = list(range(int(at.max()) + 1))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    for a, b in at[edges].reshape(-1, 2):
+        ra, rb = find(int(a)), find(int(b))
+        if ra != rb:
+            root[ra] = rb
+    piece = np.array([find(int(i)) for i in at])
+    inside = np.all((co >= np.array(lo)) & (co <= np.array(hi)), axis=1)
+    mask = np.zeros(n, dtype=bool)
+    for k in np.unique(piece[inside]):
+        own = piece == k
+        if inside[own].all() and own.sum() >= least:
+            mask |= own
+    return mask
+
+
+def shift(o, mask, by):
+    """Moves the vertices `mask` picks by `by` (hull space), as one piece."""
+    co = np.empty(len(o.data.vertices) * 3, dtype=np.float32)
+    o.data.vertices.foreach_get('co', co)
+    co = co.reshape(-1, 3)
+    co[mask] += np.array(by, dtype=np.float32)
+    o.data.vertices.foreach_set('co', co.ravel())
+    o.data.update()
+
+
+def rod(a, b, r, material='iron'):
+    """A round bar from `a` to `b` (hull space), `r` thick, of the kit's own
+    paint (lib.py's PALETTE): a riser, a crossbar, what a mesh needs added
+    to carry a piece that was moved."""
+    a, b = Vector(a), Vector(b)
+    o = cyl(r, (b - a).length, axis='z', material=material, verts=16, bevel=0)
+    o.matrix_world = Matrix.Translation((a + b) / 2) @ (b - a).to_track_quat('Z', 'Y').to_matrix().to_4x4()
+    return o
+
+
+def texels(o, px=MAP_PX):
+    """Where each texel of its map lies on the craft: `(pos, nor, on)`, the
+    hull-space point and the face's normal under each of `px` × `px` texels
+    (rows from the map's bottom, as Blender keeps an image) and whether any
+    face is there at all. What `light` and `paint` pick their texels by: a
+    rule written in metres (`pos[..., 2] > 0.6`), not a brush."""
+    me = o.data
+    me.calc_loop_triangles()
+    n = len(me.loop_triangles)
+    loops = np.empty(n * 3, dtype=np.int32)
+    verts = np.empty(n * 3, dtype=np.int32)
+    normal = np.empty(n * 3, dtype=np.float32)
+    me.loop_triangles.foreach_get('loops', loops)
+    me.loop_triangles.foreach_get('vertices', verts)
+    me.loop_triangles.foreach_get('normal', normal)
+    uv = np.empty(len(me.uv_layers.active.data) * 2, dtype=np.float32)
+    me.uv_layers.active.data.foreach_get('uv', uv)
+    co = np.empty(len(me.vertices) * 3, dtype=np.float32)
+    me.vertices.foreach_get('co', co)
+    uv = uv.reshape(-1, 2)[loops].reshape(n, 3, 2) % 1.0 * px
+    co = co.reshape(-1, 3)[verts].reshape(n, 3, 3)
+    normal = normal.reshape(n, 3)
+    pos = np.zeros((px, px, 3), dtype=np.float32)
+    nor = np.zeros((px, px, 3), dtype=np.float32)
+    on = np.zeros((px, px), dtype=bool)
+    for a, p, face in zip(uv, co, normal):
+        x0, y0 = np.floor(a.min(axis=0)).astype(int)
+        x1, y1 = np.ceil(a.max(axis=0)).astype(int)
+        x0, y0, x1, y1 = max(x0 - 1, 0), max(y0 - 1, 0), min(x1 + 1, px), min(y1 + 1, px)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        gx, gy = np.meshgrid(np.arange(x0, x1) + 0.5, np.arange(y0, y1) + 0.5)
+        d = (a[1, 1] - a[2, 1]) * (a[0, 0] - a[2, 0]) + (a[2, 0] - a[1, 0]) * (a[0, 1] - a[2, 1])
+        if abs(d) < 1e-9:
+            continue
+        w0 = ((a[1, 1] - a[2, 1]) * (gx - a[2, 0]) + (a[2, 0] - a[1, 0]) * (gy - a[2, 1])) / d
+        w1 = ((a[2, 1] - a[0, 1]) * (gx - a[2, 0]) + (a[0, 0] - a[2, 0]) * (gy - a[2, 1])) / d
+        w2 = 1.0 - w0 - w1
+        # A texel whose middle is just off the face is still drawn from it
+        # at a seam: half a texel of margin, a face already there kept.
+        m = 0.5 / max(abs(d) ** 0.5, 1e-6)
+        inside = (w0 >= -m) & (w1 >= -m) & (w2 >= -m)
+        strict = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
+        take = inside & (strict | ~on[y0:y1, x0:x1])
+        if not take.any():
+            continue
+        at = w0[..., None] * p[0] + w1[..., None] * p[1] + w2[..., None] * p[2]
+        pos[y0:y1, x0:x1][take] = at[take]
+        nor[y0:y1, x0:x1][take] = face
+        on[y0:y1, x0:x1] |= take
+    return pos, nor, on
+
+
+def _image(o, socket):
+    """The image behind its paint's `socket` (the first material's)."""
+    nt = o.data.materials[0].node_tree
+    bsdf = next(x for x in nt.nodes if x.type == 'BSDF_PRINCIPLED')
+    node = bsdf.inputs[socket].links[0].from_node
+    while node.type != 'TEX_IMAGE':
+        node = next(i.links[0].from_node for i in node.inputs if i.links)
+    return node.image
+
+
+def _fit(mask, im):
+    """`mask` (texels' shape) at `im`'s size."""
+    w, h = im.size
+    k = h // mask.shape[0]
+    return np.kron(mask, np.ones((k, k), dtype=np.float32)) if k > 1 else mask
+
+
+def light(o, mask, colour='#4ff2ff', k=1.0):
+    """Lights the texels `mask` picks (0..1, `texels`' shape) in `colour`,
+    over what `hull` lit: a strip where a camera looks, a nozzle's throat."""
+    im = _image(o, 'Emission Color')
+    w, h = im.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    m = np.clip(_fit(mask.astype(np.float32), im) * k, 0.0, 1.0)
+    px[..., :3] = np.maximum(px[..., :3], np.array(srgb(colour), dtype=np.float32) * m[..., None])
+    im.pixels.foreach_set(px.ravel())
+    im.pack()
+    print(f'LIGHT {o.name}: {float(m.mean()) * 100:.2f}% of the map')
+
+
+def paint(o, mask, colour, mix=1.0, rough=None, metal=None):
+    """Turns the paint under `mask` toward `colour` by `mix` (its detail
+    kept by what is left), and its roughness and metal to `rough` and
+    `metal` where given: bare steel made dark iron, a belly the top's hue."""
+    im = _image(o, 'Base Color')
+    w, h = im.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    im.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    m = np.clip(_fit(mask.astype(np.float32), im), 0.0, 1.0)[..., None]
+    grey = px[..., :3].mean(axis=-1, keepdims=True)
+    tint = np.array(srgb(colour), dtype=np.float32)
+    # The colour named, shaded by how light the old paint was beside its own middle.
+    shade = np.clip(grey / max(float((grey * m).sum() / max(m.sum(), 1e-6)), 1e-3), 0.3, 2.0)
+    px[..., :3] = px[..., :3] * (1.0 - m * mix) + tint * shade * (m * mix)
+    im.pixels.foreach_set(px.ravel())
+    im.pack()
+    if rough is not None or metal is not None:
+        im = _image(o, 'Roughness')
+        w, h = im.size
+        px = np.empty(w * h * 4, dtype=np.float32)
+        im.pixels.foreach_get(px)
+        px = px.reshape(h, w, 4)
+        m = np.clip(_fit(mask.astype(np.float32), im), 0.0, 1.0)
+        if rough is not None:
+            px[..., 1] = px[..., 1] * (1.0 - m) + rough * m
+        if metal is not None:
+            px[..., 2] = px[..., 2] * (1.0 - m) + metal * m
+        im.pixels.foreach_set(px.ravel())
+        im.pack()
+    print(f'PAINT {o.name}: {float(m.mean()) * 100:.2f}% of the map toward {colour}')
+
+
+def band(x, lo, hi, soft):
+    """1 between `lo` and `hi`, easing to 0 over `soft` outside them."""
+    return np.clip((x - lo) / soft + 1.0, 0.0, 1.0) * np.clip((hi - x) / soft + 1.0, 0.0, 1.0)
+
+
 def _lit(o):
     """Each face's middle, its area, and how lit its paint is there (0..1):
     the glow map `hull` made, read at the face's own place on it."""
@@ -196,22 +376,48 @@ def _lit(o):
     return mid.reshape(n, 3), area, lit
 
 
-def nozzles(o, behind):
-    """Where its thrusters end: the lit paint aft of `behind` (x, hull
-    space), a side each, as `(x, y, z)` in the client's frame (x forward, y
-    up, z right) of each's rearmost glow. For `craft.rs`'s flames."""
+def rings(o, behind):
+    """Its thrusters' ends, found by the rings of light Meshy painted round
+    them aft of `behind` (x, hull space): `(x, y, z, r)` each in hull
+    space, the ring's rearmost x, its middle and its radius; the one on
+    the left, the one on the right, then the one on the centre line if it
+    has one."""
     mid, area, lit = _lit(o)
     out = []
-    for side in (1.0, -1.0):
-        on = (lit > 0.3) & (mid[:, 0] < behind) & (mid[:, 1] * side > 0.02)
+    for lo, hi in ((0.15, 9.0), (-9.0, -0.15), (-0.15, 0.15)):
+        on = (lit > 0.3) & (mid[:, 0] < behind) & (mid[:, 1] > lo) & (mid[:, 1] < hi)
         if not on.any():
             continue
-        # The ring at its end, not the light strip that runs up to it.
+        # The ring at its end, not a light strip that runs up to it.
         on &= mid[:, 0] < mid[on][:, 0].min() + 0.2
         w = area[on] * lit[on]
         c = (mid[on] * w[:, None]).sum(axis=0) / w.sum()
-        out.append((round(float(mid[on][:, 0].min()), 3), round(float(c[2]), 3), round(float(-c[1]), 3)))
+        r = float((np.hypot(mid[on][:, 1] - c[1], mid[on][:, 2] - c[2]) * w).sum() / w.sum())
+        out.append((float(mid[on][:, 0].min()), float(c[1]), float(c[2]), r))
     return out
+
+
+def nozzles(o, behind):
+    """`rings`, as `craft.rs` wants them for its flames: `(x, y, z)` each
+    in the client's frame (x forward, y up, z right)."""
+    return [(round(x, 3), round(z, 3), round(-y, 3)) for x, y, z, _ in rings(o, behind)]
+
+
+def thrusters(o, tx, found, iron='#2b2a36', throat=0.8, can=2.1, deep=0.16, long=0.3):
+    """Each of `found` (`rings`) with its throat alight and its can dark
+    iron: the paint inside `throat` of the ring's radius and within `deep`
+    metres of its end is lit; what is within `can` radii of its axis and
+    `long` metres of its end, bare steel as Meshy paints an engine, is
+    painted `iron`. `tx` is `texels(o)`."""
+    pos, _, on = tx
+    lit = np.zeros(on.shape, dtype=np.float32)
+    dark = np.zeros(on.shape, dtype=np.float32)
+    for x, y, z, r in found:
+        off = np.hypot(pos[..., 1] - y, pos[..., 2] - z)
+        lit = np.maximum(lit, band(pos[..., 0], x - 0.05, x + deep, 0.02) * np.clip((r * throat - off) / (r * 0.25), 0.0, 1.0))
+        dark = np.maximum(dark, band(pos[..., 0], x - 0.05, x + long, 0.04) * np.clip((r * can - off) / (r * 0.3), 0.0, 1.0))
+    paint(o, on * dark * (1.0 - lit), iron, mix=0.8, rough=0.55, metal=0.8)
+    light(o, on * lit)
 
 
 def _wire(lo, hi, colour, name):

@@ -1375,12 +1375,19 @@ fn draw_fighters(
         Option<Res<film::Film>>,
         Res<Seen>,
     ),
+    crafts: Query<&look::craft::Craft>,
     mut scratch: Local<FighterScratch>,
 ) {
     let core = &link.0.session().core;
     // A film's camera off the player's eye sees the player's own body
-    // (`film.rs`).
-    let third = film.is_some_and(|f| f.third());
+    // (`film.rs`); so does the camera behind a skimmer (`view`), whose
+    // rider sits out in the open on it.
+    let astride = core.own().0.alive
+        && core.own().0.riding().is_some_and(|(_, s)| s == sim::vehicle::DRIVER)
+        && core
+            .own_vehicle()
+            .is_some_and(|(v, ..)| v.kind == sim::vehicle::SKIMMER);
+    let third = film.is_some_and(|f| f.third()) || astride;
     let FighterScratch { others, hulls, shown } = &mut *scratch;
     others.clear();
     let live = match &posed {
@@ -1539,6 +1546,14 @@ fn draw_fighters(
             &mut at,
             time.delta_secs(),
         );
+        // Astride a skimmer, its hands are on its grips, wherever they lean.
+        let grips = seat
+            .filter(|(v, k)| v.kind == sim::vehicle::SKIMMER && *k == sim::vehicle::DRIVER)
+            .and_then(|(v, _)| drawn.vehicles.get(&v.slot))
+            .and_then(|hull| crafts.get(*hull).ok());
+        if let Some(craft) = grips {
+            look::bodies::grip(e, craft.grips(), &mut bodies);
+        }
         let glow = look::bodies::Glow {
             hit: fx.was.flare(d.slot, t),
             over: d.over && d.alive,

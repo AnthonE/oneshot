@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from craft import *
+from craft import _image
 
 IMAGE = ('A single alien one-seat attack aircraft, small, about the size of a car. A wedge-shaped lifting body, flat '
          'underneath and rounded on top, with a sharp chisel nose and a low flush canopy of dark smoked glass over its '
@@ -55,10 +56,48 @@ HEIGHT = sim('FLY_H') - BELLY
 # (`Vehicle::gun_at`: ahead, to each side, over the wing's underside).
 SEAT = (0.4, 0.15)
 GUNS = (1.1, 1.9, sim('FLY_WING_Y') + 0.15)
+# Aft of this is its tail (the engines' rings); the wings begin this far out
+# from the centre line; the belly's paint; the keel's line of light, half
+# its width, and from where to where; and the size of the cells the top's
+# lights are found under by.
+STERN = -0.5 * sim('FLY_HALF_L')
+WING_FROM = 0.95
+BELLY_PAINT = '#4b2a8f'
+KEEL = 0.02
+KEEL_FROM = -1.5
+KEEL_TO = 0.9
+CELL = 0.03
+hull_l, hull_w = sim('FLY_HALF_L'), sim('FLY_HALF_W')
 
 scene()
 o = hull('flier', LENGTH, turn=TURN, width=2 * sim('FLY_HALF_W'), height=HEIGHT, belly=BELLY, mirror=MIRROR, pale=True,
          rough=ROUGH, metal=METAL, glow_strength=GLOW)
+
+# Its lights and its iron, by where each texel lies (hull space, metres).
+tx = texels(o)
+pos, nor, on = tx
+x, y, across, up = pos[..., 0], pos[..., 1], np.abs(pos[..., 1]), nor[..., 2]
+under = on * np.clip((-up - 0.2) / 0.3, 0.0, 1.0)
+# The picture never saw its belly, and it came back a muddy plum: the
+# top's violet, so it is one craft from the ground.
+paint(o, under, BELLY_PAINT, mix=0.6)
+# Its three engines as Meshy painted them are steel cans, cold inside.
+thrusters(o, tx, rings(o, STERN))
+# The light along each wing's trailing edge is on its top alone; the same
+# line under it, where it is seen from the ground, and a keel line aft.
+glow = _image(o, 'Emission Color')
+lit = np.empty(glow.size[0] * glow.size[1] * 4, dtype=np.float32)
+glow.pixels.foreach_get(lit)
+lit = lit.reshape(glow.size[1], glow.size[0], 4)[..., :3].max(axis=-1)
+top = on & (lit > 0.3) & (up > 0.2) & (across > WING_FROM)
+cells = np.zeros((int(2 * hull_l / CELL) + 2, int(2 * hull_w / CELL) + 2), dtype=bool)
+at = lambda a, half: np.clip(((a + half) / CELL).astype(int), 0, None)
+cells[at(x[top], hull_l), at(y[top], hull_w)] = True
+# A cell either way: the under side's edge is not quite over the top's.
+cells |= np.roll(cells, 1, 0) | np.roll(cells, -1, 0) | np.roll(cells, 1, 1) | np.roll(cells, -1, 1)
+light(o, under * (across > WING_FROM) * cells[np.minimum(at(x, hull_l), cells.shape[0] - 1), np.minimum(at(y, hull_w), cells.shape[1] - 1)])
+light(o, under * band(across, 0.0, KEEL, KEEL * 0.5) * band(x, KEEL_FROM, KEEL_TO, 0.05))
+
 hl, hw, bw, r = sim('FLY_HALF_L'), sim('FLY_HALF_W'), sim('FLY_BODY_HALF_W'), sim('BODY_R')
 wy, wt = sim('FLY_WING_Y'), sim('FLY_WING_T')
 eye = Vector((SEAT[0], 0, SEAT[1] + sim('CROUCH_EYE')))
@@ -69,5 +108,5 @@ deliver(
     rider=[((SEAT[0] - r, -r, SEAT[1]), (SEAT[0] + r, r, SEAT[1] + sim('CROUCH_H')))],
     marks=[(GUNS[0], side * GUNS[1], GUNS[2]) for side in (1, -1)],
     chase=(eye + Vector((-cam('FLY_CAM_BACK_M'), 0, cam('FLY_CAM_UP_M'))), eye + Vector((cam('CRAFT_CAM_MEET_M'), 0, 0))),
-    behind=-0.5 * hl,
+    behind=STERN,
     note='Veil flier: a wedge of a lifting body, short swept wings, a gun pod under each, twin fins and engines')

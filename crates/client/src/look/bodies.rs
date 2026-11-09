@@ -196,6 +196,9 @@ pub struct Body {
     rack: Vec<(u8, Entity)>,
     /// A rag doll poses it ([`Body::go_limp`]).
     limp: bool,
+    /// The grips its hands are on, left then right, in its root's frame
+    /// ([`grip`]): a skimmer's, this frame. None: its clip's hands.
+    grips: Option<[Vec3; 2]>,
     /// The shield's flare last put on its meshes' tags (`Glow`), and with
     /// it whether camouflage hides the body's own meshes and its hand.
     flare: Flare,
@@ -397,6 +400,7 @@ fn spawn_as(commands: &mut Commands, team: u8, look: proto::Look, shadow: bool) 
         cutting: 0.0,
         rack: Vec::with_capacity(RACK),
         limp: false,
+        grips: None,
         flare: Flare {
             level: 0.0,
             tone: Tone::Gold,
@@ -774,6 +778,14 @@ pub fn flare(root: Entity, glow: Glow, bodies: &mut Query<&mut Body>, tags: &mut
     body.flare = f;
 }
 
+/// The body at `root` has its hands on `grips` this frame (left, right, in
+/// its root's frame: [`pose_limbs`] reaches them): call after [`pose`].
+pub fn grip(root: Entity, grips: [Vec3; 2], bodies: &mut Query<&mut Body>) {
+    if let Ok(mut body) = bodies.get_mut(root) {
+        body.grips = Some(grips);
+    }
+}
+
 /// One fighter's body this frame: where it stands, how it moves (its gait,
 /// read off the snapshot: `anim.rs`), which gun it holds. `seat` is its
 /// hull's yaw and its seat, riding; `gunning`, it is on that hull's turret,
@@ -796,6 +808,7 @@ pub fn pose(
     };
     body.was_alive = body.drawn.then_some(body.alive);
     body.drawn = true;
+    body.grips = None;
     body.alive = d.alive;
     body.slot = d.slot;
     if d.alive {
@@ -1008,7 +1021,7 @@ const ON_TERRAIN_M: f32 = 0.15;
 
 /// Every body's limbs reached (`ik.rs`), after its spine is turned: the left
 /// hand onto a long gun's own fore-end, by as much as the long hold owns the
-/// arms; and on a terrain, each foot onto the ground under it, the hips
+/// arms; both hands onto a skimmer's grips ([`grip`]); and on a terrain, each foot onto the ground under it, the hips
 /// brought down for the lower. Not a rag doll's nor a hidden body's.
 #[allow(clippy::type_complexity)]
 pub fn pose_limbs(
@@ -1051,6 +1064,28 @@ pub fn pose_limbs(
                     held.transform_point(super::guns::left_wrist(g, k))
                 });
                 let target = j.end.lerp(on_gun, w);
+                if let Some(qs) = limb.reach(target, None) {
+                    for (bone, (t, q)) in [u, l, e]
+                        .into_iter()
+                        .zip([limb.upper, limb.lower, limb.end].into_iter().zip(qs))
+                    {
+                        limbs.write(bone, t.with_rotation(q), &mut bones);
+                    }
+                }
+            }
+        }
+        // Both hands on a skimmer's grips, whatever its clip has them at.
+        if let Some(grips) = b.grips.filter(|_| b.alive) {
+            for ([u, l, e], target) in [limbs.arm, limbs.right_arm].into_iter().zip(grips) {
+                let limb = (|| {
+                    Some(Limb {
+                        parent: frame(u, &bones)?,
+                        upper: local(u, &bones)?,
+                        lower: local(l, &bones)?,
+                        end: local(e, &bones)?,
+                    })
+                })();
+                let Some(limb) = limb else { continue };
                 if let Some(qs) = limb.reach(target, None) {
                     for (bone, (t, q)) in [u, l, e]
                         .into_iter()

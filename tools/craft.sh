@@ -146,8 +146,12 @@ for name in "${names[@]}"; do
   mkdir -p "$dir"
   row=()
   while IFS='|' read -r id h q secs; do
-    if [ ${#want[@]} -gt 0 ] && [[ ! " ${want[*]} " =~ " $id " ]]; then continue; fi
     png=$dir/$id.png
+    if [ ${#want[@]} -gt 0 ] && [[ ! " ${want[*]} " =~ " $id " ]]; then
+      # Not shot this time: on the board as it stands.
+      [ -s "$png" ] && row+=("$id")
+      continue
+    fi
     [ -s "$png" ] && mv -f "$png" "$dir/$id.last.png"
     pose="map=$map&craft=$sx,$h,$sz&craftkind=$(kind_of "$name")&craftyaw=$yaw&$q"
     if shoot "$png" "$pose" "$secs" >"$dir/$id.log" 2>&1 && [ -s "$png" ]; then
