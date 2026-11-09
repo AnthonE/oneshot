@@ -2284,11 +2284,13 @@ fn aim_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) 
         .min_by(f32::total_cmp)
 }
 
-/// How far along our aim a round of the gun in hand would meet an enemy's
-/// body, as drawn: the body as far as the gun reaches, widened as
-/// magnetism bends a near miss within its `aim_range` (the red reticle's
-/// zone). None: the round is going to the map, or the gun fires no ray.
-/// Where our own round's line ends, before the server says what it met.
+/// How far along our aim a round of the gun in hand is sure to meet an
+/// enemy's body, as drawn: the body widened as magnetism bends a near miss
+/// within the gun's `aim_range` (the red reticle's zone), less what the
+/// gun's cone may throw the round off by at that distance (the cone's draw
+/// is the server's secret). None: the round may be going to the map, or
+/// the gun fires no ray. Where our own round's line ends, before the
+/// server says what it met.
 pub fn round_on(core: &client_net::core::NetCore, others: &[client_net::core::Drawn]) -> Option<f32> {
     use sim::consts::{HEAD_R, HEAD_Y, HEAD_Y_CROUCH, HIT_R, HIT_TOP, HIT_TOP_CROUCH};
     let f = core.own().0;
@@ -2303,6 +2305,7 @@ pub fn round_on(core: &client_net::core::NetCore, others: &[client_net::core::Dr
     let dir = sim::geom::aim_dir(f.yaw, f.pitch);
     let wall = core.map.ray(eye, dir, a.range);
     let mate = core.rules.teams.then_some(core.team & 1);
+    let cone = if f.dual() { a.dual_spread } else { a.spread };
     others
         .iter()
         .filter(|d| d.alive && Some(d.team & 1) != mate)
@@ -2312,10 +2315,18 @@ pub fn round_on(core: &client_net::core::NetCore, others: &[client_net::core::Dr
             } else {
                 (HEAD_Y, HIT_TOP)
             };
+            let dist = (d.pos - eye).len();
+            let off = cone * dist;
+            let pad = if dist <= a.aim_range { a.magnet_pad(dist) } else { 0.0 };
             let head = d.pos + sim::geom::V3::new(0.0, hy, 0.0);
-            a.magnet_zone(eye, dir, d.pos, top, wall.min(a.aim_range))
-                .or_else(|| sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R, top, wall))
-                .or_else(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R, wall))
+            let body = (HIT_R + pad > off)
+                .then(|| sim::geom::ray_cylinder(eye, dir, d.pos, HIT_R + pad - off, top, wall))
+                .flatten();
+            body.or_else(|| {
+                (HEAD_R > off)
+                    .then(|| sim::geom::ray_sphere(eye, dir, head, HEAD_R - off, wall))
+                    .flatten()
+            })
         })
         .min_by(f32::total_cmp)
 }

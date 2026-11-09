@@ -626,8 +626,8 @@ pub struct Scene<'a> {
     pub aim: Vec3,
     /// The time now, seconds.
     pub t: f32,
-    /// How far along our aim our round would meet an enemy's body, as
-    /// drawn (`hud::round_on`): its line ends there and marks no wall
+    /// How far along our aim our round is sure to meet an enemy's body,
+    /// as drawn (`hud::round_on`): its line ends there and marks no wall
     /// behind, and what it did there is the server's to say (`ours_met`).
     pub on_body: Option<f32>,
     /// The gun in our hand: what a hit of ours lands as.
