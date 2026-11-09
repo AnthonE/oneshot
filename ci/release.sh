@@ -4,8 +4,8 @@
 # downloads (the desktop-v* tag; .github/workflows/desktop.yml).
 #
 #   ci/release.sh                 # the checks and the plan; changes nothing
-#   ci/release.sh --go            # ship it
-#   ci/release.sh --go --skip-ci  # ship without a green CI run of HEAD
+#   ci/release.sh --go            # ship it (live is the test: no CI wait)
+#   ci/release.sh --go --ci       # ship only if HEAD's CI run is green
 #
 # An OPERATOR ACT. Run it on the game box, in the checkout: the server
 # deploys there (ci/deploy_server.sh), the page and the depots go to the
@@ -24,11 +24,12 @@ PAGE=https://elopros.com/games/oneshot/play/build.json
 MANIFEST=https://elopros.com/api/launcher/manifest/oneshot
 PLATFORMS=(linux-x86_64 win-x86_64)
 
-GO=0; SKIP_CI=0
+GO=0; SKIP_CI=1
 for a in "$@"; do
   case "$a" in
     --go) GO=1 ;;
     --skip-ci) SKIP_CI=1 ;;
+    --ci) SKIP_CI=0 ;;
     -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "release: unknown flag $a" >&2; exit 2 ;;
   esac
@@ -52,7 +53,7 @@ fi
 echo
 echo "== 1. HEAD's CI run (gh workflow run ci --ref main, about an hour)"
 if [ "$SKIP_CI" = 1 ]; then
-  echo "  skipped (--skip-ci)"
+  echo "  not asked for (--ci waits for a green one)"
 elif ! command -v gh >/dev/null; then
   refuse "gh is not installed, so nothing says HEAD is green (or pass --skip-ci)"
 else
@@ -88,11 +89,27 @@ fi
 
 echo
 echo "== 3. build all of it, before anything moves"
-run cargo build --release -p server || exit 1
-run ci/client.sh || exit 1
-for p in "${PLATFORMS[@]}"; do
-  run python3 ci/depot.py --platform "$p" || exit 1
-done
+# Niced: the box's other games keep their cores. Two big builds at a time
+# at most (the page's two modules, then the two desktops), each in a build
+# folder of its own, so neither waits on the other's lock.
+t0=$SECONDS
+run nice -n 10 cargo build -q --release -p server || exit 1
+run nice -n 10 ci/client.sh ship || exit 1
+if [ "$GO" = 1 ]; then
+  pids=()
+  for p in "${PLATFORMS[@]}"; do
+    echo "+ python3 ci/depot.py --platform $p (logged to target/depot/$p.log)"
+    mkdir -p target/depot
+    nice -n 10 python3 ci/depot.py --platform "$p" > "target/depot/$p.log" 2>&1 &
+    pids+=($!)
+  done
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || { echo "  !! the ${PLATFORMS[$i]} depot failed: target/depot/${PLATFORMS[$i]}.log"; tail -20 "target/depot/${PLATFORMS[$i]}.log"; exit 1; }
+  done
+  echo "  built in $((SECONDS - t0)) s"
+else
+  for p in "${PLATFORMS[@]}"; do echo "  would run: python3 ci/depot.py --platform $p (side by side)"; done
+fi
 
 echo
 echo "== 4. publish: the server first"

@@ -59,8 +59,12 @@ the server, then the page, then the launcher's depots (Linux and Windows,
 tag that puts the downloads on a GitHub release. One command, so the
 desktop build is never the step left out.
 
-CI (`.github/workflows/ci.yml`) runs only when asked, once before a
-release (`gh workflow run ci`, about an hour; `ci/release.sh` wants it green): quick's checks, the crates'
+The operator tests on live: a release waits for no CI (`--ci` makes it
+wait for a green run), builds the page with none of `ci/client.sh`'s
+checks (`ci/client.sh ship`), the two modules and the two desktops side by
+side, niced, as the box runs other games.
+
+CI (`.github/workflows/ci.yml`) runs only when asked (`gh workflow run ci`, about an hour): quick's checks, the crates'
 tests, parity, `ci/client.sh`, e2e in Chromium (a match with the WebGPU
 module's smoke, Gun Game, three matches back to back, a party) and the
 desktop's title and a match (shown, not gated). A push or a PR runs
@@ -127,10 +131,11 @@ not twenty.
 
 ```
 ci/quick.sh [crate…]                                 # the local check
-ci/release.sh [--go]                                 # ship HEAD: server, page, launcher depots, desktop tag (game box)
+ci/release.sh [--go] [--ci]                          # ship HEAD: server, page, launcher depots, desktop tag (game box; --ci: wait for green)
 ci/depot.py [--platform win-x86_64] [--self-test]    # the desktop client as a launcher depot → target/depot/<platform>/<build>/
 ci/parity.sh                                         # native vs wasm
 ci/client.sh                                         # the client: clippy, native, the page's two modules into crates/client/dist
+ci/client.sh ship                                    # the page as it ships, no checks (what the release builds)
 ci/client.sh dev                                     # just the page, quickly (release, no fat LTO); both modules
 cargo build --release -p server && target/release/oneshot-server   # serves crates/client/dist
 target/release/oneshot-server --map range            # every gun on a pad, never in the rotation

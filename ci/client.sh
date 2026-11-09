@@ -4,6 +4,8 @@
 #   ci/client.sh       the check: fmt, clippy (native and both browser
 #                      modules), its tests, a native build, then the page
 #                      into crates/client/dist, each module's size printed
+#   ci/client.sh ship  the page as it ships (web profile, wasm-opt), none
+#                      of the check: what ci/release.sh builds
 #   ci/client.sh dev   just the page, quickly: release (thin LTO, where the
 #                      web profile is fat); both modules,
 #                      bound and proved, into dist all the same, or one
@@ -24,8 +26,8 @@
 set -eu
 mode=${1:-check}
 case "$mode" in
-  check|dev) ;;
-  *) echo "usage: ci/client.sh [dev]" >&2; exit 2 ;;
+  check|dev|ship) ;;
+  *) echo "usage: ci/client.sh [dev|ship]" >&2; exit 2 ;;
 esac
 cd "$(dirname "$0")/../crates/client"
 want=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
@@ -34,8 +36,11 @@ if [ "$want" != "$have" ]; then
   echo "wasm-bindgen $want is needed (have: ${have:-none}): cargo install wasm-bindgen-cli --version $want --locked" >&2
   exit 1
 fi
-cargo fmt
-if [ "$mode" = check ]; then
+# A ship builds what was committed, as it is.
+[ "$mode" = ship ] || cargo fmt
+if [ "$mode" = ship ]; then
+  profile=web
+elif [ "$mode" = check ]; then
   cargo clippy -q --all-targets -- -D warnings
   # Each module compiles its own side of `cfg(webgl2)` (build.rs).
   cargo clippy -q --lib --target wasm32-unknown-unknown -- -D warnings
@@ -49,30 +54,31 @@ else
 fi
 # wasm-opt: $WASM_OPT, else one on PATH, else npm's (`npm ci`: binaryen).
 opt=""
-if [ "$mode" = check ]; then
+if [ "$profile" = web ]; then
   opt=${WASM_OPT:-$(command -v wasm-opt || true)}
   [ -n "$opt" ] || [ ! -x ../../node_modules/binaryen/bin/wasm-opt ] || opt=../../node_modules/binaryen/bin/wasm-opt
   [ -n "$opt" ] || echo "== wasm-opt: none (npm ci, or WASM_OPT=...): the modules ship unoptimised" >&2
 fi
 rm -rf dist
 mkdir -p dist
-mods=""
 modules="webgl2 webgpu"
 if [ "$mode" = dev ]; then
   modules=${WEB_MODULES:-$modules}
 fi
-for m in $modules; do
+# One module, built, bound, optimised and proved; its line of build.json in
+# dist/.mod-<m>. The two build side by side, each in a build folder of its
+# own (both write an oneshot_client.wasm, and one folder is one lock).
+module() {
+  m=$1
   case "$m" in
-    webgl2) stem=oneshot_client; feat="" ;;
-    webgpu) stem=oneshot_client_gpu; feat="--features webgpu" ;;
+    webgl2) stem=oneshot_client; feat=""; dir=target ;;
+    webgpu) stem=oneshot_client_gpu; feat="--features webgpu"; dir=target/gpu ;;
     *) echo "WEB_MODULES: webgl2 and/or webgpu, not $m" >&2; exit 2 ;;
   esac
-  # Both builds write the same oneshot_client.wasm, so each is bound before
-  # the next is built.
   # shellcheck disable=SC2086 # feat is a flag and its value, or nothing
-  cargo build -q --profile "$profile" --lib --target wasm32-unknown-unknown $feat
+  cargo build -q --profile "$profile" --lib --target wasm32-unknown-unknown --target-dir "$dir" $feat
   wasm-bindgen --target web --remove-name-section --remove-producers-section --out-name "$stem" --out-dir dist \
-    "target/wasm32-unknown-unknown/$profile/oneshot_client.wasm"
+    "$dir/wasm32-unknown-unknown/$profile/oneshot_client.wasm"
   # binaryen, after Gates' ci/build_web.sh: what actually shrinks a Bevy
   # module. The real build only (dev stays quick). The features are the
   # module's own: rustc's wasm32 defaults and +simd128 (.cargo/config.toml).
@@ -93,7 +99,7 @@ for m in $modules; do
     exit 1
   fi
   raw=$(wc -c < "dist/${stem}_bg.wasm")
-  if [ "$mode" = check ]; then
+  if [ "$profile" = web ]; then
     # What a player downloads, gzipped, whichever module their browser
     # fetches: printed, never a gate.
     gz=$(gzip -9c "dist/${stem}_bg.wasm" | wc -c)
@@ -106,7 +112,21 @@ for m in $modules; do
   # never meets another build's module) and remembers a WebGPU failure
   # against it.
   sha=$(cat "dist/$stem.js" "dist/${stem}_bg.wasm" | sha256sum | cut -c1-64)
-  mods="$mods${mods:+,}\"$m\":{\"js\":\"$stem.js\",\"wasm\":\"${stem}_bg.wasm\",\"wasm_bytes\":$raw,\"wasm_gz_bytes\":$gz,\"sha256\":\"$sha\"}"
+  printf '"%s":{"js":"%s.js","wasm":"%s_bg.wasm","wasm_bytes":%s,"wasm_gz_bytes":%s,"sha256":"%s"}' \
+    "$m" "$stem" "$stem" "$raw" "$gz" "$sha" > "dist/.mod-$m"
+}
+pids=""
+for m in $modules; do
+  module "$m" &
+  pids="$pids $!"
+done
+failed=0
+for p in $pids; do wait "$p" || failed=1; done
+[ "$failed" = 0 ] || { echo "a module failed to build" >&2; exit 1; }
+mods=""
+for m in $modules; do
+  mods="$mods${mods:+,}$(cat "dist/.mod-$m")"
+  rm "dist/.mod-$m"
 done
 # The page, the clip page F9 opens in a frame of its own (web/clip.js), its
 # scripts, and the credits.
