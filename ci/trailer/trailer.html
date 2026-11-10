@@ -337,7 +337,8 @@ function scope(L, alpha, sway = 1) {
 const KILL = hit(45.44);                    // the cold open's swing, on the first big kick
 // Where each sword clip's blow lands, in clip seconds (read off the shot's
 // frames: the film's speed ramp slows each into its strike).
-const STRIKE = { 'sword-open': 4.3, 'sword-lunge': 3.75 };
+const STRIKE = { 'sword-open': 4.3, 'sword-lunge-b': 3.9 };
+const LUNGE_HIT = 1.9;                    // where x2-lunge's blow lands in its scene
 const SCENES = [
   // cold open: a sword's eyes closing on someone, the lunge slowed, one swing
   { id: 'c1-sword', at: 0, box: false, draw(L) {
@@ -406,10 +407,10 @@ const SCENES = [
   } },
   { id: 'x2-lunge', at: grid(7), box: true, draw(L) {
     // a lunge from over the shoulder, slowed into the blow
-    foot(bg, 'sword-lunge', L.t, L.d, { from: Math.max(0, STRIKE['sword-lunge'] - 1.6), fallback: 'bulkhead', grade: 'contrast(1.08) saturate(1.04)', still: { z0: 1.0, z1: 1.1 } });
-    const k = Math.exp(-Math.max(0, L.t - 1.6) * 10) * (L.t >= 1.6 ? 1 : 0);
+    foot(bg, 'sword-lunge-b', L.t, L.d, { from: Math.max(0, STRIKE['sword-lunge-b'] - LUNGE_HIT), fallback: 'bulkhead', grade: 'contrast(1.08) saturate(1.04)', still: { z0: 1.0, z1: 1.1 } });
+    const k = Math.exp(-Math.max(0, L.t - LUNGE_HIT) * 10) * (L.t >= LUNGE_HIT ? 1 : 0);
     if (k > .04) { fg.save(); fg.globalAlpha = k * .4; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
-    caption(L, ['SIX METRES IS CLOSE ENOUGH.'], { y: 820, size: 70, at: 1.7, track: 5 });
+    caption(L, ['SIX METRES IS CLOSE ENOUGH.'], { y: 820, size: 70, at: LUNGE_HIT + .1, track: 5 });
   } },
   { id: 'x3-pit', at: grid(10), box: true, draw(L) {
     foot(bg, 'sword-pov2', L.t, L.d, { fallback: 'bulkhead', grade: 'contrast(1.06)', still: { z0: 1.06, z1: 1.0, x0: -.2, x1: .2 } });
@@ -525,7 +526,7 @@ const SWORD_LINES = [
 ];
 // The capture's moment in its scene (seconds): the clip is cut so the
 // flag comes home on the beat after the card.
-const CAPTURE_AT = 1.6;
+const CAPTURE_AT = 1.9;
 // [name, line, chip, clip, stand-in]
 const MODES = [
   ['DUEL', '1v1 Slayer, first to 15.', 'RANKED', 'ctf-a', 'cistern'],
@@ -587,9 +588,9 @@ const CUES = {
     { src: 'sfx/trailer_whoosh.wav', at: at('x1-sword') - .2, gain: .3 },
     { src: 'snd/sword_on_0.ogg', at: at('x1-sword') + .1, gain: .9 },
     ...SWORD_LINES.map((_, i) => ({ src: 'snd/ui_click_0.ogg', at: at('x1-sword') + .45 + i * .32, gain: .35 })),
-    { src: 'sfx/trailer_whoosh.wav', at: at('x2-lunge') + 1.15, gain: .5 },
-    { src: 'snd/sword_swing_0.ogg', at: at('x2-lunge') + 1.6, gain: 1.0 },
-    { src: 'sfx/trailer_boom.wav', at: at('x2-lunge') + 1.6, gain: .5 },
+    { src: 'sfx/trailer_whoosh.wav', at: at('x2-lunge') + LUNGE_HIT - .45, gain: .5 },
+    { src: 'snd/sword_swing_0.ogg', at: at('x2-lunge') + LUNGE_HIT, gain: 1.0 },
+    { src: 'sfx/trailer_boom.wav', at: at('x2-lunge') + LUNGE_HIT, gain: .5 },
     { src: 'sfx/trailer_pulse.wav', at: at('x3-pit'), gain: .55 },
     { src: 'snd/sword_swing_1.ogg', at: at('x3-pit') + 1.3, gain: .7 },
     // the capture
