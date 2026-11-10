@@ -165,7 +165,10 @@ impl Gate {
                         let truth = w
                             .proj
                             .live()
-                            .find(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            .filter(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            // Two of one owner's can lie a hair apart (both
+                            // stickies thrown at one spot): the one sent.
+                            .min_by(|a, b| (a.1.pos - p.pos).len().total_cmp(&(b.1.pos - p.pos).len()))
                             .map(|(_, t)| *t);
                         let t = truth.unwrap_or_else(|| panic!("tick {}: {p:?} is in no true projectile", w.tick));
                         assert!(

@@ -1,4 +1,4 @@
-//! Dry Fork: a red-rock gulch, 290 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.
+//! Dry Fork: a red-rock gulch, 320 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.
 //!
 //! Generated from `maps/canyon/map.json` by `tools/maps/compile.mjs`: edit the JSON,
 //! then run it. CI fails if this file is not what the JSON compiles to.
@@ -15,7 +15,7 @@ pub const DEF: Def = Def {
     name: "Dry Fork",
     practice: false,
     modes: 72,
-    lo: (-140.0, -78.0),
+    lo: (-170.0, -78.0),
     hi: (150.0, 78.0),
     void: f32::NEG_INFINITY,
     boxes: &[

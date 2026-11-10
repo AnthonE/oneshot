@@ -239,16 +239,23 @@ pub fn step_paced(b: &mut Body, inp: &Input, map: &Map, pace: f32) {
     let ceil = map.ceiling(p.x, p.z, BODY_R, p.y + h - 0.01);
     let mut ny = p.y + v.y * DT;
     if ny + h > ceil {
-        ny = ceil - h;
+        // On the grid below it: rounded to the nearest, a head stopped at a
+        // ceiling could end a hair inside it, and the next tick pushed the
+        // body out sideways (Dry Fork's bunker threw a jump metres back).
+        ny = fmath::floor((ceil - h) * QUANT) * (1.0 / QUANT);
         v.y = v.y.min(0.0);
     }
+    // On the grid above it, as the head is under a ceiling: feet rounded
+    // into a top (a wreck's, a crate's) were pushed off it sideways on the
+    // tick a jump let the band down to them.
+    let stand = fmath::ceil(floor * QUANT) * (1.0 / QUANT);
     if ny <= floor {
-        ny = floor;
+        ny = stand;
         v.y = v.y.max(0.0);
         b.grounded = v.y <= 0.0;
     } else if b.grounded && v.y <= 0.0 && ny - floor < SNAP {
         // Walking down a step stays on the ground.
-        ny = floor;
+        ny = stand;
         v.y = 0.0;
     } else {
         b.grounded = false;
