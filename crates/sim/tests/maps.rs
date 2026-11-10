@@ -87,6 +87,10 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
             side(1)
         );
         assert!(m.spawns.len() >= 8, "{}: eight seats need eight spawns", m.name);
+        // Big Team is Capture the Flag (`Rules::big_ctf`): its maps have flags.
+        if d.plays(sim::map::ROT_BIG_TEAM) {
+            assert!(m.flags.is_some(), "{}: a Big Team map with no flags", m.name);
+        }
     }
 }
 

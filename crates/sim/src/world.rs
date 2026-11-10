@@ -124,6 +124,16 @@ impl Rules {
         }
     }
 
+    /// Big Team as it is played: Capture the Flag at its sixteen seats,
+    /// first side to 3 captures, or the most at 15 minutes.
+    pub fn big_ctf() -> Rules {
+        Rules {
+            score_limit: 3,
+            ctf: true,
+            ..Rules::big_team()
+        }
+    }
+
     /// Gun Game, eight seats: up the ladder, a kill a rung; the first kill
     /// with the last gun wins.
     pub fn gun_game() -> Rules {

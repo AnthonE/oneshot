@@ -259,9 +259,9 @@ pub const GREN_RELEASE_MS: u32 = 170;
 /// seen as one. Ours. Halo: Combat Evolved's frags chain (Halopedia).
 pub const GREN_CHAIN_MS: u32 = 70;
 pub const GREN_START: u8 = 2;
-/// Sticky grenades at a spawn: none, as Halo 2's multiplayer on most maps.
-/// They come from pads (`arms::STICKIES`) and from the dead.
-pub const STICKY_START: u8 = 0;
+/// Sticky grenades at a spawn, beside the frags; more come from pads
+/// (`arms::STICKIES`) and from the dead.
+pub const STICKY_START: u8 = 2;
 /// What a grenade pad gives (at most `GREN_MAX` carried).
 pub const GREN_PAD_GIVES: u8 = 2;
 /// A sticky (Halo 2's plasma grenade in multiplayer): thrown as a frag is. It
