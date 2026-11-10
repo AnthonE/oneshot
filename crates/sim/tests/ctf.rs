@@ -407,3 +407,21 @@ fn bots_go_for_flags_on_every_map_with_flags() {
         assert_ne!(bot_match_on(d.id, 3, 1, 600), 0);
     }
 }
+
+/// Big Team is Capture the Flag on Dry Fork (`Rules::big_ctf`): its flags
+/// stand where a fighter can take one with USE and score with it at home.
+#[test]
+fn big_team_captures_on_dry_fork() {
+    let mut w = World::new(sim::map::by_id(3).unwrap(), Rules::big_ctf(), 1, (5, 6));
+    w.seat(0, 0);
+    w.seat(1, 1);
+    while w.phase == Phase::Countdown {
+        idle(&mut w);
+    }
+    let [red, blue] = w.map.flags.expect("Dry Fork has flags");
+    w.fighters[0].body.pos = V3::new(0.0, w.map.ground(0.0, 0.0), 0.0);
+    assert_eq!(take(&mut w, 1, red), vec![(0, 1, 0)], "blue takes red's flag");
+    w.fighters[1].body.pos = blue;
+    assert_eq!(idle(&mut w), vec![(3, 1, 0)], "and scores with it at home");
+    assert_eq!(w.score[1], 1);
+}

@@ -22,7 +22,23 @@ fn world() -> World {
         time_limit_ms: 0,
         ..Rules::doubles()
     };
-    let mut w = World::new(sim::maps::canyon::DEF.build(), rules, 1, (5, 6));
+    // Dry Fork carries only trucks; set the craft down where they stood.
+    let mut map = sim::maps::canyon::DEF.build();
+    for (x, z, yaw, respawn_ms, kind) in [
+        (-92.0, -16.0, 0, 30_000, sim::vehicle::SKIMMER),
+        (92.0, -16.0, 32768, 30_000, sim::vehicle::SKIMMER),
+        (-112.0, 14.0, 0, 60_000, sim::vehicle::FLIER),
+        (112.0, 14.0, 32768, 60_000, sim::vehicle::FLIER),
+    ] {
+        map.vehicles.push(sim::map::VehicleSpawn {
+            pos: V3::new(x, 0.0, z),
+            yaw,
+            respawn_ms,
+            turret: sim::vehicle::NO_TURRET,
+            kind,
+        });
+    }
+    let mut w = World::new(map, rules, 1, (5, 6));
     w.seat(0, 0);
     w.seat(1, 1);
     let idle = [Input::default(); MAX_FIGHTERS];

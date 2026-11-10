@@ -87,16 +87,19 @@ impl Textures {
     }
 }
 
-fn repeat() -> ImageSamplerDescriptor {
+/// How far a sampler follows a surface seen edge on: Gates' 4 for WebGL2's
+/// integrated GPUs; the desktop's 16 wherever the desktop's frame is drawn
+/// (the WebGPU module too).
+const ANISOTROPY: u16 = if cfg!(webgl2) { 4 } else { 16 };
+
+pub(crate) fn repeat() -> ImageSamplerDescriptor {
     ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        // Gates' 4 for WebGL2's integrated GPUs; the desktop's 16 wherever
-        // the desktop's frame is drawn (the WebGPU module too).
-        anisotropy_clamp: if cfg!(webgl2) { 4 } else { 16 },
+        anisotropy_clamp: ANISOTROPY,
         ..default()
     }
 }
@@ -183,6 +186,11 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
         for (h, normal) in [(a, false), (n, true)] {
             if let Some(img) = images.get_mut(h) {
                 mip_in_place(img, normal);
+                // The GPU's from here, as the models' maps are
+                // (`mip_models`): nothing reads a set back once the ground's
+                // arrays are made of them below, and kept they were 200 MB
+                // of a browser module's memory for as long as it ran.
+                img.asset_usage = RenderAssetUsages::RENDER_WORLD;
             }
         }
     }
@@ -197,7 +205,15 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     if let (Some(a), Some(n)) = (array(&alb), array(&nor)) {
         t.ground = Some((images.add(a), images.add(n)));
     }
-    t.sets = loading;
+    // A ground set that is no box's is drawn from the arrays alone
+    // (`set` is asked for a box's): its own pair would be the same pixels
+    // on the GPU a second time, 64 MB of them.
+    let (boxes, ground): (Vec<_>, Vec<_>) = loading.into_iter().partition(|s| BOXES.contains(&s.0));
+    for (_, a, n) in ground {
+        images.remove(&a);
+        images.remove(&n);
+    }
+    t.sets = boxes;
     // The plating: drawn here, not photographed.
     let (albedo, normal, orm) = panel_images(PANEL_PX);
     let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));
@@ -597,6 +613,10 @@ pub fn mip_models(
         d.mipmap_filter = ImageFilterMode::Linear;
         d.min_filter = ImageFilterMode::Linear;
         d.mag_filter = ImageFilterMode::Linear;
+        // The gun in our own view is seen along its length, its top and its
+        // side running away from the eye: without this a chain's blur takes
+        // its maps down to a smear there, and a 2048 map reads as a 256.
+        d.anisotropy_clamp = ANISOTROPY;
         img.sampler = ImageSampler::Descriptor(d);
     }
 }

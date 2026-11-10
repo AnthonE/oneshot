@@ -13,8 +13,9 @@
 //!
 //! Under the gun's own field of view, like the gun, and [`SHRINK`] small and
 //! that much nearer (`viewmodel.rs`); lit by the world, casting nothing, and
-//! wearing our shield's shell as the gun does. Drawing only: it reads what
-//! `viewmodel.rs` posed and writes the hands' places.
+//! wearing our shield's shell as the gun does. Their bark is a photograph's
+//! (`bark.rs`): the body's atlas is a smear this close. Drawing only: it
+//! reads what `viewmodel.rs` posed and writes the hands' places.
 
 use bevy::prelude::*;
 use core::f32::consts::FRAC_PI_2;
@@ -104,7 +105,7 @@ pub fn spawn(commands: &mut Commands, models: &Models, in_view: Entity) {
         (true, false, &models.hand_left),
         (false, true, &models.hand_sword),
     ] {
-        commands
+        let hand = commands
             .spawn((
                 ViewHand { left, sword },
                 SceneRoot(scene.clone()),
@@ -112,7 +113,9 @@ pub fn spawn(commands: &mut Commands, models: &Models, in_view: Entity) {
                 Visibility::Hidden,
                 ChildOf(in_view),
             ))
-            .observe(no_shadows);
+            .observe(no_shadows)
+            .id();
+        super::bark::wear(commands, hand);
     }
 }
 

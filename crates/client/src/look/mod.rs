@@ -2,6 +2,7 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod anim;
+pub mod bark;
 pub mod blade;
 pub mod bodies;
 pub mod boulders;
@@ -33,7 +34,6 @@ pub mod icons;
 pub mod ik;
 pub mod isle_stone;
 pub mod keel;
-pub mod lying;
 pub mod mood;
 pub mod moon;
 pub mod own_shadow;

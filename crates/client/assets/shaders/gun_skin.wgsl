@@ -4,6 +4,11 @@
 // light and dark against that part's middle, so wear, grime and panel lines
 // stay where they were painted. What the gun's glow map lights is left alone.
 //
+// Before either, the gun's own surface is read off its paint: its maps for
+// metal and roughness are one matte surface all over, so what the paint
+// leaves grey is steel (finished where it is dark, polished where it is worn
+// bright), what it colours is the line's coat, and its black seams are dirt.
+//
 // Over Bevy's lighting each gun reflects a sky photograph (`env_tex`, cut by
 // tools/gun_env.py), a level for each roughness: the scene's own fill is two
 // tones, which leaves metal looking painted.
@@ -51,6 +56,12 @@ struct Coat {
     hot: vec4<f32>,
     // x: the sky photograph's brightness in a reflection; y its last level.
     env: vec4<f32>,
+    // The gun's steel, what its paint leaves grey: x its metal; y its
+    // roughness as finished, z where it is worn bright.
+    steel: vec4<f32>,
+    // The line's own coat, what its paint colours: x its metal, y its
+    // roughness; z dirt's roughness, w how much of a part's metal dirt takes.
+    finish: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> coat: Coat;
@@ -72,6 +83,12 @@ fn env_brdf(rough: f32, nv: f32) -> vec2<f32> {
 
 // How far over its middle a texel's tone may go.
 const TONE_MAX: f32 = 2.5;
+// Steel is worn bright from this many times its middle to this many.
+const WORN_FROM: f32 = 1.25;
+const WORN_FULL: f32 = 2.6;
+// And a part is dirt under this share of its middle, all of it by this.
+const DIRT_FROM: f32 = 0.55;
+const DIRT_FULL: f32 = 0.2;
 // The glow map's level where a texel is all light.
 const LIT_FULL: f32 = 0.1;
 // Cells a gauge has at most.
@@ -240,8 +257,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let chroma = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
     let glow = pbr_input.material.emissive.rgb;
     let lit = smoothstep(0.0, LIT_FULL, max(glow.r, max(glow.g, glow.b)));
-    let paint = smoothstep(coat.mid.z, coat.mid.w, chroma) * (1.0 - lit) * coat.glow.y;
+    let painted = smoothstep(coat.mid.z, coat.mid.w, chroma);
+    let paint = painted * (1.0 - lit) * coat.glow.y;
     let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+
+    // What it is made of, where it is not a light: steel or the line's coat,
+    // by its colour; worn or dirty, by how light it is against its middle.
+    let tone = luma / mix(coat.mid.y, coat.mid.x, painted);
+    let worn = smoothstep(WORN_FROM, WORN_FULL, tone) * (1.0 - painted);
+    let dirt = smoothstep(DIRT_FROM, DIRT_FULL, tone);
+    let metal = mix(coat.steel.x, coat.finish.x, painted) * (1.0 - coat.finish.w * dirt);
+    let rough = mix(mix(mix(coat.steel.y, coat.steel.z, worn), coat.finish.y, painted), coat.finish.z, dirt);
+    pbr_input.material.metallic = mix(metal, pbr_input.material.metallic, lit);
+    pbr_input.material.perceptual_roughness = mix(rough, pbr_input.material.perceptual_roughness, lit);
+
     let coated = mix(
         coat.rest.rgb * min(luma / coat.mid.y, TONE_MAX),
         coat.paint.rgb * min(luma / coat.mid.x, TONE_MAX),

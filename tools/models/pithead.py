@@ -302,9 +302,12 @@ def icicles(S, a, b, y, rng, spacing=0.12, longest=0.45, fill=0.8):
         S.rod((x, y + 0.01, z), (x, y - ln_, z), r, 'ice', sides=5, taper=0.06)
 
 
-def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0):
+def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0, holes=()):
     """Snow blown onto a floor, a hair over it: thick against `walls` ('-x',
-    '+x', '-z', '+z': which of its edges stand walled), thin out over it."""
+    '+x', '-z', '+z': which of its edges stand walled), thin out over it. None
+    over `holes`, the floor's openings (x0, z0, x1, z1 each): a bank laid across
+    a stairwell hangs in the air over the stairs, a pale sheet whoever climbs
+    them looks down through."""
     rng = random.Random(seed)
     pa = part('drift')
     nx, nz = max(2, int((x1 - x0) / 0.25)), max(2, int((z1 - z0) / 0.25))
@@ -328,6 +331,11 @@ def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0):
             pa.colors[len(pa.verts) - 1] = (1.0, 1.0, 1.0, alpha)
     for j in range(nz):
         for i in range(nx):
+            cx0, cx1 = x0 + (x1 - x0) * i / nx, x0 + (x1 - x0) * (i + 1) / nx
+            cz0, cz1 = z0 + (z1 - z0) * j / nz, z0 + (z1 - z0) * (j + 1) / nz
+            if any(cx1 > hx0 + 1e-4 and cx0 < hx1 - 1e-4 and cz1 > hz0 + 1e-4 and cz0 < hz1 - 1e-4
+                   for hx0, hz0, hx1, hz1 in holes):
+                continue
             k = base + j * (nx + 1) + i
             face(pa, (k, k + 1, k + nx + 2, k + nx + 1), (0, 1, 0), True)
 
@@ -385,7 +393,7 @@ def shaft_house(S):
     for x in (-18.0, -15.6):
         S.box(x, 0.0, -2.4, x + 0.1, 2.6, -2.0, 'steel', c=0.01)
     # The mezzanine: tread plate on joists, a channel along its open edge.
-    S.box(-21.0, 3.36, 5.0, -13.0, 3.5, 14.0, 'tread', c=0.0, cell=2.0)
+    S.box(-21.0, 3.36, 5.0, -13.0, 3.5, 14.0, 'tread', c=0.0, cell=2.0, under=False)
     S.box(-21.0, 3.0, 5.0, -13.0, 3.36, 5.18, 'steel', c=0.01, cell=3.0)
     for x in np.arange(-20.6, -13.2, 1.5):
         S.box(x, 3.04, 5.18, x + 0.14, 3.36, 14.0, 'steel', c=0.01, cell=3.0)
@@ -396,7 +404,7 @@ def shaft_house(S):
     stairs(S, -21.0, 6.0, -19.0, 12.0, 3.5, 7.0)
     # The crown's floor: the shaft house's roof, its ceiling under it.
     for x0, z0, x1, z1 in ((-19.0, -2.0, -13.0, 14.0), (-21.0, -2.0, -19.0, 5.6), (-21.0, 12.0, -19.0, 14.0)):
-        S.box(x0, 6.86, z0, x1, 7.0, z1, 'tread', c=0.0, cell=2.0)
+        S.box(x0, 6.86, z0, x1, 7.0, z1, 'tread', c=0.0, cell=2.0, under=False)
         S.quad((x0, 6.86, z0), (x1, 6.86, z0), (x1, 6.86, z1), (x0, 6.86, z1), 'steel', (0, -1, 0), cell=3.0)
     for x in np.arange(-20.7, -13.1, 1.6):
         S.box(x, 6.5, -2.0, x + 0.18, 6.86, 14.0, 'steel', c=0.01, cell=3.0)
@@ -405,7 +413,8 @@ def shaft_house(S):
     S.box(-13.2, 6.5, -2.0, -13.0, 7.0, 14.0, 'steel', c=0.01, cell=3.0)
     # Short: they hang in the mezzanine's window and the way out to the deck.
     icicles(S, (-13.02, -1.8), (-13.02, 13.8), 6.5, rng, longest=0.3, fill=0.6)
-    drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s)
+    drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s,
+          holes=[(-21.0, 5.6, -19.0, 12.0)])
     # Its crate.
     crate(S, -16.6, 7.0, 8.4, -15.4, 8.2, 9.6)
     # Its floor: concrete over the rock, the snow blown in at its doors.
@@ -456,7 +465,7 @@ def stringer(S, axis, a0, a1, y0, y1, plane, inw, n):
                 S.quad(at(a, y0, c), at(b, y0, c), at(b, top(b) - deep, c), at(a, top(a) - deep, c), 'steel', out)
     c0, c1 = sorted((plane, plane + inw * back))
     for a in bays[1:-1]:
-        S.box(*at(a - 0.03, y0, c0), *at(a + 0.03, top(a - 0.03) - deep, c1), 'steel', c=0.005)
+        S.box(*at(a - 0.03, y0, c0), *at(a + 0.03, top(a - 0.03) - deep, c1), 'steel', c=0.005, under=False)
     return s, top
 
 
@@ -470,7 +479,7 @@ def stairs(S, x0, z0, x1, z1, y0, y1):
         y = y0 + (y1 - y0) * k / n
         za = z0 + run * k
         S.box(x0 + wide, y - 0.06, za, x1 - wide, y, za + run, 'tread', c=0.005, cell=3.0)
-        S.box(x0 + wide, y0, za, x1 - wide, y - 0.06, za + 0.03, 'steel', c=0.0, cell=3.0)
+        S.box(x0 + wide, y0, za, x1 - wide, y - 0.06, za + 0.03, 'steel', c=0.0, cell=3.0, under=False)
     for plane, inw in ((x0, 1.0), (x1, -1.0)):
         stringer(S, 'z', z0, z1, y0, y1, plane, inw, n)
     S.quad((x0, y0, z1), (x1, y0, z1), (x1, y1 - 0.03, z1), (x0, y1 - 0.03, z1), 'steel', (0, 0, 1))
@@ -582,9 +591,14 @@ def gantry():
     for z0, z1 in ((-1.5, -1.36), (1.36, 1.5)):
         for x0, x1 in ((-13.0, -3.0), (3.0, 13.0)):
             cbox(x0, 6.5, z0, x1, 7.0, z1, 'steel', c=0.01, cell=1.6)
-    cbox(-13.0, 6.86, -1.36, 13.0, 7.0, 1.36, 'tread', c=0.0, cell=2.0)
-    cbox(-3.0, 6.86, -3.0, 3.0, 7.0, 3.0, 'tread', c=0.0, cell=2.0)
+    # The deck either side of the landing, the landing between, the soffit
+    # under them: no two faces on one plane.
+    for x0, x1 in ((-13.0, -3.0), (3.0, 13.0)):
+        cbox(x0, 6.86, -1.36, x1, 7.0, 1.36, 'tread', c=0.0, cell=2.0, under=False)
+    cbox(-3.0, 6.86, -3.0, 3.0, 7.0, 3.0, 'tread', c=0.0, cell=2.0, under=False)
     quad((-13.0, 6.86, -1.36), (13.0, 6.86, -1.36), (13.0, 6.86, 1.36), (-13.0, 6.86, 1.36), 'steel', (0, -1, 0), cell=3.0)
+    for z0, z1 in ((-3.0, -1.36), (1.36, 3.0)):
+        quad((-3.0, 6.86, z0), (3.0, 6.86, z0), (3.0, 6.86, z1), (-3.0, 6.86, z1), 'steel', (0, -1, 0), cell=3.0)
     for x in np.arange(-12.6, 12.7, 1.4):
         cbox(x, 6.56, -1.36, x + 0.14, 6.86, 1.36, 'steel', c=0.01, cell=3.0)
     # The landing's edges.
@@ -663,7 +677,8 @@ def cab():
     cbox(-2.9, 10.0, 3.0, 2.9, 10.36, 3.2, 'steel', c=0.01)
     for x in np.arange(-2.7, 2.8, 1.1):
         cbox(x, 10.04, -3.0, x + 0.14, 10.36, 3.0, 'steel', c=0.01, cell=3.0)
-    quad((-2.9, 10.04, -3.0), (2.9, 10.04, -3.0), (2.9, 10.04, 3.0), (-2.9, 10.04, 3.0), 'lining', (0, -1, 0), cell=0.35)
+    # Just under the joists, not on their plane.
+    quad((-2.9, 10.02, -3.0), (2.9, 10.02, -3.0), (2.9, 10.02, 3.0), (-2.9, 10.02, 3.0), 'lining', (0, -1, 0), cell=0.35)
     drift(S1, -2.9, -3.2, 2.9, 3.2, 10.5, ['+z', '-z'], reach=0.5, seed=55)
 
 
@@ -685,11 +700,13 @@ def sheave_stairs(S):
         y = y0 + (y1 - y0) * k / n
         xa = x0 + run * k
         S.box(xa, y - 0.06, z0 + wide, xa + run, y, z1 - wide, 'tread', c=0.005, cell=3.0)
-        S.box(xa, y0, z0 + wide, xa + 0.03, y - 0.06, z1 - wide, 'steel', c=0.0, cell=3.0)
+        S.box(xa, y0, z0 + wide, xa + 0.03, y - 0.06, z1 - wide, 'steel', c=0.0, cell=3.0, under=False)
     for zp, inw in ((z0, 1.0), (z1, -1.0)):
         xs, top = stringer(S, 'x', x0, x1, y0, y1, zp, inw, n)
-    # The inner web's foot, past the gantry's girder.
-    S.quad((xs, y0, z0), (x1, y0, z0), (x1, y0, z0 + back), (xs, y0, z0 + back), 'steel', (0, 1, 0))
+    # The inner web's foot, past the gantry's girder and the foot's plate. A
+    # riser and a stiffener stand open under on the floor and its soffit: no
+    # two faces on one plane.
+    S.quad((x0 + run, y0, z0), (x1, y0, z0), (x1, y0, z0 + back), (x0 + run, y0, z0 + back), 'steel', (0, 1, 0))
     S.quad((x1, y0, z0), (x1, y0, z1), (x1, y1 - 0.03, z1), (x1, y1 - 0.03, z0), 'steel', (1, 0, 0))
     S.quad((x0 + run, y0, z0), (x1, y0, z0), (x1, y0, z1 - chan), (x0 + run, y0, z1 - chan), 'steel', (0, -1, 0))
     S.rod((xs + 0.1, top(xs + 0.1) - deep / 2, z1 + 0.01), (x1, top(x1) - deep / 2, z1 + 0.01), 0.025, 'light_sodium', sides=4)
@@ -710,7 +727,7 @@ def cage():
     gantry, tread plate on joists between two plate girders, a lamp hung under
     it either side of the plinth, each throwing its pool on the collar."""
     rng = random.Random(56)
-    cbox(-1.5, 3.36, -8.0, 1.5, 3.5, 8.0, 'tread', c=0.0, cell=2.0)
+    cbox(-1.5, 3.36, -8.0, 1.5, 3.5, 8.0, 'tread', c=0.0, cell=2.0, under=False)
     for x0, x1 in ((-1.5, -1.2), (1.2, 1.5)):
         cbox(x0, 3.0, -8.0, x1, 3.36, 8.0, 'steel', c=0.01, cell=3.0)
         cbox(x0, 1.4, -8.0, x1, 1.52, 8.0, 'steel', c=0.01, cell=3.0)
@@ -864,7 +881,7 @@ def deck(S):
     tread plate on joists between two plate girders, its abutment on the
     side's crag, a ramp down at the far end; the gallery over its first stretch."""
     rng = random.Random(61 if S.s > 0 else 62)
-    S.box(-13.0, 3.36, 8.0, 8.0, 3.5, 14.0, 'tread', c=0.0, cell=2.0)
+    S.box(-13.0, 3.36, 8.0, 8.0, 3.5, 14.0, 'tread', c=0.0, cell=2.0, under=False)
     for x in np.arange(-11.7, 7.9, 1.5):
         S.box(x, 3.04, 8.4, x + 0.14, 3.36, 13.6, 'steel', c=0.01, cell=3.0)
     S.quad((-12.0, 3.36, 8.4), (8.0, 3.36, 8.4), (8.0, 3.36, 13.6), (-12.0, 3.36, 13.6), 'steel', (0, -1, 0), cell=3.0)
@@ -900,7 +917,7 @@ def gallery(S):
     open at its ends, its windows lit, snow on its roof, a lamp inside."""
     shed_wall(S, -10.0, 3.5, 8.0, -5.0, 6.5, 8.4, '-z', windows=(-9.6, -5.4, 4.7, 5.5))
     shed_wall(S, -10.0, 3.5, 13.6, -5.0, 6.5, 14.0, '+z', windows=(-9.6, -5.4, 4.7, 5.5))
-    S.box(-10.0, 6.86, 8.0, -5.0, 7.0, 14.0, 'steel', c=0.03, cell=2.0)
+    S.box(-10.0, 6.86, 8.0, -5.0, 7.0, 14.0, 'steel', c=0.03, cell=2.0, under=False)
     S.quad((-10.0, 6.86, 8.4), (-5.0, 6.86, 8.4), (-5.0, 6.86, 13.6), (-10.0, 6.86, 13.6), 'steel', (0, -1, 0), cell=3.0)
     for x in np.arange(-9.9, -5.0, 1.2):
         S.box(x, 6.5, 8.4, x + 0.16, 6.86, 13.6, 'steel', c=0.01, cell=3.0)

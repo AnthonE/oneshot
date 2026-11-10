@@ -108,18 +108,29 @@ impl Rules {
     }
 
     /// Big Team, 8v8 Team Slayer: first side to 50, or the most at 15
-    /// minutes. Casual, bots in the empty seats.
+    /// minutes. Casual, bots in the empty seats. Out with the assault
+    /// rifle: the better guns are the map's to find.
     pub fn big_team() -> Rules {
         Rules {
             teams: true,
             score_limit: 50,
             time_limit_ms: 900_000,
-            loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            loadout: [crate::arms::AR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
             friendly_fire: false,
             ctf: false,
             siege: false,
+        }
+    }
+
+    /// Big Team as it is played: Capture the Flag at its sixteen seats,
+    /// first side to 3 captures, or the most at 15 minutes.
+    pub fn big_ctf() -> Rules {
+        Rules {
+            score_limit: 3,
+            ctf: true,
+            ..Rules::big_team()
         }
     }
 
@@ -140,6 +151,7 @@ impl Rules {
         Rules {
             score_limit: 3,
             time_limit_ms: 900_000,
+            loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 8,
             ctf: true,
             ..Rules::big_team()
@@ -905,10 +917,7 @@ impl World {
                 // A homing round locks on whoever the aim was on, as seen.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
-                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD, true)
-                    {
-                        target = q as u8;
-                    }
+                    target = self.lock(s, eye, base, a, depth);
                 }
                 // A round that flies straight lives as long as its range
                 // takes; one that blows up, till it lands.
@@ -1096,6 +1105,52 @@ impl World {
             && v.seats
                 .iter()
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
+    }
+
+    /// Whom a homing round from `eye` along `dir` locks on, as `s` saw
+    /// them: of the enemies within `aim_range` whose body, widened by
+    /// [`HOMING_CONE`] at its distance, the aim passes through, the one
+    /// nearest in angle, in clear line (Halo's red reticle locks the
+    /// needler, not a dead-on aim); else whoever the aim meets within
+    /// `range`, padded by [`HOMING_PAD`]. Never a teammate.
+    fn lock(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32) -> u8 {
+        let mut best: Option<(f32, usize)> = None;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == s || !v.active() || self.mate(s, q) {
+                continue;
+            }
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
+            if !p.alive {
+                continue;
+            }
+            let top = crate::movement::ducked(p.duck, HIT_TOP, HIT_TOP_CROUCH);
+            let pad = (p.pos - eye).len() * HOMING_CONE;
+            if ray_cylinder(eye, dir, p.pos, HIT_R + pad, top, a.aim_range).is_none() {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH), 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if best.is_some_and(|b| b.0 <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off, q));
+            }
+        }
+        if let Some((_, q)) = best {
+            return q as u8;
+        }
+        match self.trace(s, eye, dir, a.range, depth, HOMING_PAD, true) {
+            Some((Target::Fighter(q, _), _)) => q as u8,
+            _ => NO_TARGET,
+        }
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
@@ -1600,7 +1655,8 @@ impl World {
             let v = self.fighters[p.target as usize];
             let speed = p.vel.len();
             if v.active() && speed > 0.0 {
-                let to = (v.body.pos + V3::new(0.0, 1.0, 0.0) - p.pos).norm();
+                let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
+                let to = (v.body.pos + V3::new(0.0, chest, 0.0) - p.pos).norm();
                 let d = p.vel * (1.0 / speed);
                 let chord = (to - d).len();
                 let turn = a.homing * DT;
@@ -3515,12 +3571,14 @@ impl World {
     }
 
     /// Back at the spawn its side may use that is safest: farthest from the
-    /// nearest living enemy (to [`SPAWN_FAR_M`]), out of every living
-    /// enemy's sight, near a teammate, with a little chance
+    /// nearest living enemy (to [`SPAWN_FAR_M`], or [`SPAWN_FAR_BIG_M`]),
+    /// out of every living enemy's sight, near a teammate but not in a
+    /// crowd of them nor on anyone, with a little chance
     /// (`SPAWN_JITTER_M`) between close calls.
     fn respawn(&mut self, s: usize) {
         let team = self.fighters[s].team;
         let teams = self.rules.teams;
+        let far_cap = if self.map.big() { SPAWN_FAR_BIG_M } else { SPAWN_FAR_M };
         let mut pick = 0usize;
         let mut best = f32::NEG_INFINITY;
         for i in 0..self.map.spawns.len() {
@@ -3529,23 +3587,31 @@ impl World {
                 continue;
             }
             let eye = sp.pos + V3::new(0.0, EYE, 0.0);
-            let mut near = SPAWN_FAR_M;
+            let mut near = far_cap;
             let mut seen = false;
             let mut mate = false;
+            let mut crowd = 0.0;
             for (q, v) in self.fighters.iter().enumerate() {
                 if q == s || !v.active() {
                     continue;
                 }
                 let far = (v.body.pos - sp.pos).len();
+                if far < SPAWN_TAKEN_R {
+                    crowd += SPAWN_TAKEN_M;
+                }
                 if teams && v.team == team {
                     mate = mate || far < SPAWN_MATE_R;
+                    if far < SPAWN_CROWD_R {
+                        crowd += SPAWN_CROWD_M;
+                    }
                     continue;
                 }
                 near = near.min(far);
                 seen = seen || self.map.clear(v.eye(), eye);
             }
             let luck = self.rng.next_bounded(1024) as f32 * (SPAWN_JITTER_M / 1024.0);
-            let score = near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } + luck;
+            let score =
+                near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } - crowd + luck;
             if score > best {
                 best = score;
                 pick = i;

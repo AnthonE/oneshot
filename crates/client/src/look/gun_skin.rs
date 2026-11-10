@@ -16,7 +16,15 @@
 //! Guns are metal, and metal is what it reflects. The scene's fill is a
 //! two-tone cube (`fill.rs`), which leaves a gun looking painted, so every
 //! coat reflects a sky photograph too (`ENV`, cut by `tools/gun_env.py`):
-//! sharp on a polished part, a sheen on a rough one, by the gun's own maps.
+//! sharp on a polished part, a sheen on a rough one.
+//!
+//! Which part is which is read off the gun's paint as it is drawn ([`Line`]):
+//! its maps for metal and roughness came out of the kit one matte surface
+//! (`tools/models/lib.py`'s `temper`: a tenth metal, two thirds rough, all
+//! over), which is a gun moulded in plastic. What the paint leaves grey is
+//! steel, finished where it is dark and polished where it is worn bright;
+//! what it colours is the line's own coat; what is black in its seams is
+//! dirt.
 
 use std::collections::HashMap;
 
@@ -50,6 +58,8 @@ pub struct CoatParams {
     pub look: Vec4,
     pub hot: Vec4,
     pub env: Vec4,
+    pub steel: Vec4,
+    pub finish: Vec4,
 }
 
 /// How bright the sky photograph is in a reflection, on screen (its mean is
@@ -81,6 +91,8 @@ pub const BARE: CoatParams = CoatParams {
     look: Vec4::ZERO,
     hot: Vec4::ZERO,
     env: Vec4::new(ENV_GAIN, (ENV_LEVELS - 1) as f32, 0.0, 0.0),
+    steel: FORGE.steel,
+    finish: FORGE.finish,
 };
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
@@ -208,24 +220,38 @@ const COLOURS: [Option<Colours>; 6] = [
 ];
 
 /// A gun line's paint, as the shader reads it: its paint's and the rest's
-/// middle (linear luma), and how far from grey a texel becomes paint.
+/// middle (linear luma), and how far from grey a texel becomes paint. And
+/// what each is made of.
 struct Line {
     paint_mid: f32,
     rest_mid: f32,
     chroma: [f32; 2],
+    /// The steel (what the paint leaves grey): its metal, and its roughness
+    /// as finished and where it is worn bright.
+    steel: Vec4,
+    /// The line's own coat (what the paint colours): its metal and its
+    /// roughness; then dirt's roughness, and how much of a part's metal it
+    /// takes.
+    finish: Vec4,
 }
 
-/// The human guns' olive is a faint colour on grey metal.
+/// The human guns: blued steel, bright where hands and holsters have worn
+/// it, under an olive baked on thin, so the metal shows through its sheen.
 const FORGE: Line = Line {
     paint_mid: 0.08,
     rest_mid: 0.08,
     chroma: [0.02, 0.06],
+    steel: Vec4::new(0.92, 0.36, 0.2, 0.0),
+    finish: Vec4::new(0.5, 0.45, 0.85, 0.7),
 };
-/// The ship's violet is most of the gun.
+/// The ship's violet is most of the gun: a shell with a pearl's sheen, over
+/// dark fittings.
 const VEIL: Line = Line {
     paint_mid: 0.05,
     rest_mid: 0.1,
     chroma: [0.066, 0.13],
+    steel: Vec4::new(0.9, 0.4, 0.24, 0.0),
+    finish: Vec4::new(0.7, 0.3, 0.85, 0.7),
 };
 
 fn line(arm: u8) -> &'static Line {
@@ -256,6 +282,15 @@ fn params(c: &Colours, l: &Line) -> CoatParams {
         glow: Vec4::new(1.0, 1.0, 1.0, 1.0),
         look,
         hot,
+        ..bare(l)
+    }
+}
+
+/// No coat on a gun of line `l`: its own paint, on its own metal.
+fn bare(l: &Line) -> CoatParams {
+    CoatParams {
+        steel: l.steel,
+        finish: l.finish,
         ..BARE
     }
 }
@@ -311,7 +346,7 @@ fn coat(
         return;
     };
     let c = COLOURS.get(skin as usize).and_then(Option::as_ref);
-    let coat = c.map_or(BARE, |c| params(c, line(arm)));
+    let coat = c.map_or(bare(line(arm)), |c| params(c, line(arm)));
     // In view, each of the gun's own materials once, for it alone.
     let mut alive: Vec<(AssetId<StandardMaterial>, Handle<GunMaterial>)> = Vec::new();
     for e in children.iter_descendants(ev.entity) {

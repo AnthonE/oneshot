@@ -127,8 +127,10 @@ def tri(a, b, c, mat, out):
     pa.faces.append((idx, [box_uv(pa.verts[q], n, mat) for q in idx], False))
 
 
-def cbox(x0, y0, z0, x1, y1, z1, mat='stone', c=0.05, top=True, bottom=False, cell=CELL):
-    """A box with its upright and top edges cut back by `c`, inside its bounds."""
+def cbox(x0, y0, z0, x1, y1, z1, mat='stone', c=0.05, top=True, bottom=False, cell=CELL, under=True):
+    """A box with its upright and top edges cut back by `c`, inside its bounds.
+    `under=False` leaves it open under, for a deck whose soffit is drawn on its
+    plane: two faces on one plane fight for the depth."""
     c = min(c, (x1 - x0) * 0.45, (z1 - z0) * 0.45, (y1 - y0) * 0.45)
     mid = ((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
     plan = [(x0 + c, z0), (x1 - c, z0), (x1, z0 + c), (x1, z1 - c), (x1 - c, z1), (x0 + c, z1), (x0, z1 - c), (x0, z0 + c)]
@@ -149,7 +151,7 @@ def cbox(x0, y0, z0, x1, y1, z1, mat='stone', c=0.05, top=True, bottom=False, ce
                 quad((p[0], yt, p[1]), (q[0], yt, q[1]), (s[0], y1, s[1]), (r[0], y1, r[1]), mat, o, cell)
     if top:
         quad((x0 + c, y1, z0 + c), (x1 - c, y1, z0 + c), (x1 - c, y1, z1 - c), (x0 + c, y1, z1 - c), mat, (0, 1, 0), cell)
-    if bottom or y0 > 0.05:
+    if under and (bottom or y0 > 0.05):
         # Anything off the ground is closed under: looked up at, an open box
         # shows what stands on its top through it.
         for i in range(8):
