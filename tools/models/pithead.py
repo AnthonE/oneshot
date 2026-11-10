@@ -26,7 +26,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import arch  # noqa: E402
-from arch import CELL, cbox, export, make_objects, paint, part, quad, rod, spin, surface, to_blender, torus, tri  # noqa: E402
+from arch import CELL, cbox, export, make_objects, paint, part, plank, quad, rod, spin, surface, to_blender, torus, tri  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
@@ -417,16 +417,62 @@ def shaft_house(S):
     lamp(S, -17.0, 2.7, 10.0, 3.0)
 
 
+# A flight's stringer: how wide it stands in from its plane, its flange's
+# depth, how far its web is set back behind the plane, m.
+STRINGER = (0.1, 0.12, 0.04)
+
+
+def stringer(S, axis, a0, a1, y0, y1, plane, inw, n):
+    """A plate stringer down one side of a flight of n treads that runs a0 to a1
+    along `axis` ('x' or 'z') and rises y0 to y1, inside the sim's ramp (which is
+    solid, so the side is closed): a flange along the slope from where its foot
+    clears the floor, under it a web down to the flight's floor, set back from
+    `plane` (the side the sim collides; `inw` the way in from it across the
+    flight), a stiffener every other tread out to the plane, and its other face
+    at the treads' ends, so the flight has a side from on it too. Cut into
+    bays, so each takes its own shade and frost. Returns where the flange
+    starts and its top along the flight."""
+    wide, deep, back = STRINGER
+    rate = (y1 - y0) / (a1 - a0)
+    run = (a1 - a0) / n
+
+    def top(a):
+        return y0 + rate * (a - a0) - 0.03
+
+    def at(a, y, c):
+        return (a, y, c) if axis == 'x' else (c, y, a)
+
+    s = a0 + (deep + 0.03) / rate
+    mid = plane + inw * wide / 2
+    (ax, _, az), (bx, _, bz) = S.p(*at(s, 0.0, mid)), S.p(*at(a1, 0.0, mid))
+    plank((ax, az), (bx, bz), top(s), top(a1), -wide / 2, wide / 2, deep, 'steel')
+    bays = [s] + [a0 + run * k for k in range(2, n, 2)] + [a1]
+    for c, o in ((plane + inw * back, -inw), (plane + inw * wide, inw)):
+        out = at(0.0, 0.0, o)
+        for a, b in zip(bays, bays[1:]):
+            if a == s:
+                S.tri(at(a, y0, c), at(b, y0, c), at(b, top(b) - deep, c), 'steel', out)
+            else:
+                S.quad(at(a, y0, c), at(b, y0, c), at(b, top(b) - deep, c), at(a, top(a) - deep, c), 'steel', out)
+    c0, c1 = sorted((plane, plane + inw * back))
+    for a in bays[1:-1]:
+        S.box(*at(a - 0.03, y0, c0), *at(a + 0.03, top(a - 0.03) - deep, c1), 'steel', c=0.005)
+    return s, top
+
+
 def stairs(S, x0, z0, x1, z1, y0, y1):
-    """A flight up +z inside the sim's ramp: each tread's nose on the slope."""
+    """A flight up +z inside the sim's ramp: each tread's nose on the slope, a
+    plate stringer down each side, its head closed."""
     n = int(round((y1 - y0) / 0.25))
     run = (z1 - z0) / n
+    wide = STRINGER[0]
     for k in range(1, n):
         y = y0 + (y1 - y0) * k / n
         za = z0 + run * k
-        S.box(x0 + 0.12, y - 0.06, za, x1 - 0.12, y, za + run, 'tread', c=0.005, cell=3.0)
-        S.box(x0 + 0.12, y0, za, x1 - 0.12, y - 0.06, za + 0.03, 'steel', c=0.0, cell=3.0)
-    S.tri((x1, y0, z0), (x1, y0, z1), (x1, y1 - 0.03, z1), 'steel', (1, 0, 0))
+        S.box(x0 + wide, y - 0.06, za, x1 - wide, y, za + run, 'tread', c=0.005, cell=3.0)
+        S.box(x0 + wide, y0, za, x1 - wide, y - 0.06, za + 0.03, 'steel', c=0.0, cell=3.0)
+    for plane, inw in ((x0, 1.0), (x1, -1.0)):
+        stringer(S, 'z', z0, z1, y0, y1, plane, inw, n)
     S.quad((x0, y0, z1), (x1, y0, z1), (x1, y1 - 0.03, z1), (x0, y1 - 0.03, z1), 'steel', (0, 0, 1))
     # A handrail on the wall's side.
     S.rod((x0 + 0.08, y0 + 0.95, z0), (x0 + 0.08, y1 + 0.95, z1), 0.025, 'galv', sides=6)
@@ -623,21 +669,40 @@ def cab():
 
 def sheave_stairs(S):
     """A flight up beside the gantry to the sheave deck, rising +x: its treads on
-    the slope, plate sides down to its floor at the gantry's height, a string of
-    lights along its outer side so the way up reads."""
+    the slope between two plate stringers down to its floor at the gantry's
+    height, a string of lights along its outer side so the way up reads. Under
+    its floor, out of reach, what carries it: outriggers off the gantry's girder
+    to a channel along its outer edge, each braced from the truss's foot."""
     x0, z0, x1, z1, y0, y1 = -9.0, 1.5, -2.9, 3.2, 7.0, 10.5
     n = int(round((y1 - y0) / 0.25))
     run = (x1 - x0) / n
+    wide, deep, back = STRINGER
+    # The channel's width under the outer stringer.
+    chan = 0.14
+    # The foot's plate, level with the gantry's deck, out to the channel.
+    S.box(x0, y0 - 0.06, z0, x0 + run, y0, z1 - chan, 'tread', c=0.005, cell=3.0)
     for k in range(1, n):
         y = y0 + (y1 - y0) * k / n
         xa = x0 + run * k
-        S.box(xa, y - 0.06, z0 + 0.1, xa + run, y, z1 - 0.1, 'tread', c=0.005, cell=3.0)
-        S.box(xa, y0, z0 + 0.1, xa + 0.03, y - 0.06, z1 - 0.1, 'steel', c=0.0, cell=3.0)
-    for z, o in ((z0, -1.0), (z1, 1.0)):
-        S.tri((x0, y0, z), (x1, y0, z), (x1, y1 - 0.03, z), 'steel', (0, 0, o))
+        S.box(xa, y - 0.06, z0 + wide, xa + run, y, z1 - wide, 'tread', c=0.005, cell=3.0)
+        S.box(xa, y0, z0 + wide, xa + 0.03, y - 0.06, z1 - wide, 'steel', c=0.0, cell=3.0)
+    for zp, inw in ((z0, 1.0), (z1, -1.0)):
+        xs, top = stringer(S, 'x', x0, x1, y0, y1, zp, inw, n)
+    # The inner web's foot, past the gantry's girder.
+    S.quad((xs, y0, z0), (x1, y0, z0), (x1, y0, z0 + back), (xs, y0, z0 + back), 'steel', (0, 1, 0))
     S.quad((x1, y0, z0), (x1, y0, z1), (x1, y1 - 0.03, z1), (x1, y1 - 0.03, z0), 'steel', (1, 0, 0))
-    S.quad((x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1), 'steel', (0, -1, 0))
-    S.rod((x0 + 0.3, y0 + 0.1, z1 + 0.01), (x1, y1 - 0.25, z1 + 0.01), 0.025, 'light_sodium', sides=4)
+    S.quad((x0 + run, y0, z0), (x1, y0, z0), (x1, y0, z1 - chan), (x0 + run, y0, z1 - chan), 'steel', (0, -1, 0))
+    S.rod((xs + 0.1, top(xs + 0.1) - deep / 2, z1 + 0.01), (x1, top(x1) - deep / 2, z1 + 0.01), 0.025, 'light_sodium', sides=4)
+    # What carries it: the channel along its outer edge and across its foot,
+    # as deep as the gantry's girder, an outrigger at the foot and at each of
+    # the truss's posts, a brace to each from the truss's lower chord.
+    S.box(x0, y0 - 0.5, z1 - chan, x1, y0, z1, 'steel', c=0.01, cell=1.6)
+    S.box(x0, y0 - 0.5, z0, x0 + chan, y0 - 0.06, z1 - chan, 'steel', c=0.01, cell=1.6)
+    for x in (x0 + chan / 2, -7.8, -6.2, -4.6):
+        if x > x0 + chan:
+            S.box(x - 0.07, y0 - 0.3, z0, x + 0.07, y0, z1 - chan, 'steel', c=0.01, cell=3.0)
+        S.rod((x, 5.7, 1.38), (x, y0 - 0.45, z1 - chan / 2), 0.045, 'steel', sides=5)
+    icicles(S, (x0, z1 + 0.01), (x1, z1 + 0.01), y0 - 0.5, random.Random(61 if S.s > 0 else 62), longest=0.4, spacing=0.16, fill=0.6)
 
 
 def cage():
