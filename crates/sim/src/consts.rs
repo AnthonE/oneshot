@@ -213,8 +213,12 @@ pub const STRIKE_R: f32 = 1.2;
 /// How hard a clash throws each back.
 pub const CLASH_PUSH: f32 = 8.0;
 
-/// A homing round (a shard, a charged bolt) locks on whoever its aim
-/// passes this near, at the shot.
+/// A homing round (a shard, a charged bolt) locks on an enemy within its
+/// gun's `aim_range` whose body its aim passes within this angle of
+/// (radians, as magnetism's), at the shot: Halo's red reticle, not a
+/// dead-on aim.
+pub const HOMING_CONE: f32 = 0.10;
+/// Past `aim_range`, on whoever its aim passes this near.
 pub const HOMING_PAD: f32 = 1.0;
 /// Shards fall out of a fighter this long after the last went in.
 pub const NEEDLE_KEEP_MS: u32 = 1500;

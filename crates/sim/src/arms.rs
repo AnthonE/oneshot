@@ -560,8 +560,11 @@ pub static ARMS: [Arm; COUNT] = [
         rank: 3,
         kind: Kind::Needle,
         auto: true,
-        // Halo 2's needler: 7.5 a second, slow (6 wu/s), turning 15–30° a
-        // second at the top of that, eight stuck go off, a kill.
+        // Halo 2's needler: 7.5 a second, slow (6 wu/s), eight stuck go
+        // off, a kill. Its tag's 15–30° a second never caught a strafer
+        // here (3 in 20 at 15 m); 150° finds one juking inside the red
+        // reticle's reach, and a step wider than the lock's cone, or a juke
+        // past 25 m, still slips it (`range`'s shard table).
         refire_ms: 133,
         mag: 30,
         reserve: 90,
@@ -570,7 +573,7 @@ pub static ARMS: [Arm; COUNT] = [
         spread: deg(1.0),
         range: 73.0,
         speed: 18.3,
-        homing: deg(30.0),
+        homing: deg(150.0),
         stick: 8,
         reload_ms: 2000,
         // Halo 2's: 0.5–1.5° alone, 1–3° dual.
