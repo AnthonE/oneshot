@@ -32,7 +32,7 @@ struct Shell {
 @group(#{MATERIAL_BIND_GROUP}) @binding(102) var env_smp: sampler;
 
 // How sharply the paint turns at the edge (a power of how edge on it is).
-const TURN: f32 = 2.2;
+const TURN: f32 = 3.0;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {

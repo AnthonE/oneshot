@@ -74,7 +74,17 @@ for row in "${SETS[@]}"; do
   [ "$name" = stone ] && grade=(-modulate 118,22,100)
   # The cold rock is cut grey too: its tint (`ground::ICE_TINT`) gives it the frost's blue.
   [ "$name" = ice_rock ] && grade=(-modulate 100,12,100)
-  convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} "${grade[@]}" -strip -quality 82 "$out/${name}_albedo.jpg"
+  if [ "$name" = grass ]; then
+    # The turf is cut hard: its own occlusion laid into its colour and its
+    # contrast drawn out, so what lies between the tufts is blades with
+    # shade under them, not an olive felt (as it came, a meadow's floor was
+    # one value from ten metres), then lifted back to near its own mean.
+    convert "$d/${id}_diff_2k.jpg" \( "$d/${id}_ao_2k.jpg" -colorspace Gray -level 30%,100% \) -compose Multiply -composite \
+      -sigmoidal-contrast 5x42% -modulate 100,118,104 -evaluate multiply 1.17 \
+      -filter Lanczos -resize ${px}x${px} -strip -quality 84 "$out/${name}_albedo.jpg"
+  else
+    convert "$d/${id}_diff_2k.jpg" -filter Lanczos -resize ${px}x${px} "${grade[@]}" -strip -quality 82 "$out/${name}_albedo.jpg"
+  fi
   convert "$d/${id}_nor_gl_2k.jpg" -filter Lanczos -resize ${px}x${px} -strip -quality 90 "$out/${name}_normal.jpg"
   if [[ " rock stone brick marble road blast snow rust " =~ " $name " ]]; then
     convert "$d/${id}_rough_2k.jpg" -filter Lanczos -resize ${px}x${px} -colorspace Gray -strip -quality 82 "$out/${name}_rough.jpg"

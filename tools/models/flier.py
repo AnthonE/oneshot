@@ -45,9 +45,10 @@ B_CHINE = curve((TAIL, 0.7), (0.4, 0.7), (1.5, 0.6), (2.3, 0.39))
 B_AT = (TAIL, -1.5, -1.2, -0.8, -0.3, 0.2, 0.6, 1.0, 1.35, 1.65, 1.95, 2.15, 2.27)
 B_N = 20
 # How round its back is (2 an ellipse), and how keeled its bill, from
-# `BILL` forward (under 2 a ridge).
+# `BILL` forward (under 2 a ridge): the bill is its own plates from there,
+# a paler upper mandible and a deeper lower.
 B_ROUND = curve((1.0, 2.0), (1.6, 1.5))
-BILL = 1.3
+BILL = 1.28
 # Its engine's mouth, in its tail's end: how much of the tail's section it
 # is, how deep, and the vanes across it; the cowl of iron round it runs
 # this far forward.
@@ -87,20 +88,27 @@ A_AT = (0.5, 0.95, 1.4, 1.8, 2.15, 2.4, 2.59)
 F_ROOT = (0.98, 1.22, 1.46, 1.70, 1.92, 2.12, 2.28)
 F_END = ((-0.80, 1.02), (-0.94, 1.30), (-1.05, 1.60), (-1.14, 1.90), (-1.22, 2.16), (-1.29, 2.37), (-1.33, 2.5))
 F_WIDE = 0.175
-F_SHAPE = (0.6, 0.86, 1.0, 1.0, 1.0, 0.96, 0.84, 0.62, 0.3)
+F_SHAPE = (0.6, 0.86, 1.0, 1.0, 1.0, 0.96, 0.8, 0.5, 0.14)
 F_THIN = 0.11
 F_STEP = 0.011
-F_LIT = 0.15
+F_LIT = 0.08
 # The blades of its tail: from where to where, how far out they start and
-# how far they spread, how high they start and how far they rise.
-BLADE = (-0.9, -2.28, 0.6, 0.26, 0.72, 0.48)
+# how far they spread, how high they start and how far they rise; half
+# their width at its widest and their width along their length as shares of
+# it, how thin they are for it, and how far they are canted, degrees (their
+# outer edges high: from its own saddle a pilot sees their faces).
+BLADE = (-0.95, -2.28, 0.58, 0.19, 0.76, 0.3)
+BLADE_WIDE = 0.17
+BLADE_SHAPE = (0.45, 0.7, 0.88, 1.0, 1.0, 1.0, 0.86, 0.5, 0.1)
+BLADE_THIN = 0.2
+BLADE_CANT = 40
 # The hoop of its frame over the glass: where along the craft.
 HOOP = 0.98
 # The lift's lenses under the wings' roots: where along the craft, how far
 # out, how long and wide, and how far their middles are sunk into the belly;
 # the port under the chin its bomb leaves by the same (on the centre line).
 LIFT = (-0.3, 0.47, 0.6, 0.11, 0.03)
-PORT = (1.5, 0.2, 0.07, 0.022)
+PORT = (1.45, 0.34, 0.11, 0.028)
 
 scene()
 # A seam between two plates, with dark iron in it; a hairline; a seam with
@@ -129,17 +137,22 @@ top = lambda q: Z(q) - B_CHINE(X(q)) - 0.04
 under = lambda q: B_CHINE(X(q)) - 0.12 - Z(q)
 # The bill's plate, the collar behind the blister, the shoulders: gaps with
 # iron in them.
-beak = plane((1.7, 0, 0), (1, 0, 0.3))
+beak = plane((BILL, 0, 0), (1, 0, 0.3))
+gape = lambda q: Z(q) - B_CHINE(X(q)) + 0.035
 collar = plane((-0.95, 0, 0), (1, 0, -0.3))
 shoulder = {side: plane((0, side * 0.6, 0), (0.2, side, 0)) for side in (1, -1)}
 seam(body, beak, **GAP)
+# The bill's gape: a gap of iron along its chine, the upper mandible over it
+# and the lower under.
+seam(body, gape, 0.05, 0.026, flat=0.5, within=run(BILL + 0.08, 2.2))
 seam(body, collar, **GAP, where=lambda q: X(q) > COWL + 0.1)
 for side in (1, -1):
     seam(body, shoulder[side], **GAP, within=lambda q: both(top(q), run(COWL, 1.25)(q), side * q[:, 1] - 0.3))
-# Gills: three slits a shoulder.
-for x in (-1.08, -1.2, -1.32):
-    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.03, 0.016, flat=0.3,
-         within=lambda q: both(top(q), Y(q) - 0.44, B_WIDE(X(q)) - 0.1 - Y(q)))
+# Gills: three louvres a side across its back, from the blister's foot out
+# to the shoulder, the engine's glow in them.
+for x in (-1.06, -1.2, -1.34):
+    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.075, 0.032, floor='glow', wall='iron', flat=0.45,
+         within=lambda q: both(top(q), Y(q) - C_WIDE(X(q)) - 0.13, B_WIDE(X(q)) - 0.12 - Y(q)))
 # Under it: the keel's line of light and a seam across.
 seam(body, plane((0, 0, 0), (0, 1, 0)), 0.045, 0.012, **GLOW, within=lambda q: both(under(q), run(-1.3, 1.15)(q)))
 seam(body, plane((0.9, 0, 0), (1, 0, 0)), **SEAM, where=lambda q: under(q) > 0)
@@ -165,7 +178,8 @@ bm.from_mesh(body.data)
 bmesh.ops.delete(bm, geom=[f for f in bm.faces if hidden(np.array([f.calc_center_median()[:]]))[0] > 0], context='FACES')
 bm.to_mesh(body.data)
 bm.free()
-repaint(body, 'shell_pale', where=lambda q: beak(q) > 0.03, of='shell')
+repaint(body, 'shell_pale', where=lambda q: (beak(q) > 0.03) & (gape(q) > 0), of='shell')
+repaint(body, 'shell_deep', where=lambda q: (beak(q) > 0.03) & (gape(q) < 0), of='shell')
 parts.append(body)
 
 parts += mouth((TAIL, 0, MZ), MW, MH, MOUTH_DEEP, CORE, VANES, n=B_N)
@@ -177,8 +191,8 @@ for side in (1, -1):
         up = B_TOP(x) - B_CHINE(x)
         p = B_ROUND(x)
         path.append((x, side * (B_WIDE(x) * max(1 - EYE[2] ** p, 0.0) ** (1 / p) - 0.016), B_CHINE(x) + EYE[2] * up))
-    parts.append(stem(path, [0.006, 0.022, 0.034, 0.04, 0.042, 0.04, 0.032, 0.02, 0.005], n=8, material='light', name='eye',
-                      flat=0.7))
+    parts.append(stem(path, [0.004, 0.012, 0.018, 0.021, 0.022, 0.021, 0.017, 0.011, 0.004], n=8, material='light', name='eye',
+                      flat=0.8))
 # The lenses under it: the lift's, a grille of light under each wing's
 # root, and the port under the chin its bomb leaves by.
 for side in (1, -1):
@@ -222,7 +236,7 @@ def feather(side, i):
     bend = (root + end) / 2 + Vector((0.0, side * 0.035, 0.0))
     o = solid(stem(bow(root, bend, end, steps=8), [F_WIDE * k for k in F_SHAPE], n=8, material='shell' if i % 2 else 'shell_deep',
                    name='feather', flat=F_THIN, thin=(0, 0, 1)), 'feather')
-    return repaint(o, 'light', where=lambda q: np.linalg.norm(q - np.array(end), axis=1) < F_LIT)
+    return repaint(o, 'light_dim', where=lambda q: np.linalg.norm(q - np.array(end), axis=1) < F_LIT)
 
 
 wings = [arm(side) for side in (1, -1)] + [feather(side, i) for side in (1, -1) for i in range(len(F_ROOT))]
@@ -246,19 +260,15 @@ def lance(side):
 
 
 def blade(side):
-    """A blade of the forked tail: on edge, curving up and out as it goes
-    aft, its top edge and its tip alight."""
+    """A blade of the forked tail: a feather on a cant, its outer edge high,
+    lifting and spreading as it goes aft, broad to its last third and then a
+    point, its end alight."""
     x0, x1, y0, spread, z0, rise = BLADE
-    rings = []
-    for x in np.linspace(x0, x1, 12):
-        k = (x - x0) / (x1 - x0)
-        rings.append(oval(x, side * (y0 + spread * k), z0 + rise * k ** 1.5, 0.05 * (1 - k) ** 0.7 + 0.012,
-                          0.2 * (1 - k) ** 0.6 + 0.02, n=12, p=1.6))
-    o = solid(loft(rings, 'shell', name='blade', sharp=(3, 9), levels=1), 'blade')
-    k = lambda q: np.clip((X(q) - x0) / (x1 - x0), 0, 1)
-    edge = lambda q: Z(q) - (z0 + rise * k(q) ** 1.5 + 0.8 * (0.2 * (1 - k(q)) ** 0.6 + 0.02))
-    repaint(o, 'light', where=lambda q: ((edge(q) > 0) & (k(q) > 0.3)) | (k(q) > 0.95))
-    return o
+    path = [(x0 + (x1 - x0) * k, side * (y0 + spread * k), z0 + rise * k ** 1.4) for k in np.linspace(0.0, 1.0, 9)]
+    cant = math.radians(BLADE_CANT)
+    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell', name='blade', flat=BLADE_THIN,
+                   thin=(0, -side * math.sin(cant), math.cos(cant))), 'blade')
+    return repaint(o, 'light', where=lambda q: X(q) < x1 + 0.13)
 
 
 for side in (1, -1):

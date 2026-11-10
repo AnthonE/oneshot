@@ -1,12 +1,18 @@
 """The one-seaters' kit (look/craft.rs): the skimmer and the flier, each a
-script in this folder that holds its prompt and its cut, as a gun's does
-(lib.py). `meshy_gen.py <name>` commissions the raw mesh from the script's
-IMAGE, VIEW and TEXTURE; `hull` brings it into the sim's hull frame, sized
-to the sim's hull, its paint cut down and what it painted cyan set glowing;
-`light` and `paint` then light and repaint it by rule, where each texel lies
-on the craft (`texels`); `deliver` exports `crates/client/assets/models/<name>.glb`, writes the
-numbers to `traces/craft/<name>.json` and renders the sheet it is judged by,
+script in this folder. What every craft needs is here: the sim's own numbers
+(`sim`, `cam`), and `deliver`, which exports
+`crates/client/assets/models/<name>.glb`, writes the numbers to
+`traces/craft/<name>.json` and renders the sheet it is judged by,
 `traces/craft/<name>.png`: six views, the sim's hull drawn over three.
+
+A craft's form comes one of two ways. The skimmer and the flier are grown by
+rule on veil.py's kit, with no mesh of anyone's and no map. The other way is
+kept here for a craft that is commissioned, as a gun is (lib.py):
+`meshy_gen.py <name>` makes the raw mesh from the script's IMAGE, VIEW and
+TEXTURE; `hull` brings it into the sim's hull frame, sized to the sim's hull,
+its paint cut down and what it painted cyan set glowing; `light` and `paint`
+then light and repaint it by rule, where each texel lies on the craft
+(`texels`).
 
     tools/craft.sh skimmer                       the loop: this, then the game's views
     blender -b --python tools/models/skimmer.py  this alone (tools/models/build.sh skimmer)

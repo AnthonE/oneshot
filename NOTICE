@@ -14,9 +14,9 @@ is commissioned from Meshy on a paid plan and owned outright, from our own
 prompt (in its script in tools/models, which cuts the mesh it gets with
 Blender: sized, turned, its maps made smaller and re-encoded as JPEG); no
 attribution is owed. The one-seaters (models/skimmer.glb, flier.glb) are
-ours on the same terms: commissioned from Meshy from our own prompts and cut
-by the script of its name on tools/models/craft.py's kit (turned and sized
-to the sim's hull, its maps made smaller and re-encoded as JPEG). The
+ours outright: each is built in Blender by the script of its name
+(tools/models/skimmer.py, flier.py, on veil.py's and craft.py's kits) from
+numbers alone, no mesh, picture or map of anyone's in it. The
 boulders and the sea stack (models/rock,
 boulder_*.glb, sea_stack.glb) and the bases' pylon (models/base/pylon.glb)
 are ours on the same terms: commissioned from Meshy from our own prompts

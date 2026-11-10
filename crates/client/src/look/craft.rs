@@ -50,22 +50,23 @@ const FLY_LEAN_K: f32 = 0.7;
 /// The skimmer's bob on its lift: metres, and cycles a second.
 const BOB_M: f32 = 0.035;
 const BOB_HZ: f32 = 0.9;
+/// The flier's, while it hangs slow on its lift: metres, cycles a second,
+/// and gone by this speed, m/s.
+const FLY_BOB_M: f32 = 0.045;
+const FLY_BOB_HZ: f32 = 0.55;
+const FLY_BOB_TO: f32 = 9.0;
 /// Each engine's flame while it boosts: where its mouth ends, in the
 /// hull's frame (x forward, y up from the ground under it, z right),
 /// measured on the model (its sheet's numbers, `traces/craft/<name>.json`),
 /// then how long it burns, how wide and how tall, metres (no bigger than
 /// the lit mouth it leaves, so the rim round it still shows). The skimmer's
-/// two are its hulls' sterns; the flier's three lie side by side across its
-/// one wide mouth, a sheet of flame.
+/// two are its hulls' sterns; the flier's is one flat blade of flame out of
+/// the whole of its wide mouth.
 const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
     (Vec3::new(-1.5, 0.54, -0.6), 1.0, 0.26, 0.2),
     (Vec3::new(-1.5, 0.54, 0.6), 1.0, 0.26, 0.2),
 ];
-const FLY_FLAMES: [(Vec3, f32, f32, f32); 3] = [
-    (Vec3::new(-1.72, 0.69, -0.21), 1.3, 0.34, 0.2),
-    (Vec3::new(-1.72, 0.69, 0.21), 1.3, 0.34, 0.2),
-    (Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.4, 0.22),
-];
+const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
 /// A flame's core inside its sheath: this share of its length and of its
 /// width.
 const CORE: (f32, f32) = (0.55, 0.42);
@@ -81,19 +82,24 @@ const LIGHT_M: f32 = 5.0;
 /// rider's hands go (`Craft::grips`), measured on the model (its bars as
 /// `tools/models/skimmer.py` raised them on their stalk).
 const SKIM_GRIPS: [Vec3; 2] = [Vec3::new(-0.18, 1.24, -0.285), Vec3::new(-0.18, 1.24, 0.285)];
-/// The trails of light a craft draws behind it at speed: where each leaves
-/// it, in the hull's frame (the tips of the flier's tail blades and of the
-/// skimmer's fins, a forked wake; measured on the models), then how wide it
-/// is, metres, and how long it lasts, seconds.
-const FLY_TRAILS: ([Vec3; 2], f32, f32) = ([Vec3::new(-2.27, 1.19, -0.86), Vec3::new(-2.27, 1.19, 0.86)], 0.07, 0.5);
-const SKIM_TRAILS: ([Vec3; 2], f32, f32) = ([Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.05, 0.3);
+/// The streamers of light a craft's tail draws behind it at speed: where
+/// each leaves it, in the hull's frame (the tips of the flier's tail blades
+/// and of the skimmer's fins; measured on the models), then how wide it is,
+/// metres, and how long it lasts, seconds: short, a few metres of light at
+/// a boost's speed and never a beam down the screen from the chase camera.
+const FLY_TRAILS: ([Vec3; 2], f32, f32) = (
+    [Vec3::new(-2.26, 1.05, -0.77), Vec3::new(-2.26, 1.05, 0.77)],
+    0.09,
+    0.09,
+);
+const SKIM_TRAILS: ([Vec3; 2], f32, f32) = ([Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.06, 0.09);
 /// A trail is this many points; it is drawn from `TRAIL_FROM` m/s and whole
-/// by `TRAIL_FULL`, and fades along its length as this power of what is
-/// left of it.
-const TRAIL_N: usize = 18;
-const TRAIL_FROM: f32 = 9.0;
-const TRAIL_FULL: f32 = 20.0;
-const TRAIL_FADE: f32 = 1.6;
+/// by `TRAIL_FULL` (faint at a craft's own top speed, whole in a boost),
+/// and fades along its length as this power of what is left of it.
+const TRAIL_N: usize = 12;
+const TRAIL_FROM: f32 = 13.0;
+const TRAIL_FULL: f32 = 27.0;
+const TRAIL_FADE: f32 = 1.5;
 
 /// A craft's paint with the wing case's stage over it.
 pub type ShellMaterial = ExtendedMaterial<StandardMaterial, Shell>;
@@ -127,7 +133,7 @@ impl MaterialExtension for Shell {
 }
 
 /// What a shell's paint turns toward edge on (linear), and how far.
-const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.42);
+const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.32);
 /// The wing case over each of a craft's paints, by its name in the GLB
 /// (`veil.py`'s `PAINTS`): how far it turns at the edge, how bright the
 /// sky's photograph is in it, the photograph's blur (levels), how much of
@@ -135,8 +141,8 @@ const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.42);
 /// (a light, a saddle's pad) is drawn as it came.
 fn shell_of(name: &str) -> Option<ShellParams> {
     let (turn, sky) = match name {
-        "shell" | "shell_pale" => (1.0, Vec4::new(0.38, 1.2, 0.05, 0.6)),
-        "shell_deep" => (0.8, Vec4::new(0.32, 1.4, 0.05, 0.6)),
+        "shell" | "shell_pale" => (1.0, Vec4::new(0.22, 0.5, 0.03, 0.6)),
+        "shell_deep" => (0.8, Vec4::new(0.2, 0.6, 0.03, 0.6)),
         "glass" => (0.0, Vec4::new(0.58, 0.0, 0.09, 0.8)),
         "iron" => (0.0, Vec4::new(0.14, 2.6, 0.04, 0.3)),
         _ => return None,
@@ -146,9 +152,10 @@ fn shell_of(name: &str) -> Option<ShellParams> {
         sky,
     })
 }
-/// The paints of an engine's fire (the lit throat and its core): each craft
-/// has its own, since it burns brighter while that craft boosts.
-const BURNS: [&str; 2] = ["throat", "glow"];
+/// The paints of an engine's fire (its core, its lit throat, and the veins
+/// of it that show through a hull's seams): each craft has its own, since
+/// they burn brighter while that craft boosts.
+const BURNS: [&str; 3] = ["throat", "glow", "vein"];
 /// How bright an engine burns: at rest, at speed, boosting (its paint's own
 /// light is 1); how fast it comes to it (1/s); and its breath at rest, this
 /// share either way, cycles a second.
@@ -243,7 +250,7 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
         flame: meshes.add(flame()),
         sheath: mats.add(paint(LinearRgba::new(0.25, 1.1, 1.6, 0.7))),
         core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
-        trail: mats.add(paint(LinearRgba::new(0.35, 1.5, 2.2, 0.55))),
+        trail: mats.add(paint(LinearRgba::new(0.3, 1.2, 1.8, 0.34))),
     });
 }
 
@@ -315,7 +322,11 @@ impl Craft {
     fn body_at(&self) -> Transform {
         let (pivot, bob) = match self.kind {
             SKIMMER => (SKIM_PIVOT_Y, (self.t * BOB_HZ * TAU).sin() * BOB_M),
-            _ => (FLY_PIVOT_Y, 0.0),
+            // A flier hangs on its lift too, while it is slow.
+            _ => (
+                FLY_PIVOT_Y,
+                (self.t * FLY_BOB_HZ * TAU).sin() * FLY_BOB_M * (1.0 - self.speed / FLY_BOB_TO).clamp(0.0, 1.0),
+            ),
         };
         let turn = Quat::from_rotation_z(self.pitch) * Quat::from_rotation_x(self.roll + self.lean);
         Transform::from_xyz(0.0, pivot + bob, 0.0).with_rotation(turn)
@@ -607,7 +618,7 @@ fn pose(
                 let head = stand.transform_point(body.transform_point(trail.from - pivot));
                 // A point is left behind each stretch of the way; the first
                 // rides with the craft.
-                let stretch = (speed * lasts / (TRAIL_N - 2) as f32).max(0.25);
+                let stretch = (speed * lasts / (TRAIL_N - 2) as f32).max(0.12);
                 if trail.points.len() < 2 || trail.points[1].0.distance(head) > stretch {
                     trail.points.insert(0, (head, right, now, bright));
                     trail.points.truncate(TRAIL_N);

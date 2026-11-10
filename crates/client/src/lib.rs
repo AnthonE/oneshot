@@ -1687,6 +1687,13 @@ fn draw_vehicles(
                     drawn.vehicles.insert(slot, e);
                 }
             }
+            // The dust its lift blows up, and a hurt hull's smoke.
+            let half = if kind == sim::vehicle::FLIER {
+                (sim::consts::FLY_HALF_L, sim::consts::FLY_BODY_HALF_W)
+            } else {
+                (sim::consts::SKIM_HALF_L, sim::consts::SKIM_HALF_W)
+            };
+            look::fx::hulls::hover(&mut fx, &core.map, slot, p, yaw, half, health, time.delta_secs());
             continue;
         }
         // Only a live hull on its wheels presses the grass: not one in the

@@ -29,9 +29,9 @@ TAU = math.tau
 # metal takes the sky's colour and reads white); its colour is the middle of
 # what `shade` then turns each plate about.
 PAINTS = {
-    'shell': ('#45228c', 0.35, 0.34, None, 0.0),
-    'shell_deep': ('#271756', 0.35, 0.38, None, 0.0),
-    'shell_pale': ('#7a5fc4', 0.30, 0.34, None, 0.0),
+    'shell': ('#5a2396', 0.35, 0.27, None, 0.0),
+    'shell_deep': ('#34185c', 0.35, 0.3, None, 0.0),
+    'shell_pale': ('#8f62c9', 0.30, 0.27, None, 0.0),
     'iron': ('#1c1b24', 0.75, 0.50, None, 0.0),
     'glass': ('#07070d', 0.60, 0.07, None, 0.0),
     'pad': ('#141218', 0.00, 0.85, None, 0.0),
@@ -39,12 +39,13 @@ PAINTS = {
     'light_dim': ('#06232a', 0.00, 0.30, ('#4ff2ff', 2.2), 0.0),
     'throat': ('#0a2a33', 0.00, 0.40, ('#7df6ff', 9.0), 0.0),
     'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.9), 0.0),
+    'vein': ('#06232a', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
     'ember': ('#2a0620', 0.00, 0.30, ('#ff4fd8', 5.0), 0.0),
 }
 # Paints that take a plate's tone and a worn edge (`shade`); the rest take
 # the traced shade alone, and a light none of it.
 PLATED = ('shell', 'shell_deep', 'shell_pale')
-LIT = ('light', 'light_dim', 'throat', 'glow', 'ember')
+LIT = ('light', 'light_dim', 'throat', 'glow', 'vein', 'ember')
 
 _paints = {}
 
@@ -223,13 +224,15 @@ def lip(at, w, h, n=20, p=2.6):
     return [oval(x + 0.1, y, z, w * 0.96, h * 0.96, n=n, p=p), oval(x - 0.03, y, z, w, h, n=n, p=p)]
 
 
-def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6):
-    """An engine's mouth looking aft from `at` (`lip`): a throat lit from
-    within, `deep` metres of it; its core, a swell of light whose middle is
-    `core[0]` in from the end, `core[1]` long, and `core[2]` and `core[3]`
-    of the mouth across and up; thin iron vanes across it. Its parts."""
+def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow'):
+    """An engine's mouth looking aft from `at` (`lip`): a throat `deep`
+    metres in, lined with `lining` (lit from within, or dark iron round a
+    core that is the only light in it); its core, a swell of light whose
+    middle is `core[0]` in from the end, `core[1]` long, and `core[2]` and
+    `core[3]` of the mouth across and up; thin iron vanes across it. Its
+    parts."""
     x, y, z = at
-    throat = loft([oval(x, y, z, w * 0.98, h * 0.98, n=n, p=p), oval(x + deep, y, z, w * 0.8, h * 0.8, n=n, p=p)], 'glow',
+    throat = loft([oval(x, y, z, w * 0.98, h * 0.98, n=n, p=p), oval(x + deep, y, z, w * 0.8, h * 0.8, n=n, p=p)], lining,
                   ends=('open', 'flat'), levels=1, name='throat', inside=True)
     swell = sphere(1.0, at=(x + core[0], y, z), material=None, scale=(core[1], w * core[2], h * core[3]), segments=24)
     swell.data.materials.append(skin('throat'))

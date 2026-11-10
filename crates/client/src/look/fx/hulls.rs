@@ -1,5 +1,6 @@
-//! Vehicles: dust off the wheels at speed, and smoke, then fire, from a
-//! hull badly hurt (its health is sent with it); what `look/truck.rs` asks
+//! Vehicles: dust off the wheels at speed (a one-seater's lift blows its
+//! own off the dirt under it), and smoke, then fire, from a hull badly hurt
+//! (its health is sent with it); what `look/truck.rs` asks
 //! for as it drives: tyre tracks, a landing's dust, a scrape's sparks, the
 //! exhaust, a wreck's husk smouldering. Drawn only.
 
@@ -51,6 +52,53 @@ pub fn roll(fx: &mut Fx, slot: u8, at: Vec3, yaw: f32, health: u8, dt: f32) {
             fx.emit_tint(Layer::Smoke, 1, top, Vec3::Y, Color::WHITE, 0.6 + 0.6 * dark);
             if health < FIRE_BELOW {
                 fx.emit_tint(Layer::Fireball, 1, top, Vec3::Y, Color::WHITE, 0.5);
+                engine_sparks(fx, top);
+            }
+        }
+    }
+    fx.hulls[i] = Hull { at: Some(at), acc };
+}
+
+/// A one-seater's lift blows dust off dirt from this near it, metres, and
+/// how often at rest (a share of the puffs it blows at full speed).
+const HOVER_DUST_M: f32 = 3.2;
+const HOVER_IDLE: f32 = 0.18;
+
+/// One one-seater this frame (`look/craft.rs`): `slot`, where, which way,
+/// how far its hull reaches aft and to each side, its health of 255. Its
+/// lift blows the dust off the dirt under it while it is low, a wake of it
+/// the faster it goes; and a hull badly hurt smokes, then burns, as a
+/// truck's.
+#[allow(clippy::too_many_arguments)]
+pub fn hover(fx: &mut Fx, map: &sim::map::Map, slot: u8, at: Vec3, yaw: f32, half: (f32, f32), health: u8, dt: f32) {
+    let i = slot as usize % fx.hulls.len();
+    let h = fx.hulls[i];
+    let speed = match h.at {
+        Some(p) if dt > 0.0 => (at - p).with_y(0.0).length() / dt,
+        _ => 0.0,
+    };
+    let speed = if speed > 60.0 { 0.0 } else { speed };
+    let mut acc = h.acc + dt * PUFF_HZ;
+    let fwd = Vec3::new(yaw.cos(), 0.0, yaw.sin());
+    let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+    let (matter, _, floor) = ground(map, at);
+    let low = (1.0 - (at.y - floor) / HOVER_DUST_M).clamp(0.0, 1.0);
+    let k = (speed / DUST_FULL_MPS).min(1.0);
+    while acc >= 1.0 {
+        acc -= 1.0;
+        if health > 0 && matter == Matter::Dirt && fx.rand() < low * (HOVER_IDLE + (1.0 - HOVER_IDLE) * k) {
+            // From under its after half, thrown out and back.
+            let off = side * fx.range(-half.1, half.1) - fwd * fx.range(0.0, half.0);
+            let from = Vec3::new(at.x + off.x, floor + 0.12, at.z + off.z);
+            let out = (off.normalize_or(-fwd) * 0.7 - fwd * k + Vec3::Y * 0.4).normalize_or(Vec3::Y);
+            fx.emit_tint(Layer::Dust, 1, from, out, dust_tint(matter), 2.5 + 4.5 * k);
+        }
+        if health > 0 && health < SMOKE_BELOW {
+            let top = at + Vec3::Y * 0.9 - fwd * half.0 * 0.6;
+            let dark = 1.0 - health as f32 / SMOKE_BELOW as f32;
+            fx.emit_tint(Layer::Smoke, 1, top, Vec3::Y, Color::WHITE, 0.5 + 0.5 * dark);
+            if health < FIRE_BELOW {
+                fx.emit_tint(Layer::Fireball, 1, top, Vec3::Y, Color::WHITE, 0.4);
                 engine_sparks(fx, top);
             }
         }
