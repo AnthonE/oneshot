@@ -199,7 +199,9 @@
     { "weapon": "beam_rifle", "at": [-60, 28], "respawn": 90, "mirror": true },
     { "weapon": "cannon", "at": [-66, -28], "respawn": 90, "mirror": true },
     { "weapon": "carbine", "at": [-88, 8], "respawn": 30, "mirror": true },
-    { "weapon": "sword", "at": [0, -56], "respawn": 120 }
+    { "weapon": "sword", "at": [0, -56], "respawn": 120 },
+    { "weapon": "br", "at": [-40, 22], "respawn": 30, "mirror": true },
+    { "weapon": "ion_rifle", "at": [-28, -26], "respawn": 45, "mirror": true }
   ],
   "vehicles": [
     { "at": [-88, -32], "yaw": 0, "respawn": 30, "mirror": true },

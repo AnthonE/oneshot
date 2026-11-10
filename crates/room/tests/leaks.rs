@@ -254,7 +254,8 @@ impl Gate {
                 // line of this client's eye: one lying still from the eye
                 // at some tick of the hold (where it lies was seen, and
                 // stays known), one flying from the eye now; never by who
-                // dropped it, so never where a hidden enemy fell.
+                // dropped it, so never where a hidden enemy fell. Or one it
+                // stood in reach of in the hold: what it can take, it sees.
                 sim::thing::Kind::Drop => {
                     let eye = me.eye();
                     for d in s.drops() {
@@ -270,7 +271,10 @@ impl Gate {
                             self.history.iter().any(|h| w.map.clear(h[self.me].eye(), look))
                         } else {
                             w.map.clear(eye, look)
-                        };
+                        } || self
+                            .history
+                            .iter()
+                            .any(|h| h[self.me].active() && t.reach(h[self.me].body.pos));
                         assert!(seen, "tick {}: a drop out of sight was sent: {d:?}", w.tick);
                     }
                 }

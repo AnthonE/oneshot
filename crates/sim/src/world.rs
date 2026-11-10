@@ -108,13 +108,14 @@ impl Rules {
     }
 
     /// Big Team, 8v8 Team Slayer: first side to 50, or the most at 15
-    /// minutes. Casual, bots in the empty seats.
+    /// minutes. Casual, bots in the empty seats. Out with the assault
+    /// rifle: the better guns are the map's to find.
     pub fn big_team() -> Rules {
         Rules {
             teams: true,
             score_limit: 50,
             time_limit_ms: 900_000,
-            loadout: [crate::arms::BR, crate::arms::MAGNUM],
+            loadout: [crate::arms::AR, crate::arms::MAGNUM],
             seats: MAX_FIGHTERS as u8,
             gun_game: false,
             friendly_fire: false,
@@ -140,6 +141,7 @@ impl Rules {
         Rules {
             score_limit: 3,
             time_limit_ms: 900_000,
+            loadout: [crate::arms::BR, crate::arms::MAGNUM],
             seats: 8,
             ctf: true,
             ..Rules::big_team()
