@@ -2404,6 +2404,9 @@ mod tests {
         assert!(siege.iter().all(|id| sim::maps::ALL
             .iter()
             .any(|d| d.id == *id && d.siege.len() == sim::consts::SIEGE_NODES)));
+        // Free for all is every map in the rotation, Big Team's too.
+        let every: Vec<u8> = sim::maps::ALL.iter().filter(|d| !d.practice).map(|d| d.id).collect();
+        assert_eq!(pool(Vec::new(), ROT_FFA), every);
         // A server's own list is played as given.
         assert_eq!(pool(vec![7, 0], ROT_FFA), vec![7, 0]);
     }

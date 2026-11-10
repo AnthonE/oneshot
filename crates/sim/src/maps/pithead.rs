@@ -1,4 +1,4 @@
-//! Pithead: A mine's pithead built over its open shaft, 42 by 28 m, the same for red (-x) and blue (+x) turned about its middle. Nothing in the middle but the shaft and what hangs in it, four floors stacked over the drop: the collar a metre down with the sword, the cage across it 3.5 m up from deck to deck, the gantry 7 m up from crown to crown through the winding cab, and the sheave deck on the cab's roof with the sniper, up the ramps beside the gantry or by the skip from the collar. Round it, each side's headframe on its rock (the hall, its mezzanine, its crown, a lift up from its spur) and a deck over the drop from each side's mezzanine to the other's spur, the overshield on the north deck and the camo on the south where the cage meets them. Off any edge is death. Out of the rotation until it has been played.
+//! Pithead: A mine's pithead built over its open shaft, 42 by 28 m, the same for red (-x) and blue (+x) turned about its middle. Nothing in the middle but the shaft and what hangs in it, four floors stacked over the drop: the collar a metre down with the sword, the cage across it 3.5 m up from deck to deck, the gantry 7 m up from crown to crown through the winding cab, and the sheave deck on the cab's roof with the sniper, up the ramps beside the gantry or by the skip from the collar. Round it, each side's headframe on its rock (the hall, its mezzanine, its crown, a lift up from its spur) and a deck over the drop from each side's mezzanine to the other's spur, the overshield on the north deck and the camo on the south where the cage meets them. Off any edge is death.
 //!
 //! Generated from `maps/pithead/map.json` by `tools/maps/compile.mjs`: edit the JSON,
 //! then run it. CI fails if this file is not what the JSON compiles to.
@@ -13,7 +13,7 @@ use crate::terrain::TerrainDef;
 pub const DEF: Def = Def {
     id: 8,
     name: "Pithead",
-    practice: true,
+    practice: false,
     modes: 14,
     lo: (-24.0, -17.0),
     hi: (24.0, 17.0),
