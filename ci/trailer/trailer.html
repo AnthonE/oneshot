@@ -430,18 +430,18 @@ const SCENES = [
   } },
   // Big Team: the trucks on Dry Fork
   { id: 'y1-truck', at: hit(79.69), box: true, draw(L) {
-    foot(bg, 'truck-pov', L.t, L.d, { from: .3, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
+    foot(bg, 'truck-pov', L.t, L.d, { from: .2, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
     caption(L, ['OR BRING A TRUCK.'], { y: 820, size: 86, at: .2, track: 6 });
   } },
   { id: 'y2-bigteam', at: grid(19), box: true, draw(L) {
     const two = L.d / 2;
     if (L.t < two) foot(bg, 'trucks', L.t, two, { from: .1, fallback: 'dryfork', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.08, z1: 1.16, x0: .2 } });
-    else foot(bg, 'launch-pov', L.t - two, L.d - two, { from: .1, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.08 } });
+    else foot(bg, 'bt-rush', L.t - two, L.d - two, { from: .2, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.08 } });
     if (L.t >= two) { const k = Math.exp(-(L.t - two) * 14); if (k > .04) { fg.save(); fg.globalAlpha = k * .35; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); } }
     modeCard(L, 'BIG TEAM', 'Capture the Flag, 8v8, across a canyon 290 m long. A minigun on the back of two trucks.', { tag: '16 PLAYERS', tagColor: C.blueHi });
   } },
   { id: 'y3-canyon', at: grid(22), box: true, draw(L) {
-    foot(bg, 'bt-flag', L.t, L.d, { fallback: 'dryfork', grade: 'contrast(1.05) saturate(1.06)', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } });
+    foot(bg, 'bt-flag', L.t, L.d, { from: .6, fallback: 'dryfork', grade: 'contrast(1.05) saturate(1.06)', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } });
     caption(L, ['TWO FLAGS. SIXTEEN PLAYERS.', 'ONE CANYON.'], { y: 760, size: 74, at: .2, step: .5, track: 5 });
   } },
   // the rest of the modes, one a beat over two, on footage graded down to a bed

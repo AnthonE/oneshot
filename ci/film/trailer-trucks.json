@@ -48,15 +48,6 @@
     "fstop": 5.6,
     "shake": 0.1
    }
-  },
-  {
-   "name": "launch-pov",
-   "at": 142.0,
-   "len": 2.2,
-   "pov": true,
-   "look": {
-    "shake": 0.08
-   }
   }
  ]
 }
