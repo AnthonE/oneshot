@@ -564,7 +564,6 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
     .add_plugins(look::gun_skin::plugin)
-    .add_plugins(look::lying::plugin)
     .add_plugins(MaterialPlugin::<look::blade::BladeMaterial>::default())
     .add_plugins(look::cels::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())

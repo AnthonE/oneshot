@@ -2,7 +2,7 @@
 //! ground where it spawns (or its power-up: an orb in its rings hovering
 //! over it, `look/powerup.rs`), gone while the pad waits
 //! (the snapshot's `empty_s`); the guns and grenades on the floor that the
-//! snapshot names, each glowing faintly to be seen (`look/lying.rs`); and the
+//! snapshot names, each as its model came (no glow laid over it); and the
 //! line that says what USE would take here. All read from the session; what
 //! USE takes is the sim's (`World::pickup`).
 
@@ -77,18 +77,16 @@ fn loaded(core: &NetCore, i: usize) -> bool {
     core.latest().pads().get(i).is_none_or(|p| p.empty_s == 0)
 }
 
-/// Grenades lying under `root`, at `at`, glowing.
+/// Grenades lying under `root`, at `at`.
 fn frag(commands: &mut Commands, models: &Models, at: Transform, root: Entity) {
-    let scene = commands.spawn((SceneRoot(models.frag.clone()), at, ChildOf(root))).id();
-    crate::look::lying::glow(commands, scene);
+    commands.spawn((SceneRoot(models.frag.clone()), at, ChildOf(root)));
 }
 
 /// `arm`'s gun under `root`, turned about its middle rather than its grip,
-/// drawn [`LYING_SCALE`] big, glowing.
+/// drawn [`LYING_SCALE`] big.
 fn posed(commands: &mut Commands, models: &Models, arm: u8, basis: Quat, root: Entity) {
     if let (Some(g), Some((pivot, scene))) = (guns::gun(arm), guns::spawn_posed(commands, models, arm, basis, root)) {
         crate::look::blade::light(commands, scene, arm);
-        crate::look::lying::glow(commands, scene);
         let half = g.height * g.scale * (0.5 - g.grip) * LYING_SCALE;
         commands.entity(pivot).insert(Transform {
             translation: basis * Vec3::new(0.0, -half, 0.0),
