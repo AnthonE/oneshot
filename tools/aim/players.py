@@ -12,9 +12,17 @@ them cheating every match with one assist. Here:
   random, set it: the score above 1% of their windows, as a review would set
   its line on players it has already cleared. The other half and every
   cheater are judged by it.
-- **A player's evidence** after each match is their flags so far against
-  their sightings so far, as a binomial tail at the honest 1%: the chance an
-  honest player flags that often. A case opens below `--p` (0.001).
+- **A player's evidence** after each match is the odds their flags so far
+  give against the honest 1%: a likelihood ratio, mixed over the rates a
+  cheater might flag at (Wald's sequential test, with no rate guessed). It
+  is looked at after every match, so it has to stay honest under looking:
+  the chance an honest player's odds *ever* reach 1/`--p` is at most `--p`
+  (0.001), however long they play. A binomial tail read after every match
+  is not that: at 0.001 it opened a case on up to 1% of honest careers
+  (`--selftest` shows both).
+- **`--null`** is the honest rate tested against (default the line's own
+  1%). Honest players don't all flag at the line's rate, so before this
+  decides anything it wants a margin read off the spread printed below.
 - **What it reports:** how well players are told apart after 1, 3, 10
   matches and the whole career; each cheater's matches to a case; honest
   players with a case (false accusations); and the honest flag rates' spread.
@@ -31,13 +39,31 @@ import os
 import sys
 
 import numpy as np
-import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import train as det  # noqa: E402
-import zoo  # noqa: E402
 
 FPR = 0.01
+# The flag rates a cheater might show, as multiples of the honest rate: the
+# test's alternative is all of them at once, equally weighted.
+RATES = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
+
+
+def odds(k, n, p0=FPR):
+    """The odds `k` flags in `n` sightings give against an honest player who
+    flags at `p0` or less: the likelihood ratio, averaged over [`RATES`].
+    Under honest play it is a supermartingale that starts at 1, so the
+    chance it ever reaches `x` is at most 1/x (Ville's inequality): it may
+    be read after every match."""
+    if n <= 0:
+        return 1.0
+    logs = []
+    for r in RATES:
+        p1 = min(p0 * r, 0.95)
+        if p1 <= p0:
+            continue
+        logs.append(k * math.log(p1 / p0) + (n - k) * math.log((1 - p1) / (1 - p0)))
+    top = max(logs)
+    return math.exp(min(700.0, top + math.log(sum(math.exp(x - top) for x in logs) / len(logs))))
 
 
 def tail(k, n, p=FPR):
@@ -57,13 +83,60 @@ def tail(k, n, p=FPR):
     return min(1.0, total)
 
 
+def selftest(p=1e-3, players=20000, seed=0):
+    """Honest players at exactly the line's rate, looked at after every
+    match: how many ever get a case, by the odds and by the binomial tail
+    this replaced; then how soon cheaters do."""
+    rng = np.random.default_rng(seed)
+    print(f"{players} honest players flagging at {FPR:.0%}, a case at {p:g}:")
+    worst = 0.0
+    for per, matches in ((20, 50), (40, 50), (40, 200)):
+        k = rng.binomial(per, FPR, size=(players, matches)).cumsum(1)
+        by_odds = by_tail = 0
+        seen = {}
+        for row in k:
+            o = t = False
+            for m in range(matches):
+                key = (int(row[m]), per * (m + 1))
+                if key not in seen:
+                    seen[key] = (odds(*key) >= 1 / p, tail(*key) < p)
+                o, t = o or seen[key][0], t or seen[key][1]
+                if o and t:
+                    break
+            by_odds += o
+            by_tail += t
+        worst = max(worst, by_odds / players)
+        print(f"  {per} sightings a match, {matches:>3} matches: a case for {by_odds / players:.3%} by the odds, "
+              f"{by_tail / players:.2%} by the tail read every match")
+    print("cheaters, 40 sightings a match, median matches to a case (by the odds, by the tail):")
+    for rate in (0.03, 0.05, 0.10, 0.25):
+        k = rng.binomial(40, rate, size=(2000, 200)).cumsum(1)
+        at = [[next((m + 1 for m in range(200) if hit(int(row[m]), 40 * (m + 1))), 201) for row in k]
+              for hit in (lambda k, n: odds(k, n) >= 1 / p, lambda k, n: tail(k, n) < p)]
+        print(f"  flagged {rate:.0%}: {np.median(at[0]):.0f}, {np.median(at[1]):.0f}")
+    if worst > p:
+        sys.exit(f"the odds opened a case on {worst:.3%} of honest players, over {p:.3%}")
+    print("ok")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("league")
-    ap.add_argument("--detector", required=True)
-    ap.add_argument("--p", type=float, default=1e-3, help="a case opens below this chance for an honest player")
+    ap.add_argument("league", nargs="?")
+    ap.add_argument("--detector")
+    ap.add_argument("--p", type=float, default=1e-3,
+                    help="a case opens at odds of 1/p: at most this share of honest players ever get one")
+    ap.add_argument("--null", type=float, default=FPR, help="the honest flag rate tested against (the line's, or it with a margin)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--selftest", action="store_true", help="the test on made-up players, no detector or torch")
     args = ap.parse_args()
+    if args.selftest:
+        return selftest(args.p)
+    if not args.league or not args.detector:
+        ap.error("a league and --detector (or --selftest)")
+    import torch
+
+    import train as det
+    import zoo
 
     ck = torch.load(args.detector, map_location=det.DEV, weights_only=False)
     w, meta, info, col = zoo.load(args.league)
@@ -96,13 +169,13 @@ def main():
             r = rows[match[rows] == m]
             n += len(r)
             k += int(flag[r].sum())
-            steps.append({"match": m, "n": n, "k": k, "p": tail(k, n), "mean": float(score[r].mean())})
+            steps.append({"match": m, "n": n, "k": k, "odds": odds(k, n, args.null), "mean": float(score[r].mean())})
         careers[p] = steps
 
     def case_at(p):
-        return next((i + 1 for i, s in enumerate(careers[p]) if s["p"] < args.p), None)
+        return next((i + 1 for i, s in enumerate(careers[p]) if s["odds"] >= 1 / args.p), None)
 
-    report = {"league": args.league, "detector": args.detector, "threshold": thr, "p": args.p}
+    report = {"league": args.league, "detector": args.detector, "threshold": thr, "p": args.p, "null": args.null}
     judged = judged_honest + cheaters
     yw = np.isin(player, cheaters)
     sel = np.isin(player, judged)
@@ -140,7 +213,7 @@ def main():
     print(f"one sighting: AUC {report['window_auc']:.3f}")
     print("a player, by flag rate after N matches: " + ", ".join(
         f"{k} {v['auc']:.3f}" for k, v in by_m.items()))
-    print(f"cheaters (a case at p < {args.p:g} under the honest 1%):")
+    print(f"cheaters (a case at odds of {1 / args.p:g}:1 against an honest {args.null:.1%}):")
     for r in sorted(rows, key=lambda r: (r["case_at"] is None, r["case_at"] or 0)):
         at = f"case after {r['case_at']} of {r['matches']} matches" if r["case_at"] else f"no case in {r['matches']} matches"
         print(f"  player {r['player']:>2} {r['style']:<8} {r['genome']:<12} flags {r['flag_rate']:>5.1%}  {at}")
