@@ -148,7 +148,7 @@ node ci/client_shot.mjs traces/x.png 25 6 3 1        # look at a match in a brow
                                                      #   GFX=webgpu for the WebGPU module, ?gfx=webgpu|webgl2 on the page)
 ci/desktop_shot.sh traces/x.png 4 6 3 1 menu         # the same on the desktop (Xvfb, lavapipe; title: … 2 0 0 0,
                                                      #   settings, pose='map=6&eye=…&look=…'); F12 in game saves one
-                                                     # either: quality=potato|low|medium|high draws that rung (a software
+                                                     # either: quality=potato|low|medium|high|ultra draws that rung (a software
                                                      #   GPU is otherwise POTATO in a browser: look/potato.rs), graphics opens
                                                      #   SETTINGS > GRAPHICS (`?graphics=1` / `--graphics`)
 tools/fx.sh list | <name>… [--knobs 'Layer.key=v;…'] # the fx stage: one effect's strip → traces/fx/<name>/

@@ -19,6 +19,7 @@
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
@@ -46,6 +47,13 @@ const SHOT_EYE: Vec3 = Vec3::new(-12.0, 10.0, -16.0);
 const SHOT_LOOK: Vec3 = Vec3::new(6.0, 7.5, 6.0);
 const SWAY: f32 = 2.5;
 const DRIFT_S: f32 = 70.0;
+/// The backdrop is out of focus behind the title ([`backdrop_focus`]): the
+/// lens set this near, metres, and this wide open, so the whole hall is
+/// past its far limit and blurs the same; and the widest that blur is
+/// drawn, pixels across on a 1080-line window.
+const FOCUS_M: f32 = 1.5;
+const FOCUS_F_STOPS: f32 = 1.0;
+const FOCUS_BLUR_PX: f32 = 14.0;
 /// The curtain over the backdrop until its level is there
 /// (`loading::Settle`), then how long it holds and how fast it lifts; its
 /// guard is the title's loading overlay's (`Settle::given_up`), which lifts
@@ -410,7 +418,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
                 .run_if(in_state(Screen::Title)),
         )
         .add_systems(Update, (page_cmds, join, poll, ended, hud_shown).chain())
-        .add_systems(Update, fly.after(crate::view));
+        .add_systems(Update, (fly.after(crate::view), backdrop_focus));
 }
 
 fn enter(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut front: ResMut<Front>) {
@@ -2999,6 +3007,57 @@ fn hud_shown(
     let want = if on { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut q {
         v.set_if_neq(want);
+    }
+}
+
+/// On the eye while the title holds its lens ([`backdrop_focus`]), so the
+/// title takes off only the blur it put on (a film's shot sets its own).
+#[derive(Component)]
+struct BackdropFocus;
+
+/// Behind the title the backdrop is out of focus, so the panels, the words
+/// and Triple T (his own picture, drawn over it) are what is sharp, and the
+/// hall's lamps and strips are soft discs behind them. Only the title's
+/// picture: a match is never blurred, nor a pose (`--pose`, no title).
+/// Where the frame has its post chain and the room for another pass: never
+/// WebGL2 (Bevy's depth of field reads the depth buffer, which its GL
+/// can't), nor a rung without bloom, nor the lite frame.
+fn backdrop_focus(
+    mut commands: Commands,
+    tier: Res<crate::look::quality::Tier>,
+    in_match: Res<InMatch>,
+    title: Query<(), With<TitleRoot>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    cams: Query<(Entity, Has<BackdropFocus>, Has<DepthOfField>), With<crate::look::rig::EyeCam>>,
+) {
+    let want = !in_match.0
+        && !title.is_empty()
+        && !crate::look::gpu::WEBGL2
+        && tier.gfx.bloom != crate::look::quality::Glow::Off
+        && !tier.lite();
+    for (cam, ours, lens) in &cams {
+        if want && !lens {
+            let h = window.single().map_or(1080.0, |w| w.physical_height() as f32);
+            commands.entity(cam).insert((
+                BackdropFocus,
+                DepthOfField {
+                    // Bevy's bokeh doesn't work on WebGPU; its gaussian does
+                    // (`film::lens`).
+                    mode: if crate::look::gpu::api() == "webgpu" {
+                        DepthOfFieldMode::Gaussian
+                    } else {
+                        DepthOfFieldMode::Bokeh
+                    },
+                    focal_distance: FOCUS_M,
+                    aperture_f_stops: FOCUS_F_STOPS,
+                    max_circle_of_confusion_diameter: FOCUS_BLUR_PX * h / 1080.0,
+                    max_depth: crate::look::rig::FAR_M,
+                    ..default()
+                },
+            ));
+        } else if !want && ours {
+            commands.entity(cam).remove::<(BackdropFocus, DepthOfField)>();
+        }
     }
 }
 

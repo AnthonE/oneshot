@@ -39,11 +39,11 @@ const flag = (k) => params.get(k) === '1';
 if (flag('lite')) document.getElementById('wrap').classList.add('lite');
 // The graphics ladder's words for the game (look/quality.rs,
 // look/potato.rs): `?potato` is POTATO from now on, `?quality=high`
-// (potato, low, medium, high) that rung for this run, as a picture of
+// (potato, low, medium, high, ultra) that rung for this run, as a picture of
 // it wants; `?lite=1` is POTATO for this run.
 const gfxOpts = [
   ...(params.has('potato') && params.get('potato') !== '0' ? ['potato'] : []),
-  ...(/^(potato|low|medium|high)$/.test(params.get('quality') ?? '') ? ['quality=' + params.get('quality')] : []),
+  ...(/^(potato|low|medium|high|ultra)$/.test(params.get('quality') ?? '') ? ['quality=' + params.get('quality')] : []),
 ];
 /* FULLSCREEN on the settings screen is the page's (crates/client/src/
    display.rs). Esc is the game's menu key and a browser also ends a

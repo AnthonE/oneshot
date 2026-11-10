@@ -12,7 +12,7 @@
 #   more: menu (the Esc menu over the match), settings (over the title, or
 #   the match), graphics (the settings on GRAPHICS), fxdemo, fxstage=N (the
 #   demo's stage N alone: crates/client/src/look/fx/demo.rs), lite (POTATO),
-#   quality=potato|low|medium|high (that rung; unset, the default HIGH),
+#   quality=potato|low|medium|high|ultra (that rung; unset, the default HIGH),
 #   capsules, name=NAME, tab=armory|party|friends|challenges (the title on
 #   that panel), look=SKIN,HEAD,FEET,EMBLEM
 #   (what Triple T wears: `proto::Look`'s ids, the emblem as its u16; in a

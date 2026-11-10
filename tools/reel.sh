@@ -12,7 +12,7 @@
 #
 #   tools/reel.sh rifle sniper       → traces/reel/<gun>/{pov.mp4, rest, burst, wall, floor, melee, frag, reload}.jpg
 #   tools/reel.sh list               the guns
-#   REEL_QUALITY=low tools/reel.sh rifle    another rung (potato low medium high; high has bloom)
+#   REEL_QUALITY=low tools/reel.sh rifle    another rung (potato low medium high ultra; high has bloom, ultra its glow)
 #   REEL_TAG=before tools/reel.sh rifle     → traces/reel/before/<gun>/, to keep a round
 #   REEL_SIZE=1920x1080 …                   the frame (1280x720)
 #   REEL_KNOBS='Sparks.speed=4,12;…' tools/reel.sh rifle   retuned, no rebuild (the fx skill's knobs)

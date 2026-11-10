@@ -399,7 +399,7 @@ fn graphics(pane: &mut ChildSpawnerCommands, s: &Settings, tier: &Tier) {
     if webgl2 {
         fact(pane, "BLOOM", "not in WebGL2: the glows are drawn to read without it");
     } else {
-        toggle(pane, s, Knob::Bloom, "BLOOM");
+        number(pane, s, Knob::Bloom, "BLOOM", "ON: a soft veil; GLOW: lights bloom");
     }
     number(
         pane,
