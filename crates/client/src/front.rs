@@ -150,8 +150,8 @@ const MODES: [Mode; 9] = [
     Mode {
         id: proto::MODE_BIG_TEAM,
         name: "BIG TEAM",
-        short: "8V8 · VEHICLES",
-        about: "Team Slayer on terrain, with vehicles. Bots fill the empty seats.",
+        short: "8V8 · FLAGS · VEHICLES",
+        about: "Capture the Flag on terrain, with vehicles. First to 3 captures. Bots fill the empty seats.",
         ranked: false,
         tag: "mode6",
     },

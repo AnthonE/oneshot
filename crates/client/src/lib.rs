@@ -164,7 +164,17 @@ impl Look {
 
 /// The link (by `front::LinkGen`) and welcome this level was built for.
 #[derive(Resource, Default)]
-pub(crate) struct Built(Option<(u32, u32)>);
+pub struct Built(Option<(u32, u32)>);
+
+impl Built {
+    /// Whether the level for this link and welcome is up. What hangs its
+    /// own parts on a level (the pads' guns, the flags, Siege's nodes)
+    /// waits for it: parts made a frame before `rebuild` saw the welcome
+    /// went down with the old level and were never made again.
+    pub fn is(&self, gen: Option<&front::LinkGen>, welcomes: u32) -> bool {
+        self.0 == Some((gen.map_or(0, |g| g.0), welcomes))
+    }
+}
 
 /// Drawn things by their slot (a fighter with the side and look its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
@@ -554,7 +564,6 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // (`look/paint.rs`).
     .add_plugins(look::paint::plugin)
     .add_plugins(look::gun_skin::plugin)
-    .add_plugins(look::lying::plugin)
     .add_plugins(MaterialPlugin::<look::blade::BladeMaterial>::default())
     .add_plugins(look::cels::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())

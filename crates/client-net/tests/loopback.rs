@@ -456,7 +456,7 @@ fn a_driver_predicts_its_vehicle_without_a_correction() {
 fn every_kill_arrives_once_through_loss() {
     let mut r = start(60.0, 10.0, 0.10, false);
     let mut told = 0u32;
-    for _ in 0..160 {
+    for _ in 0..480 {
         r.run(500.0, player);
         let now = r.now;
         told += r

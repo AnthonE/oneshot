@@ -87,6 +87,10 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
             side(1)
         );
         assert!(m.spawns.len() >= 8, "{}: eight seats need eight spawns", m.name);
+        // Big Team is Capture the Flag (`Rules::big_ctf`): its maps have flags.
+        if d.plays(sim::map::ROT_BIG_TEAM) {
+            assert!(m.flags.is_some(), "{}: a Big Team map with no flags", m.name);
+        }
     }
 }
 
@@ -325,6 +329,30 @@ fn bots_fight_on_every_map() {
             );
             assert_eq!(own_falls, 0, "{} with {n} seats: bots walked off the edge", d.name);
         }
+    }
+}
+
+/// Big Team's sixteen seated at once on Dry Fork: nobody on top of anyone,
+/// and each side spread over its spawns, never one heap at its base.
+#[test]
+fn a_full_big_team_spreads_over_its_spawns() {
+    let mut w = World::new(by_id(3).unwrap(), Rules::big_team(), 1, (2, 3));
+    for s in 0..MAX_FIGHTERS {
+        w.seat(s, (s & 1) as u8);
+    }
+    for a in 0..MAX_FIGHTERS {
+        for b in a + 1..MAX_FIGHTERS {
+            let d = (w.fighters[a].body.pos - w.fighters[b].body.pos).len();
+            assert!(d > 2.0, "{a} and {b} spawned {d} m apart");
+        }
+        let crowd = (0..MAX_FIGHTERS)
+            .filter(|&b| b != a && w.fighters[b].team == w.fighters[a].team)
+            .filter(|&b| (w.fighters[a].body.pos - w.fighters[b].body.pos).len() < SPAWN_CROWD_R)
+            .count();
+        assert!(
+            crowd <= 2,
+            "{a} spawned with {crowd} teammates within {SPAWN_CROWD_R} m"
+        );
     }
 }
 

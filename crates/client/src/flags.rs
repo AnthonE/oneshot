@@ -196,7 +196,7 @@ pub fn draw(
     mood: Res<crate::look::mood::MoodNow>,
     time: Res<Time>,
     (film, posed): (Option<Res<crate::film::Film>>, Option<Res<crate::pose::Pose>>),
-    gen: Option<Res<crate::front::LinkGen>>,
+    (gen, level): (Option<Res<crate::front::LinkGen>>, Res<crate::Built>),
 ) {
     // The wind the banners feel.
     let m = &mood.mood;
@@ -251,7 +251,7 @@ pub fn draw(
             (POSED, [Some(at), None])
         } else {
             let s = link.0.session();
-            if !s.ready {
+            if !s.ready || !level.is(gen.as_deref(), s.welcomes) {
                 return;
             }
             let core = &s.core;
