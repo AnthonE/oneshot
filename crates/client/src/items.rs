@@ -110,9 +110,10 @@ pub fn draw(
     plasma: Option<Res<crate::look::fx::plasma::Kit>>,
     powerup: Option<Res<crate::look::powerup::Kit>>,
     gen: Option<Res<crate::front::LinkGen>>,
+    level: Res<crate::Built>,
 ) {
     let s = link.0.session();
-    if !s.ready {
+    if !s.ready || !level.is(gen.as_deref(), s.welcomes) {
         return;
     }
     let core = &s.core;
