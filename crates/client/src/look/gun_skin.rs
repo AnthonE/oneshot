@@ -64,7 +64,14 @@ pub struct CoatParams {
 
 /// How bright the sky photograph is in a reflection, on screen (its mean is
 /// 1).
-const ENV_GAIN: f32 = 0.55;
+const ENV_GAIN: f32 = 0.33;
+/// How much of the map's own light a gun reflects, and how much of the
+/// photograph's sheen it keeps where it is seen edge on. A gun in the hand is
+/// seen along its length, where every surface is mostly sheen: with all of
+/// both, its steel was pale in a lit hall and in the sun and dark only in a
+/// corner.
+const ENV_OWN: f32 = 0.65;
+const ENV_EDGE: f32 = 0.2;
 
 /// No coat, its glow as painted, no gauge.
 pub const BARE: CoatParams = CoatParams {
@@ -90,7 +97,7 @@ pub const BARE: CoatParams = CoatParams {
     ],
     look: Vec4::ZERO,
     hot: Vec4::ZERO,
-    env: Vec4::new(ENV_GAIN, (ENV_LEVELS - 1) as f32, 0.0, 0.0),
+    env: Vec4::new(ENV_GAIN, (ENV_LEVELS - 1) as f32, ENV_OWN, ENV_EDGE),
     steel: FORGE.steel,
     finish: FORGE.finish,
 };
@@ -226,8 +233,9 @@ struct Line {
     paint_mid: f32,
     rest_mid: f32,
     chroma: [f32; 2],
-    /// The steel (what the paint leaves grey): its metal, and its roughness
-    /// as finished and where it is worn bright.
+    /// The steel (what the paint leaves grey): its metal, its roughness as
+    /// finished and where it is worn bright, and how dark it is against its
+    /// map (the map's grey is a paint's; gunmetal is darker).
     steel: Vec4,
     /// The line's own coat (what the paint colours): its metal and its
     /// roughness; then dirt's roughness, and how much of a part's metal it
@@ -241,7 +249,7 @@ const FORGE: Line = Line {
     paint_mid: 0.08,
     rest_mid: 0.08,
     chroma: [0.02, 0.06],
-    steel: Vec4::new(0.92, 0.36, 0.2, 0.0),
+    steel: Vec4::new(0.92, 0.36, 0.2, 0.5),
     finish: Vec4::new(0.5, 0.45, 0.85, 0.7),
 };
 /// The ship's violet is most of the gun: a shell with a pearl's sheen, over
@@ -250,7 +258,7 @@ const VEIL: Line = Line {
     paint_mid: 0.05,
     rest_mid: 0.1,
     chroma: [0.066, 0.13],
-    steel: Vec4::new(0.9, 0.4, 0.24, 0.0),
+    steel: Vec4::new(0.9, 0.4, 0.24, 0.5),
     finish: Vec4::new(0.7, 0.3, 0.85, 0.7),
 };
 
