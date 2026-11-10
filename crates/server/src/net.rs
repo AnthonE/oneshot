@@ -244,6 +244,10 @@ pub struct Gate {
     /// Addresses held to no share, as loopback isn't (`Config::load_sources`).
     exempt: Vec<IpAddr>,
     conns: AtomicUsize,
+    /// Connections past their hello ([`Permit::opened`]): what the lobby's
+    /// "full" counts. A handshake nobody finishes (a spoofed address costs
+    /// one packet each) holds a place in `conns`, never one here.
+    open: AtomicUsize,
     /// Sessions in a match, the queue or watching: what costs snapshots.
     playing: Arc<AtomicUsize>,
     places: Mutex<(BTreeMap<IpAddr, u16>, BTreeMap<IpAddr, u16>)>,
@@ -263,11 +267,25 @@ impl Drop for Playing {
 pub struct Permit {
     gate: Arc<Gate>,
     keys: Option<(IpAddr, IpAddr)>,
+    open: bool,
+}
+
+impl Permit {
+    /// Its hello came: it is a session now, counted with the lobbies.
+    pub fn opened(&mut self) {
+        if !self.open {
+            self.open = true;
+            self.gate.open.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Drop for Permit {
     fn drop(&mut self) {
         self.gate.conns.fetch_sub(1, Ordering::Relaxed);
+        if self.open {
+            self.gate.open.fetch_sub(1, Ordering::Relaxed);
+        }
         if let (Some((src, pre)), Ok(mut m)) = (self.keys, self.gate.places.lock()) {
             let (by_src, by_pre) = &mut *m;
             for (map, k) in [(by_src, src), (by_pre, pre)] {
@@ -305,6 +323,7 @@ impl Gate {
             capacity: capacity.max(1),
             exempt: Vec::new(),
             conns: AtomicUsize::new(0),
+            open: AtomicUsize::new(0),
             playing: Arc::new(AtomicUsize::new(0)),
             places: Mutex::new((BTreeMap::new(), BTreeMap::new())),
         }
@@ -327,11 +346,17 @@ impl Gate {
         self.playing.load(Ordering::Relaxed)
     }
 
+    /// Connections whose hello came (this one's too, by then).
+    pub fn sessions(&self) -> usize {
+        self.open.load(Ordering::Relaxed)
+    }
+
     /// Whether a session in `mode` is answered "full": a match past
-    /// capacity in players, the lobby past every player's connections.
+    /// capacity in players, the lobby past every player's connections
+    /// (those that said hello: a handshake left hanging fills nothing).
     pub fn full(&self, lobby: bool) -> bool {
         if lobby {
-            self.busy() > CONNS_PER_PLAYER * self.capacity
+            self.sessions() > CONNS_PER_PLAYER * self.capacity
         } else {
             self.players() >= self.capacity
         }
@@ -364,6 +389,7 @@ impl Gate {
         Some(Permit {
             gate: self.clone(),
             keys,
+            open: false,
         })
     }
 }
@@ -557,7 +583,7 @@ fn queue_match_side(
 
 async fn session(
     incoming: IncomingSession,
-    _permit: Permit,
+    mut permit: Permit,
     to_sim: mpsc::Sender<ToSim>,
     inputs: Inputs,
     ctx: Arc<Ctx>,
@@ -574,6 +600,7 @@ async fn session(
         ctx.health.handshake_failed.fetch_add(1, Ordering::Relaxed);
         return;
     };
+    permit.opened();
     let Msg::Hello {
         proto,
         name,
@@ -1089,17 +1116,27 @@ mod tests {
         let gate = Arc::new(Gate::new(2));
         let lo: IpAddr = "127.0.0.1".parse().unwrap();
         // Two players, each with a lobby and a match: four connections.
-        let conns: Vec<Permit> = (0..4).map(|_| gate.take(lo).unwrap()).collect();
+        let said_hello = |mut p: Permit| {
+            p.opened();
+            p
+        };
+        let conns: Vec<Permit> = (0..4).map(|_| said_hello(gate.take(lo).unwrap())).collect();
         let a = gate.play();
         assert!(!gate.full(false), "one player of two");
         let b = gate.play();
         assert!(gate.full(false), "a third player is full");
         assert!(!gate.full(true), "their lobbies still fit");
-        let more = gate.take(lo).unwrap();
+        // Handshakes nobody finishes (a spoofed address each) hold
+        // connections, never a lobby's place.
+        let hanging: Vec<Permit> = (0..100).map(|_| gate.take(lo).unwrap()).collect();
+        assert_eq!(gate.busy(), 104);
+        assert!(!gate.full(true), "a hanging handshake fills no lobby");
+        drop(hanging);
+        let more = said_hello(gate.take(lo).unwrap());
         assert!(gate.full(true), "past every player's connections");
         drop((a, more));
         assert!(!gate.full(false));
         drop((b, conns));
-        assert_eq!(gate.players(), 0);
+        assert_eq!((gate.players(), gate.sessions(), gate.busy()), (0, 0, 0));
     }
 }
