@@ -74,6 +74,12 @@ for row in "${SETS[@]}"; do
   [ "$name" = stone ] && grade=(-modulate 118,22,100)
   # The cold rock is cut grey too: its tint (`ground::ICE_TINT`) gives it the frost's blue.
   [ "$name" = ice_rock ] && grade=(-modulate 100,12,100)
+  if [ "$name" = snow ]; then
+    # Snow is its shape: the photograph flattened to white over a relief
+    # the wind laid, all four maps cut by tools/snow.py.
+    python3 tools/snow.py "$d" "$id" "$out"
+    continue
+  fi
   if [ "$name" = grass ]; then
     # The turf is cut hard: its own occlusion laid into its colour and its
     # contrast drawn out, so what lies between the tufts is blades with

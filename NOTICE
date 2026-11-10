@@ -121,7 +121,8 @@ Dario Barresi, processing Jenelle van Heerden). Cloudbreak's two are cut
 the same way: old_sandstone_02 (Dimitrios Savva, its rock) and
 large_sandstone_blocks_01 (Rob Tuytel, its masonry, greyed). The arenas' are
 cut the same way: brick_wall_001, marble_01, asphalt_02, brushed_concrete_2,
-snow_floor and rusty_metal_02. Pithead's ground is snow_01 (Rob Tuytel)
+snow_floor (over a relief of our own, tools/snow.py) and rusty_metal_02.
+Pithead's ground is snow_01 (Rob Tuytel)
 and its rock marble_cliff_05 (Amal Kumar, greyed). The bases' two
 are cut from ambientCG (ambientcg.com) by the same tool: MetalPlates001 (steel)
 and DiamondPlate008C (tread). The boxes' other two are copied from Gates by

@@ -53,6 +53,10 @@ class Part:
         self.verts = []
         self.faces = []  # (vertex indices, uvs, smooth)
         self.colors = {}  # vertex index: (r, g, b), painted here, not traced
+        # vertex index: how much of its traced shade and tone is let go, 0..1. A
+        # sheet's rim lying on a floor the game draws itself, which has neither:
+        # at 1 the two meet in one value, not along a line.
+        self.fade = {}
 
     def add(self, pts):
         i = len(self.verts)
@@ -440,6 +444,7 @@ def paint(objs, ground=None, tone=None):
                 normals[i] += p.normal
         lit = name.startswith('light_') or name in UNTRACED
         own = PARTS[name].colors if name in PARTS else {}
+        fade = PARTS[name].fade if name in PARTS else {}
         for i, v in enumerate(me.vertices):
             n = normals[i].normalized() if normals[i].length > 1e-6 else Vector((0, 0, 1))
             if lit:
@@ -469,7 +474,9 @@ def paint(objs, ground=None, tone=None):
             cell = (int(v.co.x // 1.3), int(v.co.y // 1.3), int(v.co.z // 0.7))
             rng.seed(hash(cell) & 0xffff)
             jitter = 0.94 + 0.12 * rng.random()
-            attr.data[i].color = (ao * d[0] * jitter, ao * d[1] * jitter, ao * d[2] * jitter, 1.0)
+            c = (ao * d[0] * jitter, ao * d[1] * jitter, ao * d[2] * jitter)
+            w = fade.get(i, 0.0)
+            attr.data[i].color = (c[0] + (1.0 - c[0]) * w, c[1] + (1.0 - c[1]) * w, c[2] + (1.0 - c[2]) * w, 1.0)
         me.color_attributes.active_color_index = 0
 
 

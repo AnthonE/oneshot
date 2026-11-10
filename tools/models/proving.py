@@ -28,6 +28,16 @@ arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'snow': 2.6, 'rust': 2.4})
 arch.UNTRACED.update({'decal', 'track', 'peaks', 'shaft'})
 
 W = 24.0
+# How much of its shade a wall's drift lets go, row by row from the wall out
+# to its rim.
+DRIFT_FADE = (0.0, 0.0, 0.15, 0.45, 0.8, 1.0)
+# How far in from a cap of snow's edge it reaches its depth, m.
+CAP_LIP = 0.1
+# A bank at a thing's foot: its rows, each how far out from the thing's face
+# (a share of its reach; the first is tucked in behind the face, m), and how
+# much of its shade each lets go.
+BANK_ROWS = (-0.16, 0.0, 0.2, 0.45, 0.72, 1.0)
+BANK_FADE = (0.0, 0.0, 0.15, 0.45, 0.8, 1.0)
 
 
 def turn(k, x, z):
@@ -42,19 +52,69 @@ def qbox(k, x0, y0, z0, x1, y1, z1, mat='blast', c=0.04, **kw):
 
 
 def snow_cap(x0, y, z0, x1, z1, k=0):
-    """Snow lying on a flat top: a low soft cushion inside its plan."""
-    n = 5
+    """Snow lying on a flat top: a cushion inside its plan that rises to its
+    depth within `CAP_LIP` of its edge, so it ends in a rounded lip with a
+    line of shade under it and reads against what lies beyond; a ramp from
+    its middle to nothing is a coat of paint."""
+    lip = min(CAP_LIP, (x1 - x0) / 4, (z1 - z0) / 4)
+    stops = lambda a, b: (a, a + lip * 0.35, a + lip, (a + b) / 2, b - lip, b - lip * 0.35, b)
     rows = []
-    for j in range(n + 1):
+    for z in stops(z0, z1):
         row = []
-        for i in range(n + 1):
-            u, v = i / n, j / n
-            e = min(u, 1 - u, v, 1 - v) * 2
-            h = 0.09 * (1 - (1 - min(1.0, e * 2)) ** 2) * (0.75 + 0.25 * math.sin(u * 7.1 + v * 5.3))
-            px, pz = turn(k, x0 + (x1 - x0) * u, z0 + (z1 - z0) * v)
+        for x in stops(x0, x1):
+            u, v = (x - x0) / (x1 - x0), (z - z0) / (z1 - z0)
+            t = min(1.0, min(x - x0, x1 - x, z - z0, z1 - z) / lip)
+            h = 0.09 * (1 - (1 - t) ** 2) * (0.75 + 0.25 * math.sin(u * 7.1 + v * 5.3))
+            px, pz = turn(k, x, z)
             row.append((px, y + 0.004 + h, pz))
         rows.append(row)
     surface(rows, 'snow', (0, 1, 0), lambda p: (p[0], p[2]))
+
+
+def bank(path, closed, seed, reach=0.95, high=0.13):
+    """Snow banked against the foot of a thing: along `path`, its plan's
+    corners in order with the thing on the left hand, `high` at its face (a
+    hand: no one's feet are hidden by more than a fall of snow would hide)
+    and out to nothing `reach` from it, more and less along it. An open
+    path's bank runs out at its ends. Its shade is let go toward its rim,
+    as a wall's drift's is (`BANK_FADE`)."""
+    cols = []  # (x, z, out x, out z, how much of a bank there is)
+    n = len(path)
+    for i in range(n if closed else n - 1):
+        a, b = path[i], path[(i + 1) % n]
+        ln = math.hypot(b[0] - a[0], b[1] - a[1])
+        dx, dz = (b[0] - a[0]) / ln, (b[1] - a[1]) / ln
+        steps = max(2, round(ln / 0.5))
+        for j in range(steps + 1):
+            cols.append((a[0] + dx * ln * j / steps, a[1] + dz * ln * j / steps, dz, -dx))
+        # Round the corner to the next side.
+        if closed or i < n - 2:
+            c = path[(i + 2) % n]
+            l2 = math.hypot(c[0] - b[0], c[1] - b[1])
+            ex, ez = (c[0] - b[0]) / l2, (c[1] - b[1]) / l2
+            a0, a1 = math.atan2(-dx, dz), math.atan2(-ex, ez)
+            turn_ = (a1 - a0 + math.pi) % math.tau - math.pi
+            for j in (1, 2, 3):
+                a_ = a0 + turn_ * j / 4
+                cols.append((b[0], b[1], math.cos(a_), math.sin(a_)))
+    if closed:
+        cols.append(cols[0])
+    first = len(part('snow').verts)
+    rows = []
+    for t in BANK_ROWS:
+        row = []
+        for i, (x, z, ox, oz) in enumerate(cols):
+            s = i / (len(cols) - 1)
+            end = 1.0 if closed else min(1.0, s * len(cols) / 3, (1 - s) * len(cols) / 3)
+            wob = 0.5 + 0.5 * math.sin(math.tau * (2 * s + seed)) * math.sin(math.tau * (5 * s + seed * 3.1))
+            out = max(t, 0.0) * reach * (0.6 + 0.8 * wob) * (0.4 + 0.6 * end) + min(t, 0.0)
+            h = high * (0.8 + 0.2 * wob) * end * (1 - max(t, 0.0)) ** 1.7
+            row.append((x + ox * out, 0.002 + h, z + oz * out))
+        rows.append(row)
+    surface(rows, 'snow', (0, 1, 0), lambda p: (p[0], p[2]))
+    for j, w in enumerate(BANK_FADE):
+        for i in range(len(cols)):
+            part('snow').fade[first + j * len(cols) + i] = w
 
 
 def wall_side(k):
@@ -214,8 +274,9 @@ def decal_disc(x, z, r, k, rng, mat='decal', lobes=11):
             pa.faces.append(((p, q, s, r_), [(0, 0)] * 4, True))
 
 
-def tracks(pts, gauge_w=1.5, width=0.34, alpha=0.5):
-    """A vehicle's two ruts along a curve of points, their edges soft."""
+def tracks(pts, gauge_w=1.5, width=0.2, alpha=0.5):
+    """A vehicle's two ruts along a curve of points, their edges soft: a
+    tyre wide, or on clean snow they are two bands of shadow."""
     pa = part('track')
     for s in (-1, 1):
         rows = []
@@ -239,8 +300,9 @@ def tracks(pts, gauge_w=1.5, width=0.34, alpha=0.5):
 
 def floor():
     rng = random.Random(14)
-    # Scorch: round the target hard, a few old shots out on the range.
-    decal_disc(0.0, 0.0, 6.6, 0.92, rng)
+    # Scorch: round the target hard (out past its dais, which is six metres
+    # across and hid most of a smaller one), a few old shots out on the range.
+    decal_disc(0.0, 0.0, 8.6, 0.92, rng)
     for x, z, r, k in ((-10.0, 10.0, 2.6, 0.6), (12.0, -13.0, 3.2, 0.66), (-15.0, -19.0, 2.2, 0.5), (5.0, 19.0, 2.4, 0.5), (19.0, 18.0, 1.9, 0.5), (-6.0, -6.0, 1.7, 0.42)):
         decal_disc(x, z, r, k, rng)
     # The carriers' ruts: lanes the range's vehicles wore.
@@ -254,9 +316,13 @@ def floor():
     tracks(curve((-23.5, 14.0), (23.5, 10.0), -3.0))
     tracks(curve((-11.0, -23.5), (-6.0, 23.5), 5.0), alpha=0.32)
     # Drifts along the walls and in the lee of things: a hand high, so no one's
-    # feet are hidden by more than a fall of snow would hide them.
+    # feet are hidden by more than a fall of snow would hide them. A drift's
+    # shade is let go toward its rim (`DRIFT_FADE`, its rows from the wall
+    # out): the floor it runs out onto is the game's own and has none, and a
+    # drift ends in the snow, not at a line across it.
     for k in range(4):
         n, m = 48, 5
+        first = len(part('snow').verts)
         rows = []
         for j in range(m + 1):
             row = []
@@ -269,6 +335,19 @@ def floor():
                 row.append((px, 0.002 + h, pz))
             rows.append(row)
         surface(rows, 'snow', (0, 1, 0), lambda p: (p[0], p[2]))
+        for j, w in enumerate(DRIFT_FADE):
+            for i in range(n + 1):
+                part('snow').fade[first + j * (n + 1) + i] = w
+    # And banked at the foot of what stands on the range: the gauges, the low
+    # walls, each bunker round to its steps. Not the target: it is scorched.
+    for i, (sx, sz) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
+        x, z = sx * 8.0, sz * 12.0
+        bank([(x - 0.75, z - 0.75), (x + 0.75, z - 0.75), (x + 0.75, z + 0.75), (x - 0.75, z + 0.75)], True, 0.13 + i * 0.21)
+    for i, z in enumerate((-16.0, 16.0)):
+        bank([(-6.0, z - 0.25), (6.0, z - 0.25), (6.0, z + 0.25), (-6.0, z + 0.25)], True, 0.4 + i * 0.37, reach=0.8)
+    round_bunker = [(12.0, -1.5), (12.0, -4.0), (20.0, -4.0), (20.0, 4.0), (12.0, 4.0), (12.0, 1.5)]
+    bank(round_bunker, False, 0.62)
+    bank([(-x, z) for x, z in reversed(round_bunker)], False, 0.85)
 
 
 def flood_masts():

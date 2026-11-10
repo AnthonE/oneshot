@@ -130,11 +130,8 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
             crate::look::built::tile(BLAST),
             Color::linear_rgb(0.45, 0.45, 0.47),
         ),
-        SNOW => (
-            "snow",
-            crate::look::built::tile(SNOW),
-            Color::linear_rgb(3.3, 3.42, 3.7),
-        ),
+        // Its set is cut white (`tools/snow.py`'s `WHITE`).
+        SNOW => ("snow", crate::look::built::tile(SNOW), Color::WHITE),
         RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
         _ => return None,
     })
@@ -553,6 +550,12 @@ pub fn dress_level(
                 LinearRgba::BLACK
             },
             emissive_texture: glow,
+            // The snow's set lies over more than a tile of its UVs.
+            uv_transform: if look.0 == SNOW {
+                bevy::math::Affine2::from_scale(Vec2::splat(1.0 / crate::look::built::SNOW_LAID))
+            } else {
+                bevy::math::Affine2::IDENTITY
+            },
             ..base
         };
         let mut ec = commands.entity(e);

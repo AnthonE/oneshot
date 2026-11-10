@@ -34,6 +34,9 @@ pub const MARBLE_TILE_M: f32 = 3.0;
 pub const ROAD_TILE_M: f32 = 5.0;
 pub const BLAST_TILE_M: f32 = 3.6;
 pub const SNOW_TILE_M: f32 = 2.6;
+/// The snow's set is cut this many of those tiles across (`tools/snow.py`'s
+/// `TILE_M`): its swells want the room, and a floor of it is fifty metres.
+pub const SNOW_LAID: f32 = 2.0;
 pub const RUST_TILE_M: f32 = 2.4;
 /// The bronze: brushed and old, not polished (a mirror under the open sky is
 /// white).
