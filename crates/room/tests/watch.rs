@@ -194,3 +194,25 @@ fn an_assist_over_a_bot_is_flagged() {
     }
     assert!(watch.stats[0].on_target() > watch.stats[1].on_target() + 0.1);
 }
+
+/// In a room, sight is looked at for people only (a bot's row of rays is
+/// nobody's to read); what everyone did is still counted.
+#[test]
+fn a_room_looks_at_its_people_s_sight_only() {
+    let rules = Rules {
+        score_limit: 1000,
+        time_limit_ms: 0,
+        ..Rules::doubles()
+    };
+    let mut room = room::Room::new(sim::map::Map::proving_grounds(), rules, 9, (4, 5));
+    let (me, _) = room.join(proto::Name::new("me"), proto::Look::default()).unwrap();
+    for t in 0..(60 * sim::consts::TICK_HZ) {
+        room.step(f64::from(t) * 1000.0 / f64::from(sim::consts::TICK_HZ));
+    }
+    let stats = &room.watch().stats;
+    assert!(stats[me as usize].sight_ticks > 0, "the person saw someone");
+    for (s, st) in stats.iter().enumerate().take(4).filter(|(s, _)| *s != me as usize) {
+        assert_eq!(st.sight_ticks, 0, "bot {s}");
+        assert!(st.alive_ticks > 0 && st.shots > 0, "bot {s} still played: {st:?}");
+    }
+}

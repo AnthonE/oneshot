@@ -961,8 +961,12 @@ impl Room {
         self.world.step_with(&inputs, &lag);
         let (fogs, tick) = (&self.fogs, self.world.tick);
         let mut plain = fog::Plain::default();
+        // The review is of people (`watch`): a bot's sight is nobody's to read.
+        let people = (0..MAX_FIGHTERS)
+            .filter(|&s| matches!(self.seats[s], Seat::Person(..)))
+            .fold(0u16, |m, s| m | 1 << s);
         self.watch
-            .observe_with(&self.world, &mut plain, |v, t| fogs[v].shows(t, tick));
+            .observe_with(&self.world, &mut plain, people, |v, t| fogs[v].shows(t, tick));
 
         for e in self.world.events.as_slice() {
             if e.kind == Ev::Kill {
