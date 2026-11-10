@@ -54,10 +54,13 @@ struct Coat {
     // rgb: the pattern's hot colour, linear; w how much of the gun's steel
     // it takes (its paint it takes whole).
     hot: vec4<f32>,
-    // x: the sky photograph's brightness in a reflection; y its last level.
+    // x: the sky photograph's brightness in a reflection; y its last level;
+    // z: how much of the map's own light the gun reflects; w: how much of
+    // the photograph's sheen it keeps where it is seen edge on.
     env: vec4<f32>,
     // The gun's steel, what its paint leaves grey: x its metal; y its
-    // roughness as finished, z where it is worn bright.
+    // roughness as finished, z where it is worn bright; w how dark it is
+    // against its map (the map's grey is a paint's: gunmetal is darker).
     steel: vec4<f32>,
     // The line's own coat, what its paint colours: x its metal, y its
     // roughness; z dirt's roughness, w how much of a part's metal dirt takes.
@@ -268,6 +271,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let dirt = smoothstep(DIRT_FROM, DIRT_FULL, tone);
     let metal = mix(coat.steel.x, coat.finish.x, painted) * (1.0 - coat.finish.w * dirt);
     let rough = mix(mix(mix(coat.steel.y, coat.steel.z, worn), coat.finish.y, painted), coat.finish.z, dirt);
+    let own = c * mix(coat.steel.w, 1.0, max(painted, lit));
     pbr_input.material.metallic = mix(metal, pbr_input.material.metallic, lit);
     pbr_input.material.perceptual_roughness = mix(rough, pbr_input.material.perceptual_roughness, lit);
 
@@ -276,7 +280,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         coat.paint.rgb * min(luma / coat.mid.x, TONE_MAX),
         paint,
     );
-    pbr_input.material.base_color = vec4<f32>(mix(c, mix(coated, c, lit), coat.glow.y), pbr_input.material.base_color.a);
+    pbr_input.material.base_color = vec4<f32>(mix(own, mix(coated, c, lit), coat.glow.y), pbr_input.material.base_color.a);
     pbr_input.material.metallic = mix(pbr_input.material.metallic, coat.paint.w, paint);
     pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, coat.rest.w, paint);
 
@@ -303,6 +307,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     pbr_input.material.emissive = vec4<f32>(emissive, pbr_input.material.emissive.a);
 
+    // What it reflects of the map's own light: less than a mirror of its
+    // steel would, or held up to the eye its top is all sheen.
+    let own_spec = pbr_input.specular_occlusion;
+    pbr_input.specular_occlusion = own_spec * coat.env.z;
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
@@ -319,8 +327,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let sky = mix(vec3<f32>(dot(photo, vec3<f32>(0.2126, 0.7152, 0.0722))), photo, SKY_CHROMA);
         let f0 = mix(vec3<f32>(0.04), m.base_color.rgb, m.metallic);
         let ab = env_brdf(m.perceptual_roughness, nv);
-        let shade = pbr_input.diffuse_occlusion * pbr_input.specular_occlusion;
-        out.color = vec4<f32>(out.color.rgb + sky * (f0 * ab.x + ab.y) * shade * coat.env.x, out.color.a);
+        let shade = pbr_input.diffuse_occlusion * own_spec;
+        // The metal's own colour of it whole; of the white sheen every
+        // surface has seen edge on, a share: a gun in the hand is seen along
+        // its length, and all of that sheen is a pale gun.
+        out.color = vec4<f32>(out.color.rgb + sky * (f0 * ab.x + ab.y * coat.env.w) * shade * coat.env.x, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

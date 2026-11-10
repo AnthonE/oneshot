@@ -21,7 +21,10 @@
 #   and its rating), pose=QUERY (no server: a picture,
 #   `map=6&eye=-20,6,0&look=0,2,0` or `yaw=1.57&arm=3`), loadout=GUNS (the
 #   server's --loadout: everyone starts with them), scope (the autopilot
-#   holds the scope), passive (the bots don't fight back).
+#   holds the scope), passive (the bots don't fight back), drill (the
+#   autopilot's range drill, `tools/reel.sh`'s: on map `range` it stands at
+#   rest for its first seconds, the same view every run, so two shots of a
+#   gun in the hand can be laid side by side).
 #
 #   ci/desktop_shot.sh traces/scope.png 6 0 3 1 loadout=sniper scope passive
 #
@@ -82,9 +85,10 @@ for w in "${more[@]}"; do
     wardrobe=*) args+=(--wardrobe "${w#wardrobe=}") ;;
     pose=*) args+=(--pose "${w#pose=}") ;;
     scope | scope=1) args+=(--scope) ;;
+    drill | drill=1) args+=(--drill) ;;
     loadout=*) loadout=${w#loadout=} ;;
     passive | passive=1) passive=1 ;;
-    *) echo "desktop_shot: what is '$w'? (menu settings graphics title tab= look= wardrobe= fxdemo fxstage= lite quality= capsules name= pose= scope loadout= passive)" >&2; exit 1 ;;
+    *) echo "desktop_shot: what is '$w'? (menu settings graphics title tab= look= wardrobe= fxdemo fxstage= lite quality= capsules name= pose= scope loadout= passive drill)" >&2; exit 1 ;;
   esac
 done
 case " ${args[*]} " in *" --pose "*) match=0 ;; esac
