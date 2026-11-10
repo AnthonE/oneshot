@@ -377,3 +377,40 @@ fn a_jump_is_never_thrown_sideways() {
         }
     }
 }
+
+/// Dry Fork's closed end is held by its cliff, never by the bound: a run up
+/// the bank behind red's base, jumping all the way, stops against rock
+/// short of it. The bound once stood 20 m out on the bank, a wall nobody
+/// could see.
+#[test]
+fn dry_forks_closed_end_is_its_cliff() {
+    use sim::geom::V3;
+    use sim::input::JUMP;
+    use sim::movement::{step, Body};
+    let m = by_id(3).unwrap();
+    for z in [-50.0, -30.0, -10.0, 0.0, 10.0, 30.0, 50.0] {
+        let mut b = Body {
+            pos: V3::new(-125.0, m.floor(-125.0, z, BODY_R, 40.0), z),
+            vel: V3::new(0.0, 0.0, 0.0),
+            grounded: true,
+            crouched: false,
+            duck: 0,
+        };
+        for t in 0..TICK_HZ * 30 {
+            let inp = Input {
+                buttons: if t % 2 == 0 { JUMP } else { 0 },
+                yaw: 32768,
+                pitch: 0,
+                mx: 0,
+                mz: 127,
+            };
+            step(&mut b, &inp, &m);
+        }
+        assert!(
+            b.pos.x < -150.0 && b.pos.x > m.lo.0 + 2.0,
+            "z {z}: stopped at {:?}, the bound at {}",
+            b.pos,
+            m.lo.0
+        );
+    }
+}
