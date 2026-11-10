@@ -13,7 +13,11 @@ are by tools/assets.mjs. The guns, the rocket and the frag are ours: each
 is commissioned from Meshy on a paid plan and owned outright, from our own
 prompt (in its script in tools/models, which cuts the mesh it gets with
 Blender: sized, turned, its maps made smaller and re-encoded as JPEG); no
-attribution is owed. The boulders and the sea stack (models/rock,
+attribution is owed. The one-seaters (models/skimmer.glb, flier.glb) are
+ours on the same terms: commissioned from Meshy from our own prompts and cut
+by the script of its name on tools/models/craft.py's kit (turned and sized
+to the sim's hull, its maps made smaller and re-encoded as JPEG). The
+boulders and the sea stack (models/rock,
 boulder_*.glb, sea_stack.glb) and the bases' pylon (models/base/pylon.glb)
 are ours on the same terms: commissioned from Meshy from our own prompts
 and cut by tools/models/rocks.py (squared up, thinned, their paint baked
@@ -46,7 +50,8 @@ Its steel panels and its tyres wear photographed materials from ambientCG
 
 The sound effects (crates/client/assets/sound) are ours: made with
 ElevenLabs' sound-effects model (eleven_text_to_sound_v3) on a paid plan
-(Starter, 2026-11-04 and 2026-11-06) from the prompts in tools/sfx.mjs.
+(Starter, 2026-11-04, 2026-11-06 and 2026-11-09) from the prompts in
+tools/sfx.mjs; the thump under a gun's shot is made there.
 
 The announcer (crates/client/assets/sound/voice) is ours: made with
 ElevenLabs' text to speech (eleven_v4, the library voice Kallixis) on a paid

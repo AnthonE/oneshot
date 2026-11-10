@@ -31,7 +31,12 @@
 //! carrier sees it. `craft=x,y,z` stands a one-seater there (`look/craft.rs`),
 //! `y` over the ground, `craftkind=1` a skimmer or `2` a flier, turned by
 //! `craftyaw=`, its nose up `craftpitch=` and rolled `craftroll=` (radians),
-//! `craftboost=1` boosting.
+//! `craftboost=1` boosting, `craftseat=1` the fighter at its controls.
+//! `craftcam=x,y,z` puts the camera in the craft's own frame (metres ahead
+//! of its middle, over the ground under it, to its right), looking at
+//! `craftaim=x,y,z` in the same frame: a view that needs no height read off
+//! the map (`tools/craft.sh`'s). `craftchase=1` is the camera a player has
+//! at its controls, looking the way it points.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -87,6 +92,12 @@ pub struct View {
     /// A one-seater for the picture: where it stands (over the ground), its
     /// yaw, its kind, its nose and roll (radians), whether it boosts.
     pub craft: Option<(Vec3, f32, u8, f32, f32, bool)>,
+    /// The fighter is at its controls.
+    pub craft_seat: bool,
+    /// The camera and what it looks at, in the craft's frame.
+    pub craft_cam: Option<(Vec3, Vec3)>,
+    /// The camera is the one at its controls (`craft_chase`).
+    pub craft_chase: bool,
 }
 
 /// A ball of plasma for the picture (`look/fx/plasma.rs`), standing at `look`:
@@ -115,8 +126,42 @@ pub fn stand_orb(
 
 /// The radius of the circle a posed truck drives, metres.
 const CIRCLE_M: f32 = 8.0;
+/// What `craftcam` looks at with no `craftaim`: the craft's middle.
+const CRAFT_AIM: Vec3 = Vec3::new(0.0, 0.8, 0.0);
 
 impl View {
+    /// The camera's eye and what it looks at: as given, or in the craft's
+    /// frame (`craftcam`), on the `ground` under it.
+    pub fn camera(&self, ground: impl Fn(f32, f32) -> f32) -> (Vec3, Vec3) {
+        let Some((at, yaw, kind, pitch, ..)) = self.craft else {
+            return (self.eye, self.look);
+        };
+        let base = at + Vec3::Y * ground(at.x, at.z);
+        if self.craft_chase {
+            // From its pilot's eye, where the sim seats one.
+            let hull = sim::vehicle::Vehicle::new_kind(
+                V3::new(base.x, base.y, base.z),
+                sim::geom::rad_to_yaw(yaw),
+                0,
+                0,
+                kind,
+            );
+            let seat = hull.mount(sim::vehicle::DRIVER);
+            let eye = Vec3::new(seat.x, seat.y + sim::consts::CROUCH_EYE, seat.z);
+            let aim = Vec3::new(pitch.cos() * yaw.cos(), pitch.sin(), pitch.cos() * yaw.sin());
+            return crate::craft_chase(kind, eye, aim);
+        }
+        let Some((cam, aim)) = self.craft_cam else {
+            return (self.eye, self.look);
+        };
+        let (f, r) = (
+            Vec3::new(yaw.cos(), 0.0, yaw.sin()),
+            Vec3::new(-yaw.sin(), 0.0, yaw.cos()),
+        );
+        let world = |v: Vec3| base + f * v.x + Vec3::Y * v.y + r * v.z;
+        (world(cam), world(aim))
+    }
+
     /// The truck's place and yaw `t` seconds in: where it was put, or as
     /// far round its circle as it has driven.
     pub fn truck_at(&self, t: f32) -> Option<(Vec3, f32)> {
@@ -204,6 +249,9 @@ impl Pose {
                     get("craftboost", 0.0) != 0.0,
                 )
             }),
+            craft_seat: get("craftseat", 0.0) != 0.0,
+            craft_cam: vec("craftcam").map(|c| (c, vec("craftaim").unwrap_or(CRAFT_AIM))),
+            craft_chase: get("craftchase", 0.0) != 0.0,
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
@@ -216,7 +264,7 @@ impl Pose {
             hull.mount(seat)
         });
         let view = View {
-            fighter: view.fighter || mount.is_some(),
+            fighter: view.fighter || mount.is_some() || (view.craft.is_some() && view.craft_seat),
             ..view
         };
         let yaw = get("yaw", core::f32::consts::PI);
@@ -352,9 +400,11 @@ pub fn throw(
 }
 
 /// The still camera, over whatever `view` set.
-pub fn aim(pose: Res<Pose>, mut cam: Query<&mut Transform, With<crate::Eye>>) {
+pub fn aim(pose: Res<Pose>, link: NonSend<crate::LinkRes>, mut cam: Query<&mut Transform, With<crate::Eye>>) {
     if let Ok(mut t) = cam.single_mut() {
-        *t = Transform::from_translation(pose.2.eye).looking_at(pose.2.look, Vec3::Y);
+        let map = &link.0.session().core.map;
+        let (eye, look) = pose.2.camera(|x, z| map.ground(x, z));
+        *t = Transform::from_translation(eye).looking_at(look, Vec3::Y);
     }
 }
 

@@ -224,6 +224,8 @@ impl Legs {
 pub struct LimbBones {
     /// LeftArm, LeftForeArm, LeftHand.
     pub arm: [Entity; 3],
+    /// RightArm, RightForeArm, RightHand.
+    pub right_arm: [Entity; 3],
     pub hips: Entity,
     /// UpLeg, Leg, Foot: left, then right.
     pub legs: [[Entity; 3]; 2],
@@ -270,6 +272,7 @@ pub fn bind(model: Entity, names: &Query<&Name>, children: &Query<&Children>) ->
     let three = |a: &str, b: &str, c: &str| Some([find(a)?, find(b)?, find(c)?]);
     Some(LimbBones {
         arm: three("LeftArm", "LeftForeArm", "LeftHand")?,
+        right_arm: three("RightArm", "RightForeArm", "RightHand")?,
         hips: find(super::anim::HIPS_BONE)?,
         legs: [
             three("LeftUpLeg", "LeftLeg", "LeftFoot")?,
