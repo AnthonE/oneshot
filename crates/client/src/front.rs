@@ -1243,6 +1243,7 @@ const FEET_BLURBS: [&str; proto::FOOTWEAR.len()] = [
     "Tooled leather and steel. They don't jingle: your steps sound no louder in them.",
     "Armour plate and a lit seam. The magnets hold you to nothing.",
     "Yellow rubber, mud to the ankle. Dry where it matters.",
+    "Huge, goofy, and in the pill's colours. For PROS holders; they don't make you any bigger.",
 ];
 
 /// A line of the box under the cards: the item under the pointer, else
