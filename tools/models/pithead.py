@@ -302,9 +302,12 @@ def icicles(S, a, b, y, rng, spacing=0.12, longest=0.45, fill=0.8):
         S.rod((x, y + 0.01, z), (x, y - ln_, z), r, 'ice', sides=5, taper=0.06)
 
 
-def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0):
+def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0, holes=()):
     """Snow blown onto a floor, a hair over it: thick against `walls` ('-x',
-    '+x', '-z', '+z': which of its edges stand walled), thin out over it."""
+    '+x', '-z', '+z': which of its edges stand walled), thin out over it. None
+    over `holes`, the floor's openings (x0, z0, x1, z1 each): a bank laid across
+    a stairwell hangs in the air over the stairs, a pale sheet whoever climbs
+    them looks down through."""
     rng = random.Random(seed)
     pa = part('drift')
     nx, nz = max(2, int((x1 - x0) / 0.25)), max(2, int((z1 - z0) / 0.25))
@@ -328,6 +331,11 @@ def drift(S, x0, z0, x1, z1, y, walls, reach=0.9, seed=0):
             pa.colors[len(pa.verts) - 1] = (1.0, 1.0, 1.0, alpha)
     for j in range(nz):
         for i in range(nx):
+            cx0, cx1 = x0 + (x1 - x0) * i / nx, x0 + (x1 - x0) * (i + 1) / nx
+            cz0, cz1 = z0 + (z1 - z0) * j / nz, z0 + (z1 - z0) * (j + 1) / nz
+            if any(cx1 > hx0 + 1e-4 and cx0 < hx1 - 1e-4 and cz1 > hz0 + 1e-4 and cz0 < hz1 - 1e-4
+                   for hx0, hz0, hx1, hz1 in holes):
+                continue
             k = base + j * (nx + 1) + i
             face(pa, (k, k + 1, k + nx + 2, k + nx + 1), (0, 1, 0), True)
 
@@ -405,7 +413,8 @@ def shaft_house(S):
     S.box(-13.2, 6.5, -2.0, -13.0, 7.0, 14.0, 'steel', c=0.01, cell=3.0)
     # Short: they hang in the mezzanine's window and the way out to the deck.
     icicles(S, (-13.02, -1.8), (-13.02, 13.8), 6.5, rng, longest=0.3, fill=0.6)
-    drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s)
+    drift(S, -21.0, -2.0, -13.0, 14.0, 7.0, ['-x', '+z', '-z'], reach=1.1, seed=7 + S.s,
+          holes=[(-21.0, 5.6, -19.0, 12.0)])
     # Its crate.
     crate(S, -16.6, 7.0, 8.4, -15.4, 8.2, 9.6)
     # Its floor: concrete over the rock, the snow blown in at its doors.
