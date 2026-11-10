@@ -230,20 +230,22 @@ pub const MIST: Mood = Mood {
 };
 
 /// Dry Fork: a desert afternoon. The sun well down the sky (39°) and
-/// across the canyon, a little warm, so one wall glows, the other stands in
-/// blue shade and throws it over a strip of the floor, and neither base
-/// looks into it; cumulus racing over on a stiff wind so their shadows
-/// sweep it end to end; a little dust in the air; the frame a step richer
-/// and harder than the light gives it, as red rock under a clear sky is.
+/// across the canyon, so one wall glows, the other stands in
+/// shade and throws it over a strip of the floor, and neither base looks
+/// into it; cumulus racing over on a stiff wind so their shadows sweep it
+/// end to end; a little dust in the air. The sun's colour stays near white
+/// and the frame ungraded: the atmosphere already warms a 39° sun on the
+/// desktop, and a warm sun with a richer, harder grade over it read as a
+/// cartoon there, its shade side near black.
 pub const DESERT: Mood = Mood {
     name: "desert afternoon",
     sun_elev: 0.68,
     sun_azim: 2.75,
-    sun_rgb: [1.0, 0.9, 0.74],
-    sun: 1.08,
+    sun_rgb: [1.0, 0.97, 0.9],
+    sun: 1.0,
     light: 1.0,
-    fill: 0.82,
-    ev100: 14.3,
+    fill: 0.95,
+    ev100: 14.4,
     cover: 0.5,
     dark: 0.0,
     mist: 0.0,
@@ -262,13 +264,7 @@ pub const DESERT: Mood = Mood {
     veil: 0.0,
     field_at: [3.0, 22.0],
     hall: 0,
-    grade: Grade {
-        temperature: 0.0,
-        tint: 0.0,
-        saturation: 1.1,
-        contrast: 1.07,
-        lift: 0.0,
-    },
+    grade: Grade::NONE,
     snow: false,
 };
 
