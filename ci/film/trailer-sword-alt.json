@@ -1,0 +1,79 @@
+{
+ "tape": "traces/film/sword.tape",
+ "out": "traces/film/trailer",
+ "width": 1600,
+ "height": 900,
+ "fps": 30,
+ "quality": "high",
+ "settle": 20,
+ "hold": 24,
+ "look": {
+  "saturation": 1.06,
+  "contrast": 1.05,
+  "shutter": 0.5
+ },
+ "shots": [
+  {
+   "name": "sword-lunge-b",
+   "at": 69.4,
+   "len": 5.0,
+   "fov": 58,
+   "speed": [
+    [
+     0,
+     1
+    ],
+    [
+     1.9,
+     1
+    ],
+    [
+     2.1,
+     0.25
+    ]
+   ],
+   "follow": {
+    "back": 2.8,
+    "up": 1.3,
+    "side": 1.3,
+    "lag": 0.08
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.03
+   }
+  },
+  {
+   "name": "sword-lunge-c",
+   "at": 180.1,
+   "len": 5.0,
+   "fov": 58,
+   "speed": [
+    [
+     0,
+     1
+    ],
+    [
+     1.9,
+     1
+    ],
+    [
+     2.1,
+     0.25
+    ]
+   ],
+   "follow": {
+    "back": 2.8,
+    "up": 1.3,
+    "side": -1.3,
+    "lag": 0.08
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.03
+   }
+  }
+ ]
+}

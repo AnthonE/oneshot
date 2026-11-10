@@ -337,7 +337,7 @@ function scope(L, alpha, sway = 1) {
 const KILL = hit(45.44);                    // the cold open's swing, on the first big kick
 // Where each sword clip's blow lands, in clip seconds (read off the shot's
 // frames: the film's speed ramp slows each into its strike).
-const STRIKE = { 'sword-open': 3.6, 'sword-lunge': 2.4 };
+const STRIKE = { 'sword-open': 4.3, 'sword-lunge': 3.75 };
 const SCENES = [
   // cold open: a sword's eyes closing on someone, the lunge slowed, one swing
   { id: 'c1-sword', at: 0, box: false, draw(L) {
@@ -510,7 +510,9 @@ const TOTAL = hit(114.2);
 for (let i = 0; i < SCENES.length; i++) { SCENES[i].t0 = SCENES[i].at; SCENES[i].d = (i + 1 < SCENES.length ? SCENES[i + 1].at : TOTAL) - SCENES[i].at; }
 const at = id => SCENES.find(s => s.id === id).t0;
 // The ramp's cuts: [seconds into the scene, clip, stand-in, seconds into the clip].
-const RAMP = [[0, 'sk-1', 'bulkhead'], [.72, 'sk-2', 'bulkhead'], [1.44, 'sk-3', 'bulkhead'], [2.0, 'sk-4', 'bulkhead'], [2.5, 'sk-5', 'bulkhead'], [2.9, 'sk-6', 'bulkhead'], [3.1, 'sk-7', 'bulkhead'], [3.3, 'sk-8', 'bulkhead']];
+// Each kill cam is a sword coming at the lens; it is cut so the blow lands
+// at the cut's end (the blow is about 1.1 s into each clip).
+const RAMP = [[0, 'sk-1', 'bulkhead', .4], [.72, 'sk-2', 'bulkhead', .4], [1.44, 'sk-3', 'bulkhead', .55], [2.0, 'sk-4', 'bulkhead', .6], [2.5, 'sk-5', 'bulkhead', .7], [2.9, 'sk-6', 'bulkhead', .9], [3.1, 'sk-7', 'bulkhead', .9], [3.3, 'sk-8', 'bulkhead', .2]];
 // What the announcer calls over them, in the bar.
 const MEDALS = [[.3, 'DOUBLE KILL'], [1.5, 'TRIPLE KILL'], [2.2, 'OVERKILL'], [2.8, 'KILLING SPREE']];
 // The sword's card: crates/sim/src/arms.rs and consts.rs (SWORD_REACH,
