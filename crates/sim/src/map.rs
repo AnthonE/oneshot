@@ -321,6 +321,11 @@ pub struct Map {
 }
 
 impl Map {
+    /// Whether this is a Big Team map ([`Def::big`]).
+    pub fn big(&self) -> bool {
+        (self.hi.0 - self.lo.0) * (self.hi.1 - self.lo.1) >= BIG_M2
+    }
+
     /// Builds the grid (the boxes, then the solids); every constructor
     /// ends here, and a test that adds a box calls it again.
     pub fn indexed(mut self) -> Map {

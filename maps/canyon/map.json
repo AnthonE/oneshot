@@ -159,7 +159,13 @@
     { "at": [-80, -26], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-80, 26], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-118, -30], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true }
+    { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-128, -12], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-128, 12], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-105, -22], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-105, 22], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-70, -14], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-70, 14], "team": "red", "yaw": 0, "mirror": true }
   ],
   "flag": { "at": [-100, 0, 0.125] },
   "siege": { "gens": [[-80, 0], [-60, 34.7], [-70, -52]], "core": [-100, 0, 0.125] },

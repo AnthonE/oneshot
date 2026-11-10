@@ -3515,12 +3515,14 @@ impl World {
     }
 
     /// Back at the spawn its side may use that is safest: farthest from the
-    /// nearest living enemy (to [`SPAWN_FAR_M`]), out of every living
-    /// enemy's sight, near a teammate, with a little chance
+    /// nearest living enemy (to [`SPAWN_FAR_M`], or [`SPAWN_FAR_BIG_M`]),
+    /// out of every living enemy's sight, near a teammate but not in a
+    /// crowd of them nor on anyone, with a little chance
     /// (`SPAWN_JITTER_M`) between close calls.
     fn respawn(&mut self, s: usize) {
         let team = self.fighters[s].team;
         let teams = self.rules.teams;
+        let far_cap = if self.map.big() { SPAWN_FAR_BIG_M } else { SPAWN_FAR_M };
         let mut pick = 0usize;
         let mut best = f32::NEG_INFINITY;
         for i in 0..self.map.spawns.len() {
@@ -3529,23 +3531,31 @@ impl World {
                 continue;
             }
             let eye = sp.pos + V3::new(0.0, EYE, 0.0);
-            let mut near = SPAWN_FAR_M;
+            let mut near = far_cap;
             let mut seen = false;
             let mut mate = false;
+            let mut crowd = 0.0;
             for (q, v) in self.fighters.iter().enumerate() {
                 if q == s || !v.active() {
                     continue;
                 }
                 let far = (v.body.pos - sp.pos).len();
+                if far < SPAWN_TAKEN_R {
+                    crowd += SPAWN_TAKEN_M;
+                }
                 if teams && v.team == team {
                     mate = mate || far < SPAWN_MATE_R;
+                    if far < SPAWN_CROWD_R {
+                        crowd += SPAWN_CROWD_M;
+                    }
                     continue;
                 }
                 near = near.min(far);
                 seen = seen || self.map.clear(v.eye(), eye);
             }
             let luck = self.rng.next_bounded(1024) as f32 * (SPAWN_JITTER_M / 1024.0);
-            let score = near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } + luck;
+            let score =
+                near - if seen { SPAWN_SEEN_M } else { 0.0 } + if mate { SPAWN_MATE_M } else { 0.0 } - crowd + luck;
             if score > best {
                 best = score;
                 pick = i;
