@@ -36,7 +36,9 @@
 //! of its middle, over the ground under it, to its right), looking at
 //! `craftaim=x,y,z` in the same frame: a view that needs no height read off
 //! the map (`tools/craft.sh`'s). `craftchase=1` is the camera a player has
-//! at its controls, looking the way it points.
+//! at its controls, looking the way it points. `craftfly=` puts it under
+//! way along its nose, metres a second, and `craftturn=` turns it, radians
+//! a second (`fly`): its lean, its engines' flames at speed, its trails.
 
 use bevy::prelude::*;
 use client_net::core::Drawn;
@@ -98,6 +100,9 @@ pub struct View {
     pub craft_cam: Option<(Vec3, Vec3)>,
     /// The camera is the one at its controls (`craft_chase`).
     pub craft_chase: bool,
+    /// It is under way: how fast along its nose, m/s, and how fast it turns,
+    /// rad/s (`craftfly=`, `craftturn=`), from when the screen is there.
+    pub craft_fly: (f32, f32),
 }
 
 /// A ball of plasma for the picture (`look/fx/plasma.rs`), standing at `look`:
@@ -252,6 +257,7 @@ impl Pose {
             craft_seat: get("craftseat", 0.0) != 0.0,
             craft_cam: vec("craftcam").map(|c| (c, vec("craftaim").unwrap_or(CRAFT_AIM))),
             craft_chase: get("craftchase", 0.0) != 0.0,
+            craft_fly: (get("craftfly", 0.0), get("craftturn", 0.0)),
         };
         // A rider stands where the sim mounts one.
         let mount = view.truck.zip(view.seat).map(|((at, yaw), seat)| {
@@ -300,6 +306,22 @@ impl Pose {
             blast: get("blast", 0.0) != 0.0,
         };
         Pose(d, look, view, acts)
+    }
+}
+
+/// The posed craft under way (`craftfly=`, `craftturn=`), once the screen is
+/// there: over the ground it was stood over, for the looks that read its
+/// going (its lean, its engines' flames, its trails).
+pub fn fly(mut pose: ResMut<Pose>, settle: Res<crate::loading::Settle>, time: Res<Time>) {
+    let (speed, turn) = pose.2.craft_fly;
+    if (speed == 0.0 && turn == 0.0) || !settle.ready() {
+        return;
+    }
+    let dt = time.delta_secs();
+    if let Some((at, yaw, ..)) = pose.2.craft.as_mut() {
+        *yaw += turn * dt;
+        at.x += speed * yaw.cos() * dt;
+        at.z += speed * yaw.sin() * dt;
     }
 }
 

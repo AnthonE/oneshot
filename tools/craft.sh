@@ -40,6 +40,9 @@ root=$(pwd)
 # a height off a map; `craftchase` is the camera a player has at its
 # controls, the game's own.
 #   view | height over the ground | pose | seconds after the level is there
+# (`wake` is the craft under way, turning: its lean, its engines' flames at
+# speed and the trails it draws; it wants room, so shoot it where they fly:
+# CRAFT_STAGE='3 -90 -12')
 SKIMMER=(
   "side|0|craftseat=1&craftcam=0.1,1.1,3.4&craftaim=0,0.8,0|2"
   "quarter|0|craftseat=1&craftcam=3.0,1.6,2.4&craftaim=0,0.6,0|2"
@@ -48,6 +51,7 @@ SKIMMER=(
   "boost|0|craftseat=1&craftboost=1&craftchase=1|2"
   "bare|0|craftcam=2.3,2.2,-2.2&craftaim=0,0.5,0|2"
   "far|0|craftseat=1&craftcam=17.4,1.7,-14.1&craftaim=0,0.8,0|2"
+  "wake|0|craftseat=1&craftfly=17&craftturn=-0.45&craftcam=-4.6,1.9,2.4&craftaim=0.3,0.8,0|3"
 )
 FLIER=(
   "side|0|craftcam=0.2,1.3,6.0&craftaim=0,0.8,0|2"
@@ -57,6 +61,7 @@ FLIER=(
   "boost|6|craftboost=1&craftpitch=0.12&craftchase=1|2"
   "under|7|craftpitch=0.1&craftroll=0.45&craftcam=4.5,-5.3,3.5&craftaim=0,0.8,0|2"
   "far|9|craftroll=-0.3&craftcam=17.4,-7.3,-14.1&craftaim=0,0.8,0|2"
+  "wake|9|craftfly=24&craftturn=-0.35&craftcam=-7.0,3.4,3.0&craftaim=0.5,0.8,0|3"
 )
 
 views_of() { if [ "$1" = flier ]; then printf '%s\n' "${FLIER[@]}"; else printf '%s\n' "${SKIMMER[@]}"; fi; }

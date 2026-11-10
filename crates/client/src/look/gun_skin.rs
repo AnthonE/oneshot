@@ -100,7 +100,7 @@ const ENV_LEVELS: u32 = 6;
 
 /// The cube, once.
 #[derive(Resource)]
-pub struct GunEnv(Handle<Image>);
+pub struct GunEnv(pub(super) Handle<Image>);
 
 fn env_image() -> Image {
     let mut img = Image::new_uninit(

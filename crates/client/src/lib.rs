@@ -802,7 +802,7 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                 pose::aim.after(view),
                 pose::fall.before(draw_fighters),
                 pose::throw.after(happened).before(draw_vehicles),
-                pose::stand_orb,
+                (pose::stand_orb, pose::fly.before(view).before(draw_vehicles)),
             ),
         );
     } else {
@@ -1602,7 +1602,12 @@ fn draw_vehicles(
     link: NonSend<LinkRes>,
     mut drawn: ResMut<Drawn>,
     mut commands: Commands,
-    (models, turrets, kit): (Res<look::guns::Models>, Res<look::turret::Kit>, Res<look::craft::Kit>),
+    (models, turrets, kit, mut meshes): (
+        Res<look::guns::Models>,
+        Res<look::turret::Kit>,
+        Res<look::craft::Kit>,
+        ResMut<Assets<Mesh>>,
+    ),
     posed: Option<Res<pose::Pose>>,
     mut at: Query<&mut Transform>,
     (mut hulls, mut crafts): (Query<&mut look::truck::Hull>, Query<&mut look::craft::Craft>),
@@ -1678,7 +1683,7 @@ fn draw_vehicles(
                 }
                 None => {
                     let e = commands.spawn((t, Visibility::default(), Kept)).id();
-                    look::craft::spawn(&mut commands, &kit, &models, e, kind);
+                    look::craft::spawn(&mut commands, &mut meshes, &kit, &models, e, kind);
                     drawn.vehicles.insert(slot, e);
                 }
             }

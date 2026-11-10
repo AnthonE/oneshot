@@ -29,9 +29,9 @@ TAU = math.tau
 # metal takes the sky's colour and reads white); its colour is the middle of
 # what `shade` then turns each plate about.
 PAINTS = {
-    'shell': ('#4a2590', 0.35, 0.34, None, 0.0),
-    'shell_deep': ('#2c1a5e', 0.35, 0.38, None, 0.0),
-    'shell_pale': ('#7d63c9', 0.30, 0.34, None, 0.0),
+    'shell': ('#45228c', 0.35, 0.34, None, 0.0),
+    'shell_deep': ('#271756', 0.35, 0.38, None, 0.0),
+    'shell_pale': ('#7a5fc4', 0.30, 0.34, None, 0.0),
     'iron': ('#1c1b24', 0.75, 0.50, None, 0.0),
     'glass': ('#07070d', 0.60, 0.07, None, 0.0),
     'pad': ('#141218', 0.00, 0.85, None, 0.0),
@@ -145,8 +145,9 @@ def loft(rings, material='shell', ends=('tip', 'tip'), levels=2, name='loft', sh
     from each ring to the next, an end closed on its middle (`tip`), by one
     face (`flat`) or left `open`; then subdivided `levels` times. `sharp`
     names the points of a ring (their index) whose line along the skin stays
-    a crease: a chine, a trailing edge. `inside`: it is seen from within (a
-    throat, a well)."""
+    a crease: a chine, a trailing edge; `(index, first, last)` creases it
+    from ring `first` to ring `last` alone. `inside`: it is seen from within
+    (a throat, a well)."""
     bm = bmesh.new()
     vs = [[bm.verts.new(p) for p in r] for r in rings]
     n = len(rings[0])
@@ -165,8 +166,11 @@ def loft(rings, material='shell', ends=('tip', 'tip'), levels=2, name='loft', sh
         bmesh.ops.reverse_faces(bm, faces=bm.faces)
     if sharp:
         layer = bm.edges.layers.float.get('crease_edge') or bm.edges.layers.float.new('crease_edge')
-        for a, b in zip(vs, vs[1:]):
+        for k, (a, b) in enumerate(zip(vs, vs[1:])):
             for i in sharp:
+                i, first, last = (i, 0, len(vs)) if isinstance(i, int) else i
+                if not first <= k < last:
+                    continue
                 e = bm.edges.get((a[i % n], b[i % n]))
                 if e:
                     e[layer] = 1.0
@@ -176,6 +180,7 @@ def loft(rings, material='shell', ends=('tip', 'tip'), levels=2, name='loft', sh
     o = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(o)
     me.materials.append(skin(material))
+    o['veil_skin'] = True
     if levels:
         m = o.modifiers.new('subsurf', 'SUBSURF')
         m.levels = m.render_levels = levels
@@ -188,17 +193,22 @@ def bow(a, b, c, steps=8):
     return [(1 - t) ** 2 * a + 2 * t * (1 - t) * b + t ** 2 * c for t in (i / steps for i in range(steps + 1))]
 
 
-def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0):
+def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0, thin=None):
     """A round limb along `points`, `radii` thick at each (one number for
-    all): rings square to its run, skinned. `flat` squeezes it across its
-    first bend's plane (a blade under 1)."""
+    all): rings square to its run, skinned. `flat` squeezes it one way (a
+    blade under 1): along `thin` if given (the way it is thin: up, for a
+    feather lying flat), or across its first bend's plane."""
     pts = [Vector(p) for p in points]
     radii = [radii] * len(pts) if isinstance(radii, (int, float)) else radii
     rings = []
     side = None
     for i, p in enumerate(pts):
         t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
-        side = t.orthogonal().normalized() if side is None else (side - t * side.dot(t)).normalized()
+        if thin is not None:
+            up = Vector(thin) - t * Vector(thin).dot(t)
+            side = up.normalized().cross(t)
+        else:
+            side = t.orthogonal().normalized() if side is None else (side - t * side.dot(t)).normalized()
         up = t.cross(side)
         rings.append([p + (side * math.cos(TAU * k / n) + up * math.sin(TAU * k / n) * flat) * radii[i] for k in range(n)])
     return loft(rings, material, ends=ends, levels=levels, name=name)
@@ -232,9 +242,64 @@ def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.
     return parts
 
 
+def lens(at, a, b, rise, paint='light_dim', rim='iron', down=True, vanes=0):
+    """A lens of light let into a skin: an oval dome at `at`, `a` along the
+    craft and `b` across it, standing `rise` out of the skin (downward, or
+    up), in a rim of dark iron a little wider, `vanes` thin iron vanes
+    across it. A lift's plate under a hull; a port. Its parts."""
+    x, y, z = at
+    k = -1.0 if down else 1.0
+    glass = sphere(1.0, at=(x, y, z), material=None, scale=(a, b, rise), segments=20)
+    glass.data.materials.append(skin(paint))
+    seat = sphere(1.0, at=(x, y, z + k * -0.006), material=None, scale=(a + 0.035, b + 0.035, rise * 0.75), segments=20)
+    seat.data.materials.append(skin(rim))
+    parts = [glass, seat]
+    for i in range(vanes):
+        t = (i + 1) / (vanes + 1) * 2 - 1
+        vane = box(0.022, 2 * b * math.sqrt(1 - t * t) + 0.04, rise * 0.9, at=(x + a * t, y, z + k * rise * 0.62),
+                   material=None, bevel=0.003)
+        vane.data.materials.append(skin(rim))
+        parts.append(vane)
+    return parts
+
+
+# The name of the layer that keeps a skin's own normals through every cut
+# (`solid` stamps it, `gloss` reads it and takes it off).
+OWN = 'n0'
+
+
 def solid(objs, name):
-    """The parts as one plain mesh (modifiers applied), ready for `seam`."""
-    return join(objs if isinstance(objs, (list, tuple)) else [objs], name)
+    """The parts as one plain mesh (modifiers applied), ready for `seam`.
+    A skin fresh from `loft` has its normals kept with it (a layer of its
+    vertices that every later cut carries along), so however finely it is
+    cut it is still shaded as the one smooth skin it was (`gloss`)."""
+    objs = objs if isinstance(objs, (list, tuple)) else [objs]
+    fresh = [bool(o.get('veil_skin')) and OWN not in o.data.attributes for o in objs]
+    dg = bpy.context.evaluated_depsgraph_get()
+    plain = []
+    for o, new in zip(objs, fresh):
+        me = bpy.data.meshes.new_from_object(o.evaluated_get(dg))
+        me.transform(o.matrix_world)
+        if new:
+            n = np.empty(len(me.vertices) * 3, dtype=np.float32)
+            me.vertices.foreach_get('normal', n)
+            me.attributes.new(OWN, 'FLOAT_VECTOR', 'POINT').data.foreach_set('vector', n)
+        if os.environ.get('VEIL_COUNT') and len(objs) > 3:
+            print(f'PART {o.name}: {sum(len(f.vertices) - 2 for f in me.polygons)} triangles', flush=True)
+        p = bpy.data.objects.new(o.name + '_m', me)
+        bpy.context.scene.collection.objects.link(p)
+        plain.append(p)
+    for o in objs:
+        bpy.data.objects.remove(o, do_unlink=True)
+    bpy.ops.object.select_all(action='DESELECT')
+    for p in plain:
+        p.select_set(True)
+    bpy.context.view_layer.objects.active = plain[0]
+    if len(plain) > 1:
+        bpy.ops.object.join()
+    o = bpy.context.view_layer.objects.active
+    o.name = o.data.name = name
+    return o
 
 
 def repaint(o, material, where=None, of=None):
@@ -268,16 +333,26 @@ def _slot(me, material):
     return names.index(material)
 
 
+# A cut that would pass this near a vertex, metres, goes through it instead:
+# no sliver is left for a bevel or a groove to tear.
+SNAP = 0.004
+
+
 def _cut(bm, g, level, where):
     """Splits every edge that crosses g = `level` there, and joins the new
-    points across each face they cut."""
+    points across each face they cut. A face it crosses is made triangles
+    first (a triangle is cut one way only), and a vertex it would pass
+    within `SNAP` of is taken to lie on it."""
     co = np.array([v.co[:] for v in bm.verts])
     val = g(co) - level
-    val[np.abs(val) < 1e-6] = 1e-6
-    for v, d in zip(bm.verts, val):
-        v.tag = False
+    on = np.abs(val) < SNAP
+    val[on] = 0.0
     index = {v: i for i, v in enumerate(bm.verts)}
-    new = []
+    across = [f for f in bm.faces
+              if len(f.verts) > 3 and any(val[index[v]] > 0 for v in f.verts) and any(val[index[v]] < 0 for v in f.verts)]
+    if across:
+        bmesh.ops.triangulate(bm, faces=across)
+    new = [v for v in bm.verts if on[index[v]] and (where is None or bool(where(np.array([v.co[:]]))[0]))]
     for e in list(bm.edges):
         a, b = e.verts
         da, db = val[index[a]], val[index[b]]
@@ -293,50 +368,67 @@ def _cut(bm, g, level, where):
     return new
 
 
-def seam(o, g, width=0.03, depth=0.012, floor='iron', wall=None, flat=0.0, where=None):
+def seam(o, g, width=0.03, depth=0.012, floor='iron', wall=None, flat=0.0, where=None, within=None, end=0.012):
     """Cuts a groove into `o` along g = 0 (`g` a rule over an (n, 3) array
     of points that gives each a distance in metres from the seam's surface:
-    a plane, a cylinder, a wing's edge moved in), `width` wide and `depth`
-    deep. Its floor is the share `flat` of its width (0: a V) and is painted
-    `floor` (dark iron, or a light: light out of the gap between two
-    plates); its walls `wall` (the floor's if not given). `where` keeps it
-    to a part of the craft (a rule over points, true where it runs)."""
+    a plane, a wing's edge moved in), `width` wide and `depth` deep. Its
+    floor is the share `flat` of its width (0: a V) and is painted `floor`
+    (dark iron, or a light: light out of the gap between two plates); its
+    walls `wall` (the floor's if not given).
+
+    `within` keeps it to a part of the craft: a rule that is positive where
+    the seam runs, metres from where it stops, and there it ends square, its
+    end wall `end` long. `where` (a rule true where it runs) is the cheap
+    way, for an end nobody sees: the seam just stops at whatever edge of
+    the skin is nearest."""
     me = o.data
     k_floor = _slot(me, floor)
     k_wall = _slot(me, wall or floor)
     bm = bmesh.new()
     bm.from_mesh(me)
     half = width / 2
+    near = where
+    if within is not None:
+        near = lambda q: (within(q) > -0.03) & (True if where is None else where(q))
     levels = [-half, half] + ([-half * flat, half * flat] if flat > 0 else [0.0])
     for level in levels:
-        _cut(bm, g, level, where)
+        _cut(bm, g, level, near)
+    if within is not None:
+        band = lambda q: np.abs(g(q)) < half + SNAP
+        _cut(bm, within, 0.0, band)
+        _cut(bm, within, end, band)
     bm.normal_update()
     bm.verts.ensure_lookup_table()
     co = np.array([v.co[:] for v in bm.verts])
     d = np.abs(g(co))
     on = np.ones(len(co), dtype=bool) if where is None else np.asarray(where(co), dtype=bool)
-    inside = (d < half - 1e-5) & on
-    sink = np.clip((1.0 - d / half) / max(1.0 - flat, 1e-6), 0.0, 1.0) * depth
+    run = np.full(len(co), 1.0) if within is None else np.clip(within(co) / end, 0.0, 1.0)
+    reach = np.full(len(co), 1.0) if within is None else within(co)
+    inside = (d < half - 1e-5) & on & (run > 0)
+    sink = np.clip((1.0 - d / half) / max(1.0 - flat, 1e-6), 0.0, 1.0) * depth * run
     for v, i, s in zip(bm.verts, inside, sink):
         if i:
             v.co -= v.normal * s
     index = {v: i for i, v in enumerate(bm.verts)}
     for f in bm.faces:
         ids = [index[v] for v in f.verts]
-        if not all(on[i] for i in ids) or not all(d[i] <= half + 1e-5 for i in ids):
+        if not all(on[i] and d[i] <= half + SNAP and reach[i] >= -SNAP for i in ids):
             continue
-        f.material_index = k_floor if all(d[i] <= half * flat + 1e-5 for i in ids) else k_wall
+        f.material_index = k_floor if all(d[i] <= half * flat + SNAP and reach[i] >= end - SNAP for i in ids) else k_wall
     bm.to_mesh(me)
     bm.free()
     me.update()
+    if os.environ.get('VEIL_COUNT'):
+        print(f'SEAM {o.name}: {len(me.polygons)} faces', flush=True)
     return o
 
 
-def plate(o, inside, lift=0.016, material='shell', bevel=0.005, name='plate', clear=0.05):
+def plate(o, inside, lift=0.016, material='shell', bevel=0.0, name='plate', clear=0.05, keep=('iron',) + LIT):
     """A plate laid over `o`'s skin where the rule `inside` is positive (a
     rule over an (n, 3) array of points, metres from the plate's edge): that
     part of the skin again, `lift` over it, with an edge of its own
-    thickness, rounded; a seam already cut there is in it too. What of `o`
+    thickness (rounded by `bevel`, which is dear where seams cross the
+    plate); a seam already cut there is in it too. What of `o`
     lies under it, further than `clear` from its edge, is taken off. Its
     object, for `solid`."""
     me = o.data.copy()
@@ -348,11 +440,12 @@ def plate(o, inside, lift=0.016, material='shell', bevel=0.005, name='plate', cl
     bm.normal_update()
     for v in bm.verts:
         v.co += v.normal * lift
-    # The skin's own paint becomes the plate's; what a seam painted (its
+    # The skin's paint becomes the plate's; what a seam painted (`keep`: its
     # iron, its light) it keeps.
     k = _slot(me, material)
+    kept = {i for i, m in enumerate(me.materials) if m.name in keep}
     for f in bm.faces:
-        if f.material_index == 0:
+        if f.material_index not in kept:
             f.material_index = k
     bm.to_mesh(me)
     bm.free()
@@ -361,6 +454,8 @@ def plate(o, inside, lift=0.016, material='shell', bevel=0.005, name='plate', cl
     m = p.modifiers.new('solid', 'SOLIDIFY')
     m.thickness = lift + 0.014
     m.offset = -1.0
+    # Its top and its edge alone: nothing sees its underside.
+    m.use_rim_only = True
     _bevel(p, bevel, 2)
     if clear is not None:
         bm = bmesh.new()
@@ -398,16 +493,55 @@ def plane(point, normal):
     return lambda q: (q - p) @ n
 
 
+def gloss(o, angle=38, within=24):
+    """Its shading: smooth, hard past `angle` degrees; and wherever a face
+    still lies in the skin it was cut from (within `within` degrees of the
+    normals `solid` kept), that skin's own normals, so a seam's fine cuts do
+    not show as facets in a reflection. A groove's wall and a plate's edge
+    are shaded as what they are."""
+    me = o.data
+    smooth(o, angle)
+    if OWN not in me.attributes:
+        return o
+    nv, nl = len(me.vertices), len(me.loops)
+    own = np.empty(nv * 3, dtype=np.float32)
+    me.attributes[OWN].data.foreach_get('vector', own)
+    own = own.reshape(nv, 3)
+    length = np.linalg.norm(own, axis=1)
+    own = own / np.maximum(length, 1e-9)[:, None]
+    me.calc_normals_split()
+    now = np.empty(nl * 3, dtype=np.float32)
+    me.loops.foreach_get('normal', now)
+    now = now.reshape(nl, 3)
+    lv = np.empty(nl, dtype=np.int32)
+    me.loops.foreach_get('vertex_index', lv)
+    face = np.empty(len(me.polygons) * 3, dtype=np.float32)
+    me.polygons.foreach_get('normal', face)
+    face = face.reshape(-1, 3)
+    lp = np.empty(nl, dtype=np.int32)
+    for p in me.polygons:
+        lp[p.loop_start:p.loop_start + p.loop_total] = p.index
+    keep = (length[lv] > 0.5) & ((face[lp] * own[lv]).sum(axis=1) > math.cos(math.radians(within)))
+    now[keep] = own[lv][keep]
+    me.normals_split_custom_set([tuple(n) for n in now])
+    me.attributes.remove(me.attributes[OWN])
+    me.update()
+    print(f'GLOSS {o.name}: {float(keep.mean()) * 100:.0f}% of its corners shaded as the skin they were cut from')
+    return o
+
+
 def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edge_colour=(0.72, 0.86, 1.25),
-          under=0.82, seed=5):
+          under=0.82, seed=5, stain=None):
     """Its colours (COLOR_0, a corner each), which the game multiplies its
     paint by: the shade each vertex stands in, traced against the whole
     craft (`rays` a vertex, reaching `reach` metres, never darker than
     `floor`); each plate of a `PLATED` paint its own tone, `tone` either way
     (a plate is what no seam crosses, and a plate and its twin across the
     craft are one tone); a convex edge of one worn toward `edge_colour` by
-    up to `edge`; what faces the ground darkened to `under`. A light keeps
-    its own."""
+    up to `edge`; what faces the ground darkened to `under`; and `stain`, a
+    rule over an (n, 3) array of points that gives each how much of its
+    paint is left under soot and dust (1 clean). A light keeps its own. The
+    colours' alpha is the shade alone."""
     me = o.data
     me.calc_loop_triangles()
     nv = len(me.vertices)
@@ -495,6 +629,9 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     tint = np.ones((np_, 3))
     for k in np.unique(plate[plated[mat_of]]):
         own = plate == k
+        if area[own].sum() < 0.03:
+            # A sliver between two seams: no tone of its own.
+            continue
         c = (mid[own] * area[own, None]).sum(axis=0) / area[own].sum()
         rng = random.Random(hash((seed, round(c[0], 1), round(abs(c[1]), 1), round(c[2], 1))) & 0xffffffff)
         v = 1.0 + tone * (rng.random() * 2 - 1)
@@ -517,7 +654,12 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     col[:, :3] = col[:, :3] * np.where(isp[:, None], tint[lp], 1.0) * (1 - w) + np.array(edge_colour) * shadow[:, None] * w
     pal = np.array([srgb(PAINTS[n][0]) if n in PAINTS and n not in LIT else (1.0, 1.0, 1.0) for n in names] or [(1.0, 1.0, 1.0)])
     col[:, :3] *= pal[lm]
-    col[lit[lm], :3] = 1.0
+    if stain is not None:
+        col[:, :3] *= np.clip(np.asarray(stain(co), dtype=float), 0.0, 1.0)[lv][:, None]
+    # The shade alone, for what the game lays over the paint (a reflection
+    # is dimmed by it, a paint's colour is not).
+    col[:, 3] = shadow
+    col[lit[lm]] = 1.0
     attr.data.foreach_set('color', col.ravel())
     me.color_attributes.active_color = attr
     me.color_attributes.render_color_index = list(me.color_attributes).index(attr)

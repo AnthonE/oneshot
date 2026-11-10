@@ -165,6 +165,7 @@ pub fn warm_models(
     eye: Query<Entity, With<Eye>>,
     plasma: Option<Res<super::fx::plasma::Kit>>,
     powerup: Option<Res<super::powerup::Kit>>,
+    (craft, mut meshes): (Option<Res<super::craft::Kit>>, ResMut<Assets<Mesh>>),
 ) {
     if *done {
         return;
@@ -178,8 +179,6 @@ pub fn warm_models(
         models.frag.clone(),
         models.turret.clone(),
         models.turret_barrels.clone(),
-        models.skimmer.clone(),
-        models.flier.clone(),
     ]);
     scenes.extend(
         WARM_GEAR
@@ -192,7 +191,8 @@ pub fn warm_models(
         assets.load_state(&models.body),
         LoadState::Loaded | LoadState::Failed(_)
     );
-    if !body || !scenes.iter().all(settled) || !settled(&models.truck) {
+    if !body || !scenes.iter().all(settled) || ![&models.truck, &models.skimmer, &models.flier].into_iter().all(settled)
+    {
         return;
     }
     *done = true;
@@ -230,6 +230,16 @@ pub fn warm_models(
         .spawn((Warming(WARM_FRAMES), small, Visibility::default(), ChildOf(eye)))
         .id();
     super::truck::spawn(&mut commands, &models, truck);
+    // The one-seaters: their shells are materials of their own (`craft.rs`),
+    // made when their scenes are in, as the truck's.
+    if let Some(kit) = craft {
+        for kind in [sim::vehicle::SKIMMER, sim::vehicle::FLIER] {
+            let hull = commands
+                .spawn((Warming(WARM_FRAMES), small, Visibility::default(), ChildOf(eye)))
+                .id();
+            super::craft::spawn(&mut commands, &mut meshes, &kit, &models, hull, kind);
+        }
+    }
     let done = |ev: On<SceneInstanceReady>, mut commands: Commands| {
         commands.entity(ev.entity).insert(SceneDone);
     };
