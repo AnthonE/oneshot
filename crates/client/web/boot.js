@@ -176,6 +176,14 @@ let buildInfo = null;
 // for by it (mix.js's theme, voice.js's worklet), so a cache can't keep an
 // old one past a publish.
 let pageV = '';
+// The loaded module's memory (`load`), and what a report says of it: the
+// module's heap and the page's own, MB, and the machine's GB as the
+// browser rounds it. A page that died of memory is told by these.
+let wasmMemory = null;
+const memNow = () => {
+  const mb = (n) => (typeof n === 'number' ? Math.round(n / 1048576) : null);
+  return { wasm_mb: mb(wasmMemory?.buffer.byteLength), js_mb: mb(performance.memory?.usedJSHeapSize), device_gb: navigator.deviceMemory ?? null };
+};
 const key = () => String(mods?.webgpu?.sha256 ?? mods?.webgpu?.wasm_bytes ?? '');
 async function pickModule() {
   const has = (k) => (mods ? !!mods[k] : k === 'webgl2');
@@ -213,7 +221,8 @@ async function load(gfx) {
   let glue;
   try {
     glue = await import(m.js + v);
-    await glue.default({ module_or_path: res });
+    // The module's memory, for a report's numbers (`memNow`).
+    wasmMemory = (await glue.default({ module_or_path: res }))?.memory ?? null;
   } finally {
     if (downloading === mine) downloading = 0;
     bar(null);
@@ -276,7 +285,8 @@ function counted(res, whole) {
 let started = 0;
 // Going back into WebGL2: what the dying module does next isn't a crash.
 let switching = false;
-function gpuFallBack(why) {
+function gpuFallBack(why, msg) {
+  if (switching) return;
   switching = true;
   let kept = false;
   try {
@@ -289,7 +299,13 @@ function gpuFallBack(why) {
   const u = new URL(location.href);
   if (!kept || params.get('gfx') === 'webgpu') u.searchParams.set('gfx', 'webgl2');
   console.warn(`oneshot: ${why}: switching to WebGL2`);
-  location.replace(u);
+  // Told to us first: the reload says it to the player once and to
+  // nobody else. A beacon outlives the page; it is never waited on long.
+  const go = () => location.replace(u);
+  Promise.race([
+    reportDoc('gpu', msg ? `${why}: ${msg}` : why).then((d) => sendReport(d, true)),
+    new Promise((r) => setTimeout(r, 400)),
+  ]).then(go, go);
 }
 /* The WebGPU module's device hooks (look/gpu.rs, `watch`). WebGPU
    refuses a pipeline quietly and that frame isn't drawn. A lost
@@ -298,8 +314,8 @@ function gpuFallBack(why) {
    WebGL2, and it is remembered. */
 window.__oneshotGpuError = (msg, kind) => {
   if (window.__oneshotGfx !== 'webgpu') return;
-  if (kind === 'lost') { gpuFallBack('the graphics device was lost under WebGPU'); return; }
-  if (!boot.classList.contains('gone')) { gpuFallBack('WebGPU refused the frame'); return; }
+  if (kind === 'lost') { gpuFallBack('the graphics device was lost under WebGPU', msg); return; }
+  if (!boot.classList.contains('gone')) { gpuFallBack('WebGPU refused the frame', msg); return; }
   try { localStorage.setItem(GPU_FAILED, key()); } catch { /* private window */ }
   if (document.getElementById('gpubar')) return;
   const bar = document.createElement('div');
@@ -327,9 +343,9 @@ window.__oneshotPanic = (msg) => {
   // in an asset upload panics in bevy_render too, and would panic
   // again under WebGL2.
   const renderer = /bevy_render[^\n]*renderer|Unable to find a GPU|wgpu surface|request_device/.test(m);
-  if (gpu && renderer && started && performance.now() - started < 30000) { gpuFallBack('WebGPU did not start here'); return; }
+  if (gpu && renderer && started && performance.now() - started < 30000) { gpuFallBack('WebGPU did not start here', m); return; }
   if (gpu && /wgpu-[\d.]+\/src\/backend\/webgpu|GPUDevice|GPUQueue|GPUCanvasContext/.test(m)) {
-    gpuFallBack('the graphics card refused WebGPU');
+    gpuFallBack('the graphics card refused WebGPU', m);
     return;
   }
   stopped(m);
@@ -370,6 +386,7 @@ async function reportDoc(kind, text) {
       ua: navigator.userAgent, gpu: gfx === 'webgpu' && probe.name ? probe.name : gpuName(),
       tier: s.tier || '', quality: s.quality || '',
       screen: `${innerWidth}x${innerHeight}@${devicePixelRatio}`, page: location.pathname,
+      mem: memNow(),
     },
     game: {
       screen: s.screen || '', in_match: !!s.in_match, connected: !!s.connected, match: s.match || '',
@@ -398,10 +415,10 @@ async function sendReport(doc, beacon) {
    rather than a frozen canvas. A panic is followed by its trap; the
    first, which has the panic's words, is the one sent. */
 let crashed = false;
-function stopped(line) {
+function stopped(line, kind = 'crash', words = 'THE GAME STOPPED. WHAT IT SAID WAS SENT TO US') {
   if (crashed || switching) return;
   crashed = true;
-  reportDoc('crash', line).then((d) => sendReport(d, true)).catch(() => {});
+  reportDoc(kind, line).then((d) => sendReport(d, true)).catch(() => {});
   if (!boot.classList.contains('gone')) { say('The game stopped. Reload to try again', true); return; }
   try { document.exitPointerLock(); } catch { /* not locked */ }
   const note = document.createElement('div');
@@ -410,13 +427,80 @@ function stopped(line) {
   const a = document.createElement('a');
   a.href = location.href;
   a.textContent = 'RELOAD';
-  note.append('THE GAME STOPPED. WHAT IT SAID WAS SENT TO US', a);
+  note.append(words, a);
   note.title = String(line).slice(0, 400);
   document.body.append(note);
 }
 const trap = (e) => e instanceof WebAssembly.RuntimeError;
 addEventListener('error', (e) => { if (trap(e.error)) stopped(String(e.error)); });
 addEventListener('unhandledrejection', (e) => { if (trap(e.reason)) stopped(String(e.reason)); });
+/* The WebGL2 module's graphics context, gone (the browser's GPU process
+   died or was reset, the driver gave up): nothing draws again, and
+   neither wgpu nor Bevy listens for it, so without this the game is a
+   still picture with no word said and none sent. The WebGPU module's
+   own is `__oneshotGpuError` above. */
+document.getElementById('game').addEventListener('webglcontextlost', () => {
+  stopped('the graphics context was lost under WebGL2', 'gpu', 'THE GRAPHICS CARD STOPPED DRAWING. THAT WAS SENT TO US');
+});
+
+/* ── the last breath ─────────────────────────────────────────────────
+   A browser that is killed, a tab out of memory and a machine that
+   stops all take the page with them, and nothing above gets a word
+   out. So while the game runs, a few numbers are left in localStorage
+   every few seconds (the build, the match, how long since a frame, the
+   memory), and taken away when the page leaves in the ordinary way. A
+   visit that finds some left says so to /bugs as a `died`. A tab that
+   went while hidden isn't one (browsers discard those), and another
+   tab's that is still fresh is that tab's, alive. */
+{
+  const BREATH = 'oneshot.breath.';
+  const EVERY_MS = 5000;
+  const STALE_MS = 20000;
+  const mine = BREATH + Math.random().toString(36).slice(2, 10);
+  try {
+    let sent = 0;
+    for (const k of Object.keys(localStorage)) {
+      if (!k.startsWith(BREATH)) continue;
+      let v = null;
+      try { v = JSON.parse(localStorage.getItem(k)); } catch { /* not ours */ }
+      if (v && Date.now() - v.at < STALE_MS) continue;
+      localStorage.removeItem(k);
+      if (v && !v.hidden && sent++ < 2) reportDoc('died', JSON.stringify(v)).then((d) => sendReport(d, false)).catch(() => {});
+    }
+  } catch { /* private window */ }
+  // When the page last drew, and the longest it went between two frames
+  // since the last note. A hidden tab draws none: not a gap.
+  let drew = 0;
+  let worst = 0;
+  const beat = (t) => {
+    if (drew) worst = Math.max(worst, t - drew);
+    drew = t;
+    requestAnimationFrame(beat);
+  };
+  requestAnimationFrame(beat);
+  const gone = () => { try { localStorage.removeItem(mine); } catch { /* private window */ } };
+  const note = () => {
+    const o = window.__oneshot;
+    // Before the game has drawn there is nothing to say; what stopped it
+    // or sent it to WebGL2 has been said already.
+    if (!o || !started) return;
+    if (crashed || switching) { gone(); return; }
+    const v = {
+      at: Date.now(), up_s: Math.round((performance.now() - started) / 1000), hidden: document.hidden,
+      commit: buildInfo?.commit || '', gfx: window.__oneshotGfx || '', quality: o.quality || '', tier: o.tier || '',
+      view: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
+      screen: o.screen || '', in_match: !!o.in_match, map: o.map ?? null, tick: o.tick ?? null, match: o.match || '',
+      frames: o.frames ?? 0, no_frame_ms: drew ? Math.round(performance.now() - drew) : null, worst_gap_ms: Math.round(worst),
+      mem: memNow(),
+    };
+    worst = 0;
+    try { localStorage.setItem(mine, JSON.stringify(v)); } catch { /* private window, or full */ }
+  };
+  setInterval(note, EVERY_MS);
+  document.addEventListener('visibilitychange', () => { drew = 0; note(); });
+  addEventListener('pagehide', gone);
+  addEventListener('pageshow', (e) => { if (e.persisted) note(); });
+}
 
 /* A player's report: the game's Esc menu (REPORT A BUG, crates/client/
    src/pause.rs) opens this over it. The cursor is already free there. */
