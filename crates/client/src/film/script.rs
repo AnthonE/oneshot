@@ -108,7 +108,7 @@ pub struct Script {
     /// Frames a still holds the stopped world before it is taken.
     #[serde(default = "default_hold")]
     pub hold: u32,
-    /// The graphics rung: potato, low, medium or high.
+    /// The graphics rung: potato, low, medium, high or ultra.
     #[serde(default = "default_quality")]
     pub quality: String,
     /// The lens and grade every shot starts from; a shot's own `look` wins
@@ -145,7 +145,7 @@ impl Script {
             return Err(format!("{}x{}: an even size, 16 or more a side", s.width, s.height));
         }
         if crate::look::quality::Quality::from_name(&s.quality).is_none() {
-            return Err(format!("quality {}: potato, low, medium or high", s.quality));
+            return Err(format!("quality {}: potato, low, medium, high or ultra", s.quality));
         }
         for shot in &s.shots {
             shot.check()?;

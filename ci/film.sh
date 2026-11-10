@@ -34,7 +34,7 @@
 # player is on it only while the player could have seen them. It is wire
 # bytes: tape it again after a PROTO_VER bump.
 #
-# FILM_QUALITY=potato|low|medium|high draws every shot at that rung, whatever
+# FILM_QUALITY=potato|low|medium|high|ultra draws every shot at that rung, whatever
 # the list says (a clip's styles say high: slow on lavapipe).
 #
 # Needs Xvfb and lavapipe (apt-get install xvfb mesa-vulkan-drivers), ffmpeg

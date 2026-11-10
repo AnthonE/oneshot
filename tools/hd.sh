@@ -8,7 +8,7 @@
 #   tools/hd.sh                    every view → traces/hd/<view>.png
 #   tools/hd.sh beach cliff        those two
 #   tools/hd.sh list               the views and their poses
-#   HD_QUALITY=medium tools/hd.sh  another rung (potato low medium high)
+#   HD_QUALITY=medium tools/hd.sh  another rung (potato low medium high ultra)
 #   HD_TAG=before tools/hd.sh      → traces/hd/before/<view>.png, to keep a round
 #
 # The board lays them beside the references and the last pass

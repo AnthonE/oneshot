@@ -1,5 +1,5 @@
 //! `oneshot [--server URL] [--name you] [--mode casual|duel|doubles|ffa|gungame|cup|bigteam|ctf|watch|0..6|8|9]
-//! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high] [--capsules] [--menu|--settings|--graphics] [--windowed]
+//! [--autoplay [--scope|--drill]] [--lite] [--potato] [--quality potato|low|medium|high|ultra] [--capsules] [--menu|--settings|--graphics] [--windowed]
 //! [--shot out.png [--shot-at s]] [--record x.tape SECONDS]`
 //! (or `oneshot --pose 'yaw=1.57&arm=3'`, no server, for a picture; or
 //! `oneshot --film shots.json`, `--clip x.tape [--style S]`, `--scan x.tape`,
@@ -41,7 +41,7 @@ fn run() -> Result<(), String> {
     let quality = match arg("--quality") {
         Some(q) => Some(
             oneshot_client::look::quality::Quality::from_name(&q.to_ascii_lowercase())
-                .ok_or_else(|| format!("--quality {q}: potato, low, medium or high"))?,
+                .ok_or_else(|| format!("--quality {q}: potato, low, medium, high or ultra"))?,
         ),
         None => None,
     };
@@ -363,7 +363,7 @@ const HELP: &str = "oneshot: the desktop client
                                    (a software GPU can't skin a room of Triple Ts)
   --lite                           POTATO for this run (your own graphics are kept)
   --potato                         POTATO from now on (SETTINGS > GRAPHICS to change it)
-  --quality NAME                   potato, low, medium or high, for this run only
+  --quality NAME                   potato, low, medium, high or ultra, for this run only
   --pose 'yaw=1.57&arm=3'          no server: one fighter, for a picture
   --pose 'map=6&eye=-20,6,0&look=0,2,0'  no server: a map's view
   --menu, --settings               open the match on the Esc menu or the settings

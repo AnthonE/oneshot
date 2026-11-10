@@ -7,7 +7,7 @@
 // as ci/desktop_shot.sh's do. Defaults: Big Team on Dry Fork, 25 s.
 // autoplay 0 is the title; `menu=1` or `settings=1` opens them (the match's
 // with autoplay=1, else the settings over the title), `graphics=1` the
-// settings on GRAPHICS; `quality=potato|low|medium|high` draws that rung
+// settings on GRAPHICS; `quality=potato|low|medium|high|ultra` draws that rung
 // (unset, the page's default for its module, or POTATO where the machine
 // is a software one: crates/client/src/look/potato.rs). `fxdemo=1` as the last
 // argument stages the effects in front of the camera, `fxstage=N` only

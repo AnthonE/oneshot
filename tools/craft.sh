@@ -20,7 +20,7 @@
 #   CRAFT_CUT=0 tools/craft.sh          shoot what is built (a change in craft.rs, a shader)
 #   CRAFT_SHOOT=0 tools/craft.sh        the cut and its sheet only
 #   CRAFT_STAGE='3 -90 -12' tools/craft.sh   on Dry Fork, where they fly (map, x, z; it needs 6 GB free)
-#   CRAFT_QUALITY=low tools/craft.sh    another rung (potato low medium high)
+#   CRAFT_QUALITY=low tools/craft.sh    another rung (potato low medium high ultra)
 #   CRAFT_TAG=before tools/craft.sh     → traces/craft/before/<name>/…, to keep a round by hand
 #
 # A model's GLB is read when the client starts: a new cut needs no build. A

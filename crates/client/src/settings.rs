@@ -16,8 +16,8 @@ use bevy::prelude::*;
 use crate::binds::Binds;
 use crate::config;
 use crate::look::quality::{
-    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Clouds, Effects, Gfx, Quality,
-    SHADOW_M_LADDER, SHADOW_PX_LADDER,
+    self, for_target, max_cascades, max_shadow_map_px, preset, step_ladder, Aa, Ao, Clouds, Effects, Gfx, Glow,
+    Quality, SHADOW_M_LADDER, SHADOW_PX_LADDER,
 };
 use crate::look::render_scale;
 
@@ -308,7 +308,7 @@ struct GfxFile {
     shadow_map_px: Option<usize>,
     ao: Option<Ao>,
     aa: Option<Aa>,
-    bloom: Option<bool>,
+    bloom: Option<Glow>,
     render_scale: Option<u8>,
     effects: Option<Effects>,
     clouds: Option<Clouds>,
@@ -452,7 +452,7 @@ impl Settings {
                     }
                     Knob::Ambient => g.ao = g.ao.step(delta),
                     Knob::Aa => g.aa = g.aa.step(delta),
-                    Knob::Bloom => g.bloom = !g.bloom,
+                    Knob::Bloom => g.bloom = g.bloom.step(delta),
                     Knob::RenderScale => g.render_scale = render_scale::step(g.render_scale, delta),
                     Knob::Fx => g.effects = g.effects.step(delta),
                     Knob::Clouds => g.clouds = g.clouds.step(delta),
@@ -484,7 +484,7 @@ impl Settings {
             Knob::ShadowMap => g.shadow_map_px.to_string(),
             Knob::Ambient => g.ao.name().to_uppercase(),
             Knob::Aa => g.aa.name().to_uppercase(),
-            Knob::Bloom => on_off(g.bloom),
+            Knob::Bloom => g.bloom.name().to_uppercase(),
             Knob::RenderScale => format!("{}%", g.render_scale),
             Knob::Fx => g.effects.name().to_uppercase(),
             Knob::Clouds => g.clouds.name().to_uppercase(),
@@ -528,7 +528,7 @@ impl Settings {
                 ("shadow_map_px", g.shadow_map_px.to_string()),
                 ("ao", g.ao.name().into()),
                 ("aa", g.aa.name().into()),
-                ("bloom", g.bloom.to_string()),
+                ("bloom", g.bloom.name().into()),
                 ("render_scale", g.render_scale.to_string()),
                 ("fx", g.effects.name().into()),
                 ("clouds", g.clouds.name().into()),
@@ -578,7 +578,8 @@ impl Settings {
                 "shadow_map_px" => f.shadow_map_px = whole.map(|n| n.min(1 << 20) as usize),
                 "ao" => f.ao = Ao::from_name(v),
                 "aa" => f.aa = Aa::from_name(v),
-                "bloom" => f.bloom = flag,
+                // `true` and `false` are a file's from before GLOW.
+                "bloom" => f.bloom = Glow::from_name(v).or(flag.map(|on| if on { Glow::On } else { Glow::Off })),
                 "render_scale" => f.render_scale = whole.map(|n| n.min(255) as u8),
                 // The GRASS rows' keys, from before the ground cover was
                 // the same on every rung: dropped.
@@ -974,9 +975,19 @@ fullscreen = true
         let (back, ..) = read(Some(&d));
         assert_eq!(back, Settings::default());
         let mut c = s;
-        c.adjust(Knob::Bloom, 0);
+        c.adjust(Knob::Bloom, -1);
         let t = text(&c, &Binds::default(), &Player::default(), 1, &[], &[]);
-        assert!(t.contains("bloom = false") && t.contains("shadow_m"), "{t}");
+        assert!(t.contains("bloom = off") && t.contains("shadow_m"), "{t}");
+        // A file from before GLOW said `true` and `false`.
+        let (old, ..) = read(Some(&t.replace("bloom = off", "bloom = false")));
+        assert_eq!(old.gfx.bloom, Glow::Off);
+        let (old, ..) = read(Some(&t.replace("bloom = off", "bloom = true")));
+        assert_eq!(old.gfx.bloom, Glow::On);
+        c.adjust(Knob::Bloom, 1);
+        c.adjust(Knob::Bloom, 1);
+        let t = text(&c, &Binds::default(), &Player::default(), 1, &[], &[]);
+        let (back, ..) = read(Some(&t));
+        assert_eq!((c.gfx.bloom, back.gfx.bloom), (Glow::Glow, Glow::Glow), "{t}");
     }
 
     /// The preset row writes every row below it; a moved row reads CUSTOM
@@ -995,7 +1006,7 @@ fullscreen = true
             assert_eq!(s.preset_name(), Some(q), "{q:?}");
         }
         let mut s = Settings::with_preset(Quality::High);
-        s.adjust(Knob::Bloom, 0);
+        s.adjust(Knob::Bloom, -1);
         s.adjust(Knob::Quality, -1);
         assert_eq!(s.gfx, for_target(preset(Quality::Medium)));
         for _ in 0..10 {
@@ -1022,6 +1033,7 @@ fullscreen = true
                     Knob::ShadowMap,
                     Knob::Ambient,
                     Knob::Aa,
+                    Knob::Bloom,
                     Knob::RenderScale,
                     Knob::Fx,
                     Knob::Clouds,
