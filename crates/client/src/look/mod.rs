@@ -2,6 +2,7 @@
 //! Drawing only: nothing here reads anything but the map and the camera.
 
 pub mod anim;
+pub mod bark;
 pub mod blade;
 pub mod bodies;
 pub mod boulders;

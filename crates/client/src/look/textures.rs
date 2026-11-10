@@ -87,16 +87,19 @@ impl Textures {
     }
 }
 
-fn repeat() -> ImageSamplerDescriptor {
+/// How far a sampler follows a surface seen edge on: Gates' 4 for WebGL2's
+/// integrated GPUs; the desktop's 16 wherever the desktop's frame is drawn
+/// (the WebGPU module too).
+const ANISOTROPY: u16 = if cfg!(webgl2) { 4 } else { 16 };
+
+pub(crate) fn repeat() -> ImageSamplerDescriptor {
     ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        // Gates' 4 for WebGL2's integrated GPUs; the desktop's 16 wherever
-        // the desktop's frame is drawn (the WebGPU module too).
-        anisotropy_clamp: if cfg!(webgl2) { 4 } else { 16 },
+        anisotropy_clamp: ANISOTROPY,
         ..default()
     }
 }
@@ -597,6 +600,10 @@ pub fn mip_models(
         d.mipmap_filter = ImageFilterMode::Linear;
         d.min_filter = ImageFilterMode::Linear;
         d.mag_filter = ImageFilterMode::Linear;
+        // The gun in our own view is seen along its length, its top and its
+        // side running away from the eye: without this a chain's blur takes
+        // its maps down to a smear there, and a 2048 map reads as a 256.
+        d.anisotropy_clamp = ANISOTROPY;
         img.sampler = ImageSampler::Descriptor(d);
     }
 }
