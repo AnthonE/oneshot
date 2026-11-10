@@ -96,7 +96,7 @@ impl Recorder {
         self.buf.push(b'H');
     }
 
-    /// Whether the recording stopped at [`MAX_BYTES`].
+    /// Whether the recording stopped: at [`MAX_BYTES`], or taken.
     pub fn full(&self) -> bool {
         self.full
     }
@@ -164,9 +164,23 @@ impl Recorder {
         if self.full {
             return Vec::new();
         }
-        let mut out = self.buf.clone();
+        Self::end(self.buf.clone(), self.ticks, world)
+    }
+
+    /// [`Recorder::finish`], handing the recording over rather than copying
+    /// it (megabytes of a long match, on a thread every room's tick waits
+    /// for): nothing is recorded after, and a second take is empty.
+    pub fn take(&mut self, world: &World) -> Vec<u8> {
+        if self.full {
+            return Vec::new();
+        }
+        self.full = true;
+        Self::end(std::mem::take(&mut self.buf), self.ticks, world)
+    }
+
+    fn end(mut out: Vec<u8>, ticks: u32, world: &World) -> Vec<u8> {
         out.push(b'E');
-        out.extend_from_slice(&self.ticks.to_le_bytes());
+        out.extend_from_slice(&ticks.to_le_bytes());
         out.extend_from_slice(&world.hash().to_le_bytes());
         for s in world.score {
             out.extend_from_slice(&s.to_le_bytes());
@@ -415,6 +429,28 @@ mod tests {
         assert!(!s.kills.is_empty(), "the bots fought");
         // Small: a changed input costs 8 bytes, an unchanged one nothing.
         assert!(bytes.len() < 6000 * 40, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn a_taken_replay_is_the_copy_and_the_recording_s_end() {
+        let rules = Rules {
+            score_limit: 1000,
+            time_limit_ms: 0,
+            ..Rules::doubles()
+        };
+        let mut room = Room::new(Map::proving_grounds(), rules, 9, (4, 5));
+        for t in 0..600 {
+            room.step(t as f64);
+        }
+        let copy = room.replay();
+        let taken = room.take_replay();
+        assert_eq!(verify(&taken).unwrap().ticks, 600);
+        assert!(copy == taken, "the same file, not copied");
+        // The room plays on (a match over lingers); nothing more is kept.
+        for t in 600..700 {
+            room.step(t as f64);
+        }
+        assert!(room.take_replay().is_empty() && room.replay().is_empty());
     }
 
     /// Each seat's view of each target changing as a bubble's would (a

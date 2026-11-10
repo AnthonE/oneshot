@@ -663,6 +663,12 @@ impl Room {
         self.rec.finish(&self.world)
     }
 
+    /// The match's replay, handed over without a copy once it is over: the
+    /// room records nothing after (`replay::Recorder::take`).
+    pub fn take_replay(&mut self) -> Vec<u8> {
+        self.rec.take(&self.world)
+    }
+
     /// The aim review's numbers so far.
     pub fn watch(&self) -> &watch::Watch {
         &self.watch
