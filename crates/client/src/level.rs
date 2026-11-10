@@ -620,6 +620,49 @@ const LIFT_BEAM_ALPHA: f32 = 0.08;
 /// The beam's radius as a share of the lift's narrower side: a column of
 /// light up the middle, not a glass wall over the whole pad.
 const LIFT_BEAM_R: f32 = 0.22;
+/// The beam is shells of light one inside another, each this share of its
+/// radius: the more of them a line of sight crosses the brighter, so it has
+/// a core and no edge. Each adds this share of the beam's colour, fading
+/// to nothing by its top as this power of what is left of its height and in
+/// from nothing over this share of it at its foot.
+const LIFT_BEAM_SHELLS: [f32; 4] = [1.0, 0.72, 0.46, 0.22];
+const LIFT_BEAM_SHELL: f32 = 0.5;
+const LIFT_BEAM_FADE: f32 = 1.3;
+const LIFT_BEAM_FOOT: f32 = 0.04;
+const LIFT_BEAM_SIDES: usize = 20;
+const LIFT_BEAM_RINGS: usize = 8;
+
+/// A lift's beam, `r` wide and `height` tall about its middle: open shells
+/// (`LIFT_BEAM_SHELLS`), their fade in their vertices' alpha, for a paint
+/// that adds.
+fn lift_beam(r: f32, height: f32) -> Mesh {
+    let (mut positions, mut normals, mut colors, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for share in LIFT_BEAM_SHELLS {
+        let base = positions.len() as u32;
+        for i in 0..=LIFT_BEAM_RINGS {
+            let t = i as f32 / LIFT_BEAM_RINGS as f32;
+            let alpha = LIFT_BEAM_SHELL * (1.0 - t).powf(LIFT_BEAM_FADE) * (t / LIFT_BEAM_FOOT).min(1.0);
+            for j in 0..LIFT_BEAM_SIDES {
+                let (sin, cos) = (j as f32 / LIFT_BEAM_SIDES as f32 * core::f32::consts::TAU).sin_cos();
+                positions.push([r * share * cos, (t - 0.5) * height, r * share * sin]);
+                normals.push([cos, 0.0, sin]);
+                colors.push([1.0, 1.0, 1.0, alpha]);
+            }
+        }
+        let n = LIFT_BEAM_SIDES as u32;
+        for i in 0..LIFT_BEAM_RINGS as u32 {
+            for j in 0..n {
+                let (a, b) = (base + i * n + j, base + i * n + (j + 1) % n);
+                indices.extend([a, b, b + n, a, b + n, a + n]);
+            }
+        }
+    }
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+        .with_inserted_indices(Indices::U32(indices))
+}
 
 /// A light strip's colour (looks `glow`, `red_glow`, `blue_glow`,
 /// `magenta_glow`, `cyan_glow`): drawn unshadowed and emissive, the same
@@ -1640,12 +1683,13 @@ pub fn build(
             Transform::from_xyz(cx, a.y + 0.04, cz),
         ));
         // A lift: its beam stands to the throw's apex, drawn additive and
-        // unlit so it reads as light, not a wall.
+        // unlit so it reads as light, not a wall: brightest up its middle
+        // and at its foot, with no edge and no lid.
         let r = (b.x - a.x).min(b.z - a.z) * LIFT_BEAM_R;
         let apex = l.vel.y * l.vel.y / (2.0 * sim::consts::GRAVITY) + 1.0;
         commands.spawn((
             LevelPart,
-            Mesh3d(meshes.add(Cylinder::new(r, apex))),
+            Mesh3d(meshes.add(lift_beam(r, apex))),
             MeshMaterial3d(mats.add(StandardMaterial {
                 base_color: lift.map_or(Color::srgba(0.35, 0.8, 1.0, LIFT_BEAM_ALPHA), |s| s.beam),
                 alpha_mode: AlphaMode::Add,
