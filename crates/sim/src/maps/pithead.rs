@@ -14,7 +14,7 @@ pub const DEF: Def = Def {
     id: 8,
     name: "Pithead",
     practice: false,
-    modes: 14,
+    modes: 15,
     lo: (-24.0, -17.0),
     hi: (24.0, 17.0),
     void: -10.0,
