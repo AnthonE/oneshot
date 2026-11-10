@@ -560,7 +560,7 @@ fn eight_shards_go_off_together() {
     let k = kill(SHARDS, 10.0, Spot::Chest, SALT).unwrap();
     assert_eq!(k.hits, 10, "{k:?}");
     // They turn after a target crossing the aim: fired where it is, not
-    // led, at 15 m they still find it, slowly, within a magazine.
+    // led, at 15 m they find it within a magazine.
     let mut w = range([SHARDS, arms::NONE], 15.0, SALT);
     let mut inputs = [Input::default(); MAX_FIGHTERS];
     inputs[1] = Input {
@@ -852,4 +852,62 @@ fn the_range_table() {
         sword(4.0, 0.0),
         lunge_reach()
     );
+}
+
+/// Shards at a target strafing across the aim, fired where it is (not led),
+/// the aim `off` m wide of it: how many of `n` find it.
+fn shards_on_a_strafer(dist: f32, off: f32, n: u32) -> u32 {
+    let mut w = range([SHARDS, arms::NONE], dist, SALT);
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    let mut hits = 0;
+    for t in 0..TICK_HZ * 4 {
+        // Back and forth, a second each way, as a player jukes.
+        let dir = if (t / TICK_HZ).is_multiple_of(2) { 127 } else { -127 };
+        inputs[1] = Input {
+            mx: dir,
+            yaw: 32768,
+            ..Input::default()
+        };
+        // Health never runs out: the hits are counted, not the kill.
+        w.fighters[1].health = HEALTH_MAX;
+        w.fighters[1].needles = 0;
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest) + V3::new(0.0, 0.0, off));
+        inputs[0] = Input {
+            buttons: if w.fighters[0].shots < n { FIRE } else { 0 },
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        hits += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.a == 0 && e.b == 1)
+            .count() as u32;
+    }
+    hits
+}
+
+#[test]
+fn shards_home_on_a_strafer_inside_the_red_reticle() {
+    // Halo's needler: aimed on a juking target (or near it) inside its
+    // reach, the shards find it; aimed well wide, they don't lock.
+    assert!(shards_on_a_strafer(15.0, 0.0, 20) >= 18);
+    assert!(shards_on_a_strafer(15.0, 1.0, 20) >= 18, "the lock's cone");
+    assert!(shards_on_a_strafer(8.0, 0.0, 20) >= 18);
+    assert!(shards_on_a_strafer(15.0, 2.5, 20) <= 6, "too wide to lock");
+}
+
+#[test]
+#[ignore]
+fn shard_homing_table() {
+    for dist in [8.0, 15.0, 22.0, 30.0] {
+        for off in [0.0, 1.0, 2.0] {
+            println!(
+                "{dist:>4} m, {off} m wide: {:>2}/20",
+                shards_on_a_strafer(dist, off, 20)
+            );
+        }
+    }
 }

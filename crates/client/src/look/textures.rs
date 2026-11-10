@@ -186,6 +186,11 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
         for (h, normal) in [(a, false), (n, true)] {
             if let Some(img) = images.get_mut(h) {
                 mip_in_place(img, normal);
+                // The GPU's from here, as the models' maps are
+                // (`mip_models`): nothing reads a set back once the ground's
+                // arrays are made of them below, and kept they were 200 MB
+                // of a browser module's memory for as long as it ran.
+                img.asset_usage = RenderAssetUsages::RENDER_WORLD;
             }
         }
     }
@@ -200,7 +205,15 @@ pub fn prepare(mut t: ResMut<Textures>, mut images: ResMut<Assets<Image>>) {
     if let (Some(a), Some(n)) = (array(&alb), array(&nor)) {
         t.ground = Some((images.add(a), images.add(n)));
     }
-    t.sets = loading;
+    // A ground set that is no box's is drawn from the arrays alone
+    // (`set` is asked for a box's): its own pair would be the same pixels
+    // on the GPU a second time, 64 MB of them.
+    let (boxes, ground): (Vec<_>, Vec<_>) = loading.into_iter().partition(|s| BOXES.contains(&s.0));
+    for (_, a, n) in ground {
+        images.remove(&a);
+        images.remove(&n);
+    }
+    t.sets = boxes;
     // The plating: drawn here, not photographed.
     let (albedo, normal, orm) = panel_images(PANEL_PX);
     let (a, n, o) = (images.add(albedo), images.add(normal), images.add(orm));

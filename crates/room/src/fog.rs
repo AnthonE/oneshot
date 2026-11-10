@@ -440,6 +440,13 @@ impl Fog {
                 self.duntil[i] = 0;
                 continue;
             }
+            // In reach it can be taken (`World::pickup`), so it is shown:
+            // nobody takes a gun their screen never drew (one fallen under
+            // a boulder's lip, where no line from the eye is clear).
+            if me.active() && d.reach(me.body.pos) {
+                self.duntil[i] = tick + hold;
+                continue;
+            }
             if d.vel != V3::ZERO {
                 self.duntil[i] = if w.map.clear(eye, d.pos + look_y) { tick } else { 0 };
                 continue;

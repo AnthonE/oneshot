@@ -164,7 +164,17 @@ impl Look {
 
 /// The link (by `front::LinkGen`) and welcome this level was built for.
 #[derive(Resource, Default)]
-pub(crate) struct Built(Option<(u32, u32)>);
+pub struct Built(Option<(u32, u32)>);
+
+impl Built {
+    /// Whether the level for this link and welcome is up. What hangs its
+    /// own parts on a level (the pads' guns, the flags, Siege's nodes)
+    /// waits for it: parts made a frame before `rebuild` saw the welcome
+    /// went down with the old level and were never made again.
+    pub fn is(&self, gen: Option<&front::LinkGen>, welcomes: u32) -> bool {
+        self.0 == Some((gen.map_or(0, |g| g.0), welcomes))
+    }
+}
 
 /// Drawn things by their slot (a fighter with the side and look its body
 /// was made in). Made once and kept: fog hiding someone hides their body or
@@ -458,7 +468,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // wasm reader panics on a download that breaks mid-body, this one
     // retries it (`asset_fetch.rs`).
     #[cfg(target_arch = "wasm32")]
-    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"));
+    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"))
+        // And hands its files over a frame's worth at a time.
+        .add_systems(First, asset_fetch::frame);
     app.add_plugins(
         DefaultPlugins
             .set(bevy::log::LogPlugin {
@@ -556,7 +568,6 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     .add_plugins(look::gun_skin::plugin)
     // Our own hands' bark (`look/bark.rs`).
     .add_plugins(look::bark::plugin)
-    .add_plugins(look::lying::plugin)
     .add_plugins(MaterialPlugin::<look::blade::BladeMaterial>::default())
     .add_plugins(look::cels::plugin)
     .add_plugins(MaterialPlugin::<look::shield::ShieldMaterial>::default())

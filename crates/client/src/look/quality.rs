@@ -840,8 +840,10 @@ const _: () = assert!(
 /// what the tone curve takes to white's shoulder).
 pub const GLOW_THRESHOLD: f32 = 1.2;
 
-/// How hard the frame is sharpened after TAA (Bevy's CAS, 0 to 1).
-pub const TAA_SHARPEN: f32 = 0.7;
+/// How hard the frame is sharpened after TAA (Bevy's CAS, 0 to 1): enough
+/// to take back TAA's blur, no more. At 0.7 every edge drew a dark halo and
+/// the rock's grain went to blotches, a cel-shaded frame on the desktop.
+pub const TAA_SHARPEN: f32 = 0.3;
 
 /// The prepass room (`gpu::GpuCaps::prepass_room`) from which a prepass a
 /// rung no longer needs is kept rather than taken off (Gates' three).

@@ -266,14 +266,6 @@ pub fn warm_models(
         .observe(done)
         .id();
     super::bark::wear(&mut commands, hand);
-    // One gun lying for the taking: every glow is the one pipeline.
-    if let Some(scene) = models.guns.get(sim::arms::AR as usize).cloned().flatten() {
-        let lying = commands
-            .spawn((Warming(WARM_FRAMES), SceneRoot(scene), at(), ChildOf(eye)))
-            .observe(done)
-            .id();
-        super::lying::glow(&mut commands, lying);
-    }
     // A sword's blade lit: the shader is its own.
     if let Some(scene) = models.guns.get(sim::arms::SWORD as usize).cloned().flatten() {
         let lit = commands
