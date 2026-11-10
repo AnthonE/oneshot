@@ -75,6 +75,8 @@ K_AT = (-1.43, -1.3, -1.12, -0.95, -0.8, -0.68, -0.6)
 # thick across as along).
 HORN = ((0.42, 0.2, 0.72), (0.44, 0.5, 1.32), (GRIP[0], 0.385, GRIP[2]))
 HORN_R = (0.085, 0.03)
+# Its knuckles: at which of its bow's eight points.
+KNUCKLES = (2, 5)
 GRIP_R = 0.021
 # A fin: its foot's leading and trailing edges, its tip's, from how high to
 # how high, and how far out its foot and its tip stand (canted out).
@@ -109,7 +111,7 @@ def hull(side):
                   (H_TOP(x) - H_KEEL(x)) / 2 + 0.03, n=H_N, p=H_ROUND(x), pb=2.5) for x in H_AT]
     o = solid(loft(lip(at, MW, MH, n=H_N, p=2.3) + rings, 'shell', ends=('open', 'tip'), name='hull',
                    sharp=((H_N // 4, neck, 99), (0 if side > 0 else H_N // 2, neck, 99))), 'hull')
-    return o, mouth(at, MW, MH, deep=0.3, core=(0.15, 0.12, 0.5, 0.5), vanes=0, n=H_N, p=2.3), at
+    return o, mouth(at, MW, MH, deep=0.3, core=(0.15, 0.12, 0.68, 0.68), vanes=0, n=H_N, p=2.3, wall='iron'), at
 
 
 burns = []
@@ -138,9 +140,11 @@ for side in (1, -1):
     for lean in (-0.9, 0.9):
         seam(hulls, plane((0, side * H_OUT(-1.1), MZ + 0.02), (0, side * 1.0, lean)), **SEAM,
              within=lambda q: both(run(STERN + 0.12, NECK[0] + 0.02)(q), side * q[:, 1], Z(q) - MZ))
-seam(hulls, plane((0.72, 0, 0), (1, 0, 0.45)), **SEAM, where=lambda q: Z(q) > mid(q))
-# A hairline along each blade's flank, under the lip of its back's plate.
-seam(hulls, lambda q: top(q) - 0.03, **SEAM, within=run(NECK[1] + 0.12, 0.64))
+cross = plane((0.72, 0, 0), (1, 0, 0.45))
+seam(hulls, cross, **SEAM, where=lambda q: Z(q) > mid(q))
+# A hairline along each blade's flank, under the lip of its back's plate,
+# from the neck to that seam.
+seam(hulls, lambda q: top(q) - 0.03, **SEAM, within=lambda q: both(X(q) - NECK[1] - 0.12, -cross(q)))
 # Gills down each pod's outer flank, under its back's plate, the engine's
 # fire in them.
 for x in (-0.9, -1.02, -1.14):
@@ -153,7 +157,10 @@ parts += [
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - STERN - 0.1, NECK[0] - 0.03 - X(q)), 0.03, 'shell_pale', name='backs'),
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - NECK[0] + 0.07, NECK[1] + 0.04 - X(q)), 0.018, 'shell', name='necks',
           clear=None),
-    plate(hulls, lambda q: both(top(q) - 0.03, X(q) - NECK[1] - 0.1, 0.66 - X(q)), 0.025, 'shell_pale', name='blades',
+    # (The strake's lip stands clear of the hairline under it, and it ends
+    # short of the seam across the blade: a plate cut along a seam's own
+    # line carries half its groove up on its edge.)
+    plate(hulls, lambda q: both(top(q) - 0.052, X(q) - NECK[1] - 0.1, -cross(q) - 0.022), 0.025, 'shell_pale', name='blades',
           clear=None),
     plate(hulls, lambda q: STERN + 0.05 - X(q), 0.012, 'iron', name='rims'),
 ]
@@ -224,7 +231,16 @@ parts.append(case)
 for side in (1, -1):
     path = bow(*[(x, side * y, z) for x, y, z in HORN], steps=7)
     radii = [HORN_R[0] + (HORN_R[1] - HORN_R[0]) * (i / 7) ** 0.7 for i in range(8)]
-    parts.append(stem(path, radii, n=10, material='shell_deep', name='horn', ends=('tip', 'tip'), flat=0.5, thin=(0, 1, 0)))
+    horn = solid(stem(path, radii, n=10, material='shell_deep', name='horn', ends=('tip', 'tip'), flat=0.5, thin=(0, 1, 0)), 'horn')
+    # Its knuckles: a joint of dark iron across it at each, the blade
+    # between them a paler plate, so it is of the hulls' make and not a hose.
+    joints = []
+    for i in KNUCKLES:
+        at = np.array(path[i][:])
+        joints.append(plane(at, (path[i + 1] - path[i - 1])[:]))
+        seam(horn, joints[-1], 0.03, 0.01, flat=0.5, where=lambda q, at=at: np.linalg.norm(q - at, axis=1) < 0.16)
+    repaint(horn, 'shell', where=lambda q: (joints[0](q) > 0.016) & (joints[1](q) < -0.016), of='shell_deep')
+    parts.append(horn)
     socket = sphere(1.0, at=(HORN[0][0], side * HORN[0][1], HORN[0][2] + 0.035), material=None, scale=(0.12, 0.08, 0.035),
                     segments=16)
     socket.data.materials.append(skin('iron'))

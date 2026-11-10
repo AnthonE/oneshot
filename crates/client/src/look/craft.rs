@@ -64,14 +64,15 @@ const FLY_BOB_TO: f32 = 9.0;
 /// two are its hulls' sterns; the flier's is one flat blade of flame out of
 /// the whole of its wide mouth.
 const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
-    (Vec3::new(-1.5, 0.54, -0.6), 1.0, 0.26, 0.2),
-    (Vec3::new(-1.5, 0.54, 0.6), 1.0, 0.26, 0.2),
+    (Vec3::new(-1.5, 0.54, -0.6), 1.0, 0.32, 0.27),
+    (Vec3::new(-1.5, 0.54, 0.6), 1.0, 0.32, 0.27),
 ];
 const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
 /// A flame's core inside its sheath: this share of its length and of its
-/// width. The flier's one flat blade wants a broader one: half its mouth
-/// wide, across both vanes.
-const CORE: (f32, f32) = (0.55, 0.42);
+/// width (the skimmer's a third of its mouth, so a sheath shows round it).
+/// The flier's one flat blade wants a broader one: half its mouth wide,
+/// across both vanes.
+const CORE: (f32, f32) = (0.55, 0.36);
 const FLY_CORE: (f32, f32) = (0.7, 0.65);
 /// The light a craft throws on what is under and behind it (on a rung with
 /// lights to spare, `fx::Caps::lights_in_flight`): where it hangs in the

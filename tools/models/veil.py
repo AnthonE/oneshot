@@ -224,19 +224,25 @@ def lip(at, w, h, n=20, p=2.6):
     return [oval(x + 0.1, y, z, w * 0.96, h * 0.96, n=n, p=p), oval(x - 0.03, y, z, w, h, n=n, p=p)]
 
 
-def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow'):
+def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow', wall=None):
     """An engine's mouth looking aft from `at` (`lip`): a throat `deep`
     metres in, lined with `lining` (lit from within, or dark iron round a
-    core that is the only light in it); its core, a swell of light whose
-    middle is `core[0]` in from the end, `core[1]` long, and `core[2]` and
-    `core[3]` of the mouth across and up; thin iron vanes across it. Its
-    parts."""
+    core that is the only light in it), or with `wall` down to a floor of
+    `lining` (a dark throat with light at the bottom of it: a lit wall is a
+    lamp's lens from astern); its core, a swell of light whose middle is
+    `core[0]` in from the end, `core[1]` long, and `core[2]` and `core[3]` of
+    the mouth across and up; thin iron vanes across it. Its parts."""
     x, y, z = at
-    throat = loft([oval(x, y, z, w * 0.98, h * 0.98, n=n, p=p), oval(x + deep, y, z, w * 0.8, h * 0.8, n=n, p=p)], lining,
-                  ends=('open', 'flat'), levels=1, name='throat', inside=True)
+    rim, foot = oval(x, y, z, w * 0.98, h * 0.98, n=n, p=p), oval(x + deep, y, z, w * 0.8, h * 0.8, n=n, p=p)
+    if wall is None:
+        parts = [loft([rim, foot], lining, ends=('open', 'flat'), levels=1, name='throat', inside=True)]
+    else:
+        parts = [loft([rim, foot], wall, ends=('open', 'open'), levels=1, name='throat', inside=True),
+                 loft([oval(x + deep - 0.004, y, z, w * 0.81, h * 0.81, n=n, p=p), foot], lining, ends=('open', 'flat'), levels=1,
+                      name='floor', inside=True)]
     swell = sphere(1.0, at=(x + core[0], y, z), material=None, scale=(core[1], w * core[2], h * core[3]), segments=24)
     swell.data.materials.append(skin('throat'))
-    parts = [throat, swell]
+    parts.append(swell)
     for i in range(vanes):
         vane = box(0.05, w * 1.9, 0.014, at=(x + 0.005, y, z + h * 1.3 * ((i + 1) / (vanes + 1) - 0.5)), material=None,
                    bevel=0.003)

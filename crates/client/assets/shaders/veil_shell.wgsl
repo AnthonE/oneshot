@@ -7,17 +7,18 @@
 // paint in the shade each vertex stands in), and their alpha is that shade
 // alone, which is what dims a reflection down in a seam.
 //
-// And it has been flown: a mottle in its tone and gloss and fine scuffs
+// And it has been flown: a mottle in its tone and gloss and hairline scuffs
 // running fore and aft, laid by where each pixel lies on the craft (its two
 // UV sets carry that, metres: along and across it, and up it), each faded
-// out before a pixel is too big to hold it, so a far craft is clean paint
-// and a near one has grain.
+// out before a pixel is too big to hold it and all of it by a few metres
+// from the eye, so a far craft is clean paint and a near one has grain.
 //
 // Uniforms, one cube and arithmetic only, so it binds and runs the same on
 // WebGL2.
 
 #import bevy_pbr::{
     forward_io::{VertexOutput, FragmentOutput},
+    mesh_view_bindings::view,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
@@ -42,22 +43,29 @@ struct Shell {
 // How sharply the paint turns at the edge (a power of how edge on it is).
 const TURN: f32 = 3.0;
 // The mottle: cycles a metre (patches a hand across, with broad ones four
-// times the size under them), how far it moves the paint's tone either way
-// and its roughness either way: where it is rough the coat is dull, and a
-// reflection shows the patches where the paint's own dark tone would not.
+// times the size under them), how far the noise is stretched (a sum of
+// noises keeps near its middle), how far it moves the paint's tone either
+// way and its roughness either way. Little of that: a coat this glossy
+// shows a highlight where it is smooth and none where it is rough, so more
+// cut a highlight into islands, which is banding and not wear.
 const MOTTLE_FREQ: f32 = 7.0;
+const MOTTLE_GAIN: f32 = 2.2;
 const MOTTLE_TONE: f32 = 0.1;
-const MOTTLE_ROUGH: f32 = 0.16;
+const MOTTLE_ROUGH: f32 = 0.05;
 // The scratches: cycles a metre across the craft, how many times longer
 // than wide they run along it, the noise's level one shows from (about a
-// quarter of the skin has one), how much rougher and paler they are, and
-// how much of the coat's reflection they take. Fine: gone by a few metres.
-const SCUFF_FREQ: f32 = 70.0;
-const SCUFF_LONG: f32 = 26.0;
-const SCUFF_FROM: f32 = 0.6;
-const SCUFF_ROUGH: f32 = 0.3;
-const SCUFF_PALE: f32 = 0.45;
-const SCUFF_DULL: f32 = 0.8;
+// fifth of the skin has one), how much rougher and paler they are, and
+// how much of the coat's reflection they take. Hairlines: a pixel or two
+// at arm's length, gone by three metres.
+const SCUFF_FREQ: f32 = 110.0;
+const SCUFF_LONG: f32 = 30.0;
+const SCUFF_FROM: f32 = 0.64;
+const SCUFF_ROUGH: f32 = 0.25;
+const SCUFF_PALE: f32 = 0.3;
+const SCUFF_DULL: f32 = 0.7;
+// All its grain is whole to here and gone by here, metres from the eye.
+const GRAIN_NEAR: f32 = 3.5;
+const GRAIN_FAR: f32 = 8.0;
 
 fn hash3(c: vec3<i32>) -> f32 {
     // WGSL will not mix `^` with `*` unparenthesised.
@@ -96,19 +104,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #else
     let shade = 1.0;
 #endif
-    // Its grain, by where the pixel lies on the craft.
+    // Its grain, by where the pixel lies on the craft (a mesh without the
+    // two UV sets that say so has none).
+    var mottle = 0.0;
     var scuff = 0.0;
 #ifdef VERTEX_UVS_A
 #ifdef VERTEX_UVS_B
     let wp = in.world_position.xyz;
     let px = max(length(dpdx(wp)), length(dpdy(wp)));
+    let nearby = (1.0 - smoothstep(GRAIN_NEAR, GRAIN_FAR, distance(view.world_position.xyz, wp))) * shell.grain.x;
     let at = vec3<f32>(in.uv.x, in.uv.y, in.uv_b.x);
-    // (A sum of value noises keeps near its middle: stretched to fill -1..1.)
-    let mottle = clamp((0.25 * vnoise(at * MOTTLE_FREQ * 0.25 + vec3<f32>(2.7, 8.1, 5.3)) + 0.5 * vnoise(at * MOTTLE_FREQ)
-        + 0.25 * vnoise(at * MOTTLE_FREQ * 2.7 + vec3<f32>(7.3, 1.9, 4.1)) - 0.5) * 3.4, -1.0, 1.0)
-        * band(px, MOTTLE_FREQ) * shell.grain.x;
+    mottle = clamp((0.25 * vnoise(at * MOTTLE_FREQ * 0.25 + vec3<f32>(2.7, 8.1, 5.3)) + 0.5 * vnoise(at * MOTTLE_FREQ)
+        + 0.25 * vnoise(at * MOTTLE_FREQ * 2.7 + vec3<f32>(7.3, 1.9, 4.1)) - 0.5) * MOTTLE_GAIN, -1.0, 1.0)
+        * band(px, MOTTLE_FREQ) * nearby;
     let streak = vnoise(vec3<f32>(at.x * SCUFF_FREQ / SCUFF_LONG, at.y * SCUFF_FREQ, at.z * SCUFF_FREQ));
-    scuff = smoothstep(SCUFF_FROM, SCUFF_FROM + 0.1, streak) * band(px, SCUFF_FREQ) * shell.grain.x;
+    scuff = smoothstep(SCUFF_FROM, SCUFF_FROM + 0.1, streak) * band(px, SCUFF_FREQ) * nearby;
     let grained = pbr_input.material.base_color.rgb * (1.0 + MOTTLE_TONE * mottle) * (1.0 + SCUFF_PALE * scuff);
     pbr_input.material.base_color = vec4<f32>(grained, pbr_input.material.base_color.a);
     pbr_input.material.perceptual_roughness = clamp(
