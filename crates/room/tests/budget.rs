@@ -123,8 +123,8 @@ fn a_full_sky_sends_the_rounds_that_matter_to_you() {
 }
 
 /// Dry Fork at its fullest with a bubble: every seat in sight and six of
-/// them in it, every hull it has (its trucks and its one-seaters) in it and
-/// driven, as many rounds and drops as a snapshot holds, riding behind a
+/// them in it, every hull a map may hold (its trucks, and the two
+/// skimmers and two fliers it had) in it and driven, as many rounds and drops as a snapshot holds, riding behind a
 /// driver. Room for four of the widest events (145 bits each) besides;
 /// those that don't fit wait for the next (`room::EventQueue`).
 #[test]
@@ -150,13 +150,19 @@ fn a_full_bubble_fits_with_room_for_events() {
             share: 7,
         });
     }
-    let hulls = w.map.vehicles.len();
-    assert_eq!(hulls, 8);
+    let hulls = sim::consts::MAX_VEHICLES;
     snap.n_vehicles = hulls as u8;
     for (i, v) in snap.vehicles.iter_mut().enumerate().take(hulls) {
         // A one-seater at its widest: mid-roll, its tank half spent, its
         // pilot's aim and buttons in its stick.
-        let kind = w.map.vehicles[i].kind;
+        let kind = w.map.vehicles.get(i).map_or(
+            if i < 6 {
+                sim::vehicle::SKIMMER
+            } else {
+                sim::vehicle::FLIER
+            },
+            |v| v.kind,
+        );
         let one = kind != sim::vehicle::TRUCK;
         let stick = sim::input::Input {
             mx: -127,

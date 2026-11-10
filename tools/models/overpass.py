@@ -91,7 +91,7 @@ def flyover():
     for sgn in (-1, 1):
         a0, a1 = (0.0, sgn * 26.4), (0.0, sgn * 38.0)
         extrude(a0, a1, [(-4.4, -0.9), (4.4, -0.9), (4.4, 0.0), (-4.4, 0.0)], 'blast', caps=True, cell=1.6, ya=DECK + 1.8, yb=DECK - 6.0)
-        extrude(a0, a1, [(-4.4, 0.0), (4.4, 0.0), (4.4, 0.04), (-4.4, 0.04)], 'road', caps=False, cell=1.6, ya=DECK + 1.8, yb=DECK - 6.0)
+        extrude(a0, a1, [(-4.4, 0.0), (4.4, 0.0), (4.4, 0.04), (-4.4, 0.04)], 'road', caps=True, cell=1.6, ya=DECK + 1.8, yb=DECK - 6.0)
         rod((3.9, DECK + 1.6, sgn * 29.0), (3.9, DECK + 4.6, sgn * 30.4), 0.11, 'steel', sides=8)
         rod((3.9, DECK + 4.6, sgn * 30.4), (2.2, DECK + 3.4, sgn * 33.2), 0.09, 'steel', sides=6)
         rng2 = random.Random(31 if sgn > 0 else 32)
@@ -103,7 +103,7 @@ def flyover():
     cbox(1.62, DECK + 0.5, 3.5, 3.78, DECK + 2.2, 5.5, 'rust', c=0.14)
     cbox(1.7, DECK + 1.2, 3.46, 3.7, DECK + 2.0, 3.5, 'blast_dark', c=0.0)
     for x in (1.7, 3.7):
-        spin(x, 4.0, [(0.02, DECK + 0.46), (0.46, DECK + 0.46), (0.46, DECK + 0.02)], 'rust', sides=12, smooth=False)
+        spin(x, 4.0, [(0.46, DECK + 0.02), (0.46, DECK + 0.46), (0.02, DECK + 0.46)], 'rust', sides=12, smooth=False)
     container(-3.5, DECK, 6.6, -1.1, 12.6, 0.0)
     container_turned(1.9, -9.8, 2.4, 6.0, 14.0)
 
@@ -180,8 +180,8 @@ def red_half(sx):
         # The bank's road and walls.
         quad((xa, 0.01, z0), (xa, 0.01, z1), (xb, 2.76, z1), (xb, 2.76, z0), 'road', (0, 1, 0), cell=1.6)
         for z, o in ((z0, -1), (z1, 1)):
-            quad((xa, 0.0, z), (xb, 0.0, z), (xb, 2.76, z), (xa, 0.0, z), 'blast', (0, 0, o), cell=1.4)
-        quad((xb, 0.0, z0), (xb, 0.0, z1), (xb, 2.26, z1), (xb, 2.26, z0), 'blast', (-X(1), 0, 0), cell=1.4)
+            quad((xa, 0.0, z), (xb, 0.0, z), (xb, 2.76, z), (xa, 0.01, z), 'blast', (0, 0, o), cell=1.4)
+        quad((xb, 0.0, z0), (xb, 0.0, z1), (xb, 2.26, z1), (xb, 2.26, z0), 'blast', (X(1), 0, 0), cell=1.4)
         # The span from there to the flyover.
         xc = X(-4.5)
         for off0, off1, mat, drop, thick in ((-3.0, 3.0, 'road', 0.0, 0.06), (-3.0, 3.0, 'blast', 0.06, 0.44)):
@@ -190,6 +190,8 @@ def red_half(sx):
         for z, o in ((z0, -1), (z1, 1)):
             quad((xb, 2.26, z), (xc, 4.5, z), (xc, DECK, z), (xb, 2.76, z), 'blast', (0, 0, o), cell=1.4)
         quad((xb, 2.26, z0), (xb, 2.26, z1), (xc, 4.5, z1), (xc, 4.5, z0), 'blast_dark', (0, -1, 0), cell=1.6)
+        # Its end, the lip that hangs under the flyover's edge.
+        quad((xc, 4.5, z0), (xc, 4.5, z1), (xc, 4.62, z1), (xc, 4.62, z0), 'blast_dark', (X(1), 0, 0), cell=1.6)
         # Its lines, a low kerb drawn on its top edges.
         for z in (z0 + 0.25, z1 - 0.25):
             quad((xa, 0.02, z - 0.06), (xa, 0.02, z + 0.06), (xb, 2.77, z + 0.06), (xb, 2.77, z - 0.06), 'paint', (0, 1, 0), cell=8.0)
@@ -273,7 +275,11 @@ def block(sx, X, bx, light):
     xa, xb = X(-15.0), X(-23.0)
     quad((xa, 0.01, -3.0), (xa, 0.01, 3.0), (xb, ROOF, 3.0), (xb, ROOF, -3.0), 'road', (0, 1, 0), cell=1.6)
     for z, o in ((-3.0, -1), (3.0, 1)):
-        quad((xa, 0.0, z), (xb, 0.0, z), (xb, ROOF, z), (xa, 0.0, z), 'blast', (0, 0, o), cell=1.4)
+        quad((xa, 0.0, z), (xb, 0.0, z), (xb, ROOF, z), (xa, 0.01, z), 'blast', (0, 0, o), cell=1.4)
+    # Its back, seen from the floor inside, up to the roof's underside; the
+    # roof's cut edge filled where the ramp leaves it.
+    quad((xb, 0.0, -3.0), (xb, 0.0, 3.0), (xb, ROOF - 0.4, 3.0), (xb, ROOF - 0.4, -3.0), 'blast', (-X(1), 0, 0), cell=1.4)
+    quad((X(-23.02), ROOF, -3.0), (X(-23.02), ROOF, 3.0), (xb, ROOF, 3.0), (xb, ROOF, -3.0), 'road', (0, 1, 0), cell=1.6)
     for z in (-2.75, 2.75):
         quad((xa, 0.02, z - 0.06), (xa, 0.02, z + 0.06), (xb, ROOF + 0.005, z + 0.06), (xb, ROOF + 0.005, z - 0.06), 'paint', (0, 1, 0), cell=8.0)
     # The block's upper face to the road: a great sign in its side's colour.

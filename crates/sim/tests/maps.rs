@@ -87,6 +87,10 @@ fn spawns_stand_clear_and_pads_can_be_taken() {
             side(1)
         );
         assert!(m.spawns.len() >= 8, "{}: eight seats need eight spawns", m.name);
+        // Big Team is Capture the Flag (`Rules::big_ctf`): its maps have flags.
+        if d.plays(sim::map::ROT_BIG_TEAM) {
+            assert!(m.flags.is_some(), "{}: a Big Team map with no flags", m.name);
+        }
     }
 }
 
@@ -325,5 +329,116 @@ fn bots_fight_on_every_map() {
             );
             assert_eq!(own_falls, 0, "{} with {n} seats: bots walked off the edge", d.name);
         }
+    }
+}
+
+/// Big Team's sixteen seated at once on Dry Fork: nobody on top of anyone,
+/// and each side spread over its spawns, never one heap at its base.
+#[test]
+fn a_full_big_team_spreads_over_its_spawns() {
+    let mut w = World::new(by_id(3).unwrap(), Rules::big_team(), 1, (2, 3));
+    for s in 0..MAX_FIGHTERS {
+        w.seat(s, (s & 1) as u8);
+    }
+    for a in 0..MAX_FIGHTERS {
+        for b in a + 1..MAX_FIGHTERS {
+            let d = (w.fighters[a].body.pos - w.fighters[b].body.pos).len();
+            assert!(d > 2.0, "{a} and {b} spawned {d} m apart");
+        }
+        let crowd = (0..MAX_FIGHTERS)
+            .filter(|&b| b != a && w.fighters[b].team == w.fighters[a].team)
+            .filter(|&b| (w.fighters[a].body.pos - w.fighters[b].body.pos).len() < SPAWN_CROWD_R)
+            .count();
+        assert!(
+            crowd <= 2,
+            "{a} spawned with {crowd} teammates within {SPAWN_CROWD_R} m"
+        );
+    }
+}
+
+/// A jump goes up and over, never sideways: a head stopped at a ceiling
+/// (Dry Fork's bunker, under its roof), feet on a top the grid rounds into
+/// (Overpass' van) or a top a float holds a hair high (Chrysalis' bridge)
+/// each threw a body out of it sideways, half a metre to three.
+#[test]
+fn a_jump_is_never_thrown_sideways() {
+    use sim::geom::V3;
+    use sim::input::JUMP;
+    use sim::movement::{step, Body};
+    // (map, x, z, feet, yaw): a run at the wall, or a jump standing.
+    let runs: [(u8, f32, f32, f32, Option<u16>); 4] = [
+        (3, -98.0, 0.3, 0.125, Some(0)),
+        (1, -16.4, 19.0, 2.3, None),
+        (6, -12.0, -1.0, 7.0, None),
+        (6, -12.0, 1.2, 7.0, None),
+    ];
+    for (id, x, z, y, yaw) in runs {
+        let m = by_id(id).unwrap();
+        let mut b = Body {
+            pos: V3::new(x, m.floor(x, z, BODY_R, y + STEP), z),
+            vel: V3::new(0.0, 0.0, 0.0),
+            grounded: true,
+            crouched: false,
+            duck: 0,
+        };
+        // Over by tick 100, short of the launcher at its door.
+        for t in 0..100u32 {
+            let inp = Input {
+                buttons: if t == 15 { JUMP } else { 0 },
+                yaw: yaw.unwrap_or(0),
+                pitch: 0,
+                mx: 0,
+                mz: if yaw.is_some() { 127 } else { 0 },
+            };
+            let (px, pz) = (b.pos.x, b.pos.z);
+            step(&mut b, &inp, &m);
+            let d = fabs(b.pos.x - px) + fabs(b.pos.z - pz);
+            assert!(d < 0.1, "{}: thrown {d} m at tick {t} from ({px}, {pz})", m.name);
+        }
+        if yaw.is_some() {
+            assert!(
+                b.pos.x > -95.0,
+                "{}: never cleared the low wall, at {:?}",
+                m.name,
+                b.pos
+            );
+        }
+    }
+}
+
+/// Dry Fork's closed end is held by its cliff, never by the bound: a run up
+/// the bank behind red's base, jumping all the way, stops against rock
+/// short of it. The bound once stood 20 m out on the bank, a wall nobody
+/// could see.
+#[test]
+fn dry_forks_closed_end_is_its_cliff() {
+    use sim::geom::V3;
+    use sim::input::JUMP;
+    use sim::movement::{step, Body};
+    let m = by_id(3).unwrap();
+    for z in [-50.0, -30.0, -10.0, 0.0, 10.0, 30.0, 50.0] {
+        let mut b = Body {
+            pos: V3::new(-125.0, m.floor(-125.0, z, BODY_R, 40.0), z),
+            vel: V3::new(0.0, 0.0, 0.0),
+            grounded: true,
+            crouched: false,
+            duck: 0,
+        };
+        for t in 0..TICK_HZ * 30 {
+            let inp = Input {
+                buttons: if t % 2 == 0 { JUMP } else { 0 },
+                yaw: 32768,
+                pitch: 0,
+                mx: 0,
+                mz: 127,
+            };
+            step(&mut b, &inp, &m);
+        }
+        assert!(
+            b.pos.x < -150.0 && b.pos.x > m.lo.0 + 2.0,
+            "z {z}: stopped at {:?}, the bound at {}",
+            b.pos,
+            m.lo.0
+        );
     }
 }

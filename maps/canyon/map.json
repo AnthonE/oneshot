@@ -1,15 +1,15 @@
 {
   "id": 3,
   "name": "Dry Fork",
-  "about": "a red-rock gulch, 290 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
+  "about": "a red-rock gulch, 320 by 156 m, open at blue's end to the sea: a bunker a sixth of the way in at each end with a sniper on its roof, scree banks rising to 45 m cliffs with mesas behind, pockets in the walls, a hill in the middle with the rocket, a dry creek bed, boulders and dead trees for cover, a launcher at each bunker's door that throws you to the middle, and a beach of palms at blue's back.",
   "modes": ["big_team", "ffa"],
-  "bounds": [-140, 150, -78, 78],
+  "bounds": [-170, 150, -78, 78],
   "mirror": "x",
   "light": { "sea": -6 },
   "terrain": {
     "cell": 1,
     "base": 0,
-    "margin": [60, 60, 30, 30],
+    "margin": [30, 60, 30, 30],
     "gen": "canyon",
     "canyon": {
       "seed": 3,
@@ -159,7 +159,13 @@
     { "at": [-80, -26], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-80, 26], "team": "red", "yaw": 0, "mirror": true },
     { "at": [-118, -30], "team": "red", "yaw": 0, "mirror": true },
-    { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true }
+    { "at": [-118, 30], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-128, -12], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-128, 12], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-105, -22], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-105, 22], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-70, -14], "team": "red", "yaw": 0, "mirror": true },
+    { "at": [-70, 14], "team": "red", "yaw": 0, "mirror": true }
   ],
   "flag": { "at": [-100, 0, 0.125] },
   "siege": { "gens": [[-80, 0], [-60, 34.7], [-70, -52]], "core": [-100, 0, 0.125] },
@@ -189,13 +195,17 @@
     { "weapon": "launcher", "at": [-60, 0], "respawn": 60, "mirror": true },
     { "weapon": "rocket", "at": [0, 0], "respawn": 120 },
     { "weapon": "overshield", "at": [0, 34.75], "respawn": 120 },
-    { "weapon": "camo", "at": [0, -34.75], "respawn": 120 }
+    { "weapon": "camo", "at": [0, -34.75], "respawn": 120 },
+    { "weapon": "beam_rifle", "at": [-60, 28], "respawn": 90, "mirror": true },
+    { "weapon": "cannon", "at": [-66, -28], "respawn": 90, "mirror": true },
+    { "weapon": "carbine", "at": [-88, 8], "respawn": 30, "mirror": true },
+    { "weapon": "sword", "at": [0, -56], "respawn": 120 },
+    { "weapon": "br", "at": [-40, 22], "respawn": 30, "mirror": true },
+    { "weapon": "ion_rifle", "at": [-28, -26], "respawn": 45, "mirror": true }
   ],
   "vehicles": [
     { "at": [-88, -32], "yaw": 0, "respawn": 30, "mirror": true },
-    { "at": [-88, 32], "yaw": 0, "respawn": 30, "turret": "minigun", "mirror": true },
-    { "at": [-92, -16], "yaw": 0, "respawn": 30, "kind": "skimmer", "mirror": true },
-    { "at": [-112, 14], "yaw": 0, "respawn": 60, "kind": "flier", "mirror": true }
+    { "at": [-88, 32], "yaw": 0, "respawn": 30, "turret": "minigun", "mirror": true }
   ],
   "launchers": [
     { "at": [-90, 0], "to": [-20, 0], "time": 2.5, "size": [2, 2], "mirror": true }

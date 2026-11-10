@@ -35,6 +35,9 @@ import { startMix } from './mix.js';
 }
 const $id = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+// The wallet the store signed in with, asked at load beside the download
+// (setupSignIn reads it; it never prompts).
+const walletAtLoad = connectedWallet();
 const flag = (k) => params.get(k) === '1';
 if (flag('lite')) document.getElementById('wrap').classList.add('lite');
 // The graphics ladder's words for the game (look/quality.rs,
@@ -777,6 +780,66 @@ function eloAccount() {
   }
 }
 
+/** Signed in on Elo Pros with a wallet is signed in here too, as Gates'
+ * page (app.js §resume): the store's wallet sign-in keeps no account token,
+ * only a wallet that lets this origin see its account (`eth_accounts`, never
+ * a prompt) and `elo.signedout` unset. Resolves to that wallet's provider
+ * and address, or null. The wallet the store remembers (`elo.wallet`, an
+ * EIP-6963 rdns) is asked first, then `window.ethereum`, then any other. */
+async function connectedWallet() {
+  try {
+    if (localStorage.getItem('elo.signedout') === '1') return null;
+  } catch { /* private window */ }
+  const seen = [];
+  const on = (e) => { if (e.detail?.provider) seen.push(e.detail); };
+  addEventListener('eip6963:announceProvider', on);
+  dispatchEvent(new Event('eip6963:requestProvider'));
+  await new Promise((r) => setTimeout(r, 60));
+  removeEventListener('eip6963:announceProvider', on);
+  let kept = null;
+  try { kept = localStorage.getItem('elo.wallet'); } catch { /* private window */ }
+  const order = seen.filter((w) => kept && w.info?.rdns === kept).map((w) => w.provider);
+  if (window.ethereum) order.push(window.ethereum);
+  for (const w of seen) order.push(w.provider);
+  if (!order.length) return null;
+  // MetaMask answers [] for the first moments of a page (store.js §silentAccount).
+  for (const wait of [0, 400, 1500]) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    for (const provider of new Set(order)) {
+      try {
+        const a = (await provider.request({ method: 'eth_accounts' }))?.[0];
+        if (/^0x[0-9a-fA-F]{40}$/.test(a ?? '')) return { provider, address: a };
+      } catch { /* a wallet's own bug: the next */ }
+    }
+  }
+  return null;
+}
+
+/** The connected wallet signs Elo Pros' sign-in text (one signature in the
+ * wallet, no window of ours), and the account token it opens is kept where
+ * the store keeps it (its js/account.js `keep`), so the store and every
+ * game on elopros.com are signed in by it too. Resolves to the token. */
+async function walletAccount(w) {
+  const post = async (path, body) => {
+    const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error(d?.error || `Elo Pros answered ${r.status}`);
+    return d;
+  };
+  const prep = await post('/api/account/siwe/prepare', { wallet: w.address });
+  const hex = '0x' + [...new TextEncoder().encode(prep.message)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const signature = await w.provider.request({ method: 'personal_sign', params: [hex, w.address] });
+  const done = await post('/api/account/siwe', { nonce: prep.nonce, signature });
+  const v = done.account || {};
+  const wallets = (v.logins || []).filter((x) => x?.provider === 'wallet').map((x) => String(x.id || x.name || '')).filter(Boolean);
+  try {
+    localStorage.setItem('elo.account.token', done.token);
+    localStorage.setItem('elo.account.view', JSON.stringify({ id: v.id, name: v.name, named: !!v.named,
+      wallet: v.wallet, wallets, player: v.player || null, alerts: Number(v.alerts) || 0, exp: done.exp }));
+  } catch { /* a private window: signed in for this join only */ }
+  return done.token;
+}
+
 /** Sign in with Elo Pros: a pass for this game, from the Elo Pros account
  * this browser is signed in to (no popup), else from Elo Pros' popup. The
  * server hands out the nonce the pass must carry; one is fetched ahead so
@@ -832,6 +895,7 @@ async function setupSignIn(info) {
     if (!pass) throw new Error('Elo Pros sent no pass');
     return pass;
   };
+  let wallet = null;
   const fn = async () => {
     // Read before the first await: a click's activation is what lets the
     // popup open, and the game's own call as it starts has none.
@@ -844,10 +908,15 @@ async function setupSignIn(info) {
         try {
           pass = await fromAccount(token);
         } catch (e) {
-          // Run out, or the platform is away: the popup, on a click.
+          // Run out, or the platform is away: the wallet, else the popup.
           console.warn('oneshot: the Elo Pros account gave no pass', e);
         }
       }
+      // Signed in on the store with a wallet: that wallet signs, no popup.
+      // (asked again on a click, if it found none at load)
+      let w = pass ? null : await wallet;
+      if (!pass && !w && click) w = await (wallet = connectedWallet());
+      if (w) pass = await fromAccount(await walletAccount(w));
       if (!pass && !click) return {};
       pass ??= (await sdk().popup({ game: info.game, nonce })).pass;
       const res = { pass };
@@ -859,7 +928,10 @@ async function setupSignIn(info) {
       await fresh();
     }
   };
-  fn.auto = !!eloAccount();
+  // A wallet the store signed in with signs in here as the game starts,
+  // as an account does: the press of PLAY on the store was the click.
+  wallet = walletAtLoad;
+  fn.auto = !!eloAccount() || !!(await wallet);
   return { fn, off: '' };
 }
 

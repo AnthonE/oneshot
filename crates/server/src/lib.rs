@@ -324,7 +324,7 @@ impl Default for Config {
             rules: Rules::duel(),
             ffa: Rules::ffa(),
             gun_game: Rules::gun_game(),
-            big_team: Rules::big_team(),
+            big_team: Rules::big_ctf(),
             ctf: Rules::ctf(),
             siege: Rules::siege(),
             duel: Rules::duel(),
@@ -1050,7 +1050,11 @@ impl Sim {
             .filter(|d| !rules.ctf || d.flags.len() == 2)
             .filter(|d| !rules.siege || d.siege.len() == sim::consts::SIEGE_NODES)
             .and_then(|d| built(d.id));
-        let rot = if rules.ctf {
+        // Big Team keeps to its own maps whatever its rules (its flags
+        // are on them); Capture the Flag's rotation is the arenas'.
+        let rot = if mode == MODE_BIG_TEAM {
+            rotation_of(mode)
+        } else if rules.ctf {
             sim::map::ROT_CTF
         } else if rules.siege {
             sim::map::ROT_SIEGE

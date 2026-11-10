@@ -37,6 +37,11 @@ pub type Knots = &'static [[f32; 3]];
 
 /// How far over the feet a steep top must stand to block, m.
 const STEEP_EPS: f32 = 1e-3;
+/// How far over `lo` a face's top must stand to block, m: a top the feet
+/// stand level with, taken down to the solid's own heights, can come out
+/// a rounding over them (Chrysalis' bridges, their tops 0.45 over a 6.55
+/// that a float holds a hair high), and a jump from it was pushed off.
+const LO_EPS: f32 = 1e-4;
 /// Slack in the ray's tests that a root lies on its piece, m.
 const ON_EPS: f32 = 1e-4;
 
@@ -217,7 +222,7 @@ pub fn blocks(k: Knots, c: Cover, b: Band, inner: bool) -> bool {
         return false;
     }
     if c.end {
-        return mt > b.lo;
+        return mt > b.lo + LO_EPS;
     }
     let n = k.len();
     for j in 0..n {
@@ -226,7 +231,7 @@ pub fn blocks(k: Knots, c: Cover, b: Band, inner: bool) -> bool {
             continue;
         }
         if let Some((fb, ft)) = face(k, j, inner) {
-            if ft > b.lo && fb < b.hi {
+            if ft > b.lo + LO_EPS && fb < b.hi {
                 return true;
             }
         }
