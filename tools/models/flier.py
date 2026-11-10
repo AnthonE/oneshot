@@ -149,9 +149,10 @@ seam(body, collar, **GAP, where=lambda q: X(q) > COWL + 0.1)
 for side in (1, -1):
     seam(body, shoulder[side], **GAP, within=lambda q: both(top(q), run(COWL, 1.25)(q), side * q[:, 1] - 0.3))
 # Gills: three louvres a side across its back, from the blister's foot out
-# to the shoulder, the engine's glow in them.
+# to the shoulder, the engine's fire in them, walls and all (the chase
+# camera sees their forward walls, not their floors).
 for x in (-1.06, -1.2, -1.34):
-    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.075, 0.032, floor='glow', wall='iron', flat=0.45,
+    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.075, 0.02, floor='vein', flat=0.45,
          within=lambda q: both(top(q), Y(q) - C_WIDE(X(q)) - 0.13, B_WIDE(X(q)) - 0.12 - Y(q)))
 # Under it: the keel's line of light and a seam across.
 seam(body, plane((0, 0, 0), (0, 1, 0)), 0.045, 0.012, **GLOW, within=lambda q: both(under(q), run(-1.3, 1.15)(q)))
@@ -251,7 +252,7 @@ def lance(side):
     pod = loft([oval(x, y, z, r(x), r(x), n=10, p=2.0) for x in (-0.8, -0.6, -0.4, -0.2, 0.0, 0.2, 0.4, 0.62, 0.7)],
                'shell_deep', ends=('tip', 'flat'), name='lance', levels=1)
     out = []
-    for at, long, wide, paint in ((0.74, 0.1, 0.075, 'iron'), (0.92, 0.3, 0.05, 'iron'), (GUNS[0] - 0.1, 0.06, 0.075, 'light'),
+    for at, long, wide, paint in ((0.74, 0.1, 0.075, 'iron'), (0.92, 0.3, 0.05, 'iron'), (GUNS[0] - 0.1, 0.06, 0.075, 'light_dim'),
                                   (GUNS[0] - 0.035, 0.07, 0.056, 'iron')):
         part = cyl(wide, long, at=(at, y, z), material=None, verts=18, bevel=0.004)
         part.data.materials.append(skin(paint))
@@ -262,11 +263,13 @@ def lance(side):
 def blade(side):
     """A blade of the forked tail: a feather on a cant, its outer edge high,
     lifting and spreading as it goes aft, broad to its last third and then a
-    point, its end alight."""
+    point, its end alight; pale, as the bill's upper mandible is, so the
+    craft's two ends are its two pale things and the tail is not taken for
+    one more feather of a wing."""
     x0, x1, y0, spread, z0, rise = BLADE
     path = [(x0 + (x1 - x0) * k, side * (y0 + spread * k), z0 + rise * k ** 1.4) for k in np.linspace(0.0, 1.0, 9)]
     cant = math.radians(BLADE_CANT)
-    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell', name='blade', flat=BLADE_THIN,
+    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell_pale', name='blade', flat=BLADE_THIN,
                    thin=(0, -side * math.sin(cant), math.cos(cant))), 'blade')
     return repaint(o, 'light', where=lambda q: X(q) < x1 + 0.13)
 
@@ -276,7 +279,7 @@ for side in (1, -1):
 
 o = solid(parts, 'flier')
 # Soot aft of the gills and round the mouth.
-shade(o, tone=0.16, stain=lambda q: 1.0 - 0.4 * np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.75))
+shade(o, tone=0.16, stain=lambda q: 1.0 - 0.4 * np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5))
 gloss(o)
 
 r = sim('BODY_R')

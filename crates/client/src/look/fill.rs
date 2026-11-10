@@ -239,19 +239,21 @@ pub mod hall {
     };
 
     /// Bulkhead's steel: cold panels overhead, amber at the lanes, a planet's pale
-    /// day through the viewport.
+    /// day through the viewport. Bright enough that a crate shows three faces
+    /// and a fighter stands off it: at two thirds of this its sides were holes
+    /// in the frame, and only space outside should be black.
     pub const DOCK: Palette = Palette {
-        wall: [0.11, 0.12, 0.14],
-        deck: [0.03, 0.034, 0.04],
-        vault: [0.07, 0.08, 0.095],
+        wall: [0.26, 0.285, 0.33],
+        deck: [0.07, 0.08, 0.094],
+        vault: [0.165, 0.19, 0.225],
         pane: [0.72, 0.84, 1.0],
         strip: [0.6, 0.42, 0.22],
         strip_at: 0.2,
         strip_half: 0.04,
         pane_freq: 4.0,
         pane_share: 0.16,
-        spec_wall: [0.05, 0.056, 0.066],
-        spec_vault: [0.03, 0.036, 0.044],
+        spec_wall: [0.12, 0.134, 0.158],
+        spec_vault: [0.072, 0.086, 0.105],
         sheen: [0.55, 0.62, 0.72],
         sheen_share: 0.4,
         haze: [0.012, 0.016, 0.022],

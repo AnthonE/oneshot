@@ -109,7 +109,7 @@ def hull(side):
                   (H_TOP(x) - H_KEEL(x)) / 2 + 0.03, n=H_N, p=H_ROUND(x), pb=2.5) for x in H_AT]
     o = solid(loft(lip(at, MW, MH, n=H_N, p=2.3) + rings, 'shell', ends=('open', 'tip'), name='hull',
                    sharp=((H_N // 4, neck, 99), (0 if side > 0 else H_N // 2, neck, 99))), 'hull')
-    return o, mouth(at, MW, MH, deep=0.3, core=(0.2, 0.12, 0.6, 0.6), vanes=0, n=H_N, p=2.3, lining='iron'), at
+    return o, mouth(at, MW, MH, deep=0.3, core=(0.15, 0.12, 0.5, 0.5), vanes=0, n=H_N, p=2.3), at
 
 
 burns = []
@@ -126,11 +126,8 @@ mid = lambda q: (H_TOP(X(q)) + H_KEEL(X(q))) / 2
 # middle, and on its outer flank.
 top = lambda q: Z(q) - mid(q) - 0.05
 flank = lambda q: out(q) - 0.03
-# A vein of the engine's fire down each pod's back, which wakes with it; a
-# line of light along each blade's outer flank, a third of the way up it,
+# A line of light along each blade's outer flank, a third of the way up it,
 # thinning from the neck to the gun.
-seam(hulls, out, 0.04, 0.014, floor='vein', wall='iron', flat=0.6,
-     within=lambda q: both(top(q), run(STERN + 0.14, NECK[1] - 0.06)(q)))
 taper = curve((NECK[1], 1.5), (1.3, 0.4))
 seam(hulls, lambda q: (Z(q) - (H_KEEL(X(q)) + 0.36 * (H_TOP(X(q)) - H_KEEL(X(q))))) / taper(X(q)), 0.036, 0.012, **GLOW,
      within=lambda q: both(flank(q), run(NECK[1], 1.3)(q)))
@@ -142,6 +139,8 @@ for side in (1, -1):
         seam(hulls, plane((0, side * H_OUT(-1.1), MZ + 0.02), (0, side * 1.0, lean)), **SEAM,
              within=lambda q: both(run(STERN + 0.12, NECK[0] + 0.02)(q), side * q[:, 1], Z(q) - MZ))
 seam(hulls, plane((0.72, 0, 0), (1, 0, 0.45)), **SEAM, where=lambda q: Z(q) > mid(q))
+# A hairline along each blade's flank, under the lip of its back's plate.
+seam(hulls, lambda q: top(q) - 0.03, **SEAM, within=run(NECK[1] + 0.12, 0.64))
 # Gills down each pod's outer flank, under its back's plate, the engine's
 # fire in them.
 for x in (-0.9, -1.02, -1.14):
@@ -154,13 +153,18 @@ parts += [
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - STERN - 0.1, NECK[0] - 0.03 - X(q)), 0.03, 'shell_pale', name='backs'),
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - NECK[0] + 0.07, NECK[1] + 0.04 - X(q)), 0.018, 'shell', name='necks',
           clear=None),
-    plate(hulls, lambda q: both(top(q) - 0.03, X(q) - NECK[1] - 0.1, 0.66 - X(q)), 0.012, 'shell_deep', name='blades',
+    plate(hulls, lambda q: both(top(q) - 0.03, X(q) - NECK[1] - 0.1, 0.66 - X(q)), 0.025, 'shell_deep', name='blades',
           clear=None),
     plate(hulls, lambda q: STERN + 0.05 - X(q), 0.012, 'iron', name='rims'),
 ]
 # The blades dark, the pods violet over a darker hull.
 repaint(hulls, 'shell_deep', where=lambda q: (Z(q) < mid(q) + 0.03) | (X(q) > NECK[1] + 0.04), of='shell')
 parts.append(hulls)
+# A vein of the engine's fire down each pod's back: a thread laid along its
+# ridge, asleep until the engine wakes it (`craft.rs`'s `BURNS`).
+for side in (1, -1):
+    path = [(x, side * H_OUT(x), H_TOP(x) + 0.022) for x in np.linspace(STERN + 0.2, NECK[0] - 0.06, 8)]
+    parts.append(stem(path, [0.004, 0.012, 0.014, 0.014, 0.014, 0.014, 0.012, 0.004], n=8, material='vein', name='vein', flat=0.7))
 
 # The deck between the pods, drawn in to a bow ahead, the rider's feet on a
 # board each side of the saddle.

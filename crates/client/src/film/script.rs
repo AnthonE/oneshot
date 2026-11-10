@@ -655,7 +655,8 @@ mod tests {
         let shot: Shot = serde_json::from_str(both).unwrap();
         assert!(shot.check().is_err());
         assert!(Script::parse(r#"{"fps":7,"shots":[{"name":"e","at":1,"len":1,"pov":true}]}"#).is_err());
-        assert!(Script::parse(r#"{"quality":"ultra","shots":[{"name":"e","at":1,"len":1,"pov":true}]}"#).is_err());
+        // A rung there is none of (`ultra` is one since `quality::ULTRA`).
+        assert!(Script::parse(r#"{"quality":"ludicrous","shots":[{"name":"e","at":1,"len":1,"pov":true}]}"#).is_err());
     }
 
     #[test]

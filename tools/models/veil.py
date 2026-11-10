@@ -452,6 +452,11 @@ def plate(o, inside, lift=0.016, material='shell', bevel=0.0, name='plate', clea
             f.material_index = k
     bm.to_mesh(me)
     bm.free()
+    if os.environ.get('VEIL_COUNT'):
+        hist = {}
+        for f in me.polygons:
+            hist[me.materials[f.material_index].name] = hist.get(me.materials[f.material_index].name, 0) + 1
+        print(f'PLATE {name}: {hist} keep {sorted(keep)}', flush=True)
     p = bpy.data.objects.new(name, me)
     bpy.context.scene.collection.objects.link(p)
     m = p.modifiers.new('solid', 'SOLIDIFY')

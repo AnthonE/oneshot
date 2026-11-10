@@ -160,6 +160,9 @@ const BURNS: [&str; 3] = ["throat", "glow", "vein"];
 /// light is 1); how fast it comes to it (1/s); and its breath at rest, this
 /// share either way, cycles a second.
 const BURN: (f32, f32, f32) = (0.55, 1.0, 2.4);
+/// A vein (the fire that shows through a hull's seams and louvres) sleeps
+/// at this until the engine is past its cruise, and is whole by the boost.
+const VEIN_ASLEEP: f32 = 0.08;
 const BURN_EASE: f32 = 5.0;
 const BREATH: (f32, f32) = (0.12, 0.45);
 
@@ -193,6 +196,8 @@ const FLAME_SIDES: usize = 14;
 const FLAME_MOUTH: f32 = 0.55;
 const FLAME_FULL: f32 = 0.16;
 const FLAME_FADE: f32 = 3.0;
+/// How much of it is gone at its two rims (across its width).
+const FLAME_RIM: f32 = 0.85;
 const FLAME_IN: f32 = 0.06;
 /// Its flicker: this share of its length, at these two rates (radians a
 /// second), so it never beats.
@@ -215,7 +220,9 @@ fn flame() -> Mesh {
             let (sin, cos) = (j as f32 / FLAME_SIDES as f32 * TAU).sin_cos();
             positions.push([-t, r * cos, r * sin]);
             normals.push([0.0, cos, sin]);
-            colors.push([1.0, 1.0, 1.0, alpha]);
+            // Thinner toward its two rims: a flat blade of flame seen on its
+            // face has no drawn sides.
+            colors.push([1.0, 1.0, 1.0, alpha * (1.0 - FLAME_RIM * sin * sin)]);
         }
         if i < FLAME_RINGS {
             for j in 0..FLAME_SIDES {
@@ -248,7 +255,7 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
     };
     commands.insert_resource(Kit {
         flame: meshes.add(flame()),
-        sheath: mats.add(paint(LinearRgba::new(0.25, 1.1, 1.6, 0.7))),
+        sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.45))),
         core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
         trail: mats.add(paint(LinearRgba::new(0.3, 1.2, 1.8, 0.34))),
     });
@@ -298,8 +305,9 @@ pub struct Craft {
     flames: Vec<(Entity, f32)>,
     /// Its light, and its lumens at rest and boosting.
     light: (Entity, f32, f32),
-    /// Its engines' paints, its own (`BURNS`), and the light each came with.
-    burns: Vec<(Handle<StandardMaterial>, LinearRgba)>,
+    /// Its engines' paints, its own (`BURNS`), the light each came with,
+    /// and whether it is a vein's.
+    burns: Vec<(Handle<StandardMaterial>, LinearRgba, bool)>,
     /// How bright they burn now (`BURN`), and how fast it goes, m/s.
     burn: f32,
     speed: f32,
@@ -476,7 +484,7 @@ fn bind(
     let Ok(&Skin(hull)) = skins.get(ev.entity) else {
         return;
     };
-    let mut burns: Vec<(AssetId<StandardMaterial>, Handle<StandardMaterial>, LinearRgba)> = Vec::new();
+    let mut burns: Vec<(AssetId<StandardMaterial>, Handle<StandardMaterial>, LinearRgba, bool)> = Vec::new();
     for e in children.iter_descendants(ev.entity) {
         let Ok((mat, name)) = plain.get(e) else { continue };
         if let Some(params) = shell_of(&name.0) {
@@ -501,14 +509,14 @@ fn bind(
                 .insert(MeshMaterial3d(shell));
         } else if BURNS.contains(&name.0.as_str()) {
             let own = match burns.iter().find(|(id, ..)| *id == mat.0.id()) {
-                Some((_, h, _)) => h.clone(),
+                Some((_, h, ..)) => h.clone(),
                 None => {
                     let Some(base) = mats.get(&mat.0).cloned() else {
                         continue;
                     };
                     let lit = base.emissive;
                     let h = mats.add(base);
-                    burns.push((mat.0.id(), h.clone(), lit));
+                    burns.push((mat.0.id(), h.clone(), lit, name.0 == "vein"));
                     h
                 }
             };
@@ -516,7 +524,7 @@ fn bind(
         }
     }
     if let Ok(mut c) = crafts.get_mut(hull) {
-        c.burns = burns.into_iter().map(|(_, h, lit)| (h, lit)).collect();
+        c.burns = burns.into_iter().map(|(_, h, lit, vein)| (h, lit, vein)).collect();
     }
     // A warm craft's scene is in: its warm draw may count down (`prewarm.rs`).
     if warming.contains(hull) {
@@ -580,8 +588,14 @@ fn pose(
             (BURN.0 + (BURN.1 - BURN.0) * cruise) * breath
         };
         c.burn += (want - c.burn) * (1.0 - (-BURN_EASE * dt).exp());
-        for (h, own) in &c.burns {
-            let glow = *own * c.burn;
+        let woken = ((c.burn - BURN.1) / (BURN.2 - BURN.1)).clamp(0.0, 1.0);
+        for (h, own, vein) in &c.burns {
+            let glow = *own
+                * if *vein {
+                    VEIN_ASLEEP + (BURN.2 - VEIN_ASLEEP) * woken
+                } else {
+                    c.burn
+                };
             if mats
                 .get(h)
                 .is_some_and(|m| (m.emissive.green - glow.green).abs() > 0.02 * own.green)
