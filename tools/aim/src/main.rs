@@ -8,13 +8,13 @@
 //! people: what is learned from bot matches is plumbing, not a result.
 //!
 //! ```text
-//! oneshot-aim zoo [n] [--seed s]          # n assists, an oa2: line each, and what each does
-//! oneshot-aim knobs <oa2:…>               # what one does
+//! oneshot-aim zoo [n] [--seed s] [--nets k]   # n assists (the last k bred nets), a line each, and what each does
+//! oneshot-aim knobs <oa2:… | on1:…>       # what one does
 //! oneshot-aim bots --out dir [--matches 40] [--seed 1] [--secs 300]
-//!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64] [--threads 2]
+//!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64 [--nets 0]] [--threads 2]
 //! oneshot-aim replays --out dir [--zoo file | --zoo-n 64] [--threads 2] <file.osr>…
 //! oneshot-aim league --out dir [--players 40] [--cheaters 10] [--matches 200] [--secs 120]
-//!     [--modes duel,doubles] [--zoo file | --zoo-n 64]
+//!     [--modes duel,doubles] [--zoo file | --zoo-n 64] [--decoys]
 //!     any: [--sightings 400] a match at most; [--len 128] [--pre 32] a window's ticks
 //!     and those before the sighting; [--each] every assist on every sighting, not one
 //!     drawn for each (the zoo's arms race, `zoo.py`)
@@ -26,7 +26,11 @@
 //! them cheating with the same assist every match they play. Nothing is
 //! forked; each sighting's window is what was played, labelled by whether
 //! its player cheats, with the player's id, so a player's evidence can be
-//! added up over matches (`players.py`, docs/ANTICHEAT.md §2).
+//! added up over matches (`players.py`, docs/ANTICHEAT.md §2). With
+//! `--decoys` every seat is also played `room::decoy`'s coin flips (a body
+//! sent where its viewer can't see, a second spot held back as the
+//! control) and each match's counts go in `info.json`: an assist that
+//! locks through walls takes the sent one (`players.py --decoys`).
 //!
 //! `dir` gets `windows.npy` (f32: windows × `LEN` × `F`), `meta.npy` (i32:
 //! windows × [`META`]) and `info.json` (the features, meta's columns, the
@@ -46,7 +50,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use hand::{Hand, Traits};
-use room::assist::{Assist, Knobs, PREFIX};
+use room::assist::{Assist, Cheat, Line};
+use room::decoy::{Decoy, Tally, Trail};
 use room::fog::{Fog, Plain};
 use room::genome::Genome;
 use room::replay::{Cursor, Next};
@@ -73,7 +78,7 @@ const META: [&str; 15] = [
     "label", "pair", "match", "gun", "map", "cheat", "style", "viewer", "skill", "sight", "helped", "hits", "kills",
     "heads", "player",
 ];
-const STYLES: [&str; 5] = ["blatant", "closet", "smooth", "trigger", "walls"];
+const STYLES: [&str; 6] = ["blatant", "closet", "smooth", "trigger", "walls", "net"];
 
 /// Where a match's inputs come from.
 trait Feed: Clone + Send {
@@ -160,6 +165,17 @@ struct Run<Fd: Feed> {
     cheats: Vec<Option<Assist>>,
     /// Which of them helped this tick.
     helped: [bool; MAX_FIGHTERS],
+    /// Every seat's decoys (`league --decoys`).
+    decoys: Option<Decoys>,
+}
+
+/// A match's decoys: the key they are drawn by (a live match's would be its
+/// salt), where fighters have stood, and each seat's.
+#[derive(Clone)]
+struct Decoys {
+    key: u64,
+    trail: Trail,
+    seats: Vec<Decoy>,
 }
 
 impl<Fd: Feed> Run<Fd> {
@@ -171,6 +187,7 @@ impl<Fd: Feed> Run<Fd> {
             fogs: vec![Fog::default(); n],
             cheats: vec![None; n],
             helped: [false; MAX_FIGHTERS],
+            decoys: None,
         }
     }
 
@@ -181,12 +198,22 @@ impl<Fd: Feed> Run<Fd> {
         for (s, f) in self.fogs.iter_mut().enumerate() {
             f.update(&self.w, s, LEAD, next);
         }
+        // What each seat's client is sent that isn't there.
+        let mut ghosts = [None; MAX_FIGHTERS];
+        if let Some(d) = &mut self.decoys {
+            d.trail.note(&self.w);
+            for (s, dc) in d.seats.iter_mut().enumerate() {
+                let fog = &self.fogs[s];
+                ghosts[s] = dc.step(&self.w, s, d.key, &d.trail, |t| fog.shows(t, next));
+            }
+        }
         let Some((mut inputs, lag)) = self.feed.next(&mut self.w) else {
             return false;
         };
         for (s, c) in self.cheats.iter_mut().enumerate() {
             self.helped[s] = false;
             if let Some(a) = c {
+                a.ghost = ghosts[s];
                 let from = self.feed.from(&self.w, s);
                 let fog = &self.fogs[s];
                 self.helped[s] = a.bend(
@@ -200,6 +227,7 @@ impl<Fd: Feed> Run<Fd> {
         }
         if let Some(a) = assist {
             let v = a.seat();
+            a.ghost = ghosts[v];
             let from = self.feed.from(&self.w, v);
             let fog = &self.fogs[v];
             *helped = a.bend(
@@ -228,8 +256,8 @@ fn enemy(w: &World, v: usize, t: usize) -> bool {
 }
 
 /// Every sighting in a match, in order: (tick, viewer, enemy), as the aim
-/// review counts them (`room::watch`).
-fn sightings<Fd: Feed>(mut run: Run<Fd>) -> Vec<(u32, usize, usize)> {
+/// review counts them (`room::watch`); and each seat's decoys, counted.
+fn sightings<Fd: Feed>(mut run: Run<Fd>) -> (Vec<(u32, usize, usize)>, Vec<Tally>) {
     let gap = ticks(room::watch::SIGHT_GAP_MS);
     let n = run.w.rules.seats as usize;
     let mut last = [[None::<u32>; MAX_FIGHTERS]; MAX_FIGHTERS];
@@ -255,7 +283,10 @@ fn sightings<Fd: Feed>(mut run: Run<Fd>) -> Vec<(u32, usize, usize)> {
             }
         }
     }
-    out
+    let tallies = run
+        .decoys
+        .map_or_else(Vec::new, |d| d.seats.iter().map(|x| x.tally).collect());
+    (out, tallies)
 }
 
 /// One branch's window and what the viewer did in it.
@@ -333,14 +364,14 @@ fn mix64(mut z: u64) -> u64 {
 /// `who` is each seat's player and whether they cheat, in a league.
 fn cut<Fd: Feed>(
     start: Run<Fd>,
-    zoo: &[Knobs],
+    zoo: &[Cheat],
     mseed: u64,
     each: bool,
     cap: usize,
     shape: Shape,
     who: &[(i32, i32)],
-) -> Vec<Sighting> {
-    let mut sights = sightings(start.clone());
+) -> (Vec<Sighting>, Vec<Tally>) {
+    let (mut sights, tallies) = sightings(start.clone());
     if sights.len() > cap {
         // Spread over the match, not its first minutes.
         let every = sights.len() as f64 / cap as f64;
@@ -373,7 +404,7 @@ fn cut<Fd: Feed>(
             };
             let mut cheats = Vec::with_capacity(ks.len());
             for k in ks {
-                let assist = Assist::new(zoo[k], v, (h >> 32) as u32);
+                let assist = Assist::of(&zoo[k], v, (h >> 32) as u32);
                 let Some(b) = branch(run.clone(), v, t, Some(assist), shape.len) else {
                     continue 'sight;
                 };
@@ -394,7 +425,7 @@ fn cut<Fd: Feed>(
             break;
         }
     }
-    out
+    (out, tallies)
 }
 
 /// A `.npy` file written as it goes, its count put in its header at the
@@ -527,36 +558,60 @@ fn league(seed: u64, players: usize, cheaters: usize, zoo: usize) -> Vec<Person>
     people
 }
 
-/// The zoo: `n` assists from `seed`.
-fn zoo_of(seed: u64, n: usize) -> Vec<Genome> {
+/// The zoo: `n` assists from `seed`, the last `nets` of them bred nets.
+fn zoo_of(seed: u64, n: usize, nets: usize) -> Vec<Line> {
     (0..n)
-        .map(|i| Genome::new(mix64(seed ^ (i as u64) << 32) as u32))
+        .map(|i| Line {
+            net: i + nets >= n,
+            genome: Genome::new(mix64(seed ^ (i as u64) << 32) as u32),
+        })
         .collect()
 }
 
-fn read_zoo(path: &str) -> Vec<Genome> {
+fn read_zoo(path: &str) -> Vec<Line> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(&format!("{path}: {e}")));
     text.lines()
         .map(|l| l.split_whitespace().next().unwrap_or(""))
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| Genome::decode(PREFIX, l.as_bytes()).unwrap_or_else(|e| die(&format!("{path}: {l}: {e:?}"))))
+        .map(|l| Line::decode(l.as_bytes()).unwrap_or_else(|e| die(&format!("{path}: {l}: {e:?}"))))
         .collect()
 }
 
-fn knobs_json(k: &Knobs) -> serde_json::Value {
-    serde_json::json!({
-        "aim": k.aim, "trigger": k.trigger, "fov_deg": k.fov_deg, "smooth": k.smooth,
-        "max_deg": k.max_deg, "delay_ms": k.delay_ms, "fire_ms": k.fire_ms, "bone": k.bone,
-        "miss": k.miss, "jitter_deg": k.jitter_deg, "walls": k.walls, "style": k.style(),
-        "range_m": k.range_m, "low": k.low, "selective": k.selective(),
-    })
+/// A line of the zoo for `info.json`: a knob assist's knobs, or what a
+/// net's line still sets (the rest is the net's, tick by tick).
+fn line_json(line: &Line) -> serde_json::Value {
+    let k = line.cheat().knobs;
+    let mut doc = if line.net {
+        serde_json::json!({
+            "net": true, "trigger": k.trigger, "fov_deg": k.fov_deg, "bone": k.bone, "walls": k.walls, "style": "net",
+        })
+    } else {
+        serde_json::json!({
+            "net": false, "aim": k.aim, "trigger": k.trigger, "fov_deg": k.fov_deg, "smooth": k.smooth,
+            "max_deg": k.max_deg, "delay_ms": k.delay_ms, "fire_ms": k.fire_ms, "bone": k.bone,
+            "miss": k.miss, "jitter_deg": k.jitter_deg, "walls": k.walls, "style": k.style(),
+            "range_m": k.range_m, "low": k.low, "selective": k.selective(),
+        })
+    };
+    doc["genome"] = line.text().into();
+    doc
 }
 
-fn describe(g: &Genome) -> String {
-    let k = Knobs::from_genome(g);
+fn describe(line: &Line) -> String {
+    let k = line.cheat().knobs;
+    if line.net {
+        return format!(
+            "{}  net     fov {:>4.1}° bone {:.2}{}{}: a bred net turns it, tick by tick",
+            line.text(),
+            k.fov_deg,
+            k.bone,
+            if k.trigger { " trigger" } else { "" },
+            if k.walls { " walls" } else { "" },
+        );
+    }
     format!(
         "{}  {:<7} fov {:>4.1}° smooth {:.2} max {:>5.2}°/tick delay {:>3} ms bone {:.2} miss {:.2} jitter {:.2}°{}{}{}{}",
-        g.text(PREFIX),
+        line.text(),
         k.style(),
         k.fov_deg,
         k.smooth,
@@ -581,9 +636,9 @@ fn describe(g: &Genome) -> String {
 fn run_all<J: Sync>(
     jobs: &[J],
     threads: usize,
-    zoo: &[Knobs],
+    zoo: &[Cheat],
     out: &Mutex<Out>,
-    play: impl Fn(&J, usize, &[Knobs]) -> (Vec<Sighting>, serde_json::Value) + Sync,
+    play: impl Fn(&J, usize, &[Cheat]) -> (Vec<Sighting>, serde_json::Value) + Sync,
 ) -> Vec<serde_json::Value> {
     let next = AtomicUsize::new(0);
     let done = Mutex::new(vec![serde_json::Value::Null; jobs.len()]);
@@ -606,7 +661,8 @@ fn run_all<J: Sync>(
 fn main() {
     let mut out = None;
     let (mut matches, mut seed, mut secs, mut threads, mut zoo_n) = (40usize, 1u64, 300u32, 2usize, 64usize);
-    let (mut each, mut cap, mut hands) = (false, MAX_SIGHTINGS, false);
+    let mut nets = 0usize;
+    let (mut each, mut cap, mut hands, mut decoys) = (false, MAX_SIGHTINGS, false, false);
     let mut shape = Shape { len: LEN, pre: PRE };
     let (mut players, mut cheaters, mut modes_set) = (40usize, 10usize, false);
     let mut zoo_file = None;
@@ -624,6 +680,7 @@ fn main() {
             "--secs" => secs = num(val()) as u32,
             "--threads" => threads = num(val()) as usize,
             "--zoo-n" => zoo_n = num(val()) as usize,
+            "--nets" => nets = num(val()) as usize,
             "--zoo" => zoo_file = Some(val()),
             "--modes" => {
                 modes = val();
@@ -636,24 +693,25 @@ fn main() {
             "--maps" => maps = val(),
             "--each" => each = true,
             "--hands" => hands = true,
+            "--decoys" => decoys = true,
             "--sightings" => cap = num(val()) as usize,
             _ => rest.push(a),
         }
     }
     let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
-    let zoo = || zoo_file.as_deref().map_or_else(|| zoo_of(seed, zoo_n), read_zoo);
+    let zoo = || zoo_file.as_deref().map_or_else(|| zoo_of(seed, zoo_n, nets), read_zoo);
     match rest.as_slice() {
         ["zoo"] | ["zoo", _] => {
             let n = rest
                 .get(1)
                 .map_or(zoo_n, |n| n.parse().unwrap_or_else(|_| die("zoo [n]")));
-            for g in zoo_of(seed, n) {
-                println!("{}", describe(&g));
+            for line in zoo_of(seed, n, nets) {
+                println!("{}", describe(&line));
             }
         }
         ["knobs", text] => {
-            let g = Genome::decode(PREFIX, text.as_bytes()).unwrap_or_else(|e| die(&format!("{e:?}")));
-            println!("{}", describe(&g));
+            let line = Line::decode(text.as_bytes()).unwrap_or_else(|e| die(&format!("{e:?}")));
+            println!("{}", describe(&line));
         }
         ["bots"] => {
             let dir = out.unwrap_or_else(|| die("bots --out dir"));
@@ -672,7 +730,7 @@ fn main() {
                 })
                 .collect();
             let genomes = zoo();
-            let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
+            let knobs: Vec<Cheat> = genomes.iter().map(Line::cheat).collect();
             let sink = Mutex::new(Out::new(&dir, shape));
             let about = run_all(&jobs, threads, &knobs, &sink, |&(mseed, mode, map), _, zoo| {
                 let mut rules = match mode {
@@ -706,7 +764,7 @@ fn main() {
                     feed.skills[s] = skill;
                     feed.bots[s] = Bot::new(mseed, s, skill);
                 }
-                let sights = cut(Run::new(w, feed), zoo, mseed, each, cap, shape, &[]);
+                let (sights, _) = cut(Run::new(w, feed), zoo, mseed, each, cap, shape, &[]);
                 (
                     sights,
                     serde_json::json!({ "mode": mode, "map": map, "map_name": name, "seed": mseed, "hands": traits }),
@@ -735,7 +793,7 @@ fn main() {
                 })
                 .collect();
             let genomes = zoo();
-            let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
+            let knobs: Vec<Cheat> = genomes.iter().map(Line::cheat).collect();
             let sink = Mutex::new(Out::new(&dir, shape));
             let about = run_all(&bytes, threads, &knobs, &sink, |(name, b), m, zoo| {
                 match Cursor::open(b) {
@@ -745,7 +803,7 @@ fn main() {
                             c,
                             prev: [Input::default(); MAX_FIGHTERS],
                         };
-                        let sights = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap, shape, &[]);
+                        let (sights, _) = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap, shape, &[]);
                         (sights, serde_json::json!({ "file": name, "map": map }))
                     }
                     Err(e) => {
@@ -769,7 +827,7 @@ fn main() {
                 .map(|m| m.parse().unwrap_or_else(|_| die("--maps 0,1,…")))
                 .collect();
             let genomes = zoo();
-            let knobs: Vec<Knobs> = genomes.iter().map(Knobs::from_genome).collect();
+            let knobs: Vec<Cheat> = genomes.iter().map(Line::cheat).collect();
             let people = league(seed, players, cheaters.min(players), knobs.len());
             // Seats go to whoever has played least, so every career is
             // about as long.
@@ -824,15 +882,30 @@ fn main() {
                     feed.bots[s] = Bot::new(mseed, s, people[p].skill);
                 }
                 let mut run = Run::new(w, feed);
+                run.decoys = decoys.then(|| Decoys {
+                    key: mix64(mseed ^ 0xdec0),
+                    trail: Trail::default(),
+                    seats: vec![Decoy::default(); n],
+                });
                 for (s, &p) in seats.iter().enumerate() {
-                    run.cheats[s] = people[p].cheat.map(|k| Assist::new(zoo[k], s, mix64(mseed ^ s as u64) as u32));
+                    run.cheats[s] = people[p].cheat.map(|k| Assist::of(&zoo[k], s, mix64(mseed ^ s as u64) as u32));
                 }
                 let who: Vec<(i32, i32)> = seats
                     .iter()
                     .map(|&p| (p as i32, people[p].cheat.is_some() as i32))
                     .collect();
-                let sights = cut(run, &[], mseed, false, cap, shape, &who);
-                (sights, serde_json::json!({ "mode": mode, "map": map, "seed": mseed, "players": seats }))
+                let (sights, tallies) = cut(run, &[], mseed, false, cap, shape, &who);
+                // Each seat's decoy episodes: all; the aim drawn toward the
+                // sent spot, toward the held one; sat on the sent one only,
+                // on the held one only.
+                let tallies: Vec<[u32; 5]> = tallies
+                    .iter()
+                    .map(|t| [t.episodes, t.toward_sent, t.toward_held, t.sent_only, t.held_only])
+                    .collect();
+                (
+                    sights,
+                    serde_json::json!({ "mode": mode, "map": map, "seed": mseed, "players": seats, "decoys": tallies }),
+                )
             });
             let sink = sink.into_inner().unwrap();
             let roster = serde_json::Value::Array(
@@ -844,8 +917,9 @@ fn main() {
                             "player": p,
                             "skill": x.skill,
                             "cheat": x.cheat,
-                            "genome": x.cheat.map(|k| genomes[k].text(PREFIX)),
+                            "genome": x.cheat.map(|k| genomes[k].text()),
                             "style": x.cheat.map(|k| knobs[k].style()),
+                            "walls": x.cheat.map(|k| knobs[k].knobs.walls),
                             "matches": played[p],
                             "hand": x.traits.json(),
                         })
@@ -855,7 +929,7 @@ fn main() {
             info(&dir, sink, &genomes, about, "league", shape, roster);
         }
         _ => die(
-            "zoo [n] | knobs <oa2:…> | bots --out dir | replays --out dir <file.osr>… | league --out dir (see the source's header)",
+            "zoo [n] | knobs <oa2:… | on1:…> | bots --out dir | replays --out dir <file.osr>… | league --out dir (see the source's header)",
         ),
     }
 }
@@ -865,7 +939,7 @@ fn main() {
 fn info(
     dir: &Path,
     out: Out,
-    zoo: &[Genome],
+    zoo: &[Line],
     matches: Vec<serde_json::Value>,
     from: &str,
     shape: Shape,
@@ -885,11 +959,7 @@ fn info(
         "styles": STYLES,
         "maps": sim::maps::ALL.iter().map(|d| serde_json::json!({"id": d.id, "name": d.name})).collect::<Vec<_>>(),
         "guns": sim::arms::ARMS.iter().map(|a| a.name).collect::<Vec<_>>(),
-        "zoo": zoo.iter().map(|g| {
-            let mut k = knobs_json(&Knobs::from_genome(g));
-            k["genome"] = g.text(PREFIX).into();
-            k
-        }).collect::<Vec<_>>(),
+        "zoo": zoo.iter().map(line_json).collect::<Vec<_>>(),
         "matches": matches,
         "windows": windows,
         "pairs": pairs,

@@ -5,7 +5,8 @@
 //! Golf's `client/brain.mjs`) and trimmed to the recipe and its text form:
 //! the same splitmix32 draws, the same three-uniform noise, the same seed
 //! mix and step table. Here it breeds the zoo's aim assists
-//! (`crate::assist`, docs/ANTICHEAT.md §5), not nets.
+//! (`crate::assist`, docs/ANTICHEAT.md §5): their knobs, and for a bred
+//! net ([`Net`], Gates' again: one hidden layer, softsign) its weights.
 //!
 //! **What a genome says.** Nothing on its own: it is a recipe for one list
 //! of values. The four-byte prefix of the text form names the list (`oa1:`
@@ -86,12 +87,18 @@ impl Genome {
     /// The values it describes, each `scale` times unit noise from the
     /// base, then every mutation's step in turn.
     pub fn build(&self, w: &mut [f32], scale: f32) {
+        self.build_by(w, |_| scale);
+    }
+
+    /// As [`Genome::build`], each value with a scale of its own (a net's
+    /// weights go by their layer's fan-in).
+    pub fn build_by(&self, w: &mut [f32], scale: impl Fn(usize) -> f32) {
         let mut u = Draw(self.base);
-        for wi in w.iter_mut() {
-            *wi = noise(&mut u) * scale;
+        for (i, wi) in w.iter_mut().enumerate() {
+            *wi = noise(&mut u) * scale(i);
         }
         for (g, &m) in self.muts().iter().enumerate() {
-            perturb(w, |_| scale, self.base, g, m);
+            perturb(w, &scale, self.base, g, m);
         }
     }
 
@@ -150,6 +157,82 @@ pub fn perturb(w: &mut [f32], scale: impl Fn(usize) -> f32, base: u32, g: usize,
 /// Softsign: tanh's shape from one division.
 pub fn soft(x: f32) -> f32 {
     x / (1.0 + fabs(x))
+}
+
+/// The largest net [`Net`] holds.
+pub const NET_IN: usize = 16;
+pub const NET_HIDDEN: usize = 16;
+pub const NET_OUT: usize = 8;
+pub const NET_WEIGHTS: usize = (NET_IN + 1) * NET_HIDDEN + (NET_HIDDEN + 1) * NET_OUT;
+
+/// A bred brain: `nin` inputs, `nhid` softsign units, `nout` softsign
+/// outputs, every output in (−1, 1). Weights are laid out unit by unit,
+/// each unit's bias first, as Gates lays them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Net {
+    nin: u8,
+    nhid: u8,
+    nout: u8,
+    w: [f32; NET_WEIGHTS],
+}
+
+impl Net {
+    /// The weights a net of this shape has.
+    pub const fn weights(nin: usize, nhid: usize, nout: usize) -> usize {
+        (nin + 1) * nhid + (nhid + 1) * nout
+    }
+
+    /// Weight `i`'s scale, 1/√fan-in, so a fresh net neither saturates nor
+    /// sleeps.
+    pub fn scale(nin: usize, nhid: usize, i: usize) -> f32 {
+        let fan = if i < (nin + 1) * nhid { nin + 1 } else { nhid + 1 };
+        1.0 / (fan as f32).sqrt()
+    }
+
+    /// The net with these weights; `None` past the caps, with an empty
+    /// layer or the wrong count of weights.
+    pub fn new(nin: usize, nhid: usize, nout: usize, w: &[f32]) -> Option<Net> {
+        if nin == 0 || nhid == 0 || nout == 0 || nin > NET_IN || nhid > NET_HIDDEN || nout > NET_OUT {
+            return None;
+        }
+        if w.len() != Net::weights(nin, nhid, nout) {
+            return None;
+        }
+        let mut net = Net {
+            nin: nin as u8,
+            nhid: nhid as u8,
+            nout: nout as u8,
+            w: [0.0; NET_WEIGHTS],
+        };
+        net.w[..w.len()].copy_from_slice(w);
+        Some(net)
+    }
+
+    /// Runs the net on `x` (its inputs) into `out` (its outputs).
+    pub fn forward(&self, x: &[f32], out: &mut [f32]) {
+        let (ni, nh, no) = (self.nin as usize, self.nhid as usize, self.nout as usize);
+        let w = &self.w;
+        let mut h = [0.0f32; NET_HIDDEN];
+        let mut k = 0;
+        for hj in h.iter_mut().take(nh) {
+            let mut s = w[k];
+            k += 1;
+            for &xi in &x[..ni] {
+                s += w[k] * xi;
+                k += 1;
+            }
+            *hj = soft(s);
+        }
+        for oj in out.iter_mut().take(no) {
+            let mut s = w[k];
+            k += 1;
+            for &hi in &h[..nh] {
+                s += w[k] * hi;
+                k += 1;
+            }
+            *oj = soft(s);
+        }
+    }
 }
 
 /// splitmix32 for the bits, then 24 of them as an exact f32 in [0, 1).

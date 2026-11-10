@@ -10,7 +10,9 @@ Each round:
 
 1. **Candidates:** every elite in the archive, `--children` mutants of each
    (its genome with one more 16-bit seed: Gates' encoding, so a child is
-   its parent plus one step) and `--fresh` new genomes.
+   its parent plus one step) and `--fresh` new genomes, `--nets` of them
+   bred nets (`on1:`, `room::assist::Cheat`): a small net that turns the
+   aim tick by tick, where a knob assist (`oa2:`) is thirteen numbers.
 2. **The same moments for all:** every candidate laid on every sighting of
    fresh bot matches (`oneshot-aim bots --each`, a new seed a round), so
    what each gains over the clean window is paired, moment for moment.
@@ -18,11 +20,19 @@ Each round:
    windows the detector flags at 1% of clean windows flagged.
 4. **The archive** (MAP-Elites): a cell per style, per aim point (head or
    body) and per whether it picks its moments (past a range, or only with
-   its shields down: what its client can see); each keeps the fittest candidate of the round, so the zoo stays a
+   its shields down: what its client can see). A net has no knobs to read
+   a style from, so its cells go by what it did: the share of a window's
+   ticks it acted on (seldom, some, mostly). Each cell keeps the fittest candidate of the round, so the zoo stays a
    spread of kinds of cheat, not one leader.
-5. **The detector trains on**, from where it was, on the base set and the
-   last `--keep-rounds` rounds' elites (older ones it learned already; the
-   exam says whether it kept them).
+5. **The detector trains on**, from where it was, on the base set, the
+   last `--keep-rounds` rounds' elites and half as many older rounds drawn
+   afresh each time.
+6. **The hall of fame** (Rosin & Belew 1997; AlphaStar's league): `--hall`
+   elites of earlier rounds come back each round as candidates, judged
+   against today's detector beside the rest. One that takes its cell back
+   is a cheat the detector forgot, and so is in its next lessons. Without
+   it an arms race can go in circles: each side beating only the other's
+   latest.
 
 Each round prints §5's two numbers: the most a candidate gained while
 flagged in under 5% of its windows, and how many sightings a sequential
@@ -50,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import train as det  # noqa: E402
 
 PREFIX = "oa2:"
+NET_PREFIX = "on1:"
 MAX_MUTATIONS = 101
 FPR = det.FPR
 FREE = 0.05
@@ -59,24 +70,27 @@ AIM = os.path.join(ROOT, "target", "release", "oneshot-aim")
 
 def child(genome, seed):
     """`genome` with one more mutation (`room::genome::Genome::child`)."""
-    body = genome[len(PREFIX):]
+    prefix, body = genome[:4], genome[4:]
     raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
     if (len(raw) - 4) // 2 >= MAX_MUTATIONS:
         return None
-    return PREFIX + base64.urlsafe_b64encode(raw + struct.pack("<H", seed)).decode().rstrip("=")
+    return prefix + base64.urlsafe_b64encode(raw + struct.pack("<H", seed)).decode().rstrip("=")
 
 
-def fresh(base):
-    return PREFIX + base64.urlsafe_b64encode(struct.pack("<I", base)).decode().rstrip("=")
+def fresh(base, net=False):
+    return (NET_PREFIX if net else PREFIX) + base64.urlsafe_b64encode(struct.pack("<I", base)).decode().rstrip("=")
 
 
-def cell(k):
+def cell(k, duty=0.0):
     """The archive's grid: style, aim point, and whether it picks its
     moments. Selection seldom finds a condition from scratch (morr's bred
     golfers settled on never or always), so a picky cheat keeps a cell of
-    its own until it is worth its condition."""
-    when = "/picky" if k.get("selective") else ""
-    return f"{k['style']}/{'head' if k['bone'] >= 0.5 else 'body'}{when}"
+    its own until it is worth its condition. A net's cells go by `duty`,
+    the share of a window's ticks it acted on."""
+    bone = "head" if k["bone"] >= 0.5 else "body"
+    if k.get("net"):
+        return f"net/{bone}/{'seldom' if duty < 0.1 else 'some' if duty < 0.4 else 'mostly'}"
+    return f"{k['style']}/{bone}{'/picky' if k.get('selective') else ''}"
 
 
 def load(path):
@@ -99,8 +113,9 @@ def score(model, w, meta, col, mu, sd, guns, maps, chunk=512):
     return np.concatenate(out)
 
 
-def judge(scores, meta, col, zoo):
-    """Each candidate's gain, flag share and fitness on one evaluation."""
+def judge(scores, meta, col, zoo, length):
+    """Each candidate's gain, flag share and fitness on one evaluation of
+    windows `length` ticks long."""
     label, pair, cheat = meta[:, col["label"]], meta[:, col["pair"]], meta[:, col["cheat"]]
     hits, helped = meta[:, col["hits"]], meta[:, col["helped"]]
     clean = label == 0
@@ -113,12 +128,14 @@ def judge(scores, meta, col, zoo):
         if not m.any():
             continue
         caught = float((scores[m] > thr).mean())
+        duty = float(helped[m].mean()) / length
         rows.append({
-            "genome": z["genome"], "cell": cell(z), "style": z["style"],
+            "genome": z["genome"], "cell": cell(z, duty), "style": z["style"], "duty": duty,
             "gain": float((hits[m] - clean_hits[pair[m]]).mean()),
             "caught": caught, "acted": float((helped[m] > 0).mean()),
             "to_catch": det.sightings_to_catch(caught, FPR),
-            "knobs": {key: z[key] for key in ("fov_deg", "smooth", "max_deg", "delay_ms", "bone", "miss", "trigger", "walls", "range_m", "low")},
+            "knobs": {key: z[key] for key in ("fov_deg", "smooth", "max_deg", "delay_ms", "bone", "miss", "trigger",
+                                              "walls", "range_m", "low") if key in z},
         })
     return rows, thr
 
@@ -216,6 +233,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=8)
     ap.add_argument("--children", type=int, default=3)
     ap.add_argument("--fresh", type=int, default=10)
+    ap.add_argument("--nets", type=float, default=0.5, help="the share of fresh genomes that are bred nets")
     ap.add_argument("--lam", type=float, default=1.0, help="hits a sighting a flag on every window costs")
     ap.add_argument("--matches", type=int, default=12)
     ap.add_argument("--secs", type=int, default=150)
@@ -225,7 +243,9 @@ def main():
     ap.add_argument("--hands", action="store_true", help="a person's hand on the bots' aim, as the base set had")
     ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--retrain-epochs", type=int, default=6)
-    ap.add_argument("--keep-rounds", type=int, default=6, help="the rounds of elites the detector trains on (memory)")
+    ap.add_argument("--keep-rounds", type=int, default=6,
+                    help="the latest rounds of elites the detector trains on, and half as many older ones (memory)")
+    ap.add_argument("--hall", type=int, default=6, help="elites of earlier rounds that come back each round")
     ap.add_argument("--lr", type=float, default=2e-3)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -248,14 +268,17 @@ def main():
                 c = child(e, int(rng.integers(0, 1 << 16)))
                 if c:
                     zoo.append(c)
-        zoo += [fresh(int(rng.integers(0, 1 << 32))) for _ in range(args.fresh if archive else 4 * args.fresh)]
-        zoo = list(dict.fromkeys(zoo))
+        zoo += [fresh(int(rng.integers(0, 1 << 32)), rng.random() < args.nets)
+                for _ in range(args.fresh if archive else 4 * args.fresh)]
+        hall = [g for g in ever if g not in zoo]
+        back = [hall[i] for i in rng.permutation(len(hall))[: args.hall]]
+        zoo = list(dict.fromkeys(zoo + back))
         rd = os.path.join(args.out, f"round{r}")
         ev = os.path.join(rd, "eval")
         info = cut(zoo, ev, 1000 + r, args)
         w, meta, _, col = load(ev)
         s = score(model, w, meta, col, mu, sd, guns, maps)
-        rows, thr = judge(s, meta, col, info["zoo"])
+        rows, thr = judge(s, meta, col, info["zoo"], info["len"])
         for row in rows:
             row["fitness"] = row["gain"] - args.lam * row["caught"]
         # The archive is this round's fittest in each cell: elites are
@@ -264,6 +287,7 @@ def main():
         for row in rows:
             if row["gain"] > 0 and (row["cell"] not in archive or row["fitness"] > archive[row["cell"]]["fitness"]):
                 archive[row["cell"]] = row
+        returned = [e for e in archive.values() if e["genome"] in back]
         for e in archive.values():
             ever.setdefault(e["genome"], r)
         free = [x for x in rows if x["caught"] < FREE]
@@ -276,6 +300,7 @@ def main():
             "elites_median_to_catch": float(np.median(caught_elites)) if caught_elites else None,
             "elites_caught": float(np.mean([e["caught"] for e in archive.values()])) if archive else 0.0,
             "elites_gain": float(np.mean([e["gain"] for e in archive.values()])) if archive else 0.0,
+            "hall_back": len(back), "hall_returned": [e["genome"] for e in returned],
             "archive": list(archive.values()),
         })
         print()
@@ -286,6 +311,9 @@ def main():
                   f"({best_free['cell']}, {best_free['genome']})")
         print(f"  elites: {history[-1]['elites_gain']:+.2f} hits a sighting, caught {history[-1]['elites_caught']:.0%}, "
               f"median {history[-1]['elites_median_to_catch']:.0f} sightings to 1000:1")
+        if back:
+            print(f"  the hall: {len(returned)} of {len(back)} old elites took a cell back"
+                  + (" (" + ", ".join(f"{e['cell']} from round {ever[e['genome']]}" for e in returned) + ")" if returned else ""))
         json.dump({"archive": list(archive.values()), "history": history}, open(os.path.join(args.out, "zoo.json"), "w"), indent=1)
 
         # The detector's next lessons: this round's elites, on top of the rest.
@@ -294,7 +322,10 @@ def main():
         shutil.rmtree(ev)
         kept.append(keep)
         state = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        model, *_ = fit(args.base, kept[-args.keep_rounds :], args, init=state, mu=mu, sd=sd, epochs=args.retrain_epochs)
+        older = kept[: -args.keep_rounds]
+        again = [older[i] for i in rng.permutation(len(older))[: max(1, args.keep_rounds // 2)]]
+        model, *_ = fit(args.base, again + kept[-args.keep_rounds :], args, init=state, mu=mu, sd=sd,
+                        epochs=args.retrain_epochs)
 
     # The exam: every elite ever, on matches no round saw, before and after.
     zoo = list(ever)
@@ -305,7 +336,7 @@ def main():
     for name, state in (("first", first), ("last", model.state_dict())):
         m = det.Detector(w.shape[2], guns, maps, 64).to(det.DEV)
         m.load_state_dict(state)
-        rows, _ = judge(score(m, w, meta, col, mu, sd, guns, maps), meta, col, info["zoo"])
+        rows, _ = judge(score(m, w, meta, col, mu, sd, guns, maps), meta, col, info["zoo"], info["len"])
         for row in rows:
             row["bred_in"] = ever[row["genome"]]
         exam[name] = rows

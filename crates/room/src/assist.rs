@@ -12,9 +12,21 @@
 //! An assist is its [`Knobs`], and its knobs are a [`Genome`] in Gates'
 //! encoding: each cheat in the zoo is one `oa2:` line that rebuilds
 //! exactly.
+//!
+//! **A bred net** (`on1:`, [`Cheat`]) is the other kind. Thirteen knobs are
+//! a small family, and a detector shown only that family may learn the
+//! family, not cheating: the published aimbot that got past detectors
+//! learned its movement (GAN-Aimbots, Kanervisto et al. 2022). So here a
+//! small net (Gates' wolves' own, `crate::genome::Net`) reads the moment
+//! each tick (how far off the aim is, how the target moves across the
+//! view, what the person's own hand is doing, how long the lock has been
+//! held) and says whether to act, how much of the angle to close, how
+//! fast, where off the point to aim and whether to pull. It can only ever
+//! turn toward its target, so a fresh one is a cheat of some kind, and
+//! breeding shapes the kind.
 
 use sim::arms::arm;
-use sim::consts::{ticks, HEAD_Y, HEAD_Y_CROUCH, MAX_FIGHTERS, PITCH_MAX};
+use sim::consts::{ticks, HEAD_Y, HEAD_Y_CROUCH, MAX_FIGHTERS, PITCH_MAX, SHIELD_MAX};
 use sim::fighter::Fighter;
 use sim::fmath;
 use sim::geom::{rad_to_yaw, V3};
@@ -22,7 +34,7 @@ use sim::input::{Input, FIRE};
 use sim::world::World;
 
 use crate::fog::Plain;
-use crate::genome::{soft, Draw, Genome};
+use crate::genome::{soft, Draw, Genome, GenomeError, Net};
 
 /// The text form's prefix: an assist's knobs, as [`Knobs::from_genome`]
 /// reads them. A change to that list is a new prefix.
@@ -33,6 +45,20 @@ pub const GENES: usize = 13;
 /// Their spread before squashing: wide, so a fresh genome lands anywhere
 /// in each knob's range.
 const GENE_SCALE: f32 = 1.5;
+
+/// The text form's prefix of a bred net: its weights, then the four knobs
+/// it leaves to its line ([`Cheat::net`]). A change to the net's shape,
+/// to what it reads or to what its outputs mean is a new prefix.
+pub const NET_PREFIX: &[u8; 4] = b"on1:";
+/// What the net reads and says ([`Assist::think`]), and its hidden units.
+const NET_IN: usize = 12;
+const NET_HID: usize = 12;
+const NET_OUT: usize = 6;
+const NET_W: usize = Net::weights(NET_IN, NET_HID, NET_OUT);
+/// The knobs after a net's weights: field of view, bone, walls, trigger.
+const NET_GENES: usize = 4;
+/// How far off the point a net may aim, degrees.
+const NET_OFF_DEG: f32 = 1.5;
 
 /// Where the chest is aimed at, up from the feet.
 const CHEST_Y: f32 = 1.1;
@@ -153,10 +179,103 @@ impl Knobs {
     }
 }
 
+/// One of the zoo's cheats: its knobs, and for a bred net the net that
+/// turns them tick by tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cheat {
+    pub knobs: Knobs,
+    pub net: Option<Net>,
+}
+
+impl Cheat {
+    /// The net an `on1:` genome describes, with the knobs it still sets:
+    /// whom it locks on (field of view, walls), where it aims (bone) and
+    /// whether it may pull. The rest is the net's, each tick.
+    pub fn net(g: &Genome) -> Cheat {
+        let mut v = [0.0f32; NET_W + NET_GENES];
+        g.build_by(&mut v, |i| {
+            if i < NET_W {
+                Net::scale(NET_IN, NET_HID, i)
+            } else {
+                GENE_SCALE
+            }
+        });
+        let u = |i: usize| unit(v[NET_W + i]);
+        let knobs = Knobs {
+            trigger: u(3) > 0.5,
+            fov_deg: log_range(u(0), 2.0, 60.0),
+            bone: u(1),
+            walls: u(2) > 0.7,
+            ..Knobs::BLATANT
+        };
+        Cheat {
+            knobs,
+            net: Net::new(NET_IN, NET_HID, NET_OUT, &v[..NET_W]),
+        }
+    }
+
+    /// Its style: a knob assist's, or `net`.
+    pub fn style(&self) -> &'static str {
+        if self.net.is_some() {
+            "net"
+        } else {
+            self.knobs.style()
+        }
+    }
+}
+
+/// A line of the zoo: a genome and which kind of cheat it describes, by
+/// its prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Line {
+    pub net: bool,
+    pub genome: Genome,
+}
+
+impl Line {
+    pub fn decode(text: &[u8]) -> Result<Line, GenomeError> {
+        match Genome::decode(PREFIX, text) {
+            Err(GenomeError::Prefix) => Genome::decode(NET_PREFIX, text).map(|genome| Line { net: true, genome }),
+            r => r.map(|genome| Line { net: false, genome }),
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.genome.text(if self.net { NET_PREFIX } else { PREFIX })
+    }
+
+    pub fn cheat(&self) -> Cheat {
+        if self.net {
+            Cheat::net(&self.genome)
+        } else {
+            Cheat {
+                knobs: Knobs::from_genome(&self.genome),
+                net: None,
+            }
+        }
+    }
+}
+
+/// What an assist does with one tick of a lock.
+struct Plan {
+    aim: bool,
+    smooth: f32,
+    max_deg: f32,
+    off: (f32, f32),
+    fire: bool,
+}
+
 /// One seat's assist, with what it remembers between ticks.
 #[derive(Clone, Copy, Debug)]
 pub struct Assist {
     pub knobs: Knobs,
+    /// A decoy its client was sent this tick (`crate::decoy`): this seat,
+    /// standing here, though fog shows no such enemy. It is out of sight by
+    /// its making, so only an assist that locks through walls takes it.
+    pub ghost: Option<(usize, V3)>,
+    net: Option<Net>,
+    /// Where its target was in the view last tick (a net reads its motion).
+    seen: Option<(f32, f32)>,
     seat: usize,
     rng: Draw,
     /// The enemy it is locked on, and since when.
@@ -176,11 +295,11 @@ pub fn wrap_deg(d: f32) -> f32 {
     d - 360.0 * fmath::round(d / 360.0)
 }
 
-fn yaw_deg(y: u16) -> f32 {
+pub fn yaw_deg(y: u16) -> f32 {
     y as f32 * (360.0 / 65536.0)
 }
 
-fn pitch_deg(p: i16) -> f32 {
+pub fn pitch_deg(p: i16) -> f32 {
     p as f32 * (360.0 / 65536.0)
 }
 
@@ -216,6 +335,9 @@ impl Assist {
     pub fn new(knobs: Knobs, seat: usize, seed: u32) -> Assist {
         Assist {
             knobs,
+            ghost: None,
+            net: None,
+            seen: None,
             seat,
             rng: Draw(seed ^ (seat as u32).wrapping_mul(0x9e37_79b9)),
             lock: None,
@@ -225,8 +347,59 @@ impl Assist {
         }
     }
 
+    /// Seat `seat`'s assist with one of the zoo's cheats.
+    pub fn of(cheat: &Cheat, seat: usize, seed: u32) -> Assist {
+        Assist {
+            net: cheat.net,
+            ..Assist::new(cheat.knobs, seat, seed)
+        }
+    }
+
     pub fn seat(&self) -> usize {
         self.seat
+    }
+
+    /// A net's plan for this tick of its lock: what it reads, scaled to
+    /// about (−1, 1), and what its six outputs mean. `err` and `vel` are
+    /// the target's point from the aim and its motion across the view,
+    /// degrees (yaw, pitch); `own` the person's own turn this tick.
+    #[allow(clippy::too_many_arguments)]
+    fn think(
+        &mut self,
+        net: &Net,
+        err: (f32, f32),
+        vel: (f32, f32),
+        own: (f32, f32),
+        held: u32,
+        dist: f32,
+        plain: bool,
+        shield: f32,
+    ) -> Plan {
+        let far = |x: f32| soft(x) * 2.0 - 1.0;
+        let x = [
+            soft(err.0 / 10.0),
+            soft(err.1 / 10.0),
+            far((err.0 * err.0 + err.1 * err.1).sqrt() / 2.0),
+            soft(vel.0),
+            soft(vel.1),
+            soft(own.0 / 2.0),
+            soft(own.1 / 2.0),
+            far(held as f32 / ticks(250) as f32),
+            far(dist / 20.0),
+            if plain { 1.0 } else { -1.0 },
+            shield * 2.0 - 1.0,
+            self.rng.draw() * 2.0 - 1.0,
+        ];
+        let mut o = [0.0f32; NET_OUT];
+        net.forward(&x, &mut o);
+        let u = |v: f32| 0.5 * (v + 1.0);
+        Plan {
+            aim: o[0] > 0.0,
+            smooth: log_range(u(o[1]), 0.005, 1.0),
+            max_deg: log_range(u(o[2]), 0.05, 20.0),
+            fire: self.knobs.trigger && o[3] > 0.0,
+            off: (o[4] * NET_OFF_DEG, o[5] * NET_OFF_DEG),
+        }
     }
 
     /// The enemy it is locked on and whether it is helping with it.
@@ -257,19 +430,37 @@ impl Assist {
         }
         let from = if self.fresh { (me.yaw, me.pitch) } else { from };
         self.fresh = false;
-        let mut yaw = yaw_deg(me.yaw) + wrap_deg(yaw_deg(inp.yaw) - yaw_deg(from.0));
-        let mut pitch = pitch_deg(me.pitch) + (pitch_deg(inp.pitch) - pitch_deg(from.1));
+        let own = (
+            wrap_deg(yaw_deg(inp.yaw) - yaw_deg(from.0)),
+            pitch_deg(inp.pitch) - pitch_deg(from.1),
+        );
+        let mut yaw = yaw_deg(me.yaw) + own.0;
+        let mut pitch = pitch_deg(me.pitch) + own.1;
         // The person's own turn, on top of where the view is (the same
         // input for an author that turned from the view itself, as a bot).
         set_aim(inp, yaw, pitch);
         let eye = me.eye();
         // How far the aim is from seat `t`'s point, degrees.
+        let ghost = self.ghost;
+        let is_ghost = |t: usize| ghost.is_some_and(|(g, _)| g == t);
+        // Seat `t` as this client knows it: where a decoy says, if it is one.
+        let body = |t: usize| match ghost {
+            Some((g, at)) if g == t => crate::decoy::standing(&w.fighters[t], at),
+            _ => w.fighters[t],
+        };
         let off_by = |t: usize, yaw: f32, pitch: f32| {
-            let (ty, tp) = angles_to(eye, aim_point(&w.fighters[t], k.bone));
+            let (ty, tp) = angles_to(eye, aim_point(&body(t), k.bone));
             let (dy, dp) = (wrap_deg(ty - yaw), tp - pitch);
             (dy * dy + dp * dp).sqrt()
         };
-        let mut can = |t: usize| enemy(w, s, t) && shown(t) && (k.walls || plain.sees(w, s, t));
+        let mut can = |t: usize| {
+            enemy(w, s, t)
+                && if is_ghost(t) {
+                    k.walls
+                } else {
+                    shown(t) && (k.walls || plain.sees(w, s, t))
+                }
+        };
 
         // Keep the lock while it can, else the enemy nearest the aim.
         let kept = self
@@ -282,6 +473,7 @@ impl Assist {
                 .filter(|&(_, d)| d <= k.fov_deg)
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             self.lock = best.map(|(t, _)| (t, w.tick));
+            self.seen = None;
             if self.lock.is_some() {
                 self.leave = self.rng.draw() < k.miss;
                 let r = k.jitter_deg;
@@ -289,31 +481,56 @@ impl Assist {
             }
         }
         let Some((t, since)) = self.lock else { return false };
-        if self.leave {
-            return false;
+        if is_ghost(t) && !self.leave {
+            // A person who sees a body through a wall looks at it: their
+            // own hand leaves a decoy to the assist and doesn't turn away
+            // (a bot under the assist would, knowing nothing of it).
+            yaw = yaw_deg(me.yaw);
+            pitch = pitch_deg(me.pitch);
+            set_aim(inp, yaw, pitch);
         }
-        let mut helped = false;
         let held = w.tick.saturating_sub(since);
-        let them = &w.fighters[t];
-        if (k.low && me.shield > 0) || (k.range_m > 0.0 && (them.body.pos - me.body.pos).len() < k.range_m) {
-            return false;
-        }
+        let them = &body(t);
+        let point = aim_point(them, k.bone);
+        let (py, pp) = angles_to(eye, point);
+        let plan = if let Some(net) = self.net {
+            let vel = self.seen.map_or((0.0, 0.0), |(ly, lp)| (wrap_deg(py - ly), pp - lp));
+            self.seen = Some((py, pp));
+            let err = (wrap_deg(py - yaw), pp - pitch);
+            let dist = (point - eye).len();
+            let shield = (me.shield as f32 / SHIELD_MAX as f32).clamp(0.0, 1.0);
+            let in_plain = !is_ghost(t) && plain.sees(w, s, t);
+            self.think(&net, err, vel, own, held, dist, in_plain, shield)
+        } else {
+            if self.leave {
+                return false;
+            }
+            if (k.low && me.shield > 0) || (k.range_m > 0.0 && (them.body.pos - me.body.pos).len() < k.range_m) {
+                return false;
+            }
+            Plan {
+                aim: k.aim && held >= ticks(k.delay_ms),
+                smooth: k.smooth,
+                max_deg: k.max_deg,
+                off: self.off,
+                fire: k.trigger && held >= ticks(k.fire_ms),
+            }
+        };
+        let mut helped = false;
 
-        if k.aim && held >= ticks(k.delay_ms) {
-            let (ty, tp) = angles_to(eye, aim_point(them, k.bone));
-            let (ty, tp) = (ty + self.off.0, tp + self.off.1);
-            yaw += (wrap_deg(ty - yaw) * k.smooth).clamp(-k.max_deg, k.max_deg);
-            pitch += ((tp - pitch) * k.smooth).clamp(-k.max_deg, k.max_deg);
+        if plan.aim {
+            let (ty, tp) = (py + plan.off.0, pp + plan.off.1);
+            yaw += (wrap_deg(ty - yaw) * plan.smooth).clamp(-plan.max_deg, plan.max_deg);
+            pitch += ((tp - pitch) * plan.smooth).clamp(-plan.max_deg, plan.max_deg);
             set_aim(inp, yaw, pitch);
             helped = true;
         }
 
-        if k.trigger && held >= ticks(k.fire_ms) {
+        if plan.fire {
             // On target: within the part's width at that distance.
-            let d = (aim_point(them, k.bone) - eye).len().max(1.0);
+            let d = (point - eye).len().max(1.0);
             let half = 0.3 + (0.12 - 0.3) * k.bone;
             let cone = fmath::atan2(half, d) * (180.0 / core::f32::consts::PI);
-            let (py, pp) = angles_to(eye, aim_point(them, k.bone));
             let (ey, ep) = (wrap_deg(py - yaw), pp - pitch);
             if (ey * ey + ep * ep).sqrt() < cone {
                 // A semi-automatic needs the trigger let go between pulls.
@@ -362,6 +579,38 @@ mod tests {
         assert!(ks
             .iter()
             .all(|k| k.range_m == 0.0 || (10.0..=40.0).contains(&k.range_m)));
+    }
+
+    #[test]
+    fn a_net_rebuilds_and_acts() {
+        let line = Line {
+            net: true,
+            genome: Genome::new(7).child(0x4321).unwrap(),
+        };
+        let back = Line::decode(line.text().as_bytes()).unwrap();
+        assert_eq!(line, back);
+        assert_eq!(line.cheat(), back.cheat());
+        assert_eq!(line.cheat().style(), "net");
+        // A knob line is still a knob line.
+        let knobs = Line::decode(Genome::new(7).text(PREFIX).as_bytes()).unwrap();
+        assert!(!knobs.net && knobs.cheat().net.is_none());
+        // Fresh nets are not all one cheat: over a few moments some act,
+        // some hold, and how hard they turn differs.
+        let (mut acts, mut shares) = (0, std::collections::BTreeSet::new());
+        for b in 0..60u32 {
+            let cheat = Cheat::net(&Genome::new(b));
+            let mut a = Assist::of(&cheat, 0, b);
+            let net = cheat.net.unwrap();
+            for held in [0, 8, 30] {
+                let p = a.think(&net, (4.0, -1.0), (0.3, 0.0), (0.5, 0.0), held, 15.0, true, 1.0);
+                assert!((0.005..=1.0).contains(&p.smooth) && (0.05..=20.0).contains(&p.max_deg));
+                assert!(p.off.0.abs() <= NET_OFF_DEG && p.off.1.abs() <= NET_OFF_DEG);
+                acts += p.aim as usize;
+                shares.insert((p.smooth * 200.0) as i32);
+            }
+        }
+        assert!((30..150).contains(&acts), "{acts} of 180 moments acted on");
+        assert!(shares.len() > 20, "{} kinds of turn", shares.len());
     }
 
     #[test]
