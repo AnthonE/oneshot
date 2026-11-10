@@ -191,7 +191,11 @@ pub fn warm_models(
         assets.load_state(&models.body),
         LoadState::Loaded | LoadState::Failed(_)
     );
-    if !body || !scenes.iter().all(settled) || ![&models.truck, &models.skimmer, &models.flier].into_iter().all(settled)
+    if !body
+        || !scenes.iter().all(settled)
+        || ![&models.truck, &models.skimmer, &models.flier, &models.hand]
+            .into_iter()
+            .all(settled)
     {
         return;
     }
@@ -256,6 +260,12 @@ pub fn warm_models(
             .id();
         super::gun_skin::wear(&mut commands, coated, WARM_SKIN, sim::arms::AR);
     }
+    // A hand in view: its bark is a pipeline of its own (`bark.rs`).
+    let hand = commands
+        .spawn((Warming(WARM_FRAMES), SceneRoot(models.hand.clone()), at(), ChildOf(eye)))
+        .observe(done)
+        .id();
+    super::bark::wear(&mut commands, hand);
     // A sword's blade lit: the shader is its own.
     if let Some(scene) = models.guns.get(sim::arms::SWORD as usize).cloned().flatten() {
         let lit = commands

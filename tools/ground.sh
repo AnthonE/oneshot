@@ -8,6 +8,7 @@
 #
 #   tools/ground.sh            fetch what is missing, cut them all
 #   tools/ground.sh rock       just that one
+#   tools/ground.sh bark       Triple T's hands in view (tools/bark.py cuts it)
 #
 # The size each photograph was taken at is `GROUND_TILE_M` in
 # crates/client/src/look/textures.rs: change both. tools/assets.mjs no
@@ -38,6 +39,7 @@ SETS=(
   "rust|rusty_metal_02|flaking paint over rust: signs, shutters, old steel"
   "drift|snow_01|Pithead's ground, snow trodden over by boots"
   "ice_rock|marble_cliff_05|Pithead's rock, grey and fractured, cut cold"
+  "bark|bark_brown_01|Triple T's own hands in view, furrowed brown bark"
 )
 # our name | ambientCG's id | what it is
 METAL=(
@@ -78,6 +80,12 @@ for row in "${SETS[@]}"; do
     # Snow is its shape: the photograph flattened to white over a relief
     # the wind laid, all four maps cut by tools/snow.py.
     python3 tools/snow.py "$d" "$id" "$out"
+    continue
+  fi
+  if [ "$name" = bark ]; then
+    # The hands' bark is a piece of the photograph at the hands' own size,
+    # in Triple T's colour, its occlusion in its normal map: tools/bark.py.
+    python3 tools/bark.py "$d" "$id" "$out"
     continue
   fi
   if [ "$name" = grass ]; then
