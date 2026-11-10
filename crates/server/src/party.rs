@@ -516,6 +516,11 @@ impl Parties {
 
     /// A party act from `session`. A refusal goes back to it alone.
     pub fn act(&mut self, session: u64, act: u8, arg: u32) -> Outbox {
+        // A page let go (another tab took over) whose line isn't closed yet
+        // is nobody here: it has no party to act on or to be given.
+        if !self.sessions.contains_key(&session) {
+            return Outbox::new();
+        }
         match self.try_act(session, act, arg) {
             Ok(out) => out,
             Err(reason) => vec![(session, Msg::Refuse { reason })],
@@ -1004,5 +1009,28 @@ mod tests {
         assert_eq!(row(&ps), (pp::AT_MATCH, proto::MODE_CTF));
         ps.set_playing(&who(1).id, PLAYING_NONE, 101);
         assert_eq!(row(&ps), (pp::AT_HERE, PLAYING_NONE));
+    }
+
+    #[test]
+    fn a_replaced_page_s_act_is_nothing() {
+        // Another tab took over (`connect` let session 1 go), and the old
+        // page's line, not yet closed, still says LEAVE: it has no seat to
+        // leave and no party to be given.
+        let t = Instant::now();
+        let mut ps = Parties::default();
+        ps.connect(1, who(1), Name::new("old"), 0, vec![], t);
+        let (_, replaced) = ps.connect(2, who(1), Name::new("new"), 0, vec![], t);
+        assert_eq!(replaced, vec![1]);
+        for act in [
+            pp::ACT_LEAVE,
+            pp::ACT_JOIN,
+            pp::ACT_START,
+            pp::ACT_KICK,
+            pp::ACT_PRIVACY,
+            pp::ACT_LEAD,
+        ] {
+            assert!(ps.act(1, act, 0).iter().all(|(to, _)| *to == 1), "act {act}");
+        }
+        assert_eq!(ps.lobbies(), 1);
     }
 }
