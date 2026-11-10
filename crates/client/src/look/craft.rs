@@ -35,21 +35,21 @@ const FLY_LEAN_K: f32 = 0.7;
 /// The skimmer's bob on its lift: metres, and cycles a second.
 const BOB_M: f32 = 0.035;
 const BOB_HZ: f32 = 0.9;
-/// Each thruster's flame while it boosts: where its nozzle ends, in the
+/// Each engine's flame while it boosts: where its mouth ends, in the
 /// hull's frame (x forward, y up from the ground under it, z right),
 /// measured on the model (its sheet's numbers, `traces/craft/<name>.json`),
-/// then how long and how wide it burns, metres (no wider than the lit
-/// throat it leaves, so the ring round it still shows). The two outboard,
-/// then the one on the centre line.
-const SKIM_FLAMES: [(Vec3, f32, f32); 3] = [
-    (Vec3::new(-1.5, 0.43, -0.5), 1.0, 0.15),
-    (Vec3::new(-1.5, 0.43, 0.5), 1.0, 0.15),
-    (Vec3::new(-1.28, 0.56, 0.0), 0.6, 0.11),
+/// then how long it burns, how wide and how tall, metres (no bigger than
+/// the lit mouth it leaves, so the rim round it still shows). The skimmer's
+/// two are its hulls' sterns; the flier's three lie side by side across its
+/// one wide mouth, a sheet of flame.
+const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
+    (Vec3::new(-1.5, 0.5, -0.6), 1.0, 0.26, 0.2),
+    (Vec3::new(-1.5, 0.5, 0.6), 1.0, 0.26, 0.2),
 ];
-const FLY_FLAMES: [(Vec3, f32, f32); 3] = [
-    (Vec3::new(-2.15, 0.635, -0.47), 1.2, 0.27),
-    (Vec3::new(-2.15, 0.635, 0.47), 1.2, 0.27),
-    (Vec3::new(-1.84, 0.7, 0.0), 0.8, 0.24),
+const FLY_FLAMES: [(Vec3, f32, f32, f32); 3] = [
+    (Vec3::new(-1.72, 0.69, -0.21), 1.3, 0.34, 0.2),
+    (Vec3::new(-1.72, 0.69, 0.21), 1.3, 0.34, 0.2),
+    (Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.4, 0.22),
 ];
 /// A flame's core inside its sheath: this share of its length and of its
 /// width.
@@ -60,7 +60,7 @@ const CORE: (f32, f32) = (0.55, 0.42);
 /// metres. The skimmer's is its lift's, under its bridge; the flier's its
 /// engines', lit by the boost alone.
 const SKIM_LIGHT: (Vec3, f32, f32) = (Vec3::new(-0.5, 0.3, 0.0), 70_000.0, 240_000.0);
-const FLY_LIGHT: (Vec3, f32, f32) = (Vec3::new(-2.5, 0.65, 0.0), 0.0, 320_000.0);
+const FLY_LIGHT: (Vec3, f32, f32) = (Vec3::new(-2.3, 0.69, 0.0), 0.0, 320_000.0);
 const LIGHT_M: f32 = 5.0;
 /// The skimmer's grips, left then right, in the hull's frame: where its
 /// rider's hands go (`Craft::grips`), measured on the model (its bars as
@@ -160,7 +160,7 @@ pub struct Craft {
     body: Entity,
     exhaust: Entity,
     /// Its flames, and how long each is.
-    flames: [(Entity, f32); 3],
+    flames: Vec<(Entity, f32)>,
     /// Its light, and its lumens at rest and boosting.
     light: (Entity, f32, f32),
     lean: f32,
@@ -195,8 +195,8 @@ impl Craft {
 /// hull turned by its yaw.
 pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, kind: u8) {
     let (scene, pivot, burns, (lamp, rest, boost)) = match kind {
-        FLIER => (&models.flier, FLY_PIVOT_Y, &FLY_FLAMES, FLY_LIGHT),
-        _ => (&models.skimmer, SKIM_PIVOT_Y, &SKIM_FLAMES, SKIM_LIGHT),
+        FLIER => (&models.flier, FLY_PIVOT_Y, &FLY_FLAMES[..], FLY_LIGHT),
+        _ => (&models.skimmer, SKIM_PIVOT_Y, &SKIM_FLAMES[..], SKIM_LIGHT),
     };
     let body = commands
         .spawn((
@@ -216,14 +216,15 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
     let exhaust = commands
         .spawn((Transform::default(), Visibility::Hidden, ChildOf(body)))
         .id();
-    let flames = burns.map(|(at, len, wide)| {
+    let mut flames = Vec::with_capacity(burns.len());
+    for &(at, len, wide, tall) in burns {
         let e = commands
             .spawn((
                 Mesh3d(kit.flame.clone()),
                 MeshMaterial3d(kit.sheath.clone()),
                 Transform {
                     translation: at - Vec3::Y * pivot,
-                    scale: Vec3::new(len, wide, wide),
+                    scale: Vec3::new(len, tall, wide),
                     ..default()
                 },
                 NotShadowCaster,
@@ -240,8 +241,8 @@ pub fn spawn(commands: &mut Commands, kit: &Kit, models: &Models, hull: Entity, 
             NotShadowReceiver,
             ChildOf(e),
         ));
-        (e, len)
-    });
+        flames.push((e, len));
+    }
     let light = commands
         .spawn((
             PointLight {

@@ -597,11 +597,12 @@ def sheet(o, path, steel=(), rider=(), marks=(), chase=None):
     print('SHEET', path)
 
 
-def deliver(name, o, steel, rider=(), marks=(), chase=None, behind=0.0, note=''):
+def deliver(name, o, steel, rider=(), marks=(), chase=None, behind=0.0, note='', burns=None):
     """Exports hull-space `o` as the craft `name` and renders its sheet.
     `steel`: the sim's boxes that stop a shot, `(lo, hi)` each in hull space
     (`Vehicle::hull`); the fit printed is the craft against them, and the
-    nozzles (`nozzles`, aft of `behind`) are for `craft.rs`. Call last."""
+    nozzles (`nozzles`, aft of `behind`; or `burns`, hull space, where a
+    built craft's script knows them) are for `craft.rs`. Call last."""
     lo, hi = bounds(o)
     mid, area, _ = _lit(o)
     inside = np.zeros(len(area), dtype=bool)
@@ -614,7 +615,7 @@ def deliver(name, o, steel, rider=(), marks=(), chase=None, behind=0.0, note='')
         'belly': round(lo.z, 3),
         'top': round(hi.z, 3),
         'outside_steel': round(out, 3),
-        'nozzles': nozzles(o, behind),
+        'nozzles': nozzles(o, behind) if burns is None else [(round(x, 3), round(z, 3), round(-y, 3)) for x, y, z in burns],
         'tris': sum(len(p.vertices) - 2 for p in o.data.polygons),
         'note': note,
     }
@@ -627,7 +628,7 @@ def deliver(name, o, steel, rider=(), marks=(), chase=None, behind=0.0, note='')
     bpy.context.view_layer.objects.active = o
     path = os.path.join(MODELS, name + '.glb')
     bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_apply=True, export_yup=True, use_selection=True,
-                              export_image_format='JPEG', export_jpeg_quality=88)
+                              export_image_format='JPEG', export_jpeg_quality=88, export_colors=True)
     info['bytes'] = os.path.getsize(path)
     with open(os.path.join(OUT, name + '.json'), 'w') as f:
         json.dump(info, f, indent=1)
