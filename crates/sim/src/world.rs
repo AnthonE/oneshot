@@ -905,10 +905,7 @@ impl World {
                 // A homing round locks on whoever the aim was on, as seen.
                 let mut target = NO_TARGET;
                 if matches!(kind, ProjKind::Needle | ProjKind::Charge) {
-                    if let Some((Target::Fighter(q, _), _)) = self.trace(s, eye, base, a.range, depth, HOMING_PAD, true)
-                    {
-                        target = q as u8;
-                    }
+                    target = self.lock(s, eye, base, a, depth);
                 }
                 // A round that flies straight lives as long as its range
                 // takes; one that blows up, till it lands.
@@ -1096,6 +1093,52 @@ impl World {
             && v.seats
                 .iter()
                 .any(|&x| x != 0 && x as usize - 1 != att && self.fighters[x as usize - 1].team == team)
+    }
+
+    /// Whom a homing round from `eye` along `dir` locks on, as `s` saw
+    /// them: of the enemies within `aim_range` whose body, widened by
+    /// [`HOMING_CONE`] at its distance, the aim passes through, the one
+    /// nearest in angle, in clear line (Halo's red reticle locks the
+    /// needler, not a dead-on aim); else whoever the aim meets within
+    /// `range`, padded by [`HOMING_PAD`]. Never a teammate.
+    fn lock(&self, s: usize, eye: V3, dir: V3, a: &Arm, depth: u32) -> u8 {
+        let mut best: Option<(f32, usize)> = None;
+        for (q, v) in self.fighters.iter().enumerate() {
+            if q == s || !v.active() || self.mate(s, q) {
+                continue;
+            }
+            let p = self
+                .rewind
+                .pose_at(self.tick, q, self.lag.seen[s].depth(depth, q), &pose(v));
+            if !p.alive {
+                continue;
+            }
+            let top = crate::movement::ducked(p.duck, HIT_TOP, HIT_TOP_CROUCH);
+            let pad = (p.pos - eye).len() * HOMING_CONE;
+            if ray_cylinder(eye, dir, p.pos, HIT_R + pad, top, a.aim_range).is_none() {
+                continue;
+            }
+            let c = p.pos + V3::new(0.0, crate::movement::ducked(p.duck, CHEST_Y, CHEST_Y_CROUCH), 0.0);
+            let to = c - eye;
+            let t = to.dot(dir);
+            if t <= 0.0 {
+                continue;
+            }
+            let off = (to - dir * t).len() / t;
+            if best.is_some_and(|b| b.0 <= off) {
+                continue;
+            }
+            if self.map.clear(eye, c) {
+                best = Some((off, q));
+            }
+        }
+        if let Some((_, q)) = best {
+            return q as u8;
+        }
+        match self.trace(s, eye, dir, a.range, depth, HOMING_PAD, true) {
+            Some((Target::Fighter(q, _), _)) => q as u8,
+            _ => NO_TARGET,
+        }
     }
 
     /// Bullet magnetism: of the enemies a ray from `eye` along `dir`
@@ -1600,7 +1643,8 @@ impl World {
             let v = self.fighters[p.target as usize];
             let speed = p.vel.len();
             if v.active() && speed > 0.0 {
-                let to = (v.body.pos + V3::new(0.0, 1.0, 0.0) - p.pos).norm();
+                let chest = crate::movement::ducked(v.body.duck, CHEST_Y, CHEST_Y_CROUCH);
+                let to = (v.body.pos + V3::new(0.0, chest, 0.0) - p.pos).norm();
                 let d = p.vel * (1.0 / speed);
                 let chord = (to - d).len();
                 let turn = a.homing * DT;
