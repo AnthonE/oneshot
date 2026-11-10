@@ -269,6 +269,10 @@ struct Plan {
 #[derive(Clone, Copy, Debug)]
 pub struct Assist {
     pub knobs: Knobs,
+    /// A decoy its client was sent this tick (`crate::decoy`): this seat,
+    /// standing here, though fog shows no such enemy. It is out of sight by
+    /// its making, so only an assist that locks through walls takes it.
+    pub ghost: Option<(usize, V3)>,
     net: Option<Net>,
     /// Where its target was in the view last tick (a net reads its motion).
     seen: Option<(f32, f32)>,
@@ -291,11 +295,11 @@ pub fn wrap_deg(d: f32) -> f32 {
     d - 360.0 * fmath::round(d / 360.0)
 }
 
-fn yaw_deg(y: u16) -> f32 {
+pub fn yaw_deg(y: u16) -> f32 {
     y as f32 * (360.0 / 65536.0)
 }
 
-fn pitch_deg(p: i16) -> f32 {
+pub fn pitch_deg(p: i16) -> f32 {
     p as f32 * (360.0 / 65536.0)
 }
 
@@ -331,6 +335,7 @@ impl Assist {
     pub fn new(knobs: Knobs, seat: usize, seed: u32) -> Assist {
         Assist {
             knobs,
+            ghost: None,
             net: None,
             seen: None,
             seat,
@@ -436,12 +441,26 @@ impl Assist {
         set_aim(inp, yaw, pitch);
         let eye = me.eye();
         // How far the aim is from seat `t`'s point, degrees.
+        let ghost = self.ghost;
+        let is_ghost = |t: usize| ghost.is_some_and(|(g, _)| g == t);
+        // Seat `t` as this client knows it: where a decoy says, if it is one.
+        let body = |t: usize| match ghost {
+            Some((g, at)) if g == t => crate::decoy::standing(&w.fighters[t], at),
+            _ => w.fighters[t],
+        };
         let off_by = |t: usize, yaw: f32, pitch: f32| {
-            let (ty, tp) = angles_to(eye, aim_point(&w.fighters[t], k.bone));
+            let (ty, tp) = angles_to(eye, aim_point(&body(t), k.bone));
             let (dy, dp) = (wrap_deg(ty - yaw), tp - pitch);
             (dy * dy + dp * dp).sqrt()
         };
-        let mut can = |t: usize| enemy(w, s, t) && shown(t) && (k.walls || plain.sees(w, s, t));
+        let mut can = |t: usize| {
+            enemy(w, s, t)
+                && if is_ghost(t) {
+                    k.walls
+                } else {
+                    shown(t) && (k.walls || plain.sees(w, s, t))
+                }
+        };
 
         // Keep the lock while it can, else the enemy nearest the aim.
         let kept = self
@@ -462,8 +481,16 @@ impl Assist {
             }
         }
         let Some((t, since)) = self.lock else { return false };
+        if is_ghost(t) && !self.leave {
+            // A person who sees a body through a wall looks at it: their
+            // own hand leaves a decoy to the assist and doesn't turn away
+            // (a bot under the assist would, knowing nothing of it).
+            yaw = yaw_deg(me.yaw);
+            pitch = pitch_deg(me.pitch);
+            set_aim(inp, yaw, pitch);
+        }
         let held = w.tick.saturating_sub(since);
-        let them = &w.fighters[t];
+        let them = &body(t);
         let point = aim_point(them, k.bone);
         let (py, pp) = angles_to(eye, point);
         let plan = if let Some(net) = self.net {
@@ -472,7 +499,7 @@ impl Assist {
             let err = (wrap_deg(py - yaw), pp - pitch);
             let dist = (point - eye).len();
             let shield = (me.shield as f32 / SHIELD_MAX as f32).clamp(0.0, 1.0);
-            let in_plain = plain.sees(w, s, t);
+            let in_plain = !is_ghost(t) && plain.sees(w, s, t);
             self.think(&net, err, vel, own, held, dist, in_plain, shield)
         } else {
             if self.leave {

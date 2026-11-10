@@ -14,7 +14,7 @@
 //!     [--modes duel,doubles,ffa] [--maps 0,1,2,5,6,7] [--zoo file | --zoo-n 64 [--nets 0]] [--threads 2]
 //! oneshot-aim replays --out dir [--zoo file | --zoo-n 64] [--threads 2] <file.osr>…
 //! oneshot-aim league --out dir [--players 40] [--cheaters 10] [--matches 200] [--secs 120]
-//!     [--modes duel,doubles] [--zoo file | --zoo-n 64]
+//!     [--modes duel,doubles] [--zoo file | --zoo-n 64] [--decoys]
 //!     any: [--sightings 400] a match at most; [--len 128] [--pre 32] a window's ticks
 //!     and those before the sighting; [--each] every assist on every sighting, not one
 //!     drawn for each (the zoo's arms race, `zoo.py`)
@@ -26,7 +26,11 @@
 //! them cheating with the same assist every match they play. Nothing is
 //! forked; each sighting's window is what was played, labelled by whether
 //! its player cheats, with the player's id, so a player's evidence can be
-//! added up over matches (`players.py`, docs/ANTICHEAT.md §2).
+//! added up over matches (`players.py`, docs/ANTICHEAT.md §2). With
+//! `--decoys` every seat is also played `room::decoy`'s coin flips (a body
+//! sent where its viewer can't see, a second spot held back as the
+//! control) and each match's counts go in `info.json`: an assist that
+//! locks through walls takes the sent one (`players.py --decoys`).
 //!
 //! `dir` gets `windows.npy` (f32: windows × `LEN` × `F`), `meta.npy` (i32:
 //! windows × [`META`]) and `info.json` (the features, meta's columns, the
@@ -47,6 +51,7 @@ use std::sync::Mutex;
 
 use hand::{Hand, Traits};
 use room::assist::{Assist, Cheat, Line};
+use room::decoy::{Decoy, Tally, Trail};
 use room::fog::{Fog, Plain};
 use room::genome::Genome;
 use room::replay::{Cursor, Next};
@@ -160,6 +165,17 @@ struct Run<Fd: Feed> {
     cheats: Vec<Option<Assist>>,
     /// Which of them helped this tick.
     helped: [bool; MAX_FIGHTERS],
+    /// Every seat's decoys (`league --decoys`).
+    decoys: Option<Decoys>,
+}
+
+/// A match's decoys: the key they are drawn by (a live match's would be its
+/// salt), where fighters have stood, and each seat's.
+#[derive(Clone)]
+struct Decoys {
+    key: u64,
+    trail: Trail,
+    seats: Vec<Decoy>,
 }
 
 impl<Fd: Feed> Run<Fd> {
@@ -171,6 +187,7 @@ impl<Fd: Feed> Run<Fd> {
             fogs: vec![Fog::default(); n],
             cheats: vec![None; n],
             helped: [false; MAX_FIGHTERS],
+            decoys: None,
         }
     }
 
@@ -181,12 +198,22 @@ impl<Fd: Feed> Run<Fd> {
         for (s, f) in self.fogs.iter_mut().enumerate() {
             f.update(&self.w, s, LEAD, next);
         }
+        // What each seat's client is sent that isn't there.
+        let mut ghosts = [None; MAX_FIGHTERS];
+        if let Some(d) = &mut self.decoys {
+            d.trail.note(&self.w);
+            for (s, dc) in d.seats.iter_mut().enumerate() {
+                let fog = &self.fogs[s];
+                ghosts[s] = dc.step(&self.w, s, d.key, &d.trail, |t| fog.shows(t, next));
+            }
+        }
         let Some((mut inputs, lag)) = self.feed.next(&mut self.w) else {
             return false;
         };
         for (s, c) in self.cheats.iter_mut().enumerate() {
             self.helped[s] = false;
             if let Some(a) = c {
+                a.ghost = ghosts[s];
                 let from = self.feed.from(&self.w, s);
                 let fog = &self.fogs[s];
                 self.helped[s] = a.bend(
@@ -200,6 +227,7 @@ impl<Fd: Feed> Run<Fd> {
         }
         if let Some(a) = assist {
             let v = a.seat();
+            a.ghost = ghosts[v];
             let from = self.feed.from(&self.w, v);
             let fog = &self.fogs[v];
             *helped = a.bend(
@@ -228,8 +256,8 @@ fn enemy(w: &World, v: usize, t: usize) -> bool {
 }
 
 /// Every sighting in a match, in order: (tick, viewer, enemy), as the aim
-/// review counts them (`room::watch`).
-fn sightings<Fd: Feed>(mut run: Run<Fd>) -> Vec<(u32, usize, usize)> {
+/// review counts them (`room::watch`); and each seat's decoys, counted.
+fn sightings<Fd: Feed>(mut run: Run<Fd>) -> (Vec<(u32, usize, usize)>, Vec<Tally>) {
     let gap = ticks(room::watch::SIGHT_GAP_MS);
     let n = run.w.rules.seats as usize;
     let mut last = [[None::<u32>; MAX_FIGHTERS]; MAX_FIGHTERS];
@@ -255,7 +283,10 @@ fn sightings<Fd: Feed>(mut run: Run<Fd>) -> Vec<(u32, usize, usize)> {
             }
         }
     }
-    out
+    let tallies = run
+        .decoys
+        .map_or_else(Vec::new, |d| d.seats.iter().map(|x| x.tally).collect());
+    (out, tallies)
 }
 
 /// One branch's window and what the viewer did in it.
@@ -339,8 +370,8 @@ fn cut<Fd: Feed>(
     cap: usize,
     shape: Shape,
     who: &[(i32, i32)],
-) -> Vec<Sighting> {
-    let mut sights = sightings(start.clone());
+) -> (Vec<Sighting>, Vec<Tally>) {
+    let (mut sights, tallies) = sightings(start.clone());
     if sights.len() > cap {
         // Spread over the match, not its first minutes.
         let every = sights.len() as f64 / cap as f64;
@@ -394,7 +425,7 @@ fn cut<Fd: Feed>(
             break;
         }
     }
-    out
+    (out, tallies)
 }
 
 /// A `.npy` file written as it goes, its count put in its header at the
@@ -631,7 +662,7 @@ fn main() {
     let mut out = None;
     let (mut matches, mut seed, mut secs, mut threads, mut zoo_n) = (40usize, 1u64, 300u32, 2usize, 64usize);
     let mut nets = 0usize;
-    let (mut each, mut cap, mut hands) = (false, MAX_SIGHTINGS, false);
+    let (mut each, mut cap, mut hands, mut decoys) = (false, MAX_SIGHTINGS, false, false);
     let mut shape = Shape { len: LEN, pre: PRE };
     let (mut players, mut cheaters, mut modes_set) = (40usize, 10usize, false);
     let mut zoo_file = None;
@@ -662,6 +693,7 @@ fn main() {
             "--maps" => maps = val(),
             "--each" => each = true,
             "--hands" => hands = true,
+            "--decoys" => decoys = true,
             "--sightings" => cap = num(val()) as usize,
             _ => rest.push(a),
         }
@@ -732,7 +764,7 @@ fn main() {
                     feed.skills[s] = skill;
                     feed.bots[s] = Bot::new(mseed, s, skill);
                 }
-                let sights = cut(Run::new(w, feed), zoo, mseed, each, cap, shape, &[]);
+                let (sights, _) = cut(Run::new(w, feed), zoo, mseed, each, cap, shape, &[]);
                 (
                     sights,
                     serde_json::json!({ "mode": mode, "map": map, "map_name": name, "seed": mseed, "hands": traits }),
@@ -771,7 +803,7 @@ fn main() {
                             c,
                             prev: [Input::default(); MAX_FIGHTERS],
                         };
-                        let sights = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap, shape, &[]);
+                        let (sights, _) = cut(Run::new(w, feed), zoo, mix64(m as u64), each, cap, shape, &[]);
                         (sights, serde_json::json!({ "file": name, "map": map }))
                     }
                     Err(e) => {
@@ -850,6 +882,11 @@ fn main() {
                     feed.bots[s] = Bot::new(mseed, s, people[p].skill);
                 }
                 let mut run = Run::new(w, feed);
+                run.decoys = decoys.then(|| Decoys {
+                    key: mix64(mseed ^ 0xdec0),
+                    trail: Trail::default(),
+                    seats: vec![Decoy::default(); n],
+                });
                 for (s, &p) in seats.iter().enumerate() {
                     run.cheats[s] = people[p].cheat.map(|k| Assist::of(&zoo[k], s, mix64(mseed ^ s as u64) as u32));
                 }
@@ -857,8 +894,18 @@ fn main() {
                     .iter()
                     .map(|&p| (p as i32, people[p].cheat.is_some() as i32))
                     .collect();
-                let sights = cut(run, &[], mseed, false, cap, shape, &who);
-                (sights, serde_json::json!({ "mode": mode, "map": map, "seed": mseed, "players": seats }))
+                let (sights, tallies) = cut(run, &[], mseed, false, cap, shape, &who);
+                // Each seat's decoy episodes: all; the aim drawn toward the
+                // sent spot, toward the held one; sat on the sent one only,
+                // on the held one only.
+                let tallies: Vec<[u32; 5]> = tallies
+                    .iter()
+                    .map(|t| [t.episodes, t.toward_sent, t.toward_held, t.sent_only, t.held_only])
+                    .collect();
+                (
+                    sights,
+                    serde_json::json!({ "mode": mode, "map": map, "seed": mseed, "players": seats, "decoys": tallies }),
+                )
             });
             let sink = sink.into_inner().unwrap();
             let roster = serde_json::Value::Array(
@@ -872,6 +919,7 @@ fn main() {
                             "cheat": x.cheat,
                             "genome": x.cheat.map(|k| genomes[k].text()),
                             "style": x.cheat.map(|k| knobs[k].style()),
+                            "walls": x.cheat.map(|k| knobs[k].knobs.walls),
                             "matches": played[p],
                             "hand": x.traits.json(),
                         })

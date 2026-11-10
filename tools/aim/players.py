@@ -48,17 +48,17 @@ FPR = 0.01
 RATES = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0)
 
 
-def odds(k, n, p0=FPR):
+def odds(k, n, p0=FPR, alts=None):
     """The odds `k` flags in `n` sightings give against an honest player who
-    flags at `p0` or less: the likelihood ratio, averaged over [`RATES`].
+    flags at `p0` or less: the likelihood ratio, averaged over the rates a
+    cheater might show (`alts`, or `p0` times each of [`RATES`]).
     Under honest play it is a supermartingale that starts at 1, so the
     chance it ever reaches `x` is at most 1/x (Ville's inequality): it may
     be read after every match."""
     if n <= 0:
         return 1.0
     logs = []
-    for r in RATES:
-        p1 = min(p0 * r, 0.95)
+    for p1 in alts or [min(p0 * r, 0.95) for r in RATES]:
         if p1 <= p0:
             continue
         logs.append(k * math.log(p1 / p0) + (n - k) * math.log((1 - p1) / (1 - p0)))
@@ -119,6 +119,45 @@ def selftest(p=1e-3, players=20000, seed=0):
     print("ok")
 
 
+# A decoy episode where the aim came to sit on one spot only: for an honest
+# player, the sent one half the time. These are the rates a cheat might
+# show. (Which spot the aim merely drew nearer is printed beside it: every
+# episode has one, but an assist that didn't lock leaves it a coin flip,
+# and that drowns the ones that did.)
+DECOY_ALTS = (0.7, 0.8, 0.9, 0.97)
+
+
+def decoys(league, p):
+    """A league played with `oneshot-aim league --decoys`: each player's
+    decoy episodes added up, match by match, and the odds they give that
+    the sent spot draws the aim more than the held one. No detector."""
+    info = json.load(open(os.path.join(league, "info.json")))
+    roster = {r["player"]: r for r in info["league"]}
+    tot = {q: [0, 0, 0, 0, 0] for q in roster}
+    case = {}
+    for mi, m in enumerate(info["matches"]):
+        for q, t in zip(m.get("players", []), m.get("decoys", [])):
+            tot[q] = [a + b for a, b in zip(tot[q], t)]
+            if q not in case and odds(tot[q][3], tot[q][3] + tot[q][4], 0.5, DECOY_ALTS) >= 1 / p:
+                case[q] = sum(q in x.get("players", []) for x in info["matches"][: mi + 1])
+    groups = {"honest": [], "cheating, through walls": [], "cheating, in sight only": []}
+    for q, r in roster.items():
+        g = "honest" if r["cheat"] is None else "cheating, through walls" if r.get("walls") else "cheating, in sight only"
+        groups[g].append(q)
+    print(f"{league}: decoys, a case at odds of {1 / p:g}:1 that the sent spot draws the aim")
+    for g, qs in groups.items():
+        e, s, h, ts, th = (sum(tot[q][i] for q in qs) for i in range(5))
+        print(f"{g} ({len(qs)} players): {e} episodes; the aim sat on the sent spot only {ts}, the held one only {th} "
+              f"(all of them at once, {odds(ts, ts + th, 0.5, DECOY_ALTS):.3g}:1); drawn toward the sent one {s}, "
+              f"the held one {h}; {sum(q in case for q in qs)} with a case")
+        for q in sorted(qs, key=lambda q: case.get(q, 1 << 30)):
+            if g != "honest" or q in case:
+                at = f"case after {case[q]} matches" if q in case else "no case"
+                print(f"  player {q:>2} {roster[q].get('style') or '':<8} sat on sent {tot[q][3]:>2}, held {tot[q][4]:>2} "
+                      f"({odds(tot[q][3], tot[q][3] + tot[q][4], 0.5, DECOY_ALTS):.3g}:1): {at}")
+    json.dump({"p": p, "totals": tot, "case_at": case}, open(os.path.join(league, "decoys.json"), "w"), indent=1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("league", nargs="?")
@@ -128,9 +167,12 @@ def main():
     ap.add_argument("--null", type=float, default=FPR, help="the honest flag rate tested against (the line's, or it with a margin)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--selftest", action="store_true", help="the test on made-up players, no detector or torch")
+    ap.add_argument("--decoys", action="store_true", help="the league's decoys (oneshot-aim league --decoys), no detector")
     args = ap.parse_args()
     if args.selftest:
         return selftest(args.p)
+    if args.decoys:
+        return decoys(args.league, args.p)
     if not args.league or not args.detector:
         ap.error("a league and --detector (or --selftest)")
     import torch

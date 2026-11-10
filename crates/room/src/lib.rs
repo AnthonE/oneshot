@@ -6,6 +6,7 @@
 
 pub mod assist;
 pub mod bubble;
+pub mod decoy;
 pub mod fog;
 pub mod genome;
 pub mod medals;
