@@ -33,13 +33,17 @@ jobs:
             features: sound,pad
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      # Actions by commit (a tag can be moved), and no token left in
+      # .git/config for the build to read: only the release step is handed one.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # rustup reads rust-toolchain.toml (the pinned compiler).
       - run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: crates/client -> target
           key: desktop-${{ matrix.target }}
@@ -63,7 +67,7 @@ jobs:
           cd pkg
           if [ "$RUNNER_OS" = Windows ]; then 7z a -tzip "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
           ls -la
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: oneshot-${{ matrix.target }}
           path: pkg/oneshot-${{ matrix.target }}.*

@@ -216,11 +216,15 @@ impl Watch {
     /// is looked at every [`SIGHT_EVERY`] ticks; the shots and hits every
     /// tick.
     pub fn observe(&mut self, w: &World, shown: impl Fn(usize, usize) -> bool) {
-        self.observe_with(w, &mut Plain::default(), shown);
+        self.observe_with(w, &mut Plain::default(), u16::MAX, shown);
     }
 
-    /// [`Watch::observe`], sharing this tick's plain tests (`plain`, of `w`).
-    pub fn observe_with(&mut self, w: &World, plain: &mut Plain, shown: impl Fn(usize, usize) -> bool) {
+    /// [`Watch::observe`], sharing this tick's plain tests (`plain`, of `w`),
+    /// and looking at who is in sight only for the seats in `people` (bit
+    /// `s`): a room reviews its people, and a bot's row of sight tests
+    /// (every enemy, every other tick, rays nobody reads) is most of a
+    /// bot-filled room's. Everyone's shots, hits and turns are still counted.
+    pub fn observe_with(&mut self, w: &World, plain: &mut Plain, people: u16, shown: impl Fn(usize, usize) -> bool) {
         let tick = w.tick;
         let gap = ms_to_ticks(SIGHT_GAP_MS);
         let hidden_for = ms_to_ticks(PREAIM_HIDDEN_MS);
@@ -250,7 +254,7 @@ impl Watch {
             } else {
                 self.prev[v] = None;
             }
-            if !look {
+            if !look || people & (1 << v) == 0 {
                 continue;
             }
             let aim = aim_dir(me.yaw, me.pitch);

@@ -835,8 +835,11 @@ function voiceBridge(glue) {
   addEventListener('pointerdown', wake, { capture: true });
   addEventListener('keydown', wake, { capture: true });
   addEventListener('visibilitychange', () => { if (!document.hidden && voice.ctx) voice.wake(); });
-  // The browser test's fake microphone (?mic=open): on at once.
-  if (params.get('mic') === 'open') {
+  // The browser test's fake microphone (?mic=open): on at once. Only on a
+  // page served from this machine (ci/party.mjs): on the published page a
+  // link with it and a party's code would open a visitor's microphone to
+  // whoever sent it, with no click.
+  if (params.get('mic') === 'open' && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) {
     voice.setMode('open');
     voice.wake().then(() => voice.micOn()).catch((e) => console.warn('mic', e));
   }

@@ -1941,7 +1941,7 @@ impl Sim {
     /// A match ended: its stats now; its replay and aim review to disk (and
     /// to `review/` if they cross a line), and a ranked one's result to Elo
     /// Pros, once the jobs task has hashed the replay.
-    fn finish(&self, r: &Live) {
+    fn finish(&self, r: &mut Live) {
         let lines: Vec<stats::Line> = (0..MAX_FIGHTERS)
             .filter_map(|s| played(r, s, true))
             .map(stats::Line::Match)
@@ -1959,7 +1959,7 @@ impl Sim {
             return;
         }
         let _ = self.jobs.send(Job::Finished(Box::new(Finished {
-            replay: r.room.replay(),
+            replay: r.room.take_replay(),
             files,
             report,
         })));
