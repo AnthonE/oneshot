@@ -61,11 +61,13 @@ const FLY_BOB_TO: f32 = 9.0;
 /// measured on the model (its sheet's numbers, `traces/craft/<name>.json`),
 /// then how long it burns, how wide and how tall, metres (no bigger than
 /// the lit mouth it leaves, so the rim round it still shows). The skimmer's
-/// two are its hulls' sterns; the flier's is one flat blade of flame out of
-/// the whole of its wide mouth.
+/// two are its hulls' sterns, each rooted a hand inside its throat, where
+/// its core lies, so it leaves through the lip and not from the air behind
+/// it; the flier's is one flat blade of flame out of the whole of its wide
+/// mouth.
 const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
-    (Vec3::new(-1.5, 0.54, -0.6), 1.0, 0.32, 0.27),
-    (Vec3::new(-1.5, 0.54, 0.6), 1.0, 0.32, 0.27),
+    (Vec3::new(-1.38, 0.54, -0.6), 1.1, 0.3, 0.26),
+    (Vec3::new(-1.38, 0.54, 0.6), 1.1, 0.3, 0.26),
 ];
 const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
 /// A flame's core inside its sheath: this share of its length and of its
@@ -191,6 +193,9 @@ pub fn plugin(app: &mut App) {
 pub struct Kit {
     flame: Handle<Mesh>,
     sheath: Handle<StandardMaterial>,
+    /// The skimmer's: a round dart, where the flier's is a flat blade.
+    dart: Handle<Mesh>,
+    dart_sheath: Handle<StandardMaterial>,
     core: Handle<StandardMaterial>,
     trail: Handle<StandardMaterial>,
 }
@@ -207,6 +212,11 @@ const FLAME_FADE: f32 = 3.0;
 /// How much of it is gone at its two rims (across its width).
 const FLAME_RIM: f32 = 0.85;
 const FLAME_IN: f32 = 0.06;
+/// The same two for a round flame out of a round mouth (the skimmer's): it
+/// leaves its lip two thirds of itself across, and keeps most of its sides,
+/// which a flat blade seen on its face has none of.
+const DART_MOUTH: f32 = 0.7;
+const DART_RIM: f32 = 0.4;
 /// Its flicker: this share of its length, at these two rates (radians a
 /// second), so it never beats.
 const FLICKER: f32 = 0.09;
@@ -216,12 +226,12 @@ const FLICKER_HZ: [f32; 2] = [61.0, 37.0];
 /// -x: a spindle that leaves its mouth narrow, fills, and thins to nothing
 /// at its tip. The fade is its vertices' alpha: its paint adds, and adds
 /// less of what has less, so it has no edge and no point.
-fn flame() -> Mesh {
+fn flame(mouth: f32, rim: f32) -> Mesh {
     let (mut positions, mut normals, mut colors) = (Vec::new(), Vec::new(), Vec::new());
     let mut indices = Vec::new();
     for i in 0..=FLAME_RINGS {
         let t = i as f32 / FLAME_RINGS as f32;
-        let fill = FLAME_MOUTH + (1.0 - FLAME_MOUTH) * (t / FLAME_FULL).min(1.0);
+        let fill = mouth + (1.0 - mouth) * (t / FLAME_FULL).min(1.0);
         let r = 0.5 * fill * (1.0 - t).powf(0.8);
         let alpha = (1.0 - t).powf(FLAME_FADE) * (t / FLAME_IN).min(1.0);
         for j in 0..FLAME_SIDES {
@@ -230,7 +240,7 @@ fn flame() -> Mesh {
             normals.push([0.0, cos, sin]);
             // Thinner toward its two rims: a flat blade of flame seen on its
             // face has no drawn sides.
-            colors.push([1.0, 1.0, 1.0, alpha * (1.0 - FLAME_RIM * sin * sin)]);
+            colors.push([1.0, 1.0, 1.0, alpha * (1.0 - rim * sin * sin)]);
         }
         if i < FLAME_RINGS {
             for j in 0..FLAME_SIDES {
@@ -262,8 +272,12 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
         ..default()
     };
     commands.insert_resource(Kit {
-        flame: meshes.add(flame()),
+        flame: meshes.add(flame(FLAME_MOUTH, FLAME_RIM)),
         sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.45))),
+        // A dart's sheath is seen over lit ground from the saddle, not
+        // against the sky: more of it, or the sand swallows its blue.
+        dart: meshes.add(flame(DART_MOUTH, DART_RIM)),
+        dart_sheath: mats.add(paint(LinearRgba::new(0.14, 0.85, 1.9, 0.75))),
         core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
         trail: mats.add(paint(LinearRgba::new(0.3, 1.2, 1.8, 0.34))),
     });
@@ -309,8 +323,8 @@ pub struct Craft {
     pub yaw: f32,
     body: Entity,
     exhaust: Entity,
-    /// Its flames, and how long each is.
-    flames: Vec<(Entity, f32)>,
+    /// Its flames, and how long, how tall and how wide each is boosting.
+    flames: Vec<(Entity, Vec3)>,
     /// Its light, and its lumens at rest and boosting.
     light: (Entity, f32, f32),
     /// Its engines' paints, its own (`BURNS`), the light each came with,
@@ -388,12 +402,17 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, kit: &Kit, mode
         .spawn((Transform::default(), Visibility::Hidden, ChildOf(body)))
         .id();
     let core = if kind == FLIER { FLY_CORE } else { CORE };
+    let (shape, sheath) = if kind == FLIER {
+        (&kit.flame, &kit.sheath)
+    } else {
+        (&kit.dart, &kit.dart_sheath)
+    };
     let mut flames = Vec::with_capacity(burns.len());
     for &(at, len, wide, tall) in burns {
         let e = commands
             .spawn((
-                Mesh3d(kit.flame.clone()),
-                MeshMaterial3d(kit.sheath.clone()),
+                Mesh3d(shape.clone()),
+                MeshMaterial3d(sheath.clone()),
                 Transform {
                     translation: at - Vec3::Y * pivot,
                     scale: Vec3::new(len, tall, wide),
@@ -406,14 +425,14 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, kit: &Kit, mode
             .id();
         // Its core, inside it and flickering with it.
         commands.spawn((
-            Mesh3d(kit.flame.clone()),
+            Mesh3d(shape.clone()),
             MeshMaterial3d(kit.core.clone()),
             Transform::from_scale(Vec3::new(core.0, core.1, core.1)),
             NotShadowCaster,
             NotShadowReceiver,
             ChildOf(e),
         ));
-        flames.push((e, len));
+        flames.push((e, Vec3::new(len, tall, wide)));
     }
     let light = commands
         .spawn((
@@ -547,6 +566,11 @@ fn bind(
 const FLAME_FROM: f32 = 4.0;
 const FLAME_TOP: f32 = 17.0;
 const FLAME_CRUISE: f32 = 0.34;
+/// A skimmer's flame short of a boost is this share of its boost's girth: a
+/// dart in the middle of its mouth. At a third of its length and all of its
+/// girth it was a plug in it. (The flier's flat blade keeps its mouth's
+/// width.)
+const DART_CRUISE: f32 = 0.42;
 /// How fast the speed a craft is drawn by follows the hull, 1/s; a hull that
 /// moved further than this in a frame was put there (a respawn), not flown.
 const SPEED_EASE: f32 = 6.0;
@@ -619,11 +643,20 @@ fn pose(
         // Their flames: none at rest, short at speed, long boosting, each a
         // little out of step with the other.
         let reach = if c.boosting { 1.0 } else { FLAME_CRUISE * cruise };
-        for (k, &(e, len)) in c.flames.iter().enumerate() {
+        let girth = if c.boosting || c.kind == FLIER {
+            1.0
+        } else {
+            DART_CRUISE
+        };
+        for (k, &(e, size)) in c.flames.iter().enumerate() {
             let phase = c.t + k as f32 * 0.37;
             let wave = (phase * FLICKER_HZ[0]).sin() * 0.6 + (phase * FLICKER_HZ[1]).sin() * 0.4;
             if let Ok(mut t) = at.get_mut(e) {
-                t.scale.x = (len * reach * (1.0 + FLICKER * wave)).max(1e-3);
+                t.scale = Vec3::new(
+                    (size.x * reach * (1.0 + FLICKER * wave)).max(1e-3),
+                    size.y * girth,
+                    size.z * girth,
+                );
             }
         }
         // Its trails: each runs back through where its end of the craft has

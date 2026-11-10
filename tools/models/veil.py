@@ -227,9 +227,9 @@ def lip(at, w, h, n=20, p=2.6):
 def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow', wall=None):
     """An engine's mouth looking aft from `at` (`lip`): a throat `deep`
     metres in, lined with `lining` (lit from within, or dark iron round a
-    core that is the only light in it), or with `wall` down to a floor of
-    `lining` (a dark throat with light at the bottom of it: a lit wall is a
-    lamp's lens from astern); its core, a swell of light whose middle is
+    core that is the only light in it), or with `wall` for the outer half
+    of its depth and `lining` below (a dark throat with light at the bottom
+    of it: a lit wall is a lamp's lens from astern); its core, a swell of light whose middle is
     `core[0]` in from the end, `core[1]` long, and `core[2]` and `core[3]` of
     the mouth across and up; thin iron vanes across it. Its parts."""
     x, y, z = at
@@ -237,9 +237,12 @@ def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.
     if wall is None:
         parts = [loft([rim, foot], lining, ends=('open', 'flat'), levels=1, name='throat', inside=True)]
     else:
-        parts = [loft([rim, foot], wall, ends=('open', 'open'), levels=1, name='throat', inside=True),
-                 loft([oval(x + deep - 0.004, y, z, w * 0.81, h * 0.81, n=n, p=p), foot], lining, ends=('open', 'flat'), levels=1,
-                      name='floor', inside=True)]
+        # The wall's outer half is `wall`; its inner half and the floor
+        # `lining`, so looking in, it goes from dark to lit under the core.
+        k = 0.55
+        mid = oval(x + deep * k, y, z, w * (0.98 - 0.18 * k), h * (0.98 - 0.18 * k), n=n, p=p)
+        parts = [loft([rim, mid], wall, ends=('open', 'open'), levels=1, name='throat', inside=True),
+                 loft([mid, foot], lining, ends=('open', 'flat'), levels=1, name='floor', inside=True)]
     swell = sphere(1.0, at=(x + core[0], y, z), material=None, scale=(core[1], w * core[2], h * core[3]), segments=24)
     swell.data.materials.append(skin('throat'))
     parts.append(swell)

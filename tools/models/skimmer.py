@@ -111,7 +111,10 @@ def hull(side):
                   (H_TOP(x) - H_KEEL(x)) / 2 + 0.03, n=H_N, p=H_ROUND(x), pb=2.5) for x in H_AT]
     o = solid(loft(lip(at, MW, MH, n=H_N, p=2.3) + rings, 'shell', ends=('open', 'tip'), name='hull',
                    sharp=((H_N // 4, neck, 99), (0 if side > 0 else H_N // 2, neck, 99))), 'hull')
-    return o, mouth(at, MW, MH, deep=0.3, core=(0.15, 0.12, 0.68, 0.68), vanes=0, n=H_N, p=2.3, wall='iron'), at
+    # (Its core lies at the throat's floor, small: from the saddle the lip
+    # hides its top and the wall under it goes from black to lit. Up at the
+    # lip and two thirds across it was a lamp plugged in the end of a tube.)
+    return o, mouth(at, MW, MH, deep=0.3, core=(0.22, 0.07, 0.56, 0.56), vanes=0, n=H_N, p=2.3, wall='iron'), at
 
 
 burns = []
