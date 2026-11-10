@@ -549,7 +549,9 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     up to `edge`; what faces the ground darkened to `under`; and `stain`, a
     rule over an (n, 3) array of points that gives each how much of its
     paint is left under soot and dust (1 clean). A light keeps its own. The
-    colours' alpha is the shade alone."""
+    colours' alpha is the shade alone. It also writes where each corner lies
+    on the craft into two UV sets (TEXCOORD_0: along it and across it;
+    TEXCOORD_1: up it), metres, for the game's grain."""
     me = o.data
     me.calc_loop_triangles()
     nv = len(me.vertices)
@@ -669,6 +671,13 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     col[:, 3] = shadow
     col[lit[lm]] = 1.0
     attr.data.foreach_set('color', col.ravel())
+    # Where each corner lies on the craft, metres, in its two UV sets (along
+    # and across it; up it): what the game's shell stage lays its grain by
+    # (`veil_shell.wgsl`), since a craft has no map to carry any.
+    for name, pick in (('hull_xy', (0, 1)), ('hull_z', (2, 2))):
+        uv = me.uv_layers.get(name) or me.uv_layers.new(name=name)
+        at = np.stack([co[lv, pick[0]], co[lv, pick[1]] if name == 'hull_xy' else np.zeros(nl)], axis=1)
+        uv.data.foreach_set('uv', at.astype(np.float32).ravel())
     me.color_attributes.active_color = attr
     me.color_attributes.render_color_index = list(me.color_attributes).index(attr)
     me.update()

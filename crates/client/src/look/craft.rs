@@ -14,8 +14,9 @@
 //! **Its shell is a wing case.** A craft carries no map: its colours are its
 //! mesh's (the paint in the shade each vertex stands in). Its paints are
 //! `StandardMaterial` plus a fragment stage (`shaders/veil_shell.wgsl`): the
-//! violet turns blue edge on, and the sky's photograph the guns reflect
-//! (`gun_skin.rs`) lies in its coat. Its engines burn brighter while it
+//! violet turns blue edge on, the sky's photograph the guns reflect
+//! (`gun_skin.rs`) lies in its coat, and up close it has the grain of a
+//! craft that has been flown. Its engines burn brighter while it
 //! boosts and throw a flame, a short one at speed and a long one boosting,
 //! and it lights the ground under and behind it. Looks only: what flies is
 //! the sim's.
@@ -68,8 +69,10 @@ const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
 ];
 const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
 /// A flame's core inside its sheath: this share of its length and of its
-/// width.
+/// width. The flier's one flat blade wants a broader one: half its mouth
+/// wide, across both vanes.
 const CORE: (f32, f32) = (0.55, 0.42);
+const FLY_CORE: (f32, f32) = (0.7, 0.65);
 /// The light a craft throws on what is under and behind it (on a rung with
 /// lights to spare, `fx::Caps::lights_in_flight`): where it hangs in the
 /// hull's frame, its lumens at rest and boosting, and how far it reaches,
@@ -110,6 +113,7 @@ pub const SHADER: &str = "shaders/veil_shell.wgsl";
 pub struct ShellParams {
     pub edge: Vec4,
     pub sky: Vec4,
+    pub grain: Vec4,
 }
 
 /// The extension. Not `#[bindless]`, as the truck's isn't.
@@ -135,21 +139,24 @@ impl MaterialExtension for Shell {
 /// What a shell's paint turns toward edge on (linear), and how far.
 const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.32);
 /// The wing case over each of a craft's paints, by its name in the GLB
-/// (`veil.py`'s `PAINTS`): how far it turns at the edge, how bright the
+/// (`veil.py`'s `PAINTS`): how far it turns at the edge; how bright the
 /// sky's photograph is in it, the photograph's blur (levels), how much of
-/// it shows face on, and how much of its colour it keeps. A paint not named
-/// (a light, a saddle's pad) is drawn as it came.
+/// it shows face on, and how much of its colour it keeps; and how much
+/// grain it has (the mottle and scuffs of a craft that has been flown: none
+/// on glass). A paint not named (a light, a saddle's pad) is drawn as it
+/// came.
 fn shell_of(name: &str) -> Option<ShellParams> {
-    let (turn, sky) = match name {
-        "shell" | "shell_pale" => (1.0, Vec4::new(0.22, 0.5, 0.03, 0.6)),
-        "shell_deep" => (0.8, Vec4::new(0.2, 0.6, 0.03, 0.6)),
-        "glass" => (0.0, Vec4::new(0.58, 0.0, 0.09, 0.8)),
-        "iron" => (0.0, Vec4::new(0.14, 2.6, 0.04, 0.3)),
+    let (turn, sky, grain) = match name {
+        "shell" | "shell_pale" => (1.0, Vec4::new(0.22, 0.5, 0.03, 0.6), 1.0),
+        "shell_deep" => (0.8, Vec4::new(0.2, 0.6, 0.03, 0.6), 1.0),
+        "glass" => (0.0, Vec4::new(0.58, 0.0, 0.09, 0.8), 0.0),
+        "iron" => (0.0, Vec4::new(0.14, 2.6, 0.04, 0.3), 0.7),
         _ => return None,
     };
     Some(ShellParams {
         edge: EDGE * Vec4::new(1.0, 1.0, 1.0, turn),
         sky,
+        grain: Vec4::new(grain, 0.0, 0.0, 0.0),
     })
 }
 /// The paints of an engine's fire (its core, its lit throat, and the veins
@@ -379,6 +386,7 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, kit: &Kit, mode
     let exhaust = commands
         .spawn((Transform::default(), Visibility::Hidden, ChildOf(body)))
         .id();
+    let core = if kind == FLIER { FLY_CORE } else { CORE };
     let mut flames = Vec::with_capacity(burns.len());
     for &(at, len, wide, tall) in burns {
         let e = commands
@@ -399,7 +407,7 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, kit: &Kit, mode
         commands.spawn((
             Mesh3d(kit.flame.clone()),
             MeshMaterial3d(kit.core.clone()),
-            Transform::from_scale(Vec3::new(CORE.0, CORE.1, CORE.1)),
+            Transform::from_scale(Vec3::new(core.0, core.1, core.1)),
             NotShadowCaster,
             NotShadowReceiver,
             ChildOf(e),
@@ -581,7 +589,9 @@ fn pose(
         }
         let cruise = ((c.speed - FLAME_FROM) / (FLAME_TOP - FLAME_FROM)).clamp(0.0, 1.0);
         // Its engines: a breath at rest, full at speed, past it boosting.
-        let breath = 1.0 + BREATH.0 * (c.t * BREATH.1 * TAU).sin();
+        // (It breathes at rest alone: at speed it burns steady, so a vein
+        // stays asleep until the boost.)
+        let breath = 1.0 + BREATH.0 * (1.0 - cruise) * (c.t * BREATH.1 * TAU).sin();
         let want = if c.boosting {
             BURN.2
         } else {

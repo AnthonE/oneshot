@@ -7,6 +7,12 @@
 // paint in the shade each vertex stands in), and their alpha is that shade
 // alone, which is what dims a reflection down in a seam.
 //
+// And it has been flown: a mottle in its tone and gloss and fine scuffs
+// running fore and aft, laid by where each pixel lies on the craft (its two
+// UV sets carry that, metres: along and across it, and up it), each faded
+// out before a pixel is too big to hold it, so a far craft is clean paint
+// and a near one has grain.
+//
 // Uniforms, one cube and arithmetic only, so it binds and runs the same on
 // WebGL2.
 
@@ -25,6 +31,8 @@ struct Shell {
     // shows face on (a clear coat's is 0.04); w: how much of the sky's own
     // colour the reflection keeps.
     sky: vec4<f32>,
+    // x: how much grain it has (0 none: glass).
+    grain: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> shell: Shell;
@@ -33,6 +41,50 @@ struct Shell {
 
 // How sharply the paint turns at the edge (a power of how edge on it is).
 const TURN: f32 = 3.0;
+// The mottle: cycles a metre (patches a hand across, with broad ones four
+// times the size under them), how far it moves the paint's tone either way
+// and its roughness either way: where it is rough the coat is dull, and a
+// reflection shows the patches where the paint's own dark tone would not.
+const MOTTLE_FREQ: f32 = 7.0;
+const MOTTLE_TONE: f32 = 0.1;
+const MOTTLE_ROUGH: f32 = 0.16;
+// The scratches: cycles a metre across the craft, how many times longer
+// than wide they run along it, the noise's level one shows from (about a
+// quarter of the skin has one), how much rougher and paler they are, and
+// how much of the coat's reflection they take. Fine: gone by a few metres.
+const SCUFF_FREQ: f32 = 70.0;
+const SCUFF_LONG: f32 = 26.0;
+const SCUFF_FROM: f32 = 0.6;
+const SCUFF_ROUGH: f32 = 0.3;
+const SCUFF_PALE: f32 = 0.45;
+const SCUFF_DULL: f32 = 0.8;
+
+fn hash3(c: vec3<i32>) -> f32 {
+    // WGSL will not mix `^` with `*` unparenthesised.
+    var h = (bitcast<u32>(c.x) * 0x8da6b343u) ^ (bitcast<u32>(c.y) * 0xd8163841u) ^ (bitcast<u32>(c.z) * 0xcb1ab31fu);
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h = (h ^ (h >> 15u)) * 0x846ca68bu;
+    h = h ^ (h >> 16u);
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+// Value noise over a lattice, in 0..1 (the truck's and the level's).
+fn vnoise(p: vec3<f32>) -> f32 {
+    let i = vec3<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(hash3(i), hash3(i + vec3<i32>(1, 0, 0)), u.x);
+    let b = mix(hash3(i + vec3<i32>(0, 1, 0)), hash3(i + vec3<i32>(1, 1, 0)), u.x);
+    let c = mix(hash3(i + vec3<i32>(0, 0, 1)), hash3(i + vec3<i32>(1, 0, 1)), u.x);
+    let d = mix(hash3(i + vec3<i32>(0, 1, 1)), hash3(i + vec3<i32>(1, 1, 1)), u.x);
+    return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+
+// How much of a noise at `freq` cycles a metre a pixel `px` metres across
+// can carry: whole at six pixels a cycle, gone at two.
+fn band(px: f32, freq: f32) -> f32 {
+    return clamp(1.5 - px * freq * 3.0, 0.0, 1.0);
+}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -43,6 +95,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let shade = clamp(in.color.a, 0.0, 1.0);
 #else
     let shade = 1.0;
+#endif
+    // Its grain, by where the pixel lies on the craft.
+    var scuff = 0.0;
+#ifdef VERTEX_UVS_A
+#ifdef VERTEX_UVS_B
+    let wp = in.world_position.xyz;
+    let px = max(length(dpdx(wp)), length(dpdy(wp)));
+    let at = vec3<f32>(in.uv.x, in.uv.y, in.uv_b.x);
+    // (A sum of value noises keeps near its middle: stretched to fill -1..1.)
+    let mottle = clamp((0.25 * vnoise(at * MOTTLE_FREQ * 0.25 + vec3<f32>(2.7, 8.1, 5.3)) + 0.5 * vnoise(at * MOTTLE_FREQ)
+        + 0.25 * vnoise(at * MOTTLE_FREQ * 2.7 + vec3<f32>(7.3, 1.9, 4.1)) - 0.5) * 3.4, -1.0, 1.0)
+        * band(px, MOTTLE_FREQ) * shell.grain.x;
+    let streak = vnoise(vec3<f32>(at.x * SCUFF_FREQ / SCUFF_LONG, at.y * SCUFF_FREQ, at.z * SCUFF_FREQ));
+    scuff = smoothstep(SCUFF_FROM, SCUFF_FROM + 0.1, streak) * band(px, SCUFF_FREQ) * shell.grain.x;
+    let grained = pbr_input.material.base_color.rgb * (1.0 + MOTTLE_TONE * mottle) * (1.0 + SCUFF_PALE * scuff);
+    pbr_input.material.base_color = vec4<f32>(grained, pbr_input.material.base_color.a);
+    pbr_input.material.perceptual_roughness = clamp(
+        pbr_input.material.perceptual_roughness + MOTTLE_ROUGH * mottle + SCUFF_ROUGH * scuff, 0.045, 1.0);
+#endif
 #endif
     let n = pbr_input.N;
     let v = pbr_input.V;
@@ -62,7 +133,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let grey = vec3<f32>(dot(photo, vec3<f32>(0.2126, 0.7152, 0.0722)));
         let sky = mix(grey, photo, shell.sky.w);
         let fresnel = shell.sky.z + (1.0 - shell.sky.z) * pow(1.0 - nv, 5.0);
-        let seen = pbr_input.diffuse_occlusion * pbr_input.specular_occlusion * shade * shade;
+        let seen = pbr_input.diffuse_occlusion * pbr_input.specular_occlusion * shade * shade * (1.0 - SCUFF_DULL * scuff) * (1.0 - 0.35 * max(mottle, 0.0));
         out.color = vec4<f32>(out.color.rgb + sky * fresnel * shell.sky.x * seen, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;

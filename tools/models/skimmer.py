@@ -50,7 +50,7 @@ H_AT = (STERN, -1.3, -1.05, NECK[0], -0.57, NECK[1], -0.1, 0.3, 0.7, 1.05, 1.3, 
 H_N = 16
 # How round a hull is (2 an ellipse): the pod's, and the blade's (a ridge).
 H_ROUND = curve((NECK[0], 2.1), (NECK[1], 1.45))
-MOUTH = 0.82
+MOUTH = 0.9
 # The deck between the pods: from where to where, and its top.
 DECK = (-1.1, 0.36, 0.46)
 # The saddle on it, and the cowl before it: each its half-width and its
@@ -148,12 +148,12 @@ for x in (-0.9, -1.02, -1.14):
          within=lambda q: both(out(q) - 0.05, Z(q) - 0.375, 0.5 - Z(q)))
 parts += [
     # Each pod's back: a paler plate over it, proud of the neck's; each
-    # blade's back a plate of its own; the darker hull under them. A rim of
-    # iron round each mouth.
+    # blade's back a pale strake of its own; the darker hull under them. A
+    # rim of iron round each mouth.
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - STERN - 0.1, NECK[0] - 0.03 - X(q)), 0.03, 'shell_pale', name='backs'),
     plate(hulls, lambda q: both(top(q) + 0.02, X(q) - NECK[0] + 0.07, NECK[1] + 0.04 - X(q)), 0.018, 'shell', name='necks',
           clear=None),
-    plate(hulls, lambda q: both(top(q) - 0.03, X(q) - NECK[1] - 0.1, 0.66 - X(q)), 0.025, 'shell_deep', name='blades',
+    plate(hulls, lambda q: both(top(q) - 0.03, X(q) - NECK[1] - 0.1, 0.66 - X(q)), 0.025, 'shell_pale', name='blades',
           clear=None),
     plate(hulls, lambda q: STERN + 0.05 - X(q), 0.012, 'iron', name='rims'),
 ]
