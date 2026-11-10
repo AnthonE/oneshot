@@ -468,7 +468,9 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
     // wasm reader panics on a download that breaks mid-body, this one
     // retries it (`asset_fetch.rs`).
     #[cfg(target_arch = "wasm32")]
-    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"));
+    app.register_asset_source(bevy::asset::io::AssetSourceId::Default, asset_fetch::source("assets"))
+        // And hands its files over a frame's worth at a time.
+        .add_systems(First, asset_fetch::frame);
     app.add_plugins(
         DefaultPlugins
             .set(bevy::log::LogPlugin {

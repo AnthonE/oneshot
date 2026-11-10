@@ -9,8 +9,19 @@
 //! time, and otherwise hands Bevy an error, which fails that one asset and
 //! keeps the match. 403 and 404 are "not found", as in Bevy's.
 //!
-//! [`retry_after_ms`] is the whole policy, on every target, so it is tested
-//! natively. The reader is wasm-only, the default source in `app_on`.
+//! And it hands the loaders their files a few a frame ([`Budget`]). A
+//! browser's module decodes on the one thread that draws, so every file
+//! that arrived between two frames was decoded before the next one drew:
+//! a slow frame (the level being dressed) and the whole set of models was
+//! in memory at once as pixels, a gigabyte and more, waiting for the frame
+//! that would send it to the GPU and let it go. A module's memory never
+//! shrinks and stops at 4 GB, and measured it peaked between 2.4 and 3 GB
+//! going into a Big Team match; handed over this way, at 1.3 GB. The files
+//! still download side by side.
+//!
+//! [`retry_after_ms`] and [`Budget`] are the whole policy, on every target,
+//! so they are tested natively. The reader is wasm-only, the default source
+//! in `app_on`.
 
 /// How one try at a file failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,20 +48,144 @@ pub fn retry_after_ms(attempt: u32, failed: Failed) -> Option<u32> {
     BACKOFF_MS.get(attempt as usize).copied()
 }
 
+/// The bytes of files the loaders are handed in one frame: a few guns'
+/// models, each some thirty times its file once its maps are pixels with
+/// their chains (`look/textures.rs`, `mip_models`), so a couple of hundred
+/// megabytes in hand at most. Less only spreads the same decoding over
+/// more frames: every model there is is some twenty frames of this.
+pub const FRAME_BYTES: usize = 4 << 20;
+
+/// A file this small never waits: a shader, a font, a sound. What it
+/// becomes in memory is nothing to space out, and a screen wants its
+/// letters and its shaders before its models.
+pub const SMALL_BYTES: usize = 128 << 10;
+
+/// What is left of a frame's [`FRAME_BYTES`]. The first file of a frame
+/// always goes, however large: the budget spaces the files out, it never
+/// holds one back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget {
+    left: usize,
+    fresh: bool,
+}
+
+impl Budget {
+    pub const fn new() -> Budget {
+        Budget {
+            left: FRAME_BYTES,
+            fresh: true,
+        }
+    }
+
+    /// Whether a file of `bytes` goes this frame; taken off the budget if so.
+    pub fn take(&mut self, bytes: usize) -> bool {
+        if bytes <= SMALL_BYTES {
+            return true;
+        }
+        if !self.fresh && bytes > self.left {
+            return false;
+        }
+        self.left = self.left.saturating_sub(bytes);
+        self.fresh = false;
+        true
+    }
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Budget::new()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
-pub use wasm::source;
+pub use wasm::{frame, source};
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
+    use std::collections::VecDeque;
+    use std::future::Future;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+    use std::task::{Context, Poll, Waker};
 
     use bevy::asset::io::{AssetReader, AssetReaderError, AssetSourceBuilder, PathStream, Reader, VecReader};
     use bevy::log::warn;
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
 
-    use super::{retry_after_ms, Failed};
+    use super::{retry_after_ms, Budget, Failed, SMALL_BYTES};
+
+    /// This frame's budget and the files waiting for a later one, in the
+    /// order they arrived: whether each may go yet, its size, and who to
+    /// wake.
+    struct Gate {
+        budget: Budget,
+        waiting: VecDeque<(Arc<AtomicBool>, usize, Waker)>,
+    }
+
+    static GATE: Mutex<Gate> = Mutex::new(Gate {
+        budget: Budget::new(),
+        waiting: VecDeque::new(),
+    });
+
+    fn gate() -> MutexGuard<'static, Gate> {
+        GATE.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A new frame (`app_on` runs it first in each): a new budget, and the
+    /// files at the head of the line that fit it go. A hidden tab draws no
+    /// frames and so takes none: what it would decode would only wait, as
+    /// pixels, for the frame that uploads it.
+    pub fn frame() {
+        let mut g = gate();
+        g.budget = Budget::new();
+        while let Some(&(_, bytes, _)) = g.waiting.front() {
+            if !g.budget.take(bytes) {
+                break;
+            }
+            if let Some((go, _, waker)) = g.waiting.pop_front() {
+                go.store(true, Ordering::Relaxed);
+                waker.wake();
+            }
+        }
+    }
+
+    /// A file's turn: at once if nothing waits and this frame has room.
+    struct Turn {
+        bytes: usize,
+        go: Option<Arc<AtomicBool>>,
+    }
+
+    impl Future for Turn {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            let mut g = gate();
+            match &self.go {
+                Some(go) if go.load(Ordering::Relaxed) => Poll::Ready(()),
+                Some(go) => {
+                    if let Some(w) = g.waiting.iter_mut().find(|w| Arc::ptr_eq(&w.0, go)) {
+                        w.2.clone_from(cx.waker());
+                    }
+                    Poll::Pending
+                }
+                // Nothing ahead of it and room this frame, or too small to
+                // wait behind anything.
+                None if self.bytes <= SMALL_BYTES || (g.waiting.is_empty() && g.budget.take(self.bytes)) => {
+                    Poll::Ready(())
+                }
+                None => {
+                    let go = Arc::new(AtomicBool::new(false));
+                    g.waiting.push_back((go.clone(), self.bytes, cx.waker().clone()));
+                    drop(g);
+                    self.go = Some(go);
+                    Poll::Pending
+                }
+            }
+        }
+    }
 
     /// The default asset source for the page: files under `root`, relative
     /// to the page's URL, as Bevy's reader resolves them.
@@ -107,7 +242,15 @@ mod wasm {
             let mut attempt = 0;
             loop {
                 let (failed, why) = match once(&url).await {
-                    Ok(bytes) => return Ok(VecReader::new(bytes)),
+                    Ok(bytes) => {
+                        // Downloaded; handed over when its frame comes.
+                        Turn {
+                            bytes: bytes.len(),
+                            go: None,
+                        }
+                        .await;
+                        return Ok(VecReader::new(bytes));
+                    }
                     Err(e) => e,
                 };
                 let Some(ms) = retry_after_ms(attempt, failed) else {
@@ -168,5 +311,24 @@ mod tests {
         for s in [403, 404, 400, 410] {
             assert_eq!(retry_after_ms(0, Failed::Status(s)), None);
         }
+    }
+
+    #[test]
+    fn a_frame_hands_over_its_budget_and_never_holds_its_first_file() {
+        // Models go together until the frame is spent.
+        let mut b = Budget::new();
+        assert!(b.take(FRAME_BYTES / 2));
+        assert!(b.take(FRAME_BYTES / 2));
+        assert!(!b.take(SMALL_BYTES + 1), "the next waits for a frame");
+        // A shader or a font is never one of them.
+        assert!(b.take(SMALL_BYTES));
+        // One larger than a whole frame goes alone, at the head of its own.
+        let mut b = Budget::new();
+        assert!(b.take(3 * FRAME_BYTES));
+        assert!(!b.take(SMALL_BYTES + 1));
+        // And never behind another.
+        let mut b = Budget::new();
+        assert!(b.take(SMALL_BYTES + 1));
+        assert!(!b.take(3 * FRAME_BYTES));
     }
 }
