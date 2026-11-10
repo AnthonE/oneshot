@@ -154,7 +154,7 @@ async fn hello(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn few_online_play_free_for_all_whatever_they_ask() {
+async fn few_online_play_big_team_whatever_else_they_ask() {
     let h = server::run(server::Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         http: None,
@@ -163,7 +163,8 @@ async fn few_online_play_free_for_all_whatever_they_ask() {
     .await
     .unwrap();
     let (a, _sa, _ra, _ca) = hello(&h, proto::MODE_GUN_GAME, "one").await;
-    let (b, _sb, _rb, _cb) = hello(&h, proto::MODE_FFA, "two").await;
+    let (b, _sb, _rb, _cb) = hello(&h, proto::MODE_BIG_TEAM, "two").await;
+    let (c, _sc, _rc, _cc) = hello(&h, proto::MODE_FFA, "three").await;
     let (
         Msg::Welcome {
             rules: r0,
@@ -171,12 +172,24 @@ async fn few_online_play_free_for_all_whatever_they_ask() {
             ..
         },
         Msg::Welcome { salt_commit: c1, .. },
-    ) = (a, b)
+        Msg::Welcome {
+            rules: r2,
+            salt_commit: c2,
+            ..
+        },
+    ) = (a, b, c)
     else {
         panic!("not welcomed")
     };
-    assert!(!r0.gun_game && !r0.teams, "Gun Game shut, free for all: {r0:?}");
-    assert_eq!(c0, c1, "in one room");
+    let big = sim::world::Rules::big_team();
+    assert!(
+        !r0.gun_game && r0.teams && r0.seats == big.seats,
+        "Gun Game shut, Big Team: {r0:?}"
+    );
+    assert_eq!(c0, c1, "in one room, open with nobody online");
+    // Free for all is its own, never shut.
+    assert!(!r2.teams && !r2.gun_game, "{r2:?}");
+    assert_ne!(c2, c0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -393,6 +393,8 @@ pub fn throw(
         me: u8::MAX,
         aim: Vec3::X,
         t,
+        on_body: None,
+        arm: sim::arms::NONE,
     };
     crate::look::fx::on_events(&mut fx, &scene, &[ev]);
 }

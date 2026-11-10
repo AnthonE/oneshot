@@ -121,6 +121,10 @@ const EDGE_LOOK: [f32; 4] = [0.5, 1.0, 1.5, 2.0];
 const EDGE_JUMP: [f32; 4] = [1.5, 3.0, 4.5, 6.0];
 /// In the air, along the way it is going: where it would come down.
 const EDGE_AIR: [f32; 4] = [0.5, 1.5, 2.5, 3.5];
+/// A ledge this far down or more is a jump of its own: walked off at a
+/// run, the fall carries a body on past [`EDGE_LOOK`] before the air
+/// turns it, so the void is looked for beyond it as far as a jump's.
+const EDGE_DROP: f32 = 1.0;
 /// The turns it tries, smallest first, when the way it means to go is
 /// over the edge: along it, then back from it. (sin, cos) of ±45°, ±90°,
 /// ±135°.
@@ -802,6 +806,14 @@ fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
     }
     let p = me.body.pos;
     let over = |dx: f32, dz: f32, look: &[f32]| look.iter().any(|&d| w.map.over_void(p.x + dx * d, p.z + dz * d, p.y));
+    // The way holds nobody: the void in a stride, or past a ledge it would
+    // run off ([`EDGE_DROP`]).
+    let drop = |dx: f32, dz: f32| {
+        EDGE_LOOK
+            .iter()
+            .any(|&d| w.map.floor(p.x + dx * d, p.z + dz * d, 0.0, p.y + STEP) < p.y - EDGE_DROP)
+    };
+    let lost = |dx: f32, dz: f32| over(dx, dz, &EDGE_LOOK) || (drop(dx, dz) && over(dx, dz, &EDGE_JUMP));
     let (sn, cs) = crate::geom::yaw_sincos(inp.yaw);
     // The stick in the world's x and z, as movement turns it.
     let fwd = inp.mz as f32 * (1.0 / 127.0);
@@ -823,7 +835,7 @@ fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
     }
     // Carried over it (a landing, a blast's push) whatever the stick says:
     // the stick pulls back against the way it is going.
-    if going_over(&EDGE_LOOK) {
+    if going_over(&EDGE_LOOK) || (speed > 0.5 && lost(v.x / speed, v.z / speed)) {
         inp.buttons &= !JUMP;
         set(inp, -v.x / speed, -v.z / speed, 1.0);
         return;
@@ -836,13 +848,13 @@ fn mind_the_edge(w: &World, slot: usize, inp: &mut Input) {
     if inp.held(JUMP) && (over(ux, uz, &EDGE_JUMP) || going_over(&EDGE_JUMP)) {
         inp.buttons &= !JUMP;
     }
-    if !over(ux, uz, &EDGE_LOOK) {
+    if !lost(ux, uz) {
         return;
     }
     inp.buttons &= !JUMP;
     for (s, c) in EDGE_TURNS {
         let (dx, dz) = (ux * c - uz * s, ux * s + uz * c);
-        if !over(dx, dz, &EDGE_LOOK) {
+        if !lost(dx, dz) {
             set(inp, dx, dz, len.min(1.0));
             return;
         }

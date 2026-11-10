@@ -251,12 +251,13 @@ fn shields_come_back_after_five_seconds() {
     let mut w = duel([MAGNUM, AR], 15.0);
     let c = chest(&w, 1);
     shoot(&mut w, c, FIRE, NO_LAG);
-    assert_eq!(w.fighters[1].shield, SHIELD_MAX - 28 * PT);
+    let hurt = SHIELD_MAX - sim::arms::arm(MAGNUM).dmg * PT;
+    assert_eq!(w.fighters[1].shield, hurt);
     let idle = [Input::default(); MAX_FIGHTERS];
     for _ in 0..ticks(SHIELD_DELAY_MS) - 2 {
         w.step(&idle, &NO_LAG);
     }
-    assert_eq!(w.fighters[1].shield, SHIELD_MAX - 28 * PT, "not before the delay");
+    assert_eq!(w.fighters[1].shield, hurt, "not before the delay");
     for _ in 0..TICK_HZ {
         w.step(&idle, &NO_LAG);
     }
@@ -394,8 +395,12 @@ fn a_frag_still_hurts_at_its_rim() {
         w.step(&inputs, &NO_LAG);
     }
     let took = (SHIELD_MAX - w.fighters[1].shield) / PT;
-    // Half of it, on shields.
-    assert!((GREN_EDGE / 2..GREN_DMG / 4).contains(&took), "took {took}");
+    // What shields take of it (`GREN_SHIELD_K`).
+    let on_shields = |pts: i32| (pts as f32 * GREN_SHIELD_K) as i32;
+    assert!(
+        (on_shields(GREN_EDGE)..on_shields(GREN_DMG) / 2).contains(&took),
+        "took {took}"
+    );
 }
 
 #[test]
@@ -673,7 +678,9 @@ fn a_melee_lunges_at_someone_just_past_reach() {
         let hurt = w.fighters[1].shield < SHIELD_MAX;
         assert_eq!(hurt, lands, "at {dist} m");
         if lands {
-            assert_eq!(w.fighters[1].shield, SHIELD_MAX - MELEE_DMG * PT);
+            // The shields and a little of the health.
+            assert_eq!(w.fighters[1].shield, 0);
+            assert_eq!(w.fighters[1].health, SHIELD_MAX + HEALTH_MAX - MELEE_DMG * PT);
             assert!(w.fighters[0].body.pos.x > 1.0, "the striker went to them");
         }
     }
@@ -1267,8 +1274,9 @@ fn a_stuck_sticky_stays_exactly_where_it_stuck() {
 }
 
 #[test]
-fn a_grenade_takes_half_off_shields() {
-    // Set off beside them, in full reach: 160 is 80 off a shield of 100.
+fn a_frag_in_full_reach_breaks_the_shields_and_never_kills() {
+    // Set off beside them, in full reach: the shields go (Halo 2's frag
+    // breaks its 70 the same way) and a part of the health with them.
     let mut w = duel([AR, MAGNUM], 60.0);
     thrown(&mut w, 0, 0);
     let i = (0..MAX_PROJ).find(|&i| w.proj[i].active).expect("thrown");
@@ -1279,8 +1287,13 @@ fn a_grenade_takes_half_off_shields() {
     let (shield, health) = (w.fighters[1].shield, w.fighters[1].health);
     let idle = [Input::default(); MAX_FIGHTERS];
     w.step(&idle, &NO_LAG);
-    assert_eq!(w.fighters[1].health, health, "the shields took it all");
-    assert_eq!(shield - w.fighters[1].shield, (GREN_DMG * PT) / 2);
+    assert_eq!(shield, SHIELD_MAX);
+    assert_eq!(w.fighters[1].shield, 0, "the shields broke");
+    let through = health - w.fighters[1].health;
+    assert!(
+        w.fighters[1].alive && through > 0 && through < HEALTH_MAX / 2,
+        "{through}"
+    );
 }
 
 #[test]

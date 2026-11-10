@@ -111,7 +111,8 @@ impl PartyView {
     }
 
     /// Whether PLAY may pick mode `id`: the server has it open, or the
-    /// party plays a room of its own. Shut ones are played as free for all.
+    /// party plays a room of its own. Shut ones are played as the server's
+    /// hub (Big Team).
     pub fn mode_open(&self, id: u8) -> bool {
         self.alone
             || self

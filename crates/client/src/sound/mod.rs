@@ -157,6 +157,17 @@ pub const PUMP_AT_S: f32 = 0.3;
 /// are ten), each hit past the first this much louder, to at most this.
 const HITS_LOUDER: f32 = 0.12;
 const HITS_LOUDEST: f32 = 1.5;
+/// Our round on a head whose shield holds: the shield's ring, this much
+/// higher, so an aim on the head is heard before the shield is down.
+const HEAD_RING_RATE: f32 = 1.4;
+const HEAD_RING_GAIN: f32 = 0.6;
+/// Our round that takes a shield down: its burst in our head, at once and
+/// as loud whatever the distance, a little higher than our own shield's
+/// (that one is ours breaking). The body's own burst out in the world,
+/// when it is drawn a moment later, is this one already heard.
+const OUR_POP_GAIN: f32 = 0.75;
+const OUR_POP_RATE: f32 = 1.2;
+const OUR_POP_S: f32 = 0.5;
 const PASS: Carry = Carry { near: 1.5, reach: 6.0 };
 /// A shot of ours, and one out in the world before its distance: the
 /// loudest things heard but a blast, a gun's hardest round just under the
@@ -201,6 +212,9 @@ struct Body {
     charging: bool,
     fall: f32,
     step: f32,
+    /// Seconds left in which its shield's burst is one we already played
+    /// (ours: [`OUR_POP_S`]).
+    popped: f32,
 }
 
 /// A vehicle, as last heard: where, and its speed (smoothed).
@@ -531,6 +545,16 @@ impl Ear {
     /// A sound of our own, in our head.
     fn mine(&mut self, name: &str, gain: f32) {
         self.head(name, gain, self.world);
+    }
+
+    /// [`Ear::mine`], played `rate` times as fast (higher).
+    fn mine_rate(&mut self, name: &str, gain: f32, rate: f32) {
+        let speed = self.pitch() * rate;
+        self.cue(name, None, gain, speed);
+        let Some(clip) = self.clip(name) else { return };
+        let mut at = Place::centre(gain * self.world);
+        at.rate = speed;
+        self.cmds.push(Cmd::Play { clip, at, delay: 0 });
     }
 
     /// [`Ear::mine`], `secs` from now.
@@ -1189,10 +1213,12 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
     // Who swung a fist this frame: a hit of theirs is a blow landing.
     let mut swung = [false; MAX_FIGHTERS];
     let mut struck_left = STRUCK_MAX;
-    // This frame's hits, by body: ours on each (its worst: 1 shield, 2
-    // health, 3 the head), on us (1 shield, 2 health), and others' on a
+    // This frame's hits, by body: ours on each (its worst: 1 shield, 2 the
+    // head with the shield holding, 3 health, 4 the head) and whether one
+    // broke its shield, on us (1 shield, 2 health), and others' on a
     // shield, each with how many and where.
     let mut ours_on = [(0u8, 0u8); MAX_FIGHTERS];
+    let mut ours_broke = [false; MAX_FIGHTERS];
     let mut on_us = (0u8, 0u8);
     let mut shield_on = [(0u8, Vec3::ZERO); MAX_FIGHTERS];
     for e in list {
@@ -1267,12 +1293,17 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
                 let b = e.b as usize;
                 if e.a == me && e.b != me && b < MAX_FIGHTERS {
                     let worst = match e.part {
-                        2 => 3,
+                        2 => 4,
+                        3 => 2,
                         _ if shield => 1,
-                        _ => 2,
+                        _ => 3,
                     };
                     let o = &mut ours_on[b];
                     *o = (o.0.max(worst), o.1.saturating_add(1));
+                    // As the hit marker tells it (`hud::broke`): the body
+                    // as last drawn still had its shield.
+                    let was = ear.bodies[b];
+                    ours_broke[b] |= crate::hud::broke(e.part, (was.seen && was.alive).then_some(was.shield));
                 }
                 if e.b == me {
                     on_us = (on_us.0.max(if shield { 1 } else { 2 }), on_us.1.saturating_add(1));
@@ -1387,14 +1418,21 @@ fn events(ear: &mut Ear, ears: &Ears, list: &[proto::EventState], me: u8) {
         }
     }
     let louder = |n: u8| (1.0 + HITS_LOUDER * f32::from(n.saturating_sub(1))).min(HITS_LOUDEST);
-    for &(worst, n) in &ours_on {
-        let (clip, gain) = match worst {
+    for (b, &(worst, n)) in ours_on.iter().enumerate() {
+        let (clip, gain, rate) = match worst {
             0 => continue,
-            1 => (ear.take("shield_hit", 3), HIT_SHIELD),
-            2 => ("hit_0".into(), HIT_BODY),
-            _ => (ear.take("headshot", 2), HIT_HEAD),
+            1 => (ear.take("shield_hit", 3), HIT_SHIELD, 1.0),
+            2 => (ear.take("shield_hit", 3), HEAD_RING_GAIN, HEAD_RING_RATE),
+            3 => ("hit_0".into(), HIT_BODY, 1.0),
+            _ => (ear.take("headshot", 2), HIT_HEAD, 1.0),
         };
-        ear.mine(&clip, gain * louder(n));
+        ear.mine_rate(&clip, gain * louder(n), rate);
+        // Once a break: the body is drawn a playout behind, so the next
+        // round can still find its shield up.
+        if ours_broke[b] && ear.bodies[b].popped <= 0.0 {
+            ear.mine_rate("shield_pop_0", OUR_POP_GAIN, OUR_POP_RATE);
+            ear.bodies[b].popped = OUR_POP_S;
+        }
     }
     match on_us {
         (0, _) => {}
@@ -1566,10 +1604,15 @@ fn everyone(ear: &mut Ear, ears: &Ears, others: &[Drawn], dt: f32) {
             charging: b.charging,
             fall: o.vel.y,
             step: b.step,
+            popped: (b.popped - dt).max(0.0),
         };
         if b.seen && o.alive && b.alive {
             if o.shield == 0 && b.shield > 0 {
-                ear.at(ears, "shield_pop_0", p + Vec3::Y, 1.0, SHIELD);
+                // Ours to break: heard already, in our head (`events`).
+                if b.popped <= 0.0 {
+                    ear.at(ears, "shield_pop_0", p + Vec3::Y, 1.0, SHIELD);
+                }
+                nb.popped = 0.0;
             }
             if o.shield > b.shield && !b.charging {
                 ear.at(ears, "shield_charge_0", p + Vec3::Y, 0.4, BODY);

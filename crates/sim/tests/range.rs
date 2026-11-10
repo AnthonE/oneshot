@@ -291,6 +291,12 @@ fn the_magnum_is_a_five_shot_sidearm() {
     let head = kill(MAGNUM, 20.0, Spot::Head, SALT).unwrap();
     assert_eq!(head.pulls, 5, "{head:?}");
     assert_eq!(kill(MAGNUM, 20.0, Spot::Chest, SALT).unwrap().pulls, 8);
+    // A sidearm: its kill is never quicker than the rifle's (Halo 2's
+    // rule of one gun a role; ours killed in half the rifle's time).
+    let rifle = kill(BR, 20.0, Spot::Head, SALT).unwrap();
+    assert!(head.ms >= rifle.ms, "{head:?} against the rifle's {rifle:?}");
+    // And a room's gun: past one it takes more.
+    assert!(kill(MAGNUM, 60.0, Spot::Head, SALT).unwrap().pulls > 5);
 }
 
 #[test]
@@ -354,9 +360,51 @@ fn a_rocket_starts_slow_and_kills_wide() {
     assert!((3.0..=3.6).contains(&r), "kills to {r} m");
 }
 
+/// Blows it takes to kill a target in reach that starts with `shield`
+/// (in points) and full health.
+fn blows(shield: i32) -> u32 {
+    let mut w = range([BR, arms::NONE], 1.5, SALT);
+    w.fighters[1].shield = shield * PT;
+    let mut inputs = [Input::default(); MAX_FIGHTERS];
+    // Facing the striker: a blow, not one from behind.
+    inputs[1].yaw = 32768;
+    let mut n = 0;
+    for _ in 0..TICK_HZ * 10 {
+        let f = w.fighters[0];
+        let (yaw, pitch) = look(&w, 0, spot(&w, 1, Spot::Chest));
+        inputs[0] = Input {
+            buttons: if f.melee_cool == 0 && f.last_buttons & MELEE == 0 {
+                MELEE
+            } else {
+                0
+            },
+            yaw,
+            pitch,
+            ..Input::default()
+        };
+        w.step(&inputs, &NO_LAG);
+        n += w
+            .events
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind == Ev::Hit && e.a == 0 && e.b == 1)
+            .count() as u32;
+        if !w.fighters[1].alive {
+            return n;
+        }
+    }
+    u32::MAX
+}
+
 #[test]
-fn melee_is_three_to_kill() {
-    assert_eq!(200 / MELEE_DMG + (200 % MELEE_DMG != 0) as i32, 3);
+fn melee_is_two_to_kill_and_finishes_the_unshielded() {
+    // Halo 2's and Halo 3's: two blows kill, one after the shields are gone
+    // does, and so does one after three bursts of the rifle (not two).
+    assert_eq!(blows(SHIELD_MAX / PT), 2);
+    assert_eq!(blows(0), 1);
+    let burst = 3 * arm(BR).dmg;
+    assert_eq!(blows(SHIELD_MAX / PT - 3 * burst), 1);
+    assert_eq!(blows(SHIELD_MAX / PT - 2 * burst), 2);
 }
 
 #[test]

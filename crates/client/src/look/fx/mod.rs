@@ -626,6 +626,12 @@ pub struct Scene<'a> {
     pub aim: Vec3,
     /// The time now, seconds.
     pub t: f32,
+    /// How far along our aim our round is sure to meet an enemy's body,
+    /// as drawn (`hud::round_on`): its line ends there and marks no wall
+    /// behind, and what it did there is the server's to say (`ours_met`).
+    pub on_body: Option<f32>,
+    /// The gun in our hand: what a hit of ours lands as.
+    pub arm: u8,
 }
 
 /// One frame's events: what they look like.
@@ -658,10 +664,56 @@ pub fn on_events(fx: &mut Fx, scene: &Scene, events: &[EventState]) {
                 // A hit on us: the hurt arc and the screen say it, never the
                 // frame (it would throw the crosshair off the aim).
                 hurt(fx, scene, e, from);
+                ours_met(fx, scene, e);
             }
             _ => {}
         }
     }
+}
+
+/// A round of ours the server says a shield took (a hit's part 0, or 3 on
+/// the head): the shield's spark on the body as it is drawn now, where our
+/// aim meets it, the moment we are told. Our own round's line is drawn
+/// when it is fired and can't know what it met; this is the answer, on the
+/// body, never on the wall behind it. (Health taken bleeds: [`hurt`].)
+fn ours_met(fx: &mut Fx, scene: &Scene, e: &EventState) {
+    use sim::consts::{HEAD_Y, HEAD_Y_CROUCH, HIP_Y, HIT_R, HIT_TOP, HIT_TOP_CROUCH};
+    if e.a != scene.me || e.b == scene.me || !(e.part == 0 || e.part == 3) {
+        return;
+    }
+    if !sim::arms::arm(scene.arm).kind.ray() {
+        return;
+    }
+    let Some(d) = scene.others.iter().find(|d| d.slot == e.b && d.alive) else {
+        return;
+    };
+    let feet = Vec3::new(d.pos.x, d.pos.y, d.pos.z);
+    let (head, top) = if d.crouched {
+        (HEAD_Y_CROUCH, HIT_TOP_CROUCH)
+    } else {
+        (HEAD_Y, HIT_TOP)
+    };
+    // The height our aim passes the body at, on the body; the head's own
+    // for a round the server put there.
+    let flat = Vec3::new(scene.aim.x, 0.0, scene.aim.z);
+    let along = flat.length_squared();
+    let up = if e.part == 3 {
+        head
+    } else if along > 1e-6 {
+        let t = ((feet - fx.eye).dot(flat) / along).max(0.0);
+        (fx.eye.y + scene.aim.y * t - feet.y).clamp(HIP_Y, top)
+    } else {
+        top * 0.7
+    };
+    let toward = (fx.eye - feet).with_y(0.0).normalize_or(-scene.aim);
+    let at = feet + Vec3::Y * up + toward * HIT_R;
+    fx.impact(
+        Weapon::of_arm(scene.arm),
+        Matter::Shield,
+        at,
+        toward,
+        surface::floor_under(scene.map, at, toward),
+    );
 }
 
 /// Health taken (a hit's part 1 or 2), where the server told us the body

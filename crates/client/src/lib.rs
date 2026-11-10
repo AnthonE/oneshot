@@ -472,6 +472,11 @@ fn app_on(link: Box<dyn Link>, opts: Opts, first: Screen) -> App {
                     name: Some("oneshot".into()),
                     canvas: Some("#game".into()),
                     fit_canvas_to_parent: true,
+                    // One frame waiting on the GPU, not wgpu's two: a
+                    // frame less between the hand and the screen under
+                    // vsync (a shooter's choice; a GPU that can't keep up
+                    // gives a little throughput for it).
+                    desired_maximum_frame_latency: core::num::NonZero::new(1),
                     ..default()
                 }),
                 ..default()
@@ -2003,6 +2008,8 @@ pub(crate) fn happened(
             me: if third { u8::MAX } else { s.core.slot },
             aim: dir,
             t: time.elapsed_secs(),
+            on_body: if third { None } else { hud::round_on(&s.core, others) },
+            arm: s.core.own().0.gun().arm,
         };
         look::fx::on_events(&mut fx, &scene, events);
         let (mf, me) = s.core.own();

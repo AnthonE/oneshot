@@ -102,7 +102,18 @@ struct Mode {
     tag: &'static str,
 }
 
-/// Siege is held off the list until it plays (`--mode siege` still finds it).
+/// What the play panel offers, in its order: Big Team, the pick it opens
+/// on (a match of bots to walk into with nobody online), and free for all.
+/// The rest of [`MODES`] are held off the list while the game is young (a
+/// link, `--mode`, a party's room and a friend's match still find them),
+/// the 1v1s among them: the bot duel and the rated one.
+const LISTED: [u8; 2] = [proto::MODE_BIG_TEAM, proto::MODE_FFA];
+/// The mode the title opens on, and the one picked when the server shuts
+/// the one that was (the server plays a shut mode as this: its hub).
+const DEFAULT_MODE: u8 = proto::MODE_BIG_TEAM;
+
+/// Every mode the title can name (a friend's match, a party's, a link's),
+/// Siege not among them until it plays (`--mode siege` still finds it).
 const MODES: [Mode; 9] = [
     Mode {
         id: proto::MODE_CASUAL,
@@ -358,7 +369,7 @@ pub fn install(app: &mut App, door: Door, start: Start, open: Screen) {
         .insert_resource(Front {
             mode: match start {
                 Start::Join(m) => m,
-                _ => proto::MODE_FFA,
+                _ => DEFAULT_MODE,
             },
             status: String::new(),
             bad: false,
@@ -684,14 +695,17 @@ fn panel(
             // What you wear, at a glance: a click opens the armory.
             look_row(p, player, party.wardrobe.as_ref());
 
-            p.spawn(ui::group("CASUAL"));
+            let listed = || LISTED.iter().map(|&id| mode(id));
+            // The two groups are named only while there are two.
+            let ranked = listed().any(|m| m.ranked);
+            p.spawn(ui::group(if ranked { "CASUAL" } else { "PLAY" }));
             // With few online, the server keeps players in fewer modes.
-            let shut = MODES.iter().any(|m| !m.ranked && !party.mode_open(m.id));
+            let shut = listed().any(|m| !m.ranked && !party.mode_open(m.id));
             if let (true, Some((_, online))) = (shut, party.modes) {
                 let line = format!("{online} online: more modes open as players come.");
                 p.spawn(ui::label(line, 12.0, ui::FAINT));
             }
-            for m in MODES.iter().filter(|m| !m.ranked) {
+            for m in listed().filter(|m| !m.ranked) {
                 let open = party.mode_open(m.id);
                 mode_row(
                     p,
@@ -701,18 +715,20 @@ fn panel(
                     if open { m.short } else { "MORE PLAYERS" },
                 );
             }
-            p.spawn(ui::group("RANKED"));
-            let open = signin.ranked();
-            if !open {
-                let why = match signin {
-                    SignIn::Off(why) => why.clone(),
-                    SignIn::In(_) => "Link a wallet to play ranked.".into(),
-                    _ => "Sign in, a wallet linked, to play ranked.".into(),
-                };
-                p.spawn(ui::label(why, 12.0, ui::FAINT));
-            }
-            for m in MODES.iter().filter(|m| m.ranked) {
-                mode_row(p, m, front.mode == m.id, open, m.short);
+            if ranked {
+                p.spawn(ui::group("RANKED"));
+                let open = signin.ranked();
+                if !open {
+                    let why = match signin {
+                        SignIn::Off(why) => why.clone(),
+                        SignIn::In(_) => "Link a wallet to play ranked.".into(),
+                        _ => "Sign in, a wallet linked, to play ranked.".into(),
+                    };
+                    p.spawn(ui::label(why, 12.0, ui::FAINT));
+                }
+                for m in listed().filter(|m| m.ranked) {
+                    mode_row(p, m, front.mode == m.id, open, m.short);
+                }
             }
         });
         play_foot(panel, front, party, knocking);
@@ -2706,10 +2722,10 @@ fn rebuild(
         return;
     }
     front.dirty = false;
-    // A mode the server shut since it was picked: free for all, where it
-    // would be played anyway.
+    // A mode the server shut since it was picked: the one it would be
+    // played as anyway.
     if !party.mode_open(front.mode) {
-        front.mode = proto::MODE_FFA;
+        front.mode = DEFAULT_MODE;
     }
     // Triple T shows his back while the emblem is being picked, and wears
     // the armory's pick there; on the other panels, what the server will

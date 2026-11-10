@@ -1,7 +1,8 @@
 // node ci/e2e.mjs [seconds] [mode] [map]: the real server and the game's
 // page (the Bevy client, crates/client/dist) in headless Chromium, WebGL2 on
-// SwiftShader. First the title: a casual mode's row and PLAY must get a
-// person into the match. Then the client drives itself (?autoplay=1: it walks the
+// SwiftShader. First the title: a listed mode's row (Big Team or free for
+// all, front.rs's `LISTED`; any other mode's run goes in by free for all)
+// and PLAY must get a person into the match. Then the client drives itself (?autoplay=1: it walks the
 // map's route, closes on whoever fog shows and fires; inputs only; ?lite=1:
 // a quarter of the pixels, no shadows or grass, for the software GPU;
 // ?capsules=1 past a duel) against bots
@@ -116,8 +117,10 @@ try {
       await p.mouse.up();
       await p.waitForTimeout(400);
     };
+    // The row pressed: the mode's own if the title lists it.
+    const row = [3, 6].includes(mode) ? mode : 3;
     try {
-      await press(`mode${mode}`);
+      await press(`mode${row}`);
       await press('go');
       const t = Date.now();
       while (Date.now() - t < 60000) {
@@ -131,7 +134,7 @@ try {
     mkdirSync('traces', { recursive: true });
     await p.screenshot({ path: `traces/e2e-title-${mode}.png`, timeout: SHOT_MS });
     const NAMES = ['vs the bot', 'duel', 'doubles', 'free for all', 'gun game', 'cup', 'big team'];
-    checks.push([`the title's ${NAMES[mode]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
+    checks.push([`the title's ${NAMES[row]} row and PLAY got us into a match`, !!m?.connected && m.screen === 'playing']);
     // Again and again: each match runs out its clock, the page rides its
     // end back to the title, and PLAY starts the next, on another map.
     if (again && m?.connected) {

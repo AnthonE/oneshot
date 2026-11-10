@@ -328,6 +328,8 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
         me: core.slot,
         aim: Vec3::from(stage.framing.dir),
         t: time.elapsed_secs(),
+        on_body: None,
+        arm: sim::arms::NONE,
     };
     let f = &stage.framing;
     let dir = Vec3::from(f.dir);

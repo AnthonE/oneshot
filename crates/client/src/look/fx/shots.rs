@@ -110,8 +110,12 @@ pub fn shot(fx: &mut Fx, scene: &Scene, e: &EventState, from: Vec3, to: Vec3) {
     // A ray is drawn as a tracer; anything else flies (`flying.rs`).
     let kind = sim::arms::arm(arm).kind;
     if own && !turret {
-        // Drawn when it broke (`own`): only what it met is new.
-        if kind.ray() {
+        // Drawn when it broke (`own`): only what it met is new. With our
+        // aim on a body the round is going there, not to the wall behind
+        // it (this line is to the map: the server's cone and the bodies
+        // are not ours to know): what it does there is the hit's to draw
+        // when the server tells it (`ours_met`, `hurt`).
+        if kind.ray() && (scene.on_body.is_none() || arm == SHOTGUN) {
             land(fx, scene, arm, from, dir, len, to);
         }
         return;
@@ -266,8 +270,14 @@ fn hand(fx: &mut Fx, scene: &Scene, f: &Fighter, eye: Vec3, cam: Quat, left: boo
         } else {
             fwd
         };
-        // Down the view to the first wall, or as far as the gun reaches.
+        // Down the view to the first wall, or as far as the gun reaches;
+        // no farther than a body our aim is on (a line through someone to
+        // the wall behind says the round went past).
         let reach = scene.map.ray(v3(eye), v3(dir), a.range.max(30.0));
+        let reach = match scene.on_body {
+            Some(t) if id != SHOTGUN => reach.min(t),
+            _ => reach,
+        };
         let hit = eye + dir * reach;
         if k == 0 || id == SHOTGUN {
             table::own_tracer(&mut fx.tracers, &look, muzzle, hit, OWN_TRACER_IN_M);
