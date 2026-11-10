@@ -425,7 +425,7 @@ const SCENES = [
       const lt = L.t - cap, k = Math.exp(-lt * 9);
       if (k > .04) { fg.save(); fg.globalAlpha = k * .5; fg.fillStyle = '#ffe9c0'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
       const s = lerp(1.4, 1, E.expo(ramp(lt, 0, .3)));
-      text(fg, 'CAPTURED.', W / 2, 560, { size: 150, track: 14, scale: s, alpha: ramp(lt, 0, .06) * (1 - ramp(L.t, L.d - .15, L.d)), shadow: 30, glow: 'rgba(232,185,49,.45)', glowR: 60, color: C.goldHi });
+      text(fg, 'CAPTURED.', W / 2, 470, { size: 150, track: 14, scale: s, alpha: ramp(lt, 0, .06) * (1 - ramp(L.t, L.d - .15, L.d)), shadow: 30, glow: 'rgba(232,185,49,.45)', glowR: 60, color: C.goldHi });
     }
     modeCard(L, 'CAPTURE THE FLAG', '4v4, first to three captures.', { at: .1 });
   } },
