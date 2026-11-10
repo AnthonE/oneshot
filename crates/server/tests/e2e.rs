@@ -26,6 +26,10 @@ async fn a_native_client_plays_the_bot() {
     let h = server::run(server::Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         http: None,
+        // Proving Grounds, where the bot is in view within the eight
+        // seconds: on a map drawn from the rotation it may spend them
+        // behind the fog, and "the bot plays" was then the draw's luck.
+        maps: vec![0],
         rules: Rules {
             score_limit: 1000,
             time_limit_ms: 0,
