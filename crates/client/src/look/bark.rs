@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -100,7 +101,8 @@ fn load(mut commands: Commands, assets: Res<AssetServer>) {
     });
 }
 
-/// Once both maps are in: their chains, as the level's sets get theirs. The
+/// Once both maps are in: their chains, as the level's sets get theirs, and
+/// the GPU's from there as theirs are (nothing reads them back). The
 /// relief's is averaged as data: its third lane is occlusion, not a z.
 fn chains(mut kit: ResMut<Kit>, mut images: ResMut<Assets<Image>>) {
     if kit.mipped || !images.contains(&kit.colour) || !images.contains(&kit.relief) {
@@ -109,6 +111,7 @@ fn chains(mut kit: ResMut<Kit>, mut images: ResMut<Assets<Image>>) {
     for h in [kit.colour.clone(), kit.relief.clone()] {
         if let Some(img) = images.get_mut(&h) {
             super::textures::mip_in_place(img, false);
+            img.asset_usage = RenderAssetUsages::RENDER_WORLD;
         }
     }
     kit.mipped = true;
