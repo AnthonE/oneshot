@@ -112,7 +112,7 @@ pub struct Grade {
     pub saturation: f32,
     /// Over the shadows and the midtones, about their middle.
     pub contrast: f32,
-    /// Added to the shadows.
+    /// Added to the shadows and the midtones.
     pub lift: f32,
 }
 
@@ -743,6 +743,52 @@ mod tests {
             // Across an 80 m sightline more than three fifths gets through.
             assert!((-m.fog_sigma() * 80.0).exp() > 0.6, "{}: the air", m.name);
             assert!(m.rain <= 0.4 && m.shade <= 0.5, "{}", m.name);
+        }
+    }
+
+    /// No mood's grade has a step in it: its contrast and its lift move a
+    /// little at a time from black to past white, weighed as Bevy 0.18's
+    /// shader weighs its three sections (`sectional_color_grading`: at the
+    /// foot of the midtones what isn't theirs goes to the highlights).
+    #[test]
+    fn no_grade_steps() {
+        use bevy::render::view::{ColorGrading, ColorGradingSection};
+        const MARGIN: f32 = 0.1;
+        let weights = |level: f32, mid: &core::ops::Range<f32>| {
+            if level < mid.start - MARGIN {
+                [1.0, 0.0, 0.0]
+            } else if level < mid.start + MARGIN {
+                let m = (level - mid.start) * 0.5 / MARGIN + 0.5;
+                [0.0, m, 1.0 - m]
+            } else if level < mid.end - MARGIN {
+                [0.0, 1.0, 0.0]
+            } else if level < mid.end + MARGIN {
+                let h = (level - mid.end) * 0.5 / MARGIN + 0.5;
+                [0.0, 1.0 - h, h]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        };
+        for id in 0..=8u8 {
+            let m = of(id);
+            let mut c = ColorGrading::default();
+            super::super::rig::grade(m.grade, &mut c);
+            let at = |level: f32| {
+                let w = weights(level, &c.global.midtones_range);
+                let mix = |of: fn(&ColorGradingSection) -> f32| {
+                    w[0] * of(&c.shadows) + w[1] * of(&c.midtones) + w[2] * of(&c.highlights)
+                };
+                [mix(|s| s.contrast), mix(|s| s.lift)]
+            };
+            let mut last = at(0.0);
+            for k in 1..=2000 {
+                let level = k as f32 / 1000.0;
+                let now = at(level);
+                for (a, b) in now.iter().zip(last) {
+                    assert!((a - b).abs() < 0.002, "{}: a step at {level}", m.name);
+                }
+                last = now;
+            }
         }
     }
 

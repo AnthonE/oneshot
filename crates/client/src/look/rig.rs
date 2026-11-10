@@ -308,20 +308,33 @@ pub fn hall_haze(mood: &super::mood::Mood) -> DistanceFog {
     }
 }
 
-/// A mood's grade on the eye's camera (`mood::Grade`). The film's own shots grade
-/// their own camera over it.
+/// Where a grade's midtones start, a level (the mean of a colour's three
+/// lanes, white 1): under any there is, so a frame has no shadows of Bevy's
+/// to grade apart. At the foot of its midtones Bevy 0.18 blends them with
+/// the highlights where it means the shadows (`sectional_color_grading`,
+/// `tonemapping_shared.wgsl`), so shadows graded apart from the highlights
+/// are a step at a tenth of white: every dim wall on a graded map in two
+/// flat tones with a hard line between, Pithead's halls most of all.
+const GRADE_MIDTONES_FROM: f32 = -0.2;
+
+/// A mood's grade (`mood::Grade`) on a camera's.
+pub fn grade(g: super::mood::Grade, c: &mut ColorGrading) {
+    c.global.temperature = g.temperature;
+    c.global.tint = g.tint;
+    c.global.post_saturation = g.saturation;
+    c.global.midtones_range = GRADE_MIDTONES_FROM..c.global.midtones_range.end;
+    c.midtones.contrast = g.contrast;
+    c.midtones.lift = g.lift;
+}
+
+/// A mood's grade on the eye's camera. The film's own shots grade their own
+/// camera over it.
 pub fn grade_for(mood: Res<super::mood::MoodNow>, mut cams: Query<&mut ColorGrading, With<EyeCam>>) {
     if !mood.is_changed() {
         return;
     }
-    let g = mood.mood.grade;
     for mut c in &mut cams {
-        c.global.temperature = g.temperature;
-        c.global.tint = g.tint;
-        c.global.post_saturation = g.saturation;
-        c.shadows.contrast = g.contrast;
-        c.midtones.contrast = g.contrast;
-        c.shadows.lift = g.lift;
+        grade(mood.mood.grade, &mut c);
     }
 }
 
