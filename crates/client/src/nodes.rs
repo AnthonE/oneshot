@@ -63,9 +63,10 @@ pub fn draw(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut vis: Query<&mut Visibility>,
     time: Res<Time>,
+    (gen, level): (Option<Res<crate::front::LinkGen>>, Res<crate::Built>),
 ) {
     let s = link.0.session();
-    if !s.ready {
+    if !s.ready || !level.is(gen.as_deref(), s.welcomes) {
         return;
     }
     let core = &s.core;
@@ -218,9 +219,10 @@ pub fn draw_minions(
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut placed: Query<(&mut Transform, &mut Visibility)>,
     time: Res<Time>,
+    (gen, level): (Option<Res<crate::front::LinkGen>>, Res<crate::Built>),
 ) {
     let s = link.0.session();
-    if !s.ready || !s.core.rules.siege {
+    if !s.ready || !s.core.rules.siege || !level.is(gen.as_deref(), s.welcomes) {
         return;
     }
     if minions.built != s.welcomes {

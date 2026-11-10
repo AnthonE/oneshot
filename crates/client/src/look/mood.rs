@@ -337,8 +337,8 @@ pub const RAIN_DUSK: Mood = Mood {
     grade: Grade {
         temperature: -0.045,
         tint: 0.003,
-        saturation: 1.08,
-        contrast: 1.06,
+        saturation: 1.0,
+        contrast: 1.0,
         lift: 0.0,
     },
     snow: false,
@@ -376,8 +376,8 @@ pub const SNOW_DUSK: Mood = Mood {
     grade: Grade {
         temperature: -0.06,
         tint: 0.004,
-        saturation: 1.08,
-        contrast: 1.07,
+        saturation: 1.0,
+        contrast: 1.0,
         lift: 0.0,
     },
     snow: true,
@@ -461,7 +461,7 @@ pub const BLIZZARD: Mood = Mood {
         temperature: -0.04,
         tint: 0.012,
         saturation: 0.9,
-        contrast: 1.08,
+        contrast: 1.0,
         lift: 0.0,
     },
     snow: true,
@@ -490,7 +490,7 @@ pub fn of(id: u8) -> Mood {
             grade: Grade {
                 temperature: -0.012,
                 tint: 0.0,
-                saturation: 1.03,
+                saturation: 1.0,
                 contrast: 1.0,
                 lift: 0.0,
             },
@@ -509,8 +509,8 @@ pub fn of(id: u8) -> Mood {
             grade: Grade {
                 temperature: -0.015,
                 tint: 0.0,
-                saturation: 1.05,
-                contrast: 1.06,
+                saturation: 1.0,
+                contrast: 1.0,
                 lift: 0.0,
             },
             ..INTERIOR

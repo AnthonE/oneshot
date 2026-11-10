@@ -165,7 +165,10 @@ impl Gate {
                         let truth = w
                             .proj
                             .live()
-                            .find(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            .filter(|(_, t)| t.owner == p.owner && (t.pos - p.pos).len() < 0.05)
+                            // Two of one owner's can lie a hair apart (both
+                            // stickies thrown at one spot): the one sent.
+                            .min_by(|a, b| (a.1.pos - p.pos).len().total_cmp(&(b.1.pos - p.pos).len()))
                             .map(|(_, t)| *t);
                         let t = truth.unwrap_or_else(|| panic!("tick {}: {p:?} is in no true projectile", w.tick));
                         assert!(
@@ -254,7 +257,8 @@ impl Gate {
                 // line of this client's eye: one lying still from the eye
                 // at some tick of the hold (where it lies was seen, and
                 // stays known), one flying from the eye now; never by who
-                // dropped it, so never where a hidden enemy fell.
+                // dropped it, so never where a hidden enemy fell. Or one it
+                // stood in reach of in the hold: what it can take, it sees.
                 sim::thing::Kind::Drop => {
                     let eye = me.eye();
                     for d in s.drops() {
@@ -270,7 +274,10 @@ impl Gate {
                             self.history.iter().any(|h| w.map.clear(h[self.me].eye(), look))
                         } else {
                             w.map.clear(eye, look)
-                        };
+                        } || self
+                            .history
+                            .iter()
+                            .any(|h| h[self.me].active() && t.reach(h[self.me].body.pos));
                         assert!(seen, "tick {}: a drop out of sight was sent: {d:?}", w.tick);
                     }
                 }

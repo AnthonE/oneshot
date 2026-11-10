@@ -161,12 +161,20 @@ pub const CAMO_BOT_HIDDEN: f32 = 0.6;
 pub const CAMO_BOT_M: f32 = 12.0;
 /// Where someone comes back (`World::respawn`): of the spawns their side
 /// may use, the one whose nearest living enemy is farthest, counted only
-/// to `SPAWN_FAR_M` (past it, far is far); one a living enemy can see
-/// counts `SPAWN_SEEN_M` less, one with a living teammate within
-/// `SPAWN_MATE_R` counts `SPAWN_MATE_M` more (Halo's: back beside your
-/// side); and each draws up to `SPAWN_JITTER_M` more, so the same spawn
-/// isn't a certainty to be camped.
+/// to `SPAWN_FAR_M` (`SPAWN_FAR_BIG_M` on a Big Team map; past it, far is
+/// far); one a living enemy can see counts `SPAWN_SEEN_M` less, one with a
+/// living teammate within `SPAWN_MATE_R` counts `SPAWN_MATE_M` more
+/// (Halo's: back beside your side), but each teammate within
+/// `SPAWN_CROWD_R` counts `SPAWN_CROWD_M` less and anyone standing on it
+/// (`SPAWN_TAKEN_R`) `SPAWN_TAKEN_M` less, so a side spreads over its
+/// spawns rather than piling onto one; and each draws up to
+/// `SPAWN_JITTER_M` more, so the same spawn isn't a certainty to be camped.
 pub const SPAWN_FAR_M: f32 = 30.0;
+pub const SPAWN_FAR_BIG_M: f32 = 70.0;
+pub const SPAWN_CROWD_R: f32 = 8.0;
+pub const SPAWN_CROWD_M: f32 = 7.0;
+pub const SPAWN_TAKEN_R: f32 = 2.0;
+pub const SPAWN_TAKEN_M: f32 = 100.0;
 pub const SPAWN_SEEN_M: f32 = 25.0;
 pub const SPAWN_MATE_R: f32 = 15.0;
 pub const SPAWN_MATE_M: f32 = 10.0;
@@ -251,9 +259,9 @@ pub const GREN_RELEASE_MS: u32 = 170;
 /// seen as one. Ours. Halo: Combat Evolved's frags chain (Halopedia).
 pub const GREN_CHAIN_MS: u32 = 70;
 pub const GREN_START: u8 = 2;
-/// Sticky grenades at a spawn: none, as Halo 2's multiplayer on most maps.
-/// They come from pads (`arms::STICKIES`) and from the dead.
-pub const STICKY_START: u8 = 0;
+/// Sticky grenades at a spawn, beside the frags; more come from pads
+/// (`arms::STICKIES`) and from the dead.
+pub const STICKY_START: u8 = 2;
 /// What a grenade pad gives (at most `GREN_MAX` carried).
 pub const GREN_PAD_GIVES: u8 = 2;
 /// A sticky (Halo 2's plasma grenade in multiplayer): thrown as a frag is. It
