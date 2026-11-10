@@ -14,9 +14,27 @@
  },
  "shots": [
   {
-   "name": "ctf",
-   "at": 36.0,
-   "len": 3.6,
+   "name": "flag-run",
+   "at": 89.8,
+   "len": 4.4,
+   "fov": 62,
+   "follow": {
+    "slot": 4,
+    "back": 3.6,
+    "up": 1.7,
+    "side": -0.7,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "ctf-a",
+   "at": 96.0,
+   "len": 2.4,
    "fov": 62,
    "follow": {
     "back": 3.4,
@@ -31,10 +49,91 @@
    }
   },
   {
-   "name": "kill-8",
-   "at": 100.95,
-   "len": 1.6,
-   "pov": true
+   "name": "ctf-b",
+   "at": 100.0,
+   "len": 2.4,
+   "fov": 60,
+   "follow": {
+    "back": 3.0,
+    "up": 1.4,
+    "side": -0.6,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "capture",
+   "at": 109.7,
+   "len": 3.4,
+   "fov": 56,
+   "follow": {
+    "slot": 4,
+    "back": 5.0,
+    "up": 2.4,
+    "side": 1.6,
+    "lag": 0.3
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.04
+   }
+  },
+  {
+   "name": "ctf-c",
+   "at": 114.2,
+   "len": 2.4,
+   "fov": 62,
+   "follow": {
+    "back": 3.4,
+    "up": 1.6,
+    "side": 0.6,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "flag-take",
+   "at": 117.6,
+   "len": 4.4,
+   "fov": 60,
+   "follow": {
+    "slot": 4,
+    "back": 3.6,
+    "up": 1.7,
+    "side": 0.7,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
+  },
+  {
+   "name": "ctf-d",
+   "at": 80.2,
+   "len": 2.4,
+   "fov": 62,
+   "follow": {
+    "back": 3.4,
+    "up": 1.6,
+    "side": 0.6,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 4,
+    "shake": 0.05
+   }
   }
  ]
 }

@@ -372,6 +372,20 @@ fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
                 .filter(|d| d.alive)
                 .map(|d| format!("{}@({:.0}, {:.0}, {:.0})", d.slot, d.pos.x, d.pos.y, d.pos.z))
                 .collect();
+            // Hulls with someone in them (seats are slot + 1), which is how
+            // the trailer's lists find a truck being driven.
+            for v in s.core.latest().vehicles().iter().filter(|v| v.seats != [0, 0]) {
+                println!(
+                    "{:7.1} s  vehicle {} kind {} at ({:.0}, {:.0}, {:.0}) seats {:?}",
+                    r.clock_ms / 1000.0,
+                    v.slot,
+                    v.kind,
+                    v.pos.x,
+                    v.pos.y,
+                    v.pos.z,
+                    v.seats
+                );
+            }
             println!(
                 "{:7.1} s  seat {} at ({:.1}, {:.1}, {:.1}) {}  {}/{}  sees {}",
                 r.clock_ms / 1000.0,
