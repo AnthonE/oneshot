@@ -415,9 +415,21 @@ async function sendReport(doc, beacon) {
    rather than a frozen canvas. A panic is followed by its trap; the
    first, which has the panic's words, is the one sent. */
 let crashed = false;
+const LOST_WORDS = 'THE GRAPHICS CARD STOPPED DRAWING. THAT WAS SENT TO US';
+const LOST = 'the graphics context was lost under WebGL2';
+/* Whether the WebGL2 module's context is gone. Asking a canvas again
+   for the kind of context it has hands back the one it has; one that
+   holds a WebGPU context answers null. */
+const contextLost = () => {
+  if (window.__oneshotGfx !== 'webgl2') return false;
+  try { return !!document.getElementById('game').getContext('webgl2')?.isContextLost(); } catch { return false; }
+};
 function stopped(line, kind = 'crash', words = 'THE GAME STOPPED. WHAT IT SAID WAS SENT TO US') {
   if (crashed || switching) return;
   crashed = true;
+  // The module can trip over a dead context before the browser's event
+  // says it is dead: the same thing, and said as it.
+  if (kind === 'crash' && contextLost()) [line, kind, words] = [`${LOST}: ${line}`, 'gpu', LOST_WORDS];
   reportDoc(kind, line).then((d) => sendReport(d, true)).catch(() => {});
   if (!boot.classList.contains('gone')) { say('The game stopped. Reload to try again', true); return; }
   try { document.exitPointerLock(); } catch { /* not locked */ }
@@ -439,9 +451,7 @@ addEventListener('unhandledrejection', (e) => { if (trap(e.reason)) stopped(Stri
    neither wgpu nor Bevy listens for it, so without this the game is a
    still picture with no word said and none sent. The WebGPU module's
    own is `__oneshotGpuError` above. */
-document.getElementById('game').addEventListener('webglcontextlost', () => {
-  stopped('the graphics context was lost under WebGL2', 'gpu', 'THE GRAPHICS CARD STOPPED DRAWING. THAT WAS SENT TO US');
-});
+document.getElementById('game').addEventListener('webglcontextlost', () => stopped(LOST, 'gpu', LOST_WORDS));
 
 /* ── the last breath ─────────────────────────────────────────────────
    A browser that is killed, a tab out of memory and a machine that
@@ -479,11 +489,14 @@ document.getElementById('game').addEventListener('webglcontextlost', () => {
   };
   requestAnimationFrame(beat);
   const gone = () => { try { localStorage.removeItem(mine); } catch { /* private window */ } };
+  // Left: a browser says a page is hidden after it says it is going, and
+  // that must not put the note back.
+  let left = false;
   const note = () => {
     const o = window.__oneshot;
     // Before the game has drawn there is nothing to say; what stopped it
     // or sent it to WebGL2 has been said already.
-    if (!o || !started) return;
+    if (!o || !started || left) return;
     if (crashed || switching) { gone(); return; }
     const v = {
       at: Date.now(), up_s: Math.round((performance.now() - started) / 1000), hidden: document.hidden,
@@ -498,8 +511,11 @@ document.getElementById('game').addEventListener('webglcontextlost', () => {
   };
   setInterval(note, EVERY_MS);
   document.addEventListener('visibilitychange', () => { drew = 0; note(); });
-  addEventListener('pagehide', gone);
-  addEventListener('pageshow', (e) => { if (e.persisted) note(); });
+  // Both: a page whose frames are slow can be gone before `pagehide`
+  // gets its turn, and a leave that didn't happen is noted again.
+  addEventListener('beforeunload', gone);
+  addEventListener('pagehide', () => { left = true; gone(); });
+  addEventListener('pageshow', (e) => { if (e.persisted) { left = false; note(); } });
 }
 
 /* A player's report: the game's Esc menu (REPORT A BUG, crates/client/
