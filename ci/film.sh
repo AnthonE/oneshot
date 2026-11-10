@@ -24,6 +24,10 @@
 # written by ci/film/plan.py from the tapes' scans (Big Team's by hand),
 # and ci/trailer/make.sh cuts the trailer from what they shoot.
 #
+# FILM_SERVER_ARGS adds to the server's flags for a record: the trailer's
+# sword fights are `FILM_SERVER_ARGS='--loadout sword,br'`, everyone spawning
+# with the sword.
+#
 # A tape runs from the join, and the level takes a minute to build on
 # lavapipe: ask for the load plus the play you want (170 s for a minute
 # and a half of it). One recorder at a time: a client is about 5 GB.
@@ -104,7 +108,7 @@ record)
   case $tape in /*) ;; *) tape=$root/$tape ;; esac
   mkdir -p "$(dirname "$tape")"
   display
-  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map "$map" >"$tmp/server.out" 2>"$tmp/server.err" &
+  target/release/oneshot-server --bind 127.0.0.1:0 --http 127.0.0.1:0 --all-modes --map "$map" ${FILM_SERVER_ARGS:-} >"$tmp/server.out" 2>"$tmp/server.err" &
   pids+=($!)
   url=
   for _ in $(seq 200); do

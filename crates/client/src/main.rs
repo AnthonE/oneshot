@@ -292,6 +292,8 @@ fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
     let step = 1000.0 / sim::consts::TICK_HZ as f64 * client_net::core::SEND_EVERY as f64;
     let mut next = 0.0;
     let every = every_s.max(0.1) * 1000.0;
+    let mut flags: [Option<(u8, u8)>; 2] = [None; 2];
+    let mut score: Vec<i32> = Vec::new();
     while r.clock_ms < end + step {
         r.clock_ms += step;
         r.frame(&mut s);
@@ -300,14 +302,66 @@ fn scan(path: &std::path::Path, every_s: f64) -> Result<(), String> {
                 proto::Msg::Seat { slot, name, .. } => {
                     names.insert(slot, name.as_str().to_string());
                 }
-                proto::Msg::Kill { killer, victim, .. } => {
+                proto::Msg::Kill {
+                    killer,
+                    victim,
+                    cause,
+                    head,
+                } => {
                     let who = |k: u8| names.get(&k).cloned().unwrap_or_else(|| format!("seat {k}"));
-                    println!("{:7.1} s  {} killed {}", r.clock_ms / 1000.0, who(killer), who(victim));
+                    println!(
+                        "{:7.1} s  {} killed {} [{}{}]",
+                        r.clock_ms / 1000.0,
+                        who(killer),
+                        who(victim),
+                        oneshot_client::tally::how(cause),
+                        if head { ", head" } else { "" }
+                    );
                 }
                 _ => {}
             }
         }
         s.core.drain_events(r.clock_ms);
+        // Capture the Flag: each flag's change of hands, and each change
+        // of the score (a capture, in that mode), as the trailer's lists
+        // look for them.
+        {
+            let snap = s.core.latest();
+            for (i, f) in snap.flags().iter().enumerate() {
+                let now = (f.state, f.carrier);
+                if flags[i] != Some(now) {
+                    let who = names
+                        .get(&f.carrier)
+                        .cloned()
+                        .unwrap_or_else(|| format!("seat {}", f.carrier));
+                    let side = if i == 0 { "red" } else { "blue" };
+                    match f.state {
+                        sim::world::FLAG_HELD => println!(
+                            "{:7.1} s  flag {side} taken by {who} (seat {})",
+                            r.clock_ms / 1000.0,
+                            f.carrier
+                        ),
+                        sim::world::FLAG_DOWN => println!(
+                            "{:7.1} s  flag {side} down at ({:.1}, {:.1}, {:.1})",
+                            r.clock_ms / 1000.0,
+                            f.pos.x,
+                            f.pos.y,
+                            f.pos.z
+                        ),
+                        _ if flags[i].is_some() => println!("{:7.1} s  flag {side} home", r.clock_ms / 1000.0),
+                        _ => {}
+                    }
+                    flags[i] = Some(now);
+                }
+            }
+            let sc = &snap.score[..snap.n_score as usize];
+            if sc != score.as_slice() {
+                if !score.is_empty() && sc.len() == 2 {
+                    println!("{:7.1} s  score {} : {}", r.clock_ms / 1000.0, sc[0], sc[1]);
+                }
+                score = sc.to_vec();
+            }
+        }
         if r.clock_ms >= next && s.ready {
             next += every;
             let (f, p) = s.core.own();
