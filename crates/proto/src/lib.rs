@@ -1640,7 +1640,15 @@ pub const HEADWEAR: [&str; 14] = [
     "ten-gallon",
     "beanie",
 ];
-pub const FOOTWEAR: [&str; 6] = ["none", "loggers", "hightops", "spurs", "magboots", "wellies"];
+pub const FOOTWEAR: [&str; 7] = [
+    "none",
+    "loggers",
+    "hightops",
+    "spurs",
+    "magboots",
+    "wellies",
+    "pillboots",
+];
 pub const GEAR_NONE: u8 = 0;
 
 /// `g` if it names gear in `slot` ([`HEADWEAR`], [`FOOTWEAR`]), else none.

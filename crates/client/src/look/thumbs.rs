@@ -80,7 +80,7 @@ const fn pair(g: u8) -> Shot {
 /// radians.
 const PAIR: [(f32, f32); 2] = [(0.17, -0.2), (-0.17, 0.2)];
 
-const SHOTS: [Shot; 18] = [
+const SHOTS: [Shot; 19] = [
     head(1, Vec3::new(0.0, 0.0, -0.17), 1.1),
     head(2, Vec3::new(0.0, 0.0, -0.1), 1.1),
     head(3, Vec3::new(0.0, 0.0, -0.1), 1.1),
@@ -99,6 +99,7 @@ const SHOTS: [Shot; 18] = [
     pair(3),
     pair(4),
     pair(5),
+    pair(6),
 ];
 
 /// Each piece's picture, by slot and id (none for no gear, or one with no
