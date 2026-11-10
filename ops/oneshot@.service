@@ -92,6 +92,13 @@ LimitNOFILE=65536
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/master/oneshot-data
+# The slots run as the deploy's own user: what that user signs in elsewhere
+# with (its ssh keys publish the page and the launcher's depots) is not the
+# server's to read, should a hole in it ever let a stranger read files.
+# Those that aren't there are skipped.
+InaccessiblePaths=-/home/master/.ssh -/home/master/.gnupg -/home/master/.config -/home/master/.netrc
+InaccessiblePaths=-/home/master/.git-credentials -/home/master/.cargo/credentials.toml -/home/master/.foundry
+InaccessiblePaths=-/home/master/.aws -/home/master/.docker
 PrivateTmp=true
 NoNewPrivileges=true
 # And the rest of the sandbox: the server needs its sockets, its files and
