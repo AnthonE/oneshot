@@ -58,12 +58,13 @@ BILL = 1.28
 # this far forward.
 MOUTH = 0.84
 MOUTH_DEEP = 0.26
-# (Three bays: a row of upright ribs with the fire behind them was a grin.)
+# (No upright ribs: a row of them with the fire behind was a grin, and two
+# a window's bars.)
 VANES = 3
-RIBS = 2
+RIBS = 0
 # Its core: how far in from the tail's end its middle is, how long it is,
 # and what share of the mouth's width and height.
-CORE = (0.17, 0.14, 0.8, 0.72)
+CORE = (0.2, 0.1, 0.6, 0.5)
 COWL = -1.46
 # The blister over the pilot and the spine it runs back into: its
 # half-width and its crest, tail to nose; glass ahead of `GLASS`, and a
@@ -99,7 +100,7 @@ F_THIN = 0.11
 F_STEP = 0.011
 F_LIT = 0.055
 # The jack at each feather's root: how long, wide and tall, metres.
-JACK = (0.1, 0.05, 0.03)
+JACK = (0.15, 0.075, 0.042)
 # The blades of its tail: from where to where, how far out they start and
 # how far they spread, how high they start and how far they rise; half
 # their width at its widest and their width along their length as shares of
@@ -160,7 +161,7 @@ for side in (1, -1):
 # to the shoulder, the engine's fire in them, walls and all (the chase
 # camera sees their forward walls, not their floors).
 for x in (-1.06, -1.2, -1.34):
-    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.075, 0.02, floor='vein', flat=0.45,
+    seam(body, plane((x, 0, 0.8), (1, 0, 0.5)), 0.075, 0.02, floor='vein', wall='iron', flat=0.45,
          within=lambda q: both(top(q), Y(q) - C_WIDE(X(q)) - 0.13, B_WIDE(X(q)) - 0.12 - Y(q)))
 # Louvres down each flank of the bill's upper mandible, raked as its plate's
 # seam is. (It had an eye of light there each side: a face.)
@@ -169,7 +170,9 @@ for x in LOUVRES:
          within=lambda q: both(gape(q) - 0.07, Y(q) - 0.1, B_TOP(X(q)) - 0.09 - Z(q)))
 # Hairlines across its back, where its panels come off.
 for x in (-0.5, 0.32):
-    seam(body, plane((x, 0, 0), (1, 0, 0)), 0.014, 0.006, where=lambda q: (top(q) > 0) & (Y(q) > C_WIDE(X(q)) + 0.1))
+    seam(body, plane((x, 0, 0), (1, 0, 0)), **SEAM, where=lambda q: (top(q) > 0) & (Y(q) > C_WIDE(X(q)) + 0.1))
+# And one across the bill: its upper mandible is two plates.
+seam(body, plane((1.8, 0, 0.6), (1, 0, 0.3)), **SEAM, where=lambda q: gape(q) > 0.04)
 # Under it: the keel's hairline of light and a seam across.
 seam(body, plane((0, 0, 0), (0, 1, 0)), 0.022, 0.012, **GLOW, within=lambda q: both(under(q), run(-1.3, 1.15)(q)))
 seam(body, plane((0.9, 0, 0), (1, 0, 0)), **SEAM, where=lambda q: under(q) > 0)
@@ -199,7 +202,7 @@ repaint(body, 'shell_pale', where=lambda q: (beak(q) > 0.03) & (gape(q) > 0), of
 repaint(body, 'shell_deep', where=lambda q: (beak(q) > 0.03) & (gape(q) < 0), of='shell')
 parts.append(body)
 
-parts += mouth((TAIL, 0, MZ), MW, MH, MOUTH_DEEP, CORE, VANES, n=B_N, ribs=RIBS)
+parts += mouth((TAIL, 0, MZ), MW, MH, MOUTH_DEEP, CORE, VANES, n=B_N, ribs=RIBS, wall='iron')
 # The lenses under it: the lift's, a grille of light under each wing's
 # root, and the port under the chin its bomb leaves by.
 for side in (1, -1):
@@ -298,12 +301,12 @@ o = solid(parts, 'flier')
 # back before the engine's cowl, and a row down each wing's arm.
 pins = []
 for side in (1, -1):
-    for x in np.linspace(-1.3, 1.0, 9):
-        for lean in (-0.07, 0.075):
+    for x in np.linspace(-1.3, 1.0, 7):
+        for lean in (-0.08, 0.085):
             pins.append((x, side * (0.6 - 0.2 * x + lean), B_TOP(x)))
-    for y in np.linspace(0.75, 2.35, 9):
+    for y in np.linspace(0.75, 2.35, 7):
         pins.append((W_LE(y) - 0.3 * ARM(y), side * y, W_Z(y) + W_T(y)))
-for a in np.linspace(0.12, math.pi - 0.12, 11):
+for a in np.linspace(0.12, math.pi - 0.12, 8):
     x = COWL + 0.075
     pins.append((x, 1.1 * B_WIDE(x) * math.cos(a), B_CHINE(x) + 1.1 * (B_TOP(x) - B_CHINE(x)) * math.sin(a)))
 o = solid([o, studs(o, pins)], 'flier')

@@ -78,7 +78,7 @@ K_AT = (-1.43, -1.3, -1.12, -0.95, -0.8, -0.68, -0.6)
 # in to the grip; how thick at its foot and at its end (a blade, half as
 # thick across as along).
 HORN = ((0.4, 0.2, 0.73), (0.3, 0.49, 1.3), (GRIP[0], 0.385, GRIP[2]))
-HORN_R = (0.058, 0.024)
+HORN_R = (0.074, 0.03)
 # The brace under each: from the cowl's flank up to the arm's first knuckle.
 BRACE = (0.62, 0.17, 0.6)
 # Its knuckles: at which of its bow's eight points.
@@ -154,8 +154,8 @@ for side in (1, -1):
     for lean in (-0.9, 0.9):
         seam(hulls, plane((0, side * H_OUT(-1.1), MZ + 0.02), (0, side * 1.0, lean)), **SEAM,
              within=lambda q: both(run(STERN + 0.12, NECK[0] + 0.02)(q), side * q[:, 1], Z(q) - MZ))
-# A hairline round each pod, where its cowl comes off.
-seam(hulls, plane((-1.27, 0, 0), (1, 0, 0.12)), 0.014, 0.006, where=lambda q: X(q) < NECK[0])
+# A gap round each pod, where its cowl comes off.
+seam(hulls, plane((-1.27, 0, 0), (1, 0, 0.12)), **GAP, where=lambda q: X(q) < NECK[0])
 cross = plane((0.72, 0, 0), (1, 0, 0.45))
 seam(hulls, cross, **SEAM, where=lambda q: Z(q) > mid(q))
 # A hairline along each blade's flank, under the lip of its back's plate,
@@ -183,11 +183,6 @@ parts += [
 # The blades dark, the pods violet over a darker hull.
 repaint(hulls, 'shell_deep', where=lambda q: (Z(q) < mid(q) + 0.03) | (X(q) > NECK[1] + 0.04), of='shell')
 parts.append(hulls)
-# A vein of the engine's fire down each pod's back: a thread laid along its
-# ridge, asleep until the engine wakes it (`craft.rs`'s `BURNS`).
-for side in (1, -1):
-    path = [(x, side * H_OUT(x), H_TOP(x) + 0.022) for x in np.linspace(STERN + 0.2, NECK[0] - 0.06, 8)]
-    parts.append(stem(path, [0.004, 0.012, 0.014, 0.014, 0.014, 0.014, 0.012, 0.004], n=8, material='vein', name='vein', flat=0.7))
 
 # The deck between the pods, drawn in to a bow ahead, the rider's feet on a
 # board each side of the saddle.
@@ -243,8 +238,17 @@ parts.append(saddle)
 rings = [oval(x, 0, DECK[2] - 0.02, K_WIDE(x), K_TOP(x) - DECK[2] + 0.02, 0.04, n=14, p=2.2) for x in K_AT]
 case = solid(loft(rings, 'shell', name='case'), 'case')
 seam(case, plane((0, 0, 0), (0, 1, 0)), 0.02, 0.012, **GLOW, within=lambda q: both(Z(q) - DECK[2] - 0.08, run(-1.36, -0.7)(q)))
+# Its plates: a gap each side of its spine and one across it, louvres down
+# its aft slope, its shoulders the deeper violet. From the saddle it is the
+# middle of the frame: three plates and a row of slots, not one dome.
+wings = {side: plane((0, side * 0.19, 0), (-0.25, side, 0)) for side in (1, -1)}
 for side in (1, -1):
-    seam(case, plane((0, side * 0.19, 0), (-0.25, side, 0)), **SEAM, within=lambda q: both(Z(q) - DECK[2] - 0.06, run(-1.3, -0.72)(q)))
+    seam(case, wings[side], **GAP, within=lambda q: both(Z(q) - DECK[2] - 0.06, run(-1.3, -0.72)(q)))
+seam(case, plane((-0.98, 0, 0.6), (1, 0, 0.35)), **GAP, where=lambda q: (Z(q) > DECK[2] + 0.07) & (Y(q) > 0.03))
+for x in (-1.19, -1.26, -1.33):
+    seam(case, plane((x, 0, 0.6), (1, 0, -0.45)), 0.03, 0.014, flat=0.5,
+         within=lambda q: both(Y(q) - 0.045, 0.15 - Y(q), Z(q) - DECK[2] - 0.07))
+repaint(case, 'shell_deep', where=lambda q: (wings[1](q) > 0.02) | (wings[-1](q) > 0.02), of='shell')
 parts.append(case)
 
 # The control arms: blades from the cowl's shoulders raked up, out and back
@@ -261,7 +265,6 @@ for side in (1, -1):
         at = np.array(path[i][:])
         joints.append(plane(at, (path[i + 1] - path[i - 1])[:]))
         seam(horn, joints[-1], 0.03, 0.01, flat=0.5, where=lambda q, at=at: np.linalg.norm(q - at, axis=1) < 0.16)
-    repaint(horn, 'shell', where=lambda q: (joints[0](q) > 0.016) & (joints[1](q) < -0.016), of='shell_deep')
     parts.append(horn)
     socket = sphere(1.0, at=(HORN[0][0], side * HORN[0][1], HORN[0][2] + 0.035), material=None, scale=(0.12, 0.08, 0.035),
                     segments=16)
@@ -272,9 +275,11 @@ for side in (1, -1):
     knob.data.materials.append(skin('shell_deep'))
     cap = sphere(GRIP_R * 1.25, at=(GRIP[0], side * (GRIP[1] - 0.1), GRIP[2]), material=None, segments=12)
     cap.data.materials.append(skin('iron'))
-    brace = stem([(BRACE[0], side * BRACE[1], BRACE[2]), tuple((Vector((BRACE[0], side * BRACE[1], BRACE[2])) + path[KNUCKLES[0]]) / 2
-                                                             + Vector((0.03, side * 0.02, 0.0))), tuple(path[KNUCKLES[0]])],
-                 [0.02, 0.013, 0.013], n=8, material='iron', name='brace')
+    # Its jack: a barrel of iron from the cowl's flank, and the ram out of
+    # it up to the arm's first knuckle.
+    foot, head = Vector((BRACE[0], side * BRACE[1], BRACE[2])), Vector(path[KNUCKLES[0]])
+    brace = stem([tuple(foot), tuple(foot.lerp(head, 0.5)), tuple(foot.lerp(head, 0.52)), tuple(head)],
+                 [0.034, 0.032, 0.017, 0.017], n=8, material='iron', name='brace', levels=0)
     parts += [socket, grip, knob, cap, brace]
 
 # The fins: one canted out from each shoulder of the wing case, a lamp at
@@ -312,13 +317,19 @@ o = solid(parts, 'skimmer')
 # pod's back plate, round the wing case's foot and along each fin's.
 pins = []
 for side in (1, -1):
-    for a in np.linspace(0.0, TAU, 12, endpoint=False):
+    for a in np.linspace(0.0, TAU, 9, endpoint=False):
         pins.append((STERN + 0.095, side * H_OUT(STERN) + 1.2 * H_WIDE(STERN) * math.cos(a), MZ + 1.2 * (H_TOP(STERN) - MZ) * math.sin(a)))
-    for x in np.linspace(STERN + 0.2, NECK[0] - 0.1, 6):
+    for x in np.linspace(STERN + 0.2, NECK[0] - 0.1, 5):
         for lean in (1, -1):
-            pins.append((x, side * H_OUT(x) + lean * 1.1 * H_WIDE(x), (H_TOP(x) + H_KEEL(x)) / 2 + 0.085))
-    for x in np.linspace(-1.3, -0.76, 5):
+            pins.append((x, side * H_OUT(x) + lean * 1.1 * H_WIDE(x), (H_TOP(x) + H_KEEL(x)) / 2 + 0.09))
+    for x in np.linspace(-1.3, -0.76, 4):
         pins.append((x, side * (K_WIDE(x) + 0.02), DECK[2] + 0.1))
+    # Down each blade's strake, and round the cowl's brow.
+    for x in np.linspace(NECK[1] + 0.22, 0.6, 4):
+        pins.append((x, side * (H_OUT(x) + 1.2 * H_WIDE(x)), H_TOP(x) - 0.035))
+    for z in (0.56, 0.66):
+        x = 0.74 - 0.6 * z - 0.06
+        pins.append((x, side * S_WIDE(x), z))
     for k in (0.12, 0.5, 0.88):
         pins.append((f0 + (f1 - f0) * k, side * (y0 + 0.05), z0 + 0.07))
 o = solid([o, studs(o, pins)], 'skimmer')

@@ -71,14 +71,15 @@ const SCUFF_FROM: f32 = 0.64;
 const SCUFF_ROUGH: f32 = 0.25;
 const SCUFF_PALE: f32 = 0.3;
 const SCUFF_DULL: f32 = 0.7;
-// All its grain is whole to here and gone by here, metres from the eye.
-const GRAIN_NEAR: f32 = 3.5;
-const GRAIN_FAR: f32 = 8.0;
+// All its grain is whole to here and gone by here, metres from the eye
+// (past a flier's own chase camera: its back is what its pilot sees).
+const GRAIN_NEAR: f32 = 6.0;
+const GRAIN_FAR: f32 = 15.0;
 // The streaks of grime down a steep face: cycles a metre along the craft,
 // how many times longer they run down it, the noise's level one shows from,
 // how much darker and rougher it is.
-const RUN_FREQ: f32 = 34.0;
-const RUN_LONG: f32 = 14.0;
+const RUN_FREQ: f32 = 16.0;
+const RUN_LONG: f32 = 9.0;
 const RUN_FROM: f32 = 0.6;
 const RUN_DARK: f32 = 0.28;
 const RUN_ROUGH: f32 = 0.14;
@@ -88,10 +89,10 @@ const RUN_ROUGH: f32 = 0.14;
 // how much of a worn edge is bare from too far to see a chip.
 const BARE: vec3<f32> = vec3<f32>(0.33, 0.34, 0.38);
 const BARE_ROUGH: f32 = 0.42;
-const CHIP_FREQ: f32 = 55.0;
-const CHIP_FROM: f32 = 0.62;
-const CHIP_RAG: f32 = 0.85;
-const CHIP_FAR: f32 = 0.3;
+const CHIP_FREQ: f32 = 26.0;
+const CHIP_FROM: f32 = 0.6;
+const CHIP_RAG: f32 = 0.55;
+const CHIP_FAR: f32 = 0.08;
 // The dust (linear), and its roughness; how much of it lies in full shade,
 // on what faces straight up, and at the belly; the height over the ground,
 // metres, the thrown dust is whole to and gone by; its patches' cycles a
@@ -107,6 +108,13 @@ const DUST_COVER: f32 = 0.6;
 // The lacquer's own blur, in the photograph's levels: sharper than the
 // alloy under it.
 const LACQUER_LEVEL: f32 = 0.8;
+// What it reflects of the map's own fill seen edge on (face on it has all
+// of it: that is its colour in shade), and of the white sheen every surface
+// has seen edge on: a share each (`gun_skin.wgsl`'s reason: seen along its
+// length, as a craft's back is from its own saddle, all of that sheen is a
+// pale craft).
+const FILL_GRAZE: f32 = 0.35;
+const SHEEN: f32 = 0.15;
 
 fn hash3(c: vec3<i32>) -> f32 {
     // WGSL will not mix `^` with `*` unparenthesised.
@@ -217,6 +225,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr_input.material.perceptual_roughness = rough;
     pbr_input.material.metallic = clamp(metal, 0.0, 1.0);
 
+    let own_spec = pbr_input.specular_occlusion;
+    pbr_input.specular_occlusion = own_spec * mix(FILL_GRAZE, 1.0, nv);
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
@@ -232,8 +242,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let f0 = mix(vec3<f32>(0.04), c, pbr_input.material.metallic);
         let ab = env_brdf(rough, nv);
         let lacquer = (0.04 + 0.96 * pow(1.0 - nv, 5.0)) * shell.sky.z * (1.0 - dull);
-        let seen = pbr_input.diffuse_occlusion * pbr_input.specular_occlusion * shade * shade;
-        out.color = vec4<f32>(out.color.rgb + (sky * (f0 * ab.x + ab.y * 0.25) + sheen * lacquer) * shell.sky.x * seen, out.color.a);
+        let seen = pbr_input.diffuse_occlusion * own_spec * shade * shade;
+        out.color = vec4<f32>(out.color.rgb + (sky * (f0 * ab.x + ab.y * SHEEN) + sheen * lacquer) * shell.sky.x * seen, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

@@ -33,18 +33,20 @@ TAU = math.tau
 # (an engine, a lift, a lamp), and past white where it is, so it blooms as a
 # lamp does and is not a stripe of paint.
 PAINTS = {
-    'shell': ('#402a58', 0.85, 0.24, None, 0.0),
-    'shell_deep': ('#261a36', 0.85, 0.30, None, 0.0),
-    'shell_pale': ('#4d3a69', 0.85, 0.22, None, 0.0),
+    'shell': ('#402d57', 0.85, 0.24, None, 0.0),
+    'shell_deep': ('#271c36', 0.85, 0.30, None, 0.0),
+    'shell_pale': ('#4c3b66', 0.85, 0.22, None, 0.0),
     'iron': ('#1d1d22', 0.90, 0.55, None, 0.0),
+    # Bare alloy, for what stands in a dark throat and must still be seen.
+    'alloy': ('#5a5b63', 0.95, 0.40, None, 0.0),
     'glass': ('#07070d', 0.60, 0.07, None, 0.0),
     'pad': ('#141218', 0.00, 0.85, None, 0.0),
     'light': ('#06232a', 0.00, 0.30, ('#8ff6ff', 9.0), 0.0),
     'light_dim': ('#06232a', 0.00, 0.30, ('#4ff2ff', 1.6), 0.0),
     'throat': ('#0a2a33', 0.00, 0.40, ('#7df6ff', 9.0), 0.0),
     'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.7), 0.0),
-    'vein': ('#06232a', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
-    'ember': ('#2a0620', 0.00, 0.30, ('#ff4fd8', 1.8), 0.0),
+    'vein': ('#0c0c10', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
+    'ember': ('#1a0614', 0.00, 0.30, ('#ff4fd8', 0.5), 0.0),
 }
 # Paints that take a plate's tone and a worn edge (`shade`); the rest take
 # the traced shade alone, and a light none of it.
@@ -265,7 +267,7 @@ def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.
     return parts
 
 
-def stator(at, w, h, deep, blades=9, hub=0.3, pitch=34, chord=0.075, thick=0.007, sit=0.4, paint='iron'):
+def stator(at, w, h, deep, blades=9, hub=0.3, pitch=34, chord=0.075, thick=0.007, sit=0.4, paint='alloy'):
     """A turbine's stator down the throat of a `mouth` at `at` (`w` to each
     side, `h` over and under, `deep` in): `blades` vanes of dark iron from a
     hub out to the wall, each turned `pitch` degrees to the flow, `chord`
@@ -296,7 +298,7 @@ def stator(at, w, h, deep, blades=9, hub=0.3, pitch=34, chord=0.075, thick=0.007
     return [smooth(o, 30), boss]
 
 
-def studs(o, points, r=0.011, rise=0.0035, n=6, paint='iron', reach=0.12):
+def studs(o, points, r=0.019, rise=0.007, n=6, paint='iron', reach=0.12):
     """Fasteners on `o`'s skin: at each of `points` (hull space, near it) a
     low flat head `r` across and `rise` proud, set on the skin nearest that
     point and square to it. A point further than `reach` from any skin is
@@ -685,7 +687,8 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.1, edg
     np.add.at(count, ev[:, 0], 1)
     np.add.at(count, ev[:, 1], 1)
     bend = bend / np.maximum(count, 1)
-    worn = np.clip((bend - 0.06) / 0.25, 0.0, 1.0)
+    # (A thin blade is convex all round: its face is not an edge.)
+    worn = np.clip((bend - 0.1) / 0.3, 0.0, 1.0)
     # Spread a little along the skin, so it is an edge's wear and not each
     # vertex's own: a groove's lip, cut fine, is otherwise worn at one corner
     # and whole at the next, and its chips are a row of teeth.

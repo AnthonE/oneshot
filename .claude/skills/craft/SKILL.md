@@ -78,4 +78,6 @@ Top down; the first line that fails is the gap.
 - **A paint chosen by a rule over face middles has a staircase for an edge** unless the rule follows the skin's own lines (a share of a chord, a ring of a loft).
 - **A loft's subdivided skin lies a little inside its sections.** Read the fit off the json, not off the numbers typed.
 - **The rider's arms are 40 cm.** Triple T sits bolt upright in the sim's seat: bring the grips to his fists and the saddle to the foot of his trunk (measured in the game's side view), not him to them. A lean that puts the head outside the sim's seat box is a head that cannot be shot.
+- **A coat that is pale from the saddle is not its paint.** From its own chase camera a craft's back is seen edge on, where every surface mirrors the sky: that is the shader's to hold down (`veil_shell.wgsl`'s `FILL_GRAZE`, `SHEEN`, `shell_of`'s lacquer). Darkening `PAINTS` for it loses the craft in shade, where its colour is all it has.
+- **The Range (the default stage) lies in cloud shade.** It is quick, and it is the dullest light a craft is seen in; `CRAFT_STAGE='3 -79.5 -4'` is open ground on Dry Fork.
 - **The board's last pass is one pass back.** A second run overwrites it: `CRAFT_TAG=<name>` keeps a round worth comparing against.

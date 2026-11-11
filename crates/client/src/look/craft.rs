@@ -72,7 +72,7 @@ const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
     (Vec3::new(-1.38, 0.54, -0.6), 1.1, 0.3, 0.26),
     (Vec3::new(-1.38, 0.54, 0.6), 1.1, 0.3, 0.26),
 ];
-const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
+const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.6, 0.69, 0.0), 1.8, 0.78, 0.22)];
 /// A flame's core inside its sheath: this share of its length and of its
 /// width (the skimmer's a third of its mouth, so a sheath shows round it).
 /// The flier's one flat blade wants a broader one: half its mouth wide,
@@ -143,7 +143,7 @@ impl MaterialExtension for Shell {
 }
 
 /// What a shell's paint turns toward edge on (linear), and how far.
-const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.22);
+const EDGE: Vec4 = Vec4::new(0.02, 0.09, 0.3, 0.2);
 /// The wing case over each of a craft's paints, by its name in the GLB
 /// (`veil.py`'s `PAINTS`): how far it turns at the edge; how bright the
 /// sky's photograph is in it, the photograph's blur at full roughness
@@ -155,8 +155,8 @@ const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.22);
 /// paint not named (a light, a saddle's pad) is drawn as it came.
 fn shell_of(name: &str) -> Option<ShellParams> {
     let (turn, sky, wear) = match name {
-        "shell" | "shell_pale" => (1.0, Vec4::new(0.65, 5.0, 0.45, 0.5), Vec3::new(1.0, 1.0, 1.0)),
-        "shell_deep" => (0.8, Vec4::new(0.6, 5.0, 0.36, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "shell" | "shell_pale" => (1.0, Vec4::new(0.65, 5.0, 0.2, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "shell_deep" => (0.8, Vec4::new(0.6, 5.0, 0.16, 0.5), Vec3::new(1.0, 1.0, 1.0)),
         "glass" => (0.0, Vec4::new(0.75, 5.0, 1.6, 0.8), Vec3::new(0.0, 0.3, 0.0)),
         "iron" => (0.0, Vec4::new(0.4, 5.0, 0.0, 0.3), Vec3::new(0.7, 1.0, 0.0)),
         _ => return None,
@@ -177,7 +177,7 @@ const BURNS: [&str; 3] = ["throat", "glow", "vein"];
 const BURN: (f32, f32, f32) = (0.55, 1.0, 2.4);
 /// A vein (the fire that shows through a hull's seams and louvres) sleeps
 /// at this until the engine is past its cruise, and is whole by the boost.
-const VEIN_ASLEEP: f32 = 0.025;
+const VEIN_ASLEEP: f32 = 0.01;
 const BURN_EASE: f32 = 5.0;
 const BREATH: (f32, f32) = (0.12, 0.45);
 
@@ -211,7 +211,7 @@ pub struct Kit {
 /// along it fades in from nothing at its mouth.
 const FLAME_RINGS: usize = 14;
 const FLAME_SIDES: usize = 14;
-const FLAME_MOUTH: f32 = 0.55;
+const FLAME_MOUTH: f32 = 0.85;
 const FLAME_FULL: f32 = 0.16;
 const FLAME_FADE: f32 = 3.0;
 /// How much of it is gone at its two rims (across its width).
