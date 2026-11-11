@@ -11,12 +11,15 @@
 //! its yaw); its body here takes the flier's nose and roll from the sim, and
 //! leans into a turn and bobs on its lift as looks of its own.
 //!
-//! **Its shell is a wing case.** A craft carries no map: its colours are its
-//! mesh's (the paint in the shade each vertex stands in). Its paints are
-//! `StandardMaterial` plus a fragment stage (`shaders/veil_shell.wgsl`): the
-//! violet turns blue edge on, the sky's photograph the guns reflect
-//! (`gun_skin.rs`) lies in its coat, and up close it has the grain of a
-//! craft that has been flown. Its engines burn brighter while it
+//! **Its shell is a wing case, and a machine's.** A craft carries no map:
+//! its colours are its mesh's (the paint in the shade each vertex stands in).
+//! Its paints are `StandardMaterial` plus a fragment stage
+//! (`shaders/veil_shell.wgsl`): an alloy with its colour in it, dark face on
+//! and turning blue edge on, that reflects the sky's photograph the guns do
+//! (`gun_skin.rs`) in its own colour under a thin lacquer; and it has been
+//! flown: its coat is chipped to bare alloy along its worn edges, grime has
+//! run down its flanks, and dust lies in its seams, on its back and up its
+//! belly. Its engines burn brighter while it
 //! boosts and throw a flame, a short one at speed and a long one boosting,
 //! and it lights the ground under and behind it. Looks only: what flies is
 //! the sim's.
@@ -140,26 +143,28 @@ impl MaterialExtension for Shell {
 }
 
 /// What a shell's paint turns toward edge on (linear), and how far.
-const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.32);
+const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.22);
 /// The wing case over each of a craft's paints, by its name in the GLB
 /// (`veil.py`'s `PAINTS`): how far it turns at the edge; how bright the
-/// sky's photograph is in it, the photograph's blur (levels), how much of
-/// it shows face on, and how much of its colour it keeps; and how much
-/// grain it has (the mottle and scuffs of a craft that has been flown: none
-/// on glass). A paint not named (a light, a saddle's pad) is drawn as it
-/// came.
+/// sky's photograph is in it, the photograph's blur at full roughness
+/// (levels: all of `gun_skin.rs`'s cube), how much of a clear lacquer's
+/// sheen lies over it, and how much of the sky's colour it keeps; and its
+/// wear: how much grain it has (the mottle, the scuffs and the streaks of a
+/// craft that has been flown: none on glass), how much dust it takes, and
+/// how far its worn edges chip to bare alloy (iron has no coat to chip). A
+/// paint not named (a light, a saddle's pad) is drawn as it came.
 fn shell_of(name: &str) -> Option<ShellParams> {
-    let (turn, sky, grain) = match name {
-        "shell" | "shell_pale" => (1.0, Vec4::new(0.22, 0.5, 0.03, 0.6), 1.0),
-        "shell_deep" => (0.8, Vec4::new(0.2, 0.6, 0.03, 0.6), 1.0),
-        "glass" => (0.0, Vec4::new(0.58, 0.0, 0.09, 0.8), 0.0),
-        "iron" => (0.0, Vec4::new(0.14, 2.6, 0.04, 0.3), 0.7),
+    let (turn, sky, wear) = match name {
+        "shell" | "shell_pale" => (1.0, Vec4::new(0.65, 5.0, 0.45, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "shell_deep" => (0.8, Vec4::new(0.6, 5.0, 0.36, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "glass" => (0.0, Vec4::new(0.75, 5.0, 1.6, 0.8), Vec3::new(0.0, 0.3, 0.0)),
+        "iron" => (0.0, Vec4::new(0.4, 5.0, 0.0, 0.3), Vec3::new(0.7, 1.0, 0.0)),
         _ => return None,
     };
     Some(ShellParams {
         edge: EDGE * Vec4::new(1.0, 1.0, 1.0, turn),
         sky,
-        grain: Vec4::new(grain, 0.0, 0.0, 0.0),
+        grain: wear.extend(0.0),
     })
 }
 /// The paints of an engine's fire (its core, its lit throat, and the veins
@@ -172,7 +177,7 @@ const BURNS: [&str; 3] = ["throat", "glow", "vein"];
 const BURN: (f32, f32, f32) = (0.55, 1.0, 2.4);
 /// A vein (the fire that shows through a hull's seams and louvres) sleeps
 /// at this until the engine is past its cruise, and is whole by the boost.
-const VEIN_ASLEEP: f32 = 0.08;
+const VEIN_ASLEEP: f32 = 0.025;
 const BURN_EASE: f32 = 5.0;
 const BREATH: (f32, f32) = (0.12, 0.45);
 
