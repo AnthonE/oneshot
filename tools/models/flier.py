@@ -95,7 +95,7 @@ A_AT = (0.5, 0.95, 1.4, 1.8, 2.15, 2.4, 2.59)
 F_ROOT = (0.98, 1.22, 1.46, 1.70, 1.92, 2.12, 2.28)
 F_END = ((-0.80, 1.02), (-0.94, 1.30), (-1.05, 1.60), (-1.14, 1.90), (-1.22, 2.16), (-1.29, 2.37), (-1.33, 2.5))
 F_WIDE = 0.175
-F_SHAPE = (0.6, 0.86, 1.0, 1.0, 1.0, 0.96, 0.8, 0.5, 0.14)
+F_SHAPE = (0.6, 0.86, 1.0, 1.0, 0.98, 0.9, 0.72, 0.42, 0.06)
 F_THIN = 0.11
 F_STEP = 0.011
 F_LIT = 0.055
@@ -206,7 +206,7 @@ parts += mouth((TAIL, 0, MZ), MW, MH, MOUTH_DEEP, CORE, VANES, n=B_N, ribs=RIBS,
 # The lenses under it: the lift's, a grille of light under each wing's
 # root, and the port under the chin its bomb leaves by.
 for side in (1, -1):
-    parts += lens((LIFT[0], side * LIFT[1], B_KEEL(LIFT[0]) + LIFT[4]), LIFT[2], LIFT[3], 0.05, vanes=3)
+    parts += lens((LIFT[0], side * LIFT[1], B_KEEL(LIFT[0]) + LIFT[4]), LIFT[2], LIFT[3], 0.05, vanes=6)
 parts += lens((PORT[0], 0, B_KEEL(PORT[0]) + PORT[3]), PORT[1], PORT[2], 0.04, paint='ember')
 
 # The blister and its spine, sunk a little into the body's top: glass
@@ -246,7 +246,9 @@ def feather(side, i):
     # It bows a little outward on its way.
     bend = (root + end) / 2 + Vector((0.0, side * 0.035, 0.0))
     o = solid(stem(bow(root, bend, end, steps=8), [F_WIDE * k for k in F_SHAPE], n=8, material='shell' if i % 2 else 'shell_deep',
-                   name='feather', flat=F_THIN, thin=(0, 0, 1)), 'feather')
+                   name='feather', flat=F_THIN, thin=(0, 0, 1), sharp=(0, 2, 4)), 'feather')
+    # (Creased down its two edges and its quill: a blade with a spine, where
+    # it was a paddle.)
     # Its jack: a block of iron on it where it leaves the arm, and the pin
     # it turns on.
     at = (W_LE(y0) - ARM(y0) - 0.035, side * y0, W_Z(y0) - sink + 0.022)
@@ -288,7 +290,7 @@ def blade(side):
     x0, x1, y0, spread, z0, rise = BLADE
     path = [(x0 + (x1 - x0) * k, side * (y0 + spread * k), z0 + rise * k ** 1.4) for k in np.linspace(0.0, 1.0, 9)]
     cant = math.radians(BLADE_CANT)
-    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell_pale', name='blade', flat=BLADE_THIN,
+    o = solid(stem(path, [BLADE_WIDE * k for k in BLADE_SHAPE], n=8, material='shell', name='blade', flat=BLADE_THIN,
                    thin=(0, -side * math.sin(cant), math.cos(cant))), 'blade')
     return repaint(o, 'light', where=lambda q: X(q) < x1 + 0.07)
 
@@ -318,6 +320,11 @@ def soot(q):
     aft = np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5)
     left = (1.0 - 0.45 * aft)[:, None] * np.ones((1, 3))
     lip = (np.clip((TAIL + 0.12 - q[:, 0]) / 0.12, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5))[:, None]
+    # And at each feather's root, aft of its jack: what a pilot sees of his
+    # own wings.
+    y = np.abs(q[:, 1])
+    root = np.clip(1.0 - (W_LE(y) - ARM(y) - q[:, 0]) / 0.4, 0.0, 1.0) * (q[:, 0] < W_LE(y) - ARM(y)) * (y > 0.95)
+    left = left * (1.0 - 0.5 * root)[:, None]
     return left * (1 - lip) + lip * np.array([1.25, 1.0, 1.45])
 
 

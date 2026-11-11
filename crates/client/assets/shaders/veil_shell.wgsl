@@ -90,9 +90,9 @@ const RUN_ROUGH: f32 = 0.14;
 const BARE: vec3<f32> = vec3<f32>(0.33, 0.34, 0.38);
 const BARE_ROUGH: f32 = 0.42;
 const CHIP_FREQ: f32 = 26.0;
-const CHIP_FROM: f32 = 0.6;
+const CHIP_FROM: f32 = 0.52;
 const CHIP_RAG: f32 = 0.55;
-const CHIP_FAR: f32 = 0.08;
+const CHIP_FAR: f32 = 0.14;
 // The dust (linear), and its roughness; how much of it lies in full shade,
 // on what faces straight up, and at the belly; the height over the ground,
 // metres, the thrown dust is whole to and gone by; its patches' cycles a
@@ -243,7 +243,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let ab = env_brdf(rough, nv);
         let lacquer = (0.04 + 0.96 * pow(1.0 - nv, 5.0)) * shell.sky.z * (1.0 - dull);
         let seen = pbr_input.diffuse_occlusion * own_spec * shade * shade;
-        out.color = vec4<f32>(out.color.rgb + (sky * (f0 * ab.x + ab.y * SHEEN) + sheen * lacquer) * shell.sky.x * seen, out.color.a);
+        // (Edge on it has a share of this too, as of the fill.)
+        let graze = mix(FILL_GRAZE, 1.0, nv);
+        out.color = vec4<f32>(out.color.rgb + (sky * (f0 * ab.x + ab.y * SHEEN) + sheen * lacquer) * shell.sky.x * seen * graze, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

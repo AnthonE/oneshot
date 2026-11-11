@@ -46,7 +46,7 @@ PAINTS = {
     'throat': ('#0a2a33', 0.00, 0.40, ('#7df6ff', 9.0), 0.0),
     'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.7), 0.0),
     'vein': ('#0c0c10', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
-    'ember': ('#1a0614', 0.00, 0.30, ('#ff4fd8', 0.5), 0.0),
+    'ember': ('#1a0614', 0.00, 0.30, ('#ff4fd8', 0.2), 0.0),
 }
 # Paints that take a plate's tone and a worn edge (`shade`); the rest take
 # the traced shade alone, and a light none of it.
@@ -200,11 +200,13 @@ def bow(a, b, c, steps=8):
     return [(1 - t) ** 2 * a + 2 * t * (1 - t) * b + t ** 2 * c for t in (i / steps for i in range(steps + 1))]
 
 
-def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0, thin=None):
+def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0, thin=None, sharp=()):
     """A round limb along `points`, `radii` thick at each (one number for
     all): rings square to its run, skinned. `flat` squeezes it one way (a
     blade under 1): along `thin` if given (the way it is thin: up, for a
-    feather lying flat), or across its first bend's plane."""
+    feather lying flat), or across its first bend's plane. `sharp`: the
+    points round it whose line along it stays a crease (`loft`'s): a blade's
+    two edges, the quill down a feather's back."""
     pts = [Vector(p) for p in points]
     radii = [radii] * len(pts) if isinstance(radii, (int, float)) else radii
     rings = []
@@ -218,7 +220,7 @@ def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('ti
             side = t.orthogonal().normalized() if side is None else (side - t * side.dot(t)).normalized()
         up = t.cross(side)
         rings.append([p + (side * math.cos(TAU * k / n) + up * math.sin(TAU * k / n) * flat) * radii[i] for k in range(n)])
-    return loft(rings, material, ends=ends, levels=levels, name=name)
+    return loft(rings, material, ends=ends, levels=levels, name=name, sharp=sharp)
 
 
 def lip(at, w, h, n=20, p=2.6):

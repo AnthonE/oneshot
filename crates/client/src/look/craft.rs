@@ -66,19 +66,19 @@ const FLY_BOB_TO: f32 = 9.0;
 /// the lit mouth it leaves, so the rim round it still shows). The skimmer's
 /// two are its hulls' sterns, each rooted a hand inside its throat, where
 /// its core lies, so it leaves through the lip and not from the air behind
-/// it; the flier's is one flat blade of flame out of the whole of its wide
-/// mouth.
+/// it; the flier's is one flat blade of flame, rooted in its throat too and
+/// no wider than the fire between its vanes.
 const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
     (Vec3::new(-1.38, 0.54, -0.6), 1.1, 0.3, 0.26),
     (Vec3::new(-1.38, 0.54, 0.6), 1.1, 0.3, 0.26),
 ];
-const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.6, 0.69, 0.0), 1.8, 0.78, 0.22)];
+const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.6, 0.69, 0.0), 1.5, 0.66, 0.19)];
 /// A flame's core inside its sheath: this share of its length and of its
 /// width (the skimmer's a third of its mouth, so a sheath shows round it).
-/// The flier's one flat blade wants a broader one: half its mouth wide,
-/// across both vanes.
+/// The flier's one flat blade wants a broader one, half of it wide: a hot
+/// middle between its vanes, and no pale wedge to the mouth's lips.
 const CORE: (f32, f32) = (0.55, 0.36);
-const FLY_CORE: (f32, f32) = (0.7, 0.65);
+const FLY_CORE: (f32, f32) = (0.6, 0.5);
 /// The light a craft throws on what is under and behind it (on a rung with
 /// lights to spare, `fx::Caps::lights_in_flight`): where it hangs in the
 /// hull's frame, its lumens at rest and boosting, and how far it reaches,
@@ -218,10 +218,11 @@ const FLAME_FADE: f32 = 3.0;
 const FLAME_RIM: f32 = 0.85;
 const FLAME_IN: f32 = 0.06;
 /// The same two for a round flame out of a round mouth (the skimmer's): it
-/// leaves its lip two thirds of itself across, and keeps most of its sides,
-/// which a flat blade seen on its face has none of.
+/// leaves its lip two thirds of itself across, and keeps some of its sides,
+/// which a flat blade seen on its face has none of (most of them, and it
+/// was a cone with an outline over the ground).
 const DART_MOUTH: f32 = 0.7;
-const DART_RIM: f32 = 0.4;
+const DART_RIM: f32 = 0.6;
 /// Its flicker: this share of its length, at these two rates (radians a
 /// second), so it never beats.
 const FLICKER: f32 = 0.09;
@@ -278,11 +279,11 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
     };
     commands.insert_resource(Kit {
         flame: meshes.add(flame(FLAME_MOUTH, FLAME_RIM)),
-        sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.45))),
+        sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.36))),
         // A dart's sheath is seen over lit ground from the saddle, not
         // against the sky: more of it, or the sand swallows its blue.
         dart: meshes.add(flame(DART_MOUTH, DART_RIM)),
-        dart_sheath: mats.add(paint(LinearRgba::new(0.14, 0.85, 1.9, 0.75))),
+        dart_sheath: mats.add(paint(LinearRgba::new(0.14, 0.85, 1.9, 0.58))),
         core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
         trail: mats.add(paint(LinearRgba::new(0.3, 1.2, 1.8, 0.34))),
     });

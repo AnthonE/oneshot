@@ -53,7 +53,7 @@ H_OUT = curve((STERN, 0.6), (NECK[1], 0.62), (0.5, 0.70), (1.1, 0.60), (HL, 0.43
 H_AT = (STERN, -1.3, -1.05, NECK[0], -0.57, NECK[1], -0.1, 0.3, 0.7, 1.05, 1.3, 1.43, 1.49)
 H_N = 16
 # How round a hull is (2 an ellipse): the pod's, and the blade's (a ridge).
-H_ROUND = curve((NECK[0], 2.1), (NECK[1], 1.45))
+H_ROUND = curve((NECK[0], 2.5), (NECK[1], 1.45))
 MOUTH = 0.9
 # The deck between the pods: from where to where, and its top.
 DECK = (-1.1, 0.36, 0.46)
@@ -118,7 +118,10 @@ def hull(side):
     rings = [oval(x, side * H_OUT(x), (H_TOP(x) + H_KEEL(x)) / 2 + 0.03, H_WIDE(x), (H_TOP(x) - H_KEEL(x)) / 2 - 0.03,
                   (H_TOP(x) - H_KEEL(x)) / 2 + 0.03, n=H_N, p=H_ROUND(x), pb=2.5) for x in H_AT]
     o = solid(loft(lip(at, MW, MH, n=H_N, p=2.3) + rings, 'shell', ends=('open', 'tip'), name='hull',
-                   sharp=((H_N // 4, neck, 99), (0 if side > 0 else H_N // 2, neck, 99))), 'hull')
+                   sharp=((H_N // 4, neck, 99), (0 if side > 0 else H_N // 2, neck, 99),
+                          # A chine along each pod's outer shoulder: a hard
+                          # line of light down it, where it was all one curve.
+                          (H_N // 8 if side > 0 else 3 * H_N // 8, 2, neck))), 'hull')
     # (Its core lies at the throat's floor, small: from the saddle the lip
     # hides its top and the wall under it goes from black to lit. Up at the
     # lip and two thirds across it was a lamp plugged in the end of a tube.)
@@ -170,13 +173,13 @@ parts += [
     # Each pod's back: a paler plate over it, proud of the neck's; each
     # blade's back a pale strake of its own; the darker hull under them. A
     # rim of iron round each mouth.
-    plate(hulls, lambda q: both(top(q) + 0.02, X(q) - STERN - 0.1, NECK[0] - 0.03 - X(q)), 0.03, 'shell_pale', name='backs'),
-    plate(hulls, lambda q: both(top(q) + 0.02, X(q) - NECK[0] + 0.07, NECK[1] + 0.04 - X(q)), 0.018, 'shell', name='necks',
+    plate(hulls, lambda q: both(top(q) + 0.02, X(q) - STERN - 0.1, NECK[0] - 0.03 - X(q)), 0.04, 'shell_pale', name='backs'),
+    plate(hulls, lambda q: both(top(q) + 0.02, X(q) - NECK[0] + 0.07, NECK[1] + 0.04 - X(q)), 0.026, 'shell', name='necks',
           clear=None),
     # (The strake's lip stands clear of the hairline under it, and it ends
     # short of the seam across the blade: a plate cut along a seam's own
     # line carries half its groove up on its edge.)
-    plate(hulls, lambda q: both(top(q) - 0.052, X(q) - NECK[1] - 0.1, -cross(q) - 0.022), 0.025, 'shell_pale', name='blades',
+    plate(hulls, lambda q: both(top(q) - 0.052, X(q) - NECK[1] - 0.1, -cross(q) - 0.022), 0.032, 'shell_pale', name='blades',
           clear=None),
     plate(hulls, lambda q: STERN + 0.05 - X(q), 0.012, 'iron', name='rims'),
 ]
@@ -239,8 +242,10 @@ rings = [oval(x, 0, DECK[2] - 0.02, K_WIDE(x), K_TOP(x) - DECK[2] + 0.02, 0.04, 
 case = solid(loft(rings, 'shell', name='case'), 'case')
 seam(case, plane((0, 0, 0), (0, 1, 0)), 0.02, 0.012, **GLOW, within=lambda q: both(Z(q) - DECK[2] - 0.08, run(-1.36, -0.7)(q)))
 # Its plates: a gap each side of its spine and one across it, louvres down
-# its aft slope, its shoulders the deeper violet. From the saddle it is the
-# middle of the frame: three plates and a row of slots, not one dome.
+# its aft slope, its spine the paler violet. From the saddle it is the
+# middle of the frame, and in shade: three plates told apart by their value
+# and a row of slots, not one dome (its shoulders in the deeper violet were
+# the darkest paint on its most shaded faces, and the lot one dark knot).
 wings = {side: plane((0, side * 0.19, 0), (-0.25, side, 0)) for side in (1, -1)}
 for side in (1, -1):
     seam(case, wings[side], **GAP, within=lambda q: both(Z(q) - DECK[2] - 0.06, run(-1.3, -0.72)(q)))
@@ -248,7 +253,7 @@ seam(case, plane((-0.98, 0, 0.6), (1, 0, 0.35)), **GAP, where=lambda q: (Z(q) > 
 for x in (-1.19, -1.26, -1.33):
     seam(case, plane((x, 0, 0.6), (1, 0, -0.45)), 0.03, 0.014, flat=0.5,
          within=lambda q: both(Y(q) - 0.045, 0.15 - Y(q), Z(q) - DECK[2] - 0.07))
-repaint(case, 'shell_deep', where=lambda q: (wings[1](q) > 0.02) | (wings[-1](q) > 0.02), of='shell')
+repaint(case, 'shell_pale', where=lambda q: (wings[1](q) < -0.02) & (wings[-1](q) < -0.02), of='shell')
 parts.append(case)
 
 # The control arms: blades from the cowl's shoulders raked up, out and back
@@ -265,6 +270,10 @@ for side in (1, -1):
         at = np.array(path[i][:])
         joints.append(plane(at, (path[i + 1] - path[i - 1])[:]))
         seam(horn, joints[-1], 0.03, 0.01, flat=0.5, where=lambda q, at=at: np.linalg.norm(q - at, axis=1) < 0.16)
+        # A collar of iron round it there: a joint, seen as one.
+        collar = sphere(radii[i] * 1.22, at=tuple(at), material=None, scale=(1.0, 0.62, 1.0), segments=12)
+        collar.data.materials.append(skin('iron'))
+        parts.append(collar)
     parts.append(horn)
     socket = sphere(1.0, at=(HORN[0][0], side * HORN[0][1], HORN[0][2] + 0.035), material=None, scale=(0.12, 0.08, 0.035),
                     segments=16)
