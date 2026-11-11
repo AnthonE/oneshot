@@ -6,6 +6,7 @@
  "fps": 30,
  "quality": "high",
  "settle": 20,
+ "hold": 24,
  "look": {
   "saturation": 1.06,
   "contrast": 1.05,
@@ -13,254 +14,38 @@
  },
  "shots": [
   {
-   "name": "truck-pov",
-   "at": 36.6,
-   "len": 3.0,
-   "pov": true
+   "name": "bt-rush",
+   "at": 34.0,
+   "len": 3.4,
+   "fov": 60,
+   "follow": {
+    "back": 4.0,
+    "up": 1.9,
+    "side": 0.8,
+    "lag": 0.25
+   },
+   "look": {
+    "focus": "subject",
+    "fstop": 5.6,
+    "shake": 0.05
+   }
   },
   {
-   "name": "trucks",
-   "at": 37.2,
-   "len": 3.0,
-   "fov": 58,
+   "name": "bt-flag",
+   "at": 39.4,
+   "len": 3.6,
+   "fov": 62,
    "follow": {
-    "slot": 0,
-    "back": 7.5,
-    "up": 3.2,
-    "side": 1.4,
+    "back": 6.5,
+    "up": 2.6,
+    "side": 1.2,
     "lag": 0.3
    },
    "look": {
     "focus": "subject",
     "fstop": 5.6,
-    "shake": 0.08
-   }
-  },
-  {
-   "name": "minigun",
-   "at": 38.2,
-   "len": 3.0,
-   "fov": 60,
-   "follow": {
-    "slot": 10,
-    "back": 5.5,
-    "up": 2.4,
-    "side": -1.1,
-    "lag": 0.3
-   },
-   "look": {
-    "focus": "subject",
-    "fstop": 4,
-    "shake": 0.1
-   }
-  },
-  {
-   "name": "still-bigteam",
-   "at": 39.0,
-   "still": true,
-   "fov": 56,
-   "follow": {
-    "slot": 0,
-    "back": 8,
-    "up": 2.8,
-    "side": 2.0,
-    "lag": 0.01
-   },
-   "look": {
-    "focus": "subject",
-    "fstop": 5.6
-   }
-  },
-  {
-   "name": "still-minigun",
-   "at": 39.6,
-   "still": true,
-   "fov": 52,
-   "follow": {
-    "slot": 10,
-    "back": 3.2,
-    "up": 1.9,
-    "side": -2.2,
-    "lag": 0.01
-   },
-   "look": {
-    "focus": "subject",
-    "fstop": 4
-   }
-  },
-  {
-   "name": "launch",
-   "at": 69.6,
-   "len": 3.0,
-   "fov": 50,
-   "ease": true,
-   "keys": [
-    {
-     "t": 0,
-     "pos": [
-      -50,
-      7,
-      -19
-     ],
-     "look": [
-      -50,
-      4,
-      0
-     ]
-    },
-    {
-     "t": 3,
-     "pos": [
-      -47,
-      6.6,
-      -15
-     ],
-     "look": [
-      -40,
-      4,
-      0
-     ]
-    }
-   ],
-   "track": {
-    "slot": 2,
-    "up": 1.0,
-    "lag": 0.15
-   }
-  },
-  {
-   "name": "chase",
-   "at": 118.6,
-   "len": 4.6,
-   "fov": 62,
-   "follow": {
-    "slot": 0,
-    "back": 3.6,
-    "up": 1.7,
-    "side": 0.6,
-    "lag": 0.25
-   },
-   "look": {
-    "focus": "subject",
-    "fstop": 4,
     "shake": 0.06
    }
-  },
-  {
-   "name": "slow",
-   "at": 122.0,
-   "len": 5.6,
-   "pov": true,
-   "speed": [
-    [
-     0,
-     1
-    ],
-    [
-     2.3,
-     1
-    ],
-    [
-     2.75,
-     0.3
-    ]
-   ],
-   "look": {
-    "shake": 0.2
-   }
-  },
-  {
-   "name": "still-fighter",
-   "at": 100.6,
-   "still": true,
-   "fov": 40,
-   "keys": [
-    {
-     "t": 0,
-     "pos": [
-      -97.0,
-      1.35,
-      4.8
-     ],
-     "look": [
-      -100.0,
-      1.2,
-      4.0
-     ]
-    }
-   ],
-   "track": {
-    "slot": 0,
-    "up": 1.25,
-    "lag": 0.01
-   },
-   "look": {
-    "focus": "subject",
-    "fstop": 2.8
-   }
-  },
-  {
-   "name": "map-dryfork",
-   "at": 60,
-   "len": 2.6,
-   "ease": true,
-   "fov": 50,
-   "keys": [
-    {
-     "t": 0,
-     "pos": [
-      -100,
-      7.3,
-      0
-     ],
-     "look": [
-      150,
-      0,
-      0
-     ]
-    },
-    {
-     "t": 2.6,
-     "pos": [
-      -92,
-      7.0,
-      0.5
-     ],
-     "look": [
-      150,
-      0,
-      0
-     ]
-    }
-   ]
-  },
-  {
-   "name": "still-dryfork",
-   "at": 64,
-   "still": true,
-   "fov": 52,
-   "keys": [
-    {
-     "t": 0,
-     "pos": [
-      -20,
-      4.5,
-      8
-     ],
-     "look": [
-      0,
-      22,
-      70
-     ]
-    }
-   ]
-  },
-  {
-   "name": "kill-9",
-   "at": 95.65,
-   "len": 1.6,
-   "pov": true
   }
- ],
- "hold": 24
+ ]
 }

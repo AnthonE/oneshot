@@ -40,7 +40,6 @@ const MUSIC_IN = 62.55 - DROP;
 const hit = s => s - MUSIC_IN;          // a track hit's time in the trailer
 const grid = n => DROP + n * 1.068;     // the n-th beat after the drop
 
-const MAPS0 = grid(22), MAPSEG = (hit(97.9) - grid(22)) / 7;   // the maps' roll call, before the guns
 const C = {
   bg: '#1b1916', ink: '#eeebe6', muted: '#bdb8ad', faint: '#8d8a84', gold: '#e8b931', goldHi: '#f5cc54',
   blue: '#3982ba', blueHi: '#4a94cc', red: '#d0352b', redHi: '#ef6a5e', elo: '#b8ff38', line: 'rgba(191,184,158,.22)',
@@ -250,6 +249,12 @@ const GEAR = [['helmet', 'HELMET'], ['ten-gallon', 'TEN GALLON'], ['beanie', 'BE
   ['hightops-right', 'HIGH-TOPS'], ['spurs-right', 'SPURS'], ['magboots-right', 'MAG BOOTS'], ['wellies-right', 'WELLIES']];
 const S3 = {};
 async function build3D() {
+  // the sword, as it lies on its pad in the game
+  S3.sword = stage(0xffe8dc, 0xef6a5e);
+  try {
+    const o = lay(prep(await loadGLB('glb/sword.glb'), 1.0), 1.9);
+    o.userData.s0 = o.scale.x; S3.sword.s.add(o); S3.sword.obj = o;
+  } catch (e) { console.log('no model', 'sword'); }
   S3.gear = stage(0xfff4e6, 0xffffff); S3.gear.objs = [];
   for (const [i, [f, label]] of GEAR.entries()) {
     try {
@@ -324,101 +329,139 @@ function scope(L, alpha, sway = 1) {
 // Times are trailer seconds; each scene runs to the next one's start, and
 // every start is one of the theme's hits (`hit`), so the cuts land on the
 // music. The last scene's end is TOTAL.
+//
+// The cut is Capture the Flag's: a sword in the cold open, a flag stolen
+// and run home, the sword's kills on the ramp, the title, the sword up
+// close, the capture, then Big Team's trucks on Dry Fork, the rest of the
+// modes on the beat, ranked, the gear, the end card.
+const KILL = hit(45.44);                    // the cold open's swing, on the first big kick
+// Where each sword clip's blow lands, in clip seconds (read off the shot's
+// frames: the film's speed ramp slows each into its strike).
+const STRIKE = { 'sword-open': 4.3, 'sword-lunge-b': 3.9 };
+const LUNGE_HIT = 1.9;                    // where x2-lunge's blow lands in its scene
 const SCENES = [
-  // cold open: through the scope, one shot
-  { id: 'c1-scope', at: 0, box: false, draw(L) {
-    const kill = hit(45.44);                 // the first big kick: the shot
-    const pre = L.t < kill;
-    if (pre) foot(bg, 'scope', L.t, L.d, { full: true, z: 1.75, px: -.45, py: -.35, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.3, z1: 1.36, x0: -.3, x1: .2 } });
-    // the shot, and the fighter dropping, in slow motion: snipe-kill's clip holds the kill 1.2 s in
-    else foot(bg, 'snipe-kill', Math.min(L.t - kill, 2.1), L.d - kill, { full: true, from: 1.05, fallback: 'dryfork', grade: 'contrast(1.08) saturate(.9) brightness(.9)', still: { full: true, z0: 1.36, z1: 1.3, x0: .2, x1: .25 } });
-    const breath = ramp(L.t, 0, .9);
-    scope(L, pre ? breath : 1 - ramp(L.t, kill + .5, kill + 1.1), pre ? 1 : 0);
-    if (!pre) {
-      // the shot: the frame kicks, the scope comes off, the body drops
-      const k = Math.exp(-(L.t - kill) * 6);
-      fg.save(); fg.globalAlpha = k * .5; fg.fillStyle = '#fff'; fg.fillRect(0, 0, W, H); fg.restore();
+  // cold open: a sword's eyes closing on someone, the lunge slowed, one swing
+  { id: 'c1-sword', at: 0, box: false, draw(L) {
+    const s0 = STRIKE['sword-open'];
+    foot(bg, 'sword-open', L.t, L.d, { full: true, from: Math.max(0, s0 - KILL), fallback: 'bulkhead', grade: 'contrast(1.1) saturate(.92) brightness(.92)', still: { full: true, z0: 1.18, z1: 1.32 } });
+    // a red reticle while the lunge is on (the sword's lock: the game's own read)
+    const lock = ramp(L.t, KILL - 1.2, KILL - 1.0) * (1 - ramp(L.t, KILL, KILL + .05));
+    reticle(fg, W / 2, H / 2, 34, lock * .9, C.redHi);
+    if (L.t >= KILL) {
+      const k = Math.exp(-(L.t - KILL) * 6);
+      fg.save(); fg.globalAlpha = k * .55; fg.fillStyle = '#fff'; fg.fillRect(0, 0, W, H); fg.restore();
     }
-    // the picture goes to black under the words before the first claim
-    const dark = ramp(L.t, kill + 2.1, kill + 2.6);
+    const dark = ramp(L.t, KILL + 2.4, KILL + 3.0);
     if (dark > 0) { fg.save(); fg.globalAlpha = dark; fg.fillStyle = '#000'; fg.fillRect(0, 0, W, H); fg.restore(); }
-    const r = rv({ t: L.t - kill, d: L.d - kill }, .25, .4, .25);
-    if (L.t > kill) text(fg, 'ONE SHOT.', W / 2, 800 + r.dy, { size: 150, track: 14, alpha: r.a, shadow: 40 });
+    const r = rv({ t: L.t - KILL, d: L.d - KILL }, .2, .35, .25);
+    if (L.t > KILL) text(fg, 'ONE SWING.', W / 2, 800 + r.dy, { size: 150, track: 14, alpha: r.a, shadow: 40 });
   } },
-  // the build: three claims, each over a shot that shows it
-  { id: 'b1-server', at: hit(49.69), box: true, draw(L) {
-    foot(bg, 'chase', L.t, L.d, { fallback: 'bigteam', still: { z0: 1.0, z1: 1.08 } });
-    caption(L, ['THE SERVER DECIDES EVERY HIT.'], { y: 820, size: 76, at: .2, track: 6 });
+  // the flag: stolen, then run home
+  { id: 'b1-steal', at: hit(49.69), box: true, draw(L) {
+    foot(bg, 'flag-take', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.0, z1: 1.08 } });
+    caption(L, ['STEAL THEIR FLAG.'], { y: 820, size: 86, at: .25, track: 6 });
   } },
-  { id: 'b2-fog', at: hit(53.98), box: true, draw(L) {
-    foot(bg, 'corner', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.06, z1: 1.12, x0: .2, x1: -.1 } });
-    caption(L, ['YOU ARE SENT ONLY WHAT YOU COULD SEE.'], { y: 820, size: 72, at: .2, track: 5 });
+  { id: 'b2-run', at: hit(53.98), box: true, draw(L) {
+    foot(bg, 'flag-run', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.06, z1: 1.12, x0: .2, x1: -.1 } });
+    caption(L, ['RUN IT HOME.'], { y: 820, size: 86, at: .2, track: 6 });
+    sub(L, 'Carried, a flag tells the other side who has it. Never where.', { at: .9 });
   } },
-  // the ramp: kills, faster and faster, the announcer counting them
+  // the ramp: the sword's kills, faster and faster, the announcer counting them
   { id: 'b4-ramp', at: hit(58.26), box: true, draw(L) {
     const cuts = RAMP;
     let k = 0; while (k < cuts.length - 1 && L.t >= cuts[k + 1][0]) k++;
     const [t0, name, fb, from] = cuts[k], lt = L.t - t0, d = (cuts[k + 1] ? cuts[k + 1][0] : L.d) - t0;
-    foot(bg, name, lt, d, { fallback: fb, from: from || 0, grade: (name === 'kill-5' || name === 'kill-2' ? 'brightness(1.2) ' : '') + 'contrast(1.08) saturate(1.05)', still: { z0: 1.08 + k * .03, z1: 1.14 + k * .03, x0: (k % 2 ? .3 : -.3) } });
-    // a white tick on each cut
+    foot(bg, name, lt, d, { fallback: fb, from: from || 0, grade: 'contrast(1.08) saturate(1.05)', still: { z0: 1.08 + k * .03, z1: 1.14 + k * .03, x0: (k % 2 ? .3 : -.3) } });
     const kick = Math.exp(-lt * 14);
     if (kick > .04) { fg.save(); fg.globalAlpha = kick * .35; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
-    // the medal the announcer calls, stamped in the bar
     const m = MEDALS.filter(x => L.t >= x[0]).pop();
     if (m) { const a = ramp(L.t, m[0], m[0] + .1) * (1 - ramp(L.t, m[0] + 1.3, m[0] + 1.6)); const s = lerp(1.25, 1, E.expo(ramp(L.t, m[0], m[0] + .25))); text(fg, m[1], W / 2, 1035, { size: 48, track: 6, color: C.gold, alpha: a, scale: s, glow: 'rgba(232,185,49,.5)' }); }
   } },
   // the drop
   { id: 't1-title', at: DROP, draw(L) {
-    // Triple T in aviators with the battle rifle, as pose mode draws it (ci/film.sh pose), a slow push on it
     foot(bg, 'still-tt', L.t, L.d, { full: true, z: lerp(1.3, 1.36, L.t / L.d), px: -1, py: -.6, fallback: 'fighter', grade: 'brightness(.9) contrast(1.08) saturate(.96)', still: { full: true, z0: 1.3, z1: 1.36, x0: -1, x1: -1, y0: -.6, y1: -.6 } });
     pool(bg, 1330, 640, 980, .72);
     const s = lerp(1.25, 1, E.expo(ramp(L.t, 0, .5))), a = ramp(L.t, 0, .08) * (1 - ramp(L.t, L.d - .2, L.d));
     fg.save(); fg.translate(1330, 600); fg.scale(s, s); fg.translate(-1330, -600); wordmark(fg, 1330, 600, 1.0, { alpha: a, glow: 'rgba(232,185,49,.45)', line: '' }); fg.restore();
-    const r1 = rv(L, .8, .4, .2);
-    text(fg, 'ARENA SLAYER  ·  FREE TO PLAY', 1330, 712 + r1.dy, { kind: 'ail', size: 38, weight: 700, color: C.muted, track: 9, alpha: r1.a });
-    const r2 = rv(L, 1.5, .4, .2);
+    const r1 = rv(L, .45, .4, .2);
+    text(fg, 'CAPTURE THE FLAG  ·  FREE TO PLAY', 1330, 712 + r1.dy, { kind: 'ail', size: 38, weight: 700, color: C.muted, track: 9, alpha: r1.a });
+    const r2 = rv(L, .75, .4, .2);
     text(fg, 'IN YOUR BROWSER OR ON YOUR DESKTOP', 1330, 768 + r2.dy, { kind: 'ail', size: 29, weight: 600, color: C.faint, track: 6, alpha: r2.a });
   } },
-  // the modes, one card each on the hits
-  { id: 'm1-duel', at: hit(66.84), box: true, draw(L) {
-    foot(bg, 'duel', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.0, z1: 1.08 } });
-    modeCard(L, 'DUEL', '1v1 Slayer, first to 15. Rated on Elo Pros.', { tag: 'RANKED', tagColor: C.goldHi });
+  // the sword up close: the game's own model, the sim's own numbers
+  { id: 'x1-sword', at: hit(66.84), draw(L) {
+    ground(bg, 'rgba(208,53,43,.16)', 620, 560, 900);
+    const st = S3.sword;
+    if (st.obj) {
+      const p = E.back(ramp(L.t, .05, .55)) * (1 - ramp(L.t, L.d - .15, L.d));
+      st.obj.scale.setScalar(Math.max(.001, p) * st.obj.userData.s0);
+      st.obj.rotation.set(.25 + Math.sin(L.t * .9) * .08, -.6 + L.t * .55, -.35);
+      shoot(st, [0, 140, 1240, 800], [0, .05, 3.0], [0, 0, 0], 30);
+    }
+    caption(L, ['THE SWORD.'], { y: 300, x: 1240, align: 'left', size: 110, at: .1, track: 10 });
+    SWORD_LINES.forEach(([big, small], i) => {
+      const r = rv(L, .45 + i * .32, .35, .15);
+      text(fg, big, 1244, 430 + i * 118 + r.dy, { kind: 'unit', size: 52, track: 4, align: 'left', alpha: r.a, color: i % 2 ? C.ink : C.goldHi });
+      text(fg, small, 1246, 470 + i * 118 + r.dy, { kind: 'ail', size: 26, weight: 600, align: 'left', alpha: r.a, color: C.muted, track: 1 });
+    });
   } },
-  { id: 'm2-doubles', at: grid(7), box: true, draw(L) {
-    foot(bg, 'doubles', L.t, L.d, { fallback: 'cistern', still: { z0: 1.06, z1: 1.0, x0: -.2, x1: .2 } });
-    modeCard(L, 'DOUBLES', '2v2 Team Slayer, first to 30. Friendly fire on.', { tag: 'RANKED', tagColor: C.goldHi });
+  { id: 'x2-lunge', at: grid(7), box: true, draw(L) {
+    // a lunge from over the shoulder, slowed into the blow
+    foot(bg, 'sword-lunge-b', L.t, L.d, { from: Math.max(0, STRIKE['sword-lunge-b'] - LUNGE_HIT), fallback: 'bulkhead', grade: 'contrast(1.08) saturate(1.04)', still: { z0: 1.0, z1: 1.1 } });
+    const k = Math.exp(-Math.max(0, L.t - LUNGE_HIT) * 10) * (L.t >= LUNGE_HIT ? 1 : 0);
+    if (k > .04) { fg.save(); fg.globalAlpha = k * .4; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
+    caption(L, ['SIX METRES IS CLOSE ENOUGH.'], { y: 820, size: 70, at: LUNGE_HIT + .1, track: 5 });
   } },
-  { id: 'm3-ffa', at: grid(10), box: true, draw(L) {
-    foot(bg, 'ffa', L.t, L.d, { fallback: 'chrysalis', still: { z0: 1.0, z1: 1.1 } });
-    modeCard(L, 'FREE FOR ALL', 'Eight in, one out. Bots fill the empty seats.');
+  { id: 'x3-pit', at: grid(10), box: true, draw(L) {
+    foot(bg, 'sword-pov2', L.t, L.d, { fallback: 'bulkhead', grade: 'contrast(1.06)', still: { z0: 1.06, z1: 1.0, x0: -.2, x1: .2 } });
+    caption(L, ['IT WAITS IN THE PIT.'], { y: 820, size: 80, at: .2, track: 6 });
+    sub(L, 'Bulkhead, Cistern and Pithead keep one at the middle of the map. Whoever gets there first runs the next minute.', { at: .8 });
   } },
-  { id: 'm4-gungame', at: grid(13), box: true, draw(L) {
-    foot(bg, 'gungame', L.t, L.d, { fallback: 'cistern', grade: 'brightness(1.22) contrast(1.04)', still: { z0: 1.1, z1: 1.02, y0: .2, y1: -.2 } });
-    modeCard(L, 'GUN GAME', 'A kill a rung up a ladder of seven guns.');
+  // the capture, on the hit
+  { id: 'x4-capture', at: grid(13), box: true, draw(L) {
+    foot(bg, 'capture', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.04, z1: 1.12, x0: .3, x1: -.3 } });
+    const cap = CAPTURE_AT;
+    if (L.t >= cap) {
+      const lt = L.t - cap, k = Math.exp(-lt * 9);
+      if (k > .04) { fg.save(); fg.globalAlpha = k * .5; fg.fillStyle = '#ffe9c0'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
+      const s = lerp(1.4, 1, E.expo(ramp(lt, 0, .3)));
+      text(fg, 'CAPTURED.', W / 2, 470, { size: 150, track: 14, scale: s, alpha: ramp(lt, 0, .06) * (1 - ramp(L.t, L.d - .15, L.d)), shadow: 30, glow: 'rgba(232,185,49,.45)', glowR: 60, color: C.goldHi });
+    }
+    modeCard(L, 'CAPTURE THE FLAG', '4v4, first to three captures.', { at: .1 });
   } },
-  { id: 'm5-ctf', at: hit(79.69), box: true, draw(L) {
-    foot(bg, 'ctf', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.04, z1: 1.12, x0: .3, x1: -.3 } });
-    modeCard(L, 'CAPTURE THE FLAG', '4v4, first to three captures.');
+  // Big Team: the trucks on Dry Fork
+  { id: 'y1-truck', at: hit(79.69), box: true, draw(L) {
+    foot(bg, 'truck-pov', L.t, L.d, { from: .2, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
+    caption(L, ['OR BRING A TRUCK.'], { y: 820, size: 86, at: .2, track: 6 });
   } },
-  { id: 'm6-bigteam', at: grid(19), box: true, draw(L) {
+  { id: 'y2-bigteam', at: grid(19), box: true, draw(L) {
     const two = L.d / 2;
-    if (L.t < two) foot(bg, 'truck-pov', L.t, two, { from: .6, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.1 } });
-    else foot(bg, 'trucks', L.t - two, L.d - two, { from: .3, fallback: 'dryfork', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.08, z1: 1.16, x0: .2 } });
+    if (L.t < two) foot(bg, 'trucks', L.t, two, { from: .1, fallback: 'dryfork', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.08, z1: 1.16, x0: .2 } });
+    else foot(bg, 'bt-rush', L.t - two, L.d - two, { from: .2, fallback: 'bigteam', grade: 'contrast(1.06) saturate(1.08)', still: { z0: 1.0, z1: 1.08 } });
     if (L.t >= two) { const k = Math.exp(-(L.t - two) * 14); if (k > .04) { fg.save(); fg.globalAlpha = k * .35; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); } }
-    modeCard(L, 'BIG TEAM', '8v8 on terrain. Trucks, a minigun on the back of two of them.', { tag: '16 PLAYERS', tagColor: C.blueHi });
+    modeCard(L, 'BIG TEAM', 'Capture the Flag, 8v8, across a canyon 290 m long. A minigun on the back of two trucks.', { tag: '16 PLAYERS', tagColor: C.blueHi });
   } },
-  // the maps, seven in a row up to the kick grid
-  { id: 'p1-proving', at: MAPS0, box: true, draw(L) { foot(bg, 'map-proving', L.t, L.d, { fallback: 'fighter', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 1, 'PROVING GROUNDS', 'Duel · Doubles'); } },
-  { id: 'p2-overpass', at: MAPS0 + MAPSEG, box: true, draw(L) { foot(bg, 'map-overpass', L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.06, z1: 1.0, x0: .2 } }); mapCard(L, 2, 'OVERPASS', 'Duel · Doubles'); } },
-  { id: 'p3-cistern', at: MAPS0 + 2 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-cistern-2', 'map-cistern'), L.t, L.d, { fallback: 'cistern', grade: 'brightness(1.15) contrast(1.04)', still: { z0: 1.0, z1: 1.1 } }); mapCard(L, 3, 'CISTERN', 'Duel · Doubles'); } },
-  { id: 'p4-bulkhead', at: MAPS0 + 3 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-bulkhead-2', 'map-bulkhead'), L.t, L.d, { fallback: 'bulkhead', still: { z0: 1.08, z1: 1.0, x0: -.2 } }); mapCard(L, 4, 'BULKHEAD', 'Doubles · Capture the Flag'); } },
-  { id: 'p5-chrysalis', at: MAPS0 + 4 * MAPSEG, box: true, draw(L) { foot(bg, 'map-chrysalis', L.t, L.d, { fallback: 'chrysalis', still: { z0: 1.0, z1: 1.08 } }); mapCard(L, 5, 'CHRYSALIS', 'Free for all · Gun Game'); } },
-  { id: 'p6-cloudbreak', at: MAPS0 + 5 * MAPSEG, box: true, draw(L) { foot(bg, 'map-cloudbreak', L.t, L.d, { fallback: 'dryfork', still: { z0: 1.1, z1: 1.02, y0: -.2 } }); mapCard(L, 6, 'CLOUDBREAK', 'Doubles · Free for all'); } },
-  { id: 'p7-dryfork', at: MAPS0 + 6 * MAPSEG, box: true, draw(L) { foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { from: .3, fallback: 'dryfork', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } }); mapCard(L, 7, 'DRY FORK', 'Big Team · Capture the Flag'); } },
+  { id: 'y3-canyon', at: grid(22), box: true, draw(L) {
+    foot(bg, 'bt-flag', L.t, L.d, { from: .6, fallback: 'dryfork', grade: 'contrast(1.05) saturate(1.06)', still: { z0: 1.0, z1: 1.1, x0: -.3, x1: .3 } });
+    caption(L, ['TWO FLAGS. SIXTEEN PLAYERS.', 'ONE CANYON.'], { y: 760, size: 74, at: .2, step: .5, track: 5 });
+  } },
+  // the rest of the modes, one a beat over two, on footage graded down to a bed
+  { id: 'm1-modes', at: grid(25), box: true, draw(L) {
+    const seg = 2 * 1.068;
+    const k = Math.min(MODES.length - 1, Math.floor(L.t / seg)), lt = L.t - k * seg;
+    const [name, line, tag, clipName, fb] = MODES[k];
+    foot(bg, clipName, lt, seg, { from: .3, fallback: fb, grade: 'brightness(.62) contrast(1.06) saturate(.85)', still: { z0: 1.04, z1: 1.1, grade: 'brightness(.6) contrast(1.06) saturate(.8)' } });
+    const kick = Math.exp(-lt * 14);
+    if (kick > .04) { fg.save(); fg.globalAlpha = kick * .3; fg.fillStyle = '#fff'; fg.fillRect(0, BOX.y, W, BOX.h); fg.restore(); }
+    const s = lerp(1.18, 1, E.expo(ramp(lt, 0, .3))), a = ramp(lt, 0, .06) * (1 - ramp(lt, seg - .12, seg));
+    text(fg, name, W / 2, 540, { size: 140, track: 12, scale: s, alpha: a, shadow: 30 });
+    text(fg, line, W / 2, 620, { kind: 'ail', size: 36, weight: 600, color: C.muted, alpha: a * ramp(lt, .15, .35), track: 2 });
+    if (tag) chip(fg, W / 2, 700, tag, { size: 26, alpha: a * ramp(lt, .2, .4), color: C.goldHi });
+  } },
   // ranked from day one: the slam on the first kick of the track's grid
   { id: 'r1-ranked', at: hit(97.9), draw(L) {
     const slam = hit(98.97) - hit(97.9);
-    foot(bg, 'slow', L.t, L.d, { full: true, fallback: 'bigteam', grade: 'brightness(.55) contrast(1.1) saturate(.8)', still: { full: true, z0: 1.1, z1: 1.16 } });
+    foot(bg, clip('capture-slow', 'capture'), L.t, L.d, { full: true, fallback: 'bulkhead', grade: 'brightness(.55) contrast(1.1) saturate(.8)', still: { full: true, z0: 1.1, z1: 1.16 } });
     if (L.t < slam) return;
     const lt = L.t - slam, LL = { t: lt, d: L.d - slam };
     fg.save(); fg.globalAlpha = .55; fg.fillStyle = '#000'; fg.fillRect(0, 0, W, H); fg.restore();
@@ -452,9 +495,9 @@ const SCENES = [
   } },
   // the end card
   { id: 'e1-end', at: hit(107.54), draw(L) {
-    foot(bg, clip('map-dryfork-2', 'map-dryfork'), L.t, L.d, { full: true, fallback: 'dryfork', grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)', still: { full: true, z0: 1.08, z1: 1.02, grade: 'brightness(.28) contrast(1.05) saturate(.7) blur(5px)' } });
+    foot(bg, clip('trucks', 'bt-flag'), L.t, L.d, { full: true, fallback: 'dryfork', grade: 'brightness(.3) contrast(1.05) saturate(.75) blur(4px)', still: { full: true, z0: 1.08, z1: 1.02, grade: 'brightness(.28) contrast(1.05) saturate(.7) blur(5px)' } });
     const r0 = rv(L, .25, .45, .01);
-    wordmark(fg, W / 2, 430 + r0.dy, 1.15, { alpha: r0.a, glow: 'rgba(232,185,49,.35)', line: 'ARENA SLAYER' });
+    wordmark(fg, W / 2, 430 + r0.dy, 1.15, { alpha: r0.a, glow: 'rgba(232,185,49,.35)', line: 'CAPTURE THE FLAG' });
     const r2 = rv(L, 1.2, .45, .01);
     fg.save(); fg.globalAlpha = r2.a; fg.fillStyle = C.line; fg.fillRect(W / 2 - 520, 610, 1040, 2); fg.restore();
     text(fg, 'PLAY FREE', W / 2, 700 + r2.dy, { size: 72, track: 10, alpha: r2.a, shadow: 20 });
@@ -468,19 +511,40 @@ const TOTAL = hit(114.2);
 for (let i = 0; i < SCENES.length; i++) { SCENES[i].t0 = SCENES[i].at; SCENES[i].d = (i + 1 < SCENES.length ? SCENES[i + 1].at : TOTAL) - SCENES[i].at; }
 const at = id => SCENES.find(s => s.id === id).t0;
 // The ramp's cuts: [seconds into the scene, clip, stand-in, seconds into the clip].
-const RAMP = [[0, 'kill-1', 'chrysalis'], [.72, 'kill-2', 'cistern'], [1.44, 'kill-3', 'bulkhead'], [2.0, 'kill-4', 'bigteam'], [2.5, 'kill-5', 'chrysalis'], [2.9, 'kill-6', 'cistern'], [3.1, 'kill-7', 'bulkhead']];
+// Each kill cam is a sword coming at the lens; it is cut so the blow lands
+// at the cut's end (the blow is about 1.1 s into each clip).
+const RAMP = [[0, 'sk-1', 'bulkhead', .4], [.72, 'sk-2', 'bulkhead', .4], [1.44, 'sk-3', 'bulkhead', .55], [2.0, 'sk-4', 'bulkhead', .6], [2.5, 'sk-5', 'bulkhead', .7], [2.9, 'sk-6', 'bulkhead', .9], [3.1, 'sk-7', 'bulkhead', .9], [3.3, 'sk-8', 'bulkhead', .2]];
 // What the announcer calls over them, in the bar.
 const MEDALS = [[.3, 'DOUBLE KILL'], [1.5, 'TRIPLE KILL'], [2.2, 'OVERKILL'], [2.8, 'KILLING SPREE']];
+// The sword's card: crates/sim/src/arms.rs and consts.rs (SWORD_REACH,
+// LUNGE_RANGE, LUNGE_SPEED, LUNGE_MS, CLASH_PUSH).
+const SWORD_LINES = [
+  ['ONE SWING, ONE KILL', 'Everything a full fighter has, shields and all'],
+  ['LUNGES FROM 6 M', 'Red reticle on: 18 m/s at them for up to 0.4 s'],
+  ['NEVER RUNS DOWN', 'A battery that is never spent'],
+  ['TWO LUNGES CLASH', 'Both thrown back, nobody hurt'],
+];
+// The capture's moment in its scene (seconds): the clip is cut so the
+// flag comes home on the beat after the card.
+const CAPTURE_AT = 1.9;
+// [name, line, chip, clip, stand-in]
+const MODES = [
+  ['DUEL', '1v1 Slayer, first to 15.', 'RANKED', 'ctf-a', 'cistern'],
+  ['DOUBLES', '2v2 Team Slayer, first to 30. Friendly fire on.', 'RANKED', 'ctf-b', 'bulkhead'],
+  ['FREE FOR ALL', 'Eight in, one out. Bots fill the empty seats.', '', 'ctf-c', 'chrysalis'],
+  ['GUN GAME', 'A kill a rung up a ladder of seven guns.', '', 'ctf-d', 'cistern'],
+];
 const FLASHES = [
-  [hit(45.44), .4, '#fff', .55],
+  [KILL, .4, '#fff', .55],
   [DROP, .5, '#fff', .9],
-  [at('m6-bigteam') + (at('p1-proving') - at('m6-bigteam')) / 2, .25, '#ffe9c0', .4],
+  [hit(79.69), .3, '#ffe9c0', .35],
   [hit(98.97), .5, '#fff', .8],
   [at('e1-end'), .5, '#fff', .45],
 ];
 
 // ── the audio cue list mix.py lays down, in trailer seconds ───────────────
 const ramp0 = at('b4-ramp');
+const modes0 = at('m1-modes');
 const CUES = {
   total: TOTAL,
   music: [
@@ -488,43 +552,62 @@ const CUES = {
     { src: 'sfx/trailer_drone.wav', at: 0, in: 0, len: hit(49.69), gain: .3, fade_in: 1.0, fade_out: .5 },
   ],
   sfx: [
-    { src: 'snd/wind_0.ogg', at: .2, gain: .5 },
-    { src: 'snd/scope_in_0.ogg', at: .3, gain: .8 },
-    { src: 'sfx/trailer_riser.wav', at: hit(45.44) - 4.2, gain: .35 },
-    { src: 'snd/shot_sniper_0.ogg', at: hit(45.44), gain: 1.0 },
-    { src: 'sfx/trailer_boom.wav', at: hit(45.44), gain: .7 },
-    { src: 'snd/headshot_0.ogg', at: hit(45.44) + .12, gain: .9 },
-    { src: 'snd/shield_pop_0.ogg', at: hit(45.44) + .1, gain: .6 },
-    { src: 'snd/death_0.ogg', at: hit(45.44) + .3, gain: .6 },
-    { src: 'sfx/trailer_whoosh.wav', at: at('b1-server') - .25, gain: .35 },
-    { src: 'snd/shot_br_0.ogg', at: at('b1-server') + .5, gain: .6 },
-    { src: 'snd/shield_hit_0.ogg', at: at('b1-server') + .55, gain: .5 },
-    { src: 'sfx/trailer_pulse.wav', at: at('b2-fog'), gain: .6 },
+    // the cold open: footsteps of a run, the blade lit, the lunge, the blow
+    { src: 'snd/room_hum_0.ogg', at: .2, gain: .45 },
+    { src: 'snd/sword_on_0.ogg', at: .6, gain: .8 },
+    { src: 'snd/step_metal_0.ogg', at: 1.4, gain: .5 },
+    { src: 'snd/step_metal_0.ogg', at: 2.0, gain: .5 },
+    { src: 'snd/step_metal_0.ogg', at: 2.6, gain: .5 },
+    { src: 'sfx/trailer_riser.wav', at: KILL - 4.2, gain: .35 },
+    { src: 'sfx/trailer_whoosh.wav', at: KILL - .45, gain: .6 },
+    { src: 'snd/sword_swing_0.ogg', at: KILL, gain: 1.0 },
+    { src: 'sfx/trailer_boom.wav', at: KILL, gain: .7 },
+    { src: 'snd/shield_pop_0.ogg', at: KILL + .06, gain: .6 },
+    { src: 'snd/death_0.ogg', at: KILL + .25, gain: .6 },
+    // the steal and the run
+    { src: 'sfx/trailer_whoosh.wav', at: at('b1-steal') - .25, gain: .35 },
+    { src: 'snd/pickup_0.ogg', at: at('b1-steal') + .3, gain: .6 },
+    { src: 'voice/flag_taken.ogg', at: at('b1-steal') + .5, gain: 1.0 },
+    { src: 'sfx/trailer_pulse.wav', at: at('b2-run'), gain: .6 },
+    { src: 'snd/shot_br_0.ogg', at: at('b2-run') + 1.1, gain: .45 },
+    { src: 'snd/shot_br_1.ogg', at: at('b2-run') + 1.35, gain: .4 },
     { src: 'sfx/trailer_riser.wav', at: DROP - 6.0, gain: .55 },
-    ...RAMP.slice(1).map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: ramp0 + t, gain: .7 })),
-    { src: 'snd/kill_0.ogg', at: ramp0 + .1, gain: .6 },
+    // the ramp: a swing on every cut
+    ...RAMP.map(([t], i) => ({ src: `snd/sword_swing_${i % 2}.ogg`, at: ramp0 + t, gain: .75 })),
+    ...RAMP.slice(1).map(([t]) => ({ src: 'sfx/trailer_pulse.wav', at: ramp0 + t, gain: .55 })),
     { src: 'voice/double_kill.ogg', at: ramp0 + MEDALS[0][0], gain: .9 },
     { src: 'voice/triple_kill.ogg', at: ramp0 + MEDALS[1][0], gain: .9 },
     { src: 'voice/overkill.ogg', at: ramp0 + MEDALS[2][0], gain: .9 },
     { src: 'voice/killing_spree.ogg', at: ramp0 + MEDALS[3][0], gain: .9 },
+    // the drop
     { src: 'sfx/trailer_boom.wav', at: DROP, gain: 1.0 },
-    { src: 'snd/shot_br_0.ogg', at: DROP, gain: .9 },
+    { src: 'snd/sword_swing_1.ogg', at: DROP, gain: .8 },
     { src: 'sfx/trailer_braam.wav', at: DROP + .02, gain: .55 },
-    { src: 'voice/slayer.ogg', at: DROP + .9, gain: 1.0 },
-    { src: 'snd/match_found_0.ogg', at: at('m1-duel') - .3, gain: .6 },
-    { src: 'sfx/trailer_whoosh.wav', at: at('m1-duel') - .2, gain: .3 },
-    { src: 'snd/go_0.ogg', at: at('m1-duel') + .1, gain: .5 },
-    { src: 'sfx/trailer_pulse.wav', at: at('m2-doubles'), gain: .55 },
-    { src: 'voice/free_for_all.ogg', at: at('m3-ffa') + .1, gain: .9 },
-    { src: 'voice/gun_game.ogg', at: at('m4-gungame') + .1, gain: .9 },
-    { src: 'snd/swap_0.ogg', at: at('m4-gungame') + 1.2, gain: .5 },
-    { src: 'voice/capture_the_flag.ogg', at: at('m5-ctf') + .1, gain: .9 },
-    { src: 'snd/pickup_0.ogg', at: at('m5-ctf') + 1.4, gain: .5 },
-    { src: 'voice/team_slayer.ogg', at: at('m6-bigteam') + .1, gain: .9 },
-    { src: 'snd/engine_0.ogg', at: at('m6-bigteam') + .2, gain: .6 },
-    { src: 'snd/skid_0.ogg', at: at('m6-bigteam') + (at('p1-proving') - at('m6-bigteam')) / 2, gain: .6 },
-    { src: 'sfx/trailer_boom.wav', at: at('p1-proving'), gain: .5 },
-    ...['p1-proving', 'p2-overpass', 'p3-cistern', 'p4-bulkhead', 'p5-chrysalis', 'p6-cloudbreak', 'p7-dryfork'].slice(1).map(id => ({ src: 'sfx/trailer_whoosh.wav', at: at(id) - .15, gain: .22 })),
+    { src: 'voice/capture_the_flag.ogg', at: DROP + .9, gain: 1.0 },
+    // the sword up close
+    { src: 'sfx/trailer_whoosh.wav', at: at('x1-sword') - .2, gain: .3 },
+    { src: 'snd/sword_on_0.ogg', at: at('x1-sword') + .1, gain: .9 },
+    ...SWORD_LINES.map((_, i) => ({ src: 'snd/ui_click_0.ogg', at: at('x1-sword') + .45 + i * .32, gain: .35 })),
+    { src: 'sfx/trailer_whoosh.wav', at: at('x2-lunge') + LUNGE_HIT - .45, gain: .5 },
+    { src: 'snd/sword_swing_0.ogg', at: at('x2-lunge') + LUNGE_HIT, gain: 1.0 },
+    { src: 'sfx/trailer_boom.wav', at: at('x2-lunge') + LUNGE_HIT, gain: .5 },
+    { src: 'sfx/trailer_pulse.wav', at: at('x3-pit'), gain: .55 },
+    { src: 'snd/sword_swing_1.ogg', at: at('x3-pit') + 1.3, gain: .7 },
+    // the capture
+    { src: 'sfx/trailer_riser.wav', at: at('x4-capture') + CAPTURE_AT - 2.2, gain: .4 },
+    { src: 'sfx/trailer_boom.wav', at: at('x4-capture') + CAPTURE_AT, gain: .8 },
+    { src: 'voice/flag_captured.ogg', at: at('x4-capture') + CAPTURE_AT + .2, gain: 1.0 },
+    // Big Team
+    { src: 'snd/engine_0.ogg', at: at('y1-truck') + .1, gain: .7 },
+    { src: 'snd/skid_0.ogg', at: at('y2-bigteam') + .3, gain: .5 },
+    { src: 'snd/shot_minigun_0.ogg', at: at('y2-bigteam') + (at('y3-canyon') - at('y2-bigteam')) / 2, gain: .7 },
+    { src: 'snd/truck_land_0.ogg', at: at('y3-canyon') + .4, gain: .6 },
+    { src: 'voice/flag_dropped.ogg', at: at('y3-canyon') + 1.4, gain: .9 },
+    // the modes, a hit each
+    ...MODES.map((_, i) => ({ src: 'sfx/trailer_pulse.wav', at: modes0 + i * 2 * 1.068, gain: .65 })),
+    { src: 'voice/free_for_all.ogg', at: modes0 + 2 * 2 * 1.068 + .1, gain: .9 },
+    { src: 'voice/gun_game.ogg', at: modes0 + 3 * 2 * 1.068 + .1, gain: .9 },
+    // ranked
     { src: 'sfx/trailer_riser.wav', at: hit(98.97) - 3.0, gain: .45 },
     { src: 'sfx/trailer_boom.wav', at: hit(98.97), gain: 1.0 },
     { src: 'sfx/trailer_braam.wav', at: hit(98.97) + .02, gain: .6 },
@@ -534,7 +617,7 @@ const CUES = {
     { src: 'sfx/trailer_reverse.wav', at: at('e1-end') - 2.4, gain: .6 },
     { src: 'sfx/trailer_boom.wav', at: at('e1-end') + .05, gain: .7 },
     { src: 'sfx/trailer_braam.wav', at: at('e1-end') + .05, gain: .45 },
-    { src: 'voice/game_over.ogg', at: at('e1-end') + 1.0, gain: .8 },
+    { src: 'voice/game_over_you_win.ogg', at: at('e1-end') + 1.0, gain: .8 },
   ],
 };
 

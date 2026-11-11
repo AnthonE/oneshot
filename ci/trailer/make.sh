@@ -74,7 +74,7 @@ cp "$ONESHOT"/crates/client/assets/fonts/Unitblock.ttf "$ONESHOT"/crates/client/
 # game's own renders: ci/film.sh pose draws the title's Triple T)
 M="$ONESHOT/crates/client/assets/models"
 for m in helmet beanie ten-gallon hardhat aviators shades goggles respirator welder skull demon visor \
-         hightops-right spurs-right magboots-right loggers-right wellies-right; do
+         hightops-right spurs-right magboots-right loggers-right wellies-right sword; do
   [ -s "$M/$m.glb" ] && cp "$M/$m.glb" "$B/glb/" || echo "trailer: no model $m (skipped)" >&2
 done
 
@@ -131,7 +131,7 @@ S="$ONESHOT/crates/client/assets/sound"
 cp "$S/music/intro.ogg" "$B/music/"
 for s in shot_sniper_0 shot_sniper_far_0 headshot_0 headshot_1 shield_pop_0 shield_hit_0 kill_0 death_0 scope_in_0 scope_out_0 \
          shot_br_0 shot_br_1 shot_ar_0 shot_rifle_0 shot_magnum_0 shot_shotgun_0 shot_rocket_0 shot_smg_0 sword_swing_0 sword_on_0 \
-         shot_carbine_0 shot_beam_0 shot_ion_0 shot_ionp_0 shot_ion_charged_0 shot_shards_0 shot_launcher_0 shot_cannon_0 shot_minigun_0 \
+         sword_swing_1 shot_carbine_0 shot_beam_0 shot_ion_0 shot_ionp_0 shot_ion_charged_0 shot_shards_0 shot_launcher_0 shot_cannon_0 shot_minigun_0 \
          blast_0 blast_1 rocket_fly_0 reload_br_0 reload_sniper_0 swap_0 swap_1 pickup_0 pickup_1 launch_0 jump_0 land_0 \
          engine_0 ride_0 skid_0 crash_0 truck_land_0 flyby_0 flyby_1 ricochet_0 bullet_metal_0 impact_metal_0 melee_hit_0 \
          match_found_0 go_0 ui_click_0 ui_hover_0 tick_0 over_on_0 camo_on_0 spawn_0 sticky_stick_0 grenades_0 throw_0 \
@@ -139,7 +139,8 @@ for s in shot_sniper_0 shot_sniper_far_0 headshot_0 headshot_1 shield_pop_0 shie
   [ -s "$S/$s.ogg" ] && cp "$S/$s.ogg" "$B/snd/" || true
 done
 for v in slayer team_slayer free_for_all gun_game capture_the_flag double_kill triple_kill overkill killstorm killing_spree \
-         running_riot rampage untouchable unstoppable extermination perfection game_over game_over_you_win taken_lead one_minute; do
+         running_riot rampage untouchable unstoppable extermination perfection game_over game_over_you_win taken_lead one_minute \
+         flag_taken flag_captured flag_dropped flag_returned killstorm game_over_you_win; do
   [ -s "$S/voice/$v.ogg" ] && cp "$S/voice/$v.ogg" "$B/voice/" || true
 done
 [ -s "$B/sfx/trailer_boom.wav" ] || python3 sfx.py "$B/sfx" >/dev/null

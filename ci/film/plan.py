@@ -77,7 +77,7 @@ ROLES = {
 def scan(tape):
     rows, deaths, kills = [], [], []
     for line in open(FILM / f"{tape}.scan"):
-        m = re.match(r"\s*([\d.]+) s\s+(.*?) killed (.*)$", line)
+        m = re.match(r"\s*([\d.]+) s\s+(.*?) killed (.*?)(?: \[[^\]]*\])?$", line)
         if m:
             t, killer, victim = float(m.group(1)), m.group(2).strip(), m.group(3).strip()
             if victim == "player":
