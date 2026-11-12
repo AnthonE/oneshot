@@ -900,11 +900,15 @@ fn face_tall(t: &TerrainDef, i: usize, j: usize) -> f32 {
 /// more: the wall each side stands higher; less: a buttress's nose), read
 /// `HOLLOW_UP_M` up the fall line (`dx`, `dz`: the ground's slope there),
 /// where the wall's ribs stand whole, so a couloir's line carries down to
-/// the foot: the ground `HOLLOW_REACH_M` to each side along the wall over
-/// the ground between, `HOLLOW_FULL_M` of it for the whole lane.
+/// the foot: how far the wall `HOLLOW_REACH_M` to each side stands out
+/// past the wall between, in the plan (the heights' difference over the
+/// wall's own slope there, so a cleft reads the same at any height on it),
+/// `HOLLOW_FULL_M` of it for the whole lane. A cleft is a tent in it, as
+/// wide as twice the reach: its ridge is the gully's line, its skirts the
+/// cone under it.
 const HOLLOW_UP_M: f32 = 8.0;
 const HOLLOW_REACH_M: f32 = 9.0;
-const HOLLOW_FULL_M: f32 = 12.0;
+const HOLLOW_FULL_M: f32 = 14.0;
 
 fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
     let len = dx.hypot(dz);
@@ -921,7 +925,12 @@ fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
     ) else {
         return 0.5;
     };
-    (0.5 + ((l + r) * 0.5 - mid) / HOLLOW_FULL_M).clamp(0.0, 1.0)
+    // The wall's slope where it is read, up its fall line.
+    let steep = match (at(qx + ux, qz + uz), at(qx - ux, qz - uz)) {
+        (Some(a), Some(b)) => ((a - b) * 0.5).abs().max(0.5),
+        _ => len.max(0.5),
+    };
+    (0.5 + ((l + r) * 0.5 - mid) / steep / HOLLOW_FULL_M).clamp(0.0, 1.0)
 }
 
 /// A terrain's lowest ground, m: a valley's ice.

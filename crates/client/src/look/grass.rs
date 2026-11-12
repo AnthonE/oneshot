@@ -305,7 +305,7 @@ const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 /// anywhere, all of it where the gather noise runs high); a lane's floor
 /// and a forecourt lie flat and low and stay clean.
 const THIN_REACH_M: f32 = 10.0;
-const THIN_PROUD_M: (f32, f32) = (0.3, 1.5);
+const THIN_PROUD_M: (f32, f32) = (0.6, 2.2);
 const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
 const THIN_FLANK: f32 = 0.6;
 const THIN_OVER_ICE_M: (f32, f32) = (0.05, 1.6);

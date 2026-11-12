@@ -869,7 +869,9 @@ function canyon(c, sea, fail) {
  *   crags     { h, wave, from, over, fine? }: a ridged relief on the
  *             faces; `fine` the share of it at 0.4 of the wave (0.35)
  *   ribs      { m, wave, from, over }?: buttresses and couloirs: the face
- *             read ±m further past its foot along ridges `wave` m apart,
+ *             read up to 2m further past its foot, broad buttresses
+ *             standing out between narrow clefts `wave` m apart that keep
+ *             the wall's own line,
  *             taken on from `from` over `over` m (more than 1.5 m, so the
  *             wall never dips; its foot and the floor do not move)
  *   massifs   [{ from: [x, z], to: [x, z], crest: [[u, y], ...],
@@ -974,12 +976,14 @@ function alpine(a, mirrors, fail) {
     return amp(x) * crH * ((1 - crFine) * ridged(ax / crWave, az / crWave, K(6)) + crFine * ridged(bx / fine, bz / fine, K(8)));
   };
   // Ribs: the face read further in or further out along the wall, so buttresses stand out of it and couloirs are let into it.
+  // The ridged field's sharp line is the couloir's (a cleft a gully lies in), its broad swell the buttress's.
   const rib = (x, z, e) => {
     if (!rbM) return 0;
     const [xw0, zw] = warp(x, z);
     const xw = nx(xw0);
     const [ax, az] = [0.6 * xw - 0.8 * zw, 0.8 * xw + 0.6 * zw];
-    return amp(x) * rbM * (2 * ridged(ax / rbWave, az / rbWave, K(9)) - 1) * fade(clamp01((e - rbFrom) / rbOver));
+    // Only ever out: a cleft keeps the wall's own line, so no rib lowers a rim that holds a flier in.
+    return amp(x) * rbM * 2 * (1 - ridged(ax / rbWave, az / rbWave, K(9))) * fade(clamp01((e - rbFrom) / rbOver));
   };
   const wall = (x, z, e0) => {
     if (e0 < -screeW) return 0;
