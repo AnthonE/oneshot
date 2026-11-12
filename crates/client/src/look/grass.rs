@@ -293,7 +293,7 @@ const ISLE_DRIFT: (f32, f32) = (0.45, 0.72);
 /// `ground.wgsl`, its stones in `clutter.rs` and these tufts all read it),
 /// so tufts and stones stand on ground that shows and are not two scatters
 /// on clean snow.
-const COLD_DRY: (f32, f32) = (0.006, 0.34);
+const COLD_DRY: (f32, f32) = (0.006, 0.45);
 /// A pressure ridge: ground under this much over the ice with the sheet
 /// this far to both sides of it.
 const RIDGE_UNDER_M: f32 = 2.2;
@@ -320,7 +320,7 @@ const THIN_REACH_M: f32 = 10.0;
 const THIN_PROUD_M: (f32, f32) = (0.6, 2.2);
 const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
 const THIN_FLANK: f32 = 0.6;
-const THIN_OVER_ICE_M: (f32, f32) = (0.05, 1.6);
+const THIN_OVER_ICE_M: (f32, f32) = (0.05, 2.6);
 const THIN_SHORE_M: f32 = 12.0;
 const THIN_PATCH: f32 = 0.45;
 const THIN_HIGH_M: (f32, f32) = (9.0, 15.0);
@@ -454,7 +454,7 @@ pub(crate) fn ice_ridge(t: &TerrainDef, x: f32, z: f32, ice: f32) -> bool {
 /// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
 /// opens its windows (`ground.wgsl`'s scour, a noise against the same
 /// lane), so cover stands on ground that shows and not on clean snow.
-const OPEN: (f32, f32) = (0.45, 0.85);
+const OPEN: (f32, f32) = (0.32, 0.7);
 
 pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let k = ((snow_thin(t, x, z, ice) - OPEN.0) / (OPEN.1 - OPEN.0)).clamp(0.0, 1.0);
@@ -465,7 +465,7 @@ pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
 /// than its bare ground (`STREWN`, as the paint strews its own:
 /// `ground.wgsl`'s `SCOUR_RIM`), on snow, so where a painted stone goes at
 /// the feet a real one stands.
-const STREWN: (f32, f32) = (0.22, 0.65);
+const STREWN: (f32, f32) = (0.15, 0.45);
 
 pub(crate) fn snow_strewn(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let k = ((snow_thin(t, x, z, ice) - STREWN.0) / (STREWN.1 - STREWN.0)).clamp(0.0, 1.0);

@@ -745,7 +745,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.6, 1.88, 2.34];
+const ALPINE_CONCRETE: [f32; 3] = [1.5, 1.86, 2.5];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its
@@ -827,7 +827,10 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         // grows and no creek runs, so the other three carry what the
         // paint reads (`ground.wgsl`): how far into a couloir a face is,
         // how tall the face is, how thin the snow lies.
-        let rock = splat_snow(slope)[3];
+        // A cut is rock to its rim: the vertex at a slot's inside corner lies
+        // on the mountain's gentle top, and as snow it drew a ruled white
+        // line down the corner's one cell of triangles.
+        let rock = if cut(t, i, j) { 1.0 } else { splat_snow(slope)[3] };
         let (x, z) = (t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
         // A face, and no cut: a slot let square into the mountain (a
         // base's) is a plane to the paint, a wall's beds and no more.

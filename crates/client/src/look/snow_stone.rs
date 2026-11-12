@@ -15,8 +15,9 @@ use bevy::shader::ShaderRef;
 const SHADER: &str = "shaders/snow_stone.wgsl";
 
 /// How far a facet turns to the sky (its normal's y) where the cap starts
-/// and where it is whole. A boulder's flank is under the first.
-pub const CAP_UP: (f32, f32) = (0.52, 0.74);
+/// and where it is whole: its crown alone. From 0.52 a boulder seen from a
+/// perch or the air was all cap, a snow mound, and cover lost its dark.
+pub const CAP_UP: (f32, f32) = (0.74, 0.92);
 /// The cap's colour, a shade under the field's snow so the boulder keeps an
 /// edge against it, and its roughness.
 pub const CAP_RGB: [f32; 3] = [0.74, 0.76, 0.8];
