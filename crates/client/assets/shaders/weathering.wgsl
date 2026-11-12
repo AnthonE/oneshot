@@ -391,7 +391,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // 2 · Grime toward the ground, in a ragged band: splash and soil.
     let above = p.y - ground_under(p);
     let ragged = weather.grime.y * (0.6 + 0.8 * vnoise_aa(p + vec3<f32>(47.0), 0.8, px));
-    let grime = (1.0 - smoothstep(0.0, ragged, above)) * weather.grime.x;
+    // No splash or snow lies against a wall under a roof.
+    let hall = in_hall(p, ng);
+    let grime = (1.0 - smoothstep(0.0, ragged, above)) * weather.grime.x * (1.0 - hall);
     c = mix(c, c * weather.grime_tint.rgb, clamp(grime, 0.0, 1.0));
 
     // 3 · Streaks, on the sides only: noise long down the wall and narrow
@@ -406,7 +408,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var streak = smoothstep(0.38, 0.78, s1 * 0.7 + s2 * 0.3) * side * weather.streak.x;
     // No rain runs down a wall under a roof; a poured wall's stains hang
     // from its top edge, each its own length.
-    let hall = in_hall(p, ng);
     streak *= 1.0 - hall;
     if weather.turn.w > 1.5 {
         let hang = weather.centre.y + weather.half.y - p.y;
@@ -438,7 +439,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A hall is lit by its lamps: the sky's fill does not come through its roof.
     let fill = mix(1.0, HALL_FILL, hall);
     pbr_input.diffuse_occlusion *= fill;
-    pbr_input.specular_occlusion *= fill * 0.5;
+    // Its mirrored sky by half as much again: a hall's steel shows no sky.
+    pbr_input.specular_occlusion *= mix(1.0, HALL_FILL * 0.5, hall);
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

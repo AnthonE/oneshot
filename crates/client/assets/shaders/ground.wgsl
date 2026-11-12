@@ -523,13 +523,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 
     var w = vec4<f32>(1.0, 0.0, 0.0, 0.0);
-    var face = 0.0;
+    var face_tall = 0.0;
 #ifdef VERTEX_COLORS
     w = clamp(in.color, vec4<f32>(0.0), vec4<f32>(1.0));
     // A valley grows no grass: its second lane is not a weight but how
     // tall the face a vertex stands in is (`level::face_tall`).
     if ground.layers.z > 0.5 {
-        face = w.y;
+        face_tall = w.y;
         w.y = 0.0;
     }
 #endif
@@ -804,7 +804,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             if turn < 0.99 {
                 gully = max(gully, (1.0 - turn) * gully_snow(wp.x, wp.y, 2, fp_m));
             }
-            lie = max(max(deep.x, thin.x), gully * face);
+            lie = max(max(deep.x, thin.x), gully * face_tall);
         } else {
             let up = wn.y + rock_tilt.y;
             lie = smoothstep(0.12, 0.32, up) * smoothstep(0.3, 0.7, value3(wp / 3.0));
