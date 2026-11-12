@@ -413,6 +413,7 @@ pub fn dress(
                             own_value: false,
                             open: false,
                             hall: None,
+                            foot: 0b1111,
                         },
                     ));
                 }

@@ -96,10 +96,10 @@ VIEWS=(
   "pit_shaft|map=8&eye=-9,0.7,2.5&look=4,-14,-12|2"
   "ice_base|map=9&eye=-183,5.7,-6&look=-206,8.5,4|2"
   "ice_hangar|map=9&eye=-211,6.7,5&look=-238,6.5,-2|2"
-  "ice_terrace|map=9&eye=-206.8,14.2,-3.5&look=-170,1,66|2"
+  "ice_terrace|map=9&eye=-206.8,14.2,-3.5&look=-170,8,66|2"
   "ice_lake|map=9&eye=-158,2.4,56&look=0,6,96|2"
   "ice_col|map=9&eye=-8,5.85,-66&look=-78,12,-12|2"
-  "ice_perch|map=9&eye=-88,26.3,0&look=-206,31,0|2"
+  "ice_perch|map=9&eye=-88,26.3,0&look=-206,39,0|2"
   "ice_moraine|map=9&eye=-134,7.3,-80&look=0,4,-116|2"
   "ice_over|map=9&eye=-170,85,-118&look=30,0,20|2"
 )

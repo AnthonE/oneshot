@@ -623,6 +623,10 @@ const LAMP_FIXTURE_GLOW: f32 = 8.0;
 /// every rung lights a fighter the same.
 const LAMP_DOWN_FROM: f32 = 13.0;
 const LAMP_CONE: (f32, f32) = (0.6, 1.05);
+/// A lamp within this of a roof over it is hung from it, and its cone:
+/// near a hemisphere, so it still lies in the floor far down a hall.
+const LAMP_HUNG_M: f32 = 0.8;
+const LAMP_HUNG_CONE: (f32, f32) = (1.1, 1.45);
 /// Any lower lamp lights a room with a low ceiling, a metre or two over a
 /// head: its fixture is this small and this bright.
 const LAMP_ROOM_R: f32 = 0.34;
@@ -826,9 +830,14 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         let rock = splat_snow(slope)[3];
         let (x, z) = (t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
         // A face, and no cut: a slot let square into the mountain (a
-        // base's) is a plane to the paint, with shelves and no more.
-        let on_face = slope > SNOW_ROCK_SLOPE.0 * 0.6 && !cut(t, i, j);
-        let (hollow, tall) = if on_face {
+        // base's) is a plane to the paint, a wall's beds and no more.
+        let steep = slope > SNOW_ROCK_SLOPE.0 * 0.6;
+        let on_face = steep && !cut(t, i, j);
+        let (hollow, tall) = if steep && !on_face {
+            // A cut: a tall face (its beds are a wall's, not a massif's
+            // close-set ones) with no hollow and no broad one.
+            (0.5, 0.5)
+        } else if on_face {
             // The second lane is two things: under a half, how tall the
             // face is; over it, a tall face, and how far into a broad
             // hollow (the bank at its foot stands highest there).
@@ -1331,7 +1340,33 @@ pub fn build(
             own_value: true,
             open: open_top(&map, mid, max.y),
             hall: halls.of(&map, mid, (max - min) * 0.5),
+            foot: 0b1111,
         };
+        // A block on another's top has a floor only where that top runs on
+        // past its side (a parapet on a deck's edge: on the deck's side).
+        if block.ground == min.y {
+            let under = |x: f32, z: f32| map.occupied(x, z, 0.15, min.y - 0.4, min.y - 0.05);
+            const OUT: f32 = 0.4;
+            block.foot = u8::from(under(max.x + OUT, mid.z))
+                | u8::from(under(min.x - OUT, mid.z)) << 1
+                | u8::from(under(mid.x, max.z + OUT)) << 2
+                | u8::from(under(mid.x, min.z - OUT)) << 3;
+        }
+        // Under snow the wind bares a top's lip only where its floor ends:
+        // not where another box (or the hill) carries it on past that side.
+        if land == Land::Alpine {
+            const OUT: f32 = 0.4;
+            let on =
+                |x: f32, z: f32| map.occupied(x, z, 0.15, max.y - 0.4, max.y - 0.05) || ground_at(x, z) > max.y - 0.3;
+            let along = |f: &dyn Fn(f32) -> (f32, f32)| {
+                [0.25, 0.5, 0.75].into_iter().filter(|&t| on(f(t).0, f(t).1)).count() >= 2
+            };
+            let (dx, dz) = (max.x - min.x, max.z - min.z);
+            block.foot |= u8::from(along(&|t| (max.x + OUT, min.z + dz * t))) << 4
+                | u8::from(along(&|t| (min.x - OUT, min.z + dz * t))) << 5
+                | u8::from(along(&|t| (min.x + dx * t, max.z + OUT))) << 6
+                | u8::from(along(&|t| (min.x + dx * t, min.z - OUT))) << 7;
+        }
         // A long box on uneven ground: its grime follows the ground along
         // it, not the height under its middle (an end wall across a
         // canyon's floor and up its banks).
@@ -1541,6 +1576,7 @@ pub fn build(
             own_value: true,
             open: open_top(&map, mid, max.y),
             hall: halls.of(&map, mid, size * 0.5),
+            foot: 0b1111,
         };
         commands.spawn((
             LevelPart,
@@ -1661,6 +1697,7 @@ pub fn build(
                 own_value: false,
                 open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
                 hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(r, hy, r)),
+                foot: 0b1111,
             },
             // No wear: an arc is turned segments overlapping at their
             // ends, and each one's end edges are inside the next.
@@ -1675,6 +1712,7 @@ pub fn build(
                 own_value: false,
                 open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
                 hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(hx, hy, hz)),
+                foot: 0b1111,
             },
             // No wear either: the edges a box's wear is laid along aren't
             // there on a curve.
@@ -1692,6 +1730,7 @@ pub fn build(
                     own_value: false,
                     open: open_top(&map, mid, b.y),
                     hall: halls.of(&map, mid, Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z) * 0.5),
+                    foot: 0b1111,
                 }
             }
         };
@@ -1794,6 +1833,33 @@ pub fn build(
     }
     for &(p, c, lm) in map.light.lamps {
         let colour = Color::srgb(c[0], c[1], c[2]);
+        // Hung close under a roof in a snowed valley's hall (a strip's own
+        // light): it throws down and wide, and the strip is its fixture. As
+        // a point it lit the roof a hand over it far harder than the floor,
+        // and what stands on the roof's far side.
+        let hung = land == Land::Alpine
+            && map.ray(
+                sim::geom::V3::new(p[0], p[1], p[2]),
+                sim::geom::V3::new(0.0, 1.0, 0.0),
+                LAMP_HUNG_M,
+            ) < LAMP_HUNG_M;
+        if hung {
+            commands.spawn((
+                LevelPart,
+                SpotLight {
+                    color: colour,
+                    intensity: lm,
+                    range: LAMP_RANGE,
+                    radius: 0.15,
+                    inner_angle: LAMP_HUNG_CONE.0,
+                    outer_angle: LAMP_HUNG_CONE.1,
+                    shadows_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(p[0], p[1], p[2]).looking_to(Dir3::NEG_Y, Vec3::Z),
+            ));
+            continue;
+        }
         if p[1] >= LAMP_DOWN_FROM {
             commands.spawn((
                 LevelPart,
@@ -2037,6 +2103,7 @@ pub fn build(
                         own_value: false,
                         open: false,
                         hall: None,
+                        foot: 0b1111,
                     },
                     Mesh3d(meshes.add({
                         // Cut where the boxes stand on it.

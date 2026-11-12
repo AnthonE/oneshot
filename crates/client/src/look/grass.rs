@@ -297,7 +297,9 @@ const COLD_DRY: (f32, f32) = (0.006, 0.34);
 /// A pressure ridge: ground under this much over the ice with the sheet
 /// this far to both sides of it.
 const RIDGE_UNDER_M: f32 = 2.2;
+const RUBBLE_OVER_ICE_M: f32 = 0.45;
 const RIDGE_ACROSS_M: f32 = 7.0;
+const RIDGE_LOW_M: f32 = 8.0;
 const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 /// Where a valley's snow lies thin. On what stands proud of the ground
 /// `THIN_REACH_M` round it (a crown, a shoulder, a spur's crest: from
@@ -399,7 +401,21 @@ pub(crate) fn ice_ridge(t: &TerrainDef, x: f32, z: f32, ice: f32) -> bool {
     let Some(y) = ground(t, x, z) else { return false };
     let ice_at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).is_some_and(|h| h < ice + THIN_OVER_ICE_M.0);
     let r = RIDGE_ACROSS_M;
-    y >= ice + THIN_OVER_ICE_M.0
+    // A ridge is low all along: an islet's flank has higher ground within reach.
+    let d = core::f32::consts::FRAC_1_SQRT_2 * RIDGE_LOW_M;
+    let low = [
+        (RIDGE_LOW_M, 0.0),
+        (-RIDGE_LOW_M, 0.0),
+        (0.0, RIDGE_LOW_M),
+        (0.0, -RIDGE_LOW_M),
+        (d, d),
+        (-d, d),
+        (d, -d),
+        (-d, -d),
+    ]
+    .iter()
+    .all(|(a, b)| ground(t, x + a, z + b).is_none_or(|h| h < ice + RIDGE_UNDER_M));
+    low && y >= ice + THIN_OVER_ICE_M.0
         && y < ice + RIDGE_UNDER_M
         && ((ice_at(r, 0.0) && ice_at(-r, 0.0))
             || (ice_at(0.0, r) && ice_at(0.0, -r))
@@ -418,6 +434,17 @@ pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     k * k * (3.0 - 2.0 * k)
 }
 
+/// How much of a window's stones lie at (x, z), 0..1: from further out
+/// than its bare ground (`STREWN`, as the paint strews its own:
+/// `ground.wgsl`'s `SCOUR_RIM`), on snow, so where a painted stone goes at
+/// the feet a real one stands.
+const STREWN: (f32, f32) = (0.22, 0.65);
+
+pub(crate) fn snow_strewn(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
+    let k = ((snow_thin(t, x, z, ice) - STREWN.0) / (STREWN.1 - STREWN.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
+
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
 /// rule (level.rs): grass up the hills, none on steep rock or in the creek,
 /// in patches; dry tufts alone under the floor, above the sea at `sea`. An
@@ -430,7 +457,8 @@ fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> O
     let slope = (dx * dx + dz * dz).sqrt();
     if cold {
         // Down to the ice's edge (no swash to keep clear of), none on the sheet.
-        if slope > 0.55 || y < sea + THIN_OVER_ICE_M.0 {
+        // None in the first hand over the sheet: that is its rubble, not ground.
+        if slope > 0.55 || y < sea + RUBBLE_OVER_ICE_M {
             return None;
         }
         // None on a ridge of the ice's own: broken ice grows nothing.

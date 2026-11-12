@@ -230,10 +230,11 @@ const RED_ROCK_C: u32 = 0x9c6448;
 const COLD_STONE_C: u32 = 0x4a4c52;
 const COLD_DARK_STONE_C: u32 = 0x34363c;
 /// The snow lying on a stone's top in a valley (its facets steeper to the
-/// sky than `CAP_UP`), a shade under the field's own so the stone still
-/// has an edge against it.
+/// sky than `CAP_UP`: its ridge alone; a stone is a low lump, and at 0.45
+/// every facet of it was white on white), a shade under the field's own so
+/// the stone still has an edge against it.
 const SNOW_CAP_C: u32 = 0xd4d9e2;
-const CAP_UP: f32 = 0.45;
+const CAP_UP: f32 = 0.8;
 const TWIG_C: u32 = 0x5a4630;
 /// A twig the sun has had for years, on the sand.
 const BLEACHED_TWIG_C: u32 = 0x857a6c;
@@ -524,7 +525,7 @@ fn dry_plant(s: &mut Soup, at: Vec3, seed: u32) {
 /// everywhere, and drifts of them where the meadow's patch noise, read
 /// elsewhere and broader, runs high.
 fn snow_drift(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
-    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * grass::snow_open(t, x, z, ice)
+    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * grass::snow_strewn(t, x, z, ice)
 }
 
 pub(crate) fn drift(x: f32, z: f32) -> f32 {

@@ -113,6 +113,13 @@ pub struct Block {
     /// The hall it stands in or bounds, as a box (lo, hi), on a map whose
     /// halls the sky does not light (a snowed valley's hangars).
     pub hall: Option<(Vec3, Vec3)>,
+    /// Which of its sides have a floor at their foot, as bits (+x 1, -x 2,
+    /// +z 4, -z 8, in its own frame): where snow can lie against it. All
+    /// four on the ground; a parapet on a deck's edge has it on its deck's
+    /// side only. Over those, a bit for each side its top's floor carries on
+    /// past (16, 32, 64, 128): the wind bares a snowed top's lip on the
+    /// others.
+    pub foot: u8,
 }
 
 /// The ground's samples along a long block ([`Block::run`]).
@@ -292,7 +299,7 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool, snowy: boo
     };
     WeatherParams {
         mottle: Vec4::new(mottle, 0.65, 0.17, if b.own_value { block_value(b.mid) } else { 1.0 }),
-        streak: Vec4::new(streak, 2.2, if settles { 1.0 } else { 0.0 }, 0.0),
+        streak: Vec4::new(streak, 2.2, if settles { 1.0 } else { 0.0 }, f32::from(b.foot)),
         streak_tint: Vec4::new(tint[0], tint[1], tint[2], 0.0),
         grime: Vec4::new(
             // A snowed valley's concrete is damp and dark over the snow at its foot.
@@ -397,6 +404,7 @@ mod tests {
             own_value: true,
             open: true,
             hall: None,
+            foot: 0b1111,
         }
     }
 

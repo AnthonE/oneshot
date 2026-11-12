@@ -106,7 +106,7 @@ const HANG_M: vec2<f32> = vec2<f32>(0.6, 2.6);
 // there (its roof's underside, which the cube's earth half would paint
 // with another map's sunlit sand) takes `HALL_SOFFIT` of that again.
 const HALL_FILL: f32 = 0.38;
-const HALL_SOFFIT: f32 = 0.45;
+const HALL_SOFFIT: f32 = 0.35;
 // A soffit's beams, as shading: this wide along each bay's joint, this dark.
 const SOFFIT_RIB_M: f32 = 0.5;
 const SOFFIT_RIB_DARK: f32 = 0.55;
@@ -116,7 +116,8 @@ const SOFFIT_RIB_DARK: f32 = 0.55;
 // two tyres' tracks in it `LANE_TRACK_M` off its middle; the dust is kept
 // to its margins.
 const LANE_M: vec2<f32> = vec2<f32>(4.5, 6.5);
-const LANE_DARK: f32 = 0.72;
+const LANE_DARK: f32 = 0.88;
+const HALL_FLOOR_LIFT: f32 = 1.5;
 const LANE_ROUGH: f32 = 0.3;
 const LANE_TRACK_M: f32 = 1.1;
 const LANE_TRACK_ROUGH: f32 = 0.5;
@@ -420,7 +421,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let ragged = weather.grime.y * (0.6 + 0.8 * vnoise_aa(p + vec3<f32>(47.0), 0.8, px));
     // No splash or snow lies against a wall under a roof.
     let hall = in_hall(p, ng);
-    let grime = (1.0 - smoothstep(0.0, ragged, above)) * weather.grime.x * (1.0 - hall);
+    // Nor against a side with no floor at its foot (a parapet's outer face on a deck's edge):
+    // the block's own frame, a bit a side (`weathering::Block::foot`).
+    let side_n = vec2<f32>(ng.x * weather.turn.x + ng.z * weather.turn.y, ng.z * weather.turn.x - ng.x * weather.turn.y);
+    let side_bit = select(select(8u, 4u, side_n.y > 0.0), select(2u, 1u, side_n.x > 0.0), abs(side_n.x) > abs(side_n.y));
+    let floored = f32((u32(weather.streak.w + 0.5) & side_bit) != 0u);
+    let grime = (1.0 - smoothstep(0.0, ragged, above)) * weather.grime.x * (1.0 - hall) * floored;
     c = mix(c, c * weather.grime_tint.rgb, clamp(grime, 0.0, 1.0));
     // 2a · Snow against a poured wall's foot, outdoors, on its sides.
     if weather.turn.w > 1.5 && hall < 0.5 {
@@ -429,7 +435,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let tear = 0.7 * vnoise_aa(p + vec3<f32>(7.0), 0.45, px) + 0.3 * vnoise_aa(p + vec3<f32>(3.0), 2.6, px);
         let reach = mix(PLASTER_M.x, PLASTER_M.y, tear * tear);
         let plaster = (1.0 - smoothstep(reach * 0.8, reach, above)) * smoothstep(-0.5, -0.1, above)
-            * (1.0 - smoothstep(0.35, 0.7, abs(ng.y)));
+            * (1.0 - smoothstep(0.35, 0.7, abs(ng.y))) * floored;
         c = mix(c, SNOW_RGB * (0.9 + 0.2 * vnoise_aa(p, 6.0, px)), plaster);
         rough = mix(rough, 1.0, plaster);
     }
@@ -470,7 +476,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if weather.streak.z > 0.5 {
         // Snow: windrows, and the wind keeps a top's free edges bare.
         let rows = fbm(vec3<f32>(p.x / WINDROW.x, p.y, p.z) + vec3<f32>(13.0), 0.6, px);
-        patches = smoothstep(WINDROW.y - 0.012, WINDROW.y + 0.012, rows) * smoothstep(LIP_BARE_M.x, LIP_BARE_M.y, edge_distance(p));
+        // The lip is the top's own border in the plan, whatever stands on it (a parapet covers the
+        // bare strip under it, and at a gap in one the deck has a kerb), on the sides its floor
+        // ends at (`weathering::Block::foot`'s high bits).
+        let lp = local(p);
+        let carried = u32(weather.streak.w + 0.5);
+        var border = 1.0e4;
+        if weather.centre.w > 1.5 {
+            border = weather.half.x - length(lp.xz);
+        } else {
+            border = min(border, select(weather.half.x - lp.x, 1.0e4, (carried & 16u) != 0u));
+            border = min(border, select(weather.half.x + lp.x, 1.0e4, (carried & 32u) != 0u));
+            border = min(border, select(weather.half.z - lp.z, 1.0e4, (carried & 64u) != 0u));
+            border = min(border, select(weather.half.z + lp.z, 1.0e4, (carried & 128u) != 0u));
+        }
+        let cut = 0.012 + px * 0.15;
+        patches = smoothstep(WINDROW.y - cut, WINDROW.y + cut, rows) * smoothstep(LIP_BARE_M.x, LIP_BARE_M.y, border);
     }
     // A hall's floor: its lane, and the dust at its margins.
     var lane = 0.0;
@@ -483,7 +504,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // A tyre's width, and it comes and goes with the wear.
         let track = (1.0 - smoothstep(0.12, 0.26, abs(off - LANE_TRACK_M))) * lane
             * smoothstep(0.35, 0.6, vnoise_aa(p + vec3<f32>(5.0), 0.3, px));
-        c *= mix(1.0, LANE_DARK, max(lane * 0.6, track));
+        // A hall's floor is its palest broad surface: lifted, its lane told by gloss more than by dark.
+        c *= HALL_FLOOR_LIFT * mix(1.0, LANE_DARK, max(lane * 0.6, track));
         // Worn in patches, and a tyre's rubber is dull across the sheen.
         let worn = mix(LANE_ROUGH, LANE_ROUGH + 0.12, vnoise_aa(p + vec3<f32>(21.0), 0.5, px));
         rough = mix(mix(rough, worn, lane), LANE_TRACK_ROUGH, track);
