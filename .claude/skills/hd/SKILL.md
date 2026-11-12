@@ -44,6 +44,10 @@ One `hd-judge` a view, all at once, each told three things: the pass it is readi
 - **Rank across the views, not within one.** The gap most of them put first is the round's; a view's own gap that no other shares waits, unless it is its whole frame.
 - **A view that cannot see its take is the first gap.** Half of Icefall's first eyes stood where a lip, a deck or the view's own subject hid what the view was named for; the judges said so before anything else, and a moved eye loosens one round's comparison and no more.
 - **Batch what does not overlap.** A pass is ten minutes on a box with no GPU: a round may change the rock, the snow and the concrete at once, each its own constant and its own line in what the judges are told.
+- **One view before eight.** After a shader change shoot one view and look at it: a shader that does not compile still gives a frame (`tools/hd.sh` refuses it and prints the error; `from` and `patch` are WGSL's words, not names), and a rule that draws blotches is seen in one frame, not in a pass.
+- **Run the client's tests before the judges, not after** (`cargo test --lib` in `crates/client`): a mood has floors a look may not go under (`every_mood_keeps_a_fighter_readable`: the fill at 0.7), and a pass shot under one is judged for light it cannot keep.
+- **Name the map to the board** (`HD_MAP=9 … node tools/board.mjs look --views …`): without it the board shoots every map's views before it reads one, half an hour here.
+- **Stop a round on a rule, not a feeling.** A judge always has five gaps. The round is over when what they put first is the operator's (the layout, the sun, the mist, a thing in play) or when two passes running leave the verdicts where they were.
 
 ## What the references have
 

@@ -156,6 +156,14 @@ shoot() {
   local id=$1 q=$2 secs=$3 png=$out/$1.png
   rm -f "$png"
   if timeout "$limit" "$bin" --pose "$q" --quality "${HD_QUALITY:-high}" --shot "$png" --shot-at "$secs" >"$out/$id.log" 2>&1 && [ -s "$png" ]; then
+    # A shader that did not compile still gives a frame (what it draws is
+    # left out or flat): that frame is not the map's, and no pass keeps it.
+    if grep -q "failed to process shader" "$out/$id.log"; then
+      echo "hd: $id: a shader did not compile, the frame is not the map's:" >&2
+      grep -m1 -A6 "failed to process shader" "$out/$id.log" | sed 's/\x1b\[[0-9;]*m//g' >&2
+      rm -f "$png"
+      return 1
+    fi
     echo "$png  $q"
   else
     echo "hd: $id was not shot (see $out/$id.log)" >&2

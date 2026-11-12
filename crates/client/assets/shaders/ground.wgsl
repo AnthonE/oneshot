@@ -78,39 +78,47 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 // line a pixel deep and as much fainter, never a level lift. The beds dip
 // `LEDGE_DIP_M` over `LEDGE_DIP_WAVE_M` (each family its own way) and waver
 // `LEDGE_WAVER_M` every few metres.
-// Snow falls down gullies: plumb lines down a face, one in `GULLY_SHARE`
-// of the `GULLY_GAP_M` stretches along it, `GULLY_W` across (m, narrowest
-// and widest), each kinked `GULLY_KINK_M` on its own wave
-// `GULLY_KINK_WAVE_M` tall, bare for `GULLY_BARE` of its reaches
-// (`GULLY_REACH_M`), and opening under its own apex (a height in `FAN_Y`,
-// over the floor) into a cone `FAN_SPREAD` wider each metre down, streaked
-// by what slid. Noise through a threshold drew islands and ribbons that
-// bent together at one height; a cut lowered along the whole foot drew a
-// row of flames; sheets on a face that leans drew ovals.
+// Snow falls down gullies, on a face tall enough to feed one (the mesh's
+// second lane under snow, `level::face_tall`: a massif's or a spur's face
+// holds shelves and no more): one in `GULLY_SHARE` of the `GULLY_GAP_M`
+// stretches along it, each starting at its own height (in `GULLY_FROM_Y`)
+// as a hair and widening over `GULLY_GROW_M` of fall to its width (in
+// `GULLY_W`, m), kinked `GULLY_KINK_M` on its own wave `GULLY_KINK_WAVE_M`
+// tall, bare for `GULLY_BARE` of its reaches (`GULLY_REACH_M`), and
+// opening under its own apex (a height in `FAN_Y`, over the floor) into a
+// cone at snow's repose (`FAN_SPREAD` wider each metre down: wider than it
+// is tall), streaked by what slid, the cones running together into the
+// bank at the wall's foot. Noise through a threshold drew islands and
+// ribbons that bent together at one height; a cut lowered along the whole
+// foot drew a row of flames; sheets on a face that leans drew ovals; lines
+// of one width from crest to foot, each with a cone three times as tall as
+// wide, drew pinstripes and a row of teeth.
 // Snow on rock is the field's snow (`SNOW_ON_ROCK` of the way from its lee
 // to its crest) and faces the sky more than its face does (`SNOW_UP`).
 const LEDGE_DEEP: vec4<f32> = vec4<f32>(11.5, 2.4, 0.5, 90.0);
 const LEDGE_THIN: vec4<f32> = vec4<f32>(3.3, 0.7, 0.3, 14.0);
-const LEDGE_DIP_M: f32 = 12.0;
+const LEDGE_DIP_M: f32 = 6.0;
 const LEDGE_DIP_WAVE_M: f32 = 95.0;
-const LEDGE_WAVER_M: f32 = 1.4;
+const LEDGE_WAVER_M: f32 = 0.8;
 const LEDGE_RUN_M: f32 = 14.0;
 const LIP_AT: f32 = 0.3;
 const LIP_SHADE: f32 = 0.45;
 const LIP_SHADE_M: f32 = 1.6;
-const BAND_TONE: f32 = 0.2;
+const BAND_TONE: f32 = 0.3;
 const LEAN: vec2<f32> = vec2<f32>(0.52, 0.72);
 const LEAN_SHARE: f32 = 0.4;
 const LEAN_DEEP: f32 = 1.5;
 const GULLY_GAP_M: f32 = 22.0;
-const GULLY_SHARE: f32 = 0.5;
+const GULLY_SHARE: f32 = 0.34;
+const GULLY_FROM_Y: vec2<f32> = vec2<f32>(45.0, 120.0);
+const GULLY_GROW_M: f32 = 45.0;
 const GULLY_W: vec2<f32> = vec2<f32>(0.9, 2.6);
-const GULLY_KINK_M: f32 = 2.2;
-const GULLY_KINK_WAVE_M: f32 = 45.0;
+const GULLY_KINK_M: f32 = 4.5;
+const GULLY_KINK_WAVE_M: f32 = 30.0;
 const GULLY_REACH_M: f32 = 26.0;
 const GULLY_BARE: f32 = 0.4;
-const FAN_Y: vec2<f32> = vec2<f32>(16.0, 30.0);
-const FAN_SPREAD: f32 = 0.28;
+const FAN_Y: vec2<f32> = vec2<f32>(11.0, 21.0);
+const FAN_SPREAD: f32 = 1.1;
 const SNOW_ON_ROCK: f32 = 0.6;
 const SNOW_UP: f32 = 1.1;
 // Its beds, read from across a valley: `VALLEY_BED` times the canyon's
@@ -131,14 +139,14 @@ const SNOW_DRIFT_M: f32 = 34.0;
 const SNOW_LEE: vec3<f32> = vec3<f32>(0.8, 0.86, 0.97);
 const SNOW_CREST: f32 = 1.06;
 // It lies thin on what slopes (one minus the normal's y from `SCOUR_SLOPE.x`
-// to `.y`: 14° to 30°; a lane's floor and a forecourt lie flatter and stay
+// to `.y`: 10° to 21°, a drumlin's flank; a lane's floor and a forecourt lie flatter and stay
 // clean): in patches `SCOUR_M` across the ground shows through
 // (`SCOUR_GROUND`, `SCOUR_THIN` of the way) with its stones (`SCOUR_STONE`,
 // of two sizes `SCOUR_STONE_M`), as the cover's own stones do up close.
 // Colours in the snow's lane, before its tint.
-const SCOUR_SLOPE: vec2<f32> = vec2<f32>(0.03, 0.13);
+const SCOUR_SLOPE: vec2<f32> = vec2<f32>(0.015, 0.07);
 const SCOUR_M: f32 = 11.0;
-const SCOUR_THIN: f32 = 0.08;
+const SCOUR_THIN: f32 = 0.14;
 const SCOUR_GROUND: vec3<f32> = vec3<f32>(0.3, 0.285, 0.265);
 const SCOUR_STONE: vec3<f32> = vec3<f32>(0.07, 0.07, 0.075);
 const SCOUR_STONE_M: vec2<f32> = vec2<f32>(0.38, 1.3);
@@ -413,7 +421,7 @@ fn ledge_snow(wp: vec3<f32>, by: f32, f: vec4<f32>, fp_m: f32, lean: f32) -> vec
         let d1 = draw3(cell_key(vec3<i32>(c1.x, i + 1, c1.y)));
         if d1.x < min(f.z + LEAN_SHARE * lean, 1.0) {
             let g1 = q1 - floor(q1);
-            let ends1 = smoothstep(0.0, 0.2, min(min(g1.x, 1.0 - g1.x), min(g1.y, 1.0 - g1.y)));
+            let ends1 = smoothstep(0.0, 0.06, min(min(g1.x, 1.0 - g1.x), min(g1.y, 1.0 - g1.y)));
             let run1 = value3(vec3<f32>(wp.x / LEDGE_RUN_M, f32(i + 1) * 3.7, wp.z / LEDGE_RUN_M));
             let depth1 = f.y * (0.15 + 0.85 * d1.y * d1.y) * ends1 * smoothstep(0.28, 0.6, run1);
             shade = LIP_SHADE * (1.0 - smoothstep(0.0, sm, -under)) * clamp(depth1 / 0.5, 0.0, 1.0)
@@ -424,7 +432,7 @@ fn ledge_snow(wp: vec3<f32>, by: f32, f: vec4<f32>, fp_m: f32, lean: f32) -> vec
         return vec2<f32>(0.0, shade);
     }
     let g = q - floor(q);
-    let ends = smoothstep(0.0, 0.2, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
+    let ends = smoothstep(0.0, 0.06, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
     let run = value3(vec3<f32>(wp.x / LEDGE_RUN_M, f32(i) * 3.7, wp.z / LEDGE_RUN_M));
     let depth = f.y * (0.15 + 0.85 * d.y * d.y) * (1.0 + LEAN_DEEP * lean) * ends * smoothstep(0.28, 0.6, run);
     // Never thinner than a pixel, and as much fainter.
@@ -456,14 +464,17 @@ fn gully_snow(u: f32, y: f32, key: i32, fp_m: f32) -> f32 {
         let at = (f32(c) + 0.2 + 0.6 * d.y) * GULLY_GAP_M + kink;
         let drop = max(mix(FAN_Y.x, FAN_Y.y, e.x) - y, 0.0);
         let swell = 0.55 + 0.9 * value3(vec3<f32>(f32(c) * 2.3, y / 9.0, f32(key) * 4.1));
-        let half = mix(GULLY_W.x, GULLY_W.y, d.z * d.z) * 0.5 * swell + drop * FAN_SPREAD;
+        // A hair where it starts, its width won as it falls.
+        let head = mix(GULLY_FROM_Y.x, GULLY_FROM_Y.y, e.z);
+        let grown = 0.2 + 0.8 * smoothstep(0.0, GULLY_GROW_M, head - y);
+        let half = mix(GULLY_W.x, GULLY_W.y, d.z * d.z) * 0.5 * swell * grown + drop * FAN_SPREAD;
         let reach = value3(vec3<f32>(f32(c) * 5.3, y / GULLY_REACH_M + e.y * 7.0, f32(key) * 2.1));
         let fed = max(smoothstep(GULLY_BARE - 0.06, GULLY_BARE + 0.06, reach), smoothstep(0.0, 3.0, drop));
         let wide = max(half, fp_m * 0.6);
         let off = abs(u - at) + rag * min(half, 1.0);
         // What slid down its cone: streaks down the fall line.
         let slid = 1.0 - 0.22 * smoothstep(0.0, 6.0, drop) * value3(vec3<f32>((u - at) / 0.8, y / 17.0, f32(c)));
-        best = max(best, (1.0 - smoothstep(wide * 0.6, wide, off)) * fed * slid * half / wide);
+        best = max(best, (1.0 - smoothstep(wide * 0.6, wide, off)) * fed * slid * half / wide * smoothstep(0.0, 4.0, head - y));
     }
     return best;
 }
@@ -512,8 +523,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
 
     var w = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    var face = 0.0;
 #ifdef VERTEX_COLORS
     w = clamp(in.color, vec4<f32>(0.0), vec4<f32>(1.0));
+    // A valley grows no grass: its second lane is not a weight but how
+    // tall the face a vertex stands in is (`level::face_tall`).
+    if ground.layers.z > 0.5 {
+        face = w.y;
+        w.y = 0.0;
+    }
 #endif
     w = w / max(w.x + w.y + w.z + w.w, 1e-4);
 
@@ -765,11 +783,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         if ground.layers.z > 0.5 {
             let waver = (value3(wp / 5.0 + vec3<f32>(2.0, 9.0, 4.0)) - 0.5) * 2.0 * LEDGE_WAVER_M;
             let by = wp.y + (value3(wp / BED_DIP_WAVE_M) - 0.5) * BED_DIP_M + waver;
-            let dip = vec2<f32>(value3(wp / LEDGE_DIP_WAVE_M + vec3<f32>(11.0, 3.0, 7.0)), value3(wp / (LEDGE_DIP_WAVE_M * 0.7) + vec3<f32>(1.0, 6.0, 13.0))) - 0.5;
+            // One dip for both families: strata lie parallel.
+            let dip = value3(wp / LEDGE_DIP_WAVE_M + vec3<f32>(11.0, 3.0, 7.0)) - 0.5;
             let lean = smoothstep(LEAN.x, LEAN.y, wn.y);
-            let by_deep = by + dip.x * LEDGE_DIP_M;
+            let by_deep = by + dip * LEDGE_DIP_M;
             let deep = ledge_snow(wp, by_deep, LEDGE_DEEP, fp_m, lean);
-            let thin = ledge_snow(wp, by + dip.y * LEDGE_DIP_M + 1.7, LEDGE_THIN, fp_m, lean);
+            let thin = ledge_snow(wp, by_deep + 1.7, LEDGE_THIN, fp_m, lean);
             // The deep beds as bands: each its own tone, hard along its top (the lip its shelf lies on).
             let band = by_deep / LEDGE_DEEP.x - LIP_AT;
             let bi = i32(floor(band));
@@ -785,7 +804,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             if turn < 0.99 {
                 gully = max(gully, (1.0 - turn) * gully_snow(wp.x, wp.y, 2, fp_m));
             }
-            lie = max(max(deep.x, thin.x), gully);
+            lie = max(max(deep.x, thin.x), gully * face);
         } else {
             let up = wn.y + rock_tilt.y;
             lie = smoothstep(0.12, 0.32, up) * smoothstep(0.3, 0.7, value3(wp / 3.0));

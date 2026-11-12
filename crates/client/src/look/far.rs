@@ -82,13 +82,15 @@ const SNOW_RINGS_M: [f32; 18] = [
 /// Snow lies on it where the valley's own walls hold it (the normal's y,
 /// from none to whole: 57° to 46°); the mesas' scrub rule (37°) left a
 /// range bare rock. Its rock shows in beds every `SNOW_BED_M` up. The
-/// valley's mist is over it already: its own air is `SNOW_HAZE`.
+/// valley's mist is over it already: its own air is `SNOW_HAZE`, and its
+/// snow a step bluer than the wall's cap in front of it, which stays the
+/// brightest thing on that skyline.
 const SNOW_LIES: (f32, f32) = (0.55, 0.70);
 const SNOW_BED_M: f32 = 38.0;
-const SNOW_HAZE: f32 = 0.3;
+const SNOW_HAZE: f32 = 0.45;
 const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
 const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
-const SNOW: [f32; 3] = [0.88, 0.91, 0.96];
+const SNOW: [f32; 3] = [0.78, 0.84, 0.95];
 const SNOW_AIR: [f32; 3] = [0.70, 0.78, 0.90];
 const HAZE: f32 = 0.62;
 const HAZE_M: f32 = 1500.0;

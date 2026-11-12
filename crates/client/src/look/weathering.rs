@@ -185,7 +185,7 @@ const ROOFED_DUST: f32 = 0.6;
 const HALL_OUT_M: f32 = 0.75;
 /// What grime at a block's foot multiplies by where snow lies against it:
 /// wet and cold, not the canyon's soil.
-const COLD_GRIME: [f32; 3] = [0.56, 0.6, 0.66];
+const COLD_GRIME: [f32; 3] = [0.42, 0.46, 0.52];
 
 /// How a surface weathers.
 #[derive(Clone, Copy, Debug)]

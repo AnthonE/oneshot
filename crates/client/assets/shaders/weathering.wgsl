@@ -97,8 +97,9 @@ const POUR_VALUE: f32 = 0.11;
 const TIE_R: f32 = 0.035;
 const TIE_DARK: f32 = 0.4;
 // Its stains hang from its top edge, strongest in its first `HANG_M.x`
-// metres and gone by `.y` more where they run longest.
-const HANG_M: vec2<f32> = vec2<f32>(1.0, 6.0);
+// metres and gone by `.y` more where they run longest (at 6 m every one
+// ran a wall's whole height, and the wall was corrugated sheet).
+const HANG_M: vec2<f32> = vec2<f32>(0.6, 2.6);
 // In a hall the sky's fill is this much of itself (the lamps are its
 // light), fading in over `HALL_EDGE_M` inside its box.
 const HALL_FILL: f32 = 0.38;
@@ -437,7 +438,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // A hall is lit by its lamps: the sky's fill does not come through its roof.
     let fill = mix(1.0, HALL_FILL, hall);
     pbr_input.diffuse_occlusion *= fill;
-    pbr_input.specular_occlusion *= fill;
+    pbr_input.specular_occlusion *= fill * 0.5;
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

@@ -818,8 +818,13 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         return (slope, splat_in(slope, y, 0.0, 0.0));
     }
     if land == Land::Alpine {
-        // Under snow: drifts where it lies, rock where it stands.
-        return (slope, splat_snow(slope));
+        // Under snow: drifts where it lies, rock where it stands. Nothing
+        // grows, so the grass's lane says how tall the face it stands in is.
+        let mut w = splat_snow(slope);
+        if slope > SNOW_ROCK_SLOPE.0 * 0.6 {
+            w[1] = face_tall(t, i, j);
+        }
+        return (slope, w);
     }
     let cover = crate::look::grass::cover(t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell, y);
     (slope, splat_in(slope, y, trough, cover))
@@ -856,6 +861,29 @@ pub(crate) fn splat(slope: f32, y: f32) -> [f32; 4] {
 /// lies, rock where it stands, nothing else.
 pub(crate) fn splat_bare(slope: f32, y: f32) -> [f32; 4] {
     splat_in(slope, y, 0.0, 0.0)
+}
+
+/// How tall the face vertex (i, j) stands in is, 0..1: the ground's fall
+/// within `FACE_REACH_M` of it, from `FACE_TALL_M.0` (a massif's or a
+/// spur's face: shelves, and nothing falls down it) to `.1` (a valley's
+/// wall, which feeds gullies and the cones at its foot: `ground.wgsl`).
+const FACE_REACH_M: f32 = 24.0;
+const FACE_TALL_M: (f32, f32) = (34.0, 56.0);
+
+fn face_tall(t: &TerrainDef, i: usize, j: usize) -> f32 {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let r = (FACE_REACH_M / t.cell).round() as usize;
+    let (mut lo, mut hi) = (i16::MAX, i16::MIN);
+    for b in j.saturating_sub(r)..=(j + r).min(nz - 1) {
+        for a in i.saturating_sub(r)..=(i + r).min(nx - 1) {
+            let h = t.heights[b * nx + a];
+            lo = lo.min(h);
+            hi = hi.max(h);
+        }
+    }
+    let fall = (hi as f32 - lo as f32) / HEIGHT_Q;
+    let k = ((fall - FACE_TALL_M.0) / (FACE_TALL_M.1 - FACE_TALL_M.0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
 }
 
 /// The same under a valley's snow (`Land::Alpine`): snow (the sand's lane)
