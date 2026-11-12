@@ -741,7 +741,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.3, 1.5, 1.8];
+const ALPINE_CONCRETE: [f32; 3] = [1.45, 1.7, 2.1];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its
@@ -839,7 +839,10 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
                 tall * (0.5 + 0.5 * bank),
             )
         } else {
-            (0.5, 0.0)
+            // Off a face the first lane is free: whole on a pressure
+            // ridge, which the paint draws as ice and not as ground.
+            let ridge = crate::look::grass::ice_ridge(t, x, z, lowest_cached(t));
+            (if ridge { 1.0 } else { 0.5 }, 0.0)
         };
         return (
             slope,

@@ -105,11 +105,13 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 // tusk under each; reaches cut to nothing drew a column of lozenges.
 // A low face has beds at its own scale: the thin family's are bands too
 // there (`BAND_TONE`), and more of its stretches hold a shelf (`LOW_SHELF`,
-// as a face that leans by that much).
+// as a face that leans by that much). A tall face has them at `TALL_THIN`
+// of that tone, between its deep ones, and its beds step by `BED_STEP_M`
+// between a buttress's nose and the cleft beside it.
 // Snow on rock is the field's snow (`SNOW_ON_ROCK` of the way from its lee
 // to its crest) and faces the sky more than its face does (`SNOW_UP`).
 const LEDGE_DEEP: vec4<f32> = vec4<f32>(11.5, 2.4, 0.5, 90.0);
-const LEDGE_THIN: vec4<f32> = vec4<f32>(3.3, 0.7, 0.3, 14.0);
+const LEDGE_THIN: vec4<f32> = vec4<f32>(3.3, 0.7, 0.4, 14.0);
 const LEDGE_DIP_M: f32 = 6.0;
 const LEDGE_DIP_WAVE_M: f32 = 95.0;
 const LEDGE_WAVER_M: f32 = 0.8;
@@ -133,6 +135,8 @@ const BANK: vec2<f32> = vec2<f32>(0.05, 0.9);
 const BANK_EDGE_M: vec2<f32> = vec2<f32>(1.2, 2.0);
 const BANK_ROLL_M: f32 = 15.0;
 const LOW_SHELF: f32 = 0.45;
+const TALL_THIN: f32 = 0.55;
+const BED_STEP_M: f32 = 2.4;
 const SNOW_ON_ROCK: f32 = 0.6;
 const SNOW_UP: f32 = 1.1;
 // Its beds, read from across a valley: `VALLEY_BED` times the canyon's
@@ -154,20 +158,27 @@ const SNOW_LEE: vec3<f32> = vec3<f32>(0.8, 0.86, 0.97);
 const SNOW_CREST: f32 = 1.06;
 // Between a drift and the set's grain, wind ridges `SNOW_RIDGE_M` long and
 // a third as wide, `SNOW_RIDGE` of the field's run (gone to their mean when
-// a pixel is their size). And the field stands: its run tilts the normal
+// a pixel is their size), each with a lee of its own tone (`SNOW_RIDGE_LEE`)
+// hard-edged against its crest. And the field stands: its run tilts the normal
 // (`SNOW_TILT`: over how far it is read, m, and how much it leans), so a
 // drift's lee takes shade under the sun and not a tone alone.
 const SNOW_RIDGE_M: f32 = 3.6;
-const SNOW_RIDGE: f32 = 0.22;
-const SNOW_TILT: vec2<f32> = vec2<f32>(0.5, 0.55);
+const SNOW_RIDGE: f32 = 0.45;
+const SNOW_RIDGE_LEE: vec3<f32> = vec3<f32>(0.82, 0.87, 0.97);
+const SNOW_TILT: vec2<f32> = vec2<f32>(0.5, 1.4);
 // It lies thin where the mesh says (its third lane under snow,
 // `grass::snow_thin`: crowns and shoulders, flanks, the ice's shore and
 // its islets; the cover's stones and tufts stand by the same rule): there
 // the ground shows through in windows with a ragged edge (a noise
 // `SCOUR_M` across against the lane, `SCOUR_EDGE` soft), `SCOUR_THIN` of
 // the way to `SCOUR_GROUND`, with its stones (`SCOUR_STONE`, of two sizes
-// `SCOUR_STONE_M`). Just over the ice (`SCOUR_ICE_M`, m over the sheet,
-// from all to none) what shows is the sheet's own rubble, `ICE_RUBBLE`.
+// `SCOUR_STONE_M`). The bare ground is a window's heart (`SCOUR_HEART`
+// further in than its edge); its stones lie `SCOUR_RIM` further out than
+// that, on snow, so a window thins to single stones and has no outline.
+// Just over the ice (`SCOUR_ICE_M`, m over the sheet, from all to none)
+// what shows is the sheet's own rubble, `ICE_RUBBLE`, in slabs `ICE_SLAB_M`
+// across; on a pressure ridge (the mesh's first lane on snow) to its crest
+// (`RIDGE_ICE_M` over the sheet), and no stones.
 // Colours in the snow's lane, before its tint.
 const SCOUR_M: f32 = 6.0;
 const SCOUR_LONG: f32 = 2.2;
@@ -178,10 +189,14 @@ const SCOUR_GROUND: vec3<f32> = vec3<f32>(0.115, 0.1, 0.082);
 const SCOUR_GRAVEL_MEAN: f32 = 0.3;
 const SCOUR_GRAIN: f32 = 0.7;
 const SCOUR_FAR: vec2<f32> = vec2<f32>(0.2, 0.16);
+const SCOUR_HEART: f32 = 0.12;
+const SCOUR_RIM: f32 = 0.2;
+const RIDGE_ICE_M: f32 = 2.4;
+const ICE_SLAB_M: f32 = 1.1;
 const SCOUR_STONE: vec3<f32> = vec3<f32>(0.07, 0.07, 0.075);
 const SCOUR_STONE_M: vec2<f32> = vec2<f32>(0.38, 1.3);
 const SCOUR_ICE_M: vec2<f32> = vec2<f32>(0.1, 0.5);
-const ICE_RUBBLE: vec3<f32> = vec3<f32>(0.24, 0.29, 0.36);
+const ICE_RUBBLE: vec3<f32> = vec3<f32>(0.3, 0.36, 0.44);
 // And its ice (`ground.sea.w` under −1.5: the sea's lanes are the ice's
 // level, how far over it is still ice and over how much more the snow takes
 // over): a sheet paler than rock and darker than snow, smooth where the
@@ -190,6 +205,8 @@ const ICE_RUBBLE: vec3<f32> = vec3<f32>(0.24, 0.29, 0.36);
 const ICE_RGB: vec3<f32> = vec3<f32>(0.4, 0.48, 0.57);
 const ICE_ROUGHNESS: f32 = 0.22;
 const ICE_ROUGH_DUSTED: f32 = 0.6;
+const ICE_SEAM: f32 = 4.0;
+const ICE_LUMP_M: f32 = 1.4;
 const ICE_PLATE_M: f32 = 9.0;
 const ICE_CRACK: f32 = 0.03;
 const ICE_CRACK_RGB: vec3<f32> = vec3<f32>(0.74, 0.82, 0.9);
@@ -534,6 +551,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     var w = vec4<f32>(1.0, 0.0, 0.0, 0.0);
     var face_hollow = 0.5;
+    var lane_x = 0.5;
     var face_tall = 0.0;
     var bank_hollow = 0.0;
     var snow_thin = 0.0;
@@ -544,6 +562,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // how far into a couloir a face is, how tall it is, how thin the snow.
     if ground.layers.z > 0.5 {
         face_hollow = w.x;
+        lane_x = w.x;
         // The second is two things (`level::ground_point`): under a half,
         // how tall the face is; over it, how far into a broad hollow.
         face_tall = smoothstep(0.1, 0.45, w.y);
@@ -772,7 +791,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // The drifts stand: their backs tilt the snow, so a lee takes shade.
         snow_tilt = vec3<f32>(run - snow_run(q + vec3<f32>(SNOW_TILT.x, 0.0, 0.0), ridged), 0.0, run - snow_run(q + vec3<f32>(0.0, 0.0, SNOW_TILT.x), ridged)) * (SNOW_TILT.y / SNOW_TILT.x);
         let flat0 = mix(vec3<f32>(SNOW_MEAN), max(a0.rgb, vec3<f32>(SNOW_FLOOR * SNOW_MEAN)), snow_near);
-        snow0 = flat0 * mix(SNOW_LEE, vec3<f32>(SNOW_CREST), drift);
+        // A wind ridge has a crest and a lee with a hard edge between: a tone of its own, not the drift's.
+        let ridge = value3(vec3<f32>(q.x / SNOW_RIDGE_M, 0.0, q.z / (SNOW_RIDGE_M * 0.33)) + vec3<f32>(1.3, 0.0, 4.7));
+        let lee = smoothstep(0.5, 0.53, ridge) * (1.0 - smoothstep(0.56, 0.78, ridge));
+        snow0 = flat0 * mix(SNOW_LEE, vec3<f32>(SNOW_CREST), drift) * mix(vec3<f32>(1.0), SNOW_RIDGE_LEE, lee * ridged);
         snow_rock = flat0 * mix(SNOW_LEE, vec3<f32>(SNOW_CREST), SNOW_ON_ROCK);
         // Thin where the mesh says: the ground and its stones through it, in windows.
         if snow_thin > 0.02 && w.x > 0.01 {
@@ -783,16 +805,26 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let lies = 0.5 * value3(sq / SCOUR_M + vec3<f32>(1.7, 0.0, 5.3)) + 0.32 * value3(sq / (SCOUR_M * 0.28) + vec3<f32>(8.9, 0.0, 2.1))
                 + 0.18 * value3(q / 0.55 + vec3<f32>(2.2, 0.0, 6.6));
             // Open before the cover stands (`grass::OPEN`), so a tuft has ground at its foot.
-            let scour = smoothstep(-SCOUR_EDGE, SCOUR_EDGE, snow_thin - (0.85 * lies - 0.05));
-            // Stones of two sizes, each gone to its share of the window when under a pixel.
-            let small = smoothstep(0.66, 0.72, value3(wp / SCOUR_STONE_M.x));
-            let big = smoothstep(0.7, 0.76, value3(wp / SCOUR_STONE_M.y + vec3<f32>(3.1, 7.7, 1.3)));
+            // The bare ground is a window's heart; its stones reach `SCOUR_RIM` further out,
+            // on snow: a window is stones thinning to single ones, not a sheet with an edge.
+            let open = snow_thin - (0.85 * lies - 0.05);
+            let scour = smoothstep(-SCOUR_EDGE, SCOUR_EDGE, open - SCOUR_HEART);
+            let strewn = smoothstep(-SCOUR_RIM, 0.0, open);
+            // Stones of two sizes, each gone to its share of the window when under a pixel;
+            // the larger gone again when it is a dozen pixels across (a painted stone has no body).
+            let small = smoothstep(0.62, 0.68, value3(wp / SCOUR_STONE_M.x));
+            let big = smoothstep(0.7, 0.76, value3(wp / SCOUR_STONE_M.y + vec3<f32>(3.1, 7.7, 1.3))) * smoothstep(0.02, 0.07, fp_m / SCOUR_STONE_M.y);
             let stones = max(mix(SCOUR_FAR.x, small, 1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_STONE_M.x)),
                 mix(SCOUR_FAR.y, big, 1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_STONE_M.y)));
             // The ground is the gravel's photograph (a valley weighs it nothing else), in the window's own colour.
-            let gravel = SCOUR_GROUND * mix(vec3<f32>(1.0), a2.rgb / SCOUR_GRAVEL_MEAN, SCOUR_GRAIN * snow_near);
-            let bare = mix(ICE_RUBBLE, gravel, smoothstep(SCOUR_ICE_M.x, SCOUR_ICE_M.y, in.world_position.y - ground.sea.x));
-            snow0 = mix(mix(snow0, bare, SCOUR_THIN * scour), SCOUR_STONE, stones * scour);
+            let gravel = SCOUR_GROUND * mix(vec3<f32>(1.0), a2.rgb / SCOUR_GRAVEL_MEAN, SCOUR_GRAIN * (1.0 - smoothstep(0.08, 0.5, fp_m)));
+            // Broken ice shows ice, to its crest: a pressure ridge (the mesh's first lane on snow, `level::ground_point`), and any shore's first hand.
+            let over_ice = in.world_position.y - ground.sea.x;
+            let ridge_ice = smoothstep(0.7, 0.95, lane_x) * (1.0 - smoothstep(RIDGE_ICE_M * 0.8, RIDGE_ICE_M, over_ice));
+            let slab = rock_cell((q + bend * 0.4) / ICE_SLAB_M);
+            let rubble = ICE_RUBBLE * (0.7 + 0.6 * rock_draw(slab, 0u).y) * (1.0 - 0.55 * (1.0 - smoothstep(0.0, 0.12, slab.edge)));
+            let bare = mix(mix(rubble, gravel, smoothstep(SCOUR_ICE_M.x, SCOUR_ICE_M.y, over_ice)), rubble, ridge_ice);
+            snow0 = mix(mix(snow0, bare, SCOUR_THIN * max(scour, ridge_ice * strewn)), SCOUR_STONE, stones * strewn * (1.0 - ridge_ice));
         }
     }
     var c = (snow0 * ground.tint[0].rgb * w.x
@@ -816,7 +848,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // One dip for both families: strata lie parallel.
             let dip = value3(wp / LEDGE_DIP_WAVE_M + vec3<f32>(11.0, 3.0, 7.0)) - 0.5;
             let lean = smoothstep(LEAN.x, LEAN.y, wn.y);
-            let by_deep = by + dip * LEDGE_DIP_M;
+            // A bed steps where a buttress turns: no line runs a wall unbroken.
+            let by_deep = by + dip * LEDGE_DIP_M + (face_hollow - 0.5) * 2.0 * BED_STEP_M * face_tall;
             let deep = ledge_snow(wp, by_deep, LEDGE_DEEP, fp_m, lean);
             let low = 1.0 - face_tall;
             let thin = ledge_snow(wp, by_deep + 1.7, LEDGE_THIN, fp_m, lean + LOW_SHELF * low);
@@ -829,7 +862,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let band2 = (by_deep + 1.7) / LEDGE_THIN.x - LIP_AT;
             let bj = i32(floor(band2));
             let over2 = smoothstep(0.0, 2.0 * max(fp_m, 0.05) / LEDGE_THIN.x, fract(band2));
-            let tone2 = 1.0 + BAND_TONE * low * (2.0 * mix(draw3(cell_key(vec3<i32>(bj - 1, 43, 7))).x, draw3(cell_key(vec3<i32>(bj, 43, 7))).x, over2) - 1.0)
+            let tone2 = 1.0 + BAND_TONE * max(low, TALL_THIN) * (2.0 * mix(draw3(cell_key(vec3<i32>(bj - 1, 43, 7))).x, draw3(cell_key(vec3<i32>(bj, 43, 7))).x, over2) - 1.0)
                 * (1.0 - smoothstep(0.3, 1.2, fp_m / LEDGE_THIN.x));
             c = c * mix(1.0, tone * tone2 * (1.0 - max(deep.y, thin.y)), w.w);
             // A buttress's nose is paler than the cleft beside it: the wall's
@@ -845,7 +878,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // Its top wanders on a noise of its own, broad: on the couloir's fine one it was a row of teeth.
             let roll = (value3(wp / BANK_ROLL_M + vec3<f32>(6.0, 2.0, 8.0)) - 0.5) * 2.0;
             let top = mix(FAN_Y.x, FAN_Y.y, smoothstep(BANK.x, BANK.y, bank_hollow)) + roll * BANK_EDGE_M.y + rag / COULOIR_RAG * 0.4;
-            let slid = 1.0 - 0.25 * value3(vec3<f32>(wp.x / 1.6, wp.y / 15.0, wp.z / 1.6));
+            let slid = 1.0 - 0.34 * smoothstep(0.45, 0.7, value3(vec3<f32>(wp.x / 4.5, wp.y / 18.0, wp.z / 4.5) + vec3<f32>(3.0, 1.0, 7.0)));
             let bank = (1.0 - smoothstep(top - BANK_EDGE_M.x, top, wp.y)) * slid;
             let gully = max(line, bank) * face_tall;
             lie = max(max(deep.x, thin.x), gully);
@@ -881,12 +914,21 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // Its plates' cracks, pale lines a pixel wide at least.
             let warp = vec3<f32>(value3(q / 5.0), 0.0, value3(q / 5.0 + vec3<f32>(13.1, 0.0, 7.7))) * 2.0 - 1.0;
             let plate = rock_cell((q + warp * 1.6) / ICE_PLATE_M);
-            let crack_px = ICE_CRACK * ICE_PLATE_M / max(fp_m, 1e-5);
-            let crack = (1.0 - smoothstep(0.0, ICE_CRACK, plate.edge)) * smoothstep(0.4, 1.2, crack_px);
             // Each plate its own tone, and the depth under it showing darker in patches.
-            let dusted = rock_draw(plate, 0u).y;
+            let drawn = rock_draw(plate, 0u);
+            let dusted = drawn.y;
+            // A few plates' cracks are healed seams, broad and white; most are hairlines.
+            let wide = ICE_CRACK * mix(1.0, ICE_SEAM, step(0.8, drawn.x));
+            let crack_px = wide * ICE_PLATE_M / max(fp_m, 1e-5);
+            let crack = (1.0 - smoothstep(0.0, wide, plate.edge)) * smoothstep(0.4, 1.2, crack_px);
             let tone = 0.8 + 0.42 * dusted;
-            let sheet = mix(ICE_RGB * tone, ICE_CRACK_RGB, crack * 0.8);
+            // Lumps frozen in: a pale rim round a dark core, sparse.
+            let spot = value3(q / ICE_LUMP_M + vec3<f32>(5.5, 0.0, 9.1));
+            let lump_far = 1.0 - smoothstep(0.3, 1.2, fp_m / ICE_LUMP_M);
+            let rim_l = smoothstep(0.8, 0.83, spot) * (1.0 - smoothstep(0.86, 0.89, spot)) * lump_far;
+            let core = smoothstep(0.87, 0.9, spot) * lump_far;
+            var sheet = mix(ICE_RGB * tone, ICE_CRACK_RGB, crack * 0.8);
+            sheet = mix(mix(sheet, ICE_CRACK_RGB, rim_l * 0.9), ICE_RGB * 0.45, core);
             c = mix(c, sheet, ice);
             pbr_input.material.perceptual_roughness = mix(pbr_input.material.perceptual_roughness, mix(ICE_ROUGHNESS, ICE_ROUGH_DUSTED, dusted * dusted), ice * (1.0 - crack));
         } else if ground.sea.w < 0.0 {

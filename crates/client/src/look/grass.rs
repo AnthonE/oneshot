@@ -392,6 +392,21 @@ pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     (proud.max(flank) * patch * open).max(shore * (SHORE_FLOOR + (1.0 - SHORE_FLOOR) * reach))
 }
 
+/// Whether (x, z) is on a pressure ridge: low ground with the sheet (at
+/// `ice`) close on both sides of it. Broken ice, not ground: it grows
+/// nothing and is painted as ice to its crest (`ground.wgsl`).
+pub(crate) fn ice_ridge(t: &TerrainDef, x: f32, z: f32, ice: f32) -> bool {
+    let Some(y) = ground(t, x, z) else { return false };
+    let ice_at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).is_some_and(|h| h < ice + THIN_OVER_ICE_M.0);
+    let r = RIDGE_ACROSS_M;
+    y >= ice + THIN_OVER_ICE_M.0
+        && y < ice + RIDGE_UNDER_M
+        && ((ice_at(r, 0.0) && ice_at(-r, 0.0))
+            || (ice_at(0.0, r) && ice_at(0.0, -r))
+            || (ice_at(r, r) && ice_at(-r, -r))
+            || (ice_at(r, -r) && ice_at(-r, r)))
+}
+
 /// How much of the ground shows through a valley's snow at (x, z), 0..1:
 /// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
 /// opens its windows (`ground.wgsl`'s scour, a noise against the same
@@ -418,16 +433,8 @@ fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> O
         if slope > 0.55 || y < sea + THIN_OVER_ICE_M.0 {
             return None;
         }
-        // None on a ridge of the ice's own (the sheet close on both sides
-        // of low ground): broken ice grows nothing.
-        let ice_at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).is_some_and(|h| h < sea + THIN_OVER_ICE_M.0);
-        let r = RIDGE_ACROSS_M;
-        if y < sea + RIDGE_UNDER_M
-            && ((ice_at(r, 0.0) && ice_at(-r, 0.0))
-                || (ice_at(0.0, r) && ice_at(0.0, -r))
-                || (ice_at(r, r) && ice_at(-r, -r))
-                || (ice_at(r, -r) && ice_at(-r, r)))
-        {
+        // None on a ridge of the ice's own: broken ice grows nothing.
+        if ice_ridge(t, x, z, sea) {
             return None;
         }
         return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_open(t, x, z, sea)));

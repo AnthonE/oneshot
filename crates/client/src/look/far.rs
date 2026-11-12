@@ -85,12 +85,12 @@ const SNOW_RINGS_M: [f32; 18] = [
 /// valley's mist is over it already: its own air is `SNOW_HAZE`, and its
 /// snow a step bluer than the wall's cap in front of it, which stays the
 /// brightest thing on that skyline.
-const SNOW_LIES: (f32, f32) = (0.55, 0.70);
+const SNOW_LIES: (f32, f32) = (0.6, 0.78);
 const SNOW_BED_M: f32 = 38.0;
 const SNOW_HAZE: f32 = 0.45;
 const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
 const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
-const SNOW: [f32; 3] = [0.78, 0.84, 0.95];
+const SNOW: [f32; 3] = [0.86, 0.88, 0.93];
 const SNOW_AIR: [f32; 3] = [0.70, 0.78, 0.90];
 const HAZE: f32 = 0.62;
 const HAZE_M: f32 = 1500.0;

@@ -481,7 +481,8 @@ pub const BLIZZARD: Mood = Mood {
 /// stays readable), so the shade is as clear a step under the sun as that allows. The exposure is a hair
 /// under noon's: closed a step for the snow, the sunlit floor was a mid
 /// grey and nothing in the frame was white. The sun is warm on the snow
-/// and the shade blue; the grade only leans cold.
+/// and the shade blue; the grade leaves that alone (leaning it cold took
+/// the sun's warmth off the snow, and sun and shade were one hue).
 pub const FROST: Mood = Mood {
     name: "frost",
     sun_elev: 0.75,
@@ -510,7 +511,7 @@ pub const FROST: Mood = Mood {
     field_at: [41.0, 13.0],
     hall: 0,
     grade: Grade {
-        temperature: -0.015,
+        temperature: 0.0,
         tint: 0.004,
         saturation: 0.96,
         contrast: 1.0,
