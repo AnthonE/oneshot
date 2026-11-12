@@ -83,7 +83,7 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 // whole at `.y`, its edge ragged by `COULOIR_RAG`), on a face tall enough to
 // feed one (its second, `level::face_tall`: a massif's or a spur's face
 // holds shelves and no more), bare for `GULLY_BARE` of its reaches
-// (`GULLY_REACH_M`). At the wall's foot what slid lies in a bank whose top
+// (`GULLY_REACH_M`) and swelling and pinching between (`COULOIR_SWELL`). At the wall's foot what slid lies in a bank whose top
 // is the mesh's too: at `FAN_Y.x` (a height over the floor) under a
 // buttress's nose, at `FAN_Y.y` under a couloir (the hollow from `BANK.x`
 // to `.y`), so it stands highest under each couloir and sags between,
@@ -114,7 +114,8 @@ const LEAN_SHARE: f32 = 0.4;
 const LEAN_DEEP: f32 = 1.5;
 const COULOIR: vec2<f32> = vec2<f32>(0.7, 0.76);
 const COULOIR_RAG: f32 = 0.07;
-const GULLY_REACH_M: f32 = 26.0;
+const GULLY_REACH_M: f32 = 12.0;
+const COULOIR_SWELL: f32 = 0.07;
 const GULLY_BARE: f32 = 0.5;
 const FAN_Y: vec2<f32> = vec2<f32>(11.0, 24.0);
 const BANK: vec2<f32> = vec2<f32>(0.5, 0.74);
@@ -786,10 +787,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let foot = 1.0 - smoothstep(FAN_Y.x, FAN_Y.y, wp.y);
             let rag = (value3(wp / 2.3 + vec3<f32>(4.0, 1.0, 9.0)) - 0.5) * 2.0 * COULOIR_RAG;
             let reach = value3(vec3<f32>(wp.x / 19.0, wp.y / GULLY_REACH_M, wp.z / 19.0) + vec3<f32>(9.0, 4.0, 1.0));
+            // It swells and pinches as it falls: snow caught on ledges, not a thread.
+            let swell = (value3(vec3<f32>(wp.x / 31.0, wp.y / 7.0, wp.z / 31.0) + vec3<f32>(2.0, 6.0, 5.0)) - 0.5) * 2.0 * COULOIR_SWELL;
             let fed = smoothstep(GULLY_BARE - 0.08, GULLY_BARE + 0.08, reach);
             // A cut corner (a base's slot) is the lane's far end and no couloir: a plane, to the snow.
             let hollow = mix(face_hollow, 0.5, smoothstep(CORNER.x, CORNER.y, face_hollow));
-            let line = smoothstep(COULOIR.x, COULOIR.y, hollow + rag) * fed;
+            let line = smoothstep(COULOIR.x, COULOIR.y, hollow + rag + swell) * fed;
             // The bank at its foot: as high as the hollow over it is deep.
             let top = mix(FAN_Y.x, FAN_Y.y, smoothstep(BANK.x, BANK.y, hollow)) + rag / COULOIR_RAG * BANK_EDGE_M.y;
             let slid = 1.0 - 0.22 * foot * value3(vec3<f32>(wp.x / 0.9, wp.y / 15.0, wp.z / 0.9));
