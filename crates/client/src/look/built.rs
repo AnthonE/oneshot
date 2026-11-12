@@ -386,6 +386,7 @@ pub fn dress(
     wanted: Query<(Entity, &Wanted)>,
     server: Res<AssetServer>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut floors: Query<&mut super::floor_shade::Waits>,
 ) {
     for (e, w) in &wanted {
         commands.entity(e).despawn();
@@ -395,6 +396,12 @@ pub fn dress(
                 GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }
                     .from_asset(format!("models/{}/{}_{}.glb", set.dir, set.prefix, p.name)),
             );
+            // A light lights the floor under it (`look/floor_shade.rs`).
+            if let Paint::Light(colour) = p.paint {
+                for mut w in &mut floors {
+                    w.light(mesh.clone(), LinearRgba::from(colour) * crate::level::STRIP_GLOW);
+                }
+            }
             let mut c = commands.spawn((LevelPart, Mesh3d(mesh), Transform::default()));
             match p.paint {
                 Paint::Look(look) => {
@@ -529,6 +536,10 @@ pub fn dress(
             if let Some((at, way, rate)) = p.spins {
                 c.insert(Turns(at, way, rate));
             }
+        }
+        // Every light the set has is named: its floors can be laid.
+        for mut w in &mut floors {
+            w.built();
         }
     }
 }

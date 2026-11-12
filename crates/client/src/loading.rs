@@ -243,7 +243,14 @@ type Parts<'w, 's> = Query<
     Has<Dressed>,
     (
         With<LevelPart>,
-        Or<(With<GroundMesh>, With<BoxLook>, With<GrassPart>, With<ClutterPart>)>,
+        Or<(
+            With<GroundMesh>,
+            With<BoxLook>,
+            With<GrassPart>,
+            With<ClutterPart>,
+            // A hall's floors, until they are laid (`look/floor_shade.rs`).
+            With<crate::look::floor_shade::Waits>,
+        )>,
     ),
 >;
 

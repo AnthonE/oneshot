@@ -17,6 +17,12 @@
 //! under it casts nothing). Bulkhead is two thirds fill, so most of its
 //! shade is the dome's; the lamps' is what lies under its bridge.
 //!
+//! **And the light its strips lay on them.** A strip was drawn bright and
+//! lit nothing: the deck a hand under it was as dark as the deck across the
+//! hall. The same sheet carries what each strip and each lamp's fixture
+//! gives the floor near it ([`Lights`]), in the light's own colour: a pool
+//! under a lane's amber, a wash of red at a base's door.
+//!
 //! **What it is traced against is what collides** (`sim::map::Map::ray`),
 //! which is what stands on a floor: a built set is drawn inside it. Only
 //! floors carry it, where the drawn plane is the collided one; a wall is
@@ -25,8 +31,14 @@
 //! **The same on every rung, and it hides nobody**: a mesh and a blend,
 //! nothing a rung lacks. A fighter is not under it (it lies on the floor),
 //! so in a shaded place he stands out the more.
+//!
+//! A built set's lights are meshes that come after the level is built, so
+//! the sheet is laid when they are in ([`Waits`], [`lay`]); the loading
+//! screen waits for it as it does for a part's textures.
 
-use bevy::asset::RenderAssetUsages;
+use std::collections::HashMap;
+
+use bevy::asset::{LoadState, RenderAssetUsages};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -84,7 +96,124 @@ const DARKEST: f32 = 0.75;
 /// where it stops.
 const FAINT: f32 = 0.05;
 
+/// A light is weighed as patches this far apart, metres.
+const PATCH_M: f32 = 0.5;
+/// How far a light's spill is followed over a floor, metres: past this a
+/// strip's is under what the fill gives, and a roof's panels are the
+/// lamps', which light the floor already.
+const SPILL_REACH_M: f32 = 6.0;
+/// What a floor gives back of a light on it, for a light drawn at 1: a
+/// strip is drawn at four times white, which is as bright as a screen
+/// shows one, and a strip that lit its hall is a hundred times that. This
+/// is that light, and the deck's own colour and sheen, in one number set
+/// by eye: at a tenth of it no pool could be found under a lane's strip.
+const SPILL: f32 = 1.1;
+/// Nearer a light than this its spill is no stronger, metres: a strip let
+/// into a floor would be a white line of it.
+const SPILL_NEAR_M: f32 = 0.35;
+/// The strongest few lights on a vertex are looked at, the rest taken as
+/// seen: a strip behind a wall lights nothing this side of it.
+const SPILL_LOOKS: usize = 5;
+/// Spill fainter than this is none.
+const SPILL_FAINT: f32 = 0.004;
+
 const _: () = assert!(DARKEST < 0.8 && FAINT < DARKEST && ROUND_M < EYE_M);
+
+/// A piece of a light: where, and what it shines (linear, as it is drawn)
+/// times the area it shows a floor, m².
+#[derive(Clone, Copy, Debug)]
+struct Patch {
+    at: Vec3,
+    shines: Vec3,
+}
+
+/// A map's lights, as what each gives a floor: its strips, its lamps'
+/// fixtures, a built set's light parts.
+#[derive(Default, Clone)]
+pub struct Lights {
+    patches: Vec<Patch>,
+}
+
+impl Lights {
+    fn push(&mut self, at: Vec3, light: LinearRgba, area: f32) {
+        self.patches.push(Patch {
+            at,
+            shines: Vec3::new(light.red, light.green, light.blue) * area,
+        });
+    }
+
+    /// A strip: a box from `min` to `max` shining `light`, in pieces along
+    /// its length. A body shows a floor a quarter of its skin.
+    pub fn strip(&mut self, min: Vec3, max: Vec3, light: LinearRgba) {
+        let size = (max - min).abs();
+        let skin = 2.0 * (size.x * size.y + size.y * size.z + size.z * size.x);
+        let (axis, len) = if size.x >= size.y && size.x >= size.z {
+            (Vec3::X, size.x)
+        } else if size.y >= size.z {
+            (Vec3::Y, size.y)
+        } else {
+            (Vec3::Z, size.z)
+        };
+        let n = (len / PATCH_M).ceil().max(1.0);
+        let mid = (min + max) * 0.5;
+        for k in 0..n as usize {
+            let along = ((k as f32 + 0.5) / n - 0.5) * len;
+            self.push(mid + axis * along, light, skin * 0.25 / n);
+        }
+    }
+
+    /// A lamp's fixture: a disc of radius `r` at `at` looking down.
+    pub fn disc(&mut self, at: Vec3, r: f32, light: LinearRgba) {
+        self.push(at, light, core::f32::consts::PI * r * r * 0.5);
+    }
+
+    /// A light of any shape: `mesh`'s triangles where `at` puts them,
+    /// gathered into pieces.
+    pub fn add(&mut self, mesh: &Mesh, at: &Transform, light: LinearRgba) {
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            return;
+        };
+        let point = |i: usize| at.transform_point(Vec3::from_array(points[i]));
+        let corners: Vec<usize> = match mesh.indices() {
+            Some(i) => i.iter().collect(),
+            None => (0..points.len()).collect(),
+        };
+        // Each triangle's area at its middle, summed by the cell it is in.
+        let mut cells: HashMap<[i32; 3], (Vec3, f32)> = HashMap::new();
+        for t in corners.chunks_exact(3) {
+            let (a, b, c) = (point(t[0]), point(t[1]), point(t[2]));
+            let area = 0.5 * (b - a).cross(c - a).length();
+            let mid = (a + b + c) / 3.0;
+            let cell = (mid / PATCH_M).floor().as_ivec3().to_array();
+            let e = cells.entry(cell).or_insert((Vec3::ZERO, 0.0));
+            e.0 += mid * area;
+            e.1 += area;
+        }
+        // In the cells' own order: a map's sheet is the same every time.
+        let mut cells: Vec<_> = cells.into_iter().filter(|c| c.1 .1 > 0.0).collect();
+        cells.sort_by_key(|c| c.0);
+        for (_, (sum, area)) in cells {
+            self.push(sum / area, light, area * 0.25);
+        }
+    }
+
+    /// The patches by the square of [`SPILL_REACH_M`] each is in.
+    fn by_square(&self) -> HashMap<[i32; 2], Vec<usize>> {
+        let mut squares: HashMap<[i32; 2], Vec<usize>> = HashMap::new();
+        for (i, p) in self.patches.iter().enumerate() {
+            squares.entry(square(p.at)).or_default().push(i);
+        }
+        squares
+    }
+}
+
+fn square(p: Vec3) -> [i32; 2] {
+    [
+        (p.x / SPILL_REACH_M).floor() as i32,
+        (p.z / SPILL_REACH_M).floor() as i32,
+    ]
+}
 
 /// A lamp as the renderer lights with it: where, how much (lumens, by its
 /// colour's luminance), whether it is a cone down, and how deep a shadow
@@ -105,6 +234,9 @@ struct Light<'a> {
     fill: f32,
     range: f32,
     cone: (f32, f32),
+    /// The lights that spill, and which are near where.
+    lights: &'a Lights,
+    near: HashMap<[i32; 2], Vec<usize>>,
 }
 
 fn v3(v: Vec3) -> V3 {
@@ -221,6 +353,58 @@ impl Light<'_> {
         let dark = (1.0 - self.reaches(p)).min(DARKEST);
         ((dark - FAINT) / (1.0 - FAINT)).max(0.0)
     }
+
+    /// What the lights near `p` lay on a floor there, linear: each piece
+    /// by how square it stands over the floor and how far off, the
+    /// strongest few only if they are in sight.
+    fn spill(&self, p: Vec3) -> Vec3 {
+        // The strongest few, strongest first (by which piece, where two
+        // give alike), and the sum of all.
+        let mut top = [(0.0f32, usize::MAX, Vec3::ZERO); SPILL_LOOKS];
+        let mut sum = Vec3::ZERO;
+        let [sx, sz] = square(p);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let Some(ids) = self.near.get(&[sx + dx, sz + dz]) else {
+                    continue;
+                };
+                for &i in ids {
+                    let l = &self.lights.patches[i];
+                    let to = l.at - p;
+                    if to.y <= 0.02 {
+                        continue;
+                    }
+                    let d2 = to.length_squared();
+                    let window = (1.0 - d2 / (SPILL_REACH_M * SPILL_REACH_M)).max(0.0);
+                    if window <= 0.0 {
+                        continue;
+                    }
+                    let d2 = d2.max(SPILL_NEAR_M * SPILL_NEAR_M);
+                    let g = l.shines * (to.y / d2.sqrt() / d2 * window * window);
+                    sum += g;
+                    let mut new = (g.max_element(), i, g);
+                    for slot in top.iter_mut() {
+                        if new.0 > slot.0 || (new.0 == slot.0 && new.1 < slot.1) {
+                            core::mem::swap(slot, &mut new);
+                        }
+                    }
+                }
+            }
+        }
+        let eye = p + Vec3::Y * EYE_M;
+        for (_, i, g) in top {
+            if i == usize::MAX {
+                continue;
+            }
+            let to = self.lights.patches[i].at - eye;
+            let d = to.length();
+            let far = (d - 0.12).max(0.0);
+            if self.map.ray(v3(eye), v3(to / d), far) < far {
+                sum -= g;
+            }
+        }
+        sum.max(Vec3::ZERO) * SPILL
+    }
 }
 
 /// The highest spawn, metres.
@@ -286,7 +470,7 @@ struct Sheets {
 impl Sheets {
     /// A floor of `nu` by `nv` cells, `at(u, v)` its place for `u`, `v` in
     /// `0..=1`, its cells kept where `keep` says so of their middle and
-    /// where there is any shade to lay.
+    /// where there is any shade or light to lay.
     fn patch(
         &mut self,
         light: &Light,
@@ -303,15 +487,20 @@ impl Sheets {
                 keep(mid) && !covered(light.map, mid + Vec3::Y * EYE_M) && !roof(light.map, mid)
             })
             .collect();
-        // A vertex's shade, worked out for the vertices of kept cells only.
+        // A vertex's shade and the light spilt on it, worked out for the
+        // vertices of kept cells only.
         let w = nu + 1;
         let mut shade = vec![f32::NAN; w * (nv + 1)];
+        let mut spill = vec![Vec3::ZERO; w * (nv + 1)];
         for (c, _) in kept.iter().enumerate().filter(|(_, on)| **on) {
             let (i, j) = (c % nu, c / nu);
             for (di, dj) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                 let v = (j + dj) * w + i + di;
                 if shade[v].is_nan() {
-                    shade[v] = light.shade(place(i + di, j + dj));
+                    let p = place(i + di, j + dj);
+                    shade[v] = light.shade(p);
+                    let s = light.spill(p);
+                    spill[v] = (s - Vec3::splat(SPILL_FAINT)).max(Vec3::ZERO);
                 }
             }
         }
@@ -319,7 +508,7 @@ impl Sheets {
         for (c, _) in kept.iter().enumerate().filter(|(_, on)| **on) {
             let (i, j) = (c % nu, c / nu);
             let corners = [j * w + i, j * w + i + 1, (j + 1) * w + i + 1, (j + 1) * w + i];
-            if corners.iter().all(|&v| shade[v] <= 0.0) {
+            if corners.iter().all(|&v| shade[v] <= 0.0 && spill[v] == Vec3::ZERO) {
                 continue;
             }
             let mut ids = [0u32; 4];
@@ -328,7 +517,7 @@ impl Sheets {
                     index[v] = self.at.len() as u32;
                     let p = place(v % w, v / w) + Vec3::Y * LIFT_M;
                     self.at.push(p.to_array());
-                    self.colour.push([0.0, 0.0, 0.0, shade[v]]);
+                    self.colour.push([spill[v].x, spill[v].y, spill[v].z, shade[v]]);
                 }
                 ids[k] = index[v];
             }
@@ -366,7 +555,8 @@ fn cells(len: f32) -> usize {
 /// `fill_units` is the fill on a floor with its dome open, in the
 /// renderer's units (`rig::expose_for`'s intensity times the hall's cube
 /// looking up); then the lamps' range, their cone and the height from
-/// which one is a cone down (`level`'s), and whether the ground is drawn.
+/// which one is a cone down (`level`'s), whether the ground is drawn, and
+/// the lights that spill on it.
 pub fn mesh(
     map: &Map,
     fill_units: f32,
@@ -374,6 +564,7 @@ pub fn mesh(
     ground: bool,
     floor_box: impl Fn(usize) -> bool,
     floor_solid: impl Fn(usize) -> bool,
+    lights: &Lights,
 ) -> Option<Mesh> {
     if map.light.sun > 0.0 || map.terrain.is_some() {
         return None;
@@ -396,6 +587,8 @@ pub fn mesh(
         fill: fill_units,
         range,
         cone,
+        lights,
+        near: lights.by_square(),
     };
     light.cast();
     let mut sheets = Sheets::default();
@@ -498,20 +691,106 @@ pub fn fill_units(map: &Map, id: u8) -> f32 {
         * fill::luminance(fill::hall::diffuse_at(hall, Vec3::Y))
 }
 
-/// The sheet's material: black, its vertices' alpha, lit by nothing.
+/// The sheet's material: its vertices' own colours, lit by nothing. Their
+/// alpha takes the floor's light away and their colour lays the strips' on
+/// what is left (premultiplied: nothing of it is fogged, or a floor with
+/// neither would wear the hall's haze).
 pub fn material() -> StandardMaterial {
     StandardMaterial {
-        base_color: Color::BLACK,
+        base_color: Color::WHITE,
         unlit: true,
-        alpha_mode: AlphaMode::Blend,
+        alpha_mode: AlphaMode::Premultiplied,
+        fog_enabled: false,
         depth_bias: 0.5,
         ..default()
     }
 }
 
-/// What rides with the sheet's mesh and material.
-pub fn bundle() -> impl Bundle {
-    (NotShadowCaster, NotShadowReceiver)
+/// A level's floors waiting to be laid: what `level::build` knew, and a
+/// built set's lights as they are named (`built::dress`).
+#[derive(Component)]
+pub struct Waits {
+    pub map: Box<Map>,
+    pub id: u8,
+    /// The lamps' range, cone and the height one is a cone down from.
+    pub lamps: (f32, (f32, f32), f32),
+    pub ground: bool,
+    pub floor_box: Vec<bool>,
+    pub floor_solid: Vec<bool>,
+    /// The lights the level made itself.
+    pub lights: Lights,
+    /// A built set's, by their meshes.
+    pub parts: Vec<(Handle<Mesh>, LinearRgba)>,
+    /// A built set is still to name its lights.
+    pub set: bool,
+}
+
+impl Waits {
+    /// One of a built set's lights.
+    pub fn light(&mut self, mesh: Handle<Mesh>, shines: LinearRgba) {
+        self.parts.push((mesh, shines));
+    }
+
+    /// The set has named them all.
+    pub fn built(&mut self) {
+        self.set = false;
+    }
+}
+
+/// Lays a waiting level's floors once its lights are all in.
+pub fn lay(
+    mut commands: Commands,
+    waiting: Query<(Entity, &Waits)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
+    server: Res<AssetServer>,
+) {
+    for (e, w) in &waiting {
+        if w.set {
+            continue;
+        }
+        // A light that failed to load lights nothing; one still loading is
+        // waited for.
+        let loading = w
+            .parts
+            .iter()
+            .any(|(h, _)| meshes.get(h).is_none() && !matches!(server.load_state(h), LoadState::Failed(_)));
+        if loading {
+            continue;
+        }
+        let began = bevy::platform::time::Instant::now();
+        let mut lights = w.lights.clone();
+        for (h, shines) in &w.parts {
+            if let Some(m) = meshes.get(h) {
+                lights.add(m, &Transform::default(), *shines);
+            }
+        }
+        let sheet = mesh(
+            &w.map,
+            fill_units(&w.map, w.id),
+            w.lamps,
+            w.ground,
+            |i| w.floor_box[i],
+            |i| w.floor_solid[i],
+            &lights,
+        );
+        commands.entity(e).despawn();
+        if let Some(m) = sheet {
+            info!(
+                "oneshot: floor shade: {} triangles under {} lights' pieces in {:.0} ms",
+                m.indices().map_or(0, |i| i.len() / 3),
+                lights.patches.len(),
+                began.elapsed().as_secs_f32() * 1000.0
+            );
+            commands.spawn((
+                crate::level::LevelPart,
+                Mesh3d(meshes.add(m)),
+                MeshMaterial3d(mats.add(material())),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -546,6 +825,7 @@ mod tests {
                 true,
                 |_| true,
                 |_| true,
+                &Lights::default(),
             );
             if map.light.sun > 0.0 {
                 assert!(m.is_none(), "{}: the sun casts there", map.name);
@@ -564,6 +844,39 @@ mod tests {
         }
     }
 
+    /// A strip lights the floor under it and not the floor behind a wall:
+    /// most under it, less a step away, none past its reach, and in its
+    /// own colour.
+    #[test]
+    fn a_strip_lights_the_floor_under_it() {
+        let map = Map::open();
+        let mut lights = Lights::default();
+        lights.strip(
+            Vec3::new(-2.0, 1.0, -0.02),
+            Vec3::new(2.0, 1.06, 0.02),
+            LinearRgba::rgb(4.0, 0.0, 0.0),
+        );
+        let l = Light {
+            map: &map,
+            lamps: Vec::new(),
+            fill: 1.0,
+            range: 22.0,
+            cone: (0.6, 1.05),
+            near: lights.by_square(),
+            lights: &lights,
+        };
+        let under = l.spill(Vec3::ZERO);
+        let aside = l.spill(Vec3::new(0.0, 0.0, 2.0));
+        let far = l.spill(Vec3::new(0.0, 0.0, SPILL_REACH_M + 2.0));
+        assert!(under.x > aside.x && aside.x > 0.0, "{under} {aside}");
+        assert_eq!((under.y, under.z), (0.0, 0.0), "red, and nothing else");
+        assert_eq!(far, Vec3::ZERO);
+        // The whole strip is weighed, however it is cut up.
+        let all: f32 = lights.patches.iter().map(|p| p.shines.x).sum();
+        let skin = 2.0 * (4.0 * 0.06 + 0.06 * 0.04 + 0.04 * 4.0);
+        assert!((all - 4.0 * skin * 0.25).abs() < 1e-3, "{all}");
+    }
+
     /// A lamp set where no floor sees it fills its hall and casts nothing
     /// (Cistern's five stand over its vault, for the day through its
     /// oculi); one hung in the open over its floor casts most of a shadow.
@@ -572,8 +885,11 @@ mod tests {
         let weigh = |id: u8| {
             let map = sim::map::by_id(id).unwrap();
             let lamps = map.light.lamps;
+            let none = Lights::default();
             let mut l = Light {
                 map: &map,
+                lights: &none,
+                near: HashMap::new(),
                 lamps: lamps
                     .iter()
                     .map(|&(p, _, lm)| Lamp {
