@@ -46,7 +46,7 @@ PAINTS = {
     'throat': ('#0a2a33', 0.00, 0.40, ('#7df6ff', 9.0), 0.0),
     'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.7), 0.0),
     'vein': ('#0c0c10', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
-    'ember': ('#0e0a10', 0.00, 0.30, ('#ff4fd8', 0.25), 0.0),
+    'ember': ('#0e0a10', 0.00, 0.30, ('#ff4fd8', 0.07), 0.0),
 }
 # Paints that take a plate's tone and a worn edge (`shade`); the rest take
 # the traced shade alone, and a light none of it.
