@@ -165,7 +165,7 @@ const SNOW_CREST: f32 = 1.06;
 const SNOW_RIDGE_M: f32 = 3.6;
 const SNOW_RIDGE: f32 = 0.45;
 const SNOW_RIDGE_LEE: vec3<f32> = vec3<f32>(0.82, 0.87, 0.97);
-const SNOW_TILT: vec2<f32> = vec2<f32>(0.5, 1.4);
+const SNOW_TILT: vec2<f32> = vec2<f32>(0.5, 1.0);
 // It lies thin where the mesh says (its third lane under snow,
 // `grass::snow_thin`: crowns and shoulders, flanks, the ice's shore and
 // its islets; the cover's stones and tufts stand by the same rule): there
@@ -184,12 +184,13 @@ const SCOUR_M: f32 = 6.0;
 const SCOUR_LONG: f32 = 2.2;
 const SCOUR_BEND_M: f32 = 3.0;
 const SCOUR_EDGE: f32 = 0.035;
-const SCOUR_THIN: f32 = 0.85;
-const SCOUR_GROUND: vec3<f32> = vec3<f32>(0.115, 0.1, 0.082);
-const SCOUR_GRAVEL_MEAN: f32 = 0.3;
-const SCOUR_GRAIN: f32 = 0.7;
+const SCOUR_THIN: f32 = 0.8;
+const SCOUR_GROUND: vec3<f32> = vec3<f32>(0.2, 0.17, 0.13);
+const SCOUR_GRIT: f32 = 0.35;
+const SCOUR_GRIT_M: vec2<f32> = vec2<f32>(0.05, 0.22);
+const SCOUR_TORN: f32 = 0.09;
 const SCOUR_FAR: vec2<f32> = vec2<f32>(0.2, 0.16);
-const SCOUR_HEART: f32 = 0.12;
+const SCOUR_HEART: f32 = 0.16;
 const SCOUR_RIM: f32 = 0.2;
 const RIDGE_ICE_M: f32 = 2.4;
 const ICE_SLAB_M: f32 = 1.1;
@@ -808,16 +809,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // The bare ground is a window's heart; its stones reach `SCOUR_RIM` further out,
             // on snow: a window is stones thinning to single ones, not a sheet with an edge.
             let open = snow_thin - (0.85 * lies - 0.05);
-            let scour = smoothstep(-SCOUR_EDGE, SCOUR_EDGE, open - SCOUR_HEART);
+            // Its edge is torn at a pebble's size where a pixel is smaller than one.
+            let grit_near = 1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_GRIT_M.y);
+            let torn = (value3(wp / SCOUR_GRIT_M.y) - 0.5) * 2.0 * SCOUR_TORN * grit_near;
+            let scour = smoothstep(-SCOUR_EDGE, SCOUR_EDGE, open - SCOUR_HEART + torn);
             let strewn = smoothstep(-SCOUR_RIM, 0.0, open);
             // Stones of two sizes, each gone to its share of the window when under a pixel;
-            // the larger gone again when it is a dozen pixels across (a painted stone has no body).
-            let small = smoothstep(0.62, 0.68, value3(wp / SCOUR_STONE_M.x));
-            let big = smoothstep(0.7, 0.76, value3(wp / SCOUR_STONE_M.y + vec3<f32>(3.1, 7.7, 1.3))) * smoothstep(0.02, 0.07, fp_m / SCOUR_STONE_M.y);
+            // each gone again when it is a dozen pixels across, by a pixel's short side (at a grazing
+            // eye its long side is many times that). A painted stone has no body: at the feet it was
+            // a puddle, and the cover's own stones stand there.
+            let fp_lo = min(length(dp_dx), length(dp_dy));
+            let small = smoothstep(0.62, 0.68, value3(wp / SCOUR_STONE_M.x)) * smoothstep(0.012, 0.04, fp_lo / SCOUR_STONE_M.x);
+            let big = smoothstep(0.7, 0.76, value3(wp / SCOUR_STONE_M.y + vec3<f32>(3.1, 7.7, 1.3))) * smoothstep(0.03, 0.08, fp_lo / SCOUR_STONE_M.y);
             let stones = max(mix(SCOUR_FAR.x, small, 1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_STONE_M.x)),
                 mix(SCOUR_FAR.y, big, 1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_STONE_M.y)));
-            // The ground is the gravel's photograph (a valley weighs it nothing else), in the window's own colour.
-            let gravel = SCOUR_GROUND * mix(vec3<f32>(1.0), a2.rgb / SCOUR_GRAVEL_MEAN, SCOUR_GRAIN * (1.0 - smoothstep(0.08, 0.5, fp_m)));
+            // The ground has grit of its own, fine and coarse, each gone to its mean under a pixel
+            // (the gravel's photograph is a creek's, wet and dark: under snow's light it was a puddle).
+            let fine = 1.0 + SCOUR_GRIT * (value3(wp / SCOUR_GRIT_M.x) - 0.5) * 2.0 * (1.0 - smoothstep(0.3, 1.2, fp_m / SCOUR_GRIT_M.x));
+            let coarse = 1.0 + SCOUR_GRIT * (value3(wp / SCOUR_GRIT_M.y + vec3<f32>(9.0, 2.0, 4.0)) - 0.5) * 2.0 * grit_near;
+            let gravel = SCOUR_GROUND * fine * coarse;
             // Broken ice shows ice, to its crest: a pressure ridge (the mesh's first lane on snow, `level::ground_point`), and any shore's first hand.
             let over_ice = in.world_position.y - ground.sea.x;
             let ridge_ice = smoothstep(0.7, 0.95, lane_x) * (1.0 - smoothstep(RIDGE_ICE_M * 0.8, RIDGE_ICE_M, over_ice));

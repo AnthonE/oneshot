@@ -110,4 +110,5 @@ Icefall is the third land (`level::Land::Alpine`: a terrain with no void whose m
 - **Cloud shadows cross Dry Fork**, so two passes minutes apart differ in light; the pose mode's clock starts the same each run, so two shots a run apart do not.
 - **This box's Blender has no denoiser**: a Cycles bake that asks for one comes back black (`rocks.py` turns it off). Run from a script, `bpy.ops.object.bake` reads its own arguments, not the scene's.
 - **Meshy's mesh is cut along every seam of its map**: weld it before thinning it, and bake onto a copy with a map of its own, or the paint smears. What Meshy calls metal has no colour to bake; bake the paint as emitted light.
+- **A pixel is long at a grazing eye.** Its footprint on the ground a few metres off is many times longer away from the eye than across (`fp_m`, the longer side, is what a far thing fades by). What must go when it is too *large* on screen (a painted stone with no body, a puddle at the feet) fades by the shorter side, or it never goes.
 - **A view inside a hill measures nothing.** Put an eye 1.7 m over the ground (the scratch probe: a crate that prints `Terrain::height`).

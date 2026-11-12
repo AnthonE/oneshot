@@ -229,6 +229,11 @@ const RED_ROCK_C: u32 = 0x9c6448;
 /// boulders' own (`boulders::COLD_TINT`), dark against white.
 const COLD_STONE_C: u32 = 0x4a4c52;
 const COLD_DARK_STONE_C: u32 = 0x34363c;
+/// The snow lying on a stone's top in a valley (its facets steeper to the
+/// sky than `CAP_UP`), a shade under the field's own so the stone still
+/// has an edge against it.
+const SNOW_CAP_C: u32 = 0xd4d9e2;
+const CAP_UP: f32 = 0.45;
 const TWIG_C: u32 = 0x5a4630;
 /// A twig the sun has had for years, on the sand.
 const BLEACHED_TWIG_C: u32 = 0x857a6c;
@@ -372,13 +377,25 @@ fn pebble(s: &mut Soup, at: Vec3, yaw: f32, size: Vec3, col: [f32; 3], seed: u32
     }
 }
 
-/// A stone, faceted (Gates'): a hand across, a ridge on top.
-fn stone(s: &mut Soup, at: Vec3, yaw: f32, size: Vec3, col: [f32; 3], seed: u32) {
+/// A stone, faceted (Gates'): a hand across, a ridge on top. With `cap`,
+/// the facets that face the sky are that colour: snow lying on it, so it
+/// reads as a stone in the snow and not, from a standing eye, as a dark
+/// puddle on it.
+fn stone(s: &mut Soup, at: Vec3, yaw: f32, size: Vec3, col: [f32; 3], seed: u32, cap: Option<[f32; 3]>) {
     let (corners, ctr) = stone_corners(at, yaw, size, seed);
     let uv1 = rigid(size.y, hash01(seed, 211));
     let c = scale3(col, 0.8 + 0.4 * hash01(seed, 5));
     for t in STONE_TRIS {
-        s.facet(t.map(|k| corners[k]), ctr, CHIP_VOLUME_BLEND, c, uv1);
+        let tri = t.map(|k| corners[k]);
+        let mut n = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or(Vec3::Y);
+        if n.dot((tri[0] + tri[1] + tri[2]) / 3.0 - ctr) < 0.0 {
+            n = -n;
+        }
+        let c = match cap {
+            Some(snow) if n.y > CAP_UP => snow,
+            _ => c,
+        };
+        s.facet(tri, ctr, CHIP_VOLUME_BLEND, c, uv1);
     }
 }
 
@@ -653,7 +670,8 @@ fn piece(s: &mut Soup, kind: Piece, at: Vec3, w: [f32; 4], seed: u32, soil: Soil
             };
             // Most of them small: the product of two rolls.
             let kk = STONE_K.0 + (STONE_K.1 - STONE_K.0) * hash01(seed, 8) * hash01(seed, 14);
-            stone(s, at, yaw, STONE * kk, linear(c), seed);
+            let cap = (soil == Soil::Snow).then(|| linear(SNOW_CAP_C));
+            stone(s, at, yaw, STONE * kk, linear(c), seed, cap);
         }
         Piece::Twig => {
             let c = if ground == 0 { BLEACHED_TWIG_C } else { TWIG_C };
@@ -880,7 +898,7 @@ mod tests {
     fn a_stone_faces_out() {
         let at = Vec3::new(0.0, 0.0, 0.0);
         let mut s = Soup::default();
-        stone(&mut s, at, 0.4, STONE, [0.5; 3], 77);
+        stone(&mut s, at, 0.4, STONE, [0.5; 3], 77, None);
         let (_, ctr) = stone_corners(at, 0.4, STONE, 77);
         for (p, n) in s.pos.iter().zip(&s.nor) {
             let (p, n) = (Vec3::from_array(*p), Vec3::from_array(*n));
