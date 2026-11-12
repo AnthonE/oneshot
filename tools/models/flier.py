@@ -29,6 +29,8 @@ from veil import *
 LENGTH = 2 * sim('FLY_HALF_L')
 HL, HW, BW = sim('FLY_HALF_L'), sim('FLY_HALF_W'), sim('FLY_BODY_HALF_W')
 WY, WT, TOP = sim('FLY_WING_Y'), sim('FLY_WING_T'), sim('FLY_H')
+# The rest of what stops a shot (`Vehicle::hull`'s boxes), by its name there.
+S = lambda name: sim('FLY_' + name)
 # How far its belly hangs over the ground at rest, metres.
 BELLY = 0.2
 # Where the sim seats its pilot (`Vehicle::mount`: metres ahead of the
@@ -86,8 +88,8 @@ LOUVRES = (1.42, 1.53, 1.64)
 # swept, a ridge down its back ahead of its spar (broad and flat it was a
 # delta: a hairline edge on and one pale sheet face on), drooping from the body's shoulder to a point a hand over where its belly
 # rides. (It was a sickle with seven feathers stepped down its trailing
-# edge: a bird's wing, and from astern fourteen paddles.) It is in the sim's
-# wing slab to the lance, and hangs under it from there out.
+# edge: a bird's wing, and from astern fourteen paddles.) The sim's steel is
+# cut to it: a level slab to the lance, a lower box for its tip.
 W_LE = curve((0.5, 0.6), (0.9, 0.52), (1.9, -0.22), (2.54, -0.86))
 W_TE = curve((0.5, -0.42), (0.9, -0.48), (1.9, -0.92), (2.54, -1.08))
 W_Z = curve((0.5, 0.86), (0.9, 0.82), (1.9, 0.55), (2.54, 0.27))
@@ -398,8 +400,16 @@ r = sim('BODY_R')
 eye = Vector((SEAT[0], 0, SEAT[1] + sim('CROUCH_EYE')))
 deliver(
     'flier', o,
-    # `Vehicle::hull`: its fuselage, and its wings' slab.
-    steel=[((-HL, -BW, 0), (HL, BW, TOP)), ((-HL * 0.6, -HW, WY), (HL * 0.3, HW, WY + WT))],
+    # `Vehicle::hull`: its fuselage; its blades' level run; a tip each side,
+    # lower; a prong each side, ahead; its fin's foot and tip.
+    steel=[((S('TAIL_X'), -BW, 0), (HL, BW, TOP)),
+           ((S('WING_X0'), -S('WING_SPAN'), WY), (S('WING_X1'), S('WING_SPAN'), WY + WT))]
+    + [((S('TIP_X0'), min(k * S('WING_SPAN'), k * HW), S('TIP_Y0')), (S('TIP_X1'), max(k * S('WING_SPAN'), k * HW), S('TIP_Y1')))
+       for k in (1, -1)]
+    + [((S('WING_X1'), min(k * S('GUN_Z0'), k * S('GUN_Z1')), S('GUN_Y0')), (S('GUN_X'), max(k * S('GUN_Z0'), k * S('GUN_Z1')), S('GUN_Y1')))
+       for k in (1, -1)]
+    + [((S('FIN_X0'), -S('FIN_HALF_T'), TOP), (S('FIN_X1'), S('FIN_HALF_T'), S('FIN_Y'))),
+       ((S('FIN_TIP_X0'), -S('FIN_HALF_T'), S('FIN_Y')), (S('FIN_TIP_X1'), S('FIN_HALF_T'), S('FIN_TOP')))],
     rider=[((SEAT[0] - r, -r, SEAT[1]), (SEAT[0] + r, r, SEAT[1] + sim('CROUCH_H')))],
     marks=[(GUNS[0], side * GUNS[1], GUNS[2]) for side in (1, -1)],
     chase=(eye + Vector((-cam('FLY_CAM_BACK_M'), 0, cam('FLY_CAM_UP_M'))), eye + Vector((cam('CRAFT_CAM_MEET_M'), 0, 0))),

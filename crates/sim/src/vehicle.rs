@@ -60,6 +60,60 @@ pub struct Spec {
     pub seats: usize,
 }
 
+/// What of each kind's hull stops a shot (`Vehicle::hull`), in its own
+/// frame: x forward, z right, y up from the ground.
+const VEH_STEEL: [Aabb; 2] = [
+    Aabb::new(
+        V3::new(-VEH_HALF_L, 0.0, -VEH_HALF_W),
+        V3::new(VEH_HALF_L, VEH_SILL, VEH_HALF_W),
+    ),
+    Aabb::new(
+        V3::new(-VEH_HALF_L, 0.0, -VEH_HALF_W),
+        V3::new(VEH_BED_X, VEH_BED_H, VEH_HALF_W),
+    ),
+];
+const SKIM_STEEL: [Aabb; 1] = [Aabb::new(
+    V3::new(-SKIM_HALF_L, 0.0, -SKIM_HALF_W),
+    V3::new(SKIM_HALF_L, SKIM_SILL, SKIM_HALF_W),
+)];
+/// The flier's: its fuselage; its two blades' level run as one slab through
+/// it; a tip each side, lower; a prong each side, ahead; the fin's foot and
+/// its tip.
+const FLY_STEEL: [Aabb; 8] = [
+    Aabb::new(
+        V3::new(FLY_TAIL_X, 0.0, -FLY_BODY_HALF_W),
+        V3::new(FLY_HALF_L, FLY_H, FLY_BODY_HALF_W),
+    ),
+    Aabb::new(
+        V3::new(FLY_WING_X0, FLY_WING_Y, -FLY_WING_SPAN),
+        V3::new(FLY_WING_X1, FLY_WING_Y + FLY_WING_T, FLY_WING_SPAN),
+    ),
+    Aabb::new(
+        V3::new(FLY_TIP_X0, FLY_TIP_Y0, FLY_WING_SPAN),
+        V3::new(FLY_TIP_X1, FLY_TIP_Y1, FLY_HALF_W),
+    ),
+    Aabb::new(
+        V3::new(FLY_TIP_X0, FLY_TIP_Y0, -FLY_HALF_W),
+        V3::new(FLY_TIP_X1, FLY_TIP_Y1, -FLY_WING_SPAN),
+    ),
+    Aabb::new(
+        V3::new(FLY_WING_X1, FLY_GUN_Y0, FLY_GUN_Z0),
+        V3::new(FLY_GUN_X, FLY_GUN_Y1, FLY_GUN_Z1),
+    ),
+    Aabb::new(
+        V3::new(FLY_WING_X1, FLY_GUN_Y0, -FLY_GUN_Z1),
+        V3::new(FLY_GUN_X, FLY_GUN_Y1, -FLY_GUN_Z0),
+    ),
+    Aabb::new(
+        V3::new(FLY_FIN_X0, FLY_H, -FLY_FIN_HALF_T),
+        V3::new(FLY_FIN_X1, FLY_FIN_Y, FLY_FIN_HALF_T),
+    ),
+    Aabb::new(
+        V3::new(FLY_FIN_TIP_X0, FLY_FIN_Y, -FLY_FIN_HALF_T),
+        V3::new(FLY_FIN_TIP_X1, FLY_FIN_TOP, FLY_FIN_HALF_T),
+    ),
+];
+
 static SPECS: [Spec; KINDS as usize] = [
     Spec {
         half_l: VEH_HALF_L,
@@ -316,7 +370,7 @@ impl Vehicle {
             SKIMMER => self.pos + f * (SKIM_HALF_L - 0.1) + r * (0.42 * side) + V3::new(0.0, 0.55, 0.0),
             FLIER => {
                 let nose = aim_dir(self.yaw, self.pitch);
-                self.pos + nose * 1.1 + r * (1.9 * side) + V3::new(0.0, FLY_WING_Y + 0.15, 0.0)
+                self.pos + nose * FLY_GUN_X + r * (1.9 * side) + V3::new(0.0, FLY_WING_Y + 0.15, 0.0)
             }
             _ => self.muzzle(dir),
         }
@@ -396,33 +450,14 @@ impl Vehicle {
     /// through to whoever sits or stands there.
     ///
     /// A skimmer's is its body to its cowl, its rider sitting up out of it;
-    /// a flier's, its fuselage and its wings, its pilot inside.
-    pub fn hull(kind: u8) -> [Aabb; 2] {
+    /// a flier's, its fuselage, its pilot inside, and what stands off it as
+    /// it is drawn: each wing's blade and the tip it hangs down to, its
+    /// guns' prongs, the fin on its back.
+    pub fn hull(kind: u8) -> &'static [Aabb] {
         match kind {
-            SKIMMER => {
-                let b = Aabb::new(
-                    V3::new(-SKIM_HALF_L, 0.0, -SKIM_HALF_W),
-                    V3::new(SKIM_HALF_L, SKIM_SILL, SKIM_HALF_W),
-                );
-                [b, b]
-            }
-            FLIER => [
-                Aabb::new(
-                    V3::new(-FLY_HALF_L, 0.0, -FLY_BODY_HALF_W),
-                    V3::new(FLY_HALF_L, FLY_H, FLY_BODY_HALF_W),
-                ),
-                Aabb::new(
-                    V3::new(-FLY_HALF_L * 0.6, FLY_WING_Y, -FLY_HALF_W),
-                    V3::new(FLY_HALF_L * 0.3, FLY_WING_Y + FLY_WING_T, FLY_HALF_W),
-                ),
-            ],
-            _ => {
-                let lo = V3::new(-VEH_HALF_L, 0.0, -VEH_HALF_W);
-                [
-                    Aabb::new(lo, V3::new(VEH_HALF_L, VEH_SILL, VEH_HALF_W)),
-                    Aabb::new(lo, V3::new(VEH_BED_X, VEH_BED_H, VEH_HALF_W)),
-                ]
-            }
+            SKIMMER => &SKIM_STEEL,
+            FLIER => &FLY_STEEL,
+            _ => &VEH_STEEL,
         }
     }
 
@@ -438,7 +473,7 @@ impl Vehicle {
         let (o, d) = (self.local(o - self.pos, ax), self.local(d, ax));
         let mut near = None;
         for b in Vehicle::hull(self.kind) {
-            if let Some(t) = ray_aabb(o, d, &b, near.unwrap_or(tmax)) {
+            if let Some(t) = ray_aabb(o, d, b, near.unwrap_or(tmax)) {
                 near = Some(t);
             }
         }

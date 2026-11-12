@@ -488,3 +488,50 @@ fn a_pilots_prediction_of_its_skimmer_matches_the_server_bit_for_bit() {
 fn a_pilots_prediction_of_its_flier_matches_the_server_bit_for_bit() {
     predicts(FLIER);
 }
+
+/// The flier's steel is the craft as it is drawn: a round from over it
+/// stops on its fin, on a wing's tip where it hangs low, and on a gun's
+/// prong, and falls through the air over the tip, where a level wing was.
+#[test]
+fn a_fliers_fin_its_wings_tips_and_its_guns_stop_a_shot() {
+    let v = sim::vehicle::Vehicle::new_kind(V3::new(10.0, 3.0, -4.0), 9_000, 0, 0, FLIER);
+    let (f, r) = v.axes();
+    // Straight down from 10 m over the hull's ground, at (ahead, right) of
+    // its middle: how high over that ground the round is stopped.
+    let stopped = |ahead: f32, right: f32| {
+        let from = v.pos + f * ahead + r * right + V3::new(0.0, 10.0, 0.0);
+        v.ray(from, V3::new(0.0, -1.0, 0.0), 10.0).map(|t| 10.0 - t)
+    };
+    let near = |got: Option<f32>, want: f32| got.is_some_and(|y| fmath::fabs(y - want) < 1e-3);
+    assert!(
+        near(stopped(-1.5, 0.0), FLY_FIN_TOP),
+        "its fin's tip: {:?}",
+        stopped(-1.5, 0.0)
+    );
+    assert!(
+        near(stopped(-1.0, 0.0), FLY_FIN_Y),
+        "its fin's foot: {:?}",
+        stopped(-1.0, 0.0)
+    );
+    assert!(near(stopped(0.4, 0.0), FLY_H), "its fuselage: {:?}", stopped(0.4, 0.0));
+    for side in [-1.0, 1.0] {
+        assert!(
+            near(stopped(-0.7, 2.3 * side), FLY_TIP_Y1),
+            "a tip: {:?}",
+            stopped(-0.7, 2.3 * side)
+        );
+        assert!(
+            near(stopped(0.9, 1.9 * side), FLY_GUN_Y1),
+            "a prong: {:?}",
+            stopped(0.9, 1.9 * side)
+        );
+        assert!(
+            near(stopped(0.0, 1.4 * side), FLY_WING_Y + FLY_WING_T),
+            "a blade: {:?}",
+            stopped(0.0, 1.4 * side)
+        );
+        assert_eq!(stopped(0.3, 2.3 * side), None, "the air ahead of a tip");
+        assert_eq!(stopped(-1.2, 1.4 * side), None, "the air behind a blade");
+    }
+    assert_eq!(stopped(-2.2, 0.5), None, "the air behind its tail");
+}
