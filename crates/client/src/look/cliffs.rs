@@ -59,6 +59,44 @@ pub const SKIN_STEP_M: f32 = 0.5;
 /// [`LEVER_MAX`]).
 pub const VIRTUAL_OUT_M: f32 = 3.5;
 const LEVER_MAX: f32 = 1.5;
+/// A wall: from this slope (rise/run, 45°, where the sim stops a climb) a
+/// face is shaded less as a bank and more as a wall, whole by the second
+/// (61°). The lattice is half a metre across a wall and three metres up
+/// it: a point pushed up slides along the face, its planes turn nowhere,
+/// and where the wall bends (its foot, its rim) each cell's two triangles
+/// part into a comb of teeth. A wall's normal is taken instead from how
+/// its relief changes across it and up it, point by point
+/// ([`wall_normal`]): planes that turn left and right as a cliff's
+/// buttresses do, and lean a little.
+const WALL_LO: f32 = 1.0;
+const WALL_HI: f32 = 1.8;
+/// How far a wall's relief would stand out of it at most, metres…
+pub const WALL_OUT_M: f32 = 2.6;
+/// …and how much of its height the relief is read at: squashed, it is
+/// buttresses and chimneys many times taller than they are wide, which a
+/// wall's joints cut and the lattice can carry; its beds are the shader's.
+const WALL_SQUASH: f32 = 0.22;
+/// How much darker a wall is in its deepest chimney, and from how far
+/// under the relief's middle to how far the dark comes on: what tells a
+/// buttress from the gap beside it from across the canyon, where a normal's
+/// turn is a few parts in a hundred.
+const WALL_CHIMNEY: f32 = 0.5;
+const WALL_CHIMNEY_AT: (f32, f32) = (0.0, 0.18);
+/// …and how much lighter on a buttress's brow, as far over the middle.
+const WALL_BROW: f32 = 0.12;
+/// How much of [`UV_1`]'s value the ground's shader keeps
+/// (`ground.wgsl`'s `SKIN_VALUE`): a chimney's is written that much
+/// stronger, so it is drawn whole.
+///
+/// [`UV_1`]: Mesh::ATTRIBUTE_UV_1
+const SKIN_VALUE: f32 = 0.25;
+/// How far either side of a point a wall's relief is compared, metres,
+/// across the wall and up it.
+const WALL_ACROSS_M: f32 = 0.5;
+const WALL_UP_M: f32 = 1.5;
+/// The least a shaded normal looks up: a facet of a wall may lean out, and
+/// the ground's shader reads a face by its tilt from level.
+const NORMAL_UP_MIN: f32 = 0.03;
 /// How far past the playable rectangle the skin is drawn, metres: beyond it
 /// the ground lies under the walls.
 const MARGIN_M: f32 = 2.0;
@@ -124,6 +162,24 @@ pub fn fade(rock: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// A wall's relief at `p`: [`rock::buttress`] read at [`WALL_SQUASH`] of
+/// its height.
+fn wall_relief(p: Vec3, key: u32) -> (f32, f32) {
+    rock::buttress(Vec3::new(p.x, p.y * WALL_SQUASH, p.z), key)
+}
+
+/// The normal a wall is shaded with at `p`, where the ground's is `ng` and
+/// the skin is `fd` grown: the ground's, turned by how the wall's relief
+/// changes across the face and up it.
+fn wall_normal(p: Vec3, ng: Vec3, fd: f32, key: u32) -> Vec3 {
+    let across = Vec3::Y.cross(ng).normalize_or_zero();
+    let up = ng.cross(across);
+    let out = |q: Vec3| wall_relief(q, key).0 * (WALL_OUT_M * fd);
+    let da = (out(p + across * WALL_ACROSS_M) - out(p - across * WALL_ACROSS_M)) / (2.0 * WALL_ACROSS_M);
+    let du = (out(p + up * WALL_UP_M) - out(p - up * WALL_UP_M)) / (2.0 * WALL_UP_M);
+    (ng - across * da - up * du).normalize_or(ng)
+}
+
 /// Barycentric weights of a point at (fu, fv) in a cell, over its corners
 /// (0,0), (1,0), (0,1), (1,1): the cell's two triangles split from its low
 /// corner to its high one, as the sim's are.
@@ -162,6 +218,7 @@ pub fn skin(
     let (mut drawn, mut virt) = (Vec::with_capacity(n), Vec::with_capacity(n));
     let (mut sim_y, mut lift) = (Vec::with_capacity(n), Vec::with_capacity(n));
     let mut shades = Vec::with_capacity(n);
+    let mut walls = Vec::with_capacity(n);
     let (mut fades, mut cols, mut ngs, mut vals) = (
         Vec::with_capacity(n),
         Vec::with_capacity(n),
@@ -181,7 +238,10 @@ pub fn skin(
             let y = mix(&h);
             let rock_w = mix(&|c| ground[c].1[3]);
             let fd = fade(rock_w);
-            let lever = mix(&|c| ground[c].0).min(LEVER_MAX);
+            let slope = mix(&|c| ground[c].0);
+            let lever = slope.min(LEVER_MAX);
+            let wall = ((slope - WALL_LO) / (WALL_HI - WALL_LO)).clamp(0.0, 1.0);
+            let wall = wall * wall * (3.0 - 2.0 * wall);
             let mut col = [0.0f32; 4];
             for (&c, w) in corners.iter().zip(w) {
                 for (o, g) in col.iter_mut().zip(ground[c].1) {
@@ -195,10 +255,24 @@ pub fn skin(
                 .normalize_or(Vec3::Y);
             let (x, z) = (t.x0 + a as f32 * step, t.z0 + b as f32 * step);
             let p = Vec3::new(x, y, z);
-            let (push, local) = rock::relief(p, key);
+            let (mut push, mut local) = rock::relief(p, key);
+            let mut chimney = 0.0;
+            if wall > 0.0 {
+                let (wp, wl) = wall_relief(p, key);
+                push += (wp - push) * wall;
+                local += (wl - local) * wall;
+                let span = WALL_CHIMNEY_AT.1 - WALL_CHIMNEY_AT.0;
+                let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+                let deep = ease(((0.5 - wp - WALL_CHIMNEY_AT.0) / span).clamp(0.0, 1.0));
+                let brow = ease(((wp - 0.5 - WALL_CHIMNEY_AT.0) / span).clamp(0.0, 1.0));
+                chimney = (WALL_CHIMNEY * deep - WALL_BROW * brow) * wall;
+            }
             let l = SKIN_OUT_M * fd * (SKIN_FLOOR + (1.0 - SKIN_FLOOR) * push) - SKIN_SINK_M * (1.0 - fd);
             drawn.push(Vec3::new(x, y + l, z));
-            virt.push(Vec3::new(x, y + fd * VIRTUAL_OUT_M * push * lever, z));
+            // A bank's is pushed up; a wall's stays, and takes its normal
+            // from its relief.
+            virt.push(Vec3::new(x, y + fd * VIRTUAL_OUT_M * push * lever * (1.0 - wall), z));
+            walls.push((wall, if wall > 0.0 { wall_normal(p, ng, fd, key) } else { ng }));
             sim_y.push(y);
             lift.push(l);
             fades.push(fd);
@@ -212,7 +286,7 @@ pub fn skin(
             let keep = 1.0 - sw;
             cols.push([col[0] * keep, col[1] * keep, col[2] * keep, col[3] * keep + sw]);
             ngs.push(ng);
-            vals.push(1.0 + (rock::relief_value(p, local, key) - 1.0) * sw);
+            vals.push(1.0 + (rock::relief_value(p, local, key) - 1.0 - chimney / SKIN_VALUE) * sw);
             shades.push(sw);
         }
     }
@@ -249,10 +323,13 @@ pub fn skin(
     );
     for &(i, vn) in &creased.verts {
         let (fd, sw) = (fades[i], shades[i]);
+        let (wall, wn) = walls[i];
+        let vn = vn.lerp(wn, wall).normalize_or(vn);
         // The ground's own normal where the skin comes up through it, the
         // relief's where it is whole; darker where the relief turns from
         // the sky.
-        let n = ngs[i].lerp(vn, sw).normalize_or(ngs[i]);
+        let n = ngs[i].lerp(vn, sw);
+        let n = Vec3::new(n.x, n.y.max(NORMAL_UP_MIN), n.z).normalize_or(ngs[i]);
         let value = vals[i] * (1.0 - sw * rock::SKY_DARK * (ngs[i].y - vn.y).max(0.0));
         pos.push(drawn[i].to_array());
         nrm.push(n.to_array());
@@ -374,7 +451,21 @@ mod tests {
         let (lo, hi) = vals
             .iter()
             .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
-        assert!(hi - lo > 0.15 && lo > 0.3 && hi < 1.6, "value {lo}..{hi}");
+        // As drawn (the shader keeps `SKIN_VALUE` of it): a chimney dark
+        // and never black, a brow lighter and never chalk.
+        let drawn = |v: f32| 1.0 + (v - 1.0) * SKIN_VALUE;
+        assert!(hi - lo > 0.15, "value {lo}..{hi}");
+        assert!(
+            (0.35..0.9).contains(&drawn(lo)) && drawn(hi) < 1.25,
+            "drawn {}..{}",
+            drawn(lo),
+            drawn(hi)
+        );
+        const WGSL: &str = include_str!("../../assets/shaders/ground.wgsl");
+        assert!(
+            WGSL.contains(&format!("const SKIN_VALUE: f32 = {SKIN_VALUE};")),
+            "the shader's SKIN_VALUE"
+        );
     }
 
     /// Where the skin is still under the ground it shades as the ground,

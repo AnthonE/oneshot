@@ -185,6 +185,16 @@ pub fn relief(p: Vec3, key: u32) -> (f32, f32) {
     (0.5 + t / (1.0 + 2.0 * t.abs()), local)
 }
 
+/// [`relief`] without its strata, for a wall read squashed
+/// (`cliffs::wall_relief`): buttresses and the chimneys between them. A
+/// bed stretched to a wall's height is a band of shade across it.
+pub fn buttress(p: Vec3, key: u32) -> (f32, f32) {
+    let at = |m: f32, k: u32| (facet_noise(p.x / m, p.y / m, p.z / m, k) - 0.5) * 2.0;
+    let local = 0.6 * at(FACET_M, key ^ 0xfac3) + 0.22 * at(FACET_FINE_M, key ^ 0x5ca1);
+    let t = 0.5 * at(FACET_BROAD_M, key ^ 0xb0ad) + local;
+    (0.5 + t / (1.0 + 2.0 * t.abs()), local)
+}
+
 /// Bed `bed`'s stand-out at height `f` (0..1) up it: its own, drifting
 /// along the face so a shelf comes and goes, and how its face leans.
 fn stratum(bed: f32, f: f32, x: f32, z: f32, key: u32) -> f32 {
