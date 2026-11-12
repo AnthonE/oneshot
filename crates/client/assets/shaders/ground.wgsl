@@ -91,7 +91,8 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 // at `FAN_Y.x` (a height over the floor) under a buttress's nose, at
 // `FAN_Y.y` under a couloir (from `BANK.x` to `.y` of that lane), so it
 // stands highest under each couloir and sags between, wider than it is
-// tall, its edge ragged (`BANK_EDGE_M`: how soft, how far it wanders) and
+// tall, its edge rolling (`BANK_EDGE_M`: how soft, how far it wanders, on a
+// noise `BANK_ROLL_M` across) and
 // streaked by what slid. The rock itself is paler on a buttress's nose and
 // darker in the cleft beside it (`NOSE_TONE`), so the wall's relief reads
 // where the light is flat on it.
@@ -129,7 +130,8 @@ const COULOIR_SWELL: f32 = 0.07;
 const GULLY_BARE: f32 = 0.5;
 const FAN_Y: vec2<f32> = vec2<f32>(11.0, 22.0);
 const BANK: vec2<f32> = vec2<f32>(0.05, 0.9);
-const BANK_EDGE_M: vec2<f32> = vec2<f32>(2.5, 1.6);
+const BANK_EDGE_M: vec2<f32> = vec2<f32>(1.2, 2.0);
+const BANK_ROLL_M: f32 = 15.0;
 const LOW_SHELF: f32 = 0.45;
 const SNOW_ON_ROCK: f32 = 0.6;
 const SNOW_UP: f32 = 1.1;
@@ -170,7 +172,7 @@ const SNOW_TILT: vec2<f32> = vec2<f32>(0.5, 0.55);
 const SCOUR_M: f32 = 6.0;
 const SCOUR_LONG: f32 = 2.2;
 const SCOUR_BEND_M: f32 = 3.0;
-const SCOUR_EDGE: f32 = 0.06;
+const SCOUR_EDGE: f32 = 0.035;
 const SCOUR_THIN: f32 = 0.85;
 const SCOUR_GROUND: vec3<f32> = vec3<f32>(0.115, 0.1, 0.082);
 const SCOUR_GRAVEL_MEAN: f32 = 0.3;
@@ -840,7 +842,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let swell = (value3(vec3<f32>(wp.x / 31.0, wp.y / 7.0, wp.z / 31.0) + vec3<f32>(2.0, 6.0, 5.0)) - 0.5) * 2.0 * COULOIR_SWELL;
             let line = smoothstep(COULOIR.x, COULOIR.y, face_hollow + rag + swell - COULOIR_THIN * (1.0 - fed));
             // The bank at its foot: as high as the broad hollow over it is deep, wider than it is tall.
-            let top = mix(FAN_Y.x, FAN_Y.y, smoothstep(BANK.x, BANK.y, bank_hollow)) + rag / COULOIR_RAG * BANK_EDGE_M.y;
+            // Its top wanders on a noise of its own, broad: on the couloir's fine one it was a row of teeth.
+            let roll = (value3(wp / BANK_ROLL_M + vec3<f32>(6.0, 2.0, 8.0)) - 0.5) * 2.0;
+            let top = mix(FAN_Y.x, FAN_Y.y, smoothstep(BANK.x, BANK.y, bank_hollow)) + roll * BANK_EDGE_M.y + rag / COULOIR_RAG * 0.4;
             let slid = 1.0 - 0.25 * value3(vec3<f32>(wp.x / 1.6, wp.y / 15.0, wp.z / 1.6));
             let bank = (1.0 - smoothstep(top - BANK_EDGE_M.x, top, wp.y)) * slid;
             let gully = max(line, bank) * face_tall;

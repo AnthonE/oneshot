@@ -119,7 +119,7 @@ const LANE_M: vec2<f32> = vec2<f32>(4.5, 6.5);
 const LANE_DARK: f32 = 0.72;
 const LANE_ROUGH: f32 = 0.3;
 const LANE_TRACK_M: f32 = 1.1;
-const LANE_TRACK_ROUGH: f32 = 0.7;
+const LANE_TRACK_ROUGH: f32 = 0.5;
 // Snow blown against a poured wall's foot outdoors: plastered up it from
 // the ground, to a ragged line `PLASTER_M` up (lowest, highest), in
 // `SNOW_RGB`; the wall is damp and dark over it (the grime). And on a top
@@ -480,10 +480,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let off = abs(select(p.z - mid.z, p.x - mid.x, ext.x > ext.z));
         let wander = (vnoise_aa(p, 0.35, px) - 0.5) * 2.0;
         lane = (1.0 - smoothstep(LANE_M.x, LANE_M.y, off + wander)) * hall;
-        let track = (1.0 - smoothstep(0.2, 0.45, abs(off - LANE_TRACK_M))) * lane;
+        // A tyre's width, and it comes and goes with the wear.
+        let track = (1.0 - smoothstep(0.12, 0.26, abs(off - LANE_TRACK_M))) * lane
+            * smoothstep(0.35, 0.6, vnoise_aa(p + vec3<f32>(5.0), 0.3, px));
         c *= mix(1.0, LANE_DARK, max(lane * 0.6, track));
         // Worn in patches, and a tyre's rubber is dull across the sheen.
-        let worn = mix(LANE_ROUGH, LANE_ROUGH + 0.25, vnoise_aa(p + vec3<f32>(21.0), 0.5, px));
+        let worn = mix(LANE_ROUGH, LANE_ROUGH + 0.12, vnoise_aa(p + vec3<f32>(21.0), 0.5, px));
         rough = mix(mix(rough, worn, lane), LANE_TRACK_ROUGH, track);
     }
     let dust = clamp(up * patches * weather.wear.x * (1.0 - 0.4 * hall) * (1.0 - lane), 0.0, 1.0);

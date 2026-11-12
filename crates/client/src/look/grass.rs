@@ -311,14 +311,17 @@ const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 /// `SHORE_REACH`); a lane's floor and a forecourt lie flat and low and
 /// stay clean, and so does the snow against a face (ground standing or
 /// falling steeper than rock holds within `FACE_CLEAR_M`: `FACE_THIN` of
-/// it there), where a cap meets its lip and a bank lies at a foot.
+/// it there), where a cap meets its lip and a bank lies at a foot; and so
+/// does high ground (from `THIN_HIGH_M.0` over the ice, none of it thin by
+/// `.1`): a moraine's crowns and a shore are scoured, a massif's cap is not.
 const THIN_REACH_M: f32 = 10.0;
-const THIN_PROUD_M: (f32, f32) = (0.45, 1.8);
+const THIN_PROUD_M: (f32, f32) = (0.6, 2.2);
 const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
 const THIN_FLANK: f32 = 0.6;
 const THIN_OVER_ICE_M: (f32, f32) = (0.05, 1.6);
 const THIN_SHORE_M: f32 = 12.0;
-const THIN_PATCH: f32 = 0.55;
+const THIN_PATCH: f32 = 0.45;
+const THIN_HIGH_M: (f32, f32) = (9.0, 15.0);
 const SHORE_REACH: (f32, f32) = (0.4, 0.6);
 const SHORE_FLOOR: f32 = 0.2;
 const FACE_CLEAR_M: f32 = 5.0;
@@ -382,7 +385,10 @@ pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let face = ring
         .iter()
         .any(|(a, b)| (at(a * FACE_CLEAR_M, b * FACE_CLEAR_M) - y).abs() > FACE_CLEAR_M * 1.1);
-    let open = if face { FACE_THIN } else { 1.0 };
+    // High ground keeps its cap: a massif's top and a spur's crest are
+    // white to their lips, as a mountain's are.
+    let high = 1.0 - step(THIN_HIGH_M.0, THIN_HIGH_M.1, y - ice);
+    let open = high * if face { FACE_THIN } else { 1.0 };
     (proud.max(flank) * patch * open).max(shore * (SHORE_FLOOR + (1.0 - SHORE_FLOOR) * reach))
 }
 

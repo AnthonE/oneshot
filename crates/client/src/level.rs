@@ -1332,7 +1332,9 @@ pub fn build(
         // A long box on uneven ground: its grime follows the ground along
         // it, not the height under its middle (an end wall across a
         // canyon's floor and up its banks).
-        if map.terrain.is_some() {
+        // Not one that stands on another block: its foot is that block's
+        // top, level end to end, whatever the ground does far under it.
+        if map.terrain.is_some() && block.ground != min.y {
             let size = max - min;
             let along_x = size.x >= size.z;
             if size.x.max(size.z) > RUN_MIN_M {
