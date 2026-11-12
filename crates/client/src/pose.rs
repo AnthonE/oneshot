@@ -13,7 +13,8 @@
 //!
 //! A map's view (the board's level shots): `map=4` builds that map instead,
 //! `eye=x,y,z` and `look=x,y,z` place the camera, and the fighter stands
-//! only when `fighter=1` (it always does on Proving Grounds' default view).
+//! only when `fighter=1` (it always does on Proving Grounds' default view),
+//! at `at=x,y,z` if that is given (its feet: a floor's own height).
 //! `truck=x,y,z` stands a truck there (`look/truck.rs`), `y` over the
 //! ground, turned by `truckyaw=` (radians); `drive=` drives it from there
 //! round a circle to its right, m/s. `seat=0` puts the fighter at its
@@ -281,7 +282,10 @@ impl Pose {
             team: get("team", 0.0) as u8,
             alive: true,
             grounded: true,
-            pos: mount.unwrap_or(V3::new(AT.x, AT.y, AT.z)),
+            pos: mount.unwrap_or_else(|| {
+                let at = vec("at").unwrap_or(AT);
+                V3::new(at.x, at.y, at.z)
+            }),
             // Running the way it faces, or `dir` off it.
             vel: V3::new(speed * travel.cos(), 0.0, speed * travel.sin()),
             yaw,

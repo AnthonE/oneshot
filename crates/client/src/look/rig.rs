@@ -323,7 +323,13 @@ pub fn grade(g: super::mood::Grade, c: &mut ColorGrading) {
     c.global.tint = g.tint;
     c.global.post_saturation = g.saturation;
     c.global.midtones_range = GRADE_MIDTONES_FROM..c.global.midtones_range.end;
-    c.midtones.contrast = g.contrast;
+    // A power about the mood's own middle, the same in all three of Bevy's
+    // sections so none shows a seam: out = pivot * (in / pivot)^contrast.
+    let gain = g.pivot.powf((1.0 - g.contrast) / g.contrast);
+    for s in [&mut c.shadows, &mut c.midtones, &mut c.highlights] {
+        s.gamma = 1.0 / g.contrast;
+        s.gain = gain;
+    }
     c.midtones.lift = g.lift;
 }
 

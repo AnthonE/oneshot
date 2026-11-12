@@ -22,8 +22,8 @@ use bevy::prelude::*;
 use super::fresnel;
 use super::weathering::{Block, Shape};
 use crate::level::{
-    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, DARK, HULL, MARBLE, PLATE, ROAD, RUST, SNOW,
-    STEEL_BLUE, STEEL_RED, STONE, STONE_DARK, TREAD,
+    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, DARK, LINING, MARBLE, PANEL, PANEL_BLUE, PANEL_RED,
+    RIBBED, ROAD, RUST, SNOW, STONE, STONE_DARK, TREAD,
 };
 
 /// The `stone` set's tile, m: the UVs the Blender kit writes (`arch.py`'s `TILE_M`).
@@ -38,6 +38,10 @@ pub const SNOW_TILE_M: f32 = 2.6;
 /// `TILE_M`): its swells want the room, and a floor of it is fifty metres.
 pub const SNOW_LAID: f32 = 2.0;
 pub const RUST_TILE_M: f32 = 2.4;
+/// A wall's panels: the plating is two plates to its tile (`bulkhead.py`).
+pub const PANEL_TILE_M: f32 = 3.0;
+/// Ribbed sheet: its photograph is a score of ribs.
+pub const RIBBED_TILE_M: f32 = 1.5;
 /// The bronze: brushed and old, not polished (a mirror under the open sky is
 /// white).
 const BRONZE: Color = Color::linear_rgb(0.17, 0.105, 0.05);
@@ -141,6 +145,10 @@ pub struct Set {
     pub turns: (Vec3, f32),
     /// Its lifts' look, if not the game's own.
     pub lift: Option<Lift>,
+    /// Where the map's own floor is not drawn (`hidden`), whether the set
+    /// draws a ground that is stood on (Overpass's road: yes; Cistern's is
+    /// under its water).
+    pub ground: bool,
 }
 
 const BRONZE_PAINT: Paint = Paint::Metal(BRONZE, BRONZE_ROUGH, BRONZE_METAL);
@@ -166,6 +174,7 @@ const OBSERVATORY: Set = Set {
     // `observatory.py`'s `CROWN_AT`.
     turns: (Vec3::new(0.0, 33.0, 21.0), 0.05),
     lift: None,
+    ground: false,
 };
 
 const CISTERN: Set = Set {
@@ -196,6 +205,7 @@ const CISTERN: Set = Set {
         glow: LinearRgba::rgb(0.5, 0.68, 0.9),
         beam: Color::srgba(0.5, 0.68, 0.95, 0.04),
     }),
+    ground: false,
 };
 
 const OVERPASS: Set = Set {
@@ -217,7 +227,6 @@ const OVERPASS: Set = Set {
         part("light_pink", Paint::Light(LIGHT_PINK)),
         part("light_cyan", Paint::Light(LIGHT_CYAN)),
         part("light_warm", Paint::Dim(LIGHT_WARM, WINDOW_GLOW)),
-        part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
         part("city", Paint::Far),
         part("city_lights", Paint::Far),
         part("flood", Paint::Water),
@@ -231,19 +240,22 @@ const OVERPASS: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(40.0, 8.0, 40.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: true,
 };
 
 const DOCK: Set = Set {
     dir: "bulkhead",
     prefix: "dock",
     parts: &[
-        part("hull", Paint::Look(HULL)),
+        // Its walls and girders in smooth panels, its frames in riveted
+        // plate, its cargo ribbed or rusted, each side's paint on panels.
+        part("hull", Paint::Look(PANEL)),
         part("rust", Paint::Look(RUST)),
         part("dark", Paint::Look(DARK)),
-        part("plate", Paint::Look(PLATE)),
+        part("plate", Paint::Look(RIBBED)),
         part("tread", Paint::Look(TREAD)),
-        part("red", Paint::Look(STEEL_RED)),
-        part("blue", Paint::Look(STEEL_BLUE)),
+        part("red", Paint::Look(PANEL_RED)),
+        part("blue", Paint::Look(PANEL_BLUE)),
         part("pipe", Paint::Metal(Color::srgb(0.3, 0.31, 0.33), 0.45, 0.7)),
         part("crane", Paint::Metal(Color::srgb(0.68, 0.5, 0.1), 0.55, 0.2)),
         part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.6, 0.0)),
@@ -266,6 +278,7 @@ const DOCK: Set = Set {
     block: (Vec3::new(0.0, 5.0, 0.0), Vec3::new(25.0, 6.0, 17.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 const RANGE: Set = Set {
@@ -292,6 +305,7 @@ const RANGE: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(25.0, 6.0, 25.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 /// Pithead's paint: what the Blender kit colours per vertex (`pithead.py`'s
@@ -323,7 +337,8 @@ const PITHEAD: Set = Set {
         part("snow", Paint::Look(SNOW)),
         part("clad", TONED),
         part("clad_grey", TONED),
-        part("lining", TONED),
+        // The sheds' inner sheet: ribbed, in the kit's tone.
+        part("lining", Paint::Look(LINING)),
         part("steel", TONED),
         part("steel_box", TONED),
         part("rusty", TONED),
@@ -349,6 +364,7 @@ const PITHEAD: Set = Set {
     block: (Vec3::new(0.0, 4.0, 0.0), Vec3::new(22.0, 8.0, 15.0)),
     turns: (Vec3::ZERO, 0.0),
     lift: None,
+    ground: false,
 };
 
 /// The built set of map `id`, if it has one.
@@ -386,6 +402,7 @@ pub fn dress(
     wanted: Query<(Entity, &Wanted)>,
     server: Res<AssetServer>,
     mut mats: ResMut<Assets<StandardMaterial>>,
+    mut floors: Query<&mut super::floor_shade::Waits>,
 ) {
     for (e, w) in &wanted {
         commands.entity(e).despawn();
@@ -395,6 +412,12 @@ pub fn dress(
                 GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }
                     .from_asset(format!("models/{}/{}_{}.glb", set.dir, set.prefix, p.name)),
             );
+            // A light lights the floor under it (`look/floor_shade.rs`).
+            if let Paint::Light(colour) = p.paint {
+                for mut w in &mut floors {
+                    w.light(mesh.clone(), LinearRgba::from(colour) * crate::level::STRIP_GLOW);
+                }
+            }
             let mut c = commands.spawn((LevelPart, Mesh3d(mesh), Transform::default()));
             match p.paint {
                 Paint::Look(look) => {
@@ -530,6 +553,10 @@ pub fn dress(
                 c.insert(Turns(at, way, rate));
             }
         }
+        // Every light the set has is named: its floors can be laid.
+        for mut w in &mut floors {
+            w.built();
+        }
     }
 }
 
@@ -551,6 +578,8 @@ pub const fn tile(look: u8) -> f32 {
         BLAST => BLAST_TILE_M,
         SNOW => SNOW_TILE_M,
         RUST => RUST_TILE_M,
+        PANEL | PANEL_RED | PANEL_BLUE => PANEL_TILE_M,
+        RIBBED | LINING => RIBBED_TILE_M,
         _ => TILE_M,
     }
 }

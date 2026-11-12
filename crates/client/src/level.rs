@@ -133,6 +133,30 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // Its set is cut white (`tools/snow.py`'s `WHITE`).
         SNOW => ("snow", crate::look::built::tile(SNOW), Color::WHITE),
         RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
+        // The plating is drawn near white (`textures::panel_images`): the
+        // tint is the colour. A floor's plates are big, a wall's a stride.
+        PLATING => ("panel", 5.0, Color::linear_rgb(0.22, 0.23, 0.25)),
+        PANEL => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.24, 0.255, 0.285),
+        ),
+        PANEL_RED => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.62, 0.115, 0.09),
+        ),
+        PANEL_BLUE => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.1, 0.19, 0.6),
+        ),
+        RIBBED => (
+            "metal",
+            crate::look::built::tile(RIBBED),
+            Color::linear_rgb(1.05, 1.08, 1.12),
+        ),
+        LINING => ("metal", crate::look::built::tile(RIBBED), Color::WHITE),
         _ => return None,
     })
 }
@@ -174,6 +198,17 @@ pub const RUST: u8 = 42;
 /// A turned box drawn as a wreck inside it (`look/boulders.rs`).
 pub const WRECK_CAR: u8 = 43;
 pub const WRECK_VAN: u8 = 44;
+/// A dock's other metals: deck plating a floor is laid in, a wall's smooth
+/// panels in a hull's grey or a side's paint, ribbed sheet. A dock in one
+/// riveted plate, walls and cargo and paint alike, was one surface.
+pub const PLATING: u8 = 45;
+pub const PANEL: u8 = 46;
+pub const PANEL_RED: u8 = 47;
+pub const PANEL_BLUE: u8 = 48;
+pub const RIBBED: u8 = 49;
+/// A shed's inner sheet (Pithead's shaft houses): ribbed and painted, its
+/// tone the kit's own per vertex. Flat paint on a flat wall was no surface.
+pub const LINING: u8 = 50;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -209,6 +244,18 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
         // is not; tread plate is worn dull.
         (STEEL, _) => (0.62, 0.85),
         (STEEL_RED | STEEL_BLUE, _) => (0.7, 0.3),
+        // Paint over plate, as a base's. Bare plating is metal through and
+        // through, as the riveted plate is, and as dull: the plating's own
+        // roughness is a half (`textures::panel_images`), and at a wall's
+        // 0.62 of that it was a mirror for the hall's sheen, a pale card
+        // from end to end. A deck is worn a little smoother than a wall.
+        (PANEL_RED | PANEL_BLUE, _) => (1.0, 0.3),
+        (PANEL, _) => (1.0, 0.85),
+        (PLATING, _) => (0.9, 0.85),
+        (RIBBED, _) => (0.6, 0.7),
+        // Paint on sheet, not bare metal: a mine's shed under an open sky
+        // would wear the sky as a sheen.
+        (LINING, _) => (0.85, 0.1),
         (TREAD, _) => (0.75, 0.8),
         (STONE | STONE_DARK, _) => (0.88, 0.0),
         (_, "metal") => (0.55, 0.35),
@@ -227,6 +274,7 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
 fn surface(look: u8) -> Surface {
     match look {
         0 | 1 | 3 | 4 | 5 | 7 | 11 | PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
+        PLATING | PANEL | PANEL_RED | PANEL_BLUE | RIBBED | LINING => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB | HUSK..=FONT => Surface::Hull,
@@ -576,7 +624,7 @@ pub fn dress_level(
 
 /// How bright a light strip is, over the display's white (HDR: past 1 it
 /// blooms on the desktop), and a launcher's glow beside it.
-const STRIP_GLOW: f32 = 4.0;
+pub(crate) const STRIP_GLOW: f32 = 4.0;
 /// How bright the hull's light seams glow, over the display's white.
 const VEIN_GLOW: f32 = 3.0;
 /// And the windows' honeycomb.
@@ -916,6 +964,10 @@ pub fn build(
     };
     let map = def.build();
     let land = Land::of(def);
+    // The lights the level makes itself, for what they lay on its floors
+    // (`look/floor_shade.rs`).
+    let mut lights = crate::look::floor_shade::Lights::default();
+    let shines = |c: Color| LinearRgba::from(c) * STRIP_GLOW;
     let (lo, hi) = (map.lo, map.hi);
     let (cx, cz) = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let half = (hi.0 - lo.0).max(hi.1 - lo.1) * 0.5 + 8.0;
@@ -973,6 +1025,7 @@ pub fn build(
         }
         if let Some(c) = strip(l) {
             let mid = (b.min + b.max) * 0.5;
+            lights.strip(v3(b.min), v3(b.max), shines(c));
             commands.spawn((
                 LevelPart,
                 Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
@@ -1124,6 +1177,7 @@ pub fn build(
         let size = max - min;
         let mid = (min + max) * 0.5;
         if let Some(c) = strip(l) {
+            lights.strip(min, max, shines(c));
             commands.spawn((
                 LevelPart,
                 Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
@@ -1365,6 +1419,9 @@ pub fn build(
                 }
             }
         };
+        if let Some(c) = glow {
+            lights.add(&mesh, &at, shines(c));
+        }
         let mut e = commands.spawn((LevelPart, Mesh3d(meshes.add(mesh)), MeshMaterial3d(mat), at));
         if glow.is_some() {
             e.insert(bevy::light::NotShadowCaster);
@@ -1418,6 +1475,9 @@ pub fn build(
     for (l, mesh) in trim {
         let (color, roughness, metallic) = look(l);
         let glow = strip(l);
+        if let Some(c) = glow {
+            lights.add(&mesh, &Transform::default(), shines(c));
+        }
         let mut e = commands.spawn((
             LevelPart,
             Mesh3d(meshes.add(mesh)),
@@ -1477,6 +1537,11 @@ pub fn build(
         } else {
             (LAMP_ROOM_R, LAMP_ROOM_GLOW)
         };
+        lights.disc(
+            Vec3::new(p[0], p[1] - 0.05, p[2]),
+            fixture_r,
+            LinearRgba::from(colour) * fixture_glow,
+        );
         commands.spawn((
             LevelPart,
             Mesh3d(meshes.add(Cylinder::new(fixture_r, 0.1))),
@@ -1720,6 +1785,42 @@ pub fn build(
     } else {
         mood.ev100
     };
+    // The shade a map's lamps and its fill (a hall's, or the sky's) lay on
+    // its floors, and the light its strips do (`look/floor_shade.rs`):
+    // laid once a built set's lights are in.
+    {
+        let built = crate::look::built::of(id).is_some();
+        // What is drawn as a floor: not a strip of light, not a box nothing
+        // draws, not a prop standing in its solid.
+        let floor_box = map
+            .looks
+            .iter()
+            .map(|&l| strip(l).is_none() && (l != HIDDEN || built))
+            .collect();
+        let floor_solid = map
+            .solid_looks
+            .iter()
+            .map(|&l| {
+                !matches!(l, PALM | DEAD_TREE | PYLON | WRECK_CAR | WRECK_VAN | HUSK..=FONT) && (l != HIDDEN || built)
+            })
+            .collect();
+        commands.spawn((
+            LevelPart,
+            crate::look::floor_shade::Waits {
+                // A floor the level draws, or a set that draws its own
+                // (Overpass's road; Cistern's is its water).
+                ground: map.light.floor != HIDDEN || crate::look::built::of(id).is_some_and(|s| s.ground),
+                map: Box::new(map.clone()),
+                id,
+                lamps: (LAMP_RANGE, LAMP_CONE, LAMP_DOWN_FROM),
+                floor_box,
+                floor_solid,
+                lights,
+                parts: Vec::new(),
+                set: built,
+            },
+        ));
+    }
     // With the graphics tier's cascades from its first frame: spawned where
     // the tier can be read.
     let k = map.light.sun;
