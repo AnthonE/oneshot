@@ -38,6 +38,9 @@ pub enum Weapon {
     Carbine,
     /// The beam rifle's beam: energy, a bigger scorch.
     Beam,
+    /// A one-seater's plasma bolt (`sim::arms::BOLTS`, `WING_BOLTS`):
+    /// energy in plasma's blue, a splash more than a crack.
+    Bolt,
 }
 
 impl Weapon {
@@ -56,6 +59,7 @@ impl Weapon {
         match self {
             Weapon::Carbine => Some(sheets::TONE_GREEN),
             Weapon::Beam => Some(sheets::TONE_PINK),
+            Weapon::Bolt => Some(sheets::TONE_PLASMA),
             _ => None,
         }
     }
@@ -351,6 +355,8 @@ pub fn effect(weapon: Weapon, matter: Matter) -> EffectDef {
         (Weapon::Carbine, Dirt) => of(&[(Zap, 1), (Dust, 2), (Grit, 4)], 0),
         (Weapon::Beam, Metal | Hull | Concrete) => of(&[(Zap, 2), (Sparks, 10), (Dust, 2)], 2),
         (Weapon::Beam, Dirt) => of(&[(Zap, 2), (Dust, 4), (Grit, 8), (DustCloud, 1)], 0),
+        (Weapon::Bolt, Metal | Hull | Concrete) => of(&[(Zap, 1), (Sparks, 6), (Dust, 1)], 1),
+        (Weapon::Bolt, Dirt) => of(&[(Zap, 1), (Dust, 2), (Grit, 4)], 0),
     }
 }
 

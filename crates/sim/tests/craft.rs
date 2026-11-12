@@ -139,6 +139,25 @@ fn a_skimmer_turns_to_its_pilots_aim_strafes_and_boosts_with_its_guns_cold() {
     }
     assert!(fired > 3, "{fired} bolts");
     assert!(w.vehicles[i].vel.flat().len() < 1.0, "stopped: {:?}", w.vehicles[i].vel);
+    // Boost held standing still is no boost: the guns fire.
+    let was = fired;
+    for _ in 0..TICK_HZ {
+        press(
+            &mut w,
+            0,
+            Input {
+                yaw: start,
+                buttons: CROUCH | FIRE,
+                ..Input::default()
+            },
+        );
+        fired += shots(&w);
+    }
+    assert!(
+        !w.vehicles[i].boosting && fired > was + 3,
+        "{} bolts held still",
+        fired - was
+    );
     // A quarter turn to the left, full ahead: it comes round to the aim in
     // under a second (3.2 rad/s), and speeds up along it.
     let to = turns(start, -0.25);

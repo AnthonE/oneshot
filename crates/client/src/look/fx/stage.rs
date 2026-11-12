@@ -35,6 +35,8 @@ pub enum Fire {
     Hit(Weapon, Matter),
     /// A gun's muzzle: `shots::flash` with its look (`table::gun`).
     Muzzle(u8),
+    /// A one-seater's guns' muzzle: `shots::flash` with `table::BOLTS`.
+    Bolts,
     /// An explosion: `blast::blast` with its cause (a grenade, a gun's id).
     Blast(u16),
     /// A shield breaking on a fighter: `bodies::pop`.
@@ -55,7 +57,7 @@ pub struct Staged {
     pub fire: Fire,
 }
 
-const WEAPONS: [(Weapon, &str); 7] = [
+const WEAPONS: [(Weapon, &str); 8] = [
     (Weapon::Bullet, "bullet"),
     (Weapon::Pellet, "pellet"),
     (Weapon::Sniper, "sniper"),
@@ -63,6 +65,7 @@ const WEAPONS: [(Weapon, &str); 7] = [
     (Weapon::Blade, "blade"),
     (Weapon::Carbine, "carbine"),
     (Weapon::Beam, "beam"),
+    (Weapon::Bolt, "bolt"),
 ];
 
 const MATTERS: [(Matter, &str); 6] = [
@@ -119,6 +122,13 @@ pub fn list() -> Vec<Staged> {
             Fire::Muzzle(arm),
         ));
     }
+    out.push(s(
+        "muzzle-bolts",
+        "a skimmer's or a flier's guns' muzzle flash",
+        0.3,
+        0.6,
+        Fire::Bolts,
+    ));
     out.push(s(
         "grenade",
         "a frag going off",
@@ -349,6 +359,7 @@ fn fire(link: NonSend<LinkRes>, stage: Res<Stage>, time: Res<Time>, mut fx: ResM
                 }
             }
             Fire::Muzzle(arm) => shots::flash(&mut fx, at, dir, &table::gun(arm)),
+            Fire::Bolts => shots::flash(&mut fx, at, dir, &table::BOLTS),
             Fire::Blast(c) => blast::blast(&mut fx, &scene, at + standoff, c, false),
             Fire::Wreck => blast::wreck(&mut fx, &scene, at + standoff - Vec3::Y * 0.8),
             Fire::Pop => bodies::pop(&mut fx, at - Vec3::Y * 1.0),

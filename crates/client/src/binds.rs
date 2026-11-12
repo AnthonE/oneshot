@@ -6,7 +6,7 @@
 //!
 //! The defaults are Halo 2's on a PC (the Master Chief Collection's: Q
 //! melees, F throws, 1 and 2 change the gun and the grenade, E is the
-//! action, Tab the board), and Mouse 2 is the scope or, with a gun in each
+//! action, Tab the board; Shift boosts a craft), and Mouse 2 is the scope or, with a gun in each
 //! hand, the left one's trigger, as in Halo 2: ZOOM and FIRE LEFT are the
 //! one pair of actions that may share a bind, since only one of them can
 //! act at a time.
@@ -247,6 +247,9 @@ pub enum Action {
     Right,
     Jump,
     Crouch,
+    /// A one-seater's boost, at its controls (`Fighter::step_local` reads
+    /// it as CROUCH there); nothing on foot.
+    Boost,
     Melee,
     Grenade,
     GrenSwitch,
@@ -260,7 +263,7 @@ pub enum Action {
     Talk,
 }
 
-pub const COUNT: usize = 18;
+pub const COUNT: usize = 19;
 
 pub struct Spec {
     pub action: Action,
@@ -335,6 +338,12 @@ pub static SPECS: [Spec; COUNT] = [
         token: "crouch",
         name: "Crouch",
         default: [k(KeyCode::ControlLeft), k(KeyCode::KeyC)],
+    },
+    Spec {
+        action: Action::Boost,
+        token: "boost",
+        name: "Boost (skimmer, flier)",
+        default: [k(KeyCode::ShiftLeft), None],
     },
     Spec {
         action: Action::Melee,
@@ -577,6 +586,7 @@ mod tests {
         assert_eq!(b.key(Action::Use), "E");
         assert_eq!(b.key(Action::Swap), "1");
         assert_eq!(b.key(Action::Crouch), "CTRL");
+        assert_eq!(b.key(Action::Boost), "SHIFT");
         assert_eq!(b.key(Action::Jump), "SPACE");
         assert_eq!(b.key(Action::Scores), "TAB");
     }
