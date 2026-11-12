@@ -482,6 +482,36 @@ pub const FLY_H: f32 = 1.5;
 pub const FLY_BODY_HALF_W: f32 = 0.9;
 pub const FLY_WING_Y: f32 = 0.55;
 pub const FLY_WING_T: f32 = 0.35;
+/// What of it stops a shot, as it is drawn (`Vehicle::hull`; the craft is
+/// `tools/models/flier.py`'s, which reads these for its sheet). Its
+/// fuselage, from its tail's end. Each wing's blade: level, in the slab
+/// above, out to this span and this far behind and ahead of its middle;
+/// from there out to `FLY_HALF_W` its tip hangs lower, between these along
+/// the craft and these over the ground. Its guns' prongs ahead of the
+/// blades, to the muzzle `gun_at` fires from: how high, and from what span
+/// to what. And the fin on its back: a foot from `FLY_H` up and a tip over
+/// it (each from where to where along the craft, and the height it ends
+/// at), this thick to each side.
+pub const FLY_TAIL_X: f32 = -1.75;
+pub const FLY_WING_SPAN: f32 = 1.95;
+pub const FLY_WING_X0: f32 = -0.95;
+pub const FLY_WING_X1: f32 = 0.55;
+pub const FLY_TIP_X0: f32 = -1.22;
+pub const FLY_TIP_X1: f32 = -0.2;
+pub const FLY_TIP_Y0: f32 = 0.2;
+pub const FLY_TIP_Y1: f32 = 0.6;
+pub const FLY_GUN_X: f32 = 1.1;
+pub const FLY_GUN_Y0: f32 = 0.6;
+pub const FLY_GUN_Y1: f32 = 0.78;
+pub const FLY_GUN_Z0: f32 = 1.8;
+pub const FLY_GUN_Z1: f32 = 2.0;
+pub const FLY_FIN_X0: f32 = -1.75;
+pub const FLY_FIN_X1: f32 = -0.85;
+pub const FLY_FIN_Y: f32 = 1.95;
+pub const FLY_FIN_TIP_X0: f32 = -2.02;
+pub const FLY_FIN_TIP_X1: f32 = -1.25;
+pub const FLY_FIN_TOP: f32 = 2.4;
+pub const FLY_FIN_HALF_T: f32 = 0.08;
 pub const FLY_HULL_R: f32 = 1.4;
 /// Per second: thrust along the nose and braking against it, top speed
 /// (boosted, and back), strafe's top speed and rate, and the damping of

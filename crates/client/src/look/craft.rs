@@ -4,19 +4,23 @@
 //! on `veil.py`'s and `craft.py`'s kits; `tools/craft.sh` is their loop, the
 //! `craft` skill). The skimmer is a sled: two runner hulls, a gun in each
 //! up-curled prow and an engine's mouth in each stern, its rider astride the
-//! saddle between them, his hands on its horns. The flier is a swift: a
-//! beak, a glass blister, scythe wings, a forked tail with its engine's
-//! mouth between the prongs, its pilot unseen under the glass. Each is a
+//! saddle between them, his hands on its horns. The flier is a swift in
+//! its stoop: a beak, a glass blister, two long blades of wings held down
+//! and back from a bare hinge each, a shark's fin on its back over its
+//! engine's mouth, its pilot unseen under the glass. Each is a
 //! child of the entity `draw_vehicles` stands at the sim's hull (turned by
 //! its yaw); its body here takes the flier's nose and roll from the sim, and
 //! leans into a turn and bobs on its lift as looks of its own.
 //!
-//! **Its shell is a wing case.** A craft carries no map: its colours are its
-//! mesh's (the paint in the shade each vertex stands in). Its paints are
-//! `StandardMaterial` plus a fragment stage (`shaders/veil_shell.wgsl`): the
-//! violet turns blue edge on, the sky's photograph the guns reflect
-//! (`gun_skin.rs`) lies in its coat, and up close it has the grain of a
-//! craft that has been flown. Its engines burn brighter while it
+//! **Its shell is a wing case, and a machine's.** A craft carries no map:
+//! its colours are its mesh's (the paint in the shade each vertex stands in).
+//! Its paints are `StandardMaterial` plus a fragment stage
+//! (`shaders/veil_shell.wgsl`): an alloy with its colour in it, dark face on
+//! and turning blue edge on, that reflects the sky's photograph the guns do
+//! (`gun_skin.rs`) in its own colour under a thin lacquer; and it has been
+//! flown: its coat is chipped to bare alloy along its worn edges, grime has
+//! run down its flanks, and dust lies in its seams, on its back and up its
+//! belly. Its engines burn brighter while it
 //! boosts and throw a flame, a short one at speed and a long one boosting,
 //! and it lights the ground under and behind it. Looks only: what flies is
 //! the sim's.
@@ -63,19 +67,19 @@ const FLY_BOB_TO: f32 = 9.0;
 /// the lit mouth it leaves, so the rim round it still shows). The skimmer's
 /// two are its hulls' sterns, each rooted a hand inside its throat, where
 /// its core lies, so it leaves through the lip and not from the air behind
-/// it; the flier's is one flat blade of flame out of the whole of its wide
-/// mouth.
+/// it; the flier's is one flat blade of flame, rooted in its throat too and
+/// no wider than the fire between its vanes.
 const SKIM_FLAMES: [(Vec3, f32, f32, f32); 2] = [
     (Vec3::new(-1.38, 0.54, -0.6), 1.1, 0.3, 0.26),
     (Vec3::new(-1.38, 0.54, 0.6), 1.1, 0.3, 0.26),
 ];
-const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.72, 0.69, 0.0), 1.7, 0.74, 0.24)];
+const FLY_FLAMES: [(Vec3, f32, f32, f32); 1] = [(Vec3::new(-1.6, 0.69, 0.0), 1.5, 0.66, 0.19)];
 /// A flame's core inside its sheath: this share of its length and of its
 /// width (the skimmer's a third of its mouth, so a sheath shows round it).
-/// The flier's one flat blade wants a broader one: half its mouth wide,
-/// across both vanes.
+/// The flier's one flat blade wants a broader one, half of it wide: a hot
+/// middle between its vanes, and no pale wedge to the mouth's lips.
 const CORE: (f32, f32) = (0.55, 0.36);
-const FLY_CORE: (f32, f32) = (0.7, 0.65);
+const FLY_CORE: (f32, f32) = (0.6, 0.5);
 /// The light a craft throws on what is under and behind it (on a rung with
 /// lights to spare, `fx::Caps::lights_in_flight`): where it hangs in the
 /// hull's frame, its lumens at rest and boosting, and how far it reaches,
@@ -89,16 +93,12 @@ const LIGHT_M: f32 = 5.0;
 /// `tools/models/skimmer.py` raised them on their stalk).
 const SKIM_GRIPS: [Vec3; 2] = [Vec3::new(-0.18, 1.24, -0.285), Vec3::new(-0.18, 1.24, 0.285)];
 /// The streamers of light a craft's tail draws behind it at speed: where
-/// each leaves it, in the hull's frame (the tips of the flier's tail blades
-/// and of the skimmer's fins; measured on the models), then how wide it is,
+/// each leaves it, in the hull's frame (the tip of the flier's fin and of
+/// each of the skimmer's; measured on the models), then how wide it is,
 /// metres, and how long it lasts, seconds: short, a few metres of light at
 /// a boost's speed and never a beam down the screen from the chase camera.
-const FLY_TRAILS: ([Vec3; 2], f32, f32) = (
-    [Vec3::new(-2.26, 1.05, -0.77), Vec3::new(-2.26, 1.05, 0.77)],
-    0.09,
-    0.09,
-);
-const SKIM_TRAILS: ([Vec3; 2], f32, f32) = ([Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.06, 0.09);
+const FLY_TRAILS: (&[Vec3], f32, f32) = (&[Vec3::new(-1.96, 2.38, 0.0)], 0.09, 0.09);
+const SKIM_TRAILS: (&[Vec3], f32, f32) = (&[Vec3::new(-1.42, 1.0, -0.44), Vec3::new(-1.42, 1.0, 0.44)], 0.06, 0.09);
 /// A trail is this many points; it is drawn from `TRAIL_FROM` m/s and whole
 /// by `TRAIL_FULL` (faint at a craft's own top speed, whole in a boost),
 /// and fades along its length as this power of what is left of it.
@@ -140,26 +140,28 @@ impl MaterialExtension for Shell {
 }
 
 /// What a shell's paint turns toward edge on (linear), and how far.
-const EDGE: Vec4 = Vec4::new(0.035, 0.18, 0.56, 0.32);
+const EDGE: Vec4 = Vec4::new(0.02, 0.09, 0.3, 0.2);
 /// The wing case over each of a craft's paints, by its name in the GLB
 /// (`veil.py`'s `PAINTS`): how far it turns at the edge; how bright the
-/// sky's photograph is in it, the photograph's blur (levels), how much of
-/// it shows face on, and how much of its colour it keeps; and how much
-/// grain it has (the mottle and scuffs of a craft that has been flown: none
-/// on glass). A paint not named (a light, a saddle's pad) is drawn as it
-/// came.
+/// sky's photograph is in it, the photograph's blur at full roughness
+/// (levels: all of `gun_skin.rs`'s cube), how much of a clear lacquer's
+/// sheen lies over it, and how much of the sky's colour it keeps; and its
+/// wear: how much grain it has (the mottle, the scuffs and the streaks of a
+/// craft that has been flown: none on glass), how much dust it takes, and
+/// how far its worn edges chip to bare alloy (iron has no coat to chip). A
+/// paint not named (a light, a saddle's pad) is drawn as it came.
 fn shell_of(name: &str) -> Option<ShellParams> {
-    let (turn, sky, grain) = match name {
-        "shell" | "shell_pale" => (1.0, Vec4::new(0.22, 0.5, 0.03, 0.6), 1.0),
-        "shell_deep" => (0.8, Vec4::new(0.2, 0.6, 0.03, 0.6), 1.0),
-        "glass" => (0.0, Vec4::new(0.58, 0.0, 0.09, 0.8), 0.0),
-        "iron" => (0.0, Vec4::new(0.14, 2.6, 0.04, 0.3), 0.7),
+    let (turn, sky, wear) = match name {
+        "shell" | "shell_pale" => (1.0, Vec4::new(0.65, 5.0, 0.2, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "shell_deep" => (0.8, Vec4::new(0.6, 5.0, 0.16, 0.5), Vec3::new(1.0, 1.0, 1.0)),
+        "glass" => (0.0, Vec4::new(0.75, 5.0, 1.6, 0.8), Vec3::new(0.0, 0.3, 0.0)),
+        "iron" => (0.0, Vec4::new(0.4, 5.0, 0.0, 0.3), Vec3::new(0.7, 1.0, 0.0)),
         _ => return None,
     };
     Some(ShellParams {
         edge: EDGE * Vec4::new(1.0, 1.0, 1.0, turn),
         sky,
-        grain: Vec4::new(grain, 0.0, 0.0, 0.0),
+        grain: wear.extend(0.0),
     })
 }
 /// The paints of an engine's fire (its core, its lit throat, and the veins
@@ -172,7 +174,7 @@ const BURNS: [&str; 3] = ["throat", "glow", "vein"];
 const BURN: (f32, f32, f32) = (0.55, 1.0, 2.4);
 /// A vein (the fire that shows through a hull's seams and louvres) sleeps
 /// at this until the engine is past its cruise, and is whole by the boost.
-const VEIN_ASLEEP: f32 = 0.08;
+const VEIN_ASLEEP: f32 = 0.01;
 const BURN_EASE: f32 = 5.0;
 const BREATH: (f32, f32) = (0.12, 0.45);
 
@@ -206,17 +208,18 @@ pub struct Kit {
 /// along it fades in from nothing at its mouth.
 const FLAME_RINGS: usize = 14;
 const FLAME_SIDES: usize = 14;
-const FLAME_MOUTH: f32 = 0.55;
+const FLAME_MOUTH: f32 = 0.85;
 const FLAME_FULL: f32 = 0.16;
 const FLAME_FADE: f32 = 3.0;
 /// How much of it is gone at its two rims (across its width).
 const FLAME_RIM: f32 = 0.85;
 const FLAME_IN: f32 = 0.06;
 /// The same two for a round flame out of a round mouth (the skimmer's): it
-/// leaves its lip two thirds of itself across, and keeps most of its sides,
-/// which a flat blade seen on its face has none of.
+/// leaves its lip two thirds of itself across, and keeps some of its sides,
+/// which a flat blade seen on its face has none of (most of them, and it
+/// was a cone with an outline over the ground).
 const DART_MOUTH: f32 = 0.7;
-const DART_RIM: f32 = 0.4;
+const DART_RIM: f32 = 0.6;
 /// Its flicker: this share of its length, at these two rates (radians a
 /// second), so it never beats.
 const FLICKER: f32 = 0.09;
@@ -273,11 +276,11 @@ fn kit(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMu
     };
     commands.insert_resource(Kit {
         flame: meshes.add(flame(FLAME_MOUTH, FLAME_RIM)),
-        sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.45))),
+        sheath: mats.add(paint(LinearRgba::new(0.12, 0.7, 1.6, 0.36))),
         // A dart's sheath is seen over lit ground from the saddle, not
         // against the sky: more of it, or the sand swallows its blue.
         dart: meshes.add(flame(DART_MOUTH, DART_RIM)),
-        dart_sheath: mats.add(paint(LinearRgba::new(0.14, 0.85, 1.9, 0.75))),
+        dart_sheath: mats.add(paint(LinearRgba::new(0.14, 0.85, 1.9, 0.58))),
         core: mats.add(paint(LinearRgba::new(3.0, 4.0, 4.5, 0.9))),
         trail: mats.add(paint(LinearRgba::new(0.3, 1.2, 1.8, 0.34))),
     });

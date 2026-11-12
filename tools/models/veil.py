@@ -25,22 +25,28 @@ from lib import _bevel
 TAU = math.tau
 
 # The Veil's paint, by what it is: (sRGB hex, metallic, roughness, emissive
-# (hex, strength) or None, the weight of a clear coat over it). A shell is barely metal (under an open sky a
-# metal takes the sky's colour and reads white); its colour is the middle of
-# what `shade` then turns each plate about.
+# (hex, strength) or None, the weight of a clear coat over it). A shell is
+# an alloy with its colour in it, dark face on: most of what it shows is what
+# it reflects, tinted (`veil_shell.wgsl` lays the sky in it), and a bright,
+# barely metal violet was a toy's plastic. Its colour is the middle of what
+# `shade` then turns each plate about. Light is scarce and small on a craft
+# (an engine, a lift, a lamp), and past white where it is, so it blooms as a
+# lamp does and is not a stripe of paint.
 PAINTS = {
-    'shell': ('#5a2396', 0.35, 0.27, None, 0.0),
-    'shell_deep': ('#34185c', 0.35, 0.3, None, 0.0),
-    'shell_pale': ('#8f62c9', 0.30, 0.27, None, 0.0),
-    'iron': ('#1c1b24', 0.75, 0.50, None, 0.0),
+    'shell': ('#402d57', 0.85, 0.24, None, 0.0),
+    'shell_deep': ('#271c36', 0.85, 0.30, None, 0.0),
+    'shell_pale': ('#4c3b66', 0.85, 0.22, None, 0.0),
+    'iron': ('#1d1d22', 0.90, 0.55, None, 0.0),
+    # Bare alloy, for what stands in a dark throat and must still be seen.
+    'alloy': ('#8a8c96', 0.90, 0.45, None, 0.0),
     'glass': ('#07070d', 0.60, 0.07, None, 0.0),
     'pad': ('#141218', 0.00, 0.85, None, 0.0),
-    'light': ('#06232a', 0.00, 0.30, ('#4ff2ff', 6.0), 0.0),
-    'light_dim': ('#06232a', 0.00, 0.30, ('#4ff2ff', 2.2), 0.0),
+    'light': ('#06232a', 0.00, 0.30, ('#8ff6ff', 9.0), 0.0),
+    'light_dim': ('#06232a', 0.00, 0.30, ('#4ff2ff', 1.6), 0.0),
     'throat': ('#0a2a33', 0.00, 0.40, ('#7df6ff', 9.0), 0.0),
-    'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.9), 0.0),
-    'vein': ('#06232a', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
-    'ember': ('#2a0620', 0.00, 0.30, ('#ff4fd8', 5.0), 0.0),
+    'glow': ('#06232a', 0.00, 0.50, ('#3fd0e8', 0.7), 0.0),
+    'vein': ('#0c0c10', 0.00, 0.40, ('#4ff2ff', 2.5), 0.0),
+    'ember': ('#0e0a10', 0.00, 0.30, ('#ff4fd8', 0.07), 0.0),
 }
 # Paints that take a plate's tone and a worn edge (`shade`); the rest take
 # the traced shade alone, and a light none of it.
@@ -194,11 +200,13 @@ def bow(a, b, c, steps=8):
     return [(1 - t) ** 2 * a + 2 * t * (1 - t) * b + t ** 2 * c for t in (i / steps for i in range(steps + 1))]
 
 
-def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0, thin=None):
+def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('tip', 'tip'), flat=1.0, thin=None, sharp=()):
     """A round limb along `points`, `radii` thick at each (one number for
     all): rings square to its run, skinned. `flat` squeezes it one way (a
     blade under 1): along `thin` if given (the way it is thin: up, for a
-    feather lying flat), or across its first bend's plane."""
+    feather lying flat), or across its first bend's plane. `sharp`: the
+    points round it whose line along it stays a crease (`loft`'s): a blade's
+    two edges, the quill down a feather's back."""
     pts = [Vector(p) for p in points]
     radii = [radii] * len(pts) if isinstance(radii, (int, float)) else radii
     rings = []
@@ -212,7 +220,7 @@ def stem(points, radii, n=10, material='shell', name='stem', levels=1, ends=('ti
             side = t.orthogonal().normalized() if side is None else (side - t * side.dot(t)).normalized()
         up = t.cross(side)
         rings.append([p + (side * math.cos(TAU * k / n) + up * math.sin(TAU * k / n) * flat) * radii[i] for k in range(n)])
-    return loft(rings, material, ends=ends, levels=levels, name=name)
+    return loft(rings, material, ends=ends, levels=levels, name=name, sharp=sharp)
 
 
 def lip(at, w, h, n=20, p=2.6):
@@ -224,14 +232,15 @@ def lip(at, w, h, n=20, p=2.6):
     return [oval(x + 0.1, y, z, w * 0.96, h * 0.96, n=n, p=p), oval(x - 0.03, y, z, w, h, n=n, p=p)]
 
 
-def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow', wall=None):
+def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.6, lining='glow', wall=None, ribs=0):
     """An engine's mouth looking aft from `at` (`lip`): a throat `deep`
     metres in, lined with `lining` (lit from within, or dark iron round a
     core that is the only light in it), or with `wall` for the outer half
     of its depth and `lining` below (a dark throat with light at the bottom
     of it: a lit wall is a lamp's lens from astern); its core, a swell of light whose middle is
     `core[0]` in from the end, `core[1]` long, and `core[2]` and `core[3]` of
-    the mouth across and up; thin iron vanes across it. Its parts."""
+    the mouth across and up; thin iron vanes across it, and `ribs` upright
+    ones between them (a wide nozzle's guide vanes). Its parts."""
     x, y, z = at
     rim, foot = oval(x, y, z, w * 0.98, h * 0.98, n=n, p=p), oval(x + deep, y, z, w * 0.8, h * 0.8, n=n, p=p)
     if wall is None:
@@ -251,7 +260,71 @@ def mouth(at, w, h, deep=0.26, core=(0.17, 0.14, 0.8, 0.72), vanes=2, n=20, p=2.
                    bevel=0.003)
         vane.data.materials.append(skin('iron'))
         parts.append(vane)
+    for i in range(ribs):
+        t = (i + 1) / (ribs + 1) * 2 - 1
+        rib = box(0.07, 0.012, h * 1.9 * (1 - abs(t) ** p) ** (1 / p), at=(x + 0.03, y + w * 0.97 * t, z), material=None,
+                  bevel=0.003)
+        rib.data.materials.append(skin('iron'))
+        parts.append(rib)
     return parts
+
+
+def stator(at, w, h, deep, blades=9, hub=0.3, pitch=34, chord=0.075, thick=0.007, sit=0.4, paint='alloy'):
+    """A turbine's stator down the throat of a `mouth` at `at` (`w` to each
+    side, `h` over and under, `deep` in): `blades` vanes of dark iron from a
+    hub out to the wall, each turned `pitch` degrees to the flow, `chord`
+    along it and `thick` through, standing `sit` of the throat's depth in,
+    before its core, so the fire is seen between them; and the hub's boss.
+    Its parts."""
+    x, y, z = at
+    k = 0.98 - 0.18 * sit
+    unit = min(w, h) * k
+    bm = bmesh.new()
+    for i in range(blades):
+        made = bmesh.ops.create_cube(bm, size=1.0)['verts']
+        bmesh.ops.scale(bm, vec=(chord / unit, 1.04 - hub * 0.8, thick / unit), verts=made)
+        bmesh.ops.translate(bm, vec=(0, (1.04 + hub * 0.8) / 2, 0), verts=made)
+        bmesh.ops.rotate(bm, cent=(0, 0, 0), matrix=Matrix.Rotation(math.radians(pitch), 3, 'Y'), verts=made)
+        bmesh.ops.rotate(bm, cent=(0, 0, 0), matrix=Matrix.Rotation(TAU * (i + 0.5) / blades, 3, 'X'), verts=made)
+    for v in bm.verts:
+        v.co = (x + deep * sit + v.co.x * unit, y + v.co.y * w * k, z + v.co.z * h * k)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new('stator')
+    bm.to_mesh(me)
+    bm.free()
+    o = bpy.data.objects.new('stator', me)
+    bpy.context.scene.collection.objects.link(o)
+    me.materials.append(skin(paint))
+    boss = sphere(1.0, at=(x + deep * sit + 0.01, y, z), material=None, scale=(0.11, w * k * hub, h * k * hub), segments=14)
+    boss.data.materials.append(skin(paint))
+    return [smooth(o, 30), boss]
+
+
+def studs(o, points, r=0.019, rise=0.007, n=6, paint='iron', reach=0.12):
+    """Fasteners on `o`'s skin: at each of `points` (hull space, near it) a
+    low flat head `r` across and `rise` proud, set on the skin nearest that
+    point and square to it. A point further than `reach` from any skin is
+    left out. One object, for `solid`."""
+    me = o.data
+    tree = BVHTree.FromPolygons([v.co[:] for v in me.vertices], [tuple(f.vertices) for f in me.polygons])
+    bm = bmesh.new()
+    for at in points:
+        loc, normal, _, dist = tree.find_nearest(Vector(at), reach)
+        if loc is None:
+            continue
+        made = bmesh.ops.create_cone(bm, cap_ends=True, segments=n, radius1=r, radius2=r * 0.8, depth=rise * 2)['verts']
+        turn = normal.to_track_quat('Z', 'Y').to_matrix().to_4x4()
+        bmesh.ops.transform(bm, matrix=Matrix.Translation(loc) @ turn, verts=made)
+    # What lies under the skin is never seen.
+    bmesh.ops.delete(bm, geom=[f for f in bm.faces if len(f.verts) > 4 and f.normal.dot(
+        tree.find_nearest(f.calc_center_median())[1]) < 0], context='FACES')
+    out = bpy.data.meshes.new('studs')
+    bm.to_mesh(out)
+    bm.free()
+    s = bpy.data.objects.new('studs', out)
+    bpy.context.scene.collection.objects.link(s)
+    out.materials.append(skin(paint))
+    return smooth(s, 30)
 
 
 def lens(at, a, b, rise, paint='light_dim', rim='iron', down=True, vanes=0):
@@ -547,20 +620,24 @@ def gloss(o, angle=38, within=24):
     return o
 
 
-def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edge_colour=(0.72, 0.86, 1.25),
+def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.1, edge_colour=(0.34, 0.35, 0.4),
           under=0.82, seed=5, stain=None):
     """Its colours (COLOR_0, a corner each), which the game multiplies its
     paint by: the shade each vertex stands in, traced against the whole
     craft (`rays` a vertex, reaching `reach` metres, never darker than
     `floor`); each plate of a `PLATED` paint its own tone, `tone` either way
     (a plate is what no seam crosses, and a plate and its twin across the
-    craft are one tone); a convex edge of one worn toward `edge_colour` by
-    up to `edge`; what faces the ground darkened to `under`; and `stain`, a
-    rule over an (n, 3) array of points that gives each how much of its
-    paint is left under soot and dust (1 clean). A light keeps its own. The
-    colours' alpha is the shade alone. It also writes where each corner lies
-    on the craft into two UV sets (TEXCOORD_0: along it and across it;
-    TEXCOORD_1: up it), metres, for the game's grain."""
+    craft are one tone); a convex edge of one worn toward `edge_colour` (the
+    bare alloy under the coat) by up to `edge`, which is little: a pale line
+    down every edge is a drawing's outline, and the game chips the coat there
+    itself, pixel by pixel, by how worn each corner is; what faces the ground
+    darkened to `under`; and `stain`, a rule over an (n, 3) array of points
+    that gives each how much of its paint is left under soot and dust (1
+    clean: a number each, or three, so heat can blue a nozzle's lip). A light
+    keeps its own. The colours' alpha is the shade alone. It also writes
+    where each corner lies on the craft into two UV sets (TEXCOORD_0: along
+    it and across it; TEXCOORD_1: up it, metres, and how worn it is, 0..1),
+    for the game's grain and its chips."""
     me = o.data
     me.calc_loop_triangles()
     nv = len(me.vertices)
@@ -612,7 +689,16 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     np.add.at(count, ev[:, 0], 1)
     np.add.at(count, ev[:, 1], 1)
     bend = bend / np.maximum(count, 1)
-    worn = np.clip((bend - 0.06) / 0.25, 0.0, 1.0)
+    # (A thin blade is convex all round: its face is not an edge.)
+    worn = np.clip((bend - 0.1) / 0.3, 0.0, 1.0)
+    # Spread a little along the skin, so it is an edge's wear and not each
+    # vertex's own: a groove's lip, cut fine, is otherwise worn at one corner
+    # and whole at the next, and its chips are a row of teeth.
+    for _ in range(3):
+        near = np.zeros(nv)
+        np.add.at(near, ev[:, 0], worn[ev[:, 1]])
+        np.add.at(near, ev[:, 1], worn[ev[:, 0]])
+        worn = 0.5 * worn + 0.5 * near / np.maximum(count, 1)
 
     # Plates: faces of a plated paint joined across their edges.
     names = [m.name for m in me.materials]
@@ -674,7 +760,8 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     pal = np.array([srgb(PAINTS[n][0]) if n in PAINTS and n not in LIT else (1.0, 1.0, 1.0) for n in names] or [(1.0, 1.0, 1.0)])
     col[:, :3] *= pal[lm]
     if stain is not None:
-        col[:, :3] *= np.clip(np.asarray(stain(co), dtype=float), 0.0, 1.0)[lv][:, None]
+        left = np.clip(np.asarray(stain(co), dtype=float), 0.0, 1.5)
+        col[:, :3] *= (left[:, None] if left.ndim == 1 else left)[lv]
     # The shade alone, for what the game lays over the paint (a reflection
     # is dimmed by it, a paint's colour is not).
     col[:, 3] = shadow
@@ -683,9 +770,13 @@ def shade(o, rays=40, reach=1.4, floor=0.22, power=1.0, tone=0.07, edge=0.5, edg
     # Where each corner lies on the craft, metres, in its two UV sets (along
     # and across it; up it): what the game's shell stage lays its grain by
     # (`veil_shell.wgsl`), since a craft has no map to carry any.
+    # (The exporter turns a UV's second number over, 1 - v: the game reads
+    # how worn a corner is as 1 less what it is given, so a mesh with no such
+    # set, whose second number is 1, has no wear.)
+    wear = np.where(isp, worn[lv], 0.0)
     for name, pick in (('hull_xy', (0, 1)), ('hull_z', (2, 2))):
         uv = me.uv_layers.get(name) or me.uv_layers.new(name=name)
-        at = np.stack([co[lv, pick[0]], co[lv, pick[1]] if name == 'hull_xy' else np.zeros(nl)], axis=1)
+        at = np.stack([co[lv, pick[0]], co[lv, pick[1]] if name == 'hull_xy' else wear], axis=1)
         uv.data.foreach_set('uv', at.astype(np.float32).ravel())
     me.color_attributes.active_color = attr
     me.color_attributes.render_color_index = list(me.color_attributes).index(attr)
