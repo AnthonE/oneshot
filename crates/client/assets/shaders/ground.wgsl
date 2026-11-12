@@ -138,6 +138,7 @@ const BANK_ROLL_M: f32 = 40.0;
 const LOW_SHELF: f32 = 0.45;
 const TALL_THIN: f32 = 0.55;
 const BED_STEP_M: f32 = 2.4;
+const BED_STEP_AT: f32 = 0.62;
 const SNOW_ON_ROCK: f32 = 0.6;
 const SNOW_UP: f32 = 1.1;
 // Its beds, read from across a valley: `VALLEY_BED` times the canyon's
@@ -881,10 +882,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let lean = smoothstep(LEAN.x, LEAN.y, wn.y);
             // A bed steps where a buttress turns into its cleft (a step, not a ramp: on a ramp the beds
             // sagged into every cleft like garlands): no line runs a wall unbroken.
-            let by_deep = by + dip * LEDGE_DIP_M + (smoothstep(0.44, 0.56, face_hollow) - 0.5) * 2.0 * BED_STEP_M * face_tall;
+            let by_deep = by + dip * LEDGE_DIP_M + (smoothstep(BED_STEP_AT - 0.05, BED_STEP_AT + 0.05, face_hollow) - 0.5) * 2.0 * BED_STEP_M * face_tall;
             // A shelf ends at the step and the next begins beside it: none is drawn across the riser
             // (drawn, every step was a diagonal chalk stroke, a wall of lightning).
-            let riser = 1.0 - smoothstep(0.42, 0.48, face_hollow) * (1.0 - smoothstep(0.52, 0.58, face_hollow)) * face_tall;
+            // The step is inside the cleft, off a flat face's own value (0.5): on it, a plane lost every shelf.
+            let riser = 1.0 - smoothstep(BED_STEP_AT - 0.07, BED_STEP_AT - 0.02, face_hollow) * (1.0 - smoothstep(BED_STEP_AT + 0.02, BED_STEP_AT + 0.07, face_hollow)) * face_tall;
             let deep = ledge_snow(wp, by_deep, LEDGE_DEEP, fp_m, lean) * riser;
             let low = 1.0 - face_tall;
             let thin = ledge_snow(wp, by_deep + 1.7, LEDGE_THIN, fp_m, lean + LOW_SHELF * low) * riser;
