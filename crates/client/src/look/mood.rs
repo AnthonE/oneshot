@@ -110,11 +110,21 @@ pub struct Grade {
     pub tint: f32,
     /// Over everything, after the tone curve.
     pub saturation: f32,
-    /// Over the shadows and the midtones, about their middle.
+    /// How far the frame's tones are pulled apart, as a film stock's gamma:
+    /// a power about [`Grade::pivot`], before the tone curve, so the shade
+    /// deepens and the lit side lifts and neither is cut off (Bevy's own
+    /// contrast is a line about a half, and takes a shade side to black).
     pub contrast: f32,
+    /// The grey the contrast turns about, exposed and linear: the frame's
+    /// own middle, which keeps its brightness. A sunlit floor in daylight
+    /// ([`DAY_PIVOT`]); a hall or a dusk sits lower.
+    pub pivot: f32,
     /// Added to the shadows and the midtones.
     pub lift: f32,
 }
+
+/// A daylit frame's middle: a floor of middling albedo in the sun.
+pub const DAY_PIVOT: f32 = 0.18;
 
 impl Grade {
     pub const NONE: Grade = Grade {
@@ -122,7 +132,16 @@ impl Grade {
         tint: 0.0,
         saturation: 1.0,
         contrast: 1.0,
+        pivot: DAY_PIVOT,
         lift: 0.0,
+    };
+    /// Daylight on film: the frame as lit used a third of the range it has
+    /// (Dry Fork's meadow from 18% grey to 82%, nothing darker in a crevice
+    /// or brighter on a cloud).
+    pub const DAY: Grade = Grade {
+        saturation: 1.1,
+        contrast: 1.3,
+        ..Grade::NONE
     };
 }
 
@@ -155,7 +174,11 @@ pub const NOON: Mood = Mood {
     veil: 0.0,
     field_at: [0.0, 0.0],
     hall: 0,
-    grade: Grade::NONE,
+    grade: Grade {
+        saturation: 1.08,
+        contrast: 1.25,
+        ..Grade::NONE
+    },
     snow: false,
 };
 
@@ -233,10 +256,11 @@ pub const MIST: Mood = Mood {
 /// across the canyon, so one wall glows, the other stands in
 /// shade and throws it over a strip of the floor, and neither base looks
 /// into it; cumulus racing over on a stiff wind so their shadows sweep it
-/// end to end; a little dust in the air. The sun's colour stays near white
-/// and the frame ungraded: the atmosphere already warms a 39° sun on the
-/// desktop, and a warm sun with a richer, harder grade over it read as a
-/// cartoon there, its shade side near black.
+/// end to end; a little dust in the air. The sun's colour stays near white:
+/// the atmosphere already warms a 39° sun on the desktop, and a warm sun
+/// under Bevy's own contrast read as a cartoon there, its shade side near
+/// black. Its grade is daylight's ([`Grade::DAY`]), which can't cut a shade
+/// off.
 pub const DESERT: Mood = Mood {
     name: "desert afternoon",
     sun_elev: 0.68,
@@ -264,7 +288,7 @@ pub const DESERT: Mood = Mood {
     veil: 0.0,
     field_at: [3.0, 22.0],
     hall: 0,
-    grade: Grade::NONE,
+    grade: Grade::DAY,
     snow: false,
 };
 
@@ -337,8 +361,9 @@ pub const RAIN_DUSK: Mood = Mood {
     grade: Grade {
         temperature: -0.045,
         tint: 0.003,
-        saturation: 1.0,
-        contrast: 1.0,
+        saturation: 1.1,
+        contrast: 1.25,
+        pivot: 0.08,
         lift: 0.0,
     },
     snow: false,
@@ -376,8 +401,9 @@ pub const SNOW_DUSK: Mood = Mood {
     grade: Grade {
         temperature: -0.06,
         tint: 0.004,
-        saturation: 1.0,
-        contrast: 1.0,
+        saturation: 1.05,
+        contrast: 1.2,
+        pivot: 0.14,
         lift: 0.0,
     },
     snow: true,
@@ -418,7 +444,7 @@ pub const OVERCAST: Mood = Mood {
     veil: 0.72,
     field_at: [33.0, 7.0],
     hall: 0,
-    grade: Grade::NONE,
+    grade: Grade::DAY,
     snow: false,
 };
 
@@ -460,8 +486,9 @@ pub const BLIZZARD: Mood = Mood {
     grade: Grade {
         temperature: -0.04,
         tint: 0.012,
-        saturation: 0.9,
-        contrast: 1.0,
+        saturation: 0.95,
+        contrast: 1.25,
+        pivot: DAY_PIVOT,
         lift: 0.0,
     },
     snow: true,
@@ -475,6 +502,14 @@ pub const INTERIOR: Mood = Mood {
     stars: 0.0,
     moon: 0.0,
     field_at: [12.0, 28.0],
+    // A hall's middle is its lit hull, well under a day's: the strips and
+    // the lamps go up from it, the ribs' shade down.
+    grade: Grade {
+        saturation: 1.1,
+        contrast: 1.3,
+        pivot: 0.045,
+        ..Grade::NONE
+    },
     ..NOON
 };
 
@@ -490,8 +525,9 @@ pub fn of(id: u8) -> Mood {
             grade: Grade {
                 temperature: -0.012,
                 tint: 0.0,
-                saturation: 1.0,
-                contrast: 1.0,
+                saturation: 1.05,
+                contrast: 1.15,
+                pivot: 0.035,
                 lift: 0.0,
             },
             ..INTERIOR
@@ -509,8 +545,9 @@ pub fn of(id: u8) -> Mood {
             grade: Grade {
                 temperature: -0.015,
                 tint: 0.0,
-                saturation: 1.0,
-                contrast: 1.0,
+                saturation: 1.1,
+                contrast: 1.3,
+                pivot: 0.07,
                 lift: 0.0,
             },
             ..INTERIOR
@@ -746,10 +783,11 @@ mod tests {
         }
     }
 
-    /// No mood's grade has a step in it: its contrast and its lift move a
-    /// little at a time from black to past white, weighed as Bevy 0.18's
-    /// shader weighs its three sections (`sectional_color_grading`: at the
-    /// foot of the midtones what isn't theirs goes to the highlights).
+    /// No mood's grade has a step in it: its contrast (a gamma and a gain)
+    /// and its lift move a little at a time from black to past white,
+    /// weighed as Bevy 0.18's shader weighs its three sections
+    /// (`sectional_color_grading`: at the foot of the midtones what isn't
+    /// theirs goes to the highlights).
     #[test]
     fn no_grade_steps() {
         use bevy::render::view::{ColorGrading, ColorGradingSection};
@@ -778,7 +816,7 @@ mod tests {
                 let mix = |of: fn(&ColorGradingSection) -> f32| {
                     w[0] * of(&c.shadows) + w[1] * of(&c.midtones) + w[2] * of(&c.highlights)
                 };
-                [mix(|s| s.contrast), mix(|s| s.lift)]
+                [mix(|s| s.gamma), mix(|s| s.gain), mix(|s| s.lift)]
             };
             let mut last = at(0.0);
             for k in 1..=2000 {
