@@ -4,8 +4,9 @@
 //! on `veil.py`'s and `craft.py`'s kits; `tools/craft.sh` is their loop, the
 //! `craft` skill). The skimmer is a sled: two runner hulls, a gun in each
 //! up-curled prow and an engine's mouth in each stern, its rider astride the
-//! saddle between them, his hands on its horns. The flier is a swift: a
-//! beak, a glass blister, scythe wings, a forked tail with its engine's
+//! saddle between them, his hands on its horns. The flier is a swift in
+//! its stoop: a beak, a glass blister, two long blades of wings held down
+//! and back from a bare hinge each, a forked tail with its engine's
 //! mouth between the prongs, its pilot unseen under the glass. Each is a
 //! child of the entity `draw_vehicles` stands at the sim's hull (turned by
 //! its yaw); its body here takes the flier's nose and roll from the sim, and

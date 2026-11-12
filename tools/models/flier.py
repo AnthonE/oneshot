@@ -1,15 +1,17 @@
 """The flier (look/craft.rs, `sim::vehicle::FLIER`): a one-seat attack craft
 of the Veil's, our own design, grown here by rule (veil.py) on craft.py's
-kit: a swift. A low broad body with a hawk's bill of a nose, keeled and
-hooked, louvres down each flank of it; two panes of dark glass over its
-pilot either side of a crest that carries one hairline of light from bill to
-tail; sickle wings that leave it narrow, hold forward to a wrist and sweep
-back to a point, their trailing edge stepped feather by feather, each
-feather worked from an iron jack at its root; a lance through each wing's
-leading edge; two blades of a forked tail, curved up and out, with its
-engine's mouth, vaned, between them. It is a machine and is lit like one:
-its engine, its lift's lenses, a lamp at each wing's tip and each tail
-blade's, and one hairline down its crest; nothing drawn on it in light. Its
+kit: a swift in its stoop. A low broad body with a hawk's bill of a nose,
+keeled and hooked, louvres down each flank of it; two panes of dark glass
+over its pilot either side of a crest that carries one hairline of light
+from bill to tail; two long blades of wings held down and back, each one
+plane from a broad root to a point, plated along its spar, hung from a
+hinge's bare barrel in the body's flank and braced by two jacks under it,
+a pod with a lamp at its tip; a lance out of each wing's leading edge; two
+blades of a forked tail, curved up and out, with its engine's mouth, vaned,
+between them: from astern an X, the tail's two points over the wings' two.
+It is a machine and is lit like one: its engine, its lift's lenses, a lamp
+at each wing's tip and each tail blade's, and one hairline down its crest;
+nothing drawn on it in light. Its
 plates lap like a wing case and are fastened down, its seams are cut by rule
 with dark iron in them, and its shade is traced into its colours: it carries
 no map.
@@ -78,29 +80,31 @@ CREST = (0.055, 1.52)
 # The bill's louvres, down each flank of its upper mandible: where along
 # the craft.
 LOUVRES = (1.42, 1.53, 1.64)
-# A wing, root to tip: its leading edge (x at each span), the height of its
-# middle and its thickness. A sickle: it leaves the body, holds forward to a
-# wrist and sweeps back to a point.
-W_LE = curve((0.5, 0.98), (0.95, 0.74), (1.4, 0.66), (1.8, 0.52), (2.15, 0.10), (2.4, -0.55), (2.6, -1.2))
-W_Z = curve((0.5, 0.72), (1.4, 0.72), (2.2, 0.69), (2.6, 0.64))
-W_T = curve((0.5, 0.16), (0.95, 0.14), (1.6, 0.12), (2.3, 0.07), (2.6, 0.03))
-# Its arm: the round dark spar along that edge, this deep at each span.
-ARM = curve((0.5, 0.5), (0.95, 0.42), (1.8, 0.36), (2.3, 0.26), (2.6, 0.08))
-A_AT = (0.5, 0.95, 1.4, 1.8, 2.15, 2.4, 2.59)
-# Its feathers: the span each leaves the arm at, and where each ends (x,
-# span): the trailing edge steps back feather by feather to the tip. How
-# wide a feather is at its widest (half of it), its width along its length
-# as shares of that, how thin it is for its width, how much lower each lies
-# than the one inboard of it, and how much of its end is alight, metres.
-F_ROOT = (0.98, 1.22, 1.46, 1.70, 1.92, 2.12, 2.28)
-F_END = ((-0.80, 1.02), (-0.94, 1.30), (-1.05, 1.60), (-1.14, 1.90), (-1.22, 2.16), (-1.29, 2.37), (-1.33, 2.5))
-F_WIDE = 0.175
-F_SHAPE = (0.6, 0.86, 1.0, 1.0, 0.98, 0.9, 0.72, 0.42, 0.06)
-F_THIN = 0.11
-F_STEP = 0.011
-F_LIT = 0.055
-# The jack at each feather's root: how long, wide and tall, metres.
-JACK = (0.15, 0.075, 0.042)
+# A wing, root to tip: its leading and trailing edges (x at each span), the
+# height of its middle and its thickness. One long blade, a narrow triangle
+# held down and back: its leading edge swept, its trailing edge straight,
+# drooping from the body's shoulder to a point a hand over where its belly
+# rides. (It was a sickle with seven feathers stepped down its trailing
+# edge: a bird's wing, and from astern fourteen paddles.) It is in the sim's
+# wing slab to the lance, and hangs under it from there out.
+W_LE = curve((0.5, 0.6), (0.9, 0.52), (1.9, -0.22), (2.54, -0.86))
+W_TE = curve((0.5, -0.86), (0.9, -0.9), (1.9, -1.04), (2.54, -1.08))
+W_Z = curve((0.5, 0.86), (0.9, 0.82), (1.9, 0.55), (2.54, 0.27))
+W_T = curve((0.5, 0.17), (0.9, 0.15), (1.9, 0.08), (2.54, 0.04))
+W_AT = (0.5, 0.9, 1.3, 1.7, 2.1, 2.36, 2.54)
+# Its spar and its flap's hinge: the shares of its chord they lie at (0 its
+# trailing edge), and the spans its two cross seams lie at.
+SPAR, FLAP = 0.6, 0.26
+RIBS_AT = (1.42, 1.95)
+# The hinge it hangs from: a bare barrel along the body's flank (where along
+# the craft its middle is, how long, how far out, how high, how thick), and
+# the jacks under the wing: where each leaves the body (along the craft) and
+# the span it meets the wing at.
+HINGE = (-0.2, 1.15, 0.88, 0.83, 0.1)
+JACKS = ((0.18, 1.3), (-0.6, 1.22))
+# The pod at its tip: how far it runs ahead of the tip's leading edge and
+# behind its trailing edge, and how thick.
+POD = (0.2, 0.12, 0.052)
 # The blades of its tail: from where to where, how far out they start and
 # how far they spread, how high they start and how far they rise; half
 # their width at its widest and their width along their length as shares of
@@ -228,45 +232,61 @@ parts += [canopy,
           plate(canopy, lambda q: both(0.03 - np.abs(X(q) - HOOP), Z(q) - B_TOP(X(q)) - 0.02), 0.009, 'shell_deep', name='hoop',
                 clear=None)]
 
-# The wings, as a swift's: an arm along the leading edge, round and dark,
-# and the feathers that fan back from under it, each lapping the next one
-# out, by turns the shell's violet and its deeper one, each worked by a jack
-# of iron at its root; the last one's end a lamp, the wing's tip.
-def arm(side):
-    return loft([foil(side * y, W_LE(y), W_LE(y) - ARM(y), W_Z(y), W_T(y), n=10) for y in A_AT], 'shell_deep', name='arm')
+# The wings: each one long blade, creased down its two edges, its plates
+# cut by rule: a gap along its spar, a hairline at its flap's hinge and two
+# across it; a paler strake proud of it ahead of the spar, the flap a tone
+# of its own.
+chord = lambda q: W_LE(Y(q)) - W_TE(Y(q))
+share = lambda q: (X(q) - W_TE(Y(q))) / chord(q)
+spar = lambda q: (share(q) - SPAR) * chord(q)
+flap = lambda q: (share(q) - FLAP) * chord(q)
 
 
-def feather(side, i):
-    """One feather: a blade from under the arm at span `F_ROOT[i]` back to
-    its end at `F_END[i]`, a little lower than the one inboard of it."""
-    y0, (x1, y1) = F_ROOT[i], F_END[i]
-    sink = 0.02 + F_STEP * i
-    root = Vector((W_LE(y0) - ARM(y0) + 0.12, side * y0, W_Z(y0) - sink))
-    end = Vector((x1, side * y1, W_Z(y1) - sink - 0.01))
-    # It bows a little outward on its way.
-    bend = (root + end) / 2 + Vector((0.0, side * 0.035, 0.0))
-    o = solid(stem(bow(root, bend, end, steps=8), [F_WIDE * k for k in F_SHAPE], n=8, material='shell' if i % 2 else 'shell_deep',
-                   name='feather', flat=F_THIN, thin=(0, 0, 1), sharp=(0, 2, 4)), 'feather')
-    # (Creased down its two edges and its quill: a blade with a spine, where
-    # it was a paddle.)
-    # Its jack: a block of iron on it where it leaves the arm, and the pin
-    # it turns on.
-    at = (W_LE(y0) - ARM(y0) - 0.035, side * y0, W_Z(y0) - sink + 0.022)
-    jack = box(*JACK, at=at, material=None, bevel=0.006)
-    jack.data.materials.append(skin('iron'))
-    pin = cyl(0.017, JACK[1] + 0.03, axis='y', at=(at[0] + 0.02, at[1], at[2] + 0.006), material=None, verts=8, bevel=0.0)
-    pin.data.materials.append(skin('iron'))
-    if i == len(F_ROOT) - 1:
-        repaint(o, 'light', where=lambda q: np.linalg.norm(q - np.array(end), axis=1) < F_LIT)
-    return [o, jack, pin]
+def wing(side):
+    n = 12
+    o = solid(loft([foil(side * y, W_LE(y), W_TE(y), W_Z(y), W_T(y), n=n, under=0.8) for y in W_AT], 'shell_deep',
+                   ends=('flat', 'tip'), name='wing', sharp=(0, n // 2)), 'wing')
+    seam(o, spar, 0.04, 0.014, flat=0.5, within=lambda q: both(Y(q) - 0.98, 2.05 - Y(q)))
+    seam(o, flap, **SEAM, within=lambda q: both(Y(q) - 1.0, RIBS_AT[1] - Y(q)))
+    for y in RIBS_AT:
+        seam(o, lambda q, y=y: Y(q) - y, **SEAM)
+    strake = plate(o, lambda q: both(spar(q) - 0.04, Y(q) - 1.0, 2.2 - Y(q)), 0.016, 'shell_pale', name='strake', clear=None)
+    repaint(o, 'shell', where=lambda q: (flap(q) < -0.02) & (Y(q) > 1.02) & (Y(q) < RIBS_AT[1] - 0.02), of='shell_deep')
+    out = [o, strake]
+    # The pod at its tip, and its lamp, looking aft.
+    y, z = side * W_AT[-1], W_Z(W_AT[-1])
+    x0, x1 = W_LE(W_AT[-1]) + POD[0], W_TE(W_AT[-1]) - POD[1]
+    out.append(stem([(x0, y, z), (x0 - 0.12, y, z), (x1 + 0.1, y, z), (x1, y, z)], [0.01, POD[2] * 0.85, POD[2], POD[2] * 0.7], n=8,
+                    material='iron', name='pod', ends=('tip', 'flat')))
+    lamp = cyl(POD[2] * 0.62, 0.04, at=(x1 - 0.012, y, z), material=None, verts=10, bevel=0.003)
+    lamp.data.materials.append(skin('light'))
+    out.append(lamp)
+    # The hinge it hangs from: a barrel of bare alloy in the body's flank,
+    # three collars of iron round it.
+    hx, long, hy, hz, r = HINGE
+    barrel = cyl(r, long, at=(hx, side * hy, hz), material=None, verts=14, bevel=0.004)
+    barrel.data.materials.append(skin('alloy'))
+    out.append(barrel)
+    for k in (-0.42, 0.0, 0.42):
+        collar = cyl(r * 1.16, 0.075, at=(hx + long * k, side * hy, hz), material=None, verts=14, bevel=0.004)
+        collar.data.materials.append(skin('iron'))
+        out.append(collar)
+    # The jacks under it: a barrel of iron out of the body's flank under the
+    # chine, and the bare ram out of it up to the wing's underside.
+    for x, span in JACKS:
+        foot = Vector((x, side * (B_WIDE(x) - 0.05), B_CHINE(x) - 0.2))
+        head = Vector((x - 0.2, side * span, W_Z(span) - 0.3 * W_T(span)))
+        out.append(stem([tuple(foot), tuple(foot.lerp(head, 0.55))], 0.036, n=8, material='iron', name='jack', levels=0))
+        out.append(stem([tuple(foot.lerp(head, 0.5)), tuple(head)], 0.018, n=8, material='alloy', name='ram', levels=0))
+    return out
 
 
-wings = [arm(side) for side in (1, -1)] + [part for side in (1, -1) for i in range(len(F_ROOT)) for part in feather(side, i)]
-parts += wings
+for side in (1, -1):
+    parts += wing(side)
 
 
 def lance(side):
-    """A gun's fairing through the wing's leading edge, its barrel in an
+    """A gun's fairing out of the wing's leading edge, its barrel in an
     iron collar, and the ring of light behind its muzzle."""
     y, z = side * GUNS[1], GUNS[2]
     r = curve((-0.8, 0.02), (-0.4, 0.1), (0.0, 0.13), (0.4, 0.115), (0.62, 0.09), (0.7, 0.08))
@@ -278,7 +298,10 @@ def lance(side):
         part = cyl(wide, long, at=(at, y, z), material=None, verts=18, bevel=0.004)
         part.data.materials.append(skin(paint))
         out.append(part)
-    return [pod] + out
+    # The pylon it rides the wing on.
+    pylon = box(0.5, 0.05, 0.13, at=(-0.5, y, z - 0.09), material=None, bevel=0.008)
+    pylon.data.materials.append(skin('iron'))
+    return [pod, pylon] + out
 
 
 def blade(side):
@@ -300,14 +323,14 @@ for side in (1, -1):
 
 o = solid(parts, 'flier')
 # Its fasteners: a row each side of each shoulder's seam, an arc over its
-# back before the engine's cowl, and a row down each wing's arm.
+# back before the engine's cowl, and a row down each wing ahead of its spar.
 pins = []
 for side in (1, -1):
     for x in np.linspace(-1.3, 1.0, 7):
         for lean in (-0.08, 0.085):
             pins.append((x, side * (0.6 - 0.2 * x + lean), B_TOP(x)))
-    for y in np.linspace(0.75, 2.35, 7):
-        pins.append((W_LE(y) - 0.3 * ARM(y), side * y, W_Z(y) + W_T(y)))
+    for y in np.linspace(1.08, 1.86, 5):
+        pins.append((W_TE(y) + (SPAR + 0.09) * (W_LE(y) - W_TE(y)), side * y, W_Z(y) + W_T(y)))
 for a in np.linspace(0.12, math.pi - 0.12, 8):
     x = COWL + 0.075
     pins.append((x, 1.1 * B_WIDE(x) * math.cos(a), B_CHINE(x) + 1.1 * (B_TOP(x) - B_CHINE(x)) * math.sin(a)))
@@ -320,11 +343,10 @@ def soot(q):
     aft = np.clip((-1.05 - q[:, 0]) / 0.7, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5)
     left = (1.0 - 0.45 * aft)[:, None] * np.ones((1, 3))
     lip = (np.clip((TAIL + 0.12 - q[:, 0]) / 0.12, 0.0, 1.0) * (np.abs(q[:, 1]) < 0.5))[:, None]
-    # And at each feather's root, aft of its jack: what a pilot sees of his
-    # own wings.
+    # And down each wing aft of its lance, where the gun's smoke lies.
     y = np.abs(q[:, 1])
-    root = np.clip(1.0 - (W_LE(y) - ARM(y) - q[:, 0]) / 0.4, 0.0, 1.0) * (q[:, 0] < W_LE(y) - ARM(y)) * (y > 0.95)
-    left = left * (1.0 - 0.5 * root)[:, None]
+    smoke = np.clip(1.0 - np.abs(y - GUNS[1]) / 0.22, 0.0, 1.0) * np.clip((W_LE(y) + 0.1 - q[:, 0]) / 0.5, 0.0, 1.0) * (y > 1.0)
+    left = left * (1.0 - 0.4 * smoke)[:, None]
     return left * (1 - lip) + lip * np.array([1.25, 1.0, 1.45])
 
 
@@ -343,5 +365,5 @@ deliver(
     chase=(eye + Vector((-cam('FLY_CAM_BACK_M'), 0, cam('FLY_CAM_UP_M'))), eye + Vector((cam('CRAFT_CAM_MEET_M'), 0, 0))),
     # Its mouth's two halves and its middle, for the boost's flames.
     burns=[(TAIL, MW * 0.5, MZ), (TAIL, -MW * 0.5, MZ), (TAIL, 0.0, MZ)],
-    note='Veil flier: a swift, sickle wings with stepped feathers and a forked tail of two blades, a lance through each '
+    note='Veil flier: a swift in its stoop, two long blades of wings held down and back and a forked tail, a lance out of each '
          f"wing, its engine a mouth between the blades; its tail's tips at x {x1}, y ±{y0 + spread:.2f}, z {z0 + rise:.2f}")
