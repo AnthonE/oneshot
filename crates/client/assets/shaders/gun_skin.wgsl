@@ -73,18 +73,6 @@ struct Coat {
 
 // How much of the sky photograph's own colour a reflection keeps.
 const SKY_CHROMA: f32 = 0.3;
-// A gun's edge light: what its turned-away edges catch from behind and over
-// it, on the screen whatever the map's exposure, as its reflection is. A gun
-// is dark steel held over a dark floor: in a hall or at dusk the one in our
-// own view was a hole in the corner of the frame, its shape gone. Where a
-// surface turns away from the eye by `RIM_POW` (a flat top seen along its
-// length takes little; an edge all of it), more from over it than under.
-const RIM: f32 = 0.2;
-const RIM_POW: f32 = 4.0;
-const RIM_RGB: vec3<f32> = vec3<f32>(0.78, 0.88, 1.0);
-// And a floor under its own colours: this much of its paint shows in any
-// light, as a hand held up in a dim room is seen.
-const SEEN: f32 = 0.035;
 
 // What a reflection keeps of the light it meets, by roughness and the view's
 // angle: Karis' fit of the split-sum's table (2014), scale and bias on F0.
@@ -343,10 +331,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         // The metal's own colour of it whole; of the white sheen every
         // surface has seen edge on, a share: a gun in the hand is seen along
         // its length, and all of that sheen is a pale gun.
-        var rgb = out.color.rgb + sky * (f0 * ab.x + ab.y * coat.env.w) * shade * coat.env.x;
-        let rim = pow(1.0 - nv, RIM_POW) * (0.4 + 0.6 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0));
-        rgb += (RIM_RGB * RIM * rim + m.base_color.rgb * SEEN) * shade;
-        out.color = vec4<f32>(rgb, out.color.a);
+        out.color = vec4<f32>(out.color.rgb + sky * (f0 * ab.x + ab.y * coat.env.w) * shade * coat.env.x, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }
