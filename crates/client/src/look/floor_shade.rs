@@ -56,7 +56,7 @@ use sim::solid::Shape;
 use super::fill;
 
 /// A sheet's cell, metres: a contact line is drawn across one.
-const CELL_M: f32 = 0.35;
+const CELL_M: f32 = 0.4;
 /// How far over its floor the sheet lies, and how far over it a vertex
 /// looks from, metres.
 const LIFT_M: f32 = 0.008;
@@ -70,7 +70,7 @@ const ROUND_M: f32 = 0.03;
 /// takes more of it the nearer it is.
 const REACH_M: f32 = 4.5;
 /// Looks into the dome, a vertex.
-const DOME: usize = 24;
+const DOME: usize = 20;
 /// What stands in the dome takes this much more of the fill than its share
 /// of the looks: a hall's fill is its lamps' light come back off the vault
 /// and the walls, and what stands beside a floor stands in the way of the
@@ -81,7 +81,7 @@ const DOME_TAKES: f32 = 1.4;
 /// is looked at this many times across it, so its shadow has an edge a
 /// cell can hold.
 const LAMP_WIDE_M: f32 = 0.7;
-const LAMP_LOOKS: usize = 4;
+const LAMP_LOOKS: usize = 3;
 /// A way to a lamp is clear if nothing stands in it short of this far
 /// from the lamp, metres: its fixture hangs in the roof's steel.
 const LAMP_CLEAR_M: f32 = 0.8;
@@ -115,12 +115,16 @@ const DARKEST_OPEN: f32 = 0.62;
 /// where it stops.
 const FAINT: f32 = 0.05;
 
-/// A light is weighed as patches this far apart, metres.
+/// A light is weighed as patches this far apart, metres: a strip along
+/// its length, a mesh (a ring round a pillar, a set's strips in one part)
+/// by the cell its triangles are in, coarser. Chrysalis has five thousand
+/// of the finer, and every floor vertex weighs every one near it.
 const PATCH_M: f32 = 0.5;
+const MESH_PATCH_M: f32 = 1.0;
 /// How far a light's spill is followed over a floor, metres: past this a
 /// strip's is under what the fill gives, and a roof's panels are the
 /// lamps', which light the floor already.
-const SPILL_REACH_M: f32 = 6.0;
+const SPILL_REACH_M: f32 = 5.0;
 /// What a floor gives back of a light on it, for a light drawn at 1: a
 /// strip is drawn at four times white, which is as bright as a screen
 /// shows one, and a strip that lit its hall is a hundred times that. This
@@ -207,7 +211,7 @@ impl Lights {
             let (a, b, c) = (point(t[0]), point(t[1]), point(t[2]));
             let area = 0.5 * (b - a).cross(c - a).length();
             let mid = (a + b + c) / 3.0;
-            let cell = (mid / PATCH_M).floor().as_ivec3().to_array();
+            let cell = (mid / MESH_PATCH_M).floor().as_ivec3().to_array();
             let e = cells.entry(cell).or_insert((Vec3::ZERO, 0.0));
             e.0 += mid * area;
             e.1 += area;
@@ -495,6 +499,16 @@ fn covered(map: &Map, p: Vec3) -> bool {
     hit
 }
 
+/// A floor is as wide as a body stands on: a top narrower than this,
+/// metres, is a wall's or a rail's, and nobody looks at its shade.
+const STOOD_M: f32 = 0.6;
+
+/// Whether `on` holds a stride to one side or the other of (x, z) both
+/// ways across: the middle of a floor or its edge, never a wall's top.
+fn stood(x: f32, z: f32, on: impl Fn(f32, f32) -> bool) -> bool {
+    (on(x + STOOD_M, z) || on(x - STOOD_M, z)) && (on(x, z + STOOD_M) || on(x, z - STOOD_M))
+}
+
 /// Whether anything stands within [`NEAR_M`] of (x, z), at any height.
 fn near(map: &Map, x: f32, z: f32) -> bool {
     let (lo, hi) = ((x - NEAR_M, z - NEAR_M), (x + NEAR_M, z + NEAR_M));
@@ -662,7 +676,8 @@ pub fn mesh(
     let same = |y: f32, other: f32| (y - other).abs() < 2e-3;
     let boxes = &map.boxes;
     for (i, b) in boxes.iter().enumerate() {
-        if !floor_box(i) || b.max.y <= map.ground((b.min.x + b.max.x) * 0.5, (b.min.z + b.max.z) * 0.5) {
+        let narrow = (b.max.x - b.min.x).min(b.max.z - b.min.z) < 2.0 * STOOD_M;
+        if !floor_box(i) || narrow || b.max.y <= map.ground((b.min.x + b.max.x) * 0.5, (b.min.z + b.max.z) * 0.5) {
             continue;
         }
         let (min, size) = (b.min, b.max - b.min);
@@ -743,7 +758,11 @@ pub fn mesh(
                         let (px, pz) = (b.min.x + size.x * u, b.min.z + size.z * v);
                         Vec3::new(px, s.top_at(px, pz), pz)
                     },
-                    |mid| s.over(mid.x, mid.z, 0.0) && level(mid.x, mid.z),
+                    |mid| {
+                        let on =
+                            |x: f32, z: f32| s.over(x, z, 0.0) && level(x, z) && (s.top_at(x, z) - mid.y).abs() < 0.02;
+                        on(mid.x, mid.z) && stood(mid.x, mid.z, on)
+                    },
                 );
             }
         }
@@ -861,7 +880,10 @@ pub fn lay(
             |i| w.floor_solid[i],
             &lights,
         );
-        commands.entity(e).despawn();
+        // What waited is the sheet from here (if the level was built again
+        // this frame and took it, there is nothing to dress).
+        let mut waited = commands.entity(e);
+        waited.try_remove::<Waits>();
         if let Some(m) = sheet {
             info!(
                 "oneshot: floor shade: {} triangles under {} lights' pieces in {:.0} ms",
@@ -869,8 +891,7 @@ pub fn lay(
                 lights.patches.len(),
                 began.elapsed().as_secs_f32() * 1000.0
             );
-            commands.spawn((
-                crate::level::LevelPart,
+            waited.try_insert((
                 Mesh3d(meshes.add(m)),
                 MeshMaterial3d(mats.add(material())),
                 NotShadowCaster,
