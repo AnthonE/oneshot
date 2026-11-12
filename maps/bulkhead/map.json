@@ -750,7 +750,7 @@
   "ev100": 9.7,
   "sun": 0,
   "fill": 0.075,
-  "floor": "tread",
+  "floor": "plating",
   "lamps": [
    {
     "at": [

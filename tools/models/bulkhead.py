@@ -27,7 +27,9 @@ ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'bulkhead')
 TEX = os.path.join(ROOT, 'crates', 'client', 'assets', 'textures', 'planet.jpg')
 
-arch.TILES.update({'hull': 2.3, 'plate': 2.2, 'dark': 2.2, 'tread': 2.0, 'red': 2.3, 'blue': 2.3, 'rust': 2.4})
+# The walls' and the sides' panels are two plates to a tile, the cargo's ribbed
+# sheet a score of ribs (`look/built.rs`' PANEL_TILE_M, RIBBED_TILE_M).
+arch.TILES.update({'hull': 3.0, 'plate': 1.5, 'dark': 2.2, 'tread': 2.0, 'red': 3.0, 'blue': 3.0, 'rust': 2.4})
 arch.UNTRACED.update({'space', 'stars', 'planet', 'ring', 'shaft', 'ship', 'ship_dark'})
 
 LANE = 1.5

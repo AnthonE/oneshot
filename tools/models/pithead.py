@@ -32,7 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 OUT = os.path.join(ROOT, 'crates', 'client', 'assets', 'models', 'pithead')
 
-arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'floor': 3.6, 'snow': 2.6, 'rust': 2.4, 'tread': 2.0})
+# The lining is ribbed sheet in its photograph (`look/built.rs`' RIBBED_TILE_M).
+arch.TILES.update({'blast': 3.6, 'blast_dark': 3.6, 'floor': 3.6, 'snow': 2.6, 'rust': 2.4, 'tread': 2.0, 'lining': 1.5})
 arch.UNTRACED.update({'drift', 'peaks', 'window', 'pool', 'track'})
 
 # Toward where the wind blows (x, z): the mood's `wind_azim` 1.25. Rime faces
@@ -1337,8 +1338,10 @@ def tone(p, n, name):
             out = mix(out, RIME_SIDE, 0.5 * smooth(-6.0, 0.4, y) * smooth(0.45, 0.7, vnoise(x * 0.6 + z * 0.6, y * 0.9, 3)))
         out = mix(out, (0.004, 0.005, 0.007), 0.92 * smooth(-3.0, -40.0, y))
     elif name == 'lining':
+        # Over its photograph (ribbed sheet, a mid grey): a cold paint gone
+        # dull, as dark as the flat colour it was.
         k = 0.8 + 0.2 * w
-        out = (0.09 * k, 0.1 * k, 0.11 * k)
+        out = (0.3 * k, 0.33 * k, 0.37 * k)
     else:
         out = (1.0, 1.0, 1.0)
     if warm > 0.0:
@@ -1370,6 +1373,10 @@ def main():
         crag(x, z, top, r, 300 + i)
     peaks()
     objs = make_objects()
+    # The lining's ribs stand upright, as the cladding's do outside: its
+    # photograph's run level, so its faces are mapped a quarter turn round.
+    for d in objs['lining'].data.uv_layers[0].data:
+        d.uv = (d.uv[1], d.uv[0])
 
     def ground(verts, polys):
         # The crags' tops and their faces into the shaft, for the occlusion.

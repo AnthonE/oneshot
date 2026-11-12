@@ -133,6 +133,30 @@ fn dress(look: u8) -> Option<(&'static str, f32, Color)> {
         // Its set is cut white (`tools/snow.py`'s `WHITE`).
         SNOW => ("snow", crate::look::built::tile(SNOW), Color::WHITE),
         RUST => ("rust", crate::look::built::tile(RUST), Color::linear_rgb(1.0, 1.0, 1.0)),
+        // The plating is drawn near white (`textures::panel_images`): the
+        // tint is the colour. A floor's plates are big, a wall's a stride.
+        PLATING => ("panel", 5.0, Color::linear_rgb(0.22, 0.23, 0.25)),
+        PANEL => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.24, 0.255, 0.285),
+        ),
+        PANEL_RED => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.62, 0.115, 0.09),
+        ),
+        PANEL_BLUE => (
+            "panel",
+            crate::look::built::tile(PANEL),
+            Color::linear_rgb(0.1, 0.19, 0.6),
+        ),
+        RIBBED => (
+            "metal",
+            crate::look::built::tile(RIBBED),
+            Color::linear_rgb(1.05, 1.08, 1.12),
+        ),
+        LINING => ("metal", crate::look::built::tile(RIBBED), Color::WHITE),
         _ => return None,
     })
 }
@@ -174,6 +198,17 @@ pub const RUST: u8 = 42;
 /// A turned box drawn as a wreck inside it (`look/boulders.rs`).
 pub const WRECK_CAR: u8 = 43;
 pub const WRECK_VAN: u8 = 44;
+/// A dock's other metals: deck plating a floor is laid in, a wall's smooth
+/// panels in a hull's grey or a side's paint, ribbed sheet. A dock in one
+/// riveted plate, walls and cargo and paint alike, was one surface.
+pub const PLATING: u8 = 45;
+pub const PANEL: u8 = 46;
+pub const PANEL_RED: u8 = 47;
+pub const PANEL_BLUE: u8 = 48;
+pub const RIBBED: u8 = 49;
+/// A shed's inner sheet (Pithead's shaft houses): ribbed and painted, its
+/// tone the kit's own per vertex. Flat paint on a flat wall was no surface.
+pub const LINING: u8 = 50;
 
 /// The rock look (tools/maps/compile.mjs LOOKS).
 const ROCK: u8 = 6;
@@ -209,6 +244,18 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
         // is not; tread plate is worn dull.
         (STEEL, _) => (0.62, 0.85),
         (STEEL_RED | STEEL_BLUE, _) => (0.7, 0.3),
+        // Paint over plate, as a base's. Bare plating is metal through and
+        // through, as the riveted plate is, and as dull: the plating's own
+        // roughness is a half (`textures::panel_images`), and at a wall's
+        // 0.62 of that it was a mirror for the hall's sheen, a pale card
+        // from end to end. A deck is worn a little smoother than a wall.
+        (PANEL_RED | PANEL_BLUE, _) => (1.0, 0.3),
+        (PANEL, _) => (1.0, 0.85),
+        (PLATING, _) => (0.9, 0.85),
+        (RIBBED, _) => (0.6, 0.7),
+        // Paint on sheet, not bare metal: a mine's shed under an open sky
+        // would wear the sky as a sheen.
+        (LINING, _) => (0.85, 0.1),
         (TREAD, _) => (0.75, 0.8),
         (STONE | STONE_DARK, _) => (0.88, 0.0),
         (_, "metal") => (0.55, 0.35),
@@ -227,6 +274,7 @@ pub fn box_material(look: u8) -> Option<StandardMaterial> {
 fn surface(look: u8) -> Surface {
     match look {
         0 | 1 | 3 | 4 | 5 | 7 | 11 | PYLON | STEEL | STEEL_RED | STEEL_BLUE | TREAD => Surface::Plate,
+        PLATING | PANEL | PANEL_RED | PANEL_BLUE | RIBBED | LINING => Surface::Plate,
         ROCK => Surface::Rock,
         FLOOR => Surface::Floor,
         12..=15 | DECK | GOLD | RIB | HUSK..=FONT => Surface::Hull,

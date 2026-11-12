@@ -22,8 +22,8 @@ use bevy::prelude::*;
 use super::fresnel;
 use super::weathering::{Block, Shape};
 use crate::level::{
-    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, DARK, HULL, MARBLE, PLATE, ROAD, RUST, SNOW,
-    STEEL_BLUE, STEEL_RED, STONE, STONE_DARK, TREAD,
+    strip_material, BoxLook, LevelPart, BLAST, BLAST_DARK, BRICK, DARK, LINING, MARBLE, PANEL, PANEL_BLUE, PANEL_RED,
+    RIBBED, ROAD, RUST, SNOW, STONE, STONE_DARK, TREAD,
 };
 
 /// The `stone` set's tile, m: the UVs the Blender kit writes (`arch.py`'s `TILE_M`).
@@ -38,6 +38,10 @@ pub const SNOW_TILE_M: f32 = 2.6;
 /// `TILE_M`): its swells want the room, and a floor of it is fifty metres.
 pub const SNOW_LAID: f32 = 2.0;
 pub const RUST_TILE_M: f32 = 2.4;
+/// A wall's panels: the plating is two plates to its tile (`bulkhead.py`).
+pub const PANEL_TILE_M: f32 = 3.0;
+/// Ribbed sheet: its photograph is a score of ribs.
+pub const RIBBED_TILE_M: f32 = 1.5;
 /// The bronze: brushed and old, not polished (a mirror under the open sky is
 /// white).
 const BRONZE: Color = Color::linear_rgb(0.17, 0.105, 0.05);
@@ -237,13 +241,15 @@ const DOCK: Set = Set {
     dir: "bulkhead",
     prefix: "dock",
     parts: &[
-        part("hull", Paint::Look(HULL)),
+        // Its walls and girders in smooth panels, its frames in riveted
+        // plate, its cargo ribbed or rusted, each side's paint on panels.
+        part("hull", Paint::Look(PANEL)),
         part("rust", Paint::Look(RUST)),
         part("dark", Paint::Look(DARK)),
-        part("plate", Paint::Look(PLATE)),
+        part("plate", Paint::Look(RIBBED)),
         part("tread", Paint::Look(TREAD)),
-        part("red", Paint::Look(STEEL_RED)),
-        part("blue", Paint::Look(STEEL_BLUE)),
+        part("red", Paint::Look(PANEL_RED)),
+        part("blue", Paint::Look(PANEL_BLUE)),
         part("pipe", Paint::Metal(Color::srgb(0.3, 0.31, 0.33), 0.45, 0.7)),
         part("crane", Paint::Metal(Color::srgb(0.68, 0.5, 0.1), 0.55, 0.2)),
         part("paint_y", Paint::Metal(Color::srgb(0.72, 0.55, 0.14), 0.6, 0.0)),
@@ -323,7 +329,8 @@ const PITHEAD: Set = Set {
         part("snow", Paint::Look(SNOW)),
         part("clad", TONED),
         part("clad_grey", TONED),
-        part("lining", TONED),
+        // The sheds' inner sheet: ribbed, in the kit's tone.
+        part("lining", Paint::Look(LINING)),
         part("steel", TONED),
         part("steel_box", TONED),
         part("rusty", TONED),
@@ -562,6 +569,8 @@ pub const fn tile(look: u8) -> f32 {
         BLAST => BLAST_TILE_M,
         SNOW => SNOW_TILE_M,
         RUST => RUST_TILE_M,
+        PANEL | PANEL_RED | PANEL_BLUE => PANEL_TILE_M,
+        RIBBED | LINING => RIBBED_TILE_M,
         _ => TILE_M,
     }
 }
