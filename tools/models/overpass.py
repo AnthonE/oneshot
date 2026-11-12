@@ -428,89 +428,250 @@ def signs():
 
 
 # --------------------------------------------------------------------- the city
-def window(at, along, out, warm, rng):
-    """A lit window on a tower's face, its colour and how bright in its paint."""
-    pa = part('city_lights')
-    x, y, z = at
-    ax, az = along[0] * WIN_W, along[2] * WIN_W
-    base = pa.add([(x - ax, y, z - az), (x + ax, y, z + az), (x + ax, y + WIN_H, z + az), (x - ax, y + WIN_H, z - az)])
-    r = math.hypot(x, z)
-    b = 1.9 - min(1.0, max(0.0, (r - 90.0) / 240.0)) * 1.0
-    b *= rng.uniform(0.6, 1.1)
-    c = (1.0, 0.6, 0.28) if (rng.random() < 0.8) == warm else (0.55, 0.74, 1.0)
-    for k in range(4):
-        pa.colors[base + k] = (c[0] * b, c[1] * b, c[2] * b)
-    o = Vector(out)
-    pa.faces.append(((base, base + 1, base + 2, base + 3) if (Vector((along[0], 0, along[2])).cross(Vector((0, 1, 0)))).dot(o) < 0 else (base + 1, base, base + 3, base + 2), [(0, 0)] * 4, True))
-
-
-WIN_PITCH = 1.9
+# A floor and a bay of a tower, metres; a floor's glass over its floor.
 WIN_FLOOR = 3.3
-WIN_LIT = 0.13
-WIN_W = 0.42
-WIN_H = 1.25
+WIN_PITCH = 1.9
+BAND = (1.0, 2.75)
+# A bay lit with none lit beside it, and with one; a tower's share of both.
+WIN_LIT = 0.1
+WIN_RUN = 0.6
+# A lit window nearest the map, of the frame's white, and what the farthest
+# keeps of it: unlit, so they are what the screen shows.
+WIN_GLOW = 0.62
+WIN_FAR = 0.5
+# What stands off a tower's wall, a step each: its glass, its piers, its lights.
+SKIN_M = 0.15
+# The dusk is down the map's +z (`look/mood.rs` RAIN_DUSK's sun): what a face
+# turned to it takes on, over its own.
+DUSK = (1.1, 0.55, 0.24)
+SIGN_RGB = ((1.0, 0.2, 0.52), (0.22, 0.85, 1.0), (1.0, 0.52, 0.14))
+# The big signs and the old road's other decks out in the flood: no tower
+# stands in them.
+SIGNS = ((-58.0, 62.0, 34.0, 'light_pink'), (64.0, 58.0, 28.0, 'light_cyan'), (-66.0, -58.0, 30.0, 'light_cyan'), (56.0, -64.0, 36.0, 'light_pink'))
+DECKS = ((-140.0, 30.0, -44.0, 44.0, 9.0), (46.0, -40.0, 160.0, -60.0, 12.0), (44.0, 52.0, 140.0, 78.0, 7.0))
+# The city's vertices: what each one's paint is multiplied by (`paint_city`).
+CITY_TONE = {}
+
+
+def toned(n0, k):
+    """Everything put in the city since it had `n0` vertices is `k` of its paint."""
+    k = k if isinstance(k, tuple) else (k, k, k)
+    for i in range(n0, len(part('city').verts)):
+        CITY_TONE[i] = k
+
+
+def faces_of(x, z, w, d):
+    """A tower's two faces toward the map: (middle, along, out, half its length)."""
+    fx, fz = (-1.0 if x > 0 else 1.0), (-1.0 if z > 0 else 1.0)
+    return (((x, z + fz * d), (1.0, 0.0), (0.0, fz), w), ((x + fx * w, z), (0.0, 1.0), (fx, 0.0), d))
+
+
+def on_face(f, u0, u1, y0, y1, off, mat, k=None):
+    """A sheet on a tower's face, `off` out of it: its tone in the city's paint,
+    or its colour as a light."""
+    (ox, oz), (ax, az), (nx, nz), _ = f
+    at = lambda u, y: (ox + ax * u + nx * off, y, oz + az * u + nz * off)
+    pa = part(mat)
+    n0 = len(pa.verts)
+    quad(at(u0, y0), at(u1, y0), at(u1, y1), at(u0, y1), mat, (nx, 0.0, nz), cell=400.0)
+    if mat == 'city':
+        toned(n0, k)
+    else:
+        for i in range(n0, len(pa.verts)):
+            pa.colors[i] = k
+
+
+def glyphs(rng, f, u, y, h, rgb):
+    """A sign down a tower's face in no language anyone reads, on its dark board."""
+    w = h / 7.0
+    on_face(f, u - w * 0.75, u + w * 0.75, y - 0.6, y + h + 0.6, SKIN_M * 3, 'city', 0.45)
+    n = int(h / (w * 1.25))
+    for k in range(n):
+        gy = y + h - (k + 1) * h / n
+        cell = h / n * 0.8
+        t = w * 0.11
+        on_face(f, u - w * 0.5, u - w * 0.5 + t, gy, gy + cell, SKIN_M * 4, 'city_lights', rgb)
+        for _ in range(rng.randint(2, 4)):
+            yy = gy + rng.random() * (cell - t)
+            a = u - w * 0.5 + rng.random() * w * 0.3
+            on_face(f, a, min(u + w * 0.5, a + rng.uniform(0.3, 0.9) * w), yy, yy + t, SKIN_M * 4, 'city_lights', rgb)
 
 
 def tower(rng, x, z, w, d, h):
-    """A dark tower out in the flood, its lit windows on the faces toward the map."""
-    tbase = FLOOD - 3.0
-    cbox(x - w, tbase, z - d, x + w, h, z + d, 'city', c=0.0, cell=400.0)
-    if rng.random() < 0.5:
-        cbox(x - w * 0.55, h, z - d * 0.55, x + w * 0.55, h + rng.uniform(4, 14), z + d * 0.55, 'city', c=0.0, cell=400.0)
-    if rng.random() < 0.3:
-        top = h + rng.uniform(12, 30)
-        rod((x, h, z), (x, top, z), 0.5, 'city', sides=5, taper=0.2)
-        spin(x, z, [(0.7, top), (0.7, top + 0.6), (0.001, top + 0.6)], 'light_red', sides=6, smooth=False)
-    # Windows: rows on rows, a few lit, whole floors of them dark.
-    fx = -1.0 if x > 0 else 1.0
-    fz = -1.0 if z > 0 else 1.0
-    cols, floors = int(w * 2 / WIN_PITCH), int((h - FLOOD) / WIN_FLOOR)
+    """A dark tower out in the flood: a shaft that steps back as it climbs, its
+    floors and piers on the faces toward the map, a few of its windows lit, its
+    plant on its roof."""
+    foot = FLOOD - 3.0
+    own = rng.uniform(0.8, 1.2)
+    r = math.hypot(x, z)
+    far = min(1.0, max(0.0, (r - 90.0) / 240.0))
+    # Its shaft's tiers: (x, z, half wide, half deep, from, to).
+    kind = rng.random()
+    tiers = []
+    if kind < 0.28:
+        tiers.append((x, z, w, d, foot, h))
+    elif kind < 0.78:
+        steps = 2 if rng.random() < 0.6 else 3
+        cuts = [rng.uniform(0.5, 0.78)] if steps == 2 else [rng.uniform(0.36, 0.52), rng.uniform(0.68, 0.86)]
+        tx, tz, tw, td, y0 = x, z, w, d, foot
+        for k in range(steps):
+            y1 = h if k == steps - 1 else FLOOD + (h - FLOOD) * cuts[k]
+            tiers.append((tx, tz, tw, td, y0, y1))
+            nw, nd = tw * rng.uniform(0.6, 0.86), td * rng.uniform(0.6, 0.86)
+            # A step back from one side, or from both.
+            tx += rng.choice((-1.0, 0.0, 1.0)) * (tw - nw)
+            tz += rng.choice((-1.0, 0.0, 1.0)) * (td - nd)
+            tw, td, y0 = nw, nd, y1
+    else:
+        # A podium and two shafts on it, one the taller.
+        y1 = FLOOD + (h - FLOOD) * rng.uniform(0.22, 0.38)
+        tiers.append((x, z, w, d, foot, y1))
+        low = h - (h - y1) * rng.uniform(0.15, 0.4)
+        tall = rng.choice((-1.0, 1.0))
+        if w >= d:
+            tiers.append((x + tall * w * 0.56, z, w * 0.4, d * 0.8, y1, h))
+            tiers.append((x - tall * w * 0.56, z, w * 0.4, d * 0.8, y1, low))
+        else:
+            tiers.append((x, z + tall * d * 0.56, w * 0.8, d * 0.4, y1, h))
+            tiers.append((x, z - tall * d * 0.56, w * 0.8, d * 0.4, y1, low))
+    for (tx, tz, tw, td, y0, y1) in tiers:
+        n0 = len(part('city').verts)
+        cbox(tx - tw, y0, tz - td, tx + tw, y1, tz + td, 'city', c=0.0, cell=400.0)
+        toned(n0, own)
+    # Its face: ribbons of glass a floor, upright fins, both, or bare wall.
+    face = rng.choice(('bands', 'bands', 'fins', 'grid', 'grid', 'bare'))
+    pitch = rng.uniform(2.8, 4.6)
+    lit = rng.choice((0.0, 0.4, 0.7, 1.0, 1.0, 1.5, 2.2))
     warm = rng.random() < 0.7
-    for fl in range(1, floors):
-        if rng.random() < 0.3:
-            continue
-        y = FLOOD + fl * WIN_FLOOR
-        for c in range(cols):
-            run = rng.random() < (0.62 if c and lit_last else WIN_LIT)
-            lit_last = run
-            if not run:
-                continue
-            u = -w + (c + 0.5) * w * 2 / cols
-            window((x + u, y, z + fz * d + fz * 0.05), (1, 0, 0), (0, 0, fz), warm, rng)
-        lit_last = False
-        for c in range(int(d * 2 / WIN_PITCH)):
-            run = rng.random() < (0.62 if c and lit_last else WIN_LIT)
-            lit_last = run
-            if not run:
-                continue
-            v = -d + (c + 0.5) * WIN_PITCH
-            window((x + fx * w + fx * 0.05, y, z + v), (0, 0, 1), (fx, 0, 0), warm, rng)
+    glow = WIN_GLOW * (1.0 - (1.0 - WIN_FAR) * far)
+    floors = int((h - FLOOD) / WIN_FLOOR)
+    whole = set(rng.sample(range(1, max(2, floors)), min(max(1, floors - 1), rng.choice((0, 0, 1, 2, 3))))) if lit > 0.0 else set()
+    stair = rng.random() < 0.3
+    for (tx, tz, tw, td, y0, y1) in tiers:
+        for f in faces_of(tx, tz, tw, td):
+            half = f[3]
+            edge = min(1.2, half * 0.2)
+            cols = max(1, int((half - edge) * 2 / WIN_PITCH))
+            bay = (half - edge) * 2 / cols
+            core = rng.randrange(cols) if stair else -1
+            fl0 = max(1, int(math.ceil((y0 - FLOOD) / WIN_FLOOR)))
+            fl1 = int((y1 - 0.8 - BAND[1] - FLOOD) / WIN_FLOOR)
+            if face in ('fins', 'grid') and fl1 >= fl0:
+                n = max(2, int(half * 2 / pitch))
+                for k in range(n + 1):
+                    u = -half + 0.4 + (half * 2 - 0.8) * k / n
+                    on_face(f, u - 0.32, u + 0.32, max(y0, FLOOD), y1 - 0.6, SKIN_M * 2, 'city', own * (1.45 if face == 'fins' else 0.62))
+            for fl in range(fl0, fl1 + 1):
+                y = FLOOD + fl * WIN_FLOOR
+                if face in ('bands', 'grid'):
+                    g = own * (1.12 if rng.random() < 0.15 else rng.uniform(1.4, 1.85))
+                    on_face(f, -half + edge, half - edge, y + BAND[0], y + BAND[1], SKIN_M, 'city', (g, g * 1.06, g * 1.16))
+                if lit <= 0.0 or (fl not in whole and rng.random() < 0.3):
+                    continue
+                on = False
+                for c in range(cols):
+                    p = 0.78 if fl in whole else (WIN_RUN if on else WIN_LIT * lit)
+                    on = rng.random() < p
+                    if not on and c != core:
+                        continue
+                    u = -half + edge + (c + 0.5) * bay
+                    b = glow * rng.uniform(0.5, 1.1) * (0.75 if fl in whole else 1.0)
+                    col = (1.0, 0.6, 0.28) if (rng.random() < 0.8) == warm else (0.55, 0.74, 1.0)
+                    if not on:
+                        # The stair's slit, lit on every floor, low.
+                        b, col, wide = glow * 0.4, (0.6, 0.8, 1.0), 0.14
+                    else:
+                        wide = 0.36
+                    on_face(f, u - bay * wide, u + bay * wide, y + BAND[0] + 0.12, y + BAND[1] - 0.12, SKIN_M * 3, 'city_lights', (col[0] * b, col[1] * b, col[2] * b))
+    # Its roof: plant, a tank, a mast and its lamp.
+    tx, tz, tw, td, _, top = max(tiers, key=lambda t: t[5])
+    for _ in range(rng.randint(0, 3)):
+        bw, bd = rng.uniform(1.2, 0.45 * tw + 1.2), rng.uniform(1.2, 0.45 * td + 1.2)
+        bx, bz = tx + rng.uniform(-1, 1) * max(0.0, tw - bw), tz + rng.uniform(-1, 1) * max(0.0, td - bd)
+        n0 = len(part('city').verts)
+        cbox(bx - bw, top, bz - bd, bx + bw, top + rng.uniform(2.0, 6.5), bz + bd, 'city', c=0.0, cell=400.0)
+        toned(n0, own * rng.uniform(0.8, 1.1))
+    if rng.random() < 0.3:
+        tr = rng.uniform(1.4, 2.6)
+        cx, cz = tx + rng.uniform(-1, 1) * max(0.0, tw - tr), tz + rng.uniform(-1, 1) * max(0.0, td - tr)
+        n0 = len(part('city').verts)
+        spin(cx, cz, [(tr, top + 1.2), (tr, top + 1.2 + tr * 1.6), (0.001, top + 1.8 + tr * 1.6)], 'city', sides=8, smooth=False)
+        for a in range(4):
+            lx, lz = cx + math.cos(a * math.tau / 4 + 0.6) * tr * 0.7, cz + math.sin(a * math.tau / 4 + 0.6) * tr * 0.7
+            rod((lx, top, lz), (lx, top + 1.2, lz), 0.14, 'city', sides=4)
+        toned(n0, own * 0.9)
+    if rng.random() < 0.34:
+        tip = top + rng.uniform(12, 30)
+        n0 = len(part('city').verts)
+        rod((tx, top, tz), (tx, tip, tz), 0.5, 'city', sides=5, taper=0.2)
+        toned(n0, own)
+        spin(tx, tz, [(0.7, tip), (0.7, tip + 0.6), (0.001, tip + 0.6)], 'light_red', sides=6, smooth=False)
+    # A line of light under its roof, or a sign down its face: the near ones.
+    fs = faces_of(tx, tz, tw, td)
+    if far < 0.6 and rng.random() < 0.22:
+        rgb = rng.choice(SIGN_RGB)
+        b = glow * 1.3
+        for f in fs:
+            on_face(f, -f[3], f[3], top - 0.75, top - 0.3, SKIN_M * 3, 'city_lights', (rgb[0] * b, rgb[1] * b, rgb[2] * b))
+    if far < 0.45 and rng.random() < 0.3:
+        f = rng.choice(fs)
+        rgb = rng.choice(SIGN_RGB[:2])
+        b = glow * 1.5
+        sh = rng.uniform(10.0, 18.0)
+        if top - 4.0 - sh > FLOOD + 8.0 and f[3] > 3.0:
+            glyphs(rng, f, rng.uniform(-1, 1) * (f[3] - 2.4), rng.uniform(max(FLOOD + 8.0, top - sh - 22.0), top - 4.0 - sh), sh, (rgb[0] * b, rgb[1] * b, rgb[2] * b))
+
+
+def stands_clear(x, z, w, d):
+    """Whether a tower here is out of the signs and the old road's decks."""
+    for sx, sz, _, _ in SIGNS:
+        if abs(x - sx) < w + 13.0 and abs(z - sz) < d + 8.0:
+            return False
+    for ax, az, bx_, bz, _ in DECKS:
+        for k in range(17):
+            px, pz = ax + (bx_ - ax) * k / 16, az + (bz - az) * k / 16
+            if abs(x - px) < w + 8.0 and abs(z - pz) < d + 8.0:
+                return False
+    return True
 
 
 def city():
-    rng = random.Random(77)
-    placed = 0
     for ring, count, rmin, rmax, hmin, hmax in ((0, 14, 82, 118, 26, 66), (1, 20, 135, 195, 44, 118), (2, 26, 220, 330, 80, 190)):
         for i in range(count):
-            a = math.tau * (i + rng.random() * 0.7) / count
-            r = rng.uniform(rmin, rmax)
-            x, z = math.cos(a) * r * 1.2, math.sin(a) * r
-            tower(rng, x, z, rng.uniform(8, 16), rng.uniform(8, 16), rng.uniform(hmin, hmax))
-            placed += 1
+            # Each tower by its own roll: one changed leaves the others where they stood.
+            rng = random.Random(7700 + ring * 100 + i)
+            for _ in range(8):
+                a = math.tau * (i + rng.random() * 0.7) / count
+                r = rng.uniform(rmin, rmax)
+                x, z = math.cos(a) * r * 1.2, math.sin(a) * r
+                w, d = rng.uniform(8, 16), rng.uniform(8, 16)
+                if stands_clear(x, z, w, d):
+                    tower(rng, x, z, w, d, rng.uniform(hmin, hmax))
+                    break
+    rng = random.Random(77)
     # Big signs high on the nearest, for colour across the flood.
-    for x, z, h, mat in ((-58.0, 62.0, 34.0, 'light_pink'), (64.0, 58.0, 28.0, 'light_cyan'), (-66.0, -58.0, 30.0, 'light_cyan'), (56.0, -64.0, 36.0, 'light_pink')):
+    for x, z, h, mat in SIGNS:
         s = -1 if z > 0 else 1
+        n0 = len(part('city').verts)
         cbox(x - 7.5, h - 0.4, z - 0.4, x + 7.5, h + 8.4, z + 0.4, 'city', c=0.0, cell=400.0)
         for px in (x - 5.0, x + 5.0):
             cbox(px - 0.5, FLOOD - 2.0, z - 0.5, px + 0.5, h - 0.4, z + 0.5, 'city', c=0.0, cell=400.0)
+            # Its frame: a brace between its legs.
+        for y in (h * 0.35, h * 0.7):
+            cbox(x - 5.0, y - 0.3, z - 0.3, x + 5.0, y + 0.3, z + 0.3, 'city', c=0.0, cell=400.0)
+        toned(n0, 0.8)
         neon_far(x, h, z + s * 0.5, s, mat, rng)
     # Another deck of the old road, standing out in the flood, on its piers.
-    for (ax, az, bx_, bz, y) in ((-140.0, 30.0, -44.0, 44.0, 9.0), (46.0, -40.0, 160.0, -60.0, 12.0), (44.0, 52.0, 140.0, 78.0, 7.0)):
+    for (ax, az, bx_, bz, y) in DECKS:
         extrude((ax, az), (bx_, bz), [(-4.5, y - 1.0), (4.5, y - 1.0), (4.5, y), (-4.5, y)], 'city', caps=True, cell=400.0)
+        # Its parapets.
+        for off in (-4.5, 4.2):
+            extrude((ax, az), (bx_, bz), [(off, y), (off + 0.3, y), (off + 0.3, y + 0.9), (off, y + 0.9)], 'city', caps=True, cell=400.0)
         n = 7
         for k in range(1, n):
             px, pz = ax + (bx_ - ax) * k / n, az + (bz - az) * k / n
             cbox(px - 1.0, FLOOD - 2.0, pz - 1.0, px + 1.0, y - 1.0, pz + 1.0, 'city', c=0.0, cell=400.0)
+            cbox(px - 3.4, y - 1.9, pz - 1.3, px + 3.4, y - 1.0, pz + 1.3, 'city', c=0.0, cell=400.0)
     # And the flyover's own far piers, north and south, past where it fell.
     for s in (-1, 1):
         for sx in (-1, 1):
@@ -531,15 +692,31 @@ def neon_far(x, y, z, s, mat, rng):
 
 def paint_city():
     """The towers' colour, unlit: each ring a step paler and bluer into the rain,
-    misted at the water."""
+    misted at the water; each tower its own value, its glass over its wall, a
+    face to the dusk warmed by it, one turned from it darker."""
     pa = part('city')
+    turned = {}
+    for idx, _, _ in pa.faces:
+        a, b, c = (Vector(pa.verts[i]) for i in idx[:3])
+        n = (b - a).cross(c - a)
+        if n.length > 1e-9:
+            n.normalize()
+            for i in idx:
+                turned.setdefault(i, n)
     for i, (x, y, z) in enumerate(pa.verts):
         r = math.hypot(x, z)
         t = min(1.0, max(0.0, (r - 70.0) / 280.0))
         near, far = (0.014, 0.017, 0.022), (0.042, 0.052, 0.062)
         c = [near[k] + (far[k] - near[k]) * t for k in range(3)]
-        # A face to the west catches what's left of the day, a little.
-        c = [v * (1.0 + 0.25 * max(0.0, -x / max(r, 1.0))) for v in c]
+        # Its own tone, less of it the farther into the rain.
+        own = CITY_TONE.get(i, (1.0, 1.0, 1.0))
+        c = [c[k] * (1.0 + (own[k] - 1.0) * (1.0 - 0.55 * t)) for k in range(3)]
+        # Paler up where the sky is on it.
+        c = [v * (0.9 + 0.3 * min(1.0, max(0.0, (y - FLOOD) / 120.0))) for v in c]
+        n = turned.get(i)
+        if n is not None:
+            lit = max(0.0, n.z)
+            c = [c[k] * (1.0 - 0.14 * max(0.0, -n.z)) + near[1] * DUSK[k] * lit * (1.0 + 2.0 * t) for k in range(3)]
         mist = max(0.0, 1.0 - (y - FLOOD) / 22.0)
         c = [c[k] + (far[k] * 1.1 - c[k]) * mist * 0.45 for k in range(3)]
         pa.colors[i] = tuple(c)

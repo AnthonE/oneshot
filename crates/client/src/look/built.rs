@@ -227,7 +227,6 @@ const OVERPASS: Set = Set {
         part("light_pink", Paint::Light(LIGHT_PINK)),
         part("light_cyan", Paint::Light(LIGHT_CYAN)),
         part("light_warm", Paint::Dim(LIGHT_WARM, WINDOW_GLOW)),
-        part("light_cold", Paint::Dim(LIGHT_COLD, WINDOW_GLOW)),
         part("city", Paint::Far),
         part("city_lights", Paint::Far),
         part("flood", Paint::Water),
