@@ -1082,6 +1082,40 @@ pub fn build(
     // Rock out of reach: the sea's stacks and stones.
     crate::look::boulders::spawn_scenery(commands, id, land == Land::Isle);
     crate::look::built::spawn(commands, id);
+    // The shade a hall's lamps and fill lay on its floors
+    // (`look/floor_shade.rs`).
+    {
+        let built = crate::look::built::of(id).is_some();
+        let fill = crate::look::floor_shade::fill_units(&map, id);
+        // What is drawn as a floor: not a strip of light, not a box nothing
+        // draws, not a prop standing in its solid.
+        let floor_box = |i: usize| strip(map.looks[i]).is_none() && (map.looks[i] != HIDDEN || built);
+        let floor_solid = |i: usize| {
+            let l = map.solid_looks[i];
+            !matches!(l, PALM | DEAD_TREE | PYLON | WRECK_CAR | WRECK_VAN | HUSK..=FONT) && (l != HIDDEN || built)
+        };
+        let began = bevy::platform::time::Instant::now();
+        if let Some(m) = crate::look::floor_shade::mesh(
+            &map,
+            fill,
+            (LAMP_RANGE, LAMP_CONE, LAMP_DOWN_FROM),
+            map.light.floor != HIDDEN,
+            floor_box,
+            floor_solid,
+        ) {
+            info!(
+                "oneshot: floor shade: {} triangles in {:.0} ms",
+                m.indices().map_or(0, |i| i.len() / 3),
+                began.elapsed().as_secs_f32() * 1000.0
+            );
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(m)),
+                MeshMaterial3d(mats.add(crate::look::floor_shade::material())),
+                crate::look::floor_shade::bundle(),
+            ));
+        }
+    }
     // And trees along the rim over the walls, out of reach too, and the
     // land beyond it (`look/far.rs`).
     // An island has none: the cloud is its distance.

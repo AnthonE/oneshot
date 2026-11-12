@@ -20,6 +20,7 @@ pub mod deck;
 pub mod emblem;
 pub mod far;
 pub mod fill;
+pub mod floor_shade;
 pub mod foliage;
 pub mod fresnel;
 pub mod fx;
