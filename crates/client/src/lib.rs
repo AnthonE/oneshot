@@ -1372,7 +1372,8 @@ fn rebuild(
     );
     if let Ok((mut exposure, mut env, fills)) = eye.single_mut() {
         if let Some(d) = sim::maps::ALL.iter().find(|d| d.id == s.map_id) {
-            look::rig::expose_for(&d.light, &mood.mood, fills, &mut exposure, &mut env);
+            let snowed = level::Land::of(d) == level::Land::Alpine;
+            look::rig::expose_for(&d.light, &mood.mood, snowed, fills, &mut exposure, &mut env);
         }
     }
     // Every rung's shade reaches across this map (`look/quality.rs`).

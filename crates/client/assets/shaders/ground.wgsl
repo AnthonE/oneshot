@@ -112,13 +112,13 @@ const WET_WANDER_WAVE_M: f32 = 3.0;
 // between a buttress's nose and the cleft beside it.
 // Snow on rock is the field's snow (`SNOW_ON_ROCK` of the way from its lee
 // to its crest) and faces the sky more than its face does (`SNOW_UP`).
-const LEDGE_DEEP: vec4<f32> = vec4<f32>(11.5, 3.0, 0.6, 90.0);
+const LEDGE_DEEP: vec4<f32> = vec4<f32>(11.5, 3.0, 0.68, 90.0);
 const LEDGE_FAR_M: f32 = 1.0;
-const LEDGE_THIN: vec4<f32> = vec4<f32>(3.3, 0.7, 0.4, 14.0);
+const LEDGE_THIN: vec4<f32> = vec4<f32>(3.3, 0.7, 0.4, 26.0);
 const LEDGE_DIP_M: f32 = 6.0;
 const LEDGE_DIP_WAVE_M: f32 = 95.0;
 const LEDGE_WAVER_M: f32 = 0.8;
-const LEDGE_RUN_M: f32 = 14.0;
+const LEDGE_RUN_M: f32 = 24.0;
 const LIP_AT: f32 = 0.3;
 const LIP_SHADE: f32 = 0.45;
 const LIP_SHADE_M: f32 = 1.6;
@@ -141,7 +141,7 @@ const BANK_EDGE_M: vec2<f32> = vec2<f32>(1.2, 3.5);
 const BANK_ROLL_M: f32 = 40.0;
 const LOW_SHELF: f32 = 0.45;
 const TALL_THIN: f32 = 0.55;
-const TALL_THIN_SHARE: f32 = 0.7;
+const TALL_THIN_SHARE: f32 = 0.85;
 const CUT_UP: vec2<f32> = vec2<f32>(0.06, 0.09);
 const CUT_LIP: vec2<f32> = vec2<f32>(0.8, 0.3);
 const CUT_LIP_RUN_M: f32 = 16.0;
@@ -149,6 +149,7 @@ const CUT_BAND: f32 = 0.6;
 const CUT_JOINT_M: f32 = 9.0;
 const CUT_JOINT_SHARE: f32 = 0.45;
 const CUT_JOINT_DARK: f32 = 0.4;
+const CUT_TREAD: f32 = 0.35;
 const BED_STEP_M: f32 = 2.4;
 const BED_STEP_AT: f32 = 0.62;
 const SNOW_ON_ROCK: f32 = 0.6;
@@ -168,7 +169,8 @@ const SNOW_MEAN: f32 = 0.49;
 const SNOW_RELIEF: f32 = 0.8;
 const SNOW_NEAR_M: vec2<f32> = vec2<f32>(0.025, 0.11);
 const SNOW_DRIFT_M: f32 = 34.0;
-const SNOW_LEE: vec3<f32> = vec3<f32>(0.76, 0.84, 0.97);
+const SNOW_SWELL_M: vec2<f32> = vec2<f32>(11.0, 6.0);
+const SNOW_LEE: vec3<f32> = vec3<f32>(0.72, 0.81, 0.98);
 const SNOW_CREST: f32 = 1.06;
 // Between a drift and the set's grain, wind ridges `SNOW_RIDGE_M` long and
 // `SNOW_RIDGE_THIN` of that wide (`snow_ridge`), `SNOW_RIDGE` of the field's run (gone to their mean when
@@ -476,8 +478,12 @@ fn wall_tap(wall: Wall, layer: i32, tile: f32) -> WallTap {
 // A valley's snow's run at `q` (in the plan): its drifts down the wind, a
 // broader swell.
 fn snow_far(q: vec3<f32>) -> f32 {
-    return 0.6 * value3(vec3<f32>(q.x / SNOW_DRIFT_M, 0.0, q.z / (SNOW_DRIFT_M * 0.33)) + vec3<f32>(6.1, 0.0, 2.9))
-        + 0.4 * value3(q / 7.0 + vec3<f32>(3.3, 0.0, 8.1));
+    // A drift's back at a middle scale (`SNOW_SWELL_M`, long down the wind) carries most of it:
+    // between a 34 m drift and a ridge under a metre a forecourt was one white from a terrace.
+    let along = SNOW_WIND.x * q.x + SNOW_WIND.y * q.z;
+    let across = -SNOW_WIND.y * q.x + SNOW_WIND.x * q.z;
+    return 0.42 * value3(vec3<f32>(q.x / SNOW_DRIFT_M, 0.0, q.z / (SNOW_DRIFT_M * 0.33)) + vec3<f32>(6.1, 0.0, 2.9))
+        + 0.58 * value3(vec3<f32>(along / SNOW_SWELL_M.x, 0.0, across / SNOW_SWELL_M.y) + vec3<f32>(3.3, 0.0, 8.1));
 }
 
 // Its wind ridges at `q`, 0..1: long and thin down the wind (`SNOW_WIND`:
@@ -532,9 +538,11 @@ fn ledge_snow(wp: vec3<f32>, by: f32, f: vec4<f32>, fp_m: f32, lean: f32) -> vec
         return vec2<f32>(0.0, shade);
     }
     let g = q - floor(q);
-    let ends = smoothstep(0.0, 0.06, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
+    let ends = smoothstep(0.0, 0.015, min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y)));
     let run = value3(vec3<f32>(wp.x / LEDGE_RUN_M, f32(i) * 3.7, wp.z / LEDGE_RUN_M));
-    let depth = f.y * (0.3 + 0.7 * d.y) * (1.0 + LEAN_DEEP * lean) * ends * smoothstep(0.28, 0.6, run);
+    // A shelf is there or it is not, and ends square: a depth that followed the run tapered every
+    // shelf to a point at both ends (lenses on a sheer wall, pills from across the valley).
+    let depth = f.y * (0.3 + 0.7 * d.y) * (1.0 + LEAN_DEEP * lean) * ends * smoothstep(0.3, 0.34, run) * (0.75 + 0.25 * smoothstep(0.34, 0.7, run));
     // Never thinner than a pixel, and as much fainter.
     let deep = max(depth, fp_m);
     // Clean along the lip, ragged where it banks against the riser.
@@ -801,7 +809,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // 0.5, so the face is lightened between streaks exactly as much
             // as it is darkened in them: the mean stays the photograph's.
             let streak = 2.0 * smoothstep(0.38, 0.62, st) - 1.0;
-            shade = shade * (1.0 - ground.rock_c.w * face * streak);
+            // A sawn face is younger than its stains: few on a cut.
+            shade = shade * (1.0 - ground.rock_c.w * face * streak * mix(0.3, 1.0, smoothstep(CUT_UP.x, CUT_UP.y, wn.y)));
         }
         rock_shade = shade;
     }
@@ -965,14 +974,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             // joints down it, a few to a bench, each bench's its own. (With a tall face's shelves it was
             // a plane with brush strokes; with none, a blank slab the width of the base under it.)
             if cutf > 0.01 {
-                let jw = max(0.14, 1.5 * fp_m);
+                let jw = max(0.3, 2.5 * fp_m);
                 let bench = 1.0 - smoothstep(0.0, jw / LEDGE_DEEP.x, fract(band));
+                // And the tread's edge over it catches the light: a pair several pixels tall reads from
+                // across the valley, where a joint alone was a hairline.
+                let tread = smoothstep(1.0 - jw / LEDGE_DEEP.x, 1.0, fract(band));
                 let course = (1.0 - smoothstep(0.0, jw / LEDGE_THIN.x, fract(band2))) * (1.0 - smoothstep(0.3, 1.2, fp_m / 0.5));
                 let jx = (wp.x * -wn.z + wp.z * wn.x) / CUT_JOINT_M + draw3(cell_key(vec3<i32>(bi, 47, 5))).y;
                 let jf = abs(fract(jx + 0.5) - 0.5);
                 let stands = step(draw3(cell_key(vec3<i32>(i32(floor(jx + 0.5)), bi, 9))).x, CUT_JOINT_SHARE);
                 let sheer = (1.0 - smoothstep(0.0, jw / CUT_JOINT_M, jf)) * stands;
-                c = c * (1.0 - CUT_JOINT_DARK * max(max(bench, sheer), 0.5 * course) * cutf * w.w);
+                c = c * (1.0 - CUT_JOINT_DARK * max(max(bench, sheer), 0.5 * course) * cutf * w.w) * (1.0 + CUT_TREAD * tread * cutf * w.w);
             }
             // A buttress's nose is paler than the cleft beside it: the wall's
             // relief by tone, where the light is flat on it.

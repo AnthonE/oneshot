@@ -150,7 +150,7 @@ pub const VALLEY_SNOW_TINT: Vec4 = Vec4::new(1.69, 1.68, 1.68, 1.0);
 /// Its faces' streaks: a wall a hundred metres high wants them broader,
 /// longer and deeper than a canyon's 45 m (`rock_d`'s width and height m,
 /// `rock_c`'s strength), or it has no verticals at all from across a lane.
-pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.18);
+pub const VALLEY_STREAK: (f32, f32, f32) = (2.6, 34.0, 0.13);
 /// Its blocks (`rock_a`): the canyon's sizes, leaning a third as far. A
 /// canyon's wall is read from 30 m; a valley's from 150, under a sun that
 /// rakes it, where a 7 m block leaning 40 degrees is a patch of camouflage

@@ -78,6 +78,8 @@ pub const SKY_LIFT_SATURATION: f32 = 1.9;
 #[derive(Component, Clone)]
 pub struct Fills {
     pub sky: Handle<Image>,
+    /// The sky's over snow (a snowed valley: `fill::snow_cubemap`).
+    pub snow: Handle<Image>,
     /// By `Mood::hall`.
     pub hall: Vec<(Handle<Image>, Handle<Image>)>,
 }
@@ -161,6 +163,7 @@ pub fn camera<M: Component>(
     let fill = images.add(super::fill::cubemap(super::fill::FILL_FACE));
     let fills = Fills {
         sky: fill.clone(),
+        snow: images.add(super::fill::snow_cubemap(super::fill::FILL_FACE)),
         hall: super::fill::hall::PALETTES
             .iter()
             .map(|p| {
@@ -227,10 +230,12 @@ pub fn camera<M: Component>(
 
 /// The map's exposure and sky fill: the mood's, under the map's own
 /// `sim::map::LightDef` (an interior is exposed for its lamps, its fill
-/// turned down under its roof, and its fill its hall's, not the sky's).
+/// turned down under its roof, and its fill its hall's, not the sky's; a
+/// `snowed` valley's sky fill is the one over snow).
 pub fn expose_for(
     light: &sim::map::LightDef,
     mood: &super::mood::Mood,
+    snowed: bool,
     fills: &Fills,
     exposure: &mut Exposure,
     env: &mut EnvironmentMapLight,
@@ -238,6 +243,8 @@ pub fn expose_for(
     let roofed = light.sun <= 0.0;
     let (d, s) = if roofed {
         fills.hall[mood.hall].clone()
+    } else if snowed {
+        (fills.snow.clone(), fills.snow.clone())
     } else {
         (fills.sky.clone(), fills.sky.clone())
     };

@@ -626,6 +626,11 @@ const LAMP_CONE: (f32, f32) = (0.6, 1.05);
 /// A lamp within this of a roof over it is hung from it, and its cone:
 /// near a hemisphere, so it still lies in the floor far down a hall.
 const LAMP_HUNG_M: f32 = 0.8;
+/// A lamp within this of a wall is on it; how far off the wall its light
+/// stands, and its lit face (wide, tall), m.
+const LAMP_WALL_M: f32 = 0.6;
+const LAMP_OFF_WALL_M: f32 = 0.6;
+const LAMP_FACE_M: (f32, f32) = (0.7, 0.22);
 const LAMP_HUNG_CONE: (f32, f32) = (1.1, 1.45);
 /// Any lower lamp lights a room with a low ceiling, a metre or two over a
 /// head: its fixture is this small and this bright.
@@ -745,7 +750,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.5, 1.86, 2.5];
+const ALPINE_CONCRETE: [f32; 3] = [1.55, 1.82, 2.25];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its
@@ -1870,6 +1875,25 @@ pub fn build(
                 sim::geom::V3::new(0.0, 1.0, 0.0),
                 LAMP_HUNG_M,
             ) < LAMP_HUNG_M;
+        // Beside a wall, and which way is out from it.
+        let out = (land == Land::Alpine && !hung)
+            .then(|| {
+                [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]
+                    .into_iter()
+                    .map(|(dx, dz)| {
+                        let d = map.ray(
+                            sim::geom::V3::new(p[0], p[1], p[2]),
+                            sim::geom::V3::new(dx, 0.0, dz),
+                            LAMP_WALL_M,
+                        );
+                        (Vec3::new(-dx, 0.0, -dz), d)
+                    })
+                    .find(|&(_, d)| d < LAMP_WALL_M)
+            })
+            .flatten();
+        // How far the wall is behind it.
+        let behind = out.map_or(0.0, |(_, d)| d);
+        let out = out.map(|(o, _)| o);
         if hung {
             commands.spawn((
                 LevelPart,
@@ -1903,6 +1927,9 @@ pub fn build(
                 Transform::from_xyz(p[0], p[1], p[2]).looking_to(Dir3::NEG_Y, Vec3::Z),
             ));
         } else {
+            // A valley's lamp beside a wall stands off it (against the
+            // wall its pool was a tight disc) and shows a lit face.
+            let at = Vec3::new(p[0], p[1], p[2]) + out.unwrap_or(Vec3::ZERO) * LAMP_OFF_WALL_M;
             commands.spawn((
                 LevelPart,
                 PointLight {
@@ -1913,11 +1940,48 @@ pub fn build(
                     shadows_enabled: false,
                     ..default()
                 },
-                Transform::from_xyz(p[0], p[1], p[2]),
+                Transform::from_translation(at),
             ));
         }
         // A built set draws its own.
         if crate::look::built::of(id).is_some() {
+            continue;
+        }
+        // On a wall: a lit face turned out from it on a dark back plate
+        // (a ceiling's disc on a wall is seen edge-on, a dark dash).
+        if let Some(out) = out.filter(|_| p[1] < LAMP_DOWN_FROM) {
+            let along_x = out.x.abs() < 0.5;
+            let face = |w: f32, h: f32, d: f32| {
+                if along_x {
+                    Cuboid::new(w, h, d)
+                } else {
+                    Cuboid::new(d, h, w)
+                }
+            };
+            let mid = Vec3::new(p[0], p[1], p[2]);
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(face(LAMP_FACE_M.0, LAMP_FACE_M.1, 0.06))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: colour,
+                    emissive: LinearRgba::from(colour) * LAMP_ROOM_GLOW,
+                    ..default()
+                })),
+                Transform::from_translation(mid - out * (behind - 0.06)),
+                bevy::light::NotShadowCaster,
+            ));
+            commands.spawn((
+                LevelPart,
+                Mesh3d(meshes.add(face(LAMP_FACE_M.0 + 0.24, LAMP_FACE_M.1 + 0.2, 0.04))),
+                MeshMaterial3d(mats.add(StandardMaterial {
+                    base_color: Color::srgb(0.1, 0.1, 0.12),
+                    perceptual_roughness: 0.5,
+                    metallic: 0.6,
+                    ..default()
+                })),
+                Transform::from_translation(mid - out * (behind - 0.02)),
+                bevy::light::NotShadowCaster,
+            ));
             continue;
         }
         // Its fixture: a lit disc in a dark ring.

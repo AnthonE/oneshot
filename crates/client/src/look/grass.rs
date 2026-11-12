@@ -454,7 +454,7 @@ pub(crate) fn ice_ridge(t: &TerrainDef, x: f32, z: f32, ice: f32) -> bool {
 /// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
 /// opens its windows (`ground.wgsl`'s scour, a noise against the same
 /// lane), so cover stands on ground that shows and not on clean snow.
-const OPEN: (f32, f32) = (0.32, 0.7);
+const OPEN: (f32, f32) = (0.45, 0.85);
 
 pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let k = ((snow_thin(t, x, z, ice) - OPEN.0) / (OPEN.1 - OPEN.0)).clamp(0.0, 1.0);
