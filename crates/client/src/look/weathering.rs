@@ -171,7 +171,7 @@ const GREY_DUST: [f32; 3] = [0.3, 0.29, 0.27];
 /// Snow settled on what faces up under an open sky, in a valley that
 /// snows (`level::Land::Alpine`): a step under the ground's own snow, and
 /// how much of a top it takes (the patches between are scoured bare).
-const SNOW_SETTLE: [f32; 3] = [0.74, 0.78, 0.86];
+const SNOW_SETTLE: [f32; 3] = [0.8, 0.81, 0.83];
 const SNOW_SETTLE_SHARE: f32 = 1.0;
 /// How far one block's value may sit from the next, either way.
 const BLOCK_VALUE: f32 = 0.07;

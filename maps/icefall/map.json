@@ -125,6 +125,18 @@
       ]
     },
     {
+      "name": "red's hangar's strips: cold light in a line under its roof from the door to the dais",
+      "mirror": true,
+      "dress": true,
+      "boxes": [
+        [-238, 11.38, -0.15, -234.8, 11.5, 0.15, "glow"],
+        [-232, 11.38, -0.15, -228.8, 11.5, 0.15, "glow"],
+        [-226, 11.38, -0.15, -222.8, 11.5, 0.15, "glow"],
+        [-220, 11.38, -0.15, -216.8, 11.5, 0.15, "glow"],
+        [-214, 11.38, -0.15, -210.8, 11.5, 0.15, "glow"]
+      ]
+    },
+    {
       "name": "the col's station: a plinth with the rocket on it, a ramp at each end, pylons round it",
       "boxes": [
         [-6, 7, -4.5, 6, 9.6, 4.5, "blast"],

@@ -825,12 +825,27 @@ pub(crate) fn ground_point(t: &TerrainDef, i: usize, j: usize, land: Land) -> (f
         // how tall the face is, how thin the snow lies.
         let rock = splat_snow(slope)[3];
         let (x, z) = (t.x0 + i as f32 * t.cell, t.z0 + j as f32 * t.cell);
-        let on_face = slope > SNOW_ROCK_SLOPE.0 * 0.6;
+        // A face, and no cut: a slot let square into the mountain (a
+        // base's) is a plane to the paint, with shelves and no more.
+        let on_face = slope > SNOW_ROCK_SLOPE.0 * 0.6 && !cut(t, i, j);
+        let (hollow, tall) = if on_face {
+            // The second lane is two things: under a half, how tall the
+            // face is; over it, a tall face, and how far into a broad
+            // hollow (the bank at its foot stands highest there).
+            let tall = face_tall(t, x, z, dx, dz);
+            let bank = (face_hollow(t, x, z, dx, dz, BANK_REACH_M) / BANK_FULL_M).clamp(0.0, 1.0);
+            (
+                (0.5 + face_hollow(t, x, z, dx, dz, HOLLOW_REACH_M) / HOLLOW_FULL_M).clamp(0.0, 1.0),
+                tall * (0.5 + 0.5 * bank),
+            )
+        } else {
+            (0.5, 0.0)
+        };
         return (
             slope,
             [
-                if on_face { face_hollow(t, x, z, dx, dz) } else { 0.5 },
-                if on_face { face_tall(t, i, j) } else { 0.0 },
+                hollow,
+                tall,
                 crate::look::grass::snow_thin(t, x, z, lowest_cached(t)),
                 rock,
             ],
@@ -873,64 +888,106 @@ pub(crate) fn splat_bare(slope: f32, y: f32) -> [f32; 4] {
     splat_in(slope, y, 0.0, 0.0)
 }
 
-/// How tall the face vertex (i, j) stands in is, 0..1: the ground's fall
-/// within `FACE_REACH_M` of it, from `FACE_TALL_M.0` (a massif's or a
-/// spur's face: shelves, and nothing falls down it) to `.1` (a valley's
-/// wall, which feeds gullies and the cones at its foot: `ground.wgsl`).
+/// How tall the face at (x, z) is, 0..1: the ground's fall along its own
+/// fall line (`dx`, `dz`: the slope there), followed up and down by steps
+/// of `FALL_STEP_M` for `FACE_REACH_M` each way or until it levels off
+/// (`FACE_END_SLOPE`), from `FACE_TALL_M.0` (a massif's or a spur's face:
+/// shelves, and nothing falls down it) to `.1` (a valley's wall, which
+/// feeds gullies and the bank at its foot: `ground.wgsl`). The fall within
+/// a box round it took in the wall behind a spur at its foot, and the spur
+/// was drawn with couloirs.
 const FACE_REACH_M: f32 = 24.0;
+const FALL_STEP_M: f32 = 2.0;
+const FACE_END_SLOPE: f32 = 0.45;
 const FACE_TALL_M: (f32, f32) = (34.0, 56.0);
 
-fn face_tall(t: &TerrainDef, i: usize, j: usize) -> f32 {
-    let (nx, nz) = (t.nx as usize, t.nz as usize);
-    let r = (FACE_REACH_M / t.cell).round() as usize;
-    let (mut lo, mut hi) = (i16::MAX, i16::MIN);
-    for b in j.saturating_sub(r)..=(j + r).min(nz - 1) {
-        for a in i.saturating_sub(r)..=(i + r).min(nx - 1) {
-            let h = t.heights[b * nx + a];
-            lo = lo.min(h);
-            hi = hi.max(h);
+fn face_tall(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
+    let at = |a: f32, b: f32| crate::look::grass::ground(t, a, b);
+    let Some(here) = at(x, z) else { return 0.0 };
+    let end = |way: f32| {
+        let (mut px, mut pz, mut h) = (x, z, here);
+        let (mut gx, mut gz) = (dx, dz);
+        for _ in 0..(FACE_REACH_M / FALL_STEP_M) as usize {
+            let len = gx.hypot(gz);
+            if len < FACE_END_SLOPE {
+                break;
+            }
+            let (qx, qz) = (px + way * gx / len * FALL_STEP_M, pz + way * gz / len * FALL_STEP_M);
+            let Some(next) = at(qx, qz) else { break };
+            if (next - h) * way <= 0.0 {
+                break;
+            }
+            (px, pz, h) = (qx, qz, next);
+            let (Some(a), Some(b), Some(c), Some(d)) =
+                (at(px + 1.0, pz), at(px - 1.0, pz), at(px, pz + 1.0), at(px, pz - 1.0))
+            else {
+                break;
+            };
+            (gx, gz) = ((a - b) * 0.5, (c - d) * 0.5);
         }
-    }
-    let fall = (hi as f32 - lo as f32) / HEIGHT_Q;
-    let k = ((fall - FACE_TALL_M.0) / (FACE_TALL_M.1 - FACE_TALL_M.0)).clamp(0.0, 1.0);
+        h
+    };
+    let k = ((end(1.0) - end(-1.0) - FACE_TALL_M.0) / (FACE_TALL_M.1 - FACE_TALL_M.0)).clamp(0.0, 1.0);
     k * k * (3.0 - 2.0 * k)
 }
 
-/// How far into a couloir the face at (x, z) is, 0..1 (a half: a plane;
-/// more: the wall each side stands higher; less: a buttress's nose), read
-/// `HOLLOW_UP_M` up the fall line (`dx`, `dz`: the ground's slope there),
-/// where the wall's ribs stand whole, so a couloir's line carries down to
-/// the foot: how far the wall `HOLLOW_REACH_M` to each side stands out
-/// past the wall between, in the plan (the heights' difference over the
-/// wall's own slope there, so a cleft reads the same at any height on it),
-/// `HOLLOW_FULL_M` of it for the whole lane. A cleft is a tent in it, as
-/// wide as twice the reach: its ridge is the gully's line, its skirts the
-/// cone under it.
+/// A slope no mountain's own wall reaches (its cliff's steepest stretch is
+/// 5, and ribs and crags take that to 12 or so): steeper is a cut. Vertex
+/// (i, j) is at one if it or a vertex beside it is: a cut's faces are a
+/// cell of plan for all their height, and every lane on them is a blend of
+/// its foot's and its rim's.
+const CUT_SLOPE: f32 = 17.0;
+
+fn cut(t: &TerrainDef, i: usize, j: usize) -> bool {
+    let (nx, nz) = (t.nx as usize, t.nz as usize);
+    let h = |a: usize, b: usize| t.heights[b * nx + a] as f32 / HEIGHT_Q;
+    let steep = |a: usize, b: usize| {
+        let dx = (h((a + 1).min(nx - 1), b) - h(a.saturating_sub(1), b)) / (2.0 * t.cell);
+        let dz = (h(a, (b + 1).min(nz - 1)) - h(a, b.saturating_sub(1))) / (2.0 * t.cell);
+        dx.hypot(dz) > CUT_SLOPE
+    };
+    (j.saturating_sub(1)..=(j + 1).min(nz - 1))
+        .any(|b| (i.saturating_sub(1)..=(i + 1).min(nx - 1)).any(|a| steep(a, b)))
+}
+
+/// How far into a hollow the face at (x, z) is, m in the plan (none: a
+/// plane; less: a buttress's nose): how far the wall `reach` to each side
+/// stands out past the wall between, the heights' difference over the
+/// wall's own slope there, so a cleft reads the same at any height on it.
+/// Read `HOLLOW_UP_M` up the fall line (`dx`, `dz`: the ground's slope
+/// here), where the wall's ribs stand whole, so a couloir's line carries
+/// down to the foot. A cleft is a tent in it, as wide as twice the reach.
+/// At `HOLLOW_REACH_M` its ridge is the gully's line (`HOLLOW_FULL_M` of it
+/// either way for the first lane); at `BANK_REACH_M` its skirts are the
+/// bank under the gully, wider than it is tall (`BANK_FULL_M` for the
+/// whole of the second lane's upper half).
 const HOLLOW_UP_M: f32 = 8.0;
 const HOLLOW_REACH_M: f32 = 9.0;
 const HOLLOW_FULL_M: f32 = 14.0;
+const BANK_REACH_M: f32 = 28.0;
+const BANK_FULL_M: f32 = 7.0;
 
-fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32) -> f32 {
+fn face_hollow(t: &TerrainDef, x: f32, z: f32, dx: f32, dz: f32, reach: f32) -> f32 {
     let len = dx.hypot(dz);
     if len < 1e-3 {
-        return 0.5;
+        return 0.0;
     }
     let (ux, uz) = (dx / len, dz / len);
     let (qx, qz) = (x + ux * HOLLOW_UP_M, z + uz * HOLLOW_UP_M);
     let at = |a: f32, b: f32| crate::look::grass::ground(t, a, b);
     let (Some(mid), Some(l), Some(r)) = (
         at(qx, qz),
-        at(qx - uz * HOLLOW_REACH_M, qz + ux * HOLLOW_REACH_M),
-        at(qx + uz * HOLLOW_REACH_M, qz - ux * HOLLOW_REACH_M),
+        at(qx - uz * reach, qz + ux * reach),
+        at(qx + uz * reach, qz - ux * reach),
     ) else {
-        return 0.5;
+        return 0.0;
     };
     // The wall's slope where it is read, up its fall line.
     let steep = match (at(qx + ux, qz + uz), at(qx - ux, qz - uz)) {
         (Some(a), Some(b)) => ((a - b) * 0.5).abs().max(0.5),
         _ => len.max(0.5),
     };
-    (0.5 + ((l + r) * 0.5 - mid) / steep / HOLLOW_FULL_M).clamp(0.0, 1.0)
+    ((l + r) * 0.5 - mid) / steep
 }
 
 /// A terrain's lowest ground, m: a valley's ice.
@@ -1255,7 +1312,17 @@ pub fn build(
             half: (max - min) * 0.5,
             turn: (1.0, 0.0),
             shape: Shape::Box,
-            ground: ground_at(mid.x, mid.z),
+            // Under snow a block that stands on another (a parapet on a
+            // deck) has its foot there: snow lies against it, not against
+            // the ground far under it.
+            ground: if land == Land::Alpine
+                && min.y > ground_at(mid.x, mid.z) + 0.5
+                && map.occupied(mid.x, mid.z, 0.2, min.y - 0.4, min.y - 0.05)
+            {
+                min.y
+            } else {
+                ground_at(mid.x, mid.z)
+            },
             run: None,
             hidden: rock::hidden_edges(min, max, i, &all),
             own_value: true,

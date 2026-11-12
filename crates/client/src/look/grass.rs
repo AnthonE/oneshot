@@ -294,6 +294,10 @@ const ISLE_DRIFT: (f32, f32) = (0.45, 0.72);
 /// so tufts and stones stand on ground that shows and are not two scatters
 /// on clean snow.
 const COLD_DRY: (f32, f32) = (0.006, 0.34);
+/// A pressure ridge: ground under this much over the ice with the sheet
+/// this far to both sides of it.
+const RIDGE_UNDER_M: f32 = 2.2;
+const RIDGE_ACROSS_M: f32 = 7.0;
 const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 /// Where a valley's snow lies thin. On what stands proud of the ground
 /// `THIN_REACH_M` round it (a crown, a shoulder, a spur's crest: from
@@ -302,15 +306,23 @@ const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
 /// (from `THIN_OVER_ICE_M.0` over it, whole there, to none `.1` higher,
 /// where the sheet is within `THIN_SHORE_M`): a shore and an islet are
 /// ground and stones, the wind's doing. In patches (`THIN_PATCH` of it
-/// anywhere, all of it where the gather noise runs high); a lane's floor
-/// and a forecourt lie flat and low and stay clean.
+/// anywhere, all of it where the gather noise runs high; a shore in
+/// reaches, `SHORE_FLOOR` of it between them, by a broader noise cut at
+/// `SHORE_REACH`); a lane's floor and a forecourt lie flat and low and
+/// stay clean, and so does the snow against a face (ground standing or
+/// falling steeper than rock holds within `FACE_CLEAR_M`: `FACE_THIN` of
+/// it there), where a cap meets its lip and a bank lies at a foot.
 const THIN_REACH_M: f32 = 10.0;
-const THIN_PROUD_M: (f32, f32) = (0.6, 2.2);
+const THIN_PROUD_M: (f32, f32) = (0.45, 1.8);
 const THIN_SLOPE: (f32, f32) = (0.18, 0.4);
 const THIN_FLANK: f32 = 0.6;
 const THIN_OVER_ICE_M: (f32, f32) = (0.05, 1.6);
 const THIN_SHORE_M: f32 = 12.0;
 const THIN_PATCH: f32 = 0.55;
+const SHORE_REACH: (f32, f32) = (0.4, 0.6);
+const SHORE_FLOOR: f32 = 0.2;
+const FACE_CLEAR_M: f32 = 5.0;
+const FACE_THIN: f32 = 0.25;
 
 /// How much of a snowed valley's ground shows through at (x, z), 0..1: the
 /// meadow's patch noise read elsewhere and broader. Its tufts and its
@@ -364,14 +376,21 @@ pub(crate) fn snow_thin(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
         0.0
     };
     let patch = THIN_PATCH + (1.0 - THIN_PATCH) * snow_gather(x, z);
-    (proud.max(flank) * patch).max(shore * (0.55 + 0.45 * patch))
+    // A shore is thin in reaches, bare of it between: no hem round the ice.
+    let reach = step(SHORE_REACH.0, SHORE_REACH.1, self::patch(x * 0.3 + 11.0, z * 0.3 - 7.0));
+    // Against a face the snow lies deep: its cap to the lip, a bank at its foot.
+    let face = ring
+        .iter()
+        .any(|(a, b)| (at(a * FACE_CLEAR_M, b * FACE_CLEAR_M) - y).abs() > FACE_CLEAR_M * 1.1);
+    let open = if face { FACE_THIN } else { 1.0 };
+    (proud.max(flank) * patch * open).max(shore * (SHORE_FLOOR + (1.0 - SHORE_FLOOR) * reach))
 }
 
 /// How much of the ground shows through a valley's snow at (x, z), 0..1:
 /// where [`snow_thin`] passes from `OPEN.0` to `.1`, as the ground's paint
 /// opens its windows (`ground.wgsl`'s scour, a noise against the same
 /// lane), so cover stands on ground that shows and not on clean snow.
-const OPEN: (f32, f32) = (0.3, 0.75);
+const OPEN: (f32, f32) = (0.45, 0.85);
 
 pub(crate) fn snow_open(t: &TerrainDef, x: f32, z: f32, ice: f32) -> f32 {
     let k = ((snow_thin(t, x, z, ice) - OPEN.0) / (OPEN.1 - OPEN.0)).clamp(0.0, 1.0);
@@ -391,6 +410,18 @@ fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> O
     if cold {
         // Down to the ice's edge (no swash to keep clear of), none on the sheet.
         if slope > 0.55 || y < sea + THIN_OVER_ICE_M.0 {
+            return None;
+        }
+        // None on a ridge of the ice's own (the sheet close on both sides
+        // of low ground): broken ice grows nothing.
+        let ice_at = |dx: f32, dz: f32| ground(t, x + dx, z + dz).is_some_and(|h| h < sea + THIN_OVER_ICE_M.0);
+        let r = RIDGE_ACROSS_M;
+        if y < sea + RIDGE_UNDER_M
+            && ((ice_at(r, 0.0) && ice_at(-r, 0.0))
+                || (ice_at(0.0, r) && ice_at(0.0, -r))
+                || (ice_at(r, r) && ice_at(-r, -r))
+                || (ice_at(r, -r) && ice_at(-r, r)))
+        {
             return None;
         }
         return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_open(t, x, z, sea)));
