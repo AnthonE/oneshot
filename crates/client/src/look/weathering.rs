@@ -54,6 +54,11 @@ pub struct WeatherParams {
     pub shaft_lo: Vec4,
     pub shaft_hi: Vec4,
     pub shaft_tint: Vec4,
+    /// The hall the block stands in or bounds ([`Block::hall`]), its box
+    /// let out [`HALL_OUT_M`] so a wall's inner face is well inside it;
+    /// `hall_hi.w` 0: none.
+    pub hall_lo: Vec4,
+    pub hall_hi: Vec4,
 }
 
 /// A block's shaft lanes, to compare with `shafts::WebShafts`.
@@ -105,6 +110,9 @@ pub struct Block {
     /// Whether its top is open to the sky (nothing built over its middle):
     /// where snow settles on a map that snows.
     pub open: bool,
+    /// The hall it stands in or bounds, as a box (lo, hi), on a map whose
+    /// halls the sky does not light (a snowed valley's hangars).
+    pub hall: Option<(Vec3, Vec3)>,
 }
 
 /// The ground's samples along a long block ([`Block::run`]).
@@ -171,6 +179,13 @@ const BLOCK_VALUE: f32 = 0.07;
 const GRIME_REACH_M: f32 = 1.3;
 /// Under a roof there is less dust and no weather to carry it off.
 const ROOFED_DUST: f32 = 0.6;
+/// How far a hall's box is let out in the plan: past its walls' inner
+/// faces by more than the shader's fade, short of the thinnest wall's far
+/// face (a facade is a metre and a half through).
+const HALL_OUT_M: f32 = 0.75;
+/// What grime at a block's foot multiplies by where snow lies against it:
+/// wet and cold, not the canyon's soil.
+const COLD_GRIME: [f32; 3] = [0.56, 0.6, 0.66];
 
 /// How a surface weathers.
 #[derive(Clone, Copy, Debug)]
@@ -287,14 +302,30 @@ pub fn params(surface: Surface, b: &Block, dusty: bool, roofed: bool, snowy: boo
                 Some((Run::Z, _)) => 2.0,
             },
         ),
-        grime_tint: Vec4::new(SOIL[0], SOIL[1], SOIL[2], 0.0),
+        grime_tint: if snowy {
+            Vec4::new(COLD_GRIME[0], COLD_GRIME[1], COLD_GRIME[2], 0.0)
+        } else {
+            Vec4::new(SOIL[0], SOIL[1], SOIL[2], 0.0)
+        },
         wear: Vec4::new(dust, wear, width, lift),
         dust_tint: Vec4::new(dust_rgb[0], dust_rgb[1], dust_rgb[2], rough),
         centre: b.mid.extend(shape),
         half: b.half.extend(f32::from(b.hidden)),
-        turn: Vec4::new(b.turn.0, b.turn.1, if seal(b) { 1.0 } else { 0.0 }, 0.0),
+        // A snowed valley's stone is its bases' cast concrete: in panels.
+        turn: Vec4::new(
+            b.turn.0,
+            b.turn.1,
+            if seal(b) { 1.0 } else { 0.0 },
+            if snowy && surface == Surface::Stone { 2.0 } else { 0.0 },
+        ),
         ground_run: b.run.map_or([Vec4::splat(b.ground); 2], |(_, g)| {
             [Vec4::new(g[0], g[1], g[2], g[3]), Vec4::new(g[4], g[5], g[6], g[7])]
+        }),
+        hall_lo: b.hall.map_or(Vec4::ZERO, |(lo, _)| {
+            Vec4::new(lo.x - HALL_OUT_M, lo.y, lo.z - HALL_OUT_M, 0.0)
+        }),
+        hall_hi: b.hall.map_or(Vec4::ZERO, |(_, hi)| {
+            Vec4::new(hi.x + HALL_OUT_M, hi.y, hi.z + HALL_OUT_M, 1.0)
         }),
         // Painted in by `shafts::paint_web` where WebGL2 marches.
         ..default()
@@ -358,6 +389,7 @@ mod tests {
             hidden: 0,
             own_value: true,
             open: true,
+            hall: None,
         }
     }
 

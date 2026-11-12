@@ -68,14 +68,27 @@ const AIR: [f32; 3] = [0.50, 0.62, 0.80];
 /// the valley's floor the wall's crest stands 30° up, and what is behind
 /// it shows only what it has over that.
 const SNOW_EDGE_Y: f32 = 92.0;
-const SNOW_RISE_M: f32 = 300.0;
-const SNOW_RISE_OVER_M: (f32, f32) = (10.0, 480.0);
+const SNOW_RISE_M: f32 = 230.0;
+const SNOW_RISE_OVER_M: (f32, f32) = (10.0, 560.0);
 const SNOW_RANGE_M: f32 = 420.0;
-const SNOW_PEAK_H: f32 = 190.0;
-const SNOW_PEAK_M: f32 = 230.0;
+const SNOW_PEAK_H: f32 = 170.0;
+const SNOW_PEAK_M: f32 = 300.0;
+/// Its rings: a range's ridges are a few hundred metres apart, and rings as
+/// far apart as the mesas' drew them as saddles and its summits as needles.
+const SNOW_RINGS_M: [f32; 18] = [
+    -6.0, 15.0, 40.0, 70.0, 105.0, 145.0, 190.0, 240.0, 300.0, 370.0, 450.0, 540.0, 640.0, 760.0, 900.0, 1100.0,
+    1350.0, 1700.0,
+];
+/// Snow lies on it where the valley's own walls hold it (the normal's y,
+/// from none to whole: 57° to 46°); the mesas' scrub rule (37°) left a
+/// range bare rock. Its rock shows in beds every `SNOW_BED_M` up. The
+/// valley's mist is over it already: its own air is `SNOW_HAZE`.
+const SNOW_LIES: (f32, f32) = (0.55, 0.70);
+const SNOW_BED_M: f32 = 38.0;
+const SNOW_HAZE: f32 = 0.3;
 const SNOW_ROCK: [f32; 3] = [0.10, 0.11, 0.14];
 const SNOW_ROCK_PALE: [f32; 3] = [0.20, 0.22, 0.27];
-const SNOW: [f32; 3] = [0.80, 0.85, 0.93];
+const SNOW: [f32; 3] = [0.88, 0.91, 0.96];
 const SNOW_AIR: [f32; 3] = [0.70, 0.78, 0.90];
 const HAZE: f32 = 0.62;
 const HAZE_M: f32 = 1500.0;
@@ -140,7 +153,8 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> 
     };
     let mid = (lo + hi) * 0.5;
     let half = (hi - lo) * 0.5;
-    let rings = RINGS_M.len();
+    let ring_at: &[f32] = if snow { &SNOW_RINGS_M } else { &RINGS_M };
+    let rings = ring_at.len();
     let mut pos: Vec<Vec3> = Vec::with_capacity(SPOKES * rings);
     let mut outs = Vec::with_capacity(SPOKES * rings);
     for s in 0..SPOKES {
@@ -148,7 +162,7 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> 
         let dir = Vec2::new(a.cos(), a.sin());
         // Where this spoke leaves the rectangle.
         let edge = (half.x / dir.x.abs().max(1e-4)).min(half.y / dir.y.abs().max(1e-4));
-        for &out in &RINGS_M {
+        for &out in ring_at {
             let p = mid + dir * (edge + out);
             pos.push(Vec3::new(
                 p.x,
@@ -176,13 +190,24 @@ pub fn mesh(lo: Vec2, hi: Vec2, sea_x: f32, sea: f32, seed: u32, snow: bool) -> 
             let (p, n) = (pos[i], nor[i]);
             // Scrub on what lies flat, rock on what stands, a pale bed
             // every sixty metres up.
-            let flat = smooth(0.80, 0.94, n.y);
-            let bed = smooth(0.55, 0.9, noise(p.y / 60.0, (p.x + p.z) / 900.0, 0x0bed));
+            let (flat, bed, air) = if snow {
+                (
+                    smooth(SNOW_LIES.0, SNOW_LIES.1, n.y),
+                    smooth(0.45, 0.75, noise(p.y / SNOW_BED_M, (p.x + p.z) / 900.0, 0x0bed)),
+                    SNOW_HAZE,
+                )
+            } else {
+                (
+                    smooth(0.80, 0.94, n.y),
+                    smooth(0.55, 0.9, noise(p.y / 60.0, (p.x + p.z) / 900.0, 0x0bed)),
+                    HAZE,
+                )
+            };
             let mut c = [0.0f32; 3];
             for k in 0..3 {
                 let rock = rock_c[k] + (pale_c[k] - rock_c[k]) * bed;
                 let ground = rock + (flat_c[k] - rock) * flat;
-                let haze = HAZE * smooth(0.0, HAZE_M, outs[i]);
+                let haze = air * smooth(0.0, HAZE_M, outs[i]);
                 c[k] = ground + (air_c[k] - ground) * haze;
             }
             [c[0], c[1], c[2], 1.0]

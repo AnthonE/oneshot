@@ -81,9 +81,8 @@ const FLOWER_CLUMP_R: f32 = 0.3;
 const FLOWER_SHARE: f32 = 0.42;
 const FLOWER_DRIFT: (f32, f32) = (0.6, 0.74);
 /// A valley's stones through its snow: this share of them anywhere, all of
-/// them where the patch noise passes from `SNOW_DRIFT.0` to `.1`.
+/// them where its ground shows (`grass::snow_gather`, its tufts' own rule).
 const SNOW_SCATTER: f32 = 0.06;
-const SNOW_DRIFT: (f32, f32) = (0.5, 0.68);
 /// Flowers want turf: none where the grass's share of the ground is under
 /// this.
 const FLOWER_TURF: f32 = 0.45;
@@ -177,9 +176,9 @@ const ISLE_SAND: Grows = Grows {
 /// it and a dry plant here and there, gathered in drifts (`snow_drift`) and
 /// thin between, so a lane stays clean snow and a hollow is peppered.
 const SNOW_FIELD: Grows = Grows {
-    pebble: 0.2,
-    stone: 0.07,
-    twig: 0.01,
+    pebble: 0.3,
+    stone: 0.16,
+    twig: 0.012,
     plant: 0.03,
 };
 
@@ -507,8 +506,7 @@ fn dry_plant(s: &mut Soup, at: Vec3, seed: u32) {
 /// everywhere, and drifts of them where the meadow's patch noise, read
 /// elsewhere and broader, runs high.
 fn snow_drift(x: f32, z: f32) -> f32 {
-    let n = grass::patch(x * 0.45 - 53.0, z * 0.45 + 29.0);
-    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * ((n - SNOW_DRIFT.0) / (SNOW_DRIFT.1 - SNOW_DRIFT.0)).clamp(0.0, 1.0)
+    SNOW_SCATTER + (1.0 - SNOW_SCATTER) * grass::snow_gather(x, z)
 }
 
 pub(crate) fn drift(x: f32, z: f32) -> f32 {

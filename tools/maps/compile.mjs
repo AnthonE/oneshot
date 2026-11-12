@@ -868,6 +868,10 @@ function canyon(c, sea, fail) {
  *             fading in from `from` over `over` m past the foot
  *   crags     { h, wave, from, over, fine? }: a ridged relief on the
  *             faces; `fine` the share of it at 0.4 of the wave (0.35)
+ *   ribs      { m, wave, from, over }?: buttresses and couloirs: the face
+ *             read ±m further past its foot along ridges `wave` m apart,
+ *             taken on from `from` over `over` m (more than 1.5 m, so the
+ *             wall never dips; its foot and the floor do not move)
  *   massifs   [{ from: [x, z], to: [x, z], crest: [[u, y], ...],
  *             half: [[u, w], ...], flank?: [a, b], crags?: k, mirror }]: a
  *             ridge along a line, its crest's height and its half-width by
@@ -913,6 +917,10 @@ function alpine(a, mirrors, fail) {
   const [crH, crWave, crFrom, crOver] = [num(a.crags, 'h', 'crags.h'), num(a.crags, 'wave', 'crags.wave'), num(a.crags, 'from', 'crags.from'), num(a.crags, 'over', 'crags.over')];
   const crFine = a.crags.fine ?? 0.35;
   if (!(crFine >= 0 && crFine <= 1)) fail('alpine.crags.fine: 0 to 1');
+  const rb = a.ribs;
+  const [rbM, rbWave, rbFrom, rbOver] = rb ? [num(rb, 'm', 'ribs.m'), num(rb, 'wave', 'ribs.wave'), num(rb, 'from', 'ribs.from'), num(rb, 'over', 'ribs.over')] : [0, 1, 0, 1];
+  // The wall must still rise all the way in: a rib taken on faster than a metre a metre would cut a trench at its foot.
+  if (rb && !(rbM >= 0 && rbWave > 0 && rbFrom >= 0 && rbOver > 1.5 * rbM)) fail('alpine.ribs: m and from at least 0, wave over 0, over more than 1.5 m');
   const massifs = [];
   for (const [k, m] of (a.massifs || []).entries()) {
     const what = `alpine.massifs ${k}`;
@@ -965,9 +973,18 @@ function alpine(a, mirrors, fail) {
     const fine = crWave * 0.4;
     return amp(x) * crH * ((1 - crFine) * ridged(ax / crWave, az / crWave, K(6)) + crFine * ridged(bx / fine, bz / fine, K(8)));
   };
-  const wall = (x, z, e) => {
-    if (e < -screeW) return 0;
-    if (e < 0) return screeH * fade((e + screeW) / screeW);
+  // Ribs: the face read further in or further out along the wall, so buttresses stand out of it and couloirs are let into it.
+  const rib = (x, z, e) => {
+    if (!rbM) return 0;
+    const [xw0, zw] = warp(x, z);
+    const xw = nx(xw0);
+    const [ax, az] = [0.6 * xw - 0.8 * zw, 0.8 * xw + 0.6 * zw];
+    return amp(x) * rbM * (2 * ridged(ax / rbWave, az / rbWave, K(9)) - 1) * fade(clamp01((e - rbFrom) / rbOver));
+  };
+  const wall = (x, z, e0) => {
+    if (e0 < -screeW) return 0;
+    if (e0 < 0) return screeH * fade((e0 + screeW) / screeW);
+    const e = e0 + rib(x, z, e0);
     const h = e < cliffTop ? cliff(e) : topH + slope * (e - cliffTop);
     const [px, pz] = [0.8 * nx(x) + 0.6 * z, 0.8 * z - 0.6 * nx(x)];
     return h + crag(x, z) * fade(clamp01((e - crFrom) / crOver)) + amp(x) * pkH * fbm(px, pz, K(7), 1 / pkWave, 3) * fade(clamp01((e - pkFrom) / pkOver));

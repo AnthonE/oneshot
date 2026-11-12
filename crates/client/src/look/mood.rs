@@ -474,8 +474,10 @@ pub const BLIZZARD: Mood = Mood {
 /// the light, and red's facade is lit where blue's is in shade: the two
 /// lanes and the two ends each their own. Broken cloud whose shadows cross
 /// the snow, a few flakes still coming down, and a mist that takes half of
-/// what is 300 m off, so the far end of a lane pales into the air and a
-/// rifle doesn't own the valley from one end. The exposure is a hair
+/// what is 460 m off (the valley's length; at half of that at 300 m the
+/// far wall and the range behind it were one grey), so the far end of a
+/// lane pales into the air and a rifle doesn't own the valley from one end.
+/// The sky's fill is held down so the shade is a clear step under the sun. The exposure is a hair
 /// under noon's: closed a step for the snow, the sunlit floor was a mid
 /// grey and nothing in the frame was white. The sun is warm on the snow
 /// and the shade blue; the grade only leans cold.
@@ -486,11 +488,11 @@ pub const FROST: Mood = Mood {
     sun_rgb: [1.0, 0.95, 0.87],
     sun: 1.0,
     light: 1.0,
-    fill: 0.8,
+    fill: 0.6,
     ev100: 14.2,
     cover: 0.42,
     dark: 0.1,
-    mist: 0.0022,
+    mist: 0.0015,
     rain: 0.12,
     dust: 0.0,
     wet: 0.0,

@@ -43,7 +43,8 @@ struct Weather {
     half: vec4<f32>,
     // x, y: cos and sin of its turn about y (local +x is (c, 0, s)); z 1:
     // a plaza's round slab, its top carved as a seal (`weathering::seal`);
-    // w 1: cut stone, in courses with joints (`Surface::Stone`).
+    // w 1: cut stone, in courses with joints (`Surface::Stone`); 2: poured
+    // concrete, in its formwork's panels (a snowed valley's).
     turn: vec4<f32>,
     // The ground under a long block at eight points end to end along the
     // axis `grime.w` names (`weathering::Block::run`).
@@ -53,6 +54,10 @@ struct Weather {
     shaft_lo: vec4<f32>,
     shaft_hi: vec4<f32>,
     shaft_tint: vec4<f32>,
+    // The hall this block stands in or bounds (a snowed valley's hangar):
+    // its box, lo and hi; `hall_hi.w` 0: none.
+    hall_lo: vec4<f32>,
+    hall_hi: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> weather: Weather;
@@ -80,6 +85,72 @@ const COURSE_LEN: f32 = 1.3;
 const JOINT_W: f32 = 0.014;
 const JOINT_DARK: f32 = 0.58;
 const COURSE_VALUE: f32 = 0.09;
+
+// Poured concrete: its formwork's panels (height and length m, one over
+// the next, unstaggered), the lip between two pours (half-width m), how far
+// a panel's own value strays, and its tie holes: four a panel, their radius
+// m and how dark. A floor is poured in square bays two panels long, with no
+// holes.
+const POUR: vec2<f32> = vec2<f32>(1.2, 2.4);
+const POUR_JOINT_W: f32 = 0.022;
+const POUR_VALUE: f32 = 0.11;
+const TIE_R: f32 = 0.035;
+const TIE_DARK: f32 = 0.4;
+// Its stains hang from its top edge, strongest in its first `HANG_M.x`
+// metres and gone by `.y` more where they run longest.
+const HANG_M: vec2<f32> = vec2<f32>(1.0, 6.0);
+// In a hall the sky's fill is this much of itself (the lamps are its
+// light), fading in over `HALL_EDGE_M` inside its box.
+const HALL_FILL: f32 = 0.38;
+const HALL_EDGE_M: f32 = 0.4;
+
+// Poured concrete at `p`: the joint (1 in it), the panel's own value and
+// a tie hole (1 in it), in the block's own frame as `courses`.
+fn pours(p: vec3<f32>, ng: vec3<f32>, aa: f32) -> vec3<f32> {
+    let l = local(p) + weather.half.xyz;
+    let c = weather.turn.x;
+    let s = weather.turn.y;
+    let nl = vec3<f32>(ng.x * c + ng.z * s, ng.y, ng.z * c - ng.x * s);
+    var u = l.x;
+    var v = l.y;
+    var size = vec2<f32>(POUR.y, POUR.x);
+    var face = 0.0;
+    var holes = 1.0;
+    if abs(nl.y) > 0.7 {
+        v = l.z;
+        size = vec2<f32>(POUR.y * 2.0);
+        face = 3.0;
+        holes = 0.0;
+    } else if abs(nl.x) > abs(nl.z) {
+        u = l.z;
+        face = select(1.0, 2.0, nl.x < 0.0);
+    } else {
+        face = select(4.0, 5.0, nl.z < 0.0);
+    }
+    let q = vec2<f32>(u, v) / size;
+    let g = (fract(q) - 0.5) * size;
+    let edge = min(size.x * 0.5 - abs(g.x), size.y * 0.5 - abs(g.y));
+    var joint = 1.0 - smoothstep(POUR_JOINT_W, POUR_JOINT_W + aa, edge);
+    joint *= clamp(POUR_JOINT_W / max(aa, 1.0e-4) * 1.5 - 0.3, 0.0, 1.0);
+    // A hole a quarter of the way in from each corner.
+    let h = length(abs(g) - size * 0.25);
+    var hole = (1.0 - smoothstep(TIE_R, TIE_R + aa, h)) * holes;
+    hole *= clamp(TIE_R / max(aa, 1.0e-4) * 1.5 - 0.3, 0.0, 1.0);
+    let cell = vec2<i32>(floor(q));
+    let value = 1.0 + POUR_VALUE * (hash3(vec3<i32>(cell.x + 17, cell.y * 3 + 5, i32(face) * 11)) * 2.0 - 1.0);
+    return vec3<f32>(joint, value, hole);
+}
+
+// How far inside its hall `p` is (0 outside, 1 `HALL_EDGE_M` in), read a
+// hand off the face so a wall's inner face is inside.
+fn in_hall(p: vec3<f32>, ng: vec3<f32>) -> f32 {
+    if weather.hall_hi.w < 0.5 {
+        return 0.0;
+    }
+    let q = p + ng * 0.15;
+    let d = min(q - weather.hall_lo.xyz, weather.hall_hi.xyz - q);
+    return smoothstep(0.0, HALL_EDGE_M, min(d.x, d.z)) * step(0.0, d.y);
+}
 
 // Cut stone at `p`: the joint (1 in it) and the block's own value, read
 // in the block's own frame so the courses run level along every face and
@@ -262,7 +333,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // 1a · Cut stone: courses of blocks, each its own value, a dark joint
     // between them. Shading only: the faces stay the sim's planes. A seal's
     // top keeps its own carving.
-    if weather.turn.w > 0.5 && !(weather.turn.z > 0.5 && ng.y > 0.9) {
+    if weather.turn.w > 1.5 {
+        let ps = pours(p, ng, max(px, 0.002));
+        c *= ps.y;
+        c *= mix(1.0, JOINT_DARK, ps.x);
+        c *= mix(1.0, TIE_DARK, ps.z);
+        rough = mix(rough, 1.0, max(ps.x, ps.z) * 0.5);
+    } else if weather.turn.w > 0.5 && !(weather.turn.z > 0.5 && ng.y > 0.9) {
         let cs = courses(p, ng, max(px, 0.002));
         c *= cs.y;
         c *= mix(1.0, JOINT_DARK, cs.x);
@@ -325,8 +402,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let s2 = mix(0.5, vnoise(vec3<f32>(across * f * 2.7 + 3.0, p.y * 0.35, 1.7)), band(px, f * 2.7));
     // A faded streak field sits at its mean, under the threshold: a far
     // wall keeps its value and loses the stripes rather than greying.
-    let streak = smoothstep(0.38, 0.78, s1 * 0.7 + s2 * 0.3) * side * weather.streak.x;
-    c = mix(c, c * weather.streak_tint.rgb, streak);
+    var streak = smoothstep(0.38, 0.78, s1 * 0.7 + s2 * 0.3) * side * weather.streak.x;
+    // No rain runs down a wall under a roof; a poured wall's stains hang
+    // from its top edge, each its own length.
+    let hall = in_hall(p, ng);
+    streak *= 1.0 - hall;
+    if weather.turn.w > 1.5 {
+        let hang = weather.centre.y + weather.half.y - p.y;
+        streak *= 1.6 * (1.0 - smoothstep(HANG_M.x, HANG_M.x + HANG_M.y * s1, hang));
+    }
+    c = mix(c, c * weather.streak_tint.rgb, clamp(streak, 0.0, 1.0));
 
     // 4 · Wear along the edges: chipped concrete and rock, paint worn to
     // the metal. Ragged, and gone where the band is thinner than a pixel.
@@ -342,13 +427,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // pixel wide at range would sparkle.
     let up = smoothstep(0.82, 0.96, ng.y);
     let patches = smoothstep(0.42, 0.66, fbm(p + vec3<f32>(13.0), 0.6, px));
-    let dust = clamp(up * patches * weather.wear.x, 0.0, 1.0);
+    let dust = clamp(up * patches * weather.wear.x * (1.0 - 0.7 * hall), 0.0, 1.0);
     let grain = 0.75 + 0.5 * vnoise_aa(p, 9.0, px);
     c = mix(c, weather.dust_tint.rgb * grain, dust);
     rough = mix(rough, 1.0, dust * 0.8);
 
     pbr_input.material.base_color = vec4<f32>(c, pbr_input.material.base_color.a);
     pbr_input.material.perceptual_roughness = rough;
+    // A hall is lit by its lamps: the sky's fill does not come through its roof.
+    let fill = mix(1.0, HALL_FILL, hall);
+    pbr_input.diffuse_occlusion *= fill;
+    pbr_input.specular_occlusion *= fill;
 
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {

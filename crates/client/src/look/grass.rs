@@ -75,6 +75,10 @@ pub const DRAW_M: f32 = 46.0;
 /// has taken it to its own grey (luma ~0.108): Gates' golden straw. A green
 /// one's photograph keeps its colour, times this and the meadow's patches.
 const STRAW: [f32; 3] = [3.1, 2.3, 1.0];
+/// A snowed valley's (`cold`): what stands through snow is last year's,
+/// dun and no brighter than a snag's bark. Golden on white read orange,
+/// the most saturated thing in the frame.
+const STRAW_COLD: [f32; 3] = [1.75, 1.5, 1.05];
 const GREEN: [f32; 3] = [0.95, 1.0, 0.85];
 /// How far a grass block's corner is from its centre: what `cull` reaches
 /// past the cover's distance.
@@ -284,18 +288,35 @@ const DUNE_ABOVE_SEA_M: f32 = 1.3;
 /// dunes read as grown over in places and bare between.
 const ISLE_DRY: (f32, f32) = (0.03, 0.3);
 const ISLE_DRIFT: (f32, f32) = (0.45, 0.72);
+/// A snowed valley's (`cold`): next to none on clean snow, and stands of
+/// them where its snow lies thin and its stones show ([`snow_gather`]), so
+/// tufts and stones are one patch of ground and not two scatters.
+const COLD_DRY: (f32, f32) = (0.008, 0.26);
+const SNOW_GATHER: (f32, f32) = (0.5, 0.68);
+
+/// How much of a snowed valley's ground shows through at (x, z), 0..1: the
+/// meadow's patch noise read elsewhere and broader. Its tufts and its
+/// stones (`clutter.rs`) both gather by it.
+pub(crate) fn snow_gather(x: f32, z: f32) -> f32 {
+    let n = patch(x * 0.45 - 53.0, z * 0.45 + 29.0);
+    ((n - SNOW_GATHER.0) / (SNOW_GATHER.1 - SNOW_GATHER.0)).clamp(0.0, 1.0)
+}
 
 /// How much grass grows at (x, z): (green, dry), each 0..1. The splat's own
 /// rule (level.rs): grass up the hills, none on steep rock or in the creek,
 /// in patches; dry tufts alone under the floor, above the sea at `sea`. An
-/// island (`isle`) grows dry tufts alone, in drifts ([`ISLE_DRY`]).
-fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool) -> Option<(f32, f32)> {
+/// island (`isle`) grows dry tufts alone, in drifts ([`ISLE_DRY`]); a snowed
+/// valley (`cold`, with `isle`) where its ground shows ([`COLD_DRY`]).
+fn growth(t: &TerrainDef, x: f32, z: f32, sea: f32, isle: bool, cold: bool) -> Option<(f32, f32)> {
     let y = ground(t, x, z)?;
     let dx = ground(t, x + 0.5, z)? - ground(t, x - 0.5, z)?;
     let dz = ground(t, x, z + 0.5)? - ground(t, x, z - 0.5)?;
     let slope = (dx * dx + dz * dz).sqrt();
     if slope > 0.55 || y < sea + DUNE_ABOVE_SEA_M {
         return None;
+    }
+    if cold {
+        return Some((0.0, COLD_DRY.0 + (COLD_DRY.1 - COLD_DRY.0) * snow_gather(x, z)));
     }
     if isle {
         let drift = ((patch(x, z) - ISLE_DRIFT.0) / (ISLE_DRIFT.1 - ISLE_DRIFT.0)).clamp(0.0, 1.0);
@@ -412,7 +433,8 @@ impl Soup {
 /// The blocks of grass for a map's terrain: a mesh per block and density
 /// layer, its centre and its layer. Nothing grows where `clear` says, nor
 /// down by the sea at `sea` (`NEG_INFINITY`: none); an island (`isle`)
-/// grows dry tufts alone.
+/// grows dry tufts alone, a snowed valley (`cold`) its own dun ones.
+#[allow(clippy::too_many_arguments)]
 pub fn blocks(
     t: &TerrainDef,
     lo: (f32, f32),
@@ -421,6 +443,7 @@ pub fn blocks(
     clear: &Clear,
     sea: f32,
     isle: bool,
+    cold: bool,
 ) -> Vec<(Mesh, Vec2, u8)> {
     let mut out = Vec::new();
     let mut bz = lo.1;
@@ -437,7 +460,7 @@ pub fn blocks(
                     if x > hi.0 || z > hi.1 || clear.blocked(Vec2::new(x, z)) {
                         continue;
                     }
-                    let Some((green, dry)) = growth(t, x, z, sea, isle) else {
+                    let Some((green, dry)) = growth(t, x, z, sea, isle, cold) else {
                         continue;
                     };
                     let r = hash01(cell, 3);
@@ -445,7 +468,7 @@ pub fn blocks(
                         let p = patch_tint(x, z);
                         ([GREEN[0] * p[0], GREEN[1] * p[1], GREEN[2] * p[2]], 1.0, 0.0)
                     } else if r < green * 0.9 + dry {
-                        (STRAW, 0.8, 1.0)
+                        (if cold { STRAW_COLD } else { STRAW }, 0.8, 1.0)
                     } else {
                         continue;
                     };
@@ -603,8 +626,9 @@ mod tests {
             &Clear::default(),
             f32::NEG_INFINITY,
             false,
+            false,
         );
-        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c, f32::NEG_INFINITY, false);
+        let cleared = blocks(&t, (-8.0, -8.0), (8.0, 8.0), 7, &c, f32::NEG_INFINITY, false, false);
         let near = |b: &[(Mesh, Vec2, u8)]| {
             b.iter()
                 .flat_map(|(m, ..)| {

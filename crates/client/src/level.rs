@@ -741,7 +741,7 @@ const ROCK_SLOPE: (f32, f32) = (0.45, 0.9);
 /// as board. Its brown taken out and the whole lifted to a pale cool grey:
 /// darker than the snow, a clear step paler than the rock it stands in,
 /// so a base is found without its door's colour.
-const ALPINE_CONCRETE: [f32; 3] = [1.0, 1.2, 1.5];
+const ALPINE_CONCRETE: [f32; 3] = [1.3, 1.5, 1.8];
 /// The same under a valley's snow (`Land::Alpine`): the vertices say rock
 /// only where the per-pixel veto (`look::ground::SNOW_CLIFF_TAN`, from 45°)
 /// already has, so the snow's edge is the pixel's, wandering with its
@@ -943,6 +943,116 @@ fn open_top(map: &sim::map::Map, mid: Vec3, top: f32) -> bool {
     !map.occupied(mid.x, mid.z, 0.3, top + 0.2, top + 200.0)
 }
 
+/// The halls of a map whose sky does not light them (a snowed valley's
+/// hangars; `on`): each found once, as a box.
+struct Halls {
+    on: bool,
+    found: Vec<(Vec3, Vec3)>,
+}
+
+/// A hall is at least this much floor (a nook under an overhang is not
+/// one), searched by steps of `HALL_STEP_M` out to `HALL_REACH_M`.
+const HALL_MIN_M2: f32 = 80.0;
+const HALL_STEP_M: f32 = 1.0;
+const HALL_REACH_M: f32 = 60.0;
+
+impl Halls {
+    /// The hall a block (`mid`, `half`) stands in or bounds
+    /// (`weathering::Block::hall`): the first found a hand off one of its
+    /// faces, at its middle's height, near its top or near its foot.
+    fn of(&mut self, map: &sim::map::Map, mid: Vec3, half: Vec3) -> Option<(Vec3, Vec3)> {
+        if !self.on {
+            return None;
+        }
+        const OFF: f32 = 0.6;
+        let side = [mid.y, mid.y + half.y - 2.0, mid.y - half.y + 1.0];
+        let mut at = vec![
+            Vec3::new(mid.x, mid.y + half.y + OFF, mid.z),
+            Vec3::new(mid.x, mid.y - half.y - OFF, mid.z),
+        ];
+        for y in side {
+            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                at.push(Vec3::new(mid.x + dx * (half.x + OFF), y, mid.z + dz * (half.z + OFF)));
+            }
+        }
+        for p in at {
+            if let Some(h) = self
+                .found
+                .iter()
+                .find(|(lo, hi)| p.cmpgt(*lo).all() && p.cmplt(*hi).all())
+            {
+                return Some(*h);
+            }
+            if !hall_open(map, p.x, p.y, p.z) {
+                continue;
+            }
+            if let Some(h) = hall_box(map, p) {
+                self.found.push(h);
+                return Some(h);
+            }
+        }
+        None
+    }
+}
+
+/// Whether (x, y, z) is in the air under something built.
+fn hall_open(map: &sim::map::Map, x: f32, y: f32, z: f32) -> bool {
+    map.ground(x, z) < y && !map.occupied(x, z, 0.1, y - 0.1, y + 0.1) && crate::look::rain::covered(map, x, y, z)
+}
+
+/// The hall round `p`, floor to roof: every place joined to it under
+/// cover at its height. A place counts toward the box only if it is open
+/// just under the roof too, so a door's own depth (under its lintel) is
+/// the wall's and not the hall's, and the box ends at the walls' inner
+/// faces, to a step.
+fn hall_box(map: &sim::map::Map, p: Vec3) -> Option<(Vec3, Vec3)> {
+    use sim::geom::V3;
+    let up = map.ray(
+        V3::new(p.x, p.y, p.z),
+        V3::new(0.0, 1.0, 0.0),
+        crate::look::rain::SHELTER_UP_M,
+    );
+    let down = map.ray(V3::new(p.x, p.y, p.z), V3::new(0.0, -1.0, 0.0), 30.0);
+    let under = p.y + up - 0.6;
+    let n = (HALL_REACH_M / HALL_STEP_M) as i32;
+    let side = (2 * n + 1) as usize;
+    let mut seen = vec![false; side * side];
+    seen[n as usize * side + n as usize] = true;
+    let mut queue = vec![(0i32, 0i32)];
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    let mut cells = 0;
+    while let Some((i, j)) = queue.pop() {
+        let (x, z) = (p.x + i as f32 * HALL_STEP_M, p.z + j as f32 * HALL_STEP_M);
+        if under <= p.y || !map.occupied(x, z, 0.1, under - 0.1, under + 0.1) {
+            lo = lo.min(Vec2::new(x, z));
+            hi = hi.max(Vec2::new(x, z));
+            cells += 1;
+        }
+        for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (a, b) = (i + di, j + dj);
+            if a.abs() > n || b.abs() > n {
+                continue;
+            }
+            let k = (b + n) as usize * side + (a + n) as usize;
+            if seen[k] {
+                continue;
+            }
+            seen[k] = true;
+            if hall_open(map, p.x + a as f32 * HALL_STEP_M, p.y, p.z + b as f32 * HALL_STEP_M) {
+                queue.push((a, b));
+            }
+        }
+    }
+    if cells as f32 * HALL_STEP_M * HALL_STEP_M < HALL_MIN_M2 {
+        return None;
+    }
+    let m = HALL_STEP_M * 0.5;
+    Some((
+        Vec3::new(lo.x - m, p.y - down - 0.3, lo.y - m),
+        Vec3::new(hi.x + m, p.y + up + 0.3, hi.y + m),
+    ))
+}
+
 /// Spawns map `id`'s level; `old` is the last one's, taken down first.
 #[allow(clippy::too_many_arguments)]
 pub fn build(
@@ -964,6 +1074,10 @@ pub fn build(
     };
     let map = def.build();
     let land = Land::of(def);
+    let mut halls = Halls {
+        on: land == Land::Alpine,
+        found: Vec::new(),
+    };
     let (lo, hi) = (map.lo, map.hi);
     let (cx, cz) = ((lo.0 + hi.0) * 0.5, (lo.1 + hi.1) * 0.5);
     let half = (hi.0 - lo.0).max(hi.1 - lo.1) * 0.5 + 8.0;
@@ -1046,6 +1160,7 @@ pub fn build(
             hidden: rock::hidden_edges(min, max, i, &all),
             own_value: true,
             open: open_top(&map, mid, max.y),
+            hall: halls.of(&map, mid, (max - min) * 0.5),
         };
         // A long box on uneven ground: its grime follows the ground along
         // it, not the height under its middle (an end wall across a
@@ -1253,6 +1368,7 @@ pub fn build(
             hidden: rock::hidden_edges(min, max, usize::MAX, &all),
             own_value: true,
             open: open_top(&map, mid, max.y),
+            hall: halls.of(&map, mid, size * 0.5),
         };
         commands.spawn((
             LevelPart,
@@ -1372,6 +1488,7 @@ pub fn build(
                 hidden: 0,
                 own_value: false,
                 open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
+                hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(r, hy, r)),
             },
             // No wear: an arc is turned segments overlapping at their
             // ends, and each one's end edges are inside the next.
@@ -1385,6 +1502,7 @@ pub fn build(
                 hidden: 0,
                 own_value: false,
                 open: open_top(&map, Vec3::new(x, 0.0, z), sol.y1),
+                hall: halls.of(&map, Vec3::new(x, sol.y0 + hy, z), Vec3::new(hx, hy, hz)),
             },
             // No wear either: the edges a box's wear is laid along aren't
             // there on a curve.
@@ -1401,6 +1519,7 @@ pub fn build(
                     hidden: 0,
                     own_value: false,
                     open: open_top(&map, mid, b.y),
+                    hall: halls.of(&map, mid, Vec3::new(b.x - a.x, b.y - a.y, b.z - a.z) * 0.5),
                 }
             }
         };
@@ -1592,11 +1711,11 @@ pub fn build(
                 // Off what is built, too (the clutter's own places): its
                 // ground runs on under a hangar's floor.
                 let clear = crate::look::clutter::clear(&map, t);
-                crate::look::grass::blocks(t, lo, hi, seed, &clear, ice, true)
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, ice, true, true)
             } else if snowed {
                 Vec::new()
             } else {
-                crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle)
+                crate::look::grass::blocks(t, lo, hi, seed, &clear, def.light.sea, isle, false)
             };
             for (mesh, centre, layer) in cover {
                 commands.spawn((
@@ -1745,6 +1864,7 @@ pub fn build(
                         hidden: 0,
                         own_value: false,
                         open: false,
+                        hall: None,
                     },
                     Mesh3d(meshes.add({
                         // Cut where the boxes stand on it.

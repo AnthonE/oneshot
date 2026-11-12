@@ -412,6 +412,7 @@ pub fn dress(
                             hidden: 0,
                             own_value: false,
                             open: false,
+                            hall: None,
                         },
                     ));
                 }

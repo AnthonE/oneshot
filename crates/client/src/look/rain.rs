@@ -319,7 +319,7 @@ pub fn drive(
 
 /// Whether (x, z) at height `y` is under cover: something built over it
 /// within [`SHELTER_UP_M`].
-fn covered(map: &sim::map::Map, x: f32, y: f32, z: f32) -> bool {
+pub(crate) fn covered(map: &sim::map::Map, x: f32, y: f32, z: f32) -> bool {
     map.ray(
         sim::geom::V3::new(x, y, z),
         sim::geom::V3::new(0.0, 1.0, 0.0),
